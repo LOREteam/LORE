@@ -1,6 +1,6 @@
 # LORE / Linea Miner
 
-Web UI + keeper bot for a Linea Sepolia mining game.
+
 
 ## Stack
 
