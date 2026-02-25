@@ -1,0 +1,15 @@
+{
+  "rules": {
+    "messages": {
+      ".read": true,
+      ".indexOn": ["timestamp"],
+      "$messageId": {
+        ".write": "newData.hasChildren(['text', 'sender', 'timestamp', 'authAddress', 'authMessage', 'authSignature']) && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 280 && newData.child('sender').isString() && newData.child('sender').val().length >= 42 && newData.child('authAddress').isString() && newData.child('authAddress').val().length >= 42 && newData.child('authMessage').isString() && newData.child('authMessage').val().length > 20 && newData.child('authSignature').isString() && newData.child('authSignature').val().length >= 132 && (!newData.hasChild('senderAvatar') || newData.child('senderAvatar').val().length <= 8000)"
+      }
+    },
+    "$other": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}

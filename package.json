@@ -1,0 +1,46 @@
+{
+  "name": "linea-miner",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev:ui": "next dev",
+    "bot": "tsx bot.ts",
+    "bot:supervisor": "node scripts/run-bot-forever.mjs",
+    "dev": "concurrently -c \"cyan,magenta\" -n \"SITE,BOT\" \"npm run dev:ui\" \"npm run bot:supervisor\"",
+    "build": "next build --webpack",
+    "start": "next start --port 3001",
+    "start:3000": "next start",
+    "start:all": "concurrently -c \"cyan,magenta\" -n \"SITE,BOT\" \"npm run start\" \"npm run bot:supervisor\"",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit --incremental false"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.8.0",
+    "@privy-io/react-auth": "^3.14.0",
+    "@privy-io/wagmi": "^4.0.2",
+    "@tanstack/react-query": "^5.90.21",
+    "dotenv": "^17.3.1",
+    "ethers": "^6.16.0",
+    "firebase": "^12.9.0",
+    "next": "16.1.6",
+    "ox": "^0.12.4",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "viem": "^2.46.1",
+    "wagmi": "^2.19.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "concurrently": "^9.2.1",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "open-cli": "^8.0.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.20.5",
+    "typescript": "^5"
+  }
+}
