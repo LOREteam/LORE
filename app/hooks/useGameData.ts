@@ -21,12 +21,27 @@ interface UseGameDataOptions {
   historyDetailed?: boolean;
 }
 
+const AUTO_MINER_STORAGE_KEY = "lineaore:auto-miner-session:v1";
+
+function isAutoMineSessionActive(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const raw = window.localStorage.getItem(AUTO_MINER_STORAGE_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { active?: boolean };
+    return Boolean(parsed?.active);
+  } catch {
+    return false;
+  }
+}
+
 export function useGameData(options?: UseGameDataOptions) {
   const historyDetailed = options?.historyDetailed ?? false;
   const { address } = useAccount();
   const chainId = APP_CHAIN_ID;
   const { data: tokenBalance } = useBalance({ address, token: LINEA_TOKEN_ADDRESS, chainId });
   const [isPageVisible, setIsPageVisible] = useState(true);
+  const [autoMineSessionActive, setAutoMineSessionActive] = useState(false);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -34,6 +49,21 @@ export function useGameData(options?: UseGameDataOptions) {
     onVisibility();
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sync = () => setAutoMineSessionActive(isAutoMineSessionActive());
+    sync();
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key || e.key === AUTO_MINER_STORAGE_KEY) sync();
+    };
+    window.addEventListener("storage", onStorage);
+    const iv = window.setInterval(sync, 1500);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.clearInterval(iv);
+    };
   }, []);
 
   const [visualEpoch, setVisualEpoch] = useState<string | null>(null);
@@ -91,8 +121,10 @@ export function useGameData(options?: UseGameDataOptions) {
         : 5000
     : 20_000;
   const epochEndInterval = isPageVisible ? (pollPhase === "fast" ? 1800 : 6000) : 20_000;
+  const liveGridInterval = autoMineSessionActive ? 1000 : 3000;
+  const liveUserBetsInterval = autoMineSessionActive ? 1000 : 3000;
   const gridEpochInterval = isPageVisible
-    ? (isRevealing ? 500 : pollPhase === "fast" ? 1500 : 5000)
+    ? (isRevealing ? 500 : autoMineSessionActive ? 1000 : pollPhase === "fast" ? 1500 : 5000)
     : 20_000;
 
   const { data: actualCurrentEpoch, refetch: refetchEpoch } = useReadContract({
@@ -135,7 +167,7 @@ export function useGameData(options?: UseGameDataOptions) {
   const { data: tileData, refetch: refetchTileData } = useReadContract({
     address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getTileData",
     args: gridDisplayEpochBigInt ? [gridDisplayEpochBigInt] : undefined,
-    chainId, query: { enabled: !!gridDisplayEpochBigInt, refetchInterval: isPageVisible ? 3000 : 20000 },
+    chainId, query: { enabled: !!gridDisplayEpochBigInt, refetchInterval: isPageVisible ? liveGridInterval : 20000 },
   });
 
   // Prefetch tile data + user bets for the NEXT epoch during reveal so transition is instant
@@ -173,7 +205,7 @@ export function useGameData(options?: UseGameDataOptions) {
     args: actualCurrentEpoch ? [actualCurrentEpoch] : undefined,
     chainId, query: {
       enabled: !!actualCurrentEpoch && !gridAndCurrentAreSame,
-      refetchInterval: isPageVisible ? 3000 : 20000,
+      refetchInterval: isPageVisible ? liveGridInterval : 20000,
     },
   });
 
@@ -189,7 +221,7 @@ export function useGameData(options?: UseGameDataOptions) {
   const { data: userBetsAllRaw, refetch: refetchUserBets, dataUpdatedAt: userBetsUpdatedAt } = useReadContract({
     address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
     args: gridDisplayEpochBigInt && address ? [gridDisplayEpochBigInt, address] : undefined,
-    chainId, query: { enabled: !!gridDisplayEpochBigInt && !!address, refetchInterval: isPageVisible ? 3000 : 20000 },
+    chainId, query: { enabled: !!gridDisplayEpochBigInt && !!address, refetchInterval: isPageVisible ? liveUserBetsInterval : 20000 },
   });
 
   const userBetsEpochRef = useRef<string | null>(null);
