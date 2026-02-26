@@ -72,6 +72,8 @@ function isSessionExpiredError(err: unknown): boolean {
   const name = err instanceof Error ? err.name : "";
   return (
     name === "PrivyApiError" ||
+    msg.includes("must have valid access token") ||
+    msg.includes("valid access token and privy wallet") ||
     msg.includes("authorization signatures") ||
     msg.includes("signing keys") ||
     msg.includes("incorrect or expired")

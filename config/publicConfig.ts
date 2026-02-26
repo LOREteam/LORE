@@ -18,5 +18,4 @@ export const DEFAULT_LINEA_SEPOLIA_RPCS = [
   "https://linea-sepolia.drpc.org",
   "https://linea-sepolia-rpc.publicnode.com",
   "https://rpc.sepolia.linea.build",
-  "https://linea-sepolia.public.blastapi.io",
 ] as const;

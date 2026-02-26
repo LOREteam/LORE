@@ -41,7 +41,8 @@ const ENV_RPCS =
     .map((s) => s.trim())
     .filter(Boolean) ?? [];
 
-const RPC_URLS = [...new Set([...ENV_RPCS, ...DEFAULT_LINEA_SEPOLIA_RPCS])];
+// If env list is provided, use only it. This allows hard-excluding flaky providers in production.
+const RPC_URLS = [...new Set(ENV_RPCS.length > 0 ? ENV_RPCS : DEFAULT_LINEA_SEPOLIA_RPCS)];
 
 export const lineaSepoliaChain = defineChain({
   ...baseLineaSepolia,
