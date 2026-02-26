@@ -3,6 +3,7 @@ import { parseAbi } from "viem";
 import { DEFAULT_API_EPOCHS_RECONCILE_MAX } from "../../../config/publicConfig";
 import {
   CONTRACT_ADDRESS,
+  CONTRACT_DEPLOY_BLOCK,
   fetchFirebaseJson,
   parseCurrentEpoch,
   patchFirebase,
@@ -50,9 +51,13 @@ export async function GET() {
     let epochs =
       Number.isInteger(currentEpoch) && currentEpoch > 0
         ? Object.fromEntries(
-            Object.entries(raw).filter(([key]) => {
+            Object.entries(raw).filter(([key, value]) => {
               const n = Number(key);
-              return Number.isInteger(n) && n >= 1 && n <= currentEpoch;
+              if (!Number.isInteger(n) || n < 1 || n > currentEpoch) return false;
+              const resolvedBlock = Number((value as EpochRow).resolvedBlock ?? "0");
+              // Drop stale epochs from older contracts when block marker is available
+              if (resolvedBlock > 0 && BigInt(resolvedBlock) < CONTRACT_DEPLOY_BLOCK) return false;
+              return true;
             }),
           )
         : raw;

@@ -139,6 +139,12 @@ export async function GET(request: NextRequest) {
     const meta = await fetchFirebaseJson<number>("gamedata/_meta/currentEpoch");
     const currentEpochNum = parseCurrentEpoch(meta.data);
     deposits = filterByCurrentEpoch(deposits, currentEpochNum);
+    deposits = deposits.filter((d) => {
+      const blockNumber = Number(d.blockNumber ?? "0");
+      // Drop stale deposits from older contracts when block marker is available
+      if (blockNumber > 0 && BigInt(blockNumber) < CONTRACT_DEPLOY_BLOCK) return false;
+      return true;
+    });
 
     // Chain supplement: if DB is empty/missing, recover user deposits from on-chain logs and upsert to Firebase
     if (deposits.length === 0) {

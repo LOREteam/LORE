@@ -332,6 +332,7 @@ export function useMining({
 
   const placeBetsSilent = useCallback(
     async (tiles: number[], singleAmountRaw: bigint, gasOverrides?: GasOverrides) => {
+      await ensurePreferredWalletRef.current?.();
       const pc = publicClientRef.current;
       const silentSend = silentSendRef.current;
       if (!pc || !silentSend) throw new Error("Privy wallet not ready");

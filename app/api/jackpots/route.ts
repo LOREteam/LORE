@@ -76,6 +76,12 @@ export async function GET() {
     const meta = await fetchFirebaseJson<number>("gamedata/_meta/currentEpoch");
     const currentEpoch = parseCurrentEpoch(meta.data);
     jackpots = filterByCurrentEpoch(jackpots, currentEpoch);
+    jackpots = jackpots.filter((j) => {
+      const blockNumber = Number(j.blockNumber ?? "0");
+      // Drop stale jackpots from older contracts when block marker is available
+      if (blockNumber > 0 && BigInt(blockNumber) < CONTRACT_DEPLOY_BLOCK) return false;
+      return true;
+    });
 
     // Safety fallback: if indexer skipped latest jackpot, recover from chain
     try {

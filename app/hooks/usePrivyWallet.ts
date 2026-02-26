@@ -60,7 +60,9 @@ export function usePrivyWallet() {
       tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint },
       gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint },
     ) => {
-      if (!embeddedWalletAddress) throw new Error("Privy embedded wallet not found.");
+      if (!embeddedWallet || !embeddedWalletAddress) throw new Error("Privy embedded wallet not found.");
+      // Some flows can switch active signer to external wallet; force embedded signer for silent tx.
+      await setActiveWallet(embeddedWallet);
       const baseRequest: Parameters<typeof sendTransaction>[0] = {
         to: tx.to,
         data: tx.data,
@@ -90,7 +92,7 @@ export function usePrivyWallet() {
       });
       return receipt.hash as `0x${string}`;
     },
-    [sendTransaction, embeddedWalletAddress, publicClient],
+    [sendTransaction, embeddedWallet, embeddedWalletAddress, publicClient, setActiveWallet],
   );
 
   return {
