@@ -124,7 +124,7 @@ const NETWORK_BACKOFF_INITIAL_MS = 1_500;
 const NETWORK_BACKOFF_MAX_MS = 15_000;
 const EXTERNAL_RESOLVE_GRACE_MAX_MS = 8_000;
 const EXTERNAL_RESOLVE_POLL_MS = 500;
-const MAX_TX_FEE_GWEI = 0.28;
+const MAX_TX_FEE_GWEI = 0.58;
 
 function readSession(): PersistedAutoMinerSession | null {
   if (typeof window === "undefined") return null;
@@ -458,7 +458,14 @@ export function useMining({
       } catch (err) {
         if (!isUserRejection(err)) {
           log.error("ManualMine", "bet failed", err);
-          alert("Bet failed. Check your token balance and try again.");
+          const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+          if (msg.includes("gas fee ceiling exceeded")) {
+            alert(`Bet skipped: gas too high right now (ceiling ${MAX_TX_FEE_GWEI.toFixed(2)} gwei). Try again in a few seconds.`);
+          } else if (isInsufficientFundsError(err)) {
+            alert("Bet failed: not enough ETH for gas on Privy wallet.");
+          } else {
+            alert("Bet failed. Check your token balance and try again.");
+          }
         }
       } finally {
         setIsPending(false);
@@ -498,7 +505,14 @@ export function useMining({
       } catch (err) {
         if (!isUserRejection(err)) {
           log.error("DirectMine", "bet failed", err);
-          alert("Bet failed. Check your token balance and try again.");
+          const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+          if (msg.includes("gas fee ceiling exceeded")) {
+            alert(`Bet skipped: gas too high right now (ceiling ${MAX_TX_FEE_GWEI.toFixed(2)} gwei). Try again in a few seconds.`);
+          } else if (isInsufficientFundsError(err)) {
+            alert("Bet failed: not enough ETH for gas on Privy wallet.");
+          } else {
+            alert("Bet failed. Check your token balance and try again.");
+          }
         }
       } finally {
         setIsPending(false);
