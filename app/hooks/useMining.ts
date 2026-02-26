@@ -25,6 +25,7 @@ interface UseMiningOptions {
   refetchTileData: () => void;
   refetchUserBets: () => void;
   refetchEpoch?: () => void;
+  refetchGridEpochData?: () => void;
   ensurePreferredWallet?: () => Promise<void> | void;
   sendTransactionSilent?: SilentSendFn;
   /** Optional: call every ~20 min while bot runs to keep Privy session valid (e.g. () => getAccessToken()) */
@@ -173,6 +174,7 @@ export function useMining({
   refetchTileData,
   refetchUserBets,
   refetchEpoch,
+  refetchGridEpochData,
   ensurePreferredWallet,
   sendTransactionSilent,
   refreshSession,
@@ -204,6 +206,7 @@ export function useMining({
   const refetchTileDataRef = useRef(refetchTileData);
   const refetchUserBetsRef = useRef(refetchUserBets);
   const refetchEpochRef = useRef(refetchEpoch);
+  const refetchGridEpochDataRef = useRef(refetchGridEpochData);
   const onAutoMineBetConfirmedRef = useRef(onAutoMineBetConfirmed);
 
   // Sync refs on every render (assignment is synchronous, no useEffect needed)
@@ -216,6 +219,7 @@ export function useMining({
   refetchTileDataRef.current = refetchTileData;
   refetchUserBetsRef.current = refetchUserBets;
   refetchEpochRef.current = refetchEpoch;
+  refetchGridEpochDataRef.current = refetchGridEpochData;
   onAutoMineBetConfirmedRef.current = onAutoMineBetConfirmed;
 
   // Sync UI with localStorage after hydration
@@ -809,8 +813,8 @@ export function useMining({
             if (skippedEpochEnded) { networkRetries = 0; continue; }
             if (betAlreadyConfirmedOnChain) {
               lastPlacedEpoch = liveEpochNow;
-              setSelectedTiles([]);
-              setSelectedTilesEpoch(null);
+              setSelectedTiles(tilesToBet);
+              setSelectedTilesEpoch(liveEpochNow.toString());
               setAutoMineProgress(`${r + 1} / ${rounds} – confirmed (detected on-chain)`);
               onAutoMineBetConfirmedRef.current?.();
               log.info("AutoMine", `round ${r + 1}/${rounds} detected on-chain`, { epoch: liveEpochNow.toString() });
@@ -820,9 +824,19 @@ export function useMining({
                 lastPlacedEpoch: lastPlacedEpoch.toString(),
               });
               networkRetries = 0;
-              await delay(REFETCH_DELAY_MS);
+              refetchEpochRef.current?.();
+              refetchGridEpochDataRef.current?.();
               refetchTileDataRef.current();
               refetchUserBetsRef.current();
+              setTimeout(() => {
+                refetchTileDataRef.current();
+                refetchUserBetsRef.current();
+              }, 1500);
+              setTimeout(() => {
+                setSelectedTiles([]);
+                setSelectedTilesEpoch(null);
+              }, 3500);
+              await delay(REFETCH_DELAY_MS);
               continue;
             }
 
@@ -909,9 +923,19 @@ export function useMining({
               lastPlacedEpoch: lastPlacedEpoch.toString(),
             });
             networkRetries = 0;
-            await delay(REFETCH_DELAY_MS);
+            refetchEpochRef.current?.();
+            refetchGridEpochDataRef.current?.();
             refetchTileDataRef.current();
             refetchUserBetsRef.current();
+            setTimeout(() => {
+              refetchTileDataRef.current();
+              refetchUserBetsRef.current();
+            }, 1500);
+            setTimeout(() => {
+              setSelectedTiles([]);
+              setSelectedTilesEpoch(null);
+            }, 3500);
+            await delay(REFETCH_DELAY_MS);
 
           } catch (roundErr) {
             // Network errors: backoff and retry the same round instead of dying

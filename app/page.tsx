@@ -239,11 +239,12 @@ export default function LineaOre() {
     refetchTileData,
     refetchUserBets,
     refetchEpoch,
+    refetchGridEpochData,
     ensurePreferredWallet: ensureEmbeddedWallet,
     sendTransactionSilent,
     refreshSession,
     onAutoMineBetConfirmed: () => playSound("autoBet"),
-  }), [refetchAllowance, refetchTileData, refetchUserBets, refetchEpoch, ensureEmbeddedWallet, sendTransactionSilent, refreshSession, playSound]);
+  }), [refetchAllowance, refetchTileData, refetchUserBets, refetchEpoch, refetchGridEpochData, ensureEmbeddedWallet, sendTransactionSilent, refreshSession, playSound]);
 
   const {
     isPending, selectedTiles, selectedTilesEpoch, isAutoMining, autoMineProgress, runningParams,
