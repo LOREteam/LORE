@@ -2,9 +2,12 @@ import { parseAbi, getAddress } from "viem";
 import { lineaSepolia } from "viem/chains";
 
 // --- Contract Addresses ---
-export const CONTRACT_ADDRESS = getAddress("0xaa6a6a2c8eb6bd183c4153fdec99d53ddd8416d8");
-export const LINEA_TOKEN_ADDRESS = getAddress("0x6F17f60E25dB2975B8baDf865e16e4ca9e00F180");
+export const CONTRACT_ADDRESS = getAddress("0x2a98cfb661710d11c47e958856859f7b474e0107");
+export const LINEA_TOKEN_ADDRESS = getAddress("0xa25bec3ed257a31ee62f1418ec3c3571aa051107");
 export const APP_CHAIN_ID = lineaSepolia.id;
+
+// --- Contract Deploy Block (Linea Sepolia) ---
+export const CONTRACT_DEPLOY_BLOCK = 25663555n;
 
 // --- Game Config ---
 export const GRID_SIZE = 25;

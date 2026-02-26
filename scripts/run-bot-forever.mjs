@@ -11,12 +11,26 @@ const ALERT_THREAD_ID = process.env.ALERT_TELEGRAM_THREAD_ID ?? "";
 const ALERT_PREFIX = process.env.ALERT_PREFIX ?? "LORE Supervisor";
 
 let stopping = false;
-let restartAttempt = 0;
-
 const MIN_UPTIME_MS = 5000;
 const MAX_FAST_CRASHES = 3;
-let consecutiveFastCrashes = 0;
 const alertCooldowns = new Map();
+
+const managed = {
+  bot: {
+    command: "npm run bot",
+    child: null,
+    startedAt: 0,
+    restartAttempt: 0,
+    consecutiveFastCrashes: 0,
+  },
+  indexer: {
+    command: "npm run indexer",
+    child: null,
+    startedAt: 0,
+    restartAttempt: 0,
+    consecutiveFastCrashes: 0,
+  },
+};
 
 function shouldSendAlert(key, cooldownMs = 300000) {
   const now = Date.now();
@@ -47,78 +61,97 @@ async function sendAlert(text, key, cooldownMs = 300000) {
   }
 }
 
-function nextDelayMs() {
-  const base = 2000;
-  const cap = 30000;
+function nextDelayMs(name) {
+  const base = name === "bot" ? 2000 : 3000;
+  const cap = name === "bot" ? 30000 : 20000;
+  const restartAttempt = managed[name].restartAttempt;
   const ms = Math.min(cap, base * Math.pow(2, Math.min(restartAttempt, 4)));
-  restartAttempt += 1;
+  managed[name].restartAttempt = restartAttempt + 1;
   return ms;
 }
 
-function runBot() {
-  console.log(`[bot-supervisor] Starting bot at ${new Date().toISOString()}`);
-  void sendAlert(`starting bot at \`${new Date().toISOString()}\``, "supervisor-start", 60000);
-  const startedAt = Date.now();
+function startManaged(name) {
+  const meta = managed[name];
+  meta.startedAt = Date.now();
+  console.log(`[bot-supervisor] Starting ${name} at ${new Date().toISOString()}`);
 
-  const child = spawn("npm run bot", {
+  const child = spawn(meta.command, {
     cwd: projectRoot,
     stdio: "inherit",
     shell: true,
   });
+  meta.child = child;
 
   child.on("error", (error) => {
     if (stopping) return;
-    console.error(`[bot-supervisor] Bot process error: ${error.message}`);
+    console.error(`[bot-supervisor] ${name} process error: ${error.message}`);
   });
 
   child.on("exit", (code, signal) => {
     if (stopping) return;
 
-    const uptimeMs = Date.now() - startedAt;
+    const uptimeMs = Date.now() - meta.startedAt;
     const reason = signal ? `signal ${signal}` : `code ${String(code ?? "null")}`;
 
     if (uptimeMs < MIN_UPTIME_MS) {
-      consecutiveFastCrashes += 1;
+      meta.consecutiveFastCrashes += 1;
     } else {
-      consecutiveFastCrashes = 0;
-      restartAttempt = 0;
+      meta.consecutiveFastCrashes = 0;
+      meta.restartAttempt = 0;
     }
 
-    if (consecutiveFastCrashes >= MAX_FAST_CRASHES) {
+    if (meta.consecutiveFastCrashes >= MAX_FAST_CRASHES) {
+      if (name === "indexer") {
+        console.error(
+          `[bot-supervisor] indexer crashed ${MAX_FAST_CRASHES} times. Keeping bot alive, indexer disabled.`,
+        );
+        void sendAlert(
+          "indexer crashed repeatedly and was disabled; bot keeps running.",
+          "supervisor-indexer-disabled",
+          60000,
+        );
+        return;
+      }
       console.error(
-        `[bot-supervisor] Bot crashed ${MAX_FAST_CRASHES} times within ${MIN_UPTIME_MS / 1000}s each. ` +
-        `Likely a config error (missing env vars?). Stopping supervisor.`,
+        `[bot-supervisor] ${name} crashed ${MAX_FAST_CRASHES} times within ${MIN_UPTIME_MS / 1000}s each. Stopping supervisor.`,
       );
       void sendAlert(
-        `bot crashed ${MAX_FAST_CRASHES} times in a row (uptime < ${Math.round(MIN_UPTIME_MS / 1000)}s). Supervisor stopped.`,
-        "supervisor-fatal",
+        `${name} crashed ${MAX_FAST_CRASHES} times in a row (uptime < ${Math.round(MIN_UPTIME_MS / 1000)}s). Supervisor stopped.`,
+        `supervisor-fatal-${name}`,
         60000,
       );
       process.exit(1);
     }
 
-    const ms = nextDelayMs();
-    console.error(`[bot-supervisor] Bot exited (${reason}, uptime ${Math.round(uptimeMs / 1000)}s). Restarting in ${ms}ms...`);
+    const ms = nextDelayMs(name);
+    console.error(`[bot-supervisor] ${name} exited (${reason}, uptime ${Math.round(uptimeMs / 1000)}s). Restarting in ${ms}ms...`);
     void sendAlert(
-      `bot exited (${reason}, uptime ${Math.round(uptimeMs / 1000)}s). Restart in ${ms}ms.`,
-      "supervisor-restart",
+      `${name} exited (${reason}, uptime ${Math.round(uptimeMs / 1000)}s). Restart in ${ms}ms.`,
+      `supervisor-restart-${name}`,
       120000,
     );
 
     setTimeout(() => {
-      if (!stopping) runBot();
+      if (!stopping) startManaged(name);
     }, ms);
   });
+}
+
+function runSupervisor() {
+  void sendAlert(`starting bot+indexer at \`${new Date().toISOString()}\``, "supervisor-start", 60000);
+  startManaged("bot");
+  startManaged("indexer");
 
   const stopHandler = (sig) => {
     if (stopping) return;
     stopping = true;
-    console.log(`[bot-supervisor] Received ${sig}, stopping bot...`);
-    child.kill("SIGTERM");
+    console.log(`[bot-supervisor] Received ${sig}, stopping bot + indexer...`);
+    managed.bot.child?.kill("SIGTERM");
+    managed.indexer.child?.kill("SIGTERM");
   };
 
   process.once("SIGINT", () => stopHandler("SIGINT"));
   process.once("SIGTERM", () => stopHandler("SIGTERM"));
 }
 
-runBot();
+runSupervisor();

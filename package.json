@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev:ui": "next dev",
+    "dev:ui": "next dev --webpack",
     "bot": "tsx bot.ts",
+    "indexer": "tsx scripts/indexer.ts --watch",
+    "indexer:once": "tsx scripts/indexer.ts",
     "bot:supervisor": "node scripts/run-bot-forever.mjs",
     "dev": "concurrently -c \"cyan,magenta\" -n \"SITE,BOT\" \"npm run dev:ui\" \"npm run bot:supervisor\"",
     "build": "next build --webpack",
@@ -35,11 +37,13 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "autoprefixer": "^10.4.27",
     "concurrently": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "open-cli": "^8.0.0",
-    "tailwindcss": "^4",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.2.1",
     "tsx": "^4.20.5",
     "typescript": "^5"
   }

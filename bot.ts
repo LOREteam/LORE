@@ -5,7 +5,7 @@ import { lineaSepolia } from "viem/chains";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEFAULT_RPC_URL = "https://rpc.sepolia.linea.build";
-const DEFAULT_CONTRACT = "0xaa6a6a2c8eb6bd183c4153fdec99d53ddd8416d8";
+const DEFAULT_CONTRACT = "0x2a98cfb661710d11c47e958856859f7b474e0107";
 const ALERT_BOT_TOKEN = process.env.ALERT_TELEGRAM_BOT_TOKEN ?? "";
 const ALERT_CHAT_ID = process.env.ALERT_TELEGRAM_CHAT_ID ?? "";
 const ALERT_THREAD_ID = process.env.ALERT_TELEGRAM_THREAD_ID ?? "";

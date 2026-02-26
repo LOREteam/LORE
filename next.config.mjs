@@ -1,11 +1,13 @@
-import type { NextConfig } from "next";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const projectRoot = process.cwd();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(__dirname);
 
-const nextConfig: NextConfig = {
-  // In dev, Turbopack can trigger full reloads; production build does not.
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   reactStrictMode: false,
+  transpilePackages: ["porto", "@wagmi/connectors", "wagmi", "@privy-io/wagmi"],
   async headers() {
     return [
       {
@@ -34,8 +36,7 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  webpack: (config) => {
-    // Fix: on Windows, Webpack may resolve modules from D:\ instead of project root.
+  webpack(config) {
     config.context = projectRoot;
     config.resolve = config.resolve ?? {};
     config.resolve.modules = [
@@ -46,6 +47,9 @@ const nextConfig: NextConfig = {
     config.resolve.alias = {
       ...(config.resolve.alias ?? {}),
       "@react-native-async-storage/async-storage": false,
+      tailwindcss: path.resolve(projectRoot, "node_modules", "tailwindcss"),
+      "porto/internal": path.resolve(projectRoot, "node_modules", "porto", "dist", "internal", "index.js"),
+      "zod/mini": path.resolve(projectRoot, "node_modules", "porto", "node_modules", "zod", "mini", "index.js"),
     };
     return config;
   },
