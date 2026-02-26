@@ -110,9 +110,9 @@ function isNetworkError(err: unknown): boolean {
 const NETWORK_RETRY_MAX = 120;
 const NETWORK_BACKOFF_INITIAL_MS = 1_500;
 const NETWORK_BACKOFF_MAX_MS = 15_000;
-const EXTERNAL_RESOLVE_GRACE_MAX_MS = 12_000;
-const EXTERNAL_RESOLVE_POLL_MS = 800;
-const MAX_TX_FEE_GWEI = 0.9;
+const EXTERNAL_RESOLVE_GRACE_MAX_MS = 25_000;
+const EXTERNAL_RESOLVE_POLL_MS = 1_200;
+const MAX_TX_FEE_GWEI = 0.12;
 
 function readSession(): PersistedAutoMinerSession | null {
   if (typeof window === "undefined") return null;
@@ -290,7 +290,8 @@ export function useMining({
 
   const getBumpedFees = useCallback(async (percent: bigint = GAS_BUMP_BASE) => {
     const pc = publicClientRef.current;
-    if (!pc) return undefined;
+    const ceilingWei = parseUnits(MAX_TX_FEE_GWEI.toString(), 9);
+    if (!pc) return { maxFeePerGas: ceilingWei, maxPriorityFeePerGas: ceilingWei };
     try {
       const fees = await pc.estimateFeesPerGas();
       if (fees?.maxFeePerGas && fees?.maxPriorityFeePerGas) {
@@ -316,9 +317,9 @@ export function useMining({
       if (err instanceof Error && err.message.toLowerCase().includes("gas fee ceiling exceeded")) {
         throw err;
       }
-      /* ignore non-critical fee estimation errors */
+      log.warn("AutoMine", "fee estimation failed, using ceiling as fallback", err);
     }
-    return undefined;
+    return { maxFeePerGas: ceilingWei, maxPriorityFeePerGas: ceilingWei };
   }, []);
 
   const estimateGas = useCallback(
@@ -680,7 +681,7 @@ export function useMining({
                 })) as bigint;
                 if (latestEpoch <= lastPlacedEpoch) {
                   const graceStart = Date.now();
-                  const initialJitterMs = 1500 + Math.floor(Math.random() * 2500);
+                  const initialJitterMs = 3000 + Math.floor(Math.random() * 5000);
                   setAutoMineProgress(`${r} / ${rounds} – waiting first resolver...`);
                   await delay(initialJitterMs);
                   while (autoMineRef.current && Date.now() - graceStart < EXTERNAL_RESOLVE_GRACE_MAX_MS) {
@@ -836,8 +837,8 @@ export function useMining({
                 }
 
                 const gasBumpPercent = GAS_BUMP_BASE + BigInt(betAttempts) * GAS_BUMP_REPLACEMENT_STEP;
-                const retryOverrides = betAttempts > 0 ? await getBumpedFees(gasBumpPercent) : undefined;
-                await placeBetOnce(retryOverrides);
+                const feeOverrides = await getBumpedFees(gasBumpPercent);
+                await placeBetOnce(feeOverrides);
                 break;
               } catch (err) {
                 const errMsg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
