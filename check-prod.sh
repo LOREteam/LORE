@@ -64,7 +64,7 @@ json_get() {
   # Passes JSON via stdin to avoid "Argument list too long" on large payloads.
   local json="$1"
   local expr="$2"
-  printf '%s' "$json" | python3 - "$expr" <<'PY'
+  printf '%s' "$json" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
 expr = sys.argv[1]
@@ -84,7 +84,7 @@ try:
         print("" if result is None else result)
 except Exception:
     print("")
-PY
+' "$expr"
 }
 
 echo "== LORE production check =="
