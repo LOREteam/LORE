@@ -82,7 +82,9 @@ function isSessionExpiredError(err: unknown): boolean {
 
 function isNetworkError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const name = err instanceof Error ? err.name.toLowerCase() : "";
   return (
+    name.includes("methodnotsupportedrpcerror") ||
     msg.includes("failed to fetch") ||
     msg.includes("network request failed") ||
     msg.includes("networkerror") ||
@@ -96,6 +98,7 @@ function isNetworkError(err: unknown): boolean {
     msg.includes("aborted") ||
     msg.includes("err_network") ||
     msg.includes("load failed") ||
+    msg.includes("method \"eth_sendrawtransaction\" is not supported") ||
     msg.includes("timed out after")
   );
 }
