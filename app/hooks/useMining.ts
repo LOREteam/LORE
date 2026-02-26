@@ -83,7 +83,19 @@ function isSessionExpiredError(err: unknown): boolean {
   );
 }
 
+function isInsufficientFundsError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  return (
+    msg.includes("insufficient funds") ||
+    msg.includes("upfront cost exceeds") ||
+    msg.includes("exceeds account balance") ||
+    msg.includes("sender doesn't have enough funds") ||
+    msg.includes("out of gas")
+  );
+}
+
 function isNetworkError(err: unknown): boolean {
+  if (isInsufficientFundsError(err)) return false;
   const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
   const name = err instanceof Error ? err.name.toLowerCase() : "";
   return (
@@ -322,11 +334,15 @@ export function useMining({
     return { maxFeePerGas: ceilingWei, maxPriorityFeePerGas: ceilingWei };
   }, []);
 
+  const MIN_GAS_PLACE_BET = BigInt(600_000);
+  const MIN_GAS_PLACE_BATCH = BigInt(800_000);
+
   const estimateGas = useCallback(
     async (functionName: string, args: readonly unknown[], bufferExtra: bigint) => {
+      const minGas = functionName === "placeBatchBets" ? MIN_GAS_PLACE_BATCH : MIN_GAS_PLACE_BET;
       const pc = publicClientRef.current;
       const actorAddress = getActorAddress();
-      if (!pc || !actorAddress) return BigInt(500000) + bufferExtra;
+      if (!pc || !actorAddress) return minGas;
       try {
         const est = await pc.estimateContractGas({
           account: actorAddress as `0x${string}`,
@@ -335,9 +351,10 @@ export function useMining({
           functionName: functionName as "placeBet",
           args: args as [bigint, bigint],
         });
-        return (est * BigInt(115)) / BigInt(100) + bufferExtra;
+        const withBuffer = (est * BigInt(150)) / BigInt(100) + bufferExtra;
+        return withBuffer > minGas ? withBuffer : minGas;
       } catch {
-        return BigInt(500000) + bufferExtra;
+        return minGas;
       }
     },
     [getActorAddress],
@@ -817,6 +834,7 @@ export function useMining({
             let skippedHighGas = false;
             let betAlreadyConfirmedOnChain = false;
             while (betAttempts < MAX_BET_ATTEMPTS) {
+              if (!autoMineRef.current) { break; }
               try {
                 // Before retrying, check if a previous attempt already went through on-chain
                 if (betAttempts > 0) {
@@ -867,6 +885,9 @@ export function useMining({
                   await delay(250);
                   skippedEpochEnded = true;
                   break;
+                }
+                if (isInsufficientFundsError(err)) {
+                  throw err;
                 }
                 if (isNetworkError(err)) {
                   betAttempts++;
@@ -1031,6 +1052,7 @@ export function useMining({
             await delay(REFETCH_DELAY_MS);
 
           } catch (roundErr) {
+            if (isInsufficientFundsError(roundErr)) throw roundErr;
             // Network errors: backoff and retry the same round instead of dying
             if (isNetworkError(roundErr) && autoMineRef.current) {
               networkRetries++;
@@ -1103,7 +1125,7 @@ export function useMining({
             userMsg = "Auto-miner paused: RPC offline for too long. Will auto-resume on page reload.";
           } else if (rawMsg.includes("replacement transaction underpriced")) {
             userMsg = "Stopped: replacement tx underpriced. Press START BOT again to continue.";
-          } else if (rawMsg.includes("upfront cost exceeds") || rawMsg.includes("insufficient funds") || rawMsg.includes("exceeds account balance")) {
+          } else if (isInsufficientFundsError(err)) {
             userMsg = "Auto-miner stopped: not enough ETH for gas. Top up ETH on Privy wallet.";
           } else if (rawMsg.includes("gas fee ceiling exceeded")) {
             userMsg = "Auto-miner paused: gas above configured ceiling. Will continue when gas is lower.";
@@ -1119,10 +1141,12 @@ export function useMining({
             userMsg = "Auto-miner error: " + (err instanceof Error ? err.message : String(err));
           }
           setAutoMineProgress(userMsg);
-          await delay(8000);
+          const noFunds = isInsufficientFundsError(err);
+          await delay(noFunds ? 2000 : 8000);
         }
         autoMineRef.current = false;
         // Keep session alive for network errors so reload can resume
+        // Insufficient funds → clear session so bot doesn't auto-resume into the same error
         if (!sessionExpired && !networkDown) clearSession();
       } finally {
         log.info("AutoMine", "stopped", { reason: stopReason });
