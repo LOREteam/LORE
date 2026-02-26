@@ -10,13 +10,11 @@ import {
 } from "@privy-io/react-auth";
 import { useSetActiveWallet } from "@privy-io/wagmi";
 import { useAccount, usePublicClient } from "wagmi";
-import { parseUnits, formatUnits } from "viem";
 import { lineaSepoliaChain } from "../providers";
 
 /** 105% - keeps tx inclusion without materially overpaying gas. */
 const GAS_BUMP_PERCENT = BigInt(105);
 const SILENT_SEND_TIMEOUT_MS = 45_000;
-const MAX_FEE_GWEI = 0.58;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   const guarded = promise.catch((err) => {
@@ -82,11 +80,10 @@ export function usePrivyWallet() {
       const baseRequest: Parameters<typeof sendTransaction>[0] = {
         to: tx.to,
         data: tx.data,
-        value: tx.value !== undefined && tx.value !== BigInt(0) ? Number(tx.value) : undefined,
+        value: tx.value !== undefined && tx.value !== BigInt(0) ? tx.value : undefined,
         chainId: lineaSepoliaChain.id,
-        ...(tx.gas ? { gas: Number(tx.gas) } : {}),
+        ...(tx.gas ? { gas: tx.gas } : {}),
       };
-      const ceilingWei = parseUnits(MAX_FEE_GWEI.toString(), 9);
       if (gasOverrides && ("maxFeePerGas" in gasOverrides || "gasPrice" in gasOverrides)) {
         if (gasOverrides.maxFeePerGas) baseRequest.maxFeePerGas = gasOverrides.maxFeePerGas;
         if (gasOverrides.maxPriorityFeePerGas) baseRequest.maxPriorityFeePerGas = gasOverrides.maxPriorityFeePerGas;
@@ -95,29 +92,14 @@ export function usePrivyWallet() {
         try {
           const fees = await publicClient.estimateFeesPerGas();
           if (fees?.maxFeePerGas && fees?.maxPriorityFeePerGas) {
-            const bumped = (fees.maxFeePerGas * GAS_BUMP_PERCENT) / BigInt(100);
-            const bumpedGwei = Number(formatUnits(bumped, 9));
-            if (bumpedGwei > MAX_FEE_GWEI) {
-              throw new Error(`Gas fee ceiling exceeded: ${bumpedGwei.toFixed(3)} gwei > ${MAX_FEE_GWEI.toFixed(3)} gwei`);
-            }
-            baseRequest.maxFeePerGas = bumped;
+            baseRequest.maxFeePerGas = (fees.maxFeePerGas * GAS_BUMP_PERCENT) / BigInt(100);
             baseRequest.maxPriorityFeePerGas = (fees.maxPriorityFeePerGas * GAS_BUMP_PERCENT) / BigInt(100);
           } else if (fees?.gasPrice) {
-            const bumped = (fees.gasPrice * GAS_BUMP_PERCENT) / BigInt(100);
-            const bumpedGwei = Number(formatUnits(bumped, 9));
-            if (bumpedGwei > MAX_FEE_GWEI) {
-              throw new Error(`Gas fee ceiling exceeded: ${bumpedGwei.toFixed(3)} gwei > ${MAX_FEE_GWEI.toFixed(3)} gwei`);
-            }
-            baseRequest.gasPrice = bumped;
+            baseRequest.gasPrice = (fees.gasPrice * GAS_BUMP_PERCENT) / BigInt(100);
           }
-        } catch (err) {
-          if (err instanceof Error && err.message.includes("Gas fee ceiling exceeded")) throw err;
-          baseRequest.maxFeePerGas = ceilingWei;
-          baseRequest.maxPriorityFeePerGas = ceilingWei;
+        } catch {
+          /* let wallet decide gas */
         }
-      } else {
-        baseRequest.maxFeePerGas = ceilingWei;
-        baseRequest.maxPriorityFeePerGas = ceilingWei;
       }
       const receipt = await withTimeout(
         sendTransaction(baseRequest, {

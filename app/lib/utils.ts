@@ -21,10 +21,16 @@ export const safeParseFloat = (value: string): number => {
   return isNaN(n) ? 0 : n;
 };
 
-/** Check if an error was a user rejection (MetaMask, etc.) */
+/** Check if an error was a user rejection (MetaMask, WalletConnect, Coinbase, etc.) */
 export const isUserRejection = (err: unknown): boolean => {
-  if (err instanceof Error) {
-    return err.message.toLowerCase().includes("user rejected");
-  }
-  return false;
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  return (
+    msg.includes("user rejected") ||
+    msg.includes("user denied") ||
+    msg.includes("rejected by user") ||
+    msg.includes("user cancelled") ||
+    msg.includes("user canceled") ||
+    msg.includes("action_rejected") ||
+    msg.includes("request rejected")
+  );
 };

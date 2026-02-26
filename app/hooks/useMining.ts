@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
-import { parseUnits, maxUint256, encodeFunctionData, formatUnits } from "viem";
+import { parseUnits, maxUint256, encodeFunctionData } from "viem";
 import type { PublicClient } from "viem";
 import {
   CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS,
@@ -63,7 +63,6 @@ function isRetryableError(err: unknown): boolean {
     msg.includes("nonce") ||
     msg.includes("replacement transaction underpriced") ||
     msg.includes("already known") ||
-    msg.includes("gas fee ceiling exceeded") ||
     name === "TimeoutError" ||
     msg.includes("took too long") ||
     msg.includes("timed out")
@@ -124,7 +123,6 @@ const NETWORK_BACKOFF_INITIAL_MS = 1_500;
 const NETWORK_BACKOFF_MAX_MS = 15_000;
 const EXTERNAL_RESOLVE_GRACE_MAX_MS = 8_000;
 const EXTERNAL_RESOLVE_POLL_MS = 500;
-const MAX_TX_FEE_GWEI = 0.58;
 
 function readSession(): PersistedAutoMinerSession | null {
   if (typeof window === "undefined") return null;
@@ -154,7 +152,7 @@ let autoMineRunInProgress = false;
 
 // Cross-tab lock: prevents multiple browser tabs from mining simultaneously
 const TAB_LOCK_KEY = "lore:auto-mine-tab-lock";
-const TAB_LOCK_TTL_MS = 10_000;
+const TAB_LOCK_TTL_MS = 90_000;
 const TAB_ID = typeof crypto !== "undefined" ? crypto.randomUUID() : String(Date.now());
 
 function acquireTabLock(): boolean {
@@ -264,12 +262,15 @@ export function useMining({
     async (hash: `0x${string}`, pc?: PublicClient) => {
       const client = pc ?? publicClientRef.current;
       if (!client) throw new Error("Public client not ready");
-      await Promise.race([
+      const receipt = await Promise.race([
         client.waitForTransactionReceipt({ hash }),
         delay(TX_RECEIPT_TIMEOUT_MS).then(() => {
           throw new Error("Transaction receipt timeout – check network status");
         }),
       ]);
+      if (receipt && typeof receipt === "object" && "status" in receipt && receipt.status === "reverted") {
+        throw new Error(`Transaction reverted (hash: ${hash})`);
+      }
     },
     [],
   );
@@ -302,36 +303,22 @@ export function useMining({
 
   const getBumpedFees = useCallback(async (percent: bigint = GAS_BUMP_BASE) => {
     const pc = publicClientRef.current;
-    const ceilingWei = parseUnits(MAX_TX_FEE_GWEI.toString(), 9);
-    if (!pc) return { maxFeePerGas: ceilingWei, maxPriorityFeePerGas: ceilingWei };
+    if (!pc) return undefined;
     try {
       const fees = await pc.estimateFeesPerGas();
       if (fees?.maxFeePerGas && fees?.maxPriorityFeePerGas) {
-        const maxFeePerGas = (fees.maxFeePerGas * percent) / BigInt(100);
-        const maxFeePerGasGwei = Number(formatUnits(maxFeePerGas, 9));
-        if (maxFeePerGasGwei > MAX_TX_FEE_GWEI) {
-          throw new Error(`Gas fee ceiling exceeded: ${maxFeePerGasGwei.toFixed(3)} gwei > ${MAX_TX_FEE_GWEI.toFixed(3)} gwei`);
-        }
         return {
-          maxFeePerGas,
+          maxFeePerGas: (fees.maxFeePerGas * percent) / BigInt(100),
           maxPriorityFeePerGas: (fees.maxPriorityFeePerGas * percent) / BigInt(100),
         };
       }
       if (fees?.gasPrice) {
-        const gasPrice = (fees.gasPrice * percent) / BigInt(100);
-        const gasPriceGwei = Number(formatUnits(gasPrice, 9));
-        if (gasPriceGwei > MAX_TX_FEE_GWEI) {
-          throw new Error(`Gas fee ceiling exceeded: ${gasPriceGwei.toFixed(3)} gwei > ${MAX_TX_FEE_GWEI.toFixed(3)} gwei`);
-        }
-        return { gasPrice };
+        return { gasPrice: (fees.gasPrice * percent) / BigInt(100) };
       }
     } catch (err) {
-      if (err instanceof Error && err.message.toLowerCase().includes("gas fee ceiling exceeded")) {
-        throw err;
-      }
-      log.warn("AutoMine", "fee estimation failed, using ceiling as fallback", err);
+      log.warn("AutoMine", "fee estimation failed, letting wallet decide", err);
     }
-    return { maxFeePerGas: ceilingWei, maxPriorityFeePerGas: ceilingWei };
+    return undefined;
   }, []);
 
   const MIN_GAS_PLACE_BET = BigInt(600_000);
@@ -447,6 +434,22 @@ export function useMining({
           await placeBets(selectedTiles, singleAmountRaw);
         } catch (err) {
           if (!isRetryableError(err)) throw err;
+          // Before retry, check if the first tx actually landed on-chain
+          const pc = publicClientRef.current;
+          if (pc && address) {
+            try {
+              const epoch = (await pc.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "currentEpoch" })) as bigint;
+              const bets = (await pc.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll", args: [epoch, address as `0x${string}`] })) as bigint[];
+              const onChain = bets.filter(b => b > BigInt(0)).length;
+              if (onChain >= selectedTiles.length) {
+                log.info("ManualMine", `skipping retry – ${onChain} bets already on-chain`);
+                setSelectedTiles([]);
+                setSelectedTilesEpoch(null);
+                scheduleRefetch();
+                return;
+              }
+            } catch { /* non-critical */ }
+          }
           await delay(1500);
           const bumpedFees = await getBumpedFees(BigInt(180));
           await placeBets(selectedTiles, singleAmountRaw, bumpedFees);
@@ -458,10 +461,7 @@ export function useMining({
       } catch (err) {
         if (!isUserRejection(err)) {
           log.error("ManualMine", "bet failed", err);
-          const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-          if (msg.includes("gas fee ceiling exceeded")) {
-            alert(`Bet skipped: gas too high right now (ceiling ${MAX_TX_FEE_GWEI.toFixed(2)} gwei). Try again in a few seconds.`);
-          } else if (isInsufficientFundsError(err)) {
+          if (isInsufficientFundsError(err)) {
             alert("Bet failed: not enough ETH for gas on Privy wallet.");
           } else {
             alert("Bet failed. Check your token balance and try again.");
@@ -494,6 +494,21 @@ export function useMining({
           await placeBets(tiles, singleAmountRaw);
         } catch (err) {
           if (!isRetryableError(err)) throw err;
+          const pc = publicClientRef.current;
+          if (pc && address) {
+            try {
+              const epoch = (await pc.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "currentEpoch" })) as bigint;
+              const bets = (await pc.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll", args: [epoch, address as `0x${string}`] })) as bigint[];
+              const onChain = bets.filter(b => b > BigInt(0)).length;
+              if (onChain >= tiles.length) {
+                log.info("DirectMine", `skipping retry – ${onChain} bets already on-chain`);
+                setSelectedTiles([]);
+                setSelectedTilesEpoch(null);
+                scheduleRefetch();
+                return;
+              }
+            } catch { /* non-critical */ }
+          }
           await delay(1500);
           const bumpedFees = await getBumpedFees(BigInt(180));
           await placeBets(tiles, singleAmountRaw, bumpedFees);
@@ -505,10 +520,7 @@ export function useMining({
       } catch (err) {
         if (!isUserRejection(err)) {
           log.error("DirectMine", "bet failed", err);
-          const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-          if (msg.includes("gas fee ceiling exceeded")) {
-            alert(`Bet skipped: gas too high right now (ceiling ${MAX_TX_FEE_GWEI.toFixed(2)} gwei). Try again in a few seconds.`);
-          } else if (isInsufficientFundsError(err)) {
+          if (isInsufficientFundsError(err)) {
             alert("Bet failed: not enough ETH for gas on Privy wallet.");
           } else {
             alert("Bet failed. Check your token balance and try again.");
@@ -694,6 +706,7 @@ export function useMining({
                   : secLeft <= 60
                     ? Math.min(secLeft * 1000 + 200, 500)
                     : Math.min(secLeft * 1000 + 300, 2000);
+                renewTabLock();
                 await delay(waitMs);
               } catch (err) {
                 log.warn("AutoMine", "getEpochEndTime failed in wait loop, retrying", err);
@@ -845,7 +858,6 @@ export function useMining({
 
             let betAttempts = 0;
             let skippedEpochEnded = false;
-            let skippedHighGas = false;
             let betAlreadyConfirmedOnChain = false;
             while (betAttempts < MAX_BET_ATTEMPTS) {
               if (!autoMineRef.current) { break; }
@@ -874,21 +886,6 @@ export function useMining({
                 break;
               } catch (err) {
                 const errMsg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-                if (errMsg.includes("gas fee ceiling exceeded")) {
-                  log.warn("AutoMine", `round ${r + 1} skipped – gas above ceiling`, err);
-                  setAutoMineProgress(`${r + 1} / ${rounds} – gas too high, skipping round`);
-                  setSelectedTiles([]);
-                  setSelectedTilesEpoch(null);
-                  lastPlacedEpoch = liveEpochNow;
-                  saveSession({
-                    active: true, betStr, blocks, rounds,
-                    nextRoundIndex: r + 1,
-                    lastPlacedEpoch: lastPlacedEpoch.toString(),
-                  });
-                  skippedHighGas = true;
-                  await delay(500);
-                  break;
-                }
                 if (isEpochEndedError(err)) {
                   log.warn("AutoMine", `round ${r + 1} skipped – epoch ended (tx too late), continuing next round`, { epoch: liveEpochNow.toString() });
                   setAutoMineProgress(`${r + 1} / ${rounds} – skipped (epoch ended), next round...`);
@@ -942,7 +939,7 @@ export function useMining({
               }
             }
 
-            if (skippedEpochEnded || skippedHighGas) { networkRetries = 0; continue; }
+            if (skippedEpochEnded) { networkRetries = 0; continue; }
             if (betAlreadyConfirmedOnChain) {
               lastPlacedEpoch = liveEpochNow;
               setSelectedTiles(tilesToBet);
@@ -1145,8 +1142,6 @@ export function useMining({
             userMsg = "Stopped: replacement tx underpriced. Press START BOT again to continue.";
           } else if (isInsufficientFundsError(err)) {
             userMsg = "Auto-miner stopped: not enough ETH for gas. Top up ETH on Privy wallet.";
-          } else if (rawMsg.includes("gas fee ceiling exceeded")) {
-            userMsg = "Auto-miner paused: gas above configured ceiling. Will continue when gas is lower.";
           } else if (rawMsg.includes("epoch ended")) {
             userMsg = "Round skipped (epoch ended). Press START BOT to continue.";
           } else if (rawMsg.includes("gas required exceeds") || rawMsg.includes("reverted")) {
