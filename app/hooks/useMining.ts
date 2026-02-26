@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
-import { parseUnits, maxUint256, encodeFunctionData } from "viem";
+import { parseUnits, maxUint256, encodeFunctionData, formatUnits } from "viem";
 import type { PublicClient } from "viem";
 import {
   CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS,
@@ -26,6 +26,7 @@ interface UseMiningOptions {
   refetchUserBets: () => void;
   refetchEpoch?: () => void;
   refetchGridEpochData?: () => void;
+  preferredAddress?: `0x${string}` | string | null;
   ensurePreferredWallet?: () => Promise<void> | void;
   sendTransactionSilent?: SilentSendFn;
   /** Optional: call every ~20 min while bot runs to keep Privy session valid (e.g. () => getAccessToken()) */
@@ -62,6 +63,7 @@ function isRetryableError(err: unknown): boolean {
     msg.includes("nonce") ||
     msg.includes("replacement transaction underpriced") ||
     msg.includes("already known") ||
+    msg.includes("gas fee ceiling exceeded") ||
     name === "TimeoutError" ||
     msg.includes("took too long") ||
     msg.includes("timed out")
@@ -107,6 +109,9 @@ function isNetworkError(err: unknown): boolean {
 const NETWORK_RETRY_MAX = 120;
 const NETWORK_BACKOFF_INITIAL_MS = 1_500;
 const NETWORK_BACKOFF_MAX_MS = 15_000;
+const EXTERNAL_RESOLVE_GRACE_MAX_MS = 12_000;
+const EXTERNAL_RESOLVE_POLL_MS = 800;
+const MAX_TX_FEE_GWEI = 0.9;
 
 function readSession(): PersistedAutoMinerSession | null {
   if (typeof window === "undefined") return null;
@@ -175,6 +180,7 @@ export function useMining({
   refetchUserBets,
   refetchEpoch,
   refetchGridEpochData,
+  preferredAddress,
   ensurePreferredWallet,
   sendTransactionSilent,
   refreshSession,
@@ -201,6 +207,7 @@ export function useMining({
   const silentSendRef = useRef(sendTransactionSilent);
   const refreshSessionRef = useRef(refreshSession);
   const writeContractAsyncRef = useRef(writeContractAsync);
+  const preferredAddressRef = useRef<string | null>(preferredAddress ?? null);
   const ensurePreferredWalletRef = useRef(ensurePreferredWallet);
   const refetchAllowanceRef = useRef(refetchAllowance);
   const refetchTileDataRef = useRef(refetchTileData);
@@ -214,6 +221,7 @@ export function useMining({
   silentSendRef.current = sendTransactionSilent;
   refreshSessionRef.current = refreshSession;
   writeContractAsyncRef.current = writeContractAsync;
+  preferredAddressRef.current = preferredAddress ?? null;
   ensurePreferredWalletRef.current = ensurePreferredWallet;
   refetchAllowanceRef.current = refetchAllowance;
   refetchTileDataRef.current = refetchTileData;
@@ -221,6 +229,8 @@ export function useMining({
   refetchEpochRef.current = refetchEpoch;
   refetchGridEpochDataRef.current = refetchGridEpochData;
   onAutoMineBetConfirmedRef.current = onAutoMineBetConfirmed;
+
+  const getActorAddress = useCallback(() => preferredAddressRef.current ?? address ?? null, [address]);
 
   // Sync UI with localStorage after hydration
   useEffect(() => {
@@ -253,27 +263,29 @@ export function useMining({
 
   const ensureAllowance = useCallback(
     async (requiredAmount: bigint) => {
-      if (!address || !publicClientRef.current) return;
+      const actorAddress = getActorAddress();
+      if (!actorAddress || !publicClientRef.current) return;
       await ensurePreferredWalletRef.current?.();
       const liveAllowance = (await publicClientRef.current.readContract({
         address: LINEA_TOKEN_ADDRESS, abi: TOKEN_ABI, functionName: "allowance",
-        args: [address, CONTRACT_ADDRESS],
+        args: [actorAddress as `0x${string}`, CONTRACT_ADDRESS],
       })) as bigint;
 
       if (liveAllowance < requiredAmount) {
-        await writeContractAsyncRef.current({
+        const approveHash = await writeContractAsyncRef.current({
           address: LINEA_TOKEN_ADDRESS, abi: TOKEN_ABI, functionName: "approve",
           args: [CONTRACT_ADDRESS, maxUint256],
           chainId: APP_CHAIN_ID,
         });
+        await waitReceipt(approveHash as `0x${string}`);
         refetchAllowanceRef.current();
       }
     },
-    [address],
+    [getActorAddress, waitReceipt],
   );
 
-  const GAS_BUMP_BASE = BigInt(120);
-  const GAS_BUMP_REPLACEMENT_STEP = BigInt(60);
+  const GAS_BUMP_BASE = BigInt(110);
+  const GAS_BUMP_REPLACEMENT_STEP = BigInt(25);
 
   const getBumpedFees = useCallback(async (percent: bigint = GAS_BUMP_BASE) => {
     const pc = publicClientRef.current;
@@ -281,16 +293,29 @@ export function useMining({
     try {
       const fees = await pc.estimateFeesPerGas();
       if (fees?.maxFeePerGas && fees?.maxPriorityFeePerGas) {
+        const maxFeePerGas = (fees.maxFeePerGas * percent) / BigInt(100);
+        const maxFeePerGasGwei = Number(formatUnits(maxFeePerGas, 9));
+        if (maxFeePerGasGwei > MAX_TX_FEE_GWEI) {
+          throw new Error(`Gas fee ceiling exceeded: ${maxFeePerGasGwei.toFixed(3)} gwei > ${MAX_TX_FEE_GWEI.toFixed(3)} gwei`);
+        }
         return {
-          maxFeePerGas: (fees.maxFeePerGas * percent) / BigInt(100),
+          maxFeePerGas,
           maxPriorityFeePerGas: (fees.maxPriorityFeePerGas * percent) / BigInt(100),
         };
       }
       if (fees?.gasPrice) {
-        return { gasPrice: (fees.gasPrice * percent) / BigInt(100) };
+        const gasPrice = (fees.gasPrice * percent) / BigInt(100);
+        const gasPriceGwei = Number(formatUnits(gasPrice, 9));
+        if (gasPriceGwei > MAX_TX_FEE_GWEI) {
+          throw new Error(`Gas fee ceiling exceeded: ${gasPriceGwei.toFixed(3)} gwei > ${MAX_TX_FEE_GWEI.toFixed(3)} gwei`);
+        }
+        return { gasPrice };
       }
-    } catch {
-      /* ignore */
+    } catch (err) {
+      if (err instanceof Error && err.message.toLowerCase().includes("gas fee ceiling exceeded")) {
+        throw err;
+      }
+      /* ignore non-critical fee estimation errors */
     }
     return undefined;
   }, []);
@@ -298,10 +323,11 @@ export function useMining({
   const estimateGas = useCallback(
     async (functionName: string, args: readonly unknown[], bufferExtra: bigint) => {
       const pc = publicClientRef.current;
-      if (!pc || !address) return BigInt(500000) + bufferExtra;
+      const actorAddress = getActorAddress();
+      if (!pc || !actorAddress) return BigInt(500000) + bufferExtra;
       try {
         const est = await pc.estimateContractGas({
-          account: address,
+          account: actorAddress as `0x${string}`,
           address: CONTRACT_ADDRESS,
           abi: GAME_ABI,
           functionName: functionName as "placeBet",
@@ -312,7 +338,7 @@ export function useMining({
         return BigInt(500000) + bufferExtra;
       }
     },
-    [address],
+    [getActorAddress],
   );
 
   const placeBets = useCallback(
@@ -321,23 +347,25 @@ export function useMining({
       const overrides = gasOverrides ?? (await getBumpedFees());
       if (tiles.length === 1) {
         const gas = await estimateGas("placeBet", [BigInt(tiles[0]), singleAmountRaw], BigInt(20000));
-        await writeContractAsyncRef.current({
+        const txHash = await writeContractAsyncRef.current({
           address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "placeBet",
           args: [BigInt(tiles[0]), singleAmountRaw],
           chainId: APP_CHAIN_ID, gas, ...overrides,
         });
+        await waitReceipt(txHash as `0x${string}`);
       } else {
         const tileArgs = tiles.map((id) => BigInt(id));
         const amountArgs = tiles.map(() => singleAmountRaw);
         const gas = await estimateGas("placeBatchBets", [tileArgs, amountArgs], BigInt(35000));
-        await writeContractAsyncRef.current({
+        const txHash = await writeContractAsyncRef.current({
           address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "placeBatchBets",
           args: [tileArgs, amountArgs],
           chainId: APP_CHAIN_ID, gas, ...overrides,
         });
+        await waitReceipt(txHash as `0x${string}`);
       }
     },
-    [estimateGas, getBumpedFees],
+    [estimateGas, getBumpedFees, waitReceipt],
   );
 
   const placeBetsSilent = useCallback(
@@ -471,7 +499,8 @@ export function useMining({
     }) => {
       const { betStr, blocks, rounds, startRoundIndex = 0, lastPlacedEpoch: restoredLastEpoch = null } = params;
       const pc = publicClientRef.current;
-      if (!isConnected || !address || !pc) return;
+      const actorAddress = getActorAddress();
+      if (!isConnected || !actorAddress || !pc) return;
       if (autoMineRef.current) return;
       if (autoMineRunInProgress) return;
 
@@ -522,7 +551,7 @@ export function useMining({
         for (let attempt = 0; attempt < NETWORK_RETRY_MAX; attempt++) {
           try {
             initBalance = (await pc.readContract({
-              address: LINEA_TOKEN_ADDRESS, abi: TOKEN_ABI, functionName: "balanceOf", args: [address],
+              address: LINEA_TOKEN_ADDRESS, abi: TOKEN_ABI, functionName: "balanceOf", args: [actorAddress as `0x${string}`],
             })) as bigint;
             break;
           } catch (netErr) {
@@ -554,7 +583,7 @@ export function useMining({
           try {
             liveAllowance = (await pc.readContract({
               address: LINEA_TOKEN_ADDRESS, abi: TOKEN_ABI, functionName: "allowance",
-              args: [address, CONTRACT_ADDRESS],
+                  args: [actorAddress as `0x${string}`, CONTRACT_ADDRESS],
             })) as bigint;
             break;
           } catch (netErr) {
@@ -608,8 +637,15 @@ export function useMining({
 
           if (lastPlacedEpoch !== null) {
             setAutoMineProgress(`${r} / ${rounds} – waiting for epoch to end...`);
+            const waitPhaseStart = Date.now();
+            const WAIT_FOR_EPOCH_MAX_MS = 75_000; // 75s max – avoid infinite wait if RPC/time is wrong
             // Wait until the epoch timer has expired; then placeBet immediately (it auto-resolves).
             while (autoMineRef.current) {
+              if (Date.now() - waitPhaseStart > WAIT_FOR_EPOCH_MAX_MS) {
+                log.warn("AutoMine", "wait for epoch timeout – proceeding to place bet", { lastPlacedEpoch: lastPlacedEpoch.toString() });
+                setAutoMineProgress(`${r} / ${rounds} – epoch wait timeout, placing bet...`);
+                break;
+              }
               try {
                 const currentPc = publicClientRef.current;
                 if (!currentPc) { await delay(200); continue; }
@@ -626,14 +662,48 @@ export function useMining({
                     ? Math.min(secLeft * 1000 + 200, 500)
                     : Math.min(secLeft * 1000 + 300, 2000);
                 await delay(waitMs);
-              } catch {
+              } catch (err) {
+                log.warn("AutoMine", "getEpochEndTime failed in wait loop, retrying", err);
                 await delay(500);
               }
             }
             if (!autoMineRef.current) { stopReason = "user-stopped"; break; }
 
+            // Gas saver: prefer letting another player resolve first.
+            // If epoch is still not advanced, wait a short grace window before placing.
+            try {
+              const currentPc = publicClientRef.current;
+              if (currentPc) {
+                let latestEpoch = (await currentPc.readContract({
+                  address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "currentEpoch",
+                })) as bigint;
+                if (latestEpoch <= lastPlacedEpoch) {
+                  const graceStart = Date.now();
+                  const initialJitterMs = 1500 + Math.floor(Math.random() * 2500);
+                  setAutoMineProgress(`${r} / ${rounds} – waiting first resolver...`);
+                  await delay(initialJitterMs);
+                  while (autoMineRef.current && Date.now() - graceStart < EXTERNAL_RESOLVE_GRACE_MAX_MS) {
+                    latestEpoch = (await currentPc.readContract({
+                      address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "currentEpoch",
+                    })) as bigint;
+                    if (latestEpoch > lastPlacedEpoch) {
+                      log.info("AutoMine", "epoch advanced by other player – placing without resolve race", {
+                        previousEpoch: lastPlacedEpoch.toString(),
+                        latestEpoch: latestEpoch.toString(),
+                      });
+                      break;
+                    }
+                    await delay(EXTERNAL_RESOLVE_POLL_MS);
+                  }
+                }
+              }
+            } catch (resolveWaitErr) {
+              log.warn("AutoMine", "external resolver grace check failed, placing anyway", resolveWaitErr);
+            }
+
+            await ensurePreferredWalletRef.current?.();
             refetchEpochRef.current?.();
-            setAutoMineProgress(`${r} / ${rounds} – placing bet (auto-resolves)...`);
+            setAutoMineProgress(`${r} / ${rounds} – placing bet (${blocks} tiles)...`);
           }
 
           // --- Inner round body wrapped with network retry ---
@@ -657,7 +727,7 @@ export function useMining({
             if (!epochNeedsResolve) {
               const existingBets = (await currentPc.readContract({
                 address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-                args: [liveEpochNow, address],
+                args: [liveEpochNow, actorAddress as `0x${string}`],
               })) as bigint[];
 
               existingBets.forEach((b, i) => { if (b > BigInt(0)) alreadyBetTiles.add(i + 1); });
@@ -684,7 +754,7 @@ export function useMining({
             const roundCostActual = singleAmountRaw * BigInt(tilesToAdd);
 
             const tokenBal = (await currentPc.readContract({
-              address: LINEA_TOKEN_ADDRESS, abi: TOKEN_ABI, functionName: "balanceOf", args: [address],
+              address: LINEA_TOKEN_ADDRESS, abi: TOKEN_ABI, functionName: "balanceOf", args: [actorAddress as `0x${string}`],
             })) as bigint;
 
             if (tokenBal < roundCostActual) {
@@ -727,7 +797,14 @@ export function useMining({
             const placeBetOnce = async (overrides?: GasOverrides) => {
               const silentSend = silentSendRef.current;
               if (silentSend) {
-                await placeBetsSilent(tilesToBet, singleAmountRaw, overrides);
+                try {
+                  await placeBetsSilent(tilesToBet, singleAmountRaw, overrides);
+                } catch (silentErr) {
+                  // Fallback path: if silent signer fails unexpectedly, use regular wagmi write flow.
+                  if (isSessionExpiredError(silentErr)) throw silentErr;
+                  log.warn("AutoMine", "silent send failed, falling back to wallet write", silentErr);
+                  await placeBets(tilesToBet, singleAmountRaw, overrides);
+                }
               } else {
                 await placeBets(tilesToBet, singleAmountRaw, overrides);
               }
@@ -735,6 +812,7 @@ export function useMining({
 
             let betAttempts = 0;
             let skippedEpochEnded = false;
+            let skippedHighGas = false;
             let betAlreadyConfirmedOnChain = false;
             while (betAttempts < MAX_BET_ATTEMPTS) {
               try {
@@ -743,7 +821,7 @@ export function useMining({
                   try {
                     const recheckBets = (await currentPc.readContract({
                       address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-                      args: [liveEpochNow, address],
+                      args: [liveEpochNow, actorAddress as `0x${string}`],
                     })) as bigint[];
                     const recheckCount = recheckBets.filter(b => b > BigInt(0)).length;
                     if (recheckCount >= effectiveBlocks) {
@@ -761,6 +839,20 @@ export function useMining({
                 await placeBetOnce(retryOverrides);
                 break;
               } catch (err) {
+                const errMsg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+                if (errMsg.includes("gas fee ceiling exceeded")) {
+                  log.warn("AutoMine", `round ${r + 1} skipped – gas above ceiling`, err);
+                  setAutoMineProgress(`${r + 1} / ${rounds} – gas too high, skipping round`);
+                  lastPlacedEpoch = liveEpochNow;
+                  saveSession({
+                    active: true, betStr, blocks, rounds,
+                    nextRoundIndex: r + 1,
+                    lastPlacedEpoch: lastPlacedEpoch.toString(),
+                  });
+                  skippedHighGas = true;
+                  await delay(500);
+                  break;
+                }
                 if (isEpochEndedError(err)) {
                   log.warn("AutoMine", `round ${r + 1} skipped – epoch ended (tx too late), continuing next round`, { epoch: liveEpochNow.toString() });
                   setAutoMineProgress(`${r + 1} / ${rounds} – skipped (epoch ended), next round...`);
@@ -794,7 +886,6 @@ export function useMining({
                   await delay(1500);
                   continue;
                 }
-                const errMsg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
                 const isReplacementUnderpriced = errMsg.includes("replacement transaction underpriced");
                 betAttempts++;
                 if (!isRetryableError(err) || betAttempts >= MAX_BET_ATTEMPTS) throw err;
@@ -810,7 +901,7 @@ export function useMining({
               }
             }
 
-            if (skippedEpochEnded) { networkRetries = 0; continue; }
+            if (skippedEpochEnded || skippedHighGas) { networkRetries = 0; continue; }
             if (betAlreadyConfirmedOnChain) {
               lastPlacedEpoch = liveEpochNow;
               setSelectedTiles(tilesToBet);
@@ -857,7 +948,7 @@ export function useMining({
             try {
               const verifyBets = (await currentPc.readContract({
                 address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-                args: [liveEpochNow, address],
+                args: [liveEpochNow, actorAddress as `0x${string}`],
               })) as bigint[];
               const countInExpected = verifyBets.filter(b => b > BigInt(0)).length;
 
@@ -869,7 +960,7 @@ export function useMining({
                 try {
                   const nextBets = (await currentPc.readContract({
                     address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-                    args: [nextEpoch, address],
+                    args: [nextEpoch, actorAddress as `0x${string}`],
                   })) as bigint[];
                   const countInNext = nextBets.filter(b => b > BigInt(0)).length;
                   if (countInNext >= tilesToBet.length) {
@@ -880,7 +971,7 @@ export function useMining({
                     await delay(1200);
                     const recheckNext = (await currentPc.readContract({
                       address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-                      args: [nextEpoch, address],
+                      args: [nextEpoch, actorAddress as `0x${string}`],
                     })) as bigint[];
                     const recheckNextCount = recheckNext.filter(b => b > BigInt(0)).length;
                     if (recheckNextCount >= tilesToBet.length) {
@@ -891,7 +982,7 @@ export function useMining({
                         const epochPlus2 = liveEpochNow + BigInt(2);
                         const betsE2 = (await currentPc.readContract({
                           address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-                          args: [epochPlus2, address],
+                          args: [epochPlus2, actorAddress as `0x${string}`],
                         })) as bigint[];
                         const countE2 = betsE2.filter(b => b > BigInt(0)).length;
                         if (countE2 >= tilesToBet.length) {
@@ -961,7 +1052,7 @@ export function useMining({
                   })) as bigint;
                   const checkBets = (await currentPcCheck.readContract({
                     address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-                    args: [checkEpoch, address],
+                    args: [checkEpoch, actorAddress as `0x${string}`],
                   })) as bigint[];
                   const alreadyCount = checkBets.filter(b => b > BigInt(0)).length;
                   const effBlocks = Math.min(blocks, GRID_SIZE);
@@ -1012,6 +1103,8 @@ export function useMining({
             userMsg = "Stopped: replacement tx underpriced. Press START BOT again to continue.";
           } else if (rawMsg.includes("upfront cost exceeds") || rawMsg.includes("insufficient funds") || rawMsg.includes("exceeds account balance")) {
             userMsg = "Auto-miner stopped: not enough ETH for gas. Top up ETH on Privy wallet.";
+          } else if (rawMsg.includes("gas fee ceiling exceeded")) {
+            userMsg = "Auto-miner paused: gas above configured ceiling. Will continue when gas is lower.";
           } else if (rawMsg.includes("epoch ended")) {
             userMsg = "Round skipped (epoch ended). Press START BOT to continue.";
           } else if (rawMsg.includes("gas required exceeds") || rawMsg.includes("reverted")) {
@@ -1043,7 +1136,7 @@ export function useMining({
       }
     },
     // Minimal deps – all volatile functions read from refs
-    [isConnected, address, placeBets, placeBetsSilent, waitReceipt],
+    [isConnected, getActorAddress, placeBets, placeBetsSilent, waitReceipt],
   );
 
   // Ref to always hold the latest runAutoMining – decouples it from the restore effect

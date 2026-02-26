@@ -42,6 +42,9 @@ import { log } from "./lib/logger";
 const AUTO_RESOLVE_DELAY_BASE_MS = 90_000;
 const AUTO_RESOLVE_JITTER_MS = 30_000;
 const MIN_ETH_FOR_GAS = 0.0001; // ~enough for a couple of txs on Linea
+// Hard-disabled in client to prevent uncontrolled ETH gas burn from browser-side resolve txs.
+const ENABLE_CLIENT_AUTO_RESOLVE = false;
+const ENABLE_AUTO_RESOLVE_SWEEP = false;
 const VALID_TABS: TabId[] = ["hub", "analytics", "referral", "leaderboards", "whitepaper"];
 const ORB_STYLE = { animationDelay: "-10s" } as const;
 
@@ -240,11 +243,12 @@ export default function LineaOre() {
     refetchUserBets,
     refetchEpoch,
     refetchGridEpochData,
+    preferredAddress: embeddedWalletAddress ?? address ?? null,
     ensurePreferredWallet: ensureEmbeddedWallet,
     sendTransactionSilent,
     refreshSession,
     onAutoMineBetConfirmed: () => playSound("autoBet"),
-  }), [refetchAllowance, refetchTileData, refetchUserBets, refetchEpoch, refetchGridEpochData, ensureEmbeddedWallet, sendTransactionSilent, refreshSession, playSound]);
+  }), [refetchAllowance, refetchTileData, refetchUserBets, refetchEpoch, refetchGridEpochData, embeddedWalletAddress, address, ensureEmbeddedWallet, sendTransactionSilent, refreshSession, playSound]);
 
   const {
     isPending, selectedTiles, selectedTilesEpoch, isAutoMining, autoMineProgress, runningParams,
@@ -333,10 +337,11 @@ export default function LineaOre() {
   }, [historyViewData]);
 
   // --- Auto-resolve stale epochs from the browser if keeper bot is slow ---
-  const AUTO_RESOLVE_MAX_RETRIES = 3;
+  const AUTO_RESOLVE_MAX_RETRIES = 1;
   const AUTO_RESOLVE_RETRY_DELAY_MS = 6_000;
 
   useEffect(() => {
+    if (!ENABLE_CLIENT_AUTO_RESOLVE) return;
     const hasLowGasBalance =
       embeddedEthBalance != null && Number(embeddedEthBalance.formatted) < MIN_ETH_FOR_GAS;
     if (hasLowGasBalance) return;
@@ -488,6 +493,7 @@ export default function LineaOre() {
   // --- Sweep: resolve past unresolved epochs the auto-resolve missed ---
   const sweepRunningRef = useRef(false);
   useEffect(() => {
+    if (!ENABLE_AUTO_RESOLVE_SWEEP) return;
     const hasLowGasBalance =
       embeddedEthBalance != null && Number(embeddedEthBalance.formatted) < MIN_ETH_FOR_GAS;
     if (hasLowGasBalance) return;

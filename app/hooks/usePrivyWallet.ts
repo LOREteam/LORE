@@ -12,8 +12,8 @@ import { useSetActiveWallet } from "@privy-io/wagmi";
 import { useAccount, usePublicClient } from "wagmi";
 import { lineaSepoliaChain } from "../providers";
 
-/** 120% - balanced between inclusion speed and fee cost (fewer "replacement underpriced"). */
-const GAS_BUMP_PERCENT = BigInt(120);
+/** 105% - keeps tx inclusion without materially overpaying gas. */
+const GAS_BUMP_PERCENT = BigInt(105);
 const SILENT_SEND_TIMEOUT_MS = 45_000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {

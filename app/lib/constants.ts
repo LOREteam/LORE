@@ -23,7 +23,7 @@ export const MAX_REVEAL_DURATION_MS = 10000;
 
 // --- Reliability ---
 export const TX_RECEIPT_TIMEOUT_MS = 60_000;
-export const MAX_BET_ATTEMPTS = 5;
+export const MAX_BET_ATTEMPTS = 2;
 
 // --- Leaderboards ---
 export const LEADERBOARD_TOP_N = 50;
