@@ -102,6 +102,7 @@ function isNetworkError(err: unknown): boolean {
     msg.includes("err_network") ||
     msg.includes("load failed") ||
     msg.includes("method \"eth_sendrawtransaction\" is not supported") ||
+    msg.includes("does not exist/is not available") ||
     msg.includes("timed out after")
   );
 }

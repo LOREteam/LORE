@@ -14,8 +14,10 @@ export const DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS = 8;
 export const DEFAULT_API_EPOCHS_RECONCILE_MAX = 25;
 export const DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS = 800;
 
+// publicnode supports eth_sendRawTransaction and must be FIRST (Privy uses first URL for broadcast).
+// drpc and rpc.sepolia.linea.build do NOT support eth_sendRawTransaction.
 export const DEFAULT_LINEA_SEPOLIA_RPCS = [
-  "https://linea-sepolia.drpc.org",
   "https://linea-sepolia-rpc.publicnode.com",
+  "https://linea-sepolia.drpc.org",
   "https://rpc.sepolia.linea.build",
 ] as const;

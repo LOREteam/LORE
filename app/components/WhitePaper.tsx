@@ -133,7 +133,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         <Section id="grid" badge="04" title="The Mining Grid" icon={GridIcon} delay={0.15}>
           <P>
-            The grid is a 5×5 matrix of 25 "mine tiles," numbered <Code>#1</Code> through <Code>#25</Code>.
+            The grid is a 5×5 matrix of 25 &quot;mine tiles,&quot; numbered <Code>#1</Code> through <Code>#25</Code>.
             Each tile displays:
           </P>
           <ul className="space-y-2 mb-6 ml-1">
@@ -212,7 +212,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
             <Li emoji="💸">Withdraw LINEA tokens to your connected wallet (the one you use for deposits)</Li>
           </ul>
           <InfoBox emoji="🛡" title="Security Model">
-            The embedded wallet's private key is encrypted and managed by Privy's infrastructure.
+            The embedded wallet&apos;s private key is encrypted and managed by Privy&apos;s infrastructure.
             Only you can sign transactions. The game contract never has custody of your tokens beyond
             the approved allowance. You can revoke approval at any time.
           </InfoBox>
