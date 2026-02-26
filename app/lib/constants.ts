@@ -7,7 +7,7 @@ export const LINEA_TOKEN_ADDRESS = getAddress("0xa25bec3ed257a31ee62f1418ec3c357
 export const APP_CHAIN_ID = lineaSepolia.id;
 
 // --- Contract Deploy Block (Linea Sepolia) ---
-export const CONTRACT_DEPLOY_BLOCK = 25663555n;
+export const CONTRACT_DEPLOY_BLOCK = BigInt(25663555);
 
 // --- Game Config ---
 export const GRID_SIZE = 25;
