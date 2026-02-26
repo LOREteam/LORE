@@ -30,6 +30,7 @@ interface ApiEpoch {
 export function useDepositHistory(userAddress?: string) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<DepositEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const runningRef = useRef(false);
 
   const fetchFromApi = useCallback(async () => {
@@ -37,19 +38,45 @@ export function useDepositHistory(userAddress?: string) {
     if (runningRef.current) return;
     runningRef.current = true;
     setLoading(true);
+    setError(null);
 
     try {
-      const [depositsRes, epochsRes] = await Promise.all([
+      const [depositsResult, epochsResult] = await Promise.allSettled([
         fetch(`/api/deposits?user=${userAddress.toLowerCase()}`),
         fetch(`/api/epochs`),
       ]);
 
-      const depositsJson = await depositsRes.json();
-      const epochsJson = await epochsRes.json();
+      if (depositsResult.status === "rejected") {
+        setError("Network error while loading deposits");
+        setData([]);
+        return;
+      }
+
+      const depositsRes = depositsResult.value;
+      let depositsJson: { deposits?: ApiDeposit[]; error?: string } = {};
+      try {
+        depositsJson = await depositsRes.json();
+      } catch {
+        depositsJson = {};
+      }
+
+      if (!depositsRes.ok || depositsJson.error) {
+        setError(depositsJson.error || `HTTP ${depositsRes.status}`);
+        setData([]);
+        return;
+      }
+
+      let epochsMap: Record<string, ApiEpoch> = {};
+      if (epochsResult.status === "fulfilled" && epochsResult.value.ok) {
+        try {
+          const epochsJson = (await epochsResult.value.json()) as { epochs?: Record<string, ApiEpoch> };
+          epochsMap = epochsJson.epochs ?? {};
+        } catch {
+          epochsMap = {};
+        }
+      }
 
       const deposits: ApiDeposit[] = depositsJson.deposits ?? [];
-      const epochsMap: Record<string, ApiEpoch> = epochsJson.epochs ?? {};
-
       const entries: DepositEntry[] = deposits.map((d) => {
         const epochData = epochsMap[d.epoch];
         return {
@@ -67,6 +94,8 @@ export function useDepositHistory(userAddress?: string) {
       setData(entries);
     } catch (err) {
       console.error("[useDepositHistory] API fetch failed:", err);
+      setError((err as Error).message || "Network error");
+      setData([]);
     } finally {
       setLoading(false);
       runningRef.current = false;
@@ -76,6 +105,7 @@ export function useDepositHistory(userAddress?: string) {
   useEffect(() => {
     if (!userAddress) {
       setData(null);
+      setError(null);
       return;
     }
     void fetchFromApi();
@@ -90,5 +120,5 @@ export function useDepositHistory(userAddress?: string) {
     [data],
   );
 
-  return { data, loading, totalDeposited, fetch: fetchFromApi, refresh };
+  return { data, loading, totalDeposited, error, fetch: fetchFromApi, refresh };
 }

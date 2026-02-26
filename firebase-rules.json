@@ -9,7 +9,12 @@
     },
     "gamedata": {
       ".read": true,
-      ".write": true
+      ".write": true,
+      "bets": {
+        "$user": {
+          ".indexOn": ["epoch"]
+        }
+      }
     },
     "$other": {
       ".read": false,

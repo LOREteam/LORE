@@ -11,19 +11,27 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const res = await fetch(
+    let res = await fetch(
       `${FIREBASE_DB_URL}/gamedata/bets/${user}.json?orderBy="epoch"&limitToLast=5000`,
       { next: { revalidate: 10 } },
     );
+    if (res.status === 400) {
+      res = await fetch(`${FIREBASE_DB_URL}/gamedata/bets/${user}.json`, {
+        next: { revalidate: 10 },
+      });
+    }
     if (!res.ok) {
-      return NextResponse.json({ deposits: [] });
+      return NextResponse.json(
+        { deposits: [], error: `Firebase ${res.status}` },
+        { status: 502 },
+      );
     }
     const raw = await res.json();
     if (!raw || typeof raw !== "object") {
       return NextResponse.json({ deposits: [] });
     }
 
-    const deposits = Object.values(raw) as Array<{
+    let deposits = Object.values(raw) as Array<{
       epoch: string;
       tileIds: number[];
       totalAmount: string;
@@ -32,9 +40,22 @@ export async function GET(request: NextRequest) {
       blockNumber: string;
     }>;
 
-    deposits.sort((a, b) => Number(b.epoch) - Number(a.epoch));
+    // Only show deposits from current contract (exclude old contract epochs 71–1007+)
+    const metaRes = await fetch(`${FIREBASE_DB_URL}/gamedata/_meta/currentEpoch.json`, {
+      next: { revalidate: 10 },
+    });
+    const currentEpoch = metaRes.ok ? Number(await metaRes.json()) : NaN;
+    if (Number.isInteger(currentEpoch) && currentEpoch > 0) {
+      deposits = deposits.filter((d) => {
+        const n = Number(d.epoch);
+        return Number.isInteger(n) && n >= 1 && n <= currentEpoch;
+      });
+    }
 
-    return NextResponse.json({ deposits });
+    deposits.sort((a, b) => Number(b.epoch) - Number(a.epoch));
+    const limited = deposits.slice(0, 5000);
+
+    return NextResponse.json({ deposits: limited });
   } catch (err) {
     console.error("[api/deposits] Error:", err);
     return NextResponse.json({ deposits: [], error: "fetch failed" }, { status: 500 });

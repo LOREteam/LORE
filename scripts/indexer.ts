@@ -16,6 +16,7 @@ import {
   decodeEventLog,
   formatUnits,
   encodeEventTopics,
+  toHex,
   type Log,
 } from "viem";
 import { lineaSepolia } from "viem/chains";
@@ -23,18 +24,23 @@ import { lineaSepolia } from "viem/chains";
 const CONTRACT = (process.env.KEEPER_CONTRACT_ADDRESS ||
   "0x2a98cfb661710d11c47e958856859f7b474e0107") as `0x${string}`;
 const DEPLOY_BLOCK = 25663555n;
+const INDEXER_START_BLOCK = BigInt(process.env.INDEXER_START_BLOCK ?? DEPLOY_BLOCK.toString());
 const CHUNK_BLOCKS = 2_000n;
+const REPAIR_CHUNK_BLOCKS = 20_000n;
 const POLL_INTERVAL_MS = 15_000;
 const CONCURRENCY = 1;
 const RETRY_COUNT = 5;
 const RETRY_DELAY_MS = 5_000;
 const INTER_CHUNK_DELAY_MS = 1_500;
+const RECONCILE_INTERVAL_MS = Number(process.env.INDEXER_RECONCILE_INTERVAL_MS ?? "120000");
+const RECONCILE_MAX_EPOCHS_PER_PASS = Number(process.env.INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS ?? "8");
 
 const FIREBASE_DB_URL =
   process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL ||
   "https://lore-78751-default-rtdb.europe-west1.firebasedatabase.app";
 const FIREBASE_DB_AUTH = process.env.FIREBASE_DB_AUTH ?? "";
 let writeDisabled = false;
+let lastReconcileAtMs = 0;
 
 function firebaseUrl(path: string) {
   const base = `${FIREBASE_DB_URL}/${path}.json`;
@@ -50,6 +56,8 @@ const EVENTS_ABI = parseAbi([
   "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
   "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
 ]);
+
+const READ_ABI = parseAbi(["function currentEpoch() view returns (uint256)"]);
 
 const client = createPublicClient({
   chain: lineaSepolia,
@@ -127,12 +135,38 @@ async function fetchLogsWithRetry(
         console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} — wait ${wait}ms`);
         await delay(wait);
       } else {
-        console.warn(`  [warn] ${from}-${to} failed after ${RETRY_COUNT} retries: ${msg}`);
-        return [];
+        throw new Error(`log fetch failed for ${from}-${to} after ${RETRY_COUNT} retries: ${msg}`);
       }
     }
   }
-  return [];
+  throw new Error(`log fetch failed for ${from}-${to}: exhausted retries`);
+}
+
+async function fetchLogsByTopicsWithRetry(
+  topics: Array<`0x${string}`>,
+  from: bigint,
+  to: bigint,
+): Promise<Log[]> {
+  for (let attempt = 0; attempt < RETRY_COUNT; attempt++) {
+    try {
+      return await client.getLogs({
+        address: CONTRACT,
+        topics,
+        fromBlock: from,
+        toBlock: to,
+      } as any);
+    } catch (err) {
+      const msg = (err as Error).message?.slice(0, 80) ?? "unknown";
+      if (attempt < RETRY_COUNT - 1) {
+        const wait = RETRY_DELAY_MS * (attempt + 1);
+        console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} — wait ${wait}ms`);
+        await delay(wait);
+      } else {
+        throw new Error(`indexed log fetch failed for ${from}-${to} after ${RETRY_COUNT} retries: ${msg}`);
+      }
+    }
+  }
+  throw new Error(`indexed log fetch failed for ${from}-${to}: exhausted retries`);
 }
 
 async function fetchLogsByTopic(
@@ -356,9 +390,138 @@ async function setLastBlock(block: bigint) {
   await fbPut("gamedata/_meta/lastIndexedBlock", block.toString());
 }
 
+async function updateCurrentEpochMeta() {
+  try {
+    const currentEpoch = await client.readContract({
+      address: CONTRACT,
+      abi: READ_ABI,
+      functionName: "currentEpoch",
+    });
+    await fbPut("gamedata/_meta/currentEpoch", Number(currentEpoch));
+  } catch (err) {
+    console.warn("[indexer] Could not read currentEpoch from contract:", (err as Error).message);
+  }
+}
+
+async function getCurrentEpochFromChain() {
+  return await client.readContract({
+    address: CONTRACT,
+    abi: READ_ABI,
+    functionName: "currentEpoch",
+  });
+}
+
 async function getLastBlock(): Promise<bigint> {
   const val = await fbGet<string>("gamedata/_meta/lastIndexedBlock");
-  return val ? BigInt(val) : DEPLOY_BLOCK;
+  return val ? BigInt(val) : INDEXER_START_BLOCK;
+}
+
+async function getRepairCursorBlock(): Promise<bigint> {
+  const val = await fbGet<string>("gamedata/_meta/repairCursorBlock");
+  return val ? BigInt(val) : INDEXER_START_BLOCK;
+}
+
+async function setRepairCursorBlock(block: bigint) {
+  await fbPut("gamedata/_meta/repairCursorBlock", block.toString());
+}
+
+async function runRepairPass(currentBlock: bigint) {
+  let from = await getRepairCursorBlock();
+  if (from < INDEXER_START_BLOCK) from = INDEXER_START_BLOCK;
+
+  if (from > currentBlock) {
+    await updateCurrentEpochMeta();
+    return 0;
+  }
+
+  const to = from + REPAIR_CHUNK_BLOCKS - 1n > currentBlock
+    ? currentBlock
+    : from + REPAIR_CHUNK_BLOCKS - 1n;
+
+  console.log(`[indexer][repair] Scanning ${from} → ${to} (${to - from + 1n} blocks)`);
+
+  const logs = await fetchAllLogs(from, to);
+  if (logs.length > 0) {
+    const { bets, epochs, jackpots } = processLogs(logs);
+    await writeBets(bets);
+    await writeEpochs(epochs);
+    await writeJackpots(jackpots);
+    console.log(`[indexer][repair] Repaired ${logs.length} logs (${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots)`);
+  } else {
+    console.log("[indexer][repair] No logs in this range");
+  }
+
+  await setRepairCursorBlock(to + 1n);
+  await updateCurrentEpochMeta();
+  return logs.length;
+}
+
+async function runEpochReconcile(currentBlock: bigint) {
+  const now = Date.now();
+  if (now - lastReconcileAtMs < RECONCILE_INTERVAL_MS) return 0;
+  lastReconcileAtMs = now;
+
+  const currentEpoch = await getCurrentEpochFromChain();
+  await fbPut("gamedata/_meta/currentEpoch", Number(currentEpoch));
+
+  if (currentEpoch <= 1n) return 0;
+
+  const rawEpochs = (await fbGet<Record<string, EpochRecord>>("gamedata/epochs")) ?? {};
+  const have = new Set<number>();
+  for (const key of Object.keys(rawEpochs)) {
+    const n = Number(key);
+    if (Number.isInteger(n) && n > 0) have.add(n);
+  }
+
+  const missing: number[] = [];
+  for (let ep = 1; ep < Number(currentEpoch); ep++) {
+    if (!have.has(ep)) missing.push(ep);
+  }
+  if (missing.length === 0) {
+    console.log("[indexer][reconcile] No missing epochs");
+    return 0;
+  }
+
+  const targets = missing.slice(-Math.max(1, RECONCILE_MAX_EPOCHS_PER_PASS));
+  console.log(`[indexer][reconcile] Missing epochs: ${missing.length}, repairing now: ${targets.join(", ")}`);
+
+  const epochsPatch = new Map<string, EpochRecord>();
+  for (const epNum of targets) {
+    const epTopic = toHex(BigInt(epNum), { size: 32 });
+    const logs = await fetchLogsByTopicsWithRetry([resolvedSig, epTopic], INDEXER_START_BLOCK, currentBlock);
+    if (logs.length === 0) continue;
+
+    // Keep last resolved log for epoch (safety)
+    const log = logs[logs.length - 1];
+    try {
+      const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+      if (decoded.eventName !== "EpochResolved") continue;
+      const args = decoded.args as {
+        epoch: bigint; winningTile: bigint; totalPool: bigint; fee: bigint; rewardPool: bigint; jackpotBonus: bigint;
+      };
+      epochsPatch.set(args.epoch.toString(), {
+        winningTile: Number(args.winningTile),
+        totalPool: formatUnits(args.totalPool, 18),
+        rewardPool: formatUnits(args.rewardPool, 18),
+        fee: formatUnits(args.fee, 18),
+        jackpotBonus: formatUnits(args.jackpotBonus, 18),
+        isDailyJackpot: false,
+        isWeeklyJackpot: false,
+        resolvedBlock: (log.blockNumber ?? 0n).toString(),
+      });
+    } catch {
+      // malformed log
+    }
+    await delay(250);
+  }
+
+  if (epochsPatch.size > 0) {
+    await writeEpochs(epochsPatch);
+    console.log(`[indexer][reconcile] Repaired ${epochsPatch.size} epochs`);
+    return epochsPatch.size;
+  }
+  console.log("[indexer][reconcile] No resolvable missing epochs in this pass");
+  return 0;
 }
 
 // ─── Main loop ──────────────────────────────────────────────────────
@@ -387,6 +550,7 @@ async function runOnce() {
   }
 
   await setLastBlock(currentBlock);
+  await updateCurrentEpochMeta();
   return logs.length;
 }
 
@@ -398,15 +562,24 @@ async function main() {
   }
   console.log(`[indexer] Contract: ${CONTRACT}`);
   console.log(`[indexer] Deploy block: ${DEPLOY_BLOCK}`);
+  console.log(`[indexer] Start block: ${INDEXER_START_BLOCK}`);
   console.log(`[indexer] Mode: ${isWatch ? "watch (continuous)" : "one-shot"}`);
 
   await runOnce();
+  {
+    const head = await client.getBlockNumber();
+    await runRepairPass(head);
+    await runEpochReconcile(head);
+  }
 
   if (isWatch) {
     console.log(`[indexer] Watching for new blocks every ${POLL_INTERVAL_MS / 1000}s...`);
     setInterval(async () => {
       try {
         await runOnce();
+        const head = await client.getBlockNumber();
+        await runRepairPass(head);
+        await runEpochReconcile(head);
       } catch (err) {
         console.error(`[indexer] Error in watch loop:`, (err as Error).message);
       }

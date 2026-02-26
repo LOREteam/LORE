@@ -456,6 +456,7 @@ interface AnalyticsProps {
   }>;
   deposits: DepositEntry[] | null;
   depositsLoading: boolean;
+  depositsError: string | null;
   totalDeposited: number;
   onLoadDeposits: () => void;
   onRefreshDeposits: () => void;
@@ -469,6 +470,7 @@ export const Analytics = React.memo(function Analytics({
   historyViewData,
   deposits,
   depositsLoading,
+  depositsError,
   totalDeposited,
   onLoadDeposits,
   onRefreshDeposits,
@@ -763,7 +765,12 @@ export const Analytics = React.memo(function Analytics({
           </div>
         </div>
 
-        {deposits === null && !depositsLoading ? (
+        {depositsError ? (
+          <div className="flex flex-col items-center justify-center py-4 gap-2">
+            <span className="text-[11px] text-amber-400/90">Failed to load: {depositsError}</span>
+            <span className="text-[10px] text-gray-500">Check Firebase and indexer on the server. Then click Refresh above.</span>
+          </div>
+        ) : deposits === null && !depositsLoading ? (
           <div className="flex flex-col items-center justify-center py-3 gap-2">
             <span className="text-[12px] text-gray-500">Scans full chain history for your bets (cached incrementally)</span>
             <button

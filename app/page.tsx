@@ -281,7 +281,7 @@ export default function LineaOre() {
   } = useReferral({ sendTransactionSilent });
 
   // --- Deposit history (auto-load when Analytics tab opens; periodic refresh) ---
-  const { data: deposits, loading: depositsLoading, totalDeposited, fetch: fetchDeposits, refresh: refreshDeposits } =
+  const { data: deposits, loading: depositsLoading, totalDeposited, error: depositsError, fetch: fetchDeposits, refresh: refreshDeposits } =
     useDepositHistory(embeddedWalletAddress ?? undefined);
 
   const depositsFetchedRef = useRef(false);
@@ -858,6 +858,7 @@ export default function LineaOre() {
             historyViewData={historyViewData}
             deposits={deposits}
             depositsLoading={depositsLoading}
+            depositsError={depositsError}
             totalDeposited={totalDeposited}
             onLoadDeposits={fetchDeposits}
             onRefreshDeposits={refreshDeposits}
