@@ -61,14 +61,13 @@ pick_base_url() {
 
 json_get() {
   # json_get '<json>' '<python expr>'
-  # expr examples:
-  #   "data.get('epochs', {})"
+  # Passes JSON via stdin to avoid "Argument list too long" on large payloads.
   local json="$1"
   local expr="$2"
-  python3 - "$json" "$expr" <<'PY'
+  printf '%s' "$json" | python3 - "$expr" <<'PY'
 import json, sys
-raw = sys.argv[1]
-expr = sys.argv[2]
+raw = sys.stdin.read()
+expr = sys.argv[1]
 try:
     data = json.loads(raw)
     safe_builtins = {
