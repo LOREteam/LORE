@@ -57,8 +57,8 @@ export const wagmiConfig = createConfig({
   chains: [lineaSepoliaChain],
   transports: {
     [lineaSepoliaChain.id]: fallback([
-      ...RPC_URLS.map((url) => http(url)),
-    ]),
+      ...RPC_URLS.map((url) => http(url, { timeout: 12_000, retryCount: 1 })),
+    ], { rank: true }),
   },
   batch: {
     multicall: true,

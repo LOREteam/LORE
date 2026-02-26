@@ -14,6 +14,20 @@ import { lineaSepoliaChain } from "../providers";
 
 /** 120% - balanced between inclusion speed and fee cost (fewer "replacement underpriced"). */
 const GAS_BUMP_PERCENT = BigInt(120);
+const SILENT_SEND_TIMEOUT_MS = 45_000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  const guarded = promise.catch((err) => {
+    // Prevent unhandled rejection noise when timeout wins the race.
+    throw err;
+  });
+  return Promise.race([
+    guarded,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    }),
+  ]);
+}
 
 export function usePrivyWallet() {
   const { wallets } = useWallets();
@@ -87,9 +101,13 @@ export function usePrivyWallet() {
           /* keep request without gas overrides */
         }
       }
-      const receipt = await sendTransaction(baseRequest, {
-        uiOptions: { showWalletUIs: false },
-      });
+      const receipt = await withTimeout(
+        sendTransaction(baseRequest, {
+          uiOptions: { showWalletUIs: false },
+        }),
+        SILENT_SEND_TIMEOUT_MS,
+        "Privy sendTransaction",
+      );
       return receipt.hash as `0x${string}`;
     },
     [sendTransaction, embeddedWallet, embeddedWalletAddress, publicClient, setActiveWallet],

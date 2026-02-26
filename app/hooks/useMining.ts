@@ -93,7 +93,8 @@ function isNetworkError(err: unknown): boolean {
     msg.includes("fetch failed") ||
     msg.includes("aborted") ||
     msg.includes("err_network") ||
-    msg.includes("load failed")
+    msg.includes("load failed") ||
+    msg.includes("timed out after")
   );
 }
 

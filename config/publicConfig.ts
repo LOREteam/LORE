@@ -15,8 +15,8 @@ export const DEFAULT_API_EPOCHS_RECONCILE_MAX = 25;
 export const DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS = 800;
 
 export const DEFAULT_LINEA_SEPOLIA_RPCS = [
-  "https://linea-sepolia.public.blastapi.io",
   "https://linea-sepolia.drpc.org",
   "https://linea-sepolia-rpc.publicnode.com",
   "https://rpc.sepolia.linea.build",
+  "https://linea-sepolia.public.blastapi.io",
 ] as const;
