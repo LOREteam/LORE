@@ -122,9 +122,9 @@ function isNetworkError(err: unknown): boolean {
 const NETWORK_RETRY_MAX = 120;
 const NETWORK_BACKOFF_INITIAL_MS = 1_500;
 const NETWORK_BACKOFF_MAX_MS = 15_000;
-const EXTERNAL_RESOLVE_GRACE_MAX_MS = 25_000;
-const EXTERNAL_RESOLVE_POLL_MS = 1_200;
-const MAX_TX_FEE_GWEI = 0.12;
+const EXTERNAL_RESOLVE_GRACE_MAX_MS = 8_000;
+const EXTERNAL_RESOLVE_POLL_MS = 500;
+const MAX_TX_FEE_GWEI = 0.28;
 
 function readSession(): PersistedAutoMinerSession | null {
   if (typeof window === "undefined") return null;
@@ -698,7 +698,7 @@ export function useMining({
                 })) as bigint;
                 if (latestEpoch <= lastPlacedEpoch) {
                   const graceStart = Date.now();
-                  const initialJitterMs = 3000 + Math.floor(Math.random() * 5000);
+                  const initialJitterMs = 400 + Math.floor(Math.random() * 1000);
                   setAutoMineProgress(`${r} / ${rounds} – waiting first resolver...`);
                   await delay(initialJitterMs);
                   while (autoMineRef.current && Date.now() - graceStart < EXTERNAL_RESOLVE_GRACE_MAX_MS) {
@@ -863,6 +863,8 @@ export function useMining({
                 if (errMsg.includes("gas fee ceiling exceeded")) {
                   log.warn("AutoMine", `round ${r + 1} skipped – gas above ceiling`, err);
                   setAutoMineProgress(`${r + 1} / ${rounds} – gas too high, skipping round`);
+                  setSelectedTiles([]);
+                  setSelectedTilesEpoch(null);
                   lastPlacedEpoch = liveEpochNow;
                   saveSession({
                     active: true, betStr, blocks, rounds,
@@ -876,6 +878,8 @@ export function useMining({
                 if (isEpochEndedError(err)) {
                   log.warn("AutoMine", `round ${r + 1} skipped – epoch ended (tx too late), continuing next round`, { epoch: liveEpochNow.toString() });
                   setAutoMineProgress(`${r + 1} / ${rounds} – skipped (epoch ended), next round...`);
+                  setSelectedTiles([]);
+                  setSelectedTilesEpoch(null);
                   lastPlacedEpoch = liveEpochNow;
                   saveSession({
                     active: true, betStr, blocks, rounds,

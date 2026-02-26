@@ -16,7 +16,7 @@ import { lineaSepoliaChain } from "../providers";
 /** 105% - keeps tx inclusion without materially overpaying gas. */
 const GAS_BUMP_PERCENT = BigInt(105);
 const SILENT_SEND_TIMEOUT_MS = 45_000;
-const MAX_FEE_GWEI = 0.12;
+const MAX_FEE_GWEI = 0.28;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   const guarded = promise.catch((err) => {
