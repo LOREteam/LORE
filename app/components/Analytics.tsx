@@ -745,23 +745,21 @@ export const Analytics = React.memo(function Analytics({
           </h2>
           <div className="flex items-center gap-3">
             {deposits && deposits.length > 0 && (
-              <>
-                <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                  Total: <span className="text-sky-400">{totalDeposited.toFixed(2)} LINEA</span>
-                  <span className="text-gray-600 ml-1.5">({deposits.length} tx)</span>
-                </span>
-                <button
-                  onClick={onRefreshDeposits}
-                  disabled={depositsLoading}
-                  className="p-1.5 rounded-lg border border-white/[0.06] text-gray-500 hover:text-sky-400 hover:border-sky-500/20 hover:bg-sky-500/[0.06] transition-all disabled:opacity-40"
-                  title="Refresh"
-                >
-                  <svg className={`w-3.5 h-3.5 ${depositsLoading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                </button>
-              </>
+              <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                Total: <span className="text-sky-400">{totalDeposited.toFixed(2)} LINEA</span>
+                <span className="text-gray-600 ml-1.5">({deposits.length} tx)</span>
+              </span>
             )}
+            <button
+              onClick={onRefreshDeposits}
+              disabled={depositsLoading}
+              className="p-1.5 rounded-lg border border-white/[0.06] text-gray-500 hover:text-sky-400 hover:border-sky-500/20 hover:bg-sky-500/[0.06] transition-all disabled:opacity-40"
+              title="Refresh"
+            >
+              <svg className={`w-3.5 h-3.5 ${depositsLoading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
           </div>
         </div>
 
@@ -782,8 +780,9 @@ export const Analytics = React.memo(function Analytics({
             <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider"><LoreText items={loadingQuotes} /></span>
           </div>
         ) : deposits && deposits.length === 0 ? (
-          <div className="text-center py-4">
+          <div className="text-center py-4 flex flex-col items-center gap-2">
             <span className="text-[11px] text-gray-600 italic"><LoreText items={emptyStates.analytics} /></span>
+            <span className="text-[10px] text-gray-500">If you&apos;ve already placed bets, use <strong className="text-sky-400/90">Refresh</strong> above to load history.</span>
           </div>
         ) : (
           <>

@@ -699,6 +699,9 @@ function Footer() {
       <p className="text-[9px] text-gray-700 mt-1">
         This document is for informational purposes. Not financial advice. Play responsibly.
       </p>
+      <p className="text-[9px] text-gray-600 mt-2">
+        <a href="/privacy" className="text-violet-400/80 hover:text-violet-400 underline">Privacy Policy</a>
+      </p>
     </div>
   );
 }

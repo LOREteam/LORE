@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback } from "react";
+import Link from "next/link";
 import { formatUnits } from "viem";
 import type { TabId, UnclaimedWin } from "../lib/types";
 import { useGlobalStats } from "../hooks/useGlobalStats";
@@ -215,6 +216,16 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
               </div>
             )}
           </div>
+        </div>
+
+        {/* ═══ Footer links ═══ */}
+        <div className="p-3 mt-auto border-t border-white/[0.06]">
+          <Link
+            href="/privacy"
+            className="block text-center text-[10px] font-semibold uppercase tracking-wider text-gray-500 hover:text-violet-400 transition-colors"
+          >
+            Privacy Policy
+          </Link>
         </div>
       </div>
     </aside>
