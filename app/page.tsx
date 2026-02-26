@@ -314,7 +314,7 @@ export default function LineaOre() {
     useLeaderboards(activeTab === "leaderboards");
 
   const recentWins = useRecentWins();
-  const { items: jackpotHistory, loading: jackpotHistoryLoading, refresh: refreshJackpotHistory } = useJackpotHistory();
+  const { items: jackpotHistory, loading: jackpotHistoryLoading, error: jackpotHistoryError, refresh: refreshJackpotHistory } = useJackpotHistory();
 
 
   // --- Hot tiles (most frequent winners) ---
@@ -864,6 +864,7 @@ export default function LineaOre() {
             onRefreshDeposits={refreshDeposits}
             jackpotHistory={jackpotHistory}
             jackpotHistoryLoading={jackpotHistoryLoading}
+            jackpotHistoryError={jackpotHistoryError}
             onRefreshJackpotHistory={refreshJackpotHistory}
           />
         )}

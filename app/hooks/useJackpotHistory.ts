@@ -17,16 +17,18 @@ const REFRESH_MS = 45_000;
 export function useJackpotHistory() {
   const [items, setItems] = useState<JackpotHistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const runningRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (runningRef.current) return;
     runningRef.current = true;
     setLoading(true);
+    setError(null);
 
     try {
       const res = await fetch("/api/jackpots");
-      const json = await res.json();
+      const json = (await res.json()) as { jackpots?: unknown[]; error?: string };
       const jackpots = (json.jackpots ?? []) as Array<{
         epoch: string;
         kind: "daily" | "weekly";
@@ -35,6 +37,12 @@ export function useJackpotHistory() {
         txHash: string;
         blockNumber: string;
       }>;
+
+      if (!res.ok || json.error) {
+        setError(json.error || `HTTP ${res.status}`);
+        setItems([]);
+        return;
+      }
 
       const entries: JackpotHistoryEntry[] = jackpots.map((j) => ({
         epoch: j.epoch,
@@ -49,6 +57,8 @@ export function useJackpotHistory() {
       setItems(entries);
     } catch (err) {
       console.error("[useJackpotHistory] API fetch failed:", err);
+      setError((err as Error).message || "Network error");
+      setItems([]);
     } finally {
       setLoading(false);
       runningRef.current = false;
@@ -61,5 +71,5 @@ export function useJackpotHistory() {
     return () => clearInterval(id);
   }, [refresh]);
 
-  return { items, loading, refresh };
+  return { items, loading, error, refresh };
 }

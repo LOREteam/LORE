@@ -1,8 +1,114 @@
 import { NextRequest, NextResponse } from "next/server";
+import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi, toHex } from "viem";
+import {
+  CONTRACT_ADDRESS,
+  CONTRACT_DEPLOY_BLOCK,
+  fetchFirebaseJson,
+  fetchFirebaseWithOrderFallback,
+  filterByCurrentEpoch,
+  parseCurrentEpoch,
+  patchFirebase,
+  publicClient,
+} from "../_lib/dataBridge";
 
-const FIREBASE_DB_URL =
-  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL ||
-  "https://lore-78751-default-rtdb.europe-west1.firebasedatabase.app";
+const LOG_CHUNK_BLOCKS = 50_000n;
+
+const EVENTS_ABI = parseAbi([
+  "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
+  "event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)",
+]);
+const [betSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BetPlaced" });
+const [batchSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsPlaced" });
+
+type DepositRow = {
+  epoch: string;
+  tileIds: number[];
+  totalAmount: string;
+  totalAmountNum: number;
+  txHash: string;
+  blockNumber: string;
+  amounts?: string[];
+};
+
+async function getLogsByTopicAndUser(topic0: `0x${string}`, userTopic: `0x${string}`) {
+  const all: Awaited<ReturnType<typeof publicClient.getLogs>> = [];
+  const head = await publicClient.getBlockNumber();
+  for (let from = CONTRACT_DEPLOY_BLOCK; from <= head; from += LOG_CHUNK_BLOCKS) {
+    const to = from + LOG_CHUNK_BLOCKS - 1n > head ? head : from + LOG_CHUNK_BLOCKS - 1n;
+    const logs = await publicClient.getLogs({
+      address: CONTRACT_ADDRESS,
+      topics: [topic0, null, userTopic],
+      fromBlock: from,
+      toBlock: to,
+    } as any);
+    all.push(...logs);
+  }
+  return all;
+}
+
+async function fetchDepositsFromChain(user: string, currentEpoch: number | null) {
+  const userTopic = toHex(user as `0x${string}`, { size: 32 });
+  const betLogs = betSig ? await getLogsByTopicAndUser(betSig, userTopic) : [];
+  const batchLogs = batchSig ? await getLogsByTopicAndUser(batchSig, userTopic) : [];
+
+  const byKey = new Map<string, DepositRow>();
+  const all = [...betLogs, ...batchLogs];
+  all.sort((a, b) => Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n)));
+
+  for (const log of all) {
+    const topic0 = log.topics[0];
+    if (!topic0) continue;
+    try {
+      if (topic0 === betSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "BetPlaced") continue;
+        const args = decoded.args as { epoch: bigint; tileId: bigint; amount: bigint };
+        const ep = Number(args.epoch);
+        if (currentEpoch && (ep < 1 || ep > currentEpoch)) continue;
+        const key = `${args.epoch.toString()}_${(log.transactionHash ?? "").slice(0, 10)}`;
+        const amount = formatUnits(args.amount, 18);
+        const prev = byKey.get(key);
+        if (prev) {
+          prev.tileIds.push(Number(args.tileId));
+          prev.totalAmountNum += parseFloat(amount);
+          prev.totalAmount = prev.totalAmountNum.toString();
+        } else {
+          byKey.set(key, {
+            epoch: args.epoch.toString(),
+            tileIds: [Number(args.tileId)],
+            amounts: [amount],
+            totalAmount: amount,
+            totalAmountNum: parseFloat(amount),
+            txHash: log.transactionHash ?? "",
+            blockNumber: (log.blockNumber ?? 0n).toString(),
+          });
+        }
+      } else if (topic0 === batchSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "BatchBetsPlaced") continue;
+        const args = decoded.args as { epoch: bigint; tileIds: readonly bigint[]; amounts: readonly bigint[]; totalAmount: bigint };
+        const ep = Number(args.epoch);
+        if (currentEpoch && (ep < 1 || ep > currentEpoch)) continue;
+        const key = `${args.epoch.toString()}_${(log.transactionHash ?? "").slice(0, 10)}`;
+        byKey.set(key, {
+          epoch: args.epoch.toString(),
+          tileIds: args.tileIds.map(Number),
+          amounts: args.amounts.map((a) => formatUnits(a, 18)),
+          totalAmount: formatUnits(args.totalAmount, 18),
+          totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
+      }
+    } catch {
+      // malformed log
+    }
+  }
+
+  const rows = Array.from(byKey.values());
+  rows.sort((a, b) => Number(b.epoch) - Number(a.epoch));
+  return rows.slice(0, 5000);
+}
 
 export async function GET(request: NextRequest) {
   const user = request.nextUrl.searchParams.get("user")?.toLowerCase();
@@ -11,45 +117,41 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    let res = await fetch(
-      `${FIREBASE_DB_URL}/gamedata/bets/${user}.json?orderBy="epoch"&limitToLast=5000`,
-      { next: { revalidate: 10 } },
+    const fb = await fetchFirebaseWithOrderFallback<Record<string, DepositRow>>(
+      `gamedata/bets/${user}`,
+      "epoch",
+      5000,
     );
-    if (res.status === 400) {
-      res = await fetch(`${FIREBASE_DB_URL}/gamedata/bets/${user}.json`, {
-        next: { revalidate: 10 },
-      });
-    }
-    if (!res.ok) {
+    if (!fb.ok) {
       return NextResponse.json(
-        { deposits: [], error: `Firebase ${res.status}` },
+        { deposits: [], error: `Firebase ${fb.status}` },
         { status: 502 },
       );
     }
-    const raw = await res.json();
+    const raw = fb.data;
     if (!raw || typeof raw !== "object") {
       return NextResponse.json({ deposits: [] });
     }
 
-    let deposits = Object.values(raw) as Array<{
-      epoch: string;
-      tileIds: number[];
-      totalAmount: string;
-      totalAmountNum: number;
-      txHash: string;
-      blockNumber: string;
-    }>;
+    let deposits = Object.values(raw) as DepositRow[];
 
     // Only show deposits from current contract (exclude old contract epochs 71–1007+)
-    const metaRes = await fetch(`${FIREBASE_DB_URL}/gamedata/_meta/currentEpoch.json`, {
-      next: { revalidate: 10 },
-    });
-    const currentEpoch = metaRes.ok ? Number(await metaRes.json()) : NaN;
-    if (Number.isInteger(currentEpoch) && currentEpoch > 0) {
-      deposits = deposits.filter((d) => {
-        const n = Number(d.epoch);
-        return Number.isInteger(n) && n >= 1 && n <= currentEpoch;
-      });
+    const meta = await fetchFirebaseJson<number>("gamedata/_meta/currentEpoch");
+    const currentEpochNum = parseCurrentEpoch(meta.data);
+    deposits = filterByCurrentEpoch(deposits, currentEpochNum);
+
+    // Chain supplement: if DB is empty/missing, recover user deposits from on-chain logs and upsert to Firebase
+    if (deposits.length === 0) {
+      const recovered = await fetchDepositsFromChain(user, currentEpochNum);
+      if (recovered.length > 0) {
+        const patch: Record<string, unknown> = {};
+        for (const d of recovered) {
+          const key = `${d.epoch}_${d.txHash.slice(0, 10)}`;
+          patch[key] = d;
+        }
+        await patchFirebase(`gamedata/bets/${user}`, patch);
+        deposits = recovered;
+      }
     }
 
     deposits.sort((a, b) => Number(b.epoch) - Number(a.epoch));

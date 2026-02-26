@@ -462,6 +462,7 @@ interface AnalyticsProps {
   onRefreshDeposits: () => void;
   jackpotHistory: JackpotHistoryEntry[];
   jackpotHistoryLoading: boolean;
+  jackpotHistoryError: string | null;
   onRefreshJackpotHistory: () => void;
 }
 
@@ -476,6 +477,7 @@ export const Analytics = React.memo(function Analytics({
   onRefreshDeposits,
   jackpotHistory,
   jackpotHistoryLoading,
+  jackpotHistoryError,
   onRefreshJackpotHistory,
 }: AnalyticsProps) {
   useEffect(() => {
@@ -886,12 +888,20 @@ export const Analytics = React.memo(function Analytics({
           </button>
         </div>
 
-        {jackpotHistory.length === 0 ? (
-          <div className="text-center py-4">
+        {jackpotHistoryError ? (
+          <div className="text-center py-4 flex flex-col items-center gap-2">
+            <span className="text-[11px] text-amber-400/90">Failed to load: {jackpotHistoryError}</span>
+            <span className="text-[10px] text-gray-500">Check Firebase and indexer. Use Refresh above.</span>
+          </div>
+        ) : jackpotHistory.length === 0 ? (
+          <div className="text-center py-4 flex flex-col items-center gap-2">
             {jackpotHistoryLoading ? (
               <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider"><LoreText items={loadingQuotes} /></span>
             ) : (
-              <span className="text-[11px] text-gray-600 italic">No jackpot awards yet.</span>
+              <>
+                <span className="text-[11px] text-gray-600 italic">No jackpot awards yet.</span>
+                <span className="text-[10px] text-gray-500">If a jackpot was awarded, the indexer may still be syncing. Use Refresh above.</span>
+              </>
             )}
           </div>
         ) : (

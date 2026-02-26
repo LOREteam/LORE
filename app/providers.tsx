@@ -5,6 +5,7 @@ import { WagmiProvider, createConfig } from '@privy-io/wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, fallback, defineChain } from 'viem';
 import { lineaSepolia as baseLineaSepolia } from 'viem/chains';
+import { DEFAULT_LINEA_SEPOLIA_RPCS } from '../config/publicConfig';
 
 if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
   const _origError = console.error;
@@ -34,11 +35,20 @@ const queryClient = new QueryClient({
  * The default rpc.sepolia.linea.build does NOT support it, which breaks
  * Privy's useSendTransaction (it signs client-side and broadcasts raw).
  */
+const ENV_RPCS =
+  process.env.NEXT_PUBLIC_LINEA_SEPOLIA_RPCS
+    ?.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean) ?? [];
+
+const RPC_URLS = [...new Set([...ENV_RPCS, ...DEFAULT_LINEA_SEPOLIA_RPCS])];
+
 export const lineaSepoliaChain = defineChain({
   ...baseLineaSepolia,
   rpcUrls: {
     default: {
-      http: ['https://linea-sepolia-rpc.publicnode.com'],
+      // Privy mostly uses the first RPC here for raw tx broadcast.
+      http: RPC_URLS,
     },
   },
 });
@@ -47,10 +57,7 @@ export const wagmiConfig = createConfig({
   chains: [lineaSepoliaChain],
   transports: {
     [lineaSepoliaChain.id]: fallback([
-      http('https://linea-sepolia-rpc.publicnode.com'),
-      http('https://rpc.sepolia.linea.build'),
-      http('https://linea-sepolia.public.blastapi.io'),
-      http('https://linea-sepolia.drpc.org'),
+      ...RPC_URLS.map((url) => http(url)),
     ]),
   },
   batch: {

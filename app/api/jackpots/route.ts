@@ -1,35 +1,137 @@
 import { NextResponse } from "next/server";
+import { encodeEventTopics, parseAbi, toHex } from "viem";
+import {
+  CONTRACT_ADDRESS,
+  CONTRACT_DEPLOY_BLOCK,
+  fetchFirebaseJson,
+  fetchFirebaseWithOrderFallback,
+  filterByCurrentEpoch,
+  parseCurrentEpoch,
+  publicClient,
+} from "../_lib/dataBridge";
 
-const FIREBASE_DB_URL =
-  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL ||
-  "https://lore-78751-default-rtdb.europe-west1.firebasedatabase.app";
+const READ_ABI = parseAbi([
+  "function getJackpotInfo() view returns (uint256 dailyPool, uint256 weeklyPool, uint256 lastDailyDay, uint256 lastWeeklyWeek, uint256 lastDailyEpoch, uint256 lastWeeklyEpoch, uint256 lastDailyAmount, uint256 lastWeeklyAmount)",
+]);
+const EVENTS_ABI = parseAbi([
+  "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
+  "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
+]);
+const [dailySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "DailyJackpotAwarded" });
+const [weeklySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "WeeklyJackpotAwarded" });
+
+type JackpotRow = {
+  epoch: string;
+  kind: "daily" | "weekly";
+  amount: string;
+  amountNum: number;
+  txHash: string;
+  blockNumber: string;
+};
+
+async function fetchJackpotEventByEpoch(
+  kind: "daily" | "weekly",
+  epoch: number,
+): Promise<{ txHash: string; blockNumber: string } | null> {
+  if (!Number.isInteger(epoch) || epoch <= 0) return null;
+  const topic0 = kind === "daily" ? dailySig : weeklySig;
+  if (!topic0) return null;
+  const epochTopic = toHex(BigInt(epoch), { size: 32 });
+  const currentBlock = await publicClient.getBlockNumber();
+  const logs = await publicClient.getLogs({
+    address: CONTRACT_ADDRESS,
+    topics: [topic0, epochTopic],
+    fromBlock: CONTRACT_DEPLOY_BLOCK,
+    toBlock: currentBlock,
+  } as any);
+  const log = logs[logs.length - 1];
+  if (!log) return null;
+  return {
+    txHash: log.transactionHash ?? "",
+    blockNumber: (log.blockNumber ?? 0n).toString(),
+  };
+}
 
 export async function GET() {
   try {
-    const res = await fetch(
-      `${FIREBASE_DB_URL}/gamedata/jackpots.json?orderBy="epoch"&limitToLast=200`,
-      { next: { revalidate: 10 } },
+    const fb = await fetchFirebaseWithOrderFallback<Record<string, JackpotRow>>(
+      "gamedata/jackpots",
+      "epoch",
+      200,
     );
-    if (!res.ok) {
-      return NextResponse.json({ jackpots: [] });
+    if (!fb.ok) {
+      return NextResponse.json(
+        { jackpots: [], error: `Firebase ${fb.status}` },
+        { status: 502 },
+      );
     }
-    const raw = await res.json();
-    if (!raw || typeof raw !== "object") {
+    const raw = fb.data ?? {};
+    if (typeof raw !== "object") {
       return NextResponse.json({ jackpots: [] });
     }
 
-    const jackpots = Object.values(raw) as Array<{
-      epoch: string;
-      kind: "daily" | "weekly";
-      amount: string;
-      amountNum: number;
-      txHash: string;
-      blockNumber: string;
-    }>;
+    let jackpots = Object.values(raw) as JackpotRow[];
+
+    // Only show jackpots from current contract
+    const meta = await fetchFirebaseJson<number>("gamedata/_meta/currentEpoch");
+    const currentEpoch = parseCurrentEpoch(meta.data);
+    jackpots = filterByCurrentEpoch(jackpots, currentEpoch);
+
+    // Safety fallback: if indexer skipped latest jackpot, recover from chain
+    try {
+      const info = await publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: READ_ABI,
+        functionName: "getJackpotInfo",
+      }) as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
+
+      const lastDailyEpoch = Number(info[4]);
+      const lastWeeklyEpoch = Number(info[5]);
+      const lastDailyAmount = Number(info[6]) / 1e18;
+      const lastWeeklyAmount = Number(info[7]) / 1e18;
+
+      const byKey = new Map<string, JackpotRow>();
+      for (const j of jackpots) byKey.set(`${j.kind}_${j.epoch}`, j);
+
+      if (Number.isInteger(lastDailyEpoch) && lastDailyEpoch > 0) {
+        const key = `daily_${lastDailyEpoch}`;
+        if (!byKey.has(key)) {
+          const onchain = await fetchJackpotEventByEpoch("daily", lastDailyEpoch);
+          byKey.set(key, {
+            epoch: String(lastDailyEpoch),
+            kind: "daily",
+            amount: lastDailyAmount.toString(),
+            amountNum: lastDailyAmount,
+            txHash: onchain?.txHash ?? "",
+            blockNumber: onchain?.blockNumber ?? "0",
+          });
+        }
+      }
+
+      if (Number.isInteger(lastWeeklyEpoch) && lastWeeklyEpoch > 0) {
+        const key = `weekly_${lastWeeklyEpoch}`;
+        if (!byKey.has(key)) {
+          const onchain = await fetchJackpotEventByEpoch("weekly", lastWeeklyEpoch);
+          byKey.set(key, {
+            epoch: String(lastWeeklyEpoch),
+            kind: "weekly",
+            amount: lastWeeklyAmount.toString(),
+            amountNum: lastWeeklyAmount,
+            txHash: onchain?.txHash ?? "",
+            blockNumber: onchain?.blockNumber ?? "0",
+          });
+        }
+      }
+
+      jackpots = Array.from(byKey.values());
+    } catch (err) {
+      console.warn("[api/jackpots] On-chain fallback failed:", (err as Error).message);
+    }
 
     jackpots.sort((a, b) => Number(b.blockNumber) - Number(a.blockNumber));
+    const limited = jackpots.slice(0, 200);
 
-    return NextResponse.json({ jackpots });
+    return NextResponse.json({ jackpots: limited });
   } catch (err) {
     console.error("[api/jackpots] Error:", err);
     return NextResponse.json({ jackpots: [], error: "fetch failed" }, { status: 500 });
