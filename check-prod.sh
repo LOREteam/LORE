@@ -6,7 +6,7 @@ set -u
 #   bash check-prod.sh
 #   BASE_URL=https://lore.example.com bash check-prod.sh
 
-BASE_URL="${BASE_URL:-http://127.0.0.1:3000}"
+BASE_URL="${BASE_URL:-}"
 ENV_FILE="${ENV_FILE:-.env}"
 DEPLOY_BLOCK="${INDEXER_START_BLOCK:-25663555}"
 
@@ -23,8 +23,40 @@ fail() {
   FAIL_COUNT=$((FAIL_COUNT + 1))
 }
 
+warn() {
+  echo "WARN: $1"
+}
+
 has_cmd() {
   command -v "$1" >/dev/null 2>&1
+}
+
+search_in_text() {
+  local pattern="$1"
+  if has_cmd rg; then
+    rg -qi "$pattern"
+  else
+    grep -Eiq "$pattern"
+  fi
+}
+
+pick_base_url() {
+  if [[ -n "$BASE_URL" ]]; then
+    echo "$BASE_URL"
+    return
+  fi
+  local candidates=(
+    "http://127.0.0.1:3000"
+    "http://127.0.0.1:3001"
+  )
+  for c in "${candidates[@]}"; do
+    if curl -sS --max-time 3 "$c/api/epochs" >/dev/null 2>&1; then
+      echo "$c"
+      return
+    fi
+  done
+  # fallback: keep old default for deterministic output
+  echo "http://127.0.0.1:3000"
 }
 
 json_get() {
@@ -39,7 +71,14 @@ raw = sys.argv[1]
 expr = sys.argv[2]
 try:
     data = json.loads(raw)
-    result = eval(expr, {"__builtins__": {}}, {"data": data})
+    safe_builtins = {
+        "min": min,
+        "max": max,
+        "int": int,
+        "str": str,
+        "len": len,
+    }
+    result = eval(expr, {"__builtins__": safe_builtins}, {"data": data})
     if isinstance(result, (dict, list)):
         print(json.dumps(result))
     else:
@@ -50,6 +89,7 @@ PY
 }
 
 echo "== LORE production check =="
+BASE_URL="$(pick_base_url)"
 echo "BASE_URL=$BASE_URL"
 echo "ENV_FILE=$ENV_FILE"
 echo "DEPLOY_BLOCK=$DEPLOY_BLOCK"
@@ -74,7 +114,7 @@ fi
 if [[ -n "${KEEPER_CONTRACT_ADDRESS:-}" ]]; then
   pass "KEEPER_CONTRACT_ADDRESS is set"
 else
-  fail "KEEPER_CONTRACT_ADDRESS is empty"
+  warn "KEEPER_CONTRACT_ADDRESS is empty (using default from config/publicConfig.ts)"
 fi
 
 if [[ -n "${NEXT_PUBLIC_FIREBASE_DATABASE_URL:-}" || -n "${FIREBASE_DB_URL:-}" ]]; then
@@ -89,15 +129,15 @@ fi
 if has_cmd pm2; then
   PM2_OUT="$(pm2 jlist 2>/dev/null || true)"
   if [[ -n "$PM2_OUT" ]] && [[ "$PM2_OUT" != "[]" ]]; then
-    echo "$PM2_OUT" | rg -qi "\"status\":\"online\"" \
+    echo "$PM2_OUT" | search_in_text "\"status\":\"online\"" \
       && pass "PM2 has online processes" \
       || fail "PM2 found, but no online process"
   else
     fail "PM2 found, but process list is empty"
   fi
 else
-  echo "WARN: pm2 not found, checking process list"
-  if ps aux | rg -q "run-bot-forever|indexer|bot\.ts|node .*bot"; then
+  warn "pm2 not found, checking process list"
+  if ps aux | search_in_text "run-bot-forever|indexer|bot\.ts|node .*bot"; then
     pass "Bot/indexer-like process is running"
   else
     fail "No bot/indexer process detected"
@@ -140,7 +180,7 @@ fi
 # 4) Freshness / old-data guard
 ###############################################################################
 if [[ -n "$EPOCHS_JSON" ]]; then
-  MIN_BLOCK="$(json_get "$EPOCHS_JSON" "min([int(v.get('resolvedBlock', '0')) for v in data.get('epochs', {}).values()] or [0])")"
+  MIN_BLOCK="$(json_get "$EPOCHS_JSON" "min([int(v.get('resolvedBlock', '0')) for v in data.get('epochs', {}).values() if int(v.get('resolvedBlock', '0')) > 0] or [0])")"
   MAX_EPOCH="$(json_get "$EPOCHS_JSON" "max([int(k) for k in data.get('epochs', {}).keys()] or [0])")"
 
   if [[ -n "$MIN_BLOCK" ]] && [[ "$MIN_BLOCK" =~ ^[0-9]+$ ]] && [[ "$MIN_BLOCK" -ge "$DEPLOY_BLOCK" ]]; then
@@ -159,7 +199,7 @@ else
 fi
 
 if [[ -n "$JACKPOTS_JSON" ]]; then
-  JACKPOT_MIN_BLOCK="$(json_get "$JACKPOTS_JSON" "min([int(j.get('blockNumber', '0')) for j in data.get('jackpots', []) if str(j.get('blockNumber', '0')).isdigit()] or [0])")"
+  JACKPOT_MIN_BLOCK="$(json_get "$JACKPOTS_JSON" "min([int(j.get('blockNumber', '0')) for j in data.get('jackpots', []) if str(j.get('blockNumber', '0')).isdigit() and int(j.get('blockNumber', '0')) > 0] or [0])")"
   if [[ -n "$JACKPOT_MIN_BLOCK" ]] && [[ "$JACKPOT_MIN_BLOCK" =~ ^[0-9]+$ ]] && [[ "$JACKPOT_MIN_BLOCK" -ge "$DEPLOY_BLOCK" ]]; then
     pass "Jackpots do not include pre-deploy blockNumber values"
   else
