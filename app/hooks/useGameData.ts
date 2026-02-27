@@ -244,11 +244,26 @@ export function useGameData(options?: UseGameDataOptions) {
   }, [userBetsAllRaw, userBetsUpdatedAt, gridDisplayEpochBigInt]);
 
   // --- History epochs for analytics (lazy-loaded) ---
+  // Only load history when user explicitly requests it or scrolls to analytics tab
+  const [historyPage, setHistoryPage] = useState(1);
+  const HISTORY_PAGE_SIZE = 20; // Load 20 epochs at a time
+  const maxHistoryPages = Math.ceil(HISTORY_DEPTH / HISTORY_PAGE_SIZE);
+
   const historyEpochsList = useMemo(() => {
     if (!actualCurrentEpoch) return [];
-    return Array.from({ length: HISTORY_DEPTH }, (_, i) => actualCurrentEpoch - BigInt(i + 1))
+    // Calculate which epochs to load based on current page
+    const startIdx = (historyPage - 1) * HISTORY_PAGE_SIZE;
+    const endIdx = Math.min(startIdx + HISTORY_PAGE_SIZE, HISTORY_DEPTH);
+    return Array.from({ length: endIdx - startIdx }, (_, i) => actualCurrentEpoch - BigInt(startIdx + i + 1))
       .filter((id) => id > BigInt(0));
-  }, [actualCurrentEpoch]);
+  }, [actualCurrentEpoch, historyPage]);
+
+  // Reset page when current epoch changes significantly
+  useEffect(() => {
+    if (actualCurrentEpoch && historyEpochsList.length === 0 && historyPage > 1) {
+      setHistoryPage(1);
+    }
+  }, [actualCurrentEpoch, historyEpochsList.length, historyPage]);
 
   const { data: historyData, refetch: refetchHistory } = useReadContracts({
     contracts: historyEpochsList.map((id) => ({
@@ -558,5 +573,8 @@ export function useGameData(options?: UseGameDataOptions) {
     refetchUserBets,
     refetchAllowance,
     refetchHistory,
+    setHistoryPage,
+    historyPage,
+    maxHistoryPages,
   };
 }

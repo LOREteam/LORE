@@ -9,6 +9,12 @@ import { CHART_HISTORY_LENGTH, CHART_UPDATE_INTERVAL_MS } from "../lib/constants
 export function useChartData(realTotalStaked: number) {
   const [chartData, setChartData] = useState<number[]>(Array(CHART_HISTORY_LENGTH).fill(0));
   const seededRef = useRef(false);
+  const realTotalStakedRef = useRef(realTotalStaked);
+  
+  // Keep the ref updated with latest value
+  useEffect(() => {
+    realTotalStakedRef.current = realTotalStaked;
+  }, [realTotalStaked]);
 
   // Seed chart with the first non-zero value (runs only once)
   useEffect(() => {
@@ -18,13 +24,14 @@ export function useChartData(realTotalStaked: number) {
     }
   }, [realTotalStaked]);
 
-  // Push new data points at regular intervals
+  // Push new data points at regular intervals - interval never restarts
   useEffect(() => {
     const interval = setInterval(() => {
-      setChartData((prev) => [...prev.slice(1), realTotalStaked]);
+      setChartData((prev) => [...prev.slice(1), realTotalStakedRef.current]);
     }, CHART_UPDATE_INTERVAL_MS);
+    
     return () => clearInterval(interval);
-  }, [realTotalStaked]);
+  }, []); // Empty deps - interval runs forever with latest ref value
 
   const maxValue = useMemo(() => Math.max(...chartData, 1), [chartData]);
 

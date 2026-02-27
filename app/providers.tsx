@@ -7,19 +7,6 @@ import { http, fallback, defineChain } from 'viem';
 import { lineaSepolia as baseLineaSepolia } from 'viem/chains';
 import { DEFAULT_LINEA_SEPOLIA_RPCS } from '../config/publicConfig';
 
-if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
-  const _origError = console.error;
-  console.error = (...args: unknown[]) => {
-    if (
-      typeof args[0] === "string" &&
-      args[0].includes("React does not recognize the `isActive` prop")
-    ) {
-      return;
-    }
-    _origError.apply(console, args);
-  };
-}
-
 // Higher staleTime reduces RPC load: data stays "fresh" longer, fewer duplicate refetches.
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -67,9 +54,11 @@ export const wagmiConfig = createConfig({
 });
 
 export default function Providers({ children }: { children: React.ReactNode }) {
+  const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "cmlqkgtmg00og0cjueu4mxmn9";
+  
   return (
     <PrivyProvider
-      appId="cmlqkgtmg00og0cjueu4mxmn9"
+      appId={privyAppId}
       config={{
         defaultChain: lineaSepoliaChain,
         supportedChains: [lineaSepoliaChain],

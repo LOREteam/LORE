@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { encodeEventTopics, parseAbi, toHex } from "viem";
+import { encodeEventTopics, parseAbi, toHex, formatUnits } from "viem";
 import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
@@ -93,8 +93,11 @@ export async function GET() {
 
       const lastDailyEpoch = Number(info[4]);
       const lastWeeklyEpoch = Number(info[5]);
-      const lastDailyAmount = Number(info[6]) / 1e18;
-      const lastWeeklyAmount = Number(info[7]) / 1e18;
+      // Use string formatting with proper precision instead of Number division
+      const formatAmount = (wei: bigint): { amount: string; amountNum: number } => ({
+        amount: formatUnits(wei, 18),
+        amountNum: parseFloat(formatUnits(wei, 18)),
+      });
 
       const byKey = new Map<string, JackpotRow>();
       for (const j of jackpots) byKey.set(`${j.kind}_${j.epoch}`, j);
@@ -102,12 +105,13 @@ export async function GET() {
       if (Number.isInteger(lastDailyEpoch) && lastDailyEpoch > 0) {
         const key = `daily_${lastDailyEpoch}`;
         if (!byKey.has(key)) {
+          const dailyFormatted = formatAmount(info[6]);
           const onchain = await fetchJackpotEventByEpoch("daily", lastDailyEpoch);
           byKey.set(key, {
             epoch: String(lastDailyEpoch),
             kind: "daily",
-            amount: lastDailyAmount.toString(),
-            amountNum: lastDailyAmount,
+            amount: dailyFormatted.amount,
+            amountNum: dailyFormatted.amountNum,
             txHash: onchain?.txHash ?? "",
             blockNumber: onchain?.blockNumber ?? "0",
           });
@@ -117,12 +121,13 @@ export async function GET() {
       if (Number.isInteger(lastWeeklyEpoch) && lastWeeklyEpoch > 0) {
         const key = `weekly_${lastWeeklyEpoch}`;
         if (!byKey.has(key)) {
+          const weeklyFormatted = formatAmount(info[7]);
           const onchain = await fetchJackpotEventByEpoch("weekly", lastWeeklyEpoch);
           byKey.set(key, {
             epoch: String(lastWeeklyEpoch),
             kind: "weekly",
-            amount: lastWeeklyAmount.toString(),
-            amountNum: lastWeeklyAmount,
+            amount: weeklyFormatted.amount,
+            amountNum: weeklyFormatted.amountNum,
             txHash: onchain?.txHash ?? "",
             blockNumber: onchain?.blockNumber ?? "0",
           });

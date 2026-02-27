@@ -1,7 +1,12 @@
-const rng = () => Math.random();
+// Secure random number generator using crypto API
+function getSecureRandomNumber(max: number): number {
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  return array[0] % max;
+}
 
 export function pickRandom<T>(arr: readonly T[]): T {
-  return arr[Math.floor(rng() * arr.length)];
+  return arr[getSecureRandomNumber(arr.length)];
 }
 
 // ── Loading / spinner states ────────────────────────────────────────

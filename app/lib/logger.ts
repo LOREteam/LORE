@@ -31,9 +31,24 @@ function persist() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
     buffer = trimmed;
   } catch {
-    // storage full – drop oldest half
-    buffer = buffer.slice(-Math.floor(MAX_ENTRIES / 2));
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(buffer)); } catch { /* give up */ }
+    // Storage full - try to save what we can
+    try {
+      // Keep most recent entries that fit
+      const maxThatFit = Math.floor(MAX_ENTRIES / 2);
+      const trimmed = buffer.slice(-maxThatFit);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+      buffer = trimmed;
+    } catch {
+      // Give up - clear oldest half and try again
+      buffer = buffer.slice(-Math.floor(MAX_ENTRIES / 2));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(buffer));
+      } catch {
+        // Last resort - keep only last 50 entries
+        buffer = buffer.slice(-50);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(buffer));
+      }
+    }
   }
 }
 
@@ -114,4 +129,10 @@ export function downloadLogs() {
 export function clearLogs() {
   buffer = [];
   if (typeof window !== "undefined") localStorage.removeItem(STORAGE_KEY);
+}
+
+// Get current log count for debugging
+export function getLogCount(): number {
+  if (buffer.length === 0) buffer = loadBuffer();
+  return buffer.length;
 }

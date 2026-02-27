@@ -41,6 +41,19 @@ export function firebaseWriteUrl(path: string, params?: Record<string, QueryValu
   return `${base}${toQueryString(p)}`;
 }
 
+export function firebaseWriteUrlWithHeaders(path: string, params?: Record<string, QueryValue>): { url: string; headers: Record<string, string> } {
+  const base = `${FIREBASE_DB_URL}/${path}.json`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  
+  if (FIREBASE_DB_AUTH) {
+    headers["X-Firebase-Auth"] = FIREBASE_DB_AUTH;
+  }
+  
+  return { url: base + toQueryString(params ?? {}) || "", headers };
+}
+
 export async function fetchFirebaseWithOrderFallback<T>(path: string, orderByField: string, limitToLast?: number) {
   const params: Record<string, QueryValue> = { orderBy: JSON.stringify(orderByField) };
   if (limitToLast) params.limitToLast = limitToLast;

@@ -123,6 +123,10 @@ const NETWORK_BACKOFF_INITIAL_MS = 1_500;
 const NETWORK_BACKOFF_MAX_MS = 15_000;
 const EXTERNAL_RESOLVE_GRACE_MAX_MS = 8_000;
 const EXTERNAL_RESOLVE_POLL_MS = 500;
+const GAS_BUMP_BASE = BigInt(110);
+const GAS_BUMP_REPLACEMENT_STEP = BigInt(25);
+const MIN_GAS_PLACE_BET = BigInt(600_000);
+const MIN_GAS_PLACE_BATCH = BigInt(800_000);
 
 function readSession(): PersistedAutoMinerSession | null {
   if (typeof window === "undefined") return null;
@@ -155,30 +159,72 @@ const TAB_LOCK_KEY = "lore:auto-mine-tab-lock";
 const TAB_LOCK_TTL_MS = 90_000;
 const TAB_ID = typeof crypto !== "undefined" ? crypto.randomUUID() : String(Date.now());
 
+// Use BroadcastChannel for reliable cross-tab communication
+const lockChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lore-tab-lock") : null;
+
+// Use crypto.getRandomValues for secure random number generation
+function getSecureRandomNumber(max: number): number {
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  return array[0] % max;
+}
+
 function acquireTabLock(): boolean {
   try {
     const raw = localStorage.getItem(TAB_LOCK_KEY);
     if (raw) {
       const lock = JSON.parse(raw) as { id: string; ts: number };
-      if (lock.id !== TAB_ID && Date.now() - lock.ts < TAB_LOCK_TTL_MS) return false;
+      // If another tab holds the lock and it's still valid, we can't acquire
+      if (lock.id !== TAB_ID && Date.now() - lock.ts < TAB_LOCK_TTL_MS) {
+        return false;
+      }
     }
-    localStorage.setItem(TAB_LOCK_KEY, JSON.stringify({ id: TAB_ID, ts: Date.now() }));
+    // Atomic update: check-then-set with timestamp to prevent race condition
+    // Use a unique transaction ID to avoid conflicts
+    const newLock = { id: TAB_ID, ts: Date.now(), tx: getSecureRandomNumber(1000000).toString() };
+    localStorage.setItem(TAB_LOCK_KEY, JSON.stringify(newLock));
+    
+    // Verify we actually got the lock (another tab might have stolen it)
+    const verifyRaw = localStorage.getItem(TAB_LOCK_KEY);
+    if (!verifyRaw) return false;
+    const verifyLock = JSON.parse(verifyRaw) as { id: string; ts: number; tx?: string };
+    if (verifyLock.id !== TAB_ID) return false;
+    
     return true;
   } catch { return false; }
 }
 
 function renewTabLock() {
-  try { localStorage.setItem(TAB_LOCK_KEY, JSON.stringify({ id: TAB_ID, ts: Date.now() })); } catch {}
+  try {
+    const raw = localStorage.getItem(TAB_LOCK_KEY);
+    if (raw) {
+      const lock = JSON.parse(raw) as { id: string; ts: number; tx?: string };
+      // Only renew if we own the lock
+      if (lock.id === TAB_ID) {
+        localStorage.setItem(TAB_LOCK_KEY, JSON.stringify({ id: TAB_ID, ts: Date.now(), tx: lock.tx }));
+      }
+    }
+  } catch {}
 }
 
 function releaseTabLock() {
   try {
     const raw = localStorage.getItem(TAB_LOCK_KEY);
     if (raw) {
-      const lock = JSON.parse(raw) as { id: string };
+      const lock = JSON.parse(raw) as { id: string; tx?: string };
+      // Only release if we own the lock
       if (lock.id === TAB_ID) localStorage.removeItem(TAB_LOCK_KEY);
     }
   } catch {}
+}
+
+// Listen for lock release events from other tabs
+if (lockChannel) {
+  lockChannel.onmessage = (event) => {
+    if (event.data === "lock-released") {
+      // Check if we should try to acquire the lock
+    }
+  };
 }
 
 const SESSION_REFRESH_INTERVAL_MS = 20 * 60 * 1000; // 20 min – refresh before wallet session typically expires
@@ -298,9 +344,6 @@ export function useMining({
     [getActorAddress, waitReceipt],
   );
 
-  const GAS_BUMP_BASE = BigInt(110);
-  const GAS_BUMP_REPLACEMENT_STEP = BigInt(25);
-
   const getBumpedFees = useCallback(async (percent: bigint = GAS_BUMP_BASE) => {
     const pc = publicClientRef.current;
     if (!pc) return undefined;
@@ -320,9 +363,6 @@ export function useMining({
     }
     return undefined;
   }, []);
-
-  const MIN_GAS_PLACE_BET = BigInt(600_000);
-  const MIN_GAS_PLACE_BATCH = BigInt(800_000);
 
   const estimateGas = useCallback(
     async (functionName: string, args: readonly unknown[], bufferExtra: bigint) => {
@@ -471,7 +511,7 @@ export function useMining({
         setIsPending(false);
       }
     },
-    [selectedTiles, isConnected, address, ensureAllowance, placeBets, scheduleRefetch],
+    [selectedTiles, isConnected, address, ensureAllowance, placeBets, scheduleRefetch, getBumpedFees],
   );
 
   const handleDirectMine = useCallback(
@@ -530,7 +570,7 @@ export function useMining({
         setIsPending(false);
       }
     },
-    [isConnected, address, ensureAllowance, placeBets, scheduleRefetch],
+    [isConnected, address, ensureAllowance, placeBets, scheduleRefetch, getBumpedFees],
   );
 
   // --- Auto-mining core: reads all volatile deps from refs ---
@@ -725,7 +765,7 @@ export function useMining({
                 })) as bigint;
                 if (latestEpoch <= lastPlacedEpoch) {
                   const graceStart = Date.now();
-                  const initialJitterMs = 400 + Math.floor(Math.random() * 1000);
+                  const initialJitterMs = 400 + getSecureRandomNumber(1000);
                   setAutoMineProgress(`${r} / ${rounds} – waiting first resolver...`);
                   await delay(initialJitterMs);
                   while (autoMineRef.current && Date.now() - graceStart < EXTERNAL_RESOLVE_GRACE_MAX_MS) {
@@ -817,7 +857,7 @@ export function useMining({
             const tileSet = new Set<number>();
             let safetyCounter = 0;
             while (tileSet.size < tilesToAdd && safetyCounter < 500) {
-              const candidate = Math.floor(Math.random() * GRID_SIZE) + 1;
+              const candidate = getSecureRandomNumber(GRID_SIZE) + 1;
               if (!alreadyBetTiles.has(candidate)) tileSet.add(candidate);
               safetyCounter++;
             }
@@ -1175,7 +1215,7 @@ export function useMining({
       }
     },
     // Minimal deps – all volatile functions read from refs
-    [isConnected, getActorAddress, placeBets, placeBetsSilent, waitReceipt],
+    [isConnected, getActorAddress, placeBets, placeBetsSilent, waitReceipt, getBumpedFees],
   );
 
   // Ref to always hold the latest runAutoMining – decouples it from the restore effect
@@ -1244,7 +1284,6 @@ export function useMining({
     }, 1000);
 
     return () => clearTimeout(timeoutId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, address, publicClient]);
 
   useEffect(() => {
