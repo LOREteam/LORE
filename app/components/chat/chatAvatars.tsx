@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import Image from "next/image";
 
 export const AVATAR_IDS = [
   "miner-helmet",
@@ -393,11 +394,12 @@ interface AvatarProps {
 export function ChatAvatar({ avatarId, customSrc, walletAddress, size = 32, className = "" }: AvatarProps) {
   if (customSrc) {
     return (
-      <img
+      <Image
         src={customSrc}
         alt="avatar"
         width={size}
         height={size}
+        unoptimized
         className={`rounded-full object-cover ${className}`}
         style={{ width: size, height: size }}
       />

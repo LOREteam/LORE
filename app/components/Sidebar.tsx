@@ -2,6 +2,7 @@
 
 import React, { useCallback } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { formatUnits } from "viem";
 import type { TabId, UnclaimedWin } from "../lib/types";
 import { useGlobalStats } from "../hooks/useGlobalStats";
@@ -46,7 +47,13 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
         <div className="p-5 flex items-center gap-4">
           <div className="relative group">
             <div className="w-14 h-14 animate-crystal" style={{ transformStyle: "preserve-3d" }}>
-              <img src="/icon.png" alt="LORE" className="w-full h-full object-contain drop-shadow-[0_0_16px_rgba(139,92,246,0.5)]" />
+              <Image
+                src="/icon.png"
+                alt="LORE"
+                width={56}
+                height={56}
+                className="w-full h-full object-contain drop-shadow-[0_0_16px_rgba(139,92,246,0.5)]"
+              />
             </div>
             <div className="absolute inset-0 rounded-full bg-violet-500/30 blur-xl animate-breathe -z-10" />
           </div>

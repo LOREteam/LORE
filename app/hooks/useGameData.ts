@@ -501,6 +501,28 @@ export function useGameData(options?: UseGameDataOptions) {
     return null;
   }, [isRevealing, gridEpochData]);
 
+  // Extract jackpot info from current epoch data
+  const currentEpochJackpotInfo = useMemo(() => {
+    if (!gridEpochData) return { isDailyJackpot: false, isWeeklyJackpot: false };
+    const tuple = gridEpochData as unknown as EpochTuple;
+    return {
+      isDailyJackpot: Boolean(tuple[4]),
+      isWeeklyJackpot: Boolean(tuple[5]),
+    };
+  }, [gridEpochData]);
+
+  // Calculate potential jackpot amount (simplified - actual would need more contract calls)
+  const currentJackpotAmount = useMemo(() => {
+    if (!jackpotInfo) return 0;
+    if (currentEpochJackpotInfo.isDailyJackpot) {
+      return jackpotInfo.lastDailyJackpotAmount;
+    }
+    if (currentEpochJackpotInfo.isWeeklyJackpot) {
+      return jackpotInfo.lastWeeklyJackpotAmount;
+    }
+    return 0;
+  }, [jackpotInfo, currentEpochJackpotInfo]);
+
   // getTileData(epoch) -> (pools[0..24], users[0..24]); index i = tile #(i+1)
   const tileViewData = useMemo(() => {
     const poolsArr = tileData && Array.isArray(tileData[0]) ? (tileData[0] as bigint[]) : null;
@@ -559,6 +581,9 @@ export function useGameData(options?: UseGameDataOptions) {
     jackpotInfo,
     formattedLineaBalance,
     winningTileId,
+    isDailyJackpot: currentEpochJackpotInfo.isDailyJackpot,
+    isWeeklyJackpot: currentEpochJackpotInfo.isWeeklyJackpot,
+    jackpotAmount: currentJackpotAmount,
     currentEpochResolved: currentEpochData
       ? Boolean((currentEpochData as unknown as EpochTuple)[3])
       : undefined,

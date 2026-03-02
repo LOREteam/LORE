@@ -35,7 +35,6 @@ const INDEXER_START_BLOCK = BigInt(process.env.INDEXER_START_BLOCK ?? String(DEF
 const CHUNK_BLOCKS = 2_000n;
 const REPAIR_CHUNK_BLOCKS = 20_000n;
 const POLL_INTERVAL_MS = 15_000;
-const CONCURRENCY = 1;
 const RETRY_COUNT = 5;
 const RETRY_DELAY_MS = 5_000;
 const INTER_CHUNK_DELAY_MS = 1_500;
@@ -129,12 +128,13 @@ async function fetchLogsWithRetry(
 ): Promise<Log[]> {
   for (let attempt = 0; attempt < RETRY_COUNT; attempt++) {
     try {
-      return await client.getLogs({
+      const request = {
         address: CONTRACT,
         topics: [topic],
         fromBlock: from,
         toBlock: to,
-      } as any);
+      } as unknown as Parameters<typeof client.getLogs>[0];
+      return await client.getLogs(request);
     } catch (err) {
       const msg = (err as Error).message?.slice(0, 80) ?? "unknown";
       if (attempt < RETRY_COUNT - 1) {
@@ -156,12 +156,13 @@ async function fetchLogsByTopicsWithRetry(
 ): Promise<Log[]> {
   for (let attempt = 0; attempt < RETRY_COUNT; attempt++) {
     try {
-      return await client.getLogs({
+      const request = {
         address: CONTRACT,
         topics,
         fromBlock: from,
         toBlock: to,
-      } as any);
+      } as unknown as Parameters<typeof client.getLogs>[0];
+      return await client.getLogs(request);
     } catch (err) {
       const msg = (err as Error).message?.slice(0, 80) ?? "unknown";
       if (attempt < RETRY_COUNT - 1) {

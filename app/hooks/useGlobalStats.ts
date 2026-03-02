@@ -153,10 +153,13 @@ export function useGlobalStats() {
       let addedResolved = 0;
 
       if (fromBlock <= toBlock) {
-        const resolvedTopic = encodeEventTopics({
+        const [resolvedTopic] = encodeEventTopics({
           abi: GAME_EVENTS_ABI,
           eventName: "EpochResolved",
         });
+        if (!resolvedTopic) {
+          throw new Error("EpochResolved topic not found");
+        }
 
         const chunks: { from: bigint; to: bigint }[] = [];
         for (let from = fromBlock; from <= toBlock; from += BigInt(LOG_CHUNK_BLOCKS)) {
@@ -171,10 +174,10 @@ export function useGlobalStats() {
             batch.map((c) =>
               publicClient.getLogs({
                 address: CONTRACT_ADDRESS,
-                topics: resolvedTopic,
+                topics: [resolvedTopic],
                 fromBlock: c.from,
                 toBlock: c.to,
-              } as any),
+              } as unknown as Parameters<typeof publicClient.getLogs>[0]),
             ),
           );
           for (const chunk of results) logs.push(...chunk);

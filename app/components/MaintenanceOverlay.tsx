@@ -1,6 +1,7 @@
 "use client";
 
 import { maintenance } from "../lib/loreTexts";
+import Image from "next/image";
 
 export function MaintenanceOverlay() {
   return (
@@ -26,9 +27,11 @@ export function MaintenanceOverlay() {
       <div className="relative z-10 flex flex-col items-center justify-center px-6 text-center max-w-2xl">
         {/* Logo */}
         <div className="mb-8 animate-float">
-          <img
+          <Image
             src="/icon.png"
             alt="LORE"
+            width={80}
+            height={80}
             className="w-20 h-20 object-contain drop-shadow-[0_0_20px_rgba(139,92,246,0.4)]"
           />
         </div>

@@ -40,12 +40,12 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         const v = String(raw).trim();
         if (v && !Number.isNaN(Number(v))) setBetAmount(v);
       }
-    } catch (_) {}
+    } catch {}
   }, []);
   useEffect(() => {
     try {
       if (typeof window !== "undefined" && betAmount != null) window.localStorage.setItem(MANUAL_BET_AMOUNT_KEY, betAmount);
-    } catch (_) {}
+    } catch {}
   }, [betAmount]);
   const totalBet = useMemo(() => safeParseFloat(betAmount) * selectedTilesCount, [betAmount, selectedTilesCount]);
   const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
@@ -177,13 +177,13 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
           if (typeof data.cycles === "number" && data.cycles >= 1) setCycles(data.cycles);
         }
       }
-    } catch (_) {}
+    } catch {}
   }, []);
   useEffect(() => {
     try {
       if (typeof window !== "undefined")
         window.localStorage.setItem(AUTOMINER_INPUTS_KEY, JSON.stringify({ betSize, targets, cycles }));
-    } catch (_) {}
+    } catch {}
   }, [betSize, targets, cycles]);
 
   // When bot runs with restored/session params, sync form so displayed values match and persist after stop

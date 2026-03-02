@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 
 /* ═══════════════════════════════════════════
    LORE White Paper – fully animated, single-page
@@ -25,7 +26,13 @@ export const WhitePaper = React.memo(function WhitePaper() {
               <span className="text-[10px] font-bold uppercase tracking-[0.2em] lore-text-shimmer">Prologue – The Crystal Lattice</span>
             </div>
             <div className="float-left w-44 h-36 shrink-0 mr-4 mb-3 rounded-xl border border-violet-500/20 lore-avatar-glow overflow-hidden">
-              <img src="/kael-hero.png" alt="KAEL – The First Miner" className="w-full h-full object-cover" loading="lazy" />
+              <Image
+                src="/kael-hero.png"
+                alt="KAEL – The First Miner"
+                width={176}
+                height={144}
+                className="w-full h-full object-cover"
+              />
             </div>
             <div className="space-y-3 text-sm text-gray-400 leading-relaxed">
               <p>

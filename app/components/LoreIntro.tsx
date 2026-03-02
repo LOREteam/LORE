@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import Image from "next/image";
 
 const DISMISSED_KEY = "lore_intro_dismissed";
 
@@ -35,11 +36,13 @@ export const LoreIntro = React.memo(function LoreIntro() {
       <div className="relative z-10 flex items-start gap-4 p-4">
         {/* Hero avatar */}
         <div className="hidden sm:block shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-violet-500/30 shadow-[0_0_20px_rgba(139,92,246,0.2)] lore-avatar-glow">
-          <img
+          <Image
             src="/kael-hero.png"
             alt="KAEL – The First Miner"
+            width={64}
+            height={64}
             className="w-full h-full object-cover object-top"
-            loading="eager"
+            priority
           />
         </div>
 

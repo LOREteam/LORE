@@ -35,12 +35,13 @@ async function getLogsByTopicAndUser(topic0: `0x${string}`, userTopic: `0x${stri
   const head = await publicClient.getBlockNumber();
   for (let from = CONTRACT_DEPLOY_BLOCK; from <= head; from += LOG_CHUNK_BLOCKS) {
     const to = from + LOG_CHUNK_BLOCKS - 1n > head ? head : from + LOG_CHUNK_BLOCKS - 1n;
-    const logs = await publicClient.getLogs({
+    const logsRequest = {
       address: CONTRACT_ADDRESS,
       topics: [topic0, null, userTopic],
       fromBlock: from,
       toBlock: to,
-    } as any);
+    } as unknown as Parameters<typeof publicClient.getLogs>[0];
+    const logs = await publicClient.getLogs(logsRequest);
     all.push(...logs);
   }
   return all;

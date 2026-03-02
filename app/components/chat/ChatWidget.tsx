@@ -57,8 +57,8 @@ export function ChatWidget({ walletAddress, onOpenChange }: Props) {
   }, [onOpenChange]);
 
   const handleSend = useCallback(
-    (text: string, name: string | null, _avatar: string | null) => {
-      sendMessage(text, name, effectiveAvatar);
+    (text: string, name: string | null, avatar: string | null) => {
+      sendMessage(text, name, avatar ?? effectiveAvatar);
     },
     [sendMessage, effectiveAvatar],
   );

@@ -38,12 +38,13 @@ async function fetchJackpotEventByEpoch(
   if (!topic0) return null;
   const epochTopic = toHex(BigInt(epoch), { size: 32 });
   const currentBlock = await publicClient.getBlockNumber();
-  const logs = await publicClient.getLogs({
+  const logsRequest = {
     address: CONTRACT_ADDRESS,
     topics: [topic0, epochTopic],
     fromBlock: CONTRACT_DEPLOY_BLOCK,
     toBlock: currentBlock,
-  } as any);
+  } as unknown as Parameters<typeof publicClient.getLogs>[0];
+  const logs = await publicClient.getLogs(logsRequest);
   const log = logs[logs.length - 1];
   if (!log) return null;
   return {

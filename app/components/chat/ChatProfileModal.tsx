@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useRef, useState } from "react";
+import Image from "next/image";
 import type { ChatProfile } from "../../hooks/useChatProfile";
 import { resizeImageToBase64 } from "../../hooks/useChatProfile";
 import { ChatAvatar, AVATAR_IDS, type AvatarId } from "./chatAvatars";
@@ -86,7 +87,14 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
               }`}
             >
               {customAvatar ? (
-                <img src={customAvatar} alt="custom" className="w-10 h-10 rounded-md object-cover" />
+                <Image
+                  src={customAvatar}
+                  alt="custom"
+                  width={40}
+                  height={40}
+                  unoptimized
+                  className="w-10 h-10 rounded-md object-cover"
+                />
               ) : (
                 <div className="w-10 h-10 rounded-md bg-white/5 flex items-center justify-center text-slate-600">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">

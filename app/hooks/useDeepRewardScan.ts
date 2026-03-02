@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from "react";
 import { usePublicClient, useAccount } from "wagmi";
-import { encodeFunctionData, formatUnits } from "viem";
+import { encodeFunctionData } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
 import type { UnclaimedWin } from "../lib/types";
 import { isUserRejection, delay } from "../lib/utils";

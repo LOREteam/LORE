@@ -58,18 +58,23 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       const fromBlock = BigInt(0);
 
       const transferSig = encodeEventTopics({ abi: TRANSFER_ABI, eventName: "Transfer" })[0];
+      if (!transferSig) {
+        setData({ transfers: [], totalIn: 0, totalOut: 0 });
+        return;
+      }
       const paddedAddr = pad(embeddedAddress as Hex, { size: 32 }).toLowerCase() as Hex;
 
       const fetchChunked = async (topics: (Hex | Hex[] | null)[]) => {
         const result: Log[] = [];
         for (let from = fromBlock; from <= toBlock; from += BigInt(CHUNK_BLOCKS)) {
           const to = from + BigInt(CHUNK_BLOCKS) > toBlock ? toBlock : from + BigInt(CHUNK_BLOCKS - 1);
-          const chunk = await publicClient.getLogs({
+          const request = {
             address: LINEA_TOKEN_ADDRESS,
             topics,
             fromBlock: from,
             toBlock: to,
-          } as any);
+          } as unknown as Parameters<typeof publicClient.getLogs>[0];
+          const chunk = await publicClient.getLogs(request);
           result.push(...chunk);
         }
         return result;
@@ -104,12 +109,13 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
         for (let from = fromBlock; from <= toBlock; from += BigInt(FALLBACK_CHUNK)) {
           const to = from + BigInt(FALLBACK_CHUNK) > toBlock ? toBlock : from + BigInt(FALLBACK_CHUNK - 1);
           try {
-            const chunk = await publicClient.getLogs({
+            const request = {
               address: LINEA_TOKEN_ADDRESS,
               topics: [transferSig],
               fromBlock: from,
               toBlock: to,
-            } as any);
+            } as unknown as Parameters<typeof publicClient.getLogs>[0];
+            const chunk = await publicClient.getLogs(request);
             allLogs.push(...chunk);
           } catch {
             // If even this fails, skip this chunk

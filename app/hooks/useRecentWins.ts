@@ -79,17 +79,22 @@ export function useRecentWins() {
         return;
       }
 
-      const topics = encodeEventTopics({
+      const [rewardClaimedTopic] = encodeEventTopics({
         abi: GAME_EVENTS_ABI,
         eventName: "RewardClaimed",
       });
+      if (!rewardClaimedTopic) {
+        runningRef.current = false;
+        return;
+      }
 
-      const logs = await publicClient.getLogs({
+      const logsRequest = {
         address: CONTRACT_ADDRESS,
-        topics,
+        topics: [rewardClaimedTopic],
         fromBlock,
         toBlock,
-      } as any);
+      } as unknown as Parameters<typeof publicClient.getLogs>[0];
+      const logs = await publicClient.getLogs(logsRequest);
 
       const newWins: RecentWin[] = [];
       for (const log of logs) {

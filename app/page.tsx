@@ -23,10 +23,10 @@ import { ReferralPanel } from "./components/ReferralPanel";
 import { WhitePaper } from "./components/WhitePaper";
 import { FAQ } from "./components/FAQ";
 import { Leaderboards } from "./components/Leaderboards";
+import { JackpotBanner } from "./components/JackpotBanner";
 import { useLeaderboards } from "./hooks/useLeaderboards";
 import { useRecentWins } from "./hooks/useRecentWins";
 import { useJackpotHistory } from "./hooks/useJackpotHistory";
-import { WinsTicker } from "./components/WinsTicker";
 import { useDepositHistory } from "./hooks/useDepositHistory";
 import { useWalletTransfers } from "./hooks/useWalletTransfers";
 import { useDeepRewardScan } from "./hooks/useDeepRewardScan";
@@ -83,6 +83,7 @@ export default function LineaOre() {
   const {
     address, visualEpoch, gridDisplayEpoch, isRevealing, timeLeft,
     realTotalStaked, rolloverAmount, jackpotInfo, formattedLineaBalance, winningTileId,
+    isDailyJackpot, isWeeklyJackpot, jackpotAmount,
     currentEpochResolved,
     tileViewData,
     epochDurationChange,
@@ -252,7 +253,7 @@ export default function LineaOre() {
 
   const {
     isPending, selectedTiles, selectedTilesEpoch, isAutoMining, autoMineProgress, runningParams,
-    handleManualMine, handleDirectMine, handleAutoMineToggle, handleTileClick, setTiles,
+    handleManualMine, handleDirectMine, handleAutoMineToggle, handleTileClick,
   } = useMining(miningOptions);
 
   const gridSelectedTiles = useMemo(() => {
@@ -734,7 +735,6 @@ export default function LineaOre() {
           jackpotInfo={jackpotInfo}
           linePath={linePath}
           chartHasData={chartData.length > 0}
-          address={address}
           embeddedWalletAddress={embeddedWalletAddress}
           privyEthBalance={formattedPrivyEthBalance}
           privyEthBalanceLoading={headerEthLoading}
@@ -817,6 +817,17 @@ export default function LineaOre() {
                 isAnalyzing={isAnalyzing}
                 showSelection={showSelectionOnGrid}
                 onTileClick={stableTileClick}
+              />
+
+              {/* Jackpot celebration banner */}
+              <JackpotBanner
+                winningTileId={winningTileId}
+                isRevealing={isRevealing}
+                tileViewData={tileViewData}
+                epoch={gridDisplayEpoch}
+                isDailyJackpot={isDailyJackpot}
+                isWeeklyJackpot={isWeeklyJackpot}
+                jackpotAmount={jackpotAmount}
               />
 
               {/* Mobile-only Rewards (sidebar hidden on <lg) */}
@@ -927,3 +938,4 @@ export default function LineaOre() {
     </div>
   );
 }
+

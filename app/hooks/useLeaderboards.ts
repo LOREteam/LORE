@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePublicClient } from "wagmi";
-import { decodeEventLog, formatUnits, encodeEventTopics, type Log, type Hex } from "viem";
+import { decodeEventLog, formatUnits, encodeEventTopics, type Log, type Hex, type PublicClient } from "viem";
 import {
   CONTRACT_ADDRESS,
   GAME_ABI,
@@ -224,12 +224,15 @@ export function useLeaderboards(enabled: boolean) {
       for (let i = 0; i < chunks.length; i += MAX_CONCURRENT) {
         const batch = chunks.slice(i, i + MAX_CONCURRENT);
         const results = await Promise.all(
-          batch.map(c => publicClient.getLogs({
-            address: CONTRACT_ADDRESS,
-            topics: eventSigs.length > 0 ? [eventSigs] : undefined,
-            fromBlock: c.from,
-            toBlock: c.to,
-          } as any)),
+          batch.map((c) => {
+            const request = {
+              address: CONTRACT_ADDRESS,
+              topics: eventSigs.length > 0 ? [eventSigs] : undefined,
+              fromBlock: c.from,
+              toBlock: c.to,
+            } as unknown as Parameters<typeof publicClient.getLogs>[0];
+            return publicClient.getLogs(request);
+          }),
         );
         for (const r of results) allLogs.push(...r);
       }
@@ -381,7 +384,9 @@ export function useLeaderboards(enabled: boolean) {
 
 // ─── Referral refresh (separate from event scan) ───
 
-async function refreshReferrals(cache: CachedLeaderboard, publicClient: any) {
+type MulticallResultLike = { status: "success"; result: unknown } | { status: "failure"; error: unknown };
+
+async function refreshReferrals(cache: CachedLeaderboard, publicClient: PublicClient) {
   const addresses = Object.keys(cache.us);
   if (addresses.length === 0) return;
 
@@ -400,11 +405,11 @@ async function refreshReferrals(cache: CachedLeaderboard, publicClient: any) {
     },
   ]);
 
-  const results: any[] = [];
+  const results: MulticallResultLike[] = [];
   for (let i = 0; i < contracts.length; i += MULTICALL_BATCH) {
     const batch = contracts.slice(i, i + MULTICALL_BATCH);
     const res = await publicClient.multicall({ contracts: batch });
-    results.push(...res);
+    results.push(...(res as MulticallResultLike[]));
   }
 
   const rf: Record<string, RefAgg> = {};

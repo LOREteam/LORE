@@ -6,6 +6,8 @@ import { formatTime, shortenAddress } from "../lib/utils";
 import { WinsTicker } from "./WinsTicker";
 import type { RecentWin } from "../hooks/useRecentWins";
 
+const JACKPOT_NOTICE_MS = 30 * 60 * 1000;
+
 export interface JackpotDisplayInfo {
   dailyPool: number;
   weeklyPool: number;
@@ -26,7 +28,6 @@ interface HeaderProps {
   jackpotInfo: JackpotDisplayInfo | null;
   linePath: string;
   chartHasData: boolean;
-  address: string | undefined;
   embeddedWalletAddress: string | null;
   privyEthBalance: string;
   privyEthBalanceLoading?: boolean;
@@ -54,7 +55,6 @@ export const Header = React.memo(function Header({
   jackpotInfo,
   linePath,
   chartHasData,
-  address,
   embeddedWalletAddress,
   privyEthBalance,
   privyEthBalanceLoading = false,
@@ -67,7 +67,6 @@ export const Header = React.memo(function Header({
   showWinsTicker = false,
   epochDurationChange = null,
 }: HeaderProps) {
-  const JACKPOT_NOTICE_MS = 30 * 60 * 1000;
   const { login, logout, authenticated } = usePrivy();
   // Sticky "Analyzing": avoid switching to Mining during brief 00:00 refreshes
   const [showAnalyzing, setShowAnalyzing] = useState(false);
