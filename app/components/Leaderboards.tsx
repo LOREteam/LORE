@@ -6,6 +6,11 @@ import type { LeaderboardEntry, LuckyTileEntry } from "../lib/types";
 import { loadingQuotes, emptyStates, leaderboardLore } from "../lib/loreTexts";
 import { LoreText } from "./LoreText";
 import { useAddressNames } from "../hooks/useAddressNames";
+import { cn } from "../lib/cn";
+import { UiBadge } from "./ui/UiBadge";
+import { UiButton } from "./ui/UiButton";
+import { UiPanel } from "./ui/UiPanel";
+import { uiTokens } from "./ui/tokens";
 
 function Section({
   id,
@@ -45,23 +50,27 @@ function Section({
     <section
       id={id}
       ref={ref}
-      className={`transition-all duration-700 ${visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}
+      className={cn("transition-all duration-700", visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8")}
       style={{ transitionDelay: `${delay}s` }}
     >
-      <div className="flex items-center gap-3 mb-3">
-        <div className="w-10 h-10 rounded-lg bg-violet-500/10 border border-violet-500/25 flex items-center justify-center shrink-0">
-          <Icon className="w-5 h-5 text-violet-400" />
+      <UiPanel tone="default" padding="md" className="bg-[#0a0a16]/70">
+        <div className="flex items-center gap-3 mb-3">
+          <div className={cn("w-10 h-10 bg-violet-500/10 border border-violet-500/25 flex items-center justify-center shrink-0", uiTokens.radius.sm)}>
+            <Icon className="w-5 h-5 text-violet-400" />
+          </div>
+          <div>
+            <UiBadge tone="violet" size="xs" uppercase className="mb-1 text-violet-300/80">
+              {badge}
+            </UiBadge>
+            <h2 className="text-xl font-black text-white">{title}</h2>
+            {loreTitle && <div className="text-[10px] font-bold text-amber-400/70 uppercase tracking-wider mt-0.5">{loreTitle}</div>}
+          </div>
         </div>
-        <div>
-          <div className="text-[9px] font-bold text-violet-500/60 uppercase tracking-widest">{badge}</div>
-          <h2 className="text-xl font-black text-white">{title}</h2>
-          {loreTitle && <div className="text-[10px] font-bold text-amber-400/70 uppercase tracking-wider mt-0.5">{loreTitle}</div>}
-        </div>
-      </div>
-      <p className="text-sm text-gray-400 leading-relaxed mb-1">{desc}</p>
-      {loreQuote && <p className="text-xs text-violet-400/50 italic mb-4 lore-quote">&ldquo;{loreQuote}&rdquo;</p>}
-      {!loreQuote && <div className="mb-3" />}
-      {children}
+        <p className="text-sm text-gray-400 leading-relaxed mb-1">{desc}</p>
+        {loreQuote && <p className="text-xs text-violet-400/50 italic mb-4 lore-quote">&ldquo;{loreQuote}&rdquo;</p>}
+        {!loreQuote && <div className="mb-3" />}
+        {children}
+      </UiPanel>
     </section>
   );
 }
@@ -74,14 +83,14 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400",
 }) {
   if (!entries.length) {
     return (
-      <div className="rounded-xl border border-violet-500/15 bg-[#0a0a16]/50 py-8 text-center text-gray-500 text-sm italic">
+      <UiPanel tone="subtle" padding="md" className="py-8 text-center text-gray-500 text-sm italic">
         <LoreText items={emptyStates.leaderboard} />
-      </div>
+      </UiPanel>
     );
   }
 
   return (
-    <div className="rounded-xl border border-violet-500/15 bg-[#0a0a16]/50 overflow-hidden">
+    <UiPanel tone="subtle" padding="sm" className="overflow-hidden p-0">
       <div className="grid grid-cols-[3rem_1fr_auto] gap-2 px-4 py-3 border-b border-violet-500/10 text-[9px] font-bold uppercase tracking-widest text-gray-500">
         <span>#</span>
         <span>Miner</span>
@@ -102,7 +111,9 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400",
                 {resolved.source === "chat" ? (
                   <>
                     <span className="font-sans font-semibold text-violet-300">{resolved.display}</span>
-                    <span className="text-[10px] text-gray-500 ml-1">(site)</span>
+                    <UiBadge tone="default" size="xs" className="ml-1 text-[9px] text-gray-400 border-white/15 bg-white/[0.03]">
+                      site
+                    </UiBadge>
                     <span className="text-gray-600 ml-1.5">{shortenAddress(e.address)}</span>
                   </>
                 ) : (
@@ -116,23 +127,23 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400",
           );
         })}
       </ul>
-    </div>
+    </UiPanel>
   );
 }
 
 function LuckyTileGrid({ entries }: { entries: LuckyTileEntry[] }) {
   if (!entries.length) {
     return (
-      <div className="rounded-xl border border-violet-500/15 bg-[#0a0a16]/50 py-8 text-center text-gray-500 text-sm italic">
+      <UiPanel tone="subtle" padding="md" className="py-8 text-center text-gray-500 text-sm italic">
         <LoreText items={emptyStates.luckyTileGrid} />
-      </div>
+      </UiPanel>
     );
   }
 
   const maxWins = Math.max(...entries.map((e) => e.wins), 1);
 
   return (
-    <div className="rounded-xl border border-violet-500/15 bg-[#0a0a16]/50 p-4">
+    <UiPanel tone="subtle" padding="md" className="p-4">
       <p className="text-[10px] text-gray-500 mb-3 uppercase tracking-wider font-bold">
         Tile # (1–25) vs times it won
       </p>
@@ -154,7 +165,7 @@ function LuckyTileGrid({ entries }: { entries: LuckyTileEntry[] }) {
           </div>
         ))}
       </div>
-    </div>
+    </UiPanel>
   );
 }
 
@@ -246,10 +257,16 @@ export function Leaderboards({
             ))}
           </div>
           <div className="relative z-10">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 mb-6 animate-slide-up">
-              <span className="text-lg">🏆</span>
-              <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest">On-chain leaderboards</span>
-            </div>
+            <UiBadge
+              tone="amber"
+              size="sm"
+              pill
+              uppercase
+              className="mb-6 animate-slide-up text-amber-300/95 border-amber-400/30 bg-amber-500/12"
+            >
+              <span className="text-base">🏆</span>
+              On-chain leaderboards
+            </UiBadge>
             <h1 className="text-4xl sm:text-5xl font-black mb-3 animate-slide-up" style={{ animationDelay: "0.05s" }}>
               <span className="text-white">Leader</span>
               <span className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 bg-clip-text text-transparent">boards</span>
@@ -267,25 +284,29 @@ export function Leaderboards({
               </div>
             )}
             {error && (
-              <div className="mt-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+              <UiPanel tone="danger" padding="md" className="mt-6 text-red-300 text-sm">
                 {error}
-                <button
-                  type="button"
+                <UiButton
                   onClick={() => refetch()}
-                  className="ml-3 px-2 py-1 rounded border border-red-500/30 hover:bg-red-500/10 text-xs font-bold uppercase"
+                  variant="danger"
+                  size="xs"
+                  uppercase
+                  className="ml-3"
                 >
                   Retry
-                </button>
-              </div>
+                </UiButton>
+              </UiPanel>
             )}
             {!loading && !error && data && (
-              <button
-                type="button"
+              <UiButton
                 onClick={() => refetch()}
-                className="mt-4 px-3 py-1.5 rounded-lg border border-violet-500/30 text-[10px] font-bold text-violet-400 uppercase tracking-widest hover:bg-violet-500/10 transition-colors"
+                variant="secondary"
+                size="xs"
+                uppercase
+                className="mt-4"
               >
                 Refresh data
-              </button>
+              </UiButton>
             )}
           </div>
         </div>

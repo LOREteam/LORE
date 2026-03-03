@@ -5,6 +5,8 @@ import { usePrivy } from "@privy-io/react-auth";
 import { formatTime, shortenAddress } from "../lib/utils";
 import { WinsTicker } from "./WinsTicker";
 import type { RecentWin } from "../hooks/useRecentWins";
+import { UiButton } from "./ui/UiButton";
+import { uiTokens } from "./ui/tokens";
 
 const JACKPOT_NOTICE_MS = 30 * 60 * 1000;
 
@@ -499,9 +501,11 @@ export const Header = React.memo(function Header({
         {/* Bottom gradient border */}
         <div className="absolute bottom-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-violet-500/40 to-transparent" />
 
-        <button
+        <UiButton
           onClick={onToggleMute}
-          className="absolute top-2 right-2 z-20 w-6 h-6 rounded-full bg-black/40 border border-white/10 flex items-center justify-center text-gray-500 hover:text-violet-400 hover:border-violet-500/30 transition-all"
+          variant="ghost"
+          size="xs"
+          className={`absolute top-2 right-2 z-20 h-6 w-6 p-0 ${uiTokens.radius.sm} bg-black/40 border-white/10 text-gray-500 hover:text-violet-400 hover:border-violet-500/30`}
           title={muted ? "Unmute sounds" : "Mute sounds"}
         >
           {muted ? (
@@ -514,35 +518,45 @@ export const Header = React.memo(function Header({
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
             </svg>
           )}
-        </button>
+        </UiButton>
       </div>
 
       {/* ═══ Wallet - no inner spacing, content flush to border ═══ */}
       <div className="min-[900px]:col-span-3 min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-[#0d0d1a] shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden animate-slide-up" style={{ animationDelay: "0.15s" }}>
         {!authenticated ? (
-          <button
-            onClick={login}
-            className="w-full h-full min-h-[72px] px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold transition-all text-[10px] uppercase tracking-widest shadow-lg shadow-violet-500/20 shimmer-btn active:scale-[0.98]"
+          <UiButton
+            onClick={() => { void login(); }}
+            variant="primary"
+            size="md"
+            fullWidth
+            uppercase
+            className="h-full min-h-[72px] px-4 py-2 text-[10px] text-white bg-gradient-to-r from-violet-600 to-indigo-600 border-violet-500/35 hover:from-violet-500 hover:to-indigo-500 shadow-lg shadow-violet-500/20 shimmer-btn"
           >
             Login / Connect
-          </button>
+          </UiButton>
         ) : embeddedWalletAddress ? (
           /* Embedded Privy wallet is created - show its address and balances */
           <>
             <div className="flex gap-1 p-1.5 border-b border-violet-500/15 bg-[#0d0d1a]">
-              <button
+              <UiButton
                 onClick={onOpenWalletSettings}
-                className="flex-[2] min-w-0 px-2 py-1.5 rounded-md border border-violet-500/30 bg-violet-500/[0.08] text-violet-300 hover:bg-violet-500/15 text-[10px] font-bold uppercase tracking-widest transition-all duration-200"
+                variant="secondary"
+                size="sm"
+                uppercase
+                className="flex-[2] min-w-0 px-2 py-1.5 rounded-md text-[10px]"
               >
                 Settings
-              </button>
-              <button
-                onClick={logout}
-                className="flex-1 min-w-0 px-2 py-1.5 rounded-md border border-white/10 bg-transparent text-gray-500 hover:bg-red-500/10 hover:border-red-500/20 hover:text-red-400 text-[9px] font-bold uppercase tracking-widest transition-all duration-200"
+              </UiButton>
+              <UiButton
+                onClick={() => { void logout(); }}
+                variant="ghost"
+                size="sm"
+                uppercase
+                className="flex-1 min-w-0 px-2 py-1.5 rounded-md text-[9px] text-gray-500 hover:bg-red-500/10 hover:border-red-500/20 hover:text-red-400"
                 title="Log out (use carefully)"
               >
                 Out
-              </button>
+              </UiButton>
             </div>
 
             <div className="flex-1 min-h-0 px-3 py-1.5 bg-violet-500/[0.06] flex flex-col gap-0.5">
@@ -554,7 +568,10 @@ export const Header = React.memo(function Header({
                 </span>
               </div>
               <button
-                onClick={() => { if (embeddedWalletAddress) navigator.clipboard.writeText(embeddedWalletAddress); }}
+                onClick={() => {
+                  if (!embeddedWalletAddress) return;
+                  void navigator.clipboard.writeText(embeddedWalletAddress).catch(() => {});
+                }}
                 className="text-[11px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] leading-tight hover:text-emerald-300 transition-colors flex items-center gap-1 group"
                 title="Copy address"
               >
@@ -578,19 +595,25 @@ export const Header = React.memo(function Header({
           /* Embedded wallet is not created yet - do not show main wallet under Privy */
           <>
             <div className="flex gap-1 p-1.5 border-b border-violet-500/15 bg-[#0d0d1a]">
-              <button
+              <UiButton
                 onClick={onOpenWalletSettings}
-                className="flex-[2] min-w-0 px-2 py-1.5 rounded-md border border-violet-500/30 bg-violet-500/[0.08] text-violet-300 hover:bg-violet-500/15 text-[10px] font-bold uppercase tracking-widest transition-all duration-200"
+                variant="secondary"
+                size="sm"
+                uppercase
+                className="flex-[2] min-w-0 px-2 py-1.5 rounded-md text-[10px]"
               >
                 Settings
-              </button>
-              <button
-                onClick={logout}
-                className="flex-1 min-w-0 px-2 py-1.5 rounded-md border border-white/10 bg-transparent text-gray-500 hover:bg-red-500/10 hover:border-red-500/20 hover:text-red-400 text-[9px] font-bold uppercase tracking-widest transition-all duration-200"
+              </UiButton>
+              <UiButton
+                onClick={() => { void logout(); }}
+                variant="ghost"
+                size="sm"
+                uppercase
+                className="flex-1 min-w-0 px-2 py-1.5 rounded-md text-[9px] text-gray-500 hover:bg-red-500/10 hover:border-red-500/20 hover:text-red-400"
                 title="Log out (use carefully)"
               >
                 Out
-              </button>
+              </UiButton>
             </div>
 
             <div className="flex-1 min-h-0 px-3 py-1.5 bg-violet-500/[0.06] flex flex-col gap-1">

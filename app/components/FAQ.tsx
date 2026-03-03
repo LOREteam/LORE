@@ -1,6 +1,10 @@
 "use client";
 
 import React, { useState, useCallback } from "react";
+import { cn } from "../lib/cn";
+import { UiButton } from "./ui/UiButton";
+import { UiPanel } from "./ui/UiPanel";
+import { uiTokens } from "./ui/tokens";
 
 interface FAQItem {
   q: string;
@@ -219,7 +223,7 @@ const faqData: FAQItem[] = [
   {
     category: "Chat & Social",
     q: "How do I set my chat name and avatar?",
-    a: "Open the chat widget (bottom-right corner), click the gear icon. You can set a custom name and upload an avatar. Your profile is stored per-browser and displayed in chat and on leaderboards.",
+    a: "Open the chat widget (bottom-right corner), click the gear icon. You can set a custom name and upload an avatar. Your profile is linked to your wallet and synced to chat profile storage, so it restores even after local cache clear.",
   },
   {
     category: "Chat & Social",
@@ -277,20 +281,23 @@ export const FAQ = React.memo(function FAQ() {
         {/* Category tabs */}
         <div className="flex flex-wrap gap-2 mb-8 justify-center">
           {categories.map((cat) => (
-            <button
+            <UiButton
               key={cat}
               onClick={() => { setActiveCategory(cat); setOpenIdx(null); }}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all duration-200 border ${
+              variant={activeCategory === cat ? "secondary" : "ghost"}
+              size="sm"
+              className={cn(
+                "flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold",
                 activeCategory === cat
-                  ? "bg-violet-500/15 text-violet-300 border-violet-500/30 shadow-sm shadow-violet-500/10"
-                  : "text-gray-500 border-white/[0.06] hover:text-gray-300 hover:bg-white/[0.04]"
-              }`}
+                  ? "text-violet-300 border-violet-500/30 shadow-sm shadow-violet-500/10"
+                  : "text-gray-500 border-white/[0.06] hover:text-gray-300 hover:bg-white/[0.04]",
+              )}
             >
               <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                 <path strokeLinecap="round" strokeLinejoin="round" d={categoryIcons[cat] || categoryIcons["Getting Started"]} />
               </svg>
               {cat}
-            </button>
+            </UiButton>
           ))}
         </div>
 
@@ -298,18 +305,23 @@ export const FAQ = React.memo(function FAQ() {
         <div className="space-y-2">
           {filteredFaq.map((item, i) => {
             const isOpen = openIdx === i;
+            const panelId = `faq-panel-${activeCategory}-${i}`;
             return (
-              <div
+              <UiPanel
                 key={`${activeCategory}-${i}`}
-                className={`rounded-xl border transition-all duration-300 ${
+                tone="subtle"
+                padding="sm"
+                className={cn(`transition-all duration-300 ${
                   isOpen
                     ? "bg-violet-500/[0.06] border-violet-500/20 shadow-lg shadow-violet-500/[0.04]"
                     : "bg-white/[0.02] border-white/[0.06] hover:bg-white/[0.04]"
-                }`}
+                }`)}
               >
                 <button
                   onClick={() => toggle(i)}
-                  className="w-full flex items-center gap-3 px-5 py-4 text-left"
+                  aria-expanded={isOpen}
+                  aria-controls={panelId}
+                  className={`w-full flex items-center gap-3 px-5 py-4 text-left ${uiTokens.focusRing} ${uiTokens.radius.sm}`}
                 >
                   <svg
                     className={`w-4 h-4 shrink-0 transition-transform duration-300 ${
@@ -328,6 +340,9 @@ export const FAQ = React.memo(function FAQ() {
                 </button>
 
                 <div
+                  id={panelId}
+                  role="region"
+                  aria-hidden={!isOpen}
                   className={`overflow-hidden transition-all duration-300 ${
                     isOpen ? "max-h-[600px] opacity-100" : "max-h-0 opacity-0"
                   }`}
@@ -344,7 +359,7 @@ export const FAQ = React.memo(function FAQ() {
                     )}
                   </div>
                 </div>
-              </div>
+              </UiPanel>
             );
           })}
         </div>

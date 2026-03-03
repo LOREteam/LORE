@@ -15,6 +15,20 @@ async function fetchChatNames(): Promise<NameMap> {
 
   const map: NameMap = new Map();
   try {
+    // 1) Dedicated per-wallet chat profile storage (survives browser cache clear)
+    const profileRes = await fetch(`${FIREBASE_DB_URL}/gamedata/chatProfiles.json`);
+    if (profileRes.ok) {
+      const profileData = await profileRes.json();
+      if (profileData && typeof profileData === "object") {
+        for (const [address, val] of Object.entries(profileData as Record<string, unknown>)) {
+          const v = val as Record<string, unknown>;
+          const name = typeof v.name === "string" ? v.name.trim() : "";
+          if (name) map.set(address.toLowerCase(), name);
+        }
+      }
+    }
+
+    // 2) Fallback from recent messages (legacy behavior)
     const url = `${FIREBASE_DB_URL}/messages.json?orderBy="timestamp"&limitToLast=200`;
     const res = await fetch(url);
     if (!res.ok) return map;
@@ -23,9 +37,9 @@ async function fetchChatNames(): Promise<NameMap> {
 
     for (const val of Object.values(data)) {
       const v = val as Record<string, unknown>;
-      const sender = (v.sender as string)?.toLowerCase();
-      const name = v.senderName as string | undefined;
-      if (sender && name) map.set(sender, name);
+      const sender = typeof v.sender === "string" ? v.sender.toLowerCase() : "";
+      const name = typeof v.senderName === "string" ? v.senderName : undefined;
+      if (sender && name && !map.has(sender)) map.set(sender, name);
     }
   } catch {
     // silent
@@ -40,10 +54,15 @@ export function useAddressNames(addresses: string[]) {
   const fetchedRef = useRef(false);
 
   useEffect(() => {
-    if (addresses.length === 0 || fetchedRef.current) return;
+    if (addresses.length === 0) return;
+    if (fetchedRef.current && globalCache && Date.now() - globalCache.fetchedAt < CACHE_TTL_MS) return;
     fetchedRef.current = true;
+    let cancelled = false;
 
-    fetchChatNames().then(setNameMap);
+    fetchChatNames().then((map) => {
+      if (!cancelled) setNameMap(map);
+    });
+    return () => { cancelled = true; };
   }, [addresses]);
 
   const resolveName = useCallback(

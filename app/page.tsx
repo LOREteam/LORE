@@ -45,7 +45,7 @@ const MIN_ETH_FOR_GAS = 0.0001; // ~enough for a couple of txs on Linea
 // Hard-disabled in client to prevent uncontrolled ETH gas burn from browser-side resolve txs.
 const ENABLE_CLIENT_AUTO_RESOLVE = false;
 const ENABLE_AUTO_RESOLVE_SWEEP = false;
-const VALID_TABS: TabId[] = ["hub", "analytics", "referral", "leaderboards", "whitepaper"];
+const VALID_TABS: TabId[] = ["hub", "analytics", "referral", "leaderboards", "whitepaper", "faq"];
 const ORB_STYLE = { animationDelay: "-10s" } as const;
 
 export default function LineaOre() {
@@ -75,7 +75,11 @@ export default function LineaOre() {
   const [isWalletSettingsOpen, setIsWalletSettingsOpen] = useState(false);
   const [backupGateVersion, setBackupGateVersion] = useState(0);
   const [withdrawAmount, setWithdrawAmount] = useState("0.0");
+  const [depositEthAmount, setDepositEthAmount] = useState("0.001");
+  const [depositTokenAmount, setDepositTokenAmount] = useState("10");
   const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [isDepositingEth, setIsDepositingEth] = useState(false);
+  const [isDepositingToken, setIsDepositingToken] = useState(false);
   const { writeContractAsync } = useWriteContract();
 
   // --- On-chain data ---
@@ -188,6 +192,7 @@ export default function LineaOre() {
     exportEmbeddedWallet,
     createEmbeddedWallet,
     sendTransactionSilent,
+    sendTransactionFromExternal,
   } = usePrivyWallet();
 
   const normalizedEmbeddedAddress = useMemo(() => {
@@ -199,13 +204,13 @@ export default function LineaOre() {
     }
   }, [embeddedWalletAddress]);
 
-  const { data: embeddedTokenBalance, isPending: embeddedTokenPending } = useBalance({
+  const { data: embeddedTokenBalance, isPending: embeddedTokenPending, refetch: refetchEmbeddedTokenBalance } = useBalance({
     address: normalizedEmbeddedAddress,
     token: LINEA_TOKEN_ADDRESS,
     chainId: APP_CHAIN_ID,
     query: { refetchInterval: isPageVisible ? 4000 : 15_000 },
   });
-  const { data: embeddedEthBalance, isPending: embeddedEthPending } = useBalance({
+  const { data: embeddedEthBalance, isPending: embeddedEthPending, refetch: refetchEmbeddedEthBalance } = useBalance({
     address: normalizedEmbeddedAddress,
     chainId: APP_CHAIN_ID,
     query: { refetchInterval: isPageVisible ? 4000 : 15_000 },
@@ -683,6 +688,94 @@ export default function LineaOre() {
     }
   }, [externalWalletAddress, withdrawAmount, embeddedTokenBalance, writeContractAsync]);
 
+  const handleDepositEthToEmbedded = useCallback(async () => {
+    if (!embeddedWalletAddress) {
+      alert("Create a Privy wallet first.");
+      return;
+    }
+    if (!externalWalletAddress) {
+      alert("Connect an external wallet first.");
+      return;
+    }
+    const normalized = normalizeDecimalInput(depositEthAmount);
+    if (!normalized || isNaN(Number(normalized)) || Number(normalized) <= 0) {
+      alert("Invalid ETH amount.");
+      return;
+    }
+
+    try {
+      const value = parseUnits(normalized, 18);
+      setIsDepositingEth(true);
+      await sendTransactionFromExternal({
+        to: getAddress(embeddedWalletAddress),
+        value,
+      });
+      void refetchEmbeddedEthBalance();
+    } catch (err) {
+      if (!isUserRejection(err)) {
+        log.error("Deposit", "ETH transfer to Privy failed", err);
+        const message = err instanceof Error ? err.message : "";
+        alert(message ? `ETH transfer failed: ${message}` : "ETH transfer failed. Check wallet balance and try again.");
+      }
+    } finally {
+      setIsDepositingEth(false);
+    }
+  }, [
+    embeddedWalletAddress,
+    externalWalletAddress,
+    depositEthAmount,
+    sendTransactionFromExternal,
+    refetchEmbeddedEthBalance,
+  ]);
+
+  const handleDepositTokenToEmbedded = useCallback(async () => {
+    if (!embeddedWalletAddress) {
+      alert("Create a Privy wallet first.");
+      return;
+    }
+    if (!externalWalletAddress) {
+      alert("Connect an external wallet first.");
+      return;
+    }
+    const normalized = normalizeDecimalInput(depositTokenAmount);
+    if (!normalized || isNaN(Number(normalized)) || Number(normalized) <= 0) {
+      alert("Invalid LINEA amount.");
+      return;
+    }
+
+    try {
+      const amountWei = parseUnits(normalized, 18);
+      const data = encodeFunctionData({
+        abi: TOKEN_ABI,
+        functionName: "transfer",
+        args: [getAddress(embeddedWalletAddress), amountWei],
+      });
+      setIsDepositingToken(true);
+      await sendTransactionFromExternal({
+        to: LINEA_TOKEN_ADDRESS,
+        data,
+      });
+      void refetchEmbeddedTokenBalance();
+      if (walletTransfers) void fetchWalletTransfers();
+    } catch (err) {
+      if (!isUserRejection(err)) {
+        log.error("Deposit", "LINEA transfer to Privy failed", err);
+        const message = err instanceof Error ? err.message : "";
+        alert(message ? `LINEA transfer failed: ${message}` : "LINEA transfer failed. Check wallet balance and try again.");
+      }
+    } finally {
+      setIsDepositingToken(false);
+    }
+  }, [
+    embeddedWalletAddress,
+    externalWalletAddress,
+    depositTokenAmount,
+    sendTransactionFromExternal,
+    refetchEmbeddedTokenBalance,
+    walletTransfers,
+    fetchWalletTransfers,
+  ]);
+
 
   return (
     <div className="h-screen w-full flex overflow-hidden bg-[#060612] text-slate-200">
@@ -756,12 +849,20 @@ export default function LineaOre() {
           externalWalletAddress={externalWalletAddress}
           formattedLineaBalance={formattedPrivyBalance}
           withdrawAmount={withdrawAmount}
+          depositEthAmount={depositEthAmount}
+          depositTokenAmount={depositTokenAmount}
           isWithdrawing={isWithdrawing}
+          isDepositingEth={isDepositingEth}
+          isDepositingToken={isDepositingToken}
           onWithdrawAmountChange={setWithdrawAmount}
+          onDepositEthAmountChange={setDepositEthAmount}
+          onDepositTokenAmountChange={setDepositTokenAmount}
           onCreateEmbeddedWallet={createEmbeddedWallet}
           onCopyEmbeddedAddress={handleCopyEmbeddedAddress}
           onExportEmbeddedWallet={exportEmbeddedWallet}
           onWithdrawToExternal={handleWithdrawToExternal}
+          onDepositEthToEmbedded={handleDepositEthToEmbedded}
+          onDepositTokenToEmbedded={handleDepositTokenToEmbedded}
           walletTransfers={walletTransfers}
           walletTransfersLoading={walletTransfersLoading}
           onLoadWalletTransfers={fetchWalletTransfers}

@@ -9,11 +9,21 @@ import {
   APP_CHAIN_ID,
   TX_RECEIPT_TIMEOUT_MS,
 } from "../lib/constants";
-import { delay } from "../lib/utils";
+import { delay, isUserRejection } from "../lib/utils";
 import { log } from "../lib/logger";
 
 const REF_STORAGE_KEY = "lineaore:pending-ref-code:v1";
 const ZERO_BYTES6 = "0x000000000000";
+const GAS_SET_REFERRER = BigInt(250_000);
+const GAS_REGISTER_REFERRAL = BigInt(300_000);
+const ACCRUE_BATCH_SIZE = BigInt(50);
+const GAS_ACCRUE_BATCH = BigInt(1_600_000);
+const GAS_FINAL_CLAIM = BigInt(300_000);
+
+function isTimeoutLike(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  return msg.includes("timed out") || msg.includes("timeout");
+}
 
 type SilentSendFn = (tx: {
   to: `0x${string}`;
@@ -34,6 +44,30 @@ export function useReferral(options?: UseReferralOptions) {
   const [isClaiming, setIsClaiming] = useState(false);
   const [isSettingReferrer, setIsSettingReferrer] = useState(false);
   const attemptedAddressesRef = useRef(new Set<string>());
+
+  const waitReceipt = useCallback(
+    async (hash: `0x${string}`) => {
+      if (!publicClient) return;
+      const receipt = await Promise.race([
+        publicClient.waitForTransactionReceipt({ hash }),
+        delay(TX_RECEIPT_TIMEOUT_MS).then(() => { throw new Error("Timeout"); }),
+      ]);
+      if (receipt.status !== "success") {
+        let txGas: bigint | null = null;
+        try {
+          const tx = await publicClient.getTransaction({ hash });
+          txGas = tx.gas;
+        } catch {
+          // fall through to generic revert when tx lookup is unavailable
+        }
+        if (txGas !== null && receipt.gasUsed >= txGas) {
+          throw new Error(`Out of gas: used=${receipt.gasUsed.toString()} limit=${txGas.toString()} hash=${hash}`);
+        }
+        throw new Error(`Transaction reverted: ${hash}`);
+      }
+    },
+    [publicClient],
+  );
 
   const { data: referralInfoRaw, refetch: refetchReferralInfo } = useReadContract({
     address: CONTRACT_ADDRESS,
@@ -101,8 +135,10 @@ export function useReferral(options?: UseReferralOptions) {
     if (!pendingCode) return;
 
     attemptedAddressesRef.current.add(addrLower);
+    let cancelled = false;
 
     const doSetReferrer = async () => {
+      if (cancelled) return;
       setIsSettingReferrer(true);
       try {
         const silentSend = options?.sendTransactionSilent;
@@ -112,33 +148,41 @@ export function useReferral(options?: UseReferralOptions) {
             functionName: "setReferrer",
             args: [pendingCode as `0x${string}`],
           });
-          const hash = await silentSend({ to: CONTRACT_ADDRESS, data });
-          await Promise.race([
-            publicClient.waitForTransactionReceipt({ hash }),
-            delay(TX_RECEIPT_TIMEOUT_MS).then(() => { throw new Error("Timeout"); }),
-          ]);
+          const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas: GAS_SET_REFERRER });
+          await waitReceipt(hash);
         } else {
-          await writeContractAsync({
+          const hash = await writeContractAsync({
             address: CONTRACT_ADDRESS,
             abi: GAME_ABI,
             functionName: "setReferrer",
             args: [pendingCode as `0x${string}`],
             chainId: APP_CHAIN_ID,
+            gas: GAS_SET_REFERRER,
           });
+          await waitReceipt(hash);
         }
-        log.info("Referral", "referrer set successfully", { address: addrLower, code: pendingCode });
-        refetchReferralInfo();
+        if (!cancelled) {
+          log.info("Referral", "referrer set successfully", { address: addrLower, code: pendingCode });
+          void refetchReferralInfo().catch(() => {});
+        }
       } catch (err) {
-        log.error("Referral", "setReferrer failed", err);
+        if (isUserRejection(err) || isTimeoutLike(err)) {
+          log.warn("Referral", "setReferrer not completed", err);
+        } else {
+          log.error("Referral", "setReferrer failed", err);
+        }
         attemptedAddressesRef.current.delete(addrLower);
       } finally {
-        setIsSettingReferrer(false);
+        if (!cancelled) setIsSettingReferrer(false);
       }
     };
 
     const timeout = setTimeout(doSetReferrer, 2000);
-    return () => clearTimeout(timeout);
-  }, [address, publicClient, referralInfo, options?.sendTransactionSilent, writeContractAsync, refetchReferralInfo]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [address, publicClient, referralInfo, options?.sendTransactionSilent, writeContractAsync, refetchReferralInfo, waitReceipt]);
 
   // Register referral code
   const registerCode = useCallback(async () => {
@@ -146,73 +190,176 @@ export function useReferral(options?: UseReferralOptions) {
     setIsRegistering(true);
     try {
       const silentSend = options?.sendTransactionSilent;
+      const interactiveTx = async () => {
+        const hash = await writeContractAsync({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "registerReferralCode",
+          args: [],
+          chainId: APP_CHAIN_ID,
+          gas: GAS_REGISTER_REFERRAL,
+        });
+        await waitReceipt(hash);
+      };
+
       if (silentSend) {
         const data = encodeFunctionData({
           abi: GAME_ABI,
           functionName: "registerReferralCode",
           args: [],
         });
-        const hash = await silentSend({ to: CONTRACT_ADDRESS, data });
-        if (publicClient) {
-          await Promise.race([
-            publicClient.waitForTransactionReceipt({ hash }),
-            delay(TX_RECEIPT_TIMEOUT_MS).then(() => { throw new Error("Timeout"); }),
-          ]);
+        try {
+          const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas: GAS_REGISTER_REFERRAL });
+          await waitReceipt(hash);
+        } catch (err) {
+          if (isTimeoutLike(err)) {
+            log.warn("Referral", "registerReferralCode silent tx timeout, falling back to interactive flow");
+            await interactiveTx();
+          } else {
+            throw err;
+          }
         }
       } else {
-        await writeContractAsync({
-          address: CONTRACT_ADDRESS,
-          abi: GAME_ABI,
-          functionName: "registerReferralCode",
-          args: [],
-          chainId: APP_CHAIN_ID,
-        });
+        await interactiveTx();
       }
       log.info("Referral", "code registered");
-      refetchReferralInfo();
+      void refetchReferralInfo().catch(() => {});
     } catch (err) {
-      log.error("Referral", "registerCode failed", err);
+      if (isUserRejection(err) || isTimeoutLike(err)) {
+        log.warn("Referral", "registerCode not completed", err);
+      } else {
+        log.error("Referral", "registerCode failed", err);
+      }
     } finally {
       setIsRegistering(false);
     }
-  }, [address, options?.sendTransactionSilent, publicClient, writeContractAsync, refetchReferralInfo]);
+  }, [address, options?.sendTransactionSilent, writeContractAsync, refetchReferralInfo, waitReceipt]);
 
-  // Claim pending referral earnings
+  // Claim pending referral earnings (batched accrue → lightweight claim)
   const claimEarnings = useCallback(async () => {
-    if (!address || !referralInfo?.pendingEarningsWei || referralInfo.pendingEarningsWei === BigInt(0)) return;
+    if (!address || !publicClient || !referralInfo?.pendingEarningsWei || referralInfo.pendingEarningsWei === BigInt(0)) return;
     setIsClaiming(true);
     try {
       const silentSend = options?.sendTransactionSilent;
+
+      let remaining: bigint;
+      try {
+        remaining = await publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "referralEpochsRemaining",
+          args: [address as `0x${string}`],
+        }) as bigint;
+      } catch {
+        remaining = BigInt(0);
+      }
+
+      log.info("Referral", "claimEarnings start", {
+        remaining: remaining.toString(),
+        pending: referralInfo.pendingEarningsWei.toString(),
+      });
+
+      if (remaining > BigInt(0)) {
+        let accrued = BigInt(0);
+        const total = remaining;
+
+        while (accrued < total) {
+          const batch = total - accrued > ACCRUE_BATCH_SIZE ? ACCRUE_BATCH_SIZE : total - accrued;
+
+          log.info("Referral", "accrueReferralBatch", {
+            batch: batch.toString(),
+            accrued: accrued.toString(),
+            total: total.toString(),
+          });
+
+          if (silentSend) {
+            const data = encodeFunctionData({
+              abi: GAME_ABI,
+              functionName: "accrueReferralBatch",
+              args: [batch],
+            });
+            try {
+              const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas: GAS_ACCRUE_BATCH });
+              await waitReceipt(hash);
+            } catch (silentErr) {
+              if (isUserRejection(silentErr)) throw silentErr;
+              log.warn("Referral", "accrueReferralBatch silent failed, trying interactive", silentErr);
+              const hash = await writeContractAsync({
+                address: CONTRACT_ADDRESS,
+                abi: GAME_ABI,
+                functionName: "accrueReferralBatch",
+                args: [batch],
+                chainId: APP_CHAIN_ID,
+                gas: GAS_ACCRUE_BATCH,
+              });
+              await waitReceipt(hash);
+            }
+          } else {
+            const hash = await writeContractAsync({
+              address: CONTRACT_ADDRESS,
+              abi: GAME_ABI,
+              functionName: "accrueReferralBatch",
+              args: [batch],
+              chainId: APP_CHAIN_ID,
+              gas: GAS_ACCRUE_BATCH,
+            });
+            await waitReceipt(hash);
+          }
+
+          accrued += batch;
+          if (accrued < total) await delay(1_500);
+        }
+      }
+
       if (silentSend) {
         const data = encodeFunctionData({
           abi: GAME_ABI,
-          functionName: "claimReferralEarnings",
+          functionName: "claimAccruedReferralEarnings",
           args: [],
         });
-        const hash = await silentSend({ to: CONTRACT_ADDRESS, data });
-        if (publicClient) {
-          await Promise.race([
-            publicClient.waitForTransactionReceipt({ hash }),
-            delay(TX_RECEIPT_TIMEOUT_MS).then(() => { throw new Error("Timeout"); }),
-          ]);
+        try {
+          const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas: GAS_FINAL_CLAIM });
+          await waitReceipt(hash);
+        } catch (silentErr) {
+          if (isUserRejection(silentErr)) throw silentErr;
+          log.warn("Referral", "claimAccruedReferralEarnings silent failed, trying interactive", silentErr);
+          const hash = await writeContractAsync({
+            address: CONTRACT_ADDRESS,
+            abi: GAME_ABI,
+            functionName: "claimAccruedReferralEarnings",
+            args: [],
+            chainId: APP_CHAIN_ID,
+            gas: GAS_FINAL_CLAIM,
+          });
+          await waitReceipt(hash);
         }
       } else {
-        await writeContractAsync({
+        const hash = await writeContractAsync({
           address: CONTRACT_ADDRESS,
           abi: GAME_ABI,
-          functionName: "claimReferralEarnings",
+          functionName: "claimAccruedReferralEarnings",
           args: [],
           chainId: APP_CHAIN_ID,
+          gas: GAS_FINAL_CLAIM,
         });
+        await waitReceipt(hash);
       }
+
       log.info("Referral", "earnings claimed");
-      refetchReferralInfo();
+      void refetchReferralInfo().catch(() => {});
     } catch (err) {
-      log.error("Referral", "claimEarnings failed", err);
+      if (isUserRejection(err) || isTimeoutLike(err)) {
+        log.warn("Referral", "claimEarnings not completed", err);
+      } else {
+        log.error("Referral", "claimEarnings failed", err);
+        if (typeof window !== "undefined") {
+          window.alert(`Claim failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     } finally {
       setIsClaiming(false);
     }
-  }, [address, referralInfo?.pendingEarningsWei, options?.sendTransactionSilent, publicClient, writeContractAsync, refetchReferralInfo]);
+  }, [address, publicClient, referralInfo?.pendingEarningsWei, options?.sendTransactionSilent, writeContractAsync, refetchReferralInfo, waitReceipt]);
 
   return {
     referralInfo,

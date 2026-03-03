@@ -2,6 +2,9 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import { cn } from "../lib/cn";
+import { UiPanel } from "./ui/UiPanel";
+import { uiTokens } from "./ui/tokens";
 
 /* ═══════════════════════════════════════════
    LORE White Paper – fully animated, single-page
@@ -79,6 +82,14 @@ export const WhitePaper = React.memo(function WhitePaper() {
             Every bet, every payout, every jackpot trigger, and every winner selection is verifiable on-chain.
             No off-chain randomness, no hidden admin functions – pure decentralized gaming with escalating tension.
           </P>
+          <InfoBox emoji="🎲" title="How Randomness Is Generated">
+            Winning tile uses only on-chain entropy:
+            <Code>keccak256(prevrandao, blockhash(n-1), epoch, totalPoolWithRollover, dailyPool, weeklyPool) % 25 + 1</Code>.
+            <br /><br />
+            Daily and weekly jackpots use separate random checks:
+            <Code>keccak256(prevrandao, &quot;daily/weekly&quot;, epoch, lastCheck, block.timestamp)</Code>,
+            then compare randomness against elapsed time in the current day/week window.
+          </InfoBox>
           <InfoBox emoji="⛏" title="Core Idea">
             Place your LINEA tokens on tiles you believe will win. The more you stake on a winning tile – the bigger your share of the prize pool.
             And if you&apos;re in the right round at the right time, you might take home the <Accent>jackpot</Accent> too.
@@ -92,9 +103,9 @@ export const WhitePaper = React.memo(function WhitePaper() {
             { step: "1", title: "Epoch Starts", desc: "A new round begins with a fresh 5×5 grid. The countdown timer starts." },
             { step: "2", title: "Place Bets", desc: "Select one or more tiles and stake LINEA tokens. Each tile accumulates its own pool from all players." },
             { step: "3", title: "Epoch Ends", desc: "When the timer reaches zero, no more bets are accepted. The smart contract resolves the epoch." },
-            { step: "4", title: "Winner Revealed", desc: "The contract randomly selects one winning tile (1–25). The grid highlights the winner." },
+            { step: "4", title: "Winner Revealed", desc: "The contract computes the winning tile from on-chain entropy (prevrandao + previous block hash + epoch/pool state) and maps it to 1–25." },
             { step: "5", title: "Fees Split", desc: "The pool is split: 92% to winners, 2% to daily jackpot, 3% to weekly jackpot, 2% to devs (half of that to referrals), 1% burn." },
-            { step: "6", title: "Jackpot Check", desc: "If someone bet on the winning tile, the contract checks if the daily or weekly jackpot triggers. If it does – the entire jackpot pool is added to the winners' reward." },
+            { step: "6", title: "Jackpot Check", desc: "If there is at least one winner, the contract runs daily/weekly random checks using prevrandao + time window variables. On trigger, the full jackpot pool is added to this epoch." },
             { step: "7", title: "Claim Rewards", desc: "Winners claim their share via the Reward Scanner. If no one hit the winning tile – the base reward rolls into the next round, and jackpot pools keep growing." },
           ]} />
         </Section>
@@ -247,15 +258,21 @@ export const WhitePaper = React.memo(function WhitePaper() {
             Key contract features:
           </P>
           <ul className="space-y-2 mb-6 ml-1">
-            <Li emoji="🎲">Verifiable on-chain winner selection via <Code>keccak256(abi.encodePacked(block.prevrandao, block.number, epoch))</Code></Li>
+            <Li emoji="🎲">Verifiable winner randomness: <Code>keccak256(prevrandao, blockhash(n-1), epoch, totalPoolWithRollover, dailyPool, weeklyPool) % 25 + 1</Code></Li>
             <Li emoji="🔒">No admin withdrawal functions – funds are only claimable by winners via <Code>claimReward()</Code></Li>
             <Li emoji="📊"><Code>getTileData()</Code> returns all 25 tiles&apos; stakes and player counts in one call</Li>
             <Li emoji="⏰">Epoch end times enforced on-chain – no bets after the deadline</Li>
-            <Li emoji="🎰">Dual jackpot: 2% daily + 3% weekly accrual, random on-chain trigger via <Code>block.prevrandao</Code> probability</Li>
+            <Li emoji="🎰">Daily/weekly jackpot trigger uses on-chain hazard checks with <Code>keccak256(prevrandao, &quot;daily/weekly&quot;, epoch, lastCheck, block.timestamp)</Code></Li>
             <Li emoji="♻️">Rollover: if nobody hit the winning tile, the 92% base reward flows into the <Code>rolloverPool</Code>, inflating the next round</Li>
             <Li emoji="🛡">ReentrancyGuard on all state-changing functions; SafeERC20 for all token transfers</Li>
             <Li emoji="📅">Weekly jackpot uses Monday-based weeks (Monday 00:00 UTC start) via <Code>MONDAY_OFFSET</Code></Li>
           </ul>
+          <InfoBox emoji="🔍" title="Provable Randomness (Winner + Jackpots)">
+            The winner tile and jackpot trigger checks are computed inside the smart contract at resolve time using only on-chain data.
+            The winner tile hash mixes <Code>block.prevrandao</Code>, previous block hash, epoch id, and live pool state.
+            Daily and weekly jackpots use separate random checks against elapsed time windows (<Code>elapsed / remaining</Code> hazard model),
+            so they are not fixed by round count and cannot be manually forced by UI or backend.
+          </InfoBox>
         </Section>
 
         <Divider />
@@ -364,7 +381,7 @@ function Hero() {
     <div className="relative pt-5 pb-5 text-center overflow-hidden">
       <FloatingParticles />
       <div className="relative z-10">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/25 mb-6 animate-slide-up">
+        <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/25 mb-6 animate-slide-up ${uiTokens.focusRing}`}>
           <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
           <span className="text-[10px] font-bold text-violet-400 uppercase tracking-widest">Official Documentation</span>
         </div>
@@ -447,7 +464,7 @@ function Section({ id, badge, title, icon: Icon, delay, children }: {
       style={{ transitionDelay: `${delay}s` }}
     >
       <div className="flex items-center gap-3 mb-5">
-        <div className="w-10 h-10 rounded-lg bg-violet-500/10 border border-violet-500/25 flex items-center justify-center shrink-0">
+        <div className={`w-10 h-10 ${uiTokens.radius.sm} bg-violet-500/10 border border-violet-500/25 flex items-center justify-center shrink-0`}>
           <Icon />
         </div>
         <div>
@@ -484,14 +501,17 @@ function Li({ emoji, children }: { emoji: string; children: React.ReactNode }) {
 
 function InfoBox({ emoji, title, children }: { emoji: string; title: string; children: React.ReactNode }) {
   return (
-    <div className="relative my-6 p-4 rounded-xl bg-gradient-to-br from-violet-500/[0.07] to-indigo-500/[0.04] border border-violet-500/20 overflow-hidden">
+    <UiPanel
+      tone="accent"
+      className="relative my-6 bg-gradient-to-br from-violet-500/[0.07] to-indigo-500/[0.04] border-violet-500/20 overflow-hidden"
+    >
       <div className="absolute top-0 right-0 w-24 h-24 bg-violet-500/5 rounded-full blur-2xl pointer-events-none" />
       <div className="flex items-center gap-2 mb-2 relative">
         <span className="text-lg">{emoji}</span>
         <span className="text-xs font-bold text-violet-300 uppercase tracking-wider">{title}</span>
       </div>
       <p className="text-sm text-gray-400 leading-relaxed relative">{children}</p>
-    </div>
+    </UiPanel>
   );
 }
 
@@ -524,7 +544,7 @@ function StatCard({ label, value, sub, color }: { label: string; value: string; 
     sky: "border-sky-500/25 bg-sky-500/[0.06] text-sky-400",
   };
   return (
-    <div className={`p-3 rounded-lg border ${colors[color]}`}>
+    <div className={cn(`p-3 border ${colors[color]}`, uiTokens.radius.sm)}>
       <div className="text-[8px] font-bold uppercase tracking-widest opacity-60 mb-1">{label}</div>
       <div className="text-xl font-black">{value}</div>
       <div className="text-[10px] text-gray-500 mt-0.5">{sub}</div>
@@ -534,17 +554,17 @@ function StatCard({ label, value, sub, color }: { label: string; value: string; 
 
 function FeatureCard({ icon, title, desc }: { icon: string; title: string; desc: string }) {
   return (
-    <div className="p-3 rounded-lg bg-[#0a0a16] border border-violet-500/15 hover:border-violet-500/30 transition-colors">
+    <UiPanel tone="default" padding="sm" className="hover:border-violet-500/30 transition-colors">
       <div className="text-lg mb-1">{icon}</div>
       <div className="text-xs font-bold text-white mb-0.5">{title}</div>
       <div className="text-[10px] text-gray-500">{desc}</div>
-    </div>
+    </UiPanel>
   );
 }
 
 function ContractCard({ name, address, functions }: { name: string; address: string; functions: string[] }) {
   return (
-    <div className="p-4 rounded-xl bg-[#0a0a16] border border-violet-500/15">
+    <UiPanel tone="default">
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-bold text-white uppercase tracking-wider">{name}</span>
         <span className="text-[10px] font-mono text-violet-400/60">{address}</span>
@@ -556,7 +576,7 @@ function ContractCard({ name, address, functions }: { name: string; address: str
           </span>
         ))}
       </div>
-    </div>
+    </UiPanel>
   );
 }
 
@@ -611,7 +631,10 @@ function MiniGrid() {
 
 function FormulaBlock() {
   return (
-    <div className="my-6 p-5 rounded-xl bg-gradient-to-r from-violet-500/[0.06] via-indigo-500/[0.08] to-violet-500/[0.06] border border-violet-500/20 text-center">
+    <UiPanel
+      tone="accent"
+      className="my-6 p-5 bg-gradient-to-r from-violet-500/[0.06] via-indigo-500/[0.08] to-violet-500/[0.06] border-violet-500/20 text-center"
+    >
       <div className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-3">Reward Formula</div>
       <div className="text-lg sm:text-xl font-mono font-black text-white">
         <span className="text-violet-400">reward</span>
@@ -624,7 +647,7 @@ function FormulaBlock() {
         </span>
       </div>
       <div className="text-[10px] text-gray-500 mt-3">rewardPool = 92% of totalPool + dailyJackpot (if triggered) + weeklyJackpot (if triggered)</div>
-    </div>
+    </UiPanel>
   );
 }
 
@@ -639,7 +662,7 @@ function RoadmapTimeline() {
   return (
     <div className="space-y-4 mb-4">
       {phases.map((p) => (
-        <div key={p.phase} className={`p-4 rounded-xl border transition-all ${
+        <UiPanel key={p.phase} className={`transition-all ${
           p.status === "live"
             ? "bg-emerald-500/[0.05] border-emerald-500/25"
             : p.status === "next"
@@ -666,7 +689,7 @@ function RoadmapTimeline() {
               </span>
             ))}
           </div>
-        </div>
+        </UiPanel>
       ))}
     </div>
   );
@@ -685,7 +708,7 @@ function TechBadge({ name, color }: { name: string; color: string }) {
     indigo: "text-indigo-400 border-indigo-500/20 bg-indigo-500/[0.04]",
   };
   return (
-    <div className={`px-3 py-2 rounded-lg border text-xs font-bold text-center ${colors[color] ?? colors.white}`}>
+    <div className={cn(`px-3 py-2 border text-xs font-bold text-center ${colors[color] ?? colors.white}`, uiTokens.radius.sm)}>
       {name}
     </div>
   );

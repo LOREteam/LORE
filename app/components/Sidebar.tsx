@@ -8,6 +8,10 @@ import type { TabId, UnclaimedWin } from "../lib/types";
 import { useGlobalStats } from "../hooks/useGlobalStats";
 import { searchingQuotes, emptyStates } from "../lib/loreTexts";
 import { LoreText } from "./LoreText";
+import { cn } from "../lib/cn";
+import { UiButton } from "./ui/UiButton";
+import { UiPanel } from "./ui/UiPanel";
+import { uiTokens } from "./ui/tokens";
 
 interface HotTile { tileId: number; wins: number; }
 
@@ -30,6 +34,19 @@ const TILE_STYLES = [
   "border-white/10 bg-white/[0.02] text-gray-400",
 ] as const;
 
+function formatRewardAmount(amountWei: string): string {
+  try {
+    const value = Number(formatUnits(BigInt(amountWei || "0"), 18));
+    if (!Number.isFinite(value)) return "0.0";
+    return value.toLocaleString("en-US", {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    });
+  } catch {
+    return "0.0";
+  }
+}
+
 export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hotTiles, unclaimedWins, isScanning, isDeepScanning, isClaiming, onScan, onClaim, onClaimAll }: SidebarProps) {
   const { stats, loading: statsLoading } = useGlobalStats();
 
@@ -41,7 +58,7 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
   const goFaq = useCallback(() => onTabChange("faq"), [onTabChange]);
 
   return (
-    <aside className="w-[calc(14rem+1cm)] bg-[#0a0a18]/90 backdrop-blur-md border-r border-violet-500/15 hidden lg:flex flex-col justify-between animate-slide-in-left">
+    <aside className="w-[calc(14rem+1cm)] bg-[#0a0a18]/90 backdrop-blur-md border-r border-violet-500/15 hidden lg:flex flex-col justify-between animate-slide-in-left overflow-y-auto">
       <div>
         {/* ═══ Logo ═══ */}
         <div className="p-5 flex items-center gap-4">
@@ -96,7 +113,11 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
           <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
           <p className="text-gray-600 font-bold uppercase tracking-[0.2em] px-1 pt-1" style={{ fontSize: "11px" }}>Protocol Stats</p>
 
-          <div className="rounded-lg bg-gradient-to-br from-violet-500/[0.06] to-cyan-500/[0.04] border border-violet-500/10 p-[10px] space-y-2.5">
+          <UiPanel
+            tone="subtle"
+            padding="sm"
+            className="bg-gradient-to-br from-violet-500/[0.06] to-cyan-500/[0.04] border-violet-500/10 p-[10px] space-y-2.5"
+          >
             <StatRow
               icon="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
               label="Total Volume"
@@ -111,12 +132,16 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
               loading={statsLoading && !stats}
               accent="orange"
             />
-          </div>
+          </UiPanel>
 
           {hotTiles && hotTiles.length > 0 && (
             <>
               <p className="text-gray-600 font-bold uppercase tracking-[0.2em] px-1 pt-1" style={{ fontSize: "11px" }}>Hot Tiles</p>
-              <div className="rounded-lg bg-gradient-to-br from-violet-500/[0.06] to-cyan-500/[0.04] border border-violet-500/10 p-[10px]">
+              <UiPanel
+                tone="subtle"
+                padding="sm"
+                className="bg-gradient-to-br from-violet-500/[0.06] to-cyan-500/[0.04] border-violet-500/10 p-[10px]"
+              >
                 <div className="flex gap-1 min-w-0">
                   {hotTiles.map((t, i) => (
                     <div
@@ -132,97 +157,113 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
                   ))}
                 </div>
                 <p className="text-gray-500 font-medium text-center mt-2" style={{ fontSize: "10px" }}>Top tiles · last 40 rounds</p>
-              </div>
+              </UiPanel>
             </>
           )}
 
           {/* ═══ Rewards ═══ */}
           <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent mt-1" />
-          <div className="flex justify-between items-center gap-2 px-1 pt-1">
-            <p className="text-gray-600 font-bold uppercase tracking-[0.2em] flex items-center gap-1.5 shrink-0" style={{ fontSize: "11px" }}>
-              <span className="w-1 h-3 bg-amber-400 rounded-sm shadow-[0_0_6px_rgba(251,191,36,0.3)]" />
-              Rewards
-            </p>
-            <div className="flex items-center gap-2 min-w-0">
-              {unclaimedWins.length > 1 && (
-                <button
-                  onClick={onClaimAll}
-                  disabled={isClaiming}
-                  className="py-0.5 px-2 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-md shadow-amber-500/15 shrink-0"
+          <UiPanel
+            tone="warning"
+            padding="sm"
+            className="bg-gradient-to-br from-amber-500/[0.04] to-violet-500/[0.04] border-amber-500/10 p-0 max-h-[240px] overflow-y-auto [scrollbar-gutter:stable]"
+          >
+            <div className="sticky top-0 z-10 flex justify-between items-center gap-2 border-b border-white/[0.06] bg-[#0f0d14]/95 pl-[10px] pr-4 py-2 backdrop-blur-sm">
+              <p className="text-gray-600 font-bold uppercase tracking-[0.2em] flex items-center gap-1.5 min-w-0" style={{ fontSize: "11px" }}>
+                <span className="w-1 h-3 bg-amber-400 rounded-sm shadow-[0_0_6px_rgba(251,191,36,0.3)]" />
+                Rewards
+                {unclaimedWins.length > 0 && (
+                  <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/12 px-1 py-[1px] text-[8px] font-black tracking-normal text-amber-300">
+                    {unclaimedWins.length}
+                  </span>
+                )}
+              </p>
+              <div className="flex items-center gap-2 min-w-0">
+                {unclaimedWins.length > 1 && (
+                  <UiButton
+                    onClick={onClaimAll}
+                    loading={isClaiming}
+                    variant="warning"
+                    size="xs"
+                    uppercase
+                    className="h-5 px-1.5 bg-gradient-to-r from-amber-500 to-orange-500 border-amber-500/20 text-black font-black text-[8px] hover:from-amber-400 hover:to-orange-400 shadow-sm shadow-amber-500/10 shrink-0"
+                  >
+                    {isClaiming ? "WAIT..." : "CLAIM ALL"}
+                  </UiButton>
+                )}
+                <UiButton
+                  onClick={onScan}
+                  disabled={isScanning}
+                  title="Scan rewards"
+                  variant="ghost"
+                  size="xs"
+                  className="h-6 w-6 p-0 text-violet-400 hover:text-violet-300 hover:drop-shadow-[0_0_6px_rgba(139,92,246,0.4)] shrink-0"
                 >
-                  {isClaiming ? "WAIT..." : `CLAIM ALL (${unclaimedWins.length})`}
-                </button>
-              )}
-              <button
-                onClick={onScan}
-                disabled={isScanning}
-                title="Scan rewards"
-                className="text-violet-400 hover:text-violet-300 transition-all duration-200 flex items-center justify-center hover:drop-shadow-[0_0_6px_rgba(139,92,246,0.4)] shrink-0 p-0.5"
-              >
-                <svg
-                  className={`w-3.5 h-3.5 ${isScanning ? "animate-spin" : "hover:rotate-180 transition-transform duration-500"}`}
-                  fill="none" viewBox="0 0 24 24" stroke="currentColor"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </button>
+                  <svg
+                    className={`w-3.5 h-3.5 ${isScanning ? "animate-spin" : "hover:rotate-180 transition-transform duration-500"}`}
+                    fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </UiButton>
+              </div>
             </div>
-          </div>
-
-          <div className="rounded-lg bg-gradient-to-br from-amber-500/[0.04] to-violet-500/[0.04] border border-amber-500/10 p-[10px]">
-            {isDeepScanning && (
-              <div className="mb-2 rounded-md border border-violet-500/20 bg-violet-500/8 px-2 py-1">
-                <p className="text-[8px] leading-tight text-violet-300/90 font-semibold tracking-wide">
-                  Quick results are ready. Full reward history is still loading in background.
-                </p>
-              </div>
-            )}
-            {isScanning && unclaimedWins.length === 0 ? (
-              <div className="flex items-center justify-center gap-2 py-1.5">
-                <svg className="w-3 h-3 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <span className="text-[9px] text-gray-500 uppercase tracking-widest font-bold"><LoreText items={searchingQuotes} /></span>
-              </div>
-            ) : unclaimedWins.length > 0 ? (
-              <div className="flex flex-col gap-1">
-                <div className="flex flex-col gap-1 max-h-[100px] overflow-y-auto">
+            <div className="px-2 py-2">
+              {isDeepScanning && (
+                <div className="mb-2 rounded-md border border-violet-500/20 bg-violet-500/8 px-2 py-1">
+                  <p className="text-[8px] leading-tight text-violet-300/90 font-semibold tracking-wide">
+                    Quick results are ready. Full reward history is still loading in background.
+                  </p>
+                </div>
+              )}
+              {isScanning && unclaimedWins.length === 0 ? (
+                <div className="flex items-center justify-center gap-2 py-1.5">
+                  <svg className="w-3 h-3 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <span className="text-[9px] text-gray-500 uppercase tracking-widest font-bold"><LoreText items={searchingQuotes} /></span>
+                </div>
+              ) : unclaimedWins.length > 0 ? (
+                <div className="flex flex-col gap-1 pb-0.5">
                   {unclaimedWins.map((win, idx) => (
                     <div
                       key={win.epoch}
-                      className="flex justify-between items-center bg-amber-500/8 border border-amber-500/15 px-2 py-1 rounded-md animate-slide-up hover:bg-amber-500/12 transition-colors group"
+                      className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-amber-500/8 border border-amber-500/15 px-2.5 py-1.5 rounded-md animate-slide-up hover:bg-amber-500/12 transition-colors group"
                       style={{ animationDelay: `${idx * 0.05}s` }}
                     >
                       <div className="flex flex-col min-w-0">
                         <span className="text-[8px] text-amber-500/50 uppercase font-bold tracking-wider">
                           #{win.epoch}
                         </span>
-                      <span className="text-[10px] font-bold text-emerald-400 truncate">
-                        {Number(formatUnits(BigInt(win.amountWei), 18)).toFixed(4)} LINEA
+                      <span className="text-[10px] font-bold text-emerald-400">
+                        {formatRewardAmount(win.amountWei)} L
                       </span>
                       </div>
-                      <button
+                      <UiButton
                         onClick={() => onClaim(win.epoch)}
                         disabled={isClaiming}
-                        className="px-2 py-0.5 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-widest rounded hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-sm active:scale-[0.95] shrink-0 ml-1"
+                        variant="warning"
+                        size="xs"
+                        uppercase
+                        className="h-5 px-1.5 bg-gradient-to-r from-amber-500 to-orange-500 border-amber-500/20 text-black font-black text-[8px] hover:from-amber-400 hover:to-orange-400 shadow-sm shrink-0 ml-1"
                       >
                         {isClaiming ? "..." : "CLAIM"}
-                      </button>
+                      </UiButton>
                     </div>
                   ))}
                 </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-center gap-1.5 py-1">
-                <svg className="w-3 h-3 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                </svg>
-                <span className="text-[9px] font-bold tracking-widest italic text-gray-600"><LoreText items={emptyStates.rewards} /></span>
-              </div>
-            )}
-          </div>
+              ) : (
+                <div className="flex items-center justify-center gap-1.5 py-1">
+                  <svg className="w-3 h-3 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                  </svg>
+                  <span className="text-[9px] font-bold tracking-widest italic text-gray-600"><LoreText items={emptyStates.rewards} /></span>
+                </div>
+              )}
+            </div>
+          </UiPanel>
         </div>
 
         {/* ═══ Footer links ═══ */}
@@ -280,11 +321,14 @@ const NavItem = React.memo(function NavItem({ active, onClick, icon, label, dela
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg font-semibold transition-all duration-200 animate-slide-up group ${
+      className={cn(
+        "w-full flex items-center gap-3 px-3 py-2.5 font-semibold transition-all duration-200 animate-slide-up group",
+        uiTokens.radius.sm,
+        uiTokens.focusRing,
         active
           ? "bg-violet-500/15 text-violet-400 shadow-sm shadow-violet-500/10 animate-glow-pulse"
-          : "text-gray-500 hover:text-gray-300 hover:bg-white/[0.04]"
-      }`}
+          : "text-gray-500 hover:text-gray-300 hover:bg-white/[0.04]",
+      )}
       style={{ animationDelay: delay, fontSize: 15 }}
     >
       <svg className={`w-[20px] h-[20px] shrink-0 transition-transform duration-200 ${active ? "" : "group-hover:scale-110"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>

@@ -22,10 +22,11 @@ export function useDeepRewardScan(
   const [claiming, setClaiming] = useState(false);
   const [progress, setProgress] = useState("");
   const abortRef = useRef(false);
+  const scanRunningRef = useRef(false);
 
   const waitReceipt = useCallback(
     async (hash: `0x${string}`) => {
-      if (!publicClient) return;
+      if (!publicClient) throw new Error("publicClient unavailable");
       await Promise.race([
         publicClient.waitForTransactionReceipt({ hash }),
         delay(TX_RECEIPT_TIMEOUT_MS).then(() => { throw new Error("Timeout"); }),
@@ -36,6 +37,8 @@ export function useDeepRewardScan(
 
   const scan = useCallback(async () => {
     if (!publicClient || !address) return;
+    if (scanRunningRef.current) return;
+    scanRunningRef.current = true;
     abortRef.current = false;
     setScanning(true);
     setWins(null);
@@ -121,6 +124,7 @@ export function useDeepRewardScan(
       console.error("[DeepScan]", e);
     } finally {
       setScanning(false);
+      scanRunningRef.current = false;
     }
   }, [publicClient, address]);
 
@@ -133,7 +137,7 @@ export function useDeepRewardScan(
       const data = encodeFunctionData({
         abi: GAME_ABI, functionName: "claimReward", args: [BigInt(epochId)],
       });
-      const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data });
+      const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas: BigInt(200_000) });
       await waitReceipt(hash);
       setWins((prev) => prev ? prev.filter((w) => w.epoch !== epochId) : prev);
     } catch (err) {
@@ -146,39 +150,40 @@ export function useDeepRewardScan(
   const claimAllDeep = useCallback(async () => {
     if (!wins || wins.length === 0 || !sendTransactionSilent) return;
     setClaiming(true);
+    try {
+      const all = [...wins];
+      const pending: { epoch: string; hash: `0x${string}` }[] = [];
 
-    const all = [...wins];
-    const pending: { epoch: string; hash: `0x${string}` }[] = [];
-
-    for (const win of all) {
-      try {
-        const data = encodeFunctionData({
-          abi: GAME_ABI, functionName: "claimReward", args: [BigInt(win.epoch)],
-        });
-        const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data });
-        pending.push({ epoch: win.epoch, hash });
-      } catch (err) {
-        if (isUserRejection(err)) break;
+      for (const win of all) {
+        try {
+          const data = encodeFunctionData({
+            abi: GAME_ABI, functionName: "claimReward", args: [BigInt(win.epoch)],
+          });
+          const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas: BigInt(200_000) });
+          pending.push({ epoch: win.epoch, hash });
+        } catch (err) {
+          if (isUserRejection(err)) break;
+        }
       }
+
+      const results = await Promise.allSettled(
+        pending.map(async ({ epoch, hash }) => {
+          await waitReceipt(hash);
+          return epoch;
+        }),
+      );
+
+      const claimedEpochs = new Set<string>();
+      results.forEach((r) => {
+        if (r.status === "fulfilled") claimedEpochs.add(r.value);
+      });
+
+      if (claimedEpochs.size > 0) {
+        setWins((prev) => prev ? prev.filter((w) => !claimedEpochs.has(w.epoch)) : prev);
+      }
+    } finally {
+      setClaiming(false);
     }
-
-    const results = await Promise.allSettled(
-      pending.map(async ({ epoch, hash }) => {
-        await waitReceipt(hash);
-        return epoch;
-      }),
-    );
-
-    const claimedEpochs = new Set<string>();
-    results.forEach((r) => {
-      if (r.status === "fulfilled") claimedEpochs.add(r.value);
-    });
-
-    if (claimedEpochs.size > 0) {
-      setWins((prev) => prev ? prev.filter((w) => !claimedEpochs.has(w.epoch)) : prev);
-    }
-
-    setClaiming(false);
   }, [wins, sendTransactionSilent, waitReceipt]);
 
   return { wins, scanning, claiming, progress, scan, stop, claimOne, claimAllDeep };

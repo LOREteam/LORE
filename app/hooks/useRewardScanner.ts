@@ -29,11 +29,14 @@ export function useRewardScanner(
   const [isDeepScanning, setIsDeepScanning] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
   const scanAbortRef = useRef(false);
+  const scanRunningRef = useRef(false);
   const lastScannedEpochRef = useRef<string | null>(null);
+  const unclaimedWinsRef = useRef(unclaimedWins);
+  unclaimedWinsRef.current = unclaimedWins;
 
   const waitReceipt = useCallback(
     async (hash: `0x${string}`) => {
-      if (!publicClient) return;
+      if (!publicClient) throw new Error("publicClient unavailable");
       await Promise.race([
         publicClient.waitForTransactionReceipt({ hash }),
         delay(TX_RECEIPT_TIMEOUT_MS).then(() => {
@@ -46,10 +49,12 @@ export function useRewardScanner(
 
   const scanRewards = useCallback(async () => {
     if (!publicClient || !actualCurrentEpoch || !address) return;
+    if (scanRunningRef.current) return;
 
     const epochKey = actualCurrentEpoch.toString();
-    if (lastScannedEpochRef.current === epochKey && unclaimedWins.length > 0) return;
+    if (lastScannedEpochRef.current === epochKey && unclaimedWinsRef.current.length > 0) return;
 
+    scanRunningRef.current = true;
     scanAbortRef.current = false;
     setIsScanning(true);
     setIsDeepScanning(false);
@@ -161,11 +166,16 @@ export function useRewardScanner(
 
     setIsDeepScanning(false);
     setIsScanning(false);
-  }, [publicClient, actualCurrentEpoch, address, unclaimedWins.length]);
+    scanRunningRef.current = false;
+  }, [publicClient, actualCurrentEpoch, address]);
 
   useEffect(() => {
     scanRewards();
   }, [scanRewards]);
+
+  useEffect(() => {
+    lastScannedEpochRef.current = null;
+  }, [address]);
 
   const claimReward = useCallback(
     async (epochId: string) => {
@@ -176,7 +186,7 @@ export function useRewardScanner(
           const data = encodeFunctionData({
             abi: GAME_ABI, functionName: "claimReward", args: [BigInt(epochId)],
           });
-          const hash = await silentSend({ to: CONTRACT_ADDRESS, data });
+          const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas: BigInt(200_000) });
           await waitReceipt(hash);
         }
         setUnclaimedWins((prev) => prev.filter((w) => w.epoch !== epochId));
@@ -215,7 +225,7 @@ export function useRewardScanner(
           const data = encodeFunctionData({
             abi: GAME_ABI, functionName: "claimReward", args: [BigInt(win.epoch)],
           });
-          const hash = await silentSend({ to: CONTRACT_ADDRESS, data });
+          const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas: BigInt(200_000) });
           pending.push({ epoch: win.epoch, hash });
         } catch (err) {
           if (isUserRejection(err)) break;

@@ -1,6 +1,10 @@
 "use client";
 
 import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { cn } from "../lib/cn";
+import { UiBadge } from "./ui/UiBadge";
+import { UiButton } from "./ui/UiButton";
+import { uiTokens } from "./ui/tokens";
 
 interface JackpotBannerProps {
   winningTileId: number | null;
@@ -79,6 +83,15 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   }, []);
 
   useEffect(() => {
+    if (!showBanner) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showBanner, handleClose]);
+
+  useEffect(() => {
     return () => {
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
     };
@@ -120,6 +133,9 @@ export const JackpotBanner = React.memo(function JackpotBanner({
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${jackpotType} Jackpot Win`}
       className={`fixed inset-0 z-[100] flex items-center justify-center transition-all duration-500 ${
         showContent ? "opacity-100" : "opacity-0"
       }`}
@@ -132,21 +148,32 @@ export const JackpotBanner = React.memo(function JackpotBanner({
 
       {/* Main Banner */}
       <div
-        className={`relative z-10 mx-4 p-6 md:p-8 rounded-2xl bg-gradient-to-r ${theme.gradient} ${theme.glow} animate-scale-in`}
+        className={cn(
+          "relative z-10 mx-4 p-6 md:p-8 bg-gradient-to-r animate-scale-in",
+          uiTokens.radius.lg,
+          theme.gradient,
+          theme.glow,
+        )}
         style={{ animation: showContent ? "jackpot-scale 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)" : undefined }}
       >
         {/* Glow effect */}
-        <div className="absolute inset-0 rounded-2xl animate-pulse opacity-50">
-          <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-white/20 to-transparent" />
+        <div className={cn("absolute inset-0 animate-pulse opacity-50", uiTokens.radius.lg)}>
+          <div className={cn("absolute inset-0 bg-gradient-to-r from-white/20 to-transparent", uiTokens.radius.lg)} />
         </div>
 
         {/* Content */}
         <div className="relative text-center">
           {/* JACKPOT text */}
           <div className="mb-2">
-            <span className="text-xs md:text-sm font-black tracking-[0.3em] text-white/80 uppercase">
+            <UiBadge
+              tone="default"
+              size="sm"
+              pill
+              uppercase
+              className="border-white/35 bg-black/20 text-white/90 tracking-[0.24em] px-3 py-1"
+            >
               {jackpotType} JACKPOT! 🎰
-            </span>
+            </UiBadge>
           </div>
 
           {/* Big WIN text */}
@@ -182,18 +209,22 @@ export const JackpotBanner = React.memo(function JackpotBanner({
 
           {/* Close button */}
           <div className="flex flex-col sm:flex-row gap-2 justify-center">
-            <button
+            <UiButton
               onClick={handleClose}
-              className="px-6 py-2 rounded-lg bg-white/20 hover:bg-white/30 text-white font-bold text-sm transition-all"
+              variant="ghost"
+              size="md"
+              className="min-w-[132px] border-white/35 bg-white/20 text-white hover:bg-white/30 hover:text-white"
             >
               AWESOME!
-            </button>
-            <button
+            </UiButton>
+            <UiButton
               onClick={handleShareToX}
-              className={`px-6 py-2 rounded-lg text-white font-bold text-sm transition-all ${theme.button}`}
+              variant="secondary"
+              size="md"
+              className={cn("min-w-[132px] text-white border-white/35", theme.button)}
             >
               Share on X
-            </button>
+            </UiButton>
           </div>
         </div>
 
@@ -204,7 +235,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
         <div className="absolute bottom-4 right-4 text-2xl animate-ping" style={{ animationDelay: "0.6s" }}>✨</div>
 
         {/* Coins falling effect */}
-        <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-2xl">
+        <div className={cn("absolute inset-0 pointer-events-none overflow-hidden", uiTokens.radius.lg)}>
           {particleItems.map((item) => (
             <div
               key={item.id}

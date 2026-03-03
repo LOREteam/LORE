@@ -8,6 +8,10 @@ import type { WalletTransfersSummary } from "../hooks/useWalletTransfers";
 import type { UnclaimedWin } from "../lib/types";
 import type { SoundName } from "../hooks/useSound";
 import { SOUND_LABELS } from "../hooks/useSound";
+import { UiButton } from "./ui/UiButton";
+import { UiInput } from "./ui/UiInput";
+import { UiPanel } from "./ui/UiPanel";
+import { uiTokens } from "./ui/tokens";
 
 interface WalletSettingsModalProps {
   isOpen: boolean;
@@ -17,12 +21,20 @@ interface WalletSettingsModalProps {
   externalWalletAddress: string | null;
   formattedLineaBalance: string | null;
   withdrawAmount: string;
+  depositEthAmount: string;
+  depositTokenAmount: string;
   isWithdrawing: boolean;
+  isDepositingEth: boolean;
+  isDepositingToken: boolean;
   onWithdrawAmountChange: (value: string) => void;
+  onDepositEthAmountChange: (value: string) => void;
+  onDepositTokenAmountChange: (value: string) => void;
   onCreateEmbeddedWallet: () => void;
   onCopyEmbeddedAddress: () => void;
   onExportEmbeddedWallet: () => void;
   onWithdrawToExternal: () => void;
+  onDepositEthToEmbedded: () => void;
+  onDepositTokenToEmbedded: () => void;
   walletTransfers: WalletTransfersSummary | null;
   walletTransfersLoading: boolean;
   onLoadWalletTransfers: () => void;
@@ -46,12 +58,20 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   externalWalletAddress,
   formattedLineaBalance,
   withdrawAmount,
+  depositEthAmount,
+  depositTokenAmount,
   isWithdrawing,
+  isDepositingEth,
+  isDepositingToken,
   onWithdrawAmountChange,
+  onDepositEthAmountChange,
+  onDepositTokenAmountChange,
   onCreateEmbeddedWallet,
   onCopyEmbeddedAddress,
   onExportEmbeddedWallet,
   onWithdrawToExternal,
+  onDepositEthToEmbedded,
+  onDepositTokenToEmbedded,
   walletTransfers,
   walletTransfersLoading,
   onLoadWalletTransfers,
@@ -72,7 +92,9 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={onClose} />
 
-      <div className="relative w-full max-w-2xl rounded-xl border border-violet-500/20 bg-[#0d0d1a] shadow-2xl shadow-violet-500/10 animate-slide-up overflow-hidden">
+      <div
+        className={`relative w-full max-w-2xl ${uiTokens.radius.lg} ${uiTokens.modalSurface} animate-slide-up overflow-hidden`}
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-violet-500/10 px-5 py-4">
           <div>
@@ -86,21 +108,27 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
             <p className="text-gray-500 text-xs mt-0.5">Manage Privy wallet, export keys, withdraw</p>
           </div>
           <div className="flex items-center gap-2">
-            <button
+            <UiButton
               onClick={downloadLogs}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-violet-500/20 text-violet-400 hover:bg-violet-500/10 text-xs font-bold uppercase tracking-widest transition-all duration-200"
+              variant="secondary"
+              size="sm"
+              uppercase
+              className="text-xs"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
               Export Logs
-            </button>
-            <button
+            </UiButton>
+            <UiButton
               onClick={onClose}
-              className="px-3 py-1.5 rounded-lg border border-white/10 text-gray-400 hover:bg-white/[0.05] hover:text-white text-xs font-bold uppercase tracking-widest transition-all duration-200"
+              variant="ghost"
+              size="sm"
+              uppercase
+              className="text-xs"
             >
               Close
-            </button>
+            </UiButton>
           </div>
         </div>
 
@@ -108,7 +136,12 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
         <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
           {/* Sound Settings */}
           {soundSettings && onSoundSettingChange && (
-            <div className="rounded-lg border border-violet-500/10 bg-[#0a0a16]/80 px-3 py-2.5 animate-slide-up" style={{ animationDelay: "0.02s" }}>
+            <UiPanel
+              tone="subtle"
+              padding="sm"
+              className="animate-slide-up"
+              style={{ animationDelay: "0.02s" }}
+            >
               <div className="flex items-baseline justify-between gap-2 mb-1.5">
                 <span className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider">Sound</span>
                 <span className="text-[8px] text-gray-600">when unmuted</span>
@@ -129,19 +162,19 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
                   </label>
                 ))}
               </div>
-            </div>
+            </UiPanel>
           )}
 
           {/* Session */}
-          <div className="rounded-xl border border-violet-500/15 bg-[#0a0a16] p-4 animate-slide-up" style={{ animationDelay: "0.05s" }}>
+          <UiPanel tone="default" className="animate-slide-up" style={{ animationDelay: "0.05s" }}>
             <div className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1.5">Current Session</div>
             <div className="text-sm text-emerald-400 font-mono font-semibold drop-shadow-[0_0_6px_rgba(52,211,153,0.3)]">
               {connectedWalletAddress ? shortenAddress(connectedWalletAddress) : "Not connected"}
             </div>
-          </div>
+          </UiPanel>
 
           {/* Privy */}
-          <div className="rounded-xl border border-violet-500/25 bg-violet-500/[0.06] p-4 animate-slide-up" style={{ animationDelay: "0.1s" }}>
+          <UiPanel tone="accent" className="animate-slide-up" style={{ animationDelay: "0.1s" }}>
             <div className="flex items-center justify-between mb-2">
               <div className="text-[10px] text-gray-300 font-bold uppercase tracking-widest">Privy Embedded Wallet</div>
               <span className="text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 text-emerald-400">
@@ -155,24 +188,83 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
                 <p className="text-[10px] text-gray-400 mb-2">All bets go through this wallet. Deposit LINEA and ETH (for gas) here.</p>
                 <div className="text-xs text-white font-mono break-all mb-3 bg-black/20 px-2 py-1.5 rounded-lg border border-white/[0.04]">{embeddedWalletAddress}</div>
                 <div className="flex flex-wrap gap-2">
-                  <Btn onClick={onCopyEmbeddedAddress}>Copy</Btn>
-                  <Btn onClick={onExportEmbeddedWallet}>Export</Btn>
+                  <UiButton onClick={onCopyEmbeddedAddress} variant="ghost" uppercase size="sm">
+                    Copy
+                  </UiButton>
+                  <UiButton onClick={onExportEmbeddedWallet} variant="ghost" uppercase size="sm">
+                    Export
+                  </UiButton>
+                </div>
+
+                <div className="mt-3 rounded-lg border border-violet-500/15 bg-black/20 p-3">
+                  <div className="text-[10px] text-gray-300 font-bold uppercase tracking-widest mb-1.5">Quick top-up from external wallet</div>
+                  <div className="text-[10px] text-gray-500 mb-2">
+                    From: {externalWalletAddress ? shortenAddress(externalWalletAddress) : "none"}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <UiInput
+                        type="text"
+                        inputMode="decimal"
+                        value={depositEthAmount}
+                        onChange={(e) => onDepositEthAmountChange(e.target.value)}
+                        className="flex-1"
+                        placeholder="ETH amount"
+                      />
+                      <UiButton
+                        onClick={onDepositEthToEmbedded}
+                        disabled={isDepositingEth || !externalWalletAddress || !embeddedWalletAddress}
+                        variant="secondary"
+                        size="md"
+                        uppercase
+                        loading={isDepositingEth}
+                        className="w-32 shrink-0 text-[10px]"
+                      >
+                        {isDepositingEth ? "Sending…" : "Send ETH"}
+                      </UiButton>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <UiInput
+                        type="text"
+                        inputMode="decimal"
+                        value={depositTokenAmount}
+                        onChange={(e) => onDepositTokenAmountChange(e.target.value)}
+                        className="flex-1"
+                        placeholder="LINEA amount"
+                      />
+                      <UiButton
+                        onClick={onDepositTokenToEmbedded}
+                        disabled={isDepositingToken || !externalWalletAddress || !embeddedWalletAddress}
+                        variant="success"
+                        size="md"
+                        uppercase
+                        loading={isDepositingToken}
+                        className="w-32 shrink-0 text-[10px]"
+                      >
+                        {isDepositingToken ? "Sending…" : "Send LINEA"}
+                      </UiButton>
+                    </div>
+                  </div>
                 </div>
               </>
             ) : (
               <>
                 <p className="text-xs text-gray-400 mb-2">Not created yet.</p>
-                <Btn onClick={onCreateEmbeddedWallet} variant="emerald">Create Privy Wallet</Btn>
+                <UiButton onClick={onCreateEmbeddedWallet} variant="success" size="sm" uppercase>
+                  Create Privy Wallet
+                </UiButton>
               </>
             )}
 
             <p className="text-[11px] text-gray-500 mt-3">
               To own your key – <span className="text-white font-semibold">Export</span> and import into MetaMask.
             </p>
-          </div>
+          </UiPanel>
 
           {/* Withdraw */}
-          <div className="rounded-xl border border-violet-500/15 bg-[#0a0a16] p-4 animate-slide-up" style={{ animationDelay: "0.15s" }}>
+          <UiPanel tone="default" className="animate-slide-up" style={{ animationDelay: "0.15s" }}>
             <div className="text-[10px] text-gray-300 font-bold uppercase tracking-widest mb-1.5">Withdraw to Deposit Wallet</div>
             <div className="text-xs text-gray-500 mb-1">
               To: {externalWalletAddress ? shortenAddress(externalWalletAddress) : "none"}
@@ -181,43 +273,47 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
               Balance: <span className="text-white font-semibold">{formattedLineaBalance ?? "0.00"} LINEA</span>
             </div>
             <div className="flex gap-2">
-              <input
+              <UiInput
                 type="text"
                 inputMode="decimal"
                 value={withdrawAmount}
                 onChange={(e) => onWithdrawAmountChange(e.target.value)}
-                className="flex-1 px-3 py-2 rounded-lg bg-[#060612] border border-violet-500/15 text-sm text-white outline-none focus:border-violet-500/50 focus:shadow-[0_0_12px_rgba(139,92,246,0.1)] transition-all duration-200"
+                className="flex-1"
                 placeholder="Amount"
               />
-              <button
+              <UiButton
                 onClick={onWithdrawToExternal}
                 disabled={isWithdrawing || !externalWalletAddress}
-                className="px-4 py-2 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-400 hover:bg-sky-500/15 hover:shadow-[0_0_12px_rgba(56,189,248,0.1)] disabled:opacity-40 text-xs font-bold uppercase tracking-widest transition-all duration-200"
+                variant="sky"
+                size="md"
+                uppercase
+                loading={isWithdrawing}
+                className="min-w-24 text-xs"
               >
-                {isWithdrawing ? (
-                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                ) : "Send"}
-              </button>
+                {isWithdrawing ? "Sending…" : "Send"}
+              </UiButton>
             </div>
-          </div>
+          </UiPanel>
 
           {/* Transfer History */}
           {embeddedWalletAddress && (
-            <div className="rounded-xl border border-violet-500/15 bg-[#0a0a16] p-4 animate-slide-up" style={{ animationDelay: "0.2s" }}>
+            <UiPanel tone="default" className="animate-slide-up" style={{ animationDelay: "0.2s" }}>
               <div className="text-[10px] text-gray-300 font-bold uppercase tracking-widest mb-1">LINEA Transfer History</div>
                 {externalWalletAddress && <div className="text-[9px] text-gray-500 mb-3">Deposits and withdrawals between your wallets only (no referral/rewards)</div>}
 
               {walletTransfers === null ? (
-                <button
+                <UiButton
                   onClick={onLoadWalletTransfers}
                   disabled={walletTransfersLoading}
-                  className="w-full py-2 rounded-lg border border-violet-500/20 bg-violet-500/[0.06] text-violet-400 hover:bg-violet-500/10 text-[10px] font-bold uppercase tracking-widest transition-all disabled:opacity-50"
+                  variant="secondary"
+                  size="md"
+                  uppercase
+                  fullWidth
+                  loading={walletTransfersLoading}
+                  className="text-[10px]"
                 >
                   {walletTransfersLoading ? "Loading…" : "Load History"}
-                </button>
+                </UiButton>
               ) : (
                 <>
                   <div className="flex gap-3 mb-3">
@@ -261,11 +357,11 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
                   )}
                 </>
               )}
-            </div>
+            </UiPanel>
           )}
 
           {/* Deep Reward Scan */}
-          <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.03] p-4 animate-slide-up" style={{ animationDelay: "0.25s" }}>
+          <UiPanel tone="warning" className="animate-slide-up" style={{ animationDelay: "0.25s" }}>
             <div className="flex items-center justify-between mb-2">
               <div className="text-[10px] text-amber-300 font-bold uppercase tracking-widest flex items-center gap-1.5">
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -274,24 +370,32 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
                 Deep Reward Scan
               </div>
               {deepScanWins && deepScanWins.length > 0 && !deepScanScanning && (
-                <button
+                <UiButton
                   onClick={onDeepClaimAll}
                   disabled={deepScanClaiming}
-                  className="px-2.5 py-1 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[9px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-sm"
+                  variant="warning"
+                  size="xs"
+                  uppercase
+                  loading={deepScanClaiming}
+                  className="font-bold text-[9px]"
                 >
                   {deepScanClaiming ? "Claiming…" : `Claim All (${deepScanWins.length})`}
-                </button>
+                </UiButton>
               )}
             </div>
             <p className="text-[10px] text-gray-500 mb-3">Scans ALL epochs from the start of the contract. Use if you might have unclaimed rewards older than 48 hours.</p>
 
             {deepScanWins === null && !deepScanScanning ? (
-              <button
+              <UiButton
                 onClick={onDeepScan}
-                className="w-full py-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] text-amber-400 hover:bg-amber-500/10 text-[10px] font-bold uppercase tracking-widest transition-all"
+                variant="warning"
+                size="md"
+                uppercase
+                fullWidth
+                className="text-[10px]"
               >
                 Start Full Scan
-              </button>
+              </UiButton>
             ) : deepScanScanning ? (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
@@ -301,12 +405,16 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
                   </svg>
                   <span className="text-[10px] text-gray-400 font-mono">{deepScanProgress}</span>
                 </div>
-                <button
+                <UiButton
                   onClick={onDeepScanStop}
-                  className="w-full py-1.5 rounded-lg border border-red-500/25 bg-red-500/[0.06] text-red-400 hover:bg-red-500/10 text-[10px] font-bold uppercase tracking-widest transition-all"
+                  variant="danger"
+                  size="sm"
+                  uppercase
+                  fullWidth
+                  className="text-[10px]"
                 >
                   Stop Scan
-                </button>
+                </UiButton>
               </div>
             ) : deepScanWins && deepScanWins.length > 0 ? (
               <div className="space-y-2">
@@ -318,13 +426,16 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
                         <span className="text-[9px] text-amber-500/60 font-bold uppercase tracking-wider">Epoch #{win.epoch}</span>
                         <span className="text-xs font-bold text-emerald-400">{parseFloat(formatUnits(BigInt(win.amountWei), 18)).toFixed(2)} LINEA</span>
                       </div>
-                      <button
+                      <UiButton
                         onClick={() => onDeepClaimOne(win.epoch)}
                         disabled={deepScanClaiming}
-                        className="px-2.5 py-1 bg-amber-500/10 border border-amber-500/25 text-amber-400 text-[9px] font-bold uppercase tracking-widest rounded-md hover:bg-amber-500/15 disabled:opacity-40 transition-all"
+                        variant="warning"
+                        size="xs"
+                        uppercase
+                        className="text-[9px]"
                       >
                         Claim
-                      </button>
+                      </UiButton>
                     </div>
                   ))}
                 </div>
@@ -338,41 +449,21 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
                   </svg>
                   <span className="text-[9px] uppercase font-bold tracking-widest">All rewards claimed</span>
                 </div>
-                <button
+                <UiButton
                   onClick={onDeepScan}
-                  className="w-full py-1.5 rounded-lg border border-white/[0.06] bg-white/[0.02] text-gray-500 hover:bg-white/[0.04] text-[10px] font-bold uppercase tracking-widest transition-all"
+                  variant="ghost"
+                  size="sm"
+                  uppercase
+                  fullWidth
+                  className="text-[10px]"
                 >
                   Scan Again
-                </button>
+                </UiButton>
               </div>
             ) : null}
-          </div>
+          </UiPanel>
         </div>
       </div>
     </div>
   );
 });
-
-function Btn({ onClick, disabled, variant = "default", children }: {
-  onClick: () => void;
-  disabled?: boolean;
-  variant?: "default" | "amber" | "sky" | "emerald";
-  children: React.ReactNode;
-}) {
-  const colors = {
-    default: "border-white/10 text-gray-300 hover:bg-white/[0.05] hover:text-white",
-    amber: "border-amber-400/30 bg-amber-400/8 text-amber-300 hover:bg-amber-400/15",
-    sky: "border-sky-400/30 bg-sky-400/8 text-sky-300 hover:bg-sky-400/15",
-    emerald: "border-emerald-400/30 bg-emerald-400/8 text-emerald-300 hover:bg-emerald-400/15",
-  }[variant];
-
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`px-3 py-1.5 rounded-lg border text-xs font-bold uppercase tracking-widest transition-all duration-200 disabled:opacity-40 active:scale-[0.97] ${colors}`}
-    >
-      {children}
-    </button>
-  );
-}

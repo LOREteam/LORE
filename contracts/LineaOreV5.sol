@@ -29,6 +29,7 @@ contract LineaOreV5 is Ownable, ReentrancyGuard {
     uint256 public constant FEE_FLUSH_INTERVAL_EPOCHS = 120;
     uint256 public constant MAX_REFERRERS_PER_EPOCH = 200;
     uint256 public constant EPOCH_DURATION_TIMELOCK = 30 minutes;
+    uint256 public constant REFERRAL_SETTLE_DELAY = 30 days;
     address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
     uint256 internal constant MONDAY_OFFSET = 3 days; // Unix epoch = Thu 00:00 UTC; +3d shifts week boundary to Monday 00:00 UTC
 
@@ -94,6 +95,7 @@ contract LineaOreV5 is Ownable, ReentrancyGuard {
     mapping(uint256 => uint256) public epochRewardClaimed;
     mapping(uint256 => uint256) public epochWinnerClaims;
     mapping(uint256 => bool) public epochDustRolled;
+    mapping(uint256 => uint256) public epochResolvedAt;
     uint256 public accruedOwnerFees;
     uint256 public accruedBurnFees;
     mapping(address => uint256) public pendingResolverRewards;
@@ -173,6 +175,25 @@ contract LineaOreV5 is Ownable, ReentrancyGuard {
         pendingReferralEarnings[msg.sender] = 0;
         token.safeTransfer(msg.sender, amount);
         emit ReferralEarningsClaimed(msg.sender, amount);
+    }
+
+    function accrueReferralBatch(uint256 maxEpochs) external {
+        require(maxEpochs > 0 && maxEpochs <= 100, "maxEpochs must be 1..100");
+        _accrueReferralFor(msg.sender, maxEpochs);
+    }
+
+    function claimAccruedReferralEarnings() external nonReentrant {
+        uint256 amount = pendingReferralEarnings[msg.sender];
+        if (amount == 0) revert NothingToClaim();
+        pendingReferralEarnings[msg.sender] = 0;
+        token.safeTransfer(msg.sender, amount);
+        emit ReferralEarningsClaimed(msg.sender, amount);
+    }
+
+    function referralEpochsRemaining(address user) external view returns (uint256) {
+        uint256 len = referrerEpochs[user].length;
+        uint256 cursor = referralClaimCursor[user];
+        return cursor >= len ? 0 : len - cursor;
     }
 
     function claimResolverRewards() external nonReentrant {
@@ -300,6 +321,7 @@ contract LineaOreV5 is Ownable, ReentrancyGuard {
 
         ep.winningTile = L.winningTile;
         ep.isResolved = true;
+        epochResolvedAt[L.epoch] = block.timestamp;
 
         _splitFees(L);
 
@@ -570,8 +592,9 @@ contract LineaOreV5 is Ownable, ReentrancyGuard {
         }
     }
 
-    function getEpochEndTime(uint256) public view returns (uint256) {
-        return epochStartTime + epochDuration;
+    function getEpochEndTime(uint256 epoch) public view returns (uint256) {
+        if (epoch == currentEpoch) return epochStartTime + epochDuration;
+        return 0;
     }
 
     function getJackpotInfo() external view returns (
@@ -653,6 +676,21 @@ contract LineaOreV5 is Ownable, ReentrancyGuard {
         pendingEpochDurationEta = 0;
         pendingEpochDurationEffectiveFromEpoch = 0;
         emit EpochDurationChangeCancelled(pending);
+    }
+
+    function settleStaleReferralEpoch(uint256 epoch) external onlyOwner {
+        require(!epochReferrerSettled[epoch], "Already settled");
+        require(epochs[epoch].isResolved, "Epoch not resolved");
+        require(
+            epochResolvedAt[epoch] > 0 && block.timestamp >= epochResolvedAt[epoch] + REFERRAL_SETTLE_DELAY,
+            "Settlement delay not reached"
+        );
+        uint256 share = epochReferrerShare[epoch];
+        uint256 claimedAmt = epochReferrerClaimedAmount[epoch];
+        if (share > claimedAmt) {
+            accruedOwnerFees += (share - claimedAmt);
+        }
+        epochReferrerSettled[epoch] = true;
     }
 
 }

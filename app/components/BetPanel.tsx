@@ -5,6 +5,11 @@ import { GRID_SIZE } from "../lib/constants";
 import { safeParseFloat } from "../lib/utils";
 import { processingQuotes } from "../lib/loreTexts";
 import { LoreText } from "./LoreText";
+import { cn } from "../lib/cn";
+import { UiButton } from "./ui/UiButton";
+import { UiInput } from "./ui/UiInput";
+import { UiPanel } from "./ui/UiPanel";
+import { uiTokens } from "./ui/tokens";
 
 const AUTOMINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
 const MANUAL_BET_AMOUNT_KEY = "lineaore:manual-bet-amount:v1";
@@ -53,7 +58,12 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   const isDisabled = isPending || selectedTilesCount === 0 || isRevealing || isAutoMining || manualInsufficient;
   if (isAutoMining) {
     return (
-      <div className="p-2 rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] animate-slide-up" style={{ animationDelay: "0.2s" }}>
+      <UiPanel
+        tone="default"
+        padding="sm"
+        className="shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] animate-slide-up"
+        style={{ animationDelay: "0.2s" }}
+      >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-3.5 bg-emerald-400/40 rounded-full" />
@@ -63,12 +73,17 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
             <span className="text-[10px] text-gray-500">{formattedBalance} LINEA</span>
           )}
         </div>
-      </div>
+      </UiPanel>
     );
   }
 
   return (
-    <div className="p-2 rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up" style={{ animationDelay: "0.2s" }}>
+    <UiPanel
+      tone="default"
+      padding="sm"
+      className="shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up"
+      style={{ animationDelay: "0.2s" }}
+    >
       <div className="flex items-center justify-between mb-1.5 border-b border-white/[0.06] pb-1.5">
         <div className="flex items-center gap-1.5">
           <div className="w-1.5 h-3 bg-emerald-400 rounded-full animate-synced-pulse shadow-[0_0_8px_rgba(52,211,153,0.4)]" />
@@ -81,15 +96,16 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         )}
       </div>
 
-      <div className="bg-[#0a0a16] p-0.5 rounded-lg border border-violet-500/15 focus-within:border-violet-500/50 transition-all duration-200 mb-1.5">
-        <label className="text-[7px] font-bold uppercase text-gray-600 block px-1.5 pt-0.5">Amount per tile</label>
-        <input
+      <div className="mb-1.5">
+        <label htmlFor="bet-amount-per-tile" className="text-[7px] font-bold uppercase text-gray-600 block mb-0.5 px-0.5">Amount per tile</label>
+        <UiInput
+          id="bet-amount-per-tile"
           type="text"
           inputMode="decimal"
           value={betAmount}
           onChange={(e) => setBetAmount(e.target.value)}
           disabled={isPending || isRevealing}
-          className="w-full px-1.5 py-0.5 bg-transparent text-sm font-bold text-white outline-none"
+          className="h-8 px-2 text-sm font-bold bg-[#0a0a16]"
         />
       </div>
 
@@ -105,23 +121,32 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
       )}
 
       {lastBet && onRepeatBet && !isAutoMining && (
-        <button
+        <UiButton
           onClick={onRepeatBet}
           disabled={isPending || isRevealing}
-          className="w-full py-1.5 mb-1 rounded-lg border border-violet-500/20 bg-violet-500/[0.06] text-violet-400 text-[10px] font-bold uppercase tracking-wider hover:bg-violet-500/10 transition-all disabled:opacity-40"
+          variant="secondary"
+          size="sm"
+          uppercase
+          fullWidth
+          className="mb-1 text-[10px]"
         >
           ↻ Repeat: {lastBet.tiles.length} tiles × {lastBet.amount} LINEA
-        </button>
+        </UiButton>
       )}
 
-      <button
+      <UiButton
         onClick={() => onMine(betAmount)}
         disabled={isDisabled}
-        className={`w-full py-2 rounded-lg font-bold uppercase tracking-wider text-[11px] transition-all duration-200 ${
+        variant={isDisabled ? "ghost" : "primary"}
+        size="md"
+        uppercase
+        fullWidth
+        className={cn(
+          "text-[11px]",
           isDisabled
-            ? "bg-[#13132a] text-gray-600 border border-white/[0.04]"
-            : "text-white bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 shadow-lg shadow-violet-600/20 hover:shadow-violet-500/30 active:scale-[0.97] shimmer-btn"
-        }`}
+            ? "bg-[#13132a] text-gray-600 border-white/[0.04]"
+            : "text-white bg-gradient-to-r from-violet-600 to-indigo-600 border-violet-500/40 hover:from-violet-500 hover:to-indigo-500 shadow-lg shadow-violet-600/20 hover:shadow-violet-500/30 shimmer-btn",
+        )}
       >
         {isPending ? (
           <span className="flex items-center justify-center gap-2">
@@ -132,8 +157,8 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
             <LoreText items={processingQuotes} />
           </span>
         ) : selectedTilesCount > 0 ? `⛏ BET ON ${selectedTilesCount} TILES` : "SELECT TILES"}
-      </button>
-    </div>
+      </UiButton>
+    </UiPanel>
   );
 });
 
@@ -225,7 +250,12 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   const compact = isAutoMining;
 
   return (
-    <div className={`rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up ${compact ? "p-2" : "p-3"}`} style={{ animationDelay: "0.25s" }}>
+    <UiPanel
+      tone="default"
+      padding="md"
+      className={`shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up ${compact ? "p-2" : "p-3"}`}
+      style={{ animationDelay: "0.25s" }}
+    >
 
       {compact ? (
         /* ── Compact LIVE view ── */
@@ -310,28 +340,29 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
       )}
 
       {lowEthForGas && !isAutoMining && (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/25 mb-2">
+        <div className={`flex items-center gap-1.5 px-2 py-1 ${uiTokens.radius.sm} bg-amber-500/10 border border-amber-500/25 mb-2`}>
           <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wider">
             Top up ETH for gas to start
           </span>
         </div>
       )}
-      <button
+      <UiButton
         onClick={() => onToggle(betSize, targets, cycles)}
         disabled={isDisabled}
-        className={`w-full rounded-lg font-bold uppercase tracking-wider text-[11px] transition-all duration-200 border ${
-          compact ? "py-1.5" : "py-2"
-        } ${
-          isAutoMining
-            ? "bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/15 hover:shadow-[0_0_16px_rgba(239,68,68,0.15)]"
-            : isDisabled
-              ? "bg-[#13132a] text-gray-600 border-white/[0.04] cursor-not-allowed"
-              : "bg-sky-500/10 border-sky-500/30 text-sky-400 hover:bg-sky-500/15 shadow-lg shadow-sky-500/10 hover:shadow-sky-500/20 shimmer-btn"
-        }`}
+        variant={isAutoMining ? "danger" : "sky"}
+        size={compact ? "sm" : "md"}
+        fullWidth
+        uppercase
+        className={cn(
+          "text-[11px]",
+          isAutoMining && "bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/15 hover:shadow-[0_0_16px_rgba(239,68,68,0.15)]",
+          !isAutoMining && !isDisabled && "shimmer-btn",
+          !isAutoMining && isDisabled && "bg-[#13132a] text-gray-600 border-white/[0.04]",
+        )}
       >
         {isAutoMining ? "⏹ STOP BOT" : "▶ START BOT"}
-      </button>
-    </div>
+      </UiButton>
+    </UiPanel>
   );
 });
 
@@ -352,20 +383,28 @@ const SmallInput = React.memo(function SmallInput({
   accent?: "violet" | "sky";
   compact?: boolean;
 }) {
-  const focusColor = accent === "sky" ? "focus-within:border-sky-500/50 focus-within:shadow-[0_0_12px_rgba(56,189,248,0.1)]" : "focus-within:border-violet-500/50 focus-within:shadow-[0_0_12px_rgba(139,92,246,0.1)]";
+  const inputId = `small-input-${label.toLowerCase().replace(/\s+/g, "-")}`;
+  const inputAccent = accent === "sky"
+    ? "border-sky-500/20 focus:border-sky-500/45 focus:shadow-[0_0_12px_rgba(56,189,248,0.12)]"
+    : "border-violet-500/20 focus:border-violet-500/45 focus:shadow-[0_0_12px_rgba(139,92,246,0.12)]";
 
   return (
-    <div className={`bg-[#0a0a16] rounded-lg border border-violet-500/15 transition-all duration-200 ${focusColor} ${compact ? "p-0.5" : "p-1"} ${className}`}>
-      <label className={`text-[8px] font-bold uppercase text-gray-600 block px-1.5 ${compact ? "pt-0.5" : "pt-1"}`}>{label}</label>
-      <input
+    <div className={className}>
+      <label htmlFor={inputId} className={`text-[8px] font-bold uppercase text-gray-600 block mb-0.5 px-0.5 ${compact ? "pt-0" : "pt-0.5"}`}>{label}</label>
+      <UiInput
+        id={inputId}
         type={type}
         inputMode={inputMode}
-        value={value}
+        value={String(value)}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
         min={min}
         max={max}
-        className={`w-full bg-transparent font-bold text-white outline-none px-1.5 ${compact ? "py-0.5 text-xs" : "py-1 text-sm"}`}
+        className={cn(
+          "bg-[#0a0a16] font-bold text-white",
+          compact ? "h-7 px-1.5 py-0.5 text-xs" : "h-9 px-2 py-1 text-sm",
+          inputAccent,
+        )}
       />
     </div>
   );

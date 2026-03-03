@@ -5,6 +5,10 @@ import type { DepositEntry } from "../hooks/useDepositHistory";
 import type { JackpotHistoryEntry } from "../hooks/useJackpotHistory";
 import { loadingQuotes, emptyStates } from "../lib/loreTexts";
 import { LoreText } from "./LoreText";
+import { UiButton } from "./ui/UiButton";
+import { UiBadge } from "./ui/UiBadge";
+import { UiPanel } from "./ui/UiPanel";
+import { UiTable, UiTableBody, UiTableHead, UiTableRow } from "./ui/UiTable";
 
 const PAGE_SIZE = 50;
 const ACHIEVEMENTS_VERSION = "v2";
@@ -522,7 +526,7 @@ export const Analytics = React.memo(function Analytics({
   useEffect(() => {
     if (deposits && deposits.length > 0) {
       depositsInitRef.current = true;
-      for (const d of deposits) seenDepositsRef.current.add(d.txHash);
+      for (const d of deposits) if (d.txHash) seenDepositsRef.current.add(d.txHash);
     }
   }, [deposits]);
   const stats = useMemo<AchievementStats>(() => {
@@ -665,7 +669,11 @@ export const Analytics = React.memo(function Analytics({
   return (
     <div className="flex-1 flex flex-col gap-4 overflow-y-auto animate-fade-in">
       {/* ═══ Achievements ═══ */}
-      <div className="bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] rounded-xl px-4 py-2.5">
+      <UiPanel
+        tone="default"
+        padding="md"
+        className="shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] px-4 py-2.5"
+      >
         <div className="relative flex items-center justify-between mb-2">
           <h2 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wider">
             <div className="w-1 h-4 bg-amber-500 rounded-sm shadow-[0_0_10px_rgba(245,158,11,0.45)]" />
@@ -738,10 +746,14 @@ export const Analytics = React.memo(function Analytics({
             </div>
           ))}
         </div>
-      </div>
+      </UiPanel>
 
       {/* ═══ My Deposits ═══ */}
-      <div className="bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] rounded-xl px-4 py-2.5">
+      <UiPanel
+        tone="default"
+        padding="md"
+        className="shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] px-4 py-2.5"
+      >
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wider">
             <div className="w-1 h-4 bg-sky-500 rounded-sm shadow-[0_0_10px_rgba(14,165,233,0.4)]" />
@@ -754,16 +766,19 @@ export const Analytics = React.memo(function Analytics({
                 <span className="text-gray-600 ml-1.5">({deposits.length} tx)</span>
               </span>
             )}
-            <button
+            <UiButton
               onClick={onRefreshDeposits}
               disabled={depositsLoading}
-              className="p-1.5 rounded-lg border border-white/[0.06] text-gray-500 hover:text-sky-400 hover:border-sky-500/20 hover:bg-sky-500/[0.06] transition-all disabled:opacity-40"
+              variant="ghost"
+              size="xs"
+              className="h-8 w-8 p-0 text-gray-500 hover:text-sky-300 hover:border-sky-500/20 hover:bg-sky-500/[0.06]"
               title="Refresh"
+              aria-label="Refresh deposits"
             >
               <svg className={`w-3.5 h-3.5 ${depositsLoading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-            </button>
+            </UiButton>
           </div>
         </div>
 
@@ -775,13 +790,15 @@ export const Analytics = React.memo(function Analytics({
         ) : deposits === null && !depositsLoading ? (
           <div className="flex flex-col items-center justify-center py-3 gap-2">
             <span className="text-[12px] text-gray-500">Scans full chain history for your bets (cached incrementally)</span>
-            <button
+            <UiButton
               onClick={onLoadDeposits}
               disabled={depositsLoading}
-              className="px-4 py-2 rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-400 hover:bg-sky-500/15 text-[11px] font-bold uppercase tracking-widest transition-all disabled:opacity-50"
+              variant="sky"
+              size="sm"
+              uppercase
             >
               {depositsLoading ? <LoreText items={loadingQuotes} /> : "Load History"}
-            </button>
+            </UiButton>
           </div>
         ) : deposits === null && depositsLoading ? (
           <div className="flex items-center justify-center py-4 gap-2">
@@ -795,24 +812,21 @@ export const Analytics = React.memo(function Analytics({
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto rounded-lg border border-sky-500/15 max-h-[260px] overflow-y-auto">
+            <UiTable tone="sky" maxHeightClass="max-h-[260px]">
               <table className="w-full text-left">
-                <thead className="bg-[#0a0a16] text-xs uppercase font-bold text-gray-500 tracking-widest sticky top-0 z-10">
+                <UiTableHead>
                   <tr>
                     <th className="px-3 py-2 w-[70px]">Epoch</th>
                     <th className="px-3 py-2">Tiles</th>
                     <th className="px-3 py-2 text-right w-[110px]">Amount</th>
                     <th className="px-3 py-2 text-right w-[90px]">Tx</th>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.04]">
+                </UiTableHead>
+                <UiTableBody>
                   {visibleDeposits!.map((d, idx) => {
                     const isNew = d.txHash ? newDepositIds.has(d.txHash) : false;
                     return (
-                    <tr
-                      key={d.txHash || `${d.epoch}-${idx}`}
-                      className={`hover:bg-white/[0.02] transition-colors ${idx % 2 === 0 ? "bg-[#0d0d1a]" : "bg-[#0a0a16]/50"}${isNew ? " animate-row-enter" : ""}`}
-                    >
+                    <UiTableRow key={d.txHash || `${d.epoch}-${idx}`} index={idx} isNew={isNew}>
                       <td className="px-3 py-2 font-mono text-white text-sm font-semibold whitespace-nowrap">#{d.epoch}</td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1">
@@ -851,41 +865,52 @@ export const Analytics = React.memo(function Analytics({
                           <span className="text-gray-600">–</span>
                         )}
                       </td>
-                    </tr>
+                    </UiTableRow>
                     );
                   })}
-                </tbody>
+                </UiTableBody>
               </table>
-            </div>
+            </UiTable>
             {hasMore && (
-              <button
+              <UiButton
                 onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
-                className="mt-2 w-full py-1.5 rounded-lg border border-white/[0.06] bg-white/[0.02] text-xs font-bold text-gray-500 uppercase tracking-widest hover:bg-white/[0.04] transition-colors"
+                variant="ghost"
+                size="xs"
+                fullWidth
+                uppercase
+                className="mt-2 text-gray-400 hover:text-gray-300"
               >
                 Show more ({deposits.length - visibleCount} remaining)
-              </button>
+              </UiButton>
             )}
           </>
         )}
-      </div>
+      </UiPanel>
 
       {/* ═══ Jackpot History ═══ */}
-      <div className="bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] rounded-xl px-4 py-2.5">
+      <UiPanel
+        tone="default"
+        padding="md"
+        className="shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] px-4 py-2.5"
+      >
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wider">
             <div className="w-1 h-4 bg-amber-400 rounded-sm shadow-[0_0_10px_rgba(251,191,36,0.45)]" />
             Jackpot History
           </h2>
-          <button
+          <UiButton
             onClick={onRefreshJackpotHistory}
             disabled={jackpotHistoryLoading}
-            className="p-1.5 rounded-lg border border-white/[0.06] text-gray-500 hover:text-amber-300 hover:border-amber-500/20 hover:bg-amber-500/[0.06] transition-all disabled:opacity-40"
+            variant="ghost"
+            size="xs"
+            className="h-8 w-8 p-0 text-gray-500 hover:text-amber-300 hover:border-amber-500/20 hover:bg-amber-500/[0.06]"
             title="Refresh jackpot history"
+            aria-label="Refresh jackpot history"
           >
             <svg className={`w-3.5 h-3.5 ${jackpotHistoryLoading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-          </button>
+          </UiButton>
         </div>
 
         {jackpotHistoryError ? (
@@ -905,9 +930,9 @@ export const Analytics = React.memo(function Analytics({
             )}
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-amber-500/15 max-h-[220px] overflow-y-auto">
+          <UiTable tone="amber" maxHeightClass="max-h-[220px]">
             <table className="w-full text-left">
-              <thead className="bg-[#0a0a16] text-xs uppercase font-bold text-gray-500 tracking-widest sticky top-0 z-10">
+              <UiTableHead>
                 <tr>
                   <th className="px-3 py-2 w-[90px]">Type</th>
                   <th className="px-3 py-2 w-[150px]">Date</th>
@@ -915,22 +940,19 @@ export const Analytics = React.memo(function Analytics({
                   <th className="px-3 py-2 text-right">Amount</th>
                   <th className="px-3 py-2 text-right w-[95px]">Tx</th>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.04]">
+              </UiTableHead>
+              <UiTableBody>
                 {jackpotHistory.map((j, idx) => (
-                  <tr
-                    key={`${j.kind}-${j.epoch}-${j.txHash}-${idx}`}
-                    className={`hover:bg-white/[0.02] transition-colors ${idx % 2 === 0 ? "bg-[#0d0d1a]" : "bg-[#0a0a16]/50"}`}
-                  >
+                  <UiTableRow key={`${j.kind}-${j.epoch}-${j.txHash}-${idx}`} index={idx}>
                     <td className="px-3 py-2">
                       {j.kind === "daily" ? (
-                        <span className="inline-flex items-center gap-1 py-0.5 px-2 rounded text-xs font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 uppercase tracking-wider">
+                        <UiBadge tone="amber" size="xs" uppercase>
                           Daily
-                        </span>
+                        </UiBadge>
                       ) : (
-                        <span className="inline-flex items-center gap-1 py-0.5 px-2 rounded text-xs font-bold bg-fuchsia-500/15 text-fuchsia-300 border border-fuchsia-500/30 uppercase tracking-wider">
+                        <UiBadge tone="fuchsia" size="xs" uppercase>
                           Weekly
-                        </span>
+                        </UiBadge>
                       )}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -961,52 +983,51 @@ export const Analytics = React.memo(function Analytics({
                         <span className="text-gray-600">–</span>
                       )}
                     </td>
-                  </tr>
+                  </UiTableRow>
                 ))}
-              </tbody>
+              </UiTableBody>
             </table>
-          </div>
+          </UiTable>
         )}
-      </div>
+      </UiPanel>
 
       {/* ═══ Blockchain History ═══ */}
-      <div className="bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] rounded-xl px-4 py-2.5">
+      <UiPanel
+        tone="default"
+        padding="md"
+        className="shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] px-4 py-2.5"
+      >
         <h2 className="text-sm font-bold text-white mb-2 flex items-center gap-2 uppercase tracking-wider">
           <div className="w-1 h-4 bg-violet-500 rounded-sm shadow-[0_0_10px_rgba(139,92,246,0.4)]" />
           Blockchain History
         </h2>
 
-        <div className="overflow-x-auto rounded-lg border border-violet-500/15 max-h-[260px] overflow-y-auto">
+        <UiTable tone="violet" maxHeightClass="max-h-[260px]">
           <table className="w-full text-left">
-            <thead className="bg-[#0a0a16] text-xs uppercase font-bold text-gray-500 tracking-widest sticky top-0 z-10">
+            <UiTableHead>
               <tr>
                 <th className="px-3 py-2">Round</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Winner</th>
                 <th className="px-3 py-2 text-right">Pool</th>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.04]">
+            </UiTableHead>
+            <UiTableBody>
               {historyViewData.map((row, idx) => {
                 const winBlockNum = Number(row.winningTile);
                 const isNew = newHistoryIds.has(row.roundId);
                 return (
-                  <tr
-                    key={row.roundId}
-                    className={`hover:bg-white/[0.02] transition-colors ${idx % 2 === 0 ? "bg-[#0d0d1a]" : "bg-[#0a0a16]/50"}${isNew ? " animate-row-enter" : ""}`}
-                  >
+                  <UiTableRow key={row.roundId} index={idx} isNew={isNew}>
                     <td className="px-3 py-2 font-mono text-white text-sm font-semibold">#{row.roundId}</td>
                     <td className="px-3 py-2">
                       {row.isResolved ? (
-                        <span className="inline-flex items-center gap-1.5 py-0.5 px-2 rounded text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase tracking-wider">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                        <UiBadge tone="success" size="xs" uppercase dot>
                           Done
-                        </span>
+                        </UiBadge>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 py-0.5 px-2 rounded text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 uppercase tracking-wider">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-synced-pulse" />
+                        <UiBadge tone="warning" size="xs" uppercase dot pulseDot>
                           Pending
-                        </span>
+                        </UiBadge>
                       )}
                     </td>
                     <td className="px-3 py-2">
@@ -1014,9 +1035,9 @@ export const Analytics = React.memo(function Analytics({
                         <span className="flex items-center gap-2 flex-wrap">
                           <span className="font-bold text-white">Block #{row.winningTile}</span>
                           {row.userWon && (
-                            <span className="inline-flex items-center gap-1 py-0.5 px-1.5 rounded text-xs font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 uppercase tracking-wider">
-                              <span className="text-amber-400">★</span> You won
-                            </span>
+                            <UiBadge tone="amber" size="xs" uppercase>
+                              <span className="text-amber-300">★</span> You won
+                            </UiBadge>
                           )}
                         </span>
                       ) : (
@@ -1027,13 +1048,13 @@ export const Analytics = React.memo(function Analytics({
                       <span className="font-bold text-violet-400 font-mono text-sm">{row.poolDisplay}</span>
                       <span className="text-[11px] text-gray-600 ml-1">LINEA</span>
                     </td>
-                  </tr>
+                  </UiTableRow>
                 );
               })}
-            </tbody>
+            </UiTableBody>
           </table>
-        </div>
-      </div>
+        </UiTable>
+      </UiPanel>
     </div>
   );
 });

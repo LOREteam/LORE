@@ -582,7 +582,10 @@ async function main() {
 
   if (isWatch) {
     console.log(`[indexer] Watching for new blocks every ${POLL_INTERVAL_MS / 1000}s...`);
+    let running = false;
     setInterval(async () => {
+      if (running) return;
+      running = true;
       try {
         await runOnce();
         const head = await client.getBlockNumber();
@@ -590,6 +593,8 @@ async function main() {
         await runEpochReconcile(head);
       } catch (err) {
         console.error(`[indexer] Error in watch loop:`, (err as Error).message);
+      } finally {
+        running = false;
       }
     }, POLL_INTERVAL_MS);
   }

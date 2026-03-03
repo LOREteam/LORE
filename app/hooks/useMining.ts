@@ -254,7 +254,6 @@ export function useMining({
   const [autoMineProgress, setAutoMineProgress] = useState<string | null>(null);
   const [runningParams, setRunningParams] = useState<{ betStr: string; blocks: number; rounds: number } | null>(null);
   const autoMineRef = useRef(false);
-  const mountedRef = useRef(true);
   const restoreAttemptedRef = useRef(false);
   const sessionExpiredErrorRef = useRef(false);
   const scheduleRefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1287,8 +1286,6 @@ export function useMining({
   }, [isConnected, address, publicClient]);
 
   useEffect(() => {
-    mountedRef.current = true;
-
     const onBeforeUnload = () => {
       if (autoMineRef.current) {
         log.warn("AutoMine", "tab closing while mining – releasing lock");
@@ -1298,7 +1295,6 @@ export function useMining({
     window.addEventListener("beforeunload", onBeforeUnload);
 
     return () => {
-      mountedRef.current = false;
       window.removeEventListener("beforeunload", onBeforeUnload);
       if (scheduleRefetchTimerRef.current) clearTimeout(scheduleRefetchTimerRef.current);
     };

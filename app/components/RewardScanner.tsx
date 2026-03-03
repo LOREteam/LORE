@@ -16,6 +16,19 @@ interface RewardScannerProps {
   onClaimAll: () => void;
 }
 
+function formatRewardAmount(amountWei: string): string {
+  try {
+    const value = Number(formatUnits(BigInt(amountWei || "0"), 18));
+    if (!Number.isFinite(value)) return "0.0";
+    return value.toLocaleString("en-US", {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    });
+  } catch {
+    return "0.0";
+  }
+}
+
 export const RewardScanner = React.memo(function RewardScanner({
   unclaimedWins,
   isScanning,
@@ -26,9 +39,9 @@ export const RewardScanner = React.memo(function RewardScanner({
   onClaimAll,
 }: RewardScannerProps) {
   return (
-    <div className="p-3 rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] flex flex-col gap-1 shrink-0 animate-slide-up" style={{ animationDelay: "0.15s" }}>
+    <div className="rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] flex flex-col gap-0 shrink-0 animate-slide-up max-h-[260px] overflow-y-auto [scrollbar-gutter:stable]" style={{ animationDelay: "0.15s" }}>
       {/* Header */}
-      <div className="flex justify-between items-center border-b border-white/[0.06] pb-1.5">
+      <div className="sticky top-0 z-10 flex justify-between items-center border-b border-white/[0.06] bg-[#0d0d1a]/95 backdrop-blur-sm pl-3 pr-4 py-2">
         <h3 className="text-[11px] font-bold text-white uppercase tracking-wider flex items-center gap-2">
           <div className="w-1.5 h-3.5 bg-amber-400 rounded-sm shadow-[0_0_8px_rgba(251,191,36,0.4)]" />
           Rewards
@@ -43,9 +56,9 @@ export const RewardScanner = React.memo(function RewardScanner({
             <button
               onClick={onClaimAll}
               disabled={isClaiming}
-              className="px-2.5 py-0.5 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[9px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-md shadow-amber-500/20 hover:shadow-amber-500/30 shimmer-btn active:scale-[0.97]"
+              className="h-6 px-2 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-md shadow-amber-500/20 hover:shadow-amber-500/30 shimmer-btn active:scale-[0.97]"
             >
-              {isClaiming ? "WAIT..." : `CLAIM ALL (${unclaimedWins.length})`}
+              {isClaiming ? "WAIT..." : "CLAIM ALL"}
             </button>
           )}
           <button
@@ -66,7 +79,7 @@ export const RewardScanner = React.memo(function RewardScanner({
       </div>
 
       {/* Results */}
-      <div className="flex flex-col gap-1 max-h-[70px] overflow-y-auto pr-1">
+      <div className="flex flex-col gap-1 px-3 py-2">
         {isDeepScanning && (
           <div className="mb-1 rounded-md border border-violet-500/20 bg-violet-500/8 px-2 py-1">
             <p className="text-[9px] leading-tight text-violet-300/90 font-semibold tracking-wide">
@@ -86,7 +99,7 @@ export const RewardScanner = React.memo(function RewardScanner({
           unclaimedWins.map((win, idx) => (
             <div
               key={win.epoch}
-              className="flex justify-between items-center bg-amber-500/8 border border-amber-500/20 p-1.5 rounded-lg animate-slide-up hover:bg-amber-500/12 transition-colors group"
+              className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-amber-500/8 border border-amber-500/20 px-2.5 py-1.5 rounded-lg animate-slide-up hover:bg-amber-500/12 transition-colors group"
               style={{ animationDelay: `${idx * 0.05}s` }}
             >
               <div className="flex items-center gap-2">
@@ -96,14 +109,14 @@ export const RewardScanner = React.memo(function RewardScanner({
                     Round #{win.epoch}
                   </span>
                   <span className="text-xs font-bold text-emerald-400">
-                    Won {formatUnits(BigInt(win.amountWei), 18)} LINEA
+                    {formatRewardAmount(win.amountWei)} L
                   </span>
                 </div>
               </div>
               <button
                 onClick={() => onClaim(win.epoch)}
                 disabled={isClaiming}
-                className="px-3 py-1 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[9px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-sm group-hover:shadow-amber-500/25 active:scale-[0.95]"
+                className="h-6 px-2 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-sm group-hover:shadow-amber-500/25 active:scale-[0.95]"
               >
                 {isClaiming ? "..." : "CLAIM"}
               </button>
