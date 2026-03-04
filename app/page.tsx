@@ -796,7 +796,6 @@ export default function LineaOre() {
         isScanning={isScanning}
         isDeepScanning={isDeepScanning}
         isClaiming={isClaiming}
-        onScan={scanRewards}
         onClaim={claimReward}
         onClaimAll={claimAll}
       />

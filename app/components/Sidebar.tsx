@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useCallback } from "react";
-import Link from "next/link";
 import Image from "next/image";
 import { formatUnits } from "viem";
 import type { TabId, UnclaimedWin } from "../lib/types";
@@ -23,7 +22,6 @@ interface SidebarProps {
   isScanning: boolean;
   isDeepScanning: boolean;
   isClaiming: boolean;
-  onScan: () => void;
   onClaim: (epochId: string) => void;
   onClaimAll: () => void;
 }
@@ -37,17 +35,14 @@ const TILE_STYLES = [
 function formatRewardAmount(amountWei: string): string {
   try {
     const value = Number(formatUnits(BigInt(amountWei || "0"), 18));
-    if (!Number.isFinite(value)) return "0.0";
-    return value.toLocaleString("en-US", {
-      minimumFractionDigits: 1,
-      maximumFractionDigits: 1,
-    });
+    if (!Number.isFinite(value)) return "0.0000";
+    return value.toFixed(4);
   } catch {
-    return "0.0";
+    return "0.0000";
   }
 }
 
-export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hotTiles, unclaimedWins, isScanning, isDeepScanning, isClaiming, onScan, onClaim, onClaimAll }: SidebarProps) {
+export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hotTiles, unclaimedWins, isScanning, isDeepScanning, isClaiming, onClaim, onClaimAll }: SidebarProps) {
   const { stats, loading: statsLoading } = useGlobalStats();
 
   const goHub = useCallback(() => onTabChange("hub"), [onTabChange]);
@@ -58,30 +53,30 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
   const goFaq = useCallback(() => onTabChange("faq"), [onTabChange]);
 
   return (
-    <aside className="w-[calc(14rem+1cm)] bg-[#0a0a18]/90 backdrop-blur-md border-r border-violet-500/15 hidden lg:flex flex-col justify-between animate-slide-in-left overflow-y-auto">
-      <div>
+    <aside className="w-[calc(14rem+1cm)] h-screen bg-[#0a0a18]/90 backdrop-blur-md border-r border-violet-500/15 hidden lg:flex flex-col animate-slide-in-left overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col">
         {/* ═══ Logo ═══ */}
-        <div className="p-5 flex items-center gap-4">
+        <div className="px-4 pt-2.5 pb-1.5 flex items-center gap-2">
           <div className="relative group">
-            <div className="w-14 h-14 animate-crystal" style={{ transformStyle: "preserve-3d" }}>
+            <div className="w-12 h-12 animate-crystal" style={{ transformStyle: "preserve-3d" }}>
               <Image
                 src="/icon.png"
                 alt="LORE"
-                width={56}
-                height={56}
+                width={48}
+                height={48}
                 className="w-full h-full object-contain drop-shadow-[0_0_16px_rgba(139,92,246,0.5)]"
               />
             </div>
             <div className="absolute inset-0 rounded-full bg-violet-500/30 blur-xl animate-breathe -z-10" />
           </div>
 
-          {/* Brand – centered; two lines so decorative lines stay aligned */}
-          <div className="flex flex-col items-center justify-center">
-            <span className="text-2xl font-black tracking-[0.15em] animate-text-glow leading-tight">
+          {/* Keep brand text centered in the full sidebar width */}
+          <div className="flex-1 flex flex-col items-center justify-center text-center">
+            <span className="text-[22px] font-black tracking-[0.15em] animate-text-glow leading-tight">
               <span className="text-white">L</span>
               <span className="text-violet-400">ORE</span>
             </span>
-            <div className="flex flex-col items-center mt-1">
+            <div className="flex flex-col items-center mt-0.5">
               <div className="flex items-center gap-1.5 w-full justify-center">
                 <span className="w-4 shrink-0 h-px bg-gradient-to-r from-violet-500/50 to-transparent" aria-hidden />
                 <span className="text-gray-500 font-bold uppercase tracking-[0.25em] whitespace-nowrap" style={{ fontSize: 9 }}>
@@ -96,10 +91,10 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
           </div>
         </div>
 
-        <div className="mx-4 h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent" />
+        <div className="mx-3.5 h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent" />
 
         {/* ═══ Nav ═══ */}
-        <nav className="p-3 mt-2 space-y-1">
+        <nav className="px-3 pt-1.5 pb-2 mt-1 space-y-1">
           <NavItem active={activeTab === "hub"} onClick={goHub} icon="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012-2v2M7 7h10" label="Mining Hub" delay="0.1s" />
           <NavItem active={activeTab === "analytics"} onClick={goAnalytics} icon="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" label="Analytics" delay="0.15s" />
           <NavItem active={activeTab === "referral"} onClick={goReferral} icon="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" label="Referral" delay="0.2s" />
@@ -109,7 +104,7 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
         </nav>
 
         {/* ═══ Global Stats ═══ */}
-        <div className="mx-4 mt-1 space-y-2 animate-fade-in" style={{ animationDelay: "0.6s" }}>
+        <div className="mx-4 mt-1 flex min-h-0 flex-1 flex-col gap-2 animate-fade-in" style={{ animationDelay: "0.6s" }}>
           <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
           <p className="text-gray-600 font-bold uppercase tracking-[0.2em] px-1 pt-1" style={{ fontSize: "11px" }}>Protocol Stats</p>
 
@@ -162,92 +157,60 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
           )}
 
           {/* ═══ Rewards ═══ */}
-          <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent mt-1" />
+          <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent mt-1 shrink-0" />
           <UiPanel
             tone="warning"
             padding="sm"
-            className="bg-gradient-to-br from-amber-500/[0.04] to-violet-500/[0.04] border-amber-500/10 p-0 max-h-[240px] overflow-y-auto [scrollbar-gutter:stable]"
+            className="bg-gradient-to-br from-amber-500/[0.04] to-violet-500/[0.04] border-amber-500/10 p-0 min-h-0 flex-1 mb-[6mm] overflow-y-auto [scrollbar-gutter:stable_both-edges]"
           >
-            <div className="sticky top-0 z-10 flex justify-between items-center gap-2 border-b border-white/[0.06] bg-[#0f0d14]/95 pl-[10px] pr-4 py-2 backdrop-blur-sm">
-              <p className="text-gray-600 font-bold uppercase tracking-[0.2em] flex items-center gap-1.5 min-w-0" style={{ fontSize: "11px" }}>
-                <span className="w-1 h-3 bg-amber-400 rounded-sm shadow-[0_0_6px_rgba(251,191,36,0.3)]" />
-                Rewards
-                {unclaimedWins.length > 0 && (
-                  <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/12 px-1 py-[1px] text-[8px] font-black tracking-normal text-amber-300">
-                    {unclaimedWins.length}
-                  </span>
-                )}
-              </p>
-              <div className="flex items-center gap-2 min-w-0">
+            <div className="px-2 py-0.5">
+              <div className="mb-2.5 flex items-center justify-between gap-1">
+                <p className="flex items-center gap-1 text-[#455073] text-[7px] font-bold uppercase tracking-[0.18em]">
+                  <span className="w-1 h-2.5 bg-amber-400 rounded-sm shadow-[0_0_6px_rgba(251,191,36,0.28)]" />
+                  Rewards
+                </p>
                 {unclaimedWins.length > 1 && (
                   <UiButton
                     onClick={onClaimAll}
                     loading={isClaiming}
                     variant="warning"
                     size="xs"
-                    uppercase
-                    className="h-5 px-1.5 bg-gradient-to-r from-amber-500 to-orange-500 border-amber-500/20 text-black font-black text-[8px] hover:from-amber-400 hover:to-orange-400 shadow-sm shadow-amber-500/10 shrink-0"
+                    className="h-[18px] rounded-full px-2 bg-gradient-to-r from-amber-500 to-orange-500 border-0 text-black font-black text-[7px] tracking-[0.05em] hover:from-amber-400 hover:to-orange-400 shadow-none hover:shadow-none shrink-0"
                   >
-                    {isClaiming ? "WAIT..." : "CLAIM ALL"}
+                    {isClaiming ? "WAIT..." : `CLAIM ALL (${unclaimedWins.length})`}
                   </UiButton>
                 )}
-                <UiButton
-                  onClick={onScan}
-                  disabled={isScanning}
-                  title="Scan rewards"
-                  variant="ghost"
-                  size="xs"
-                  className="h-6 w-6 p-0 text-violet-400 hover:text-violet-300 hover:drop-shadow-[0_0_6px_rgba(139,92,246,0.4)] shrink-0"
-                >
-                  <svg
-                    className={`w-3.5 h-3.5 ${isScanning ? "animate-spin" : "hover:rotate-180 transition-transform duration-500"}`}
-                    fill="none" viewBox="0 0 24 24" stroke="currentColor"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                </UiButton>
               </div>
-            </div>
-            <div className="px-2 py-2">
-              {isDeepScanning && (
-                <div className="mb-2 rounded-md border border-violet-500/20 bg-violet-500/8 px-2 py-1">
-                  <p className="text-[8px] leading-tight text-violet-300/90 font-semibold tracking-wide">
-                    Quick results are ready. Full reward history is still loading in background.
-                  </p>
-                </div>
-              )}
               {isScanning && unclaimedWins.length === 0 ? (
-                <div className="flex items-center justify-center gap-2 py-1.5">
-                  <svg className="w-3 h-3 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
+                <div className="flex items-center justify-center gap-1.5 py-1">
+                  <svg className="w-2.5 h-2.5 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  <span className="text-[9px] text-gray-500 uppercase tracking-widest font-bold"><LoreText items={searchingQuotes} /></span>
+                  <span className="text-[8px] text-gray-500 uppercase tracking-widest font-bold"><LoreText items={searchingQuotes} /></span>
                 </div>
               ) : unclaimedWins.length > 0 ? (
-                <div className="flex flex-col gap-1 pb-0.5">
+                <div className="-mx-3 flex flex-col gap-1 pb-0.5">
                   {unclaimedWins.map((win, idx) => (
                     <div
                       key={win.epoch}
-                      className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-amber-500/8 border border-amber-500/15 px-2.5 py-1.5 rounded-md animate-slide-up hover:bg-amber-500/12 transition-colors group"
+                      className="flex items-center gap-1.5 rounded-md border border-amber-500/35 bg-amber-500/8 px-2 py-1.5 animate-slide-up transition-colors hover:bg-amber-500/12 group"
                       style={{ animationDelay: `${idx * 0.05}s` }}
                     >
-                      <div className="flex flex-col min-w-0">
-                        <span className="text-[8px] text-amber-500/50 uppercase font-bold tracking-wider">
+                      <div className="min-w-0 flex-1">
+                        <span className="block text-[8px] text-amber-500/70 uppercase font-bold tracking-wide leading-none">
                           #{win.epoch}
                         </span>
-                      <span className="text-[10px] font-bold text-emerald-400">
-                        {formatRewardAmount(win.amountWei)} L
-                      </span>
+                        <span className="block mt-0.5 text-[9px] leading-none font-black text-emerald-400 tabular-nums whitespace-nowrap">
+                          {formatRewardAmount(win.amountWei)} LINEA
+                        </span>
                       </div>
                       <UiButton
                         onClick={() => onClaim(win.epoch)}
                         disabled={isClaiming}
                         variant="warning"
                         size="xs"
-                        uppercase
-                        className="h-5 px-1.5 bg-gradient-to-r from-amber-500 to-orange-500 border-amber-500/20 text-black font-black text-[8px] hover:from-amber-400 hover:to-orange-400 shadow-sm shrink-0 ml-1"
+                        className="h-5 min-w-[58px] rounded-full px-2 bg-gradient-to-r from-amber-500 to-orange-500 border-0 text-black font-black text-[8px] tracking-[0.05em] hover:from-amber-400 hover:to-orange-400 shadow-none hover:shadow-none shrink-0"
                       >
                         {isClaiming ? "..." : "CLAIM"}
                       </UiButton>
@@ -264,16 +227,6 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
               )}
             </div>
           </UiPanel>
-        </div>
-
-        {/* ═══ Footer links ═══ */}
-        <div className="p-3 mt-auto border-t border-white/[0.06]">
-          <Link
-            href="/privacy"
-            className="block text-center text-[10px] font-semibold uppercase tracking-wider text-gray-500 hover:text-violet-400 transition-colors"
-          >
-            Privacy Policy
-          </Link>
         </div>
       </div>
     </aside>
@@ -322,7 +275,7 @@ const NavItem = React.memo(function NavItem({ active, onClick, icon, label, dela
     <button
       onClick={onClick}
       className={cn(
-        "w-full flex items-center gap-3 px-3 py-2.5 font-semibold transition-all duration-200 animate-slide-up group",
+        "w-full flex items-center gap-3 px-3 py-2 font-semibold transition-all duration-200 animate-slide-up group",
         uiTokens.radius.sm,
         uiTokens.focusRing,
         active

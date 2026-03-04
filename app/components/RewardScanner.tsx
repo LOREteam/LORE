@@ -19,13 +19,13 @@ interface RewardScannerProps {
 function formatRewardAmount(amountWei: string): string {
   try {
     const value = Number(formatUnits(BigInt(amountWei || "0"), 18));
-    if (!Number.isFinite(value)) return "0.0";
+    if (!Number.isFinite(value)) return "0.0000";
     return value.toLocaleString("en-US", {
-      minimumFractionDigits: 1,
-      maximumFractionDigits: 1,
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
     });
   } catch {
-    return "0.0";
+    return "0.0000";
   }
 }
 
@@ -58,7 +58,7 @@ export const RewardScanner = React.memo(function RewardScanner({
               disabled={isClaiming}
               className="h-6 px-2 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-md shadow-amber-500/20 hover:shadow-amber-500/30 shimmer-btn active:scale-[0.97]"
             >
-              {isClaiming ? "WAIT..." : "CLAIM ALL"}
+              {isClaiming ? "WAIT..." : `CLAIM ALL (${unclaimedWins.length})`}
             </button>
           )}
           <button
@@ -99,24 +99,21 @@ export const RewardScanner = React.memo(function RewardScanner({
           unclaimedWins.map((win, idx) => (
             <div
               key={win.epoch}
-              className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-amber-500/8 border border-amber-500/20 px-2.5 py-1.5 rounded-lg animate-slide-up hover:bg-amber-500/12 transition-colors group"
+              className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-amber-500/8 border border-amber-500/30 px-3 py-2 rounded-lg animate-slide-up hover:bg-amber-500/12 transition-colors group"
               style={{ animationDelay: `${idx * 0.05}s` }}
             >
-              <div className="flex items-center gap-2">
-                <div className="w-0.5 h-6 rounded-full bg-gradient-to-b from-amber-400 to-orange-500" />
-                <div className="flex flex-col">
-                  <span className="text-[9px] text-amber-500/60 uppercase font-bold tracking-wider">
-                    Round #{win.epoch}
-                  </span>
-                  <span className="text-xs font-bold text-emerald-400">
-                    {formatRewardAmount(win.amountWei)} L
-                  </span>
-                </div>
+              <div className="flex min-w-0 flex-col">
+                <span className="text-[9px] text-amber-500/60 uppercase font-bold tracking-wider">
+                  #{win.epoch}
+                </span>
+                <span className="text-[10px] font-bold text-emerald-400 whitespace-nowrap">
+                  {formatRewardAmount(win.amountWei)} LINEA
+                </span>
               </div>
               <button
                 onClick={() => onClaim(win.epoch)}
                 disabled={isClaiming}
-                className="h-6 px-2 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-sm group-hover:shadow-amber-500/25 active:scale-[0.95]"
+                className="h-6 px-2 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-wide rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-sm group-hover:shadow-amber-500/25 active:scale-[0.95]"
               >
                 {isClaiming ? "..." : "CLAIM"}
               </button>
