@@ -505,17 +505,17 @@ export const Header = React.memo(function Header({
           onClick={onToggleMute}
           variant="ghost"
           size="xs"
-          className={`absolute top-2 right-2 z-20 h-7 w-7 p-0 ${uiTokens.radius.sm} bg-black/55 border-white/20 text-violet-200 hover:text-violet-100 hover:border-violet-400/50`}
+          className={`absolute top-2 right-2 z-20 h-8 w-8 p-0 ${uiTokens.radius.sm} bg-black/60 border-white/20 text-violet-200 hover:text-violet-100 hover:border-violet-400/50`}
           title={muted ? "Unmute sounds" : "Mute sounds"}
           aria-label={muted ? "Unmute sounds" : "Mute sounds"}
         >
           {muted ? (
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
             </svg>
           ) : (
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
             </svg>
           )}

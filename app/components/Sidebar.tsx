@@ -35,14 +35,14 @@ const TILE_STYLES = [
 function formatRewardAmount(amountWei: string): string {
   try {
     const value = Number(formatUnits(BigInt(amountWei || "0"), 18));
-    if (!Number.isFinite(value)) return "0.0000";
-    return value.toFixed(4);
+    if (!Number.isFinite(value)) return "0.0";
+    return value.toFixed(1);
   } catch {
-    return "0.0000";
+    return "0.0";
   }
 }
 
-export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hotTiles, unclaimedWins, isScanning, isDeepScanning, isClaiming, onClaim, onClaimAll }: SidebarProps) {
+export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hotTiles, unclaimedWins, isScanning, isClaiming, onClaim, onClaimAll }: SidebarProps) {
   const { stats, loading: statsLoading } = useGlobalStats();
 
   const goHub = useCallback(() => onTabChange("hub"), [onTabChange]);
@@ -53,8 +53,13 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
   const goFaq = useCallback(() => onTabChange("faq"), [onTabChange]);
 
   return (
-    <aside className="w-[calc(14rem+1cm)] h-screen bg-[#0a0a18]/90 backdrop-blur-md border-r border-violet-500/15 hidden lg:flex flex-col animate-slide-in-left overflow-hidden">
-      <div className="flex min-h-0 flex-1 flex-col">
+    <aside className="relative w-[calc(14rem+1cm)] h-screen bg-[#0a0a18]/90 backdrop-blur-md border-r border-violet-500/15 hidden lg:flex flex-col animate-slide-in-left overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+        <div className="absolute top-[-10%] left-[-22%] h-52 w-52 rounded-full bg-violet-600/10 blur-3xl animate-orb-1" />
+        <div className="absolute bottom-[-12%] right-[-18%] h-48 w-48 rounded-full bg-sky-500/8 blur-3xl animate-orb-2" />
+        <div className="absolute top-[36%] left-[58%] h-32 w-32 rounded-full bg-fuchsia-500/6 blur-3xl animate-orb-1" style={{ animationDelay: "-8s" }} />
+      </div>
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col">
         {/* ═══ Logo ═══ */}
         <div className="px-4 pt-2.5 pb-1.5 flex items-center gap-2">
           <div className="relative group">
@@ -64,10 +69,10 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
                 alt="LORE"
                 width={48}
                 height={48}
-                className="w-full h-full object-contain drop-shadow-[0_0_16px_rgba(139,92,246,0.5)]"
+                className="w-full h-full object-contain drop-shadow-[0_0_9px_rgba(139,92,246,0.28)]"
               />
             </div>
-            <div className="absolute inset-0 rounded-full bg-violet-500/30 blur-xl animate-breathe -z-10" />
+            <div className="absolute inset-0 rounded-full bg-violet-500/16 blur-lg animate-breathe -z-10" />
           </div>
 
           {/* Keep brand text centered in the full sidebar width */}
@@ -165,7 +170,7 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
           >
             <div className="px-2 py-0.5">
               <div className="mb-2.5 flex items-center justify-between gap-1">
-                <p className="flex items-center gap-1 text-[#455073] text-[7px] font-bold uppercase tracking-[0.18em]">
+                <p className="flex items-center gap-1 text-[#455073] text-[10px] font-bold uppercase tracking-[0.14em]">
                   <span className="w-1 h-2.5 bg-amber-400 rounded-sm shadow-[0_0_6px_rgba(251,191,36,0.28)]" />
                   Rewards
                 </p>
@@ -175,9 +180,9 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
                     loading={isClaiming}
                     variant="warning"
                     size="xs"
-                    className="h-[18px] rounded-full px-2 bg-gradient-to-r from-amber-500 to-orange-500 border-0 text-black font-black text-[7px] tracking-[0.05em] hover:from-amber-400 hover:to-orange-400 shadow-none hover:shadow-none shrink-0"
+                    className="h-[22px] min-w-[96px] rounded-full px-2.5 bg-gradient-to-r from-amber-500 to-orange-500 border-0 text-black font-bold text-[9px] tracking-[0.01em] hover:from-amber-400 hover:to-orange-400 shadow-none hover:shadow-none shrink-0"
                   >
-                    {isClaiming ? "WAIT..." : `CLAIM ALL (${unclaimedWins.length})`}
+                    {isClaiming ? "Wait..." : `Claim all (${unclaimedWins.length})`}
                   </UiButton>
                 )}
               </div>
@@ -197,11 +202,11 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
                       className="flex items-center gap-1.5 rounded-md border border-amber-500/35 bg-amber-500/8 px-2 py-1.5 animate-slide-up transition-colors hover:bg-amber-500/12 group"
                       style={{ animationDelay: `${idx * 0.05}s` }}
                     >
-                      <div className="min-w-0 flex-1">
+                      <div className="min-w-0 flex-1 pr-1">
                         <span className="block text-[8px] text-amber-500/70 uppercase font-bold tracking-wide leading-none">
                           #{win.epoch}
                         </span>
-                        <span className="block mt-0.5 text-[9px] leading-none font-black text-emerald-400 tabular-nums whitespace-nowrap">
+                        <span className="block mt-0.5 text-[9px] leading-none font-black text-emerald-400 tabular-nums truncate">
                           {formatRewardAmount(win.amountWei)} LINEA
                         </span>
                       </div>
@@ -210,9 +215,9 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
                         disabled={isClaiming}
                         variant="warning"
                         size="xs"
-                        className="h-5 min-w-[58px] rounded-full px-2 bg-gradient-to-r from-amber-500 to-orange-500 border-0 text-black font-black text-[8px] tracking-[0.05em] hover:from-amber-400 hover:to-orange-400 shadow-none hover:shadow-none shrink-0"
+                        className="h-[22px] w-[88px] rounded-full px-2.5 bg-gradient-to-r from-amber-500 to-orange-500 border-0 text-black font-bold text-[9px] tracking-[0.01em] hover:from-amber-400 hover:to-orange-400 shadow-none hover:shadow-none shrink-0"
                       >
-                        {isClaiming ? "..." : "CLAIM"}
+                        {isClaiming ? "..." : "Claim"}
                       </UiButton>
                     </div>
                   ))}
@@ -294,3 +299,4 @@ const NavItem = React.memo(function NavItem({ active, onClick, icon, label, dela
     </button>
   );
 });
+

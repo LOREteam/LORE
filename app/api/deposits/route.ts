@@ -30,6 +30,32 @@ type DepositRow = {
   amounts?: string[];
 };
 
+function buildDepositKey(epoch: string, txHash: string, blockNumber: string): string {
+  const normalizedHash = txHash.toLowerCase().trim();
+  if (/^0x[0-9a-f]+$/.test(normalizedHash)) {
+    return `${epoch}_${normalizedHash}`;
+  }
+  return `${epoch}_nohash_${blockNumber}`;
+}
+
+function dedupeDeposits(rows: DepositRow[]): DepositRow[] {
+  const byKey = new Map<string, DepositRow>();
+  for (const row of rows) {
+    const key = `${row.epoch}_${String(row.txHash ?? "").toLowerCase().trim()}`;
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, row);
+      continue;
+    }
+    const prevBlock = Number(prev.blockNumber ?? "0");
+    const nextBlock = Number(row.blockNumber ?? "0");
+    if (nextBlock >= prevBlock) {
+      byKey.set(key, row);
+    }
+  }
+  return Array.from(byKey.values());
+}
+
 async function getLogsByTopicAndUser(topic0: `0x${string}`, userTopic: `0x${string}`) {
   const all: Awaited<ReturnType<typeof publicClient.getLogs>> = [];
   const head = await publicClient.getBlockNumber();
@@ -66,7 +92,11 @@ async function fetchDepositsFromChain(user: string, currentEpoch: number | null)
         const args = decoded.args as { epoch: bigint; tileId: bigint; amount: bigint };
         const ep = Number(args.epoch);
         if (currentEpoch && (ep < 1 || ep > currentEpoch)) continue;
-        const key = `${args.epoch.toString()}_${(log.transactionHash ?? "").slice(0, 10)}`;
+        const key = buildDepositKey(
+          args.epoch.toString(),
+          log.transactionHash ?? "",
+          (log.blockNumber ?? 0n).toString(),
+        );
         const amount = formatUnits(args.amount, 18);
         const prev = byKey.get(key);
         if (prev) {
@@ -90,7 +120,11 @@ async function fetchDepositsFromChain(user: string, currentEpoch: number | null)
         const args = decoded.args as { epoch: bigint; tileIds: readonly bigint[]; amounts: readonly bigint[]; totalAmount: bigint };
         const ep = Number(args.epoch);
         if (currentEpoch && (ep < 1 || ep > currentEpoch)) continue;
-        const key = `${args.epoch.toString()}_${(log.transactionHash ?? "").slice(0, 10)}`;
+        const key = buildDepositKey(
+          args.epoch.toString(),
+          log.transactionHash ?? "",
+          (log.blockNumber ?? 0n).toString(),
+        );
         byKey.set(key, {
           epoch: args.epoch.toString(),
           tileIds: args.tileIds.map(Number),
@@ -146,6 +180,7 @@ export async function GET(request: NextRequest) {
       if (blockNumber > 0 && BigInt(blockNumber) < CONTRACT_DEPLOY_BLOCK) return false;
       return true;
     });
+    deposits = dedupeDeposits(deposits);
 
     // Chain supplement: if DB is empty/missing, recover user deposits from on-chain logs and upsert to Firebase
     if (deposits.length === 0) {
@@ -153,7 +188,7 @@ export async function GET(request: NextRequest) {
       if (recovered.length > 0) {
         const patch: Record<string, unknown> = {};
         for (const d of recovered) {
-          const key = `${d.epoch}_${d.txHash.slice(0, 10)}`;
+          const key = buildDepositKey(d.epoch, d.txHash, d.blockNumber);
           patch[key] = d;
         }
         await patchFirebase(`gamedata/bets/${user}`, patch);

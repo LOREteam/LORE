@@ -779,7 +779,6 @@ export default function LineaOre() {
 
   return (
     <div className="h-screen w-full flex overflow-hidden bg-[#060612] text-slate-200">
-      {/* Animated background orbs */}
       {/* Ambient crystal particles */}
       <CrystalParticles />
 

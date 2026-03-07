@@ -46,6 +46,7 @@ const FIREBASE_DB_URL =
   DEFAULT_FIREBASE_DB_URL;
 const FIREBASE_DB_AUTH = process.env.FIREBASE_DB_AUTH ?? "";
 let writeDisabled = false;
+let writeDisabledReason: string | null = null;
 let lastReconcileAtMs = 0;
 
 function firebaseUrl(path: string) {
@@ -63,7 +64,10 @@ const EVENTS_ABI = parseAbi([
   "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
 ]);
 
-const READ_ABI = parseAbi(["function currentEpoch() view returns (uint256)"]);
+const READ_ABI = parseAbi([
+  "function currentEpoch() view returns (uint256)",
+  "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
+]);
 
 const client = createPublicClient({
   chain: lineaSepolia,
@@ -76,13 +80,19 @@ const client = createPublicClient({
 // ─── Firebase REST helpers ───────────────────────────────────────────
 async function fbGet<T = unknown>(path: string): Promise<T | null> {
   const res = await fetch(firebaseUrl(path));
-  if (!res.ok) return null;
+  if (!res.ok) throw new Error(`Firebase GET ${path} failed: ${res.status}`);
   const data = await res.json();
-  return data as T;
+  return data as T | null;
+}
+
+function throwIfWritesDisabled(path: string) {
+  if (!writeDisabled) return;
+  const reason = writeDisabledReason ? `: ${writeDisabledReason}` : "";
+  throw new Error(`[indexer] Firebase writes disabled${reason}. Attempted write to ${path}.`);
 }
 
 async function fbPatch(path: string, data: Record<string, unknown>) {
-  if (writeDisabled) return;
+  throwIfWritesDisabled(path);
   const res = await fetch(firebaseUrl(path), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -90,14 +100,16 @@ async function fbPatch(path: string, data: Record<string, unknown>) {
   });
   if (res.status === 401 || res.status === 403) {
     writeDisabled = true;
-    console.error(`[indexer] Firebase write denied (${res.status}) for ${path}. Disabling writes.`);
-    return;
+    writeDisabledReason = `write denied (${res.status})`;
+    const msg = `[indexer] Firebase write denied (${res.status}) for ${path}. Disabling writes.`;
+    console.error(msg);
+    throw new Error(msg);
   }
   if (!res.ok) throw new Error(`Firebase PATCH ${path} failed: ${res.status}`);
 }
 
 async function fbPut(path: string, data: unknown) {
-  if (writeDisabled) return;
+  throwIfWritesDisabled(path);
   const res = await fetch(firebaseUrl(path), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -105,8 +117,10 @@ async function fbPut(path: string, data: unknown) {
   });
   if (res.status === 401 || res.status === 403) {
     writeDisabled = true;
-    console.error(`[indexer] Firebase write denied (${res.status}) for ${path}. Disabling writes.`);
-    return;
+    writeDisabledReason = `write denied (${res.status})`;
+    const msg = `[indexer] Firebase write denied (${res.status}) for ${path}. Disabling writes.`;
+    console.error(msg);
+    throw new Error(msg);
   }
   if (!res.ok) throw new Error(`Firebase PUT ${path} failed: ${res.status}`);
 }
@@ -252,6 +266,14 @@ interface JackpotRecord {
   blockNumber: string;
 }
 
+function buildBetKey(epoch: string, txHash: string, blockNumber: string): string {
+  const normalizedHash = txHash.toLowerCase().trim();
+  if (/^0x[0-9a-f]+$/.test(normalizedHash)) {
+    return `${epoch}_${normalizedHash}`;
+  }
+  return `${epoch}_nohash_${blockNumber}`;
+}
+
 function processLogs(logs: Log[]) {
   const bets: BetRecord[] = [];
   const epochs: Map<string, EpochRecord> = new Map();
@@ -360,7 +382,7 @@ async function writeBets(bets: BetRecord[]) {
   for (const [user, userBets] of byUser) {
     const patch: Record<string, unknown> = {};
     for (const bet of userBets) {
-      const key = `${bet.epoch}_${bet.txHash.slice(0, 10)}`;
+      const key = buildBetKey(bet.epoch, bet.txHash, bet.blockNumber);
       patch[key] = {
         epoch: bet.epoch,
         tileIds: bet.tileIds,
@@ -421,12 +443,30 @@ async function getCurrentEpochFromChain() {
 
 async function getLastBlock(): Promise<bigint> {
   const val = await fbGet<string>("gamedata/_meta/lastIndexedBlock");
-  return val ? BigInt(val) : INDEXER_START_BLOCK;
+  if (!val) {
+    console.warn("[indexer] Missing gamedata/_meta/lastIndexedBlock, falling back to INDEXER_START_BLOCK.");
+    return INDEXER_START_BLOCK;
+  }
+  try {
+    return BigInt(val);
+  } catch {
+    console.warn(`[indexer] Invalid gamedata/_meta/lastIndexedBlock value: ${val}. Falling back to INDEXER_START_BLOCK.`);
+    return INDEXER_START_BLOCK;
+  }
 }
 
 async function getRepairCursorBlock(): Promise<bigint> {
   const val = await fbGet<string>("gamedata/_meta/repairCursorBlock");
-  return val ? BigInt(val) : INDEXER_START_BLOCK;
+  if (!val) {
+    console.warn("[indexer] Missing gamedata/_meta/repairCursorBlock, falling back to INDEXER_START_BLOCK.");
+    return INDEXER_START_BLOCK;
+  }
+  try {
+    return BigInt(val);
+  } catch {
+    console.warn(`[indexer] Invalid gamedata/_meta/repairCursorBlock value: ${val}. Falling back to INDEXER_START_BLOCK.`);
+    return INDEXER_START_BLOCK;
+  }
 }
 
 async function setRepairCursorBlock(block: bigint) {
@@ -499,6 +539,21 @@ async function runEpochReconcile(currentBlock: bigint) {
     const logs = await fetchLogsByTopicsWithRetry([resolvedSig, epTopic], INDEXER_START_BLOCK, currentBlock);
     if (logs.length === 0) continue;
 
+    let isDailyJackpot = false;
+    let isWeeklyJackpot = false;
+    try {
+      const epochState = await client.readContract({
+        address: CONTRACT,
+        abi: READ_ABI,
+        functionName: "epochs",
+        args: [BigInt(epNum)],
+      }) as [bigint, bigint, bigint, boolean, boolean, boolean];
+      isDailyJackpot = Boolean(epochState[4]);
+      isWeeklyJackpot = Boolean(epochState[5]);
+    } catch (err) {
+      console.warn(`[indexer][reconcile] Could not read jackpot flags for epoch ${epNum}: ${(err as Error).message}`);
+    }
+
     // Keep last resolved log for epoch (safety)
     const log = logs[logs.length - 1];
     try {
@@ -513,8 +568,8 @@ async function runEpochReconcile(currentBlock: bigint) {
         rewardPool: formatUnits(args.rewardPool, 18),
         fee: formatUnits(args.fee, 18),
         jackpotBonus: formatUnits(args.jackpotBonus, 18),
-        isDailyJackpot: false,
-        isWeeklyJackpot: false,
+        isDailyJackpot,
+        isWeeklyJackpot,
         resolvedBlock: (log.blockNumber ?? 0n).toString(),
       });
     } catch {

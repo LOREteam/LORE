@@ -19,6 +19,8 @@ const RATE_LIMIT_MS = 1_500;
 const MAX_TEXT_LENGTH = 280;
 const POLL_INTERVAL_MS = 3_000;
 const AUTH_STORAGE_PREFIX = "lore:chat-auth:";
+const CHAT_CACHE_KEY = "lore:chat-cache:v1";
+const NETWORK_WARN_THROTTLE_MS = 15_000;
 
 interface ChatAuthProof {
   address: string;
@@ -52,9 +54,58 @@ function saveProof(proof: ChatAuthProof) {
   localStorage.setItem(getAuthStorageKey(proof.address), JSON.stringify(proof));
 }
 
+function isNetworkFetchError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return msg.includes("failed to fetch") || msg.includes("networkerror") || msg.includes("network request failed");
+}
+
+function warnNetworkOnce(tag: string, ref: { current: number }, err: unknown) {
+  const now = Date.now();
+  if (now - ref.current < NETWORK_WARN_THROTTLE_MS) return;
+  ref.current = now;
+  const message = err instanceof Error ? err.message : String(err);
+  console.warn(`${tag} ${message}`);
+}
+
+function loadCachedMessages(): ChatMessage[] {
+  if (typeof localStorage === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(CHAT_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => {
+        const v = (item ?? {}) as Record<string, unknown>;
+        return {
+          id: typeof v.id === "string" ? v.id : "",
+          text: typeof v.text === "string" ? v.text : "",
+          sender: typeof v.sender === "string" ? v.sender : "",
+          senderName: typeof v.senderName === "string" ? v.senderName : null,
+          senderAvatar: typeof v.senderAvatar === "string" ? v.senderAvatar : null,
+          timestamp: typeof v.timestamp === "number" ? v.timestamp : Number(v.timestamp ?? 0),
+        } as ChatMessage;
+      })
+      .filter((m) => m.id && m.sender && m.text)
+      .sort((a, b) => a.timestamp - b.timestamp);
+  } catch {
+    return [];
+  }
+}
+
+function saveCachedMessages(messages: ChatMessage[]) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(CHAT_CACHE_KEY, JSON.stringify(messages.slice(-MESSAGES_LIMIT)));
+  } catch {
+    // ignore cache write failures
+  }
+}
+
 async function fetchMessages(): Promise<ChatMessage[]> {
   const url = `${FIREBASE_DB_URL}/messages.json?orderBy="timestamp"&limitToLast=${MESSAGES_LIMIT}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`Firebase read HTTP ${res.status}`);
   const data = await res.json();
   if (!data || typeof data !== "object") return [];
@@ -79,6 +130,7 @@ async function postMessage(payload: Record<string, unknown>): Promise<void> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    cache: "no-store",
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
@@ -88,12 +140,14 @@ async function postMessage(payload: Record<string, unknown>): Promise<void> {
 }
 
 export function useChat(walletAddress: string | null) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => loadCachedMessages());
   const [connected, setConnected] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const lastSentRef = useRef(0);
   const proofRef = useRef<ChatAuthProof | null>(null);
   const authInFlightRef = useRef<Promise<boolean> | null>(null);
+  const pollWarnAtRef = useRef(0);
+  const sendWarnAtRef = useRef(0);
   const { signMessage } = useSignMessage();
 
   useEffect(() => {
@@ -154,21 +208,31 @@ export function useChat(walletAddress: string | null) {
         const msgs = await fetchMessages();
         if (!active) return;
         setMessages(msgs);
-        if (!connected) setConnected(true);
+        saveCachedMessages(msgs);
+        setConnected(true);
+        pollWarnAtRef.current = 0;
       } catch (err) {
-        console.error("[Chat] Poll error:", err);
+        if (!active) return;
+        setConnected(false);
+        if (isNetworkFetchError(err)) {
+          warnNetworkOnce("[Chat] Poll network unavailable:", pollWarnAtRef, err);
+        } else {
+          warnNetworkOnce("[Chat] Poll failed:", pollWarnAtRef, err);
+        }
       }
     }
 
     console.log("[Chat] Starting REST polling for wallet:", walletAddress.slice(0, 10) + "...");
-    poll();
-    const timer = setInterval(poll, POLL_INTERVAL_MS);
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, POLL_INTERVAL_MS);
 
     return () => {
       active = false;
       clearInterval(timer);
     };
-  }, [walletAddress]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [walletAddress]);
 
   const ensureChatAuth = useCallback(async (): Promise<boolean> => {
     if (!walletAddress) return false;
@@ -241,8 +305,16 @@ export function useChat(walletAddress: string | null) {
 
         const msgs = await fetchMessages();
         setMessages(msgs);
+        saveCachedMessages(msgs);
+        setConnected(true);
+        sendWarnAtRef.current = 0;
       } catch (err) {
-        console.error("[Chat] Send failed:", err);
+        setConnected(false);
+        if (isNetworkFetchError(err)) {
+          warnNetworkOnce("[Chat] Send network unavailable:", sendWarnAtRef, err);
+        } else {
+          warnNetworkOnce("[Chat] Send failed:", sendWarnAtRef, err);
+        }
       }
     },
     [walletAddress, ensureChatAuth],

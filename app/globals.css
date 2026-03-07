@@ -187,6 +187,84 @@ body {
 .animate-orb-1 { animation: orb-drift-1 20s ease-in-out infinite; }
 .animate-orb-2 { animation: orb-drift-2 25s ease-in-out infinite; }
 
+.ambient-shell {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at top left, rgba(124,58,237,0.08), transparent 30%),
+    linear-gradient(180deg, #060612 0%, #070714 45%, #060612 100%);
+}
+
+.ambient-shell::before,
+.ambient-shell::after {
+  content: "";
+  position: absolute;
+  inset: -18%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ambient-shell::before {
+  background:
+    radial-gradient(circle at 18% 20%, rgba(124,58,237,0.2), transparent 32%),
+    radial-gradient(circle at 78% 82%, rgba(14,165,233,0.13), transparent 30%),
+    radial-gradient(circle at 56% 38%, rgba(217,70,239,0.08), transparent 28%);
+  filter: blur(120px);
+  opacity: 0.58;
+  animation: ambient-drift 24s ease-in-out infinite;
+}
+
+.ambient-shell::after {
+  background:
+    linear-gradient(125deg, rgba(124,58,237,0.04) 0%, rgba(124,58,237,0) 42%, rgba(14,165,233,0.025) 72%, rgba(124,58,237,0.03) 100%);
+  filter: blur(80px);
+  opacity: 0.55;
+  animation: ambient-sheen 20s ease-in-out infinite;
+}
+
+.ambient-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ambient-panel {
+  position: relative;
+  isolation: isolate;
+  background:
+    linear-gradient(180deg, rgba(10,10,24,0.9) 0%, rgba(10,10,24,0.84) 100%);
+}
+
+.ambient-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 18% 14%, rgba(124,58,237,0.13), transparent 34%),
+    radial-gradient(circle at 82% 88%, rgba(14,165,233,0.08), transparent 32%),
+    linear-gradient(180deg, rgba(124,58,237,0.035), rgba(10,10,24,0));
+  filter: blur(50px);
+  opacity: 0.72;
+  animation: ambient-drift 26s ease-in-out infinite;
+}
+
+.ambient-panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(160deg, rgba(255,255,255,0.03), rgba(255,255,255,0) 28%);
+  opacity: 0.5;
+  animation: ambient-sheen 18s ease-in-out infinite;
+}
+
+.ambient-panel > * {
+  position: relative;
+  z-index: 1;
+}
+
 /* Shimmer overlay for buttons */
 .shimmer-btn {
   position: relative;
