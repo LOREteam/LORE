@@ -566,14 +566,27 @@ export default function LineaOre() {
   }, [embeddedTokenBalance]);
 
   const [balanceWarningDismissed, setBalanceWarningDismissed] = useState(false);
+  const [embeddedAddressCopied, setEmbeddedAddressCopied] = useState(false);
   useEffect(() => {
     if (!lowEthBalance && !lowTokenBalance) setBalanceWarningDismissed(false);
   }, [lowEthBalance, lowTokenBalance]);
 
+  useEffect(() => {
+    if (!embeddedAddressCopied) return;
+    const timeoutId = window.setTimeout(() => setEmbeddedAddressCopied(false), 1600);
+    return () => window.clearTimeout(timeoutId);
+  }, [embeddedAddressCopied]);
+
   const handleCopyEmbeddedAddress = useCallback(async () => {
     if (!embeddedWalletAddress) return;
-    await navigator.clipboard.writeText(embeddedWalletAddress);
+    try {
+      await navigator.clipboard.writeText(embeddedWalletAddress);
+      setEmbeddedAddressCopied(true);
+    } catch {
+      // Ignore clipboard denials so the modal does not throw in unsupported contexts.
+    }
   }, [embeddedWalletAddress]);
+
 
   const openWalletSettings = useCallback(() => setIsWalletSettingsOpen(true), []);
   const closeWalletSettings = useCallback(() => setIsWalletSettingsOpen(false), []);
@@ -614,7 +627,8 @@ export default function LineaOre() {
         return;
       }
       const tilesSnapshot = [...selectedTiles];
-      await handleManualMine(amount);
+      const success = await handleManualMine(amount);
+      if (!success) return;
       playSound("bet");
       if (tilesSnapshot.length > 0) {
         const entry = { tiles: tilesSnapshot, amount };
@@ -631,7 +645,8 @@ export default function LineaOre() {
       alert("Create a Privy wallet first in Wallet Settings.");
       return;
     }
-    await handleDirectMine(lastBet.tiles, lastBet.amount);
+    const success = await handleDirectMine(lastBet.tiles, lastBet.amount);
+    if (!success) return;
     playSound("bet");
     try { localStorage.setItem(LAST_BET_KEY, JSON.stringify(lastBet)); } catch {}
   }, [lastBet, embeddedWalletAddress, handleDirectMine, playSound]);
@@ -643,13 +658,13 @@ export default function LineaOre() {
         setIsWalletSettingsOpen(true);
         return;
       }
-      if (lowEthBalance) {
+      if (lowEthBalance && !isAutoMining) {
         alert("Not enough ETH for gas. Top up your Privy wallet in Settings.");
         return;
       }
       await handleAutoMineToggle(bet, blocks, rounds);
     },
-    [embeddedWalletAddress, lowEthBalance, handleAutoMineToggle],
+    [embeddedWalletAddress, lowEthBalance, isAutoMining, handleAutoMineToggle],
   );
 
   const handleWithdrawToExternal = useCallback(async () => {
@@ -857,6 +872,7 @@ export default function LineaOre() {
           onDepositTokenAmountChange={setDepositTokenAmount}
           onCreateEmbeddedWallet={createEmbeddedWallet}
           onCopyEmbeddedAddress={handleCopyEmbeddedAddress}
+          embeddedAddressCopied={embeddedAddressCopied}
           onExportEmbeddedWallet={exportEmbeddedWallet}
           onWithdrawToExternal={handleWithdrawToExternal}
           onDepositEthToEmbedded={handleDepositEthToEmbedded}

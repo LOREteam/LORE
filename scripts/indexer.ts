@@ -621,7 +621,7 @@ async function main() {
   const isWatch = process.argv.includes("--watch");
   console.log(`[indexer] Firebase: ${FIREBASE_DB_URL}`);
   if (!FIREBASE_DB_AUTH) {
-    console.warn("[indexer] FIREBASE_DB_AUTH is empty. Writes require permissive RTDB rules for /gamedata.");
+    throw new Error("[indexer] FIREBASE_DB_AUTH is required because RTDB writes are protected by server-side auth.");
   }
   console.log(`[indexer] Contract: ${CONTRACT}`);
   console.log(`[indexer] Deploy block: ${DEPLOY_BLOCK}`);

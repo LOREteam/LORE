@@ -22,6 +22,13 @@ export const publicClient = createPublicClient({
 
 type QueryValue = string | number | boolean;
 
+export function requireFirebaseWriteAuth(context: string = "server Firebase writes") {
+  if (!FIREBASE_DB_AUTH) {
+    throw new Error(`FIREBASE_DB_AUTH is required for ${context}.`);
+  }
+  return FIREBASE_DB_AUTH;
+}
+
 function toQueryString(params?: Record<string, QueryValue>) {
   if (!params) return "";
   const sp = new URLSearchParams();
@@ -35,22 +42,22 @@ export function firebaseReadUrl(path: string, params?: Record<string, QueryValue
 }
 
 export function firebaseWriteUrl(path: string, params?: Record<string, QueryValue>) {
+  const auth = requireFirebaseWriteAuth(`Firebase write path "${path}"`);
   const base = `${FIREBASE_DB_URL}/${path}.json`;
   const p: Record<string, QueryValue> = { ...(params ?? {}) };
-  if (FIREBASE_DB_AUTH) p.auth = FIREBASE_DB_AUTH;
+  p.auth = auth;
   return `${base}${toQueryString(p)}`;
 }
 
 export function firebaseWriteUrlWithHeaders(path: string, params?: Record<string, QueryValue>): { url: string; headers: Record<string, string> } {
+  const auth = requireFirebaseWriteAuth(`Firebase write path "${path}"`);
   const base = `${FIREBASE_DB_URL}/${path}.json`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  
-  if (FIREBASE_DB_AUTH) {
-    headers["X-Firebase-Auth"] = FIREBASE_DB_AUTH;
-  }
-  
+
+  headers["X-Firebase-Auth"] = auth;
+
   return { url: base + toQueryString(params ?? {}) || "", headers };
 }
 

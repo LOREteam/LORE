@@ -458,7 +458,7 @@ export function useMining({
   // --- Manual mining ---
   const handleManualMine = useCallback(
     async (betAmountStr: string) => {
-      if (selectedTiles.length === 0 || !isConnected || !address) return;
+      if (selectedTiles.length === 0 || !isConnected || !address) return false;
       setIsPending(true);
       try {
         const normalized = normalizeDecimalInput(betAmountStr);
@@ -485,7 +485,7 @@ export function useMining({
                 setSelectedTiles([]);
                 setSelectedTilesEpoch(null);
                 scheduleRefetch();
-                return;
+                return true;
               }
             } catch { /* non-critical */ }
           }
@@ -497,6 +497,7 @@ export function useMining({
         setSelectedTiles([]);
         setSelectedTilesEpoch(null);
         scheduleRefetch();
+        return true;
       } catch (err) {
         if (!isUserRejection(err)) {
           log.error("ManualMine", "bet failed", err);
@@ -506,6 +507,7 @@ export function useMining({
             alert("Bet failed. Check your token balance and try again.");
           }
         }
+        return false;
       } finally {
         setIsPending(false);
       }
@@ -515,8 +517,8 @@ export function useMining({
 
   const handleDirectMine = useCallback(
     async (tiles: number[], betAmountStr: string) => {
-      if (tiles.length === 0 || !isConnected || !address) return;
-      if (autoMineRef.current) return;
+      if (tiles.length === 0 || !isConnected || !address) return false;
+      if (autoMineRef.current) return false;
       setSelectedTiles(tiles);
       setSelectedTilesEpoch(null);
       setIsPending(true);
@@ -544,7 +546,7 @@ export function useMining({
                 setSelectedTiles([]);
                 setSelectedTilesEpoch(null);
                 scheduleRefetch();
-                return;
+                return true;
               }
             } catch { /* non-critical */ }
           }
@@ -556,6 +558,7 @@ export function useMining({
         setSelectedTiles([]);
         setSelectedTilesEpoch(null);
         scheduleRefetch();
+        return true;
       } catch (err) {
         if (!isUserRejection(err)) {
           log.error("DirectMine", "bet failed", err);
@@ -565,6 +568,7 @@ export function useMining({
             alert("Bet failed. Check your token balance and try again.");
           }
         }
+        return false;
       } finally {
         setIsPending(false);
       }
@@ -875,7 +879,7 @@ export function useMining({
 
             saveSession({
               active: true, betStr, blocks, rounds,
-              nextRoundIndex: r + 1,
+              nextRoundIndex: r,
               lastPlacedEpoch: liveEpochNow.toString(),
             });
 

@@ -25,6 +25,7 @@ Then set at least:
 
 - `KEEPER_PRIVATE_KEY` for bot transactions
 - `NEXT_PUBLIC_FIREBASE_DATABASE_URL` for chat
+- `FIREBASE_DB_AUTH` for protected server-side Firebase writes and rate limiting
 
 Useful optional vars are documented in `.env.example` and `.env.local.example`.
 

@@ -13,6 +13,7 @@ export interface RecentWin {
 }
 
 const INITIAL_SCAN_BLOCKS = BigInt(200000);
+const LOG_SCAN_CHUNK = BigInt(25_000);
 const REFRESH_MS = 45_000;
 const MAX_WINS = 100;
 const STORAGE_KEY = "lore:recent-wins-cache";
@@ -91,10 +92,18 @@ export function useRecentWins() {
       const logsRequest = {
         address: CONTRACT_ADDRESS,
         topics: [rewardClaimedTopic],
-        fromBlock,
-        toBlock,
-      } as unknown as Parameters<typeof publicClient.getLogs>[0];
-      const logs = await publicClient.getLogs(logsRequest);
+      } as const;
+
+      const logs = [];
+      for (let cursor = fromBlock; cursor <= toBlock; cursor += LOG_SCAN_CHUNK) {
+        const chunkTo = cursor + LOG_SCAN_CHUNK - BigInt(1) > toBlock ? toBlock : cursor + LOG_SCAN_CHUNK - BigInt(1);
+        const chunkLogs = await publicClient.getLogs({
+          ...logsRequest,
+          fromBlock: cursor,
+          toBlock: chunkTo,
+        } as unknown as Parameters<typeof publicClient.getLogs>[0]);
+        logs.push(...chunkLogs);
+      }
 
       const newWins: RecentWin[] = [];
       for (const log of logs) {
@@ -124,7 +133,9 @@ export function useRecentWins() {
       lastBlockRef.current = toBlock;
       setWins(merged);
       saveCache(merged, toBlock);
-    } catch {} finally {
+    } catch (error) {
+      console.warn("[useRecentWins] fetch failed:", error);
+    } finally {
       runningRef.current = false;
     }
   }, [publicClient]);

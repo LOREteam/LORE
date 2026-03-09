@@ -153,17 +153,6 @@ async function startKeeperBot() {
       const overdue = -secondsLeft;
 
       if (secondsLeft <= -GRACE_SECONDS && !isResolved) {
-        // No bets in this epoch — nobody is playing, skip resolve entirely.
-        // The epoch will stay "stale" until a user opens the DApp,
-        // at which point AutoResolve will wake the game up.
-        if (totalPool === BigInt(0)) {
-          process.stdout.write(
-            `\rEpoch #${epoch.toString()} | empty (no bets) | idle ${overdue}s — skipping   `,
-          );
-          await delay(3000);
-          continue;
-        }
-
         const freshEpoch = await publicClient.readContract({
           address: contractAddress, abi: ABI, functionName: "currentEpoch",
         });

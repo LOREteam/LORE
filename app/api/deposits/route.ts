@@ -10,8 +10,10 @@ import {
   patchFirebase,
   publicClient,
 } from "../_lib/dataBridge";
+import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 
 const LOG_CHUNK_BLOCKS = 50_000n;
+const ENABLE_CHAIN_RECOVERY = process.env.API_DEPOSITS_CHAIN_RECOVERY === "1";
 
 const EVENTS_ABI = parseAbi([
   "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
@@ -41,7 +43,7 @@ function buildDepositKey(epoch: string, txHash: string, blockNumber: string): st
 function dedupeDeposits(rows: DepositRow[]): DepositRow[] {
   const byKey = new Map<string, DepositRow>();
   for (const row of rows) {
-    const key = `${row.epoch}_${String(row.txHash ?? "").toLowerCase().trim()}`;
+    const key = buildDepositKey(row.epoch, row.txHash ?? "", row.blockNumber ?? "0");
     const prev = byKey.get(key);
     if (!prev) {
       byKey.set(key, row);
@@ -146,6 +148,13 @@ async function fetchDepositsFromChain(user: string, currentEpoch: number | null)
 }
 
 export async function GET(request: NextRequest) {
+  const rateLimited = await enforceSharedRateLimit(request, {
+    bucket: "api-deposits",
+    limit: 20,
+    windowMs: 60_000,
+  });
+  if (rateLimited) return rateLimited;
+
   const user = request.nextUrl.searchParams.get("user")?.toLowerCase();
   if (!user || !/^0x[0-9a-f]{40}$/.test(user)) {
     return NextResponse.json({ error: "Missing or invalid ?user=0x..." }, { status: 400 });
@@ -183,7 +192,7 @@ export async function GET(request: NextRequest) {
     deposits = dedupeDeposits(deposits);
 
     // Chain supplement: if DB is empty/missing, recover user deposits from on-chain logs and upsert to Firebase
-    if (deposits.length === 0) {
+    if (ENABLE_CHAIN_RECOVERY && deposits.length === 0) {
       const recovered = await fetchDepositsFromChain(user, currentEpochNum);
       if (recovered.length > 0) {
         const patch: Record<string, unknown> = {};

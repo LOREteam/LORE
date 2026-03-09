@@ -27,6 +27,14 @@ interface ApiEpoch {
   rewardPool: string;
 }
 
+interface ApiRewardInfo {
+  reward: string;
+  winningTile: number;
+  rewardPool: string;
+  winningTilePool: string;
+  userWinningAmount: string;
+}
+
 export function useDepositHistory(userAddress?: string) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<DepositEntry[] | null>(null);
@@ -77,16 +85,64 @@ export function useDepositHistory(userAddress?: string) {
       }
 
       const deposits: ApiDeposit[] = depositsJson.deposits ?? [];
+      const uniqueEpochs = [...new Set(deposits.map((d) => d.epoch))];
+      let rewardsMap: Record<string, ApiRewardInfo> = {};
+      if (uniqueEpochs.length > 0) {
+        try {
+          const rewardsRes = await fetch("/api/rewards", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user: userAddress.toLowerCase(),
+              epochs: uniqueEpochs,
+            }),
+          });
+          if (rewardsRes.ok) {
+            const rewardsJson = (await rewardsRes.json()) as { rewards?: Record<string, ApiRewardInfo> };
+            rewardsMap = rewardsJson.rewards ?? {};
+          }
+        } catch {
+          rewardsMap = {};
+        }
+      }
+
       const entries: DepositEntry[] = deposits.map((d) => {
         const epochData = epochsMap[d.epoch];
+        const rewardData = rewardsMap[d.epoch];
+        const winningTile = epochData?.winningTile ?? rewardData?.winningTile ?? null;
+        let reward: number | null = null;
+
+        if (rewardData && winningTile !== null && d.tileIds.includes(winningTile)) {
+          const userWinningAmount = parseFloat(rewardData.userWinningAmount);
+          const totalReward = parseFloat(rewardData.reward);
+          if (userWinningAmount > 0 && totalReward > 0) {
+            let rowWinningAmount = 0;
+            if (Array.isArray(d.amounts) && d.amounts.length === d.tileIds.length) {
+              d.tileIds.forEach((tileId, index) => {
+                if (tileId === winningTile) {
+                  rowWinningAmount += parseFloat(d.amounts?.[index] ?? "0");
+                }
+              });
+            } else {
+              const hitCount = d.tileIds.filter((tileId) => tileId === winningTile).length;
+              if (hitCount > 0 && d.tileIds.length > 0) {
+                rowWinningAmount = (d.totalAmountNum / d.tileIds.length) * hitCount;
+              }
+            }
+            if (rowWinningAmount > 0) {
+              reward = (totalReward * rowWinningAmount) / userWinningAmount;
+            }
+          }
+        }
+
         return {
           epoch: d.epoch,
           tileIds: d.tileIds,
           amount: parseFloat(d.totalAmount).toFixed(2),
           amountNum: d.totalAmountNum,
           txHash: d.txHash,
-          winningTile: epochData?.winningTile ?? null,
-          reward: null,
+          winningTile,
+          reward,
         };
       });
 

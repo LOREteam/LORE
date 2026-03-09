@@ -102,7 +102,11 @@ export function useReferral(options?: UseReferralOptions) {
 
   const copyReferralLink = useCallback(async () => {
     if (!referralLink) return;
-    await navigator.clipboard.writeText(referralLink);
+    try {
+      await navigator.clipboard.writeText(referralLink);
+    } catch {
+      // Ignore clipboard denials in unsupported or blocked contexts.
+    }
   }, [referralLink]);
 
   // Save referral code from URL on mount
@@ -118,8 +122,6 @@ export function useReferral(options?: UseReferralOptions) {
     }
   }, []);
 
-  // Auto-set referrer when wallet connects (or switches) and there's a pending code.
-  // Tracks per-address so switching Privy <-> main both get the referrer set.
   useEffect(() => {
     if (!address || !publicClient || !referralInfo) return;
     const addrLower = address.toLowerCase();

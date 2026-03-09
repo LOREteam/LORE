@@ -126,8 +126,7 @@ async function fetchMessages(): Promise<ChatMessage[]> {
 }
 
 async function postMessage(payload: Record<string, unknown>): Promise<void> {
-  const url = `${FIREBASE_DB_URL}/messages.json`;
-  const res = await fetch(url, {
+  const res = await fetch("/api/chat/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     cache: "no-store",

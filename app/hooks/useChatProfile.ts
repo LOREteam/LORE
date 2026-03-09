@@ -5,6 +5,7 @@ import { FIREBASE_DB_URL } from "../lib/firebase";
 
 const LEGACY_STORAGE_KEY = "lore:chat-profile";
 const STORAGE_KEY_PREFIX = "lore:chat-profile:";
+const AUTH_STORAGE_PREFIX = "lore:chat-auth:";
 const PROFILE_NAME_MAX = 20;
 const MAX_AVATAR_LEN = 8_000;
 const MESSAGE_SCAN_LIMIT = 400;
@@ -16,8 +17,35 @@ export interface ChatProfile {
   updatedAt?: number;
 }
 
+interface ChatAuthProof {
+  address: string;
+  message: string;
+  signature: string;
+}
+
 function storageKey(walletAddress: string | null): string {
   return walletAddress ? `${STORAGE_KEY_PREFIX}${walletAddress.toLowerCase()}` : LEGACY_STORAGE_KEY;
+}
+
+function authStorageKey(walletAddress: string) {
+  return `${AUTH_STORAGE_PREFIX}${walletAddress.toLowerCase()}`;
+}
+
+function loadAuthProof(walletAddress: string): ChatAuthProof | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(authStorageKey(walletAddress));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ChatAuthProof>;
+    if (!parsed.address || !parsed.message || !parsed.signature) return null;
+    return {
+      address: parsed.address.toLowerCase(),
+      message: parsed.message,
+      signature: parsed.signature,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function normalizeProfile(input: Partial<ChatProfile>): ChatProfile {
@@ -83,14 +111,21 @@ async function fetchRemoteProfile(walletAddress: string): Promise<ChatProfile | 
 
 async function saveRemoteProfile(walletAddress: string, profile: ChatProfile): Promise<void> {
   const normalizedAddress = walletAddress.toLowerCase();
+  const proof = loadAuthProof(normalizedAddress);
+  if (!proof || proof.address !== normalizedAddress) return;
+
   const payload = {
+    walletAddress: normalizedAddress,
     name: profile.name,
     avatar: profile.avatar,
     customAvatar: profile.customAvatar,
     updatedAt: profile.updatedAt ?? Date.now(),
+    authAddress: proof.address,
+    authMessage: proof.message,
+    authSignature: proof.signature,
   };
   try {
-    await fetch(`${FIREBASE_DB_URL}/gamedata/chatProfiles/${normalizedAddress}.json`, {
+    await fetch("/api/chat/profile", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

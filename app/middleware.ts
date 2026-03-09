@@ -9,21 +9,20 @@ const MAX_ENTRIES = 10000; // Maximum number of entries to prevent memory leak
 let lastCleanupAt = 0;
 
 function getRateLimitKey(request: NextRequest): string {
-  // Get client IP from X-Forwarded-For header or fallback to unknown
-  const xForwardedFor = request.headers.get("x-forwarded-for");
-  if (xForwardedFor) {
-    // X-Forwarded-For can contain multiple IPs, take the first one
-    const ip = xForwardedFor.split(",")[0].trim();
-    return ip;
-  }
-  // Fallback: use a combination of headers that might identify the client
   const cfConnectingIp = request.headers.get("cf-connecting-ip");
   if (cfConnectingIp) return cfConnectingIp;
-  
+
   const realIp = request.headers.get("x-real-ip");
   if (realIp) return realIp;
 
-  return "unknown";
+  const xForwardedFor = request.headers.get("x-forwarded-for");
+  if (xForwardedFor) {
+    const ip = xForwardedFor.split(",")[0]?.trim();
+    if (ip) return ip;
+  }
+
+  const userAgent = request.headers.get("user-agent")?.slice(0, 120) ?? "unknown";
+  return `anon:${userAgent}`;
 }
 
 function cleanupOldEntries() {
@@ -86,9 +85,6 @@ export function middleware(request: NextRequest) {
   }
 
   const key = getRateLimitKey(request);
-  if (key === "unknown") {
-    return NextResponse.next();
-  }
 
   const now = Date.now();
   if (now - lastCleanupAt > RATE_LIMIT_WINDOW_MS) {

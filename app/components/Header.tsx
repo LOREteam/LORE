@@ -72,11 +72,18 @@ export const Header = React.memo(function Header({
   const { login, logout, authenticated } = usePrivy();
   // Sticky "Analyzing": avoid switching to Mining during brief 00:00 refreshes
   const [showAnalyzing, setShowAnalyzing] = useState(false);
+  const [embeddedAddressCopied, setEmbeddedAddressCopied] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [dailyAwardVisibleUntil, setDailyAwardVisibleUntil] = useState(0);
   const [weeklyAwardVisibleUntil, setWeeklyAwardVisibleUntil] = useState(0);
   const prevDailyEpochRef = useRef<string | null>(null);
   const prevWeeklyEpochRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!embeddedAddressCopied) return;
+    const timeoutId = window.setTimeout(() => setEmbeddedAddressCopied(false), 1400);
+    return () => window.clearTimeout(timeoutId);
+  }, [embeddedAddressCopied]);
 
   useEffect(() => {
     if (!jackpotInfo) return;
@@ -571,12 +578,12 @@ export const Header = React.memo(function Header({
               <button
                 onClick={() => {
                   if (!embeddedWalletAddress) return;
-                  void navigator.clipboard.writeText(embeddedWalletAddress).catch(() => {});
+                  void navigator.clipboard.writeText(embeddedWalletAddress).then(() => setEmbeddedAddressCopied(true)).catch(() => {});
                 }}
-                className="text-[11px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] leading-tight hover:text-emerald-300 transition-colors flex items-center gap-1 group"
-                title="Copy address"
+                className={embeddedAddressCopied ? "text-[11px] font-mono font-bold text-emerald-300 drop-shadow-[0_0_10px_rgba(52,211,153,0.3)] leading-tight transition-all duration-200 flex items-center gap-1 group scale-[1.03] animate-pulse" : "text-[11px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] leading-tight hover:text-emerald-300 transition-colors flex items-center gap-1 group"}
+                title={embeddedAddressCopied ? "Copied" : "Copy address"}
               >
-                {shortenAddress(embeddedWalletAddress)}
+                {embeddedAddressCopied ? "Copied" : shortenAddress(embeddedWalletAddress)}
                 <svg className="w-2.5 h-2.5 text-emerald-400/40 group-hover:text-emerald-300 transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <rect x="9" y="9" width="13" height="13" rx="2" />
                   <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />

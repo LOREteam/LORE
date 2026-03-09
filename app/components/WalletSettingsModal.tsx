@@ -31,6 +31,7 @@ interface WalletSettingsModalProps {
   onDepositTokenAmountChange: (value: string) => void;
   onCreateEmbeddedWallet: () => void;
   onCopyEmbeddedAddress: () => void;
+  embeddedAddressCopied?: boolean;
   onExportEmbeddedWallet: () => void;
   onWithdrawToExternal: () => void;
   onDepositEthToEmbedded: () => void;
@@ -68,6 +69,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   onDepositTokenAmountChange,
   onCreateEmbeddedWallet,
   onCopyEmbeddedAddress,
+  embeddedAddressCopied = false,
   onExportEmbeddedWallet,
   onWithdrawToExternal,
   onDepositEthToEmbedded,
@@ -189,7 +191,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
                 <div className="text-xs text-white font-mono break-all mb-3 bg-black/20 px-2 py-1.5 rounded-lg border border-white/[0.04]">{embeddedWalletAddress}</div>
                 <div className="flex flex-wrap gap-2">
                   <UiButton onClick={onCopyEmbeddedAddress} variant="ghost" uppercase size="sm">
-                    Copy
+                    {embeddedAddressCopied ? "Copied" : "Copy"}
                   </UiButton>
                   <UiButton onClick={onExportEmbeddedWallet} variant="ghost" uppercase size="sm">
                     Export

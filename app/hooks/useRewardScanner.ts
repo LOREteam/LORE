@@ -179,16 +179,19 @@ export function useRewardScanner(
 
   const claimReward = useCallback(
     async (epochId: string) => {
+      const silentSend = options?.sendTransactionSilent;
+      if (!silentSend) {
+        alert("Wallet is not ready to claim yet. Please try again in a moment.");
+        return;
+      }
+
       setIsClaiming(true);
       try {
-        const silentSend = options?.sendTransactionSilent;
-        if (silentSend) {
-          const data = encodeFunctionData({
-            abi: GAME_ABI, functionName: "claimReward", args: [BigInt(epochId)],
-          });
-          const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas: BigInt(200_000) });
-          await waitReceipt(hash);
-        }
+        const data = encodeFunctionData({
+          abi: GAME_ABI, functionName: "claimReward", args: [BigInt(epochId)],
+        });
+        const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas: BigInt(200_000) });
+        await waitReceipt(hash);
         setUnclaimedWins((prev) => prev.filter((w) => w.epoch !== epochId));
       } catch (err) {
         if (!isUserRejection(err)) {

@@ -9,6 +9,7 @@ import {
   patchFirebase,
   publicClient,
 } from "../_lib/dataBridge";
+import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 const MAX_CHAIN_RECONCILE_EPOCHS = Number(process.env.API_EPOCHS_RECONCILE_MAX ?? String(DEFAULT_API_EPOCHS_RECONCILE_MAX));
 
 const READ_ABI = parseAbi([
@@ -27,7 +28,14 @@ type EpochRow = {
   resolvedBlock?: string;
 };
 
-export async function GET() {
+export async function GET(request: Request) {
+  const rateLimited = await enforceSharedRateLimit(request, {
+    bucket: "api-epochs",
+    limit: 30,
+    windowMs: 60_000,
+  });
+  if (rateLimited) return rateLimited;
+
   try {
     const [epochsRes, metaRes] = await Promise.all([
       fetchFirebaseJson<Record<string, EpochRow>>("gamedata/epochs"),

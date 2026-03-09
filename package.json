@@ -8,7 +8,7 @@
     "indexer": "tsx scripts/indexer.ts --watch",
     "indexer:once": "tsx scripts/indexer.ts",
     "bot:supervisor": "node scripts/run-bot-forever.mjs",
-    "dev": "concurrently -c \"cyan,magenta\" -n \"SITE,BOT\" \"npm run dev:ui\" \"npm run bot:supervisor\"",
+    "dev": "node scripts/dev-runner.mjs",
     "build": "next build --webpack",
     "start": "next start --port 3001",
     "start:3000": "next start",
