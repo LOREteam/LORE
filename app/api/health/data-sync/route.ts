@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { parseAbi } from "viem";
+import { formatUnits, parseAbi } from "viem";
 import { DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS } from "../../../../config/publicConfig";
 import {
   fetchFirebaseJson,
@@ -76,8 +76,8 @@ export async function GET() {
     const jackpotsInfo = jackpotInfoRaw as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
     const lastDailyEpoch = Number(jackpotsInfo[4]);
     const lastWeeklyEpoch = Number(jackpotsInfo[5]);
-    const lastDailyAmount = Number(jackpotsInfo[6]) / 1e18;
-    const lastWeeklyAmount = Number(jackpotsInfo[7]) / 1e18;
+    const lastDailyAmount = formatUnits(jackpotsInfo[6], 18);
+    const lastWeeklyAmount = formatUnits(jackpotsInfo[7], 18);
 
     const dbJackpots = dbJackpotsRaw.ok && dbJackpotsRaw.data ? Object.values(dbJackpotsRaw.data) : [];
     const dbJackpotKeys = new Set<string>(

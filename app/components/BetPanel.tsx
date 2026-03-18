@@ -128,7 +128,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           size="sm"
           uppercase
           fullWidth
-          className="mb-1 text-[10px]"
+          className="mb-1 min-h-[2.5rem] px-2 text-center text-[9px] leading-tight whitespace-normal sm:text-[10px]"
         >
           ↻ Repeat: {lastBet.tiles.length} tiles × {lastBet.amount} LINEA
         </UiButton>
@@ -142,7 +142,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         uppercase
         fullWidth
         className={cn(
-          "text-[11px]",
+          "min-h-[2.75rem] px-2.5 text-center text-[10px] leading-tight whitespace-normal sm:text-[11px]",
           isDisabled
             ? "bg-[#13132a] text-gray-600 border-white/[0.04]"
             : "text-white bg-gradient-to-r from-violet-600 to-indigo-600 border-violet-500/40 hover:from-violet-500 hover:to-indigo-500 shadow-lg shadow-violet-600/20 hover:shadow-violet-500/30 shimmer-btn",
@@ -354,7 +354,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
         fullWidth
         uppercase
         className={cn(
-          "text-[11px]",
+          "min-h-[2.75rem] px-2.5 text-center text-[10px] leading-tight whitespace-normal sm:text-[11px]",
           isAutoMining && "bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/15 hover:shadow-[0_0_16px_rgba(239,68,68,0.15)]",
           !isAutoMining && !isDisabled && "shimmer-btn",
           !isAutoMining && isDisabled && "bg-[#13132a] text-gray-600 border-white/[0.04]",

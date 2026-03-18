@@ -10,13 +10,10 @@ import {
 } from "@privy-io/react-auth";
 import { useSetActiveWallet } from "@privy-io/wagmi";
 import { useAccount, usePublicClient } from "wagmi";
-import { parseGwei, toHex } from "viem";
-import { lineaSepoliaChain } from "../providers";
+import { toHex } from "viem";
+import { APP_CHAIN_ID, APP_CHAIN_NAME } from "../lib/constants";
+import { getFallbackFeeOverrides, getKeeperFeeOverrides, getLineaFeeOverrides } from "../lib/lineaFees";
 
-/** 105% - keeps tx inclusion without materially overpaying gas. */
-const GAS_BUMP_PERCENT = BigInt(105);
-/** Minimum 0.5 gwei so RPC flukes (e.g. 0.038 gwei) don't cause estimateGas to fail with "Out of gas". */
-const MIN_FEE_PER_GAS_WEI = parseGwei("0.5");
 const SILENT_SEND_TIMEOUT_MS = 45_000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -39,7 +36,7 @@ export function usePrivyWallet() {
   const { createWallet } = useCreateWallet();
   const { sendTransaction } = useSendTransaction();
   const { address } = useAccount();
-  const publicClient = usePublicClient({ chainId: lineaSepoliaChain.id });
+  const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
 
   const embeddedWallet = useMemo(() => getEmbeddedConnectedWallet(wallets), [wallets]);
   const externalWallet = useMemo(() => {
@@ -76,7 +73,7 @@ export function usePrivyWallet() {
 
   const sendTransactionSilent = useCallback(
     async (
-      tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint },
+      tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number },
       gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint },
     ) => {
       if (!embeddedWallet || !embeddedWalletAddress) throw new Error("Privy embedded wallet not found.");
@@ -86,8 +83,9 @@ export function usePrivyWallet() {
         to: tx.to,
         data: tx.data,
         value: tx.value !== undefined && tx.value !== BigInt(0) ? tx.value : undefined,
-        chainId: lineaSepoliaChain.id,
+        chainId: APP_CHAIN_ID,
         ...(tx.gas ? { gas: tx.gas } : {}),
+        ...(tx.nonce !== undefined ? { nonce: BigInt(tx.nonce) } : {}),
       };
       if (gasOverrides && ("maxFeePerGas" in gasOverrides || "gasPrice" in gasOverrides)) {
         if (gasOverrides.maxFeePerGas) baseRequest.maxFeePerGas = gasOverrides.maxFeePerGas;
@@ -96,19 +94,20 @@ export function usePrivyWallet() {
       } else if (publicClient) {
         try {
           const fees = await publicClient.estimateFeesPerGas();
-          if (fees?.maxFeePerGas && fees?.maxPriorityFeePerGas) {
-            let maxFee = (fees.maxFeePerGas * GAS_BUMP_PERCENT) / BigInt(100);
-            let maxPri = (fees.maxPriorityFeePerGas * GAS_BUMP_PERCENT) / BigInt(100);
-            if (maxFee < MIN_FEE_PER_GAS_WEI) maxFee = MIN_FEE_PER_GAS_WEI;
-            if (maxPri < MIN_FEE_PER_GAS_WEI) maxPri = MIN_FEE_PER_GAS_WEI;
-            baseRequest.maxFeePerGas = maxFee;
-            baseRequest.maxPriorityFeePerGas = maxPri;
-          } else if (fees?.gasPrice) {
-            const gasPrice = (fees.gasPrice * GAS_BUMP_PERCENT) / BigInt(100);
-            baseRequest.gasPrice = gasPrice < MIN_FEE_PER_GAS_WEI ? MIN_FEE_PER_GAS_WEI : gasPrice;
-          }
+          const overrides = tx.gas
+            ? getKeeperFeeOverrides(fees, APP_CHAIN_ID)
+            : getLineaFeeOverrides(fees, APP_CHAIN_ID);
+          if (overrides?.maxFeePerGas) baseRequest.maxFeePerGas = overrides.maxFeePerGas;
+          if (overrides?.maxPriorityFeePerGas) baseRequest.maxPriorityFeePerGas = overrides.maxPriorityFeePerGas;
+          if (overrides?.gasPrice) baseRequest.gasPrice = overrides.gasPrice;
         } catch {
-          /* let wallet decide gas */
+          const overrides = getFallbackFeeOverrides(
+            APP_CHAIN_ID,
+            tx.gas ? "keeper" : "normal",
+          );
+          if (overrides.maxFeePerGas) baseRequest.maxFeePerGas = overrides.maxFeePerGas;
+          if (overrides.maxPriorityFeePerGas) baseRequest.maxPriorityFeePerGas = overrides.maxPriorityFeePerGas;
+          if (overrides.gasPrice) baseRequest.gasPrice = overrides.gasPrice;
         }
       }
       const receipt = await withTimeout(
@@ -129,9 +128,9 @@ export function usePrivyWallet() {
       // External-wallet flow: trigger the wallet's own send tx prompt directly.
       // This is more reliable than routing through embedded sendTransaction flow.
       const provider = await externalWallet.getEthereumProvider();
-      const targetChainIdHex = toHex(lineaSepoliaChain.id) as `0x${string}`;
+      const targetChainIdHex = toHex(APP_CHAIN_ID) as `0x${string}`;
       try {
-        await externalWallet.switchChain(lineaSepoliaChain.id);
+        await externalWallet.switchChain(APP_CHAIN_ID);
       } catch (switchErr) {
         console.warn("[PrivyWallet] switchChain failed, trying EIP-1193 fallback:", switchErr);
         await provider.request({
@@ -143,7 +142,7 @@ export function usePrivyWallet() {
       }
       const currentChainId = (await provider.request({ method: "eth_chainId" }) as string | undefined)?.toLowerCase();
       if (!currentChainId || currentChainId !== targetChainIdHex.toLowerCase()) {
-        throw new Error("Switch your external wallet to Linea Sepolia and try again.");
+        throw new Error(`Switch your external wallet to ${APP_CHAIN_NAME} and try again.`);
       }
       const requestTx: {
         from: `0x${string}`;

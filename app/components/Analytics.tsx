@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { DepositEntry } from "../hooks/useDepositHistory";
 import type { JackpotHistoryEntry } from "../hooks/useJackpotHistory";
 import { loadingQuotes, emptyStates } from "../lib/loreTexts";
+import { EXPLORER_TX_BASE_URL } from "../lib/constants";
 import { LoreText } from "./LoreText";
 import { UiButton } from "./ui/UiButton";
 import { UiBadge } from "./ui/UiBadge";
@@ -854,7 +855,7 @@ export const Analytics = React.memo(function Analytics({
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         {d.txHash ? (
                           <a
-                            href={`https://sepolia.lineascan.build/tx/${d.txHash}`}
+                            href={`${EXPLORER_TX_BASE_URL}/${d.txHash}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-xs font-mono text-violet-400/60 hover:text-violet-400 transition-colors"
@@ -972,7 +973,7 @@ export const Analytics = React.memo(function Analytics({
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       {j.txHash ? (
                         <a
-                          href={`https://sepolia.lineascan.build/tx/${j.txHash}`}
+                          href={`${EXPLORER_TX_BASE_URL}/${j.txHash}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-xs font-mono text-violet-400/60 hover:text-violet-400 transition-colors"

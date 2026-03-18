@@ -1,23 +1,40 @@
-import { createPublicClient, http } from "viem";
-import { lineaSepolia } from "viem/chains";
+import { createPublicClient, fallback, http } from "viem";
 import {
-  DEFAULT_CONTRACT_ADDRESS,
-  DEFAULT_FIREBASE_DB_URL,
-  DEFAULT_INDEXER_START_BLOCK,
+  getConfiguredContractAddress,
+  getConfiguredFirebaseDbUrl,
+  getConfiguredDeployBlock,
+  getConfiguredLineaNetwork,
+  getLineaChain,
+  getPreferredLineaRpcs,
 } from "../../../config/publicConfig";
 
-export const FIREBASE_DB_URL =
-  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL ||
-  DEFAULT_FIREBASE_DB_URL;
+export const APP_NETWORK = getConfiguredLineaNetwork();
+export const APP_CHAIN = getLineaChain(APP_NETWORK);
+
+export const FIREBASE_DB_URL = getConfiguredFirebaseDbUrl(
+  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
+  APP_NETWORK,
+);
 export const FIREBASE_DB_AUTH = process.env.FIREBASE_DB_AUTH ?? "";
-export const CONTRACT_ADDRESS = (process.env.KEEPER_CONTRACT_ADDRESS ||
-  DEFAULT_CONTRACT_ADDRESS) as `0x${string}`;
-export const CONTRACT_DEPLOY_BLOCK = BigInt(process.env.INDEXER_START_BLOCK ?? String(DEFAULT_INDEXER_START_BLOCK));
-export const RPC_URL = process.env.KEEPER_RPC_URL || "https://rpc.sepolia.linea.build";
+export const CONTRACT_ADDRESS = getConfiguredContractAddress(
+  process.env.KEEPER_CONTRACT_ADDRESS ??
+    process.env.NEXT_PUBLIC_CONTRACT_ADDRESS,
+  APP_NETWORK,
+) as `0x${string}`;
+export const CONTRACT_DEPLOY_BLOCK = getConfiguredDeployBlock(
+  process.env.INDEXER_START_BLOCK ??
+    process.env.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK,
+  APP_NETWORK,
+);
+export const SERVER_RPC_URLS = getPreferredLineaRpcs(process.env.KEEPER_RPC_URL, APP_NETWORK);
+export const RPC_URL = SERVER_RPC_URLS[0];
 
 export const publicClient = createPublicClient({
-  chain: lineaSepolia,
-  transport: http(RPC_URL, { timeout: 20_000, retryCount: 1 }),
+  chain: APP_CHAIN,
+  transport: fallback(
+    SERVER_RPC_URLS.map((url) => http(url, { timeout: 20_000, retryCount: 1 })),
+    { rank: true },
+  ),
 });
 
 type QueryValue = string | number | boolean;

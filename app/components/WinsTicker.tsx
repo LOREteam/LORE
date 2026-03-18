@@ -20,23 +20,37 @@ function WinItem({ w }: { w: RecentWin }) {
   );
 }
 
-export const WinsTicker = memo(function WinsTicker({ wins }: { wins: RecentWin[] }) {
+export const WinsTicker = memo(function WinsTicker({
+  wins,
+  reducedMotion = false,
+}: {
+  wins: RecentWin[];
+  reducedMotion?: boolean;
+}) {
   const duration = Math.max(wins.length * 3, 20);
 
   return (
-    <div className="w-full overflow-hidden bg-[#0d0d1a]/80 border border-violet-500/10 backdrop-blur-sm h-5 flex items-center relative">
+    <div className={`w-full bg-[#0d0d1a]/80 border border-violet-500/10 backdrop-blur-sm h-5 flex items-center relative ${reducedMotion ? "overflow-x-auto overflow-y-hidden" : "overflow-hidden"}`}>
       {wins.length > 0 ? (
-        <div
-          className="flex whitespace-nowrap animate-ticker"
-          style={{ animationDuration: `${duration}s` }}
-        >
-          {wins.map((w, i) => (
-            <WinItem key={`a-${w.epoch}-${w.user}-${i}`} w={w} />
-          ))}
-          {wins.map((w, i) => (
-            <WinItem key={`b-${w.epoch}-${w.user}-${i}`} w={w} />
-          ))}
-        </div>
+        reducedMotion ? (
+          <div className="flex min-w-max whitespace-nowrap pr-2">
+            {wins.map((w, i) => (
+              <WinItem key={`static-${w.epoch}-${w.user}-${i}`} w={w} />
+            ))}
+          </div>
+        ) : (
+          <div
+            className="flex whitespace-nowrap animate-ticker"
+            style={{ animationDuration: `${duration}s` }}
+          >
+            {wins.map((w, i) => (
+              <WinItem key={`a-${w.epoch}-${w.user}-${i}`} w={w} />
+            ))}
+            {wins.map((w, i) => (
+              <WinItem key={`b-${w.epoch}-${w.user}-${i}`} w={w} />
+            ))}
+          </div>
+        )
       ) : (
         <span className="text-[9px] text-gray-500 px-3 whitespace-nowrap">
           Recent wins will appear here after claims on-chain

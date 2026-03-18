@@ -10,7 +10,7 @@ import { uiTokens } from "./ui/tokens";
    LORE White Paper – fully animated, single-page
    ═══════════════════════════════════════════ */
 
-const CONTRACT = "0xb538...4c56";
+const CONTRACT = "0xa230...7d36";
 const TOKEN = "0x6F17...F180";
 
 export const WhitePaper = React.memo(function WhitePaper() {
@@ -74,7 +74,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
             by the smart contract. If your bet is on the winning tile – you take a proportional share of the entire round&apos;s reward pool.
           </P>
           <P>
-            On top of the base reward, <Accent>LORE V5</Accent> introduces a <B>dual jackpot system</B>: a <Accent>Daily Jackpot</Accent> (2%) and a <Accent>Weekly Jackpot</Accent> (3%).
+            On top of the base reward, <Accent>LORE V6</Accent> introduces a <B>dual jackpot system</B>: a <Accent>Daily Jackpot</Accent> (2%) and a <Accent>Weekly Jackpot</Accent> (3%).
             Every round, a portion of the pool accrues into these jackpot reserves. Once per day and once per week, one lucky round
             triggers the jackpot – and the <B>entire accumulated jackpot pool</B> is added to that round&apos;s winners.
           </P>
@@ -104,7 +104,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
             { step: "2", title: "Place Bets", desc: "Select one or more tiles and stake LINEA tokens. Each tile accumulates its own pool from all players." },
             { step: "3", title: "Epoch Ends", desc: "When the timer reaches zero, no more bets are accepted. The smart contract resolves the epoch." },
             { step: "4", title: "Winner Revealed", desc: "The contract computes the winning tile from on-chain entropy (prevrandao + previous block hash + epoch/pool state) and maps it to 1–25." },
-            { step: "5", title: "Fees Split", desc: "The pool is split: 92% to winners, 2% to daily jackpot, 3% to weekly jackpot, 2% to devs (half of that to referrals), 1% burn." },
+            { step: "5", title: "Fees Split", desc: "The pool is split: 92% to winners, 2% to daily jackpot, 3% to weekly jackpot, 2% protocol fee (half to treasury, half to player rebates), 1% burn." },
             { step: "6", title: "Jackpot Check", desc: "If there is at least one winner, the contract runs daily/weekly random checks using prevrandao + time window variables. On trigger, the full jackpot pool is added to this epoch." },
             { step: "7", title: "Claim Rewards", desc: "Winners claim their share via the Reward Scanner. If no one hit the winning tile – the base reward rolls into the next round, and jackpot pools keep growing." },
           ]} />
@@ -121,7 +121,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
             <StatCard label="Winners" value="92%" sub="base reward to winning-tile holders" color="emerald" />
             <StatCard label="Daily Jackpot" value="2%" sub="accrues every round, triggers once/day" color="amber" />
             <StatCard label="Weekly Jackpot" value="3%" sub="accrues every round, triggers once/week" color="sky" />
-            <StatCard label="Dev + Burn" value="3%" sub="2% devs (half to referrers), 1% burn" color="violet" />
+            <StatCard label="Protocol + Burn" value="3%" sub="2% protocol fee (1% treasury, 1% rebates), 1% burn" color="violet" />
           </Grid2>
           <InfoBox emoji="🎰" title="Dual Jackpot System">
             Every round, 2% feeds the <Accent>Daily Jackpot</Accent> pool and 3% feeds the <Accent>Weekly Jackpot</Accent> pool.
@@ -136,9 +136,9 @@ export const WhitePaper = React.memo(function WhitePaper() {
             If nobody bet on the winning tile in a round, the base reward (92%) goes back into the <Accent>rollover pool</Accent>, and jackpot pools keep growing – no jackpot can trigger without a real winner.
             This means jackpots can only get <B>bigger</B> over time.
           </InfoBox>
-          <InfoBox emoji="🔥" title="Burn & Dev Fee">
+          <InfoBox emoji="🔥" title="Burn & Rebate Fee">
             1% of every round is permanently burned (sent to <Code>0x...dEaD</Code>), reducing supply forever.
-            2% goes to devs; half of that (1% of the total pool) is distributed to referrers whose referred players bet in that round.
+            2% goes to protocol accounting: half to treasury and half to a participation rebate pool distributed in LINEA to players who bet in that round.
           </InfoBox>
           <P>
             No one can print new tokens, freeze transfers, or blacklist your wallet – the token is simple and predictable.
@@ -190,26 +190,25 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         <Divider />
 
-        <Section id="referral" badge="06" title="Referral Program" icon={RefIcon} delay={0.25}>
+        <Section id="rebate" badge="06" title="Participation Rebate" icon={RefIcon} delay={0.25}>
           <P>
-            LORE has a built-in on-chain referral program. Register a referral code, share the link, bring new players, and earn a cut of every bet they place.
-            Your address is never shown in the link – only a short hex code.
+            LORE V6 uses an on-chain <Accent>participation rebate</Accent> instead of referrals. A portion of every epoch is reserved
+            for players who actually spent gas and placed bets in that round.
           </P>
           <Grid2>
-            <FeatureCard icon="🔑" title="Unique Code" desc="Generated from your wallet, stored on-chain. Your address stays private." />
-            <FeatureCard icon="📝" title="On-Chain Binding" desc="Referrer is set once per wallet and stored permanently in the contract." />
-            <FeatureCard icon="💰" title="~1% of Bets" desc="Half of the 2% dev fee is split among referrers proportionally." />
-            <FeatureCard icon="🏦" title="Claim Anytime" desc="Earnings accumulate in the contract. Claim whenever you want." />
+            <FeatureCard icon="⛏" title="Bet To Earn" desc="Every player who bets in an epoch becomes eligible for that epoch's rebate share." />
+            <FeatureCard icon="📊" title="Volume Based" desc="The rebate is split proportionally to your total LINEA volume in that epoch." />
+            <FeatureCard icon="💰" title="1% Rebate Pool" desc="Half of the 2% protocol fee is reserved for players instead of referrals." />
+            <FeatureCard icon="🏦" title="Claim Anytime" desc="Rebates accumulate in the contract and can be claimed later in batches." />
           </Grid2>
-          <InfoBox emoji="🤝" title="How Referral Payouts Work">
-            Each round, 2% of the pool goes to devs. Half of that (1% of the total pool) is split among all referrers
-            proportionally to how much their referred players bet in that round.
-            If a player has no referrer, their share stays with the team.
-            Earnings accumulate in a pending balance inside the contract – referrers claim them at any time with a single transaction, paying only their own gas.
+          <InfoBox emoji="🤝" title="How Participation Rebate Works">
+            Each round, 2% of the pool goes to protocol accounting. Half of that stays with treasury, and the other half
+            becomes the epoch rebate pool. After the epoch resolves, every player can claim their LINEA rebate in
+            proportion to how much they personally staked in that round.
           </InfoBox>
           <P>
-            To start earning, go to the <Accent>Referral</Accent> tab, register your code, copy the link, and share it.
-            When someone opens the link and connects their wallet, your code is set as their referrer permanently on-chain.
+            To collect it, go to the <Accent>Rebate</Accent> tab. The UI shows your pending rebate, claimable epochs, and recent
+            rounds where you earned a LINEA bonus back from protocol fees.
           </P>
         </Section>
 
@@ -240,13 +239,13 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         <Section id="contract" badge="08" title="Smart Contracts" icon={ContractIcon} delay={0.35}>
           <P>
-            LORE V5 is powered by two contracts on <Accent>Linea</Accent>:
+            LORE is currently served by the live V6 deployment on <Accent>Linea</Accent>:
           </P>
           <div className="space-y-3 mb-6">
             <ContractCard
-              name="Game Contract (LineaOreV5)"
+              name="Game Contract (LineaOreV6 live)"
               address={CONTRACT}
-              functions={["placeBet()", "placeBatchBets()", "claimReward()", "resolveEpoch()", "getJackpotInfo()", "registerReferralCode()", "setReferrer()", "claimReferralEarnings()"]}
+              functions={["placeBet()", "placeBatchBets()", "claimReward()", "resolveEpoch()", "claimEpochRebate()", "claimEpochsRebate()", "getJackpotInfo()", "getRebateSummary()"]}
             />
             <ContractCard
               name="LINEA Token"
@@ -260,7 +259,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
           <ul className="space-y-2 mb-6 ml-1">
             <Li emoji="🎲">Verifiable winner randomness: <Code>keccak256(prevrandao, blockhash(n-1), epoch, totalPoolWithRollover, dailyPool, weeklyPool) % 25 + 1</Code></Li>
             <Li emoji="🔒">No admin withdrawal functions – funds are only claimable by winners via <Code>claimReward()</Code></Li>
-            <Li emoji="📊"><Code>getTileData()</Code> returns all 25 tiles&apos; stakes and player counts in one call</Li>
+            <Li emoji="📊"><Code>getTileData()</Code> returns all 25 tiles&apos; stake totals in one call; per-tile player counts are derived off-chain from bet events</Li>
             <Li emoji="⏰">Epoch end times enforced on-chain – no bets after the deadline</Li>
             <Li emoji="🎰">Daily/weekly jackpot trigger uses on-chain hazard checks with <Code>keccak256(prevrandao, &quot;daily/weekly&quot;, epoch, lastCheck, block.timestamp)</Code></Li>
             <Li emoji="♻️">Rollover: if nobody hit the winning tile, the 92% base reward flows into the <Code>rolloverPool</Code>, inflating the next round</Li>
@@ -654,7 +653,7 @@ function FormulaBlock() {
 function RoadmapTimeline() {
   const phases = [
     { phase: "Phase 1", status: "live", title: "Core Game", items: ["5×5 mining grid", "Manual betting", "Reward claiming", "Analytics module"] },
-    { phase: "Phase 2", status: "live", title: "Auto-Miner & Referrals", items: ["Automated betting bot", "Privy embedded wallet", "On-chain referral program", "Session persistence"] },
+    { phase: "Phase 2", status: "live", title: "Auto-Miner & Rebates", items: ["Automated betting bot", "Privy embedded wallet", "Participation rebate system", "Session persistence"] },
     { phase: "Phase 3", status: "live", title: "Jackpots & Leaderboards", items: ["Daily Jackpot (2%)", "Weekly Jackpot (3%)", "Rollover pool", "Leaderboard system", "Achievements"] },
     { phase: "Phase 4", status: "next", title: "Growth & Features", items: ["Dynamic epoch durations", "Mobile-optimized UI", "Public API for stats", "Token?"] },
   ];

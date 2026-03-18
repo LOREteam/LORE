@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { formatUnits } from "viem";
 import { usePrivy } from "@privy-io/react-auth";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
@@ -13,6 +13,7 @@ function fmtToken(v?: bigint) {
 
 export default function AdminPage() {
   const { address } = useAccount();
+  const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
   const { login } = usePrivy();
   const { writeContractAsync } = useWriteContract();
   const [nextDuration, setNextDuration] = useState("60");
@@ -86,17 +87,28 @@ export default function AdminPage() {
     ]);
   };
 
+  const waitReceipt = async (hash: `0x${string}`) => {
+    if (!publicClient) throw new Error("publicClient unavailable");
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status !== "success") {
+      throw new Error(`Transaction reverted: ${hash}`);
+    }
+  };
+
   const onFlush = async () => {
     try {
       setBusy("flush");
-      await writeContractAsync({
+      const hash = await writeContractAsync({
         address: CONTRACT_ADDRESS,
         abi: GAME_ABI,
         functionName: "flushProtocolFees",
         args: [],
         chainId: APP_CHAIN_ID,
       });
+      await waitReceipt(hash);
       await refetchAll();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
@@ -105,14 +117,17 @@ export default function AdminPage() {
   const onClaimResolver = async () => {
     try {
       setBusy("resolver");
-      await writeContractAsync({
+      const hash = await writeContractAsync({
         address: CONTRACT_ADDRESS,
         abi: GAME_ABI,
         functionName: "claimResolverRewards",
         args: [],
         chainId: APP_CHAIN_ID,
       });
+      await waitReceipt(hash);
       await refetchAll();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
@@ -126,14 +141,17 @@ export default function AdminPage() {
     }
     try {
       setBusy("schedule");
-      await writeContractAsync({
+      const hash = await writeContractAsync({
         address: CONTRACT_ADDRESS,
         abi: GAME_ABI,
         functionName: "scheduleEpochDuration",
         args: [BigInt(Math.floor(n))],
         chainId: APP_CHAIN_ID,
       });
+      await waitReceipt(hash);
       await refetchAll();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
@@ -142,14 +160,17 @@ export default function AdminPage() {
   const onCancelDuration = async () => {
     try {
       setBusy("cancel");
-      await writeContractAsync({
+      const hash = await writeContractAsync({
         address: CONTRACT_ADDRESS,
         abi: GAME_ABI,
         functionName: "cancelEpochDurationChange",
         args: [],
         chainId: APP_CHAIN_ID,
       });
+      await waitReceipt(hash);
       await refetchAll();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
@@ -225,4 +246,3 @@ export default function AdminPage() {
     </main>
   );
 }
-

@@ -40,6 +40,7 @@ interface HeaderProps {
   onToggleMute: () => void;
   recentWins?: RecentWin[];
   showWinsTicker?: boolean;
+  reducedMotion?: boolean;
   epochDurationChange?: {
     current: number | null;
     next: number;
@@ -67,6 +68,7 @@ export const Header = React.memo(function Header({
   onToggleMute,
   recentWins = [],
   showWinsTicker = false,
+  reducedMotion = false,
   epochDurationChange = null,
 }: HeaderProps) {
   const { login, logout, authenticated } = usePrivy();
@@ -196,7 +198,7 @@ export const Header = React.memo(function Header({
   return (
     <>
     {jackpotInfo && (jackpotInfo.dailyPool > 0 || jackpotInfo.weeklyPool > 0) && (
-      <div className="grid grid-cols-2 gap-1.5 mb-1.5 animate-slide-up" style={{ animationDelay: "0s" }}>
+      <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-1.5 mb-1.5 animate-slide-up" style={{ animationDelay: "0s" }}>
         {/* Daily Jackpot */}
         <div className="relative overflow-hidden rounded-lg border border-amber-500/25 bg-[#0d0d1a] group hover:border-amber-500/40 transition-all duration-300">
           <div className="absolute inset-0 bg-gradient-to-r from-amber-500/[0.04] to-transparent pointer-events-none" />
@@ -206,17 +208,17 @@ export const Header = React.memo(function Header({
               <div className="absolute inset-0 bg-gradient-to-r from-transparent via-amber-300/[0.25] to-transparent animate-gradient-x" />
             </div>
           )}
-          <div className="relative z-10 px-2.5 py-1.5">
+          <div className="relative z-10 px-2 py-1.5 sm:px-2.5">
             {nowMs < dailyAwardVisibleUntil && jackpotInfo.lastDailyJackpotEpoch ? (
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-col items-start gap-1.5 min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-sm">🎉</span>
-                  <span className="text-[12px] font-black text-amber-300 uppercase tracking-[0.16em] animate-pulse">
+                  <span className="text-xs sm:text-sm">🎉</span>
+                  <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-amber-300 animate-pulse sm:text-[12px] sm:tracking-[0.16em]">
                     Daily Jackpot Awarded
                   </span>
                 </div>
-                <div className="text-right shrink-0">
-                  <div className="text-[12px] font-black text-amber-300 tabular-nums">
+                <div className="text-left min-[520px]:text-right shrink-0">
+                  <div className="text-[11px] sm:text-[12px] font-black text-amber-300 tabular-nums">
                     +{jackpotInfo.lastDailyJackpotAmount.toFixed(2)} LINEA
                   </div>
                   <div className="text-[8px] text-amber-200/75 font-bold uppercase tracking-wider">
@@ -226,35 +228,35 @@ export const Header = React.memo(function Header({
               </div>
             ) : (
               dailyAwardedToday && jackpotInfo.lastDailyJackpotEpoch ? (
-                <div className="flex items-center justify-between gap-2 min-h-[38px]">
-                  <div className="flex items-center gap-1.5 min-w-0">
+                <div className="flex flex-col items-start gap-1.5 min-h-[38px] min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
+                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0">
                     <span className="text-xs drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]">🎰</span>
-                    <span className="text-[12px] font-black text-amber-300 uppercase tracking-[0.16em]">
+                    <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-amber-300 sm:text-[12px] sm:tracking-[0.16em]">
                       Next Daily Jackpot
                     </span>
-                    <span className="text-[15px] font-black text-amber-400 tabular-nums leading-none">{jackpotInfo.dailyPool.toFixed(2)}</span>
-                    <span className="text-[10px] text-amber-400/75 font-black tracking-wide">LINEA</span>
+                    <span className="text-[13px] sm:text-[15px] font-black text-amber-400 tabular-nums leading-none">{jackpotInfo.dailyPool.toFixed(2)}</span>
+                    <span className="text-[9px] sm:text-[10px] text-amber-400/75 font-black tracking-wide">LINEA</span>
                   </div>
-                  <div className="w-[8.5rem] shrink-0 flex flex-col items-end justify-center">
+                  <div className="w-full min-[520px]:w-[8.5rem] shrink-0 flex flex-col items-start min-[520px]:items-end justify-center">
                     <p className="text-[7px] text-emerald-300/80 font-semibold leading-tight text-right">
                       Today JACKPOT was awarded
                     </p>
-                    <p className="text-[7px] text-emerald-300/65 mt-0.5 font-semibold leading-tight text-right">
+                    <p className="text-[7px] text-emerald-300/65 mt-0.5 font-semibold leading-tight">
                       (epoch #{jackpotInfo.lastDailyJackpotEpoch})
                     </p>
                   </div>
                 </div>
               ) : (
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 min-w-0">
+                <div className="flex flex-col items-start gap-1.5 min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
+                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0">
                     <span className="text-xs drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]">🎰</span>
-                    <span className="text-[12px] font-black text-amber-300 uppercase tracking-[0.16em] animate-pulse">
+                    <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-amber-300 animate-pulse sm:text-[12px] sm:tracking-[0.16em]">
                       Daily Jackpot
                     </span>
-                    <span className="text-[15px] font-black text-amber-400 tabular-nums leading-none">{jackpotInfo.dailyPool.toFixed(2)}</span>
-                    <span className="text-[10px] text-amber-400/75 font-black tracking-wide">LINEA</span>
+                    <span className="text-[13px] sm:text-[15px] font-black text-amber-400 tabular-nums leading-none">{jackpotInfo.dailyPool.toFixed(2)}</span>
+                    <span className="text-[9px] sm:text-[10px] text-amber-400/75 font-black tracking-wide">LINEA</span>
                   </div>
-                  <div className="w-[8.5rem] shrink-0">
+                  <div className="w-full min-[520px]:w-[8.5rem] shrink-0">
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-[7px] text-amber-500/45 font-semibold uppercase tracking-wide">Window</span>
                       <span className="text-[7px] text-amber-300/70 font-bold tabular-nums">{dailyWindow.leftLabel}</span>
@@ -265,7 +267,7 @@ export const Header = React.memo(function Header({
                         style={{ width: `${dailyWindow.pct}%` }}
                       />
                     </div>
-                    <p className="text-[7px] mt-0.5 font-semibold text-amber-300/65">
+                    <p className="text-[7px] mt-0.5 font-semibold text-amber-300/65 leading-tight">
                       Day window progress - random trigger any time
                     </p>
                   </div>
@@ -284,17 +286,17 @@ export const Header = React.memo(function Header({
               <div className="absolute inset-0 bg-gradient-to-r from-transparent via-violet-300/[0.25] to-transparent animate-gradient-x" />
             </div>
           )}
-          <div className="relative z-10 px-2.5 py-1.5">
+          <div className="relative z-10 px-2 py-1.5 sm:px-2.5">
             {nowMs < weeklyAwardVisibleUntil && jackpotInfo.lastWeeklyJackpotEpoch ? (
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-col items-start gap-1.5 min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-sm">🎉</span>
-                  <span className="text-[12px] font-black text-violet-300 uppercase tracking-[0.16em] animate-pulse">
+                  <span className="text-xs sm:text-sm">🎉</span>
+                  <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-violet-300 animate-pulse sm:text-[12px] sm:tracking-[0.16em]">
                     Weekly Jackpot Awarded
                   </span>
                 </div>
-                <div className="text-right shrink-0">
-                  <div className="text-[12px] font-black text-violet-300 tabular-nums">
+                <div className="text-left min-[520px]:text-right shrink-0">
+                  <div className="text-[11px] sm:text-[12px] font-black text-violet-300 tabular-nums">
                     +{jackpotInfo.lastWeeklyJackpotAmount.toFixed(2)} LINEA
                   </div>
                   <div className="text-[8px] text-violet-200/75 font-bold uppercase tracking-wider">
@@ -304,35 +306,35 @@ export const Header = React.memo(function Header({
               </div>
             ) : (
               weeklyAwardedThisWeek && jackpotInfo.lastWeeklyJackpotEpoch ? (
-                <div className="flex items-center justify-between gap-2 min-h-[38px]">
-                  <div className="flex items-center gap-1.5 min-w-0">
+                <div className="flex flex-col items-start gap-1.5 min-h-[38px] min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
+                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0">
                     <span className="text-xs drop-shadow-[0_0_4px_rgba(139,92,246,0.5)]">💎</span>
-                    <span className="text-[12px] font-black text-violet-300 uppercase tracking-[0.16em]">
+                    <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-violet-300 sm:text-[12px] sm:tracking-[0.16em]">
                       Next Weekly Jackpot
                     </span>
-                    <span className="text-[15px] font-black text-violet-400 tabular-nums leading-none">{jackpotInfo.weeklyPool.toFixed(2)}</span>
-                    <span className="text-[10px] text-violet-400/75 font-black tracking-wide">LINEA</span>
+                    <span className="text-[13px] sm:text-[15px] font-black text-violet-400 tabular-nums leading-none">{jackpotInfo.weeklyPool.toFixed(2)}</span>
+                    <span className="text-[9px] sm:text-[10px] text-violet-400/75 font-black tracking-wide">LINEA</span>
                   </div>
-                  <div className="w-[8.5rem] shrink-0 flex flex-col items-end justify-center">
+                  <div className="w-full min-[520px]:w-[8.5rem] shrink-0 flex flex-col items-start min-[520px]:items-end justify-center">
                     <p className="text-[7px] text-emerald-300/80 font-semibold leading-tight text-right">
                       This week JACKPOT was awarded
                     </p>
-                    <p className="text-[7px] text-emerald-300/65 mt-0.5 font-semibold leading-tight text-right">
+                    <p className="text-[7px] text-emerald-300/65 mt-0.5 font-semibold leading-tight">
                       (epoch #{jackpotInfo.lastWeeklyJackpotEpoch})
                     </p>
                   </div>
                 </div>
               ) : (
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 min-w-0">
+                <div className="flex flex-col items-start gap-1.5 min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
+                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0">
                     <span className="text-xs drop-shadow-[0_0_4px_rgba(139,92,246,0.5)]">💎</span>
-                    <span className="text-[12px] font-black text-violet-300 uppercase tracking-[0.16em] animate-pulse">
+                    <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-violet-300 animate-pulse sm:text-[12px] sm:tracking-[0.16em]">
                       Weekly Jackpot
                     </span>
-                    <span className="text-[15px] font-black text-violet-400 tabular-nums leading-none">{jackpotInfo.weeklyPool.toFixed(2)}</span>
-                    <span className="text-[10px] text-violet-400/75 font-black tracking-wide">LINEA</span>
+                    <span className="text-[13px] sm:text-[15px] font-black text-violet-400 tabular-nums leading-none">{jackpotInfo.weeklyPool.toFixed(2)}</span>
+                    <span className="text-[9px] sm:text-[10px] text-violet-400/75 font-black tracking-wide">LINEA</span>
                   </div>
-                  <div className="w-[8.5rem] shrink-0">
+                  <div className="w-full min-[520px]:w-[8.5rem] shrink-0">
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-[7px] text-violet-500/45 font-semibold uppercase tracking-wide">Window</span>
                       <span className="text-[7px] text-violet-300/70 font-bold tabular-nums">{weeklyWindow.leftLabel}</span>
@@ -343,7 +345,7 @@ export const Header = React.memo(function Header({
                         style={{ width: `${weeklyWindow.pct}%` }}
                       />
                     </div>
-                    <p className="text-[7px] mt-0.5 font-semibold text-violet-300/65">
+                    <p className="text-[7px] mt-0.5 font-semibold text-violet-300/65 leading-tight">
                       Week window progress - random trigger any time
                     </p>
                   </div>
@@ -358,31 +360,31 @@ export const Header = React.memo(function Header({
     <header className="grid grid-cols-1 min-[900px]:grid-cols-12 gap-2 mb-2">
       {/* ═══ Epoch + WinsTicker ═══ */}
       <div className="min-[900px]:col-span-4 flex flex-col rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up overflow-hidden" style={{ animationDelay: "0.05s" }}>
-        <div className="grid grid-cols-[7rem_1fr_5.5rem] items-stretch shrink-0">
+        <div className="grid grid-cols-[5.25rem_minmax(0,1fr)_4.25rem] sm:grid-cols-[7rem_minmax(0,1fr)_5.5rem] items-stretch shrink-0">
         {/* LEFT – Epoch */}
         <div className="flex flex-col items-center justify-center py-1.5 px-1">
-          <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Epoch</div>
-          <div className="rounded-md overflow-visible w-full max-w-[6.25rem] mx-auto">
+          <div className="text-[8px] sm:text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Epoch</div>
+          <div className="rounded-md overflow-visible w-full max-w-[5rem] sm:max-w-[6.25rem] mx-auto">
             <div
-              className={`px-2.5 h-[1.75rem] rounded-md border flex items-center justify-center gap-1.5 transition-colors duration-200 ${
+              className={`px-1.5 sm:px-2.5 h-[1.75rem] rounded-md border flex items-center justify-center gap-1 sm:gap-1.5 transition-colors duration-200 ${
                 isRevealing
                   ? "bg-amber-500/15 border-amber-500/40 text-amber-400 reveal-glow"
                   : "bg-violet-500/10 border-violet-500/30 text-violet-400"
               }`}
             >
             <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isRevealing ? "bg-amber-400 reveal-dot" : "bg-emerald-400 animate-synced-pulse"}`} />
-            <span className={`text-[11px] font-bold uppercase tracking-widest whitespace-nowrap ${isRevealing ? "reveal-text-blink" : ""}`}>
-              {isRevealing ? "REVEALING" : visualEpoch ? `#${visualEpoch}` : "SYNC"}
+            <span className={`text-[9px] font-bold uppercase tracking-[0.08em] sm:text-[11px] sm:tracking-widest whitespace-nowrap ${isRevealing ? "reveal-text-blink" : ""}`}>
+              {isRevealing ? "REVEAL" : visualEpoch ? `#${visualEpoch}` : "SYNC"}
             </span>
           </div>
           </div>
         </div>
 
         {/* CENTER – Timer (expands to fill, content fixed) */}
-        <div className="flex flex-col items-center justify-center py-1.5 border-x border-white/[0.06]">
-          <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Timer</div>
+        <div className="flex flex-col items-center justify-center py-1.5 border-x border-white/[0.06] min-w-0">
+          <div className="text-[8px] sm:text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Timer</div>
           <div
-            className={`w-[7rem] h-[2rem] flex items-center justify-center font-mono text-[1.75rem] font-black tracking-tight leading-none tabular-nums transition-colors duration-300 ${
+            className={`w-full max-w-[5.5rem] sm:max-w-[7rem] h-[2rem] flex items-center justify-center font-mono text-[1.35rem] sm:text-[1.75rem] font-black tracking-tight leading-none tabular-nums transition-colors duration-300 ${
               isRevealing
                 ? "text-amber-400 drop-shadow-[0_0_12px_rgba(251,191,36,0.5)]"
                 : timeLeft <= 10
@@ -405,14 +407,14 @@ export const Header = React.memo(function Header({
                 <span className="w-[3px] bg-amber-400/70 rounded-full animate-[bar-2_0.6s_ease-in-out_infinite]" style={{ height: "55%", animationDelay: "0.15s" }} />
                 <span className="w-[3px] bg-amber-400/90 rounded-full animate-[bar-1_0.6s_ease-in-out_infinite]" style={{ height: "25%", animationDelay: "0.05s" }} />
               </div>
-              <span className="text-[10px] font-bold text-amber-400/80 uppercase tracking-widest">Analyzing</span>
+              <span className="text-[8px] sm:text-[10px] font-bold text-amber-400/80 uppercase tracking-[0.14em] sm:tracking-widest text-center">Analyzing</span>
             </>
           ) : (
             <div className="flex flex-col items-center mt-1">
               <div className="animate-float" style={{ animationDuration: "2.5s" }}>
-                <PickaxeIcon />
+                <PickaxeIcon className="w-6 h-6 sm:w-8 sm:h-8" />
               </div>
-              <span className="text-[10px] font-bold text-violet-400/50 uppercase tracking-widest mt-0.5">Mining</span>
+              <span className="text-[8px] sm:text-[10px] font-bold text-violet-400/50 uppercase tracking-[0.14em] sm:tracking-widest mt-0.5 text-center">Mining</span>
             </div>
           )}
         </div>
@@ -420,7 +422,7 @@ export const Header = React.memo(function Header({
 
         {epochDurationChange && (
           <div className="border-t border-white/[0.06] px-2 py-1 bg-amber-500/[0.04]">
-            <div className="text-[9px] text-amber-300/90 font-bold uppercase tracking-wider text-center">
+            <div className="px-1 text-center text-[8px] font-bold uppercase leading-tight tracking-wide text-amber-300/90 sm:text-[9px] sm:tracking-wider">
               Duration scheduled: {epochDurationChange.current ?? "?"}s {"->"} {epochDurationChange.next}s
               {epochDurationChange.effectiveFromEpoch ? ` from #${epochDurationChange.effectiveFromEpoch}` : ""}
               {epochDurationChange.eta ? ` (ETA ${new Date(epochDurationChange.eta * 1000).toLocaleTimeString()})` : ""}
@@ -430,15 +432,15 @@ export const Header = React.memo(function Header({
 
         {showWinsTicker && (
           <div className="border-t border-white/[0.06] flex-1 min-h-0 flex items-center">
-            <WinsTicker wins={recentWins} />
+            <WinsTicker wins={recentWins} reducedMotion={reducedMotion} />
           </div>
         )}
       </div>
 
       {/* ═══ Pool chart ═══ */}
-      <div className="min-[900px]:col-span-5 relative rounded-xl bg-[#080812] border border-white/[0.06] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden min-h-[72px] animate-slide-up" style={{ animationDelay: "0.1s" }}>
+      <div className="min-[900px]:col-span-5 relative rounded-xl bg-[#080812] border border-white/[0.06] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden min-h-[76px] sm:min-h-[72px] animate-slide-up" style={{ animationDelay: "0.1s" }}>
         <div className="absolute top-2.5 left-3 z-20 pointer-events-none">
-          <div className="text-[9px] uppercase font-bold text-gray-500 tracking-wider flex items-center gap-1.5 mb-0.5">
+          <div className="text-[8px] sm:text-[9px] uppercase font-bold text-gray-500 tracking-wider flex flex-wrap items-center gap-1 mb-0.5 pr-10 sm:pr-12">
             Total Pool
             {rolloverAmount > 0 && (
               <span className="bg-emerald-500/15 text-emerald-400 px-1 py-px rounded text-[7px] border border-emerald-500/25">
@@ -446,7 +448,7 @@ export const Header = React.memo(function Header({
               </span>
             )}
           </div>
-          <div className="text-lg font-black text-white leading-tight">
+          <div className="text-base sm:text-lg font-black text-white leading-tight pr-10 sm:pr-12">
             {realTotalStaked.toFixed(2)} <span className="text-violet-400 text-xs font-bold">LINEA</span>
           </div>
         </div>
@@ -589,7 +591,7 @@ export const Header = React.memo(function Header({
                   <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
                 </svg>
               </button>
-              <div className="flex items-center justify-between text-[11px] leading-tight">
+              <div className="flex flex-col items-start gap-0.5 text-[11px] leading-tight min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
                 <span className="text-gray-400">
                   {privyEthBalanceLoading ? "..." : privyEthBalance}<span className="text-gray-500 font-medium"> ETH</span>
                 </span>

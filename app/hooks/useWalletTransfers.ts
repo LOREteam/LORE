@@ -130,7 +130,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       let totalOut = 0;
       const seenTx = new Set<string>();
 
-      // Deposits and withdrawals only: between embedded and external wallets (no rewards/referrals)
+      // Deposits and withdrawals only: between embedded and external wallets (game rewards remain claimable separately)
       const isDepositOrWithdrawal = (dir: "in" | "out", counterparty: string) => {
         if (!externalAddr) return true; // no external wallet - keep current logic (exclude contract only)
         const c = counterparty.toLowerCase();

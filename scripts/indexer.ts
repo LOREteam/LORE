@@ -11,6 +11,7 @@
 import "dotenv/config";
 import {
   createPublicClient,
+  fallback,
   http,
   parseAbi,
   decodeEventLog,
@@ -19,19 +20,31 @@ import {
   toHex,
   type Log,
 } from "viem";
-import { lineaSepolia } from "viem/chains";
 import {
-  DEFAULT_CONTRACT_ADDRESS,
-  DEFAULT_FIREBASE_DB_URL,
   DEFAULT_INDEXER_RECONCILE_INTERVAL_MS,
   DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS,
-  DEFAULT_INDEXER_START_BLOCK,
+  getConfiguredContractAddress,
+  getConfiguredFirebaseDbUrl,
+  getConfiguredDeployBlock,
+  getConfiguredLineaNetwork,
+  getDefaultLineaRpcs,
+  getLineaChain,
+  getPreferredLineaRpcs,
 } from "../config/publicConfig";
 
-const CONTRACT = (process.env.KEEPER_CONTRACT_ADDRESS ||
-  DEFAULT_CONTRACT_ADDRESS) as `0x${string}`;
-const DEPLOY_BLOCK = BigInt(DEFAULT_INDEXER_START_BLOCK);
-const INDEXER_START_BLOCK = BigInt(process.env.INDEXER_START_BLOCK ?? String(DEFAULT_INDEXER_START_BLOCK));
+const APP_NETWORK = getConfiguredLineaNetwork();
+const APP_CHAIN = getLineaChain(APP_NETWORK);
+const CONTRACT = getConfiguredContractAddress(
+  process.env.KEEPER_CONTRACT_ADDRESS ??
+    process.env.NEXT_PUBLIC_CONTRACT_ADDRESS,
+  APP_NETWORK,
+) as `0x${string}`;
+const DEPLOY_BLOCK = getConfiguredDeployBlock(
+  process.env.INDEXER_START_BLOCK ??
+    process.env.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK,
+  APP_NETWORK,
+);
+const INDEXER_START_BLOCK = DEPLOY_BLOCK;
 const CHUNK_BLOCKS = 2_000n;
 const REPAIR_CHUNK_BLOCKS = 20_000n;
 const POLL_INTERVAL_MS = 15_000;
@@ -41,9 +54,10 @@ const INTER_CHUNK_DELAY_MS = 1_500;
 const RECONCILE_INTERVAL_MS = Number(process.env.INDEXER_RECONCILE_INTERVAL_MS ?? String(DEFAULT_INDEXER_RECONCILE_INTERVAL_MS));
 const RECONCILE_MAX_EPOCHS_PER_PASS = Number(process.env.INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS ?? String(DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS));
 
-const FIREBASE_DB_URL =
-  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL ||
-  DEFAULT_FIREBASE_DB_URL;
+const FIREBASE_DB_URL = getConfiguredFirebaseDbUrl(
+  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
+  APP_NETWORK,
+);
 const FIREBASE_DB_AUTH = process.env.FIREBASE_DB_AUTH ?? "";
 let writeDisabled = false;
 let writeDisabledReason: string | null = null;
@@ -70,11 +84,17 @@ const READ_ABI = parseAbi([
 ]);
 
 const client = createPublicClient({
-  chain: lineaSepolia,
-  transport: http(process.env.KEEPER_RPC_URL || "https://rpc.sepolia.linea.build", {
-    timeout: 30_000,
-    retryCount: 0,
-  }),
+  chain: APP_CHAIN,
+  transport: fallback(
+    getPreferredLineaRpcs(
+      process.env.KEEPER_RPC_URL ?? getDefaultLineaRpcs(APP_NETWORK)[0],
+      APP_NETWORK,
+    ).map((url) => http(url, {
+      timeout: 30_000,
+      retryCount: 0,
+    })),
+    { rank: true },
+  ),
 });
 
 // ─── Firebase REST helpers ───────────────────────────────────────────

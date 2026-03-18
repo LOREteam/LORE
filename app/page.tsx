@@ -10,7 +10,8 @@ import { useChartData } from "./hooks/useChartData";
 import { useMining } from "./hooks/useMining";
 import { usePrivy } from "@privy-io/react-auth";
 import { usePrivyWallet } from "./hooks/usePrivyWallet";
-import { useReferral } from "./hooks/useReferral";
+import { useRebate } from "./hooks/useRebate";
+import { useReducedMotion } from "./hooks/useReducedMotion";
 import { useSound } from "./hooks/useSound";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
@@ -19,7 +20,7 @@ import { MiningGrid } from "./components/MiningGrid";
 import { RewardScanner } from "./components/RewardScanner";
 import { ManualBetPanel, AutoMinerPanel } from "./components/BetPanel";
 import { Analytics } from "./components/Analytics";
-import { ReferralPanel } from "./components/ReferralPanel";
+import { RebatePanel } from "./components/RebatePanel";
 import { WhitePaper } from "./components/WhitePaper";
 import { FAQ } from "./components/FAQ";
 import { Leaderboards } from "./components/Leaderboards";
@@ -30,6 +31,7 @@ import { useJackpotHistory } from "./hooks/useJackpotHistory";
 import { useDepositHistory } from "./hooks/useDepositHistory";
 import { useWalletTransfers } from "./hooks/useWalletTransfers";
 import { useDeepRewardScan } from "./hooks/useDeepRewardScan";
+import { getLineaFeeOverrides } from "./lib/lineaFees";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { CrystalParticles } from "./components/CrystalParticles";
 import { BackupGate } from "./components/BackupGate";
@@ -38,20 +40,22 @@ import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, LINEA_TOKEN_ADDRESS, TOKEN_AB
 import { isUserRejection, normalizeDecimalInput } from "./lib/utils";
 import { log } from "./lib/logger";
 
-// Long delay so bot (45s grace) or someone's bet resolves first; jitter so not all tabs tx at once
-const AUTO_RESOLVE_DELAY_BASE_MS = 90_000;
-const AUTO_RESOLVE_JITTER_MS = 30_000;
-const MIN_ETH_FOR_GAS = 0.0001; // ~enough for a couple of txs on Linea
-// Hard-disabled in client to prevent uncontrolled ETH gas burn from browser-side resolve txs.
-const ENABLE_CLIENT_AUTO_RESOLVE = false;
+const MIN_ETH_FOR_GAS = 0.0005; // conservative floor for approve/placeBatchBets on Linea
+const MIN_ETH_WITHDRAW_RESERVE_WEI = parseUnits("0.0005", 18);
+// Server-side fallback: if the dedicated keeper isn't running, ask the Next server
+// to resolve stale epochs using the configured keeper key.
+const ENABLE_CLIENT_BOOTSTRAP_RESOLVE = true;
+const ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK = false;
+const BOOTSTRAP_RESOLVE_RETRY_MS = 12_000;
 const ENABLE_AUTO_RESOLVE_SWEEP = false;
-const VALID_TABS: TabId[] = ["hub", "analytics", "referral", "leaderboards", "whitepaper", "faq"];
+const VALID_TABS: TabId[] = ["hub", "analytics", "rebate", "leaderboards", "whitepaper", "faq"];
 const ORB_STYLE = { animationDelay: "-10s" } as const;
 
 export default function LineaOre() {
   const [activeTab, setActiveTab] = useState<TabId>("hub");
   const [chatOpen, setChatOpen] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(true);
+  const { reducedMotion, setReducedMotion, motionReady } = useReducedMotion();
   const { play: playSound, muted: soundMuted, toggleMute: toggleSoundMute, soundSettings, setSoundEnabled } = useSound();
 
   useEffect(() => {
@@ -75,15 +79,39 @@ export default function LineaOre() {
   const [isWalletSettingsOpen, setIsWalletSettingsOpen] = useState(false);
   const [backupGateVersion, setBackupGateVersion] = useState(0);
   const [withdrawAmount, setWithdrawAmount] = useState("0.0");
+  const [withdrawEthAmount, setWithdrawEthAmount] = useState("0.0");
   const [depositEthAmount, setDepositEthAmount] = useState("0.001");
   const [depositTokenAmount, setDepositTokenAmount] = useState("10");
   const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [isWithdrawingEth, setIsWithdrawingEth] = useState(false);
   const [isDepositingEth, setIsDepositingEth] = useState(false);
   const [isDepositingToken, setIsDepositingToken] = useState(false);
   const { writeContractAsync } = useWriteContract();
+  const { getAccessToken } = usePrivy();
+  const {
+    embeddedWalletAddress,
+    externalWalletAddress,
+    ensureEmbeddedWallet,
+    exportEmbeddedWallet,
+    createEmbeddedWallet,
+    sendTransactionSilent,
+    sendTransactionFromExternal,
+  } = usePrivyWallet();
+
+  const normalizedEmbeddedAddress = useMemo(() => {
+    if (!embeddedWalletAddress) return undefined;
+    try {
+      return getAddress(embeddedWalletAddress);
+    } catch {
+      return undefined;
+    }
+  }, [embeddedWalletAddress]);
 
   // --- On-chain data ---
-  const gameData = useGameData({ historyDetailed: activeTab === "analytics" });
+  const gameData = useGameData({
+    historyDetailed: activeTab === "analytics",
+    preferredAddress: normalizedEmbeddedAddress,
+  });
   const {
     address, visualEpoch, gridDisplayEpoch, isRevealing, timeLeft,
     realTotalStaked, rolloverAmount, jackpotInfo, formattedLineaBalance, winningTileId,
@@ -184,26 +212,6 @@ export default function LineaOre() {
     gridDisplayEpoch != null &&
     gridDisplayEpoch === actualCurrentEpoch.toString();
 
-  const { getAccessToken } = usePrivy();
-  const {
-    embeddedWalletAddress,
-    externalWalletAddress,
-    ensureEmbeddedWallet,
-    exportEmbeddedWallet,
-    createEmbeddedWallet,
-    sendTransactionSilent,
-    sendTransactionFromExternal,
-  } = usePrivyWallet();
-
-  const normalizedEmbeddedAddress = useMemo(() => {
-    if (!embeddedWalletAddress) return undefined;
-    try {
-      return getAddress(embeddedWalletAddress);
-    } catch {
-      return undefined;
-    }
-  }, [embeddedWalletAddress]);
-
   const { data: embeddedTokenBalance, isPending: embeddedTokenPending, refetch: refetchEmbeddedTokenBalance } = useBalance({
     address: normalizedEmbeddedAddress,
     token: LINEA_TOKEN_ADDRESS,
@@ -249,12 +257,12 @@ export default function LineaOre() {
     refetchUserBets,
     refetchEpoch,
     refetchGridEpochData,
-    preferredAddress: embeddedWalletAddress ?? address ?? null,
+    preferredAddress: embeddedWalletAddress ?? null,
     ensurePreferredWallet: ensureEmbeddedWallet,
     sendTransactionSilent,
     refreshSession,
     onAutoMineBetConfirmed: () => playSound("autoBet"),
-  }), [refetchAllowance, refetchTileData, refetchUserBets, refetchEpoch, refetchGridEpochData, embeddedWalletAddress, address, ensureEmbeddedWallet, sendTransactionSilent, refreshSession, playSound]);
+  }), [refetchAllowance, refetchTileData, refetchUserBets, refetchEpoch, refetchGridEpochData, embeddedWalletAddress, ensureEmbeddedWallet, sendTransactionSilent, refreshSession, playSound]);
 
   const {
     isPending, selectedTiles, selectedTilesEpoch, isAutoMining, autoMineProgress, runningParams,
@@ -285,11 +293,16 @@ export default function LineaOre() {
       sendTransactionSilent,
     });
 
-  // --- Referral ---
+  // --- Participation rebate ---
   const {
-    referralInfo, referralLink, isRegistering, isClaiming: isClaimingReferral, isSettingReferrer,
-    registerCode, claimEarnings, copyReferralLink,
-  } = useReferral({ sendTransactionSilent });
+    rebateInfo,
+    isClaiming: isClaimingRebate,
+    claimRebates,
+  } = useRebate({
+    enabled: activeTab === "rebate",
+    preferredAddress: normalizedEmbeddedAddress,
+    sendTransactionSilent,
+  });
 
   // --- Deposit history (auto-load when Analytics tab opens; periodic refresh) ---
   const { data: deposits, loading: depositsLoading, totalDeposited, error: depositsError, fetch: fetchDeposits, refresh: refreshDeposits } =
@@ -342,149 +355,194 @@ export default function LineaOre() {
       .slice(0, 5);
   }, [historyViewData]);
 
+  const tryClientResolveEpoch = useCallback(async (epochKey: string): Promise<boolean> => {
+    if (!publicClient || !sendTransactionSilent || !embeddedWalletAddress) return false;
+    try {
+      const epoch = BigInt(epochKey);
+      const nowSec = BigInt(Math.floor(Date.now() / 1000));
+      const liveEpoch = (await publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "currentEpoch",
+      })) as bigint;
+      // Another tx already advanced the game; nothing to resolve for this epoch anymore.
+      if (liveEpoch !== epoch) return true;
+      const epochData = (await publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "epochs",
+        args: [epoch],
+      })) as [bigint, bigint, bigint, boolean, boolean, boolean];
+      if (epochData[3]) return true;
+      const endTime = (await publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "getEpochEndTime",
+        args: [epoch],
+      })) as bigint;
+      if (nowSec < endTime) return true;
+
+      const data = encodeFunctionData({
+        abi: GAME_ABI,
+        functionName: "resolveEpoch",
+        args: [epoch],
+      });
+      const gasEstimate = await publicClient.estimateGas({
+        to: CONTRACT_ADDRESS,
+        data,
+        account: embeddedWalletAddress as `0x${string}`,
+      });
+      const gas = (gasEstimate * 130n) / 100n + 20_000n;
+      const fees = await publicClient.estimateFeesPerGas().catch(() => null);
+      const feeOverrides = fees ? getLineaFeeOverrides(fees, APP_CHAIN_ID) : undefined;
+      const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas }, feeOverrides);
+      log.info("AutoResolve", "client fallback sent resolve tx", { epoch: epochKey, hash });
+      try {
+        await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
+      } catch (waitErr) {
+        // Receipt timeouts are common on public RPC. Treat as success if epoch already advanced.
+        try {
+          const latestEpoch = (await publicClient.readContract({
+            address: CONTRACT_ADDRESS,
+            abi: GAME_ABI,
+            functionName: "currentEpoch",
+          })) as bigint;
+          if (latestEpoch > epoch) {
+            log.info("AutoResolve", "resolve tx timed out but epoch advanced", { epoch: epochKey, hash });
+          } else {
+            throw waitErr;
+          }
+        } catch {
+          throw waitErr;
+        }
+      }
+      refetchEpoch();
+      refetchGridEpochData();
+      refetchTileData();
+      refetchUserBets();
+      clearResolveGuard();
+      return true;
+    } catch (err) {
+      // If estimate reverted because someone else already resolved, don't keep retrying.
+      try {
+        const epoch = BigInt(epochKey);
+        const latestEpoch = (await publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "currentEpoch",
+        })) as bigint;
+        if (latestEpoch > epoch) {
+          return true;
+        }
+      } catch {
+        // fall through to warning
+      }
+      log.warn("AutoResolve", "client fallback resolve failed", { epoch: epochKey, err });
+      return false;
+    }
+  }, [
+    publicClient,
+    sendTransactionSilent,
+    embeddedWalletAddress,
+    refetchEpoch,
+    refetchGridEpochData,
+    refetchTileData,
+    refetchUserBets,
+    clearResolveGuard,
+  ]);
+
   // --- Auto-resolve stale epochs from the browser if keeper bot is slow ---
-  const AUTO_RESOLVE_MAX_RETRIES = 1;
-  const AUTO_RESOLVE_RETRY_DELAY_MS = 6_000;
-
   useEffect(() => {
-    if (!ENABLE_CLIENT_AUTO_RESOLVE) return;
-    const hasLowGasBalance =
-      embeddedEthBalance != null && Number(embeddedEthBalance.formatted) < MIN_ETH_FOR_GAS;
-    if (hasLowGasBalance) return;
-    if (timeLeft !== 0 || currentEpochResolved !== false || !actualCurrentEpoch || !publicClient) return;
+    if (!ENABLE_CLIENT_BOOTSTRAP_RESOLVE) return;
+    if (timeLeft !== 0 || !actualCurrentEpoch) return;
+    let cancelled = false;
     const epochKey = actualCurrentEpoch.toString();
-    const now = Date.now();
-    const localGuard = readResolveGuard();
-    if (
-      autoResolveAttemptedRef.current === epochKey &&
-      now - autoResolveAttemptTsRef.current < AUTO_RESOLVE_RETRY_AFTER_MS
-    ) return;
-    if (
-      localGuard?.epoch === epochKey &&
-      now - localGuard.ts < AUTO_RESOLVE_RETRY_AFTER_MS
-    ) return;
+    const delayMs = 4_000 + Math.floor(Math.random() * 2_000);
 
-    const delayMs = AUTO_RESOLVE_DELAY_BASE_MS + Math.floor(Math.random() * AUTO_RESOLVE_JITTER_MS);
-    const timer = setTimeout(() => {
-      const run = async () => {
+    const run = async () => {
+      while (!cancelled) {
         const runNow = Date.now();
         const runGuard = readResolveGuard();
         if (
           autoResolveAttemptedRef.current === epochKey &&
           runNow - autoResolveAttemptTsRef.current < AUTO_RESOLVE_RETRY_AFTER_MS
-        ) return;
+        ) {
+          await new Promise<void>((r) => setTimeout(r, BOOTSTRAP_RESOLVE_RETRY_MS));
+          continue;
+        }
         if (
           runGuard?.epoch === epochKey &&
           runNow - runGuard.ts < AUTO_RESOLVE_RETRY_AFTER_MS
-        ) return;
+        ) {
+          await new Promise<void>((r) => setTimeout(r, BOOTSTRAP_RESOLVE_RETRY_MS));
+          continue;
+        }
         writeResolveGuard(epochKey);
 
-        for (let attempt = 0; attempt < AUTO_RESOLVE_MAX_RETRIES; attempt++) {
-          try {
-            if (!sendTransactionSilent) {
-              log.warn("AutoResolve", "wallet not ready, waiting...");
-              await new Promise<void>((r) => setTimeout(r, 5_000));
-              if (!sendTransactionSilent) throw new Error("Privy embedded wallet not found.");
-            }
+        try {
+          const res = await fetch("/api/bootstrap-resolve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            cache: "no-store",
+          });
+          const payload = (await res.json().catch(() => null)) as
+            | { ok?: boolean; action?: string; currentEpoch?: string; hash?: string; reason?: string; error?: string }
+            | null;
 
-            const resolveEpochLive = await publicClient.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "currentEpoch" }) as bigint;
-            const resolveEpochData = await publicClient.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochs", args: [actualCurrentEpoch] }) as unknown as [bigint, bigint, bigint, boolean, boolean, boolean];
-            if (resolveEpochLive !== actualCurrentEpoch || resolveEpochData[3] === true) {
-              clearResolveGuard();
-              return;
-            }
-
-            const data = encodeFunctionData({
-              abi: GAME_ABI,
-              functionName: "resolveEpoch",
-              args: [resolveEpochLive],
-            });
-            let hash: `0x${string}` | null = null;
-            let gasOverrides: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | undefined;
-            for (let g = 0; g < 3; g++) {
-              try {
-                hash = await sendTransactionSilent(
-                  { to: CONTRACT_ADDRESS, data, gas: BigInt(300_000) },
-                  gasOverrides,
-                );
-                break;
-              } catch (sendErr) {
-                const sm = sendErr instanceof Error ? sendErr.message.toLowerCase() : String(sendErr).toLowerCase();
-                if ((sm.includes("replacement") && sm.includes("underpriced")) && g < 2) {
-                  try {
-                    const fees = await publicClient.estimateFeesPerGas();
-                    const bump = BigInt(150);
-                    gasOverrides = {
-                      maxFeePerGas: fees.maxFeePerGas ? (fees.maxFeePerGas * bump) / BigInt(100) : undefined,
-                      maxPriorityFeePerGas: fees.maxPriorityFeePerGas ? (fees.maxPriorityFeePerGas * bump) / BigInt(100) : undefined,
-                    };
-                    if (!gasOverrides.maxFeePerGas) gasOverrides = undefined;
-                    log.warn("AutoResolve", `replacement underpriced, retry with higher gas (attempt ${g + 2}/3)`);
-                    continue;
-                  } catch { /* fallthrough */ }
-                }
-                throw sendErr;
-              }
-            }
-            if (!hash) throw new Error("resolveEpoch tx hash missing");
+          if (payload?.ok && payload.action === "sent") {
             autoResolveAttemptedRef.current = epochKey;
             autoResolveAttemptTsRef.current = Date.now();
-            log.info("AutoResolve", `sent resolveEpoch tx`, { epoch: epochKey, hash });
-            try {
-              await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
-            } catch (receiptErr) {
-              const re = receiptErr instanceof Error ? receiptErr : new Error(String(receiptErr));
-              if (re.name === "WaitForTransactionReceiptTimeoutError" || re.message?.toLowerCase().includes("timeout")) {
-                log.info("AutoResolve", `tx sent, receipt timeout (will confirm on-chain)`, { epoch: epochKey, hash });
-              } else {
-                throw receiptErr;
-              }
-            }
+            log.info("AutoResolve", "server keeper sent resolve tx", {
+              epoch: payload.currentEpoch ?? epochKey,
+              hash: payload.hash,
+            });
+            clearResolveGuard();
             return;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-            const isSessionErr = msg.includes("authorization signatures") || msg.includes("signing keys") || msg.includes("incorrect or expired") || (err instanceof Error && err.name === "PrivyApiError");
-            const isSimRevert = msg.includes("execution reverted") || msg.includes("estimategasexecutionerror");
-            const isAlreadyHandled = msg.includes("known transaction") || msg.includes("already known") || msg.includes("nonce too low");
-            const isContractExpected = msg.includes("timernotended") || msg.includes("canonlyresolvecurrent");
-            const isWalletMissing = msg.includes("wallet not found") || msg.includes("wallet not ready");
+          }
 
-            if (isContractExpected || isSimRevert || isAlreadyHandled) {
-              try {
-                const freshData = await publicClient.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochs", args: [actualCurrentEpoch] }) as unknown as [bigint, bigint, bigint, boolean, boolean, boolean];
-                if (freshData[3]) {
-                  log.info("AutoResolve", `epoch ${epochKey} already resolved (keeper bot), done`);
-                } else if (isContractExpected) {
-                  log.info("AutoResolve", `epoch ${epochKey} contract revert (timer not ended / wrong epoch), skipping`);
-                } else {
-                  log.info("AutoResolve", `epoch ${epochKey} revert but not yet resolved, skipping`);
-                }
-              } catch { /* ignore */ }
+          if (payload?.ok && payload.action === "noop") {
+            log.info("AutoResolve", "server keeper noop", {
+              epoch: payload.currentEpoch ?? epochKey,
+              reason: payload.reason,
+            });
+            if (payload.reason !== "bootstrap_keeper_disabled") {
               autoResolveAttemptedRef.current = epochKey;
               autoResolveAttemptTsRef.current = Date.now();
               clearResolveGuard();
               return;
             }
-            if (isSessionErr && attempt < AUTO_RESOLVE_MAX_RETRIES - 1) {
-              log.warn("AutoResolve", `session error (attempt ${attempt + 1}/${AUTO_RESOLVE_MAX_RETRIES}), refreshing...`, err);
-              try { await refreshSession(); } catch { /* ignore */ }
-              await new Promise<void>((r) => setTimeout(r, 3_000));
-              continue;
+            if (ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK && await tryClientResolveEpoch(epochKey)) {
+              autoResolveAttemptedRef.current = epochKey;
+              autoResolveAttemptTsRef.current = Date.now();
+              return;
             }
-            if (isWalletMissing && attempt < AUTO_RESOLVE_MAX_RETRIES - 1) {
-              log.warn("AutoResolve", `wallet not ready (attempt ${attempt + 1}/${AUTO_RESOLVE_MAX_RETRIES}), retrying...`, err);
-              await new Promise<void>((r) => setTimeout(r, AUTO_RESOLVE_RETRY_DELAY_MS));
-              continue;
-            }
+          }
 
-            log.warn("AutoResolve", "failed", err);
-            autoResolveAttemptedRef.current = null;
-            autoResolveAttemptTsRef.current = 0;
-            clearResolveGuard();
+          log.warn("AutoResolve", "server keeper bootstrap resolve failed", payload ?? { status: res.status });
+          if (ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK && await tryClientResolveEpoch(epochKey)) {
+            autoResolveAttemptedRef.current = epochKey;
+            autoResolveAttemptTsRef.current = Date.now();
             return;
           }
+          autoResolveAttemptedRef.current = null;
+          autoResolveAttemptTsRef.current = 0;
+          clearResolveGuard();
+        } catch (err) {
+          log.warn("AutoResolve", "server keeper bootstrap resolve request failed", err);
+          if (ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK && await tryClientResolveEpoch(epochKey)) {
+            autoResolveAttemptedRef.current = epochKey;
+            autoResolveAttemptTsRef.current = Date.now();
+            return;
+          }
+          autoResolveAttemptedRef.current = null;
+          autoResolveAttemptTsRef.current = 0;
+          clearResolveGuard();
         }
-      };
+        await new Promise<void>((r) => setTimeout(r, BOOTSTRAP_RESOLVE_RETRY_MS));
+      }
+    };
+
+    const timer = setTimeout(() => {
       void run().catch((err) => {
         log.warn("AutoResolve", "unhandled", err);
         autoResolveAttemptedRef.current = null;
@@ -493,8 +551,11 @@ export default function LineaOre() {
       });
     }, delayMs);
 
-    return () => clearTimeout(timer);
-  }, [timeLeft, currentEpochResolved, actualCurrentEpoch, sendTransactionSilent, publicClient, embeddedWalletAddress, refreshSession, embeddedEthBalance, readResolveGuard, writeResolveGuard, clearResolveGuard]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [timeLeft, actualCurrentEpoch, readResolveGuard, writeResolveGuard, clearResolveGuard, tryClientResolveEpoch]);
 
   // --- Sweep: resolve past unresolved epochs the auto-resolve missed ---
   const sweepRunningRef = useRef(false);
@@ -703,6 +764,70 @@ export default function LineaOre() {
     }
   }, [externalWalletAddress, withdrawAmount, embeddedTokenBalance, writeContractAsync]);
 
+  const handleWithdrawEthToExternal = useCallback(async () => {
+    if (!embeddedWalletAddress) {
+      alert("Create a Privy wallet first.");
+      return;
+    }
+    if (!externalWalletAddress) {
+      alert("External wallet is not connected.");
+      return;
+    }
+    const normalized = normalizeDecimalInput(withdrawEthAmount);
+    if (!normalized || isNaN(Number(normalized)) || Number(normalized) <= 0) {
+      alert("Invalid ETH withdraw amount.");
+      return;
+    }
+    const amountWei = parseUnits(normalized, 18);
+    if (embeddedEthBalance?.value != null) {
+      if (amountWei > embeddedEthBalance.value) {
+        alert("Insufficient ETH balance.");
+        return;
+      }
+      const spendableWei =
+        embeddedEthBalance.value > MIN_ETH_WITHDRAW_RESERVE_WEI
+          ? embeddedEthBalance.value - MIN_ETH_WITHDRAW_RESERVE_WEI
+          : 0n;
+      if (amountWei > spendableWei) {
+        alert(`Keep at least ${MIN_ETH_FOR_GAS} ETH in the Privy wallet for gas.`);
+        return;
+      }
+    }
+
+    setIsWithdrawingEth(true);
+    try {
+      const hash = await sendTransactionSilent({
+        to: getAddress(externalWalletAddress),
+        value: amountWei,
+      });
+      try {
+        if (publicClient) {
+          await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
+        }
+      } catch {
+        // Balance refresh below is enough if receipt polling times out on a public RPC.
+      }
+      setWithdrawEthAmount("0.0");
+      void refetchEmbeddedEthBalance();
+    } catch (err) {
+      if (!isUserRejection(err)) {
+        log.error("Withdraw", "ETH withdraw failed", err);
+        const message = err instanceof Error ? err.message : "";
+        alert(message ? `ETH withdraw failed: ${message}` : "ETH withdraw failed. Check your balance and try again.");
+      }
+    } finally {
+      setIsWithdrawingEth(false);
+    }
+  }, [
+    embeddedWalletAddress,
+    externalWalletAddress,
+    withdrawEthAmount,
+    embeddedEthBalance,
+    sendTransactionSilent,
+    publicClient,
+    refetchEmbeddedEthBalance,
+  ]);
+
   const handleDepositEthToEmbedded = useCallback(async () => {
     if (!embeddedWalletAddress) {
       alert("Create a Privy wallet first.");
@@ -793,9 +918,9 @@ export default function LineaOre() {
 
 
   return (
-    <div className="h-screen w-full flex overflow-hidden bg-[#060612] text-slate-200">
+    <div className="min-h-dvh w-full flex flex-col overflow-x-hidden bg-[#060612] text-slate-200 lg:h-screen lg:flex-row lg:overflow-hidden">
       {/* Ambient crystal particles */}
-      <CrystalParticles />
+      {motionReady && !reducedMotion && <CrystalParticles />}
 
       {/* Animated background orbs */}
       <div className="fixed top-[-20%] left-[-15%] w-[50%] h-[50%] bg-violet-600 rounded-full blur-[250px] opacity-[0.07] pointer-events-none animate-orb-1" />
@@ -814,11 +939,11 @@ export default function LineaOre() {
         onClaimAll={claimAll}
       />
 
-      <main className="flex-1 flex flex-col p-3 md:p-4 overflow-hidden z-10 relative overflow-y-auto animate-fade-in">
+      <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-visible p-3 animate-fade-in md:p-4 lg:overflow-x-hidden lg:overflow-y-auto">
         <OfflineBanner />
         {/* Compact navigation when sidebar is hidden (narrow screens) */}
         <div className="lg:hidden flex flex-wrap gap-1.5 mb-3 -mt-1">
-          {(["hub", "analytics", "referral", "leaderboards", "whitepaper", "faq"] as const).map((tab) => (
+          {(["hub", "analytics", "rebate", "leaderboards", "whitepaper", "faq"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => handleTabChange(tab)}
@@ -851,6 +976,7 @@ export default function LineaOre() {
           onToggleMute={toggleSoundMute}
           recentWins={recentWins}
           showWinsTicker
+          reducedMotion={reducedMotion}
           epochDurationChange={epochDurationChange}
         />
 
@@ -861,13 +987,17 @@ export default function LineaOre() {
           embeddedWalletAddress={embeddedWalletAddress}
           externalWalletAddress={externalWalletAddress}
           formattedLineaBalance={formattedPrivyBalance}
+          formattedEthBalance={formattedPrivyEthBalance}
           withdrawAmount={withdrawAmount}
+          withdrawEthAmount={withdrawEthAmount}
           depositEthAmount={depositEthAmount}
           depositTokenAmount={depositTokenAmount}
           isWithdrawing={isWithdrawing}
+          isWithdrawingEth={isWithdrawingEth}
           isDepositingEth={isDepositingEth}
           isDepositingToken={isDepositingToken}
           onWithdrawAmountChange={setWithdrawAmount}
+          onWithdrawEthAmountChange={setWithdrawEthAmount}
           onDepositEthAmountChange={setDepositEthAmount}
           onDepositTokenAmountChange={setDepositTokenAmount}
           onCreateEmbeddedWallet={createEmbeddedWallet}
@@ -875,6 +1005,7 @@ export default function LineaOre() {
           embeddedAddressCopied={embeddedAddressCopied}
           onExportEmbeddedWallet={exportEmbeddedWallet}
           onWithdrawToExternal={handleWithdrawToExternal}
+          onWithdrawEthToExternal={handleWithdrawEthToExternal}
           onDepositEthToEmbedded={handleDepositEthToEmbedded}
           onDepositTokenToEmbedded={handleDepositTokenToEmbedded}
           walletTransfers={walletTransfers}
@@ -890,6 +1021,8 @@ export default function LineaOre() {
           onDeepClaimAll={claimAllDeep}
           soundSettings={soundSettings}
           onSoundSettingChange={setSoundEnabled}
+          reducedMotion={reducedMotion}
+          onReducedMotionChange={setReducedMotion}
         />
 
         <BackupGate
@@ -900,10 +1033,10 @@ export default function LineaOre() {
         />
 
         {activeTab === "hub" && !balanceWarningDismissed && (lowEthBalance || lowTokenBalance) && (
-          <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-bold uppercase tracking-wider mb-2">
-            <div className="flex items-center gap-2">
-              <span className="text-base">⚠</span>
-              <span>
+          <div className="flex items-start justify-between gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-[11px] sm:text-xs font-bold uppercase tracking-wide sm:tracking-wider mb-2">
+            <div className="flex min-w-0 items-start gap-2">
+              <span className="text-base leading-none">⚠</span>
+              <span className="leading-tight break-words">
                 {lowEthBalance && lowTokenBalance
                   ? "Privy: low ETH (gas) & LINEA token"
                   : lowEthBalance
@@ -913,7 +1046,7 @@ export default function LineaOre() {
             </div>
             <button
               onClick={() => setBalanceWarningDismissed(true)}
-              className="text-red-400/60 hover:text-red-300 text-sm leading-none"
+              className="shrink-0 text-red-400/60 hover:text-red-300 text-sm leading-none mt-0.5"
             >
               ✕
             </button>
@@ -930,6 +1063,7 @@ export default function LineaOre() {
                 winningTileId={winningTileId}
                 isRevealing={isRevealing}
                 isAnalyzing={isAnalyzing}
+                reducedMotion={reducedMotion}
                 showSelection={showSelectionOnGrid}
                 onTileClick={stableTileClick}
               />
@@ -943,6 +1077,7 @@ export default function LineaOre() {
                 isDailyJackpot={isDailyJackpot}
                 isWeeklyJackpot={isWeeklyJackpot}
                 jackpotAmount={jackpotAmount}
+                reducedMotion={reducedMotion}
               />
 
               {/* Mobile-only Rewards (sidebar hidden on <lg) */}
@@ -959,7 +1094,7 @@ export default function LineaOre() {
               </div>
             </div>
 
-            <div className={`min-[900px]:col-span-3 flex flex-col gap-1.5 ${chatOpen ? "hidden" : ""}`}>
+            <div className={`min-[900px]:col-span-3 min-w-0 flex flex-col gap-1.5 ${chatOpen ? "hidden" : ""}`}>
               <ManualBetPanel
                 formattedBalance={formattedLineaBalance}
                 selectedTilesCount={selectedTiles.length}
@@ -1002,17 +1137,12 @@ export default function LineaOre() {
           />
         )}
 
-        {activeTab === "referral" && (
-          <ReferralPanel
+        {activeTab === "rebate" && (
+          <RebatePanel
             address={address}
-            referralLink={referralLink}
-            referralInfo={referralInfo}
-            isRegistering={isRegistering}
-            isClaiming={isClaimingReferral}
-            isSettingReferrer={isSettingReferrer}
-            onRegisterCode={registerCode}
-            onClaimEarnings={claimEarnings}
-            onCopyLink={copyReferralLink}
+            rebateInfo={rebateInfo}
+            isClaiming={isClaimingRebate}
+            onClaimRebates={claimRebates}
           />
         )}
 
@@ -1053,4 +1183,3 @@ export default function LineaOre() {
     </div>
   );
 }
-

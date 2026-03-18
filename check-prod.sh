@@ -116,6 +116,30 @@ else
   warn "KEEPER_CONTRACT_ADDRESS is empty (using default from config/publicConfig.ts)"
 fi
 
+if [[ -n "${NEXT_PUBLIC_CONTRACT_ADDRESS:-}" ]]; then
+  pass "NEXT_PUBLIC_CONTRACT_ADDRESS is set"
+else
+  warn "NEXT_PUBLIC_CONTRACT_ADDRESS is empty (frontend will use default from config/publicConfig.ts)"
+fi
+
+if [[ -n "${NEXT_PUBLIC_LINEA_TOKEN_ADDRESS:-}" ]]; then
+  pass "NEXT_PUBLIC_LINEA_TOKEN_ADDRESS is set"
+else
+  warn "NEXT_PUBLIC_LINEA_TOKEN_ADDRESS is empty (frontend will use default token address)"
+fi
+
+if [[ -n "${NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER:-}" ]]; then
+  pass "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER is set"
+else
+  warn "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER is empty (frontend will infer legacy/v6 profile from contract address)"
+fi
+
+if [[ -n "${NEXT_PUBLIC_CONTRACT_HAS_REBATE_API:-}" ]]; then
+  pass "NEXT_PUBLIC_CONTRACT_HAS_REBATE_API is set"
+else
+  warn "NEXT_PUBLIC_CONTRACT_HAS_REBATE_API is empty (frontend will infer rebate support from contract address)"
+fi
+
 if [[ -n "${NEXT_PUBLIC_FIREBASE_DATABASE_URL:-}" || -n "${FIREBASE_DB_URL:-}" ]]; then
   pass "Firebase URL is set"
 else

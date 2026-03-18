@@ -2,6 +2,7 @@
 
 import React from "react";
 import { formatUnits } from "viem";
+import { EXPLORER_TX_BASE_URL } from "../lib/constants";
 import { downloadLogs } from "../lib/logger";
 import { shortenAddress } from "../lib/utils";
 import type { WalletTransfersSummary } from "../hooks/useWalletTransfers";
@@ -20,13 +21,17 @@ interface WalletSettingsModalProps {
   embeddedWalletAddress: string | null;
   externalWalletAddress: string | null;
   formattedLineaBalance: string | null;
+  formattedEthBalance: string | null;
   withdrawAmount: string;
+  withdrawEthAmount: string;
   depositEthAmount: string;
   depositTokenAmount: string;
   isWithdrawing: boolean;
+  isWithdrawingEth: boolean;
   isDepositingEth: boolean;
   isDepositingToken: boolean;
   onWithdrawAmountChange: (value: string) => void;
+  onWithdrawEthAmountChange: (value: string) => void;
   onDepositEthAmountChange: (value: string) => void;
   onDepositTokenAmountChange: (value: string) => void;
   onCreateEmbeddedWallet: () => void;
@@ -34,6 +39,7 @@ interface WalletSettingsModalProps {
   embeddedAddressCopied?: boolean;
   onExportEmbeddedWallet: () => void;
   onWithdrawToExternal: () => void;
+  onWithdrawEthToExternal: () => void;
   onDepositEthToEmbedded: () => void;
   onDepositTokenToEmbedded: () => void;
   walletTransfers: WalletTransfersSummary | null;
@@ -49,6 +55,75 @@ interface WalletSettingsModalProps {
   onDeepClaimAll: () => void;
   soundSettings?: Partial<Record<SoundName, boolean>>;
   onSoundSettingChange?: (name: SoundName, enabled: boolean) => void;
+  reducedMotion?: boolean;
+  onReducedMotionChange?: (enabled: boolean) => void;
+}
+
+interface TransferRowProps {
+  assetLabel: string;
+  assetVariant: NonNullable<React.ComponentProps<typeof UiButton>["variant"]>;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  buttonLabel: string;
+  onSubmit: () => void;
+  disabled: boolean;
+  loading: boolean;
+  buttonVariant: NonNullable<React.ComponentProps<typeof UiButton>["variant"]>;
+}
+
+const transferBadgeVariantClasses: Record<NonNullable<TransferRowProps["assetVariant"]>, string> = {
+  primary: "border-violet-400/45 bg-violet-500/15 text-violet-200",
+  secondary: "border-violet-500/25 bg-violet-500/10 text-violet-300",
+  ghost: "border-white/12 bg-white/[0.02] text-slate-300",
+  success: "border-emerald-500/35 bg-emerald-500/10 text-emerald-300",
+  danger: "border-red-500/35 bg-red-500/10 text-red-300",
+  warning: "border-amber-500/35 bg-amber-500/10 text-amber-300",
+  sky: "border-sky-500/35 bg-sky-500/10 text-sky-300",
+};
+
+function TransferRow({
+  assetLabel,
+  assetVariant,
+  value,
+  onChange,
+  placeholder,
+  buttonLabel,
+  onSubmit,
+  disabled,
+  loading,
+  buttonVariant,
+}: TransferRowProps) {
+  return (
+    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_8rem] items-center gap-2">
+      <div
+        className={`flex h-10 items-center justify-center rounded-xl border text-[10px] font-semibold uppercase tracking-widest shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${transferBadgeVariantClasses[assetVariant]}`}
+      >
+        <span className="block w-full text-center leading-none">
+          {assetLabel}
+        </span>
+      </div>
+      <UiInput
+        type="text"
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-10 min-w-0"
+        placeholder={placeholder}
+      />
+      <UiButton
+        onClick={onSubmit}
+        disabled={disabled}
+        variant={buttonVariant}
+        size="md"
+        uppercase
+        loading={loading}
+        className="h-10 w-full text-[10px]"
+      >
+        {loading ? "Sending…" : buttonLabel}
+      </UiButton>
+    </div>
+  );
 }
 
 export const WalletSettingsModal = React.memo(function WalletSettingsModal({
@@ -58,13 +133,17 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   embeddedWalletAddress,
   externalWalletAddress,
   formattedLineaBalance,
+  formattedEthBalance,
   withdrawAmount,
+  withdrawEthAmount,
   depositEthAmount,
   depositTokenAmount,
   isWithdrawing,
+  isWithdrawingEth,
   isDepositingEth,
   isDepositingToken,
   onWithdrawAmountChange,
+  onWithdrawEthAmountChange,
   onDepositEthAmountChange,
   onDepositTokenAmountChange,
   onCreateEmbeddedWallet,
@@ -72,6 +151,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   embeddedAddressCopied = false,
   onExportEmbeddedWallet,
   onWithdrawToExternal,
+  onWithdrawEthToExternal,
   onDepositEthToEmbedded,
   onDepositTokenToEmbedded,
   walletTransfers,
@@ -87,6 +167,8 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   onDeepClaimAll,
   soundSettings,
   onSoundSettingChange,
+  reducedMotion = false,
+  onReducedMotionChange,
 }: WalletSettingsModalProps) {
   if (!isOpen) return null;
 
@@ -167,6 +249,39 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
             </UiPanel>
           )}
 
+          {onReducedMotionChange && (
+            <UiPanel
+              tone="subtle"
+              padding="sm"
+              className="animate-slide-up"
+              style={{ animationDelay: "0.035s" }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider mb-1">Animation</div>
+                  <p className="text-[10px] text-gray-500 leading-relaxed">
+                    Reduce visual effects and transitions across the site for weaker PCs. The countdown timer still updates normally.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={reducedMotion}
+                  onClick={() => onReducedMotionChange(!reducedMotion)}
+                  className={`mt-0.5 flex h-6 w-11 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+                    reducedMotion
+                      ? "justify-end border-emerald-400/40 bg-emerald-500/20"
+                      : "justify-start border-white/10 bg-white/[0.05]"
+                  }`}
+                >
+                  <span
+                    className="block h-5 w-5 rounded-full bg-white shadow-sm"
+                  />
+                </button>
+              </div>
+            </UiPanel>
+          )}
+
           {/* Session */}
           <UiPanel tone="default" className="animate-slide-up" style={{ animationDelay: "0.05s" }}>
             <div className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1.5">Current Session</div>
@@ -205,49 +320,31 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
                   </div>
 
                   <div className="space-y-2">
-                    <div className="flex gap-2">
-                      <UiInput
-                        type="text"
-                        inputMode="decimal"
-                        value={depositEthAmount}
-                        onChange={(e) => onDepositEthAmountChange(e.target.value)}
-                        className="flex-1"
-                        placeholder="ETH amount"
-                      />
-                      <UiButton
-                        onClick={onDepositEthToEmbedded}
-                        disabled={isDepositingEth || !externalWalletAddress || !embeddedWalletAddress}
-                        variant="secondary"
-                        size="md"
-                        uppercase
-                        loading={isDepositingEth}
-                        className="w-32 shrink-0 text-[10px]"
-                      >
-                        {isDepositingEth ? "Sending…" : "Send ETH"}
-                      </UiButton>
-                    </div>
+                    <TransferRow
+                      assetLabel="ETH"
+                      assetVariant="secondary"
+                      value={depositEthAmount}
+                      onChange={onDepositEthAmountChange}
+                      placeholder="ETH amount"
+                      buttonLabel="Send ETH"
+                      onSubmit={onDepositEthToEmbedded}
+                      disabled={isDepositingEth || !externalWalletAddress || !embeddedWalletAddress}
+                      loading={isDepositingEth}
+                      buttonVariant="secondary"
+                    />
 
-                    <div className="flex gap-2">
-                      <UiInput
-                        type="text"
-                        inputMode="decimal"
-                        value={depositTokenAmount}
-                        onChange={(e) => onDepositTokenAmountChange(e.target.value)}
-                        className="flex-1"
-                        placeholder="LINEA amount"
-                      />
-                      <UiButton
-                        onClick={onDepositTokenToEmbedded}
-                        disabled={isDepositingToken || !externalWalletAddress || !embeddedWalletAddress}
-                        variant="success"
-                        size="md"
-                        uppercase
-                        loading={isDepositingToken}
-                        className="w-32 shrink-0 text-[10px]"
-                      >
-                        {isDepositingToken ? "Sending…" : "Send LINEA"}
-                      </UiButton>
-                    </div>
+                    <TransferRow
+                      assetLabel="LINEA"
+                      assetVariant="success"
+                      value={depositTokenAmount}
+                      onChange={onDepositTokenAmountChange}
+                      placeholder="LINEA amount"
+                      buttonLabel="Send LINEA"
+                      onSubmit={onDepositTokenToEmbedded}
+                      disabled={isDepositingToken || !externalWalletAddress || !embeddedWalletAddress}
+                      loading={isDepositingToken}
+                      buttonVariant="success"
+                    />
                   </div>
                 </div>
               </>
@@ -271,29 +368,37 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
             <div className="text-xs text-gray-500 mb-1">
               To: {externalWalletAddress ? shortenAddress(externalWalletAddress) : "none"}
             </div>
-            <div className="text-xs text-gray-500 mb-2">
-              Balance: <span className="text-white font-semibold">{formattedLineaBalance ?? "0.00"} LINEA</span>
+            <div className="text-xs text-gray-500 mb-1">
+              LINEA Balance: <span className="text-white font-semibold">{formattedLineaBalance ?? "0.00"} LINEA</span>
             </div>
-            <div className="flex gap-2">
-              <UiInput
-                type="text"
-                inputMode="decimal"
-                value={withdrawAmount}
-                onChange={(e) => onWithdrawAmountChange(e.target.value)}
-                className="flex-1"
-                placeholder="Amount"
+            <div className="text-xs text-gray-500 mb-2">
+              ETH Balance: <span className="text-white font-semibold">{formattedEthBalance ?? "0.0000"} ETH</span>
+            </div>
+            <div className="space-y-2">
+              <TransferRow
+                assetLabel="ETH"
+                assetVariant="secondary"
+                value={withdrawEthAmount}
+                onChange={onWithdrawEthAmountChange}
+                placeholder="ETH amount"
+                buttonLabel="Send ETH"
+                onSubmit={onWithdrawEthToExternal}
+                disabled={isWithdrawingEth || !externalWalletAddress || !embeddedWalletAddress}
+                loading={isWithdrawingEth}
+                buttonVariant="secondary"
               />
-              <UiButton
-                onClick={onWithdrawToExternal}
+              <TransferRow
+                assetLabel="LINEA"
+                assetVariant="sky"
+                value={withdrawAmount}
+                onChange={onWithdrawAmountChange}
+                placeholder="LINEA amount"
+                buttonLabel="Send LINEA"
+                onSubmit={onWithdrawToExternal}
                 disabled={isWithdrawing || !externalWalletAddress}
-                variant="sky"
-                size="md"
-                uppercase
                 loading={isWithdrawing}
-                className="min-w-24 text-xs"
-              >
-                {isWithdrawing ? "Sending…" : "Send"}
-              </UiButton>
+                buttonVariant="sky"
+              />
             </div>
           </UiPanel>
 
@@ -301,7 +406,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
           {embeddedWalletAddress && (
             <UiPanel tone="default" className="animate-slide-up" style={{ animationDelay: "0.2s" }}>
               <div className="text-[10px] text-gray-300 font-bold uppercase tracking-widest mb-1">LINEA Transfer History</div>
-                {externalWalletAddress && <div className="text-[9px] text-gray-500 mb-3">Deposits and withdrawals between your wallets only (no referral/rewards)</div>}
+                {externalWalletAddress && <div className="text-[9px] text-gray-500 mb-3">Deposits and withdrawals between your wallets only (game rewards stay claimable in-app)</div>}
 
               {walletTransfers === null ? (
                 <UiButton
@@ -340,7 +445,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
                               {t.direction === "in" ? "↓ IN" : "↑ OUT"}
                             </span>
                             <a
-                              href={`https://sepolia.lineascan.build/tx/${t.txHash}`}
+                              href={`${EXPLORER_TX_BASE_URL}/${t.txHash}`}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-[9px] font-mono text-violet-400/50 hover:text-violet-400 transition-colors"

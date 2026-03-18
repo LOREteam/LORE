@@ -4,20 +4,91 @@ import { useEffect } from "react";
 import { log } from "../lib/logger";
 
 const RESOLVE_STORAGE_KEY = "lore_resolve_epoch";
+const CHUNK_RELOAD_KEY = "lore:chunk-reload-once";
 
 export function ErrorCatcher() {
   useEffect(() => {
+    const isBenignConsoleWarning = (args: unknown[]): boolean => {
+      const first = args[0];
+      const msg = typeof first === "string" ? first : "";
+      if (msg.includes("Error checking Cross-Origin-Opener-Policy")) {
+        // Coinbase Wallet SDK occasionally emits this in dev; benign for app flow.
+        return true;
+      }
+      if (msg.includes('Each child in a list should have a unique "key" prop.')) {
+        const serialized = args
+          .map((arg) => (typeof arg === "string" ? arg : ""))
+          .join(" ");
+        if (serialized.includes("passed a child from Me")) {
+          // Privy currently emits this warning internally under React 19 in dev.
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const tryRecoverChunkLoad = (message: string): boolean => {
+      const lower = message.toLowerCase();
+      const isChunkLoadError =
+        lower.includes("chunkloaderror") ||
+        (lower.includes("loading chunk") && lower.includes("/_next/static/chunks/")) ||
+        (lower.includes("loading chunk") && lower.includes("failed"));
+      if (!isChunkLoadError) return false;
+
+      try {
+        const alreadyRetried =
+          typeof sessionStorage !== "undefined" &&
+          sessionStorage.getItem(CHUNK_RELOAD_KEY) === "1";
+        if (alreadyRetried) return false;
+        if (typeof sessionStorage !== "undefined") {
+          sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
+        }
+      } catch {
+        // ignore storage failures; still attempt reload
+      }
+
+      log.warn("Global", "chunk load failed, reloading page once", { message: message.slice(0, 180) });
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("_r", Date.now().toString());
+        window.location.replace(url.toString());
+      } catch {
+        window.location.reload();
+      }
+      return true;
+    };
+
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      if (isBenignConsoleWarning(args)) {
+        return;
+      }
+      originalConsoleError(...args);
+    };
+
     const onError = (e: ErrorEvent) => {
+      const reasonMessage =
+        (e.error instanceof Error ? e.error.message : "") ||
+        e.message ||
+        "";
+      if (reasonMessage && tryRecoverChunkLoad(reasonMessage)) {
+        e.preventDefault();
+        return;
+      }
       log.error("Global", e.message, { filename: e.filename, lineno: e.lineno, colno: e.colno });
     };
     const onUnhandledRejection = (e: PromiseRejectionEvent) => {
       const reason = e.reason;
       const reasonMessage =
         reason instanceof Error
-          ? reason.message
+          ? `${reason.name}: ${reason.message}`
           : typeof reason === "string"
             ? reason
-            : "";
+            : JSON.stringify(reason);
+      if (reasonMessage && tryRecoverChunkLoad(reasonMessage)) {
+        e.preventDefault();
+        return;
+      }
       const isResolveRevert =
         reason instanceof Error &&
         (reason.name === "EstimateGasExecutionError" || reason.message?.includes("execution reverted")) &&
@@ -32,17 +103,6 @@ export function ErrorCatcher() {
         return;
       }
 
-      // Referral claim estimate can fail in provider middleware (84ae48b5 selector).
-      // We handle this in referral hook with explicit gas, but keep this guard to avoid noisy dev overlay.
-      const isReferralClaimEstimateError =
-        reasonMessage.includes("84ae48b5") &&
-        reasonMessage.toLowerCase().includes("estimategasexecutionerror");
-      if (isReferralClaimEstimateError) {
-        e.preventDefault();
-        log.warn("Global", "referral claim estimate reverted", { message: reasonMessage.slice(0, 160) });
-        return;
-      }
-
       const payload = reason instanceof Error
         ? { name: reason.name, message: reason.message, stack: reason.stack?.slice(0, 400) }
         : String(reason);
@@ -52,6 +112,7 @@ export function ErrorCatcher() {
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onUnhandledRejection);
     return () => {
+      console.error = originalConsoleError;
       window.removeEventListener("error", onError);
       window.removeEventListener("unhandledrejection", onUnhandledRejection);
     };

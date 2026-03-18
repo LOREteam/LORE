@@ -1,11 +1,12 @@
 "use client";
 
+import { useMemo } from 'react';
 import { PrivyProvider } from '@privy-io/react-auth';
-import { WagmiProvider, createConfig } from '@privy-io/wagmi';
+import { WagmiProvider as PrivyWagmiProvider, createConfig } from '@privy-io/wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { http, fallback, defineChain } from 'viem';
-import { lineaSepolia as baseLineaSepolia } from 'viem/chains';
-import { DEFAULT_LINEA_SEPOLIA_RPCS } from '../config/publicConfig';
+import { http, fallback, defineChain, type Transport } from 'viem';
+import { APP_CHAIN } from './lib/constants';
+import { getDefaultLineaRpcs } from '../config/publicConfig';
 
 // Higher staleTime reduces RPC load: data stays "fresh" longer, fewer duplicate refetches.
 const queryClient = new QueryClient({
@@ -18,21 +19,21 @@ const queryClient = new QueryClient({
 });
 
 /**
- * Custom Linea Sepolia chain with an RPC that supports eth_sendRawTransaction.
- * The default rpc.sepolia.linea.build does NOT support it, which breaks
- * Privy's useSendTransaction (it signs client-side and broadcasts raw).
+ * Custom Linea chain definition with app-configured RPC priority.
+ * Privy tends to prefer the first RPC for raw transaction broadcast, so
+ * production can pin a provider via NEXT_PUBLIC_LINEA_RPCS when needed.
  */
 const ENV_RPCS =
-  process.env.NEXT_PUBLIC_LINEA_SEPOLIA_RPCS
+  (process.env.NEXT_PUBLIC_LINEA_RPCS ?? process.env.NEXT_PUBLIC_LINEA_SEPOLIA_RPCS)
     ?.split(',')
     .map((s) => s.trim())
     .filter(Boolean) ?? [];
 
 // If env list is provided, use only it. This allows hard-excluding flaky providers in production.
-const RPC_URLS = [...new Set(ENV_RPCS.length > 0 ? ENV_RPCS : DEFAULT_LINEA_SEPOLIA_RPCS)];
+const RPC_URLS = [...new Set(ENV_RPCS.length > 0 ? ENV_RPCS : getDefaultLineaRpcs())];
 
-export const lineaSepoliaChain = defineChain({
-  ...baseLineaSepolia,
+export const appChain = defineChain({
+  ...APP_CHAIN,
   rpcUrls: {
     default: {
       // Privy mostly uses the first RPC here for raw tx broadcast.
@@ -42,12 +43,12 @@ export const lineaSepoliaChain = defineChain({
 });
 
 export const wagmiConfig = createConfig({
-  chains: [lineaSepoliaChain],
+  chains: [appChain],
   transports: {
-    [lineaSepoliaChain.id]: fallback([
+    [appChain.id]: fallback([
       ...RPC_URLS.map((url) => http(url, { timeout: 12_000, retryCount: 1 })),
     ], { rank: true }),
-  },
+  } as Record<(typeof appChain)["id"], Transport>,
   batch: {
     multicall: true,
   },
@@ -55,30 +56,36 @@ export const wagmiConfig = createConfig({
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "cmlqkgtmg00og0cjueu4mxmn9";
-  
+
+  const privyConfig = useMemo(() => ({
+    defaultChain: appChain,
+    supportedChains: [appChain],
+    appearance: {
+      theme: 'dark' as const,
+      accentColor: '#6c38ff' as const,
+    },
+    embeddedWallets: {
+      showWalletUIs: false,
+      ethereum: {
+        createOnLogin: 'users-without-wallets' as const,
+      },
+    },
+  }), []);
+
+  const secureAppTree = (
+    <QueryClientProvider client={queryClient}>
+      <PrivyWagmiProvider config={wagmiConfig}>
+        {children}
+      </PrivyWagmiProvider>
+    </QueryClientProvider>
+  );
+
   return (
     <PrivyProvider
       appId={privyAppId}
-      config={{
-        defaultChain: lineaSepoliaChain,
-        supportedChains: [lineaSepoliaChain],
-        appearance: {
-          theme: 'dark',
-          accentColor: '#6c38ff',
-        },
-        embeddedWallets: {
-          showWalletUIs: false,
-          ethereum: {
-            createOnLogin: 'users-without-wallets',
-          },
-        },
-      }}
+      config={privyConfig}
     >
-      <QueryClientProvider client={queryClient}>
-        <WagmiProvider config={wagmiConfig}>
-          {children}
-        </WagmiProvider>
-      </QueryClientProvider>
+      {secureAppTree}
     </PrivyProvider>
   );
 }

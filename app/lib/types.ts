@@ -1,4 +1,4 @@
-export type TabId = "hub" | "analytics" | "referral" | "leaderboards" | "whitepaper" | "faq";
+export type TabId = "hub" | "analytics" | "rebate" | "leaderboards" | "whitepaper" | "faq";
 
 export interface LeaderboardEntry {
   rank: number;

@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePublicClient } from "wagmi";
-import { decodeEventLog, formatUnits, encodeEventTopics, type Log, type Hex, type PublicClient } from "viem";
+import { decodeEventLog, encodeEventTopics, formatUnits, type Hex, type Log } from "viem";
 import {
+  APP_CHAIN_ID,
   CONTRACT_ADDRESS,
+  CONTRACT_DEPLOY_BLOCK,
   GAME_ABI,
   GAME_EVENTS_ABI,
-  APP_CHAIN_ID,
   LEADERBOARD_TOP_N,
 } from "../lib/constants";
 import type { LeaderboardEntry, LuckyTileEntry } from "../lib/types";
@@ -15,39 +16,29 @@ import type { LeaderboardEntry, LuckyTileEntry } from "../lib/types";
 const CHUNK_BLOCKS = 50_000;
 const MAX_CONCURRENT = 4;
 const MULTICALL_BATCH = 200;
-const REFERRAL_STALE_MS = 10 * 60 * 1000;
-const STORAGE_KEY = "lore:leaderboard:v1";
-
-// ─── Compact storage format (short keys to minimize size) ───
+const STORAGE_KEY = `lore:leaderboard:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 
 interface UserAgg {
-  w: string;   // totalWagered (bigint)
-  n: string;   // totalWon (bigint)
-  m: string;   // maxSingleWin (bigint)
-  c: number;   // winCount
+  w: string;
+  n: string;
+  m: string;
+  c: number;
 }
 
 interface UnderdogRow {
-  u: string;   // user
-  e: string;   // epoch
-  r: string;   // reward (bigint)
-  t: number;   // tile
-  p: string;   // tilePool (bigint)
-}
-
-interface RefAgg {
-  c: number;   // referralCount
-  e: string;   // totalEarnings (bigint)
+  u: string;
+  e: string;
+  r: string;
+  t: number;
+  p: string;
 }
 
 interface CachedLeaderboard {
-  lb: string;                       // lastBlock scanned
-  us: Record<string, UserAgg>;      // per-user stats
-  tw: Record<string, number>;       // tileId → win count
-  rc: number;                       // total resolved epochs
-  ud: UnderdogRow[];                // top underdog candidates
-  rf: Record<string, RefAgg>;       // referral data (periodic)
-  rt: number;                       // referrals last updated ts
+  lb: string;
+  us: Record<string, UserAgg>;
+  tw: Record<string, number>;
+  rc: number;
+  ud: UnderdogRow[];
 }
 
 function loadCache(): CachedLeaderboard | null {
@@ -55,14 +46,18 @@ function loadCache(): CachedLeaderboard | null {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     return JSON.parse(raw) as CachedLeaderboard;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
-function saveCache(c: CachedLeaderboard) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(c)); } catch {}
+function saveCache(cache: CachedLeaderboard) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(cache));
+  } catch {
+    // ignore quota issues
+  }
 }
-
-// ─── Build display data from cache ───
 
 export interface LeaderboardsData {
   biggestSingleWin: LeaderboardEntry[];
@@ -72,8 +67,6 @@ export interface LeaderboardsData {
   whales: LeaderboardEntry[];
   underdog: LeaderboardEntry[];
   luckyTile: LuckyTileEntry[];
-  topReferrers: LeaderboardEntry[];
-  topReferralEarners: LeaderboardEntry[];
 }
 
 function buildFromCache(cache: CachedLeaderboard): LeaderboardsData {
@@ -91,20 +84,25 @@ function buildFromCache(cache: CachedLeaderboard): LeaderboardsData {
   const biggestSingleWin: LeaderboardEntry[] = [...users]
     .sort((a, b) => (b.maxSingleWin > a.maxSingleWin ? 1 : b.maxSingleWin < a.maxSingleWin ? -1 : 0))
     .slice(0, N)
-    .filter(u => u.maxSingleWin > BigInt(0))
-    .map((u, i) => ({ rank: i + 1, address: u.addr, value: fmt(u.maxSingleWin), valueNum: Number(formatUnits(u.maxSingleWin, 18)) }));
+    .filter((u) => u.maxSingleWin > BigInt(0))
+    .map((u, i) => ({
+      rank: i + 1,
+      address: u.addr,
+      value: fmt(u.maxSingleWin),
+      valueNum: Number(formatUnits(u.maxSingleWin, 18)),
+    }));
 
   const oneTileWonder = biggestSingleWin;
 
   const mostWins: LeaderboardEntry[] = [...users]
     .sort((a, b) => b.winCount - a.winCount)
     .slice(0, N)
-    .filter(u => u.winCount > 0)
+    .filter((u) => u.winCount > 0)
     .map((u, i) => ({ rank: i + 1, address: u.addr, value: String(u.winCount), valueNum: u.winCount }));
 
   const luckiest: LeaderboardEntry[] = users
-    .filter(u => u.totalWagered > BigInt(0) && u.totalWon > BigInt(0))
-    .map(u => ({
+    .filter((u) => u.totalWagered > BigInt(0) && u.totalWon > BigInt(0))
+    .map((u) => ({
       addr: u.addr,
       roi: Number((u.totalWon * BigInt(10000)) / u.totalWagered) / 100,
       totalWon: u.totalWon,
@@ -123,45 +121,32 @@ function buildFromCache(cache: CachedLeaderboard): LeaderboardsData {
   const whales: LeaderboardEntry[] = [...users]
     .sort((a, b) => (b.totalWagered > a.totalWagered ? 1 : b.totalWagered < a.totalWagered ? -1 : 0))
     .slice(0, N)
-    .filter(u => u.totalWagered > BigInt(0))
-    .map((u, i) => ({ rank: i + 1, address: u.addr, value: fmt(u.totalWagered), valueNum: Number(formatUnits(u.totalWagered, 18)) }));
-
-  const totalResolved = cache.rc;
-  const luckyTile: LuckyTileEntry[] = Object.entries(cache.tw)
-    .map(([id, wins]) => ({ tileId: Number(id), wins, pct: totalResolved > 0 ? (wins / totalResolved) * 100 : 0 }))
-    .sort((a, b) => b.wins - a.wins);
-
-  const underdog: LeaderboardEntry[] = cache.ud
+    .filter((u) => u.totalWagered > BigInt(0))
     .map((u, i) => ({
       rank: i + 1,
-      address: u.u,
-      value: fmt(BigInt(u.r)),
-      valueNum: Number(formatUnits(BigInt(u.r), 18)),
-      extra: `pool on tile ${u.t} was ${fmt(BigInt(u.p))} LINEA`,
+      address: u.addr,
+      value: fmt(u.totalWagered),
+      valueNum: Number(formatUnits(u.totalWagered, 18)),
     }));
 
-  const refEntries = Object.entries(cache.rf);
-  const topReferrers: LeaderboardEntry[] = refEntries
-    .filter(([, r]) => r.c > 0)
-    .sort((a, b) => b[1].c - a[1].c)
-    .slice(0, N)
-    .map(([addr, r], i) => ({ rank: i + 1, address: addr, value: String(r.c), valueNum: r.c }));
+  const luckyTile: LuckyTileEntry[] = Object.entries(cache.tw)
+    .map(([id, wins]) => ({
+      tileId: Number(id),
+      wins,
+      pct: cache.rc > 0 ? (wins / cache.rc) * 100 : 0,
+    }))
+    .sort((a, b) => b.wins - a.wins);
 
-  const topReferralEarners: LeaderboardEntry[] = refEntries
-    .filter(([, r]) => BigInt(r.e) > BigInt(0))
-    .sort((a, b) => (BigInt(b[1].e) > BigInt(a[1].e) ? 1 : -1))
-    .slice(0, N)
-    .map(([addr, r], i) => ({
-      rank: i + 1,
-      address: addr,
-      value: parseFloat(formatUnits(BigInt(r.e), 18)).toFixed(2),
-      valueNum: parseFloat(formatUnits(BigInt(r.e), 18)),
-    }));
+  const underdog: LeaderboardEntry[] = cache.ud.map((u, i) => ({
+    rank: i + 1,
+    address: u.u,
+    value: fmt(BigInt(u.r)),
+    valueNum: Number(formatUnits(BigInt(u.r), 18)),
+    extra: `pool on tile ${u.t} was ${fmt(BigInt(u.p))} LINEA`,
+  }));
 
-  return { biggestSingleWin, luckiest, oneTileWonder, mostWins, whales, underdog, luckyTile, topReferrers, topReferralEarners };
+  return { biggestSingleWin, luckiest, oneTileWonder, mostWins, whales, underdog, luckyTile };
 }
-
-// ─── Hook ───
 
 export function useLeaderboards(enabled: boolean) {
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
@@ -171,7 +156,6 @@ export function useLeaderboards(enabled: boolean) {
   const runningRef = useRef(false);
   const restoredRef = useRef(false);
 
-  // Restore from cache instantly on first enable
   useEffect(() => {
     if (!enabled || restoredRef.current) return;
     restoredRef.current = true;
@@ -182,8 +166,7 @@ export function useLeaderboards(enabled: boolean) {
   }, [enabled]);
 
   const fetchAll = useCallback(async (force = false) => {
-    if (!publicClient || !enabled) return;
-    if (runningRef.current) return;
+    if (!publicClient || !enabled || runningRef.current) return;
     runningRef.current = true;
     setLoading(true);
     setError(null);
@@ -192,26 +175,22 @@ export function useLeaderboards(enabled: boolean) {
       const toBlock = await publicClient.getBlockNumber();
       const cache = force ? null : loadCache();
       const fromBlock = cache
-        ? BigInt(cache.lb) + BigInt(1)
-        : BigInt(0);
+        ? (BigInt(cache.lb) + 1n > CONTRACT_DEPLOY_BLOCK ? BigInt(cache.lb) + 1n : CONTRACT_DEPLOY_BLOCK)
+        : CONTRACT_DEPLOY_BLOCK;
 
       if (fromBlock > toBlock && cache) {
-        // Nothing new – just refresh referrals if stale
-        if (Date.now() - cache.rt > REFERRAL_STALE_MS) {
-          await refreshReferrals(cache, publicClient);
-          saveCache(cache);
-          setData(buildFromCache(cache));
-        }
+        setData(buildFromCache(cache));
         return;
       }
 
-      // ─── 1. Fetch event logs in chunks ───
       const eventSigs: Hex[] = [];
       for (const eventName of ["RewardClaimed", "BetPlaced", "BatchBetsPlaced", "EpochResolved"] as const) {
         try {
           const topics = encodeEventTopics({ abi: GAME_EVENTS_ABI, eventName });
           if (topics[0]) eventSigs.push(topics[0]);
-        } catch {}
+        } catch {
+          // ignore abi issues
+        }
       }
 
       const chunks: { from: bigint; to: bigint }[] = [];
@@ -224,20 +203,18 @@ export function useLeaderboards(enabled: boolean) {
       for (let i = 0; i < chunks.length; i += MAX_CONCURRENT) {
         const batch = chunks.slice(i, i + MAX_CONCURRENT);
         const results = await Promise.all(
-          batch.map((c) => {
-            const request = {
+          batch.map((chunk) =>
+            publicClient.getLogs({
               address: CONTRACT_ADDRESS,
               topics: eventSigs.length > 0 ? [eventSigs] : undefined,
-              fromBlock: c.from,
-              toBlock: c.to,
-            } as unknown as Parameters<typeof publicClient.getLogs>[0];
-            return publicClient.getLogs(request);
-          }),
+              fromBlock: chunk.from,
+              toBlock: chunk.to,
+            } as Parameters<typeof publicClient.getLogs>[0]),
+          ),
         );
-        for (const r of results) allLogs.push(...r);
+        for (const result of results) allLogs.push(...result);
       }
 
-      // ─── 2. Decode and aggregate into cache ───
       const us: Record<string, UserAgg> = cache?.us ? { ...cache.us } : {};
       const tw: Record<string, number> = cache?.tw ? { ...cache.tw } : {};
       let rc = cache?.rc ?? 0;
@@ -271,64 +248,60 @@ export function useLeaderboards(enabled: boolean) {
             newClaims.push({ epoch, user: addr, reward });
           } else if (decoded.eventName === "EpochResolved") {
             const { epoch, winningTile } = decoded.args as { epoch: bigint; winningTile: bigint };
-            const t = Number(winningTile);
-            tw[String(t)] = (tw[String(t)] ?? 0) + 1;
-            rc++;
+            tw[String(Number(winningTile))] = (tw[String(Number(winningTile))] ?? 0) + 1;
+            rc += 1;
             newResolved.push({ epoch, winningTile });
           }
-        } catch {}
+        } catch {
+          // ignore malformed log
+        }
       }
 
-      // ─── 3. Underdog: merge with existing candidates ───
-      const existingUd = cache?.ud ?? [];
-      let udCandidates = [...existingUd];
+      const existingUnderdog = cache?.ud ?? [];
+      let underdogCandidates = [...existingUnderdog];
 
       if (newClaims.length > 0) {
         const epochToTile = new Map<string, number>();
-        for (const r of newResolved) epochToTile.set(r.epoch.toString(), Number(r.winningTile));
-        // Also load from existing resolved if missing
-        if (cache) {
-          for (const ud of cache.ud) {
-            epochToTile.set(ud.e, ud.t);
-          }
-        }
+        for (const resolved of newResolved) epochToTile.set(resolved.epoch.toString(), Number(resolved.winningTile));
+        for (const row of existingUnderdog) epochToTile.set(row.e, row.t);
 
-        const pairsToQuery = newClaims
-          .map(c => {
-            const tile = epochToTile.get(c.epoch.toString());
-            return tile != null ? { epoch: c.epoch, tile, user: c.user, reward: c.reward } : null;
+        const pairs = newClaims
+          .map((claim) => {
+            const tile = epochToTile.get(claim.epoch.toString());
+            return tile != null ? { epoch: claim.epoch, tile, user: claim.user, reward: claim.reward } : null;
           })
-          .filter((x): x is NonNullable<typeof x> => x != null);
+          .filter((value): value is NonNullable<typeof value> => value != null);
 
-        const uniquePairs = Array.from(
-          new Map(pairsToQuery.map(p => [`${p.epoch}-${p.tile}`, p])).values()
-        );
+        const uniquePairs = Array.from(new Map(pairs.map((pair) => [`${pair.epoch}-${pair.tile}`, pair])).values());
 
         if (uniquePairs.length > 0) {
           const poolMap = new Map<string, bigint>();
           for (let i = 0; i < uniquePairs.length; i += MULTICALL_BATCH) {
             const batch = uniquePairs.slice(i, i + MULTICALL_BATCH);
-            const contracts = batch.map(p => ({
+            const contracts = batch.map((pair) => ({
               address: CONTRACT_ADDRESS,
               abi: GAME_ABI,
               functionName: "tilePools" as const,
-              args: [p.epoch, BigInt(p.tile)] as const,
+              args: [pair.epoch, BigInt(pair.tile)] as const,
             }));
             const results = await publicClient.multicall({ contracts });
-            batch.forEach((p, j) => {
-              const res = results[j];
-              poolMap.set(`${p.epoch}-${p.tile}`, res?.status === "success" && res.result != null ? res.result : BigInt(0));
+            batch.forEach((pair, index) => {
+              const result = results[index];
+              poolMap.set(
+                `${pair.epoch}-${pair.tile}`,
+                result?.status === "success" && result.result != null ? (result.result as bigint) : BigInt(0),
+              );
             });
           }
 
-          for (const p of pairsToQuery) {
-            const pool = poolMap.get(`${p.epoch}-${p.tile}`) ?? BigInt(0);
+          for (const pair of pairs) {
+            const pool = poolMap.get(`${pair.epoch}-${pair.tile}`) ?? BigInt(0);
             if (pool > BigInt(0)) {
-              udCandidates.push({
-                u: p.user,
-                e: p.epoch.toString(),
-                r: p.reward.toString(),
-                t: p.tile,
+              underdogCandidates.push({
+                u: pair.user,
+                e: pair.epoch.toString(),
+                r: pair.reward.toString(),
+                t: pair.tile,
                 p: pool.toString(),
               });
             }
@@ -336,93 +309,40 @@ export function useLeaderboards(enabled: boolean) {
         }
       }
 
-      udCandidates.sort((a, b) => {
-        const pa = BigInt(a.p), pb = BigInt(b.p);
-        if (pa !== pb) return pa < pb ? -1 : 1;
+      underdogCandidates.sort((a, b) => {
+        const poolA = BigInt(a.p);
+        const poolB = BigInt(b.p);
+        if (poolA !== poolB) return poolA < poolB ? -1 : 1;
         return BigInt(b.r) > BigInt(a.r) ? 1 : -1;
       });
-      udCandidates = udCandidates.slice(0, LEADERBOARD_TOP_N);
+      underdogCandidates = underdogCandidates.slice(0, LEADERBOARD_TOP_N);
 
-      // ─── 4. Save cache (before referrals) ───
-      const newCache: CachedLeaderboard = {
+      const nextCache: CachedLeaderboard = {
         lb: toBlock.toString(),
         us,
         tw,
         rc,
-        ud: udCandidates,
-        rf: cache?.rf ?? {},
-        rt: cache?.rt ?? 0,
+        ud: underdogCandidates,
       };
 
-      saveCache(newCache);
-      setData(buildFromCache(newCache));
-
-      // ─── 5. Refresh referrals if stale ───
-      if (Date.now() - newCache.rt > REFERRAL_STALE_MS) {
-        try {
-          await refreshReferrals(newCache, publicClient);
-          saveCache(newCache);
-          setData(buildFromCache(newCache));
-        } catch {}
-      }
+      saveCache(nextCache);
+      setData(buildFromCache(nextCache));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
       runningRef.current = false;
     }
-  }, [publicClient, enabled]);
+  }, [enabled, publicClient]);
 
   useEffect(() => {
     if (!enabled) return;
-    fetchAll();
+    void fetchAll();
   }, [enabled, fetchAll]);
 
-  const refetch = useCallback(() => fetchAll(true), [fetchAll]);
+  const refetch = useCallback(() => {
+    void fetchAll(true);
+  }, [fetchAll]);
+
   return { data, loading, error, refetch };
-}
-
-// ─── Referral refresh (separate from event scan) ───
-
-type MulticallResultLike = { status: "success"; result: unknown } | { status: "failure"; error: unknown };
-
-async function refreshReferrals(cache: CachedLeaderboard, publicClient: PublicClient) {
-  const addresses = Object.keys(cache.us);
-  if (addresses.length === 0) return;
-
-  const contracts = addresses.flatMap(addr => [
-    {
-      address: CONTRACT_ADDRESS as `0x${string}`,
-      abi: GAME_ABI,
-      functionName: "referralCount" as const,
-      args: [addr as `0x${string}`] as const,
-    },
-    {
-      address: CONTRACT_ADDRESS as `0x${string}`,
-      abi: GAME_ABI,
-      functionName: "totalReferralEarnings" as const,
-      args: [addr as `0x${string}`] as const,
-    },
-  ]);
-
-  const results: MulticallResultLike[] = [];
-  for (let i = 0; i < contracts.length; i += MULTICALL_BATCH) {
-    const batch = contracts.slice(i, i + MULTICALL_BATCH);
-    const res = await publicClient.multicall({ contracts: batch });
-    results.push(...(res as MulticallResultLike[]));
-  }
-
-  const rf: Record<string, RefAgg> = {};
-  for (let i = 0; i < addresses.length; i++) {
-    const countRes = results[i * 2];
-    const earnRes = results[i * 2 + 1];
-    const count = countRes?.status === "success" ? Number(countRes.result as bigint) : 0;
-    const earnings = earnRes?.status === "success" ? (earnRes.result as bigint).toString() : "0";
-    if (count > 0 || BigInt(earnings) > BigInt(0)) {
-      rf[addresses[i]] = { c: count, e: earnings };
-    }
-  }
-
-  cache.rf = rf;
-  cache.rt = Date.now();
 }

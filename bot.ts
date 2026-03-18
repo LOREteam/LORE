@@ -1,15 +1,30 @@
 import "dotenv/config";
 import { createPublicClient, createWalletClient, getAddress, http, fallback, parseAbi, formatUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { lineaSepolia } from "viem/chains";
+import { getKeeperFeeOverrides } from "./app/lib/lineaFees";
+import {
+  getConfiguredContractAddress,
+  getConfiguredLineaNetwork,
+  getDefaultLineaRpcs,
+  getLineaChain,
+  getPreferredLineaRpcs,
+} from "./config/publicConfig";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const DEFAULT_RPC_URL = "https://rpc.sepolia.linea.build";
-const DEFAULT_CONTRACT = "0x2a98cfb661710d11c47e958856859f7b474e0107";
+const APP_NETWORK = getConfiguredLineaNetwork();
+const APP_CHAIN = getLineaChain(APP_NETWORK);
+const DEFAULT_RPC_URL = getDefaultLineaRpcs(APP_NETWORK)[0];
+const DEFAULT_CONTRACT = getConfiguredContractAddress(
+  process.env.KEEPER_CONTRACT_ADDRESS ??
+    process.env.NEXT_PUBLIC_CONTRACT_ADDRESS,
+  APP_NETWORK,
+);
 const ALERT_BOT_TOKEN = process.env.ALERT_TELEGRAM_BOT_TOKEN ?? "";
 const ALERT_CHAT_ID = process.env.ALERT_TELEGRAM_CHAT_ID ?? "";
 const ALERT_THREAD_ID = process.env.ALERT_TELEGRAM_THREAD_ID ?? "";
 const ALERT_PREFIX = process.env.ALERT_PREFIX ?? "LORE Keeper";
+const PENDING_RESOLVE_STALE_MS = Number(process.env.PENDING_RESOLVE_STALE_MS ?? "45000");
+const FORCE_REPLACE_PENDING_NONCE_GAP = Number(process.env.FORCE_REPLACE_PENDING_NONCE_GAP ?? "6");
 
 // Fallback grace period: wait this many seconds after epoch ends before resolving.
 // Gives AutoResolve in users' browsers time to handle it first.
@@ -93,19 +108,16 @@ async function startKeeperBot() {
   const contractAddress = getAddress(process.env.KEEPER_CONTRACT_ADDRESS ?? DEFAULT_CONTRACT);
   const rpcUrl = process.env.KEEPER_RPC_URL ?? DEFAULT_RPC_URL;
   const account = privateKeyToAccount(`0x${privateKeyRaw}`);
+  const rpcUrls = getPreferredLineaRpcs(rpcUrl, APP_NETWORK);
 
-  const transport = fallback([
-    http(rpcUrl),
-    http('https://linea-sepolia-rpc.publicnode.com'),
-    http('https://linea-sepolia.public.blastapi.io'),
-  ]);
+  const transport = fallback(rpcUrls.map((url) => http(url)));
   const publicClient = createPublicClient({
-    chain: lineaSepolia,
+    chain: APP_CHAIN,
     transport,
   });
   const walletClient = createWalletClient({
     account,
-    chain: lineaSepolia,
+    chain: APP_CHAIN,
     transport,
   });
 
@@ -125,6 +137,7 @@ async function startKeeperBot() {
 
   let consecutiveErrors = 0;
   let consecutiveNetworkErrors = 0;
+  let pendingResolve: { epoch: bigint; hash: `0x${string}`; submittedAt: number } | null = null;
 
   while (true) {
     try {
@@ -152,6 +165,43 @@ async function startKeeperBot() {
       const totalPool = epochData[0] as bigint;
       const overdue = -secondsLeft;
 
+      if (pendingResolve) {
+        const pending = pendingResolve;
+        if (epoch > pending.epoch || isResolved) {
+          console.log(`\nPending resolve confirmed for epoch ${pending.epoch.toString()} via chain state. Tx: ${pending.hash}`);
+          pendingResolve = null;
+        } else {
+          try {
+            const receipt = await publicClient.getTransactionReceipt({ hash: pending.hash });
+            console.log(`\nPending resolve receipt found for epoch ${pending.epoch.toString()} (${receipt.status}). Tx: ${pending.hash}`);
+            pendingResolve = null;
+          } catch {
+            const latestNonce = await publicClient.getTransactionCount({
+              address: account.address,
+              blockTag: "latest",
+            });
+            const pendingNonce = await publicClient.getTransactionCount({
+              address: account.address,
+              blockTag: "pending",
+            });
+            const nonceGap = Number(pendingNonce - latestNonce);
+            const pendingAgeMs = Date.now() - pending.submittedAt;
+            if (
+              pendingAgeMs < PENDING_RESOLVE_STALE_MS &&
+              nonceGap < FORCE_REPLACE_PENDING_NONCE_GAP
+            ) {
+              process.stdout.write(`\rEpoch #${epoch.toString()} | resolve tx pending | ${pending.hash.slice(0, 10)}...   `);
+              await delay(3000);
+              continue;
+            }
+            console.log(
+              `\nPending resolve tx marked stale for epoch ${pending.epoch.toString()} (age=${Math.floor(pendingAgeMs / 1000)}s, nonceGap=${nonceGap}), retrying with latest nonce.`,
+            );
+            pendingResolve = null;
+          }
+        }
+      }
+
       if (secondsLeft <= -GRACE_SECONDS && !isResolved) {
         const freshEpoch = await publicClient.readContract({
           address: contractAddress, abi: ABI, functionName: "currentEpoch",
@@ -171,21 +221,60 @@ async function startKeeperBot() {
             });
             const gas = (est * BigInt(150)) / BigInt(100);
             const fees = await publicClient.estimateFeesPerGas();
-            const feeOverrides = fees?.maxFeePerGas
-              ? { maxFeePerGas: (fees.maxFeePerGas * BigInt(130)) / BigInt(100), maxPriorityFeePerGas: ((fees.maxPriorityFeePerGas ?? BigInt(0)) * BigInt(130)) / BigInt(100) }
-              : fees?.gasPrice ? { gasPrice: (fees.gasPrice * BigInt(130)) / BigInt(100) } : {};
+            const latestNonce = await publicClient.getTransactionCount({
+              address: account.address,
+              blockTag: "latest",
+            });
+            const pendingNonce = await publicClient.getTransactionCount({
+              address: account.address,
+              blockTag: "pending",
+            });
+            const replacingPendingTx = pendingNonce > latestNonce;
+            const estimatedFeeOverrides = getKeeperFeeOverrides(
+              fees,
+              APP_CHAIN.id,
+              replacingPendingTx ? BigInt(160) : BigInt(130),
+              replacingPendingTx ? BigInt(150) : BigInt(125),
+            );
+            const feeOverrides = estimatedFeeOverrides?.gasPrice !== undefined
+              ? { gasPrice: estimatedFeeOverrides.gasPrice }
+              : estimatedFeeOverrides?.maxFeePerGas !== undefined
+                ? {
+                    maxFeePerGas: estimatedFeeOverrides.maxFeePerGas,
+                    maxPriorityFeePerGas: estimatedFeeOverrides.maxPriorityFeePerGas,
+                  }
+                : {};
+            if (replacingPendingTx) {
+              console.log(
+                `Replacing pending keeper tx with nonce ${latestNonce.toString()} (pending=${pendingNonce.toString()}, latest=${latestNonce.toString()})`,
+              );
+            }
             const hash = await walletClient.writeContract({
               address: contractAddress,
               abi: ABI,
               functionName: "resolveEpoch",
               args: [epoch],
               gas,
+              ...(replacingPendingTx ? { nonce: latestNonce } : {}),
               ...feeOverrides,
             });
-            await publicClient.waitForTransactionReceipt({ hash });
-            console.log(`Resolved (gas: ${gas}). Tx: ${hash}`);
-            consecutiveErrors = 0;
-            consecutiveNetworkErrors = 0;
+            try {
+              await publicClient.waitForTransactionReceipt({ hash });
+              console.log(`Resolved (gas: ${gas}). Tx: ${hash}`);
+              pendingResolve = null;
+              consecutiveErrors = 0;
+              consecutiveNetworkErrors = 0;
+            } catch (receiptErr) {
+              const receiptMsg = receiptErr instanceof Error ? receiptErr.message.toLowerCase() : String(receiptErr).toLowerCase();
+              if (receiptMsg.includes("timed out") || receiptMsg.includes("timeout")) {
+                pendingResolve = { epoch, hash, submittedAt: Date.now() };
+                console.log(`Resolve tx sent but receipt timed out. Will verify next cycles. Tx: ${hash}`);
+                consecutiveErrors = 0;
+                consecutiveNetworkErrors = 0;
+              } else {
+                throw receiptErr;
+              }
+            }
           } catch (txErr) {
             const errStr = txErr instanceof Error ? txErr.message.toLowerCase() : String(txErr).toLowerCase();
             if (

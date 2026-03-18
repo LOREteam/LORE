@@ -204,17 +204,6 @@ const GridIcon = ({ className }: { className?: string }) => (
     <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
   </svg>
 );
-const UsersIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-  </svg>
-);
-const CoinsIcon = ({ className }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
-  </svg>
-);
-
 export function Leaderboards({
   data,
   loading,
@@ -229,7 +218,7 @@ export function Leaderboards({
   const allAddresses = useMemo(() => {
     if (!data) return [];
     const set = new Set<string>();
-    for (const list of [data.biggestSingleWin, data.luckiest, data.oneTileWonder, data.mostWins, data.whales, data.underdog, data.topReferrers, data.topReferralEarners]) {
+    for (const list of [data.biggestSingleWin, data.luckiest, data.oneTileWonder, data.mostWins, data.whales, data.underdog]) {
       for (const e of list) set.add(e.address);
     }
     return [...set];
@@ -416,36 +405,6 @@ export function Leaderboards({
               loreQuote={leaderboardLore.luckyTile.quote}
             >
               <LuckyTileGrid entries={data.luckyTile} />
-            </Section>
-
-            <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
-
-            <Section
-              id="top-referrers"
-              badge="08"
-              title="Top Referrers"
-              desc="Most players invited to the Lattice. The recruiters who grew the mining community."
-              icon={UsersIcon}
-              delay={0.35}
-              loreTitle="The Recruiters"
-              loreQuote="Every miner I bring to the Lattice strengthens its resonance. The chain grows through trust."
-            >
-              <LeaderboardTable entries={data.topReferrers} valueLabel="Invited" valueClass="text-emerald-400" resolveName={resolveName} />
-            </Section>
-
-            <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
-
-            <Section
-              id="referral-earnings"
-              badge="09"
-              title="Referral Earnings"
-              desc="Who earned the most from their referral network. The ambassadors of LORE."
-              icon={CoinsIcon}
-              delay={0.4}
-              loreTitle="The Ambassadors"
-              loreQuote="The Lattice rewards those who expand its reach. Commission is the echo of influence."
-            >
-              <LeaderboardTable entries={data.topReferralEarners} valueLabel="LINEA earned" valueClass="text-amber-400" resolveName={resolveName} />
             </Section>
           </>
         )}

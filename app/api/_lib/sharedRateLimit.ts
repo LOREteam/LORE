@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
-import { firebaseWriteUrl } from "./dataBridge";
+import { FIREBASE_DB_AUTH, firebaseWriteUrl } from "./dataBridge";
 
 type RateLimitState = {
   count: number;
@@ -15,6 +15,7 @@ type RateLimitOptions = {
 };
 
 const localFallbackMap = new Map<string, RateLimitState>();
+const sharedLimiterMisconfigBuckets = new Set<string>();
 
 function getClientIdentity(request: Request): string {
   const cfConnectingIp = request.headers.get("cf-connecting-ip");
@@ -127,8 +128,15 @@ export async function enforceSharedRateLimit(
 ): Promise<NextResponse | null> {
   const identity = getClientIdentity(request);
   const key = hashIdentity(identity);
-  const path = `_internal/rateLimits/${bucket}/${key}`;
   const now = Date.now();
+
+  // In local/dev runs, prefer in-memory limiting and avoid noisy auth failures
+  // when Firebase write credentials are missing or intentionally not configured.
+  if (process.env.NODE_ENV !== "production" || !FIREBASE_DB_AUTH) {
+    return enforceLocalFallback(bucket, key, limit, windowMs, now);
+  }
+
+  const path = `_internal/rateLimits/${bucket}/${key}`;
   const windowStartedAt = now - (now % windowMs);
   const resetAt = windowStartedAt + windowMs;
 
@@ -160,7 +168,16 @@ export async function enforceSharedRateLimit(
       if (writeRes.status === 412) continue;
       throw new Error(`rate-limit write failed: ${writeRes.status}`);
     } catch (error) {
-      console.warn(`[rate-limit:${bucket}] shared limiter fallback:`, error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("401") || message.includes("403")) {
+        const warnKey = `${bucket}:${message}`;
+        if (!sharedLimiterMisconfigBuckets.has(warnKey)) {
+          sharedLimiterMisconfigBuckets.add(warnKey);
+          console.warn(`[rate-limit:${bucket}] shared limiter disabled, using local fallback: ${message}`);
+        }
+      } else {
+        console.warn(`[rate-limit:${bucket}] shared limiter fallback:`, error);
+      }
       return enforceLocalFallback(bucket, key, limit, windowMs, now);
     }
   }

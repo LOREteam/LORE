@@ -1,13 +1,43 @@
 import { parseAbi, getAddress } from "viem";
-import { lineaSepolia } from "viem/chains";
+import {
+  getConfiguredContractAddress,
+  getConfiguredDeployBlock,
+  getConfiguredLineaNetwork,
+  getConfiguredLineaTokenAddress,
+  getContractHasRebateApi,
+  getContractHasTokenGetter,
+  getLineaChain,
+  getLineaChainName,
+  getLineaExplorerTxBaseUrl,
+} from "../../config/publicConfig";
 
 // --- Contract Addresses ---
-export const CONTRACT_ADDRESS = getAddress("0x2a98cfb661710d11c47e958856859f7b474e0107");
-export const LINEA_TOKEN_ADDRESS = getAddress("0xa25bec3ed257a31ee62f1418ec3c3571aa051107");
-export const APP_CHAIN_ID = lineaSepolia.id;
+export const APP_NETWORK = getConfiguredLineaNetwork();
+export const APP_CHAIN = getLineaChain(APP_NETWORK);
+export const APP_CHAIN_ID = APP_CHAIN.id;
+export const APP_CHAIN_NAME = getLineaChainName(APP_NETWORK);
+export const EXPLORER_TX_BASE_URL = getLineaExplorerTxBaseUrl(APP_NETWORK);
+export const CONTRACT_ADDRESS = getAddress(
+  getConfiguredContractAddress(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS, APP_NETWORK),
+);
+export const LINEA_TOKEN_ADDRESS = getAddress(
+  getConfiguredLineaTokenAddress(process.env.NEXT_PUBLIC_LINEA_TOKEN_ADDRESS, APP_NETWORK),
+);
+export const CONTRACT_HAS_TOKEN_GETTER = getContractHasTokenGetter(
+  CONTRACT_ADDRESS,
+  process.env.NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER,
+);
+export const CONTRACT_HAS_REBATE_API = getContractHasRebateApi(
+  CONTRACT_ADDRESS,
+  process.env.NEXT_PUBLIC_CONTRACT_HAS_REBATE_API,
+);
 
-// --- Contract Deploy Block (Linea Sepolia) ---
-export const CONTRACT_DEPLOY_BLOCK = BigInt(25663555);
+// --- Contract Deploy Block ---
+export const CONTRACT_DEPLOY_BLOCK = getConfiguredDeployBlock(
+  process.env.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK ??
+    process.env.INDEXER_START_BLOCK,
+  APP_NETWORK,
+);
 
 // --- Game Config ---
 export const GRID_SIZE = 25;
@@ -22,7 +52,7 @@ export const MIN_WINNER_DISPLAY_MS = 600;
 export const MAX_REVEAL_DURATION_MS = 10000;
 
 // --- Reliability ---
-export const TX_RECEIPT_TIMEOUT_MS = 60_000;
+export const TX_RECEIPT_TIMEOUT_MS = 120_000;
 export const MAX_BET_ATTEMPTS = 2;
 
 // --- Leaderboards ---
@@ -34,27 +64,31 @@ export const TOKEN_ABI = parseAbi([
   "function allowance(address owner, address spender) external view returns (uint256)",
   "function balanceOf(address account) external view returns (uint256)",
   "function transfer(address to, uint256 amount) external returns (bool)",
+  "error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)",
 ]);
 
 export const GAME_ABI = parseAbi([
   "function placeBet(uint256 _tileId, uint256 _amount) external",
   "function placeBatchBets(uint256[] calldata _tileIds, uint256[] calldata _amounts) external",
   "function claimReward(uint256 _epoch) external",
+  "function claimEpochRebate(uint256 epoch) external",
+  "function claimEpochsRebate(uint256[] calldata claimEpochs) external",
+  "function settleEpochDust(uint256 epoch) external",
   "function resolveEpoch(uint256 _epoch) external",
-  "function registerReferralCode() external",
-  "function setReferrer(bytes6 code) external",
-  "function claimReferralEarnings() external",
-  "function accrueReferralBatch(uint256 maxEpochs) external",
-  "function claimAccruedReferralEarnings() external",
-  "function referralEpochsRemaining(address user) external view returns (uint256)",
   "function claimResolverRewards() external",
   "function flushProtocolFees() external",
   "function scheduleEpochDuration(uint256 newDuration) external",
   "function cancelEpochDurationChange() external",
+  "function scheduleFeeRecipientChange(address newRecipient) external",
+  "function cancelFeeRecipientChange() external",
+  "function acceptOwnership() external",
+  "function token() public view returns (address)",
   "function currentEpoch() public view returns (uint256)",
   "function owner() public view returns (address)",
+  "function pendingOwner() public view returns (address)",
+  "function feeRecipient() public view returns (address)",
   "function epochDuration() public view returns (uint256)",
-  "function getEpochEndTime(uint256 _epoch) public view returns (uint256)",
+  "function getEpochEndTime(uint256 _epoch) external view returns (uint256)",
   "function epochs(uint256) public view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
   "function rolloverPool() public view returns (uint256)",
   "function dailyJackpotPool() public view returns (uint256)",
@@ -63,21 +97,23 @@ export const GAME_ABI = parseAbi([
   "function accruedOwnerFees() public view returns (uint256)",
   "function accruedBurnFees() public view returns (uint256)",
   "function pendingResolverRewards(address user) public view returns (uint256)",
+  "function epochRebatePool(uint256 epoch) public view returns (uint256)",
+  "function rebateClaimed(uint256 epoch, address user) public view returns (bool)",
+  "function epochDustSettled(uint256 epoch) public view returns (bool)",
+  "function previewRebate(uint256 epoch, address user) external view returns (uint256)",
+  "function getRebateInfo(uint256 epoch, address user) external view returns (uint256 rebatePool, uint256 userVolume, uint256 pending, bool claimed, bool resolved)",
+  "function getRebateSummary(address user, uint256[] calldata rebateEpochList) external view returns (uint256 totalPending, uint256 claimableEpochs)",
   "function pendingEpochDuration() public view returns (uint256)",
   "function pendingEpochDurationEta() public view returns (uint256)",
   "function pendingEpochDurationEffectiveFromEpoch() public view returns (uint256)",
+  "function pendingFeeRecipient() public view returns (address)",
+  "function pendingFeeRecipientEta() public view returns (uint256)",
   "function getTileData(uint256 _epoch) external view returns (uint256[] memory pools, uint256[] memory users)",
   "function userBets(uint256 epoch, uint256 tile, address user) public view returns (uint256)",
   "function getUserBetsAll(uint256 epoch, address user) external view returns (uint256[] memory bets)",
   "function tilePools(uint256 epoch, uint256 tile) public view returns (uint256)",
   "function hasClaimed(address user, uint256 epoch) public view returns (bool)",
-  "function codeToAddress(bytes6 code) public view returns (address)",
-  "function addressToCode(address user) public view returns (bytes6)",
-  "function referrerOf(address user) public view returns (address)",
-  "function pendingReferralEarnings(address user) public view returns (uint256)",
-  "function totalReferralEarnings(address user) public view returns (uint256)",
-  "function referralCount(address user) public view returns (uint256)",
-  "function getReferralInfo(address user) external view returns (address referrer, bytes6 code, uint256 pending, uint256 totalEarned, uint256 referredUsers)",
+  "error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)",
   "error TimerNotEnded()",
   "error CanOnlyResolveCurrent()",
 ]);
@@ -89,4 +125,5 @@ export const GAME_EVENTS_ABI = parseAbi([
   "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
   "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
   "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
+  "event ProtocolFeesFlushed(uint256 ownerAmount, uint256 burnAmount)",
 ]);

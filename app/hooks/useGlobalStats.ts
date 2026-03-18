@@ -5,6 +5,7 @@ import { usePublicClient, useReadContract } from "wagmi";
 import { formatUnits, decodeEventLog, encodeEventTopics, type Log } from "viem";
 import {
   CONTRACT_ADDRESS,
+  CONTRACT_DEPLOY_BLOCK,
   GAME_ABI,
   GAME_EVENTS_ABI,
   APP_CHAIN_ID,
@@ -14,7 +15,7 @@ import {
 const MULTICALL_BATCH = 200;
 const LOG_CHUNK_BLOCKS = 50_000;
 const MAX_CONCURRENT_CHUNKS = 4;
-const STORAGE_KEY = "lore:global-stats-cache";
+const STORAGE_KEY = `lore:global-stats-cache:v4:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 
 export interface GlobalStats {
   totalVolume: string;
@@ -56,7 +57,7 @@ function loadCache(): Accumulator | null {
     const obj = JSON.parse(raw);
     return {
       volumeRaw: BigInt(obj.volumeRaw),
-      burnRaw: BigInt(obj.burnRaw),
+      burnRaw: BigInt(obj.burnRaw ?? 0),
       resolvedEpochs: obj.resolvedEpochs,
       lastScannedEpoch: obj.lastScannedEpoch,
       lastScannedBlock: obj.lastScannedBlock,
@@ -146,8 +147,8 @@ export function useGlobalStats() {
       const toBlock = await publicClient.getBlockNumber();
       const prevBlock = prev ? BigInt(prev.lastScannedBlock) : null;
       const fromBlock = prevBlock !== null
-        ? prevBlock + BigInt(1)
-        : BigInt(0);
+        ? (prevBlock + 1n > CONTRACT_DEPLOY_BLOCK ? prevBlock + 1n : CONTRACT_DEPLOY_BLOCK)
+        : CONTRACT_DEPLOY_BLOCK;
 
       let addedBurn = BigInt(0);
       let addedResolved = 0;
@@ -157,8 +158,15 @@ export function useGlobalStats() {
           abi: GAME_EVENTS_ABI,
           eventName: "EpochResolved",
         });
+        const [flushedTopic] = encodeEventTopics({
+          abi: GAME_EVENTS_ABI,
+          eventName: "ProtocolFeesFlushed",
+        });
         if (!resolvedTopic) {
           throw new Error("EpochResolved topic not found");
+        }
+        if (!flushedTopic) {
+          throw new Error("ProtocolFeesFlushed topic not found");
         }
 
         const chunks: { from: bigint; to: bigint }[] = [];
@@ -167,23 +175,37 @@ export function useGlobalStats() {
           chunks.push({ from, to });
         }
 
-        const logs: Log[] = [];
+        const resolvedLogs: Log[] = [];
+        const flushedLogs: Log[] = [];
         for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_CHUNKS) {
           const batch = chunks.slice(i, i + MAX_CONCURRENT_CHUNKS);
-          const results = await Promise.all(
-            batch.map((c) =>
-              publicClient.getLogs({
-                address: CONTRACT_ADDRESS,
-                topics: [resolvedTopic],
-                fromBlock: c.from,
-                toBlock: c.to,
-              } as unknown as Parameters<typeof publicClient.getLogs>[0]),
+          const [resolvedResults, flushedResults] = await Promise.all([
+            Promise.all(
+              batch.map((c) =>
+                publicClient.getLogs({
+                  address: CONTRACT_ADDRESS,
+                  topics: [resolvedTopic],
+                  fromBlock: c.from,
+                  toBlock: c.to,
+                } as unknown as Parameters<typeof publicClient.getLogs>[0]),
+              ),
             ),
-          );
-          for (const chunk of results) logs.push(...chunk);
+            Promise.all(
+              batch.map((c) =>
+                publicClient.getLogs({
+                  address: CONTRACT_ADDRESS,
+                  topics: [flushedTopic],
+                  fromBlock: c.from,
+                  toBlock: c.to,
+                } as unknown as Parameters<typeof publicClient.getLogs>[0]),
+              ),
+            ),
+          ]);
+          for (const chunk of resolvedResults) resolvedLogs.push(...chunk);
+          for (const chunk of flushedResults) flushedLogs.push(...chunk);
         }
 
-        for (const log of logs) {
+        for (const log of resolvedLogs) {
           try {
             const decoded = decodeEventLog({
               abi: GAME_EVENTS_ABI,
@@ -191,9 +213,21 @@ export function useGlobalStats() {
               topics: log.topics,
             });
             if (decoded.eventName === "EpochResolved") {
-              const { fee } = decoded.args as { fee: bigint };
-              addedBurn += fee;
               addedResolved++;
+            }
+          } catch { /* skip */ }
+        }
+
+        for (const log of flushedLogs) {
+          try {
+            const decoded = decodeEventLog({
+              abi: GAME_EVENTS_ABI,
+              data: log.data,
+              topics: log.topics,
+            });
+            if (decoded.eventName === "ProtocolFeesFlushed") {
+              const { burnAmount } = decoded.args as { ownerAmount: bigint; burnAmount: bigint };
+              addedBurn += burnAmount;
             }
           } catch { /* skip */ }
         }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FIREBASE_DB_URL } from "../lib/firebase";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 
 export interface JackpotHistoryEntry {
   epoch: string;
@@ -21,6 +22,7 @@ interface JackpotApiResponse {
 const REFRESH_MS = 45_000;
 const WARN_THROTTLE_MS = 15_000;
 const JACKPOT_LIMIT = 200;
+const STORAGE_KEY = `lore:jackpots-cache:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 
 function isNetworkFetchError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -73,7 +75,7 @@ function sortByBlockDesc(entries: JackpotHistoryEntry[]) {
 function loadCachedEntries(): JackpotHistoryEntry[] {
   if (typeof localStorage === "undefined") return [];
   try {
-    const raw = localStorage.getItem("lore:jackpots-cache:v1");
+    const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown[];
     if (!Array.isArray(parsed)) return [];
@@ -92,7 +94,7 @@ function saveCachedEntries(entries: JackpotHistoryEntry[]) {
     blockNumber: entry.blockNumber.toString(),
   }));
   try {
-    localStorage.setItem("lore:jackpots-cache:v1", JSON.stringify(serializable.slice(0, JACKPOT_LIMIT)));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable.slice(0, JACKPOT_LIMIT)));
   } catch {
     // ignore cache write failures
   }

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePublicClient } from "wagmi";
 import { decodeEventLog, encodeEventTopics, formatUnits } from "viem";
-import { CONTRACT_ADDRESS, GAME_EVENTS_ABI, APP_CHAIN_ID } from "../lib/constants";
+import { CONTRACT_ADDRESS, CONTRACT_DEPLOY_BLOCK, GAME_EVENTS_ABI, APP_CHAIN_ID } from "../lib/constants";
 
 export interface RecentWin {
   epoch: string;
@@ -16,7 +16,7 @@ const INITIAL_SCAN_BLOCKS = BigInt(200000);
 const LOG_SCAN_CHUNK = BigInt(25_000);
 const REFRESH_MS = 45_000;
 const MAX_WINS = 100;
-const STORAGE_KEY = "lore:recent-wins-cache";
+const STORAGE_KEY = `lore:recent-wins-cache:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 
 interface WinCache {
   wins: Array<{ epoch: string; user: string; amount: string; amountRaw: string }>;
@@ -72,8 +72,11 @@ export function useRecentWins() {
       const toBlock = await publicClient.getBlockNumber();
       const isIncremental = lastBlockRef.current !== null;
       const fromBlock = isIncremental
-        ? lastBlockRef.current! + BigInt(1)
-        : toBlock > INITIAL_SCAN_BLOCKS ? toBlock - INITIAL_SCAN_BLOCKS : BigInt(0);
+        ? (lastBlockRef.current! + 1n > CONTRACT_DEPLOY_BLOCK ? lastBlockRef.current! + 1n : CONTRACT_DEPLOY_BLOCK)
+        : (() => {
+            const lookbackStart = toBlock > INITIAL_SCAN_BLOCKS ? toBlock - INITIAL_SCAN_BLOCKS : 0n;
+            return lookbackStart > CONTRACT_DEPLOY_BLOCK ? lookbackStart : CONTRACT_DEPLOY_BLOCK;
+          })();
 
       if (fromBlock > toBlock) {
         runningRef.current = false;

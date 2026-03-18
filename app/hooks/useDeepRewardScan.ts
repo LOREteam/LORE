@@ -27,10 +27,13 @@ export function useDeepRewardScan(
   const waitReceipt = useCallback(
     async (hash: `0x${string}`) => {
       if (!publicClient) throw new Error("publicClient unavailable");
-      await Promise.race([
+      const receipt = await Promise.race([
         publicClient.waitForTransactionReceipt({ hash }),
         delay(TX_RECEIPT_TIMEOUT_MS).then(() => { throw new Error("Timeout"); }),
       ]);
+      if (receipt.status !== "success") {
+        throw new Error(`Transaction reverted: ${hash}`);
+      }
     },
     [publicClient],
   );
@@ -65,7 +68,7 @@ export function useDeepRewardScan(
 
         setProgress(`Scanning ${scanned}/${totalEpochs} epochs… (${found.length} found)`);
 
-        const [epochResults, claimResults] = await Promise.all([
+        const [epochResults, claimResults, dustSettledResults] = await Promise.all([
           publicClient.multicall({
             contracts: epochIds.map((id) => ({
               address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochs" as const, args: [id],
@@ -76,13 +79,19 @@ export function useDeepRewardScan(
               address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "hasClaimed" as const, args: [address, id],
             })),
           }),
+          publicClient.multicall({
+            contracts: epochIds.map((id) => ({
+              address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochDustSettled" as const, args: [id],
+            })),
+          }),
         ]);
 
         const potentialWins: { id: bigint; winTile: bigint; rewardPool: bigint }[] = [];
         epochIds.forEach((id, index) => {
           const epRes = epochResults[index]?.result as unknown as EpochTuple | undefined;
           const claimed = claimResults[index]?.result as unknown as boolean | undefined;
-          if (epRes && claimed === false && epRes[3]) {
+          const dustSettled = dustSettledResults[index]?.result as unknown as boolean | undefined;
+          if (epRes && claimed === false && dustSettled !== true && epRes[3]) {
             potentialWins.push({ id, rewardPool: epRes[1], winTile: epRes[2] });
           }
         });

@@ -1,12 +1,14 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { useAccount, useReadContract, useReadContracts, useBalance } from "wagmi";
-import { formatUnits } from "viem";
+import { useAccount, useReadContract, useReadContracts, useBalance, usePublicClient } from "wagmi";
+import { decodeEventLog, formatUnits, getAddress, parseAbiItem, type Log } from "viem";
 import {
   CONTRACT_ADDRESS,
+  CONTRACT_DEPLOY_BLOCK,
   LINEA_TOKEN_ADDRESS,
   GAME_ABI,
+  GAME_EVENTS_ABI,
   TOKEN_ABI,
   GRID_SIZE,
   HISTORY_DEPTH,
@@ -19,9 +21,16 @@ type EpochTuple = readonly [bigint, bigint, bigint, boolean, boolean, boolean];
 
 interface UseGameDataOptions {
   historyDetailed?: boolean;
+  preferredAddress?: `0x${string}` | string | null;
 }
 
-const AUTO_MINER_STORAGE_KEY = "lineaore:auto-miner-session:v1";
+const AUTO_MINER_STORAGE_KEY = `lineaore:auto-miner-session:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+const TILE_USER_COUNT_LOG_CHUNK = 25_000n;
+const TILE_USER_COUNT_MAX_CONCURRENT = 4;
+
+function createZeroTileUserCounts(): number[] {
+  return Array.from({ length: GRID_SIZE }, () => 0);
+}
 
 function isAutoMineSessionActive(): boolean {
   if (typeof window === "undefined") return false;
@@ -37,11 +46,27 @@ function isAutoMineSessionActive(): boolean {
 
 export function useGameData(options?: UseGameDataOptions) {
   const historyDetailed = options?.historyDetailed ?? false;
+  const preferredAddress = options?.preferredAddress ?? null;
   const { address } = useAccount();
   const chainId = APP_CHAIN_ID;
-  const { data: tokenBalance } = useBalance({ address, token: LINEA_TOKEN_ADDRESS, chainId });
+  const publicClient = usePublicClient({ chainId });
+  const walletAddress = useMemo(() => {
+    const candidate = preferredAddress ?? address;
+    if (!candidate) return undefined;
+    try {
+      return getAddress(candidate);
+    } catch {
+      return undefined;
+    }
+  }, [preferredAddress, address]);
+  const { data: tokenBalance } = useBalance({ address: walletAddress, token: LINEA_TOKEN_ADDRESS, chainId });
   const [isPageVisible, setIsPageVisible] = useState(true);
   const [autoMineSessionActive, setAutoMineSessionActive] = useState(false);
+  const [tileUserCounts, setTileUserCounts] = useState<number[]>(() => createZeroTileUserCounts());
+  const tileUserCountEpochRef = useRef<string | null>(null);
+  const tileUserCountLastBlockRef = useRef<bigint | null>(null);
+  const tileUserCountSetsRef = useRef<Array<Set<string>>>(Array.from({ length: GRID_SIZE }, () => new Set<string>()));
+  const tileUserCountFetchInFlightRef = useRef(false);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -180,8 +205,8 @@ export function useGameData(options?: UseGameDataOptions) {
   });
   useReadContract({
     address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-    args: prefetchEpoch && address ? [prefetchEpoch, address] : undefined,
-    chainId, query: { enabled: !!prefetchEpoch && !!address && isPageVisible, refetchInterval: 0 },
+    args: prefetchEpoch && walletAddress ? [prefetchEpoch, walletAddress] : undefined,
+    chainId, query: { enabled: !!prefetchEpoch && !!walletAddress && isPageVisible, refetchInterval: 0 },
   });
   useReadContract({
     address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getEpochEndTime",
@@ -213,15 +238,15 @@ export function useGameData(options?: UseGameDataOptions) {
 
   const { data: currentAllowance, refetch: refetchAllowance } = useReadContract({
     address: LINEA_TOKEN_ADDRESS, abi: TOKEN_ABI, functionName: "allowance",
-    args: address ? [address, CONTRACT_ADDRESS] : undefined,
-    chainId, query: { enabled: !!address },
+    args: walletAddress ? [walletAddress, CONTRACT_ADDRESS] : undefined,
+    chainId, query: { enabled: !!walletAddress },
   });
 
   // --- User bets per tile - single call via getUserBetsAll ---
   const { data: userBetsAllRaw, refetch: refetchUserBets, dataUpdatedAt: userBetsUpdatedAt } = useReadContract({
     address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-    args: gridDisplayEpochBigInt && address ? [gridDisplayEpochBigInt, address] : undefined,
-    chainId, query: { enabled: !!gridDisplayEpochBigInt && !!address, refetchInterval: isPageVisible ? liveUserBetsInterval : 20000 },
+    args: gridDisplayEpochBigInt && walletAddress ? [gridDisplayEpochBigInt, walletAddress] : undefined,
+    chainId, query: { enabled: !!gridDisplayEpochBigInt && !!walletAddress, refetchInterval: isPageVisible ? liveUserBetsInterval : 20000 },
   });
 
   const userBetsEpochRef = useRef<string | null>(null);
@@ -272,12 +297,13 @@ export function useGameData(options?: UseGameDataOptions) {
     query: {
       enabled: historyEpochsList.length > 0 && isPageVisible,
       refetchInterval: historyDetailed ? 15000 : 90000,
-      placeholderData: (prev) => prev,
     },
   });
 
   const historyUserBetsCalls = useMemo(() => {
-    if (!address || !historyData || historyEpochsList.length === 0) return [];
+    if (!walletAddress || !historyData || historyData.length !== historyEpochsList.length || historyEpochsList.length === 0) {
+      return [];
+    }
     return historyEpochsList.map((epoch, i) => {
       const res = historyData[i]?.result;
       const winBlock = res != null ? (res as unknown as EpochTuple)[2] : BigInt(0);
@@ -285,11 +311,123 @@ export function useGameData(options?: UseGameDataOptions) {
         address: CONTRACT_ADDRESS,
         abi: GAME_ABI,
         functionName: "userBets" as const,
-        args: [epoch, winBlock, address],
+        args: [epoch, winBlock, walletAddress],
         chainId,
       };
     });
-  }, [historyEpochsList, historyData, address, chainId]);
+  }, [historyEpochsList, historyData, walletAddress, chainId]);
+
+  useEffect(() => {
+    const epochKey = gridDisplayEpochBigInt?.toString() ?? null;
+    if (tileUserCountEpochRef.current === epochKey) return;
+    tileUserCountEpochRef.current = epochKey;
+    tileUserCountLastBlockRef.current = null;
+    tileUserCountSetsRef.current = Array.from({ length: GRID_SIZE }, () => new Set<string>());
+    tileUserCountFetchInFlightRef.current = false;
+    setTileUserCounts(createZeroTileUserCounts());
+  }, [gridDisplayEpochBigInt]);
+
+  useEffect(() => {
+    if (!publicClient || !gridDisplayEpochBigInt) {
+      setTileUserCounts(createZeroTileUserCounts());
+      return;
+    }
+    if (!isPageVisible) return;
+
+    let cancelled = false;
+    const betEvent = parseAbiItem("event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)");
+    const batchEvent = parseAbiItem("event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)");
+    const targetEpochKey = gridDisplayEpochBigInt.toString();
+
+    const fetchCounts = async () => {
+      if (tileUserCountFetchInFlightRef.current) return;
+      tileUserCountFetchInFlightRef.current = true;
+      try {
+        const latestBlock = await publicClient.getBlockNumber();
+        const fromBlock =
+          tileUserCountLastBlockRef.current !== null ? tileUserCountLastBlockRef.current + 1n : CONTRACT_DEPLOY_BLOCK;
+        if (fromBlock > latestBlock) return;
+
+        const perTile = tileUserCountSetsRef.current.map((set) => new Set(set));
+        const chunks: Array<{ from: bigint; to: bigint }> = [];
+        for (let from = fromBlock; from <= latestBlock; from += TILE_USER_COUNT_LOG_CHUNK) {
+          const to =
+            from + TILE_USER_COUNT_LOG_CHUNK > latestBlock ? latestBlock : from + TILE_USER_COUNT_LOG_CHUNK - 1n;
+          chunks.push({ from, to });
+        }
+
+        for (let i = 0; i < chunks.length; i += TILE_USER_COUNT_MAX_CONCURRENT) {
+          if (cancelled || tileUserCountEpochRef.current !== targetEpochKey) return;
+          const batch = chunks.slice(i, i + TILE_USER_COUNT_MAX_CONCURRENT);
+          const [betResults, batchResults] = await Promise.all([
+            Promise.all(
+              batch.map((chunk) =>
+                publicClient.getLogs({
+                  address: CONTRACT_ADDRESS,
+                  event: betEvent,
+                  args: { epoch: gridDisplayEpochBigInt },
+                  fromBlock: chunk.from,
+                  toBlock: chunk.to,
+                }),
+              ),
+            ),
+            Promise.all(
+              batch.map((chunk) =>
+                publicClient.getLogs({
+                  address: CONTRACT_ADDRESS,
+                  event: batchEvent,
+                  args: { epoch: gridDisplayEpochBigInt },
+                  fromBlock: chunk.from,
+                  toBlock: chunk.to,
+                }),
+              ),
+            ),
+          ]);
+
+          for (const logs of betResults) {
+            for (const log of logs as Log[]) {
+              const decoded = decodeEventLog({ abi: GAME_EVENTS_ABI, data: log.data, topics: log.topics });
+              if (decoded.eventName !== "BetPlaced") continue;
+              const args = decoded.args as { user: string; tileId: bigint };
+              const tileIdx = Number(args.tileId) - 1;
+              if (tileIdx >= 0 && tileIdx < GRID_SIZE) perTile[tileIdx].add(args.user.toLowerCase());
+            }
+          }
+
+          for (const logs of batchResults) {
+            for (const log of logs as Log[]) {
+              const decoded = decodeEventLog({ abi: GAME_EVENTS_ABI, data: log.data, topics: log.topics });
+              if (decoded.eventName !== "BatchBetsPlaced") continue;
+              const args = decoded.args as { user: string; tileIds: readonly bigint[] };
+              const user = args.user.toLowerCase();
+              for (const tileId of args.tileIds) {
+                const tileIdx = Number(tileId) - 1;
+                if (tileIdx >= 0 && tileIdx < GRID_SIZE) perTile[tileIdx].add(user);
+              }
+            }
+          }
+        }
+
+        if (!cancelled && tileUserCountEpochRef.current === targetEpochKey) {
+          tileUserCountSetsRef.current = perTile;
+          tileUserCountLastBlockRef.current = latestBlock;
+          setTileUserCounts(perTile.map((set) => set.size));
+        }
+      } catch {
+        // Keep the last known counts on screen when a public RPC request hiccups.
+      } finally {
+        tileUserCountFetchInFlightRef.current = false;
+      }
+    };
+
+    void fetchCounts();
+    const intervalId = window.setInterval(fetchCounts, isRevealing ? 1500 : 4000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [publicClient, gridDisplayEpochBigInt, isPageVisible, isRevealing]);
 
   const { data: historyUserBetsData } = useReadContracts({
     contracts: historyUserBetsCalls,
@@ -514,34 +652,34 @@ export function useGameData(options?: UseGameDataOptions) {
   // Calculate potential jackpot amount (simplified - actual would need more contract calls)
   const currentJackpotAmount = useMemo(() => {
     if (!jackpotInfo) return 0;
+    let total = 0;
     if (currentEpochJackpotInfo.isDailyJackpot) {
-      return jackpotInfo.lastDailyJackpotAmount;
+      total += jackpotInfo.lastDailyJackpotAmount;
     }
     if (currentEpochJackpotInfo.isWeeklyJackpot) {
-      return jackpotInfo.lastWeeklyJackpotAmount;
+      total += jackpotInfo.lastWeeklyJackpotAmount;
     }
-    return 0;
+    return total;
   }, [jackpotInfo, currentEpochJackpotInfo]);
 
-  // getTileData(epoch) -> (pools[0..24], users[0..24]); index i = tile #(i+1)
+  // getTileData(epoch) -> pools only; unique player counts are reconstructed off-chain from bet events.
   const tileViewData = useMemo(() => {
     const poolsArr = tileData && Array.isArray(tileData[0]) ? (tileData[0] as bigint[]) : null;
-    const usersArr = tileData && Array.isArray(tileData[1]) ? (tileData[1] as bigint[]) : null;
     return Array.from({ length: GRID_SIZE }, (_, i) => {
       const myBetRaw = userBetsAll?.[i];
       const hasMyBet = myBetRaw !== undefined && myBetRaw > BigInt(0);
       const poolWei = poolsArr?.[i] ?? BigInt(0);
-      const usersRaw = usersArr?.[i] ?? BigInt(0);
-      const users = Number(usersRaw);
       const poolDisplay = parseFloat(formatUnits(poolWei, 18)).toFixed(2);
-      return { tileId: i + 1, users: users >= 0 ? users : 0, poolDisplay, hasMyBet };
+      return { tileId: i + 1, users: tileUserCounts[i] ?? 0, poolDisplay, hasMyBet };
     });
-  }, [tileData, userBetsAll]);
+  }, [tileData, tileUserCounts, userBetsAll]);
 
   const historyViewData = useMemo(() => {
+    if (!historyData || historyData.length !== historyEpochsList.length) return [];
     return historyData?.map((dataObj, index) => {
       if (!dataObj.result) return null;
       const roundId = historyEpochsList[index];
+      if (!roundId) return null;
       const [pool, , winBlock, isRes] = dataObj.result as unknown as EpochTuple;
       const userBetOnWinner = historyUserBetsData?.[index]?.result != null
         ? BigInt(historyUserBetsData[index].result as bigint) > BigInt(0)

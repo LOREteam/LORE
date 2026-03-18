@@ -47,7 +47,7 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
 
   const goHub = useCallback(() => onTabChange("hub"), [onTabChange]);
   const goAnalytics = useCallback(() => onTabChange("analytics"), [onTabChange]);
-  const goReferral = useCallback(() => onTabChange("referral"), [onTabChange]);
+  const goRebate = useCallback(() => onTabChange("rebate"), [onTabChange]);
   const goLeaderboards = useCallback(() => onTabChange("leaderboards"), [onTabChange]);
   const goWhitepaper = useCallback(() => onTabChange("whitepaper"), [onTabChange]);
   const goFaq = useCallback(() => onTabChange("faq"), [onTabChange]);
@@ -102,7 +102,7 @@ export const Sidebar = React.memo(function Sidebar({ activeTab, onTabChange, hot
         <nav className="px-3 pt-1.5 pb-2 mt-1 space-y-1">
           <NavItem active={activeTab === "hub"} onClick={goHub} icon="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012-2v2M7 7h10" label="Mining Hub" delay="0.1s" />
           <NavItem active={activeTab === "analytics"} onClick={goAnalytics} icon="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" label="Analytics" delay="0.15s" />
-          <NavItem active={activeTab === "referral"} onClick={goReferral} icon="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" label="Referral" delay="0.2s" />
+          <NavItem active={activeTab === "rebate"} onClick={goRebate} icon="M12 3v3m0 12v3m9-9h-3M6 12H3m15.364 6.364l-2.121-2.121M7.757 7.757L5.636 5.636m12.728 0l-2.121 2.121M7.757 16.243l-2.121 2.121" label="Rebate" delay="0.2s" />
           <NavItem active={activeTab === "leaderboards"} onClick={goLeaderboards} icon="M16.5 18.75h-9m9 0a3 3 0 013 3h-15a3 3 0 013-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 01-.982-3.172M9.497 14.25a7.454 7.454 0 00.981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 007.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M7.73 9.728a6.726 6.726 0 002.748 1.35m8.272-6.842V4.5c0 2.108-.966 3.99-2.48 5.228m2.48-5.492a46.32 46.32 0 012.916.52 6.003 6.003 0 01-5.395 4.972m0 0a6.726 6.726 0 01-2.749 1.35m0 0a6.772 6.772 0 01-3.044 0" label="Leaderboards" delay="0.25s" />
           <NavItem active={activeTab === "whitepaper"} onClick={goWhitepaper} icon="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" label="White Paper" delay="0.3s" />
           <NavItem active={activeTab === "faq"} onClick={goFaq} icon="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" label="FAQ" delay="0.35s" />
@@ -299,4 +299,3 @@ const NavItem = React.memo(function NavItem({ active, onClick, icon, label, dela
     </button>
   );
 });
-

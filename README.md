@@ -29,6 +29,18 @@ Then set at least:
 
 Useful optional vars are documented in `.env.example` and `.env.local.example`.
 
+Important for future contract deployments:
+
+- Set `LINEA_NETWORK` and `NEXT_PUBLIC_LINEA_NETWORK` to `mainnet` for production.
+- Set `KEEPER_CONTRACT_ADDRESS` for server routes and keeper bot.
+- Set `NEXT_PUBLIC_CONTRACT_ADDRESS` for the frontend.
+- Set `NEXT_PUBLIC_LINEA_TOKEN_ADDRESS` if the token address changes.
+- Set `INDEXER_START_BLOCK` and `NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK` to the new deployment block.
+- Set `NEXT_PUBLIC_LINEA_RPCS` if you need to pin reliable production RPCs for wallet broadcast.
+- Set `NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER=1` for V6/mainnet-style deployments.
+- Set `NEXT_PUBLIC_CONTRACT_HAS_REBATE_API=1` if the deployed contract supports rebate methods.
+- Keep `NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER=0` only if you intentionally point the app at the old legacy Sepolia contract that does not expose `token()`.
+
 ## Scripts
 
 - `npm run dev:ui` - run frontend in dev mode
@@ -50,6 +62,7 @@ Useful optional vars are documented in `.env.example` and `.env.local.example`.
 
 - Frontend CSP/security headers are configured in `next.config.ts`.
 - Firebase rules are in `firebase-rules.json`; review before production rollout.
+- Governance migration guidance for the next contract deployment is in `docs/governance-migration.md`.
 
 ## Deploy
 
@@ -59,3 +72,5 @@ Recommended flow:
 2. `npm run typecheck`
 3. `npm run build`
 4. deploy with your preferred platform (Vercel/Node host)
+
+For contract deployments, do not keep a single EOA as live owner. Prefer a Safe multisig, or a timelock controlled by a Safe multisig.

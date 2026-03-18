@@ -17,6 +17,7 @@ interface JackpotBannerProps {
   isDailyJackpot?: boolean;
   isWeeklyJackpot?: boolean;
   jackpotAmount?: number;
+  reducedMotion?: boolean;
 }
 
 export const JackpotBanner = React.memo(function JackpotBanner({
@@ -27,6 +28,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   isDailyJackpot = false,
   isWeeklyJackpot = false,
   jackpotAmount = 0,
+  reducedMotion = false,
 }: JackpotBannerProps) {
   const [showBanner, setShowBanner] = useState(false);
   const [showContent, setShowContent] = useState(false);
@@ -38,6 +40,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
     return tileViewData.some((t) => t.tileId === winningTileId && t.hasMyBet);
   }, [winningTileId, tileViewData]);
 
+  const isDualJackpot = isDailyJackpot && isWeeklyJackpot;
   const isJackpotWin = isMyWin && (isDailyJackpot || isWeeklyJackpot);
 
   const particleItems = useMemo(
@@ -98,7 +101,13 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   }, []);
 
   const handleShareToX = useCallback(() => {
-    const typeLabel = isDailyJackpot ? "Daily Jackpot" : isWeeklyJackpot ? "Weekly Jackpot" : "Jackpot";
+    const typeLabel = isDualJackpot
+      ? "Daily + Weekly Jackpot"
+      : isDailyJackpot
+        ? "Daily Jackpot"
+        : isWeeklyJackpot
+          ? "Weekly Jackpot"
+          : "Jackpot";
     const amountPart =
       jackpotAmount > 0
         ? `${jackpotAmount.toLocaleString("en-US", { maximumFractionDigits: 2 })} LINEA`
@@ -108,12 +117,18 @@ export const JackpotBanner = React.memo(function JackpotBanner({
     const pageUrl = typeof window !== "undefined" ? window.location.origin : "https://lore.game";
     const shareUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(pageUrl)}&via=${encodeURIComponent("Linea_Ore")}`;
     window.open(shareUrl, "_blank", "noopener,noreferrer");
-  }, [isDailyJackpot, isWeeklyJackpot, jackpotAmount, epoch, winningTileId]);
+  }, [isDailyJackpot, isDualJackpot, isWeeklyJackpot, jackpotAmount, epoch, winningTileId]);
 
   if (!showBanner || isDismissed) return null;
 
-  const jackpotType = isDailyJackpot ? "DAILY" : isWeeklyJackpot ? "WEEKLY" : "JACKPOT";
-  const theme = isDailyJackpot
+  const jackpotType = isDualJackpot ? "DOUBLE" : isDailyJackpot ? "DAILY" : isWeeklyJackpot ? "WEEKLY" : "JACKPOT";
+  const theme = isDualJackpot
+    ? {
+        gradient: "from-amber-400 via-fuchsia-500 to-sky-500",
+        glow: "shadow-[0_0_60px_rgba(244,114,182,0.45),0_0_100px_rgba(56,189,248,0.3)]",
+        button: "bg-fuchsia-900/35 hover:bg-fuchsia-900/55 border border-pink-200/40",
+      }
+    : isDailyJackpot
     ? {
         gradient: "from-amber-500 via-yellow-400 to-amber-500",
         glow: "shadow-[0_0_60px_rgba(251,191,36,0.5),0_0_100px_rgba(251,191,36,0.3)]",
@@ -149,17 +164,20 @@ export const JackpotBanner = React.memo(function JackpotBanner({
       {/* Main Banner */}
       <div
         className={cn(
-          "relative z-10 mx-4 p-6 md:p-8 bg-gradient-to-r animate-scale-in",
+          "relative z-10 mx-4 p-6 md:p-8 bg-gradient-to-r",
+          !reducedMotion && "animate-scale-in",
           uiTokens.radius.lg,
           theme.gradient,
           theme.glow,
         )}
-        style={{ animation: showContent ? "jackpot-scale 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)" : undefined }}
+        style={{ animation: !reducedMotion && showContent ? "jackpot-scale 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)" : undefined }}
       >
         {/* Glow effect */}
-        <div className={cn("absolute inset-0 animate-pulse opacity-50", uiTokens.radius.lg)}>
-          <div className={cn("absolute inset-0 bg-gradient-to-r from-white/20 to-transparent", uiTokens.radius.lg)} />
-        </div>
+        {!reducedMotion && (
+          <div className={cn("absolute inset-0 animate-pulse opacity-50", uiTokens.radius.lg)}>
+            <div className={cn("absolute inset-0 bg-gradient-to-r from-white/20 to-transparent", uiTokens.radius.lg)} />
+          </div>
+        )}
 
         {/* Content */}
         <div className="relative text-center">
@@ -177,7 +195,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
           </div>
 
           {/* Big WIN text */}
-          <h1 className="text-5xl md:text-7xl font-black text-white drop-shadow-[0_0_20px_rgba(255,255,255,0.8)] mb-2 animate-bounce">
+          <h1 className={`text-5xl md:text-7xl font-black text-white drop-shadow-[0_0_20px_rgba(255,255,255,0.8)] mb-2 ${reducedMotion ? "" : "animate-bounce"}`}>
             WIN!
           </h1>
 
@@ -228,28 +246,32 @@ export const JackpotBanner = React.memo(function JackpotBanner({
           </div>
         </div>
 
-        {/* Particle effects - sparkles */}
-        <div className="absolute top-4 left-4 text-2xl animate-ping">✨</div>
-        <div className="absolute top-4 right-4 text-2xl animate-ping" style={{ animationDelay: "0.2s" }}>✨</div>
-        <div className="absolute bottom-4 left-4 text-2xl animate-ping" style={{ animationDelay: "0.4s" }}>✨</div>
-        <div className="absolute bottom-4 right-4 text-2xl animate-ping" style={{ animationDelay: "0.6s" }}>✨</div>
+        {!reducedMotion && (
+          <>
+            {/* Particle effects - sparkles */}
+            <div className="absolute top-4 left-4 text-2xl animate-ping">✨</div>
+            <div className="absolute top-4 right-4 text-2xl animate-ping" style={{ animationDelay: "0.2s" }}>✨</div>
+            <div className="absolute bottom-4 left-4 text-2xl animate-ping" style={{ animationDelay: "0.4s" }}>✨</div>
+            <div className="absolute bottom-4 right-4 text-2xl animate-ping" style={{ animationDelay: "0.6s" }}>✨</div>
 
-        {/* Coins falling effect */}
-        <div className={cn("absolute inset-0 pointer-events-none overflow-hidden", uiTokens.radius.lg)}>
-          {particleItems.map((item) => (
-            <div
-              key={item.id}
-              className="absolute text-2xl"
-              style={{
-                left: item.left,
-                animation: `coin-fall ${item.duration} linear infinite`,
-                animationDelay: item.delay,
-              }}
-            >
-              {item.icon}
+            {/* Coins falling effect */}
+            <div className={cn("absolute inset-0 pointer-events-none overflow-hidden", uiTokens.radius.lg)}>
+              {particleItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="absolute text-2xl"
+                  style={{
+                    left: item.left,
+                    animation: `coin-fall ${item.duration} linear infinite`,
+                    animationDelay: item.delay,
+                  }}
+                >
+                  {item.icon}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </>
+        )}
       </div>
     </div>
   );

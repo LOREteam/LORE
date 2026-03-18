@@ -37,12 +37,15 @@ export function useRewardScanner(
   const waitReceipt = useCallback(
     async (hash: `0x${string}`) => {
       if (!publicClient) throw new Error("publicClient unavailable");
-      await Promise.race([
+      const receipt = await Promise.race([
         publicClient.waitForTransactionReceipt({ hash }),
         delay(TX_RECEIPT_TIMEOUT_MS).then(() => {
           throw new Error("Transaction receipt timeout");
         }),
       ]);
+      if (receipt.status !== "success") {
+        throw new Error(`Transaction reverted: ${hash}`);
+      }
     },
     [publicClient],
   );
@@ -82,7 +85,7 @@ export function useRewardScanner(
           for (let i = cursor; i >= end; i--) epochIds.push(i);
           if (epochIds.length === 0) break;
 
-          const [epochResults, claimResults] = await Promise.all([
+          const [epochResults, claimResults, dustSettledResults] = await Promise.all([
             publicClient.multicall({
               contracts: epochIds.map((id) => ({
                 address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochs" as const, args: [id],
@@ -93,6 +96,11 @@ export function useRewardScanner(
                 address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "hasClaimed" as const, args: [address, id],
               })),
             }),
+            publicClient.multicall({
+              contracts: epochIds.map((id) => ({
+                address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochDustSettled" as const, args: [id],
+              })),
+            }),
           ]);
 
           const potentialWins: { id: bigint; winTile: bigint; rewardPool: bigint }[] = [];
@@ -100,9 +108,10 @@ export function useRewardScanner(
           epochIds.forEach((id, index) => {
             const epRes = epochResults[index]?.result as unknown as EpochTuple | undefined;
             const claimed = claimResults[index]?.result as unknown as boolean | undefined;
+            const dustSettled = dustSettledResults[index]?.result as unknown as boolean | undefined;
             if (!epRes) return;
             if (epRes[3]) chunkHadResolved = true;
-            if (claimed === false && epRes[3]) {
+            if (claimed === false && dustSettled !== true && epRes[3]) {
               potentialWins.push({ id, rewardPool: epRes[1], winTile: epRes[2] });
             }
           });
@@ -162,11 +171,11 @@ export function useRewardScanner(
       setUnclaimedWins(mergeWins(wins));
     } catch (e) {
       console.error("Reward scanner error:", e);
+    } finally {
+      setIsDeepScanning(false);
+      setIsScanning(false);
+      scanRunningRef.current = false;
     }
-
-    setIsDeepScanning(false);
-    setIsScanning(false);
-    scanRunningRef.current = false;
   }, [publicClient, actualCurrentEpoch, address]);
 
   useEffect(() => {

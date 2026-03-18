@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CONTRACT_ADDRESS } from "../../../lib/constants";
+import { RPC_URL } from "../../_lib/dataBridge";
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,8 +13,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch owner from blockchain
-    const rpcUrl = process.env.KEEPER_RPC_URL || "https://rpc.sepolia.linea.build";
-    const response = await fetch(rpcUrl, {
+    const response = await fetch(RPC_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

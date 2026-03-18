@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useCallback } from "react";
+import { APP_CHAIN_NAME } from "../lib/constants";
 import { cn } from "../lib/cn";
 import { UiButton } from "./ui/UiButton";
 import { UiPanel } from "./ui/UiPanel";
@@ -28,8 +29,8 @@ const faqData: FAQItem[] = [
     category: "Getting Started",
     q: "Where do I get LINEA tokens and ETH for gas?",
     a: [
-      "LINEA tokens: get them from the Linea Sepolia faucet or swap on a DEX that supports Linea Sepolia.",
-      "ETH for gas: use the Linea Sepolia bridge or faucet to get testnet ETH. You only need a tiny amount – each bet costs fractions of a cent in gas.",
+      `LINEA tokens: get them from a bridge, faucet, or DEX that supports ${APP_CHAIN_NAME}.`,
+      `ETH for gas: fund your wallet on ${APP_CHAIN_NAME}. You only need a tiny amount – each bet costs fractions of a cent in gas.`,
     ],
   },
   {
@@ -141,7 +142,7 @@ const faqData: FAQItem[] = [
       "92% – base reward for winners (+ rollover + jackpot if triggered)",
       "2% – accrues to the Daily Jackpot pool",
       "3% – accrues to the Weekly Jackpot pool",
-      "2% – to devs, half of that to referrers",
+      "2% – protocol fee: half to treasury, half to participation rebates",
       "1% – permanently burned (sent to 0x...dEaD)",
     ],
   },

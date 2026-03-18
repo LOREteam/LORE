@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { parseAbi } from "viem";
+import { formatUnits, parseAbi } from "viem";
 import { DEFAULT_API_EPOCHS_RECONCILE_MAX } from "../../../config/publicConfig";
 import {
   CONTRACT_ADDRESS,
@@ -38,7 +38,7 @@ export async function GET(request: Request) {
 
   try {
     const [epochsRes, metaRes] = await Promise.all([
-      fetchFirebaseJson<Record<string, EpochRow>>("gamedata/epochs"),
+      fetchFirebaseJson<Record<string, EpochRow | null>>("gamedata/epochs"),
       fetchFirebaseJson<number>("gamedata/_meta/currentEpoch"),
     ]);
     const raw = epochsRes.ok ? (epochsRes.data ?? {}) : {};
@@ -62,7 +62,8 @@ export async function GET(request: Request) {
             Object.entries(raw).filter(([key, value]) => {
               const n = Number(key);
               if (!Number.isInteger(n) || n < 1 || n > currentEpoch) return false;
-              const resolvedBlock = Number((value as EpochRow).resolvedBlock ?? "0");
+              if (!value || typeof value !== "object") return false;
+              const resolvedBlock = Number(value.resolvedBlock ?? "0");
               // Drop stale epochs from older contracts when block marker is available
               if (resolvedBlock > 0 && BigInt(resolvedBlock) < CONTRACT_DEPLOY_BLOCK) return false;
               return true;
@@ -78,7 +79,8 @@ export async function GET(request: Request) {
           .filter((n) => Number.isInteger(n) && n > 0),
       );
       const missing: number[] = [];
-      for (let ep = 1; ep < currentEpoch; ep++) {
+      const reconcileStart = Math.max(1, currentEpoch - Math.max(1, MAX_CHAIN_RECONCILE_EPOCHS));
+      for (let ep = reconcileStart; ep < currentEpoch; ep++) {
         if (!present.has(ep)) missing.push(ep);
       }
 
@@ -97,8 +99,8 @@ export async function GET(request: Request) {
             if (!isResolved) continue;
             patch[String(ep)] = {
               winningTile: Number(row[2]),
-              totalPool: row[0].toString(),
-              rewardPool: row[1].toString(),
+              totalPool: formatUnits(row[0], 18),
+              rewardPool: formatUnits(row[1], 18),
               isDailyJackpot: row[4],
               isWeeklyJackpot: row[5],
             };
