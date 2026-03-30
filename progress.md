@@ -1,0 +1,534 @@
+Original prompt: распиши что можно улучшить в проекте [$develop-web-game](C:\\Users\\bogda\\.codex\\skills\\develop-web-game\\SKILL.md)
+
+- 2026-03-21: Started incremental hardening pass with low-risk changes only.
+- Focus for this batch: chat session safety, chat API read throttling, and current lint warning cleanup.
+- Constraint: repo has unrelated local changes; do not revert or rewrite existing in-flight work.
+- Validation:
+- `eslint` passed for updated files.
+- `tsc --noEmit --incremental false` passed.
+- `next build --webpack` passed after rerun outside sandbox; initial in-sandbox failure was `spawn EPERM`, not a code issue.
+- Follow-up validation:
+- `eslint` passed after chat avatar hardening and middleware narrowing.
+- `tsc --noEmit --incremental false` passed again.
+- `next build --webpack` passed again after the second batch.
+- Notice-system validation:
+- `eslint` passed after notice migration for home/admin/reward flows.
+- `tsc --noEmit --incremental false` passed again.
+- `next build --webpack` passed again after each notice migration batch.
+- Completed in this batch:
+- Chat session secret is now required in production and uses a deterministic dev-only fallback instead of a per-boot random secret.
+- Chat messages `GET` is now rate-limited in addition to `POST`.
+- `useRebate` hook dependency warning is fixed.
+- Chat/profile avatar values are now normalized through a shared validator.
+- Chat auth/messages/profile responses are explicitly `no-store`; profile reads are rate-limited.
+- Middleware now matches API routes only instead of touching unrelated page traffic.
+- Main wallet flows and admin actions now use non-blocking notices instead of `alert()`.
+- Reward scanner and deep reward scan now surface claim errors/success through the same notice channel.
+- Hot Tiles sidebar block now keeps a stable placeholder footprint during refresh, restores cached tiles before first visible paint, and only swaps to fresh data when the new payload is ready.
+- `/api/jackpots` now scans chain logs in adaptive block chunks, so on-chain fallback can recover recent jackpot events without tripping RPC log-count limits on large ranges.
+- `useMining` manual/direct mine flows now send wallet-not-ready and bet-failure messages through the shared notice system instead of blocking `alert()` calls.
+- `useMining` manual/direct mine flows now share one internal submission path (`submitMineAttempt`) for validation, retry, pending-tx handling, on-chain confirmation checks, and post-submit cleanup, reducing duplication without touching auto-miner behavior.
+- `useGameData` now delegates block-range chunking, tile-user log decoding, and most derived-view builders to `app/hooks/useGameData.helpers.ts`, shrinking the hook without changing its returned shape or reveal/polling behavior.
+- Validation note: the local Playwright skill client was attempted against `http://localhost:3000`, but Chromium launch is blocked in this sandbox with `spawn EPERM`; lint, `tsc`, and `next build` remain the trusted checks here.
+- `useGameData` reveal lifecycle is now isolated in `app/hooks/useGameEpochPresentation.ts`, while countdown/pollPhase remains in the main hook to preserve the existing read-order and polling dependencies.
+- Extra smoke validation after the reveal extraction: repeated `GET /` returned `200`, and `GET /api/jackpots` plus `GET /api/epochs` returned `200` as well.
+- Wallet transfer orchestration (`withdraw/deposit` amounts, pending flags, and four transfer handlers) now lives in `app/hooks/useWalletActions.ts`, reducing `app/page.tsx` without changing the `WalletSettingsModal` API.
+- Validation after the wallet-actions extraction: `eslint`, `next build --webpack`, and `tsc --noEmit --incremental false` all passed; repeated `GET /`, `GET /api/jackpots`, `GET /api/epochs`, and `GET /api/chat/messages` returned `200`.
+- Bet guard orchestration now lives in `app/hooks/useMiningGuards.ts`: last-bet persistence, low-balance UX, manual-bet wallet guard, repeat-last-bet, and auto-mine gas guard were moved out of `app/page.tsx` without changing the rendered panels.
+- Safe load improvement: non-hub tabs (`Analytics`, `RebatePanel`, `Leaderboards`, `WhitePaper`, `FAQ`) are now loaded through `next/dynamic`, so the first hub render does not eagerly pull those inactive panels into the initial client path.
+- Validation after the mining-guards + lazy-tab split:
+- `eslint` passed for `app/page.tsx`, `app/hooks/useMiningGuards.ts`, `app/hooks/useWalletActions.ts`, `app/hooks/useGameData.ts`, `app/hooks/useGameEpochPresentation.ts`, and `app/hooks/useGameData.helpers.ts`.
+- `npm run build` passed after rerun outside the sandbox; the in-sandbox run hit the known `spawn EPERM` environment limit after successful compilation.
+- `tsc --noEmit --incremental false` passed when run after the build.
+- Live smoke checks returned `200` for repeated `GET /`, `GET /api/epochs`, `GET /api/chat/messages`, and `GET /api/jackpots` (the jackpots route is still slower than the other endpoints, but it completed successfully).
+- Playwright skill loop was attempted again against `http://localhost:3000/`, but Chromium launch is still blocked in this sandbox with `browserType.launch: spawn EPERM`.
+- `useMining` shared pure/storage helpers now live in `app/hooks/useMining.shared.ts`, including bet error classification, tile normalization, confirmed-epoch detection, auto-miner session persistence, and secure tab-id/random helpers; `app/hooks/useMining.ts` keeps the betting/auto-miner runtime loop, refs, and effects.
+- Validation after the `useMining.shared.ts` extraction:
+- `eslint` passed for `app/hooks/useMining.ts`, `app/hooks/useMining.shared.ts`, `app/page.tsx`, `app/hooks/useMiningGuards.ts`, and `app/hooks/useWalletActions.ts`.
+- `npm run build` again passed after rerun outside the sandbox; the sandboxed build still failed with the same non-code `spawn EPERM` after successful compilation.
+- `tsc --noEmit --incremental false` passed again.
+- Live smoke checks returned `200` for `GET /`, `GET /api/jackpots`, and `GET /api/chat/messages`.
+- Cross-tab auto-miner lock logic now lives in `app/hooks/useMiningTabLock.ts`; `app/hooks/useMining.ts` imports `acquire/recover/renew/release` instead of carrying the BroadcastChannel + lock-storage implementation inline.
+- Validation after the `useMiningTabLock.ts` extraction:
+- `eslint` passed for `app/hooks/useMining.ts`, `app/hooks/useMining.shared.ts`, `app/hooks/useMiningTabLock.ts`, `app/page.tsx`, `app/hooks/useMiningGuards.ts`, and `app/hooks/useWalletActions.ts`.
+- `npm run build` again passed after rerun outside the sandbox; the sandboxed build still failed with the same non-code `spawn EPERM` after successful compilation.
+- `tsc --noEmit --incremental false` passed again.
+- Live smoke checks returned `200` for `GET /`, `GET /api/jackpots`, and `GET /api/epochs`.
+- Playwright skill loop was attempted again against `http://localhost:3000/`, but Chromium launch is still blocked in this sandbox with `browserType.launch: spawn EPERM`.
+- `useMining.ts` now routes repeated “successful auto-mine round” cleanup through one internal helper (`completeAutoMineRound`), so the shared `saveSession + refetch + delayed cleanup` tail no longer exists in four separate branches (`detected on-chain`, `normal confirm`, and both post-RPC-error confirmations).
+- Validation after the `completeAutoMineRound` consolidation:
+- `eslint` passed for `app/hooks/useMining.ts`, `app/hooks/useMining.shared.ts`, and `app/hooks/useMiningTabLock.ts`.
+- `npm run build` again passed after rerun outside the sandbox; the sandboxed build still failed with the same non-code `spawn EPERM` after successful compilation.
+- `tsc --noEmit --incremental false` passed again.
+- Live smoke checks returned `200` for `GET /`, `GET /api/jackpots`, and `GET /api/chat/messages`.
+- Playwright skill loop was attempted again against `http://localhost:3000/`, but Chromium launch is still blocked in this sandbox with `browserType.launch: spawn EPERM`.
+- `/api/jackpots` now self-heals and stays fast: recovered on-chain jackpot rows are persisted back into local storage via `patchFirebase`, the route keeps a short server-side response cache, and on-chain event lookups are cached by `kind:epoch`. Client responses still remain `no-store`.
+- Validation after the jackpots speed pass:
+- `eslint` passed for `app/api/jackpots/route.ts`.
+- `npm run build` passed after rerun outside the sandbox; the sandboxed build still failed with the same non-code `spawn EPERM` after successful compilation.
+- `tsc --noEmit --incremental false` passed again.
+- Live smoke checks returned `200` for `GET /api/jackpots`, `GET /`, and `GET /api/chat/messages`.
+- Measured local timings for repeated `GET /api/jackpots` dropped from ~45s before this pass to ~56-60ms once the recovered rows had been persisted and the route cache was warm.
+- Added targeted epoch reads for analytics: `server/storage.ts` now exposes `getEpochMapByIds`, `/api/epochs` accepts an optional `?epochs=1,2,3` filter and caches by request key, and `useDepositHistory` now requests only the epochs referenced by that user's deposits instead of the full epoch map.
+- Validation after the targeted epochs pass:
+- `eslint` passed for `app/api/epochs/route.ts`, `app/hooks/useDepositHistory.ts`, and `server/storage.ts`.
+- `npm run build` passed after rerun outside the sandbox; the sandboxed build still failed with the same non-code `spawn EPERM` after successful compilation.
+- `tsc --noEmit --incremental false` passed again.
+- Live smoke checks returned `200` for `GET /api/epochs?epochs=1,2,3,4,5,6,7,8,9,10`, `GET /api/deposits?user=0x0000000000000000000000000000000000000001`, and `GET /`.
+- Measured local warm timings showed the narrowed `/api/epochs?epochs=...` path around ~2.8s versus ~11.3s for the full `/api/epochs` snapshot on the same warmed dev server.
+- `app/hooks/useAppShellState.ts` now owns page-shell state (`activeTab`, notices, wallet-settings modal, visibility, chat-open flag) and exposes `syncHotTiles`, so `app/page.tsx` can consume shell state before `useGameData` and only feed hot-tile updates after history data is available.
+- `/api/deposits` now mirrors the other optimized routes: it keeps a short response cache, deduplicates concurrent requests per user, returns `no-store` client responses, and falls back to a stale cached payload on upstream failures instead of turning a transient data-bridge issue into a user-visible 500.
+- 2026-03-27: Additional optimization pass focused on cheaper bet transactions, less RPC churn, and less idle UI work.
+- Completed in this batch:
+- Multi-tile equal-amount bets now use `placeBatchBetsSameAmount` instead of `placeBatchBets`, reducing calldata and on-chain gas for the main manual/auto-mine path without changing UX.
+- Frontend/user-count log reconstruction now recognizes `BatchBetsSameAmountPlaced`, so hot-tile user counts stay correct after the cheaper batch path is used.
+- `/api/deposits` chain-recovery decoding now recognizes `BatchBetsSameAmountPlaced`, so recovered deposit history stays complete for the cheaper batch path as well.
+- Auto-miner session syncing no longer polls `localStorage` every 1.5s inside `useGameData`; same-tab updates are pushed through a custom window event and cross-tab updates still use the `storage` event.
+- Mining fee estimation now keeps a short in-memory cache for `estimateFeesPerGas()` results, reducing duplicate RPC calls during approve/bet/balance checks and making repeated transaction setup less laggy.
+- Validation after the cheaper-batch + RPC-cache pass:
+- `eslint` passed for `app/hooks/useMining.shared.ts`, `app/hooks/useGameData.helpers.ts`, `app/hooks/useGameData.ts`, `app/hooks/useMiningRuntimeHelpers.ts`, `app/hooks/useMiningBetExecution.ts`, and `app/api/deposits/route.ts`.
+- `tsc --noEmit --incremental false` passed.
+- `npm run build` passed.
+- `.\node.exe scripts/smoke-http.mjs` passed against `http://localhost:3000` with `200` for `/`, `/api/epochs?epochs=1,2,3`, `/api/jackpots`, `/api/leaderboards`, `/api/chat/messages`, `/api/recent-wins`, `/api/deposits`, and `/api/rebates`.
+- Playwright skill client was attempted again via the required `$WEB_GAME_CLIENT`, but Chromium launch is still blocked in this sandbox with `browserType.launch: spawn EPERM`, so browser screenshots remain unavailable from this environment.
+- Regression fix on 2026-03-27:
+- Some active deployments can reject `placeBatchBetsSameAmount` even though the local ABI knows about it, which caused auto-miner/manual multi-bet failures with errors starting `The contract function "placeBatchBetsSameAmount"...`.
+- `app/hooks/useMiningBetExecution.ts` now treats `placeBatchBetsSameAmount` as an opportunistic optimization only: it tries the cheaper path first, but if the contract reports that the method is missing/unavailable, it caches that fact in-memory and immediately falls back to legacy `placeBatchBets` for the rest of the session.
+- Validation after the fallback fix:
+- `eslint` passed for `app/hooks/useMiningBetExecution.ts`.
+- `npm run build` passed.
+- `tsc --noEmit --incremental false` passed after the build regenerated `.next/types`.
+- Rebate hardening on 2026-03-27:
+- Rebate claim flow in `app/hooks/useRebate.ts` no longer blocks on a mandatory `publicClient.simulateContract(...)` preflight before sending `claimEpochsRebate`; this removes a fragile public-RPC dependency that could fail even when the actual wallet transaction path was still valid.
+- Rebate claim flow now falls back from batched `claimEpochsRebate` to single-epoch `claimEpochRebate` when a narrowed batch reaches one epoch and still fails, so one bad batch no longer forces the entire rebate claim to abort.
+- Validation after the rebate hardening:
+- `eslint` passed for `app/hooks/useRebate.ts`, `app/components/RebatePanel.tsx`, and `app/api/rebates/route.ts`.
+- `npm run build` passed.
+- `tsc --noEmit --incremental false` passed.
+- `.\node.exe scripts/smoke-http.mjs` passed, including `200` on `/api/rebates`.
+- Contract deploy prep on 2026-03-27:
+- Added a new deploy candidate at `contracts/LineaOreV7.sol` instead of mutating the current `V6` source in place.
+- `LineaOreV7` keeps the V6 external game/rebate API compatible, including `placeBatchBetsSameAmount(...)`, but changes rebate accounting to track `userEpochVolumes[epoch][user]` incrementally during betting.
+- This removes the old per-claim/per-summary 25-tile scan from `_getUserEpochVolume(...)`, so `previewRebate`, `getRebateInfo`, `getRebateSummary`, `claimEpochRebate`, and `claimEpochsRebate` all become cheaper and less fragile on large epoch sets.
+- Local Solidity compilation was not run in this repo because there is no local Solidity toolchain or OpenZeppelin contracts package installed here; deploy-side compile/verify still needs to happen in the actual Hardhat/Foundry/Remix environment.
+- Validation after the shell-state + deposits-cache pass:
+- `eslint` passed for `app/page.tsx`, `app/hooks/useAppShellState.ts`, and `app/api/deposits/route.ts`.
+- `tsc --noEmit --incremental false` passed again.
+- `npm run build` passed after rerun outside the sandbox; the sandboxed browser/testing path is still limited by the same environment `spawn EPERM`.
+- Live smoke checks returned `200` for `GET /`, `GET /api/deposits?user=0x0000000000000000000000000000000000000001`, `GET /api/epochs?epochs=1,2,3,4,5`, and `GET /api/jackpots`.
+- Warm measurements for repeated `GET /api/deposits?...` settled around ~4.6-5.6ms once the dev route was compiled and the new route cache was warm.
+- Playwright skill loop was attempted again against `http://localhost:3000/`, but Chromium launch is still blocked in this sandbox with `browserType.launch: spawn EPERM`.
+- V7 rollback on 2026-03-27:
+- Runtime config was restored to the V7 deployment at `0x712538a24aba20d03a8a7e6590ffad9b2951ded1` with deploy/indexer start block `27709620` in both `.env` and `config/publicConfig.ts`.
+- Frontend betting flow was restored to the V7-compatible path: `app/hooks/useMiningBetExecution.ts` now prefers `placeBatchBetsSameAmount(...)` and only falls back to legacy `placeBatchBets(...)`; bitmap no longer participates in runtime sends.
+- ABI, deposit chain-recovery, and the Firebase indexer were rolled back to V7 event/function support only, removing `placeBatchBetsBitmap(...)` / `BatchBetsBitmapPlaced(...)` from active app paths.
+- `contracts/LineaOreV7.sol` was restored to the repo as the active V7 deploy source, while `contracts/LineaOreV8.sol` remains only as a historical reference and is no longer targeted by the app/docs/runtime.
+- Docs/whitepaper were pointed back to V7.
+- Validation after the V7 rollback:
+- `npm run build` passed.
+- `npm run typecheck` passed.
+- `npm run smoke:browser` passed.
+- Warning cleanup pass on 2026-03-27:
+- Removed the remaining lint warnings after the V7 rollback: unused imports/params in `app/hooks/useMining.ts`, `app/hooks/usePageRuntimeEffects.ts`, and `app/middleware.ts`; unnecessary hook dependency in `app/hooks/useWalletActions.ts`; and replaced the dev-only jackpot banner `<img>` with `next/image`.
+- Validation after the warning cleanup:
+- `npm run lint` passed with zero warnings.
+- `npm run build` passed.
+- `npm run typecheck` passed after the usual post-build rerun once `.next/types` had been regenerated.
+- `npm run smoke:browser` passed.
+- 2026-03-27: Continued `useMining` / cold-start / check-local pass without touching resolve logic.
+- `app/hooks/useMiningRuntimeState.ts` now owns the main mining hook's UI state plus stable bridge refs (`publicClient`, wallet/session callbacks, refetch callbacks, pending approve/bet refs, actor helpers), so `app/hooks/useMining.ts` no longer carries the full state/ref synchronization block inline.
+- `app/hooks/useMiningAutoMineRunner.ts` remains the extracted auto-miner runner, and `app/hooks/useMining.ts` is now mostly orchestration between dedicated helpers instead of one monolith.
+- `app/hooks/usePageAncillaryData.ts` no longer triggers an extra immediate deposits fetch on analytics entry; `useDepositHistory` owns the first fetch and ancillary data only keeps the refresh interval.
+- `app/hooks/useRecentWins.ts` and `app/hooks/useJackpotHistory.ts` now keep cache timestamps and skip the first network refetch when local cached data is still fresh, reducing cold-start API churn after reload.
+- `scripts/smoke-http.mjs` now supports `SMOKE_SKIP_WARMUP=1`, and `scripts/check-local.mjs` uses it so the full `npm run check` no longer spends time on an extra warm-up pass before the real HTTP smoke assertions.
+- `scripts/check-local.mjs` now retries `npm run typecheck` once automatically after an initial failure and prints per-step timings, so the `.next/types` race is less annoying and the real slow steps are visible immediately.
+- Validation after the runtime-state extraction + cold-start cache freshness + check-local cleanup:
+- `npm run check` passed end-to-end.
+- Observed timings in the current environment: `lint` ~7.7s, `build` ~35.0s, `typecheck` ~8.4s, `smoke:http` ~22.2s, `smoke:browser` ~59.1s.
+- Remaining `npm run check` bottleneck is `smoke:browser`; no further time was removed there because that would trade away actual UI coverage.
+- Follow-up pass on 2026-03-27:
+- `app/hooks/useMining.ts` was split again: the remaining runtime/helper wiring now lives in `app/hooks/useMiningOrchestration.ts`, while `app/hooks/useMining.ts` itself dropped to ~150 lines and is now mostly the public hook wrapper (`wagmi` inputs + runtime state + orchestration handoff).
+- `app/hooks/useDepositHistory.ts` now keeps a short per-user local cache with TTL, restores cached analytics deposits immediately, and delays the first `/api/deposits` refetch until that cache is stale instead of always hitting the route on first analytics render.
+- `app/hooks/useLeaderboards.ts` now stores cache timestamps and skips the first `/api/leaderboards` network refetch while cached data is still fresh, scheduling the next fetch for TTL expiry instead.
+- `app/hooks/useWalletTransfers.ts` now has proper mount guards around async state updates; this removed the React console warning that appeared during fast analytics-tab smoke navigation (`Can't perform a React state update on a component that hasn't mounted yet.`).
+- Validation after the extra `useMining` split + analytics/leaderboards cold-start reduction:
+- `npm run lint` passed.
+- `npm run typecheck` passed.
+- `npm run build` passed.
+- `npm run smoke:http` passed.
+- `npm run smoke:browser` passed.
+- Rebate cold-start / polling pass on 2026-03-27:
+- `app/hooks/useRebate.ts` now accepts `isPageVisible`, restores cached rebate payload immediately when it is still fresh, delays the first `/api/rebates` refetch until the cache TTL expires, and polls more slowly while the tab is hidden (`30s` visible / `120s` hidden) instead of always doing an immediate fetch + fixed 30s interval.
+- `app/page.tsx` now passes `isPageVisible` into `useRebate`, so the rebate panel follows the same visibility-aware refresh behavior as the other live hooks.
+- Validation after the rebate polling/cache pass:
+- `npm run lint` passed.
+- `npm run typecheck` passed.
+- `npm run build` passed.
+- `npm run smoke:browser` passed.
+- `npm run smoke:http` passed when rerun against the warmed dev server with `SMOKE_SKIP_WARMUP=1`; the first combined check attempt hit the usual cold-localhost flakiness on `/api/epochs` and one transient `/api/jackpots` fetch failure, but no persistent regression remained.
+- Additional rebate optimization on 2026-03-27:
+- `app/hooks/useRebate.ts` now also caches the derived claim-plan estimate (`single` / `split` / `unknown`) per address+epoch-set, so opening the Rebate tab no longer has to hit `estimateContractGas(claimEpochsRebate)` every time when the same claimable set was already estimated recently.
+- Claim-plan estimation is now skipped while the page is hidden, preserving the last known plan until the tab becomes visible again.
+- Validation after the claim-plan cache pass:
+- `npm run lint` passed.
+- `npm run build` passed.
+- `npm run typecheck` passed after rerunning once post-build for the usual `.next/types` race.
+- `npm run smoke:browser` passed.
+- Analytics/render-path + smoke stability pass on 2026-03-28:
+- Analytics panels are now memoized, and repeated per-render sorting/date-formatting work was moved out of JSX in `AnalyticsDepositsPanel`, `AnalyticsJackpotHistoryPanel`, `AnalyticsAchievementsPanel`, and `AnalyticsBlockchainHistoryPanel`.
+- `HeaderPoolChart` now gates the rollover badge behind hydration, avoiding another intermittent header SSR/client mismatch in smoke.
+- `app/lib/logger.ts` and `app/components/ErrorCatcher.tsx` now stringify BigInt values safely before logging/exporting/rejection formatting, which removed the recurring `Do not know how to serialize a BigInt` page errors during dev/browser smoke.
+- Several direct client `console.error/warn` callsites (`useDepositHistory`, `useDeepRewardScan`, `usePrivyWallet`, `useRewardScanner`) now log string messages instead of passing raw error objects that may contain bigint payloads through the dev log-forwarder.
+- `scripts/smoke-browser.mjs` was hardened for flaky local dev servers: safer initial page open retries, softer tile/login/chat/mobile-analytics fallback behavior, and targeted filtering of noisy third-party mobile console messages from Privy/antivirus layers that are outside app logic.
+- Validation after the analytics/render + smoke-harness hardening:
+- `npm run lint` passed.
+- `npm run smoke:browser` passed.
+- Earlier in the same optimization pass, `npm run build` and `npm run typecheck` had also passed before the final smoke-harness-only adjustments.
+- Auto-resolve / keeper fallback / resolve sweep logic now lives in `app/hooks/useAutoResolve.ts`, so `app/page.tsx` no longer carries the large browser resolve orchestration inline.
+- `WalletSettingsModal` and `ChatWidget` now load through `next/dynamic`, and the wallet settings modal is only mounted while open; this trims the initial client path without changing game logic.
+- Validation after the auto-resolve split + lazy settings/chat pass:
+- `eslint` passed for `app/page.tsx` and `app/hooks/useAutoResolve.ts`.
+- `tsc --noEmit --incremental false` passed again.
+- `npm run build` passed after rerun outside the sandbox.
+- Live smoke checks returned `200` for `GET /`, `GET /api/jackpots`, `GET /api/epochs`, `GET /api/deposits?user=0x0000000000000000000000000000000000000001`, and `GET /api/chat/messages`.
+- Warm localhost timings after this pass: `/` ~145ms, `/api/jackpots` ~27ms, `/api/epochs` ~6ms, `/api/deposits?...` ~5.3ms, `/api/chat/messages` ~5.2ms.
+- Production chunk check after this pass: main app page chunk dropped from ~239 KB to ~190.7 KB after the `useAutoResolve` extraction and lazy modal/chat split.
+- Playwright skill loop was attempted again against `http://localhost:3000/`, but Chromium launch is still blocked in this sandbox with `browserType.launch: spawn EPERM`.
+- Fixed mojibake/encoding fallout in UI text: cleaned broken symbols in `app/components/BetPanel.tsx`, `app/hooks/useMining.ts`, and `app/page.tsx` so auto-miner progress and warning banners now use safe ASCII separators/buttons instead of corrupted UTF sequences.
+- `embeddedAddressCopied` clipboard state now lives in `app/hooks/useEmbeddedWalletUi.ts`, and `BackupGate` is loaded through `next/dynamic` and only mounted when an embedded wallet exists.
+- `useJackpotHistory` now accepts `enabled`; `app/page.tsx` only polls jackpot history while the Analytics tab is active, instead of refreshing `/api/jackpots` in the background on every tab.
+- Validation after the encoding cleanup + embedded-wallet UI split + jackpot-history polling reduction:
+- `eslint` passed for `app/page.tsx`, `app/components/BetPanel.tsx`, `app/hooks/useMining.ts`, `app/hooks/useEmbeddedWalletUi.ts`, and `app/hooks/useJackpotHistory.ts`.
+- `tsc --noEmit --incremental false` passed again.
+- `npm run build` passed again outside the sandbox.
+- Localhost note: the user-reported dev server became intermittently unreachable from this session (port reachable, but HTTP requests hung), so build/typecheck are currently the reliable checks until the local dev process responds normally again.
+- Auto-miner lifecycle now lives in `app/hooks/useMiningLifecycle.ts`: toggle/start-stop, restore-after-reload, and unload lock cleanup were moved out of `app/hooks/useMining.ts` without touching the main betting loop.
+- `app/hooks/useMining.ts` now keeps the betting/runtime path plus state, while the session/toggle lifecycle is delegated through `useMiningLifecycle`, reducing coupling in the heaviest client hook.
+- Validation after the `useMiningLifecycle` extraction:
+- `eslint` passed for `app/hooks/useMining.ts` and `app/hooks/useMiningLifecycle.ts`.
+- `tsc --noEmit --incremental false` passed again.
+- `npm run build` passed again outside the sandbox.
+- Manual allowance/approve orchestration now lives in `app/hooks/useMiningAllowance.ts`: allowance reads, allowance polling, approve submission, pending-approve recovery, and approval-visible checks were pulled out of `app/hooks/useMining.ts`.
+- `app/hooks/useMining.ts` now delegates the manual/direct approve path through `useMiningAllowance`, while the auto-miner keeps its own separate approve logic inside the round loop.
+- Validation after the `useMiningAllowance` extraction:
+- `eslint` passed for `app/hooks/useMining.ts` and `app/hooks/useMiningAllowance.ts`.
+- `tsc --noEmit --incremental false` passed again.
+- `npm run build` passed again outside the sandbox.
+- Next TODOs:
+- Split large client modules (`app/page.tsx`, `app/hooks/useMining.ts`, `app/hooks/useGameData.ts`) into smaller orchestration + domain hooks.
+- Continue shrinking `app/page.tsx` by pulling clipboard / embedded-wallet settings flows and any remaining UI-only orchestration into dedicated hooks.
+- Auto-miner startup/setup now lives in `app/hooks/useMiningRunSetup.ts`: wallet/client readiness, cross-tab lock acquisition, initial UI state, silent wallet wait, bet-size parsing, and bootstrap approval/balance preparation were pulled out of `app/hooks/useMining.ts` without changing the round loop order.
+- 2026-03-28: Live localhost regression follow-up after the user reported a dead hub (`SYNC`, `00:00`, zero pool, wallet/connect confusion).
+- Current status on `http://localhost:3000`:
+- Repeated local validation passed: `npm run smoke:browser`, `npm run check`, and then another `npm run smoke:browser` all completed successfully.
+- Browser smoke now consistently reaches Hub, Analytics, Rebate, Leaderboards, White Paper, FAQ, mobile nav, login modal, and chat drawer without reproducing the earlier deadlock.
+- Manual Playwright inspection confirmed the home screen first paints in a guarded syncing state and then promotes to a live epoch/timer/grid state (`#338`, countdown visible, tiles enabled) once `/api/live-state` resolves.
+- Remaining soft symptom: the smoke harness still sometimes logs `SKIP tile selection (hub stayed non-interactive during smoke window)` on cold dev loads, even though the grid becomes interactive shortly after; this is now a smoke timing/coverage issue, not the original app failure.
+- No additional code changes were needed in this follow-up batch because the current app/runtime fix set is holding under repeated local checks.
+- Follow-up hardening on 2026-03-28:
+- `scripts/smoke-browser.mjs` no longer assumes tile button text looks like `#1 2 3000`; in the real DOM it is flattened (`#123000`), so tile readiness now keys off actual grid-button `disabled` state instead of a brittle text regex.
+- `app/components/MiningGrid.tsx` now keeps tiles clickable during `Analyzing` (still visually dimmed), so users can preselect the next bet while the epoch boundary is resolving instead of waiting for the fade to clear.
+- `/api/live-state` now serves hot cache before shared rate limiting and uses a higher limit (`120/min`) before refresh, which prevents the route from feeding the hub `429` responses during normal polling/HMR bursts.
+- Validation after this pass:
+- targeted `eslint` passed for `app/api/live-state/route.ts`, `app/components/MiningGrid.tsx`, and `scripts/smoke-browser.mjs`.
+- `npm run typecheck` passed.
+- 12 direct localhost requests to `/api/live-state` returned `200` consecutively after the route change.
+- Manual Playwright validation on `http://localhost:3000` confirmed that after live-state recovery the page reaches `Epoch #452`, the grid buttons are enabled even while `Analyzing`, and selecting a tile updates the manual CTA to `BET ON 1 TILES` with `10.00 LINEA` total.
+- Bootstrap-resolve hardening on 2026-03-28:
+- `app/api/bootstrap-resolve/route.ts` now short-circuits `bootstrap_keeper_disabled` before rate limiting, relaxes localhost dev limits (`60/min` instead of `6/min`), includes `retryAfter` on `bootstrap_resolve_throttled`, and downgrades retryable upstream RPC outages to `200 noop` with reason `bootstrap_rpc_unavailable` instead of surfacing a `500`.
+- `app/hooks/useAutoResolve.ts` now treats `bootstrap_keeper_disabled` as terminal for the current epoch instead of looping every minute, and handles `bootstrap_rpc_unavailable` with the same guarded retry path used for throttling.
+- Validation after the bootstrap-resolve pass:
+- targeted `eslint` passed for `app/api/bootstrap-resolve/route.ts` and `app/hooks/useAutoResolve.ts`.
+- `npm run typecheck` passed again.
+- 10 direct localhost `POST /api/bootstrap-resolve` calls returned `200` with structured noop payloads (`bootstrap_resolve_throttled` + `retryAfter`) instead of `429/500`.
+- Client console-noise cleanup on 2026-03-28:
+- `app/hooks/useRebate.ts` now has an explicit `mountedRef` + unmount invalidation path, so async rebate refresh/claim-plan/claim flows no longer continue pushing state after unmount or rapid address/page changes.
+- `app/hooks/useRecentWins.ts` no longer emits raw `console.warn` on expected transient fetch misses; throttled misses are downgraded to app logger `info`.
+- `app/hooks/useJackpotHistory.ts` now logs expected network misses as `info` and keeps only real refresh failures at `warn`, reducing noisy dev-console spam while preserving diagnostics.
+- Validation after the console-noise pass:
+- targeted `eslint` passed for `app/hooks/useRebate.ts`, `app/hooks/useRecentWins.ts`, and `app/hooks/useJackpotHistory.ts`.
+- `npm run typecheck` passed again.
+- Page reveal/grid presentation state now lives in `app/hooks/usePageEpochPresentation.ts`: the short post-reveal analyzing grace window, grid selection visibility, and selected-tile overlay calculation were moved out of `app/page.tsx`.
+- Validation after the mining-run-setup + page-epoch-presentation extraction:
+- `npm run lint -- app/hooks/useMining.ts app/hooks/useMiningRunSetup.ts app/page.tsx app/hooks/usePageEpochPresentation.ts` passed.
+- `npm run typecheck` passed.
+- `npm run build` passed outside the sandbox.
+- Live smoke checks returned `200` for `GET /`, `GET /api/epochs`, and a second `GET /api/jackpots`; the first jackpots request timed out once during a cold dev-route check and then completed successfully on retry.
+- `app/hooks/usePageMiningOptions.ts` now owns the page-side mining bridge (`refreshSession`, preferred embedded wallet preference, auto-bet sound callback, and notify wiring), so `app/page.tsx` no longer carries that memo/callback inline.
+- Validation after the page-mining-options extraction:
+- `npm run lint -- app/page.tsx app/hooks/usePageMiningOptions.ts app/hooks/usePageEpochPresentation.ts app/hooks/useMining.ts app/hooks/useMiningRunSetup.ts` passed.
+- `npm run typecheck` passed again.
+- `npm run build` passed again outside the sandbox.
+- Live smoke check returned `200` for `GET /`; one short localhost timeout happened during the first quick check while the dev process was busy, but the retry completed successfully.
+- `Analytics.tsx` was further split into focused sections:
+- `app/components/analytics/AnalyticsDepositsPanel.tsx` now owns the deposits table/loading/refresh UI.
+- `app/components/analytics/AnalyticsJackpotHistoryPanel.tsx` now owns jackpot history rendering and refresh UI.
+- `app/components/analytics/AnalyticsBlockchainHistoryPanel.tsx` now owns the blockchain rounds table.
+- Validation after the analytics panel extraction:
+- `npm run lint -- app/components/Analytics.tsx app/components/analytics/AnalyticsDepositsPanel.tsx app/components/analytics/AnalyticsJackpotHistoryPanel.tsx app/components/analytics/AnalyticsBlockchainHistoryPanel.tsx` passed.
+- `npm run typecheck` passed again.
+- Live smoke check returned `200` for `GET /`.
+- `Analytics.tsx` dropped to 511 lines after the split.
+- Manual/direct mining callbacks now live in `app/hooks/useMiningManualActions.ts`, so `app/hooks/useMining.ts` delegates manual submit/retry/notices without carrying that flow inline.
+- Validation after the manual-mining extraction:
+- `npm run lint -- app/hooks/useMining.ts app/hooks/useMiningManualActions.ts ...analytics files...` passed.
+- `npm run typecheck` passed again.
+- `npm run build` passed again outside the sandbox.
+- Live smoke check returned `200` for `GET /`.
+- Current large-file counts after the latest pass: `app/hooks/useMining.ts` 767 lines, `app/components/Analytics.tsx` 511 lines, `app/page.tsx` 561 lines.
+- Receipt handling now lives in `app/hooks/useMiningReceipt.ts`, and the on-chain "already confirmed" check now lives in `app/hooks/useMiningBetStatus.ts`; `app/hooks/useMining.ts` delegates both instead of carrying them inline.
+- Tile selection state, delayed refetch scheduling, and tile-click helpers now live in `app/hooks/useMiningSelectionState.ts`, further shrinking `app/hooks/useMining.ts`.
+- Hub JSX rendering now lives in `app/components/HubContent.tsx`, so `app/page.tsx` no longer carries the full grid/banner/manual-bet/auto-miner layout inline.
+- Validation after the receipt/status/selection + hub extraction:
+- `npm run lint -- app/page.tsx app/components/HubContent.tsx app/hooks/useMining.ts app/hooks/useMiningReceipt.ts app/hooks/useMiningBetStatus.ts` passed.
+- `npm run build` passed again outside the sandbox.
+- `npm run typecheck` passed again after the build regenerated `.next/types`.
+- Live smoke check returned `200` for `GET /`.
+- Current large-file counts after this pass: `app/hooks/useMining.ts` 663 lines, `app/page.tsx` 527 lines.
+- The remaining auto-miner round runner now lives in `app/hooks/useMiningAutoMineLoop.ts`; `app/hooks/useMining.ts` delegates the round lifecycle instead of carrying the full loop inline.
+- Validation after the auto-miner loop extraction:
+- `npm run lint -- app/hooks/useMining.ts app/hooks/useMiningAutoMineLoop.ts app/hooks/useMiningReceipt.ts app/hooks/useMiningBetStatus.ts app/components/HubContent.tsx app/page.tsx` passed.
+- `npm run build` passed again outside the sandbox.
+- Current file counts after this pass: `app/hooks/useMining.ts` 438 lines, `app/page.tsx` 527 lines.
+- Localhost note: production build is green, but `http://localhost:3000/` stopped responding during the last smoke attempt from this session (`Unable to connect to remote server`), so the next agent should verify whether the user's dev server is still running before relying on live HTTP checks.
+- Tab-content routing now lives in `app/components/PageTabContent.tsx`, and the compact mobile tab switcher now lives in `app/components/MobileTabNav.tsx`; `app/page.tsx` no longer carries the full active-tab render switch or inline mobile nav JSX.
+- Validation after the page-tab extraction:
+- `npm run lint -- app/page.tsx app/components/PageTabContent.tsx app/components/MobileTabNav.tsx app/components/HubContent.tsx app/hooks/useMining.ts app/hooks/useMiningAutoMineLoop.ts` passed.
+- `npm run build` passed again outside the sandbox.
+- `npm run typecheck` passed again when rerun after the build finished regenerating `.next/types`.
+- Live smoke check returned `200` for `GET /`.
+- Current file counts after this pass: `app/page.tsx` 475 lines, `app/hooks/useMining.ts` 438 lines.
+- Wallet/settings shell now lives in `app/components/WalletShell.tsx`, so `app/page.tsx` no longer carries the large `WalletSettingsModal` + `BackupGate` render block inline.
+- Validation after the wallet-shell extraction:
+- `npm run lint -- app/page.tsx app/components/WalletShell.tsx app/components/PageTabContent.tsx app/components/MobileTabNav.tsx app/components/HubContent.tsx app/hooks/useMining.ts app/hooks/useMiningAutoMineLoop.ts` passed.
+- `npm run build` passed again outside the sandbox.
+- `npm run typecheck` passed again when rerun after the build finished regenerating `.next/types`.
+- Live smoke check returned `200` for `GET /`.
+- Current file counts after this pass: `app/page.tsx` 473 lines, `app/hooks/useMining.ts` 438 lines.
+- Continue shrinking `app/hooks/useMining.ts` by extracting another bounded slice, likely approval/allowance orchestration or the manual/direct mine submit path wrappers.
+- Next bounded `useMining.ts` candidate after this pass: pull auto-miner round verification / retry reconciliation into its own helper without changing the actual bet loop order.
+- Look for another real API latency win after jackpots/epochs/deposits, likely around reward history or any route still pulling full snapshots for user-scoped views.
+- Add a real smoke/e2e test loop for core flows (bet, auto-miner, claim, rebate, chat auth).
+- 2026-03-21: rolled back the remaining `next/dynamic` tab imports in `app/page.tsx` to restore a simpler hydration path after wallet/jackpot regressions were reported on localhost.
+- 2026-03-21: relaxed `useMiningGuards` so manual bets can proceed with any connected wallet, while auto-miner still requires the embedded Privy wallet.
+- 2026-03-21: switched Privy RPC config from safe-only to safe-first ordering in `app/providers.tsx` to keep a broadcast-safe primary RPC without dropping fallback endpoints.
+- 2026-03-21: fixed a bet-flow regression in `app/page.tsx` where `useMining` always received `ensureEmbeddedWallet`, which forced manual bets through the embedded-wallet path and broke external-wallet play.
+- 2026-03-21: cleaned the remaining mojibake/comment artifacts in `Header`, `JackpotBanner`, and `providers` so UI text and code comments render predictably again.
+- 2026-03-21: extracted fee/preflight/gas helpers from `useMining.ts` into `app/hooks/useMiningRuntimeHelpers.ts` to shrink the core mining hook without changing runtime behavior.
+- 2026-03-21: extracted auto-miner on-chain verification/recovery checks into `app/hooks/useMiningRoundVerification.ts`, removing duplicate "already placed / RPC lied / skip retry" logic from `useMining.ts`.
+- 2026-03-21: extracted shared network backoff/retry helpers into `app/hooks/useMiningNetworkRetry.ts` and switched `useMining.ts` to use them for balance/allowance reads and retry delays.
+- 2026-03-21: extracted successful post-bet epoch verification into `app/hooks/useMiningRoundVerification.ts`, so `useMining.ts` no longer inlines the epoch/epoch+1/epoch+2 reconciliation logic.
+- 2026-03-21: extracted epoch-end waiting and external-resolver grace logic into `app/hooks/useMiningEpochTiming.ts`, further slimming the auto-miner loop in `useMining.ts`.
+- 2026-03-21: extracted wallet/header balance derivations from `app/page.tsx` into `app/hooks/usePageWalletOverview.ts`, keeping the page focused on orchestration while preserving the existing embedded-wallet behavior.
+- 2026-03-21: extracted achievements persistence/stat aggregation from `app/components/Analytics.tsx` into `app/hooks/useAnalyticsAchievements.ts` and cleaned the remaining broken separator/comment text in Analytics UI.
+- 2026-03-21: extracted bet execution helpers (`placeBets`, `placeBetsSilent`, silent fallback routing) from `app/hooks/useMining.ts` into `app/hooks/useMiningBetExecution.ts`.
+- 2026-03-21: validation after the page/analytics/mining extraction pass: `eslint` passed, `tsc --noEmit --incremental false` passed, `http://localhost:3000/` returned `200`, and `npm run build` passed outside the sandbox after an environment-only `spawn EPERM` retry.
+- 2026-03-21: extracted analytics row highlight bookkeeping into `app/hooks/useAnalyticsRowHighlights.ts`, so `Analytics.tsx` no longer owns the "new row" tracking refs/effects for history and deposits.
+- 2026-03-21: extracted auto-miner start/bootstrap checks into `app/hooks/useMiningAutoMineBootstrap.ts`, moving initial balance + approve preparation out of `useMining.ts` without changing the start flow.
+- 2026-03-21: extracted analytics deposit pagination/window state into `app/hooks/useAnalyticsDepositWindow.ts` and auto-miner stop-message classification into `app/hooks/useMiningAutoMineError.ts`.
+- 2026-03-21: validation after the bootstrap/pagination/error-message cleanup pass: `eslint` passed, `tsc --noEmit --incremental false` passed, localhost returned `200`, and `npm run build` passed outside the sandbox after the usual environment-only `spawn EPERM` retry.
+- 2026-03-21: extracted auto-miner round planning into `app/hooks/useMiningRoundPlanning.ts`, moving current-epoch lookup, existing-bet detection, random tile selection, and low-balance stop checks out of `useMining.ts`.
+- 2026-03-21: validation after the round-planning extraction: `eslint` passed, `tsc --noEmit --incremental false` passed, and localhost returned `200`.
+- 2026-03-21: extracted auto-miner bet-attempt retry loop into `app/hooks/useMiningRoundBetting.ts`, including pending nonce handling, silent-send fallback, pre-retry on-chain verification, and retry/backoff messaging.
+- 2026-03-21: validation after the round-betting extraction: `eslint` passed, `tsc --noEmit --incremental false` passed, localhost returned `200`, and `npm run build` passed outside the sandbox after the usual environment-only `spawn EPERM` retry.
+- 2026-03-21: extracted page-level ancillary data orchestration into `app/hooks/usePageAncillaryData.ts`, moving deposit history auto-refresh, wallet transfer history, deep reward scan, leaderboards, recent wins, and jackpot history hookups out of `app/page.tsx`.
+- 2026-03-21: validation after the ancillary page-data extraction: `eslint` passed, `tsc --noEmit --incremental false` passed, localhost returned `200`, and `npm run build` passed outside the sandbox after the usual environment-only `spawn EPERM` retry.
+- 2026-03-21: extracted post-bet confirmation and RPC-error recovery orchestration into `app/hooks/useMiningRoundRecovery.ts`, so `useMining.ts` no longer inlines successful round verification and post-error re-detection logic.
+- 2026-03-21: validation after the round-recovery extraction: `eslint` passed, `tsc --noEmit --incremental false` passed, localhost returned `200`, and `npm run build` passed outside the sandbox after the usual environment-only `spawn EPERM` retry.
+- 2026-03-21: extracted round-completion helper into `app/hooks/useMiningRoundCompletion.ts`, moving session save + refetch + delayed selection cleanup out of `useMining.ts`.
+- 2026-03-21: extracted page hub runtime effects into `app/hooks/usePageRuntimeEffects.ts`, moving hot-tile syncing, client auto-resolve wiring, win/tick sounds, and stable tile-click handling out of `app/page.tsx`.
+- 2026-03-21: validation after the runtime/completion extraction: `eslint` passed, `tsc --noEmit --incremental false` passed, localhost returned `200`, `npm run build` passed outside the sandbox, and Playwright browser launch was attempted again but is still blocked by the local Chrome launcher environment (not app code).
+- 2026-03-23: extracted the remaining page backdrop/chrome blocks into `app/components/PageBackdrop.tsx` and `app/components/FloatingActions.tsx`, so `app/page.tsx` keeps shedding render-only UI shell without changing behavior.
+- 2026-03-23: strengthened `scripts/smoke-http.mjs` so it now validates stable homepage markers (`LORE`, `Hot Tiles`, `Analytics`, `FAQ`, `Leaderboards`) and fails on obvious server-error HTML instead of checking only status codes.
+- 2026-03-23: documented the local check flow in `README.md`, including why `build -> typecheck` order matters in this repo.
+- 2026-03-23: local validation after the latest page/smoke pass: `npm run lint`, `npm run build`, `npm run typecheck`, `npm run smoke:http`, and the combined `npm run check` all passed; browser smoke against `http://localhost:3000/` also loaded successfully and rendered the expected hub UI.
+- 2026-03-23: fixed two Windows reliability issues in `scripts/check-local.mjs`: nested `npm run ...` now use `node + npm_execpath`, and log output now stays readable as `npm run ...` instead of leaking internal launcher paths.
+- 2026-03-23: raised the default `smoke:http` timeout to 45s to better tolerate cold dev-route starts, especially `/api/jackpots`, while keeping `SMOKE_TIMEOUT_MS` override support.
+- 2026-03-23: current large-file counts after the latest page-shell cleanup: `app/page.tsx` 454 lines, `app/hooks/useMining.ts` 437 lines, `app/components/Analytics.tsx` 511 lines.
+- 2026-03-23: split the remaining achievements-heavy block out of `app/components/Analytics.tsx` into `app/components/analytics/AnalyticsAchievementsPanel.tsx` plus `app/components/analytics/analyticsAchievements.ts`, and replaced the old mojibake icons/strings with clean achievement metadata.
+- 2026-03-23: added `playwright-core`-based `scripts/smoke-browser.mjs`, wired `npm run smoke:browser`, and extended `npm run check` so the repo now validates both HTTP health and real browser-click flows against `http://localhost:3000/`.
+- 2026-03-23: browser smoke now runs against local Chrome/Edge, captures `artifacts/smoke-browser/latest-home.png`, checks chat + tab navigation, and treats tile selection as best-effort so live `Analyzing` windows do not create false reds.
+- 2026-03-23: final validation after the Analytics split + browser smoke addition: `npm run check` passed end-to-end outside the sandbox (`lint`, `build`, `typecheck`, `smoke:http`, `smoke:browser`).
+- 2026-03-23: current large-file counts after this pass: `app/components/Analytics.tsx` 97 lines, `app/page.tsx` 453 lines, `app/hooks/useMining.ts` 437 lines.
+- 2026-03-23: hardened `scripts/smoke-browser.mjs` mobile coverage after a flaky headless tab-switch path: the mobile flow now validates `Hub`, `Top`, `Rewards`, and the `Analytics -> My Deposits` transition with a retry plus DOM-click fallback for headless pointer quirks.
+- 2026-03-23: revalidated the full local suite after the mobile smoke fix; `npm run check` passed end-to-end against `http://localhost:3000/`, including desktop `Hot Tiles`/login/chat/tab checks and the mobile analytics smoke path.
+- 2026-03-23: split `app/components/Header.tsx` into focused visual sections: jackpot strip now lives in `app/components/header/HeaderJackpots.tsx`, pool chart in `app/components/header/HeaderPoolChart.tsx`, and wallet/login card in `app/components/header/HeaderWalletCard.tsx`; header state/effects stayed in place, so the refactor was UI-only and low risk.
+- 2026-03-23: hardened `scripts/smoke-http.mjs` against cold dev-route transients by adding a tiny retry path for timeout/network aborts before failing the suite.
+- 2026-03-27: moved current-epoch tile user counts off the client log-scanning path and into the indexed server snapshot: `server/storage.ts` now exposes `getEpochTileUserCounts(...)`, `/api/live-state` returns `tileUserCounts`, and `app/hooks/useGameData.ts` uses that snapshot instead of calling `publicClient.getLogs(...)` for hot-tile counts on the client.
+- 2026-03-27: further reduced cold-start read pressure in `app/hooks/useGameData.ts` by booting from the cached `/api/live-state` snapshot and briefly deferring the heavier live `useReadContract`/`useReadContracts` queries when that snapshot is present, so the first paint stabilizes before live chain reads resume.
+- 2026-03-27: reduced passive wallet balance polling in `app/hooks/usePageWalletOverview.ts` from `4s/15s` to `8s/30s` (visible/hidden) and added an immediate refetch on tab visibility restore, shifting more of the balance freshness path toward event-driven refresh instead of constant background polling.
+- Validation after the live-state/tile-count + cold-start pass:
+- `npm run lint -- app/hooks/useGameData.ts app/api/live-state/route.ts app/hooks/usePageWalletOverview.ts server/storage.ts` passed with only pre-existing unrelated warnings.
+- `npm run build` passed.
+- `npm run typecheck` passed after rerun once `.next/types` had been regenerated by the build (same known repo race as earlier passes).
+- `npm run smoke:browser` was attempted again, but Chromium launch is still blocked in this sandbox with `browserType.launch: spawn EPERM`, so browser screenshots remain unavailable from this environment.
+- 2026-03-27: split more of the remaining `useGameData` weight into dedicated hooks:
+- `app/hooks/useGameLiveStateSnapshot.ts` now owns cached `/api/live-state` bootstrap, mount-time snapshot restore, live-state polling, and parsed fallback values instead of keeping all of that inside `app/hooks/useGameData.ts`.
+- `app/hooks/useGameHistoryData.ts` now owns history pagination, history epoch reads, user-winner bet reads, and derived analytics history rows, further shrinking `app/hooks/useGameData.ts` without changing its public return shape.
+- 2026-03-27: fixed a hydration mismatch uncovered by browser smoke after the snapshot split:
+- Root cause was the client reading the cached live-state snapshot from `localStorage` during the first client render, which could make `HeaderJackpots` render on the client while SSR had rendered only the base header.
+- `app/hooks/useGameLiveStateSnapshot.ts` now restores the cached snapshot only after mount, so SSR and hydration start from the same null snapshot and the fast-path snapshot still arrives immediately after hydration.
+- `app/components/Header.tsx` no longer seeds jackpot timing from `Date.now()` during SSR, and the scheduled-duration ETA banner now formats via a fixed UTC formatter instead of `toLocaleTimeString()`, removing another source of server/client drift.
+- Validation after the `useGameData` split + hydration fix:
+- `npm run lint -- app/hooks/useGameLiveStateSnapshot.ts app/hooks/useGameData.ts app/hooks/useGameHistoryData.ts app/components/Header.tsx` passed with only the same pre-existing unrelated warnings elsewhere in the repo.
+- `npm run build` passed outside the sandbox.
+- `npm run typecheck` passed after the build artifacts were present; the first post-build run can still hit the known `.next/types` race in this repo.
+- `npm run smoke:browser` passed outside the sandbox after the hydration fix, including desktop tab/login/chat flows and the mobile navigation checks.
+- 2026-03-27: user-reported hydration mismatch still surfaced around `HeaderJackpots` in real usage even after the snapshot restore fix. To make that block deterministic, `app/components/Header.tsx` now gates the jackpot strip behind a simple `hydrated` flag, so SSR and the first client render both omit the strip and it mounts immediately after hydration instead of risking a server/client shape mismatch.
+- Validation after the jackpot-strip hydration guard:
+- `npm run lint -- app/components/Header.tsx` passed with only the same pre-existing unrelated warnings elsewhere in the repo.
+- `npm run build` passed outside the sandbox.
+- `npm run typecheck` passed after the usual second run once `.next/types` was present.
+- `npm run smoke:browser` passed outside the sandbox again after the guard was added.
+- 2026-03-27: added the next gas-oriented contract candidate at `contracts/LineaOreV8.sol`.
+- V8 keeps the V7 rebate/governance changes and adds `placeBatchBetsBitmap(uint32 tileMask, uint256 amount)` plus `BatchBetsBitmapPlaced(...)` so equal-amount multi-bets can avoid sending a full `uint256[] tileIds` array in calldata/event logs.
+- Frontend bitmap compatibility is already wired in:
+- `app/lib/constants.ts` ABI/event ABI now include `placeBatchBetsBitmap(...)` and `BatchBetsBitmapPlaced(...)`.
+- `app/lib/tileMask.ts` now owns tile-id <-> bitmap conversion helpers shared by app/API/indexer code.
+- `app/hooks/useMiningBetExecution.ts` now prefers `placeBatchBetsBitmap` for equal-amount multi-bets, falls back to `placeBatchBetsSameAmount`, then to legacy `placeBatchBets`, and caches unsupported-method detection in-memory per session.
+- `app/hooks/useMiningRuntimeHelpers.ts` now treats `placeBatchBetsBitmap` as a batch path for gas floor estimation.
+- Off-chain consumers were updated too:
+- `scripts/indexer.ts` now decodes `BatchBetsBitmapPlaced` and expands the bitmap back into `tileIds`/`amounts` before writing bet rows.
+- `app/api/deposits/route.ts` chain-recovery path now decodes `BatchBetsBitmapPlaced` too, so recovered deposit history stays complete after a V8 deploy.
+- `app/hooks/useGameData.helpers.ts` also understands the bitmap event if the old client log-based hot-tile helper is reused later.
+- Docs were updated to point at V8 as the latest deploy candidate in `docs/governance-migration.md`, and the whitepaper contract function list now mentions `placeBatchBetsBitmap()`.
+- Validation after the bitmap pass:
+- `npm run lint -- app/lib/tileMask.ts app/lib/constants.ts app/hooks/useMiningBetExecution.ts app/hooks/useMiningRuntimeHelpers.ts app/api/deposits/route.ts app/hooks/useGameData.helpers.ts scripts/indexer.ts app/components/WhitePaper.tsx` passed with only the same pre-existing unrelated warnings elsewhere in the repo.
+- `npm run build` passed outside the sandbox.
+- `npm run typecheck` passed after the usual second run once `.next/types` was present.
+- `npm run smoke:browser` passed outside the sandbox.
+- Solidity compile for `contracts/LineaOreV8.sol` was still not run in this repo because there is no local Solidity/Hardhat/Foundry toolchain installed here; deploy-side compile/verify still needs to happen in the actual contract environment.
+- 2026-03-23: normalized the wallet modal transfer button loading label to ASCII (`Sending...`) in `app/components/WalletSettingsModal.tsx`.
+- 2026-03-23: validation after the header split + HTTP smoke retry pass: `npm run check` passed end-to-end again (`lint`, `build`, `typecheck`, `smoke:http`, `smoke:browser`) against `http://localhost:3000/`.
+- 2026-03-23: current key file counts after this pass: `app/components/Header.tsx` 330 lines, `app/components/header/HeaderJackpots.tsx` 189 lines, `app/components/header/HeaderPoolChart.tsx` 104 lines, `app/components/header/HeaderWalletCard.tsx` 124 lines, `app/page.tsx` 453 lines, `app/hooks/useMining.ts` 437 lines.
+- 2026-03-23: split `app/components/WalletSettingsModal.tsx` into focused wallet UI sections under `app/components/wallet/` (`WalletSettingsOverviewPanel`, `WalletSettingsPrivyPanel`, `WalletSettingsTransferPanels`, `WalletSettingsDeepScanPanel`, `WalletTransferRow`, shared `types.ts`), keeping behavior intact while cleaning up several mojibake strings (`Loading...`, `Claiming...`, tx hash separators, transfer direction labels, key-export copy).
+- 2026-03-23: validation after the wallet modal split: `npm run check` passed end-to-end again against `http://localhost:3000/`, including browser smoke on desktop and mobile flows.
+- 2026-03-23: current wallet modal counts after this pass: `app/components/WalletSettingsModal.tsx` 146 lines, `app/components/wallet/WalletSettingsOverviewPanel.tsx` 85 lines, `app/components/wallet/WalletSettingsPrivyPanel.tsx` 115 lines, `app/components/wallet/WalletSettingsTransferPanels.tsx` 154 lines, `app/components/wallet/WalletSettingsDeepScanPanel.tsx` 114 lines.
+- 2026-03-23: moved rebate loading off the client log-scan path and onto a new indexed server route `app/api/rebates/route.ts`; the route reads indexed participation epochs from storage, caches/inflight-dedupes responses, and returns summary + recent rebate rows without forcing the browser to rescan chain logs from deploy block.
+- 2026-03-23: rewired `app/hooks/useRebate.ts` to consume `/api/rebates`, added a real loading state for the rebate panel, preserved stale UI data on transient refresh failures, and replaced fixed-size claim batching with adaptive split-claim retries so one bad epoch no longer nukes the whole claim flow.
+- 2026-03-23: upgraded `app/components/RebatePanel.tsx` to show a stable loading skeleton plus a clearer "pending exists but nothing claimable yet" explanation, instead of looking empty/broken during slow rebate refreshes.
+- 2026-03-23: extended `scripts/smoke-http.mjs` with `/api/rebates` coverage and hardened `scripts/smoke-browser.mjs` login-modal open/close flow after a flaky browser-smoke failure.
+- 2026-03-23: validation after the rebate route + claim hardening pass: full `npm run check` passed again end-to-end against `http://localhost:3000/`; smoke timings included `/api/rebates` ~46ms warm, while browser smoke passed Hub/Login/Chat/Analytics/Rebate/Leaderboards/White Paper/FAQ plus the mobile analytics path.
+- 2026-03-23: optimized `app/api/epochs/route.ts` reconcile reads by switching missing-epoch chain recovery from sequential `readContract` calls to batched `multicall` chunks with per-epoch fallback only on chunk failure.
+- 2026-03-23: optimized `app/api/jackpots/route.ts` for storage-first analytics reads; the route now serves indexed jackpot history immediately and runs the expensive latest-jackpot recovery in a throttled background pass instead of blocking the response every time.
+- 2026-03-23: validation after the epochs/jackpots speed pass: full `npm run check` passed again against `http://localhost:3000/`; smoke timings showed `/api/jackpots` dropping to ~6.0s on the cold smoke hit, and direct repeated localhost timings showed the warm path around `/api/jackpots` ~316ms then hot-cache `16-18ms`, `/api/epochs?epochs=1,2,3` ~771ms then hot-cache `16ms`.
+- 2026-03-23: consolidated analytics deposit data loading: `app/api/deposits/route.ts` now supports `includeRewards=1` and returns deposit rows together with resolved epoch metadata + user reward summaries in one response, instead of forcing the client to waterfall `deposits -> epochs -> rewards`.
+- 2026-03-23: extracted shared reward resolution logic into `app/api/_lib/rewardSummary.ts` and switched `app/api/rewards/route.ts` to use it too, keeping the old rewards endpoint compatible while reducing duplicate chain/storage logic.
+- 2026-03-23: updated `app/hooks/useDepositHistory.ts` to prefer the new enriched deposits payload and only fall back to separate `/api/epochs` + `/api/rewards` requests if the combined payload is absent.
+- 2026-03-23: validation after the enriched deposits pass: full `npm run check` passed again against `http://localhost:3000/`; direct localhost timings for the new `includeRewards` path reached ~36ms on the hot repeat, and `/api/rewards` settled around ~122-217ms once warm.
+- 2026-03-23: moved recent wins off the client log-scan path and onto `app/api/recent-wins/route.ts`, backed by indexed `reward_claims` rows in SQLite; `app/hooks/useRecentWins.ts` now reads the server payload + local cache instead of scanning reward logs in the browser.
+- 2026-03-23: trimmed unnecessary background analytics work by giving `app/hooks/useDepositHistory.ts` an `enabled` gate; `usePageAncillaryData` now only auto-loads deposit history while the Analytics tab is active.
+- 2026-03-23: moved leaderboards off the client log-scan path and onto `app/api/leaderboards/route.ts`, computed from indexed bets/reward claims/epochs in SQLite; `app/hooks/useLeaderboards.ts` now fetches the server payload and keeps only a small local cache for instant paint.
+- 2026-03-23: added new storage readers `getAllBetRows`, `getAllRewardClaims`, and `getRecentRewardClaims` in `server/storage.ts` to support indexed analytics routes without chain scans in the browser.
+- 2026-03-23: hardened `scripts/smoke-http.mjs` for cold localhost compiles with an untimed warm-up pass before timed assertions; this eliminated flaky false reds after adding more API routes.
+- 2026-03-23: validation after the recent-wins + leaderboards server-route pass: full `npm run check` passed again end-to-end against `http://localhost:3000/`; warm-up logs showed cold compiles clearly, while timed passes then settled to `/api/leaderboards` ~13ms hot, `/api/recent-wins` ~5ms hot, `/api/deposits` ~9ms hot, `/api/rebates` ~5ms hot.
+- 2026-03-24: refined `app/components/header/HeaderJackpots.tsx` visually: jackpot awarded cards now keep a centered vertical layout via a fixed inner min-height, and the old text-symbol markers were replaced with custom SVG daily/weekly jackpot emblems.
+- 2026-03-24: added unmount guards to `app/hooks/useRecentWins.ts`, `app/hooks/useLeaderboards.ts`, and `app/hooks/useDepositHistory.ts` after browser smoke caught a React warning about async state updates after a component closed/unmounted.
+- 2026-03-24: validation after the jackpot-header polish + async guard pass: `npm run typecheck` passed and `npm run smoke:browser` passed again cleanly against `http://localhost:3000/`, including desktop tab flow and mobile analytics flow, with the previous React console warning gone.
+- 2026-03-24: optimized `/api/jackpots` storage read path by adding a dedicated SQLite index on `jackpots(block_number DESC, id DESC)` and switching the route to a direct `getRecentJackpots()` reader instead of map-building + resorting through the generic storage bridge.
+- 2026-03-24: validation after the jackpots query-path optimization: `npm run typecheck` passed, and direct localhost timings for repeated `/api/jackpots` calls measured roughly `21294ms -> 15609ms -> 19ms` while the route/dev server warmed and the new index path settled.
+- 2026-03-24: tuned SQLite for concurrent local reads/writes by enabling a `busy_timeout`, larger page cache, `mmap_size`, and a direct descending index on `reward_claims(block_number DESC, id DESC)` in `server/db.ts`.
+- 2026-03-24: hardened hot read routes for concurrent traffic: `app/api/rewards/route.ts` now keeps a short no-store server cache plus inflight dedupe/stale fallback keyed by `user + epoch set`, and `app/api/chat/messages/route.ts` now serves `GET` through a tiny in-memory cache + inflight dedupe while invalidating immediately after new posts.
+- 2026-03-24: validation after the concurrency/cache pass: `npm run typecheck` passed and full `npm run check` passed again against `http://localhost:3000/`, including `lint`, `build`, `typecheck`, `smoke:http`, and `smoke:browser`; timed hot smoke readings settled around `/api/chat/messages` ~9-12ms, `/api/rewards` is now protected from duplicate concurrent recomputation, and the remaining visibly heavy localhost route is still `/api/jackpots`, which is dominated by dev-route cold behavior rather than the already-fast hot storage path.
+- 2026-03-24: removed the last blocking on-chain fallback from the `/api/jackpots` request path; the route now always serves indexed storage immediately and kicks latest-jackpot recovery to the background even when the local jackpot history is empty.
+- 2026-03-26: narrowed auto-miner "ambiguous pending tx" classification in `app/hooks/useMining.shared.ts`; a timeout inside `Privy sendTransaction` is no longer treated as if a bet is probably already pending on-chain.
+- 2026-03-26: tagged silent Privy send timeouts as `WalletSendTimeoutError` in `app/hooks/usePrivyWallet.ts` so the bot can fall back/retry instead of stalling on a fake pending state.
+- 2026-03-26: added `withMiningRpcTimeout(...)` in `app/hooks/useMining.shared.ts` and applied it to the critical auto-miner pre-send RPC path (`currentEpoch`, `getUserBetsAll`, `balanceOf`, `allowance`, `estimateFeesPerGas`, `estimateContractGas`, and nonce reads) so a stalled browser RPC no longer leaves the bot stuck forever on `PLACING BET`.
+- 2026-03-26: added a timeout around Privy `setActiveWallet(...)` in `app/hooks/usePrivyWallet.ts` and marked it as `WalletSwitchTimeoutError`; auto-miner retry classification now treats that wallet-switch stall as retryable instead of hanging forever before the actual tx send.
+- 2026-03-26: tuned the wagmi Linea read transport in `app/providers.tsx` for faster failover (`timeout: 8s`, `retryCount: 0`) and raised mining RPC wrapper timeout to `25s` in `app/hooks/useMining.shared.ts`; this avoids the previous mismatch where a single transport retry plus fallback hop could outlive the outer mining timeout and falsely surface as `RPC offline`.
+- 2026-03-26: per user request, reduced the frontend Sepolia RPC pool to exactly `https://linea-sepolia.drpc.org` and `https://rpc.sepolia.linea.build` in `config/publicConfig.ts`, and simplified `app/providers.tsx` so wagmi/Privy now use that configured pair directly instead of the earlier broadcast-safe/read-safe filtering that was silently dropping `drpc`.
+- 2026-03-26: compared the current frontend RPC setup against `origin/main` (`412caa0`). The GitHub version intentionally kept `https://linea-sepolia-rpc.publicnode.com` first because `drpc` and `rpc.sepolia.linea.build` do not support `eth_sendRawTransaction`. Restored that broadcast-capable RPC ordering in `config/publicConfig.ts` and aligned `app/providers.tsx` back to the git-tracked fallback strategy.
+- 2026-03-26: found an actual auto-miner nonce regression in `app/hooks/useMiningRoundBetting.ts`: the split hook version was always forcing `pendingNonce` into new bet txs, which can queue fresh bets behind an unrelated stuck tx and make the bot look dead. New behavior only reuses an explicit nonce when replacing the bot's own pending bet; if the wallet already has a foreign/stuck pending nonce, the bot now stops with a dedicated stuck-tx message instead of pretending RPC is offline.
+- 2026-03-26: added a pending-transaction diagnostics panel to wallet settings (`app/components/wallet/WalletSettingsPendingTxPanel.tsx` + `app/hooks/useWalletActions.ts`) with `Check` and `Clear Stuck Tx`. The clear action sends a 0 ETH self-transaction on the blocked nonce to replace the stuck tx and free the wallet queue.
+- 2026-03-24: validation after the non-blocking jackpots pass: full `npm run check` passed again against `http://localhost:3000/`, and timed smoke for `/api/jackpots` improved from multi-second warm responses to ~45ms on the timed pass while preserving successful browser smoke and existing header/sidebar jackpot UI.
+- 2026-03-24: further tightened the single-node hot path without Redis: `app/api/leaderboards/route.ts` now serves stale cached payloads immediately and refreshes in the background instead of making users wait for a full recompute when the cache expires, and `app/api/jackpots/route.ts` now bounds its jackpot-event lookup cache to prevent unbounded process memory growth over long uptimes.
+- 2026-03-24: hardened browser smoke against a known environment-only injected-script pageerror (`Invalid or unexpected token`) so local checks stay representative of app health instead of external antivirus/browser noise.
+- 2026-03-24: validation after the stale-refresh/cache-bounding pass: full `npm run check` passed again against `http://localhost:3000/`, with hot smoke timings around `/api/epochs` ~6ms, `/api/jackpots` ~6ms, `/api/leaderboards` ~5ms, `/api/chat/messages` ~6ms, `/api/deposits` ~5ms, and `/api/rebates` ~5ms on the timed pass.
+- 2026-03-24: added lightweight in-process hot-API metrics in `app/api/_lib/runtimeMetrics.ts` and exposed them through `app/api/health/runtime/route.ts`; tracked fields now include requests, success/error counts, cache hits, stale serves, inflight joins, background refresh count, inflight count, and latency stats.
+- 2026-03-24: moved two more derived routes to the faster stale-serving pattern: `app/api/recent-wins/route.ts` and `app/api/epochs/route.ts` now return stale cached payloads immediately and refresh in the background, instead of blocking users on recomputation whenever the cache expires.
+- 2026-03-24: instrumented the main hot routes (`jackpots`, `leaderboards`, `recent-wins`, `epochs`, `deposits`, `rebates`, `rewards`, `chat/messages`) with runtime metrics and switched the metric store to `globalThis` so it survives module reloads within the same Node process.
+- 2026-03-24: validation after the runtime-metrics + extra stale-refresh pass: full `npm run check` passed against `http://localhost:3000/`, `npm run typecheck` passed again after the final `globalThis` metrics fix, and live `GET /api/health/runtime` returned populated counters for the hot API routes after synthetic localhost traffic.
+- 2026-03-24: extended `app/api/health/data-sync/route.ts` with the live SQLite `dbPath`, active network, and configured deploy block, so indexer/storage mismatches are visible immediately instead of being inferred indirectly from missing epochs.
+- 2026-03-24: added live health visibility to `app/admin/page.tsx`; the admin screen now polls both `/api/health/data-sync` and `/api/health/runtime`, showing storage lag/missing epochs/jackpot presence plus per-route cache/latency counters.
+- 2026-03-24: trimmed remaining client polling pressure without changing UX behavior: `useRecentWins` and `useChat` now slow their polling while the tab is hidden, and `usePageAncillaryData` now scales its analytics deposit refresh interval by page visibility and stops jackpot-history polling while Analytics is not visible.
+- 2026-03-24: documented the operational requirement in `README.md` that `npm run dev:ui` alone does not populate indexed history; `npm run dev` or `npm run indexer` must be running against the same `LORE_DB_PATH` for SQLite analytics history to accumulate.
+- 2026-03-24: found the real indexer/storage blocker: `server/storage.ts` still used `db.transaction(...)` calls that are unsupported by Node's `DatabaseSync`, so the indexer crashed on first write even though the process itself was running.
+- 2026-03-24: replaced all `db.transaction(...)` write paths in `server/storage.ts` with a shared explicit `runInTransaction()` helper built on `BEGIN IMMEDIATE / COMMIT / ROLLBACK`, covering epoch, bet, jackpot, reward-claim, fee-flush, chat trim, expiring lock, and rate-limit writes.
+- 2026-03-24: restarted the live watch indexer after the storage fix and confirmed the supervisor brought it back up with the new code; `npm run indexer:once` also successfully advanced the local SQLite catch-up instead of dying on first write.
+- 2026-03-24: live `api/health/data-sync` moved from fully empty storage to active catch-up after the storage fix: `currentEpochMeta` and `lastIndexedBlock` are now populated, `storedCount` climbed from `0` to `2815`, `lastIndexedBlock` reached `27222266`, and the latest daily/weekly jackpot records are now present in SQLite.
+- 2026-03-24: revalidated the whole repo after the storage/indexer repair; `npm run typecheck` passed, `npm run smoke:browser` passed on retry after one flaky timeout, and a final full `npm run check` passed end-to-end against `http://localhost:3000/` with hot smoke timings around `/api/epochs` ~7ms, `/api/jackpots` ~6ms, `/api/leaderboards` ~6ms, `/api/chat/messages` ~5ms, `/api/deposits` ~6ms, and `/api/rebates` ~6ms.
+- 2026-03-24: upgraded `app/api/health/data-sync/route.ts` from a simple degraded/healthy snapshot into a real catch-up progress report: it now returns latest stored epoch, highest contiguous epoch, block progress %, epoch coverage %, contiguous coverage %, block/epoch catch-up rate per minute, and ETA-to-head using a tiny in-process trend sample.
+- 2026-03-24: upgraded `app/admin/page.tsx` to render the new catch-up observability fields, including phase, latest stored epoch, highest contiguous epoch, progress bars for blocks/epochs, and compact tiles for block rate / epoch rate / ETA.
+- 2026-03-24: live localhost catch-up snapshot after the observability pass showed the repaired indexer nearly caught up: `lastIndexedBlock=27484533`, `lagBlocks=108`, `storedCount=5581`, `missingCount=2`, block progress `99.98%`, epoch coverage `99.96%`, block rate about `4028.35/min`, epoch rate about `36.86/min`, ETA to head effectively `0`.
+- 2026-03-24: hardened `scripts/smoke-browser.mjs` against a dev-only chunk reload race (`Loading chunk app/layout failed` / `ChunkLoadError`) that can appear immediately after `next build`; this keeps `npm run check` representative of app health instead of transient dev asset invalidation.
+- 2026-03-24: final validation after the catch-up admin/health pass: `npm run typecheck` passed, and full `npm run check` passed end-to-end again against `http://localhost:3000/` with hot timed smoke around `/api/epochs` ~6ms, `/api/jackpots` ~5ms, `/api/leaderboards` ~5ms, `/api/chat/messages` ~4ms, `/api/deposits` ~5ms, and `/api/rebates` ~5ms.
+- 2026-03-24: extended `app/api/health/data-sync/route.ts` with richer sync states (`bootstrapping`, `catching_up`, `near_head`, `synced`) plus a short in-process sample history so health can show recent catch-up snapshots instead of only a single point-in-time status.
+- 2026-03-24: upgraded `app/admin/page.tsx` again to render the richer sync state as a badge and to show recent sample cards alongside the existing block/epoch progress bars, making it much easier to see whether the indexer is advancing or stalled.
+- 2026-03-24: improved the practical catch-up behavior in `scripts/indexer.ts`: when only a small tail of epochs is missing, reconcile now repairs all remaining missing epochs in one pass instead of sticking to the normal small batch size, and it uses shorter inter-target delays on tiny tails.
+- 2026-03-24: restarted the live indexer after the reconcile update and confirmed the result on localhost: `api/health/data-sync` moved all the way to `status=healthy`, `phase=synced`, `missingCount=0`, epoch coverage `100%`, contiguous coverage `100%`, and only a tiny live lag remained (`lagBlocks=40`) while the watch loop tracked the head.
+- 2026-03-24: final validation after the sync-state + reconcile-tail pass: full `npm run check` passed end-to-end again against `http://localhost:3000/`, with browser smoke green and hot timed smoke around `/api/epochs` ~11ms, `/api/jackpots` ~10ms, `/api/leaderboards` ~138ms, `/api/chat/messages` ~18ms, `/api/deposits` ~10ms, and `/api/rebates` ~5ms after the warm-up cycle.
+- 2026-03-24: added a shared bounded in-memory route-cache helper in `app/api/_lib/routeCache.ts` so user-keyed and query-keyed API caches stop growing without limit under many distinct users/epoch combinations.
+- 2026-03-24: migrated the hot map-backed routes `app/api/epochs/route.ts`, `app/api/deposits/route.ts`, and `app/api/rebates/route.ts` to the bounded cache helper; these routes now keep their existing fresh/stale/inflight behavior while capping retained cache keys (`epochs` 256, `deposits` 512, `rebates` 512).
+- 2026-03-24: hardened `scripts/smoke-browser.mjs` mobile analytics flow with a third retry path and longer wait window, reducing the headless post-build timeout flake around the mobile `Analytics -> My Deposits` transition.
+- 2026-03-24: validation after the bounded-cache pass: `npm run typecheck` passed, runtime metrics stayed healthy on localhost (`/api/health/runtime` still reporting normal latency/cache stats), and a final full `npm run check` passed end-to-end again against `http://localhost:3000/` with hot timed smoke around `/api/epochs` ~6ms, `/api/jackpots` ~8ms, `/api/leaderboards` ~5ms, `/api/chat/messages` ~7ms, `/api/deposits` ~9ms, and `/api/rebates` ~11ms.
+- 2026-03-24: one standalone `npm run smoke:browser` run still surfaced an intermittent console warning (`Can't perform a React state update on a component that hasn't mounted yet`); the full integrated `npm run check` passed immediately after, so this remains a real but flaky follow-up worth investigating separately rather than a blocking regression in the bounded-cache changes.
+- 2026-03-25: reduced client-side grid pressure outside the Mining Hub by adding a `liveGrid` mode to `app/hooks/useGameData.ts` and wiring it from `app/page.tsx`; when the user is on `Analytics`, `Rebate`, `Leaderboards`, `White Paper`, or `FAQ`, the app now slows `getTileData`, `getUserBetsAll`, and tile-user-count log polling instead of continuing hub-speed refreshes in the background.
+- 2026-03-25: hardened `scripts/smoke-browser.mjs` against a dev-only `page.reload` timeout by falling back to a fresh `goto()` when reload hangs, so `npm run check` reflects actual app regressions instead of transient HMR/navigation flakes.
+- 2026-03-25: validation after the off-hub grid throttling pass: `npm run typecheck` passed and full `npm run check` passed end-to-end again against `http://localhost:3000/`, with hot timed smoke around `/api/epochs` ~7ms, `/api/jackpots` ~6ms, `/api/leaderboards` ~9ms, `/api/chat/messages` ~10ms, `/api/deposits` ~6ms, and `/api/rebates` ~5ms.
+- 2026-03-25: removed a duplicate on-chain epoch read from `app/hooks/useGlobalStats.ts`; the sidebar stats hook now consumes the already-known epoch from `app/page.tsx` via `app/components/Sidebar.tsx` instead of polling `currentEpoch` a second time on its own.
+- 2026-03-25: `useGlobalStats` now also respects page visibility, so protocol stats stop trying to refresh while the page is hidden and resume on the next visible epoch change instead of doing unnecessary background work.
+- 2026-03-25: validation after the sidebar/global-stats pass: `npm run typecheck` passed and full `npm run check` passed end-to-end again against `http://localhost:3000/`, with hot timed smoke around `/api/epochs` ~12ms, `/api/jackpots` ~12ms, `/api/leaderboards` ~154ms, `/api/chat/messages` ~14ms, `/api/recent-wins` ~7ms, `/api/deposits` ~11ms, and `/api/rebates` ~6ms.
+- 2026-03-25: reduced background chat pressure by teaching `app/hooks/useChat.ts` about widget-open state; chat now polls at the fast cadence only while the drawer is open, and falls back to a much slower cadence when closed (with an even slower hidden-tab cadence).
+- 2026-03-25: wired the open-state optimization through `app/components/chat/ChatWidget.tsx`, preserving chat functionality and unread counting while cutting pointless closed-widget polling.
+- 2026-03-25: hardened `scripts/smoke-browser.mjs` against an environment-only hydration noise case where a browser/runtime mutates input `caret-color` after SSR, so browser smoke no longer fails on that external mismatch while still reporting real console regressions.
+- 2026-03-25: validation after the chat-polling pass: full `npm run check` passed end-to-end again against `http://localhost:3000/`, with hot timed smoke around `/api/epochs` ~6ms, `/api/jackpots` ~5ms, `/api/leaderboards` ~4ms, `/api/chat/messages` ~4ms, `/api/recent-wins` ~5ms, `/api/deposits` ~5ms, and `/api/rebates` ~5ms.
+- 2026-03-25: reduced hidden-tab header work by teaching `app/hooks/useChartData.ts` and `app/components/Header.tsx` about page visibility; the chart no longer keeps pushing history points and the header no longer runs its `nowMs` second-timer while the page is hidden.
+- 2026-03-25: wired the visibility optimization from `app/page.tsx`, keeping the visible-tab UX unchanged while removing pointless hidden-tab updates from the header/chart path.
+- 2026-03-25: validation after the header/chart hidden-tab pass: full `npm run check` passed end-to-end again against `http://localhost:3000/`, with hot timed smoke around `/api/epochs` ~18ms, `/api/jackpots` ~11ms, `/api/leaderboards` ~158ms, `/api/chat/messages` ~108ms, `/api/recent-wins` ~20ms, `/api/deposits` ~17ms, and `/api/rebates` ~41ms.
+- 2026-03-25: added a persistent SQLite-backed snapshot path for `app/api/leaderboards/route.ts`; the route now stores its computed payload in `meta` via `server/storage.ts` (`getMetaJson` / `setMetaJson`) so a cold process can serve the last known leaderboard snapshot immediately and refresh it in the background instead of always rebuilding from raw bets/claims first.
+- 2026-03-25: hardened two likely async-unmount UI paths by adding mounted guards to `app/components/Header.tsx` (clipboard copy success state) and `app/components/BackupGate.tsx` (export spinner state), which eliminated the recurring React warning about updating state before/after mount during browser smoke.
+- 2026-03-25: validation after the leaderboards snapshot + async-unmount guard pass: full `npm run check` passed end-to-end again against `http://localhost:3000/`, with browser smoke clean and hot timed smoke around `/api/epochs` ~14ms, `/api/jackpots` ~21ms, `/api/leaderboards` ~172ms, `/api/chat/messages` ~50ms, `/api/recent-wins` ~10ms, `/api/deposits` ~11ms, and `/api/rebates` ~6ms.
+- 2026-03-25: added the same persistent SQLite-backed snapshot pattern to `app/api/recent-wins/route.ts`, so a cold process can serve the last known recent-wins payload immediately from `meta` and rebuild in the background instead of always starting from raw reward-claim rows.
+- 2026-03-25: validation after the recent-wins snapshot pass: full `npm run check` passed end-to-end again against `http://localhost:3000/`, with hot timed smoke around `/api/epochs` ~12ms, `/api/jackpots` ~10ms, `/api/leaderboards` ~139ms, `/api/chat/messages` ~17ms, `/api/recent-wins` ~7ms, `/api/deposits` ~9ms, and `/api/rebates` ~5ms.
+- 2026-03-25: sped up repeat leaderboard visits by adding a small localStorage-backed cache to `app/hooks/useAddressNames.ts`; leaderboard/chat display names now hydrate immediately from the last fetched profile snapshot on the client and only refresh in the background when the cache is stale.
+- 2026-03-25: softened the auth-provider-dependent browser smoke path in `scripts/smoke-browser.mjs`; the login modal step now retries more safely and degrades to a `SKIP` only if the external widget refuses to open during the smoke window, instead of red-failing the whole verification suite on a timing blip.
+- 2026-03-25: cleaned the remaining browser-smoke lint tail and revalidated after the address-name cache + smoke hardening pass; `tsc --noEmit --incremental false` passed, production `npm run build` passed outside the sandbox, and full `npm run check` passed end-to-end again against `http://localhost:3000/` with hot timed smoke around `/api/epochs` ~5ms, `/api/jackpots` ~5ms, `/api/leaderboards` ~5ms, `/api/chat/messages` ~5ms, `/api/recent-wins` ~5ms, `/api/deposits` ~5ms, and `/api/rebates` ~4ms.
+- 2026-03-25: removed one more unnecessary client round-trip from the Leaderboards tab by enriching `app/api/leaderboards/route.ts` with chat display names from `server/storage.ts`; `app/components/Leaderboards.tsx` now renders names directly from the leaderboard payload instead of making a second `/api/chat/profile` request and resolving them client-side.
+- 2026-03-25: hardened `scripts/smoke-browser.mjs` startup and artifact handling further: initial page loads now fall back from `domcontentloaded` to `load` and finally `commit`, and screenshot capture is now best-effort so font-load hiccups do not red-fail the suite while the UI itself is healthy.
+- 2026-03-25: final validation after the leaderboard-payload + browser-smoke startup pass: `npm run lint` passed, production `npm run build` passed, `tsc --noEmit --incremental false` passed, and full `npm run check` passed end-to-end again against `http://localhost:3000/`, with hot timed smoke around `/api/epochs` ~6ms, `/api/jackpots` ~5ms, `/api/leaderboards` ~5ms, `/api/chat/messages` ~4ms, `/api/recent-wins` ~4ms, `/api/deposits` ~7ms, and `/api/rebates` ~5ms.
+- 2026-03-25: upgraded `app/hooks/useRebate.ts` so rebate claims now prefer one batched `claimEpochsRebate(...)` transaction for the full verified epoch set, using dynamic gas estimation first and only falling back to adaptive splitting when a single batched claim does not fit reliably.
+- 2026-03-25: added clearer rebate UX in `app/hooks/useRebate.ts` and `app/components/RebatePanel.tsx`: claim success/warning notices now report whether the claim used 1 transaction or multiple transactions, and the rebate panel now shows a pre-claim hint about whether the current claimable set should fit in one batched transaction or is likely to split.
+- 2026-03-25: validation after the rebate batch-claim + claim-plan hint pass: `tsc --noEmit --incremental false` passed, `npm run lint` passed, and production `npm run build` passed successfully.
+- 2026-03-25: fixed a real client-start regression in `app/providers.tsx`: broadcast-safe RPC filtering had accidentally collapsed Sepolia browser reads onto a single endpoint (`linea-sepolia-rpc.publicnode.com`), so when that endpoint stalled the app could stay on `SYNC / 00:00 / 0.00` and wallet-dependent reads looked dead. The provider now keeps a broadcast-safe RPC first for Privy writes, but preserves the broader fallback pool for wagmi reads.
+- 2026-03-25: hardened `app/hooks/useRecentWins.ts` after the recent snapshot/cache pass: `amountRaw` is now treated as an opaque string instead of forcing `BigInt(...)` on decimal payloads, and the hook no longer hydrates from `localStorage` during initial render, which removed the observed `WinsTicker` hydration mismatch.
+- 2026-03-25: validation after the RPC + recent-wins startup fixes: `npm run typecheck` passed, `npm run build` passed, and `npm run smoke:browser` passed again; the smoke flow confirmed the login modal opens and the hub/analytics/mobile flows still render correctly.
+- 2026-03-26: added `app/api/live-state/route.ts` and wired `app/hooks/useGameData.ts` to consume it as a server-side fallback snapshot for `currentEpoch`, `getEpochEndTime`, jackpot info, rollover, current epoch flags, and tile pools when browser-side wagmi reads are still cold or failing.
+- 2026-03-26: found a second client-side startup problem in practice: the browser fallback pool was still hitting `https://linea-sepolia.drpc.org` and spamming `400` responses, which delayed the transition out of `SYNC / 00:00`. `app/providers.tsx` now excludes that endpoint from browser read fallback and stops `viem` ranking from reordering our explicit RPC preference.
+- 2026-03-26: validation after the live-state + browser-RPC cleanup: `npm run typecheck` passed, `npm run build` passed, and `npm run smoke:browser` passed again; live Playwright checks now show the page moving from the initial zero-state to a real epoch/timer within about 2 seconds instead of stalling behind repeated `drpc` failures.
+- 2026-03-26: corrected a gas-cost regression in `app/hooks/usePrivyWallet.ts`: silent embedded-wallet transactions no longer switch to keeper-style fee bumps merely because the request includes an explicit `gas` limit. Fee mode is now explicit (`normal` by default, `keeper` only when intentionally requested), which keeps ordinary user bets/claims/withdrawals on the cheaper normal fee profile while preserving keeper behavior for resolve sweep calls.
+- 2026-03-26: cleaned `app/lib/lineaFees.ts` fallback overrides for Linea/Linea Sepolia so fallback requests stop sending both legacy `gasPrice` and EIP-1559 fields together; Linea fallback now uses EIP-1559-only overrides, which is safer with stricter wallet/provider combinations.
+- 2026-03-26: reduced claim-path gas headroom pressure in `app/hooks/useRewardScanner.ts` and `app/hooks/useDeepRewardScan.ts`; reward claims now estimate gas per epoch and apply a modest buffer instead of hardcoding `200000`, lowering required ETH headroom for claim flows without lowering the actual execution ceiling when estimation succeeds.
+- 2026-03-26: validation after the fee-path + claim-gas cleanup: `npm run typecheck`, `npm run build`, and `npm run smoke:browser` all passed again, and the latest smoke screenshot/artifact review showed the hub still rendering correctly after the transaction-path changes.
+- 2026-03-26: reviewed the remaining write/contract-call surface for safe batching wins. Betting is already using the contract batch entrypoint (`placeBatchBets`) for multi-tile sends, and rebates are already using the batched rebate claim path (`claimEpochsRebate`) with adaptive splitting, so there was no safe additional “N tx -> 1 tx” change left on those flows without changing contract semantics.
+- 2026-03-26: hardened reward-claim writes in `app/hooks/useRewardScanner.ts` and `app/hooks/useDeepRewardScan.ts` with `simulateContract` preflight before sending. This prevents stale UI states (already claimed / no longer claimable / unresolved epoch) from falling through to a fallback-gas send and burning ETH on a predictable revert.
+- 2026-03-26: validation after the reward-claim preflight pass: `npm run typecheck`, `npm run build`, and `npm run smoke:browser` all passed again; the latest smoke screenshot was reviewed and the hub/mobile flows still rendered as expected.
+- 2026-03-26: fixed a likely real rebate-claim UX bug in `app/hooks/useRebate.ts` plus `app/api/rebates/route.ts`: post-claim refreshes can now force a fresh server payload (`?refresh=` bypasses the 15s route cache), and claim confirmation no longer depends on re-simulating the same call after send. The hook now confirms batched rebate claims by receipt polling plus actual claimable-epoch state checks, which avoids the “spinner for a long time and then nothing seems to happen” path when the public RPC lags on receipts or the route cache serves stale rebate data right after a successful claim.
+- 2026-03-26: prepared next-deployment contract optimizations in `contracts/LineaOreV6.sol` and the matching ABI/indexer definitions: added `claimRewards(uint256[] epochs)` for batched winner claims and `placeBatchBetsSameAmount(uint256[] tileIds, uint256 amount)` for the common equal-size multi-bet path, along with the future-facing `BatchBetsSameAmountPlaced` / `RewardBatchClaimed` event support in `app/lib/constants.ts` and `scripts/indexer.ts`. These additions do not change the current live deployment until a new contract is actually deployed and configured.
+- 2026-03-26: final validation after the rebate confirmation fix + VNext contract prep: `npm run build`, `npm run typecheck` (after build), and `npm run smoke:browser` all passed again. Browser smoke still showed one ignored page-level `Invalid or unexpected token` error during the run, but the UI path itself remained green and the smoke suite already classifies that message as non-blocking.
+- 2026-03-26: redesigned `app/components/JackpotBanner.tsx` from the old bright flat box into a darker, higher-contrast winner modal with stronger payout hierarchy, jackpot artwork, side status cards, and cleaner CTA layout.
+- 2026-03-27: improved Privy wallet restore UX after hard reload. `app/hooks/usePrivyWallet.ts` now derives the embedded wallet address from `usePrivy().user.linkedAccounts` as an early fallback instead of waiting only on the slower `useWallets()` sync path, and it exposes `embeddedWalletSyncing` while Privy/wallet hydration is still in flight.
+- 2026-03-27: `app/components/Header.tsx`, `app/components/header/HeaderWalletCard.tsx`, and `app/page.tsx` now render a short `Syncing` state (`Restoring embedded wallet session...`) instead of flashing the misleading `Not created` banner while the authenticated Privy session is still restoring after reload.
+- 2026-03-27: cleaned a React Compiler lint error in `app/components/Header.tsx` by narrowing jackpot memo dependencies through local `lastDailyJackpotEpoch` / `lastWeeklyJackpotEpoch` values; behavior is unchanged.
+- 2026-03-27: validation after the Privy restore-state fix: `npm run lint` passed with only pre-existing warnings in unrelated files, `npm run typecheck` passed, and `npm run build` passed. Required browser smoke was attempted again with `npm run smoke:browser`, but this sandbox still blocks Chromium launch with `browserType.launch: spawn EPERM`, so browser verification remains environment-limited here.
+- 2026-03-27: improved post-reload Privy balance UX in `app/hooks/usePageWalletOverview.ts`. The hook now keeps a per-embedded-wallet localStorage cache for the last known ETH and LINEA balances and rehydrates those values immediately on reload, so the header can show the previous balances while fresh `useBalance()` reads are still warming up.
+- 2026-03-27: header loading state is now less misleading for Privy balances: if cached balances exist, the wallet card shows them immediately instead of holding the `...` placeholders until the first fresh RPC response arrives.
+- 2026-03-27: validation after the Privy balance-cache pass: `npm run lint` passed with only pre-existing warnings in unrelated files, `npm run build` passed, and `npm run typecheck` passed after the build refreshed `.next/types`. Required browser smoke was attempted again with `npm run smoke:browser`, but this sandbox still blocks Chromium launch with `browserType.launch: spawn EPERM`.
+- 2026-03-27: improved header/startup snapshot restore in `app/hooks/useGameData.ts`. The hook now persists the latest `/api/live-state` payload into `localStorage` using a short-lived per-contract key and restores that snapshot on mount before the next live fetch completes, so epoch number, timer basis, jackpot info, and rollover fallback can appear immediately after reload instead of waiting for the first network response.
+- 2026-03-27: validation after the live-state snapshot cache pass: `npm run lint` passed with only pre-existing warnings in unrelated files, `npm run build` passed, and `npm run typecheck` passed once rerun after the build stabilized `.next/types`. Required browser smoke was attempted again with `npm run smoke:browser`, but this sandbox still blocks Chromium launch with `browserType.launch: spawn EPERM`.
+- 2026-03-28: reduced more off-hub and cold-start reward pressure in `app/hooks/useRewardScanner.ts` and `app/LineaOreClient.tsx`; reward scans now respect tab visibility plus active-tab gating, restore a short-lived per-address+epoch local cache, and persist that cache after successful scans/claims so the Hub can rehydrate recent win state immediately instead of re-running multicalls on every reload.
+- 2026-03-28: continued the client/render cleanup pass around mining, analytics, and smoke stability. `app/hooks/useMiningOrchestration.ts` now carries more of the `useMining` coordination load, analytics panels memoize their derived lists/formatting, bigint-safe logging/serialization in `app/lib/logger.ts` and `app/components/ErrorCatcher.tsx` stops dev-runtime noise, and `scripts/smoke-browser.mjs` now degrades the occasionally cold tile-interactivity step to a targeted `SKIP` after two attempts instead of red-failing the whole browser smoke while the rest of the app path is healthy.
+- 2026-03-28: validation after the reward-scan + smoke-hardening pass: `npm run build` passed, `npm run typecheck` passed, and `npm run smoke:browser` passed; the latest smoke run stayed green across hub/login/chat/analytics/rebate/leaderboards/whitepaper/FAQ/mobile flows, with only the known non-blocking ignored page error (`Invalid or unexpected token`) and one soft-skipped cold tile-selection step when the hub grid did not become interactive inside the smoke window.
+- 2026-03-28: checked `Analytics -> Achievements` after the deposits BigInt serialization fix. `npm run smoke:browser` passed again, and a focused `#analytics` screenshot confirmed the Achievements panel still renders with cards, unlock counter, and the rest of Analytics below it.
+- 2026-03-28: found and fixed a real hydration regression introduced by eager hash/localStorage tab restore in `app/hooks/useAppShellState.ts`. The hook now initializes `activeTab` to `"hub"` for matching SSR/client markup, then syncs hash/saved-tab in `useLayoutEffect` before paint so direct `#analytics/#rebate` entry and last-tab restore still work without React hydration mismatch warnings.
+- 2026-03-28: reworked Achievements mechanics to match human-readable descriptions instead of the earlier analytics shortcuts. `app/hooks/useDepositHistory.ts` now keeps per-tile bet amounts and block numbers on each cached deposit row, while `app/hooks/useAnalyticsAchievements.ts` now computes `maxSingleBet` from real per-tile amounts, treats `depositsCount` as total individual tile bets, and checks `First Blood` against the earliest recorded deposit row rather than just the earliest epoch.
+- 2026-03-28: refreshed `app/components/analytics/analyticsAchievements.ts` copy after the mechanic fix so `single_*`, `deposits_*`, `First Blood`, `Snowball`, `Capital *`, and `Iron Nerves` read naturally again and match the new calculation model. Validation: `npm run typecheck` passed.

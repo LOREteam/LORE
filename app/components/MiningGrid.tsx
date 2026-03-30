@@ -17,6 +17,41 @@ function compactTileAmount(value: string): string {
   return amount.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
+function buildTileAriaLabel({
+  tileId,
+  users,
+  compactAmount,
+  isSelected,
+  hasMyBet,
+  isWinner,
+  isMyWin,
+  liveStateReady,
+}: {
+  tileId: number;
+  users: number;
+  compactAmount: string;
+  isSelected: boolean;
+  hasMyBet: boolean;
+  isWinner: boolean;
+  isMyWin: boolean;
+  liveStateReady: boolean;
+}) {
+  const fragments = [`Tile ${tileId}`];
+
+  if (liveStateReady) {
+    fragments.push(`${users} players`, `${compactAmount} LINEA pooled`);
+  } else {
+    fragments.push("live state syncing");
+  }
+
+  if (isMyWin) fragments.push("your winning tile");
+  else if (isWinner) fragments.push("winning tile");
+  else if (hasMyBet) fragments.push("your bet is here");
+
+  if (isSelected && !isWinner) fragments.push("selected");
+  return fragments.join(", ");
+}
+
 interface MiningGridProps {
   tileViewData: Array<{
     tileId: number;
@@ -24,6 +59,8 @@ interface MiningGridProps {
     poolDisplay: string;
     hasMyBet: boolean;
   }>;
+  coldBootDefaults?: boolean;
+  liveStateReady?: boolean;
   selectedTiles: number[];
   winningTileId: number | null;
   isRevealing: boolean;
@@ -35,6 +72,8 @@ interface MiningGridProps {
 
 export const MiningGrid = React.memo(function MiningGrid({
   tileViewData,
+  coldBootDefaults = false,
+  liveStateReady = true,
   selectedTiles,
   winningTileId,
   isRevealing,
@@ -67,7 +106,7 @@ export const MiningGrid = React.memo(function MiningGrid({
   }, [isRevealing, winningTileId, tileViewData, reducedMotion]);
 
   return (
-    <div className="relative w-full aspect-square min-h-[18rem] rounded-xl border border-violet-500/20 bg-[#0d0d1a] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] sm:min-h-[20rem] min-[900px]:aspect-auto min-[900px]:h-[calc(100dvh-13rem)] min-[900px]:min-h-[22rem]">
+    <div className="relative w-full aspect-square min-h-[18rem] overflow-hidden rounded-xl border border-violet-500/20 bg-[#0d0d1a] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] sm:min-h-[20rem] min-[900px]:aspect-auto min-[900px]:h-[calc(100dvh-13rem)] min-[900px]:min-h-[22rem]">
       <div className="grid grid-cols-5 grid-rows-5 gap-1 p-1.5 sm:gap-1.5 sm:p-2 h-full">
         {TILE_INDICES.map((i) => {
           const tile = tileViewData[i] ?? { tileId: i + 1, users: 0, poolDisplay: "0.00", hasMyBet: false };
@@ -78,8 +117,10 @@ export const MiningGrid = React.memo(function MiningGrid({
               key={tileId}
               tileId={tileId}
               index={i}
+              coldBootDefaults={coldBootDefaults}
               users={tile.users}
-              displayAmount={tile.poolDisplay}
+              displayAmount={liveStateReady || coldBootDefaults ? tile.poolDisplay : "..."}
+              liveStateReady={liveStateReady}
               isWinner={winningTileId === tileId}
               isSelected={selectionSet.has(tileId)}
               hasMyBet={tile.hasMyBet}
@@ -116,8 +157,10 @@ export const MiningGrid = React.memo(function MiningGrid({
 const Tile = React.memo(function Tile({
   tileId,
   index,
+  coldBootDefaults,
   users,
   displayAmount,
+  liveStateReady,
   isWinner,
   isSelected,
   hasMyBet,
@@ -128,8 +171,10 @@ const Tile = React.memo(function Tile({
 }: {
   tileId: number;
   index: number;
+  coldBootDefaults: boolean;
   users: number;
   displayAmount: string;
+  liveStateReady: boolean;
   isWinner: boolean;
   isSelected: boolean;
   hasMyBet: boolean;
@@ -141,7 +186,17 @@ const Tile = React.memo(function Tile({
   const handleClick = useCallback(() => onTileClick(tileId), [onTileClick, tileId]);
   const isMyWin = isWinner && hasMyBet;
   const isNeutralWinner = isWinner && !hasMyBet;
-  const compactAmount = compactTileAmount(displayAmount);
+  const compactAmount = liveStateReady || coldBootDefaults ? compactTileAmount(displayAmount) : "...";
+  const ariaLabel = buildTileAriaLabel({
+    tileId,
+    users,
+    compactAmount,
+    isSelected,
+    hasMyBet,
+    isWinner,
+    isMyWin,
+    liveStateReady,
+  });
   // 4 distinct colors: 1 default (slate), 2 my bet (emerald), 3 round win (amber), 4 my win (sky)
   let base: string;
   if (isMyWin) {
@@ -165,7 +220,7 @@ const Tile = React.memo(function Tile({
   const faded = isRevealing && !isWinner
     ? "opacity-10 pointer-events-none"
     : isAnalyzing
-      ? "opacity-40 pointer-events-none"
+      ? "opacity-40"
       : "";
   const staggerClass = `stagger-${index + 1}`;
   const entranceAnim = !reducedMotion && !isRevealing && !isAnalyzing ? "animate-tile-enter" : "";
@@ -173,8 +228,9 @@ const Tile = React.memo(function Tile({
   return (
     <button
       onClick={handleClick}
-      disabled={isRevealing || isAnalyzing}
-      title={`${displayAmount} LINEA`}
+      disabled={!liveStateReady || isRevealing}
+      aria-label={ariaLabel}
+      aria-pressed={isSelected && !isWinner}
       className={`relative h-full w-full min-h-0 overflow-hidden rounded-lg border p-1 transition-all duration-200 group flex flex-col items-center justify-between sm:p-1.5 [contain:layout_paint] ${entranceAnim} ${staggerClass} ${base} ${faded}`}
     >
       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-br from-white/[0.03] to-transparent z-0" />
@@ -203,7 +259,7 @@ const Tile = React.memo(function Tile({
                   : "text-gray-700"
           }`}
         >
-          <span>{users}</span>
+          <span>{liveStateReady || coldBootDefaults ? users : "-"}</span>
           <svg
             viewBox="0 0 16 16"
             fill="none"

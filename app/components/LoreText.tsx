@@ -12,7 +12,7 @@ export const LoreText = memo(function LoreText({ items }: { items: readonly stri
 
   useEffect(() => {
     setText(pickRandom(items));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [items]);
 
   return <>{text}</>;
 });

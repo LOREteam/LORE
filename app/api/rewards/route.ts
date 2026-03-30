@@ -1,29 +1,55 @@
 import { NextResponse } from "next/server";
-import { formatUnits, parseAbi } from "viem";
-import { CONTRACT_ADDRESS, publicClient } from "../_lib/dataBridge";
+import { applyNoStoreHeaders } from "../_lib/responseHeaders";
+import { createRouteCache } from "../_lib/routeCache";
+import {
+  beginRouteMetric,
+  failRouteMetric,
+  finishRouteMetric,
+  markRouteCacheHit,
+  markRouteInflightJoin,
+  markRouteStaleServed,
+} from "../_lib/runtimeMetrics";
+import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
-
-const READ_ABI = parseAbi([
-  "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
-  "function userBets(uint256 epoch, uint256 tile, address user) view returns (uint256)",
-  "function tilePools(uint256 epoch, uint256 tile) view returns (uint256)",
-]);
-
-const MAX_EPOCHS_PER_REQUEST = 400;
-const MULTICALL_CHUNK = 100;
+import { RewardRow, loadRewardMapsForUserEpochs } from "../_lib/rewardSummary";
 
 type RewardsRequest = {
   user?: unknown;
   epochs?: unknown;
 };
 
-type RewardRow = {
-  reward: string;
-  winningTile: number;
-  rewardPool: string;
-  winningTilePool: string;
-  userWinningAmount: string;
+const MAX_EPOCHS_PER_REQUEST = 400;
+const REWARDS_ROUTE_CACHE_MS = 15_000;
+const MAX_REWARDS_CACHE_ENTRIES = 200;
+const ROUTE_METRIC_KEY = "api/rewards";
+
+type RewardsPayload = {
+  rewards: Record<string, RewardRow>;
+  error?: string;
 };
+
+const rewardsRouteCache = createRouteCache<RewardsPayload>(MAX_REWARDS_CACHE_ENTRIES);
+
+function jsonNoStore(payload: RewardsPayload | { error: string }, status = 200) {
+  return applyNoStoreHeaders(NextResponse.json(payload, { status }));
+}
+
+function normalizeEpochs(epochsRaw: unknown) {
+  return [...new Set(
+    (Array.isArray(epochsRaw) ? epochsRaw : [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0),
+  )].slice(0, MAX_EPOCHS_PER_REQUEST);
+}
+
+async function buildRewardsPayload(user: string, epochs: number[]): Promise<RewardsPayload> {
+  if (epochs.length === 0) {
+    return { rewards: {} };
+  }
+
+  const { rewards } = await loadRewardMapsForUserEpochs(user, epochs);
+  return { rewards };
+}
 
 export async function POST(request: Request) {
   const rateLimited = await enforceSharedRateLimit(request, {
@@ -33,95 +59,53 @@ export async function POST(request: Request) {
   });
   if (rateLimited) return rateLimited;
 
+  let staleCache: RewardsPayload | null = null;
+  const metric = beginRouteMetric(ROUTE_METRIC_KEY);
+
   try {
     const body = (await request.json()) as RewardsRequest;
     const user = typeof body.user === "string" ? body.user.toLowerCase() : "";
     if (!/^0x[0-9a-f]{40}$/.test(user)) {
-      return NextResponse.json({ error: "Missing or invalid user" }, { status: 400 });
+      failRouteMetric(metric, 400);
+      return jsonNoStore({ error: "Missing or invalid user" }, 400);
     }
 
-    const epochsRaw = Array.isArray(body.epochs) ? body.epochs : [];
-    const epochs = [...new Set(
-      epochsRaw
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0),
-    )].slice(0, MAX_EPOCHS_PER_REQUEST);
-
-    if (epochs.length === 0) {
-      return NextResponse.json({ rewards: {} });
+    const epochs = normalizeEpochs(body.epochs);
+    const cacheKey = `${user}:${epochs.join(",")}`;
+    const now = Date.now();
+    const cached = rewardsRouteCache.getFresh(cacheKey, now);
+    if (cached) {
+      markRouteCacheHit(ROUTE_METRIC_KEY);
+      finishRouteMetric(metric, 200);
+      return jsonNoStore(cached);
     }
+    staleCache = rewardsRouteCache.getStale(cacheKey);
 
-    const rewards: Record<string, RewardRow> = {};
+    const inflight = rewardsRouteCache.getInflight(cacheKey);
+    const payload = inflight
+      ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await inflight)
+      : await (() => {
+          const writeVersion = rewardsRouteCache.beginWrite(cacheKey);
+          const requestPromise = buildRewardsPayload(user, epochs)
+            .then((result) => {
+              return rewardsRouteCache.setIfLatest(cacheKey, result, REWARDS_ROUTE_CACHE_MS, writeVersion);
+            })
+            .finally(() => {
+              rewardsRouteCache.clearInflight(cacheKey);
+            });
+          return rewardsRouteCache.setInflight(cacheKey, requestPromise);
+        })();
 
-    for (let offset = 0; offset < epochs.length; offset += MULTICALL_CHUNK) {
-      const chunk = epochs.slice(offset, offset + MULTICALL_CHUNK);
-      const epochResults = await publicClient.multicall({
-        contracts: chunk.map((epoch) => ({
-          address: CONTRACT_ADDRESS,
-          abi: READ_ABI,
-          functionName: "epochs",
-          args: [BigInt(epoch)],
-        })),
-      });
-
-      const winningEpochs: Array<{
-        epoch: number;
-        rewardPool: bigint;
-        winningTile: bigint;
-      }> = [];
-
-      chunk.forEach((epoch, index) => {
-        const row = epochResults[index]?.result as
-          | [bigint, bigint, bigint, boolean, boolean, boolean]
-          | undefined;
-        if (!row) return;
-        const isResolved = Boolean(row[3]);
-        const rewardPool = row[1];
-        const winningTile = row[2];
-        if (!isResolved || winningTile <= 0n || rewardPool <= 0n) return;
-        winningEpochs.push({ epoch, rewardPool, winningTile });
-      });
-
-      if (winningEpochs.length === 0) continue;
-
-      const [userBetResults, tilePoolResults] = await Promise.all([
-        publicClient.multicall({
-          contracts: winningEpochs.map((entry) => ({
-            address: CONTRACT_ADDRESS,
-            abi: READ_ABI,
-            functionName: "userBets",
-            args: [BigInt(entry.epoch), entry.winningTile, user as `0x${string}`],
-          })),
-        }),
-        publicClient.multicall({
-          contracts: winningEpochs.map((entry) => ({
-            address: CONTRACT_ADDRESS,
-            abi: READ_ABI,
-            functionName: "tilePools",
-            args: [BigInt(entry.epoch), entry.winningTile],
-          })),
-        }),
-      ]);
-
-      winningEpochs.forEach((entry, index) => {
-        const userWinningAmount = (userBetResults[index]?.result as bigint | undefined) ?? 0n;
-        const winningTilePool = (tilePoolResults[index]?.result as bigint | undefined) ?? 0n;
-        if (userWinningAmount <= 0n || winningTilePool <= 0n) return;
-
-        const reward = (entry.rewardPool * userWinningAmount) / winningTilePool;
-        rewards[String(entry.epoch)] = {
-          reward: formatUnits(reward, 18),
-          winningTile: Number(entry.winningTile),
-          rewardPool: formatUnits(entry.rewardPool, 18),
-          winningTilePool: formatUnits(winningTilePool, 18),
-          userWinningAmount: formatUnits(userWinningAmount, 18),
-        };
-      });
-    }
-
-    return NextResponse.json({ rewards });
+    finishRouteMetric(metric, 200);
+    return jsonNoStore(payload);
   } catch (error) {
-    console.error("[api/rewards] Error:", error);
-    return NextResponse.json({ rewards: {}, error: "fetch failed" }, { status: 500 });
+    logRouteError(ROUTE_METRIC_KEY, error);
+    if (staleCache) {
+      markRouteStaleServed(ROUTE_METRIC_KEY);
+      finishRouteMetric(metric, 200);
+      return jsonNoStore(staleCache);
+    }
+    failRouteMetric(metric, 500);
+    return jsonNoStore({ rewards: {}, error: "fetch failed" }, 500);
   }
 }

@@ -1,12 +1,47 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FIREBASE_DB_URL } from "../lib/firebase";
+import { readJsonResponse } from "../lib/readJsonResponse";
 
 type NameMap = Map<string, string>;
 
 const CACHE_TTL_MS = 60_000;
+const STORAGE_KEY = "lore:address-names-cache:v1";
 let globalCache: { map: NameMap; fetchedAt: number } | null = null;
+
+function serializeNameMap(map: NameMap) {
+  return Object.fromEntries(map.entries());
+}
+
+function loadCachedNames(): { map: NameMap; fetchedAt: number } | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { names?: Record<string, string>; fetchedAt?: number };
+    if (!parsed?.names || typeof parsed.fetchedAt !== "number") return null;
+    const map = new Map<string, string>();
+    for (const [address, name] of Object.entries(parsed.names)) {
+      const trimmed = typeof name === "string" ? name.trim() : "";
+      if (trimmed) map.set(address.toLowerCase(), trimmed);
+    }
+    return { map, fetchedAt: parsed.fetchedAt };
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedNames(map: NameMap, fetchedAt: number) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      names: serializeNameMap(map),
+      fetchedAt,
+    }));
+  } catch {
+    // ignore storage failures
+  }
+}
 
 async function fetchChatNames(): Promise<NameMap> {
   if (globalCache && Date.now() - globalCache.fetchedAt < CACHE_TTL_MS) {
@@ -15,46 +50,43 @@ async function fetchChatNames(): Promise<NameMap> {
 
   const map: NameMap = new Map();
   try {
-    // 1) Dedicated per-wallet chat profile storage (survives browser cache clear)
-    const profileRes = await fetch(`${FIREBASE_DB_URL}/gamedata/chatProfiles.json`);
+    const profileRes = await fetch("/api/chat/profile", { cache: "no-store" });
     if (profileRes.ok) {
-      const profileData = await profileRes.json();
-      if (profileData && typeof profileData === "object") {
-        for (const [address, val] of Object.entries(profileData as Record<string, unknown>)) {
+      const profileData = await readJsonResponse<{ profiles?: Record<string, unknown> }>(profileRes);
+      if (profileData?.profiles && typeof profileData.profiles === "object") {
+        for (const [address, val] of Object.entries(profileData.profiles)) {
           const v = val as Record<string, unknown>;
           const name = typeof v.name === "string" ? v.name.trim() : "";
           if (name) map.set(address.toLowerCase(), name);
         }
       }
     }
-
-    // 2) Fallback from recent messages (legacy behavior)
-    const url = `${FIREBASE_DB_URL}/messages.json?orderBy="timestamp"&limitToLast=200`;
-    const res = await fetch(url);
-    if (!res.ok) return map;
-    const data = await res.json();
-    if (!data || typeof data !== "object") return map;
-
-    for (const val of Object.values(data)) {
-      const v = val as Record<string, unknown>;
-      const sender = typeof v.sender === "string" ? v.sender.toLowerCase() : "";
-      const name = typeof v.senderName === "string" ? v.senderName : undefined;
-      if (sender && name && !map.has(sender)) map.set(sender, name);
-    }
   } catch {
     // silent
   }
 
-  globalCache = { map, fetchedAt: Date.now() };
+  const fetchedAt = Date.now();
+  globalCache = { map, fetchedAt };
+  saveCachedNames(map, fetchedAt);
   return map;
 }
 
 export function useAddressNames(addresses: string[]) {
-  const [nameMap, setNameMap] = useState<NameMap>(new Map());
+  const [nameMap, setNameMap] = useState<NameMap>(() => {
+    const cached = globalCache ?? loadCachedNames();
+    if (cached) {
+      globalCache = cached;
+      return cached.map;
+    }
+    return new Map();
+  });
   const fetchedRef = useRef(false);
 
   useEffect(() => {
     if (addresses.length === 0) return;
+    if (globalCache) {
+      setNameMap(globalCache.map);
+    }
     if (fetchedRef.current && globalCache && Date.now() - globalCache.fetchedAt < CACHE_TTL_MS) return;
     fetchedRef.current = true;
     let cancelled = false;

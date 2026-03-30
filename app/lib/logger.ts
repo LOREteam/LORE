@@ -14,6 +14,22 @@ interface LogEntry {
 let buffer: LogEntry[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
+function jsonReplacer(_key: string, value: unknown) {
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack?.slice(0, 400),
+    };
+  }
+  return value;
+}
+
+function safeJsonStringify(value: unknown, space?: number) {
+  return JSON.stringify(value, jsonReplacer, space);
+}
+
 function loadBuffer(): LogEntry[] {
   if (typeof window === "undefined") return [];
   try {
@@ -28,7 +44,7 @@ function persist() {
   if (typeof window === "undefined") return;
   try {
     const trimmed = buffer.slice(-MAX_ENTRIES);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+    localStorage.setItem(STORAGE_KEY, safeJsonStringify(trimmed));
     buffer = trimmed;
   } catch {
     // Storage full - try to save what we can
@@ -36,17 +52,17 @@ function persist() {
       // Keep most recent entries that fit
       const maxThatFit = Math.floor(MAX_ENTRIES / 2);
       const trimmed = buffer.slice(-maxThatFit);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+      localStorage.setItem(STORAGE_KEY, safeJsonStringify(trimmed));
       buffer = trimmed;
     } catch {
       // Give up - clear oldest half and try again
       buffer = buffer.slice(-Math.floor(MAX_ENTRIES / 2));
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(buffer));
+        localStorage.setItem(STORAGE_KEY, safeJsonStringify(buffer));
       } catch {
         // Last resort - keep only last 50 entries
         buffer = buffer.slice(-50);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(buffer));
+        localStorage.setItem(STORAGE_KEY, safeJsonStringify(buffer));
       }
     }
   }
@@ -62,19 +78,20 @@ function scheduleFlush() {
 
 function push(lvl: LogLevel, tag: string, msg: string, data?: unknown) {
   if (buffer.length === 0) buffer = loadBuffer();
+  const safeData = data !== undefined ? sanitize(data) : undefined;
   const entry: LogEntry = {
     ts: new Date().toISOString(),
     lvl,
     tag,
     msg,
-    ...(data !== undefined && { data: sanitize(data) }),
+    ...(safeData !== undefined && { data: safeData }),
   };
   buffer.push(entry);
 
   if (lvl === "error") {
-    console.error(`[${tag}]`, msg, data ?? "");
+    console.error(`[${tag}]`, msg, safeData ?? "");
   } else if (lvl === "warn") {
-    console.warn(`[${tag}]`, msg, data ?? "");
+    console.warn(`[${tag}]`, msg, safeData ?? "");
   }
 
   scheduleFlush();
@@ -85,7 +102,7 @@ function sanitize(v: unknown): unknown {
   if (typeof v === "bigint") return v.toString();
   if (typeof v === "object" && v !== null) {
     try {
-      return JSON.parse(JSON.stringify(v, (_k, val) => (typeof val === "bigint" ? val.toString() : val)));
+      return JSON.parse(safeJsonStringify(v));
     } catch {
       return String(v);
     }
@@ -109,10 +126,10 @@ export function exportLogs(): string {
     entries: buffer.length,
   };
   const lines = buffer.map((e) => {
-    const d = e.data !== undefined ? ` | ${JSON.stringify(e.data)}` : "";
+    const d = e.data !== undefined ? ` | ${safeJsonStringify(e.data)}` : "";
     return `${e.ts} [${e.lvl.toUpperCase().padEnd(5)}] <${e.tag}> ${e.msg}${d}`;
   });
-  return `=== LORE DApp Logs ===\n${JSON.stringify(meta, null, 2)}\n${"=".repeat(40)}\n${lines.join("\n")}\n`;
+  return `=== LORE DApp Logs ===\n${safeJsonStringify(meta, 2)}\n${"=".repeat(40)}\n${lines.join("\n")}\n`;
 }
 
 export function downloadLogs() {

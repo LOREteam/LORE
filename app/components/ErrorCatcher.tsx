@@ -5,9 +5,43 @@ import { log } from "../lib/logger";
 
 const RESOLVE_STORAGE_KEY = "lore_resolve_epoch";
 const CHUNK_RELOAD_KEY = "lore:chunk-reload-once";
+const CHUNK_RELOAD_WINDOW_MS = 15_000;
 
 export function ErrorCatcher() {
   useEffect(() => {
+    const sanitizeConsoleArg = (value: unknown): unknown => {
+      if (value instanceof Error) {
+        return {
+          name: value.name,
+          message: value.message,
+          stack: value.stack?.slice(0, 400),
+        };
+      }
+      if (typeof value === "bigint") {
+        return value.toString();
+      }
+      if (typeof value === "object" && value !== null) {
+        try {
+          return JSON.parse(
+            JSON.stringify(value, (_key, current) =>
+              typeof current === "bigint" ? current.toString() : current,
+            ),
+          );
+        } catch {
+          return String(value);
+        }
+      }
+      return value;
+    };
+
+    const stringifySafe = (value: unknown) => {
+      try {
+        return JSON.stringify(value, (_key, current) => (typeof current === "bigint" ? current.toString() : current));
+      } catch {
+        return String(value);
+      }
+    };
+
     const isBenignConsoleWarning = (args: unknown[]): boolean => {
       const first = args[0];
       const msg = typeof first === "string" ? first : "";
@@ -36,12 +70,16 @@ export function ErrorCatcher() {
       if (!isChunkLoadError) return false;
 
       try {
+        const raw =
+          typeof sessionStorage !== "undefined"
+            ? sessionStorage.getItem(CHUNK_RELOAD_KEY)
+            : null;
+        const lastAt = Number(raw);
         const alreadyRetried =
-          typeof sessionStorage !== "undefined" &&
-          sessionStorage.getItem(CHUNK_RELOAD_KEY) === "1";
+          Number.isFinite(lastAt) && Date.now() - lastAt < CHUNK_RELOAD_WINDOW_MS;
         if (alreadyRetried) return false;
         if (typeof sessionStorage !== "undefined") {
-          sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
+          sessionStorage.setItem(CHUNK_RELOAD_KEY, Date.now().toString());
         }
       } catch {
         // ignore storage failures; still attempt reload
@@ -63,7 +101,7 @@ export function ErrorCatcher() {
       if (isBenignConsoleWarning(args)) {
         return;
       }
-      originalConsoleError(...args);
+      originalConsoleError(...args.map(sanitizeConsoleArg));
     };
 
     const onError = (e: ErrorEvent) => {
@@ -84,7 +122,7 @@ export function ErrorCatcher() {
           ? `${reason.name}: ${reason.message}`
           : typeof reason === "string"
             ? reason
-            : JSON.stringify(reason);
+            : stringifySafe(reason);
       if (reasonMessage && tryRecoverChunkLoad(reasonMessage)) {
         e.preventDefault();
         return;
@@ -111,7 +149,21 @@ export function ErrorCatcher() {
 
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onUnhandledRejection);
+
+    const cleanupId = window.setTimeout(() => {
+      try {
+        const raw = sessionStorage.getItem(CHUNK_RELOAD_KEY);
+        const lastAt = Number(raw);
+        if (!Number.isFinite(lastAt) || Date.now() - lastAt >= CHUNK_RELOAD_WINDOW_MS) {
+          sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+        }
+      } catch {
+        // ignore storage failures
+      }
+    }, CHUNK_RELOAD_WINDOW_MS);
+
     return () => {
+      window.clearTimeout(cleanupId);
       console.error = originalConsoleError;
       window.removeEventListener("error", onError);
       window.removeEventListener("unhandledrejection", onUnhandledRejection);

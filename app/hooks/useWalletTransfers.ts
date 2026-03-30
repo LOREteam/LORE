@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePublicClient } from "wagmi";
 import { parseAbi, decodeEventLog, formatUnits, encodeEventTopics, pad, type Log, type Hex } from "viem";
 import {
@@ -34,9 +34,28 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<WalletTransfersSummary | null>(null);
+  const mountedRef = useRef(false);
   const cachedAtRef = useRef(0);
   const cachedForRef = useRef<string | null>(null);
   const dataRef = useRef<WalletTransfersSummary | null>(null);
+  const requestIdRef = useRef(0);
+  const runningForRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    requestIdRef.current += 1;
+    runningForRef.current = null;
+    if (mountedRef.current) {
+      setLoading(false);
+      setData(null);
+    }
+  }, [embeddedAddress, externalWalletAddress]);
 
   const fetch = useCallback(async () => {
     if (!publicClient || !embeddedAddress) return;
@@ -44,6 +63,9 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
     const addr = embeddedAddress.toLowerCase();
     const externalAddr = externalWalletAddress?.toLowerCase() ?? null;
     const cacheKey = `${addr}:${externalAddr ?? "any"}`;
+    if (loading && runningForRef.current === cacheKey) {
+      return;
+    }
     if (
       Date.now() - cachedAtRef.current < CACHE_MS &&
       cachedForRef.current === cacheKey &&
@@ -52,14 +74,20 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       return;
     }
 
-    setLoading(true);
+    const requestId = ++requestIdRef.current;
+    runningForRef.current = cacheKey;
+    if (mountedRef.current) {
+      setLoading(true);
+    }
     try {
       const toBlock = await publicClient.getBlockNumber();
       const fromBlock = BigInt(0);
 
       const transferSig = encodeEventTopics({ abi: TRANSFER_ABI, eventName: "Transfer" })[0];
       if (!transferSig) {
-        setData({ transfers: [], totalIn: 0, totalOut: 0 });
+        if (mountedRef.current && requestId === requestIdRef.current) {
+          setData({ transfers: [], totalIn: 0, totalOut: 0 });
+        }
         return;
       }
       const paddedAddr = pad(embeddedAddress as Hex, { size: 32 }).toLowerCase() as Hex;
@@ -175,13 +203,22 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       cachedAtRef.current = Date.now();
       cachedForRef.current = cacheKey;
       dataRef.current = summary;
-      setData(summary);
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setData(summary);
+      }
     } catch {
-      setData({ transfers: [], totalIn: 0, totalOut: 0 });
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setData({ transfers: [], totalIn: 0, totalOut: 0 });
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setLoading(false);
+      }
+      if (requestId === requestIdRef.current || runningForRef.current === cacheKey) {
+        runningForRef.current = null;
+      }
     }
-  }, [publicClient, embeddedAddress, externalWalletAddress]);
+  }, [publicClient, embeddedAddress, externalWalletAddress, loading]);
 
   return { data, loading, fetch };
 }

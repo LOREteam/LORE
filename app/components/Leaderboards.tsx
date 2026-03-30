@@ -1,11 +1,10 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { shortenAddress } from "../lib/utils";
 import type { LeaderboardEntry, LuckyTileEntry } from "../lib/types";
 import { loadingQuotes, emptyStates, leaderboardLore } from "../lib/loreTexts";
 import { LoreText } from "./LoreText";
-import { useAddressNames } from "../hooks/useAddressNames";
 import { cn } from "../lib/cn";
 import { UiBadge } from "./ui/UiBadge";
 import { UiButton } from "./ui/UiButton";
@@ -75,11 +74,10 @@ function Section({
   );
 }
 
-function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400", resolveName }: {
+function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400" }: {
   entries: LeaderboardEntry[];
   valueLabel: string;
   valueClass?: string;
-  resolveName: (addr: string) => { display: string; source: "chat" | "raw" };
 }) {
   if (!entries.length) {
     return (
@@ -98,7 +96,6 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400",
       </div>
       <ul className="divide-y divide-white/5">
         {entries.map((e, i) => {
-          const resolved = resolveName(e.address);
           return (
             <li
               key={`${e.address}-${e.rank}-${i}`}
@@ -108,9 +105,9 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400",
                 {e.rank === 1 ? "🥇" : e.rank === 2 ? "🥈" : e.rank === 3 ? "🥉" : e.rank}
               </span>
               <span className="font-mono text-sm text-gray-300 truncate" title={e.address}>
-                {resolved.source === "chat" ? (
+                {e.name ? (
                   <>
-                    <span className="font-sans font-semibold text-violet-300">{resolved.display}</span>
+                    <span className="font-sans font-semibold text-violet-300">{e.name}</span>
                     <UiBadge tone="default" size="xs" className="ml-1 text-[9px] text-gray-400 border-white/15 bg-white/[0.03]">
                       site
                     </UiBadge>
@@ -215,17 +212,6 @@ export function Leaderboards({
   error: string | null;
   refetch: () => void;
 }) {
-  const allAddresses = useMemo(() => {
-    if (!data) return [];
-    const set = new Set<string>();
-    for (const list of [data.biggestSingleWin, data.luckiest, data.oneTileWonder, data.mostWins, data.whales, data.underdog]) {
-      for (const e of list) set.add(e.address);
-    }
-    return [...set];
-  }, [data]);
-
-  const { resolveName } = useAddressNames(allAddresses);
-
   return (
     <div className="flex-1 overflow-y-auto pb-24 animate-fade-in">
       <div className="max-w-3xl mx-auto px-4 md:px-8">
@@ -314,7 +300,7 @@ export function Leaderboards({
               loreTitle={leaderboardLore.biggestWin.title}
               loreQuote={leaderboardLore.biggestWin.quote}
             >
-              <LeaderboardTable entries={data.biggestSingleWin} valueLabel="LINEA" valueClass="text-amber-400" resolveName={resolveName} />
+              <LeaderboardTable entries={data.biggestSingleWin} valueLabel="LINEA" valueClass="text-amber-400" />
             </Section>
 
             <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
@@ -329,7 +315,7 @@ export function Leaderboards({
               loreTitle={leaderboardLore.luckiest.title}
               loreQuote={leaderboardLore.luckiest.quote}
             >
-              <LeaderboardTable entries={data.luckiest} valueLabel="ROI" valueClass="text-emerald-400" resolveName={resolveName} />
+              <LeaderboardTable entries={data.luckiest} valueLabel="ROI" valueClass="text-emerald-400" />
             </Section>
 
             <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
@@ -344,7 +330,7 @@ export function Leaderboards({
               loreTitle={leaderboardLore.oneTile.title}
               loreQuote={leaderboardLore.oneTile.quote}
             >
-              <LeaderboardTable entries={data.oneTileWonder} valueLabel="LINEA" valueClass="text-sky-400" resolveName={resolveName} />
+              <LeaderboardTable entries={data.oneTileWonder} valueLabel="LINEA" valueClass="text-sky-400" />
             </Section>
 
             <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
@@ -359,7 +345,7 @@ export function Leaderboards({
               loreTitle={leaderboardLore.mostWins.title}
               loreQuote={leaderboardLore.mostWins.quote}
             >
-              <LeaderboardTable entries={data.mostWins} valueLabel="Wins" valueClass="text-violet-400" resolveName={resolveName} />
+              <LeaderboardTable entries={data.mostWins} valueLabel="Wins" valueClass="text-violet-400" />
             </Section>
 
             <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
@@ -374,7 +360,7 @@ export function Leaderboards({
               loreTitle={leaderboardLore.whales.title}
               loreQuote={leaderboardLore.whales.quote}
             >
-              <LeaderboardTable entries={data.whales} valueLabel="LINEA wagered" valueClass="text-violet-400" resolveName={resolveName} />
+              <LeaderboardTable entries={data.whales} valueLabel="LINEA wagered" valueClass="text-violet-400" />
             </Section>
 
             <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
@@ -389,7 +375,7 @@ export function Leaderboards({
               loreTitle={leaderboardLore.underdog.title}
               loreQuote={leaderboardLore.underdog.quote}
             >
-              <LeaderboardTable entries={data.underdog} valueLabel="LINEA won" valueClass="text-amber-400" resolveName={resolveName} />
+              <LeaderboardTable entries={data.underdog} valueLabel="LINEA won" valueClass="text-amber-400" />
             </Section>
 
             <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />

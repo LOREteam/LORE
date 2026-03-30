@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import {
   getEmbeddedConnectedWallet,
+  usePrivy,
   useCreateWallet,
   useExportWallet,
   useSendTransaction,
@@ -15,6 +16,7 @@ import { APP_CHAIN_ID, APP_CHAIN_NAME } from "../lib/constants";
 import { getFallbackFeeOverrides, getKeeperFeeOverrides, getLineaFeeOverrides } from "../lib/lineaFees";
 
 const SILENT_SEND_TIMEOUT_MS = 45_000;
+const ACTIVE_WALLET_TIMEOUT_MS = 12_000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   const guarded = promise.catch((err) => {
@@ -30,7 +32,8 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 }
 
 export function usePrivyWallet() {
-  const { wallets } = useWallets();
+  const { ready: privyReady, authenticated, user } = usePrivy();
+  const { wallets, ready: walletsReady } = useWallets();
   const { setActiveWallet } = useSetActiveWallet();
   const { exportWallet } = useExportWallet();
   const { createWallet } = useCreateWallet();
@@ -39,27 +42,49 @@ export function usePrivyWallet() {
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
 
   const embeddedWallet = useMemo(() => getEmbeddedConnectedWallet(wallets), [wallets]);
+  const linkedEmbeddedWalletAddress = useMemo(() => {
+    for (const account of user?.linkedAccounts ?? []) {
+      if (account.type !== "wallet") continue;
+      if (account.walletClientType !== "privy") continue;
+      if ("chainType" in account && account.chainType && account.chainType !== "ethereum") continue;
+      if ("address" in account && typeof account.address === "string") {
+        return account.address;
+      }
+    }
+    return null;
+  }, [user]);
   const externalWallet = useMemo(() => {
     if (!embeddedWallet) return wallets[0];
     return wallets.find((wallet) => wallet.address.toLowerCase() !== embeddedWallet.address.toLowerCase());
   }, [wallets, embeddedWallet]);
 
-  const embeddedWalletAddress = embeddedWallet?.address ?? null;
+  const embeddedWalletAddress = embeddedWallet?.address ?? linkedEmbeddedWalletAddress ?? null;
   const externalWalletAddress = externalWallet?.address ?? null;
+  const embeddedWalletSyncing =
+    authenticated &&
+    !embeddedWalletAddress &&
+    (!privyReady || !walletsReady);
 
   // Always keep embedded wallet as active signer
   useEffect(() => {
     if (!embeddedWallet || !address) return;
     if (address.toLowerCase() !== embeddedWallet.address.toLowerCase()) {
       setActiveWallet(embeddedWallet).catch((err) => {
-        console.warn("[PrivyWallet] setActiveWallet failed:", err);
+        console.warn("[PrivyWallet] setActiveWallet failed:", err instanceof Error ? err.message : String(err));
       });
     }
   }, [embeddedWallet, address, setActiveWallet]);
 
   const ensureEmbeddedWallet = useCallback(async () => {
     if (!embeddedWallet) throw new Error("Privy embedded wallet not found.");
-    await setActiveWallet(embeddedWallet);
+    try {
+      await withTimeout(setActiveWallet(embeddedWallet), ACTIVE_WALLET_TIMEOUT_MS, "Privy setActiveWallet");
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Privy setActiveWallet timed out")) {
+        error.name = "WalletSwitchTimeoutError";
+      }
+      throw error;
+    }
   }, [embeddedWallet, setActiveWallet]);
 
   const exportEmbeddedWallet = useCallback(async () => {
@@ -73,12 +98,27 @@ export function usePrivyWallet() {
 
   const sendTransactionSilent = useCallback(
     async (
-      tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number },
+      tx: {
+        to: `0x${string}`;
+        data?: `0x${string}`;
+        value?: bigint;
+        gas?: bigint;
+        nonce?: number;
+        feeMode?: "normal" | "keeper";
+      },
       gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint },
     ) => {
       if (!embeddedWallet || !embeddedWalletAddress) throw new Error("Privy embedded wallet not found.");
       // Some flows can switch active signer to external wallet; force embedded signer for silent tx.
-      await setActiveWallet(embeddedWallet);
+      try {
+        await withTimeout(setActiveWallet(embeddedWallet), ACTIVE_WALLET_TIMEOUT_MS, "Privy setActiveWallet");
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("Privy setActiveWallet timed out")) {
+          error.name = "WalletSwitchTimeoutError";
+        }
+        throw error;
+      }
+      const feeMode = tx.feeMode ?? "normal";
       const baseRequest: Parameters<typeof sendTransaction>[0] = {
         to: tx.to,
         data: tx.data,
@@ -94,29 +134,35 @@ export function usePrivyWallet() {
       } else if (publicClient) {
         try {
           const fees = await publicClient.estimateFeesPerGas();
-          const overrides = tx.gas
-            ? getKeeperFeeOverrides(fees, APP_CHAIN_ID)
-            : getLineaFeeOverrides(fees, APP_CHAIN_ID);
+          const overrides =
+            feeMode === "keeper"
+              ? getKeeperFeeOverrides(fees, APP_CHAIN_ID)
+              : getLineaFeeOverrides(fees, APP_CHAIN_ID);
           if (overrides?.maxFeePerGas) baseRequest.maxFeePerGas = overrides.maxFeePerGas;
           if (overrides?.maxPriorityFeePerGas) baseRequest.maxPriorityFeePerGas = overrides.maxPriorityFeePerGas;
           if (overrides?.gasPrice) baseRequest.gasPrice = overrides.gasPrice;
         } catch {
-          const overrides = getFallbackFeeOverrides(
-            APP_CHAIN_ID,
-            tx.gas ? "keeper" : "normal",
-          );
+          const overrides = getFallbackFeeOverrides(APP_CHAIN_ID, feeMode);
           if (overrides.maxFeePerGas) baseRequest.maxFeePerGas = overrides.maxFeePerGas;
           if (overrides.maxPriorityFeePerGas) baseRequest.maxPriorityFeePerGas = overrides.maxPriorityFeePerGas;
           if (overrides.gasPrice) baseRequest.gasPrice = overrides.gasPrice;
         }
       }
-      const receipt = await withTimeout(
-        sendTransaction(baseRequest, {
-          uiOptions: { showWalletUIs: false },
-        }),
-        SILENT_SEND_TIMEOUT_MS,
-        "Privy sendTransaction",
-      );
+      let receipt: Awaited<ReturnType<typeof sendTransaction>>;
+      try {
+        receipt = await withTimeout(
+          sendTransaction(baseRequest, {
+            uiOptions: { showWalletUIs: false },
+          }),
+          SILENT_SEND_TIMEOUT_MS,
+          "Privy sendTransaction",
+        );
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("Privy sendTransaction timed out")) {
+          error.name = "WalletSendTimeoutError";
+        }
+        throw error;
+      }
       return receipt.hash as `0x${string}`;
     },
     [sendTransaction, embeddedWallet, embeddedWalletAddress, publicClient, setActiveWallet],
@@ -132,12 +178,12 @@ export function usePrivyWallet() {
       try {
         await externalWallet.switchChain(APP_CHAIN_ID);
       } catch (switchErr) {
-        console.warn("[PrivyWallet] switchChain failed, trying EIP-1193 fallback:", switchErr);
+        console.warn("[PrivyWallet] switchChain failed, trying EIP-1193 fallback:", switchErr instanceof Error ? switchErr.message : String(switchErr));
         await provider.request({
           method: "wallet_switchEthereumChain",
           params: [{ chainId: targetChainIdHex }],
         }).catch((fbErr) => {
-          console.warn("[PrivyWallet] EIP-1193 switchChain fallback also failed:", fbErr);
+          console.warn("[PrivyWallet] EIP-1193 switchChain fallback also failed:", fbErr instanceof Error ? fbErr.message : String(fbErr));
         });
       }
       const currentChainId = (await provider.request({ method: "eth_chainId" }) as string | undefined)?.toLowerCase();
@@ -174,6 +220,7 @@ export function usePrivyWallet() {
   return {
     embeddedWalletAddress,
     externalWalletAddress,
+    embeddedWalletSyncing,
     ensureEmbeddedWallet,
     exportEmbeddedWallet,
     createEmbeddedWallet,

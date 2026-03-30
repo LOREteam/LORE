@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { usePublicClient, useAccount } from "wagmi";
 import { encodeFunctionData } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
@@ -10,9 +10,27 @@ import { isUserRejection, delay } from "../lib/utils";
 type EpochTuple = readonly [bigint, bigint, bigint, boolean];
 
 const DEEP_CHUNK = BigInt(200);
+const CLAIM_GAS_FALLBACK = 200_000n;
+const CLAIM_GAS_BUFFER = 20_000n;
+const CLAIM_GAS_HEADROOM_BPS = 12_000n;
+const BPS_DENOMINATOR = 10_000n;
+
+function formatClaimError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  if (lower.includes("notresolved")) return "Reward is not claimable yet because the epoch is not resolved.";
+  if (lower.includes("already claimed") || lower.includes("hasclaimed") || lower.includes("claimed")) {
+    return "This reward was already claimed.";
+  }
+  if (lower.includes("nothingtoclaim") || lower.includes("no reward")) {
+    return "No reward is available for this epoch.";
+  }
+  return "Claim failed.";
+}
 
 export function useDeepRewardScan(
   sendTransactionSilent?: (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => Promise<`0x${string}`>,
+  onNotify?: (message: string, tone?: "info" | "success" | "warning" | "danger") => void,
 ) {
   const { address } = useAccount();
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
@@ -23,6 +41,7 @@ export function useDeepRewardScan(
   const [progress, setProgress] = useState("");
   const abortRef = useRef(false);
   const scanRunningRef = useRef(false);
+  const scanAddressRef = useRef<string | null>(null);
 
   const waitReceipt = useCallback(
     async (hash: `0x${string}`) => {
@@ -38,10 +57,132 @@ export function useDeepRewardScan(
     [publicClient],
   );
 
+  const estimateClaimGas = useCallback(
+    async (epochId: string) => {
+      if (!publicClient || !address) return CLAIM_GAS_FALLBACK;
+      const data = encodeFunctionData({
+        abi: GAME_ABI,
+        functionName: "claimReward",
+        args: [BigInt(epochId)],
+      });
+      try {
+        const estimatedGas = await publicClient.estimateGas({
+          account: address as `0x${string}`,
+          to: CONTRACT_ADDRESS,
+          data,
+        });
+        return (estimatedGas * CLAIM_GAS_HEADROOM_BPS) / BPS_DENOMINATOR + CLAIM_GAS_BUFFER;
+      } catch {
+        return CLAIM_GAS_FALLBACK;
+      }
+    },
+    [address, publicClient],
+  );
+
+  const estimateBatchClaimGas = useCallback(
+    async (epochIds: string[]) => {
+      if (epochIds.length === 0) return CLAIM_GAS_FALLBACK;
+      if (!publicClient || !address) {
+        return CLAIM_GAS_FALLBACK * BigInt(epochIds.length);
+      }
+      const data = encodeFunctionData({
+        abi: GAME_ABI,
+        functionName: "claimRewards",
+        args: [epochIds.map((epochId) => BigInt(epochId))],
+      });
+      try {
+        const estimatedGas = await publicClient.estimateGas({
+          account: address as `0x${string}`,
+          to: CONTRACT_ADDRESS,
+          data,
+        });
+        return (estimatedGas * CLAIM_GAS_HEADROOM_BPS) / BPS_DENOMINATOR + CLAIM_GAS_BUFFER;
+      } catch {
+        return CLAIM_GAS_FALLBACK * BigInt(epochIds.length);
+      }
+    },
+    [address, publicClient],
+  );
+
+  const prepareClaimTx = useCallback(
+    async (epochId: string) => {
+      const data = encodeFunctionData({
+        abi: GAME_ABI,
+        functionName: "claimReward",
+        args: [BigInt(epochId)],
+      });
+
+      if (publicClient && address) {
+        await publicClient.simulateContract({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "claimReward",
+          args: [BigInt(epochId)],
+          account: address as `0x${string}`,
+        });
+      }
+
+      const gas = await estimateClaimGas(epochId);
+      return { data, gas };
+    },
+    [address, estimateClaimGas, publicClient],
+  );
+
+  const prepareBatchClaimTx = useCallback(
+    async (epochIds: string[]) => {
+      const epochArgs = epochIds.map((epochId) => BigInt(epochId));
+      const data = encodeFunctionData({
+        abi: GAME_ABI,
+        functionName: "claimRewards",
+        args: [epochArgs],
+      });
+
+      if (publicClient && address) {
+        await publicClient.simulateContract({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "claimRewards",
+          args: [epochArgs],
+          account: address as `0x${string}`,
+        });
+      }
+
+      const gas = await estimateBatchClaimGas(epochIds);
+      return { data, gas };
+    },
+    [address, estimateBatchClaimGas, publicClient],
+  );
+
+  const confirmClaimedEpochs = useCallback(
+    async (epochIds: string[]) => {
+      if (!publicClient || !address || epochIds.length === 0) {
+        return new Set(epochIds);
+      }
+      const results = await publicClient.multicall({
+        contracts: epochIds.map((epochId) => ({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "hasClaimed" as const,
+          args: [address, BigInt(epochId)],
+        })),
+      });
+      const claimed = new Set<string>();
+      epochIds.forEach((epochId, index) => {
+        if (results[index]?.result === true) {
+          claimed.add(epochId);
+        }
+      });
+      return claimed;
+    },
+    [address, publicClient],
+  );
+
   const scan = useCallback(async () => {
     if (!publicClient || !address) return;
+    const normalizedAddress = address.toLowerCase();
     if (scanRunningRef.current) return;
     scanRunningRef.current = true;
+    scanAddressRef.current = normalizedAddress;
     abortRef.current = false;
     setScanning(true);
     setWins(null);
@@ -59,6 +200,7 @@ export function useDeepRewardScan(
 
       let cursor = startEpoch;
       while (cursor > BigInt(0) && !abortRef.current) {
+        if (scanAddressRef.current !== normalizedAddress) return;
         let end = cursor - DEEP_CHUNK + BigInt(1);
         if (end < BigInt(1)) end = BigInt(1);
 
@@ -85,6 +227,7 @@ export function useDeepRewardScan(
             })),
           }),
         ]);
+        if (scanAddressRef.current !== normalizedAddress) return;
 
         const potentialWins: { id: bigint; winTile: bigint; rewardPool: bigint }[] = [];
         epochIds.forEach((id, index) => {
@@ -109,6 +252,7 @@ export function useDeepRewardScan(
               })),
             }),
           ]);
+          if (scanAddressRef.current !== normalizedAddress) return;
 
           potentialWins.forEach((w, index) => {
             const betAmt = betResults[index]?.result as unknown as bigint | undefined;
@@ -126,16 +270,34 @@ export function useDeepRewardScan(
         cursor = end - BigInt(1);
       }
 
-      setWins(found);
-      setProgress(abortRef.current ? "Cancelled" : `Done – ${found.length} unclaimed reward${found.length !== 1 ? "s" : ""}`);
+      if (scanAddressRef.current === normalizedAddress) {
+        setWins(found);
+      }
+      if (scanAddressRef.current === normalizedAddress) {
+        setProgress(abortRef.current ? "Cancelled" : `Done – ${found.length} unclaimed reward${found.length !== 1 ? "s" : ""}`);
+      }
     } catch (e) {
-      setProgress("Error during scan");
-      console.error("[DeepScan]", e);
+      if (scanAddressRef.current === normalizedAddress) {
+        setProgress("Error during scan");
+      }
+      console.error("[DeepScan]", e instanceof Error ? e.message : String(e));
     } finally {
-      setScanning(false);
-      scanRunningRef.current = false;
+      if (scanAddressRef.current === normalizedAddress) {
+        setScanning(false);
+        scanRunningRef.current = false;
+        scanAddressRef.current = null;
+      }
     }
   }, [publicClient, address]);
+
+  useEffect(() => {
+    abortRef.current = true;
+    scanRunningRef.current = false;
+    scanAddressRef.current = address ? address.toLowerCase() : null;
+    setWins(null);
+    setScanning(false);
+    setProgress("");
+  }, [address]);
 
   const stop = useCallback(() => { abortRef.current = true; }, []);
 
@@ -143,57 +305,99 @@ export function useDeepRewardScan(
     if (!sendTransactionSilent) return;
     setClaiming(true);
     try {
-      const data = encodeFunctionData({
-        abi: GAME_ABI, functionName: "claimReward", args: [BigInt(epochId)],
-      });
-      const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas: BigInt(200_000) });
+      const { data, gas } = await prepareClaimTx(epochId);
+      const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
       await waitReceipt(hash);
       setWins((prev) => prev ? prev.filter((w) => w.epoch !== epochId) : prev);
+      onNotify?.("Reward claimed successfully.", "success");
     } catch (err) {
-      if (!isUserRejection(err)) alert("Claim failed.");
+      if (!isUserRejection(err)) onNotify?.(formatClaimError(err), "danger");
     } finally {
       setClaiming(false);
     }
-  }, [sendTransactionSilent, waitReceipt]);
+  }, [onNotify, prepareClaimTx, sendTransactionSilent, waitReceipt]);
 
   const claimAllDeep = useCallback(async () => {
     if (!wins || wins.length === 0 || !sendTransactionSilent) return;
     setClaiming(true);
     try {
       const all = [...wins];
-      const pending: { epoch: string; hash: `0x${string}` }[] = [];
+      const claimedEpochs = new Set<string>();
+      let skippedEpochs = 0;
+      let claimTxCount = 0;
 
-      for (const win of all) {
+      const submitSingleClaim = async (epochId: string) => {
+        const { data, gas } = await prepareClaimTx(epochId);
+        const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
+        claimTxCount += 1;
+        await waitReceipt(hash);
+        claimedEpochs.add(epochId);
+      };
+
+      const submitBatchClaim = async (epochIds: string[]) => {
+        const { data, gas } = await prepareBatchClaimTx(epochIds);
+        const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
+        claimTxCount += 1;
+        await waitReceipt(hash);
+        const confirmedClaimed = await confirmClaimedEpochs(epochIds);
+        confirmedClaimed.forEach((epochId) => claimedEpochs.add(epochId));
+        if (confirmedClaimed.size === 0) {
+          throw new Error("Batch claim confirmed without claimed epochs");
+        }
+      };
+
+      const queue: string[][] = [all.map((win) => win.epoch)];
+
+      while (queue.length > 0) {
+        const batch = queue.shift();
+        if (!batch || batch.length === 0) continue;
+
         try {
-          const data = encodeFunctionData({
-            abi: GAME_ABI, functionName: "claimReward", args: [BigInt(win.epoch)],
-          });
-          const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas: BigInt(200_000) });
-          pending.push({ epoch: win.epoch, hash });
+          if (batch.length === 1) {
+            await submitSingleClaim(batch[0]);
+          } else {
+            await submitBatchClaim(batch);
+          }
         } catch (err) {
           if (isUserRejection(err)) break;
+          if (batch.length === 1) {
+            skippedEpochs += 1;
+            continue;
+          }
+          const middle = Math.ceil(batch.length / 2);
+          queue.unshift(batch.slice(middle));
+          queue.unshift(batch.slice(0, middle));
         }
       }
 
-      const results = await Promise.allSettled(
-        pending.map(async ({ epoch, hash }) => {
-          await waitReceipt(hash);
-          return epoch;
-        }),
-      );
-
-      const claimedEpochs = new Set<string>();
-      results.forEach((r) => {
-        if (r.status === "fulfilled") claimedEpochs.add(r.value);
-      });
-
       if (claimedEpochs.size > 0) {
         setWins((prev) => prev ? prev.filter((w) => !claimedEpochs.has(w.epoch)) : prev);
+        onNotify?.(
+          claimedEpochs.size === 1
+            ? claimTxCount <= 1
+              ? "1 reward claimed successfully."
+              : `1 reward claimed successfully in ${claimTxCount} transactions.`
+            : claimTxCount <= 1
+              ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
+              : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
+          "success",
+        );
+      }
+      if (skippedEpochs > 0 && claimedEpochs.size === 0) {
+        onNotify?.("Some rewards are no longer claimable.", "info");
       }
     } finally {
       setClaiming(false);
     }
-  }, [wins, sendTransactionSilent, waitReceipt]);
+  }, [
+    confirmClaimedEpochs,
+    onNotify,
+    prepareBatchClaimTx,
+    prepareClaimTx,
+    wins,
+    sendTransactionSilent,
+    waitReceipt,
+  ]);
 
   return { wins, scanning, claiming, progress, scan, stop, claimOne, claimAllDeep };
 }

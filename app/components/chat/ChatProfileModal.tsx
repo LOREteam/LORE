@@ -159,25 +159,25 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
           <div className="grid grid-cols-4 gap-2.5">
             <button
               onClick={() => selectPreset(null)}
-              className={`h-16 ${uiTokens.radius.md} border transition-all flex items-center justify-center ${uiTokens.focusRing} ${
+              className={`h-[4.35rem] ${uiTokens.radius.md} border transition-all flex items-center justify-center ${uiTokens.focusRing} ${
                 !avatar && !customAvatar
                   ? "border-violet-400/80 bg-violet-500/15 shadow-[0_0_24px_rgba(124,58,237,0.28)]"
-                  : "border-white/10 bg-white/[0.02] hover:border-violet-500/50 hover:bg-violet-500/5"
+                  : "border-white/10 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.05),rgba(255,255,255,0.015)_58%,transparent)] hover:border-violet-500/50 hover:bg-violet-500/5"
               }`}
             >
-              <ChatAvatar avatarId={null} walletAddress={walletAddress ?? undefined} size={44} />
+              <ChatAvatar avatarId={null} walletAddress={walletAddress ?? undefined} size={48} />
             </button>
             {AVATAR_IDS.map((id) => (
               <button
                 key={id}
                 onClick={() => selectPreset(id)}
-                className={`h-16 ${uiTokens.radius.md} border transition-all flex items-center justify-center ${uiTokens.focusRing} ${
+                className={`h-[4.35rem] ${uiTokens.radius.md} border transition-all flex items-center justify-center ${uiTokens.focusRing} ${
                   avatar === id && !customAvatar
                     ? "border-violet-400/80 bg-violet-500/15 shadow-[0_0_24px_rgba(124,58,237,0.28)]"
-                    : "border-white/10 bg-white/[0.02] hover:border-violet-500/50 hover:bg-violet-500/5"
+                    : "border-white/10 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.05),rgba(255,255,255,0.015)_58%,transparent)] hover:border-violet-500/50 hover:bg-violet-500/5"
                 }`}
               >
-                <ChatAvatar avatarId={id as AvatarId} size={44} />
+                <ChatAvatar avatarId={id as AvatarId} size={48} />
               </button>
             ))}
           </div>

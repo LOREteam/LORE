@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
 import { formatUnits, parseAbi } from "viem";
-import { DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS } from "../../../../config/publicConfig";
+import {
+  DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS,
+  getConfiguredDeployBlock,
+  getConfiguredLineaNetwork,
+} from "../../../../config/publicConfig";
 import {
   fetchFirebaseJson,
   parseCurrentEpoch,
   publicClient,
   CONTRACT_ADDRESS,
 } from "../../_lib/dataBridge";
+import { dbPath } from "../../../../server/db";
 
 const READ_ABI = parseAbi([
   "function currentEpoch() view returns (uint256)",
@@ -14,6 +19,11 @@ const READ_ABI = parseAbi([
 ]);
 
 const LAG_WARN_BLOCKS = Number(process.env.DATA_SYNC_LAG_WARN_BLOCKS ?? String(DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS));
+const APP_NETWORK = getConfiguredLineaNetwork();
+const DEPLOY_BLOCK = getConfiguredDeployBlock(
+  process.env.INDEXER_START_BLOCK ?? process.env.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK,
+  APP_NETWORK,
+);
 
 type EpochRow = {
   winningTile: number;
@@ -27,9 +37,26 @@ type JackpotRow = {
   kind: "daily" | "weekly";
 };
 
+type SyncTrendSample = {
+  ts: number;
+  headBlock: bigint;
+  lastIndexedBlock: bigint | null;
+  storedEpochCount: number;
+  lagBlocks: number | null;
+};
+
+type GlobalWithDataSyncTrend = typeof globalThis & {
+  __loreDataSyncTrend?: SyncTrendSample;
+  __loreDataSyncTrendHistory?: SyncTrendSample[];
+};
+
 function toNum(v: unknown): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, value));
 }
 
 export async function GET() {
@@ -72,6 +99,11 @@ export async function GET() {
     for (let ep = 1; ep <= maxEpochToCheck; ep++) {
       if (!presentEpochs.has(ep)) missingEpochs.push(ep);
     }
+    const latestStoredEpoch = presentEpochs.size > 0 ? Math.max(...presentEpochs) : null;
+    const highestContiguousEpoch =
+      missingEpochs.length > 0
+        ? Math.max(0, missingEpochs[0] - 1)
+        : maxEpochToCheck;
 
     const jackpotsInfo = jackpotInfoRaw as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
     const lastDailyEpoch = Number(jackpotsInfo[4]);
@@ -89,6 +121,73 @@ export async function GET() {
     const hasLatestDailyInDb = lastDailyEpoch > 0 ? dbJackpotKeys.has(`daily_${lastDailyEpoch}`) : true;
     const hasLatestWeeklyInDb = lastWeeklyEpoch > 0 ? dbJackpotKeys.has(`weekly_${lastWeeklyEpoch}`) : true;
 
+    const totalBlocksToIndex =
+      head >= DEPLOY_BLOCK
+        ? Number(head - DEPLOY_BLOCK + 1n)
+        : 0;
+    const indexedBlocksToCurrentHead =
+      dbLastIndexedBlock !== null && dbLastIndexedBlock >= DEPLOY_BLOCK
+        ? Number((dbLastIndexedBlock > head ? head : dbLastIndexedBlock) - DEPLOY_BLOCK + 1n)
+        : 0;
+    const blockProgressPct =
+      totalBlocksToIndex > 0
+        ? clampPercent((indexedBlocksToCurrentHead / totalBlocksToIndex) * 100)
+        : 100;
+    const epochCoveragePct =
+      maxEpochToCheck > 0
+        ? clampPercent((presentEpochs.size / maxEpochToCheck) * 100)
+        : 100;
+    const contiguousEpochCoveragePct =
+      maxEpochToCheck > 0
+        ? clampPercent((highestContiguousEpoch / maxEpochToCheck) * 100)
+        : 100;
+
+    const trendStore = globalThis as GlobalWithDataSyncTrend;
+    const previousSample = trendStore.__loreDataSyncTrend;
+    const now = Date.now();
+    let blockRatePerMinute: number | null = null;
+    let epochRatePerMinute: number | null = null;
+    let estimatedMinutesToHead: number | null = null;
+
+    if (previousSample && previousSample.lastIndexedBlock !== null && dbLastIndexedBlock !== null) {
+      const elapsedMs = now - previousSample.ts;
+      const deltaBlocks = Number(dbLastIndexedBlock - previousSample.lastIndexedBlock);
+      const deltaEpochs = presentEpochs.size - previousSample.storedEpochCount;
+      if (elapsedMs >= 5_000 && deltaBlocks > 0) {
+        blockRatePerMinute = Number(((deltaBlocks * 60_000) / elapsedMs).toFixed(2));
+        epochRatePerMinute = Number(((deltaEpochs * 60_000) / elapsedMs).toFixed(2));
+        if (lagBlocks !== null && blockRatePerMinute > 0) {
+          estimatedMinutesToHead = Number((lagBlocks / blockRatePerMinute).toFixed(1));
+        }
+      }
+    }
+
+    trendStore.__loreDataSyncTrend = {
+      ts: now,
+      headBlock: head,
+      lastIndexedBlock: dbLastIndexedBlock,
+      storedEpochCount: presentEpochs.size,
+      lagBlocks,
+    };
+    const trendHistory = trendStore.__loreDataSyncTrendHistory ?? [];
+    trendHistory.push({
+      ts: now,
+      headBlock: head,
+      lastIndexedBlock: dbLastIndexedBlock,
+      storedEpochCount: presentEpochs.size,
+      lagBlocks,
+    });
+    trendStore.__loreDataSyncTrendHistory = trendHistory.slice(-8);
+
+    const syncState =
+      dbLastIndexedBlock === null
+        ? "bootstrapping"
+        : lagBlocks !== null && lagBlocks <= LAG_WARN_BLOCKS && missingEpochs.length === 0
+          ? "synced"
+          : lagBlocks !== null && lagBlocks <= Math.max(LAG_WARN_BLOCKS, 512) && missingEpochs.length <= 3
+            ? "near_head"
+            : "catching_up";
+
     const degraded =
       (lagBlocks !== null && lagBlocks > LAG_WARN_BLOCKS) ||
       missingEpochs.length > 0 ||
@@ -102,7 +201,7 @@ export async function GET() {
         currentEpoch: chainCurrentEpoch,
         headBlock: head.toString(),
       },
-      firebase: {
+      storage: {
         currentEpochMeta: dbCurrentEpoch,
         lastIndexedBlock: dbLastIndexedBlock?.toString() ?? null,
         repairCursorBlock: dbRepairCursorBlock?.toString() ?? null,
@@ -112,7 +211,28 @@ export async function GET() {
         expectedResolvedRange: maxEpochToCheck > 0 ? `1..${maxEpochToCheck}` : "none",
         storedCount: presentEpochs.size,
         missingCount: missingEpochs.length,
+        latestStoredEpoch,
+        highestContiguousEpoch,
+        coveragePct: Number(epochCoveragePct.toFixed(2)),
+        contiguousCoveragePct: Number(contiguousEpochCoveragePct.toFixed(2)),
         missingLatest: missingEpochs.slice(-20),
+      },
+      catchUp: {
+        phase: syncState,
+        totalBlocksToIndex,
+        indexedBlocksToCurrentHead,
+        blockProgressPct: Number(blockProgressPct.toFixed(2)),
+        epochCoveragePct: Number(epochCoveragePct.toFixed(2)),
+        contiguousEpochCoveragePct: Number(contiguousEpochCoveragePct.toFixed(2)),
+        blockRatePerMinute,
+        epochRatePerMinute,
+        estimatedMinutesToHead,
+        recentSamples: trendStore.__loreDataSyncTrendHistory?.map((sample) => ({
+          ts: sample.ts,
+          lastIndexedBlock: sample.lastIndexedBlock?.toString() ?? null,
+          storedEpochCount: sample.storedEpochCount,
+          lagBlocks: sample.lagBlocks,
+        })) ?? [],
       },
       jackpots: {
         lastDailyEpoch,
@@ -130,6 +250,9 @@ export async function GET() {
       ].filter(Boolean),
       ts: Date.now(),
       env: {
+        network: APP_NETWORK,
+        dbPath,
+        deployBlock: DEPLOY_BLOCK.toString(),
         lagWarnBlocks: toNum(LAG_WARN_BLOCKS),
       },
     });

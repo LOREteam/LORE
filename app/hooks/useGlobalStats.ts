@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { usePublicClient, useReadContract } from "wagmi";
+import { usePublicClient } from "wagmi";
 import { formatUnits, decodeEventLog, encodeEventTopics, type Log } from "viem";
 import {
   CONTRACT_ADDRESS,
@@ -77,21 +77,23 @@ function saveCache(acc: Accumulator) {
   } catch {}
 }
 
-export function useGlobalStats() {
+export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
-  const { data: currentEpoch } = useReadContract({
-    address: CONTRACT_ADDRESS,
-    abi: GAME_ABI,
-    functionName: "currentEpoch",
-    chainId: APP_CHAIN_ID,
-    query: { refetchInterval: 5000 }, // poll ~every 5s to detect new round
-  });
   const [stats, setStats] = useState<GlobalStats | null>(null);
   const [loading, setLoading] = useState(false);
   const accRef = useRef<Accumulator | null>(null);
   const runningRef = useRef(false);
   const initializedRef = useRef(false);
   const lastFetchedEpochRef = useRef<bigint | null>(null);
+  const queuedEpochRef = useRef<bigint | null>(null);
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Restore from localStorage on mount – show cached values instantly
   useEffect(() => {
@@ -100,24 +102,27 @@ export function useGlobalStats() {
     const cached = loadCache();
     if (cached) {
       accRef.current = cached;
-      setStats(toStats(cached));
+      if (mountedRef.current) {
+        setStats(toStats(cached));
+      }
     }
   }, []);
 
-  const fetchStats = useCallback(async () => {
-    if (!publicClient || runningRef.current) return;
+  const fetchStats = useCallback(async (targetEpoch?: bigint | null) => {
+    const epochToFetch = targetEpoch ?? currentEpoch;
+    if (!publicClient || !enabled || epochToFetch == null) return;
+    if (runningRef.current) {
+      if (queuedEpochRef.current == null || epochToFetch > queuedEpochRef.current) {
+        queuedEpochRef.current = epochToFetch;
+      }
+      return;
+    }
     runningRef.current = true;
     const isInitial = accRef.current === null;
-    if (isInitial) setLoading(true);
+    if (isInitial && mountedRef.current) setLoading(true);
 
     try {
-      const currentEpoch = (await publicClient.readContract({
-        address: CONTRACT_ADDRESS,
-        abi: GAME_ABI,
-        functionName: "currentEpoch",
-      })) as bigint;
-
-      const epochCount = Number(currentEpoch);
+      const epochCount = Number(epochToFetch);
       const prev = accRef.current;
       const startEpoch = prev ? prev.lastScannedEpoch + 1 : 1;
 
@@ -243,24 +248,35 @@ export function useGlobalStats() {
 
       accRef.current = newAcc;
       saveCache(newAcc);
-      setStats(toStats(newAcc));
+      lastFetchedEpochRef.current = epochToFetch;
+      if (mountedRef.current) {
+        setStats(toStats(newAcc));
+      }
     } catch {
       // non-critical – keep previous stats
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
       runningRef.current = false;
+      const queuedEpoch = queuedEpochRef.current;
+      if (queuedEpoch !== null && queuedEpoch !== lastFetchedEpochRef.current) {
+        queuedEpochRef.current = null;
+        void fetchStats(queuedEpoch);
+      }
     }
-  }, [publicClient]);
+  }, [currentEpoch, enabled, publicClient]);
 
   // Fetch on mount + once per round (when epoch changes)
   useEffect(() => {
+    if (!enabled) return;
     if (currentEpoch == null) return;
-    const prev = lastFetchedEpochRef.current;
-    if (prev !== currentEpoch) {
-      lastFetchedEpochRef.current = currentEpoch;
-      void fetchStats();
+    if (lastFetchedEpochRef.current === currentEpoch) return;
+    if (queuedEpochRef.current == null || currentEpoch > queuedEpochRef.current) {
+      queuedEpochRef.current = currentEpoch;
     }
-  }, [currentEpoch, fetchStats]);
+    void fetchStats(currentEpoch);
+  }, [currentEpoch, enabled, fetchStats]);
 
   return { stats, loading };
 }

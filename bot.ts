@@ -1,7 +1,11 @@
 import "dotenv/config";
 import { createPublicClient, createWalletClient, getAddress, http, fallback, parseAbi, formatUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { getKeeperFeeOverrides } from "./app/lib/lineaFees";
+import {
+  clampKeeperFeeOverridesToBalance,
+  getAffordableKeeperGasLimit,
+  getKeeperFeeOverrides,
+} from "./app/lib/lineaFees";
 import {
   getConfiguredContractAddress,
   getConfiguredLineaNetwork,
@@ -25,6 +29,8 @@ const ALERT_THREAD_ID = process.env.ALERT_TELEGRAM_THREAD_ID ?? "";
 const ALERT_PREFIX = process.env.ALERT_PREFIX ?? "LORE Keeper";
 const PENDING_RESOLVE_STALE_MS = Number(process.env.PENDING_RESOLVE_STALE_MS ?? "45000");
 const FORCE_REPLACE_PENDING_NONCE_GAP = Number(process.env.FORCE_REPLACE_PENDING_NONCE_GAP ?? "6");
+const REPLACE_PENDING_MAX_FEE_BUMP_PERCENT = 220n;
+const REPLACE_PENDING_PRIORITY_BUMP_PERCENT = 200n;
 
 // Fallback grace period: wait this many seconds after epoch ends before resolving.
 // Gives AutoResolve in users' browsers time to handle it first.
@@ -219,7 +225,6 @@ async function startKeeperBot() {
               functionName: "resolveEpoch",
               args: [epoch],
             });
-            const gas = (est * BigInt(150)) / BigInt(100);
             const fees = await publicClient.estimateFeesPerGas();
             const latestNonce = await publicClient.getTransactionCount({
               address: account.address,
@@ -233,10 +238,10 @@ async function startKeeperBot() {
             const estimatedFeeOverrides = getKeeperFeeOverrides(
               fees,
               APP_CHAIN.id,
-              replacingPendingTx ? BigInt(160) : BigInt(130),
-              replacingPendingTx ? BigInt(150) : BigInt(125),
+              replacingPendingTx ? REPLACE_PENDING_MAX_FEE_BUMP_PERCENT : BigInt(130),
+              replacingPendingTx ? REPLACE_PENDING_PRIORITY_BUMP_PERCENT : BigInt(125),
             );
-            const feeOverrides = estimatedFeeOverrides?.gasPrice !== undefined
+            const rawFeeOverrides = estimatedFeeOverrides?.gasPrice !== undefined
               ? { gasPrice: estimatedFeeOverrides.gasPrice }
               : estimatedFeeOverrides?.maxFeePerGas !== undefined
                 ? {
@@ -244,6 +249,26 @@ async function startKeeperBot() {
                     maxPriorityFeePerGas: estimatedFeeOverrides.maxPriorityFeePerGas,
                   }
                 : {};
+            const keeperBalance = await publicClient.getBalance({ address: account.address });
+            const feeOverrides = clampKeeperFeeOverridesToBalance(
+              rawFeeOverrides,
+              est,
+              keeperBalance,
+            ) ?? {};
+            const txFeeOverrides = feeOverrides.gasPrice !== undefined
+              ? { gasPrice: feeOverrides.gasPrice }
+              : feeOverrides.maxFeePerGas !== undefined
+                ? {
+                    maxFeePerGas: feeOverrides.maxFeePerGas,
+                    maxPriorityFeePerGas: feeOverrides.maxPriorityFeePerGas,
+                  }
+                : {};
+            const gas = getAffordableKeeperGasLimit(est, keeperBalance, feeOverrides, 150n);
+            if (gas === null) {
+              throw new Error(
+                `keeper_insufficient_funds balance=${keeperBalance.toString()} estimatedGas=${est.toString()}`,
+              );
+            }
             if (replacingPendingTx) {
               console.log(
                 `Replacing pending keeper tx with nonce ${latestNonce.toString()} (pending=${pendingNonce.toString()}, latest=${latestNonce.toString()})`,
@@ -256,7 +281,7 @@ async function startKeeperBot() {
               args: [epoch],
               gas,
               ...(replacingPendingTx ? { nonce: latestNonce } : {}),
-              ...feeOverrides,
+              ...txFeeOverrides,
             });
             try {
               await publicClient.waitForTransactionReceipt({ hash });

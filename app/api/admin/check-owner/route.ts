@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CONTRACT_ADDRESS } from "../../../lib/constants";
 import { RPC_URL } from "../../_lib/dataBridge";
+import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 
 export async function GET(request: NextRequest) {
+  const rateLimited = await enforceSharedRateLimit(request, {
+    bucket: "api-admin-check-owner",
+    limit: 20,
+    windowMs: 60_000,
+  });
+  if (rateLimited) return rateLimited;
+
   try {
     // Get the wallet address from query params
     const { searchParams } = new URL(request.url);

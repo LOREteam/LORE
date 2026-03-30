@@ -1,18 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { decodeEventLog, encodeEventTopics, encodeFunctionData, formatUnits, getAddress } from "viem";
-import type { Hex, PublicClient } from "viem";
+import { encodeFunctionData, formatUnits, getAddress } from "viem";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import {
   APP_CHAIN_ID,
   CONTRACT_ADDRESS,
   CONTRACT_HAS_REBATE_API,
-  CONTRACT_DEPLOY_BLOCK,
   GAME_ABI,
-  GAME_EVENTS_ABI,
   TX_RECEIPT_TIMEOUT_MS,
 } from "../lib/constants";
+import { readJsonResponse } from "../lib/readJsonResponse";
 import { delay, isUserRejection } from "../lib/utils";
 import { log } from "../lib/logger";
 
@@ -25,8 +23,11 @@ type SilentSendFn = (tx: {
 
 interface UseRebateOptions {
   enabled?: boolean;
+  active?: boolean;
+  isPageVisible?: boolean;
   preferredAddress?: `0x${string}` | string | null;
   sendTransactionSilent?: SilentSendFn;
+  onNotify?: (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 }
 
 interface RebateEpochInfo {
@@ -39,10 +40,109 @@ interface RebateEpochInfo {
   rebatePoolWei: bigint;
 }
 
+type ClaimPlanKind = "none" | "single" | "split" | "unknown";
+
+interface ApiRebateEpochInfo {
+  epoch: number;
+  pendingWei: string;
+  pending: string;
+  claimed: boolean;
+  resolved: boolean;
+  userVolumeWei: string;
+  rebatePoolWei: string;
+}
+
+interface ApiRebatePayload {
+  isSupported: boolean;
+  pendingRebateWei: string;
+  claimableEpochCount: number;
+  claimableEpochList: number[];
+  totalEpochs: number;
+  participatingEpochs: number[];
+  recentEpochs: ApiRebateEpochInfo[];
+  error?: string;
+}
+
+type CachedRebateInfo = Omit<ApiRebatePayload, "error"> & { cachedAt: number };
+
 const GAS_CLAIM_REBATES = BigInt(1_200_000);
-const REBATE_DETAILS_LIMIT = 8;
-const REBATE_SUMMARY_CHUNK_SIZE = 24;
-const LOG_CHUNK_SIZE_BLOCKS = BigInt(49_999);
+const REBATE_EXACT_CHUNK_SIZE = 48;
+const CLAIM_GAS_HEADROOM_BPS = 1_200n;
+const CLAIM_GAS_BUFFER = 80_000n;
+const REBATE_CLIENT_CACHE_TTL_MS = 60_000;
+const REBATE_REFRESH_MS = 30_000;
+const REBATE_HIDDEN_REFRESH_MS = 120_000;
+const REBATE_WARM_REFRESH_MS = 90_000;
+const CLAIM_PLAN_CACHE_TTL_MS = 60_000;
+const REBATE_CONFIRM_POLL_INTERVAL_MS = 2_000;
+const REBATE_CONFIRM_ATTEMPTS = Math.max(1, Math.floor(TX_RECEIPT_TIMEOUT_MS / REBATE_CONFIRM_POLL_INTERVAL_MS));
+
+function getRebateCacheKey(address: string) {
+  return `lore:rebate:v1:${address.toLowerCase()}`;
+}
+
+function getClaimPlanCacheKey(address: string, epochs: number[]) {
+  return `lore:rebate-claim-plan:v1:${address.toLowerCase()}:${epochs.join(",")}`;
+}
+
+function loadCachedRebatePayload(address: string): CachedRebateInfo | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(getRebateCacheKey(address));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedRebateInfo;
+    if (!parsed || typeof parsed.cachedAt !== "number") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedRebatePayload(address: string, payload: ApiRebatePayload) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(
+      getRebateCacheKey(address),
+      JSON.stringify({
+        ...payload,
+        cachedAt: Date.now(),
+      } satisfies CachedRebateInfo),
+    );
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function loadCachedClaimPlan(address: string, epochs: number[]): { kind: ClaimPlanKind; savedAt: number } | null {
+  if (typeof localStorage === "undefined" || epochs.length === 0) return null;
+  try {
+    const raw = localStorage.getItem(getClaimPlanCacheKey(address, epochs));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { kind?: ClaimPlanKind; savedAt?: number };
+    if (
+      (parsed.kind === "single" || parsed.kind === "split" || parsed.kind === "unknown" || parsed.kind === "none")
+      && typeof parsed.savedAt === "number"
+      && Number.isFinite(parsed.savedAt)
+    ) {
+      return { kind: parsed.kind, savedAt: parsed.savedAt };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedClaimPlan(address: string, epochs: number[], kind: ClaimPlanKind) {
+  if (typeof localStorage === "undefined" || epochs.length === 0) return;
+  try {
+    localStorage.setItem(
+      getClaimPlanCacheKey(address, epochs),
+      JSON.stringify({ kind, savedAt: Date.now() }),
+    );
+  } catch {
+    // ignore storage failures
+  }
+}
 
 function isMissingContractMethodError(err: unknown, methodName: string) {
   const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
@@ -55,63 +155,15 @@ function isMissingContractMethodError(err: unknown, methodName: string) {
   );
 }
 
-async function loadUserRebateEpochs(
-  publicClient: PublicClient,
-  address: `0x${string}`,
-  previous?: { epochs: bigint[]; lastBlock: bigint | null },
-): Promise<{ epochs: bigint[]; lastBlock: bigint }> {
-  const topics: Hex[] = [];
-  for (const eventName of ["BetPlaced", "BatchBetsPlaced"] as const) {
-    const encoded = encodeEventTopics({ abi: GAME_EVENTS_ABI, eventName });
-    if (encoded[0]) topics.push(encoded[0]);
-  }
-
-  const epochSet = new Set<bigint>(previous?.epochs ?? []);
-  const latestBlock = await publicClient.getBlockNumber();
-  const startBlock = previous?.lastBlock !== null && previous?.lastBlock !== undefined
-    ? previous.lastBlock + 1n
-    : CONTRACT_DEPLOY_BLOCK;
-
-  for (let fromBlock = startBlock; fromBlock <= latestBlock; fromBlock += LOG_CHUNK_SIZE_BLOCKS + 1n) {
-    const toBlock = fromBlock + LOG_CHUNK_SIZE_BLOCKS > latestBlock
-      ? latestBlock
-      : fromBlock + LOG_CHUNK_SIZE_BLOCKS;
-
-    const logs = await publicClient.getLogs({
-      address: CONTRACT_ADDRESS,
-      topics: topics.length > 0 ? [topics, null, [address]] : undefined,
-      fromBlock,
-      toBlock,
-    } as Parameters<typeof publicClient.getLogs>[0]);
-
-    for (const log of logs) {
-      try {
-        const decoded = decodeEventLog({ abi: GAME_EVENTS_ABI, data: log.data, topics: log.topics });
-        if (decoded.eventName === "BetPlaced" || decoded.eventName === "BatchBetsPlaced") {
-          const epoch = decoded.args.epoch;
-          if (typeof epoch === "bigint") epochSet.add(epoch);
-        }
-      } catch {
-        // ignore malformed or unrelated logs
-      }
-    }
-  }
-
-  return {
-    epochs: [...epochSet].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
-    lastBlock: latestBlock,
-  };
-}
-
 async function loadClaimableEpochsExact(
-  publicClient: PublicClient,
+  publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
   address: `0x${string}`,
   epochs: bigint[],
 ): Promise<number[]> {
   const claimable = new Set<number>();
 
-  for (let i = 0; i < epochs.length; i += REBATE_SUMMARY_CHUNK_SIZE) {
-    const chunk = epochs.slice(i, i + REBATE_SUMMARY_CHUNK_SIZE);
+  for (let i = 0; i < epochs.length; i += REBATE_EXACT_CHUNK_SIZE) {
+    const chunk = epochs.slice(i, i + REBATE_EXACT_CHUNK_SIZE);
     const contracts = chunk.map((epoch) => ({
       address: CONTRACT_ADDRESS,
       abi: GAME_ABI,
@@ -120,10 +172,7 @@ async function loadClaimableEpochsExact(
     }));
 
     try {
-      const results = await publicClient.multicall({
-        contracts,
-      });
-
+      const results = await publicClient.multicall({ contracts });
       results.forEach((result, index) => {
         if (result.status !== "success") return;
         const [, , pendingWei, claimed, resolved] = result.result as [
@@ -133,7 +182,7 @@ async function loadClaimableEpochsExact(
           boolean,
           boolean,
         ];
-        if (pendingWei > 0 && !claimed && resolved) {
+        if (pendingWei > 0n && !claimed && resolved) {
           claimable.add(Number(chunk[index]));
         }
       });
@@ -141,14 +190,14 @@ async function loadClaimableEpochsExact(
       log.warn("Rebate", "exact claimable multicall failed, falling back to per-epoch reads", err);
       for (const epoch of chunk) {
         try {
-          const result = await publicClient.readContract({
+          const result = (await publicClient.readContract({
             address: CONTRACT_ADDRESS,
             abi: GAME_ABI,
             functionName: "getRebateInfo",
             args: [epoch, address],
-          }) as [bigint, bigint, bigint, boolean, boolean];
+          })) as [bigint, bigint, bigint, boolean, boolean];
           const [, , pendingWei, claimed, resolved] = result;
-          if (pendingWei > 0 && !claimed && resolved) {
+          if (pendingWei > 0n && !claimed && resolved) {
             claimable.add(Number(epoch));
           }
         } catch (readErr) {
@@ -161,18 +210,44 @@ async function loadClaimableEpochsExact(
   return [...claimable].sort((a, b) => b - a);
 }
 
+function parseApiEpochInfo(row: ApiRebateEpochInfo): RebateEpochInfo {
+  return {
+    epoch: row.epoch,
+    pendingWei: BigInt(row.pendingWei),
+    pending: row.pending,
+    claimed: row.claimed,
+    resolved: row.resolved,
+    userVolumeWei: BigInt(row.userVolumeWei),
+    rebatePoolWei: BigInt(row.rebatePoolWei),
+  };
+}
+
 export function useRebate(options?: UseRebateOptions) {
   const { address } = useAccount();
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
   const { writeContractAsync } = useWriteContract();
   const [isClaiming, setIsClaiming] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [rebateEpochs, setRebateEpochs] = useState<number[]>([]);
   const [claimableEpochs, setClaimableEpochs] = useState<number[]>([]);
   const [claimableEpochCount, setClaimableEpochCount] = useState(0);
-  const [pendingRebateWei, setPendingRebateWei] = useState(BigInt(0));
+  const [pendingRebateWei, setPendingRebateWei] = useState(0n);
   const [details, setDetails] = useState<RebateEpochInfo[]>([]);
   const [isSupported, setIsSupported] = useState(CONTRACT_HAS_REBATE_API);
+  const [claimPlanKind, setClaimPlanKind] = useState<ClaimPlanKind>("none");
+  const [isEstimatingClaimPlan, setIsEstimatingClaimPlan] = useState(false);
   const enabled = options?.enabled ?? true;
+  const active = options?.active ?? enabled;
+  const isPageVisible = options?.isPageVisible ?? true;
+  const notify = options?.onNotify;
+  const silentSend = options?.sendTransactionSilent;
+  const hasLoadedRef = useRef(false);
+  const requestIdRef = useRef(0);
+  const timeoutRef = useRef<number | null>(null);
+  const cacheSavedAtRef = useRef<number | null>(null);
+  const rebateUnavailableWarningRef = useRef(false);
+  const mountedRef = useRef(false);
   const rebateAddress = useMemo(() => {
     const candidate = options?.preferredAddress ?? address;
     if (!candidate) return null;
@@ -182,42 +257,96 @@ export function useRebate(options?: UseRebateOptions) {
       return null;
     }
   }, [address, options?.preferredAddress]);
-  const rebateUnavailableWarningRef = useRef(false);
-  const rebateEpochScanCacheRef = useRef<{
-    address: `0x${string}` | null;
-    epochs: bigint[];
-    lastBlock: bigint | null;
-  }>({
-    address: null,
-    epochs: [],
-    lastBlock: null,
-  });
 
-  const waitReceipt = useCallback(
-    async (hash: `0x${string}`) => {
-      if (!publicClient) return;
-      const receipt = await Promise.race([
-        publicClient.waitForTransactionReceipt({ hash }),
-        delay(TX_RECEIPT_TIMEOUT_MS).then(() => {
-          throw new Error("Timeout");
-        }),
-      ]);
-      if (receipt.status !== "success") {
-        throw new Error(`Transaction reverted: ${hash}`);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestIdRef.current += 1;
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
       }
+    };
+  }, []);
+
+  const resetState = useCallback(() => {
+    if (!mountedRef.current) return;
+    setRebateEpochs([]);
+    setClaimableEpochs([]);
+    setClaimableEpochCount(0);
+    setPendingRebateWei(0n);
+    setDetails([]);
+    setIsSupported(CONTRACT_HAS_REBATE_API);
+    setClaimPlanKind("none");
+    setIsEstimatingClaimPlan(false);
+    setIsLoading(false);
+    setHasLoaded(false);
+    hasLoadedRef.current = false;
+  }, []);
+
+  const applyPayload = useCallback((payload: ApiRebatePayload) => {
+    if (!mountedRef.current) return;
+    setIsSupported(payload.isSupported);
+    setRebateEpochs(payload.participatingEpochs);
+    setClaimableEpochs(payload.claimableEpochList);
+    setClaimableEpochCount(payload.claimableEpochCount);
+    setPendingRebateWei(BigInt(payload.pendingRebateWei || "0"));
+    setDetails(payload.recentEpochs.map(parseApiEpochInfo).sort((a, b) => b.epoch - a.epoch));
+    setHasLoaded(true);
+  }, []);
+
+  const formatRebateError = useCallback((err: unknown): string => {
+    const msg = err instanceof Error ? err.message : String(err);
+    const low = msg.toLowerCase();
+    if (low.includes("notresolved")) return "Rebate is not claimable yet because the epoch is not resolved.";
+    if (low.includes("rebatealreadyclaimed")) return "One of the selected rebate epochs was already claimed.";
+    if (low.includes("norebateavailable") || low.includes("nothing to claim")) {
+      return "No rebate is currently claimable for the selected epochs.";
+    }
+    if (low.includes("emptyarray")) return "No rebate epochs were selected for claim.";
+    return msg;
+  }, []);
+
+  const confirmClaimBatch = useCallback(
+    async (hash: `0x${string}`, sender: `0x${string}`, epochArgs: bigint[]) => {
+      if (!publicClient) return;
+
+      for (let attempt = 0; attempt < REBATE_CONFIRM_ATTEMPTS; attempt += 1) {
+        try {
+          const receipt = await publicClient.getTransactionReceipt({ hash });
+          if (receipt.status !== "success") {
+            throw new Error(`Transaction reverted: ${hash}`);
+          }
+          return;
+        } catch (err) {
+          const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+          const missingReceipt =
+            message.includes("could not be found") ||
+            message.includes("not found");
+          if (!missingReceipt) {
+            throw err;
+          }
+        }
+
+        const remainingEpochs = await loadClaimableEpochsExact(publicClient, sender, epochArgs);
+        if (remainingEpochs.length === 0) {
+          return;
+        }
+
+        await delay(REBATE_CONFIRM_POLL_INTERVAL_MS);
+      }
+
+      throw new Error(
+        `Rebate claim confirmation timed out after ${TX_RECEIPT_TIMEOUT_MS}ms. Refresh the rebate tab in a few seconds.`,
+      );
     },
     [publicClient],
   );
 
-  const refetchRebateInfo = useCallback(async () => {
-    if (!enabled || !rebateAddress || !publicClient) {
-      setRebateEpochs([]);
-      setClaimableEpochs([]);
-      setClaimableEpochCount(0);
-      setPendingRebateWei(BigInt(0));
-      setDetails([]);
-      setIsSupported(CONTRACT_HAS_REBATE_API);
-      rebateEpochScanCacheRef.current = { address: null, epochs: [], lastBlock: null };
+  const refetchRebateInfo = useCallback(async (options?: { forceFresh?: boolean }) => {
+    if (!enabled || !rebateAddress) {
+      resetState();
       return;
     }
 
@@ -226,104 +355,61 @@ export function useRebate(options?: UseRebateOptions) {
         rebateUnavailableWarningRef.current = true;
         log.info("Rebate", "disabled for legacy contract profile");
       }
-      setRebateEpochs([]);
-      setClaimableEpochs([]);
-      setClaimableEpochCount(0);
-      setPendingRebateWei(BigInt(0));
-      setDetails([]);
-      setIsSupported(false);
+      if (mountedRef.current) {
+        setIsSupported(false);
+        setIsLoading(false);
+        setRebateEpochs([]);
+        setClaimableEpochs([]);
+        setClaimableEpochCount(0);
+        setPendingRebateWei(0n);
+        setDetails([]);
+      }
+      hasLoadedRef.current = true;
+      if (mountedRef.current) {
+        setHasLoaded(true);
+      }
       return;
     }
 
+    const requestId = ++requestIdRef.current;
+    if (!hasLoadedRef.current) {
+      const cached = loadCachedRebatePayload(rebateAddress);
+      if (cached && Date.now() - cached.cachedAt < REBATE_CLIENT_CACHE_TTL_MS) {
+        applyPayload(cached);
+        hasLoadedRef.current = true;
+        cacheSavedAtRef.current = cached.cachedAt;
+      }
+    }
+
+    if (!hasLoadedRef.current) {
+      if (mountedRef.current) {
+        setIsLoading(true);
+      }
+    }
+
     try {
-      setIsSupported(true);
-      const cache = rebateEpochScanCacheRef.current;
-      const nextScan = await loadUserRebateEpochs(
-        publicClient,
-        rebateAddress,
-        cache.address === rebateAddress ? { epochs: cache.epochs, lastBlock: cache.lastBlock } : undefined,
-      );
-      rebateEpochScanCacheRef.current = {
-        address: rebateAddress,
-        epochs: nextScan.epochs,
-        lastBlock: nextScan.lastBlock,
-      };
-      const epochs = nextScan.epochs;
-
-      const epochList = epochs.map((epoch) => Number(epoch));
-      setRebateEpochs(epochList);
-
-      if (epochList.length === 0) {
-        setClaimableEpochs([]);
-        setClaimableEpochCount(0);
-        setPendingRebateWei(BigInt(0));
-        setDetails([]);
-        return;
-      }
-
-      let totalPending = BigInt(0);
-      let summaryClaimableCount = 0;
-
-      for (let i = 0; i < epochs.length; i += REBATE_SUMMARY_CHUNK_SIZE) {
-        const chunk = epochs.slice(i, i + REBATE_SUMMARY_CHUNK_SIZE);
-        const summary = (await publicClient.readContract({
-          address: CONTRACT_ADDRESS,
-          abi: GAME_ABI,
-          functionName: "getRebateSummary",
-          args: [rebateAddress, chunk],
-        })) as [bigint, bigint];
-        totalPending += summary[0];
-        summaryClaimableCount += Number(summary[1]);
-      }
-      setPendingRebateWei(totalPending);
-      const exactClaimableEpochs =
-        summaryClaimableCount > 0
-          ? await loadClaimableEpochsExact(publicClient, rebateAddress, epochs)
-          : [];
-      setClaimableEpochCount(exactClaimableEpochs.length);
-
-      const recentEpochs = [...epochs].reverse().slice(0, REBATE_DETAILS_LIMIT);
-      const contracts = recentEpochs.map((epoch) => ({
-        address: CONTRACT_ADDRESS,
-        abi: GAME_ABI,
-        functionName: "getRebateInfo" as const,
-        args: [epoch, rebateAddress] as const,
-      }));
-      const results = await publicClient.multicall({ contracts });
-
-      const nextDetails: RebateEpochInfo[] = [];
-      const nextClaimable = new Set<number>(exactClaimableEpochs);
-
-      results.forEach((result, index) => {
-        if (result.status !== "success") return;
-        const epoch = Number(recentEpochs[index]);
-        const [rebatePoolWei, userVolumeWei, pendingWei, claimed, resolved] = result.result as [
-          bigint,
-          bigint,
-          bigint,
-          boolean,
-          boolean,
-        ];
-        if (pendingWei > 0 && !claimed && resolved) {
-          nextClaimable.add(epoch);
-        }
-        nextDetails.push({
-          epoch,
-          pendingWei,
-          pending: formatUnits(pendingWei, 18),
-          claimed,
-          resolved,
-          userVolumeWei,
-          rebatePoolWei,
-        });
+      const refreshSuffix = options?.forceFresh ? `&refresh=${Date.now()}` : "";
+      const response = await fetch(`/api/rebates?user=${rebateAddress.toLowerCase()}${refreshSuffix}`, {
+        cache: "no-store",
       });
+      const payload = await readJsonResponse<ApiRebatePayload>(response);
 
-      if (exactClaimableEpochs.length === 0) {
-        setClaimableEpochs([]);
-      } else {
-        setClaimableEpochs([...nextClaimable].sort((a, b) => b - a));
+      if (!payload) {
+        throw new Error(`Empty response from /api/rebates (HTTP ${response.status})`);
       }
-      setDetails(nextDetails.sort((a, b) => b.epoch - a.epoch));
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+
+      if (requestId !== requestIdRef.current) return;
+
+      applyPayload(payload);
+      saveCachedRebatePayload(rebateAddress, payload);
+      hasLoadedRef.current = true;
+      if (mountedRef.current) {
+        setHasLoaded(true);
+      }
+      cacheSavedAtRef.current = Date.now();
     } catch (err) {
       if (
         isMissingContractMethodError(err, "getRebateSummary") ||
@@ -334,102 +420,381 @@ export function useRebate(options?: UseRebateOptions) {
           rebateUnavailableWarningRef.current = true;
           log.info("Rebate", "rebate methods unavailable for current contract profile");
         }
-        setIsSupported(false);
+        if (mountedRef.current) {
+          setIsSupported(false);
+        }
       } else {
         log.warn("Rebate", "refetch failed", err);
       }
-      setClaimableEpochs([]);
-      setClaimableEpochCount(0);
-      setPendingRebateWei(BigInt(0));
-      setDetails([]);
+
+      if (!hasLoadedRef.current) {
+        if (mountedRef.current) {
+          setRebateEpochs([]);
+          setClaimableEpochs([]);
+          setClaimableEpochCount(0);
+          setPendingRebateWei(0n);
+          setDetails([]);
+          setHasLoaded(false);
+        }
+      }
+    } finally {
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
-  }, [enabled, publicClient, rebateAddress, rebateUnavailableWarningRef]);
+  }, [applyPayload, enabled, rebateAddress, resetState]);
 
   useEffect(() => {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+
     if (!enabled) {
-      setRebateEpochs([]);
-      setClaimableEpochs([]);
-      setClaimableEpochCount(0);
-      setPendingRebateWei(BigInt(0));
-      setDetails([]);
-      setIsSupported(CONTRACT_HAS_REBATE_API);
-      rebateEpochScanCacheRef.current = { address: null, epochs: [], lastBlock: null };
+      resetState();
       return;
     }
-    void refetchRebateInfo();
+
     if (!rebateAddress) return;
-    const id = window.setInterval(() => {
-      void refetchRebateInfo();
-    }, 30_000);
-    return () => window.clearInterval(id);
-  }, [enabled, rebateAddress, refetchRebateInfo]);
+
+    if (!hasLoadedRef.current) {
+      const cached = loadCachedRebatePayload(rebateAddress);
+      if (cached && Date.now() - cached.cachedAt < REBATE_CLIENT_CACHE_TTL_MS) {
+        applyPayload(cached);
+        hasLoadedRef.current = true;
+        cacheSavedAtRef.current = cached.cachedAt;
+      }
+    }
+
+    const pollMs = active
+      ? (isPageVisible ? REBATE_REFRESH_MS : REBATE_HIDDEN_REFRESH_MS)
+      : REBATE_WARM_REFRESH_MS;
+    const savedAt = cacheSavedAtRef.current;
+    const initialDelay =
+      savedAt && Date.now() - savedAt < REBATE_CLIENT_CACHE_TTL_MS
+        ? REBATE_CLIENT_CACHE_TTL_MS - (Date.now() - savedAt)
+        : 0;
+    let cancelled = false;
+
+    const schedule = (delayMs: number) => {
+      timeoutRef.current = window.setTimeout(async () => {
+        if (cancelled) return;
+        await refetchRebateInfo();
+        if (cancelled) return;
+        schedule(pollMs);
+      }, delayMs);
+    };
+
+    schedule(initialDelay);
+    return () => {
+      cancelled = true;
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, [active, applyPayload, enabled, isPageVisible, rebateAddress, refetchRebateInfo, resetState]);
+
+  useEffect(() => {
+    if (!enabled || !CONTRACT_HAS_REBATE_API) {
+      if (mountedRef.current) {
+        setClaimPlanKind("none");
+        setIsEstimatingClaimPlan(false);
+      }
+      return;
+    }
+
+    if (!rebateAddress || !publicClient) {
+      if (mountedRef.current) {
+        setClaimPlanKind("unknown");
+        setIsEstimatingClaimPlan(false);
+      }
+      return;
+    }
+
+    if (claimableEpochs.length === 0) {
+      if (mountedRef.current) {
+        setClaimPlanKind("none");
+        setIsEstimatingClaimPlan(false);
+      }
+      return;
+    }
+
+    if (!active || !isPageVisible) {
+      if (mountedRef.current) {
+        setIsEstimatingClaimPlan(false);
+      }
+      return;
+    }
+
+    let cancelled = false;
+    const epochArgs = claimableEpochs.map((epoch) => BigInt(epoch));
+    const cachedPlan = loadCachedClaimPlan(rebateAddress, claimableEpochs);
+    if (cachedPlan && Date.now() - cachedPlan.savedAt < CLAIM_PLAN_CACHE_TTL_MS) {
+      if (mountedRef.current) {
+        setClaimPlanKind(cachedPlan.kind);
+        setIsEstimatingClaimPlan(false);
+      }
+      return;
+    }
+
+    if (mountedRef.current) {
+      setIsEstimatingClaimPlan(true);
+    }
+    void publicClient.estimateContractGas({
+      address: CONTRACT_ADDRESS,
+      abi: GAME_ABI,
+      functionName: "claimEpochsRebate",
+      args: [epochArgs],
+      account: rebateAddress,
+    }).then(() => {
+      if (cancelled) return;
+      setClaimPlanKind("single");
+      saveCachedClaimPlan(rebateAddress, claimableEpochs, "single");
+    }).catch(() => {
+      if (cancelled) return;
+      const fallbackKind = claimableEpochs.length > 1 ? "split" : "unknown";
+      setClaimPlanKind(fallbackKind);
+      saveCachedClaimPlan(rebateAddress, claimableEpochs, fallbackKind);
+    }).finally(() => {
+      if (cancelled) return;
+      setIsEstimatingClaimPlan(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [active, claimableEpochs, enabled, isPageVisible, publicClient, rebateAddress]);
 
   const claimRebates = useCallback(async () => {
     if (!CONTRACT_HAS_REBATE_API || !rebateAddress || !publicClient || rebateEpochs.length === 0) return;
-    setIsClaiming(true);
+    if (mountedRef.current) {
+      setIsClaiming(true);
+    }
+
+    let claimedEpochCount = 0;
+    let claimTxCount = 0;
+    let usedSplitFallback = false;
+
     try {
+      const connected = address ? getAddress(address) : null;
+      const sender = silentSend ? rebateAddress : connected;
+      if (!sender) {
+        notify?.("Connect a wallet to claim rebates.", "warning");
+        return;
+      }
+
+      if (!silentSend && sender.toLowerCase() !== rebateAddress.toLowerCase()) {
+        throw new Error(
+          `Rebate claim sender mismatch. Rebate is loaded for ${rebateAddress}, but your connected wallet is ${sender}. Switch wallets or use the embedded wallet and try again.`,
+        );
+      }
+
       const candidateEpochs = claimableEpochs.length > 0 ? claimableEpochs : rebateEpochs;
       const verifiedClaimableEpochs = await loadClaimableEpochsExact(
         publicClient,
-        rebateAddress,
+        sender,
         candidateEpochs.map((epoch) => BigInt(epoch)),
       );
 
       if (verifiedClaimableEpochs.length === 0) {
-        await refetchRebateInfo();
-        if (typeof window !== "undefined") {
-          window.alert("No claimable rebate epochs were found. Rebate state has been refreshed.");
-        }
+        await refetchRebateInfo({ forceFresh: true });
+        notify?.("No claimable rebate epochs were found. Rebate state has been refreshed.", "info");
         return;
       }
 
-      const epochArgs = verifiedClaimableEpochs.map((epoch) => BigInt(epoch));
-      await publicClient.simulateContract({
-        address: CONTRACT_ADDRESS,
-        abi: GAME_ABI,
-        functionName: "claimEpochsRebate",
-        args: [epochArgs],
-        account: rebateAddress,
-        gas: GAS_CLAIM_REBATES,
-      });
+      const estimateClaimGas = async (epochArgs: bigint[]) => {
+        try {
+          const estimated = await publicClient.estimateContractGas({
+            address: CONTRACT_ADDRESS,
+            abi: GAME_ABI,
+            functionName: "claimEpochsRebate",
+            args: [epochArgs],
+            account: sender,
+          });
+          return ((estimated * CLAIM_GAS_HEADROOM_BPS) / 1_000n) + CLAIM_GAS_BUFFER;
+        } catch {
+          return GAS_CLAIM_REBATES;
+        }
+      };
 
-      const silentSend = options?.sendTransactionSilent;
+      const estimateSingleClaimGas = async (epoch: bigint) => {
+        try {
+          const estimated = await publicClient.estimateContractGas({
+            address: CONTRACT_ADDRESS,
+            abi: GAME_ABI,
+            functionName: "claimEpochRebate",
+            args: [epoch],
+            account: sender,
+          });
+          return ((estimated * CLAIM_GAS_HEADROOM_BPS) / 1_000n) + CLAIM_GAS_BUFFER;
+        } catch {
+          return GAS_CLAIM_REBATES;
+        }
+      };
 
-      if (silentSend) {
-        const data = encodeFunctionData({
-          abi: GAME_ABI,
-          functionName: "claimEpochsRebate",
-          args: [epochArgs],
-        });
-        const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas: GAS_CLAIM_REBATES });
-        await waitReceipt(hash);
-      } else {
+      const submitClaimBatch = async (epochArgs: bigint[]) => {
+        const gas = await estimateClaimGas(epochArgs);
+
+        if (silentSend) {
+          const data = encodeFunctionData({
+            abi: GAME_ABI,
+            functionName: "claimEpochsRebate",
+            args: [epochArgs],
+          });
+          const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+          claimTxCount += 1;
+          await confirmClaimBatch(hash, sender, epochArgs);
+          return;
+        }
+
         const hash = await writeContractAsync({
           address: CONTRACT_ADDRESS,
           abi: GAME_ABI,
           functionName: "claimEpochsRebate",
           args: [epochArgs],
           chainId: APP_CHAIN_ID,
-          gas: GAS_CLAIM_REBATES,
+          gas,
         });
-        await waitReceipt(hash);
-      }
+        claimTxCount += 1;
+        await confirmClaimBatch(hash, sender, epochArgs);
+      };
 
-      log.info("Rebate", "claimed", { epochs: verifiedClaimableEpochs.length });
-      await refetchRebateInfo();
+      const submitSingleClaim = async (epoch: bigint) => {
+        const gas = await estimateSingleClaimGas(epoch);
+
+        if (silentSend) {
+          const data = encodeFunctionData({
+            abi: GAME_ABI,
+            functionName: "claimEpochRebate",
+            args: [epoch],
+          });
+          const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+          claimTxCount += 1;
+          await confirmClaimBatch(hash, sender, [epoch]);
+          return;
+        }
+
+        const hash = await writeContractAsync({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "claimEpochRebate",
+          args: [epoch],
+          chainId: APP_CHAIN_ID,
+          gas,
+        });
+        claimTxCount += 1;
+        await confirmClaimBatch(hash, sender, [epoch]);
+      };
+
+      const claimBatches = async (epochArgs: bigint[]): Promise<number> => {
+        if (epochArgs.length === 0) return 0;
+
+        const queue: bigint[][] =
+          claimPlanKind === "split" && epochArgs.length > 1
+            ? [
+                epochArgs.slice(0, Math.ceil(epochArgs.length / 2)),
+                epochArgs.slice(Math.ceil(epochArgs.length / 2)),
+              ]
+            : [epochArgs];
+
+        if (queue.length > 1) {
+          usedSplitFallback = true;
+          notify?.("Rebate claim is being sent in multiple transactions. Please wait until all parts finish.", "info");
+        }
+
+        let localClaimedCount = 0;
+        while (queue.length > 0) {
+          const batch = queue.shift();
+          if (!batch || batch.length === 0) continue;
+
+          try {
+            await submitClaimBatch(batch);
+            localClaimedCount += batch.length;
+          } catch (err) {
+            if (batch.length === 1) {
+              usedSplitFallback = true;
+              log.warn("Rebate", "batch claim failed for single epoch, trying claimEpochRebate fallback", {
+                epoch: Number(batch[0]),
+                err,
+              });
+              await submitSingleClaim(batch[0]);
+              localClaimedCount += 1;
+              continue;
+            }
+
+            usedSplitFallback = true;
+            const middle = Math.ceil(batch.length / 2);
+            queue.unshift(batch.slice(middle));
+            queue.unshift(batch.slice(0, middle));
+          }
+        }
+
+        return localClaimedCount;
+      };
+
+      claimedEpochCount = await claimBatches(
+        verifiedClaimableEpochs.map((epoch) => BigInt(epoch)),
+      );
+
+      log.info("Rebate", "claimed", {
+        epochs: claimedEpochCount,
+        txCount: claimTxCount,
+        split: usedSplitFallback,
+      });
+      notify?.(
+        claimedEpochCount === 1
+          ? claimTxCount <= 1
+            ? "Rebate claimed successfully in 1 transaction."
+            : `Rebate claimed successfully in ${claimTxCount} transactions.`
+          : claimTxCount <= 1
+            ? `Claimed rebates for ${claimedEpochCount} epochs in 1 transaction.`
+            : `Claimed rebates for ${claimedEpochCount} epochs in ${claimTxCount} transactions.`,
+        "success",
+      );
+      await refetchRebateInfo({ forceFresh: true });
     } catch (err) {
+      await refetchRebateInfo({ forceFresh: true });
+
       if (isUserRejection(err)) {
         log.warn("Rebate", "claim cancelled", err);
+        if (claimedEpochCount > 0) {
+          notify?.(
+            `Claimed rebates for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"} before the remaining claim flow was cancelled.`,
+            "warning",
+          );
+        }
       } else {
         log.error("Rebate", "claim failed", err);
-        if (typeof window !== "undefined") {
-          window.alert(`Rebate claim failed: ${err instanceof Error ? err.message : String(err)}`);
+        const message = formatRebateError(err);
+        if (claimedEpochCount > 0) {
+          notify?.(
+            `Claimed rebates for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"}, but some epochs still failed: ${message}`,
+            "warning",
+          );
+        } else {
+          notify?.(`Rebate claim failed: ${message}`, "danger");
         }
       }
     } finally {
-      setIsClaiming(false);
+      if (mountedRef.current) {
+        setIsClaiming(false);
+      }
     }
-  }, [claimableEpochs, options?.sendTransactionSilent, publicClient, rebateAddress, rebateEpochs, refetchRebateInfo, waitReceipt, writeContractAsync]);
+  }, [
+    address,
+    claimPlanKind,
+    claimableEpochs,
+    formatRebateError,
+    notify,
+    publicClient,
+    rebateAddress,
+    rebateEpochs,
+    refetchRebateInfo,
+    silentSend,
+    confirmClaimBatch,
+    writeContractAsync,
+  ]);
 
   const rebateInfo = useMemo(
     () => ({
@@ -439,8 +804,22 @@ export function useRebate(options?: UseRebateOptions) {
       claimableEpochs: claimableEpochCount,
       totalEpochs: rebateEpochs.length,
       recentEpochs: details,
+      isLoading,
+      hasLoaded,
+      claimPlanKind,
+      isEstimatingClaimPlan,
     }),
-    [claimableEpochCount, details, isSupported, pendingRebateWei, rebateEpochs.length],
+    [
+      claimPlanKind,
+      claimableEpochCount,
+      details,
+      hasLoaded,
+      isEstimatingClaimPlan,
+      isLoading,
+      isSupported,
+      pendingRebateWei,
+      rebateEpochs.length,
+    ],
   );
 
   return {

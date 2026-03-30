@@ -4,28 +4,18 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
- * @title LineaOreV6
+ * @title LineaOreV7
  * @notice On-chain prediction mining game with daily & weekly jackpots.
  *         Fee split: 2% daily jackpot, 3% weekly jackpot, 2% protocol
  *         (half treasury, half participation rebate), 1% burn.
- *         Each day/week, one random resolved epoch awards the accumulated jackpot pool
- *         to the winning-tile holders. Jackpot only triggers when someone bets on the
- *         winning tile; otherwise the base reward feeds the jackpot pools, growing them.
  *
- *         Governance model:
- *         - Ownable2Step for safe ownership handoff to a multisig or timelock.
- *         - Separate feeRecipient (treasury), so owner can be a timelock without trapping fees.
- *         - Sensitive treasury changes are timelocked on-chain for user visibility.
- *
- *         Participation rebate model:
- *         - Half of the 2% protocol fee (1% of the total pool) is saved as an epoch rebate pool.
- *         - Every bettor in that epoch can claim a proportional LINEA rebate later.
- *         - Rebate claiming is separated from reward claiming to keep the betting path simple.
+ *         V7 keeps the V6 external game/rebate API compatible while
+ *         making rebate accounting cheaper via per-user epoch volume tracking.
  */
-contract LineaOreV6 is Ownable2Step, ReentrancyGuard {
+contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable token;
@@ -79,6 +69,7 @@ contract LineaOreV6 is Ownable2Step, ReentrancyGuard {
     mapping(uint256 => Epoch) public epochs;
     mapping(uint256 => mapping(uint256 => uint256)) public tilePools;
     mapping(uint256 => mapping(uint256 => mapping(address => uint256))) public userBets;
+    mapping(uint256 => mapping(address => uint256)) public userEpochVolumes;
     mapping(address => mapping(uint256 => bool)) public hasClaimed;
     mapping(uint256 => uint256) public epochRewardClaimed;
     mapping(uint256 => bool) public epochDustSettled;
@@ -87,16 +78,17 @@ contract LineaOreV6 is Ownable2Step, ReentrancyGuard {
     uint256 public accruedBurnFees;
     mapping(address => uint256) public pendingResolverRewards;
 
-    // Participation rebate tracking.
     mapping(uint256 => uint256) public epochRebatePool;
     mapping(uint256 => mapping(address => bool)) public rebateClaimed;
 
     event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount);
     event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount);
+    event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount);
     event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus);
     event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount);
     event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount);
     event RewardClaimed(uint256 indexed epoch, address indexed user, uint256 reward);
+    event RewardBatchClaimed(address indexed user, uint256 totalAmount, uint256 epochsClaimed);
     event RewardDustSettled(uint256 indexed epoch, uint256 amount);
     event ResolverRewardAccrued(address indexed resolver, uint256 indexed epoch, uint256 amount);
     event ResolverRewardClaimed(address indexed resolver, uint256 amount);
@@ -180,10 +172,7 @@ contract LineaOreV6 is Ownable2Step, ReentrancyGuard {
 
         for (uint256 i = 0; i < len; ) {
             uint256 epoch = claimEpochs[i];
-            if (
-                epochs[epoch].isResolved &&
-                !rebateClaimed[epoch][msg.sender]
-            ) {
+            if (epochs[epoch].isResolved && !rebateClaimed[epoch][msg.sender]) {
                 uint256 amount = _previewRebate(epoch, msg.sender);
                 if (amount > 0) {
                     rebateClaimed[epoch][msg.sender] = true;
@@ -261,8 +250,29 @@ contract LineaOreV6 is Ownable2Step, ReentrancyGuard {
         emit BatchBetsPlaced(currentEpoch, msg.sender, tileIds, amounts, totalAmount);
     }
 
+    function placeBatchBetsSameAmount(uint256[] calldata tileIds, uint256 amount) external nonReentrant {
+        _autoResolveIfNeeded();
+        if (block.timestamp >= epochStartTime + epochDuration) revert EpochEnded();
+        uint256 len = tileIds.length;
+        if (len == 0) revert EmptyArray();
+        if (amount == 0) revert ZeroAmount();
+
+        uint256 totalAmount = amount * len;
+        token.safeTransferFrom(msg.sender, address(this), totalAmount);
+
+        for (uint256 i = 0; i < len; ) {
+            uint256 tileId = tileIds[i];
+            if (tileId == 0 || tileId > GRID_SIZE) revert InvalidTile();
+            _recordBet(msg.sender, tileId, amount);
+            unchecked { ++i; }
+        }
+
+        emit BatchBetsSameAmountPlaced(currentEpoch, msg.sender, tileIds, amount, totalAmount);
+    }
+
     function _recordBet(address user, uint256 tileId, uint256 amount) internal {
         userBets[currentEpoch][tileId][user] += amount;
+        userEpochVolumes[currentEpoch][user] += amount;
         tilePools[currentEpoch][tileId] += amount;
         epochs[currentEpoch].totalPool += amount;
     }
@@ -422,9 +432,6 @@ contract LineaOreV6 is Ownable2Step, ReentrancyGuard {
         }
     }
 
-    /**
-     * @dev Accrue 2% protocol fee: half to treasury, half to participation rebate pool.
-     */
     function _accrueProtocolFee(uint256 protocolFee, uint256 epoch) internal {
         if (protocolFee == 0) return;
 
@@ -459,6 +466,44 @@ contract LineaOreV6 is Ownable2Step, ReentrancyGuard {
 
         token.safeTransfer(msg.sender, reward);
         emit RewardClaimed(epoch, msg.sender, reward);
+    }
+
+    function claimRewards(uint256[] calldata claimEpochs) external nonReentrant {
+        uint256 len = claimEpochs.length;
+        if (len == 0) revert EmptyArray();
+
+        uint256 totalReward;
+        uint256 epochsClaimedCount;
+
+        for (uint256 i = 0; i < len; ) {
+            uint256 epoch = claimEpochs[i];
+            if (
+                epochs[epoch].isResolved &&
+                !epochDustSettled[epoch] &&
+                !hasClaimed[msg.sender][epoch] &&
+                !(
+                    epochResolvedAt[epoch] > 0 &&
+                    block.timestamp >= epochResolvedAt[epoch] + DUST_SETTLE_DELAY
+                )
+            ) {
+                uint256 winTile = epochs[epoch].winningTile;
+                uint256 userBet = userBets[epoch][winTile][msg.sender];
+                if (userBet > 0) {
+                    hasClaimed[msg.sender][epoch] = true;
+                    uint256 tileTotal = tilePools[epoch][winTile];
+                    uint256 reward = (epochs[epoch].rewardPool * userBet) / tileTotal;
+                    epochRewardClaimed[epoch] += reward;
+                    totalReward += reward;
+                    epochsClaimedCount += 1;
+                    emit RewardClaimed(epoch, msg.sender, reward);
+                }
+            }
+            unchecked { ++i; }
+        }
+
+        if (totalReward == 0) revert NothingToClaim();
+        token.safeTransfer(msg.sender, totalReward);
+        emit RewardBatchClaimed(msg.sender, totalReward, epochsClaimedCount);
     }
 
     function _previewRebate(uint256 epoch, address user) internal view returns (uint256) {
@@ -559,10 +604,7 @@ contract LineaOreV6 is Ownable2Step, ReentrancyGuard {
     }
 
     function _getUserEpochVolume(uint256 epoch, address user) internal view returns (uint256 volume) {
-        for (uint256 tileId = 1; tileId <= GRID_SIZE; ) {
-            volume += userBets[epoch][tileId][user];
-            unchecked { ++tileId; }
-        }
+        return userEpochVolumes[epoch][user];
     }
 
     function _scheduleEpochDuration(uint256 newDuration) internal {

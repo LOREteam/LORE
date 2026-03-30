@@ -70,7 +70,9 @@ export const TOKEN_ABI = parseAbi([
 export const GAME_ABI = parseAbi([
   "function placeBet(uint256 _tileId, uint256 _amount) external",
   "function placeBatchBets(uint256[] calldata _tileIds, uint256[] calldata _amounts) external",
+  "function placeBatchBetsSameAmount(uint256[] calldata _tileIds, uint256 _amount) external",
   "function claimReward(uint256 _epoch) external",
+  "function claimRewards(uint256[] calldata _epochs) external",
   "function claimEpochRebate(uint256 epoch) external",
   "function claimEpochsRebate(uint256[] calldata claimEpochs) external",
   "function settleEpochDust(uint256 epoch) external",
@@ -116,12 +118,20 @@ export const GAME_ABI = parseAbi([
   "error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)",
   "error TimerNotEnded()",
   "error CanOnlyResolveCurrent()",
+  // V6+ custom errors (improves UI error decoding)
+  "error NotResolved()",
+  "error RebateAlreadyClaimed()",
+  "error NoRebateAvailable()",
+  "error EmptyArray()",
+  "error NothingToClaim()",
 ]);
 
 export const GAME_EVENTS_ABI = parseAbi([
   "event RewardClaimed(uint256 indexed epoch, address indexed user, uint256 reward)",
+  "event RewardBatchClaimed(address indexed user, uint256 totalAmount, uint256 epochsClaimed)",
   "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
   "event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)",
+  "event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount)",
   "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
   "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
   "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",

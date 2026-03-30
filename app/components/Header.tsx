@@ -1,29 +1,24 @@
-"use client";
+﻿"use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
-import { formatTime, shortenAddress } from "../lib/utils";
+import { formatTime } from "../lib/utils";
 import { WinsTicker } from "./WinsTicker";
+import type { JackpotHistoryEntry } from "../hooks/useJackpotHistory";
 import type { RecentWin } from "../hooks/useRecentWins";
-import { UiButton } from "./ui/UiButton";
-import { uiTokens } from "./ui/tokens";
+import { HeaderJackpots } from "./header/HeaderJackpots";
+import { HeaderPoolChart } from "./header/HeaderPoolChart";
+import { HeaderWalletCard } from "./header/HeaderWalletCard";
+import type { JackpotDisplayInfo } from "./header/types";
 
 const JACKPOT_NOTICE_MS = 30 * 60 * 1000;
 
-export interface JackpotDisplayInfo {
-  dailyPool: number;
-  weeklyPool: number;
-  lastDailyDay: number;
-  lastWeeklyWeek: number;
-  lastDailyJackpotEpoch: string | null;
-  lastWeeklyJackpotEpoch: string | null;
-  lastDailyJackpotAmount: number;
-  lastWeeklyJackpotAmount: number;
-}
-
 interface HeaderProps {
+  initialNowMs?: number;
   visualEpoch: string | null;
   isRevealing: boolean;
+  coldBootDefaults?: boolean;
+  liveStateReady?: boolean;
   timeLeft: number;
   realTotalStaked: number;
   rolloverAmount: number;
@@ -31,6 +26,7 @@ interface HeaderProps {
   linePath: string;
   chartHasData: boolean;
   embeddedWalletAddress: string | null;
+  embeddedWalletSyncing?: boolean;
   privyEthBalance: string;
   privyEthBalanceLoading?: boolean;
   privyTokenBalance: string;
@@ -39,8 +35,10 @@ interface HeaderProps {
   muted: boolean;
   onToggleMute: () => void;
   recentWins?: RecentWin[];
+  jackpotHistory?: JackpotHistoryEntry[];
   showWinsTicker?: boolean;
   reducedMotion?: boolean;
+  isPageVisible?: boolean;
   epochDurationChange?: {
     current: number | null;
     next: number;
@@ -50,8 +48,11 @@ interface HeaderProps {
 }
 
 export const Header = React.memo(function Header({
+  initialNowMs = 0,
   visualEpoch,
   isRevealing,
+  coldBootDefaults = false,
+  liveStateReady = true,
   timeLeft,
   realTotalStaked,
   rolloverAmount,
@@ -59,6 +60,7 @@ export const Header = React.memo(function Header({
   linePath,
   chartHasData,
   embeddedWalletAddress,
+  embeddedWalletSyncing = false,
   privyEthBalance,
   privyEthBalanceLoading = false,
   privyTokenBalance,
@@ -67,19 +69,29 @@ export const Header = React.memo(function Header({
   muted,
   onToggleMute,
   recentWins = [],
+  jackpotHistory = [],
   showWinsTicker = false,
   reducedMotion = false,
+  isPageVisible = true,
   epochDurationChange = null,
 }: HeaderProps) {
   const { login, logout, authenticated } = usePrivy();
+  const showColdBootDefaults = coldBootDefaults && !liveStateReady && !isRevealing;
   // Sticky "Analyzing": avoid switching to Mining during brief 00:00 refreshes
+  const [hydrated, setHydrated] = useState(false);
   const [showAnalyzing, setShowAnalyzing] = useState(false);
   const [embeddedAddressCopied, setEmbeddedAddressCopied] = useState(false);
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const [dailyAwardVisibleUntil, setDailyAwardVisibleUntil] = useState(0);
-  const [weeklyAwardVisibleUntil, setWeeklyAwardVisibleUntil] = useState(0);
-  const prevDailyEpochRef = useRef<string | null>(null);
-  const prevWeeklyEpochRef = useRef<string | null>(null);
+  const [nowMs, setNowMs] = useState(initialNowMs);
+  const mountedRef = useRef(false);
+  const historyReady = hydrated;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    setHydrated(true);
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!embeddedAddressCopied) return;
@@ -88,87 +100,20 @@ export const Header = React.memo(function Header({
   }, [embeddedAddressCopied]);
 
   useEffect(() => {
-    if (!jackpotInfo) return;
-    const now = Date.now();
-
-    const saveNotice = (key: string, epoch: string, until: number) => {
-      try {
-        localStorage.setItem(key, JSON.stringify({ epoch, until }));
-      } catch {
-        // ignore storage errors
-      }
-    };
-    const loadNotice = (key: string): { epoch: string; until: number } | null => {
-      try {
-        const raw = localStorage.getItem(key);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw) as { epoch?: string; until?: number };
-        if (!parsed?.epoch || typeof parsed.until !== "number") return null;
-        return { epoch: parsed.epoch, until: parsed.until };
-      } catch {
-        return null;
-      }
-    };
-
-    const dailyEpoch = jackpotInfo.lastDailyJackpotEpoch ?? null;
-    const weeklyEpoch = jackpotInfo.lastWeeklyJackpotEpoch ?? null;
-
-    if (dailyEpoch && prevDailyEpochRef.current === null) {
-      const cached = loadNotice("lore:daily-jackpot-notice");
-      if (cached?.epoch === dailyEpoch && cached.until > now) {
-        setDailyAwardVisibleUntil(cached.until);
-      } else {
-        setDailyAwardVisibleUntil(0);
-        try {
-          localStorage.removeItem("lore:daily-jackpot-notice");
-        } catch {
-          /* ignore */
-        }
-      }
-      prevDailyEpochRef.current = dailyEpoch;
-    } else if (dailyEpoch && prevDailyEpochRef.current !== null && dailyEpoch !== prevDailyEpochRef.current) {
-      const until = now + JACKPOT_NOTICE_MS;
-      setDailyAwardVisibleUntil(until);
-      saveNotice("lore:daily-jackpot-notice", dailyEpoch, until);
-      prevDailyEpochRef.current = dailyEpoch;
-    } else if (!dailyEpoch) {
-      setDailyAwardVisibleUntil(0);
-      prevDailyEpochRef.current = null;
+    if (!liveStateReady) {
+      setShowAnalyzing(false);
+      return;
     }
-
-    if (weeklyEpoch && prevWeeklyEpochRef.current === null) {
-      const cached = loadNotice("lore:weekly-jackpot-notice");
-      if (cached?.epoch === weeklyEpoch && cached.until > now) {
-        setWeeklyAwardVisibleUntil(cached.until);
-      } else {
-        setWeeklyAwardVisibleUntil(0);
-        try {
-          localStorage.removeItem("lore:weekly-jackpot-notice");
-        } catch {
-          /* ignore */
-        }
-      }
-      prevWeeklyEpochRef.current = weeklyEpoch;
-    } else if (weeklyEpoch && prevWeeklyEpochRef.current !== null && weeklyEpoch !== prevWeeklyEpochRef.current) {
-      const until = now + JACKPOT_NOTICE_MS;
-      setWeeklyAwardVisibleUntil(until);
-      saveNotice("lore:weekly-jackpot-notice", weeklyEpoch, until);
-      prevWeeklyEpochRef.current = weeklyEpoch;
-    } else if (!weeklyEpoch) {
-      setWeeklyAwardVisibleUntil(0);
-      prevWeeklyEpochRef.current = null;
-    }
-  }, [jackpotInfo]);
-
-  useEffect(() => {
     if (timeLeft === 0 || isRevealing) setShowAnalyzing(true);
     else if (timeLeft > 10 && !isRevealing) setShowAnalyzing(false);
-  }, [timeLeft, isRevealing]);
+  }, [liveStateReady, timeLeft, isRevealing]);
 
   useEffect(() => {
+    if (!isPageVisible) return;
+    setNowMs(Date.now());
     const id = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [isPageVisible]);
 
   const dailyWindow = useMemo(() => {
     const dayMs = 86_400_000;
@@ -194,174 +139,77 @@ export const Header = React.memo(function Header({
   const dailyAwardedToday = Boolean(jackpotInfo && jackpotInfo.lastDailyDay === todayDayIdx);
   const weeklyNowIdx = Math.floor((nowMs + 3 * 86_400_000) / 604_800_000);
   const weeklyAwardedThisWeek = Boolean(jackpotInfo && jackpotInfo.lastWeeklyWeek === weeklyNowIdx);
+  const lastDailyJackpotEpoch = jackpotInfo?.lastDailyJackpotEpoch ?? null;
+  const lastWeeklyJackpotEpoch = jackpotInfo?.lastWeeklyJackpotEpoch ?? null;
+  const latestDailyAward = useMemo(
+    () =>
+      historyReady && lastDailyJackpotEpoch
+        ? jackpotHistory.find(
+            (entry) =>
+              entry.kind === "daily" &&
+              entry.epoch === lastDailyJackpotEpoch &&
+              typeof entry.timestamp === "number",
+          ) ?? null
+        : null,
+    [historyReady, jackpotHistory, lastDailyJackpotEpoch],
+  );
+  const latestWeeklyAward = useMemo(
+    () =>
+      historyReady && lastWeeklyJackpotEpoch
+        ? jackpotHistory.find(
+            (entry) =>
+              entry.kind === "weekly" &&
+              entry.epoch === lastWeeklyJackpotEpoch &&
+              typeof entry.timestamp === "number",
+          ) ?? null
+        : null,
+    [historyReady, jackpotHistory, lastWeeklyJackpotEpoch],
+  );
+  const dailyAwardVisibleUntil = latestDailyAward?.timestamp ? latestDailyAward.timestamp + JACKPOT_NOTICE_MS : 0;
+  const weeklyAwardVisibleUntil = latestWeeklyAward?.timestamp ? latestWeeklyAward.timestamp + JACKPOT_NOTICE_MS : 0;
+  const epochDurationEta = epochDurationChange?.eta ?? null;
+  const epochDurationEtaLabel = useMemo(() => {
+    if (!epochDurationEta) return null;
+    return `${new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      timeZone: "UTC",
+    }).format(new Date(epochDurationEta * 1000))} UTC`;
+  }, [epochDurationEta]);
+  const handleCopyEmbeddedAddress = useCallback(() => {
+    if (!embeddedWalletAddress) return;
+    void navigator.clipboard
+      .writeText(embeddedWalletAddress)
+      .then(() => {
+        if (mountedRef.current) {
+          setEmbeddedAddressCopied(true);
+        }
+      })
+      .catch(() => {});
+  }, [embeddedWalletAddress]);
 
   return (
     <>
-    {jackpotInfo && (jackpotInfo.dailyPool > 0 || jackpotInfo.weeklyPool > 0) && (
-      <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-1.5 mb-1.5 animate-slide-up" style={{ animationDelay: "0s" }}>
-        {/* Daily Jackpot */}
-        <div className="relative overflow-hidden rounded-lg border border-amber-500/25 bg-[#0d0d1a] group hover:border-amber-500/40 transition-all duration-300">
-          <div className="absolute inset-0 bg-gradient-to-r from-amber-500/[0.04] to-transparent pointer-events-none" />
-          {nowMs < dailyAwardVisibleUntil && jackpotInfo.lastDailyJackpotEpoch && (
-            <div className="absolute inset-0 z-20 pointer-events-none">
-              <div className="absolute inset-0 bg-amber-400/[0.08] animate-pulse" />
-              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-amber-300/[0.25] to-transparent animate-gradient-x" />
-            </div>
-          )}
-          <div className="relative z-10 px-2 py-1.5 sm:px-2.5">
-            {nowMs < dailyAwardVisibleUntil && jackpotInfo.lastDailyJackpotEpoch ? (
-              <div className="flex flex-col items-start gap-1.5 min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-xs sm:text-sm">🎉</span>
-                  <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-amber-300 animate-pulse sm:text-[12px] sm:tracking-[0.16em]">
-                    Daily Jackpot Awarded
-                  </span>
-                </div>
-                <div className="text-left min-[520px]:text-right shrink-0">
-                  <div className="text-[11px] sm:text-[12px] font-black text-amber-300 tabular-nums">
-                    +{jackpotInfo.lastDailyJackpotAmount.toFixed(2)} LINEA
-                  </div>
-                  <div className="text-[8px] text-amber-200/75 font-bold uppercase tracking-wider">
-                    Epoch #{jackpotInfo.lastDailyJackpotEpoch}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              dailyAwardedToday && jackpotInfo.lastDailyJackpotEpoch ? (
-                <div className="flex flex-col items-start gap-1.5 min-h-[38px] min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
-                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0">
-                    <span className="text-xs drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]">🎰</span>
-                    <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-amber-300 sm:text-[12px] sm:tracking-[0.16em]">
-                      Next Daily Jackpot
-                    </span>
-                    <span className="text-[13px] sm:text-[15px] font-black text-amber-400 tabular-nums leading-none">{jackpotInfo.dailyPool.toFixed(2)}</span>
-                    <span className="text-[9px] sm:text-[10px] text-amber-400/75 font-black tracking-wide">LINEA</span>
-                  </div>
-                  <div className="w-full min-[520px]:w-[8.5rem] shrink-0 flex flex-col items-start min-[520px]:items-end justify-center">
-                    <p className="text-[7px] text-emerald-300/80 font-semibold leading-tight text-right">
-                      Today JACKPOT was awarded
-                    </p>
-                    <p className="text-[7px] text-emerald-300/65 mt-0.5 font-semibold leading-tight">
-                      (epoch #{jackpotInfo.lastDailyJackpotEpoch})
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-start gap-1.5 min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
-                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0">
-                    <span className="text-xs drop-shadow-[0_0_4px_rgba(245,158,11,0.5)]">🎰</span>
-                    <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-amber-300 animate-pulse sm:text-[12px] sm:tracking-[0.16em]">
-                      Daily Jackpot
-                    </span>
-                    <span className="text-[13px] sm:text-[15px] font-black text-amber-400 tabular-nums leading-none">{jackpotInfo.dailyPool.toFixed(2)}</span>
-                    <span className="text-[9px] sm:text-[10px] text-amber-400/75 font-black tracking-wide">LINEA</span>
-                  </div>
-                  <div className="w-full min-[520px]:w-[8.5rem] shrink-0">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-[7px] text-amber-500/45 font-semibold uppercase tracking-wide">Window</span>
-                      <span className="text-[7px] text-amber-300/70 font-bold tabular-nums">{dailyWindow.leftLabel}</span>
-                    </div>
-                    <div className="h-1 rounded-full overflow-hidden bg-amber-900/35">
-                      <div
-                        className="h-full rounded-full transition-all duration-1000 bg-gradient-to-r from-amber-500 via-yellow-400 to-orange-400"
-                        style={{ width: `${dailyWindow.pct}%` }}
-                      />
-                    </div>
-                    <p className="text-[7px] mt-0.5 font-semibold text-amber-300/65 leading-tight">
-                      Day window progress - random trigger any time
-                    </p>
-                  </div>
-                </div>
-              )
-            )}
-          </div>
-        </div>
-
-        {/* Weekly Jackpot */}
-        <div className="relative overflow-hidden rounded-lg border border-violet-500/25 bg-[#0d0d1a] group hover:border-violet-500/40 transition-all duration-300">
-          <div className="absolute inset-0 bg-gradient-to-r from-violet-500/[0.04] to-transparent pointer-events-none" />
-          {nowMs < weeklyAwardVisibleUntil && jackpotInfo.lastWeeklyJackpotEpoch && (
-            <div className="absolute inset-0 z-20 pointer-events-none">
-              <div className="absolute inset-0 bg-violet-400/[0.08] animate-pulse" />
-              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-violet-300/[0.25] to-transparent animate-gradient-x" />
-            </div>
-          )}
-          <div className="relative z-10 px-2 py-1.5 sm:px-2.5">
-            {nowMs < weeklyAwardVisibleUntil && jackpotInfo.lastWeeklyJackpotEpoch ? (
-              <div className="flex flex-col items-start gap-1.5 min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-xs sm:text-sm">🎉</span>
-                  <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-violet-300 animate-pulse sm:text-[12px] sm:tracking-[0.16em]">
-                    Weekly Jackpot Awarded
-                  </span>
-                </div>
-                <div className="text-left min-[520px]:text-right shrink-0">
-                  <div className="text-[11px] sm:text-[12px] font-black text-violet-300 tabular-nums">
-                    +{jackpotInfo.lastWeeklyJackpotAmount.toFixed(2)} LINEA
-                  </div>
-                  <div className="text-[8px] text-violet-200/75 font-bold uppercase tracking-wider">
-                    Epoch #{jackpotInfo.lastWeeklyJackpotEpoch}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              weeklyAwardedThisWeek && jackpotInfo.lastWeeklyJackpotEpoch ? (
-                <div className="flex flex-col items-start gap-1.5 min-h-[38px] min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
-                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0">
-                    <span className="text-xs drop-shadow-[0_0_4px_rgba(139,92,246,0.5)]">💎</span>
-                    <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-violet-300 sm:text-[12px] sm:tracking-[0.16em]">
-                      Next Weekly Jackpot
-                    </span>
-                    <span className="text-[13px] sm:text-[15px] font-black text-violet-400 tabular-nums leading-none">{jackpotInfo.weeklyPool.toFixed(2)}</span>
-                    <span className="text-[9px] sm:text-[10px] text-violet-400/75 font-black tracking-wide">LINEA</span>
-                  </div>
-                  <div className="w-full min-[520px]:w-[8.5rem] shrink-0 flex flex-col items-start min-[520px]:items-end justify-center">
-                    <p className="text-[7px] text-emerald-300/80 font-semibold leading-tight text-right">
-                      This week JACKPOT was awarded
-                    </p>
-                    <p className="text-[7px] text-emerald-300/65 mt-0.5 font-semibold leading-tight">
-                      (epoch #{jackpotInfo.lastWeeklyJackpotEpoch})
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-start gap-1.5 min-[520px]:flex-row min-[520px]:items-center min-[520px]:justify-between">
-                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0">
-                    <span className="text-xs drop-shadow-[0_0_4px_rgba(139,92,246,0.5)]">💎</span>
-                    <span className="break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] text-violet-300 animate-pulse sm:text-[12px] sm:tracking-[0.16em]">
-                      Weekly Jackpot
-                    </span>
-                    <span className="text-[13px] sm:text-[15px] font-black text-violet-400 tabular-nums leading-none">{jackpotInfo.weeklyPool.toFixed(2)}</span>
-                    <span className="text-[9px] sm:text-[10px] text-violet-400/75 font-black tracking-wide">LINEA</span>
-                  </div>
-                  <div className="w-full min-[520px]:w-[8.5rem] shrink-0">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-[7px] text-violet-500/45 font-semibold uppercase tracking-wide">Window</span>
-                      <span className="text-[7px] text-violet-300/70 font-bold tabular-nums">{weeklyWindow.leftLabel}</span>
-                    </div>
-                    <div className="h-1 rounded-full overflow-hidden bg-violet-900/35">
-                      <div
-                        className="h-full rounded-full transition-all duration-1000 bg-gradient-to-r from-violet-500 via-purple-400 to-fuchsia-400"
-                        style={{ width: `${weeklyWindow.pct}%` }}
-                      />
-                    </div>
-                    <p className="text-[7px] mt-0.5 font-semibold text-violet-300/65 leading-tight">
-                      Week window progress - random trigger any time
-                    </p>
-                  </div>
-                </div>
-              )
-            )}
-          </div>
-        </div>
-      </div>
+    {jackpotInfo && (
+      <HeaderJackpots
+        jackpotInfo={jackpotInfo}
+        nowMs={nowMs}
+        dailyAwardVisibleUntil={dailyAwardVisibleUntil}
+        weeklyAwardVisibleUntil={weeklyAwardVisibleUntil}
+        dailyAwardedToday={dailyAwardedToday}
+        weeklyAwardedThisWeek={weeklyAwardedThisWeek}
+        dailyWindow={dailyWindow}
+        weeklyWindow={weeklyWindow}
+      />
     )}
 
     <header className="grid grid-cols-1 min-[900px]:grid-cols-12 gap-2 mb-2">
-      {/* ═══ Epoch + WinsTicker ═══ */}
+      {/* Epoch + WinsTicker */}
       <div className="min-[900px]:col-span-4 flex flex-col rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up overflow-hidden" style={{ animationDelay: "0.05s" }}>
         <div className="grid grid-cols-[5.25rem_minmax(0,1fr)_4.25rem] sm:grid-cols-[7rem_minmax(0,1fr)_5.5rem] items-stretch shrink-0">
-        {/* LEFT – Epoch */}
+        {/* LEFT - Epoch */}
         <div className="flex flex-col items-center justify-center py-1.5 px-1">
           <div className="text-[8px] sm:text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Epoch</div>
           <div className="rounded-md overflow-visible w-full max-w-[5rem] sm:max-w-[6.25rem] mx-auto">
@@ -374,29 +222,31 @@ export const Header = React.memo(function Header({
             >
             <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isRevealing ? "bg-amber-400 reveal-dot" : "bg-emerald-400 animate-synced-pulse"}`} />
             <span className={`text-[9px] font-bold uppercase tracking-[0.08em] sm:text-[11px] sm:tracking-widest whitespace-nowrap ${isRevealing ? "reveal-text-blink" : ""}`}>
-              {isRevealing ? "REVEAL" : visualEpoch ? `#${visualEpoch}` : "SYNC"}
+              {isRevealing ? "REVEAL" : visualEpoch ? `#${visualEpoch}` : showColdBootDefaults ? "#0" : "SYNC"}
             </span>
           </div>
           </div>
         </div>
 
-        {/* CENTER – Timer (expands to fill, content fixed) */}
+        {/* CENTER - Timer (expands to fill, content fixed) */}
         <div className="flex flex-col items-center justify-center py-1.5 border-x border-white/[0.06] min-w-0">
           <div className="text-[8px] sm:text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Timer</div>
           <div
             className={`w-full max-w-[5.5rem] sm:max-w-[7rem] h-[2rem] flex items-center justify-center font-mono text-[1.35rem] sm:text-[1.75rem] font-black tracking-tight leading-none tabular-nums transition-colors duration-300 ${
               isRevealing
                 ? "text-amber-400 drop-shadow-[0_0_12px_rgba(251,191,36,0.5)]"
+                : !liveStateReady && !showColdBootDefaults
+                  ? "text-gray-500"
                 : timeLeft <= 10
                   ? "text-red-400 drop-shadow-[0_0_8px_rgba(239,68,68,0.4)]"
                   : "text-white"
             }`}
           >
-            {formatTime(timeLeft)}
+            {liveStateReady || showColdBootDefaults ? formatTime(timeLeft) : "--:--"}
           </div>
         </div>
 
-        {/* RIGHT – Status */}
+        {/* RIGHT - Status */}
         <div className="flex flex-col items-center justify-center py-1.5">
           {showAnalyzing ? (
             <>
@@ -425,7 +275,7 @@ export const Header = React.memo(function Header({
             <div className="px-1 text-center text-[8px] font-bold uppercase leading-tight tracking-wide text-amber-300/90 sm:text-[9px] sm:tracking-wider">
               Duration scheduled: {epochDurationChange.current ?? "?"}s {"->"} {epochDurationChange.next}s
               {epochDurationChange.effectiveFromEpoch ? ` from #${epochDurationChange.effectiveFromEpoch}` : ""}
-              {epochDurationChange.eta ? ` (ETA ${new Date(epochDurationChange.eta * 1000).toLocaleTimeString()})` : ""}
+              {epochDurationEtaLabel ? ` (ETA ${epochDurationEtaLabel})` : ""}
             </div>
           </div>
         )}
@@ -437,207 +287,32 @@ export const Header = React.memo(function Header({
         )}
       </div>
 
-      {/* ═══ Pool chart ═══ */}
-      <div className="min-[900px]:col-span-5 relative rounded-xl bg-[#080812] border border-white/[0.06] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden min-h-[76px] sm:min-h-[72px] animate-slide-up" style={{ animationDelay: "0.1s" }}>
-        <div className="absolute top-2.5 left-3 z-20 pointer-events-none">
-          <div className="text-[8px] sm:text-[9px] uppercase font-bold text-gray-500 tracking-wider flex flex-wrap items-center gap-1 mb-0.5 pr-10 sm:pr-12">
-            Total Pool
-            {rolloverAmount > 0 && (
-              <span className="bg-emerald-500/15 text-emerald-400 px-1 py-px rounded text-[7px] border border-emerald-500/25">
-                +{rolloverAmount.toFixed(2)} rollover
-              </span>
-            )}
-          </div>
-          <div className="text-base sm:text-lg font-black text-white leading-tight pr-10 sm:pr-12">
-            {realTotalStaked.toFixed(2)} <span className="text-violet-400 text-xs font-bold">LINEA</span>
-          </div>
-        </div>
+      <HeaderPoolChart
+        chartHasData={chartHasData}
+        coldBootDefaults={coldBootDefaults}
+        hydrated={hydrated}
+        linePath={linePath}
+        liveStateReady={liveStateReady}
+        muted={muted}
+        onToggleMute={onToggleMute}
+        realTotalStaked={realTotalStaked}
+        rolloverAmount={rolloverAmount}
+      />
 
-        {/* Background grid */}
-        <svg className="absolute inset-0 w-full h-full pointer-events-none" preserveAspectRatio="none">
-          <defs>
-            <pattern id="gridDots" width="16" height="16" patternUnits="userSpaceOnUse">
-              <circle cx="8" cy="8" r="0.4" fill="rgba(139,92,246,0.15)" />
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#gridDots)" />
-          {/* Horizontal guide lines */}
-          <line x1="0" y1="33%" x2="100%" y2="33%" stroke="rgba(139,92,246,0.06)" strokeWidth="1" strokeDasharray="4 8" />
-          <line x1="0" y1="66%" x2="100%" y2="66%" stroke="rgba(139,92,246,0.06)" strokeWidth="1" strokeDasharray="4 8" />
-        </svg>
-
-        {/* Main chart */}
-        <div className="absolute bottom-0 left-0 w-full h-[60%]">
-          {chartHasData && (
-            <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-              <defs>
-                <linearGradient id="chartStroke" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="#06b6d4" />
-                  <stop offset="50%" stopColor="#8b5cf6" />
-                  <stop offset="100%" stopColor="#c084fc" />
-                </linearGradient>
-                <linearGradient id="chartFill" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor="#8b5cf6" stopOpacity="0.25" />
-                  <stop offset="50%" stopColor="#6d28d9" stopOpacity="0.08" />
-                  <stop offset="100%" stopColor="#06b6d4" stopOpacity="0" />
-                </linearGradient>
-                <filter id="lineGlow">
-                  <feGaussianBlur stdDeviation="3" result="blur" />
-                  <feMerge>
-                    <feMergeNode in="blur" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
-                <radialGradient id="endpointGlow" cx="50%" cy="50%" r="50%">
-                  <stop offset="0%" stopColor="#a78bfa" stopOpacity="0.6" />
-                  <stop offset="100%" stopColor="#8b5cf6" stopOpacity="0" />
-                </radialGradient>
-              </defs>
-
-              {/* Area fill */}
-              <path d={`${linePath} L 100,100 L 0,100 Z`} fill="url(#chartFill)" className="transition-all duration-700" />
-
-              {/* Blurred glow */}
-              <path d={linePath} fill="none" stroke="url(#chartStroke)" strokeWidth="5" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="transition-all duration-700" opacity="0.12" />
-
-              {/* Main line */}
-              <path d={linePath} fill="none" stroke="url(#chartStroke)" strokeWidth="1.5" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="transition-all duration-700" filter="url(#lineGlow)" />
-
-            </svg>
-          )}
-        </div>
-
-        {/* Bottom gradient border */}
-        <div className="absolute bottom-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-violet-500/40 to-transparent" />
-
-        <UiButton
-          onClick={onToggleMute}
-          variant="ghost"
-          size="xs"
-          className={`absolute top-2 right-2 z-20 h-8 w-8 p-0 ${uiTokens.radius.sm} bg-black/60 border-white/20 text-violet-200 hover:text-violet-100 hover:border-violet-400/50`}
-          title={muted ? "Unmute sounds" : "Mute sounds"}
-          aria-label={muted ? "Unmute sounds" : "Mute sounds"}
-        >
-          {muted ? (
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.1}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-            </svg>
-          ) : (
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.1}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-            </svg>
-          )}
-        </UiButton>
-      </div>
-
-      {/* ═══ Wallet - no inner spacing, content flush to border ═══ */}
-      <div className="min-[900px]:col-span-3 min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-[#0d0d1a] shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden animate-slide-up" style={{ animationDelay: "0.15s" }}>
-        {!authenticated ? (
-          <UiButton
-            onClick={() => { void login(); }}
-            variant="primary"
-            size="md"
-            fullWidth
-            uppercase
-            className="h-full min-h-[72px] px-4 py-2 text-[10px] text-white bg-gradient-to-r from-violet-600 to-indigo-600 border-violet-500/35 hover:from-violet-500 hover:to-indigo-500 shadow-lg shadow-violet-500/20 shimmer-btn"
-          >
-            Login / Connect
-          </UiButton>
-        ) : embeddedWalletAddress ? (
-          /* Embedded Privy wallet is created - show its address and balances */
-          <>
-            <div className="flex gap-1 p-1.5 border-b border-violet-500/15 bg-[#0d0d1a]">
-              <UiButton
-                onClick={onOpenWalletSettings}
-                variant="secondary"
-                size="sm"
-                uppercase
-                className="flex-[2] min-w-0 px-2 py-1.5 rounded-md text-[10px]"
-              >
-                Settings
-              </UiButton>
-              <UiButton
-                onClick={() => { void logout(); }}
-                variant="ghost"
-                size="sm"
-                uppercase
-                className="flex-1 min-w-0 px-2 py-1.5 rounded-md text-[9px] text-gray-500 hover:bg-red-500/10 hover:border-red-500/20 hover:text-red-400"
-                title="Log out (use carefully)"
-              >
-                Out
-              </UiButton>
-            </div>
-
-            <div className="flex-1 min-h-0 px-3 py-1.5 bg-violet-500/[0.06] flex flex-col gap-0.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Privy</span>
-                <span className="text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 text-emerald-400">
-                  <span className="w-1 h-1 rounded-full bg-emerald-400 animate-synced-pulse" />
-                  Active
-                </span>
-              </div>
-              <button
-                onClick={() => {
-                  if (!embeddedWalletAddress) return;
-                  void navigator.clipboard.writeText(embeddedWalletAddress).then(() => setEmbeddedAddressCopied(true)).catch(() => {});
-                }}
-                className={embeddedAddressCopied ? "text-[11px] font-mono font-bold text-emerald-300 drop-shadow-[0_0_10px_rgba(52,211,153,0.3)] leading-tight transition-all duration-200 flex items-center gap-1 group scale-[1.03] animate-pulse" : "text-[11px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] leading-tight hover:text-emerald-300 transition-colors flex items-center gap-1 group"}
-                title={embeddedAddressCopied ? "Copied" : "Copy address"}
-              >
-                {embeddedAddressCopied ? "Copied" : shortenAddress(embeddedWalletAddress)}
-                <svg className="w-2.5 h-2.5 text-emerald-400/40 group-hover:text-emerald-300 transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <rect x="9" y="9" width="13" height="13" rx="2" />
-                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-                </svg>
-              </button>
-              <div className="flex flex-col items-start gap-0.5 text-[11px] leading-tight min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
-                <span className="text-gray-400">
-                  {privyEthBalanceLoading ? "..." : privyEthBalance}<span className="text-gray-500 font-medium"> ETH</span>
-                </span>
-                <span className="text-white font-bold">
-                  {privyTokenBalanceLoading ? "..." : privyTokenBalance}<span className="text-gray-500 font-medium"> LINEA</span>
-                </span>
-              </div>
-            </div>
-          </>
-        ) : (
-          /* Embedded wallet is not created yet - do not show main wallet under Privy */
-          <>
-            <div className="flex gap-1 p-1.5 border-b border-violet-500/15 bg-[#0d0d1a]">
-              <UiButton
-                onClick={onOpenWalletSettings}
-                variant="secondary"
-                size="sm"
-                uppercase
-                className="flex-[2] min-w-0 px-2 py-1.5 rounded-md text-[10px]"
-              >
-                Settings
-              </UiButton>
-              <UiButton
-                onClick={() => { void logout(); }}
-                variant="ghost"
-                size="sm"
-                uppercase
-                className="flex-1 min-w-0 px-2 py-1.5 rounded-md text-[9px] text-gray-500 hover:bg-red-500/10 hover:border-red-500/20 hover:text-red-400"
-                title="Log out (use carefully)"
-              >
-                Out
-              </UiButton>
-            </div>
-
-            <div className="flex-1 min-h-0 px-3 py-1.5 bg-violet-500/[0.06] flex flex-col gap-1">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Privy</span>
-                <span className="text-[10px] font-bold uppercase tracking-widest text-amber-400/90">Not created</span>
-              </div>
-              <p className="text-[10px] text-gray-500 leading-tight">
-                Create embedded wallet in Settings to play and receive rewards.
-              </p>
-            </div>
-          </>
-        )}
-      </div>
+      <HeaderWalletCard
+        authenticated={authenticated}
+        embeddedWalletAddress={embeddedWalletAddress}
+        embeddedWalletSyncing={embeddedWalletSyncing}
+        embeddedAddressCopied={embeddedAddressCopied}
+        onCopyEmbeddedAddress={handleCopyEmbeddedAddress}
+        onLogin={() => { void login(); }}
+        onLogout={() => { void logout(); }}
+        onOpenWalletSettings={onOpenWalletSettings}
+        privyEthBalance={privyEthBalance}
+        privyEthBalanceLoading={privyEthBalanceLoading}
+        privyTokenBalance={privyTokenBalance}
+        privyTokenBalanceLoading={privyTokenBalanceLoading}
+      />
     </header>
     </>
   );

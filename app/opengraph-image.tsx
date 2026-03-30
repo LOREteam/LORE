@@ -3,6 +3,7 @@ import { ImageResponse } from 'next/og';
 export const alt = 'LORE - Linea Mining Game';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
+export const runtime = 'nodejs';
 
 export default async function Image() {
   return new ImageResponse(

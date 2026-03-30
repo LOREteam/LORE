@@ -1,153 +1,194 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { usePublicClient } from "wagmi";
-import { decodeEventLog, encodeEventTopics, formatUnits } from "viem";
-import { CONTRACT_ADDRESS, CONTRACT_DEPLOY_BLOCK, GAME_EVENTS_ABI, APP_CHAIN_ID } from "../lib/constants";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
+import { readJsonResponse } from "../lib/readJsonResponse";
+import { log } from "../lib/logger";
 
 export interface RecentWin {
   epoch: string;
   user: string;
   amount: string;
-  amountRaw: bigint;
+  amountRaw: string;
 }
 
-const INITIAL_SCAN_BLOCKS = BigInt(200000);
-const LOG_SCAN_CHUNK = BigInt(25_000);
+interface RecentWinsApiResponse {
+  wins?: Array<{ epoch?: string; user?: string; amount?: string; amountRaw?: string }>;
+  error?: string;
+}
+
+interface RecentWinsCacheEnvelope {
+  savedAt?: number;
+  wins?: Array<{ epoch?: string; user?: string; amount?: string; amountRaw?: string }>;
+}
+
 const REFRESH_MS = 45_000;
+const HIDDEN_REFRESH_MS = 180_000;
 const MAX_WINS = 100;
-const STORAGE_KEY = `lore:recent-wins-cache:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+const WARN_THROTTLE_MS = 15_000;
+const STORAGE_KEY = `lore:recent-wins-cache:v3:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 
-interface WinCache {
-  wins: Array<{ epoch: string; user: string; amount: string; amountRaw: string }>;
-  lastBlock: string;
+function normalizeWins(rows: Array<{
+  epoch?: string;
+  user?: string;
+  amount?: string;
+  amountRaw?: string;
+}>): RecentWin[] {
+  return rows
+    .map((row) => {
+      if (!row?.epoch || !row?.user || !row?.amountRaw) return null;
+      return {
+        epoch: String(row.epoch),
+        user: String(row.user),
+        amount: String(row.amount ?? "0.00"),
+        amountRaw: String(row.amountRaw),
+      };
+    })
+    .filter((row): row is RecentWin => row !== null)
+    .slice(0, MAX_WINS);
 }
 
-function loadCache(): { wins: RecentWin[]; lastBlock: bigint } | null {
+function loadCache(): { wins: RecentWin[]; savedAt: number | null } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const obj: WinCache = JSON.parse(raw);
+    if (!raw) return { wins: [], savedAt: null };
+    const parsed = JSON.parse(raw) as RecentWinsCacheEnvelope | Array<{
+      epoch?: string;
+      user?: string;
+      amount?: string;
+      amountRaw?: string;
+    }>;
+    if (Array.isArray(parsed)) {
+      return { wins: normalizeWins(parsed), savedAt: null };
+    }
     return {
-      wins: obj.wins.map(w => ({ ...w, amountRaw: BigInt(w.amountRaw) })),
-      lastBlock: BigInt(obj.lastBlock),
+      wins: normalizeWins(Array.isArray(parsed.wins) ? parsed.wins : []),
+      savedAt:
+        typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
+          ? parsed.savedAt
+          : null,
     };
-  } catch { return null; }
+  } catch {
+    return { wins: [], savedAt: null };
+  }
 }
 
-function saveCache(wins: RecentWin[], lastBlock: bigint) {
+function saveCache(wins: RecentWin[]) {
   try {
-    const obj: WinCache = {
-      wins: wins.map(w => ({ ...w, amountRaw: w.amountRaw.toString() })),
-      lastBlock: lastBlock.toString(),
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
-  } catch {}
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(
+        {
+          savedAt: Date.now(),
+          wins: wins.slice(0, MAX_WINS).map((row) => ({
+            ...row,
+            amountRaw: row.amountRaw,
+          })),
+        },
+      ),
+    );
+  } catch {
+    // ignore localStorage failures
+  }
 }
 
 export function useRecentWins() {
-  const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
   const [wins, setWins] = useState<RecentWin[]>([]);
+  const [isPageVisible, setIsPageVisible] = useState(() =>
+    typeof document === "undefined" ? true : document.visibilityState === "visible",
+  );
   const runningRef = useRef(false);
-  const lastBlockRef = useRef<bigint | null>(null);
   const initializedRef = useRef(false);
-  const winsRef = useRef<RecentWin[]>([]);
-  winsRef.current = wins;
+  const warnAtRef = useRef(0);
+  const mountedRef = useRef(false);
+  const cacheSavedAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const syncVisibility = () => {
+      setIsPageVisible(document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", syncVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", syncVisibility);
+    };
+  }, []);
 
   useEffect(() => {
     if (initializedRef.current) return;
     initializedRef.current = true;
     const cached = loadCache();
-    if (cached) {
+    cacheSavedAtRef.current = cached.savedAt;
+    if (mountedRef.current) {
       setWins(cached.wins);
-      winsRef.current = cached.wins;
-      lastBlockRef.current = cached.lastBlock;
     }
   }, []);
 
   const fetchWins = useCallback(async () => {
-    if (!publicClient || runningRef.current) return;
+    if (runningRef.current) return;
     runningRef.current = true;
+
     try {
-      const toBlock = await publicClient.getBlockNumber();
-      const isIncremental = lastBlockRef.current !== null;
-      const fromBlock = isIncremental
-        ? (lastBlockRef.current! + 1n > CONTRACT_DEPLOY_BLOCK ? lastBlockRef.current! + 1n : CONTRACT_DEPLOY_BLOCK)
-        : (() => {
-            const lookbackStart = toBlock > INITIAL_SCAN_BLOCKS ? toBlock - INITIAL_SCAN_BLOCKS : 0n;
-            return lookbackStart > CONTRACT_DEPLOY_BLOCK ? lookbackStart : CONTRACT_DEPLOY_BLOCK;
-          })();
+      const response = await fetch("/api/recent-wins", { cache: "no-store" });
+      const payload = await readJsonResponse<RecentWinsApiResponse>(response);
 
-      if (fromBlock > toBlock) {
-        runningRef.current = false;
-        return;
+      if (!payload) {
+        throw new Error(`Empty response from /api/recent-wins (HTTP ${response.status})`);
+      }
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error || `HTTP ${response.status}`);
       }
 
-      const [rewardClaimedTopic] = encodeEventTopics({
-        abi: GAME_EVENTS_ABI,
-        eventName: "RewardClaimed",
-      });
-      if (!rewardClaimedTopic) {
-        runningRef.current = false;
-        return;
+      const nextWins = normalizeWins(payload.wins ?? []);
+
+      if (mountedRef.current) {
+        setWins(nextWins);
+        saveCache(nextWins);
+        cacheSavedAtRef.current = Date.now();
       }
-
-      const logsRequest = {
-        address: CONTRACT_ADDRESS,
-        topics: [rewardClaimedTopic],
-      } as const;
-
-      const logs = [];
-      for (let cursor = fromBlock; cursor <= toBlock; cursor += LOG_SCAN_CHUNK) {
-        const chunkTo = cursor + LOG_SCAN_CHUNK - BigInt(1) > toBlock ? toBlock : cursor + LOG_SCAN_CHUNK - BigInt(1);
-        const chunkLogs = await publicClient.getLogs({
-          ...logsRequest,
-          fromBlock: cursor,
-          toBlock: chunkTo,
-        } as unknown as Parameters<typeof publicClient.getLogs>[0]);
-        logs.push(...chunkLogs);
-      }
-
-      const newWins: RecentWin[] = [];
-      for (const log of logs) {
-        try {
-          const decoded = decodeEventLog({
-            abi: GAME_EVENTS_ABI,
-            data: log.data,
-            topics: log.topics,
-          });
-          if (decoded.eventName === "RewardClaimed") {
-            const args = decoded.args as { epoch: bigint; user: string; reward: bigint };
-            newWins.push({
-              epoch: args.epoch.toString(),
-              user: args.user,
-              amount: parseFloat(formatUnits(args.reward, 18)).toFixed(2),
-              amountRaw: args.reward,
-            });
-          }
-        } catch {}
-      }
-
-      const currentWins = winsRef.current;
-      const merged = isIncremental
-        ? [...newWins.reverse(), ...currentWins].slice(0, MAX_WINS)
-        : newWins.reverse().slice(0, MAX_WINS);
-
-      lastBlockRef.current = toBlock;
-      setWins(merged);
-      saveCache(merged, toBlock);
     } catch (error) {
-      console.warn("[useRecentWins] fetch failed:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      const now = Date.now();
+      if (now - warnAtRef.current >= WARN_THROTTLE_MS) {
+        warnAtRef.current = now;
+        log.info("RecentWins", `fetch skipped: ${message}`);
+      }
     } finally {
       runningRef.current = false;
     }
-  }, [publicClient]);
+  }, []);
 
   useEffect(() => {
-    fetchWins();
-    const id = setInterval(fetchWins, REFRESH_MS);
-    return () => clearInterval(id);
-  }, [fetchWins]);
+    const intervalMs = isPageVisible ? REFRESH_MS : HIDDEN_REFRESH_MS;
+    const savedAt = cacheSavedAtRef.current;
+    const initialDelay =
+      savedAt && Date.now() - savedAt < intervalMs
+        ? intervalMs - (Date.now() - savedAt)
+        : 0;
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const schedule = (delayMs: number) => {
+      timeoutId = setTimeout(async () => {
+        if (cancelled) return;
+        await fetchWins();
+        if (cancelled) return;
+        schedule(intervalMs);
+      }, delayMs);
+    };
+
+    schedule(initialDelay);
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [fetchWins, isPageVisible]);
 
   return wins;
 }

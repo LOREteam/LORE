@@ -11,25 +11,12 @@ export type LineaNetwork = "mainnet" | "sepolia";
 export const DEFAULT_LINEA_NETWORK: LineaNetwork = "sepolia";
 
 export const DEFAULT_SEPOLIA_CONTRACT_ADDRESS =
-  "0x40a87453f92f56aa7cd917af82a6f6cd26820515" as const;
+  "0x712538a24aba20d03a8a7e6590ffad9b2951ded1" as const;
 
 export const DEFAULT_SEPOLIA_LINEA_TOKEN_ADDRESS =
   "0xad986c50d411055484d38bf779ba2450a42afd60" as const;
 
-export const LEGACY_SEPOLIA_CONTRACT_ADDRESS =
-  "0x3eab64b4de11355508b2656aedf832b33771c74e" as const;
-
-// The previous Sepolia deployment was a legacy contract profile.
-// The current default Sepolia deployment uses the V6-style APIs, while the
-// old address still needs explicit legacy handling when selected via env.
-export const LEGACY_CONTRACTS_WITHOUT_TOKEN_GETTER = [
-  LEGACY_SEPOLIA_CONTRACT_ADDRESS.toLowerCase(),
-] as const;
-export const LEGACY_CONTRACTS_WITHOUT_REBATE_API = [
-  LEGACY_SEPOLIA_CONTRACT_ADDRESS.toLowerCase(),
-] as const;
-
-export const DEFAULT_INDEXER_START_BLOCK = 26_997_266;
+export const DEFAULT_INDEXER_START_BLOCK = 27_709_620;
 
 export const DEFAULT_INDEXER_RECONCILE_INTERVAL_MS = 120_000;
 export const DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS = 8;
@@ -136,6 +123,18 @@ export function isDeprecatedLineaRpc(url: string | null | undefined) {
   return url.toLowerCase().includes("blastapi.io");
 }
 
+export function isUnstableLineaReadRpc(
+  url: string | null | undefined,
+  network: LineaNetwork = getConfiguredLineaNetwork(),
+) {
+  if (!url) return false;
+  const normalized = url.toLowerCase();
+  if (network === "sepolia" && normalized.includes("linea-sepolia.drpc.org")) {
+    return true;
+  }
+  return false;
+}
+
 export function getDefaultLineaRpcs(network: LineaNetwork = getConfiguredLineaNetwork()) {
   return network === "mainnet"
     ? [...DEFAULT_LINEA_MAINNET_RPCS]
@@ -153,6 +152,15 @@ export function getPreferredLineaRpcs(
   return [...new Set(urls)];
 }
 
+export function getStableLineaReadRpcs(
+  primaryRpc?: string | null,
+  network: LineaNetwork = getConfiguredLineaNetwork(),
+) {
+  const filtered = getPreferredLineaRpcs(primaryRpc, network)
+    .filter((url) => !isUnstableLineaReadRpc(url, network));
+  return filtered.length > 0 ? filtered : getPreferredLineaRpcs(primaryRpc, network);
+}
+
 function parseBooleanEnv(value?: string | null) {
   if (value == null) return null;
   const normalized = value.trim().toLowerCase();
@@ -161,23 +169,13 @@ function parseBooleanEnv(value?: string | null) {
   return null;
 }
 
-export function isLegacyContractAddress(contractAddress?: string | null) {
-  const normalizedAddress = contractAddress?.trim().toLowerCase();
-  if (!normalizedAddress) return false;
-  return LEGACY_CONTRACTS_WITHOUT_TOKEN_GETTER.includes(normalizedAddress);
-}
-
 export function getContractHasTokenGetter(
   contractAddress?: string | null,
   explicitFlag?: string | null,
 ) {
-  if (isLegacyContractAddress(contractAddress)) return false;
-
   const envValue = parseBooleanEnv(explicitFlag);
   if (envValue !== null) return envValue;
 
-  const normalizedAddress = contractAddress?.trim().toLowerCase();
-  if (!normalizedAddress) return true;
   return true;
 }
 
@@ -185,11 +183,6 @@ export function getContractHasRebateApi(
   contractAddress?: string | null,
   explicitFlag?: string | null,
 ) {
-  const normalizedAddress = contractAddress?.trim().toLowerCase();
-  if (normalizedAddress && LEGACY_CONTRACTS_WITHOUT_REBATE_API.includes(normalizedAddress)) {
-    return false;
-  }
-
   const envValue = parseBooleanEnv(explicitFlag);
   if (envValue !== null) return envValue;
 

@@ -20,9 +20,16 @@ const LINEA_SEPOLIA_PRIORITY_FLOOR = parseGwei("0.04");
 const LINEA_MAINNET_PRIORITY_CAP = parseGwei("0.06");
 const LINEA_SEPOLIA_PRIORITY_CAP = parseGwei("0.08");
 const LINEA_MAINNET_KEEPER_PRIORITY_FLOOR = parseGwei("0.02");
-const LINEA_SEPOLIA_KEEPER_PRIORITY_FLOOR = parseGwei("0.05");
+// Sepolia keeper must stay operable even with a very small faucet balance.
+// Public fee estimators often return tiny values here, so a high hard floor
+// can block epoch resolution entirely despite the network accepting the tx.
+const LINEA_SEPOLIA_KEEPER_PRIORITY_FLOOR = parseGwei("0.001");
 const LINEA_MAINNET_KEEPER_GAS_PRICE_FLOOR = parseGwei("0.05");
-const LINEA_SEPOLIA_KEEPER_GAS_PRICE_FLOOR = parseGwei("0.05");
+const LINEA_SEPOLIA_KEEPER_GAS_PRICE_FLOOR = parseGwei("0.001");
+
+function supportsEip1559Fallback(chainId?: number) {
+  return chainId === linea.id || chainId === lineaSepolia.id;
+}
 
 function getPriorityCap(chainId?: number) {
   if (chainId === linea.id) return LINEA_MAINNET_PRIORITY_CAP;
@@ -55,20 +62,28 @@ export function getFallbackFeeOverrides(
   if (mode === "keeper") {
     const floor = getKeeperGasPriceFloor(chainId);
     const priority = getKeeperPriorityFloor(chainId);
+    if (supportsEip1559Fallback(chainId)) {
+      return {
+        maxFeePerGas: floor,
+        maxPriorityFeePerGas: priority,
+      };
+    }
     return {
       gasPrice: floor,
-      maxFeePerGas: floor,
-      maxPriorityFeePerGas: priority,
     };
   }
 
   const priority = getPriorityFloor(chainId);
   const cap = getPriorityCap(chainId);
   const maxFee = cap !== undefined && cap > priority ? cap : priority;
+  if (supportsEip1559Fallback(chainId)) {
+    return {
+      maxFeePerGas: maxFee,
+      maxPriorityFeePerGas: priority,
+    };
+  }
   return {
     gasPrice: maxFee,
-    maxFeePerGas: maxFee,
-    maxPriorityFeePerGas: priority,
   };
 }
 
@@ -157,4 +172,71 @@ export function getKeeperFeeOverrides(
   }
 
   return undefined;
+}
+
+export function getAffordableKeeperGasLimit(
+  estimatedGas: bigint,
+  balanceWei: bigint,
+  feeOverrides: FeeOverrides | undefined,
+  preferredBufferPercent = 150n,
+) {
+  const effectiveGasPrice = feeOverrides?.gasPrice ?? feeOverrides?.maxFeePerGas;
+  if (!effectiveGasPrice || effectiveGasPrice <= 0n) {
+    return (estimatedGas * preferredBufferPercent) / ONE_HUNDRED;
+  }
+
+  const candidates = [
+    preferredBufferPercent,
+    130n,
+    120n,
+    110n,
+    105n,
+    100n,
+  ];
+
+  for (const percent of candidates) {
+    const gasLimit = (estimatedGas * percent + (ONE_HUNDRED - 1n)) / ONE_HUNDRED;
+    if (gasLimit * effectiveGasPrice <= balanceWei) {
+      return gasLimit;
+    }
+  }
+
+  return null;
+}
+
+export function clampKeeperFeeOverridesToBalance(
+  feeOverrides: FeeOverrides | undefined,
+  estimatedGas: bigint,
+  balanceWei: bigint,
+  headroomPercent = 98n,
+): FeeOverrides | undefined {
+  if (!feeOverrides || estimatedGas <= 0n || balanceWei <= 0n) return feeOverrides;
+
+  const affordablePerGas = ((balanceWei * headroomPercent) / ONE_HUNDRED) / estimatedGas;
+  if (affordablePerGas <= 0n) return feeOverrides;
+
+  if (feeOverrides.gasPrice !== undefined) {
+    if (feeOverrides.gasPrice <= affordablePerGas) return feeOverrides;
+    return { gasPrice: affordablePerGas };
+  }
+
+  if (feeOverrides.maxFeePerGas !== undefined) {
+    const maxFeePerGas =
+      feeOverrides.maxFeePerGas <= affordablePerGas
+        ? feeOverrides.maxFeePerGas
+        : affordablePerGas;
+    const maxPriorityFeePerGas =
+      feeOverrides.maxPriorityFeePerGas === undefined
+        ? maxFeePerGas
+        : feeOverrides.maxPriorityFeePerGas <= maxFeePerGas
+          ? feeOverrides.maxPriorityFeePerGas
+          : maxFeePerGas;
+
+    return {
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+    };
+  }
+
+  return feeOverrides;
 }

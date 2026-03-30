@@ -1,9 +1,9 @@
 "use client";
 
-import { useSignMessage } from "@privy-io/react-auth";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { verifyMessage } from "viem";
-import { FIREBASE_DB_URL } from "../lib/firebase";
+import { sanitizeChatAvatarValue } from "../lib/chatAvatar";
+import { readJsonResponse } from "../lib/readJsonResponse";
+import { useChatAuth } from "./useChatAuth";
 
 export interface ChatMessage {
   id: string;
@@ -18,46 +18,23 @@ const MESSAGES_LIMIT = 100;
 const RATE_LIMIT_MS = 1_500;
 const MAX_TEXT_LENGTH = 280;
 const POLL_INTERVAL_MS = 3_000;
-const AUTH_STORAGE_PREFIX = "lore:chat-auth:";
+const HIDDEN_POLL_INTERVAL_MS = 15_000;
+const CLOSED_POLL_INTERVAL_MS = 12_000;
+const HIDDEN_CLOSED_POLL_INTERVAL_MS = 45_000;
 const CHAT_CACHE_KEY = "lore:chat-cache:v1";
 const NETWORK_WARN_THROTTLE_MS = 15_000;
-
-interface ChatAuthProof {
-  address: string;
-  message: string;
-  signature: string;
-}
-
-function getAuthStorageKey(address: string) {
-  return `${AUTH_STORAGE_PREFIX}${address.toLowerCase()}`;
-}
-
-function loadProof(address: string): ChatAuthProof | null {
-  if (typeof localStorage === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(getAuthStorageKey(address));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<ChatAuthProof>;
-    if (!parsed.address || !parsed.message || !parsed.signature) return null;
-    return {
-      address: parsed.address.toLowerCase(),
-      message: parsed.message,
-      signature: parsed.signature,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function saveProof(proof: ChatAuthProof) {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(getAuthStorageKey(proof.address), JSON.stringify(proof));
-}
+const MAX_AVATAR_LENGTH = 8_000;
 
 function isNetworkFetchError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
   return msg.includes("failed to fetch") || msg.includes("networkerror") || msg.includes("network request failed");
+}
+
+function isChatAuthError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return msg.includes("http 401") || msg.includes("chat auth required");
 }
 
 function warnNetworkOnce(tag: string, ref: { current: number }, err: unknown) {
@@ -83,7 +60,7 @@ function loadCachedMessages(): ChatMessage[] {
           text: typeof v.text === "string" ? v.text : "",
           sender: typeof v.sender === "string" ? v.sender : "",
           senderName: typeof v.senderName === "string" ? v.senderName : null,
-          senderAvatar: typeof v.senderAvatar === "string" ? v.senderAvatar : null,
+          senderAvatar: sanitizeChatAvatarValue(v.senderAvatar, MAX_AVATAR_LENGTH),
           timestamp: typeof v.timestamp === "number" ? v.timestamp : Number(v.timestamp ?? 0),
         } as ChatMessage;
       })
@@ -104,25 +81,15 @@ function saveCachedMessages(messages: ChatMessage[]) {
 }
 
 async function fetchMessages(): Promise<ChatMessage[]> {
-  const url = `${FIREBASE_DB_URL}/messages.json?orderBy="timestamp"&limitToLast=${MESSAGES_LIMIT}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Firebase read HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data || typeof data !== "object") return [];
-
-  return Object.entries(data)
-    .map(([id, val]: [string, unknown]) => {
-      const v = val as Record<string, unknown>;
-      return {
-        id,
-        text: (v.text as string) ?? "",
-        sender: (v.sender as string) ?? "",
-        senderName: (v.senderName as string) ?? null,
-        senderAvatar: (v.senderAvatar as string) ?? null,
-        timestamp: (v.timestamp as number) ?? 0,
-      };
-    })
-    .sort((a, b) => a.timestamp - b.timestamp);
+  const res = await fetch("/api/chat/messages", { cache: "no-store" });
+  const json = await readJsonResponse<{ messages?: ChatMessage[]; error?: string }>(res);
+  if (!json) {
+    throw new Error(`Empty response from /api/chat/messages (HTTP ${res.status})`);
+  }
+  if (!res.ok || json.error) {
+    throw new Error(json.error || `HTTP ${res.status}`);
+  }
+  return (json.messages ?? []).slice(-MESSAGES_LIMIT);
 }
 
 async function postMessage(payload: Record<string, unknown>): Promise<void> {
@@ -134,72 +101,33 @@ async function postMessage(payload: Record<string, unknown>): Promise<void> {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Firebase write HTTP ${res.status}: ${body}`);
+    throw new Error(`Chat write HTTP ${res.status}: ${body}`);
   }
 }
 
-export function useChat(walletAddress: string | null) {
+export function useChat(walletAddress: string | null, options?: { open?: boolean }) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadCachedMessages());
   const [connected, setConnected] = useState(false);
-  const [authReady, setAuthReady] = useState(false);
+  const [isPageVisible, setIsPageVisible] = useState(() =>
+    typeof document === "undefined" ? true : document.visibilityState === "visible",
+  );
+  const open = options?.open ?? false;
   const lastSentRef = useRef(0);
-  const proofRef = useRef<ChatAuthProof | null>(null);
-  const authInFlightRef = useRef<Promise<boolean> | null>(null);
   const pollWarnAtRef = useRef(0);
   const sendWarnAtRef = useRef(0);
-  const { signMessage } = useSignMessage();
+  const { authReady, ensureChatAuth, clearAuth } = useChatAuth(walletAddress, "Verify wallet for chat");
 
   useEffect(() => {
-    let cancelled = false;
-    if (!walletAddress) {
-      proofRef.current = null;
-      setAuthReady(false);
-      return;
-    }
-
-    const proof = loadProof(walletAddress);
-    if (proof) {
-      proofRef.current = proof;
-      setAuthReady(true);
-    } else {
-      proofRef.current = null;
-      setAuthReady(false);
-    }
-
-    const verifyStored = async () => {
-      const p = loadProof(walletAddress);
-      if (!p) return;
-      try {
-        const ok = await verifyMessage({
-          address: walletAddress as `0x${string}`,
-          message: p.message,
-          signature: p.signature as `0x${string}`,
-        });
-        if (cancelled) return;
-        if (!ok) {
-          localStorage.removeItem(getAuthStorageKey(walletAddress));
-          proofRef.current = null;
-          setAuthReady(false);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          console.warn("[Chat] Stored proof verification failed:", err);
-          localStorage.removeItem(getAuthStorageKey(walletAddress));
-          proofRef.current = null;
-          setAuthReady(false);
-        }
-      }
+    const syncVisibility = () => {
+      setIsPageVisible(document.visibilityState === "visible");
     };
-
-    void verifyStored();
+    document.addEventListener("visibilitychange", syncVisibility);
     return () => {
-      cancelled = true;
+      document.removeEventListener("visibilitychange", syncVisibility);
     };
-  }, [walletAddress]);
+  }, []);
 
   useEffect(() => {
-    if (!walletAddress) return;
-
     let active = true;
 
     async function poll() {
@@ -221,57 +149,19 @@ export function useChat(walletAddress: string | null) {
       }
     }
 
-    console.log("[Chat] Starting REST polling for wallet:", walletAddress.slice(0, 10) + "...");
     void poll();
+    const pollInterval = open
+      ? (isPageVisible ? POLL_INTERVAL_MS : HIDDEN_POLL_INTERVAL_MS)
+      : (isPageVisible ? CLOSED_POLL_INTERVAL_MS : HIDDEN_CLOSED_POLL_INTERVAL_MS);
     const timer = setInterval(() => {
       void poll();
-    }, POLL_INTERVAL_MS);
+    }, pollInterval);
 
     return () => {
       active = false;
       clearInterval(timer);
     };
-  }, [walletAddress]);
-
-  const ensureChatAuth = useCallback(async (): Promise<boolean> => {
-    if (!walletAddress) return false;
-    if (proofRef.current) return true;
-    if (authInFlightRef.current) return authInFlightRef.current;
-
-    const task = (async () => {
-      try {
-        const addr = walletAddress.toLowerCase();
-        const message = [
-          "LORE Chat Verification",
-          `Address: ${addr}`,
-          "Purpose: Verify wallet ownership for chat messages.",
-          "This signature does not trigger any blockchain transaction.",
-        ].join("\n");
-        const { signature } = await signMessage(
-          { message },
-          { uiOptions: { title: "Verify wallet for chat" } },
-        );
-        const ok = await verifyMessage({
-          address: walletAddress as `0x${string}`,
-          message,
-          signature: signature as `0x${string}`,
-        });
-        if (!ok) return false;
-        const proof: ChatAuthProof = { address: addr, message, signature };
-        proofRef.current = proof;
-        saveProof(proof);
-        setAuthReady(true);
-        return true;
-      } catch {
-        return false;
-      } finally {
-        authInFlightRef.current = null;
-      }
-    })();
-
-    authInFlightRef.current = task;
-    return task;
-  }, [walletAddress, signMessage]);
+  }, [isPageVisible, open]);
 
   const sendMessage = useCallback(
     async (text: string, senderName: string | null, senderAvatar: string | null) => {
@@ -284,23 +174,28 @@ export function useChat(walletAddress: string | null) {
       lastSentRef.current = now;
 
       const authOk = await ensureChatAuth();
-      if (!authOk || !proofRef.current) return;
+      if (!authOk) return;
 
       const payload: Record<string, unknown> = {
         text: trimmed,
         sender: walletAddress.toLowerCase(),
-        authAddress: proofRef.current.address,
-        authMessage: proofRef.current.message,
-        authSignature: proofRef.current.signature,
         timestamp: { ".sv": "timestamp" },
       };
       if (senderName) payload.senderName = senderName;
-      if (senderAvatar) payload.senderAvatar = senderAvatar;
+      const normalizedAvatar = sanitizeChatAvatarValue(senderAvatar, MAX_AVATAR_LENGTH);
+      if (normalizedAvatar) payload.senderAvatar = normalizedAvatar;
 
       try {
-        console.log("[Chat] Sending message:", trimmed.slice(0, 30));
-        await postMessage(payload);
-        console.log("[Chat] Message sent OK");
+        try {
+          await postMessage(payload);
+        } catch (err) {
+          if (!isChatAuthError(err)) throw err;
+          clearAuth();
+
+          const reauthed = await ensureChatAuth();
+          if (!reauthed) throw err;
+          await postMessage(payload);
+        }
 
         const msgs = await fetchMessages();
         setMessages(msgs);
@@ -316,7 +211,7 @@ export function useChat(walletAddress: string | null) {
         }
       }
     },
-    [walletAddress, ensureChatAuth],
+    [walletAddress, clearAuth, ensureChatAuth],
   );
 
   return { messages, sendMessage, connected, authReady, ensureChatAuth };

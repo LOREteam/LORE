@@ -13,6 +13,10 @@ interface RebatePanelProps {
     pendingRebateWei: bigint;
     claimableEpochs: number;
     totalEpochs: number;
+    isLoading?: boolean;
+    hasLoaded?: boolean;
+    claimPlanKind?: "none" | "single" | "split" | "unknown";
+    isEstimatingClaimPlan?: boolean;
     recentEpochs: Array<{
       epoch: number;
       pending: string;
@@ -33,6 +37,12 @@ export const RebatePanel = React.memo(function RebatePanel({
 }: RebatePanelProps) {
   const isSupported = rebateInfo?.isSupported ?? true;
   const hasClaimable = (rebateInfo?.claimableEpochs ?? 0) > 0;
+  const isLoading = rebateInfo?.isLoading ?? false;
+  const hasLoaded = rebateInfo?.hasLoaded ?? false;
+  const hasPendingOnly = (rebateInfo?.pendingRebateWei ?? 0n) > 0n && !hasClaimable;
+  const claimPlanKind = rebateInfo?.claimPlanKind ?? "none";
+  const isEstimatingClaimPlan = rebateInfo?.isEstimatingClaimPlan ?? false;
+  const showInitialSkeleton = isLoading && !hasLoaded;
 
   return (
     <div className="flex-1 overflow-y-auto pb-12 animate-fade-in">
@@ -55,6 +65,22 @@ export const RebatePanel = React.memo(function RebatePanel({
           <h2 className={`${uiTokens.sectionLabel} text-white mb-3`}>Your rebate balance</h2>
           {!address ? (
             <p className="text-sm text-gray-500 text-center py-4">Connect your wallet to load rebate history.</p>
+          ) : showInitialSkeleton ? (
+            <div className="space-y-3 py-2">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3">
+                  <div className="mb-2 h-2.5 w-14 rounded-full bg-white/10" />
+                  <div className="h-8 w-36 rounded-full bg-emerald-500/10" />
+                </div>
+                <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3">
+                  <div className="mb-2 h-2.5 w-20 rounded-full bg-white/10" />
+                  <div className="h-8 w-14 rounded-full bg-sky-500/10" />
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3 text-center text-sm text-gray-500">
+                Loading rebate ledger...
+              </div>
+            </div>
           ) : !isSupported ? (
             <p className="text-sm text-gray-500 text-center py-4">
               Rebate functions are not available on the current legacy contract deployment.
@@ -87,6 +113,27 @@ export const RebatePanel = React.memo(function RebatePanel({
               >
                 {isClaiming ? "Claiming..." : hasClaimable ? "Claim rebate" : "Nothing to claim"}
               </UiButton>
+              {hasPendingOnly ? (
+                <p className="mt-3 text-xs leading-relaxed text-gray-500">
+                  Pending rebate includes unresolved or not-yet-claimable epochs. Claim unlocks only after those epochs are resolved.
+                </p>
+              ) : null}
+              {isLoading && hasLoaded ? (
+                <p className="mt-3 text-xs leading-relaxed text-gray-500">
+                  Refreshing rebate ledger in background...
+                </p>
+              ) : null}
+              {hasClaimable ? (
+                <p className="mt-3 text-xs leading-relaxed text-gray-500">
+                  {isEstimatingClaimPlan
+                    ? "Estimating whether the current rebate set fits in one transaction..."
+                    : claimPlanKind === "single"
+                      ? "Current rebate set should fit in one batched transaction. This is usually much cheaper than claiming epochs one by one."
+                      : claimPlanKind === "split"
+                        ? "Current rebate set looks too large for a single reliable claim, so the wallet may split it into multiple transactions."
+                        : "Claim size depends on the current epoch set and network conditions; the app will try one batched transaction first."}
+                </p>
+              ) : null}
             </>
           )}
         </UiPanel>
@@ -98,9 +145,28 @@ export const RebatePanel = React.memo(function RebatePanel({
 
         <UiPanel tone="default" className="animate-slide-up" style={{ animationDelay: "0.25s" }}>
           <h2 className={`${uiTokens.sectionLabel} text-white mb-3`}>Recent rebate epochs</h2>
-          {!rebateInfo?.recentEpochs?.length ? (
+          {showInitialSkeleton ? (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-2 h-2.5 w-20 rounded-full bg-white/10" />
+                    <div className="h-4 w-28 rounded-full bg-white/[0.06]" />
+                  </div>
+                  <div className="h-3 w-16 rounded-full bg-white/[0.06]" />
+                </div>
+              ))}
+            </div>
+          ) : !rebateInfo?.recentEpochs?.length ? (
             <p className="text-sm text-gray-500">
-              {isSupported ? "No rebate history yet." : "Rebate history is unavailable on the current contract."}
+              {isSupported
+                ? rebateInfo?.totalEpochs
+                  ? "Recent rebate rows are still being indexed or there is nothing claimable yet."
+                  : "No rebate history yet."
+                : "Rebate history is unavailable on the current contract."}
             </p>
           ) : (
             <div className="space-y-2">

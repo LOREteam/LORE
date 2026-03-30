@@ -24,13 +24,21 @@ import {
   DEFAULT_INDEXER_RECONCILE_INTERVAL_MS,
   DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS,
   getConfiguredContractAddress,
-  getConfiguredFirebaseDbUrl,
   getConfiguredDeployBlock,
   getConfiguredLineaNetwork,
   getDefaultLineaRpcs,
   getLineaChain,
   getPreferredLineaRpcs,
 } from "../config/publicConfig";
+import {
+  patchJsonPath,
+  putJsonPath,
+  readJsonPath,
+  upsertProtocolFeeFlushes,
+  upsertRewardClaims,
+  type FeeFlushStorageRow,
+  type RewardClaimStorageRow,
+} from "../server/storage";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
@@ -46,36 +54,28 @@ const DEPLOY_BLOCK = getConfiguredDeployBlock(
 );
 const INDEXER_START_BLOCK = DEPLOY_BLOCK;
 const CHUNK_BLOCKS = 2_000n;
+const RUN_CHUNK_BLOCKS = 5_000n;
 const REPAIR_CHUNK_BLOCKS = 20_000n;
 const POLL_INTERVAL_MS = 15_000;
 const RETRY_COUNT = 5;
 const RETRY_DELAY_MS = 5_000;
-const INTER_CHUNK_DELAY_MS = 1_500;
+const INTER_CHUNK_DELAY_MS = 400;
 const RECONCILE_INTERVAL_MS = Number(process.env.INDEXER_RECONCILE_INTERVAL_MS ?? String(DEFAULT_INDEXER_RECONCILE_INTERVAL_MS));
 const RECONCILE_MAX_EPOCHS_PER_PASS = Number(process.env.INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS ?? String(DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS));
 
-const FIREBASE_DB_URL = getConfiguredFirebaseDbUrl(
-  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
-  APP_NETWORK,
-);
-const FIREBASE_DB_AUTH = process.env.FIREBASE_DB_AUTH ?? "";
-let writeDisabled = false;
-let writeDisabledReason: string | null = null;
+const writeDisabled = false;
+const writeDisabledReason: string | null = null;
 let lastReconcileAtMs = 0;
-
-function firebaseUrl(path: string) {
-  const base = `${FIREBASE_DB_URL}/${path}.json`;
-  if (!FIREBASE_DB_AUTH) return base;
-  const sep = base.includes("?") ? "&" : "?";
-  return `${base}${sep}auth=${encodeURIComponent(FIREBASE_DB_AUTH)}`;
-}
 
 const EVENTS_ABI = parseAbi([
   "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
   "event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)",
+  "event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount)",
   "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
   "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
   "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
+  "event RewardClaimed(uint256 indexed epoch, address indexed user, uint256 reward)",
+  "event ProtocolFeesFlushed(uint256 ownerAmount, uint256 burnAmount)",
 ]);
 
 const READ_ABI = parseAbi([
@@ -99,58 +99,34 @@ const client = createPublicClient({
 
 // ─── Firebase REST helpers ───────────────────────────────────────────
 async function fbGet<T = unknown>(path: string): Promise<T | null> {
-  const res = await fetch(firebaseUrl(path));
-  if (!res.ok) throw new Error(`Firebase GET ${path} failed: ${res.status}`);
-  const data = await res.json();
-  return data as T | null;
+  return readJsonPath<T>(path);
 }
 
 function throwIfWritesDisabled(path: string) {
   if (!writeDisabled) return;
   const reason = writeDisabledReason ? `: ${writeDisabledReason}` : "";
-  throw new Error(`[indexer] Firebase writes disabled${reason}. Attempted write to ${path}.`);
+  throw new Error(`[indexer] Storage writes disabled${reason}. Attempted write to ${path}.`);
 }
 
 async function fbPatch(path: string, data: Record<string, unknown>) {
   throwIfWritesDisabled(path);
-  const res = await fetch(firebaseUrl(path), {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (res.status === 401 || res.status === 403) {
-    writeDisabled = true;
-    writeDisabledReason = `write denied (${res.status})`;
-    const msg = `[indexer] Firebase write denied (${res.status}) for ${path}. Disabling writes.`;
-    console.error(msg);
-    throw new Error(msg);
-  }
-  if (!res.ok) throw new Error(`Firebase PATCH ${path} failed: ${res.status}`);
+  patchJsonPath(path, data);
 }
 
 async function fbPut(path: string, data: unknown) {
   throwIfWritesDisabled(path);
-  const res = await fetch(firebaseUrl(path), {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (res.status === 401 || res.status === 403) {
-    writeDisabled = true;
-    writeDisabledReason = `write denied (${res.status})`;
-    const msg = `[indexer] Firebase write denied (${res.status}) for ${path}. Disabling writes.`;
-    console.error(msg);
-    throw new Error(msg);
-  }
-  if (!res.ok) throw new Error(`Firebase PUT ${path} failed: ${res.status}`);
+  putJsonPath(path, data);
 }
 
 // ─── Event topic signatures ─────────────────────────────────────────
 const [betSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BetPlaced" });
 const [batchSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsPlaced" });
+const [batchSameAmountSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsSameAmountPlaced" });
 const [resolvedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "EpochResolved" });
 const [dailySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "DailyJackpotAwarded" });
 const [weeklySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "WeeklyJackpotAwarded" });
+const [rewardClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RewardClaimed" });
+const [feesFlushedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "ProtocolFeesFlushed" });
 
 // ─── Chunked log fetcher ────────────────────────────────────────────
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -240,9 +216,12 @@ async function fetchAllLogs(from: bigint, to: bigint): Promise<Log[]> {
   const topics: Array<{ sig: `0x${string}`; label: string }> = [
     { sig: betSig, label: "BetPlaced" },
     { sig: batchSig, label: "BatchBets" },
+    { sig: batchSameAmountSig, label: "BatchBetsSameAmount" },
     { sig: resolvedSig, label: "EpochResolved" },
     { sig: dailySig, label: "DailyJackpot" },
     { sig: weeklySig, label: "WeeklyJackpot" },
+    { sig: rewardClaimedSig, label: "RewardClaimed" },
+    { sig: feesFlushedSig, label: "ProtocolFeesFlushed" },
   ];
 
   const all: Log[] = [];
@@ -286,6 +265,24 @@ interface JackpotRecord {
   blockNumber: string;
 }
 
+interface RewardClaimRecord {
+  id: string;
+  epoch: string;
+  user: string;
+  reward: string;
+  rewardNum: number;
+  txHash: string;
+  blockNumber: string;
+}
+
+interface FeeFlushRecord {
+  id: string;
+  ownerAmount: string;
+  burnAmount: string;
+  txHash: string;
+  blockNumber: string;
+}
+
 function buildBetKey(epoch: string, txHash: string, blockNumber: string): string {
   const normalizedHash = txHash.toLowerCase().trim();
   if (/^0x[0-9a-f]+$/.test(normalizedHash)) {
@@ -294,10 +291,39 @@ function buildBetKey(epoch: string, txHash: string, blockNumber: string): string
   return `${epoch}_nohash_${blockNumber}`;
 }
 
+function normalizeBetRecord(bet: BetRecord): BetRecord {
+  if (bet.tileIds.length === 0) {
+    return { ...bet, amounts: [] };
+  }
+
+  const normalizedAmounts =
+    Array.isArray(bet.amounts) && bet.amounts.length === bet.tileIds.length
+      ? bet.amounts.map((value) => {
+          const parsed = Number.parseFloat(String(value));
+          return Number.isFinite(parsed) ? parsed : 0;
+        })
+      : bet.tileIds.map(() => bet.totalAmountNum / bet.tileIds.length);
+
+  const aggregate = new Map<number, number>();
+  for (let index = 0; index < bet.tileIds.length; index += 1) {
+    const tileId = Number(bet.tileIds[index]);
+    if (!Number.isInteger(tileId) || tileId <= 0) continue;
+    aggregate.set(tileId, (aggregate.get(tileId) ?? 0) + (normalizedAmounts[index] ?? 0));
+  }
+
+  return {
+    ...bet,
+    tileIds: [...aggregate.keys()],
+    amounts: [...aggregate.values()].map((value) => String(value)),
+  };
+}
+
 function processLogs(logs: Log[]) {
   const bets: BetRecord[] = [];
   const epochs: Map<string, EpochRecord> = new Map();
   const jackpots: JackpotRecord[] = [];
+  const rewardClaims: RewardClaimRecord[] = [];
+  const feeFlushes: FeeFlushRecord[] = [];
 
   for (const log of logs) {
     const topic0 = log.topics[0];
@@ -329,6 +355,23 @@ function processLogs(logs: Log[]) {
           user: args.user.toLowerCase(),
           tileIds: args.tileIds.map(Number),
           amounts: args.amounts.map((a) => formatUnits(a, 18)),
+          totalAmount: formatUnits(args.totalAmount, 18),
+          totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
+      } else if (topic0 === batchSameAmountSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "BatchBetsSameAmountPlaced") continue;
+        const args = decoded.args as {
+          epoch: bigint; user: string; tileIds: bigint[]; amount: bigint; totalAmount: bigint;
+        };
+        const formattedAmount = formatUnits(args.amount, 18);
+        bets.push({
+          epoch: args.epoch.toString(),
+          user: args.user.toLowerCase(),
+          tileIds: args.tileIds.map(Number),
+          amounts: args.tileIds.map(() => formattedAmount),
           totalAmount: formatUnits(args.totalAmount, 18),
           totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
           txHash: log.transactionHash ?? "",
@@ -380,16 +423,40 @@ function processLogs(logs: Log[]) {
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
+      } else if (topic0 === rewardClaimedSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "RewardClaimed") continue;
+        const args = decoded.args as { epoch: bigint; user: string; reward: bigint };
+        rewardClaims.push({
+          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          epoch: args.epoch.toString(),
+          user: args.user.toLowerCase(),
+          reward: formatUnits(args.reward, 18),
+          rewardNum: parseFloat(formatUnits(args.reward, 18)),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
+      } else if (topic0 === feesFlushedSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "ProtocolFeesFlushed") continue;
+        const args = decoded.args as { ownerAmount: bigint; burnAmount: bigint };
+        feeFlushes.push({
+          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          ownerAmount: formatUnits(args.ownerAmount, 18),
+          burnAmount: formatUnits(args.burnAmount, 18),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
       }
     } catch {
       // malformed log
     }
   }
 
-  return { bets, epochs, jackpots };
+  return { bets, epochs, jackpots, rewardClaims, feeFlushes };
 }
 
-// ─── Write to Firebase ──────────────────────────────────────────────
+// Write to local SQLite
 async function writeBets(bets: BetRecord[]) {
   if (bets.length === 0) return;
   const byUser = new Map<string, BetRecord[]>();
@@ -402,15 +469,16 @@ async function writeBets(bets: BetRecord[]) {
   for (const [user, userBets] of byUser) {
     const patch: Record<string, unknown> = {};
     for (const bet of userBets) {
-      const key = buildBetKey(bet.epoch, bet.txHash, bet.blockNumber);
+      const normalizedBet = normalizeBetRecord(bet);
+      const key = buildBetKey(normalizedBet.epoch, normalizedBet.txHash, normalizedBet.blockNumber);
       patch[key] = {
-        epoch: bet.epoch,
-        tileIds: bet.tileIds,
-        amounts: bet.amounts,
-        totalAmount: bet.totalAmount,
-        totalAmountNum: bet.totalAmountNum,
-        txHash: bet.txHash,
-        blockNumber: bet.blockNumber,
+        epoch: normalizedBet.epoch,
+        tileIds: normalizedBet.tileIds,
+        amounts: normalizedBet.amounts,
+        totalAmount: normalizedBet.totalAmount,
+        totalAmountNum: normalizedBet.totalAmountNum,
+        txHash: normalizedBet.txHash,
+        blockNumber: normalizedBet.blockNumber,
       };
     }
     await fbPatch(`gamedata/bets/${user}`, patch);
@@ -434,6 +502,32 @@ async function writeJackpots(jackpots: JackpotRecord[]) {
     patch[key] = j;
   }
   await fbPatch("gamedata/jackpots", patch);
+}
+
+async function writeRewardClaims(rewardClaims: RewardClaimRecord[]) {
+  if (rewardClaims.length === 0) return;
+  const rows: RewardClaimStorageRow[] = rewardClaims.map((row) => ({
+    id: row.id,
+    epoch: row.epoch,
+    user: row.user,
+    reward: row.reward,
+    rewardNum: row.rewardNum,
+    txHash: row.txHash,
+    blockNumber: row.blockNumber,
+  }));
+  upsertRewardClaims(rows);
+}
+
+async function writeFeeFlushes(feeFlushes: FeeFlushRecord[]) {
+  if (feeFlushes.length === 0) return;
+  const rows: FeeFlushStorageRow[] = feeFlushes.map((row) => ({
+    id: row.id,
+    ownerAmount: row.ownerAmount,
+    burnAmount: row.burnAmount,
+    txHash: row.txHash,
+    blockNumber: row.blockNumber,
+  }));
+  upsertProtocolFeeFlushes(rows);
 }
 
 async function setLastBlock(block: bigint) {
@@ -510,11 +604,13 @@ async function runRepairPass(currentBlock: bigint) {
 
   const logs = await fetchAllLogs(from, to);
   if (logs.length > 0) {
-    const { bets, epochs, jackpots } = processLogs(logs);
+    const { bets, epochs, jackpots, rewardClaims, feeFlushes } = processLogs(logs);
     await writeBets(bets);
     await writeEpochs(epochs);
     await writeJackpots(jackpots);
-    console.log(`[indexer][repair] Repaired ${logs.length} logs (${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots)`);
+    await writeRewardClaims(rewardClaims);
+    await writeFeeFlushes(feeFlushes);
+    console.log(`[indexer][repair] Repaired ${logs.length} logs (${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots, ${rewardClaims.length} claims)`);
   } else {
     console.log("[indexer][repair] No logs in this range");
   }
@@ -550,7 +646,13 @@ async function runEpochReconcile(currentBlock: bigint) {
     return 0;
   }
 
-  const targets = missing.slice(-Math.max(1, RECONCILE_MAX_EPOCHS_PER_PASS));
+  const reconcileBatchSize =
+    missing.length <= 32
+      ? missing.length
+      : missing.length <= 128
+        ? Math.max(RECONCILE_MAX_EPOCHS_PER_PASS, 16)
+        : Math.max(1, RECONCILE_MAX_EPOCHS_PER_PASS);
+  const targets = missing.slice(-reconcileBatchSize);
   console.log(`[indexer][reconcile] Missing epochs: ${missing.length}, repairing now: ${targets.join(", ")}`);
 
   const epochsPatch = new Map<string, EpochRecord>();
@@ -595,7 +697,7 @@ async function runEpochReconcile(currentBlock: bigint) {
     } catch {
       // malformed log
     }
-    await delay(250);
+    await delay(targets.length <= 8 ? 50 : 150);
   }
 
   if (epochsPatch.size > 0) {
@@ -619,30 +721,49 @@ async function runOnce() {
 
   console.log(`[indexer] Scanning blocks ${fromBlock} → ${currentBlock} (${currentBlock - fromBlock + 1n} blocks)`);
 
-  const logs = await fetchAllLogs(fromBlock, currentBlock);
-  console.log(`[indexer] Fetched ${logs.length} logs`);
-
-  if (logs.length > 0) {
-    const { bets, epochs, jackpots } = processLogs(logs);
-    console.log(`[indexer] Parsed: ${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots`);
-
-    await writeBets(bets);
-    await writeEpochs(epochs);
-    await writeJackpots(jackpots);
-    console.log(`[indexer] Written to Firebase`);
+  let totalLogs = 0;
+  let chunkCount = 0;
+  for (let start = fromBlock; start <= currentBlock; start += RUN_CHUNK_BLOCKS) {
+    void start;
+    chunkCount += 1;
   }
 
-  await setLastBlock(currentBlock);
+  let chunkIndex = 0;
+  for (let start = fromBlock; start <= currentBlock; start += RUN_CHUNK_BLOCKS) {
+    const end = start + RUN_CHUNK_BLOCKS - 1n > currentBlock
+      ? currentBlock
+      : start + RUN_CHUNK_BLOCKS - 1n;
+    chunkIndex += 1;
+
+    console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount}: ${start} -> ${end}`);
+    const logs = await fetchAllLogs(start, end);
+    totalLogs += logs.length;
+    console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} fetched ${logs.length} logs`);
+
+    if (logs.length > 0) {
+      const { bets, epochs, jackpots, rewardClaims, feeFlushes } = processLogs(logs);
+      console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} parsed: ${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots, ${rewardClaims.length} claims`);
+
+      await writeBets(bets);
+      await writeEpochs(epochs);
+      await writeJackpots(jackpots);
+      await writeRewardClaims(rewardClaims);
+      await writeFeeFlushes(feeFlushes);
+      console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} written to local SQLite`);
+    }
+
+    await setLastBlock(end);
+    await updateCurrentEpochMeta();
+  }
+
+  console.log(`[indexer] Finished runOnce with ${totalLogs} logs`);
   await updateCurrentEpochMeta();
-  return logs.length;
+  return totalLogs;
 }
 
 async function main() {
   const isWatch = process.argv.includes("--watch");
-  console.log(`[indexer] Firebase: ${FIREBASE_DB_URL}`);
-  if (!FIREBASE_DB_AUTH) {
-    throw new Error("[indexer] FIREBASE_DB_AUTH is required because RTDB writes are protected by server-side auth.");
-  }
+  console.log(`[indexer] SQLite path: ${process.env.LORE_DB_PATH ?? "data/lore.sqlite"}`);
   console.log(`[indexer] Contract: ${CONTRACT}`);
   console.log(`[indexer] Deploy block: ${DEPLOY_BLOCK}`);
   console.log(`[indexer] Start block: ${INDEXER_START_BLOCK}`);

@@ -8,9 +8,9 @@ Move LORE from a single-key `Ownable` setup to an ownership model that is accept
 - timelock + multisig ownership when operationally ready
 - no ownership renounce for the live game contract
 
-## What changed in V6
+## What changed in V7
 
-The new contract source is [contracts/LineaOreV6.sol](/d:/linea-miner-main/contracts/LineaOreV6.sol).
+The latest deploy-ready contract source is [contracts/LineaOreV7.sol](/d:/linea-miner-main/contracts/LineaOreV7.sol).
 
 Key governance changes:
 
@@ -21,6 +21,8 @@ Key governance changes:
   - `cancelFeeRecipientChange()`
 - ownership renounce disabled
 - protocol fees now go to `feeRecipient`, not `owner()`
+- equal-size multi-bets can use `placeBatchBetsSameAmount(...)`
+- rebate accounting now tracks per-user epoch volume incrementally, so rebate preview/claim paths do not scan all 25 tiles per epoch
 
 This matters because a `TimelockController` can safely be the owner without trapping protocol fees.
 
@@ -57,7 +59,7 @@ For LORE, immutability is less important than removing single-key risk.
 
 ## Deployment checklist
 
-1. Deploy `LineaOreV6` with:
+1. Deploy `LineaOreV7` with:
    - `tokenAddress`
    - `initialOwner`
    - `initialFeeRecipient`
@@ -65,7 +67,7 @@ For LORE, immutability is less important than removing single-key risk.
 3. If using the preferred model:
    - deploy `TimelockController`
    - set the Safe as proposer/executor/admin as planned
-   - transfer ownership of `LineaOreV6` to the timelock
+   - transfer ownership of `LineaOreV7` to the timelock
    - call `acceptOwnership` from the timelock flow
 4. Update frontend constants:
    - `LINEA_NETWORK` / `NEXT_PUBLIC_LINEA_NETWORK`
@@ -82,9 +84,9 @@ For LORE, immutability is less important than removing single-key risk.
 
 The current frontend still points at the existing deployed address in [app/lib/constants.ts](/d:/linea-miner-main/app/lib/constants.ts).
 
-After V6 deployment, update:
+After V7 deployment, update:
 
 - `CONTRACT_ADDRESS`
 - `CONTRACT_DEPLOY_BLOCK`
 
-The ABI in [app/lib/constants.ts](/d:/linea-miner-main/app/lib/constants.ts) already includes the new governance functions needed by V6.
+The ABI in [app/lib/constants.ts](/d:/linea-miner-main/app/lib/constants.ts) already includes the methods needed by the current V7 deploy candidate.

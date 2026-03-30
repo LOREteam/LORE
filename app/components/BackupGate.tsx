@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 const STORAGE_KEY = "lineaore:privy-backup-confirmed";
 
@@ -40,13 +40,25 @@ export function BackupGate({
 }: BackupGateProps) {
   const [checked, setChecked] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const handleExport = useCallback(async () => {
-    setIsExporting(true);
+    if (mountedRef.current) {
+      setIsExporting(true);
+    }
     try {
       await onExportPrivateKey();
     } finally {
-      setIsExporting(false);
+      if (mountedRef.current) {
+        setIsExporting(false);
+      }
     }
   }, [onExportPrivateKey]);
 

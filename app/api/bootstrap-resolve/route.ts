@@ -2,13 +2,16 @@ import { NextResponse } from "next/server";
 import { createPublicClient, createWalletClient, http, parseAbi } from "viem";
 import type { PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { getKeeperFeeOverrides } from "../../lib/lineaFees";
+import {
+  clampKeeperFeeOverridesToBalance,
+  getAffordableKeeperGasLimit,
+  getKeeperFeeOverrides,
+} from "../../lib/lineaFees";
+import { acquireExpiringLock } from "../../../server/storage";
 import {
   APP_CHAIN,
   CONTRACT_ADDRESS,
-  FIREBASE_DB_AUTH,
   SERVER_RPC_URLS,
-  firebaseWriteUrl,
 } from "../_lib/dataBridge";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 
@@ -23,20 +26,33 @@ const ABI = parseAbi([
 ]);
 
 const RESOLVE_THROTTLE_MS = 5_000;
+const BOOTSTRAP_RPC_UNAVAILABLE_RETRY_MS = 12_000;
 const RESOLVE_LOCK_PATH = "_internal/bootstrapResolveLock";
+const REPLACE_PENDING_MAX_FEE_BUMP_PERCENT = 220n;
+const REPLACE_PENDING_PRIORITY_BUMP_PERCENT = 200n;
 let lastResolveAttemptAt = 0;
-let sharedLockAuthMisconfigured = false;
 
-type ResolveLockState = {
-  epoch?: string;
-  acquiredAt?: number;
-  expiresAt?: number;
-};
+function isLocalDevBootstrapRequest(request: Request) {
+  const requestUrl = new URL(request.url);
+  return (
+    process.env.NODE_ENV !== "production" &&
+    (requestUrl.hostname === "localhost" || requestUrl.hostname === "127.0.0.1")
+  );
+}
 
 function getResolveNoopReason(message: string): string | null {
   const lower = message.toLowerCase();
   if (lower.includes("known transaction")) return "resolve_tx_known";
   if (lower.includes("nonce too low") || lower.includes("lower than the current nonce")) return "resolve_nonce_already_used";
+  if (
+    lower.includes("replacement transaction underpriced") ||
+    lower.includes("transaction underpriced") ||
+    lower.includes("replacement fee too low") ||
+    lower.includes("fee too low to replace") ||
+    lower.includes("could not replace existing tx")
+  ) {
+    return "resolve_fee_bump_needed";
+  }
   if (lower.includes("alreadyresolved") || lower.includes("0x6d5703c2")) return "epoch_already_resolved";
   if (lower.includes("canonlyresolvecurrent") || lower.includes("0x22daea9a")) return "epoch_no_longer_current";
   if (lower.includes("timernotended") || lower.includes("0xe7884c39")) return "epoch_not_expired";
@@ -64,73 +80,15 @@ function createRpcClient(url: string) {
   });
 }
 
-function normalizeResolveLock(value: unknown): ResolveLockState | null {
-  if (!value || typeof value !== "object") return null;
-  const raw = value as ResolveLockState;
-  return {
-    epoch: typeof raw.epoch === "string" ? raw.epoch : undefined,
-    acquiredAt: typeof raw.acquiredAt === "number" ? raw.acquiredAt : undefined,
-    expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : undefined,
-  };
-}
-
 async function acquireResolveLock(epoch: bigint) {
-  const now = Date.now();
-
-  // If Firebase write auth isn't configured (or is known-bad), fall back to a process-local throttle.
-  // This avoids turning an auth misconfig into a 500-loop and request storm from clients.
-  if (!FIREBASE_DB_AUTH || sharedLockAuthMisconfigured) {
+  try {
+    return acquireExpiringLock(RESOLVE_LOCK_PATH, epoch.toString(), RESOLVE_THROTTLE_MS);
+  } catch {
+    const now = Date.now();
     if (now - lastResolveAttemptAt < RESOLVE_THROTTLE_MS) return false;
     lastResolveAttemptAt = now;
     return true;
   }
-
-  const url = firebaseWriteUrl(RESOLVE_LOCK_PATH);
-  const readRes = await fetch(url, { headers: { "X-Firebase-ETag": "true" }, cache: "no-store" });
-  if (!readRes.ok) {
-    // If auth is invalid (401/403), degrade to local throttle rather than breaking resolve entirely.
-    if (readRes.status === 401 || readRes.status === 403) {
-      sharedLockAuthMisconfigured = true;
-      if (now - lastResolveAttemptAt < RESOLVE_THROTTLE_MS) return false;
-      lastResolveAttemptAt = now;
-      return true;
-    }
-    throw new Error(`bootstrap lock read failed: ${readRes.status}`);
-  }
-
-  const etag = readRes.headers.get("etag") ?? "null_etag";
-  const current = normalizeResolveLock(await readRes.json());
-  if (
-    current?.epoch === epoch.toString() &&
-    typeof current.expiresAt === "number" &&
-    current.expiresAt > now
-  ) {
-    return false;
-  }
-
-  const nextLock = {
-    epoch: epoch.toString(),
-    acquiredAt: now,
-    expiresAt: now + RESOLVE_THROTTLE_MS,
-  };
-  const writeRes = await fetch(url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      "If-Match": etag,
-    },
-    body: JSON.stringify(nextLock),
-    cache: "no-store",
-  });
-  if (writeRes.ok) return true;
-  if (writeRes.status === 412) return false;
-  if (writeRes.status === 401 || writeRes.status === 403) {
-    sharedLockAuthMisconfigured = true;
-    if (now - lastResolveAttemptAt < RESOLVE_THROTTLE_MS) return false;
-    lastResolveAttemptAt = now;
-    return true;
-  }
-  throw new Error(`bootstrap lock write failed: ${writeRes.status}`);
 }
 
 async function readContractResilient<T>(
@@ -163,20 +121,32 @@ function getBootstrapKeeperAccount() {
   return privateKeyToAccount(privateKey.startsWith("0x") ? (privateKey as `0x${string}`) : (`0x${privateKey}` as `0x${string}`));
 }
 
+function isAuthorizedBootstrapRequest(request: Request) {
+  const secret = process.env.BOOTSTRAP_RESOLVE_SECRET?.trim();
+  if (isLocalDevBootstrapRequest(request)) return true;
+  if (!secret) return false;
+  const provided = request.headers.get("x-bootstrap-resolve-secret")?.trim();
+  return provided === secret;
+}
+
 export async function POST(request: Request) {
+  if (!isAuthorizedBootstrapRequest(request)) {
+    return NextResponse.json({ ok: true, action: "noop", reason: "bootstrap_keeper_disabled" });
+  }
+
+  const account = getBootstrapKeeperAccount();
+  if (!account) {
+    return NextResponse.json({ ok: true, action: "noop", reason: "bootstrap_keeper_disabled" });
+  }
+
   const rateLimited = await enforceSharedRateLimit(request, {
     bucket: "api-bootstrap-resolve",
-    limit: 6,
+    limit: isLocalDevBootstrapRequest(request) ? 60 : 12,
     windowMs: 60_000,
   });
   if (rateLimited) return rateLimited;
 
   try {
-    const account = getBootstrapKeeperAccount();
-    if (!account) {
-      return NextResponse.json({ ok: true, action: "noop", reason: "bootstrap_keeper_disabled" });
-    }
-
     const { result: currentEpoch, rpcUrl, client: publicClient } = await readContractResilient<bigint>(SERVER_RPC_URLS, {
       address: CONTRACT_ADDRESS,
       abi: ABI,
@@ -189,6 +159,7 @@ export async function POST(request: Request) {
         action: "noop",
         reason: "bootstrap_resolve_throttled",
         currentEpoch: currentEpoch.toString(),
+        retryAfter: Math.max(1, Math.ceil(RESOLVE_THROTTLE_MS / 1000)),
       });
     }
 
@@ -227,6 +198,16 @@ export async function POST(request: Request) {
       });
     }
 
+    const latestNonce = await publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: "latest",
+    });
+    const pendingNonce = await publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: "pending",
+    });
+    const replacingPendingTx = pendingNonce > latestNonce;
+
     const gasEstimate = await publicClient.estimateContractGas({
       account: account.address,
       address: CONTRACT_ADDRESS,
@@ -234,9 +215,28 @@ export async function POST(request: Request) {
       functionName: "resolveEpoch",
       args: [currentEpoch],
     });
-    const gas = (gasEstimate * 150n) / 100n;
     const fees = await publicClient.estimateFeesPerGas();
-    const feeOverrides = getKeeperFeeOverrides(fees, APP_CHAIN.id);
+    const estimatedFeeOverrides = getKeeperFeeOverrides(
+      fees,
+      APP_CHAIN.id,
+      replacingPendingTx ? REPLACE_PENDING_MAX_FEE_BUMP_PERCENT : 130n,
+      replacingPendingTx ? REPLACE_PENDING_PRIORITY_BUMP_PERCENT : 125n,
+    );
+    const keeperBalance = await publicClient.getBalance({ address: account.address });
+    const feeOverrides = clampKeeperFeeOverridesToBalance(
+      estimatedFeeOverrides,
+      gasEstimate,
+      keeperBalance,
+    );
+    const gas = getAffordableKeeperGasLimit(gasEstimate, keeperBalance, feeOverrides, 150n);
+
+    if (gas === null) {
+      return NextResponse.json({
+        ok: false,
+        reason: "resolve_failed",
+        error: `keeper_insufficient_funds balance=${keeperBalance.toString()} estimatedGas=${gasEstimate.toString()}`,
+      }, { status: 500 });
+    }
 
     const hash = await walletClient.writeContract({
       address: CONTRACT_ADDRESS,
@@ -244,6 +244,7 @@ export async function POST(request: Request) {
       functionName: "resolveEpoch",
       args: [currentEpoch],
       gas,
+      ...(replacingPendingTx ? { nonce: latestNonce } : {}),
       ...(feeOverrides?.gasPrice !== undefined
         ? { gasPrice: feeOverrides.gasPrice }
         : {
@@ -262,7 +263,22 @@ export async function POST(request: Request) {
     const message = err instanceof Error ? err.message : String(err);
     const noopReason = getResolveNoopReason(message);
     if (noopReason) {
-      return NextResponse.json({ ok: true, action: "noop", reason: noopReason });
+      return NextResponse.json({
+        ok: true,
+        action: "noop",
+        reason: noopReason,
+        retryAfter: noopReason === "resolve_fee_bump_needed"
+          ? Math.max(1, Math.ceil(RESOLVE_THROTTLE_MS / 1000))
+          : undefined,
+      });
+    }
+    if (isRpcReadRetryableError(message)) {
+      return NextResponse.json({
+        ok: true,
+        action: "noop",
+        reason: "bootstrap_rpc_unavailable",
+        retryAfter: Math.max(1, Math.ceil(BOOTSTRAP_RPC_UNAVAILABLE_RETRY_MS / 1000)),
+      });
     }
     return NextResponse.json({ ok: false, reason: "resolve_failed", error: message }, { status: 500 });
   }

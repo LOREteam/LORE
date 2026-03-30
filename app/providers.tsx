@@ -6,13 +6,13 @@ import { WagmiProvider as PrivyWagmiProvider, createConfig } from '@privy-io/wag
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, fallback, defineChain, type Transport } from 'viem';
 import { APP_CHAIN } from './lib/constants';
-import { getDefaultLineaRpcs } from '../config/publicConfig';
+import { getStableLineaReadRpcs, isDeprecatedLineaRpc, isUnstableLineaReadRpc } from '../config/publicConfig';
 
 // Higher staleTime reduces RPC load: data stays "fresh" longer, fewer duplicate refetches.
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 10_000, // 10s – fewer refetches, less load on public RPC
+      staleTime: 10_000, // 10s - fewer refetches, less load on public RPC
       refetchOnWindowFocus: false,
     },
   },
@@ -29,9 +29,18 @@ const ENV_RPCS =
     .map((s) => s.trim())
     .filter(Boolean) ?? [];
 
-// If env list is provided, use only it. This allows hard-excluding flaky providers in production.
-const RPC_URLS = [...new Set(ENV_RPCS.length > 0 ? ENV_RPCS : getDefaultLineaRpcs())];
+const APP_NETWORK = APP_CHAIN.id === 59144 ? "mainnet" : "sepolia";
 
+const FILTERED_ENV_RPCS = ENV_RPCS
+  .filter((url) => !isDeprecatedLineaRpc(url))
+  .filter((url) => !isUnstableLineaReadRpc(url, APP_NETWORK));
+
+// If env list is provided, use only it. This allows hard-excluding flaky providers in production.
+const RPC_URLS = [...new Set(
+  FILTERED_ENV_RPCS.length > 0
+    ? FILTERED_ENV_RPCS
+    : getStableLineaReadRpcs(undefined, APP_NETWORK),
+)];
 export const appChain = defineChain({
   ...APP_CHAIN,
   rpcUrls: {
@@ -47,7 +56,7 @@ export const wagmiConfig = createConfig({
   transports: {
     [appChain.id]: fallback([
       ...RPC_URLS.map((url) => http(url, { timeout: 12_000, retryCount: 1 })),
-    ], { rank: true }),
+    ], { rank: false }),
   } as Record<(typeof appChain)["id"], Transport>,
   batch: {
     multicall: true,

@@ -1,15 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { FIREBASE_DB_URL } from "../lib/firebase";
+import { sanitizeCustomChatAvatar, sanitizePresetChatAvatar } from "../lib/chatAvatar";
+import { loadChatAuthSession } from "../lib/chatSessionClient";
+import { readJsonResponse } from "../lib/readJsonResponse";
+import { useChatAuth } from "./useChatAuth";
 
 const LEGACY_STORAGE_KEY = "lore:chat-profile";
 const STORAGE_KEY_PREFIX = "lore:chat-profile:";
-const AUTH_STORAGE_PREFIX = "lore:chat-auth:";
 const PROFILE_NAME_MAX = 20;
 const MAX_AVATAR_LEN = 8_000;
-const MESSAGE_SCAN_LIMIT = 400;
-
 export interface ChatProfile {
   name: string | null;
   avatar: string | null;
@@ -17,45 +17,21 @@ export interface ChatProfile {
   updatedAt?: number;
 }
 
-interface ChatAuthProof {
-  address: string;
-  message: string;
-  signature: string;
-}
-
 function storageKey(walletAddress: string | null): string {
   return walletAddress ? `${STORAGE_KEY_PREFIX}${walletAddress.toLowerCase()}` : LEGACY_STORAGE_KEY;
 }
 
-function authStorageKey(walletAddress: string) {
-  return `${AUTH_STORAGE_PREFIX}${walletAddress.toLowerCase()}`;
-}
-
-function loadAuthProof(walletAddress: string): ChatAuthProof | null {
-  if (typeof localStorage === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(authStorageKey(walletAddress));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<ChatAuthProof>;
-    if (!parsed.address || !parsed.message || !parsed.signature) return null;
-    return {
-      address: parsed.address.toLowerCase(),
-      message: parsed.message,
-      signature: parsed.signature,
-    };
-  } catch {
-    return null;
-  }
+function isChatAuthError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return msg.includes("http 401") || msg.includes("chat auth required");
 }
 
 function normalizeProfile(input: Partial<ChatProfile>): ChatProfile {
   const nameRaw = typeof input.name === "string" ? input.name.trim() : "";
   const name = nameRaw ? nameRaw.slice(0, PROFILE_NAME_MAX) : null;
-  const avatar = typeof input.avatar === "string" && input.avatar.length <= 120 ? input.avatar : null;
-  const customAvatar =
-    typeof input.customAvatar === "string" && input.customAvatar.length <= MAX_AVATAR_LEN
-      ? input.customAvatar
-      : null;
+  const avatar = sanitizePresetChatAvatar(input.avatar);
+  const customAvatar = sanitizeCustomChatAvatar(input.customAvatar, MAX_AVATAR_LEN);
   const updatedAt = typeof input.updatedAt === "number" ? input.updatedAt : 0;
   return { name, avatar, customAvatar, updatedAt };
 }
@@ -97,12 +73,12 @@ function newerProfile(a: ChatProfile | null, b: ChatProfile | null): ChatProfile
 
 async function fetchRemoteProfile(walletAddress: string): Promise<ChatProfile | null> {
   try {
-    const url = `${FIREBASE_DB_URL}/gamedata/chatProfiles/${walletAddress.toLowerCase()}.json`;
-    const res = await fetch(url);
+    const res = await fetch(`/api/chat/profile?walletAddress=${walletAddress.toLowerCase()}`, { cache: "no-store" });
     if (!res.ok) return null;
-    const data = await res.json();
-    if (!data || typeof data !== "object") return null;
-    const profile = normalizeProfile(data as Partial<ChatProfile>);
+    const json = await readJsonResponse<{ profile?: Partial<ChatProfile> | null }>(res);
+    if (!json) return null;
+    if (!json.profile || typeof json.profile !== "object") return null;
+    const profile = normalizeProfile(json.profile);
     return hasMeaningfulProfile(profile) ? profile : null;
   } catch {
     return null;
@@ -110,70 +86,49 @@ async function fetchRemoteProfile(walletAddress: string): Promise<ChatProfile | 
 }
 
 async function saveRemoteProfile(walletAddress: string, profile: ChatProfile): Promise<void> {
-  const normalizedAddress = walletAddress.toLowerCase();
-  const proof = loadAuthProof(normalizedAddress);
-  if (!proof || proof.address !== normalizedAddress) return;
-
   const payload = {
-    walletAddress: normalizedAddress,
+    walletAddress: walletAddress.toLowerCase(),
     name: profile.name,
     avatar: profile.avatar,
     customAvatar: profile.customAvatar,
     updatedAt: profile.updatedAt ?? Date.now(),
-    authAddress: proof.address,
-    authMessage: proof.message,
-    authSignature: proof.signature,
   };
-  try {
-    await fetch("/api/chat/profile", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } catch {
-    // silent sync failure: local profile is still kept
-  }
-}
-
-async function fetchProfileFromMessages(walletAddress: string): Promise<ChatProfile | null> {
-  try {
-    const normalizedAddress = walletAddress.toLowerCase();
-    const url = `${FIREBASE_DB_URL}/messages.json?orderBy="timestamp"&limitToLast=${MESSAGE_SCAN_LIMIT}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data || typeof data !== "object") return null;
-
-    let latest: ChatProfile | null = null;
-    for (const val of Object.values(data)) {
-      const v = val as Record<string, unknown>;
-      const sender = typeof v.sender === "string" ? v.sender.toLowerCase() : "";
-      if (sender !== normalizedAddress) continue;
-      const senderAvatar = typeof v.senderAvatar === "string" ? v.senderAvatar : null;
-      const senderName = typeof v.senderName === "string" ? v.senderName : null;
-      const timestamp = typeof v.timestamp === "number" ? v.timestamp : 0;
-      const fromMessage = normalizeProfile({
-        name: senderName,
-        avatar: senderAvatar && !senderAvatar.startsWith("data:") ? senderAvatar : null,
-        customAvatar: senderAvatar && senderAvatar.startsWith("data:") ? senderAvatar : null,
-        updatedAt: timestamp,
-      });
-      if (!hasMeaningfulProfile(fromMessage)) continue;
-      latest = newerProfile(latest, fromMessage);
-    }
-    return latest;
-  } catch {
-    return null;
+  const response = await fetch("/api/chat/profile", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(body || `HTTP ${response.status}`);
   }
 }
 
 export function useChatProfile(walletAddress: string | null) {
   const normalizedWallet = walletAddress ? walletAddress.toLowerCase() : null;
   const [profile, setProfile] = useState<ChatProfile>(() => loadProfile(normalizedWallet));
+  const { ensureChatAuth } = useChatAuth(walletAddress, "Verify wallet for chat profile");
 
   useEffect(() => {
     setProfile(loadProfile(normalizedWallet));
   }, [normalizedWallet]);
+
+  const persistRemoteProfile = useCallback(async (nextProfile: ChatProfile) => {
+    if (!normalizedWallet) return;
+
+    const attemptSave = async () => {
+      await saveRemoteProfile(normalizedWallet, nextProfile);
+    };
+
+    try {
+      await attemptSave();
+    } catch (err) {
+      if (!isChatAuthError(err)) throw err;
+      const reauthed = await ensureChatAuth();
+      if (!reauthed) throw err;
+      await attemptSave();
+    }
+  }, [ensureChatAuth, normalizedWallet]);
 
   useEffect(() => {
     if (!normalizedWallet) return;
@@ -181,13 +136,9 @@ export function useChatProfile(walletAddress: string | null) {
 
     const syncProfile = async () => {
       const local = loadProfile(normalizedWallet);
-      const [remote, fromMessages] = await Promise.all([
-        fetchRemoteProfile(normalizedWallet),
-        fetchProfileFromMessages(normalizedWallet),
-      ]);
+      const remote = await fetchRemoteProfile(normalizedWallet);
 
-      let best = newerProfile(local, remote);
-      best = newerProfile(best, fromMessages);
+      const best = newerProfile(local, remote);
       if (!best || !hasMeaningfulProfile(best)) return;
 
       if (!cancelled) setProfile(best);
@@ -195,7 +146,14 @@ export function useChatProfile(walletAddress: string | null) {
 
       // Keep dedicated profile path populated for fast restore after cache clear.
       if (!remote || (best.updatedAt ?? 0) > (remote.updatedAt ?? 0)) {
-        void saveRemoteProfile(normalizedWallet, best);
+        const existing = loadChatAuthSession(normalizedWallet);
+        if (existing?.address === normalizedWallet) {
+          void saveRemoteProfile(normalizedWallet, best).catch((err) => {
+            if (!isChatAuthError(err)) {
+              console.warn("[ChatProfile] Background profile sync failed:", err);
+            }
+          });
+        }
       }
     };
 
@@ -219,9 +177,15 @@ export function useChatProfile(walletAddress: string | null) {
     setProfile(next);
     saveProfile(normalizedWallet, next);
     if (normalizedWallet && hasMeaningfulProfile(next)) {
-      void saveRemoteProfile(normalizedWallet, next);
+      void (async () => {
+        if (await ensureChatAuth()) {
+          await persistRemoteProfile(next);
+        }
+      })().catch(() => {
+        // Keep the local profile and auth marker intact when remote sync fails.
+      });
     }
-  }, [normalizedWallet, profile]);
+  }, [ensureChatAuth, normalizedWallet, persistRemoteProfile, profile]);
 
   return { profile, displayName, effectiveAvatar, updateProfile };
 }

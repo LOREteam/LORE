@@ -239,13 +239,13 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         <Section id="contract" badge="08" title="Smart Contracts" icon={ContractIcon} delay={0.35}>
           <P>
-            LORE is currently served by the live V6 deployment on <Accent>Linea</Accent>:
+            LORE is currently served by the live V7 deployment on <Accent>Linea</Accent>:
           </P>
           <div className="space-y-3 mb-6">
             <ContractCard
-              name="Game Contract (LineaOreV6 live)"
+              name="Game Contract (LineaOreV7 live)"
               address={CONTRACT}
-              functions={["placeBet()", "placeBatchBets()", "claimReward()", "resolveEpoch()", "claimEpochRebate()", "claimEpochsRebate()", "getJackpotInfo()", "getRebateSummary()"]}
+              functions={["placeBet()", "placeBatchBets()", "placeBatchBetsSameAmount()", "claimReward()", "resolveEpoch()", "claimEpochRebate()", "claimEpochsRebate()", "getJackpotInfo()", "getRebateSummary()"]}
             />
             <ContractCard
               name="LINEA Token"

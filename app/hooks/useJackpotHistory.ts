@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FIREBASE_DB_URL } from "../lib/firebase";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
+import { log } from "../lib/logger";
 
 export interface JackpotHistoryEntry {
   epoch: string;
@@ -17,6 +17,11 @@ export interface JackpotHistoryEntry {
 interface JackpotApiResponse {
   jackpots?: unknown[];
   error?: string;
+}
+
+interface JackpotHistoryCacheEnvelope {
+  savedAt?: number;
+  jackpots?: unknown[];
 }
 
 const REFRESH_MS = 45_000;
@@ -61,7 +66,10 @@ function toEntry(row: Record<string, unknown>): JackpotHistoryEntry | null {
     kind,
     txHash: String(row.txHash ?? ""),
     blockNumber: parseBigIntSafe(row.blockNumber),
-    timestamp: null,
+    timestamp:
+      typeof row.timestamp === "number" && Number.isFinite(row.timestamp)
+        ? row.timestamp
+        : null,
   };
 }
 
@@ -72,18 +80,30 @@ function sortByBlockDesc(entries: JackpotHistoryEntry[]) {
   });
 }
 
-function loadCachedEntries(): JackpotHistoryEntry[] {
-  if (typeof localStorage === "undefined") return [];
+function normalizeEntries(rows: unknown[]): JackpotHistoryEntry[] {
+  return rows
+    .map((item) => toEntry((item ?? {}) as Record<string, unknown>))
+    .filter((item): item is JackpotHistoryEntry => item !== null);
+}
+
+function loadCachedEntries(): { entries: JackpotHistoryEntry[]; savedAt: number | null } {
+  if (typeof localStorage === "undefined") return { entries: [], savedAt: null };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item) => toEntry((item ?? {}) as Record<string, unknown>))
-      .filter((item): item is JackpotHistoryEntry => item !== null);
+    if (!raw) return { entries: [], savedAt: null };
+    const parsed = JSON.parse(raw) as JackpotHistoryCacheEnvelope | unknown[];
+    if (Array.isArray(parsed)) {
+      return { entries: normalizeEntries(parsed), savedAt: null };
+    }
+    return {
+      entries: normalizeEntries(Array.isArray(parsed.jackpots) ? parsed.jackpots : []),
+      savedAt:
+        typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
+          ? parsed.savedAt
+          : null,
+    };
   } catch {
-    return [];
+    return { entries: [], savedAt: null };
   }
 }
 
@@ -94,7 +114,13 @@ function saveCachedEntries(entries: JackpotHistoryEntry[]) {
     blockNumber: entry.blockNumber.toString(),
   }));
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable.slice(0, JACKPOT_LIMIT)));
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        savedAt: Date.now(),
+        jackpots: serializable.slice(0, JACKPOT_LIMIT),
+      }),
+    );
   } catch {
     // ignore cache write failures
   }
@@ -115,94 +141,100 @@ async function fetchFromApi(): Promise<JackpotHistoryEntry[]> {
     .slice(0, JACKPOT_LIMIT);
 }
 
-async function fetchFromFirebase(): Promise<JackpotHistoryEntry[]> {
-  let res = await fetch(
-    `${FIREBASE_DB_URL}/gamedata/jackpots.json?orderBy="epoch"&limitToLast=${JACKPOT_LIMIT}`,
-    { cache: "no-store" },
-  );
-
-  // Fallback if Firebase rejects ordered query (missing index or strict rules)
-  if (res.status === 400) {
-    res = await fetch(`${FIREBASE_DB_URL}/gamedata/jackpots.json`, { cache: "no-store" });
-  }
-
-  if (!res.ok) {
-    throw new Error(`Firebase HTTP ${res.status}`);
-  }
-
-  const data = (await res.json()) as Record<string, unknown> | null;
-  if (!data || typeof data !== "object") return [];
-
-  const entries = Object.values(data)
-    .map((row) => toEntry((row ?? {}) as Record<string, unknown>))
-    .filter((item): item is JackpotHistoryEntry => item !== null);
-
-  return sortByBlockDesc(entries).slice(0, JACKPOT_LIMIT);
-}
-
-export function useJackpotHistory() {
-  const [items, setItems] = useState<JackpotHistoryEntry[]>(() => loadCachedEntries());
+export function useJackpotHistory(enabled = true) {
+  const [items, setItems] = useState<JackpotHistoryEntry[]>(() => loadCachedEntries().entries);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const runningRef = useRef(false);
   const warnAtRef = useRef(0);
+  const mountedRef = useRef(false);
+  const cacheSavedAtRef = useRef<number | null>(loadCachedEntries().savedAt);
+  const itemsRef = useRef<JackpotHistoryEntry[]>(items);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     if (runningRef.current) return;
     runningRef.current = true;
-    setLoading(true);
-    setError(null);
+    const shouldShowLoading = itemsRef.current.length === 0;
+    if (mountedRef.current) {
+      if (shouldShowLoading) {
+        setLoading(true);
+      }
+      setError(null);
+    }
 
     try {
-      let entries: JackpotHistoryEntry[];
-
-      try {
-        entries = await fetchFromApi();
-      } catch (apiErr) {
-        const now = Date.now();
-        if (now - warnAtRef.current >= WARN_THROTTLE_MS) {
-          warnAtRef.current = now;
-          const msg = apiErr instanceof Error ? apiErr.message : String(apiErr);
-          console.warn(`[useJackpotHistory] /api/jackpots unavailable, switching to Firebase fallback: ${msg}`);
-        }
-        entries = await fetchFromFirebase();
-      }
-
+      const entries = await fetchFromApi();
       const sorted = sortByBlockDesc(entries);
-      setItems(sorted);
+      if (mountedRef.current) {
+        setItems(sorted);
+        setError(null);
+      }
       saveCachedEntries(sorted);
-      setError(null);
+      cacheSavedAtRef.current = Date.now();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Network error";
       if (isNetworkFetchError(err)) {
         const now = Date.now();
         if (now - warnAtRef.current >= WARN_THROTTLE_MS) {
           warnAtRef.current = now;
-          console.warn(`[useJackpotHistory] Network unavailable: ${msg}`);
+          log.info("JackpotHistory", `refresh skipped: ${msg}`);
         }
       } else {
         const now = Date.now();
         if (now - warnAtRef.current >= WARN_THROTTLE_MS) {
           warnAtRef.current = now;
-          console.warn(`[useJackpotHistory] Failed to refresh jackpots: ${msg}`);
+          log.warn("JackpotHistory", `refresh failed: ${msg}`);
         }
       }
 
       // Keep stale data on screen if available to avoid blank analytics panel.
-      setError(msg);
+      if (mountedRef.current) {
+        setError(msg);
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
       runningRef.current = false;
     }
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const id = setInterval(() => {
-      void refresh();
-    }, REFRESH_MS);
-    return () => clearInterval(id);
-  }, [refresh]);
+    if (!enabled) return;
+    const savedAt = cacheSavedAtRef.current;
+    const initialDelay =
+      savedAt && Date.now() - savedAt < REFRESH_MS
+        ? REFRESH_MS - (Date.now() - savedAt)
+        : 0;
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const schedule = (delayMs: number) => {
+      timeoutId = setTimeout(async () => {
+        if (cancelled) return;
+        await refresh();
+        if (cancelled) return;
+        schedule(REFRESH_MS);
+      }, delayMs);
+    };
+
+    schedule(initialDelay);
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [enabled, refresh]);
 
   return { items, loading, error, refresh };
 }

@@ -1,10 +1,8 @@
 "use client";
 
-import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/cn";
-import { UiBadge } from "./ui/UiBadge";
 import { UiButton } from "./ui/UiButton";
-import { uiTokens } from "./ui/tokens";
 
 interface JackpotBannerProps {
   winningTileId: number | null;
@@ -14,9 +12,11 @@ interface JackpotBannerProps {
     hasMyBet: boolean;
   }>;
   epoch: string | null;
+  walletAddress?: string | null;
   isDailyJackpot?: boolean;
   isWeeklyJackpot?: boolean;
   jackpotAmount?: number;
+  hasMyWinningBet?: boolean;
   reducedMotion?: boolean;
 }
 
@@ -25,9 +25,11 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   isRevealing,
   tileViewData,
   epoch,
+  walletAddress,
   isDailyJackpot = false,
   isWeeklyJackpot = false,
   jackpotAmount = 0,
+  hasMyWinningBet = false,
   reducedMotion = false,
 }: JackpotBannerProps) {
   const [showBanner, setShowBanner] = useState(false);
@@ -36,31 +38,48 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isMyWin = useMemo(() => {
+    if (hasMyWinningBet) return true;
     if (winningTileId === null) return false;
     return tileViewData.some((t) => t.tileId === winningTileId && t.hasMyBet);
-  }, [winningTileId, tileViewData]);
+  }, [hasMyWinningBet, tileViewData, winningTileId]);
 
   const isDualJackpot = isDailyJackpot && isWeeklyJackpot;
   const isJackpotWin = isMyWin && (isDailyJackpot || isWeeklyJackpot);
 
-  const particleItems = useMemo(
+  const sparkles = useMemo(
     () =>
-      Array.from({ length: 12 }, (_, i) => ({
-        id: i,
-        left: `${Math.random() * 100}%`,
-        duration: `${1.5 + Math.random()}s`,
-        delay: `${Math.random() * 0.5}s`,
-        icon: i % 2 === 0 ? "🪙" : "💎",
+      Array.from({ length: 10 }, (_, index) => ({
+        id: index,
+        left: `${10 + Math.random() * 80}%`,
+        top: `${10 + Math.random() * 78}%`,
+        size: index % 3 === 0 ? 18 : index % 3 === 1 ? 12 : 8,
+        delay: `${Math.random() * 1.4}s`,
+        duration: `${2.2 + Math.random() * 1.1}s`,
+        rotate: index % 2 === 0 ? 12 : 32,
+        opacity: index % 3 === 0 ? 0.92 : 0.68,
       })),
     [],
   );
 
-  // Reset dismissed state when a new reveal starts
+  const coins = useMemo(
+    () =>
+      Array.from({ length: 6 }, (_, index) => ({
+        id: index,
+        left: `${8 + Math.random() * 84}%`,
+        top: `${8 + Math.random() * 84}%`,
+        delay: `${Math.random() * 1.1}s`,
+        size: index % 2 === 0 ? 20 : 14,
+        rotate: index % 2 === 0 ? -18 : 18,
+        opacity: index % 2 === 0 ? 0.92 : 0.72,
+      })),
+    [],
+  );
+
   useEffect(() => {
     if (isRevealing && isJackpotWin) {
       setIsDismissed(false);
     }
-  }, [isRevealing, isJackpotWin, winningTileId]);
+  }, [isJackpotWin, isRevealing, winningTileId]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -69,12 +88,12 @@ export const JackpotBanner = React.memo(function JackpotBanner({
       timer = setTimeout(() => setShowContent(true), 100);
     } else {
       setShowContent(false);
-      timer = setTimeout(() => setShowBanner(false), 500);
+      timer = setTimeout(() => setShowBanner(false), 450);
     }
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [isRevealing, isJackpotWin, isDismissed, winningTileId]);
+  }, [isDismissed, isJackpotWin, isRevealing]);
 
   const handleClose = useCallback(() => {
     setIsDismissed(true);
@@ -82,17 +101,17 @@ export const JackpotBanner = React.memo(function JackpotBanner({
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
     closeTimerRef.current = setTimeout(() => {
       setShowBanner(false);
-    }, 300);
+    }, 280);
   }, []);
 
   useEffect(() => {
     if (!showBanner) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") handleClose();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") handleClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showBanner, handleClose]);
+  }, [handleClose, showBanner]);
 
   useEffect(() => {
     return () => {
@@ -100,177 +119,265 @@ export const JackpotBanner = React.memo(function JackpotBanner({
     };
   }, []);
 
-  const handleShareToX = useCallback(() => {
-    const typeLabel = isDualJackpot
-      ? "Daily + Weekly Jackpot"
-      : isDailyJackpot
-        ? "Daily Jackpot"
-        : isWeeklyJackpot
-          ? "Weekly Jackpot"
-          : "Jackpot";
-    const amountPart =
-      jackpotAmount > 0
-        ? `${jackpotAmount.toLocaleString("en-US", { maximumFractionDigits: 2 })} LINEA`
-        : "a big reward";
-    const epochPart = epoch ? ` in epoch #${epoch}` : "";
-    const text = `I just hit a ${typeLabel} on LORE! Winning tile #${winningTileId}${epochPart}. Reward: ${amountPart}. Built with @Linea_Ore on @LineaBuild.`;
-    const pageUrl = typeof window !== "undefined" ? window.location.origin : "https://lore.game";
-    const shareUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(pageUrl)}&via=${encodeURIComponent("Linea_Ore")}`;
-    window.open(shareUrl, "_blank", "noopener,noreferrer");
-  }, [isDailyJackpot, isDualJackpot, isWeeklyJackpot, jackpotAmount, epoch, winningTileId]);
+  const headerText = isDualJackpot
+    ? "DOUBLE JACKPOT!"
+    : isDailyJackpot
+      ? "DAILY JACKPOT!"
+      : "WEEKLY JACKPOT!";
+  const amountText =
+    jackpotAmount > 0
+      ? jackpotAmount.toLocaleString("en-US", { maximumFractionDigits: 2 })
+      : "0";
+  const palette = isDailyJackpot
+    ? {
+        shell: "from-[#120e14] via-[#20171d] to-[#120d14]",
+        shellInner: "from-[#1a1418] via-[#2a2023] to-[#171117]",
+        glow: "rgba(234,194,113,0.24)",
+        frame: "border-[#d7b16d]",
+        rim: "border-[#f2d89f]/10",
+        beam: "rgba(226,186,97,0.08)",
+        beamAlt: "rgba(226,186,97,0.03)",
+        accent: "text-[#e2bc75]",
+        headlineFrom: "#fff1c9",
+        headlineVia: "#ffd67b",
+        headlineTo: "#b77b2f",
+        prize: "from-[#171116] via-[#24191d] to-[#151015]",
+        prizeBorder: "border-[#d7b16d]/40",
+        button: "from-[#6f4923] via-[#b9873e] to-[#694520]",
+        buttonBorder: "border-[#f0d08c]/55",
+        shareBorder: "border-[#d7b16d]/18",
+        shareBg: "bg-white/[0.04]",
+        shareText: "text-[#f3e3c1]",
+      }
+    : {
+        shell: "from-[#10131d] via-[#172130] to-[#0f131d]",
+        shellInner: "from-[#151b27] via-[#1c2736] to-[#141a25]",
+        glow: "rgba(139,166,255,0.22)",
+        frame: "border-[#9fb6ee]",
+        rim: "border-[#dce8ff]/10",
+        beam: "rgba(145,166,255,0.07)",
+        beamAlt: "rgba(110,199,255,0.04)",
+        accent: "text-[#a7c2ff]",
+        headlineFrom: "#eff6ff",
+        headlineVia: "#9fd3ff",
+        headlineTo: "#5f8dff",
+        prize: "from-[#111824] via-[#172233] to-[#111723]",
+        prizeBorder: "border-[#8eb8ff]/40",
+        button: "from-[#36548d] via-[#5583d4] to-[#304d84]",
+        buttonBorder: "border-[#bed7ff]/45",
+        shareBorder: "border-[#a8c7ff]/18",
+        shareBg: "bg-white/[0.04]",
+        shareText: "text-[#e3edff]",
+      };
+
+  const share = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const kind = isDualJackpot ? "dual" : isDailyJackpot ? "daily" : "weekly";
+    const ogParams = new URLSearchParams();
+    ogParams.set("kind", kind);
+    ogParams.set("amount", amountText);
+    if (winningTileId !== null) ogParams.set("tile", String(winningTileId));
+    if (epoch) ogParams.set("epoch", epoch);
+    if (walletAddress) ogParams.set("winner", walletAddress);
+    const sharePageUrl = `${window.location.origin}/jackpot-win?${ogParams.toString()}`;
+
+    const lines = [
+      `I just hit the ${headerText.replace("!", "")} in LORE!`,
+      winningTileId !== null ? `Winning Tile: #${winningTileId}` : null,
+      `Reward: ${amountText} LINEA`,
+      "",
+      sharePageUrl,
+    ].filter((l) => l !== null);
+
+    const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(lines.join("\n"))}`;
+    window.open(tweetUrl, "_blank", "noopener,noreferrer");
+  }, [amountText, epoch, headerText, isDailyJackpot, isDualJackpot, walletAddress, winningTileId]);
 
   if (!showBanner || isDismissed) return null;
-
-  const jackpotType = isDualJackpot ? "DOUBLE" : isDailyJackpot ? "DAILY" : isWeeklyJackpot ? "WEEKLY" : "JACKPOT";
-  const theme = isDualJackpot
-    ? {
-        gradient: "from-amber-400 via-fuchsia-500 to-sky-500",
-        glow: "shadow-[0_0_60px_rgba(244,114,182,0.45),0_0_100px_rgba(56,189,248,0.3)]",
-        button: "bg-fuchsia-900/35 hover:bg-fuchsia-900/55 border border-pink-200/40",
-      }
-    : isDailyJackpot
-    ? {
-        gradient: "from-amber-500 via-yellow-400 to-amber-500",
-        glow: "shadow-[0_0_60px_rgba(251,191,36,0.5),0_0_100px_rgba(251,191,36,0.3)]",
-        button: "bg-amber-900/35 hover:bg-amber-900/55 border border-amber-200/40",
-      }
-    : isWeeklyJackpot
-      ? {
-          gradient: "from-cyan-500 via-sky-500 to-indigo-600",
-          glow: "shadow-[0_0_60px_rgba(56,189,248,0.5),0_0_100px_rgba(59,130,246,0.3)]",
-          button: "bg-sky-900/35 hover:bg-sky-900/55 border border-cyan-200/40",
-        }
-      : {
-          gradient: "from-violet-500 via-fuchsia-500 to-violet-500",
-          glow: "shadow-[0_0_60px_rgba(139,92,246,0.5),0_0_100px_rgba(139,92,246,0.3)]",
-          button: "bg-violet-900/35 hover:bg-violet-900/55 border border-violet-200/40",
-        };
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={`${jackpotType} Jackpot Win`}
-      className={`fixed inset-0 z-[100] flex items-center justify-center transition-all duration-500 ${
+      aria-label={`${headerText} Win`}
+      className={`fixed inset-0 z-[100] flex items-center justify-center transition-opacity duration-500 ${
         showContent ? "opacity-100" : "opacity-0"
       }`}
     >
-      {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(240,210,130,0.06),transparent_24%),rgba(10,8,17,0.76)] backdrop-blur-[6px]"
         onClick={handleClose}
       />
 
-      {/* Main Banner */}
+      {!reducedMotion && (
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div
+            className="absolute left-1/2 top-1/2 h-[58rem] w-[58rem] -translate-x-1/2 -translate-y-1/2 rounded-full"
+            style={{
+              background: `repeating-conic-gradient(from 0deg, ${palette.beam} 0deg 8deg, transparent 8deg 28deg, ${palette.beamAlt} 28deg 35deg, transparent 35deg 56deg)`,
+              filter: "blur(2px)",
+            }}
+          />
+          <div
+            className="absolute left-1/2 top-1/2 h-[38rem] w-[38rem] -translate-x-1/2 -translate-y-1/2 rounded-full"
+            style={{
+              background: `radial-gradient(circle, ${palette.glow} 0%, rgba(255,255,255,0.06) 16%, transparent 62%)`,
+            }}
+          />
+        </div>
+      )}
+
       <div
         className={cn(
-          "relative z-10 mx-4 p-6 md:p-8 bg-gradient-to-r",
-          !reducedMotion && "animate-scale-in",
-          uiTokens.radius.lg,
-          theme.gradient,
-          theme.glow,
+          "relative z-10 mx-4 w-full max-w-[42rem] overflow-hidden rounded-[2rem] border bg-gradient-to-br px-5 py-5 text-center sm:px-6 sm:py-6",
+          palette.shell,
+          palette.frame,
         )}
-        style={{ animation: !reducedMotion && showContent ? "jackpot-scale 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)" : undefined }}
+        style={{
+          boxShadow: `0 0 38px ${palette.glow}, 0 30px 80px rgba(0,0,0,0.42)`,
+          animation: !reducedMotion && showContent ? "jackpot-scale 0.52s cubic-bezier(0.22, 1, 0.36, 1)" : undefined,
+        }}
       >
-        {/* Glow effect */}
-        {!reducedMotion && (
-          <div className={cn("absolute inset-0 animate-pulse opacity-50", uiTokens.radius.lg)}>
-            <div className={cn("absolute inset-0 bg-gradient-to-r from-white/20 to-transparent", uiTokens.radius.lg)} />
-          </div>
-        )}
+        <div className={cn("absolute inset-[10px] rounded-[1.55rem] border bg-gradient-to-br", palette.shellInner, palette.rim)} />
+        <div className="absolute inset-x-10 top-0 h-28 bg-[radial-gradient(circle_at_top,rgba(255,244,205,0.14),transparent_70%)]" />
+        <div className="absolute left-1/2 top-[18%] h-[26rem] w-[26rem] -translate-x-1/2 rounded-full border border-white/5" />
+        <div className="absolute left-1/2 top-[18%] h-[26rem] w-[26rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(255,214,124,0.08),transparent_62%)]" />
 
-        {/* Content */}
-        <div className="relative text-center">
-          {/* JACKPOT text */}
-          <div className="mb-2">
-            <UiBadge
-              tone="default"
-              size="sm"
-              pill
-              uppercase
-              className="border-white/35 bg-black/20 text-white/90 tracking-[0.24em] px-3 py-1"
+        <button
+          type="button"
+          aria-label="Close jackpot banner"
+          onClick={handleClose}
+          className="absolute right-6 top-6 z-20 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/20 text-lg text-white/70 transition hover:bg-black/30 hover:text-white"
+        >
+          <span aria-hidden="true">&times;</span>
+        </button>
+
+        <div className="relative z-10">
+          <div className="mx-auto max-w-[30rem]">
+            <div className={cn("mx-auto inline-flex rounded-full border px-4 py-2 text-[0.72rem] font-semibold uppercase tracking-[0.34em]", palette.shareBorder, palette.accent)}>
+              {isDualJackpot ? "Dual payout unlocked" : isDailyJackpot ? "Daily reward pool" : "Weekly reward pool"}
+            </div>
+
+            <h2
+              className="mt-6 text-[2.25rem] font-semibold uppercase tracking-[0.24em] text-white/92 sm:text-[3rem]"
+              style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
             >
-              {jackpotType} JACKPOT! 🎰
-            </UiBadge>
-          </div>
+              {headerText.replace("!", "")}
+            </h2>
 
-          {/* Big WIN text */}
-          <h1 className={`text-5xl md:text-7xl font-black text-white drop-shadow-[0_0_20px_rgba(255,255,255,0.8)] mb-2 ${reducedMotion ? "" : "animate-bounce"}`}>
-            WIN!
-          </h1>
-
-          {/* Tile number */}
-          <div className="mb-4">
-            <span className="text-lg md:text-xl font-bold text-white/90">
-              Winning Tile: <span className="text-3xl md:text-4xl font-black text-white">#{winningTileId}</span>
-            </span>
-          </div>
-
-          {/* Amount */}
-          {jackpotAmount > 0 && (
-            <div className="mb-4">
-              <div className="inline-block px-4 py-2 rounded-lg bg-black/30 border border-white/20">
-                <span className="text-sm text-white/70">You won</span>
-                <div className="text-2xl md:text-3xl font-black text-white">
-                  {jackpotAmount.toLocaleString("en-US", { maximumFractionDigits: 2 })} LINEA
-                </div>
+            <div className="mt-3">
+              <div
+                className="bg-clip-text text-[5.5rem] font-semibold uppercase leading-[0.88] tracking-[0.06em] text-transparent sm:text-[7rem]"
+                style={{
+                  fontFamily: 'Georgia, "Times New Roman", serif',
+                  backgroundImage: `linear-gradient(180deg, ${palette.headlineFrom} 0%, ${palette.headlineVia} 46%, ${palette.headlineTo} 100%)`,
+                  textShadow: "0 12px 28px rgba(0,0,0,0.32)",
+                  filter: "drop-shadow(0 0 12px rgba(255,218,122,0.12))",
+                }}
+              >
+                WIN!
               </div>
             </div>
-          )}
 
-          {/* Epoch */}
-          {epoch && (
-            <div className="mb-6">
-              <span className="text-sm text-white/60">Epoch #{epoch}</span>
+            <div className="mt-6 flex items-center justify-center gap-4 text-white/78">
+              <div className="h-px w-16 bg-gradient-to-r from-transparent to-white/35 sm:w-24" />
+              <div className="text-[0.92rem] font-medium uppercase tracking-[0.28em] sm:text-[1rem]">
+                {winningTileId !== null ? `Winning Tile ${winningTileId}` : "Jackpot Winner"}
+              </div>
+              <div className="h-px w-16 bg-gradient-to-l from-transparent to-white/35 sm:w-24" />
             </div>
-          )}
 
-          {/* Close button */}
-          <div className="flex flex-col sm:flex-row gap-2 justify-center">
-            <UiButton
-              onClick={handleClose}
-              variant="ghost"
-              size="md"
-              className="min-w-[132px] border-white/35 bg-white/20 text-white hover:bg-white/30 hover:text-white"
+            <div
+              className={cn(
+                "mx-auto mt-7 w-full max-w-[26rem] rounded-[1.25rem] border bg-gradient-to-br px-6 py-5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]",
+                palette.prize,
+                palette.prizeBorder,
+              )}
             >
-              AWESOME!
-            </UiButton>
-            <UiButton
-              onClick={handleShareToX}
-              variant="secondary"
-              size="md"
-              className={cn("min-w-[132px] text-white border-white/35", theme.button)}
-            >
-              Share on X
-            </UiButton>
+              <div className="text-[0.76rem] uppercase tracking-[0.3em] text-white/44">Payout</div>
+              <div className="mt-2 text-[1.1rem] text-white/78 sm:text-[1.2rem]">You won</div>
+              <div className={cn("mt-1 text-[2rem] font-semibold tracking-[0.04em] sm:text-[2.5rem]", palette.accent)}>
+                {amountText} LINEA
+              </div>
+            </div>
+
+            <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:justify-center">
+              <UiButton
+                onClick={handleClose}
+                variant="ghost"
+                size="md"
+                className={cn(
+                  "min-h-14 min-w-[15rem] rounded-[0.95rem] border bg-gradient-to-r px-8 py-4 text-[0.95rem] font-semibold uppercase tracking-[0.24em] text-white transition hover:brightness-105",
+                  palette.button,
+                  palette.buttonBorder,
+                )}
+              >
+                Collect Reward
+              </UiButton>
+
+              <UiButton
+                onClick={share}
+                variant="ghost"
+                size="md"
+                className={cn(
+                  "min-h-14 min-w-[15rem] rounded-[0.95rem] border px-8 py-4 text-[0.95rem] font-semibold uppercase tracking-[0.18em] transition hover:bg-white/[0.08]",
+                  palette.shareBorder,
+                  palette.shareBg,
+                  palette.shareText,
+                )}
+              >
+                <span className="text-base font-bold">X</span>
+                Share on X
+              </UiButton>
+            </div>
           </div>
         </div>
 
         {!reducedMotion && (
-          <>
-            {/* Particle effects - sparkles */}
-            <div className="absolute top-4 left-4 text-2xl animate-ping">✨</div>
-            <div className="absolute top-4 right-4 text-2xl animate-ping" style={{ animationDelay: "0.2s" }}>✨</div>
-            <div className="absolute bottom-4 left-4 text-2xl animate-ping" style={{ animationDelay: "0.4s" }}>✨</div>
-            <div className="absolute bottom-4 right-4 text-2xl animate-ping" style={{ animationDelay: "0.6s" }}>✨</div>
-
-            {/* Coins falling effect */}
-            <div className={cn("absolute inset-0 pointer-events-none overflow-hidden", uiTokens.radius.lg)}>
-              {particleItems.map((item) => (
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            {sparkles.map((sparkle) => (
+              <div
+                key={sparkle.id}
+                className="absolute"
+                style={{
+                  left: sparkle.left,
+                  top: sparkle.top,
+                  animation: `jackpot-glow ${sparkle.duration} ease-in-out infinite`,
+                  animationDelay: sparkle.delay,
+                }}
+              >
                 <div
-                  key={item.id}
-                  className="absolute text-2xl"
+                  className="bg-[#ffe9ad]"
                   style={{
-                    left: item.left,
-                    animation: `coin-fall ${item.duration} linear infinite`,
-                    animationDelay: item.delay,
+                    width: `${sparkle.size}px`,
+                    height: `${sparkle.size}px`,
+                    clipPath: "polygon(50% 0%, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0% 50%, 38% 38%)",
+                    transform: `rotate(${sparkle.rotate}deg)`,
+                    opacity: sparkle.opacity,
+                    filter: "drop-shadow(0 0 8px rgba(255,224,146,0.34))",
                   }}
-                >
-                  {item.icon}
-                </div>
-              ))}
-            </div>
-          </>
+                />
+              </div>
+            ))}
+
+            {coins.map((coin) => (
+              <div
+                key={coin.id}
+                className="absolute rounded-full border border-[#ffefab]/45 bg-[radial-gradient(circle_at_30%_30%,#fff6ba,#ffcb4e_45%,#d97b15_100%)]"
+                style={{
+                  left: coin.left,
+                  top: coin.top,
+                  width: `${coin.size}px`,
+                  height: `${coin.size}px`,
+                  transform: `rotate(${coin.rotate}deg)`,
+                  opacity: coin.opacity,
+                  animation: "jackpot-glow 2.8s ease-in-out infinite",
+                  animationDelay: coin.delay,
+                  boxShadow: "0 0 14px rgba(255,203,94,0.18)",
+                }}
+              />
+            ))}
+          </div>
         )}
       </div>
     </div>

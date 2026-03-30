@@ -3,6 +3,7 @@ export type TabId = "hub" | "analytics" | "rebate" | "leaderboards" | "whitepape
 export interface LeaderboardEntry {
   rank: number;
   address: string;
+  name?: string;
   value: string;
   valueNum: number;
   extra?: string;

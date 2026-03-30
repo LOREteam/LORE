@@ -1,133 +1,64 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { useAccount, useReadContract, useReadContracts, useBalance, usePublicClient } from "wagmi";
-import { decodeEventLog, formatUnits, getAddress, parseAbiItem, type Log } from "viem";
-import {
-  CONTRACT_ADDRESS,
-  CONTRACT_DEPLOY_BLOCK,
-  LINEA_TOKEN_ADDRESS,
-  GAME_ABI,
-  GAME_EVENTS_ABI,
-  TOKEN_ABI,
-  GRID_SIZE,
-  HISTORY_DEPTH,
-  MIN_WINNER_DISPLAY_MS,
-  MAX_REVEAL_DURATION_MS,
-  APP_CHAIN_ID,
-} from "../lib/constants";
-
-type EpochTuple = readonly [bigint, bigint, bigint, boolean, boolean, boolean];
+import { useMemo, useState } from "react";
+import { type PollPhase, useGameRevealState } from "./useGameEpochPresentation";
+import { useGameCountdown } from "./useGameCountdown";
+import { useGameCoreReads } from "./useGameCoreReads";
+import { useGameDerivedState } from "./useGameDerivedState";
+import { useGameEffectiveState } from "./useGameEffectiveState";
+import { useGameGridReads } from "./useGameGridReads";
+import { useGameHistoryData } from "./useGameHistoryData";
+import { useGameLiveStateSnapshot, type LiveStateApiResponse } from "./useGameLiveStateSnapshot";
+import { useGamePollingConfig } from "./useGamePollingConfig";
+import { useGameTileUserCounts } from "./useGameTileUserCounts";
+import { useGameUserBets } from "./useGameUserBets";
+import { useGameWalletContext } from "./useGameWalletContext";
 
 interface UseGameDataOptions {
   historyDetailed?: boolean;
+  initialServerLiveState?: LiveStateApiResponse | null;
+  liveGrid?: boolean;
   preferredAddress?: `0x${string}` | string | null;
-}
-
-const AUTO_MINER_STORAGE_KEY = `lineaore:auto-miner-session:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
-const TILE_USER_COUNT_LOG_CHUNK = 25_000n;
-const TILE_USER_COUNT_MAX_CONCURRENT = 4;
-
-function createZeroTileUserCounts(): number[] {
-  return Array.from({ length: GRID_SIZE }, () => 0);
-}
-
-function isAutoMineSessionActive(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    const raw = window.localStorage.getItem(AUTO_MINER_STORAGE_KEY);
-    if (!raw) return false;
-    const parsed = JSON.parse(raw) as { active?: boolean };
-    return Boolean(parsed?.active);
-  } catch {
-    return false;
-  }
 }
 
 export function useGameData(options?: UseGameDataOptions) {
   const historyDetailed = options?.historyDetailed ?? false;
+  const initialServerLiveState = options?.initialServerLiveState ?? null;
+  const liveGrid = options?.liveGrid ?? true;
   const preferredAddress = options?.preferredAddress ?? null;
-  const { address } = useAccount();
-  const chainId = APP_CHAIN_ID;
-  const publicClient = usePublicClient({ chainId });
-  const walletAddress = useMemo(() => {
-    const candidate = preferredAddress ?? address;
-    if (!candidate) return undefined;
-    try {
-      return getAddress(candidate);
-    } catch {
-      return undefined;
-    }
-  }, [preferredAddress, address]);
-  const { data: tokenBalance } = useBalance({ address: walletAddress, token: LINEA_TOKEN_ADDRESS, chainId });
-  const [isPageVisible, setIsPageVisible] = useState(true);
-  const [autoMineSessionActive, setAutoMineSessionActive] = useState(false);
-  const [tileUserCounts, setTileUserCounts] = useState<number[]>(() => createZeroTileUserCounts());
-  const tileUserCountEpochRef = useRef<string | null>(null);
-  const tileUserCountLastBlockRef = useRef<bigint | null>(null);
-  const tileUserCountSetsRef = useRef<Array<Set<string>>>(Array.from({ length: GRID_SIZE }, () => new Set<string>()));
-  const tileUserCountFetchInFlightRef = useRef(false);
+  const {
+    address,
+    chainId,
+    walletAddress,
+    tokenBalance,
+    isPageVisible,
+    autoMineSessionActive,
+  } = useGameWalletContext({ preferredAddress });
+  const positiveBigIntOrUndefined = (value: bigint | null | undefined) =>
+    value != null && value > 0n ? value : undefined;
 
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const onVisibility = () => setIsPageVisible(document.visibilityState === "visible");
-    onVisibility();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sync = () => setAutoMineSessionActive(isAutoMineSessionActive());
-    sync();
-    const onStorage = (e: StorageEvent) => {
-      if (!e.key || e.key === AUTO_MINER_STORAGE_KEY) sync();
-    };
-    window.addEventListener("storage", onStorage);
-    const iv = window.setInterval(sync, 1500);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.clearInterval(iv);
-    };
-  }, []);
+  const {
+    fallbackCurrentEpoch,
+    fallbackEpochEndTime,
+    fallbackJackpotInfoRaw,
+    fallbackRolloverPoolRaw,
+    fallbackCurrentEpochData,
+    fallbackTileData,
+    fallbackTileUserCounts,
+    fallbackIndexedTilePools,
+    fallbackEpochDuration,
+    fallbackPendingEpochDuration,
+    fallbackPendingEpochDurationEta,
+    fallbackPendingEpochDurationEffectiveFromEpoch,
+    liveStateBootstrapPending,
+    liveContractReadsEnabled,
+  } = useGameLiveStateSnapshot({ initialSnapshot: initialServerLiveState, isPageVisible });
 
   const [visualEpoch, setVisualEpoch] = useState<string | null>(null);
   const [isRevealing, setIsRevealing] = useState(false);
   const [lockedGridEpoch, setLockedGridEpoch] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState(0);
-
-  // Polling speed tier – changes only at thresholds, not every second
-  type PollPhase = "fast" | "medium" | "slow";
   const [pollPhase, setPollPhase] = useState<PollPhase>("slow");
-  const timeLeftRef = useRef(0);
-
-  const revealIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const revealStartTimeRef = useRef<number>(0);
-  const winnerFoundTimeRef = useRef<number>(0);
-  const revealTargetEpochRef = useRef<string | null>(null);
-  const revealSafetyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-
-  const forceExitReveal = useCallback(() => {
-    if (revealIntervalRef.current) {
-      clearInterval(revealIntervalRef.current);
-      revealIntervalRef.current = null;
-    }
-    if (revealSafetyRef.current) {
-      clearTimeout(revealSafetyRef.current);
-      revealSafetyRef.current = null;
-    }
-    const targetEpoch = revealTargetEpochRef.current;
-    revealTargetEpochRef.current = null;
-    setIsRevealing(false);
-    setLockedGridEpoch(null);
-    if (targetEpoch != null) setVisualEpoch(targetEpoch);
-  }, []);
-
-  const visualEpochBigInt = useMemo(
-    () => (visualEpoch ? BigInt(visualEpoch) : null),
-    [visualEpoch],
-  );
 
   // lockedGridEpoch persists until the new epoch is ready - prevents intermediate flash
   const gridDisplayEpoch = lockedGridEpoch ?? visualEpoch;
@@ -136,576 +67,187 @@ export function useGameData(options?: UseGameDataOptions) {
     [gridDisplayEpoch],
   );
 
-  // --- Core contract reads (polling speed driven by pollPhase, not timeLeft) ---
-  // Linea blocks are ~2s; polling faster than 1s is wasteful.
-  const epochInterval = isPageVisible
-    ? pollPhase === "fast"
-      ? 1200
-      : pollPhase === "medium"
-        ? 2500
-        : 5000
-    : 20_000;
-  const epochEndInterval = isPageVisible ? (pollPhase === "fast" ? 1800 : 6000) : 20_000;
-  const liveGridInterval = autoMineSessionActive ? 1000 : 3000;
-  const liveUserBetsInterval = autoMineSessionActive ? 1000 : 3000;
-  const gridEpochInterval = isPageVisible
-    ? (isRevealing ? 500 : autoMineSessionActive ? 1000 : pollPhase === "fast" ? 1500 : 5000)
-    : 20_000;
-
-  const { data: actualCurrentEpoch, refetch: refetchEpoch } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "currentEpoch",
-    chainId, query: { refetchInterval: epochInterval },
-  });
-  const { data: epochDurationSec } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochDuration",
-    chainId, query: { refetchInterval: isPageVisible ? 15000 : 30000 },
-  });
-  const { data: pendingEpochDuration } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "pendingEpochDuration",
-    chainId, query: { refetchInterval: isPageVisible ? 30000 : 60000 },
-  });
-  const { data: pendingEpochDurationEta } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "pendingEpochDurationEta",
-    chainId, query: { refetchInterval: isPageVisible ? 30000 : 60000 },
-  });
-  const { data: pendingEpochDurationEffectiveFromEpoch } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "pendingEpochDurationEffectiveFromEpoch",
-    chainId, query: { refetchInterval: isPageVisible ? 30000 : 60000 },
+  const {
+    epochInterval,
+    epochEndInterval,
+    liveGridInterval,
+    liveUserBetsInterval,
+    gridEpochInterval,
+  } = useGamePollingConfig({
+    isPageVisible,
+    pollPhase,
+    liveGrid,
+    autoMineSessionActive,
+    isRevealing,
   });
 
-  const { data: epochEndTime, refetch: refetchEpochEndTime } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getEpochEndTime",
-    args: actualCurrentEpoch ? [actualCurrentEpoch] : undefined,
-    chainId, query: { enabled: !!actualCurrentEpoch, refetchInterval: epochEndInterval },
+  const {
+    actualCurrentEpoch,
+    refetchEpoch,
+    epochDurationSec,
+    pendingEpochDuration,
+    pendingEpochDurationEta,
+    pendingEpochDurationEffectiveFromEpoch,
+    jackpotInfoRaw,
+    rolloverPoolRaw,
+  } = useGameCoreReads({
+    liveContractReadsEnabled,
+    isPageVisible,
+    epochInterval,
+  });
+  const currentEpochForReads =
+    positiveBigIntOrUndefined(actualCurrentEpoch) ?? positiveBigIntOrUndefined(fallbackCurrentEpoch);
+  const {
+    epochEndTime,
+    refetchEpochEndTime,
+    tileData,
+    refetchTileData,
+    gridAndCurrentAreSame,
+    gridEpochData,
+    refetchGridEpochData,
+    separateCurrentEpochData,
+    currentAllowance,
+    refetchAllowance,
+  } = useGameGridReads({
+    liveContractReadsEnabled,
+    liveGrid,
+    isPageVisible,
+    isRevealing,
+    walletAddress,
+    resolvedCurrentEpoch: currentEpochForReads,
+    gridDisplayEpochBigInt,
+    epochEndInterval,
+    liveGridInterval,
+    gridEpochInterval,
+  });
+  const {
+    resolvedCurrentEpoch,
+    serverStateMatchesGrid,
+    effectiveGridEpochData,
+    effectiveTileData,
+    currentEpochResolved,
+    effectiveEpochEndTime,
+    effectiveJackpotInfoRaw,
+    effectiveRolloverPoolRaw,
+    effectiveEpochDurationSec,
+    effectivePendingEpochDuration,
+    effectivePendingEpochDurationEta,
+    effectivePendingEpochDurationEffectiveFromEpoch,
+    liveStateReady,
+  } = useGameEffectiveState({
+    actualCurrentEpoch,
+    fallbackCurrentEpoch,
+    gridDisplayEpochBigInt,
+    gridEpochData,
+    fallbackCurrentEpochData,
+    tileData,
+    fallbackTileData,
+    fallbackIndexedTilePools,
+    gridAndCurrentAreSame,
+    separateCurrentEpochData,
+    epochEndTime,
+    fallbackEpochEndTime,
+    jackpotInfoRaw,
+    fallbackJackpotInfoRaw,
+    rolloverPoolRaw,
+    fallbackRolloverPoolRaw,
+    epochDurationSec,
+    fallbackEpochDuration,
+    pendingEpochDuration,
+    fallbackPendingEpochDuration,
+    pendingEpochDurationEta,
+    fallbackPendingEpochDurationEta,
+    pendingEpochDurationEffectiveFromEpoch,
+    fallbackPendingEpochDurationEffectiveFromEpoch,
   });
 
-  const { data: jackpotInfoRaw } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getJackpotInfo",
-    chainId, query: { refetchInterval: isPageVisible ? 15000 : 30000 },
+  const { userBetsAll, refetchUserBets } = useGameUserBets({
+    chainId,
+    gridDisplayEpochBigInt,
+    walletAddress,
+    isPageVisible,
+    liveUserBetsInterval,
   });
 
-  const { data: rolloverPoolRaw } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "rolloverPool",
-    chainId, query: { refetchInterval: isPageVisible ? 15000 : 30000 },
+  useGameRevealState({
+    actualCurrentEpoch: resolvedCurrentEpoch,
+    gridEpochData: effectiveGridEpochData,
+    visualEpoch,
+    isRevealing,
+    lockedGridEpoch,
+    setVisualEpoch,
+    setIsRevealing,
+    setLockedGridEpoch,
+    refetchGridEpochData,
+    refetchUserBets,
   });
 
-  const { data: tileData, refetch: refetchTileData } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getTileData",
-    args: gridDisplayEpochBigInt ? [gridDisplayEpochBigInt] : undefined,
-    chainId, query: { enabled: !!gridDisplayEpochBigInt, refetchInterval: isPageVisible ? liveGridInterval : 20000 },
+  const { tileUserCounts } = useGameTileUserCounts({
+    gridDisplayEpochBigInt,
+    liveGrid,
+    serverStateMatchesGrid,
+    fallbackTileUserCounts,
   });
 
-  // Prefetch tile data + user bets for the NEXT epoch during reveal so transition is instant
-  const prefetchEpoch = isRevealing && actualCurrentEpoch && gridDisplayEpochBigInt && actualCurrentEpoch !== gridDisplayEpochBigInt
-    ? actualCurrentEpoch : undefined;
-  useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getTileData",
-    args: prefetchEpoch ? [prefetchEpoch] : undefined,
-    chainId, query: { enabled: !!prefetchEpoch && isPageVisible, refetchInterval: 0 },
-  });
-  useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-    args: prefetchEpoch && walletAddress ? [prefetchEpoch, walletAddress] : undefined,
-    chainId, query: { enabled: !!prefetchEpoch && !!walletAddress && isPageVisible, refetchInterval: 0 },
-  });
-  useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getEpochEndTime",
-    args: prefetchEpoch ? [prefetchEpoch] : undefined,
-    chainId, query: { enabled: !!prefetchEpoch && isPageVisible, refetchInterval: 0 },
+  useGameCountdown({
+    effectiveEpochEndTime,
+    liveStateReady,
+    isRevealing,
+    visualEpoch,
+    lockedGridEpoch,
+    setLockedGridEpoch,
+    refetchEpoch,
+    refetchGridEpochData,
+    refetchEpochEndTime,
+    setTimeLeft,
+    setPollPhase,
   });
 
-  const gridAndCurrentAreSame =
-    gridDisplayEpochBigInt != null &&
-    actualCurrentEpoch != null &&
-    gridDisplayEpochBigInt === actualCurrentEpoch;
-
-  const { data: gridEpochData, refetch: refetchGridEpochData } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochs",
-    args: gridDisplayEpochBigInt ? [gridDisplayEpochBigInt] : undefined,
-    chainId, query: { enabled: !!gridDisplayEpochBigInt, refetchInterval: gridEpochInterval },
+  const {
+    jackpotInfo,
+    rolloverAmount,
+    realTotalStaked,
+    formattedLineaBalance,
+    winningTileId,
+    hasMyWinningBet,
+    currentEpochJackpotInfo,
+    jackpotAmount,
+    tileViewData,
+    epochDurationChange,
+  } = useGameDerivedState({
+    chainId,
+    effectiveJackpotInfoRaw,
+    effectiveRolloverPoolRaw,
+    effectiveTileData,
+    tokenBalanceFormatted: tokenBalance?.formatted,
+    isRevealing,
+    effectiveGridEpochData,
+    gridDisplayEpochBigInt,
+    walletAddress,
+    isPageVisible,
+    tileUserCounts,
+    userBetsAll,
+    effectiveEpochDurationSec,
+    effectivePendingEpochDuration,
+    effectivePendingEpochDurationEta,
+    effectivePendingEpochDurationEffectiveFromEpoch,
   });
 
-  const { data: separateCurrentEpochData } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochs",
-    args: actualCurrentEpoch ? [actualCurrentEpoch] : undefined,
-    chainId, query: {
-      enabled: !!actualCurrentEpoch && !gridAndCurrentAreSame,
-      refetchInterval: isPageVisible ? liveGridInterval : 20000,
-    },
+  const {
+    historyViewData,
+    historyLoading,
+    historyRefreshing,
+    refetchHistory,
+    historyPage,
+    setHistoryPage,
+    maxHistoryPages,
+  } = useGameHistoryData({
+    chainId,
+    historyDetailed,
+    isPageVisible,
+    resolvedCurrentEpoch,
+    walletAddress,
   });
-
-  const currentEpochData = gridAndCurrentAreSame ? gridEpochData : separateCurrentEpochData;
-
-  const { data: currentAllowance, refetch: refetchAllowance } = useReadContract({
-    address: LINEA_TOKEN_ADDRESS, abi: TOKEN_ABI, functionName: "allowance",
-    args: walletAddress ? [walletAddress, CONTRACT_ADDRESS] : undefined,
-    chainId, query: { enabled: !!walletAddress },
-  });
-
-  // --- User bets per tile - single call via getUserBetsAll ---
-  const { data: userBetsAllRaw, refetch: refetchUserBets, dataUpdatedAt: userBetsUpdatedAt } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getUserBetsAll",
-    args: gridDisplayEpochBigInt && walletAddress ? [gridDisplayEpochBigInt, walletAddress] : undefined,
-    chainId, query: { enabled: !!gridDisplayEpochBigInt && !!walletAddress, refetchInterval: isPageVisible ? liveUserBetsInterval : 20000 },
-  });
-
-  const userBetsEpochRef = useRef<string | null>(null);
-  const userBetsValidAtRef = useRef(0);
-
-  const userBetsAll = useMemo(() => {
-    const currentKey = gridDisplayEpochBigInt?.toString() ?? null;
-    if (currentKey !== userBetsEpochRef.current) {
-      if (userBetsUpdatedAt > userBetsValidAtRef.current) {
-        userBetsEpochRef.current = currentKey;
-        userBetsValidAtRef.current = userBetsUpdatedAt;
-        return userBetsAllRaw as bigint[] | undefined;
-      }
-      return undefined;
-    }
-    if (userBetsUpdatedAt > userBetsValidAtRef.current) {
-      userBetsValidAtRef.current = userBetsUpdatedAt;
-    }
-    return userBetsAllRaw as bigint[] | undefined;
-  }, [userBetsAllRaw, userBetsUpdatedAt, gridDisplayEpochBigInt]);
-
-  // --- History epochs for analytics (lazy-loaded) ---
-  // Only load history when user explicitly requests it or scrolls to analytics tab
-  const [historyPage, setHistoryPage] = useState(1);
-  const HISTORY_PAGE_SIZE = 20; // Load 20 epochs at a time
-  const maxHistoryPages = Math.ceil(HISTORY_DEPTH / HISTORY_PAGE_SIZE);
-
-  const historyEpochsList = useMemo(() => {
-    if (!actualCurrentEpoch) return [];
-    // Calculate which epochs to load based on current page
-    const startIdx = (historyPage - 1) * HISTORY_PAGE_SIZE;
-    const endIdx = Math.min(startIdx + HISTORY_PAGE_SIZE, HISTORY_DEPTH);
-    return Array.from({ length: endIdx - startIdx }, (_, i) => actualCurrentEpoch - BigInt(startIdx + i + 1))
-      .filter((id) => id > BigInt(0));
-  }, [actualCurrentEpoch, historyPage]);
-
-  // Reset page when current epoch changes significantly
-  useEffect(() => {
-    if (actualCurrentEpoch && historyEpochsList.length === 0 && historyPage > 1) {
-      setHistoryPage(1);
-    }
-  }, [actualCurrentEpoch, historyEpochsList.length, historyPage]);
-
-  const { data: historyData, refetch: refetchHistory } = useReadContracts({
-    contracts: historyEpochsList.map((id) => ({
-      address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochs" as const, args: [id], chainId,
-    })),
-    query: {
-      enabled: historyEpochsList.length > 0 && isPageVisible,
-      refetchInterval: historyDetailed ? 15000 : 90000,
-    },
-  });
-
-  const historyUserBetsCalls = useMemo(() => {
-    if (!walletAddress || !historyData || historyData.length !== historyEpochsList.length || historyEpochsList.length === 0) {
-      return [];
-    }
-    return historyEpochsList.map((epoch, i) => {
-      const res = historyData[i]?.result;
-      const winBlock = res != null ? (res as unknown as EpochTuple)[2] : BigInt(0);
-      return {
-        address: CONTRACT_ADDRESS,
-        abi: GAME_ABI,
-        functionName: "userBets" as const,
-        args: [epoch, winBlock, walletAddress],
-        chainId,
-      };
-    });
-  }, [historyEpochsList, historyData, walletAddress, chainId]);
-
-  useEffect(() => {
-    const epochKey = gridDisplayEpochBigInt?.toString() ?? null;
-    if (tileUserCountEpochRef.current === epochKey) return;
-    tileUserCountEpochRef.current = epochKey;
-    tileUserCountLastBlockRef.current = null;
-    tileUserCountSetsRef.current = Array.from({ length: GRID_SIZE }, () => new Set<string>());
-    tileUserCountFetchInFlightRef.current = false;
-    setTileUserCounts(createZeroTileUserCounts());
-  }, [gridDisplayEpochBigInt]);
-
-  useEffect(() => {
-    if (!publicClient || !gridDisplayEpochBigInt) {
-      setTileUserCounts(createZeroTileUserCounts());
-      return;
-    }
-    if (!isPageVisible) return;
-
-    let cancelled = false;
-    const betEvent = parseAbiItem("event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)");
-    const batchEvent = parseAbiItem("event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)");
-    const targetEpochKey = gridDisplayEpochBigInt.toString();
-
-    const fetchCounts = async () => {
-      if (tileUserCountFetchInFlightRef.current) return;
-      tileUserCountFetchInFlightRef.current = true;
-      try {
-        const latestBlock = await publicClient.getBlockNumber();
-        const fromBlock =
-          tileUserCountLastBlockRef.current !== null ? tileUserCountLastBlockRef.current + 1n : CONTRACT_DEPLOY_BLOCK;
-        if (fromBlock > latestBlock) return;
-
-        const perTile = tileUserCountSetsRef.current.map((set) => new Set(set));
-        const chunks: Array<{ from: bigint; to: bigint }> = [];
-        for (let from = fromBlock; from <= latestBlock; from += TILE_USER_COUNT_LOG_CHUNK) {
-          const to =
-            from + TILE_USER_COUNT_LOG_CHUNK > latestBlock ? latestBlock : from + TILE_USER_COUNT_LOG_CHUNK - 1n;
-          chunks.push({ from, to });
-        }
-
-        for (let i = 0; i < chunks.length; i += TILE_USER_COUNT_MAX_CONCURRENT) {
-          if (cancelled || tileUserCountEpochRef.current !== targetEpochKey) return;
-          const batch = chunks.slice(i, i + TILE_USER_COUNT_MAX_CONCURRENT);
-          const [betResults, batchResults] = await Promise.all([
-            Promise.all(
-              batch.map((chunk) =>
-                publicClient.getLogs({
-                  address: CONTRACT_ADDRESS,
-                  event: betEvent,
-                  args: { epoch: gridDisplayEpochBigInt },
-                  fromBlock: chunk.from,
-                  toBlock: chunk.to,
-                }),
-              ),
-            ),
-            Promise.all(
-              batch.map((chunk) =>
-                publicClient.getLogs({
-                  address: CONTRACT_ADDRESS,
-                  event: batchEvent,
-                  args: { epoch: gridDisplayEpochBigInt },
-                  fromBlock: chunk.from,
-                  toBlock: chunk.to,
-                }),
-              ),
-            ),
-          ]);
-
-          for (const logs of betResults) {
-            for (const log of logs as Log[]) {
-              const decoded = decodeEventLog({ abi: GAME_EVENTS_ABI, data: log.data, topics: log.topics });
-              if (decoded.eventName !== "BetPlaced") continue;
-              const args = decoded.args as { user: string; tileId: bigint };
-              const tileIdx = Number(args.tileId) - 1;
-              if (tileIdx >= 0 && tileIdx < GRID_SIZE) perTile[tileIdx].add(args.user.toLowerCase());
-            }
-          }
-
-          for (const logs of batchResults) {
-            for (const log of logs as Log[]) {
-              const decoded = decodeEventLog({ abi: GAME_EVENTS_ABI, data: log.data, topics: log.topics });
-              if (decoded.eventName !== "BatchBetsPlaced") continue;
-              const args = decoded.args as { user: string; tileIds: readonly bigint[] };
-              const user = args.user.toLowerCase();
-              for (const tileId of args.tileIds) {
-                const tileIdx = Number(tileId) - 1;
-                if (tileIdx >= 0 && tileIdx < GRID_SIZE) perTile[tileIdx].add(user);
-              }
-            }
-          }
-        }
-
-        if (!cancelled && tileUserCountEpochRef.current === targetEpochKey) {
-          tileUserCountSetsRef.current = perTile;
-          tileUserCountLastBlockRef.current = latestBlock;
-          setTileUserCounts(perTile.map((set) => set.size));
-        }
-      } catch {
-        // Keep the last known counts on screen when a public RPC request hiccups.
-      } finally {
-        tileUserCountFetchInFlightRef.current = false;
-      }
-    };
-
-    void fetchCounts();
-    const intervalId = window.setInterval(fetchCounts, isRevealing ? 1500 : 4000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [publicClient, gridDisplayEpochBigInt, isPageVisible, isRevealing]);
-
-  const { data: historyUserBetsData } = useReadContracts({
-    contracts: historyUserBetsCalls,
-    query: {
-      enabled: historyDetailed && historyUserBetsCalls.length > 0 && isPageVisible,
-      refetchInterval: 15000,
-    },
-  });
-
-  // --- Sync winner detection into ref for interval access ---
-  useEffect(() => {
-    if (!isRevealing) return;
-    if (winnerFoundTimeRef.current > 0) return;
-    if (gridEpochData) {
-      const resolved = (gridEpochData as unknown as EpochTuple)[3];
-      if (resolved) {
-        winnerFoundTimeRef.current = Date.now();
-      }
-    }
-  }, [isRevealing, gridEpochData]);
-
-  // --- Epoch reveal logic ---
-  useEffect(() => {
-    if (!actualCurrentEpoch) return;
-
-    if (!visualEpoch) {
-      setVisualEpoch(actualCurrentEpoch.toString());
-      return;
-    }
-
-    if (
-      visualEpochBigInt &&
-      actualCurrentEpoch > visualEpochBigInt &&
-      !isRevealing &&
-      !revealIntervalRef.current
-    ) {
-      const epochGap = actualCurrentEpoch - visualEpochBigInt;
-
-      // Skip reveal only when lagging behind by more than one epoch
-      if (epochGap > BigInt(1)) {
-        setVisualEpoch(actualCurrentEpoch.toString());
-        setLockedGridEpoch(null);
-        return;
-      }
-
-      revealTargetEpochRef.current = actualCurrentEpoch.toString();
-      revealStartTimeRef.current = Date.now();
-      winnerFoundTimeRef.current = 0;
-      setLockedGridEpoch(visualEpoch);
-      setIsRevealing(true);
-      refetchGridEpochData();
-      setTimeout(() => { refetchUserBets(); }, 100);
-
-      if (revealSafetyRef.current) clearTimeout(revealSafetyRef.current);
-      revealSafetyRef.current = setTimeout(forceExitReveal, MAX_REVEAL_DURATION_MS + 3000);
-
-      revealIntervalRef.current = setInterval(() => {
-        const elapsed = Date.now() - revealStartTimeRef.current;
-
-        if (winnerFoundTimeRef.current > 0) {
-          const shownFor = Date.now() - winnerFoundTimeRef.current;
-          if (shownFor >= MIN_WINNER_DISPLAY_MS) {
-            forceExitReveal();
-          }
-          return;
-        }
-
-        if (elapsed >= MAX_REVEAL_DURATION_MS) {
-          forceExitReveal();
-        }
-      }, 200);
-
-      return;
-    }
-  }, [actualCurrentEpoch, visualEpoch, visualEpochBigInt, isRevealing, epochEndTime, refetchGridEpochData, refetchUserBets, forceExitReveal]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (revealIntervalRef.current) {
-        clearInterval(revealIntervalRef.current);
-        revealIntervalRef.current = null;
-      }
-      if (revealSafetyRef.current) {
-        clearTimeout(revealSafetyRef.current);
-        revealSafetyRef.current = null;
-      }
-    };
-  }, []);
-
-  // Safety: if isRevealing but interval is dead (strict mode, HMR, tab switch edge case),
-  // force exit after a short delay
-  useEffect(() => {
-    if (!isRevealing) return;
-    const check = setTimeout(() => {
-      if (!revealIntervalRef.current) {
-        forceExitReveal();
-      }
-    }, 1500);
-    return () => clearTimeout(check);
-  }, [isRevealing, forceExitReveal]);
-
-  // --- Countdown timer with threshold-based pollPhase to avoid re-render cascade ---
-  const didRefetchAtZeroRef = useRef(false);
-  const isRevealingRef = useRef(isRevealing);
-  isRevealingRef.current = isRevealing;
-  const visualEpochRef = useRef(visualEpoch);
-  visualEpochRef.current = visualEpoch;
-  const lockedGridEpochRef = useRef(lockedGridEpoch);
-  lockedGridEpochRef.current = lockedGridEpoch;
-
-  const refetchEpochRef = useRef(refetchEpoch);
-  refetchEpochRef.current = refetchEpoch;
-  const refetchGridEpochDataRef = useRef(refetchGridEpochData);
-  refetchGridEpochDataRef.current = refetchGridEpochData;
-  const refetchEpochEndTimeRef = useRef(refetchEpochEndTime);
-  refetchEpochEndTimeRef.current = refetchEpochEndTime;
-
-  useEffect(() => {
-    if (!epochEndTime) {
-      setTimeLeft(0);
-      timeLeftRef.current = 0;
-      setPollPhase("fast");
-      return;
-    }
-
-    const computePhase = (tl: number): PollPhase =>
-      tl === 0 ? "fast" : tl <= 10 ? "medium" : "slow";
-
-    const updateTimeLeft = () => {
-      const endMs = Number(epochEndTime) * 1000;
-      const now = Date.now();
-      const tl = endMs > now ? Math.floor((endMs - now) / 1000) : 0;
-      const prev = timeLeftRef.current;
-      timeLeftRef.current = tl;
-      setTimeLeft(tl);
-
-      const prevPhase = computePhase(prev);
-      const nextPhase = computePhase(tl);
-      if (prevPhase !== nextPhase) {
-        setPollPhase(nextPhase);
-      }
-
-      // One-shot refetch + grid lock when timer hits zero
-      if (tl === 0 && prev > 0) {
-        didRefetchAtZeroRef.current = false;
-      }
-      if (tl === 0 && !didRefetchAtZeroRef.current) {
-        didRefetchAtZeroRef.current = true;
-        if (visualEpochRef.current && !lockedGridEpochRef.current && !isRevealingRef.current) {
-          setLockedGridEpoch(visualEpochRef.current);
-        }
-        refetchEpochRef.current();
-        refetchGridEpochDataRef.current();
-        refetchEpochEndTimeRef.current?.();
-      }
-    };
-
-    updateTimeLeft();
-    const interval = setInterval(updateTimeLeft, 1000);
-    return () => clearInterval(interval);
-  }, [epochEndTime]);
-
-  // --- Derived data ---
-  type JackpotInfoTuple = readonly [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
-
-  const jackpotInfo = useMemo(() => {
-    if (!jackpotInfoRaw) return null;
-    const t = jackpotInfoRaw as unknown as JackpotInfoTuple;
-    return {
-      dailyPool: parseFloat(formatUnits(t[0], 18)),
-      dailyPoolWei: t[0],
-      weeklyPool: parseFloat(formatUnits(t[1], 18)),
-      weeklyPoolWei: t[1],
-      lastDailyDay: Number(t[2]),
-      lastWeeklyWeek: Number(t[3]),
-      lastDailyJackpotEpoch: t[4] > BigInt(0) ? t[4].toString() : null,
-      lastWeeklyJackpotEpoch: t[5] > BigInt(0) ? t[5].toString() : null,
-      lastDailyJackpotAmount: parseFloat(formatUnits(t[6], 18)),
-      lastWeeklyJackpotAmount: parseFloat(formatUnits(t[7], 18)),
-    };
-  }, [jackpotInfoRaw]);
-
-  const rolloverAmount = useMemo(() => {
-    if (rolloverPoolRaw === undefined) return 0;
-    return parseFloat(formatUnits(rolloverPoolRaw as bigint, 18));
-  }, [rolloverPoolRaw]);
-
-  const realTotalStaked = useMemo(() => {
-    if (!tileData) return 0;
-    const pools = tileData[0];
-    if (!Array.isArray(pools)) return 0;
-    const currentPool = (pools as bigint[]).reduce((acc, val) => acc + val, BigInt(0));
-    const roll = rolloverPoolRaw !== undefined ? (rolloverPoolRaw as bigint) : BigInt(0);
-    return parseFloat(formatUnits(currentPool + roll, 18));
-  }, [tileData, rolloverPoolRaw]);
-
-  const formattedLineaBalance = useMemo(
-    () => (tokenBalance ? Number(tokenBalance.formatted).toFixed(2) : null),
-    [tokenBalance],
-  );
-
-  const winningTileId = useMemo(() => {
-    if (!isRevealing || !gridEpochData) return null;
-    const tuple = gridEpochData as unknown as EpochTuple;
-    if (tuple[3] && Number(tuple[2]) > 0) {
-      return Number(tuple[2]);
-    }
-    return null;
-  }, [isRevealing, gridEpochData]);
-
-  // Extract jackpot info from current epoch data
-  const currentEpochJackpotInfo = useMemo(() => {
-    if (!gridEpochData) return { isDailyJackpot: false, isWeeklyJackpot: false };
-    const tuple = gridEpochData as unknown as EpochTuple;
-    return {
-      isDailyJackpot: Boolean(tuple[4]),
-      isWeeklyJackpot: Boolean(tuple[5]),
-    };
-  }, [gridEpochData]);
-
-  // Calculate potential jackpot amount (simplified - actual would need more contract calls)
-  const currentJackpotAmount = useMemo(() => {
-    if (!jackpotInfo) return 0;
-    let total = 0;
-    if (currentEpochJackpotInfo.isDailyJackpot) {
-      total += jackpotInfo.lastDailyJackpotAmount;
-    }
-    if (currentEpochJackpotInfo.isWeeklyJackpot) {
-      total += jackpotInfo.lastWeeklyJackpotAmount;
-    }
-    return total;
-  }, [jackpotInfo, currentEpochJackpotInfo]);
-
-  // getTileData(epoch) -> pools only; unique player counts are reconstructed off-chain from bet events.
-  const tileViewData = useMemo(() => {
-    const poolsArr = tileData && Array.isArray(tileData[0]) ? (tileData[0] as bigint[]) : null;
-    return Array.from({ length: GRID_SIZE }, (_, i) => {
-      const myBetRaw = userBetsAll?.[i];
-      const hasMyBet = myBetRaw !== undefined && myBetRaw > BigInt(0);
-      const poolWei = poolsArr?.[i] ?? BigInt(0);
-      const poolDisplay = parseFloat(formatUnits(poolWei, 18)).toFixed(2);
-      return { tileId: i + 1, users: tileUserCounts[i] ?? 0, poolDisplay, hasMyBet };
-    });
-  }, [tileData, tileUserCounts, userBetsAll]);
-
-  const historyViewData = useMemo(() => {
-    if (!historyData || historyData.length !== historyEpochsList.length) return [];
-    return historyData?.map((dataObj, index) => {
-      if (!dataObj.result) return null;
-      const roundId = historyEpochsList[index];
-      if (!roundId) return null;
-      const [pool, , winBlock, isRes] = dataObj.result as unknown as EpochTuple;
-      const userBetOnWinner = historyUserBetsData?.[index]?.result != null
-        ? BigInt(historyUserBetsData[index].result as bigint) > BigInt(0)
-        : false;
-      return {
-        roundId: roundId.toString(),
-        poolDisplay: formatUnits(pool, 18),
-        winningTile: winBlock.toString(),
-        isResolved: isRes,
-        userWon: isRes && userBetOnWinner,
-      };
-    }).filter((item): item is NonNullable<typeof item> => item !== null) ?? [];
-  }, [historyData, historyEpochsList, historyUserBetsData]);
-
-  const epochDurationChange = useMemo(() => {
-    const next = pendingEpochDuration ? Number(pendingEpochDuration) : 0;
-    if (!next) return null;
-    return {
-      current: epochDurationSec ? Number(epochDurationSec) : null,
-      next,
-      eta: pendingEpochDurationEta ? Number(pendingEpochDurationEta) : null,
-      effectiveFromEpoch: pendingEpochDurationEffectiveFromEpoch
-        ? pendingEpochDurationEffectiveFromEpoch.toString()
-        : null,
-    };
-  }, [epochDurationSec, pendingEpochDuration, pendingEpochDurationEta, pendingEpochDurationEffectiveFromEpoch]);
 
   return {
     address,
@@ -719,17 +261,20 @@ export function useGameData(options?: UseGameDataOptions) {
     jackpotInfo,
     formattedLineaBalance,
     winningTileId,
+    hasMyWinningBet,
     isDailyJackpot: currentEpochJackpotInfo.isDailyJackpot,
     isWeeklyJackpot: currentEpochJackpotInfo.isWeeklyJackpot,
-    jackpotAmount: currentJackpotAmount,
-    currentEpochResolved: currentEpochData
-      ? Boolean((currentEpochData as unknown as EpochTuple)[3])
-      : undefined,
+    jackpotAmount,
+    currentEpochResolved,
     tileViewData,
     currentAllowance,
-    actualCurrentEpoch,
+    actualCurrentEpoch: resolvedCurrentEpoch,
     historyViewData,
+    historyLoading,
+    historyRefreshing,
     epochDurationChange,
+    liveStateBootstrapPending,
+    liveStateReady,
     refetchEpoch,
     refetchGridEpochData,
     refetchTileData,

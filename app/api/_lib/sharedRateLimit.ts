@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
-import { FIREBASE_DB_AUTH, firebaseWriteUrl } from "./dataBridge";
+import { consumeRateLimit } from "../../../server/storage";
 
 type RateLimitState = {
   count: number;
@@ -37,48 +37,6 @@ function getClientIdentity(request: Request): string {
 
 function hashIdentity(identity: string) {
   return createHash("sha256").update(identity).digest("hex").slice(0, 32);
-}
-
-function normalizeState(value: unknown): RateLimitState | null {
-  if (!value || typeof value !== "object") return null;
-  const raw = value as Partial<RateLimitState>;
-  if (
-    typeof raw.count !== "number" ||
-    typeof raw.windowStartedAt !== "number" ||
-    typeof raw.resetAt !== "number"
-  ) {
-    return null;
-  }
-  return {
-    count: raw.count,
-    windowStartedAt: raw.windowStartedAt,
-    resetAt: raw.resetAt,
-  };
-}
-
-async function readState(path: string) {
-  const res = await fetch(firebaseWriteUrl(path), {
-    headers: { "X-Firebase-ETag": "true" },
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`rate-limit read failed: ${res.status}`);
-  }
-  const etag = res.headers.get("etag") ?? "null_etag";
-  const json = await res.json();
-  return { state: normalizeState(json), etag };
-}
-
-async function writeState(path: string, state: RateLimitState, etag: string) {
-  return fetch(firebaseWriteUrl(path), {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      "If-Match": etag,
-    },
-    body: JSON.stringify(state),
-    cache: "no-store",
-  });
 }
 
 function enforceLocalFallback(
@@ -130,57 +88,28 @@ export async function enforceSharedRateLimit(
   const key = hashIdentity(identity);
   const now = Date.now();
 
-  // In local/dev runs, prefer in-memory limiting and avoid noisy auth failures
-  // when Firebase write credentials are missing or intentionally not configured.
-  if (process.env.NODE_ENV !== "production" || !FIREBASE_DB_AUTH) {
+  if (process.env.NODE_ENV !== "production") {
     return enforceLocalFallback(bucket, key, limit, windowMs, now);
   }
 
-  const path = `_internal/rateLimits/${bucket}/${key}`;
-  const windowStartedAt = now - (now % windowMs);
-  const resetAt = windowStartedAt + windowMs;
+  try {
+    const result = consumeRateLimit(bucket, key, limit, windowMs);
+    if (result.allowed) return null;
 
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    try {
-      const { state, etag } = await readState(path);
-      const current =
-        !state || state.resetAt <= now || state.windowStartedAt !== windowStartedAt
-          ? { count: 0, windowStartedAt, resetAt }
-          : state;
-
-      if (current.count >= limit) {
-        return NextResponse.json(
-          {
-            error: "Too many requests",
-            retryAfter: Math.max(1, Math.ceil((current.resetAt - now) / 1000)),
-          },
-          { status: 429 },
-        );
-      }
-
-      const nextState: RateLimitState = {
-        count: current.count + 1,
-        windowStartedAt,
-        resetAt,
-      };
-      const writeRes = await writeState(path, nextState, etag);
-      if (writeRes.ok) return null;
-      if (writeRes.status === 412) continue;
-      throw new Error(`rate-limit write failed: ${writeRes.status}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("401") || message.includes("403")) {
-        const warnKey = `${bucket}:${message}`;
-        if (!sharedLimiterMisconfigBuckets.has(warnKey)) {
-          sharedLimiterMisconfigBuckets.add(warnKey);
-          console.warn(`[rate-limit:${bucket}] shared limiter disabled, using local fallback: ${message}`);
-        }
-      } else {
-        console.warn(`[rate-limit:${bucket}] shared limiter fallback:`, error);
-      }
-      return enforceLocalFallback(bucket, key, limit, windowMs, now);
+    return NextResponse.json(
+      {
+        error: "Too many requests",
+        retryAfter: result.retryAfter ?? 1,
+      },
+      { status: 429 },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const warnKey = `${bucket}:${message}`;
+    if (!sharedLimiterMisconfigBuckets.has(warnKey)) {
+      sharedLimiterMisconfigBuckets.add(warnKey);
+      console.warn(`[rate-limit:${bucket}] sqlite fallback: ${message}`);
     }
+    return enforceLocalFallback(bucket, key, limit, windowMs, now);
   }
-
-  return enforceLocalFallback(bucket, key, limit, windowMs, now);
 }

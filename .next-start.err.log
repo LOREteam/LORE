@@ -1,0 +1,476 @@
+(node:25416) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 546.1,
+  exactMs: 187.3,
+  recentMs: 75,
+  totalMs: 808.5
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 465.4,
+  exactMs: 191.1,
+  recentMs: 175.5,
+  totalMs: 832.2
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 1748.1,
+  exactMs: 158.5,
+  recentMs: 80.4,
+  totalMs: 1987.1
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 2210.5,
+  exactMs: 212.1,
+  recentMs: 113.2,
+  totalMs: 2535.8
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 1003.7,
+  exactMs: 184.3,
+  recentMs: 87.8,
+  totalMs: 1276
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 469.6,
+  exactMs: 184.9,
+  recentMs: 182.7,
+  totalMs: 837.2
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 3298.5,
+  exactMs: 170.5,
+  recentMs: 173.3,
+  totalMs: 3642.4
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 4413.8,
+  exactMs: 156.5,
+  recentMs: 66.4,
+  totalMs: 4636.8
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 4303.6,
+  exactMs: 178.8,
+  recentMs: 72.9,
+  totalMs: 4555.4
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 769.6,
+  exactMs: 177.2,
+  recentMs: 86.5,
+  totalMs: 1033.5
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 1695.8,
+  exactMs: 183.8,
+  recentMs: 156.5,
+  totalMs: 2036.2
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 4332.3,
+  exactMs: 169.7,
+  recentMs: 160.9,
+  totalMs: 4662.9
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 718.7,
+  exactMs: 166.1,
+  recentMs: 176.9,
+  totalMs: 1061.8
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 541,
+  exactMs: 199,
+  recentMs: 185.6,
+  totalMs: 925.6
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 1920.5,
+  exactMs: 166.4,
+  recentMs: 166.5,
+  totalMs: 2253.5
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 889.1,
+  exactMs: 197.8,
+  recentMs: 106.8,
+  totalMs: 1193.8
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 2645.5,
+  exactMs: 159.9,
+  recentMs: 67,
+  totalMs: 2872.4
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 544.2,
+  exactMs: 170.8,
+  recentMs: 101.9,
+  totalMs: 817
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 437,
+  exactMs: 199,
+  recentMs: 235.2,
+  totalMs: 871.3
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 2245.4,
+  exactMs: 169.8,
+  recentMs: 164.4,
+  totalMs: 2579.6
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 1942.4,
+  exactMs: 159.2,
+  recentMs: 82.1,
+  totalMs: 2183.8
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 476.8,
+  exactMs: 179.6,
+  recentMs: 220.1,
+  totalMs: 876.6
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 5269.3,
+  exactMs: 192.8,
+  recentMs: 148.3,
+  totalMs: 5610.6
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 475,
+  exactMs: 482.6,
+  recentMs: 210.4,
+  totalMs: 1168
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 3898.7,
+  exactMs: 221.2,
+  recentMs: 200.4,
+  totalMs: 4320.4
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 572.3,
+  exactMs: 200.7,
+  recentMs: 110.2,
+  totalMs: 883.4
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 3947.2,
+  exactMs: 185.5,
+  recentMs: 149.4,
+  totalMs: 4282.2
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 518.5,
+  exactMs: 207.8,
+  recentMs: 119,
+  totalMs: 845.3
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 505.7,
+  exactMs: 188.7,
+  recentMs: 182.4,
+  totalMs: 876.9
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 1534.8,
+  exactMs: 194.5,
+  recentMs: 106.8,
+  totalMs: 1836.2
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 5005.1,
+  exactMs: 527.6,
+  recentMs: 162.9,
+  totalMs: 5695.8
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.2,
+  summaryMs: 4138.7,
+  exactMs: 181.8,
+  recentMs: 89.6,
+  totalMs: 4410.3
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 708.2,
+  exactMs: 201.9,
+  recentMs: 117.8,
+  totalMs: 1028
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 15307.2,
+  exactMs: 172.1,
+  recentMs: 109.7,
+  totalMs: 15589.1
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 1329.2,
+  exactMs: 191.9,
+  recentMs: 137.3,
+  totalMs: 1658.5
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 598.9,
+  exactMs: 202.3,
+  recentMs: 97.6,
+  totalMs: 898.9
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 5231,
+  exactMs: 194.9,
+  recentMs: 114,
+  totalMs: 5540
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 788.8,
+  exactMs: 187.1,
+  recentMs: 100.3,
+  totalMs: 1076.3
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 867,
+  exactMs: 161.1,
+  recentMs: 75.3,
+  totalMs: 1103.5
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 824.8,
+  exactMs: 185,
+  recentMs: 101,
+  totalMs: 1110.9
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 2290,
+  exactMs: 209.1,
+  recentMs: 406.8,
+  totalMs: 2906
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 1640.4,
+  exactMs: 198.2,
+  recentMs: 205.4,
+  totalMs: 2044.2
+}
+[api/rebates] slow build {
+  user: '0x9dceE0288c503bbccEeb8706B4335C318f496d37',
+  epochCount: 2,
+  summaryChunks: 1,
+  exactChunks: 1,
+  indexedMs: 0.1,
+  summaryMs: 856,
+  exactMs: 205.3,
+  recentMs: 111,
+  totalMs: 1172.5
+}
+^C^C

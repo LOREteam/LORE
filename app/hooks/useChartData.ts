@@ -6,7 +6,7 @@ import { CHART_HISTORY_LENGTH, CHART_UPDATE_INTERVAL_MS } from "../lib/constants
 /**
  * Manages real-time chart data for the total pool visualization.
  */
-export function useChartData(realTotalStaked: number) {
+export function useChartData(realTotalStaked: number, isPageVisible = true) {
   const [chartData, setChartData] = useState<number[]>(Array(CHART_HISTORY_LENGTH).fill(0));
   const seededRef = useRef(false);
   const realTotalStakedRef = useRef(realTotalStaked);
@@ -26,12 +26,13 @@ export function useChartData(realTotalStaked: number) {
 
   // Push new data points at regular intervals - interval never restarts
   useEffect(() => {
+    if (!isPageVisible) return;
     const interval = setInterval(() => {
       setChartData((prev) => [...prev.slice(1), realTotalStakedRef.current]);
     }, CHART_UPDATE_INTERVAL_MS);
     
     return () => clearInterval(interval);
-  }, []); // Empty deps - interval runs forever with latest ref value
+  }, [isPageVisible]);
 
   const maxValue = useMemo(() => Math.max(...chartData, 1), [chartData]);
 

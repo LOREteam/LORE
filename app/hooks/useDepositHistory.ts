@@ -1,14 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 
 export interface DepositEntry {
   epoch: string;
   tileIds: number[];
+  amounts: number[];
   amount: string;
   amountNum: number;
   txHash: string;
+  blockNumber: string;
+  blockNumberNum: number;
   winningTile: number | null;
+  isDailyJackpot: boolean;
+  isWeeklyJackpot: boolean;
   reward: number | null;
 }
 
@@ -25,6 +31,8 @@ interface ApiDeposit {
 interface ApiEpoch {
   winningTile: number;
   rewardPool: string;
+  isDailyJackpot?: boolean;
+  isWeeklyJackpot?: boolean;
 }
 
 interface ApiRewardInfo {
@@ -35,33 +43,209 @@ interface ApiRewardInfo {
   userWinningAmount: string;
 }
 
-export function useDepositHistory(userAddress?: string) {
+interface DepositCacheEnvelope {
+  savedAt?: number;
+  data?: DepositEntry[];
+}
+
+const DEPOSIT_CACHE_TTL_MS = 30_000;
+const SYNC_EPOCH_PREFETCH_LIMIT = 64;
+const EPOCHS_FETCH_CHUNK = 100;
+const REWARDS_FETCH_CHUNK = 200;
+
+function getDepositCacheKey(userAddress: string) {
+  return `lore:deposits:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${userAddress.toLowerCase()}`;
+}
+
+function loadCachedDeposits(userAddress: string): { data: DepositEntry[] | null; savedAt: number | null } {
+  if (typeof localStorage === "undefined") return { data: null, savedAt: null };
+  try {
+    const raw = localStorage.getItem(getDepositCacheKey(userAddress));
+    if (!raw) return { data: null, savedAt: null };
+    const parsed = JSON.parse(raw) as DepositCacheEnvelope | DepositEntry[];
+    if (Array.isArray(parsed)) {
+      return { data: parsed, savedAt: null };
+    }
+    return {
+      data: Array.isArray(parsed.data) ? parsed.data : null,
+      savedAt:
+        typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
+          ? parsed.savedAt
+          : null,
+    };
+  } catch {
+    return { data: null, savedAt: null };
+  }
+}
+
+function saveCachedDeposits(userAddress: string, entries: DepositEntry[]) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(
+      getDepositCacheKey(userAddress),
+      JSON.stringify({
+        savedAt: Date.now(),
+        data: entries,
+      } satisfies DepositCacheEnvelope),
+    );
+  } catch {
+    // ignore storage failures
+  }
+}
+
+async function fetchEpochMap(epochIds: string[]) {
+  if (epochIds.length === 0) return {} as Record<string, ApiEpoch>;
+
+  const merged: Record<string, ApiEpoch> = {};
+  for (let index = 0; index < epochIds.length; index += EPOCHS_FETCH_CHUNK) {
+    const chunk = epochIds.slice(index, index + EPOCHS_FETCH_CHUNK);
+    const epochsQuery = encodeURIComponent(chunk.join(","));
+    const response = await fetch(`/api/epochs?epochs=${epochsQuery}`);
+    if (!response.ok) continue;
+    try {
+      const json = (await response.json()) as { epochs?: Record<string, ApiEpoch> };
+      Object.assign(merged, json.epochs ?? {});
+    } catch {
+      // ignore chunk parse failures
+    }
+  }
+
+  return merged;
+}
+
+async function fetchRewardsMap(userAddress: string, epochIds: string[]) {
+  if (epochIds.length === 0) return {} as Record<string, ApiRewardInfo>;
+
+  const merged: Record<string, ApiRewardInfo> = {};
+  for (let index = 0; index < epochIds.length; index += REWARDS_FETCH_CHUNK) {
+    const chunk = epochIds.slice(index, index + REWARDS_FETCH_CHUNK);
+    const response = await fetch("/api/rewards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user: userAddress,
+        epochs: chunk,
+      }),
+    });
+    if (!response.ok) continue;
+    try {
+      const json = (await response.json()) as { rewards?: Record<string, ApiRewardInfo> };
+      Object.assign(merged, json.rewards ?? {});
+    } catch {
+      // ignore chunk parse failures
+    }
+  }
+
+  return merged;
+}
+
+function mapDepositEntries(
+  deposits: ApiDeposit[],
+  epochsMap: Record<string, ApiEpoch>,
+  rewardsMap: Record<string, ApiRewardInfo>,
+): DepositEntry[] {
+  return deposits.map((d) => {
+    const normalizedTileIds = [...new Set(d.tileIds.filter((tileId) => Number.isInteger(tileId) && tileId > 0))];
+    const epochData = epochsMap[d.epoch];
+    const rewardData = rewardsMap[d.epoch];
+    const winningTile = epochData?.winningTile ?? rewardData?.winningTile ?? null;
+    const normalizedAmounts =
+      Array.isArray(d.amounts) && d.amounts.length === normalizedTileIds.length
+        ? d.amounts.map((value) => {
+            const amount = parseFloat(value);
+            return Number.isFinite(amount) && amount >= 0 ? amount : 0;
+          })
+        : normalizedTileIds.length > 0
+          ? normalizedTileIds.map(() => d.totalAmountNum / normalizedTileIds.length)
+          : [];
+    let reward: number | null = null;
+
+    if (rewardData && winningTile !== null && normalizedTileIds.includes(winningTile)) {
+      const userWinningAmount = parseFloat(rewardData.userWinningAmount);
+      const totalReward = parseFloat(rewardData.reward);
+      if (userWinningAmount > 0 && totalReward > 0) {
+        let rowWinningAmount = 0;
+        if (normalizedAmounts.length === normalizedTileIds.length) {
+          normalizedTileIds.forEach((tileId, index) => {
+            if (tileId === winningTile) {
+              rowWinningAmount += normalizedAmounts[index] ?? 0;
+            }
+          });
+        } else {
+          const hitCount = normalizedTileIds.filter((tileId) => tileId === winningTile).length;
+          if (hitCount > 0 && normalizedTileIds.length > 0) {
+            rowWinningAmount = (d.totalAmountNum / normalizedTileIds.length) * hitCount;
+          }
+        }
+        if (rowWinningAmount > 0) {
+          reward = (totalReward * rowWinningAmount) / userWinningAmount;
+        }
+      }
+    }
+
+    return {
+      epoch: d.epoch,
+      tileIds: normalizedTileIds,
+      amounts: normalizedAmounts,
+      amount: parseFloat(d.totalAmount).toFixed(2),
+      amountNum: d.totalAmountNum,
+      txHash: d.txHash,
+      blockNumber: d.blockNumber,
+      blockNumberNum: Number(d.blockNumber ?? "0"),
+      winningTile,
+      isDailyJackpot: Boolean(epochData?.isDailyJackpot),
+      isWeeklyJackpot: Boolean(epochData?.isWeeklyJackpot),
+      reward,
+    };
+  }).sort((a, b) => Number(b.epoch) - Number(a.epoch));
+}
+
+export function useDepositHistory(userAddress?: string, enabled = true) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<DepositEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const runningRef = useRef(false);
+  const runningForRef = useRef<string | null>(null);
+  const requestIdRef = useRef(0);
+  const mountedRef = useRef(false);
+  const dataRef = useRef<DepositEntry[] | null>(null);
+
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const fetchFromApi = useCallback(async () => {
     if (!userAddress) return;
-    if (runningRef.current) return;
+    const normalizedUser = userAddress.toLowerCase();
+    if (runningRef.current && runningForRef.current === normalizedUser) return;
+    const requestId = ++requestIdRef.current;
+    const shouldShowLoading = dataRef.current === null;
     runningRef.current = true;
-    setLoading(true);
-    setError(null);
+    runningForRef.current = normalizedUser;
+    if (mountedRef.current) {
+      if (shouldShowLoading) {
+        setLoading(true);
+      }
+      setError(null);
+    }
 
     try {
-      const [depositsResult, epochsResult] = await Promise.allSettled([
-        fetch(`/api/deposits?user=${userAddress.toLowerCase()}`),
-        fetch(`/api/epochs`),
-      ]);
+      const depositsResult = await fetch(`/api/deposits?user=${normalizedUser}&includeRewards=1`);
 
-      if (depositsResult.status === "rejected") {
-        setError("Network error while loading deposits");
-        setData([]);
-        return;
-      }
-
-      const depositsRes = depositsResult.value;
-      let depositsJson: { deposits?: ApiDeposit[]; error?: string } = {};
+      const depositsRes = depositsResult;
+      let depositsJson: {
+        deposits?: ApiDeposit[];
+        epochs?: Record<string, ApiEpoch>;
+        rewards?: Record<string, ApiRewardInfo>;
+        error?: string;
+      } = {};
       try {
         depositsJson = await depositsRes.json();
       } catch {
@@ -69,103 +253,114 @@ export function useDepositHistory(userAddress?: string) {
       }
 
       if (!depositsRes.ok || depositsJson.error) {
-        setError(depositsJson.error || `HTTP ${depositsRes.status}`);
-        setData([]);
-        return;
-      }
-
-      let epochsMap: Record<string, ApiEpoch> = {};
-      if (epochsResult.status === "fulfilled" && epochsResult.value.ok) {
-        try {
-          const epochsJson = (await epochsResult.value.json()) as { epochs?: Record<string, ApiEpoch> };
-          epochsMap = epochsJson.epochs ?? {};
-        } catch {
-          epochsMap = {};
+        if (mountedRef.current) {
+          setError(depositsJson.error || `HTTP ${depositsRes.status}`);
+          setData([]);
         }
+        return;
       }
 
       const deposits: ApiDeposit[] = depositsJson.deposits ?? [];
       const uniqueEpochs = [...new Set(deposits.map((d) => d.epoch))];
-      let rewardsMap: Record<string, ApiRewardInfo> = {};
-      if (uniqueEpochs.length > 0) {
-        try {
-          const rewardsRes = await fetch("/api/rewards", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user: userAddress.toLowerCase(),
-              epochs: uniqueEpochs,
-            }),
-          });
-          if (rewardsRes.ok) {
-            const rewardsJson = (await rewardsRes.json()) as { rewards?: Record<string, ApiRewardInfo> };
-            rewardsMap = rewardsJson.rewards ?? {};
-          }
-        } catch {
-          rewardsMap = {};
-        }
+      let epochsMap: Record<string, ApiEpoch> = depositsJson.epochs ?? {};
+      let rewardsMap: Record<string, ApiRewardInfo> = depositsJson.rewards ?? {};
+
+      const priorityEpochs = uniqueEpochs.slice(0, SYNC_EPOCH_PREFETCH_LIMIT);
+      const syncMissingEpochs = priorityEpochs.filter((epoch) => !epochsMap[String(epoch)]);
+      const syncMissingRewards = priorityEpochs.filter((epoch) => !rewardsMap[String(epoch)]);
+
+      const [extraEpochsMap, extraRewardsMap] = await Promise.all([
+        fetchEpochMap(syncMissingEpochs),
+        fetchRewardsMap(normalizedUser, syncMissingRewards),
+      ]);
+      epochsMap = { ...epochsMap, ...extraEpochsMap };
+      rewardsMap = { ...rewardsMap, ...extraRewardsMap };
+
+      const entries = mapDepositEntries(deposits, epochsMap, rewardsMap);
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setData(entries);
       }
+      saveCachedDeposits(normalizedUser, entries);
 
-      const entries: DepositEntry[] = deposits.map((d) => {
-        const epochData = epochsMap[d.epoch];
-        const rewardData = rewardsMap[d.epoch];
-        const winningTile = epochData?.winningTile ?? rewardData?.winningTile ?? null;
-        let reward: number | null = null;
-
-        if (rewardData && winningTile !== null && d.tileIds.includes(winningTile)) {
-          const userWinningAmount = parseFloat(rewardData.userWinningAmount);
-          const totalReward = parseFloat(rewardData.reward);
-          if (userWinningAmount > 0 && totalReward > 0) {
-            let rowWinningAmount = 0;
-            if (Array.isArray(d.amounts) && d.amounts.length === d.tileIds.length) {
-              d.tileIds.forEach((tileId, index) => {
-                if (tileId === winningTile) {
-                  rowWinningAmount += parseFloat(d.amounts?.[index] ?? "0");
-                }
-              });
-            } else {
-              const hitCount = d.tileIds.filter((tileId) => tileId === winningTile).length;
-              if (hitCount > 0 && d.tileIds.length > 0) {
-                rowWinningAmount = (d.totalAmountNum / d.tileIds.length) * hitCount;
-              }
-            }
-            if (rowWinningAmount > 0) {
-              reward = (totalReward * rowWinningAmount) / userWinningAmount;
-            }
+      const deferredEpochs = uniqueEpochs.slice(SYNC_EPOCH_PREFETCH_LIMIT);
+      const deferredMissingEpochs = deferredEpochs.filter((epoch) => !epochsMap[String(epoch)]);
+      const deferredMissingRewards = deferredEpochs.filter((epoch) => !rewardsMap[String(epoch)]);
+      if (deferredMissingEpochs.length > 0 || deferredMissingRewards.length > 0) {
+        void (async () => {
+          const [deferredEpochsMap, deferredRewardsMap] = await Promise.all([
+            fetchEpochMap(deferredMissingEpochs),
+            fetchRewardsMap(normalizedUser, deferredMissingRewards),
+          ]);
+          if (requestId !== requestIdRef.current) return;
+          const mergedEpochsMap = { ...epochsMap, ...deferredEpochsMap };
+          const mergedRewardsMap = { ...rewardsMap, ...deferredRewardsMap };
+          const fullEntries = mapDepositEntries(deposits, mergedEpochsMap, mergedRewardsMap);
+          if (mountedRef.current && requestId === requestIdRef.current) {
+            setData(fullEntries);
           }
-        }
-
-        return {
-          epoch: d.epoch,
-          tileIds: d.tileIds,
-          amount: parseFloat(d.totalAmount).toFixed(2),
-          amountNum: d.totalAmountNum,
-          txHash: d.txHash,
-          winningTile,
-          reward,
-        };
-      });
-
-      entries.sort((a, b) => Number(b.epoch) - Number(a.epoch));
-      setData(entries);
+          saveCachedDeposits(normalizedUser, fullEntries);
+        })();
+      }
     } catch (err) {
-      console.error("[useDepositHistory] API fetch failed:", err);
-      setError((err as Error).message || "Network error");
-      setData([]);
+      console.error("[useDepositHistory] API fetch failed:", err instanceof Error ? err.message : String(err));
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setError((err as Error).message || "Network error");
+        setData([]);
+      }
     } finally {
-      setLoading(false);
-      runningRef.current = false;
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setLoading(false);
+      }
+      if (requestId === requestIdRef.current || runningForRef.current === normalizedUser) {
+        runningRef.current = false;
+        runningForRef.current = null;
+      }
     }
   }, [userAddress]);
 
   useEffect(() => {
     if (!userAddress) {
-      setData(null);
-      setError(null);
+      requestIdRef.current += 1;
+      runningRef.current = false;
+      runningForRef.current = null;
+      if (mountedRef.current) {
+        setData(null);
+        setError(null);
+        setLoading(false);
+      }
+      dataRef.current = null;
       return;
     }
+
+    if (!enabled) {
+      requestIdRef.current += 1;
+      runningRef.current = false;
+      runningForRef.current = null;
+      if (mountedRef.current) {
+        setError(null);
+        setLoading(false);
+      }
+      return;
+    }
+
+    const cached = loadCachedDeposits(userAddress);
+    if (mountedRef.current) {
+      setData(cached.data);
+      setError(null);
+    }
+    const savedAt = cached.savedAt;
+    if (savedAt && Date.now() - savedAt < DEPOSIT_CACHE_TTL_MS) {
+      const timeoutId = window.setTimeout(() => {
+        void fetchFromApi();
+      }, DEPOSIT_CACHE_TTL_MS - (Date.now() - savedAt));
+      return () => window.clearTimeout(timeoutId);
+    }
+
+    if (mountedRef.current && !cached.data && dataRef.current === null) {
+      setLoading(true);
+    }
     void fetchFromApi();
-  }, [userAddress, fetchFromApi]);
+  }, [enabled, userAddress, fetchFromApi]);
 
   const refresh = useCallback(async () => {
     await fetchFromApi();

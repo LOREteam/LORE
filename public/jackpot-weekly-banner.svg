@@ -1,0 +1,182 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="112" y1="68" x2="1508" y2="842" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0A0914"/>
+      <stop offset="0.45" stop-color="#150F27"/>
+      <stop offset="1" stop-color="#08070F"/>
+    </linearGradient>
+    <radialGradient id="violetGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1164 430) rotate(90) scale(344 344)">
+      <stop offset="0" stop-color="#A364FF"/>
+      <stop offset="0.38" stop-color="#8F58F8" stop-opacity="0.92"/>
+      <stop offset="0.72" stop-color="#5A34D0" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#5A34D0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cyanGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1240 396) rotate(90) scale(220 220)">
+      <stop offset="0" stop-color="#79EAFF"/>
+      <stop offset="1" stop-color="#79EAFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tag" x1="0" y1="0" x2="374" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#140F27"/>
+      <stop offset="1" stop-color="#2A1D58"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="690" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D8C6FF" stop-opacity="0"/>
+      <stop offset="0.42" stop-color="#8F58F8" stop-opacity="0.78"/>
+      <stop offset="1" stop-color="#56D8FF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="panelAlt" x1="986" y1="672" x2="1414" y2="782" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#110E22"/>
+      <stop offset="1" stop-color="#1B1732"/>
+    </linearGradient>
+    <linearGradient id="body" x1="872" y1="384" x2="1226" y2="770" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#231147"/>
+      <stop offset="0.55" stop-color="#4D2D9A"/>
+      <stop offset="1" stop-color="#120B22"/>
+    </linearGradient>
+    <linearGradient id="lid" x1="0" y1="0" x2="254" y2="124" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#41227D"/>
+      <stop offset="0.52" stop-color="#6E43D8"/>
+      <stop offset="1" stop-color="#231147"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="168" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF2AB"/>
+      <stop offset="0.5" stop-color="#FFC542"/>
+      <stop offset="1" stop-color="#9D6818"/>
+    </linearGradient>
+    <linearGradient id="crystal" x1="0" y1="0" x2="104" y2="132" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D8F7FF"/>
+      <stop offset="0.4" stop-color="#8BE4FF"/>
+      <stop offset="1" stop-color="#6D5CFF"/>
+    </linearGradient>
+    <filter id="panelShadow" x="36" y="44" width="1528" height="844" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="36" stdDeviation="34" flood-color="#000000" flood-opacity="0.54"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="#8F58F8" flood-opacity="0.2"/>
+    </filter>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="24"/>
+    </filter>
+    <filter id="smallGlow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+    <filter id="textGlow" x="-20%" y="-40%" width="140%" height="180%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.42"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="12" flood-color="#8F58F8" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#panelShadow)">
+    <rect x="72" y="72" width="1456" height="756" rx="42" fill="url(#bg)"/>
+    <rect x="88" y="88" width="1424" height="724" rx="32" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2"/>
+  </g>
+
+  <ellipse cx="1164" cy="430" rx="344" ry="344" fill="url(#violetGlow)"/>
+  <ellipse cx="1240" cy="396" rx="220" ry="220" fill="url(#cyanGlow)"/>
+  <circle cx="1180" cy="430" r="262" stroke="#CAB3FF" stroke-opacity="0.18" stroke-width="2"/>
+  <circle cx="1180" cy="430" r="310" stroke="#CAB3FF" stroke-opacity="0.08" stroke-width="2"/>
+
+  <g opacity="0.72">
+    <rect x="930" y="120" width="18" height="668" rx="9" transform="rotate(-24 930 120)" fill="url(#beam)"/>
+    <rect x="990" y="102" width="14" height="690" rx="7" transform="rotate(-16 990 102)" fill="url(#beam)"/>
+    <rect x="1052" y="88" width="16" height="700" rx="8" transform="rotate(-8 1052 88)" fill="url(#beam)"/>
+    <rect x="1120" y="78" width="18" height="710" rx="9" fill="url(#beam)"/>
+    <rect x="1194" y="88" width="16" height="698" rx="8" transform="rotate(8 1194 88)" fill="url(#beam)"/>
+    <rect x="1260" y="102" width="14" height="690" rx="7" transform="rotate(16 1260 102)" fill="url(#beam)"/>
+    <rect x="1324" y="120" width="18" height="668" rx="9" transform="rotate(24 1324 120)" fill="url(#beam)"/>
+  </g>
+
+  <g filter="url(#smallGlow)">
+    <g fill="#DFCFFF">
+      <path d="M904 134L910 151L928 157L910 163L904 181L898 163L880 157L898 151L904 134Z"/>
+      <path d="M1310 164L1315 177L1328 182L1315 187L1310 200L1305 187L1292 182L1305 177L1310 164Z"/>
+      <path d="M1394 250L1401 269L1420 276L1401 283L1394 302L1387 283L1368 276L1387 269L1394 250Z"/>
+      <path d="M1236 626L1242 642L1258 648L1242 654L1236 670L1230 654L1214 648L1230 642L1236 626Z"/>
+      <path d="M1040 248L1045 261L1058 266L1045 271L1040 284L1035 271L1022 266L1035 261L1040 248Z"/>
+    </g>
+  </g>
+
+  <g>
+    <rect x="132" y="128" width="352" height="56" rx="28" fill="url(#tag)" stroke="#6458D0" stroke-width="2"/>
+    <text x="163" y="164" fill="#E4D6FF" font-size="18" font-family="Inter, Arial, sans-serif" font-weight="800" letter-spacing="1.4">MYTHIC DROP / PRESTIGE POOL</text>
+  </g>
+
+  <g filter="url(#textGlow)">
+    <text x="132" y="302" fill="#F5F0FF" font-size="108" font-family="Inter, Arial, sans-serif" font-weight="900">WEEKLY</text>
+    <text x="132" y="404" fill="#F5F0FF" font-size="108" font-family="Inter, Arial, sans-serif" font-weight="900">JACKPOT</text>
+  </g>
+  <text x="136" y="492" fill="#D0C0FF" font-size="29" font-family="Inter, Arial, sans-serif" font-weight="500">
+    Bigger, darker, and more expensive.
+  </text>
+  <text x="136" y="532" fill="#D0C0FF" font-size="29" font-family="Inter, Arial, sans-serif" font-weight="500">
+    Crystal overload, crown-tier chest,
+  </text>
+  <text x="136" y="572" fill="#D0C0FF" font-size="29" font-family="Inter, Arial, sans-serif" font-weight="500">
+    and a rarer end-of-week payoff vibe.
+  </text>
+
+  <g>
+    <rect x="136" y="624" width="258" height="72" rx="24" fill="#120F22" stroke="#5247B6" stroke-width="2"/>
+    <text x="170" y="669" fill="#F5F0FF" font-size="24" font-family="Inter, Arial, sans-serif" font-weight="800">3% of every round</text>
+    <rect x="414" y="624" width="300" height="72" rx="24" fill="#120F22" stroke="#5247B6" stroke-width="2"/>
+    <text x="446" y="669" fill="#F5F0FF" font-size="24" font-family="Inter, Arial, sans-serif" font-weight="800">One mega drop weekly</text>
+  </g>
+
+  <text x="136" y="748" fill="#8A7CC1" font-size="18" font-family="Inter, Arial, sans-serif" font-weight="700">
+    Use when the message needs weight, rarity, and more visual authority.
+  </text>
+  <line x1="136" y1="776" x2="662" y2="776" stroke="#5247B6" stroke-opacity="0.7"/>
+  <text x="136" y="806" fill="#8A7CC1" font-size="14" font-family="Inter, Arial, sans-serif" font-weight="800" letter-spacing="1.6">
+    LORE / LINEA MINING GAME / PROMO SPLASH / SOCIAL CROP READY
+  </text>
+
+  <g transform="translate(844 200)">
+    <ellipse cx="228" cy="248" rx="218" ry="126" fill="#8F58F8" fill-opacity="0.3" filter="url(#glow)"/>
+    <ellipse cx="264" cy="212" rx="134" ry="84" fill="#72DEFF" fill-opacity="0.24" filter="url(#glow)"/>
+
+    <path d="M212 48L252 78L292 48L326 112H178L212 48Z" fill="url(#gold)" stroke="#E8DCA8" stroke-opacity="0.42" stroke-width="4"/>
+    <path d="M176 112L224 78L246 112H176Z" fill="#A17DFF"/>
+    <path d="M278 112L300 78L348 112H278Z" fill="#A17DFF"/>
+
+    <path d="M132 250C132 238.954 140.954 230 152 230H378C389.046 230 398 238.954 398 250V384C398 395.046 389.046 404 378 404H152C140.954 404 132 395.046 132 384V250Z" fill="url(#body)" stroke="url(#gold)" stroke-width="4"/>
+    <rect x="156" y="230" width="32" height="174" rx="14" fill="url(#gold)"/>
+    <rect x="238" y="228" width="64" height="178" rx="18" fill="url(#gold)"/>
+    <rect x="338" y="230" width="32" height="174" rx="14" fill="url(#gold)"/>
+    <rect x="132" y="282" width="266" height="18" rx="9" fill="#8F58F8" fill-opacity="0.4"/>
+
+    <g transform="translate(146 150) rotate(-8 122 58)">
+      <rect width="244" height="116" rx="32" fill="url(#lid)" stroke="url(#gold)" stroke-width="4"/>
+      <rect x="22" y="0" width="24" height="116" rx="12" fill="url(#gold)"/>
+      <rect x="178" y="0" width="24" height="116" rx="12" fill="url(#gold)"/>
+    </g>
+
+    <path d="M258 296L274 306V326L258 336L242 326V306L258 296Z" fill="#F8EDFF" stroke="#6645D7" stroke-width="3"/>
+    <rect x="249" y="334" width="18" height="30" rx="9" fill="#6645D7"/>
+
+    <path d="M74 236L138 268L112 386L38 344L74 236Z" fill="url(#crystal)" stroke="#AEEFFF" stroke-width="3"/>
+    <path d="M74 236L88 310L138 268" stroke="#F6FDFF" stroke-opacity="0.75" stroke-width="3"/>
+    <path d="M88 310L112 386" stroke="#F6FDFF" stroke-opacity="0.75" stroke-width="3"/>
+
+    <path d="M402 212L494 244L446 390L360 358L402 212Z" fill="url(#crystal)" stroke="#AEEFFF" stroke-width="3"/>
+    <path d="M402 212L420 304L494 244" stroke="#F6FDFF" stroke-opacity="0.75" stroke-width="3"/>
+    <path d="M420 304L446 390" stroke="#F6FDFF" stroke-opacity="0.75" stroke-width="3"/>
+
+    <path d="M328 332L372 348L346 420L304 402L328 332Z" fill="url(#crystal)" stroke="#AEEFFF" stroke-width="2.5"/>
+    <path d="M328 332L338 376L372 348" stroke="#F6FDFF" stroke-opacity="0.75" stroke-width="2.5"/>
+
+    <g filter="url(#smallGlow)">
+      <path d="M262 32L272 60L300 70L272 80L262 108L252 80L224 70L252 60L262 32Z" fill="#E4D6FF"/>
+    </g>
+  </g>
+
+  <g>
+    <rect x="996" y="672" width="418" height="110" rx="28" fill="url(#panelAlt)" stroke="#5448BA" stroke-width="2"/>
+    <text x="1028" y="718" fill="#F5F0FF" font-size="24" font-family="Inter, Arial, sans-serif" font-weight="900">Visual Direction</text>
+    <text x="1028" y="752" fill="#D0C0FF" font-size="18" font-family="Inter, Arial, sans-serif" font-weight="500">
+      Royal purple core, blue plasma accents,
+    </text>
+    <text x="1028" y="778" fill="#D0C0FF" font-size="18" font-family="Inter, Arial, sans-serif" font-weight="500">
+      crystal shards, slower and richer energy.
+    </text>
+  </g>
+
+  <text x="1426" y="142" text-anchor="end" fill="#F5F0FF" font-size="24" font-family="Inter, Arial, sans-serif" font-weight="900" letter-spacing="2">LORE</text>
+</svg>

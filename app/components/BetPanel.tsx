@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React from "react";
 import { GRID_SIZE } from "../lib/constants";
-import { safeParseFloat } from "../lib/utils";
 import { processingQuotes } from "../lib/loreTexts";
+import { useAutoMinerForm } from "../hooks/useAutoMinerForm";
+import { useManualBetForm } from "../hooks/useManualBetForm";
 import { LoreText } from "./LoreText";
 import { cn } from "../lib/cn";
 import { UiButton } from "./ui/UiButton";
@@ -11,13 +12,12 @@ import { UiInput } from "./ui/UiInput";
 import { UiPanel } from "./ui/UiPanel";
 import { uiTokens } from "./ui/tokens";
 
-const AUTOMINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
-const MANUAL_BET_AMOUNT_KEY = "lineaore:manual-bet-amount:v1";
-
-/* ═══ Manual Bet ═══ */
+/* Manual Bet */
 
 interface ManualBetProps {
   formattedBalance: string | null;
+  coldBootDefaults?: boolean;
+  liveStateReady?: boolean;
   selectedTilesCount: number;
   isPending: boolean;
   isRevealing: boolean;
@@ -29,6 +29,8 @@ interface ManualBetProps {
 
 export const ManualBetPanel = React.memo(function ManualBetPanel({
   formattedBalance,
+  coldBootDefaults = false,
+  liveStateReady = true,
   selectedTilesCount,
   isPending,
   isRevealing,
@@ -37,25 +39,15 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   lastBet,
   onRepeatBet,
 }: ManualBetProps) {
-  const [betAmount, setBetAmount] = useState("10.0");
-  useEffect(() => {
-    try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(MANUAL_BET_AMOUNT_KEY) : null;
-      if (raw != null) {
-        const v = String(raw).trim();
-        if (v && !Number.isNaN(Number(v))) setBetAmount(v);
-      }
-    } catch {}
-  }, []);
-  useEffect(() => {
-    try {
-      if (typeof window !== "undefined" && betAmount != null) window.localStorage.setItem(MANUAL_BET_AMOUNT_KEY, betAmount);
-    } catch {}
-  }, [betAmount]);
-  const totalBet = useMemo(() => safeParseFloat(betAmount) * selectedTilesCount, [betAmount, selectedTilesCount]);
-  const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
-  const manualInsufficient = balance !== null && totalBet > 0 && totalBet > balance;
-  const isDisabled = isPending || selectedTilesCount === 0 || isRevealing || isAutoMining || manualInsufficient;
+  const { betAmount, setBetAmount, totalBet, manualInsufficient, isDisabled } = useManualBetForm({
+    formattedBalance,
+    liveStateReady,
+    selectedTilesCount,
+    isPending,
+    isRevealing,
+    isAutoMining,
+  });
+
   if (isAutoMining) {
     return (
       <UiPanel
@@ -114,6 +106,14 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         <span className={`font-bold text-[11px] ${manualInsufficient ? "text-red-400" : "text-violet-400"}`}>{totalBet.toFixed(2)} LINEA</span>
       </div>
 
+      {!liveStateReady && !coldBootDefaults && (
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-violet-500/8 border border-violet-500/20 mb-1.5">
+          <span className="text-[8px] font-bold text-violet-300/80 uppercase tracking-wide">
+            Syncing live epoch...
+          </span>
+        </div>
+      )}
+
       {manualInsufficient && (
         <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/25 mb-1.5">
           <span className="text-[8px] font-bold text-red-400">Insufficient balance</span>
@@ -130,7 +130,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           fullWidth
           className="mb-1 min-h-[2.5rem] px-2 text-center text-[9px] leading-tight whitespace-normal sm:text-[10px]"
         >
-          ↻ Repeat: {lastBet.tiles.length} tiles × {lastBet.amount} LINEA
+          Repeat: {lastBet.tiles.length} tiles x {lastBet.amount} LINEA
         </UiButton>
       )}
 
@@ -156,23 +156,25 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
             </svg>
             <LoreText items={processingQuotes} />
           </span>
-        ) : selectedTilesCount > 0 ? `⛏ BET ON ${selectedTilesCount} TILES` : "SELECT TILES"}
+        ) : !liveStateReady && !coldBootDefaults ? "SYNCING..." : selectedTilesCount > 0 ? `BET ON ${selectedTilesCount} ${selectedTilesCount === 1 ? "TILE" : "TILES"}` : "SELECT TILES"}
       </UiButton>
     </UiPanel>
   );
 });
 
-/* ═══ Auto-Miner ═══ */
+/* Auto-Miner */
 
 interface AutoMinerProps {
   isAutoMining: boolean;
   isPending: boolean;
   isRevealing: boolean;
+  coldBootDefaults?: boolean;
+  liveStateReady?: boolean;
   autoMineProgress?: string | null;
   formattedBalance?: string | null;
   /** When bot is running, show these params (from session/restore) so UI matches actual behavior */
   runningParams?: { betStr: string; blocks: number; rounds: number } | null;
-  /** Not enough ETH for gas – disable starting the bot */
+  /** Not enough ETH for gas - disable starting the bot */
   lowEthForGas?: boolean;
   onToggle: (betStr: string, blocks: number, rounds: number) => void;
 }
@@ -181,71 +183,37 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   isAutoMining,
   isPending,
   isRevealing,
+  coldBootDefaults = false,
+  liveStateReady = true,
   autoMineProgress,
   formattedBalance,
   runningParams,
   lowEthForGas,
   onToggle,
 }: AutoMinerProps) {
-  const [betSize, setBetSize] = useState("1.0");
-  const [targets, setTargets] = useState(3);
-  const [cycles, setCycles] = useState(5);
-
-  useEffect(() => {
-    try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(AUTOMINER_INPUTS_KEY) : null;
-      if (raw != null) {
-        const data = JSON.parse(raw);
-        if (data && typeof data === "object") {
-          if (typeof data.betSize === "string" && data.betSize && !Number.isNaN(Number(data.betSize))) setBetSize(data.betSize);
-          if (typeof data.targets === "number" && data.targets >= 1 && data.targets <= GRID_SIZE) setTargets(data.targets);
-          if (typeof data.cycles === "number" && data.cycles >= 1) setCycles(data.cycles);
-        }
-      }
-    } catch {}
-  }, []);
-  useEffect(() => {
-    try {
-      if (typeof window !== "undefined")
-        window.localStorage.setItem(AUTOMINER_INPUTS_KEY, JSON.stringify({ betSize, targets, cycles }));
-    } catch {}
-  }, [betSize, targets, cycles]);
-
-  // When bot runs with restored/session params, sync form so displayed values match and persist after stop
-  useEffect(() => {
-    if (isAutoMining && runningParams) {
-      setBetSize(runningParams.betStr);
-      setTargets(runningParams.blocks);
-      setCycles(runningParams.rounds);
-    }
-  }, [isAutoMining, runningParams]);
-
-  const displayBetSize = isAutoMining && runningParams ? runningParams.betStr : betSize;
-  const displayTargets = isAutoMining && runningParams ? runningParams.blocks : targets;
-  const displayCycles = isAutoMining && runningParams ? runningParams.rounds : cycles;
-
-  const handleTargetsChange = useCallback((v: string) => {
-    const n = Number(v);
-    if (Number.isFinite(n)) setTargets(Math.min(GRID_SIZE, Math.max(1, Math.floor(n))));
-  }, []);
-
-  const handleCyclesChange = useCallback((v: string) => {
-    const n = Number(v);
-    if (Number.isFinite(n)) setCycles(Math.max(1, Math.floor(n)));
-  }, []);
-
-  const totalCost = useMemo(() => {
-    const t = Number.isFinite(displayTargets) ? Math.max(1, displayTargets) : 1;
-    const c = Number.isFinite(displayCycles) ? Math.max(1, displayCycles) : 1;
-    return safeParseFloat(displayBetSize) * t * c;
-  }, [displayBetSize, displayTargets, displayCycles]);
-  const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
-  const insufficientBalance = balance !== null && totalCost > balance;
-  const isDisabled =
-    (isPending && !isAutoMining) ||
-    isRevealing ||
-    (insufficientBalance && !isAutoMining) ||
-    (lowEthForGas && !isAutoMining);
+  const {
+    betSize,
+    setBetSize,
+    targets,
+    cycles,
+    displayBetSize,
+    displayTargets,
+    displayCycles,
+    totalCost,
+    balance,
+    insufficientBalance,
+    isDisabled,
+    handleTargetsChange,
+    handleCyclesChange,
+  } = useAutoMinerForm({
+    isAutoMining,
+    isPending,
+    isRevealing,
+    liveStateReady,
+    formattedBalance,
+    runningParams,
+    lowEthForGas,
+  });
 
   const compact = isAutoMining;
 
@@ -258,20 +226,20 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
     >
 
       {compact ? (
-        /* ── Compact LIVE view ── */
+        /* Compact LIVE view */
         <>
           <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-1.5">
               <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-synced-pulse shadow-[0_0_6px_rgba(239,68,68,0.4)]" />
               <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                {displayTargets}×{displayBetSize} <span className="text-gray-600">LINEA</span> · {displayCycles} cyc
+                {displayTargets}x{displayBetSize} <span className="text-gray-600">LINEA</span> - {displayCycles} cyc
               </span>
             </div>
             <span className="text-[10px] font-bold text-sky-400 tabular-nums">{totalCost.toFixed(0)} <span className="text-gray-600">LINEA</span></span>
           </div>
         </>
       ) : (
-        /* ── Full edit view ── */
+        /* Full edit view */
         <>
           <div className="flex items-center gap-1.5 border-b border-white/[0.06] mb-1.5 pb-1.5">
             <div className="w-1.5 h-3 rounded-full bg-sky-400 animate-synced-pulse shadow-[0_0_8px_rgba(56,189,248,0.4)]" />
@@ -346,6 +314,13 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
           </span>
         </div>
       )}
+      {!liveStateReady && !coldBootDefaults && (
+        <div className={`flex items-center gap-1.5 px-2 py-1 ${uiTokens.radius.sm} bg-sky-500/10 border border-sky-500/20 mb-2`}>
+          <span className="text-[9px] font-bold text-sky-300 uppercase tracking-wider">
+            Waiting for live epoch sync
+          </span>
+        </div>
+      )}
       <UiButton
         onClick={() => onToggle(betSize, targets, cycles)}
         disabled={isDisabled}
@@ -360,13 +335,13 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
           !isAutoMining && isDisabled && "bg-[#13132a] text-gray-600 border-white/[0.04]",
         )}
       >
-        {isAutoMining ? "⏹ STOP BOT" : "▶ START BOT"}
+        {isAutoMining ? "STOP BOT" : "START BOT"}
       </UiButton>
     </UiPanel>
   );
 });
 
-/* ═══ Input ═══ */
+/* Input */
 
 const SmallInput = React.memo(function SmallInput({
   label, value, onChange, disabled, type = "text", inputMode, min, max, className = "", accent = "violet", compact = false,

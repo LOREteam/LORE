@@ -1,21 +1,16 @@
 import { createPublicClient, fallback, http } from "viem";
 import {
   getConfiguredContractAddress,
-  getConfiguredFirebaseDbUrl,
   getConfiguredDeployBlock,
   getConfiguredLineaNetwork,
   getLineaChain,
-  getPreferredLineaRpcs,
+  getStableLineaReadRpcs,
 } from "../../../config/publicConfig";
+import { patchJsonPath, readJsonPath } from "../../../server/storage";
 
 export const APP_NETWORK = getConfiguredLineaNetwork();
 export const APP_CHAIN = getLineaChain(APP_NETWORK);
 
-export const FIREBASE_DB_URL = getConfiguredFirebaseDbUrl(
-  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
-  APP_NETWORK,
-);
-export const FIREBASE_DB_AUTH = process.env.FIREBASE_DB_AUTH ?? "";
 export const CONTRACT_ADDRESS = getConfiguredContractAddress(
   process.env.KEEPER_CONTRACT_ADDRESS ??
     process.env.NEXT_PUBLIC_CONTRACT_ADDRESS,
@@ -26,86 +21,41 @@ export const CONTRACT_DEPLOY_BLOCK = getConfiguredDeployBlock(
     process.env.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK,
   APP_NETWORK,
 );
-export const SERVER_RPC_URLS = getPreferredLineaRpcs(process.env.KEEPER_RPC_URL, APP_NETWORK);
+export const SERVER_RPC_URLS = getStableLineaReadRpcs(process.env.KEEPER_RPC_URL, APP_NETWORK);
 export const RPC_URL = SERVER_RPC_URLS[0];
 
 export const publicClient = createPublicClient({
   chain: APP_CHAIN,
   transport: fallback(
     SERVER_RPC_URLS.map((url) => http(url, { timeout: 20_000, retryCount: 1 })),
-    { rank: true },
+    { rank: false },
   ),
 });
 
-type QueryValue = string | number | boolean;
-
-export function requireFirebaseWriteAuth(context: string = "server Firebase writes") {
-  if (!FIREBASE_DB_AUTH) {
-    throw new Error(`FIREBASE_DB_AUTH is required for ${context}.`);
-  }
-  return FIREBASE_DB_AUTH;
-}
-
-function toQueryString(params?: Record<string, QueryValue>) {
-  if (!params) return "";
-  const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) sp.set(k, String(v));
-  const q = sp.toString();
-  return q ? `?${q}` : "";
-}
-
-export function firebaseReadUrl(path: string, params?: Record<string, QueryValue>) {
-  return `${FIREBASE_DB_URL}/${path}.json${toQueryString(params)}`;
-}
-
-export function firebaseWriteUrl(path: string, params?: Record<string, QueryValue>) {
-  const auth = requireFirebaseWriteAuth(`Firebase write path "${path}"`);
-  const base = `${FIREBASE_DB_URL}/${path}.json`;
-  const p: Record<string, QueryValue> = { ...(params ?? {}) };
-  p.auth = auth;
-  return `${base}${toQueryString(p)}`;
-}
-
-export function firebaseWriteUrlWithHeaders(path: string, params?: Record<string, QueryValue>): { url: string; headers: Record<string, string> } {
-  const auth = requireFirebaseWriteAuth(`Firebase write path "${path}"`);
-  const base = `${FIREBASE_DB_URL}/${path}.json`;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-
-  headers["X-Firebase-Auth"] = auth;
-
-  return { url: base + toQueryString(params ?? {}) || "", headers };
-}
-
 export async function fetchFirebaseWithOrderFallback<T>(path: string, orderByField: string, limitToLast?: number) {
-  const params: Record<string, QueryValue> = { orderBy: JSON.stringify(orderByField) };
-  if (limitToLast) params.limitToLast = limitToLast;
-
-  let res = await fetch(firebaseReadUrl(path, params), { next: { revalidate: 10 } });
-  if (res.status === 400) {
-    res = await fetch(firebaseReadUrl(path), { next: { revalidate: 10 } });
+  void orderByField;
+  try {
+    const data = readJsonPath<T>(path, limitToLast);
+    return { ok: true as const, status: 200, data };
+  } catch {
+    return { ok: false as const, status: 500, data: null as T | null };
   }
-  if (!res.ok) return { ok: false as const, status: res.status, data: null as T | null };
-  const json = (await res.json()) as T | null;
-  return { ok: true as const, status: res.status, data: json };
 }
 
 export async function fetchFirebaseJson<T>(path: string) {
-  const res = await fetch(firebaseReadUrl(path), { next: { revalidate: 10 } });
-  if (!res.ok) return { ok: false as const, status: res.status, data: null as T | null };
-  const json = (await res.json()) as T | null;
-  return { ok: true as const, status: res.status, data: json };
+  try {
+    const data = readJsonPath<T>(path);
+    return { ok: true as const, status: 200, data };
+  } catch {
+    return { ok: false as const, status: 500, data: null as T | null };
+  }
 }
 
 export async function patchFirebase(path: string, payload: Record<string, unknown>) {
-  const res = await fetch(firebaseWriteUrl(path), {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    console.warn(`[api] Firebase patch failed (${res.status}) for ${path}`);
+  try {
+    patchJsonPath(path, payload);
+  } catch (error) {
+    console.warn(`[api] Storage patch failed for ${path}:`, error);
   }
 }
 

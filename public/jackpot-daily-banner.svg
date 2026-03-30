@@ -1,0 +1,197 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="118" y1="70" x2="1490" y2="860" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#12080E"/>
+      <stop offset="0.42" stop-color="#1E0D10"/>
+      <stop offset="1" stop-color="#09060B"/>
+    </linearGradient>
+    <radialGradient id="sunGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1168 430) rotate(90) scale(334 334)">
+      <stop offset="0" stop-color="#FFD66B"/>
+      <stop offset="0.36" stop-color="#FFB423" stop-opacity="0.94"/>
+      <stop offset="0.7" stop-color="#FF8F09" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#FF8F09" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="baseGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(415 810) rotate(-16) scale(600 210)">
+      <stop offset="0" stop-color="#FF9216" stop-opacity="0.48"/>
+      <stop offset="1" stop-color="#FF9216" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tag" x1="0" y1="0" x2="338" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#291207"/>
+      <stop offset="1" stop-color="#512108"/>
+    </linearGradient>
+    <linearGradient id="lineGlow" x1="0" y1="0" x2="0" y2="668" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE28F" stop-opacity="0"/>
+      <stop offset="0.48" stop-color="#FFB726" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#FF8E09" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="coinFace" x1="0" y1="0" x2="0" y2="92" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF4A7"/>
+      <stop offset="0.55" stop-color="#FFD45A"/>
+      <stop offset="1" stop-color="#C87410"/>
+    </linearGradient>
+    <linearGradient id="chestBody" x1="813" y1="407" x2="1222" y2="786" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3D1B08"/>
+      <stop offset="0.46" stop-color="#6C310D"/>
+      <stop offset="1" stop-color="#1B0C05"/>
+    </linearGradient>
+    <linearGradient id="chestLid" x1="0" y1="0" x2="266" y2="130" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#91541B"/>
+      <stop offset="0.55" stop-color="#D27A1B"/>
+      <stop offset="1" stop-color="#4F210A"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="166" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF0A5"/>
+      <stop offset="0.52" stop-color="#FFC938"/>
+      <stop offset="1" stop-color="#A35A12"/>
+    </linearGradient>
+    <linearGradient id="diamond" x1="0" y1="0" x2="90" y2="122" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF8C9"/>
+      <stop offset="0.48" stop-color="#FFE06A"/>
+      <stop offset="1" stop-color="#D17C13"/>
+    </linearGradient>
+    <filter id="panelShadow" x="36" y="44" width="1528" height="844" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="36" stdDeviation="34" flood-color="#000000" flood-opacity="0.5"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="#FFAB1A" flood-opacity="0.16"/>
+    </filter>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="24"/>
+    </filter>
+    <filter id="smallGlow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+    <filter id="textGlow" x="-20%" y="-40%" width="140%" height="180%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.4"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="12" flood-color="#FFB423" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#panelShadow)">
+    <rect x="72" y="72" width="1456" height="756" rx="42" fill="url(#bg)"/>
+    <rect x="88" y="88" width="1424" height="724" rx="32" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2"/>
+  </g>
+
+  <ellipse cx="1168" cy="430" rx="334" ry="334" fill="url(#sunGlow)"/>
+  <ellipse cx="413" cy="816" rx="600" ry="210" fill="url(#baseGlow)"/>
+  <circle cx="1188" cy="430" r="258" stroke="#FFCF63" stroke-opacity="0.18" stroke-width="2"/>
+  <circle cx="1188" cy="430" r="308" stroke="#FFCF63" stroke-opacity="0.08" stroke-width="2"/>
+
+  <g opacity="0.64">
+    <rect x="925" y="126" width="18" height="650" rx="9" transform="rotate(-24 925 126)" fill="url(#lineGlow)"/>
+    <rect x="980" y="102" width="14" height="680" rx="7" transform="rotate(-16 980 102)" fill="url(#lineGlow)"/>
+    <rect x="1040" y="86" width="16" height="690" rx="8" transform="rotate(-8 1040 86)" fill="url(#lineGlow)"/>
+    <rect x="1110" y="76" width="18" height="706" rx="9" fill="url(#lineGlow)"/>
+    <rect x="1184" y="86" width="16" height="694" rx="8" transform="rotate(8 1184 86)" fill="url(#lineGlow)"/>
+    <rect x="1250" y="102" width="14" height="682" rx="7" transform="rotate(16 1250 102)" fill="url(#lineGlow)"/>
+    <rect x="1314" y="128" width="18" height="648" rx="9" transform="rotate(24 1314 128)" fill="url(#lineGlow)"/>
+  </g>
+
+  <g filter="url(#smallGlow)">
+    <g fill="#FFE689">
+      <path d="M894 134L900 151L918 157L900 163L894 181L888 163L870 157L888 151L894 134Z"/>
+      <path d="M1310 160L1315 173L1328 178L1315 183L1310 196L1305 183L1292 178L1305 173L1310 160Z"/>
+      <path d="M1388 254L1395 273L1414 280L1395 287L1388 306L1381 287L1362 280L1381 273L1388 254Z"/>
+      <path d="M1230 620L1236 636L1252 642L1236 648L1230 664L1224 648L1208 642L1224 636L1230 620Z"/>
+      <path d="M1032 244L1037 257L1050 262L1037 267L1032 280L1027 267L1014 262L1027 257L1032 244Z"/>
+    </g>
+  </g>
+
+  <g>
+    <rect x="132" y="128" width="322" height="56" rx="28" fill="url(#tag)" stroke="#A15B16" stroke-width="2"/>
+    <text x="163" y="164" fill="#FFE7A1" font-size="18" font-family="Inter, Arial, sans-serif" font-weight="800" letter-spacing="1.4">FAST HIT / HOT STREAK</text>
+  </g>
+
+  <g filter="url(#textGlow)">
+    <text x="132" y="302" fill="#FFF8E0" font-size="108" font-family="Inter, Arial, sans-serif" font-weight="900">DAILY</text>
+    <text x="132" y="404" fill="#FFF8E0" font-size="108" font-family="Inter, Arial, sans-serif" font-weight="900">JACKPOT</text>
+  </g>
+  <text x="136" y="492" fill="#F5D8A0" font-size="29" font-family="Inter, Arial, sans-serif" font-weight="500">
+    A brighter, louder reward burst.
+  </text>
+  <text x="136" y="532" fill="#F5D8A0" font-size="29" font-family="Inter, Arial, sans-serif" font-weight="500">
+    Gold rain, fast hype, and a daily
+  </text>
+  <text x="136" y="572" fill="#F5D8A0" font-size="29" font-family="Inter, Arial, sans-serif" font-weight="500">
+    win moment that actually feels premium.
+  </text>
+
+  <g>
+    <rect x="136" y="624" width="258" height="72" rx="24" fill="#171010" stroke="#85511C" stroke-width="2"/>
+    <text x="170" y="669" fill="#FFF8E0" font-size="24" font-family="Inter, Arial, sans-serif" font-weight="800">2% of every round</text>
+    <rect x="414" y="624" width="278" height="72" rx="24" fill="#171010" stroke="#85511C" stroke-width="2"/>
+    <text x="446" y="669" fill="#FFF8E0" font-size="24" font-family="Inter, Arial, sans-serif" font-weight="800">Drops once per day</text>
+  </g>
+
+  <text x="136" y="748" fill="#9F7A50" font-size="18" font-family="Inter, Arial, sans-serif" font-weight="700">
+    Use when the message needs speed, heat, and a stronger arcade loot vibe.
+  </text>
+  <line x1="136" y1="776" x2="662" y2="776" stroke="#85511C" stroke-opacity="0.6"/>
+  <text x="136" y="806" fill="#9F7A50" font-size="14" font-family="Inter, Arial, sans-serif" font-weight="800" letter-spacing="1.6">
+    LORE / LINEA MINING GAME / PROMO SPLASH / SOCIAL CROP READY
+  </text>
+
+  <g transform="translate(834 208)">
+    <ellipse cx="236" cy="244" rx="220" ry="124" fill="#FFAF22" fill-opacity="0.28" filter="url(#glow)"/>
+    <ellipse cx="240" cy="232" rx="136" ry="72" fill="#FFF0A8" fill-opacity="0.24" filter="url(#glow)"/>
+
+    <g transform="translate(120 214)">
+      <ellipse cx="0" cy="122" rx="52" ry="52" fill="url(#coinFace)"/>
+      <ellipse cx="0" cy="122" rx="38" ry="38" fill="#FFF2AA"/>
+      <path d="M-18 122H18" stroke="#C57712" stroke-width="8" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(166 242)">
+      <ellipse cx="0" cy="110" rx="48" ry="48" fill="url(#coinFace)"/>
+      <ellipse cx="0" cy="110" rx="34" ry="34" fill="#FFF2AA"/>
+      <path d="M-16 110H16" stroke="#C57712" stroke-width="7" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(430 210)">
+      <ellipse cx="0" cy="138" rx="58" ry="58" fill="url(#coinFace)"/>
+      <ellipse cx="0" cy="138" rx="42" ry="42" fill="#FFF2AA"/>
+      <path d="M-20 138H20" stroke="#C57712" stroke-width="8" stroke-linecap="round"/>
+    </g>
+
+    <g transform="translate(108 110)">
+      <ellipse cx="132" cy="104" rx="36" ry="36" fill="url(#coinFace)"/>
+      <ellipse cx="180" cy="86" rx="40" ry="40" fill="url(#coinFace)"/>
+      <ellipse cx="228" cy="106" rx="36" ry="36" fill="url(#coinFace)"/>
+      <ellipse cx="274" cy="90" rx="40" ry="40" fill="url(#coinFace)"/>
+    </g>
+
+    <path d="M130 246C130 234.954 138.954 226 150 226H378C389.046 226 398 234.954 398 246V382C398 393.046 389.046 402 378 402H150C138.954 402 130 393.046 130 382V246Z" fill="url(#chestBody)" stroke="url(#metal)" stroke-width="4"/>
+    <rect x="154" y="226" width="32" height="176" rx="14" fill="url(#metal)"/>
+    <rect x="240" y="224" width="64" height="180" rx="18" fill="url(#metal)"/>
+    <rect x="340" y="226" width="32" height="176" rx="14" fill="url(#metal)"/>
+    <rect x="130" y="278" width="268" height="18" rx="9" fill="#A06018" fill-opacity="0.68"/>
+
+    <g transform="translate(144 146) rotate(-9 122 58)">
+      <rect width="244" height="118" rx="32" fill="url(#chestLid)" stroke="url(#metal)" stroke-width="4"/>
+      <rect x="20" y="0" width="24" height="118" rx="12" fill="url(#metal)"/>
+      <rect x="176" y="0" width="24" height="118" rx="12" fill="url(#metal)"/>
+    </g>
+
+    <g>
+      <path d="M257 293L273 303V323L257 333L241 323V303L257 293Z" fill="#FFF0AA" stroke="#A45C11" stroke-width="3"/>
+      <rect x="248" y="332" width="18" height="30" rx="9" fill="#A45C11"/>
+    </g>
+
+    <path d="M428 276L500 298L458 382L380 360L428 276Z" fill="url(#diamond)" stroke="#F2C74C" stroke-width="3"/>
+    <path d="M428 276L438 332L500 298" stroke="#FFF7C6" stroke-width="3" stroke-opacity="0.68"/>
+    <path d="M438 332L458 382" stroke="#FFF7C6" stroke-width="3" stroke-opacity="0.68"/>
+
+    <g filter="url(#smallGlow)">
+      <path d="M264 36L274 64L302 74L274 84L264 112L254 84L226 74L254 64L264 36Z" fill="#FFE78A"/>
+    </g>
+  </g>
+
+  <g>
+    <rect x="1028" y="672" width="386" height="110" rx="28" fill="#150F0F" stroke="#8A5418" stroke-width="2"/>
+    <text x="1060" y="718" fill="#FFF8E0" font-size="24" font-family="Inter, Arial, sans-serif" font-weight="900">Visual Direction</text>
+    <text x="1060" y="752" fill="#F5D8A0" font-size="18" font-family="Inter, Arial, sans-serif" font-weight="500">
+      Solar vault, aggressive amber glow,
+    </text>
+    <text x="1060" y="778" fill="#F5D8A0" font-size="18" font-family="Inter, Arial, sans-serif" font-weight="500">
+      cleaner silhouette, louder arcade energy.
+    </text>
+  </g>
+
+  <text x="1426" y="142" text-anchor="end" fill="#FFF8E0" font-size="24" font-family="Inter, Arial, sans-serif" font-weight="900" letter-spacing="2">LORE</text>
+</svg>
