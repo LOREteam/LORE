@@ -30,12 +30,42 @@ function fmtMinutes(value?: number | null) {
   return `${(hours / 24).toFixed(1)} d`;
 }
 
+function fmtAge(value?: number | null) {
+  if (value == null || !Number.isFinite(value)) return "...";
+  if (value < 1000) return `${Math.round(value)} ms`;
+  const seconds = value / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)} s`;
+  return fmtMinutes(seconds / 60);
+}
+
+function fmtMode(value?: string | null) {
+  if (!value) return "...";
+  return value.replace(/_/g, " ");
+}
+
+function modeToneClass(value?: string | null) {
+  if (value === "indexer_fast_path") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+  if (value === "bootstrap_recovery_needed") return "border-violet-500/30 bg-violet-500/10 text-violet-200";
+  return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+}
+
+function staleToneClass(stale?: boolean) {
+  return stale
+    ? "border-red-500/30 bg-red-500/10 text-red-200"
+    : "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+}
+
 type DataSyncHealth = {
   status?: string;
   storage?: {
     currentEpochMeta?: number | null;
     lastIndexedBlock?: string | null;
+    repairCursorBlock?: string | null;
     lagBlocks?: number | null;
+    latestStoredJackpotBlock?: string | null;
+    latestRewardClaimBlock?: string | null;
+    rewardClaimsLagToHead?: number | null;
+    rewardClaimsLagToIndexer?: number | null;
   };
   epochs?: {
     storedCount?: number;
@@ -69,11 +99,51 @@ type DataSyncHealth = {
     hasLatestWeeklyInDb?: boolean;
     lastDailyEpoch?: number;
     lastWeeklyEpoch?: number;
+    servingMode?: string;
+  };
+  recentWins?: {
+    totalStored?: number;
+    latestRewardClaimBlock?: string | null;
+    lagToHeadBlocks?: number | null;
+    lagToIndexerBlocks?: number | null;
+    servingMode?: string;
+  };
+  indexer?: {
+    run?: {
+      startedAt?: number;
+      completedAt?: number;
+      fromBlock?: string;
+      toBlock?: string;
+      totalLogs?: number;
+      runCompletedAgeMs?: number | null;
+      stale?: boolean;
+    };
+    repair?: {
+      at?: number;
+      fromBlock?: string;
+      toBlock?: string;
+      repairedLogs?: number;
+      ageMs?: number | null;
+      stale?: boolean;
+    };
+    reconcile?: {
+      at?: number;
+      currentEpoch?: number;
+      missingEpochs?: number;
+      repairedEpochs?: number;
+      targetEpochs?: number[];
+      ageMs?: number | null;
+      stale?: boolean;
+    };
   };
   env?: {
     network?: string;
     dbPath?: string;
     deployBlock?: string;
+    lagWarnBlocks?: number | null;
+    jackpotRecoveryBlockLag?: number | null;
+    recentWinsRecoveryBlockLag?: number | null;
+    indexerHeartbeatStaleMs?: number | null;
   };
   hints?: string[];
 };
@@ -337,6 +407,8 @@ export default function AdminPage() {
   const blockProgressWidth = Math.max(0, Math.min(100, dataSyncHealth?.catchUp?.blockProgressPct ?? 0));
   const epochProgressWidth = Math.max(0, Math.min(100, dataSyncHealth?.epochs?.coveragePct ?? 0));
   const contiguousProgressWidth = Math.max(0, Math.min(100, dataSyncHealth?.epochs?.contiguousCoveragePct ?? 0));
+  const jackpotServingMode = dataSyncHealth?.jackpots?.servingMode ?? null;
+  const recentWinsServingMode = dataSyncHealth?.recentWins?.servingMode ?? null;
 
   return (
     <main className="min-h-screen bg-[#060612] text-slate-200 p-6">
@@ -422,7 +494,9 @@ export default function AdminPage() {
               <div className="text-sm">Network: <b>{dataSyncHealth?.env?.network ?? "..."}</b></div>
               <div className="text-sm">DB path: <span className="font-mono text-xs">{dataSyncHealth?.env?.dbPath ?? "..."}</span></div>
               <div className="text-sm">Deploy block: <b>{dataSyncHealth?.env?.deployBlock ?? "..."}</b></div>
+              <div className="text-sm">Lag warn threshold: <b>{fmtNumber(dataSyncHealth?.env?.lagWarnBlocks)}</b></div>
               <div className="text-sm">Last indexed block: <b>{dataSyncHealth?.storage?.lastIndexedBlock ?? "null"}</b></div>
+              <div className="text-sm">Repair cursor block: <b>{dataSyncHealth?.storage?.repairCursorBlock ?? "null"}</b></div>
               <div className="text-sm">Lag blocks: <b>{fmtNumber(dataSyncHealth?.storage?.lagBlocks)}</b></div>
               <div className="text-sm">Stored epochs: <b>{fmtNumber(dataSyncHealth?.epochs?.storedCount)}</b></div>
               <div className="text-sm">Missing epochs: <b>{fmtNumber(dataSyncHealth?.epochs?.missingCount)}</b></div>
@@ -433,6 +507,76 @@ export default function AdminPage() {
                 Latest jackpots in DB:
                 <b> daily {String(Boolean(dataSyncHealth?.jackpots?.hasLatestDailyInDb))}</b>,
                 <b> weekly {String(Boolean(dataSyncHealth?.jackpots?.hasLatestWeeklyInDb))}</b>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded border border-white/10 bg-black/20 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs uppercase tracking-wider text-gray-400">Jackpots Serving</div>
+                    <div className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${modeToneClass(jackpotServingMode)}`}>
+                      {fmtMode(jackpotServingMode)}
+                    </div>
+                  </div>
+                  <div className="text-sm">Stored jackpots: <b>{fmtNumber(dataSyncHealth?.jackpots?.totalStored)}</b></div>
+                  <div className="text-sm">Latest jackpot block: <b>{dataSyncHealth?.storage?.latestStoredJackpotBlock ?? "null"}</b></div>
+                  <div className="text-sm">Recovery threshold: <b>{fmtNumber(dataSyncHealth?.env?.jackpotRecoveryBlockLag)}</b> blocks</div>
+                </div>
+                <div className="rounded border border-white/10 bg-black/20 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs uppercase tracking-wider text-gray-400">Recent Wins Serving</div>
+                    <div className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${modeToneClass(recentWinsServingMode)}`}>
+                      {fmtMode(recentWinsServingMode)}
+                    </div>
+                  </div>
+                  <div className="text-sm">Stored claims: <b>{fmtNumber(dataSyncHealth?.recentWins?.totalStored)}</b></div>
+                  <div className="text-sm">Latest reward claim block: <b>{dataSyncHealth?.recentWins?.latestRewardClaimBlock ?? "null"}</b></div>
+                  <div className="text-sm">Lag to head: <b>{fmtNumber(dataSyncHealth?.recentWins?.lagToHeadBlocks)}</b> blocks</div>
+                  <div className="text-sm">Lag to indexer: <b>{fmtNumber(dataSyncHealth?.recentWins?.lagToIndexerBlocks)}</b> blocks</div>
+                  <div className="text-sm">Recovery threshold: <b>{fmtNumber(dataSyncHealth?.env?.recentWinsRecoveryBlockLag)}</b> blocks</div>
+                </div>
+              </div>
+              <div className="rounded border border-white/10 bg-black/20 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs uppercase tracking-wider text-gray-400">Indexer Heartbeat</div>
+                  <div className="text-xs text-gray-400">
+                    stale after <b>{fmtAge(dataSyncHealth?.env?.indexerHeartbeatStaleMs)}</b>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+                  <div className="rounded border border-white/10 bg-white/[0.03] p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs uppercase tracking-wider text-gray-400">Run</span>
+                      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${staleToneClass(dataSyncHealth?.indexer?.run?.stale)}`}>
+                        {dataSyncHealth?.indexer?.run?.stale ? "stale" : "fresh"}
+                      </span>
+                    </div>
+                    <div>Age: <b>{fmtAge(dataSyncHealth?.indexer?.run?.runCompletedAgeMs)}</b></div>
+                    <div>Range: <span className="font-mono text-xs">{dataSyncHealth?.indexer?.run?.fromBlock ?? "..."}</span> {"->"} <span className="font-mono text-xs">{dataSyncHealth?.indexer?.run?.toBlock ?? "..."}</span></div>
+                    <div>Logs: <b>{fmtNumber(dataSyncHealth?.indexer?.run?.totalLogs)}</b></div>
+                  </div>
+                  <div className="rounded border border-white/10 bg-white/[0.03] p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs uppercase tracking-wider text-gray-400">Repair</span>
+                      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${staleToneClass(dataSyncHealth?.indexer?.repair?.stale)}`}>
+                        {dataSyncHealth?.indexer?.repair?.stale ? "stale" : "fresh"}
+                      </span>
+                    </div>
+                    <div>Age: <b>{fmtAge(dataSyncHealth?.indexer?.repair?.ageMs)}</b></div>
+                    <div>Range: <span className="font-mono text-xs">{dataSyncHealth?.indexer?.repair?.fromBlock ?? "..."}</span> {"->"} <span className="font-mono text-xs">{dataSyncHealth?.indexer?.repair?.toBlock ?? "..."}</span></div>
+                    <div>Repaired logs: <b>{fmtNumber(dataSyncHealth?.indexer?.repair?.repairedLogs)}</b></div>
+                  </div>
+                  <div className="rounded border border-white/10 bg-white/[0.03] p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs uppercase tracking-wider text-gray-400">Reconcile</span>
+                      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${staleToneClass(dataSyncHealth?.indexer?.reconcile?.stale)}`}>
+                        {dataSyncHealth?.indexer?.reconcile?.stale ? "stale" : "fresh"}
+                      </span>
+                    </div>
+                    <div>Age: <b>{fmtAge(dataSyncHealth?.indexer?.reconcile?.ageMs)}</b></div>
+                    <div>Missing epochs: <b>{fmtNumber(dataSyncHealth?.indexer?.reconcile?.missingEpochs)}</b></div>
+                    <div>Repaired this pass: <b>{fmtNumber(dataSyncHealth?.indexer?.reconcile?.repairedEpochs)}</b></div>
+                    <div>Targets: <span className="text-xs text-gray-300">{dataSyncHealth?.indexer?.reconcile?.targetEpochs?.length ? dataSyncHealth.indexer.reconcile.targetEpochs.join(", ") : "none"}</span></div>
+                  </div>
+                </div>
               </div>
               <div className="rounded border border-white/10 bg-black/20 p-3 space-y-2">
                 <div className="text-xs uppercase tracking-wider text-gray-400">Catch-Up Progress</div>

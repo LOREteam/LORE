@@ -125,7 +125,11 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
         fetchChunked(inTopics),
       ]);
 
-      if (outResult.status === "fulfilled") outLogs = outResult.value;
+      if (outResult.status === "fulfilled") {
+        outLogs = outResult.value;
+      } else {
+        console.warn("[useWalletTransfers] Outgoing transfer fetch failed:", outResult.reason);
+      }
 
       if (inResult.status === "fulfilled") {
         inLogs = inResult.value;

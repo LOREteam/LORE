@@ -50,11 +50,16 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const resize = () => {
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const resizeImmediate = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
     };
-    resize();
+    const resize = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(resizeImmediate, 150);
+    };
+    resizeImmediate();
     window.addEventListener("resize", resize);
 
     particlesRef.current = Array.from({ length: PARTICLE_COUNT }, () =>
@@ -110,6 +115,7 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
 
     return () => {
       cancelAnimationFrame(animRef.current);
+      if (resizeTimer) clearTimeout(resizeTimer);
       window.removeEventListener("resize", resize);
     };
   }, []);

@@ -5,14 +5,16 @@ import { encodeFunctionData, type PublicClient } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
 import { getLineaFeeOverrides } from "../lib/lineaFees";
 import { log } from "../lib/logger";
+import { clearResolveGuard, readResolveGuard, writeResolveGuard } from "./autoResolveStorage";
+import { waitUnlessCancelled } from "./autoResolveShared";
 
 const ENABLE_CLIENT_BOOTSTRAP_RESOLVE = true;
-const ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK = false;
+const ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK = true;
 const BOOTSTRAP_RESOLVE_RETRY_MS = 12_000;
 const ENABLE_AUTO_RESOLVE_SWEEP = false;
 const AUTO_RESOLVE_RETRY_AFTER_MS = 25_000;
 const MIN_ETH_FOR_GAS = 0.0005;
-const RESOLVE_STORAGE_KEY = "lore_resolve_epoch";
+const BOOTSTRAP_RESOLVE_REQUEST_TIMEOUT_MS = 8_000;
 
 type SilentSender = (
   tx: {
@@ -59,44 +61,6 @@ export function useAutoResolve({
   const autoResolveAttemptTsRef = useRef(0);
   const sweepRunningRef = useRef(false);
 
-  const waitUnlessCancelled = useCallback(async (cancelled: () => boolean, ms: number) => {
-    const sleepMs = Math.max(1_000, ms);
-    await new Promise<void>((resolve) => setTimeout(resolve, sleepMs));
-    return !cancelled();
-  }, []);
-
-  const readResolveGuard = useCallback((): { epoch: string; ts: number } | null => {
-    if (typeof localStorage === "undefined") return null;
-    try {
-      const raw = localStorage.getItem(RESOLVE_STORAGE_KEY);
-      if (!raw) return null;
-      if (raw[0] !== "{") return { epoch: raw, ts: 0 };
-      const parsed = JSON.parse(raw) as { epoch?: string; ts?: number };
-      if (!parsed?.epoch) return null;
-      return { epoch: parsed.epoch, ts: Number(parsed.ts) || 0 };
-    } catch {
-      return null;
-    }
-  }, []);
-
-  const writeResolveGuard = useCallback((epoch: string) => {
-    if (typeof localStorage === "undefined") return;
-    try {
-      localStorage.setItem(RESOLVE_STORAGE_KEY, JSON.stringify({ epoch, ts: Date.now() }));
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const clearResolveGuard = useCallback(() => {
-    if (typeof localStorage === "undefined") return;
-    try {
-      localStorage.removeItem(RESOLVE_STORAGE_KEY);
-    } catch {
-      // ignore
-    }
-  }, []);
-
   const timeLeftRef = useRef(timeLeft);
   timeLeftRef.current = timeLeft;
   const currentEpochResolvedRef = useRef(currentEpochResolved);
@@ -118,7 +82,7 @@ export function useAutoResolve({
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [refetchEpoch, refetchGridEpochData, refetchTileData, refetchUserBets, clearResolveGuard]);
+  }, [refetchEpoch, refetchGridEpochData, refetchTileData, refetchUserBets]);
 
   const tryClientResolveEpoch = useCallback(async (epochKey: string): Promise<boolean> => {
     if (!publicClient || !sendTransactionSilent || !embeddedWalletAddress) return false;
@@ -202,16 +166,7 @@ export function useAutoResolve({
       log.warn("AutoResolve", "client fallback resolve failed", { epoch: epochKey, err });
       return false;
     }
-  }, [
-    clearResolveGuard,
-    embeddedWalletAddress,
-    publicClient,
-    refetchEpoch,
-    refetchGridEpochData,
-    refetchTileData,
-    refetchUserBets,
-    sendTransactionSilent,
-  ]);
+  }, [embeddedWalletAddress, publicClient, refetchEpoch, refetchGridEpochData, refetchTileData, refetchUserBets, sendTransactionSilent]);
 
   useEffect(() => {
     if (!ENABLE_CLIENT_BOOTSTRAP_RESOLVE) return;
@@ -239,11 +194,14 @@ export function useAutoResolve({
         writeResolveGuard(epochKey);
 
         try {
+          const controller = new AbortController();
+          const timeoutId = window.setTimeout(() => controller.abort("bootstrap-timeout"), BOOTSTRAP_RESOLVE_REQUEST_TIMEOUT_MS);
           const res = await fetch("/api/bootstrap-resolve", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             cache: "no-store",
-          });
+            signal: controller.signal,
+          }).finally(() => window.clearTimeout(timeoutId));
           const payload = (await res.json().catch(() => null)) as
             | {
                 ok?: boolean;
@@ -386,7 +344,7 @@ export function useAutoResolve({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [actualCurrentEpoch, clearResolveGuard, readResolveGuard, timeLeft, tryClientResolveEpoch, waitUnlessCancelled, writeResolveGuard]);
+  }, [actualCurrentEpoch, timeLeft, tryClientResolveEpoch]);
 
   useEffect(() => {
     if (!ENABLE_AUTO_RESOLVE_SWEEP) return;

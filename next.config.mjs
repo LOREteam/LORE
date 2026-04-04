@@ -13,9 +13,8 @@ const nextConfig = {
   async headers() {
     const csp = [
       "default-src 'self'",
-      isDev
-        ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://auth.privy.io https://challenges.cloudflare.com"
-        : "script-src 'self' 'unsafe-inline' https://auth.privy.io https://challenges.cloudflare.com",
+      // Privy's auth/runtime flow currently relies on eval in this app environment.
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://auth.privy.io https://challenges.cloudflare.com",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",

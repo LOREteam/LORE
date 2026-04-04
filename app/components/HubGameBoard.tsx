@@ -43,7 +43,7 @@ interface HubGameBoardProps {
   onClaimAll: () => void;
 }
 
-export function HubGameBoard({
+export const HubGameBoard = React.memo(function HubGameBoard({
   gridDisplayEpoch,
   coldBootDefaults,
   liveStateReady,
@@ -110,4 +110,4 @@ export function HubGameBoard({
       </div>
     </div>
   );
-}
+});

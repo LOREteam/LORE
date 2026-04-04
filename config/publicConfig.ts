@@ -22,6 +22,10 @@ export const DEFAULT_INDEXER_RECONCILE_INTERVAL_MS = 120_000;
 export const DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS = 8;
 export const DEFAULT_API_EPOCHS_RECONCILE_MAX = 25;
 export const DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS = 800;
+export const DEFAULT_EIP7702_ENABLED = false;
+export const DEFAULT_EIP7702_MINING_ENABLED = false;
+export const DEFAULT_SEPOLIA_EIP7702_DELEGATE_ADDRESS =
+  "0x170067a88e64bba842ae6615ab277493de32629a" as const;
 
 const DEFAULT_LINEA_MAINNET_RPCS = [...linea.rpcUrls.default.http] as const;
 
@@ -67,6 +71,12 @@ export function getLineaExplorerTxBaseUrl(network: LineaNetwork = getConfiguredL
   return network === "mainnet"
     ? "https://lineascan.build/tx"
     : "https://sepolia.lineascan.build/tx";
+}
+
+export function getLineaExplorerAddressBaseUrl(network: LineaNetwork = getConfiguredLineaNetwork()) {
+  return network === "mainnet"
+    ? "https://lineascan.build/address"
+    : "https://sepolia.lineascan.build/address";
 }
 
 function getRequiredConfigValue(
@@ -167,6 +177,39 @@ function parseBooleanEnv(value?: string | null) {
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return null;
+}
+
+export function getConfiguredEip7702Enabled(explicitFlag?: string | null) {
+  const envValue = parseBooleanEnv(
+    explicitFlag ??
+      process.env.NEXT_PUBLIC_EIP7702_ENABLED ??
+      process.env.EIP7702_ENABLED,
+  );
+  return envValue ?? DEFAULT_EIP7702_ENABLED;
+}
+
+export function getConfiguredEip7702MiningEnabled(explicitFlag?: string | null) {
+  const envValue = parseBooleanEnv(
+    explicitFlag ??
+      process.env.NEXT_PUBLIC_EIP7702_MINING_ENABLED ??
+      process.env.EIP7702_MINING_ENABLED,
+  );
+  return envValue ?? DEFAULT_EIP7702_MINING_ENABLED;
+}
+
+export function getConfiguredEip7702DelegateAddress(
+  explicitValue?: string | null,
+  network: LineaNetwork = getConfiguredLineaNetwork(),
+) {
+  const configured =
+    explicitValue?.trim() ??
+    process.env.NEXT_PUBLIC_EIP7702_DELEGATE_ADDRESS?.trim() ??
+    process.env.EIP7702_DELEGATE_ADDRESS?.trim() ??
+    "";
+
+  if (configured) return configured;
+  if (network === "mainnet") return "";
+  return DEFAULT_SEPOLIA_EIP7702_DELEGATE_ADDRESS;
 }
 
 export function getContractHasTokenGetter(

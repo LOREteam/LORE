@@ -118,20 +118,64 @@ function parseAmountWei(value: unknown) {
   }
 }
 
-function runInTransaction<T>(action: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = action();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
+const SQLITE_BUSY_WAIT_BASE_MS = 40;
+const SQLITE_TX_MAX_ATTEMPTS = 6;
+const SQLITE_SLEEP_BUFFER = new SharedArrayBuffer(4);
+const SQLITE_SLEEP_VIEW = new Int32Array(SQLITE_SLEEP_BUFFER);
+
+function sleepSync(ms: number) {
+  Atomics.wait(SQLITE_SLEEP_VIEW, 0, 0, ms);
+}
+
+function isSqliteBusyError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return message.includes("database is locked") || message.includes("database schema is locked");
+}
+
+function runInTransaction<T>(action: () => T, label = "tx"): T {
+  let waitMs = SQLITE_BUSY_WAIT_BASE_MS;
+  for (let attempt = 1; attempt <= SQLITE_TX_MAX_ATTEMPTS; attempt += 1) {
     try {
-      db.exec("ROLLBACK");
-    } catch {
-      // Ignore rollback failures so we preserve the original error.
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = action();
+        db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch (rollbackErr) {
+          console.error("[storage] Rollback failed:", rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr));
+        }
+        throw error;
+      }
+    } catch (error) {
+      if (!isSqliteBusyError(error) || attempt === SQLITE_TX_MAX_ATTEMPTS) {
+        throw error;
+      }
+      console.warn(`[storage] ${label} hit SQLITE_BUSY, retry ${attempt}/${SQLITE_TX_MAX_ATTEMPTS} in ${waitMs}ms`);
+      sleepSync(waitMs);
+      waitMs *= 2;
     }
-    throw error;
   }
+  throw new Error("[storage] transaction failed: exhausted retries");
+}
+
+function runWrite<T>(action: () => T, label = "write"): T {
+  let waitMs = SQLITE_BUSY_WAIT_BASE_MS;
+  for (let attempt = 1; attempt <= SQLITE_TX_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return action();
+    } catch (error) {
+      if (!isSqliteBusyError(error) || attempt === SQLITE_TX_MAX_ATTEMPTS) {
+        throw error;
+      }
+      console.warn(`[storage] ${label} hit SQLITE_BUSY, retry ${attempt}/${SQLITE_TX_MAX_ATTEMPTS} in ${waitMs}ms`);
+      sleepSync(waitMs);
+      waitMs *= 2;
+    }
+  }
+  throw new Error("[storage] write failed: exhausted retries");
 }
 
 function scopeMetaKey(key: string) {
@@ -144,11 +188,13 @@ function getMetaValue(key: string) {
 }
 
 function setMetaValue(key: string, value: string) {
-  db.prepare(`
-    INSERT INTO meta(key, value)
-    VALUES(?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run(scopeMetaKey(key), value);
+  runWrite(() => {
+    db.prepare(`
+      INSERT INTO meta(key, value)
+      VALUES(?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(scopeMetaKey(key), value);
+  }, "meta");
 }
 
 export function getMetaJson<T>(key: string): T | null {
@@ -156,7 +202,8 @@ export function getMetaJson<T>(key: string): T | null {
   if (raw == null) return null;
   try {
     return JSON.parse(raw) as T;
-  } catch {
+  } catch (err) {
+    console.warn(`[storage] getMetaJson: failed to parse key "${key}":`, (err as Error).message ?? err);
     return null;
   }
 }
@@ -286,7 +333,7 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
         row.resolvedBlock != null ? Number(row.resolvedBlock) : null,
       );
     }
-  });
+  }, "epochs");
 }
 
 function buildDepositKey(epoch: string, txHash: string, blockNumber: string) {
@@ -485,7 +532,7 @@ export function upsertBets(rows: BetStorageRow[]) {
         Number(row.blockNumber),
       );
     }
-  });
+  }, "bets");
 }
 
 export function getJackpotsMap(limit?: number) {
@@ -569,7 +616,7 @@ export function upsertJackpots(rows: JackpotStorageRow[]) {
         Number(row.blockNumber),
       );
     }
-  });
+  }, "jackpots");
 }
 
 export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
@@ -599,7 +646,7 @@ export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
         Number(row.blockNumber),
       );
     }
-  });
+  }, "reward_claims");
 }
 
 export function getRecentRewardClaims(limit = 100) {
@@ -663,7 +710,7 @@ export function upsertProtocolFeeFlushes(rows: FeeFlushStorageRow[]) {
         Number(row.blockNumber),
       );
     }
-  });
+  }, "protocol_fee_flushes");
 }
 
 export function getChatMessages(limit = MAX_CHAT_MESSAGES): ChatMessageRow[] {
@@ -710,7 +757,7 @@ export function insertChatMessage(message: Omit<ChatMessageRow, "id">) {
       message.timestamp,
     );
     trim.run(MAX_CHAT_MESSAGES);
-  });
+  }, "chat_messages");
 }
 
 export function getChatProfile(wallet: string) {
@@ -773,21 +820,23 @@ export function getChatProfiles(wallets?: string[]) {
 }
 
 export function upsertChatProfile(wallet: string, profile: ChatProfileRow) {
-  db.prepare(`
-    INSERT INTO chat_profiles(wallet, name, avatar, custom_avatar, updated_at)
-    VALUES(?, ?, ?, ?, ?)
-    ON CONFLICT(wallet) DO UPDATE SET
-      name = excluded.name,
-      avatar = excluded.avatar,
-      custom_avatar = excluded.custom_avatar,
-      updated_at = excluded.updated_at
-  `).run(
-    normalizeWallet(wallet),
-    profile.name,
-    profile.avatar,
-    profile.customAvatar,
-    profile.updatedAt,
-  );
+  runWrite(() => {
+    db.prepare(`
+      INSERT INTO chat_profiles(wallet, name, avatar, custom_avatar, updated_at)
+      VALUES(?, ?, ?, ?, ?)
+      ON CONFLICT(wallet) DO UPDATE SET
+        name = excluded.name,
+        avatar = excluded.avatar,
+        custom_avatar = excluded.custom_avatar,
+        updated_at = excluded.updated_at
+    `).run(
+      normalizeWallet(wallet),
+      profile.name,
+      profile.avatar,
+      profile.customAvatar,
+      profile.updatedAt,
+    );
+  }, "chat_profile");
 }
 
 export function acquireExpiringLock(name: string, epoch: string, ttlMs: number) {
@@ -819,7 +868,7 @@ export function acquireExpiringLock(name: string, epoch: string, ttlMs: number) 
     `).run(name, epoch, now, expiresAt);
 
     return true;
-  });
+  }, "ephemeral_lock");
 }
 
 export function consumeRateLimit(bucket: string, key: string, limit: number, windowMs: number) {
@@ -869,7 +918,7 @@ export function consumeRateLimit(bucket: string, key: string, limit: number, win
     `).run(bucket, key, count + 1, windowStartedAt, resetAt);
 
     return { allowed: true as const };
-  });
+  }, "rate_limit");
 }
 
 export function readJsonPath<T>(path: string, limitToLast?: number): T | null {

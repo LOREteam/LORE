@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { sanitizeCustomChatAvatar, sanitizePresetChatAvatar } from "../lib/chatAvatar";
 import { loadChatAuthSession } from "../lib/chatSessionClient";
 import { readJsonResponse } from "../lib/readJsonResponse";
-import { useChatAuth } from "./useChatAuth";
+import { type ChatAuthControls, useChatAuth } from "./useChatAuth";
 
 const LEGACY_STORAGE_KEY = "lore:chat-profile";
 const STORAGE_KEY_PREFIX = "lore:chat-profile:";
@@ -38,6 +38,11 @@ function normalizeProfile(input: Partial<ChatProfile>): ChatProfile {
 
 function hasMeaningfulProfile(profile: ChatProfile): boolean {
   return !!(profile.name || profile.avatar || profile.customAvatar);
+}
+
+function sameProfileContent(a: ChatProfile | null, b: ChatProfile | null): boolean {
+  if (!a || !b) return false;
+  return a.name === b.name && a.avatar === b.avatar && a.customAvatar === b.customAvatar;
 }
 
 function loadProfile(walletAddress: string | null): ChatProfile {
@@ -104,10 +109,12 @@ async function saveRemoteProfile(walletAddress: string, profile: ChatProfile): P
   }
 }
 
-export function useChatProfile(walletAddress: string | null) {
+export function useChatProfile(walletAddress: string | null, auth?: ChatAuthControls) {
   const normalizedWallet = walletAddress ? walletAddress.toLowerCase() : null;
   const [profile, setProfile] = useState<ChatProfile>(() => loadProfile(normalizedWallet));
-  const { ensureChatAuth } = useChatAuth(walletAddress, "Verify wallet for chat profile");
+  const localAuth = useChatAuth(walletAddress, "Verify wallet for chat profile");
+  const { ensureChatAuth, refreshAuth, clearAuth } = auth ?? localAuth;
+  const lastSyncedProfileRef = useRef<string | null>(null);
 
   useEffect(() => {
     setProfile(loadProfile(normalizedWallet));
@@ -115,6 +122,13 @@ export function useChatProfile(walletAddress: string | null) {
 
   const persistRemoteProfile = useCallback(async (nextProfile: ChatProfile) => {
     if (!normalizedWallet) return;
+    const syncKey = JSON.stringify({
+      name: nextProfile.name,
+      avatar: nextProfile.avatar,
+      customAvatar: nextProfile.customAvatar,
+      updatedAt: nextProfile.updatedAt ?? 0,
+    });
+    if (lastSyncedProfileRef.current === syncKey) return;
 
     const attemptSave = async () => {
       await saveRemoteProfile(normalizedWallet, nextProfile);
@@ -122,13 +136,22 @@ export function useChatProfile(walletAddress: string | null) {
 
     try {
       await attemptSave();
+      lastSyncedProfileRef.current = syncKey;
     } catch (err) {
       if (!isChatAuthError(err)) throw err;
+      const refreshed = await refreshAuth();
+      if (refreshed) {
+        await attemptSave();
+        lastSyncedProfileRef.current = syncKey;
+        return;
+      }
+      clearAuth();
       const reauthed = await ensureChatAuth();
       if (!reauthed) throw err;
       await attemptSave();
+      lastSyncedProfileRef.current = syncKey;
     }
-  }, [ensureChatAuth, normalizedWallet]);
+  }, [clearAuth, ensureChatAuth, normalizedWallet, refreshAuth]);
 
   useEffect(() => {
     if (!normalizedWallet) return;
@@ -173,6 +196,9 @@ export function useChatProfile(walletAddress: string | null) {
       next.avatar = null;
     } else if (updates.avatar) {
       next.customAvatar = null;
+    }
+    if (sameProfileContent(profile, next)) {
+      return;
     }
     setProfile(next);
     saveProfile(normalizedWallet, next);

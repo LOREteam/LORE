@@ -211,3 +211,10 @@ export function useChatAuth(walletAddress: string | null, uiTitle = "Verify wall
     clearAuth,
   };
 }
+
+export type ChatAuthControls = {
+  authReady: boolean;
+  ensureChatAuth: () => Promise<boolean>;
+  refreshAuth: () => Promise<boolean>;
+  clearAuth: () => void;
+};

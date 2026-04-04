@@ -21,11 +21,9 @@ import {
 import { getAutoMineUserMessage } from "./useMiningAutoMineError";
 import { runAutoMineLoop } from "./useMiningAutoMineLoop";
 import { prepareAutoMineRunSetup } from "./useMiningRunSetup";
+import type { GasOverrides, RunningParams } from "./useMining.types";
+import type { PendingApproveState, PendingBetState, ReceiptState } from "./useMining.stateTypes";
 
-type GasOverrides = { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint };
-type ReceiptState = "confirmed" | "pending";
-
-type RunningParams = { betStr: string; blocks: number; rounds: number } | null;
 type RunningParamsSetter = Dispatch<SetStateAction<RunningParams>>;
 type BooleanSetter = Dispatch<SetStateAction<boolean>>;
 type StringSetter = Dispatch<SetStateAction<string | null>>;
@@ -63,8 +61,8 @@ interface UseMiningAutoMineRunnerOptions {
   networkInitialMs: number;
   networkRetryMax: number;
   onAutoMineBetConfirmedRef: MutableRefObject<(() => void) | undefined>;
-  pendingApproveRef: MutableRefObject<{ hash: `0x${string}`; submittedAt: number; nonce: number } | null>;
-  pendingBetRef: MutableRefObject<{ submittedAt: number; nonce: number } | null>;
+  pendingApproveRef: MutableRefObject<PendingApproveState | null>;
+  pendingBetRef: MutableRefObject<PendingBetState | null>;
   placeBets: (
     tileIds: number[],
     amountRawPerTile: bigint,

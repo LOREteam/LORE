@@ -26,7 +26,7 @@ interface UseGameLiveStateSnapshotOptions {
 }
 
 const LIVE_STATE_FALLBACK_POLL_MS = 5_000;
-const LIVE_STATE_SNAPSHOT_MAX_AGE_MS = 45_000;
+const LIVE_STATE_SNAPSHOT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_STATE_BOOT_TIMEOUT_MS = 2_500;
 const LIVE_READ_DEFER_MS = 1_200;
 
@@ -137,6 +137,12 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
           // Ignore storage quota/privacy mode failures.
         }
       } catch {
+        if (!cancelled) {
+          setSnapshotState((current) => ({
+            ...current,
+            bootstrapPending: false,
+          }));
+        }
         // Keep the last known server snapshot when browser-side RPC or fetch hiccups.
       }
     };

@@ -6,6 +6,13 @@ import Providers from './providers';
 import { ErrorCatcher } from './components/ErrorCatcher';
 import { MaintenanceGate } from './components/MaintenanceGate';
 
+const interDigits = Inter({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700', '800', '900'],
+  display: 'swap',
+  variable: '--font-lore-digits',
+});
+
 const EARLY_CHUNK_RECOVERY_SCRIPT = `
 (() => {
   if (typeof BigInt !== "undefined" && typeof BigInt.prototype.toJSON !== "function") {
@@ -92,12 +99,6 @@ const EARLY_CHUNK_RECOVERY_SCRIPT = `
 })();
 `;
 
-const inter = Inter({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700', '800', '900'],
-  display: 'swap',
-});
-
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://lore.game';
 
 export const metadata: Metadata = {
@@ -139,7 +140,7 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/icon.png" />
         <script dangerouslySetInnerHTML={{ __html: EARLY_CHUNK_RECOVERY_SCRIPT }} />
       </head>
-      <body className={`${inter.className} antialiased`}>
+      <body className={`${interDigits.variable} antialiased`}>
         <ErrorCatcher />
         <MaintenanceGate>
           <Providers>{children}</Providers>

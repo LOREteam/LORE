@@ -12,6 +12,7 @@ import {
   CONTRACT_ADDRESS,
 } from "../../_lib/dataBridge";
 import { dbPath } from "../../../../server/db";
+import { getMetaJson, getRecentRewardClaims } from "../../../../server/storage";
 
 const READ_ABI = parseAbi([
   "function currentEpoch() view returns (uint256)",
@@ -19,6 +20,9 @@ const READ_ABI = parseAbi([
 ]);
 
 const LAG_WARN_BLOCKS = Number(process.env.DATA_SYNC_LAG_WARN_BLOCKS ?? String(DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS));
+const JACKPOT_RECOVERY_BLOCK_LAG = Number(process.env.JACKPOT_RECOVERY_BLOCK_LAG ?? "256");
+const RECENT_WINS_RECOVERY_BLOCK_LAG = Number(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG ?? "256");
+const INDEXER_HEARTBEAT_STALE_MS = Number(process.env.INDEXER_HEARTBEAT_STALE_MS ?? "180000");
 const APP_NETWORK = getConfiguredLineaNetwork();
 const DEPLOY_BLOCK = getConfiguredDeployBlock(
   process.env.INDEXER_START_BLOCK ?? process.env.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK,
@@ -35,6 +39,7 @@ type EpochRow = {
 type JackpotRow = {
   epoch: string;
   kind: "daily" | "weekly";
+  blockNumber?: string;
 };
 
 type SyncTrendSample = {
@@ -43,6 +48,29 @@ type SyncTrendSample = {
   lastIndexedBlock: bigint | null;
   storedEpochCount: number;
   lagBlocks: number | null;
+};
+
+type IndexerRunStatus = {
+  startedAt: number;
+  completedAt: number;
+  fromBlock: string;
+  toBlock: string;
+  totalLogs: number;
+};
+
+type IndexerRepairStatus = {
+  at: number;
+  fromBlock: string;
+  toBlock: string;
+  repairedLogs: number;
+};
+
+type IndexerReconcileStatus = {
+  at: number;
+  currentEpoch: number;
+  missingEpochs: number;
+  repairedEpochs: number;
+  targetEpochs: number[];
 };
 
 type GlobalWithDataSyncTrend = typeof globalThis & {
@@ -59,8 +87,26 @@ function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value));
 }
 
+function ageMs(timestamp: number | null, now: number) {
+  if (!Number.isFinite(timestamp ?? NaN)) return null;
+  return Math.max(0, now - Number(timestamp));
+}
+
+function deriveServingMode(options: {
+  lagBlocks: number | null;
+  recoveryThreshold: number;
+  storedCount: number;
+}) {
+  const { lagBlocks, recoveryThreshold, storedCount } = options;
+  if (storedCount === 0) return "bootstrap_recovery_needed";
+  if (lagBlocks === null) return "bootstrap_recovery_needed";
+  if (lagBlocks > recoveryThreshold) return "hybrid_recovery_needed";
+  return "indexer_fast_path";
+}
+
 export async function GET() {
   try {
+    const now = Date.now();
     const [head, chainEpochRaw, jackpotInfoRaw, dbEpochMeta, dbLastIndexed, dbRepairCursor, dbEpochsRaw, dbJackpotsRaw] =
       await Promise.all([
         publicClient.getBlockNumber(),
@@ -80,6 +126,10 @@ export async function GET() {
         fetchFirebaseJson<Record<string, EpochRow>>("gamedata/epochs"),
         fetchFirebaseJson<Record<string, JackpotRow>>("gamedata/jackpots"),
       ]);
+    const indexerRunStatus = getMetaJson<IndexerRunStatus>("indexerRunStatus");
+    const indexerRepairStatus = getMetaJson<IndexerRepairStatus>("indexerRepairStatus");
+    const indexerReconcileStatus = getMetaJson<IndexerReconcileStatus>("indexerReconcileStatus");
+    const recentRewardClaims = getRecentRewardClaims(100);
 
     const chainCurrentEpoch = Number(chainEpochRaw);
     const dbCurrentEpoch = parseCurrentEpoch(dbEpochMeta.data);
@@ -117,9 +167,29 @@ export async function GET() {
         .filter((j) => j && (j.kind === "daily" || j.kind === "weekly"))
         .map((j) => `${j.kind}_${j.epoch}`),
     );
+    const jackpotBlocks = dbJackpots
+      .map((row) => Number(row.blockNumber ?? 0))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const latestStoredJackpotBlock = jackpotBlocks.length > 0 ? Math.max(...jackpotBlocks) : null;
 
     const hasLatestDailyInDb = lastDailyEpoch > 0 ? dbJackpotKeys.has(`daily_${lastDailyEpoch}`) : true;
     const hasLatestWeeklyInDb = lastWeeklyEpoch > 0 ? dbJackpotKeys.has(`weekly_${lastWeeklyEpoch}`) : true;
+    const latestRewardClaimBlock =
+      recentRewardClaims.length > 0
+        ? Math.max(
+            ...recentRewardClaims
+              .map((row) => Number(row.blockNumber))
+              .filter((value) => Number.isFinite(value) && value > 0),
+          )
+        : null;
+    const rewardClaimsLagToHead =
+      latestRewardClaimBlock !== null
+        ? Number(head - BigInt(latestRewardClaimBlock))
+        : null;
+    const rewardClaimsLagToIndexer =
+      dbLastIndexedBlock !== null && latestRewardClaimBlock !== null
+        ? Math.max(0, Number(dbLastIndexedBlock - BigInt(latestRewardClaimBlock)))
+        : null;
 
     const totalBlocksToIndex =
       head >= DEPLOY_BLOCK
@@ -144,7 +214,6 @@ export async function GET() {
 
     const trendStore = globalThis as GlobalWithDataSyncTrend;
     const previousSample = trendStore.__loreDataSyncTrend;
-    const now = Date.now();
     let blockRatePerMinute: number | null = null;
     let epochRatePerMinute: number | null = null;
     let estimatedMinutesToHead: number | null = null;
@@ -188,11 +257,25 @@ export async function GET() {
             ? "near_head"
             : "catching_up";
 
+    const jackpotServingMode = deriveServingMode({
+      lagBlocks,
+      recoveryThreshold: JACKPOT_RECOVERY_BLOCK_LAG,
+      storedCount: dbJackpots.length,
+    });
+    const recentWinsServingMode = deriveServingMode({
+      lagBlocks,
+      recoveryThreshold: RECENT_WINS_RECOVERY_BLOCK_LAG,
+      storedCount: recentRewardClaims.length,
+    });
+    const runCompletedAgeMs = ageMs(indexerRunStatus?.completedAt ?? null, now);
+    const repairAgeMs = ageMs(indexerRepairStatus?.at ?? null, now);
+    const reconcileAgeMs = ageMs(indexerReconcileStatus?.at ?? null, now);
     const degraded =
       (lagBlocks !== null && lagBlocks > LAG_WARN_BLOCKS) ||
       missingEpochs.length > 0 ||
       !hasLatestDailyInDb ||
       !hasLatestWeeklyInDb ||
+      (runCompletedAgeMs !== null && runCompletedAgeMs > INDEXER_HEARTBEAT_STALE_MS) ||
       (dbCurrentEpoch !== null && Math.abs(dbCurrentEpoch - chainCurrentEpoch) > 1);
 
     return NextResponse.json({
@@ -206,6 +289,10 @@ export async function GET() {
         lastIndexedBlock: dbLastIndexedBlock?.toString() ?? null,
         repairCursorBlock: dbRepairCursorBlock?.toString() ?? null,
         lagBlocks,
+        latestStoredJackpotBlock: latestStoredJackpotBlock?.toString() ?? null,
+        latestRewardClaimBlock: latestRewardClaimBlock?.toString() ?? null,
+        rewardClaimsLagToHead,
+        rewardClaimsLagToIndexer,
       },
       epochs: {
         expectedResolvedRange: maxEpochToCheck > 0 ? `1..${maxEpochToCheck}` : "none",
@@ -242,11 +329,46 @@ export async function GET() {
         lastWeeklyAmount,
         hasLatestWeeklyInDb,
         totalStored: dbJackpots.length,
+        servingMode: jackpotServingMode,
+      },
+      recentWins: {
+        totalStored: recentRewardClaims.length,
+        latestRewardClaimBlock: latestRewardClaimBlock?.toString() ?? null,
+        lagToHeadBlocks: rewardClaimsLagToHead,
+        lagToIndexerBlocks: rewardClaimsLagToIndexer,
+        servingMode: recentWinsServingMode,
+      },
+      indexer: {
+        run: {
+          ...(indexerRunStatus ?? {}),
+          runCompletedAgeMs,
+          stale: runCompletedAgeMs !== null && runCompletedAgeMs > INDEXER_HEARTBEAT_STALE_MS,
+        },
+        repair: {
+          ...(indexerRepairStatus ?? {}),
+          ageMs: repairAgeMs,
+          stale:
+            repairAgeMs !== null &&
+            lagBlocks !== null &&
+            lagBlocks > LAG_WARN_BLOCKS &&
+            repairAgeMs > INDEXER_HEARTBEAT_STALE_MS,
+        },
+        reconcile: {
+          ...(indexerReconcileStatus ?? {}),
+          ageMs: reconcileAgeMs,
+          stale:
+            reconcileAgeMs !== null &&
+            missingEpochs.length > 0 &&
+            reconcileAgeMs > INDEXER_HEARTBEAT_STALE_MS,
+        },
       },
       hints: [
         missingEpochs.length > 0 ? "Indexer repair/reconcile is still catching up missing epochs." : null,
         lagBlocks !== null && lagBlocks > LAG_WARN_BLOCKS ? "Indexer is lagging by blocks; check bot/indexer supervisor." : null,
         !hasLatestDailyInDb || !hasLatestWeeklyInDb ? "Latest jackpot event not in DB yet; API fallback should still show it." : null,
+        jackpotServingMode !== "indexer_fast_path" ? "Jackpots API is in recovery-capable mode and may pull a fresh tail from chain." : null,
+        recentWinsServingMode !== "indexer_fast_path" ? "Recent wins API is in recovery-capable mode and may pull RewardClaimed logs from chain." : null,
+        runCompletedAgeMs !== null && runCompletedAgeMs > INDEXER_HEARTBEAT_STALE_MS ? "Indexer heartbeat is stale; watch loop may be stuck or down." : null,
       ].filter(Boolean),
       ts: Date.now(),
       env: {
@@ -254,6 +376,9 @@ export async function GET() {
         dbPath,
         deployBlock: DEPLOY_BLOCK.toString(),
         lagWarnBlocks: toNum(LAG_WARN_BLOCKS),
+        jackpotRecoveryBlockLag: toNum(JACKPOT_RECOVERY_BLOCK_LAG),
+        recentWinsRecoveryBlockLag: toNum(RECENT_WINS_RECOVERY_BLOCK_LAG),
+        indexerHeartbeatStaleMs: toNum(INDEXER_HEARTBEAT_STALE_MS),
       },
     });
   } catch (err) {

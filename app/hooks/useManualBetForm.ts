@@ -11,6 +11,7 @@ interface UseManualBetFormOptions {
   selectedTilesCount: number;
   isPending: boolean;
   isRevealing: boolean;
+  isAnalyzing?: boolean;
   isAutoMining: boolean;
 }
 
@@ -20,6 +21,7 @@ export function useManualBetForm({
   selectedTilesCount,
   isPending,
   isRevealing,
+  isAnalyzing = false,
   isAutoMining,
 }: UseManualBetFormOptions) {
   const [betAmount, setBetAmount] = useState("10.0");
@@ -44,7 +46,13 @@ export function useManualBetForm({
   const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
   const manualInsufficient = balance !== null && totalBet > 0 && totalBet > balance;
   const isDisabled =
-    !liveStateReady || isPending || selectedTilesCount === 0 || isRevealing || isAutoMining || manualInsufficient;
+    !liveStateReady ||
+    isPending ||
+    selectedTilesCount === 0 ||
+    isRevealing ||
+    isAnalyzing ||
+    isAutoMining ||
+    manualInsufficient;
 
   return {
     betAmount,

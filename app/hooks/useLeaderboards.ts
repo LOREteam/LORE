@@ -28,6 +28,7 @@ interface LeaderboardsCacheEnvelope {
 }
 
 function loadCache(): { data: LeaderboardsData | null; savedAt: number | null } {
+  if (typeof localStorage === "undefined") return { data: null, savedAt: null };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { data: null, savedAt: null };
@@ -54,6 +55,7 @@ function loadCache(): { data: LeaderboardsData | null; savedAt: number | null } 
 }
 
 function saveCache(data: LeaderboardsData) {
+  if (typeof localStorage === "undefined") return;
   try {
     localStorage.setItem(
       STORAGE_KEY,
@@ -68,14 +70,14 @@ function saveCache(data: LeaderboardsData) {
 }
 
 export function useLeaderboards(enabled: boolean) {
+  const initialCache = loadCache();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<LeaderboardsData | null>(null);
+  const [data, setData] = useState<LeaderboardsData | null>(initialCache.data);
   const runningRef = useRef(false);
-  const restoredRef = useRef(false);
   const mountedRef = useRef(false);
-  const cacheSavedAtRef = useRef<number | null>(null);
-  const dataRef = useRef<LeaderboardsData | null>(null);
+  const cacheSavedAtRef = useRef<number | null>(initialCache.savedAt);
+  const dataRef = useRef<LeaderboardsData | null>(initialCache.data);
 
   useEffect(() => {
     dataRef.current = data;
@@ -87,18 +89,6 @@ export function useLeaderboards(enabled: boolean) {
       mountedRef.current = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (!enabled || restoredRef.current) return;
-    restoredRef.current = true;
-    const cached = loadCache();
-    cacheSavedAtRef.current = cached.savedAt;
-    if (cached.data) {
-      if (mountedRef.current) {
-        setData(cached.data);
-      }
-    }
-  }, [enabled]);
 
   const fetchAll = useCallback(async (force = false) => {
     if (!enabled || runningRef.current) return;

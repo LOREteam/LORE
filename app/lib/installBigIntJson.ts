@@ -16,4 +16,6 @@ export function installBigIntJsonSerialization() {
   });
 }
 
+// Auto-install on import for backward compatibility.
+// Prefer calling installBigIntJsonSerialization() explicitly in app initialization.
 installBigIntJsonSerialization();

@@ -12,8 +12,6 @@ import { UiInput } from "./ui/UiInput";
 import { UiPanel } from "./ui/UiPanel";
 import { uiTokens } from "./ui/tokens";
 
-/* Manual Bet */
-
 interface ManualBetProps {
   formattedBalance: string | null;
   coldBootDefaults?: boolean;
@@ -21,6 +19,7 @@ interface ManualBetProps {
   selectedTilesCount: number;
   isPending: boolean;
   isRevealing: boolean;
+  isAnalyzing?: boolean;
   isAutoMining: boolean;
   onMine: (betAmount: string) => void;
   lastBet?: { tiles: number[]; amount: string } | null;
@@ -34,6 +33,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   selectedTilesCount,
   isPending,
   isRevealing,
+  isAnalyzing = false,
   isAutoMining,
   onMine,
   lastBet,
@@ -45,6 +45,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     selectedTilesCount,
     isPending,
     isRevealing,
+    isAnalyzing,
     isAutoMining,
   });
 
@@ -62,7 +63,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
             <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Manual Bet</span>
           </div>
           {formattedBalance && (
-            <span className="text-[10px] text-gray-500">{formattedBalance} LINEA</span>
+            <span className="lore-nums text-[10px] text-gray-500">{formattedBalance} LINEA</span>
           )}
         </div>
       </UiPanel>
@@ -83,27 +84,38 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         </div>
         {formattedBalance && (
           <span className="text-[9px] text-gray-500">
-            <span className="text-white font-semibold">{formattedBalance}</span> LINEA
+            <span className="lore-nums text-white font-semibold">{formattedBalance}</span> LINEA
           </span>
         )}
       </div>
 
       <div className="mb-1.5">
-        <label htmlFor="bet-amount-per-tile" className="text-[7px] font-bold uppercase text-gray-600 block mb-0.5 px-0.5">Amount per tile</label>
+        <label
+          htmlFor="bet-amount-per-tile"
+          className="text-[7px] font-bold uppercase text-gray-600 block mb-0.5 px-0.5"
+        >
+          Amount per tile
+        </label>
         <UiInput
           id="bet-amount-per-tile"
           type="text"
           inputMode="decimal"
           value={betAmount}
           onChange={(e) => setBetAmount(e.target.value)}
-          disabled={isPending || isRevealing}
+          disabled={isPending || isRevealing || isAnalyzing}
           className="h-8 px-2 text-sm font-bold bg-[#0a0a16]"
         />
       </div>
 
-      <div className={`flex justify-between items-center rounded-lg border px-2 py-1 mb-1.5 ${manualInsufficient ? "bg-red-500/8 border-red-500/30" : "bg-black/20 border-white/[0.04]"}`}>
+      <div
+        className={`flex justify-between items-center rounded-lg border px-2 py-1 mb-1.5 ${
+          manualInsufficient ? "bg-red-500/8 border-red-500/30" : "bg-black/20 border-white/[0.04]"
+        }`}
+      >
         <span className="text-[8px] font-bold uppercase text-gray-500">Total:</span>
-        <span className={`font-bold text-[11px] ${manualInsufficient ? "text-red-400" : "text-violet-400"}`}>{totalBet.toFixed(2)} LINEA</span>
+        <span className={`lore-nums font-bold text-[11px] ${manualInsufficient ? "text-red-400" : "text-violet-400"}`}>
+          {totalBet.toFixed(2)} LINEA
+        </span>
       </div>
 
       {!liveStateReady && !coldBootDefaults && (
@@ -123,14 +135,14 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
       {lastBet && onRepeatBet && !isAutoMining && (
         <UiButton
           onClick={onRepeatBet}
-          disabled={isPending || isRevealing}
+          disabled={isPending || isRevealing || isAnalyzing}
           variant="secondary"
           size="sm"
           uppercase
           fullWidth
-          className="mb-1 min-h-[2.5rem] px-2 text-center text-[9px] leading-tight whitespace-normal sm:text-[10px]"
+          className="mb-1 text-[10px]"
         >
-          Repeat: {lastBet.tiles.length} tiles x {lastBet.amount} LINEA
+          <span className="lore-nums">Repeat: {lastBet.tiles.length} tiles x {lastBet.amount} LINEA</span>
         </UiButton>
       )}
 
@@ -142,7 +154,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         uppercase
         fullWidth
         className={cn(
-          "min-h-[2.75rem] px-2.5 text-center text-[10px] leading-tight whitespace-normal sm:text-[11px]",
+          "text-[11px]",
           isDisabled
             ? "bg-[#13132a] text-gray-600 border-white/[0.04]"
             : "text-white bg-gradient-to-r from-violet-600 to-indigo-600 border-violet-500/40 hover:from-violet-500 hover:to-indigo-500 shadow-lg shadow-violet-600/20 hover:shadow-violet-500/30 shimmer-btn",
@@ -156,25 +168,30 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
             </svg>
             <LoreText items={processingQuotes} />
           </span>
-        ) : !liveStateReady && !coldBootDefaults ? "SYNCING..." : selectedTilesCount > 0 ? `BET ON ${selectedTilesCount} ${selectedTilesCount === 1 ? "TILE" : "TILES"}` : "SELECT TILES"}
+        ) : !liveStateReady && !coldBootDefaults ? (
+          "SYNCING..."
+        ) : isAnalyzing ? (
+          "LOCKED"
+        ) : selectedTilesCount > 0 ? (
+          `BET ON ${selectedTilesCount} TILES`
+        ) : (
+          "SELECT TILES"
+        )}
       </UiButton>
     </UiPanel>
   );
 });
 
-/* Auto-Miner */
-
 interface AutoMinerProps {
   isAutoMining: boolean;
   isPending: boolean;
   isRevealing: boolean;
+  isAnalyzing?: boolean;
   coldBootDefaults?: boolean;
   liveStateReady?: boolean;
   autoMineProgress?: string | null;
   formattedBalance?: string | null;
-  /** When bot is running, show these params (from session/restore) so UI matches actual behavior */
   runningParams?: { betStr: string; blocks: number; rounds: number } | null;
-  /** Not enough ETH for gas - disable starting the bot */
   lowEthForGas?: boolean;
   onToggle: (betStr: string, blocks: number, rounds: number) => void;
 }
@@ -183,6 +200,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   isAutoMining,
   isPending,
   isRevealing,
+  isAnalyzing = false,
   coldBootDefaults = false,
   liveStateReady = true,
   autoMineProgress,
@@ -209,6 +227,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
     isAutoMining,
     isPending,
     isRevealing,
+    isAnalyzing,
     liveStateReady,
     formattedBalance,
     runningParams,
@@ -224,34 +243,42 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
       className={`shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up ${compact ? "p-2" : "p-3"}`}
       style={{ animationDelay: "0.25s" }}
     >
-
       {compact ? (
-        /* Compact LIVE view */
         <>
           <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-1.5">
               <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-synced-pulse shadow-[0_0_6px_rgba(239,68,68,0.4)]" />
-              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+              <span className="lore-nums text-[10px] font-bold text-gray-400 uppercase tracking-wider">
                 {displayTargets}x{displayBetSize} <span className="text-gray-600">LINEA</span> - {displayCycles} cyc
               </span>
             </div>
-            <span className="text-[10px] font-bold text-sky-400 tabular-nums">{totalCost.toFixed(0)} <span className="text-gray-600">LINEA</span></span>
+            <span className="lore-nums text-[10px] font-bold text-sky-400 tabular-nums">
+              {totalCost.toFixed(0)} <span className="text-gray-600">LINEA</span>
+            </span>
           </div>
         </>
       ) : (
-        /* Full edit view */
         <>
           <div className="flex items-center gap-1.5 border-b border-white/[0.06] mb-1.5 pb-1.5">
             <div className="w-1.5 h-3 rounded-full bg-sky-400 animate-synced-pulse shadow-[0_0_8px_rgba(56,189,248,0.4)]" />
             <span className="text-[10px] font-bold text-white uppercase tracking-wider">Auto-Miner</span>
           </div>
+
           <div className="grid grid-cols-2 gap-1 mb-1">
-            <SmallInput label="Bet Size" value={displayBetSize} onChange={setBetSize} disabled={isPending || isRevealing} inputMode="decimal" accent="sky" compact />
+            <SmallInput
+              label="Bet Size"
+              value={displayBetSize}
+              onChange={setBetSize}
+              disabled={isPending || isRevealing || isAnalyzing}
+              inputMode="decimal"
+              accent="sky"
+              compact
+            />
             <SmallInput
               label="Targets"
               value={displayTargets}
               onChange={handleTargetsChange}
-              disabled={isPending || isRevealing}
+              disabled={isPending || isRevealing || isAnalyzing}
               type="number"
               min={1}
               max={GRID_SIZE}
@@ -264,7 +291,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
             label="Cycles"
             value={displayCycles}
             onChange={handleCyclesChange}
-            disabled={isPending || isRevealing}
+            disabled={isPending || isRevealing || isAnalyzing}
             type="number"
             min={1}
             className="mb-1.5"
@@ -272,17 +299,27 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
             compact
           />
 
-          <div className={`flex justify-between items-center rounded-lg border px-2 py-1 mb-1.5 ${insufficientBalance ? "bg-red-500/8 border-red-500/30" : "bg-black/20 border-white/[0.04]"}`}>
+          <div
+            className={`flex justify-between items-center rounded-lg border px-2 py-1 mb-1.5 ${
+              insufficientBalance ? "bg-red-500/8 border-red-500/30" : "bg-black/20 border-white/[0.04]"
+            }`}
+          >
             <span className="text-[8px] font-bold uppercase text-gray-500">Total Req:</span>
-            <span className={`font-bold text-[11px] ${insufficientBalance ? "text-red-400" : "text-sky-400"}`}>{totalCost.toFixed(2)} LINEA</span>
+            <span className={`lore-nums font-bold text-[11px] ${insufficientBalance ? "text-red-400" : "text-sky-400"}`}>
+              {totalCost.toFixed(2)} LINEA
+            </span>
           </div>
 
           {insufficientBalance && (
             <div className="flex items-start gap-1 px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/25 mb-1.5">
               <svg className="w-3 h-3 text-red-400 shrink-0 mt-px" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                <path
+                  fillRule="evenodd"
+                  d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
+                  clipRule="evenodd"
+                />
               </svg>
-              <span className="text-[8px] font-bold text-red-400 leading-tight">
+              <span className="lore-nums text-[8px] font-bold text-red-400 leading-tight">
                 Need {totalCost.toFixed(2)}, have {balance?.toFixed(2)} LINEA
               </span>
             </div>
@@ -294,14 +331,21 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
         compact ? (
           <div className="flex items-center gap-1.5 mb-1.5">
             <div className="w-1 h-1 rounded-full bg-sky-400 animate-synced-pulse shrink-0" />
-            <span className="text-[9px] font-bold text-sky-400/70 uppercase tracking-wider truncate">{autoMineProgress}</span>
+            <span className="text-[9px] font-bold text-sky-400/70 uppercase tracking-wider truncate">
+              {autoMineProgress}
+            </span>
           </div>
         ) : (
           <div className="relative bg-sky-500/8 rounded-lg border border-sky-500/20 overflow-hidden p-2 mb-2">
-            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-sky-400/5 to-transparent animate-shimmer pointer-events-none" style={{ animation: "shimmer 2s ease-in-out infinite" }} />
+            <div
+              className="absolute inset-0 bg-gradient-to-r from-transparent via-sky-400/5 to-transparent animate-shimmer pointer-events-none"
+              style={{ animation: "shimmer 2s ease-in-out infinite" }}
+            />
             <div className="flex items-center gap-1.5 relative">
               <div className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-synced-pulse shrink-0" />
-              <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider truncate">{autoMineProgress}</span>
+              <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider truncate">
+                {autoMineProgress}
+              </span>
             </div>
           </div>
         )
@@ -314,6 +358,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
           </span>
         </div>
       )}
+
       {!liveStateReady && !coldBootDefaults && (
         <div className={`flex items-center gap-1.5 px-2 py-1 ${uiTokens.radius.sm} bg-sky-500/10 border border-sky-500/20 mb-2`}>
           <span className="text-[9px] font-bold text-sky-300 uppercase tracking-wider">
@@ -321,6 +366,15 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
           </span>
         </div>
       )}
+
+      {isAnalyzing && !isAutoMining && (
+        <div className={`flex items-center gap-1.5 px-2 py-1 ${uiTokens.radius.sm} bg-amber-500/10 border border-amber-500/25 mb-2`}>
+          <span className="text-[9px] font-bold text-amber-300 uppercase tracking-wider">
+            Betting locked while epoch resolves
+          </span>
+        </div>
+      )}
+
       <UiButton
         onClick={() => onToggle(betSize, targets, cycles)}
         disabled={isDisabled}
@@ -329,22 +383,30 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
         fullWidth
         uppercase
         className={cn(
-          "min-h-[2.75rem] px-2.5 text-center text-[10px] leading-tight whitespace-normal sm:text-[11px]",
+          "text-[11px]",
           isAutoMining && "bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/15 hover:shadow-[0_0_16px_rgba(239,68,68,0.15)]",
           !isAutoMining && !isDisabled && "shimmer-btn",
           !isAutoMining && isDisabled && "bg-[#13132a] text-gray-600 border-white/[0.04]",
         )}
       >
-        {isAutoMining ? "STOP BOT" : "START BOT"}
+        {isAutoMining ? "STOP BOT" : isAnalyzing ? "LOCKED" : "START BOT"}
       </UiButton>
     </UiPanel>
   );
 });
 
-/* Input */
-
 const SmallInput = React.memo(function SmallInput({
-  label, value, onChange, disabled, type = "text", inputMode, min, max, className = "", accent = "violet", compact = false,
+  label,
+  value,
+  onChange,
+  disabled,
+  type = "text",
+  inputMode,
+  min,
+  max,
+  className = "",
+  accent = "violet",
+  compact = false,
 }: {
   label: string;
   value: string | number;
@@ -359,13 +421,16 @@ const SmallInput = React.memo(function SmallInput({
   compact?: boolean;
 }) {
   const inputId = `small-input-${label.toLowerCase().replace(/\s+/g, "-")}`;
-  const inputAccent = accent === "sky"
-    ? "border-sky-500/20 focus:border-sky-500/45 focus:shadow-[0_0_12px_rgba(56,189,248,0.12)]"
-    : "border-violet-500/20 focus:border-violet-500/45 focus:shadow-[0_0_12px_rgba(139,92,246,0.12)]";
+  const inputAccent =
+    accent === "sky"
+      ? "border-sky-500/20 focus:border-sky-500/45 focus:shadow-[0_0_12px_rgba(56,189,248,0.12)]"
+      : "border-violet-500/20 focus:border-violet-500/45 focus:shadow-[0_0_12px_rgba(139,92,246,0.12)]";
 
   return (
     <div className={className}>
-      <label htmlFor={inputId} className={`text-[8px] font-bold uppercase text-gray-600 block mb-0.5 px-0.5 ${compact ? "pt-0" : "pt-0.5"}`}>{label}</label>
+      <label htmlFor={inputId} className={`text-[8px] font-bold uppercase text-gray-600 block mb-0.5 px-0.5 ${compact ? "pt-0" : "pt-0.5"}`}>
+        {label}
+      </label>
       <UiInput
         id={inputId}
         type={type}
@@ -376,7 +441,7 @@ const SmallInput = React.memo(function SmallInput({
         min={min}
         max={max}
         className={cn(
-          "bg-[#0a0a16] font-bold text-white",
+          "lore-nums bg-[#0a0a16] font-bold text-white",
           compact ? "h-7 px-1.5 py-0.5 text-xs" : "h-9 px-2 py-1 text-sm",
           inputAccent,
         )}

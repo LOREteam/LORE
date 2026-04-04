@@ -1,24 +1,18 @@
-import { JackpotBanner } from "../../components/JackpotBanner";
+import { JackpotPreviewClient } from "./JackpotPreviewClient";
 
-export default function JackpotPreviewPage() {
-  return (
-    <main className="min-h-screen bg-[#060612]">
-      <JackpotBanner
-        winningTileId={3}
-        isRevealing
-        tileViewData={[
-          { tileId: 1, hasMyBet: false },
-          { tileId: 2, hasMyBet: false },
-          { tileId: 3, hasMyBet: true },
-          { tileId: 4, hasMyBet: false },
-        ]}
-        epoch="1284"
-        walletAddress="0x1234567890abcdef1234567890abcdef12345678"
-        isDailyJackpot
-        jackpotAmount={40}
-        hasMyWinningBet
-        reducedMotion={false}
-      />
-    </main>
-  );
+type Variant = "daily" | "weekly" | "dual";
+
+interface Props {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+function resolveVariant(raw: string | string[] | undefined): Variant {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (value === "weekly" || value === "dual") return value;
+  return "daily";
+}
+
+export default async function JackpotPreviewPage({ searchParams }: Props) {
+  const params = await searchParams;
+  return <JackpotPreviewClient initialVariant={resolveVariant(params.variant)} />;
 }

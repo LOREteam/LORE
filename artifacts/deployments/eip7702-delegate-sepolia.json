@@ -1,0 +1,177 @@
+{
+  "contractName": "LineaOre7702Delegate",
+  "network": "sepolia",
+  "chainId": 59141,
+  "chainName": "Linea Sepolia",
+  "rpcUrl": "https://rpc.sepolia.linea.build",
+  "deployerAddress": "0x7FBEbb0Bc02EF8963a3C1A68033f0f1D73cEF8f5",
+  "deployerBalanceWei": "474576382682452",
+  "configuredDelegateAddress": null,
+  "dryRun": false,
+  "deployedAtIso": "2026-04-03T16:35:26.820Z",
+  "deployedAddress": "0xBEfFc7De28934A2320453bA83915012D199AF947",
+  "transactionHash": "0x17fb2f744bd2d012775367bb78365057f22b3d9b3de10be8d6109f31ea180a66",
+  "blockNumber": null,
+  "pending": true,
+  "abi": [
+    {
+      "inputs": [],
+      "name": "EmptyArray",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "OnlyDelegatedSelf",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        }
+      ],
+      "name": "SafeERC20FailedOperation",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ZeroAddress",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ZeroAmount",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "game",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "tileIds",
+          "type": "uint256[]"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amount",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "spender",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "approvalAmount",
+          "type": "uint256"
+        }
+      ],
+      "name": "approveAndPlaceBatchSameAmount",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "game",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "epochs",
+          "type": "uint256[]"
+        }
+      ],
+      "name": "claimEpochsRebate",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "game",
+          "type": "address"
+        }
+      ],
+      "name": "claimResolverRewards",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "game",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "epochs",
+          "type": "uint256[]"
+        }
+      ],
+      "name": "claimRewards",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "game",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "tileIds",
+          "type": "uint256[]"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amount",
+          "type": "uint256"
+        }
+      ],
+      "name": "placeBatchSameAmount",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "game",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "epoch",
+          "type": "uint256"
+        }
+      ],
+      "name": "resolveEpoch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ]
+}

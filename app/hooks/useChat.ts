@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sanitizeChatAvatarValue } from "../lib/chatAvatar";
 import { readJsonResponse } from "../lib/readJsonResponse";
-import { useChatAuth } from "./useChatAuth";
+import { type ChatAuthControls, useChatAuth } from "./useChatAuth";
 
 export interface ChatMessage {
   id: string;
@@ -105,7 +105,7 @@ async function postMessage(payload: Record<string, unknown>): Promise<void> {
   }
 }
 
-export function useChat(walletAddress: string | null, options?: { open?: boolean }) {
+export function useChat(walletAddress: string | null, options?: { open?: boolean; auth?: ChatAuthControls }) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadCachedMessages());
   const [connected, setConnected] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(() =>
@@ -115,7 +115,8 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
   const lastSentRef = useRef(0);
   const pollWarnAtRef = useRef(0);
   const sendWarnAtRef = useRef(0);
-  const { authReady, ensureChatAuth, clearAuth } = useChatAuth(walletAddress, "Verify wallet for chat");
+  const localAuth = useChatAuth(walletAddress, "Verify wallet for chat");
+  const { authReady, ensureChatAuth, refreshAuth, clearAuth } = options?.auth ?? localAuth;
 
   useEffect(() => {
     const syncVisibility = () => {
@@ -149,12 +150,12 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
       }
     }
 
-    void poll();
+    poll().catch(() => {});
     const pollInterval = open
       ? (isPageVisible ? POLL_INTERVAL_MS : HIDDEN_POLL_INTERVAL_MS)
       : (isPageVisible ? CLOSED_POLL_INTERVAL_MS : HIDDEN_CLOSED_POLL_INTERVAL_MS);
     const timer = setInterval(() => {
-      void poll();
+      poll().catch(() => {});
     }, pollInterval);
 
     return () => {
@@ -190,11 +191,16 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
           await postMessage(payload);
         } catch (err) {
           if (!isChatAuthError(err)) throw err;
-          clearAuth();
 
-          const reauthed = await ensureChatAuth();
-          if (!reauthed) throw err;
-          await postMessage(payload);
+          const refreshed = await refreshAuth();
+          if (refreshed) {
+            await postMessage(payload);
+          } else {
+            clearAuth();
+            const reauthed = await ensureChatAuth();
+            if (!reauthed) throw err;
+            await postMessage(payload);
+          }
         }
 
         const msgs = await fetchMessages();
@@ -211,7 +217,7 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         }
       }
     },
-    [walletAddress, clearAuth, ensureChatAuth],
+    [walletAddress, clearAuth, ensureChatAuth, refreshAuth],
   );
 
   return { messages, sendMessage, connected, authReady, ensureChatAuth };

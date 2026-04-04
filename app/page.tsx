@@ -1,5 +1,11 @@
 import LineaOreClient from "./LineaOreClient";
-import { buildLiveStatePayload, type LiveStatePayload } from "./api/live-state/shared";
+import {
+  buildStoredLiveStateBootstrap,
+  getLiveStatePayloadWithSnapshotFallback,
+  loadLiveStateSnapshot,
+  type LiveStatePayload,
+} from "./api/live-state/shared";
+import { getRecentWinsPayloadForRender } from "./api/recent-wins/data";
 
 const PAGE_LIVE_STATE_CACHE_MS = 4_000;
 const PAGE_LIVE_STATE_RENDER_WAIT_MS = 1_200;
@@ -35,7 +41,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | nul
 
 function startInitialLiveStateRefresh() {
   if (!initialLiveStateInflight) {
-    initialLiveStateInflight = buildLiveStatePayload()
+    initialLiveStateInflight = getLiveStatePayloadWithSnapshotFallback()
       .then((payload) => {
         const sanitizedPayload = sanitizeInitialLiveState(payload);
         initialLiveStateCache = {
@@ -45,11 +51,12 @@ function startInitialLiveStateRefresh() {
         return sanitizedPayload;
       })
       .catch(() => {
+        const previousPayload = initialLiveStateCache?.payload ?? null;
         initialLiveStateCache = {
-          payload: null,
-          expiresAt: Date.now() + 1_000,
+          payload: previousPayload,
+          expiresAt: Date.now() + (previousPayload ? PAGE_LIVE_STATE_CACHE_MS : 1_000),
         };
-        return null;
+        return previousPayload;
       })
       .finally(() => {
         initialLiveStateInflight = null;
@@ -65,6 +72,18 @@ async function getInitialLiveState() {
     return initialLiveStateCache.payload;
   }
 
+  const persistedSnapshot = sanitizeInitialLiveState(
+    loadLiveStateSnapshot(Number.POSITIVE_INFINITY) ?? buildStoredLiveStateBootstrap(),
+  );
+  if (persistedSnapshot) {
+    initialLiveStateCache = {
+      payload: persistedSnapshot,
+      expiresAt: now + PAGE_LIVE_STATE_CACHE_MS,
+    };
+    void startInitialLiveStateRefresh();
+    return persistedSnapshot;
+  }
+
   if (initialLiveStateCache) {
     void startInitialLiveStateRefresh();
     return initialLiveStateCache.payload;
@@ -76,5 +95,12 @@ async function getInitialLiveState() {
 
 export default async function Page() {
   const initialLiveState = await getInitialLiveState();
-  return <LineaOreClient initialLiveState={initialLiveState} initialNowMs={Date.now()} />;
+  const initialRecentWins = (await getRecentWinsPayloadForRender()).wins;
+  return (
+    <LineaOreClient
+      initialLiveState={initialLiveState}
+      initialNowMs={Date.now()}
+      initialRecentWins={initialRecentWins}
+    />
+  );
 }

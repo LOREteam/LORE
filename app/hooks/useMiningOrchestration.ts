@@ -1,6 +1,7 @@
 "use client";
 
 import { REFETCH_DELAY_MS, MAX_BET_ATTEMPTS } from "../lib/constants";
+import type { Eip7702CapabilityState, Signed7702AuthorizationLike } from "../lib/eip7702";
 import { saveSession } from "./useMining.shared";
 import { useMiningAllowance } from "./useMiningAllowance";
 import { useMiningRuntimeHelpers } from "./useMiningRuntimeHelpers";
@@ -12,12 +13,10 @@ import { useMiningReceipt } from "./useMiningReceipt";
 import { useMiningBetStatus } from "./useMiningBetStatus";
 import { useMiningAutoMineRunner } from "./useMiningAutoMineRunner";
 import { useMiningLifecycle } from "./useMiningLifecycle";
-import type { RefreshSessionFn, MiningNotifyFn } from "./useMining";
-import type { GasOverrides } from "./useMining";
+import type { GasOverrides, MiningNotifyFn, RefreshSessionFn, RunningParams } from "./useMining.types";
+import type { PendingApproveState, PendingBetState } from "./useMining.stateTypes";
 import type { PublicClient } from "viem";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
-
-type RunningParams = { betStr: string; blocks: number; rounds: number } | null;
 
 interface UseMiningOrchestrationOptions {
   publicClient: PublicClient | undefined;
@@ -29,8 +28,8 @@ interface UseMiningOrchestrationOptions {
   restoreAttemptedRef: MutableRefObject<boolean>;
   sessionExpiredErrorRef: MutableRefObject<boolean>;
   tokenGetterWarningShownRef: MutableRefObject<boolean>;
-  pendingApproveRef: MutableRefObject<{ hash: `0x${string}`; submittedAt: number; nonce: number } | null>;
-  pendingBetRef: MutableRefObject<{ submittedAt: number; nonce: number } | null>;
+  pendingApproveRef: MutableRefObject<PendingApproveState | null>;
+  pendingBetRef: MutableRefObject<PendingBetState | null>;
   publicClientRef: MutableRefObject<PublicClient | undefined>;
   silentSendRef: MutableRefObject<
     | ((
@@ -39,6 +38,26 @@ interface UseMiningOrchestrationOptions {
       ) => Promise<`0x${string}`>)
     | undefined
   >;
+  silentSend7702Ref: MutableRefObject<
+    | ((
+        tx: {
+          data?: `0x${string}`;
+          value?: bigint;
+          gas?: bigint;
+          nonce?: number;
+          authorizationList: readonly Signed7702AuthorizationLike[];
+          sponsor?: boolean;
+          feeMode?: "normal" | "keeper";
+        },
+        gasOverrides?: GasOverrides,
+      ) => Promise<`0x${string}`>)
+    | undefined
+  >;
+  signEip7702DelegationRef: MutableRefObject<
+    | ((executor?: "self" | `0x${string}`) => Promise<Signed7702AuthorizationLike>)
+    | undefined
+  >;
+  eip7702Ref: MutableRefObject<Eip7702CapabilityState | undefined>;
   refreshSessionRef: MutableRefObject<RefreshSessionFn | undefined>;
   writeContractAsyncRef: MutableRefObject<(args: unknown) => Promise<`0x${string}`>>;
   ensurePreferredWalletRef: MutableRefObject<(() => Promise<void> | void) | undefined>;
@@ -85,6 +104,9 @@ export function useMiningOrchestration({
   pendingBetRef,
   publicClientRef,
   silentSendRef,
+  silentSend7702Ref,
+  signEip7702DelegationRef,
+  eip7702Ref,
   refreshSessionRef,
   writeContractAsyncRef,
   ensurePreferredWalletRef,
@@ -151,8 +173,12 @@ export function useMiningOrchestration({
     estimateGas,
     getBumpedFees,
     waitReceipt,
+    getActorAddress,
     readPublicClient: () => publicClientRef.current,
     readSilentSend: () => silentSendRef.current,
+    readSilentSend7702: () => silentSend7702Ref.current,
+    readSignEip7702Delegation: () => signEip7702DelegationRef.current,
+    readEip7702Capability: () => eip7702Ref.current,
     readWriteContractAsync: () => (args: unknown) => writeContractAsyncRef.current(args as never),
     ensurePreferredWallet: () => ensurePreferredWalletRef.current?.(),
   });

@@ -352,7 +352,7 @@ export const FAQ = React.memo(function FAQ() {
                     {Array.isArray(item.a) ? (
                       <div className="space-y-2">
                         {item.a.map((line, j) => (
-                          <p key={j} className="text-sm text-gray-400 leading-relaxed">{line}</p>
+                          <p key={`${activeCategory}-${i}-${j}`} className="text-sm text-gray-400 leading-relaxed">{line}</p>
                         ))}
                       </div>
                     ) : (

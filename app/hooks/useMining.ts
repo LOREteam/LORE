@@ -4,33 +4,7 @@ import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { APP_CHAIN_ID } from "../lib/constants";
 import { useMiningRuntimeState } from "./useMiningRuntimeState";
 import { useMiningOrchestration } from "./useMiningOrchestration";
-
-export type GasOverrides = { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint };
-
-type SilentSendFn = (
-  tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number },
-  gasOverrides?: GasOverrides,
-) => Promise<`0x${string}`>;
-
-/** Call periodically to refresh Privy auth/session so wallet signing keeps working. */
-export type RefreshSessionFn = () => Promise<void>;
-export type MiningNotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
-
-interface UseMiningOptions {
-  refetchAllowance: () => void;
-  refetchTileData: () => void;
-  refetchUserBets: () => void;
-  refetchEpoch?: () => void;
-  refetchGridEpochData?: () => void;
-  preferredAddress?: `0x${string}` | string | null;
-  ensurePreferredWallet?: () => Promise<void> | void;
-  sendTransactionSilent?: SilentSendFn;
-  /** Optional: call every ~20 min while bot runs to keep Privy session valid (e.g. () => getAccessToken()) */
-  refreshSession?: RefreshSessionFn;
-  /** Optional: called when auto-miner has placed a bet (blocks chosen and tx confirmed) */
-  onAutoMineBetConfirmed?: () => void;
-  onNotify?: MiningNotifyFn;
-}
+import type { UseMiningOptions } from "./useMining.types";
 
 export function useMining({
   refetchAllowance,
@@ -41,6 +15,9 @@ export function useMining({
   preferredAddress,
   ensurePreferredWallet,
   sendTransactionSilent,
+  sendTransaction7702,
+  signEip7702Delegation,
+  eip7702,
   refreshSession,
   onAutoMineBetConfirmed,
   onNotify,
@@ -70,6 +47,9 @@ export function useMining({
     pendingBetRef,
     publicClientRef,
     silentSendRef,
+    silentSend7702Ref,
+    signEip7702DelegationRef,
+    eip7702Ref,
     refreshSessionRef,
     writeContractAsyncRef,
     ensurePreferredWalletRef,
@@ -87,6 +67,9 @@ export function useMining({
     preferredAddress,
     ensurePreferredWallet,
     sendTransactionSilent,
+    sendTransaction7702,
+    signEip7702Delegation,
+    eip7702,
     refreshSession,
     onAutoMineBetConfirmed,
     onNotify,
@@ -119,6 +102,9 @@ export function useMining({
     pendingBetRef,
     publicClientRef,
     silentSendRef,
+    silentSend7702Ref,
+    signEip7702DelegationRef,
+    eip7702Ref,
     refreshSessionRef,
     writeContractAsyncRef,
     ensurePreferredWalletRef,

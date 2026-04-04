@@ -21,15 +21,16 @@ const LazyChatWidget = dynamic(() => import("./chat/ChatWidget").then((mod) => m
 interface FloatingActionsProps {
   walletAddress: string | null;
   onChatOpenChange: (open: boolean) => void;
+  chatOpen?: boolean;
 }
 
-export function FloatingActions({ walletAddress, onChatOpenChange }: FloatingActionsProps) {
+export function FloatingActions({ walletAddress, onChatOpenChange, chatOpen = false }: FloatingActionsProps) {
   return (
     <div
-      className="fixed right-3 z-[200]"
-      style={{ bottom: "max(0.75rem, calc(env(safe-area-inset-bottom, 0px) + 0.35rem))" }}
+      className={`fixed right-3 transition-all duration-200 ${chatOpen ? "z-[150]" : "z-[200]"}`}
+      style={{ bottom: chatOpen ? "max(0.25rem, env(safe-area-inset-bottom, 0px))" : "max(0.75rem, calc(env(safe-area-inset-bottom, 0px) + 0.35rem))" }}
     >
-      <div className="hud-dock flex items-center gap-2 rounded-2xl border border-white/[0.08] bg-[#070712]/84 p-1.5 shadow-[0_12px_34px_rgba(2,6,23,0.4)] backdrop-blur-xl">
+      <div className={`hud-dock flex items-center gap-2 rounded-2xl border border-white/[0.08] bg-[#070712]/84 p-1.5 shadow-[0_12px_34px_rgba(2,6,23,0.4)] backdrop-blur-xl transition-all duration-200 ${chatOpen ? "translate-y-4 opacity-92" : ""}`}>
         <a
           href="https://x.com/Linea_Ore"
           target="_blank"

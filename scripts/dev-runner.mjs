@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const IS_WINDOWS = process.platform === "win32";
 const command = "npm";
 const tasks = [
   { name: "SITE", args: ["run", "dev:ui"] },
@@ -42,7 +43,7 @@ function stopAll(exceptChild) {
     if (child === exceptChild) continue;
     if (!child.pid || child.killed || child.exitCode !== null || child.signalCode !== null) continue;
 
-    if (process.platform === "win32") {
+    if (IS_WINDOWS) {
       const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
@@ -69,10 +70,10 @@ function shutdown(code, exceptChild) {
 }
 
 for (const task of tasks) {
-  const child = spawn(process.platform === "win32" ? `${command} ${task.args.join(" ")}` : command, process.platform === "win32" ? [] : task.args, {
+  const child = spawn(IS_WINDOWS ? `${command} ${task.args.join(" ")}` : command, IS_WINDOWS ? [] : task.args, {
     cwd: root,
     env: process.env,
-    shell: process.platform === "win32",
+    shell: IS_WINDOWS,
     stdio: ["inherit", "pipe", "pipe"],
   });
 

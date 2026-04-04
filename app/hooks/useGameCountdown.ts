@@ -32,6 +32,7 @@ export function useGameCountdown({
 }: UseGameCountdownOptions) {
   const timeLeftRef = useRef(0);
   const didRefetchAtZeroRef = useRef(false);
+  const lastZeroRetryAtRef = useRef(0);
   const isRevealingRef = useRef(isRevealing);
   const visualEpochRef = useRef(visualEpoch);
   const lockedGridEpochRef = useRef(lockedGridEpoch);
@@ -73,9 +74,19 @@ export function useGameCountdown({
       }
       if (nextTimeLeft === 0 && !didRefetchAtZeroRef.current) {
         didRefetchAtZeroRef.current = true;
+        lastZeroRetryAtRef.current = now;
         if (visualEpochRef.current && !lockedGridEpochRef.current && !isRevealingRef.current) {
           setLockedGridEpoch(visualEpochRef.current);
         }
+        refetchEpochRef.current();
+        refetchGridEpochDataRef.current();
+        refetchEpochEndTimeRef.current();
+      } else if (
+        nextTimeLeft === 0 &&
+        !isRevealingRef.current &&
+        now - lastZeroRetryAtRef.current >= 5_000
+      ) {
+        lastZeroRetryAtRef.current = now;
         refetchEpochRef.current();
         refetchGridEpochDataRef.current();
         refetchEpochEndTimeRef.current();

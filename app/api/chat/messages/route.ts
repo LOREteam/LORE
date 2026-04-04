@@ -40,12 +40,8 @@ function isAddress(value: unknown): value is `0x${string}` {
   return typeof value === "string" && /^0x[a-fA-F0-9]{40}$/.test(value);
 }
 
-function setCachedChatMessages(cacheKey: string, payload: ChatMessagesPayload) {
-  chatMessagesRouteCache.set(cacheKey, payload, CHAT_MESSAGES_CACHE_MS);
-}
-
-function clearCachedChatMessages() {
-  chatMessagesRouteCache.clear();
+function invalidateCachedChatMessages(cacheKey: string) {
+  chatMessagesRouteCache.invalidate(cacheKey);
 }
 
 function jsonNoStore(payload: ChatMessagesPayload, status = 200) {
@@ -61,6 +57,7 @@ export async function POST(request: NextRequest) {
   if (rateLimited) return rateLimited;
 
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
+  const cacheKey = "latest";
   try {
     const body = (await request.json()) as ChatMessagePayload;
     const text = typeof body.text === "string" ? body.text.trim().slice(0, MAX_TEXT_LENGTH) : "";
@@ -95,14 +92,14 @@ export async function POST(request: NextRequest) {
       timestamp: Date.now(),
     });
 
-    clearCachedChatMessages();
-    setCachedChatMessages("latest", { messages: getChatMessages() });
+    chatMessagesRouteCache.beginWrite(cacheKey);
+    invalidateCachedChatMessages(cacheKey);
 
     finishRouteMetric(metric, 200);
     return applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });
   } catch (error) {
     logRouteError(ROUTE_METRIC_KEY, error, { method: "POST" });
-    clearCachedChatMessages();
+    invalidateCachedChatMessages(cacheKey);
     failRouteMetric(metric, 500);
     return applyNoStoreHeaders(NextResponse.json({ error: "Internal error" }, { status: 500 }), { varyCookie: true });
   }
@@ -132,10 +129,10 @@ export async function GET(request: NextRequest) {
     const payload = inflight
       ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await inflight)
       : await (() => {
+          const version = chatMessagesRouteCache.getWriteVersion(cacheKey);
           const requestPromise = Promise.resolve({ messages: getChatMessages() })
             .then((result) => {
-              setCachedChatMessages(cacheKey, result);
-              return result;
+              return chatMessagesRouteCache.setIfLatest(cacheKey, result, CHAT_MESSAGES_CACHE_MS, version);
             })
             .finally(() => {
               chatMessagesRouteCache.clearInflight(cacheKey);

@@ -11,14 +11,10 @@ import {
 } from "../lib/constants";
 import { delay } from "../lib/utils";
 import { log } from "../lib/logger";
+import type { GasOverrides, SilentSendFn } from "./useMining.types";
+import type { PendingApproveState, ReceiptState } from "./useMining.stateTypes";
 import { withMiningRpcTimeout } from "./useMining.shared";
 
-type GasOverrides = { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint };
-type ReceiptState = "confirmed" | "pending";
-type SilentSendFn = (
-  tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number },
-  gasOverrides?: GasOverrides,
-) => Promise<`0x${string}`>;
 type WriteContractFn = (...args: unknown[]) => Promise<unknown>;
 
 const APPROVE_RETRY_MAX = 3;
@@ -26,12 +22,6 @@ const APPROVE_ALLOWANCE_POLL_MS = 2_000;
 const APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS = 12_000;
 const APPROVE_PENDING_TIMEOUT_MS = 30_000;
 const MIN_GAS_APPROVE = 90_000n;
-
-interface PendingApproveState {
-  hash: `0x${string}`;
-  submittedAt: number;
-  nonce: number;
-}
 
 interface UseMiningAllowanceOptions {
   assertNativeGasBalance: (gas: bigint, gasOverrides?: GasOverrides) => Promise<void>;

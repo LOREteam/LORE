@@ -1,6 +1,6 @@
 import { formatUnits, parseAbi, parseUnits } from "viem";
 import { CONTRACT_ADDRESS, publicClient } from "./dataBridge";
-import { getEpochMapByIds } from "../../../server/storage";
+import { getEpochMapByIds, upsertEpochMap } from "../../../server/storage";
 
 const READ_ABI = parseAbi([
   "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
@@ -35,6 +35,7 @@ type RewardMapsForUserEpochs = {
 type OnChainEpochTuple = [bigint, bigint, bigint, boolean, boolean, boolean];
 type RewardEpochRuntimeRow = {
   winningTile: number;
+  totalPool: string;
   rewardPool: string;
   rewardPoolWei: bigint;
   isDailyJackpot: boolean;
@@ -67,6 +68,7 @@ async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpo
     if (stored && stored.winningTile > 0) {
       epochRows[String(epoch)] = {
         winningTile: stored.winningTile,
+        totalPool: stored.totalPool,
         rewardPool: stored.rewardPool,
         rewardPoolWei: parseUnits(stored.rewardPool, 18),
         isDailyJackpot: Boolean(stored.isDailyJackpot),
@@ -76,6 +78,14 @@ async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpo
       missingEpochs.push(epoch);
     }
   }
+
+  const recoveredRows: Record<string, {
+    winningTile: number;
+    totalPool: string;
+    rewardPool: string;
+    isDailyJackpot: boolean;
+    isWeeklyJackpot: boolean;
+  }> = {};
 
   for (let offset = 0; offset < missingEpochs.length; offset += MULTICALL_CHUNK) {
     const chunk = missingEpochs.slice(offset, offset + MULTICALL_CHUNK);
@@ -92,17 +102,31 @@ async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpo
       const row = results[index]?.result as OnChainEpochTuple | undefined;
       if (!row) return;
       const isResolved = Boolean(row[3]);
+      const totalPool = row[0];
       const rewardPool = row[1];
       const winningTile = row[2];
       if (!isResolved || rewardPool <= 0n || winningTile <= 0n) return;
-      epochRows[String(epoch)] = {
+      const recovered = {
         winningTile: Number(winningTile),
+        totalPool: formatUnits(totalPool, 18),
         rewardPool: formatUnits(rewardPool, 18),
         rewardPoolWei: rewardPool,
         isDailyJackpot: Boolean(row[4]),
         isWeeklyJackpot: Boolean(row[5]),
       };
+      epochRows[String(epoch)] = recovered;
+      recoveredRows[String(epoch)] = {
+        winningTile: recovered.winningTile,
+        totalPool: recovered.totalPool,
+        rewardPool: recovered.rewardPool,
+        isDailyJackpot: recovered.isDailyJackpot,
+        isWeeklyJackpot: recovered.isWeeklyJackpot,
+      };
     });
+  }
+
+  if (Object.keys(recoveredRows).length > 0) {
+    upsertEpochMap(recoveredRows);
   }
 
   return epochRows;

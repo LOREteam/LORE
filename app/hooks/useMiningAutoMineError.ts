@@ -4,6 +4,8 @@ import { firstErrorLine, isInsufficientFundsError, isNetworkError, isSessionExpi
 
 function isWalletUnavailableError(message: string) {
   return (
+    message.includes("public client not ready") ||
+    message.includes("public client unavailable") ||
     message.includes("wallet not ready") ||
     message.includes("wallet not found") ||
     message.includes("embedded wallet not found")

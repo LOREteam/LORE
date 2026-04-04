@@ -1,6 +1,7 @@
 "use client";
 
 import type { PublicClient } from "viem";
+import type { Eip7702CapabilityState, Signed7702AuthorizationLike } from "../lib/eip7702";
 import type { SoundName } from "./useSound";
 import { useMining } from "./useMining";
 import { useMiningGuards } from "./useMiningGuards";
@@ -15,6 +16,19 @@ type SilentSendFn = (
   tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number; feeMode?: "normal" | "keeper" },
   gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint },
 ) => Promise<`0x${string}`>;
+type SilentSend7702Fn = (
+  tx: {
+    data?: `0x${string}`;
+    value?: bigint;
+    gas?: bigint;
+    nonce?: number;
+    authorizationList: readonly Signed7702AuthorizationLike[];
+    sponsor?: boolean;
+    feeMode?: "normal" | "keeper";
+  },
+  gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint },
+) => Promise<`0x${string}`>;
+type Sign7702DelegationFn = (executor?: "self" | `0x${string}`) => Promise<Signed7702AuthorizationLike>;
 
 interface UseLineaOreHubRuntimeOptions {
   activeTab: string;
@@ -30,6 +44,9 @@ interface UseLineaOreHubRuntimeOptions {
   refetchTileData: () => void;
   refetchUserBets: () => void;
   sendTransactionSilent?: SilentSendFn;
+  sendTransaction7702?: SilentSend7702Fn;
+  signEip7702Delegation?: Sign7702DelegationFn;
+  eip7702?: Eip7702CapabilityState;
   actualCurrentEpoch: bigint | null | undefined;
   gridDisplayEpoch: string | null;
   isRevealing: boolean;
@@ -63,6 +80,9 @@ export function useLineaOreHubRuntime({
   refetchTileData,
   refetchUserBets,
   sendTransactionSilent,
+  sendTransaction7702,
+  signEip7702Delegation,
+  eip7702,
   actualCurrentEpoch,
   gridDisplayEpoch,
   isRevealing,
@@ -93,6 +113,9 @@ export function useLineaOreHubRuntime({
     refetchTileData,
     refetchUserBets,
     sendTransactionSilent,
+    sendTransaction7702,
+    signEip7702Delegation,
+    eip7702,
   });
 
   const mining = useMining(miningOptions);
@@ -120,6 +143,9 @@ export function useLineaOreHubRuntime({
     embeddedEthBalance,
     embeddedTokenBalance,
     isAutoMining: mining.isAutoMining,
+    isAnalyzing: epochPresentation.isAnalyzing,
+    isRevealing,
+    liveStateReady,
     selectedTiles: mining.selectedTiles,
     minEthForGas,
     onManualMine: mining.handleManualMine,

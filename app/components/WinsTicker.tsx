@@ -9,13 +9,15 @@ function shortenAddr(addr: string) {
 
 function WinItem({ w }: { w: RecentWin }) {
   return (
-    <span className="inline-flex items-center gap-1 text-[9px] shrink-0 px-2.5">
-      <span className="text-amber-400">★</span>
+    <span className="flex h-[1.05rem] shrink-0 items-center gap-1 px-2.5 leading-none text-[10px] sm:text-[11px]">
+      <span className="text-amber-400/80">*</span>
       <span className="font-mono text-gray-400">{shortenAddr(w.user)}</span>
-      <span className="text-gray-600">won</span>
-      <span className="font-bold text-emerald-400">{w.amount}</span>
-      <span className="text-gray-600">LINEA</span>
-      <span className="text-gray-700">#{w.epoch}</span>
+      <span className="text-gray-500">won</span>
+      <span className="lore-nums text-[10px] font-semibold text-emerald-300/72 sm:text-[11px]">
+        {w.amount}
+      </span>
+      <span className="text-gray-500">LINEA</span>
+      <span className="lore-nums text-gray-600">#{w.epoch}</span>
     </span>
   );
 }
@@ -30,17 +32,21 @@ export const WinsTicker = memo(function WinsTicker({
   const duration = Math.max(wins.length * 3, 20);
 
   return (
-    <div className={`w-full bg-[#0d0d1a]/80 border border-violet-500/10 backdrop-blur-sm h-5 flex items-center relative ${reducedMotion ? "overflow-x-auto overflow-y-hidden" : "overflow-hidden"}`}>
+    <div
+      className={`relative h-[1.05rem] w-full self-center overflow-hidden border border-violet-500/10 bg-[#0d0d1a]/80 leading-none backdrop-blur-sm ${
+        reducedMotion ? "overflow-x-auto overflow-y-hidden" : "overflow-hidden"
+      }`}
+    >
       {wins.length > 0 ? (
         reducedMotion ? (
-          <div className="flex min-w-max whitespace-nowrap pr-2">
+          <div className="absolute inset-y-0 left-0 flex min-w-max items-center whitespace-nowrap pr-2">
             {wins.map((w, i) => (
               <WinItem key={`static-${w.epoch}-${w.user}-${i}`} w={w} />
             ))}
           </div>
         ) : (
           <div
-            className="flex whitespace-nowrap animate-ticker"
+            className="absolute inset-y-0 left-0 flex items-center whitespace-nowrap animate-ticker"
             style={{ animationDuration: `${duration}s` }}
           >
             {wins.map((w, i) => (
@@ -52,8 +58,8 @@ export const WinsTicker = memo(function WinsTicker({
           </div>
         )
       ) : (
-        <span className="text-[9px] text-gray-500 px-3 whitespace-nowrap">
-          Recent wins will appear here after claims on-chain
+        <span className="absolute inset-y-0 left-0 inline-flex items-center px-2.5 leading-none whitespace-nowrap text-[10px] text-gray-500">
+          Recent wins will appear here after epochs resolve
         </span>
       )}
     </div>

@@ -311,7 +311,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       if (mountedRef.current && requestId === requestIdRef.current) {
         setLoading(false);
       }
-      if (requestId === requestIdRef.current || runningForRef.current === normalizedUser) {
+      if (requestId === requestIdRef.current && runningForRef.current === normalizedUser) {
         runningRef.current = false;
         runningForRef.current = null;
       }

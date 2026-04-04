@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { memo, type ReactElement } from "react";
 import { CHAT_AVATAR_IDS, isPresetChatAvatarId, type ChatAvatarId } from "../../lib/chatAvatar";
 
@@ -126,13 +125,15 @@ function AvatarImage({
   rounded?: boolean;
 }) {
   return (
-    <Image
+    // next/image caused intermittent preset avatar blanks in the chat settings grid.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
       src={src}
       alt="avatar"
       width={size}
       height={size}
-      unoptimized
-      priority
+      loading="eager"
+      decoding="async"
       draggable={false}
       className={`block ${rounded ? "rounded-[30%]" : ""} ${contain ? "object-contain" : "object-cover"} shadow-[0_10px_28px_rgba(3,7,18,0.5)] ${className ?? ""}`}
     />

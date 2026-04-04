@@ -9,18 +9,11 @@ import {
   isInsufficientFundsError,
   isNetworkError,
   isRetryableError,
-  isSessionExpiredError,
   withMiningRpcTimeout,
 } from "./useMining.shared";
+import type { GasOverrides } from "./useMining.types";
+import type { PendingBetState, ReceiptState } from "./useMining.stateTypes";
 import { verifyRoundAlreadyPlaced } from "./useMiningRoundVerification";
-
-type GasOverrides = { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint };
-type ReceiptState = "confirmed" | "pending";
-
-interface PendingBetState {
-  submittedAt: number;
-  nonce: number;
-}
 
 interface ExecuteAutoMineBetLoopOptions {
   actorAddress: `0x${string}`;
@@ -95,6 +88,8 @@ export async function executeAutoMineBetLoop({
   effectiveBlocks,
   getRetryDelayMs,
 }: ExecuteAutoMineBetLoopOptions): Promise<AutoMineBetLoopResult> {
+  const MAX_SESSION_REFRESH_ATTEMPTS = 2;
+
   const placeBetOnce = async (overrides?: GasOverrides): Promise<ReceiptState> => {
     const [latestNonceRaw, pendingNonceRaw] = await Promise.all([
       withMiningRpcTimeout(publicClient.getTransactionCount({
@@ -156,7 +151,6 @@ export async function executeAutoMineBetLoop({
         pendingBetRef.current = state === "pending" ? { submittedAt: Date.now(), nonce: submittedNonce() } : null;
         return state;
       } catch (error) {
-        if (isSessionExpiredError(error)) throw error;
         if (isAmbiguousPendingTxError(error)) {
           pendingBetRef.current = { submittedAt: Date.now(), nonce: submittedNonce() };
         }
@@ -173,6 +167,7 @@ export async function executeAutoMineBetLoop({
   };
 
   let betAttempts = 0;
+  let sessionRefreshAttempts = 0;
   while (betAttempts < maxBetAttempts) {
     if (!autoMineActive()) {
       return { kind: "stopped" };
@@ -201,6 +196,7 @@ export async function executeAutoMineBetLoop({
       const gasBumpPercent = gasBumpBase + BigInt(betAttempts) * gasBumpReplacementStep;
       const feeOverrides = await getBumpedFees(gasBumpPercent);
       const state = await placeBetOnce(feeOverrides);
+      sessionRefreshAttempts = 0;
       if (state === "pending") {
         log.warn("AutoMine", `round ${currentRoundIndex + 1}: bet tx pending, waiting before next action`);
         onProgress(`${currentRoundIndex + 1} / ${rounds} - tx pending, waiting confirmation...`);
@@ -245,10 +241,20 @@ export async function executeAutoMineBetLoop({
         await delay(wait);
         continue;
       }
-      if (isSessionExpiredError(error) && betAttempts < 2) {
-        betAttempts += 1;
-        log.warn("AutoMine", `session signing error (attempt ${betAttempts}), refreshing session...`, error);
-        onProgress(`${currentRoundIndex + 1} / ${rounds} - session error, refreshing (${betAttempts}/2)...`);
+      const sessionExpired =
+        error instanceof Error &&
+        (error.name === "PrivyApiError" ||
+          error.message.toLowerCase().includes("valid access token") ||
+          error.message.toLowerCase().includes("signing keys") ||
+          error.message.toLowerCase().includes("authorization signatures") ||
+          error.message.toLowerCase().includes("unexpected error occurred"));
+      if (sessionExpired) {
+        sessionRefreshAttempts += 1;
+        if (sessionRefreshAttempts > MAX_SESSION_REFRESH_ATTEMPTS) throw error;
+        log.warn("AutoMine", `session signing error (attempt ${sessionRefreshAttempts}), refreshing session...`, error);
+        onProgress(
+          `${currentRoundIndex + 1} / ${rounds} - session error, refreshing (${sessionRefreshAttempts}/${MAX_SESSION_REFRESH_ATTEMPTS})...`,
+        );
         if (onSessionRefresh) {
           try {
             await onSessionRefresh();

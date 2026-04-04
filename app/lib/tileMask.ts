@@ -10,7 +10,7 @@ export function tileIdsToMask(tileIds: number[], gridSize = DEFAULT_GRID_SIZE): 
 }
 
 export function tileMaskToTileIds(tileMask: number, gridSize = DEFAULT_GRID_SIZE): number[] {
-  if (!Number.isInteger(tileMask) || tileMask <= 0) return [];
+  if (!Number.isInteger(tileMask) || tileMask < 0) return [];
   const tileIds: number[] = [];
   const normalizedMask = tileMask >>> 0;
   for (let bit = 0; bit < gridSize; bit += 1) {

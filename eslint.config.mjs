@@ -15,8 +15,12 @@ const eslintConfig = defineConfig([
   ]),
   {
     rules: {
-      // Keep the baseline strict, but avoid blocking CI on patterns
-      // that are intentionally used in this codebase.
+      // These are React Compiler experimental rules (not core rules-of-hooks / exhaustive-deps).
+      // Disabled because this codebase intentionally uses patterns they flag:
+      //   refs: mutating refs in render callbacks (useMining* hooks)
+      //   set-state-in-effect: coordinated state updates in effects
+      //   purity: side-effects in render helpers
+      // TODO: gradually fix violations and re-enable these one by one.
       "react-hooks/refs": "off",
       "react-hooks/set-state-in-effect": "off",
       "react-hooks/purity": "off",

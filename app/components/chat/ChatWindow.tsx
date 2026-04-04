@@ -89,7 +89,7 @@ export function ChatWindow({
               width: "min(34rem, calc(100vw - 1.5rem))",
               right: "0.75rem",
               top: "clamp(8.8rem, 18vh, 10.2rem)",
-              bottom: "max(4.6rem, calc(env(safe-area-inset-bottom, 0px) + 4.15rem))",
+              bottom: "max(7.6rem, calc(env(safe-area-inset-bottom, 0px) + 7.1rem))",
             }
           : undefined
       }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useChatAuth } from "./useChatAuth";
 import { useChat } from "./useChat";
 import { useChatProfile } from "./useChatProfile";
 
@@ -19,9 +20,10 @@ export function useChatWidgetRuntime({
   const [mountTarget, setMountTarget] = useState<HTMLElement | null>(null);
   const lastReadOthersRef = useRef(0);
   const initializedRef = useRef(false);
+  const chatAuth = useChatAuth(walletAddress, "Verify wallet for chat");
 
-  const { messages, sendMessage, connected, authReady, ensureChatAuth } = useChat(walletAddress, { open });
-  const { profile, displayName, effectiveAvatar, updateProfile } = useChatProfile(walletAddress);
+  const { messages, sendMessage, connected, authReady, ensureChatAuth } = useChat(walletAddress, { open, auth: chatAuth });
+  const { profile, displayName, effectiveAvatar, updateProfile } = useChatProfile(walletAddress, chatAuth);
 
   const myAddr = walletAddress?.toLowerCase() ?? "";
   const othersCount = useMemo(

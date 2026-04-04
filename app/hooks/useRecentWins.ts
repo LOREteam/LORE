@@ -92,8 +92,8 @@ function saveCache(wins: RecentWin[]) {
   }
 }
 
-export function useRecentWins() {
-  const [wins, setWins] = useState<RecentWin[]>([]);
+export function useRecentWins(initialWins: RecentWin[] = []) {
+  const [wins, setWins] = useState<RecentWin[]>(() => initialWins);
   const [isPageVisible, setIsPageVisible] = useState(() =>
     typeof document === "undefined" ? true : document.visibilityState === "visible",
   );
@@ -102,6 +102,7 @@ export function useRecentWins() {
   const warnAtRef = useRef(0);
   const mountedRef = useRef(false);
   const cacheSavedAtRef = useRef<number | null>(null);
+  const cachedWinsCountRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -125,10 +126,11 @@ export function useRecentWins() {
     initializedRef.current = true;
     const cached = loadCache();
     cacheSavedAtRef.current = cached.savedAt;
+    cachedWinsCountRef.current = cached.wins.length;
     if (mountedRef.current) {
-      setWins(cached.wins);
+      setWins(cached.wins.length > 0 ? cached.wins : initialWins);
     }
-  }, []);
+  }, [initialWins]);
 
   const fetchWins = useCallback(async () => {
     if (runningRef.current) return;
@@ -168,7 +170,9 @@ export function useRecentWins() {
     const intervalMs = isPageVisible ? REFRESH_MS : HIDDEN_REFRESH_MS;
     const savedAt = cacheSavedAtRef.current;
     const initialDelay =
-      savedAt && Date.now() - savedAt < intervalMs
+      savedAt &&
+      cachedWinsCountRef.current > 0 &&
+      Date.now() - savedAt < intervalMs
         ? intervalMs - (Date.now() - savedAt)
         : 0;
     let cancelled = false;

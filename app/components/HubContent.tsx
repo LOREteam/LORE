@@ -65,7 +65,7 @@ interface HubContentProps {
   hasMyWinningBet: boolean;
 }
 
-export function HubContent({
+export const HubContent = React.memo(function HubContent({
   autoMineProgress,
   chatOpen,
   formattedBalance,
@@ -138,6 +138,7 @@ export function HubContent({
         selectedTilesCount={selectedTilesCount}
         isPending={isPending}
         isRevealing={isRevealing}
+        isAnalyzing={isAnalyzing}
         isAutoMining={isAutoMining}
         handleManualMineWithGuard={handleManualMineWithGuard}
         lastBet={lastBet}
@@ -149,4 +150,4 @@ export function HubContent({
       />
     </div>
   );
-}
+});

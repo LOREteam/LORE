@@ -3,6 +3,7 @@
 import { useAnalyticsAncillaryData } from "./useAnalyticsAncillaryData";
 import { useLeaderboards } from "./useLeaderboards";
 import { useRecentWins } from "./useRecentWins";
+import type { RecentWin } from "./useRecentWins";
 import { useWalletAncillaryData } from "./useWalletAncillaryData";
 
 type NotifyTone = "info" | "success" | "warning" | "danger";
@@ -17,6 +18,7 @@ interface UsePageAncillaryDataOptions {
   isPageVisible: boolean;
   embeddedWalletAddress?: string | null;
   externalWalletAddress?: string | null;
+  initialRecentWins?: RecentWin[];
   notify: NotifyFn;
   sendTransactionSilent?: SilentSendFn;
 }
@@ -26,6 +28,7 @@ export function usePageAncillaryData({
   isPageVisible,
   embeddedWalletAddress,
   externalWalletAddress,
+  initialRecentWins = [],
   notify,
   sendTransactionSilent,
 }: UsePageAncillaryDataOptions) {
@@ -49,7 +52,7 @@ export function usePageAncillaryData({
     refetch: leaderboardsRefetch,
   } = useLeaderboards(activeTab === "leaderboards");
 
-  const recentWins = useRecentWins();
+  const recentWins = useRecentWins(initialRecentWins);
 
   return {
     ...analyticsData,

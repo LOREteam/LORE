@@ -53,7 +53,7 @@ export function parseChatAuthMessage(message: string): ChatAuthMessageFields | n
   const issuedAt = values.get("issued at") ?? "";
   const chainId = Number(values.get("chain id") ?? NaN);
 
-  if (!/^0x[a-f0-9]{40}$/.test(address)) return null;
+  if (!/^0x[a-f0-9]{40}$/i.test(address)) return null;
   if (!/^https?:\/\/[^ ]+/i.test(uri)) return null;
   if (!/^[a-f0-9]{32,128}$/i.test(nonce)) return null;
   if (!Number.isInteger(chainId) || chainId <= 0) return null;

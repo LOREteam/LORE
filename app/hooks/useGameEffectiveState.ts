@@ -100,11 +100,18 @@ export function useGameEffectiveState({
   const effectivePendingEpochDurationEffectiveFromEpoch =
     pendingEpochDurationEffectiveFromEpoch ?? fallbackPendingEpochDurationEffectiveFromEpoch ?? undefined;
 
-  const liveStateReady = Boolean(
+  const hasGridEpochData = Boolean(effectiveGridEpochData);
+  const hasTileData = Boolean(effectiveTileData);
+  const timerReady = Boolean(
     resolvedCurrentEpoch != null &&
       resolvedCurrentEpoch > 0n &&
       effectiveEpochEndTime != null &&
       effectiveEpochEndTime > 0n,
+  );
+  const liveStateReady = Boolean(
+    resolvedCurrentEpoch != null &&
+      resolvedCurrentEpoch > 0n &&
+      (timerReady || hasGridEpochData || hasTileData),
   );
 
   const currentEpochResolved = currentEpochData
@@ -125,6 +132,7 @@ export function useGameEffectiveState({
     effectivePendingEpochDuration,
     effectivePendingEpochDurationEta,
     effectivePendingEpochDurationEffectiveFromEpoch,
+    timerReady,
     liveStateReady,
   };
 }

@@ -28,17 +28,17 @@ export function HeaderPoolChart({
   rolloverAmount,
 }: HeaderPoolChartProps) {
   return (
-    <div className="min-[900px]:col-span-5 relative rounded-xl bg-[#080812] border border-white/[0.06] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden min-h-[76px] sm:min-h-[72px] animate-slide-up" style={{ animationDelay: "0.1s" }}>
+    <div className="min-[900px]:col-span-5 min-[900px]:h-[90px] relative rounded-xl bg-[#080812] border border-white/[0.06] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden min-h-[66px] sm:min-h-[64px] animate-slide-up" style={{ animationDelay: "0.1s" }}>
       <div className="absolute top-2.5 left-3 z-20 pointer-events-none">
-        <div className="text-[8px] sm:text-[9px] uppercase font-bold text-gray-500 tracking-wider flex flex-wrap items-center gap-1 mb-0.5 pr-10 sm:pr-12">
+        <div className="text-[9px] uppercase font-bold text-gray-500 tracking-wider flex flex-wrap items-center gap-1.5 mb-0.5">
           Total Pool
           {hydrated && liveStateReady && rolloverAmount > 0 && (
-            <span className="bg-emerald-500/15 text-emerald-400 px-1 py-px rounded text-[7px] border border-emerald-500/25">
+            <span className="lore-nums bg-emerald-500/15 text-emerald-400 px-1 py-px rounded text-[7px] border border-emerald-500/25">
               +{rolloverAmount.toFixed(2)} rollover
             </span>
           )}
         </div>
-        <div className="text-base sm:text-lg font-black text-white leading-tight pr-10 sm:pr-12">
+        <div className="lore-nums text-lg font-black text-white leading-tight">
           {liveStateReady || coldBootDefaults ? (
             <>
               {realTotalStaked.toFixed(2)} <span className="text-violet-400 text-xs font-bold">LINEA</span>

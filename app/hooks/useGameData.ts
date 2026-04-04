@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { type PollPhase, useGameRevealState } from "./useGameEpochPresentation";
 import { useGameCountdown } from "./useGameCountdown";
 import { useGameCoreReads } from "./useGameCoreReads";
 import { useGameDerivedState } from "./useGameDerivedState";
 import { useGameEffectiveState } from "./useGameEffectiveState";
+import { useGameRevealState } from "./useGameEpochPresentation";
+import { useGameEpochUiState } from "./useGameEpochUiState";
 import { useGameGridReads } from "./useGameGridReads";
 import { useGameHistoryData } from "./useGameHistoryData";
 import { useGameLiveStateSnapshot, type LiveStateApiResponse } from "./useGameLiveStateSnapshot";
@@ -21,11 +21,23 @@ interface UseGameDataOptions {
   preferredAddress?: `0x${string}` | string | null;
 }
 
+const positiveBigIntOrUndefined = (value: bigint | null | undefined) =>
+  value != null && value > 0n ? value : undefined;
+
 export function useGameData(options?: UseGameDataOptions) {
   const historyDetailed = options?.historyDetailed ?? false;
   const initialServerLiveState = options?.initialServerLiveState ?? null;
   const liveGrid = options?.liveGrid ?? true;
   const preferredAddress = options?.preferredAddress ?? null;
+  const seededVisualEpoch = (() => {
+    const value = initialServerLiveState?.currentEpoch;
+    if (!value) return null;
+    try {
+      return BigInt(value) > 0n ? value : null;
+    } catch {
+      return null;
+    }
+  })();
   const {
     address,
     chainId,
@@ -34,8 +46,6 @@ export function useGameData(options?: UseGameDataOptions) {
     isPageVisible,
     autoMineSessionActive,
   } = useGameWalletContext({ preferredAddress });
-  const positiveBigIntOrUndefined = (value: bigint | null | undefined) =>
-    value != null && value > 0n ? value : undefined;
 
   const {
     fallbackCurrentEpoch,
@@ -54,18 +64,20 @@ export function useGameData(options?: UseGameDataOptions) {
     liveContractReadsEnabled,
   } = useGameLiveStateSnapshot({ initialSnapshot: initialServerLiveState, isPageVisible });
 
-  const [visualEpoch, setVisualEpoch] = useState<string | null>(null);
-  const [isRevealing, setIsRevealing] = useState(false);
-  const [lockedGridEpoch, setLockedGridEpoch] = useState<string | null>(null);
-  const [timeLeft, setTimeLeft] = useState(0);
-  const [pollPhase, setPollPhase] = useState<PollPhase>("slow");
-
-  // lockedGridEpoch persists until the new epoch is ready - prevents intermediate flash
-  const gridDisplayEpoch = lockedGridEpoch ?? visualEpoch;
-  const gridDisplayEpochBigInt = useMemo(
-    () => (gridDisplayEpoch ? BigInt(gridDisplayEpoch) : null),
-    [gridDisplayEpoch],
-  );
+  const {
+    visualEpoch,
+    setVisualEpoch,
+    isRevealing,
+    setIsRevealing,
+    lockedGridEpoch,
+    setLockedGridEpoch,
+    gridDisplayEpoch,
+    gridDisplayEpochBigInt,
+    timeLeft,
+    setTimeLeft,
+    pollPhase,
+    setPollPhase,
+  } = useGameEpochUiState({ seededVisualEpoch });
 
   const {
     epochInterval,
@@ -133,6 +145,7 @@ export function useGameData(options?: UseGameDataOptions) {
     effectivePendingEpochDuration,
     effectivePendingEpochDurationEta,
     effectivePendingEpochDurationEffectiveFromEpoch,
+    timerReady,
     liveStateReady,
   } = useGameEffectiveState({
     actualCurrentEpoch,
@@ -191,7 +204,7 @@ export function useGameData(options?: UseGameDataOptions) {
 
   useGameCountdown({
     effectiveEpochEndTime,
-    liveStateReady,
+    liveStateReady: timerReady,
     isRevealing,
     visualEpoch,
     lockedGridEpoch,
@@ -275,6 +288,7 @@ export function useGameData(options?: UseGameDataOptions) {
     epochDurationChange,
     liveStateBootstrapPending,
     liveStateReady,
+    timerReady,
     refetchEpoch,
     refetchGridEpochData,
     refetchTileData,

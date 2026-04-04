@@ -1,18 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createPublicClient, getAddress, http, parseAbi } from "viem";
 import { CONTRACT_ADDRESS } from "../../../lib/constants";
-import { RPC_URL } from "../../_lib/dataBridge";
+import { APP_CHAIN, RPC_URL } from "../../_lib/dataBridge";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
+
+const OWNER_ABI = parseAbi(["function owner() view returns (address)"]);
 
 export async function GET(request: NextRequest) {
   const rateLimited = await enforceSharedRateLimit(request, {
     bucket: "api-admin-check-owner",
-    limit: 20,
+    limit: 5,
     windowMs: 60_000,
   });
   if (rateLimited) return rateLimited;
 
   try {
-    // Get the wallet address from query params
     const { searchParams } = new URL(request.url);
     const address = searchParams.get("address");
 
@@ -20,32 +22,21 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ isOwner: false, error: "Invalid address" }, { status: 400 });
     }
 
-    // Fetch owner from blockchain
-    const response = await fetch(RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "eth_call",
-        params: [{
-          to: CONTRACT_ADDRESS,
-          data: "0x8da5cb5b", // owner() function selector
-        }, "latest"],
-        id: 1,
-      }),
+    const publicClient = createPublicClient({
+      chain: APP_CHAIN,
+      transport: http(RPC_URL, { timeout: 10_000, retryCount: 1 }),
     });
 
-    const result = await response.json();
-    
-    if (!result.result) {
-      return NextResponse.json({ isOwner: false, error: "Failed to fetch owner" }, { status: 500 });
-    }
+    const ownerAddress = await publicClient.readContract({
+      address: CONTRACT_ADDRESS,
+      abi: OWNER_ABI,
+      functionName: "owner",
+    });
 
-    // Parse the owner address from the result
-    const ownerAddress = "0x" + result.result.slice(-40);
-    const isOwner = ownerAddress.toLowerCase() === address.toLowerCase();
+    const normalizedOwner = getAddress(ownerAddress);
+    const isOwner = normalizedOwner.toLowerCase() === address.toLowerCase();
 
-    return NextResponse.json({ isOwner, owner: ownerAddress });
+    return NextResponse.json({ isOwner, owner: normalizedOwner });
   } catch (err) {
     console.error("[api/admin/check-owner] Error:", err);
     return NextResponse.json({ isOwner: false, error: "Internal error" }, { status: 500 });

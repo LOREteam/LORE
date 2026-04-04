@@ -6,15 +6,9 @@ import { APP_CHAIN_ID } from "../lib/constants";
 import { CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS, TOKEN_ABI } from "../lib/constants";
 import { log } from "../lib/logger";
 import { delay } from "../lib/utils";
+import type { GasOverrides, SilentSendFn } from "./useMining.types";
+import type { PendingApproveState, ReceiptState } from "./useMining.stateTypes";
 import { isNetworkError, isRetryableError, withMiningRpcTimeout } from "./useMining.shared";
-
-type GasOverrides = { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint };
-type ReceiptState = "confirmed" | "pending";
-
-type SilentSendFn = (
-  tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number },
-  gasOverrides?: GasOverrides,
-) => Promise<`0x${string}`>;
 
 type ReadWithNetworkRetryFn = <T>(options: {
   actionLabel: string;
@@ -26,12 +20,6 @@ type ReadWithNetworkRetryFn = <T>(options: {
   read: () => Promise<T>;
   shouldRetry: (error: unknown) => boolean;
 }) => Promise<T>;
-
-interface PendingApproveState {
-  hash: `0x${string}`;
-  submittedAt: number;
-  nonce: number;
-}
 
 interface PrepareAutoMineBootstrapOptions {
   absoluteTotal: bigint;

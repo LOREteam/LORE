@@ -17,6 +17,11 @@ function compactTileAmount(value: string): string {
   return amount.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
+function hasVisibleTilePool(value: string) {
+  const amount = Number.parseFloat(value);
+  return Number.isFinite(amount) && amount > 0;
+}
+
 function buildTileAriaLabel({
   tileId,
   users,
@@ -187,9 +192,13 @@ const Tile = React.memo(function Tile({
   const isMyWin = isWinner && hasMyBet;
   const isNeutralWinner = isWinner && !hasMyBet;
   const compactAmount = liveStateReady || coldBootDefaults ? compactTileAmount(displayAmount) : "...";
+  const displayedUsers =
+    liveStateReady || coldBootDefaults
+      ? Math.max(users, hasMyBet || hasVisibleTilePool(displayAmount) ? 1 : 0)
+      : users;
   const ariaLabel = buildTileAriaLabel({
     tileId,
-    users,
+    users: displayedUsers,
     compactAmount,
     isSelected,
     hasMyBet,
@@ -236,7 +245,7 @@ const Tile = React.memo(function Tile({
       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-br from-white/[0.03] to-transparent z-0" />
 
       <div className="relative z-10 flex w-full items-start justify-between gap-1">
-        <span className={`flex min-w-0 items-center gap-0.5 text-[7px] font-mono font-semibold leading-none sm:gap-1 sm:text-[10px] ${
+        <span className={`lore-nums flex min-w-0 items-center gap-0.5 text-[7px] font-semibold leading-none sm:gap-1 sm:text-[10px] ${
           isMyWin ? "text-sky-300" : isNeutralWinner ? "text-amber-300" : hasMyBet ? "text-emerald-400" : "text-gray-600"
         }`}>
           #{tileId}
@@ -249,7 +258,7 @@ const Tile = React.memo(function Tile({
         </span>
 
         <span
-          className={`flex items-center gap-0.5 text-[7px] font-semibold leading-none sm:gap-1 sm:text-[10px] ${
+          className={`lore-nums flex items-center gap-0.5 text-[7px] font-semibold leading-none sm:gap-1 sm:text-[10px] ${
             isMyWin
               ? "text-sky-200/70"
               : isNeutralWinner
@@ -259,7 +268,7 @@ const Tile = React.memo(function Tile({
                   : "text-gray-700"
           }`}
         >
-          <span>{liveStateReady || coldBootDefaults ? users : "-"}</span>
+          <span>{liveStateReady || coldBootDefaults ? displayedUsers : "-"}</span>
           <svg
             viewBox="0 0 16 16"
             fill="none"
@@ -278,7 +287,7 @@ const Tile = React.memo(function Tile({
       </div>
 
       <div className="relative z-10 flex w-full flex-1 items-center justify-center px-0.5">
-        <span className={`block w-full max-w-full px-0.5 text-center font-black text-[clamp(0.68rem,2.4vw,0.98rem)] leading-none tracking-tight transition-all duration-200 sm:text-lg ${
+        <span className={`lore-nums block w-full max-w-full px-0.5 text-center font-black text-[clamp(0.68rem,2.4vw,0.98rem)] leading-none tracking-tight transition-all duration-200 sm:text-lg ${
           isMyWin
             ? "text-sky-200 drop-shadow-[0_0_12px_rgba(14,165,233,0.7)]"
             : isNeutralWinner

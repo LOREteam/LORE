@@ -17,7 +17,17 @@ html {
 body {
   background: #060612;
   color: #e2e8f0;
+  font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: "liga" 1, "kern" 1;
+}
+
+.lore-nums {
+  font-family: var(--font-lore-digits), system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+  font-kerning: normal;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "kern" 1, "tnum" 1, "lnum" 1;
+  letter-spacing: -0.03em;
 }
 
 html[data-motion="reduced"] {

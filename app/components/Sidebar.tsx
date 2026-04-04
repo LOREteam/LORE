@@ -101,7 +101,7 @@ export const Sidebar = React.memo(function Sidebar({
           </div>
 
           <div className="flex flex-1 flex-col items-center justify-center text-center">
-            <span className="text-[22px] font-black leading-tight tracking-[0.15em] animate-text-glow">
+            <span className="text-[22px] font-black leading-tight tracking-[0.08em] animate-text-glow">
               <span className="text-white">L</span>
               <span className="text-violet-400">ORE</span>
             </span>
@@ -109,14 +109,14 @@ export const Sidebar = React.memo(function Sidebar({
               <div className="flex w-full items-center justify-center gap-1.5">
                 <span className="h-px w-4 shrink-0 bg-gradient-to-r from-violet-500/50 to-transparent" aria-hidden />
                 <span
-                  className="whitespace-nowrap text-gray-500 font-bold uppercase tracking-[0.25em]"
+                  className="whitespace-nowrap text-gray-500 font-bold uppercase tracking-[0.16em]"
                   style={{ fontSize: 9 }}
                 >
                   MINE THE
                 </span>
                 <span className="h-px w-4 shrink-0 bg-gradient-to-l from-violet-500/50 to-transparent" aria-hidden />
               </div>
-              <span className="text-gray-500 font-bold uppercase tracking-[0.25em]" style={{ fontSize: 9 }}>
+              <span className="text-gray-500 font-bold uppercase tracking-[0.16em]" style={{ fontSize: 9 }}>
                 CHAIN
               </span>
             </div>
@@ -172,7 +172,7 @@ export const Sidebar = React.memo(function Sidebar({
 
         <div className="mx-4 mt-1 flex min-h-0 flex-1 flex-col gap-2 animate-fade-in" style={{ animationDelay: "0.6s" }}>
           <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
-          <p className="px-1 pt-1 text-gray-600 font-bold uppercase tracking-[0.2em]" style={{ fontSize: "11px" }}>
+          <p className="px-1 pt-1 text-gray-600 font-bold uppercase tracking-[0.14em]" style={{ fontSize: "11px" }}>
             Protocol Stats
           </p>
 
@@ -197,7 +197,7 @@ export const Sidebar = React.memo(function Sidebar({
             />
           </UiPanel>
 
-          <p className="px-1 pt-1 text-gray-600 font-bold uppercase tracking-[0.2em]" style={{ fontSize: "11px" }}>
+          <p className="px-1 pt-1 text-gray-600 font-bold uppercase tracking-[0.14em]" style={{ fontSize: "11px" }}>
             Hot Tiles
           </p>
           <UiPanel
@@ -241,7 +241,7 @@ export const Sidebar = React.memo(function Sidebar({
           >
             <div className="px-2 py-0.5">
               <div className="mb-2.5 flex items-center justify-between gap-1">
-                <p className="flex items-center gap-1 text-[#455073] text-[10px] font-bold uppercase tracking-[0.14em]">
+                <p className="flex items-center gap-1 text-[#455073] text-[10px] font-bold uppercase tracking-[0.1em]">
                   <span className="h-2.5 w-1 rounded-sm bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.28)]" />
                   Rewards
                 </p>
@@ -276,10 +276,10 @@ export const Sidebar = React.memo(function Sidebar({
                       style={{ animationDelay: `${idx * 0.05}s` }}
                     >
                       <div className="min-w-0 flex-1 pr-1">
-                        <span className="block text-[8px] font-bold uppercase leading-none tracking-wide text-amber-500/70">
+                        <span className="lore-nums block text-[8px] font-bold uppercase leading-none tracking-wide text-amber-500/70">
                           #{win.epoch}
                         </span>
-                        <span className="mt-0.5 block truncate text-[9px] font-black leading-none tabular-nums text-emerald-400">
+                        <span className="lore-nums mt-0.5 block truncate text-[9px] font-black leading-none tabular-nums text-emerald-400">
                           {formatRewardAmount(win.amountWei)} LINEA
                         </span>
                       </div>
@@ -340,7 +340,7 @@ const StatRow = React.memo(function StatRow({
         <p className="text-gray-500 font-semibold uppercase leading-none tracking-wider" style={{ fontSize: 9 }}>
           {label}
         </p>
-        <p className={`mt-0.5 truncate font-bold leading-tight ${loading ? "text-gray-600" : accentColor}`} style={{ fontSize: 12 }}>
+        <p className={`lore-nums mt-0.5 truncate font-bold leading-tight ${loading ? "text-gray-600" : accentColor}`} style={{ fontSize: 12 }}>
           {value ?? "0.00 LINEA"}
         </p>
       </div>

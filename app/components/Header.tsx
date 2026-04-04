@@ -19,6 +19,7 @@ interface HeaderProps {
   isRevealing: boolean;
   coldBootDefaults?: boolean;
   liveStateReady?: boolean;
+  timerReady?: boolean;
   timeLeft: number;
   realTotalStaked: number;
   rolloverAmount: number;
@@ -53,6 +54,7 @@ export const Header = React.memo(function Header({
   isRevealing,
   coldBootDefaults = false,
   liveStateReady = true,
+  timerReady = true,
   timeLeft,
   realTotalStaked,
   rolloverAmount,
@@ -77,7 +79,8 @@ export const Header = React.memo(function Header({
 }: HeaderProps) {
   const { login, logout, authenticated } = usePrivy();
   const showColdBootDefaults = coldBootDefaults && !liveStateReady && !isRevealing;
-  // Sticky "Analyzing": avoid switching to Mining during brief 00:00 refreshes
+  const timerStalled = timerReady && liveStateReady && !showColdBootDefaults && !isRevealing && timeLeft === 0;
+  const showNumericTimer = (liveStateReady || showColdBootDefaults) && !timerStalled;
   const [hydrated, setHydrated] = useState(false);
   const [showAnalyzing, setShowAnalyzing] = useState(false);
   const [embeddedAddressCopied, setEmbeddedAddressCopied] = useState(false);
@@ -105,7 +108,7 @@ export const Header = React.memo(function Header({
       return;
     }
     if (timeLeft === 0 || isRevealing) setShowAnalyzing(true);
-    else if (timeLeft > 10 && !isRevealing) setShowAnalyzing(false);
+    else if (timeLeft > 0 && !isRevealing) setShowAnalyzing(false);
   }, [liveStateReady, timeLeft, isRevealing]);
 
   useEffect(() => {
@@ -189,7 +192,6 @@ export const Header = React.memo(function Header({
       })
       .catch(() => {});
   }, [embeddedWalletAddress]);
-
   return (
     <>
     {jackpotInfo && (
@@ -207,21 +209,21 @@ export const Header = React.memo(function Header({
 
     <header className="grid grid-cols-1 min-[900px]:grid-cols-12 gap-2 mb-2">
       {/* Epoch + WinsTicker */}
-      <div className="min-[900px]:col-span-4 flex flex-col rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up overflow-hidden" style={{ animationDelay: "0.05s" }}>
+      <div className="min-[900px]:col-span-4 min-[900px]:h-[90px] flex flex-col rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up overflow-hidden" style={{ animationDelay: "0.05s" }}>
         <div className="grid grid-cols-[5.25rem_minmax(0,1fr)_4.25rem] sm:grid-cols-[7rem_minmax(0,1fr)_5.5rem] items-stretch shrink-0">
         {/* LEFT - Epoch */}
-        <div className="flex flex-col items-center justify-center py-1.5 px-1">
-          <div className="text-[8px] sm:text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Epoch</div>
-          <div className="rounded-md overflow-visible w-full max-w-[5rem] sm:max-w-[6.25rem] mx-auto">
+        <div className="flex flex-col items-center justify-center py-1 px-1">
+          <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Epoch</div>
+          <div className="rounded-md overflow-visible w-full max-w-[6.25rem] mx-auto">
             <div
-              className={`px-1.5 sm:px-2.5 h-[1.75rem] rounded-md border flex items-center justify-center gap-1 sm:gap-1.5 transition-colors duration-200 ${
+              className={`px-2.5 h-[1.75rem] rounded-md border flex items-center justify-center gap-1.5 transition-colors duration-200 ${
                 isRevealing
                   ? "bg-amber-500/15 border-amber-500/40 text-amber-400 reveal-glow"
                   : "bg-violet-500/10 border-violet-500/30 text-violet-400"
               }`}
             >
             <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isRevealing ? "bg-amber-400 reveal-dot" : "bg-emerald-400 animate-synced-pulse"}`} />
-            <span className={`text-[9px] font-bold uppercase tracking-[0.08em] sm:text-[11px] sm:tracking-widest whitespace-nowrap ${isRevealing ? "reveal-text-blink" : ""}`}>
+            <span className={`lore-nums text-[11px] font-bold uppercase tracking-widest whitespace-nowrap ${isRevealing ? "reveal-text-blink" : ""}`}>
               {isRevealing ? "REVEAL" : visualEpoch ? `#${visualEpoch}` : showColdBootDefaults ? "#0" : "SYNC"}
             </span>
           </div>
@@ -229,25 +231,33 @@ export const Header = React.memo(function Header({
         </div>
 
         {/* CENTER - Timer (expands to fill, content fixed) */}
-        <div className="flex flex-col items-center justify-center py-1.5 border-x border-white/[0.06] min-w-0">
-          <div className="text-[8px] sm:text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Timer</div>
+        <div className="flex flex-col items-center justify-center py-1 border-x border-white/[0.06] min-w-0">
+          <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Timer</div>
           <div
-            className={`w-full max-w-[5.5rem] sm:max-w-[7rem] h-[2rem] flex items-center justify-center font-mono text-[1.35rem] sm:text-[1.75rem] font-black tracking-tight leading-none tabular-nums transition-colors duration-300 ${
+            className={`lore-nums w-[5.8rem] h-[1.6rem] flex items-center justify-center font-black leading-none tracking-tight tabular-nums transition-colors duration-300 ${
               isRevealing
                 ? "text-amber-400 drop-shadow-[0_0_12px_rgba(251,191,36,0.5)]"
-                : !liveStateReady && !showColdBootDefaults
+                : !timerReady && !showColdBootDefaults
                   ? "text-gray-500"
-                : timeLeft <= 10
-                  ? "text-red-400 drop-shadow-[0_0_8px_rgba(239,68,68,0.4)]"
-                  : "text-white"
+                  : timerStalled
+                    ? "text-amber-300/90"
+                    : timeLeft <= 10
+                    ? "text-red-400 drop-shadow-[0_0_8px_rgba(239,68,68,0.4)]"
+                    : "text-white"
             }`}
           >
-            {liveStateReady || showColdBootDefaults ? formatTime(timeLeft) : "--:--"}
+            {showNumericTimer ? (
+              <span className="text-[1.35rem]">{formatTime(timeLeft)}</span>
+            ) : timerStalled ? (
+              <span className="text-[0.72rem] font-bold uppercase tracking-[0.16em]">Locked</span>
+            ) : (
+              <span className="text-[1.35rem]">--:--</span>
+            )}
           </div>
         </div>
 
         {/* RIGHT - Status */}
-        <div className="flex flex-col items-center justify-center py-1.5">
+        <div className="flex flex-col items-center justify-center py-1">
           {showAnalyzing ? (
             <>
               <div className="flex items-end gap-[3px] h-[1.25rem] mb-1 [&>span]:origin-bottom">
@@ -257,14 +267,14 @@ export const Header = React.memo(function Header({
                 <span className="w-[3px] bg-amber-400/70 rounded-full animate-[bar-2_0.6s_ease-in-out_infinite]" style={{ height: "55%", animationDelay: "0.15s" }} />
                 <span className="w-[3px] bg-amber-400/90 rounded-full animate-[bar-1_0.6s_ease-in-out_infinite]" style={{ height: "25%", animationDelay: "0.05s" }} />
               </div>
-              <span className="text-[8px] sm:text-[10px] font-bold text-amber-400/80 uppercase tracking-[0.14em] sm:tracking-widest text-center">Analyzing</span>
+              <span className="text-[10px] font-bold text-amber-400/80 uppercase tracking-widest text-center">Analyzing</span>
             </>
           ) : (
             <div className="flex flex-col items-center mt-1">
               <div className="animate-float" style={{ animationDuration: "2.5s" }}>
-                <PickaxeIcon className="w-6 h-6 sm:w-8 sm:h-8" />
+                <PickaxeIcon className="w-8 h-8" />
               </div>
-              <span className="text-[8px] sm:text-[10px] font-bold text-violet-400/50 uppercase tracking-[0.14em] sm:tracking-widest mt-0.5 text-center">Mining</span>
+              <span className="text-[10px] font-bold text-violet-400/50 uppercase tracking-widest mt-0.5 text-center">Mining</span>
             </div>
           )}
         </div>
@@ -281,7 +291,7 @@ export const Header = React.memo(function Header({
         )}
 
         {showWinsTicker && (
-          <div className="border-t border-white/[0.06] flex-1 min-h-0 flex items-center">
+          <div className="border-t border-white/[0.06] min-h-[1.9rem] flex-1 flex items-center">
             <WinsTicker wins={recentWins} reducedMotion={reducedMotion} />
           </div>
         )}

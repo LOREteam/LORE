@@ -48,6 +48,9 @@ export function createRouteCache<T>(maxEntries: number) {
       writeVersion.set(key, nextVersion);
       return nextVersion;
     },
+    getWriteVersion(key: string) {
+      return writeVersion.get(key) ?? 0;
+    },
     setIfLatest(key: string, payload: T, ttlMs: number, version: number) {
       const latestVersion = writeVersion.get(key) ?? 0;
       if (version < latestVersion) {
@@ -59,6 +62,11 @@ export function createRouteCache<T>(maxEntries: number) {
       });
       pruneOldest(cache, maxEntries);
       return payload;
+    },
+    invalidate(key: string) {
+      cache.delete(key);
+      inflight.delete(key);
+      refresh.delete(key);
     },
     delete(key: string) {
       cache.delete(key);

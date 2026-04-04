@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     if (!isAddress(authAddress)) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth address" }, { status: 400 }), { varyCookie: true });
     }
-    if (!/^0x[a-fA-F0-9]{130,}$/.test(authSignature)) {
+    if (!/^0x[a-fA-F0-9]{128,130}$/.test(authSignature)) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid signature" }, { status: 400 }), { varyCookie: true });
     }
 

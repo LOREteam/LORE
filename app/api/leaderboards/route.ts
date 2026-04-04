@@ -5,7 +5,6 @@ import {
   beginRouteMetric,
   failRouteMetric,
   finishRouteMetric,
-  markRouteBackgroundRefresh,
   markRouteCacheHit,
   markRouteInflightJoin,
   markRouteStaleServed,
@@ -15,6 +14,8 @@ import { LEADERBOARD_TOP_N } from "../../lib/constants";
 import type { LeaderboardEntry, LuckyTileEntry } from "../../lib/types";
 import { getAllBetRows, getAllRewardClaims, getChatProfiles, getEpochMap, getMetaJson, setMetaJson } from "../../../server/storage";
 import { logRouteError } from "../_lib/routeError";
+import { createRouteCache } from "../_lib/routeCache";
+import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
 
 type LeaderboardsPayload = {
   biggestSingleWin: LeaderboardEntry[];
@@ -27,11 +28,6 @@ type LeaderboardsPayload = {
   error?: string;
 };
 
-type CacheEntry = {
-  payload: LeaderboardsPayload;
-  expiresAt: number;
-};
-
 type LeaderboardsSnapshotEnvelope = {
   payload: LeaderboardsPayload;
   savedAt: number;
@@ -42,12 +38,9 @@ const LEADERBOARDS_STALE_REFRESH_MS = 60_000;
 const LEADERBOARDS_SNAPSHOT_MAX_AGE_MS = 60 * 60 * 1000;
 const ROUTE_METRIC_KEY = "api/leaderboards";
 const LEADERBOARDS_SNAPSHOT_META_KEY = "snapshot:leaderboards:v1";
-
-let leaderboardsCache: CacheEntry | null = null;
-let leaderboardsInflight: Promise<LeaderboardsPayload> | null = null;
-let leaderboardsRefreshPromise: Promise<void> | null = null;
-let leaderboardsBuildSeq = 0;
-let leaderboardsAppliedSeq = 0;
+const LEADERBOARDS_CACHE_KEY = "latest";
+const LEADERBOARDS_ROUTE_CACHE_MAX_KEYS = 2;
+const leaderboardsRouteCache = createRouteCache<LeaderboardsPayload>(LEADERBOARDS_ROUTE_CACHE_MAX_KEYS);
 
 type UserAgg = {
   totalWagered: bigint;
@@ -331,34 +324,21 @@ function saveLeaderboardsSnapshot(payload: LeaderboardsPayload) {
   });
 }
 
-function commitLeaderboardsCache(payload: LeaderboardsPayload, ttlMs: number, seq: number) {
-  if (seq < leaderboardsAppliedSeq) {
-    return leaderboardsCache?.payload ?? payload;
-  }
-  leaderboardsAppliedSeq = seq;
-  leaderboardsCache = {
-    payload,
-    expiresAt: Date.now() + ttlMs,
-  };
-  saveLeaderboardsSnapshot(payload);
-  return payload;
-}
-
 function startLeaderboardsRefresh() {
-  if (leaderboardsRefreshPromise || leaderboardsInflight) return;
-
-  markRouteBackgroundRefresh(ROUTE_METRIC_KEY);
-  const seq = ++leaderboardsBuildSeq;
-  leaderboardsRefreshPromise = buildLeaderboardsPayload()
-    .then((result) => {
-      commitLeaderboardsCache(result, LEADERBOARDS_STALE_REFRESH_MS, seq);
-    })
-    .catch((error) => {
-      console.warn("[api/leaderboards] Background refresh failed:", (error as Error).message);
-    })
-    .finally(() => {
-      leaderboardsRefreshPromise = null;
-    });
+  startVersionedBackgroundRefresh({
+    cache: leaderboardsRouteCache,
+    cacheKey: LEADERBOARDS_CACHE_KEY,
+    ttlMs: LEADERBOARDS_STALE_REFRESH_MS,
+    routeMetricKey: ROUTE_METRIC_KEY,
+    build: () => buildLeaderboardsPayload(),
+    toPayload: (result) => result,
+    onCommit: (result) => {
+      saveLeaderboardsSnapshot(result);
+    },
+    onError: (error) => {
+      logRouteError(ROUTE_METRIC_KEY, error, { phase: "background-refresh" });
+    },
+  });
 }
 
 export async function GET(request: Request) {
@@ -371,23 +351,14 @@ export async function GET(request: Request) {
 
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
   const now = Date.now();
-  if (leaderboardsCache && leaderboardsCache.expiresAt > now) {
+  const cached = leaderboardsRouteCache.getFresh(LEADERBOARDS_CACHE_KEY, now);
+  if (cached) {
     markRouteCacheHit(ROUTE_METRIC_KEY);
     finishRouteMetric(metric, 200);
-    return jsonNoStore(leaderboardsCache.payload);
+    return jsonNoStore(cached);
   }
 
-  if (!leaderboardsCache) {
-    const snapshot = loadLeaderboardsSnapshot();
-    if (snapshot) {
-      leaderboardsCache = {
-        payload: snapshot,
-        expiresAt: now - 1,
-      };
-    }
-  }
-
-  const staleCache = leaderboardsCache?.payload ?? null;
+  const staleCache = leaderboardsRouteCache.getStale(LEADERBOARDS_CACHE_KEY) ?? loadLeaderboardsSnapshot();
   if (staleCache) {
     markRouteStaleServed(ROUTE_METRIC_KEY);
     startLeaderboardsRefresh();
@@ -396,18 +367,21 @@ export async function GET(request: Request) {
   }
 
   try {
-    const payload = leaderboardsInflight
-      ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await leaderboardsInflight)
+    const inflight = leaderboardsRouteCache.getInflight(LEADERBOARDS_CACHE_KEY);
+    const payload = inflight
+      ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await inflight)
       : await (() => {
-          const seq = ++leaderboardsBuildSeq;
-          leaderboardsInflight = buildLeaderboardsPayload()
-            .then((result) => {
-              return commitLeaderboardsCache(result, LEADERBOARDS_ROUTE_CACHE_MS, seq);
-            })
-            .finally(() => {
-              leaderboardsInflight = null;
-            });
-          return leaderboardsInflight;
+          const { requestPromise } = startVersionedInflightBuild({
+            cache: leaderboardsRouteCache,
+            cacheKey: LEADERBOARDS_CACHE_KEY,
+            ttlMs: LEADERBOARDS_ROUTE_CACHE_MS,
+            build: () => buildLeaderboardsPayload(),
+            toPayload: (result) => result,
+            onCommit: (result) => {
+              saveLeaderboardsSnapshot(result);
+            },
+          });
+          return requestPromise;
         })();
 
     finishRouteMetric(metric, 200);

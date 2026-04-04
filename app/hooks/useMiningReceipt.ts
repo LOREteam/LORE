@@ -4,8 +4,7 @@ import { useCallback } from "react";
 import type { MutableRefObject } from "react";
 import type { PublicClient } from "viem";
 import { TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
-
-type ReceiptState = "confirmed" | "pending";
+import type { ReceiptState } from "./useMining.stateTypes";
 
 interface UseMiningReceiptOptions {
   publicClientRef: MutableRefObject<PublicClient | undefined>;
@@ -15,7 +14,7 @@ export function useMiningReceipt({ publicClientRef }: UseMiningReceiptOptions) {
   return useCallback(
     async (hash: `0x${string}`, clientOverride?: PublicClient): Promise<ReceiptState> => {
       const client = clientOverride ?? publicClientRef.current;
-      if (!client) throw new Error("Public client not ready");
+      if (!client) throw new Error("Public client unavailable");
 
       try {
         const receipt = await client.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });

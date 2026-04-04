@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 import { parseUnits } from "viem";
 import { log } from "../lib/logger";
+import { clearMiningTxPathState } from "../lib/miningTxPath";
 import { delay, isUserRejection, normalizeDecimalInput } from "../lib/utils";
 import {
   getBetErrorMessage,
@@ -11,8 +12,8 @@ import {
   isRetryableError,
   normalizeTiles,
 } from "./useMining.shared";
+import type { GasOverrides } from "./useMining.types";
 
-type GasOverrides = { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint };
 type MineAttemptSource = "ManualMine" | "DirectMine";
 type NotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 
@@ -122,6 +123,7 @@ export function useMiningManualActions({
         return await submitMineAttempt("ManualMine", normalizedTiles, betAmountStr, actorAddress);
       } catch (error) {
         if (!isUserRejection(error)) {
+          clearMiningTxPathState();
           const reason = getBetErrorMessage(error);
           log.warn("ManualMine", "bet failed", { reason });
           notify?.(reason, "danger");
@@ -151,6 +153,7 @@ export function useMiningManualActions({
         return await submitMineAttempt("DirectMine", normalizedTiles, betAmountStr, actorAddress);
       } catch (error) {
         if (!isUserRejection(error)) {
+          clearMiningTxPathState();
           const reason = getBetErrorMessage(error);
           log.warn("DirectMine", "bet failed", { reason });
           notify?.(reason, "danger");

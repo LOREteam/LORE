@@ -15,6 +15,11 @@ export type FeeOverrides = {
 
 const ONE_HUNDRED = 100n;
 const MIN_PRIORITY_FEE_WEI = 1n;
+
+/** Ceiling division for bigint: rounds up so fee bumps never under-pay. */
+function ceilDiv(a: bigint, b: bigint): bigint {
+  return (a + b - 1n) / b;
+}
 const LINEA_MAINNET_PRIORITY_FLOOR = parseGwei("0.01");
 const LINEA_SEPOLIA_PRIORITY_FLOOR = parseGwei("0.04");
 const LINEA_MAINNET_PRIORITY_CAP = parseGwei("0.06");
@@ -99,13 +104,13 @@ export function getLineaFeeOverrides(
   const priorityFloor = getPriorityFloor(chainId);
   if (fees.maxFeePerGas !== undefined) {
     const rawPriority = fees.maxPriorityFeePerGas ?? 0n;
-    let maxFee = (fees.maxFeePerGas * baseBumpPercent) / ONE_HUNDRED;
+    let maxFee = ceilDiv(fees.maxFeePerGas * baseBumpPercent, ONE_HUNDRED);
     if (maxFee < MIN_PRIORITY_FEE_WEI) {
       maxFee = MIN_PRIORITY_FEE_WEI;
     }
 
     let priority = rawPriority > 0n
-      ? (rawPriority * priorityBumpPercent) / ONE_HUNDRED
+      ? ceilDiv(rawPriority * priorityBumpPercent, ONE_HUNDRED)
       : priorityFloor;
 
     if (priority < priorityFloor) {
@@ -125,7 +130,7 @@ export function getLineaFeeOverrides(
 
   if (fees.gasPrice !== undefined) {
     return {
-      gasPrice: (fees.gasPrice * baseBumpPercent) / ONE_HUNDRED,
+      gasPrice: ceilDiv(fees.gasPrice * baseBumpPercent, ONE_HUNDRED),
     };
   }
 
@@ -144,14 +149,14 @@ export function getKeeperFeeOverrides(
   if (fees.maxFeePerGas !== undefined) {
     const rawPriority = fees.maxPriorityFeePerGas ?? 0n;
     let priority = rawPriority > 0n
-      ? (rawPriority * priorityBumpPercent) / ONE_HUNDRED
+      ? ceilDiv(rawPriority * priorityBumpPercent, ONE_HUNDRED)
       : priorityFloor;
 
     if (priority < priorityFloor) {
       priority = priorityFloor;
     }
 
-    let maxFee = (fees.maxFeePerGas * maxFeeBumpPercent) / ONE_HUNDRED;
+    let maxFee = ceilDiv(fees.maxFeePerGas * maxFeeBumpPercent, ONE_HUNDRED);
     if (maxFee < priority) {
       maxFee = priority;
     }
@@ -163,7 +168,7 @@ export function getKeeperFeeOverrides(
   }
 
   if (fees.gasPrice !== undefined) {
-    let gasPrice = (fees.gasPrice * maxFeeBumpPercent) / ONE_HUNDRED;
+    let gasPrice = ceilDiv(fees.gasPrice * maxFeeBumpPercent, ONE_HUNDRED);
     const floor = getKeeperGasPriceFloor(chainId);
     if (gasPrice < floor) {
       gasPrice = floor;

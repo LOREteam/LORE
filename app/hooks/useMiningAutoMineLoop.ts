@@ -10,14 +10,10 @@ import { planAutoMineRound } from "./useMiningRoundPlanning";
 import { finalizeConfirmedRound, recoverRoundAfterRpcError } from "./useMiningRoundRecovery";
 import { awaitEpochReadyToBet } from "./useMiningEpochTiming";
 import { getNetworkRetryDelayMs } from "./useMiningNetworkRetry";
+import type { GasOverrides } from "./useMining.types";
+import type { PendingBetState } from "./useMining.stateTypes";
 
-type GasOverrides = { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint };
 type SessionRefreshFn = () => Promise<void>;
-
-interface PendingBetState {
-  submittedAt: number;
-  nonce: number;
-}
 
 interface CompleteRoundArgs {
   betStr: string;
@@ -81,6 +77,41 @@ interface RunAutoMineLoopOptions {
   setSelection: (tiles: number[], epoch: string | null) => void;
   singleAmountRaw: bigint;
   startRoundIndex: number;
+}
+
+const PUBLIC_CLIENT_RECONNECT_TIMEOUT_MS = 20_000;
+const PUBLIC_CLIENT_RECONNECT_POLL_MS = 300;
+
+async function awaitActivePublicClient(params: {
+  autoMineActive: () => boolean;
+  onProgress: (message: string) => void;
+  readClient: () => PublicClient | undefined;
+  renewLock: () => void;
+  roundIndex: number;
+  rounds: number;
+}) {
+  const { autoMineActive, onProgress, readClient, renewLock, roundIndex, rounds } = params;
+  const startedAt = Date.now();
+  let announcedWait = false;
+
+  while (autoMineActive()) {
+    const client = readClient();
+    if (client) return client;
+
+    if (!announcedWait) {
+      onProgress(`${roundIndex + 1} / ${rounds} - reconnecting RPC...`);
+      announcedWait = true;
+    }
+
+    if (Date.now() - startedAt >= PUBLIC_CLIENT_RECONNECT_TIMEOUT_MS) {
+      throw new Error("Public client not ready");
+    }
+
+    renewLock();
+    await delay(PUBLIC_CLIENT_RECONNECT_POLL_MS);
+  }
+
+  return null;
 }
 
 export async function runAutoMineLoop({
@@ -166,7 +197,14 @@ export async function runAutoMineLoop({
     let roundCandidateEpochs: bigint[] = [];
 
     try {
-      const client = readClient();
+      const client = await awaitActivePublicClient({
+        autoMineActive,
+        onProgress,
+        readClient,
+        renewLock,
+        roundIndex,
+        rounds,
+      });
       if (!client) {
         stopReason = "no-client";
         break;

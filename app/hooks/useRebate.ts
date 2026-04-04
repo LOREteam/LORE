@@ -70,6 +70,7 @@ const REBATE_EXACT_CHUNK_SIZE = 48;
 const CLAIM_GAS_HEADROOM_BPS = 1_200n;
 const CLAIM_GAS_BUFFER = 80_000n;
 const REBATE_CLIENT_CACHE_TTL_MS = 60_000;
+const REBATE_CLIENT_CACHE_DISPLAY_TTL_MS = 12 * 60 * 60 * 1000;
 const REBATE_REFRESH_MS = 30_000;
 const REBATE_HIDDEN_REFRESH_MS = 120_000;
 const REBATE_WARM_REFRESH_MS = 90_000;
@@ -344,7 +345,7 @@ export function useRebate(options?: UseRebateOptions) {
     [publicClient],
   );
 
-  const refetchRebateInfo = useCallback(async (options?: { forceFresh?: boolean }) => {
+  const refetchRebateInfo = useCallback(async (options?: { forceFresh?: boolean; includeExact?: boolean }) => {
     if (!enabled || !rebateAddress) {
       resetState();
       return;
@@ -374,7 +375,7 @@ export function useRebate(options?: UseRebateOptions) {
     const requestId = ++requestIdRef.current;
     if (!hasLoadedRef.current) {
       const cached = loadCachedRebatePayload(rebateAddress);
-      if (cached && Date.now() - cached.cachedAt < REBATE_CLIENT_CACHE_TTL_MS) {
+      if (cached && Date.now() - cached.cachedAt < REBATE_CLIENT_CACHE_DISPLAY_TTL_MS) {
         applyPayload(cached);
         hasLoadedRef.current = true;
         cacheSavedAtRef.current = cached.cachedAt;
@@ -388,8 +389,10 @@ export function useRebate(options?: UseRebateOptions) {
     }
 
     try {
-      const refreshSuffix = options?.forceFresh ? `&refresh=${Date.now()}` : "";
-      const response = await fetch(`/api/rebates?user=${rebateAddress.toLowerCase()}${refreshSuffix}`, {
+      const query = new URLSearchParams({ user: rebateAddress.toLowerCase() });
+      if (options?.forceFresh) query.set("refresh", String(Date.now()));
+      if (options?.includeExact) query.set("exact", "1");
+      const response = await fetch(`/api/rebates?${query.toString()}`, {
         cache: "no-store",
       });
       const payload = await readJsonResponse<ApiRebatePayload>(response);
@@ -459,7 +462,7 @@ export function useRebate(options?: UseRebateOptions) {
 
     if (!hasLoadedRef.current) {
       const cached = loadCachedRebatePayload(rebateAddress);
-      if (cached && Date.now() - cached.cachedAt < REBATE_CLIENT_CACHE_TTL_MS) {
+      if (cached && Date.now() - cached.cachedAt < REBATE_CLIENT_CACHE_DISPLAY_TTL_MS) {
         applyPayload(cached);
         hasLoadedRef.current = true;
         cacheSavedAtRef.current = cached.cachedAt;
@@ -494,6 +497,24 @@ export function useRebate(options?: UseRebateOptions) {
       }
     };
   }, [active, applyPayload, enabled, isPageVisible, rebateAddress, refetchRebateInfo, resetState]);
+
+  useEffect(() => {
+    if (!enabled || !active || !isPageVisible || !rebateAddress) return;
+    if (!hasLoaded || isLoading || !isSupported) return;
+    if (claimableEpochCount <= 0 || claimableEpochs.length > 0) return;
+    void refetchRebateInfo({ includeExact: true });
+  }, [
+    active,
+    claimableEpochCount,
+    claimableEpochs.length,
+    enabled,
+    hasLoaded,
+    isLoading,
+    isPageVisible,
+    isSupported,
+    rebateAddress,
+    refetchRebateInfo,
+  ]);
 
   useEffect(() => {
     if (!enabled || !CONTRACT_HAS_REBATE_API) {

@@ -1,4 +1,8 @@
 import { spawnSync } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
+
+const DEFAULT_SMOKE_BASE_URL = process.env.SMOKE_BASE_URL ?? "http://localhost:3000";
 
 const npmCommand = process.env.npm_execpath && process.execPath
   ? process.execPath
@@ -73,15 +77,61 @@ function flushStepOutput(result) {
   }
 }
 
+function prepareStep(step) {
+  if (!Array.isArray(step.args) || step.args.length < 2) {
+    return;
+  }
+
+  const [npmSubcommand, scriptName] = step.args;
+  if (npmSubcommand !== "run" || scriptName !== "build") {
+    return;
+  }
+
+  const nextDir = resolve(".next");
+  if (existsSync(nextDir)) {
+    rmSync(nextDir, { recursive: true, force: true });
+  }
+}
+
+async function canReachSmokeBaseUrl(baseUrl) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
+    const response = await fetch(baseUrl, {
+      method: "HEAD",
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+const smokeBaseReachable = await canReachSmokeBaseUrl(DEFAULT_SMOKE_BASE_URL);
+
 for (const step of steps) {
   const { command, args, retryOnce } = step;
+  if (
+    Array.isArray(args) &&
+    args[0] === "run" &&
+    (args[1] === "smoke:http" || args[1] === "smoke:browser") &&
+    !smokeBaseReachable
+  ) {
+    console.warn(`\n> ${formatStepLabel(command, args)}`);
+    console.warn(`Skipping ${args[1]} because ${DEFAULT_SMOKE_BASE_URL} is not reachable.`);
+    continue;
+  }
+
   const startedAt = Date.now();
   console.log(`\n> ${formatStepLabel(command, args)}`);
+  prepareStep(step);
   let result = runStep(step);
   flushStepOutput(result);
 
   if (retryOnce && typeof result.status === "number" && result.status !== 0) {
     console.warn(`Retrying ${formatStepLabel(command, args)} once after initial failure...`);
+    prepareStep(step);
     result = runStep(step);
     flushStepOutput(result);
   }

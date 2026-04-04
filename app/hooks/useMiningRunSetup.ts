@@ -4,22 +4,11 @@ import { parseUnits } from "viem";
 import type { PublicClient } from "viem";
 import { log } from "../lib/logger";
 import { delay, normalizeDecimalInput } from "../lib/utils";
+import type { GasOverrides, SilentSendFn } from "./useMining.types";
+import type { PendingApproveState, ReceiptState } from "./useMining.stateTypes";
 import { clearSession } from "./useMining.shared";
 import { prepareAutoMineBootstrap } from "./useMiningAutoMineBootstrap";
 import { readWithNetworkRetry } from "./useMiningNetworkRetry";
-
-type GasOverrides = { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint };
-type ReceiptState = "confirmed" | "pending";
-type SilentSendFn = (
-  tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number },
-  gasOverrides?: GasOverrides,
-) => Promise<`0x${string}`>;
-
-interface PendingApproveState {
-  hash: `0x${string}`;
-  submittedAt: number;
-  nonce: number;
-}
 
 interface PrepareAutoMineRunSetupOptions {
   acquireTabLock: () => boolean;

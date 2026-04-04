@@ -105,6 +105,7 @@ interface CreateLineaOreClientViewPropsOptions {
   leaderboardsLoading: PageTabContentProps["leaderboardsProps"]["loading"];
   leaderboardsRefetch: PageTabContentProps["leaderboardsProps"]["refetch"];
   liveStateReady: PageTabContentProps["hubProps"]["liveStateReady"];
+  timerReady: HeaderProps["timerReady"];
   lowEthBalance: boolean;
   lowTokenBalance: boolean;
   chatWalletAddress?: `0x${string}` | null;
@@ -112,6 +113,9 @@ interface CreateLineaOreClientViewPropsOptions {
   onChatOpenChange: React.ComponentProps<typeof FloatingActions>["onChatOpenChange"];
   openWalletSettings: HeaderProps["onOpenWalletSettings"];
   pendingTransactionStatus: WalletSettingsProps["pendingTransactionStatus"];
+  eip7702Diagnostic: WalletSettingsProps["eip7702Diagnostic"];
+  onRunEip7702Diagnostic: WalletSettingsProps["onRunEip7702Diagnostic"];
+  onRunEip7702SendDiagnostic: WalletSettingsProps["onRunEip7702SendDiagnostic"];
   rebateInfo: PageTabContentProps["rebateProps"]["rebateInfo"];
   recentWins: HeaderProps["recentWins"];
   reducedMotion: boolean;
@@ -234,6 +238,7 @@ export function createLineaOreClientViewProps({
   leaderboardsLoading,
   leaderboardsRefetch,
   liveStateReady,
+  timerReady,
   lowEthBalance,
   lowTokenBalance,
   chatWalletAddress,
@@ -241,6 +246,9 @@ export function createLineaOreClientViewProps({
   onChatOpenChange,
   openWalletSettings,
   pendingTransactionStatus,
+  eip7702Diagnostic,
+  onRunEip7702Diagnostic,
+  onRunEip7702SendDiagnostic,
   rebateInfo,
   recentWins,
   reducedMotion,
@@ -294,6 +302,7 @@ export function createLineaOreClientViewProps({
       isRevealing,
       coldBootDefaults,
       liveStateReady,
+      timerReady,
       timeLeft,
       rolloverAmount,
       jackpotInfo,
@@ -362,6 +371,9 @@ export function createLineaOreClientViewProps({
       isCancellingPendingTx,
       refreshPendingTransactionStatus,
       cancelPendingTransaction,
+      eip7702Diagnostic,
+      runEip7702Diagnostic: onRunEip7702Diagnostic,
+      runEip7702SendDiagnostic: onRunEip7702SendDiagnostic,
     }),
     pageTabContentProps: buildPageTabContentProps({
       activeTab,
@@ -428,6 +440,7 @@ export function createLineaOreClientViewProps({
     floatingActionsProps: buildFloatingActionsProps({
       chatWalletAddress,
       onChatOpenChange,
+      chatOpen,
     }),
   };
 }

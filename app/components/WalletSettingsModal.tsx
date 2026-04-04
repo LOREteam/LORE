@@ -8,6 +8,7 @@ import { WalletSettingsDeepScanPanel } from "./wallet/WalletSettingsDeepScanPane
 import { WalletSettingsOverviewPanel } from "./wallet/WalletSettingsOverviewPanel";
 import { WalletSettingsPendingTxPanel } from "./wallet/WalletSettingsPendingTxPanel";
 import { WalletSettingsPrivyPanel } from "./wallet/WalletSettingsPrivyPanel";
+import { WalletSettings7702Panel } from "./wallet/WalletSettings7702Panel";
 import { WalletSettingsTransferPanels } from "./wallet/WalletSettingsTransferPanels";
 import type { WalletSettingsModalProps } from "./wallet/types";
 
@@ -59,6 +60,9 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   isCancellingPendingTx,
   onRefreshPendingTx,
   onCancelPendingTx,
+  eip7702Diagnostic,
+  onRunEip7702Diagnostic,
+  onRunEip7702SendDiagnostic,
 }: WalletSettingsModalProps) {
   if (!isOpen) return null;
 
@@ -98,6 +102,12 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
             onSoundSettingChange={onSoundSettingChange}
             reducedMotion={reducedMotion}
             onReducedMotionChange={onReducedMotionChange}
+          />
+
+          <WalletSettings7702Panel
+            eip7702Diagnostic={eip7702Diagnostic}
+            onRunEip7702Diagnostic={onRunEip7702Diagnostic}
+            onRunEip7702SendDiagnostic={onRunEip7702SendDiagnostic}
           />
 
           <WalletSettingsPendingTxPanel

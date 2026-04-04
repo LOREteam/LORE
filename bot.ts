@@ -31,11 +31,24 @@ const PENDING_RESOLVE_STALE_MS = Number(process.env.PENDING_RESOLVE_STALE_MS ?? 
 const FORCE_REPLACE_PENDING_NONCE_GAP = Number(process.env.FORCE_REPLACE_PENDING_NONCE_GAP ?? "6");
 const REPLACE_PENDING_MAX_FEE_BUMP_PERCENT = 220n;
 const REPLACE_PENDING_PRIORITY_BUMP_PERCENT = 200n;
+const NORMAL_MAX_FEE_BUMP_PERCENT = 130n;
+const NORMAL_PRIORITY_BUMP_PERCENT = 125n;
+const GAS_LIMIT_MARGIN_PERCENT = 150n;
 
 // Fallback grace period: wait this many seconds after epoch ends before resolving.
 // Gives AutoResolve in users' browsers time to handle it first.
 const GRACE_SECONDS = Number(process.env.KEEPER_GRACE_SECONDS ?? "45");
 const ALERT_COOLDOWN_MS = Number(process.env.ALERT_COOLDOWN_MS ?? "300000");
+
+function extractFeeOverrideFields(fees: Record<string, unknown> | null | undefined) {
+  if (!fees) return {};
+  const f = fees as { gasPrice?: bigint; maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint };
+  if (f.gasPrice !== undefined) return { gasPrice: f.gasPrice };
+  if (f.maxFeePerGas !== undefined) {
+    return { maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas };
+  }
+  return {};
+}
 
 const ABI = parseAbi([
   "function resolveEpoch(uint256 epoch) external",
@@ -181,7 +194,14 @@ async function startKeeperBot() {
             const receipt = await publicClient.getTransactionReceipt({ hash: pending.hash });
             console.log(`\nPending resolve receipt found for epoch ${pending.epoch.toString()} (${receipt.status}). Tx: ${pending.hash}`);
             pendingResolve = null;
-          } catch {
+          } catch (receiptCheckErr) {
+            const receiptCheckMsg = receiptCheckErr instanceof Error ? (receiptCheckErr.message ?? "") : String(receiptCheckErr);
+            if (isNetworkLikeError(receiptCheckMsg)) {
+              // Network error – don't assume tx is stale, just wait and retry
+              console.warn(`\nPending resolve receipt check failed (network): ${receiptCheckMsg.slice(0, 100)}`);
+              await delay(3000);
+              continue;
+            }
             const latestNonce = await publicClient.getTransactionCount({
               address: account.address,
               blockTag: "latest",
@@ -238,32 +258,18 @@ async function startKeeperBot() {
             const estimatedFeeOverrides = getKeeperFeeOverrides(
               fees,
               APP_CHAIN.id,
-              replacingPendingTx ? REPLACE_PENDING_MAX_FEE_BUMP_PERCENT : BigInt(130),
-              replacingPendingTx ? REPLACE_PENDING_PRIORITY_BUMP_PERCENT : BigInt(125),
+              replacingPendingTx ? REPLACE_PENDING_MAX_FEE_BUMP_PERCENT : NORMAL_MAX_FEE_BUMP_PERCENT,
+              replacingPendingTx ? REPLACE_PENDING_PRIORITY_BUMP_PERCENT : NORMAL_PRIORITY_BUMP_PERCENT,
             );
-            const rawFeeOverrides = estimatedFeeOverrides?.gasPrice !== undefined
-              ? { gasPrice: estimatedFeeOverrides.gasPrice }
-              : estimatedFeeOverrides?.maxFeePerGas !== undefined
-                ? {
-                    maxFeePerGas: estimatedFeeOverrides.maxFeePerGas,
-                    maxPriorityFeePerGas: estimatedFeeOverrides.maxPriorityFeePerGas,
-                  }
-                : {};
+            const rawFeeOverrides = extractFeeOverrideFields(estimatedFeeOverrides);
             const keeperBalance = await publicClient.getBalance({ address: account.address });
             const feeOverrides = clampKeeperFeeOverridesToBalance(
               rawFeeOverrides,
               est,
               keeperBalance,
             ) ?? {};
-            const txFeeOverrides = feeOverrides.gasPrice !== undefined
-              ? { gasPrice: feeOverrides.gasPrice }
-              : feeOverrides.maxFeePerGas !== undefined
-                ? {
-                    maxFeePerGas: feeOverrides.maxFeePerGas,
-                    maxPriorityFeePerGas: feeOverrides.maxPriorityFeePerGas,
-                  }
-                : {};
-            const gas = getAffordableKeeperGasLimit(est, keeperBalance, feeOverrides, 150n);
+            const txFeeOverrides = extractFeeOverrideFields(feeOverrides);
+            const gas = getAffordableKeeperGasLimit(est, keeperBalance, feeOverrides, GAS_LIMIT_MARGIN_PERCENT);
             if (gas === null) {
               throw new Error(
                 `keeper_insufficient_funds balance=${keeperBalance.toString()} estimatedGas=${est.toString()}`,
@@ -290,7 +296,7 @@ async function startKeeperBot() {
               consecutiveErrors = 0;
               consecutiveNetworkErrors = 0;
             } catch (receiptErr) {
-              const receiptMsg = receiptErr instanceof Error ? receiptErr.message.toLowerCase() : String(receiptErr).toLowerCase();
+              const receiptMsg = receiptErr instanceof Error ? (receiptErr.message?.toLowerCase() ?? "") : String(receiptErr).toLowerCase();
               if (receiptMsg.includes("timed out") || receiptMsg.includes("timeout")) {
                 pendingResolve = { epoch, hash, submittedAt: Date.now() };
                 console.log(`Resolve tx sent but receipt timed out. Will verify next cycles. Tx: ${hash}`);

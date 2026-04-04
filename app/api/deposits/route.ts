@@ -5,7 +5,6 @@ import {
   beginRouteMetric,
   failRouteMetric,
   finishRouteMetric,
-  markRouteBackgroundRefresh,
   markRouteCacheHit,
   markRouteInflightJoin,
   markRouteStaleServed,
@@ -22,6 +21,7 @@ import {
 import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { createRouteCache } from "../_lib/routeCache";
+import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
 
 const LOG_CHUNK_BLOCKS = 50_000n;
 const ENABLE_CHAIN_RECOVERY = process.env.API_DEPOSITS_CHAIN_RECOVERY === "1";
@@ -32,6 +32,7 @@ const DEPOSIT_RECOVERY_EPOCH_LAG = 8;
 const RECENT_RECOVERY_BLOCK_WINDOW = 100_000n;
 const CURRENT_EPOCH_CACHE_MS = 5_000;
 const INLINE_REWARD_EPOCH_LIMIT = 64;
+const depositsBuildInflight = new Map<string, Promise<DepositsBuildResult>>();
 const CURRENT_EPOCH_ABI = parseAbi([
   "function currentEpoch() view returns (uint256)",
 ]);
@@ -135,7 +136,7 @@ function normalizeDepositRow(row: DepositRow): DepositRow {
   const aggregate = new Map<number, number>();
   for (let index = 0; index < tileIds.length; index += 1) {
     const tileId = Number(tileIds[index]);
-    if (!Number.isInteger(tileId) || tileId <= 0) continue;
+    if (!Number.isInteger(tileId) || tileId <= 0 || tileId > 25) continue;
     aggregate.set(tileId, (aggregate.get(tileId) ?? 0) + (normalizedAmounts[index] ?? 0));
   }
 
@@ -414,24 +415,18 @@ async function buildDepositsPayload(
 }
 
 function startDepositsRefresh(cacheKey: string, user: string, includeRewards: boolean) {
-  if (depositsRouteCache.getRefresh(cacheKey) || depositsRouteCache.getInflight(cacheKey)) {
-    return;
-  }
-
-  markRouteBackgroundRefresh(ROUTE_METRIC_KEY);
-  const writeVersion = depositsRouteCache.beginWrite(cacheKey);
-  const refreshPromise = buildDepositsPayload(user, includeRewards, { allowSlowRecovery: true })
-    .then(({ payload }) => {
-      depositsRouteCache.setIfLatest(cacheKey, payload, DEPOSITS_ROUTE_CACHE_MS, writeVersion);
-    })
-    .catch((error) => {
+  startVersionedBackgroundRefresh({
+    cache: depositsRouteCache,
+    cacheKey,
+    ttlMs: DEPOSITS_ROUTE_CACHE_MS,
+    routeMetricKey: ROUTE_METRIC_KEY,
+    build: () => buildDepositsPayload(user, includeRewards, { allowSlowRecovery: true }),
+    toPayload: (result) => result.payload,
+    shouldSkip: () => depositsBuildInflight.has(cacheKey),
+    onError: (error) => {
       logRouteError(ROUTE_METRIC_KEY, error, { user, includeRewards, phase: "background-refresh" });
-    })
-    .finally(() => {
-      depositsRouteCache.clearRefresh(cacheKey);
-    });
-
-  depositsRouteCache.setRefresh(cacheKey, refreshPromise);
+    },
+  });
 }
 
 export async function GET(request: NextRequest) {
@@ -469,20 +464,21 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const inflight = depositsRouteCache.getInflight(cacheKey);
-    const result = inflight
-      ? (markRouteInflightJoin(ROUTE_METRIC_KEY), { payload: await inflight, recoveryNeeded: false })
+    const inflightBuild = depositsBuildInflight.get(cacheKey);
+    const result = inflightBuild
+      ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await inflightBuild)
       : await (() => {
-          const writeVersion = depositsRouteCache.beginWrite(cacheKey);
-          const buildPromise = buildDepositsPayload(user, includeRewards, { allowSlowRecovery: false });
-          const requestPromise = buildPromise
-            .then(({ payload }) => {
-              return depositsRouteCache.setIfLatest(cacheKey, payload, DEPOSITS_ROUTE_CACHE_MS, writeVersion);
-            })
-            .finally(() => {
-              depositsRouteCache.clearInflight(cacheKey);
-            });
-          depositsRouteCache.setInflight(cacheKey, requestPromise);
+          const { buildPromise } = startVersionedInflightBuild({
+            cache: depositsRouteCache,
+            cacheKey,
+            ttlMs: DEPOSITS_ROUTE_CACHE_MS,
+            build: () =>
+              buildDepositsPayload(user, includeRewards, { allowSlowRecovery: false }).finally(() => {
+                depositsBuildInflight.delete(cacheKey);
+              }),
+            toPayload: (result) => result.payload,
+          });
+          depositsBuildInflight.set(cacheKey, buildPromise);
           return buildPromise;
         })();
 

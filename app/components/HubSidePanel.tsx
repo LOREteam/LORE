@@ -22,6 +22,7 @@ interface HubSidePanelProps {
   selectedTilesCount: number;
   isPending: boolean;
   isRevealing: boolean;
+  isAnalyzing: boolean;
   isAutoMining: boolean;
   handleManualMineWithGuard: (betAmountStr: string) => Promise<void>;
   lastBet: LastBet | null;
@@ -32,7 +33,7 @@ interface HubSidePanelProps {
   handleAutoMineWithGuard: (betStr: string, blocks: number, rounds: number) => Promise<void>;
 }
 
-export function HubSidePanel({
+export const HubSidePanel = React.memo(function HubSidePanel({
   chatOpen,
   coldBootDefaults,
   formattedBalance,
@@ -40,6 +41,7 @@ export function HubSidePanel({
   selectedTilesCount,
   isPending,
   isRevealing,
+  isAnalyzing,
   isAutoMining,
   handleManualMineWithGuard,
   lastBet,
@@ -62,6 +64,7 @@ export function HubSidePanel({
             selectedTilesCount={selectedTilesCount}
             isPending={isPending}
             isRevealing={isRevealing}
+            isAnalyzing={isAnalyzing}
             isAutoMining={isAutoMining}
             onMine={handleManualMineWithGuard}
             lastBet={lastBet}
@@ -73,6 +76,7 @@ export function HubSidePanel({
             isAutoMining={isAutoMining}
             isPending={isPending}
             isRevealing={isRevealing}
+            isAnalyzing={isAnalyzing}
             liveStateReady={liveStateReady}
             autoMineProgress={autoMineProgress}
             formattedBalance={formattedBalance}
@@ -84,4 +88,4 @@ export function HubSidePanel({
       )}
     </div>
   );
-}
+});

@@ -59,6 +59,7 @@ type BuildHeaderPropsOptions = {
   isRevealing: HeaderProps["isRevealing"];
   coldBootDefaults: HeaderProps["coldBootDefaults"];
   liveStateReady: HeaderProps["liveStateReady"];
+  timerReady: HeaderProps["timerReady"];
   timeLeft: HeaderProps["timeLeft"];
   rolloverAmount: HeaderProps["rolloverAmount"];
   jackpotInfo: HeaderProps["jackpotInfo"];
@@ -83,6 +84,7 @@ export function buildHeaderProps({
   isRevealing,
   coldBootDefaults,
   liveStateReady,
+  timerReady,
   timeLeft,
   rolloverAmount,
   jackpotInfo,
@@ -106,6 +108,7 @@ export function buildHeaderProps({
     isRevealing,
     coldBootDefaults,
     liveStateReady,
+    timerReady,
     timeLeft,
     rolloverAmount,
     jackpotInfo,
@@ -177,6 +180,9 @@ type BuildWalletShellPropsOptions = {
   isCancellingPendingTx: WalletSettingsProps["isCancellingPendingTx"];
   refreshPendingTransactionStatus: WalletSettingsProps["onRefreshPendingTx"];
   cancelPendingTransaction: WalletSettingsProps["onCancelPendingTx"];
+  eip7702Diagnostic: WalletSettingsProps["eip7702Diagnostic"];
+  runEip7702Diagnostic: WalletSettingsProps["onRunEip7702Diagnostic"];
+  runEip7702SendDiagnostic: WalletSettingsProps["onRunEip7702SendDiagnostic"];
 };
 
 export function buildWalletShellProps({
@@ -229,6 +235,9 @@ export function buildWalletShellProps({
   isCancellingPendingTx,
   refreshPendingTransactionStatus,
   cancelPendingTransaction,
+  eip7702Diagnostic,
+  runEip7702Diagnostic,
+  runEip7702SendDiagnostic,
 }: BuildWalletShellPropsOptions): WalletShellProps {
   return {
     backupGateVersion,
@@ -287,6 +296,9 @@ export function buildWalletShellProps({
       isCancellingPendingTx,
       onRefreshPendingTx: refreshPendingTransactionStatus,
       onCancelPendingTx: cancelPendingTransaction,
+      eip7702Diagnostic,
+      onRunEip7702Diagnostic: runEip7702Diagnostic,
+      onRunEip7702SendDiagnostic: runEip7702SendDiagnostic,
     },
   };
 }
@@ -493,14 +505,17 @@ export function buildPageTabContentProps({
 type BuildFloatingActionsPropsOptions = {
   chatWalletAddress?: `0x${string}` | null;
   onChatOpenChange: FloatingActionsProps["onChatOpenChange"];
+  chatOpen: boolean;
 };
 
 export function buildFloatingActionsProps({
   chatWalletAddress,
   onChatOpenChange,
+  chatOpen,
 }: BuildFloatingActionsPropsOptions): FloatingActionsProps {
   return {
     walletAddress: chatWalletAddress ?? null,
     onChatOpenChange,
+    chatOpen,
   };
 }

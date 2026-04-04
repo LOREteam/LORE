@@ -182,8 +182,12 @@ async function loadClaimableEpochsExact(
   return [...claimable].sort((a, b) => b - a);
 }
 
-async function buildRebatePayload(user: `0x${string}`): Promise<{ payload: RebatePayload; timings: RebateBuildTimings }> {
+async function buildRebatePayload(
+  user: `0x${string}`,
+  options?: { includeExact?: boolean },
+): Promise<{ payload: RebatePayload; timings: RebateBuildTimings }> {
   const totalStartedAt = performance.now();
+  const includeExact = options?.includeExact ?? false;
   if (!CONTRACT_HAS_REBATE_API) {
     return {
       payload: {
@@ -260,7 +264,7 @@ async function buildRebatePayload(user: `0x${string}`): Promise<{ payload: Rebat
   });
 
   const claimableEpochList =
-    summaryClaimableCount > 0
+    includeExact && summaryClaimableCount > 0
       ? await (() => {
           const exactStartedAt = performance.now();
           return loadClaimableEpochsExact(user, epochBigInts).then((result) => {
@@ -332,7 +336,7 @@ async function buildRebatePayload(user: `0x${string}`): Promise<{ payload: Rebat
     payload: {
       isSupported: true,
       pendingRebateWei: totalPendingWei.toString(),
-      claimableEpochCount: claimableEpochList.result.length,
+      claimableEpochCount: includeExact ? claimableEpochList.result.length : summaryClaimableCount,
       claimableEpochList: claimableEpochList.result,
       totalEpochs: epochs.length,
       participatingEpochs: epochs,
@@ -366,29 +370,31 @@ export async function GET(request: NextRequest) {
   const cacheKey = user.toLowerCase();
   const now = Date.now();
   const forceFresh = request.nextUrl.searchParams.has("refresh");
-  const cached = forceFresh ? null : rebateRouteCache.getFresh(cacheKey, now);
+  const includeExact = request.nextUrl.searchParams.get("exact") === "1";
+  const effectiveCacheKey = includeExact ? `${cacheKey}:exact` : cacheKey;
+  const cached = forceFresh ? null : rebateRouteCache.getFresh(effectiveCacheKey, now);
   if (cached) {
     markRouteCacheHit(ROUTE_METRIC_KEY);
     finishRouteMetric(metric, 200);
     return jsonNoStore(cached, 200, { cacheStatus: "fresh" });
   }
-  const staleCache = rebateRouteCache.getStale(cacheKey);
+  const staleCache = rebateRouteCache.getStale(effectiveCacheKey);
 
   try {
-    const inflight = forceFresh ? null : rebateRouteCache.getInflight(cacheKey);
+    const inflight = forceFresh ? null : rebateRouteCache.getInflight(effectiveCacheKey);
     const result = inflight
       ? (markRouteInflightJoin(ROUTE_METRIC_KEY), { payload: await inflight, timings: null, cacheStatus: "inflight" as const })
       : await (() => {
-          const writeVersion = rebateRouteCache.beginWrite(cacheKey);
-          const buildPromise = buildRebatePayload(user);
+          const writeVersion = rebateRouteCache.beginWrite(effectiveCacheKey);
+          const buildPromise = buildRebatePayload(user, { includeExact });
           const requestPromise = buildPromise
             .then(({ payload }) => {
-              return rebateRouteCache.setIfLatest(cacheKey, payload, REBATE_ROUTE_CACHE_MS, writeVersion);
+              return rebateRouteCache.setIfLatest(effectiveCacheKey, payload, REBATE_ROUTE_CACHE_MS, writeVersion);
             })
             .finally(() => {
-              rebateRouteCache.clearInflight(cacheKey);
+              rebateRouteCache.clearInflight(effectiveCacheKey);
             });
-          rebateRouteCache.setInflight(cacheKey, requestPromise);
+          rebateRouteCache.setInflight(effectiveCacheKey, requestPromise);
           return buildPromise.then(({ payload, timings }) => ({
             payload,
             timings,

@@ -6,8 +6,13 @@ import { GRID_SIZE } from "../lib/constants";
 export type EpochTuple = readonly [bigint, bigint, bigint, boolean, boolean, boolean];
 type JackpotInfoTuple = readonly [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
 
+const ZERO_TILE_USER_COUNTS: number[] = Object.freeze(
+  Array.from({ length: GRID_SIZE }, () => 0),
+) as number[];
+
+/** Returns a frozen zero-filled array. Safe to use as default — do NOT mutate. */
 export function createZeroTileUserCounts(): number[] {
-  return Array.from({ length: GRID_SIZE }, () => 0);
+  return ZERO_TILE_USER_COUNTS;
 }
 
 export function buildJackpotInfo(jackpotInfoRaw: unknown) {
@@ -75,14 +80,24 @@ export function buildCurrentJackpotAmount(
 }
 
 export function buildTileViewData(tileData: unknown, tileUserCounts: number[], userBetsAll?: bigint[]) {
-  const poolsArr =
-    tileData && Array.isArray((tileData as [unknown])[0]) ? ((tileData as [bigint[]])[0] as bigint[]) : null;
+  const tileTuple = Array.isArray(tileData) ? (tileData as unknown[]) : null;
+  const poolsArr = tileTuple && Array.isArray(tileTuple[0]) ? (tileTuple[0] as bigint[]) : null;
+  const liveUsersArr = tileTuple && Array.isArray(tileTuple[1]) ? (tileTuple[1] as bigint[]) : null;
   return Array.from({ length: GRID_SIZE }, (_, i) => {
     const myBetRaw = userBetsAll?.[i];
     const hasMyBet = myBetRaw !== undefined && myBetRaw > 0n;
     const poolWei = poolsArr?.[i] ?? 0n;
     const poolDisplay = parseFloat(formatUnits(poolWei, 18)).toFixed(2);
-    return { tileId: i + 1, users: tileUserCounts[i] ?? 0, poolDisplay, hasMyBet };
+    const indexedUsers = tileUserCounts[i] ?? 0;
+    const liveUsers = Number(liveUsersArr?.[i] ?? 0n);
+    const users =
+      Math.max(
+        indexedUsers,
+        Number.isFinite(liveUsers) ? liveUsers : 0,
+        poolWei > 0n ? 1 : 0,
+        hasMyBet ? 1 : 0,
+      );
+    return { tileId: i + 1, users, poolDisplay, hasMyBet };
   });
 }
 

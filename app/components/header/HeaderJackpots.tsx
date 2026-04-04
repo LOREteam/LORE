@@ -81,15 +81,15 @@ function JackpotCard({
           <div className="flex w-full items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
               <div className="shrink-0">{icon}</div>
-              <span className={`break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] animate-pulse sm:text-[12px] sm:tracking-[0.16em] ${titleClass}`}>
+              <span className={`break-words text-[10px] font-black uppercase leading-tight tracking-[0.05em] animate-pulse sm:text-[12px] sm:tracking-[0.1em] ${titleClass}`}>
                 {awardedCopy}
               </span>
             </div>
             <div className="shrink-0 text-right">
-              <div className={`text-[11px] sm:text-[12px] font-black tabular-nums leading-none ${titleClass}`}>
+              <div className={`lore-nums text-[11px] sm:text-[12px] font-black tabular-nums leading-none ${titleClass}`}>
                 +{awardedAmount.toFixed(2)} LINEA
               </div>
-              <div className={`mt-1 text-[8px] font-bold uppercase leading-none tracking-wider ${bodyClass}`}>
+              <div className={`lore-nums mt-1 text-[8px] font-bold uppercase leading-none tracking-[0.08em] ${bodyClass}`}>
                 Epoch #{awardedEpoch}
               </div>
             </div>
@@ -99,16 +99,16 @@ function JackpotCard({
             <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
               <div className="shrink-0">{icon}</div>
               <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              <span className={`break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] sm:text-[12px] sm:tracking-[0.16em] ${titleClass}`}>
+              <span className={`break-words text-[10px] font-black uppercase leading-tight tracking-[0.05em] sm:text-[12px] sm:tracking-[0.1em] ${titleClass}`}>
                 {nextCopy}
               </span>
-              <span className={`text-[13px] sm:text-[15px] font-black tabular-nums leading-none ${amountClass}`}>{poolAmount.toFixed(2)}</span>
+              <span className={`lore-nums text-[13px] sm:text-[15px] font-black tabular-nums leading-none ${amountClass}`}>{poolAmount.toFixed(2)}</span>
               <span className={`text-[9px] sm:text-[10px] font-black tracking-wide ${amountSubtleClass}`}>LINEA</span>
               </div>
             </div>
             <div className="flex shrink-0 flex-col items-end justify-center text-right">
               <p className="text-[7px] text-emerald-300/80 font-semibold leading-tight text-right">{awardedMessage}</p>
-              <p className="text-[7px] text-emerald-300/65 mt-0.5 font-semibold leading-tight">(epoch #{awardedEpoch})</p>
+              <p className="text-[7px] text-emerald-300/65 mt-0.5 font-semibold leading-tight tracking-[0.04em]">(epoch #{awardedEpoch})</p>
             </div>
           </div>
         ) : (
@@ -116,17 +116,17 @@ function JackpotCard({
             <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
               <div className="shrink-0">{icon}</div>
               <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              <span className={`break-words text-[10px] font-black uppercase leading-tight tracking-[0.08em] animate-pulse sm:text-[12px] sm:tracking-[0.16em] ${titleClass}`}>
+              <span className={`break-words text-[10px] font-black uppercase leading-tight tracking-[0.05em] animate-pulse sm:text-[12px] sm:tracking-[0.1em] ${titleClass}`}>
                 {nextCopy.replace(/^Next /, "")}
               </span>
-              <span className={`text-[13px] sm:text-[15px] font-black tabular-nums leading-none ${amountClass}`}>{poolAmount.toFixed(2)}</span>
+              <span className={`lore-nums text-[13px] sm:text-[15px] font-black tabular-nums leading-none ${amountClass}`}>{poolAmount.toFixed(2)}</span>
               <span className={`text-[9px] sm:text-[10px] font-black tracking-wide ${amountSubtleClass}`}>LINEA</span>
               </div>
             </div>
             <div className="w-[8.5rem] shrink-0">
               <div className="flex items-center justify-between mb-0.5">
-                <span className={`text-[7px] font-semibold uppercase tracking-wide ${windowLabelClass}`}>Window</span>
-                <span className={`text-[7px] font-bold tabular-nums ${windowValueClass}`}>{window.leftLabel}</span>
+                <span className={`text-[7px] font-semibold uppercase tracking-[0.08em] ${windowLabelClass}`}>Window</span>
+                <span className={`lore-nums text-[7px] font-bold tabular-nums ${windowValueClass}`}>{window.leftLabel}</span>
               </div>
               <div className={`h-1 rounded-full overflow-hidden ${windowTrackClass}`}>
                 <div

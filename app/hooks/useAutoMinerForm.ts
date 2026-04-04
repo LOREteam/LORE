@@ -16,6 +16,7 @@ interface UseAutoMinerFormOptions {
   isAutoMining: boolean;
   isPending: boolean;
   isRevealing: boolean;
+  isAnalyzing?: boolean;
   liveStateReady?: boolean;
   formattedBalance?: string | null;
   runningParams?: RunningParams | null;
@@ -26,6 +27,7 @@ export function useAutoMinerForm({
   isAutoMining,
   isPending,
   isRevealing,
+  isAnalyzing = false,
   liveStateReady = true,
   formattedBalance,
   runningParams,
@@ -91,6 +93,7 @@ export function useAutoMinerForm({
     (isPending && !isAutoMining) ||
     !liveStateReady ||
     isRevealing ||
+    (!isAutoMining && isAnalyzing) ||
     (insufficientBalance && !isAutoMining) ||
     (lowEthForGas && !isAutoMining);
 

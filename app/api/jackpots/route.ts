@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { encodeEventTopics, parseAbi, toHex, formatUnits } from "viem";
+import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi, toHex } from "viem";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import {
   beginRouteMetric,
@@ -10,11 +10,10 @@ import {
   markRouteInflightJoin,
   markRouteStaleServed,
 } from "../_lib/runtimeMetrics";
-import { getMetaNumber, getRecentJackpots } from "../../../server/storage";
+import { getMetaBigInt, getRecentJackpots } from "../../../server/storage";
 import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
-  filterByCurrentEpoch,
   patchFirebase,
   publicClient,
 } from "../_lib/dataBridge";
@@ -37,6 +36,9 @@ const JACKPOT_EVENT_CACHE_MS = 5 * 60 * 1000;
 const JACKPOT_BACKGROUND_RECOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const MAX_JACKPOT_EVENT_CACHE_ENTRIES = 256;
 const ROUTE_METRIC_KEY = "api/jackpots";
+const JACKPOT_HISTORY_LIMIT = 200;
+const JACKPOT_BOOTSTRAP_SCAN_CHUNK = 500_000n;
+const JACKPOT_RECOVERY_BLOCK_LAG = BigInt(process.env.JACKPOT_RECOVERY_BLOCK_LAG ?? "256");
 
 type JackpotRow = {
   epoch: string;
@@ -53,6 +55,9 @@ type JackpotPayload = { jackpots: JackpotRow[]; error?: string };
 type JackpotCacheEntry = { payload: JackpotPayload; expiresAt: number };
 type JackpotEventCacheEntry = { value: JackpotEventLookup; expiresAt: number };
 type JackpotBlockTimestampCacheEntry = { value: number | null; expiresAt: number };
+type JackpotLog = Awaited<ReturnType<typeof publicClient.getLogs>>[number];
+type JackpotStoredPatch = Record<string, JackpotRow>;
+type JackpotBuildResult = { payload: JackpotPayload; recoveryNeeded: boolean };
 
 let jackpotResponseCache: JackpotCacheEntry | null = null;
 let jackpotResponseInflight: Promise<JackpotPayload> | null = null;
@@ -91,6 +96,67 @@ function isTooManyResultsError(err: unknown): boolean {
     message.includes("query returned more than 10000 results") ||
     message.includes("request exceeds defined limit")
   );
+}
+
+function sortJackpotsDesc(rows: JackpotRow[]) {
+  return [...rows].sort((a, b) => {
+    const aBlock = BigInt(a.blockNumber || "0");
+    const bBlock = BigInt(b.blockNumber || "0");
+    if (aBlock === bBlock) {
+      if (a.epoch === b.epoch) {
+        if (a.kind === b.kind) return 0;
+        return a.kind === "weekly" ? -1 : 1;
+      }
+      return Number(b.epoch) - Number(a.epoch);
+    }
+    return aBlock > bBlock ? -1 : 1;
+  });
+}
+
+function mapJackpotLog(log: JackpotLog): JackpotRow | null {
+  const topic0 = log.topics[0];
+  if (!topic0) return null;
+
+  try {
+    const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+    if (decoded.eventName === "DailyJackpotAwarded") {
+      const args = decoded.args as { epoch: bigint; amount: bigint };
+      return {
+        epoch: args.epoch.toString(),
+        kind: "daily",
+        amount: formatUnits(args.amount, 18),
+        amountNum: parseFloat(formatUnits(args.amount, 18)),
+        txHash: log.transactionHash ?? "",
+        blockNumber: (log.blockNumber ?? 0n).toString(),
+      };
+    }
+    if (decoded.eventName === "WeeklyJackpotAwarded") {
+      const args = decoded.args as { epoch: bigint; amount: bigint };
+      return {
+        epoch: args.epoch.toString(),
+        kind: "weekly",
+        amount: formatUnits(args.amount, 18),
+        amountNum: parseFloat(formatUnits(args.amount, 18)),
+        txHash: log.transactionHash ?? "",
+        blockNumber: (log.blockNumber ?? 0n).toString(),
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function mergeJackpotRows(existing: JackpotRow[], incoming: JackpotRow[]) {
+  const byKey = new Map<string, JackpotRow>();
+  for (const row of existing) {
+    byKey.set(`${row.kind}_${row.epoch}`, row);
+  }
+  for (const row of incoming) {
+    byKey.set(`${row.kind}_${row.epoch}`, row);
+  }
+  return sortJackpotsDesc(Array.from(byKey.values())).slice(0, JACKPOT_HISTORY_LIMIT);
 }
 
 async function getBlockTimestampMs(blockNumber: bigint): Promise<number | null> {
@@ -147,6 +213,49 @@ async function getLogsChunked(
   }
 
   return all;
+}
+
+async function fetchJackpotLogsInRange(fromBlock: bigint, toBlock: bigint) {
+  if (toBlock < fromBlock) return [] as JackpotLog[];
+  return getLogsChunked({
+    address: CONTRACT_ADDRESS,
+    topics: [[dailySig, weeklySig]],
+    fromBlock,
+    toBlock,
+  } as Parameters<typeof publicClient.getLogs>[0] & { fromBlock: bigint; toBlock: bigint });
+}
+
+async function fetchRecentJackpotLogsFromChain(limit = JACKPOT_HISTORY_LIMIT) {
+  const currentBlock = await publicClient.getBlockNumber();
+  const collected: JackpotLog[] = [];
+  let toBlock = currentBlock;
+  let chunkSize = JACKPOT_BOOTSTRAP_SCAN_CHUNK;
+
+  while (toBlock >= CONTRACT_DEPLOY_BLOCK && collected.length < limit) {
+    const fromBlock =
+      toBlock - chunkSize + 1n > CONTRACT_DEPLOY_BLOCK
+        ? toBlock - chunkSize + 1n
+        : CONTRACT_DEPLOY_BLOCK;
+
+    try {
+      const logs = await publicClient.getLogs({
+        address: CONTRACT_ADDRESS,
+        topics: [[dailySig, weeklySig]],
+        fromBlock,
+        toBlock,
+      } as Parameters<typeof publicClient.getLogs>[0]);
+      collected.push(...logs);
+      if (fromBlock === CONTRACT_DEPLOY_BLOCK) break;
+      toBlock = fromBlock - 1n;
+    } catch (err) {
+      if (!isTooManyResultsError(err) || chunkSize <= JACKPOT_LOG_SCAN_MIN_CHUNK) {
+        throw err;
+      }
+      chunkSize = chunkSize / 2n;
+    }
+  }
+
+  return collected;
 }
 
 async function fetchJackpotEventByEpoch(
@@ -222,15 +331,22 @@ async function attachRecentBlockTimestamps(rows: JackpotRow[]): Promise<JackpotR
 }
 
 function normalizeStoredJackpots(): JackpotRow[] {
-  let jackpots = getRecentJackpots(200) as JackpotRow[];
-  const currentEpoch = getMetaNumber("currentEpoch");
-  jackpots = filterByCurrentEpoch(jackpots, currentEpoch);
-  jackpots = jackpots.filter((j) => {
-    const blockNumber = Number(j.blockNumber ?? "0");
-    if (blockNumber > 0 && BigInt(blockNumber) < CONTRACT_DEPLOY_BLOCK) return false;
-      return true;
+  const jackpots = (getRecentJackpots(JACKPOT_HISTORY_LIMIT) as JackpotRow[]).filter((j) => {
+    try {
+      return BigInt(j.blockNumber ?? "0") >= CONTRACT_DEPLOY_BLOCK;
+    } catch {
+      return false;
+    }
   });
-  return jackpots.slice(0, 200);
+  return sortJackpotsDesc(jackpots).slice(0, JACKPOT_HISTORY_LIMIT);
+}
+
+async function shouldRecoverJackpots(storedJackpots: JackpotRow[]) {
+  if (storedJackpots.length === 0) return true;
+  const lastIndexedBlock = getMetaBigInt("lastIndexedBlock");
+  if (!lastIndexedBlock || lastIndexedBlock < CONTRACT_DEPLOY_BLOCK) return true;
+  const headBlock = await publicClient.getBlockNumber();
+  return headBlock > lastIndexedBlock && headBlock - lastIndexedBlock >= JACKPOT_RECOVERY_BLOCK_LAG;
 }
 
 async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<JackpotRow[]> {
@@ -249,7 +365,7 @@ async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<
   });
 
   const byKey = new Map<string, JackpotRow>();
-  const recoveredRows: Record<string, JackpotRow> = {};
+  const recoveredRows: JackpotStoredPatch = {};
   for (const j of jackpots) byKey.set(`${j.kind}_${j.epoch}`, j);
 
   if (Number.isInteger(lastDailyEpoch) && lastDailyEpoch > 0) {
@@ -294,9 +410,52 @@ async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<
     await patchFirebase("gamedata/jackpots", recoveredRows);
   }
 
-  const nextJackpots = await attachRecentBlockTimestamps(Array.from(byKey.values()));
-  nextJackpots.sort((a, b) => Number(b.blockNumber) - Number(a.blockNumber));
-  return nextJackpots.slice(0, 200);
+  const nextJackpots = await attachRecentBlockTimestamps(sortJackpotsDesc(Array.from(byKey.values())));
+  return nextJackpots.slice(0, JACKPOT_HISTORY_LIMIT);
+}
+
+async function fetchOnchainJackpotDelta(existingJackpots: JackpotRow[]) {
+  const highestStoredBlock = existingJackpots.reduce<bigint>((max, row) => {
+    try {
+      const value = BigInt(row.blockNumber ?? "0");
+      return value > max ? value : max;
+    } catch {
+      return max;
+    }
+  }, 0n);
+
+  const currentBlock = await publicClient.getBlockNumber();
+  if (highestStoredBlock >= currentBlock) return [] as JackpotRow[];
+
+  const fromBlock =
+    highestStoredBlock > 0n && highestStoredBlock + 1n > CONTRACT_DEPLOY_BLOCK
+      ? highestStoredBlock + 1n
+      : CONTRACT_DEPLOY_BLOCK;
+  const logs = await fetchJackpotLogsInRange(fromBlock, currentBlock);
+  return logs
+    .map((log) => mapJackpotLog(log))
+    .filter((row): row is JackpotRow => row !== null);
+}
+
+async function buildOnchainJackpots(existingJackpots: JackpotRow[]) {
+  const onchainRows =
+    existingJackpots.length > 0
+      ? await fetchOnchainJackpotDelta(existingJackpots)
+      : (await fetchRecentJackpotLogsFromChain(JACKPOT_HISTORY_LIMIT))
+          .map((log) => mapJackpotLog(log))
+          .filter((row): row is JackpotRow => row !== null);
+
+  const merged = mergeJackpotRows(existingJackpots, onchainRows);
+
+  if (onchainRows.length > 0) {
+    const patch = onchainRows.reduce<JackpotStoredPatch>((acc, row) => {
+      acc[`${row.kind}_${row.epoch}`] = row;
+      return acc;
+    }, {});
+    await patchFirebase("gamedata/jackpots", patch);
+  }
+
+  return merged;
 }
 
 function maybeStartJackpotRecovery(existingJackpots: JackpotRow[]) {
@@ -307,9 +466,13 @@ function maybeStartJackpotRecovery(existingJackpots: JackpotRow[]) {
   jackpotBackgroundRecoveryStartedAt = now;
   markRouteBackgroundRefresh(ROUTE_METRIC_KEY);
   const seq = ++jackpotBuildSeq;
-  jackpotBackgroundRecoveryPromise = reconcileLatestJackpots(existingJackpots)
-    .then((jackpots) => {
-      commitJackpotResponseCache({ jackpots }, JACKPOT_ROUTE_CACHE_MS, seq);
+  jackpotBackgroundRecoveryPromise = buildJackpotsPayload({
+    allowSlowRecovery: true,
+    scheduleBackgroundRecovery: false,
+    seedJackpots: existingJackpots,
+  })
+    .then(({ payload }) => {
+      commitJackpotResponseCache(payload, JACKPOT_ROUTE_CACHE_MS, seq);
     })
     .catch((err) => {
       logRouteError(ROUTE_METRIC_KEY, err, { phase: "background-recovery" });
@@ -319,11 +482,35 @@ function maybeStartJackpotRecovery(existingJackpots: JackpotRow[]) {
     });
 }
 
-async function buildJackpotsPayload(): Promise<JackpotPayload> {
-  const jackpots = normalizeStoredJackpots();
-  maybeStartJackpotRecovery(jackpots);
-  jackpots.sort((a, b) => Number(b.blockNumber) - Number(a.blockNumber));
-  return { jackpots: await attachRecentBlockTimestamps(jackpots.slice(0, 200)) };
+async function buildJackpotsPayload(
+  options: {
+    allowSlowRecovery?: boolean;
+    scheduleBackgroundRecovery?: boolean;
+    seedJackpots?: JackpotRow[];
+  } = {},
+): Promise<JackpotBuildResult> {
+  const storedJackpots = options.seedJackpots ?? normalizeStoredJackpots();
+  const recoveryNeeded = await shouldRecoverJackpots(storedJackpots);
+  const effectiveJackpots =
+    recoveryNeeded && options.allowSlowRecovery
+      ? await buildOnchainJackpots(storedJackpots)
+      : storedJackpots;
+
+  if (recoveryNeeded && options.scheduleBackgroundRecovery !== false) {
+    maybeStartJackpotRecovery(effectiveJackpots);
+  }
+
+  const reconciledJackpots =
+    options.allowSlowRecovery && recoveryNeeded
+      ? await reconcileLatestJackpots(effectiveJackpots)
+      : effectiveJackpots;
+
+  return {
+    payload: {
+      jackpots: await attachRecentBlockTimestamps(reconciledJackpots.slice(0, JACKPOT_HISTORY_LIMIT)),
+    },
+    recoveryNeeded,
+  };
 }
 
 function jsonNoStore(payload: JackpotPayload, status = 200) {
@@ -359,8 +546,8 @@ export async function GET(request: Request) {
       ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await jackpotResponseInflight)
       : await (() => {
           const seq = ++jackpotBuildSeq;
-          jackpotResponseInflight = buildJackpotsPayload()
-            .then((result) => {
+          jackpotResponseInflight = buildJackpotsPayload({ allowSlowRecovery: true })
+            .then(({ payload: result }) => {
               return commitJackpotResponseCache(result, JACKPOT_ROUTE_CACHE_MS, seq);
             })
             .finally(() => {

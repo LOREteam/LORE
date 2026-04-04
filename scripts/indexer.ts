@@ -34,6 +34,7 @@ import {
   patchJsonPath,
   putJsonPath,
   readJsonPath,
+  setMetaJson,
   upsertProtocolFeeFlushes,
   upsertRewardClaims,
   type FeeFlushStorageRow,
@@ -66,6 +67,29 @@ const RECONCILE_MAX_EPOCHS_PER_PASS = Number(process.env.INDEXER_RECONCILE_MAX_E
 const writeDisabled = false;
 const writeDisabledReason: string | null = null;
 let lastReconcileAtMs = 0;
+
+type IndexerRunStatus = {
+  startedAt: number;
+  completedAt: number;
+  fromBlock: string;
+  toBlock: string;
+  totalLogs: number;
+};
+
+type IndexerRepairStatus = {
+  at: number;
+  fromBlock: string;
+  toBlock: string;
+  repairedLogs: number;
+};
+
+type IndexerReconcileStatus = {
+  at: number;
+  currentEpoch: number;
+  missingEpochs: number;
+  repairedEpochs: number;
+  targetEpochs: number[];
+};
 
 const EVENTS_ABI = parseAbi([
   "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
@@ -116,6 +140,11 @@ async function fbPatch(path: string, data: Record<string, unknown>) {
 async function fbPut(path: string, data: unknown) {
   throwIfWritesDisabled(path);
   putJsonPath(path, data);
+}
+
+function setIndexerStatus(key: string, value: unknown) {
+  if (writeDisabled) return;
+  setMetaJson(key, value);
 }
 
 // ─── Event topic signatures ─────────────────────────────────────────
@@ -448,8 +477,8 @@ function processLogs(logs: Log[]) {
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
       }
-    } catch {
-      // malformed log
+    } catch (err) {
+      console.warn("[indexer] Failed to decode log in processLogs:", (err as Error).message ?? err);
     }
   }
 
@@ -592,6 +621,13 @@ async function runRepairPass(currentBlock: bigint) {
   if (from < INDEXER_START_BLOCK) from = INDEXER_START_BLOCK;
 
   if (from > currentBlock) {
+    const status: IndexerRepairStatus = {
+      at: Date.now(),
+      fromBlock: from.toString(),
+      toBlock: currentBlock.toString(),
+      repairedLogs: 0,
+    };
+    setIndexerStatus("indexerRepairStatus", status);
     await updateCurrentEpochMeta();
     return 0;
   }
@@ -617,6 +653,13 @@ async function runRepairPass(currentBlock: bigint) {
 
   await setRepairCursorBlock(to + 1n);
   await updateCurrentEpochMeta();
+  const status: IndexerRepairStatus = {
+    at: Date.now(),
+    fromBlock: from.toString(),
+    toBlock: to.toString(),
+    repairedLogs: logs.length,
+  };
+  setIndexerStatus("indexerRepairStatus", status);
   return logs.length;
 }
 
@@ -628,7 +671,17 @@ async function runEpochReconcile(currentBlock: bigint) {
   const currentEpoch = await getCurrentEpochFromChain();
   await fbPut("gamedata/_meta/currentEpoch", Number(currentEpoch));
 
-  if (currentEpoch <= 1n) return 0;
+  if (currentEpoch <= 1n) {
+    const status: IndexerReconcileStatus = {
+      at: now,
+      currentEpoch: Number(currentEpoch),
+      missingEpochs: 0,
+      repairedEpochs: 0,
+      targetEpochs: [],
+    };
+    setIndexerStatus("indexerReconcileStatus", status);
+    return 0;
+  }
 
   const rawEpochs = (await fbGet<Record<string, EpochRecord>>("gamedata/epochs")) ?? {};
   const have = new Set<number>();
@@ -643,6 +696,14 @@ async function runEpochReconcile(currentBlock: bigint) {
   }
   if (missing.length === 0) {
     console.log("[indexer][reconcile] No missing epochs");
+    const status: IndexerReconcileStatus = {
+      at: now,
+      currentEpoch: Number(currentEpoch),
+      missingEpochs: 0,
+      repairedEpochs: 0,
+      targetEpochs: [],
+    };
+    setIndexerStatus("indexerReconcileStatus", status);
     return 0;
   }
 
@@ -694,8 +755,8 @@ async function runEpochReconcile(currentBlock: bigint) {
         isWeeklyJackpot,
         resolvedBlock: (log.blockNumber ?? 0n).toString(),
       });
-    } catch {
-      // malformed log
+    } catch (err) {
+      console.warn("[indexer][reconcile] Failed to decode epoch log:", (err as Error).message ?? err);
     }
     await delay(targets.length <= 8 ? 50 : 150);
   }
@@ -703,9 +764,25 @@ async function runEpochReconcile(currentBlock: bigint) {
   if (epochsPatch.size > 0) {
     await writeEpochs(epochsPatch);
     console.log(`[indexer][reconcile] Repaired ${epochsPatch.size} epochs`);
+    const status: IndexerReconcileStatus = {
+      at: Date.now(),
+      currentEpoch: Number(currentEpoch),
+      missingEpochs: missing.length,
+      repairedEpochs: epochsPatch.size,
+      targetEpochs: targets,
+    };
+    setIndexerStatus("indexerReconcileStatus", status);
     return epochsPatch.size;
   }
   console.log("[indexer][reconcile] No resolvable missing epochs in this pass");
+  const status: IndexerReconcileStatus = {
+    at: Date.now(),
+    currentEpoch: Number(currentEpoch),
+    missingEpochs: missing.length,
+    repairedEpochs: 0,
+    targetEpochs: targets,
+  };
+  setIndexerStatus("indexerReconcileStatus", status);
   return 0;
 }
 
@@ -715,7 +792,16 @@ async function runOnce() {
   const currentBlock = await client.getBlockNumber();
 
   const fromBlock = lastBlock + 1n;
+  const startedAt = Date.now();
   if (fromBlock > currentBlock) {
+    const status: IndexerRunStatus = {
+      startedAt,
+      completedAt: Date.now(),
+      fromBlock: fromBlock.toString(),
+      toBlock: currentBlock.toString(),
+      totalLogs: 0,
+    };
+    setIndexerStatus("indexerRunStatus", status);
     return 0;
   }
 
@@ -724,7 +810,6 @@ async function runOnce() {
   let totalLogs = 0;
   let chunkCount = 0;
   for (let start = fromBlock; start <= currentBlock; start += RUN_CHUNK_BLOCKS) {
-    void start;
     chunkCount += 1;
   }
 
@@ -758,6 +843,14 @@ async function runOnce() {
 
   console.log(`[indexer] Finished runOnce with ${totalLogs} logs`);
   await updateCurrentEpochMeta();
+  const status: IndexerRunStatus = {
+    startedAt,
+    completedAt: Date.now(),
+    fromBlock: fromBlock.toString(),
+    toBlock: currentBlock.toString(),
+    totalLogs,
+  };
+  setIndexerStatus("indexerRunStatus", status);
   return totalLogs;
 }
 

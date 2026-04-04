@@ -12,9 +12,9 @@ import {
 } from "../lib/constants";
 import { getFallbackFeeOverrides, getKeeperFeeOverrides, getLineaFeeOverrides } from "../lib/lineaFees";
 import { log } from "../lib/logger";
+import type { GasOverrides } from "./useMining.types";
 import { isMissingTokenGetterError, isNetworkError, withMiningRpcTimeout } from "./useMining.shared";
 
-type GasOverrides = { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint };
 type FeeEstimate = Awaited<ReturnType<PublicClient["estimateFeesPerGas"]>>;
 const FEE_ESTIMATE_CACHE_TTL_MS = 3_000;
 

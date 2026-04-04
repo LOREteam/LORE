@@ -18,6 +18,9 @@ interface UseMiningGuardsOptions {
   embeddedEthBalance: BalanceData;
   embeddedTokenBalance: BalanceData;
   isAutoMining: boolean;
+  isAnalyzing: boolean;
+  isRevealing: boolean;
+  liveStateReady: boolean;
   selectedTiles: number[];
   minEthForGas: number;
   onManualMine: (amount: string) => Promise<boolean>;
@@ -36,6 +39,9 @@ export function useMiningGuards({
   embeddedEthBalance,
   embeddedTokenBalance,
   isAutoMining,
+  isAnalyzing,
+  isRevealing,
+  liveStateReady,
   selectedTiles,
   minEthForGas,
   onManualMine,
@@ -48,6 +54,7 @@ export function useMiningGuards({
   const [lastBet, setLastBet] = useState<LastBet | null>(null);
   const [balanceWarningDismissed, setBalanceWarningDismissed] = useState(false);
   const hasPlayableWallet = Boolean(connectedWalletAddress || embeddedWalletAddress);
+  const bettingLocked = !liveStateReady || isRevealing || isAnalyzing;
 
   useEffect(() => {
     try {
@@ -74,6 +81,13 @@ export function useMiningGuards({
         onOpenWalletSettings();
         return;
       }
+      if (bettingLocked) {
+        notify(
+          !liveStateReady ? "Live epoch is still syncing." : "Betting is locked while the epoch is resolving.",
+          "warning",
+        );
+        return;
+      }
       const tilesSnapshot = [...selectedTiles];
       const success = await onManualMine(amount);
       if (!success) return;
@@ -88,7 +102,7 @@ export function useMiningGuards({
         setLastBet(entry);
       }
     },
-    [hasPlayableWallet, notify, onBetConfirmed, onManualMine, onOpenWalletSettings, selectedTiles],
+    [bettingLocked, hasPlayableWallet, liveStateReady, notify, onBetConfirmed, onManualMine, onOpenWalletSettings, selectedTiles],
   );
 
   const handleRepeatLastBet = useCallback(async () => {
@@ -96,6 +110,13 @@ export function useMiningGuards({
     if (!hasPlayableWallet) {
       notify("Connect a wallet first.", "warning");
       onOpenWalletSettings();
+      return;
+    }
+    if (bettingLocked) {
+      notify(
+        !liveStateReady ? "Live epoch is still syncing." : "Betting is locked while the epoch is resolving.",
+        "warning",
+      );
       return;
     }
     const success = await onDirectMine(lastBet.tiles, lastBet.amount);
@@ -106,13 +127,20 @@ export function useMiningGuards({
     } catch {
       // ignore storage failures
     }
-  }, [hasPlayableWallet, lastBet, notify, onBetConfirmed, onDirectMine, onOpenWalletSettings]);
+  }, [bettingLocked, hasPlayableWallet, lastBet, liveStateReady, notify, onBetConfirmed, onDirectMine, onOpenWalletSettings]);
 
   const handleAutoMineWithGuard = useCallback(
     async (bet: string, blocks: number, rounds: number) => {
       if (!embeddedWalletAddress) {
         notify("Create a Privy wallet first in Wallet Settings.", "warning");
         onOpenWalletSettings();
+        return;
+      }
+      if (!isAutoMining && bettingLocked) {
+        notify(
+          !liveStateReady ? "Live epoch is still syncing." : "Betting is locked while the epoch is resolving.",
+          "warning",
+        );
         return;
       }
       if (lowEthBalance && !isAutoMining) {
@@ -122,7 +150,7 @@ export function useMiningGuards({
       }
       await onAutoMineToggle(bet, blocks, rounds);
     },
-    [embeddedWalletAddress, isAutoMining, lowEthBalance, notify, onAutoMineToggle, onOpenWalletSettings],
+    [bettingLocked, embeddedWalletAddress, isAutoMining, liveStateReady, lowEthBalance, notify, onAutoMineToggle, onOpenWalletSettings],
   );
 
   const dismissBalanceWarning = useCallback(() => {

@@ -3,15 +3,17 @@
 import { useCallback, useRef, useState } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { PublicClient } from "viem";
-import type { RefreshSessionFn, MiningNotifyFn } from "./useMining";
-import type { GasOverrides } from "./useMining";
-
-type SilentSendFn = (
-  tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number },
-  gasOverrides?: GasOverrides,
-) => Promise<`0x${string}`>;
-
-type RunningParams = { betStr: string; blocks: number; rounds: number } | null;
+import type { Eip7702CapabilityState, Signed7702AuthorizationLike } from "../lib/eip7702";
+import type {
+  GasOverrides,
+  MiningNotifyFn,
+  RefreshSessionFn,
+  RunningParams,
+  Sign7702DelegationFn,
+  SilentSendFn,
+  SilentSend7702Fn,
+} from "./useMining.types";
+import type { PendingApproveState, PendingBetState } from "./useMining.stateTypes";
 
 interface UseMiningRuntimeStateOptions {
   address?: `0x${string}`;
@@ -20,6 +22,9 @@ interface UseMiningRuntimeStateOptions {
   preferredAddress?: `0x${string}` | string | null;
   ensurePreferredWallet?: () => Promise<void> | void;
   sendTransactionSilent?: SilentSendFn;
+  sendTransaction7702?: SilentSend7702Fn;
+  signEip7702Delegation?: Sign7702DelegationFn;
+  eip7702?: Eip7702CapabilityState;
   refreshSession?: RefreshSessionFn;
   onAutoMineBetConfirmed?: () => void;
   onNotify?: MiningNotifyFn;
@@ -47,10 +52,13 @@ interface UseMiningRuntimeStateResult {
   restoreAttemptedRef: MutableRefObject<boolean>;
   sessionExpiredErrorRef: MutableRefObject<boolean>;
   tokenGetterWarningShownRef: MutableRefObject<boolean>;
-  pendingApproveRef: MutableRefObject<{ hash: `0x${string}`; submittedAt: number; nonce: number } | null>;
-  pendingBetRef: MutableRefObject<{ submittedAt: number; nonce: number } | null>;
+  pendingApproveRef: MutableRefObject<PendingApproveState | null>;
+  pendingBetRef: MutableRefObject<PendingBetState | null>;
   publicClientRef: MutableRefObject<PublicClient | undefined>;
   silentSendRef: MutableRefObject<SilentSendFn | undefined>;
+  silentSend7702Ref: MutableRefObject<SilentSend7702Fn | undefined>;
+  signEip7702DelegationRef: MutableRefObject<Sign7702DelegationFn | undefined>;
+  eip7702Ref: MutableRefObject<Eip7702CapabilityState | undefined>;
   refreshSessionRef: MutableRefObject<RefreshSessionFn | undefined>;
   writeContractAsyncRef: MutableRefObject<(args: unknown) => Promise<`0x${string}`>>;
   preferredAddressRef: MutableRefObject<string | null>;
@@ -71,6 +79,9 @@ export function useMiningRuntimeState({
   preferredAddress,
   ensurePreferredWallet,
   sendTransactionSilent,
+  sendTransaction7702,
+  signEip7702Delegation,
+  eip7702,
   refreshSession,
   onAutoMineBetConfirmed,
   onNotify,
@@ -94,6 +105,9 @@ export function useMiningRuntimeState({
 
   const publicClientRef = useRef(publicClient);
   const silentSendRef = useRef(sendTransactionSilent);
+  const silentSend7702Ref = useRef(sendTransaction7702);
+  const signEip7702DelegationRef = useRef(signEip7702Delegation);
+  const eip7702Ref = useRef(eip7702);
   const refreshSessionRef = useRef(refreshSession);
   const writeContractAsyncRef = useRef(writeContractAsync);
   const preferredAddressRef = useRef<string | null>(preferredAddress ?? null);
@@ -105,13 +119,18 @@ export function useMiningRuntimeState({
   const refetchGridEpochDataRef = useRef(refetchGridEpochData);
   const onAutoMineBetConfirmedRef = useRef(onAutoMineBetConfirmed);
   const notifyRef = useRef(onNotify);
+  const preserveTransientRuntime = isAutoMining || autoResumeRequestedRef.current;
 
-  publicClientRef.current = publicClient;
-  silentSendRef.current = sendTransactionSilent;
-  refreshSessionRef.current = refreshSession;
+  publicClientRef.current = publicClient ?? (preserveTransientRuntime ? publicClientRef.current : undefined);
+  silentSendRef.current = sendTransactionSilent ?? (preserveTransientRuntime ? silentSendRef.current : undefined);
+  silentSend7702Ref.current = sendTransaction7702 ?? (preserveTransientRuntime ? silentSend7702Ref.current : undefined);
+  signEip7702DelegationRef.current =
+    signEip7702Delegation ?? (preserveTransientRuntime ? signEip7702DelegationRef.current : undefined);
+  eip7702Ref.current = eip7702 ?? (preserveTransientRuntime ? eip7702Ref.current : undefined);
+  refreshSessionRef.current = refreshSession ?? (preserveTransientRuntime ? refreshSessionRef.current : undefined);
   writeContractAsyncRef.current = writeContractAsync;
-  preferredAddressRef.current = preferredAddress ?? null;
-  ensurePreferredWalletRef.current = ensurePreferredWallet;
+  preferredAddressRef.current = preferredAddress ?? (preserveTransientRuntime ? preferredAddressRef.current : null);
+  ensurePreferredWalletRef.current = ensurePreferredWallet ?? (preserveTransientRuntime ? ensurePreferredWalletRef.current : undefined);
   refetchAllowanceRef.current = refetchAllowance;
   refetchTileDataRef.current = refetchTileData;
   refetchUserBetsRef.current = refetchUserBets;
@@ -120,7 +139,7 @@ export function useMiningRuntimeState({
   onAutoMineBetConfirmedRef.current = onAutoMineBetConfirmed;
   notifyRef.current = onNotify;
 
-  const hasPreferredActor = Boolean(preferredAddress);
+  const hasPreferredActor = Boolean(preferredAddress ?? (preserveTransientRuntime ? preferredAddressRef.current : null));
   const getActorAddress = useCallback(() => preferredAddressRef.current ?? address ?? null, [address]);
   const getPreferredActorAddress = useCallback(() => preferredAddressRef.current ?? null, []);
 
@@ -145,6 +164,9 @@ export function useMiningRuntimeState({
     pendingBetRef,
     publicClientRef,
     silentSendRef,
+    silentSend7702Ref,
+    signEip7702DelegationRef,
+    eip7702Ref,
     refreshSessionRef,
     writeContractAsyncRef,
     preferredAddressRef,
