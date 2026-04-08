@@ -73,6 +73,11 @@ interface UseMiningAutoMineRunnerOptions {
     amountRawPerTile: bigint,
     gasOverrides?: GasOverrides,
   ) => Promise<ReceiptState>;
+  placeBets7702?: (
+    tileIds: number[],
+    amountRawPerTile: bigint,
+    gasOverrides?: GasOverrides,
+  ) => Promise<ReceiptState>;
   publicClientRef: MutableRefObject<PublicClient | undefined>;
   refetchAllowanceRef: MutableRefObject<() => void>;
   refetchEpochRef: MutableRefObject<(() => void) | undefined>;
@@ -114,6 +119,7 @@ export function useMiningAutoMineRunner({
   pendingBetRef,
   placeBets,
   placeBetsSilent,
+  placeBets7702,
   publicClientRef,
   refetchAllowanceRef,
   refetchEpochRef,
@@ -220,6 +226,7 @@ export function useMiningAutoMineRunner({
           pendingBetRef,
           placeBets,
           placeBetsSilent,
+          placeBets7702,
           readClient: () => publicClientRef.current,
           readRefreshSession: () => refreshSessionRef.current,
           readSilentSend: () => silentSendRef.current,
@@ -299,6 +306,7 @@ export function useMiningAutoMineRunner({
       pendingBetRef,
       placeBets,
       placeBetsSilent,
+      placeBets7702,
       publicClientRef,
       refetchAllowanceRef,
       refetchEpochRef,

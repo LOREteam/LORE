@@ -3,9 +3,8 @@
 import { useCallback, useRef, useState } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { PublicClient } from "viem";
-import type { Eip7702CapabilityState, Signed7702AuthorizationLike } from "../lib/eip7702";
+import type { Eip7702CapabilityState } from "../lib/eip7702";
 import type {
-  GasOverrides,
   MiningNotifyFn,
   RefreshSessionFn,
   RunningParams,

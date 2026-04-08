@@ -326,7 +326,7 @@ export const FAQ = React.memo(function FAQ() {
                 >
                   <svg
                     className={`w-4 h-4 shrink-0 transition-transform duration-300 ${
-                      isOpen ? "rotate-45 text-violet-400" : "text-gray-600"
+                      isOpen ? "rotate-45 text-violet-400" : "text-gray-400"
                     }`}
                     fill="none"
                     viewBox="0 0 24 24"

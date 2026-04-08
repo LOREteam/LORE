@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 const LazyChatWidget = dynamic(() => import("./chat/ChatWidget").then((mod) => mod.ChatWidget), {
   loading: () => (
     <button
-      className="w-9 h-9 rounded-full bg-violet-600/80 border border-violet-400/20 shadow-lg shadow-violet-500/20 flex items-center justify-center shrink-0"
+      className="w-11 h-11 rounded-full bg-violet-600/80 border border-violet-400/20 shadow-lg shadow-violet-500/20 flex items-center justify-center shrink-0"
       aria-label="Open chat"
       title="Open chat"
       disabled
@@ -35,11 +35,11 @@ export function FloatingActions({ walletAddress, onChatOpenChange, chatOpen = fa
           href="https://x.com/Linea_Ore"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-slate-900/90 text-slate-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/30 hover:bg-slate-800 active:translate-y-0"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(29,161,242,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
           title="X (Twitter) @Linea_Ore"
           aria-label="Linea Ore on X"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className="text-slate-200">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
             <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
           </svg>
         </a>
@@ -47,11 +47,11 @@ export function FloatingActions({ walletAddress, onChatOpenChange, chatOpen = fa
           href="https://github.com/LOREteam/LORE"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-slate-900/90 text-slate-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-400/30 hover:bg-slate-800 active:translate-y-0"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-purple-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(139,92,246,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
           title="LORE on GitHub"
           aria-label="LORE on GitHub"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className="text-slate-200">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 .5C5.65.5.5 5.8.5 12.33c0 5.23 3.3 9.67 7.88 11.23.58.11.79-.26.79-.58 0-.29-.01-1.23-.02-2.23-3.2.71-3.88-1.39-3.88-1.39-.52-1.37-1.28-1.73-1.28-1.73-1.05-.74.08-.73.08-.73 1.16.08 1.78 1.22 1.78 1.22 1.03 1.82 2.69 1.29 3.35.99.1-.77.4-1.29.72-1.59-2.55-.3-5.23-1.31-5.23-5.81 0-1.28.44-2.33 1.17-3.15-.12-.3-.51-1.52.11-3.17 0 0 .95-.31 3.12 1.2a10.48 10.48 0 0 1 5.68 0c2.16-1.51 3.11-1.2 3.11-1.2.62 1.65.23 2.87.12 3.17.73.82 1.17 1.87 1.17 3.15 0 4.51-2.69 5.51-5.25 5.81.42.37.78 1.08.78 2.19 0 1.58-.01 2.86-.01 3.25 0 .32.2.7.8.58a11.87 11.87 0 0 0 7.87-11.23C23.5 5.8 18.35.5 12 .5Z" />
           </svg>
         </a>

@@ -4,45 +4,11 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname);
 
-const isDev = process.env.NODE_ENV !== "production";
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: false,
+  reactStrictMode: true,
+  outputFileTracingRoot: projectRoot,
   transpilePackages: ["porto", "@wagmi/connectors", "wagmi", "@privy-io/wagmi"],
-  async headers() {
-    const csp = [
-      "default-src 'self'",
-      // Privy's auth/runtime flow currently relies on eval in this app environment.
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://auth.privy.io https://challenges.cloudflare.com",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https:",
-      "font-src 'self' data:",
-      isDev
-        ? "connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*"
-        : "connect-src 'self' https: wss:",
-      "frame-src https://auth.privy.io https://verify.walletconnect.com https://verify.walletconnect.org https://challenges.cloudflare.com",
-      "frame-ancestors 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-    ].join("; ");
-
-    return [
-      {
-        source: "/(.*)",
-        headers: [
-          {
-            key: "Content-Security-Policy",
-            value: csp,
-          },
-          { key: "X-Content-Type-Options", value: "nosniff" },
-          { key: "X-Frame-Options", value: "DENY" },
-          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
-        ],
-      },
-    ];
-  },
   webpack(config) {
     config.context = projectRoot;
     config.resolve = config.resolve ?? {};
@@ -54,6 +20,7 @@ const nextConfig = {
     config.resolve.alias = {
       ...(config.resolve.alias ?? {}),
       "@react-native-async-storage/async-storage": false,
+      "@farcaster/mini-app-solana": false,
       tailwindcss: path.resolve(projectRoot, "node_modules", "tailwindcss"),
       "porto/internal": path.resolve(projectRoot, "node_modules", "porto", "dist", "internal", "index.js"),
       "zod/mini": path.resolve(projectRoot, "node_modules", "porto", "node_modules", "zod", "mini", "index.js"),

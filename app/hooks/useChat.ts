@@ -80,8 +80,8 @@ function saveCachedMessages(messages: ChatMessage[]) {
   }
 }
 
-async function fetchMessages(): Promise<ChatMessage[]> {
-  const res = await fetch("/api/chat/messages", { cache: "no-store" });
+async function fetchMessages(signal?: AbortSignal): Promise<ChatMessage[]> {
+  const res = await fetch("/api/chat/messages", { cache: "no-store", signal });
   const json = await readJsonResponse<{ messages?: ChatMessage[]; error?: string }>(res);
   if (!json) {
     throw new Error(`Empty response from /api/chat/messages (HTTP ${res.status})`);
@@ -92,12 +92,13 @@ async function fetchMessages(): Promise<ChatMessage[]> {
   return (json.messages ?? []).slice(-MESSAGES_LIMIT);
 }
 
-async function postMessage(payload: Record<string, unknown>): Promise<void> {
+async function postMessage(payload: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
   const res = await fetch("/api/chat/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
     body: JSON.stringify(payload),
+    signal,
   });
   if (!res.ok) {
     const body = await res.text();
@@ -129,18 +130,18 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
   }, []);
 
   useEffect(() => {
-    let active = true;
+    const controller = new AbortController();
 
     async function poll() {
       try {
-        const msgs = await fetchMessages();
-        if (!active) return;
+        const msgs = await fetchMessages(controller.signal);
+        if (controller.signal.aborted) return;
         setMessages(msgs);
         saveCachedMessages(msgs);
         setConnected(true);
         pollWarnAtRef.current = 0;
       } catch (err) {
-        if (!active) return;
+        if (controller.signal.aborted) return;
         setConnected(false);
         if (isNetworkFetchError(err)) {
           warnNetworkOnce("[Chat] Poll network unavailable:", pollWarnAtRef, err);
@@ -150,16 +151,16 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
       }
     }
 
-    poll().catch(() => {});
+    void poll();
     const pollInterval = open
       ? (isPageVisible ? POLL_INTERVAL_MS : HIDDEN_POLL_INTERVAL_MS)
       : (isPageVisible ? CLOSED_POLL_INTERVAL_MS : HIDDEN_CLOSED_POLL_INTERVAL_MS);
     const timer = setInterval(() => {
-      poll().catch(() => {});
+      void poll();
     }, pollInterval);
 
     return () => {
-      active = false;
+      controller.abort();
       clearInterval(timer);
     };
   }, [isPageVisible, open]);

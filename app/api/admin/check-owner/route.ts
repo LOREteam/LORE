@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, getAddress, http, parseAbi } from "viem";
+import { getAddress, parseAbi } from "viem";
 import { CONTRACT_ADDRESS } from "../../../lib/constants";
-import { APP_CHAIN, RPC_URL } from "../../_lib/dataBridge";
+import { publicClient } from "../../_lib/dataBridge";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 
 const OWNER_ABI = parseAbi(["function owner() view returns (address)"]);
@@ -21,11 +21,6 @@ export async function GET(request: NextRequest) {
     if (!address || !/^0x[0-9a-f]{40}$/i.test(address)) {
       return NextResponse.json({ isOwner: false, error: "Invalid address" }, { status: 400 });
     }
-
-    const publicClient = createPublicClient({
-      chain: APP_CHAIN,
-      transport: http(RPC_URL, { timeout: 10_000, retryCount: 1 }),
-    });
 
     const ownerAddress = await publicClient.readContract({
       address: CONTRACT_ADDRESS,

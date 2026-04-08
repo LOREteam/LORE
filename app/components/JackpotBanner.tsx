@@ -245,9 +245,11 @@ export const JackpotBanner = React.memo(function JackpotBanner({
 
         <button
           type="button"
+          autoFocus
           aria-label="Close jackpot banner"
           onClick={handleClose}
-          className="absolute right-6 top-6 z-20 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/20 text-lg text-white/70 transition hover:bg-black/30 hover:text-white"
+          className="absolute right-4 z-20 inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-black/20 text-lg text-white/70 transition hover:bg-black/30 hover:text-white active:scale-95 focus-visible:ring-2 focus-visible:ring-white/50 sm:right-6 sm:top-6"
+          style={{ top: "max(1.5rem, env(safe-area-inset-top, 1.5rem))" }}
         >
           <span aria-hidden="true">&times;</span>
         </button>

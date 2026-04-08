@@ -165,7 +165,7 @@ export function useMiningOrchestration({
     ensurePreferredWallet: () => ensurePreferredWalletRef.current?.(),
   });
 
-  const { placeBets, placeBetsSilent, placeBetsPreferSilent } = useMiningBetExecution({
+  const { placeBets, placeBetsSilent, placeBets7702, placeBetsPreferSilent } = useMiningBetExecution({
     assertNativeGasBalance,
     assertSufficientAllowance,
     ensureAllowance,
@@ -254,6 +254,7 @@ export function useMiningOrchestration({
     pendingBetRef,
     placeBets,
     placeBetsSilent,
+    placeBets7702,
     publicClientRef,
     refetchAllowanceRef,
     refetchEpochRef,

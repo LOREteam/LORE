@@ -3,7 +3,7 @@ import { cn } from "../../lib/cn";
 import { uiTokens } from "./tokens";
 
 type UiPanelTone = "default" | "accent" | "subtle" | "warning" | "danger" | "success";
-type UiPanelPadding = "sm" | "md";
+type UiPanelPadding = "xs" | "sm" | "md";
 
 const toneClasses: Record<UiPanelTone, string> = {
   default: "border-violet-500/15 bg-[#0a0a16]",
@@ -15,6 +15,7 @@ const toneClasses: Record<UiPanelTone, string> = {
 };
 
 const paddingClasses: Record<UiPanelPadding, string> = {
+  xs: "p-2.5",
   sm: "p-3",
   md: "p-4",
 };

@@ -3,63 +3,79 @@ import path from "node:path";
 
 const root = process.cwd();
 
+function walkFiles(dir, matcher) {
+  if (!fs.existsSync(dir)) return null;
+  const stack = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    const entries = fs.readdirSync(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const absolutePath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(absolutePath);
+        continue;
+      }
+      if (matcher(absolutePath)) return absolutePath;
+    }
+  }
+  return null;
+}
+
+/**
+ * Attempt to locate a file by exact path first, then by glob search.
+ * This makes the patch resilient to hoisting differences across npm/yarn/pnpm.
+ */
+function findFile(exactPath, suffix) {
+  if (fs.existsSync(exactPath)) return exactPath;
+  return walkFiles(
+    path.join(root, "node_modules", "@privy-io"),
+    (candidate) => candidate.endsWith(suffix),
+  );
+}
+
+/**
+ * Check if a file already has native EIP-7702 (type 4) support.
+ * If the original source already supports type 4, skip patching.
+ */
+function hasNative7702Support(filePath) {
+  try {
+    const content = fs.readFileSync(filePath, "utf8");
+    // Check for eip7702 string AND type 4 handling in the ORIGINAL source.
+    // Our patch uses NUMBER_TO_STRING_TXN_TYPE and normalizeAuthorizationList together.
+    // If the file has "eip7702" and handles authorizationList, it has native support.
+    return content.includes("eip7702") && content.includes("authorizationList");
+  } catch {
+    return false;
+  }
+}
+
 const targets = [
   {
     format: "cjs",
-    file: path.join(
-      root,
-      "node_modules",
-      "@privy-io",
-      "ethereum",
-      "dist",
-      "cjs",
-      "to-viem-transaction-serializable.js",
+    file: findFile(
+      path.join(root, "node_modules", "@privy-io", "ethereum", "dist", "cjs", "to-viem-transaction-serializable.js"),
+      path.join("ethereum", "dist", "cjs", "to-viem-transaction-serializable.js"),
     ),
   },
   {
     format: "esm",
-    file: path.join(
-      root,
-      "node_modules",
-      "@privy-io",
-      "ethereum",
-      "dist",
-      "esm",
-      "to-viem-transaction-serializable.mjs",
+    file: findFile(
+      path.join(root, "node_modules", "@privy-io", "ethereum", "dist", "esm", "to-viem-transaction-serializable.mjs"),
+      path.join("ethereum", "dist", "esm", "to-viem-transaction-serializable.mjs"),
     ),
   },
   {
     format: "wallet-cjs",
-    file: path.join(
-      root,
-      "node_modules",
-      "@privy-io",
-      "react-auth",
-      "node_modules",
-      "@privy-io",
-      "js-sdk-core",
-      "dist",
-      "cjs",
-      "embedded",
-      "stack",
-      "wallet-api-eth-transaction.js",
+    file: findFile(
+      path.join(root, "node_modules", "@privy-io", "react-auth", "node_modules", "@privy-io", "js-sdk-core", "dist", "cjs", "embedded", "stack", "wallet-api-eth-transaction.js"),
+      path.join("js-sdk-core", "dist", "cjs", "embedded", "stack", "wallet-api-eth-transaction.js"),
     ),
   },
   {
     format: "wallet-esm",
-    file: path.join(
-      root,
-      "node_modules",
-      "@privy-io",
-      "react-auth",
-      "node_modules",
-      "@privy-io",
-      "js-sdk-core",
-      "dist",
-      "esm",
-      "embedded",
-      "stack",
-      "wallet-api-eth-transaction.mjs",
+    file: findFile(
+      path.join(root, "node_modules", "@privy-io", "react-auth", "node_modules", "@privy-io", "js-sdk-core", "dist", "esm", "embedded", "stack", "wallet-api-eth-transaction.mjs"),
+      path.join("js-sdk-core", "dist", "esm", "embedded", "stack", "wallet-api-eth-transaction.mjs"),
     ),
   },
 ];
@@ -274,10 +290,16 @@ ${exportLine}
 }
 
 let patchedAny = false;
+let skippedNative = false;
 
 for (const target of targets) {
-  if (!fs.existsSync(target.file)) {
-    console.warn(`[patch-privy-7702] skipped missing file: ${target.file}`);
+  if (!target.file) {
+    console.warn(`[patch-privy-7702] skipped missing target (format: ${target.format})`);
+    continue;
+  }
+  if (hasNative7702Support(target.file)) {
+    console.log(`[patch-privy-7702] native 7702 support detected, skipping: ${path.relative(root, target.file)}`);
+    skippedNative = true;
     continue;
   }
   fs.writeFileSync(target.file, buildSource(target.format), "utf8");
@@ -285,6 +307,8 @@ for (const target of targets) {
   patchedAny = true;
 }
 
-if (!patchedAny) {
-  console.warn("[patch-privy-7702] no files patched");
+if (!patchedAny && !skippedNative) {
+  console.warn("[patch-privy-7702] no files patched — check if @privy-io packages are installed");
+} else if (skippedNative && !patchedAny) {
+  console.log("[patch-privy-7702] all targets have native EIP-7702 support — patch not needed");
 }

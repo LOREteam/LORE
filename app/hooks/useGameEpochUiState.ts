@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PollPhase } from "./useGameEpochPresentation";
 
 interface UseGameEpochUiStateOptions {
@@ -9,6 +9,17 @@ interface UseGameEpochUiStateOptions {
 
 export function useGameEpochUiState({ seededVisualEpoch }: UseGameEpochUiStateOptions) {
   const [visualEpoch, setVisualEpoch] = useState<string | null>(seededVisualEpoch);
+
+  // Sync with seeded value when it becomes available after initial render
+  // (e.g. live-state bootstrap resolves after the component mounted).
+  useEffect(() => {
+    if (seededVisualEpoch && seededVisualEpoch !== visualEpoch) {
+      setVisualEpoch(seededVisualEpoch);
+    }
+    // Only react to seededVisualEpoch changes — visualEpoch is intentionally excluded
+    // to avoid overwriting user-driven updates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seededVisualEpoch]);
   const [isRevealing, setIsRevealing] = useState(false);
   const [lockedGridEpoch, setLockedGridEpoch] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState(0);

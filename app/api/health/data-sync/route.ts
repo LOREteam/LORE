@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { formatUnits, parseAbi } from "viem";
 import {
   DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS,
@@ -11,6 +11,7 @@ import {
   publicClient,
   CONTRACT_ADDRESS,
 } from "../../_lib/dataBridge";
+import { isAuthorizedHealthDiagnosticsRequest } from "../_lib/diagnosticsAuth";
 import { dbPath } from "../../../../server/db";
 import { getMetaJson, getRecentRewardClaims } from "../../../../server/storage";
 
@@ -78,6 +79,109 @@ type GlobalWithDataSyncTrend = typeof globalThis & {
   __loreDataSyncTrendHistory?: SyncTrendSample[];
 };
 
+type DataSyncHealthResponse = {
+  status: string;
+  visibility: "public" | "private";
+  redacted: boolean;
+  contract: {
+    currentEpoch: number;
+    headBlock: string;
+  };
+  storage: {
+    currentEpochMeta: number | null;
+    lastIndexedBlock: string | null;
+    repairCursorBlock: string | null;
+    lagBlocks: number | null;
+    latestStoredJackpotBlock: string | null;
+    latestRewardClaimBlock: string | null;
+    rewardClaimsLagToHead: number | null;
+    rewardClaimsLagToIndexer: number | null;
+  };
+  epochs: {
+    expectedResolvedRange: string;
+    storedCount: number;
+    missingCount: number;
+    latestStoredEpoch: number | null;
+    highestContiguousEpoch: number | null;
+    coveragePct: number;
+    contiguousCoveragePct: number;
+    missingLatest: number[];
+  };
+  catchUp: {
+    phase: string;
+    totalBlocksToIndex: number;
+    indexedBlocksToCurrentHead: number;
+    blockProgressPct: number;
+    epochCoveragePct: number;
+    contiguousEpochCoveragePct: number;
+    blockRatePerMinute: number | null;
+    epochRatePerMinute: number | null;
+    estimatedMinutesToHead: number | null;
+    recentSamples: Array<{
+      ts: number;
+      lastIndexedBlock: string | null;
+      storedEpochCount: number;
+      lagBlocks: number | null;
+    }>;
+  };
+  jackpots: {
+    lastDailyEpoch: number;
+    lastDailyAmount: string;
+    hasLatestDailyInDb: boolean;
+    lastWeeklyEpoch: number;
+    lastWeeklyAmount: string;
+    hasLatestWeeklyInDb: boolean;
+    totalStored: number;
+    servingMode: string;
+  };
+  recentWins: {
+    totalStored: number;
+    latestRewardClaimBlock: string | null;
+    lagToHeadBlocks: number | null;
+    lagToIndexerBlocks: number | null;
+    servingMode: string;
+  };
+  indexer: {
+    run: {
+      startedAt?: number;
+      completedAt?: number;
+      fromBlock?: string | null;
+      toBlock?: string | null;
+      totalLogs?: number;
+      runCompletedAgeMs: number | null;
+      stale: boolean;
+    };
+    repair: {
+      at?: number;
+      fromBlock?: string | null;
+      toBlock?: string | null;
+      repairedLogs?: number;
+      ageMs: number | null;
+      stale: boolean;
+    };
+    reconcile: {
+      at?: number;
+      currentEpoch?: number;
+      missingEpochs?: number;
+      repairedEpochs?: number;
+      targetEpochs?: number[];
+      ageMs: number | null;
+      stale: boolean;
+    };
+  };
+  hints: string[];
+  ts: number;
+  env: {
+    network: string;
+    dbPath: string | null;
+    deployBlock: string;
+    lagWarnBlocks: number | null;
+    jackpotRecoveryBlockLag: number | null;
+    recentWinsRecoveryBlockLag: number | null;
+    indexerHeartbeatStaleMs: number | null;
+  };
+};
+
 function toNum(v: unknown): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -104,7 +208,43 @@ function deriveServingMode(options: {
   return "indexer_fast_path";
 }
 
-export async function GET() {
+function redactHealthResponse(payload: DataSyncHealthResponse): DataSyncHealthResponse {
+  return {
+    ...payload,
+    visibility: "public",
+    redacted: true,
+    catchUp: {
+      ...payload.catchUp,
+      recentSamples: [],
+    },
+    indexer: {
+      run: {
+        ...payload.indexer.run,
+        fromBlock: null,
+        toBlock: null,
+      },
+      repair: {
+        ...payload.indexer.repair,
+        fromBlock: null,
+        toBlock: null,
+      },
+      reconcile: {
+        ...payload.indexer.reconcile,
+        targetEpochs: [],
+      },
+    },
+    hints: [
+      ...payload.hints,
+      "Sensitive diagnostics are redacted from the public health response.",
+    ],
+    env: {
+      ...payload.env,
+      dbPath: null,
+    },
+  };
+}
+
+export async function GET(request: NextRequest) {
   try {
     const now = Date.now();
     const [head, chainEpochRaw, jackpotInfoRaw, dbEpochMeta, dbLastIndexed, dbRepairCursor, dbEpochsRaw, dbJackpotsRaw] =
@@ -278,8 +418,10 @@ export async function GET() {
       (runCompletedAgeMs !== null && runCompletedAgeMs > INDEXER_HEARTBEAT_STALE_MS) ||
       (dbCurrentEpoch !== null && Math.abs(dbCurrentEpoch - chainCurrentEpoch) > 1);
 
-    return NextResponse.json({
+    const payload: DataSyncHealthResponse = {
       status: degraded ? "degraded" : "healthy",
+      visibility: "private",
+      redacted: false,
       contract: {
         currentEpoch: chainCurrentEpoch,
         headBlock: head.toString(),
@@ -369,7 +511,7 @@ export async function GET() {
         jackpotServingMode !== "indexer_fast_path" ? "Jackpots API is in recovery-capable mode and may pull a fresh tail from chain." : null,
         recentWinsServingMode !== "indexer_fast_path" ? "Recent wins API is in recovery-capable mode and may pull RewardClaimed logs from chain." : null,
         runCompletedAgeMs !== null && runCompletedAgeMs > INDEXER_HEARTBEAT_STALE_MS ? "Indexer heartbeat is stale; watch loop may be stuck or down." : null,
-      ].filter(Boolean),
+      ].filter((hint): hint is string => Boolean(hint)),
       ts: Date.now(),
       env: {
         network: APP_NETWORK,
@@ -380,7 +522,11 @@ export async function GET() {
         recentWinsRecoveryBlockLag: toNum(RECENT_WINS_RECOVERY_BLOCK_LAG),
         indexerHeartbeatStaleMs: toNum(INDEXER_HEARTBEAT_STALE_MS),
       },
-    });
+    };
+
+    return NextResponse.json(
+      isAuthorizedHealthDiagnosticsRequest(request) ? payload : redactHealthResponse(payload),
+    );
   } catch (err) {
     console.error("[api/health/data-sync] Error:", err);
     return NextResponse.json(

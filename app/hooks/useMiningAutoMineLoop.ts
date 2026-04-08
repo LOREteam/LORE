@@ -66,6 +66,11 @@ interface RunAutoMineLoopOptions {
     amountRawPerTile: bigint,
     gasOverrides?: GasOverrides,
   ) => Promise<"confirmed" | "pending">;
+  placeBets7702?: (
+    tileIds: number[],
+    amountRawPerTile: bigint,
+    gasOverrides?: GasOverrides,
+  ) => Promise<"confirmed" | "pending">;
   readClient: () => PublicClient | undefined;
   readRefreshSession: () => SessionRefreshFn | undefined;
   readSilentSend: () => unknown;
@@ -138,6 +143,7 @@ export async function runAutoMineLoop({
   pendingBetRef,
   placeBets,
   placeBetsSilent,
+  placeBets7702,
   readClient,
   readRefreshSession,
   readSilentSend,
@@ -306,6 +312,7 @@ export async function runAutoMineLoop({
         pendingBetRef,
         placeBets,
         placeBetsSilent,
+        placeBets7702,
         publicClient: client,
         readSilentSend,
         rounds,

@@ -3,6 +3,12 @@
 @theme inline {
   --color-background: #060612;
   --color-foreground: #e2e8f0;
+  --color-surface: #0a0a16;
+  --color-surface-raised: #0d0d1a;
+  --color-violet-glow: rgba(139, 92, 246, 0.06);
+  --color-violet-glow-strong: rgba(139, 92, 246, 0.15);
+  --color-sky-glow: rgba(14, 165, 233, 0.15);
+  --color-amber-glow: rgba(251, 191, 36, 0.15);
 }
 
 html {
@@ -686,3 +692,8 @@ html[data-motion="reduced"] *::after {
 .animate-jackpot-glow {
   animation: jackpot-glow 2s ease-in-out infinite;
 }
+
+/* ══════ MINING GRID WINNER INLINE→CLASS ══════ */
+.animate-winner-glow-breathe { animation: winner-glow-breathe 2s ease-in-out infinite; }
+.animate-winner-glow-breathe-mine { animation: winner-glow-breathe-mine 2s ease-in-out infinite; }
+.animate-winner-badge-slide { animation: winner-badge-slide 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s both; }

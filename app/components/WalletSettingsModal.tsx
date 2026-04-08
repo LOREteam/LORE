@@ -1,9 +1,10 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { downloadLogs } from "../lib/logger";
 import { UiButton } from "./ui/UiButton";
 import { uiTokens } from "./ui/tokens";
+import { cn } from "../lib/cn";
 import { WalletSettingsDeepScanPanel } from "./wallet/WalletSettingsDeepScanPanel";
 import { WalletSettingsOverviewPanel } from "./wallet/WalletSettingsOverviewPanel";
 import { WalletSettingsPendingTxPanel } from "./wallet/WalletSettingsPendingTxPanel";
@@ -64,7 +65,18 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   onRunEip7702Diagnostic,
   onRunEip7702SendDiagnostic,
 }: WalletSettingsModalProps) {
+  const [activeSection, setActiveSection] = useState<"all" | "overview" | "7702" | "privy" | "transfer" | "scan">("all");
+
   if (!isOpen) return null;
+
+  const SECTIONS = [
+    { id: "all" as const, label: "All" },
+    { id: "overview" as const, label: "General" },
+    { id: "7702" as const, label: "7702" },
+    { id: "privy" as const, label: "Privy" },
+    { id: "transfer" as const, label: "Transfer" },
+    { id: "scan" as const, label: "Scan" },
+  ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
@@ -83,7 +95,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
             <p className="text-gray-500 text-xs mt-0.5">Manage Privy wallet, export keys, withdraw</p>
           </div>
           <div className="flex items-center gap-2">
-            <UiButton onClick={downloadLogs} variant="secondary" size="sm" uppercase className="text-xs">
+            <UiButton onClick={downloadLogs} variant="secondary" size="sm" uppercase className="text-xs hidden sm:inline-flex">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
@@ -95,74 +107,105 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
           </div>
         </div>
 
+        {/* Section tabs for mobile navigation */}
+        <div className="no-scrollbar flex gap-1 overflow-x-auto border-b border-violet-500/10 px-4 py-2 sm:hidden">
+          {SECTIONS.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => setActiveSection(s.id)}
+              className={cn(
+                "shrink-0 rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors",
+                activeSection === s.id
+                  ? "bg-violet-500/15 text-violet-300 border border-violet-400/30"
+                  : "text-slate-500 hover:text-slate-300 border border-transparent",
+              )}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
         <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
-          <WalletSettingsOverviewPanel
-            connectedWalletAddress={connectedWalletAddress}
-            soundSettings={soundSettings}
-            onSoundSettingChange={onSoundSettingChange}
-            reducedMotion={reducedMotion}
-            onReducedMotionChange={onReducedMotionChange}
-          />
+          {(activeSection === "all" || activeSection === "overview") && (
+            <WalletSettingsOverviewPanel
+              connectedWalletAddress={connectedWalletAddress}
+              soundSettings={soundSettings}
+              onSoundSettingChange={onSoundSettingChange}
+              reducedMotion={reducedMotion}
+              onReducedMotionChange={onReducedMotionChange}
+            />
+          )}
 
-          <WalletSettings7702Panel
-            eip7702Diagnostic={eip7702Diagnostic}
-            onRunEip7702Diagnostic={onRunEip7702Diagnostic}
-            onRunEip7702SendDiagnostic={onRunEip7702SendDiagnostic}
-          />
+          {(activeSection === "all" || activeSection === "7702") && (
+            <>
+              <WalletSettings7702Panel
+                eip7702Diagnostic={eip7702Diagnostic}
+                onRunEip7702Diagnostic={onRunEip7702Diagnostic}
+                onRunEip7702SendDiagnostic={onRunEip7702SendDiagnostic}
+              />
 
-          <WalletSettingsPendingTxPanel
-            pendingTransactionStatus={pendingTransactionStatus}
-            isRefreshingPendingTx={isRefreshingPendingTx}
-            isCancellingPendingTx={isCancellingPendingTx}
-            onRefreshPendingTx={onRefreshPendingTx}
-            onCancelPendingTx={onCancelPendingTx}
-          />
+              <WalletSettingsPendingTxPanel
+                pendingTransactionStatus={pendingTransactionStatus}
+                isRefreshingPendingTx={isRefreshingPendingTx}
+                isCancellingPendingTx={isCancellingPendingTx}
+                onRefreshPendingTx={onRefreshPendingTx}
+                onCancelPendingTx={onCancelPendingTx}
+              />
+            </>
+          )}
 
-          <WalletSettingsPrivyPanel
-            embeddedWalletAddress={embeddedWalletAddress}
-            externalWalletAddress={externalWalletAddress}
-            embeddedAddressCopied={embeddedAddressCopied}
-            depositEthAmount={depositEthAmount}
-            depositTokenAmount={depositTokenAmount}
-            isDepositingEth={isDepositingEth}
-            isDepositingToken={isDepositingToken}
-            onCopyEmbeddedAddress={onCopyEmbeddedAddress}
-            onExportEmbeddedWallet={onExportEmbeddedWallet}
-            onCreateEmbeddedWallet={onCreateEmbeddedWallet}
-            onDepositEthAmountChange={onDepositEthAmountChange}
-            onDepositTokenAmountChange={onDepositTokenAmountChange}
-            onDepositEthToEmbedded={onDepositEthToEmbedded}
-            onDepositTokenToEmbedded={onDepositTokenToEmbedded}
-          />
+          {(activeSection === "all" || activeSection === "privy") && (
+            <WalletSettingsPrivyPanel
+              embeddedWalletAddress={embeddedWalletAddress}
+              externalWalletAddress={externalWalletAddress}
+              embeddedAddressCopied={embeddedAddressCopied}
+              depositEthAmount={depositEthAmount}
+              depositTokenAmount={depositTokenAmount}
+              isDepositingEth={isDepositingEth}
+              isDepositingToken={isDepositingToken}
+              onCopyEmbeddedAddress={onCopyEmbeddedAddress}
+              onExportEmbeddedWallet={onExportEmbeddedWallet}
+              onCreateEmbeddedWallet={onCreateEmbeddedWallet}
+              onDepositEthAmountChange={onDepositEthAmountChange}
+              onDepositTokenAmountChange={onDepositTokenAmountChange}
+              onDepositEthToEmbedded={onDepositEthToEmbedded}
+              onDepositTokenToEmbedded={onDepositTokenToEmbedded}
+            />
+          )}
 
-          <WalletSettingsTransferPanels
-            embeddedWalletAddress={embeddedWalletAddress}
-            externalWalletAddress={externalWalletAddress}
-            formattedLineaBalance={formattedLineaBalance}
-            formattedEthBalance={formattedEthBalance}
-            withdrawAmount={withdrawAmount}
-            withdrawEthAmount={withdrawEthAmount}
-            isWithdrawing={isWithdrawing}
-            isWithdrawingEth={isWithdrawingEth}
-            walletTransfers={walletTransfers}
-            walletTransfersLoading={walletTransfersLoading}
-            onWithdrawAmountChange={onWithdrawAmountChange}
-            onWithdrawEthAmountChange={onWithdrawEthAmountChange}
-            onWithdrawToExternal={onWithdrawToExternal}
-            onWithdrawEthToExternal={onWithdrawEthToExternal}
-            onLoadWalletTransfers={onLoadWalletTransfers}
-          />
+          {(activeSection === "all" || activeSection === "transfer") && (
+            <WalletSettingsTransferPanels
+              embeddedWalletAddress={embeddedWalletAddress}
+              externalWalletAddress={externalWalletAddress}
+              formattedLineaBalance={formattedLineaBalance}
+              formattedEthBalance={formattedEthBalance}
+              withdrawAmount={withdrawAmount}
+              withdrawEthAmount={withdrawEthAmount}
+              isWithdrawing={isWithdrawing}
+              isWithdrawingEth={isWithdrawingEth}
+              walletTransfers={walletTransfers}
+              walletTransfersLoading={walletTransfersLoading}
+              onWithdrawAmountChange={onWithdrawAmountChange}
+              onWithdrawEthAmountChange={onWithdrawEthAmountChange}
+              onWithdrawToExternal={onWithdrawToExternal}
+              onWithdrawEthToExternal={onWithdrawEthToExternal}
+              onLoadWalletTransfers={onLoadWalletTransfers}
+            />
+          )}
 
-          <WalletSettingsDeepScanPanel
-            deepScanWins={deepScanWins}
-            deepScanScanning={deepScanScanning}
-            deepScanClaiming={deepScanClaiming}
-            deepScanProgress={deepScanProgress}
-            onDeepScan={onDeepScan}
-            onDeepScanStop={onDeepScanStop}
-            onDeepClaimOne={onDeepClaimOne}
-            onDeepClaimAll={onDeepClaimAll}
-          />
+          {(activeSection === "all" || activeSection === "scan") && (
+            <WalletSettingsDeepScanPanel
+              deepScanWins={deepScanWins}
+              deepScanScanning={deepScanScanning}
+              deepScanClaiming={deepScanClaiming}
+              deepScanProgress={deepScanProgress}
+              onDeepScan={onDeepScan}
+              onDeepScanStop={onDeepScanStop}
+              onDeepClaimOne={onDeepClaimOne}
+              onDeepClaimAll={onDeepClaimAll}
+            />
+          )}
         </div>
       </div>
     </div>

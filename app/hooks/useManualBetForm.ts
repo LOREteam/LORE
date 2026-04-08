@@ -21,7 +21,8 @@ export function useManualBetForm({
   selectedTilesCount,
   isPending,
   isRevealing,
-  isAnalyzing = false,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  isAnalyzing: _isAnalyzing = false,
   isAutoMining,
 }: UseManualBetFormOptions) {
   const [betAmount, setBetAmount] = useState("10.0");
@@ -50,7 +51,6 @@ export function useManualBetForm({
     isPending ||
     selectedTilesCount === 0 ||
     isRevealing ||
-    isAnalyzing ||
     isAutoMining ||
     manualInsufficient;
 

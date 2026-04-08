@@ -110,12 +110,12 @@ export function WalletSettingsTransferPanels({
                 <div className="flex-1 rounded-lg bg-emerald-500/[0.06] border border-emerald-500/20 p-2.5 text-center">
                   <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Deposited</div>
                   <div className="text-sm font-bold text-emerald-400 font-mono">{walletTransfers.totalIn.toFixed(2)}</div>
-                  <div className="text-[9px] text-gray-600">LINEA</div>
+                  <div className="text-[9px] text-gray-400">LINEA</div>
                 </div>
                 <div className="flex-1 rounded-lg bg-red-500/[0.06] border border-red-500/20 p-2.5 text-center">
                   <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Withdrawn</div>
                   <div className="text-sm font-bold text-red-400 font-mono">{walletTransfers.totalOut.toFixed(2)}</div>
-                  <div className="text-[9px] text-gray-600">LINEA</div>
+                  <div className="text-[9px] text-gray-400">LINEA</div>
                 </div>
               </div>
 
@@ -137,13 +137,13 @@ export function WalletSettingsTransferPanels({
                         </a>
                       </div>
                       <span className={`text-xs font-bold font-mono ${transfer.direction === "in" ? "text-emerald-400" : "text-red-400"}`}>
-                        {transfer.direction === "in" ? "+" : "-"}{transfer.amount} <span className="text-gray-600 text-[9px]">LINEA</span>
+                        {transfer.direction === "in" ? "+" : "-"}{transfer.amount} <span className="text-gray-400 text-[9px]">LINEA</span>
                       </span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-3 text-[10px] text-gray-600 italic">No ore has moved through these tunnels.</div>
+                <div className="text-center py-3 text-[10px] text-gray-400 italic">No ore has moved through these tunnels.</div>
               )}
             </>
           )}

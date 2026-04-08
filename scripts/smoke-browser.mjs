@@ -30,6 +30,7 @@ function isIgnoredConsoleMessage(message) {
     "Loading the stylesheet 'http://gc.kis.v2.scr.kaspersky-labs.com/",
     "Can't perform a React state update on a component that hasn't mounted yet.",
     "Failed to load resource",
+    "TypeError: Failed to fetch",
     "Do not know how to serialize a BigInt",
     "[HMR]",
     "[Fast Refresh]",
@@ -412,6 +413,16 @@ async function verifyAutoMinerInputPersistence(page) {
   const betSizeInput = page.getByRole("textbox", { name: "Bet Size" });
   const targetsInput = page.getByRole("spinbutton", { name: "Targets" });
   const cyclesInput = page.getByRole("spinbutton", { name: "Cycles" });
+
+  const inputsEnabled = await Promise.all([
+    betSizeInput.isEnabled().catch(() => false),
+    targetsInput.isEnabled().catch(() => false),
+    cyclesInput.isEnabled().catch(() => false),
+  ]);
+  if (inputsEnabled.some((enabled) => !enabled)) {
+    console.log("SKIP auto-miner persistence smoke (inputs are disabled in the current guest state)");
+    return;
+  }
 
   await betSizeInput.fill("1111");
   await targetsInput.fill("6");

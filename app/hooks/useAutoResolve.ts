@@ -9,12 +9,21 @@ import { clearResolveGuard, readResolveGuard, writeResolveGuard } from "./autoRe
 import { waitUnlessCancelled } from "./autoResolveShared";
 
 const ENABLE_CLIENT_BOOTSTRAP_RESOLVE = true;
-const ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK = true;
-const BOOTSTRAP_RESOLVE_RETRY_MS = 12_000;
+// Client wallet (Privy embedded) MUST NOT pay gas to resolve. The contract
+// auto-resolves the previous epoch on the next placeBet call, and the server
+// keeper acts as a fallback for stuck epochs. Anything beyond that just burns
+// player gas needlessly.
+const ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK = false;
+const BOOTSTRAP_RESOLVE_RETRY_MS = 30_000;
 const ENABLE_AUTO_RESOLVE_SWEEP = false;
-const AUTO_RESOLVE_RETRY_AFTER_MS = 25_000;
+const AUTO_RESOLVE_RETRY_AFTER_MS = 60_000;
 const MIN_ETH_FOR_GAS = 0.0005;
 const BOOTSTRAP_RESOLVE_REQUEST_TIMEOUT_MS = 8_000;
+/** How long to wait after timer hits 0 before pinging the keeper.
+ * Gives organic player bets a chance to trigger the contract's
+ * built-in `_autoResolveIfNeeded()` first, so the keeper only fires
+ * when nobody actually wants to play. */
+const KEEPER_TRIGGER_INITIAL_DELAY_MS = 30_000;
 
 type SilentSender = (
   tx: {
@@ -65,6 +74,14 @@ export function useAutoResolve({
   timeLeftRef.current = timeLeft;
   const currentEpochResolvedRef = useRef(currentEpochResolved);
   currentEpochResolvedRef.current = currentEpochResolved;
+  const refetchEpochRef = useRef(refetchEpoch);
+  refetchEpochRef.current = refetchEpoch;
+  const refetchGridEpochDataRef = useRef(refetchGridEpochData);
+  refetchGridEpochDataRef.current = refetchGridEpochData;
+  const refetchTileDataRef = useRef(refetchTileData);
+  refetchTileDataRef.current = refetchTileData;
+  const refetchUserBetsRef = useRef(refetchUserBets);
+  refetchUserBetsRef.current = refetchUserBets;
 
   useEffect(() => {
     const onVisible = () => {
@@ -174,9 +191,34 @@ export function useAutoResolve({
 
     let cancelled = false;
     const epochKey = actualCurrentEpoch.toString();
-    const delayMs = 4_000 + Math.floor(Math.random() * 2_000);
+    // Long delay so organic player bets get a chance to trigger contract auto-resolve.
+    // Add jitter so multiple clients don't all hammer the keeper at once.
+    const delayMs = KEEPER_TRIGGER_INITIAL_DELAY_MS + Math.floor(Math.random() * 5_000);
+
+    /** Pre-check on the client: skip the keeper entirely if the epoch has zero
+     * bets. There's nothing to resolve and burning keeper gas is pointless. */
+    const epochHasBets = async (): Promise<boolean> => {
+      if (!publicClient) return true; // err on the side of attempting resolve
+      try {
+        const epochData = (await publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "epochs",
+          args: [BigInt(epochKey)],
+        })) as [bigint, bigint, bigint, boolean, boolean, boolean];
+        // Index 0 = totalPool. If zero, no one bet → don't resolve.
+        return epochData[0] > 0n;
+      } catch {
+        return true; // network error: let the keeper try
+      }
+    };
 
     const run = async () => {
+      // Bail out early if there are no bets — round just sits frozen.
+      if (!(await epochHasBets())) {
+        log.info("AutoResolve", "skipping keeper trigger: epoch has no bets", { epoch: epochKey });
+        return;
+      }
       while (!cancelled) {
         const runNow = Date.now();
         const runGuard = readResolveGuard();
@@ -270,19 +312,40 @@ export function useAutoResolve({
               continue;
             }
 
-            if (
-              noopReason === "resolve_tx_known" ||
-              noopReason === "resolve_nonce_already_used" ||
-              noopReason === "epoch_already_resolved" ||
-              noopReason === "epoch_no_longer_current" ||
-              noopReason === "epoch_not_expired" ||
-              payload.isResolved === true ||
-              payload.isExpired === false
-            ) {
+            if (noopReason === "epoch_empty") {
+              // Round is frozen because nobody bet — that's intentional.
+              // Stop polling for this epoch; the contract's built-in
+              // _autoResolveIfNeeded will handle it once a player shows up.
               autoResolveAttemptedRef.current = epochKey;
               autoResolveAttemptTsRef.current = Date.now();
               clearResolveGuard();
               return;
+            }
+
+            if (
+              noopReason === "epoch_already_resolved" ||
+              noopReason === "epoch_no_longer_current" ||
+              noopReason === "resolve_tx_known" ||
+              noopReason === "resolve_nonce_already_used" ||
+              payload.isResolved === true
+            ) {
+              // Epoch IS resolved on-chain — force refetch so UI picks up the new epoch.
+              autoResolveAttemptedRef.current = epochKey;
+              autoResolveAttemptTsRef.current = Date.now();
+              clearResolveGuard();
+              void refetchEpochRef.current();
+              void refetchGridEpochDataRef.current();
+              void refetchTileDataRef.current();
+              void refetchUserBetsRef.current();
+              return;
+            }
+
+            if (noopReason === "epoch_not_expired" || payload.isExpired === false) {
+              // Clock skew: client thinks epoch expired, contract disagrees.
+              // Retry after a short delay instead of giving up permanently.
+              clearResolveGuard();
+              if (!(await waitUnlessCancelled(() => cancelled, BOOTSTRAP_RESOLVE_RETRY_MS))) return;
+              continue;
             }
 
             autoResolveAttemptedRef.current = epochKey;
@@ -344,7 +407,7 @@ export function useAutoResolve({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [actualCurrentEpoch, timeLeft, tryClientResolveEpoch]);
+  }, [actualCurrentEpoch, publicClient, timeLeft, tryClientResolveEpoch]);
 
   useEffect(() => {
     if (!ENABLE_AUTO_RESOLVE_SWEEP) return;

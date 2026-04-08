@@ -430,7 +430,7 @@ function FloatingParticles() {
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="text-center">
-      <div className="text-[8px] font-bold text-gray-600 uppercase tracking-widest">{label}</div>
+      <div className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">{label}</div>
       <div className="text-sm font-black text-white">{value}</div>
       {sub ? <div className="text-[9px] text-gray-500 mt-0.5 max-w-[120px] mx-auto">{sub}</div> : null}
     </div>
@@ -637,9 +637,9 @@ function FormulaBlock() {
       <div className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-3">Reward Formula</div>
       <div className="text-lg sm:text-xl font-mono font-black text-white">
         <span className="text-violet-400">reward</span>
-        <span className="text-gray-600 mx-2">=</span>
+        <span className="text-gray-400 mx-2">=</span>
         <span className="text-emerald-400">rewardPool</span>
-        <span className="text-gray-600 mx-1">×</span>
+        <span className="text-gray-400 mx-1">×</span>
         <span className="inline-block align-middle">
           <span className="block text-center text-sky-400 border-b border-gray-600 px-2 pb-0.5 text-base">yourBet</span>
           <span className="block text-center text-amber-400 pt-0.5 text-base">tileTotal</span>
@@ -720,15 +720,15 @@ function Footer() {
         <span className="text-xl font-black">
           <span className="text-white">L</span><span className="text-violet-400">ORE</span>
         </span>
-        <span className="text-[8px] text-gray-600 font-bold uppercase tracking-widest">– mine the chain</span>
+        <span className="text-[8px] text-gray-400 font-bold uppercase tracking-widest">– mine the chain</span>
       </div>
-      <p className="text-[10px] text-gray-600">
+      <p className="text-[10px] text-gray-400">
         Built on Linea · Powered by Privy · Fully On-Chain
       </p>
-      <p className="text-[9px] text-gray-700 mt-1">
+      <p className="text-[9px] text-gray-500 mt-1">
         This document is for informational purposes. Not financial advice. Play responsibly.
       </p>
-      <p className="text-[9px] text-gray-600 mt-2">
+      <p className="text-[9px] text-gray-400 mt-2">
         <a href="/privacy" className="text-violet-400/80 hover:text-violet-400 underline">Privacy Policy</a>
       </p>
     </div>

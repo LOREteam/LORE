@@ -33,19 +33,25 @@ export function useGameCountdown({
   const timeLeftRef = useRef(0);
   const didRefetchAtZeroRef = useRef(false);
   const lastZeroRetryAtRef = useRef(0);
-  const isRevealingRef = useRef(isRevealing);
-  const visualEpochRef = useRef(visualEpoch);
-  const lockedGridEpochRef = useRef(lockedGridEpoch);
-  const refetchEpochRef = useRef(refetchEpoch);
-  const refetchGridEpochDataRef = useRef(refetchGridEpochData);
-  const refetchEpochEndTimeRef = useRef(refetchEpochEndTime);
 
-  isRevealingRef.current = isRevealing;
-  visualEpochRef.current = visualEpoch;
-  lockedGridEpochRef.current = lockedGridEpoch;
-  refetchEpochRef.current = refetchEpoch;
-  refetchGridEpochDataRef.current = refetchGridEpochData;
-  refetchEpochEndTimeRef.current = refetchEpochEndTime;
+  // Single ref container for props that change frequently, avoids stale closures
+  // while keeping the code DRY and reducing individual ref bookkeeping.
+  const latestRef = useRef({
+    isRevealing,
+    visualEpoch,
+    lockedGridEpoch,
+    refetchEpoch,
+    refetchGridEpochData,
+    refetchEpochEndTime,
+  });
+  latestRef.current = {
+    isRevealing,
+    visualEpoch,
+    lockedGridEpoch,
+    refetchEpoch,
+    refetchGridEpochData,
+    refetchEpochEndTime,
+  };
 
   useEffect(() => {
     if (!liveStateReady || !effectiveEpochEndTime) {
@@ -75,21 +81,22 @@ export function useGameCountdown({
       if (nextTimeLeft === 0 && !didRefetchAtZeroRef.current) {
         didRefetchAtZeroRef.current = true;
         lastZeroRetryAtRef.current = now;
-        if (visualEpochRef.current && !lockedGridEpochRef.current && !isRevealingRef.current) {
-          setLockedGridEpoch(visualEpochRef.current);
+        const { isRevealing: rev, visualEpoch: ve, lockedGridEpoch: lge } = latestRef.current;
+        if (ve && !lge && !rev) {
+          setLockedGridEpoch(ve);
         }
-        refetchEpochRef.current();
-        refetchGridEpochDataRef.current();
-        refetchEpochEndTimeRef.current();
+        latestRef.current.refetchEpoch();
+        latestRef.current.refetchGridEpochData();
+        latestRef.current.refetchEpochEndTime();
       } else if (
         nextTimeLeft === 0 &&
-        !isRevealingRef.current &&
+        !latestRef.current.isRevealing &&
         now - lastZeroRetryAtRef.current >= 5_000
       ) {
         lastZeroRetryAtRef.current = now;
-        refetchEpochRef.current();
-        refetchGridEpochDataRef.current();
-        refetchEpochEndTimeRef.current();
+        latestRef.current.refetchEpoch();
+        latestRef.current.refetchGridEpochData();
+        latestRef.current.refetchEpochEndTime();
       }
     };
 

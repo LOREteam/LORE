@@ -23,53 +23,88 @@ const CLAIM_GAS_FALLBACK = 200_000n;
 const CLAIM_GAS_BUFFER = 20_000n;
 const CLAIM_GAS_HEADROOM_BPS = 12_000n;
 const BPS_DENOMINATOR = 10_000n;
-const REWARD_SCAN_CACHE_TTL_MS = 60_000;
+/** How long before a background re-scan is triggered after using cached data. */
+const REWARD_SCAN_CACHE_RESCAN_MS = 5 * 60_000; // 5 minutes
 
 type RewardScanCacheEnvelope = {
+  /** Timestamp of the last save */
   savedAt?: number;
-  epoch?: string;
+  /** The highest epoch that was scanned up to (exclusive upper bound of scanned range) */
+  lastScannedEpoch?: string;
+  /** The deepest (lowest) epoch that was scanned down to */
+  deepestScannedEpoch?: string;
+  /** Unclaimed wins found during scan */
   wins?: UnclaimedWin[];
 };
 
 function getRewardScanCacheKey(address: string) {
-  return `lore:reward-scan:v1:${address.toLowerCase()}`;
+  return `lore:reward-scan:v2:${address.toLowerCase()}`;
 }
 
-function loadCachedRewardScan(address: string, epoch: string): { wins: UnclaimedWin[]; savedAt: number | null } {
-  if (typeof localStorage === "undefined") return { wins: [], savedAt: null };
+function loadCachedRewardScan(address: string): {
+  wins: UnclaimedWin[];
+  savedAt: number | null;
+  lastScannedEpoch: string | null;
+  deepestScannedEpoch: string | null;
+} {
+  if (typeof localStorage === "undefined") return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
   try {
-    const raw = localStorage.getItem(getRewardScanCacheKey(address));
-    if (!raw) return { wins: [], savedAt: null };
-    const parsed = JSON.parse(raw) as RewardScanCacheEnvelope;
-    if (!parsed || parsed.epoch !== epoch || !Array.isArray(parsed.wins)) {
-      return { wins: [], savedAt: null };
+    // Try v2 first, then migrate v1 if present
+    let raw = localStorage.getItem(getRewardScanCacheKey(address));
+    if (!raw) {
+      // Attempt to read legacy v1 cache for seamless migration
+      const v1Key = `lore:reward-scan:v1:${address.toLowerCase()}`;
+      raw = localStorage.getItem(v1Key);
+      if (raw) {
+        // Remove legacy key after reading
+        try { localStorage.removeItem(v1Key); } catch { /* ignore */ }
+      }
     }
+    if (!raw) return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
+    const parsed = JSON.parse(raw) as RewardScanCacheEnvelope;
+    if (!parsed || !Array.isArray(parsed.wins)) {
+      return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
+    }
+    const wins = parsed.wins
+      .map((item) => {
+        const value = item ?? {};
+        if (typeof value.epoch !== "string" || typeof value.amountWei !== "string") return null;
+        return { epoch: value.epoch, amountWei: value.amountWei };
+      })
+      .filter((item): item is UnclaimedWin => item !== null);
     return {
-      wins: parsed.wins
-        .map((item) => {
-          const value = item ?? {};
-          if (typeof value.epoch !== "string" || typeof value.amountWei !== "string") return null;
-          return { epoch: value.epoch, amountWei: value.amountWei };
-        })
-        .filter((item): item is UnclaimedWin => item !== null),
+      wins,
       savedAt:
         typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
           ? parsed.savedAt
           : null,
+      lastScannedEpoch:
+        typeof parsed.lastScannedEpoch === "string" ? parsed.lastScannedEpoch
+        // Legacy v1 used `epoch` field — treat it as lastScannedEpoch
+        : typeof (parsed as Record<string, unknown>).epoch === "string" ? (parsed as Record<string, unknown>).epoch as string
+        : null,
+      deepestScannedEpoch:
+        typeof parsed.deepestScannedEpoch === "string" ? parsed.deepestScannedEpoch : null,
     };
   } catch {
-    return { wins: [], savedAt: null };
+    return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
   }
 }
 
-function saveCachedRewardScan(address: string, epoch: string, wins: UnclaimedWin[]) {
+function saveCachedRewardScan(
+  address: string,
+  wins: UnclaimedWin[],
+  lastScannedEpoch: string,
+  deepestScannedEpoch: string,
+) {
   if (typeof localStorage === "undefined") return;
   try {
     localStorage.setItem(
       getRewardScanCacheKey(address),
       JSON.stringify({
         savedAt: Date.now(),
-        epoch,
+        lastScannedEpoch,
+        deepestScannedEpoch,
         wins,
       } satisfies RewardScanCacheEnvelope),
     );
@@ -270,6 +305,13 @@ export function useRewardScanner(
     const epochKey = actualCurrentEpoch.toString();
     const scanKey = `${normalizedAddress}:${epochKey}`;
     if (scanRunningRef.current && activeScanKeyRef.current === scanKey) return;
+
+    // Load cache to determine scan boundaries
+    const cached = loadCachedRewardScan(normalizedAddress);
+    const cachedLastScanned = cached.lastScannedEpoch ? BigInt(cached.lastScannedEpoch) : null;
+    const cachedDeepest = cached.deepestScannedEpoch ? BigInt(cached.deepestScannedEpoch) : null;
+
+    // Skip if we already scanned up to this epoch and have results in memory
     if (
       lastScannedEpochRef.current === epochKey &&
       lastScannedAddressRef.current === normalizedAddress &&
@@ -289,6 +331,7 @@ export function useRewardScanner(
     }
 
     try {
+      // Start with any cached wins (they'll be re-validated for claimed status)
       const wins: UnclaimedWin[] = [];
       const startEpoch = actualCurrentEpoch > BigInt(1) ? actualCurrentEpoch - BigInt(1) : BigInt(0);
       const minEpoch = actualCurrentEpoch > MAX_SCAN_DEPTH
@@ -301,6 +344,7 @@ export function useRewardScanner(
       };
 
       const scanRange = async (rangeStart: bigint, rangeMin: bigint) => {
+        if (rangeStart < rangeMin) return;
         let cursor = rangeStart;
         let consecutiveEmpty = 0;
         while (cursor >= rangeMin && !scanAbortRef.current) {
@@ -379,31 +423,83 @@ export function useRewardScanner(
         }
       };
 
-      const quickMinEpoch = (() => {
-        const fastFloor = actualCurrentEpoch > FAST_SCAN_DEPTH
-          ? actualCurrentEpoch - FAST_SCAN_DEPTH
-          : BigInt(1);
-        return fastFloor > minEpoch ? fastFloor : minEpoch;
-      })();
-
-      await scanRange(startEpoch, quickMinEpoch);
-      if (scanAbortRef.current || requestId !== requestIdRef.current) return;
-      if (mountedRef.current) {
-        setUnclaimedWins(mergeWins(wins));
-      }
-
-      if (quickMinEpoch > minEpoch) {
-        if (mountedRef.current && shouldShowScanning) {
-          setIsDeepScanning(true);
-        }
-        await scanRange(quickMinEpoch - BigInt(1), minEpoch);
+      // --- Incremental scanning logic ---
+      // If we have a valid cache, only scan the gap: [cachedLastScanned .. currentEpoch-1]
+      // Then re-validate cached wins to remove any that were claimed since last scan.
+      const hasValidCache = cachedLastScanned != null && cachedLastScanned > BigInt(0);
+      if (hasValidCache && cachedLastScanned! < startEpoch) {
+        // Incremental: scan only new epochs (from current-1 down to cachedLastScanned)
+        await scanRange(startEpoch, cachedLastScanned!);
         if (scanAbortRef.current || requestId !== requestIdRef.current) return;
+
+        // Re-validate cached wins: check if any were claimed or dust-settled since last scan
+        if (cached.wins.length > 0) {
+          const cachedEpochIds = cached.wins.map((w) => w.epoch);
+          const [claimChecks, dustChecks] = await Promise.all([
+            publicClient.multicall({
+              contracts: cachedEpochIds.map((epochId) => ({
+                address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "hasClaimed" as const, args: [address, BigInt(epochId)],
+              })),
+            }),
+            publicClient.multicall({
+              contracts: cachedEpochIds.map((epochId) => ({
+                address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochDustSettled" as const, args: [BigInt(epochId)],
+              })),
+            }),
+          ]);
+          if (requestId !== requestIdRef.current) return;
+
+          cached.wins.forEach((w, index) => {
+            const claimed = claimChecks[index]?.result as unknown as boolean | undefined;
+            const dustSettled = dustChecks[index]?.result as unknown as boolean | undefined;
+            if (claimed !== true && dustSettled !== true) {
+              wins.push(w);
+            }
+          });
+        }
+
+        // Update UI with merged results after incremental scan
+        if (mountedRef.current) {
+          setUnclaimedWins(mergeWins(wins));
+        }
+
+        // If the previous deep scan didn't reach minEpoch, continue the deep scan
+        const needsDeepExtension = cachedDeepest != null && cachedDeepest > minEpoch;
+        if (needsDeepExtension) {
+          if (mountedRef.current && shouldShowScanning) {
+            setIsDeepScanning(true);
+          }
+          await scanRange(cachedDeepest! - BigInt(1), minEpoch);
+          if (scanAbortRef.current || requestId !== requestIdRef.current) return;
+        }
+      } else {
+        // Full scan: no usable cache, scan everything in two phases (fast + deep)
+        const quickMinEpoch = (() => {
+          const fastFloor = actualCurrentEpoch > FAST_SCAN_DEPTH
+            ? actualCurrentEpoch - FAST_SCAN_DEPTH
+            : BigInt(1);
+          return fastFloor > minEpoch ? fastFloor : minEpoch;
+        })();
+
+        await scanRange(startEpoch, quickMinEpoch);
+        if (scanAbortRef.current || requestId !== requestIdRef.current) return;
+        if (mountedRef.current) {
+          setUnclaimedWins(mergeWins(wins));
+        }
+
+        if (quickMinEpoch > minEpoch) {
+          if (mountedRef.current && shouldShowScanning) {
+            setIsDeepScanning(true);
+          }
+          await scanRange(quickMinEpoch - BigInt(1), minEpoch);
+          if (scanAbortRef.current || requestId !== requestIdRef.current) return;
+        }
       }
 
       const mergedWins = mergeWins(wins);
       lastScannedEpochRef.current = epochKey;
       lastScannedAddressRef.current = normalizedAddress;
-      saveCachedRewardScan(normalizedAddress, epochKey, mergedWins);
+      saveCachedRewardScan(normalizedAddress, mergedWins, epochKey, minEpoch.toString());
       cacheSavedAtRef.current = Date.now();
       if (requestId === requestIdRef.current && mountedRef.current) {
         setUnclaimedWins(mergedWins);
@@ -424,18 +520,25 @@ export function useRewardScanner(
 
   useEffect(() => {
     if (!enabled || !isPageVisible || !address || !actualCurrentEpoch) return;
-    const epochKey = actualCurrentEpoch.toString();
-    const cached = loadCachedRewardScan(address, epochKey);
+    const normalizedAddress = address.toLowerCase();
+    const cached = loadCachedRewardScan(normalizedAddress);
     cacheSavedAtRef.current = cached.savedAt;
+
+    // Immediately restore cached wins so the UI doesn't flash empty
     if (mountedRef.current && cached.wins.length > 0) {
       setUnclaimedWins(cached.wins);
     }
-    if (cached.savedAt && Date.now() - cached.savedAt < REWARD_SCAN_CACHE_TTL_MS) {
+
+    // If cache is recent enough, defer the background rescan
+    if (cached.savedAt && Date.now() - cached.savedAt < REWARD_SCAN_CACHE_RESCAN_MS) {
+      const remaining = REWARD_SCAN_CACHE_RESCAN_MS - (Date.now() - cached.savedAt);
       const timeoutId = window.setTimeout(() => {
         void scanRewards();
-      }, REWARD_SCAN_CACHE_TTL_MS - (Date.now() - cached.savedAt));
+      }, remaining);
       return () => window.clearTimeout(timeoutId);
     }
+
+    // Cache is stale or missing — scan immediately (incremental if cache exists)
     void scanRewards();
   }, [actualCurrentEpoch, address, enabled, isPageVisible, scanRewards]);
 
@@ -471,7 +574,8 @@ export function useRewardScanner(
           setUnclaimedWins((prev) => {
             const next = prev.filter((w) => w.epoch !== epochId);
             if (address && actualCurrentEpoch) {
-              saveCachedRewardScan(address, actualCurrentEpoch.toString(), next);
+              const minEpoch = actualCurrentEpoch > MAX_SCAN_DEPTH ? actualCurrentEpoch - MAX_SCAN_DEPTH : BigInt(1);
+              saveCachedRewardScan(address.toLowerCase(), next, actualCurrentEpoch.toString(), minEpoch.toString());
               cacheSavedAtRef.current = Date.now();
             }
             return next;
@@ -560,7 +664,8 @@ export function useRewardScanner(
         setUnclaimedWins((prev) => {
           const next = prev.filter((w) => !claimedEpochs.has(w.epoch));
           if (address && actualCurrentEpoch) {
-            saveCachedRewardScan(address, actualCurrentEpoch.toString(), next);
+            const minEpoch = actualCurrentEpoch > MAX_SCAN_DEPTH ? actualCurrentEpoch - MAX_SCAN_DEPTH : BigInt(1);
+            saveCachedRewardScan(address.toLowerCase(), next, actualCurrentEpoch.toString(), minEpoch.toString());
             cacheSavedAtRef.current = Date.now();
           }
           return next;

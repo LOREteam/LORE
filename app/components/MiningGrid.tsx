@@ -7,9 +7,10 @@ import { Confetti } from "./Confetti";
 
 const TILE_INDICES = Array.from({ length: GRID_SIZE }, (_, i) => i);
 
-const STYLE_GLOW_BREATHE = { animation: "winner-glow-breathe 2s ease-in-out infinite" } as const;
-const STYLE_GLOW_BREATHE_MINE = { animation: "winner-glow-breathe-mine 2s ease-in-out infinite" } as const;
-const STYLE_BADGE_SLIDE = { animation: "winner-badge-slide 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s both" } as const;
+// Animation classes defined in globals.css — avoids inline style objects for SSR/cacheability
+const CLASS_GLOW_BREATHE = "animate-winner-glow-breathe";
+const CLASS_GLOW_BREATHE_MINE = "animate-winner-glow-breathe-mine";
+const CLASS_BADGE_SLIDE = "animate-winner-badge-slide";
 
 function compactTileAmount(value: string): string {
   const amount = Number.parseFloat(value);
@@ -227,7 +228,7 @@ const Tile = React.memo(function Tile({
   }
 
   const faded = isRevealing && !isWinner
-    ? "opacity-10 pointer-events-none"
+    ? "opacity-25 pointer-events-none"
     : isAnalyzing
       ? "opacity-40"
       : "";
@@ -246,7 +247,7 @@ const Tile = React.memo(function Tile({
 
       <div className="relative z-10 flex w-full items-start justify-between gap-1">
         <span className={`lore-nums flex min-w-0 items-center gap-0.5 text-[7px] font-semibold leading-none sm:gap-1 sm:text-[10px] ${
-          isMyWin ? "text-sky-300" : isNeutralWinner ? "text-amber-300" : hasMyBet ? "text-emerald-400" : "text-gray-600"
+          isMyWin ? "text-sky-300" : isNeutralWinner ? "text-amber-300" : hasMyBet ? "text-emerald-400" : "text-gray-400"
         }`}>
           #{tileId}
           {hasMyBet && !isWinner && (
@@ -264,8 +265,8 @@ const Tile = React.memo(function Tile({
               : isNeutralWinner
                 ? "text-amber-200/70"
                 : hasMyBet
-                  ? "text-emerald-200/60"
-                  : "text-gray-700"
+                  ? "text-emerald-200/80"
+                  : "text-gray-400"
           }`}
         >
           <span>{liveStateReady || coldBootDefaults ? displayedUsers : "-"}</span>
@@ -306,13 +307,13 @@ const Tile = React.memo(function Tile({
               <div className="w-full h-full rounded-lg border-2 border-amber-400/60 winner-shockwave" />
             </div>
           )}
-          <div className="absolute inset-0 rounded-lg border-2 border-amber-400/50 pointer-events-none z-0 shadow-[inset_0_0_20px_rgba(251,191,36,0.08)]" style={reducedMotion ? undefined : STYLE_GLOW_BREATHE} />
+          <div className={`absolute inset-0 rounded-lg border-2 border-amber-400/50 pointer-events-none z-0 shadow-[inset_0_0_20px_rgba(251,191,36,0.08)] ${reducedMotion ? "" : CLASS_GLOW_BREATHE}`} />
           <div className={`absolute top-1.5 left-1/2 -translate-x-1/2 pointer-events-none z-30 ${reducedMotion ? "" : "winner-crown"}`}>
             <svg className="w-3.5 h-3.5 text-amber-300 drop-shadow-[0_0_8px_rgba(251,191,36,0.8)]" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 2L15 8L22 9L17 14L18 21L12 18L6 21L7 14L2 9L9 8L12 2Z" />
             </svg>
           </div>
-          <div className="absolute bottom-0 inset-x-0 z-20" style={reducedMotion ? undefined : STYLE_BADGE_SLIDE}>
+          <div className={`absolute bottom-0 inset-x-0 z-20 ${reducedMotion ? "" : CLASS_BADGE_SLIDE}`}>
             <div className="bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 px-1 py-0.5 text-center text-[6px] font-black uppercase leading-none tracking-[0.08em] text-black sm:text-[8px] sm:tracking-[0.15em]">
               ROUND WIN
             </div>
@@ -327,7 +328,7 @@ const Tile = React.memo(function Tile({
               <div className="w-full h-full rounded-lg border-2 border-sky-400/60 winner-shockwave" />
             </div>
           )}
-          <div className="absolute inset-0 rounded-lg border-2 border-sky-400/40 pointer-events-none z-0" style={reducedMotion ? undefined : STYLE_GLOW_BREATHE_MINE} />
+          <div className={`absolute inset-0 rounded-lg border-2 border-sky-400/40 pointer-events-none z-0 ${reducedMotion ? "" : CLASS_GLOW_BREATHE_MINE}`} />
           {!reducedMotion && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
               <div className="absolute w-1.5 h-1.5 rounded-full bg-sky-300 winner-particle-1" />
@@ -341,7 +342,7 @@ const Tile = React.memo(function Tile({
               <path d="M5 19h14v2H5z" opacity="0.5" />
             </svg>
           </div>
-          <div className="absolute bottom-0 inset-x-0 z-20" style={reducedMotion ? undefined : STYLE_BADGE_SLIDE}>
+          <div className={`absolute bottom-0 inset-x-0 z-20 ${reducedMotion ? "" : CLASS_BADGE_SLIDE}`}>
             <div className="bg-gradient-to-r from-sky-500 via-cyan-400 to-sky-500 px-1 py-0.5 text-center text-[6px] font-black uppercase leading-none tracking-[0.08em] text-white shadow-[0_-4px_12px_rgba(14,165,233,0.4)] sm:text-[8px] sm:tracking-[0.15em]">
               YOUR WIN
             </div>

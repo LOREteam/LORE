@@ -50,7 +50,7 @@ export function ChatWidget({ walletAddress, onOpenChange }: Props) {
       {/* Chat toggle button (positioned by parent floating container) */}
       <button
         onClick={handleToggle}
-        className="w-9 h-9 rounded-full bg-violet-600 hover:bg-violet-500 shadow-lg shadow-violet-500/20 flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 animate-fade-in shrink-0 relative"
+        className="w-11 h-11 rounded-full bg-violet-600 hover:bg-violet-500 shadow-lg shadow-violet-500/20 flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 animate-fade-in shrink-0 relative focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
         aria-label={open ? "Close chat" : "Open chat"}
         title={open ? "Close chat" : "Open chat"}
       >

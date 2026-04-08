@@ -67,7 +67,11 @@ function loadProfile(walletAddress: string | null): ChatProfile {
 
 function saveProfile(walletAddress: string | null, profile: ChatProfile) {
   if (typeof localStorage === "undefined") return;
-  localStorage.setItem(storageKey(walletAddress), JSON.stringify(profile));
+  try {
+    localStorage.setItem(storageKey(walletAddress), JSON.stringify(profile));
+  } catch {
+    // ignore quota / private mode
+  }
 }
 
 function newerProfile(a: ChatProfile | null, b: ChatProfile | null): ChatProfile | null {

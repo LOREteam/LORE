@@ -8,6 +8,7 @@ import {
   buildEip7702ProbeRequest,
   type Signed7702AuthorizationLike,
 } from "../lib/eip7702";
+import { withTimeout } from "../lib/utils";
 
 const ACTIVE_WALLET_TIMEOUT_MS = 12_000;
 
@@ -25,18 +26,6 @@ const IDLE_EIP7702_DIAGNOSTIC: Eip7702DiagnosticState = {
   status: "idle",
   stage: "idle",
 };
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  const guarded = promise.catch((err) => {
-    throw err;
-  });
-  return Promise.race([
-    guarded,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-    }),
-  ]);
-}
 
 interface UsePrivy7702DiagnosticsOptions {
   embeddedWallet: { address: string } | null | undefined;

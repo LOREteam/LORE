@@ -108,6 +108,7 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      abortRef.current?.abort();
     };
   }, []);
 
@@ -132,12 +133,20 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
     }
   }, [initialWins]);
 
+  const abortRef = useRef<AbortController | null>(null);
+
   const fetchWins = useCallback(async () => {
     if (runningRef.current) return;
     runningRef.current = true;
 
+    // Abort any stale in-flight request
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
-      const response = await fetch("/api/recent-wins", { cache: "no-store" });
+      const response = await fetch("/api/recent-wins", { cache: "no-store", signal: controller.signal });
+      if (controller.signal.aborted) return;
       const payload = await readJsonResponse<RecentWinsApiResponse>(response);
 
       if (!payload) {
@@ -149,17 +158,18 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
 
       const nextWins = normalizeWins(payload.wins ?? []);
 
-      if (mountedRef.current) {
+      if (mountedRef.current && !controller.signal.aborted) {
         setWins(nextWins);
         saveCache(nextWins);
         cacheSavedAtRef.current = Date.now();
       }
     } catch (error) {
+      if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : String(error);
       const now = Date.now();
       if (now - warnAtRef.current >= WARN_THROTTLE_MS) {
         warnAtRef.current = now;
-        log.info("RecentWins", `fetch skipped: ${message}`);
+        log.info("RecentWins", `fetch failed: ${message}`);
       }
     } finally {
       runningRef.current = false;

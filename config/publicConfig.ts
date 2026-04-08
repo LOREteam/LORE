@@ -24,8 +24,6 @@ export const DEFAULT_API_EPOCHS_RECONCILE_MAX = 25;
 export const DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS = 800;
 export const DEFAULT_EIP7702_ENABLED = false;
 export const DEFAULT_EIP7702_MINING_ENABLED = false;
-export const DEFAULT_SEPOLIA_EIP7702_DELEGATE_ADDRESS =
-  "0x170067a88e64bba842ae6615ab277493de32629a" as const;
 
 const DEFAULT_LINEA_MAINNET_RPCS = [...linea.rpcUrls.default.http] as const;
 
@@ -199,7 +197,6 @@ export function getConfiguredEip7702MiningEnabled(explicitFlag?: string | null) 
 
 export function getConfiguredEip7702DelegateAddress(
   explicitValue?: string | null,
-  network: LineaNetwork = getConfiguredLineaNetwork(),
 ) {
   const configured =
     explicitValue?.trim() ??
@@ -208,8 +205,9 @@ export function getConfiguredEip7702DelegateAddress(
     "";
 
   if (configured) return configured;
-  if (network === "mainnet") return "";
-  return DEFAULT_SEPOLIA_EIP7702_DELEGATE_ADDRESS;
+  // Do not silently fall back to a baked-in delegate address.
+  // 7702 deployments are network- and revision-specific, so the address must be explicit.
+  return "";
 }
 
 export function getContractHasTokenGetter(

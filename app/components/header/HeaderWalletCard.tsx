@@ -99,10 +99,16 @@ export function HeaderWalletCard({
                 title={embeddedAddressCopied ? "Copied" : "Copy address"}
               >
                 {embeddedAddressCopied ? "Copied" : shortenAddress(embeddedWalletAddress)}
-                <svg className="w-2.5 h-2.5 text-emerald-400/40 group-hover:text-emerald-300 transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <rect x="9" y="9" width="13" height="13" rx="2" />
-                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-                </svg>
+                {embeddedAddressCopied ? (
+                  <svg className="w-2.5 h-2.5 text-emerald-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : (
+                  <svg className="w-2.5 h-2.5 text-emerald-400/40 group-hover:text-emerald-300 transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                  </svg>
+                )}
               </button>
               {explorerAddressUrl && (
                 <a
@@ -122,10 +128,10 @@ export function HeaderWalletCard({
             </div>
             <div className="flex flex-col items-start gap-0.5 text-[11px] leading-tight min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
               <span className="lore-nums text-gray-400">
-                {privyEthBalanceLoading ? "..." : privyEthBalance}<span className="text-gray-500 font-medium"> ETH</span>
+                {privyEthBalanceLoading ? <span className="inline-block h-3 w-12 animate-pulse rounded bg-white/10" /> : privyEthBalance}<span className="text-gray-500 font-medium"> ETH</span>
               </span>
               <span className="lore-nums text-white font-bold">
-                {privyTokenBalanceLoading ? "..." : privyTokenBalance}<span className="text-gray-500 font-medium"> LINEA</span>
+                {privyTokenBalanceLoading ? <span className="inline-block h-3 w-16 animate-pulse rounded bg-white/10" /> : privyTokenBalance}<span className="text-gray-500 font-medium"> LINEA</span>
               </span>
             </div>
           </div>

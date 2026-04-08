@@ -40,7 +40,7 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
           Blockchain History
         </h2>
         {(historyLoading || historyViewData.length > 0) && (
-          <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${historyRefreshing || historyLoading ? "text-violet-300" : "text-gray-500"}`}>
+          <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${historyRefreshing || historyLoading ? "text-violet-300" : "text-gray-300"}`}>
             <span className={`h-1.5 w-1.5 rounded-full ${historyRefreshing || historyLoading ? "bg-violet-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
             {historyRefreshing || historyLoading ? "Refreshing" : "Ready"}
           </span>
@@ -48,9 +48,26 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
       </div>
 
       {historyLoading && historyViewData.length === 0 ? (
-        <div className="flex items-center justify-center py-4 gap-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-synced-pulse" />
-          <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500">Loading rounds...</span>
+        <div className="space-y-1.5 py-2">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-synced-pulse" />
+            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-300">Loading rounds...</span>
+          </div>
+          {Array.from({ length: 5 }, (_, i) => (
+            <div key={i} className="flex items-center gap-3 rounded-md bg-white/[0.02] px-3 py-2.5">
+              <div className="h-4 w-12 animate-pulse rounded bg-white/[0.06]" />
+              <div className="h-5 w-14 animate-pulse rounded-full bg-emerald-500/10" />
+              <div className="h-4 w-20 animate-pulse rounded bg-white/[0.06]" />
+              <div className="h-5 w-12 animate-pulse rounded-full bg-white/[0.04]" />
+              <div className="ml-auto h-4 w-16 animate-pulse rounded bg-white/[0.06]" />
+            </div>
+          ))}
+        </div>
+      ) : historyViewData.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
+          <div className="mb-2 text-2xl opacity-30">⛏</div>
+          <p className="text-[11px] font-bold uppercase tracking-wider text-gray-300">No rounds yet</p>
+          <p className="mt-1 text-[10px] text-gray-400">Place your first bet to start mining the Lattice</p>
         </div>
       ) : (
         <UiTable tone="violet" maxHeightClass="max-h-[260px]">
@@ -96,7 +113,7 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
                           )}
                         </span>
                       ) : (
-                        <span className="text-gray-600">-</span>
+                        <span className="text-gray-400">-</span>
                       )}
                     </td>
                     <td className="px-3 py-2">
@@ -113,12 +130,12 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
                           Weekly
                         </UiBadge>
                       ) : (
-                        <span className="text-gray-600">-</span>
+                        <span className="text-gray-400">-</span>
                       )}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <span className="font-bold text-violet-400 font-mono text-sm">{row.poolDisplay}</span>
-                      <span className="text-[11px] text-gray-600 ml-1">LINEA</span>
+                      <span className="text-[11px] text-gray-400 ml-1">LINEA</span>
                     </td>
                   </UiTableRow>
                 );

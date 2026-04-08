@@ -89,13 +89,13 @@ export const RebatePanel = React.memo(function RebatePanel({
             <>
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <div>
-                  <div className="text-[8px] font-bold uppercase tracking-widest text-gray-600 mb-0.5">Pending</div>
+                  <div className="text-[8px] font-bold uppercase tracking-widest text-gray-400 mb-0.5">Pending</div>
                   <div className="text-xl font-black text-emerald-400">
                     {rebateInfo ? parseFloat(rebateInfo.pendingRebate).toFixed(4) : "0.0000"} LINEA
                   </div>
                 </div>
                 <div>
-                  <div className="text-[8px] font-bold uppercase tracking-widest text-gray-600 mb-0.5">Claimable epochs</div>
+                  <div className="text-[8px] font-bold uppercase tracking-widest text-gray-400 mb-0.5">Claimable epochs</div>
                   <div className="text-xl font-black text-sky-400">
                     {rebateInfo?.claimableEpochs ?? 0}
                   </div>
@@ -179,7 +179,7 @@ export const RebatePanel = React.memo(function RebatePanel({
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className={`text-[10px] font-bold uppercase tracking-widest ${row.claimed ? "text-gray-500" : row.pendingWei > 0 ? "text-emerald-400" : "text-gray-600"}`}>
+                    <div className={`text-[10px] font-bold uppercase tracking-widest ${row.claimed ? "text-gray-500" : row.pendingWei > 0 ? "text-emerald-400" : "text-gray-400"}`}>
                       {row.claimed ? "Claimed" : row.pendingWei > 0 ? "Claimable" : row.resolved ? "No rebate" : "Live"}
                     </div>
                   </div>
@@ -202,7 +202,7 @@ function StatBox({ label, value, accent }: { label: string; value: string; accen
 
   return (
     <div className={`p-3 border ${uiTokens.radius.md} ${colors[accent]}`}>
-      <div className="text-[8px] font-bold uppercase tracking-widest text-gray-600 mb-1">{label}</div>
+      <div className="text-[8px] font-bold uppercase tracking-widest text-gray-400 mb-1">{label}</div>
       <div className="text-lg font-black">{value}</div>
     </div>
   );

@@ -16,7 +16,11 @@ export const LoreIntro = React.memo(function LoreIntro() {
 
   const dismiss = () => {
     setVisible(false);
-    localStorage.setItem(DISMISSED_KEY, "1");
+    try {
+      localStorage.setItem(DISMISSED_KEY, "1");
+    } catch {
+      // ignore quota / private mode
+    }
   };
 
   if (!visible) return null;
@@ -74,7 +78,7 @@ export const LoreIntro = React.memo(function LoreIntro() {
                 Every epoch, the Lattice pulses and one tile glows bright – the winning node.
                 Those who foresaw it share the harvest. Those who missed it sharpen their instinct for the next shift.
               </p>
-              <p className="text-[10px] text-gray-600 italic">
+              <p className="text-[10px] text-gray-400 italic">
                 &quot;The chain remembers every miner. The Lattice rewards the bold.&quot; – KAEL
               </p>
             </div>
@@ -89,7 +93,7 @@ export const LoreIntro = React.memo(function LoreIntro() {
             </button>
             <button
               onClick={dismiss}
-              className="text-[10px] font-bold uppercase tracking-wider text-gray-600 hover:text-gray-400 transition-colors"
+              className="text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-gray-200 transition-colors"
             >
               Dismiss
             </button>
@@ -99,7 +103,7 @@ export const LoreIntro = React.memo(function LoreIntro() {
         {/* Close button */}
         <button
           onClick={dismiss}
-          className="shrink-0 text-gray-600 hover:text-gray-400 transition-colors mt-0.5"
+          className="shrink-0 text-gray-400 hover:text-gray-200 transition-colors mt-0.5"
           aria-label="Close"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

@@ -118,64 +118,34 @@ function parseAmountWei(value: unknown) {
   }
 }
 
-const SQLITE_BUSY_WAIT_BASE_MS = 40;
-const SQLITE_TX_MAX_ATTEMPTS = 6;
-const SQLITE_SLEEP_BUFFER = new SharedArrayBuffer(4);
-const SQLITE_SLEEP_VIEW = new Int32Array(SQLITE_SLEEP_BUFFER);
-
-function sleepSync(ms: number) {
-  Atomics.wait(SQLITE_SLEEP_VIEW, 0, 0, ms);
-}
-
-function isSqliteBusyError(error: unknown) {
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return message.includes("database is locked") || message.includes("database schema is locked");
-}
-
 function runInTransaction<T>(action: () => T, label = "tx"): T {
-  let waitMs = SQLITE_BUSY_WAIT_BASE_MS;
-  for (let attempt = 1; attempt <= SQLITE_TX_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      db.exec("BEGIN IMMEDIATE");
+  db.exec("BEGIN IMMEDIATE");
+  let committed = false;
+  try {
+    const result = action();
+    db.exec("COMMIT");
+    committed = true;
+    return result;
+  } catch (error) {
+    if (!committed) {
       try {
-        const result = action();
-        db.exec("COMMIT");
-        return result;
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch (rollbackErr) {
-          console.error("[storage] Rollback failed:", rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr));
-        }
-        throw error;
+        db.exec("ROLLBACK");
+      } catch (rollbackErr) {
+        console.error("[storage] Rollback failed:", rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr));
       }
-    } catch (error) {
-      if (!isSqliteBusyError(error) || attempt === SQLITE_TX_MAX_ATTEMPTS) {
-        throw error;
-      }
-      console.warn(`[storage] ${label} hit SQLITE_BUSY, retry ${attempt}/${SQLITE_TX_MAX_ATTEMPTS} in ${waitMs}ms`);
-      sleepSync(waitMs);
-      waitMs *= 2;
     }
+    console.error(`[storage] ${label} failed:`, error instanceof Error ? error.message : String(error));
+    throw error;
   }
-  throw new Error("[storage] transaction failed: exhausted retries");
 }
 
 function runWrite<T>(action: () => T, label = "write"): T {
-  let waitMs = SQLITE_BUSY_WAIT_BASE_MS;
-  for (let attempt = 1; attempt <= SQLITE_TX_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return action();
-    } catch (error) {
-      if (!isSqliteBusyError(error) || attempt === SQLITE_TX_MAX_ATTEMPTS) {
-        throw error;
-      }
-      console.warn(`[storage] ${label} hit SQLITE_BUSY, retry ${attempt}/${SQLITE_TX_MAX_ATTEMPTS} in ${waitMs}ms`);
-      sleepSync(waitMs);
-      waitMs *= 2;
-    }
+  try {
+    return action();
+  } catch (error) {
+    console.error(`[storage] ${label} failed:`, error instanceof Error ? error.message : String(error));
+    throw error;
   }
-  throw new Error("[storage] write failed: exhausted retries");
 }
 
 function scopeMetaKey(key: string) {

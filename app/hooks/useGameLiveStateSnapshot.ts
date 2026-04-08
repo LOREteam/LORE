@@ -117,40 +117,51 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
 
   useEffect(() => {
     if (!isPageVisible) return;
-    let cancelled = false;
+    const controller = new AbortController();
+    let consecutiveFailures = 0;
 
     const fetchLiveState = async () => {
       try {
-        const response = await fetch("/api/live-state", { cache: "no-store" });
-        if (!response.ok) return;
-        const payload = (await response.json()) as LiveStateApiResponse;
-        if (!cancelled) {
-          setSnapshotState((current) => ({
-            snapshot: payload,
-            bootstrapPending: false,
-            liveContractReadsEnabled: current.liveContractReadsEnabled,
-          }));
+        const response = await fetch("/api/live-state", { cache: "no-store", signal: controller.signal });
+        if (controller.signal.aborted) return;
+        if (!response.ok) {
+          consecutiveFailures++;
+          return;
         }
+        consecutiveFailures = 0;
+        const payload = (await response.json()) as LiveStateApiResponse;
+        if (controller.signal.aborted) return;
+        setSnapshotState((current) => ({
+          snapshot: payload,
+          bootstrapPending: false,
+          liveContractReadsEnabled: current.liveContractReadsEnabled,
+        }));
         try {
           window.localStorage.setItem(getLiveStateSnapshotKey(), JSON.stringify(payload));
         } catch {
           // Ignore storage quota/privacy mode failures.
         }
-      } catch {
-        if (!cancelled) {
-          setSnapshotState((current) => ({
-            ...current,
-            bootstrapPending: false,
-          }));
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        consecutiveFailures++;
+        if (consecutiveFailures <= 2) {
+          console.warn("[LiveState] fetch failed:", err instanceof Error ? err.message : String(err));
         }
-        // Keep the last known server snapshot when browser-side RPC or fetch hiccups.
+        setSnapshotState((current) => ({
+          ...current,
+          bootstrapPending: false,
+        }));
       }
     };
 
     void fetchLiveState();
-    const intervalId = window.setInterval(fetchLiveState, LIVE_STATE_FALLBACK_POLL_MS);
+    const intervalId = window.setInterval(() => {
+      // Exponential backoff: skip polls when failures stack up (max skip = 3 intervals)
+      if (consecutiveFailures > 2 && consecutiveFailures % Math.min(consecutiveFailures, 4) !== 0) return;
+      void fetchLiveState();
+    }, LIVE_STATE_FALLBACK_POLL_MS);
     return () => {
-      cancelled = true;
+      controller.abort();
       window.clearInterval(intervalId);
     };
   }, [isPageVisible]);

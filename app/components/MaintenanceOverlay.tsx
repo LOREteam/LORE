@@ -77,7 +77,7 @@ export function MaintenanceOverlay() {
 
       {/* Bottom branding */}
       <div
-        className="absolute bottom-8 left-0 right-0 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-gray-600 animate-[fade-in_1s_ease-out_1s_both]"
+        className="absolute bottom-8 left-0 right-0 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-gray-400 animate-[fade-in_1s_ease-out_1s_both]"
       >
         {maintenance.brand}
       </div>

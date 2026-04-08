@@ -39,7 +39,8 @@ export function useMiningGuards({
   embeddedEthBalance,
   embeddedTokenBalance,
   isAutoMining,
-  isAnalyzing,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  isAnalyzing: _isAnalyzing,
   isRevealing,
   liveStateReady,
   selectedTiles,
@@ -54,7 +55,9 @@ export function useMiningGuards({
   const [lastBet, setLastBet] = useState<LastBet | null>(null);
   const [balanceWarningDismissed, setBalanceWarningDismissed] = useState(false);
   const hasPlayableWallet = Boolean(connectedWalletAddress || embeddedWalletAddress);
-  const bettingLocked = !liveStateReady || isRevealing || isAnalyzing;
+  // Allow betting even during the analyzing/resolving window — only block
+  // while the reveal animation is playing or live state hasn't loaded yet.
+  const bettingLocked = !liveStateReady || isRevealing;
 
   useEffect(() => {
     try {

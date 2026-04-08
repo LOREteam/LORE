@@ -27,7 +27,7 @@ export function WalletSettingsOverviewPanel({
         <UiPanel tone="subtle" padding="sm" className="animate-slide-up" style={{ animationDelay: "0.02s" }}>
           <div className="flex items-baseline justify-between gap-2 mb-1.5">
             <span className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider">Sound</span>
-            <span className="text-[8px] text-gray-600">when unmuted</span>
+            <span className="text-[8px] text-gray-400">when unmuted</span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-0.5">
             {(["bet", "autoBet", "reveal", "win", "myWin", "tick"] as SoundName[]).map((name) => (

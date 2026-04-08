@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useMemo } from "react";
 import type { DepositEntry } from "../hooks/useDepositHistory";
 import type { JackpotHistoryEntry } from "../hooks/useJackpotHistory";
 import { useAnalyticsRuntime } from "../hooks/useAnalyticsRuntime";
@@ -50,6 +50,32 @@ export const Analytics = React.memo(function Analytics({
   jackpotHistoryError,
   onRefreshJackpotHistory,
 }: AnalyticsProps) {
+  // Cross-reference jackpot history with deposits so that jackpot badges
+  // display correctly even when the /api/epochs cache has stale flags.
+  const enrichedDeposits = useMemo<DepositEntry[] | null>(() => {
+    if (!deposits) return deposits;
+    if (jackpotHistory.length === 0) return deposits;
+
+    const dailyEpochs = new Set<string>();
+    const weeklyEpochs = new Set<string>();
+    for (const entry of jackpotHistory) {
+      if (entry.kind === "daily") dailyEpochs.add(entry.epoch);
+      else if (entry.kind === "weekly") weeklyEpochs.add(entry.epoch);
+    }
+
+    let changed = false;
+    const result = deposits.map((d) => {
+      const shouldBeDaily = d.isDailyJackpot || dailyEpochs.has(d.epoch);
+      const shouldBeWeekly = d.isWeeklyJackpot || weeklyEpochs.has(d.epoch);
+      if (shouldBeDaily !== d.isDailyJackpot || shouldBeWeekly !== d.isWeeklyJackpot) {
+        changed = true;
+        return { ...d, isDailyJackpot: shouldBeDaily, isWeeklyJackpot: shouldBeWeekly };
+      }
+      return d;
+    });
+    return changed ? result : deposits;
+  }, [deposits, jackpotHistory]);
+
   const {
     visibleCount,
     visibleDeposits,
@@ -62,7 +88,7 @@ export const Analytics = React.memo(function Analytics({
   } = useAnalyticsRuntime({
     walletAddress,
     historyViewData,
-    deposits,
+    deposits: enrichedDeposits,
     totalDeposited,
   });
 
@@ -70,16 +96,16 @@ export const Analytics = React.memo(function Analytics({
     <div className="flex-1 flex flex-col gap-4 overflow-y-auto animate-fade-in">
       <AnalyticsAchievementsPanel
         achievementCards={achievementCards}
-        deposits={deposits}
+        deposits={enrichedDeposits}
         depositsLoading={depositsLoading}
         unlockedCount={unlockedCount}
       />
 
       <AnalyticsDepositsPanel
-        deposits={deposits}
+        deposits={enrichedDeposits}
         depositsError={depositsError}
         depositsLoading={depositsLoading}
-        depositsRefreshing={depositsLoading && deposits !== null}
+        depositsRefreshing={depositsLoading && enrichedDeposits !== null}
         newDepositIds={newDepositIds}
         onLoadDeposits={onLoadDeposits}
         onRefreshDeposits={onRefreshDeposits}

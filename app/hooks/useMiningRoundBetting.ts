@@ -14,6 +14,8 @@ import {
 import type { GasOverrides } from "./useMining.types";
 import type { PendingBetState, ReceiptState } from "./useMining.stateTypes";
 import { verifyRoundAlreadyPlaced } from "./useMiningRoundVerification";
+import { EIP7702_MINING_ENABLED } from "../lib/eip7702";
+import { canAttemptEip7702 } from "../lib/eip7702Runtime";
 
 interface ExecuteAutoMineBetLoopOptions {
   actorAddress: `0x${string}`;
@@ -39,6 +41,12 @@ interface ExecuteAutoMineBetLoopOptions {
     txNonce?: number,
   ) => Promise<ReceiptState>;
   placeBetsSilent: (
+    tiles: number[],
+    singleAmountRaw: bigint,
+    gasOverrides?: GasOverrides,
+    txNonce?: number,
+  ) => Promise<ReceiptState>;
+  placeBets7702?: (
     tiles: number[],
     singleAmountRaw: bigint,
     gasOverrides?: GasOverrides,
@@ -79,6 +87,7 @@ export async function executeAutoMineBetLoop({
   pendingBetRef,
   placeBets,
   placeBetsSilent,
+  placeBets7702,
   publicClient,
   readSilentSend,
   rounds,
@@ -144,6 +153,22 @@ export async function executeAutoMineBetLoop({
       throw blockedError;
     }
 
+    // --- EIP-7702 delegated path (highest priority when enabled) ---
+    if (EIP7702_MINING_ENABLED && placeBets7702 && canAttemptEip7702()) {
+      try {
+        const state = await placeBets7702(tilesToBet, singleAmountRaw, overrides, txNonce);
+        pendingBetRef.current = state === "pending" ? { submittedAt: Date.now(), nonce: submittedNonce() } : null;
+        return state;
+      } catch (error) {
+        if (isAmbiguousPendingTxError(error)) {
+          pendingBetRef.current = { submittedAt: Date.now(), nonce: submittedNonce() };
+        }
+        log.warn("AutoMine", "7702 delegated send failed, falling back to silent/wallet-write", error);
+        // fall through to standard paths
+      }
+    }
+
+    // --- Standard silent path ---
     const silentSend = readSilentSend();
     if (silentSend) {
       try {
@@ -161,6 +186,7 @@ export async function executeAutoMineBetLoop({
       }
     }
 
+    // --- Wallet write fallback ---
     const state = await placeBets(tilesToBet, singleAmountRaw, overrides, txNonce);
     pendingBetRef.current = state === "pending" ? { submittedAt: Date.now(), nonce: submittedNonce() } : null;
     return state;

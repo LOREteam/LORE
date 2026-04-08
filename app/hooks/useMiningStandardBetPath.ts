@@ -1,12 +1,18 @@
 "use client";
 
 import { useCallback, useRef } from "react";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, maxUint256 } from "viem";
 import type { PublicClient } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
 import { log } from "../lib/logger";
 import { writeMiningTxPathState } from "../lib/miningTxPath";
-import type { GasOverrides, SilentSendFn } from "./useMining.types";
+import {
+  buildApproveAndBet7702Call,
+  buildBet7702Call,
+  type Eip7702CapabilityState,
+} from "../lib/eip7702";
+import { canAttemptEip7702, noteEip7702Failure, noteEip7702Success } from "../lib/eip7702Runtime";
+import type { GasOverrides, SilentSendFn, SilentSend7702Fn, Sign7702DelegationFn } from "./useMining.types";
 import type { ReceiptState } from "./useMining.stateTypes";
 import { isAmbiguousPendingTxError, normalizeTiles } from "./useMining.shared";
 
@@ -36,6 +42,9 @@ interface UseMiningStandardBetPathOptions {
   waitReceipt: (hash: `0x${string}`, client?: PublicClient) => Promise<ReceiptState>;
   readPublicClient: () => PublicClient | undefined;
   readSilentSend: () => SilentSendFn | undefined;
+  readSilentSend7702?: () => SilentSend7702Fn | undefined;
+  readSignEip7702Delegation?: () => Sign7702DelegationFn | undefined;
+  readEip7702Capability?: () => Eip7702CapabilityState | undefined;
   readWriteContractAsync: () => (args: unknown) => Promise<`0x${string}`>;
   ensurePreferredWallet: () => Promise<void> | void;
 }
@@ -50,6 +59,9 @@ export function useMiningStandardBetPath({
   waitReceipt,
   readPublicClient,
   readSilentSend,
+  readSilentSend7702,
+  readSignEip7702Delegation,
+  readEip7702Capability,
   readWriteContractAsync,
   ensurePreferredWallet,
 }: UseMiningStandardBetPathOptions) {
@@ -261,8 +273,149 @@ export function useMiningStandardBetPath({
     ],
   );
 
+  /**
+   * EIP-7702 delegated bet path.
+   * Signs a 7702 delegation, builds calldata for the delegate contract,
+   * estimates gas WITH authorizationList, and sends a type-4 transaction.
+   * Falls back gracefully: caller should catch and use placeBetsSilent.
+   */
+  const placeBets7702 = useCallback(
+    async (
+      tiles: number[],
+      singleAmountRaw: bigint,
+      gasOverrides?: GasOverrides,
+      txNonce?: number,
+    ): Promise<ReceiptState> => {
+      const normalizedTiles = normalizeTiles(tiles);
+      if (normalizedTiles.length === 0) throw new Error("No valid tiles selected");
+
+      const send7702 = readSilentSend7702?.();
+      const signDelegation = readSignEip7702Delegation?.();
+      const cap = readEip7702Capability?.();
+      if (!send7702 || !signDelegation || !cap || cap.mode !== "ready") {
+        throw new Error("EIP-7702 is not available.");
+      }
+      if (!canAttemptEip7702()) {
+        throw new Error("EIP-7702 is in cooldown after recent failures.");
+      }
+
+      await ensurePreferredWallet();
+      await ensureContractPreflight();
+
+      const client = readPublicClient();
+      if (!client) throw new Error("Public client not ready for 7702 gas estimation.");
+
+      const totalAmountRaw = singleAmountRaw * BigInt(normalizedTiles.length);
+
+      // 1. Sign delegation once and reuse it for the selected execution path.
+      const authorization = await signDelegation("self");
+
+      const sendDelegatedCall = async (
+        data: `0x${string}`,
+        txPath: "approve+bet" | "bet-only",
+      ): Promise<ReceiptState> => {
+        const signerAddress = authorization.address;
+        let estimatedGas: bigint;
+        try {
+          estimatedGas = await (client as unknown as {
+            estimateGas: (args: Record<string, unknown>) => Promise<bigint>;
+          }).estimateGas({
+            account: signerAddress,
+            to: signerAddress,
+            data,
+            authorizationList: [authorization],
+          });
+        } catch (estimateError) {
+          const msg = estimateError instanceof Error ? estimateError.message : String(estimateError);
+          log.warn("Mine", `7702 gas estimation reverted for ${txPath}`, { error: msg });
+          throw new Error(`7702 gas estimation failed: ${msg.slice(0, 200)}`);
+        }
+
+        const gas = estimatedGas + 60_000n;
+        await assertNativeGasBalance(gas, gasOverrides);
+
+        try {
+          const hash = await send7702(
+            {
+              data,
+              gas,
+              authorizationList: [authorization],
+              ...(txNonce !== undefined ? { nonce: txNonce } : {}),
+            },
+            gasOverrides,
+          );
+          noteEip7702Success();
+          writeMiningTxPathState("7702-delegated", txPath);
+          log.info("Mine", "7702 delegated bet sent", {
+            path: txPath,
+            tileCount: normalizedTiles.length,
+            totalAmountRaw,
+            hash,
+          });
+          return waitReceipt(hash, client);
+        } catch (error) {
+          if (isAmbiguousPendingTxError(error)) {
+            log.warn("Mine", `7702 ${txPath} send may already be pending`, error);
+            return "pending";
+          }
+          throw error;
+        }
+      };
+
+      try {
+        await assertSufficientAllowance(totalAmountRaw);
+        return await sendDelegatedCall(
+          buildBet7702Call(normalizedTiles, singleAmountRaw),
+          "bet-only",
+        );
+      } catch (allowanceError) {
+        log.info("Mine", "7702 allowance missing, trying atomic approve+bet", {
+          error: allowanceError instanceof Error ? allowanceError.message : String(allowanceError),
+        });
+      }
+
+      try {
+        return await sendDelegatedCall(
+          buildApproveAndBet7702Call(
+            normalizedTiles,
+            singleAmountRaw,
+            maxUint256,
+          ),
+          "approve+bet",
+        );
+      } catch (approveAndBetError) {
+        log.warn("Mine", "7702 approve+bet failed, falling back to regular approve then delegated bet", approveAndBetError);
+      }
+
+      try {
+        await ensureAllowance(totalAmountRaw);
+        await assertSufficientAllowance(totalAmountRaw);
+        return await sendDelegatedCall(
+          buildBet7702Call(normalizedTiles, singleAmountRaw),
+          "bet-only",
+        );
+      } catch (finalError) {
+        noteEip7702Failure("send-failed");
+        throw finalError;
+      }
+    },
+    [
+      assertNativeGasBalance,
+      assertSufficientAllowance,
+      ensureAllowance,
+      ensureContractPreflight,
+      ensurePreferredWallet,
+      readEip7702Capability,
+      readPublicClient,
+      readSignEip7702Delegation,
+      readSilentSend7702,
+      waitReceipt,
+    ],
+  );
+
   return {
     placeBets,
     placeBetsSilent,
+    placeBets7702,
   };
 }

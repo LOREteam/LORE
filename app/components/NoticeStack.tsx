@@ -28,7 +28,7 @@ export function NoticeStack({ notices, onDismiss }: NoticeStackProps) {
   if (notices.length === 0) return null;
 
   return (
-    <div className="fixed right-3 top-3 z-[220] flex w-[min(26rem,calc(100vw-1.5rem))] flex-col gap-2 sm:right-4 sm:top-4">
+    <div role="status" aria-live="polite" className="fixed right-3 top-3 z-[220] flex w-[min(26rem,calc(100vw-1.5rem))] flex-col gap-2 sm:right-4 sm:top-4">
       {notices.map((notice) => {
         const tone = toneMap[notice.tone];
         return (
@@ -50,7 +50,7 @@ export function NoticeStack({ notices, onDismiss }: NoticeStackProps) {
               <button
                 type="button"
                 onClick={() => onDismiss(notice.id)}
-                className="shrink-0 rounded-md p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200"
+                className="shrink-0 rounded-md p-2 text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400"
                 aria-label="Dismiss notice"
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">

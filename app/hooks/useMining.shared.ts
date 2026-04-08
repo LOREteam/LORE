@@ -180,16 +180,20 @@ export function withMiningRpcTimeout<T>(
   label: string,
   timeoutMs: number = MINING_RPC_TIMEOUT_MS,
 ): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => {
-        const timeoutError = new Error(`${label} timed out after ${timeoutMs}ms`);
-        timeoutError.name = "TimeoutError";
-        reject(timeoutError);
-      }, timeoutMs);
-    }),
-  ]);
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const timeoutError = new Error(`${label} timed out after ${timeoutMs}ms`);
+      timeoutError.name = "TimeoutError";
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  });
 }
 
 export function isReceiptTimeoutError(err: unknown): boolean {
@@ -284,14 +288,22 @@ export function readSession(): PersistedAutoMinerSession | null {
 
 export function saveSession(session: PersistedAutoMinerSession) {
   if (typeof window !== "undefined") {
-    window.localStorage.setItem(AUTO_MINER_STORAGE_KEY, JSON.stringify(session));
+    try {
+      window.localStorage.setItem(AUTO_MINER_STORAGE_KEY, JSON.stringify(session));
+    } catch {
+      // ignore quota / private mode
+    }
     dispatchAutoMinerSessionEvent();
   }
 }
 
 export function clearSession() {
   if (typeof window !== "undefined") {
-    window.localStorage.removeItem(AUTO_MINER_STORAGE_KEY);
+    try {
+      window.localStorage.removeItem(AUTO_MINER_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
     dispatchAutoMinerSessionEvent();
   }
 }

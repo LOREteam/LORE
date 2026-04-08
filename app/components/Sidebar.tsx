@@ -29,6 +29,9 @@ interface SidebarProps {
   isClaiming: boolean;
   onClaim: (epochId: string) => void;
   onClaimAll: () => void;
+  /** Mobile drawer state */
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 const TILE_STYLES = [
@@ -62,20 +65,56 @@ export const Sidebar = React.memo(function Sidebar({
   isClaiming,
   onClaim,
   onClaimAll,
+  mobileOpen = false,
+  onMobileClose,
 }: SidebarProps) {
   const { stats, loading: statsLoading } = useGlobalStats(currentEpoch, isPageVisible);
   const renderedHotTiles = hotTiles && hotTiles.length > 0 ? hotTiles : HOT_TILE_PLACEHOLDERS;
   const hotTilesReady = Boolean(hotTiles && hotTiles.length > 0);
 
-  const goHub = useCallback(() => onTabChange("hub"), [onTabChange]);
-  const goAnalytics = useCallback(() => onTabChange("analytics"), [onTabChange]);
-  const goRebate = useCallback(() => onTabChange("rebate"), [onTabChange]);
-  const goLeaderboards = useCallback(() => onTabChange("leaderboards"), [onTabChange]);
-  const goWhitepaper = useCallback(() => onTabChange("whitepaper"), [onTabChange]);
-  const goFaq = useCallback(() => onTabChange("faq"), [onTabChange]);
+  const handleMobileTabChange = useCallback(
+    (tab: TabId) => {
+      onTabChange(tab);
+      onMobileClose?.();
+    },
+    [onTabChange, onMobileClose],
+  );
+
+  const createTabHandler = useCallback(
+    (tab: TabId) => () => handleMobileTabChange(tab),
+    [handleMobileTabChange],
+  );
+  const goHub = createTabHandler("hub");
+  const goAnalytics = createTabHandler("analytics");
+  const goRebate = createTabHandler("rebate");
+  const goLeaderboards = createTabHandler("leaderboards");
+  const goWhitepaper = createTabHandler("whitepaper");
+  const goFaq = createTabHandler("faq");
+
+  const handleBackdropKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Escape") onMobileClose?.();
+    },
+    [onMobileClose],
+  );
 
   return (
-    <aside className="relative hidden h-screen w-[calc(14rem+1cm)] flex-col overflow-hidden border-r border-violet-500/15 bg-[#0a0a18]/90 backdrop-blur-md lg:flex animate-slide-in-left">
+    <>
+      {/* Mobile backdrop */}
+      {mobileOpen && (
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Close sidebar"
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden animate-fade-in"
+          onClick={onMobileClose}
+          onKeyDown={handleBackdropKeyDown}
+        />
+      )}
+    <aside className={cn(
+      "fixed inset-y-0 left-0 z-50 h-screen w-[calc(14rem+1cm)] flex-col overflow-hidden border-r border-violet-500/15 bg-[#0a0a18]/95 backdrop-blur-md transition-transform duration-300 lg:relative lg:z-auto lg:translate-x-0 lg:flex animate-slide-in-left",
+      mobileOpen ? "flex translate-x-0" : "hidden lg:flex -translate-x-full lg:translate-x-0",
+    )}>
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
         <div className="absolute left-[-22%] top-[-10%] h-52 w-52 rounded-full bg-violet-600/10 blur-3xl animate-orb-1" />
         <div className="absolute bottom-[-12%] right-[-18%] h-48 w-48 rounded-full bg-sky-500/8 blur-3xl animate-orb-2" />
@@ -172,14 +211,14 @@ export const Sidebar = React.memo(function Sidebar({
 
         <div className="mx-4 mt-1 flex min-h-0 flex-1 flex-col gap-2 animate-fade-in" style={{ animationDelay: "0.6s" }}>
           <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
-          <p className="px-1 pt-1 text-gray-600 font-bold uppercase tracking-[0.14em]" style={{ fontSize: "11px" }}>
+          <p className="px-1 pt-1 text-slate-500 font-bold uppercase tracking-[0.14em]" style={{ fontSize: "11px" }}>
             Protocol Stats
           </p>
 
           <UiPanel
             tone="subtle"
             padding="sm"
-            className="space-y-2.5 border-violet-500/10 bg-gradient-to-br from-violet-500/[0.06] to-cyan-500/[0.04] p-[10px]"
+            className="space-y-2.5 border-violet-500/10 bg-gradient-to-br from-violet-500/[0.06] to-cyan-500/[0.04]"
           >
             <StatRow
               icon="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
@@ -197,13 +236,13 @@ export const Sidebar = React.memo(function Sidebar({
             />
           </UiPanel>
 
-          <p className="px-1 pt-1 text-gray-600 font-bold uppercase tracking-[0.14em]" style={{ fontSize: "11px" }}>
+          <p className="px-1 pt-1 text-slate-500 font-bold uppercase tracking-[0.14em]" style={{ fontSize: "11px" }}>
             Hot Tiles
           </p>
           <UiPanel
             tone="subtle"
             padding="sm"
-            className="border-violet-500/10 bg-gradient-to-br from-violet-500/[0.06] to-cyan-500/[0.04] p-[10px]"
+            className="border-violet-500/10 bg-gradient-to-br from-violet-500/[0.06] to-cyan-500/[0.04]"
           >
             <div className="flex min-w-0 gap-1">
               {renderedHotTiles.map((tile, index) => {
@@ -214,13 +253,13 @@ export const Sidebar = React.memo(function Sidebar({
                     className={cn(
                       "flex aspect-square min-w-0 flex-1 flex-col items-center justify-center rounded border text-center font-bold leading-tight transition-all duration-500 ease-out",
                       isPlaceholder
-                        ? "border-white/10 bg-white/[0.02] text-gray-600"
+                        ? "border-white/10 bg-white/[0.02] text-gray-400"
                         : TILE_STYLES[Math.min(index, TILE_STYLES.length - 1)],
                     )}
                     style={{ fontSize: 11 }}
                   >
                     <span>#{tile.tileId}</span>
-                    <span className="text-gray-600">&times;{tile.wins}</span>
+                    <span className="text-gray-400">&times;{tile.wins}</span>
                   </div>
                 );
               })}
@@ -297,10 +336,10 @@ export const Sidebar = React.memo(function Sidebar({
                 </div>
               ) : (
                 <div className="flex items-center justify-center gap-1.5 py-1">
-                  <svg className="h-3 w-3 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <svg className="h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                   </svg>
-                  <span className="text-[9px] font-bold italic tracking-widest text-gray-600">
+                  <span className="text-[9px] font-bold italic tracking-widest text-gray-400">
                     <LoreText items={emptyStates.rewards} />
                   </span>
                 </div>
@@ -310,6 +349,7 @@ export const Sidebar = React.memo(function Sidebar({
         </div>
       </div>
     </aside>
+    </>
   );
 });
 
@@ -340,9 +380,13 @@ const StatRow = React.memo(function StatRow({
         <p className="text-gray-500 font-semibold uppercase leading-none tracking-wider" style={{ fontSize: 9 }}>
           {label}
         </p>
-        <p className={`lore-nums mt-0.5 truncate font-bold leading-tight ${loading ? "text-gray-600" : accentColor}`} style={{ fontSize: 12 }}>
-          {value ?? "0.00 LINEA"}
-        </p>
+        {loading ? (
+          <div className="mt-1 h-3 w-20 animate-pulse rounded bg-white/10" />
+        ) : (
+          <p className={`lore-nums mt-0.5 truncate font-bold leading-tight ${accentColor}`} style={{ fontSize: 12 }}>
+            {value ?? "0.00 LINEA"}
+          </p>
+        )}
       </div>
     </div>
   );

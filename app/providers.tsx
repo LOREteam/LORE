@@ -8,6 +8,8 @@ import { http, fallback, defineChain, type Transport } from 'viem';
 import { APP_CHAIN } from './lib/constants';
 import { getStableLineaReadRpcs, isDeprecatedLineaRpc, isUnstableLineaReadRpc } from '../config/publicConfig';
 
+const DEV_PRIVY_APP_ID = 'cmlqkgtmg00og0cjueu4mxmn9';
+
 // Higher staleTime reduces RPC load: data stays "fresh" longer, fewer duplicate refetches.
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -64,7 +66,12 @@ export const wagmiConfig = createConfig({
 });
 
 export default function Providers({ children }: { children: React.ReactNode }) {
-  const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "cmlqkgtmg00og0cjueu4mxmn9";
+  const allowPrivyFallback = APP_CHAIN.id !== 59144;
+  const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID?.trim()
+    || (allowPrivyFallback ? DEV_PRIVY_APP_ID : undefined);
+  if (!privyAppId) {
+    throw new Error("NEXT_PUBLIC_PRIVY_APP_ID is required for mainnet/production");
+  }
 
   const privyConfig = useMemo(() => ({
     defaultChain: appChain,

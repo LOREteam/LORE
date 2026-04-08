@@ -82,6 +82,7 @@ export async function POST(request: Request) {
       transport: http(rpcUrl, { timeout: 15_000, retryCount: 1 }),
     });
 
+    const totalPool = epochData[0];
     const isResolved = Boolean(epochData[3]);
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
     const isExpired = nowSec >= epochEndTime;
@@ -90,6 +91,21 @@ export async function POST(request: Request) {
       return NextResponse.json({
         ok: true,
         action: "noop",
+        currentEpoch: currentEpoch.toString(),
+        isResolved,
+        isExpired,
+      });
+    }
+
+    // Skip empty epochs entirely — burning gas to resolve a round
+    // with zero bets is wasteful. Round simply sits frozen until a
+    // player shows up; their bet will trigger the contract's
+    // built-in `_autoResolveIfNeeded()` automatically.
+    if (totalPool === 0n) {
+      return NextResponse.json({
+        ok: true,
+        action: "noop",
+        reason: "epoch_empty",
         currentEpoch: currentEpoch.toString(),
         isResolved,
         isExpired,

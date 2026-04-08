@@ -45,10 +45,14 @@ export function useStableChatWalletAddress(...addresses: Array<string | null | u
     }
 
     if (typeof window === "undefined") return;
-    if (next) {
-      window.localStorage.setItem(CHAT_WALLET_STORAGE_KEY, next);
-    } else {
-      window.localStorage.removeItem(CHAT_WALLET_STORAGE_KEY);
+    try {
+      if (next) {
+        window.localStorage.setItem(CHAT_WALLET_STORAGE_KEY, next);
+      } else {
+        window.localStorage.removeItem(CHAT_WALLET_STORAGE_KEY);
+      }
+    } catch {
+      // ignore quota / private mode
     }
   }, [candidates, stableAddress]);
 

@@ -111,7 +111,7 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400" 
                     <UiBadge tone="default" size="xs" className="ml-1 text-[9px] text-gray-400 border-white/15 bg-white/[0.03]">
                       site
                     </UiBadge>
-                    <span className="text-gray-600 ml-1.5">{shortenAddress(e.address)}</span>
+                    <span className="text-gray-400 ml-1.5">{shortenAddress(e.address)}</span>
                   </>
                 ) : (
                   shortenAddress(e.address)

@@ -28,7 +28,9 @@ export function HubBalanceWarning({
         </span>
       </div>
       <button
+        type="button"
         onClick={onDismiss}
+        aria-label="Dismiss warning"
         className="mt-0.5 shrink-0 text-sm leading-none text-red-400/60 hover:text-red-300"
       >
         x

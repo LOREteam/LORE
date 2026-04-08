@@ -106,7 +106,7 @@ export function MobileTabNav({ activeTab, onTabChange }: MobileTabNavProps) {
                 key={tab}
                 onClick={() => onTabChange(tab)}
                 aria-current={active ? "page" : undefined}
-                className={`group flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] transition-all duration-200 ${
+                className={`group flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2.5 min-h-[44px] text-[11px] font-semibold uppercase tracking-[0.14em] transition-all duration-200 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-transparent ${
                   active
                     ? "border-violet-400/35 bg-gradient-to-r from-violet-500/24 via-violet-500/18 to-sky-500/18 text-violet-100 shadow-[0_0_0_1px_rgba(167,139,250,0.12),0_10px_24px_rgba(76,29,149,0.18)]"
                     : "border-white/[0.05] bg-white/[0.02] text-slate-400 hover:border-white/[0.1] hover:bg-white/[0.04] hover:text-slate-200"

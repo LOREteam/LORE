@@ -128,9 +128,9 @@ function JackpotCard({
                 <span className={`text-[7px] font-semibold uppercase tracking-[0.08em] ${windowLabelClass}`}>Window</span>
                 <span className={`lore-nums text-[7px] font-bold tabular-nums ${windowValueClass}`}>{window.leftLabel}</span>
               </div>
-              <div className={`h-1 rounded-full overflow-hidden ${windowTrackClass}`}>
+              <div className={`h-2 rounded-full overflow-hidden ${windowTrackClass}`}>
                 <div
-                  className={`h-full rounded-full transition-all duration-1000 ${windowFillClass}`}
+                  className={`h-full rounded-full transition-all duration-1000 shadow-[0_0_8px_rgba(139,92,246,0.3)] ${windowFillClass}`}
                   style={{ width: `${window.pct}%` }}
                 />
               </div>

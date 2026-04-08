@@ -21,6 +21,7 @@ export interface UiInputProps extends React.InputHTMLAttributes<HTMLInputElement
 export function UiInput({ tone = "default", className, ...props }: UiInputProps) {
   return (
     <input
+      aria-invalid={tone === "danger" ? true : undefined}
       className={cn(
         uiTokens.inputBase,
         uiTokens.radius.md,

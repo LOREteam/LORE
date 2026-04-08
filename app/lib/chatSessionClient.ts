@@ -43,13 +43,21 @@ export function loadChatAuthSession(address: string): ChatAuthSession | null {
 
 export function saveChatAuthSession(session: ChatAuthSession) {
   if (typeof localStorage === "undefined") return;
-  localStorage.setItem(getChatAuthStorageKey(session.address), JSON.stringify(session));
+  try {
+    localStorage.setItem(getChatAuthStorageKey(session.address), JSON.stringify(session));
+  } catch {
+    // ignore quota / private mode
+  }
   emitChatAuthSessionChange(session.address, session.expiresAt);
 }
 
 export function clearChatAuthSession(address: string) {
   if (typeof localStorage === "undefined") return;
-  localStorage.removeItem(getChatAuthStorageKey(address));
+  try {
+    localStorage.removeItem(getChatAuthStorageKey(address));
+  } catch {
+    // ignore
+  }
   emitChatAuthSessionChange(address, null);
 }
 

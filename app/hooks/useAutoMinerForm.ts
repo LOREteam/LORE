@@ -27,7 +27,8 @@ export function useAutoMinerForm({
   isAutoMining,
   isPending,
   isRevealing,
-  isAnalyzing = false,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  isAnalyzing: _isAnalyzing = false,
   liveStateReady = true,
   formattedBalance,
   runningParams,
@@ -93,7 +94,6 @@ export function useAutoMinerForm({
     (isPending && !isAutoMining) ||
     !liveStateReady ||
     isRevealing ||
-    (!isAutoMining && isAnalyzing) ||
     (insufficientBalance && !isAutoMining) ||
     (lowEthForGas && !isAutoMining);
 

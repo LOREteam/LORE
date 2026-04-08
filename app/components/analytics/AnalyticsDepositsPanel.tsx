@@ -40,24 +40,24 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
 }: AnalyticsDepositsPanelProps) {
   const visibleRows = useMemo(
     () =>
-      visibleDeposits.map((deposit, index) => ({
-        key: deposit.txHash || `${deposit.epoch}-${index}`,
-        epoch: deposit.epoch,
-        sortedTileIds: [...deposit.tileIds].sort((left, right) => left - right),
-        winningTile: deposit.winningTile,
-        wonDailyJackpot:
-          Boolean(deposit.isDailyJackpot)
-          && deposit.winningTile !== null
-          && deposit.tileIds.includes(deposit.winningTile),
-        wonWeeklyJackpot:
-          Boolean(deposit.isWeeklyJackpot)
-          && deposit.winningTile !== null
-          && deposit.tileIds.includes(deposit.winningTile),
-        amount: deposit.amount,
-        reward: deposit.reward,
-        txHash: deposit.txHash,
-        isNew: deposit.txHash ? newDepositIds.has(deposit.txHash) : false,
-      })),
+      visibleDeposits.map((deposit, index) => {
+        const userWon = deposit.winningTile !== null && deposit.tileIds.includes(deposit.winningTile);
+        return {
+          key: deposit.txHash || `${deposit.epoch}-${index}`,
+          epoch: deposit.epoch,
+          sortedTileIds: [...deposit.tileIds].sort((left, right) => left - right),
+          winningTile: deposit.winningTile,
+          userWon,
+          wonDailyJackpot:
+            Boolean(deposit.isDailyJackpot) && userWon,
+          wonWeeklyJackpot:
+            Boolean(deposit.isWeeklyJackpot) && userWon,
+          amount: deposit.amount,
+          reward: deposit.reward,
+          txHash: deposit.txHash,
+          isNew: deposit.txHash ? newDepositIds.has(deposit.txHash) : false,
+        };
+      }),
     [newDepositIds, visibleDeposits],
   );
 
@@ -82,7 +82,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
           {deposits && deposits.length > 0 && (
             <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
               Total: <span className="text-sky-400">{totalDeposited.toFixed(2)} LINEA</span>
-              <span className="text-gray-600 ml-1.5">({deposits.length} tx)</span>
+              <span className="text-gray-400 ml-1.5">({deposits.length} tx)</span>
             </span>
           )}
           <UiButton
@@ -90,7 +90,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
             disabled={depositsLoading}
             variant="ghost"
             size="xs"
-            className="h-8 w-8 p-0 text-gray-500 hover:text-sky-300 hover:border-sky-500/20 hover:bg-sky-500/[0.06]"
+            className="h-10 w-10 p-0 text-gray-500 hover:text-sky-300 hover:border-sky-500/20 hover:bg-sky-500/[0.06] active:scale-95"
             title="Refresh"
             aria-label="Refresh deposits"
           >
@@ -103,8 +103,11 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
 
       {depositsError ? (
         <div className="flex flex-col items-center justify-center py-4 gap-2">
-          <span className="text-[11px] text-amber-400/90">Failed to load: {depositsError}</span>
-          <span className="text-[10px] text-gray-500">Check Firebase and indexer on the server. Then click Refresh above.</span>
+          <svg className="h-5 w-5 text-amber-400/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
+          <span className="text-[11px] text-amber-400/90">Unable to load deposit history</span>
+          <span className="text-[10px] text-gray-500">Please try refreshing in a moment. If the issue persists, the server may need attention.</span>
         </div>
       ) : deposits === null && !depositsLoading ? (
         <div className="flex flex-col items-center justify-center py-3 gap-2">
@@ -120,13 +123,26 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
           </UiButton>
         </div>
       ) : deposits === null && depositsLoading ? (
-        <div className="flex items-center justify-center py-4 gap-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-synced-pulse" />
-          <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider"><LoreText items={loadingQuotes} /></span>
+        <div className="space-y-1.5 py-2">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-synced-pulse" />
+            <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider"><LoreText items={loadingQuotes} /></span>
+          </div>
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="flex items-center gap-3 rounded-md bg-white/[0.02] px-3 py-2.5" style={{ animationDelay: `${i * 0.08}s` }}>
+              <div className="h-4 w-12 animate-pulse rounded bg-white/[0.06]" />
+              <div className="flex gap-1">
+                <div className="h-6 w-6 animate-pulse rounded bg-violet-500/10" />
+                <div className="h-6 w-6 animate-pulse rounded bg-violet-500/10" />
+              </div>
+              <div className="ml-auto h-4 w-16 animate-pulse rounded bg-white/[0.06]" />
+              <div className="h-4 w-14 animate-pulse rounded bg-white/[0.04]" />
+            </div>
+          ))}
         </div>
       ) : deposits && deposits.length === 0 ? (
         <div className="text-center py-4 flex flex-col items-center gap-2">
-          <span className="text-[11px] text-gray-600 italic"><LoreText items={emptyStates.analytics} /></span>
+          <span className="text-[11px] text-gray-400 italic"><LoreText items={emptyStates.analytics} /></span>
           <span className="text-[10px] text-gray-500">If you&apos;ve already placed bets, use <strong className="text-sky-400/90">Refresh</strong> above to load history.</span>
         </div>
       ) : (
@@ -187,7 +203,14 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
                               {isDualJackpot ? "Dual Jackpot" : row.wonDailyJackpot ? "Daily Jackpot" : "Weekly Jackpot"}
                             </span>
                           )}
-                          {hasJackpotBadge && typeof row.reward === "number" && row.reward > 0 && (
+                          {/* Regular win badge (non-jackpot) */}
+                          {row.userWon && !hasJackpotBadge && (
+                            <span className="ml-1 inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-black uppercase leading-none tracking-[0.14em] whitespace-nowrap text-emerald-300">
+                              Win
+                            </span>
+                          )}
+                          {/* Reward amount for any win */}
+                          {row.userWon && typeof row.reward === "number" && row.reward > 0 && (
                             <span className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-black uppercase leading-none tracking-[0.12em] whitespace-nowrap text-emerald-300">
                               +{row.reward.toFixed(2)} LINEA
                             </span>
@@ -196,7 +219,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         <span className="font-bold text-sky-400 font-mono text-sm">{row.amount}</span>
-                        <span className="text-xs text-gray-600 ml-0.5">LINEA</span>
+                        <span className="text-xs text-gray-400 ml-0.5">LINEA</span>
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         {row.txHash ? (
@@ -209,7 +232,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
                             {row.txHash.slice(0, 6)}...{row.txHash.slice(-4)}
                           </a>
                         ) : (
-                          <span className="text-gray-600">-</span>
+                          <span className="text-gray-400">-</span>
                         )}
                       </td>
                     </UiTableRow>

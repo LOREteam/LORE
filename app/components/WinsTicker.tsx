@@ -17,7 +17,7 @@ function WinItem({ w }: { w: RecentWin }) {
         {w.amount}
       </span>
       <span className="text-gray-500">LINEA</span>
-      <span className="lore-nums text-gray-600">#{w.epoch}</span>
+      <span className="lore-nums text-gray-400">#{w.epoch}</span>
     </span>
   );
 }
@@ -58,8 +58,8 @@ export const WinsTicker = memo(function WinsTicker({
           </div>
         )
       ) : (
-        <span className="absolute inset-y-0 left-0 inline-flex items-center px-2.5 leading-none whitespace-nowrap text-[10px] text-gray-500">
-          Recent wins will appear here after epochs resolve
+        <span className="absolute inset-y-0 left-0 inline-flex items-center px-2.5 leading-none whitespace-nowrap text-[10px] text-slate-500 animate-pulse">
+          Waiting for winners&hellip;
         </span>
       )}
     </div>

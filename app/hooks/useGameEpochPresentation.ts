@@ -159,6 +159,22 @@ export function useGameRevealState({
     return () => clearTimeout(check);
   }, [forceExitReveal, isRevealing]);
 
+  // Safety valve: if the grid stays locked for 8+ seconds without a reveal
+  // starting, force-clear the lock so users can bet again. This handles
+  // edge cases where auto-resolve succeeds but wagmi cache doesn't update.
+  const LOCKED_SAFETY_TIMEOUT_MS = 8_000;
+  useEffect(() => {
+    if (!lockedGridEpoch || isRevealing) return;
+    const safetyTimer = setTimeout(() => {
+      // Still locked and still not revealing — force unlock.
+      setLockedGridEpoch(null);
+      // Also refetch everything to pick up current state.
+      refetchGridEpochDataRef.current();
+      refetchUserBetsRef.current();
+    }, LOCKED_SAFETY_TIMEOUT_MS);
+    return () => clearTimeout(safetyTimer);
+  }, [lockedGridEpoch, isRevealing, setLockedGridEpoch]);
+
   return {
     visualEpochBigInt,
     gridDisplayEpoch,

@@ -14,36 +14,6 @@ export const dbPath = resolveDbPath();
 mkdirSync(dirname(dbPath), { recursive: true });
 
 export const db = new DatabaseSync(dbPath);
-const SQLITE_BUSY_WAIT_BASE_MS = 75;
-const SQLITE_BOOTSTRAP_MAX_ATTEMPTS = 8;
-const SQLITE_SLEEP_BUFFER = new SharedArrayBuffer(4);
-const SQLITE_SLEEP_VIEW = new Int32Array(SQLITE_SLEEP_BUFFER);
-
-function sleepSync(ms: number) {
-  Atomics.wait(SQLITE_SLEEP_VIEW, 0, 0, ms);
-}
-
-function isSqliteBusyError(error: unknown) {
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return message.includes("database is locked") || message.includes("database schema is locked");
-}
-
-function execWithBusyRetry(sql: string, label: string) {
-  let waitMs = SQLITE_BUSY_WAIT_BASE_MS;
-  for (let attempt = 1; attempt <= SQLITE_BOOTSTRAP_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      db.exec(sql);
-      return;
-    } catch (error) {
-      if (!isSqliteBusyError(error) || attempt === SQLITE_BOOTSTRAP_MAX_ATTEMPTS) {
-        throw error;
-      }
-      console.warn(`[db] ${label} hit SQLITE_BUSY, retry ${attempt}/${SQLITE_BOOTSTRAP_MAX_ATTEMPTS} in ${waitMs}ms`);
-      sleepSync(waitMs);
-      waitMs *= 2;
-    }
-  }
-}
 
 function configureConnection() {
   db.exec(`
@@ -57,7 +27,7 @@ function configureConnection() {
 }
 
 function bootstrapSchema() {
-  execWithBusyRetry(`
+  db.exec(`
     PRAGMA journal_mode = WAL;
 
     CREATE TABLE IF NOT EXISTS meta (
@@ -228,7 +198,7 @@ function bootstrapSchema() {
       acquired_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL
     );
-  `, "bootstrap schema");
+  `);
 }
 
 configureConnection();

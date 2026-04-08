@@ -57,6 +57,8 @@ function staleToneClass(stale?: boolean) {
 
 type DataSyncHealth = {
   status?: string;
+  visibility?: "public" | "private";
+  redacted?: boolean;
   storage?: {
     currentEpochMeta?: number | null;
     lastIndexedBlock?: string | null;
@@ -150,6 +152,8 @@ type DataSyncHealth = {
 
 type RuntimeHealth = {
   status?: string;
+  visibility?: "public" | "private";
+  redacted?: boolean;
   metrics?: Record<string, {
     requests: number;
     successes: number;
@@ -409,6 +413,7 @@ export default function AdminPage() {
   const contiguousProgressWidth = Math.max(0, Math.min(100, dataSyncHealth?.epochs?.contiguousCoveragePct ?? 0));
   const jackpotServingMode = dataSyncHealth?.jackpots?.servingMode ?? null;
   const recentWinsServingMode = dataSyncHealth?.recentWins?.servingMode ?? null;
+  const diagnosticsRedacted = Boolean(dataSyncHealth?.redacted);
 
   return (
     <main className="min-h-screen bg-[#060612] text-slate-200 p-6">
@@ -488,11 +493,16 @@ export default function AdminPage() {
                 </button>
               </div>
               <div className="text-sm">Status: <b>{dataSyncHealth?.status ?? "..."}</b></div>
+              {diagnosticsRedacted ? (
+                <div className="rounded border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-200">
+                  Sensitive diagnostics are redacted in this environment. Local requests or a private health secret are required for full internals.
+                </div>
+              ) : null}
               <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${catchUpToneClass}`}>
                 {catchUpPhase.replace(/_/g, " ")}
               </div>
               <div className="text-sm">Network: <b>{dataSyncHealth?.env?.network ?? "..."}</b></div>
-              <div className="text-sm">DB path: <span className="font-mono text-xs">{dataSyncHealth?.env?.dbPath ?? "..."}</span></div>
+              <div className="text-sm">DB path: <span className="font-mono text-xs">{dataSyncHealth?.env?.dbPath ?? (diagnosticsRedacted ? "redacted" : "...")}</span></div>
               <div className="text-sm">Deploy block: <b>{dataSyncHealth?.env?.deployBlock ?? "..."}</b></div>
               <div className="text-sm">Lag warn threshold: <b>{fmtNumber(dataSyncHealth?.env?.lagWarnBlocks)}</b></div>
               <div className="text-sm">Last indexed block: <b>{dataSyncHealth?.storage?.lastIndexedBlock ?? "null"}</b></div>
@@ -648,6 +658,11 @@ export default function AdminPage() {
 
             <div className="rounded border border-white/10 bg-white/[0.02] p-4 space-y-3">
               <div className="text-xs uppercase tracking-wider text-gray-400">Hot API Runtime</div>
+              {runtimeHealth?.redacted ? (
+                <div className="rounded border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-200">
+                  Runtime metrics are redacted in this environment. Use localhost or the private health secret for full route metrics.
+                </div>
+              ) : null}
               {runtimeMetricRows.length === 0 ? (
                 <div className="text-sm text-gray-400">No runtime metrics recorded yet.</div>
               ) : (
