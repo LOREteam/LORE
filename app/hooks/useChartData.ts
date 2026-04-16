@@ -28,7 +28,13 @@ export function useChartData(realTotalStaked: number, isPageVisible = true) {
   useEffect(() => {
     if (!isPageVisible) return;
     const interval = setInterval(() => {
-      setChartData((prev) => [...prev.slice(1), realTotalStakedRef.current]);
+      setChartData((prev) => {
+        const nextValue = realTotalStakedRef.current;
+        if (prev.length > 0 && prev.every((value) => value === prev[0]) && prev[prev.length - 1] === nextValue) {
+          return prev;
+        }
+        return [...prev.slice(1), nextValue];
+      });
     }, CHART_UPDATE_INTERVAL_MS);
     
     return () => clearInterval(interval);

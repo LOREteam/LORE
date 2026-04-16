@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { createPublicClient, createWalletClient, getAddress, http, fallback, parseAbi, formatUnits } from "viem";
+import { createPublicClient, createWalletClient, getAddress, http, fallback, formatUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   clampKeeperFeeOverridesToBalance,
@@ -13,6 +13,10 @@ import {
   getLineaChain,
   getPreferredLineaRpcs,
 } from "./config/publicConfig";
+import { RESOLVE_ABI } from "./config/abi";
+import { assertProductionRuntimeConfig } from "./config/productionRuntime";
+
+assertProductionRuntimeConfig("bot");
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const APP_NETWORK = getConfiguredLineaNetwork();
@@ -27,37 +31,55 @@ const ALERT_BOT_TOKEN = process.env.ALERT_TELEGRAM_BOT_TOKEN ?? "";
 const ALERT_CHAT_ID = process.env.ALERT_TELEGRAM_CHAT_ID ?? "";
 const ALERT_THREAD_ID = process.env.ALERT_TELEGRAM_THREAD_ID ?? "";
 const ALERT_PREFIX = process.env.ALERT_PREFIX ?? "LORE Keeper";
-const PENDING_RESOLVE_STALE_MS = Number(process.env.PENDING_RESOLVE_STALE_MS ?? "45000");
-const FORCE_REPLACE_PENDING_NONCE_GAP = Number(process.env.FORCE_REPLACE_PENDING_NONCE_GAP ?? "6");
+const PENDING_RESOLVE_STALE_MS = (() => {
+  const raw = Number(process.env.PENDING_RESOLVE_STALE_MS ?? "45000");
+  return Number.isFinite(raw) && raw > 0 ? raw : 45_000;
+})();
+const FORCE_REPLACE_PENDING_NONCE_GAP = (() => {
+  const raw = Number(process.env.FORCE_REPLACE_PENDING_NONCE_GAP ?? "6");
+  return Number.isFinite(raw) && raw > 0 ? raw : 6;
+})();
 const REPLACE_PENDING_MAX_FEE_BUMP_PERCENT = 220n;
 const REPLACE_PENDING_PRIORITY_BUMP_PERCENT = 200n;
 const NORMAL_MAX_FEE_BUMP_PERCENT = 130n;
 const NORMAL_PRIORITY_BUMP_PERCENT = 125n;
 const GAS_LIMIT_MARGIN_PERCENT = 150n;
 
-// Fallback grace period: wait this many seconds after epoch ends before resolving.
-// Gives AutoResolve in users' browsers time to handle it first.
-const GRACE_SECONDS = Number(process.env.KEEPER_GRACE_SECONDS ?? "45");
-const ALERT_COOLDOWN_MS = Number(process.env.ALERT_COOLDOWN_MS ?? "300000");
+// V8 atomic resolve: a single tx finalizes the epoch. Players normally
+// trigger _autoResolveIfNeeded() via their next bet — the keeper is just a
+// fallback for empty/quiet rounds. Keep grace short so the UI doesn't freeze.
+const GRACE_SECONDS = (() => {
+  const raw = Number(process.env.LAST_BET_GRACE_SECONDS ?? process.env.KEEPER_GRACE_SECONDS ?? "2");
+  if (!Number.isFinite(raw) || raw < 0 || raw > 60) {
+    console.warn(`[keeper] GRACE_SECONDS=${raw} out of range [0..60], defaulting to 2`);
+    return 2;
+  }
+  return raw;
+})();
+const ALERT_COOLDOWN_MS = (() => {
+  const raw = Number(process.env.ALERT_COOLDOWN_MS ?? "300000");
+  return Number.isFinite(raw) && raw > 0 ? raw : 300_000;
+})();
 
 function extractFeeOverrideFields(fees: Record<string, unknown> | null | undefined) {
   if (!fees) return {};
   const f = fees as { gasPrice?: bigint; maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint };
   if (f.gasPrice !== undefined) return { gasPrice: f.gasPrice };
   if (f.maxFeePerGas !== undefined) {
-    return { maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas };
+    // EIP-1559 requires both fields; default priority to 10% of maxFee if absent
+    const priority = f.maxPriorityFeePerGas ?? f.maxFeePerGas / 10n;
+    return { maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: priority };
   }
   return {};
 }
 
-const ABI = parseAbi([
-  "function resolveEpoch(uint256 epoch) external",
-  "function currentEpoch() public view returns (uint256)",
-  "function getEpochEndTime(uint256 epoch) public view returns (uint256)",
-  "function epochs(uint256) public view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved)",
-  "error TimerNotEnded()",
-  "error CanOnlyResolveCurrent()",
-]);
+const ABI = RESOLVE_ABI;
+
+type PendingResolve = {
+  epoch: bigint;
+  hash: `0x${string}`;
+  submittedAt: number;
+};
 
 const alertCooldowns = new Map<string, number>();
 
@@ -76,26 +98,29 @@ function shouldSendAlert(key: string, cooldownMs = ALERT_COOLDOWN_MS) {
 async function sendTelegramAlert(text: string, key: string, cooldownMs = ALERT_COOLDOWN_MS) {
   if (!isAlertingEnabled()) return;
   if (!shouldSendAlert(key, cooldownMs)) return;
-  try {
-    const body = new URLSearchParams({
-      chat_id: ALERT_CHAT_ID,
-      text: `*${ALERT_PREFIX}*\n${text}`,
-      parse_mode: "Markdown",
-      disable_web_page_preview: "true",
-    });
-    if (ALERT_THREAD_ID) body.set("message_thread_id", ALERT_THREAD_ID);
 
-    const res = await fetch(`https://api.telegram.org/bot${ALERT_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
-    if (!res.ok) {
+  const body = new URLSearchParams({
+    chat_id: ALERT_CHAT_ID,
+    text: `*${ALERT_PREFIX}*\n${text}`,
+    parse_mode: "Markdown",
+    disable_web_page_preview: "true",
+  });
+  if (ALERT_THREAD_ID) body.set("message_thread_id", ALERT_THREAD_ID);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${ALERT_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      if (res.ok) return;
       const msg = await res.text();
-      console.error(`[alert] Telegram send failed: HTTP ${res.status} ${msg}`);
+      console.error(`[alert] Telegram send failed (attempt ${attempt + 1}): HTTP ${res.status} ${msg}`);
+    } catch (err) {
+      console.error(`[alert] Telegram send error (attempt ${attempt + 1}):`, err);
     }
-  } catch (err) {
-    console.error("[alert] Telegram send error:", err);
+    if (attempt === 0) await delay(2000);
   }
 }
 
@@ -120,6 +145,105 @@ function getRequiredEnv(name: string) {
     throw new Error(`Missing required env var: ${name}`);
   }
   return value;
+}
+
+function isSkippableResolveError(message: string) {
+  return (
+    message.includes("known transaction") ||
+    message.includes("already known") ||
+    message.includes("nonce too low") ||
+    message.includes("replacement transaction underpriced") ||
+    message.includes("execution reverted") ||
+    message.includes("reverted with the following signature") ||
+    message.includes("epochalreadyclosed") ||
+    message.includes("alreadyresolved") ||
+    message.includes("timernotended") ||
+    message.includes("canonlyresolvecurrent")
+  );
+}
+
+async function tryResolveEpochAction(options: {
+  accountAddress: `0x${string}`;
+  contractAddress: `0x${string}`;
+  epoch: bigint;
+  gasLimitMarginPercent: bigint;
+  publicClient: ReturnType<typeof createPublicClient>;
+  walletClient: ReturnType<typeof createWalletClient>;
+}) {
+  const {
+    accountAddress,
+    contractAddress,
+    epoch,
+    gasLimitMarginPercent,
+    publicClient,
+    walletClient,
+  } = options;
+
+  const est = await publicClient.estimateContractGas({
+    account: accountAddress,
+    address: contractAddress,
+    abi: ABI,
+    functionName: "resolveEpoch",
+    args: [epoch],
+  });
+  const fees = await publicClient.estimateFeesPerGas();
+  const latestNonce = await publicClient.getTransactionCount({
+    address: accountAddress,
+    blockTag: "latest",
+  });
+  const pendingNonce = await publicClient.getTransactionCount({
+    address: accountAddress,
+    blockTag: "pending",
+  });
+  const replacingPendingTx = pendingNonce > latestNonce;
+  const estimatedFeeOverrides = getKeeperFeeOverrides(
+    fees,
+    APP_CHAIN.id,
+    replacingPendingTx ? REPLACE_PENDING_MAX_FEE_BUMP_PERCENT : NORMAL_MAX_FEE_BUMP_PERCENT,
+    replacingPendingTx ? REPLACE_PENDING_PRIORITY_BUMP_PERCENT : NORMAL_PRIORITY_BUMP_PERCENT,
+  );
+  const rawFeeOverrides = extractFeeOverrideFields(estimatedFeeOverrides);
+  const keeperBalance = await publicClient.getBalance({ address: accountAddress });
+  const feeOverrides = clampKeeperFeeOverridesToBalance(
+    rawFeeOverrides,
+    est,
+    keeperBalance,
+  ) ?? {};
+  const txFeeOverrides = extractFeeOverrideFields(feeOverrides);
+  const gas = getAffordableKeeperGasLimit(est, keeperBalance, feeOverrides, gasLimitMarginPercent);
+  if (gas === null) {
+    throw new Error(
+      `keeper_insufficient_funds balance=${keeperBalance.toString()} estimatedGas=${est.toString()}`,
+    );
+  }
+  if (replacingPendingTx) {
+    console.log(
+      `Replacing pending keeper tx with nonce ${latestNonce.toString()} (pending=${pendingNonce.toString()}, latest=${latestNonce.toString()})`,
+    );
+  }
+  const hash = await walletClient.writeContract({
+    account: walletClient.account ?? accountAddress,
+    chain: APP_CHAIN,
+    address: contractAddress,
+    abi: ABI,
+    functionName: "resolveEpoch",
+    args: [epoch],
+    gas,
+    ...(replacingPendingTx ? { nonce: latestNonce } : {}),
+    ...txFeeOverrides,
+  });
+  try {
+    await publicClient.waitForTransactionReceipt({ hash });
+    console.log(`Resolved epoch ${epoch.toString()} (gas: ${gas}). Tx: ${hash}`);
+    return null;
+  } catch (receiptErr) {
+    const receiptMsg = receiptErr instanceof Error ? (receiptErr.message?.toLowerCase() ?? "") : String(receiptErr).toLowerCase();
+    if (receiptMsg.includes("timed out") || receiptMsg.includes("timeout")) {
+      console.log(`Resolve tx sent but receipt timed out. Will verify next cycles. Tx: ${hash}`);
+      return { epoch, hash, submittedAt: Date.now() } satisfies PendingResolve;
+    }
+    throw receiptErr;
+  }
 }
 
 async function startKeeperBot() {
@@ -156,7 +280,7 @@ async function startKeeperBot() {
 
   let consecutiveErrors = 0;
   let consecutiveNetworkErrors = 0;
-  let pendingResolve: { epoch: bigint; hash: `0x${string}`; submittedAt: number } | null = null;
+  let pendingResolve: PendingResolve | null = null;
 
   while (true) {
     try {
@@ -186,7 +310,8 @@ async function startKeeperBot() {
 
       if (pendingResolve) {
         const pending = pendingResolve;
-        if (epoch > pending.epoch || isResolved) {
+        const pendingResolved = epoch > pending.epoch;
+        if (pendingResolved) {
           console.log(`\nPending resolve confirmed for epoch ${pending.epoch.toString()} via chain state. Tx: ${pending.hash}`);
           pendingResolve = null;
         } else {
@@ -217,7 +342,7 @@ async function startKeeperBot() {
               nonceGap < FORCE_REPLACE_PENDING_NONCE_GAP
             ) {
               process.stdout.write(`\rEpoch #${epoch.toString()} | resolve tx pending | ${pending.hash.slice(0, 10)}...   `);
-              await delay(3000);
+              await delay(1500);
               continue;
             }
             console.log(
@@ -228,106 +353,33 @@ async function startKeeperBot() {
         }
       }
 
-      if (secondsLeft <= -GRACE_SECONDS && !isResolved) {
-        const freshEpoch = await publicClient.readContract({
-          address: contractAddress, abi: ABI, functionName: "currentEpoch",
-        });
-        if (freshEpoch !== epoch) {
-          console.log(`\nEpoch ${epoch.toString()} already resolved, now at ${freshEpoch.toString()}`);
-        } else {
-          const poolStr = formatUnits(totalPool, 18);
-          console.log(`\nResolving epoch ${epoch.toString()} (pool: ${poolStr} LINEA, overdue ${overdue}s)...`);
-          try {
-            const est = await publicClient.estimateContractGas({
-              account: account.address,
-              address: contractAddress,
-              abi: ABI,
-              functionName: "resolveEpoch",
-              args: [epoch],
-            });
-            const fees = await publicClient.estimateFeesPerGas();
-            const latestNonce = await publicClient.getTransactionCount({
-              address: account.address,
-              blockTag: "latest",
-            });
-            const pendingNonce = await publicClient.getTransactionCount({
-              address: account.address,
-              blockTag: "pending",
-            });
-            const replacingPendingTx = pendingNonce > latestNonce;
-            const estimatedFeeOverrides = getKeeperFeeOverrides(
-              fees,
-              APP_CHAIN.id,
-              replacingPendingTx ? REPLACE_PENDING_MAX_FEE_BUMP_PERCENT : NORMAL_MAX_FEE_BUMP_PERCENT,
-              replacingPendingTx ? REPLACE_PENDING_PRIORITY_BUMP_PERCENT : NORMAL_PRIORITY_BUMP_PERCENT,
+      const shouldResolve = secondsLeft <= -GRACE_SECONDS && !isResolved && totalPool > 0n;
+
+      if (shouldResolve) {
+        const poolStr = formatUnits(totalPool, 18);
+        console.log(`\nResolving epoch ${epoch.toString()} (pool: ${poolStr} LINEA, overdue ${overdue}s)...`);
+        try {
+          pendingResolve = await tryResolveEpochAction({
+            accountAddress: account.address,
+            contractAddress,
+            epoch,
+            gasLimitMarginPercent: GAS_LIMIT_MARGIN_PERCENT,
+            publicClient,
+            walletClient,
+          });
+          consecutiveErrors = 0;
+          consecutiveNetworkErrors = 0;
+        } catch (txErr) {
+          const errStr = txErr instanceof Error ? txErr.message.toLowerCase() : String(txErr).toLowerCase();
+          if (isSkippableResolveError(errStr)) {
+            console.log(`Epoch ${epoch.toString()} skipped (${errStr.slice(0, 80)})`);
+            await delay(1500);
+          } else {
+            await sendTelegramAlert(
+              `resolve tx error on epoch \`${epoch.toString()}\`\n\`${errStr.slice(0, 220)}\``,
+              "resolve-tx-error",
             );
-            const rawFeeOverrides = extractFeeOverrideFields(estimatedFeeOverrides);
-            const keeperBalance = await publicClient.getBalance({ address: account.address });
-            const feeOverrides = clampKeeperFeeOverridesToBalance(
-              rawFeeOverrides,
-              est,
-              keeperBalance,
-            ) ?? {};
-            const txFeeOverrides = extractFeeOverrideFields(feeOverrides);
-            const gas = getAffordableKeeperGasLimit(est, keeperBalance, feeOverrides, GAS_LIMIT_MARGIN_PERCENT);
-            if (gas === null) {
-              throw new Error(
-                `keeper_insufficient_funds balance=${keeperBalance.toString()} estimatedGas=${est.toString()}`,
-              );
-            }
-            if (replacingPendingTx) {
-              console.log(
-                `Replacing pending keeper tx with nonce ${latestNonce.toString()} (pending=${pendingNonce.toString()}, latest=${latestNonce.toString()})`,
-              );
-            }
-            const hash = await walletClient.writeContract({
-              address: contractAddress,
-              abi: ABI,
-              functionName: "resolveEpoch",
-              args: [epoch],
-              gas,
-              ...(replacingPendingTx ? { nonce: latestNonce } : {}),
-              ...txFeeOverrides,
-            });
-            try {
-              await publicClient.waitForTransactionReceipt({ hash });
-              console.log(`Resolved (gas: ${gas}). Tx: ${hash}`);
-              pendingResolve = null;
-              consecutiveErrors = 0;
-              consecutiveNetworkErrors = 0;
-            } catch (receiptErr) {
-              const receiptMsg = receiptErr instanceof Error ? (receiptErr.message?.toLowerCase() ?? "") : String(receiptErr).toLowerCase();
-              if (receiptMsg.includes("timed out") || receiptMsg.includes("timeout")) {
-                pendingResolve = { epoch, hash, submittedAt: Date.now() };
-                console.log(`Resolve tx sent but receipt timed out. Will verify next cycles. Tx: ${hash}`);
-                consecutiveErrors = 0;
-                consecutiveNetworkErrors = 0;
-              } else {
-                throw receiptErr;
-              }
-            }
-          } catch (txErr) {
-            const errStr = txErr instanceof Error ? txErr.message.toLowerCase() : String(txErr).toLowerCase();
-            if (
-              errStr.includes("known transaction") ||
-              errStr.includes("already known") ||
-              errStr.includes("nonce too low") ||
-              errStr.includes("replacement transaction underpriced") ||
-              errStr.includes("execution reverted") ||
-              errStr.includes("reverted with the following signature") ||
-              errStr.includes("0x22daea9a") ||
-              errStr.includes("timernotended") ||
-              errStr.includes("canonlyresolvecurrent")
-            ) {
-              console.log(`Epoch ${epoch.toString()} – skipped (${errStr.slice(0, 80)})`);
-              await delay(3000);
-            } else {
-              await sendTelegramAlert(
-                `resolve tx error on epoch \`${epoch.toString()}\`\n\`${errStr.slice(0, 220)}\``,
-                "resolve-tx-error",
-              );
-              throw txErr;
-            }
+            throw txErr;
           }
         }
       } else {
@@ -351,14 +403,7 @@ async function startKeeperBot() {
       } else {
         consecutiveNetworkErrors = 0;
       }
-      if (
-        low.includes("reverted") ||
-        low.includes("known transaction") ||
-        low.includes("nonce") ||
-        low.includes("0x22daea9a") ||
-        low.includes("timernotended") ||
-        low.includes("canonlyresolvecurrent")
-      ) {
+      if (isSkippableResolveError(low) || low.includes("0x22daea9a")) {
         console.log(`\n[skip] ${low.slice(0, 80)}`);
       } else {
         console.log(`\nKeeper error: ${msg}`);
@@ -380,8 +425,12 @@ async function startKeeperBot() {
       }
     }
 
-    await delay(3000);
+    const loopDelay = pendingResolve != null ? 1500 : 3000;
+    await delay(loopDelay);
   }
 }
 
-void startKeeperBot();
+startKeeperBot().catch((err) => {
+  console.error("[keeper] Fatal startup error:", err);
+  process.exit(1);
+});

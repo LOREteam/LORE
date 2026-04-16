@@ -171,6 +171,14 @@ type BuildWalletShellPropsOptions = {
   deepScanStop: WalletSettingsProps["onDeepScanStop"];
   deepClaimOne: WalletSettingsProps["onDeepClaimOne"];
   claimAllDeep: WalletSettingsProps["onDeepClaimAll"];
+  connectedResolverRewards: WalletSettingsProps["connectedResolverRewards"];
+  connectedResolverRewardsWei: WalletSettingsProps["connectedResolverRewardsWei"];
+  embeddedResolverRewards: WalletSettingsProps["embeddedResolverRewards"];
+  embeddedResolverRewardsWei: WalletSettingsProps["embeddedResolverRewardsWei"];
+  isClaimingConnectedResolverRewards: WalletSettingsProps["isClaimingConnectedResolverRewards"];
+  isClaimingEmbeddedResolverRewards: WalletSettingsProps["isClaimingEmbeddedResolverRewards"];
+  claimConnectedResolverRewards: WalletSettingsProps["onClaimConnectedResolverRewards"];
+  claimEmbeddedResolverRewards: WalletSettingsProps["onClaimEmbeddedResolverRewards"];
   soundSettings: WalletSettingsProps["soundSettings"];
   setSoundEnabled: WalletSettingsProps["onSoundSettingChange"];
   reducedMotion: WalletSettingsProps["reducedMotion"];
@@ -226,6 +234,14 @@ export function buildWalletShellProps({
   deepScanStop,
   deepClaimOne,
   claimAllDeep,
+  connectedResolverRewards,
+  connectedResolverRewardsWei,
+  embeddedResolverRewards,
+  embeddedResolverRewardsWei,
+  isClaimingConnectedResolverRewards,
+  isClaimingEmbeddedResolverRewards,
+  claimConnectedResolverRewards,
+  claimEmbeddedResolverRewards,
   soundSettings,
   setSoundEnabled,
   reducedMotion,
@@ -287,6 +303,14 @@ export function buildWalletShellProps({
       onDeepScanStop: deepScanStop,
       onDeepClaimOne: deepClaimOne,
       onDeepClaimAll: claimAllDeep,
+      connectedResolverRewards,
+      connectedResolverRewardsWei,
+      embeddedResolverRewards,
+      embeddedResolverRewardsWei,
+      isClaimingConnectedResolverRewards,
+      isClaimingEmbeddedResolverRewards,
+      onClaimConnectedResolverRewards: claimConnectedResolverRewards,
+      onClaimEmbeddedResolverRewards: claimEmbeddedResolverRewards,
       soundSettings,
       onSoundSettingChange: setSoundEnabled,
       reducedMotion,
@@ -319,6 +343,7 @@ type BuildPageTabContentPropsOptions = {
   jackpotHistoryLoading: PageTabContentProps["analyticsProps"]["jackpotHistoryLoading"];
   jackpotHistoryError: PageTabContentProps["analyticsProps"]["jackpotHistoryError"];
   refreshJackpotHistory: PageTabContentProps["analyticsProps"]["onRefreshJackpotHistory"];
+  autoMinePhase: PageTabContentProps["hubProps"]["autoMinePhase"];
   autoMineProgress: PageTabContentProps["hubProps"]["autoMineProgress"];
   chatOpen: PageTabContentProps["hubProps"]["chatOpen"];
   formattedLineaBalance: PageTabContentProps["hubProps"]["formattedBalance"];
@@ -382,6 +407,7 @@ export function buildPageTabContentProps({
   jackpotHistoryLoading,
   jackpotHistoryError,
   refreshJackpotHistory,
+  autoMinePhase,
   autoMineProgress,
   chatOpen,
   formattedLineaBalance,
@@ -447,6 +473,7 @@ export function buildPageTabContentProps({
       onRefreshJackpotHistory: refreshJackpotHistory,
     },
     hubProps: {
+      autoMinePhase,
       autoMineProgress,
       chatOpen,
       formattedBalance: formattedLineaBalance,

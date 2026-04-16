@@ -1,8 +1,11 @@
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { assertProductionRuntimeConfig } from "../config/productionRuntime";
 
 const DEFAULT_DB_PATH = "data/lore.sqlite";
+
+assertProductionRuntimeConfig("server");
 
 function resolveDbPath() {
   const configured = process.env.LORE_DB_PATH?.trim() || DEFAULT_DB_PATH;

@@ -30,6 +30,7 @@ import {
   getLineaChain,
   getPreferredLineaRpcs,
 } from "../config/publicConfig";
+import { assertProductionRuntimeConfig } from "../config/productionRuntime";
 import {
   patchJsonPath,
   putJsonPath,
@@ -40,6 +41,8 @@ import {
   type FeeFlushStorageRow,
   type RewardClaimStorageRow,
 } from "../server/storage";
+
+assertProductionRuntimeConfig("indexer");
 
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
@@ -57,23 +60,29 @@ const INDEXER_START_BLOCK = DEPLOY_BLOCK;
 const CHUNK_BLOCKS = 2_000n;
 const RUN_CHUNK_BLOCKS = 5_000n;
 const REPAIR_CHUNK_BLOCKS = 20_000n;
+const RECONCILE_SCAN_CHUNK_BLOCKS = 20_000n;
+const RECONCILE_RECENT_LOOKBACK_BLOCKS = 150_000n;
 const POLL_INTERVAL_MS = 15_000;
 const RETRY_COUNT = 5;
 const RETRY_DELAY_MS = 5_000;
 const INTER_CHUNK_DELAY_MS = 400;
+const RPC_CALL_TIMEOUT_MS = Number(process.env.INDEXER_RPC_TIMEOUT_MS ?? "45000");
+const MIN_ADAPTIVE_LOG_RANGE_BLOCKS = BigInt(process.env.INDEXER_MIN_ADAPTIVE_LOG_RANGE_BLOCKS ?? "250");
 const RECONCILE_INTERVAL_MS = Number(process.env.INDEXER_RECONCILE_INTERVAL_MS ?? String(DEFAULT_INDEXER_RECONCILE_INTERVAL_MS));
 const RECONCILE_MAX_EPOCHS_PER_PASS = Number(process.env.INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS ?? String(DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS));
 
-const writeDisabled = false;
-const writeDisabledReason: string | null = null;
 let lastReconcileAtMs = 0;
 
 type IndexerRunStatus = {
   startedAt: number;
-  completedAt: number;
+  completedAt?: number;
+  lastHeartbeatAt?: number;
   fromBlock: string;
   toBlock: string;
   totalLogs: number;
+  currentChunk?: number;
+  totalChunks?: number;
+  lastProcessedBlock?: string;
 };
 
 type IndexerRepairStatus = {
@@ -99,6 +108,11 @@ const EVENTS_ABI = parseAbi([
   "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
   "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
   "event RewardClaimed(uint256 indexed epoch, address indexed user, uint256 reward)",
+  "event RewardBatchClaimed(address indexed user, uint256 totalAmount, uint256 epochsClaimed)",
+  "event RebateClaimed(address indexed user, uint256 indexed epoch, uint256 amount)",
+  "event RebateBatchClaimed(address indexed user, uint256 amount, uint256 epochsClaimed)",
+  "event ResolverRewardAccrued(address indexed resolver, uint256 indexed epoch, uint256 amount)",
+  "event ResolverRewardClaimed(address indexed resolver, uint256 amount)",
   "event ProtocolFeesFlushed(uint256 ownerAmount, uint256 burnAmount)",
 ]);
 
@@ -126,24 +140,15 @@ async function fbGet<T = unknown>(path: string): Promise<T | null> {
   return readJsonPath<T>(path);
 }
 
-function throwIfWritesDisabled(path: string) {
-  if (!writeDisabled) return;
-  const reason = writeDisabledReason ? `: ${writeDisabledReason}` : "";
-  throw new Error(`[indexer] Storage writes disabled${reason}. Attempted write to ${path}.`);
-}
-
 async function fbPatch(path: string, data: Record<string, unknown>) {
-  throwIfWritesDisabled(path);
   patchJsonPath(path, data);
 }
 
 async function fbPut(path: string, data: unknown) {
-  throwIfWritesDisabled(path);
   putJsonPath(path, data);
 }
 
 function setIndexerStatus(key: string, value: unknown) {
-  if (writeDisabled) return;
   setMetaJson(key, value);
 }
 
@@ -155,25 +160,47 @@ const [resolvedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "EpochReso
 const [dailySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "DailyJackpotAwarded" });
 const [weeklySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "WeeklyJackpotAwarded" });
 const [rewardClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RewardClaimed" });
+const [rewardBatchClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RewardBatchClaimed" });
+const [rebateClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RebateClaimed" });
+const [rebateBatchClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RebateBatchClaimed" });
+const [resolverRewardAccruedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "ResolverRewardAccrued" });
+const [resolverRewardClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "ResolverRewardClaimed" });
 const [feesFlushedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "ProtocolFeesFlushed" });
 
 // ─── Chunked log fetcher ────────────────────────────────────────────
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function fetchLogsWithRetry(
-  topic: `0x${string}`,
+async function withRpcTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${RPC_CALL_TIMEOUT_MS}ms`));
+        }, RPC_CALL_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
+async function fetchLogsRequestWithRetry(
+  topics: Array<`0x${string}`>,
   from: bigint,
   to: bigint,
+  kind: "log fetch" | "indexed log fetch",
 ): Promise<Log[]> {
   for (let attempt = 0; attempt < RETRY_COUNT; attempt++) {
     try {
       const request = {
         address: CONTRACT,
-        topics: [topic],
+        topics,
         fromBlock: from,
         toBlock: to,
       } as unknown as Parameters<typeof client.getLogs>[0];
-      return await client.getLogs(request);
+      return await withRpcTimeout(client.getLogs(request), `getLogs(${from}-${to})`);
     } catch (err) {
       const msg = (err as Error).message?.slice(0, 80) ?? "unknown";
       if (attempt < RETRY_COUNT - 1) {
@@ -181,15 +208,16 @@ async function fetchLogsWithRetry(
         console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} — wait ${wait}ms`);
         await delay(wait);
       } else {
-        throw new Error(`log fetch failed for ${from}-${to} after ${RETRY_COUNT} retries: ${msg}`);
+        throw new Error(`${kind} failed for ${from}-${to} after ${RETRY_COUNT} retries: ${msg}`);
       }
     }
   }
-  throw new Error(`log fetch failed for ${from}-${to}: exhausted retries`);
+  throw new Error(`${kind} failed for ${from}-${to}: exhausted retries`);
 }
 
-async function fetchLogsByTopicsWithRetry(
+async function fetchLogsRequestAdaptive(
   topics: Array<`0x${string}`>,
+  label: string,
   from: bigint,
   to: bigint,
 ): Promise<Log[]> {
@@ -201,7 +229,7 @@ async function fetchLogsByTopicsWithRetry(
         fromBlock: from,
         toBlock: to,
       } as unknown as Parameters<typeof client.getLogs>[0];
-      return await client.getLogs(request);
+      return await withRpcTimeout(client.getLogs(request), `getLogs(${from}-${to})`);
     } catch (err) {
       const msg = (err as Error).message?.slice(0, 80) ?? "unknown";
       if (attempt < RETRY_COUNT - 1) {
@@ -214,6 +242,88 @@ async function fetchLogsByTopicsWithRetry(
     }
   }
   throw new Error(`indexed log fetch failed for ${from}-${to}: exhausted retries`);
+}
+void fetchLogsRequestAdaptive;
+
+async function fetchLogsRequestAdaptiveSplit(
+  topics: Array<`0x${string}`>,
+  label: string,
+  from: bigint,
+  to: bigint,
+): Promise<Log[]> {
+  const kind = topics.length === 1 ? "log fetch" : "indexed log fetch";
+  try {
+    return await fetchLogsRequestWithRetry(topics, from, to, kind);
+  } catch (err) {
+    const span = to - from + 1n;
+    if (span <= MIN_ADAPTIVE_LOG_RANGE_BLOCKS) {
+      throw err;
+    }
+    const leftTo = from + (span / 2n) - 1n;
+    const rightFrom = leftTo + 1n;
+    console.warn(
+      `  [split] ${label} ${from}-${to}: ${(err as Error).message}. splitting into ${from}-${leftTo} and ${rightFrom}-${to}`,
+    );
+    const left = await fetchLogsRequestAdaptiveSplit(topics, `${label}:L`, from, leftTo);
+    if (rightFrom <= to) {
+      await delay(INTER_CHUNK_DELAY_MS);
+    }
+    const right =
+      rightFrom <= to
+        ? await fetchLogsRequestAdaptiveSplit(topics, `${label}:R`, rightFrom, to)
+        : [];
+    return [...left, ...right];
+  }
+}
+
+async function fetchLogsByTopicsAdaptive(
+  topics: Array<`0x${string}`>,
+  label: string,
+  from: bigint,
+  to: bigint,
+): Promise<Log[]> {
+  return fetchLogsRequestAdaptiveSplit(topics, label, from, to);
+}
+
+async function fetchLogTopicAdaptive(
+  topic: `0x${string}`,
+  label: string,
+  from: bigint,
+  to: bigint,
+): Promise<Log[]> {
+  return fetchLogsRequestAdaptiveSplit([topic], label, from, to);
+}
+
+async function fetchLogsByTopicsChunked(
+  topics: Array<`0x${string}`>,
+  label: string,
+  from: bigint,
+  to: bigint,
+  chunkSize = RECONCILE_SCAN_CHUNK_BLOCKS,
+): Promise<Log[]> {
+  const all: Log[] = [];
+  const ranges: Array<{ from: bigint; to: bigint }> = [];
+  for (let f = from; f <= to; f += chunkSize) {
+    const t = f + chunkSize - 1n > to ? to : f + chunkSize - 1n;
+    ranges.push({ from: f, to: t });
+  }
+
+  for (let i = 0; i < ranges.length; i += 1) {
+    const range = ranges[i];
+    const logs = await fetchLogsByTopicsAdaptive(
+      topics,
+      `${label}:${i + 1}/${ranges.length}`,
+      range.from,
+      range.to,
+    );
+    all.push(...logs);
+    if (i < ranges.length - 1) await delay(INTER_CHUNK_DELAY_MS);
+    if ((i + 1) % 10 === 0 || i === ranges.length - 1) {
+      console.log(`  [${label}] ${i + 1}/${ranges.length} chunks, ${all.length} logs`);
+    }
+  }
+
+  return all;
 }
 
 async function fetchLogsByTopic(
@@ -231,7 +341,12 @@ async function fetchLogsByTopic(
 
   for (let i = 0; i < ranges.length; i++) {
     const r = ranges[i];
-    const logs = await fetchLogsWithRetry(topic, r.from, r.to);
+    const logs = await fetchLogTopicAdaptive(
+      topic,
+      `${label}:${i + 1}/${ranges.length}`,
+      r.from,
+      r.to,
+    );
     all.push(...logs);
     if (i < ranges.length - 1) await delay(INTER_CHUNK_DELAY_MS);
     if ((i + 1) % 10 === 0 || i === ranges.length - 1) {
@@ -250,6 +365,11 @@ async function fetchAllLogs(from: bigint, to: bigint): Promise<Log[]> {
     { sig: dailySig, label: "DailyJackpot" },
     { sig: weeklySig, label: "WeeklyJackpot" },
     { sig: rewardClaimedSig, label: "RewardClaimed" },
+    { sig: rewardBatchClaimedSig, label: "RewardBatchClaimed" },
+    { sig: rebateClaimedSig, label: "RebateClaimed" },
+    { sig: rebateBatchClaimedSig, label: "RebateBatchClaimed" },
+    { sig: resolverRewardAccruedSig, label: "ResolverRewardAccrued" },
+    { sig: resolverRewardClaimedSig, label: "ResolverRewardClaimed" },
     { sig: feesFlushedSig, label: "ProtocolFeesFlushed" },
   ];
 
@@ -312,6 +432,26 @@ interface FeeFlushRecord {
   blockNumber: string;
 }
 
+interface BatchClaimRecord {
+  id: string;
+  kind: "reward" | "rebate";
+  user: string;
+  totalAmount: string;
+  epochsClaimed: number;
+  txHash: string;
+  blockNumber: string;
+}
+
+interface ResolverRewardRecord {
+  id: string;
+  kind: "accrued" | "claimed";
+  resolver: string;
+  epoch?: string;
+  amount: string;
+  txHash: string;
+  blockNumber: string;
+}
+
 function buildBetKey(epoch: string, txHash: string, blockNumber: string): string {
   const normalizedHash = txHash.toLowerCase().trim();
   if (/^0x[0-9a-f]+$/.test(normalizedHash)) {
@@ -336,7 +476,7 @@ function normalizeBetRecord(bet: BetRecord): BetRecord {
   const aggregate = new Map<number, number>();
   for (let index = 0; index < bet.tileIds.length; index += 1) {
     const tileId = Number(bet.tileIds[index]);
-    if (!Number.isInteger(tileId) || tileId <= 0) continue;
+    if (!Number.isInteger(tileId) || tileId <= 0 || tileId > 25) continue;
     aggregate.set(tileId, (aggregate.get(tileId) ?? 0) + (normalizedAmounts[index] ?? 0));
   }
 
@@ -353,6 +493,8 @@ function processLogs(logs: Log[]) {
   const jackpots: JackpotRecord[] = [];
   const rewardClaims: RewardClaimRecord[] = [];
   const feeFlushes: FeeFlushRecord[] = [];
+  const batchClaims: BatchClaimRecord[] = [];
+  const resolverRewards: ResolverRewardRecord[] = [];
 
   for (const log of logs) {
     const topic0 = log.topics[0];
@@ -465,6 +607,59 @@ function processLogs(logs: Log[]) {
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
+      } else if (topic0 === rewardBatchClaimedSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "RewardBatchClaimed") continue;
+        const args = decoded.args as { user: string; totalAmount: bigint; epochsClaimed: bigint };
+        batchClaims.push({
+          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          kind: "reward",
+          user: args.user.toLowerCase(),
+          totalAmount: formatUnits(args.totalAmount, 18),
+          epochsClaimed: Number(args.epochsClaimed),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
+      } else if (topic0 === rebateClaimedSig) {
+        continue;
+      } else if (topic0 === rebateBatchClaimedSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "RebateBatchClaimed") continue;
+        const args = decoded.args as { user: string; amount: bigint; epochsClaimed: bigint };
+        batchClaims.push({
+          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          kind: "rebate",
+          user: args.user.toLowerCase(),
+          totalAmount: formatUnits(args.amount, 18),
+          epochsClaimed: Number(args.epochsClaimed),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
+      } else if (topic0 === resolverRewardAccruedSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "ResolverRewardAccrued") continue;
+        const args = decoded.args as { resolver: string; epoch: bigint; amount: bigint };
+        resolverRewards.push({
+          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          kind: "accrued",
+          resolver: args.resolver.toLowerCase(),
+          epoch: args.epoch.toString(),
+          amount: formatUnits(args.amount, 18),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
+      } else if (topic0 === resolverRewardClaimedSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "ResolverRewardClaimed") continue;
+        const args = decoded.args as { resolver: string; amount: bigint };
+        resolverRewards.push({
+          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          kind: "claimed",
+          resolver: args.resolver.toLowerCase(),
+          amount: formatUnits(args.amount, 18),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
       } else if (topic0 === feesFlushedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "ProtocolFeesFlushed") continue;
@@ -482,7 +677,15 @@ function processLogs(logs: Log[]) {
     }
   }
 
-  return { bets, epochs, jackpots, rewardClaims, feeFlushes };
+  return {
+    bets,
+    epochs,
+    jackpots,
+    rewardClaims,
+    feeFlushes,
+    batchClaims,
+    resolverRewards,
+  };
 }
 
 // Write to local SQLite
@@ -547,6 +750,24 @@ async function writeRewardClaims(rewardClaims: RewardClaimRecord[]) {
   upsertRewardClaims(rows);
 }
 
+async function writeBatchClaims(records: BatchClaimRecord[]) {
+  if (records.length === 0) return;
+  const patch: Record<string, unknown> = {};
+  for (const row of records) {
+    patch[row.id] = row;
+  }
+  await fbPatch("gamedata/batchClaims", patch);
+}
+
+async function writeResolverRewards(records: ResolverRewardRecord[]) {
+  if (records.length === 0) return;
+  const patch: Record<string, unknown> = {};
+  for (const row of records) {
+    patch[row.id] = row;
+  }
+  await fbPatch("gamedata/resolverRewards", patch);
+}
+
 async function writeFeeFlushes(feeFlushes: FeeFlushRecord[]) {
   if (feeFlushes.length === 0) return;
   const rows: FeeFlushStorageRow[] = feeFlushes.map((row) => ({
@@ -565,11 +786,11 @@ async function setLastBlock(block: bigint) {
 
 async function updateCurrentEpochMeta() {
   try {
-    const currentEpoch = await client.readContract({
+    const currentEpoch = await withRpcTimeout(client.readContract({
       address: CONTRACT,
       abi: READ_ABI,
       functionName: "currentEpoch",
-    });
+    }), "read currentEpoch");
     await fbPut("gamedata/_meta/currentEpoch", Number(currentEpoch));
   } catch (err) {
     console.warn("[indexer] Could not read currentEpoch from contract:", (err as Error).message);
@@ -577,11 +798,11 @@ async function updateCurrentEpochMeta() {
 }
 
 async function getCurrentEpochFromChain() {
-  return await client.readContract({
+  return await withRpcTimeout(client.readContract({
     address: CONTRACT,
     abi: READ_ABI,
     functionName: "currentEpoch",
-  });
+  }), "read currentEpoch");
 }
 
 async function getLastBlock(): Promise<bigint> {
@@ -640,12 +861,14 @@ async function runRepairPass(currentBlock: bigint) {
 
   const logs = await fetchAllLogs(from, to);
   if (logs.length > 0) {
-    const { bets, epochs, jackpots, rewardClaims, feeFlushes } = processLogs(logs);
+    const { bets, epochs, jackpots, rewardClaims, feeFlushes, batchClaims, resolverRewards } = processLogs(logs);
     await writeBets(bets);
     await writeEpochs(epochs);
     await writeJackpots(jackpots);
     await writeRewardClaims(rewardClaims);
     await writeFeeFlushes(feeFlushes);
+    await writeBatchClaims(batchClaims);
+    await writeResolverRewards(resolverRewards);
     console.log(`[indexer][repair] Repaired ${logs.length} logs (${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots, ${rewardClaims.length} claims)`);
   } else {
     console.log("[indexer][repair] No logs in this range");
@@ -715,22 +938,47 @@ async function runEpochReconcile(currentBlock: bigint) {
         : Math.max(1, RECONCILE_MAX_EPOCHS_PER_PASS);
   const targets = missing.slice(-reconcileBatchSize);
   console.log(`[indexer][reconcile] Missing epochs: ${missing.length}, repairing now: ${targets.join(", ")}`);
+  setIndexerStatus("indexerReconcileStatus", {
+    at: Date.now(),
+    currentEpoch: Number(currentEpoch),
+    missingEpochs: missing.length,
+    repairedEpochs: 0,
+    targetEpochs: targets,
+  } satisfies IndexerReconcileStatus);
 
   const epochsPatch = new Map<string, EpochRecord>();
   for (const epNum of targets) {
     const epTopic = toHex(BigInt(epNum), { size: 32 });
-    const logs = await fetchLogsByTopicsWithRetry([resolvedSig, epTopic], INDEXER_START_BLOCK, currentBlock);
+    const recentFrom =
+      currentBlock > RECONCILE_RECENT_LOOKBACK_BLOCKS
+        ? currentBlock - RECONCILE_RECENT_LOOKBACK_BLOCKS
+        : INDEXER_START_BLOCK;
+    let logs = await fetchLogsByTopicsChunked(
+      [resolvedSig, epTopic],
+      `EpochResolved:${epNum}:recent`,
+      recentFrom,
+      currentBlock,
+    );
+    if (logs.length === 0 && recentFrom > INDEXER_START_BLOCK) {
+      console.log(`[indexer][reconcile] Epoch ${epNum} not found in recent tail, falling back to full scan`);
+      logs = await fetchLogsByTopicsChunked(
+        [resolvedSig, epTopic],
+        `EpochResolved:${epNum}:full`,
+        INDEXER_START_BLOCK,
+        recentFrom - 1n,
+      );
+    }
     if (logs.length === 0) continue;
 
     let isDailyJackpot = false;
     let isWeeklyJackpot = false;
     try {
-      const epochState = await client.readContract({
+      const epochState = await withRpcTimeout(client.readContract({
         address: CONTRACT,
         abi: READ_ABI,
         functionName: "epochs",
         args: [BigInt(epNum)],
-      }) as [bigint, bigint, bigint, boolean, boolean, boolean];
+      }), `read epochs(${epNum})`) as [bigint, bigint, bigint, boolean, boolean, boolean];
       isDailyJackpot = Boolean(epochState[4]);
       isWeeklyJackpot = Boolean(epochState[5]);
     } catch (err) {
@@ -789,17 +1037,21 @@ async function runEpochReconcile(currentBlock: bigint) {
 // ─── Main loop ──────────────────────────────────────────────────────
 async function runOnce() {
   const lastBlock = await getLastBlock();
-  const currentBlock = await client.getBlockNumber();
+  const currentBlock = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
 
   const fromBlock = lastBlock + 1n;
   const startedAt = Date.now();
   if (fromBlock > currentBlock) {
     const status: IndexerRunStatus = {
       startedAt,
+      lastHeartbeatAt: startedAt,
       completedAt: Date.now(),
       fromBlock: fromBlock.toString(),
       toBlock: currentBlock.toString(),
       totalLogs: 0,
+      currentChunk: 0,
+      totalChunks: 0,
+      lastProcessedBlock: lastBlock.toString(),
     };
     setIndexerStatus("indexerRunStatus", status);
     return 0;
@@ -814,6 +1066,16 @@ async function runOnce() {
   }
 
   let chunkIndex = 0;
+  setIndexerStatus("indexerRunStatus", {
+    startedAt,
+    lastHeartbeatAt: startedAt,
+    fromBlock: fromBlock.toString(),
+    toBlock: currentBlock.toString(),
+    totalLogs: 0,
+    currentChunk: 0,
+    totalChunks: chunkCount,
+    lastProcessedBlock: lastBlock.toString(),
+  } satisfies IndexerRunStatus);
   for (let start = fromBlock; start <= currentBlock; start += RUN_CHUNK_BLOCKS) {
     const end = start + RUN_CHUNK_BLOCKS - 1n > currentBlock
       ? currentBlock
@@ -826,7 +1088,7 @@ async function runOnce() {
     console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} fetched ${logs.length} logs`);
 
     if (logs.length > 0) {
-      const { bets, epochs, jackpots, rewardClaims, feeFlushes } = processLogs(logs);
+      const { bets, epochs, jackpots, rewardClaims, feeFlushes, batchClaims, resolverRewards } = processLogs(logs);
       console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} parsed: ${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots, ${rewardClaims.length} claims`);
 
       await writeBets(bets);
@@ -834,21 +1096,37 @@ async function runOnce() {
       await writeJackpots(jackpots);
       await writeRewardClaims(rewardClaims);
       await writeFeeFlushes(feeFlushes);
+      await writeBatchClaims(batchClaims);
+      await writeResolverRewards(resolverRewards);
       console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} written to local SQLite`);
     }
 
     await setLastBlock(end);
     await updateCurrentEpochMeta();
+    setIndexerStatus("indexerRunStatus", {
+      startedAt,
+      lastHeartbeatAt: Date.now(),
+      fromBlock: fromBlock.toString(),
+      toBlock: currentBlock.toString(),
+      totalLogs,
+      currentChunk: chunkIndex,
+      totalChunks: chunkCount,
+      lastProcessedBlock: end.toString(),
+    } satisfies IndexerRunStatus);
   }
 
   console.log(`[indexer] Finished runOnce with ${totalLogs} logs`);
   await updateCurrentEpochMeta();
   const status: IndexerRunStatus = {
     startedAt,
+    lastHeartbeatAt: Date.now(),
     completedAt: Date.now(),
     fromBlock: fromBlock.toString(),
     toBlock: currentBlock.toString(),
     totalLogs,
+    currentChunk: chunkCount,
+    totalChunks: chunkCount,
+    lastProcessedBlock: currentBlock.toString(),
   };
   setIndexerStatus("indexerRunStatus", status);
   return totalLogs;
@@ -864,7 +1142,7 @@ async function main() {
 
   await runOnce();
   {
-    const head = await client.getBlockNumber();
+    const head = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
     await runRepairPass(head);
     await runEpochReconcile(head);
   }
@@ -877,7 +1155,7 @@ async function main() {
       running = true;
       try {
         await runOnce();
-        const head = await client.getBlockNumber();
+        const head = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
         await runRepairPass(head);
         await runEpochReconcile(head);
       } catch (err) {

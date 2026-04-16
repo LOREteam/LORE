@@ -1,13 +1,23 @@
 "use client";
 
 import React from "react";
-import { shortenAddress } from "../../lib/utils";
 import type { SoundName } from "../../hooks/useSound";
 import { SOUND_LABELS } from "../../hooks/useSound";
+import { shortenAddress } from "../../lib/utils";
+import { UiButton } from "../ui/UiButton";
 import { UiPanel } from "../ui/UiPanel";
 
 interface WalletSettingsOverviewPanelProps {
-  connectedWalletAddress?: string;
+  connectedWalletAddress?: string | null;
+  embeddedWalletAddress?: string | null;
+  connectedResolverRewards: string;
+  connectedResolverRewardsWei: bigint;
+  embeddedResolverRewards: string;
+  embeddedResolverRewardsWei: bigint;
+  isClaimingConnectedResolverRewards: boolean;
+  isClaimingEmbeddedResolverRewards: boolean;
+  onClaimConnectedResolverRewards: () => void;
+  onClaimEmbeddedResolverRewards: () => void;
   soundSettings?: Partial<Record<SoundName, boolean>>;
   onSoundSettingChange?: (name: SoundName, enabled: boolean) => void;
   reducedMotion: boolean;
@@ -16,13 +26,94 @@ interface WalletSettingsOverviewPanelProps {
 
 export function WalletSettingsOverviewPanel({
   connectedWalletAddress,
+  embeddedWalletAddress,
+  connectedResolverRewards,
+  connectedResolverRewardsWei,
+  embeddedResolverRewards,
+  embeddedResolverRewardsWei,
+  isClaimingConnectedResolverRewards,
+  isClaimingEmbeddedResolverRewards,
+  onClaimConnectedResolverRewards,
+  onClaimEmbeddedResolverRewards,
   soundSettings,
   onSoundSettingChange,
   reducedMotion,
   onReducedMotionChange,
 }: WalletSettingsOverviewPanelProps) {
+  const normalizedConnectedWallet = connectedWalletAddress?.toLowerCase() ?? null;
+  const normalizedEmbeddedWallet = embeddedWalletAddress?.toLowerCase() ?? null;
+  const showConnectedResolverRow = Boolean(connectedWalletAddress);
+  const showEmbeddedResolverRow =
+    Boolean(embeddedWalletAddress) &&
+    normalizedEmbeddedWallet !== null &&
+    normalizedEmbeddedWallet !== normalizedConnectedWallet;
+
   return (
     <>
+      {(showConnectedResolverRow || showEmbeddedResolverRow) && (
+        <UiPanel tone="subtle" padding="sm" className="animate-slide-up" style={{ animationDelay: "0.01s" }}>
+          <div className="flex items-baseline justify-between gap-2 mb-1.5">
+            <span className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider">Resolver Rewards</span>
+            <span className="text-[8px] text-gray-400">claimable LINEA</span>
+          </div>
+          <div className="space-y-2">
+            {showConnectedResolverRow && connectedWalletAddress && (
+              <div className="rounded-lg border border-white/[0.06] bg-black/15 px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] text-gray-300 font-semibold">Connected wallet</div>
+                    <div className="text-[10px] text-gray-500 truncate">{shortenAddress(connectedWalletAddress)}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs font-bold text-emerald-400">{connectedResolverRewards} LINEA</div>
+                    <div className="text-[10px] text-gray-500">pending</div>
+                  </div>
+                </div>
+                <div className="mt-2 flex justify-end">
+                  <UiButton
+                    variant="success"
+                    size="xs"
+                    uppercase
+                    loading={isClaimingConnectedResolverRewards}
+                    disabled={connectedResolverRewardsWei <= 0n}
+                    onClick={onClaimConnectedResolverRewards}
+                  >
+                    Claim Connected
+                  </UiButton>
+                </div>
+              </div>
+            )}
+
+            {showEmbeddedResolverRow && embeddedWalletAddress && (
+              <div className="rounded-lg border border-white/[0.06] bg-black/15 px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] text-gray-300 font-semibold">Privy wallet</div>
+                    <div className="text-[10px] text-gray-500 truncate">{shortenAddress(embeddedWalletAddress)}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs font-bold text-emerald-400">{embeddedResolverRewards} LINEA</div>
+                    <div className="text-[10px] text-gray-500">pending</div>
+                  </div>
+                </div>
+                <div className="mt-2 flex justify-end">
+                  <UiButton
+                    variant="success"
+                    size="xs"
+                    uppercase
+                    loading={isClaimingEmbeddedResolverRewards}
+                    disabled={embeddedResolverRewardsWei <= 0n}
+                    onClick={onClaimEmbeddedResolverRewards}
+                  >
+                    Claim Privy
+                  </UiButton>
+                </div>
+              </div>
+            )}
+          </div>
+        </UiPanel>
+      )}
+
       {soundSettings && onSoundSettingChange && (
         <UiPanel tone="subtle" padding="sm" className="animate-slide-up" style={{ animationDelay: "0.02s" }}>
           <div className="flex items-baseline justify-between gap-2 mb-1.5">
@@ -73,13 +164,6 @@ export function WalletSettingsOverviewPanel({
           </div>
         </UiPanel>
       )}
-
-      <UiPanel tone="default" className="animate-slide-up" style={{ animationDelay: "0.05s" }}>
-        <div className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1.5">Current Session</div>
-        <div className="text-sm text-emerald-400 font-mono font-semibold drop-shadow-[0_0_6px_rgba(52,211,153,0.3)]">
-          {connectedWalletAddress ? shortenAddress(connectedWalletAddress) : "Not connected"}
-        </div>
-      </UiPanel>
     </>
   );
 }

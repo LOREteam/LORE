@@ -22,12 +22,15 @@ interface CreateLineaOreClientViewPropsOptions {
   activeTab: SidebarProps["activeTab"];
   actualCurrentEpoch?: bigint;
   address?: PageTabContentProps["rebateProps"]["address"];
+  autoMinePhase: PageTabContentProps["hubProps"]["autoMinePhase"];
   autoMineProgress: PageTabContentProps["hubProps"]["autoMineProgress"];
   backupGateVersion: number;
   balanceWarningDismissed: boolean;
   chatOpen: PageTabContentProps["hubProps"]["chatOpen"];
   claimAll: SidebarProps["onClaimAll"];
   claimAllDeep: WalletSettingsProps["onDeepClaimAll"];
+  claimConnectedResolverRewards: WalletSettingsProps["onClaimConnectedResolverRewards"];
+  claimEmbeddedResolverRewards: WalletSettingsProps["onClaimEmbeddedResolverRewards"];
   claimRebates: PageTabContentProps["rebateProps"]["onClaimRebates"];
   claimReward: SidebarProps["onClaim"];
   closeWalletSettings: WalletSettingsProps["onClose"];
@@ -40,6 +43,8 @@ interface CreateLineaOreClientViewPropsOptions {
   deepScanScanning: WalletSettingsProps["deepScanScanning"];
   deepScanStop: WalletSettingsProps["onDeepScanStop"];
   deepScanWins: WalletSettingsProps["deepScanWins"];
+  connectedResolverRewards: WalletSettingsProps["connectedResolverRewards"];
+  connectedResolverRewardsWei: WalletSettingsProps["connectedResolverRewardsWei"];
   depositEthAmount: string;
   depositTokenAmount: string;
   deposits: PageTabContentProps["analyticsProps"]["deposits"];
@@ -47,6 +52,8 @@ interface CreateLineaOreClientViewPropsOptions {
   depositsLoading: PageTabContentProps["analyticsProps"]["depositsLoading"];
   dismissBalanceWarning: PageTabContentProps["onDismissBalanceWarning"];
   embeddedAddressCopied: WalletSettingsProps["embeddedAddressCopied"];
+  embeddedResolverRewards: WalletSettingsProps["embeddedResolverRewards"];
+  embeddedResolverRewardsWei: WalletSettingsProps["embeddedResolverRewardsWei"];
   embeddedWalletAddress: string | null;
   embeddedWalletSyncing: HeaderProps["embeddedWalletSyncing"];
   epochDurationChange: HeaderProps["epochDurationChange"];
@@ -80,6 +87,8 @@ interface CreateLineaOreClientViewPropsOptions {
   isAutoMining: PageTabContentProps["hubProps"]["isAutoMining"];
   isCancellingPendingTx: WalletSettingsProps["isCancellingPendingTx"];
   isClaiming: SidebarProps["isClaiming"];
+  isClaimingConnectedResolverRewards: WalletSettingsProps["isClaimingConnectedResolverRewards"];
+  isClaimingEmbeddedResolverRewards: WalletSettingsProps["isClaimingEmbeddedResolverRewards"];
   isClaimingRebate: PageTabContentProps["rebateProps"]["isClaiming"];
   isDailyJackpot: PageTabContentProps["hubProps"]["isDailyJackpot"];
   isDeepScanning: SidebarProps["isDeepScanning"];
@@ -155,12 +164,15 @@ export function createLineaOreClientViewProps({
   activeTab,
   actualCurrentEpoch,
   address,
+  autoMinePhase,
   autoMineProgress,
   backupGateVersion,
   balanceWarningDismissed,
   chatOpen,
   claimAll,
   claimAllDeep,
+  claimConnectedResolverRewards,
+  claimEmbeddedResolverRewards,
   claimRebates,
   claimReward,
   closeWalletSettings,
@@ -173,6 +185,8 @@ export function createLineaOreClientViewProps({
   deepScanScanning,
   deepScanStop,
   deepScanWins,
+  connectedResolverRewards,
+  connectedResolverRewardsWei,
   depositEthAmount,
   depositTokenAmount,
   deposits,
@@ -180,6 +194,8 @@ export function createLineaOreClientViewProps({
   depositsLoading,
   dismissBalanceWarning,
   embeddedAddressCopied,
+  embeddedResolverRewards,
+  embeddedResolverRewardsWei,
   embeddedWalletAddress,
   embeddedWalletSyncing,
   epochDurationChange,
@@ -213,6 +229,8 @@ export function createLineaOreClientViewProps({
   isAutoMining,
   isCancellingPendingTx,
   isClaiming,
+  isClaimingConnectedResolverRewards,
+  isClaimingEmbeddedResolverRewards,
   isClaimingRebate,
   isDailyJackpot,
   isDeepScanning,
@@ -299,7 +317,11 @@ export function createLineaOreClientViewProps({
     }),
     headerProps: buildHeaderProps({
       visualEpoch,
-      isRevealing,
+      // V8 resolve is atomic: the winning tile is known the moment the
+      // resolve tx lands, so the header always reflects the live epoch
+      // (number + countdown) without any "REVEAL"/ANALYZING placeholder.
+      // The winner announcement is handled by the wins ticker.
+      isRevealing: false,
       coldBootDefaults,
       liveStateReady,
       timerReady,
@@ -362,6 +384,14 @@ export function createLineaOreClientViewProps({
       deepScanStop,
       deepClaimOne,
       claimAllDeep,
+      connectedResolverRewards,
+      connectedResolverRewardsWei,
+      embeddedResolverRewards,
+      embeddedResolverRewardsWei,
+      isClaimingConnectedResolverRewards,
+      isClaimingEmbeddedResolverRewards,
+      claimConnectedResolverRewards,
+      claimEmbeddedResolverRewards,
       soundSettings,
       setSoundEnabled,
       reducedMotion,
@@ -391,6 +421,7 @@ export function createLineaOreClientViewProps({
       jackpotHistoryLoading,
       jackpotHistoryError,
       refreshJackpotHistory,
+      autoMinePhase,
       autoMineProgress,
       chatOpen,
       formattedLineaBalance,

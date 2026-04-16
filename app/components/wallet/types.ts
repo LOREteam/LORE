@@ -10,7 +10,7 @@ import type { Eip7702DiagnosticState } from "../../hooks/usePrivy7702Diagnostics
 export interface WalletSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  connectedWalletAddress?: string;
+  connectedWalletAddress?: string | null;
   embeddedWalletAddress: string | null;
   externalWalletAddress: string | null;
   formattedLineaBalance: string | null;
@@ -46,6 +46,14 @@ export interface WalletSettingsModalProps {
   onDeepScanStop: () => void;
   onDeepClaimOne: (epochId: string) => void;
   onDeepClaimAll: () => void;
+  connectedResolverRewards: string;
+  connectedResolverRewardsWei: bigint;
+  embeddedResolverRewards: string;
+  embeddedResolverRewardsWei: bigint;
+  isClaimingConnectedResolverRewards: boolean;
+  isClaimingEmbeddedResolverRewards: boolean;
+  onClaimConnectedResolverRewards: () => void;
+  onClaimEmbeddedResolverRewards: () => void;
   soundSettings?: Partial<Record<SoundName, boolean>>;
   onSoundSettingChange?: (name: SoundName, enabled: boolean) => void;
   reducedMotion?: boolean;

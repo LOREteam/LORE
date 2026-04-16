@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { encodeFunctionData, maxUint256 } from "viem";
 import type { MutableRefObject } from "react";
 import {
@@ -221,8 +221,11 @@ export function useMiningAllowance({
     ],
   );
 
-  return {
-    assertSufficientAllowance,
-    ensureAllowance,
-  };
+  return useMemo(
+    () => ({
+      assertSufficientAllowance,
+      ensureAllowance,
+    }),
+    [assertSufficientAllowance, ensureAllowance],
+  );
 }

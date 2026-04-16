@@ -15,7 +15,7 @@ export interface ChatMessage {
 }
 
 const MESSAGES_LIMIT = 100;
-const RATE_LIMIT_MS = 1_500;
+export const CHAT_RATE_LIMIT_MS = 1_500;
 const MAX_TEXT_LENGTH = 280;
 const POLL_INTERVAL_MS = 3_000;
 const HIDDEN_POLL_INTERVAL_MS = 15_000;
@@ -24,6 +24,26 @@ const HIDDEN_CLOSED_POLL_INTERVAL_MS = 45_000;
 const CHAT_CACHE_KEY = "lore:chat-cache:v1";
 const NETWORK_WARN_THROTTLE_MS = 15_000;
 const MAX_AVATAR_LENGTH = 8_000;
+
+function areMessagesEqual(a: ChatMessage[], b: ChatMessage[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (
+      left.id !== right.id ||
+      left.text !== right.text ||
+      left.sender !== right.sender ||
+      left.senderName !== right.senderName ||
+      left.senderAvatar !== right.senderAvatar ||
+      left.timestamp !== right.timestamp
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function isNetworkFetchError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -112,12 +132,19 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
   const [isPageVisible, setIsPageVisible] = useState(() =>
     typeof document === "undefined" ? true : document.visibilityState === "visible",
   );
+  const [sendCooldownRemainingMs, setSendCooldownRemainingMs] = useState(0);
+  const [isSending, setIsSending] = useState(false);
   const open = options?.open ?? false;
   const lastSentRef = useRef(0);
+  const messagesRef = useRef(messages);
   const pollWarnAtRef = useRef(0);
   const sendWarnAtRef = useRef(0);
   const localAuth = useChatAuth(walletAddress, "Verify wallet for chat");
   const { authReady, ensureChatAuth, refreshAuth, clearAuth } = options?.auth ?? localAuth;
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     const syncVisibility = () => {
@@ -130,14 +157,27 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
   }, []);
 
   useEffect(() => {
+    if (sendCooldownRemainingMs <= 0) return;
+    const timer = window.setInterval(() => {
+      const remaining = Math.max(0, CHAT_RATE_LIMIT_MS - (Date.now() - lastSentRef.current));
+      setSendCooldownRemainingMs(remaining);
+    }, 33);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [sendCooldownRemainingMs]);
+
+  useEffect(() => {
     const controller = new AbortController();
 
     async function poll() {
       try {
         const msgs = await fetchMessages(controller.signal);
         if (controller.signal.aborted) return;
-        setMessages(msgs);
-        saveCachedMessages(msgs);
+        if (!areMessagesEqual(messagesRef.current, msgs)) {
+          setMessages(msgs);
+          saveCachedMessages(msgs);
+        }
         setConnected(true);
         pollWarnAtRef.current = 0;
       } catch (err) {
@@ -167,16 +207,24 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
 
   const sendMessage = useCallback(
     async (text: string, senderName: string | null, senderAvatar: string | null) => {
-      if (!walletAddress) return;
+      if (!walletAddress) return false;
       const trimmed = text.trim().slice(0, MAX_TEXT_LENGTH);
-      if (!trimmed) return;
+      if (!trimmed) return false;
 
       const now = Date.now();
-      if (now - lastSentRef.current < RATE_LIMIT_MS) return;
+      if (now - lastSentRef.current < CHAT_RATE_LIMIT_MS) {
+        setSendCooldownRemainingMs(Math.max(0, CHAT_RATE_LIMIT_MS - (now - lastSentRef.current)));
+        return false;
+      }
       lastSentRef.current = now;
+      setSendCooldownRemainingMs(CHAT_RATE_LIMIT_MS);
+      setIsSending(true);
 
       const authOk = await ensureChatAuth();
-      if (!authOk) return;
+      if (!authOk) {
+        setIsSending(false);
+        return false;
+      }
 
       const payload: Record<string, unknown> = {
         text: trimmed,
@@ -205,10 +253,14 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         }
 
         const msgs = await fetchMessages();
-        setMessages(msgs);
-        saveCachedMessages(msgs);
+        if (!areMessagesEqual(messagesRef.current, msgs)) {
+          setMessages(msgs);
+          saveCachedMessages(msgs);
+        }
         setConnected(true);
         sendWarnAtRef.current = 0;
+        setIsSending(false);
+        return true;
       } catch (err) {
         setConnected(false);
         if (isNetworkFetchError(err)) {
@@ -216,10 +268,12 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         } else {
           warnNetworkOnce("[Chat] Send failed:", sendWarnAtRef, err);
         }
+        setIsSending(false);
+        return false;
       }
     },
     [walletAddress, clearAuth, ensureChatAuth, refreshAuth],
   );
 
-  return { messages, sendMessage, connected, authReady, ensureChatAuth };
+  return { messages, sendMessage, connected, authReady, ensureChatAuth, sendCooldownRemainingMs, isSending };
 }

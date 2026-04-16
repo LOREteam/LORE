@@ -49,7 +49,11 @@ export const HISTORY_DEPTH = 120;
 
 // --- Reveal Timing ---
 export const MIN_WINNER_DISPLAY_MS = 600;
-export const MAX_REVEAL_DURATION_MS = 10000;
+// Classic short reveal window: grid stays on the old epoch for this long so
+// the winning-tile animation can flash. Non-blocking — betting is never gated
+// on reveal state, and the header already shows the new epoch immediately.
+// If the winner arrives sooner, we exit after MIN_WINNER_DISPLAY_MS.
+export const MAX_REVEAL_DURATION_MS = 2500;
 
 // --- Reliability ---
 export const TX_RECEIPT_TIMEOUT_MS = 120_000;
@@ -117,6 +121,7 @@ export const GAME_ABI = parseAbi([
   "function hasClaimed(address user, uint256 epoch) public view returns (bool)",
   "error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)",
   "error TimerNotEnded()",
+  "error AlreadyResolved()",
   "error CanOnlyResolveCurrent()",
   // V6+ custom errors (improves UI error decoding)
   "error NotResolved()",
@@ -124,6 +129,9 @@ export const GAME_ABI = parseAbi([
   "error NoRebateAvailable()",
   "error EmptyArray()",
   "error NothingToClaim()",
+  // V8 atomic contract: reject bets in the last LAST_BET_GRACE_SECONDS window.
+  "error EpochEnded()",
+  "error EpochClosing()",
 ]);
 
 export const GAME_EVENTS_ABI = parseAbi([

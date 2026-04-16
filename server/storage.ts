@@ -92,7 +92,8 @@ function parseJsonArray<T>(value: unknown): T[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch {
+  } catch (err) {
+    console.warn("[storage] parseJsonArray failed:", (err as Error).message ?? err);
     return [];
   }
 }
@@ -113,7 +114,8 @@ function parseAmountWei(value: unknown) {
   if (typeof value !== "string" || !value) return 0n;
   try {
     return parseUnits(value, 18);
-  } catch {
+  } catch (err) {
+    console.warn("[storage] parseAmountWei failed for value:", value, (err as Error).message ?? err);
     return 0n;
   }
 }
@@ -180,6 +182,19 @@ export function getMetaJson<T>(key: string): T | null {
 
 export function setMetaJson(key: string, value: unknown) {
   setMetaValue(key, JSON.stringify(value));
+}
+
+function getMetaJsonMap<T extends JsonMap>(key: string): T {
+  const value = getMetaJson<T>(key);
+  return value && typeof value === "object" ? value : ({} as T);
+}
+
+function patchMetaJsonMap(key: string, patch: JsonMap) {
+  const current = getMetaJsonMap<JsonMap>(key);
+  setMetaJson(key, {
+    ...current,
+    ...patch,
+  });
 }
 
 export function getMetaNumber(key: string) {
@@ -455,12 +470,14 @@ export function getEpochTilePoolsWei(epoch: number, gridSize = 25) {
 
     const totalWei = parseAmountWei(String(row.total_amount ?? "0"));
     if (totalWei <= 0n) continue;
-    const sharedWei = totalWei / BigInt(tileIds.length);
-    for (const tileId of tileIds) {
-      const tileIdx = Number(tileId) - 1;
-      if (tileIdx >= 0 && tileIdx < gridSize) {
-        perTile[tileIdx] += sharedWei;
-      }
+    const validTileIdxs = tileIds
+      .map((tileId) => Number(tileId) - 1)
+      .filter((tileIdx) => tileIdx >= 0 && tileIdx < gridSize);
+    if (validTileIdxs.length === 0) continue;
+    const sharedWei = totalWei / BigInt(validTileIdxs.length);
+    const remainder = totalWei % BigInt(validTileIdxs.length);
+    for (let i = 0; i < validTileIdxs.length; i += 1) {
+      perTile[validTileIdxs[i]] += sharedWei + (i === 0 ? remainder : 0n);
     }
   }
 
@@ -928,6 +945,18 @@ export function readJsonPath<T>(path: string, limitToLast?: number): T | null {
     return getUserBetsMap(user, limitToLast) as T;
   }
 
+  if (path === "gamedata/epochLifecycle") {
+    return getMetaJsonMap<T & JsonMap>("gamedata:epochLifecycle") as T;
+  }
+
+  if (path === "gamedata/batchClaims") {
+    return getMetaJsonMap<T & JsonMap>("gamedata:batchClaims") as T;
+  }
+
+  if (path === "gamedata/resolverRewards") {
+    return getMetaJsonMap<T & JsonMap>("gamedata:resolverRewards") as T;
+  }
+
   return null;
 }
 
@@ -949,6 +978,21 @@ export function patchJsonPath(path: string, data: JsonMap) {
       user,
     })) as BetStorageRow[];
     upsertBets(rows);
+    return;
+  }
+
+  if (path === "gamedata/epochLifecycle") {
+    patchMetaJsonMap("gamedata:epochLifecycle", data);
+    return;
+  }
+
+  if (path === "gamedata/batchClaims") {
+    patchMetaJsonMap("gamedata:batchClaims", data);
+    return;
+  }
+
+  if (path === "gamedata/resolverRewards") {
+    patchMetaJsonMap("gamedata:resolverRewards", data);
     return;
   }
 

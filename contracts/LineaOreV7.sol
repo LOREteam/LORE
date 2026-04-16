@@ -13,7 +13,8 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *         (half treasury, half participation rebate), 1% burn.
  *
  *         V7 keeps the V6 external game/rebate API compatible while
- *         making rebate accounting cheaper via per-user epoch volume tracking.
+ *         fixing resolve-time randomness/timing issues and returning
+ *         truthful per-tile user counts.
  */
 contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -31,12 +32,16 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     uint256 public constant EPOCH_DURATION_TIMELOCK = 30 minutes;
     uint256 public constant FEE_RECIPIENT_TIMELOCK = 24 hours;
     uint256 public constant DUST_SETTLE_DELAY = 365 days;
+    uint256 public constant REVEAL_DELAY_BLOCKS = 2;
+    uint256 public constant MAX_BET_BATCH_LENGTH = GRID_SIZE;
+    uint256 public constant MAX_CLAIM_BATCH_LENGTH = 128;
     address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
     uint256 internal constant MONDAY_OFFSET = 3 days;
 
     uint256 public epochDuration = 60;
     uint256 public currentEpoch = 1;
     uint256 public epochStartTime;
+    uint256 public nextEpochToFinalize = 1;
     address public feeRecipient;
     uint256 public pendingEpochDuration;
     uint256 public pendingEpochDurationEta;
@@ -64,11 +69,17 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         bool isResolved;
         bool isDailyJackpot;
         bool isWeeklyJackpot;
+        uint256 endTime;
+        uint256 entropyBlock;
+        uint256 totalPoolWithRollover;
+        uint256 baseRewardPool;
     }
 
-    mapping(uint256 => Epoch) public epochs;
+    mapping(uint256 => Epoch) internal _epochs;
     mapping(uint256 => mapping(uint256 => uint256)) public tilePools;
+    mapping(uint256 => mapping(uint256 => uint256)) public tileUserCounts;
     mapping(uint256 => mapping(uint256 => mapping(address => uint256))) public userBets;
+    mapping(uint256 => mapping(uint256 => mapping(address => bool))) private _hasUserBetOnTile;
     mapping(uint256 => mapping(address => uint256)) public userEpochVolumes;
     mapping(address => mapping(uint256 => bool)) public hasClaimed;
     mapping(uint256 => uint256) public epochRewardClaimed;
@@ -84,6 +95,14 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount);
     event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount);
     event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount);
+    event EpochSealed(
+        uint256 indexed epoch,
+        uint256 entropyBlock,
+        uint256 endTime,
+        uint256 totalPoolWithRollover,
+        uint256 baseRewardPool
+    );
+    event EpochEntropyRefreshed(uint256 indexed epoch, uint256 previousEntropyBlock, uint256 newEntropyBlock);
     event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus);
     event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount);
     event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount);
@@ -104,7 +123,7 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
 
     error EpochEnded();
     error TimerNotEnded();
-    error AlreadyResolved();
+    error EpochAlreadyClosed();
     error CanOnlyResolveCurrent();
     error InvalidTile();
     error ZeroAmount();
@@ -127,6 +146,10 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     error DustAlreadySettled();
     error DustSettlementDelayNotReached();
     error RewardClaimWindowExpired();
+    error BatchTooLarge();
+    error EpochNotSealed();
+    error EntropyNotReady();
+    error FinalizeOrderViolation();
 
     constructor(address tokenAddress, address initialOwner, address initialFeeRecipient) Ownable(initialOwner) {
         if (tokenAddress == address(0)) revert InvalidTokenAddress();
@@ -135,6 +158,48 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         token = IERC20(tokenAddress);
         feeRecipient = initialFeeRecipient;
         epochStartTime = block.timestamp;
+    }
+
+    function epochs(uint256 epoch)
+        external
+        view
+        returns (
+            uint256 totalPool,
+            uint256 rewardPool,
+            uint256 winningTile,
+            bool isResolved,
+            bool isDailyJackpot,
+            bool isWeeklyJackpot
+        )
+    {
+        Epoch storage ep = _epochs[epoch];
+        return (
+            ep.totalPool,
+            ep.rewardPool,
+            ep.winningTile,
+            ep.isResolved,
+            ep.isDailyJackpot,
+            ep.isWeeklyJackpot
+        );
+    }
+
+    function getEpochLifecycle(uint256 epoch)
+        external
+        view
+        returns (
+            uint256 endTime,
+            uint256 entropyBlock,
+            bool isSealed,
+            bool isResolved_,
+            bool isEntropyReady
+        )
+    {
+        Epoch storage ep = _epochs[epoch];
+        endTime = epoch == currentEpoch ? epochStartTime + epochDuration : ep.endTime;
+        entropyBlock = ep.entropyBlock;
+        isSealed = entropyBlock > 0;
+        isResolved_ = ep.isResolved;
+        isEntropyReady = isSealed && block.number > entropyBlock && blockhash(entropyBlock) != bytes32(0);
     }
 
     function claimResolverRewards() external nonReentrant {
@@ -152,7 +217,7 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     }
 
     function claimEpochRebate(uint256 epoch) external nonReentrant {
-        if (!epochs[epoch].isResolved) revert NotResolved();
+        if (!_epochs[epoch].isResolved) revert NotResolved();
         if (rebateClaimed[epoch][msg.sender]) revert RebateAlreadyClaimed();
 
         uint256 amount = _previewRebate(epoch, msg.sender);
@@ -166,13 +231,14 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     function claimEpochsRebate(uint256[] calldata claimEpochs) external nonReentrant {
         uint256 len = claimEpochs.length;
         if (len == 0) revert EmptyArray();
+        if (len > MAX_CLAIM_BATCH_LENGTH) revert BatchTooLarge();
 
         uint256 totalAmount;
         uint256 epochsClaimedCount;
 
         for (uint256 i = 0; i < len; ) {
             uint256 epoch = claimEpochs[i];
-            if (epochs[epoch].isResolved && !rebateClaimed[epoch][msg.sender]) {
+            if (_epochs[epoch].isResolved && !rebateClaimed[epoch][msg.sender]) {
                 uint256 amount = _previewRebate(epoch, msg.sender);
                 if (amount > 0) {
                     rebateClaimed[epoch][msg.sender] = true;
@@ -190,7 +256,7 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     }
 
     function settleEpochDust(uint256 epoch) external nonReentrant {
-        if (!epochs[epoch].isResolved) revert NotResolved();
+        if (!_epochs[epoch].isResolved) revert NotResolved();
         if (epochDustSettled[epoch]) revert DustAlreadySettled();
         if (!(epochResolvedAt[epoch] > 0 && block.timestamp >= epochResolvedAt[epoch] + DUST_SETTLE_DELAY)) {
             revert DustSettlementDelayNotReached();
@@ -198,7 +264,7 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
 
         epochDustSettled[epoch] = true;
 
-        uint256 rewardPool = epochs[epoch].rewardPool;
+        uint256 rewardPool = _epochs[epoch].rewardPool;
         uint256 claimed = epochRewardClaimed[epoch];
         uint256 dust = rewardPool > claimed ? rewardPool - claimed : 0;
 
@@ -210,14 +276,15 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         emit RewardDustSettled(epoch, dust);
     }
 
-    function _autoResolveIfNeeded() internal {
-        if (!epochs[currentEpoch].isResolved && block.timestamp >= epochStartTime + epochDuration) {
-            _resolveCurrentEpoch();
+    function _advanceEpochIfNeeded(address resolver) internal {
+        if (block.timestamp >= epochStartTime + epochDuration) {
+            _sealCurrentEpoch(resolver);
         }
+        _finalizeReadyEpochs(1);
     }
 
     function placeBet(uint256 tileId, uint256 amount) external nonReentrant {
-        _autoResolveIfNeeded();
+        _advanceEpochIfNeeded(msg.sender);
         if (block.timestamp >= epochStartTime + epochDuration) revert EpochEnded();
         if (tileId == 0 || tileId > GRID_SIZE) revert InvalidTile();
         if (amount == 0) revert ZeroAmount();
@@ -228,10 +295,11 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     }
 
     function placeBatchBets(uint256[] calldata tileIds, uint256[] calldata amounts) external nonReentrant {
-        _autoResolveIfNeeded();
+        _advanceEpochIfNeeded(msg.sender);
         if (block.timestamp >= epochStartTime + epochDuration) revert EpochEnded();
         if (tileIds.length != amounts.length) revert ArraysMismatch();
         if (tileIds.length == 0) revert EmptyArray();
+        if (tileIds.length > MAX_BET_BATCH_LENGTH) revert BatchTooLarge();
 
         uint256 totalAmount;
         uint256 len = amounts.length;
@@ -251,12 +319,15 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     }
 
     function placeBatchBetsSameAmount(uint256[] calldata tileIds, uint256 amount) external nonReentrant {
-        _autoResolveIfNeeded();
+        _advanceEpochIfNeeded(msg.sender);
         if (block.timestamp >= epochStartTime + epochDuration) revert EpochEnded();
         uint256 len = tileIds.length;
         if (len == 0) revert EmptyArray();
+        if (len > MAX_BET_BATCH_LENGTH) revert BatchTooLarge();
         if (amount == 0) revert ZeroAmount();
 
+        // Solidity 0.8+ uses checked arithmetic here. Any theoretical
+        // overflow reverts the whole transaction instead of wrapping.
         uint256 totalAmount = amount * len;
         token.safeTransferFrom(msg.sender, address(this), totalAmount);
 
@@ -271,17 +342,31 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     }
 
     function _recordBet(address user, uint256 tileId, uint256 amount) internal {
-        userBets[currentEpoch][tileId][user] += amount;
-        userEpochVolumes[currentEpoch][user] += amount;
-        tilePools[currentEpoch][tileId] += amount;
-        epochs[currentEpoch].totalPool += amount;
+        uint256 epoch = currentEpoch;
+        if (!_hasUserBetOnTile[epoch][tileId][user]) {
+            _hasUserBetOnTile[epoch][tileId][user] = true;
+            tileUserCounts[epoch][tileId] += 1;
+        }
+        userBets[epoch][tileId][user] += amount;
+        userEpochVolumes[epoch][user] += amount;
+        tilePools[epoch][tileId] += amount;
+        _epochs[epoch].totalPool += amount;
     }
 
     function resolveEpoch(uint256 epoch) external nonReentrant {
-        if (epoch != currentEpoch) revert CanOnlyResolveCurrent();
-        if (block.timestamp < epochStartTime + epochDuration) revert TimerNotEnded();
-        if (epochs[epoch].isResolved) revert AlreadyResolved();
-        _resolveCurrentEpoch();
+        if (epoch > currentEpoch) revert CanOnlyResolveCurrent();
+
+        if (epoch == currentEpoch) {
+            if (block.timestamp < epochStartTime + epochDuration) revert TimerNotEnded();
+            _sealCurrentEpoch(msg.sender);
+            _finalizeReadyEpochs(1);
+            return;
+        }
+
+        if (epoch != nextEpochToFinalize) revert FinalizeOrderViolation();
+        if (_refreshExpiredEpochEntropy(epoch, _epochs[epoch])) return;
+        _finalizeEpoch(epoch);
+        _finalizeReadyEpochs(1);
     }
 
     struct ResolveLocals {
@@ -294,46 +379,29 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         uint256 jackpotBonus;
     }
 
-    function _resolveCurrentEpoch() internal {
+    function _sealCurrentEpoch(address resolver) internal {
         ResolveLocals memory L;
         L.epoch = currentEpoch;
-        Epoch storage ep = epochs[L.epoch];
-        if (ep.isResolved) revert AlreadyResolved();
+        Epoch storage ep = _epochs[L.epoch];
+        if (ep.isResolved || ep.entropyBlock > 0) revert EpochAlreadyClosed();
 
         L.totalPoolWithRollover = ep.totalPool + rolloverPool;
         rolloverPool = 0;
+        ep.endTime = epochStartTime + epochDuration;
+        ep.entropyBlock = block.number + REVEAL_DELAY_BLOCKS;
+        ep.totalPoolWithRollover = L.totalPoolWithRollover;
 
-        L.winningTile = (
-            uint256(
-                keccak256(
-                    abi.encodePacked(
-                        block.prevrandao,
-                        blockhash(block.number - 1),
-                        L.epoch,
-                        L.totalPoolWithRollover,
-                        dailyJackpotPool,
-                        weeklyJackpotPool
-                    )
-                )
-            ) % GRID_SIZE
-        ) + 1;
+        _splitFees(L, resolver);
+        ep.baseRewardPool = L.baseReward;
 
-        ep.winningTile = L.winningTile;
-        ep.isResolved = true;
-        epochResolvedAt[L.epoch] = block.timestamp;
+        emit EpochSealed(
+            L.epoch,
+            ep.entropyBlock,
+            ep.endTime,
+            ep.totalPoolWithRollover,
+            ep.baseRewardPool
+        );
 
-        _splitFees(L);
-
-        bool hasWinner = tilePools[L.epoch][L.winningTile] > 0;
-        if (hasWinner) {
-            L.jackpotBonus = _tryAwardJackpots(L.epoch, ep);
-            ep.rewardPool = L.baseReward + L.jackpotBonus;
-        } else {
-            rolloverPool = L.baseReward;
-            ep.rewardPool = 0;
-        }
-
-        emit EpochResolved(L.epoch, L.winningTile, L.totalPoolWithRollover, L.protocolFee + L.burnAmount, ep.rewardPool, L.jackpotBonus);
         currentEpoch = L.epoch + 1;
         epochStartTime = block.timestamp;
         _applyPendingEpochDurationIfReady();
@@ -343,13 +411,95 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         }
     }
 
-    function _splitFees(ResolveLocals memory L) internal {
+    function _finalizeReadyEpochs(uint256 maxEpochs) internal {
+        uint256 finalized;
+        // Keep catch-up work bounded so user-triggered flows do not inherit
+        // unbounded gas from a long pending finalize backlog.
+        while (finalized < maxEpochs && nextEpochToFinalize < currentEpoch) {
+            Epoch storage ep = _epochs[nextEpochToFinalize];
+            if (ep.isResolved) {
+                nextEpochToFinalize += 1;
+                unchecked { ++finalized; }
+                continue;
+            }
+            if (ep.entropyBlock == 0) break;
+            if (block.number <= ep.entropyBlock) break;
+            if (_refreshExpiredEpochEntropy(nextEpochToFinalize, ep)) break;
+            _finalizeEpoch(nextEpochToFinalize);
+            unchecked { ++finalized; }
+        }
+    }
+
+    function _finalizeEpoch(uint256 epoch) internal {
+        if (epoch >= currentEpoch) revert CanOnlyResolveCurrent();
+        if (epoch != nextEpochToFinalize) revert FinalizeOrderViolation();
+
+        Epoch storage ep = _epochs[epoch];
+        if (ep.isResolved) revert EpochAlreadyClosed();
+        if (ep.entropyBlock == 0) revert EpochNotSealed();
+        if (block.number <= ep.entropyBlock) revert EntropyNotReady();
+        if (_refreshExpiredEpochEntropy(epoch, ep)) return;
+
+        bytes32 entropySource = blockhash(ep.entropyBlock);
+        if (entropySource == bytes32(0)) revert EntropyNotReady();
+
+        uint256 epochEntropy = uint256(
+            keccak256(
+                abi.encodePacked(
+                    entropySource,
+                    ep.entropyBlock,
+                    epoch,
+                    ep.totalPoolWithRollover,
+                    ep.endTime
+                )
+            )
+        );
+
+        uint256 winningTile = (epochEntropy % GRID_SIZE) + 1;
+        ep.winningTile = winningTile;
+        ep.isResolved = true;
+        epochResolvedAt[epoch] = block.timestamp;
+
+        bool hasWinner = tilePools[epoch][winningTile] > 0;
+        uint256 jackpotBonus;
+        if (hasWinner) {
+            jackpotBonus = _tryAwardJackpots(epoch, ep, epochEntropy);
+            ep.rewardPool = ep.baseRewardPool + jackpotBonus;
+        } else {
+            rolloverPool += ep.baseRewardPool;
+            ep.rewardPool = 0;
+        }
+
+        emit EpochResolved(epoch, winningTile, ep.totalPoolWithRollover, _calcFeeAmount(ep.totalPoolWithRollover), ep.rewardPool, jackpotBonus);
+        nextEpochToFinalize = epoch + 1;
+    }
+
+    function _refreshExpiredEpochEntropy(uint256 epoch, Epoch storage ep) internal returns (bool refreshed) {
+        uint256 currentEntropyBlock = ep.entropyBlock;
+        if (currentEntropyBlock == 0 || block.number <= currentEntropyBlock) return false;
+        if (blockhash(currentEntropyBlock) != bytes32(0)) return false;
+
+        uint256 newEntropyBlock = block.number + REVEAL_DELAY_BLOCKS;
+        ep.entropyBlock = newEntropyBlock;
+        emit EpochEntropyRefreshed(epoch, currentEntropyBlock, newEntropyBlock);
+        return true;
+    }
+
+    function _calcFeeAmount(uint256 pool) internal pure returns (uint256) {
+        return
+            (pool * PROTOCOL_FEE_PERCENT) / 100 +
+            (pool * BURN_FEE_PERCENT) / 100;
+    }
+
+    function _splitFees(ResolveLocals memory L, address resolver) internal {
         uint256 pool = L.totalPoolWithRollover;
         uint256 dailyAccrual = (pool * DAILY_JACKPOT_PERCENT) / 100;
         uint256 weeklyAccrual = (pool * WEEKLY_JACKPOT_PERCENT) / 100;
         L.protocolFee = (pool * PROTOCOL_FEE_PERCENT) / 100;
         L.burnAmount = (pool * BURN_FEE_PERCENT) / 100;
         uint256 resolverReward = (pool * RESOLVER_REWARD_BPS) / BPS_DENOMINATOR;
+        // Defensive cap: keep resolver incentives unable to exceed the
+        // protocol-fee bucket even if parameters change in a later version.
         if (resolverReward > L.protocolFee) resolverReward = L.protocolFee;
         L.baseReward = pool - dailyAccrual - weeklyAccrual - L.protocolFee - L.burnAmount;
 
@@ -359,8 +509,8 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         _accrueProtocolFee(L.protocolFee - resolverReward, L.epoch);
         if (L.burnAmount > 0) accruedBurnFees += L.burnAmount;
         if (resolverReward > 0) {
-            pendingResolverRewards[msg.sender] += resolverReward;
-            emit ResolverRewardAccrued(msg.sender, L.epoch, resolverReward);
+            pendingResolverRewards[resolver] += resolverReward;
+            emit ResolverRewardAccrued(resolver, L.epoch, resolverReward);
         }
     }
 
@@ -378,18 +528,20 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         return weekIdx * 1 weeks - MONDAY_OFFSET;
     }
 
-    function _tryAwardJackpots(uint256 epoch, Epoch storage ep) internal returns (uint256 bonus) {
-        uint256 today = block.timestamp / 1 days;
+    function _tryAwardJackpots(uint256 epoch, Epoch storage ep, uint256 epochEntropy) internal returns (uint256 bonus) {
+        uint256 epochEndTime = ep.endTime;
+        uint256 today = epochEndTime / 1 days;
         if (lastDailyJackpotDay != today && dailyJackpotPool > 0) {
-            uint256 start = _dayStart(block.timestamp);
+            uint256 start = _dayStart(epochEndTime);
             uint256 end = start + 1 days;
             uint256 lastCheck = lastDailyJackpotCheckTs;
             if (lastCheck < start) lastCheck = start;
-            if (lastCheck > block.timestamp) lastCheck = block.timestamp;
+            if (lastCheck > epochEndTime) lastCheck = epochEndTime;
 
-            uint256 elapsed = block.timestamp - lastCheck;
+            uint256 elapsed = epochEndTime - lastCheck;
             uint256 remaining = end > lastCheck ? (end - lastCheck) : 1;
-            uint256 dRand = uint256(keccak256(abi.encodePacked(block.prevrandao, "daily", epoch, lastCheck, block.timestamp))) % remaining;
+            uint256 dRand = uint256(keccak256(abi.encodePacked(epochEntropy, "daily", epoch, lastCheck, epochEndTime))) % remaining;
+            lastDailyJackpotCheckTs = epochEndTime;
             if (dRand < elapsed) {
                 uint256 amt = dailyJackpotPool;
                 dailyJackpotPool = 0;
@@ -397,25 +549,23 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
                 lastDailyJackpotDay = today;
                 lastDailyJackpotEpoch = epoch;
                 lastDailyJackpotAmount = amt;
-                lastDailyJackpotCheckTs = block.timestamp;
                 ep.isDailyJackpot = true;
                 emit DailyJackpotAwarded(epoch, amt);
-            } else {
-                lastDailyJackpotCheckTs = block.timestamp;
             }
         }
 
-        uint256 thisWeek = _mondayWeek(block.timestamp);
+        uint256 thisWeek = _mondayWeek(epochEndTime);
         if (lastWeeklyJackpotWeek != thisWeek && weeklyJackpotPool > 0) {
-            uint256 start = _weekStartMonday(block.timestamp);
+            uint256 start = _weekStartMonday(epochEndTime);
             uint256 end = start + 1 weeks;
             uint256 lastCheck = lastWeeklyJackpotCheckTs;
             if (lastCheck < start) lastCheck = start;
-            if (lastCheck > block.timestamp) lastCheck = block.timestamp;
+            if (lastCheck > epochEndTime) lastCheck = epochEndTime;
 
-            uint256 elapsed = block.timestamp - lastCheck;
+            uint256 elapsed = epochEndTime - lastCheck;
             uint256 remaining = end > lastCheck ? (end - lastCheck) : 1;
-            uint256 wRand = uint256(keccak256(abi.encodePacked(block.prevrandao, "weekly", epoch, lastCheck, block.timestamp))) % remaining;
+            uint256 wRand = uint256(keccak256(abi.encodePacked(epochEntropy, "weekly", epoch, lastCheck, epochEndTime))) % remaining;
+            lastWeeklyJackpotCheckTs = epochEndTime;
             if (wRand < elapsed) {
                 uint256 amt = weeklyJackpotPool;
                 weeklyJackpotPool = 0;
@@ -423,11 +573,8 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
                 lastWeeklyJackpotWeek = thisWeek;
                 lastWeeklyJackpotEpoch = epoch;
                 lastWeeklyJackpotAmount = amt;
-                lastWeeklyJackpotCheckTs = block.timestamp;
                 ep.isWeeklyJackpot = true;
                 emit WeeklyJackpotAwarded(epoch, amt);
-            } else {
-                lastWeeklyJackpotCheckTs = block.timestamp;
             }
         }
     }
@@ -447,7 +594,7 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     }
 
     function claimReward(uint256 epoch) external nonReentrant {
-        if (!epochs[epoch].isResolved) revert NotResolved();
+        if (!_epochs[epoch].isResolved) revert NotResolved();
         if (
             epochResolvedAt[epoch] > 0 &&
             block.timestamp >= epochResolvedAt[epoch] + DUST_SETTLE_DELAY
@@ -455,13 +602,13 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         if (epochDustSettled[epoch]) revert RewardClaimWindowExpired();
         if (hasClaimed[msg.sender][epoch]) revert AlreadyClaimed();
 
-        uint256 winTile = epochs[epoch].winningTile;
+        uint256 winTile = _epochs[epoch].winningTile;
         uint256 userBet = userBets[epoch][winTile][msg.sender];
         if (userBet == 0) revert NoWinningBet();
 
         hasClaimed[msg.sender][epoch] = true;
         uint256 tileTotal = tilePools[epoch][winTile];
-        uint256 reward = (epochs[epoch].rewardPool * userBet) / tileTotal;
+        uint256 reward = (_epochs[epoch].rewardPool * userBet) / tileTotal;
         epochRewardClaimed[epoch] += reward;
 
         token.safeTransfer(msg.sender, reward);
@@ -471,6 +618,7 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     function claimRewards(uint256[] calldata claimEpochs) external nonReentrant {
         uint256 len = claimEpochs.length;
         if (len == 0) revert EmptyArray();
+        if (len > MAX_CLAIM_BATCH_LENGTH) revert BatchTooLarge();
 
         uint256 totalReward;
         uint256 epochsClaimedCount;
@@ -478,7 +626,7 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         for (uint256 i = 0; i < len; ) {
             uint256 epoch = claimEpochs[i];
             if (
-                epochs[epoch].isResolved &&
+                _epochs[epoch].isResolved &&
                 !epochDustSettled[epoch] &&
                 !hasClaimed[msg.sender][epoch] &&
                 !(
@@ -486,12 +634,12 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
                     block.timestamp >= epochResolvedAt[epoch] + DUST_SETTLE_DELAY
                 )
             ) {
-                uint256 winTile = epochs[epoch].winningTile;
+                uint256 winTile = _epochs[epoch].winningTile;
                 uint256 userBet = userBets[epoch][winTile][msg.sender];
                 if (userBet > 0) {
                     hasClaimed[msg.sender][epoch] = true;
                     uint256 tileTotal = tilePools[epoch][winTile];
-                    uint256 reward = (epochs[epoch].rewardPool * userBet) / tileTotal;
+                    uint256 reward = (_epochs[epoch].rewardPool * userBet) / tileTotal;
                     epochRewardClaimed[epoch] += reward;
                     totalReward += reward;
                     epochsClaimedCount += 1;
@@ -507,10 +655,12 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
     }
 
     function _previewRebate(uint256 epoch, address user) internal view returns (uint256) {
-        uint256 totalPool = epochs[epoch].totalPool;
+        uint256 totalPool = _epochs[epoch].totalPool;
         uint256 rebatePool = epochRebatePool[epoch];
         uint256 userVolume = _getUserEpochVolume(epoch, user);
         if (totalPool == 0 || rebatePool == 0 || userVolume == 0) return 0;
+        // Integer division truncates toward zero. Any tiny rebate dust stays in
+        // the contract by design rather than complicating the claim path.
         return (rebatePool * userVolume) / totalPool;
     }
 
@@ -518,7 +668,9 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         pools = new uint256[](GRID_SIZE);
         users = new uint256[](GRID_SIZE);
         for (uint256 i = 0; i < GRID_SIZE; ) {
-            pools[i] = tilePools[epoch][i + 1];
+            uint256 tileId = i + 1;
+            pools[i] = tilePools[epoch][tileId];
+            users[i] = tileUserCounts[epoch][tileId];
             unchecked { ++i; }
         }
     }
@@ -533,7 +685,7 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
 
     function getEpochEndTime(uint256 epoch) external view returns (uint256) {
         if (epoch == currentEpoch) return epochStartTime + epochDuration;
-        return 0;
+        return _epochs[epoch].endTime;
     }
 
     function getJackpotInfo()
@@ -581,7 +733,7 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         userVolume = _getUserEpochVolume(epoch, user);
         pending = rebateClaimed[epoch][user] ? 0 : _previewRebate(epoch, user);
         claimed = rebateClaimed[epoch][user];
-        resolved = epochs[epoch].isResolved;
+        resolved = _epochs[epoch].isResolved;
     }
 
     function getRebateSummary(address user, uint256[] calldata rebateEpochList)
@@ -590,9 +742,10 @@ contract LineaOreV7 is Ownable2Step, ReentrancyGuard {
         returns (uint256 totalPending, uint256 claimableEpochs)
     {
         uint256 len = rebateEpochList.length;
+        if (len > MAX_CLAIM_BATCH_LENGTH) revert BatchTooLarge();
         for (uint256 i = 0; i < len; ) {
             uint256 epoch = rebateEpochList[i];
-            if (epochs[epoch].isResolved && !rebateClaimed[epoch][user]) {
+            if (_epochs[epoch].isResolved && !rebateClaimed[epoch][user]) {
                 uint256 pending = _previewRebate(epoch, user);
                 if (pending > 0) {
                     totalPending += pending;

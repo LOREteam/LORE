@@ -15,7 +15,7 @@ import { getEpochMap, getEpochMapByIds, getMetaNumber } from "../../../server/st
 import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
-  patchFirebase,
+  patchStorage,
   publicClient,
 } from "../_lib/dataBridge";
 import { logRouteError } from "../_lib/routeError";
@@ -31,6 +31,7 @@ const ROUTE_METRIC_KEY = "api/epochs";
 
 const READ_ABI = parseAbi([
   "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
+  "function getEpochEndTime(uint256 epoch) view returns (uint256)",
   "function currentEpoch() view returns (uint256)",
 ]);
 
@@ -43,6 +44,7 @@ type EpochRow = {
   isDailyJackpot: boolean;
   isWeeklyJackpot: boolean;
   resolvedBlock?: string;
+  endTime?: string;
 };
 
 type EpochPayload = { epochs: Record<string, EpochRow>; error?: string };
@@ -56,6 +58,7 @@ type EpochBuildResult = {
 const epochsRouteCache = createRouteCache<EpochPayload>(EPOCHS_ROUTE_CACHE_MAX_KEYS);
 let currentEpochCache: { value: number | null; expiresAt: number } | null = null;
 let currentEpochInflight: Promise<number | null> | null = null;
+let currentEpochBackgroundRefresh: Promise<void> | null = null;
 
 function jsonNoStore(payload: EpochPayload, status = 200) {
   return applyNoStoreHeaders(NextResponse.json(payload, { status }));
@@ -74,7 +77,7 @@ function parseRequestedEpochs(request: Request): number[] {
     search
       .split(",")
       .map((value) => Number(value.trim()))
-      .filter((value) => Number.isInteger(value) && value > 0),
+      .filter((value) => Number.isInteger(value) && value > 0 && value <= 1_000_000),
   )];
 }
 
@@ -88,11 +91,48 @@ async function resolveCachedCurrentEpoch(): Promise<number | null> {
   if (currentEpochCache && currentEpochCache.expiresAt > now) {
     return currentEpochCache.value;
   }
+
+  const storedCurrentEpoch = getMetaNumber("currentEpoch");
+  if (Number.isInteger(storedCurrentEpoch) && storedCurrentEpoch && storedCurrentEpoch > 0) {
+    currentEpochCache = {
+      value: storedCurrentEpoch,
+      expiresAt: now + CURRENT_EPOCH_CACHE_MS,
+    };
+
+    if (!currentEpochBackgroundRefresh) {
+      currentEpochBackgroundRefresh = (async () => {
+        try {
+          const onChainCurrentEpoch = await publicClient.readContract({
+            address: CONTRACT_ADDRESS,
+            abi: READ_ABI,
+            functionName: "currentEpoch",
+          });
+          const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
+          if (
+            Number.isInteger(onChainCurrentEpochNum) &&
+            onChainCurrentEpochNum > 0 &&
+            onChainCurrentEpochNum >= storedCurrentEpoch
+          ) {
+            currentEpochCache = {
+              value: onChainCurrentEpochNum,
+              expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
+            };
+          }
+        } catch {
+          // Keep serving the indexed epoch when RPC is slow or unavailable.
+        } finally {
+          currentEpochBackgroundRefresh = null;
+        }
+      })();
+    }
+
+    return storedCurrentEpoch;
+  }
+
   if (currentEpochInflight) {
     return currentEpochInflight;
   }
 
-  const storedCurrentEpoch = getMetaNumber("currentEpoch");
   currentEpochInflight = (async () => {
     try {
       const onChainCurrentEpoch = await publicClient.readContract({
@@ -102,13 +142,11 @@ async function resolveCachedCurrentEpoch(): Promise<number | null> {
       });
       const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
       if (Number.isInteger(onChainCurrentEpochNum) && onChainCurrentEpochNum > 0) {
-        if (!storedCurrentEpoch || onChainCurrentEpochNum > storedCurrentEpoch) {
-          currentEpochCache = {
-            value: onChainCurrentEpochNum,
-            expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
-          };
-          return onChainCurrentEpochNum;
-        }
+        currentEpochCache = {
+          value: onChainCurrentEpochNum,
+          expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
+        };
+        return onChainCurrentEpochNum;
       }
     } catch {
       // Fall back to indexed meta when RPC is unavailable.
@@ -145,51 +183,81 @@ function filterEpochRowsByCurrentEpoch(
   );
 }
 
-async function readResolvedEpochRowsFromChain(epochIds: number[]): Promise<Record<string, EpochRow>> {
+async function readEpochRowsFromChain(epochIds: number[]): Promise<{
+  responseRows: Record<string, EpochRow>;
+  resolvedPatch: Record<string, EpochRow>;
+}> {
   const normalizedIds = [...new Set(epochIds.filter((epoch) => Number.isInteger(epoch) && epoch > 0))];
-  const patch: Record<string, EpochRow> = {};
+  const responseRows: Record<string, EpochRow> = {};
+  const resolvedPatch: Record<string, EpochRow> = {};
 
   for (let i = 0; i < normalizedIds.length; i += EPOCHS_CHAIN_MULTICALL_CHUNK) {
     const chunk = normalizedIds.slice(i, i + EPOCHS_CHAIN_MULTICALL_CHUNK);
-    const contracts = chunk.map((epoch) => ({
+    const epochContracts = chunk.map((epoch) => ({
       address: CONTRACT_ADDRESS,
       abi: READ_ABI,
       functionName: "epochs" as const,
       args: [BigInt(epoch)] as const,
     }));
+    const endTimeContracts = chunk.map((epoch) => ({
+      address: CONTRACT_ADDRESS,
+      abi: READ_ABI,
+      functionName: "getEpochEndTime" as const,
+      args: [BigInt(epoch)] as const,
+    }));
 
     try {
-      const results = await publicClient.multicall({ contracts });
-      results.forEach((result, index) => {
-        if (result.status !== "success") return;
-        const epoch = chunk[index];
+      const [epochResults, endTimeResults] = await Promise.all([
+        publicClient.multicall({ contracts: epochContracts }),
+        publicClient.multicall({ contracts: endTimeContracts }),
+      ]);
+      chunk.forEach((epoch, index) => {
+        const result = epochResults[index];
+        const endTimeResult = endTimeResults[index];
+        if (result?.status !== "success") return;
         const row = result.result as [bigint, bigint, bigint, boolean, boolean, boolean];
-        if (!row[3]) return;
-        patch[String(epoch)] = {
+        const endTime =
+          endTimeResult?.status === "success" ? (endTimeResult.result as bigint).toString() : undefined;
+        const epochRow: EpochRow = {
           winningTile: Number(row[2]),
           totalPool: formatUnits(row[0], 18),
           rewardPool: formatUnits(row[1], 18),
           isDailyJackpot: row[4],
           isWeeklyJackpot: row[5],
+          endTime,
         };
+        if (!row[3]) return;
+        responseRows[String(epoch)] = epochRow;
+        resolvedPatch[String(epoch)] = epochRow;
       });
     } catch {
       for (const epoch of chunk) {
         try {
-          const row = (await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: READ_ABI,
-            functionName: "epochs",
-            args: [BigInt(epoch)],
-          })) as [bigint, bigint, bigint, boolean, boolean, boolean];
-          if (!row[3]) continue;
-          patch[String(epoch)] = {
+          const [row, endTime] = await Promise.all([
+            publicClient.readContract({
+              address: CONTRACT_ADDRESS,
+              abi: READ_ABI,
+              functionName: "epochs",
+              args: [BigInt(epoch)],
+            }) as Promise<[bigint, bigint, bigint, boolean, boolean, boolean]>,
+            publicClient.readContract({
+              address: CONTRACT_ADDRESS,
+              abi: READ_ABI,
+              functionName: "getEpochEndTime",
+              args: [BigInt(epoch)],
+            }).catch(() => null) as Promise<bigint | null>,
+          ]);
+          const epochRow: EpochRow = {
             winningTile: Number(row[2]),
             totalPool: formatUnits(row[0], 18),
             rewardPool: formatUnits(row[1], 18),
             isDailyJackpot: row[4],
             isWeeklyJackpot: row[5],
+            endTime: endTime?.toString(),
           };
+          if (!row[3]) continue;
+          responseRows[String(epoch)] = epochRow;
+          resolvedPatch[String(epoch)] = epochRow;
         } catch {
           // ignore one failed epoch
         }
@@ -197,7 +265,7 @@ async function readResolvedEpochRowsFromChain(epochIds: number[]): Promise<Recor
     }
   }
 
-  return patch;
+  return { responseRows, resolvedPatch };
 }
 
 async function buildEpochsPayload(
@@ -257,18 +325,23 @@ async function buildEpochsPayload(
   }
 
   const target = missing.slice(-Math.max(1, MAX_CHAIN_RECONCILE_EPOCHS));
-  const patch = await readResolvedEpochRowsFromChain(target);
-  if (Object.keys(patch).length > 0) {
-    await patchFirebase("gamedata/epochs", patch);
+  const { responseRows, resolvedPatch } = await readEpochRowsFromChain(target);
+  if (Object.keys(resolvedPatch).length > 0) {
+    await patchStorage("gamedata/epochs", resolvedPatch);
     epochs = {
       ...epochs,
-      ...filterEpochRowsByCurrentEpoch(patch, currentEpoch),
+      ...filterEpochRowsByCurrentEpoch(responseRows, currentEpoch),
+    };
+  } else if (Object.keys(responseRows).length > 0) {
+    epochs = {
+      ...epochs,
+      ...filterEpochRowsByCurrentEpoch(responseRows, currentEpoch),
     };
   }
 
   return {
     payload: { epochs },
-    refreshNeeded: missing.length > Object.keys(patch).length,
+    refreshNeeded: missing.length > Object.keys(responseRows).length,
   };
 }
 
@@ -325,7 +398,9 @@ export async function GET(request: Request) {
       ? (markRouteInflightJoin(ROUTE_METRIC_KEY), { payload: await inflight, refreshNeeded: false })
       : await (() => {
           const writeVersion = epochsRouteCache.beginWrite(cacheKey);
-          const buildPromise = buildEpochsPayload(requestedEpochs, { allowChainReconcile: false });
+          const buildPromise = buildEpochsPayload(requestedEpochs, {
+            allowChainReconcile: requestedEpochs.length > 0,
+          });
           const requestPromise = buildPromise
             .then(({ payload }) => {
               return epochsRouteCache.setIfLatest(cacheKey, payload, EPOCHS_ROUTE_CACHE_MS, writeVersion);

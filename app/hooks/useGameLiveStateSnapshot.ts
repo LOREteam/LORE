@@ -1,5 +1,6 @@
 "use client";
 
+import { log } from "../lib/logger";
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { EpochTuple } from "./useGameData.helpers";
@@ -48,6 +49,15 @@ function loadLiveStateSnapshot(): LiveStateApiResponse | null {
   }
 }
 
+function getSnapshotSignature(snapshot: LiveStateApiResponse | null) {
+  if (!snapshot) return "";
+  try {
+    return JSON.stringify(snapshot);
+  } catch {
+    return "";
+  }
+}
+
 function toBigIntOrNull(value?: string | null) {
   if (!value) return null;
   try {
@@ -80,6 +90,10 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
       liveContractReadsEnabled: false,
     };
   });
+  const snapshotSignature = useMemo(
+    () => getSnapshotSignature(snapshotState.snapshot),
+    [snapshotState.snapshot],
+  );
   const serverLiveState = snapshotState.snapshot;
   const liveContractReadsEnabled = snapshotState.liveContractReadsEnabled;
   const liveStateBootstrapPending = snapshotState.bootstrapPending;
@@ -119,6 +133,7 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
     if (!isPageVisible) return;
     const controller = new AbortController();
     let consecutiveFailures = 0;
+    let lastSignature = snapshotSignature;
 
     const fetchLiveState = async () => {
       try {
@@ -131,21 +146,29 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
         consecutiveFailures = 0;
         const payload = (await response.json()) as LiveStateApiResponse;
         if (controller.signal.aborted) return;
-        setSnapshotState((current) => ({
-          snapshot: payload,
-          bootstrapPending: false,
-          liveContractReadsEnabled: current.liveContractReadsEnabled,
-        }));
-        try {
-          window.localStorage.setItem(getLiveStateSnapshotKey(), JSON.stringify(payload));
-        } catch {
-          // Ignore storage quota/privacy mode failures.
+        const nextSignature = getSnapshotSignature(payload);
+        if (nextSignature !== lastSignature) {
+          lastSignature = nextSignature;
+          setSnapshotState((current) => ({
+            snapshot: payload,
+            bootstrapPending: false,
+            liveContractReadsEnabled: current.liveContractReadsEnabled,
+          }));
+          try {
+            window.localStorage.setItem(getLiveStateSnapshotKey(), JSON.stringify(payload));
+          } catch {
+            // Ignore storage quota/privacy mode failures.
+          }
+        } else {
+          setSnapshotState((current) =>
+            current.bootstrapPending ? { ...current, bootstrapPending: false } : current,
+          );
         }
       } catch (err) {
         if (controller.signal.aborted) return;
         consecutiveFailures++;
         if (consecutiveFailures <= 2) {
-          console.warn("[LiveState] fetch failed:", err instanceof Error ? err.message : String(err));
+          log.warn("LiveState", "fetch failed", { message: err instanceof Error ? err.message : String(err) });
         }
         setSnapshotState((current) => ({
           ...current,
@@ -164,7 +187,7 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
       controller.abort();
       window.clearInterval(intervalId);
     };
-  }, [isPageVisible]);
+  }, [isPageVisible, snapshotSignature]);
 
   const fallbackCurrentEpoch = useMemo(
     () => toBigIntOrNull(serverLiveState?.currentEpoch ?? null),

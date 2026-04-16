@@ -20,7 +20,7 @@ interface PageTabContentProps {
   onDismissBalanceWarning: () => void;
 }
 
-export function PageTabContent({
+export const PageTabContent = React.memo(function PageTabContent({
   activeTab,
   analyticsProps,
   hubProps,
@@ -53,4 +53,4 @@ export function PageTabContent({
       />
     </>
   );
-}
+});

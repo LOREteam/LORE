@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { log } from "../lib/logger";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { usePublicClient, useAccount } from "wagmi";
 import { encodeFunctionData } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, REWARD_SCAN_CHUNK_SIZE, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
@@ -19,6 +20,7 @@ type EpochTuple = readonly [bigint, bigint, bigint, boolean];
 const MAX_SCAN_DEPTH = BigInt(12000); // deeper history scan for late claims
 const FAST_SCAN_DEPTH = BigInt(1500); // quick first pass for responsive UI
 const MAX_CONSECUTIVE_EMPTY = 5;
+const MAX_BATCH_CLAIM_EPOCHS = 128;
 const CLAIM_GAS_FALLBACK = 200_000n;
 const CLAIM_GAS_BUFFER = 20_000n;
 const CLAIM_GAS_HEADROOM_BPS = 12_000n;
@@ -126,6 +128,14 @@ function formatClaimError(err: unknown): string {
   return "Claim failed. Please try again.";
 }
 
+function chunkEpochIds(epochIds: string[], size: number) {
+  const chunks: string[][] = [];
+  for (let index = 0; index < epochIds.length; index += size) {
+    chunks.push(epochIds.slice(index, index + size));
+  }
+  return chunks;
+}
+
 export function useRewardScanner(
   actualCurrentEpoch: bigint | undefined,
   options?: UseRewardScannerOptions,
@@ -149,6 +159,7 @@ export function useRewardScanner(
   const lastScannedAddressRef = useRef<string | null>(null);
   const cacheSavedAtRef = useRef<number | null>(null);
   const mountedRef = useRef(false);
+  const previousAddressRef = useRef<string | undefined>(undefined);
   const unclaimedWinsRef = useRef(unclaimedWins);
   unclaimedWinsRef.current = unclaimedWins;
 
@@ -505,7 +516,7 @@ export function useRewardScanner(
         setUnclaimedWins(mergedWins);
       }
     } catch (e) {
-      console.error("Reward scanner error:", e instanceof Error ? e.message : String(e));
+      log.warn("RewardScanner", "scan error", { message: e instanceof Error ? e.message : String(e) });
     } finally {
       if (requestId === requestIdRef.current) {
         if (mountedRef.current) {
@@ -543,6 +554,15 @@ export function useRewardScanner(
   }, [actualCurrentEpoch, address, enabled, isPageVisible, scanRewards]);
 
   useEffect(() => {
+    if (previousAddressRef.current === undefined) {
+      previousAddressRef.current = address;
+      return;
+    }
+    if (previousAddressRef.current === address) {
+      return;
+    }
+    previousAddressRef.current = address;
+
     requestIdRef.current += 1;
     scanAbortRef.current = true;
     scanRunningRef.current = false;
@@ -584,7 +604,7 @@ export function useRewardScanner(
         notify?.("Reward claimed successfully.", "success");
       } catch (err) {
         if (!isUserRejection(err)) {
-          console.error("[ClaimReward]", err instanceof Error ? err.message : String(err));
+          log.warn("RewardScanner", "claim error", { message: err instanceof Error ? err.message : String(err) });
           notify?.(formatClaimError(err), "danger");
           void scanRewards();
         }
@@ -635,7 +655,10 @@ export function useRewardScanner(
       }
     };
 
-    const queue: string[][] = [all.map((win) => win.epoch)];
+    const queue: string[][] = chunkEpochIds(
+      all.map((win) => win.epoch),
+      MAX_BATCH_CLAIM_EPOCHS,
+    );
 
     while (queue.length > 0) {
       const batch = queue.shift();
@@ -705,5 +728,16 @@ export function useRewardScanner(
     waitReceipt,
   ]);
 
-  return { unclaimedWins, isScanning, isDeepScanning, isClaiming, scanRewards, claimReward, claimAll };
+  return useMemo(
+    () => ({
+      unclaimedWins,
+      isScanning,
+      isDeepScanning,
+      isClaiming,
+      scanRewards,
+      claimReward,
+      claimAll,
+    }),
+    [claimAll, claimReward, isClaiming, isDeepScanning, isScanning, scanRewards, unclaimedWins],
+  );
 }

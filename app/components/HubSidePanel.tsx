@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import type { AutoMinePhase } from "../hooks/useMining.types";
 import { AutoMinerPanel, ManualBetPanel } from "./BetPanel";
 
 interface LastBet {
@@ -27,6 +28,7 @@ interface HubSidePanelProps {
   handleManualMineWithGuard: (betAmountStr: string) => Promise<void>;
   lastBet: LastBet | null;
   handleRepeatLastBet: () => Promise<void>;
+  autoMinePhase: AutoMinePhase;
   autoMineProgress: string | null;
   runningParams: RunningParams | null;
   lowEthBalance: boolean;
@@ -46,6 +48,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
   handleManualMineWithGuard,
   lastBet,
   handleRepeatLastBet,
+  autoMinePhase,
   autoMineProgress,
   runningParams,
   lowEthBalance,
@@ -54,7 +57,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
   return (
     <div className="min-[900px]:col-span-3 min-w-0 flex flex-col gap-1.5">
       {chatOpen ? (
-        <div id="chat-panel-slot" className="min-h-[35.25rem] flex-1 pb-[4.25rem]" />
+        <div id="chat-panel-slot" className="min-h-[35.25rem] flex-1" />
       ) : (
         <>
           <ManualBetPanel
@@ -78,6 +81,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
             isRevealing={isRevealing}
             isAnalyzing={isAnalyzing}
             liveStateReady={liveStateReady}
+            autoMinePhase={autoMinePhase}
             autoMineProgress={autoMineProgress}
             formattedBalance={formattedBalance}
             runningParams={runningParams}

@@ -1,10 +1,13 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { PublicClient } from "viem";
 import type { Eip7702CapabilityState } from "../lib/eip7702";
+import { writeAutoMineDiagnostics } from "../lib/mining/autoMineDiagnostics";
 import type {
+  AutoMinePhase,
+  AutoMineUiState,
   MiningNotifyFn,
   RefreshSessionFn,
   RunningParams,
@@ -37,12 +40,23 @@ interface UseMiningRuntimeStateOptions {
 interface UseMiningRuntimeStateResult {
   isPending: boolean;
   setIsPending: Dispatch<SetStateAction<boolean>>;
+  autoMinePhase: AutoMinePhase;
   isAutoMining: boolean;
   setIsAutoMining: Dispatch<SetStateAction<boolean>>;
   autoMineProgress: string | null;
   setAutoMineProgress: Dispatch<SetStateAction<string | null>>;
   runningParams: RunningParams;
   setRunningParams: Dispatch<SetStateAction<RunningParams>>;
+  activateAutoMineUi: (options: {
+    phase: Extract<AutoMinePhase, "starting" | "restoring" | "running">;
+    params: NonNullable<RunningParams>;
+    progress?: string | null;
+  }) => void;
+  deactivateAutoMineUi: (options?: {
+    phase?: Extract<AutoMinePhase, "idle" | "retry-wait" | "session-expired">;
+    progress?: string | null;
+  }) => void;
+  setAutoMinePhase: (phase: AutoMinePhase) => void;
   hasPreferredActor: boolean;
   getActorAddress: () => string | null;
   getPreferredActorAddress: () => string | null;
@@ -71,6 +85,12 @@ interface UseMiningRuntimeStateResult {
   notifyRef: MutableRefObject<MiningNotifyFn | undefined>;
 }
 
+const ACTIVE_AUTO_MINE_PHASES = new Set<AutoMinePhase>(["starting", "restoring", "running"]);
+
+function resolveSetterValue<T>(value: SetStateAction<T>, current: T): T {
+  return typeof value === "function" ? (value as (prevState: T) => T)(current) : value;
+}
+
 export function useMiningRuntimeState({
   address,
   publicClient,
@@ -91,9 +111,11 @@ export function useMiningRuntimeState({
   refetchGridEpochData,
 }: UseMiningRuntimeStateOptions): UseMiningRuntimeStateResult {
   const [isPending, setIsPending] = useState(false);
-  const [isAutoMining, setIsAutoMining] = useState(false);
-  const [autoMineProgress, setAutoMineProgress] = useState<string | null>(null);
-  const [runningParams, setRunningParamsState] = useState<RunningParams>(null);
+  const [autoMineUiState, setAutoMineUiState] = useState<AutoMineUiState>({
+    phase: "idle",
+    progress: null,
+    runningParams: null,
+  });
   const autoMineRef = useRef(false);
   const autoResumeRequestedRef = useRef(false);
   const restoreAttemptedRef = useRef(false);
@@ -101,6 +123,97 @@ export function useMiningRuntimeState({
   const tokenGetterWarningShownRef = useRef(false);
   const pendingApproveRef = useRef<{ hash: `0x${string}`; submittedAt: number; nonce: number } | null>(null);
   const pendingBetRef = useRef<{ submittedAt: number; nonce: number } | null>(null);
+
+  const autoMinePhase = autoMineUiState.phase;
+  const isAutoMining = ACTIVE_AUTO_MINE_PHASES.has(autoMinePhase);
+  const autoMineProgress = autoMineUiState.progress;
+  const runningParams = autoMineUiState.runningParams;
+
+  useEffect(() => {
+    writeAutoMineDiagnostics({
+      phase: autoMinePhase,
+      progress: autoMineProgress,
+      runningParams,
+      isAutoMining,
+      autoResumeRequested: autoResumeRequestedRef.current,
+      sessionExpired: sessionExpiredErrorRef.current,
+    });
+  }, [autoMinePhase, autoMineProgress, isAutoMining, runningParams]);
+
+  const setAutoMinePhase = useCallback((phase: AutoMinePhase) => {
+    setAutoMineUiState((current) => ({ ...current, phase }));
+  }, []);
+
+  const setAutoMineProgress = useCallback((value: SetStateAction<string | null>) => {
+    setAutoMineUiState((current) => ({
+      ...current,
+      progress: resolveSetterValue(value, current.progress),
+    }));
+  }, []);
+
+  const setRunningParams = useCallback((value: SetStateAction<RunningParams>) => {
+    setAutoMineUiState((current) => ({
+      ...current,
+      runningParams: resolveSetterValue(value, current.runningParams),
+    }));
+  }, []);
+
+  const activateAutoMineUi = useCallback((options: {
+    phase: Extract<AutoMinePhase, "starting" | "restoring" | "running">;
+    params: NonNullable<RunningParams>;
+    progress?: string | null;
+  }) => {
+    autoResumeRequestedRef.current = false;
+    sessionExpiredErrorRef.current = false;
+    writeAutoMineDiagnostics({
+      lastErrorKind: null,
+      lastErrorMessage: null,
+      lastErrorRawMessage: null,
+      lastStopReason: null,
+    });
+    setAutoMineUiState((current) => ({
+      phase: options.phase,
+      runningParams: options.params,
+      progress: options.progress ?? current.progress,
+    }));
+  }, []);
+
+  const deactivateAutoMineUi = useCallback((options?: {
+    phase?: Extract<AutoMinePhase, "idle" | "retry-wait" | "session-expired">;
+    progress?: string | null;
+  }) => {
+    const phase = options?.phase ?? "idle";
+    autoResumeRequestedRef.current = phase === "retry-wait";
+    sessionExpiredErrorRef.current = phase === "session-expired";
+    setAutoMineUiState({
+      phase,
+      runningParams: null,
+      progress: options?.progress ?? null,
+    });
+  }, []);
+
+  const setIsAutoMining = useCallback((value: SetStateAction<boolean>) => {
+    setAutoMineUiState((current) => {
+      const nextIsActive = resolveSetterValue(value, ACTIVE_AUTO_MINE_PHASES.has(current.phase));
+      if (nextIsActive) {
+        const nextPhase = current.phase === "restoring" ? "restoring" : current.phase === "starting" ? "starting" : "running";
+        autoResumeRequestedRef.current = false;
+        sessionExpiredErrorRef.current = false;
+        return { ...current, phase: nextPhase };
+      }
+
+      const pausedPhase = autoResumeRequestedRef.current
+        ? "retry-wait"
+        : sessionExpiredErrorRef.current
+          ? "session-expired"
+          : "idle";
+      return {
+        phase: pausedPhase,
+        progress: current.progress,
+        runningParams: null,
+      };
+    });
+  }, []);
 
   const publicClientRef = useRef(publicClient);
   const silentSendRef = useRef(sendTransactionSilent);
@@ -142,40 +255,86 @@ export function useMiningRuntimeState({
   const getActorAddress = useCallback(() => preferredAddressRef.current ?? address ?? null, [address]);
   const getPreferredActorAddress = useCallback(() => preferredAddressRef.current ?? null, []);
 
-  return {
-    isPending,
-    setIsPending,
-    isAutoMining,
-    setIsAutoMining,
-    autoMineProgress,
-    setAutoMineProgress,
-    runningParams,
-    setRunningParams: setRunningParamsState,
-    hasPreferredActor,
-    getActorAddress,
-    getPreferredActorAddress,
-    autoMineRef,
-    autoResumeRequestedRef,
-    restoreAttemptedRef,
-    sessionExpiredErrorRef,
-    tokenGetterWarningShownRef,
-    pendingApproveRef,
-    pendingBetRef,
-    publicClientRef,
-    silentSendRef,
-    silentSend7702Ref,
-    signEip7702DelegationRef,
-    eip7702Ref,
-    refreshSessionRef,
-    writeContractAsyncRef,
-    preferredAddressRef,
-    ensurePreferredWalletRef,
-    refetchAllowanceRef,
-    refetchTileDataRef,
-    refetchUserBetsRef,
-    refetchEpochRef,
-    refetchGridEpochDataRef,
-    onAutoMineBetConfirmedRef,
-    notifyRef,
-  };
+  return useMemo(
+    () => ({
+      isPending,
+      setIsPending,
+      autoMinePhase,
+      isAutoMining,
+      setIsAutoMining,
+      autoMineProgress,
+      setAutoMineProgress,
+      runningParams,
+      setRunningParams,
+      activateAutoMineUi,
+      deactivateAutoMineUi,
+      setAutoMinePhase,
+      hasPreferredActor,
+      getActorAddress,
+      getPreferredActorAddress,
+      autoMineRef,
+      autoResumeRequestedRef,
+      restoreAttemptedRef,
+      sessionExpiredErrorRef,
+      tokenGetterWarningShownRef,
+      pendingApproveRef,
+      pendingBetRef,
+      publicClientRef,
+      silentSendRef,
+      silentSend7702Ref,
+      signEip7702DelegationRef,
+      eip7702Ref,
+      refreshSessionRef,
+      writeContractAsyncRef,
+      preferredAddressRef,
+      ensurePreferredWalletRef,
+      refetchAllowanceRef,
+      refetchTileDataRef,
+      refetchUserBetsRef,
+      refetchEpochRef,
+      refetchGridEpochDataRef,
+      onAutoMineBetConfirmedRef,
+      notifyRef,
+    }),
+    [
+      isPending,
+      setIsPending,
+      autoMinePhase,
+      isAutoMining,
+      setIsAutoMining,
+      autoMineProgress,
+      setAutoMineProgress,
+      runningParams,
+      setRunningParams,
+      activateAutoMineUi,
+      deactivateAutoMineUi,
+      setAutoMinePhase,
+      hasPreferredActor,
+      getActorAddress,
+      getPreferredActorAddress,
+      autoMineRef,
+      autoResumeRequestedRef,
+      restoreAttemptedRef,
+      sessionExpiredErrorRef,
+      tokenGetterWarningShownRef,
+      pendingApproveRef,
+      pendingBetRef,
+      publicClientRef,
+      silentSendRef,
+      silentSend7702Ref,
+      signEip7702DelegationRef,
+      eip7702Ref,
+      refreshSessionRef,
+      writeContractAsyncRef,
+      preferredAddressRef,
+      ensurePreferredWalletRef,
+      refetchAllowanceRef,
+      refetchTileDataRef,
+      refetchUserBetsRef,
+      refetchEpochRef,
+      refetchGridEpochDataRef,
+      onAutoMineBetConfirmedRef,
+      notifyRef,
+    ],
+  );
 }

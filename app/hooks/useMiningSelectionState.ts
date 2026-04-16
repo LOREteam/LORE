@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { normalizeTiles } from "./useMining.shared";
 
 interface UseMiningSelectionStateOptions {
@@ -58,14 +58,24 @@ export function useMiningSelectionState({
     setSelectedTiles(normalizeTiles(tiles));
   }, [autoMineActive]);
 
-  return {
-    clearScheduledRefetch,
-    finalizeMineSuccess,
-    handleTileClick,
-    selectedTiles,
-    selectedTilesEpoch,
-    setSelectedTiles,
-    setSelectedTilesEpoch,
-    setTiles,
-  };
+  return useMemo(
+    () => ({
+      clearScheduledRefetch,
+      finalizeMineSuccess,
+      handleTileClick,
+      selectedTiles,
+      selectedTilesEpoch,
+      setSelectedTiles,
+      setSelectedTilesEpoch,
+      setTiles,
+    }),
+    [
+      clearScheduledRefetch,
+      finalizeMineSuccess,
+      handleTileClick,
+      selectedTiles,
+      selectedTilesEpoch,
+      setTiles,
+    ],
+  );
 }

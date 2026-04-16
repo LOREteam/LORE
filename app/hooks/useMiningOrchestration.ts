@@ -1,8 +1,9 @@
 "use client";
 
+import { useMemo } from "react";
 import { REFETCH_DELAY_MS, MAX_BET_ATTEMPTS } from "../lib/constants";
 import type { Eip7702CapabilityState, Signed7702AuthorizationLike } from "../lib/eip7702";
-import { saveSession } from "./useMining.shared";
+import { clearSession, readSession, saveSession } from "./useMining.shared";
 import { useMiningAllowance } from "./useMiningAllowance";
 import { useMiningRuntimeHelpers } from "./useMiningRuntimeHelpers";
 import { useMiningBetExecution } from "./useMiningBetExecution";
@@ -13,10 +14,12 @@ import { useMiningReceipt } from "./useMiningReceipt";
 import { useMiningBetStatus } from "./useMiningBetStatus";
 import { useMiningAutoMineRunner } from "./useMiningAutoMineRunner";
 import { useMiningLifecycle } from "./useMiningLifecycle";
-import type { GasOverrides, MiningNotifyFn, RefreshSessionFn, RunningParams } from "./useMining.types";
+import { releaseTabLock } from "./useMiningTabLock";
+import type { AutoMinePhase, GasOverrides, MiningNotifyFn, RefreshSessionFn, RunningParams } from "./useMining.types";
 import type { PendingApproveState, PendingBetState } from "./useMining.stateTypes";
 import type { PublicClient } from "viem";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import { createAutoMineRuntimeController } from "../lib/mining/autoMineRuntimeController";
 
 interface UseMiningOrchestrationOptions {
   publicClient: PublicClient | undefined;
@@ -68,11 +71,22 @@ interface UseMiningOrchestrationOptions {
   refetchGridEpochDataRef: MutableRefObject<(() => void) | undefined>;
   onAutoMineBetConfirmedRef: MutableRefObject<(() => void) | undefined>;
   notifyRef: MutableRefObject<MiningNotifyFn | undefined>;
+  autoMinePhase: AutoMinePhase;
   isAutoMining: boolean;
   setIsPending: Dispatch<SetStateAction<boolean>>;
   setIsAutoMining: Dispatch<SetStateAction<boolean>>;
   setAutoMineProgress: Dispatch<SetStateAction<string | null>>;
   setRunningParams: Dispatch<SetStateAction<RunningParams>>;
+  activateAutoMineUi: (options: {
+    phase: Extract<AutoMinePhase, "starting" | "restoring" | "running">;
+    params: NonNullable<RunningParams>;
+    progress?: string | null;
+  }) => void;
+  deactivateAutoMineUi: (options?: {
+    phase?: Extract<AutoMinePhase, "idle" | "retry-wait" | "session-expired">;
+    progress?: string | null;
+  }) => void;
+  setAutoMinePhase: (phase: AutoMinePhase) => void;
 }
 
 const NETWORK_RETRY_MAX = 120;
@@ -117,12 +131,27 @@ export function useMiningOrchestration({
   refetchGridEpochDataRef,
   onAutoMineBetConfirmedRef,
   notifyRef,
+  autoMinePhase,
   isAutoMining,
   setIsPending,
   setIsAutoMining,
   setAutoMineProgress,
   setRunningParams,
+  activateAutoMineUi,
+  deactivateAutoMineUi,
+  setAutoMinePhase,
 }: UseMiningOrchestrationOptions) {
+  const autoMineController = useMemo(
+    () =>
+      createAutoMineRuntimeController({
+        clearSession,
+        readSession,
+        releaseTabLock,
+        saveSession,
+      }),
+    [],
+  );
+
   const waitReceipt = useMiningReceipt({ publicClientRef });
 
   const {
@@ -222,7 +251,7 @@ export function useMiningOrchestration({
     refetchGridEpochData: () => refetchGridEpochDataRef.current?.(),
     refetchTileData: () => refetchTileDataRef.current(),
     refetchUserBets: () => refetchUserBetsRef.current(),
-    saveSession,
+    saveSession: (payload) => autoMineController.persistCheckpoint(payload),
     setAutoMineProgress,
     setSelectedTiles,
     setSelectedTilesEpoch,
@@ -249,6 +278,7 @@ export function useMiningOrchestration({
     minGasApprove: MIN_GAS_APPROVE,
     networkInitialMs: NETWORK_BACKOFF_INITIAL_MS,
     networkRetryMax: NETWORK_RETRY_MAX,
+    runtimeController: autoMineController,
     onAutoMineBetConfirmedRef,
     pendingApproveRef,
     pendingBetRef,
@@ -263,6 +293,9 @@ export function useMiningOrchestration({
     setAutoMineProgress,
     setIsAutoMining,
     setRunningParams,
+    activateAutoMineUi,
+    deactivateAutoMineUi,
+    setAutoMinePhase,
     setSelectedTiles,
     setSelectedTilesEpoch,
     silentSendRef,
@@ -275,6 +308,8 @@ export function useMiningOrchestration({
     autoMineRef,
     autoResumeRequestedRef,
     clearScheduledRefetch,
+    autoMinePhase,
+    runtimeController: autoMineController,
     getPreferredActorAddress,
     hasPreferredActor,
     isAutoMining,
@@ -282,18 +317,28 @@ export function useMiningOrchestration({
     restoreAttemptedRef,
     runAutoMining,
     sessionExpiredErrorRef,
-    setAutoMineProgress,
-    setIsAutoMining,
-    setRunningParams,
+    activateAutoMineUi,
+    deactivateAutoMineUi,
   });
 
-  return {
-    selectedTiles,
-    selectedTilesEpoch,
-    handleManualMine,
-    handleDirectMine,
-    handleAutoMineToggle,
-    handleTileClick,
-    setTiles,
-  };
+  return useMemo(
+    () => ({
+      selectedTiles,
+      selectedTilesEpoch,
+      handleManualMine,
+      handleDirectMine,
+      handleAutoMineToggle,
+      handleTileClick,
+      setTiles,
+    }),
+    [
+      selectedTiles,
+      selectedTilesEpoch,
+      handleManualMine,
+      handleDirectMine,
+      handleAutoMineToggle,
+      handleTileClick,
+      setTiles,
+    ],
+  );
 }

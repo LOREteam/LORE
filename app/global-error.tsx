@@ -50,18 +50,6 @@ export default function GlobalError({
           <p style={{ fontSize: "13px", color: "#d1d5db", margin: "0 0 20px", lineHeight: 1.5 }}>
             A fatal error occurred while rendering the app shell. Your funds are safe on-chain.
           </p>
-          {error?.digest && (
-            <p
-              style={{
-                fontSize: "10px",
-                fontFamily: "ui-monospace, monospace",
-                color: "#6b7280",
-                margin: "0 0 16px",
-              }}
-            >
-              ref: {error.digest}
-            </p>
-          )}
           <button
             type="button"
             onClick={() => reset()}

@@ -57,17 +57,32 @@ export function useLineaOreClientBaseState({
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
   const chart = useChartData(gameData.realTotalStaked, shell.isPageVisible);
 
-  return {
-    uiHydrated,
-    motion,
-    sound,
-    wallet,
-    shell,
-    gameData,
-    chart,
-    publicClient,
-    normalizedEmbeddedAddress,
-    chatWalletAddress,
-    coldBootDefaults,
-  };
+  return useMemo(
+    () => ({
+      uiHydrated,
+      motion,
+      sound,
+      wallet,
+      shell,
+      gameData,
+      chart,
+      publicClient,
+      normalizedEmbeddedAddress,
+      chatWalletAddress,
+      coldBootDefaults,
+    }),
+    [
+      uiHydrated,
+      motion,
+      sound,
+      wallet,
+      shell,
+      gameData,
+      chart,
+      publicClient,
+      normalizedEmbeddedAddress,
+      chatWalletAddress,
+      coldBootDefaults,
+    ],
+  );
 }

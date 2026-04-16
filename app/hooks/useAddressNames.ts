@@ -70,6 +70,50 @@ async function fetchChatNames(): Promise<NameMap> {
   saveCachedNames(map, fetchedAt);
   return map;
 }
+void fetchChatNames;
+
+async function fetchChatNamesForAddresses(addresses: string[]): Promise<NameMap> {
+  const normalizedAddresses = [...new Set(
+    addresses
+      .map((address) => address.trim().toLowerCase())
+      .filter((address) => /^0x[a-f0-9]{40}$/.test(address)),
+  )];
+  if (normalizedAddresses.length === 0) {
+    return globalCache?.map ?? new Map();
+  }
+
+  const currentMap = new Map(globalCache?.map ?? loadCachedNames()?.map ?? new Map<string, string>());
+  const cacheIsFresh = globalCache && Date.now() - globalCache.fetchedAt < CACHE_TTL_MS;
+  const missing = cacheIsFresh
+    ? normalizedAddresses.filter((address) => !currentMap.has(address))
+    : normalizedAddresses;
+
+  if (missing.length === 0 && cacheIsFresh) {
+    return currentMap;
+  }
+
+  try {
+    const query = encodeURIComponent(missing.join(","));
+    const profileRes = await fetch(`/api/chat/profile?walletAddresses=${query}`, { cache: "no-store" });
+    if (profileRes.ok) {
+      const profileData = await readJsonResponse<{ profiles?: Record<string, unknown> }>(profileRes);
+      if (profileData?.profiles && typeof profileData.profiles === "object") {
+        for (const [address, val] of Object.entries(profileData.profiles)) {
+          const v = val as Record<string, unknown>;
+          const name = typeof v.name === "string" ? v.name.trim() : "";
+          if (name) currentMap.set(address.toLowerCase(), name);
+        }
+      }
+    }
+  } catch {
+    // silent
+  }
+
+  const fetchedAt = Date.now();
+  globalCache = { map: currentMap, fetchedAt };
+  saveCachedNames(currentMap, fetchedAt);
+  return currentMap;
+}
 
 export function useAddressNames(addresses: string[]) {
   const [nameMap, setNameMap] = useState<NameMap>(() => {
@@ -91,7 +135,7 @@ export function useAddressNames(addresses: string[]) {
     fetchedRef.current = true;
     let cancelled = false;
 
-    fetchChatNames().then((map) => {
+    fetchChatNamesForAddresses(addresses).then((map) => {
       if (!cancelled) setNameMap(map);
     });
     return () => { cancelled = true; };

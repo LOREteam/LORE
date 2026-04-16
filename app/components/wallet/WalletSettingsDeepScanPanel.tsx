@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useCallback } from "react";
 import { formatUnits } from "viem";
 import type { UnclaimedWin } from "../../lib/types";
 import { UiButton } from "../ui/UiButton";
@@ -17,7 +17,7 @@ interface WalletSettingsDeepScanPanelProps {
   onDeepClaimAll: () => void;
 }
 
-export function WalletSettingsDeepScanPanel({
+export const WalletSettingsDeepScanPanel = React.memo(function WalletSettingsDeepScanPanel({
   deepScanWins,
   deepScanScanning,
   deepScanClaiming,
@@ -76,22 +76,13 @@ export function WalletSettingsDeepScanPanel({
           <div className="text-[10px] text-gray-500 font-mono">{deepScanProgress}</div>
           <div className="max-h-[160px] overflow-y-auto rounded-lg border border-amber-500/15 divide-y divide-white/[0.04]">
             {deepScanWins.map((win) => (
-              <div key={win.epoch} className="flex items-center justify-between px-3 py-2 hover:bg-white/[0.02]">
-                <div className="flex flex-col">
-                  <span className="text-[9px] text-amber-500/60 font-bold uppercase tracking-wider">Epoch #{win.epoch}</span>
-                  <span className="text-xs font-bold text-emerald-400">{parseFloat(formatUnits(BigInt(win.amountWei), 18)).toFixed(2)} LINEA</span>
-                </div>
-                <UiButton
-                  onClick={() => onDeepClaimOne(win.epoch)}
-                  disabled={deepScanClaiming}
-                  variant="warning"
-                  size="xs"
-                  uppercase
-                  className="text-[9px]"
-                >
-                  Claim
-                </UiButton>
-              </div>
+              <DeepScanWinRow
+                key={win.epoch}
+                amountWei={win.amountWei}
+                deepScanClaiming={deepScanClaiming}
+                epoch={win.epoch}
+                onDeepClaimOne={onDeepClaimOne}
+              />
             ))}
           </div>
         </div>
@@ -111,4 +102,39 @@ export function WalletSettingsDeepScanPanel({
       ) : null}
     </UiPanel>
   );
-}
+});
+
+const DeepScanWinRow = React.memo(function DeepScanWinRow({
+  epoch,
+  amountWei,
+  deepScanClaiming,
+  onDeepClaimOne,
+}: {
+  epoch: string;
+  amountWei: string;
+  deepScanClaiming: boolean;
+  onDeepClaimOne: (epochId: string) => void;
+}) {
+  const handleClaim = useCallback(() => {
+    onDeepClaimOne(epoch);
+  }, [epoch, onDeepClaimOne]);
+
+  return (
+    <div className="flex items-center justify-between px-3 py-2 hover:bg-white/[0.02]">
+      <div className="flex flex-col">
+        <span className="text-[9px] text-amber-500/60 font-bold uppercase tracking-wider">Epoch #{epoch}</span>
+        <span className="text-xs font-bold text-emerald-400">{parseFloat(formatUnits(BigInt(amountWei), 18)).toFixed(2)} LINEA</span>
+      </div>
+      <UiButton
+        onClick={handleClaim}
+        disabled={deepScanClaiming}
+        variant="warning"
+        size="xs"
+        uppercase
+        className="text-[9px]"
+      >
+        Claim
+      </UiButton>
+    </div>
+  );
+});

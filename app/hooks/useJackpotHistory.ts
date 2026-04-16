@@ -86,6 +86,26 @@ function normalizeEntries(rows: unknown[]): JackpotHistoryEntry[] {
     .filter((item): item is JackpotHistoryEntry => item !== null);
 }
 
+function jackpotEntriesEqual(left: JackpotHistoryEntry[], right: JackpotHistoryEntry[]) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (
+      a.epoch !== b.epoch ||
+      a.amount !== b.amount ||
+      a.amountNum !== b.amountNum ||
+      a.kind !== b.kind ||
+      a.txHash !== b.txHash ||
+      a.blockNumber !== b.blockNumber ||
+      a.timestamp !== b.timestamp
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function loadCachedEntries(): { entries: JackpotHistoryEntry[]; savedAt: number | null } {
   if (typeof localStorage === "undefined") return { entries: [], savedAt: null };
   try {
@@ -142,13 +162,18 @@ async function fetchFromApi(): Promise<JackpotHistoryEntry[]> {
 }
 
 export function useJackpotHistory(enabled = true) {
-  const [items, setItems] = useState<JackpotHistoryEntry[]>(() => loadCachedEntries().entries);
+  const initialCacheRef = useRef<{ entries: JackpotHistoryEntry[]; savedAt: number | null } | null>(null);
+  if (initialCacheRef.current === null) {
+    initialCacheRef.current = loadCachedEntries();
+  }
+
+  const [items, setItems] = useState<JackpotHistoryEntry[]>(() => initialCacheRef.current?.entries ?? []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const runningRef = useRef(false);
   const warnAtRef = useRef(0);
   const mountedRef = useRef(false);
-  const cacheSavedAtRef = useRef<number | null>(loadCachedEntries().savedAt);
+  const cacheSavedAtRef = useRef<number | null>(initialCacheRef.current?.savedAt ?? null);
   const itemsRef = useRef<JackpotHistoryEntry[]>(items);
 
   useEffect(() => {
@@ -176,11 +201,16 @@ export function useJackpotHistory(enabled = true) {
     try {
       const entries = await fetchFromApi();
       const sorted = sortByBlockDesc(entries);
+      const changed = !jackpotEntriesEqual(itemsRef.current, sorted);
       if (mountedRef.current) {
-        setItems(sorted);
+        if (changed) {
+          setItems(sorted);
+        }
         setError(null);
       }
-      saveCachedEntries(sorted);
+      if (changed) {
+        saveCachedEntries(sorted);
+      }
       cacheSavedAtRef.current = Date.now();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Network error";

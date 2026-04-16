@@ -1,5 +1,6 @@
 "use client";
 
+import { log } from "../lib/logger";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePublicClient } from "wagmi";
 import { parseAbi, decodeEventLog, formatUnits, encodeEventTopics, pad, type Log, type Hex } from "viem";
@@ -128,7 +129,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       if (outResult.status === "fulfilled") {
         outLogs = outResult.value;
       } else {
-        console.warn("[useWalletTransfers] Outgoing transfer fetch failed:", outResult.reason);
+        log.warn("WalletTransfers", "outgoing fetch failed", { reason: String(outResult.reason) });
       }
 
       if (inResult.status === "fulfilled") {

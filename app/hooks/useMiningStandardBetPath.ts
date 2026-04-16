@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { encodeFunctionData, maxUint256 } from "viem";
 import type { PublicClient } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
@@ -413,9 +413,12 @@ export function useMiningStandardBetPath({
     ],
   );
 
-  return {
-    placeBets,
-    placeBetsSilent,
-    placeBets7702,
-  };
+  return useMemo(
+    () => ({
+      placeBets,
+      placeBetsSilent,
+      placeBets7702,
+    }),
+    [placeBets, placeBetsSilent, placeBets7702],
+  );
 }

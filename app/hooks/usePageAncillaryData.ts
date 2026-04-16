@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useAnalyticsAncillaryData } from "./useAnalyticsAncillaryData";
 import { useLeaderboards } from "./useLeaderboards";
 import { useRecentWins } from "./useRecentWins";
@@ -54,13 +55,24 @@ export function usePageAncillaryData({
 
   const recentWins = useRecentWins(initialRecentWins);
 
-  return {
-    ...analyticsData,
-    ...walletData,
-    leaderboardsData,
-    leaderboardsLoading,
-    leaderboardsError,
-    leaderboardsRefetch,
-    recentWins,
-  };
+  return useMemo(
+    () => ({
+      ...analyticsData,
+      ...walletData,
+      leaderboardsData,
+      leaderboardsLoading,
+      leaderboardsError,
+      leaderboardsRefetch,
+      recentWins,
+    }),
+    [
+      analyticsData,
+      walletData,
+      leaderboardsData,
+      leaderboardsLoading,
+      leaderboardsError,
+      leaderboardsRefetch,
+      recentWins,
+    ],
+  );
 }

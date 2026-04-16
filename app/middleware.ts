@@ -16,7 +16,7 @@ function createNonce() {
 function buildContentSecurityPolicy(nonce: string) {
   return [
     "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval' https://auth.privy.io https://challenges.cloudflare.com`,
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' ${isDev ? "'unsafe-eval' " : ""}https://auth.privy.io https://challenges.cloudflare.com`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
@@ -30,6 +30,7 @@ function buildContentSecurityPolicy(nonce: string) {
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",
+    !isDev ? "upgrade-insecure-requests" : "",
   ].join("; ");
 }
 
@@ -50,7 +51,12 @@ export function middleware(request: NextRequest) {
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("X-Frame-Options", "DENY");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  response.headers.set("X-DNS-Prefetch-Control", "off");
+  response.headers.set("Cross-Origin-Resource-Policy", "same-site");
+  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), bluetooth=()");
+  if (!isDev) {
+    response.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  }
 
   return response;
 }

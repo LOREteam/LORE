@@ -13,7 +13,7 @@ interface WalletSettingsPendingTxPanelProps {
   onCancelPendingTx: () => void;
 }
 
-export function WalletSettingsPendingTxPanel({
+export const WalletSettingsPendingTxPanel = React.memo(function WalletSettingsPendingTxPanel({
   pendingTransactionStatus,
   isRefreshingPendingTx,
   isCancellingPendingTx,
@@ -61,4 +61,4 @@ export function WalletSettingsPendingTxPanel({
       </div>
     </UiPanel>
   );
-}
+});

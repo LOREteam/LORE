@@ -12,7 +12,16 @@ import {
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { LEADERBOARD_TOP_N } from "../../lib/constants";
 import type { LeaderboardEntry, LuckyTileEntry } from "../../lib/types";
-import { getAllBetRows, getAllRewardClaims, getChatProfiles, getEpochMap, getMetaJson, setMetaJson } from "../../../server/storage";
+import {
+  getAllBetRows,
+  getAllRewardClaims,
+  getChatProfiles,
+  getEpochMap,
+  getMetaBigInt,
+  getMetaJson,
+  getRecentRewardClaims,
+  setMetaJson,
+} from "../../../server/storage";
 import { logRouteError } from "../_lib/routeError";
 import { createRouteCache } from "../_lib/routeCache";
 import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
@@ -31,6 +40,7 @@ type LeaderboardsPayload = {
 type LeaderboardsSnapshotEnvelope = {
   payload: LeaderboardsPayload;
   savedAt: number;
+  watermark: string | null;
 };
 
 const LEADERBOARDS_ROUTE_CACHE_MS = 15_000;
@@ -41,6 +51,7 @@ const LEADERBOARDS_SNAPSHOT_META_KEY = "snapshot:leaderboards:v1";
 const LEADERBOARDS_CACHE_KEY = "latest";
 const LEADERBOARDS_ROUTE_CACHE_MAX_KEYS = 2;
 const leaderboardsRouteCache = createRouteCache<LeaderboardsPayload>(LEADERBOARDS_ROUTE_CACHE_MAX_KEYS);
+let leaderboardsCacheWatermark: string | null = null;
 
 type UserAgg = {
   totalWagered: bigint;
@@ -48,6 +59,17 @@ type UserAgg = {
   maxSingleWin: bigint;
   winCount: number;
 };
+
+function getLatestRewardClaimMarker() {
+  const latest = getRecentRewardClaims(1)[0];
+  if (!latest) return "none";
+  return `${latest.blockNumber}:${latest.txHash ?? ""}:${latest.epoch}`;
+}
+
+function getLeaderboardsDataWatermark() {
+  const lastIndexedBlock = getMetaBigInt("lastIndexedBlock")?.toString() ?? "null";
+  return `${lastIndexedBlock}|${getLatestRewardClaimMarker()}`;
+}
 
 function jsonNoStore(payload: LeaderboardsPayload, status = 200) {
   return applyNoStoreHeaders(NextResponse.json(payload, { status }));
@@ -304,7 +326,7 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
   };
 }
 
-function loadLeaderboardsSnapshot(): LeaderboardsPayload | null {
+function loadLeaderboardsSnapshot(expectedWatermark: string | null): LeaderboardsPayload | null {
   const snapshot = getMetaJson<LeaderboardsSnapshotEnvelope | LeaderboardsPayload>(LEADERBOARDS_SNAPSHOT_META_KEY);
   if (!snapshot || !("savedAt" in snapshot)) {
     return null;
@@ -314,26 +336,41 @@ function loadLeaderboardsSnapshot(): LeaderboardsPayload | null {
     return null;
   }
 
+  if (!("watermark" in snapshot) || snapshot.watermark !== expectedWatermark) {
+    return null;
+  }
+
   return snapshot.payload;
 }
 
-function saveLeaderboardsSnapshot(payload: LeaderboardsPayload) {
+function saveLeaderboardsSnapshot(payload: LeaderboardsPayload, watermark: string | null) {
   setMetaJson(LEADERBOARDS_SNAPSHOT_META_KEY, {
     payload,
     savedAt: Date.now(),
+    watermark,
   });
 }
 
-function startLeaderboardsRefresh() {
+function hydrateLeaderboardsSnapshot(watermark: string | null) {
+  const snapshot = loadLeaderboardsSnapshot(watermark);
+  if (!snapshot) return null;
+  leaderboardsCacheWatermark = watermark;
+  leaderboardsRouteCache.set(LEADERBOARDS_CACHE_KEY, snapshot, LEADERBOARDS_ROUTE_CACHE_MS);
+  return snapshot;
+}
+
+function startLeaderboardsRefresh(watermark: string | null) {
   startVersionedBackgroundRefresh({
     cache: leaderboardsRouteCache,
     cacheKey: LEADERBOARDS_CACHE_KEY,
     ttlMs: LEADERBOARDS_STALE_REFRESH_MS,
     routeMetricKey: ROUTE_METRIC_KEY,
+    shouldSkip: () => leaderboardsCacheWatermark === watermark,
     build: () => buildLeaderboardsPayload(),
     toPayload: (result) => result,
     onCommit: (result) => {
-      saveLeaderboardsSnapshot(result);
+      leaderboardsCacheWatermark = watermark;
+      saveLeaderboardsSnapshot(result, watermark);
     },
     onError: (error) => {
       logRouteError(ROUTE_METRIC_KEY, error, { phase: "background-refresh" });
@@ -358,12 +395,22 @@ export async function GET(request: Request) {
     return jsonNoStore(cached);
   }
 
-  const staleCache = leaderboardsRouteCache.getStale(LEADERBOARDS_CACHE_KEY) ?? loadLeaderboardsSnapshot();
+  const currentWatermark = getLeaderboardsDataWatermark();
+  const staleCache = leaderboardsRouteCache.getStale(LEADERBOARDS_CACHE_KEY);
   if (staleCache) {
     markRouteStaleServed(ROUTE_METRIC_KEY);
-    startLeaderboardsRefresh();
+    if (leaderboardsCacheWatermark !== currentWatermark) {
+      startLeaderboardsRefresh(currentWatermark);
+    }
     finishRouteMetric(metric, 200);
     return jsonNoStore(staleCache);
+  }
+
+  const snapshot = hydrateLeaderboardsSnapshot(currentWatermark);
+  if (snapshot) {
+    markRouteCacheHit(ROUTE_METRIC_KEY);
+    finishRouteMetric(metric, 200);
+    return jsonNoStore(snapshot);
   }
 
   try {
@@ -378,7 +425,8 @@ export async function GET(request: Request) {
             build: () => buildLeaderboardsPayload(),
             toPayload: (result) => result,
             onCommit: (result) => {
-              saveLeaderboardsSnapshot(result);
+              leaderboardsCacheWatermark = currentWatermark;
+              saveLeaderboardsSnapshot(result, currentWatermark);
             },
           });
           return requestPromise;

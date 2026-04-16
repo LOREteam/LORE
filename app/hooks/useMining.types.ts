@@ -27,6 +27,19 @@ export type Sign7702DelegationFn = (executor?: "self" | `0x${string}`) => Promis
 export type RefreshSessionFn = () => Promise<void>;
 export type MiningNotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 export type RunningParams = { betStr: string; blocks: number; rounds: number } | null;
+export type AutoMinePhase =
+  | "idle"
+  | "starting"
+  | "restoring"
+  | "running"
+  | "retry-wait"
+  | "session-expired";
+
+export interface AutoMineUiState {
+  phase: AutoMinePhase;
+  progress: string | null;
+  runningParams: RunningParams;
+}
 
 export interface UseMiningOptions {
   refetchAllowance: () => void;

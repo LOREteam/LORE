@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import type { AutoMinePhase } from "../hooks/useMining.types";
 import { HubGameBoard } from "./HubGameBoard";
 import { HubSidePanel } from "./HubSidePanel";
 
@@ -28,6 +29,7 @@ interface UnclaimedWin {
 }
 
 interface HubContentProps {
+  autoMinePhase: AutoMinePhase;
   autoMineProgress: string | null;
   chatOpen: boolean;
   formattedBalance: string | null;
@@ -66,6 +68,7 @@ interface HubContentProps {
 }
 
 export const HubContent = React.memo(function HubContent({
+  autoMinePhase,
   autoMineProgress,
   chatOpen,
   formattedBalance,
@@ -143,6 +146,7 @@ export const HubContent = React.memo(function HubContent({
         handleManualMineWithGuard={handleManualMineWithGuard}
         lastBet={lastBet}
         handleRepeatLastBet={handleRepeatLastBet}
+        autoMinePhase={autoMinePhase}
         autoMineProgress={autoMineProgress}
         runningParams={runningParams}
         lowEthBalance={lowEthBalance}

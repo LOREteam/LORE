@@ -1,268 +1,192 @@
 "use client";
 
-import type { MutableRefObject } from "react";
-import type { PublicClient } from "viem";
 import { log } from "../lib/logger";
-import { delay } from "../lib/utils";
 import { isInsufficientFundsError, isNetworkError } from "./useMining.shared";
-import { executeAutoMineBetLoop } from "./useMiningRoundBetting";
-import { planAutoMineRound } from "./useMiningRoundPlanning";
-import { finalizeConfirmedRound, recoverRoundAfterRpcError } from "./useMiningRoundRecovery";
-import { awaitEpochReadyToBet } from "./useMiningEpochTiming";
-import { getNetworkRetryDelayMs } from "./useMiningNetworkRetry";
-import type { GasOverrides } from "./useMining.types";
-import type { PendingBetState } from "./useMining.stateTypes";
-
-type SessionRefreshFn = () => Promise<void>;
-
-interface CompleteRoundArgs {
-  betStr: string;
-  blocks: number;
-  rounds: number;
-  roundIndex: number;
-  placedEpoch: bigint;
-  displayTiles?: number[];
-  displayEpoch?: bigint;
-  progressMessage?: string;
-  announceBet?: boolean;
-}
+import { createAutoMineLoopState, reduceAutoMineLoopEvent } from "../lib/mining/autoMineLoopModel";
+import { planAutoMineLoopPrelude } from "../lib/mining/autoMineLoopPreludePlanner";
+import { planAutoMineLoopNetworkRetry } from "../lib/mining/autoMineLoopRetryPlanner";
+import {
+  toAutoMineLoopConfirmedEvent,
+  type AutoMineLoopConfirmedRoundOutcome,
+} from "../lib/mining/autoMineLoopRoundOutcome";
+import type { AutoMineLoopReadyRoundCommand } from "../lib/mining/autoMineLoopRoundCommand";
+import {
+  planAutoMineAttemptTransition,
+  planAutoMineLoopCompletionTransition,
+  planAutoMineNetworkErrorTransition,
+  planAutoMinePreparedRoundTransition,
+  planAutoMineRecoveryTransition,
+  type AutoMineLoopTransitionAction,
+} from "../lib/mining/autoMineLoopTransitionPlanner";
+import type { AutoMineLoopAdapter } from "../lib/mining/autoMineLoopAdapter";
+import type { AutoMineLoopRuntime } from "../lib/mining/autoMineLoopRuntime";
 
 interface RunAutoMineLoopOptions {
-  actorAddress: `0x${string}`;
+  adapter: AutoMineLoopAdapter;
   autoMineActive: () => boolean;
-  betPendingGraceMs: number;
-  betPendingStaleMs: number;
-  betStr: string;
   blocks: number;
-  completeAutoMineRound: (args: CompleteRoundArgs) => Promise<void>;
-  forceReplacePendingNonceGap: number;
-  gasBumpBase: bigint;
-  gasBumpReplacementStep: bigint;
-  getBumpedFees: (stepBps?: bigint) => Promise<GasOverrides | undefined>;
-  maxBetAttempts: number;
   networkBackoffInitialMs: number;
   networkBackoffMaxMs: number;
   networkRetryMax: number;
-  onAutoMineBetConfirmed?: () => void;
-  onClearSelection: () => void;
-  onProgress: (message: string) => void;
-  onRefetchEpoch?: () => void;
-  onSaveSession: (payload: {
-    active: boolean;
-    betStr: string;
-    blocks: number;
-    rounds: number;
-    nextRoundIndex: number;
-    lastPlacedEpoch: string | null;
-  }) => void;
-  pendingBetRef: MutableRefObject<PendingBetState | null>;
-  placeBets: (
-    tileIds: number[],
-    amountRawPerTile: bigint,
-    gasOverrides?: GasOverrides,
-  ) => Promise<"confirmed" | "pending">;
-  placeBetsSilent: (
-    tileIds: number[],
-    amountRawPerTile: bigint,
-    gasOverrides?: GasOverrides,
-  ) => Promise<"confirmed" | "pending">;
-  placeBets7702?: (
-    tileIds: number[],
-    amountRawPerTile: bigint,
-    gasOverrides?: GasOverrides,
-  ) => Promise<"confirmed" | "pending">;
-  readClient: () => PublicClient | undefined;
-  readRefreshSession: () => SessionRefreshFn | undefined;
-  readSilentSend: () => unknown;
-  renewLock: () => void;
   restoredLastEpoch: bigint | null;
   rounds: number;
-  secureRandom: (max: number) => number;
-  sessionRefreshIntervalMs: number;
-  setSelection: (tiles: number[], epoch: string | null) => void;
-  singleAmountRaw: bigint;
   startRoundIndex: number;
+  runtime: AutoMineLoopRuntime;
+  sessionRefreshIntervalMs: number;
 }
 
-const PUBLIC_CLIENT_RECONNECT_TIMEOUT_MS = 20_000;
-const PUBLIC_CLIENT_RECONNECT_POLL_MS = 300;
-
-async function awaitActivePublicClient(params: {
-  autoMineActive: () => boolean;
-  onProgress: (message: string) => void;
-  readClient: () => PublicClient | undefined;
-  renewLock: () => void;
+async function handleConfirmedRoundOutcome(params: {
+  loopState: ReturnType<typeof createAutoMineLoopState>;
+  outcome: AutoMineLoopConfirmedRoundOutcome;
   roundIndex: number;
-  rounds: number;
+  runtime: AutoMineLoopRuntime;
+  tilesToBet: number[];
 }) {
-  const { autoMineActive, onProgress, readClient, renewLock, roundIndex, rounds } = params;
-  const startedAt = Date.now();
-  let announcedWait = false;
+  const { loopState, outcome, roundIndex, runtime, tilesToBet } = params;
+  const nextLoopState = reduceAutoMineLoopEvent(
+    loopState,
+    toAutoMineLoopConfirmedEvent({
+      outcome,
+      tiles: tilesToBet,
+    }),
+  );
+  runtime.syncState(nextLoopState, { progress: true, selection: true, session: false });
+  await runtime.handleConfirmedRound({
+    placedEpoch: outcome.placedEpoch,
+    progressMessage: nextLoopState.progressMessage,
+    roundIndex,
+    tilesToBet,
+  });
+  return nextLoopState;
+}
 
-  while (autoMineActive()) {
-    const client = readClient();
-    if (client) return client;
+async function applyTransitionAction(params: {
+  action: AutoMineLoopTransitionAction;
+  loopState: ReturnType<typeof createAutoMineLoopState>;
+  runtime: AutoMineLoopRuntime;
+}) {
+  const { action, loopState, runtime } = params;
 
-    if (!announcedWait) {
-      onProgress(`${roundIndex + 1} / ${rounds} - reconnecting RPC...`);
-      announcedWait = true;
-    }
-
-    if (Date.now() - startedAt >= PUBLIC_CLIENT_RECONNECT_TIMEOUT_MS) {
-      throw new Error("Public client not ready");
-    }
-
-    renewLock();
-    await delay(PUBLIC_CLIENT_RECONNECT_POLL_MS);
+  if (action.commandsBefore?.length) {
+    await runtime.runCommands(action.commandsBefore);
   }
 
-  return null;
+  const nextLoopState = reduceAutoMineLoopEvent(loopState, action.event);
+  runtime.syncState(nextLoopState, action.syncEffects);
+
+  if (action.commandsAfter?.length) {
+    await runtime.runCommands(action.commandsAfter);
+  }
+
+  return nextLoopState;
 }
 
 export async function runAutoMineLoop({
-  actorAddress,
+  adapter,
   autoMineActive,
-  betPendingGraceMs,
-  betPendingStaleMs,
-  betStr,
   blocks,
-  completeAutoMineRound,
-  forceReplacePendingNonceGap,
-  gasBumpBase,
-  gasBumpReplacementStep,
-  getBumpedFees,
-  maxBetAttempts,
   networkBackoffInitialMs,
   networkBackoffMaxMs,
   networkRetryMax,
-  onAutoMineBetConfirmed,
-  onClearSelection,
-  onProgress,
-  onRefetchEpoch,
-  onSaveSession,
-  pendingBetRef,
-  placeBets,
-  placeBetsSilent,
-  placeBets7702,
-  readClient,
-  readRefreshSession,
-  readSilentSend,
-  renewLock,
   restoredLastEpoch,
   rounds,
-  secureRandom,
+  runtime,
   sessionRefreshIntervalMs,
-  setSelection,
-  singleAmountRaw,
   startRoundIndex,
 }: RunAutoMineLoopOptions) {
-  let lastPlacedEpoch: bigint | null = restoredLastEpoch;
-  let lastSessionRefresh = Date.now();
-  let networkRetries = 0;
-  let stopReason = "unknown";
+  let loopState = createAutoMineLoopState({
+    rounds,
+    startRoundIndex,
+    restoredLastEpoch,
+  });
+  let lastSessionRefresh = runtime.getNow();
 
-  for (let roundIndex = startRoundIndex; roundIndex < rounds; roundIndex += 1) {
+  while (loopState.roundIndex < rounds) {
+    const roundIndex = loopState.roundIndex;
     if (!autoMineActive()) {
-      stopReason = "user-stopped";
+      loopState = reduceAutoMineLoopEvent(loopState, { type: "stop-user" });
       break;
     }
-    renewLock();
+    runtime.renewLock();
 
-    const refreshSession = readRefreshSession();
-    if (refreshSession && Date.now() - lastSessionRefresh > sessionRefreshIntervalMs) {
-      try {
-        await refreshSession();
-        lastSessionRefresh = Date.now();
-        log.info("AutoMine", "session refreshed");
-      } catch (error) {
-        log.warn("AutoMine", "session refresh failed (continuing)", error);
-      }
-    }
+    const refreshSession = runtime.readRefreshSession();
+    const preludeDecision = planAutoMineLoopPrelude({
+      hasRefreshSession: Boolean(refreshSession),
+      lastPlacedEpoch: loopState.lastPlacedEpoch,
+      lastSessionRefresh,
+      now: runtime.getNow(),
+      sessionRefreshIntervalMs,
+    });
 
-    if (lastPlacedEpoch !== null) {
-      const epochWait = await awaitEpochReadyToBet({
-        isActive: autoMineActive,
-        lastPlacedEpoch,
-        onProgress,
-        readClient,
-        renewLock,
-        roundIndex,
-        rounds,
-        secureRandom,
-      });
-      if (epochWait.stopped) {
-        stopReason = "user-stopped";
-        break;
-      }
-
-      onRefetchEpoch?.();
-      onProgress(`${roundIndex} / ${rounds} - placing bet (${blocks} tiles)...`);
-    }
-
-    let roundTilesToBet: number[] = [];
-    let roundCandidateEpochs: bigint[] = [];
-
-    try {
-      const client = await awaitActivePublicClient({
-        autoMineActive,
-        onProgress,
-        readClient,
-        renewLock,
-        roundIndex,
-        rounds,
-      });
-      if (!client) {
-        stopReason = "no-client";
-        break;
-      }
-
-      const roundPlan = await planAutoMineRound({
-        actorAddress,
-        blocks,
-        client,
-        lastPlacedEpoch,
-        secureRandom,
-        singleAmountRaw,
-      });
-
-      if (roundPlan.kind === "skip-existing") {
-        log.info(
-          "AutoMine",
-          `skipping round ${roundIndex + 1} - already bet on ${roundPlan.alreadyBetTiles.length}/${roundPlan.effectiveBlocks} tiles in epoch ${roundPlan.liveEpoch}`,
-          { betTiles: roundPlan.alreadyBetTiles },
-        );
-        setSelection([], null);
-        lastPlacedEpoch = roundPlan.liveEpoch;
-        onSaveSession({
-          active: true,
-          betStr,
-          blocks,
-          rounds,
-          nextRoundIndex: roundIndex + 1,
-          lastPlacedEpoch: lastPlacedEpoch.toString(),
-        });
-        networkRetries = 0;
+    let preludeStopped = false;
+    for (const operation of preludeDecision.operations) {
+      if (operation === "refresh-session" && refreshSession) {
+        const refreshedAt = await runtime.handleSessionRefresh(refreshSession);
+        if (refreshedAt !== null) {
+          lastSessionRefresh = refreshedAt;
+        }
         continue;
       }
 
-      if (roundPlan.kind === "stop-insufficient-balance") {
-        onProgress(`Stopped: need ${roundPlan.neededAmount.toFixed(1)} LINEA, have ${roundPlan.currentAmount.toFixed(1)} LINEA`);
-        stopReason = "insufficient-balance";
-        await delay(3500);
+      if (operation === "await-epoch-ready" && loopState.lastPlacedEpoch !== null) {
+        const epochWait = await adapter.awaitEpochReady({
+          lastPlacedEpoch: loopState.lastPlacedEpoch,
+          roundIndex,
+          rounds,
+        });
+        if (epochWait.stopped) {
+          loopState = reduceAutoMineLoopEvent(loopState, { type: "stop-user" });
+          preludeStopped = true;
+          break;
+        }
+
+        await runtime.handleEpochReady({ blocks, roundIndex, rounds });
+      }
+    }
+
+    if (preludeStopped) {
+      break;
+    }
+
+    let activeRoundCommand: AutoMineLoopReadyRoundCommand | null = null;
+
+    try {
+      const preparedRound = await adapter.prepareRoundCommand({
+        lastPlacedEpoch: loopState.lastPlacedEpoch,
+        roundIndex,
+        rounds,
+      });
+      const preparedDecision = planAutoMinePreparedRoundTransition(preparedRound);
+
+      if (preparedRound.kind === "skip-existing") {
+        log.info(
+          "AutoMine",
+          `skipping round ${roundIndex + 1} - already bet on ${preparedRound.alreadyBetTiles.length}/${preparedRound.effectiveBlocks} tiles in epoch ${preparedRound.liveEpoch}`,
+          { betTiles: preparedRound.alreadyBetTiles },
+        );
+      }
+
+      if (preparedDecision.kind === "continue") {
+        loopState = await applyTransitionAction({
+          action: preparedDecision.action,
+          loopState,
+          runtime,
+        });
+        continue;
+      }
+
+      if (preparedDecision.kind === "stop") {
+        loopState = await applyTransitionAction({
+          action: preparedDecision.action,
+          loopState,
+          runtime,
+        });
         break;
       }
 
-      const {
-        liveEpoch: liveEpochNow,
-        epochNeedsResolve,
-        effectiveBlocks,
-        tilesToBet,
-        alreadyBetTiles,
-        roundCandidateEpochs: plannedCandidateEpochs,
-        selectionEpoch,
-      } = roundPlan;
-      roundTilesToBet = tilesToBet;
-      roundCandidateEpochs = plannedCandidateEpochs;
+      const { command, alreadyBetTiles } = preparedDecision;
+      activeRoundCommand = command;
+      const { liveEpoch: liveEpochNow, epochNeedsResolve, effectiveBlocks, tilesToBet, selectionEpoch } = command;
 
       if (epochNeedsResolve) {
         log.info(
@@ -276,185 +200,147 @@ export async function runAutoMineLoop({
         `round ${roundIndex + 1}: blocks=${blocks}, effectiveBlocks=${effectiveBlocks}, tiles=[${tilesToBet.join(",")}], existingBets=[${alreadyBetTiles.join(",")}], epoch=${liveEpochNow}`,
       );
 
-      setSelection(tilesToBet, selectionEpoch);
-      onProgress(`${roundIndex + 1} / ${rounds} - placing bet (${tilesToBet.length} tiles)...`);
-
-      onSaveSession({
-        active: true,
-        betStr,
-        blocks,
-        rounds,
-        nextRoundIndex: roundIndex,
-        lastPlacedEpoch: liveEpochNow.toString(),
+      loopState = reduceAutoMineLoopEvent(loopState, {
+        type: "round-betting-started",
+        liveEpoch: liveEpochNow,
+        tiles: tilesToBet,
+        selectionEpoch,
       });
+      runtime.syncState(loopState);
 
-      const betLoopResult = await executeAutoMineBetLoop({
-        actorAddress,
-        autoMineActive,
-        betPendingGraceMs,
-        betPendingStaleMs,
-        currentEpoch: liveEpochNow,
-        currentRoundIndex: roundIndex,
-        forceReplacePendingNonceGap,
-        getBumpedFees,
-        gasBumpBase,
-        gasBumpReplacementStep,
-        maxBetAttempts,
-        networkBackoffInitialMs,
-        networkBackoffMaxMs,
-        onProgress,
-        onSessionRefresh: refreshSession
+      const betLoopResult = await adapter.executeRoundCommand({
+        command,
+        refreshSession: refreshSession
           ? async () => {
               await refreshSession();
-              lastSessionRefresh = Date.now();
+              lastSessionRefresh = runtime.getNow();
             }
           : undefined,
-        pendingBetRef,
-        placeBets,
-        placeBetsSilent,
-        placeBets7702,
-        publicClient: client,
-        readSilentSend,
+        roundIndex,
+      });
+      const attemptDecision = planAutoMineAttemptTransition({
+        epochNeedsResolve,
+        outcome: betLoopResult,
+        roundIndex,
         rounds,
-        singleAmountRaw,
-        tilesToBet,
-        roundCandidateEpochs,
-        effectiveBlocks,
-        getRetryDelayMs: getNetworkRetryDelayMs,
       });
 
-      if (betLoopResult.kind === "stopped") {
-        stopReason = "user-stopped";
-        break;
-      }
-
-      if (betLoopResult.kind === "epoch-ended-skip") {
-        pendingBetRef.current = null;
+      if (betLoopResult.kind === "epoch-ended") {
         log.warn(
           "AutoMine",
           `round ${roundIndex + 1} skipped - epoch ended (tx too late), continuing next round`,
-          { epoch: liveEpochNow.toString() },
+          { epoch: betLoopResult.liveEpoch.toString() },
         );
-        onProgress(`${roundIndex + 1} / ${rounds} - skipped (epoch ended), next round...`);
-        setSelection([], null);
-        lastPlacedEpoch = liveEpochNow;
-        onSaveSession({
-          active: true,
-          betStr,
-          blocks,
-          rounds,
-          nextRoundIndex: roundIndex + 1,
-          lastPlacedEpoch: lastPlacedEpoch.toString(),
+      }
+
+      if (attemptDecision.kind === "stop" || attemptDecision.kind === "continue") {
+        loopState = await applyTransitionAction({
+          action: attemptDecision.action,
+          loopState,
+          runtime,
         });
-        await delay(250);
-        networkRetries = 0;
+        if (attemptDecision.kind === "stop") {
+          break;
+        }
         continue;
       }
 
-      if (betLoopResult.kind === "detected-on-chain") {
-        pendingBetRef.current = null;
-        const detectedEpoch = betLoopResult.placedEpoch ?? liveEpochNow;
-        lastPlacedEpoch = detectedEpoch;
-        setSelection(tilesToBet, detectedEpoch.toString());
-        onProgress(`${roundIndex + 1} / ${rounds} - confirmed (detected on-chain)`);
-        onAutoMineBetConfirmed?.();
-        log.info("AutoMine", `round ${roundIndex + 1}/${rounds} detected on-chain`, { epoch: lastPlacedEpoch.toString() });
-        networkRetries = 0;
-        await completeAutoMineRound({
-          betStr,
-          blocks,
-          rounds,
+      if (attemptDecision.kind === "confirmed") {
+        if (attemptDecision.commandsBefore?.length) {
+          await runtime.runCommands(attemptDecision.commandsBefore);
+        }
+        log.info("AutoMine", `round ${roundIndex + 1}/${rounds} confirmed`, {
+          epoch: attemptDecision.outcome.placedEpoch.toString(),
+          source: attemptDecision.outcome.source,
+        });
+        loopState = await handleConfirmedRoundOutcome({
+          loopState,
+          outcome: attemptDecision.outcome,
           roundIndex,
-          placedEpoch: lastPlacedEpoch,
-          displayTiles: tilesToBet,
-          displayEpoch: lastPlacedEpoch,
-          progressMessage: `${roundIndex + 1} / ${rounds} - confirmed (detected on-chain)`,
-          announceBet: false,
+          runtime,
+          tilesToBet,
         });
         continue;
       }
 
-      pendingBetRef.current = null;
-      const finalizedRound = await finalizeConfirmedRound({
-        actorAddress,
-        betStr,
-        blocks,
-        client,
-        completeAutoMineRound,
-        effectiveBlocks,
-        epochNeedsResolve,
-        liveEpoch: liveEpochNow,
-        onAnnounceConfirmed: () => onAutoMineBetConfirmed?.(),
-        onClearSelection,
-        onRefetchEpoch,
-        onSetProgress: onProgress,
-        rounds,
+      await runtime.runCommands(attemptDecision.commandsBefore);
+      const finalizedRound = await adapter.finalizeRoundCommand({
+        command,
         roundIndex,
+      });
+      loopState = await handleConfirmedRoundOutcome({
+        loopState,
+        outcome: finalizedRound,
+        roundIndex,
+        runtime,
         tilesToBet,
       });
-      lastPlacedEpoch = finalizedRound.placedEpoch;
-      networkRetries = 0;
+      continue;
     } catch (error) {
       if (isInsufficientFundsError(error)) throw error;
       if (isNetworkError(error) && autoMineActive()) {
-        networkRetries += 1;
-        if (networkRetries > networkRetryMax) {
+        const retryDecision = planAutoMineLoopNetworkRetry({
+          currentRetryCount: loopState.networkRetries,
+          initialMs: networkBackoffInitialMs,
+          maxExponent: 6,
+          maxMs: networkBackoffMaxMs,
+          retryMax: networkRetryMax,
+        });
+        if (retryDecision.kind === "give-up") {
           log.error("AutoMine", `network down for ${networkRetryMax} retries, giving up`);
           throw error;
         }
-        const wait = getNetworkRetryDelayMs(
-          networkRetries - 1,
-          networkBackoffInitialMs,
-          networkBackoffMaxMs,
-          6,
-        );
+        const networkErrorDecision = planAutoMineNetworkErrorTransition({
+          retryCount: retryDecision.retryCount,
+          waitMs: retryDecision.waitMs,
+        });
         log.warn(
           "AutoMine",
-          `network error on round ${roundIndex + 1} (retry ${networkRetries}/${networkRetryMax}), waiting ${(wait / 1000).toFixed(0)}s...`,
+          `network error on round ${roundIndex + 1} (retry ${retryDecision.retryCount}/${networkRetryMax}), waiting ${(retryDecision.waitMs / 1000).toFixed(0)}s...`,
           error,
         );
-        onProgress(`RPC offline - retry ${networkRetries} in ${(wait / 1000).toFixed(0)}s...`);
-        await delay(wait);
+        loopState = await applyTransitionAction({
+          action: networkErrorDecision.action,
+          loopState,
+          runtime,
+        });
 
-        const currentClient = readClient();
-        if (currentClient) {
-          const recoveredRound = await recoverRoundAfterRpcError({
-            actorAddress,
-            betStr,
-            blocks,
-            client: currentClient,
-            completeAutoMineRound,
-            onAnnounceConfirmed: () => onAutoMineBetConfirmed?.(),
-            onSetSelection: (tiles, epoch) => {
-              setSelection(tiles, epoch);
-            },
-            onSetProgress: onProgress,
-            roundCandidateEpochs,
+        if (activeRoundCommand) {
+          const recoveredRound = await adapter.recoverRoundCommand({
+            command: activeRoundCommand,
             roundIndex,
             rounds,
-            roundTilesToBet,
           });
-          if (recoveredRound.kind === "recovered") {
-            lastPlacedEpoch = recoveredRound.placedEpoch;
-            pendingBetRef.current = null;
-            networkRetries = 0;
+          const recoveryDecision = planAutoMineRecoveryTransition(recoveredRound);
+          if (recoveryDecision.kind === "confirmed") {
+            if (recoveryDecision.commandsBefore?.length) {
+              await runtime.runCommands(recoveryDecision.commandsBefore);
+            }
+            loopState = await handleConfirmedRoundOutcome({
+              loopState,
+              outcome: recoveryDecision.outcome,
+              roundIndex,
+              runtime,
+              tilesToBet: activeRoundCommand.tilesToBet,
+            });
             continue;
           }
         }
 
-        roundIndex -= 1;
         continue;
       }
       throw error;
     }
   }
 
-  if (autoMineActive()) {
-    stopReason = "completed";
-    onProgress(`Completed ${rounds}/${rounds} rounds`);
-    await delay(1500);
+  if (loopState.stopReason === "unknown" && loopState.roundIndex >= rounds) {
+    loopState = await applyTransitionAction({
+      action: planAutoMineLoopCompletionTransition().action,
+      loopState,
+      runtime,
+    });
   }
 
-  log.info("AutoMine", `loop finished | reason=${stopReason}`);
-  return { stopReason };
+  log.info("AutoMine", `loop finished | reason=${loopState.stopReason}`);
+  return { stopReason: loopState.stopReason };
 }

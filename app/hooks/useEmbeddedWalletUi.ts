@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export function useEmbeddedWalletUi(embeddedWalletAddress: string | null) {
   const [embeddedAddressCopied, setEmbeddedAddressCopied] = useState(false);
@@ -31,8 +31,11 @@ export function useEmbeddedWalletUi(embeddedWalletAddress: string | null) {
     }
   }, [embeddedWalletAddress]);
 
-  return {
-    embeddedAddressCopied,
-    handleCopyEmbeddedAddress,
-  };
+  return useMemo(
+    () => ({
+      embeddedAddressCopied,
+      handleCopyEmbeddedAddress,
+    }),
+    [embeddedAddressCopied, handleCopyEmbeddedAddress],
+  );
 }

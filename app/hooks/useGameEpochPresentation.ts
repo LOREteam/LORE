@@ -89,16 +89,19 @@ export function useGameRevealState({
       !isRevealing &&
       !revealIntervalRef.current
     ) {
-      const epochGap = actualCurrentEpoch - visualEpochBigInt;
-      if (epochGap > 1n) {
-        setVisualEpoch(actualCurrentEpoch.toString());
-        setLockedGridEpoch(null);
-        return;
-      }
-
+      // V8 atomic resolve: the previous epoch is finalized in the same tx
+      // that advances `currentEpoch`, so its winningTile/isResolved are
+      // already on-chain. Immediately advance `visualEpoch` so the header
+      // (epoch number + timer) reflects the new epoch, but keep the GRID
+      // locked on the previous epoch for a brief window (≤ MAX_REVEAL_DURATION_MS,
+      // typically MIN_WINNER_DISPLAY_MS once the resolved data refetches)
+      // so the winning-tile animation can play. `isRevealing` is scoped to
+      // the grid — betting is never gated on it, and the header does not
+      // show a REVEAL/ANALYZING state (that prop is hard-wired off).
       revealTargetEpochRef.current = actualCurrentEpoch.toString();
       revealStartTimeRef.current = Date.now();
       winnerFoundTimeRef.current = 0;
+      setVisualEpoch(actualCurrentEpoch.toString());
       setLockedGridEpoch(visualEpoch);
       setIsRevealing(true);
       refetchGridEpochDataRef.current();
@@ -107,7 +110,7 @@ export function useGameRevealState({
       }, 100);
 
       if (revealSafetyRef.current) clearTimeout(revealSafetyRef.current);
-      revealSafetyRef.current = setTimeout(forceExitReveal, MAX_REVEAL_DURATION_MS + 3000);
+      revealSafetyRef.current = setTimeout(forceExitReveal, MAX_REVEAL_DURATION_MS + 500);
 
       revealIntervalRef.current = setInterval(() => {
         const elapsed = Date.now() - revealStartTimeRef.current;
@@ -123,7 +126,7 @@ export function useGameRevealState({
         if (elapsed >= MAX_REVEAL_DURATION_MS) {
           forceExitReveal();
         }
-      }, 200);
+      }, 150);
     }
   }, [
     actualCurrentEpoch,
@@ -162,7 +165,7 @@ export function useGameRevealState({
   // Safety valve: if the grid stays locked for 8+ seconds without a reveal
   // starting, force-clear the lock so users can bet again. This handles
   // edge cases where auto-resolve succeeds but wagmi cache doesn't update.
-  const LOCKED_SAFETY_TIMEOUT_MS = 8_000;
+  const LOCKED_SAFETY_TIMEOUT_MS = 15_000;
   useEffect(() => {
     if (!lockedGridEpoch || isRevealing) return;
     const safetyTimer = setTimeout(() => {

@@ -6,6 +6,9 @@ import './lib/installBigIntJson';
 import Providers from './providers';
 import { ErrorCatcher } from './components/ErrorCatcher';
 import { MaintenanceGate } from './components/MaintenanceGate';
+import { assertProductionRuntimeConfig } from '../config/productionRuntime';
+
+assertProductionRuntimeConfig("web");
 
 const interDigits = Inter({
   subsets: ['latin'],

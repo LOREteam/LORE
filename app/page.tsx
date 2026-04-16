@@ -5,10 +5,15 @@ import {
   loadLiveStateSnapshot,
   type LiveStatePayload,
 } from "./api/live-state/shared";
-import { getRecentWinsPayloadForRender } from "./api/recent-wins/data";
+import {
+  getRecentWinsPayloadForRender,
+  loadRecentWinsSnapshot,
+  saveRecentWinsSnapshot,
+} from "./api/recent-wins/data";
 
 const PAGE_LIVE_STATE_CACHE_MS = 4_000;
 const PAGE_LIVE_STATE_RENDER_WAIT_MS = 1_200;
+const PAGE_RECENT_WINS_RENDER_WAIT_MS = 1_200;
 
 type CachedInitialLiveState = {
   payload: LiveStatePayload | null;
@@ -93,9 +98,30 @@ async function getInitialLiveState() {
   return payload;
 }
 
+async function getInitialRecentWins() {
+  const snapshot = loadRecentWinsSnapshot();
+  if (snapshot) {
+    void getRecentWinsPayloadForRender()
+      .then((payload) => {
+        saveRecentWinsSnapshot(payload);
+        return payload;
+      })
+      .catch(() => undefined);
+    return snapshot.wins;
+  }
+
+  const payload = await withTimeout(getRecentWinsPayloadForRender(), PAGE_RECENT_WINS_RENDER_WAIT_MS);
+  if (payload) {
+    saveRecentWinsSnapshot(payload);
+    return payload.wins;
+  }
+
+  return [];
+}
+
 export default async function Page() {
   const initialLiveState = await getInitialLiveState();
-  const initialRecentWins = (await getRecentWinsPayloadForRender()).wins;
+  const initialRecentWins = await getInitialRecentWins();
   return (
     <LineaOreClient
       initialLiveState={initialLiveState}

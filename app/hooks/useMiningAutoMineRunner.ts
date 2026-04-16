@@ -7,22 +7,42 @@ import { log } from "../lib/logger";
 import { delay } from "../lib/utils";
 import {
   SESSION_REFRESH_INTERVAL_MS,
-  clearSession,
   getSecureRandomNumber,
   isInsufficientFundsError,
-  saveSession,
 } from "./useMining.shared";
+import type { AutoMineDiagnosticsStopReason } from "../lib/mining/autoMineDiagnostics";
 import {
   acquireTabLock,
   recoverOrphanedTabLock,
-  releaseTabLock,
   renewTabLock,
 } from "./useMiningTabLock";
 import { getAutoMineUserMessage } from "./useMiningAutoMineError";
 import { runAutoMineLoop } from "./useMiningAutoMineLoop";
-import { prepareAutoMineRunSetup } from "./useMiningRunSetup";
-import type { GasOverrides, RunningParams } from "./useMining.types";
+import { prepareAutoMineRunSetup } from "../lib/mining/autoMineRunSetup";
+import { createAutoMineLoopAdapter } from "../lib/mining/autoMineLoopAdapter";
+import { createAutoMineLoopRuntime } from "../lib/mining/autoMineLoopRuntime";
+import { writeAutoMineDiagnostics } from "../lib/mining/autoMineDiagnostics";
+import type { AutoMinePhase, GasOverrides, RunningParams } from "./useMining.types";
 import type { PendingApproveState, PendingBetState, ReceiptState } from "./useMining.stateTypes";
+import type { createAutoMineRuntimeController } from "../lib/mining/autoMineRuntimeController";
+
+declare global {
+  interface Window {
+    __loreAutoMineRuntimeActive?: boolean;
+  }
+}
+
+function claimInTabAutoMineRuntime(): boolean {
+  if (typeof window === "undefined") return true;
+  if (window.__loreAutoMineRuntimeActive) return false;
+  window.__loreAutoMineRuntimeActive = true;
+  return true;
+}
+
+function releaseInTabAutoMineRuntime() {
+  if (typeof window === "undefined") return;
+  window.__loreAutoMineRuntimeActive = false;
+}
 
 type RunningParamsSetter = Dispatch<SetStateAction<RunningParams>>;
 type BooleanSetter = Dispatch<SetStateAction<boolean>>;
@@ -60,6 +80,7 @@ interface UseMiningAutoMineRunnerOptions {
   minGasApprove: bigint;
   networkInitialMs: number;
   networkRetryMax: number;
+  runtimeController: ReturnType<typeof createAutoMineRuntimeController>;
   onAutoMineBetConfirmedRef: MutableRefObject<(() => void) | undefined>;
   pendingApproveRef: MutableRefObject<PendingApproveState | null>;
   pendingBetRef: MutableRefObject<PendingBetState | null>;
@@ -86,6 +107,16 @@ interface UseMiningAutoMineRunnerOptions {
   setAutoMineProgress: StringSetter;
   setIsAutoMining: BooleanSetter;
   setRunningParams: RunningParamsSetter;
+  activateAutoMineUi: (options: {
+    phase: Extract<AutoMinePhase, "starting" | "restoring" | "running">;
+    params: NonNullable<RunningParams>;
+    progress?: string | null;
+  }) => void;
+  deactivateAutoMineUi: (options?: {
+    phase?: Extract<AutoMinePhase, "idle" | "retry-wait" | "session-expired">;
+    progress?: string | null;
+  }) => void;
+  setAutoMinePhase: (phase: AutoMinePhase) => void;
   setSelectedTiles: NumberArraySetter;
   setSelectedTilesEpoch: NullableStringSetter;
   silentSendRef: MutableRefObject<unknown>;
@@ -114,6 +145,7 @@ export function useMiningAutoMineRunner({
   minGasApprove,
   networkInitialMs,
   networkRetryMax,
+  runtimeController,
   onAutoMineBetConfirmedRef,
   pendingApproveRef,
   pendingBetRef,
@@ -128,6 +160,9 @@ export function useMiningAutoMineRunner({
   setAutoMineProgress,
   setIsAutoMining,
   setRunningParams,
+  activateAutoMineUi,
+  deactivateAutoMineUi,
+  setAutoMinePhase,
   setSelectedTiles,
   setSelectedTilesEpoch,
   silentSendRef,
@@ -145,10 +180,24 @@ export function useMiningAutoMineRunner({
     }) => {
       const { betStr, blocks, rounds, startRoundIndex = 0, lastPlacedEpoch: restoredLastEpoch = null } = params;
       if (autoMineRef.current) return;
+      if (!claimInTabAutoMineRuntime()) {
+        log.warn("AutoMine", "existing in-tab runtime still active - deferring start");
+        autoResumeRequestedRef.current = true;
+        deactivateAutoMineUi({
+          phase: "retry-wait",
+          progress: "Auto-miner is still recovering in this tab...",
+        });
+        return;
+      }
 
       let startedRun = false;
       let stopReason = "unknown";
       try {
+        activateAutoMineUi({
+          phase: startRoundIndex > 0 ? "restoring" : "starting",
+          params: { betStr, blocks, rounds },
+        });
+
         const preparedRun = await prepareAutoMineRunSetup({
           acquireTabLock,
           actorAddress: getPreferredActorAddress(),
@@ -170,6 +219,7 @@ export function useMiningAutoMineRunner({
           maxNetworkMs,
           minGasApprove,
           networkInitialMs,
+          onClearPersistedSession: () => runtimeController.clearPersistedRun(),
           onProgress: setAutoMineProgress,
           pendingApproveRef,
           publicClient: publicClientRef.current,
@@ -195,15 +245,33 @@ export function useMiningAutoMineRunner({
           return;
         }
         const { actorAddress, singleAmountRaw } = preparedRun;
-
-        const loopResult = await runAutoMineLoop({
+        setAutoMinePhase("running");
+        const loopRuntime = createAutoMineLoopRuntime({
+          betStr,
+          blocks,
+          completeAutoMineRound,
+          onAutoMineBetConfirmed: () => onAutoMineBetConfirmedRef.current?.(),
+          onProgress: setAutoMineProgress,
+          onRefetchEpoch: async () => {
+            await ensurePreferredWalletRef.current?.();
+            refetchEpochRef.current?.();
+          },
+          onSaveSession: (payload) => runtimeController.persistCheckpoint(payload),
+          pendingBetRef,
+          readRefreshSession: () => refreshSessionRef.current,
+          renewLock: renewTabLock,
+          rounds,
+          setSelection: (tiles, epoch) => {
+            setSelectedTiles(tiles);
+            setSelectedTilesEpoch(epoch);
+          },
+        });
+        const loopAdapter = createAutoMineLoopAdapter({
           actorAddress: actorAddress as `0x${string}`,
           autoMineActive: () => autoMineRef.current,
           betPendingGraceMs,
           betPendingStaleMs,
-          betStr,
           blocks,
-          completeAutoMineRound,
           forceReplacePendingNonceGap,
           gasBumpBase,
           gasBumpReplacementStep,
@@ -211,44 +279,37 @@ export function useMiningAutoMineRunner({
           maxBetAttempts,
           networkBackoffInitialMs: networkInitialMs,
           networkBackoffMaxMs: maxNetworkMs,
-          networkRetryMax,
-          onAutoMineBetConfirmed: () => onAutoMineBetConfirmedRef.current?.(),
-          onClearSelection: () => {
-            setSelectedTiles([]);
-            setSelectedTilesEpoch(null);
-          },
           onProgress: setAutoMineProgress,
-          onRefetchEpoch: async () => {
-            await ensurePreferredWalletRef.current?.();
-            refetchEpochRef.current?.();
-          },
-          onSaveSession: saveSession,
           pendingBetRef,
           placeBets,
           placeBetsSilent,
           placeBets7702,
           readClient: () => publicClientRef.current,
-          readRefreshSession: () => refreshSessionRef.current,
           readSilentSend: () => silentSendRef.current,
           renewLock: renewTabLock,
-          restoredLastEpoch,
           rounds,
           secureRandom: getSecureRandomNumber,
-          sessionRefreshIntervalMs: SESSION_REFRESH_INTERVAL_MS,
-          setSelection: (tiles, epoch) => {
-            setSelectedTiles(tiles);
-            setSelectedTilesEpoch(epoch);
-          },
           singleAmountRaw,
+        });
+
+        const loopResult = await runAutoMineLoop({
+          adapter: loopAdapter,
+          autoMineActive: () => autoMineRef.current,
+          blocks,
+          networkBackoffInitialMs: networkInitialMs,
+          networkBackoffMaxMs: maxNetworkMs,
+          networkRetryMax,
+          restoredLastEpoch,
+          rounds,
+          runtime: loopRuntime,
+          sessionRefreshIntervalMs: SESSION_REFRESH_INTERVAL_MS,
           startRoundIndex,
         });
         stopReason = loopResult.stopReason;
-        if (stopReason === "completed" || stopReason === "insufficient-balance") {
-          clearSession();
-        }
       } catch (err) {
         stopReason = "error";
-        const { sessionExpired, networkDown, walletUnavailable, userMessage } = getAutoMineUserMessage(err);
+        const { diagnosticsErrorKind, rawMessage, sessionExpired, networkDown, walletUnavailable, userMessage } =
+          getAutoMineUserMessage(err);
         const shouldAutoResume = !sessionExpired && (networkDown || walletUnavailable);
         autoResumeRequestedRef.current = shouldAutoResume;
         if (isInsufficientFundsError(err)) {
@@ -260,24 +321,45 @@ export function useMiningAutoMineRunner({
         } else {
           log.error("AutoMine", "loop error", err);
         }
-        setAutoMineProgress(userMessage);
         if (sessionExpired) {
           sessionExpiredErrorRef.current = true;
         }
+        writeAutoMineDiagnostics({
+          lastErrorKind: diagnosticsErrorKind,
+          lastErrorMessage: userMessage,
+          lastErrorRawMessage: rawMessage,
+          lastStopReason: sessionExpired ? "session-expired" : shouldAutoResume ? "retry-wait" : "error",
+        });
         autoMineRef.current = false;
-        if (!sessionExpired && !networkDown && !walletUnavailable) clearSession();
+        if (!sessionExpired && !networkDown && !walletUnavailable) {
+          runtimeController.clearPersistedRun();
+        }
+        if (sessionExpired) {
+          deactivateAutoMineUi({ phase: "session-expired", progress: userMessage });
+        } else if (shouldAutoResume) {
+          deactivateAutoMineUi({ phase: "retry-wait", progress: userMessage });
+        } else {
+          deactivateAutoMineUi({ phase: "idle", progress: userMessage });
+        }
         await delay(isInsufficientFundsError(err) ? 2000 : 8000);
       } finally {
+        releaseInTabAutoMineRuntime();
         if (!startedRun) return;
         log.info("AutoMine", "stopped", { reason: stopReason });
-        setIsAutoMining(false);
+        writeAutoMineDiagnostics({
+          lastStopReason:
+            stopReason === "unknown"
+              ? null
+              : (stopReason as AutoMineDiagnosticsStopReason),
+        });
         autoMineRef.current = false;
-        setRunningParams(null);
         setSelectedTiles([]);
         setSelectedTilesEpoch(null);
-        if (!sessionExpiredErrorRef.current && !autoResumeRequestedRef.current) setAutoMineProgress(null);
+        if (!sessionExpiredErrorRef.current && !autoResumeRequestedRef.current) {
+          deactivateAutoMineUi();
+        }
         sessionExpiredErrorRef.current = false;
-        releaseTabLock();
+        runtimeController.finalizeRun(stopReason);
       }
     },
     [
@@ -301,6 +383,7 @@ export function useMiningAutoMineRunner({
       minGasApprove,
       networkInitialMs,
       networkRetryMax,
+      runtimeController,
       onAutoMineBetConfirmedRef,
       pendingApproveRef,
       pendingBetRef,
@@ -315,6 +398,9 @@ export function useMiningAutoMineRunner({
       setAutoMineProgress,
       setIsAutoMining,
       setRunningParams,
+      activateAutoMineUi,
+      deactivateAutoMineUi,
+      setAutoMinePhase,
       setSelectedTiles,
       setSelectedTilesEpoch,
       silentSendRef,

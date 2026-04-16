@@ -52,7 +52,7 @@ export async function PUT(request: NextRequest) {
       name: typeof body.name === "string" ? body.name.trim().slice(0, MAX_NAME_LENGTH) : null,
       avatar: sanitizePresetChatAvatar(body.avatar),
       customAvatar: sanitizeCustomChatAvatar(body.customAvatar, MAX_AVATAR_LENGTH),
-      updatedAt: typeof body.updatedAt === "number" ? body.updatedAt : Date.now(),
+      updatedAt: Date.now(),
     };
 
     upsertChatProfile(walletAddress, {
@@ -61,7 +61,7 @@ export async function PUT(request: NextRequest) {
       customAvatar: payload.customAvatar,
       updatedAt: payload.updatedAt,
     });
-    chatProfileRouteCache.clear();
+    chatProfileRouteCache.invalidate(`wallet:${walletAddress}`);
 
     return applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });
   } catch (error) {
@@ -81,6 +81,15 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const walletAddress = searchParams.get("walletAddress");
+    const walletAddressesParam = searchParams.get("walletAddresses");
+    const requestedAddresses = walletAddressesParam
+      ? [...new Set(
+          walletAddressesParam
+            .split(",")
+            .map((value) => value.trim().toLowerCase())
+            .filter(Boolean),
+        )].slice(0, 100)
+      : [];
     const cacheKey = walletAddress ? `wallet:${walletAddress.toLowerCase()}` : "all";
     const cached = chatProfileRouteCache.getFresh(cacheKey);
     if (cached) {
@@ -95,6 +104,22 @@ export async function GET(request: NextRequest) {
         profile: getChatProfile(walletAddress.toLowerCase()),
       };
       chatProfileRouteCache.set(cacheKey, payload, CHAT_PROFILE_CACHE_MS);
+      return applyNoStoreHeaders(NextResponse.json(payload));
+    }
+
+    if (requestedAddresses.length > 0) {
+      if (!requestedAddresses.every((value) => isAddress(value))) {
+        return applyNoStoreHeaders(NextResponse.json({ error: "Invalid walletAddresses" }, { status: 400 }));
+      }
+      const normalizedKey = `many:${requestedAddresses.slice().sort().join(",")}`;
+      const manyCached = chatProfileRouteCache.getFresh(normalizedKey);
+      if (manyCached) {
+        return applyNoStoreHeaders(NextResponse.json(manyCached));
+      }
+      const payload = {
+        profiles: getChatProfiles(requestedAddresses),
+      };
+      chatProfileRouteCache.set(normalizedKey, payload, CHAT_PROFILE_CACHE_MS);
       return applyNoStoreHeaders(NextResponse.json(payload));
     }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type NotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 type PlayBetFn = () => void;
@@ -41,7 +41,8 @@ export function useMiningGuards({
   isAutoMining,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   isAnalyzing: _isAnalyzing,
-  isRevealing,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  isRevealing: _isRevealing,
   liveStateReady,
   selectedTiles,
   minEthForGas,
@@ -55,9 +56,11 @@ export function useMiningGuards({
   const [lastBet, setLastBet] = useState<LastBet | null>(null);
   const [balanceWarningDismissed, setBalanceWarningDismissed] = useState(false);
   const hasPlayableWallet = Boolean(connectedWalletAddress || embeddedWalletAddress);
-  // Allow betting even during the analyzing/resolving window — only block
-  // while the reveal animation is playing or live state hasn't loaded yet.
-  const bettingLocked = !liveStateReady || isRevealing;
+  // V8 atomic resolve: the previous epoch is finalized in the same tx that
+  // advances `currentEpoch`, so the winning tile is already on-chain when
+  // the new epoch starts. The grid-reveal animation is non-blocking — never
+  // gate betting on it. Only gate on liveState readiness.
+  const bettingLocked = !liveStateReady;
 
   useEffect(() => {
     try {
@@ -160,14 +163,26 @@ export function useMiningGuards({
     setBalanceWarningDismissed(true);
   }, []);
 
-  return {
-    lastBet,
-    lowEthBalance,
-    lowTokenBalance,
-    balanceWarningDismissed,
-    dismissBalanceWarning,
-    handleManualMineWithGuard,
-    handleRepeatLastBet,
-    handleAutoMineWithGuard,
-  };
+  return useMemo(
+    () => ({
+      lastBet,
+      lowEthBalance,
+      lowTokenBalance,
+      balanceWarningDismissed,
+      dismissBalanceWarning,
+      handleManualMineWithGuard,
+      handleRepeatLastBet,
+      handleAutoMineWithGuard,
+    }),
+    [
+      balanceWarningDismissed,
+      dismissBalanceWarning,
+      handleAutoMineWithGuard,
+      handleManualMineWithGuard,
+      handleRepeatLastBet,
+      lastBet,
+      lowEthBalance,
+      lowTokenBalance,
+    ],
+  );
 }

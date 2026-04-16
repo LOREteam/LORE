@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { APP_CHAIN_ID } from "../lib/constants";
 import { useMiningRuntimeState } from "./useMiningRuntimeState";
@@ -29,12 +30,16 @@ export function useMining({
   const {
     isPending,
     setIsPending,
+    autoMinePhase,
     isAutoMining,
     setIsAutoMining,
     autoMineProgress,
     setAutoMineProgress,
     runningParams,
     setRunningParams,
+    activateAutoMineUi,
+    deactivateAutoMineUi,
+    setAutoMinePhase,
     hasPreferredActor,
     getActorAddress,
     getPreferredActorAddress,
@@ -115,24 +120,45 @@ export function useMining({
     refetchGridEpochDataRef,
     onAutoMineBetConfirmedRef,
     notifyRef,
+    autoMinePhase,
     isAutoMining,
     setIsPending,
     setIsAutoMining,
     setAutoMineProgress,
     setRunningParams,
+    activateAutoMineUi,
+    deactivateAutoMineUi,
+    setAutoMinePhase,
   });
 
-  return {
-    isPending,
-    selectedTiles,
-    selectedTilesEpoch,
-    isAutoMining,
-    autoMineProgress,
-    runningParams,
-    handleManualMine,
-    handleDirectMine,
-    handleAutoMineToggle,
-    handleTileClick,
-    setTiles,
-  };
+  return useMemo(
+    () => ({
+      isPending,
+      selectedTiles,
+      selectedTilesEpoch,
+      autoMinePhase,
+      isAutoMining,
+      autoMineProgress,
+      runningParams,
+      handleManualMine,
+      handleDirectMine,
+      handleAutoMineToggle,
+      handleTileClick,
+      setTiles,
+    }),
+    [
+      isPending,
+      selectedTiles,
+      selectedTilesEpoch,
+      autoMinePhase,
+      isAutoMining,
+      autoMineProgress,
+      runningParams,
+      handleManualMine,
+      handleDirectMine,
+      handleAutoMineToggle,
+      handleTileClick,
+      setTiles,
+    ],
+  );
 }

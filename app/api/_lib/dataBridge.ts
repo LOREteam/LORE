@@ -28,30 +28,21 @@ export const publicClient = createPublicClient({
   chain: APP_CHAIN,
   transport: fallback(
     SERVER_RPC_URLS.map((url) => http(url, { timeout: 20_000, retryCount: 1 })),
-    { rank: false },
+    { rank: true },
   ),
 });
 
-export async function fetchFirebaseWithOrderFallback<T>(path: string, orderByField: string, limitToLast?: number) {
-  void orderByField;
-  try {
-    const data = readJsonPath<T>(path, limitToLast);
-    return { ok: true as const, status: 200, data };
-  } catch {
-    return { ok: false as const, status: 500, data: null as T | null };
-  }
-}
-
-export async function fetchFirebaseJson<T>(path: string) {
+export async function fetchStorageJson<T>(path: string) {
   try {
     const data = readJsonPath<T>(path);
     return { ok: true as const, status: 200, data };
-  } catch {
+  } catch (err) {
+    console.warn(`[api] fetchStorageJson failed for ${path}:`, err instanceof Error ? err.message : err);
     return { ok: false as const, status: 500, data: null as T | null };
   }
 }
 
-export async function patchFirebase(path: string, payload: Record<string, unknown>) {
+export async function patchStorage(path: string, payload: Record<string, unknown>) {
   try {
     patchJsonPath(path, payload);
   } catch (error) {

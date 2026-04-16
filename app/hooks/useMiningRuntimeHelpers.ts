@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import type { MutableRefObject } from "react";
 import type { PublicClient } from "viem";
 import {
@@ -232,12 +232,22 @@ export function useMiningRuntimeHelpers({
     }), "contract.currentEpoch()");
   }, [assertContractTokenMatches, publicClientRef]);
 
-  return {
-    getBumpedFees,
-    getUrgentFees,
-    getApproveFees,
-    assertNativeGasBalance,
-    estimateGas,
-    ensureContractPreflight,
-  };
+  return useMemo(
+    () => ({
+      getBumpedFees,
+      getUrgentFees,
+      getApproveFees,
+      assertNativeGasBalance,
+      estimateGas,
+      ensureContractPreflight,
+    }),
+    [
+      assertNativeGasBalance,
+      ensureContractPreflight,
+      estimateGas,
+      getApproveFees,
+      getBumpedFees,
+      getUrgentFees,
+    ],
+  );
 }

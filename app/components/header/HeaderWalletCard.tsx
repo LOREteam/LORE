@@ -69,7 +69,7 @@ export function HeaderWalletCard({
     : null;
 
   return (
-    <div className="min-[900px]:col-span-3 min-[900px]:h-[90px] min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-[#0d0d1a] shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden animate-slide-up" style={{ animationDelay: "0.15s" }}>
+    <div id="header-wallet-card" className="min-[900px]:col-span-3 min-[900px]:h-[90px] min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-[#0d0d1a] shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden animate-slide-up" style={{ animationDelay: "0.15s" }}>
       {!authenticated ? (
         <UiButton
           onClick={onLogin}
@@ -95,7 +95,7 @@ export function HeaderWalletCard({
             <div className="flex items-center gap-1">
               <button
                 onClick={onCopyEmbeddedAddress}
-                className={embeddedAddressCopied ? "text-[11px] font-mono font-bold text-emerald-300 drop-shadow-[0_0_10px_rgba(52,211,153,0.3)] leading-tight transition-all duration-200 flex items-center gap-1 group scale-[1.03] animate-pulse" : "text-[11px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] leading-tight hover:text-emerald-300 transition-colors flex items-center gap-1 group"}
+                className={embeddedAddressCopied ? "text-[11px] font-mono font-bold text-emerald-300 drop-shadow-[0_0_10px_rgba(52,211,153,0.3)] leading-tight transition-colors duration-200 flex items-center gap-1 group animate-pulse" : "text-[11px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] leading-tight hover:text-emerald-300 transition-colors flex items-center gap-1 group"}
                 title={embeddedAddressCopied ? "Copied" : "Copy address"}
               >
                 {embeddedAddressCopied ? "Copied" : shortenAddress(embeddedWalletAddress)}

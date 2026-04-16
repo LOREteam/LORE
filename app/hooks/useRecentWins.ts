@@ -48,6 +48,23 @@ function normalizeWins(rows: Array<{
     .slice(0, MAX_WINS);
 }
 
+function recentWinsEqual(left: RecentWin[], right: RecentWin[]) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (
+      a.epoch !== b.epoch ||
+      a.user !== b.user ||
+      a.amount !== b.amount ||
+      a.amountRaw !== b.amountRaw
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function loadCache(): { wins: RecentWin[]; savedAt: number | null } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -93,6 +110,11 @@ function saveCache(wins: RecentWin[]) {
 }
 
 export function useRecentWins(initialWins: RecentWin[] = []) {
+  const initialCacheRef = useRef<{ wins: RecentWin[]; savedAt: number | null } | null>(null);
+  if (initialCacheRef.current === null) {
+    initialCacheRef.current = loadCache();
+  }
+
   const [wins, setWins] = useState<RecentWin[]>(() => initialWins);
   const [isPageVisible, setIsPageVisible] = useState(() =>
     typeof document === "undefined" ? true : document.visibilityState === "visible",
@@ -101,8 +123,9 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
   const initializedRef = useRef(false);
   const warnAtRef = useRef(0);
   const mountedRef = useRef(false);
-  const cacheSavedAtRef = useRef<number | null>(null);
-  const cachedWinsCountRef = useRef(0);
+  const cacheSavedAtRef = useRef<number | null>(initialCacheRef.current?.savedAt ?? null);
+  const cachedWinsCountRef = useRef(initialCacheRef.current?.wins.length ?? 0);
+  const winsRef = useRef<RecentWin[]>(initialWins);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -125,13 +148,17 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
   useEffect(() => {
     if (initializedRef.current) return;
     initializedRef.current = true;
-    const cached = loadCache();
+    const cached = initialCacheRef.current ?? { wins: [], savedAt: null };
     cacheSavedAtRef.current = cached.savedAt;
     cachedWinsCountRef.current = cached.wins.length;
     if (mountedRef.current) {
       setWins(cached.wins.length > 0 ? cached.wins : initialWins);
     }
   }, [initialWins]);
+
+  useEffect(() => {
+    winsRef.current = wins;
+  }, [wins]);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -157,10 +184,13 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
       }
 
       const nextWins = normalizeWins(payload.wins ?? []);
+      const changed = !recentWinsEqual(winsRef.current, nextWins);
 
       if (mountedRef.current && !controller.signal.aborted) {
-        setWins(nextWins);
-        saveCache(nextWins);
+        if (changed) {
+          setWins(nextWins);
+          saveCache(nextWins);
+        }
         cacheSavedAtRef.current = Date.now();
       }
     } catch (error) {

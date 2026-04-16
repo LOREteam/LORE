@@ -1,5 +1,6 @@
 "use client";
 
+import { log } from "../lib/logger";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { usePublicClient, useAccount } from "wagmi";
 import { encodeFunctionData } from "viem";
@@ -10,6 +11,7 @@ import { isUserRejection, delay } from "../lib/utils";
 type EpochTuple = readonly [bigint, bigint, bigint, boolean];
 
 const DEEP_CHUNK = BigInt(200);
+const MAX_BATCH_CLAIM_EPOCHS = 128;
 const CLAIM_GAS_FALLBACK = 200_000n;
 const CLAIM_GAS_BUFFER = 20_000n;
 const CLAIM_GAS_HEADROOM_BPS = 12_000n;
@@ -26,6 +28,14 @@ function formatClaimError(err: unknown): string {
     return "No reward is available for this epoch.";
   }
   return "Claim failed.";
+}
+
+function chunkEpochIds(epochIds: string[], size: number) {
+  const chunks: string[][] = [];
+  for (let index = 0; index < epochIds.length; index += size) {
+    chunks.push(epochIds.slice(index, index + size));
+  }
+  return chunks;
 }
 
 export function useDeepRewardScan(
@@ -280,7 +290,7 @@ export function useDeepRewardScan(
       if (scanAddressRef.current === normalizedAddress) {
         setProgress("Error during scan");
       }
-      console.error("[DeepScan]", e instanceof Error ? e.message : String(e));
+      log.warn("DeepScan", "scan error", { message: e instanceof Error ? e.message : String(e) });
     } finally {
       if (scanAddressRef.current === normalizedAddress) {
         setScanning(false);
@@ -346,7 +356,10 @@ export function useDeepRewardScan(
         }
       };
 
-      const queue: string[][] = [all.map((win) => win.epoch)];
+      const queue: string[][] = chunkEpochIds(
+        all.map((win) => win.epoch),
+        MAX_BATCH_CLAIM_EPOCHS,
+      );
 
       while (queue.length > 0) {
         const batch = queue.shift();

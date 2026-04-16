@@ -8,21 +8,24 @@ import { useChatProfile } from "./useChatProfile";
 interface UseChatWidgetRuntimeOptions {
   walletAddress: string | null;
   onOpenChange?: (open: boolean) => void;
+  open?: boolean;
 }
 
 export function useChatWidgetRuntime({
   walletAddress,
   onOpenChange,
+  open: controlledOpen,
 }: UseChatWidgetRuntimeOptions) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const [portalReady, setPortalReady] = useState(false);
   const [mountTarget, setMountTarget] = useState<HTMLElement | null>(null);
   const lastReadOthersRef = useRef(0);
   const initializedRef = useRef(false);
   const chatAuth = useChatAuth(walletAddress, "Verify wallet for chat");
+  const open = controlledOpen ?? uncontrolledOpen;
 
-  const { messages, sendMessage, connected, authReady, ensureChatAuth } = useChat(walletAddress, { open, auth: chatAuth });
+  const { messages, sendMessage, connected, authReady, ensureChatAuth, sendCooldownRemainingMs, isSending } = useChat(walletAddress, { open, auth: chatAuth });
   const { profile, displayName, effectiveAvatar, updateProfile } = useChatProfile(walletAddress, chatAuth);
 
   const myAddr = walletAddress?.toLowerCase() ?? "";
@@ -37,12 +40,12 @@ export function useChatWidgetRuntime({
 
   useEffect(() => {
     if (!portalReady || !open) {
-      setMountTarget(null);
+      setMountTarget((current) => (current === null ? current : null));
       return;
     }
 
-    const slot = document.getElementById("chat-panel-slot");
-    setMountTarget(slot ?? document.body);
+    const nextTarget = document.getElementById("chat-panel-slot") ?? document.body;
+    setMountTarget((current) => (current === nextTarget ? current : nextTarget));
   }, [open, portalReady]);
 
   useEffect(() => {
@@ -68,38 +71,61 @@ export function useChatWidgetRuntime({
 
   const handleToggle = useCallback(() => {
     const next = !open;
-    setOpen(next);
+    setUncontrolledOpen(next);
     onOpenChange?.(next);
     if (next) setUnread(0);
   }, [onOpenChange, open]);
 
   const handleClose = useCallback(() => {
-    setOpen(false);
+    setUncontrolledOpen(false);
     onOpenChange?.(false);
   }, [onOpenChange]);
 
   const handleSend = useCallback(
     (text: string, name: string | null, avatar: string | null) => {
-      sendMessage(text, name, avatar ?? effectiveAvatar);
+      return sendMessage(text, name, avatar ?? effectiveAvatar);
     },
     [effectiveAvatar, sendMessage],
   );
 
-  return {
-    open,
-    unread,
-    portalReady,
-    mountTarget,
-    messages,
-    walletAddress,
-    profile,
-    displayName,
-    connected,
-    authReady,
-    ensureChatAuth,
-    updateProfile,
-    handleToggle,
-    handleClose,
-    handleSend,
-  };
+  return useMemo(
+    () => ({
+      open,
+      unread,
+      portalReady,
+      mountTarget,
+      messages,
+      walletAddress,
+      profile,
+      displayName,
+      connected,
+      authReady,
+      ensureChatAuth,
+      sendCooldownRemainingMs,
+      isSending,
+      updateProfile,
+      handleToggle,
+      handleClose,
+      handleSend,
+    }),
+    [
+      authReady,
+      connected,
+      displayName,
+      ensureChatAuth,
+      handleClose,
+      handleSend,
+      handleToggle,
+      isSending,
+      messages,
+      mountTarget,
+      open,
+      portalReady,
+      profile,
+      sendCooldownRemainingMs,
+      unread,
+      updateProfile,
+      walletAddress,
+    ],
+  );
 }

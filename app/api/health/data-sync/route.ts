@@ -6,14 +6,19 @@ import {
   getConfiguredLineaNetwork,
 } from "../../../../config/publicConfig";
 import {
-  fetchFirebaseJson,
+  fetchStorageJson,
   parseCurrentEpoch,
   publicClient,
   CONTRACT_ADDRESS,
 } from "../../_lib/dataBridge";
+import { createRouteCache } from "../../_lib/routeCache";
 import { isAuthorizedHealthDiagnosticsRequest } from "../_lib/diagnosticsAuth";
+import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { dbPath } from "../../../../server/db";
 import { getMetaJson, getRecentRewardClaims } from "../../../../server/storage";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 const READ_ABI = parseAbi([
   "function currentEpoch() view returns (uint256)",
@@ -24,11 +29,14 @@ const LAG_WARN_BLOCKS = Number(process.env.DATA_SYNC_LAG_WARN_BLOCKS ?? String(D
 const JACKPOT_RECOVERY_BLOCK_LAG = Number(process.env.JACKPOT_RECOVERY_BLOCK_LAG ?? "256");
 const RECENT_WINS_RECOVERY_BLOCK_LAG = Number(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG ?? "256");
 const INDEXER_HEARTBEAT_STALE_MS = Number(process.env.INDEXER_HEARTBEAT_STALE_MS ?? "180000");
+const DATA_SYNC_CACHE_TTL_MS = Number(process.env.DATA_SYNC_HEALTH_CACHE_TTL_MS ?? "15000");
+const DATA_SYNC_CACHE_KEY = "default";
 const APP_NETWORK = getConfiguredLineaNetwork();
 const DEPLOY_BLOCK = getConfiguredDeployBlock(
   process.env.INDEXER_START_BLOCK ?? process.env.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK,
   APP_NETWORK,
 );
+const dataSyncHealthCache = createRouteCache<DataSyncHealthResponse>(1);
 
 type EpochRow = {
   winningTile: number;
@@ -53,10 +61,14 @@ type SyncTrendSample = {
 
 type IndexerRunStatus = {
   startedAt: number;
-  completedAt: number;
+  completedAt?: number;
+  lastHeartbeatAt?: number;
   fromBlock: string;
   toBlock: string;
   totalLogs: number;
+  currentChunk?: number;
+  totalChunks?: number;
+  lastProcessedBlock?: string;
 };
 
 type IndexerRepairStatus = {
@@ -84,8 +96,8 @@ type DataSyncHealthResponse = {
   visibility: "public" | "private";
   redacted: boolean;
   contract: {
-    currentEpoch: number;
-    headBlock: string;
+    currentEpoch: number | null;
+    headBlock: string | null;
   };
   storage: {
     currentEpochMeta: number | null;
@@ -98,22 +110,22 @@ type DataSyncHealthResponse = {
     rewardClaimsLagToIndexer: number | null;
   };
   epochs: {
-    expectedResolvedRange: string;
-    storedCount: number;
-    missingCount: number;
+    expectedResolvedRange: string | null;
+    storedCount: number | null;
+    missingCount: number | null;
     latestStoredEpoch: number | null;
     highestContiguousEpoch: number | null;
-    coveragePct: number;
-    contiguousCoveragePct: number;
+    coveragePct: number | null;
+    contiguousCoveragePct: number | null;
     missingLatest: number[];
   };
   catchUp: {
     phase: string;
-    totalBlocksToIndex: number;
-    indexedBlocksToCurrentHead: number;
-    blockProgressPct: number;
-    epochCoveragePct: number;
-    contiguousEpochCoveragePct: number;
+    totalBlocksToIndex: number | null;
+    indexedBlocksToCurrentHead: number | null;
+    blockProgressPct: number | null;
+    epochCoveragePct: number | null;
+    contiguousEpochCoveragePct: number | null;
     blockRatePerMinute: number | null;
     epochRatePerMinute: number | null;
     estimatedMinutesToHead: number | null;
@@ -125,30 +137,36 @@ type DataSyncHealthResponse = {
     }>;
   };
   jackpots: {
-    lastDailyEpoch: number;
-    lastDailyAmount: string;
-    hasLatestDailyInDb: boolean;
-    lastWeeklyEpoch: number;
-    lastWeeklyAmount: string;
-    hasLatestWeeklyInDb: boolean;
-    totalStored: number;
-    servingMode: string;
+    lastDailyEpoch: number | null;
+    lastDailyAmount: string | null;
+    hasLatestDailyInDb: boolean | null;
+    lastWeeklyEpoch: number | null;
+    lastWeeklyAmount: string | null;
+    hasLatestWeeklyInDb: boolean | null;
+    totalStored: number | null;
+    servingMode: string | null;
   };
   recentWins: {
-    totalStored: number;
+    totalStored: number | null;
     latestRewardClaimBlock: string | null;
     lagToHeadBlocks: number | null;
     lagToIndexerBlocks: number | null;
-    servingMode: string;
+    servingMode: string | null;
   };
   indexer: {
     run: {
       startedAt?: number;
       completedAt?: number;
+      lastHeartbeatAt?: number;
       fromBlock?: string | null;
       toBlock?: string | null;
       totalLogs?: number;
+      currentChunk?: number;
+      totalChunks?: number;
+      lastProcessedBlock?: string | null;
       runCompletedAgeMs: number | null;
+      runHeartbeatAgeMs: number | null;
+      active: boolean;
       stale: boolean;
     };
     repair: {
@@ -174,7 +192,7 @@ type DataSyncHealthResponse = {
   env: {
     network: string;
     dbPath: string | null;
-    deployBlock: string;
+    deployBlock: string | null;
     lagWarnBlocks: number | null;
     jackpotRecoveryBlockLag: number | null;
     recentWinsRecoveryBlockLag: number | null;
@@ -213,23 +231,87 @@ function redactHealthResponse(payload: DataSyncHealthResponse): DataSyncHealthRe
     ...payload,
     visibility: "public",
     redacted: true,
+    contract: {
+      currentEpoch: payload.contract.currentEpoch,
+      headBlock: null,
+    },
+    storage: {
+      currentEpochMeta: payload.storage.currentEpochMeta,
+      lastIndexedBlock: null,
+      repairCursorBlock: null,
+      lagBlocks: payload.storage.lagBlocks,
+      latestStoredJackpotBlock: null,
+      latestRewardClaimBlock: null,
+      rewardClaimsLagToHead: null,
+      rewardClaimsLagToIndexer: null,
+    },
+    epochs: {
+      expectedResolvedRange: null,
+      storedCount: null,
+      missingCount: payload.epochs.missingCount,
+      latestStoredEpoch: null,
+      highestContiguousEpoch: null,
+      coveragePct: payload.epochs.coveragePct,
+      contiguousCoveragePct: payload.epochs.contiguousCoveragePct,
+      missingLatest: [],
+    },
     catchUp: {
       ...payload.catchUp,
+      totalBlocksToIndex: null,
+      indexedBlocksToCurrentHead: null,
+      blockRatePerMinute: null,
+      epochRatePerMinute: null,
+      estimatedMinutesToHead: null,
       recentSamples: [],
+    },
+    jackpots: {
+      lastDailyEpoch: null,
+      lastDailyAmount: null,
+      hasLatestDailyInDb: null,
+      lastWeeklyEpoch: null,
+      lastWeeklyAmount: null,
+      hasLatestWeeklyInDb: null,
+      totalStored: null,
+      servingMode: payload.jackpots.servingMode,
+    },
+    recentWins: {
+      totalStored: null,
+      latestRewardClaimBlock: null,
+      lagToHeadBlocks: null,
+      lagToIndexerBlocks: null,
+      servingMode: payload.recentWins.servingMode,
     },
     indexer: {
       run: {
-        ...payload.indexer.run,
+        runCompletedAgeMs: payload.indexer.run.runCompletedAgeMs,
+        runHeartbeatAgeMs: payload.indexer.run.runHeartbeatAgeMs,
+        active: payload.indexer.run.active,
+        stale: payload.indexer.run.stale,
         fromBlock: null,
         toBlock: null,
+        startedAt: undefined,
+        completedAt: undefined,
+        lastHeartbeatAt: undefined,
+        totalLogs: undefined,
+        currentChunk: undefined,
+        totalChunks: undefined,
+        lastProcessedBlock: null,
       },
       repair: {
-        ...payload.indexer.repair,
+        ageMs: payload.indexer.repair.ageMs,
+        stale: payload.indexer.repair.stale,
         fromBlock: null,
         toBlock: null,
+        at: undefined,
+        repairedLogs: undefined,
       },
       reconcile: {
-        ...payload.indexer.reconcile,
+        ageMs: payload.indexer.reconcile.ageMs,
+        stale: payload.indexer.reconcile.stale,
+        at: undefined,
+        currentEpoch: undefined,
+        missingEpochs: payload.indexer.reconcile.missingEpochs,
+        repairedEpochs: undefined,
         targetEpochs: [],
       },
     },
@@ -238,187 +320,216 @@ function redactHealthResponse(payload: DataSyncHealthResponse): DataSyncHealthRe
       "Sensitive diagnostics are redacted from the public health response.",
     ],
     env: {
-      ...payload.env,
+      network: payload.env.network,
       dbPath: null,
+      deployBlock: null,
+      lagWarnBlocks: null,
+      jackpotRecoveryBlockLag: null,
+      recentWinsRecoveryBlockLag: null,
+      indexerHeartbeatStaleMs: null,
     },
   };
 }
 
-export async function GET(request: NextRequest) {
-  try {
-    const now = Date.now();
-    const [head, chainEpochRaw, jackpotInfoRaw, dbEpochMeta, dbLastIndexed, dbRepairCursor, dbEpochsRaw, dbJackpotsRaw] =
-      await Promise.all([
-        publicClient.getBlockNumber(),
-        publicClient.readContract({
-          address: CONTRACT_ADDRESS,
-          abi: READ_ABI,
-          functionName: "currentEpoch",
-        }),
-        publicClient.readContract({
-          address: CONTRACT_ADDRESS,
-          abi: READ_ABI,
-          functionName: "getJackpotInfo",
-        }),
-        fetchFirebaseJson<number>("gamedata/_meta/currentEpoch"),
-        fetchFirebaseJson<string>("gamedata/_meta/lastIndexedBlock"),
-        fetchFirebaseJson<string>("gamedata/_meta/repairCursorBlock"),
-        fetchFirebaseJson<Record<string, EpochRow>>("gamedata/epochs"),
-        fetchFirebaseJson<Record<string, JackpotRow>>("gamedata/jackpots"),
-      ]);
-    const indexerRunStatus = getMetaJson<IndexerRunStatus>("indexerRunStatus");
-    const indexerRepairStatus = getMetaJson<IndexerRepairStatus>("indexerRepairStatus");
-    const indexerReconcileStatus = getMetaJson<IndexerReconcileStatus>("indexerReconcileStatus");
-    const recentRewardClaims = getRecentRewardClaims(100);
+async function buildDataSyncHealthPayload() {
+  const now = Date.now();
+  const [head, chainEpochRaw, jackpotInfoRaw, dbEpochMeta, dbLastIndexed, dbRepairCursor, dbEpochsRaw, dbJackpotsRaw] =
+    await Promise.all([
+      publicClient.getBlockNumber(),
+      publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: READ_ABI,
+        functionName: "currentEpoch",
+      }),
+      publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: READ_ABI,
+        functionName: "getJackpotInfo",
+      }),
+      fetchStorageJson<number>("gamedata/_meta/currentEpoch"),
+      fetchStorageJson<string>("gamedata/_meta/lastIndexedBlock"),
+      fetchStorageJson<string>("gamedata/_meta/repairCursorBlock"),
+      fetchStorageJson<Record<string, EpochRow>>("gamedata/epochs"),
+      fetchStorageJson<Record<string, JackpotRow>>("gamedata/jackpots"),
+    ]);
+  const indexerRunStatus = getMetaJson<IndexerRunStatus>("indexerRunStatus");
+  const indexerRepairStatus = getMetaJson<IndexerRepairStatus>("indexerRepairStatus");
+  const indexerReconcileStatus = getMetaJson<IndexerReconcileStatus>("indexerReconcileStatus");
+  const recentRewardClaims = getRecentRewardClaims(100);
 
-    const chainCurrentEpoch = Number(chainEpochRaw);
-    const dbCurrentEpoch = parseCurrentEpoch(dbEpochMeta.data);
-    const dbLastIndexedBlock = dbLastIndexed.ok && dbLastIndexed.data ? BigInt(dbLastIndexed.data) : null;
-    const dbRepairCursorBlock = dbRepairCursor.ok && dbRepairCursor.data ? BigInt(dbRepairCursor.data) : null;
-    const lagBlocks = dbLastIndexedBlock !== null ? Number(head - dbLastIndexedBlock) : null;
+  const chainCurrentEpoch = Number(chainEpochRaw);
+  const dbCurrentEpoch = parseCurrentEpoch(dbEpochMeta.data);
+  const dbLastIndexedBlock = dbLastIndexed.ok && dbLastIndexed.data ? BigInt(dbLastIndexed.data) : null;
+  const dbRepairCursorBlock = dbRepairCursor.ok && dbRepairCursor.data ? BigInt(dbRepairCursor.data) : null;
+  const lagBlocks = dbLastIndexedBlock !== null ? Number(head - dbLastIndexedBlock) : null;
 
-    const dbEpochs = dbEpochsRaw.ok && dbEpochsRaw.data ? dbEpochsRaw.data : {};
-    const maxEpochToCheck = Math.max(0, chainCurrentEpoch - 1);
-    const presentEpochs = new Set<number>(
-      Object.keys(dbEpochs)
-        .map((k) => Number(k))
-        .filter((n) => Number.isInteger(n) && n >= 1 && n <= maxEpochToCheck),
-    );
+  const dbEpochs = dbEpochsRaw.ok && dbEpochsRaw.data ? dbEpochsRaw.data : {};
+  const maxEpochToCheck = Math.max(0, chainCurrentEpoch - 1);
+  const presentEpochs = new Set<number>(
+    Object.keys(dbEpochs)
+      .map((k) => Number(k))
+      .filter((n) => Number.isInteger(n) && n >= 1 && n <= maxEpochToCheck),
+  );
 
-    const missingEpochs: number[] = [];
-    for (let ep = 1; ep <= maxEpochToCheck; ep++) {
-      if (!presentEpochs.has(ep)) missingEpochs.push(ep);
-    }
-    const latestStoredEpoch = presentEpochs.size > 0 ? Math.max(...presentEpochs) : null;
-    const highestContiguousEpoch =
-      missingEpochs.length > 0
-        ? Math.max(0, missingEpochs[0] - 1)
-        : maxEpochToCheck;
+  const missingEpochs: number[] = [];
+  for (let ep = 1; ep <= maxEpochToCheck; ep += 1) {
+    if (!presentEpochs.has(ep)) missingEpochs.push(ep);
+  }
+  const latestStoredEpoch = presentEpochs.size > 0 ? Math.max(...presentEpochs) : null;
+  const highestContiguousEpoch =
+    missingEpochs.length > 0
+      ? Math.max(0, missingEpochs[0] - 1)
+      : maxEpochToCheck;
 
-    const jackpotsInfo = jackpotInfoRaw as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
-    const lastDailyEpoch = Number(jackpotsInfo[4]);
-    const lastWeeklyEpoch = Number(jackpotsInfo[5]);
-    const lastDailyAmount = formatUnits(jackpotsInfo[6], 18);
-    const lastWeeklyAmount = formatUnits(jackpotsInfo[7], 18);
+  const jackpotsInfo = jackpotInfoRaw as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
+  const lastDailyEpoch = Number(jackpotsInfo[4]);
+  const lastWeeklyEpoch = Number(jackpotsInfo[5]);
+  const lastDailyAmount = formatUnits(jackpotsInfo[6], 18);
+  const lastWeeklyAmount = formatUnits(jackpotsInfo[7], 18);
 
-    const dbJackpots = dbJackpotsRaw.ok && dbJackpotsRaw.data ? Object.values(dbJackpotsRaw.data) : [];
-    const dbJackpotKeys = new Set<string>(
-      dbJackpots
-        .filter((j) => j && (j.kind === "daily" || j.kind === "weekly"))
-        .map((j) => `${j.kind}_${j.epoch}`),
-    );
-    const jackpotBlocks = dbJackpots
-      .map((row) => Number(row.blockNumber ?? 0))
-      .filter((value) => Number.isFinite(value) && value > 0);
-    const latestStoredJackpotBlock = jackpotBlocks.length > 0 ? Math.max(...jackpotBlocks) : null;
+  const dbJackpots = dbJackpotsRaw.ok && dbJackpotsRaw.data ? Object.values(dbJackpotsRaw.data) : [];
+  const dbJackpotKeys = new Set<string>(
+    dbJackpots
+      .filter((j) => j && (j.kind === "daily" || j.kind === "weekly"))
+      .map((j) => `${j.kind}_${j.epoch}`),
+  );
+  const jackpotBlocks = dbJackpots
+    .map((row) => Number(row.blockNumber ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const latestStoredJackpotBlock = jackpotBlocks.length > 0 ? Math.max(...jackpotBlocks) : null;
 
-    const hasLatestDailyInDb = lastDailyEpoch > 0 ? dbJackpotKeys.has(`daily_${lastDailyEpoch}`) : true;
-    const hasLatestWeeklyInDb = lastWeeklyEpoch > 0 ? dbJackpotKeys.has(`weekly_${lastWeeklyEpoch}`) : true;
-    const latestRewardClaimBlock =
-      recentRewardClaims.length > 0
-        ? Math.max(
-            ...recentRewardClaims
-              .map((row) => Number(row.blockNumber))
-              .filter((value) => Number.isFinite(value) && value > 0),
-          )
-        : null;
-    const rewardClaimsLagToHead =
-      latestRewardClaimBlock !== null
-        ? Number(head - BigInt(latestRewardClaimBlock))
-        : null;
-    const rewardClaimsLagToIndexer =
-      dbLastIndexedBlock !== null && latestRewardClaimBlock !== null
-        ? Math.max(0, Number(dbLastIndexedBlock - BigInt(latestRewardClaimBlock)))
-        : null;
+  const hasLatestDailyInDb = lastDailyEpoch > 0 ? dbJackpotKeys.has(`daily_${lastDailyEpoch}`) : true;
+  const hasLatestWeeklyInDb = lastWeeklyEpoch > 0 ? dbJackpotKeys.has(`weekly_${lastWeeklyEpoch}`) : true;
+  const latestRewardClaimBlock =
+    recentRewardClaims.length > 0
+      ? Math.max(
+          ...recentRewardClaims
+            .map((row) => Number(row.blockNumber))
+            .filter((value) => Number.isFinite(value) && value > 0),
+        )
+      : null;
+  const rewardClaimsLagToHead =
+    latestRewardClaimBlock !== null
+      ? Number(head - BigInt(latestRewardClaimBlock))
+      : null;
+  const rewardClaimsLagToIndexer =
+    dbLastIndexedBlock !== null && latestRewardClaimBlock !== null
+      ? Math.max(0, Number(dbLastIndexedBlock - BigInt(latestRewardClaimBlock)))
+      : null;
 
-    const totalBlocksToIndex =
-      head >= DEPLOY_BLOCK
-        ? Number(head - DEPLOY_BLOCK + 1n)
-        : 0;
-    const indexedBlocksToCurrentHead =
-      dbLastIndexedBlock !== null && dbLastIndexedBlock >= DEPLOY_BLOCK
-        ? Number((dbLastIndexedBlock > head ? head : dbLastIndexedBlock) - DEPLOY_BLOCK + 1n)
-        : 0;
-    const blockProgressPct =
-      totalBlocksToIndex > 0
-        ? clampPercent((indexedBlocksToCurrentHead / totalBlocksToIndex) * 100)
-        : 100;
-    const epochCoveragePct =
-      maxEpochToCheck > 0
-        ? clampPercent((presentEpochs.size / maxEpochToCheck) * 100)
-        : 100;
-    const contiguousEpochCoveragePct =
-      maxEpochToCheck > 0
-        ? clampPercent((highestContiguousEpoch / maxEpochToCheck) * 100)
-        : 100;
+  const totalBlocksToIndex =
+    head >= DEPLOY_BLOCK
+      ? Number(head - DEPLOY_BLOCK + 1n)
+      : 0;
+  const indexedBlocksToCurrentHead =
+    dbLastIndexedBlock !== null && dbLastIndexedBlock >= DEPLOY_BLOCK
+      ? Number((dbLastIndexedBlock > head ? head : dbLastIndexedBlock) - DEPLOY_BLOCK + 1n)
+      : 0;
+  const blockProgressPct =
+    totalBlocksToIndex > 0
+      ? clampPercent((indexedBlocksToCurrentHead / totalBlocksToIndex) * 100)
+      : 100;
+  const epochCoveragePct =
+    maxEpochToCheck > 0
+      ? clampPercent((presentEpochs.size / maxEpochToCheck) * 100)
+      : 100;
+  const contiguousEpochCoveragePct =
+    maxEpochToCheck > 0
+      ? clampPercent((highestContiguousEpoch / maxEpochToCheck) * 100)
+      : 100;
 
-    const trendStore = globalThis as GlobalWithDataSyncTrend;
-    const previousSample = trendStore.__loreDataSyncTrend;
-    let blockRatePerMinute: number | null = null;
-    let epochRatePerMinute: number | null = null;
-    let estimatedMinutesToHead: number | null = null;
+  const trendStore = globalThis as GlobalWithDataSyncTrend;
+  const previousSample = trendStore.__loreDataSyncTrend;
+  let blockRatePerMinute: number | null = null;
+  let epochRatePerMinute: number | null = null;
+  let estimatedMinutesToHead: number | null = null;
 
-    if (previousSample && previousSample.lastIndexedBlock !== null && dbLastIndexedBlock !== null) {
-      const elapsedMs = now - previousSample.ts;
-      const deltaBlocks = Number(dbLastIndexedBlock - previousSample.lastIndexedBlock);
-      const deltaEpochs = presentEpochs.size - previousSample.storedEpochCount;
-      if (elapsedMs >= 5_000 && deltaBlocks > 0) {
-        blockRatePerMinute = Number(((deltaBlocks * 60_000) / elapsedMs).toFixed(2));
-        epochRatePerMinute = Number(((deltaEpochs * 60_000) / elapsedMs).toFixed(2));
-        if (lagBlocks !== null && blockRatePerMinute > 0) {
-          estimatedMinutesToHead = Number((lagBlocks / blockRatePerMinute).toFixed(1));
-        }
+  if (previousSample && previousSample.lastIndexedBlock !== null && dbLastIndexedBlock !== null) {
+    const elapsedMs = now - previousSample.ts;
+    const deltaBlocks = Number(dbLastIndexedBlock - previousSample.lastIndexedBlock);
+    const deltaEpochs = presentEpochs.size - previousSample.storedEpochCount;
+    if (elapsedMs >= 5_000 && deltaBlocks > 0) {
+      blockRatePerMinute = Number(((deltaBlocks * 60_000) / elapsedMs).toFixed(2));
+      epochRatePerMinute = Number(((deltaEpochs * 60_000) / elapsedMs).toFixed(2));
+      if (lagBlocks !== null && blockRatePerMinute > 0) {
+        estimatedMinutesToHead = Number((lagBlocks / blockRatePerMinute).toFixed(1));
       }
     }
+  }
 
-    trendStore.__loreDataSyncTrend = {
-      ts: now,
-      headBlock: head,
-      lastIndexedBlock: dbLastIndexedBlock,
-      storedEpochCount: presentEpochs.size,
-      lagBlocks,
-    };
-    const trendHistory = trendStore.__loreDataSyncTrendHistory ?? [];
-    trendHistory.push({
-      ts: now,
-      headBlock: head,
-      lastIndexedBlock: dbLastIndexedBlock,
-      storedEpochCount: presentEpochs.size,
-      lagBlocks,
-    });
-    trendStore.__loreDataSyncTrendHistory = trendHistory.slice(-8);
+  trendStore.__loreDataSyncTrend = {
+    ts: now,
+    headBlock: head,
+    lastIndexedBlock: dbLastIndexedBlock,
+    storedEpochCount: presentEpochs.size,
+    lagBlocks,
+  };
+  const trendHistory = trendStore.__loreDataSyncTrendHistory ?? [];
+  trendHistory.push({
+    ts: now,
+    headBlock: head,
+    lastIndexedBlock: dbLastIndexedBlock,
+    storedEpochCount: presentEpochs.size,
+    lagBlocks,
+  });
+  trendStore.__loreDataSyncTrendHistory = trendHistory.slice(-8);
 
-    const syncState =
-      dbLastIndexedBlock === null
-        ? "bootstrapping"
-        : lagBlocks !== null && lagBlocks <= LAG_WARN_BLOCKS && missingEpochs.length === 0
-          ? "synced"
-          : lagBlocks !== null && lagBlocks <= Math.max(LAG_WARN_BLOCKS, 512) && missingEpochs.length <= 3
-            ? "near_head"
-            : "catching_up";
+  const syncState =
+    dbLastIndexedBlock === null
+      ? "bootstrapping"
+      : lagBlocks !== null && lagBlocks <= LAG_WARN_BLOCKS && missingEpochs.length === 0
+        ? "synced"
+        : lagBlocks !== null && lagBlocks <= Math.max(LAG_WARN_BLOCKS, 512) && missingEpochs.length <= 3
+          ? "near_head"
+          : "catching_up";
 
-    const jackpotServingMode = deriveServingMode({
-      lagBlocks,
-      recoveryThreshold: JACKPOT_RECOVERY_BLOCK_LAG,
-      storedCount: dbJackpots.length,
-    });
-    const recentWinsServingMode = deriveServingMode({
-      lagBlocks,
-      recoveryThreshold: RECENT_WINS_RECOVERY_BLOCK_LAG,
-      storedCount: recentRewardClaims.length,
-    });
-    const runCompletedAgeMs = ageMs(indexerRunStatus?.completedAt ?? null, now);
-    const repairAgeMs = ageMs(indexerRepairStatus?.at ?? null, now);
-    const reconcileAgeMs = ageMs(indexerReconcileStatus?.at ?? null, now);
-    const degraded =
-      (lagBlocks !== null && lagBlocks > LAG_WARN_BLOCKS) ||
-      missingEpochs.length > 0 ||
-      !hasLatestDailyInDb ||
-      !hasLatestWeeklyInDb ||
+  const jackpotServingMode = deriveServingMode({
+    lagBlocks,
+    recoveryThreshold: JACKPOT_RECOVERY_BLOCK_LAG,
+    storedCount: dbJackpots.length,
+  });
+  const recentWinsServingMode = deriveServingMode({
+    lagBlocks,
+    recoveryThreshold: RECENT_WINS_RECOVERY_BLOCK_LAG,
+    storedCount: recentRewardClaims.length,
+  });
+  const runCompletedAgeMs = ageMs(indexerRunStatus?.completedAt ?? null, now);
+  const runHeartbeatAgeMs = ageMs(indexerRunStatus?.lastHeartbeatAt ?? null, now);
+  const repairAgeMs = ageMs(indexerRepairStatus?.at ?? null, now);
+  const reconcileAgeMs = ageMs(indexerReconcileStatus?.at ?? null, now);
+  const runIsActive =
+    runHeartbeatAgeMs !== null &&
+    runHeartbeatAgeMs <= INDEXER_HEARTBEAT_STALE_MS &&
+    Number(indexerRunStatus?.lastHeartbeatAt ?? 0) > Number(indexerRunStatus?.completedAt ?? 0);
+  const runIsStale =
+    !runIsActive &&
+    (
       (runCompletedAgeMs !== null && runCompletedAgeMs > INDEXER_HEARTBEAT_STALE_MS) ||
-      (dbCurrentEpoch !== null && Math.abs(dbCurrentEpoch - chainCurrentEpoch) > 1);
+      (
+        indexerRunStatus?.completedAt === undefined &&
+        runHeartbeatAgeMs !== null &&
+        runHeartbeatAgeMs > INDEXER_HEARTBEAT_STALE_MS
+      )
+    );
+  const nearHeadGapIsTolerable =
+    syncState === "near_head" &&
+    missingEpochs.length > 0 &&
+    missingEpochs.length <= 3;
+  const missingEpochsAreStale =
+    !nearHeadGapIsTolerable &&
+    missingEpochs.length > 0 &&
+    reconcileAgeMs !== null &&
+    reconcileAgeMs > INDEXER_HEARTBEAT_STALE_MS;
+  const degraded =
+    (lagBlocks !== null && lagBlocks > LAG_WARN_BLOCKS) ||
+    (syncState === "catching_up" && missingEpochs.length > 0) ||
+    missingEpochsAreStale ||
+    !hasLatestDailyInDb ||
+    !hasLatestWeeklyInDb ||
+    runIsStale ||
+    (dbCurrentEpoch !== null && Math.abs(dbCurrentEpoch - chainCurrentEpoch) > 1);
 
-    const payload: DataSyncHealthResponse = {
+  return {
       status: degraded ? "degraded" : "healthy",
       visibility: "private",
       redacted: false,
@@ -484,7 +595,9 @@ export async function GET(request: NextRequest) {
         run: {
           ...(indexerRunStatus ?? {}),
           runCompletedAgeMs,
-          stale: runCompletedAgeMs !== null && runCompletedAgeMs > INDEXER_HEARTBEAT_STALE_MS,
+          runHeartbeatAgeMs,
+          active: runIsActive,
+          stale: runIsStale,
         },
         repair: {
           ...(indexerRepairStatus ?? {}),
@@ -499,18 +612,20 @@ export async function GET(request: NextRequest) {
           ...(indexerReconcileStatus ?? {}),
           ageMs: reconcileAgeMs,
           stale:
+            !nearHeadGapIsTolerable &&
             reconcileAgeMs !== null &&
             missingEpochs.length > 0 &&
             reconcileAgeMs > INDEXER_HEARTBEAT_STALE_MS,
         },
       },
       hints: [
-        missingEpochs.length > 0 ? "Indexer repair/reconcile is still catching up missing epochs." : null,
+        missingEpochs.length > 0 && !nearHeadGapIsTolerable ? "Indexer repair/reconcile is still catching up missing epochs." : null,
         lagBlocks !== null && lagBlocks > LAG_WARN_BLOCKS ? "Indexer is lagging by blocks; check bot/indexer supervisor." : null,
         !hasLatestDailyInDb || !hasLatestWeeklyInDb ? "Latest jackpot event not in DB yet; API fallback should still show it." : null,
         jackpotServingMode !== "indexer_fast_path" ? "Jackpots API is in recovery-capable mode and may pull a fresh tail from chain." : null,
         recentWinsServingMode !== "indexer_fast_path" ? "Recent wins API is in recovery-capable mode and may pull RewardClaimed logs from chain." : null,
-        runCompletedAgeMs !== null && runCompletedAgeMs > INDEXER_HEARTBEAT_STALE_MS ? "Indexer heartbeat is stale; watch loop may be stuck or down." : null,
+        runIsActive ? "Indexer watch loop is actively catching up." : null,
+        runIsStale ? "Indexer heartbeat is stale; watch loop may be stuck or down." : null,
       ].filter((hint): hint is string => Boolean(hint)),
       ts: Date.now(),
       env: {
@@ -522,17 +637,102 @@ export async function GET(request: NextRequest) {
         recentWinsRecoveryBlockLag: toNum(RECENT_WINS_RECOVERY_BLOCK_LAG),
         indexerHeartbeatStaleMs: toNum(INDEXER_HEARTBEAT_STALE_MS),
       },
-    };
+    } satisfies DataSyncHealthResponse;
+}
 
-    return NextResponse.json(
-      isAuthorizedHealthDiagnosticsRequest(request) ? payload : redactHealthResponse(payload),
-    );
+function toHealthResponse(request: NextRequest, payload: DataSyncHealthResponse) {
+  return NextResponse.json(
+    isAuthorizedHealthDiagnosticsRequest(request) ? payload : redactHealthResponse(payload),
+    {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      },
+    },
+  );
+}
+
+function scheduleDataSyncRefresh() {
+  if (dataSyncHealthCache.getRefresh(DATA_SYNC_CACHE_KEY)) {
+    return;
+  }
+
+  const version = dataSyncHealthCache.beginWrite(DATA_SYNC_CACHE_KEY);
+  const refreshPromise = (async () => {
+    try {
+      const payload = await buildDataSyncHealthPayload();
+      dataSyncHealthCache.setIfLatest(DATA_SYNC_CACHE_KEY, payload, DATA_SYNC_CACHE_TTL_MS, version);
+    } catch (error) {
+      console.error("[api/health/data-sync] Background refresh error:", error);
+    } finally {
+      dataSyncHealthCache.clearRefresh(DATA_SYNC_CACHE_KEY);
+    }
+  })();
+
+  dataSyncHealthCache.setRefresh(DATA_SYNC_CACHE_KEY, refreshPromise);
+}
+
+export async function GET(request: NextRequest) {
+  const rateLimited = await enforceSharedRateLimit(request, {
+    bucket: "api-health-data-sync",
+    limit: 10,
+    windowMs: 60_000,
+  });
+  if (rateLimited) return rateLimited;
+
+  const fresh = dataSyncHealthCache.getFresh(DATA_SYNC_CACHE_KEY);
+  if (fresh) {
+    return toHealthResponse(request, fresh);
+  }
+
+  const inflight = dataSyncHealthCache.getInflight(DATA_SYNC_CACHE_KEY);
+  if (inflight) {
+    try {
+      return toHealthResponse(request, await inflight);
+    } catch (err) {
+      console.error("[api/health/data-sync] Error:", err);
+      const authorized = isAuthorizedHealthDiagnosticsRequest(request);
+      return NextResponse.json(
+        {
+          status: "error",
+          error: authorized
+            ? ((err as Error).message || "unknown")
+            : "Internal error",
+        },
+        { status: 500 },
+      );
+    }
+  }
+
+  const stale = dataSyncHealthCache.getStale(DATA_SYNC_CACHE_KEY);
+
+  const version = dataSyncHealthCache.beginWrite(DATA_SYNC_CACHE_KEY);
+  const requestPromise = (async () => {
+    try {
+      const payload = await buildDataSyncHealthPayload();
+      return dataSyncHealthCache.setIfLatest(DATA_SYNC_CACHE_KEY, payload, DATA_SYNC_CACHE_TTL_MS, version);
+    } finally {
+      dataSyncHealthCache.clearInflight(DATA_SYNC_CACHE_KEY);
+    }
+  })();
+  dataSyncHealthCache.setInflight(DATA_SYNC_CACHE_KEY, requestPromise);
+
+  try {
+    return toHealthResponse(request, await requestPromise);
   } catch (err) {
     console.error("[api/health/data-sync] Error:", err);
+    if (stale) {
+      scheduleDataSyncRefresh();
+      return toHealthResponse(request, stale);
+    }
+    const authorized = isAuthorizedHealthDiagnosticsRequest(request);
     return NextResponse.json(
       {
         status: "error",
-        error: (err as Error).message || "unknown",
+        error: authorized
+          ? ((err as Error).message || "unknown")
+          : "Internal error",
       },
       { status: 500 },
     );

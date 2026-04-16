@@ -1,5 +1,6 @@
 "use client";
 
+import { log } from "../lib/logger";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sanitizeCustomChatAvatar, sanitizePresetChatAvatar } from "../lib/chatAvatar";
 import { loadChatAuthSession } from "../lib/chatSessionClient";
@@ -177,7 +178,7 @@ export function useChatProfile(walletAddress: string | null, auth?: ChatAuthCont
         if (existing?.address === normalizedWallet) {
           void saveRemoteProfile(normalizedWallet, best).catch((err) => {
             if (!isChatAuthError(err)) {
-              console.warn("[ChatProfile] Background profile sync failed:", err);
+              log.warn("ChatProfile", "background profile sync failed", { message: err instanceof Error ? err.message : String(err) });
             }
           });
         }
@@ -224,29 +225,3 @@ function shortenAddr(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
-export function resizeImageToBase64(file: File, maxSize = 64): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = maxSize;
-        canvas.height = maxSize;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return reject(new Error("No canvas context"));
-
-        const min = Math.min(img.width, img.height);
-        const sx = (img.width - min) / 2;
-        const sy = (img.height - min) / 2;
-        ctx.drawImage(img, sx, sy, min, min, 0, 0, maxSize, maxSize);
-
-        resolve(canvas.toDataURL("image/jpeg", 0.7));
-      };
-      img.onerror = reject;
-      img.src = reader.result as string;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}

@@ -15,7 +15,7 @@ const transferBadgeVariantClasses: Record<NonNullable<TransferRowProps["assetVar
   sky: "border-sky-500/35 bg-sky-500/10 text-sky-300",
 };
 
-export function WalletTransferRow({
+export const WalletTransferRow = React.memo(function WalletTransferRow({
   assetLabel,
   assetVariant,
   value,
@@ -28,9 +28,9 @@ export function WalletTransferRow({
   buttonVariant,
 }: TransferRowProps) {
   return (
-    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_8rem] items-center gap-2">
+    <div className="grid grid-cols-[4rem_minmax(0,1fr)_7.5rem] items-center gap-1.5">
       <div
-        className={`flex h-10 items-center justify-center rounded-xl border text-[10px] font-semibold uppercase tracking-widest shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${transferBadgeVariantClasses[assetVariant]}`}
+        className={`flex h-8 items-center justify-center rounded-lg border px-2 text-[10px] font-semibold uppercase tracking-widest shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${transferBadgeVariantClasses[assetVariant]}`}
       >
         <span className="block w-full text-center leading-none">{assetLabel}</span>
       </div>
@@ -39,20 +39,20 @@ export function WalletTransferRow({
         inputMode="decimal"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-10 min-w-0"
+        className="h-8 min-w-0 px-4 py-1.5 text-sm"
         placeholder={placeholder}
       />
       <UiButton
         onClick={onSubmit}
         disabled={disabled}
         variant={buttonVariant}
-        size="md"
+        size="sm"
         uppercase
         loading={loading}
-        className="h-10 w-full text-[10px]"
+        className="h-8 w-full px-3 text-[10px]"
       >
         {loading ? "Sending..." : buttonLabel}
       </UiButton>
     </div>
   );
-}
+});

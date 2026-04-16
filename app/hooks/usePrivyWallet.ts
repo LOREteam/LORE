@@ -561,20 +561,43 @@ export function usePrivyWallet() {
       formatUnknownError,
     });
 
-  return {
-    embeddedWalletAddress,
-    externalWalletAddress,
-    embeddedWalletSyncing,
-    eip7702: getEip7702CapabilityState(Boolean(embeddedWalletAddress)),
-    ensureEmbeddedWallet,
-    exportEmbeddedWallet,
-    createEmbeddedWallet,
-    signEip7702Delegation,
-    eip7702Diagnostic,
-    runEip7702Diagnostic,
-    runEip7702SendDiagnostic,
-    sendTransactionSilent,
-    sendTransaction7702,
-    sendTransactionFromExternal,
-  };
+  const eip7702 = useMemo(
+    () => getEip7702CapabilityState(Boolean(embeddedWalletAddress)),
+    [embeddedWalletAddress],
+  );
+
+  return useMemo(
+    () => ({
+      embeddedWalletAddress,
+      externalWalletAddress,
+      embeddedWalletSyncing,
+      eip7702,
+      ensureEmbeddedWallet,
+      exportEmbeddedWallet,
+      createEmbeddedWallet,
+      signEip7702Delegation,
+      eip7702Diagnostic,
+      runEip7702Diagnostic,
+      runEip7702SendDiagnostic,
+      sendTransactionSilent,
+      sendTransaction7702,
+      sendTransactionFromExternal,
+    }),
+    [
+      embeddedWalletAddress,
+      externalWalletAddress,
+      embeddedWalletSyncing,
+      eip7702,
+      ensureEmbeddedWallet,
+      exportEmbeddedWallet,
+      createEmbeddedWallet,
+      signEip7702Delegation,
+      eip7702Diagnostic,
+      runEip7702Diagnostic,
+      runEip7702SendDiagnostic,
+      sendTransactionSilent,
+      sendTransaction7702,
+      sendTransactionFromExternal,
+    ],
+  );
 }

@@ -26,7 +26,7 @@ export default function PrivacyPage() {
             <span className="text-violet-400">ORE</span>
             <span className="text-gray-500 font-bold text-xl ml-2">Privacy Policy</span>
           </h1>
-          <p className="mt-2 text-sm text-gray-500">Last updated: February 2025</p>
+          <p className="mt-2 text-sm text-gray-500">Last updated: April 2026</p>
         </header>
 
         <article className="space-y-6 text-[15px] leading-relaxed">
@@ -54,7 +54,7 @@ export default function PrivacyPage() {
           <section>
             <h2 className="text-violet-400 font-bold text-sm uppercase tracking-wider mb-2">Third‑party services</h2>
             <p>
-              We use Privy (wallet sign‑in), Firebase (game data storage), and hosting providers. Each has its own privacy policy.
+              We use Privy (wallet sign‑in), backend infrastructure for app data and rate limiting, and hosting providers. Each has its own privacy policy.
             </p>
           </section>
 

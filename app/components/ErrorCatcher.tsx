@@ -2,10 +2,15 @@
 
 import { useEffect } from "react";
 import { log } from "../lib/logger";
+import {
+  CHUNK_RELOAD_WINDOW_MS,
+  clearExpiredChunkReloadAttempt,
+  isChunkLoadLikeErrorMessage,
+  reloadWithCacheBust,
+  shouldAttemptChunkReloadOnce,
+} from "../lib/chunkReloadRecovery";
 
 const RESOLVE_STORAGE_KEY = "lore_resolve_epoch";
-const CHUNK_RELOAD_KEY = "lore:chunk-reload-once";
-const CHUNK_RELOAD_WINDOW_MS = 15_000;
 
 export function ErrorCatcher() {
   useEffect(() => {
@@ -62,37 +67,14 @@ export function ErrorCatcher() {
     };
 
     const tryRecoverChunkLoad = (message: string): boolean => {
-      const lower = message.toLowerCase();
-      const isChunkLoadError =
-        lower.includes("chunkloaderror") ||
-        (lower.includes("loading chunk") && lower.includes("/_next/static/chunks/")) ||
-        (lower.includes("loading chunk") && lower.includes("failed"));
-      if (!isChunkLoadError) return false;
-
-      try {
-        const raw =
-          typeof sessionStorage !== "undefined"
-            ? sessionStorage.getItem(CHUNK_RELOAD_KEY)
-            : null;
-        const lastAt = Number(raw);
-        const alreadyRetried =
-          Number.isFinite(lastAt) && Date.now() - lastAt < CHUNK_RELOAD_WINDOW_MS;
-        if (alreadyRetried) return false;
-        if (typeof sessionStorage !== "undefined") {
-          sessionStorage.setItem(CHUNK_RELOAD_KEY, Date.now().toString());
-        }
-      } catch {
-        // ignore storage failures; still attempt reload
-      }
+      if (!isChunkLoadLikeErrorMessage(message)) return false;
+      const canReload = shouldAttemptChunkReloadOnce(
+        typeof sessionStorage !== "undefined" ? sessionStorage : null,
+      );
+      if (!canReload) return false;
 
       log.warn("Global", "chunk load failed, reloading page once", { message: message.slice(0, 180) });
-      try {
-        const url = new URL(window.location.href);
-        url.searchParams.set("_r", Date.now().toString());
-        window.location.replace(url.toString());
-      } catch {
-        window.location.reload();
-      }
+      reloadWithCacheBust(window.location);
       return true;
     };
 
@@ -151,15 +133,7 @@ export function ErrorCatcher() {
     window.addEventListener("unhandledrejection", onUnhandledRejection);
 
     const cleanupId = window.setTimeout(() => {
-      try {
-        const raw = sessionStorage.getItem(CHUNK_RELOAD_KEY);
-        const lastAt = Number(raw);
-        if (!Number.isFinite(lastAt) || Date.now() - lastAt >= CHUNK_RELOAD_WINDOW_MS) {
-          sessionStorage.removeItem(CHUNK_RELOAD_KEY);
-        }
-      } catch {
-        // ignore storage failures
-      }
+      clearExpiredChunkReloadAttempt(typeof sessionStorage !== "undefined" ? sessionStorage : null);
     }, CHUNK_RELOAD_WINDOW_MS);
 
     return () => {

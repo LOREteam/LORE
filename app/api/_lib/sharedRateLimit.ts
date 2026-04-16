@@ -15,24 +15,31 @@ type RateLimitOptions = {
 };
 
 const localFallbackMap = new Map<string, RateLimitState>();
+const weakBucketFallbackMap = new Map<string, RateLimitState>();
 const sharedLimiterMisconfigBuckets = new Set<string>();
+const weakIdentityWarnedBuckets = new Set<string>();
 
-function getClientIdentity(request: Request): string {
+type ClientIdentity = {
+  key: string;
+  weak: boolean;
+};
+
+function getClientIdentity(request: Request): ClientIdentity {
   const cfConnectingIp = request.headers.get("cf-connecting-ip");
-  if (cfConnectingIp) return `cf:${cfConnectingIp}`;
+  if (cfConnectingIp) return { key: `cf:${cfConnectingIp}`, weak: false };
 
   const realIp = request.headers.get("x-real-ip");
-  if (realIp) return `real:${realIp}`;
+  if (realIp) return { key: `real:${realIp}`, weak: false };
 
   const xForwardedFor = request.headers.get("x-forwarded-for");
   if (xForwardedFor) {
     const ip = xForwardedFor.split(",")[0]?.trim();
-    if (ip) return `xff:${ip}`;
+    if (ip) return { key: `xff:${ip}`, weak: false };
   }
 
   const userAgent = request.headers.get("user-agent")?.slice(0, 120) ?? "unknown";
   const lang = request.headers.get("accept-language")?.slice(0, 64) ?? "";
-  return `anon:${userAgent}:${lang}`;
+  return { key: `anon:${userAgent}:${lang}`, weak: true };
 }
 
 function hashIdentity(identity: string) {
@@ -80,13 +87,66 @@ function enforceLocalFallback(
   return null;
 }
 
+function enforceWeakIdentityFallback(
+  bucket: string,
+  key: string,
+  limit: number,
+  windowMs: number,
+  now: number,
+): NextResponse | null {
+  const identityLimited = enforceLocalFallback(bucket, key, limit, windowMs, now);
+  if (identityLimited) return identityLimited;
+
+  const windowStartedAt = now - (now % windowMs);
+  const resetAt = windowStartedAt + windowMs;
+  const current = weakBucketFallbackMap.get(bucket);
+  const normalized =
+    !current || current.resetAt <= now || current.windowStartedAt !== windowStartedAt
+      ? { count: 0, windowStartedAt, resetAt }
+      : current;
+
+  const weakBucketLimit = Math.max(limit * 4, limit + 10);
+  if (normalized.count >= weakBucketLimit) {
+    return NextResponse.json(
+      {
+        error: "Too many requests",
+        retryAfter: Math.max(1, Math.ceil((normalized.resetAt - now) / 1000)),
+      },
+      { status: 429 },
+    );
+  }
+
+  weakBucketFallbackMap.set(bucket, {
+    count: normalized.count + 1,
+    windowStartedAt,
+    resetAt,
+  });
+
+  if (weakBucketFallbackMap.size > 256) {
+    for (const [storedBucket, state] of weakBucketFallbackMap.entries()) {
+      if (state.resetAt <= now) weakBucketFallbackMap.delete(storedBucket);
+    }
+  }
+
+  return null;
+}
+
 export async function enforceSharedRateLimit(
   request: Request,
   { bucket, limit, windowMs }: RateLimitOptions,
 ): Promise<NextResponse | null> {
   const identity = getClientIdentity(request);
-  const key = hashIdentity(identity);
+  const key = hashIdentity(identity.key);
   const now = Date.now();
+
+  if (identity.weak) {
+    const warnKey = `${bucket}:weak-identity`;
+    if (!weakIdentityWarnedBuckets.has(warnKey)) {
+      weakIdentityWarnedBuckets.add(warnKey);
+      console.warn(`[rate-limit:${bucket}] weak identity — using fallback rate limiting`);
+    }
+    return enforceWeakIdentityFallback(bucket, key, limit, windowMs, now);
+  }
 
   if (process.env.NODE_ENV !== "production") {
     return enforceLocalFallback(bucket, key, limit, windowMs, now);

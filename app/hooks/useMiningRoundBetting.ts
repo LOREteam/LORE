@@ -98,6 +98,20 @@ export async function executeAutoMineBetLoop({
   getRetryDelayMs,
 }: ExecuteAutoMineBetLoopOptions): Promise<AutoMineBetLoopResult> {
   const MAX_SESSION_REFRESH_ATTEMPTS = 2;
+  const waitForTrackedPendingBet = async (pendingBet: PendingBetState, latestNonce: number, pendingNonce: number, pendingAgeMs: number) => {
+    log.info(
+      "AutoMine",
+      `round ${currentRoundIndex + 1}: pending bet nonce ${pendingBet.nonce} already tracked by node, waiting`,
+      {
+        latestNonce,
+        pendingNonce,
+        pendingAgeMs,
+      },
+    );
+    onProgress(`${currentRoundIndex + 1} / ${rounds} - previous tx still pending...`);
+    await delay(3_000);
+    return "pending" as const;
+  };
 
   const placeBetOnce = async (overrides?: GasOverrides): Promise<ReceiptState> => {
     const [latestNonceRaw, pendingNonceRaw] = await Promise.all([
@@ -116,13 +130,18 @@ export async function executeAutoMineBetLoop({
     let txNonce: number | undefined;
     const submittedNonce = () => txNonce ?? pendingNonce;
     const pendingBet = pendingBetRef.current;
+    let clearedTrackedPendingBet = false;
 
     if (pendingBet) {
       const nonceGap = pendingNonce - latestNonce;
       const pendingAgeMs = Date.now() - pendingBet.submittedAt;
+      const nodeStillTracksPendingNonce = pendingNonce > pendingBet.nonce;
 
       if (latestNonce > pendingBet.nonce) {
         pendingBetRef.current = null;
+        clearedTrackedPendingBet = true;
+      } else if (nodeStillTracksPendingNonce) {
+        return waitForTrackedPendingBet(pendingBet, latestNonce, pendingNonce, pendingAgeMs);
       } else if (
         pendingAgeMs < betPendingStaleMs &&
         (pendingAgeMs < betPendingGraceMs || nonceGap < forceReplacePendingNonceGap)
@@ -143,7 +162,9 @@ export async function executeAutoMineBetLoop({
         pendingNonce,
         pendingAgeMs,
       });
-    } else if (pendingNonce > latestNonce) {
+    }
+
+    if ((!pendingBetRef.current || clearedTrackedPendingBet) && pendingNonce > latestNonce) {
       const blockedNonce = latestNonce;
       const pendingCount = pendingNonce - latestNonce;
       const blockedError = new Error(

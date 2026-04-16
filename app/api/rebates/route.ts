@@ -14,7 +14,7 @@ import { CONTRACT_ADDRESS, publicClient } from "../_lib/dataBridge";
 import { CONTRACT_HAS_REBATE_API, GAME_ABI } from "../../lib/constants";
 import { createRouteCache } from "../_lib/routeCache";
 import { logRouteError } from "../_lib/routeError";
-import { getUserParticipatingEpochs } from "../../../server/storage";
+import { getMetaBigInt, getMetaNumber, getUserParticipatingEpochs } from "../../../server/storage";
 
 const REBATE_ROUTE_CACHE_MS = 15_000;
 const REBATE_SUMMARY_CHUNK_SIZE = 96;
@@ -24,6 +24,7 @@ const REBATE_ROUTE_CACHE_MAX_KEYS = 512;
 const REBATE_SUMMARY_CONCURRENCY = 6;
 const REBATE_EXACT_CONCURRENCY = 6;
 const ROUTE_METRIC_KEY = "api/rebates";
+const REBATE_INDEXED_EPOCHS_CACHE_MS = 30_000;
 
 type RebateEpochInfo = {
   epoch: number;
@@ -56,7 +57,10 @@ type RebateBuildTimings = {
   exactChunks: number;
 };
 
+type RebateInfoResult = [bigint, bigint, bigint, boolean, boolean];
+
 const rebateRouteCache = createRouteCache<RebatePayload>(REBATE_ROUTE_CACHE_MAX_KEYS);
+const rebateIndexedEpochsCache = createRouteCache<number[]>(REBATE_ROUTE_CACHE_MAX_KEYS);
 
 function formatServerTiming(params: {
   cacheStatus: "fresh" | "stale" | "miss" | "inflight";
@@ -128,7 +132,27 @@ async function mapWithConcurrency<T, R>(
 }
 
 async function getIndexedEpochs(user: `0x${string}`): Promise<number[]> {
-  return getUserParticipatingEpochs(user, 5000);
+  const currentEpoch = getMetaNumber("currentEpoch");
+  const lastIndexedBlock = getMetaBigInt("lastIndexedBlock")?.toString() ?? "null";
+  const cacheKey = `${user.toLowerCase()}:${Number.isInteger(currentEpoch) ? String(currentEpoch) : "null"}:${lastIndexedBlock}`;
+  const cached = rebateIndexedEpochsCache.getFresh(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const inflight = rebateIndexedEpochsCache.getInflight(cacheKey);
+  if (inflight) {
+    return inflight;
+  }
+
+  const task = Promise.resolve(getUserParticipatingEpochs(user, 5000))
+    .then((epochs) => rebateIndexedEpochsCache.set(cacheKey, epochs, REBATE_INDEXED_EPOCHS_CACHE_MS))
+    .finally(() => {
+      rebateIndexedEpochsCache.clearInflight(cacheKey);
+    });
+
+  rebateIndexedEpochsCache.setInflight(cacheKey, task);
+  return task;
 }
 
 async function loadClaimableEpochsExact(
@@ -244,16 +268,31 @@ async function buildRebatePayload(
   for (let i = 0; i < epochBigInts.length; i += REBATE_SUMMARY_CHUNK_SIZE) {
     summaryChunks.push(epochBigInts.slice(i, i + REBATE_SUMMARY_CHUNK_SIZE));
   }
+  const recentEpochBigInts = epochBigInts.slice(0, REBATE_DETAILS_LIMIT);
+  const recentContracts = recentEpochBigInts.map((epoch) => ({
+    address: CONTRACT_ADDRESS,
+    abi: GAME_ABI,
+    functionName: "getRebateInfo" as const,
+    args: [epoch, user] as const,
+  }));
 
   const summaryStartedAt = performance.now();
-  const summaryResults = await mapWithConcurrency(summaryChunks, REBATE_SUMMARY_CONCURRENCY, async (chunk) => {
-    return await publicClient.readContract({
-      address: CONTRACT_ADDRESS,
-      abi: GAME_ABI,
-      functionName: "getRebateSummary",
-      args: [user, chunk],
-    }) as [bigint, bigint];
-  });
+  const recentStartedAt = performance.now();
+  const [summaryResults, recentResults] = await Promise.all([
+    mapWithConcurrency(summaryChunks, REBATE_SUMMARY_CONCURRENCY, async (chunk) => {
+      return await publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "getRebateSummary",
+        args: [user, chunk],
+      }) as [bigint, bigint];
+    }),
+    recentContracts.length > 0
+      ? publicClient.multicall({ contracts: recentContracts }) as Promise<
+          Array<{ status: "success"; result: RebateInfoResult } | { status: "failure"; error: unknown; result?: undefined }>
+        >
+      : Promise.resolve([] as Array<{ status: "success"; result: RebateInfoResult } | { status: "failure"; error: unknown; result?: undefined }>),
+  ]);
   const summaryMs = performance.now() - summaryStartedAt;
 
   let totalPendingWei = 0n;
@@ -274,27 +313,12 @@ async function buildRebatePayload(
         })()
       : { result: [], exactMs: 0 };
 
-  const recentStartedAt = performance.now();
-  const recentEpochBigInts = epochBigInts.slice(0, REBATE_DETAILS_LIMIT);
-  const recentContracts = recentEpochBigInts.map((epoch) => ({
-    address: CONTRACT_ADDRESS,
-    abi: GAME_ABI,
-    functionName: "getRebateInfo" as const,
-    args: [epoch, user] as const,
-  }));
-  const recentResults = await publicClient.multicall({ contracts: recentContracts });
   const recentEpochs: RebateEpochInfo[] = [];
 
   recentResults.forEach((result, index) => {
     if (result.status !== "success") return;
     const epoch = Number(recentEpochBigInts[index]);
-    const [rebatePoolWei, userVolumeWei, pendingWei, claimed, resolved] = result.result as [
-      bigint,
-      bigint,
-      bigint,
-      boolean,
-      boolean,
-    ];
+    const [rebatePoolWei, userVolumeWei, pendingWei, claimed, resolved] = result.result;
     recentEpochs.push({
       epoch,
       pendingWei: pendingWei.toString(),

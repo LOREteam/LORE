@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { verifyMessage } from "viem";
 import { APP_CHAIN_ID } from "../../../lib/constants";
 import {
   CHAT_AUTH_PROOF_TTL_MS,
   isChatAuthIssuedAtValid,
   parseChatAuthMessage,
 } from "../../../lib/chatAuth";
+import { publicClient } from "../../_lib/dataBridge";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { logRouteError } from "../../_lib/routeError";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Expired auth proof" }, { status: 401 }), { varyCookie: true });
     }
 
-    const verified = await verifyMessage({
+    const verified = await publicClient.verifyMessage({
       address: authAddress,
       message: authMessage,
       signature: authSignature as `0x${string}`,

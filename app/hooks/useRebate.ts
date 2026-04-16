@@ -223,6 +223,47 @@ function parseApiEpochInfo(row: ApiRebateEpochInfo): RebateEpochInfo {
   };
 }
 
+function recentRebateEpochsEqual(left: ApiRebateEpochInfo[], right: ApiRebateEpochInfo[]) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (
+      a.epoch !== b.epoch ||
+      a.pendingWei !== b.pendingWei ||
+      a.pending !== b.pending ||
+      a.claimed !== b.claimed ||
+      a.resolved !== b.resolved ||
+      a.userVolumeWei !== b.userVolumeWei ||
+      a.rebatePoolWei !== b.rebatePoolWei
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function rebatePayloadEqual(left: ApiRebatePayload | null, right: ApiRebatePayload) {
+  if (!left) return false;
+  if (
+    left.isSupported !== right.isSupported ||
+    left.pendingRebateWei !== right.pendingRebateWei ||
+    left.claimableEpochCount !== right.claimableEpochCount ||
+    left.totalEpochs !== right.totalEpochs ||
+    left.claimableEpochList.length !== right.claimableEpochList.length ||
+    left.participatingEpochs.length !== right.participatingEpochs.length
+  ) {
+    return false;
+  }
+  for (let index = 0; index < left.claimableEpochList.length; index += 1) {
+    if (left.claimableEpochList[index] !== right.claimableEpochList[index]) return false;
+  }
+  for (let index = 0; index < left.participatingEpochs.length; index += 1) {
+    if (left.participatingEpochs[index] !== right.participatingEpochs[index]) return false;
+  }
+  return recentRebateEpochsEqual(left.recentEpochs, right.recentEpochs);
+}
+
 export function useRebate(options?: UseRebateOptions) {
   const { address } = useAccount();
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
@@ -238,6 +279,7 @@ export function useRebate(options?: UseRebateOptions) {
   const [isSupported, setIsSupported] = useState(CONTRACT_HAS_REBATE_API);
   const [claimPlanKind, setClaimPlanKind] = useState<ClaimPlanKind>("none");
   const [isEstimatingClaimPlan, setIsEstimatingClaimPlan] = useState(false);
+  const [payloadVersion, setPayloadVersion] = useState(0);
   const enabled = options?.enabled ?? true;
   const active = options?.active ?? enabled;
   const isPageVisible = options?.isPageVisible ?? true;
@@ -249,6 +291,10 @@ export function useRebate(options?: UseRebateOptions) {
   const cacheSavedAtRef = useRef<number | null>(null);
   const rebateUnavailableWarningRef = useRef(false);
   const mountedRef = useRef(false);
+  const lastPayloadRef = useRef<ApiRebatePayload | null>(null);
+  const cachedPayloadRef = useRef<Record<string, CachedRebateInfo | null>>({});
+  const claimPlanCacheRef = useRef<Record<string, { kind: ClaimPlanKind; savedAt: number } | null>>({});
+  const exactAttemptVersionRef = useRef<number | null>(null);
   const rebateAddress = useMemo(() => {
     const candidate = options?.preferredAddress ?? address;
     if (!candidate) return null;
@@ -283,11 +329,20 @@ export function useRebate(options?: UseRebateOptions) {
     setIsEstimatingClaimPlan(false);
     setIsLoading(false);
     setHasLoaded(false);
+    setPayloadVersion(0);
     hasLoadedRef.current = false;
+    lastPayloadRef.current = null;
+    exactAttemptVersionRef.current = null;
   }, []);
 
   const applyPayload = useCallback((payload: ApiRebatePayload) => {
-    if (!mountedRef.current) return;
+    if (!mountedRef.current) return false;
+    const changed = !rebatePayloadEqual(lastPayloadRef.current, payload);
+    lastPayloadRef.current = payload;
+    if (!changed) {
+      setHasLoaded(true);
+      return false;
+    }
     setIsSupported(payload.isSupported);
     setRebateEpochs(payload.participatingEpochs);
     setClaimableEpochs(payload.claimableEpochList);
@@ -295,6 +350,38 @@ export function useRebate(options?: UseRebateOptions) {
     setPendingRebateWei(BigInt(payload.pendingRebateWei || "0"));
     setDetails(payload.recentEpochs.map(parseApiEpochInfo).sort((a, b) => b.epoch - a.epoch));
     setHasLoaded(true);
+    setPayloadVersion((current) => current + 1);
+    return true;
+  }, []);
+
+  const primeFromDisplayCache = useCallback((targetAddress: string) => {
+    if (hasLoadedRef.current) return false;
+    const cached =
+      cachedPayloadRef.current[targetAddress] ??
+      (cachedPayloadRef.current[targetAddress] = loadCachedRebatePayload(targetAddress));
+    if (!cached || Date.now() - cached.cachedAt >= REBATE_CLIENT_CACHE_DISPLAY_TTL_MS) {
+      return false;
+    }
+    applyPayload(cached);
+    hasLoadedRef.current = true;
+    cacheSavedAtRef.current = cached.cachedAt;
+    return true;
+  }, [applyPayload]);
+
+  const readClaimPlanCache = useCallback((targetAddress: string, epochs: number[]) => {
+    const cacheKey = getClaimPlanCacheKey(targetAddress, epochs);
+    if (Object.prototype.hasOwnProperty.call(claimPlanCacheRef.current, cacheKey)) {
+      return claimPlanCacheRef.current[cacheKey];
+    }
+    const cached = loadCachedClaimPlan(targetAddress, epochs);
+    claimPlanCacheRef.current[cacheKey] = cached;
+    return cached;
+  }, []);
+
+  const writeClaimPlanCache = useCallback((targetAddress: string, epochs: number[], kind: ClaimPlanKind) => {
+    const cached = { kind, savedAt: Date.now() };
+    claimPlanCacheRef.current[getClaimPlanCacheKey(targetAddress, epochs)] = cached;
+    saveCachedClaimPlan(targetAddress, epochs, kind);
   }, []);
 
   const formatRebateError = useCallback((err: unknown): string => {
@@ -348,7 +435,7 @@ export function useRebate(options?: UseRebateOptions) {
   const refetchRebateInfo = useCallback(async (options?: { forceFresh?: boolean; includeExact?: boolean }) => {
     if (!enabled || !rebateAddress) {
       resetState();
-      return;
+      return false;
     }
 
     if (!CONTRACT_HAS_REBATE_API) {
@@ -369,18 +456,11 @@ export function useRebate(options?: UseRebateOptions) {
       if (mountedRef.current) {
         setHasLoaded(true);
       }
-      return;
+      return true;
     }
 
     const requestId = ++requestIdRef.current;
-    if (!hasLoadedRef.current) {
-      const cached = loadCachedRebatePayload(rebateAddress);
-      if (cached && Date.now() - cached.cachedAt < REBATE_CLIENT_CACHE_DISPLAY_TTL_MS) {
-        applyPayload(cached);
-        hasLoadedRef.current = true;
-        cacheSavedAtRef.current = cached.cachedAt;
-      }
-    }
+    primeFromDisplayCache(rebateAddress);
 
     if (!hasLoadedRef.current) {
       if (mountedRef.current) {
@@ -406,13 +486,22 @@ export function useRebate(options?: UseRebateOptions) {
 
       if (requestId !== requestIdRef.current) return;
 
-      applyPayload(payload);
-      saveCachedRebatePayload(rebateAddress, payload);
+      const changed = applyPayload(payload);
+      const fetchedAt = Date.now();
       hasLoadedRef.current = true;
       if (mountedRef.current) {
         setHasLoaded(true);
       }
-      cacheSavedAtRef.current = Date.now();
+      cacheSavedAtRef.current = fetchedAt;
+      if (changed || !cachedPayloadRef.current[rebateAddress]) {
+        const cachedPayload = {
+          ...payload,
+          cachedAt: fetchedAt,
+        } satisfies CachedRebateInfo;
+        cachedPayloadRef.current[rebateAddress] = cachedPayload;
+        saveCachedRebatePayload(rebateAddress, payload);
+      }
+      return true;
     } catch (err) {
       if (
         isMissingContractMethodError(err, "getRebateSummary") ||
@@ -440,12 +529,13 @@ export function useRebate(options?: UseRebateOptions) {
           setHasLoaded(false);
         }
       }
+      return false;
     } finally {
       if (mountedRef.current && requestId === requestIdRef.current) {
         setIsLoading(false);
       }
     }
-  }, [applyPayload, enabled, rebateAddress, resetState]);
+  }, [applyPayload, enabled, primeFromDisplayCache, rebateAddress, resetState]);
 
   useEffect(() => {
     if (timeoutRef.current !== null) {
@@ -460,14 +550,7 @@ export function useRebate(options?: UseRebateOptions) {
 
     if (!rebateAddress) return;
 
-    if (!hasLoadedRef.current) {
-      const cached = loadCachedRebatePayload(rebateAddress);
-      if (cached && Date.now() - cached.cachedAt < REBATE_CLIENT_CACHE_DISPLAY_TTL_MS) {
-        applyPayload(cached);
-        hasLoadedRef.current = true;
-        cacheSavedAtRef.current = cached.cachedAt;
-      }
-    }
+    primeFromDisplayCache(rebateAddress);
 
     const pollMs = active
       ? (isPageVisible ? REBATE_REFRESH_MS : REBATE_HIDDEN_REFRESH_MS)
@@ -496,13 +579,19 @@ export function useRebate(options?: UseRebateOptions) {
         timeoutRef.current = null;
       }
     };
-  }, [active, applyPayload, enabled, isPageVisible, rebateAddress, refetchRebateInfo, resetState]);
+  }, [active, enabled, isPageVisible, primeFromDisplayCache, rebateAddress, refetchRebateInfo, resetState]);
 
   useEffect(() => {
     if (!enabled || !active || !isPageVisible || !rebateAddress) return;
     if (!hasLoaded || isLoading || !isSupported) return;
     if (claimableEpochCount <= 0 || claimableEpochs.length > 0) return;
-    void refetchRebateInfo({ includeExact: true });
+    if (payloadVersion === 0 || exactAttemptVersionRef.current === payloadVersion) return;
+    exactAttemptVersionRef.current = payloadVersion;
+    void refetchRebateInfo({ includeExact: true }).then((ok) => {
+      if (!ok && exactAttemptVersionRef.current === payloadVersion) {
+        exactAttemptVersionRef.current = null;
+      }
+    });
   }, [
     active,
     claimableEpochCount,
@@ -512,6 +601,7 @@ export function useRebate(options?: UseRebateOptions) {
     isLoading,
     isPageVisible,
     isSupported,
+    payloadVersion,
     rebateAddress,
     refetchRebateInfo,
   ]);
@@ -550,7 +640,7 @@ export function useRebate(options?: UseRebateOptions) {
 
     let cancelled = false;
     const epochArgs = claimableEpochs.map((epoch) => BigInt(epoch));
-    const cachedPlan = loadCachedClaimPlan(rebateAddress, claimableEpochs);
+    const cachedPlan = readClaimPlanCache(rebateAddress, claimableEpochs);
     if (cachedPlan && Date.now() - cachedPlan.savedAt < CLAIM_PLAN_CACHE_TTL_MS) {
       if (mountedRef.current) {
         setClaimPlanKind(cachedPlan.kind);
@@ -571,12 +661,12 @@ export function useRebate(options?: UseRebateOptions) {
     }).then(() => {
       if (cancelled) return;
       setClaimPlanKind("single");
-      saveCachedClaimPlan(rebateAddress, claimableEpochs, "single");
+      writeClaimPlanCache(rebateAddress, claimableEpochs, "single");
     }).catch(() => {
       if (cancelled) return;
       const fallbackKind = claimableEpochs.length > 1 ? "split" : "unknown";
       setClaimPlanKind(fallbackKind);
-      saveCachedClaimPlan(rebateAddress, claimableEpochs, fallbackKind);
+      writeClaimPlanCache(rebateAddress, claimableEpochs, fallbackKind);
     }).finally(() => {
       if (cancelled) return;
       setIsEstimatingClaimPlan(false);
@@ -585,7 +675,7 @@ export function useRebate(options?: UseRebateOptions) {
     return () => {
       cancelled = true;
     };
-  }, [active, claimableEpochs, enabled, isPageVisible, publicClient, rebateAddress]);
+  }, [active, claimableEpochs, enabled, isPageVisible, publicClient, readClaimPlanCache, rebateAddress, writeClaimPlanCache]);
 
   const claimRebates = useCallback(async () => {
     if (!CONTRACT_HAS_REBATE_API || !rebateAddress || !publicClient || rebateEpochs.length === 0) return;

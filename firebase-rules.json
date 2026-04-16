@@ -1,14 +1,14 @@
 {
   "rules": {
     "messages": {
-      ".read": true,
+      ".read": false,
       ".indexOn": ["timestamp"],
       "$messageId": {
         ".write": false
       }
     },
     "gamedata": {
-      ".read": true,
+      ".read": false,
       ".write": false,
       "bets": {
         "$user": {

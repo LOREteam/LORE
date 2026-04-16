@@ -8,7 +8,6 @@ const projectRoot = path.resolve(__dirname);
 const nextConfig = {
   reactStrictMode: true,
   outputFileTracingRoot: projectRoot,
-  transpilePackages: ["porto", "@wagmi/connectors", "wagmi", "@privy-io/wagmi"],
   webpack(config) {
     config.context = projectRoot;
     config.resolve = config.resolve ?? {};

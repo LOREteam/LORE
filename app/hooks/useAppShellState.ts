@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { TabId } from "../lib/types";
 import type { NoticeItem, NoticeTone } from "../components/NoticeStack";
 import { log } from "../lib/logger";
@@ -163,21 +163,40 @@ export function useAppShellState() {
   const closeWalletSettings = useCallback(() => setIsWalletSettingsOpen(false), []);
   const handleBackupConfirm = useCallback(() => setBackupGateVersion((value) => value + 1), []);
 
-  return {
-    activeTab,
-    chatOpen,
-    isPageVisible,
-    isWalletSettingsOpen,
-    backupGateVersion,
-    visibleHotTiles,
-    notices,
-    setChatOpen,
-    handleTabChange,
-    dismissNotice,
-    notify,
-    syncHotTiles,
-    openWalletSettings,
-    closeWalletSettings,
-    handleBackupConfirm,
-  };
+  return useMemo(
+    () => ({
+      activeTab,
+      chatOpen,
+      isPageVisible,
+      isWalletSettingsOpen,
+      backupGateVersion,
+      visibleHotTiles,
+      notices,
+      setChatOpen,
+      handleTabChange,
+      dismissNotice,
+      notify,
+      syncHotTiles,
+      openWalletSettings,
+      closeWalletSettings,
+      handleBackupConfirm,
+    }),
+    [
+      activeTab,
+      chatOpen,
+      isPageVisible,
+      isWalletSettingsOpen,
+      backupGateVersion,
+      visibleHotTiles,
+      notices,
+      setChatOpen,
+      handleTabChange,
+      dismissNotice,
+      notify,
+      syncHotTiles,
+      openWalletSettings,
+      closeWalletSettings,
+      handleBackupConfirm,
+    ],
+  );
 }

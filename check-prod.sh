@@ -8,7 +8,7 @@ set -u
 
 BASE_URL="${BASE_URL:-}"
 ENV_FILE="${ENV_FILE:-.env}"
-DEPLOY_BLOCK="${INDEXER_START_BLOCK:-25663555}"
+DEPLOY_BLOCK="${INDEXER_START_BLOCK:-28832251}"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -140,10 +140,10 @@ else
   warn "NEXT_PUBLIC_CONTRACT_HAS_REBATE_API is empty (frontend will infer rebate support from contract address)"
 fi
 
-if [[ -n "${NEXT_PUBLIC_FIREBASE_DATABASE_URL:-}" || -n "${FIREBASE_DB_URL:-}" ]]; then
-  pass "Firebase URL is set"
+if [[ -n "${LORE_DB_PATH:-}" ]]; then
+  pass "LORE_DB_PATH is set ($LORE_DB_PATH)"
 else
-  fail "Firebase URL is empty (NEXT_PUBLIC_FIREBASE_DATABASE_URL/FIREBASE_DB_URL)"
+  warn "LORE_DB_PATH is empty (server/db.ts will use default data/lore.sqlite)"
 fi
 
 ###############################################################################

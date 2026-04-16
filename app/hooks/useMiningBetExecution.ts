@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import type { PublicClient } from "viem";
 import { log } from "../lib/logger";
 import { EIP7702_MINING_ENABLED, type Eip7702CapabilityState } from "../lib/eip7702";
@@ -100,10 +100,13 @@ export function useMiningBetExecution({
     [placeBets, placeBetsSilent, placeBets7702, readSilentSend, readEip7702Capability],
   );
 
-  return {
-    placeBets,
-    placeBetsSilent,
-    placeBets7702,
-    placeBetsPreferSilent,
-  };
+  return useMemo(
+    () => ({
+      placeBets,
+      placeBetsSilent,
+      placeBets7702,
+      placeBetsPreferSilent,
+    }),
+    [placeBets, placeBetsPreferSilent, placeBetsSilent, placeBets7702],
+  );
 }

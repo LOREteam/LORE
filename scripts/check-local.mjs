@@ -16,6 +16,7 @@ const npmCommand = process.env.npm_execpath && process.execPath
     : "npm";
 const steps = [
   { command: npmCommand, args: ["run", "lint"] },
+  { command: npmCommand, args: ["run", "test:logic"] },
   { command: npmCommand, args: ["run", "build"] },
   { command: npmCommand, args: ["run", "typecheck"], retryOnce: true },
 ];
@@ -35,6 +36,9 @@ const smokeSteps = [
 const FILTERED_WARNING_PATTERNS = [
   /ExperimentalWarning: SQLite is an experimental feature/i,
   /Using edge runtime on a page currently disables static generation/i,
+  /\[MODULE_TYPELESS_PACKAGE_JSON\]/i,
+  /Reparsing as ES module because module syntax was detected/i,
+  /To eliminate this warning, add "type": "module"/i,
   /\(Use `node --trace-warnings .*` to show where the warning was created\)/i,
 ];
 

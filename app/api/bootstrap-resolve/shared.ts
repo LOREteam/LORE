@@ -1,19 +1,15 @@
-import { createPublicClient, http, parseAbi } from "viem";
+import { createPublicClient, http } from "viem";
 import type { PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { RESOLVE_ABI } from "../../../config/abi";
 import { acquireExpiringLock } from "../../../server/storage";
 import { APP_CHAIN, CONTRACT_ADDRESS, SERVER_RPC_URLS } from "../_lib/dataBridge";
 
-export const BOOTSTRAP_RESOLVE_ABI = parseAbi([
-  "function resolveEpoch(uint256 epoch) external",
-  "function currentEpoch() view returns (uint256)",
-  "function getEpochEndTime(uint256 epoch) view returns (uint256)",
-  "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
-  "error TimerNotEnded()",
-  "error AlreadyResolved()",
-  "error CanOnlyResolveCurrent()",
-]);
+export const BOOTSTRAP_RESOLVE_ABI = RESOLVE_ABI;
 
+// V8 atomic resolve: one keeper tx per stuck epoch. A modest throttle is
+// enough — the keeper is only needed when no player bet triggers
+// _autoResolveIfNeeded in the following round.
 export const RESOLVE_THROTTLE_MS = 5_000;
 export const BOOTSTRAP_RPC_UNAVAILABLE_RETRY_MS = 12_000;
 const RESOLVE_LOCK_PATH = "_internal/bootstrapResolveLock";
@@ -41,9 +37,9 @@ export function getResolveNoopReason(message: string): string | null {
   ) {
     return "resolve_fee_bump_needed";
   }
-  if (lower.includes("alreadyresolved") || lower.includes("0x6d5703c2")) return "epoch_already_resolved";
-  if (lower.includes("canonlyresolvecurrent") || lower.includes("0x22daea9a")) return "epoch_no_longer_current";
-  if (lower.includes("timernotended") || lower.includes("0xe7884c39")) return "epoch_not_expired";
+  if (lower.includes("alreadyresolved")) return "epoch_already_resolved";
+  if (lower.includes("canonlyresolvecurrent")) return "epoch_no_longer_current";
+  if (lower.includes("timernotended")) return "epoch_not_expired";
   return null;
 }
 
@@ -71,7 +67,8 @@ export function createRpcClient(url: string) {
 export async function acquireResolveLock(epoch: bigint) {
   try {
     return acquireExpiringLock(RESOLVE_LOCK_PATH, epoch.toString(), RESOLVE_THROTTLE_MS);
-  } catch {
+  } catch (err) {
+    console.warn("[bootstrap-resolve] SQLite lock unavailable, using in-memory throttle:", err instanceof Error ? err.message : err);
     const now = Date.now();
     if (now - lastResolveAttemptAt < RESOLVE_THROTTLE_MS) return false;
     lastResolveAttemptAt = now;

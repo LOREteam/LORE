@@ -2,6 +2,11 @@
 
 import { useEffect } from "react";
 import { log } from "./lib/logger";
+import {
+  isChunkLoadLikeErrorMessage,
+  reloadWithCacheBust,
+  shouldAttemptChunkReloadOnce,
+} from "./lib/chunkReloadRecovery";
 
 export default function ErrorPage({
   error,
@@ -17,16 +22,24 @@ export default function ErrorPage({
       digest: error.digest,
       stack: error.stack?.slice(0, 400),
     });
+
+    if (!isChunkLoadLikeErrorMessage(error.message)) {
+      return;
+    }
+    const canReload = shouldAttemptChunkReloadOnce(
+      typeof sessionStorage !== "undefined" ? sessionStorage : null,
+    );
+    if (!canReload) {
+      return;
+    }
+    log.warn("ErrorBoundary", "chunk route error detected, reloading page once", {
+      message: error.message.slice(0, 180),
+    });
+    reloadWithCacheBust(window.location);
   }, [error]);
 
   const handleHardReload = () => {
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.set("_r", Date.now().toString());
-      window.location.replace(url.toString());
-    } catch {
-      window.location.reload();
-    }
+    reloadWithCacheBust(window.location);
   };
 
   return (
@@ -39,11 +52,6 @@ export default function ErrorPage({
         <p className="text-sm text-gray-300 mb-6 leading-relaxed">
           Something disrupted the rendering of this view. Your funds are safe on-chain.
         </p>
-        {error.digest && (
-          <p className="text-[10px] font-mono text-gray-500 mb-4">
-            ref: {error.digest}
-          </p>
-        )}
         <div className="flex flex-col gap-2">
           <button
             type="button"

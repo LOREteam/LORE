@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMessage } from "../../hooks/useChat";
+import { CHAT_RATE_LIMIT_MS, type ChatMessage } from "../../hooks/useChat";
 import type { ChatProfile } from "../../hooks/useChatProfile";
 import { ChatMessageRow } from "./ChatMessage";
 import { ChatProfileModal } from "./ChatProfileModal";
@@ -16,13 +16,15 @@ interface Props {
   connected: boolean;
   authReady: boolean;
   onEnsureAuth: () => Promise<boolean>;
-  onSend: (text: string, name: string | null, avatar: string | null) => void;
+  sendCooldownRemainingMs: number;
+  isSending: boolean;
+  onSend: (text: string, name: string | null, avatar: string | null) => Promise<boolean>;
   onUpdateProfile: (updates: Partial<ChatProfile>) => void;
   onClose: () => void;
   variant?: "embedded" | "floating";
 }
 
-export function ChatWindow({
+export const ChatWindow = React.memo(function ChatWindow({
   messages,
   walletAddress,
   profile,
@@ -30,6 +32,8 @@ export function ChatWindow({
   connected,
   authReady,
   onEnsureAuth,
+  sendCooldownRemainingMs,
+  isSending,
   onSend,
   onUpdateProfile,
   onClose,
@@ -37,6 +41,10 @@ export function ChatWindow({
 }: Props) {
   const [input, setInput] = useState("");
   const [showProfile, setShowProfile] = useState(false);
+  const [isDesktopViewport, setIsDesktopViewport] = useState(false);
+  const [desktopFloatingStyle, setDesktopFloatingStyle] = useState<React.CSSProperties | null>(null);
+  const [embeddedDesktopHeight, setEmbeddedDesktopHeight] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
 
@@ -49,30 +57,157 @@ export function ChatWindow({
     if (stickToBottom.current) scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const updateViewport = () => {
+      setIsDesktopViewport(window.innerWidth >= 900);
+    };
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
+    return () => {
+      window.removeEventListener("resize", updateViewport);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !isDesktopViewport) return;
+    if (variant !== "floating") return;
+
+    let frameId = 0;
+    const fallbackStyle = {
+      width: "24rem",
+      top: "13.75rem",
+      right: "0.75rem",
+      bottom: "4.5rem",
+    } satisfies React.CSSProperties;
+
+    const measureFloatingRect = () => {
+      const walletCard = document.getElementById("header-wallet-card");
+      const dock = document.querySelector(".hud-dock");
+      if (!(walletCard instanceof HTMLElement) || !(dock instanceof HTMLElement)) {
+        setDesktopFloatingStyle(fallbackStyle);
+        return;
+      }
+
+      const walletRect = walletCard.getBoundingClientRect();
+      const dockRect = dock.getBoundingClientRect();
+      const dockGapPx = 4;
+      const nextBottom = Math.max(window.innerHeight - dockRect.top + dockGapPx, 0);
+      setDesktopFloatingStyle({
+        top: `${Math.max(walletRect.bottom + 8, 0)}px`,
+        right: `${Math.max(window.innerWidth - walletRect.right, 0)}px`,
+        width: `${walletRect.width}px`,
+        bottom: `${nextBottom}px`,
+      });
+    };
+
+    const scheduleMeasure = () => {
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(measureFloatingRect);
+    };
+
+    const walletCard = document.getElementById("header-wallet-card");
+    const dock = document.querySelector(".hud-dock");
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            scheduleMeasure();
+          });
+
+    if (walletCard instanceof HTMLElement) resizeObserver?.observe(walletCard);
+    if (dock instanceof HTMLElement) resizeObserver?.observe(dock);
+    measureFloatingRect();
+    window.addEventListener("resize", scheduleMeasure);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleMeasure);
+    };
+  }, [isDesktopViewport, variant]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !isDesktopViewport) return;
+    if (variant !== "embedded") return;
+
+    let frameId = 0;
+    const dockGapPx = 4;
+
+    const measureEmbeddedHeight = () => {
+      const node = rootRef.current;
+      const dock = document.querySelector(".hud-dock");
+      if (!(node instanceof HTMLElement) || !(dock instanceof HTMLElement)) {
+        setEmbeddedDesktopHeight(null);
+        return;
+      }
+
+      const rootRect = node.getBoundingClientRect();
+      const dockRect = dock.getBoundingClientRect();
+      const nextHeight = Math.max(dockRect.top - rootRect.top - dockGapPx, 360);
+      setEmbeddedDesktopHeight(`${nextHeight}px`);
+    };
+
+    const scheduleMeasure = () => {
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(measureEmbeddedHeight);
+    };
+
+    const dock = document.querySelector(".hud-dock");
+    const parent = rootRef.current?.parentElement ?? null;
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            scheduleMeasure();
+          });
+
+    if (dock instanceof HTMLElement) resizeObserver?.observe(dock);
+    if (parent instanceof HTMLElement) resizeObserver?.observe(parent);
+    measureEmbeddedHeight();
+    window.addEventListener("resize", scheduleMeasure);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleMeasure);
+    };
+  }, [isDesktopViewport, variant]);
+
   const handleScroll = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   }, []);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
-    onSend(text, profile.name, profile.customAvatar ?? profile.avatar);
-    setInput("");
+    const sent = await onSend(text, profile.name, profile.customAvatar ?? profile.avatar);
+    if (sent) setInput("");
   }, [input, onSend, profile]);
+
+  const handleOpenProfile = useCallback(() => {
+    setShowProfile(true);
+  }, []);
+
+  const handleCloseProfile = useCallback(() => {
+    setShowProfile(false);
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        handleSend();
+        void handleSend();
       }
     },
     [handleSend],
   );
 
   const myAddr = walletAddress?.toLowerCase() ?? "";
+  const sendLocked = sendCooldownRemainingMs > 0;
+  const sendCooldownProgress = Math.min(1, Math.max(0, sendCooldownRemainingMs / CHAT_RATE_LIMIT_MS));
+  const sendCooldownCircumference = 2 * Math.PI * 18;
+  const sendCooldownOffset = sendCooldownCircumference * (1 - sendCooldownProgress);
   const containerShadowClass =
     variant === "floating"
       ? "shadow-[0_24px_72px_rgba(2,6,23,0.5)]"
@@ -80,18 +215,30 @@ export function ChatWindow({
 
   return (
     <div
+      ref={rootRef}
       className={`flex flex-col overflow-hidden rounded-xl border border-violet-500/22 bg-[#090914]/97 ${containerShadowClass} backdrop-blur-xl animate-slide-up ${
-        variant === "embedded" ? "h-full min-h-[35.25rem]" : "fixed z-[210]"
+        variant === "embedded"
+          ? "max-[899px]:h-full max-[899px]:min-h-[35.25rem] max-[899px]:pb-[6.75rem] min-[900px]:h-[calc(100dvh-17rem)] min-[900px]:min-h-[22.5rem]"
+          : "fixed z-[210]"
       }`}
       style={
         variant === "floating"
-          ? {
-              width: "min(34rem, calc(100vw - 1.5rem))",
-              right: "0.75rem",
-              top: "clamp(8.8rem, 18vh, 10.2rem)",
-              bottom: "max(7.6rem, calc(env(safe-area-inset-bottom, 0px) + 7.1rem))",
-            }
-          : undefined
+          ? isDesktopViewport
+            ? desktopFloatingStyle ?? {
+                width: "24rem",
+                top: "13.75rem",
+                right: "0.75rem",
+                bottom: "4.5rem",
+              }
+            : {
+                width: "min(20rem, calc(100vw - 12.75rem))",
+                height: "min(35.25rem, calc(100dvh - 7.5rem))",
+                right: "max(10.75rem, calc(env(safe-area-inset-right, 0px) + 10.25rem))",
+                bottom: "max(calc(7rem + 1cm), calc(env(safe-area-inset-bottom, 0px) + 6.55rem + 1cm))",
+              }
+          : variant === "embedded" && isDesktopViewport && embeddedDesktopHeight
+            ? { height: embeddedDesktopHeight }
+            : undefined
       }
     >
       <div className="pointer-events-none absolute inset-0">
@@ -111,25 +258,32 @@ export function ChatWindow({
 
         <div className="flex items-center gap-1">
           <button
-            onClick={() => setShowProfile(true)}
+            type="button"
+            onClick={handleOpenProfile}
             aria-label="Profile"
             title="Profile"
             className="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/[0.04] hover:text-violet-300"
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <circle cx="8" cy="5.5" r="2.5" />
-              <path d="M3 14c0-2.5 2.2-4 5-4s5 1.5 5 4" />
+            <svg aria-hidden="true" width="17" height="17" viewBox="0 0 17 17" fill="none">
+              <circle cx="8.5" cy="5.5" r="2.9" fill="currentColor" opacity="0.85" />
+              <path
+                d="M2.5 15.5c0-3.038 2.686-5.5 6-5.5s6 2.462 6 5.5"
+                stroke="currentColor"
+                strokeWidth="1.55"
+                strokeLinecap="round"
+                fill="none"
+              />
             </svg>
           </button>
           <button
+            type="button"
             onClick={onClose}
             aria-label="Close chat panel"
             title="Close chat"
             className="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/[0.04] hover:text-slate-200"
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <line x1="4" y1="4" x2="12" y2="12" />
-              <line x1="12" y1="4" x2="4" y2="12" />
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
             </svg>
           </button>
         </div>
@@ -165,19 +319,57 @@ export function ChatWindow({
                   className="h-11 min-w-0 flex-1 rounded-xl border border-violet-500/14 bg-[#1a1a30] px-4 text-[15px] text-slate-100 placeholder:text-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] focus:outline-none focus:border-violet-500/38"
                 />
                 <button
-                  onClick={handleSend}
-                  disabled={!input.trim()}
+                  type="button"
+                  onClick={() => {
+                    void handleSend();
+                  }}
+                  disabled={!input.trim() || sendLocked || isSending}
                   aria-label="Send message"
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white transition-all duration-200 hover:bg-violet-500 disabled:pointer-events-none disabled:opacity-35"
-                  title="Send message"
+                  className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-violet-600 text-white transition-all duration-200 hover:bg-violet-500 active:scale-95 disabled:pointer-events-none disabled:opacity-55"
+                  title={sendLocked ? "Message cooldown active" : "Send message"}
                 >
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M2.5 2.1l11.8 5.5c.4.2.4.7 0 .8L2.5 13.9c-.5.2-1-.2-.8-.7L3.4 8 1.7 2.8c-.2-.5.3-.9.8-.7z" />
+                  {(sendLocked || isSending) && (
+                    <svg
+                      aria-hidden="true"
+                      className={`pointer-events-none absolute inset-0 h-full w-full -rotate-90 ${isSending && !sendLocked ? "animate-spin" : ""}`}
+                      viewBox="0 0 44 44"
+                      fill="none"
+                    >
+                      <circle cx="22" cy="22" r="18" stroke="rgba(255,255,255,0.16)" strokeWidth="2.5" />
+                      <circle
+                        cx="22"
+                        cy="22"
+                        r="18"
+                        stroke="rgba(216,180,254,0.95)"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeDasharray={sendCooldownCircumference}
+                        strokeDashoffset={sendLocked ? sendCooldownOffset : sendCooldownCircumference * 0.72}
+                        style={{ transition: "stroke-dashoffset 80ms linear" }}
+                      />
+                    </svg>
+                  )}
+                  <svg
+                    aria-hidden="true"
+                    className={`relative z-10 transition-opacity ${sendLocked || isSending ? "opacity-75" : "opacity-100"}`}
+                    width="17"
+                    height="17"
+                    viewBox="0 0 17 17"
+                    fill="none"
+                  >
+                    <path
+                      d="M2 2.5L15 8.5L2 14.5V10L10.5 8.5L2 7V2.5Z"
+                      fill="currentColor"
+                      stroke="currentColor"
+                      strokeWidth="0.6"
+                      strokeLinejoin="round"
+                    />
                   </svg>
                 </button>
               </div>
             ) : (
               <button
+                type="button"
                 onClick={() => {
                   void onEnsureAuth();
                 }}
@@ -199,9 +391,9 @@ export function ChatWindow({
           profile={profile}
           walletAddress={walletAddress}
           onSave={onUpdateProfile}
-          onClose={() => setShowProfile(false)}
+          onClose={handleCloseProfile}
         />
       )}
     </div>
   );
-}
+});

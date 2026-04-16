@@ -18,7 +18,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
     <div className="flex-1 overflow-y-auto pb-24 animate-fade-in">
       <div className="max-w-3xl mx-auto px-4 md:px-8">
         <Hero />
-        <Divider />
+        <div className="h-3 sm:h-4" />
 
         {/* ═══ LORE PROLOGUE ═══ */}
         <section className="relative py-8 mb-4 overflow-hidden animate-fade-in">
@@ -74,7 +74,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
             by the smart contract. If your bet is on the winning tile – you take a proportional share of the entire round&apos;s reward pool.
           </P>
           <P>
-            On top of the base reward, <Accent>LORE V6</Accent> introduces a <B>dual jackpot system</B>: a <Accent>Daily Jackpot</Accent> (2%) and a <Accent>Weekly Jackpot</Accent> (3%).
+            On top of the base reward, the current live release adds a <B>dual jackpot system</B>: a <Accent>Daily Jackpot</Accent> (2%) and a <Accent>Weekly Jackpot</Accent> (3%).
             Every round, a portion of the pool accrues into these jackpot reserves. Once per day and once per week, one lucky round
             triggers the jackpot – and the <B>entire accumulated jackpot pool</B> is added to that round&apos;s winners.
           </P>
@@ -84,11 +84,9 @@ export const WhitePaper = React.memo(function WhitePaper() {
           </P>
           <InfoBox emoji="🎲" title="How Randomness Is Generated">
             Winning tile uses only on-chain entropy:
-            <Code>keccak256(prevrandao, blockhash(n-1), epoch, totalPoolWithRollover, dailyPool, weeklyPool) % 25 + 1</Code>.
+            <Code>keccak256(block.prevrandao, blockhash(block.number - 1), msg.sender, epoch, totalPoolWithRollover, dailyJackpotPool, weeklyJackpotPool) % 25 + 1</Code>.
             <br /><br />
-            Daily and weekly jackpots use separate random checks:
-            <Code>keccak256(prevrandao, &quot;daily/weekly&quot;, epoch, lastCheck, block.timestamp)</Code>,
-            then compare randomness against elapsed time in the current day/week window.
+            Each epoch is resolved atomically in a single transaction once its timer ends. Bets are rejected in the final 2 seconds of the epoch, so no single block can contain both a bet and the resolve for the same epoch.
           </InfoBox>
           <InfoBox emoji="⛏" title="Core Idea">
             Place your LINEA tokens on tiles you believe will win. The more you stake on a winning tile – the bigger your share of the prize pool.
@@ -103,10 +101,10 @@ export const WhitePaper = React.memo(function WhitePaper() {
             { step: "1", title: "Epoch Starts", desc: "A new round begins with a fresh 5×5 grid. The countdown timer starts." },
             { step: "2", title: "Place Bets", desc: "Select one or more tiles and stake LINEA tokens. Each tile accumulates its own pool from all players." },
             { step: "3", title: "Epoch Ends", desc: "When the timer reaches zero, no more bets are accepted. The smart contract resolves the epoch." },
-            { step: "4", title: "Winner Revealed", desc: "The contract computes the winning tile from on-chain entropy (prevrandao + previous block hash + epoch/pool state) and maps it to 1–25." },
+            { step: "4", title: "Winner Revealed", desc: "The contract finalizes the sealed epoch with delayed future-block entropy and maps the resulting hash to tile 1–25." },
             { step: "5", title: "Fees Split", desc: "The pool is split: 92% to winners, 2% to daily jackpot, 3% to weekly jackpot, 2% protocol fee (half to treasury, half to player rebates), 1% burn." },
-            { step: "6", title: "Jackpot Check", desc: "If there is at least one winner, the contract runs daily/weekly random checks using prevrandao + time window variables. On trigger, the full jackpot pool is added to this epoch." },
-            { step: "7", title: "Claim Rewards", desc: "Winners claim their share via the Reward Scanner. If no one hit the winning tile – the base reward rolls into the next round, and jackpot pools keep growing." },
+            { step: "6", title: "Jackpot Check", desc: "If there is at least one winner, the contract runs daily/weekly checks using the sealed epoch end time plus the same delayed entropy. On trigger, the full jackpot pool is added to this epoch." },
+            { step: "7", title: "Claim Rewards", desc: "Winners claim their share from the Rewards panel. If no one hit the winning tile, the base reward rolls into the next round and the jackpot pools keep growing." },
           ]} />
         </Section>
 
@@ -175,12 +173,11 @@ export const WhitePaper = React.memo(function WhitePaper() {
             <FeatureCard icon="⚡" title="Bet Size" desc="Set LINEA tokens per tile per round" />
             <FeatureCard icon="🎯" title="Targets" desc="Number of random tiles per round (1–25)" />
             <FeatureCard icon="🔄" title="Cycles" desc="Total rounds to auto-bet (1–∞)" />
-            <FeatureCard icon="💾" title="Persistence" desc="Survives page reload via localStorage" />
+            <FeatureCard icon="💾" title="Persistence" desc="Saves the run locally and restores it after reload when the wallet session is still valid" />
           </Grid2>
           <InfoBox emoji="🤖" title="How the Bot Works">
-            On each cycle, the bot randomly selects N tiles, places batch bets via Privy&apos;s
-            embedded wallet (no popups), waits for the next epoch, and repeats. All settings are persisted and
-            the session resumes automatically after a page refresh.
+            On each cycle, the bot randomly selects N tiles, places batch bets through the embedded Privy wallet,
+            waits for the next eligible epoch, and repeats. The run state is saved locally so the app can restore it after a reload when the wallet session is still valid.
           </InfoBox>
           <P>
             The bot checks your LINEA balance before every round and stops gracefully if funds run low.
@@ -192,13 +189,13 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         <Section id="rebate" badge="06" title="Participation Rebate" icon={RefIcon} delay={0.25}>
           <P>
-            LORE V6 uses an on-chain <Accent>participation rebate</Accent> instead of referrals. A portion of every epoch is reserved
+            The current live contract uses an on-chain <Accent>participation rebate</Accent>. A portion of every epoch is reserved
             for players who actually spent gas and placed bets in that round.
           </P>
           <Grid2>
             <FeatureCard icon="⛏" title="Bet To Earn" desc="Every player who bets in an epoch becomes eligible for that epoch's rebate share." />
             <FeatureCard icon="📊" title="Volume Based" desc="The rebate is split proportionally to your total LINEA volume in that epoch." />
-            <FeatureCard icon="💰" title="1% Rebate Pool" desc="Half of the 2% protocol fee is reserved for players instead of referrals." />
+            <FeatureCard icon="💰" title="1% Rebate Pool" desc="Half of the 2% protocol fee is reserved for active players as a participation rebate." />
             <FeatureCard icon="🏦" title="Claim Anytime" desc="Rebates accumulate in the contract and can be claimed later in batches." />
           </Grid2>
           <InfoBox emoji="🤝" title="How Participation Rebate Works">
@@ -208,7 +205,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
           </InfoBox>
           <P>
             To collect it, go to the <Accent>Rebate</Accent> tab. The UI shows your pending rebate, claimable epochs, and recent
-            rounds where you earned a LINEA bonus back from protocol fees.
+            rebate rows where you earned LINEA back from protocol fees.
           </P>
         </Section>
 
@@ -239,11 +236,11 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         <Section id="contract" badge="08" title="Smart Contracts" icon={ContractIcon} delay={0.35}>
           <P>
-            LORE is currently served by the live V7 deployment on <Accent>Linea</Accent>:
+            LORE is currently served by the live V8 deployment on <Accent>Linea</Accent>:
           </P>
           <div className="space-y-3 mb-6">
             <ContractCard
-              name="Game Contract (LineaOreV7 live)"
+              name="Game Contract (LineaOreV8 live)"
               address={CONTRACT}
               functions={["placeBet()", "placeBatchBets()", "placeBatchBetsSameAmount()", "claimReward()", "resolveEpoch()", "claimEpochRebate()", "claimEpochsRebate()", "getJackpotInfo()", "getRebateSummary()"]}
             />
@@ -257,20 +254,19 @@ export const WhitePaper = React.memo(function WhitePaper() {
             Key contract features:
           </P>
           <ul className="space-y-2 mb-6 ml-1">
-            <Li emoji="🎲">Verifiable winner randomness: <Code>keccak256(prevrandao, blockhash(n-1), epoch, totalPoolWithRollover, dailyPool, weeklyPool) % 25 + 1</Code></Li>
+            <Li emoji="🎲">Verifiable winner randomness: <Code>keccak256(block.prevrandao, blockhash(block.number - 1), msg.sender, epoch, totalPoolWithRollover, dailyJackpotPool, weeklyJackpotPool) % 25 + 1</Code></Li>
             <Li emoji="🔒">No admin withdrawal functions – funds are only claimable by winners via <Code>claimReward()</Code></Li>
-            <Li emoji="📊"><Code>getTileData()</Code> returns all 25 tiles&apos; stake totals in one call; per-tile player counts are derived off-chain from bet events</Li>
+            <Li emoji="📊"><Code>getTileData()</Code> returns all 25 tiles&apos; stake totals and on-chain unique-player counts in one call</Li>
             <Li emoji="⏰">Epoch end times enforced on-chain – no bets after the deadline</Li>
-            <Li emoji="🎰">Daily/weekly jackpot trigger uses on-chain hazard checks with <Code>keccak256(prevrandao, &quot;daily/weekly&quot;, epoch, lastCheck, block.timestamp)</Code></Li>
+            <Li emoji="🎰">Daily/weekly jackpot trigger uses sealed epoch timing plus delayed entropy, not caller-controlled resolve timing</Li>
             <Li emoji="♻️">Rollover: if nobody hit the winning tile, the 92% base reward flows into the <Code>rolloverPool</Code>, inflating the next round</Li>
             <Li emoji="🛡">ReentrancyGuard on all state-changing functions; SafeERC20 for all token transfers</Li>
             <Li emoji="📅">Weekly jackpot uses Monday-based weeks (Monday 00:00 UTC start) via <Code>MONDAY_OFFSET</Code></Li>
           </ul>
           <InfoBox emoji="🔍" title="Provable Randomness (Winner + Jackpots)">
-            The winner tile and jackpot trigger checks are computed inside the smart contract at resolve time using only on-chain data.
-            The winner tile hash mixes <Code>block.prevrandao</Code>, previous block hash, epoch id, and live pool state.
-            Daily and weekly jackpots use separate random checks against elapsed time windows (<Code>elapsed / remaining</Code> hazard model),
-            so they are not fixed by round count and cannot be manually forced by UI or backend.
+            The winner tile and jackpot trigger checks are computed inside the smart contract using only on-chain data.
+            Each epoch is sealed first, then finalized after a short reveal delay with entropy from a future block, so callers cannot influence the draw by timing the resolve transaction.
+            Daily and weekly jackpots use the sealed epoch end time for their time-window math, preserving the hazard model without exposing timing manipulation to keepers or MEV actors.
           </InfoBox>
         </Section>
 
@@ -377,26 +373,26 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
 function Hero() {
   return (
-    <div className="relative pt-5 pb-5 text-center overflow-hidden">
+    <div className="relative overflow-hidden pt-3 pb-2 text-center sm:pt-4 sm:pb-3">
       <FloatingParticles />
       <div className="relative z-10">
-        <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/25 mb-6 animate-slide-up ${uiTokens.focusRing}`}>
+        <div className={`mb-4 inline-flex items-center gap-2 rounded-full border border-violet-500/25 bg-violet-500/10 px-3 py-1 animate-slide-up sm:mb-5 ${uiTokens.focusRing}`}>
           <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
           <span className="text-[10px] font-bold text-violet-400 uppercase tracking-widest">Official Documentation</span>
         </div>
 
-        <h1 className="text-4xl sm:text-5xl font-black mb-3 animate-slide-up" style={{ animationDelay: "0.1s" }}>
+        <h1 className="mb-2 animate-slide-up text-4xl font-black sm:mb-2.5 sm:text-5xl" style={{ animationDelay: "0.1s" }}>
           <span className="text-white">L</span>
           <span className="bg-gradient-to-r from-violet-400 via-purple-400 to-indigo-400 bg-clip-text text-transparent">ORE</span>
           <span className="text-gray-500 font-medium text-2xl sm:text-3xl ml-3">White Paper</span>
         </h1>
 
-        <p className="text-gray-400 text-sm max-w-lg mx-auto leading-relaxed animate-slide-up" style={{ animationDelay: "0.15s" }}>
+        <p className="mx-auto max-w-lg animate-slide-up text-sm leading-relaxed text-gray-400" style={{ animationDelay: "0.15s" }}>
           A fully on-chain prediction mining game on Linea.
           Mine tiles, win pools, earn rewards – all transparent, all verifiable.
         </p>
 
-        <div className="flex items-center justify-center gap-6 mt-6 animate-slide-up" style={{ animationDelay: "0.2s" }}>
+        <div className="mt-4 flex items-center justify-center gap-6 animate-slide-up sm:mt-5" style={{ animationDelay: "0.2s" }}>
           <Stat label="Network" value="Linea" />
           <div className="w-px h-8 bg-white/10" />
           <Stat label="Grid" value="5 × 5" />

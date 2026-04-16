@@ -127,13 +127,24 @@ export function useGameHistoryData(options: UseGameHistoryDataOptions) {
     || isHistoryUserBetsFetching
   );
 
-  return {
-    historyViewData,
-    historyLoading,
-    historyRefreshing,
-    refetchHistory,
-    historyPage,
-    setHistoryPage,
-    maxHistoryPages,
-  };
+  return useMemo(
+    () => ({
+      historyViewData,
+      historyLoading,
+      historyRefreshing,
+      refetchHistory,
+      historyPage,
+      setHistoryPage,
+      maxHistoryPages,
+    }),
+    [
+      historyViewData,
+      historyLoading,
+      historyRefreshing,
+      refetchHistory,
+      historyPage,
+      setHistoryPage,
+      maxHistoryPages,
+    ],
+  );
 }

@@ -32,9 +32,11 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   hasMyWinningBet = false,
   reducedMotion = false,
 }: JackpotBannerProps) {
+  void isRevealing;
   const [showBanner, setShowBanner] = useState(false);
   const [showContent, setShowContent] = useState(false);
   const [isDismissed, setIsDismissed] = useState(false);
+  const [activeWinKey, setActiveWinKey] = useState<string | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isMyWin = useMemo(() => {
@@ -45,6 +47,16 @@ export const JackpotBanner = React.memo(function JackpotBanner({
 
   const isDualJackpot = isDailyJackpot && isWeeklyJackpot;
   const isJackpotWin = isMyWin && (isDailyJackpot || isWeeklyJackpot);
+  const currentWinKey = useMemo(() => {
+    if (!isJackpotWin) return null;
+    return [
+      epoch ?? "unknown",
+      winningTileId ?? "none",
+      isDailyJackpot ? "daily" : "no-daily",
+      isWeeklyJackpot ? "weekly" : "no-weekly",
+      Math.round(jackpotAmount * 100),
+    ].join(":");
+  }, [epoch, isDailyJackpot, isJackpotWin, isWeeklyJackpot, jackpotAmount, winningTileId]);
 
   const sparkles = useMemo(
     () =>
@@ -76,24 +88,33 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   );
 
   useEffect(() => {
-    if (isRevealing && isJackpotWin) {
-      setIsDismissed(false);
+    if (!currentWinKey) return;
+    if (activeWinKey === currentWinKey) return;
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
     }
-  }, [isJackpotWin, isRevealing, winningTileId]);
+    setActiveWinKey(currentWinKey);
+    setIsDismissed(false);
+    setShowBanner(true);
+    const timer = setTimeout(() => setShowContent(true), 100);
+    return () => clearTimeout(timer);
+  }, [activeWinKey, currentWinKey]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    if (isRevealing && isJackpotWin && !isDismissed) {
-      setShowBanner(true);
-      timer = setTimeout(() => setShowContent(true), 100);
-    } else {
+    if (showBanner && !isDismissed) {
+      if (!showContent) {
+        timer = setTimeout(() => setShowContent(true), 100);
+      }
+    } else if (showBanner) {
       setShowContent(false);
       timer = setTimeout(() => setShowBanner(false), 450);
     }
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [isDismissed, isJackpotWin, isRevealing]);
+  }, [isDismissed, showBanner, showContent]);
 
   const handleClose = useCallback(() => {
     setIsDismissed(true);
@@ -193,33 +214,27 @@ export const JackpotBanner = React.memo(function JackpotBanner({
     window.open(tweetUrl, "_blank", "noopener,noreferrer");
   }, [amountText, epoch, headerText, isDailyJackpot, isDualJackpot, walletAddress, winningTileId]);
 
-  if (!showBanner || isDismissed) return null;
+  if (!showBanner || isDismissed || !activeWinKey) return null;
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
+      role="region"
       aria-label={`${headerText} Win`}
-      className={`fixed inset-0 z-[100] flex items-center justify-center transition-opacity duration-500 ${
+      className={`pointer-events-none fixed inset-x-0 top-3 z-[100] flex justify-center px-3 transition-opacity duration-500 sm:top-4 ${
         showContent ? "opacity-100" : "opacity-0"
       }`}
     >
-      <div
-        className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(240,210,130,0.06),transparent_24%),rgba(10,8,17,0.76)] backdrop-blur-[6px]"
-        onClick={handleClose}
-      />
-
       {!reducedMotion && (
-        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-[36rem] overflow-hidden">
           <div
-            className="absolute left-1/2 top-1/2 h-[58rem] w-[58rem] -translate-x-1/2 -translate-y-1/2 rounded-full"
+            className="absolute left-1/2 top-0 h-[46rem] w-[46rem] -translate-x-1/2 -translate-y-[18%] rounded-full"
             style={{
               background: `repeating-conic-gradient(from 0deg, ${palette.beam} 0deg 8deg, transparent 8deg 28deg, ${palette.beamAlt} 28deg 35deg, transparent 35deg 56deg)`,
               filter: "blur(2px)",
             }}
           />
           <div
-            className="absolute left-1/2 top-1/2 h-[38rem] w-[38rem] -translate-x-1/2 -translate-y-1/2 rounded-full"
+            className="absolute left-1/2 top-0 h-[28rem] w-[28rem] -translate-x-1/2 -translate-y-[12%] rounded-full"
             style={{
               background: `radial-gradient(circle, ${palette.glow} 0%, rgba(255,255,255,0.06) 16%, transparent 62%)`,
             }}
@@ -229,7 +244,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
 
       <div
         className={cn(
-          "relative z-10 mx-4 w-full max-w-[42rem] overflow-hidden rounded-[2rem] border bg-gradient-to-br px-5 py-5 text-center sm:px-6 sm:py-6",
+          "pointer-events-auto relative z-10 w-full max-w-[42rem] overflow-hidden rounded-[2rem] border bg-gradient-to-br px-5 py-5 text-center sm:px-6 sm:py-6",
           palette.shell,
           palette.frame,
         )}
@@ -314,7 +329,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
                   palette.buttonBorder,
                 )}
               >
-                Collect Reward
+                Close Banner
               </UiButton>
 
               <UiButton

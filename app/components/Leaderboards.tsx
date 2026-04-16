@@ -33,7 +33,7 @@ function Section({
   children: React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(delay === 0);
 
   useEffect(() => {
     const el = ref.current;
@@ -104,19 +104,19 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400" 
               <span className="text-xs font-black text-gray-500 tabular-nums">
                 {e.rank === 1 ? "🥇" : e.rank === 2 ? "🥈" : e.rank === 3 ? "🥉" : e.rank}
               </span>
-              <span className="font-mono text-sm text-gray-300 truncate" title={e.address}>
+              <div className="flex min-w-0 items-center gap-1.5 text-sm text-gray-300" title={e.address}>
                 {e.name ? (
                   <>
-                    <span className="font-sans font-semibold text-violet-300">{e.name}</span>
-                    <UiBadge tone="default" size="xs" className="ml-1 text-[9px] text-gray-400 border-white/15 bg-white/[0.03]">
+                    <span className="shrink-0 font-sans font-semibold leading-none text-violet-300">{e.name}</span>
+                    <UiBadge tone="default" size="xs" className="shrink-0 text-[9px] leading-none text-gray-400 border-white/15 bg-white/[0.03]">
                       site
                     </UiBadge>
-                    <span className="text-gray-400 ml-1.5">{shortenAddress(e.address)}</span>
+                    <span className="min-w-0 truncate font-mono text-gray-400">{shortenAddress(e.address)}</span>
                   </>
                 ) : (
-                  shortenAddress(e.address)
+                  <span className="min-w-0 truncate font-mono">{shortenAddress(e.address)}</span>
                 )}
-              </span>
+              </div>
               <span className={`text-sm font-bold text-right tabular-nums ${valueClass}`}>
                 {e.value}
               </span>
@@ -216,7 +216,7 @@ export function Leaderboards({
     <div className="flex-1 overflow-y-auto pb-24 animate-fade-in">
       <div className="max-w-3xl mx-auto px-4 md:px-8">
         {/* Hero */}
-        <div className="relative pt-5 pb-5 text-center overflow-hidden">
+        <div className="relative overflow-hidden pt-2 pb-0 text-center sm:pt-3 sm:pb-1">
           <div className="absolute inset-0 overflow-hidden pointer-events-none">
             {Array.from({ length: 8 }).map((_, i) => (
               <div
@@ -237,20 +237,20 @@ export function Leaderboards({
               size="sm"
               pill
               uppercase
-              className="mb-6 animate-slide-up text-amber-300/95 border-amber-400/30 bg-amber-500/12"
+              className="mb-4 animate-slide-up border-amber-400/30 bg-amber-500/12 text-amber-300/95 sm:mb-5"
             >
               <span className="text-base">🏆</span>
               On-chain leaderboards
             </UiBadge>
-            <h1 className="text-4xl sm:text-5xl font-black mb-3 animate-slide-up" style={{ animationDelay: "0.05s" }}>
+            <h1 className="mb-2 animate-slide-up text-4xl font-black sm:mb-2.5 sm:text-5xl" style={{ animationDelay: "0.05s" }}>
               <span className="text-white">Leader</span>
               <span className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 bg-clip-text text-transparent">boards</span>
             </h1>
-            <p className="text-gray-400 text-sm max-w-lg mx-auto leading-relaxed animate-slide-up" style={{ animationDelay: "0.1s" }}>
+            <p className="mx-auto max-w-lg animate-slide-up text-sm leading-relaxed text-gray-400" style={{ animationDelay: "0.1s" }}>
               Who won the most, who got luckiest, and which tile loves to win. All data from the chain.
             </p>
             {loading && (
-              <div className="mt-6 flex items-center justify-center gap-2 text-amber-400/80 text-sm">
+              <div className="mt-4 flex items-center justify-center gap-2 text-sm text-amber-400/80 sm:mt-5">
                 <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -259,7 +259,7 @@ export function Leaderboards({
               </div>
             )}
             {error && (
-              <UiPanel tone="danger" padding="md" className="mt-6 text-red-300 text-sm">
+              <UiPanel tone="danger" padding="md" className="mt-4 text-sm text-red-300 sm:mt-5">
                 {error}
                 <UiButton
                   onClick={() => refetch()}
@@ -278,7 +278,7 @@ export function Leaderboards({
                 variant="secondary"
                 size="xs"
                 uppercase
-                className="mt-4"
+                className="mt-3 sm:mt-4"
               >
                 Refresh data
               </UiButton>
@@ -286,10 +286,8 @@ export function Leaderboards({
           </div>
         </div>
 
-        <div className="h-px bg-gradient-to-r from-transparent via-violet-500/20 to-transparent my-8" />
-
         {data && (
-          <>
+          <div className="mt-2 sm:mt-3">
             <Section
               id="biggest-win"
               badge="01"
@@ -392,11 +390,11 @@ export function Leaderboards({
             >
               <LuckyTileGrid entries={data.luckyTile} />
             </Section>
-          </>
+          </div>
         )}
 
         {!data && !loading && !error && (
-          <div className="py-16 text-center text-gray-500 text-sm italic">
+          <div className="py-6 text-center text-sm italic text-gray-500 sm:py-8">
             <LoreText items={emptyStates.leaderboardTab} />
           </div>
         )}

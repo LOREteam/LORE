@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback } from "react";
+import React, { useCallback, useMemo } from "react";
 import Image from "next/image";
 import { formatUnits } from "viem";
 import type { TabId, UnclaimedWin } from "../lib/types";
@@ -69,7 +69,10 @@ export const Sidebar = React.memo(function Sidebar({
   onMobileClose,
 }: SidebarProps) {
   const { stats, loading: statsLoading } = useGlobalStats(currentEpoch, isPageVisible);
-  const renderedHotTiles = hotTiles && hotTiles.length > 0 ? hotTiles : HOT_TILE_PLACEHOLDERS;
+  const renderedHotTiles = useMemo(
+    () => (hotTiles && hotTiles.length > 0 ? hotTiles : HOT_TILE_PLACEHOLDERS),
+    [hotTiles],
+  );
   const hotTilesReady = Boolean(hotTiles && hotTiles.length > 0);
 
   const handleMobileTabChange = useCallback(
@@ -268,7 +271,7 @@ export const Sidebar = React.memo(function Sidebar({
               className="mt-2 text-center font-medium text-gray-500 transition-opacity duration-300"
               style={{ fontSize: "10px", opacity: hotTilesReady ? 1 : 0.75 }}
             >
-              Top tiles - last 40 rounds
+              Most wins - last 40 rounds
             </p>
           </UiPanel>
 
@@ -276,9 +279,9 @@ export const Sidebar = React.memo(function Sidebar({
           <UiPanel
             tone="warning"
             padding="sm"
-            className="mb-[6mm] flex min-h-0 flex-1 overflow-y-auto border-amber-500/10 bg-gradient-to-br from-amber-500/[0.04] to-violet-500/[0.04] p-0 [scrollbar-gutter:stable_both-edges]"
+            className="mb-[6mm] flex min-h-0 flex-1 overflow-y-auto border-amber-500/10 bg-gradient-to-br from-amber-500/[0.04] to-violet-500/[0.04] p-0"
           >
-            <div className="px-2 py-0.5">
+            <div className="px-1 py-0.5">
               <div className="mb-2.5 flex items-center justify-between gap-1">
                 <p className="flex items-center gap-1 text-[#455073] text-[10px] font-bold uppercase tracking-[0.1em]">
                   <span className="h-2.5 w-1 rounded-sm bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.28)]" />
@@ -290,7 +293,7 @@ export const Sidebar = React.memo(function Sidebar({
                     loading={isClaiming}
                     variant="warning"
                     size="xs"
-                    className="h-[22px] min-w-[96px] shrink-0 rounded-full border-0 bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 text-[9px] font-bold tracking-[0.01em] text-black shadow-none hover:from-amber-400 hover:to-orange-400 hover:shadow-none"
+                    className="h-[22px] min-w-[108px] shrink-0 rounded-full border-0 bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 text-[9px] font-bold tracking-[0.01em] text-black shadow-none hover:from-amber-400 hover:to-orange-400 hover:shadow-none"
                   >
                     {isClaiming ? "Wait..." : `Claim all (${unclaimedWins.length})`}
                   </UiButton>
@@ -307,31 +310,16 @@ export const Sidebar = React.memo(function Sidebar({
                   </span>
                 </div>
               ) : unclaimedWins.length > 0 ? (
-                <div className="-mx-3 flex flex-col gap-1 pb-0.5">
+                <div className="-mx-1 flex flex-col gap-1 pb-0.5">
                   {unclaimedWins.map((win, idx) => (
-                    <div
+                    <RewardClaimRow
                       key={win.epoch}
-                      className="group flex items-center gap-1.5 rounded-md border border-amber-500/35 bg-amber-500/8 px-2 py-1.5 transition-colors hover:bg-amber-500/12 animate-slide-up"
-                      style={{ animationDelay: `${idx * 0.05}s` }}
-                    >
-                      <div className="min-w-0 flex-1 pr-1">
-                        <span className="lore-nums block text-[8px] font-bold uppercase leading-none tracking-wide text-amber-500/70">
-                          #{win.epoch}
-                        </span>
-                        <span className="lore-nums mt-0.5 block truncate text-[9px] font-black leading-none tabular-nums text-emerald-400">
-                          {formatRewardAmount(win.amountWei)} LINEA
-                        </span>
-                      </div>
-                      <UiButton
-                        onClick={() => onClaim(win.epoch)}
-                        disabled={isClaiming}
-                        variant="warning"
-                        size="xs"
-                        className="h-[22px] w-[88px] shrink-0 rounded-full border-0 bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 text-[9px] font-bold tracking-[0.01em] text-black shadow-none hover:from-amber-400 hover:to-orange-400 hover:shadow-none"
-                      >
-                        {isClaiming ? "..." : "Claim"}
-                      </UiButton>
-                    </div>
+                      epoch={win.epoch}
+                      amountWei={win.amountWei}
+                      delay={idx * 0.05}
+                      isClaiming={isClaiming}
+                      onClaim={onClaim}
+                    />
                   ))}
                 </div>
               ) : (
@@ -350,6 +338,49 @@ export const Sidebar = React.memo(function Sidebar({
       </div>
     </aside>
     </>
+  );
+});
+
+const RewardClaimRow = React.memo(function RewardClaimRow({
+  epoch,
+  amountWei,
+  delay,
+  isClaiming,
+  onClaim,
+}: {
+  epoch: string;
+  amountWei: string;
+  delay: number;
+  isClaiming: boolean;
+  onClaim: (epochId: string) => void;
+}) {
+  const handleClaim = useCallback(() => {
+    onClaim(epoch);
+  }, [epoch, onClaim]);
+
+  return (
+    <div
+      className="group flex items-center gap-1.5 rounded-md border border-amber-500/35 bg-amber-500/8 px-2.5 py-1.5 transition-colors hover:bg-amber-500/12 animate-slide-up"
+      style={{ animationDelay: `${delay}s` }}
+    >
+      <div className="min-w-0 flex-1 pr-1">
+        <span className="lore-nums block text-[8px] font-bold uppercase leading-none tracking-wide text-amber-500/70">
+          #{epoch}
+        </span>
+        <span className="lore-nums mt-0.5 block truncate text-[9px] font-black leading-none tabular-nums text-emerald-400">
+          {formatRewardAmount(amountWei)} LINEA
+        </span>
+      </div>
+      <UiButton
+        onClick={handleClaim}
+        disabled={isClaiming}
+        variant="warning"
+        size="xs"
+        className="h-[22px] w-[104px] shrink-0 rounded-full border-0 bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 text-[9px] font-bold tracking-[0.01em] text-black shadow-none hover:from-amber-400 hover:to-orange-400 hover:shadow-none"
+      >
+        {isClaiming ? "..." : "Claim"}
+      </UiButton>
+    </div>
   );
 });
 

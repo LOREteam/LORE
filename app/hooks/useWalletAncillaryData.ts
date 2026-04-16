@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useDeepRewardScan } from "./useDeepRewardScan";
 import { useWalletTransfers } from "./useWalletTransfers";
 
@@ -40,17 +41,32 @@ export function useWalletAncillaryData({
     claimAllDeep,
   } = useDeepRewardScan(sendTransactionSilent, notify);
 
-  return {
-    walletTransfers,
-    walletTransfersLoading,
-    fetchWalletTransfers,
-    deepScanWins,
-    deepScanScanning,
-    deepScanClaiming,
-    deepScanProgress,
-    deepScan,
-    deepScanStop,
-    deepClaimOne,
-    claimAllDeep,
-  };
+  return useMemo(
+    () => ({
+      walletTransfers,
+      walletTransfersLoading,
+      fetchWalletTransfers,
+      deepScanWins,
+      deepScanScanning,
+      deepScanClaiming,
+      deepScanProgress,
+      deepScan,
+      deepScanStop,
+      deepClaimOne,
+      claimAllDeep,
+    }),
+    [
+      walletTransfers,
+      walletTransfersLoading,
+      fetchWalletTransfers,
+      deepScanWins,
+      deepScanScanning,
+      deepScanClaiming,
+      deepScanProgress,
+      deepScan,
+      deepScanStop,
+      deepClaimOne,
+      claimAllDeep,
+    ],
+  );
 }

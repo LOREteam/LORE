@@ -1,15 +1,12 @@
 "use client";
 
-import { useCallback } from "react";
-import { parseUnits } from "viem";
+import { useCallback, useMemo } from "react";
 import { log } from "../lib/logger";
+import { runManualMineAttempt } from "../lib/mining/manualMineAttempt";
 import { clearMiningTxPathState } from "../lib/miningTxPath";
-import { delay, isUserRejection, normalizeDecimalInput } from "../lib/utils";
+import { isUserRejection } from "../lib/utils";
 import {
   getBetErrorMessage,
-  isAllowanceError,
-  isReceiptTimeoutError,
-  isRetryableError,
   normalizeTiles,
 } from "./useMining.shared";
 import type { GasOverrides } from "./useMining.types";
@@ -56,50 +53,18 @@ export function useMiningManualActions({
       normalizedTiles: number[],
       betAmountStr: string,
       actorAddress: string,
-    ) => {
-      const normalized = normalizeDecimalInput(betAmountStr);
-      const parsed = Number(normalized);
-      if (!normalized || Number.isNaN(parsed) || parsed <= 0) throw new Error("Invalid bet amount");
-
-      const singleAmountRaw = parseUnits(normalized, 18);
-      const totalAmountRaw = singleAmountRaw * BigInt(normalizedTiles.length);
-
-      try {
-        const state = await placeBetsPreferSilent(normalizedTiles, singleAmountRaw);
-        if (state === "pending") {
-          log.warn(source, "bet tx is pending, skip immediate retry");
-          finalizeMineSuccess();
-          return true;
-        }
-      } catch (error) {
-        if (!isRetryableError(error)) throw error;
-        if (isAllowanceError(error)) {
-          await ensureAllowance(totalAmountRaw);
-        }
-        if (isReceiptTimeoutError(error)) {
-          log.warn(source, "bet receipt timeout, avoid duplicate resend");
-          finalizeMineSuccess();
-          return true;
-        }
-        const alreadyConfirmed = await checkBetAlreadyConfirmed(actorAddress, normalizedTiles);
-        if (alreadyConfirmed) {
-          log.info(source, "skipping retry - bets already on-chain", {
-            confirmedTiles: normalizedTiles.length,
-          });
-          finalizeMineSuccess();
-          return true;
-        }
-        await delay(1500);
-        const bumpedFees = await getBumpedFees(BigInt(130));
-        const retryState = await placeBetsPreferSilent(normalizedTiles, singleAmountRaw, bumpedFees);
-        if (retryState === "pending") {
-          log.warn(source, "retry bet tx still pending, skip additional resend");
-        }
-      }
-
-      finalizeMineSuccess();
-      return true;
-    },
+    ) =>
+      runManualMineAttempt({
+        actorAddress,
+        betAmountStr,
+        checkBetAlreadyConfirmed,
+        ensureAllowance,
+        finalizeMineSuccess,
+        getBumpedFees,
+        normalizedTiles,
+        placeBetsPreferSilent,
+        source,
+      }),
     [
       checkBetAlreadyConfirmed,
       ensureAllowance,
@@ -174,8 +139,11 @@ export function useMiningManualActions({
     ],
   );
 
-  return {
-    handleDirectMine,
-    handleManualMine,
-  };
+  return useMemo(
+    () => ({
+      handleDirectMine,
+      handleManualMine,
+    }),
+    [handleDirectMine, handleManualMine],
+  );
 }

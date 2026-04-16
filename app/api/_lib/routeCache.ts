@@ -64,6 +64,7 @@ export function createRouteCache<T>(maxEntries: number) {
       return payload;
     },
     invalidate(key: string) {
+      writeVersion.set(key, (writeVersion.get(key) ?? 0) + 1);
       cache.delete(key);
       inflight.delete(key);
       refresh.delete(key);

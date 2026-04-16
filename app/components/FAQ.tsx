@@ -19,10 +19,10 @@ const faqData: FAQItem[] = [
     category: "Getting Started",
     q: "I just opened the site. What do I do first?",
     a: [
-      "1. Click 'Login / Connect' in the top-right – you can use email, Google, or an existing wallet.",
-      "2. Go to Settings and create an embedded (Privy) wallet if it wasn't created automatically.",
-      "3. Send some ETH to your Privy address for gas, and LINEA tokens for betting.",
-      "4. You're ready – click any tile on the grid and place your first bet!",
+      "1. Click 'Login / Connect' in the top-right. You can use email, Google, or an existing wallet.",
+      "2. Open Wallet Settings and create the embedded Privy wallet if it is not ready yet.",
+      "3. Send ETH to the Privy wallet for gas and LINEA tokens for betting.",
+      "4. Return to the Hub, select tiles on the grid, and place your first bet.",
     ],
   },
   {
@@ -36,14 +36,14 @@ const faqData: FAQItem[] = [
   {
     category: "Getting Started",
     q: "Do I need MetaMask or any extension?",
-    a: "No. The site creates an embedded wallet via Privy – it works in any browser with zero extensions. But if you already have MetaMask or another wallet, you can connect it too.",
+    a: "No. You can play with the embedded Privy wallet alone, so no browser extension is required. If you want, you can also connect MetaMask or another external wallet for deposits and withdrawals.",
   },
   {
     category: "Getting Started",
     q: "I see two addresses – which one is mine?",
     a: [
-      "The 'Privy' address is your embedded wallet – this is the one that places bets and pays gas. Send ETH and LINEA here.",
-      "If you also connected MetaMask/WalletConnect, that's your external wallet. You can use it to deposit/withdraw tokens to/from the Privy wallet via Settings.",
+      "The 'Privy' address is your embedded wallet. It is the wallet that places bets and pays gas, so send ETH and LINEA there.",
+      "If you also connected MetaMask or WalletConnect, that is your external wallet. You can move funds between the external wallet and the Privy wallet from Wallet Settings.",
     ],
   },
   {
@@ -69,9 +69,9 @@ const faqData: FAQItem[] = [
     category: "Jackpots",
     q: "When exactly does a jackpot trigger?",
     a: [
-      "The contract checks for a jackpot trigger only when a round is resolved AND someone actually bet on the winning tile (there is a real winner).",
-      "The probability of triggering is based on how much time is left in the day (or week). Early in the day the chance is low; as the day progresses, the chance increases. By the last round of the day, it's almost guaranteed.",
-      "If no round triggers the jackpot today, it simply carries over to tomorrow – the pool keeps growing.",
+      "The contract checks jackpots only when an epoch is resolved and there is at least one winner on the tile.",
+      "Each resolved epoch gets a deterministic on-chain daily/weekly check derived from the epoch entropy (block.prevrandao, previous blockhash, pool sizes, caller), so waiting longer to resolve does not improve anyone's odds.",
+      "If a jackpot is not awarded yet, the pool simply carries forward and keeps growing until an eligible epoch wins it.",
     ],
   },
   {
@@ -88,8 +88,8 @@ const faqData: FAQItem[] = [
     category: "Jackpots",
     q: "Is the jackpot randomness fair?",
     a: [
-      "Yes. The trigger uses block.prevrandao – the Ethereum consensus-level randomness beacon. It's not controllable by miners, the team, or any single party.",
-      "The probability formula ensures one trigger per day/week on average, with higher chances as the day/week progresses, so jackpots can never 'skip' indefinitely.",
+      "Yes. The round resolves atomically using on-chain entropy (block.prevrandao, the previous blockhash, pool sizes, and the caller address). Bets are rejected in the final 2 seconds of the epoch so no block can contain both a bet and its resolve.",
+      "Including msg.sender in the entropy means a grinder can only influence their own bet's outcome, not anyone else's, and the rest of the inputs are fixed on-chain — so keepers and users cannot bias jackpot odds by delaying resolve.",
     ],
   },
   {
@@ -164,14 +164,14 @@ const faqData: FAQItem[] = [
   {
     category: "Troubleshooting",
     q: "I won but my balance didn't change.",
-    a: "Rewards are not auto-deposited – you need to claim them. Check the Reward Scanner in the sidebar (or under the grid on mobile). It shows unclaimed wins. Click 'Claim' or 'Claim All'.",
+    a: "Rewards are not auto-deposited. Open the Rewards panel in the sidebar (or below the grid on mobile), where unclaimed wins are listed, then click 'Claim' or 'Claim All'.",
   },
   {
     category: "Troubleshooting",
     q: "Auto-Miner stopped mid-run. Why?",
     a: [
       "Usually: insufficient balance. The bot checks your token balance before each round and stops if you can't cover the next bet.",
-      "Less common: a session timeout (Privy tokens expired). Refresh the page – Auto-Miner remembers its settings and you can restart where it left off.",
+      "Less common: the wallet session expired or RPC recovery failed. Refresh the page, log in again if needed, and Auto-Miner will restore the saved run when the session is valid.",
     ],
   },
   {
@@ -187,14 +187,14 @@ const faqData: FAQItem[] = [
   {
     category: "Troubleshooting",
     q: "Where is Export Logs?",
-    a: "Export Logs is in Wallet Settings. When logged in, click Settings in the wallet area (top-right) → the Export Logs button is in the header of the modal, next to Close. It downloads a text file with session logs (useful for debugging or when contacting support).",
+    a: "Open Wallet Settings from the wallet card in the top-right. The 'Export Logs' button is in the modal header next to Close, and it downloads a text file with session logs.",
   },
 
   // ── Wallet & Security ──
   {
     category: "Wallet & Security",
     q: "Can I export my private key?",
-    a: "Yes. Go to Settings → your Privy wallet has an 'Export Private Key' option. Store it safely – anyone with this key can control your funds.",
+    a: "Yes. Open Wallet Settings, go to the Privy section, and use 'Export Private Key'. Store it safely because anyone with that key can control your funds.",
   },
   {
     category: "Wallet & Security",
@@ -204,7 +204,7 @@ const faqData: FAQItem[] = [
   {
     category: "Wallet & Security",
     q: "Is there an approval / allowance risk?",
-    a: "The site asks you to approve the game contract to spend LINEA tokens. You can revoke this approval at any time via Settings or any on-chain tool like Revoke.cash. The contract cannot withdraw more than you approved.",
+    a: "The site asks you to approve the game contract to spend LINEA tokens. You can revoke that approval later with a standard allowance-management tool such as Revoke.cash. The contract cannot spend more than the amount you approved.",
   },
   {
     category: "Wallet & Security",
@@ -229,7 +229,7 @@ const faqData: FAQItem[] = [
   {
     category: "Chat & Social",
     q: "Is the chat on-chain?",
-    a: "No. Chat is powered by Firebase for speed and free messaging. It's separate from the game logic. Your bets and rewards are always on-chain – chat is just social.",
+    a: "No. Chat is off-chain application data stored by the app backend, separate from the game logic. Bets, jackpot accounting, and rewards stay on-chain; chat is only a social layer.",
   },
   {
     category: "Chat & Social",
@@ -264,7 +264,6 @@ export const FAQ = React.memo(function FAQ() {
       <div className="max-w-3xl mx-auto px-4 md:px-8">
         {/* Hero */}
         <div className="relative py-5 text-center">
-          <div className="absolute inset-0 bg-gradient-to-b from-violet-500/[0.04] to-transparent rounded-2xl" />
           <div className="relative z-10">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/20 mb-4">
               <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-synced-pulse" />
@@ -288,13 +287,13 @@ export const FAQ = React.memo(function FAQ() {
               variant={activeCategory === cat ? "secondary" : "ghost"}
               size="sm"
               className={cn(
-                "flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold",
+                "flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold",
                 activeCategory === cat
                   ? "text-violet-300 border-violet-500/30 shadow-sm shadow-violet-500/10"
                   : "text-gray-500 border-white/[0.06] hover:text-gray-300 hover:bg-white/[0.04]",
               )}
             >
-              <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                 <path strokeLinecap="round" strokeLinejoin="round" d={categoryIcons[cat] || categoryIcons["Getting Started"]} />
               </svg>
               {cat}
@@ -303,7 +302,7 @@ export const FAQ = React.memo(function FAQ() {
         </div>
 
         {/* Questions */}
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {filteredFaq.map((item, i) => {
             const isOpen = openIdx === i;
             const panelId = `faq-panel-${activeCategory}-${i}`;
@@ -322,7 +321,7 @@ export const FAQ = React.memo(function FAQ() {
                   onClick={() => toggle(i)}
                   aria-expanded={isOpen}
                   aria-controls={panelId}
-                  className={`w-full flex items-center gap-3 px-5 py-4 text-left ${uiTokens.focusRing} ${uiTokens.radius.sm}`}
+                  className={`w-full flex items-center gap-2.5 px-4 py-3 text-left ${uiTokens.focusRing} ${uiTokens.radius.sm}`}
                 >
                   <svg
                     className={`w-4 h-4 shrink-0 transition-transform duration-300 ${
@@ -335,7 +334,7 @@ export const FAQ = React.memo(function FAQ() {
                   >
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
                   </svg>
-                  <span className={`text-sm font-semibold ${isOpen ? "text-violet-300" : "text-gray-300"}`}>
+                  <span className={`text-[15px] font-semibold leading-snug ${isOpen ? "text-violet-300" : "text-gray-300"}`}>
                     {item.q}
                   </span>
                 </button>
@@ -348,15 +347,15 @@ export const FAQ = React.memo(function FAQ() {
                     isOpen ? "max-h-[600px] opacity-100" : "max-h-0 opacity-0"
                   }`}
                 >
-                  <div className="px-5 pb-5 pl-12">
+                  <div className="px-4 pb-4 pl-10">
                     {Array.isArray(item.a) ? (
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         {item.a.map((line, j) => (
-                          <p key={`${activeCategory}-${i}-${j}`} className="text-sm text-gray-400 leading-relaxed">{line}</p>
+                          <p key={`${activeCategory}-${i}-${j}`} className="text-[13px] text-gray-400 leading-relaxed">{line}</p>
                         ))}
                       </div>
                     ) : (
-                      <p className="text-sm text-gray-400 leading-relaxed">{item.a}</p>
+                      <p className="text-[13px] text-gray-400 leading-relaxed">{item.a}</p>
                     )}
                   </div>
                 </div>

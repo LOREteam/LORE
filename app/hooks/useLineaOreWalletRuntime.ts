@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import type { PublicClient } from "viem";
 import type { useWriteContract } from "wagmi";
 import { useEmbeddedWalletUi } from "./useEmbeddedWalletUi";
@@ -61,6 +62,7 @@ export function useLineaOreWalletRuntime({
   const walletUi = useEmbeddedWalletUi(embeddedWalletAddress);
 
   const walletActions = useWalletActions({
+    connectedWalletAddress: address,
     embeddedWalletAddress,
     externalWalletAddress,
     embeddedTokenBalance: walletOverview.embeddedTokenBalance,
@@ -79,9 +81,12 @@ export function useLineaOreWalletRuntime({
     minEthWithdrawReserveWei,
   });
 
-  return {
-    ...walletOverview,
-    ...walletUi,
-    ...walletActions,
-  };
+  return useMemo(
+    () => ({
+      ...walletOverview,
+      ...walletUi,
+      ...walletActions,
+    }),
+    [walletOverview, walletUi, walletActions],
+  );
 }

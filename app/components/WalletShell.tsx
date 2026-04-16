@@ -16,7 +16,7 @@ interface WalletShellProps {
   walletSettingsProps: React.ComponentProps<typeof WalletSettingsModal>;
 }
 
-export function WalletShell({
+export const WalletShell = React.memo(function WalletShell({
   backupGateVersion,
   backupProps,
   showBackupGate,
@@ -29,4 +29,4 @@ export function WalletShell({
       {showBackupGate && <LazyBackupGate key={backupGateVersion} {...backupProps} />}
     </>
   );
-}
+});

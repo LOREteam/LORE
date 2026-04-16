@@ -6,6 +6,7 @@ import { HubContent } from "./HubContent";
 import { Analytics } from "./Analytics";
 import { Leaderboards } from "./Leaderboards";
 import { RebatePanel } from "./RebatePanel";
+import { isChunkLoadLikeErrorMessage } from "../lib/chunkReloadRecovery";
 
 const TabPanelFallback = () => (
   <div className="rounded-2xl border border-white/[0.08] bg-[#0a0b18]/80 p-6 text-sm text-slate-400">
@@ -13,10 +14,27 @@ const TabPanelFallback = () => (
   </div>
 );
 
-const LazyWhitePaper = dynamic(() => import("./WhitePaper").then((mod) => mod.WhitePaper), {
+async function loadStaticTabWithRetry<T>(loader: () => Promise<T>): Promise<T> {
+  try {
+    return await loader();
+  } catch (error) {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const isChunkLoadError = isChunkLoadLikeErrorMessage(message);
+    if (!isChunkLoadError || typeof window === "undefined") {
+      throw error;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    return loader();
+  }
+}
+
+const loadWhitePaper = () => loadStaticTabWithRetry(() => import("./WhitePaper")).then((mod) => mod.WhitePaper);
+const loadFAQ = () => loadStaticTabWithRetry(() => import("./FAQ")).then((mod) => mod.FAQ);
+
+const LazyWhitePaper = dynamic(loadWhitePaper, {
   loading: TabPanelFallback,
 });
-const LazyFAQ = dynamic(() => import("./FAQ").then((mod) => mod.FAQ), {
+const LazyFAQ = dynamic(loadFAQ, {
   loading: TabPanelFallback,
 });
 
@@ -28,27 +46,37 @@ interface PageTabPanelsProps {
   rebateProps: React.ComponentProps<typeof RebatePanel>;
 }
 
-export function PageTabPanels({
+export const PageTabPanels = React.memo(function PageTabPanels({
   activeTab,
   analyticsProps,
   hubProps,
   leaderboardsProps,
   rebateProps,
 }: PageTabPanelsProps) {
+  let activePanel: React.ReactNode = null;
   switch (activeTab) {
     case "hub":
-      return <HubContent {...hubProps} />;
+      activePanel = <HubContent {...hubProps} />;
+      break;
     case "analytics":
-      return <Analytics {...analyticsProps} />;
+      activePanel = <Analytics {...analyticsProps} />;
+      break;
     case "rebate":
-      return <RebatePanel {...rebateProps} />;
+      activePanel = <RebatePanel {...rebateProps} />;
+      break;
     case "leaderboards":
-      return <Leaderboards {...leaderboardsProps} />;
+      activePanel = <Leaderboards {...leaderboardsProps} />;
+      break;
     case "whitepaper":
-      return <LazyWhitePaper />;
+      activePanel = <LazyWhitePaper />;
+      break;
     case "faq":
-      return <LazyFAQ />;
+      activePanel = <LazyFAQ />;
+      break;
     default:
-      return null;
+      activePanel = null;
+      break;
   }
-}
+
+  return <>{activePanel}</>;
+});

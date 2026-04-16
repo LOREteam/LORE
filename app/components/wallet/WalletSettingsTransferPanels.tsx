@@ -26,7 +26,7 @@ interface WalletSettingsTransferPanelsProps {
   onLoadWalletTransfers: () => void;
 }
 
-export function WalletSettingsTransferPanels({
+export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTransferPanels({
   embeddedWalletAddress,
   externalWalletAddress,
   formattedLineaBalance,
@@ -122,24 +122,7 @@ export function WalletSettingsTransferPanels({
               {walletTransfers.transfers.length > 0 ? (
                 <div className="max-h-[180px] overflow-y-auto rounded-lg border border-white/[0.04] divide-y divide-white/[0.04]">
                   {walletTransfers.transfers.map((transfer, index) => (
-                    <div key={`${transfer.txHash}-${index}`} className="flex items-center justify-between px-3 py-2 hover:bg-white/[0.02]">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-[10px] font-bold uppercase tracking-wider ${transfer.direction === "in" ? "text-emerald-400" : "text-red-400"}`}>
-                          {transfer.direction === "in" ? "IN" : "OUT"}
-                        </span>
-                        <a
-                          href={`${EXPLORER_TX_BASE_URL}/${transfer.txHash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[9px] font-mono text-violet-400/50 hover:text-violet-400 transition-colors"
-                        >
-                          {transfer.txHash.slice(0, 8)}...{transfer.txHash.slice(-4)}
-                        </a>
-                      </div>
-                      <span className={`text-xs font-bold font-mono ${transfer.direction === "in" ? "text-emerald-400" : "text-red-400"}`}>
-                        {transfer.direction === "in" ? "+" : "-"}{transfer.amount} <span className="text-gray-400 text-[9px]">LINEA</span>
-                      </span>
-                    </div>
+                    <WalletTransferHistoryRow key={`${transfer.txHash}-${index}`} transfer={transfer} />
                   ))}
                 </div>
               ) : (
@@ -151,4 +134,33 @@ export function WalletSettingsTransferPanels({
       )}
     </>
   );
-}
+});
+
+const WalletTransferHistoryRow = React.memo(function WalletTransferHistoryRow({
+  transfer,
+}: {
+  transfer: NonNullable<WalletTransfersSummary["transfers"]>[number];
+}) {
+  const isInbound = transfer.direction === "in";
+
+  return (
+    <div className="flex items-center justify-between px-3 py-2 hover:bg-white/[0.02]">
+      <div className="flex items-center gap-2">
+        <span className={`text-[10px] font-bold uppercase tracking-wider ${isInbound ? "text-emerald-400" : "text-red-400"}`}>
+          {isInbound ? "IN" : "OUT"}
+        </span>
+        <a
+          href={`${EXPLORER_TX_BASE_URL}/${transfer.txHash}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[9px] font-mono text-violet-400/50 hover:text-violet-400 transition-colors"
+        >
+          {transfer.txHash.slice(0, 8)}...{transfer.txHash.slice(-4)}
+        </a>
+      </div>
+      <span className={`text-xs font-bold font-mono ${isInbound ? "text-emerald-400" : "text-red-400"}`}>
+        {isInbound ? "+" : "-"}{transfer.amount} <span className="text-gray-400 text-[9px]">LINEA</span>
+      </span>
+    </div>
+  );
+});

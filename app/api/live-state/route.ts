@@ -62,6 +62,16 @@ function startLiveStateRefresh() {
 
 export async function GET(request: Request) {
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
+  const rateLimited = await enforceSharedRateLimit(request, {
+    bucket: "api-live-state",
+    limit: 120,
+    windowMs: 60_000,
+  });
+  if (rateLimited) {
+    failRouteMetric(metric, 429);
+    return rateLimited;
+  }
+
   const now = Date.now();
   const cached = liveStateRouteCache.getFresh(CACHE_KEY, now);
   if (cached) {
@@ -79,21 +89,6 @@ export async function GET(request: Request) {
     startLiveStateRefresh();
     finishRouteMetric(metric, 200);
     return jsonNoStore(staleCache);
-  }
-
-  const rateLimited = await enforceSharedRateLimit(request, {
-    bucket: "api-live-state",
-    limit: 120,
-    windowMs: 60_000,
-  });
-  if (rateLimited) {
-    if (staleCache) {
-      markRouteStaleServed(ROUTE_METRIC_KEY);
-      finishRouteMetric(metric, 200);
-      return jsonNoStore(staleCache);
-    }
-    failRouteMetric(metric, 429);
-    return rateLimited;
   }
 
   try {
@@ -124,7 +119,7 @@ export async function GET(request: Request) {
     failRouteMetric(metric, 500);
     return applyNoStoreHeaders(
       NextResponse.json(
-        { error: error instanceof Error ? error.message : String(error) },
+        { error: "Internal server error" },
         { status: 500 },
       ),
     );

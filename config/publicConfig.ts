@@ -3,20 +3,17 @@ import { linea, lineaSepolia } from "viem/chains";
 // Non-secret project defaults.
 // Keep values here so deployment does not require duplicating them in server .env.
 
-export const DEFAULT_FIREBASE_DB_URL =
-  "https://lore-78751-default-rtdb.europe-west1.firebasedatabase.app";
-
 export type LineaNetwork = "mainnet" | "sepolia";
 
 export const DEFAULT_LINEA_NETWORK: LineaNetwork = "sepolia";
 
 export const DEFAULT_SEPOLIA_CONTRACT_ADDRESS =
-  "0x712538a24aba20d03a8a7e6590ffad9b2951ded1" as const;
+  "0x5dddd68683ac2662a496e6e89ef810b2eaab34b5" as const;
 
 export const DEFAULT_SEPOLIA_LINEA_TOKEN_ADDRESS =
   "0xad986c50d411055484d38bf779ba2450a42afd60" as const;
 
-export const DEFAULT_INDEXER_START_BLOCK = 27_709_620;
+export const DEFAULT_INDEXER_START_BLOCK = 28_832_251;
 
 export const DEFAULT_INDEXER_RECONCILE_INTERVAL_MS = 120_000;
 export const DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS = 8;
@@ -96,18 +93,6 @@ export function getConfiguredContractAddress(
 ) {
   const configured = getRequiredConfigValue(explicitValue, "CONTRACT_ADDRESS", network);
   return configured || DEFAULT_SEPOLIA_CONTRACT_ADDRESS;
-}
-
-export function getConfiguredFirebaseDbUrl(
-  explicitValue?: string | null,
-  network: LineaNetwork = getConfiguredLineaNetwork(),
-) {
-  const configured = getRequiredConfigValue(
-    explicitValue,
-    "NEXT_PUBLIC_FIREBASE_DATABASE_URL",
-    network,
-  );
-  return configured || DEFAULT_FIREBASE_DB_URL;
 }
 
 export function getConfiguredLineaTokenAddress(

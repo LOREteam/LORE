@@ -1,11 +1,14 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { encodeFunctionData, getAddress, parseUnits } from "viem";
+import { useCallback, useMemo, useState } from "react";
+import { encodeFunctionData, formatUnits, getAddress, parseUnits } from "viem";
 import type { PublicClient } from "viem";
+import { useReadContract } from "wagmi";
 import type { useWriteContract } from "wagmi";
 import {
   APP_CHAIN_ID,
+  CONTRACT_ADDRESS,
+  GAME_ABI,
   LINEA_TOKEN_ADDRESS,
   TOKEN_ABI,
   TX_RECEIPT_TIMEOUT_MS,
@@ -32,6 +35,7 @@ export interface PendingTransactionStatus {
 }
 
 interface UseWalletActionsOptions {
+  connectedWalletAddress?: string | null;
   embeddedWalletAddress: string | null;
   externalWalletAddress: string | null;
   embeddedTokenBalance: BalanceData;
@@ -51,6 +55,7 @@ interface UseWalletActionsOptions {
 }
 
 export function useWalletActions({
+  connectedWalletAddress,
   embeddedWalletAddress,
   externalWalletAddress,
   embeddedTokenBalance,
@@ -79,6 +84,88 @@ export function useWalletActions({
   const [pendingTransactionStatus, setPendingTransactionStatus] = useState<PendingTransactionStatus | null>(null);
   const [isRefreshingPendingTx, setIsRefreshingPendingTx] = useState(false);
   const [isCancellingPendingTx, setIsCancellingPendingTx] = useState(false);
+  const [isClaimingConnectedResolverRewards, setIsClaimingConnectedResolverRewards] = useState(false);
+  const [isClaimingEmbeddedResolverRewards, setIsClaimingEmbeddedResolverRewards] = useState(false);
+
+  const normalizedConnectedWalletAddress = useMemo(() => {
+    if (!connectedWalletAddress) return null;
+    try {
+      return getAddress(connectedWalletAddress);
+    } catch {
+      return null;
+    }
+  }, [connectedWalletAddress]);
+
+  const normalizedEmbeddedWalletAddress = useMemo(() => {
+    if (!embeddedWalletAddress) return null;
+    try {
+      return getAddress(embeddedWalletAddress);
+    } catch {
+      return null;
+    }
+  }, [embeddedWalletAddress]);
+
+  const {
+    data: connectedResolverRewardsRaw,
+    refetch: refetchConnectedResolverRewards,
+  } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: GAME_ABI,
+    functionName: "pendingResolverRewards",
+    args: normalizedConnectedWalletAddress ? [normalizedConnectedWalletAddress] : undefined,
+    chainId: APP_CHAIN_ID,
+    query: {
+      enabled: Boolean(normalizedConnectedWalletAddress),
+      refetchInterval: 30_000,
+    },
+  });
+
+  const {
+    data: embeddedResolverRewardsRaw,
+    refetch: refetchEmbeddedResolverRewards,
+  } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: GAME_ABI,
+    functionName: "pendingResolverRewards",
+    args: normalizedEmbeddedWalletAddress ? [normalizedEmbeddedWalletAddress] : undefined,
+    chainId: APP_CHAIN_ID,
+    query: {
+      enabled: Boolean(normalizedEmbeddedWalletAddress),
+      refetchInterval: 30_000,
+    },
+  });
+
+  const connectedResolverRewardsWei = connectedResolverRewardsRaw ?? 0n;
+  const embeddedResolverRewardsWei = embeddedResolverRewardsRaw ?? 0n;
+
+  const formatResolverRewards = useCallback((value: bigint) => {
+    const amount = Number(formatUnits(value, 18));
+    if (!Number.isFinite(amount)) return "0.0000";
+    if (amount >= 100) return amount.toFixed(2);
+    return amount.toFixed(4);
+  }, []);
+
+  const connectedResolverRewards = useMemo(
+    () => formatResolverRewards(connectedResolverRewardsWei),
+    [connectedResolverRewardsWei, formatResolverRewards],
+  );
+
+  const embeddedResolverRewards = useMemo(
+    () => formatResolverRewards(embeddedResolverRewardsWei),
+    [embeddedResolverRewardsWei, formatResolverRewards],
+  );
+
+  const waitForReceipt = useCallback(
+    async (hash: `0x${string}`) => {
+      if (!publicClient) return;
+      try {
+        await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
+      } catch {
+        // The balance/read refresh below is enough when a public RPC lags.
+      }
+    },
+    [publicClient],
+  );
 
   const refreshPendingTransactionStatus = useCallback(async () => {
     if (!embeddedWalletAddress || !publicClient) {
@@ -218,6 +305,130 @@ export function useWalletActions({
     publicClient,
     refreshPendingTransactionStatus,
     sendTransactionSilent,
+  ]);
+
+  const refreshResolverRewardReads = useCallback(() => {
+    void refetchConnectedResolverRewards();
+    void refetchEmbeddedResolverRewards();
+  }, [refetchConnectedResolverRewards, refetchEmbeddedResolverRewards]);
+
+  const estimateResolverRewardClaimGas = useCallback(
+    async (account: `0x${string}`) => {
+      if (!publicClient) return 160_000n;
+      const data = encodeFunctionData({
+        abi: GAME_ABI,
+        functionName: "claimResolverRewards",
+      });
+      try {
+        const estimatedGas = await publicClient.estimateGas({
+          account,
+          to: CONTRACT_ADDRESS,
+          data,
+        });
+        return estimatedGas + 20_000n;
+      } catch {
+        return 160_000n;
+      }
+    },
+    [publicClient],
+  );
+
+  const handleClaimConnectedResolverRewards = useCallback(async () => {
+    if (!normalizedConnectedWalletAddress) {
+      notify("Connect the resolver wallet first.", "warning");
+      return;
+    }
+    if (connectedResolverRewardsWei <= 0n) {
+      notify("No resolver rewards are pending for the connected wallet.", "info");
+      return;
+    }
+
+    setIsClaimingConnectedResolverRewards(true);
+    try {
+      const gas = await estimateResolverRewardClaimGas(normalizedConnectedWalletAddress);
+      const hash = await writeContractAsync({
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "claimResolverRewards",
+        chainId: APP_CHAIN_ID,
+        gas,
+      });
+      await waitForReceipt(hash);
+      refreshResolverRewardReads();
+      notify("Resolver rewards claimed to the connected wallet.", "success");
+    } catch (err) {
+      if (!isUserRejection(err)) {
+        log.error("ResolverRewards", "connected claim failed", err);
+        const message = err instanceof Error ? err.message : "";
+        notify(
+          message ? `Resolver reward claim failed: ${message}` : "Resolver reward claim failed.",
+          "danger",
+        );
+      }
+    } finally {
+      setIsClaimingConnectedResolverRewards(false);
+    }
+  }, [
+    connectedResolverRewardsWei,
+    estimateResolverRewardClaimGas,
+    normalizedConnectedWalletAddress,
+    notify,
+    refreshResolverRewardReads,
+    waitForReceipt,
+    writeContractAsync,
+  ]);
+
+  const handleClaimEmbeddedResolverRewards = useCallback(async () => {
+    if (!normalizedEmbeddedWalletAddress) {
+      notify("Create the Privy wallet first.", "warning");
+      onOpenWalletSettings();
+      return;
+    }
+    if (!sendTransactionSilent) {
+      notify("Privy wallet is not ready yet.", "warning");
+      return;
+    }
+    if (embeddedResolverRewardsWei <= 0n) {
+      notify("No resolver rewards are pending for the Privy wallet.", "info");
+      return;
+    }
+
+    setIsClaimingEmbeddedResolverRewards(true);
+    try {
+      const data = encodeFunctionData({
+        abi: GAME_ABI,
+        functionName: "claimResolverRewards",
+      });
+      const gas = await estimateResolverRewardClaimGas(normalizedEmbeddedWalletAddress);
+      const hash = await sendTransactionSilent({
+        to: CONTRACT_ADDRESS,
+        data,
+        gas,
+      });
+      await waitForReceipt(hash);
+      refreshResolverRewardReads();
+      notify("Resolver rewards claimed to the Privy wallet.", "success");
+    } catch (err) {
+      if (!isUserRejection(err)) {
+        log.error("ResolverRewards", "embedded claim failed", err);
+        const message = err instanceof Error ? err.message : "";
+        notify(
+          message ? `Resolver reward claim failed: ${message}` : "Resolver reward claim failed.",
+          "danger",
+        );
+      }
+    } finally {
+      setIsClaimingEmbeddedResolverRewards(false);
+    }
+  }, [
+    embeddedResolverRewardsWei,
+    estimateResolverRewardClaimGas,
+    normalizedEmbeddedWalletAddress,
+    notify,
+    onOpenWalletSettings,
+    refreshResolverRewardReads,
+    sendTransactionSilent,
+    waitForReceipt,
   ]);
 
   const handleWithdrawToExternal = useCallback(async () => {
@@ -429,27 +640,64 @@ export function useWalletActions({
     walletTransfersEnabled,
   ]);
 
-  return {
-    withdrawAmount,
-    setWithdrawAmount,
-    withdrawEthAmount,
-    setWithdrawEthAmount,
-    depositEthAmount,
-    setDepositEthAmount,
-    depositTokenAmount,
-    setDepositTokenAmount,
-    isWithdrawing,
-    isWithdrawingEth,
-    isDepositingEth,
-    isDepositingToken,
-    pendingTransactionStatus,
-    isRefreshingPendingTx,
-    isCancellingPendingTx,
-    handleWithdrawToExternal,
-    handleWithdrawEthToExternal,
-    handleDepositEthToEmbedded,
-    handleDepositTokenToEmbedded,
-    refreshPendingTransactionStatus,
-    cancelPendingTransaction,
-  };
+  return useMemo(
+    () => ({
+      withdrawAmount,
+      setWithdrawAmount,
+      withdrawEthAmount,
+      setWithdrawEthAmount,
+      depositEthAmount,
+      setDepositEthAmount,
+      depositTokenAmount,
+      setDepositTokenAmount,
+      isWithdrawing,
+      isWithdrawingEth,
+      isDepositingEth,
+      isDepositingToken,
+      pendingTransactionStatus,
+      isRefreshingPendingTx,
+      isCancellingPendingTx,
+      connectedResolverRewards,
+      connectedResolverRewardsWei,
+      embeddedResolverRewards,
+      embeddedResolverRewardsWei,
+      isClaimingConnectedResolverRewards,
+      isClaimingEmbeddedResolverRewards,
+      handleWithdrawToExternal,
+      handleWithdrawEthToExternal,
+      handleDepositEthToEmbedded,
+      handleDepositTokenToEmbedded,
+      refreshPendingTransactionStatus,
+      cancelPendingTransaction,
+      handleClaimConnectedResolverRewards,
+      handleClaimEmbeddedResolverRewards,
+    }),
+    [
+      withdrawAmount,
+      withdrawEthAmount,
+      depositEthAmount,
+      depositTokenAmount,
+      isWithdrawing,
+      isWithdrawingEth,
+      isDepositingEth,
+      isDepositingToken,
+      pendingTransactionStatus,
+      isRefreshingPendingTx,
+      isCancellingPendingTx,
+      connectedResolverRewards,
+      connectedResolverRewardsWei,
+      embeddedResolverRewards,
+      embeddedResolverRewardsWei,
+      isClaimingConnectedResolverRewards,
+      isClaimingEmbeddedResolverRewards,
+      handleWithdrawToExternal,
+      handleWithdrawEthToExternal,
+      handleDepositEthToEmbedded,
+      handleDepositTokenToEmbedded,
+      refreshPendingTransactionStatus,
+      cancelPendingTransaction,
+      handleClaimConnectedResolverRewards,
+      handleClaimEmbeddedResolverRewards,
+    ],
+  );
 }

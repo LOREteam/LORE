@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { parseUnits } from "viem";
 import { useWriteContract } from "wagmi";
@@ -106,29 +107,53 @@ export function useLineaOreClientRuntime({
     minEthForGas: MIN_ETH_FOR_GAS,
   });
 
-  const viewProps = buildLineaOreClientRuntimeViewProps({
-    baseState,
-    ancillaryState,
-    walletRuntime,
-    hubRuntime,
-    rebateState: {
+  const rebateState = useMemo(
+    () => ({
       rebateInfo,
       isClaiming: isClaimingRebate,
       claimRebates,
-    },
-  });
+    }),
+    [claimRebates, isClaimingRebate, rebateInfo],
+  );
 
-  return {
-    uiHydrated,
-    motionReady: motion.motionReady,
-    reducedMotion: motion.reducedMotion,
-    notices: shell.notices,
-    dismissNotice: shell.dismissNotice,
-    activeTab: shell.activeTab,
-    handleTabChange: shell.handleTabChange,
-    realTotalStaked: gameData.realTotalStaked,
-    linePath: chart.linePath,
-    chartHasData: chart.chartData.length > 0,
-    ...viewProps,
-  };
+  const viewProps = useMemo(
+    () =>
+      buildLineaOreClientRuntimeViewProps({
+        baseState,
+        ancillaryState,
+        walletRuntime,
+        hubRuntime,
+        rebateState,
+      }),
+    [ancillaryState, baseState, hubRuntime, rebateState, walletRuntime],
+  );
+
+  return useMemo(
+    () => ({
+      uiHydrated,
+      motionReady: motion.motionReady,
+      reducedMotion: motion.reducedMotion,
+      notices: shell.notices,
+      dismissNotice: shell.dismissNotice,
+      activeTab: shell.activeTab,
+      handleTabChange: shell.handleTabChange,
+      realTotalStaked: gameData.realTotalStaked,
+      linePath: chart.linePath,
+      chartHasData: chart.chartData.length > 0,
+      ...viewProps,
+    }),
+    [
+      chart.chartData.length,
+      chart.linePath,
+      gameData.realTotalStaked,
+      motion.motionReady,
+      motion.reducedMotion,
+      shell.activeTab,
+      shell.dismissNotice,
+      shell.handleTabChange,
+      shell.notices,
+      uiHydrated,
+      viewProps,
+    ],
+  );
 }

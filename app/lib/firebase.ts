@@ -1,5 +1,2 @@
-import { getConfiguredFirebaseDbUrl } from "../../config/publicConfig";
-
-export const FIREBASE_DB_URL = getConfiguredFirebaseDbUrl(
-  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
-);
+// Firebase has been fully replaced by SQLite. This file is kept empty to avoid
+// breaking any stale import paths. Safe to delete once confirmed no references remain.

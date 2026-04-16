@@ -32,12 +32,15 @@ export function useGameWalletContext({ preferredAddress }: UseGameWalletContextO
   const isPageVisible = usePageVisibility();
   const autoMineSessionActive = useAutoMineSessionActive();
 
-  return {
-    address,
-    chainId,
-    walletAddress,
-    tokenBalance,
-    isPageVisible,
-    autoMineSessionActive,
-  };
+  return useMemo(
+    () => ({
+      address,
+      chainId,
+      walletAddress,
+      tokenBalance,
+      isPageVisible,
+      autoMineSessionActive,
+    }),
+    [address, chainId, walletAddress, tokenBalance, isPageVisible, autoMineSessionActive],
+  );
 }

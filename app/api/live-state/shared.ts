@@ -17,6 +17,7 @@ const LIVE_STATE_LOG_SCAN_CHUNK = 50_000n;
 const LIVE_STATE_LOG_SCAN_MIN_CHUNK = 2_000n;
 const LIVE_STATE_SNAPSHOT_META_KEY = "snapshot:live-state:v1";
 const LIVE_STATE_SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const LIVE_STATE_SNAPSHOT_CACHE_MS = 2_000;
 
 export const LIVE_STATE_ABI = parseAbi([
   "function currentEpoch() view returns (uint256)",
@@ -64,9 +65,24 @@ type LiveStateSnapshotEnvelope = {
   savedAt: number;
 };
 
+type CachedStoredBootstrap = {
+  payload: LiveStatePayload | null;
+  watermark: string | null;
+};
+
+type CachedLiveStateSnapshot = {
+  payload: LiveStatePayload | null;
+  savedAt: number | null;
+  loadedAt: number;
+};
+
 type LiveStateEpochTuple = [bigint, bigint, bigint, boolean, boolean, boolean];
 type LiveStateTileTuple = [bigint[], bigint[]];
 type LiveStateJackpotTuple = [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
+
+let storedBootstrapCache: CachedStoredBootstrap | null = null;
+let lastLiveStateSnapshotSignature: string | null = null;
+let liveStateSnapshotCache: CachedLiveStateSnapshot | null = null;
 
 function isTooManyResultsError(err: unknown): boolean {
   const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
@@ -217,33 +233,98 @@ async function readLiveStateContract<T>(label: string, promise: Promise<T>) {
 }
 
 export function loadLiveStateSnapshot(maxAgeMs = LIVE_STATE_SNAPSHOT_MAX_AGE_MS): LiveStatePayload | null {
-  const snapshot = getMetaJson<LiveStateSnapshotEnvelope | LiveStatePayload>(LIVE_STATE_SNAPSHOT_META_KEY);
-  if (!snapshot) return null;
-  if ("payload" in snapshot) {
+  const now = Date.now();
+  if (liveStateSnapshotCache && now - liveStateSnapshotCache.loadedAt <= LIVE_STATE_SNAPSHOT_CACHE_MS) {
     if (
       Number.isFinite(maxAgeMs) &&
-      (typeof snapshot.savedAt !== "number" || Date.now() - snapshot.savedAt > maxAgeMs)
+      liveStateSnapshotCache.savedAt != null &&
+      now - liveStateSnapshotCache.savedAt > maxAgeMs
     ) {
       return null;
     }
+    return liveStateSnapshotCache.payload;
+  }
+
+  const snapshot = getMetaJson<LiveStateSnapshotEnvelope | LiveStatePayload>(LIVE_STATE_SNAPSHOT_META_KEY);
+  if (!snapshot) {
+    liveStateSnapshotCache = {
+      payload: null,
+      savedAt: null,
+      loadedAt: now,
+    };
+    return null;
+  }
+  if ("payload" in snapshot) {
+    if (
+      Number.isFinite(maxAgeMs) &&
+      (typeof snapshot.savedAt !== "number" || now - snapshot.savedAt > maxAgeMs)
+    ) {
+      liveStateSnapshotCache = {
+        payload: null,
+        savedAt: typeof snapshot.savedAt === "number" ? snapshot.savedAt : null,
+        loadedAt: now,
+      };
+      return null;
+    }
+    lastLiveStateSnapshotSignature = getLiveStateSnapshotSignature(snapshot.payload);
+    liveStateSnapshotCache = {
+      payload: snapshot.payload,
+      savedAt: typeof snapshot.savedAt === "number" ? snapshot.savedAt : null,
+      loadedAt: now,
+    };
     return snapshot.payload;
   }
+  lastLiveStateSnapshotSignature = getLiveStateSnapshotSignature(snapshot);
+  liveStateSnapshotCache = {
+    payload: snapshot,
+    savedAt: null,
+    loadedAt: now,
+  };
   return snapshot;
 }
 
+function getLiveStateSnapshotSignature(payload: LiveStatePayload | null) {
+  if (!payload) return "";
+  const { fetchedAt, ...stablePayload } = payload;
+  void fetchedAt;
+  return JSON.stringify(stablePayload);
+}
+
 export function saveLiveStateSnapshot(payload: LiveStatePayload) {
+  const signature = getLiveStateSnapshotSignature(payload);
+  if (lastLiveStateSnapshotSignature === signature) {
+    return;
+  }
+  lastLiveStateSnapshotSignature = signature;
+  liveStateSnapshotCache = {
+    payload,
+    savedAt: Date.now(),
+    loadedAt: Date.now(),
+  };
   setMetaJson(LIVE_STATE_SNAPSHOT_META_KEY, {
     payload,
     savedAt: Date.now(),
   });
 }
 
-function buildStoredJackpotInfoFallback(snapshot: LiveStatePayload | null) {
+function getStoredLiveStateBootstrapWatermark(recentJackpots = getRecentJackpots(8)) {
+  const currentEpoch = getMetaNumber("currentEpoch");
+  const lastIndexedBlock = getMetaBigInt("lastIndexedBlock")?.toString() ?? "null";
+  const latestDaily = recentJackpots.find((row) => row.kind === "daily") ?? null;
+  const latestWeekly = recentJackpots.find((row) => row.kind === "weekly") ?? null;
+  return [
+    Number.isInteger(currentEpoch) ? String(currentEpoch) : "null",
+    lastIndexedBlock,
+    latestDaily ? `d:${latestDaily.epoch}:${latestDaily.blockNumber}` : "d:none",
+    latestWeekly ? `w:${latestWeekly.epoch}:${latestWeekly.blockNumber}` : "w:none",
+  ].join("|");
+}
+
+function buildStoredJackpotInfoFallback(snapshot: LiveStatePayload | null, recentJackpots = getRecentJackpots(64)) {
   if (snapshot?.jackpotInfo && snapshot.jackpotInfo.length === 8) {
     return snapshot.jackpotInfo;
   }
 
-  const recentJackpots = getRecentJackpots(64);
   const latestDaily = recentJackpots.find((row) => row.kind === "daily") ?? null;
   const latestWeekly = recentJackpots.find((row) => row.kind === "weekly") ?? null;
 
@@ -290,8 +371,15 @@ function buildStoredJackpotInfoFallback(snapshot: LiveStatePayload | null) {
 }
 
 export function buildStoredLiveStateBootstrap(): LiveStatePayload | null {
+  const recentJackpots = getRecentJackpots(64);
+  const watermark = getStoredLiveStateBootstrapWatermark(recentJackpots);
+  if (storedBootstrapCache?.watermark === watermark) {
+    return storedBootstrapCache.payload;
+  }
+
   const storedCurrentEpoch = getMetaNumber("currentEpoch");
   if (!Number.isInteger(storedCurrentEpoch) || !storedCurrentEpoch || storedCurrentEpoch <= 0) {
+    storedBootstrapCache = { payload: null, watermark };
     return null;
   }
 
@@ -303,9 +391,9 @@ export function buildStoredLiveStateBootstrap(): LiveStatePayload | null {
   const totalPoolWei = indexedTilePoolsWei.reduce((acc, value) => acc + value, 0n);
   const snapshot = loadLiveStateSnapshot(Number.POSITIVE_INFINITY);
   const sameEpochSnapshot = snapshot?.currentEpoch === currentEpoch ? snapshot : null;
-  const storedJackpotInfo = buildStoredJackpotInfoFallback(snapshot);
+  const storedJackpotInfo = buildStoredJackpotInfoFallback(snapshot, recentJackpots);
 
-  return {
+  const payload: LiveStatePayload = {
     currentEpoch,
     epochEndTime: sameEpochSnapshot?.epochEndTime ?? snapshot?.epochEndTime ?? null,
     jackpotInfo: storedJackpotInfo,
@@ -340,6 +428,11 @@ export function buildStoredLiveStateBootstrap(): LiveStatePayload | null {
     pendingEpochDurationEffectiveFromEpoch: snapshot?.pendingEpochDurationEffectiveFromEpoch ?? null,
     fetchedAt: Date.now(),
   };
+  storedBootstrapCache = {
+    payload,
+    watermark,
+  };
+  return payload;
 }
 
 export async function buildLiveStatePayload(): Promise<LiveStatePayload> {

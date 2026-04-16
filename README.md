@@ -45,10 +45,11 @@ Important for future contract deployments:
 - `npm run dev:ui` - run frontend in dev mode
 - `npm run indexer` - run the history/indexer watcher that fills SQLite from the deploy block
 - `npm run bot` - run keeper bot once (auto-loop inside bot)
-- `npm run bot:supervisor` - restart bot on crashes with backoff
+- `npm run bot:supervisor` - local/dev supervisor for bot + indexer with backoff
 - `npm run dev` - run UI + supervisor in parallel (`bot:supervisor` also starts the indexer)
 - `npm run build` - production build
 - `npm run start` - run production server on port `3001`
+- `npm run health:prod` - fail-fast external health probe for runtime + data-sync
 - `npm run typecheck` - TypeScript checks
 - `npm run lint` - ESLint checks
 - `npm run smoke:http` - smoke-check the local app/API on `http://localhost:3000` (override with `SMOKE_BASE_URL`); validates homepage markers plus core JSON routes
@@ -71,8 +72,20 @@ Important for future contract deployments:
 
 ## Security notes
 
-- Frontend CSP/security headers are configured in `next.config.ts`.
+- Frontend CSP/security headers are enforced in [app/middleware.ts](/C:/Users/bogda/linea-miner-main/app/middleware.ts).
+- Mainnet startup now fails fast if critical runtime env is missing for web, indexer, bot, or DB-backed server paths.
 - Governance migration guidance for the next contract deployment is in `docs/governance-migration.md`.
+- Final pre-launch gate is documented in [docs/mainnet-readiness-checklist.md](/C:/Users/bogda/linea-miner-main/docs/mainnet-readiness-checklist.md).
+- Current rollout status is tracked in [docs/mainnet-status-board.md](/C:/Users/bogda/linea-miner-main/docs/mainnet-status-board.md).
+
+## Production topology
+
+- Treat the Next app, indexer, and keeper as separate long-running services. Do not rely on a single `npm run start:all` style process for production supervision.
+- The checked-in [ecosystem.config.cjs](/C:/Users/bogda/linea-miner-main/ecosystem.config.cjs) now reflects that split directly: `lore-site`, `lore-bot`, and `lore-indexer` are supervised independently.
+- SQLite is acceptable only for a single-node deployment with a persistent volume and backups. For mainnet, set `LORE_DB_PATH` to an absolute persistent path outside the repo checkout.
+- Mainnet deploys should use an explicit private RPC via `KEEPER_RPC_URL`; do not rely on public fallback RPC ordering for production writes.
+- Keep `/api/health/runtime` and `/api/health/data-sync` behind secret-backed diagnostics access outside localhost, and wire external alerts to stale indexer heartbeat / lag.
+- A concrete host-side runbook is in [docs/production-runbook.md](/C:/Users/bogda/linea-miner-main/docs/production-runbook.md).
 
 ## Deploy
 

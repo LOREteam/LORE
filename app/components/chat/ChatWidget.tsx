@@ -8,9 +8,10 @@ import { ChatWindow } from "./ChatWindow";
 interface Props {
   walletAddress: string | null;
   onOpenChange?: (open: boolean) => void;
+  open?: boolean;
 }
 
-export function ChatWidget({ walletAddress, onOpenChange }: Props) {
+export const ChatWidget = React.memo(function ChatWidget({ walletAddress, onOpenChange, open: controlledOpen }: Props) {
   const {
     open,
     unread,
@@ -22,11 +23,13 @@ export function ChatWidget({ walletAddress, onOpenChange }: Props) {
     connected,
     authReady,
     ensureChatAuth,
+    sendCooldownRemainingMs,
+    isSending,
     updateProfile,
     handleToggle,
     handleClose,
     handleSend,
-  } = useChatWidgetRuntime({ walletAddress, onOpenChange });
+  } = useChatWidgetRuntime({ walletAddress, onOpenChange, open: controlledOpen });
 
   return (
     <>
@@ -39,6 +42,8 @@ export function ChatWidget({ walletAddress, onOpenChange }: Props) {
           connected={connected}
           authReady={authReady}
           onEnsureAuth={ensureChatAuth}
+          sendCooldownRemainingMs={sendCooldownRemainingMs}
+          isSending={isSending}
           onSend={handleSend}
           onUpdateProfile={updateProfile}
           onClose={handleClose}
@@ -55,13 +60,21 @@ export function ChatWidget({ walletAddress, onOpenChange }: Props) {
         title={open ? "Close chat" : "Open chat"}
       >
         {open ? (
-          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
-            <line x1="5" y1="5" x2="15" y2="15" />
-            <line x1="15" y1="5" x2="5" y2="15" />
+          /* Close — rounded X */
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M4 4l8 8M12 4l-8 8" stroke="white" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         ) : (
-          <svg width="16" height="16" viewBox="0 0 20 20" fill="white">
-            <path d="M3 3h14a1 1 0 011 1v9a1 1 0 01-1 1h-4l-3 3-3-3H3a1 1 0 01-1-1V4a1 1 0 011-1zm2 3h10v1.5H5V6zm0 3h7v1.5H5V9z" />
+          /* Chat bubble with three dots */
+          <svg aria-hidden="true" width="19" height="18" viewBox="0 0 19 18" fill="none">
+            <path
+              d="M1.5 2.75C1.5 1.784 2.284 1 3.25 1h12.5C16.716 1 17.5 1.784 17.5 2.75v8.5c0 .966-.784 1.75-1.75 1.75H11l-1.5 2.5L8 13H3.25C2.284 13 1.5 12.216 1.5 11.25v-8.5z"
+              fill="white"
+              opacity="0.95"
+            />
+            <circle cx="6.25" cy="7" r="1.15" fill="#0a0a1c"/>
+            <circle cx="9.5"  cy="7" r="1.15" fill="#0a0a1c"/>
+            <circle cx="12.75" cy="7" r="1.15" fill="#0a0a1c"/>
           </svg>
         )}
 
@@ -73,4 +86,4 @@ export function ChatWidget({ walletAddress, onOpenChange }: Props) {
       </button>
     </>
   );
-}
+});

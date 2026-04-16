@@ -67,6 +67,8 @@ export async function findConfirmedEpochForTiles(
   tiles: number[],
 ): Promise<{ epoch: bigint; confirmedCount: number } | null> {
   if (tiles.length === 0) return null;
+  let successfulReads = 0;
+  let lastReadError: unknown = null;
   for (const epoch of dedupeEpochs(candidateEpochs)) {
     try {
       const bets = (await client.readContract({
@@ -75,20 +77,27 @@ export async function findConfirmedEpochForTiles(
         functionName: "getUserBetsAll",
         args: [epoch, actorAddress],
       })) as bigint[];
+      successfulReads += 1;
       const confirmedCount = countConfirmedTiles(bets, tiles);
       if (confirmedCount >= tiles.length) {
         return { epoch, confirmedCount };
       }
-    } catch {
+    } catch (error) {
+      lastReadError = error;
       // Keep checking nearby epochs when public RPC is flaky.
     }
+  }
+  if (successfulReads === 0 && lastReadError) {
+    throw lastReadError;
   }
   return null;
 }
 
 export function isEpochEndedError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-  return msg.includes("epoch ended");
+  // V8: also treat the last-2-second EpochClosing() reject as "epoch ended"
+  // for UX purposes — the bet missed the window and the next epoch is imminent.
+  return msg.includes("epoch ended") || msg.includes("epochended") || msg.includes("epochclosing");
 }
 
 export function isRetryableError(err: unknown): boolean {

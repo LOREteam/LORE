@@ -1,8 +1,11 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import type { JackpotHistoryEntry } from "../../hooks/useJackpotHistory";
 import type { JackpotDisplayInfo } from "./types";
+
+const JACKPOT_NOTICE_MS = 30 * 60 * 1000;
 
 interface JackpotWindowInfo {
   pct: number;
@@ -11,13 +14,10 @@ interface JackpotWindowInfo {
 
 interface HeaderJackpotsProps {
   jackpotInfo: JackpotDisplayInfo;
-  nowMs: number;
-  dailyAwardVisibleUntil: number;
-  weeklyAwardVisibleUntil: number;
-  dailyAwardedToday: boolean;
-  weeklyAwardedThisWeek: boolean;
-  dailyWindow: JackpotWindowInfo;
-  weeklyWindow: JackpotWindowInfo;
+  historyReady: boolean;
+  initialNowMs: number;
+  isPageVisible: boolean;
+  jackpotHistory: JackpotHistoryEntry[];
 }
 
 interface JackpotCardProps {
@@ -112,7 +112,7 @@ function JackpotCard({
             </div>
           </div>
         ) : (
-          <div className="flex w-full items-center justify-between gap-3">
+          <div className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
             <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
               <div className="shrink-0">{icon}</div>
               <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
@@ -134,7 +134,7 @@ function JackpotCard({
                   style={{ width: `${window.pct}%` }}
                 />
               </div>
-              <p className={`text-[7px] mt-0.5 font-semibold leading-tight ${bodyClass}`}>{progressCopy}</p>
+              <p className={`mt-0.5 text-[8px] font-semibold leading-tight sm:text-[9px] ${bodyClass}`}>{progressCopy}</p>
             </div>
           </div>
         )}
@@ -173,16 +173,73 @@ function WeeklyJackpotIcon() {
   );
 }
 
-export function HeaderJackpots({
+export const HeaderJackpots = React.memo(function HeaderJackpots({
   jackpotInfo,
-  nowMs,
-  dailyAwardVisibleUntil,
-  weeklyAwardVisibleUntil,
-  dailyAwardedToday,
-  weeklyAwardedThisWeek,
-  dailyWindow,
-  weeklyWindow,
+  historyReady,
+  initialNowMs,
+  isPageVisible,
+  jackpotHistory,
 }: HeaderJackpotsProps) {
+  const [nowMs, setNowMs] = useState(initialNowMs);
+
+  useEffect(() => {
+    if (!isPageVisible) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [isPageVisible]);
+
+  const dailyWindow = useMemo(() => {
+    const dayMs = 86_400_000;
+    const elapsed = nowMs % dayMs;
+    const leftMs = dayMs - elapsed;
+    const h = Math.floor(leftMs / 3_600_000);
+    const m = Math.floor((leftMs % 3_600_000) / 60_000);
+    return { pct: (elapsed / dayMs) * 100, leftLabel: `${h}h ${m}m left` };
+  }, [nowMs]);
+
+  const weeklyWindow = useMemo(() => {
+    const weekMs = 604_800_000;
+    const mondayOffsetMs = 3 * 86_400_000;
+    const shifted = nowMs + mondayOffsetMs;
+    const elapsed = shifted % weekMs;
+    const leftMs = weekMs - elapsed;
+    const d = Math.floor(leftMs / 86_400_000);
+    const h = Math.floor((leftMs % 86_400_000) / 3_600_000);
+    return { pct: (elapsed / weekMs) * 100, leftLabel: `${d}d ${h}h left` };
+  }, [nowMs]);
+
+  const todayDayIdx = Math.floor(nowMs / 86_400_000);
+  const dailyAwardedToday = jackpotInfo.lastDailyDay === todayDayIdx;
+  const weeklyNowIdx = Math.floor((nowMs + 3 * 86_400_000) / 604_800_000);
+  const weeklyAwardedThisWeek = jackpotInfo.lastWeeklyWeek === weeklyNowIdx;
+  const latestDailyAward = useMemo(
+    () =>
+      historyReady && jackpotInfo.lastDailyJackpotEpoch
+        ? jackpotHistory.find(
+            (entry) =>
+              entry.kind === "daily" &&
+              entry.epoch === jackpotInfo.lastDailyJackpotEpoch &&
+              typeof entry.timestamp === "number",
+          ) ?? null
+        : null,
+    [historyReady, jackpotHistory, jackpotInfo.lastDailyJackpotEpoch],
+  );
+  const latestWeeklyAward = useMemo(
+    () =>
+      historyReady && jackpotInfo.lastWeeklyJackpotEpoch
+        ? jackpotHistory.find(
+            (entry) =>
+              entry.kind === "weekly" &&
+              entry.epoch === jackpotInfo.lastWeeklyJackpotEpoch &&
+              typeof entry.timestamp === "number",
+          ) ?? null
+        : null,
+    [historyReady, jackpotHistory, jackpotInfo.lastWeeklyJackpotEpoch],
+  );
+  const dailyAwardVisibleUntil = latestDailyAward?.timestamp ? latestDailyAward.timestamp + JACKPOT_NOTICE_MS : 0;
+  const weeklyAwardVisibleUntil = latestWeeklyAward?.timestamp ? latestWeeklyAward.timestamp + JACKPOT_NOTICE_MS : 0;
+
   if (jackpotInfo.dailyPool <= 0 && jackpotInfo.weeklyPool <= 0) {
     return null;
   }
@@ -221,4 +278,4 @@ export function HeaderJackpots({
       />
     </div>
   );
-}
+});

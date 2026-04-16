@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useReadContract } from "wagmi";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
 
@@ -72,14 +73,26 @@ export function useGameCoreReads({
     query: { enabled: liveContractReadsEnabled, refetchInterval: isPageVisible ? 15000 : 30000 },
   });
 
-  return {
-    actualCurrentEpoch,
-    refetchEpoch,
-    epochDurationSec,
-    pendingEpochDuration,
-    pendingEpochDurationEta,
-    pendingEpochDurationEffectiveFromEpoch,
-    jackpotInfoRaw,
-    rolloverPoolRaw,
-  };
+  return useMemo(
+    () => ({
+      actualCurrentEpoch,
+      refetchEpoch,
+      epochDurationSec,
+      pendingEpochDuration,
+      pendingEpochDurationEta,
+      pendingEpochDurationEffectiveFromEpoch,
+      jackpotInfoRaw,
+      rolloverPoolRaw,
+    }),
+    [
+      actualCurrentEpoch,
+      refetchEpoch,
+      epochDurationSec,
+      pendingEpochDuration,
+      pendingEpochDurationEta,
+      pendingEpochDurationEffectiveFromEpoch,
+      jackpotInfoRaw,
+      rolloverPoolRaw,
+    ],
+  );
 }

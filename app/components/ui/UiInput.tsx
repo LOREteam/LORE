@@ -16,20 +16,32 @@ const toneClasses: Record<UiInputTone, string> = {
 
 export interface UiInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   tone?: UiInputTone;
+  /** Error message shown below the input and linked via aria-describedby */
+  errorText?: string;
 }
 
-export function UiInput({ tone = "default", className, ...props }: UiInputProps) {
+export function UiInput({ tone = "default", className, errorText, id, ...props }: UiInputProps) {
+  const errorId = errorText && id ? `${id}-error` : undefined;
   return (
-    <input
-      aria-invalid={tone === "danger" ? true : undefined}
-      className={cn(
-        uiTokens.inputBase,
-        uiTokens.radius.md,
-        uiTokens.focusRing,
-        toneClasses[tone],
-        className,
+    <div className="flex flex-col gap-0.5 w-full">
+      <input
+        id={id}
+        aria-invalid={tone === "danger" ? true : undefined}
+        aria-describedby={errorId}
+        className={cn(
+          uiTokens.inputBase,
+          uiTokens.radius.md,
+          uiTokens.focusRing,
+          toneClasses[tone],
+          className,
+        )}
+        {...props}
+      />
+      {errorText && (
+        <span id={errorId} className="text-[10px] text-red-400 leading-tight px-0.5" role="alert">
+          {errorText}
+        </span>
       )}
-      {...props}
-    />
+    </div>
   );
 }

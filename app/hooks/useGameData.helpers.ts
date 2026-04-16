@@ -94,7 +94,6 @@ export function buildTileViewData(tileData: unknown, tileUserCounts: number[], u
       Math.max(
         indexedUsers,
         Number.isFinite(liveUsers) ? liveUsers : 0,
-        poolWei > 0n ? 1 : 0,
         hasMyBet ? 1 : 0,
       );
     return { tileId: i + 1, users, poolDisplay, hasMyBet };

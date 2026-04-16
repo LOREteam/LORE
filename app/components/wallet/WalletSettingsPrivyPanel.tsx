@@ -23,7 +23,7 @@ interface WalletSettingsPrivyPanelProps {
   onDepositTokenToEmbedded: () => void;
 }
 
-export function WalletSettingsPrivyPanel({
+export const WalletSettingsPrivyPanel = React.memo(function WalletSettingsPrivyPanel({
   embeddedWalletAddress,
   externalWalletAddress,
   embeddedAddressCopied,
@@ -112,4 +112,4 @@ export function WalletSettingsPrivyPanel({
       </p>
     </UiPanel>
   );
-}
+});

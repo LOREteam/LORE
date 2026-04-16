@@ -4,6 +4,23 @@ export const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 /** Normalize decimal separators (comma -> dot) for numeric input */
 export const normalizeDecimalInput = (value: string): string => value.replace(/,/g, ".");
 
+/**
+ * Validate a bet-amount string before passing it to parseUnits.
+ * Returns null if valid (caller proceeds), or an error message string.
+ * Guards against: NaN, Infinity, exponential notation (e.g. 1e300), negative, zero.
+ */
+export function validateBetAmount(raw: string): string | null {
+  const normalized = normalizeDecimalInput(raw.trim());
+  if (!normalized) return "Enter an amount";
+  // Reject exponential notation — parseUnits doesn't support it and Number("1e300") = Infinity
+  if (/e/i.test(normalized)) return "Invalid amount";
+  const n = Number(normalized);
+  if (!Number.isFinite(n)) return "Invalid amount";
+  if (Number.isNaN(n)) return "Invalid amount";
+  if (n <= 0) return "Amount must be greater than 0";
+  return null;
+}
+
 /** Format seconds as MM:SS */
 export const formatTime = (seconds: number): string => {
   const m = Math.floor(seconds / 60).toString().padStart(2, "0");
@@ -15,24 +32,34 @@ export const formatTime = (seconds: number): string => {
 export const shortenAddress = (address: string): string =>
   `${address.slice(0, 6)}...${address.slice(-4)}`;
 
-/** Parse a numeric string safely, returning 0 on failure */
+/** Parse a numeric string safely, returning 0 on failure or non-finite result (NaN, Infinity) */
 export const safeParseFloat = (value: string): number => {
   const n = parseFloat(normalizeDecimalInput(value));
-  return isNaN(n) ? 0 : n;
+  return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * Safe toFixed: if value is NaN, Infinity, or not finite, returns the fallback string.
+ * Prevents "NaN LINEA" or "Infinity LINEA" from rendering in the UI.
+ */
+export const safeToFixed = (value: number, decimals: number, fallback = "0.00"): string => {
+  if (!Number.isFinite(value)) return fallback;
+  return value.toFixed(decimals);
 };
 
 /** Race a promise against a timeout. Rejects with a named error on timeout. */
 export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  const guarded = promise.catch((err) => {
-    // Prevent unhandled rejection noise when timeout wins the race.
-    throw err;
+  let timerId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timerId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
   });
-  return Promise.race([
-    guarded,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-    }),
-  ]);
+  // Prevent unhandled rejection noise when timeout wins the race.
+  const guarded = promise.catch((err) => { throw err; });
+  return Promise.race([guarded, timeoutPromise]).finally(() => {
+    if (timerId !== null) { clearTimeout(timerId); timerId = null; }
+  });
 }
 
 /** Format an unknown caught error into a single-line diagnostic string. */

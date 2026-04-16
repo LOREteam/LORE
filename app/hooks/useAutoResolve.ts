@@ -18,12 +18,16 @@ const BOOTSTRAP_RESOLVE_RETRY_MS = 30_000;
 const ENABLE_AUTO_RESOLVE_SWEEP = false;
 const AUTO_RESOLVE_RETRY_AFTER_MS = 60_000;
 const MIN_ETH_FOR_GAS = 0.0005;
-const BOOTSTRAP_RESOLVE_REQUEST_TIMEOUT_MS = 8_000;
+// Generous client-side timeout: the server-side sendTransaction path on a
+// busy Linea RPC can genuinely take 15–25 s, especially when replacing a
+// pending tx. A tight cap here produced a flood of false "bootstrap-timeout"
+// warnings while the tx actually landed.
+const BOOTSTRAP_RESOLVE_REQUEST_TIMEOUT_MS = 35_000;
 /** How long to wait after timer hits 0 before pinging the keeper.
- * Gives organic player bets a chance to trigger the contract's
- * built-in `_autoResolveIfNeeded()` first, so the keeper only fires
- * when nobody actually wants to play. */
-const KEEPER_TRIGGER_INITIAL_DELAY_MS = 30_000;
+ * V8 atomic resolve: gives organic player bets a chance to trigger the
+ * contract's built-in `_autoResolveIfNeeded()` first, so the keeper only
+ * fires when nobody actually wants to play. */
+const KEEPER_TRIGGER_INITIAL_DELAY_MS = 4_000;
 
 type SilentSender = (
   tx: {
@@ -250,22 +254,22 @@ export function useAutoResolve({
                 action?: string;
                 currentEpoch?: string;
                 hash?: string;
-              reason?: string;
-              error?: string;
-              retryAfter?: number;
-              isResolved?: boolean;
-              isExpired?: boolean;
+                reason?: string;
+                error?: string;
+                retryAfter?: number;
+                isResolved?: boolean;
+                isExpired?: boolean;
               }
             | null;
 
           if (payload?.ok && payload.action === "sent") {
-            autoResolveAttemptedRef.current = epochKey;
-            autoResolveAttemptTsRef.current = Date.now();
             log.info("AutoResolve", "server keeper sent resolve tx", {
               epoch: payload.currentEpoch ?? epochKey,
               hash: payload.hash,
             });
             clearResolveGuard();
+            autoResolveAttemptedRef.current = epochKey;
+            autoResolveAttemptTsRef.current = Date.now();
             return;
           }
 
@@ -471,7 +475,11 @@ export function useAutoResolve({
       }
     };
 
-    const id = setInterval(sweep, SWEEP_INTERVAL_MS);
+    const id = setInterval(() => {
+      if (typeof document === "undefined" || document.visibilityState !== "hidden") {
+        void sweep();
+      }
+    }, SWEEP_INTERVAL_MS);
     const initialTimer = setTimeout(sweep, 15_000);
     return () => {
       clearInterval(id);

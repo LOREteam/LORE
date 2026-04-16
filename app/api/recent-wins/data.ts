@@ -44,11 +44,23 @@ export type RecentWinsPayload = {
 type RecentWinsSnapshotEnvelope = {
   payload: RecentWinsPayload;
   savedAt: number;
+  watermark: string | null;
 };
 
 type StoredClaimRow = ReturnType<typeof getRecentRewardClaims>[number];
 type RewardClaimLog = Awaited<ReturnType<typeof publicClient.getLogs>>[number];
 type StoredBetRow = ReturnType<typeof getAllBetRows>[number];
+
+function getLatestRewardClaimMarker() {
+  const latest = getRecentRewardClaims(1)[0];
+  if (!latest) return "none";
+  return `${latest.blockNumber}:${latest.txHash ?? ""}:${latest.epoch}`;
+}
+
+export function getRecentWinsDataWatermark() {
+  const lastIndexedBlock = getMetaBigInt("lastIndexedBlock")?.toString() ?? "null";
+  return `${lastIndexedBlock}|${getLatestRewardClaimMarker()}`;
+}
 
 function parseAmountWei(value: string | undefined) {
   if (!value) return 0n;
@@ -361,18 +373,25 @@ export async function getRecentWinsPayloadForRender(): Promise<RecentWinsPayload
   return payload;
 }
 
-export function loadRecentWinsSnapshot(): RecentWinsPayload | null {
+export function loadRecentWinsSnapshot(expectedWatermark: string | null = getRecentWinsDataWatermark()): RecentWinsPayload | null {
   const snapshot = getMetaJson<RecentWinsSnapshotEnvelope | RecentWinsPayload>(RECENT_WINS_SNAPSHOT_META_KEY);
   if (!snapshot || !("savedAt" in snapshot)) return null;
   if (typeof snapshot.savedAt !== "number" || Date.now() - snapshot.savedAt > RECENT_WINS_SNAPSHOT_MAX_AGE_MS) {
     return null;
   }
+  if (!("watermark" in snapshot) || snapshot.watermark !== expectedWatermark) {
+    return null;
+  }
   return snapshot.payload;
 }
 
-export function saveRecentWinsSnapshot(payload: RecentWinsPayload) {
+export function saveRecentWinsSnapshot(
+  payload: RecentWinsPayload,
+  watermark: string | null = getRecentWinsDataWatermark(),
+) {
   setMetaJson(RECENT_WINS_SNAPSHOT_META_KEY, {
     payload,
     savedAt: Date.now(),
+    watermark,
   });
 }

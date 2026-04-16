@@ -11,8 +11,6 @@ import { HeaderPoolChart } from "./header/HeaderPoolChart";
 import { HeaderWalletCard } from "./header/HeaderWalletCard";
 import type { JackpotDisplayInfo } from "./header/types";
 
-const JACKPOT_NOTICE_MS = 30 * 60 * 1000;
-
 interface HeaderProps {
   initialNowMs?: number;
   visualEpoch: string | null;
@@ -80,13 +78,11 @@ export const Header = React.memo(function Header({
   const { login, logout, authenticated } = usePrivy();
   const showColdBootDefaults = coldBootDefaults && !liveStateReady && !isRevealing;
   const timerStalled = timerReady && liveStateReady && !showColdBootDefaults && !isRevealing && timeLeft === 0;
-  const showNumericTimer = (liveStateReady || showColdBootDefaults) && !timerStalled;
+  const showNumericTimer = liveStateReady || showColdBootDefaults;
   const [hydrated, setHydrated] = useState(false);
   const [showAnalyzing, setShowAnalyzing] = useState(false);
   const [embeddedAddressCopied, setEmbeddedAddressCopied] = useState(false);
-  const [nowMs, setNowMs] = useState(initialNowMs);
   const mountedRef = useRef(false);
-  const historyReady = hydrated;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -111,65 +107,6 @@ export const Header = React.memo(function Header({
     else if (timeLeft > 0 && !isRevealing) setShowAnalyzing(false);
   }, [liveStateReady, timeLeft, isRevealing]);
 
-  useEffect(() => {
-    if (!isPageVisible) return;
-    setNowMs(Date.now());
-    const id = setInterval(() => setNowMs(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [isPageVisible]);
-
-  const dailyWindow = useMemo(() => {
-    const dayMs = 86_400_000;
-    const elapsed = nowMs % dayMs;
-    const leftMs = dayMs - elapsed;
-    const h = Math.floor(leftMs / 3_600_000);
-    const m = Math.floor((leftMs % 3_600_000) / 60_000);
-    return { pct: (elapsed / dayMs) * 100, leftLabel: `${h}h ${m}m left` };
-  }, [nowMs]);
-
-  const weeklyWindow = useMemo(() => {
-    const weekMs = 604_800_000;
-    const mondayOffsetMs = 3 * 86_400_000; // Monday-based week, same as contract
-    const shifted = nowMs + mondayOffsetMs;
-    const elapsed = shifted % weekMs;
-    const leftMs = weekMs - elapsed;
-    const d = Math.floor(leftMs / 86_400_000);
-    const h = Math.floor((leftMs % 86_400_000) / 3_600_000);
-    return { pct: (elapsed / weekMs) * 100, leftLabel: `${d}d ${h}h left` };
-  }, [nowMs]);
-
-  const todayDayIdx = Math.floor(nowMs / 86_400_000);
-  const dailyAwardedToday = Boolean(jackpotInfo && jackpotInfo.lastDailyDay === todayDayIdx);
-  const weeklyNowIdx = Math.floor((nowMs + 3 * 86_400_000) / 604_800_000);
-  const weeklyAwardedThisWeek = Boolean(jackpotInfo && jackpotInfo.lastWeeklyWeek === weeklyNowIdx);
-  const lastDailyJackpotEpoch = jackpotInfo?.lastDailyJackpotEpoch ?? null;
-  const lastWeeklyJackpotEpoch = jackpotInfo?.lastWeeklyJackpotEpoch ?? null;
-  const latestDailyAward = useMemo(
-    () =>
-      historyReady && lastDailyJackpotEpoch
-        ? jackpotHistory.find(
-            (entry) =>
-              entry.kind === "daily" &&
-              entry.epoch === lastDailyJackpotEpoch &&
-              typeof entry.timestamp === "number",
-          ) ?? null
-        : null,
-    [historyReady, jackpotHistory, lastDailyJackpotEpoch],
-  );
-  const latestWeeklyAward = useMemo(
-    () =>
-      historyReady && lastWeeklyJackpotEpoch
-        ? jackpotHistory.find(
-            (entry) =>
-              entry.kind === "weekly" &&
-              entry.epoch === lastWeeklyJackpotEpoch &&
-              typeof entry.timestamp === "number",
-          ) ?? null
-        : null,
-    [historyReady, jackpotHistory, lastWeeklyJackpotEpoch],
-  );
-  const dailyAwardVisibleUntil = latestDailyAward?.timestamp ? latestDailyAward.timestamp + JACKPOT_NOTICE_MS : 0;
-  const weeklyAwardVisibleUntil = latestWeeklyAward?.timestamp ? latestWeeklyAward.timestamp + JACKPOT_NOTICE_MS : 0;
   const epochDurationEta = epochDurationChange?.eta ?? null;
   const epochDurationEtaLabel = useMemo(() => {
     if (!epochDurationEta) return null;
@@ -197,13 +134,10 @@ export const Header = React.memo(function Header({
     {jackpotInfo && (
       <HeaderJackpots
         jackpotInfo={jackpotInfo}
-        nowMs={nowMs}
-        dailyAwardVisibleUntil={dailyAwardVisibleUntil}
-        weeklyAwardVisibleUntil={weeklyAwardVisibleUntil}
-        dailyAwardedToday={dailyAwardedToday}
-        weeklyAwardedThisWeek={weeklyAwardedThisWeek}
-        dailyWindow={dailyWindow}
-        weeklyWindow={weeklyWindow}
+        historyReady={hydrated}
+        initialNowMs={initialNowMs || Date.now()}
+        isPageVisible={isPageVisible}
+        jackpotHistory={jackpotHistory}
       />
     )}
 
@@ -223,7 +157,7 @@ export const Header = React.memo(function Header({
               }`}
             >
             <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isRevealing ? "bg-amber-400 reveal-dot" : "bg-emerald-400 animate-synced-pulse"}`} />
-            <span className={`lore-nums text-[11px] font-bold uppercase tracking-widest whitespace-nowrap ${isRevealing ? "reveal-text-blink" : ""}`}>
+            <span key={visualEpoch ?? ""} className={`lore-nums text-[11px] font-bold uppercase tracking-widest whitespace-nowrap ${isRevealing ? "reveal-text-blink" : ""}`}>
               {isRevealing ? "REVEAL" : visualEpoch ? `#${visualEpoch}` : showColdBootDefaults ? "#0" : "SYNC"}
             </span>
           </div>
@@ -248,8 +182,6 @@ export const Header = React.memo(function Header({
           >
             {showNumericTimer ? (
               <span className="text-[1.35rem]">{formatTime(timeLeft)}</span>
-            ) : timerStalled ? (
-              <span className="text-[0.72rem] font-bold uppercase tracking-[0.16em]">Locked</span>
             ) : (
               <span className="text-[1.35rem]">--:--</span>
             )}

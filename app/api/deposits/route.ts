@@ -15,7 +15,7 @@ import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
   filterByCurrentEpoch,
-  patchFirebase,
+  patchStorage,
   publicClient,
 } from "../_lib/dataBridge";
 import { logRouteError } from "../_lib/routeError";
@@ -86,8 +86,16 @@ type DepositsBuildResult = {
 };
 
 const depositsRouteCache = createRouteCache<DepositsPayload>(DEPOSITS_ROUTE_CACHE_MAX_KEYS);
+const depositsCacheWatermarks = new Map<string, string>();
 let currentEpochCache: { value: number | null; expiresAt: number } | null = null;
 let currentEpochInflight: Promise<number | null> | null = null;
+let currentEpochBackgroundRefresh: Promise<void> | null = null;
+
+function getDepositsDataWatermark() {
+  const currentEpoch = getMetaNumber("currentEpoch");
+  const lastIndexedBlock = getMetaBigInt("lastIndexedBlock")?.toString() ?? "null";
+  return `${Number.isInteger(currentEpoch) ? String(currentEpoch) : "null"}|${lastIndexedBlock}`;
+}
 
 function buildDepositKey(epoch: string, txHash: string, blockNumber: string): string {
   const normalizedHash = txHash.toLowerCase().trim();
@@ -286,11 +294,48 @@ async function resolveFreshCurrentEpochNumber() {
   if (currentEpochCache && currentEpochCache.expiresAt > now) {
     return currentEpochCache.value;
   }
+
+  const storedCurrentEpoch = getMetaNumber("currentEpoch");
+  if (Number.isInteger(storedCurrentEpoch) && storedCurrentEpoch && storedCurrentEpoch > 0) {
+    currentEpochCache = {
+      value: storedCurrentEpoch,
+      expiresAt: now + CURRENT_EPOCH_CACHE_MS,
+    };
+
+    if (!currentEpochBackgroundRefresh) {
+      currentEpochBackgroundRefresh = (async () => {
+        try {
+          const onChainCurrentEpoch = await publicClient.readContract({
+            address: CONTRACT_ADDRESS,
+            abi: CURRENT_EPOCH_ABI,
+            functionName: "currentEpoch",
+          });
+          const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
+          if (
+            Number.isInteger(onChainCurrentEpochNum) &&
+            onChainCurrentEpochNum > 0 &&
+            onChainCurrentEpochNum >= storedCurrentEpoch
+          ) {
+            currentEpochCache = {
+              value: onChainCurrentEpochNum,
+              expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
+            };
+          }
+        } catch {
+          // Keep serving indexed meta when RPC is slow or unavailable.
+        } finally {
+          currentEpochBackgroundRefresh = null;
+        }
+      })();
+    }
+
+    return storedCurrentEpoch;
+  }
+
   if (currentEpochInflight) {
     return currentEpochInflight;
   }
 
-  const storedCurrentEpoch = getMetaNumber("currentEpoch");
   currentEpochInflight = (async () => {
     try {
       const onChainCurrentEpoch = await publicClient.readContract({
@@ -300,13 +345,11 @@ async function resolveFreshCurrentEpochNumber() {
       });
       const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
       if (Number.isInteger(onChainCurrentEpochNum) && onChainCurrentEpochNum > 0) {
-        if (!storedCurrentEpoch || onChainCurrentEpochNum > storedCurrentEpoch) {
-          currentEpochCache = {
-            value: onChainCurrentEpochNum,
-            expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
-          };
-          return onChainCurrentEpochNum;
-        }
+        currentEpochCache = {
+          value: onChainCurrentEpochNum,
+          expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
+        };
+        return onChainCurrentEpochNum;
       }
     } catch {
       // Fall back to indexed meta when RPC is unavailable.
@@ -360,7 +403,7 @@ async function recoverDepositsAndPersist(user: string, currentEpochNum: number |
       const key = buildDepositKey(d.epoch, d.txHash, d.blockNumber);
       patch[key] = d;
     }
-    await patchFirebase(`gamedata/bets/${user}`, patch);
+    await patchStorage(`gamedata/bets/${user}`, patch);
   }
   return recovered;
 }
@@ -415,14 +458,19 @@ async function buildDepositsPayload(
 }
 
 function startDepositsRefresh(cacheKey: string, user: string, includeRewards: boolean) {
+  const watermark = getDepositsDataWatermark();
   startVersionedBackgroundRefresh({
     cache: depositsRouteCache,
     cacheKey,
     ttlMs: DEPOSITS_ROUTE_CACHE_MS,
     routeMetricKey: ROUTE_METRIC_KEY,
+    shouldSkip: () =>
+      depositsBuildInflight.has(cacheKey) || depositsCacheWatermarks.get(cacheKey) === watermark,
     build: () => buildDepositsPayload(user, includeRewards, { allowSlowRecovery: true }),
     toPayload: (result) => result.payload,
-    shouldSkip: () => depositsBuildInflight.has(cacheKey),
+    onCommit: () => {
+      depositsCacheWatermarks.set(cacheKey, watermark);
+    },
     onError: (error) => {
       logRouteError(ROUTE_METRIC_KEY, error, { user, includeRewards, phase: "background-refresh" });
     },
@@ -445,9 +493,11 @@ export async function GET(request: NextRequest) {
 
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
   const cacheKey = includeRewards ? `${user}:rewards` : user;
+  const currentWatermark = getDepositsDataWatermark();
   const now = Date.now();
   const cached = depositsRouteCache.getFresh(cacheKey, now);
   if (cached) {
+    depositsCacheWatermarks.set(cacheKey, currentWatermark);
     markRouteCacheHit(ROUTE_METRIC_KEY);
     finishRouteMetric(metric, 200);
     return jsonNoStore(cached);
@@ -457,7 +507,9 @@ export async function GET(request: NextRequest) {
     const indexedCurrentEpochNum = getMetaNumber("currentEpoch");
     if (!payloadTouchesCurrentEpoch(staleCache, indexedCurrentEpochNum)) {
       markRouteStaleServed(ROUTE_METRIC_KEY);
-      startDepositsRefresh(cacheKey, user, includeRewards);
+      if (depositsCacheWatermarks.get(cacheKey) !== currentWatermark) {
+        startDepositsRefresh(cacheKey, user, includeRewards);
+      }
       finishRouteMetric(metric, 200);
       return jsonNoStore(staleCache);
     }
@@ -477,6 +529,9 @@ export async function GET(request: NextRequest) {
                 depositsBuildInflight.delete(cacheKey);
               }),
             toPayload: (result) => result.payload,
+            onCommit: () => {
+              depositsCacheWatermarks.set(cacheKey, currentWatermark);
+            },
           });
           depositsBuildInflight.set(cacheKey, buildPromise);
           return buildPromise;

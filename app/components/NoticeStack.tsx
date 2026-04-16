@@ -28,7 +28,7 @@ export function NoticeStack({ notices, onDismiss }: NoticeStackProps) {
   if (notices.length === 0) return null;
 
   return (
-    <div role="status" aria-live="polite" className="fixed right-3 top-3 z-[220] flex w-[min(26rem,calc(100vw-1.5rem))] flex-col gap-2 sm:right-4 sm:top-4">
+    <div role="status" aria-live="polite" className="fixed right-3 z-[220] flex w-[min(26rem,calc(100vw-1.5rem))] flex-col gap-2 sm:right-4" style={{ top: "max(0.75rem, env(safe-area-inset-top, 0.75rem))" }}>
       {notices.map((notice) => {
         const tone = toneMap[notice.tone];
         return (

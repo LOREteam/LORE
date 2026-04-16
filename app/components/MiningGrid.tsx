@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useCallback, useState, useEffect } from "react";
+import React, { useMemo, useRef, useState, useEffect } from "react";
 import { GRID_SIZE } from "../lib/constants";
 import { pickRandom, yourWinQuotes, roundWinQuotes } from "../lib/loreTexts";
 import { Confetti } from "./Confetti";
@@ -16,11 +16,6 @@ function compactTileAmount(value: string): string {
   const amount = Number.parseFloat(value);
   if (!Number.isFinite(amount)) return value;
   return amount.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
-}
-
-function hasVisibleTilePool(value: string) {
-  const amount = Number.parseFloat(value);
-  return Number.isFinite(amount) && amount > 0;
 }
 
 function buildTileAriaLabel({
@@ -92,6 +87,7 @@ export const MiningGrid = React.memo(function MiningGrid({
     () => (showSelection ? new Set(selectedTiles) : new Set<number>()),
     [showSelection, selectedTiles],
   );
+  const gridRef = useRef<HTMLDivElement | null>(null);
 
   const [loreMsg, setLoreMsg] = useState<string | null>(null);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -111,9 +107,30 @@ export const MiningGrid = React.memo(function MiningGrid({
     return () => clearTimeout(timer);
   }, [isRevealing, winningTileId, tileViewData, reducedMotion]);
 
+  useEffect(() => {
+    const gridElement = gridRef.current;
+    if (!gridElement) return;
+
+    const handleGridClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const tileButton = target.closest<HTMLButtonElement>("button[data-tile-id]");
+      if (!tileButton || !gridElement.contains(tileButton) || tileButton.disabled) return;
+
+      const tileId = Number(tileButton.dataset.tileId);
+      if (!Number.isInteger(tileId) || tileId <= 0) return;
+      onTileClick(tileId);
+    };
+
+    gridElement.addEventListener("click", handleGridClick);
+    return () => {
+      gridElement.removeEventListener("click", handleGridClick);
+    };
+  }, [onTileClick]);
+
   return (
     <div className="relative w-full aspect-square min-h-[18rem] overflow-hidden rounded-xl border border-violet-500/20 bg-[#0d0d1a] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] sm:min-h-[20rem] min-[900px]:aspect-auto min-[900px]:h-[calc(100dvh-13rem)] min-[900px]:min-h-[22rem]">
-      <div className="grid grid-cols-5 grid-rows-5 gap-1 p-1.5 sm:gap-1.5 sm:p-2 h-full">
+      <div ref={gridRef} className="grid grid-cols-5 grid-rows-5 gap-1 p-1.5 sm:gap-1.5 sm:p-2 h-full">
         {TILE_INDICES.map((i) => {
           const tile = tileViewData[i] ?? { tileId: i + 1, users: 0, poolDisplay: "0.00", hasMyBet: false };
           const tileId = tile.tileId;
@@ -133,7 +150,6 @@ export const MiningGrid = React.memo(function MiningGrid({
               isRevealing={isRevealing}
               isAnalyzing={isAnalyzing}
               reducedMotion={reducedMotion}
-              onTileClick={onTileClick}
             />
           );
         })}
@@ -173,7 +189,6 @@ const Tile = React.memo(function Tile({
   isRevealing,
   isAnalyzing,
   reducedMotion,
-  onTileClick,
 }: {
   tileId: number;
   index: number;
@@ -187,15 +202,13 @@ const Tile = React.memo(function Tile({
   isRevealing: boolean;
   isAnalyzing: boolean;
   reducedMotion: boolean;
-  onTileClick: (id: number) => void;
 }) {
-  const handleClick = useCallback(() => onTileClick(tileId), [onTileClick, tileId]);
   const isMyWin = isWinner && hasMyBet;
   const isNeutralWinner = isWinner && !hasMyBet;
   const compactAmount = liveStateReady || coldBootDefaults ? compactTileAmount(displayAmount) : "...";
   const displayedUsers =
     liveStateReady || coldBootDefaults
-      ? Math.max(users, hasMyBet || hasVisibleTilePool(displayAmount) ? 1 : 0)
+      ? Math.max(users, hasMyBet ? 1 : 0)
       : users;
   const ariaLabel = buildTileAriaLabel({
     tileId,
@@ -237,11 +250,12 @@ const Tile = React.memo(function Tile({
 
   return (
     <button
-      onClick={handleClick}
+      type="button"
+      data-tile-id={tileId}
       disabled={!liveStateReady || isRevealing}
       aria-label={ariaLabel}
       aria-pressed={isSelected && !isWinner}
-      className={`relative h-full w-full min-h-0 overflow-hidden rounded-lg border p-1 transition-all duration-200 group flex flex-col items-center justify-between sm:p-1.5 [contain:layout_paint] ${entranceAnim} ${staggerClass} ${base} ${faded}`}
+      className={`relative h-full w-full min-h-0 overflow-hidden rounded-lg border p-1 transition-all duration-200 group flex flex-col items-center justify-between sm:p-1.5 [contain:layout_paint] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-[#070712] ${entranceAnim} ${staggerClass} ${base} ${faded}`}
     >
       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-br from-white/[0.03] to-transparent z-0" />
 
@@ -251,10 +265,10 @@ const Tile = React.memo(function Tile({
         }`}>
           #{tileId}
           {hasMyBet && !isWinner && (
-            <span className={`w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)] ${reducedMotion ? "" : "animate-synced-pulse"}`} />
+            <span className={`w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)] ${reducedMotion ? "" : "animate-synced-pulse"}`} />
           )}
           {isSelected && !isWinner && (
-            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0 shadow-[0_0_6px_rgba(139,92,246,0.6)]" />
+            <span className="w-2 h-2 rounded-full bg-violet-400 shrink-0 shadow-[0_0_6px_rgba(139,92,246,0.6)]" />
           )}
         </span>
 

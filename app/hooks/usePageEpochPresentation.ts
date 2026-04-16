@@ -51,9 +51,12 @@ export function usePageEpochPresentation({
     return selectedTiles;
   }, [gridDisplayEpoch, selectedTiles, selectedTilesEpoch, showSelectionOnGrid]);
 
-  return {
-    gridSelectedTiles,
-    isAnalyzing,
-    showSelectionOnGrid,
-  };
+  return useMemo(
+    () => ({
+      gridSelectedTiles,
+      isAnalyzing,
+      showSelectionOnGrid,
+    }),
+    [gridSelectedTiles, isAnalyzing, showSelectionOnGrid],
+  );
 }

@@ -92,7 +92,6 @@ export async function POST(request: NextRequest) {
       timestamp: Date.now(),
     });
 
-    chatMessagesRouteCache.beginWrite(cacheKey);
     invalidateCachedChatMessages(cacheKey);
 
     finishRouteMetric(metric, 200);

@@ -129,18 +129,33 @@ export function usePageWalletOverview({
     (isEmbeddedActive && formattedLineaBalance == null) ||
     (!isEmbeddedActive && embeddedTokenPending && formattedPrivyBalance === "0.00");
 
-  return {
-    embeddedTokenBalance,
-    embeddedEthBalance,
-    embeddedTokenPending,
-    embeddedEthPending,
-    refetchEmbeddedTokenBalance,
-    refetchEmbeddedEthBalance,
-    formattedPrivyBalance,
-    formattedPrivyEthBalance,
-    isEmbeddedActive,
-    headerLineaBalance,
-    headerLineaLoading,
-    headerEthLoading: embeddedEthPending && formattedPrivyEthBalance === "0.0000",
-  };
+  return useMemo(
+    () => ({
+      embeddedTokenBalance,
+      embeddedEthBalance,
+      embeddedTokenPending,
+      embeddedEthPending,
+      refetchEmbeddedTokenBalance,
+      refetchEmbeddedEthBalance,
+      formattedPrivyBalance,
+      formattedPrivyEthBalance,
+      isEmbeddedActive,
+      headerLineaBalance,
+      headerLineaLoading,
+      headerEthLoading: embeddedEthPending && formattedPrivyEthBalance === "0.0000",
+    }),
+    [
+      embeddedTokenBalance,
+      embeddedEthBalance,
+      embeddedTokenPending,
+      embeddedEthPending,
+      refetchEmbeddedTokenBalance,
+      refetchEmbeddedEthBalance,
+      formattedPrivyBalance,
+      formattedPrivyEthBalance,
+      isEmbeddedActive,
+      headerLineaBalance,
+      headerLineaLoading,
+    ],
+  );
 }

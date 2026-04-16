@@ -11,8 +11,15 @@ const LazyChatWidget = dynamic(() => import("./chat/ChatWidget").then((mod) => m
       title="Open chat"
       disabled
     >
-      <svg width="16" height="16" viewBox="0 0 20 20" fill="white">
-        <path d="M3 3h14a1 1 0 011 1v9a1 1 0 01-1 1h-4l-3 3-3-3H3a1 1 0 01-1-1V4a1 1 0 011-1zm2 3h10v1.5H5V6zm0 3h7v1.5H5V9z" />
+      <svg aria-hidden="true" width="19" height="18" viewBox="0 0 19 18" fill="none">
+        <path
+          d="M1.5 2.75C1.5 1.784 2.284 1 3.25 1h12.5C16.716 1 17.5 1.784 17.5 2.75v8.5c0 .966-.784 1.75-1.75 1.75H11l-1.5 2.5L8 13H3.25C2.284 13 1.5 12.216 1.5 11.25v-8.5z"
+          fill="white"
+          opacity="0.6"
+        />
+        <circle cx="6.25" cy="7" r="1.15" fill="#0a0a1c" opacity="0.6"/>
+        <circle cx="9.5"  cy="7" r="1.15" fill="#0a0a1c" opacity="0.6"/>
+        <circle cx="12.75" cy="7" r="1.15" fill="#0a0a1c" opacity="0.6"/>
       </svg>
     </button>
   ),
@@ -24,13 +31,14 @@ interface FloatingActionsProps {
   chatOpen?: boolean;
 }
 
-export function FloatingActions({ walletAddress, onChatOpenChange, chatOpen = false }: FloatingActionsProps) {
+export const FloatingActions = React.memo(function FloatingActions({ walletAddress, onChatOpenChange, chatOpen = false }: FloatingActionsProps) {
   return (
     <div
-      className={`fixed right-3 transition-all duration-200 ${chatOpen ? "z-[150]" : "z-[200]"}`}
-      style={{ bottom: chatOpen ? "max(0.25rem, env(safe-area-inset-bottom, 0px))" : "max(0.75rem, calc(env(safe-area-inset-bottom, 0px) + 0.35rem))" }}
+      className="fixed right-3 z-[200]"
+      data-chat-open={chatOpen ? "true" : "false"}
+      style={{ bottom: "max(0.75rem, calc(env(safe-area-inset-bottom, 0px) + 0.35rem))" }}
     >
-      <div className={`hud-dock flex items-center gap-2 rounded-2xl border border-white/[0.08] bg-[#070712]/84 p-1.5 shadow-[0_12px_34px_rgba(2,6,23,0.4)] backdrop-blur-xl transition-all duration-200 ${chatOpen ? "translate-y-4 opacity-92" : ""}`}>
+      <div className="hud-dock flex items-center gap-2 rounded-2xl border border-white/[0.08] bg-[#070712]/84 p-1.5 shadow-[0_12px_34px_rgba(2,6,23,0.4)] backdrop-blur-xl">
         <a
           href="https://x.com/Linea_Ore"
           target="_blank"
@@ -55,8 +63,8 @@ export function FloatingActions({ walletAddress, onChatOpenChange, chatOpen = fa
             <path d="M12 .5C5.65.5.5 5.8.5 12.33c0 5.23 3.3 9.67 7.88 11.23.58.11.79-.26.79-.58 0-.29-.01-1.23-.02-2.23-3.2.71-3.88-1.39-3.88-1.39-.52-1.37-1.28-1.73-1.28-1.73-1.05-.74.08-.73.08-.73 1.16.08 1.78 1.22 1.78 1.22 1.03 1.82 2.69 1.29 3.35.99.1-.77.4-1.29.72-1.59-2.55-.3-5.23-1.31-5.23-5.81 0-1.28.44-2.33 1.17-3.15-.12-.3-.51-1.52.11-3.17 0 0 .95-.31 3.12 1.2a10.48 10.48 0 0 1 5.68 0c2.16-1.51 3.11-1.2 3.11-1.2.62 1.65.23 2.87.12 3.17.73.82 1.17 1.87 1.17 3.15 0 4.51-2.69 5.51-5.25 5.81.42.37.78 1.08.78 2.19 0 1.58-.01 2.86-.01 3.25 0 .32.2.7.8.58a11.87 11.87 0 0 0 7.87-11.23C23.5 5.8 18.35.5 12 .5Z" />
           </svg>
         </a>
-        <LazyChatWidget walletAddress={walletAddress} onOpenChange={onChatOpenChange} />
+        <LazyChatWidget walletAddress={walletAddress} onOpenChange={onChatOpenChange} open={chatOpen} />
       </div>
     </div>
   );
-}
+});

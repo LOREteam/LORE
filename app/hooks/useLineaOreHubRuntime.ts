@@ -1,9 +1,11 @@
 "use client";
 
+import { useMemo } from "react";
 import type { PublicClient } from "viem";
 import type { Eip7702CapabilityState, Signed7702AuthorizationLike } from "../lib/eip7702";
 import type { SoundName } from "./useSound";
 import { useMining } from "./useMining";
+import { useAutoMineDebugOverride } from "./useAutoMineDebugOverride";
 import { useMiningGuards } from "./useMiningGuards";
 import { usePageEpochPresentation } from "./usePageEpochPresentation";
 import { usePageMiningOptions } from "./usePageMiningOptions";
@@ -119,6 +121,14 @@ export function useLineaOreHubRuntime({
   });
 
   const mining = useMining(miningOptions);
+  const autoMineDebugOverride = useAutoMineDebugOverride();
+  const effectiveAutoMinePhase = autoMineDebugOverride?.phase ?? mining.autoMinePhase;
+  const effectiveAutoMineProgress = autoMineDebugOverride?.progress ?? mining.autoMineProgress;
+  const effectiveRunningParams = autoMineDebugOverride?.runningParams ?? mining.runningParams;
+  const effectiveIsAutoMining =
+    effectiveAutoMinePhase === "starting" ||
+    effectiveAutoMinePhase === "restoring" ||
+    effectiveAutoMinePhase === "running";
   const epochPresentation = usePageEpochPresentation({
     actualCurrentEpoch,
     gridDisplayEpoch,
@@ -178,11 +188,28 @@ export function useLineaOreHubRuntime({
     hasMyWinningBet,
   });
 
-  return {
-    ...mining,
-    ...epochPresentation,
-    ...rewardScanner,
-    ...miningGuards,
-    ...runtimeEffects,
-  };
+  return useMemo(
+    () => ({
+      ...mining,
+      ...epochPresentation,
+      ...rewardScanner,
+      ...miningGuards,
+      ...runtimeEffects,
+      autoMinePhase: effectiveAutoMinePhase,
+      autoMineProgress: effectiveAutoMineProgress,
+      runningParams: effectiveRunningParams,
+      isAutoMining: effectiveIsAutoMining,
+    }),
+    [
+      effectiveAutoMinePhase,
+      effectiveAutoMineProgress,
+      effectiveIsAutoMining,
+      effectiveRunningParams,
+      epochPresentation,
+      mining,
+      miningGuards,
+      rewardScanner,
+      runtimeEffects,
+    ],
+  );
 }

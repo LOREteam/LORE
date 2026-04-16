@@ -13,6 +13,15 @@ import { WalletSettings7702Panel } from "./wallet/WalletSettings7702Panel";
 import { WalletSettingsTransferPanels } from "./wallet/WalletSettingsTransferPanels";
 import type { WalletSettingsModalProps } from "./wallet/types";
 
+const SECTIONS = [
+  { id: "all" as const, label: "All" },
+  { id: "overview" as const, label: "General" },
+  { id: "7702" as const, label: "7702" },
+  { id: "privy" as const, label: "Privy" },
+  { id: "transfer" as const, label: "Transfer" },
+  { id: "scan" as const, label: "Scan" },
+];
+
 export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   isOpen,
   onClose,
@@ -52,6 +61,14 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   onDeepScanStop,
   onDeepClaimOne,
   onDeepClaimAll,
+  connectedResolverRewards,
+  connectedResolverRewardsWei,
+  embeddedResolverRewards,
+  embeddedResolverRewardsWei,
+  isClaimingConnectedResolverRewards,
+  isClaimingEmbeddedResolverRewards,
+  onClaimConnectedResolverRewards,
+  onClaimEmbeddedResolverRewards,
   soundSettings,
   onSoundSettingChange,
   reducedMotion = false,
@@ -68,15 +85,6 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   const [activeSection, setActiveSection] = useState<"all" | "overview" | "7702" | "privy" | "transfer" | "scan">("all");
 
   if (!isOpen) return null;
-
-  const SECTIONS = [
-    { id: "all" as const, label: "All" },
-    { id: "overview" as const, label: "General" },
-    { id: "7702" as const, label: "7702" },
-    { id: "privy" as const, label: "Privy" },
-    { id: "transfer" as const, label: "Transfer" },
-    { id: "scan" as const, label: "Scan" },
-  ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
@@ -130,6 +138,15 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
           {(activeSection === "all" || activeSection === "overview") && (
             <WalletSettingsOverviewPanel
               connectedWalletAddress={connectedWalletAddress}
+              embeddedWalletAddress={embeddedWalletAddress}
+              connectedResolverRewards={connectedResolverRewards}
+              connectedResolverRewardsWei={connectedResolverRewardsWei}
+              embeddedResolverRewards={embeddedResolverRewards}
+              embeddedResolverRewardsWei={embeddedResolverRewardsWei}
+              isClaimingConnectedResolverRewards={isClaimingConnectedResolverRewards}
+              isClaimingEmbeddedResolverRewards={isClaimingEmbeddedResolverRewards}
+              onClaimConnectedResolverRewards={onClaimConnectedResolverRewards}
+              onClaimEmbeddedResolverRewards={onClaimEmbeddedResolverRewards}
               soundSettings={soundSettings}
               onSoundSettingChange={onSoundSettingChange}
               reducedMotion={reducedMotion}

@@ -46,7 +46,7 @@ export function useReducedMotion() {
     else root.removeAttribute("data-motion");
 
     return () => {
-      root.removeAttribute("data-motion");
+      if (reducedMotion) root.removeAttribute("data-motion");
     };
   }, [reducedMotion]);
 

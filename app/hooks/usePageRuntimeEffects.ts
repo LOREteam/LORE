@@ -125,7 +125,10 @@ export function usePageRuntimeEffects({
     [handleTileClick],
   );
 
-  return {
-    stableTileClick,
-  };
+  return useMemo(
+    () => ({
+      stableTileClick,
+    }),
+    [stableTileClick],
+  );
 }

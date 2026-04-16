@@ -9,6 +9,7 @@ import { OfflineBanner } from "./components/OfflineBanner";
 import { NoticeStack } from "./components/NoticeStack";
 import { PageBackdrop } from "./components/PageBackdrop";
 import { FloatingActions } from "./components/FloatingActions";
+import { FirstVisitTutorial } from "./components/FirstVisitTutorial";
 import type { LiveStateApiResponse } from "./hooks/useGameLiveStateSnapshot";
 import type { RecentWin } from "./hooks/useRecentWins";
 import { useLineaOreClientRuntime } from "./hooks/useLineaOreClientRuntime";
@@ -88,6 +89,7 @@ export default function LineaOreClient({
         />
 
         <PageTabContent {...pageTabContentProps} />
+        <FirstVisitTutorial activeTab={activeTab} onTabChange={handleTabChange} />
 
       </main>
       <FloatingActions {...floatingActionsProps} />

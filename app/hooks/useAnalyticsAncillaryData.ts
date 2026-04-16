@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useDepositHistory } from "./useDepositHistory";
 import { useJackpotHistory } from "./useJackpotHistory";
 
@@ -15,6 +15,7 @@ export function useAnalyticsAncillaryData({
   isPageVisible,
   embeddedWalletAddress,
 }: UseAnalyticsAncillaryDataOptions) {
+  const analyticsActive = activeTab === "analytics";
   const {
     data: deposits,
     loading: depositsLoading,
@@ -22,33 +23,47 @@ export function useAnalyticsAncillaryData({
     error: depositsError,
     fetch: fetchDeposits,
     refresh: refreshDeposits,
-  } = useDepositHistory(embeddedWalletAddress ?? undefined, activeTab === "analytics");
+  } = useDepositHistory(embeddedWalletAddress ?? undefined, analyticsActive);
 
   useEffect(() => {
-    if (activeTab !== "analytics" || !embeddedWalletAddress) return;
+    if (!analyticsActive || !embeddedWalletAddress) return;
     const intervalId = setInterval(() => {
       void refreshDeposits();
     }, isPageVisible ? 30_000 : 120_000);
     return () => clearInterval(intervalId);
-  }, [activeTab, embeddedWalletAddress, isPageVisible, refreshDeposits]);
+  }, [analyticsActive, embeddedWalletAddress, isPageVisible, refreshDeposits]);
 
   const {
     items: jackpotHistory,
     loading: jackpotHistoryLoading,
     error: jackpotHistoryError,
     refresh: refreshJackpotHistory,
-  } = useJackpotHistory(isPageVisible);
+  } = useJackpotHistory(analyticsActive);
 
-  return {
-    deposits,
-    depositsLoading,
-    totalDeposited,
-    depositsError,
-    fetchDeposits,
-    refreshDeposits,
-    jackpotHistory,
-    jackpotHistoryLoading,
-    jackpotHistoryError,
-    refreshJackpotHistory,
-  };
+  return useMemo(
+    () => ({
+      deposits,
+      depositsLoading,
+      totalDeposited,
+      depositsError,
+      fetchDeposits,
+      refreshDeposits,
+      jackpotHistory,
+      jackpotHistoryLoading,
+      jackpotHistoryError,
+      refreshJackpotHistory,
+    }),
+    [
+      deposits,
+      depositsError,
+      depositsLoading,
+      fetchDeposits,
+      jackpotHistory,
+      jackpotHistoryError,
+      jackpotHistoryLoading,
+      refreshDeposits,
+      refreshJackpotHistory,
+      totalDeposited,
+    ],
+  );
 }

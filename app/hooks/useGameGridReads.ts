@@ -129,16 +129,30 @@ export function useGameGridReads({
     query: { enabled: !!walletAddress },
   });
 
-  return {
-    epochEndTime,
-    refetchEpochEndTime,
-    tileData,
-    refetchTileData,
-    gridAndCurrentAreSame,
-    gridEpochData,
-    refetchGridEpochData,
-    separateCurrentEpochData,
-    currentAllowance,
-    refetchAllowance,
-  };
+  return useMemo(
+    () => ({
+      epochEndTime,
+      refetchEpochEndTime,
+      tileData,
+      refetchTileData,
+      gridAndCurrentAreSame,
+      gridEpochData,
+      refetchGridEpochData,
+      separateCurrentEpochData,
+      currentAllowance,
+      refetchAllowance,
+    }),
+    [
+      epochEndTime,
+      refetchEpochEndTime,
+      tileData,
+      refetchTileData,
+      gridAndCurrentAreSame,
+      gridEpochData,
+      refetchGridEpochData,
+      separateCurrentEpochData,
+      currentAllowance,
+      refetchAllowance,
+    ],
+  );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { log } from "../lib/logger";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 
@@ -200,6 +201,40 @@ function mapDepositEntries(
   }).sort((a, b) => Number(b.epoch) - Number(a.epoch));
 }
 
+function arraysEqualNumbers(left: number[], right: number[]) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function depositsEqual(left: DepositEntry[] | null, right: DepositEntry[]) {
+  if (!left) return false;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (
+      a.epoch !== b.epoch ||
+      a.amount !== b.amount ||
+      a.amountNum !== b.amountNum ||
+      a.txHash !== b.txHash ||
+      a.blockNumber !== b.blockNumber ||
+      a.blockNumberNum !== b.blockNumberNum ||
+      a.winningTile !== b.winningTile ||
+      a.isDailyJackpot !== b.isDailyJackpot ||
+      a.isWeeklyJackpot !== b.isWeeklyJackpot ||
+      a.reward !== b.reward ||
+      !arraysEqualNumbers(a.tileIds, b.tileIds) ||
+      !arraysEqualNumbers(a.amounts, b.amounts)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function useDepositHistory(userAddress?: string, enabled = true) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<DepositEntry[] | null>(null);
@@ -277,10 +312,15 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       rewardsMap = { ...rewardsMap, ...extraRewardsMap };
 
       const entries = mapDepositEntries(deposits, epochsMap, rewardsMap);
+      const entriesChanged = !depositsEqual(dataRef.current, entries);
       if (mountedRef.current && requestId === requestIdRef.current) {
-        setData(entries);
+        if (entriesChanged) {
+          setData(entries);
+        }
       }
-      saveCachedDeposits(normalizedUser, entries);
+      if (entriesChanged) {
+        saveCachedDeposits(normalizedUser, entries);
+      }
 
       const deferredEpochs = uniqueEpochs.slice(SYNC_EPOCH_PREFETCH_LIMIT);
       const deferredMissingEpochs = deferredEpochs.filter((epoch) => !epochsMap[String(epoch)]);
@@ -295,14 +335,19 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
           const mergedEpochsMap = { ...epochsMap, ...deferredEpochsMap };
           const mergedRewardsMap = { ...rewardsMap, ...deferredRewardsMap };
           const fullEntries = mapDepositEntries(deposits, mergedEpochsMap, mergedRewardsMap);
+          const fullEntriesChanged = !depositsEqual(dataRef.current, fullEntries);
           if (mountedRef.current && requestId === requestIdRef.current) {
-            setData(fullEntries);
+            if (fullEntriesChanged) {
+              setData(fullEntries);
+            }
           }
-          saveCachedDeposits(normalizedUser, fullEntries);
+          if (fullEntriesChanged) {
+            saveCachedDeposits(normalizedUser, fullEntries);
+          }
         })();
       }
     } catch (err) {
-      console.error("[useDepositHistory] API fetch failed:", err instanceof Error ? err.message : String(err));
+      log.warn("DepositHistory", "API fetch failed", { message: err instanceof Error ? err.message : String(err) });
       if (mountedRef.current && requestId === requestIdRef.current) {
         setError((err as Error).message || "Network error");
         setData([]);

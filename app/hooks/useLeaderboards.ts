@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import type { LeaderboardEntry, LuckyTileEntry } from "../lib/types";
 import { readJsonResponse } from "../lib/readJsonResponse";
@@ -25,6 +25,42 @@ interface LeaderboardsApiPayload extends LeaderboardsData {
 interface LeaderboardsCacheEnvelope {
   savedAt?: number;
   data?: LeaderboardsData;
+}
+
+function leaderboardEntryArrayEqual<
+  T extends { address?: string; value?: string; valueNum?: number; extra?: string; rank?: number; tileId?: number; wins?: number; pct?: number }
+>(left: T[], right: T[]) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (
+      a.address !== b.address ||
+      a.value !== b.value ||
+      a.valueNum !== b.valueNum ||
+      a.extra !== b.extra ||
+      a.rank !== b.rank ||
+      a.tileId !== b.tileId ||
+      a.wins !== b.wins ||
+      a.pct !== b.pct
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function leaderboardsEqual(left: LeaderboardsData | null, right: LeaderboardsData) {
+  if (!left) return false;
+  return (
+    leaderboardEntryArrayEqual(left.biggestSingleWin, right.biggestSingleWin) &&
+    leaderboardEntryArrayEqual(left.luckiest, right.luckiest) &&
+    leaderboardEntryArrayEqual(left.oneTileWonder, right.oneTileWonder) &&
+    leaderboardEntryArrayEqual(left.mostWins, right.mostWins) &&
+    leaderboardEntryArrayEqual(left.whales, right.whales) &&
+    leaderboardEntryArrayEqual(left.underdog, right.underdog) &&
+    leaderboardEntryArrayEqual(left.luckyTile, right.luckyTile)
+  );
 }
 
 function loadCache(): { data: LeaderboardsData | null; savedAt: number | null } {
@@ -70,7 +106,11 @@ function saveCache(data: LeaderboardsData) {
 }
 
 export function useLeaderboards(enabled: boolean) {
-  const initialCache = loadCache();
+  const initialCacheRef = useRef<{ data: LeaderboardsData | null; savedAt: number | null } | null>(null);
+  if (initialCacheRef.current === null) {
+    initialCacheRef.current = loadCache();
+  }
+  const initialCache = initialCacheRef.current;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<LeaderboardsData | null>(initialCache.data);
@@ -102,8 +142,8 @@ export function useLeaderboards(enabled: boolean) {
     }
 
     try {
-      if (!force) {
-        const cached = loadCache();
+      if (!force && !dataRef.current) {
+        const cached = initialCacheRef.current ?? loadCache();
         cacheSavedAtRef.current = cached.savedAt;
         if (cached.data && !dataRef.current && mountedRef.current) {
           setData(cached.data);
@@ -129,12 +169,16 @@ export function useLeaderboards(enabled: boolean) {
         underdog: payload.underdog,
         luckyTile: payload.luckyTile,
       };
+      const changed = !leaderboardsEqual(dataRef.current, nextData);
 
       if (mountedRef.current) {
-        setData(nextData);
-        saveCache(nextData);
+        if (changed) {
+          setData(nextData);
+          saveCache(nextData);
+        }
       }
       cacheSavedAtRef.current = Date.now();
+      initialCacheRef.current = { data: nextData, savedAt: cacheSavedAtRef.current };
     } catch (err) {
       if (mountedRef.current) {
         setError(err instanceof Error ? err.message : String(err));
@@ -163,5 +207,8 @@ export function useLeaderboards(enabled: boolean) {
     void fetchAll(true);
   }, [fetchAll]);
 
-  return { data, loading, error, refetch };
+  return useMemo(
+    () => ({ data, loading, error, refetch }),
+    [data, error, loading, refetch],
+  );
 }

@@ -23,8 +23,10 @@ export function useGameTileUserCounts({
       setTileUserCounts(createZeroTileUserCounts());
       return;
     }
-    if (!liveGrid) return;
-    if (!serverStateMatchesGrid || !fallbackTileUserCounts) return;
+    if (!liveGrid || !serverStateMatchesGrid || !fallbackTileUserCounts) {
+      setTileUserCounts(createZeroTileUserCounts());
+      return;
+    }
     setTileUserCounts(fallbackTileUserCounts);
   }, [fallbackTileUserCounts, gridDisplayEpochBigInt, liveGrid, serverStateMatchesGrid]);
 
