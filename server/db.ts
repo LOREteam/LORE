@@ -17,6 +17,14 @@ export const dbPath = resolveDbPath();
 mkdirSync(dirname(dbPath), { recursive: true });
 
 export const db = new DatabaseSync(dbPath);
+let dbShuttingDown = false;
+const shutdownGlobal = globalThis as typeof globalThis & {
+  __loreDbShutdownHandlersInstalled?: boolean;
+};
+
+export function isDbShuttingDown() {
+  return dbShuttingDown;
+}
 
 function configureConnection() {
   db.exec(`
@@ -207,10 +215,15 @@ function bootstrapSchema() {
 configureConnection();
 bootstrapSchema();
 
-// Graceful shutdown: close DB connection on process termination.
-for (const sig of ["SIGTERM", "SIGINT"] as const) {
-  process.on(sig, () => {
-    try { db.exec("PRAGMA optimize;"); } catch { /* best effort */ }
-    try { (db as unknown as { close?: () => void }).close?.(); } catch { /* best effort */ }
-  });
+if (!shutdownGlobal.__loreDbShutdownHandlersInstalled) {
+  shutdownGlobal.__loreDbShutdownHandlersInstalled = true;
+  // Graceful shutdown: close DB connection on process termination.
+  for (const sig of ["SIGTERM", "SIGINT"] as const) {
+    process.once(sig, () => {
+      dbShuttingDown = true;
+      try { db.exec("PRAGMA optimize;"); } catch { /* best effort */ }
+      try { (db as unknown as { close?: () => void }).close?.(); } catch { /* best effort */ }
+      process.exit(sig === "SIGINT" ? 130 : 143);
+    });
+  }
 }

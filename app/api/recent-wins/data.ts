@@ -161,7 +161,11 @@ function buildRecentResolvedWins(limit = RECENT_WINS_LIMIT): RecentWinRow[] {
           blockNumber: epochInfo.resolvedBlock,
         } satisfies RecentWinRow;
       })
-      .sort((a, b) => Number.parseFloat(b.amount) - Number.parseFloat(a.amount));
+      .sort((a, b) => {
+        const amountDelta = Number.parseFloat(b.amount) - Number.parseFloat(a.amount);
+        if (amountDelta !== 0) return amountDelta;
+        return a.user.localeCompare(b.user);
+      });
 
     rows.push(...winners);
     if (rows.length >= limit) break;

@@ -129,7 +129,7 @@ export const MiningGrid = React.memo(function MiningGrid({
   }, [onTileClick]);
 
   return (
-    <div className="relative w-full aspect-square min-h-[18rem] overflow-hidden rounded-xl border border-violet-500/20 bg-[#0d0d1a] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] sm:min-h-[20rem] min-[900px]:aspect-auto min-[900px]:h-[calc(100dvh-13rem)] min-[900px]:min-h-[22rem]">
+    <div className="relative w-full aspect-square min-h-72 overflow-hidden rounded-xl border border-violet-500/20 bg-surface-raised shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] sm:min-h-80 min-[900px]:aspect-auto min-[900px]:h-[calc(100dvh-13rem)] min-[900px]:min-h-88">
       <div ref={gridRef} className="grid grid-cols-5 grid-rows-5 gap-1 p-1.5 sm:gap-1.5 sm:p-2 h-full">
         {TILE_INDICES.map((i) => {
           const tile = tileViewData[i] ?? { tileId: i + 1, users: 0, poolDisplay: "0.00", hasMyBet: false };
@@ -255,9 +255,9 @@ const Tile = React.memo(function Tile({
       disabled={!liveStateReady || isRevealing}
       aria-label={ariaLabel}
       aria-pressed={isSelected && !isWinner}
-      className={`relative h-full w-full min-h-0 overflow-hidden rounded-lg border p-1 transition-all duration-200 group flex flex-col items-center justify-between sm:p-1.5 [contain:layout_paint] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-[#070712] ${entranceAnim} ${staggerClass} ${base} ${faded}`}
+      className={`relative h-full w-full min-h-0 overflow-hidden rounded-lg border p-1 transition-all duration-200 group flex flex-col items-center justify-between sm:p-1.5 contain-[layout_paint] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-[#070712] ${entranceAnim} ${staggerClass} ${base} ${faded}`}
     >
-      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-br from-white/[0.03] to-transparent z-0" />
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none bg-linear-to-br from-white/3 to-transparent z-0" />
 
       <div className="relative z-10 flex w-full items-start justify-between gap-1">
         <span className={`lore-nums flex min-w-0 items-center gap-0.5 text-[7px] font-semibold leading-none sm:gap-1 sm:text-[10px] ${
@@ -328,7 +328,7 @@ const Tile = React.memo(function Tile({
             </svg>
           </div>
           <div className={`absolute bottom-0 inset-x-0 z-20 ${reducedMotion ? "" : CLASS_BADGE_SLIDE}`}>
-            <div className="bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 px-1 py-0.5 text-center text-[6px] font-black uppercase leading-none tracking-[0.08em] text-black sm:text-[8px] sm:tracking-[0.15em]">
+            <div className="bg-linear-to-r from-amber-500 via-yellow-400 to-amber-500 px-1 py-0.5 text-center text-[6px] font-black uppercase leading-none tracking-[0.08em] text-black sm:text-[8px] sm:tracking-[0.15em]">
               ROUND WIN
             </div>
           </div>
@@ -357,7 +357,7 @@ const Tile = React.memo(function Tile({
             </svg>
           </div>
           <div className={`absolute bottom-0 inset-x-0 z-20 ${reducedMotion ? "" : CLASS_BADGE_SLIDE}`}>
-            <div className="bg-gradient-to-r from-sky-500 via-cyan-400 to-sky-500 px-1 py-0.5 text-center text-[6px] font-black uppercase leading-none tracking-[0.08em] text-white shadow-[0_-4px_12px_rgba(14,165,233,0.4)] sm:text-[8px] sm:tracking-[0.15em]">
+            <div className="bg-linear-to-r from-sky-500 via-cyan-400 to-sky-500 px-1 py-0.5 text-center text-[6px] font-black uppercase leading-none tracking-[0.08em] text-white shadow-[0_-4px_12px_rgba(14,165,233,0.4)] sm:text-[8px] sm:tracking-[0.15em]">
               YOUR WIN
             </div>
           </div>

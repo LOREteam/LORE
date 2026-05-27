@@ -197,7 +197,8 @@ export function useMiningRuntimeHelpers({
     async (functionName: string, args: readonly unknown[], bufferExtra: bigint) => {
       const minGas =
         functionName === "placeBatchBets" ||
-        functionName === "placeBatchBetsSameAmount"
+        functionName === "placeBatchBetsSameAmount" ||
+        functionName === "placeBatchBetsBitmap"
           ? minGasPlaceBatch
           : minGasPlaceBet;
       const pc = publicClientRef.current;

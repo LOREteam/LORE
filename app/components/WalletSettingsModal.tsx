@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { downloadLogs } from "../lib/logger";
 import { UiButton } from "./ui/UiButton";
 import { uiTokens } from "./ui/tokens";
@@ -21,6 +21,15 @@ const SECTIONS = [
   { id: "transfer" as const, label: "Transfer" },
   { id: "scan" as const, label: "Scan" },
 ];
+
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
 
 export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   isOpen,
@@ -83,6 +92,45 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   onRunEip7702SendDiagnostic,
 }: WalletSettingsModalProps) {
   const [activeSection, setActiveSection] = useState<"all" | "overview" | "7702" | "privy" | "transfer" | "scan">("all");
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusable = dialogRef.current?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
+    focusable?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusableElements = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [],
+      ).filter((element) => element.offsetParent !== null);
+      if (focusableElements.length === 0) return;
+
+      const first = focusableElements[0];
+      const last = focusableElements[focusableElements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -90,17 +138,24 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={onClose} />
 
-      <div className={`relative w-full max-w-2xl ${uiTokens.radius.lg} ${uiTokens.modalSurface} animate-slide-up overflow-hidden`}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="wallet-settings-title"
+        aria-describedby="wallet-settings-description"
+        className={`relative w-full max-w-2xl ${uiTokens.radius.lg} ${uiTokens.modalSurface} animate-slide-up overflow-hidden`}
+      >
         <div className="flex items-center justify-between border-b border-violet-500/10 px-5 py-4">
           <div>
-            <h2 className="text-white text-lg font-bold flex items-center gap-2">
+            <h2 id="wallet-settings-title" className="text-white text-lg font-bold flex items-center gap-2">
               <svg className="w-5 h-5 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
               Wallet Settings
             </h2>
-            <p className="text-gray-500 text-xs mt-0.5">Manage Privy wallet, export keys, withdraw</p>
+            <p id="wallet-settings-description" className="text-gray-500 text-xs mt-0.5">Manage Privy wallet, export keys, withdraw</p>
           </div>
           <div className="flex items-center gap-2">
             <UiButton onClick={downloadLogs} variant="secondary" size="sm" uppercase className="text-xs hidden sm:inline-flex">

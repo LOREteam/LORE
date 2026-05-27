@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { createPublicClient, http } from "viem";
 import type { PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -21,6 +22,13 @@ export function isLocalDevBootstrapRequest(request: Request) {
   return (
     process.env.NODE_ENV !== "production" &&
     (requestUrl.hostname === "localhost" || requestUrl.hostname === "127.0.0.1")
+  );
+}
+
+function isBootstrapKeeperKeyConfigured() {
+  return Boolean(
+    process.env.BOOTSTRAP_KEEPER_PRIVATE_KEY?.trim() ||
+    process.env.KEEPER_PRIVATE_KEY?.trim(),
   );
 }
 
@@ -112,10 +120,20 @@ export function getBootstrapKeeperAccount() {
 
 export function isAuthorizedBootstrapRequest(request: Request) {
   const secret = process.env.BOOTSTRAP_RESOLVE_SECRET?.trim();
-  if (isLocalDevBootstrapRequest(request)) return true;
-  if (!secret) return false;
-  const provided = request.headers.get("x-bootstrap-resolve-secret")?.trim();
-  return provided === secret;
+  const provided = request.headers.get("x-bootstrap-resolve-secret")?.trim() ?? "";
+  if (!secret) {
+    if (!isBootstrapKeeperKeyConfigured()) return true;
+    return (
+      process.env.BOOTSTRAP_RESOLVE_ALLOW_LOCAL_DEV_WITHOUT_SECRET === "1" &&
+      isLocalDevBootstrapRequest(request)
+    );
+  }
+  const secretBuf = Buffer.from(secret, "utf8");
+  const providedBuf = Buffer.from(provided, "utf8");
+  return (
+    providedBuf.length === secretBuf.length &&
+    timingSafeEqual(providedBuf, secretBuf)
+  );
 }
 
 export { APP_CHAIN, CONTRACT_ADDRESS };

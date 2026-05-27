@@ -34,16 +34,16 @@ interface FloatingActionsProps {
 export const FloatingActions = React.memo(function FloatingActions({ walletAddress, onChatOpenChange, chatOpen = false }: FloatingActionsProps) {
   return (
     <div
-      className="fixed right-3 z-[200]"
+      className="fixed right-3 z-200"
       data-chat-open={chatOpen ? "true" : "false"}
       style={{ bottom: "max(0.75rem, calc(env(safe-area-inset-bottom, 0px) + 0.35rem))" }}
     >
-      <div className="hud-dock flex items-center gap-2 rounded-2xl border border-white/[0.08] bg-[#070712]/84 p-1.5 shadow-[0_12px_34px_rgba(2,6,23,0.4)] backdrop-blur-xl">
+      <div className="hud-dock flex items-center gap-2 rounded-2xl border border-white/8 bg-[#070712]/84 p-1.5 shadow-[0_12px_34px_rgba(2,6,23,0.4)] backdrop-blur-xl">
         <a
           href="https://x.com/Linea_Ore"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(29,161,242,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(29,161,242,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
           title="X (Twitter) @Linea_Ore"
           aria-label="Linea Ore on X"
         >
@@ -55,7 +55,7 @@ export const FloatingActions = React.memo(function FloatingActions({ walletAddre
           href="https://github.com/LOREteam/LORE"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-purple-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(139,92,246,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-purple-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(139,92,246,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
           title="LORE on GitHub"
           aria-label="LORE on GitHub"
         >

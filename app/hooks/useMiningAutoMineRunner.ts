@@ -4,9 +4,10 @@ import { useCallback } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { PublicClient } from "viem";
 import { log } from "../lib/logger";
-import { delay } from "../lib/utils";
+import { delay, formatUnknownError } from "../lib/utils";
 import {
   SESSION_REFRESH_INTERVAL_MS,
+  isEpochWaitTimeoutError,
   getSecureRandomNumber,
   isInsufficientFundsError,
 } from "./useMining.shared";
@@ -310,16 +311,22 @@ export function useMiningAutoMineRunner({
         stopReason = "error";
         const { diagnosticsErrorKind, rawMessage, sessionExpired, networkDown, walletUnavailable, userMessage } =
           getAutoMineUserMessage(err);
-        const shouldAutoResume = !sessionExpired && (networkDown || walletUnavailable);
+        const epochWaitTimeout = isEpochWaitTimeoutError(err);
+        const shouldAutoResume = !sessionExpired && (networkDown || walletUnavailable || epochWaitTimeout);
         autoResumeRequestedRef.current = shouldAutoResume;
         if (isInsufficientFundsError(err)) {
           log.warn("AutoMine", "loop stopped: insufficient gas funds", err);
+        } else if (epochWaitTimeout) {
+          log.warn("AutoMine", "loop paused while waiting for epoch resolution", err);
         } else if (networkDown) {
           log.warn("AutoMine", "loop paused by network/receipt timeout", err);
         } else if (walletUnavailable) {
           log.warn("AutoMine", "loop paused: embedded wallet not ready", err);
         } else {
-          log.error("AutoMine", "loop error", err);
+          log.error("AutoMine", "loop error", {
+            error: rawMessage || formatUnknownError(err),
+            raw: err,
+          });
         }
         if (sessionExpired) {
           sessionExpiredErrorRef.current = true;

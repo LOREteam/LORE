@@ -6,9 +6,12 @@ import type { PublicClient } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
 import { log } from "../lib/logger";
 import { writeMiningTxPathState } from "../lib/miningTxPath";
+import { tileIdsToMask } from "../lib/tileMask";
 import {
   buildApproveAndBet7702Call,
+  buildApproveAndBetSameAmount7702Call,
   buildBet7702Call,
+  buildBetSameAmount7702Call,
   type Eip7702CapabilityState,
 } from "../lib/eip7702";
 import { canAttemptEip7702, noteEip7702Failure, noteEip7702Success } from "../lib/eip7702Runtime";
@@ -34,7 +37,7 @@ interface UseMiningStandardBetPathOptions {
   ensureAllowance: (requiredRaw: bigint) => Promise<void>;
   ensureContractPreflight: () => Promise<void>;
   estimateGas: (
-    functionName: "placeBet" | "placeBatchBets" | "placeBatchBetsSameAmount",
+    functionName: "placeBet" | "placeBatchBets" | "placeBatchBetsSameAmount" | "placeBatchBetsBitmap",
     args: readonly unknown[],
     extraBuffer: bigint,
   ) => Promise<bigint>;
@@ -65,6 +68,7 @@ export function useMiningStandardBetPath({
   readWriteContractAsync,
   ensurePreferredWallet,
 }: UseMiningStandardBetPathOptions) {
+  const batchBitmapSupportedRef = useRef<boolean | null>(null);
   const batchSameAmountSupportedRef = useRef<boolean | null>(null);
 
   const placeBets = useCallback(
@@ -102,6 +106,37 @@ export function useMiningStandardBetPath({
       }
 
       const tileArgs = normalizedTiles.map((id) => BigInt(id));
+      const tileMask = tileIdsToMask(normalizedTiles);
+
+      if (batchBitmapSupportedRef.current !== false) {
+        try {
+          const gas = await estimateGas("placeBatchBetsBitmap", [tileMask, singleAmountRaw], BigInt(80_000));
+          await assertNativeGasBalance(gas, overrides);
+          const txHash = await writeContractAsync({
+            address: CONTRACT_ADDRESS,
+            abi: GAME_ABI,
+            functionName: "placeBatchBetsBitmap",
+            args: [tileMask, singleAmountRaw],
+            chainId: APP_CHAIN_ID,
+            gas,
+            ...(txNonce !== undefined ? { nonce: txNonce } : {}),
+            ...(overrides ?? {}),
+          });
+          batchBitmapSupportedRef.current = true;
+          writeMiningTxPathState("wallet-write", "direct-wallet");
+          return waitReceipt(txHash);
+        } catch (error) {
+          if (!isMissingMethodError(error, "placeBatchBetsBitmap")) {
+            throw error;
+          }
+          batchBitmapSupportedRef.current = false;
+          log.warn(
+            "Mine",
+            "placeBatchBetsBitmap unavailable on current contract, fallback to placeBatchBetsSameAmount",
+            error,
+          );
+        }
+      }
 
       if (batchSameAmountSupportedRef.current !== false) {
         try {
@@ -179,6 +214,8 @@ export function useMiningStandardBetPath({
       if (!client || !silentSend) throw new Error("Privy wallet not ready");
 
       const totalAmountRaw = singleAmountRaw * BigInt(normalizedTiles.length);
+      await ensureAllowance(totalAmountRaw);
+      await assertSufficientAllowance(totalAmountRaw);
 
       let data: `0x${string}` | undefined;
       let gas: bigint | undefined;
@@ -192,6 +229,29 @@ export function useMiningStandardBetPath({
         });
       } else {
         const tileArgs = normalizedTiles.map((id) => BigInt(id));
+        const tileMask = tileIdsToMask(normalizedTiles);
+
+        if (!data && batchBitmapSupportedRef.current !== false) {
+          try {
+            gas = await estimateGas("placeBatchBetsBitmap", [tileMask, singleAmountRaw], BigInt(160_000));
+            data = encodeFunctionData({
+              abi: GAME_ABI,
+              functionName: "placeBatchBetsBitmap",
+              args: [tileMask, singleAmountRaw],
+            });
+            batchBitmapSupportedRef.current = true;
+          } catch (error) {
+            if (!isMissingMethodError(error, "placeBatchBetsBitmap")) {
+              throw error;
+            }
+            batchBitmapSupportedRef.current = false;
+            log.warn(
+              "Mine",
+              "silent placeBatchBetsBitmap unavailable on current contract, fallback to placeBatchBetsSameAmount",
+              error,
+            );
+          }
+        }
 
         if (!data && batchSameAmountSupportedRef.current !== false) {
           try {
@@ -229,9 +289,6 @@ export function useMiningStandardBetPath({
       if (gas) {
         await assertNativeGasBalance(gas, gasOverrides);
       }
-
-      await ensureAllowance(totalAmountRaw);
-      await assertSufficientAllowance(totalAmountRaw);
 
       let hash: `0x${string}`;
       try {
@@ -313,6 +370,7 @@ export function useMiningStandardBetPath({
       const sendDelegatedCall = async (
         data: `0x${string}`,
         txPath: "approve+bet" | "bet-only",
+        missingMethodName?: string,
       ): Promise<ReceiptState> => {
         const signerAddress = authorization.address;
         let estimatedGas: bigint;
@@ -326,6 +384,9 @@ export function useMiningStandardBetPath({
             authorizationList: [authorization],
           });
         } catch (estimateError) {
+          if (missingMethodName && isMissingMethodError(estimateError, missingMethodName)) {
+            throw estimateError;
+          }
           const msg = estimateError instanceof Error ? estimateError.message : String(estimateError);
           log.warn("Mine", `7702 gas estimation reverted for ${txPath}`, { error: msg });
           throw new Error(`7702 gas estimation failed: ${msg.slice(0, 200)}`);
@@ -358,15 +419,37 @@ export function useMiningStandardBetPath({
             log.warn("Mine", `7702 ${txPath} send may already be pending`, error);
             return "pending";
           }
+          if (missingMethodName && isMissingMethodError(error, missingMethodName)) {
+            throw error;
+          }
           throw error;
+        }
+      };
+
+      const sendDelegatedCallWithLegacyFallback = async (
+        primaryData: `0x${string}`,
+        fallbackData: `0x${string}`,
+        txPath: "approve+bet" | "bet-only",
+        primaryMethodName: string,
+      ) => {
+        try {
+          return await sendDelegatedCall(primaryData, txPath, primaryMethodName);
+        } catch (error) {
+          if (!isMissingMethodError(error, primaryMethodName)) {
+            throw error;
+          }
+          log.warn("Mine", `7702 delegate ${primaryMethodName} unavailable, falling back to same-amount method`, error);
+          return sendDelegatedCall(fallbackData, txPath);
         }
       };
 
       try {
         await assertSufficientAllowance(totalAmountRaw);
-        return await sendDelegatedCall(
+        return await sendDelegatedCallWithLegacyFallback(
           buildBet7702Call(normalizedTiles, singleAmountRaw),
+          buildBetSameAmount7702Call(normalizedTiles, singleAmountRaw),
           "bet-only",
+          "placeBatchBitmap",
         );
       } catch (allowanceError) {
         log.info("Mine", "7702 allowance missing, trying atomic approve+bet", {
@@ -375,13 +458,19 @@ export function useMiningStandardBetPath({
       }
 
       try {
-        return await sendDelegatedCall(
+        return await sendDelegatedCallWithLegacyFallback(
           buildApproveAndBet7702Call(
             normalizedTiles,
             singleAmountRaw,
             maxUint256,
           ),
+          buildApproveAndBetSameAmount7702Call(
+            normalizedTiles,
+            singleAmountRaw,
+            maxUint256,
+          ),
           "approve+bet",
+          "approveAndPlaceBatchBitmap",
         );
       } catch (approveAndBetError) {
         log.warn("Mine", "7702 approve+bet failed, falling back to regular approve then delegated bet", approveAndBetError);
@@ -390,9 +479,11 @@ export function useMiningStandardBetPath({
       try {
         await ensureAllowance(totalAmountRaw);
         await assertSufficientAllowance(totalAmountRaw);
-        return await sendDelegatedCall(
+        return await sendDelegatedCallWithLegacyFallback(
           buildBet7702Call(normalizedTiles, singleAmountRaw),
+          buildBetSameAmount7702Call(normalizedTiles, singleAmountRaw),
           "bet-only",
+          "placeBatchBitmap",
         );
       } catch (finalError) {
         noteEip7702Failure("send-failed");

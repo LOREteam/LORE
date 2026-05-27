@@ -2,11 +2,46 @@
 
 import type { PublicClient } from "viem";
 import { CONTRACT_ADDRESS, GAME_ABI, GRID_SIZE } from "../lib/constants";
-import { countConfirmedTiles, findConfirmedEpochForTiles } from "./useMining.shared";
+import { countConfirmedTiles, dedupeEpochs, findConfirmedEpochForTiles } from "./useMining.shared";
 
 export interface VerifiedRoundResult {
   placedEpoch: bigint;
   selectionEpoch: string;
+}
+
+async function findConfirmedEpochBestEffort(params: {
+  actorAddress: `0x${string}`;
+  candidateEpochs: bigint[];
+  client: PublicClient;
+  tilesToBet: number[];
+}) {
+  const { actorAddress, candidateEpochs, client, tilesToBet } = params;
+  let bestEpoch: bigint | null = null;
+  let bestConfirmedCount = 0;
+
+  for (const epoch of dedupeEpochs(candidateEpochs)) {
+    try {
+      const bets = (await client.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "getUserBetsAll",
+        args: [epoch, actorAddress],
+      })) as bigint[];
+      const confirmedCount = countConfirmedTiles(bets, tilesToBet);
+      if (confirmedCount >= tilesToBet.length) {
+        return { epoch, confirmedCount };
+      }
+      if (confirmedCount > bestConfirmedCount) {
+        bestConfirmedCount = confirmedCount;
+        bestEpoch = epoch;
+      }
+    } catch {
+      // Keep scanning nearby epochs when the public RPC flakes.
+    }
+  }
+
+  if (bestEpoch === null) return null;
+  return { epoch: bestEpoch, confirmedCount: bestConfirmedCount };
 }
 
 export async function verifySuccessfulRoundPlacement(params: {
@@ -28,14 +63,15 @@ export async function verifySuccessfulRoundPlacement(params: {
     tilesToBet,
   } = params;
 
-  let placedEpoch = epochNeedsResolve ? liveEpoch + 1n : liveEpoch;
+  const targetEpoch = epochNeedsResolve ? liveEpoch + 1n : liveEpoch;
+  let placedEpoch = targetEpoch;
 
   try {
     const verifyBets = (await client.readContract({
       address: CONTRACT_ADDRESS,
       abi: GAME_ABI,
       functionName: "getUserBetsAll",
-      args: [liveEpoch, actorAddress],
+      args: [targetEpoch, actorAddress],
     })) as bigint[];
     const countInExpected = countConfirmedTiles(verifyBets, tilesToBet);
 
@@ -44,12 +80,12 @@ export async function verifySuccessfulRoundPlacement(params: {
         confirmed: true,
         confirmedCount: countInExpected,
         placedEpoch,
-        logLine: `${logPrefix} confirmed | epoch=${liveEpoch}, bets=${countInExpected}/${effectiveBlocks}`,
+        logLine: `${logPrefix} confirmed | epoch=${targetEpoch}, bets=${countInExpected}/${effectiveBlocks}`,
         logLevel: "info",
       } as const;
     }
 
-    const nextEpoch = liveEpoch + 1n;
+    const nextEpoch = targetEpoch + 1n;
     try {
       const nextBets = (await client.readContract({
         address: CONTRACT_ADDRESS,
@@ -91,7 +127,7 @@ export async function verifySuccessfulRoundPlacement(params: {
         }
 
         try {
-          const epochPlus2 = liveEpoch + 2n;
+          const epochPlus2 = targetEpoch + 2n;
           const betsE2 = (await client.readContract({
             address: CONTRACT_ADDRESS,
             abi: GAME_ABI,
@@ -114,7 +150,7 @@ export async function verifySuccessfulRoundPlacement(params: {
             confirmed: false,
             confirmedCount: Math.max(countInExpected, countInNext, countE2),
             placedEpoch,
-            logLine: `post-bet verify: ${countInExpected}/${effectiveBlocks} in ${liveEpoch}, ${countInNext} in ${nextEpoch}, ${countE2} in ${epochPlus2}`,
+            logLine: `post-bet verify: ${countInExpected}/${effectiveBlocks} in ${targetEpoch}, ${countInNext} in ${nextEpoch}, ${countE2} in ${epochPlus2}`,
             logLevel: "warn",
           } as const;
         } catch {
@@ -122,7 +158,7 @@ export async function verifySuccessfulRoundPlacement(params: {
             confirmed: false,
             confirmedCount: Math.max(countInExpected, countInNext),
             placedEpoch,
-            logLine: `post-bet verify: ${countInExpected} in epoch ${liveEpoch}, ${countInNext} in epoch ${nextEpoch} - expected ${effectiveBlocks}`,
+            logLine: `post-bet verify: ${countInExpected} in epoch ${targetEpoch}, ${countInNext} in epoch ${nextEpoch} - expected ${effectiveBlocks}`,
             logLevel: "warn",
           } as const;
         }
@@ -132,22 +168,55 @@ export async function verifySuccessfulRoundPlacement(params: {
         confirmed: false,
         confirmedCount: Math.max(countInExpected, countInNext),
         placedEpoch,
-        logLine: `post-bet verify: ${countInExpected} in epoch ${liveEpoch}, ${countInNext} in epoch ${nextEpoch} - expected ${effectiveBlocks}`,
+        logLine: `post-bet verify: ${countInExpected} in epoch ${targetEpoch}, ${countInNext} in epoch ${nextEpoch} - expected ${effectiveBlocks}`,
         logLevel: "warn",
       } as const;
     } catch {
+      const bestEffortRound = await findConfirmedEpochBestEffort({
+        actorAddress,
+        candidateEpochs: [targetEpoch, nextEpoch, targetEpoch + 2n],
+        client,
+        tilesToBet,
+      });
+      if (bestEffortRound && bestEffortRound.confirmedCount >= tilesToBet.length) {
+        placedEpoch = bestEffortRound.epoch;
+        return {
+          confirmed: true,
+          confirmedCount: bestEffortRound.confirmedCount,
+          placedEpoch,
+          logLine: `${logPrefix} confirmed | bets found after RPC fallback in epoch ${bestEffortRound.epoch}, bets=${bestEffortRound.confirmedCount}/${effectiveBlocks}`,
+          logLevel: "info",
+        } as const;
+      }
+
       const fullyConfirmedInExpected = countInExpected >= tilesToBet.length;
       return {
         confirmed: fullyConfirmedInExpected,
         confirmedCount: countInExpected,
         placedEpoch,
         logLine: fullyConfirmedInExpected
-          ? `${logPrefix} confirmed | ${countInExpected}/${effectiveBlocks} bets in epoch ${liveEpoch}`
-          : `${logPrefix} partial verify only | ${countInExpected}/${effectiveBlocks} bets in epoch ${liveEpoch}`,
+          ? `${logPrefix} confirmed | ${countInExpected}/${effectiveBlocks} bets in epoch ${targetEpoch}`
+          : `${logPrefix} partial verify only | ${countInExpected}/${effectiveBlocks} bets in epoch ${targetEpoch}`,
         logLevel: fullyConfirmedInExpected ? "info" : "warn",
       } as const;
     }
   } catch {
+    const bestEffortRound = await findConfirmedEpochBestEffort({
+      actorAddress,
+      candidateEpochs: [targetEpoch, targetEpoch + 1n, targetEpoch + 2n],
+      client,
+      tilesToBet,
+    });
+    if (bestEffortRound && bestEffortRound.confirmedCount >= tilesToBet.length) {
+      return {
+        confirmed: true,
+        confirmedCount: bestEffortRound.confirmedCount,
+        placedEpoch: bestEffortRound.epoch,
+        logLine: `${logPrefix} confirmed | bets found after RPC fallback in epoch ${bestEffortRound.epoch}, bets=${bestEffortRound.confirmedCount}/${effectiveBlocks}`,
+        logLevel: "info",
+      } as const;
+    }
+
     return {
       confirmed: false,
       confirmedCount: 0,
@@ -188,23 +257,18 @@ export async function verifyRoundAlreadyPlaced(params: {
     } as const;
   }
 
-  try {
-    const recheckBets = (await client.readContract({
-      address: CONTRACT_ADDRESS,
-      abi: GAME_ABI,
-      functionName: "getUserBetsAll",
-      args: [liveEpoch, actorAddress],
-    })) as bigint[];
-    const recheckCount = countConfirmedTiles(recheckBets, tilesToBet);
-    if (recheckCount >= tilesToBet.length) {
-      return {
-        confirmed: true,
-        placedEpoch: liveEpoch,
-        selectionEpoch: liveEpoch.toString(),
-      } as const;
-    }
-  } catch {
-    // non-critical secondary verification
+  const bestEffortRound = await findConfirmedEpochBestEffort({
+    actorAddress,
+    candidateEpochs: [liveEpoch, ...roundCandidateEpochs],
+    client,
+    tilesToBet,
+  });
+  if (bestEffortRound && bestEffortRound.confirmedCount >= tilesToBet.length) {
+    return {
+      confirmed: true,
+      placedEpoch: bestEffortRound.epoch,
+      selectionEpoch: bestEffortRound.epoch.toString(),
+    } as const;
   }
 
   return {
@@ -228,12 +292,40 @@ export async function verifyRoundAfterRpcError(params: {
     roundCandidateEpochs,
     roundTilesToBet,
   } = params;
+  const effBlocks = roundTilesToBet.length || Math.min(blocks, GRID_SIZE);
+  let checkEpoch: bigint;
+  try {
+    checkEpoch = (await client.readContract({
+      address: CONTRACT_ADDRESS,
+      abi: GAME_ABI,
+      functionName: "currentEpoch",
+    })) as bigint;
+  } catch {
+    const bestEffortRound = await findConfirmedEpochBestEffort({
+      actorAddress,
+      candidateEpochs: roundCandidateEpochs,
+      client,
+      tilesToBet: roundTilesToBet,
+    });
+    if (bestEffortRound && bestEffortRound.confirmedCount >= effBlocks) {
+      return {
+        confirmed: true,
+        placedEpoch: bestEffortRound.epoch,
+        selectionEpoch: bestEffortRound.epoch.toString(),
+        confirmedCount: bestEffortRound.confirmedCount,
+        effectiveBlocks: effBlocks,
+      } as const;
+    }
 
-  const checkEpoch = (await client.readContract({
-    address: CONTRACT_ADDRESS,
-    abi: GAME_ABI,
-    functionName: "currentEpoch",
-  })) as bigint;
+    const fallbackEpoch = dedupeEpochs(roundCandidateEpochs)[0] ?? 1n;
+    return {
+      confirmed: false,
+      placedEpoch: fallbackEpoch,
+      selectionEpoch: fallbackEpoch.toString(),
+      confirmedCount: bestEffortRound?.confirmedCount ?? 0,
+      effectiveBlocks: effBlocks,
+    } as const;
+  }
 
   const confirmedRound = await findConfirmedEpochForTiles(
     client,
@@ -247,7 +339,24 @@ export async function verifyRoundAfterRpcError(params: {
       placedEpoch: confirmedRound.epoch,
       selectionEpoch: confirmedRound.epoch.toString(),
       confirmedCount: confirmedRound.confirmedCount,
-      effectiveBlocks: roundTilesToBet.length || Math.min(blocks, GRID_SIZE),
+      effectiveBlocks: effBlocks,
+    } as const;
+  }
+
+  const bestEffortRound = await findConfirmedEpochBestEffort({
+    actorAddress,
+    candidateEpochs: [checkEpoch, checkEpoch + 1n, ...roundCandidateEpochs],
+    client,
+    tilesToBet: roundTilesToBet,
+  });
+
+  if (bestEffortRound && bestEffortRound.confirmedCount >= effBlocks) {
+    return {
+      confirmed: true,
+      placedEpoch: bestEffortRound.epoch,
+      selectionEpoch: bestEffortRound.epoch.toString(),
+      confirmedCount: bestEffortRound.confirmedCount,
+      effectiveBlocks: effBlocks,
     } as const;
   }
 
@@ -258,7 +367,6 @@ export async function verifyRoundAfterRpcError(params: {
     args: [checkEpoch, actorAddress],
   })) as bigint[];
   const alreadyCount = countConfirmedTiles(checkBets, roundTilesToBet);
-  const effBlocks = roundTilesToBet.length || Math.min(blocks, GRID_SIZE);
 
   if (alreadyCount >= effBlocks) {
     return {

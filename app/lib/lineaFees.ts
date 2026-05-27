@@ -1,5 +1,4 @@
 import { parseGwei } from "viem";
-import { linea, lineaSepolia } from "viem/chains";
 
 type FeeEstimate = {
   maxFeePerGas?: bigint;
@@ -25,6 +24,8 @@ const LINEA_SEPOLIA_PRIORITY_FLOOR = parseGwei("0.04");
 const LINEA_MAINNET_PRIORITY_CAP = parseGwei("0.06");
 const LINEA_SEPOLIA_PRIORITY_CAP = parseGwei("0.08");
 const LINEA_MAINNET_KEEPER_PRIORITY_FLOOR = parseGwei("0.02");
+const LINEA_MAINNET_CHAIN_ID = 59144;
+const LINEA_SEPOLIA_CHAIN_ID = 59141;
 // Sepolia keeper must stay operable even with a very small faucet balance.
 // Public fee estimators often return tiny values here, so a high hard floor
 // can block epoch resolution entirely despite the network accepting the tx.
@@ -33,30 +34,30 @@ const LINEA_MAINNET_KEEPER_GAS_PRICE_FLOOR = parseGwei("0.05");
 const LINEA_SEPOLIA_KEEPER_GAS_PRICE_FLOOR = parseGwei("0.001");
 
 function supportsEip1559Fallback(chainId?: number) {
-  return chainId === linea.id || chainId === lineaSepolia.id;
+  return chainId === LINEA_MAINNET_CHAIN_ID || chainId === LINEA_SEPOLIA_CHAIN_ID;
 }
 
 function getPriorityCap(chainId?: number) {
-  if (chainId === linea.id) return LINEA_MAINNET_PRIORITY_CAP;
-  if (chainId === lineaSepolia.id) return LINEA_SEPOLIA_PRIORITY_CAP;
+  if (chainId === LINEA_MAINNET_CHAIN_ID) return LINEA_MAINNET_PRIORITY_CAP;
+  if (chainId === LINEA_SEPOLIA_CHAIN_ID) return LINEA_SEPOLIA_PRIORITY_CAP;
   return undefined;
 }
 
 function getPriorityFloor(chainId?: number) {
-  if (chainId === linea.id) return LINEA_MAINNET_PRIORITY_FLOOR;
-  if (chainId === lineaSepolia.id) return LINEA_SEPOLIA_PRIORITY_FLOOR;
+  if (chainId === LINEA_MAINNET_CHAIN_ID) return LINEA_MAINNET_PRIORITY_FLOOR;
+  if (chainId === LINEA_SEPOLIA_CHAIN_ID) return LINEA_SEPOLIA_PRIORITY_FLOOR;
   return MIN_PRIORITY_FEE_WEI;
 }
 
 function getKeeperPriorityFloor(chainId?: number) {
-  if (chainId === linea.id) return LINEA_MAINNET_KEEPER_PRIORITY_FLOOR;
-  if (chainId === lineaSepolia.id) return LINEA_SEPOLIA_KEEPER_PRIORITY_FLOOR;
+  if (chainId === LINEA_MAINNET_CHAIN_ID) return LINEA_MAINNET_KEEPER_PRIORITY_FLOOR;
+  if (chainId === LINEA_SEPOLIA_CHAIN_ID) return LINEA_SEPOLIA_KEEPER_PRIORITY_FLOOR;
   return MIN_PRIORITY_FEE_WEI;
 }
 
 function getKeeperGasPriceFloor(chainId?: number) {
-  if (chainId === linea.id) return LINEA_MAINNET_KEEPER_GAS_PRICE_FLOOR;
-  if (chainId === lineaSepolia.id) return LINEA_SEPOLIA_KEEPER_GAS_PRICE_FLOOR;
+  if (chainId === LINEA_MAINNET_CHAIN_ID) return LINEA_MAINNET_KEEPER_GAS_PRICE_FLOOR;
+  if (chainId === LINEA_SEPOLIA_CHAIN_ID) return LINEA_SEPOLIA_KEEPER_GAS_PRICE_FLOOR;
   return MIN_PRIORITY_FEE_WEI;
 }
 

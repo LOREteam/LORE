@@ -53,9 +53,9 @@ function JackpotCard({
 }: JackpotCardProps) {
   const isAmber = accent === "amber";
   const borderClass = isAmber ? "border-amber-500/25 hover:border-amber-500/40" : "border-violet-500/25 hover:border-violet-500/40";
-  const glowClass = isAmber ? "from-amber-500/[0.04]" : "from-violet-500/[0.04]";
-  const overlayPulseClass = isAmber ? "bg-amber-400/[0.08]" : "bg-violet-400/[0.08]";
-  const overlaySweepClass = isAmber ? "via-amber-300/[0.25]" : "via-violet-300/[0.25]";
+  const glowClass = isAmber ? "from-amber-500/4" : "from-violet-500/4";
+  const overlayPulseClass = isAmber ? "bg-amber-400/8" : "bg-violet-400/8";
+  const overlaySweepClass = isAmber ? "via-amber-300/25" : "via-violet-300/25";
   const titleClass = isAmber ? "text-amber-300" : "text-violet-300";
   const amountClass = isAmber ? "text-amber-400" : "text-violet-400";
   const amountSubtleClass = isAmber ? "text-amber-400/75" : "text-violet-400/75";
@@ -63,25 +63,25 @@ function JackpotCard({
   const windowValueClass = isAmber ? "text-amber-300/70" : "text-violet-300/70";
   const windowTrackClass = isAmber ? "bg-amber-900/35" : "bg-violet-900/35";
   const windowFillClass = isAmber
-    ? "bg-gradient-to-r from-amber-500 via-yellow-400 to-orange-400"
-    : "bg-gradient-to-r from-violet-500 via-purple-400 to-fuchsia-400";
+    ? "bg-linear-to-r from-amber-500 via-yellow-400 to-orange-400"
+    : "bg-linear-to-r from-violet-500 via-purple-400 to-fuchsia-400";
   const bodyClass = isAmber ? "text-amber-300/65" : "text-violet-300/65";
 
   return (
-    <div className={`relative overflow-hidden rounded-lg border bg-[#0d0d1a] group transition-all duration-300 ${borderClass}`}>
-      <div className={`absolute inset-0 bg-gradient-to-r ${glowClass} to-transparent pointer-events-none`} />
+    <div className={`relative overflow-hidden rounded-lg border bg-surface-raised group transition-all duration-300 ${borderClass}`}>
+      <div className={`absolute inset-0 bg-linear-to-r ${glowClass} to-transparent pointer-events-none`} />
       {nowMs < visibleUntil && awardedEpoch && (
         <div className="absolute inset-0 z-20 pointer-events-none">
           <div className={`absolute inset-0 ${overlayPulseClass} animate-pulse`} />
-          <div className={`absolute inset-0 bg-gradient-to-r from-transparent ${overlaySweepClass} to-transparent animate-gradient-x`} />
+          <div className={`absolute inset-0 bg-linear-to-r from-transparent ${overlaySweepClass} to-transparent animate-gradient-x`} />
         </div>
       )}
-      <div className="relative z-10 flex min-h-[56px] items-center px-2 py-1 sm:px-2.5">
+      <div className="relative z-10 flex h-18 items-center px-2 py-1 sm:px-2.5">
         {nowMs < visibleUntil && awardedEpoch ? (
           <div className="flex w-full items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
               <div className="shrink-0">{icon}</div>
-              <span className={`break-words text-[10px] font-black uppercase leading-tight tracking-[0.05em] animate-pulse sm:text-[12px] sm:tracking-[0.1em] ${titleClass}`}>
+              <span className={`wrap-break-word text-[10px] font-black uppercase leading-tight tracking-[0.05em] animate-pulse sm:text-[12px] sm:tracking-widest ${titleClass}`}>
                 {awardedCopy}
               </span>
             </div>
@@ -99,7 +99,7 @@ function JackpotCard({
             <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
               <div className="shrink-0">{icon}</div>
               <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              <span className={`break-words text-[10px] font-black uppercase leading-tight tracking-[0.05em] sm:text-[12px] sm:tracking-[0.1em] ${titleClass}`}>
+              <span className={`wrap-break-word text-[10px] font-black uppercase leading-tight tracking-[0.05em] sm:text-[12px] sm:tracking-widest ${titleClass}`}>
                 {nextCopy}
               </span>
               <span className={`lore-nums text-[13px] sm:text-[15px] font-black tabular-nums leading-none ${amountClass}`}>{poolAmount.toFixed(2)}</span>
@@ -112,18 +112,18 @@ function JackpotCard({
             </div>
           </div>
         ) : (
-          <div className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+          <div className="flex w-full items-center justify-between gap-x-3">
             <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
               <div className="shrink-0">{icon}</div>
               <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              <span className={`break-words text-[10px] font-black uppercase leading-tight tracking-[0.05em] animate-pulse sm:text-[12px] sm:tracking-[0.1em] ${titleClass}`}>
+              <span className={`wrap-break-word text-[10px] font-black uppercase leading-tight tracking-[0.05em] animate-pulse sm:text-[12px] sm:tracking-widest ${titleClass}`}>
                 {nextCopy.replace(/^Next /, "")}
               </span>
               <span className={`lore-nums text-[13px] sm:text-[15px] font-black tabular-nums leading-none ${amountClass}`}>{poolAmount.toFixed(2)}</span>
               <span className={`text-[9px] sm:text-[10px] font-black tracking-wide ${amountSubtleClass}`}>LINEA</span>
               </div>
             </div>
-            <div className="w-[8.5rem] shrink-0">
+            <div className="w-34 shrink-0">
               <div className="flex items-center justify-between mb-0.5">
                 <span className={`text-[7px] font-semibold uppercase tracking-[0.08em] ${windowLabelClass}`}>Window</span>
                 <span className={`lore-nums text-[7px] font-bold tabular-nums ${windowValueClass}`}>{window.leftLabel}</span>
@@ -134,7 +134,7 @@ function JackpotCard({
                   style={{ width: `${window.pct}%` }}
                 />
               </div>
-              <p className={`mt-0.5 text-[8px] font-semibold leading-tight sm:text-[9px] ${bodyClass}`}>{progressCopy}</p>
+              <p className={`mt-0.5 text-[8px] font-semibold leading-tight truncate sm:text-[9px] ${bodyClass}`}>{progressCopy}</p>
             </div>
           </div>
         )}
@@ -145,7 +145,7 @@ function JackpotCard({
 
 function DailyJackpotIcon() {
   return (
-    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden sm:h-[3.5rem] sm:w-[3.5rem]">
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden sm:h-14 sm:w-14">
       <Image
         src="/Daily%20Jackpot.png"
         alt=""
@@ -160,7 +160,7 @@ function DailyJackpotIcon() {
 
 function WeeklyJackpotIcon() {
   return (
-    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden sm:h-[3.5rem] sm:w-[3.5rem]">
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden sm:h-14 sm:w-14">
       <Image
         src="/Weekly%20Jackpot.png"
         alt=""
@@ -237,8 +237,18 @@ export const HeaderJackpots = React.memo(function HeaderJackpots({
         : null,
     [historyReady, jackpotHistory, jackpotInfo.lastWeeklyJackpotEpoch],
   );
-  const dailyAwardVisibleUntil = latestDailyAward?.timestamp ? latestDailyAward.timestamp + JACKPOT_NOTICE_MS : 0;
-  const weeklyAwardVisibleUntil = latestWeeklyAward?.timestamp ? latestWeeklyAward.timestamp + JACKPOT_NOTICE_MS : 0;
+  // If the indexer hasn't indexed the jackpot event yet, fall back to nowMs so the
+  // awarded card shows immediately (and stays visible until history arrives or the day/week ends).
+  const dailyAwardVisibleUntil = latestDailyAward?.timestamp
+    ? latestDailyAward.timestamp + JACKPOT_NOTICE_MS
+    : jackpotInfo.lastDailyJackpotAmount > 0 && jackpotInfo.lastDailyJackpotEpoch && dailyAwardedToday
+      ? nowMs + JACKPOT_NOTICE_MS
+      : 0;
+  const weeklyAwardVisibleUntil = latestWeeklyAward?.timestamp
+    ? latestWeeklyAward.timestamp + JACKPOT_NOTICE_MS
+    : jackpotInfo.lastWeeklyJackpotAmount > 0 && jackpotInfo.lastWeeklyJackpotEpoch && weeklyAwardedThisWeek
+      ? nowMs + JACKPOT_NOTICE_MS
+      : 0;
 
   if (jackpotInfo.dailyPool <= 0 && jackpotInfo.weeklyPool <= 0) {
     return null;

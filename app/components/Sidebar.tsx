@@ -36,8 +36,8 @@ interface SidebarProps {
 
 const TILE_STYLES = [
   "border-amber-500/30 bg-amber-500/10 text-amber-400",
-  "border-violet-500/20 bg-violet-500/[0.06] text-violet-400",
-  "border-white/10 bg-white/[0.02] text-gray-400",
+  "border-violet-500/20 bg-violet-500/6 text-violet-400",
+  "border-white/10 bg-white/2 text-gray-400",
 ] as const;
 const HOT_TILE_PLACEHOLDERS: HotTile[] = Array.from({ length: 5 }, (_, index) => ({
   tileId: index + 1,
@@ -149,14 +149,14 @@ export const Sidebar = React.memo(function Sidebar({
             </span>
             <div className="mt-0.5 flex flex-col items-center">
               <div className="flex w-full items-center justify-center gap-1.5">
-                <span className="h-px w-4 shrink-0 bg-gradient-to-r from-violet-500/50 to-transparent" aria-hidden />
+                <span className="h-px w-4 shrink-0 bg-linear-to-r from-violet-500/50 to-transparent" aria-hidden />
                 <span
                   className="whitespace-nowrap text-gray-500 font-bold uppercase tracking-[0.16em]"
                   style={{ fontSize: 9 }}
                 >
                   MINE THE
                 </span>
-                <span className="h-px w-4 shrink-0 bg-gradient-to-l from-violet-500/50 to-transparent" aria-hidden />
+                <span className="h-px w-4 shrink-0 bg-linear-to-l from-violet-500/50 to-transparent" aria-hidden />
               </div>
               <span className="text-gray-500 font-bold uppercase tracking-[0.16em]" style={{ fontSize: 9 }}>
                 CHAIN
@@ -165,7 +165,7 @@ export const Sidebar = React.memo(function Sidebar({
           </div>
         </div>
 
-        <div className="mx-3.5 h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent" />
+        <div className="mx-3.5 h-px bg-linear-to-r from-transparent via-white/8 to-transparent" />
 
         <nav className="mt-1 space-y-1 px-3 pb-2 pt-1.5">
           <NavItem
@@ -213,7 +213,7 @@ export const Sidebar = React.memo(function Sidebar({
         </nav>
 
         <div className="mx-4 mt-1 flex min-h-0 flex-1 flex-col gap-2 animate-fade-in" style={{ animationDelay: "0.6s" }}>
-          <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
+          <div className="h-px bg-linear-to-r from-transparent via-white/6 to-transparent" />
           <p className="px-1 pt-1 text-slate-500 font-bold uppercase tracking-[0.14em]" style={{ fontSize: "11px" }}>
             Protocol Stats
           </p>
@@ -221,7 +221,7 @@ export const Sidebar = React.memo(function Sidebar({
           <UiPanel
             tone="subtle"
             padding="sm"
-            className="space-y-2.5 border-violet-500/10 bg-gradient-to-br from-violet-500/[0.06] to-cyan-500/[0.04]"
+            className="space-y-2.5 border-violet-500/10 bg-linear-to-br from-violet-500/6 to-cyan-500/4"
           >
             <StatRow
               icon="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
@@ -229,7 +229,7 @@ export const Sidebar = React.memo(function Sidebar({
               value={stats ? `${stats.totalVolume} LINEA` : undefined}
               loading={statsLoading && !stats}
             />
-            <div className="h-px bg-white/[0.04]" />
+            <div className="h-px bg-white/4" />
             <StatRow
               icon="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"
               label="Total Burn"
@@ -245,7 +245,7 @@ export const Sidebar = React.memo(function Sidebar({
           <UiPanel
             tone="subtle"
             padding="sm"
-            className="border-violet-500/10 bg-gradient-to-br from-violet-500/[0.06] to-cyan-500/[0.04]"
+            className="border-violet-500/10 bg-linear-to-br from-violet-500/6 to-cyan-500/4"
           >
             <div className="flex min-w-0 gap-1">
               {renderedHotTiles.map((tile, index) => {
@@ -256,7 +256,7 @@ export const Sidebar = React.memo(function Sidebar({
                     className={cn(
                       "flex aspect-square min-w-0 flex-1 flex-col items-center justify-center rounded border text-center font-bold leading-tight transition-all duration-500 ease-out",
                       isPlaceholder
-                        ? "border-white/10 bg-white/[0.02] text-gray-400"
+                        ? "border-white/10 bg-white/2 text-gray-400"
                         : TILE_STYLES[Math.min(index, TILE_STYLES.length - 1)],
                     )}
                     style={{ fontSize: 11 }}
@@ -275,15 +275,15 @@ export const Sidebar = React.memo(function Sidebar({
             </p>
           </UiPanel>
 
-          <div className="mt-1 h-px shrink-0 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
+          <div className="mt-1 h-px shrink-0 bg-linear-to-r from-transparent via-white/6 to-transparent" />
           <UiPanel
             tone="warning"
             padding="sm"
-            className="mb-[6mm] flex min-h-0 flex-1 overflow-y-auto border-amber-500/10 bg-gradient-to-br from-amber-500/[0.04] to-violet-500/[0.04] p-0"
+            className="mb-[6mm] flex min-h-0 flex-1 overflow-y-auto border-amber-500/10 bg-linear-to-br from-amber-500/4 to-violet-500/4 p-0"
           >
             <div className="px-1 py-0.5">
               <div className="mb-2.5 flex items-center justify-between gap-1">
-                <p className="flex items-center gap-1 text-[#455073] text-[10px] font-bold uppercase tracking-[0.1em]">
+                <p className="flex items-center gap-1 text-[#455073] text-[10px] font-bold uppercase tracking-widest">
                   <span className="h-2.5 w-1 rounded-sm bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.28)]" />
                   Rewards
                 </p>
@@ -293,7 +293,7 @@ export const Sidebar = React.memo(function Sidebar({
                     loading={isClaiming}
                     variant="warning"
                     size="xs"
-                    className="h-[22px] min-w-[108px] shrink-0 rounded-full border-0 bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 text-[9px] font-bold tracking-[0.01em] text-black shadow-none hover:from-amber-400 hover:to-orange-400 hover:shadow-none"
+                    className="h-[22px] min-w-[108px] shrink-0 rounded-full border-0 bg-linear-to-r from-amber-500 to-orange-500 px-2.5 text-[9px] font-bold tracking-[0.01em] text-black shadow-none hover:from-amber-400 hover:to-orange-400 hover:shadow-none"
                   >
                     {isClaiming ? "Wait..." : `Claim all (${unclaimedWins.length})`}
                   </UiButton>
@@ -376,7 +376,7 @@ const RewardClaimRow = React.memo(function RewardClaimRow({
         disabled={isClaiming}
         variant="warning"
         size="xs"
-        className="h-[22px] w-[104px] shrink-0 rounded-full border-0 bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 text-[9px] font-bold tracking-[0.01em] text-black shadow-none hover:from-amber-400 hover:to-orange-400 hover:shadow-none"
+        className="h-[22px] w-[104px] shrink-0 rounded-full border-0 bg-linear-to-r from-amber-500 to-orange-500 px-2.5 text-[9px] font-bold tracking-[0.01em] text-black shadow-none hover:from-amber-400 hover:to-orange-400 hover:shadow-none"
       >
         {isClaiming ? "..." : "Claim"}
       </UiButton>
@@ -446,7 +446,7 @@ const NavItem = React.memo(function NavItem({
         uiTokens.focusRing,
         active
           ? "animate-glow-pulse bg-violet-500/15 text-violet-400 shadow-sm shadow-violet-500/10"
-          : "text-gray-500 hover:bg-white/[0.04] hover:text-gray-300",
+          : "text-gray-500 hover:bg-white/4 hover:text-gray-300",
       )}
       style={{ animationDelay: delay, fontSize: 15 }}
     >

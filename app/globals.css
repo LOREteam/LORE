@@ -195,6 +195,11 @@ html[data-motion="reduced"] *::after {
   100% { transform: scale(1); }
 }
 
+@keyframes chat-send-cooldown {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: 113.097; }
+}
+
 /* ══════ UTILITIES ══════ */
 
 .animate-fade-in { animation: fade-in .3s ease-out both; }
@@ -217,6 +222,10 @@ html[data-motion="reduced"] *::after {
 .animate-spin-slow { animation: spin-slow 12s linear infinite; }
 .animate-orb-1 { animation: orb-drift-1 20s ease-in-out infinite; }
 .animate-orb-2 { animation: orb-drift-2 25s ease-in-out infinite; }
+.chat-send-cooldown-ring {
+  animation: chat-send-cooldown 1500ms linear forwards;
+  will-change: stroke-dashoffset;
+}
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;

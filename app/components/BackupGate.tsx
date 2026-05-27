@@ -72,8 +72,8 @@ export function BackupGate({
   if (isBackupConfirmedFor(embeddedWalletAddress)) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md animate-fade-in">
-      <div className="relative w-full max-w-md rounded-2xl border-2 border-amber-500/40 bg-[#0d0d1a] shadow-2xl shadow-amber-500/10 overflow-hidden animate-slide-up">
+    <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-black/95 backdrop-blur-md animate-fade-in">
+      <div className="relative w-full max-w-md rounded-2xl border-2 border-amber-500/40 bg-surface-raised shadow-2xl shadow-amber-500/10 overflow-hidden animate-slide-up">
         <div className="p-6 sm:p-8 space-y-5">
           <div className="flex items-center justify-center gap-2 text-amber-400">
             <svg className="w-10 h-10 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>

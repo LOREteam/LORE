@@ -16,7 +16,7 @@ type UiBadgeTone =
 type UiBadgeSize = "xs" | "sm";
 
 const toneClasses: Record<UiBadgeTone, string> = {
-  default: "border-white/12 bg-white/[0.02] text-slate-300",
+  default: "border-white/12 bg-white/2 text-slate-300",
   violet: "border-violet-500/30 bg-violet-500/10 text-violet-300",
   sky: "border-sky-500/30 bg-sky-500/10 text-sky-300",
   amber: "border-amber-500/30 bg-amber-500/12 text-amber-300",

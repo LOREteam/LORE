@@ -22,7 +22,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         {/* ═══ LORE PROLOGUE ═══ */}
         <section className="relative py-8 mb-4 overflow-hidden animate-fade-in">
-          <div className="absolute inset-0 bg-gradient-to-b from-violet-500/[0.03] to-transparent rounded-2xl" />
+          <div className="absolute inset-0 bg-linear-to-b from-violet-500/3 to-transparent rounded-2xl" />
           <div className="absolute inset-0 lore-hex-pattern opacity-[0.02]" />
           <div className="relative z-10 px-2">
             <div className="flex items-center gap-2 mb-3">
@@ -236,13 +236,13 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         <Section id="contract" badge="08" title="Smart Contracts" icon={ContractIcon} delay={0.35}>
           <P>
-            LORE is currently served by the live V8 deployment on <Accent>Linea</Accent>:
+            LORE is currently served by the live V9 deployment on <Accent>Linea Sepolia</Accent>:
           </P>
           <div className="space-y-3 mb-6">
             <ContractCard
-              name="Game Contract (LineaOreV8 live)"
+              name="Game Contract (LineaOreV9 live)"
               address={CONTRACT}
-              functions={["placeBet()", "placeBatchBets()", "placeBatchBetsSameAmount()", "claimReward()", "resolveEpoch()", "claimEpochRebate()", "claimEpochsRebate()", "getJackpotInfo()", "getRebateSummary()"]}
+              functions={["placeBet()", "placeBatchBets()", "placeBatchBetsSameAmount()", "placeBatchBetsBitmap()", "claimReward()", "resolveEpoch()", "claimEpochRebate()", "claimEpochsRebate()", "getJackpotInfo()", "getRebateSummary()"]}
             />
             <ContractCard
               name="LINEA Token"
@@ -383,7 +383,7 @@ function Hero() {
 
         <h1 className="mb-2 animate-slide-up text-4xl font-black sm:mb-2.5 sm:text-5xl" style={{ animationDelay: "0.1s" }}>
           <span className="text-white">L</span>
-          <span className="bg-gradient-to-r from-violet-400 via-purple-400 to-indigo-400 bg-clip-text text-transparent">ORE</span>
+          <span className="bg-linear-to-r from-violet-400 via-purple-400 to-indigo-400 bg-clip-text text-transparent">ORE</span>
           <span className="text-gray-500 font-medium text-2xl sm:text-3xl ml-3">White Paper</span>
         </h1>
 
@@ -434,7 +434,7 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 }
 
 function Divider() {
-  return <div className="my-8 h-px bg-gradient-to-r from-transparent via-violet-500/20 to-transparent" />;
+  return <div className="my-8 h-px bg-linear-to-r from-transparent via-violet-500/20 to-transparent" />;
 }
 
 function Section({ id, badge, title, icon: Icon, delay, children }: {
@@ -498,7 +498,7 @@ function InfoBox({ emoji, title, children }: { emoji: string; title: string; chi
   return (
     <UiPanel
       tone="accent"
-      className="relative my-6 bg-gradient-to-br from-violet-500/[0.07] to-indigo-500/[0.04] border-violet-500/20 overflow-hidden"
+      className="relative my-6 bg-linear-to-br from-violet-500/7 to-indigo-500/4 border-violet-500/20 overflow-hidden"
     >
       <div className="absolute top-0 right-0 w-24 h-24 bg-violet-500/5 rounded-full blur-2xl pointer-events-none" />
       <div className="flex items-center gap-2 mb-2 relative">
@@ -515,7 +515,7 @@ function Timeline({ items }: { items: { step: string; title: string; desc: strin
     <div className="relative ml-4 border-l border-violet-500/20 pl-6 space-y-6 mb-4">
       {items.map((item, i) => (
         <div key={i} className="relative">
-          <div className="absolute -left-[1.85rem] top-0.5 w-3.5 h-3.5 rounded-full bg-[#0d0d1a] border-2 border-violet-500/50 flex items-center justify-center">
+          <div className="absolute -left-[1.85rem] top-0.5 w-3.5 h-3.5 rounded-full bg-surface-raised border-2 border-violet-500/50 flex items-center justify-center">
             <div className="w-1.5 h-1.5 rounded-full bg-violet-400" />
           </div>
           <div className="text-[9px] font-bold text-violet-500/60 uppercase tracking-widest mb-0.5">Step {item.step}</div>
@@ -533,10 +533,10 @@ function Grid2({ children }: { children: React.ReactNode }) {
 
 function StatCard({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }) {
   const colors: Record<string, string> = {
-    violet: "border-violet-500/25 bg-violet-500/[0.06] text-violet-400",
-    emerald: "border-emerald-500/25 bg-emerald-500/[0.06] text-emerald-400",
-    amber: "border-amber-500/25 bg-amber-500/[0.06] text-amber-400",
-    sky: "border-sky-500/25 bg-sky-500/[0.06] text-sky-400",
+    violet: "border-violet-500/25 bg-violet-500/6 text-violet-400",
+    emerald: "border-emerald-500/25 bg-emerald-500/6 text-emerald-400",
+    amber: "border-amber-500/25 bg-amber-500/6 text-amber-400",
+    sky: "border-sky-500/25 bg-sky-500/6 text-sky-400",
   };
   return (
     <div className={cn(`p-3 border ${colors[color]}`, uiTokens.radius.sm)}>
@@ -628,7 +628,7 @@ function FormulaBlock() {
   return (
     <UiPanel
       tone="accent"
-      className="my-6 p-5 bg-gradient-to-r from-violet-500/[0.06] via-indigo-500/[0.08] to-violet-500/[0.06] border-violet-500/20 text-center"
+      className="my-6 p-5 bg-linear-to-r from-violet-500/6 via-indigo-500/8 to-violet-500/6 border-violet-500/20 text-center"
     >
       <div className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-3">Reward Formula</div>
       <div className="text-lg sm:text-xl font-mono font-black text-white">
@@ -659,10 +659,10 @@ function RoadmapTimeline() {
       {phases.map((p) => (
         <UiPanel key={p.phase} className={`transition-all ${
           p.status === "live"
-            ? "bg-emerald-500/[0.05] border-emerald-500/25"
+            ? "bg-emerald-500/5 border-emerald-500/25"
             : p.status === "next"
-              ? "bg-amber-500/[0.05] border-amber-500/25"
-              : "bg-white/[0.02] border-white/[0.06]"
+              ? "bg-amber-500/5 border-amber-500/25"
+              : "bg-white/2 border-white/6"
         }`}>
           <div className="flex items-center gap-2 mb-2">
             <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
@@ -679,7 +679,7 @@ function RoadmapTimeline() {
           <h3 className="text-sm font-bold text-white mb-2">{p.title}</h3>
           <div className="flex flex-wrap gap-1.5">
             {p.items.map((item) => (
-              <span key={item} className="px-2 py-0.5 rounded text-[10px] font-medium text-gray-400 bg-white/[0.04] border border-white/[0.06]">
+              <span key={item} className="px-2 py-0.5 rounded text-[10px] font-medium text-gray-400 bg-white/4 border border-white/6">
                 {item}
               </span>
             ))}
@@ -692,15 +692,15 @@ function RoadmapTimeline() {
 
 function TechBadge({ name, color }: { name: string; color: string }) {
   const colors: Record<string, string> = {
-    white: "text-white border-white/20 bg-white/[0.04]",
-    sky: "text-sky-400 border-sky-500/20 bg-sky-500/[0.04]",
-    blue: "text-blue-400 border-blue-500/20 bg-blue-500/[0.04]",
-    cyan: "text-cyan-400 border-cyan-500/20 bg-cyan-500/[0.04]",
-    violet: "text-violet-400 border-violet-500/20 bg-violet-500/[0.04]",
-    emerald: "text-emerald-400 border-emerald-500/20 bg-emerald-500/[0.04]",
-    purple: "text-purple-400 border-purple-500/20 bg-purple-500/[0.04]",
-    amber: "text-amber-400 border-amber-500/20 bg-amber-500/[0.04]",
-    indigo: "text-indigo-400 border-indigo-500/20 bg-indigo-500/[0.04]",
+    white: "text-white border-white/20 bg-white/4",
+    sky: "text-sky-400 border-sky-500/20 bg-sky-500/4",
+    blue: "text-blue-400 border-blue-500/20 bg-blue-500/4",
+    cyan: "text-cyan-400 border-cyan-500/20 bg-cyan-500/4",
+    violet: "text-violet-400 border-violet-500/20 bg-violet-500/4",
+    emerald: "text-emerald-400 border-emerald-500/20 bg-emerald-500/4",
+    purple: "text-purple-400 border-purple-500/20 bg-purple-500/4",
+    amber: "text-amber-400 border-amber-500/20 bg-amber-500/4",
+    indigo: "text-indigo-400 border-indigo-500/20 bg-indigo-500/4",
   };
   return (
     <div className={cn(`px-3 py-2 border text-xs font-bold text-center ${colors[color] ?? colors.white}`, uiTokens.radius.sm)}>

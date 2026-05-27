@@ -54,12 +54,12 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
             <span className="text-[11px] font-bold uppercase tracking-wider text-gray-300">Loading rounds...</span>
           </div>
           {Array.from({ length: 5 }, (_, i) => (
-            <div key={i} className="flex items-center gap-3 rounded-md bg-white/[0.02] px-3 py-2.5">
-              <div className="h-4 w-12 animate-pulse rounded bg-white/[0.06]" />
+            <div key={i} className="flex items-center gap-3 rounded-md bg-white/2 px-3 py-2.5">
+              <div className="h-4 w-12 animate-pulse rounded bg-white/6" />
               <div className="h-5 w-14 animate-pulse rounded-full bg-emerald-500/10" />
-              <div className="h-4 w-20 animate-pulse rounded bg-white/[0.06]" />
-              <div className="h-5 w-12 animate-pulse rounded-full bg-white/[0.04]" />
-              <div className="ml-auto h-4 w-16 animate-pulse rounded bg-white/[0.06]" />
+              <div className="h-4 w-20 animate-pulse rounded bg-white/6" />
+              <div className="h-5 w-12 animate-pulse rounded-full bg-white/4" />
+              <div className="ml-auto h-4 w-16 animate-pulse rounded bg-white/6" />
             </div>
           ))}
         </div>

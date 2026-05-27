@@ -72,7 +72,6 @@ interface CreateLineaOreClientViewPropsOptions {
   handleDepositEthToEmbedded: WalletSettingsProps["onDepositEthToEmbedded"];
   handleDepositTokenToEmbedded: WalletSettingsProps["onDepositTokenToEmbedded"];
   handleManualMineWithGuard: PageTabContentProps["hubProps"]["handleManualMineWithGuard"];
-  handleRepeatLastBet: PageTabContentProps["hubProps"]["handleRepeatLastBet"];
   handleTabChange: SidebarProps["onTabChange"];
   handleWithdrawEthToExternal: WalletSettingsProps["onWithdrawEthToExternal"];
   handleWithdrawToExternal: WalletSettingsProps["onWithdrawToExternal"];
@@ -108,7 +107,6 @@ interface CreateLineaOreClientViewPropsOptions {
   jackpotHistoryError: PageTabContentProps["analyticsProps"]["jackpotHistoryError"];
   jackpotHistoryLoading: PageTabContentProps["analyticsProps"]["jackpotHistoryLoading"];
   jackpotInfo: HeaderProps["jackpotInfo"];
-  lastBet: PageTabContentProps["hubProps"]["lastBet"];
   leaderboardsData: PageTabContentProps["leaderboardsProps"]["data"];
   leaderboardsError: PageTabContentProps["leaderboardsProps"]["error"];
   leaderboardsLoading: PageTabContentProps["leaderboardsProps"]["loading"];
@@ -135,6 +133,7 @@ interface CreateLineaOreClientViewPropsOptions {
   runningParams: PageTabContentProps["hubProps"]["runningParams"];
   scanRewards: PageTabContentProps["hubProps"]["onScan"];
   selectedTilesCount: PageTabContentProps["hubProps"]["selectedTilesCount"];
+  setTiles: PageTabContentProps["hubProps"]["onQuickPickTiles"];
   setDepositEthAmount: WalletSettingsProps["onDepositEthAmountChange"];
   setDepositTokenAmount: WalletSettingsProps["onDepositTokenAmountChange"];
   setReducedMotion: WalletSettingsProps["onReducedMotionChange"];
@@ -214,7 +213,6 @@ export function createLineaOreClientViewProps({
   handleDepositEthToEmbedded,
   handleDepositTokenToEmbedded,
   handleManualMineWithGuard,
-  handleRepeatLastBet,
   handleTabChange,
   handleWithdrawEthToExternal,
   handleWithdrawToExternal,
@@ -250,7 +248,6 @@ export function createLineaOreClientViewProps({
   jackpotHistoryError,
   jackpotHistoryLoading,
   jackpotInfo,
-  lastBet,
   leaderboardsData,
   leaderboardsError,
   leaderboardsLoading,
@@ -277,6 +274,7 @@ export function createLineaOreClientViewProps({
   runningParams,
   scanRewards,
   selectedTilesCount,
+  setTiles,
   setDepositEthAmount,
   setDepositTokenAmount,
   setReducedMotion,
@@ -429,7 +427,6 @@ export function createLineaOreClientViewProps({
       gridSelectedTiles,
       handleAutoMineWithGuard,
       handleManualMineWithGuard,
-      handleRepeatLastBet,
       isAnalyzing,
       isAutoMining,
       isClaiming,
@@ -442,10 +439,10 @@ export function createLineaOreClientViewProps({
       liveStateReady,
       isWeeklyJackpot,
       jackpotAmount,
-      lastBet,
       lowEthBalance,
       claimReward,
       claimAll,
+      setTiles,
       scanRewards,
       stableTileClick,
       reducedMotion,

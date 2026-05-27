@@ -190,7 +190,7 @@ export function createAutoMineLoopAdapter({
         case "skip-existing":
           return {
             kind: "skip-existing",
-            liveEpoch: roundPlan.liveEpoch,
+            placedEpoch: roundPlan.placedEpoch,
             alreadyBetTiles: roundPlan.alreadyBetTiles,
             effectiveBlocks: roundPlan.effectiveBlocks,
           };

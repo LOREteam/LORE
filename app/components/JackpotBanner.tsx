@@ -167,7 +167,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
         button: "from-[#6f4923] via-[#b9873e] to-[#694520]",
         buttonBorder: "border-[#f0d08c]/55",
         shareBorder: "border-[#d7b16d]/18",
-        shareBg: "bg-white/[0.04]",
+        shareBg: "bg-white/4",
         shareText: "text-[#f3e3c1]",
       }
     : {
@@ -187,7 +187,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
         button: "from-[#36548d] via-[#5583d4] to-[#304d84]",
         buttonBorder: "border-[#bed7ff]/45",
         shareBorder: "border-[#a8c7ff]/18",
-        shareBg: "bg-white/[0.04]",
+        shareBg: "bg-white/4",
         shareText: "text-[#e3edff]",
       };
 
@@ -220,14 +220,14 @@ export const JackpotBanner = React.memo(function JackpotBanner({
     <div
       role="region"
       aria-label={`${headerText} Win`}
-      className={`pointer-events-none fixed inset-x-0 top-3 z-[100] flex justify-center px-3 transition-opacity duration-500 sm:top-4 ${
+      className={`pointer-events-none fixed inset-x-0 top-3 z-100 flex justify-center px-3 transition-opacity duration-500 sm:top-4 ${
         showContent ? "opacity-100" : "opacity-0"
       }`}
     >
       {!reducedMotion && (
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-[36rem] overflow-hidden">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-144 overflow-hidden">
           <div
-            className="absolute left-1/2 top-0 h-[46rem] w-[46rem] -translate-x-1/2 -translate-y-[18%] rounded-full"
+            className="absolute left-1/2 top-0 h-184 w-184 -translate-x-1/2 -translate-y-[18%] rounded-full"
             style={{
               background: `repeating-conic-gradient(from 0deg, ${palette.beam} 0deg 8deg, transparent 8deg 28deg, ${palette.beamAlt} 28deg 35deg, transparent 35deg 56deg)`,
               filter: "blur(2px)",
@@ -244,7 +244,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
 
       <div
         className={cn(
-          "pointer-events-auto relative z-10 w-full max-w-[42rem] overflow-hidden rounded-[2rem] border bg-gradient-to-br px-5 py-5 text-center sm:px-6 sm:py-6",
+          "pointer-events-auto relative z-10 w-full max-w-[42rem] overflow-hidden rounded-[2rem] border bg-linear-to-br px-5 py-5 text-center sm:px-6 sm:py-6",
           palette.shell,
           palette.frame,
         )}
@@ -253,7 +253,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
           animation: !reducedMotion && showContent ? "jackpot-scale 0.52s cubic-bezier(0.22, 1, 0.36, 1)" : undefined,
         }}
       >
-        <div className={cn("absolute inset-[10px] rounded-[1.55rem] border bg-gradient-to-br", palette.shellInner, palette.rim)} />
+        <div className={cn("absolute inset-[10px] rounded-[1.55rem] border bg-linear-to-br", palette.shellInner, palette.rim)} />
         <div className="absolute inset-x-10 top-0 h-28 bg-[radial-gradient(circle_at_top,rgba(255,244,205,0.14),transparent_70%)]" />
         <div className="absolute left-1/2 top-[18%] h-[26rem] w-[26rem] -translate-x-1/2 rounded-full border border-white/5" />
         <div className="absolute left-1/2 top-[18%] h-[26rem] w-[26rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(255,214,124,0.08),transparent_62%)]" />
@@ -297,16 +297,16 @@ export const JackpotBanner = React.memo(function JackpotBanner({
             </div>
 
             <div className="mt-6 flex items-center justify-center gap-4 text-white/78">
-              <div className="h-px w-16 bg-gradient-to-r from-transparent to-white/35 sm:w-24" />
+              <div className="h-px w-16 bg-linear-to-r from-transparent to-white/35 sm:w-24" />
               <div className="text-[0.92rem] font-medium uppercase tracking-[0.28em] sm:text-[1rem]">
                 {winningTileId !== null ? `Winning Tile ${winningTileId}` : "Jackpot Winner"}
               </div>
-              <div className="h-px w-16 bg-gradient-to-l from-transparent to-white/35 sm:w-24" />
+              <div className="h-px w-16 bg-linear-to-l from-transparent to-white/35 sm:w-24" />
             </div>
 
             <div
               className={cn(
-                "mx-auto mt-7 w-full max-w-[26rem] rounded-[1.25rem] border bg-gradient-to-br px-6 py-5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]",
+                "mx-auto mt-7 w-full max-w-[26rem] rounded-[1.25rem] border bg-linear-to-br px-6 py-5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]",
                 palette.prize,
                 palette.prizeBorder,
               )}
@@ -324,7 +324,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
                 variant="ghost"
                 size="md"
                 className={cn(
-                  "min-h-14 min-w-[15rem] rounded-[0.95rem] border bg-gradient-to-r px-8 py-4 text-[0.95rem] font-semibold uppercase tracking-[0.24em] text-white transition hover:brightness-105",
+                  "min-h-14 min-w-[15rem] rounded-[0.95rem] border bg-linear-to-r px-8 py-4 text-[0.95rem] font-semibold uppercase tracking-[0.24em] text-white transition hover:brightness-105",
                   palette.button,
                   palette.buttonBorder,
                 )}
@@ -337,7 +337,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
                 variant="ghost"
                 size="md"
                 className={cn(
-                  "min-h-14 min-w-[15rem] rounded-[0.95rem] border px-8 py-4 text-[0.95rem] font-semibold uppercase tracking-[0.18em] transition hover:bg-white/[0.08]",
+                  "min-h-14 min-w-[15rem] rounded-[0.95rem] border px-8 py-4 text-[0.95rem] font-semibold uppercase tracking-[0.18em] transition hover:bg-white/8",
                   palette.shareBorder,
                   palette.shareBg,
                   palette.shareText,

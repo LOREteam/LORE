@@ -1,8 +1,9 @@
 export const ADMIN_AUTH_HEADER = "LORE Admin Verification";
 export const ADMIN_AUTH_PROOF_TTL_MS = 5 * 60 * 1000;
 export const ADMIN_AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-export const ADMIN_AUTH_WALLET =
-  (process.env.NEXT_PUBLIC_ADMIN_WALLET_ADDRESS?.trim() || "0x3EcABA03124D8e0Ce7709638276e69F1016CA5Fa").toLowerCase();
+const configuredAdminWallet = process.env.NEXT_PUBLIC_ADMIN_WALLET_ADDRESS?.trim().toLowerCase() ?? "";
+export const ADMIN_AUTH_WALLET = configuredAdminWallet;
+export const ADMIN_AUTH_WALLET_CONFIGURED = /^0x[a-f0-9]{40}$/i.test(ADMIN_AUTH_WALLET);
 
 export type AdminAuthMessageFields = {
   address: string;

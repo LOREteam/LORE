@@ -90,7 +90,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
             disabled={depositsLoading}
             variant="ghost"
             size="xs"
-            className="h-10 w-10 p-0 text-gray-500 hover:text-sky-300 hover:border-sky-500/20 hover:bg-sky-500/[0.06] active:scale-95"
+            className="h-10 w-10 p-0 text-gray-500 hover:text-sky-300 hover:border-sky-500/20 hover:bg-sky-500/6 active:scale-95"
             title="Refresh"
             aria-label="Refresh deposits"
           >
@@ -129,14 +129,14 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
             <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider"><LoreText items={loadingQuotes} /></span>
           </div>
           {Array.from({ length: 4 }, (_, i) => (
-            <div key={i} className="flex items-center gap-3 rounded-md bg-white/[0.02] px-3 py-2.5" style={{ animationDelay: `${i * 0.08}s` }}>
-              <div className="h-4 w-12 animate-pulse rounded bg-white/[0.06]" />
+            <div key={i} className="flex items-center gap-3 rounded-md bg-white/2 px-3 py-2.5" style={{ animationDelay: `${i * 0.08}s` }}>
+              <div className="h-4 w-12 animate-pulse rounded bg-white/6" />
               <div className="flex gap-1">
                 <div className="h-6 w-6 animate-pulse rounded bg-violet-500/10" />
                 <div className="h-6 w-6 animate-pulse rounded bg-violet-500/10" />
               </div>
-              <div className="ml-auto h-4 w-16 animate-pulse rounded bg-white/[0.06]" />
-              <div className="h-4 w-14 animate-pulse rounded bg-white/[0.04]" />
+              <div className="ml-auto h-4 w-16 animate-pulse rounded bg-white/6" />
+              <div className="h-4 w-14 animate-pulse rounded bg-white/4" />
             </div>
           ))}
         </div>
@@ -171,7 +171,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
                           {row.sortedTileIds.map((tileId, tileIndex) => {
                             const isWinner = row.winningTile !== null && tileId === row.winningTile;
                             const winnerClass = row.wonDailyJackpot && row.wonWeeklyJackpot
-                              ? "bg-gradient-to-br from-amber-500/25 to-fuchsia-500/20 text-fuchsia-200 border-fuchsia-400/45 shadow-[0_0_10px_rgba(217,70,239,0.24)]"
+                              ? "bg-linear-to-br from-amber-500/25 to-fuchsia-500/20 text-fuchsia-200 border-fuchsia-400/45 shadow-[0_0_10px_rgba(217,70,239,0.24)]"
                               : row.wonDailyJackpot
                                 ? "bg-amber-500/20 text-amber-300 border-amber-400/45 shadow-[0_0_8px_rgba(245,158,11,0.28)]"
                                 : row.wonWeeklyJackpot
@@ -194,7 +194,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
                             <span
                               className={`ml-1 inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-black uppercase leading-none tracking-[0.16em] whitespace-nowrap ${
                                 isDualJackpot
-                                  ? "border-fuchsia-400/30 bg-gradient-to-r from-amber-500/12 to-fuchsia-500/12 text-fuchsia-300"
+                                  ? "border-fuchsia-400/30 bg-linear-to-r from-amber-500/12 to-fuchsia-500/12 text-fuchsia-300"
                                   : row.wonDailyJackpot
                                     ? "border-amber-400/30 bg-amber-500/10 text-amber-300"
                                     : "border-sky-400/30 bg-sky-500/10 text-sky-300"

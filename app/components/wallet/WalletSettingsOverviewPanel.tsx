@@ -42,6 +42,7 @@ export function WalletSettingsOverviewPanel({
 }: WalletSettingsOverviewPanelProps) {
   const normalizedConnectedWallet = connectedWalletAddress?.toLowerCase() ?? null;
   const normalizedEmbeddedWallet = embeddedWalletAddress?.toLowerCase() ?? null;
+  const animationEnabled = !reducedMotion;
   const showConnectedResolverRow = Boolean(connectedWalletAddress);
   const showEmbeddedResolverRow =
     Boolean(embeddedWalletAddress) &&
@@ -58,7 +59,7 @@ export function WalletSettingsOverviewPanel({
           </div>
           <div className="space-y-2">
             {showConnectedResolverRow && connectedWalletAddress && (
-              <div className="rounded-lg border border-white/[0.06] bg-black/15 px-3 py-2">
+              <div className="rounded-lg border border-white/6 bg-black/15 px-3 py-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[10px] text-gray-300 font-semibold">Connected wallet</div>
@@ -85,7 +86,7 @@ export function WalletSettingsOverviewPanel({
             )}
 
             {showEmbeddedResolverRow && embeddedWalletAddress && (
-              <div className="rounded-lg border border-white/[0.06] bg-black/15 px-3 py-2">
+              <div className="rounded-lg border border-white/6 bg-black/15 px-3 py-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[10px] text-gray-300 font-semibold">Privy wallet</div>
@@ -124,7 +125,7 @@ export function WalletSettingsOverviewPanel({
             {(["bet", "autoBet", "reveal", "win", "myWin", "tick"] as SoundName[]).map((name) => (
               <label
                 key={name}
-                className="flex items-center gap-2 py-1 rounded cursor-pointer hover:bg-white/[0.03] transition-colors group"
+                className="flex items-center gap-2 py-1 rounded cursor-pointer hover:bg-white/3 transition-colors group"
               >
                 <input
                   type="checkbox"
@@ -145,18 +146,18 @@ export function WalletSettingsOverviewPanel({
             <div className="min-w-0">
               <div className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider mb-1">Animation</div>
               <p className="text-[10px] text-gray-500 leading-relaxed">
-                Reduce visual effects and transitions across the site for weaker PCs. The countdown timer still updates normally.
+                Full visual effects, particles, winner highlights, and transitions across the site.
               </p>
             </div>
             <button
               type="button"
               role="switch"
-              aria-checked={reducedMotion}
-              onClick={() => onReducedMotionChange(!reducedMotion)}
+              aria-checked={animationEnabled}
+              onClick={() => onReducedMotionChange(animationEnabled)}
               className={`mt-0.5 flex h-6 w-11 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
-                reducedMotion
+                animationEnabled
                   ? "justify-end border-emerald-400/40 bg-emerald-500/20"
-                  : "justify-start border-white/10 bg-white/[0.05]"
+                  : "justify-start border-white/10 bg-white/5"
               }`}
             >
               <span className="block h-5 w-5 rounded-full bg-white shadow-sm" />

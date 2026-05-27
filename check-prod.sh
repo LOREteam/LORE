@@ -8,7 +8,7 @@ set -u
 
 BASE_URL="${BASE_URL:-}"
 ENV_FILE="${ENV_FILE:-.env}"
-DEPLOY_BLOCK="${INDEXER_START_BLOCK:-28832251}"
+DEPLOY_BLOCK=""
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -103,6 +103,8 @@ if [[ -f "$ENV_FILE" ]]; then
 else
   fail "ENV file not found: $ENV_FILE"
 fi
+
+DEPLOY_BLOCK="${INDEXER_START_BLOCK:-${NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK:-28869863}}"
 
 if [[ -n "${KEEPER_PRIVATE_KEY:-}" ]]; then
   pass "KEEPER_PRIVATE_KEY is set"

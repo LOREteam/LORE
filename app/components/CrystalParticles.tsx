@@ -3,6 +3,7 @@
 import React, { useEffect, useRef } from "react";
 
 const PARTICLE_COUNT = 35;
+const MOBILE_PARTICLE_COUNT = 16;
 const COLORS = [
   "rgba(139, 92, 246, 0.6)",   // violet
   "rgba(167, 139, 250, 0.5)",  // lavender
@@ -51,9 +52,16 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
     if (!ctx) return;
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const getParticleCount = () => window.innerWidth < 768 ? MOBILE_PARTICLE_COUNT : PARTICLE_COUNT;
+    const seedParticles = () => {
+      particlesRef.current = Array.from({ length: getParticleCount() }, () =>
+        createParticle(canvas.width, canvas.height)
+      );
+    };
     const resizeImmediate = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
+      seedParticles();
     };
     const resize = () => {
       if (resizeTimer) clearTimeout(resizeTimer);
@@ -62,11 +70,11 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
     resizeImmediate();
     window.addEventListener("resize", resize);
 
-    particlesRef.current = Array.from({ length: PARTICLE_COUNT }, () =>
-      createParticle(canvas.width, canvas.height)
-    );
-
     const draw = () => {
+      if (document.hidden) {
+        animRef.current = 0;
+        return;
+      }
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const particles = particlesRef.current;
 
@@ -111,12 +119,33 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
       animRef.current = requestAnimationFrame(draw);
     };
 
-    animRef.current = requestAnimationFrame(draw);
+    const start = () => {
+      if (animRef.current === 0) {
+        animRef.current = requestAnimationFrame(draw);
+      }
+    };
+    const stop = () => {
+      if (animRef.current !== 0) {
+        cancelAnimationFrame(animRef.current);
+        animRef.current = 0;
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stop();
+      } else {
+        start();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    start();
 
     return () => {
-      cancelAnimationFrame(animRef.current);
+      stop();
       if (resizeTimer) clearTimeout(resizeTimer);
       window.removeEventListener("resize", resize);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 

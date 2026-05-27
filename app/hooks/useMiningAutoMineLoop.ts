@@ -1,7 +1,7 @@
 "use client";
 
 import { log } from "../lib/logger";
-import { isInsufficientFundsError, isNetworkError } from "./useMining.shared";
+import { isEpochWaitTimeoutError, isInsufficientFundsError, isNetworkError } from "./useMining.shared";
 import { createAutoMineLoopState, reduceAutoMineLoopEvent } from "../lib/mining/autoMineLoopModel";
 import { planAutoMineLoopPrelude } from "../lib/mining/autoMineLoopPreludePlanner";
 import { planAutoMineLoopNetworkRetry } from "../lib/mining/autoMineLoopRetryPlanner";
@@ -119,6 +119,7 @@ export async function runAutoMineLoop({
     });
 
     let preludeStopped = false;
+    let preludeShouldContinue = false;
     for (const operation of preludeDecision.operations) {
       if (operation === "refresh-session" && refreshSession) {
         const refreshedAt = await runtime.handleSessionRefresh(refreshSession);
@@ -129,23 +130,59 @@ export async function runAutoMineLoop({
       }
 
       if (operation === "await-epoch-ready" && loopState.lastPlacedEpoch !== null) {
-        const epochWait = await adapter.awaitEpochReady({
-          lastPlacedEpoch: loopState.lastPlacedEpoch,
-          roundIndex,
-          rounds,
-        });
-        if (epochWait.stopped) {
-          loopState = reduceAutoMineLoopEvent(loopState, { type: "stop-user" });
-          preludeStopped = true;
-          break;
-        }
+        try {
+          const epochWait = await adapter.awaitEpochReady({
+            lastPlacedEpoch: loopState.lastPlacedEpoch,
+            roundIndex,
+            rounds,
+          });
+          if (epochWait.stopped) {
+            loopState = reduceAutoMineLoopEvent(loopState, { type: "stop-user" });
+            preludeStopped = true;
+            break;
+          }
 
-        await runtime.handleEpochReady({ blocks, roundIndex, rounds });
+          await runtime.handleEpochReady({ blocks, roundIndex, rounds });
+        } catch (error) {
+          if ((isNetworkError(error) || isEpochWaitTimeoutError(error)) && autoMineActive()) {
+            const retryDecision = planAutoMineLoopNetworkRetry({
+              currentRetryCount: loopState.networkRetries,
+              initialMs: networkBackoffInitialMs,
+              maxExponent: 6,
+              maxMs: networkBackoffMaxMs,
+              retryMax: networkRetryMax,
+            });
+            if (retryDecision.kind === "give-up") {
+              log.error("AutoMine", `epoch wait failed for ${networkRetryMax} retries, giving up`);
+              throw error;
+            }
+            const networkErrorDecision = planAutoMineNetworkErrorTransition({
+              retryCount: retryDecision.retryCount,
+              waitMs: retryDecision.waitMs,
+            });
+            log.warn(
+              "AutoMine",
+              `epoch wait failed on round ${roundIndex + 1} (retry ${retryDecision.retryCount}/${networkRetryMax}), waiting ${(retryDecision.waitMs / 1000).toFixed(0)}s...`,
+              error,
+            );
+            loopState = await applyTransitionAction({
+              action: networkErrorDecision.action,
+              loopState,
+              runtime,
+            });
+            preludeShouldContinue = true;
+            break;
+          }
+          throw error;
+        }
       }
     }
 
     if (preludeStopped) {
       break;
+    }
+    if (preludeShouldContinue) {
+      continue;
     }
 
     let activeRoundCommand: AutoMineLoopReadyRoundCommand | null = null;
@@ -161,7 +198,7 @@ export async function runAutoMineLoop({
       if (preparedRound.kind === "skip-existing") {
         log.info(
           "AutoMine",
-          `skipping round ${roundIndex + 1} - already bet on ${preparedRound.alreadyBetTiles.length}/${preparedRound.effectiveBlocks} tiles in epoch ${preparedRound.liveEpoch}`,
+          `skipping round ${roundIndex + 1} - already bet on ${preparedRound.alreadyBetTiles.length}/${preparedRound.effectiveBlocks} tiles in epoch ${preparedRound.placedEpoch}`,
           { betTiles: preparedRound.alreadyBetTiles },
         );
       }

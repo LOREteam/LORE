@@ -29,20 +29,37 @@ const REPLACE_PENDING_FEE_BUMP_STEPS = [
   { maxFeeBumpPercent: 3500n, priorityBumpPercent: 3480n },
 ] as const;
 
-// Absolute fee floor for "cancel stuck tx" self-transfers. We want these
-// values high enough to dominate any realistic stuck-tx fee so the
-// replacement is never rejected as underpriced.
-const CANCEL_TX_MAX_FEE_PER_GAS_WEI = 5_000_000_000n; // 5 gwei
-const CANCEL_TX_PRIORITY_FEE_WEI = 5_000_000_000n; // 5 gwei
 const CANCEL_TX_GAS_LIMIT = 21_000n;
+const CANCEL_TX_BALANCE_HEADROOM_PERCENT = 98n;
+const INSUFFICIENT_FUNDS_RETRY_MS = 300_000;
+
+function isKeeperInsufficientFundsError(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("insufficient funds") ||
+    lower.includes("exceeds the balance of the account")
+  );
+}
+
+function getMaxAffordableCancelFeePerGas(balanceWei: bigint) {
+  return ((balanceWei * CANCEL_TX_BALANCE_HEADROOM_PERCENT) / 100n) / CANCEL_TX_GAS_LIMIT;
+}
 
 export async function POST(request: Request) {
   if (!isAuthorizedBootstrapRequest(request)) {
-    return NextResponse.json({ ok: true, action: "noop", reason: "bootstrap_keeper_disabled" });
+    return NextResponse.json({ ok: false, reason: "bootstrap_unauthorized" }, { status: 403 });
   }
 
+  const keeperKeyConfigured = !!(
+    process.env.BOOTSTRAP_KEEPER_PRIVATE_KEY?.trim() ||
+    process.env.KEEPER_PRIVATE_KEY?.trim()
+  );
   const account = getBootstrapKeeperAccount();
   if (!account) {
+    if (keeperKeyConfigured) {
+      console.error("[bootstrap-resolve] Keeper private key is configured but invalid — bootstrap resolver is non-functional. Check BOOTSTRAP_KEEPER_PRIVATE_KEY / KEEPER_PRIVATE_KEY format (must be 64 hex chars).");
+      return NextResponse.json({ ok: false, reason: "bootstrap_keeper_misconfigured" }, { status: 500 });
+    }
     return NextResponse.json({ ok: true, action: "noop", reason: "bootstrap_keeper_disabled" });
   }
 
@@ -161,10 +178,12 @@ export async function POST(request: Request) {
 
       if (gas === null) {
         return NextResponse.json({
-          ok: false,
-          reason: "resolve_failed",
+          ok: true,
+          action: "noop",
+          reason: "keeper_insufficient_funds",
           error: `keeper_insufficient_funds balance=${keeperBalance.toString()} estimatedGas=${gasEstimate.toString()}`,
-        }, { status: 500 });
+          retryAfter: Math.max(1, Math.ceil(INSUFFICIENT_FUNDS_RETRY_MS / 1000)),
+        });
       }
 
       try {
@@ -215,21 +234,23 @@ export async function POST(request: Request) {
     // call can proceed with a fresh nonce.
     if (replacingPendingTx && lastFeeBumpRejection) {
       try {
-        const cancelGasCeiling = CANCEL_TX_GAS_LIMIT * CANCEL_TX_MAX_FEE_PER_GAS_WEI;
-        if (keeperBalance < cancelGasCeiling) {
+        const cancelFeePerGas = getMaxAffordableCancelFeePerGas(keeperBalance);
+        if (cancelFeePerGas <= 0n) {
           return NextResponse.json({
-            ok: false,
-            reason: "resolve_failed",
-            error: `cancel_stuck_tx_insufficient_funds balance=${keeperBalance.toString()} needed=${cancelGasCeiling.toString()}`,
-          }, { status: 500 });
+            ok: true,
+            action: "noop",
+            reason: "keeper_insufficient_funds",
+            error: `cancel_stuck_tx_insufficient_funds balance=${keeperBalance.toString()} needed=${CANCEL_TX_GAS_LIMIT.toString()}`,
+            retryAfter: Math.max(1, Math.ceil(INSUFFICIENT_FUNDS_RETRY_MS / 1000)),
+          });
         }
         const cancelHash = await walletClient.sendTransaction({
           to: account.address,
           value: 0n,
           nonce: latestNonce,
           gas: CANCEL_TX_GAS_LIMIT,
-          maxFeePerGas: CANCEL_TX_MAX_FEE_PER_GAS_WEI,
-          maxPriorityFeePerGas: CANCEL_TX_PRIORITY_FEE_WEI,
+          maxFeePerGas: cancelFeePerGas,
+          maxPriorityFeePerGas: cancelFeePerGas,
         });
         return NextResponse.json({
           ok: true,
@@ -241,6 +262,15 @@ export async function POST(request: Request) {
         });
       } catch (cancelErr) {
         const message = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+        if (isKeeperInsufficientFundsError(message)) {
+          return NextResponse.json({
+            ok: true,
+            action: "noop",
+            reason: "keeper_insufficient_funds",
+            error: message,
+            retryAfter: Math.max(1, Math.ceil(INSUFFICIENT_FUNDS_RETRY_MS / 1000)),
+          });
+        }
         return NextResponse.json({
           ok: true,
           action: "noop",
@@ -263,6 +293,15 @@ export async function POST(request: Request) {
         retryAfter: noopReason === "resolve_fee_bump_needed"
           ? Math.max(1, Math.ceil(RESOLVE_THROTTLE_MS / 1000))
           : undefined,
+      });
+    }
+    if (isKeeperInsufficientFundsError(message)) {
+      return NextResponse.json({
+        ok: true,
+        action: "noop",
+        reason: "keeper_insufficient_funds",
+        error: message,
+        retryAfter: Math.max(1, Math.ceil(INSUFFICIENT_FUNDS_RETRY_MS / 1000)),
       });
     }
     if (isRpcReadRetryableError(message)) {

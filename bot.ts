@@ -15,6 +15,7 @@ import {
 } from "./config/publicConfig";
 import { RESOLVE_ABI } from "./config/abi";
 import { assertProductionRuntimeConfig } from "./config/productionRuntime";
+import { getMetaJson, setMetaJson } from "./server/storage";
 
 assertProductionRuntimeConfig("bot");
 
@@ -33,11 +34,17 @@ const ALERT_THREAD_ID = process.env.ALERT_TELEGRAM_THREAD_ID ?? "";
 const ALERT_PREFIX = process.env.ALERT_PREFIX ?? "LORE Keeper";
 const PENDING_RESOLVE_STALE_MS = (() => {
   const raw = Number(process.env.PENDING_RESOLVE_STALE_MS ?? "45000");
-  return Number.isFinite(raw) && raw > 0 ? raw : 45_000;
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  if (process.env.PENDING_RESOLVE_STALE_MS !== undefined)
+    console.warn(`[keeper] Invalid PENDING_RESOLVE_STALE_MS="${process.env.PENDING_RESOLVE_STALE_MS}", defaulting to 45000`);
+  return 45_000;
 })();
 const FORCE_REPLACE_PENDING_NONCE_GAP = (() => {
   const raw = Number(process.env.FORCE_REPLACE_PENDING_NONCE_GAP ?? "6");
-  return Number.isFinite(raw) && raw > 0 ? raw : 6;
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  if (process.env.FORCE_REPLACE_PENDING_NONCE_GAP !== undefined)
+    console.warn(`[keeper] Invalid FORCE_REPLACE_PENDING_NONCE_GAP="${process.env.FORCE_REPLACE_PENDING_NONCE_GAP}", defaulting to 6`);
+  return 6;
 })();
 const REPLACE_PENDING_MAX_FEE_BUMP_PERCENT = 220n;
 const REPLACE_PENDING_PRIORITY_BUMP_PERCENT = 200n;
@@ -82,6 +89,16 @@ type PendingResolve = {
 };
 
 const alertCooldowns = new Map<string, number>();
+const PENDING_RESOLVE_META_KEY = "bot:pendingResolve";
+
+function savePendingResolve(value: PendingResolve | null): PendingResolve | null {
+  try {
+    setMetaJson(PENDING_RESOLVE_META_KEY, value ? { ...value, epoch: value.epoch.toString() } : null);
+  } catch (err) {
+    console.warn("[keeper] Failed to persist pendingResolve:", err instanceof Error ? err.message : err);
+  }
+  return value;
+}
 
 function isAlertingEnabled() {
   return Boolean(ALERT_BOT_TOKEN && ALERT_CHAT_ID);
@@ -92,6 +109,12 @@ function shouldSendAlert(key: string, cooldownMs = ALERT_COOLDOWN_MS) {
   const last = alertCooldowns.get(key) ?? 0;
   if (now - last < cooldownMs) return false;
   alertCooldowns.set(key, now);
+  if (alertCooldowns.size > 500) {
+    const cutoff = now - ALERT_COOLDOWN_MS;
+    for (const [k, t] of alertCooldowns) {
+      if (t < cutoff) alertCooldowns.delete(k);
+    }
+  }
   return true;
 }
 
@@ -117,6 +140,8 @@ async function sendTelegramAlert(text: string, key: string, cooldownMs = ALERT_C
       if (res.ok) return;
       const msg = await res.text();
       console.error(`[alert] Telegram send failed (attempt ${attempt + 1}): HTTP ${res.status} ${msg}`);
+      // Don't retry permanent client errors (4xx except 429)
+      if (res.status !== 429 && res.status < 500) return;
     } catch (err) {
       console.error(`[alert] Telegram send error (attempt ${attempt + 1}):`, err);
     }
@@ -281,6 +306,15 @@ async function startKeeperBot() {
   let consecutiveErrors = 0;
   let consecutiveNetworkErrors = 0;
   let pendingResolve: PendingResolve | null = null;
+  try {
+    const stored = getMetaJson<{ epoch: string; hash: `0x${string}`; submittedAt: number }>(PENDING_RESOLVE_META_KEY);
+    if (stored?.epoch && stored?.hash && stored?.submittedAt) {
+      pendingResolve = { epoch: BigInt(stored.epoch), hash: stored.hash, submittedAt: stored.submittedAt };
+      console.log(`[keeper] Restored pending resolve for epoch ${pendingResolve.epoch.toString()} from storage. Tx: ${pendingResolve.hash}`);
+    }
+  } catch (err) {
+    console.warn("[keeper] Failed to restore pendingResolve from storage:", err instanceof Error ? err.message : err);
+  }
 
   while (true) {
     try {
@@ -313,12 +347,12 @@ async function startKeeperBot() {
         const pendingResolved = epoch > pending.epoch;
         if (pendingResolved) {
           console.log(`\nPending resolve confirmed for epoch ${pending.epoch.toString()} via chain state. Tx: ${pending.hash}`);
-          pendingResolve = null;
+          pendingResolve = savePendingResolve(null);
         } else {
           try {
             const receipt = await publicClient.getTransactionReceipt({ hash: pending.hash });
             console.log(`\nPending resolve receipt found for epoch ${pending.epoch.toString()} (${receipt.status}). Tx: ${pending.hash}`);
-            pendingResolve = null;
+            pendingResolve = savePendingResolve(null);
           } catch (receiptCheckErr) {
             const receiptCheckMsg = receiptCheckErr instanceof Error ? (receiptCheckErr.message ?? "") : String(receiptCheckErr);
             if (isNetworkLikeError(receiptCheckMsg)) {
@@ -348,7 +382,7 @@ async function startKeeperBot() {
             console.log(
               `\nPending resolve tx marked stale for epoch ${pending.epoch.toString()} (age=${Math.floor(pendingAgeMs / 1000)}s, nonceGap=${nonceGap}), retrying with latest nonce.`,
             );
-            pendingResolve = null;
+            pendingResolve = savePendingResolve(null);
           }
         }
       }
@@ -359,14 +393,14 @@ async function startKeeperBot() {
         const poolStr = formatUnits(totalPool, 18);
         console.log(`\nResolving epoch ${epoch.toString()} (pool: ${poolStr} LINEA, overdue ${overdue}s)...`);
         try {
-          pendingResolve = await tryResolveEpochAction({
+          pendingResolve = savePendingResolve(await tryResolveEpochAction({
             accountAddress: account.address,
             contractAddress,
             epoch,
             gasLimitMarginPercent: GAS_LIMIT_MARGIN_PERCENT,
             publicClient,
             walletClient,
-          });
+          }));
           consecutiveErrors = 0;
           consecutiveNetworkErrors = 0;
         } catch (txErr) {

@@ -8,6 +8,10 @@ import type { PendingApproveState, ReceiptState } from "../../hooks/useMining.st
 import { isNetworkError, isRetryableError, withMiningRpcTimeout } from "../../hooks/useMining.shared";
 import { readWithNetworkRetry } from "./networkRetry";
 
+const APPROVE_ALLOWANCE_POLL_MS = 1_000;
+const APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS = 8_000;
+const APPROVE_PENDING_TIMEOUT_MS = 30_000;
+
 interface PrepareAutoMineBootstrapOptions {
   absoluteTotal: bigint;
   actorAddress: `0x${string}`;
@@ -101,17 +105,49 @@ export async function prepareAutoMineBootstrap({
     return true;
   }
 
+  const readAllowance = async () =>
+    (await withMiningRpcTimeout(publicClient.readContract({
+      address: LINEA_TOKEN_ADDRESS,
+      abi: TOKEN_ABI,
+      functionName: "allowance",
+      args: [actorAddress, CONTRACT_ADDRESS],
+    }), "bootstrap.allowance.refresh")) as bigint;
+
+  const pollAllowanceUntil = async (timeoutMs: number) => {
+    const startedAt = Date.now();
+    while (autoMineActive() && Date.now() - startedAt < timeoutMs) {
+      try {
+        if ((await readAllowance()) >= absoluteTotal) {
+          clearPendingApprove();
+          refetchAllowance();
+          return true;
+        }
+      } catch (error) {
+        if (!isNetworkError(error)) throw error;
+      }
+      await delay(APPROVE_ALLOWANCE_POLL_MS);
+    }
+    return false;
+  };
+
+  if (pendingApproveRef.current) {
+    const allowanceUpdated = await pollAllowanceUntil(APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS);
+    if (allowanceUpdated) return true;
+  }
+
   let approvalConfirmed = false;
   for (let attempt = 0; attempt < approveRetryMax; attempt += 1) {
+    let approvalState: ReceiptState = "confirmed";
+    let approvalNonce: number | null = null;
+    let enteredApprovalSendPhase = false;
     try {
-      const approvalNonce = pendingApproveRef.current?.nonce ?? Number(
+      approvalNonce = pendingApproveRef.current?.nonce ?? Number(
         await withMiningRpcTimeout(publicClient.getTransactionCount({
           address: actorAddress,
           blockTag: "latest",
         }), "bootstrap.getTransactionCount"),
       );
       const silentSend = readSilentSend();
-      let approvalState: ReceiptState = "confirmed";
       const approveOverrides = await getUrgentFees();
       const writeApproveOverrides =
         approveOverrides && "maxFeePerGas" in approveOverrides
@@ -128,6 +164,7 @@ export async function prepareAutoMineBootstrap({
           args: [CONTRACT_ADDRESS, maxUint256],
         });
         await assertNativeGasBalance(minGasApprove, approveOverrides);
+        enteredApprovalSendPhase = true;
         const approveHash = await silentSend(
           { to: LINEA_TOKEN_ADDRESS, data, gas: minGasApprove, nonce: approvalNonce },
           approveOverrides,
@@ -137,6 +174,7 @@ export async function prepareAutoMineBootstrap({
       } else {
         await ensurePreferredWallet();
         await assertNativeGasBalance(minGasApprove, approveOverrides);
+        enteredApprovalSendPhase = true;
         const approveHash = await writeApprove({
           address: LINEA_TOKEN_ADDRESS,
           abi: TOKEN_ABI,
@@ -155,26 +193,26 @@ export async function prepareAutoMineBootstrap({
         await delay(4_000);
       }
     } catch (error) {
+      if (enteredApprovalSendPhase && approvalNonce !== null && !pendingApproveRef.current) {
+        pendingApproveRef.current = {
+          submittedAt: Date.now(),
+          nonce: approvalNonce,
+        };
+      }
       if (!isRetryableError(error) && !isNetworkError(error)) throw error;
       log.warn("AutoMine", `approve confirmation retry ${attempt + 1}/${approveRetryMax}`, error);
     }
 
     refetchAllowance();
     await delay(1_500);
-    try {
-      const refreshedAllowance = (await withMiningRpcTimeout(publicClient.readContract({
-        address: LINEA_TOKEN_ADDRESS,
-        abi: TOKEN_ABI,
-        functionName: "allowance",
-        args: [actorAddress, CONTRACT_ADDRESS],
-      }), "bootstrap.allowance.refresh")) as bigint;
-      if (refreshedAllowance >= absoluteTotal) {
-        clearPendingApprove();
-        approvalConfirmed = true;
-        break;
-      }
-    } catch (error) {
-      if (!isNetworkError(error)) throw error;
+    const allowanceUpdated = await pollAllowanceUntil(
+      approvalState === "pending"
+        ? APPROVE_PENDING_TIMEOUT_MS
+        : APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS,
+    );
+    if (allowanceUpdated) {
+      approvalConfirmed = true;
+      break;
     }
 
     if (attempt < approveRetryMax - 1) {
@@ -183,6 +221,16 @@ export async function prepareAutoMineBootstrap({
   }
 
   if (!approvalConfirmed) {
+    if (pendingApproveRef.current) {
+      const allowanceUpdated = await pollAllowanceUntil(APPROVE_PENDING_TIMEOUT_MS);
+      if (allowanceUpdated) return true;
+      const pendingAgeMs = Date.now() - pendingApproveRef.current.submittedAt;
+      throw new Error(
+        pendingAgeMs > APPROVE_PENDING_TIMEOUT_MS
+          ? "Approval transaction is still pending or underpriced. Retry once more to replace it."
+          : "Approval transaction is still pending. Wait for confirmation before auto-mine continues.",
+      );
+    }
     throw new Error("Approval not confirmed after retries");
   }
 

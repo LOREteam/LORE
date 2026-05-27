@@ -3,7 +3,7 @@
 export type ReceiptState = "confirmed" | "pending";
 
 export interface PendingApproveState {
-  hash: `0x${string}`;
+  hash?: `0x${string}`;
   submittedAt: number;
   nonce: number;
 }

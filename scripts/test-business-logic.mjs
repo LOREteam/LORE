@@ -202,6 +202,29 @@ async function main() {
     1_000 + chunkReloadRecovery.CHUNK_RELOAD_WINDOW_MS + 1,
   );
   assert.equal(chunkReloadRecovery.shouldAttemptChunkReloadOnce(chunkStorage, 20_000), true);
+  let replacedUrl = null;
+  chunkReloadRecovery.reloadWithCacheBust({
+    href: "http://localhost:3000/?_r=legacy&tab=hub",
+    reload: () => {
+      throw new Error("should use replace");
+    },
+    replace: (url) => {
+      replacedUrl = url;
+    },
+  }, 21_000);
+  assert.equal(replacedUrl, "http://localhost:3000/?tab=hub&__lore_reload=21000");
+  const historyCalls = [];
+  assert.equal(
+    chunkReloadRecovery.stripChunkReloadCacheParam(
+      { href: "http://localhost:3000/?tab=hub&_r=legacy&__lore_reload=21000#board" },
+      {
+        state: { ok: true },
+        replaceState: (...args) => historyCalls.push(args),
+      },
+    ),
+    true,
+  );
+  assert.deepEqual(historyCalls, [[{ ok: true }, "", "/?tab=hub#board"]]);
 
   await assert.rejects(
     () =>
@@ -736,8 +759,8 @@ async function main() {
     placeBetsPreferSilent: async () => "pending",
     source: "ManualMine",
   });
-  assert.equal(pendingAttempt, true);
-  assert.equal(finalizedAttempts, 1);
+  assert.equal(pendingAttempt, "pending");
+  assert.equal(finalizedAttempts, 0);
 
   let timedOutFinalized = 0;
   const timeoutAttempt = await manualMineAttempt.runManualMineAttempt({
@@ -759,8 +782,8 @@ async function main() {
     },
     source: "DirectMine",
   });
-  assert.equal(timeoutAttempt, true);
-  assert.equal(timedOutFinalized, 1);
+  assert.equal(timeoutAttempt, "pending");
+  assert.equal(timedOutFinalized, 0);
 
   await assert.rejects(
     () => utils.withTimeout(delay(50), 1, "probe"),

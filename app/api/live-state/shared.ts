@@ -1,5 +1,6 @@
 import { decodeEventLog, encodeEventTopics, parseAbi, parseUnits, toHex } from "viem";
 import { publicClient, CONTRACT_ADDRESS, CONTRACT_DEPLOY_BLOCK } from "../_lib/dataBridge";
+import { tileMaskToTileIds } from "../../lib/tileMask";
 import {
   getAllBetRows,
   getEpochMapByIds,
@@ -36,12 +37,17 @@ const LIVE_STATE_EVENTS_ABI = parseAbi([
   "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
   "event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)",
   "event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount)",
+  "event BatchBetsBitmapPlaced(uint256 indexed epoch, address indexed user, uint32 tileMask, uint256 amount, uint256 totalAmount)",
 ]);
 const [betPlacedSig] = encodeEventTopics({ abi: LIVE_STATE_EVENTS_ABI, eventName: "BetPlaced" });
 const [batchPlacedSig] = encodeEventTopics({ abi: LIVE_STATE_EVENTS_ABI, eventName: "BatchBetsPlaced" });
 const [batchSameAmountPlacedSig] = encodeEventTopics({
   abi: LIVE_STATE_EVENTS_ABI,
   eventName: "BatchBetsSameAmountPlaced",
+});
+const [batchBitmapPlacedSig] = encodeEventTopics({
+  abi: LIVE_STATE_EVENTS_ABI,
+  eventName: "BatchBetsBitmapPlaced",
 });
 
 export type LiveStatePayload = {
@@ -140,14 +146,34 @@ function hasAnyPositiveCount(counts: number[] | null) {
   return Boolean(counts?.some((value) => Number.isFinite(value) && value > 0));
 }
 
+function buildIndexedEpochTileUserSets(epoch: number, gridSize = 25) {
+  const perTile = Array.from({ length: gridSize }, () => new Set<string>());
+  for (const row of getAllBetRows()) {
+    if (Number(row.epoch) !== epoch) continue;
+    const user = String(row.user ?? "").trim().toLowerCase();
+    if (!user) continue;
+    for (const tileId of row.tileIds ?? []) {
+      const tileIndex = Number(tileId) - 1;
+      if (tileIndex >= 0 && tileIndex < gridSize) {
+        perTile[tileIndex].add(user);
+      }
+    }
+  }
+  return perTile;
+}
+
 async function fetchEpochTileUserCountsFromChain(
   epoch: bigint,
   fromBlock: bigint,
   toBlock: bigint,
+  seedTileUsers?: Set<string>[],
   gridSize = 25,
 ) {
   const epochTopic = toHex(epoch, { size: 32 });
-  const perTile = Array.from({ length: gridSize }, () => new Set<string>());
+  const perTile = Array.from(
+    { length: gridSize },
+    (_, index) => new Set(seedTileUsers?.[index] ?? []),
+  );
 
   const appendUsers = (
     users: string[],
@@ -186,10 +212,15 @@ async function fetchEpochTileUserCountsFromChain(
     if (decoded.eventName === "BatchBetsSameAmountPlaced") {
       const args = decoded.args as { user: string; tileIds: readonly bigint[] };
       appendUsers([args.user], args.tileIds.map((tileId) => Number(tileId)));
+      return;
+    }
+    if (decoded.eventName === "BatchBetsBitmapPlaced") {
+      const args = decoded.args as { user: string; tileMask: number };
+      appendUsers([args.user], tileMaskToTileIds(args.tileMask));
     }
   };
 
-  for (const topic0 of [betPlacedSig, batchPlacedSig, batchSameAmountPlacedSig]) {
+  for (const topic0 of [betPlacedSig, batchPlacedSig, batchSameAmountPlacedSig, batchBitmapPlacedSig]) {
     const logs = await getLogsChunked({
       address: CONTRACT_ADDRESS,
       topics: [topic0, epochTopic],
@@ -292,18 +323,28 @@ function getLiveStateSnapshotSignature(payload: LiveStatePayload | null) {
 
 export function saveLiveStateSnapshot(payload: LiveStatePayload) {
   const signature = getLiveStateSnapshotSignature(payload);
+  const savedAt = Date.now();
   if (lastLiveStateSnapshotSignature === signature) {
+    liveStateSnapshotCache = {
+      payload,
+      savedAt,
+      loadedAt: savedAt,
+    };
+    setMetaJson(LIVE_STATE_SNAPSHOT_META_KEY, {
+      payload,
+      savedAt,
+    });
     return;
   }
   lastLiveStateSnapshotSignature = signature;
   liveStateSnapshotCache = {
     payload,
-    savedAt: Date.now(),
-    loadedAt: Date.now(),
+    savedAt,
+    loadedAt: savedAt,
   };
   setMetaJson(LIVE_STATE_SNAPSHOT_META_KEY, {
     payload,
-    savedAt: Date.now(),
+    savedAt,
   });
 }
 
@@ -525,11 +566,12 @@ export async function buildLiveStatePayload(): Promise<LiveStatePayload> {
       : sameEpochSnapshot?.indexedTilePools ?? null;
   const liveTileTuple =
     tileData.status === "success" ? (tileData.result as LiveStateTileTuple) : null;
-  const tileUserCounts =
+  const shouldRefreshCurrentEpochTileUserCounts =
     Number.isInteger(currentEpochNumber) &&
     currentEpochNumber > 0 &&
-    !hasAnyPositiveCount(indexedTileUserCounts) &&
-    hasAnyPositivePool(liveTileTuple)
+    hasAnyPositivePool(liveTileTuple);
+  const tileUserCounts =
+    shouldRefreshCurrentEpochTileUserCounts
       ? await fetchEpochTileUserCountsFromChain(
           currentEpoch,
           (() => {
@@ -540,6 +582,9 @@ export async function buildLiveStatePayload(): Promise<LiveStatePayload> {
             return lastIndexedBlock + 1n;
           })(),
           await publicClient.getBlockNumber(),
+          hasAnyPositiveCount(indexedTileUserCounts)
+            ? buildIndexedEpochTileUserSets(currentEpochNumber)
+            : undefined,
         )
       : indexedTileUserCounts ?? sameEpochSnapshot?.tileUserCounts ?? null;
 

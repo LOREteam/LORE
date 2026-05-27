@@ -9,6 +9,7 @@ import type { UnclaimedWin } from "../lib/types";
 import { isUserRejection, delay } from "../lib/utils";
 
 type EpochTuple = readonly [bigint, bigint, bigint, boolean];
+type ReceiptState = "confirmed" | "pending";
 
 const DEEP_CHUNK = BigInt(200);
 const MAX_BATCH_CLAIM_EPOCHS = 128;
@@ -54,14 +55,67 @@ export function useDeepRewardScan(
   const scanAddressRef = useRef<string | null>(null);
 
   const waitReceipt = useCallback(
-    async (hash: `0x${string}`) => {
+    async (hash: `0x${string}`): Promise<ReceiptState> => {
       if (!publicClient) throw new Error("publicClient unavailable");
-      const receipt = await Promise.race([
-        publicClient.waitForTransactionReceipt({ hash }),
-        delay(TX_RECEIPT_TIMEOUT_MS).then(() => { throw new Error("Timeout"); }),
-      ]);
-      if (receipt.status !== "success") {
-        throw new Error(`Transaction reverted: ${hash}`);
+      const isReceiptTimeoutLike = (value: unknown) => {
+        const message = value instanceof Error ? value.message.toLowerCase() : String(value).toLowerCase();
+        const name = value instanceof Error ? value.name : "";
+        return (
+          name === "TimeoutError" ||
+          name === "TransactionReceiptNotFoundError" ||
+          name === "TransactionReceiptTimeoutError" ||
+          message.includes("timed out") ||
+          message.includes("timeout") ||
+          message.includes("receipt could not be found")
+        );
+      };
+      const isTxLookupMissing = (value: unknown) => {
+        const message = value instanceof Error ? value.message.toLowerCase() : String(value).toLowerCase();
+        const name = value instanceof Error ? value.name : "";
+        return (
+          name === "TransactionNotFoundError" ||
+          message.includes("transaction not found") ||
+          message.includes("transaction could not be found")
+        );
+      };
+
+      try {
+        const receipt = await Promise.race([
+          publicClient.waitForTransactionReceipt({ hash }),
+          delay(TX_RECEIPT_TIMEOUT_MS).then(() => {
+            const timeoutError = new Error("Transaction receipt timeout");
+            timeoutError.name = "TransactionReceiptTimeoutError";
+            throw timeoutError;
+          }),
+        ]);
+        if (receipt.status !== "success") {
+          throw new Error(`Transaction reverted: ${hash}`);
+        }
+        return "confirmed";
+      } catch (error) {
+        try {
+          const lateReceipt = await publicClient.getTransactionReceipt({ hash });
+          if (lateReceipt.status !== "success") {
+            throw new Error(`Transaction reverted: ${hash}`);
+          }
+          return "confirmed";
+        } catch (lateReceiptError) {
+          if (isReceiptTimeoutLike(error)) {
+            try {
+              await publicClient.getTransaction({ hash });
+              return "pending";
+            } catch (txLookupError) {
+              if (!isTxLookupMissing(txLookupError)) {
+                throw txLookupError;
+              }
+              throw error;
+            }
+          }
+          if (!isTxLookupMissing(lateReceiptError)) {
+            throw lateReceiptError;
+          }
+          throw error;
+        }
       }
     },
     [publicClient],
@@ -317,7 +371,11 @@ export function useDeepRewardScan(
     try {
       const { data, gas } = await prepareClaimTx(epochId);
       const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
-      await waitReceipt(hash);
+      const receiptState = await waitReceipt(hash);
+      if (receiptState === "pending") {
+        onNotify?.("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", "info");
+        return;
+      }
       setWins((prev) => prev ? prev.filter((w) => w.epoch !== epochId) : prev);
       onNotify?.("Reward claimed successfully.", "success");
     } catch (err) {
@@ -340,36 +398,46 @@ export function useDeepRewardScan(
         const { data, gas } = await prepareClaimTx(epochId);
         const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
         claimTxCount += 1;
-        await waitReceipt(hash);
+        const receiptState = await waitReceipt(hash);
+        if (receiptState === "pending") return receiptState;
         claimedEpochs.add(epochId);
+        return receiptState;
       };
 
       const submitBatchClaim = async (epochIds: string[]) => {
         const { data, gas } = await prepareBatchClaimTx(epochIds);
         const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
         claimTxCount += 1;
-        await waitReceipt(hash);
+        const receiptState = await waitReceipt(hash);
+        if (receiptState === "pending") return receiptState;
         const confirmedClaimed = await confirmClaimedEpochs(epochIds);
         confirmedClaimed.forEach((epochId) => claimedEpochs.add(epochId));
         if (confirmedClaimed.size === 0) {
           throw new Error("Batch claim confirmed without claimed epochs");
         }
+        return receiptState;
       };
 
       const queue: string[][] = chunkEpochIds(
         all.map((win) => win.epoch),
         MAX_BATCH_CLAIM_EPOCHS,
       );
+      let pendingClaimTx = false;
 
       while (queue.length > 0) {
         const batch = queue.shift();
         if (!batch || batch.length === 0) continue;
 
         try {
+          let receiptState: ReceiptState;
           if (batch.length === 1) {
-            await submitSingleClaim(batch[0]);
+            receiptState = await submitSingleClaim(batch[0]);
           } else {
-            await submitBatchClaim(batch);
+            receiptState = await submitBatchClaim(batch);
+          }
+          if (receiptState === "pending") {
+            pendingClaimTx = true;
+            break;
           }
         } catch (err) {
           if (isUserRejection(err)) break;
@@ -398,6 +466,9 @@ export function useDeepRewardScan(
       }
       if (skippedEpochs > 0 && claimedEpochs.size === 0) {
         onNotify?.("Some rewards are no longer claimable.", "info");
+      }
+      if (pendingClaimTx) {
+        onNotify?.("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", "info");
       }
     } finally {
       setClaiming(false);

@@ -199,10 +199,15 @@ async function main() {
       skipMessage: "faq tab did not open during smoke window",
     }));
 
-    await runStep("return to desktop hub", async () => {
-      await page.getByRole("button", { name: "Mining Hub" }).first().click();
-      await expectVisible(page.getByText("Manual Bet"), "return to hub", TIMEOUT_MS);
-    });
+    await runStep("return to desktop hub", () => openDesktopTab(page, {
+      ...smokeOptions,
+      buttonName: "Mining Hub",
+      checks: [
+        [page.getByText("Manual Bet"), "return to hub"],
+        [page.getByText("Auto-Miner"), "hub auto-miner panel after return"],
+      ],
+      skipMessage: "hub tab did not open during smoke window",
+    }));
 
     const mobilePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await mobilePage.addInitScript((tutorialKey) => {

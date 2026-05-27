@@ -84,6 +84,15 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     if (!getEnv("CHAT_AUTH_SECRET") && !getEnv("NEXTAUTH_SECRET")) {
       issues.push("CHAT_AUTH_SECRET or NEXTAUTH_SECRET is required for mainnet web runtime.");
     }
+    if (!getEnv("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS")) {
+      issues.push("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS is required for mainnet admin auth.");
+    }
+    if (!getEnv("BOOTSTRAP_RESOLVE_SECRET")) {
+      issues.push("BOOTSTRAP_RESOLVE_SECRET is required for mainnet bootstrap resolve.");
+    }
+    if (!getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") && !getEnv("KEEPER_PRIVATE_KEY")) {
+      issues.push("BOOTSTRAP_KEEPER_PRIVATE_KEY or KEEPER_PRIVATE_KEY is required for mainnet bootstrap resolve.");
+    }
   }
 
   if (scope === "bot") {

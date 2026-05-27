@@ -12,10 +12,10 @@ function readPreferredReducedMotion() {
     if (stored === "true") return true;
     if (stored === "false") return false;
   } catch {
-    // Ignore storage errors and fall back to system preference.
+    // Ignore storage errors.
   }
 
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+  return false;
 }
 
 export function useReducedMotion() {

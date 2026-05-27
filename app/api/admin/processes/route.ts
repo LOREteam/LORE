@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { NextRequest, NextResponse } from "next/server";
@@ -9,13 +9,13 @@ import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 const PROCESS_CONFIG = {
   indexer: {
     label: "Indexer",
-    script: "npm.cmd run indexer",
+    args: ["run", "indexer"],
     logFile: resolve(process.cwd(), "artifacts", "indexer-watch.log"),
     pidFile: resolve(process.cwd(), "artifacts", "indexer-watch.pid"),
   },
   bot: {
     label: "Bot / Keeper",
-    script: "npm.cmd run bot",
+    args: ["run", "bot"],
     logFile: resolve(process.cwd(), "artifacts", "bot.log"),
     pidFile: resolve(process.cwd(), "artifacts", "bot.pid"),
   },
@@ -23,8 +23,15 @@ const PROCESS_CONFIG = {
 
 type ProcessKey = keyof typeof PROCESS_CONFIG;
 
-function isLoopbackHost(hostname: string) {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+function isAdminProcessRouteEnabled() {
+  return process.env.NODE_ENV !== "production" && process.env.ADMIN_PROCESS_ROUTE_ENABLED === "1";
+}
+
+function disabledResponse() {
+  return applyNoStoreHeaders(
+    NextResponse.json({ error: "Admin process controls are disabled" }, { status: 404 }),
+    { varyCookie: true },
+  );
 }
 
 function getProcessStatus(target: ProcessKey) {
@@ -57,12 +64,17 @@ function getProcessStatus(target: ProcessKey) {
 
 function startLocalProcess(target: ProcessKey) {
   const config = PROCESS_CONFIG[target];
-  const command = `Set-Location '${process.cwd()}'; ${config.script} *> '${config.logFile}'`;
-  const child = spawn("powershell.exe", ["-NoProfile", "-Command", command], {
+  const command = process.platform === "win32" ? "npm.cmd" : "npm";
+  const logFd = openSync(config.logFile, "a");
+  const child = spawn(command, config.args, {
+    cwd: process.cwd(),
+    env: process.env,
     detached: true,
-    stdio: "ignore",
-    windowsHide: true,
+    shell: process.platform === "win32",
+    stdio: ["ignore", logFd, logFd],
+    ...(process.platform === "win32" ? { windowsHide: true } : {}),
   });
+  closeSync(logFd);
   if (child.pid) {
     writeFileSync(config.pidFile, String(child.pid), "utf8");
   }
@@ -87,6 +99,8 @@ function isProcessAlive(pid: number) {
 }
 
 export async function GET(request: NextRequest) {
+  if (!isAdminProcessRouteEnabled()) return disabledResponse();
+
   const rateLimited = await enforceSharedRateLimit(request, {
     bucket: "api-admin-processes-get",
     limit: 30,
@@ -97,14 +111,6 @@ export async function GET(request: NextRequest) {
   if (!isAuthorizedAdminRouteRequest(request)) {
     return applyNoStoreHeaders(
       NextResponse.json({ error: "Admin auth required" }, { status: 401 }),
-      { varyCookie: true },
-    );
-  }
-
-  const url = new URL(request.url);
-  if (!isLoopbackHost(url.hostname)) {
-    return applyNoStoreHeaders(
-      NextResponse.json({ error: "Localhost only" }, { status: 403 }),
       { varyCookie: true },
     );
   }
@@ -122,6 +128,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!isAdminProcessRouteEnabled()) return disabledResponse();
+
   const rateLimited = await enforceSharedRateLimit(request, {
     bucket: "api-admin-processes-post",
     limit: 10,
@@ -132,14 +140,6 @@ export async function POST(request: NextRequest) {
   if (!isAuthorizedAdminRouteRequest(request)) {
     return applyNoStoreHeaders(
       NextResponse.json({ error: "Admin auth required" }, { status: 401 }),
-      { varyCookie: true },
-    );
-  }
-
-  const url = new URL(request.url);
-  if (!isLoopbackHost(url.hostname)) {
-    return applyNoStoreHeaders(
-      NextResponse.json({ error: "Localhost only" }, { status: 403 }),
       { varyCookie: true },
     );
   }

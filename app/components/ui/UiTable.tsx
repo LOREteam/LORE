@@ -46,7 +46,7 @@ export function UiTableHead({
   return (
     <thead
       className={cn(
-        "sticky top-0 z-10 bg-[#0a0a16] text-xs font-bold uppercase tracking-widest text-gray-500",
+        "sticky top-0 z-10 bg-surface text-xs font-bold uppercase tracking-widest text-gray-500",
         className,
       )}
       {...props}
@@ -62,7 +62,7 @@ export function UiTableBody({
   ...props
 }: React.HTMLAttributes<HTMLTableSectionElement>) {
   return (
-    <tbody className={cn("divide-y divide-white/[0.04]", className)} {...props}>
+    <tbody className={cn("divide-y divide-white/4", className)} {...props}>
       {children}
     </tbody>
   );
@@ -83,8 +83,8 @@ export function UiTableRow({
   return (
     <tr
       className={cn(
-        "transition-colors hover:bg-white/[0.02]",
-        index % 2 === 0 ? "bg-[#0d0d1a]" : "bg-[#0a0a16]/50",
+        "transition-colors hover:bg-white/2",
+        index % 2 === 0 ? "bg-surface-raised" : "bg-surface/50",
         isNew && "animate-row-enter",
         className,
       )}

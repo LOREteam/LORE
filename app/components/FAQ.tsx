@@ -290,7 +290,7 @@ export const FAQ = React.memo(function FAQ() {
                 "flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold",
                 activeCategory === cat
                   ? "text-violet-300 border-violet-500/30 shadow-sm shadow-violet-500/10"
-                  : "text-gray-500 border-white/[0.06] hover:text-gray-300 hover:bg-white/[0.04]",
+                  : "text-gray-500 border-white/6 hover:text-gray-300 hover:bg-white/4",
               )}
             >
               <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
@@ -313,8 +313,8 @@ export const FAQ = React.memo(function FAQ() {
                 padding="sm"
                 className={cn(`transition-all duration-300 ${
                   isOpen
-                    ? "bg-violet-500/[0.06] border-violet-500/20 shadow-lg shadow-violet-500/[0.04]"
-                    : "bg-white/[0.02] border-white/[0.06] hover:bg-white/[0.04]"
+                    ? "bg-violet-500/6 border-violet-500/20 shadow-lg shadow-violet-500/4"
+                    : "bg-white/2 border-white/6 hover:bg-white/4"
                 }`)}
               >
                 <button
@@ -344,7 +344,7 @@ export const FAQ = React.memo(function FAQ() {
                   role="region"
                   aria-hidden={!isOpen}
                   className={`overflow-hidden transition-all duration-300 ${
-                    isOpen ? "max-h-[600px] opacity-100" : "max-h-0 opacity-0"
+                    isOpen ? "max-h-150 opacity-100" : "max-h-0 opacity-0"
                   }`}
                 >
                   <div className="px-4 pb-4 pl-10">

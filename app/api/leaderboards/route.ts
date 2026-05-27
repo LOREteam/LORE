@@ -91,6 +91,11 @@ function buildRankedEntries(
   }));
 }
 
+function compareBigIntDesc(left: bigint, right: bigint) {
+  if (left === right) return 0;
+  return left > right ? -1 : 1;
+}
+
 function attachLeaderboardNames(entries: LeaderboardEntry[], nameByAddress: Record<string, string>): LeaderboardEntry[] {
   return entries.map((entry) => {
     const name = nameByAddress[entry.address];
@@ -214,7 +219,11 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
   const biggestSingleWin = buildRankedEntries(
     [...userRows]
       .filter((row) => row.maxSingleWin > 0n)
-      .sort((a, b) => (b.maxSingleWin > a.maxSingleWin ? 1 : b.maxSingleWin < a.maxSingleWin ? -1 : 0))
+      .sort((a, b) => {
+        const delta = compareBigIntDesc(a.maxSingleWin, b.maxSingleWin);
+        if (delta !== 0) return delta;
+        return a.address.localeCompare(b.address);
+      })
       .slice(0, LEADERBOARD_TOP_N)
       .map((row) => ({
         address: row.address,
@@ -235,14 +244,22 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
           extra: `won ${formatUnits(row.totalWon, 18)} / wagered ${formatUnits(row.totalWagered, 18)}`,
         };
       })
-      .sort((a, b) => b.valueNum - a.valueNum)
+      .sort((a, b) => {
+        const delta = b.valueNum - a.valueNum;
+        if (delta !== 0) return delta;
+        return a.address.localeCompare(b.address);
+      })
       .slice(0, LEADERBOARD_TOP_N),
   );
 
   const mostWins = buildRankedEntries(
     [...userRows]
       .filter((row) => row.winCount > 0)
-      .sort((a, b) => b.winCount - a.winCount)
+      .sort((a, b) => {
+        const delta = b.winCount - a.winCount;
+        if (delta !== 0) return delta;
+        return a.address.localeCompare(b.address);
+      })
       .slice(0, LEADERBOARD_TOP_N)
       .map((row) => ({
         address: row.address,
@@ -254,7 +271,11 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
   const whales = buildRankedEntries(
     [...userRows]
       .filter((row) => row.totalWagered > 0n)
-      .sort((a, b) => (b.totalWagered > a.totalWagered ? 1 : b.totalWagered < a.totalWagered ? -1 : 0))
+      .sort((a, b) => {
+        const delta = compareBigIntDesc(a.totalWagered, b.totalWagered);
+        if (delta !== 0) return delta;
+        return a.address.localeCompare(b.address);
+      })
       .slice(0, LEADERBOARD_TOP_N)
       .map((row) => ({
         address: row.address,
@@ -267,7 +288,8 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
     underdogCandidates
       .sort((a, b) => {
         if (a.tilePoolWei !== b.tilePoolWei) return a.tilePoolWei < b.tilePoolWei ? -1 : 1;
-        return b.rewardWei > a.rewardWei ? 1 : -1;
+        if (a.rewardWei !== b.rewardWei) return compareBigIntDesc(a.rewardWei, b.rewardWei);
+        return a.address.localeCompare(b.address);
       })
       .slice(0, LEADERBOARD_TOP_N)
       .map((row) => ({
@@ -280,7 +302,11 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
   const oneTileWonder = buildRankedEntries(
     [...maxSingleTileWinByUser.entries()]
       .filter(([, rewardWei]) => rewardWei > 0n)
-      .sort((a, b) => (b[1] > a[1] ? 1 : b[1] < a[1] ? -1 : 0))
+      .sort((a, b) => {
+        const delta = compareBigIntDesc(a[1], b[1]);
+        if (delta !== 0) return delta;
+        return a[0].localeCompare(b[0]);
+      })
       .slice(0, LEADERBOARD_TOP_N)
       .map(([address, rewardWei]) => ({
         address,
@@ -295,7 +321,10 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
       wins,
       pct: resolvedCount > 0 ? (wins / resolvedCount) * 100 : 0,
     }))
-    .sort((a, b) => b.wins - a.wins);
+    .sort((a, b) => {
+      if (a.wins !== b.wins) return b.wins - a.wins;
+      return a.tileId - b.tileId;
+    });
 
   const leaderboardAddresses = [...new Set(
     [

@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getFormattedBalance, type WagmiBalanceLike } from "../lib/balanceFormatting";
+import type { ReceiptState } from "./useMining.stateTypes";
 
 type NotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 type PlayBetFn = () => void;
@@ -10,7 +12,7 @@ type LastBet = {
   amount: string;
 };
 
-type BalanceData = { formatted: string } | null | undefined;
+type BalanceData = WagmiBalanceLike;
 
 interface UseMiningGuardsOptions {
   connectedWalletAddress: string | null | undefined;
@@ -23,8 +25,8 @@ interface UseMiningGuardsOptions {
   liveStateReady: boolean;
   selectedTiles: number[];
   minEthForGas: number;
-  onManualMine: (amount: string) => Promise<boolean>;
-  onDirectMine: (tiles: number[], amount: string) => Promise<boolean>;
+  onManualMine: (amount: string) => Promise<ReceiptState | false>;
+  onDirectMine: (tiles: number[], amount: string) => Promise<ReceiptState | false>;
   onAutoMineToggle: (bet: string, blocks: number, rounds: number) => Promise<void>;
   notify: NotifyFn;
   onOpenWalletSettings: () => void;
@@ -71,8 +73,8 @@ export function useMiningGuards({
     }
   }, []);
 
-  const lowEthBalance = embeddedEthBalance ? Number(embeddedEthBalance.formatted) < minEthForGas : false;
-  const lowTokenBalance = embeddedTokenBalance ? Number(embeddedTokenBalance.formatted) < 1 : false;
+  const lowEthBalance = embeddedEthBalance ? Number(getFormattedBalance(embeddedEthBalance)) < minEthForGas : false;
+  const lowTokenBalance = embeddedTokenBalance ? Number(getFormattedBalance(embeddedTokenBalance)) < 1 : false;
 
   useEffect(() => {
     if (!lowEthBalance && !lowTokenBalance) {
@@ -95,8 +97,12 @@ export function useMiningGuards({
         return;
       }
       const tilesSnapshot = [...selectedTiles];
-      const success = await onManualMine(amount);
-      if (!success) return;
+      const result = await onManualMine(amount);
+      if (result === "pending") {
+        notify("Bet transaction submitted and is still pending. Waiting for on-chain confirmation.", "info");
+        return;
+      }
+      if (result !== "confirmed") return;
       onBetConfirmed();
       if (tilesSnapshot.length > 0) {
         const entry = { tiles: tilesSnapshot, amount };
@@ -125,8 +131,12 @@ export function useMiningGuards({
       );
       return;
     }
-    const success = await onDirectMine(lastBet.tiles, lastBet.amount);
-    if (!success) return;
+    const result = await onDirectMine(lastBet.tiles, lastBet.amount);
+    if (result === "pending") {
+      notify("Repeat bet transaction submitted and is still pending. Waiting for on-chain confirmation.", "info");
+      return;
+    }
+    if (result !== "confirmed") return;
     onBetConfirmed();
     try {
       localStorage.setItem(LAST_BET_KEY, JSON.stringify(lastBet));

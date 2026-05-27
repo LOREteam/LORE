@@ -1,9 +1,11 @@
+import { readdirSync, rmSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { parseUnits } from "viem";
 import {
   getConfiguredContractAddress,
   getConfiguredLineaNetwork,
 } from "../config/publicConfig";
-import { db } from "./db";
+import { db, dbPath, isDbShuttingDown } from "./db";
 
 const MAX_CHAT_MESSAGES = 100;
 const CURRENT_STORAGE_SCOPE = [
@@ -19,6 +21,17 @@ const SCOPED_BETS_TABLE = "scoped_bets";
 const SCOPED_JACKPOTS_TABLE = "scoped_jackpots";
 const SCOPED_REWARD_CLAIMS_TABLE = "scoped_reward_claims";
 const SCOPED_PROTOCOL_FEE_FLUSHES_TABLE = "scoped_protocol_fee_flushes";
+const ACTIVE_CONTRACT_SCOPE_META_KEY = "__storage_active_contract_scope";
+const LEGACY_CONTRACT_META_KEYS = [
+  "currentEpoch",
+  "lastIndexedBlock",
+  "repairCursorBlock",
+  "snapshot:live-state:v1",
+  "gamedata:epochLifecycle",
+  "gamedata:batchClaims",
+  "gamedata:resolverRewards",
+] as const;
+const CONTRACT_SCOPE_PURGE_ENV = "LORE_ALLOW_CONTRACT_SCOPE_PURGE";
 
 export interface EpochStorageRow {
   winningTile: number;
@@ -154,6 +167,21 @@ function scopeMetaKey(key: string) {
   return `${CURRENT_STORAGE_SCOPE}:${key}`;
 }
 
+function getGlobalMetaValue(key: string) {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key);
+  return typeof row?.value === "string" ? row.value : null;
+}
+
+function setGlobalMetaValue(key: string, value: string) {
+  runWrite(() => {
+    db.prepare(`
+      INSERT INTO meta(key, value)
+      VALUES(?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(key, value);
+  }, "global_meta");
+}
+
 function getMetaValue(key: string) {
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(scopeMetaKey(key));
   return typeof row?.value === "string" ? row.value : null;
@@ -168,6 +196,132 @@ function setMetaValue(key: string, value: string) {
     `).run(scopeMetaKey(key), value);
   }, "meta");
 }
+
+function purgeScopedContractData(exceptScope: string) {
+  const scopedTables = [
+    SCOPED_EPOCHS_TABLE,
+    SCOPED_BETS_TABLE,
+    SCOPED_JACKPOTS_TABLE,
+    SCOPED_REWARD_CLAIMS_TABLE,
+    SCOPED_PROTOCOL_FEE_FLUSHES_TABLE,
+  ];
+
+  runInTransaction(() => {
+    for (const table of scopedTables) {
+      db.prepare(`DELETE FROM ${table} WHERE scope <> ?`).run(exceptScope);
+    }
+
+    db.prepare(`
+      DELETE FROM meta
+      WHERE (
+        key GLOB 'mainnet:0x*:*'
+        OR key GLOB 'sepolia:0x*:*'
+      ) AND key NOT GLOB ?
+    `).run(`${exceptScope}:*`);
+
+    for (const key of LEGACY_CONTRACT_META_KEYS) {
+      db.prepare("DELETE FROM meta WHERE key = ?").run(key);
+    }
+
+    db.prepare("DELETE FROM epochs").run();
+    db.prepare("DELETE FROM bets").run();
+    db.prepare("DELETE FROM jackpots").run();
+    db.prepare("DELETE FROM reward_claims").run();
+    db.prepare("DELETE FROM protocol_fee_flushes").run();
+  }, "purge_scoped_contract_data");
+}
+
+function purgeLegacyScopedDbFiles(currentDbPath: string) {
+  const currentBase = basename(currentDbPath);
+  const dbDir = dirname(currentDbPath);
+  let removedCount = 0;
+
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(dbDir);
+  } catch {
+    return removedCount;
+  }
+
+  for (const entry of entries) {
+    if (entry === currentBase) continue;
+    if (!/^lore-v\d+\.sqlite(?:-(?:shm|wal))?$/.test(entry)) continue;
+    try {
+      rmSync(join(dbDir, entry), { force: true });
+      removedCount += 1;
+    } catch (error) {
+      console.warn("[storage] Failed to remove legacy DB artifact:", entry, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return removedCount;
+}
+
+function isContractScopePurgeAllowed() {
+  const normalized = process.env[CONTRACT_SCOPE_PURGE_ENV]?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function hasForeignScopedContractData(exceptScope: string) {
+  const scopedTables = [
+    SCOPED_EPOCHS_TABLE,
+    SCOPED_BETS_TABLE,
+    SCOPED_JACKPOTS_TABLE,
+    SCOPED_REWARD_CLAIMS_TABLE,
+    SCOPED_PROTOCOL_FEE_FLUSHES_TABLE,
+  ];
+
+  for (const table of scopedTables) {
+    const row = db.prepare(`SELECT 1 AS present FROM ${table} WHERE scope <> ? LIMIT 1`).get(exceptScope);
+    if (row?.present === 1) return true;
+  }
+
+  const metaRow = db.prepare(`
+    SELECT 1 AS present
+    FROM meta
+    WHERE (
+      key GLOB 'mainnet:0x*:*'
+      OR key GLOB 'sepolia:0x*:*'
+    ) AND key NOT GLOB ?
+    LIMIT 1
+  `).get(`${exceptScope}:*`);
+
+  return metaRow?.present === 1;
+}
+
+function reconcileContractStorageScope() {
+  if (isDbShuttingDown()) return;
+
+  const previousScope = getGlobalMetaValue(ACTIVE_CONTRACT_SCOPE_META_KEY);
+  const foundForeignData = hasForeignScopedContractData(CURRENT_STORAGE_SCOPE);
+  const scopeChanged = Boolean(previousScope && previousScope !== CURRENT_STORAGE_SCOPE);
+  const purgeAllowed = isContractScopePurgeAllowed();
+  if (previousScope === CURRENT_STORAGE_SCOPE && !foundForeignData && !purgeAllowed) return;
+
+  if (purgeAllowed && scopeChanged) {
+    purgeScopedContractData(CURRENT_STORAGE_SCOPE);
+    console.warn(`[storage] Contract scope changed: ${previousScope} -> ${CURRENT_STORAGE_SCOPE}. Purged old contract data.`);
+  } else if (purgeAllowed && foundForeignData) {
+    purgeScopedContractData(CURRENT_STORAGE_SCOPE);
+    console.warn(`[storage] Found stale contract-scoped data outside ${CURRENT_STORAGE_SCOPE}. Purged old contract data.`);
+  } else if (scopeChanged || foundForeignData) {
+    console.warn(
+      `[storage] Contract scope changed or stale scoped data exists, but automatic purge is disabled. ` +
+      `Set ${CONTRACT_SCOPE_PURGE_ENV}=1 only after backing up the DB if you intentionally want old contract data removed.`,
+    );
+  }
+
+  if (purgeAllowed) {
+    const removedLegacyDbFiles = purgeLegacyScopedDbFiles(dbPath);
+    if (removedLegacyDbFiles > 0) {
+      console.warn(`[storage] Removed ${removedLegacyDbFiles} legacy DB artifact(s) for old contract revisions.`);
+    }
+  }
+
+  setGlobalMetaValue(ACTIVE_CONTRACT_SCOPE_META_KEY, CURRENT_STORAGE_SCOPE);
+}
+
+reconcileContractStorageScope();
 
 export function getMetaJson<T>(key: string): T | null {
   const raw = getMetaValue(key);
@@ -720,7 +874,7 @@ export function getChatMessages(limit = MAX_CHAT_MESSAGES): ChatMessageRow[] {
     }));
 }
 
-export function insertChatMessage(message: Omit<ChatMessageRow, "id">) {
+export function insertChatMessage(message: Omit<ChatMessageRow, "id">): ChatMessageRow {
   const insert = db.prepare(`
     INSERT INTO chat_messages(sender, sender_name, sender_avatar, text, timestamp)
     VALUES(?, ?, ?, ?, ?)
@@ -735,16 +889,29 @@ export function insertChatMessage(message: Omit<ChatMessageRow, "id">) {
     )
   `);
 
+  const sender = normalizeWallet(message.sender);
+  let id = "";
+
   runInTransaction(() => {
-    insert.run(
-      normalizeWallet(message.sender),
+    const result = insert.run(
+      sender,
       message.senderName,
       message.senderAvatar,
       message.text,
       message.timestamp,
-    );
+    ) as { lastInsertRowid: number | bigint };
+    id = String(result.lastInsertRowid);
     trim.run(MAX_CHAT_MESSAGES);
   }, "chat_messages");
+
+  return {
+    id,
+    sender,
+    senderName: message.senderName,
+    senderAvatar: message.senderAvatar,
+    text: message.text,
+    timestamp: message.timestamp,
+  };
 }
 
 export function getChatProfile(wallet: string) {

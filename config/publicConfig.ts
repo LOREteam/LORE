@@ -1,4 +1,4 @@
-import { linea, lineaSepolia } from "viem/chains";
+import type { Chain } from "viem";
 
 // Non-secret project defaults.
 // Keep values here so deployment does not require duplicating them in server .env.
@@ -8,12 +8,12 @@ export type LineaNetwork = "mainnet" | "sepolia";
 export const DEFAULT_LINEA_NETWORK: LineaNetwork = "sepolia";
 
 export const DEFAULT_SEPOLIA_CONTRACT_ADDRESS =
-  "0x5dddd68683ac2662a496e6e89ef810b2eaab34b5" as const;
+  "0x98eef041b012668529fb66ac3133900fdffc7282" as const;
 
 export const DEFAULT_SEPOLIA_LINEA_TOKEN_ADDRESS =
   "0xad986c50d411055484d38bf779ba2450a42afd60" as const;
 
-export const DEFAULT_INDEXER_START_BLOCK = 28_832_251;
+export const DEFAULT_INDEXER_START_BLOCK = 28_869_863;
 
 export const DEFAULT_INDEXER_RECONCILE_INTERVAL_MS = 120_000;
 export const DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS = 8;
@@ -21,8 +21,52 @@ export const DEFAULT_API_EPOCHS_RECONCILE_MAX = 25;
 export const DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS = 800;
 export const DEFAULT_EIP7702_ENABLED = false;
 export const DEFAULT_EIP7702_MINING_ENABLED = false;
+export const DEFAULT_CLIENT_AUTO_RESOLVE_ENABLED = false;
+export const DEFAULT_AUTO_RESOLVE_SWEEP_ENABLED = false;
 
-const DEFAULT_LINEA_MAINNET_RPCS = [...linea.rpcUrls.default.http] as const;
+const LINEA_MAINNET_CHAIN = {
+  id: 59144,
+  name: "Linea Mainnet",
+  nativeCurrency: { name: "Linea Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: {
+    default: { http: ["https://rpc.linea.build"], webSocket: ["wss://rpc.linea.build"] },
+  },
+  blockExplorers: {
+    default: { name: "Etherscan", url: "https://lineascan.build", apiUrl: "https://api.lineascan.build/api" },
+  },
+  contracts: {
+    multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11", blockCreated: 42 },
+    ensRegistry: { address: "0x50130b669B28C339991d8676FA73CF122a121267", blockCreated: 6682888 },
+    ensUniversalResolver: { address: "0x4D41762915F83c76EcaF6776d9b08076aA32b492", blockCreated: 22222151 },
+  },
+  ensTlds: [".linea.eth"],
+  testnet: false,
+} as const satisfies Chain;
+
+const LINEA_SEPOLIA_CHAIN = {
+  id: 59141,
+  name: "Linea Sepolia Testnet",
+  nativeCurrency: { name: "Linea Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: {
+    default: { http: ["https://rpc.sepolia.linea.build"], webSocket: ["wss://rpc.sepolia.linea.build"] },
+  },
+  blockExplorers: {
+    default: {
+      name: "Etherscan",
+      url: "https://sepolia.lineascan.build",
+      apiUrl: "https://api-sepolia.lineascan.build/api",
+    },
+  },
+  contracts: {
+    multicall3: { address: "0xca11bde05977b3631167028862be2a173976ca11", blockCreated: 227427 },
+    ensRegistry: { address: "0x5B2636F0f2137B4aE722C01dd5122D7d3e9541f7", blockCreated: 2395094 },
+    ensUniversalResolver: { address: "0x4D41762915F83c76EcaF6776d9b08076aA32b492", blockCreated: 17168484 },
+  },
+  ensTlds: [".linea.eth"],
+  testnet: true,
+} as const satisfies Chain;
+
+const DEFAULT_LINEA_MAINNET_RPCS = [...LINEA_MAINNET_CHAIN.rpcUrls.default.http] as const;
 
 // publicnode supports eth_sendRawTransaction and must be FIRST (Privy uses first URL for broadcast).
 // drpc and rpc.sepolia.linea.build do NOT support eth_sendRawTransaction.
@@ -55,7 +99,7 @@ export function getConfiguredLineaNetwork(explicitValue?: string | null): LineaN
 }
 
 export function getLineaChain(network: LineaNetwork = getConfiguredLineaNetwork()) {
-  return network === "mainnet" ? linea : lineaSepolia;
+  return network === "mainnet" ? LINEA_MAINNET_CHAIN : LINEA_SEPOLIA_CHAIN;
 }
 
 export function getLineaChainName(network: LineaNetwork = getConfiguredLineaNetwork()) {
@@ -178,6 +222,22 @@ export function getConfiguredEip7702MiningEnabled(explicitFlag?: string | null) 
       process.env.EIP7702_MINING_ENABLED,
   );
   return envValue ?? DEFAULT_EIP7702_MINING_ENABLED;
+}
+
+export function getConfiguredClientAutoResolveEnabled(explicitFlag?: string | null) {
+  const envValue = parseBooleanEnv(
+    explicitFlag ??
+      process.env.NEXT_PUBLIC_ENABLE_CLIENT_AUTO_RESOLVE,
+  );
+  return envValue ?? DEFAULT_CLIENT_AUTO_RESOLVE_ENABLED;
+}
+
+export function getConfiguredAutoResolveSweepEnabled(explicitFlag?: string | null) {
+  const envValue = parseBooleanEnv(
+    explicitFlag ??
+      process.env.NEXT_PUBLIC_ENABLE_AUTO_RESOLVE_SWEEP,
+  );
+  return envValue ?? DEFAULT_AUTO_RESOLVE_SWEEP_ENABLED;
 }
 
 export function getConfiguredEip7702DelegateAddress(

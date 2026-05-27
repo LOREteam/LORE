@@ -24,17 +24,23 @@ type ClientIdentity = {
   weak: boolean;
 };
 
+function isTrustedProxyHeadersEnabled() {
+  return process.env.TRUST_PROXY_HEADERS === "1";
+}
+
 function getClientIdentity(request: Request): ClientIdentity {
-  const cfConnectingIp = request.headers.get("cf-connecting-ip");
-  if (cfConnectingIp) return { key: `cf:${cfConnectingIp}`, weak: false };
+  if (isTrustedProxyHeadersEnabled()) {
+    const cfConnectingIp = request.headers.get("cf-connecting-ip");
+    if (cfConnectingIp) return { key: `cf:${cfConnectingIp}`, weak: false };
 
-  const realIp = request.headers.get("x-real-ip");
-  if (realIp) return { key: `real:${realIp}`, weak: false };
+    const realIp = request.headers.get("x-real-ip");
+    if (realIp) return { key: `real:${realIp}`, weak: false };
 
-  const xForwardedFor = request.headers.get("x-forwarded-for");
-  if (xForwardedFor) {
-    const ip = xForwardedFor.split(",")[0]?.trim();
-    if (ip) return { key: `xff:${ip}`, weak: false };
+    const xForwardedFor = request.headers.get("x-forwarded-for");
+    if (xForwardedFor) {
+      const ip = xForwardedFor.split(",")[0]?.trim();
+      if (ip) return { key: `xff:${ip}`, weak: false };
+    }
   }
 
   const userAgent = request.headers.get("user-agent")?.slice(0, 120) ?? "unknown";
@@ -78,7 +84,7 @@ function enforceLocalFallback(
     resetAt,
   });
 
-  if (localFallbackMap.size > 5000) {
+  if (localFallbackMap.size > 2000) {
     for (const [storedKey, state] of localFallbackMap.entries()) {
       if (state.resetAt <= now) localFallbackMap.delete(storedKey);
     }

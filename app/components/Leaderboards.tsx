@@ -52,7 +52,7 @@ function Section({
       className={cn("transition-all duration-700", visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8")}
       style={{ transitionDelay: `${delay}s` }}
     >
-      <UiPanel tone="default" padding="md" className="bg-[#0a0a16]/70">
+      <UiPanel tone="default" padding="md" className="bg-surface/70">
         <div className="flex items-center gap-3 mb-3">
           <div className={cn("w-10 h-10 bg-violet-500/10 border border-violet-500/25 flex items-center justify-center shrink-0", uiTokens.radius.sm)}>
             <Icon className="w-5 h-5 text-violet-400" />
@@ -99,7 +99,7 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400" 
           return (
             <li
               key={`${e.address}-${e.rank}-${i}`}
-              className="grid grid-cols-[3rem_1fr_auto] gap-2 px-4 py-2.5 items-center hover:bg-violet-500/[0.04] transition-colors"
+              className="grid grid-cols-[3rem_1fr_auto] gap-2 px-4 py-2.5 items-center hover:bg-violet-500/4 transition-colors"
             >
               <span className="text-xs font-black text-gray-500 tabular-nums">
                 {e.rank === 1 ? "🥇" : e.rank === 2 ? "🥈" : e.rank === 3 ? "🥉" : e.rank}
@@ -108,7 +108,7 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400" 
                 {e.name ? (
                   <>
                     <span className="shrink-0 font-sans font-semibold leading-none text-violet-300">{e.name}</span>
-                    <UiBadge tone="default" size="xs" className="shrink-0 text-[9px] leading-none text-gray-400 border-white/15 bg-white/[0.03]">
+                    <UiBadge tone="default" size="xs" className="shrink-0 text-[9px] leading-none text-gray-400 border-white/15 bg-white/3">
                       site
                     </UiBadge>
                     <span className="min-w-0 truncate font-mono text-gray-400">{shortenAddress(e.address)}</span>
@@ -148,13 +148,13 @@ function LuckyTileGrid({ entries }: { entries: LuckyTileEntry[] }) {
         {entries.slice(0, 25).map((e) => (
           <div
             key={e.tileId}
-            className="rounded-lg border border-violet-500/20 bg-violet-500/[0.06] p-2 text-center transition-transform hover:scale-105"
+            className="rounded-lg border border-violet-500/20 bg-violet-500/6 p-2 text-center transition-transform hover:scale-105"
           >
             <div className="text-[10px] font-black text-violet-400">#{e.tileId}</div>
             <div className="text-xs font-bold text-white mt-0.5">{e.wins}</div>
             <div className="h-1 mt-1 rounded-full bg-violet-500/20 overflow-hidden">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-violet-500 to-emerald-500 transition-all duration-500"
+                className="h-full rounded-full bg-linear-to-r from-violet-500 to-emerald-500 transition-all duration-500"
                 style={{ width: `${(e.wins / maxWins) * 100}%` }}
               />
             </div>
@@ -244,7 +244,7 @@ export function Leaderboards({
             </UiBadge>
             <h1 className="mb-2 animate-slide-up text-4xl font-black sm:mb-2.5 sm:text-5xl" style={{ animationDelay: "0.05s" }}>
               <span className="text-white">Leader</span>
-              <span className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 bg-clip-text text-transparent">boards</span>
+              <span className="bg-linear-to-r from-amber-400 via-yellow-400 to-amber-500 bg-clip-text text-transparent">boards</span>
             </h1>
             <p className="mx-auto max-w-lg animate-slide-up text-sm leading-relaxed text-gray-400" style={{ animationDelay: "0.1s" }}>
               Who won the most, who got luckiest, and which tile loves to win. All data from the chain.
@@ -301,7 +301,7 @@ export function Leaderboards({
               <LeaderboardTable entries={data.biggestSingleWin} valueLabel="LINEA" valueClass="text-amber-400" />
             </Section>
 
-            <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
+            <div className="h-px bg-linear-to-r from-transparent via-violet-500/15 to-transparent my-8" />
 
             <Section
               id="luckiest"
@@ -316,7 +316,7 @@ export function Leaderboards({
               <LeaderboardTable entries={data.luckiest} valueLabel="ROI" valueClass="text-emerald-400" />
             </Section>
 
-            <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
+            <div className="h-px bg-linear-to-r from-transparent via-violet-500/15 to-transparent my-8" />
 
             <Section
               id="one-tile"
@@ -331,7 +331,7 @@ export function Leaderboards({
               <LeaderboardTable entries={data.oneTileWonder} valueLabel="LINEA" valueClass="text-sky-400" />
             </Section>
 
-            <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
+            <div className="h-px bg-linear-to-r from-transparent via-violet-500/15 to-transparent my-8" />
 
             <Section
               id="most-wins"
@@ -346,7 +346,7 @@ export function Leaderboards({
               <LeaderboardTable entries={data.mostWins} valueLabel="Wins" valueClass="text-violet-400" />
             </Section>
 
-            <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
+            <div className="h-px bg-linear-to-r from-transparent via-violet-500/15 to-transparent my-8" />
 
             <Section
               id="whales"
@@ -361,7 +361,7 @@ export function Leaderboards({
               <LeaderboardTable entries={data.whales} valueLabel="LINEA wagered" valueClass="text-violet-400" />
             </Section>
 
-            <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
+            <div className="h-px bg-linear-to-r from-transparent via-violet-500/15 to-transparent my-8" />
 
             <Section
               id="underdog"
@@ -376,7 +376,7 @@ export function Leaderboards({
               <LeaderboardTable entries={data.underdog} valueLabel="LINEA won" valueClass="text-amber-400" />
             </Section>
 
-            <div className="h-px bg-gradient-to-r from-transparent via-violet-500/15 to-transparent my-8" />
+            <div className="h-px bg-linear-to-r from-transparent via-violet-500/15 to-transparent my-8" />
 
             <Section
               id="lucky-tile"

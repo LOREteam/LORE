@@ -30,6 +30,33 @@ function safeJsonStringify(value: unknown, space?: number) {
   return JSON.stringify(value, jsonReplacer, space);
 }
 
+function formatUnknownForLog(value: unknown): string {
+  if (value instanceof Error) {
+    const parts = [value.message];
+    if (value.name && value.name !== "Error" && !parts.some((part) => part.includes(value.name))) {
+      parts.unshift(value.name);
+    }
+    const withStatus = value as Error & { status?: unknown; code?: unknown; details?: unknown; cause?: unknown };
+    if (withStatus.status !== undefined) parts.push(`Status: ${String(withStatus.status)}`);
+    if (withStatus.code !== undefined) parts.push(`Code: ${String(withStatus.code)}`);
+    if (typeof withStatus.details === "string" && withStatus.details) parts.push(`Details: ${withStatus.details}`);
+    if (withStatus.cause instanceof Error && withStatus.cause.message) parts.push(`Cause: ${withStatus.cause.message}`);
+    return parts.join(" | ");
+  }
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && value !== null) {
+    const candidate = value as { message?: unknown; name?: unknown; code?: unknown; status?: unknown; details?: unknown };
+    const parts: string[] = [];
+    if (typeof candidate.name === "string" && candidate.name) parts.push(candidate.name);
+    if (typeof candidate.message === "string" && candidate.message) parts.push(candidate.message);
+    if (candidate.status !== undefined) parts.push(`Status: ${String(candidate.status)}`);
+    if (candidate.code !== undefined) parts.push(`Code: ${String(candidate.code)}`);
+    if (typeof candidate.details === "string" && candidate.details) parts.push(`Details: ${candidate.details}`);
+    if (parts.length > 0) return parts.join(" | ");
+  }
+  return String(value);
+}
+
 function loadBuffer(): LogEntry[] {
   if (typeof window === "undefined") return [];
   try {
@@ -102,9 +129,13 @@ function sanitize(v: unknown): unknown {
   if (typeof v === "bigint") return v.toString();
   if (typeof v === "object" && v !== null) {
     try {
-      return JSON.parse(safeJsonStringify(v));
+      const serialized = safeJsonStringify(v);
+      if (serialized && serialized !== "{}") {
+        return JSON.parse(serialized);
+      }
+      return formatUnknownForLog(v);
     } catch {
-      return String(v);
+      return formatUnknownForLog(v);
     }
   }
   return v;

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { GRID_SIZE } from "../lib/constants";
-import { safeParseFloat } from "../lib/utils";
+import { safeParseFloat, validateBetAmount } from "../lib/utils";
 
 const AUTOMINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
 
@@ -88,11 +88,25 @@ export function useAutoMinerForm({
     return safeParseFloat(displayBetSize) * resolvedTargets * resolvedCycles;
   }, [displayBetSize, displayTargets, displayCycles]);
 
+  const betSizeError = useMemo(() => validateBetAmount(displayBetSize), [displayBetSize]);
   const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
   const insufficientBalance = balance !== null && totalCost > balance;
+  const disabledReason =
+    !liveStateReady
+      ? "Waiting for live epoch sync"
+      : betSizeError
+        ? betSizeError
+        : isRevealing
+          ? "Round is resolving"
+          : insufficientBalance && !isAutoMining
+            ? "Insufficient LINEA balance"
+            : lowEthForGas && !isAutoMining
+              ? "Top up ETH for gas"
+              : null;
   const isDisabled =
     (isPending && !isAutoMining) ||
     !liveStateReady ||
+    (Boolean(betSizeError) && !isAutoMining) ||
     isRevealing ||
     (insufficientBalance && !isAutoMining) ||
     (lowEthForGas && !isAutoMining);
@@ -106,8 +120,10 @@ export function useAutoMinerForm({
     displayTargets,
     displayCycles,
     totalCost,
+    betSizeError,
     balance,
     insufficientBalance,
+    disabledReason,
     isDisabled,
     handleTargetsChange,
     handleCyclesChange,

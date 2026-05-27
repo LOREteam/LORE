@@ -5,7 +5,7 @@ import Image from "next/image";
 
 export function MaintenanceOverlay() {
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-[#060612]">
+    <div className="fixed inset-0 z-9999 flex items-center justify-center overflow-hidden bg-background">
       {/* Animated gradient orbs */}
       <div className="absolute top-[15%] left-[20%] w-[40%] h-[40%] rounded-full bg-violet-500/20 blur-[120px] animate-[orb-drift-1_12s_ease-in-out_infinite]" />
       <div className="absolute bottom-[20%] right-[15%] w-[35%] h-[35%] rounded-full bg-sky-500/15 blur-[100px] animate-[orb-drift-2_14s_ease-in-out_infinite]" />

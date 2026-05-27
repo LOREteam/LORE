@@ -6,12 +6,12 @@ type UiPanelTone = "default" | "accent" | "subtle" | "warning" | "danger" | "suc
 type UiPanelPadding = "xs" | "sm" | "md";
 
 const toneClasses: Record<UiPanelTone, string> = {
-  default: "border-violet-500/15 bg-[#0a0a16]",
-  accent: "border-violet-500/25 bg-violet-500/[0.06]",
-  subtle: "border-violet-500/10 bg-[#0a0a16]/80",
-  warning: "border-amber-500/20 bg-amber-500/[0.03]",
-  danger: "border-red-500/20 bg-red-500/[0.03]",
-  success: "border-emerald-500/20 bg-emerald-500/[0.04]",
+  default: "border-violet-500/15 bg-surface",
+  accent: "border-violet-500/25 bg-violet-500/6",
+  subtle: "border-violet-500/10 bg-surface/80",
+  warning: "border-amber-500/20 bg-amber-500/3",
+  danger: "border-red-500/20 bg-red-500/3",
+  success: "border-emerald-500/20 bg-emerald-500/4",
 };
 
 const paddingClasses: Record<UiPanelPadding, string> = {

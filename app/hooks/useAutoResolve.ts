@@ -2,20 +2,24 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { encodeFunctionData, type PublicClient } from "viem";
+import {
+  getConfiguredAutoResolveSweepEnabled,
+  getConfiguredClientAutoResolveEnabled,
+} from "../../config/publicConfig";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
 import { getLineaFeeOverrides } from "../lib/lineaFees";
 import { log } from "../lib/logger";
 import { clearResolveGuard, readResolveGuard, writeResolveGuard } from "./autoResolveStorage";
 import { waitUnlessCancelled } from "./autoResolveShared";
 
-const ENABLE_CLIENT_BOOTSTRAP_RESOLVE = true;
+const ENABLE_CLIENT_BOOTSTRAP_RESOLVE = getConfiguredClientAutoResolveEnabled();
 // Client wallet (Privy embedded) MUST NOT pay gas to resolve. The contract
 // auto-resolves the previous epoch on the next placeBet call, and the server
 // keeper acts as a fallback for stuck epochs. Anything beyond that just burns
 // player gas needlessly.
 const ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK = false;
 const BOOTSTRAP_RESOLVE_RETRY_MS = 30_000;
-const ENABLE_AUTO_RESOLVE_SWEEP = false;
+const ENABLE_AUTO_RESOLVE_SWEEP = getConfiguredAutoResolveSweepEnabled();
 const AUTO_RESOLVE_RETRY_AFTER_MS = 60_000;
 const MIN_ETH_FOR_GAS = 0.0005;
 // Generous client-side timeout: the server-side sendTransaction path on a
@@ -94,12 +98,6 @@ export function useAutoResolve({
       void refetchGridEpochData();
       void refetchTileData();
       void refetchUserBets();
-
-      if (timeLeftRef.current === 0 && currentEpochResolvedRef.current === false) {
-        autoResolveAttemptedRef.current = null;
-        autoResolveAttemptTsRef.current = 0;
-        clearResolveGuard();
-      }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
@@ -189,6 +187,12 @@ export function useAutoResolve({
     }
   }, [embeddedWalletAddress, publicClient, refetchEpoch, refetchGridEpochData, refetchTileData, refetchUserBets, sendTransactionSilent]);
 
+  const markRetryScheduled = useCallback((epochKey: string) => {
+    autoResolveAttemptedRef.current = epochKey;
+    autoResolveAttemptTsRef.current = Date.now();
+    writeResolveGuard(epochKey);
+  }, []);
+
   useEffect(() => {
     if (!ENABLE_CLIENT_BOOTSTRAP_RESOLVE) return;
     if (timeLeft !== 0 || !actualCurrentEpoch) return;
@@ -254,6 +258,7 @@ export function useAutoResolve({
                 action?: string;
                 currentEpoch?: string;
                 hash?: string;
+                cancelledNonce?: number;
                 reason?: string;
                 error?: string;
                 retryAfter?: number;
@@ -273,6 +278,21 @@ export function useAutoResolve({
             return;
           }
 
+          if (payload?.ok && payload.action === "cancelled") {
+            log.info("AutoResolve", "server keeper cancelled stuck tx", {
+              epoch: payload.currentEpoch ?? epochKey,
+              hash: payload.hash,
+              nonce: payload.cancelledNonce,
+            });
+            markRetryScheduled(epochKey);
+            const retryMs = Math.max(
+              BOOTSTRAP_RESOLVE_RETRY_MS,
+              Number(payload.retryAfter ?? 0) * 1000,
+            );
+            if (!(await waitUnlessCancelled(() => cancelled, retryMs))) return;
+            continue;
+          }
+
           if (payload?.ok && payload.action === "noop") {
             const noopReason = payload.reason ?? "keeper_noop";
             log.info("AutoResolve", "server keeper noop", {
@@ -286,16 +306,12 @@ export function useAutoResolve({
                 autoResolveAttemptTsRef.current = Date.now();
                 return;
               }
-              autoResolveAttemptedRef.current = epochKey;
-              autoResolveAttemptTsRef.current = Date.now();
-              clearResolveGuard();
+              markRetryScheduled(epochKey);
               return;
             }
 
             if (noopReason === "bootstrap_resolve_throttled") {
-              autoResolveAttemptedRef.current = epochKey;
-              autoResolveAttemptTsRef.current = Date.now();
-              clearResolveGuard();
+              markRetryScheduled(epochKey);
               const retryMs = Math.max(
                 BOOTSTRAP_RESOLVE_RETRY_MS,
                 Number(payload.retryAfter ?? 0) * 1000,
@@ -305,9 +321,20 @@ export function useAutoResolve({
             }
 
             if (noopReason === "bootstrap_rpc_unavailable") {
-              autoResolveAttemptedRef.current = epochKey;
-              autoResolveAttemptTsRef.current = Date.now();
-              clearResolveGuard();
+              markRetryScheduled(epochKey);
+              const retryMs = Math.max(
+                BOOTSTRAP_RESOLVE_RETRY_MS,
+                Number(payload.retryAfter ?? 0) * 1000,
+              );
+              if (!(await waitUnlessCancelled(() => cancelled, retryMs))) return;
+              continue;
+            }
+
+            if (
+              noopReason === "keeper_insufficient_funds" ||
+              noopReason === "cancel_stuck_tx_failed"
+            ) {
+              markRetryScheduled(epochKey);
               const retryMs = Math.max(
                 BOOTSTRAP_RESOLVE_RETRY_MS,
                 Number(payload.retryAfter ?? 0) * 1000,
@@ -320,9 +347,7 @@ export function useAutoResolve({
               // Round is frozen because nobody bet — that's intentional.
               // Stop polling for this epoch; the contract's built-in
               // _autoResolveIfNeeded will handle it once a player shows up.
-              autoResolveAttemptedRef.current = epochKey;
-              autoResolveAttemptTsRef.current = Date.now();
-              clearResolveGuard();
+              markRetryScheduled(epochKey);
               return;
             }
 
@@ -347,16 +372,27 @@ export function useAutoResolve({
             if (noopReason === "epoch_not_expired" || payload.isExpired === false) {
               // Clock skew: client thinks epoch expired, contract disagrees.
               // Retry after a short delay instead of giving up permanently.
-              clearResolveGuard();
+              markRetryScheduled(epochKey);
               if (!(await waitUnlessCancelled(() => cancelled, BOOTSTRAP_RESOLVE_RETRY_MS))) return;
               continue;
             }
 
-            autoResolveAttemptedRef.current = epochKey;
-            autoResolveAttemptTsRef.current = Date.now();
-            clearResolveGuard();
-            if (!(await waitUnlessCancelled(() => cancelled, BOOTSTRAP_RESOLVE_RETRY_MS))) return;
+            markRetryScheduled(epochKey);
+            const retryMs = Math.max(
+              BOOTSTRAP_RESOLVE_RETRY_MS,
+              Number(payload.retryAfter ?? 0) * 1000,
+            );
+            if (!(await waitUnlessCancelled(() => cancelled, retryMs))) return;
             continue;
+          }
+
+          if (payload?.reason === "bootstrap_unauthorized" || res.status === 403) {
+            log.info("AutoResolve", "server keeper not available to browser", {
+              epoch: epochKey,
+              reason: payload?.reason ?? "bootstrap_unauthorized",
+            });
+            markRetryScheduled(epochKey);
+            return;
           }
 
           if (payload?.error === "Too many requests" || res.status === 429) {
@@ -364,7 +400,7 @@ export function useAutoResolve({
               epoch: epochKey,
               retryAfter: payload?.retryAfter,
             });
-            clearResolveGuard();
+            markRetryScheduled(epochKey);
             const retryMs = Math.max(
               BOOTSTRAP_RESOLVE_RETRY_MS,
               Number(payload?.retryAfter ?? 0) * 1000,
@@ -379,9 +415,7 @@ export function useAutoResolve({
             autoResolveAttemptTsRef.current = Date.now();
             return;
           }
-          autoResolveAttemptedRef.current = null;
-          autoResolveAttemptTsRef.current = 0;
-          clearResolveGuard();
+          markRetryScheduled(epochKey);
         } catch (err) {
           log.warn("AutoResolve", "server keeper bootstrap resolve request failed", err);
           if (ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK && await tryClientResolveEpoch(epochKey)) {
@@ -389,9 +423,7 @@ export function useAutoResolve({
             autoResolveAttemptTsRef.current = Date.now();
             return;
           }
-          autoResolveAttemptedRef.current = null;
-          autoResolveAttemptTsRef.current = 0;
-          clearResolveGuard();
+          markRetryScheduled(epochKey);
         }
 
         if (!(await waitUnlessCancelled(() => cancelled, BOOTSTRAP_RESOLVE_RETRY_MS))) return;
@@ -401,9 +433,7 @@ export function useAutoResolve({
     const timer = setTimeout(() => {
       void run().catch((err) => {
         log.warn("AutoResolve", "unhandled", err);
-        autoResolveAttemptedRef.current = null;
-        autoResolveAttemptTsRef.current = 0;
-        clearResolveGuard();
+        markRetryScheduled(epochKey);
       });
     }, delayMs);
 
@@ -411,7 +441,7 @@ export function useAutoResolve({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [actualCurrentEpoch, publicClient, timeLeft, tryClientResolveEpoch]);
+  }, [actualCurrentEpoch, markRetryScheduled, publicClient, timeLeft, tryClientResolveEpoch]);
 
   useEffect(() => {
     if (!ENABLE_AUTO_RESOLVE_SWEEP) return;

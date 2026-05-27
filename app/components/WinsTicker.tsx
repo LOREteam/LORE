@@ -33,7 +33,7 @@ export const WinsTicker = memo(function WinsTicker({
 
   return (
     <div
-      className={`relative h-[1.05rem] w-full self-center overflow-hidden border border-violet-500/10 bg-[#0d0d1a]/80 leading-none backdrop-blur-sm ${
+      className={`relative h-[1.05rem] w-full self-center overflow-hidden border border-violet-500/10 bg-surface-raised/80 leading-none backdrop-blur-sm ${
         reducedMotion ? "overflow-x-auto overflow-y-hidden" : "overflow-hidden"
       }`}
     >

@@ -149,30 +149,38 @@ export function useMiningAllowance({
           }), "approve.getTransactionCount"),
         );
         const silentSend = readSilentSend();
-        let approveHash: `0x${string}`;
-        if (silentSend) {
-          const data = encodeFunctionData({
-            abi: TOKEN_ABI,
-            functionName: "approve",
-            args: [CONTRACT_ADDRESS, maxUint256],
-          });
-          approveHash = await silentSend(
-            { to: LINEA_TOKEN_ADDRESS, data, gas: MIN_GAS_APPROVE, nonce: approvalNonce },
-            approveOverrides,
-          );
-        } else {
-          approveHash = await readWriteContractAsync()({
-            address: LINEA_TOKEN_ADDRESS,
-            abi: TOKEN_ABI,
-            functionName: "approve",
-            args: [CONTRACT_ADDRESS, maxUint256],
-            chainId: APP_CHAIN_ID,
-            nonce: approvalNonce,
-            ...writeApproveOverrides,
-          }) as `0x${string}`;
+        let approveHash: `0x${string}` | undefined;
+        let approveState: ReceiptState = "confirmed";
+        try {
+          if (silentSend) {
+            const data = encodeFunctionData({
+              abi: TOKEN_ABI,
+              functionName: "approve",
+              args: [CONTRACT_ADDRESS, maxUint256],
+            });
+            approveHash = await silentSend(
+              { to: LINEA_TOKEN_ADDRESS, data, gas: MIN_GAS_APPROVE, nonce: approvalNonce },
+              approveOverrides,
+            );
+          } else {
+            approveHash = await readWriteContractAsync()({
+              address: LINEA_TOKEN_ADDRESS,
+              abi: TOKEN_ABI,
+              functionName: "approve",
+              args: [CONTRACT_ADDRESS, maxUint256],
+              chainId: APP_CHAIN_ID,
+              nonce: approvalNonce,
+              ...writeApproveOverrides,
+            }) as `0x${string}`;
+          }
+          pendingApproveRef.current = { hash: approveHash, submittedAt: Date.now(), nonce: approvalNonce };
+          approveState = await waitReceipt(approveHash);
+        } catch (error) {
+          if (!pendingApproveRef.current) {
+            pendingApproveRef.current = { submittedAt: Date.now(), nonce: approvalNonce };
+          }
+          throw error;
         }
-        pendingApproveRef.current = { hash: approveHash, submittedAt: Date.now(), nonce: approvalNonce };
-        const approveState = await waitReceipt(approveHash);
         const allowanceUpdated = approveState === "pending"
           ? await pollAllowanceUntil(actor, requiredAmount, APPROVE_PENDING_TIMEOUT_MS)
           : await pollAllowanceUntil(actor, requiredAmount, APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS);

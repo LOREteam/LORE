@@ -27,6 +27,7 @@ interface UseGameLiveStateSnapshotOptions {
 }
 
 const LIVE_STATE_FALLBACK_POLL_MS = 5_000;
+const LIVE_STATE_FETCH_TIMEOUT_MS = 4_000;
 const LIVE_STATE_SNAPSHOT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_STATE_BOOT_TIMEOUT_MS = 2_500;
 const LIVE_READ_DEFER_MS = 1_200;
@@ -52,7 +53,9 @@ function loadLiveStateSnapshot(): LiveStateApiResponse | null {
 function getSnapshotSignature(snapshot: LiveStateApiResponse | null) {
   if (!snapshot) return "";
   try {
-    return JSON.stringify(snapshot);
+    const { fetchedAt, ...stableSnapshot } = snapshot;
+    void fetchedAt;
+    return JSON.stringify(stableSnapshot);
   } catch {
     return "";
   }
@@ -134,18 +137,26 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
     const controller = new AbortController();
     let consecutiveFailures = 0;
     let lastSignature = snapshotSignature;
+    let requestInFlight = false;
 
     const fetchLiveState = async () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      const requestController = new AbortController();
+      const abortRequest = () => requestController.abort();
+      const timeoutId = window.setTimeout(abortRequest, LIVE_STATE_FETCH_TIMEOUT_MS);
+      controller.signal.addEventListener("abort", abortRequest, { once: true });
+
       try {
-        const response = await fetch("/api/live-state", { cache: "no-store", signal: controller.signal });
-        if (controller.signal.aborted) return;
+        const response = await fetch("/api/live-state", { cache: "no-store", signal: requestController.signal });
+        if (controller.signal.aborted || requestController.signal.aborted) return;
         if (!response.ok) {
           consecutiveFailures++;
           return;
         }
         consecutiveFailures = 0;
         const payload = (await response.json()) as LiveStateApiResponse;
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || requestController.signal.aborted) return;
         const nextSignature = getSnapshotSignature(payload);
         if (nextSignature !== lastSignature) {
           lastSignature = nextSignature;
@@ -160,6 +171,11 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
             // Ignore storage quota/privacy mode failures.
           }
         } else {
+          try {
+            window.localStorage.setItem(getLiveStateSnapshotKey(), JSON.stringify(payload));
+          } catch {
+            // Ignore storage quota/privacy mode failures.
+          }
           setSnapshotState((current) =>
             current.bootstrapPending ? { ...current, bootstrapPending: false } : current,
           );
@@ -174,6 +190,10 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
           ...current,
           bootstrapPending: false,
         }));
+      } finally {
+        window.clearTimeout(timeoutId);
+        controller.signal.removeEventListener("abort", abortRequest);
+        requestInFlight = false;
       }
     };
 

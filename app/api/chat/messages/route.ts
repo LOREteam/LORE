@@ -34,6 +34,11 @@ type ChatMessagesPayload = {
   error?: string;
 };
 
+type ChatMessageWritePayload = {
+  ok: true;
+  message: ReturnType<typeof insertChatMessage>;
+};
+
 const chatMessagesRouteCache = createRouteCache<ChatMessagesPayload>(MAX_CHAT_CACHE_ENTRIES);
 
 function isAddress(value: unknown): value is `0x${string}` {
@@ -42,6 +47,13 @@ function isAddress(value: unknown): value is `0x${string}` {
 
 function invalidateCachedChatMessages(cacheKey: string) {
   chatMessagesRouteCache.invalidate(cacheKey);
+}
+
+function sortChatMessagesAsc<T extends { timestamp: number; id?: string }>(rows: T[]) {
+  return [...rows].sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+    return (a.id ?? "").localeCompare(b.id ?? "");
+  });
 }
 
 function jsonNoStore(payload: ChatMessagesPayload, status = 200) {
@@ -84,7 +96,7 @@ export async function POST(request: NextRequest) {
       typeof body.senderName === "string" ? body.senderName.trim().slice(0, MAX_NAME_LENGTH) : null;
     const senderAvatar = sanitizeChatAvatarValue(body.senderAvatar, MAX_AVATAR_LENGTH);
 
-    insertChatMessage({
+    const message = insertChatMessage({
       sender,
       senderName,
       senderAvatar,
@@ -95,7 +107,7 @@ export async function POST(request: NextRequest) {
     invalidateCachedChatMessages(cacheKey);
 
     finishRouteMetric(metric, 200);
-    return applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });
+    return applyNoStoreHeaders(NextResponse.json({ ok: true, message } satisfies ChatMessageWritePayload), { varyCookie: true });
   } catch (error) {
     logRouteError(ROUTE_METRIC_KEY, error, { method: "POST" });
     invalidateCachedChatMessages(cacheKey);
@@ -129,7 +141,7 @@ export async function GET(request: NextRequest) {
       ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await inflight)
       : await (() => {
           const version = chatMessagesRouteCache.getWriteVersion(cacheKey);
-          const requestPromise = Promise.resolve({ messages: getChatMessages() })
+          const requestPromise = Promise.resolve({ messages: sortChatMessagesAsc(getChatMessages()) })
             .then((result) => {
               return chatMessagesRouteCache.setIfLatest(cacheKey, result, CHAT_MESSAGES_CACHE_MS, version);
             })

@@ -74,7 +74,7 @@ export const WalletSettingsDeepScanPanel = React.memo(function WalletSettingsDee
       ) : deepScanWins && deepScanWins.length > 0 ? (
         <div className="space-y-2">
           <div className="text-[10px] text-gray-500 font-mono">{deepScanProgress}</div>
-          <div className="max-h-[160px] overflow-y-auto rounded-lg border border-amber-500/15 divide-y divide-white/[0.04]">
+          <div className="max-h-[160px] overflow-y-auto rounded-lg border border-amber-500/15 divide-y divide-white/4">
             {deepScanWins.map((win) => (
               <DeepScanWinRow
                 key={win.epoch}
@@ -120,7 +120,7 @@ const DeepScanWinRow = React.memo(function DeepScanWinRow({
   }, [epoch, onDeepClaimOne]);
 
   return (
-    <div className="flex items-center justify-between px-3 py-2 hover:bg-white/[0.02]">
+    <div className="flex items-center justify-between px-3 py-2 hover:bg-white/2">
       <div className="flex flex-col">
         <span className="text-[9px] text-amber-500/60 font-bold uppercase tracking-wider">Epoch #{epoch}</span>
         <span className="text-xs font-bold text-emerald-400">{parseFloat(formatUnits(BigInt(amountWei), 18)).toFixed(2)} LINEA</span>

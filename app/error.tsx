@@ -6,6 +6,7 @@ import {
   isChunkLoadLikeErrorMessage,
   reloadWithCacheBust,
   shouldAttemptChunkReloadOnce,
+  stripChunkReloadCacheParam,
 } from "./lib/chunkReloadRecovery";
 
 export default function ErrorPage({
@@ -16,6 +17,8 @@ export default function ErrorPage({
   reset: () => void;
 }) {
   useEffect(() => {
+    stripChunkReloadCacheParam(window.location, window.history);
+
     log.error("ErrorBoundary", "route render error", {
       name: error.name,
       message: error.message,
@@ -63,7 +66,7 @@ export default function ErrorPage({
           <button
             type="button"
             onClick={handleHardReload}
-            className="w-full rounded-md border border-white/10 bg-white/[0.03] px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-gray-300 hover:bg-white/[0.06] transition-colors"
+            className="w-full rounded-md border border-white/10 bg-white/3 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-gray-300 hover:bg-white/6 transition-colors"
           >
             Hard reload
           </button>

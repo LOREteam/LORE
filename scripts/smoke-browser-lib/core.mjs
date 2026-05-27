@@ -54,7 +54,12 @@ export async function safeGoto(page, baseUrl, timeoutMs) {
     try {
       await page.goto(baseUrl, { waitUntil: "load", timeout: navigationTimeoutMs });
     } catch {
-      await page.goto(baseUrl, { waitUntil: "commit", timeout: navigationTimeoutMs });
+      try {
+        await page.goto(baseUrl, { waitUntil: "commit", timeout: navigationTimeoutMs });
+      } catch (error) {
+        const currentUrl = page.url();
+        if (!currentUrl.startsWith(baseUrl)) throw error;
+      }
       try {
         await page.waitForLoadState("domcontentloaded", { timeout: Math.min(5_000, timeoutMs) });
       } catch {

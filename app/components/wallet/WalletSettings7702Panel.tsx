@@ -74,7 +74,7 @@ export function WalletSettings7702Panel({
             <div className="text-emerald-300 break-all">Tx hash: {eip7702Diagnostic.txHash}</div>
           )}
           {eip7702Diagnostic.detail && (
-            <div className={eip7702Diagnostic.status === "error" ? "text-red-300/90 break-words" : "text-gray-400 break-words"}>
+            <div className={eip7702Diagnostic.status === "error" ? "text-red-300/90 wrap-break-word" : "text-gray-400 wrap-break-word"}>
               {eip7702Diagnostic.detail}
             </div>
           )}

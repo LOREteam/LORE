@@ -52,7 +52,7 @@ export default function LineaOreClient({
 
   return (
     <div
-      className="min-h-dvh w-full flex flex-col overflow-x-hidden bg-[#060612] text-slate-200 lg:h-screen lg:flex-row lg:overflow-hidden"
+      className="min-h-dvh w-full flex flex-col overflow-x-hidden bg-background text-slate-200 lg:h-screen lg:flex-row lg:overflow-hidden"
       data-ui-hydrated={uiHydrated ? "true" : "false"}
     >
       <NoticeStack notices={notices} onDismiss={dismissNotice} />
@@ -66,7 +66,7 @@ export default function LineaOreClient({
         <button
           type="button"
           onClick={openMobileSidebar}
-          className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.08] bg-[#080814]/78 text-slate-300 backdrop-blur-xl transition-colors hover:bg-white/[0.06] hover:text-white lg:hidden"
+          className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl border border-white/8 bg-[#080814]/78 text-slate-300 backdrop-blur-xl transition-colors hover:bg-white/6 hover:text-white lg:hidden"
           aria-label="Open sidebar menu"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">

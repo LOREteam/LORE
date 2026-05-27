@@ -68,16 +68,16 @@ export const RebatePanel = React.memo(function RebatePanel({
           ) : showInitialSkeleton ? (
             <div className="space-y-3 py-2">
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3">
+                <div className="rounded-xl border border-white/6 bg-white/3 px-4 py-3">
                   <div className="mb-2 h-2.5 w-14 rounded-full bg-white/10" />
                   <div className="h-8 w-36 rounded-full bg-emerald-500/10" />
                 </div>
-                <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3">
+                <div className="rounded-xl border border-white/6 bg-white/3 px-4 py-3">
                   <div className="mb-2 h-2.5 w-20 rounded-full bg-white/10" />
                   <div className="h-8 w-14 rounded-full bg-sky-500/10" />
                 </div>
               </div>
-              <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3 text-center text-sm text-gray-500">
+              <div className="rounded-xl border border-white/6 bg-white/3 px-4 py-3 text-center text-sm text-gray-500">
                 Loading rebate ledger...
               </div>
             </div>
@@ -150,13 +150,13 @@ export const RebatePanel = React.memo(function RebatePanel({
               {Array.from({ length: 3 }).map((_, index) => (
                 <div
                   key={index}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2"
+                  className="flex items-center justify-between gap-3 rounded-lg border border-white/6 bg-black/20 px-3 py-2"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="mb-2 h-2.5 w-20 rounded-full bg-white/10" />
-                    <div className="h-4 w-28 rounded-full bg-white/[0.06]" />
+                    <div className="h-4 w-28 rounded-full bg-white/6" />
                   </div>
-                  <div className="h-3 w-16 rounded-full bg-white/[0.06]" />
+                  <div className="h-3 w-16 rounded-full bg-white/6" />
                 </div>
               ))}
             </div>
@@ -171,7 +171,7 @@ export const RebatePanel = React.memo(function RebatePanel({
           ) : (
             <div className="space-y-2">
               {rebateInfo.recentEpochs.map((row) => (
-                <div key={row.epoch} className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2">
+                <div key={row.epoch} className="flex items-center justify-between gap-3 rounded-lg border border-white/6 bg-black/20 px-3 py-2">
                   <div>
                     <div className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Epoch #{row.epoch}</div>
                     <div className="text-sm font-bold text-white">
@@ -195,9 +195,9 @@ export const RebatePanel = React.memo(function RebatePanel({
 
 function StatBox({ label, value, accent }: { label: string; value: string; accent: string }) {
   const colors: Record<string, string> = {
-    violet: "border-violet-500/25 text-violet-400 bg-violet-500/[0.04]",
-    emerald: "border-emerald-500/25 text-emerald-400 bg-emerald-500/[0.04]",
-    sky: "border-sky-500/25 text-sky-400 bg-sky-500/[0.04]",
+    violet: "border-violet-500/25 text-violet-400 bg-violet-500/4",
+    emerald: "border-emerald-500/25 text-emerald-400 bg-emerald-500/4",
+    sky: "border-sky-500/25 text-sky-400 bg-sky-500/4",
   };
 
   return (

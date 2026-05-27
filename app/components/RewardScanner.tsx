@@ -39,9 +39,9 @@ export const RewardScanner = React.memo(function RewardScanner({
   onClaimAll,
 }: RewardScannerProps) {
   return (
-    <div className="rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] flex flex-col gap-0 shrink-0 animate-slide-up max-h-[260px] overflow-y-auto [scrollbar-gutter:stable]" style={{ animationDelay: "0.15s" }}>
+    <div className="rounded-xl bg-surface-raised border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] flex flex-col gap-0 shrink-0 animate-slide-up max-h-65 overflow-y-auto [scrollbar-gutter:stable]" style={{ animationDelay: "0.15s" }}>
       {/* Header */}
-      <div className="sticky top-0 z-10 flex justify-between items-center border-b border-white/[0.06] bg-[#0d0d1a]/95 backdrop-blur-sm pl-3 pr-4 py-2">
+      <div className="sticky top-0 z-10 flex justify-between items-center border-b border-white/6 bg-surface-raised/95 backdrop-blur-sm pl-3 pr-4 py-2">
         <h3 className="text-[11px] font-bold text-white uppercase tracking-wider flex items-center gap-2">
           <div className="w-1.5 h-3.5 bg-amber-400 rounded-sm shadow-[0_0_8px_rgba(251,191,36,0.4)]" />
           Rewards
@@ -56,7 +56,7 @@ export const RewardScanner = React.memo(function RewardScanner({
             <button
               onClick={onClaimAll}
               disabled={isClaiming}
-              className="h-6 px-2 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-md shadow-amber-500/20 hover:shadow-amber-500/30 shimmer-btn active:scale-[0.97]"
+              className="h-6 px-2 bg-linear-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-md shadow-amber-500/20 hover:shadow-amber-500/30 shimmer-btn active:scale-[0.97]"
             >
               {isClaiming ? "WAIT..." : `CLAIM ALL (${unclaimedWins.length})`}
             </button>
@@ -113,7 +113,7 @@ export const RewardScanner = React.memo(function RewardScanner({
               <button
                 onClick={() => onClaim(win.epoch)}
                 disabled={isClaiming}
-                className="h-6 px-2 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-wide rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-sm group-hover:shadow-amber-500/25 active:scale-[0.95]"
+                className="h-6 px-2 bg-linear-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-wide rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-sm group-hover:shadow-amber-500/25 active:scale-[0.95]"
               >
                 {isClaiming ? "..." : "CLAIM"}
               </button>

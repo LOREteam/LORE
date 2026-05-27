@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { PublicClient } from "viem";
+import { getFormattedBalance, type WagmiBalanceLike } from "../lib/balanceFormatting";
 import type { Eip7702CapabilityState, Signed7702AuthorizationLike } from "../lib/eip7702";
 import type { SoundName } from "./useSound";
 import { useMining } from "./useMining";
@@ -56,14 +57,14 @@ interface UseLineaOreHubRuntimeOptions {
   timeLeft: number;
   visualEpoch: string | null;
   currentEpochResolved: boolean | undefined;
-  embeddedEthBalance?: { formatted: string; value: bigint } | null;
+  embeddedEthBalance?: WagmiBalanceLike;
   historyViewData: Array<{ isResolved: boolean; winningTile: string }>;
   publicClient?: PublicClient;
   syncHotTiles: (tiles: { tileId: number; wins: number }[]) => void;
   winningTileId: number | null;
   hasMyWinningBet: boolean;
   address?: `0x${string}`;
-  embeddedTokenBalance?: { formatted: string; value: bigint } | null;
+  embeddedTokenBalance?: WagmiBalanceLike;
   openWalletSettings: () => void;
   minEthForGas: number;
 }
@@ -169,7 +170,7 @@ export function useLineaOreHubRuntime({
   const runtimeEffects = usePageRuntimeEffects({
     actualCurrentEpoch,
     currentEpochResolved,
-    embeddedEthBalanceFormatted: embeddedEthBalance?.formatted ?? null,
+    embeddedEthBalanceFormatted: getFormattedBalance(embeddedEthBalance),
     embeddedWalletAddress,
     handleTileClick: mining.handleTileClick,
     historyViewData,

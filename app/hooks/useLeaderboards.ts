@@ -174,9 +174,9 @@ export function useLeaderboards(enabled: boolean) {
       if (mountedRef.current) {
         if (changed) {
           setData(nextData);
-          saveCache(nextData);
         }
       }
+      saveCache(nextData);
       cacheSavedAtRef.current = Date.now();
       initialCacheRef.current = { data: nextData, savedAt: cacheSavedAtRef.current };
     } catch (err) {

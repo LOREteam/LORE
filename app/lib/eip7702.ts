@@ -5,6 +5,7 @@ import {
   getConfiguredEip7702MiningEnabled,
 } from "../../config/publicConfig";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS } from "./constants";
+import { tileIdsToMask } from "./tileMask";
 
 export const EIP7702_ENABLED = getConfiguredEip7702Enabled();
 export const EIP7702_MINING_ENABLED = getConfiguredEip7702MiningEnabled();
@@ -24,7 +25,9 @@ export const EIP7702_DELEGATE_ADDRESS = normalizeOptionalAddress(
 
 export const EIP7702_GAME_DELEGATE_ABI = parseAbi([
   "function approveAndPlaceBatchSameAmount(address token,address game,uint256[] calldata tileIds,uint256 amount,address spender,uint256 approvalAmount) external",
+  "function approveAndPlaceBatchBitmap(address token,address game,uint32 tileMask,uint256 amount,address spender,uint256 approvalAmount) external",
   "function placeBatchSameAmount(address game,uint256[] calldata tileIds,uint256 amount) external",
+  "function placeBatchBitmap(address game,uint32 tileMask,uint256 amount) external",
   "function claimRewards(address game,uint256[] calldata epochs) external",
   "function claimEpochsRebate(address game,uint256[] calldata epochs) external",
   "function resolveEpoch(address game,uint256 epoch) external",
@@ -64,6 +67,23 @@ export function getEip7702CapabilityState(supportedByWallet: boolean): Eip7702Ca
 
 export function buildApproveAndBet7702Call(tileIds: number[], amountRaw: bigint, approvalAmount: bigint) {
   if (!EIP7702_DELEGATE_ADDRESS) throw new Error("EIP-7702 delegate address is not configured.");
+  const tileMask = tileIdsToMask(tileIds);
+  return encodeFunctionData({
+    abi: EIP7702_GAME_DELEGATE_ABI,
+    functionName: "approveAndPlaceBatchBitmap",
+    args: [
+      LINEA_TOKEN_ADDRESS,
+      CONTRACT_ADDRESS,
+      tileMask,
+      amountRaw,
+      CONTRACT_ADDRESS,
+      approvalAmount,
+    ],
+  });
+}
+
+export function buildApproveAndBetSameAmount7702Call(tileIds: number[], amountRaw: bigint, approvalAmount: bigint) {
+  if (!EIP7702_DELEGATE_ADDRESS) throw new Error("EIP-7702 delegate address is not configured.");
   return encodeFunctionData({
     abi: EIP7702_GAME_DELEGATE_ABI,
     functionName: "approveAndPlaceBatchSameAmount",
@@ -79,6 +99,16 @@ export function buildApproveAndBet7702Call(tileIds: number[], amountRaw: bigint,
 }
 
 export function buildBet7702Call(tileIds: number[], amountRaw: bigint) {
+  if (!EIP7702_DELEGATE_ADDRESS) throw new Error("EIP-7702 delegate address is not configured.");
+  const tileMask = tileIdsToMask(tileIds);
+  return encodeFunctionData({
+    abi: EIP7702_GAME_DELEGATE_ABI,
+    functionName: "placeBatchBitmap",
+    args: [CONTRACT_ADDRESS, tileMask, amountRaw],
+  });
+}
+
+export function buildBetSameAmount7702Call(tileIds: number[], amountRaw: bigint) {
   if (!EIP7702_DELEGATE_ADDRESS) throw new Error("EIP-7702 delegate address is not configured.");
   return encodeFunctionData({
     abi: EIP7702_GAME_DELEGATE_ABI,

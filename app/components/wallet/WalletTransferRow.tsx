@@ -8,7 +8,7 @@ import type { TransferRowProps } from "./types";
 const transferBadgeVariantClasses: Record<NonNullable<TransferRowProps["assetVariant"]>, string> = {
   primary: "border-violet-400/45 bg-violet-500/15 text-violet-200",
   secondary: "border-violet-500/25 bg-violet-500/10 text-violet-300",
-  ghost: "border-white/12 bg-white/[0.02] text-slate-300",
+  ghost: "border-white/12 bg-white/2 text-slate-300",
   success: "border-emerald-500/35 bg-emerald-500/10 text-emerald-300",
   danger: "border-red-500/35 bg-red-500/10 text-red-300",
   warning: "border-amber-500/35 bg-amber-500/10 text-amber-300",

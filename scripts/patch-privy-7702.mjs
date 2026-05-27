@@ -1,7 +1,12 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 
 const root = process.cwd();
+const EXPECTED_PACKAGE_VERSIONS = {
+  "@privy-io/ethereum": "0.0.11",
+  "@privy-io/js-sdk-core": "0.61.3",
+};
 
 function walkFiles(dir, matcher) {
   if (!fs.existsSync(dir)) return null;
@@ -49,9 +54,49 @@ function hasNative7702Support(filePath) {
   }
 }
 
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function readPackageVersion(packageJsonPath) {
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  return typeof packageJson.version === "string" ? packageJson.version : null;
+}
+
+function findOwningPackageJson(filePath, packageName) {
+  let current = path.dirname(filePath);
+  while (current.startsWith(root)) {
+    const candidate = path.join(current, "package.json");
+    if (fs.existsSync(candidate)) {
+      const packageJson = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      if (packageJson.name === packageName) return candidate;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  throw new Error(`[patch-privy-7702] could not find ${packageName} package.json for ${path.relative(root, filePath)}`);
+}
+
+function assertSupportedPackageVersion(target) {
+  const expectedVersion = EXPECTED_PACKAGE_VERSIONS[target.packageName];
+  const packageJson = target.packageJson && fs.existsSync(target.packageJson)
+    ? target.packageJson
+    : findOwningPackageJson(target.file, target.packageName);
+  const actualVersion = readPackageVersion(packageJson);
+  if (actualVersion !== expectedVersion) {
+    throw new Error(
+      `[patch-privy-7702] refusing to patch ${target.packageName}@${actualVersion ?? "unknown"} ` +
+      `(expected ${expectedVersion}). Update scripts/patch-privy-7702.mjs for this SDK version.`,
+    );
+  }
+}
+
 const targets = [
   {
     format: "cjs",
+    packageName: "@privy-io/ethereum",
+    packageJson: path.join(root, "node_modules", "@privy-io", "ethereum", "package.json"),
     file: findFile(
       path.join(root, "node_modules", "@privy-io", "ethereum", "dist", "cjs", "to-viem-transaction-serializable.js"),
       path.join("ethereum", "dist", "cjs", "to-viem-transaction-serializable.js"),
@@ -59,6 +104,8 @@ const targets = [
   },
   {
     format: "esm",
+    packageName: "@privy-io/ethereum",
+    packageJson: path.join(root, "node_modules", "@privy-io", "ethereum", "package.json"),
     file: findFile(
       path.join(root, "node_modules", "@privy-io", "ethereum", "dist", "esm", "to-viem-transaction-serializable.mjs"),
       path.join("ethereum", "dist", "esm", "to-viem-transaction-serializable.mjs"),
@@ -66,6 +113,8 @@ const targets = [
   },
   {
     format: "wallet-cjs",
+    packageName: "@privy-io/js-sdk-core",
+    packageJson: path.join(root, "node_modules", "@privy-io", "react-auth", "node_modules", "@privy-io", "js-sdk-core", "package.json"),
     file: findFile(
       path.join(root, "node_modules", "@privy-io", "react-auth", "node_modules", "@privy-io", "js-sdk-core", "dist", "cjs", "embedded", "stack", "wallet-api-eth-transaction.js"),
       path.join("js-sdk-core", "dist", "cjs", "embedded", "stack", "wallet-api-eth-transaction.js"),
@@ -73,6 +122,8 @@ const targets = [
   },
   {
     format: "wallet-esm",
+    packageName: "@privy-io/js-sdk-core",
+    packageJson: path.join(root, "node_modules", "@privy-io", "react-auth", "node_modules", "@privy-io", "js-sdk-core", "package.json"),
     file: findFile(
       path.join(root, "node_modules", "@privy-io", "react-auth", "node_modules", "@privy-io", "js-sdk-core", "dist", "esm", "embedded", "stack", "wallet-api-eth-transaction.mjs"),
       path.join("js-sdk-core", "dist", "esm", "embedded", "stack", "wallet-api-eth-transaction.mjs"),
@@ -294,15 +345,21 @@ let skippedNative = false;
 
 for (const target of targets) {
   if (!target.file) {
-    console.warn(`[patch-privy-7702] skipped missing target (format: ${target.format})`);
-    continue;
+    throw new Error(`[patch-privy-7702] missing target (format: ${target.format})`);
   }
   if (hasNative7702Support(target.file)) {
     console.log(`[patch-privy-7702] native 7702 support detected, skipping: ${path.relative(root, target.file)}`);
     skippedNative = true;
     continue;
   }
-  fs.writeFileSync(target.file, buildSource(target.format), "utf8");
+  assertSupportedPackageVersion(target);
+  const source = buildSource(target.format);
+  const expectedHash = sha256(source);
+  fs.writeFileSync(target.file, source, "utf8");
+  const actualHash = sha256(fs.readFileSync(target.file, "utf8"));
+  if (actualHash !== expectedHash) {
+    throw new Error(`[patch-privy-7702] patched source hash mismatch for ${path.relative(root, target.file)}`);
+  }
   console.log(`[patch-privy-7702] patched ${path.relative(root, target.file)}`);
   patchedAny = true;
 }

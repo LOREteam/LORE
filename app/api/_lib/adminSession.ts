@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { ADMIN_AUTH_SESSION_TTL_MS, ADMIN_AUTH_WALLET } from "../../lib/adminAuth";
+import { ADMIN_AUTH_SESSION_TTL_MS, ADMIN_AUTH_WALLET, ADMIN_AUTH_WALLET_CONFIGURED } from "../../lib/adminAuth";
 
 const COOKIE_NAME = "lore_admin_session";
 let missingSecretWarningShown = false;
@@ -56,6 +56,7 @@ function serialize(payload: SessionPayload) {
 }
 
 function parse(raw: string): SessionPayload | null {
+  if (!ADMIN_AUTH_WALLET_CONFIGURED) return null;
   const [encoded, signature] = raw.split(".", 2);
   if (!encoded || !signature) return null;
   const expected = sign(encoded);
@@ -81,7 +82,7 @@ export function issueAdminSession(response: NextResponse, address: string) {
   const token = serialize({ address: address.toLowerCase(), expiresAt });
   response.cookies.set(COOKIE_NAME, token, {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
     path: "/",
     expires: new Date(expiresAt),
@@ -92,7 +93,7 @@ export function issueAdminSession(response: NextResponse, address: string) {
 export function clearAdminSession(response: NextResponse) {
   response.cookies.set(COOKIE_NAME, "", {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
     path: "/",
     expires: new Date(0),

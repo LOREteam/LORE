@@ -204,7 +204,11 @@ export function useAnalyticsAchievements<TRarity extends string>({
     const winsCount = epochWon.size;
     const lossesCount = Math.max(0, epochSet.size - winsCount);
 
-    const sortedEpochs = [...epochSet].sort((left, right) => Number(BigInt(left) - BigInt(right)));
+    const sortedEpochs = [...epochSet].sort((left, right) => {
+      const leftEpoch = BigInt(left);
+      const rightEpoch = BigInt(right);
+      return leftEpoch === rightEpoch ? 0 : leftEpoch < rightEpoch ? -1 : 1;
+    });
     let maxWinStreak = 0;
     let currentStreak = 0;
     for (const epoch of sortedEpochs) {

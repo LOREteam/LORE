@@ -1,6 +1,5 @@
 "use client";
 
-import React from "react";
 import { getConfiguredLineaNetwork, getLineaExplorerAddressBaseUrl } from "../../../config/publicConfig";
 import { shortenAddress } from "../../lib/utils";
 import { UiButton } from "../ui/UiButton";
@@ -25,13 +24,13 @@ function HeaderWalletActions({
   onOpenWalletSettings,
 }: Pick<HeaderWalletCardProps, "onLogout" | "onOpenWalletSettings">) {
   return (
-    <div className="flex gap-1 p-1 border-b border-violet-500/15 bg-[#0d0d1a]">
+    <div className="flex gap-1 p-1 border-b border-violet-500/15 bg-surface-raised">
       <UiButton
         onClick={onOpenWalletSettings}
         variant="secondary"
         size="sm"
         uppercase
-        className="flex-[2] min-w-0 px-2 py-1 rounded-md text-[10px] tracking-[0.08em]"
+        className="flex-2 min-w-0 px-2 py-1 rounded-md text-[10px] tracking-[0.08em]"
       >
         Settings
       </UiButton>
@@ -69,7 +68,7 @@ export function HeaderWalletCard({
     : null;
 
   return (
-    <div id="header-wallet-card" className="min-[900px]:col-span-3 min-[900px]:h-[90px] min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-[#0d0d1a] shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden animate-slide-up" style={{ animationDelay: "0.15s" }}>
+    <div id="header-wallet-card" className="min-[900px]:col-span-3 min-[900px]:h-22.5 min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-surface-raised shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden animate-slide-up" style={{ animationDelay: "0.15s" }}>
       {!authenticated ? (
         <UiButton
           onClick={onLogin}
@@ -77,14 +76,14 @@ export function HeaderWalletCard({
           size="md"
           fullWidth
           uppercase
-          className="h-full min-h-[64px] px-4 py-2 text-[10px] tracking-[0.08em] text-white bg-gradient-to-r from-violet-600 to-indigo-600 border-violet-500/35 hover:from-violet-500 hover:to-indigo-500 shadow-lg shadow-violet-500/20 shimmer-btn"
+          className="h-full min-h-16 px-4 py-2 text-[10px] tracking-[0.08em] text-white bg-linear-to-r from-violet-600 to-indigo-600 border-violet-500/35 hover:from-violet-500 hover:to-indigo-500 shadow-lg shadow-violet-500/20 shimmer-btn"
         >
           Login / Connect
         </UiButton>
       ) : embeddedWalletAddress ? (
         <>
           <HeaderWalletActions onLogout={onLogout} onOpenWalletSettings={onOpenWalletSettings} />
-          <div className="flex-1 min-h-0 px-3 py-1 bg-violet-500/[0.06] flex flex-col gap-0.5">
+          <div className="flex-1 min-h-0 px-3 py-1 bg-violet-500/6 flex flex-col gap-0.5">
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
               <span className="text-[10px] font-bold uppercase tracking-[0.08em] flex items-center gap-1 text-emerald-400">
@@ -139,7 +138,7 @@ export function HeaderWalletCard({
       ) : embeddedWalletSyncing ? (
         <>
           <HeaderWalletActions onLogout={onLogout} onOpenWalletSettings={onOpenWalletSettings} />
-          <div className="flex-1 min-h-0 px-3 py-1 bg-violet-500/[0.06] flex flex-col gap-1">
+          <div className="flex-1 min-h-0 px-3 py-1 bg-violet-500/6 flex flex-col gap-1">
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
               <span className="text-[10px] font-bold uppercase tracking-[0.08em] flex items-center gap-1 text-violet-300/90">
@@ -155,7 +154,7 @@ export function HeaderWalletCard({
       ) : (
         <>
           <HeaderWalletActions onLogout={onLogout} onOpenWalletSettings={onOpenWalletSettings} />
-          <div className="flex-1 min-h-0 px-3 py-1 bg-violet-500/[0.06] flex flex-col gap-1">
+          <div className="flex-1 min-h-0 px-3 py-1 bg-violet-500/6 flex flex-col gap-1">
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
               <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-amber-400/90">Not created</span>

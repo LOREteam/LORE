@@ -7,6 +7,7 @@ import { EIP7702_MINING_ENABLED, type Eip7702CapabilityState } from "../lib/eip7
 import { canAttemptEip7702 } from "../lib/eip7702Runtime";
 import type { GasOverrides, SilentSendFn, SilentSend7702Fn, Sign7702DelegationFn } from "./useMining.types";
 import type { ReceiptState } from "./useMining.stateTypes";
+import { isDeterministicBetExecutionError } from "./useMining.shared";
 import { useMiningStandardBetPath } from "./useMiningStandardBetPath";
 
 interface UseMiningBetExecutionOptions {
@@ -15,7 +16,7 @@ interface UseMiningBetExecutionOptions {
   ensureAllowance: (requiredRaw: bigint) => Promise<void>;
   ensureContractPreflight: () => Promise<void>;
   estimateGas: (
-    functionName: "placeBet" | "placeBatchBets" | "placeBatchBetsSameAmount",
+    functionName: "placeBet" | "placeBatchBets" | "placeBatchBetsSameAmount" | "placeBatchBetsBitmap",
     args: readonly unknown[],
     extraBuffer: bigint,
   ) => Promise<bigint>;
@@ -79,6 +80,9 @@ export function useMiningBetExecution({
           try {
             return await placeBets7702(tiles, singleAmountRaw, gasOverrides, txNonce);
           } catch (error) {
+            if (isDeterministicBetExecutionError(error)) {
+              throw error;
+            }
             log.warn("Mine", "7702 delegated send failed, falling back to silent", error);
           }
         }
@@ -90,6 +94,9 @@ export function useMiningBetExecution({
         try {
           return await placeBetsSilent(tiles, singleAmountRaw, gasOverrides, txNonce);
         } catch (error) {
+          if (isDeterministicBetExecutionError(error)) {
+            throw error;
+          }
           log.warn("Mine", "silent send failed, fallback to wallet write", error);
         }
       }

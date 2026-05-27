@@ -104,7 +104,7 @@ function sortJackpotsDesc(rows: JackpotRow[]) {
     const bBlock = BigInt(b.blockNumber || "0");
     if (aBlock === bBlock) {
       if (a.epoch === b.epoch) {
-        if (a.kind === b.kind) return 0;
+        if (a.kind === b.kind) return (b.txHash ?? "").localeCompare(a.txHash ?? "");
         return a.kind === "weekly" ? -1 : 1;
       }
       return Number(b.epoch) - Number(a.epoch);

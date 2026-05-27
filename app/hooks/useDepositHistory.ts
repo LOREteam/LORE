@@ -198,7 +198,14 @@ function mapDepositEntries(
       isWeeklyJackpot: Boolean(epochData?.isWeeklyJackpot),
       reward,
     };
-  }).sort((a, b) => Number(b.epoch) - Number(a.epoch));
+  }).sort((a, b) => {
+    if (a.blockNumberNum === b.blockNumberNum) {
+      const epochDelta = Number(b.epoch) - Number(a.epoch);
+      if (epochDelta !== 0) return epochDelta;
+      return (b.txHash ?? "").localeCompare(a.txHash ?? "");
+    }
+    return b.blockNumberNum - a.blockNumberNum;
+  });
 }
 
 function arraysEqualNumbers(left: number[], right: number[]) {
@@ -290,7 +297,9 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       if (!depositsRes.ok || depositsJson.error) {
         if (mountedRef.current) {
           setError(depositsJson.error || `HTTP ${depositsRes.status}`);
-          setData([]);
+          if (dataRef.current === null) {
+            setData([]);
+          }
         }
         return;
       }
@@ -318,9 +327,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
           setData(entries);
         }
       }
-      if (entriesChanged) {
-        saveCachedDeposits(normalizedUser, entries);
-      }
+      saveCachedDeposits(normalizedUser, entries);
 
       const deferredEpochs = uniqueEpochs.slice(SYNC_EPOCH_PREFETCH_LIMIT);
       const deferredMissingEpochs = deferredEpochs.filter((epoch) => !epochsMap[String(epoch)]);
@@ -341,16 +348,16 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
               setData(fullEntries);
             }
           }
-          if (fullEntriesChanged) {
-            saveCachedDeposits(normalizedUser, fullEntries);
-          }
+          saveCachedDeposits(normalizedUser, fullEntries);
         })();
       }
     } catch (err) {
       log.warn("DepositHistory", "API fetch failed", { message: err instanceof Error ? err.message : String(err) });
       if (mountedRef.current && requestId === requestIdRef.current) {
         setError((err as Error).message || "Network error");
-        setData([]);
+        if (dataRef.current === null) {
+          setData([]);
+        }
       }
     } finally {
       if (mountedRef.current && requestId === requestIdRef.current) {

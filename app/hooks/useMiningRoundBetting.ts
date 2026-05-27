@@ -5,6 +5,7 @@ import { delay } from "../lib/utils";
 import type { PublicClient } from "viem";
 import {
   isAmbiguousPendingTxError,
+  isDeterministicBetExecutionError,
   isEpochEndedError,
   isInsufficientFundsError,
   isNetworkError,
@@ -184,6 +185,9 @@ export async function executeAutoMineBetLoop({
         if (isAmbiguousPendingTxError(error)) {
           pendingBetRef.current = { submittedAt: Date.now(), nonce: submittedNonce() };
         }
+        if (isDeterministicBetExecutionError(error)) {
+          throw error;
+        }
         log.warn("AutoMine", "7702 delegated send failed, falling back to silent/wallet-write", error);
         // fall through to standard paths
       }
@@ -199,6 +203,9 @@ export async function executeAutoMineBetLoop({
       } catch (error) {
         if (isAmbiguousPendingTxError(error)) {
           pendingBetRef.current = { submittedAt: Date.now(), nonce: submittedNonce() };
+        }
+        if (isDeterministicBetExecutionError(error)) {
+          throw error;
         }
         log.warn("AutoMine", "silent send failed, falling back to wallet write", error);
         const state = await placeBets(tilesToBet, singleAmountRaw, overrides, txNonce);
@@ -287,6 +294,9 @@ export async function executeAutoMineBetLoop({
         onProgress(`${currentRoundIndex + 1} / ${rounds} - RPC offline, retry in ${(wait / 1000).toFixed(0)}s...`);
         await delay(wait);
         continue;
+      }
+      if (isDeterministicBetExecutionError(error)) {
+        throw error;
       }
       const sessionExpired =
         error instanceof Error &&

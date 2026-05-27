@@ -187,7 +187,7 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
       aria-modal="true"
       aria-labelledby={titleId}
       tabIndex={-1}
-      className={`absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden bg-[#0d0d1a]/98 backdrop-blur-lg ${uiTokens.radius.lg}`}
+      className={`absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden bg-surface-raised/98 backdrop-blur-lg ${uiTokens.radius.lg}`}
     >
       <div className="flex items-center justify-between border-b border-violet-500/15 px-4 py-3">
         <div className="flex items-center gap-2">
@@ -198,7 +198,7 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-300"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white/6 hover:text-slate-300"
         >
           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none">
             <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
@@ -229,7 +229,7 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
                 ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
                 : "Anon"
             }
-            className="border-violet-500/20 bg-white/[0.06] text-slate-200 placeholder:text-slate-600"
+            className="border-violet-500/20 bg-white/6 text-slate-200 placeholder:text-slate-600"
           />
           <p className={`${uiTokens.helperText} mt-1`}>{name.length}/20</p>
         </div>
@@ -238,12 +238,12 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
           <label className="mb-2 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
             Custom Avatar
           </label>
-          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3">
+          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/3 px-3 py-3">
             <div
               className={`shrink-0 rounded-2xl border p-1.5 transition-all ${
                 customAvatar
                   ? "border-violet-400/70 bg-violet-500/14 shadow-[0_0_20px_rgba(124,58,237,0.2)]"
-                  : "border-white/10 bg-white/[0.02]"
+                  : "border-white/10 bg-white/2"
               }`}
             >
               <ChatAvatar
@@ -313,7 +313,7 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
               className={`flex h-[4.2rem] items-center justify-center border transition-all duration-150 ${uiTokens.radius.md} ${uiTokens.focusRing} ${
                 !avatar && !customAvatar
                   ? "border-violet-400/80 bg-violet-500/15 shadow-[0_0_20px_rgba(124,58,237,0.25)]"
-                  : "border-white/10 bg-white/[0.03] hover:border-violet-500/40 hover:bg-violet-500/5"
+                  : "border-white/10 bg-white/3 hover:border-violet-500/40 hover:bg-violet-500/5"
               }`}
             >
               <ChatAvatar avatarId={null} walletAddress={walletAddress ?? undefined} size={44} />
@@ -328,7 +328,7 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
                 className={`flex h-[4.2rem] items-center justify-center border transition-all duration-150 ${uiTokens.radius.md} ${uiTokens.focusRing} ${
                   avatar === id && !customAvatar
                     ? "border-violet-400/80 bg-violet-500/15 shadow-[0_0_20px_rgba(124,58,237,0.25)]"
-                    : "border-white/10 bg-white/[0.03] hover:border-violet-500/40 hover:bg-violet-500/5"
+                    : "border-white/10 bg-white/3 hover:border-violet-500/40 hover:bg-violet-500/5"
                 }`}
               >
                 <ChatAvatar avatarId={id as AvatarId} size={44} />

@@ -1,7 +1,7 @@
 import { parseAbi } from "viem";
 
 /**
- * Shared V8 contract ABI fragments used by both the keeper bot and
+ * Shared V9 contract ABI fragments used by both the keeper bot and
  * the bootstrap-resolve API route.
  */
 export const RESOLVE_ABI = parseAbi([

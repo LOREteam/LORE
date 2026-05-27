@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { getAddress } from "viem";
 import { useAccount, useBalance } from "wagmi";
+import type { WagmiBalanceLike } from "../lib/balanceFormatting";
 import { APP_CHAIN_ID, LINEA_TOKEN_ADDRESS } from "../lib/constants";
 import { useAutoMineSessionActive } from "./useAutoMineSessionActive";
 import { usePageVisibility } from "./usePageVisibility";
@@ -24,11 +25,12 @@ export function useGameWalletContext({ preferredAddress }: UseGameWalletContextO
     }
   }, [preferredAddress, address]);
 
-  const { data: tokenBalance } = useBalance({
+  const { data: tokenBalanceRaw } = useBalance({
     address: walletAddress,
     token: LINEA_TOKEN_ADDRESS,
     chainId,
-  });
+  } as unknown as Parameters<typeof useBalance>[0]);
+  const tokenBalance = tokenBalanceRaw as WagmiBalanceLike;
   const isPageVisible = usePageVisibility();
   const autoMineSessionActive = useAutoMineSessionActive();
 

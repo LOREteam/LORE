@@ -12,11 +12,6 @@ interface TileViewRow {
   hasMyBet: boolean;
 }
 
-interface LastBet {
-  tiles: number[];
-  amount: string;
-}
-
 interface RunningParams {
   betStr: string;
   blocks: number;
@@ -37,7 +32,6 @@ interface HubContentProps {
   gridSelectedTiles: number[];
   handleAutoMineWithGuard: (betStr: string, blocks: number, rounds: number) => Promise<void>;
   handleManualMineWithGuard: (betAmountStr: string) => Promise<void>;
-  handleRepeatLastBet: () => Promise<void>;
   isAnalyzing: boolean;
   isAutoMining: boolean;
   isClaiming: boolean;
@@ -50,10 +44,10 @@ interface HubContentProps {
   isDailyJackpot: boolean;
   isWeeklyJackpot: boolean;
   jackpotAmount?: number;
-  lastBet: LastBet | null;
   lowEthBalance: boolean;
   onClaim: (epochId: string) => void;
   onClaimAll: () => void;
+  onQuickPickTiles: (tileIds: number[]) => void;
   onScan: () => void;
   onTileClick: (tileId: number) => void;
   reducedMotion: boolean;
@@ -76,7 +70,6 @@ export const HubContent = React.memo(function HubContent({
   gridSelectedTiles,
   handleAutoMineWithGuard,
   handleManualMineWithGuard,
-  handleRepeatLastBet,
   isAnalyzing,
   isAutoMining,
   isClaiming,
@@ -89,10 +82,10 @@ export const HubContent = React.memo(function HubContent({
   isDailyJackpot,
   isWeeklyJackpot,
   jackpotAmount,
-  lastBet,
   lowEthBalance,
   onClaim,
   onClaimAll,
+  onQuickPickTiles,
   onScan,
   onTileClick,
   reducedMotion,
@@ -144,8 +137,7 @@ export const HubContent = React.memo(function HubContent({
         isAnalyzing={isAnalyzing}
         isAutoMining={isAutoMining}
         handleManualMineWithGuard={handleManualMineWithGuard}
-        lastBet={lastBet}
-        handleRepeatLastBet={handleRepeatLastBet}
+        onQuickPickTiles={onQuickPickTiles}
         autoMinePhase={autoMinePhase}
         autoMineProgress={autoMineProgress}
         runningParams={runningParams}

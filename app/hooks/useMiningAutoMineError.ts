@@ -1,6 +1,12 @@
 "use client";
 
-import { firstErrorLine, isInsufficientFundsError, isNetworkError, isSessionExpiredError } from "./useMining.shared";
+import {
+  firstErrorLine,
+  isEpochWaitTimeoutError,
+  isInsufficientFundsError,
+  isNetworkError,
+  isSessionExpiredError,
+} from "./useMining.shared";
 import type { AutoMineDiagnosticsErrorKind } from "../lib/mining/autoMineDiagnostics";
 
 function isWalletUnavailableError(message: string) {
@@ -35,6 +41,9 @@ export function getAutoMineUserMessage(error: unknown) {
   if (sessionExpired) {
     diagnosticsErrorKind = "session-expired";
     userMessage = "Session expired. Log out, log in again, then reload this page - the bot will auto-resume.";
+  } else if (isEpochWaitTimeoutError(error)) {
+    diagnosticsErrorKind = "timeout";
+    userMessage = "Auto-miner paused: previous epoch did not finish resolving in time. Retrying automatically...";
   } else if (pendingNonceBlocked) {
     diagnosticsErrorKind = "pending-nonce-blocked";
     userMessage = "Auto-miner paused: wallet has a stuck pending transaction. Open Settings and clear or replace it, then start the bot again.";
@@ -50,7 +59,7 @@ export function getAutoMineUserMessage(error: unknown) {
   } else if (rawMessage.includes("contract token mismatch")) {
     diagnosticsErrorKind = "unknown";
     userMessage = `Auto-miner stopped: ${firstErrorLine(error)}`;
-  } else if (rawMessage.includes("epoch ended")) {
+  } else if (rawMessage.includes("epoch ended") || rawMessage.includes("epochclosing")) {
     diagnosticsErrorKind = "unknown";
     userMessage = "Round skipped (epoch ended). Press START BOT to continue.";
   } else if (rawMessage.includes("gas required exceeds") || rawMessage.includes("reverted")) {

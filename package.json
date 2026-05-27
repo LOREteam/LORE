@@ -30,19 +30,23 @@
     "patch:privy-7702": "node scripts/patch-privy-7702.mjs"
   },
   "dependencies": {
+    "@base-org/account": "2.5.6",
+    "@metamask/connect-evm": "^1.0.0",
     "@noble/hashes": "^1.8.0",
     "@openzeppelin/contracts": "^5.6.1",
-    "@privy-io/react-auth": "^3.18.0",
-    "@privy-io/wagmi": "^4.0.3",
+    "@privy-io/react-auth": "^3.23.1",
+    "@privy-io/wagmi": "^4.0.6",
     "@tanstack/react-query": "^5.90.21",
+    "@wagmi/core": "3.4.8",
+    "accounts": "^0.8.1",
     "dotenv": "^17.3.1",
     "ethers": "^6.16.0",
-    "next": "16.1.6",
-    "ox": "^0.12.4",
+    "next": "16.2.6",
+    "ox": "0.14.20",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "viem": "^2.46.1",
-    "wagmi": "^2.19.5"
+    "viem": "2.48.8",
+    "wagmi": "^3.6.9"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -52,13 +56,20 @@
     "autoprefixer": "^10.4.27",
     "concurrently": "^9.2.1",
     "eslint": "^9",
-    "eslint-config-next": "16.1.6",
-    "open-cli": "^8.0.0",
+    "eslint-config-next": "16.2.6",
+    "open-cli": "^9.0.0",
     "playwright-core": "^1.58.2",
-    "postcss": "^8.5.6",
-    "solc": "^0.8.34",
+    "postcss": "8.5.14",
+    "solc": "^0.8.35",
     "tailwindcss": "^4.2.1",
     "tsx": "^4.20.5",
     "typescript": "^5"
+  },
+  "overrides": {
+    "axios": "1.16.0",
+    "bn.js": "5.2.3",
+    "hono": "4.12.18",
+    "postcss": "8.5.14",
+    "tmp": "0.2.5"
   }
 }

@@ -365,27 +365,46 @@ export async function verifyAutoMinerInputPersistence(page, options) {
 export async function verifyAutoMinerFailureScenarios(page, options) {
   const { autoMineDebugOverrideKey, baseUrl, timeoutMs } = options;
   const scenarioTimeoutMs = Math.min(timeoutMs, 15_000);
+  const overrideEventName = "lineaore:auto-mine-debug-override-change:v1";
 
   const applyScenario = async (payload) => {
-    await page.evaluate(({ storageKey, nextValue }) => {
+    await page.evaluate(({ eventName, storageKey, nextValue }) => {
       window.localStorage.setItem(storageKey, JSON.stringify({
         ...nextValue,
         updatedAt: Date.now(),
       }));
+      window.dispatchEvent(new CustomEvent(eventName));
     }, {
+      eventName: overrideEventName,
       storageKey: autoMineDebugOverrideKey,
       nextValue: payload,
     });
-    await safeReload(page, baseUrl, timeoutMs);
-    await expectVisible(page.getByText("Auto-Miner"), "auto-miner panel after failure-state reload", scenarioTimeoutMs);
-    await waitForUiHydration(page, scenarioTimeoutMs, "hub ui hydrated after failure-state reload");
+    await expectVisible(page.getByText("Auto-Miner"), "auto-miner panel after failure-state override", scenarioTimeoutMs);
+    await waitForUiHydration(page, scenarioTimeoutMs, "hub ui hydrated after failure-state override");
   };
   const clearOverride = async () => {
-    await page.evaluate((storageKey) => {
+    await page.evaluate(({ eventName, storageKey }) => {
       window.localStorage.removeItem(storageKey);
-    }, autoMineDebugOverrideKey);
-    await safeReload(page, baseUrl, timeoutMs);
-    await expectVisible(page.getByText("Auto-Miner", { exact: true }).first(), "auto-miner panel after clearing override", scenarioTimeoutMs);
+      window.dispatchEvent(new CustomEvent(eventName));
+    }, {
+      eventName: overrideEventName,
+      storageKey: autoMineDebugOverrideKey,
+    });
+    try {
+      await page.waitForFunction(() => {
+        const bodyText = document.body?.innerText.replace(/\s+/g, " ") ?? "";
+        return bodyText.includes("LOGIN TO START")
+          && !bodyText.includes("Retry Wait")
+          && !bodyText.includes("Session Expired")
+          && !bodyText.includes("AUTO-RETRY PENDING")
+          && !bodyText.includes("SESSION EXPIRED");
+      }, undefined, { timeout: scenarioTimeoutMs });
+      console.log("PASS auto-miner failure-state override cleared");
+    } catch {
+      await safeReload(page, baseUrl, timeoutMs);
+      await expectVisible(page.getByText("Auto-Miner", { exact: true }).first(), "auto-miner panel after clearing override", scenarioTimeoutMs);
+      console.log("PASS auto-miner failure-state override cleared");
+    }
   };
 
   try {
@@ -406,11 +425,18 @@ export async function verifyAutoMinerFailureScenarios(page, options) {
     await expectVisible(page.getByText("Session Expired", { exact: true }).first(), "auto-miner session-expired badge", scenarioTimeoutMs);
     await expectVisible(page.getByText("SESSION EXPIRED", { exact: true }).first(), "auto-miner session-expired button", scenarioTimeoutMs);
     console.log("PASS auto-miner session-expired scenario");
-  } catch {
-    console.log("SKIP auto-miner failure scenarios smoke (debug override did not surface expected badges within smoke window)");
+  } catch (error) {
+    const diagnostics = await page.evaluate((storageKey) => {
+      const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      return {
+        bodyText: normalize(document.body?.innerText).slice(0, 1200),
+        override: window.localStorage.getItem(storageKey),
+      };
+    }, autoMineDebugOverrideKey).catch(() => null);
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`auto-miner failure scenarios did not surface expected UI: ${detail}; diagnostics=${JSON.stringify(diagnostics)}`);
   } finally {
     await clearOverride();
-    console.log("PASS auto-miner failure-state override cleared");
   }
 }
 
@@ -420,6 +446,30 @@ export async function openDesktopTab(page, options) {
   const normalizedTargetHash = buttonName === "Mining Hub"
     ? ""
     : `#${buttonName.toLowerCase().replace(/\s+/g, "")}`;
+
+  const resetToHub = async () => {
+    try {
+      await page.evaluate(() => {
+        const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+        const hubButton = [...document.querySelectorAll("button")]
+          .find((button) => normalize(button.textContent) === "Mining Hub");
+        if (hubButton instanceof HTMLElement) {
+          hubButton.click();
+          return;
+        }
+        window.location.hash = "";
+      });
+      await page.waitForFunction(() => {
+        const bodyText = document.body?.innerText.replace(/\s+/g, " ") ?? "";
+        return window.location.hash === "" && bodyText.includes("Manual Bet");
+      }, undefined, { timeout: tabTimeoutMs });
+      return;
+    } catch {
+      await safeReload(page, baseUrl, tabTimeoutMs);
+      await waitForUiHydration(page, tabTimeoutMs, "hub ui hydrated after tab reset");
+      await expectVisible(page.getByText("Manual Bet"), "hub manual bet panel after tab reset", tabTimeoutMs);
+    }
+  };
 
   const waitForDesktopTabState = async () => {
     await page.waitForFunction(
@@ -468,8 +518,7 @@ export async function openDesktopTab(page, options) {
       return true;
     } catch {
       console.log(`SKIP ${skipMessage}`);
-      await safeReload(page, baseUrl, tabTimeoutMs);
-      await expectVisible(page.getByText("Manual Bet"), "hub manual bet panel after tab reset", tabTimeoutMs);
+      await resetToHub();
       return false;
     }
   }

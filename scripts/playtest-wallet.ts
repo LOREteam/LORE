@@ -21,6 +21,7 @@ import {
   getFallbackFeeOverrides,
   getKeeperFeeOverrides,
 } from "../app/lib/lineaFees";
+import { tileIdsToMask } from "../app/lib/tileMask";
 import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs } from "../config/publicConfig";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
@@ -216,6 +217,7 @@ async function placeBatchBet(
 ) {
   const nativeBalance = await publicClient.getBalance({ address: account.address });
   const tileArgs = tiles.map((tile) => BigInt(tile));
+  const tileMask = tileIdsToMask(tiles);
   let feeOverrides = await getFeeOverrides(publicClient);
   let estimatedGas: bigint;
   let hash: `0x${string}`;
@@ -225,8 +227,8 @@ async function placeBatchBet(
       account: account.address,
       address: CONTRACT_ADDRESS,
       abi: GAME_ABI,
-      functionName: "placeBatchBetsSameAmount",
-      args: [tileArgs, amount],
+      functionName: "placeBatchBetsBitmap",
+      args: [tileMask, amount],
       ...feeOverrides,
     } as never);
     feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
@@ -236,39 +238,64 @@ async function placeBatchBet(
       chain: APP_CHAIN,
       address: CONTRACT_ADDRESS,
       abi: GAME_ABI,
-      functionName: "placeBatchBetsSameAmount",
-      args: [tileArgs, amount],
+      functionName: "placeBatchBetsBitmap",
+      args: [tileMask, amount],
       gas,
       ...feeOverrides,
     } as never);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.log(`[playtest] placeBatchBetsSameAmount unavailable or failed, falling back: ${message}`);
-    const amountArgs = tiles.map(() => amount);
+  } catch (bitmapError) {
+    const bitmapMessage = bitmapError instanceof Error ? bitmapError.message : String(bitmapError);
+    console.log(`[playtest] placeBatchBetsBitmap unavailable or failed, falling back: ${bitmapMessage}`);
     try {
       estimatedGas = await publicClient.estimateContractGas({
         account: account.address,
         address: CONTRACT_ADDRESS,
         abi: GAME_ABI,
-        functionName: "placeBatchBets",
-        args: [tileArgs, amountArgs],
+        functionName: "placeBatchBetsSameAmount",
+        args: [tileArgs, amount],
         ...feeOverrides,
       } as never);
-    } catch {
-      estimatedGas = BATCH_GAS_FALLBACK;
+      feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
+      const gas = getAffordableKeeperGasLimit(estimatedGas, nativeBalance, feeOverrides) ?? estimatedGas;
+      hash = await walletClient.writeContract({
+        account,
+        chain: APP_CHAIN,
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "placeBatchBetsSameAmount",
+        args: [tileArgs, amount],
+        gas,
+        ...feeOverrides,
+      } as never);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(`[playtest] placeBatchBetsSameAmount unavailable or failed, falling back: ${message}`);
+      const amountArgs = tiles.map(() => amount);
+      try {
+        estimatedGas = await publicClient.estimateContractGas({
+          account: account.address,
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "placeBatchBets",
+          args: [tileArgs, amountArgs],
+          ...feeOverrides,
+        } as never);
+      } catch {
+        estimatedGas = BATCH_GAS_FALLBACK;
+      }
+      feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
+      const gas = getAffordableKeeperGasLimit(estimatedGas, nativeBalance, feeOverrides) ?? estimatedGas;
+      hash = await walletClient.writeContract({
+        account,
+        chain: APP_CHAIN,
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "placeBatchBets",
+        args: [tileArgs, amountArgs],
+        gas,
+        ...feeOverrides,
+      } as never);
     }
-    feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
-    const gas = getAffordableKeeperGasLimit(estimatedGas, nativeBalance, feeOverrides) ?? estimatedGas;
-    hash = await walletClient.writeContract({
-      account,
-      chain: APP_CHAIN,
-      address: CONTRACT_ADDRESS,
-      abi: GAME_ABI,
-      functionName: "placeBatchBets",
-      args: [tileArgs, amountArgs],
-      gas,
-      ...feeOverrides,
-    } as never);
   }
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash });

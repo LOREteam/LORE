@@ -100,7 +100,7 @@ export async function prepareAutoMineRunSetup({
   setSelectedTiles([]);
   setSelectedTilesEpoch(null);
   setRunningParams({ betStr, blocks, rounds });
-  onProgress(`${startRoundIndex} / ${rounds}`);
+  onProgress(`${Math.min(startRoundIndex + 1, rounds)} / ${rounds}`);
   log.info("AutoMine", "started", { betStr, blocks, rounds, startRoundIndex });
 
   if (!readSilentSend()) {

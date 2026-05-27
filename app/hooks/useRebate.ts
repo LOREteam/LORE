@@ -486,21 +486,19 @@ export function useRebate(options?: UseRebateOptions) {
 
       if (requestId !== requestIdRef.current) return;
 
-      const changed = applyPayload(payload);
+      applyPayload(payload);
       const fetchedAt = Date.now();
       hasLoadedRef.current = true;
       if (mountedRef.current) {
         setHasLoaded(true);
       }
       cacheSavedAtRef.current = fetchedAt;
-      if (changed || !cachedPayloadRef.current[rebateAddress]) {
-        const cachedPayload = {
-          ...payload,
-          cachedAt: fetchedAt,
-        } satisfies CachedRebateInfo;
-        cachedPayloadRef.current[rebateAddress] = cachedPayload;
-        saveCachedRebatePayload(rebateAddress, payload);
-      }
+      const cachedPayload = {
+        ...payload,
+        cachedAt: fetchedAt,
+      } satisfies CachedRebateInfo;
+      cachedPayloadRef.current[rebateAddress] = cachedPayload;
+      saveCachedRebatePayload(rebateAddress, payload);
       return true;
     } catch (err) {
       if (

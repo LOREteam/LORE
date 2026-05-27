@@ -4,10 +4,12 @@ import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const CHECK_LOCAL_PORT = Number(process.env.CHECK_LOCAL_PORT || "3101");
+const CHECK_LOCAL_DIST_DIR = process.env.CHECK_LOCAL_DIST_DIR || ".next-check";
 const DEFAULT_LOCAL_SMOKE_BASE_URL = `http://127.0.0.1:${CHECK_LOCAL_PORT}`;
 const SMOKE_BASE_URL = process.env.SMOKE_BASE_URL || DEFAULT_LOCAL_SMOKE_BASE_URL;
 const SHOULD_START_LOCAL_SERVER = !process.env.SMOKE_BASE_URL;
 const SERVER_START_TIMEOUT_MS = Number(process.env.CHECK_LOCAL_SERVER_START_TIMEOUT_MS || "90000");
+const CHECK_LOCAL_NEXT_ENV = { NEXT_DIST_DIR: CHECK_LOCAL_DIST_DIR };
 
 const npmCommand = process.env.npm_execpath && process.execPath
   ? process.execPath
@@ -42,6 +44,20 @@ const FILTERED_WARNING_PATTERNS = [
   /\(Use `node --trace-warnings .*` to show where the warning was created\)/i,
 ];
 
+function shouldSkipStepFailure(step, result) {
+  if (!Array.isArray(step.args) || step.args.length < 2) {
+    return false;
+  }
+
+  const [npmSubcommand, scriptName] = step.args;
+  if (npmSubcommand !== "run" || scriptName !== "smoke:browser") {
+    return false;
+  }
+
+  const combinedOutput = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  return combinedOutput.includes("no Chrome/Edge executable found; set SMOKE_BROWSER_EXECUTABLE");
+}
+
 function formatStepLabel(command, args) {
   if (process.env.npm_execpath && process.execPath) {
     return `npm ${args.join(" ")}`;
@@ -51,19 +67,31 @@ function formatStepLabel(command, args) {
 
 function runStep(step) {
   const { command, args, env } = step;
+  const stepEnv = shouldUseIsolatedNextDistDir(step)
+    ? { ...process.env, ...CHECK_LOCAL_NEXT_ENV, ...(env ?? {}) }
+    : { ...process.env, ...(env ?? {}) };
   if (process.env.npm_execpath && process.execPath) {
     return spawnSync(command, [process.env.npm_execpath, ...args], {
       stdio: "pipe",
       encoding: "utf8",
-      env: { ...process.env, ...(env ?? {}) },
+      env: stepEnv,
     });
   }
 
   return spawnSync(command, args, {
     stdio: "pipe",
     encoding: "utf8",
-    env: { ...process.env, ...(env ?? {}) },
+    env: stepEnv,
   });
+}
+
+function shouldUseIsolatedNextDistDir(step) {
+  if (!Array.isArray(step.args) || step.args.length < 2) {
+    return false;
+  }
+
+  const [npmSubcommand, scriptName] = step.args;
+  return npmSubcommand === "run" && scriptName === "build";
 }
 
 function filterKnownWarnings(output) {
@@ -98,7 +126,7 @@ function prepareStep(step) {
     return;
   }
 
-  const nextDir = resolve(".next");
+  const nextDir = resolve(CHECK_LOCAL_DIST_DIR);
   if (existsSync(nextDir)) {
     rmSync(nextDir, { recursive: true, force: true });
   }
@@ -167,7 +195,7 @@ async function startLocalServer(baseUrl) {
   const nextBin = resolve("node_modules", "next", "dist", "bin", "next");
   const serverProcess = spawn(process.execPath, [nextBin, "start", "--port", String(CHECK_LOCAL_PORT)], {
     cwd: process.cwd(),
-    env: process.env,
+    env: { ...process.env, ...CHECK_LOCAL_NEXT_ENV },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -222,6 +250,11 @@ async function runStepWithRetries(step, extraEnv = {}) {
     prepareStep(step);
     result = runStep(preparedStep);
     flushStepOutput(result);
+  }
+
+  if (typeof result.status === "number" && result.status !== 0 && shouldSkipStepFailure(step, result)) {
+    console.warn(`Skipping ${formatStepLabel(command, args)}: no local Chrome/Edge executable configured.`);
+    return;
   }
 
   if (typeof result.status === "number" && result.status !== 0) {

@@ -2,18 +2,36 @@
 
 import { useEffect } from "react";
 import { log } from "../lib/logger";
+import { formatUnknownError } from "../lib/utils";
 import {
   CHUNK_RELOAD_WINDOW_MS,
   clearExpiredChunkReloadAttempt,
   isChunkLoadLikeErrorMessage,
   reloadWithCacheBust,
   shouldAttemptChunkReloadOnce,
+  stripChunkReloadCacheParam,
 } from "../lib/chunkReloadRecovery";
 
 const RESOLVE_STORAGE_KEY = "lore_resolve_epoch";
 
 export function ErrorCatcher() {
   useEffect(() => {
+    stripChunkReloadCacheParam(window.location, window.history);
+
+    const consoleJsonReplacer = (_key: string, current: unknown) => {
+      if (current instanceof Error) {
+        return {
+          name: current.name,
+          message: current.message,
+          stack: current.stack?.slice(0, 400),
+        };
+      }
+      if (typeof current === "bigint") {
+        return current.toString();
+      }
+      return current;
+    };
+
     const sanitizeConsoleArg = (value: unknown): unknown => {
       if (value instanceof Error) {
         return {
@@ -22,18 +40,25 @@ export function ErrorCatcher() {
           stack: value.stack?.slice(0, 400),
         };
       }
+      if (value instanceof Event) {
+        return {
+          type: value.type,
+          target: value.target?.constructor?.name,
+          currentTarget: value.currentTarget?.constructor?.name,
+        };
+      }
       if (typeof value === "bigint") {
         return value.toString();
       }
       if (typeof value === "object" && value !== null) {
         try {
-          return JSON.parse(
-            JSON.stringify(value, (_key, current) =>
-              typeof current === "bigint" ? current.toString() : current,
-            ),
-          );
+          const serialized = JSON.stringify(value, consoleJsonReplacer);
+          if (serialized && serialized !== "{}") {
+            return JSON.parse(serialized);
+          }
+          return formatUnknownError(value);
         } catch {
-          return String(value);
+          return formatUnknownError(value);
         }
       }
       return value;
@@ -41,7 +66,7 @@ export function ErrorCatcher() {
 
     const stringifySafe = (value: unknown) => {
       try {
-        return JSON.stringify(value, (_key, current) => (typeof current === "bigint" ? current.toString() : current));
+        return JSON.stringify(value, consoleJsonReplacer);
       } catch {
         return String(value);
       }
@@ -123,9 +148,7 @@ export function ErrorCatcher() {
         return;
       }
 
-      const payload = reason instanceof Error
-        ? { name: reason.name, message: reason.message, stack: reason.stack?.slice(0, 400) }
-        : String(reason);
+      const payload = sanitizeConsoleArg(reason);
       log.error("Global", "unhandled promise rejection", payload);
     };
 

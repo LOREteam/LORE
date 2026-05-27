@@ -102,7 +102,36 @@ export async function recoverRoundAfterRpcError({
     );
     return { kind: "retry" as const };
   } catch (error) {
-    log.warn("AutoMine", "post-error bet check failed, retrying round anyway", error);
-    return { kind: "retry" as const };
+    await delay(1200);
+    try {
+      const retryRecoveredRound = await verifyRoundAfterRpcError({
+        actorAddress,
+        blocks,
+        client,
+        roundCandidateEpochs,
+        roundTilesToBet,
+      });
+
+      if (retryRecoveredRound.confirmed && retryRecoveredRound.placedEpoch !== null) {
+        log.info(
+          "AutoMine",
+          `post-error recheck: found ${retryRecoveredRound.confirmedCount}/${retryRecoveredRound.effectiveBlocks} target bets in epoch ${retryRecoveredRound.placedEpoch} - skipping re-bet`,
+        );
+        return {
+          kind: "confirmed" as const,
+          source: "recovered-after-network-error" as const,
+          placedEpoch: retryRecoveredRound.placedEpoch,
+        };
+      }
+
+      log.info(
+        "AutoMine",
+        `post-error recheck: ${retryRecoveredRound.confirmedCount}/${retryRecoveredRound.effectiveBlocks} bets in epoch ${retryRecoveredRound.placedEpoch} - will retry`,
+      );
+      return { kind: "retry" as const };
+    } catch (retryError) {
+      log.warn("AutoMine", "post-error bet check failed, retrying round anyway", retryError ?? error);
+      return { kind: "retry" as const };
+    }
   }
 }

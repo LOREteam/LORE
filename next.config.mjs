@@ -6,6 +6,7 @@ const projectRoot = path.resolve(__dirname);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  distDir: process.env.NEXT_DIST_DIR?.trim() || ".next",
   reactStrictMode: true,
   outputFileTracingRoot: projectRoot,
   webpack(config) {

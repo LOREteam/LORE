@@ -18,7 +18,7 @@ const variantClasses: Record<UiButtonVariant, string> = {
     "border-violet-400/45 bg-violet-500/15 text-violet-200 hover:bg-violet-500/22 hover:shadow-[0_0_16px_rgba(124,58,237,0.2)]",
   secondary:
     "border-violet-500/25 bg-violet-500/10 text-violet-300 hover:bg-violet-500/16 hover:shadow-[0_0_12px_rgba(124,58,237,0.16)]",
-  ghost: "border-white/12 bg-white/[0.02] text-slate-300 hover:bg-white/[0.06] hover:text-white",
+  ghost: "border-white/12 bg-white/2 text-slate-300 hover:bg-white/6 hover:text-white",
   success:
     "border-emerald-500/35 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/16 hover:shadow-[0_0_12px_rgba(16,185,129,0.16)]",
   danger:

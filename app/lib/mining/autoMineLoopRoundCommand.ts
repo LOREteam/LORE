@@ -12,6 +12,6 @@ export interface AutoMineLoopReadyRoundCommand {
 
 export type AutoMineLoopPrepareRoundCommandResult =
   | { kind: "stop-no-client" }
-  | { kind: "skip-existing"; liveEpoch: bigint; alreadyBetTiles: number[]; effectiveBlocks: number }
+  | { kind: "skip-existing"; liveEpoch?: bigint; placedEpoch?: bigint; alreadyBetTiles: number[]; effectiveBlocks: number }
   | { kind: "stop-insufficient-balance"; neededAmount: number; currentAmount: number }
   | { kind: "ready"; command: AutoMineLoopReadyRoundCommand; alreadyBetTiles: number[] };

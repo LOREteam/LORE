@@ -44,10 +44,10 @@ export const ChatMessageRow = memo(function ChatMessageRow({ message, isOwn }: P
           {ts && <span className="text-slate-600 tabular-nums">{ts}</span>}
         </div>
         <div
-          className={`break-words rounded-2xl px-3 py-2 text-[13px] leading-snug shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] ${
+          className={`wrap-break-word rounded-2xl px-3 py-2 text-[13px] leading-snug shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] ${
             isOwn
               ? "rounded-tr-md bg-violet-600/28 text-violet-100"
-              : "rounded-tl-md border border-white/[0.04] bg-white/[0.045] text-slate-300"
+              : "rounded-tl-md border border-white/4 bg-white/4.5 text-slate-300"
           }`}
         >
           {message.text}

@@ -93,7 +93,7 @@ export default async function JackpotWinPage({ searchParams }: Props) {
   const amount = param(sp.amount) || "0.00";
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#060612] text-white">
+    <main className="flex min-h-screen items-center justify-center bg-background text-white">
       <div className="text-center">
         <h1 className="text-4xl font-bold tracking-wider">{kindLabel(kind)} Winner</h1>
         <p className="mt-4 text-2xl text-violet-300">{amount} LINEA</p>

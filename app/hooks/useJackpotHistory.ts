@@ -75,7 +75,12 @@ function toEntry(row: Record<string, unknown>): JackpotHistoryEntry | null {
 
 function sortByBlockDesc(entries: JackpotHistoryEntry[]) {
   return [...entries].sort((a, b) => {
-    if (a.blockNumber === b.blockNumber) return 0;
+    if (a.blockNumber === b.blockNumber) {
+      const epochDelta = Number(b.epoch) - Number(a.epoch);
+      if (epochDelta !== 0) return epochDelta;
+      if (a.kind !== b.kind) return a.kind === "weekly" ? -1 : 1;
+      return (b.txHash ?? "").localeCompare(a.txHash ?? "");
+    }
     return a.blockNumber > b.blockNumber ? -1 : 1;
   });
 }
@@ -208,9 +213,7 @@ export function useJackpotHistory(enabled = true) {
         }
         setError(null);
       }
-      if (changed) {
-        saveCachedEntries(sorted);
-      }
+      saveCachedEntries(sorted);
       cacheSavedAtRef.current = Date.now();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Network error";

@@ -26,6 +26,7 @@ type SilentSendFn = (
 type ExternalSendFn = (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => Promise<`0x${string}`>;
 type WriteContractAsyncFn = ReturnType<typeof useWriteContract>["writeContractAsync"];
 type BalanceData = { value: bigint } | null | undefined;
+type ReceiptState = "confirmed" | "pending";
 export interface PendingTransactionStatus {
   latestNonce: number;
   pendingNonce: number;
@@ -156,12 +157,60 @@ export function useWalletActions({
   );
 
   const waitForReceipt = useCallback(
-    async (hash: `0x${string}`) => {
-      if (!publicClient) return;
+    async (hash: `0x${string}`): Promise<ReceiptState> => {
+      if (!publicClient) throw new Error("Transaction receipt verification is unavailable.");
       try {
-        await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
-      } catch {
-        // The balance/read refresh below is enough when a public RPC lags.
+        const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
+        if (receipt.status !== "success") {
+          throw new Error(`Transaction reverted: ${hash}`);
+        }
+        return "confirmed";
+      } catch (error) {
+        const isReceiptTimeoutLike = () => {
+          const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+          const name = error instanceof Error ? error.name : "";
+          return (
+            name === "TimeoutError" ||
+            name === "TransactionReceiptNotFoundError" ||
+            name === "TransactionReceiptTimeoutError" ||
+            message.includes("timed out") ||
+            message.includes("timeout") ||
+            message.includes("receipt could not be found")
+          );
+        };
+        const isTxLookupMissing = (value: unknown) => {
+          const message = value instanceof Error ? value.message.toLowerCase() : String(value).toLowerCase();
+          const name = value instanceof Error ? value.name : "";
+          return (
+            name === "TransactionNotFoundError" ||
+            message.includes("transaction not found") ||
+            message.includes("transaction could not be found")
+          );
+        };
+
+        try {
+          const lateReceipt = await publicClient.getTransactionReceipt({ hash });
+          if (lateReceipt.status !== "success") {
+            throw new Error(`Transaction reverted: ${hash}`);
+          }
+          return "confirmed";
+        } catch (lateReceiptError) {
+          if (isReceiptTimeoutLike()) {
+            try {
+              await publicClient.getTransaction({ hash });
+              return "pending";
+            } catch (txLookupError) {
+              if (!isTxLookupMissing(txLookupError)) {
+                throw txLookupError;
+              }
+              throw error;
+            }
+          }
+          if (!isTxLookupMissing(lateReceiptError)) {
+            throw lateReceiptError;
+          }
+          throw error;
+        }
       }
     },
     [publicClient],
@@ -449,14 +498,20 @@ export function useWalletActions({
 
     setIsWithdrawing(true);
     try {
-      await writeContractAsync({
+      const hash = await writeContractAsync({
         address: LINEA_TOKEN_ADDRESS,
         abi: TOKEN_ABI,
         functionName: "transfer",
         args: [getAddress(externalWalletAddress), amountWei],
         chainId: APP_CHAIN_ID,
       });
+      const receiptState = await waitForReceipt(hash);
+      if (receiptState === "pending") {
+        notify("LINEA withdraw submitted and is still pending confirmation.", "info");
+        return;
+      }
       setWithdrawAmount("0.0");
+      void refetchEmbeddedTokenBalance();
       notify("LINEA sent to your external wallet.", "success");
     } catch (err) {
       if (!isUserRejection(err)) {
@@ -466,7 +521,7 @@ export function useWalletActions({
     } finally {
       setIsWithdrawing(false);
     }
-  }, [embeddedTokenBalance, externalWalletAddress, notify, withdrawAmount, writeContractAsync]);
+  }, [embeddedTokenBalance, externalWalletAddress, notify, refetchEmbeddedTokenBalance, waitForReceipt, withdrawAmount, writeContractAsync]);
 
   const handleWithdrawEthToExternal = useCallback(async () => {
     if (!embeddedWalletAddress) {
@@ -509,12 +564,10 @@ export function useWalletActions({
         to: getAddress(externalWalletAddress),
         value: amountWei,
       });
-      try {
-        if (publicClient) {
-          await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
-        }
-      } catch {
-        // Balance refresh below is enough if receipt polling times out on a public RPC.
+      const receiptState = await waitForReceipt(hash);
+      if (receiptState === "pending") {
+        notify("ETH withdraw submitted and is still pending confirmation.", "info");
+        return;
       }
       setWithdrawEthAmount("0.0");
       void refetchEmbeddedEthBalance();
@@ -536,9 +589,9 @@ export function useWalletActions({
     minEthWithdrawReserveWei,
     notify,
     onOpenWalletSettings,
-    publicClient,
     refetchEmbeddedEthBalance,
     sendTransactionSilent,
+    waitForReceipt,
     withdrawEthAmount,
   ]);
 
@@ -561,10 +614,15 @@ export function useWalletActions({
     try {
       const value = parseUnits(normalized, 18);
       setIsDepositingEth(true);
-      await sendTransactionFromExternal({
+      const hash = await sendTransactionFromExternal({
         to: getAddress(embeddedWalletAddress),
         value,
       });
+      const receiptState = await waitForReceipt(hash);
+      if (receiptState === "pending") {
+        notify("ETH transfer submitted and is still pending confirmation.", "info");
+        return;
+      }
       void refetchEmbeddedEthBalance();
       notify("ETH transfer to the Privy wallet was sent.", "success");
     } catch (err) {
@@ -584,6 +642,7 @@ export function useWalletActions({
     onOpenWalletSettings,
     refetchEmbeddedEthBalance,
     sendTransactionFromExternal,
+    waitForReceipt,
   ]);
 
   const handleDepositTokenToEmbedded = useCallback(async () => {
@@ -610,10 +669,15 @@ export function useWalletActions({
         args: [getAddress(embeddedWalletAddress), amountWei],
       });
       setIsDepositingToken(true);
-      await sendTransactionFromExternal({
+      const hash = await sendTransactionFromExternal({
         to: LINEA_TOKEN_ADDRESS,
         data,
       });
+      const receiptState = await waitForReceipt(hash);
+      if (receiptState === "pending") {
+        notify("LINEA transfer submitted and is still pending confirmation.", "info");
+        return;
+      }
       void refetchEmbeddedTokenBalance();
       if (walletTransfersEnabled && fetchWalletTransfers) {
         void fetchWalletTransfers();
@@ -637,6 +701,7 @@ export function useWalletActions({
     onOpenWalletSettings,
     refetchEmbeddedTokenBalance,
     sendTransactionFromExternal,
+    waitForReceipt,
     walletTransfersEnabled,
   ]);
 

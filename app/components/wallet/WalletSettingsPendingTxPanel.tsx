@@ -31,7 +31,7 @@ export const WalletSettingsPendingTxPanel = React.memo(function WalletSettingsPe
             hasPending ? (
               <p className="text-[10px] text-amber-200 leading-relaxed">
                 Stuck pending transaction detected. Nonce gap: {pendingTransactionStatus.nonceGap}. Oldest blocked nonce: {pendingTransactionStatus.blockedNonce}.
-                New bets can queue behind it and appear to do nothing until this nonce is cleared.
+                New bets, claims, deposits, and withdrawals can queue behind it until this nonce is cleared.
               </p>
             ) : (
               <p className="text-[10px] text-emerald-300 leading-relaxed">
@@ -42,6 +42,13 @@ export const WalletSettingsPendingTxPanel = React.memo(function WalletSettingsPe
             <p className="text-[10px] text-gray-500 leading-relaxed">
               Check the embedded wallet nonce state. If a transaction is stuck, you can replace it with a 0 ETH self-transaction to clear the queue.
             </p>
+          )}
+          {pendingTransactionStatus && (
+            <div className="mt-2 flex flex-wrap gap-2 text-[9px] font-mono text-slate-500">
+              <span>latest {pendingTransactionStatus.latestNonce}</span>
+              <span>pending {pendingTransactionStatus.pendingNonce}</span>
+              <span>checked {new Date(pendingTransactionStatus.updatedAt).toLocaleTimeString()}</span>
+            </div>
           )}
         </div>
         <div className="flex shrink-0 gap-2">

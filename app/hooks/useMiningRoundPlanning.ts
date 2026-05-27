@@ -7,7 +7,8 @@ import { normalizeTiles, withMiningRpcTimeout } from "./useMining.shared";
 export type AutoMineRoundPlan =
   | {
       kind: "skip-existing";
-      liveEpoch: bigint;
+      liveEpoch?: bigint;
+      placedEpoch?: bigint;
       effectiveBlocks: number;
       alreadyBetTiles: number[];
     }
@@ -52,33 +53,33 @@ export async function planAutoMineRound({
   }), "plan.currentEpoch")) as bigint;
 
   const epochNeedsResolve = lastPlacedEpoch !== null && liveEpoch <= lastPlacedEpoch;
+  const targetEpoch = epochNeedsResolve ? liveEpoch + 1n : liveEpoch;
   const effectiveBlocks = Math.min(blocks, GRID_SIZE);
   let tilesToAdd = effectiveBlocks;
   const alreadyBetTiles = new Set<number>();
 
-  if (!epochNeedsResolve) {
-    const existingBets = (await withMiningRpcTimeout(client.readContract({
-      address: CONTRACT_ADDRESS,
-      abi: GAME_ABI,
-      functionName: "getUserBetsAll",
-      args: [liveEpoch, actorAddress],
-    }), "plan.getUserBetsAll")) as bigint[];
+  const existingBets = (await withMiningRpcTimeout(client.readContract({
+    address: CONTRACT_ADDRESS,
+    abi: GAME_ABI,
+    functionName: "getUserBetsAll",
+    args: [targetEpoch, actorAddress],
+  }), "plan.getUserBetsAll")) as bigint[];
 
-    existingBets.forEach((bet, index) => {
-      if (bet > 0n) alreadyBetTiles.add(index + 1);
-    });
+  existingBets.forEach((bet, index) => {
+    if (bet > 0n) alreadyBetTiles.add(index + 1);
+  });
 
-    if (alreadyBetTiles.size >= effectiveBlocks) {
-      return {
-        kind: "skip-existing",
-        liveEpoch,
-        effectiveBlocks,
-        alreadyBetTiles: [...alreadyBetTiles],
-      };
-    }
-
-    tilesToAdd = effectiveBlocks - alreadyBetTiles.size;
+  if (alreadyBetTiles.size >= effectiveBlocks) {
+    return {
+      kind: "skip-existing",
+      liveEpoch,
+      placedEpoch: targetEpoch,
+      effectiveBlocks,
+      alreadyBetTiles: [...alreadyBetTiles],
+    };
   }
+
+  tilesToAdd = effectiveBlocks - alreadyBetTiles.size;
 
   const roundCostActual = singleAmountRaw * BigInt(tilesToAdd);
   const tokenBalance = (await withMiningRpcTimeout(client.readContract({

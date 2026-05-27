@@ -94,16 +94,72 @@ export async function findConfirmedEpochForTiles(
 }
 
 export function isEpochEndedError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const msg = flattenErrorMessage(err);
   // V8: also treat the last-2-second EpochClosing() reject as "epoch ended"
   // for UX purposes — the bet missed the window and the next epoch is imminent.
   return msg.includes("epoch ended") || msg.includes("epochended") || msg.includes("epochclosing");
 }
 
-export function isRetryableError(err: unknown): boolean {
+export function flattenErrorMessage(err: unknown): string {
+  const parts: string[] = [];
+  const visited = new Set<unknown>();
+
+  const visit = (value: unknown) => {
+    if (!value || visited.has(value)) return;
+    visited.add(value);
+
+    if (value instanceof Error) {
+      if (value.name) parts.push(value.name);
+      if (value.message) parts.push(value.message);
+      const withMeta = value as Error & {
+        details?: unknown;
+        shortMessage?: unknown;
+        metaMessages?: unknown;
+        cause?: unknown;
+      };
+      if (typeof withMeta.shortMessage === "string") parts.push(withMeta.shortMessage);
+      if (typeof withMeta.details === "string") parts.push(withMeta.details);
+      if (Array.isArray(withMeta.metaMessages)) {
+        for (const item of withMeta.metaMessages) {
+          if (typeof item === "string") parts.push(item);
+        }
+      }
+      visit(withMeta.cause);
+      return;
+    }
+
+    if (typeof value === "string") {
+      parts.push(value);
+      return;
+    }
+
+    if (typeof value === "object" && value !== null) {
+      const withCause = value as { cause?: unknown; message?: unknown; details?: unknown };
+      if (typeof withCause.message === "string") parts.push(withCause.message);
+      if (typeof withCause.details === "string") parts.push(withCause.details);
+      visit(withCause.cause);
+    }
+  };
+
+  visit(err);
+  return parts.join(" | ").toLowerCase();
+}
+
+export function isEpochWaitTimeoutError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
   const name = err instanceof Error ? err.name : "";
   return (
+    name === "EpochWaitTimeoutError" ||
+    msg.includes("did not reach end-of-round readiness") ||
+    msg.includes("did not advance after resolver grace window")
+  );
+}
+
+export function isRetryableError(err: unknown): boolean {
+  const msg = flattenErrorMessage(err);
+  const name = err instanceof Error ? err.name : "";
+  return (
+    isEpochWaitTimeoutError(err) ||
     msg.includes("epoch ended") ||
     msg.includes("gas required exceeds") ||
     msg.includes("reverted") ||
@@ -124,7 +180,7 @@ export function isRetryableError(err: unknown): boolean {
 }
 
 export function isSessionExpiredError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const msg = flattenErrorMessage(err);
   const name = err instanceof Error ? err.name : "";
   return (
     name === "PrivyApiError" ||
@@ -137,7 +193,7 @@ export function isSessionExpiredError(err: unknown): boolean {
 }
 
 export function isInsufficientFundsError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const msg = flattenErrorMessage(err);
   return (
     msg.includes("insufficient funds") ||
     msg.includes("upfront cost exceeds") ||
@@ -148,10 +204,13 @@ export function isInsufficientFundsError(err: unknown): boolean {
 }
 
 export function isNetworkError(err: unknown): boolean {
+  if (isEpochWaitTimeoutError(err)) return false;
   if (isInsufficientFundsError(err)) return false;
-  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const msg = flattenErrorMessage(err);
   const name = err instanceof Error ? err.name.toLowerCase() : "";
   return (
+    name.includes("networkretryexhaustederror") ||
+    msg.includes("network retry exhausted") ||
     name.includes("methodnotsupportedrpcerror") ||
     msg.includes("failed to fetch") ||
     msg.includes("network request failed") ||
@@ -206,7 +265,7 @@ export function withMiningRpcTimeout<T>(
 }
 
 export function isReceiptTimeoutError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const msg = flattenErrorMessage(err);
   const name = err instanceof Error ? err.name : "";
   return (
     name === "TransactionReceiptTimeoutError" ||
@@ -218,7 +277,7 @@ export function isReceiptTimeoutError(err: unknown): boolean {
 }
 
 export function isAmbiguousPendingTxError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const msg = flattenErrorMessage(err);
   const name = err instanceof Error ? err.name : "";
   return (
     name === "TransactionReceiptTimeoutError" ||
@@ -234,7 +293,7 @@ export function isAmbiguousPendingTxError(err: unknown): boolean {
 }
 
 export function isAllowanceError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const msg = flattenErrorMessage(err);
   return (
     msg.includes("erc20insufficientallowance") ||
     msg.includes("insufficient allowance") ||
@@ -265,7 +324,7 @@ export function getBetErrorMessage(err: unknown): string {
   if (lower.includes("transfer amount exceeds balance") || lower.includes("amount exceeds balance")) {
     return "Bet failed: not enough LINEA token balance.";
   }
-  if (lower.includes("epoch ended")) {
+  if (lower.includes("epoch ended") || lower.includes("epochclosing")) {
     return "Bet failed: epoch already ended. Try again.";
   }
   if (lower.includes("reverted")) {
@@ -276,11 +335,29 @@ export function getBetErrorMessage(err: unknown): string {
 }
 
 export function isMissingTokenGetterError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const msg = flattenErrorMessage(err);
   return (
     msg.includes('function "token" returned no data') ||
     msg.includes("returned no data (\"0x\")") ||
     msg.includes("does not have the function \"token\"")
+  );
+}
+
+export function isDeterministicBetExecutionError(err: unknown): boolean {
+  const msg = flattenErrorMessage(err);
+  return (
+    msg.includes("contractfunctionexecutionerror") ||
+    msg.includes("execution reverted") ||
+    msg.includes("the contract function") ||
+    msg.includes("epochclosing") ||
+    msg.includes("epochended") ||
+    msg.includes("erc20insufficientallowance") ||
+    msg.includes("insufficient allowance") ||
+    msg.includes("emptyarray") ||
+    msg.includes("zeroamount") ||
+    msg.includes("invalidtilemask") ||
+    msg.includes("invalid tile mask") ||
+    msg.includes("invalidtile")
   );
 }
 

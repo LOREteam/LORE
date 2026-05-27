@@ -28,7 +28,7 @@ export interface AutoMineLoopState {
 
 export type AutoMineLoopEvent =
   | { type: "round-betting-started"; liveEpoch: bigint; tiles: number[]; selectionEpoch: string }
-  | { type: "round-skipped-existing"; liveEpoch: bigint }
+  | { type: "round-skipped-existing"; liveEpoch?: bigint; placedEpoch?: bigint }
   | { type: "round-epoch-ended"; liveEpoch: bigint }
   | { type: "round-confirmed"; placedEpoch: bigint; tiles: number[] }
   | { type: "round-detected-on-chain"; placedEpoch: bigint; tiles: number[] }
@@ -73,15 +73,19 @@ export function reduceAutoMineLoopEvent(
       };
 
     case "round-skipped-existing":
+      if (event.placedEpoch == null && event.liveEpoch == null) {
+        return state;
+      }
+      const skippedEpoch = event.placedEpoch ?? event.liveEpoch!;
       return {
         ...state,
         roundIndex: state.roundIndex + 1,
-        lastPlacedEpoch: event.liveEpoch,
+        lastPlacedEpoch: skippedEpoch,
         networkRetries: 0,
         selection: { tiles: [], epoch: null },
         sessionCheckpoint: {
           nextRoundIndex: state.roundIndex + 1,
-          lastPlacedEpoch: event.liveEpoch.toString(),
+          lastPlacedEpoch: skippedEpoch.toString(),
         },
       };
 

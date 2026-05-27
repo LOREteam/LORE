@@ -41,6 +41,7 @@ export const ChatWindow = React.memo(function ChatWindow({
 }: Props) {
   const [input, setInput] = useState("");
   const [showProfile, setShowProfile] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
   const [isDesktopViewport, setIsDesktopViewport] = useState(false);
   const [desktopFloatingStyle, setDesktopFloatingStyle] = useState<React.CSSProperties | null>(null);
   const [embeddedDesktopHeight, setEmbeddedDesktopHeight] = useState<string | null>(null);
@@ -181,8 +182,9 @@ export const ChatWindow = React.memo(function ChatWindow({
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
+    setInput("");
     const sent = await onSend(text, profile.name, profile.customAvatar ?? profile.avatar);
-    if (sent) setInput("");
+    if (!sent) setInput(text);
   }, [input, onSend, profile]);
 
   const handleOpenProfile = useCallback(() => {
@@ -205,9 +207,7 @@ export const ChatWindow = React.memo(function ChatWindow({
 
   const myAddr = walletAddress?.toLowerCase() ?? "";
   const sendLocked = sendCooldownRemainingMs > 0;
-  const sendCooldownProgress = Math.min(1, Math.max(0, sendCooldownRemainingMs / CHAT_RATE_LIMIT_MS));
   const sendCooldownCircumference = 2 * Math.PI * 18;
-  const sendCooldownOffset = sendCooldownCircumference * (1 - sendCooldownProgress);
   const containerShadowClass =
     variant === "floating"
       ? "shadow-[0_24px_72px_rgba(2,6,23,0.5)]"
@@ -218,8 +218,8 @@ export const ChatWindow = React.memo(function ChatWindow({
       ref={rootRef}
       className={`flex flex-col overflow-hidden rounded-xl border border-violet-500/22 bg-[#090914]/97 ${containerShadowClass} backdrop-blur-xl animate-slide-up ${
         variant === "embedded"
-          ? "max-[899px]:h-full max-[899px]:min-h-[35.25rem] max-[899px]:pb-[6.75rem] min-[900px]:h-[calc(100dvh-17rem)] min-[900px]:min-h-[22.5rem]"
-          : "fixed z-[210]"
+          ? "max-[899px]:h-full max-[899px]:min-h-141 max-[899px]:pb-27 min-[900px]:h-[calc(100dvh-17rem)] min-[900px]:min-h-90"
+          : "fixed z-210"
       }`}
       style={
         variant === "floating"
@@ -242,7 +242,7 @@ export const ChatWindow = React.memo(function ChatWindow({
       }
     >
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-violet-400/35 to-transparent" />
+        <div className="absolute inset-x-5 top-0 h-px bg-linear-to-r from-transparent via-violet-400/35 to-transparent" />
       </div>
 
       <div className="relative flex items-center gap-2 border-b border-violet-500/14 px-4 py-2.5">
@@ -262,7 +262,7 @@ export const ChatWindow = React.memo(function ChatWindow({
             onClick={handleOpenProfile}
             aria-label="Profile"
             title="Profile"
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/[0.04] hover:text-violet-300"
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/4 hover:text-violet-300"
           >
             <svg aria-hidden="true" width="17" height="17" viewBox="0 0 17 17" fill="none">
               <circle cx="8.5" cy="5.5" r="2.9" fill="currentColor" opacity="0.85" />
@@ -280,7 +280,7 @@ export const ChatWindow = React.memo(function ChatWindow({
             onClick={onClose}
             aria-label="Close chat panel"
             title="Close chat"
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/[0.04] hover:text-slate-200"
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/4 hover:text-slate-200"
           >
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none">
               <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
@@ -340,12 +340,13 @@ export const ChatWindow = React.memo(function ChatWindow({
                         cx="22"
                         cy="22"
                         r="18"
+                        className={sendLocked ? "chat-send-cooldown-ring" : ""}
                         stroke="rgba(216,180,254,0.95)"
                         strokeWidth="2.5"
                         strokeLinecap="round"
                         strokeDasharray={sendCooldownCircumference}
-                        strokeDashoffset={sendLocked ? sendCooldownOffset : sendCooldownCircumference * 0.72}
-                        style={{ transition: "stroke-dashoffset 80ms linear" }}
+                        strokeDashoffset={sendLocked ? 0 : sendCooldownCircumference * 0.72}
+                        style={{ animationDuration: sendLocked ? `${CHAT_RATE_LIMIT_MS}ms` : undefined }}
                       />
                     </svg>
                   )}
@@ -368,15 +369,25 @@ export const ChatWindow = React.memo(function ChatWindow({
                 </button>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  void onEnsureAuth();
-                }}
-                className="h-11 w-full rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-violet-500"
-              >
-                Verify wallet to chat
-              </button>
+              <div className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVerifyError(null);
+                    onEnsureAuth().then(ok => {
+                      if (!ok) setVerifyError("Verification failed. Try again or refresh the page.");
+                    }).catch((err: unknown) => {
+                      setVerifyError(err instanceof Error ? err.message : "Verification error. Try again.");
+                    });
+                  }}
+                  className="h-11 w-full rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-violet-500"
+                >
+                  Verify wallet to chat
+                </button>
+                {verifyError && (
+                  <p className="text-center text-[11px] text-red-400/80">{verifyError}</p>
+                )}
+              </div>
             )
           ) : (
             <div className="flex h-11 items-center justify-center rounded-xl border border-dashed border-violet-500/14 bg-[#161627] px-4 text-sm text-slate-500">

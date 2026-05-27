@@ -97,7 +97,7 @@ export function MobileTabNav({ activeTab, onTabChange }: MobileTabNavProps) {
   return (
     <div className="sticky top-2 z-30 -mx-1 mb-3 lg:hidden">
       <div className="no-scrollbar overflow-x-auto px-1 pb-1">
-        <div className="inline-flex min-w-full items-center gap-1.5 rounded-2xl border border-white/[0.07] bg-[#080814]/78 p-1.5 shadow-[0_12px_30px_rgba(2,6,23,0.28)] backdrop-blur-xl">
+        <div className="inline-flex min-w-full items-center gap-1.5 rounded-2xl border border-white/7 bg-[#080814]/78 p-1.5 shadow-[0_12px_30px_rgba(2,6,23,0.28)] backdrop-blur-xl">
           {MOBILE_TABS.map((tab) => {
             const { label, icon } = getTabMeta(tab);
             const active = activeTab === tab;
@@ -106,10 +106,10 @@ export function MobileTabNav({ activeTab, onTabChange }: MobileTabNavProps) {
                 key={tab}
                 onClick={() => onTabChange(tab)}
                 aria-current={active ? "page" : undefined}
-                className={`group flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2.5 min-h-[44px] text-[11px] font-semibold uppercase tracking-[0.14em] transition-all duration-200 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-transparent ${
+                className={`group flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2.5 min-h-11 text-[11px] font-semibold uppercase tracking-[0.14em] transition-all duration-200 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-transparent ${
                   active
-                    ? "border-violet-400/35 bg-gradient-to-r from-violet-500/24 via-violet-500/18 to-sky-500/18 text-violet-100 shadow-[0_0_0_1px_rgba(167,139,250,0.12),0_10px_24px_rgba(76,29,149,0.18)]"
-                    : "border-white/[0.05] bg-white/[0.02] text-slate-400 hover:border-white/[0.1] hover:bg-white/[0.04] hover:text-slate-200"
+                    ? "border-violet-400/35 bg-linear-to-r from-violet-500/24 via-violet-500/18 to-sky-500/18 text-violet-100 shadow-[0_0_0_1px_rgba(167,139,250,0.12),0_10px_24px_rgba(76,29,149,0.18)]"
+                    : "border-white/5 bg-white/2 text-slate-400 hover:border-white/10 hover:bg-white/4 hover:text-slate-200"
                 }`}
                 title={label}
               >

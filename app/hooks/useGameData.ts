@@ -10,6 +10,7 @@ import { useGameEpochUiState } from "./useGameEpochUiState";
 import { useGameGridReads } from "./useGameGridReads";
 import { useGameHistoryData } from "./useGameHistoryData";
 import { useGameLiveStateSnapshot, type LiveStateApiResponse } from "./useGameLiveStateSnapshot";
+import { getFormattedBalance } from "../lib/balanceFormatting";
 import { useGamePollingConfig } from "./useGamePollingConfig";
 import { useGameTileUserCounts } from "./useGameTileUserCounts";
 import { useGameUserBets } from "./useGameUserBets";
@@ -233,7 +234,7 @@ export function useGameData(options?: UseGameDataOptions) {
     effectiveJackpotInfoRaw,
     effectiveRolloverPoolRaw,
     effectiveTileData,
-    tokenBalanceFormatted: tokenBalance?.formatted,
+    tokenBalanceFormatted: getFormattedBalance(tokenBalance) ?? undefined,
     isRevealing,
     effectiveGridEpochData,
     gridDisplayEpochBigInt,

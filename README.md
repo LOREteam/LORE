@@ -30,6 +30,7 @@ Useful optional vars are documented in `.env.example` and `.env.local.example`.
 
 Important for future contract deployments:
 
+- Current testnet deploy: `Linea Sepolia`, contract `0x98eef041b012668529fb66ac3133900fdffc7282`, deploy block `28869863`.
 - Set `LINEA_NETWORK` and `NEXT_PUBLIC_LINEA_NETWORK` to `mainnet` for production.
 - Set `KEEPER_CONTRACT_ADDRESS` for server routes and keeper bot.
 - Set `NEXT_PUBLIC_CONTRACT_ADDRESS` for the frontend.
@@ -63,6 +64,7 @@ Important for future contract deployments:
 - Any variable prefixed with `NEXT_PUBLIC_` is exposed to the client bundle.
 - Chat keeps only the latest 100 messages in SQLite; indexed game history is stored in full from the configured deploy/start block.
 - If you run only `npm run dev:ui`, gameplay works but indexed history/analytics storage will stay empty until `npm run indexer` (or `npm run dev`) is running against the same `LORE_DB_PATH`.
+- When the configured contract address changes, old contract-scoped indexer/storage data is retained by default. Set `LORE_ALLOW_CONTRACT_SCOPE_PURGE=1` only after taking a DB backup if you intentionally want startup to remove old scoped data and legacy `data/lore-v*.sqlite*` artifacts.
 
 ## Health / Admin
 
@@ -84,7 +86,7 @@ Important for future contract deployments:
 - The checked-in [ecosystem.config.cjs](/C:/Users/bogda/linea-miner-main/ecosystem.config.cjs) now reflects that split directly: `lore-site`, `lore-bot`, and `lore-indexer` are supervised independently.
 - SQLite is acceptable only for a single-node deployment with a persistent volume and backups. For mainnet, set `LORE_DB_PATH` to an absolute persistent path outside the repo checkout.
 - Mainnet deploys should use an explicit private RPC via `KEEPER_RPC_URL`; do not rely on public fallback RPC ordering for production writes.
-- Keep `/api/health/runtime` and `/api/health/data-sync` behind secret-backed diagnostics access outside localhost, and wire external alerts to stale indexer heartbeat / lag.
+- Keep `/api/health/runtime` and `/api/health/data-sync` behind secret-backed diagnostics access, and wire external alerts to stale indexer heartbeat / lag.
 - A concrete host-side runbook is in [docs/production-runbook.md](/C:/Users/bogda/linea-miner-main/docs/production-runbook.md).
 
 ## Deploy

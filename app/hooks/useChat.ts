@@ -17,7 +17,7 @@ export interface ChatMessage {
 const MESSAGES_LIMIT = 100;
 export const CHAT_RATE_LIMIT_MS = 1_500;
 const MAX_TEXT_LENGTH = 280;
-const POLL_INTERVAL_MS = 3_000;
+const POLL_INTERVAL_MS = 1_500;
 const HIDDEN_POLL_INTERVAL_MS = 15_000;
 const CLOSED_POLL_INTERVAL_MS = 12_000;
 const HIDDEN_CLOSED_POLL_INTERVAL_MS = 45_000;
@@ -94,10 +94,20 @@ function loadCachedMessages(): ChatMessage[] {
 function saveCachedMessages(messages: ChatMessage[]) {
   if (typeof localStorage === "undefined") return;
   try {
-    localStorage.setItem(CHAT_CACHE_KEY, JSON.stringify(messages.slice(-MESSAGES_LIMIT)));
+    localStorage.setItem(
+      CHAT_CACHE_KEY,
+      JSON.stringify(sortChatMessagesAsc(messages).slice(-MESSAGES_LIMIT)),
+    );
   } catch {
     // ignore cache write failures
   }
+}
+
+function sortChatMessagesAsc(messages: ChatMessage[]) {
+  return [...messages].sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+    return a.id.localeCompare(b.id);
+  });
 }
 
 async function fetchMessages(signal?: AbortSignal): Promise<ChatMessage[]> {
@@ -109,10 +119,10 @@ async function fetchMessages(signal?: AbortSignal): Promise<ChatMessage[]> {
   if (!res.ok || json.error) {
     throw new Error(json.error || `HTTP ${res.status}`);
   }
-  return (json.messages ?? []).slice(-MESSAGES_LIMIT);
+  return sortChatMessagesAsc((json.messages ?? []).slice(-MESSAGES_LIMIT));
 }
 
-async function postMessage(payload: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+async function postMessage(payload: Record<string, unknown>, signal?: AbortSignal): Promise<ChatMessage | null> {
   const res = await fetch("/api/chat/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -120,10 +130,12 @@ async function postMessage(payload: Record<string, unknown>, signal?: AbortSigna
     body: JSON.stringify(payload),
     signal,
   });
+  const json = await readJsonResponse<{ ok?: boolean; message?: ChatMessage; error?: string }>(res);
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Chat write HTTP ${res.status}: ${body}`);
+    throw new Error(json?.error || `Chat write HTTP ${res.status}`);
   }
+  if (json?.error) throw new Error(json.error);
+  return json?.message ?? null;
 }
 
 export function useChat(walletAddress: string | null, options?: { open?: boolean; auth?: ChatAuthControls }) {
@@ -142,6 +154,23 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
   const localAuth = useChatAuth(walletAddress, "Verify wallet for chat");
   const { authReady, ensureChatAuth, refreshAuth, clearAuth } = options?.auth ?? localAuth;
 
+  const commitMessages = useCallback((nextMessages: ChatMessage[]) => {
+    const next = sortChatMessagesAsc(nextMessages).slice(-MESSAGES_LIMIT);
+    messagesRef.current = next;
+    setMessages(next);
+    saveCachedMessages(next);
+  }, []);
+
+  const mergeLocalPendingMessages = useCallback((serverMessages: ChatMessage[]) => {
+    const pending = messagesRef.current.filter((message) => message.id.startsWith("local:"));
+    if (pending.length === 0) return serverMessages;
+    const serverIds = new Set(serverMessages.map((message) => message.id));
+    return [
+      ...serverMessages,
+      ...pending.filter((message) => !serverIds.has(message.id)),
+    ];
+  }, []);
+
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
@@ -158,12 +187,16 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
 
   useEffect(() => {
     if (sendCooldownRemainingMs <= 0) return;
-    const timer = window.setInterval(() => {
-      const remaining = Math.max(0, CHAT_RATE_LIMIT_MS - (Date.now() - lastSentRef.current));
-      setSendCooldownRemainingMs(remaining);
-    }, 33);
+    const remaining = Math.max(0, CHAT_RATE_LIMIT_MS - (Date.now() - lastSentRef.current));
+    if (remaining <= 0) {
+      setSendCooldownRemainingMs(0);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setSendCooldownRemainingMs(0);
+    }, remaining);
     return () => {
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, [sendCooldownRemainingMs]);
 
@@ -174,9 +207,9 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
       try {
         const msgs = await fetchMessages(controller.signal);
         if (controller.signal.aborted) return;
-        if (!areMessagesEqual(messagesRef.current, msgs)) {
-          setMessages(msgs);
-          saveCachedMessages(msgs);
+        const nextMessages = mergeLocalPendingMessages(msgs);
+        if (!areMessagesEqual(messagesRef.current, nextMessages)) {
+          commitMessages(nextMessages);
         }
         setConnected(true);
         pollWarnAtRef.current = 0;
@@ -203,7 +236,7 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
       controller.abort();
       clearInterval(timer);
     };
-  }, [isPageVisible, open]);
+  }, [commitMessages, isPageVisible, mergeLocalPendingMessages, open]);
 
   const sendMessage = useCallback(
     async (text: string, senderName: string | null, senderAvatar: string | null) => {
@@ -234,34 +267,58 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
       if (senderName) payload.senderName = senderName;
       const normalizedAvatar = sanitizeChatAvatarValue(senderAvatar, MAX_AVATAR_LENGTH);
       if (normalizedAvatar) payload.senderAvatar = normalizedAvatar;
+      const optimisticMessage: ChatMessage = {
+        id: `local:${now}:${Math.random().toString(36).slice(2)}`,
+        text: trimmed,
+        sender: walletAddress.toLowerCase(),
+        senderName: senderName || null,
+        senderAvatar: normalizedAvatar || null,
+        timestamp: now,
+      };
+      const addOptimisticMessage = () => {
+        if (messagesRef.current.some((message) => message.id === optimisticMessage.id)) return;
+        commitMessages([...messagesRef.current, optimisticMessage]);
+      };
+      const removeOptimisticMessage = () => {
+        if (!messagesRef.current.some((message) => message.id === optimisticMessage.id)) return;
+        commitMessages(messagesRef.current.filter((message) => message.id !== optimisticMessage.id));
+      };
+      const replaceOptimisticMessage = (message: ChatMessage | null) => {
+        if (!message) return;
+        const withoutOptimistic = messagesRef.current.filter((item) => item.id !== optimisticMessage.id);
+        if (withoutOptimistic.some((item) => item.id === message.id)) {
+          commitMessages(withoutOptimistic);
+          return;
+        }
+        commitMessages([...withoutOptimistic, message]);
+      };
 
       try {
+        addOptimisticMessage();
+        let savedMessage: ChatMessage | null = null;
         try {
-          await postMessage(payload);
+          savedMessage = await postMessage(payload);
         } catch (err) {
           if (!isChatAuthError(err)) throw err;
 
           const refreshed = await refreshAuth();
           if (refreshed) {
-            await postMessage(payload);
+            savedMessage = await postMessage(payload);
           } else {
             clearAuth();
             const reauthed = await ensureChatAuth();
             if (!reauthed) throw err;
-            await postMessage(payload);
+            savedMessage = await postMessage(payload);
           }
         }
 
-        const msgs = await fetchMessages();
-        if (!areMessagesEqual(messagesRef.current, msgs)) {
-          setMessages(msgs);
-          saveCachedMessages(msgs);
-        }
+        replaceOptimisticMessage(savedMessage);
         setConnected(true);
         sendWarnAtRef.current = 0;
         setIsSending(false);
         return true;
       } catch (err) {
+        removeOptimisticMessage();
         setConnected(false);
         if (isNetworkFetchError(err)) {
           warnNetworkOnce("[Chat] Send network unavailable:", sendWarnAtRef, err);
@@ -272,7 +329,7 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         return false;
       }
     },
-    [walletAddress, clearAuth, ensureChatAuth, refreshAuth],
+    [walletAddress, clearAuth, commitMessages, ensureChatAuth, refreshAuth],
   );
 
   return { messages, sendMessage, connected, authReady, ensureChatAuth, sendCooldownRemainingMs, isSending };

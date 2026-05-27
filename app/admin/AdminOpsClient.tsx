@@ -7,6 +7,7 @@ import { toHex } from "viem";
 import { APP_CHAIN_ID } from "../lib/constants";
 import {
   ADMIN_AUTH_WALLET,
+  ADMIN_AUTH_WALLET_CONFIGURED,
   buildAdminAuthMessage,
   createAdminAuthNonce,
 } from "../lib/adminAuth";
@@ -218,6 +219,10 @@ function shortenAddress(value: string) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
+function formatAdminWalletLabel() {
+  return ADMIN_AUTH_WALLET_CONFIGURED ? shortenAddress(ADMIN_AUTH_WALLET) : "not configured";
+}
+
 function fmtNumber(value?: number | null) {
   if (value == null || !Number.isFinite(value)) return "...";
   return value.toLocaleString();
@@ -248,7 +253,7 @@ function statusToneClass(status?: string | null) {
   if (status === "healthy" || status === "ok") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
   if (status === "degraded") return "border-amber-500/30 bg-amber-500/10 text-amber-200";
   if (status === "error") return "border-red-500/30 bg-red-500/10 text-red-200";
-  return "border-white/10 bg-white/[0.04] text-slate-300";
+  return "border-white/10 bg-white/4 text-slate-300";
 }
 
 function staleToneClass(stale?: boolean) {
@@ -323,12 +328,14 @@ export default function AdminOpsClient() {
     return [...values];
   }, [address, wallets]);
 
-  const isAdminWallet = connectedAddresses.includes(ADMIN_AUTH_WALLET);
+  const isAdminWallet = ADMIN_AUTH_WALLET_CONFIGURED && connectedAddresses.includes(ADMIN_AUTH_WALLET);
   const isLocalHost =
     typeof window !== "undefined" &&
     ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
   const adminWallet = useMemo(
-    () => wallets.find((wallet) => wallet.address?.toLowerCase() === ADMIN_AUTH_WALLET) ?? null,
+    () => ADMIN_AUTH_WALLET_CONFIGURED
+      ? wallets.find((wallet) => wallet.address?.toLowerCase() === ADMIN_AUTH_WALLET) ?? null
+      : null,
     [wallets],
   );
   const canSeePrivateDiagnostics =
@@ -741,6 +748,11 @@ export default function AdminOpsClient() {
 
   const handleVerifyAdminWallet = useCallback(async () => {
     if (!authenticated || !isAdminWallet || adminAuthBusy) return;
+    if (!ADMIN_AUTH_WALLET_CONFIGURED) {
+      setAdminAuthReady(false);
+      setAdminAuthError("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS is not configured for this environment.");
+      return;
+    }
 
     setAdminAuthBusy(true);
     setAdminAuthError(null);
@@ -867,7 +879,7 @@ export default function AdminOpsClient() {
   }, [canSeePrivateDiagnostics, fetchHealth, fetchOps, fetchProcesses, processActionBusy]);
 
   return (
-    <main className="min-h-screen bg-[#060612] px-6 py-8 text-slate-200">
+    <main className="min-h-screen bg-background px-6 py-8 text-slate-200">
       <div className="mx-auto max-w-5xl space-y-4">
         <div className="space-y-2">
           <h1 className="text-2xl font-bold">LORE Ops</h1>
@@ -881,7 +893,7 @@ export default function AdminOpsClient() {
                   href="/api/health/runtime"
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/[0.08]"
+                  className="inline-flex items-center rounded-full border border-white/10 bg-white/4 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/8"
                 >
                   Runtime JSON
                 </a>
@@ -889,7 +901,7 @@ export default function AdminOpsClient() {
                   href="/api/health/data-sync"
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/[0.08]"
+                  className="inline-flex items-center rounded-full border border-white/10 bg-white/4 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/8"
                 >
                   Data Sync JSON
                 </a>
@@ -923,7 +935,7 @@ export default function AdminOpsClient() {
             ) : (
               <button
                 onClick={() => void handleLogout()}
-                className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/[0.08]"
+                className="inline-flex items-center rounded-full border border-white/10 bg-white/4 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/8"
               >
                 Logout
               </button>
@@ -943,17 +955,23 @@ export default function AdminOpsClient() {
           </div>
         ) : null}
 
+        {!ADMIN_AUTH_WALLET_CONFIGURED ? (
+          <div className="rounded border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+            `NEXT_PUBLIC_ADMIN_WALLET_ADDRESS` is not configured. Admin wallet verification is disabled until this environment is fixed.
+          </div>
+        ) : null}
+
         {!ready ? (
-          <div className="rounded border border-white/10 bg-white/[0.02] p-4 text-sm text-slate-300">
+          <div className="rounded border border-white/10 bg-white/2 p-4 text-sm text-slate-300">
             Checking wallet session...
           </div>
         ) : null}
 
-        {ready && authenticated && !isAdminWallet ? (
+        {ready && authenticated && ADMIN_AUTH_WALLET_CONFIGURED && !isAdminWallet ? (
           <div className="rounded border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
             Connected wallet is not allowed for full admin access.
             <div className="mt-2 text-amber-100">
-              Allowed wallet: <span className="font-mono">{shortenAddress(ADMIN_AUTH_WALLET)}</span>
+              Allowed wallet: <span className="font-mono">{formatAdminWalletLabel()}</span>
             </div>
             {connectedAddresses.length > 0 ? (
               <div className="mt-1 text-amber-100">
@@ -965,9 +983,9 @@ export default function AdminOpsClient() {
           </div>
         ) : null}
 
-        {ready && !authenticated ? (
+        {ready && !authenticated && ADMIN_AUTH_WALLET_CONFIGURED ? (
           <div className="rounded border border-violet-500/30 bg-violet-500/10 p-4 text-sm text-violet-100">
-            Connect the admin wallet <span className="font-mono">{shortenAddress(ADMIN_AUTH_WALLET)}</span> to unlock the full diagnostics view.
+            Connect the admin wallet <span className="font-mono">{formatAdminWalletLabel()}</span> to unlock the full diagnostics view.
           </div>
         ) : null}
 
@@ -988,7 +1006,7 @@ export default function AdminOpsClient() {
           </div>
         ) : null}
 
-        <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+        <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
           <div className="flex items-center justify-between gap-3">
             <div className="text-xs uppercase tracking-wider text-gray-400">What Needs Attention Now</div>
             <div className="text-xs text-gray-500">{attentionItems.length} items</div>
@@ -1007,7 +1025,7 @@ export default function AdminOpsClient() {
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div className="space-y-2 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-2 rounded border border-white/10 bg-white/2 p-4">
             <div className="text-xs uppercase tracking-wider text-gray-400">Runtime</div>
             <div className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${statusToneClass(runtimeHealth?.status)}`}>
               {runtimeHealth?.status ?? "..."}
@@ -1016,7 +1034,7 @@ export default function AdminOpsClient() {
               Visibility: <b className="text-slate-200">{runtimeHealth?.visibility ?? "..."}</b>
             </div>
           </div>
-          <div className="space-y-2 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-2 rounded border border-white/10 bg-white/2 p-4">
             <div className="text-xs uppercase tracking-wider text-gray-400">Data Sync</div>
             <div className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${statusToneClass(dataSyncHealth?.status)}`}>
               {dataSyncHealth?.status ?? "..."}
@@ -1025,7 +1043,7 @@ export default function AdminOpsClient() {
               Phase: <b className="text-slate-200">{fmtMode(dataSyncHealth?.catchUp?.phase)}</b>
             </div>
           </div>
-          <div className="space-y-2 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-2 rounded border border-white/10 bg-white/2 p-4">
             <div className="text-xs uppercase tracking-wider text-gray-400">Indexer Run</div>
             <div className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${staleToneClass(dataSyncHealth?.indexer?.run?.stale)}`}>
               {dataSyncHealth?.indexer?.run?.stale ? "stale" : "fresh"}
@@ -1038,7 +1056,7 @@ export default function AdminOpsClient() {
 
         {canSeePrivateDiagnostics ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
             <div className="text-xs uppercase tracking-wider text-gray-400">Indexer / Storage</div>
             <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
               <div>Network: <b>{dataSyncHealth?.env?.network ?? "..."}</b></div>
@@ -1059,7 +1077,7 @@ export default function AdminOpsClient() {
             ) : null}
           </div>
 
-          <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
             <div className="text-xs uppercase tracking-wider text-gray-400">Serving Modes</div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div className="space-y-2 rounded border border-white/10 bg-black/20 p-3">
@@ -1085,7 +1103,7 @@ export default function AdminOpsClient() {
         </div>
         ) : null}
 
-        <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+        <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
           <div className="text-xs uppercase tracking-wider text-gray-400">Catch-Up Progress</div>
           <div className="space-y-1">
             <div className="flex items-center justify-between text-sm">
@@ -1128,7 +1146,7 @@ export default function AdminOpsClient() {
         </div>
 
         {canSeePrivateDiagnostics ? (
-        <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+        <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
           <div className="flex items-center justify-between gap-3">
             <div className="text-xs uppercase tracking-wider text-gray-400">Hot Routes</div>
             <div className="text-xs text-gray-500">fast view for the routes that matter most to UX</div>
@@ -1172,7 +1190,7 @@ export default function AdminOpsClient() {
 
         {canSeePrivateDiagnostics ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
             <div className="text-xs uppercase tracking-wider text-gray-400">Heartbeat</div>
             <div className="grid grid-cols-1 gap-2 text-sm">
               <div className="rounded border border-white/10 bg-black/20 p-3">
@@ -1235,7 +1253,7 @@ export default function AdminOpsClient() {
             ) : null}
           </div>
 
-          <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
             <div className="text-xs uppercase tracking-wider text-gray-400">Hot API Runtime</div>
             {runtimeMetricRows.length === 0 ? (
               <div className="text-sm text-gray-400">No runtime metrics recorded yet.</div>
@@ -1258,7 +1276,7 @@ export default function AdminOpsClient() {
         {canSeePrivateDiagnostics ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           {opsData?.logSources.map((source) => (
-            <div key={source.key} className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+            <div key={source.key} className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
               {(() => {
                 const processKey = source.key === "bot" || source.key === "indexer" ? source.key : null;
                 const processState = processKey ? processStates?.[processKey] ?? null : null;
@@ -1307,7 +1325,7 @@ export default function AdminOpsClient() {
 
         {canSeePrivateDiagnostics ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="text-xs uppercase tracking-wider text-gray-400">Recent Errors</div>
               <div className="text-xs text-gray-500">{opsLoading ? "loading..." : `${opsData?.recentErrors.length ?? 0} items`}</div>
@@ -1331,7 +1349,7 @@ export default function AdminOpsClient() {
             </div>
           </div>
 
-          <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="text-xs uppercase tracking-wider text-gray-400">Recent Events</div>
               <div className="text-xs text-gray-500">{opsLoading ? "loading..." : `${opsData?.recentEvents.length ?? 0} items`}</div>
@@ -1359,7 +1377,7 @@ export default function AdminOpsClient() {
 
         {canSeePrivateDiagnostics ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
             <div className="text-xs uppercase tracking-wider text-gray-400">Latest Resolved Epochs</div>
             <div className="space-y-2">
               {opsData?.recentResolvedEpochs.map((row) => (
@@ -1381,7 +1399,7 @@ export default function AdminOpsClient() {
             </div>
           </div>
 
-          <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+          <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
             <div className="text-xs uppercase tracking-wider text-gray-400">Jackpots / Reward Claims</div>
             <div className="rounded border border-sky-500/20 bg-sky-500/10 p-3 text-sm text-sky-100">
               This is historical jackpot history across many epochs. Daily jackpot can trigger at most once per UTC day, so several
@@ -1415,7 +1433,7 @@ export default function AdminOpsClient() {
         ) : null}
 
         {canSeePrivateDiagnostics ? (
-        <div className="space-y-3 rounded border border-white/10 bg-white/[0.02] p-4">
+        <div className="space-y-3 rounded border border-white/10 bg-white/2 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-xs uppercase tracking-wider text-gray-400">Diagnostics Snapshot</div>

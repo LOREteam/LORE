@@ -23,6 +23,9 @@ export interface WalletTransfer {
   amount: string;
   amountNum: number;
   txHash: string;
+  blockNumber?: bigint;
+  transactionIndex?: number;
+  logIndex?: number;
 }
 
 export interface WalletTransfersSummary {
@@ -183,7 +186,16 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
           totalOut += amountNum;
           const txHash = log.transactionHash ?? "";
           seenTx.add(txHash);
-          transfers.push({ direction: "out", counterparty: args.to, amount: amountNum.toFixed(2), amountNum, txHash });
+          transfers.push({
+            direction: "out",
+            counterparty: args.to,
+            amount: amountNum.toFixed(2),
+            amountNum,
+            txHash,
+            blockNumber: log.blockNumber ?? undefined,
+            transactionIndex: log.transactionIndex ?? undefined,
+            logIndex: log.logIndex ?? undefined,
+          });
         } catch { /* skip */ }
       }
 
@@ -198,11 +210,29 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
           if (seenTx.has(txHash)) continue;
           const amountNum = parseFloat(formatUnits(args.value, 18));
           totalIn += amountNum;
-          transfers.push({ direction: "in", counterparty: args.from, amount: amountNum.toFixed(2), amountNum, txHash });
+          transfers.push({
+            direction: "in",
+            counterparty: args.from,
+            amount: amountNum.toFixed(2),
+            amountNum,
+            txHash,
+            blockNumber: log.blockNumber ?? undefined,
+            transactionIndex: log.transactionIndex ?? undefined,
+            logIndex: log.logIndex ?? undefined,
+          });
         } catch { /* skip */ }
       }
 
-      transfers.sort((a, b) => b.amountNum - a.amountNum);
+      transfers.sort((a, b) => {
+        const aBlock = a.blockNumber ?? 0n;
+        const bBlock = b.blockNumber ?? 0n;
+        if (aBlock !== bBlock) return bBlock > aBlock ? 1 : -1;
+        const txDelta = (b.transactionIndex ?? -1) - (a.transactionIndex ?? -1);
+        if (txDelta !== 0) return txDelta;
+        const logDelta = (b.logIndex ?? -1) - (a.logIndex ?? -1);
+        if (logDelta !== 0) return logDelta;
+        return (b.txHash ?? "").localeCompare(a.txHash ?? "");
+      });
 
       const summary: WalletTransfersSummary = { transfers, totalIn, totalOut };
       cachedAtRef.current = Date.now();
@@ -213,7 +243,9 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       }
     } catch {
       if (mountedRef.current && requestId === requestIdRef.current) {
-        setData({ transfers: [], totalIn: 0, totalOut: 0 });
+        if (dataRef.current === null) {
+          setData({ transfers: [], totalIn: 0, totalOut: 0 });
+        }
       }
     } finally {
       if (mountedRef.current && requestId === requestIdRef.current) {

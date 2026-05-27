@@ -33,7 +33,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
     body: "The Hub is the main game screen. Select one or more tiles, set the amount per tile, and send the bet before reveal starts.",
     bullets: [
       "The total equals your amount per tile multiplied by the number of selected tiles.",
-      "Repeat Bet restores your last tile selection and bet amount.",
+      "Lucky 3 and Lucky 5 quickly pick random tiles for manual bets.",
       "The header shows the live epoch, countdown, pool, and wallet balances.",
     ],
     tab: "hub",
@@ -151,7 +151,7 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-0 z-[260] flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm md:items-center md:p-6">
+    <div className="fixed inset-0 z-260 flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm md:items-center md:p-6">
       <UiPanel
         tone="default"
         padding="md"
@@ -181,9 +181,9 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
             <span>Step {stepIndex + 1} / {TUTORIAL_STEPS.length}</span>
             <span>{activeTab}</span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
+          <div className="h-2 overflow-hidden rounded-full bg-white/6">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-violet-500 via-fuchsia-500 to-sky-400 transition-[width] duration-300"
+              className="h-full rounded-full bg-linear-to-r from-violet-500 via-fuchsia-500 to-sky-400 transition-[width] duration-300"
               style={{ width: `${progressPct}%` }}
             />
           </div>
@@ -193,7 +193,7 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
           {currentStep.bullets.map((bullet) => (
             <div
               key={bullet}
-              className="rounded-2xl border border-white/[0.06] bg-white/[0.02] px-3 py-3 text-sm leading-relaxed text-slate-300"
+              className="rounded-2xl border border-white/6 bg-white/2 px-3 py-3 text-sm leading-relaxed text-slate-300"
             >
               {bullet}
             </div>

@@ -46,6 +46,22 @@ contract LineaOre7702Delegate {
         _callGame(game, abi.encodeWithSignature("placeBatchBetsSameAmount(uint256[],uint256)", tileIds, amount));
     }
 
+    function approveAndPlaceBatchBitmap(
+        address token,
+        address game,
+        uint32 tileMask,
+        uint256 amount,
+        address spender,
+        uint256 approvalAmount
+    ) external onlyDelegatedSelf {
+        if (token == address(0) || game == address(0) || spender == address(0)) revert ZeroAddress();
+        if (tileMask == 0) revert EmptyArray();
+        if (amount == 0 || approvalAmount == 0) revert ZeroAmount();
+
+        IERC20(token).forceApprove(spender, approvalAmount);
+        _callGame(game, abi.encodeWithSignature("placeBatchBetsBitmap(uint32,uint256)", tileMask, amount));
+    }
+
     function placeBatchSameAmount(
         address game,
         uint256[] calldata tileIds,
@@ -56,6 +72,18 @@ contract LineaOre7702Delegate {
         if (amount == 0) revert ZeroAmount();
 
         _callGame(game, abi.encodeWithSignature("placeBatchBetsSameAmount(uint256[],uint256)", tileIds, amount));
+    }
+
+    function placeBatchBitmap(
+        address game,
+        uint32 tileMask,
+        uint256 amount
+    ) external onlyDelegatedSelf {
+        if (game == address(0)) revert ZeroAddress();
+        if (tileMask == 0) revert EmptyArray();
+        if (amount == 0) revert ZeroAmount();
+
+        _callGame(game, abi.encodeWithSignature("placeBatchBetsBitmap(uint32,uint256)", tileMask, amount));
     }
 
     function claimRewards(address game, uint256[] calldata epochs) external onlyDelegatedSelf {

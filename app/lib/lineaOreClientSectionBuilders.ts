@@ -351,7 +351,6 @@ type BuildPageTabContentPropsOptions = {
   gridSelectedTiles: PageTabContentProps["hubProps"]["gridSelectedTiles"];
   handleAutoMineWithGuard: PageTabContentProps["hubProps"]["handleAutoMineWithGuard"];
   handleManualMineWithGuard: PageTabContentProps["hubProps"]["handleManualMineWithGuard"];
-  handleRepeatLastBet: PageTabContentProps["hubProps"]["handleRepeatLastBet"];
   isAnalyzing: PageTabContentProps["hubProps"]["isAnalyzing"];
   isAutoMining: PageTabContentProps["hubProps"]["isAutoMining"];
   isClaiming: PageTabContentProps["hubProps"]["isClaiming"];
@@ -364,10 +363,10 @@ type BuildPageTabContentPropsOptions = {
   liveStateReady: PageTabContentProps["hubProps"]["liveStateReady"];
   isWeeklyJackpot: PageTabContentProps["hubProps"]["isWeeklyJackpot"];
   jackpotAmount: PageTabContentProps["hubProps"]["jackpotAmount"];
-  lastBet: PageTabContentProps["hubProps"]["lastBet"];
   lowEthBalance: boolean;
   claimReward: PageTabContentProps["hubProps"]["onClaim"];
   claimAll: PageTabContentProps["hubProps"]["onClaimAll"];
+  setTiles: PageTabContentProps["hubProps"]["onQuickPickTiles"];
   scanRewards: PageTabContentProps["hubProps"]["onScan"];
   stableTileClick: PageTabContentProps["hubProps"]["onTileClick"];
   reducedMotion: PageTabContentProps["hubProps"]["reducedMotion"];
@@ -415,7 +414,6 @@ export function buildPageTabContentProps({
   gridSelectedTiles,
   handleAutoMineWithGuard,
   handleManualMineWithGuard,
-  handleRepeatLastBet,
   isAnalyzing,
   isAutoMining,
   isClaiming,
@@ -428,10 +426,10 @@ export function buildPageTabContentProps({
   liveStateReady,
   isWeeklyJackpot,
   jackpotAmount,
-  lastBet,
   lowEthBalance,
   claimReward,
   claimAll,
+  setTiles,
   scanRewards,
   stableTileClick,
   reducedMotion,
@@ -481,7 +479,6 @@ export function buildPageTabContentProps({
       gridSelectedTiles,
       handleAutoMineWithGuard,
       handleManualMineWithGuard,
-      handleRepeatLastBet,
       isAnalyzing,
       isAutoMining,
       isClaiming,
@@ -494,10 +491,10 @@ export function buildPageTabContentProps({
       liveStateReady,
       isWeeklyJackpot,
       jackpotAmount,
-      lastBet,
       lowEthBalance,
       onClaim: claimReward,
       onClaimAll: claimAll,
+      onQuickPickTiles: setTiles,
       onScan: scanRewards,
       onTileClick: stableTileClick,
       reducedMotion,

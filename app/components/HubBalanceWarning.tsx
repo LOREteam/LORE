@@ -19,7 +19,7 @@ export function HubBalanceWarning({
     <div className="mb-2 flex items-start justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-red-400 sm:text-xs sm:tracking-wider">
       <div className="flex min-w-0 items-start gap-2">
         <span className="text-base leading-none">!</span>
-        <span className="leading-tight break-words">
+        <span className="leading-tight wrap-break-word">
           {lowEthBalance && lowTokenBalance
             ? "Privy: low ETH (gas) & LINEA token"
             : lowEthBalance

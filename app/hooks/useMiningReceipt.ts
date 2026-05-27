@@ -15,6 +15,26 @@ export function useMiningReceipt({ publicClientRef }: UseMiningReceiptOptions) {
     async (hash: `0x${string}`, clientOverride?: PublicClient): Promise<ReceiptState> => {
       const client = clientOverride ?? publicClientRef.current;
       if (!client) throw new Error("Public client unavailable");
+      const isReceiptTimeoutLike = (value: unknown) => {
+        const message = value instanceof Error ? value.message.toLowerCase() : String(value).toLowerCase();
+        const name = value instanceof Error ? value.name : "";
+        return (
+          name === "TimeoutError" ||
+          name === "TransactionReceiptNotFoundError" ||
+          message.includes("timed out") ||
+          message.includes("timeout") ||
+          message.includes("receipt could not be found")
+        );
+      };
+      const isTxLookupMissing = (value: unknown) => {
+        const message = value instanceof Error ? value.message.toLowerCase() : String(value).toLowerCase();
+        const name = value instanceof Error ? value.name : "";
+        return (
+          name === "TransactionNotFoundError" ||
+          message.includes("transaction not found") ||
+          message.includes("transaction could not be found")
+        );
+      };
 
       try {
         const receipt = await client.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
@@ -40,24 +60,22 @@ export function useMiningReceipt({ publicClientRef }: UseMiningReceiptOptions) {
             );
           }
           return "confirmed";
-        } catch {
-          const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-          const name = error instanceof Error ? error.name : "";
-          if (
-            name === "TimeoutError" ||
-            name === "TransactionReceiptNotFoundError" ||
-            message.includes("timed out") ||
-            message.includes("timeout") ||
-            message.includes("receipt could not be found")
-          ) {
+        } catch (lateReceiptError) {
+          if (isReceiptTimeoutLike(error)) {
             try {
               await client.getTransaction({ hash });
               return "pending";
-            } catch {
+            } catch (txLookupError) {
+              if (!isTxLookupMissing(txLookupError)) {
+                throw txLookupError;
+              }
               const timeoutError = new Error(`Transaction receipt timed out (hash: ${hash})`);
               timeoutError.name = "TransactionReceiptTimeoutError";
               throw timeoutError;
             }
+          }
+          if (!isTxLookupMissing(lateReceiptError)) {
+            throw lateReceiptError;
           }
           throw error;
         }

@@ -79,7 +79,7 @@ export const ChatWidget = React.memo(function ChatWidget({ walletAddress, onOpen
         )}
 
         {!open && unread > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 animate-slide-up">
+          <span className="absolute -top-1 -right-1 min-w-4.5 h-4.5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 animate-slide-up">
             {unread > 99 ? "99+" : unread}
           </span>
         )}

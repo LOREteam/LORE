@@ -28,7 +28,7 @@ export const LoreIntro = React.memo(function LoreIntro() {
   return (
     <div className="relative mb-2 rounded-xl overflow-hidden animate-fade-in lore-border-glow">
       {/* Gradient background */}
-      <div className="absolute inset-0 bg-gradient-to-r from-[#0d0d1a] via-[#120d2e] to-[#0d0d1a]" />
+      <div className="absolute inset-0 bg-linear-to-r from-[#0d0d1a] via-[#120d2e] to-[#0d0d1a]" />
       <div className="absolute inset-0 bg-[url('/kael-hero.png')] bg-right bg-no-repeat bg-contain opacity-[0.12] pointer-events-none" />
       <div className="absolute inset-0 lore-hex-pattern opacity-[0.03]" />
 
@@ -55,7 +55,7 @@ export const LoreIntro = React.memo(function LoreIntro() {
             <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-violet-400/80 lore-text-shimmer">
               The Crystal Lattice
             </span>
-            <span className="w-8 h-px bg-gradient-to-r from-violet-500/50 to-transparent" />
+            <span className="w-8 h-px bg-linear-to-r from-violet-500/50 to-transparent" />
           </div>
 
           <p className="text-xs text-gray-400 leading-relaxed">

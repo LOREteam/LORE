@@ -68,7 +68,16 @@ export function planAutoMinePreparedRoundTransition(
       return {
         kind: "continue",
         action: {
-          event: { type: "round-skipped-existing", liveEpoch: preparedRound.liveEpoch },
+          event: preparedRound.placedEpoch != null
+            ? {
+                type: "round-skipped-existing",
+                liveEpoch: preparedRound.liveEpoch,
+                placedEpoch: preparedRound.placedEpoch,
+              }
+            : {
+                type: "round-skipped-existing",
+                liveEpoch: preparedRound.liveEpoch,
+              },
           syncEffects: { session: true, selection: true, progress: false },
         },
       };

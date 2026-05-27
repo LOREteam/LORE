@@ -158,7 +158,7 @@ export function createAutoMineLoopRuntime({
     },
     async handleEpochReady({ blocks, roundIndex, rounds }) {
       onRefetchEpoch?.();
-      onProgress(`${roundIndex} / ${rounds} - placing bet (${blocks} tiles)...`);
+      onProgress(`${roundIndex + 1} / ${rounds} - placing bet (${blocks} tiles)...`);
     },
     async handleSessionRefresh(refreshSession) {
       try {

@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { APP_CHAIN_ID } from "../../../../app/lib/constants";
 import {
   ADMIN_AUTH_PROOF_TTL_MS,
   ADMIN_AUTH_WALLET,
+  ADMIN_AUTH_WALLET_CONFIGURED,
   isAdminAuthIssuedAtValid,
   parseAdminAuthMessage,
 } from "../../../lib/adminAuth";
@@ -24,13 +24,18 @@ function isAddress(value: unknown): value is `0x${string}` {
   return typeof value === "string" && /^0x[a-fA-F0-9]{40}$/.test(value);
 }
 
-function buildProofKey(address: string, nonce: string, signature: string) {
-  return createHash("sha256")
-    .update(`${address.toLowerCase()}:${nonce}:${signature}`)
-    .digest("hex");
+function buildProofKey(address: string, nonce: string, uri: string) {
+  return `${address.toLowerCase()}:${nonce}:${uri}`;
 }
 
 export async function POST(request: NextRequest) {
+  if (!ADMIN_AUTH_WALLET_CONFIGURED) {
+    return applyNoStoreHeaders(
+      NextResponse.json({ error: "Admin wallet is not configured on this environment" }, { status: 503 }),
+      { varyCookie: true },
+    );
+  }
+
   const rateLimited = await enforceSharedRateLimit(request, {
     bucket: "api-admin-auth",
     limit: 8,
@@ -85,7 +90,7 @@ export async function POST(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Signature verification failed" }, { status: 401 }), { varyCookie: true });
     }
 
-    const proofKey = buildProofKey(authAddress, fields.nonce, authSignature);
+    const proofKey = buildProofKey(authAddress, fields.nonce, fields.uri);
     const issuedAtMs = Date.parse(fields.issuedAt);
     const ttlMs = Math.max(1, ADMIN_AUTH_PROOF_TTL_MS - (Date.now() - issuedAtMs));
     const consumed = acquireExpiringLock(`admin-auth:${proofKey}`, fields.nonce, ttlMs);

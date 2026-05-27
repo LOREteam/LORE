@@ -52,15 +52,22 @@ export const WalletSettingsPrivyPanel = React.memo(function WalletSettingsPrivyP
       {embeddedWalletAddress ? (
         <>
           <p className="text-[10px] text-gray-400 mb-2">All bets go through this wallet. Deposit LINEA and ETH (for gas) here.</p>
-          <div className="text-xs text-white font-mono break-all mb-3 bg-black/20 px-2 py-1.5 rounded-lg border border-white/[0.04]">
+          <div className="text-xs text-white font-mono break-all mb-3 bg-black/20 px-2 py-1.5 rounded-lg border border-white/4">
             {embeddedWalletAddress}
           </div>
           <div className="flex flex-wrap gap-2">
             <UiButton onClick={onCopyEmbeddedAddress} variant="ghost" uppercase size="sm">
               {embeddedAddressCopied ? "Copied" : "Copy"}
             </UiButton>
-            <UiButton onClick={onExportEmbeddedWallet} variant="ghost" uppercase size="sm">
-              Export
+          </div>
+
+          <div className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/6 p-3">
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-amber-300">Security action</div>
+            <p className="mb-2 text-[10px] leading-relaxed text-amber-100/70">
+              Export reveals the private key for this embedded wallet. Use it only when you are ready to store or import it safely.
+            </p>
+            <UiButton onClick={onExportEmbeddedWallet} variant="warning" uppercase size="sm">
+              Export Key
             </UiButton>
           </div>
 

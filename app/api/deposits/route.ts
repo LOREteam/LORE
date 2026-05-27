@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi } from "viem";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
+import { tileMaskToTileIds } from "../../lib/tileMask";
 import {
   beginRouteMetric,
   failRouteMetric,
@@ -41,10 +42,12 @@ const EVENTS_ABI = parseAbi([
   "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
   "event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)",
   "event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount)",
+  "event BatchBetsBitmapPlaced(uint256 indexed epoch, address indexed user, uint32 tileMask, uint256 amount, uint256 totalAmount)",
 ]);
 const [betSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BetPlaced" });
 const [batchSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsPlaced" });
 const [batchSameAmountSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsSameAmountPlaced" });
+const [batchBitmapSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsBitmapPlaced" });
 
 type DepositRow = {
   epoch: string;
@@ -114,8 +117,8 @@ function dedupeDeposits(rows: DepositRow[]): DepositRow[] {
       byKey.set(key, row);
       continue;
     }
-    const prevBlock = Number(prev.blockNumber ?? "0");
-    const nextBlock = Number(row.blockNumber ?? "0");
+    const prevBlock = BigInt(prev.blockNumber || "0");
+    const nextBlock = BigInt(row.blockNumber || "0");
     if (nextBlock >= prevBlock) {
       byKey.set(key, row);
     }
@@ -163,6 +166,19 @@ function normalizeDepositRow(row: DepositRow): DepositRow {
   };
 }
 
+function sortDepositsDesc<T extends { epoch: string; blockNumber: string; txHash: string }>(rows: T[]) {
+  return [...rows].sort((a, b) => {
+    const aBlock = BigInt(a.blockNumber || "0");
+    const bBlock = BigInt(b.blockNumber || "0");
+    if (aBlock === bBlock) {
+      const epochDelta = Number(b.epoch) - Number(a.epoch);
+      if (epochDelta !== 0) return epochDelta;
+      return (b.txHash ?? "").localeCompare(a.txHash ?? "");
+    }
+    return aBlock > bBlock ? -1 : 1;
+  });
+}
+
 function payloadTouchesCurrentEpoch(payload: DepositsPayload, currentEpochNum: number | null) {
   if (!currentEpochNum || !Array.isArray(payload.deposits) || payload.deposits.length === 0) {
     return false;
@@ -201,9 +217,14 @@ async function fetchDepositsFromChain(
   const betLogs = betSig ? await getLogsByTopicAndUser(betSig, userTopic, fromBlock) : [];
   const batchLogs = batchSig ? await getLogsByTopicAndUser(batchSig, userTopic, fromBlock) : [];
   const batchSameAmountLogs = batchSameAmountSig ? await getLogsByTopicAndUser(batchSameAmountSig, userTopic, fromBlock) : [];
+  const batchBitmapLogs = batchBitmapSig ? await getLogsByTopicAndUser(batchBitmapSig, userTopic, fromBlock) : [];
   const byKey = new Map<string, DepositRow>();
-  const all = [...betLogs, ...batchLogs, ...batchSameAmountLogs];
-  all.sort((a, b) => Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n)));
+  const all = [...betLogs, ...batchLogs, ...batchSameAmountLogs, ...batchBitmapLogs];
+  all.sort((a, b) => {
+    const aBlock = a.blockNumber ?? 0n;
+    const bBlock = b.blockNumber ?? 0n;
+    return aBlock < bBlock ? -1 : aBlock > bBlock ? 1 : 0;
+  });
 
   for (const log of all) {
     const topic0 = log.topics[0];
@@ -278,15 +299,35 @@ async function fetchDepositsFromChain(
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
+      } else if (topic0 === batchBitmapSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "BatchBetsBitmapPlaced") continue;
+        const args = decoded.args as { epoch: bigint; tileMask: number; amount: bigint; totalAmount: bigint };
+        const ep = Number(args.epoch);
+        if (currentEpoch && (ep < 1 || ep > currentEpoch)) continue;
+        const tileIds = tileMaskToTileIds(args.tileMask);
+        const amount = formatUnits(args.amount, 18);
+        const key = buildDepositKey(
+          args.epoch.toString(),
+          log.transactionHash ?? "",
+          (log.blockNumber ?? 0n).toString(),
+        );
+        byKey.set(key, {
+          epoch: args.epoch.toString(),
+          tileIds,
+          amounts: tileIds.map(() => amount),
+          totalAmount: formatUnits(args.totalAmount, 18),
+          totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
       }
     } catch {
       // malformed log
     }
   }
 
-  const rows = Array.from(byKey.values());
-  rows.sort((a, b) => Number(b.epoch) - Number(a.epoch));
-  return rows.slice(0, 5000);
+  return sortDepositsDesc(Array.from(byKey.values())).slice(0, 5000);
 }
 
 async function resolveFreshCurrentEpochNumber() {
@@ -380,8 +421,8 @@ function readIndexedDeposits(user: string, currentEpochNum: number | null) {
   let deposits = Object.values(raw) as DepositRow[];
   deposits = filterByCurrentEpoch(deposits, currentEpochNum);
   deposits = deposits.filter((d) => {
-    const blockNumber = Number(d.blockNumber ?? "0");
-    if (blockNumber > 0 && BigInt(blockNumber) < CONTRACT_DEPLOY_BLOCK) return false;
+    const blockNumber = BigInt(d.blockNumber || "0");
+    if (blockNumber > 0n && blockNumber < CONTRACT_DEPLOY_BLOCK) return false;
     return true;
   });
   return dedupeDeposits(deposits).map(normalizeDepositRow);
@@ -431,8 +472,7 @@ async function buildDepositsPayload(
     }
   }
 
-  deposits.sort((a, b) => Number(b.epoch) - Number(a.epoch));
-  deposits = deposits.slice(0, 5000);
+  deposits = sortDepositsDesc(deposits).slice(0, 5000);
 
   if (!includeRewards || deposits.length === 0) {
     return {

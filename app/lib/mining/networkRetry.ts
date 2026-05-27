@@ -31,12 +31,14 @@ export async function readWithNetworkRetry<T>(params: {
     read,
     shouldRetry,
   } = params;
+  let lastRetryableError: unknown = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       return await read();
     } catch (error) {
       if (!shouldRetry(error) || !isActive()) throw error;
+      lastRetryableError = error;
       const wait = getNetworkRetryDelayMs(attempt, initialMs, maxMs);
       log.warn("AutoMine", `network error ${actionLabel} (retry ${attempt + 1}), waiting ${(wait / 1000).toFixed(0)}s...`, error);
       onProgress(`RPC offline - retrying in ${(wait / 1000).toFixed(0)}s...`);
@@ -44,5 +46,14 @@ export async function readWithNetworkRetry<T>(params: {
     }
   }
 
-  throw new Error(`Failed to ${actionLabel} after retries`);
+  const retryExhaustedError = new Error(`Network retry exhausted while ${actionLabel}`);
+  retryExhaustedError.name = "NetworkRetryExhaustedError";
+  if (lastRetryableError) {
+    (
+      retryExhaustedError as Error & {
+        cause?: unknown;
+      }
+    ).cause = lastRetryableError;
+  }
+  throw retryExhaustedError;
 }

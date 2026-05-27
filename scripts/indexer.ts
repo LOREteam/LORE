@@ -31,6 +31,7 @@ import {
   getPreferredLineaRpcs,
 } from "../config/publicConfig";
 import { assertProductionRuntimeConfig } from "../config/productionRuntime";
+import { tileMaskToTileIds } from "../app/lib/tileMask";
 import {
   patchJsonPath,
   putJsonPath,
@@ -104,6 +105,7 @@ const EVENTS_ABI = parseAbi([
   "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
   "event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)",
   "event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount)",
+  "event BatchBetsBitmapPlaced(uint256 indexed epoch, address indexed user, uint32 tileMask, uint256 amount, uint256 totalAmount)",
   "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
   "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
   "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
@@ -156,6 +158,7 @@ function setIndexerStatus(key: string, value: unknown) {
 const [betSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BetPlaced" });
 const [batchSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsPlaced" });
 const [batchSameAmountSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsSameAmountPlaced" });
+const [batchBitmapSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsBitmapPlaced" });
 const [resolvedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "EpochResolved" });
 const [dailySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "DailyJackpotAwarded" });
 const [weeklySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "WeeklyJackpotAwarded" });
@@ -361,6 +364,7 @@ async function fetchAllLogs(from: bigint, to: bigint): Promise<Log[]> {
     { sig: betSig, label: "BetPlaced" },
     { sig: batchSig, label: "BatchBets" },
     { sig: batchSameAmountSig, label: "BatchBetsSameAmount" },
+    { sig: batchBitmapSig, label: "BatchBetsBitmap" },
     { sig: resolvedSig, label: "EpochResolved" },
     { sig: dailySig, label: "DailyJackpot" },
     { sig: weeklySig, label: "WeeklyJackpot" },
@@ -378,7 +382,11 @@ async function fetchAllLogs(from: bigint, to: bigint): Promise<Log[]> {
     const logs = await fetchLogsByTopic(sig, label, from, to);
     all.push(...logs);
   }
-  all.sort((a, b) => Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n)));
+  all.sort((a, b) => {
+    const aBlock = a.blockNumber ?? 0n;
+    const bBlock = b.blockNumber ?? 0n;
+    return aBlock < bBlock ? -1 : aBlock > bBlock ? 1 : 0;
+  });
   return all;
 }
 
@@ -543,6 +551,24 @@ function processLogs(logs: Log[]) {
           user: args.user.toLowerCase(),
           tileIds: args.tileIds.map(Number),
           amounts: args.tileIds.map(() => formattedAmount),
+          totalAmount: formatUnits(args.totalAmount, 18),
+          totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
+      } else if (topic0 === batchBitmapSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "BatchBetsBitmapPlaced") continue;
+        const args = decoded.args as {
+          epoch: bigint; user: string; tileMask: number; amount: bigint; totalAmount: bigint;
+        };
+        const tileIds = tileMaskToTileIds(args.tileMask);
+        const formattedAmount = formatUnits(args.amount, 18);
+        bets.push({
+          epoch: args.epoch.toString(),
+          user: args.user.toLowerCase(),
+          tileIds,
+          amounts: tileIds.map(() => formattedAmount),
           totalAmount: formatUnits(args.totalAmount, 18),
           totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
           txHash: log.transactionHash ?? "",

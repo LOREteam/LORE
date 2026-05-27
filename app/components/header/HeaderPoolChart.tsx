@@ -28,7 +28,7 @@ export function HeaderPoolChart({
   rolloverAmount,
 }: HeaderPoolChartProps) {
   return (
-    <div className="min-[900px]:col-span-5 min-[900px]:h-[90px] relative rounded-xl bg-[#080812] border border-white/[0.06] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden min-h-[66px] sm:min-h-[64px] animate-slide-up" style={{ animationDelay: "0.1s" }}>
+    <div className="min-[900px]:col-span-5 min-[900px]:h-22.5 relative rounded-xl bg-[#080812] border border-white/6 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden min-h-16.5 sm:min-h-16 animate-slide-up" style={{ animationDelay: "0.1s" }}>
       <div className="absolute top-2.5 left-3 z-20 pointer-events-none">
         <div className="text-[9px] uppercase font-bold text-gray-500 tracking-wider flex flex-wrap items-center gap-1.5 mb-0.5">
           Total Pool
@@ -92,7 +92,7 @@ export function HeaderPoolChart({
         )}
       </div>
 
-      <div className="absolute bottom-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-violet-500/40 to-transparent" />
+      <div className="absolute bottom-0 left-0 w-full h-px bg-linear-to-r from-transparent via-violet-500/40 to-transparent" />
 
       <UiButton
         onClick={onToggleMute}

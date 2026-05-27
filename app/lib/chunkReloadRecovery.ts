@@ -1,5 +1,7 @@
 export const CHUNK_RELOAD_KEY = "lore:chunk-reload-once";
 export const CHUNK_RELOAD_WINDOW_MS = 15_000;
+export const CHUNK_RELOAD_PARAM = "__lore_reload";
+const LEGACY_CHUNK_RELOAD_PARAM = "_r";
 
 interface StorageLike {
   getItem(key: string): string | null;
@@ -11,6 +13,11 @@ interface LocationLike {
   href: string;
   reload(): void;
   replace(url: string): void;
+}
+
+interface HistoryLike {
+  state: unknown;
+  replaceState(data: unknown, unused: string, url?: string | URL | null): void;
 }
 
 export function isChunkLoadLikeErrorMessage(message: string): boolean {
@@ -50,9 +57,29 @@ export function clearExpiredChunkReloadAttempt(
 export function reloadWithCacheBust(locationLike: LocationLike, now: number = Date.now()) {
   try {
     const url = new URL(locationLike.href);
-    url.searchParams.set("_r", String(now));
+    url.searchParams.delete(LEGACY_CHUNK_RELOAD_PARAM);
+    url.searchParams.set(CHUNK_RELOAD_PARAM, String(now));
     locationLike.replace(url.toString());
   } catch {
     locationLike.reload();
+  }
+}
+
+export function stripChunkReloadCacheParam(
+  locationLike: Pick<LocationLike, "href">,
+  historyLike: HistoryLike | null | undefined,
+) {
+  if (!historyLike) return false;
+  try {
+    const url = new URL(locationLike.href);
+    const hadParam = url.searchParams.has(CHUNK_RELOAD_PARAM) || url.searchParams.has(LEGACY_CHUNK_RELOAD_PARAM);
+    if (!hadParam) return false;
+    url.searchParams.delete(CHUNK_RELOAD_PARAM);
+    url.searchParams.delete(LEGACY_CHUNK_RELOAD_PARAM);
+    const cleanUrl = `${url.pathname}${url.search}${url.hash}`;
+    historyLike.replaceState(historyLike.state, "", cleanUrl);
+    return true;
+  } catch {
+    return false;
   }
 }

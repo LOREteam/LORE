@@ -189,8 +189,8 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
       if (mountedRef.current && !controller.signal.aborted) {
         if (changed) {
           setWins(nextWins);
-          saveCache(nextWins);
         }
+        saveCache(nextWins);
         cacheSavedAtRef.current = Date.now();
       }
     } catch (error) {

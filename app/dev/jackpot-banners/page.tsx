@@ -19,7 +19,7 @@ export default function JackpotBannersPage() {
   return (
     <main className="min-h-screen bg-[#07070d] px-6 py-10 text-white">
       <div className="mx-auto max-w-[1640px]">
-        <div className="mb-8 rounded-[28px] border border-white/10 bg-white/[0.03] p-6 shadow-[0_30px_80px_rgba(0,0,0,0.35)]">
+        <div className="mb-8 rounded-[28px] border border-white/10 bg-white/3 p-6 shadow-[0_30px_80px_rgba(0,0,0,0.35)]">
           <p className="text-[11px] font-extrabold uppercase tracking-[0.34em] text-white/45">LORE / Jackpot Art Pass</p>
           <h1 className="mt-3 text-4xl font-black tracking-[-0.04em] text-white sm:text-5xl">
             Daily and weekly jackpot banners with actual game-promo energy
@@ -36,7 +36,7 @@ export default function JackpotBannersPage() {
               key={banner.src}
               className="overflow-hidden rounded-[32px] border border-white/10 bg-[#0d0d16] shadow-[0_30px_80px_rgba(0,0,0,0.4)]"
             >
-              <div className={`h-1 w-full bg-gradient-to-r ${banner.accent}`} />
+              <div className={`h-1 w-full bg-linear-to-r ${banner.accent}`} />
               <div className="border-b border-white/8 px-6 py-5">
                 <h2 className="text-2xl font-black tracking-[-0.03em]">{banner.title}</h2>
                 <p className="mt-2 max-w-4xl text-sm leading-6 text-white/65 sm:text-base">{banner.copy}</p>

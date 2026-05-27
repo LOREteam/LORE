@@ -14,13 +14,13 @@ interface AnalyticsAchievementsPanelProps {
 }
 
 const rarityBadgeClass: Record<AchievementRarity, string> = {
-  common: "border-white/10 bg-white/[0.04]",
-  uncommon: "border-emerald-400/20 bg-emerald-500/[0.08]",
-  rare: "border-sky-400/20 bg-sky-500/[0.08]",
-  epic: "border-fuchsia-400/20 bg-fuchsia-500/[0.08]",
-  legendary: "border-amber-400/20 bg-amber-500/[0.08]",
-  exotic: "border-orange-400/20 bg-orange-500/[0.08]",
-  divine: "border-cyan-300/25 bg-cyan-400/[0.09]",
+  common: "border-white/10 bg-white/4",
+  uncommon: "border-emerald-400/20 bg-emerald-500/8",
+  rare: "border-sky-400/20 bg-sky-500/8",
+  epic: "border-fuchsia-400/20 bg-fuchsia-500/8",
+  legendary: "border-amber-400/20 bg-amber-500/8",
+  exotic: "border-orange-400/20 bg-orange-500/8",
+  divine: "border-cyan-300/25 bg-cyan-400/9",
 };
 
 const rarityGlowClass: Record<AchievementRarity, string> = {
@@ -95,14 +95,14 @@ export const AnalyticsAchievementsPanel = React.memo(function AnalyticsAchieveme
             key={achievement.id}
             className={`flex h-[114px] w-[202px] max-w-[85vw] shrink-0 flex-col rounded-xl border px-2.5 py-2 transition-all duration-300 ${
               achievement.unlocked
-                ? `bg-gradient-to-br from-[#1a1a2f] via-[#161629] to-[#10101b] ${rarityGlowClass[achievement.rarity]} ${rarityBadgeClass[achievement.rarity]}`
-                : "border-white/[0.07] bg-gradient-to-br from-[#141424] to-[#10101b] shadow-none"
+                ? `bg-linear-to-br from-[#1a1a2f] via-[#161629] to-[#10101b] ${rarityGlowClass[achievement.rarity]} ${rarityBadgeClass[achievement.rarity]}`
+                : "border-white/7 bg-linear-to-br from-[#141424] to-[#10101b] shadow-none"
             }`}
             title={achievement.description}
           >
             <div className="flex items-start gap-2 min-w-0">
               <div className="flex min-w-0 items-center gap-2">
-                <div className={`relative h-7.5 w-7.5 shrink-0 [clip-path:polygon(30%_4%,70%_4%,96%_30%,96%_70%,70%_96%,30%_96%,4%_70%,4%_30%)] border border-white/15 bg-gradient-to-br shadow-[0_0_10px_rgba(255,255,255,0.06)] ${rarityIconFrameClass[achievement.rarity]}`}>
+                <div className={`relative h-7.5 w-7.5 shrink-0 [clip-path:polygon(30%_4%,70%_4%,96%_30%,96%_70%,70%_96%,30%_96%,4%_70%,4%_30%)] border border-white/15 bg-linear-to-br shadow-[0_0_10px_rgba(255,255,255,0.06)] ${rarityIconFrameClass[achievement.rarity]}`}>
                   <div className="absolute inset-[1.5px] flex items-center justify-center border border-white/10 bg-[#171727] text-[12px] [clip-path:polygon(30%_4%,70%_4%,96%_30%,96%_70%,70%_96%,30%_96%,4%_70%,4%_30%)]">
                     {achievement.icon}
                   </div>
@@ -133,8 +133,8 @@ export const AnalyticsAchievementsPanel = React.memo(function AnalyticsAchieveme
                 <div
                   className={`h-full shrink-0 rounded-full transition-all duration-500 ${
                     achievement.unlocked
-                      ? "bg-gradient-to-r from-emerald-400 via-lime-300 to-emerald-200"
-                      : "bg-gradient-to-r from-violet-500 via-fuchsia-500 to-sky-400"
+                      ? "bg-linear-to-r from-emerald-400 via-lime-300 to-emerald-200"
+                      : "bg-linear-to-r from-violet-500 via-fuchsia-500 to-sky-400"
                   }`}
                   style={{
                     width: `${Math.min(100, Math.max(0, Number(achievement.progressPct) || 0))}%`,

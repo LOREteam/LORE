@@ -143,14 +143,14 @@ export const Header = React.memo(function Header({
 
     <header className="grid grid-cols-1 min-[900px]:grid-cols-12 gap-2 mb-2">
       {/* Epoch + WinsTicker */}
-      <div className="min-[900px]:col-span-4 min-[900px]:h-[90px] flex flex-col rounded-xl bg-[#0d0d1a] border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up overflow-hidden" style={{ animationDelay: "0.05s" }}>
+      <div className="min-[900px]:col-span-4 min-[900px]:h-22.5 flex flex-col rounded-xl bg-surface-raised border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up overflow-hidden" style={{ animationDelay: "0.05s" }}>
         <div className="grid grid-cols-[5.25rem_minmax(0,1fr)_4.25rem] sm:grid-cols-[7rem_minmax(0,1fr)_5.5rem] items-stretch shrink-0">
         {/* LEFT - Epoch */}
         <div className="flex flex-col items-center justify-center py-1 px-1">
           <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Epoch</div>
-          <div className="rounded-md overflow-visible w-full max-w-[6.25rem] mx-auto">
+          <div className="rounded-md overflow-visible w-full max-w-25 mx-auto">
             <div
-              className={`px-2.5 h-[1.75rem] rounded-md border flex items-center justify-center gap-1.5 transition-colors duration-200 ${
+              className={`px-2.5 h-7 rounded-md border flex items-center justify-center gap-1.5 transition-colors duration-200 ${
                 isRevealing
                   ? "bg-amber-500/15 border-amber-500/40 text-amber-400 reveal-glow"
                   : "bg-violet-500/10 border-violet-500/30 text-violet-400"
@@ -165,7 +165,7 @@ export const Header = React.memo(function Header({
         </div>
 
         {/* CENTER - Timer (expands to fill, content fixed) */}
-        <div className="flex flex-col items-center justify-center py-1 border-x border-white/[0.06] min-w-0">
+        <div className="flex flex-col items-center justify-center py-1 border-x border-white/6 min-w-0">
           <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Timer</div>
           <div
             className={`lore-nums w-[5.8rem] h-[1.6rem] flex items-center justify-center font-black leading-none tracking-tight tabular-nums transition-colors duration-300 ${
@@ -189,20 +189,20 @@ export const Header = React.memo(function Header({
         </div>
 
         {/* RIGHT - Status */}
-        <div className="flex flex-col items-center justify-center py-1">
+        <div className="flex flex-col items-center justify-center py-1 min-h-14">
           {showAnalyzing ? (
             <>
-              <div className="flex items-end gap-[3px] h-[1.25rem] mb-1 [&>span]:origin-bottom">
-                <span className="w-[3px] bg-amber-400/90 rounded-full animate-[bar-1_0.6s_ease-in-out_infinite]" style={{ height: "40%" }} />
-                <span className="w-[3px] bg-amber-400 rounded-full animate-[bar-2_0.6s_ease-in-out_infinite]" style={{ height: "70%", animationDelay: "0.1s" }} />
-                <span className="w-[3px] bg-amber-400/90 rounded-full animate-[bar-3_0.6s_ease-in-out_infinite]" style={{ height: "100%", animationDelay: "0.2s" }} />
-                <span className="w-[3px] bg-amber-400/70 rounded-full animate-[bar-2_0.6s_ease-in-out_infinite]" style={{ height: "55%", animationDelay: "0.15s" }} />
-                <span className="w-[3px] bg-amber-400/90 rounded-full animate-[bar-1_0.6s_ease-in-out_infinite]" style={{ height: "25%", animationDelay: "0.05s" }} />
+              <div className="flex items-end gap-0.75 h-5 mb-1 [&>span]:origin-bottom">
+                <span className="w-0.75 bg-amber-400/90 rounded-full animate-[bar-1_0.6s_ease-in-out_infinite]" style={{ height: "40%" }} />
+                <span className="w-0.75 bg-amber-400 rounded-full animate-[bar-2_0.6s_ease-in-out_infinite]" style={{ height: "70%", animationDelay: "0.1s" }} />
+                <span className="w-0.75 bg-amber-400/90 rounded-full animate-[bar-3_0.6s_ease-in-out_infinite]" style={{ height: "100%", animationDelay: "0.2s" }} />
+                <span className="w-0.75 bg-amber-400/70 rounded-full animate-[bar-2_0.6s_ease-in-out_infinite]" style={{ height: "55%", animationDelay: "0.15s" }} />
+                <span className="w-0.75 bg-amber-400/90 rounded-full animate-[bar-1_0.6s_ease-in-out_infinite]" style={{ height: "25%", animationDelay: "0.05s" }} />
               </div>
               <span className="text-[10px] font-bold text-amber-400/80 uppercase tracking-widest text-center">Analyzing</span>
             </>
           ) : (
-            <div className="flex flex-col items-center mt-1">
+            <div className="flex flex-col items-center">
               <div className="animate-float" style={{ animationDuration: "2.5s" }}>
                 <PickaxeIcon className="w-8 h-8" />
               </div>
@@ -213,7 +213,7 @@ export const Header = React.memo(function Header({
         </div>
 
         {epochDurationChange && (
-          <div className="border-t border-white/[0.06] px-2 py-1 bg-amber-500/[0.04]">
+          <div className="border-t border-white/6 px-2 py-1 bg-amber-500/4">
             <div className="px-1 text-center text-[8px] font-bold uppercase leading-tight tracking-wide text-amber-300/90 sm:text-[9px] sm:tracking-wider">
               Duration scheduled: {epochDurationChange.current ?? "?"}s {"->"} {epochDurationChange.next}s
               {epochDurationChange.effectiveFromEpoch ? ` from #${epochDurationChange.effectiveFromEpoch}` : ""}
@@ -223,7 +223,7 @@ export const Header = React.memo(function Header({
         )}
 
         {showWinsTicker && (
-          <div className="border-t border-white/[0.06] min-h-[1.9rem] flex-1 flex items-center">
+          <div className="border-t border-white/6 min-h-[1.9rem] flex-1 flex items-center">
             <WinsTicker wins={recentWins} reducedMotion={reducedMotion} />
           </div>
         )}

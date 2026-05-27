@@ -52,7 +52,7 @@ export const AnalyticsJackpotHistoryPanel = React.memo(function AnalyticsJackpot
           disabled={jackpotHistoryLoading}
           variant="ghost"
           size="xs"
-          className="h-10 w-10 p-0 text-gray-500 hover:text-amber-300 hover:border-amber-500/20 hover:bg-amber-500/[0.06] active:scale-95"
+          className="h-10 w-10 p-0 text-gray-500 hover:text-amber-300 hover:border-amber-500/20 hover:bg-amber-500/6 active:scale-95"
           title="Refresh jackpot history"
           aria-label="Refresh jackpot history"
         >
