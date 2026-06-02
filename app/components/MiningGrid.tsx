@@ -109,9 +109,6 @@ function miningGridPropsEqual(prev: MiningGridProps, next: MiningGridProps) {
     prev.reducedMotion === next.reducedMotion &&
     prev.showSelection === next.showSelection &&
     prev.onTileClick === next.onTileClick &&
-    prev.isDailyJackpot === next.isDailyJackpot &&
-    prev.isWeeklyJackpot === next.isWeeklyJackpot &&
-    prev.jackpotAmount === next.jackpotAmount &&
     selectedTilesEqual(prev.selectedTiles, next.selectedTiles) &&
     tileRowsEqual(prev.tileViewData, next.tileViewData)
   );
@@ -128,9 +125,6 @@ function MiningGridView({
   reducedMotion = false,
   showSelection,
   onTileClick,
-  isDailyJackpot = false,
-  isWeeklyJackpot = false,
-  jackpotAmount,
 }: MiningGridProps) {
   const selectionSet = useMemo(
     () => (showSelection ? new Set(selectedTiles) : new Set<number>()),
@@ -146,10 +140,6 @@ function MiningGridView({
     () => winningTileId !== null && Boolean(tileViewData.find((t) => t.tileId === winningTileId)?.hasMyBet),
     [tileViewData, winningTileId],
   );
-  void isDailyJackpot;
-  void isWeeklyJackpot;
-  void jackpotAmount;
-
   useEffect(() => {
     if (!isRevealing || winningTileId === null) {
       setLoreMsg(null);

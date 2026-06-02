@@ -30,7 +30,8 @@ export async function waitForUiHydration(page, timeoutMs, label = "ui hydration"
         || bodyText.includes("Manual Bet")
         || bodyText.includes("Auto-Miner")
         || bodyText.includes("Rewards")
-        || bodyText.includes("Login / Connect");
+        || bodyText.includes("Login / Connect")
+        || bodyText.includes("Connect Wallet");
       return hasPrimaryNav && hasHubSurface;
     }, undefined, { timeout: Math.min(timeoutMs, 20_000) });
   }

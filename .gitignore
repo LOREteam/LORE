@@ -43,6 +43,7 @@ yarn-error.log*
 .codex-next-start*.log
 .next-*.log
 artifacts/**/*.log
+artifacts/jackpot-preview/
 artifacts/smoke-browser/
 /.playwright-mcp/
 /.npm-cache/

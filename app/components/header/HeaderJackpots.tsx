@@ -60,7 +60,9 @@ function JackpotCard({
         </div>
       )}
       <div className="relative z-30 grid h-14 grid-cols-[2.65rem_minmax(0,1fr)_7.5rem] items-center gap-1.5 px-2 pb-3 pt-1.5 sm:grid-cols-[2.85rem_minmax(0,1fr)_8.2rem] sm:gap-2 sm:px-2.5">
-        <div className="jackpot-vault-core">{icon}</div>
+        <div className="flex h-full items-center justify-center">
+          <div className="jackpot-vault-core">{icon}</div>
+        </div>
         <div className="min-w-0 self-stretch">
           <div className="flex h-full min-w-0 flex-col justify-center">
             <p className={`truncate text-[6.5px] font-black uppercase leading-none tracking-[0.13em] sm:text-[7px] ${theme.card.labelClass}`}>
@@ -151,6 +153,7 @@ export const HeaderJackpots = React.memo(function HeaderJackpots({
 
   useEffect(() => {
     if (!isPageVisible) return;
+    setNowMs(Date.now());
     const id = window.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => window.clearInterval(id);
   }, [isPageVisible]);

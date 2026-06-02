@@ -76,8 +76,8 @@ export async function GET(request: Request) {
   }
   const staleCache =
     liveStateRouteCache.getStale(CACHE_KEY) ??
-    loadLiveStateSnapshot(Number.POSITIVE_INFINITY) ??
-    buildStoredLiveStateBootstrap();
+    loadLiveStateSnapshot(Number.POSITIVE_INFINITY);
+  const fallbackCache = staleCache ?? buildStoredLiveStateBootstrap();
 
   if (staleCache && canServeStaleImmediately(staleCache, now)) {
     markRouteStaleServed(ROUTE_METRIC_KEY);
@@ -115,11 +115,11 @@ export async function GET(request: Request) {
     return jsonNoStore(payload);
   } catch (error) {
     logRouteError(ROUTE_METRIC_KEY, error, { method: "GET" });
-    if (staleCache) {
+    if (fallbackCache) {
       markRouteStaleServed(ROUTE_METRIC_KEY);
       startLiveStateRefresh();
       finishRouteMetric(metric, 200);
-      return jsonNoStore(staleCache);
+      return jsonNoStore(fallbackCache);
     }
     failRouteMetric(metric, 500);
     return applyNoStoreHeaders(

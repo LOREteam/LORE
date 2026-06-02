@@ -63,6 +63,7 @@ type JackpotBuildResult = { payload: JackpotPayload; recoveryNeeded: boolean };
 
 let jackpotResponseCache: JackpotCacheEntry | null = null;
 let jackpotBackgroundRecoveryPromise: Promise<void> | null = null;
+let jackpotForceFreshInflight: Promise<JackpotPayload> | null = null;
 let jackpotBackgroundRecoveryStartedAt = 0;
 let jackpotBuildSeq = 0;
 let jackpotAppliedSeq = 0;
@@ -519,13 +520,23 @@ export async function readJackpotPayload(options: JackpotReadOptions = {}): Prom
   }
 
   if (options.forceFresh) {
-    const seq = ++jackpotBuildSeq;
-    const { payload } = await buildJackpotsPayload({
-      allowSlowRecovery: true,
-      scheduleBackgroundRecovery: false,
+    if (jackpotForceFreshInflight) {
+      return { payload: await jackpotForceFreshInflight, source: "inflight" };
+    }
+
+    jackpotForceFreshInflight = (async () => {
+      const seq = ++jackpotBuildSeq;
+      const { payload } = await buildJackpotsPayload({
+        allowSlowRecovery: true,
+        scheduleBackgroundRecovery: false,
+      });
+      return commitJackpotResponseCache(payload, JACKPOT_ROUTE_CACHE_MS, seq);
+    })().finally(() => {
+      jackpotForceFreshInflight = null;
     });
+
     return {
-      payload: commitJackpotResponseCache(payload, JACKPOT_ROUTE_CACHE_MS, seq),
+      payload: await jackpotForceFreshInflight,
       source: "rebuilt",
     };
   }
@@ -548,11 +559,13 @@ export async function readJackpotPayload(options: JackpotReadOptions = {}): Prom
     return { payload, source: "rebuilt" };
   }
 
-  const emptyPayload = commitJackpotResponseCache(
-    { jackpots: [] },
-    JACKPOT_ROUTE_CACHE_MS,
-    seq,
-  );
-  maybeStartJackpotRecovery([]);
-  return { payload: emptyPayload, source: "rebuilt" };
+  const { payload: recoveredPayload } = await buildJackpotsPayload({
+    allowSlowRecovery: true,
+    scheduleBackgroundRecovery: false,
+    seedJackpots: [],
+  });
+  return {
+    payload: commitJackpotResponseCache(recoveredPayload, JACKPOT_ROUTE_CACHE_MS, seq),
+    source: "rebuilt",
+  };
 }

@@ -26,13 +26,29 @@ function resolveKind(raw: string | null): JackpotVisualKind {
   return "daily";
 }
 
+function sanitizeAmount(raw: string | null) {
+  const value = raw?.trim();
+  if (!value) return null;
+  if (value.length > 24) return null;
+  if (!/^[0-9][0-9,. ]*$/.test(value)) return null;
+  return value;
+}
+
+function sanitizePositiveInt(raw: string | null, max: number) {
+  const value = raw?.trim();
+  if (!value || !/^[0-9]{1,10}$/.test(value)) return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > max) return null;
+  return String(parsed);
+}
+
 export async function generateMetadata({ searchParams }: Props): Promise<Metadata> {
   const sp = await searchParams;
   const kind = resolveKind(param(sp.kind));
   const theme = getJackpotVisualTheme(kind);
-  const amount = param(sp.amount);
-  const tile = param(sp.tile);
-  const epoch = param(sp.epoch);
+  const amount = sanitizeAmount(param(sp.amount));
+  const tile = sanitizePositiveInt(param(sp.tile), 25);
+  const epoch = sanitizePositiveInt(param(sp.epoch), 1_000_000_000);
 
   const label = theme.label;
   const title = amount ? `${label} Winner - ${amount} LINEA | LORE` : `${label} Winner | LORE`;
@@ -90,9 +106,9 @@ export default async function JackpotWinPage({ searchParams }: Props) {
   const sp = await searchParams;
   const kind = resolveKind(param(sp.kind));
   const theme = getJackpotVisualTheme(kind);
-  const amount = param(sp.amount);
-  const tile = param(sp.tile);
-  const epoch = param(sp.epoch);
+  const amount = sanitizeAmount(param(sp.amount));
+  const tile = sanitizePositiveInt(param(sp.tile), 25);
+  const epoch = sanitizePositiveInt(param(sp.epoch), 1_000_000_000);
 
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#05040b] px-4 py-10 text-white">

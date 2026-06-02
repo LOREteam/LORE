@@ -49,6 +49,8 @@ interface HubContentProps {
   isWeeklyJackpot: boolean;
   jackpotAmount?: number;
   jackpotFallbackAmount?: number;
+  dailyJackpotFallbackAmount?: number;
+  weeklyJackpotFallbackAmount?: number;
   lowEthBalance: boolean;
   onClaim: (epochId: string) => void;
   onClaimAll: () => void;
@@ -89,6 +91,8 @@ export const HubContent = React.memo(function HubContent({
   isWeeklyJackpot,
   jackpotAmount,
   jackpotFallbackAmount,
+  dailyJackpotFallbackAmount,
+  weeklyJackpotFallbackAmount,
   lowEthBalance,
   onClaim,
   onClaimAll,
@@ -147,6 +151,8 @@ export const HubContent = React.memo(function HubContent({
             isWeeklyJackpot={isWeeklyJackpot}
             jackpotAmount={jackpotAmount}
             jackpotFallbackAmount={jackpotFallbackAmount}
+            dailyJackpotFallbackAmount={dailyJackpotFallbackAmount}
+            weeklyJackpotFallbackAmount={weeklyJackpotFallbackAmount}
             hasMyWinningBet={hasMyWinningBet}
             unclaimedWins={unclaimedWins}
             isScanning={isScanning}

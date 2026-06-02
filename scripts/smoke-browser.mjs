@@ -132,7 +132,7 @@ async function main() {
       await expectVisible(sidebar.getByText("Most wins - last 40 rounds", { exact: true }), "sidebar hot tiles subtitle", TIMEOUT_MS);
       await expectVisible(page.getByText("Manual Bet"), "hub manual bet panel", TIMEOUT_MS);
       await expectVisible(page.getByText("Auto-Miner"), "hub auto-miner panel", TIMEOUT_MS);
-      await expectVisible(page.getByRole("button", { name: "Login / Connect" }), "login button", TIMEOUT_MS);
+      await expectVisible(page.getByRole("button", { name: /Login \/ Connect|Connect Wallet/i }), "connect wallet button", TIMEOUT_MS);
       await saveSmokeScreenshot(page, SCREENSHOT_PATH);
     });
     await runStep("verify auto-miner persistence", () => verifyAutoMinerInputPersistence(page, smokeOptions));

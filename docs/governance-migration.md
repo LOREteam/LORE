@@ -10,7 +10,7 @@ Move LORE from a single-key `Ownable` setup to an ownership model that is accept
 
 ## V9 Contract Profile
 
-The active contract source is [contracts/LineaOreV9.sol](/C:/Users/bogda/linea-miner-main/contracts/LineaOreV9.sol).
+The active contract source is [contracts/LineaOreV9.sol](../contracts/LineaOreV9.sol).
 
 Key governance properties:
 
@@ -83,7 +83,7 @@ For LORE, immutability is less important than removing single-key risk.
 
 ## Frontend migration note
 
-The app/runtime reads deployment settings from env and defaults in [config/publicConfig.ts](/C:/Users/bogda/linea-miner-main/config/publicConfig.ts).
+The app/runtime reads deployment settings from env and defaults in [config/publicConfig.ts](../config/publicConfig.ts).
 
 After a new deployment, update:
 
@@ -92,4 +92,4 @@ After a new deployment, update:
 - `LINEA_NETWORK` / `NEXT_PUBLIC_LINEA_NETWORK` when switching between Sepolia and mainnet
 - `NEXT_PUBLIC_LINEA_TOKEN_ADDRESS` if the token address changes
 
-The ABI in [app/lib/constants.ts](/C:/Users/bogda/linea-miner-main/app/lib/constants.ts) includes the V9 methods, including `placeBatchBetsBitmap(...)`.
+The ABI in [app/lib/constants.ts](../app/lib/constants.ts) includes the V9 methods, including `placeBatchBetsBitmap(...)`.

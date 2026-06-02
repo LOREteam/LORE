@@ -99,9 +99,9 @@ export const Header = React.memo(function Header({
   }, [embeddedAddressCopied]);
 
   const handleLogin = useCallback(() => {
-    if (authenticated) return;
+    if (!privyReady || authenticated) return;
     void login();
-  }, [authenticated, login]);
+  }, [authenticated, login, privyReady]);
 
   useEffect(() => {
     if (!liveStateReady) {

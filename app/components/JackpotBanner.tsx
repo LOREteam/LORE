@@ -5,7 +5,7 @@ import { formatUnits, parseAbiItem, type PublicClient } from "viem";
 import { usePublicClient } from "wagmi";
 import { cn } from "../lib/cn";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, CONTRACT_DEPLOY_BLOCK } from "../lib/constants";
-import { getJackpotVisualTheme, resolveJackpotVisualKind } from "../lib/jackpotVisualTheme";
+import { getJackpotVisualTheme, resolveJackpotVisualKind, type JackpotVisualKind } from "../lib/jackpotVisualTheme";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { UiButton } from "./ui/UiButton";
 
@@ -24,6 +24,14 @@ const EPOCH_RESOLVED_EVENT = parseAbiItem(
   "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
 );
 const PUBLIC_SHARE_ORIGIN = "https://lore.game";
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(", ");
 
 interface JackpotBannerProps {
   winningTileId: number | null;
@@ -38,8 +46,18 @@ interface JackpotBannerProps {
   isWeeklyJackpot?: boolean;
   jackpotAmount?: number;
   jackpotFallbackAmount?: number;
+  dailyJackpotFallbackAmount?: number;
+  weeklyJackpotFallbackAmount?: number;
   hasMyWinningBet?: boolean;
   reducedMotion?: boolean;
+}
+
+interface ActiveJackpotWin {
+  key: string;
+  kind: JackpotVisualKind;
+  amount: number;
+  epoch: string | null;
+  tileId: number | null;
 }
 
 function parseJackpotAmount(value: unknown, fallback = 0) {
@@ -63,6 +81,36 @@ function getShareOrigin() {
   if (!configuredSiteUrl.startsWith("http")) return PUBLIC_SHARE_ORIGIN;
   const normalized = configuredSiteUrl.replace(/\/+$/, "");
   return /localhost|127\.0\.0\.1/i.test(normalized) ? PUBLIC_SHARE_ORIGIN : normalized;
+}
+
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  return [...container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter((element) => {
+    if (element.hasAttribute("disabled")) return false;
+    if (element.getAttribute("aria-hidden") === "true") return false;
+    return element.offsetParent !== null || document.activeElement === element;
+  });
+}
+
+function getElementsOutsideDialog(dialogRoot: HTMLElement): HTMLElement[] {
+  const elements: HTMLElement[] = [];
+  let current: HTMLElement | null = dialogRoot;
+
+  while (current.parentElement && current.parentElement !== document.body) {
+    for (const sibling of Array.from(current.parentElement.children)) {
+      if (sibling instanceof HTMLElement && sibling !== current && !sibling.contains(dialogRoot)) {
+        elements.push(sibling);
+      }
+    }
+    current = current.parentElement;
+  }
+
+  for (const child of Array.from(document.body.children)) {
+    if (child instanceof HTMLElement && child !== current && !child.contains(dialogRoot)) {
+      elements.push(child);
+    }
+  }
+
+  return elements;
 }
 
 function findIndexedJackpotAmount(
@@ -155,6 +203,8 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   isWeeklyJackpot = false,
   jackpotAmount = 0,
   jackpotFallbackAmount = 0,
+  dailyJackpotFallbackAmount = 0,
+  weeklyJackpotFallbackAmount = 0,
   hasMyWinningBet = false,
   reducedMotion = false,
 }: JackpotBannerProps) {
@@ -162,9 +212,15 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   const [showBanner, setShowBanner] = useState(false);
   const [showContent, setShowContent] = useState(false);
   const [isDismissed, setIsDismissed] = useState(false);
-  const [activeWinKey, setActiveWinKey] = useState<string | null>(null);
+  const [activeWin, setActiveWin] = useState<ActiveJackpotWin | null>(null);
   const [indexedJackpotAmount, setIndexedJackpotAmount] = useState(0);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dismissedWinKeyRef = useRef<string | null>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const titleId = React.useId();
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
 
   const isMyWin = useMemo(() => {
@@ -174,20 +230,40 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   }, [hasMyWinningBet, tileViewData, winningTileId]);
 
   const isJackpotWin = isMyWin && (isDailyJackpot || isWeeklyJackpot);
+  const candidateKind = isJackpotWin ? resolveJackpotVisualKind(isDailyJackpot, isWeeklyJackpot) : null;
+  const kindFallbackAmount =
+    candidateKind === "dual"
+      ? dailyJackpotFallbackAmount + weeklyJackpotFallbackAmount
+      : candidateKind === "daily"
+        ? dailyJackpotFallbackAmount
+        : candidateKind === "weekly"
+          ? weeklyJackpotFallbackAmount
+          : 0;
   const displayJackpotAmount = jackpotAmount > 0
     ? jackpotAmount
-    : jackpotFallbackAmount > 0
+    : kindFallbackAmount > 0
+      ? kindFallbackAmount
+      : jackpotFallbackAmount > 0 && candidateKind === "dual"
       ? jackpotFallbackAmount
       : indexedJackpotAmount;
-  const currentWinKey = useMemo(() => {
-    if (!isJackpotWin) return null;
+  const candidateWinKey = useMemo(() => {
+    if (!candidateKind) return null;
     return [
       epoch ?? "unknown",
       winningTileId ?? "none",
-      isDailyJackpot ? "daily" : "no-daily",
-      isWeeklyJackpot ? "weekly" : "no-weekly",
+      candidateKind,
     ].join(":");
-  }, [epoch, isDailyJackpot, isJackpotWin, isWeeklyJackpot, winningTileId]);
+  }, [candidateKind, epoch, winningTileId]);
+  const readyWin = useMemo<ActiveJackpotWin | null>(() => {
+    if (!candidateKind || !candidateWinKey || displayJackpotAmount <= 0) return null;
+    return {
+      key: candidateWinKey,
+      kind: candidateKind,
+      amount: displayJackpotAmount,
+      epoch,
+      tileId: winningTileId,
+    };
+  }, [candidateKind, candidateWinKey, displayJackpotAmount, epoch, winningTileId]);
 
   const sparkles = useMemo(
     () =>
@@ -219,22 +295,11 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   );
 
   useEffect(() => {
-    if (!currentWinKey) return;
-    if (activeWinKey === currentWinKey) return;
-    if (closeTimerRef.current) {
-      clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
-    }
-    setActiveWinKey(currentWinKey);
     setIndexedJackpotAmount(0);
-    setIsDismissed(false);
-    setShowBanner(true);
-    const timer = setTimeout(() => setShowContent(true), 100);
-    return () => clearTimeout(timer);
-  }, [activeWinKey, currentWinKey]);
+  }, [candidateWinKey]);
 
   useEffect(() => {
-    if (!showBanner || !currentWinKey || displayJackpotAmount > 0 || !epoch) return;
+    if (!candidateWinKey || displayJackpotAmount > 0 || !epoch) return;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const controller = new AbortController();
@@ -281,7 +346,43 @@ export const JackpotBanner = React.memo(function JackpotBanner({
       controller.abort();
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [currentWinKey, displayJackpotAmount, epoch, isDailyJackpot, isWeeklyJackpot, publicClient, showBanner]);
+  }, [candidateWinKey, displayJackpotAmount, epoch, isDailyJackpot, isWeeklyJackpot, publicClient]);
+
+  useEffect(() => {
+    if (!readyWin) {
+      if (openTimerRef.current) {
+        clearTimeout(openTimerRef.current);
+        openTimerRef.current = null;
+      }
+      return;
+    }
+    if (activeWin?.key === readyWin.key) {
+      if (activeWin.amount !== readyWin.amount) setActiveWin(readyWin);
+      return;
+    }
+    if (activeWin && activeWin.epoch === readyWin.epoch && activeWin.tileId === readyWin.tileId) return;
+    if (dismissedWinKeyRef.current === readyWin.key) return;
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
+
+    openTimerRef.current = setTimeout(() => {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+      setActiveWin(readyWin);
+      setIsDismissed(false);
+      setShowContent(false);
+      setShowBanner(true);
+      openTimerRef.current = null;
+    }, 180);
+
+    return () => {
+      if (openTimerRef.current) {
+        clearTimeout(openTimerRef.current);
+        openTimerRef.current = null;
+      }
+    };
+  }, [activeWin, readyWin]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -299,38 +400,33 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   }, [isDismissed, showBanner, showContent]);
 
   const handleClose = useCallback(() => {
+    if (activeWin) dismissedWinKeyRef.current = activeWin.key;
     setIsDismissed(true);
     setShowContent(false);
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
     closeTimerRef.current = setTimeout(() => {
       setShowBanner(false);
     }, 280);
-  }, []);
-
-  useEffect(() => {
-    if (!showBanner) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") handleClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [handleClose, showBanner]);
+  }, [activeWin]);
 
   useEffect(() => {
     return () => {
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      if (openTimerRef.current) clearTimeout(openTimerRef.current);
     };
   }, []);
 
-  const theme = getJackpotVisualTheme(resolveJackpotVisualKind(isDailyJackpot, isWeeklyJackpot));
+  const theme = getJackpotVisualTheme(activeWin?.kind ?? "daily");
   const palette = theme.banner;
-  const headerText = theme.winTitle;
   const jackpotLabel = theme.label;
-  const amountText =
-    displayJackpotAmount > 0
-      ? displayJackpotAmount.toLocaleString("en-US", { maximumFractionDigits: 4 })
-      : null;
-  const amountShareText = amountText ? `${amountText} LINEA` : "reward confirmed on-chain";
+  const activeAmount = activeWin?.amount ?? 0;
+  const activeEpoch = activeWin?.epoch ?? null;
+  const activeTileId = activeWin?.tileId ?? null;
+  const amountText = activeAmount > 0
+    ? activeAmount.toLocaleString("en-US", { maximumFractionDigits: 4 })
+    : null;
+  const amountShareText = amountText ? `${amountText} LINEA` : "";
+  const isModalOpen = showBanner && !isDismissed && Boolean(activeWin) && Boolean(amountText);
 
   const share = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -338,15 +434,15 @@ export const JackpotBanner = React.memo(function JackpotBanner({
     const ogParams = new URLSearchParams();
     ogParams.set("kind", theme.kind);
     ogParams.set("amount", amountText);
-    if (winningTileId !== null) ogParams.set("tile", String(winningTileId));
-    if (epoch) ogParams.set("epoch", epoch);
+    if (activeTileId !== null) ogParams.set("tile", String(activeTileId));
+    if (activeEpoch) ogParams.set("epoch", activeEpoch);
     const shareOrigin = getShareOrigin();
     const sharePageUrl = `${shareOrigin}/jackpot-win?${ogParams.toString()}`;
 
     const lines = [
       `I just mined the ${jackpotLabel} in LORE.`,
       `Won: ${amountShareText}`,
-      [epoch ? `Epoch #${epoch}` : null, winningTileId !== null ? `Tile #${winningTileId}` : null].filter(Boolean).join(" - ") || null,
+      [activeEpoch ? `Epoch #${activeEpoch}` : null, activeTileId !== null ? `Tile #${activeTileId}` : null].filter(Boolean).join(" - ") || null,
       "Play: lore.game",
     ].filter((l) => l !== null);
 
@@ -357,20 +453,96 @@ export const JackpotBanner = React.memo(function JackpotBanner({
     });
     const tweetUrl = `https://x.com/intent/tweet?${tweetParams.toString()}`;
     window.open(tweetUrl, "_blank", "noopener,noreferrer");
-  }, [amountShareText, amountText, epoch, jackpotLabel, theme.kind, winningTileId]);
+  }, [activeEpoch, activeTileId, amountShareText, amountText, jackpotLabel, theme.kind]);
 
-  if (!showBanner || isDismissed || !activeWinKey) return null;
+  useEffect(() => {
+    if (!isModalOpen) return;
+    const overlay = overlayRef.current;
+    const dialog = dialogRef.current;
+    if (!overlay || !dialog) return;
+
+    restoreFocusRef.current =
+      typeof document !== "undefined" && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+
+    const disabledElements = getElementsOutsideDialog(overlay).map((element) => ({
+      element,
+      ariaHidden: element.getAttribute("aria-hidden"),
+      inert: element.inert,
+    }));
+    for (const { element } of disabledElements) {
+      element.inert = true;
+      element.setAttribute("aria-hidden", "true");
+    }
+
+    const focusInitial = window.requestAnimationFrame(() => {
+      const focusable = getFocusableElements(dialog);
+      (focusable[0] ?? dialog).focus();
+    });
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        handleClose();
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+      const focusable = getFocusableElements(dialog);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+      if (event.shiftKey) {
+        if (!active || active === first || !dialog.contains(active)) {
+          event.preventDefault();
+          last.focus();
+        }
+        return;
+      }
+
+      if (!active || active === last || !dialog.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKey);
+    return () => {
+      window.cancelAnimationFrame(focusInitial);
+      document.removeEventListener("keydown", onKey);
+      for (const { element, ariaHidden, inert } of disabledElements) {
+        element.inert = inert;
+        if (ariaHidden === null) {
+          element.removeAttribute("aria-hidden");
+        } else {
+          element.setAttribute("aria-hidden", ariaHidden);
+        }
+      }
+      restoreFocusRef.current?.focus();
+      restoreFocusRef.current = null;
+    };
+  }, [handleClose, isModalOpen]);
+
+  if (!isModalOpen) return null;
 
   return (
     <div
-      role="region"
-      aria-label={`${headerText} Win`}
-      className={`pointer-events-none fixed inset-0 z-[9999] flex items-start justify-center overflow-y-auto px-3 py-3 transition-opacity duration-500 sm:py-4 ${
+      ref={overlayRef}
+      role="presentation"
+      className={`pointer-events-none fixed inset-0 z-[9999] flex items-center justify-center overflow-y-auto px-3 py-4 transition-opacity duration-500 sm:px-5 sm:py-6 ${
         showContent ? "opacity-100" : "opacity-0"
       }`}
     >
-      <div className="pointer-events-none absolute inset-0 bg-black/88" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_38%,rgba(17,24,39,0.16),rgba(0,0,0,0.84)_58%,rgba(0,0,0,0.94)_100%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-black/90" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_44%,rgba(21,18,38,0.28),rgba(0,0,0,0.80)_58%,rgba(0,0,0,0.95)_100%)]" />
 
       {!reducedMotion && (
         <div className="pointer-events-none absolute inset-x-0 top-0 h-144 overflow-hidden">
@@ -390,32 +562,36 @@ export const JackpotBanner = React.memo(function JackpotBanner({
       )}
 
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className={cn(
-          "pointer-events-auto relative z-10 w-full max-w-[58rem] overflow-hidden rounded-[1.25rem] border bg-[#07040d] text-center",
+          "pointer-events-auto relative z-10 w-full max-w-[56rem] overflow-hidden rounded-[1.15rem] border bg-[#07040d] text-center",
           palette.frame,
         )}
         style={{
-          boxShadow: `0 0 24px ${palette.glow}, 0 24px 64px rgba(0,0,0,0.52)`,
+          boxShadow: `0 0 28px ${palette.glow}, 0 28px 82px rgba(0,0,0,0.72)`,
           animation: !reducedMotion && showContent ? "jackpot-scale 0.52s cubic-bezier(0.22, 1, 0.36, 1)" : undefined,
         }}
       >
-        <div className="relative aspect-[16/9] min-h-[30rem] overflow-hidden sm:min-h-0">
+        <div className="relative aspect-[16/9] min-h-[27rem] overflow-hidden sm:min-h-0">
           <div
             className="absolute inset-0 scale-[1.035] bg-cover bg-center"
             style={{ backgroundImage: `url('${theme.ogArt}')` }}
           />
-          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.70)_0%,rgba(0,0,0,0.22)_34%,rgba(0,0,0,0.18)_62%,rgba(0,0,0,0.78)_100%)]" />
-          <div className="absolute inset-x-[9%] top-[11%] h-[34%] rounded-full bg-black/45" />
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.78)_0%,rgba(0,0,0,0.30)_32%,rgba(0,0,0,0.28)_58%,rgba(0,0,0,0.86)_100%)]" />
+          <div className="absolute inset-x-0 bottom-0 h-[42%] bg-[linear-gradient(180deg,transparent,rgba(0,0,0,0.72))]" />
           <div
             className="absolute inset-0"
             style={{
-              background: `radial-gradient(circle at 50% 44%, ${palette.glow} 0%, rgba(255,255,255,0.06) 20%, transparent 48%), radial-gradient(circle at 50% 50%, transparent 0%, transparent 56%, rgba(0,0,0,0.55) 100%)`,
+              background: `radial-gradient(circle at 50% 45%, ${palette.glow} 0%, rgba(255,255,255,0.07) 18%, transparent 43%), radial-gradient(circle at 50% 50%, transparent 0%, transparent 54%, rgba(0,0,0,0.68) 100%)`,
             }}
           />
 
           <button
             type="button"
-            autoFocus
             aria-label="Close jackpot banner"
             onClick={handleClose}
             className="absolute right-3 top-3 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/12 bg-black/42 text-lg text-white/72 transition hover:bg-black/58 hover:text-white active:scale-95 focus-visible:ring-2 focus-visible:ring-white/50 sm:right-5 sm:top-5"
@@ -423,58 +599,58 @@ export const JackpotBanner = React.memo(function JackpotBanner({
             <span aria-hidden="true">&times;</span>
           </button>
 
-          <div className="relative z-10 flex h-full flex-col items-center px-5 py-7 sm:px-9 sm:py-9">
+          <div className="relative z-10 flex h-full flex-col items-center justify-between px-5 py-7 sm:px-9 sm:py-8">
             <h2
-              className="lore-display mx-auto max-w-[44rem] bg-clip-text text-[2.35rem] font-black uppercase leading-[0.86] text-transparent sm:text-[4.55rem] lg:text-[5.1rem]"
+              id={titleId}
+              className="lore-display mx-auto max-w-[42rem] bg-clip-text text-[2.2rem] font-black uppercase leading-[0.88] text-transparent sm:text-[4.2rem] lg:text-[4.75rem]"
               style={{
                 backgroundImage: `linear-gradient(180deg, ${palette.headlineFrom} 0%, ${palette.headlineVia} 48%, ${palette.headlineTo} 100%)`,
-                textShadow: "0 12px 34px rgba(0,0,0,0.88)",
-                filter: `drop-shadow(0 0 20px ${theme.colors.shadow})`,
+                textShadow: "0 16px 42px rgba(0,0,0,0.98)",
+                filter: `drop-shadow(0 0 22px ${theme.colors.shadow}) drop-shadow(0 8px 22px rgba(0,0,0,0.9))`,
               }}
             >
               {theme.winTitle}
             </h2>
 
-            <div className="mt-auto flex flex-col items-center pb-4 sm:pb-5">
+            <div className="flex w-full flex-col items-center">
               <div
                 className={cn(
-                  "rounded-[1.15rem] border px-5 py-4 sm:px-7",
-                  palette.prize,
+                  "w-full max-w-[34rem] rounded-[1rem] border bg-black/62 px-5 py-4 shadow-[0_18px_42px_rgba(0,0,0,0.55)] backdrop-blur-md sm:px-7",
                   palette.prizeBorder,
                 )}
               >
-                <div className="text-[0.66rem] font-black uppercase tracking-[0.28em] text-white/58">
+                <div className="text-[0.66rem] font-black uppercase tracking-[0.28em] text-white/70">
                   You mined the jackpot
                 </div>
                 <div
                   className={cn(
-                    "lore-hud-number mt-2 font-black leading-none",
-                    amountText ? "text-[2.6rem] sm:text-[4.4rem]" : "text-[2rem] sm:text-[3.15rem]",
+                    "lore-hud-number mt-2 break-words font-black leading-none",
+                    "text-[2.35rem] sm:text-[4rem]",
                     palette.accent,
                   )}
-                  style={{ textShadow: `0 0 18px ${theme.colors.shadow}, 0 10px 30px rgba(0,0,0,0.9)` }}
+                  style={{ textShadow: `0 0 18px ${theme.colors.shadow}, 0 10px 30px rgba(0,0,0,0.96)` }}
                 >
-                  {amountText ? `${amountText} LINEA` : "JACKPOT AWARDED"}
+                  {amountText} LINEA
                 </div>
               </div>
 
               <div className="mt-4 flex flex-wrap justify-center gap-2">
-                {winningTileId !== null && (
+                {activeTileId !== null && (
                   <div className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full border border-white/13 bg-black/44 px-4 py-0">
                     <span className="text-[0.62rem] font-black uppercase leading-none tracking-[0.22em] text-white/48">
                       Tile
                     </span>
                     <span className={cn("lore-nums text-sm font-black leading-none", palette.accent)}>
-                      #{winningTileId}
+                      #{activeTileId}
                     </span>
                   </div>
                 )}
-                {epoch && (
+                {activeEpoch && (
                   <div className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full border border-white/13 bg-black/44 px-4 py-0">
                     <span className="text-[0.62rem] font-black uppercase leading-none tracking-[0.22em] text-white/48">
                       Epoch
                     </span>
-                    <span className="lore-nums text-sm font-black leading-none text-white/82">#{epoch}</span>
+                    <span className="lore-nums text-sm font-black leading-none text-white/82">#{activeEpoch}</span>
                   </div>
                 )}
               </div>
@@ -483,7 +659,6 @@ export const JackpotBanner = React.memo(function JackpotBanner({
             <div className="flex w-full flex-col gap-2.5 sm:flex-row sm:justify-center">
               <UiButton
                 onClick={share}
-                disabled={!amountText}
                 variant="ghost"
                 size="md"
                 className={cn(
@@ -493,7 +668,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
                 )}
               >
                 <span className="text-base font-bold">X</span>
-                {amountText ? "Share" : "Preparing"}
+                Share on X
               </UiButton>
 
               <UiButton

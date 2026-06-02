@@ -586,7 +586,7 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     logRouteError(ROUTE_METRIC_KEY, err, { user, includeRewards });
     const message = err instanceof Error ? err.message : "fetch failed";
-    const status = 500;
+    const status = message.startsWith("Firebase ") ? 502 : 500;
     failRouteMetric(metric, status);
     return jsonNoStore({ deposits: [], error: message }, status);
   }
