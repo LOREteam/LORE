@@ -7,13 +7,16 @@ export const normalizeDecimalInput = (value: string): string => value.replace(/,
 /**
  * Validate a bet-amount string before passing it to parseUnits.
  * Returns null if valid (caller proceeds), or an error message string.
- * Guards against: NaN, Infinity, exponential notation (e.g. 1e300), negative, zero.
+ * Guards against: NaN, Infinity, exponential notation (e.g. 1e300), negative, zero, and token precision overflow.
  */
 export function validateBetAmount(raw: string): string | null {
   const normalized = normalizeDecimalInput(raw.trim());
   if (!normalized) return "Enter an amount";
   // Reject exponential notation — parseUnits doesn't support it and Number("1e300") = Infinity
   if (/e/i.test(normalized)) return "Invalid amount";
+  const decimalParts = normalized.split(".");
+  if (decimalParts.length > 2) return "Invalid amount";
+  if ((decimalParts[1]?.length ?? 0) > 18) return "Use 18 decimals or fewer";
   const n = Number(normalized);
   if (!Number.isFinite(n)) return "Invalid amount";
   if (Number.isNaN(n)) return "Invalid amount";
@@ -101,6 +104,15 @@ export function formatUnknownError(error: unknown): string {
       parts.push(`Cause: ${cause}`);
     }
     return parts.join(" | ");
+  }
+  if (typeof error === "object" && error !== null) {
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== "{}") return serialized;
+    } catch {
+      // Fall through to the generic object message below.
+    }
+    return "Unknown object error";
   }
   return String(error);
 }

@@ -149,6 +149,9 @@ type BuildWalletShellPropsOptions = {
   isWithdrawingEth: WalletSettingsProps["isWithdrawingEth"];
   isDepositingEth: WalletSettingsProps["isDepositingEth"];
   isDepositingToken: WalletSettingsProps["isDepositingToken"];
+  isClearingEip7702Delegation: WalletSettingsProps["isClearingEip7702Delegation"];
+  embeddedWallet7702DelegateAddress: WalletSettingsProps["embeddedWallet7702DelegateAddress"];
+  embeddedWalletCodeChecking: WalletSettingsProps["embeddedWalletCodeChecking"];
   setWithdrawAmount: WalletSettingsProps["onWithdrawAmountChange"];
   setWithdrawEthAmount: WalletSettingsProps["onWithdrawEthAmountChange"];
   setDepositEthAmount: WalletSettingsProps["onDepositEthAmountChange"];
@@ -160,6 +163,7 @@ type BuildWalletShellPropsOptions = {
   handleWithdrawEthToExternal: WalletSettingsProps["onWithdrawEthToExternal"];
   handleDepositEthToEmbedded: WalletSettingsProps["onDepositEthToEmbedded"];
   handleDepositTokenToEmbedded: WalletSettingsProps["onDepositTokenToEmbedded"];
+  handleClearEip7702Delegation: WalletSettingsProps["onClearEip7702Delegation"];
   walletTransfers: WalletSettingsProps["walletTransfers"];
   walletTransfersLoading: WalletSettingsProps["walletTransfersLoading"];
   fetchWalletTransfers: WalletSettingsProps["onLoadWalletTransfers"];
@@ -212,6 +216,9 @@ export function buildWalletShellProps({
   isWithdrawingEth,
   isDepositingEth,
   isDepositingToken,
+  isClearingEip7702Delegation,
+  embeddedWallet7702DelegateAddress,
+  embeddedWalletCodeChecking,
   setWithdrawAmount,
   setWithdrawEthAmount,
   setDepositEthAmount,
@@ -223,6 +230,7 @@ export function buildWalletShellProps({
   handleWithdrawEthToExternal,
   handleDepositEthToEmbedded,
   handleDepositTokenToEmbedded,
+  handleClearEip7702Delegation,
   walletTransfers,
   walletTransfersLoading,
   fetchWalletTransfers,
@@ -280,6 +288,9 @@ export function buildWalletShellProps({
       isWithdrawingEth,
       isDepositingEth,
       isDepositingToken,
+      isClearingEip7702Delegation,
+      embeddedWallet7702DelegateAddress,
+      embeddedWalletCodeChecking,
       onWithdrawAmountChange: setWithdrawAmount,
       onWithdrawEthAmountChange: setWithdrawEthAmount,
       onDepositEthAmountChange: setDepositEthAmount,
@@ -292,6 +303,7 @@ export function buildWalletShellProps({
       onWithdrawEthToExternal: handleWithdrawEthToExternal,
       onDepositEthToEmbedded: handleDepositEthToEmbedded,
       onDepositTokenToEmbedded: handleDepositTokenToEmbedded,
+      onClearEip7702Delegation: handleClearEip7702Delegation,
       walletTransfers,
       walletTransfersLoading,
       onLoadWalletTransfers: fetchWalletTransfers,
@@ -347,6 +359,7 @@ type BuildPageTabContentPropsOptions = {
   autoMineProgress: PageTabContentProps["hubProps"]["autoMineProgress"];
   chatOpen: PageTabContentProps["hubProps"]["chatOpen"];
   formattedLineaBalance: PageTabContentProps["hubProps"]["formattedBalance"];
+  walletConnected: PageTabContentProps["hubProps"]["walletConnected"];
   gridDisplayEpoch: PageTabContentProps["hubProps"]["gridDisplayEpoch"];
   gridSelectedTiles: PageTabContentProps["hubProps"]["gridSelectedTiles"];
   handleAutoMineWithGuard: PageTabContentProps["hubProps"]["handleAutoMineWithGuard"];
@@ -363,6 +376,7 @@ type BuildPageTabContentPropsOptions = {
   liveStateReady: PageTabContentProps["hubProps"]["liveStateReady"];
   isWeeklyJackpot: PageTabContentProps["hubProps"]["isWeeklyJackpot"];
   jackpotAmount: PageTabContentProps["hubProps"]["jackpotAmount"];
+  jackpotFallbackAmount: PageTabContentProps["hubProps"]["jackpotFallbackAmount"];
   lowEthBalance: boolean;
   claimReward: PageTabContentProps["hubProps"]["onClaim"];
   claimAll: PageTabContentProps["hubProps"]["onClaimAll"];
@@ -410,6 +424,7 @@ export function buildPageTabContentProps({
   autoMineProgress,
   chatOpen,
   formattedLineaBalance,
+  walletConnected,
   gridDisplayEpoch,
   gridSelectedTiles,
   handleAutoMineWithGuard,
@@ -426,6 +441,7 @@ export function buildPageTabContentProps({
   liveStateReady,
   isWeeklyJackpot,
   jackpotAmount,
+  jackpotFallbackAmount,
   lowEthBalance,
   claimReward,
   claimAll,
@@ -475,6 +491,7 @@ export function buildPageTabContentProps({
       autoMineProgress,
       chatOpen,
       formattedBalance: formattedLineaBalance,
+      walletConnected,
       gridDisplayEpoch,
       gridSelectedTiles,
       handleAutoMineWithGuard,
@@ -491,6 +508,7 @@ export function buildPageTabContentProps({
       liveStateReady,
       isWeeklyJackpot,
       jackpotAmount,
+      jackpotFallbackAmount,
       lowEthBalance,
       onClaim: claimReward,
       onClaimAll: claimAll,

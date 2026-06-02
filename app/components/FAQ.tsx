@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useCallback } from "react";
-import { APP_CHAIN_NAME } from "../lib/constants";
+import { APP_CHAIN_NAME, APP_NETWORK } from "../lib/constants";
 import { cn } from "../lib/cn";
 import { UiButton } from "./ui/UiButton";
 import { UiPanel } from "./ui/UiPanel";
@@ -14,7 +14,7 @@ interface FAQItem {
 }
 
 const faqData: FAQItem[] = [
-  // ── Getting Started ──
+  // Getting Started
   {
     category: "Getting Started",
     q: "I just opened the site. What do I do first?",
@@ -29,8 +29,10 @@ const faqData: FAQItem[] = [
     category: "Getting Started",
     q: "Where do I get LINEA tokens and ETH for gas?",
     a: [
-      `LINEA tokens: get them from a bridge, faucet, or DEX that supports ${APP_CHAIN_NAME}.`,
-      `ETH for gas: fund your wallet on ${APP_CHAIN_NAME}. You only need a tiny amount – each bet costs fractions of a cent in gas.`,
+      APP_NETWORK === "mainnet"
+        ? `LINEA tokens: get them from a bridge, exchange, or DEX that supports ${APP_CHAIN_NAME}.`
+        : `During Sepolia testing, use the project's test token source or faucet. On mainnet, get LINEA from a bridge, exchange, or DEX that supports ${APP_CHAIN_NAME}.`,
+      `ETH for gas: fund your wallet on ${APP_CHAIN_NAME}. You only need a small amount for transaction fees.`,
     ],
   },
   {
@@ -40,7 +42,7 @@ const faqData: FAQItem[] = [
   },
   {
     category: "Getting Started",
-    q: "I see two addresses – which one is mine?",
+    q: "I see two addresses - which one is mine?",
     a: [
       "The 'Privy' address is your embedded wallet. It is the wallet that places bets and pays gas, so send ETH and LINEA there.",
       "If you also connected MetaMask or WalletConnect, that is your external wallet. You can move funds between the external wallet and the Privy wallet from Wallet Settings.",
@@ -51,18 +53,18 @@ const faqData: FAQItem[] = [
     q: "How fast are transactions on Linea?",
     a: [
       "Very fast. Linea blocks are produced every 2 seconds with 100+ mGas/s sequencer throughput (up to 306 TPS for token transfers).",
-      "Your bet typically confirms in the next block – under 2 seconds. Gas costs are extremely low thanks to proof aggregation and data compression on the L2.",
+      "Your bet typically confirms in the next block - under 2 seconds. Gas costs are extremely low thanks to proof aggregation and data compression on the L2.",
     ],
   },
 
-  // ── Jackpots ──
+  // Jackpots
   {
     category: "Jackpots",
     q: "How do the Daily and Weekly Jackpots work?",
     a: [
       "Every round, 2% of the pool accrues into the Daily Jackpot and 3% into the Weekly Jackpot. These pools grow with every single round.",
-      "Once per calendar day (UTC), one random resolved round triggers the daily jackpot – the ENTIRE accumulated daily pool is added to that round's winners on top of the normal 92% reward.",
-      "Once per calendar week (Monday–Sunday UTC), one random round triggers the weekly jackpot – same logic, but the weekly pool is typically much larger.",
+      "Once per calendar day (UTC), one random resolved round triggers the daily jackpot - the ENTIRE accumulated daily pool is added to that round's winners on top of the normal 92% reward.",
+      "Once per calendar week (Monday-Sunday UTC), one random round triggers the weekly jackpot - same logic, but the weekly pool is typically much larger.",
     ],
   },
   {
@@ -70,14 +72,14 @@ const faqData: FAQItem[] = [
     q: "When exactly does a jackpot trigger?",
     a: [
       "The contract checks jackpots only when an epoch is resolved and there is at least one winner on the tile.",
-      "Each resolved epoch gets a deterministic on-chain daily/weekly check derived from the epoch entropy (block.prevrandao, previous blockhash, pool sizes, caller), so waiting longer to resolve does not improve anyone's odds.",
+      "Each resolved epoch gets a deterministic on-chain daily/weekly check derived from public on-chain inputs. In the hardened V9 source, the winning tile no longer depends on the resolver address; jackpot timing still depends on resolve-time block inputs.",
       "If a jackpot is not awarded yet, the pool simply carries forward and keeps growing until an eligible epoch wins it.",
     ],
   },
   {
     category: "Jackpots",
     q: "Can a jackpot trigger on a round where nobody hit the winning tile?",
-    a: "No. Jackpots only trigger when there is at least one winner on the tile. If nobody bet on the winning tile, the base reward (92%) goes into the rollover pool, and the jackpot pools remain untouched – they keep growing for the next eligible round.",
+    a: "No. Jackpots only trigger when there is at least one winner on the tile. If nobody bet on the winning tile, the base reward (92%) goes into the rollover pool, and the jackpot pools remain untouched - they keep growing for the next eligible round.",
   },
   {
     category: "Jackpots",
@@ -86,27 +88,27 @@ const faqData: FAQItem[] = [
   },
   {
     category: "Jackpots",
-    q: "Is the jackpot randomness fair?",
+    q: "How should I think about randomness risk?",
     a: [
-      "Yes. The round resolves atomically using on-chain entropy (block.prevrandao, the previous blockhash, pool sizes, and the caller address). Bets are rejected in the final 2 seconds of the epoch so no block can contain both a bet and its resolve.",
-      "Including msg.sender in the entropy means a grinder can only influence their own bet's outcome, not anyone else's, and the rest of the inputs are fixed on-chain — so keepers and users cannot bias jackpot odds by delaying resolve.",
+      "The hardened V9 source derives the winning tile from block.prevrandao, the previous blockhash, epoch number, and current pool state. Bets are rejected in the final 2 seconds of the epoch so a normal bet and resolve cannot land in the same epoch-ending window.",
+      "This is auditable pseudo-randomness, not VRF or commit-reveal randomness. Removing the resolver address closes caller-address grinding, but a sequencer still has stronger influence over block inputs and transaction inclusion.",
     ],
   },
   {
     category: "Jackpots",
     q: "What is the rollover pool?",
     a: [
-      "When nobody bets on the winning tile in a round, the 92% base reward doesn't disappear – it flows into the rollover pool.",
+      "When nobody bets on the winning tile in a round, the 92% base reward doesn't disappear - it flows into the rollover pool.",
       "The rollover pool is added to the NEXT round's total pool, making it bigger. This cascading effect means that after several no-winner rounds, the pool can become very large.",
-      "Note: the rollover only carries the base reward. The 2% daily and 3% weekly jackpot accruals still happen normally – they go to the jackpot pools regardless of whether someone won.",
+      "Note: the rollover only carries the base reward. The 2% daily and 3% weekly jackpot accruals still happen normally - they go to the jackpot pools regardless of whether someone won.",
     ],
   },
 
-  // ── Betting & Strategy ──
+  // Betting & Strategy
   {
     category: "Betting & Strategy",
     q: "Is there a minimum or maximum bet?",
-    a: "Minimum bet is 1 LINEA per tile. There's no hard maximum – bet as much as you want, but keep in mind that a large bet on a single tile only pays off if that tile wins.",
+    a: "The contract accepts any amount greater than 0, and the UI accepts up to 18 decimal places. There is no hard maximum, but very small bets may be impractical after gas and very large single-tile bets only pay off if that tile wins.",
   },
   {
     category: "Betting & Strategy",
@@ -114,7 +116,7 @@ const faqData: FAQItem[] = [
     a: [
       "One tile = high risk, high reward. If it wins, you keep a bigger share because fewer tokens compete on that tile.",
       "Many tiles = lower risk, lower reward per tile. You're more likely to hit the winner but your payout is split.",
-      "On the mining grid (Hub), each tile shows how much is staked and how many players bet on it – tiles with fewer bets from others give better odds if they win.",
+      "On the mining grid (Hub), each tile shows how much is staked and how many players bet on it - tiles with fewer bets from others give better odds if they win.",
     ],
   },
   {
@@ -127,44 +129,44 @@ const faqData: FAQItem[] = [
     q: "What happens to my bet if no one bets on the winning tile?",
     a: [
       "The 92% base reward rolls over to the next epoch, making the next round's pool bigger. The jackpot accruals (2% + 3%) still go to the jackpot pools as normal.",
-      "Your losing bet is already part of the pool – it feeds winners, jackpots, and rollover. Eventually someone will hit the winning tile and collect.",
+      "Your losing bet is already part of the pool - it feeds winners, jackpots, and rollover. Eventually someone will hit the winning tile and collect.",
     ],
   },
   {
     category: "Betting & Strategy",
     q: "Does the Auto-Miner give better odds than manual play?",
-    a: "No. Auto-Miner picks tiles randomly – it doesn't have any edge. Its advantage is convenience: set it up, walk away, and it plays hundreds of rounds for you without clicking. More rounds = more chances to be in a jackpot round.",
+    a: "No. Auto-Miner picks tiles randomly - it doesn't have any edge. Its advantage is convenience: set it up, walk away, and it plays hundreds of rounds for you without clicking. More rounds = more chances to be in a jackpot round.",
   },
   {
     category: "Betting & Strategy",
     q: "What's the fee breakdown on each round?",
     a: [
-      "92% – base reward for winners (+ rollover + jackpot if triggered)",
-      "2% – accrues to the Daily Jackpot pool",
-      "3% – accrues to the Weekly Jackpot pool",
-      "2% – protocol fee: half to treasury, half to participation rebates",
-      "1% – permanently burned (sent to 0x...dEaD)",
+      "92% - base reward for winners (+ rollover + jackpot if triggered)",
+      "2% - accrues to the Daily Jackpot pool",
+      "3% - accrues to the Weekly Jackpot pool",
+      "2% - protocol fee: half to treasury, half to participation rebates",
+      "1% - permanently burned (sent to 0x...dEaD)",
     ],
   },
 
-  // ── Troubleshooting ──
+  // Troubleshooting
   {
     category: "Troubleshooting",
     q: "My bet transaction failed. What happened?",
     a: [
       "Common reasons: not enough ETH for gas, not enough LINEA tokens, or the epoch ended between your click and the transaction landing on-chain.",
-      "Fix: make sure your Privy wallet has ETH (for gas) and LINEA (for the bet). Bet earlier in the epoch – don't wait until the last 2–3 seconds.",
+      "Fix: make sure your Privy wallet has ETH (for gas) and LINEA (for the bet). Bet earlier in the epoch - don't wait until the last 2-3 seconds.",
     ],
   },
   {
     category: "Troubleshooting",
     q: "The timer says 00:00 but nothing is happening.",
-    a: "The epoch is waiting to be resolved. This happens automatically within a few seconds – the site and a keeper bot both try to resolve it. If it takes longer than 10s, try refreshing the page.",
+    a: "The epoch is waiting to be resolved. A keeper normally resolves it within a few seconds; some deployments may also enable browser-assisted resolve. If it takes longer than 10s, try refreshing the page.",
   },
   {
     category: "Troubleshooting",
     q: "I won but my balance didn't change.",
-    a: "Rewards are not auto-deposited. Open the Rewards panel in the sidebar (or below the grid on mobile), where unclaimed wins are listed, then click 'Claim' or 'Claim All'.",
+    a: "Rewards are not auto-deposited. Open the Rewards panel in the sidebar menu, where unclaimed wins are listed, then click 'Claim' or 'Claim All'.",
   },
   {
     category: "Troubleshooting",
@@ -177,7 +179,7 @@ const faqData: FAQItem[] = [
   {
     category: "Troubleshooting",
     q: "I see 'execution reverted' errors in the console.",
-    a: "This is usually harmless – it means someone else (the keeper bot) resolved the epoch a split second before your browser tried. The site handles this silently. Your bets are not affected.",
+    a: "This is usually harmless - it means someone else (the keeper bot) resolved the epoch a split second before your browser tried. The site handles this silently. Your bets are not affected.",
   },
   {
     category: "Troubleshooting",
@@ -190,7 +192,7 @@ const faqData: FAQItem[] = [
     a: "Open Wallet Settings from the wallet card in the top-right. The 'Export Logs' button is in the modal header next to Close, and it downloads a text file with session logs.",
   },
 
-  // ── Wallet & Security ──
+  // Wallet & Security
   {
     category: "Wallet & Security",
     q: "Can I export my private key?",
@@ -215,16 +217,16 @@ const faqData: FAQItem[] = [
     category: "Wallet & Security",
     q: "Are the jackpot pools safe? Can they be drained?",
     a: [
-      "The jackpot pools are stored as state variables inside the smart contract. There is no function to withdraw them manually – they can only be awarded to winners when a jackpot triggers on-chain.",
-      "The contract uses ReentrancyGuard and SafeERC20 for all transfers. No one – not even the owner – can drain the jackpot pools.",
+      "The jackpot pools are stored as state variables inside the smart contract. There is no function to withdraw them manually - they can only be awarded to winners when a jackpot triggers on-chain.",
+      "The contract uses ReentrancyGuard and SafeERC20 for all transfers. No one - not even the owner - can drain the jackpot pools.",
     ],
   },
 
-  // ── Chat & Social ──
+  // Chat & Social
   {
     category: "Chat & Social",
     q: "How do I set my chat name and avatar?",
-    a: "Open the chat widget (bottom-right corner), click the gear icon. You can set a custom name and upload an avatar. Your profile is linked to your wallet and synced to chat profile storage, so it restores even after local cache clear.",
+    a: "Open the chat widget, then click the gear icon. You can set a custom name and upload an avatar. Your profile is linked to your wallet and synced to chat profile storage, so it restores even after local cache clear.",
   },
   {
     category: "Chat & Social",

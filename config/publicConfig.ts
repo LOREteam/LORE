@@ -215,7 +215,11 @@ export function getConfiguredEip7702Enabled(explicitFlag?: string | null) {
   return envValue ?? DEFAULT_EIP7702_ENABLED;
 }
 
-export function getConfiguredEip7702MiningEnabled(explicitFlag?: string | null) {
+export function getConfiguredEip7702MiningEnabled(
+  explicitFlag?: string | null,
+  explicitEnabledFlag?: string | null,
+) {
+  if (!getConfiguredEip7702Enabled(explicitEnabledFlag)) return false;
   const envValue = parseBooleanEnv(
     explicitFlag ??
       process.env.NEXT_PUBLIC_EIP7702_MINING_ENABLED ??

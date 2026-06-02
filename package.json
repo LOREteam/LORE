@@ -21,10 +21,13 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test:logic": "tsx scripts/test-business-logic.mjs",
+    "test:contract": "node scripts/test-contract-v9-invariants.mjs",
     "health:prod": "node scripts/check-production-health.mjs",
     "typecheck": "next typegen && tsc --noEmit --incremental false",
     "smoke:http": "node scripts/smoke-http.mjs",
+    "load:http": "node scripts/load-http.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs",
+    "playtest:wallet": "tsx scripts/playtest-wallet.ts",
     "check": "node scripts/check-local.mjs",
     "postinstall": "node scripts/patch-privy-7702.mjs",
     "patch:privy-7702": "node scripts/patch-privy-7702.mjs"
@@ -34,19 +37,19 @@
     "@metamask/connect-evm": "^1.0.0",
     "@noble/hashes": "^1.8.0",
     "@openzeppelin/contracts": "^5.6.1",
-    "@privy-io/react-auth": "^3.23.1",
-    "@privy-io/wagmi": "^4.0.6",
+    "@privy-io/react-auth": "^3.27.2",
+    "@privy-io/wagmi": "^4.0.9",
     "@tanstack/react-query": "^5.90.21",
-    "@wagmi/core": "3.4.8",
+    "@wagmi/core": "^3.5.0",
     "accounts": "^0.8.1",
     "dotenv": "^17.3.1",
     "ethers": "^6.16.0",
     "next": "16.2.6",
-    "ox": "0.14.20",
+    "ox": "0.14.25",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "viem": "2.48.8",
-    "wagmi": "^3.6.9"
+    "viem": "^2.51.3",
+    "wagmi": "^3.6.16"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -70,6 +73,11 @@
     "bn.js": "5.2.3",
     "hono": "4.12.18",
     "postcss": "8.5.14",
-    "tmp": "0.2.5"
+    "tmp": "0.2.7",
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": {
+        "brace-expansion": "5.0.6"
+      }
+    }
   }
 }

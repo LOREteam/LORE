@@ -1,11 +1,21 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
+import "dotenv/config";
 
 const root = process.cwd();
+const EIP7702_PATCH_ENABLED = ["1", "true", "yes", "on"].includes(
+  String(process.env.NEXT_PUBLIC_EIP7702_ENABLED ?? process.env.EIP7702_ENABLED ?? "").trim().toLowerCase(),
+);
+
+if (!EIP7702_PATCH_ENABLED) {
+  console.log("[patch-privy-7702] EIP-7702 disabled, skipping Privy SDK patch");
+  process.exit(0);
+}
+
 const EXPECTED_PACKAGE_VERSIONS = {
-  "@privy-io/ethereum": "0.0.11",
-  "@privy-io/js-sdk-core": "0.61.3",
+  "@privy-io/ethereum": "0.1.2",
+  "@privy-io/js-sdk-core": "0.65.2",
 };
 
 function walkFiles(dir, matcher) {
@@ -48,7 +58,7 @@ function hasNative7702Support(filePath) {
     // Check for eip7702 string AND type 4 handling in the ORIGINAL source.
     // Our patch uses NUMBER_TO_STRING_TXN_TYPE and normalizeAuthorizationList together.
     // If the file has "eip7702" and handles authorizationList, it has native support.
-    return content.includes("eip7702") && content.includes("authorizationList");
+    return content.includes("eip7702") && content.includes("authorizationList") && content.includes("toBigIntIfDefined");
   } catch {
     return false;
   }
@@ -197,8 +207,8 @@ ${exportLine}
       : `import { isHex, toHex } from "viem";`;
   const exportLine =
     format === "cjs"
-      ? `exports.STRING_TO_NUMBER_TXN_TYPE = STRING_TO_NUMBER_TXN_TYPE;\nexports.toViemTransactionSerializable = toViemTransactionSerializable;`
-      : `export { STRING_TO_NUMBER_TXN_TYPE, toViemTransactionSerializable };`;
+      ? `exports.STRING_TO_NUMBER_TXN_TYPE = STRING_TO_NUMBER_TXN_TYPE;\nexports.toBigIntIfDefined = toOptionalBigInt;\nexports.toViemTransactionSerializable = toViemTransactionSerializable;`
+      : `export { STRING_TO_NUMBER_TXN_TYPE, toOptionalBigInt as toBigIntIfDefined, toViemTransactionSerializable };`;
 
   return `${importLine}
 const NUMBER_TO_STRING_TXN_TYPE = {

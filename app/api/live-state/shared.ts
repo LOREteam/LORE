@@ -2,10 +2,11 @@ import { decodeEventLog, encodeEventTopics, parseAbi, parseUnits, toHex } from "
 import { publicClient, CONTRACT_ADDRESS, CONTRACT_DEPLOY_BLOCK } from "../_lib/dataBridge";
 import { tileMaskToTileIds } from "../../lib/tileMask";
 import {
-  getAllBetRows,
+  getBetJackpotContributionsWeiAfterBlocks,
   getEpochMapByIds,
   getEpochTilePoolsWei,
   getEpochTileUserCounts,
+  getEpochTileUserSets,
   getMetaBigInt,
   getMetaJson,
   getMetaNumber,
@@ -14,6 +15,7 @@ import {
 } from "../../../server/storage";
 
 const LIVE_STATE_RPC_TIMEOUT_MS = 15_000;
+const LIVE_STATE_TILE_USER_COUNTS_TIMEOUT_MS = 3_000;
 const LIVE_STATE_LOG_SCAN_CHUNK = 50_000n;
 const LIVE_STATE_LOG_SCAN_MIN_CHUNK = 2_000n;
 const LIVE_STATE_SNAPSHOT_META_KEY = "snapshot:live-state:v1";
@@ -146,22 +148,6 @@ function hasAnyPositiveCount(counts: number[] | null) {
   return Boolean(counts?.some((value) => Number.isFinite(value) && value > 0));
 }
 
-function buildIndexedEpochTileUserSets(epoch: number, gridSize = 25) {
-  const perTile = Array.from({ length: gridSize }, () => new Set<string>());
-  for (const row of getAllBetRows()) {
-    if (Number(row.epoch) !== epoch) continue;
-    const user = String(row.user ?? "").trim().toLowerCase();
-    if (!user) continue;
-    for (const tileId of row.tileIds ?? []) {
-      const tileIndex = Number(tileId) - 1;
-      if (tileIndex >= 0 && tileIndex < gridSize) {
-        perTile[tileIndex].add(user);
-      }
-    }
-  }
-  return perTile;
-}
-
 async function fetchEpochTileUserCountsFromChain(
   epoch: bigint,
   fromBlock: bigint,
@@ -239,17 +225,21 @@ async function fetchEpochTileUserCountsFromChain(
   return perTile.map((set) => set.size);
 }
 
-function createTimeoutError(label: string) {
-  return new Error(`live-state ${label} timed out after ${LIVE_STATE_RPC_TIMEOUT_MS}ms`);
+function createTimeoutError(label: string, timeoutMs: number) {
+  return new Error(`live-state ${label} timed out after ${timeoutMs}ms`);
 }
 
-async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs = LIVE_STATE_RPC_TIMEOUT_MS,
+): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timeoutId = setTimeout(() => reject(createTimeoutError(label)), LIVE_STATE_RPC_TIMEOUT_MS);
+        timeoutId = setTimeout(() => reject(createTimeoutError(label, timeoutMs)), timeoutMs);
       }),
     ]);
   } finally {
@@ -374,23 +364,9 @@ function buildStoredJackpotInfoFallback(snapshot: LiveStatePayload | null, recen
   const lastDailyBlock = latestDaily ? BigInt(latestDaily.blockNumber || "0") : 0n;
   const lastWeeklyBlock = latestWeekly ? BigInt(latestWeekly.blockNumber || "0") : 0n;
 
-  for (const row of getAllBetRows()) {
-    let totalAmountWei = 0n;
-    let blockNumber = 0n;
-    try {
-      totalAmountWei = parseUnits(row.totalAmount || "0", 18);
-      blockNumber = BigInt(row.blockNumber || "0");
-    } catch {
-      continue;
-    }
-    if (totalAmountWei <= 0n || blockNumber <= 0n) continue;
-    if (blockNumber > lastDailyBlock) {
-      dailyPoolWei += totalAmountWei / 50n;
-    }
-    if (blockNumber > lastWeeklyBlock) {
-      weeklyPoolWei += (totalAmountWei * 3n) / 100n;
-    }
-  }
+  const jackpotContributions = getBetJackpotContributionsWeiAfterBlocks(lastDailyBlock, lastWeeklyBlock);
+  dailyPoolWei = jackpotContributions.dailyWei;
+  weeklyPoolWei = jackpotContributions.weeklyWei;
 
   if (dailyPoolWei <= 0n && weeklyPoolWei <= 0n && !latestDaily && !latestWeekly) {
     return null;
@@ -570,9 +546,11 @@ export async function buildLiveStatePayload(): Promise<LiveStatePayload> {
     Number.isInteger(currentEpochNumber) &&
     currentEpochNumber > 0 &&
     hasAnyPositivePool(liveTileTuple);
-  const tileUserCounts =
-    shouldRefreshCurrentEpochTileUserCounts
-      ? await fetchEpochTileUserCountsFromChain(
+  let tileUserCounts = indexedTileUserCounts ?? sameEpochSnapshot?.tileUserCounts ?? null;
+  if (shouldRefreshCurrentEpochTileUserCounts) {
+    try {
+      tileUserCounts = await withTimeout(
+        fetchEpochTileUserCountsFromChain(
           currentEpoch,
           (() => {
             const lastIndexedBlock = getMetaBigInt("lastIndexedBlock");
@@ -583,10 +561,16 @@ export async function buildLiveStatePayload(): Promise<LiveStatePayload> {
           })(),
           await publicClient.getBlockNumber(),
           hasAnyPositiveCount(indexedTileUserCounts)
-            ? buildIndexedEpochTileUserSets(currentEpochNumber)
+            ? getEpochTileUserSets(currentEpochNumber)
             : undefined,
-        )
-      : indexedTileUserCounts ?? sameEpochSnapshot?.tileUserCounts ?? null;
+        ),
+        "tile user counts",
+        LIVE_STATE_TILE_USER_COUNTS_TIMEOUT_MS,
+      );
+    } catch {
+      tileUserCounts = indexedTileUserCounts ?? sameEpochSnapshot?.tileUserCounts ?? null;
+    }
+  }
 
   const payload: LiveStatePayload = {
     currentEpoch: currentEpochString,

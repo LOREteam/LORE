@@ -15,8 +15,9 @@ import { CONTRACT_HAS_REBATE_API, GAME_ABI } from "../../lib/constants";
 import { createRouteCache } from "../_lib/routeCache";
 import { logRouteError } from "../_lib/routeError";
 import { getMetaBigInt, getMetaNumber, getUserParticipatingEpochs } from "../../../server/storage";
+import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
 
-const REBATE_ROUTE_CACHE_MS = 15_000;
+const REBATE_ROUTE_CACHE_MS = 120_000;
 const REBATE_SUMMARY_CHUNK_SIZE = 96;
 const REBATE_EXACT_CHUNK_SIZE = 48;
 const REBATE_DETAILS_LIMIT = 8;
@@ -95,6 +96,24 @@ function jsonNoStore(
     response.headers.set("X-Rebate-Cache", options.cacheStatus);
   }
   return response;
+}
+
+function startRebateBackgroundRefresh(
+  cacheKey: string,
+  user: `0x${string}`,
+  includeExact: boolean,
+) {
+  startVersionedBackgroundRefresh({
+    cache: rebateRouteCache,
+    cacheKey,
+    ttlMs: REBATE_ROUTE_CACHE_MS,
+    routeMetricKey: ROUTE_METRIC_KEY,
+    build: () => buildRebatePayload(user, { includeExact }),
+    toPayload: ({ payload }) => payload,
+    onError: (error) => {
+      logRouteError(ROUTE_METRIC_KEY, error, { user, phase: "background-refresh" });
+    },
+  });
 }
 
 function isMissingContractMethodError(err: unknown, methodName: string) {
@@ -403,22 +422,25 @@ export async function GET(request: NextRequest) {
     return jsonNoStore(cached, 200, { cacheStatus: "fresh" });
   }
   const staleCache = rebateRouteCache.getStale(effectiveCacheKey);
+  if (staleCache && !forceFresh) {
+    markRouteStaleServed(ROUTE_METRIC_KEY);
+    startRebateBackgroundRefresh(effectiveCacheKey, user, includeExact);
+    finishRouteMetric(metric, 200);
+    return jsonNoStore(staleCache, 200, { cacheStatus: "stale" });
+  }
 
   try {
     const inflight = forceFresh ? null : rebateRouteCache.getInflight(effectiveCacheKey);
     const result = inflight
       ? (markRouteInflightJoin(ROUTE_METRIC_KEY), { payload: await inflight, timings: null, cacheStatus: "inflight" as const })
       : await (() => {
-          const writeVersion = rebateRouteCache.beginWrite(effectiveCacheKey);
-          const buildPromise = buildRebatePayload(user, { includeExact });
-          const requestPromise = buildPromise
-            .then(({ payload }) => {
-              return rebateRouteCache.setIfLatest(effectiveCacheKey, payload, REBATE_ROUTE_CACHE_MS, writeVersion);
-            })
-            .finally(() => {
-              rebateRouteCache.clearInflight(effectiveCacheKey);
-            });
-          rebateRouteCache.setInflight(effectiveCacheKey, requestPromise);
+          const { buildPromise } = startVersionedInflightBuild({
+            cache: rebateRouteCache,
+            cacheKey: effectiveCacheKey,
+            ttlMs: REBATE_ROUTE_CACHE_MS,
+            build: () => buildRebatePayload(user, { includeExact }),
+            toPayload: ({ payload }) => payload,
+          });
           return buildPromise.then(({ payload, timings }) => ({
             payload,
             timings,

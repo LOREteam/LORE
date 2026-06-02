@@ -110,7 +110,7 @@ export function useMiningLifecycle({
         });
         deactivateAutoMineUi({
           phase: "retry-wait",
-          progress: "Auto-miner is still recovering in this tab...",
+          progress: "Waiting for the previous auto-miner run to settle before resuming.",
         });
         return;
       }

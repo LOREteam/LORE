@@ -1,9 +1,7 @@
 /**
- * Blockchain → Firebase RTDB indexer.
- * Scans contract events (BetPlaced, BatchBetsPlaced, EpochResolved,
- * DailyJackpotAwarded, WeeklyJackpotAwarded) and writes structured data
- * to Firebase Realtime Database so the frontend can fetch it via REST
- * instead of scanning thousands of blocks.
+ * Blockchain event indexer.
+ * Scans contract events and writes structured local storage / SQLite data
+ * so the frontend can serve indexed API responses without scanning blocks.
  *
  * Run: npx tsx scripts/indexer.ts          (one-shot, catches up)
  * Or with --watch flag for continuous mode (polls every 15s).
@@ -137,24 +135,24 @@ const client = createPublicClient({
   ),
 });
 
-// ─── Firebase REST helpers ───────────────────────────────────────────
-async function fbGet<T = unknown>(path: string): Promise<T | null> {
-  return readJsonPath<T>(path);
-}
-
-async function fbPatch(path: string, data: Record<string, unknown>) {
+// Storage helpers
+function storagePatch(path: string, data: Record<string, unknown>) {
   patchJsonPath(path, data);
 }
 
-async function fbPut(path: string, data: unknown) {
+function storagePut(path: string, data: unknown) {
   putJsonPath(path, data);
+}
+
+function storageGet<T = unknown>(path: string): T | null {
+  return readJsonPath<T>(path);
 }
 
 function setIndexerStatus(key: string, value: unknown) {
   setMetaJson(key, value);
 }
 
-// ─── Event topic signatures ─────────────────────────────────────────
+// Event topic signatures
 const [betSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BetPlaced" });
 const [batchSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsPlaced" });
 const [batchSameAmountSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsSameAmountPlaced" });
@@ -170,7 +168,7 @@ const [resolverRewardAccruedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventNam
 const [resolverRewardClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "ResolverRewardClaimed" });
 const [feesFlushedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "ProtocolFeesFlushed" });
 
-// ─── Chunked log fetcher ────────────────────────────────────────────
+// Chunked log fetcher
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function withRpcTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -208,7 +206,7 @@ async function fetchLogsRequestWithRetry(
       const msg = (err as Error).message?.slice(0, 80) ?? "unknown";
       if (attempt < RETRY_COUNT - 1) {
         const wait = RETRY_DELAY_MS * (attempt + 1);
-        console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} — wait ${wait}ms`);
+        console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} - wait ${wait}ms`);
         await delay(wait);
       } else {
         throw new Error(`${kind} failed for ${from}-${to} after ${RETRY_COUNT} retries: ${msg}`);
@@ -237,7 +235,7 @@ async function fetchLogsRequestAdaptive(
       const msg = (err as Error).message?.slice(0, 80) ?? "unknown";
       if (attempt < RETRY_COUNT - 1) {
         const wait = RETRY_DELAY_MS * (attempt + 1);
-        console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} — wait ${wait}ms`);
+        console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} - wait ${wait}ms`);
         await delay(wait);
       } else {
         throw new Error(`indexed log fetch failed for ${from}-${to} after ${RETRY_COUNT} retries: ${msg}`);
@@ -385,12 +383,20 @@ async function fetchAllLogs(from: bigint, to: bigint): Promise<Log[]> {
   all.sort((a, b) => {
     const aBlock = a.blockNumber ?? 0n;
     const bBlock = b.blockNumber ?? 0n;
-    return aBlock < bBlock ? -1 : aBlock > bBlock ? 1 : 0;
+    if (aBlock !== bBlock) return aBlock < bBlock ? -1 : 1;
+
+    const aTxIndex = a.transactionIndex ?? 0;
+    const bTxIndex = b.transactionIndex ?? 0;
+    if (aTxIndex !== bTxIndex) return aTxIndex - bTxIndex;
+
+    const aLogIndex = a.logIndex ?? 0;
+    const bLogIndex = b.logIndex ?? 0;
+    return aLogIndex - bLogIndex;
   });
   return all;
 }
 
-// ─── Process a single log ───────────────────────────────────────────
+// Process a single log
 interface BetRecord {
   epoch: string;
   user: string;
@@ -739,7 +745,7 @@ async function writeBets(bets: BetRecord[]) {
         blockNumber: normalizedBet.blockNumber,
       };
     }
-    await fbPatch(`gamedata/bets/${user}`, patch);
+    storagePatch(`gamedata/bets/${user}`, patch);
   }
 }
 
@@ -749,7 +755,7 @@ async function writeEpochs(epochs: Map<string, EpochRecord>) {
   for (const [ep, data] of epochs) {
     patch[ep] = data;
   }
-  await fbPatch("gamedata/epochs", patch);
+  storagePatch("gamedata/epochs", patch);
 }
 
 async function writeJackpots(jackpots: JackpotRecord[]) {
@@ -759,7 +765,7 @@ async function writeJackpots(jackpots: JackpotRecord[]) {
     const key = `${j.kind}_${j.epoch}`;
     patch[key] = j;
   }
-  await fbPatch("gamedata/jackpots", patch);
+  storagePatch("gamedata/jackpots", patch);
 }
 
 async function writeRewardClaims(rewardClaims: RewardClaimRecord[]) {
@@ -782,7 +788,7 @@ async function writeBatchClaims(records: BatchClaimRecord[]) {
   for (const row of records) {
     patch[row.id] = row;
   }
-  await fbPatch("gamedata/batchClaims", patch);
+  storagePatch("gamedata/batchClaims", patch);
 }
 
 async function writeResolverRewards(records: ResolverRewardRecord[]) {
@@ -791,7 +797,7 @@ async function writeResolverRewards(records: ResolverRewardRecord[]) {
   for (const row of records) {
     patch[row.id] = row;
   }
-  await fbPatch("gamedata/resolverRewards", patch);
+  storagePatch("gamedata/resolverRewards", patch);
 }
 
 async function writeFeeFlushes(feeFlushes: FeeFlushRecord[]) {
@@ -807,7 +813,7 @@ async function writeFeeFlushes(feeFlushes: FeeFlushRecord[]) {
 }
 
 async function setLastBlock(block: bigint) {
-  await fbPut("gamedata/_meta/lastIndexedBlock", block.toString());
+  storagePut("gamedata/_meta/lastIndexedBlock", block.toString());
 }
 
 async function updateCurrentEpochMeta() {
@@ -817,7 +823,7 @@ async function updateCurrentEpochMeta() {
       abi: READ_ABI,
       functionName: "currentEpoch",
     }), "read currentEpoch");
-    await fbPut("gamedata/_meta/currentEpoch", Number(currentEpoch));
+    storagePut("gamedata/_meta/currentEpoch", Number(currentEpoch));
   } catch (err) {
     console.warn("[indexer] Could not read currentEpoch from contract:", (err as Error).message);
   }
@@ -832,7 +838,7 @@ async function getCurrentEpochFromChain() {
 }
 
 async function getLastBlock(): Promise<bigint> {
-  const val = await fbGet<string>("gamedata/_meta/lastIndexedBlock");
+  const val = storageGet<string>("gamedata/_meta/lastIndexedBlock");
   if (!val) {
     console.warn("[indexer] Missing gamedata/_meta/lastIndexedBlock, falling back to INDEXER_START_BLOCK.");
     return INDEXER_START_BLOCK;
@@ -846,7 +852,7 @@ async function getLastBlock(): Promise<bigint> {
 }
 
 async function getRepairCursorBlock(): Promise<bigint> {
-  const val = await fbGet<string>("gamedata/_meta/repairCursorBlock");
+  const val = storageGet<string>("gamedata/_meta/repairCursorBlock");
   if (!val) {
     console.warn("[indexer] Missing gamedata/_meta/repairCursorBlock, falling back to INDEXER_START_BLOCK.");
     return INDEXER_START_BLOCK;
@@ -860,7 +866,7 @@ async function getRepairCursorBlock(): Promise<bigint> {
 }
 
 async function setRepairCursorBlock(block: bigint) {
-  await fbPut("gamedata/_meta/repairCursorBlock", block.toString());
+  storagePut("gamedata/_meta/repairCursorBlock", block.toString());
 }
 
 async function runRepairPass(currentBlock: bigint) {
@@ -883,7 +889,7 @@ async function runRepairPass(currentBlock: bigint) {
     ? currentBlock
     : from + REPAIR_CHUNK_BLOCKS - 1n;
 
-  console.log(`[indexer][repair] Scanning ${from} → ${to} (${to - from + 1n} blocks)`);
+  console.log(`[indexer][repair] Scanning ${from} -> ${to} (${to - from + 1n} blocks)`);
 
   const logs = await fetchAllLogs(from, to);
   if (logs.length > 0) {
@@ -918,7 +924,7 @@ async function runEpochReconcile(currentBlock: bigint) {
   lastReconcileAtMs = now;
 
   const currentEpoch = await getCurrentEpochFromChain();
-  await fbPut("gamedata/_meta/currentEpoch", Number(currentEpoch));
+  storagePut("gamedata/_meta/currentEpoch", Number(currentEpoch));
 
   if (currentEpoch <= 1n) {
     const status: IndexerReconcileStatus = {
@@ -932,7 +938,7 @@ async function runEpochReconcile(currentBlock: bigint) {
     return 0;
   }
 
-  const rawEpochs = (await fbGet<Record<string, EpochRecord>>("gamedata/epochs")) ?? {};
+  const rawEpochs = storageGet<Record<string, EpochRecord>>("gamedata/epochs") ?? {};
   const have = new Set<number>();
   for (const key of Object.keys(rawEpochs)) {
     const n = Number(key);
@@ -1060,7 +1066,7 @@ async function runEpochReconcile(currentBlock: bigint) {
   return 0;
 }
 
-// ─── Main loop ──────────────────────────────────────────────────────
+// Main loop
 async function runOnce() {
   const lastBlock = await getLastBlock();
   const currentBlock = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
@@ -1083,7 +1089,7 @@ async function runOnce() {
     return 0;
   }
 
-  console.log(`[indexer] Scanning blocks ${fromBlock} → ${currentBlock} (${currentBlock - fromBlock + 1n} blocks)`);
+  console.log(`[indexer] Scanning blocks ${fromBlock} -> ${currentBlock} (${currentBlock - fromBlock + 1n} blocks)`);
 
   let totalLogs = 0;
   let chunkCount = 0;

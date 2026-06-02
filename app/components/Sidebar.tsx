@@ -119,12 +119,9 @@ export const Sidebar = React.memo(function Sidebar({
       mobileOpen ? "flex translate-x-0" : "hidden lg:flex -translate-x-full lg:translate-x-0",
     )}>
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
-        <div className="absolute left-[-22%] top-[-10%] h-52 w-52 rounded-full bg-violet-600/10 blur-3xl animate-orb-1" />
-        <div className="absolute bottom-[-12%] right-[-18%] h-48 w-48 rounded-full bg-sky-500/8 blur-3xl animate-orb-2" />
-        <div
-          className="absolute left-[58%] top-[36%] h-32 w-32 rounded-full bg-fuchsia-500/6 blur-3xl animate-orb-1"
-          style={{ animationDelay: "-8s" }}
-        />
+        <div className="absolute left-[-22%] top-[-10%] h-52 w-52 rounded-full bg-violet-600/10 blur-3xl" />
+        <div className="absolute bottom-[-12%] right-[-18%] h-48 w-48 rounded-full bg-sky-500/8 blur-3xl" />
+        <div className="absolute left-[58%] top-[36%] h-32 w-32 rounded-full bg-fuchsia-500/6 blur-3xl" />
       </div>
 
       <div className="relative z-10 flex min-h-0 flex-1 flex-col">
@@ -139,7 +136,7 @@ export const Sidebar = React.memo(function Sidebar({
                 className="h-full w-full object-contain drop-shadow-[0_0_9px_rgba(139,92,246,0.28)]"
               />
             </div>
-            <div className="absolute inset-0 -z-10 rounded-full bg-violet-500/16 blur-lg animate-breathe" />
+            <div className="absolute inset-0 -z-10 rounded-full bg-violet-500/16 blur-lg" />
           </div>
 
           <div className="flex flex-1 flex-col items-center justify-center text-center">
@@ -212,7 +209,7 @@ export const Sidebar = React.memo(function Sidebar({
           />
         </nav>
 
-        <div className="mx-4 mt-1 flex min-h-0 flex-1 flex-col gap-2 animate-fade-in" style={{ animationDelay: "0.6s" }}>
+        <div className="secondary-info-zone mx-4 mt-1 flex min-h-0 flex-1 flex-col gap-2 animate-fade-in" style={{ animationDelay: "0.6s" }}>
           <div className="h-px bg-linear-to-r from-transparent via-white/6 to-transparent" />
           <p className="px-1 pt-1 text-slate-500 font-bold uppercase tracking-[0.14em]" style={{ fontSize: "11px" }}>
             Protocol Stats
@@ -445,7 +442,7 @@ const NavItem = React.memo(function NavItem({
         uiTokens.radius.sm,
         uiTokens.focusRing,
         active
-          ? "animate-glow-pulse bg-violet-500/15 text-violet-400 shadow-sm shadow-violet-500/10"
+          ? "bg-violet-500/15 text-violet-400 shadow-sm shadow-violet-500/10"
           : "text-gray-500 hover:bg-white/4 hover:text-gray-300",
       )}
       style={{ animationDelay: delay, fontSize: 15 }}

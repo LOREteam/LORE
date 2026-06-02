@@ -56,7 +56,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
     bullets: [
       "Privy lets you create the embedded wallet, copy its address, export the private key, and deposit ETH or LINEA into it.",
       "Transfer is for withdrawing ETH or LINEA and reviewing transfer history.",
-      "General, 7702, and Scan cover sound settings, reduced motion, diagnostics, pending-transaction tools, and deep reward scans.",
+      "General and Scan cover sound settings, reduced motion, pending-transaction tools, and deep reward scans.",
     ],
     tab: "hub",
   },
@@ -134,6 +134,14 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
     onTabChange(currentStep.tab);
   }, [activeTab, currentStep, onTabChange, visible]);
 
+  useEffect(() => {
+    if (!visible) return;
+    document.documentElement.dataset.tutorialOpen = "true";
+    return () => {
+      delete document.documentElement.dataset.tutorialOpen;
+    };
+  }, [visible]);
+
   const progressPct = useMemo(
     () => ((stepIndex + 1) / TUTORIAL_STEPS.length) * 100,
     [stepIndex],
@@ -151,16 +159,16 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-0 z-260 flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm md:items-center md:p-6">
+    <div className="fixed inset-0 z-[260] flex items-end justify-center bg-black/70 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-sm md:items-center md:p-6">
       <UiPanel
         tone="default"
         padding="md"
-        className="w-full max-w-2xl border-violet-400/20 bg-[#090914]/96 shadow-[0_24px_80px_rgba(2,6,23,0.6)]"
+        className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden border-violet-400/20 bg-[#090914]/96 shadow-[0_24px_80px_rgba(2,6,23,0.6)] md:max-h-[min(42rem,calc(100dvh-3rem))]"
         role="dialog"
         aria-modal="true"
         aria-label="First visit tutorial"
       >
-        <div className="mb-4 flex items-start justify-between gap-4">
+        <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.24em] text-violet-300/80">
               {currentStep.eyebrow}
@@ -176,7 +184,7 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
           </UiButton>
         </div>
 
-        <div className="mb-4">
+        <div className="mb-4 shrink-0">
           <div className="mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">
             <span>Step {stepIndex + 1} / {TUTORIAL_STEPS.length}</span>
             <span>{activeTab}</span>
@@ -189,18 +197,20 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          {currentStep.bullets.map((bullet) => (
-            <div
-              key={bullet}
-              className="rounded-2xl border border-white/6 bg-white/2 px-3 py-3 text-sm leading-relaxed text-slate-300"
-            >
-              {bullet}
-            </div>
-          ))}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+          <div className="grid gap-3 md:grid-cols-2">
+            {currentStep.bullets.map((bullet) => (
+              <div
+                key={bullet}
+                className="rounded-2xl border border-white/6 bg-white/2 px-3 py-3 text-sm leading-relaxed text-slate-300"
+              >
+                {bullet}
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="mt-5 flex items-center justify-between gap-3">
+        <div className="mt-5 flex shrink-0 items-center justify-between gap-3">
           <UiButton
             variant="ghost"
             size="sm"

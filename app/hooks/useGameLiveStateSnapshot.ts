@@ -1,7 +1,7 @@
 "use client";
 
 import { log } from "../lib/logger";
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { EpochTuple } from "./useGameData.helpers";
 
@@ -27,10 +27,13 @@ interface UseGameLiveStateSnapshotOptions {
 }
 
 const LIVE_STATE_FALLBACK_POLL_MS = 5_000;
-const LIVE_STATE_FETCH_TIMEOUT_MS = 4_000;
+const LIVE_STATE_FETCH_TIMEOUT_MS = 10_000;
 const LIVE_STATE_SNAPSHOT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_STATE_BOOT_TIMEOUT_MS = 2_500;
 const LIVE_READ_DEFER_MS = 1_200;
+const LIVE_STATE_CACHE_WRITE_MIN_MS = 60_000;
+const LIVE_STATE_DISPOSE_ABORT_REASON = "live-state-effect-disposed";
+const LIVE_STATE_TIMEOUT_ABORT_REASON = "live-state-request-timeout";
 
 function getLiveStateSnapshotKey() {
   return `lore:live-state-snapshot:v1:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
@@ -97,9 +100,17 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
     () => getSnapshotSignature(snapshotState.snapshot),
     [snapshotState.snapshot],
   );
+  const snapshotSignatureRef = useRef(snapshotSignature);
+  const lastCacheWriteAtRef = useRef(
+    typeof initialSnapshot?.fetchedAt === "number" ? initialSnapshot.fetchedAt : 0,
+  );
   const serverLiveState = snapshotState.snapshot;
   const liveContractReadsEnabled = snapshotState.liveContractReadsEnabled;
   const liveStateBootstrapPending = snapshotState.bootstrapPending;
+
+  useEffect(() => {
+    snapshotSignatureRef.current = snapshotSignature;
+  }, [snapshotSignature]);
 
   useLayoutEffect(() => {
     setSnapshotState((current) => {
@@ -110,6 +121,8 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
       if (!snapshot) {
         return current;
       }
+      lastCacheWriteAtRef.current =
+        typeof snapshot.fetchedAt === "number" ? snapshot.fetchedAt : lastCacheWriteAtRef.current;
       return {
         snapshot,
         bootstrapPending: false,
@@ -136,15 +149,17 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
     if (!isPageVisible) return;
     const controller = new AbortController();
     let consecutiveFailures = 0;
-    let lastSignature = snapshotSignature;
     let requestInFlight = false;
 
     const fetchLiveState = async () => {
       if (requestInFlight) return;
       requestInFlight = true;
       const requestController = new AbortController();
-      const abortRequest = () => requestController.abort();
-      const timeoutId = window.setTimeout(abortRequest, LIVE_STATE_FETCH_TIMEOUT_MS);
+      const abortRequest = () => requestController.abort(LIVE_STATE_DISPOSE_ABORT_REASON);
+      const timeoutId = window.setTimeout(
+        () => requestController.abort(LIVE_STATE_TIMEOUT_ABORT_REASON),
+        LIVE_STATE_FETCH_TIMEOUT_MS,
+      );
       controller.signal.addEventListener("abort", abortRequest, { once: true });
 
       try {
@@ -158,8 +173,8 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
         const payload = (await response.json()) as LiveStateApiResponse;
         if (controller.signal.aborted || requestController.signal.aborted) return;
         const nextSignature = getSnapshotSignature(payload);
-        if (nextSignature !== lastSignature) {
-          lastSignature = nextSignature;
+        if (nextSignature !== snapshotSignatureRef.current) {
+          snapshotSignatureRef.current = nextSignature;
           setSnapshotState((current) => ({
             snapshot: payload,
             bootstrapPending: false,
@@ -167,24 +182,39 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
           }));
           try {
             window.localStorage.setItem(getLiveStateSnapshotKey(), JSON.stringify(payload));
+            lastCacheWriteAtRef.current = Date.now();
           } catch {
             // Ignore storage quota/privacy mode failures.
           }
         } else {
-          try {
-            window.localStorage.setItem(getLiveStateSnapshotKey(), JSON.stringify(payload));
-          } catch {
-            // Ignore storage quota/privacy mode failures.
+          const now = Date.now();
+          if (now - lastCacheWriteAtRef.current >= LIVE_STATE_CACHE_WRITE_MIN_MS) {
+            try {
+              window.localStorage.setItem(getLiveStateSnapshotKey(), JSON.stringify(payload));
+              lastCacheWriteAtRef.current = now;
+            } catch {
+              // Ignore storage quota/privacy mode failures.
+            }
           }
           setSnapshotState((current) =>
             current.bootstrapPending ? { ...current, bootstrapPending: false } : current,
           );
         }
       } catch (err) {
-        if (controller.signal.aborted) return;
+        if (
+          controller.signal.aborted ||
+          requestController.signal.reason === LIVE_STATE_DISPOSE_ABORT_REASON
+        ) {
+          return;
+        }
         consecutiveFailures++;
         if (consecutiveFailures <= 2) {
-          log.warn("LiveState", "fetch failed", { message: err instanceof Error ? err.message : String(err) });
+          log.warn("LiveState", "fetch failed", {
+            message:
+              requestController.signal.reason === LIVE_STATE_TIMEOUT_ABORT_REASON
+                ? `request timed out after ${LIVE_STATE_FETCH_TIMEOUT_MS}ms`
+                : err instanceof Error ? err.message : String(err),
+          });
         }
         setSnapshotState((current) => ({
           ...current,
@@ -204,10 +234,10 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
       void fetchLiveState();
     }, LIVE_STATE_FALLBACK_POLL_MS);
     return () => {
-      controller.abort();
+      controller.abort(LIVE_STATE_DISPOSE_ABORT_REASON);
       window.clearInterval(intervalId);
     };
-  }, [isPageVisible, snapshotSignature]);
+  }, [isPageVisible]);
 
   const fallbackCurrentEpoch = useMemo(
     () => toBigIntOrNull(serverLiveState?.currentEpoch ?? null),

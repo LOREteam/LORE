@@ -41,7 +41,6 @@ export default async function Image() {
             flexDirection: 'column',
             alignItems: 'center',
             gap: 12,
-            zIndex: 1,
           }}
         >
           <div
@@ -72,7 +71,7 @@ export default async function Image() {
               marginTop: 8,
             }}
           >
-            Mine · Bet · Earn
+            Mine / Bet / Earn
           </div>
         </div>
       </div>

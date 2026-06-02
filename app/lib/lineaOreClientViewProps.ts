@@ -55,6 +55,8 @@ interface CreateLineaOreClientViewPropsOptions {
   embeddedResolverRewards: WalletSettingsProps["embeddedResolverRewards"];
   embeddedResolverRewardsWei: WalletSettingsProps["embeddedResolverRewardsWei"];
   embeddedWalletAddress: string | null;
+  embeddedWallet7702DelegateAddress: WalletSettingsProps["embeddedWallet7702DelegateAddress"];
+  embeddedWalletCodeChecking: WalletSettingsProps["embeddedWalletCodeChecking"];
   embeddedWalletSyncing: HeaderProps["embeddedWalletSyncing"];
   epochDurationChange: HeaderProps["epochDurationChange"];
   exportEmbeddedWallet: WalletSettingsProps["onExportEmbeddedWallet"];
@@ -71,6 +73,7 @@ interface CreateLineaOreClientViewPropsOptions {
   handleCopyEmbeddedAddress: WalletSettingsProps["onCopyEmbeddedAddress"];
   handleDepositEthToEmbedded: WalletSettingsProps["onDepositEthToEmbedded"];
   handleDepositTokenToEmbedded: WalletSettingsProps["onDepositTokenToEmbedded"];
+  handleClearEip7702Delegation: WalletSettingsProps["onClearEip7702Delegation"];
   handleManualMineWithGuard: PageTabContentProps["hubProps"]["handleManualMineWithGuard"];
   handleTabChange: SidebarProps["onTabChange"];
   handleWithdrawEthToExternal: WalletSettingsProps["onWithdrawEthToExternal"];
@@ -93,6 +96,7 @@ interface CreateLineaOreClientViewPropsOptions {
   isDeepScanning: SidebarProps["isDeepScanning"];
   isDepositingEth: WalletSettingsProps["isDepositingEth"];
   isDepositingToken: WalletSettingsProps["isDepositingToken"];
+  isClearingEip7702Delegation: WalletSettingsProps["isClearingEip7702Delegation"];
   isPageVisible: SidebarProps["isPageVisible"];
   isPending: PageTabContentProps["hubProps"]["isPending"];
   isRefreshingPendingTx: WalletSettingsProps["isRefreshingPendingTx"];
@@ -103,10 +107,10 @@ interface CreateLineaOreClientViewPropsOptions {
   isWithdrawing: WalletSettingsProps["isWithdrawing"];
   isWithdrawingEth: WalletSettingsProps["isWithdrawingEth"];
   jackpotAmount: PageTabContentProps["hubProps"]["jackpotAmount"];
+  jackpotInfo: HeaderProps["jackpotInfo"];
   jackpotHistory: PageTabContentProps["analyticsProps"]["jackpotHistory"];
   jackpotHistoryError: PageTabContentProps["analyticsProps"]["jackpotHistoryError"];
   jackpotHistoryLoading: PageTabContentProps["analyticsProps"]["jackpotHistoryLoading"];
-  jackpotInfo: HeaderProps["jackpotInfo"];
   leaderboardsData: PageTabContentProps["leaderboardsProps"]["data"];
   leaderboardsError: PageTabContentProps["leaderboardsProps"]["error"];
   leaderboardsLoading: PageTabContentProps["leaderboardsProps"]["loading"];
@@ -153,10 +157,21 @@ interface CreateLineaOreClientViewPropsOptions {
   visualEpoch: HeaderProps["visualEpoch"];
   walletTransfers: WalletSettingsProps["walletTransfers"];
   walletTransfersLoading: WalletSettingsProps["walletTransfersLoading"];
+  walletConnected: PageTabContentProps["hubProps"]["walletConnected"];
   winningTileId: PageTabContentProps["hubProps"]["winningTileId"];
   withdrawAmount: string;
   withdrawEthAmount: string;
   cancelPendingTransaction: WalletSettingsProps["onCancelPendingTx"];
+}
+
+function findJackpotHistoryAmount(
+  entries: PageTabContentProps["analyticsProps"]["jackpotHistory"],
+  kind: "daily" | "weekly",
+  epochs: Array<string | null | undefined>,
+) {
+  const epochSet = new Set(epochs.filter((epoch): epoch is string => Boolean(epoch)));
+  const entry = entries.find((item) => item.kind === kind && epochSet.has(item.epoch));
+  return entry?.amountNum ?? 0;
 }
 
 export function createLineaOreClientViewProps({
@@ -196,6 +211,8 @@ export function createLineaOreClientViewProps({
   embeddedResolverRewards,
   embeddedResolverRewardsWei,
   embeddedWalletAddress,
+  embeddedWallet7702DelegateAddress,
+  embeddedWalletCodeChecking,
   embeddedWalletSyncing,
   epochDurationChange,
   exportEmbeddedWallet,
@@ -212,6 +229,7 @@ export function createLineaOreClientViewProps({
   handleCopyEmbeddedAddress,
   handleDepositEthToEmbedded,
   handleDepositTokenToEmbedded,
+  handleClearEip7702Delegation,
   handleManualMineWithGuard,
   handleTabChange,
   handleWithdrawEthToExternal,
@@ -234,6 +252,7 @@ export function createLineaOreClientViewProps({
   isDeepScanning,
   isDepositingEth,
   isDepositingToken,
+  isClearingEip7702Delegation,
   isPageVisible,
   isPending,
   isRefreshingPendingTx,
@@ -294,11 +313,33 @@ export function createLineaOreClientViewProps({
   visualEpoch,
   walletTransfers,
   walletTransfersLoading,
+  walletConnected,
   winningTileId,
   withdrawAmount,
   withdrawEthAmount,
   cancelPendingTransaction,
 }: CreateLineaOreClientViewPropsOptions) {
+  const gridEpochNumber = gridDisplayEpoch ? Number(gridDisplayEpoch) : NaN;
+  const previousGridEpoch =
+    Number.isFinite(gridEpochNumber) && gridEpochNumber > 0 ? String(gridEpochNumber - 1) : null;
+  const dailyHistoryAmount = isDailyJackpot
+    ? findJackpotHistoryAmount(jackpotHistory, "daily", [
+        jackpotInfo?.lastDailyJackpotEpoch,
+        gridDisplayEpoch,
+        previousGridEpoch,
+      ])
+    : 0;
+  const weeklyHistoryAmount = isWeeklyJackpot
+    ? findJackpotHistoryAmount(jackpotHistory, "weekly", [
+        jackpotInfo?.lastWeeklyJackpotEpoch,
+        gridDisplayEpoch,
+        previousGridEpoch,
+      ])
+    : 0;
+  const jackpotFallbackAmount =
+    (isDailyJackpot ? (jackpotInfo?.lastDailyJackpotAmount || dailyHistoryAmount) : 0) +
+    (isWeeklyJackpot ? (jackpotInfo?.lastWeeklyJackpotAmount || weeklyHistoryAmount) : 0);
+
   return {
     sidebarProps: buildSidebarProps({
       activeTab,
@@ -315,7 +356,7 @@ export function createLineaOreClientViewProps({
     }),
     headerProps: buildHeaderProps({
       visualEpoch,
-      // V8 resolve is atomic: the winning tile is known the moment the
+      // V9 resolve is atomic: the winning tile is known the moment the
       // resolve tx lands, so the header always reflects the live epoch
       // (number + countdown) without any "REVEAL"/ANALYZING placeholder.
       // The winner announcement is handled by the wins ticker.
@@ -360,6 +401,9 @@ export function createLineaOreClientViewProps({
       isWithdrawingEth,
       isDepositingEth,
       isDepositingToken,
+      isClearingEip7702Delegation,
+      embeddedWallet7702DelegateAddress,
+      embeddedWalletCodeChecking,
       setWithdrawAmount,
       setWithdrawEthAmount,
       setDepositEthAmount,
@@ -371,6 +415,7 @@ export function createLineaOreClientViewProps({
       handleWithdrawEthToExternal,
       handleDepositEthToEmbedded,
       handleDepositTokenToEmbedded,
+      handleClearEip7702Delegation,
       walletTransfers,
       walletTransfersLoading,
       fetchWalletTransfers,
@@ -423,6 +468,7 @@ export function createLineaOreClientViewProps({
       autoMineProgress,
       chatOpen,
       formattedLineaBalance,
+      walletConnected,
       gridDisplayEpoch,
       gridSelectedTiles,
       handleAutoMineWithGuard,
@@ -439,6 +485,7 @@ export function createLineaOreClientViewProps({
       liveStateReady,
       isWeeklyJackpot,
       jackpotAmount,
+      jackpotFallbackAmount,
       lowEthBalance,
       claimReward,
       claimAll,

@@ -50,7 +50,7 @@ export const HISTORY_DEPTH = 120;
 // --- Reveal Timing ---
 export const MIN_WINNER_DISPLAY_MS = 600;
 // Classic short reveal window: grid stays on the old epoch for this long so
-// the winning-tile animation can flash. Non-blocking — betting is never gated
+// the winning-tile animation can flash. Non-blocking - betting is never gated
 // on reveal state, and the header already shows the new epoch immediately.
 // If the winner arrives sooner, we exit after MIN_WINNER_DISPLAY_MS.
 export const MAX_REVEAL_DURATION_MS = 2500;
@@ -124,13 +124,30 @@ export const GAME_ABI = parseAbi([
   "error TimerNotEnded()",
   "error AlreadyResolved()",
   "error CanOnlyResolveCurrent()",
-  // V6+ custom errors (improves UI error decoding)
+  // V9 custom errors (improves UI error decoding)
+  "error InvalidTile()",
+  "error InvalidTileMask()",
+  "error ZeroAmount()",
+  "error ArraysMismatch()",
+  "error NoWinningBet()",
+  "error AlreadyClaimed()",
   "error NotResolved()",
+  "error InvalidEpochDuration()",
+  "error InvalidFeeRecipient()",
+  "error NoPendingEpochDurationChange()",
+  "error NoPendingFeeRecipientChange()",
+  "error NothingToFlush()",
   "error RebateAlreadyClaimed()",
   "error NoRebateAvailable()",
   "error EmptyArray()",
   "error NothingToClaim()",
-  // V8 atomic contract: reject bets in the last LAST_BET_GRACE_SECONDS window.
+  "error InvalidTokenAddress()",
+  "error InvalidInitialOwner()",
+  "error OwnershipRenounceDisabled()",
+  "error DustAlreadySettled()",
+  "error DustSettlementDelayNotReached()",
+  "error RewardClaimWindowExpired()",
+  // V9 atomic contract: reject bets in the last LAST_BET_GRACE_SECONDS window.
   "error EpochEnded()",
   "error EpochClosing()",
 ]);
@@ -145,5 +162,16 @@ export const GAME_EVENTS_ABI = parseAbi([
   "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
   "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
   "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
+  "event RewardDustSettled(uint256 indexed epoch, uint256 amount)",
+  "event ResolverRewardAccrued(address indexed resolver, uint256 indexed epoch, uint256 amount)",
+  "event ResolverRewardClaimed(address indexed resolver, uint256 amount)",
   "event ProtocolFeesFlushed(uint256 ownerAmount, uint256 burnAmount)",
+  "event RebateClaimed(address indexed user, uint256 indexed epoch, uint256 amount)",
+  "event RebateBatchClaimed(address indexed user, uint256 amount, uint256 epochsClaimed)",
+  "event EpochDurationChangeScheduled(uint256 oldValue, uint256 newValue, uint256 eta, uint256 effectiveFromEpoch)",
+  "event EpochDurationChangeCancelled(uint256 pendingValue)",
+  "event EpochDurationUpdated(uint256 oldValue, uint256 newValue)",
+  "event FeeRecipientChangeScheduled(address indexed oldRecipient, address indexed newRecipient, uint256 eta)",
+  "event FeeRecipientChangeCancelled(address indexed pendingRecipient)",
+  "event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient)",
 ]);

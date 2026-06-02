@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
+import * as publicConfigModule from "../config/publicConfig.ts";
 import * as utilsModule from "../app/lib/utils.ts";
+import * as eip7702Module from "../app/lib/eip7702.ts";
 import * as chatAvatarUploadModule from "../app/lib/chatAvatarUpload.ts";
 import * as networkRetryModule from "../app/lib/mining/networkRetry.ts";
 import * as manualMineAttemptModule from "../app/lib/mining/manualMineAttempt.ts";
 import * as autoMineLoopModule from "../app/hooks/useMiningAutoMineLoop.ts";
+import * as miningRoundBettingModule from "../app/hooks/useMiningRoundBetting.ts";
 import * as autoMineLoopModelModule from "../app/lib/mining/autoMineLoopModel.ts";
 import * as autoMineLoopPreludePlannerModule from "../app/lib/mining/autoMineLoopPreludePlanner.ts";
 import * as autoMineLoopRoundOutcomeModule from "../app/lib/mining/autoMineLoopRoundOutcome.ts";
@@ -25,6 +28,7 @@ async function main() {
   const networkRetry = networkRetryModule.default ?? networkRetryModule;
   const manualMineAttempt = manualMineAttemptModule.default ?? manualMineAttemptModule;
   const autoMineLoop = autoMineLoopModule.default ?? autoMineLoopModule;
+  const miningRoundBetting = miningRoundBettingModule.default ?? miningRoundBettingModule;
   const autoMineLoopModel = autoMineLoopModelModule.default ?? autoMineLoopModelModule;
   const autoMineLoopPreludePlanner = autoMineLoopPreludePlannerModule.default ?? autoMineLoopPreludePlannerModule;
   const autoMineLoopRoundOutcome = autoMineLoopRoundOutcomeModule.default ?? autoMineLoopRoundOutcomeModule;
@@ -38,6 +42,17 @@ async function main() {
   const autoMineRestoreDeduper = autoMineRestoreDeduperModule.default ?? autoMineRestoreDeduperModule;
   const chunkReloadRecovery = chunkReloadRecoveryModule.default ?? chunkReloadRecoveryModule;
   const miningShared = miningSharedModule.default ?? miningSharedModule;
+  const publicConfig = publicConfigModule.default ?? publicConfigModule;
+  const eip7702 = eip7702Module.default ?? eip7702Module;
+
+  assert.equal(publicConfig.getConfiguredEip7702MiningEnabled("1", "0"), false);
+  assert.equal(publicConfig.getConfiguredEip7702MiningEnabled("1", "1"), true);
+  assert.equal(publicConfig.getConfiguredEip7702MiningEnabled("0", "1"), false);
+  assert.equal(
+    eip7702.parseEip7702DelegationCode("0xef0100170067a88e64bba842ae6615ab277493de32629a"),
+    "0x170067A88E64bbA842AE6615AB277493De32629A",
+  );
+  assert.equal(eip7702.parseEip7702DelegationCode("0x"), null);
 
   assert.equal(utils.normalizeDecimalInput("1,25"), "1.25");
   assert.equal(utils.validateBetAmount(""), "Enter an amount");
@@ -45,8 +60,10 @@ async function main() {
   assert.equal(utils.validateBetAmount("0"), "Amount must be greater than 0");
   assert.equal(utils.validateBetAmount("-1"), "Amount must be greater than 0");
   assert.equal(utils.validateBetAmount("1e3"), "Invalid amount");
+  assert.equal(utils.validateBetAmount("1.2.3"), "Invalid amount");
   assert.equal(utils.validateBetAmount("1,25"), null);
   assert.equal(utils.validateBetAmount("0.0001"), null);
+  assert.equal(utils.validateBetAmount("0.0000000000000000001"), "Use 18 decimals or fewer");
 
   assert.equal(utils.safeParseFloat("1.5"), 1.5);
   assert.equal(utils.safeParseFloat("1e309"), 0);
@@ -784,6 +801,48 @@ async function main() {
   });
   assert.equal(timeoutAttempt, "pending");
   assert.equal(timedOutFinalized, 0);
+
+  let walletFallbackCalls = 0;
+  const pendingBetRef = { current: null };
+  const fakeBetClient = {
+    getTransactionCount: async () => 10,
+    readContract: async () => [1n, ...Array.from({ length: 24 }, () => 0n)],
+  };
+  const pendingFallbackResult = await miningRoundBetting.executeAutoMineBetLoop({
+    actorAddress: "0x0000000000000000000000000000000000000001",
+    autoMineActive: () => true,
+    betPendingGraceMs: 60_000,
+    betPendingStaleMs: 120_000,
+    currentEpoch: 91n,
+    currentRoundIndex: 0,
+    effectiveBlocks: 1,
+    forceReplacePendingNonceGap: 2,
+    gasBumpBase: 0n,
+    gasBumpReplacementStep: 0n,
+    getBumpedFees: async () => undefined,
+    getRetryDelayMs: () => 1,
+    maxBetAttempts: 1,
+    networkBackoffInitialMs: 1,
+    networkBackoffMaxMs: 1,
+    onProgress: () => {},
+    pendingBetRef,
+    placeBets: async () => {
+      walletFallbackCalls += 1;
+      return "confirmed";
+    },
+    placeBetsSilent: async () => {
+      throw new Error("already known");
+    },
+    publicClient: fakeBetClient,
+    readSilentSend: () => ({}),
+    roundCandidateEpochs: [91n],
+    rounds: 1,
+    singleAmountRaw: 1n,
+    tilesToBet: [1],
+  });
+  assert.deepEqual(pendingFallbackResult, { kind: "detected-on-chain", placedEpoch: 91n });
+  assert.equal(walletFallbackCalls, 0);
+  assert.deepEqual(pendingBetRef.current, null);
 
   await assert.rejects(
     () => utils.withTimeout(delay(50), 1, "probe"),

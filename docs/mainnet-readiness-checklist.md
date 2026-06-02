@@ -9,12 +9,15 @@ Use this as the final pre-launch gate. A launch is considered ready only when ev
 - [ ] Final mainnet contract addresses are set in both `KEEPER_CONTRACT_ADDRESS` and `NEXT_PUBLIC_CONTRACT_ADDRESS`.
 - [ ] `INDEXER_START_BLOCK` and `NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK` match the real deploy block.
 - [ ] Ownership is transferred to a Safe multisig or equivalent governance-safe setup.
+- [ ] Randomness hardening is explicitly signed off: at minimum, deployed winner entropy must not include `msg.sender`; for higher-value launch, use VRF or a two-phase commit/reveal with future-block entropy.
+- [ ] Public `resolveEpoch` behavior is documented and monitored so resolver withholding, resolver rewards, and stuck epochs are visible.
 - [ ] A manual verify pass confirms jackpot, rebate, deposit, reward, and resolve reads against chain.
 
 Ready when:
 - mainnet env boots without fail-fast config errors
 - web values and keeper values point at the same contract
 - no privileged EOA remains as the long-term owner
+- randomness risk is accepted in writing or mitigated in the deployed contract
 
 ### 2. Auto-mine runtime safety
 
@@ -35,6 +38,7 @@ Ready when:
 - [ ] `LORE_DB_PATH` points to a persistent absolute SQLite path outside the repo.
 - [ ] `npm run health:prod` is wired into external monitoring or cron.
 - [ ] `/api/health/runtime` and `/api/health/data-sync` are tested with the diagnostics secret.
+- [ ] `TRUST_PROXY_HEADERS=1` is enabled only after the edge proxy is confirmed to strip spoofed client IP headers.
 - [ ] Backups for SQLite are scheduled and a restore test has been done once.
 
 Ready when:

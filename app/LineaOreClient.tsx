@@ -60,13 +60,13 @@ export default function LineaOreClient({
 
       <Sidebar {...sidebarProps} mobileOpen={mobileSidebarOpen} onMobileClose={closeMobileSidebar} />
 
-      <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-visible p-3 pb-20 animate-fade-in md:p-4 md:pb-24 lg:pb-4 lg:overflow-x-hidden lg:overflow-y-auto">
+      <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-visible p-2.5 pb-[calc(6.35rem+env(safe-area-inset-bottom))] md:p-4 md:pb-24 lg:pb-4 lg:overflow-x-hidden lg:overflow-y-auto">
         <OfflineBanner />
         {/* Mobile sidebar toggle */}
         <button
           type="button"
           onClick={openMobileSidebar}
-          className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl border border-white/8 bg-[#080814]/78 text-slate-300 backdrop-blur-xl transition-colors hover:bg-white/6 hover:text-white lg:hidden"
+          className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl border border-white/8 bg-[#080814]/78 text-slate-300 backdrop-blur-xl transition-colors hover:bg-white/6 hover:text-white lg:hidden"
           aria-label="Open sidebar menu"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">

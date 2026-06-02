@@ -43,6 +43,9 @@ export type JackpotReadResult = {
   payload: JackpotPayload;
   source: "cache" | "stale-cache" | "inflight" | "rebuilt";
 };
+type JackpotReadOptions = {
+  forceFresh?: boolean;
+};
 
 type JackpotEventLookup = { txHash: string; blockNumber: string; timestamp: number | null } | null;
 type JackpotCacheEntry = { payload: JackpotPayload; expiresAt: number };
@@ -59,7 +62,6 @@ type JackpotStoredPatch = Record<string, JackpotRow>;
 type JackpotBuildResult = { payload: JackpotPayload; recoveryNeeded: boolean };
 
 let jackpotResponseCache: JackpotCacheEntry | null = null;
-let jackpotResponseInflight: Promise<JackpotPayload> | null = null;
 let jackpotBackgroundRecoveryPromise: Promise<void> | null = null;
 let jackpotBackgroundRecoveryStartedAt = 0;
 let jackpotBuildSeq = 0;
@@ -510,20 +512,28 @@ async function buildJackpotsPayload(
   };
 }
 
-export async function readJackpotPayload(): Promise<JackpotReadResult> {
+export async function readJackpotPayload(options: JackpotReadOptions = {}): Promise<JackpotReadResult> {
   const now = Date.now();
-  if (jackpotResponseCache && jackpotResponseCache.expiresAt > now) {
+  if (!options.forceFresh && jackpotResponseCache && jackpotResponseCache.expiresAt > now) {
     return { payload: jackpotResponseCache.payload, source: "cache" };
+  }
+
+  if (options.forceFresh) {
+    const seq = ++jackpotBuildSeq;
+    const { payload } = await buildJackpotsPayload({
+      allowSlowRecovery: true,
+      scheduleBackgroundRecovery: false,
+    });
+    return {
+      payload: commitJackpotResponseCache(payload, JACKPOT_ROUTE_CACHE_MS, seq),
+      source: "rebuilt",
+    };
   }
 
   const staleCache = jackpotResponseCache?.payload ?? null;
   if (staleCache) {
     maybeStartJackpotRecovery(staleCache.jackpots);
     return { payload: staleCache, source: "stale-cache" };
-  }
-
-  if (jackpotResponseInflight) {
-    return { payload: await jackpotResponseInflight, source: "inflight" };
   }
 
   const seq = ++jackpotBuildSeq;
@@ -538,16 +548,11 @@ export async function readJackpotPayload(): Promise<JackpotReadResult> {
     return { payload, source: "rebuilt" };
   }
 
-  jackpotResponseInflight = buildJackpotsPayload({
-    allowSlowRecovery: true,
-    seedJackpots,
-  })
-    .then(({ payload }) => {
-      return commitJackpotResponseCache(payload, JACKPOT_ROUTE_CACHE_MS, seq);
-    })
-    .finally(() => {
-      jackpotResponseInflight = null;
-    });
-
-  return { payload: await jackpotResponseInflight, source: "rebuilt" };
+  const emptyPayload = commitJackpotResponseCache(
+    { jackpots: [] },
+    JACKPOT_ROUTE_CACHE_MS,
+    seq,
+  );
+  maybeStartJackpotRecovery([]);
+  return { payload: emptyPayload, source: "rebuilt" };
 }

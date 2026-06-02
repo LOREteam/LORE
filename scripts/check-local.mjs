@@ -11,30 +11,50 @@ const SHOULD_START_LOCAL_SERVER = !process.env.SMOKE_BASE_URL;
 const SERVER_START_TIMEOUT_MS = Number(process.env.CHECK_LOCAL_SERVER_START_TIMEOUT_MS || "90000");
 const CHECK_LOCAL_NEXT_ENV = { NEXT_DIST_DIR: CHECK_LOCAL_DIST_DIR };
 
-const npmCommand = process.env.npm_execpath && process.execPath
-  ? process.execPath
-  : process.platform === "win32"
-    ? "npm.cmd"
-    : "npm";
-const steps = [
-  { command: npmCommand, args: ["run", "lint"] },
-  { command: npmCommand, args: ["run", "test:logic"] },
-  { command: npmCommand, args: ["run", "build"] },
-  { command: npmCommand, args: ["run", "typecheck"], retryOnce: true },
-];
-const smokeSteps = [
-  {
-    command: npmCommand,
-    args: ["run", "smoke:http"],
-    env: { SMOKE_SKIP_WARMUP: "1" },
-  },
-  {
-    command: npmCommand,
-    args: ["run", "smoke:browser"],
-    env: { SMOKE_BROWSER_TIMEOUT_MS: "60000" },
-    retryOnce: true,
-  },
-];
+const npmCommand = process.env.npm_execpath && process.execPath ? process.execPath : null;
+const nextBin = resolve("node_modules", "next", "dist", "bin", "next");
+const steps = npmCommand
+  ? [
+      { command: npmCommand, args: ["run", "lint"] },
+      { command: npmCommand, args: ["run", "test:logic"] },
+      { command: npmCommand, args: ["run", "build"] },
+      { command: npmCommand, args: ["run", "typecheck"], retryOnce: true },
+    ]
+  : [
+      { command: process.execPath, args: [resolve("node_modules", "eslint", "bin", "eslint.js"), "."] },
+      { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-business-logic.mjs")] },
+      { command: process.execPath, args: [resolve("scripts", "patch-privy-7702.mjs")] },
+      { command: process.execPath, args: [nextBin, "build", "--webpack"], kind: "build" },
+      { command: process.execPath, args: [nextBin, "typegen"], retryOnce: true },
+      { command: process.execPath, args: [resolve("node_modules", "typescript", "bin", "tsc"), "--noEmit", "--incremental", "false"], retryOnce: true },
+    ];
+const smokeSteps = npmCommand
+  ? [
+      {
+        command: npmCommand,
+        args: ["run", "smoke:http"],
+        env: { SMOKE_SKIP_WARMUP: "1" },
+      },
+      {
+        command: npmCommand,
+        args: ["run", "smoke:browser"],
+        env: { SMOKE_BROWSER_TIMEOUT_MS: "60000" },
+        retryOnce: true,
+      },
+    ]
+  : [
+      {
+        command: process.execPath,
+        args: [resolve("scripts", "smoke-http.mjs")],
+        env: { SMOKE_SKIP_WARMUP: "1" },
+      },
+      {
+        command: process.execPath,
+        args: [resolve("scripts", "smoke-browser.mjs")],
+        env: { SMOKE_BROWSER_TIMEOUT_MS: "60000" },
+        retryOnce: true,
+      },
+    ];
 const FILTERED_WARNING_PATTERNS = [
   /ExperimentalWarning: SQLite is an experimental feature/i,
   /Using edge runtime on a page currently disables static generation/i,
@@ -45,12 +65,7 @@ const FILTERED_WARNING_PATTERNS = [
 ];
 
 function shouldSkipStepFailure(step, result) {
-  if (!Array.isArray(step.args) || step.args.length < 2) {
-    return false;
-  }
-
-  const [npmSubcommand, scriptName] = step.args;
-  if (npmSubcommand !== "run" || scriptName !== "smoke:browser") {
+  if (!isNpmScript(step, "smoke:browser") && !step.args?.some((arg) => String(arg).endsWith("smoke-browser.mjs"))) {
     return false;
   }
 
@@ -65,12 +80,16 @@ function formatStepLabel(command, args) {
   return `${command} ${args.join(" ")}`;
 }
 
+function isNpmScript(step, scriptName) {
+  return Array.isArray(step.args) && step.args[0] === "run" && step.args[1] === scriptName;
+}
+
 function runStep(step) {
   const { command, args, env } = step;
   const stepEnv = shouldUseIsolatedNextDistDir(step)
     ? { ...process.env, ...CHECK_LOCAL_NEXT_ENV, ...(env ?? {}) }
     : { ...process.env, ...(env ?? {}) };
-  if (process.env.npm_execpath && process.execPath) {
+  if (npmCommand && process.env.npm_execpath) {
     return spawnSync(command, [process.env.npm_execpath, ...args], {
       stdio: "pipe",
       encoding: "utf8",
@@ -86,12 +105,7 @@ function runStep(step) {
 }
 
 function shouldUseIsolatedNextDistDir(step) {
-  if (!Array.isArray(step.args) || step.args.length < 2) {
-    return false;
-  }
-
-  const [npmSubcommand, scriptName] = step.args;
-  return npmSubcommand === "run" && scriptName === "build";
+  return step.kind === "build" || isNpmScript(step, "build");
 }
 
 function filterKnownWarnings(output) {
@@ -121,8 +135,7 @@ function prepareStep(step) {
     return;
   }
 
-  const [npmSubcommand, scriptName] = step.args;
-  if (npmSubcommand !== "run" || scriptName !== "build") {
+  if (!shouldUseIsolatedNextDistDir(step)) {
     return;
   }
 
@@ -169,15 +182,45 @@ async function stopLocalServer(serverProcess) {
     return;
   }
 
+  const waitForExit = (timeoutMs) =>
+    new Promise((resolveWait) => {
+      if (serverProcess.exitCode !== null) {
+        resolveWait(true);
+        return;
+      }
+      const timeout = setTimeout(() => {
+        serverProcess.off("exit", onExit);
+        resolveWait(false);
+      }, timeoutMs);
+      const onExit = () => {
+        clearTimeout(timeout);
+        resolveWait(true);
+      };
+      serverProcess.once("exit", onExit);
+    });
+
+  try {
+    serverProcess.kill();
+  } catch {
+    // Continue to platform-specific forced cleanup below.
+  }
+
+  if (await waitForExit(1_500)) {
+    return;
+  }
+
   if (process.platform === "win32") {
     spawnSync("taskkill", ["/pid", String(serverProcess.pid), "/t", "/f"], {
       stdio: "ignore",
       windowsHide: true,
     });
-    return;
+  } else {
+    serverProcess.kill("SIGKILL");
   }
 
-  serverProcess.kill("SIGTERM");
+  if (!(await waitForExit(5_000))) {
+    throw new Error(`Local server process ${serverProcess.pid} did not exit after stop request.`);
+  }
 }
 
 async function startLocalServer(baseUrl) {
@@ -192,7 +235,6 @@ async function startLocalServer(baseUrl) {
   }
 
   const serverLogs = [];
-  const nextBin = resolve("node_modules", "next", "dist", "bin", "next");
   const serverProcess = spawn(process.execPath, [nextBin, "start", "--port", String(CHECK_LOCAL_PORT)], {
     cwd: process.cwd(),
     env: { ...process.env, ...CHECK_LOCAL_NEXT_ENV },

@@ -19,6 +19,7 @@ interface UseAutoMinerFormOptions {
   isAnalyzing?: boolean;
   liveStateReady?: boolean;
   formattedBalance?: string | null;
+  walletConnected?: boolean;
   runningParams?: RunningParams | null;
   lowEthForGas?: boolean;
 }
@@ -31,6 +32,7 @@ export function useAutoMinerForm({
   isAnalyzing: _isAnalyzing = false,
   liveStateReady = true,
   formattedBalance,
+  walletConnected = true,
   runningParams,
   lowEthForGas,
 }: UseAutoMinerFormOptions) {
@@ -92,7 +94,9 @@ export function useAutoMinerForm({
   const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
   const insufficientBalance = balance !== null && totalCost > balance;
   const disabledReason =
-    !liveStateReady
+    !walletConnected
+      ? null
+      : !liveStateReady
       ? "Waiting for live epoch sync"
       : betSizeError
         ? betSizeError
@@ -104,6 +108,7 @@ export function useAutoMinerForm({
               ? "Top up ETH for gas"
               : null;
   const isDisabled =
+    (!walletConnected && !isAutoMining) ||
     (isPending && !isAutoMining) ||
     !liveStateReady ||
     (Boolean(betSizeError) && !isAutoMining) ||

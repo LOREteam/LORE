@@ -8,7 +8,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title LineaOreV9
- * @notice V9 keeps the V8 atomic-resolve design and adds a compact
+ * @notice V9 uses atomic resolve and adds a compact
  *         bitmap batch-betting entrypoint for equal-amount multi-bets.
  *         It also hardens empty-epoch resolves so rollover-only rounds
  *         do not leak fees into jackpot / protocol / burn buckets.
@@ -339,7 +339,6 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
                     abi.encodePacked(
                         block.prevrandao,
                         blockhash(block.number - 1),
-                        msg.sender,
                         L.epoch,
                         L.totalPoolWithRollover,
                         dailyJackpotPool,
@@ -371,16 +370,17 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
     }
 
     function _splitFees(ResolveLocals memory L, Epoch storage ep) internal {
+        uint256 freshPool = ep.totalPool;
         uint256 pool = L.totalPoolWithRollover;
         if (ep.totalPool == 0) {
             L.baseReward = pool;
             return;
         }
-        uint256 dailyAccrual = (pool * DAILY_JACKPOT_PERCENT) / 100;
-        uint256 weeklyAccrual = (pool * WEEKLY_JACKPOT_PERCENT) / 100;
-        L.protocolFee = (pool * PROTOCOL_FEE_PERCENT) / 100;
-        L.burnAmount = (pool * BURN_FEE_PERCENT) / 100;
-        uint256 resolverReward = (pool * RESOLVER_REWARD_BPS) / BPS_DENOMINATOR;
+        uint256 dailyAccrual = (freshPool * DAILY_JACKPOT_PERCENT) / 100;
+        uint256 weeklyAccrual = (freshPool * WEEKLY_JACKPOT_PERCENT) / 100;
+        L.protocolFee = (freshPool * PROTOCOL_FEE_PERCENT) / 100;
+        L.burnAmount = (freshPool * BURN_FEE_PERCENT) / 100;
+        uint256 resolverReward = (freshPool * RESOLVER_REWARD_BPS) / BPS_DENOMINATOR;
         if (resolverReward > L.protocolFee) resolverReward = L.protocolFee;
         L.baseReward = pool - dailyAccrual - weeklyAccrual - L.protocolFee - L.burnAmount;
         dailyJackpotPool += dailyAccrual;

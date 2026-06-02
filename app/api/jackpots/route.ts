@@ -29,7 +29,8 @@ export async function GET(request: Request) {
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
 
   try {
-    const result = await readJackpotPayload();
+    const { searchParams } = new URL(request.url);
+    const result = await readJackpotPayload({ forceFresh: searchParams.get("fresh") === "1" });
     if (result.source === "cache") markRouteCacheHit(ROUTE_METRIC_KEY);
     if (result.source === "stale-cache") markRouteStaleServed(ROUTE_METRIC_KEY);
     if (result.source === "inflight") markRouteInflightJoin(ROUTE_METRIC_KEY);
@@ -39,7 +40,7 @@ export async function GET(request: Request) {
   } catch (err) {
     logRouteError(ROUTE_METRIC_KEY, err);
     const message = err instanceof Error ? err.message : "fetch failed";
-    const status = message.startsWith("Firebase ") ? 502 : 500;
+    const status = 500;
     failRouteMetric(metric, status);
     return jsonNoStore({ jackpots: [], error: message }, status);
   }

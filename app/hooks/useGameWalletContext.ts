@@ -2,9 +2,9 @@
 
 import { useMemo } from "react";
 import { getAddress } from "viem";
-import { useAccount, useBalance } from "wagmi";
+import { useAccount, useReadContract } from "wagmi";
 import type { WagmiBalanceLike } from "../lib/balanceFormatting";
-import { APP_CHAIN_ID, LINEA_TOKEN_ADDRESS } from "../lib/constants";
+import { APP_CHAIN_ID, LINEA_TOKEN_ADDRESS, TOKEN_ABI } from "../lib/constants";
 import { useAutoMineSessionActive } from "./useAutoMineSessionActive";
 import { usePageVisibility } from "./usePageVisibility";
 
@@ -24,14 +24,25 @@ export function useGameWalletContext({ preferredAddress }: UseGameWalletContextO
       return undefined;
     }
   }, [preferredAddress, address]);
-
-  const { data: tokenBalanceRaw } = useBalance({
-    address: walletAddress,
-    token: LINEA_TOKEN_ADDRESS,
-    chainId,
-  } as unknown as Parameters<typeof useBalance>[0]);
-  const tokenBalance = tokenBalanceRaw as WagmiBalanceLike;
   const isPageVisible = usePageVisibility();
+
+  const { data: directTokenBalanceRaw } = useReadContract({
+    address: LINEA_TOKEN_ADDRESS,
+    abi: TOKEN_ABI,
+    functionName: "balanceOf",
+    args: walletAddress ? [walletAddress] : undefined,
+    chainId,
+    query: {
+      enabled: Boolean(walletAddress),
+      refetchInterval: isPageVisible ? 12_000 : 45_000,
+    },
+  });
+  const tokenBalance = useMemo<WagmiBalanceLike>(
+    () => directTokenBalanceRaw != null
+      ? { value: directTokenBalanceRaw as bigint, decimals: 18 }
+      : undefined,
+    [directTokenBalanceRaw],
+  );
   const autoMineSessionActive = useAutoMineSessionActive();
 
   return useMemo(

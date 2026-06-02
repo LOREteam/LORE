@@ -14,6 +14,9 @@ interface WalletSettingsPrivyPanelProps {
   depositTokenAmount: string;
   isDepositingEth: boolean;
   isDepositingToken: boolean;
+  isClearingEip7702Delegation: boolean;
+  embeddedWallet7702DelegateAddress: string | null;
+  embeddedWalletCodeChecking: boolean;
   onCopyEmbeddedAddress: () => void;
   onExportEmbeddedWallet: () => void;
   onCreateEmbeddedWallet: () => void;
@@ -21,6 +24,7 @@ interface WalletSettingsPrivyPanelProps {
   onDepositTokenAmountChange: (value: string) => void;
   onDepositEthToEmbedded: () => void;
   onDepositTokenToEmbedded: () => void;
+  onClearEip7702Delegation: () => void;
 }
 
 export const WalletSettingsPrivyPanel = React.memo(function WalletSettingsPrivyPanel({
@@ -31,6 +35,9 @@ export const WalletSettingsPrivyPanel = React.memo(function WalletSettingsPrivyP
   depositTokenAmount,
   isDepositingEth,
   isDepositingToken,
+  isClearingEip7702Delegation,
+  embeddedWallet7702DelegateAddress,
+  embeddedWalletCodeChecking,
   onCopyEmbeddedAddress,
   onExportEmbeddedWallet,
   onCreateEmbeddedWallet,
@@ -38,6 +45,7 @@ export const WalletSettingsPrivyPanel = React.memo(function WalletSettingsPrivyP
   onDepositTokenAmountChange,
   onDepositEthToEmbedded,
   onDepositTokenToEmbedded,
+  onClearEip7702Delegation,
 }: WalletSettingsPrivyPanelProps) {
   return (
     <UiPanel tone="accent" className="animate-slide-up" style={{ animationDelay: "0.1s" }}>
@@ -60,6 +68,27 @@ export const WalletSettingsPrivyPanel = React.memo(function WalletSettingsPrivyP
               {embeddedAddressCopied ? "Copied" : "Copy"}
             </UiButton>
           </div>
+
+          {(embeddedWallet7702DelegateAddress || embeddedWalletCodeChecking) && (
+            <div className="mt-3 rounded-lg border border-sky-500/20 bg-sky-500/7 p-3">
+              <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-sky-200">Wallet repair</div>
+              <p className="mb-2 text-[10px] leading-relaxed text-sky-100/70">
+                {embeddedWallet7702DelegateAddress
+                  ? `Old EIP-7702 delegation is active: ${shortenAddress(embeddedWallet7702DelegateAddress)}. Clear it to allow normal ETH top-ups.`
+                  : "Checking embedded wallet code..."}
+              </p>
+              <UiButton
+                onClick={onClearEip7702Delegation}
+                variant="secondary"
+                uppercase
+                size="sm"
+                disabled={!embeddedWallet7702DelegateAddress || isClearingEip7702Delegation}
+                loading={isClearingEip7702Delegation}
+              >
+                Clear Delegation
+              </UiButton>
+            </div>
+          )}
 
           <div className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/6 p-3">
             <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-amber-300">Security action</div>

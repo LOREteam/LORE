@@ -11,6 +11,8 @@
 
   const STORAGE_KEY = "lore:chunk-reload-once";
   const WINDOW_MS = 15_000;
+  const RELOAD_PARAM = "__lore_reload";
+  const LEGACY_RELOAD_PARAM = "_r";
 
   const isChunkLoadMessage = (value) => {
     const message = String(value || "").toLowerCase();
@@ -38,7 +40,8 @@
 
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set("_r", Date.now().toString());
+      url.searchParams.delete(LEGACY_RELOAD_PARAM);
+      url.searchParams.set(RELOAD_PARAM, Date.now().toString());
       window.location.replace(url.toString());
     } catch {
       window.location.reload();
@@ -60,12 +63,24 @@
   });
 
   window.addEventListener("error", (event) => {
+    const target = event?.target;
+    const resourceUrl =
+      target && target !== window
+        ? target.src || target.href || ""
+        : "";
+    if (typeof resourceUrl === "string" && resourceUrl.includes("/_next/static/")) {
+      if (reloadOnce()) {
+        event.preventDefault?.();
+      }
+      return;
+    }
+
     const message = event?.error?.message || event?.message || "";
     if (!isChunkLoadMessage(message)) return;
     if (reloadOnce()) {
       event.preventDefault?.();
     }
-  });
+  }, true);
 
   window.addEventListener("unhandledrejection", (event) => {
     const reason = event?.reason;

@@ -78,6 +78,9 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
   }
 
   if (scope === "web" || scope === "server") {
+    if (getEnv("TRUST_PROXY_HEADERS") !== "1") {
+      issues.push("TRUST_PROXY_HEADERS=1 is required for mainnet web runtime behind a trusted proxy; otherwise high-traffic rate limits collapse to weak browser fingerprints.");
+    }
     if (!getEnv("NEXT_PUBLIC_PRIVY_APP_ID")) {
       issues.push("NEXT_PUBLIC_PRIVY_APP_ID is required for mainnet web runtime.");
     }

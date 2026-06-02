@@ -13,6 +13,7 @@ interface LogEntry {
 
 let buffer: LogEntry[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+const mirrorErrorsToConsoleError = process.env.NODE_ENV === "production";
 
 function jsonReplacer(_key: string, value: unknown) {
   if (typeof value === "bigint") return value.toString();
@@ -89,7 +90,11 @@ function persist() {
       } catch {
         // Last resort - keep only last 50 entries
         buffer = buffer.slice(-50);
-        localStorage.setItem(STORAGE_KEY, safeJsonStringify(buffer));
+        try {
+          localStorage.setItem(STORAGE_KEY, safeJsonStringify(buffer));
+        } catch {
+          // Storage is unavailable/full. Keep the in-memory buffer only.
+        }
       }
     }
   }
@@ -116,7 +121,8 @@ function push(lvl: LogLevel, tag: string, msg: string, data?: unknown) {
   buffer.push(entry);
 
   if (lvl === "error") {
-    console.error(`[${tag}]`, msg, safeData ?? "");
+    const writeError = mirrorErrorsToConsoleError ? console.error : console.warn;
+    writeError(`[${tag}]`, msg, safeData ?? "");
   } else if (lvl === "warn") {
     console.warn(`[${tag}]`, msg, safeData ?? "");
   }

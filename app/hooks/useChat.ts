@@ -17,10 +17,10 @@ export interface ChatMessage {
 const MESSAGES_LIMIT = 100;
 export const CHAT_RATE_LIMIT_MS = 1_500;
 const MAX_TEXT_LENGTH = 280;
-const POLL_INTERVAL_MS = 1_500;
-const HIDDEN_POLL_INTERVAL_MS = 15_000;
-const CLOSED_POLL_INTERVAL_MS = 12_000;
-const HIDDEN_CLOSED_POLL_INTERVAL_MS = 45_000;
+const POLL_INTERVAL_MS = 3_000;
+const HIDDEN_POLL_INTERVAL_MS = 30_000;
+const CLOSED_POLL_INTERVAL_MS = 20_000;
+const HIDDEN_CLOSED_POLL_INTERVAL_MS = 60_000;
 const CHAT_CACHE_KEY = "lore:chat-cache:v1";
 const NETWORK_WARN_THROTTLE_MS = 15_000;
 const MAX_AVATAR_LENGTH = 8_000;
@@ -202,8 +202,11 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
 
   useEffect(() => {
     const controller = new AbortController();
+    let pollRunning = false;
 
     async function poll() {
+      if (pollRunning) return;
+      pollRunning = true;
       try {
         const msgs = await fetchMessages(controller.signal);
         if (controller.signal.aborted) return;
@@ -221,6 +224,8 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         } else {
           warnNetworkOnce("[Chat] Poll failed:", pollWarnAtRef, err);
         }
+      } finally {
+        pollRunning = false;
       }
     }
 
@@ -234,6 +239,7 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
 
     return () => {
       controller.abort();
+      pollRunning = false;
       clearInterval(timer);
     };
   }, [commitMessages, isPageVisible, mergeLocalPendingMessages, open]);

@@ -65,7 +65,7 @@ export function useMiningBetExecution({
     ensurePreferredWallet,
   });
 
-  /** Try 7702 → silent → wallet-write, in order of preference. */
+  /** Try 7702, silent, then wallet-write, in order of preference. */
   const placeBetsPreferSilent = useCallback(
     async (
       tiles: number[],

@@ -2,6 +2,7 @@
 
 import React from "react";
 import type { AutoMinePhase } from "../hooks/useMining.types";
+import type { ManualBetFormState } from "../hooks/useManualBetForm";
 import { AutoMinerPanel, ManualBetPanel } from "./BetPanel";
 
 interface RunningParams {
@@ -14,12 +15,14 @@ interface HubSidePanelProps {
   chatOpen: boolean;
   coldBootDefaults: boolean;
   formattedBalance: string | null;
+  walletConnected: boolean;
   liveStateReady: boolean;
   selectedTilesCount: number;
   isPending: boolean;
   isRevealing: boolean;
   isAnalyzing: boolean;
   isAutoMining: boolean;
+  manualBetForm: ManualBetFormState;
   handleManualMineWithGuard: (betAmountStr: string) => Promise<void>;
   onQuickPickTiles: (tileIds: number[]) => void;
   autoMinePhase: AutoMinePhase;
@@ -33,12 +36,14 @@ export const HubSidePanel = React.memo(function HubSidePanel({
   chatOpen,
   coldBootDefaults,
   formattedBalance,
+  walletConnected,
   liveStateReady,
   selectedTilesCount,
   isPending,
   isRevealing,
   isAnalyzing,
   isAutoMining,
+  manualBetForm,
   handleManualMineWithGuard,
   onQuickPickTiles,
   autoMinePhase,
@@ -48,23 +53,27 @@ export const HubSidePanel = React.memo(function HubSidePanel({
   handleAutoMineWithGuard,
 }: HubSidePanelProps) {
   return (
-    <div className="min-[900px]:col-span-3 min-w-0 flex flex-col gap-1.5">
+    <div className="gameplay-action-rail min-[900px]:col-span-3 min-w-0 flex flex-col gap-1.5">
       {chatOpen ? (
         <div id="chat-panel-slot" className="min-h-141 flex-1" />
       ) : (
         <>
-          <ManualBetPanel
-            coldBootDefaults={coldBootDefaults}
-            formattedBalance={formattedBalance}
-            liveStateReady={liveStateReady}
-            selectedTilesCount={selectedTilesCount}
-            isPending={isPending}
-            isRevealing={isRevealing}
-            isAnalyzing={isAnalyzing}
-            isAutoMining={isAutoMining}
-            onMine={handleManualMineWithGuard}
-            onQuickPickTiles={onQuickPickTiles}
-          />
+          <div className={selectedTilesCount > 0 ? "hidden min-[900px]:block" : undefined}>
+            <ManualBetPanel
+              coldBootDefaults={coldBootDefaults}
+              formattedBalance={formattedBalance}
+              walletConnected={walletConnected}
+              liveStateReady={liveStateReady}
+              selectedTilesCount={selectedTilesCount}
+              isPending={isPending}
+              isRevealing={isRevealing}
+              isAnalyzing={isAnalyzing}
+              isAutoMining={isAutoMining}
+              manualBetForm={manualBetForm}
+              onMine={handleManualMineWithGuard}
+              onQuickPickTiles={onQuickPickTiles}
+            />
+          </div>
 
           <AutoMinerPanel
             coldBootDefaults={coldBootDefaults}
@@ -76,6 +85,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
             autoMinePhase={autoMinePhase}
             autoMineProgress={autoMineProgress}
             formattedBalance={formattedBalance}
+            walletConnected={walletConnected}
             runningParams={runningParams}
             lowEthForGas={lowEthBalance}
             onToggle={handleAutoMineWithGuard}

@@ -69,27 +69,27 @@ export const WhitePaper = React.memo(function WhitePaper() {
         <Divider />
         <Section id="intro" badge="01" title="Introduction" icon={IntroIcon} delay={0}>
           <P>
-            <B>LORE</B> (Linea + ORE) is a fully on-chain prediction mining game deployed on <Accent>Linea</Accent>.
-            Players place bets on a 5×5 grid of &quot;mine blocks.&quot; Each round (epoch), one winning tile is randomly selected
-            by the smart contract. If your bet is on the winning tile – you take a proportional share of the entire round&apos;s reward pool.
+            <B>LORE</B> (Linea + ORE) is a fully on-chain prediction mining game built for <Accent>Linea mainnet</Accent>.
+            Players place bets on a 5×5 grid of &quot;mine blocks.&quot; Each round (epoch), one winning tile is pseudo-randomly selected
+            by the smart contract from public on-chain inputs. If your bet is on the winning tile, you take a proportional share of the entire round&apos;s reward pool.
           </P>
           <P>
             On top of the base reward, the current live release adds a <B>dual jackpot system</B>: a <Accent>Daily Jackpot</Accent> (2%) and a <Accent>Weekly Jackpot</Accent> (3%).
             Every round, a portion of the pool accrues into these jackpot reserves. Once per day and once per week, one lucky round
-            triggers the jackpot – and the <B>entire accumulated jackpot pool</B> is added to that round&apos;s winners.
+            triggers the jackpot, and the <B>entire accumulated jackpot pool</B> is added to that round&apos;s winners.
           </P>
           <P>
             Every bet, every payout, every jackpot trigger, and every winner selection is verifiable on-chain.
-            No off-chain randomness, no hidden admin functions – pure decentralized gaming with escalating tension.
+            The repository is currently tested on Sepolia while the UI and docs are prepared for a mainnet deployment.
           </P>
           <InfoBox emoji="🎲" title="How Randomness Is Generated">
-            Winning tile uses only on-chain entropy:
-            <Code>keccak256(block.prevrandao, blockhash(block.number - 1), msg.sender, epoch, totalPoolWithRollover, dailyJackpotPool, weeklyJackpotPool) % 25 + 1</Code>.
+            V9 winner entropy is computed on-chain from:
+            <Code>keccak256(block.prevrandao, blockhash(block.number - 1), epoch, totalPoolWithRollover, dailyJackpotPool, weeklyJackpotPool) % 25 + 1</Code>.
             <br /><br />
-            Each epoch is resolved atomically in a single transaction once its timer ends. Bets are rejected in the final 2 seconds of the epoch, so no single block can contain both a bet and the resolve for the same epoch.
+            Each epoch is resolved atomically in a single transaction once its timer ends. Bets are rejected in the final 2 seconds of the epoch, so a normal bet and resolve cannot land in the same epoch-ending window. The hardened source removes <Code>msg.sender</Code> from winner entropy to prevent caller-address grinding, but this is still not VRF-grade randomness.
           </InfoBox>
           <InfoBox emoji="⛏" title="Core Idea">
-            Place your LINEA tokens on tiles you believe will win. The more you stake on a winning tile – the bigger your share of the prize pool.
+            Place your LINEA tokens on tiles you believe will win. The more you stake on a winning tile, the bigger your share of the prize pool.
             And if you&apos;re in the right round at the right time, you might take home the <Accent>jackpot</Accent> too.
           </InfoBox>
         </Section>
@@ -101,9 +101,9 @@ export const WhitePaper = React.memo(function WhitePaper() {
             { step: "1", title: "Epoch Starts", desc: "A new round begins with a fresh 5×5 grid. The countdown timer starts." },
             { step: "2", title: "Place Bets", desc: "Select one or more tiles and stake LINEA tokens. Each tile accumulates its own pool from all players." },
             { step: "3", title: "Epoch Ends", desc: "When the timer reaches zero, no more bets are accepted. The smart contract resolves the epoch." },
-            { step: "4", title: "Winner Revealed", desc: "The contract finalizes the sealed epoch with delayed future-block entropy and maps the resulting hash to tile 1–25." },
+            { step: "4", title: "Winner Revealed", desc: "The contract resolves the epoch in one transaction and maps the V9 on-chain entropy hash to tile 1–25." },
             { step: "5", title: "Fees Split", desc: "The pool is split: 92% to winners, 2% to daily jackpot, 3% to weekly jackpot, 2% protocol fee (half to treasury, half to player rebates), 1% burn." },
-            { step: "6", title: "Jackpot Check", desc: "If there is at least one winner, the contract runs daily/weekly checks using the sealed epoch end time plus the same delayed entropy. On trigger, the full jackpot pool is added to this epoch." },
+            { step: "6", title: "Jackpot Check", desc: "If there is at least one winner, the contract runs daily/weekly checks at resolve time. On trigger, the full jackpot pool is added to this epoch." },
             { step: "7", title: "Claim Rewards", desc: "Winners claim their share from the Rewards panel. If no one hit the winning tile, the base reward rolls into the next round and the jackpot pools keep growing." },
           ]} />
         </Section>
@@ -125,13 +125,13 @@ export const WhitePaper = React.memo(function WhitePaper() {
             Every round, 2% feeds the <Accent>Daily Jackpot</Accent> pool and 3% feeds the <Accent>Weekly Jackpot</Accent> pool.
             These pools accumulate across all rounds until a jackpot triggers.
             <br /><br />
-            <B>Daily Jackpot</B> – once per calendar day (UTC), one random resolved round with a winner triggers the daily jackpot.
+            <B>Daily Jackpot</B> - once per calendar day (UTC), one pseudo-random eligible resolved round with a winner triggers the daily jackpot.
             The <B>entire accumulated daily pool</B> is added to that round&apos;s reward, on top of the normal 92%.
             <br /><br />
-            <B>Weekly Jackpot</B> – once per calendar week (Monday 00:00 UTC to Sunday 23:59 UTC), one random round triggers the weekly jackpot.
+            <B>Weekly Jackpot</B> - once per calendar week (Monday 00:00 UTC to Sunday 23:59 UTC), one pseudo-random eligible round triggers the weekly jackpot.
             Same logic: the entire weekly pool goes to that round&apos;s winning-tile holders.
             <br /><br />
-            If nobody bet on the winning tile in a round, the base reward (92%) goes back into the <Accent>rollover pool</Accent>, and jackpot pools keep growing – no jackpot can trigger without a real winner.
+            If nobody bet on the winning tile in a round, the base reward (92%) goes back into the <Accent>rollover pool</Accent>, and jackpot pools keep growing - no jackpot can trigger without a real winner.
             This means jackpots can only get <B>bigger</B> over time.
           </InfoBox>
           <InfoBox emoji="🔥" title="Burn & Rebate Fee">
@@ -139,9 +139,9 @@ export const WhitePaper = React.memo(function WhitePaper() {
             2% goes to protocol accounting: half to treasury and half to a participation rebate pool distributed in LINEA to players who bet in that round.
           </InfoBox>
           <P>
-            No one can print new tokens, freeze transfers, or blacklist your wallet – the token is simple and predictable.
+            No one can print new tokens, freeze transfers, or blacklist your wallet - the token is simple and predictable.
             When you play, you only grant the game permission to spend; your tokens stay in your wallet until you actually
-            place a bet. The contract takes exactly that amount – nothing more, and nothing in advance.
+            place a bet. The contract takes exactly that amount - nothing more, and nothing in advance.
           </P>
         </Section>
 
@@ -236,7 +236,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         <Section id="contract" badge="08" title="Smart Contracts" icon={ContractIcon} delay={0.35}>
           <P>
-            LORE is currently served by the live V9 deployment on <Accent>Linea Sepolia</Accent>:
+            LORE is shown using the currently configured V9 deployment. During testing this is Linea Sepolia; for launch the same UI is intended to point at the final <Accent>Linea mainnet</Accent> contracts:
           </P>
           <div className="space-y-3 mb-6">
             <ContractCard
@@ -254,19 +254,19 @@ export const WhitePaper = React.memo(function WhitePaper() {
             Key contract features:
           </P>
           <ul className="space-y-2 mb-6 ml-1">
-            <Li emoji="🎲">Verifiable winner randomness: <Code>keccak256(block.prevrandao, blockhash(block.number - 1), msg.sender, epoch, totalPoolWithRollover, dailyJackpotPool, weeklyJackpotPool) % 25 + 1</Code></Li>
-            <Li emoji="🔒">No admin withdrawal functions – funds are only claimable by winners via <Code>claimReward()</Code></Li>
+            <Li emoji="🎲">Transparent V9 winner entropy: <Code>keccak256(block.prevrandao, blockhash(block.number - 1), epoch, totalPoolWithRollover, dailyJackpotPool, weeklyJackpotPool) % 25 + 1</Code></Li>
+            <Li emoji="🔒">No admin withdrawal functions - funds are only claimable by winners via <Code>claimReward()</Code></Li>
             <Li emoji="📊"><Code>getTileData()</Code> returns all 25 tiles&apos; stake totals and on-chain unique-player counts in one call</Li>
-            <Li emoji="⏰">Epoch end times enforced on-chain – no bets after the deadline</Li>
-            <Li emoji="🎰">Daily/weekly jackpot trigger uses sealed epoch timing plus delayed entropy, not caller-controlled resolve timing</Li>
+            <Li emoji="⏰">Epoch end times enforced on-chain - no bets after the deadline</Li>
+            <Li emoji="🎰">Daily/weekly jackpot checks are on-chain and based on elapsed UTC day/week windows at resolve time</Li>
             <Li emoji="♻️">Rollover: if nobody hit the winning tile, the 92% base reward flows into the <Code>rolloverPool</Code>, inflating the next round</Li>
             <Li emoji="🛡">ReentrancyGuard on all state-changing functions; SafeERC20 for all token transfers</Li>
             <Li emoji="📅">Weekly jackpot uses Monday-based weeks (Monday 00:00 UTC start) via <Code>MONDAY_OFFSET</Code></Li>
           </ul>
-          <InfoBox emoji="🔍" title="Provable Randomness (Winner + Jackpots)">
-            The winner tile and jackpot trigger checks are computed inside the smart contract using only on-chain data.
-            Each epoch is sealed first, then finalized after a short reveal delay with entropy from a future block, so callers cannot influence the draw by timing the resolve transaction.
-            Daily and weekly jackpots use the sealed epoch end time for their time-window math, preserving the hazard model without exposing timing manipulation to keepers or MEV actors.
+          <InfoBox emoji="🔍" title="Transparent On-Chain Entropy">
+            The winner tile and jackpot trigger checks are computed inside the smart contract using public on-chain data.
+            This is auditable pseudo-randomness, not VRF or commit-reveal randomness. Removing the resolver address closes caller-address grinding, but a sequencer still has stronger influence over block inputs and transaction inclusion.
+            For mainnet, monitoring and any future hardening such as VRF or commit-reveal should be treated as explicit launch-review items.
           </InfoBox>
         </Section>
 
@@ -641,7 +641,7 @@ function FormulaBlock() {
           <span className="block text-center text-amber-400 pt-0.5 text-base">tileTotal</span>
         </span>
       </div>
-      <div className="text-[10px] text-gray-500 mt-3">rewardPool = 92% of totalPool + dailyJackpot (if triggered) + weeklyJackpot (if triggered)</div>
+      <div className="text-[10px] text-gray-500 mt-3">rewardPool = base reward (92% of fresh pool + rollover) + dailyJackpot (if triggered) + weeklyJackpot (if triggered)</div>
     </UiPanel>
   );
 }
@@ -651,7 +651,7 @@ function RoadmapTimeline() {
     { phase: "Phase 1", status: "live", title: "Core Game", items: ["5×5 mining grid", "Manual betting", "Reward claiming", "Analytics module"] },
     { phase: "Phase 2", status: "live", title: "Auto-Miner & Rebates", items: ["Automated betting bot", "Privy embedded wallet", "Participation rebate system", "Session persistence"] },
     { phase: "Phase 3", status: "live", title: "Jackpots & Leaderboards", items: ["Daily Jackpot (2%)", "Weekly Jackpot (3%)", "Rollover pool", "Leaderboard system", "Achievements"] },
-    { phase: "Phase 4", status: "next", title: "Growth & Features", items: ["Dynamic epoch durations", "Mobile-optimized UI", "Public API for stats", "Token?"] },
+    { phase: "Phase 4", status: "next", title: "Mainnet Hardening", items: ["Final mainnet contract config", "Resolver monitoring", "Mobile QA", "Public API for stats"] },
   ];
 
   return (

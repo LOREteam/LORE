@@ -6,12 +6,12 @@ import dynamic from "next/dynamic";
 const LazyChatWidget = dynamic(() => import("./chat/ChatWidget").then((mod) => mod.ChatWidget), {
   loading: () => (
     <button
-      className="w-11 h-11 rounded-full bg-violet-600/80 border border-violet-400/20 shadow-lg shadow-violet-500/20 flex items-center justify-center shrink-0"
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-violet-400/20 bg-violet-600/80 shadow-lg shadow-violet-500/20 sm:h-11 sm:w-11"
       aria-label="Open chat"
       title="Open chat"
       disabled
     >
-      <svg aria-hidden="true" width="19" height="18" viewBox="0 0 19 18" fill="none">
+      <svg aria-hidden="true" className="h-3.5 w-3.5 sm:h-[18px] sm:w-[19px]" viewBox="0 0 19 18" fill="none">
         <path
           d="M1.5 2.75C1.5 1.784 2.284 1 3.25 1h12.5C16.716 1 17.5 1.784 17.5 2.75v8.5c0 .966-.784 1.75-1.75 1.75H11l-1.5 2.5L8 13H3.25C2.284 13 1.5 12.216 1.5 11.25v-8.5z"
           fill="white"
@@ -34,16 +34,15 @@ interface FloatingActionsProps {
 export const FloatingActions = React.memo(function FloatingActions({ walletAddress, onChatOpenChange, chatOpen = false }: FloatingActionsProps) {
   return (
     <div
-      className="fixed right-3 z-200"
+      className="mobile-hud-chat fixed right-2 z-[200] sm:right-3"
       data-chat-open={chatOpen ? "true" : "false"}
-      style={{ bottom: "max(0.75rem, calc(env(safe-area-inset-bottom, 0px) + 0.35rem))" }}
     >
-      <div className="hud-dock flex items-center gap-2 rounded-2xl border border-white/8 bg-[#070712]/84 p-1.5 shadow-[0_12px_34px_rgba(2,6,23,0.4)] backdrop-blur-xl">
+      <div className="hud-dock flex items-center gap-1 rounded-2xl border border-white/8 bg-[#070712]/88 p-0.5 shadow-[0_12px_34px_rgba(2,6,23,0.4)] backdrop-blur-xl sm:gap-2 sm:p-1.5">
         <a
           href="https://x.com/Linea_Ore"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(29,161,242,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
+          className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(29,161,242,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] sm:flex"
           title="X (Twitter) @Linea_Ore"
           aria-label="Linea Ore on X"
         >
@@ -55,7 +54,7 @@ export const FloatingActions = React.memo(function FloatingActions({ walletAddre
           href="https://github.com/LOREteam/LORE"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-purple-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(139,92,246,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
+          className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-purple-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(139,92,246,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] sm:flex"
           title="LORE on GitHub"
           aria-label="LORE on GitHub"
         >

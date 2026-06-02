@@ -1,6 +1,6 @@
 # Mainnet status board
 
-Snapshot date: 2026-04-09
+Snapshot date: 2026-05-28
 
 ## GREEN
 
@@ -20,9 +20,11 @@ Snapshot date: 2026-04-09
 - Observability exists at the app level, but host-side alerts and log aggregation are not verified from this repo alone.
 - Visual consistency across hub, overlays, and right-column surfaces is much better, but still needs a final launch QA pass.
 - First-time education exists, but mainnet-first wording and trust/risk messaging can still be tightened.
+- Winner entropy in the source no longer includes `msg.sender`, but the current model is still transparent pseudo-randomness rather than VRF/commit-reveal randomness.
 
 ## RED
 
+- No final randomness model has been signed off for a money launch. A high-value launch should use VRF or a two-phase future-block reveal, or explicitly accept the remaining sequencer/timing trust model.
 - No real mainnet canary run is confirmed yet for `AutoMine` over a long enough sample.
 - No confirmed production host is green yet under `npm run health:prod`.
 - No confirmed external monitoring/alerting deployment exists yet for `site / bot / indexer`.

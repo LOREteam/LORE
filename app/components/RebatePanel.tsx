@@ -83,7 +83,7 @@ export const RebatePanel = React.memo(function RebatePanel({
             </div>
           ) : !isSupported ? (
             <p className="text-sm text-gray-500 text-center py-4">
-              Rebate functions are not available on the current legacy contract deployment.
+              Rebate functions are disabled for the configured contract profile.
             </p>
           ) : (
             <>

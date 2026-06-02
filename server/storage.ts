@@ -250,7 +250,7 @@ function purgeLegacyScopedDbFiles(currentDbPath: string) {
       rmSync(join(dbDir, entry), { force: true });
       removedCount += 1;
     } catch (error) {
-      console.warn("[storage] Failed to remove legacy DB artifact:", entry, error instanceof Error ? error.message : String(error));
+      console.warn("[storage] Failed to remove non-current DB artifact:", entry, error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -300,21 +300,21 @@ function reconcileContractStorageScope() {
 
   if (purgeAllowed && scopeChanged) {
     purgeScopedContractData(CURRENT_STORAGE_SCOPE);
-    console.warn(`[storage] Contract scope changed: ${previousScope} -> ${CURRENT_STORAGE_SCOPE}. Purged old contract data.`);
+    console.warn(`[storage] Contract scope changed: ${previousScope} -> ${CURRENT_STORAGE_SCOPE}. Purged non-current contract data.`);
   } else if (purgeAllowed && foundForeignData) {
     purgeScopedContractData(CURRENT_STORAGE_SCOPE);
-    console.warn(`[storage] Found stale contract-scoped data outside ${CURRENT_STORAGE_SCOPE}. Purged old contract data.`);
+    console.warn(`[storage] Found stale contract-scoped data outside ${CURRENT_STORAGE_SCOPE}. Purged non-current contract data.`);
   } else if (scopeChanged || foundForeignData) {
     console.warn(
       `[storage] Contract scope changed or stale scoped data exists, but automatic purge is disabled. ` +
-      `Set ${CONTRACT_SCOPE_PURGE_ENV}=1 only after backing up the DB if you intentionally want old contract data removed.`,
+      `Set ${CONTRACT_SCOPE_PURGE_ENV}=1 only after backing up the DB if you intentionally want non-current contract data removed.`,
     );
   }
 
   if (purgeAllowed) {
     const removedLegacyDbFiles = purgeLegacyScopedDbFiles(dbPath);
     if (removedLegacyDbFiles > 0) {
-      console.warn(`[storage] Removed ${removedLegacyDbFiles} legacy DB artifact(s) for old contract revisions.`);
+      console.warn(`[storage] Removed ${removedLegacyDbFiles} non-current DB artifact(s).`);
     }
   }
 
@@ -567,9 +567,61 @@ export function getAllBetRows() {
   })) satisfies BetStorageRow[];
 }
 
-export function getEpochTileUserCounts(epoch: number, gridSize = 25) {
+export function getBetRowsByEpochs(epochIds: number[]) {
+  const normalizedIds = [...new Set(
+    epochIds.filter((epoch) => Number.isInteger(epoch) && epoch > 0),
+  )];
+  if (normalizedIds.length === 0) return [] satisfies BetStorageRow[];
+
+  const placeholders = normalizedIds.map(() => "?").join(", ");
+  const rows = db.prepare(`
+    SELECT user, epoch, tile_ids_json, amounts_json, total_amount, total_amount_num, tx_hash, block_number
+    FROM ${SCOPED_BETS_TABLE}
+    WHERE scope = ? AND epoch IN (${placeholders})
+    ORDER BY epoch DESC, block_number DESC, id DESC
+  `).all(CURRENT_STORAGE_SCOPE, ...normalizedIds) as Array<Record<string, unknown>>;
+
+  return rows.map((row) => ({
+    user: String(row.user ?? ""),
+    epoch: String(row.epoch ?? "0"),
+    tileIds: parseJsonArray<number>(row.tile_ids_json),
+    amounts: parseJsonArray<string>(row.amounts_json),
+    totalAmount: String(row.total_amount ?? "0"),
+    totalAmountNum: Number(row.total_amount_num ?? 0),
+    txHash: String(row.tx_hash ?? ""),
+    blockNumber: String(row.block_number ?? "0"),
+  })) satisfies BetStorageRow[];
+}
+
+export function getBetJackpotContributionsWeiAfterBlocks(dailyBlockNumber: bigint, weeklyBlockNumber: bigint) {
+  const minBlockNumber = dailyBlockNumber < weeklyBlockNumber ? dailyBlockNumber : weeklyBlockNumber;
+  const rows = db.prepare(`
+    SELECT total_amount, block_number
+    FROM ${SCOPED_BETS_TABLE}
+    WHERE scope = ? AND block_number > ?
+  `).all(CURRENT_STORAGE_SCOPE, Number(minBlockNumber)) as Array<Record<string, unknown>>;
+
+  let dailyWei = 0n;
+  let weeklyWei = 0n;
+  for (const row of rows) {
+    const rowBlockNumber = BigInt(String(row.block_number ?? "0"));
+    const totalWei = parseAmountWei(row.total_amount);
+    if (totalWei <= 0n) continue;
+    if (rowBlockNumber > dailyBlockNumber) {
+      dailyWei += totalWei / 50n;
+    }
+    if (rowBlockNumber > weeklyBlockNumber) {
+      weeklyWei += (totalWei * 3n) / 100n;
+    }
+  }
+
+  return { dailyWei, weeklyWei };
+}
+
+export function getEpochTileUserSets(epoch: number, gridSize = 25) {
+  const perTile = Array.from({ length: gridSize }, () => new Set<string>());
   if (!Number.isInteger(epoch) || epoch <= 0) {
-    return Array.from({ length: gridSize }, () => 0);
+    return perTile;
   }
 
   const rows = db.prepare(`
@@ -579,7 +631,6 @@ export function getEpochTileUserCounts(epoch: number, gridSize = 25) {
     ORDER BY block_number ASC, id ASC
   `).all(CURRENT_STORAGE_SCOPE, epoch) as Array<Record<string, unknown>>;
 
-  const perTile = Array.from({ length: gridSize }, () => new Set<string>());
   for (const row of rows) {
     const user = normalizeWallet(String(row.user ?? ""));
     if (!user) continue;
@@ -592,6 +643,11 @@ export function getEpochTileUserCounts(epoch: number, gridSize = 25) {
     }
   }
 
+  return perTile;
+}
+
+export function getEpochTileUserCounts(epoch: number, gridSize = 25) {
+  const perTile = getEpochTileUserSets(epoch, gridSize);
   return perTile.map((set) => set.size);
 }
 
