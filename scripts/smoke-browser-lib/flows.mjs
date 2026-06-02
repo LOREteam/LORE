@@ -220,7 +220,7 @@ export async function openMobileAnalytics(page, options) {
 
 export async function openLoginModal(page, timeoutMs) {
   const modalTimeoutMs = Math.min(timeoutMs, 6_000);
-  const loginButton = page.getByRole("button", { name: "Login / Connect" }).first();
+  const loginButton = page.getByRole("button", { name: /Login \/ Connect|Connect Wallet/i }).first();
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
@@ -234,7 +234,7 @@ export async function openLoginModal(page, timeoutMs) {
         try {
           await page.evaluate(() => {
             const buttons = [...document.querySelectorAll("button")];
-            const loginButton = buttons.find((button) => button.textContent?.trim() === "Login / Connect");
+            const loginButton = buttons.find((button) => /^(Login \/ Connect|Connect Wallet)$/i.test(button.textContent?.trim() ?? ""));
             loginButton?.click();
           });
         } catch (error) {
@@ -271,7 +271,7 @@ export async function closeLoginModal(page, timeoutMs) {
     await page.keyboard.press("Escape");
   }
 
-  await expectVisible(page.getByRole("button", { name: "Login / Connect" }), "login modal closes", modalTimeoutMs);
+  await expectVisible(page.getByRole("button", { name: /Login \/ Connect|Connect Wallet/i }), "login modal closes", modalTimeoutMs);
 }
 
 export async function openChatDrawer(page, options) {

@@ -30,6 +30,12 @@ function buildProofKey(address: string, nonce: string, uri: string) {
     .digest("hex");
 }
 
+function buildLegacyProofKey(address: string, nonce: string, signature: string) {
+  return createHash("sha256")
+    .update(`${address.toLowerCase()}:${nonce}:${signature}`)
+    .digest("hex");
+}
+
 async function verifyChatSignature(address: `0x${string}`, message: string, signature: `0x${string}`) {
   const verifiedPersonalSign = await publicClient.verifyMessage({
     address,
@@ -97,10 +103,13 @@ export async function POST(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Signature verification failed" }, { status: 401 }), { varyCookie: true });
     }
 
-    const proofKey = buildProofKey(authAddress, fields.nonce, fields.uri);
+    const proofKeys = [
+      buildLegacyProofKey(authAddress, fields.nonce, authSignature),
+      buildProofKey(authAddress, fields.nonce, fields.uri),
+    ];
     const issuedAtMs = Date.parse(fields.issuedAt);
     const ttlMs = Math.max(1, CHAT_AUTH_PROOF_TTL_MS - (Date.now() - issuedAtMs));
-    const consumed = acquireExpiringLock(`chat-auth:${proofKey}`, fields.nonce, ttlMs);
+    const consumed = proofKeys.every((proofKey) => acquireExpiringLock(`chat-auth:${proofKey}`, fields.nonce, ttlMs));
     if (!consumed) {
       const response = applyNoStoreHeaders(NextResponse.json({ error: "Auth proof already used" }, { status: 409 }), { varyCookie: true });
       clearChatSession(response);

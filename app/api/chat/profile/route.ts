@@ -12,6 +12,8 @@ const MAX_AVATAR_LENGTH = 8_000;
 const CHAT_PROFILE_CACHE_MS = 5_000;
 const CHAT_PROFILE_CACHE_MAX_ENTRIES = 48;
 const chatProfileRouteCache = createRouteCache<{ profile?: ReturnType<typeof getChatProfile>; profiles?: ReturnType<typeof getChatProfiles> }>(CHAT_PROFILE_CACHE_MAX_ENTRIES);
+const chatProfileCacheKeysByWallet = new Map<string, Set<string>>();
+const chatProfileWalletsByCacheKey = new Map<string, Set<string>>();
 
 type ProfilePayload = {
   walletAddress?: unknown;
@@ -23,6 +25,46 @@ type ProfilePayload = {
 
 function isAddress(value: unknown): value is `0x${string}` {
   return typeof value === "string" && /^0x[a-fA-F0-9]{40}$/.test(value);
+}
+
+function rememberProfileCacheKey(wallets: string[], cacheKey: string) {
+  for (const wallet of wallets) {
+    const keys = chatProfileCacheKeysByWallet.get(wallet) ?? new Set<string>();
+    keys.add(cacheKey);
+    chatProfileCacheKeysByWallet.set(wallet, keys);
+  }
+  chatProfileWalletsByCacheKey.set(cacheKey, new Set(wallets));
+  pruneProfileCacheIndex();
+}
+
+function forgetProfileCacheKey(cacheKey: string) {
+  const wallets = chatProfileWalletsByCacheKey.get(cacheKey);
+  if (!wallets) return;
+  for (const wallet of wallets) {
+    const keys = chatProfileCacheKeysByWallet.get(wallet);
+    if (!keys) continue;
+    keys.delete(cacheKey);
+    if (keys.size === 0) chatProfileCacheKeysByWallet.delete(wallet);
+  }
+  chatProfileWalletsByCacheKey.delete(cacheKey);
+}
+
+function pruneProfileCacheIndex() {
+  while (chatProfileWalletsByCacheKey.size > CHAT_PROFILE_CACHE_MAX_ENTRIES) {
+    const oldestKey = chatProfileWalletsByCacheKey.keys().next().value;
+    if (!oldestKey) break;
+    forgetProfileCacheKey(oldestKey);
+  }
+}
+
+function clearProfileCacheForWallet(wallet: string) {
+  chatProfileRouteCache.delete("all");
+  chatProfileRouteCache.delete(`wallet:${wallet}`);
+  for (const cacheKey of Array.from(chatProfileCacheKeysByWallet.get(wallet) ?? [])) {
+    chatProfileRouteCache.delete(cacheKey);
+    forgetProfileCacheKey(cacheKey);
+  }
+  chatProfileCacheKeysByWallet.delete(wallet);
 }
 
 export async function PUT(request: NextRequest) {
@@ -61,7 +103,7 @@ export async function PUT(request: NextRequest) {
       customAvatar: payload.customAvatar,
       updatedAt: payload.updatedAt,
     });
-    chatProfileRouteCache.clear();
+    clearProfileCacheForWallet(walletAddress);
 
     return applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });
   } catch (error) {
@@ -119,6 +161,7 @@ export async function GET(request: NextRequest) {
         profiles: getChatProfiles(requestedAddresses),
       };
       chatProfileRouteCache.set(normalizedKey, payload, CHAT_PROFILE_CACHE_MS);
+      rememberProfileCacheKey(requestedAddresses, normalizedKey);
       return applyNoStoreHeaders(NextResponse.json(payload));
     }
 

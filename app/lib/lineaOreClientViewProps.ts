@@ -336,9 +336,24 @@ export function createLineaOreClientViewProps({
         previousGridEpoch,
       ])
     : 0;
-  const jackpotFallbackAmount =
-    (isDailyJackpot ? (jackpotInfo?.lastDailyJackpotAmount || dailyHistoryAmount) : 0) +
-    (isWeeklyJackpot ? (jackpotInfo?.lastWeeklyJackpotAmount || weeklyHistoryAmount) : 0);
+  const candidateJackpotEpochs = new Set(
+    [gridDisplayEpoch, previousGridEpoch].filter((item): item is string => Boolean(item)),
+  );
+  const dailyInfoAmount =
+    jackpotInfo?.lastDailyJackpotEpoch && candidateJackpotEpochs.has(jackpotInfo.lastDailyJackpotEpoch)
+      ? jackpotInfo.lastDailyJackpotAmount
+      : 0;
+  const weeklyInfoAmount =
+    jackpotInfo?.lastWeeklyJackpotEpoch && candidateJackpotEpochs.has(jackpotInfo.lastWeeklyJackpotEpoch)
+      ? jackpotInfo.lastWeeklyJackpotAmount
+      : 0;
+  const dailyJackpotFallbackAmount = isDailyJackpot
+    ? (dailyInfoAmount || dailyHistoryAmount)
+    : 0;
+  const weeklyJackpotFallbackAmount = isWeeklyJackpot
+    ? (weeklyInfoAmount || weeklyHistoryAmount)
+    : 0;
+  const jackpotFallbackAmount = dailyJackpotFallbackAmount + weeklyJackpotFallbackAmount;
 
   return {
     sidebarProps: buildSidebarProps({
@@ -486,6 +501,8 @@ export function createLineaOreClientViewProps({
       isWeeklyJackpot,
       jackpotAmount,
       jackpotFallbackAmount,
+      dailyJackpotFallbackAmount,
+      weeklyJackpotFallbackAmount,
       lowEthBalance,
       claimReward,
       claimAll,

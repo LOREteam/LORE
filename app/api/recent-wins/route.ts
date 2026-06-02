@@ -121,26 +121,26 @@ export async function GET(request: Request) {
   }
 
   try {
-    const fastResult = await buildRecentWinsPayload({ allowSlowRecovery: false });
-    if (fastResult.recoveryNeeded && fastResult.payload.wins.length === 0) {
-      startRecentWinsRefresh(currentWatermark);
-      const seq = ++recentWinsBuildSeq;
-      const payload = commitRecentWinsCache(fastResult.payload, RECENT_WINS_ROUTE_CACHE_MS, seq, currentWatermark);
+    if (recentWinsInflight) {
+      markRouteInflightJoin(ROUTE_METRIC_KEY);
+      const payload = await recentWinsInflight;
       finishRouteMetric(metric, 200);
       return jsonNoStore(payload);
     }
 
-    const payload = recentWinsInflight
-      ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await recentWinsInflight)
-      : await (() => {
-          const seq = ++recentWinsBuildSeq;
-          recentWinsInflight = buildRecentWinsPayload({ allowSlowRecovery: true })
-            .then(({ payload: result }) => commitRecentWinsCache(result, RECENT_WINS_ROUTE_CACHE_MS, seq, currentWatermark))
-            .finally(() => {
-              recentWinsInflight = null;
-            });
-          return recentWinsInflight;
-        })();
+    const fastResult = await buildRecentWinsPayload({ allowSlowRecovery: false });
+    const seq = ++recentWinsBuildSeq;
+    const buildPromise =
+      fastResult.recoveryNeeded && fastResult.payload.wins.length === 0
+        ? buildRecentWinsPayload({ allowSlowRecovery: true })
+        : Promise.resolve(fastResult);
+    recentWinsInflight = buildPromise
+      .then(({ payload: result }) => commitRecentWinsCache(result, RECENT_WINS_ROUTE_CACHE_MS, seq, currentWatermark))
+      .finally(() => {
+        recentWinsInflight = null;
+      });
+
+    const payload = await recentWinsInflight;
 
     finishRouteMetric(metric, 200);
     return jsonNoStore(payload);

@@ -377,6 +377,8 @@ type BuildPageTabContentPropsOptions = {
   isWeeklyJackpot: PageTabContentProps["hubProps"]["isWeeklyJackpot"];
   jackpotAmount: PageTabContentProps["hubProps"]["jackpotAmount"];
   jackpotFallbackAmount: PageTabContentProps["hubProps"]["jackpotFallbackAmount"];
+  dailyJackpotFallbackAmount: PageTabContentProps["hubProps"]["dailyJackpotFallbackAmount"];
+  weeklyJackpotFallbackAmount: PageTabContentProps["hubProps"]["weeklyJackpotFallbackAmount"];
   lowEthBalance: boolean;
   claimReward: PageTabContentProps["hubProps"]["onClaim"];
   claimAll: PageTabContentProps["hubProps"]["onClaimAll"];
@@ -442,6 +444,8 @@ export function buildPageTabContentProps({
   isWeeklyJackpot,
   jackpotAmount,
   jackpotFallbackAmount,
+  dailyJackpotFallbackAmount,
+  weeklyJackpotFallbackAmount,
   lowEthBalance,
   claimReward,
   claimAll,
@@ -509,6 +513,8 @@ export function buildPageTabContentProps({
       isWeeklyJackpot,
       jackpotAmount,
       jackpotFallbackAmount,
+      dailyJackpotFallbackAmount,
+      weeklyJackpotFallbackAmount,
       lowEthBalance,
       onClaim: claimReward,
       onClaimAll: claimAll,

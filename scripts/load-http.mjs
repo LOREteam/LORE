@@ -64,7 +64,7 @@ async function fetchWithTimeout(path, workerId = 0) {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const clientIp = getClientIp(workerId);
   try {
-    return await fetch(`${BASE_URL}${path}`, {
+    const response = await fetch(`${BASE_URL}${path}`, {
       signal: controller.signal,
       headers: {
         "cache-control": "no-cache",
@@ -73,6 +73,8 @@ async function fetchWithTimeout(path, workerId = 0) {
         "x-forwarded-for": clientIp,
       },
     });
+    await response.arrayBuffer();
+    return response;
   } finally {
     clearTimeout(timer);
   }
@@ -82,8 +84,7 @@ async function warmUp() {
   await Promise.all(
     endpoints.map(async (endpoint) => {
       try {
-        const response = await fetchWithTimeout(endpoint.path);
-        await response.arrayBuffer();
+        await fetchWithTimeout(endpoint.path);
       } catch {
         // The measured run below reports real failures.
       }
@@ -104,7 +105,6 @@ async function runWorker(workerId, deadline, globalStats, byEndpoint) {
     globalStats.count += 1;
     try {
       const response = await fetchWithTimeout(endpoint.path, workerId);
-      await response.arrayBuffer();
       const elapsed = performance.now() - startedAt;
       stats.latencies.push(elapsed);
       globalStats.latencies.push(elapsed);

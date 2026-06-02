@@ -693,9 +693,7 @@ html[data-tutorial-open="true"] .mobile-mine-action {
 }
 
 .jackpot-vault-card::after {
-  inset: 0.35rem;
-  border: 1px solid rgba(255,255,255,0.07);
-  opacity: 0.8;
+  display: none;
 }
 
 .jackpot-vault-daily {
@@ -731,12 +729,7 @@ html[data-tutorial-open="true"] .mobile-mine-action {
 }
 
 .jackpot-vault-core::before {
-  content: "";
-  position: absolute;
-  inset: 0.2rem;
-  border-radius: inherit;
-  background: radial-gradient(circle, rgba(255,255,255,0.16), transparent 62%);
-  filter: blur(1px);
+  display: none;
 }
 
 .jackpot-vault-daily .jackpot-vault-core {
@@ -767,7 +760,7 @@ html[data-tutorial-open="true"] .mobile-mine-action {
 
 .jackpot-vault-meter > div {
   box-shadow:
-    0 0 14px currentColor,
+    0 0 14px currentcolor,
     inset 0 1px 0 rgba(255,255,255,0.26);
 }
 

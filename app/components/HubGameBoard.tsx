@@ -33,6 +33,8 @@ interface HubGameBoardProps {
   isWeeklyJackpot: boolean;
   jackpotAmount?: number;
   jackpotFallbackAmount?: number;
+  dailyJackpotFallbackAmount?: number;
+  weeklyJackpotFallbackAmount?: number;
   hasMyWinningBet: boolean;
   unclaimedWins: UnclaimedWin[];
   isScanning: boolean;
@@ -60,6 +62,8 @@ export const HubGameBoard = React.memo(function HubGameBoard({
   isWeeklyJackpot,
   jackpotAmount,
   jackpotFallbackAmount,
+  dailyJackpotFallbackAmount,
+  weeklyJackpotFallbackAmount,
   hasMyWinningBet,
 }: HubGameBoardProps) {
   return (
@@ -90,6 +94,8 @@ export const HubGameBoard = React.memo(function HubGameBoard({
         isWeeklyJackpot={isWeeklyJackpot}
         jackpotAmount={jackpotAmount}
         jackpotFallbackAmount={jackpotFallbackAmount}
+        dailyJackpotFallbackAmount={dailyJackpotFallbackAmount}
+        weeklyJackpotFallbackAmount={weeklyJackpotFallbackAmount}
         hasMyWinningBet={hasMyWinningBet}
         reducedMotion={reducedMotion}
       />

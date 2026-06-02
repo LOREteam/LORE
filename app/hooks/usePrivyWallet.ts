@@ -597,7 +597,9 @@ export function usePrivyWallet() {
         formatUnknownError(embeddedError),
       );
       if (!externalWallet) {
-        throw embeddedError;
+        const error = new Error("No external wallet available to retry clearing EIP-7702 delegation.");
+        (error as Error & { cause?: unknown }).cause = embeddedError;
+        throw error;
       }
     }
 

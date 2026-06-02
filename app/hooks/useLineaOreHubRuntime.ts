@@ -150,13 +150,13 @@ export function useLineaOreHubRuntime({
   const rewardScanner = useRewardScanner(actualCurrentEpoch ?? undefined, {
     enabled: activeTab === "hub",
     isPageVisible,
-    sendTransactionSilent,
+    sendTransactionSilent: miningSendTransactionSilent,
     onNotify: notify,
   });
 
   const miningGuards = useMiningGuards({
     connectedWalletAddress: address,
-    embeddedWalletAddress,
+    embeddedWalletAddress: miningEmbeddedWalletAddress,
     embeddedEthBalance,
     embeddedTokenBalance,
     isAutoMining: mining.isAutoMining,
@@ -189,7 +189,7 @@ export function useLineaOreHubRuntime({
     refetchGridEpochData,
     refetchTileData,
     refetchUserBets,
-    sendTransactionSilent,
+    sendTransactionSilent: miningSendTransactionSilent,
     syncHotTiles,
     timeLeft,
     winningTileId,
