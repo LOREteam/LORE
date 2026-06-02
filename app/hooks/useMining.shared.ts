@@ -95,7 +95,7 @@ export async function findConfirmedEpochForTiles(
 
 export function isEpochEndedError(err: unknown): boolean {
   const msg = flattenErrorMessage(err);
-  // V8: also treat the last-2-second EpochClosing() reject as "epoch ended"
+  // V9: also treat the last-2-second EpochClosing() reject as "epoch ended"
   // for UX purposes — the bet missed the window and the next epoch is imminent.
   return msg.includes("epoch ended") || msg.includes("epochended") || msg.includes("epochclosing");
 }
@@ -109,7 +109,7 @@ export function flattenErrorMessage(err: unknown): string {
     visited.add(value);
 
     if (value instanceof Error) {
-      if (value.name) parts.push(value.name);
+      if (value.name && value.name !== "Error") parts.push(value.name);
       if (value.message) parts.push(value.message);
       const withMeta = value as Error & {
         details?: unknown;
@@ -200,6 +200,19 @@ export function isInsufficientFundsError(err: unknown): boolean {
     msg.includes("exceeds account balance") ||
     msg.includes("sender doesn't have enough funds") ||
     msg.includes("out of gas")
+  );
+}
+
+export function isWalletUnavailableError(err: unknown): boolean {
+  const msg = flattenErrorMessage(err);
+  return (
+    msg.includes("public client not ready") ||
+    msg.includes("public client unavailable") ||
+    msg.includes("wallet not ready") ||
+    msg.includes("wallet not found") ||
+    msg.includes("embedded wallet not found") ||
+    msg.includes("embedded wallet not ready") ||
+    msg.includes("no embedded or connected wallet found for address")
   );
 }
 

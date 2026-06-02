@@ -8,11 +8,11 @@ Move LORE from a single-key `Ownable` setup to an ownership model that is accept
 - timelock + multisig ownership when operationally ready
 - no ownership renounce for the live game contract
 
-## What changed in V9
+## V9 Contract Profile
 
-The latest deploy-ready contract source is [contracts/LineaOreV9.sol](/Users/masha/LORE/contracts/LineaOreV9.sol).
+The active contract source is [contracts/LineaOreV9.sol](/C:/Users/bogda/linea-miner-main/contracts/LineaOreV9.sol).
 
-Key governance changes:
+Key governance properties:
 
 - `Ownable` -> `Ownable2Step`
 - separate `feeRecipient` treasury address
@@ -21,8 +21,8 @@ Key governance changes:
   - `cancelFeeRecipientChange()`
 - ownership renounce disabled
 - protocol fees now go to `feeRecipient`, not `owner()`
-- equal-size multi-bets can use `placeBatchBetsSameAmount(...)`
-- equal-size multi-bets can also use `placeBatchBetsBitmap(uint32 tileMask, uint256 amount)`
+- equal-size multi-bets use `placeBatchBetsSameAmount(...)`
+- compact equal-size multi-bets use `placeBatchBetsBitmap(uint32 tileMask, uint256 amount)`
 - rebate accounting now tracks per-user epoch volume incrementally, so rebate preview/claim paths do not scan all 25 tiles per epoch
 - empty rollover-only epochs no longer leak fees into jackpot / protocol / burn buckets
 
@@ -83,7 +83,7 @@ For LORE, immutability is less important than removing single-key risk.
 
 ## Frontend migration note
 
-The app/runtime reads deployment settings from env and defaults in [config/publicConfig.ts](/Users/masha/LORE/config/publicConfig.ts).
+The app/runtime reads deployment settings from env and defaults in [config/publicConfig.ts](/C:/Users/bogda/linea-miner-main/config/publicConfig.ts).
 
 After a new deployment, update:
 
@@ -92,4 +92,4 @@ After a new deployment, update:
 - `LINEA_NETWORK` / `NEXT_PUBLIC_LINEA_NETWORK` when switching between Sepolia and mainnet
 - `NEXT_PUBLIC_LINEA_TOKEN_ADDRESS` if the token address changes
 
-The ABI in [app/lib/constants.ts](/Users/masha/LORE/app/lib/constants.ts) already includes the methods needed by the current V9 deploy candidate, including `placeBatchBetsBitmap(...)`.
+The ABI in [app/lib/constants.ts](/C:/Users/bogda/linea-miner-main/app/lib/constants.ts) includes the V9 methods, including `placeBatchBetsBitmap(...)`.

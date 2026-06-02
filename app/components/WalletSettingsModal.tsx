@@ -5,6 +5,7 @@ import { downloadLogs } from "../lib/logger";
 import { UiButton } from "./ui/UiButton";
 import { uiTokens } from "./ui/tokens";
 import { cn } from "../lib/cn";
+import { EIP7702_ENABLED } from "../lib/eip7702";
 import { WalletSettingsDeepScanPanel } from "./wallet/WalletSettingsDeepScanPanel";
 import { WalletSettingsOverviewPanel } from "./wallet/WalletSettingsOverviewPanel";
 import { WalletSettingsPendingTxPanel } from "./wallet/WalletSettingsPendingTxPanel";
@@ -13,14 +14,19 @@ import { WalletSettings7702Panel } from "./wallet/WalletSettings7702Panel";
 import { WalletSettingsTransferPanels } from "./wallet/WalletSettingsTransferPanels";
 import type { WalletSettingsModalProps } from "./wallet/types";
 
-const SECTIONS = [
+type WalletSettingsSection = "all" | "overview" | "7702" | "privy" | "transfer" | "scan";
+
+const BASE_SECTIONS: Array<{ id: Exclude<WalletSettingsSection, "7702">; label: string }> = [
   { id: "all" as const, label: "All" },
   { id: "overview" as const, label: "General" },
-  { id: "7702" as const, label: "7702" },
   { id: "privy" as const, label: "Privy" },
   { id: "transfer" as const, label: "Transfer" },
   { id: "scan" as const, label: "Scan" },
 ];
+
+const SECTIONS: Array<{ id: WalletSettingsSection; label: string }> = EIP7702_ENABLED
+  ? [...BASE_SECTIONS.slice(0, 2), { id: "7702" as const, label: "7702" }, ...BASE_SECTIONS.slice(2)]
+  : BASE_SECTIONS;
 
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -47,6 +53,9 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   isWithdrawingEth,
   isDepositingEth,
   isDepositingToken,
+  isClearingEip7702Delegation,
+  embeddedWallet7702DelegateAddress,
+  embeddedWalletCodeChecking,
   onWithdrawAmountChange,
   onWithdrawEthAmountChange,
   onDepositEthAmountChange,
@@ -59,6 +68,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   onWithdrawEthToExternal,
   onDepositEthToEmbedded,
   onDepositTokenToEmbedded,
+  onClearEip7702Delegation,
   walletTransfers,
   walletTransfersLoading,
   onLoadWalletTransfers,
@@ -91,7 +101,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   onRunEip7702Diagnostic,
   onRunEip7702SendDiagnostic,
 }: WalletSettingsModalProps) {
-  const [activeSection, setActiveSection] = useState<"all" | "overview" | "7702" | "privy" | "transfer" | "scan">("all");
+  const [activeSection, setActiveSection] = useState<WalletSettingsSection>("all");
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -191,30 +201,22 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
 
         <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
           {(activeSection === "all" || activeSection === "overview") && (
-            <WalletSettingsOverviewPanel
-              connectedWalletAddress={connectedWalletAddress}
-              embeddedWalletAddress={embeddedWalletAddress}
-              connectedResolverRewards={connectedResolverRewards}
-              connectedResolverRewardsWei={connectedResolverRewardsWei}
-              embeddedResolverRewards={embeddedResolverRewards}
-              embeddedResolverRewardsWei={embeddedResolverRewardsWei}
-              isClaimingConnectedResolverRewards={isClaimingConnectedResolverRewards}
-              isClaimingEmbeddedResolverRewards={isClaimingEmbeddedResolverRewards}
-              onClaimConnectedResolverRewards={onClaimConnectedResolverRewards}
-              onClaimEmbeddedResolverRewards={onClaimEmbeddedResolverRewards}
-              soundSettings={soundSettings}
-              onSoundSettingChange={onSoundSettingChange}
-              reducedMotion={reducedMotion}
-              onReducedMotionChange={onReducedMotionChange}
-            />
-          )}
-
-          {(activeSection === "all" || activeSection === "7702") && (
             <>
-              <WalletSettings7702Panel
-                eip7702Diagnostic={eip7702Diagnostic}
-                onRunEip7702Diagnostic={onRunEip7702Diagnostic}
-                onRunEip7702SendDiagnostic={onRunEip7702SendDiagnostic}
+              <WalletSettingsOverviewPanel
+                connectedWalletAddress={connectedWalletAddress}
+                embeddedWalletAddress={embeddedWalletAddress}
+                connectedResolverRewards={connectedResolverRewards}
+                connectedResolverRewardsWei={connectedResolverRewardsWei}
+                embeddedResolverRewards={embeddedResolverRewards}
+                embeddedResolverRewardsWei={embeddedResolverRewardsWei}
+                isClaimingConnectedResolverRewards={isClaimingConnectedResolverRewards}
+                isClaimingEmbeddedResolverRewards={isClaimingEmbeddedResolverRewards}
+                onClaimConnectedResolverRewards={onClaimConnectedResolverRewards}
+                onClaimEmbeddedResolverRewards={onClaimEmbeddedResolverRewards}
+                soundSettings={soundSettings}
+                onSoundSettingChange={onSoundSettingChange}
+                reducedMotion={reducedMotion}
+                onReducedMotionChange={onReducedMotionChange}
               />
 
               <WalletSettingsPendingTxPanel
@@ -227,6 +229,14 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
             </>
           )}
 
+          {EIP7702_ENABLED && (activeSection === "all" || activeSection === "7702") && (
+            <WalletSettings7702Panel
+              eip7702Diagnostic={eip7702Diagnostic}
+              onRunEip7702Diagnostic={onRunEip7702Diagnostic}
+              onRunEip7702SendDiagnostic={onRunEip7702SendDiagnostic}
+            />
+          )}
+
           {(activeSection === "all" || activeSection === "privy") && (
             <WalletSettingsPrivyPanel
               embeddedWalletAddress={embeddedWalletAddress}
@@ -236,6 +246,9 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
               depositTokenAmount={depositTokenAmount}
               isDepositingEth={isDepositingEth}
               isDepositingToken={isDepositingToken}
+              isClearingEip7702Delegation={isClearingEip7702Delegation}
+              embeddedWallet7702DelegateAddress={embeddedWallet7702DelegateAddress}
+              embeddedWalletCodeChecking={embeddedWalletCodeChecking}
               onCopyEmbeddedAddress={onCopyEmbeddedAddress}
               onExportEmbeddedWallet={onExportEmbeddedWallet}
               onCreateEmbeddedWallet={onCreateEmbeddedWallet}
@@ -243,6 +256,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
               onDepositTokenAmountChange={onDepositTokenAmountChange}
               onDepositEthToEmbedded={onDepositEthToEmbedded}
               onDepositTokenToEmbedded={onDepositTokenToEmbedded}
+              onClearEip7702Delegation={onClearEip7702Delegation}
             />
           )}
 

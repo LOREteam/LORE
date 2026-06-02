@@ -19,6 +19,7 @@ interface UsePageRuntimeEffectsOptions {
   embeddedWalletAddress?: string | null;
   handleTileClick: (id: number, isRevealing: boolean) => void;
   historyViewData: HistoryRow[];
+  isAnalyzing: boolean;
   isRevealing: boolean;
   liveStateReady: boolean;
   playSound: (name: SoundName) => void;
@@ -51,6 +52,7 @@ export function usePageRuntimeEffects({
   embeddedWalletAddress,
   handleTileClick,
   historyViewData,
+  isAnalyzing,
   isRevealing,
   liveStateReady,
   playSound,
@@ -119,9 +121,11 @@ export function usePageRuntimeEffects({
 
   const isRevealingRef = useRef(isRevealing);
   isRevealingRef.current = isRevealing;
+  const isAnalyzingRef = useRef(isAnalyzing);
+  isAnalyzingRef.current = isAnalyzing;
 
   const stableTileClick = useCallback(
-    (id: number) => handleTileClick(id, isRevealingRef.current),
+    (id: number) => handleTileClick(id, isRevealingRef.current || isAnalyzingRef.current),
     [handleTileClick],
   );
 

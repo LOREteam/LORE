@@ -39,14 +39,14 @@ export const RewardScanner = React.memo(function RewardScanner({
   onClaimAll,
 }: RewardScannerProps) {
   return (
-    <div className="rounded-xl bg-surface-raised border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] flex flex-col gap-0 shrink-0 animate-slide-up max-h-65 overflow-y-auto [scrollbar-gutter:stable]" style={{ animationDelay: "0.15s" }}>
+    <div className="rounded-xl bg-surface-raised border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] flex flex-col gap-0 shrink-0 max-h-65 overflow-y-auto [scrollbar-gutter:stable]">
       {/* Header */}
       <div className="sticky top-0 z-10 flex justify-between items-center border-b border-white/6 bg-surface-raised/95 backdrop-blur-sm pl-3 pr-4 py-2">
         <h3 className="text-[11px] font-bold text-white uppercase tracking-wider flex items-center gap-2">
-          <div className="w-1.5 h-3.5 bg-amber-400 rounded-sm shadow-[0_0_8px_rgba(251,191,36,0.4)]" />
+          <div className="w-1.5 h-3.5 bg-cyan-300 rounded-sm shadow-[0_0_8px_rgba(45,212,191,0.4)]" />
           Rewards
           {unclaimedWins.length > 0 && (
-            <span className="text-[9px] bg-amber-400/15 text-amber-400 px-1.5 py-0.5 rounded-full border border-amber-400/25 animate-pulse font-black">
+            <span className="text-[9px] bg-emerald-400/12 text-emerald-300 px-1.5 py-0.5 rounded-full border border-emerald-300/22 font-black">
               {unclaimedWins.length}
             </span>
           )}
@@ -56,7 +56,7 @@ export const RewardScanner = React.memo(function RewardScanner({
             <button
               onClick={onClaimAll}
               disabled={isClaiming}
-              className="h-6 px-2 bg-linear-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-widest rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-md shadow-amber-500/20 hover:shadow-amber-500/30 shimmer-btn active:scale-[0.97]"
+              className="h-6 px-2 bg-linear-to-r from-emerald-400 to-cyan-400 text-[#03110d] font-black text-[8px] uppercase tracking-widest rounded-md hover:from-emerald-300 hover:to-cyan-300 disabled:opacity-40 transition-all shadow-md shadow-cyan-500/16 hover:shadow-cyan-500/24 active:scale-[0.97]"
             >
               {isClaiming ? "WAIT..." : `CLAIM ALL (${unclaimedWins.length})`}
             </button>
@@ -96,14 +96,13 @@ export const RewardScanner = React.memo(function RewardScanner({
             <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold"><LoreText items={searchingQuotes} /></span>
           </div>
         ) : unclaimedWins.length > 0 ? (
-          unclaimedWins.map((win, idx) => (
+          unclaimedWins.map((win) => (
             <div
               key={win.epoch}
-              className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-amber-500/8 border border-amber-500/30 px-3 py-2 rounded-lg animate-slide-up hover:bg-amber-500/12 transition-colors group"
-              style={{ animationDelay: `${idx * 0.05}s` }}
+              className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 bg-emerald-400/8 border border-cyan-300/24 px-3 py-2 rounded-lg hover:bg-emerald-400/12 transition-colors group"
             >
               <div className="flex min-w-0 flex-col">
-                <span className="text-[9px] text-amber-500/60 uppercase font-bold tracking-wider">
+                <span className="text-[9px] text-cyan-300/62 uppercase font-bold tracking-wider">
                   #{win.epoch}
                 </span>
                 <span className="text-[10px] font-bold text-emerald-400 whitespace-nowrap">
@@ -113,7 +112,7 @@ export const RewardScanner = React.memo(function RewardScanner({
               <button
                 onClick={() => onClaim(win.epoch)}
                 disabled={isClaiming}
-                className="h-6 px-2 bg-linear-to-r from-amber-500 to-orange-500 text-black font-black text-[8px] uppercase tracking-wide rounded-md hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 transition-all shadow-sm group-hover:shadow-amber-500/25 active:scale-[0.95]"
+                className="h-6 px-2 bg-linear-to-r from-emerald-400 to-cyan-400 text-[#03110d] font-black text-[8px] uppercase tracking-wide rounded-md hover:from-emerald-300 hover:to-cyan-300 disabled:opacity-40 transition-all shadow-sm group-hover:shadow-cyan-500/22 active:scale-[0.95]"
               >
                 {isClaiming ? "..." : "CLAIM"}
               </button>

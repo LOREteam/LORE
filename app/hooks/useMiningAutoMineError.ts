@@ -1,23 +1,16 @@
 "use client";
 
 import {
+  flattenErrorMessage,
   firstErrorLine,
   isEpochWaitTimeoutError,
   isInsufficientFundsError,
   isNetworkError,
   isSessionExpiredError,
+  isWalletUnavailableError,
 } from "./useMining.shared";
+import { formatUnknownError } from "../lib/utils";
 import type { AutoMineDiagnosticsErrorKind } from "../lib/mining/autoMineDiagnostics";
-
-function isWalletUnavailableError(message: string) {
-  return (
-    message.includes("public client not ready") ||
-    message.includes("public client unavailable") ||
-    message.includes("wallet not ready") ||
-    message.includes("wallet not found") ||
-    message.includes("embedded wallet not found")
-  );
-}
 
 function isPendingNonceBlockedError(message: string) {
   return (
@@ -30,10 +23,13 @@ function isPendingNonceBlockedError(message: string) {
 }
 
 export function getAutoMineUserMessage(error: unknown) {
-  const rawMessage = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const flattenedMessage = flattenErrorMessage(error);
+  const formattedMessage = formatUnknownError(error);
+  const rawMessage = (flattenedMessage || formattedMessage || String(error)).toLowerCase();
+  const displayMessage = flattenedMessage || formattedMessage || "Unknown auto-miner error";
   const sessionExpired = isSessionExpiredError(error);
   const networkDown = isNetworkError(error);
-  const walletUnavailable = isWalletUnavailableError(rawMessage);
+  const walletUnavailable = isWalletUnavailableError(error);
   const pendingNonceBlocked = isPendingNonceBlockedError(rawMessage);
 
   let userMessage: string;
@@ -73,7 +69,7 @@ export function getAutoMineUserMessage(error: unknown) {
     userMessage = "Auto-miner paused: Privy wallet not ready. Retrying automatically...";
   } else {
     diagnosticsErrorKind = "unknown";
-    userMessage = "Auto-miner error: " + (error instanceof Error ? error.message : String(error));
+    userMessage = `Auto-miner error: ${displayMessage}`;
   }
 
   return {

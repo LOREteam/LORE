@@ -35,6 +35,8 @@ interface RunAutoMineLoopOptions {
   sessionRefreshIntervalMs: number;
 }
 
+const EPOCH_WAIT_RETRY_MAX = 8;
+
 async function handleConfirmedRoundOutcome(params: {
   loopState: ReturnType<typeof createAutoMineLoopState>;
   outcome: AutoMineLoopConfirmedRoundOutcome;
@@ -150,10 +152,10 @@ export async function runAutoMineLoop({
               initialMs: networkBackoffInitialMs,
               maxExponent: 6,
               maxMs: networkBackoffMaxMs,
-              retryMax: networkRetryMax,
+              retryMax: EPOCH_WAIT_RETRY_MAX,
             });
             if (retryDecision.kind === "give-up") {
-              log.error("AutoMine", `epoch wait failed for ${networkRetryMax} retries, giving up`);
+              log.warn("AutoMine", `epoch wait failed for ${EPOCH_WAIT_RETRY_MAX} retries, pausing loop`);
               throw error;
             }
             const networkErrorDecision = planAutoMineNetworkErrorTransition({
@@ -162,7 +164,7 @@ export async function runAutoMineLoop({
             });
             log.warn(
               "AutoMine",
-              `epoch wait failed on round ${roundIndex + 1} (retry ${retryDecision.retryCount}/${networkRetryMax}), waiting ${(retryDecision.waitMs / 1000).toFixed(0)}s...`,
+              `epoch wait failed on round ${roundIndex + 1} (retry ${retryDecision.retryCount}/${EPOCH_WAIT_RETRY_MAX}), waiting ${(retryDecision.waitMs / 1000).toFixed(0)}s...`,
               error,
             );
             loopState = await applyTransitionAction({

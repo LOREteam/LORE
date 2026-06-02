@@ -2,8 +2,9 @@
 
 import React, { useEffect, useRef } from "react";
 
-const PARTICLE_COUNT = 35;
-const MOBILE_PARTICLE_COUNT = 16;
+const PARTICLE_COUNT = 22;
+const MOBILE_PARTICLE_COUNT = 10;
+const FRAME_INTERVAL_MS = 50;
 const COLORS = [
   "rgba(139, 92, 246, 0.6)",   // violet
   "rgba(167, 139, 250, 0.5)",  // lavender
@@ -48,19 +49,28 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastDrawAt = 0;
+    let canvasWidth = 0;
+    let canvasHeight = 0;
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
     const getParticleCount = () => window.innerWidth < 768 ? MOBILE_PARTICLE_COUNT : PARTICLE_COUNT;
     const seedParticles = () => {
       particlesRef.current = Array.from({ length: getParticleCount() }, () =>
-        createParticle(canvas.width, canvas.height)
+        createParticle(canvasWidth, canvasHeight)
       );
     };
     const resizeImmediate = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      canvasWidth = window.innerWidth;
+      canvasHeight = window.innerHeight;
+      canvas.width = Math.floor(canvasWidth * pixelRatio);
+      canvas.height = Math.floor(canvasHeight * pixelRatio);
+      canvas.style.width = `${canvasWidth}px`;
+      canvas.style.height = `${canvasHeight}px`;
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       seedParticles();
     };
     const resize = () => {
@@ -70,12 +80,17 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
     resizeImmediate();
     window.addEventListener("resize", resize);
 
-    const draw = () => {
+    const draw = (timestamp: number) => {
       if (document.hidden) {
         animRef.current = 0;
         return;
       }
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (timestamp - lastDrawAt < FRAME_INTERVAL_MS) {
+        animRef.current = requestAnimationFrame(draw);
+        return;
+      }
+      lastDrawAt = timestamp;
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
       const particles = particlesRef.current;
 
       for (const p of particles) {
@@ -86,9 +101,9 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
 
         if (p.opacity > 0.5 || p.opacity < 0.05) p.opacityDir *= -1;
 
-        if (p.y < -10 || p.x < -10 || p.x > canvas.width + 10) {
-          Object.assign(p, createParticle(canvas.width, canvas.height));
-          p.y = canvas.height + 5;
+        if (p.y < -10 || p.x < -10 || p.x > canvasWidth + 10) {
+          Object.assign(p, createParticle(canvasWidth, canvasHeight));
+          p.y = canvasHeight + 5;
         }
 
         ctx.save();

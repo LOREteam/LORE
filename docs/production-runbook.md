@@ -22,6 +22,7 @@
 - Use a private `KEEPER_RPC_URL`.
 - Set `NEXT_PUBLIC_SITE_URL` to the final HTTPS origin.
 - Set `HEALTH_DIAGNOSTICS_SECRET`.
+- Set `TRUST_PROXY_HEADERS=1` only behind a trusted proxy that strips spoofed client IP headers.
 
 ## Deploy order
 

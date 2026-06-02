@@ -2,6 +2,7 @@
 
 import React from "react";
 import type { Eip7702DiagnosticState } from "../../hooks/usePrivy7702Diagnostics";
+import { EIP7702_DELEGATE_ADDRESS, EIP7702_ENABLED } from "../../lib/eip7702";
 import { UiButton } from "../ui/UiButton";
 import { UiPanel } from "../ui/UiPanel";
 
@@ -22,6 +23,11 @@ export function WalletSettings7702Panel({
       : eip7702Diagnostic.status === "error"
         ? "border-red-500/20 bg-red-500/5"
         : "border-violet-500/15 bg-black/20";
+  const unavailableReason = !EIP7702_ENABLED
+    ? "EIP-7702 is disabled for this deployment."
+    : !EIP7702_DELEGATE_ADDRESS
+      ? "EIP-7702 delegate address is not configured."
+      : null;
 
   return (
     <UiPanel tone="accent" className="animate-slide-up" style={{ animationDelay: "0.08s" }}>
@@ -30,7 +36,7 @@ export function WalletSettings7702Panel({
           <div>
             <div className="text-[10px] text-gray-300 font-bold uppercase tracking-widest">7702 diagnostic</div>
             <div className="mt-1 text-[11px] text-gray-500">
-              Checks delegation signing and real type-4 send behavior without using the betting UI.
+              {unavailableReason ?? "Checks delegation signing and real type-4 send behavior without using the betting UI."}
             </div>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
@@ -41,6 +47,7 @@ export function WalletSettings7702Panel({
               variant={eip7702Diagnostic.status === "error" ? "warning" : "secondary"}
               size="sm"
               uppercase
+              disabled={Boolean(unavailableReason)}
               loading={eip7702Diagnostic.status === "running" && eip7702Diagnostic.stage !== "send"}
             >
               Test 7702
@@ -52,6 +59,7 @@ export function WalletSettings7702Panel({
               variant={eip7702Diagnostic.status === "error" && eip7702Diagnostic.stage === "send" ? "warning" : "ghost"}
               size="sm"
               uppercase
+              disabled={Boolean(unavailableReason)}
               loading={eip7702Diagnostic.status === "running" && eip7702Diagnostic.stage === "send"}
             >
               Test Send

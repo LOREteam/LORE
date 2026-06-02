@@ -53,6 +53,17 @@ export function useDeepRewardScan(
   const abortRef = useRef(false);
   const scanRunningRef = useRef(false);
   const scanAddressRef = useRef<string | null>(null);
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current = true;
+      scanRunningRef.current = false;
+      scanAddressRef.current = null;
+    };
+  }, []);
 
   const waitReceipt = useCallback(
     async (hash: `0x${string}`): Promise<ReceiptState> => {
@@ -248,9 +259,11 @@ export function useDeepRewardScan(
     scanRunningRef.current = true;
     scanAddressRef.current = normalizedAddress;
     abortRef.current = false;
-    setScanning(true);
-    setWins(null);
-    setProgress("Reading current epoch…");
+    if (mountedRef.current) {
+      setScanning(true);
+      setWins(null);
+      setProgress("Reading current epoch…");
+    }
 
     try {
       const currentEpoch = await publicClient.readContract({
@@ -272,7 +285,9 @@ export function useDeepRewardScan(
         for (let i = cursor; i >= end; i--) epochIds.push(i);
         if (epochIds.length === 0) break;
 
-        setProgress(`Scanning ${scanned}/${totalEpochs} epochs… (${found.length} found)`);
+        if (mountedRef.current) {
+          setProgress(`Scanning ${scanned}/${totalEpochs} epochs… (${found.length} found)`);
+        }
 
         const [epochResults, claimResults, dustSettledResults] = await Promise.all([
           publicClient.multicall({
@@ -334,20 +349,22 @@ export function useDeepRewardScan(
         cursor = end - BigInt(1);
       }
 
-      if (scanAddressRef.current === normalizedAddress) {
+      if (scanAddressRef.current === normalizedAddress && mountedRef.current) {
         setWins(found);
       }
-      if (scanAddressRef.current === normalizedAddress) {
+      if (scanAddressRef.current === normalizedAddress && mountedRef.current) {
         setProgress(abortRef.current ? "Cancelled" : `Done – ${found.length} unclaimed reward${found.length !== 1 ? "s" : ""}`);
       }
     } catch (e) {
-      if (scanAddressRef.current === normalizedAddress) {
+      if (scanAddressRef.current === normalizedAddress && mountedRef.current) {
         setProgress("Error during scan");
       }
       log.warn("DeepScan", "scan error", { message: e instanceof Error ? e.message : String(e) });
     } finally {
-      if (scanAddressRef.current === normalizedAddress) {
-        setScanning(false);
+      if (scanAddressRef.current === normalizedAddress || !mountedRef.current) {
+        if (mountedRef.current) {
+          setScanning(false);
+        }
         scanRunningRef.current = false;
         scanAddressRef.current = null;
       }
@@ -358,16 +375,20 @@ export function useDeepRewardScan(
     abortRef.current = true;
     scanRunningRef.current = false;
     scanAddressRef.current = address ? address.toLowerCase() : null;
-    setWins(null);
-    setScanning(false);
-    setProgress("");
+    if (mountedRef.current) {
+      setWins(null);
+      setScanning(false);
+      setProgress("");
+    }
   }, [address]);
 
   const stop = useCallback(() => { abortRef.current = true; }, []);
 
   const claimOne = useCallback(async (epochId: string) => {
     if (!sendTransactionSilent) return;
-    setClaiming(true);
+    if (mountedRef.current) {
+      setClaiming(true);
+    }
     try {
       const { data, gas } = await prepareClaimTx(epochId);
       const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
@@ -376,18 +397,24 @@ export function useDeepRewardScan(
         onNotify?.("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", "info");
         return;
       }
-      setWins((prev) => prev ? prev.filter((w) => w.epoch !== epochId) : prev);
+      if (mountedRef.current) {
+        setWins((prev) => prev ? prev.filter((w) => w.epoch !== epochId) : prev);
+      }
       onNotify?.("Reward claimed successfully.", "success");
     } catch (err) {
       if (!isUserRejection(err)) onNotify?.(formatClaimError(err), "danger");
     } finally {
-      setClaiming(false);
+      if (mountedRef.current) {
+        setClaiming(false);
+      }
     }
   }, [onNotify, prepareClaimTx, sendTransactionSilent, waitReceipt]);
 
   const claimAllDeep = useCallback(async () => {
     if (!wins || wins.length === 0 || !sendTransactionSilent) return;
-    setClaiming(true);
+    if (mountedRef.current) {
+      setClaiming(true);
+    }
     try {
       const all = [...wins];
       const claimedEpochs = new Set<string>();
@@ -452,7 +479,9 @@ export function useDeepRewardScan(
       }
 
       if (claimedEpochs.size > 0) {
-        setWins((prev) => prev ? prev.filter((w) => !claimedEpochs.has(w.epoch)) : prev);
+        if (mountedRef.current) {
+          setWins((prev) => prev ? prev.filter((w) => !claimedEpochs.has(w.epoch)) : prev);
+        }
         onNotify?.(
           claimedEpochs.size === 1
             ? claimTxCount <= 1
@@ -471,7 +500,9 @@ export function useDeepRewardScan(
         onNotify?.("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", "info");
       }
     } finally {
-      setClaiming(false);
+      if (mountedRef.current) {
+        setClaiming(false);
+      }
     }
   }, [
     confirmClaimedEpochs,

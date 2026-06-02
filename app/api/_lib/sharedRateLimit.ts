@@ -149,7 +149,7 @@ export async function enforceSharedRateLimit(
     const warnKey = `${bucket}:weak-identity`;
     if (!weakIdentityWarnedBuckets.has(warnKey)) {
       weakIdentityWarnedBuckets.add(warnKey);
-      console.warn(`[rate-limit:${bucket}] weak identity — using fallback rate limiting`);
+      console.warn(`[rate-limit:${bucket}] weak identity - using fallback rate limiting`);
     }
     return enforceWeakIdentityFallback(bucket, key, limit, windowMs, now);
   }

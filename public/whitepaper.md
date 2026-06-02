@@ -1,37 +1,65 @@
-LORE Protocol: Whitepaper v1.0
+LORE Protocol: Whitepaper v1.1
+
 1. Introduction
-LORE (Linea_Ore) is a decentralized parimutuel prediction protocol built specifically for the Linea Network. The platform enables users to engage in high-frequency, grid-based competitive mining rounds. LORE combines the thrill of strategy with a robust deflationary mechanism, directly contributing to the Linea ecosystem's health through automated token burning.
+
+LORE (Linea + ORE) is an on-chain prediction mining game built for Linea mainnet. The current repository is tested on Linea Sepolia until final mainnet contract addresses are configured.
+
+Players place LINEA bets on a 5x5 grid of 25 tiles. When an epoch resolves, one tile wins. Players who backed that tile share the reward pool proportionally to their stake.
 
 2. Core Mechanics
-The protocol operates on a 5x5 matrix (25 unique tiles).
 
-Round Cycle: Every 60 seconds, a new mining cycle begins.
+Grid: 25 tiles, numbered 1 through 25.
 
-Deployment: Users deploy $LINEA tokens to one or multiple tiles within the grid.
+Epoch: The default round duration is 60 seconds. Bets are rejected at the end of the epoch, including the final safety window.
 
-Selection: At the end of the cycle, a winning tile is selected via a cryptographically secure random source.
+Betting: Players can bet on one or more tiles. The contract accepts any amount greater than zero, and the UI validates amounts before submitting transactions.
 
-Distribution: The total pool (Motherlode) is distributed among participants who deployed to the winning tile, proportional to their stake.
+Resolution: Anyone able to submit a valid transaction can call resolveEpoch after the epoch ends. The UI and keeper infrastructure are expected to resolve rounds automatically.
 
-3. Tokenomics & Burn Mechanism
-LORE is designed to be net-deflationary for the Linea token supply. Every round, a total protocol fee of 5% is levied on the Motherlode:
+Rewards: Winners claim rewards from the contract. If nobody bet on the winning tile, the base reward rolls into the next epoch.
 
-2.5% Burn Rate: Half of the fee is permanently removed from circulation by sending it to the official dead address (0x0...dEaD). This mechanism reduces the total supply of tokens, rewarding long-term holders of the underlying asset.
+3. Fee Split
 
-2.5% Treasury: The remaining portion is allocated to the protocol treasury for maintenance, infrastructure, and future development.
+Each epoch splits fresh pool volume as follows:
 
-4. Automation: The Auto-Miner
-To maximize efficiency, LORE provides a built-in "Auto-Miner" interface.
-Users can pre-set their mining parameters:
+92% base reward for winning-tile holders.
 
-Target Tiles: Number of random tiles to cover per round.
+2% accrues to the daily jackpot pool.
 
-Cycle Duration: Total number of rounds to remain active.
-This feature ensures continuous participation without manual intervention, optimized for high-volume users.
+3% accrues to the weekly jackpot pool.
 
-5. Security & Transparency
-Verified Contracts: All protocol logic is handled by smart contracts verified on Lineascan.
+2% protocol fee, split between treasury accounting and participation rebates.
 
-Non-Custodial: Users retain control of their funds until deployment. Rewards are claimed directly from the contract.
+1% burn, sent to the dead address.
 
-Immutable Execution: Round resolutions are finalized on-chain, ensuring that no central party can alter the outcome.
+Rollover from no-winner epochs is added to the next epoch's base reward pool. Jackpot pools are separate reserves and are only awarded when their on-chain trigger conditions are met.
+
+4. Jackpots
+
+The daily jackpot can trigger once per UTC day on a resolved epoch with at least one winner.
+
+The weekly jackpot can trigger once per Monday-based UTC week on a resolved epoch with at least one winner.
+
+When a jackpot triggers, the entire accumulated jackpot pool is added to that epoch's winning-tile reward pool. If an epoch has no winner, jackpot pools remain untouched and continue growing.
+
+5. Randomness Model
+
+V9 uses transparent on-chain pseudo-randomness. The hardened source derives the winner tile from block.prevrandao, the previous blockhash, epoch number, current pool state, and jackpot pool state. The resolver address is intentionally excluded from winner entropy.
+
+This model is auditable and fully on-chain, but it is not equivalent to VRF or commit-reveal randomness. Removing the resolver address closes caller-address grinding, while sequencer influence over block inputs and transaction inclusion remains part of the risk model. Mainnet launch review should explicitly cover resolver monitoring and any future randomness hardening.
+
+6. Auto-Miner
+
+The Auto-Miner automates repeated participation. Users configure bet size, number of random target tiles, and total cycles. The bot checks wallet balances before each round, persists session state locally, and stops when funds or wallet session state are no longer valid.
+
+Auto-Miner does not improve mathematical odds. It only reduces manual clicking and increases the number of rounds a user can participate in.
+
+7. Wallet And Custody
+
+LORE uses Privy embedded wallets for low-friction transaction signing. Players need LINEA for bets and ETH on Linea for gas.
+
+The game contract is non-custodial in the normal allowance model: tokens stay in the user's wallet until a bet transaction transfers the exact staked amount. Users can revoke token allowances with standard allowance-management tools.
+
+8. Mainnet Readiness
+
+The public copy is written for Linea mainnet, while the current testing environment may still point at Sepolia contracts. Before mainnet launch, deployment addresses, token addresses, explorer links, keeper configuration, resolver monitoring, and production environment variables must be verified against the final Linea mainnet contracts.

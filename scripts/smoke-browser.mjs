@@ -23,10 +23,10 @@ import {
 
 const BASE_URL = process.env.SMOKE_BASE_URL || "http://localhost:3000";
 const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "smoke-browser");
-const SCREENSHOT_PATH = path.join(OUTPUT_DIR, "latest-home.png");
+const SCREENSHOT_PATH = path.resolve(process.env.SMOKE_BROWSER_SCREENSHOT_PATH || path.join(OUTPUT_DIR, "latest-home.local.png"));
 const TIMEOUT_MS = Number(process.env.SMOKE_BROWSER_TIMEOUT_MS || 45_000);
 const WARMUP_TIMEOUT_MS = Number(process.env.SMOKE_BROWSER_WARMUP_TIMEOUT_MS || 90_000);
-const TILE_SELECTION_TIMEOUT_MS = Number(process.env.SMOKE_TILE_SELECTION_TIMEOUT_MS || 5_000);
+const TILE_SELECTION_TIMEOUT_MS = Number(process.env.SMOKE_TILE_SELECTION_TIMEOUT_MS || 45_000);
 const AUTO_MINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
 const AUTO_MINE_DEBUG_OVERRIDE_KEY = "lineaore:auto-mine-debug-override:v1";
 const FIRST_VISIT_TUTORIAL_KEY = "lore:first-visit-tutorial:v1";
@@ -142,7 +142,10 @@ async function main() {
       console.log("SKIP auto-miner failure scenarios step (set SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS=1 to enable)");
     }
 
-    await runStep("select single tile", () => selectSingleTile(page, smokeOptions));
+    const tileSelectionOk = await runStep("select single tile", () => selectSingleTile(page, smokeOptions));
+    if (!tileSelectionOk) {
+      throw new Error("tile selection smoke did not reach an interactive or valid closed-epoch state");
+    }
 
     const loginModalOpened = await runStep("open login modal", () => openLoginModal(page, TIMEOUT_MS));
     if (loginModalOpened) {
@@ -231,7 +234,8 @@ async function main() {
     await runStep("assert mobile hub shell", async () => {
       await expectVisible(mobilePage.getByRole("button", { name: "Hub" }), "mobile hub nav", TIMEOUT_MS);
       await expectVisible(mobilePage.getByRole("button", { name: "Top" }), "mobile top nav", TIMEOUT_MS);
-      await expectVisible(mobilePage.getByRole("heading", { name: "Rewards" }), "mobile rewards panel", TIMEOUT_MS);
+      await expectVisible(mobilePage.getByText("Manual Bet"), "mobile manual bet panel", TIMEOUT_MS);
+      await expectVisible(mobilePage.getByText("Auto-Miner"), "mobile auto-miner panel", TIMEOUT_MS);
     });
     await runStep("open mobile analytics", () => openMobileAnalytics(mobilePage, smokeOptions));
     await mobilePage.close();

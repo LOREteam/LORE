@@ -9,13 +9,15 @@ type UiButtonVariant =
   | "success"
   | "danger"
   | "warning"
-  | "sky";
+  | "sky"
+  | "locked"
+  | "pending";
 
 type UiButtonSize = "xs" | "sm" | "md";
 
 const variantClasses: Record<UiButtonVariant, string> = {
   primary:
-    "border-violet-400/45 bg-violet-500/15 text-violet-200 hover:bg-violet-500/22 hover:shadow-[0_0_16px_rgba(124,58,237,0.2)]",
+    "border-violet-500/40 bg-linear-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-600/20 hover:from-violet-500 hover:to-indigo-500 hover:shadow-violet-500/30",
   secondary:
     "border-violet-500/25 bg-violet-500/10 text-violet-300 hover:bg-violet-500/16 hover:shadow-[0_0_12px_rgba(124,58,237,0.16)]",
   ghost: "border-white/12 bg-white/2 text-slate-300 hover:bg-white/6 hover:text-white",
@@ -26,6 +28,9 @@ const variantClasses: Record<UiButtonVariant, string> = {
   warning:
     "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/16 hover:shadow-[0_0_12px_rgba(245,158,11,0.18)]",
   sky: "border-sky-500/35 bg-sky-500/10 text-sky-300 hover:bg-sky-500/16 hover:shadow-[0_0_12px_rgba(56,189,248,0.16)]",
+  locked: "border-white/5 bg-[#13132a] text-gray-400 hover:bg-[#16162f]",
+  pending:
+    "border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/14 hover:shadow-[0_0_12px_rgba(245,158,11,0.14)]",
 };
 
 const sizeClasses: Record<UiButtonSize, string> = {

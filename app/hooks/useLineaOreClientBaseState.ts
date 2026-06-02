@@ -55,7 +55,7 @@ export function useLineaOreClientBaseState({
   const coldBootDefaults =
     uiHydrated && gameData.liveStateBootstrapPending && !gameData.liveStateReady;
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
-  const chart = useChartData(gameData.realTotalStaked, shell.isPageVisible);
+  const chart = useChartData(gameData.realTotalStaked, shell.isPageVisible, gameData.visualEpoch);
 
   return useMemo(
     () => ({

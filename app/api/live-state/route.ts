@@ -21,6 +21,7 @@ import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "..
 
 const LIVE_STATE_CACHE_MS = 4_000;
 const LIVE_STATE_REQUEST_TIMEOUT_MS = 8_000;
+const LIVE_STATE_STALE_FAST_PATH_MS = 60_000;
 const LIVE_STATE_CACHE_MAX_KEYS = 2;
 const ROUTE_METRIC_KEY = "api/live-state";
 const CACHE_KEY = "latest";
@@ -60,18 +61,12 @@ function startLiveStateRefresh() {
   });
 }
 
+function canServeStaleImmediately(payload: LiveStatePayload, now: number) {
+  return Number.isFinite(payload.fetchedAt) && now - payload.fetchedAt <= LIVE_STATE_STALE_FAST_PATH_MS;
+}
+
 export async function GET(request: Request) {
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
-  const rateLimited = await enforceSharedRateLimit(request, {
-    bucket: "api-live-state",
-    limit: 120,
-    windowMs: 60_000,
-  });
-  if (rateLimited) {
-    failRouteMetric(metric, 429);
-    return rateLimited;
-  }
-
   const now = Date.now();
   const cached = liveStateRouteCache.getFresh(CACHE_KEY, now);
   if (cached) {
@@ -84,11 +79,21 @@ export async function GET(request: Request) {
     loadLiveStateSnapshot(Number.POSITIVE_INFINITY) ??
     buildStoredLiveStateBootstrap();
 
-  if (staleCache) {
+  if (staleCache && canServeStaleImmediately(staleCache, now)) {
     markRouteStaleServed(ROUTE_METRIC_KEY);
     startLiveStateRefresh();
     finishRouteMetric(metric, 200);
     return jsonNoStore(staleCache);
+  }
+
+  const rateLimited = await enforceSharedRateLimit(request, {
+    bucket: "api-live-state",
+    limit: 120,
+    windowMs: 60_000,
+  });
+  if (rateLimited) {
+    failRouteMetric(metric, 429);
+    return rateLimited;
   }
 
   try {

@@ -8,8 +8,8 @@ import { APP_CHAIN, CONTRACT_ADDRESS, SERVER_RPC_URLS } from "../_lib/dataBridge
 
 export const BOOTSTRAP_RESOLVE_ABI = RESOLVE_ABI;
 
-// V8 atomic resolve: one keeper tx per stuck epoch. A modest throttle is
-// enough — the keeper is only needed when no player bet triggers
+// V9 atomic resolve: one keeper tx per stuck epoch. A modest throttle is
+// enough - the keeper is only needed when no player bet triggers
 // _autoResolveIfNeeded in the following round.
 export const RESOLVE_THROTTLE_MS = 5_000;
 export const BOOTSTRAP_RPC_UNAVAILABLE_RETRY_MS = 12_000;

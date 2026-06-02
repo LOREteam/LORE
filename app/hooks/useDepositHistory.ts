@@ -50,6 +50,7 @@ interface DepositCacheEnvelope {
 }
 
 const DEPOSIT_CACHE_TTL_MS = 30_000;
+const DEPOSIT_CACHE_WRITE_MIN_MS = 120_000;
 const SYNC_EPOCH_PREFETCH_LIMIT = 64;
 const EPOCHS_FETCH_CHUNK = 100;
 const REWARDS_FETCH_CHUNK = 200;
@@ -251,6 +252,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
   const requestIdRef = useRef(0);
   const mountedRef = useRef(false);
   const dataRef = useRef<DepositEntry[] | null>(null);
+  const cacheSavedAtRef = useRef<Record<string, number | null>>({});
 
   useEffect(() => {
     dataRef.current = data;
@@ -327,7 +329,16 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
           setData(entries);
         }
       }
-      saveCachedDeposits(normalizedUser, entries);
+      const now = Date.now();
+      const savedAt = cacheSavedAtRef.current[normalizedUser] ?? null;
+      const shouldWriteCache =
+        entriesChanged ||
+        !savedAt ||
+        now - savedAt >= DEPOSIT_CACHE_WRITE_MIN_MS;
+      if (shouldWriteCache) {
+        saveCachedDeposits(normalizedUser, entries);
+        cacheSavedAtRef.current[normalizedUser] = now;
+      }
 
       const deferredEpochs = uniqueEpochs.slice(SYNC_EPOCH_PREFETCH_LIMIT);
       const deferredMissingEpochs = deferredEpochs.filter((epoch) => !epochsMap[String(epoch)]);
@@ -348,7 +359,16 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
               setData(fullEntries);
             }
           }
-          saveCachedDeposits(normalizedUser, fullEntries);
+          const deferredNow = Date.now();
+          const deferredSavedAt = cacheSavedAtRef.current[normalizedUser] ?? null;
+          const shouldWriteDeferredCache =
+            fullEntriesChanged ||
+            !deferredSavedAt ||
+            deferredNow - deferredSavedAt >= DEPOSIT_CACHE_WRITE_MIN_MS;
+          if (shouldWriteDeferredCache) {
+            saveCachedDeposits(normalizedUser, fullEntries);
+            cacheSavedAtRef.current[normalizedUser] = deferredNow;
+          }
         })();
       }
     } catch (err) {
@@ -396,6 +416,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
     }
 
     const cached = loadCachedDeposits(userAddress);
+    cacheSavedAtRef.current[userAddress.toLowerCase()] = cached.savedAt;
     if (mountedRef.current) {
       setData(cached.data);
       setError(null);

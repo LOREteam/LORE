@@ -23,6 +23,9 @@ export interface WalletSettingsModalProps {
   isWithdrawingEth: boolean;
   isDepositingEth: boolean;
   isDepositingToken: boolean;
+  isClearingEip7702Delegation: boolean;
+  embeddedWallet7702DelegateAddress: string | null;
+  embeddedWalletCodeChecking: boolean;
   onWithdrawAmountChange: (value: string) => void;
   onWithdrawEthAmountChange: (value: string) => void;
   onDepositEthAmountChange: (value: string) => void;
@@ -35,6 +38,7 @@ export interface WalletSettingsModalProps {
   onWithdrawEthToExternal: () => void;
   onDepositEthToEmbedded: () => void;
   onDepositTokenToEmbedded: () => void;
+  onClearEip7702Delegation: () => void;
   walletTransfers: WalletTransfersSummary | null;
   walletTransfersLoading: boolean;
   onLoadWalletTransfers: () => void;

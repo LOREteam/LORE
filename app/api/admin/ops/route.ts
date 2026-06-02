@@ -104,7 +104,7 @@ function sanitizeLogText(line: string) {
   return line
     .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
     .replace(/\u0000/g, "")
-    .replace(/тЦ▓|тЬУ|тАФ|тЖТ|вЂњ|вЂќ|вЂ"/g, " ")
+    .replace(/\u0442\u0426\u2593|\u0442\u042c\u0423|\u0442\u0410\u0424|\u0442\u0416\u0422|\u0432\u0402\u045A|\u0432\u0402\u045C|\u0432\u0402"/g, " ")
     .replace(/[^\x20-\x7E\u0400-\u04FF]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

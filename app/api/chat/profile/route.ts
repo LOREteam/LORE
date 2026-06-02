@@ -61,7 +61,7 @@ export async function PUT(request: NextRequest) {
       customAvatar: payload.customAvatar,
       updatedAt: payload.updatedAt,
     });
-    chatProfileRouteCache.invalidate(`wallet:${walletAddress}`);
+    chatProfileRouteCache.clear();
 
     return applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });
   } catch (error) {
@@ -90,15 +90,14 @@ export async function GET(request: NextRequest) {
             .filter(Boolean),
         )].slice(0, 100)
       : [];
-    const cacheKey = walletAddress ? `wallet:${walletAddress.toLowerCase()}` : "all";
-    const cached = chatProfileRouteCache.getFresh(cacheKey);
-    if (cached) {
-      return applyNoStoreHeaders(NextResponse.json(cached));
-    }
-
     if (walletAddress) {
       if (!isAddress(walletAddress)) {
         return applyNoStoreHeaders(NextResponse.json({ error: "Invalid walletAddress" }, { status: 400 }));
+      }
+      const cacheKey = `wallet:${walletAddress.toLowerCase()}`;
+      const cached = chatProfileRouteCache.getFresh(cacheKey);
+      if (cached) {
+        return applyNoStoreHeaders(NextResponse.json(cached));
       }
       const payload = {
         profile: getChatProfile(walletAddress.toLowerCase()),
@@ -123,6 +122,11 @@ export async function GET(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json(payload));
     }
 
+    const cacheKey = "all";
+    const cached = chatProfileRouteCache.getFresh(cacheKey);
+    if (cached) {
+      return applyNoStoreHeaders(NextResponse.json(cached));
+    }
     const payload = {
       profiles: getChatProfiles(),
     };

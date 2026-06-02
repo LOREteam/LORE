@@ -37,6 +37,7 @@ interface UseLineaOreHubRuntimeOptions {
   activeTab: string;
   isPageVisible: boolean;
   embeddedWalletAddress: string | null;
+  embeddedWalletReady: boolean;
   ensureEmbeddedWallet: () => Promise<void>;
   getAccessToken: () => Promise<string | null>;
   notify: NotifyFn;
@@ -73,6 +74,7 @@ export function useLineaOreHubRuntime({
   activeTab,
   isPageVisible,
   embeddedWalletAddress,
+  embeddedWalletReady,
   ensureEmbeddedWallet,
   getAccessToken,
   notify,
@@ -104,9 +106,13 @@ export function useLineaOreHubRuntime({
   openWalletSettings,
   minEthForGas,
 }: UseLineaOreHubRuntimeOptions) {
+  const miningEmbeddedWalletAddress = embeddedWalletReady ? embeddedWalletAddress : null;
+  const miningSendTransactionSilent = embeddedWalletReady ? sendTransactionSilent : undefined;
+  const miningSendTransaction7702 = embeddedWalletReady ? sendTransaction7702 : undefined;
+  const miningSignEip7702Delegation = embeddedWalletReady ? signEip7702Delegation : undefined;
   const miningOptions = usePageMiningOptions({
-    embeddedWalletAddress,
-    ensureEmbeddedWallet,
+    embeddedWalletAddress: miningEmbeddedWalletAddress,
+    ensureEmbeddedWallet: embeddedWalletReady ? ensureEmbeddedWallet : undefined,
     getAccessToken,
     notify,
     playSound,
@@ -115,10 +121,10 @@ export function useLineaOreHubRuntime({
     refetchGridEpochData,
     refetchTileData,
     refetchUserBets,
-    sendTransactionSilent,
-    sendTransaction7702,
-    signEip7702Delegation,
-    eip7702,
+    sendTransactionSilent: miningSendTransactionSilent,
+    sendTransaction7702: miningSendTransaction7702,
+    signEip7702Delegation: miningSignEip7702Delegation,
+    eip7702: embeddedWalletReady ? eip7702 : undefined,
   });
 
   const mining = useMining(miningOptions);
@@ -174,6 +180,7 @@ export function useLineaOreHubRuntime({
     embeddedWalletAddress,
     handleTileClick: mining.handleTileClick,
     historyViewData,
+    isAnalyzing: epochPresentation.isAnalyzing,
     isRevealing,
     liveStateReady,
     playSound,

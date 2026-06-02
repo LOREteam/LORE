@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { delay } from "../lib/utils";
 
 interface UseMiningRoundCompletionOptions {
@@ -35,6 +35,30 @@ export function useMiningRoundCompletion({
   setSelectedTilesEpoch,
   refetchDelayMs,
 }: UseMiningRoundCompletionOptions) {
+  const mountedRef = useRef(false);
+  const timeoutIdsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const scheduleTimeout = useCallback((callback: () => void, delayMs: number) => {
+    const timeoutId = setTimeout(() => {
+      timeoutIdsRef.current = timeoutIdsRef.current.filter((id) => id !== timeoutId);
+      if (mountedRef.current) {
+        callback();
+      }
+    }, delayMs);
+    timeoutIdsRef.current.push(timeoutId);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const timeoutId of timeoutIdsRef.current) {
+        clearTimeout(timeoutId);
+      }
+      timeoutIdsRef.current = [];
+    };
+  }, []);
+
   return useCallback(
     async (params: {
       betStr: string;
@@ -82,11 +106,11 @@ export function useMiningRoundCompletion({
       refetchGridEpochData?.();
       refetchTileData();
       refetchUserBets();
-      setTimeout(() => {
+      scheduleTimeout(() => {
         refetchTileData();
         refetchUserBets();
       }, 1500);
-      setTimeout(() => {
+      scheduleTimeout(() => {
         setSelectedTiles([]);
         setSelectedTilesEpoch(null);
       }, 3500);
@@ -100,6 +124,7 @@ export function useMiningRoundCompletion({
       refetchTileData,
       refetchUserBets,
       saveSession,
+      scheduleTimeout,
       setAutoMineProgress,
       setSelectedTiles,
       setSelectedTilesEpoch,

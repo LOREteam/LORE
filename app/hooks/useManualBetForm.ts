@@ -7,6 +7,7 @@ const MANUAL_BET_AMOUNT_KEY = "lineaore:manual-bet-amount:v1";
 
 interface UseManualBetFormOptions {
   formattedBalance: string | null;
+  walletConnected: boolean;
   liveStateReady?: boolean;
   selectedTilesCount: number;
   isPending: boolean;
@@ -17,12 +18,12 @@ interface UseManualBetFormOptions {
 
 export function useManualBetForm({
   formattedBalance,
+  walletConnected,
   liveStateReady = true,
   selectedTilesCount,
   isPending,
   isRevealing,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  isAnalyzing: _isAnalyzing = false,
+  isAnalyzing = false,
   isAutoMining,
 }: UseManualBetFormOptions) {
   const [betAmount, setBetAmount] = useState("10.0");
@@ -48,13 +49,13 @@ export function useManualBetForm({
   const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
   const manualInsufficient = balance !== null && totalBet > 0 && totalBet > balance;
   const disabledReason =
-    !liveStateReady
+    !walletConnected
+      ? null
+      : !liveStateReady
       ? "Waiting for live epoch sync"
       : betAmountError
         ? betAmountError
-        : selectedTilesCount === 0
-          ? "Select at least one tile"
-          : isRevealing
+        : isRevealing || isAnalyzing
             ? "Round is resolving"
             : isAutoMining
               ? "Auto-Miner is running"
@@ -62,11 +63,13 @@ export function useManualBetForm({
                 ? "Insufficient LINEA balance"
                 : null;
   const isDisabled =
+    !walletConnected ||
     !liveStateReady ||
     Boolean(betAmountError) ||
     isPending ||
     selectedTilesCount === 0 ||
     isRevealing ||
+    isAnalyzing ||
     isAutoMining ||
     manualInsufficient;
 
@@ -80,3 +83,5 @@ export function useManualBetForm({
     isDisabled,
   };
 }
+
+export type ManualBetFormState = ReturnType<typeof useManualBetForm>;

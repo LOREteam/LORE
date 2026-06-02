@@ -83,7 +83,10 @@ export function ErrorCatcher() {
         const serialized = args
           .map((arg) => (typeof arg === "string" ? arg : ""))
           .join(" ");
-        if (serialized.includes("passed a child from Me")) {
+        if (
+          serialized.includes("passed a child from Me") ||
+          serialized.includes("passed a child from xe")
+        ) {
           // Privy currently emits this warning internally under React 19 in dev.
           return true;
         }

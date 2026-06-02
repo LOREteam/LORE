@@ -6,6 +6,7 @@ import { UiButton } from "../ui/UiButton";
 
 interface HeaderWalletCardProps {
   authenticated: boolean;
+  privyReady: boolean;
   embeddedWalletAddress: string | null;
   embeddedWalletSyncing: boolean;
   embeddedAddressCopied: boolean;
@@ -50,6 +51,7 @@ function HeaderWalletActions({
 
 export function HeaderWalletCard({
   authenticated,
+  privyReady,
   embeddedWalletAddress,
   embeddedWalletSyncing,
   embeddedAddressCopied,
@@ -68,17 +70,18 @@ export function HeaderWalletCard({
     : null;
 
   return (
-    <div id="header-wallet-card" className="min-[900px]:col-span-3 min-[900px]:h-22.5 min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-surface-raised shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden animate-slide-up" style={{ animationDelay: "0.15s" }}>
+    <div id="header-wallet-card" className="min-[900px]:col-span-3 min-[900px]:h-22.5 min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-surface-raised shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden">
       {!authenticated ? (
         <UiButton
           onClick={onLogin}
-          variant="primary"
+          aria-busy={!privyReady}
+          variant={privyReady ? "secondary" : "pending"}
           size="md"
           fullWidth
           uppercase
-          className="h-full min-h-16 px-4 py-2 text-[10px] tracking-[0.08em] text-white bg-linear-to-r from-violet-600 to-indigo-600 border-violet-500/35 hover:from-violet-500 hover:to-indigo-500 shadow-lg shadow-violet-500/20 shimmer-btn"
+          className="h-14 min-h-14 rounded-xl border-violet-300/14 bg-linear-to-r from-violet-700/38 via-violet-600/32 to-indigo-600/38 px-4 py-2 text-[11px] font-black tracking-[0.1em] text-violet-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.055)] hover:border-violet-300/24 hover:from-violet-600/46 hover:via-violet-500/38 hover:to-indigo-500/46 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_18px_rgba(124,58,237,0.12)] min-[900px]:h-full min-[900px]:min-h-16"
         >
-          Login / Connect
+          {privyReady ? "Login / Connect" : "Connect Wallet"}
         </UiButton>
       ) : embeddedWalletAddress ? (
         <>
@@ -87,14 +90,14 @@ export function HeaderWalletCard({
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
               <span className="text-[10px] font-bold uppercase tracking-[0.08em] flex items-center gap-1 text-emerald-400">
-                <span className="w-1 h-1 rounded-full bg-emerald-400 animate-synced-pulse" />
+                <span className="w-1 h-1 rounded-full bg-emerald-400" />
                 Active
               </span>
             </div>
             <div className="flex items-center gap-1">
               <button
                 onClick={onCopyEmbeddedAddress}
-                className={embeddedAddressCopied ? "text-[11px] font-mono font-bold text-emerald-300 drop-shadow-[0_0_10px_rgba(52,211,153,0.3)] leading-tight transition-colors duration-200 flex items-center gap-1 group animate-pulse" : "text-[11px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] leading-tight hover:text-emerald-300 transition-colors flex items-center gap-1 group"}
+                className={embeddedAddressCopied ? "text-[11px] font-mono font-bold text-emerald-300 drop-shadow-[0_0_10px_rgba(52,211,153,0.3)] leading-tight transition-colors duration-200 flex items-center gap-1 group" : "text-[11px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] leading-tight hover:text-emerald-300 transition-colors flex items-center gap-1 group"}
                 title={embeddedAddressCopied ? "Copied" : "Copy address"}
               >
                 {embeddedAddressCopied ? "Copied" : shortenAddress(embeddedWalletAddress)}
@@ -129,8 +132,8 @@ export function HeaderWalletCard({
               <span className="lore-nums text-gray-400">
                 {privyEthBalanceLoading ? <span className="inline-block h-3 w-12 animate-pulse rounded bg-white/10" /> : privyEthBalance}<span className="text-gray-500 font-medium"> ETH</span>
               </span>
-              <span className="lore-nums text-white font-bold">
-                {privyTokenBalanceLoading ? <span className="inline-block h-3 w-16 animate-pulse rounded bg-white/10" /> : privyTokenBalance}<span className="text-gray-500 font-medium"> LINEA</span>
+              <span className="lore-nums text-[13px] font-black leading-none text-white min-[900px]:text-sm">
+                {privyTokenBalanceLoading ? <span className="inline-block h-3 w-16 animate-pulse rounded bg-white/10" /> : privyTokenBalance}<span className="text-[10px] font-medium text-gray-500"> LINEA</span>
               </span>
             </div>
           </div>
@@ -142,7 +145,7 @@ export function HeaderWalletCard({
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
               <span className="text-[10px] font-bold uppercase tracking-[0.08em] flex items-center gap-1 text-violet-300/90">
-                <span className="w-1 h-1 rounded-full bg-violet-300 animate-pulse" />
+                <span className="w-1 h-1 rounded-full bg-violet-300" />
                 Syncing
               </span>
             </div>

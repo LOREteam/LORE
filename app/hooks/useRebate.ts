@@ -71,6 +71,7 @@ const CLAIM_GAS_HEADROOM_BPS = 1_200n;
 const CLAIM_GAS_BUFFER = 80_000n;
 const REBATE_CLIENT_CACHE_TTL_MS = 60_000;
 const REBATE_CLIENT_CACHE_DISPLAY_TTL_MS = 12 * 60 * 60 * 1000;
+const REBATE_CLIENT_CACHE_WRITE_MIN_MS = 120_000;
 const REBATE_REFRESH_MS = 30_000;
 const REBATE_HIDDEN_REFRESH_MS = 120_000;
 const REBATE_WARM_REFRESH_MS = 90_000;
@@ -441,7 +442,7 @@ export function useRebate(options?: UseRebateOptions) {
     if (!CONTRACT_HAS_REBATE_API) {
       if (!rebateUnavailableWarningRef.current) {
         rebateUnavailableWarningRef.current = true;
-        log.info("Rebate", "disabled for legacy contract profile");
+        log.info("Rebate", "disabled for configured contract profile");
       }
       if (mountedRef.current) {
         setIsSupported(false);
@@ -486,19 +487,25 @@ export function useRebate(options?: UseRebateOptions) {
 
       if (requestId !== requestIdRef.current) return;
 
-      applyPayload(payload);
+      const changed = applyPayload(payload);
       const fetchedAt = Date.now();
       hasLoadedRef.current = true;
       if (mountedRef.current) {
         setHasLoaded(true);
       }
-      cacheSavedAtRef.current = fetchedAt;
       const cachedPayload = {
         ...payload,
         cachedAt: fetchedAt,
       } satisfies CachedRebateInfo;
       cachedPayloadRef.current[rebateAddress] = cachedPayload;
-      saveCachedRebatePayload(rebateAddress, payload);
+      const shouldWriteCache =
+        changed ||
+        !cacheSavedAtRef.current ||
+        fetchedAt - cacheSavedAtRef.current >= REBATE_CLIENT_CACHE_WRITE_MIN_MS;
+      if (shouldWriteCache) {
+        cacheSavedAtRef.current = fetchedAt;
+        saveCachedRebatePayload(rebateAddress, payload);
+      }
       return true;
     } catch (err) {
       if (
@@ -554,10 +561,11 @@ export function useRebate(options?: UseRebateOptions) {
       ? (isPageVisible ? REBATE_REFRESH_MS : REBATE_HIDDEN_REFRESH_MS)
       : REBATE_WARM_REFRESH_MS;
     const savedAt = cacheSavedAtRef.current;
-    const initialDelay =
+    const cachedDelay =
       savedAt && Date.now() - savedAt < REBATE_CLIENT_CACHE_TTL_MS
         ? REBATE_CLIENT_CACHE_TTL_MS - (Date.now() - savedAt)
         : 0;
+    const initialDelay = active ? cachedDelay : Math.max(cachedDelay, REBATE_WARM_REFRESH_MS);
     let cancelled = false;
 
     const schedule = (delayMs: number) => {

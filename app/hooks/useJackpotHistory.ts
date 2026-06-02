@@ -25,6 +25,7 @@ interface JackpotHistoryCacheEnvelope {
 }
 
 const REFRESH_MS = 45_000;
+const CACHE_WRITE_MIN_MS = 120_000;
 const WARN_THROTTLE_MS = 15_000;
 const JACKPOT_LIMIT = 200;
 const STORAGE_KEY = `lore:jackpots-cache:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
@@ -213,8 +214,15 @@ export function useJackpotHistory(enabled = true) {
         }
         setError(null);
       }
-      saveCachedEntries(sorted);
-      cacheSavedAtRef.current = Date.now();
+      const now = Date.now();
+      const shouldWriteCache =
+        changed ||
+        !cacheSavedAtRef.current ||
+        now - cacheSavedAtRef.current >= CACHE_WRITE_MIN_MS;
+      if (shouldWriteCache) {
+        saveCachedEntries(sorted);
+        cacheSavedAtRef.current = now;
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Network error";
       if (isNetworkFetchError(err)) {

@@ -23,12 +23,12 @@ const ENABLE_AUTO_RESOLVE_SWEEP = getConfiguredAutoResolveSweepEnabled();
 const AUTO_RESOLVE_RETRY_AFTER_MS = 60_000;
 const MIN_ETH_FOR_GAS = 0.0005;
 // Generous client-side timeout: the server-side sendTransaction path on a
-// busy Linea RPC can genuinely take 15–25 s, especially when replacing a
+// busy Linea RPC can genuinely take 15-25 s, especially when replacing a
 // pending tx. A tight cap here produced a flood of false "bootstrap-timeout"
 // warnings while the tx actually landed.
 const BOOTSTRAP_RESOLVE_REQUEST_TIMEOUT_MS = 35_000;
 /** How long to wait after timer hits 0 before pinging the keeper.
- * V8 atomic resolve: gives organic player bets a chance to trigger the
+ * V9 atomic resolve: gives organic player bets a chance to trigger the
  * contract's built-in `_autoResolveIfNeeded()` first, so the keeper only
  * fires when nobody actually wants to play. */
 const KEEPER_TRIGGER_INITIAL_DELAY_MS = 4_000;
@@ -214,7 +214,7 @@ export function useAutoResolve({
           functionName: "epochs",
           args: [BigInt(epochKey)],
         })) as [bigint, bigint, bigint, boolean, boolean, boolean];
-        // Index 0 = totalPool. If zero, no one bet → don't resolve.
+        // Index 0 = totalPool. If zero, no one bet - don't resolve.
         return epochData[0] > 0n;
       } catch {
         return true; // network error: let the keeper try
@@ -222,8 +222,9 @@ export function useAutoResolve({
     };
 
     const run = async () => {
-      // Bail out early if there are no bets — round just sits frozen.
+      // Bail out early if there are no bets - round just sits frozen.
       if (!(await epochHasBets())) {
+        if (cancelled) return;
         log.info("AutoResolve", "skipping keeper trigger: epoch has no bets", { epoch: epochKey });
         return;
       }
@@ -252,6 +253,7 @@ export function useAutoResolve({
             cache: "no-store",
             signal: controller.signal,
           }).finally(() => window.clearTimeout(timeoutId));
+          if (cancelled) return;
           const payload = (await res.json().catch(() => null)) as
             | {
                 ok?: boolean;
@@ -266,6 +268,7 @@ export function useAutoResolve({
                 isExpired?: boolean;
               }
             | null;
+          if (cancelled) return;
 
           if (payload?.ok && payload.action === "sent") {
             log.info("AutoResolve", "server keeper sent resolve tx", {
@@ -344,7 +347,7 @@ export function useAutoResolve({
             }
 
             if (noopReason === "epoch_empty") {
-              // Round is frozen because nobody bet — that's intentional.
+              // Round is frozen because nobody bet - that's intentional.
               // Stop polling for this epoch; the contract's built-in
               // _autoResolveIfNeeded will handle it once a player shows up.
               markRetryScheduled(epochKey);
@@ -358,7 +361,7 @@ export function useAutoResolve({
               noopReason === "resolve_nonce_already_used" ||
               payload.isResolved === true
             ) {
-              // Epoch IS resolved on-chain — force refetch so UI picks up the new epoch.
+              // Epoch IS resolved on-chain - force refetch so UI picks up the new epoch.
               autoResolveAttemptedRef.current = epochKey;
               autoResolveAttemptTsRef.current = Date.now();
               clearResolveGuard();
@@ -417,6 +420,7 @@ export function useAutoResolve({
           }
           markRetryScheduled(epochKey);
         } catch (err) {
+          if (cancelled) return;
           log.warn("AutoResolve", "server keeper bootstrap resolve request failed", err);
           if (ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK && await tryClientResolveEpoch(epochKey)) {
             autoResolveAttemptedRef.current = epochKey;
@@ -453,6 +457,7 @@ export function useAutoResolve({
 
     const SWEEP_INTERVAL_MS = 600_000;
     const SWEEP_LOOKBACK = 5;
+    let cancelled = false;
 
     const sweep = async () => {
       if (sweepRunningRef.current) return;
@@ -463,9 +468,11 @@ export function useAutoResolve({
           abi: GAME_ABI,
           functionName: "currentEpoch",
         })) as bigint;
+        if (cancelled) return;
 
         const start = liveEpoch - BigInt(SWEEP_LOOKBACK);
         for (let ep = start < 1n ? 1n : start; ep < liveEpoch; ep++) {
+          if (cancelled) return;
           try {
             const epochData = (await publicClient.readContract({
               address: CONTRACT_ADDRESS,
@@ -473,6 +480,7 @@ export function useAutoResolve({
               functionName: "epochs",
               args: [ep],
             })) as [bigint, bigint, bigint, boolean, boolean, boolean];
+            if (cancelled) return;
             if (epochData[3]) continue;
 
             const data = encodeFunctionData({ abi: GAME_ABI, functionName: "resolveEpoch", args: [ep] });
@@ -486,12 +494,14 @@ export function useAutoResolve({
               log.info("AutoResolve", `sweep: estimateGas reverted for epoch ${ep.toString()}, skipping`);
               continue;
             }
+            if (cancelled) return;
             const hash = await sendTransactionSilent({
               to: CONTRACT_ADDRESS,
               data,
               gas: 300_000n,
               feeMode: "keeper",
             });
+            if (cancelled) return;
             log.info("AutoResolve", "sweep resolved epoch", { epoch: ep.toString(), hash });
             await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
           } catch {
@@ -512,6 +522,7 @@ export function useAutoResolve({
     }, SWEEP_INTERVAL_MS);
     const initialTimer = setTimeout(sweep, 15_000);
     return () => {
+      cancelled = true;
       clearInterval(id);
       clearTimeout(initialTimer);
     };

@@ -1,8 +1,8 @@
 "use client";
 
+import Image from "next/image";
 import React from "react";
 import { UiButton } from "../ui/UiButton";
-import { uiTokens } from "../ui/tokens";
 
 interface HeaderPoolChartProps {
   chartHasData: boolean;
@@ -27,78 +27,122 @@ export function HeaderPoolChart({
   realTotalStaked,
   rolloverAmount,
 }: HeaderPoolChartProps) {
+  const chartId = React.useId().replace(/:/g, "");
+  const previousTotalRef = React.useRef(realTotalStaked);
+  const [depositPulseActive, setDepositPulseActive] = React.useState(false);
+  const chartStrokeId = `${chartId}-chart-stroke`;
+  const gridId = `${chartId}-grid-dots`;
+  const panelShadeId = `${chartId}-panel-shade`;
+  const displayRolloverAmount =
+    rolloverAmount > 0
+      ? rolloverAmount
+      : !liveStateReady && coldBootDefaults && realTotalStaked > 0
+        ? realTotalStaked
+        : 0;
+  const fallbackLinePath = realTotalStaked > 0
+    ? "M 1,56 C 10,56 10,56 19,56 C 28,56 28,50 37,50 C 46,50 46,50 55,50 C 64,50 64,46 73,46 C 82,46 82,46 91,46 C 95,46 95,43 99,43"
+    : "";
+  const visibleLinePath = hydrated ? (linePath || fallbackLinePath) : fallbackLinePath;
+  const showChartVisual = liveStateReady && (chartHasData || Boolean(visibleLinePath));
+
+  React.useEffect(() => {
+    const previous = previousTotalRef.current;
+    previousTotalRef.current = realTotalStaked;
+    if (realTotalStaked <= previous) return;
+
+    setDepositPulseActive(true);
+    const timeoutId = window.setTimeout(() => setDepositPulseActive(false), 1200);
+    return () => window.clearTimeout(timeoutId);
+  }, [realTotalStaked]);
+
   return (
-    <div className="min-[900px]:col-span-5 min-[900px]:h-22.5 relative rounded-xl bg-[#080812] border border-white/6 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden min-h-16.5 sm:min-h-16 animate-slide-up" style={{ animationDelay: "0.1s" }}>
-      <div className="absolute top-2.5 left-3 z-20 pointer-events-none">
-        <div className="text-[9px] uppercase font-bold text-gray-500 tracking-wider flex flex-wrap items-center gap-1.5 mb-0.5">
-          Total Pool
-          {hydrated && liveStateReady && rolloverAmount > 0 && (
-            <span className="lore-nums bg-emerald-500/15 text-emerald-400 px-1 py-px rounded text-[7px] border border-emerald-500/25">
-              +{rolloverAmount.toFixed(2)} rollover
-            </span>
-          )}
+    <div className="pool-vault-panel min-[900px]:col-span-5 min-[900px]:h-22.5 relative rounded-xl bg-[#080812] border border-white/6 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden min-h-17 sm:min-h-16">
+      <div className="absolute inset-y-0 left-2.5 z-20 flex w-[6.95rem] flex-col justify-center gap-0.75 pointer-events-none sm:left-3 sm:w-[8.8rem] sm:gap-1">
+        <div>
+          <div className="text-[8px] uppercase font-bold text-slate-500 tracking-wider leading-none">
+            Total Pool
+          </div>
+          <div className="lore-hud-number mt-0.5 max-w-full truncate text-[15px] font-black text-white leading-none sm:text-lg">
+            {liveStateReady || coldBootDefaults ? (
+              <>
+                {realTotalStaked.toFixed(2)}
+              </>
+            ) : (
+              <span className="inline-flex items-center">
+                <span className="inline-block h-4 w-20 rounded bg-white/10 animate-pulse" />
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 text-[8px] font-black uppercase tracking-[0.16em] text-violet-300 leading-none">
+            LINEA
+          </div>
         </div>
-        <div className="lore-nums text-lg font-black text-white leading-tight">
-          {liveStateReady || coldBootDefaults ? (
-            <>
-              {realTotalStaked.toFixed(2)} <span className="text-violet-400 text-xs font-bold">LINEA</span>
-            </>
-          ) : (
-            <span className="inline-flex items-center">
-              <span className="inline-block h-4 w-20 rounded bg-white/10 animate-pulse" />
-            </span>
-          )}
-        </div>
+
+        {displayRolloverAmount > 0 && (
+          <div className="w-full pt-0.5 sm:pt-1">
+            <div className="text-[7px] uppercase font-black tracking-[0.18em] text-emerald-300/70 leading-none">
+              Rollover
+            </div>
+            <div className="lore-hud-number mt-0.5 max-w-full truncate text-[13px] font-black leading-none text-emerald-300 sm:text-sm">
+              +{displayRolloverAmount.toFixed(2)}
+            </div>
+          </div>
+        )}
       </div>
 
       <svg className="absolute inset-0 w-full h-full pointer-events-none" preserveAspectRatio="none">
         <defs>
-          <pattern id="gridDots" width="16" height="16" patternUnits="userSpaceOnUse">
-            <circle cx="8" cy="8" r="0.4" fill="rgba(139,92,246,0.15)" />
+          <pattern id={gridId} width="16" height="16" patternUnits="userSpaceOnUse">
+            <circle cx="8" cy="8" r="0.35" fill="rgba(139,92,246,0.13)" />
           </pattern>
+          <linearGradient id={panelShadeId} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(6,182,212,0.04)" />
+            <stop offset="56%" stopColor="rgba(139,92,246,0.05)" />
+            <stop offset="100%" stopColor="rgba(192,132,252,0.08)" />
+          </linearGradient>
         </defs>
-        <rect width="100%" height="100%" fill="url(#gridDots)" />
-        <line x1="0" y1="33%" x2="100%" y2="33%" stroke="rgba(139,92,246,0.06)" strokeWidth="1" strokeDasharray="4 8" />
-        <line x1="0" y1="66%" x2="100%" y2="66%" stroke="rgba(139,92,246,0.06)" strokeWidth="1" strokeDasharray="4 8" />
+        <rect width="100%" height="100%" fill={`url(#${gridId})`} />
+        <rect width="100%" height="100%" fill={`url(#${panelShadeId})`} />
+        <line x1="16%" y1="0" x2="16%" y2="100%" stroke="rgba(148,163,184,0.08)" strokeWidth="1" />
       </svg>
 
-      <div className="absolute bottom-0 left-0 w-full h-[60%]">
-        {liveStateReady && chartHasData && (
-          <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id="chartStroke" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#06b6d4" />
-                <stop offset="50%" stopColor="#8b5cf6" />
-                <stop offset="100%" stopColor="#c084fc" />
-              </linearGradient>
-              <linearGradient id="chartFill" x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" stopColor="#8b5cf6" stopOpacity="0.25" />
-                <stop offset="50%" stopColor="#6d28d9" stopOpacity="0.08" />
-                <stop offset="100%" stopColor="#06b6d4" stopOpacity="0" />
-              </linearGradient>
-              <filter id="lineGlow">
-                <feGaussianBlur stdDeviation="3" result="blur" />
-                <feMerge>
-                  <feMergeNode in="blur" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
-            </defs>
+      <div className="absolute inset-y-0 left-[7.55rem] right-0 sm:left-[9.7rem] min-[900px]:left-[16%]">
+        {showChartVisual && (
+          <>
+            <Image
+              src="/pool-crystal-reservoir.png"
+              alt=""
+              aria-hidden="true"
+              fill
+              priority
+              loading="eager"
+              sizes="(min-width: 900px) 40vw, 60vw"
+              className={`pool-crystal-art ${depositPulseActive ? "pool-crystal-art-flash" : ""}`}
+            />
+            {visibleLinePath && (
+              <div className="absolute left-0 right-1 top-[24%] z-20 h-[48%] sm:right-0 sm:top-[32%] sm:h-[44%]">
+                <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id={chartStrokeId} x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" stopColor="#06b6d4" />
+                      <stop offset="50%" stopColor="#8b5cf6" />
+                      <stop offset="100%" stopColor="#c084fc" />
+                    </linearGradient>
+                  </defs>
 
-            <path d={`${linePath} L 100,100 L 0,100 Z`} fill="url(#chartFill)" className="transition-all duration-700" />
-            <path d={linePath} fill="none" stroke="url(#chartStroke)" strokeWidth="5" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="transition-all duration-700" opacity="0.12" />
-            <path d={linePath} fill="none" stroke="url(#chartStroke)" strokeWidth="1.5" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="transition-all duration-700" filter="url(#lineGlow)" />
-          </svg>
+                  <path d={visibleLinePath} fill="none" stroke={`url(#${chartStrokeId})`} strokeWidth="2" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="transition-all duration-700" />
+                </svg>
+              </div>
+            )}
+          </>
         )}
       </div>
-
-      <div className="absolute bottom-0 left-0 w-full h-px bg-linear-to-r from-transparent via-violet-500/40 to-transparent" />
 
       <UiButton
         onClick={onToggleMute}
         variant="ghost"
         size="xs"
-        className={`absolute top-2 right-2 z-20 h-8 w-8 p-0 ${uiTokens.radius.sm} bg-black/60 border-white/20 text-violet-200 hover:text-violet-100 hover:border-violet-400/50`}
+        className={`absolute top-2 right-2 z-20 h-5 w-5 p-0 rounded-full bg-transparent border-0 text-violet-200 hover:bg-white/6 hover:text-violet-100`}
         title={muted ? "Unmute sounds" : "Mute sounds"}
         aria-label={muted ? "Unmute sounds" : "Mute sounds"}
       >

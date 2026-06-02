@@ -186,7 +186,7 @@ export function useMiningAutoMineRunner({
         autoResumeRequestedRef.current = true;
         deactivateAutoMineUi({
           phase: "retry-wait",
-          progress: "Auto-miner is still recovering in this tab...",
+          progress: "Waiting for the previous auto-miner run to settle before resuming.",
         });
         return;
       }
@@ -309,7 +309,7 @@ export function useMiningAutoMineRunner({
         stopReason = loopResult.stopReason;
       } catch (err) {
         stopReason = "error";
-        const { diagnosticsErrorKind, rawMessage, sessionExpired, networkDown, walletUnavailable, userMessage } =
+        const { diagnosticsErrorKind, rawMessage, sessionExpired, networkDown, walletUnavailable, pendingNonceBlocked, userMessage } =
           getAutoMineUserMessage(err);
         const epochWaitTimeout = isEpochWaitTimeoutError(err);
         const shouldAutoResume = !sessionExpired && (networkDown || walletUnavailable || epochWaitTimeout);
@@ -322,6 +322,13 @@ export function useMiningAutoMineRunner({
           log.warn("AutoMine", "loop paused by network/receipt timeout", err);
         } else if (walletUnavailable) {
           log.warn("AutoMine", "loop paused: embedded wallet not ready", err);
+        } else if (pendingNonceBlocked) {
+          log.warn("AutoMine", "loop paused: pending nonce blocked", err);
+        } else if (rawMessage === "unknown object error") {
+          log.warn("AutoMine", "loop stopped: unclassified wallet/runtime error", {
+            error: rawMessage,
+            raw: err,
+          });
         } else {
           log.error("AutoMine", "loop error", {
             error: rawMessage || formatUnknownError(err),
