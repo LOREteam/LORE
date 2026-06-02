@@ -18,8 +18,8 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       {
         userAgent: "*",
-        allow: "/",
-        disallow: ["/api/", "/admin", "/dev", "/jackpot-win"],
+        allow: ["/", "/jackpot-win", "/api/jackpots/og"],
+        disallow: ["/api/", "/admin", "/dev"],
       },
     ],
     sitemap: `${siteUrl}/sitemap.xml`,

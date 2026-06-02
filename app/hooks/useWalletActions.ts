@@ -24,6 +24,7 @@ type SilentSendFn = (
   gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint },
 ) => Promise<`0x${string}`>;
 type ExternalSendFn = (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => Promise<`0x${string}`>;
+type ClearEip7702DelegationFn = () => Promise<`0x${string}`>;
 type WriteContractAsyncFn = ReturnType<typeof useWriteContract>["writeContractAsync"];
 type BalanceData = { value: bigint } | null | undefined;
 type ReceiptState = "confirmed" | "pending";
@@ -44,6 +45,8 @@ interface UseWalletActionsOptions {
   writeContractAsync: WriteContractAsyncFn;
   sendTransactionSilent?: SilentSendFn;
   sendTransactionFromExternal: ExternalSendFn;
+  clearEip7702DelegationFromExternal?: ClearEip7702DelegationFn;
+  refreshEmbeddedWalletCode?: () => Promise<string | null> | string | null;
   publicClient?: PublicClient;
   refetchEmbeddedEthBalance: () => Promise<unknown> | unknown;
   refetchEmbeddedTokenBalance: () => Promise<unknown> | unknown;
@@ -64,6 +67,8 @@ export function useWalletActions({
   writeContractAsync,
   sendTransactionSilent,
   sendTransactionFromExternal,
+  clearEip7702DelegationFromExternal,
+  refreshEmbeddedWalletCode,
   publicClient,
   refetchEmbeddedEthBalance,
   refetchEmbeddedTokenBalance,
@@ -87,6 +92,7 @@ export function useWalletActions({
   const [isCancellingPendingTx, setIsCancellingPendingTx] = useState(false);
   const [isClaimingConnectedResolverRewards, setIsClaimingConnectedResolverRewards] = useState(false);
   const [isClaimingEmbeddedResolverRewards, setIsClaimingEmbeddedResolverRewards] = useState(false);
+  const [isClearingEip7702Delegation, setIsClearingEip7702Delegation] = useState(false);
 
   const normalizedConnectedWalletAddress = useMemo(() => {
     if (!connectedWalletAddress) return null;
@@ -402,7 +408,12 @@ export function useWalletActions({
         chainId: APP_CHAIN_ID,
         gas,
       });
-      await waitForReceipt(hash);
+      const receiptState = await waitForReceipt(hash);
+      if (receiptState === "pending") {
+        notify("Resolver reward claim submitted and is still pending confirmation.", "info");
+        refreshResolverRewardReads();
+        return;
+      }
       refreshResolverRewardReads();
       notify("Resolver rewards claimed to the connected wallet.", "success");
     } catch (err) {
@@ -454,7 +465,12 @@ export function useWalletActions({
         data,
         gas,
       });
-      await waitForReceipt(hash);
+      const receiptState = await waitForReceipt(hash);
+      if (receiptState === "pending") {
+        notify("Resolver reward claim submitted and is still pending confirmation.", "info");
+        refreshResolverRewardReads();
+        return;
+      }
       refreshResolverRewardReads();
       notify("Resolver rewards claimed to the Privy wallet.", "success");
     } catch (err) {
@@ -705,6 +721,51 @@ export function useWalletActions({
     walletTransfersEnabled,
   ]);
 
+  const handleClearEip7702Delegation = useCallback(async () => {
+    if (!embeddedWalletAddress) {
+      notify("Create a Privy wallet first.", "warning");
+      onOpenWalletSettings();
+      return;
+    }
+    if (!clearEip7702DelegationFromExternal) {
+      notify("Wallet repair is not ready yet. Reload the page and try again.", "warning");
+      return;
+    }
+
+    setIsClearingEip7702Delegation(true);
+    try {
+      const hash = await clearEip7702DelegationFromExternal();
+      const receiptState = await waitForReceipt(hash);
+      if (receiptState === "pending") {
+        notify("Privy wallet repair submitted and is still pending confirmation.", "info");
+        return;
+      }
+      const remainingDelegateAddress = await refreshEmbeddedWalletCode?.();
+      if (remainingDelegateAddress) {
+        notify("Repair transaction confirmed, but old EIP-7702 delegation is still active. Send the repair tx hash from logs.", "danger");
+        return;
+      }
+      void refetchEmbeddedEthBalance();
+      notify("Privy wallet repaired. ETH top-up should now use normal transfers.", "success");
+    } catch (err) {
+      if (!isUserRejection(err)) {
+        log.error("Wallet", "clear 7702 delegation failed", err);
+        const message = err instanceof Error ? err.message : "";
+        notify(message ? `Privy wallet repair failed: ${message}` : "Privy wallet repair failed. Try again from the external wallet.", "danger");
+      }
+    } finally {
+      setIsClearingEip7702Delegation(false);
+    }
+  }, [
+    clearEip7702DelegationFromExternal,
+    embeddedWalletAddress,
+    notify,
+    onOpenWalletSettings,
+    refetchEmbeddedEthBalance,
+    refreshEmbeddedWalletCode,
+    waitForReceipt,
+  ]);
+
   return useMemo(
     () => ({
       withdrawAmount,
@@ -719,6 +780,7 @@ export function useWalletActions({
       isWithdrawingEth,
       isDepositingEth,
       isDepositingToken,
+      isClearingEip7702Delegation,
       pendingTransactionStatus,
       isRefreshingPendingTx,
       isCancellingPendingTx,
@@ -732,6 +794,7 @@ export function useWalletActions({
       handleWithdrawEthToExternal,
       handleDepositEthToEmbedded,
       handleDepositTokenToEmbedded,
+      handleClearEip7702Delegation,
       refreshPendingTransactionStatus,
       cancelPendingTransaction,
       handleClaimConnectedResolverRewards,
@@ -746,6 +809,7 @@ export function useWalletActions({
       isWithdrawingEth,
       isDepositingEth,
       isDepositingToken,
+      isClearingEip7702Delegation,
       pendingTransactionStatus,
       isRefreshingPendingTx,
       isCancellingPendingTx,
@@ -759,6 +823,7 @@ export function useWalletActions({
       handleWithdrawEthToExternal,
       handleDepositEthToEmbedded,
       handleDepositTokenToEmbedded,
+      handleClearEip7702Delegation,
       refreshPendingTransactionStatus,
       cancelPendingTransaction,
       handleClaimConnectedResolverRewards,

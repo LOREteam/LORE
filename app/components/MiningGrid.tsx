@@ -8,8 +8,6 @@ import { Confetti } from "./Confetti";
 const TILE_INDICES = Array.from({ length: GRID_SIZE }, (_, i) => i);
 
 // Animation classes defined in globals.css — avoids inline style objects for SSR/cacheability
-const CLASS_GLOW_BREATHE = "animate-winner-glow-breathe";
-const CLASS_GLOW_BREATHE_MINE = "animate-winner-glow-breathe-mine";
 const CLASS_BADGE_SLIDE = "animate-winner-badge-slide";
 
 function compactTileAmount(value: string): string {
@@ -69,9 +67,57 @@ interface MiningGridProps {
   reducedMotion?: boolean;
   showSelection: boolean;
   onTileClick: (tileId: number) => void;
+  isDailyJackpot?: boolean;
+  isWeeklyJackpot?: boolean;
+  jackpotAmount?: number;
 }
 
-export const MiningGrid = React.memo(function MiningGrid({
+function selectedTilesEqual(a: number[], b: number[]) {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function tileRowsEqual(a: MiningGridProps["tileViewData"], b: MiningGridProps["tileViewData"]) {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i];
+    const right = b[i];
+    if (
+      left.tileId !== right.tileId ||
+      left.users !== right.users ||
+      left.poolDisplay !== right.poolDisplay ||
+      left.hasMyBet !== right.hasMyBet
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function miningGridPropsEqual(prev: MiningGridProps, next: MiningGridProps) {
+  return (
+    prev.coldBootDefaults === next.coldBootDefaults &&
+    prev.liveStateReady === next.liveStateReady &&
+    prev.winningTileId === next.winningTileId &&
+    prev.isRevealing === next.isRevealing &&
+    prev.isAnalyzing === next.isAnalyzing &&
+    prev.reducedMotion === next.reducedMotion &&
+    prev.showSelection === next.showSelection &&
+    prev.onTileClick === next.onTileClick &&
+    prev.isDailyJackpot === next.isDailyJackpot &&
+    prev.isWeeklyJackpot === next.isWeeklyJackpot &&
+    prev.jackpotAmount === next.jackpotAmount &&
+    selectedTilesEqual(prev.selectedTiles, next.selectedTiles) &&
+    tileRowsEqual(prev.tileViewData, next.tileViewData)
+  );
+}
+
+function MiningGridView({
   tileViewData,
   coldBootDefaults = false,
   liveStateReady = true,
@@ -82,16 +128,27 @@ export const MiningGrid = React.memo(function MiningGrid({
   reducedMotion = false,
   showSelection,
   onTileClick,
+  isDailyJackpot = false,
+  isWeeklyJackpot = false,
+  jackpotAmount,
 }: MiningGridProps) {
   const selectionSet = useMemo(
     () => (showSelection ? new Set(selectedTiles) : new Set<number>()),
     [showSelection, selectedTiles],
   );
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const roundTransitionActive = isRevealing || isAnalyzing;
 
   const [loreMsg, setLoreMsg] = useState<string | null>(null);
   const [showConfetti, setShowConfetti] = useState(false);
   const [confettiIsMyWin, setConfettiIsMyWin] = useState(false);
+  const winningTileHasMyBet = useMemo(
+    () => winningTileId !== null && Boolean(tileViewData.find((t) => t.tileId === winningTileId)?.hasMyBet),
+    [tileViewData, winningTileId],
+  );
+  void isDailyJackpot;
+  void isWeeklyJackpot;
+  void jackpotAmount;
 
   useEffect(() => {
     if (!isRevealing || winningTileId === null) {
@@ -99,13 +156,12 @@ export const MiningGrid = React.memo(function MiningGrid({
       setShowConfetti(false);
       return;
     }
-    const myBet = tileViewData.find((t) => t.tileId === winningTileId)?.hasMyBet;
-    setLoreMsg(pickRandom(myBet ? yourWinQuotes : roundWinQuotes));
-    setShowConfetti(!reducedMotion && !!myBet);
-    setConfettiIsMyWin(!!myBet);
+    setLoreMsg(pickRandom(winningTileHasMyBet ? yourWinQuotes : roundWinQuotes));
+    setShowConfetti(!reducedMotion && winningTileHasMyBet);
+    setConfettiIsMyWin(winningTileHasMyBet);
     const timer = setTimeout(() => setLoreMsg(null), 4000);
     return () => clearTimeout(timer);
-  }, [isRevealing, winningTileId, tileViewData, reducedMotion]);
+  }, [isRevealing, winningTileId, reducedMotion, winningTileHasMyBet]);
 
   useEffect(() => {
     const gridElement = gridRef.current;
@@ -129,8 +185,20 @@ export const MiningGrid = React.memo(function MiningGrid({
   }, [onTileClick]);
 
   return (
-    <div className="relative w-full aspect-square min-h-72 overflow-hidden rounded-xl border border-violet-500/20 bg-surface-raised shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] sm:min-h-80 min-[900px]:aspect-auto min-[900px]:h-[calc(100dvh-13rem)] min-[900px]:min-h-88">
-      <div ref={gridRef} className="grid grid-cols-5 grid-rows-5 gap-1 p-1.5 sm:gap-1.5 sm:p-2 h-full">
+    <div
+      className="ore-board-shell relative w-full aspect-square min-h-72 overflow-hidden rounded-[1.1rem] border border-violet-200/22 bg-[#070611]/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_0_32px_rgba(124,58,237,0.12),0_18px_54px_rgba(0,0,0,0.36)] sm:min-h-80 min-[900px]:aspect-auto min-[900px]:h-[calc(100dvh-13rem)] min-[900px]:min-h-88"
+      style={{
+        backgroundImage:
+          "linear-gradient(180deg, rgba(7,6,17,0.76), rgba(7,6,17,0.9)), url('/jackpot-og-weekly-painted.png')",
+        backgroundPosition: "center bottom",
+        backgroundSize: "cover",
+      }}
+    >
+      <div
+        ref={gridRef}
+        data-round-transition={roundTransitionActive ? "true" : undefined}
+        className="ore-grid relative z-10 grid h-full grid-cols-5 grid-rows-5 gap-1 p-1.5 sm:gap-1.5 sm:p-2"
+      >
         {TILE_INDICES.map((i) => {
           const tile = tileViewData[i] ?? { tileId: i + 1, users: 0, poolDisplay: "0.00", hasMyBet: false };
           const tileId = tile.tileId;
@@ -139,7 +207,6 @@ export const MiningGrid = React.memo(function MiningGrid({
             <Tile
               key={tileId}
               tileId={tileId}
-              index={i}
               coldBootDefaults={coldBootDefaults}
               users={tile.users}
               displayAmount={liveStateReady || coldBootDefaults ? tile.poolDisplay : "..."}
@@ -174,11 +241,12 @@ export const MiningGrid = React.memo(function MiningGrid({
       )}
     </div>
   );
-});
+}
+
+export const MiningGrid = React.memo(MiningGridView, miningGridPropsEqual);
 
 const Tile = React.memo(function Tile({
   tileId,
-  index,
   coldBootDefaults,
   users,
   displayAmount,
@@ -191,7 +259,6 @@ const Tile = React.memo(function Tile({
   reducedMotion,
 }: {
   tileId: number;
-  index: number;
   coldBootDefaults: boolean;
   users: number;
   displayAmount: string;
@@ -224,62 +291,61 @@ const Tile = React.memo(function Tile({
   let base: string;
   if (isMyWin) {
     base = reducedMotion
-      ? "border-sky-400/50 bg-sky-500/15 z-20 shadow-[0_0_20px_rgba(14,165,233,0.25)]"
-      : "border-sky-400/50 bg-sky-500/15 animate-winner-burst winner-tile-pulse-mine z-20 shadow-[0_0_20px_rgba(14,165,233,0.25)]";
+      ? "border-cyan-300/55 bg-emerald-400/12 z-20"
+      : "border-cyan-300/55 bg-emerald-400/12 animate-winner-burst z-20";
   } else if (isNeutralWinner) {
     base = reducedMotion
-      ? "border-amber-400/50 bg-amber-500/10 z-20 shadow-[0_0_16px_rgba(251,191,36,0.2)]"
-      : "border-amber-400/50 bg-amber-500/10 animate-winner-burst winner-tile-pulse z-20 shadow-[0_0_16px_rgba(251,191,36,0.2)]";
+      ? "border-amber-400/50 bg-amber-500/10 z-20"
+      : "border-amber-400/50 bg-amber-500/10 animate-winner-burst z-20";
   } else if (isSelected) {
-    base = reducedMotion
-      ? "border-violet-500/60 bg-violet-500/15 shadow-[0_0_16px_rgba(139,92,246,0.25)]"
-      : "border-violet-500/60 bg-violet-500/15 shadow-[0_0_16px_rgba(139,92,246,0.25)] animate-glow-pulse";
+    base = "border-violet-200/70 bg-[#090716] shadow-[inset_0_0_0_1px_rgba(216,180,254,0.12),0_0_14px_rgba(139,92,246,0.22)]";
   } else if (hasMyBet) {
-    base = "border-emerald-500/40 bg-emerald-500/8 hover:bg-emerald-500/15 hover:border-emerald-400/60 hover:shadow-[0_0_16px_rgba(52,211,153,0.2)]";
+    base = "border-emerald-400/45 bg-transparent hover:border-emerald-300/65 hover:shadow-[0_0_18px_rgba(52,211,153,0.24)]";
   } else {
-    base = "border-violet-500/10 bg-[#0f0f1e] hover:border-violet-500/30 hover:bg-[#13132a] hover:shadow-[0_0_20px_rgba(139,92,246,0.12)]";
+    base = "border-violet-300/16 bg-[#060514] hover:border-violet-300/35 hover:bg-[#100d22] hover:shadow-[0_0_20px_rgba(139,92,246,0.16)]";
   }
 
   const faded = isRevealing && !isWinner
-    ? "opacity-25 pointer-events-none"
-    : isAnalyzing
-      ? "opacity-40"
-      : "";
-  const staggerClass = `stagger-${index + 1}`;
-  const entranceAnim = !reducedMotion && !isRevealing && !isAnalyzing ? "animate-tile-enter" : "";
+    ? "ore-tile-resolving-dim pointer-events-none"
+    : "";
+  const isBackgroundWindow = hasMyBet && !isWinner;
+  const stateClass = isMyWin
+    ? "ore-tile-my-win"
+    : isNeutralWinner
+      ? "ore-tile-round-win"
+      : hasMyBet
+        ? "ore-tile-bet"
+        : isSelected
+          ? "ore-tile-selected"
+          : "";
+  const disabledClass = !liveStateReady || isRevealing || isAnalyzing ? "cursor-not-allowed" : "";
 
   return (
     <button
       type="button"
       data-tile-id={tileId}
-      disabled={!liveStateReady || isRevealing}
+      disabled={!liveStateReady || isRevealing || isAnalyzing}
       aria-label={ariaLabel}
       aria-pressed={isSelected && !isWinner}
-      className={`relative h-full w-full min-h-0 overflow-hidden rounded-lg border p-1 transition-all duration-200 group flex flex-col items-center justify-between sm:p-1.5 contain-[layout_paint] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-[#070712] ${entranceAnim} ${staggerClass} ${base} ${faded}`}
+      className={`ore-tile ${isBackgroundWindow ? "ore-tile-window" : "ore-tile-stone"} ${stateClass} relative h-full w-full min-h-0 overflow-hidden rounded-lg border p-1 transition-[border-color,background-color,box-shadow,opacity,transform,color] duration-200 group flex flex-col items-center justify-between sm:p-1.5 contain-[layout_paint] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-[#070712] ${base} ${faded} ${disabledClass}`}
     >
-      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none bg-linear-to-br from-white/3 to-transparent z-0" />
-
       <div className="relative z-10 flex w-full items-start justify-between gap-1">
-        <span className={`lore-nums flex min-w-0 items-center gap-0.5 text-[7px] font-semibold leading-none sm:gap-1 sm:text-[10px] ${
-          isMyWin ? "text-sky-300" : isNeutralWinner ? "text-amber-300" : hasMyBet ? "text-emerald-400" : "text-gray-400"
+        <span className={`lore-hud flex min-w-0 items-center gap-0.5 text-[7px] font-bold leading-none sm:gap-1 sm:text-[10px] ${
+          isMyWin ? "text-cyan-200" : isNeutralWinner ? "text-amber-300" : hasMyBet ? "text-emerald-400" : isSelected ? "text-violet-200" : "text-gray-400"
         }`}>
           #{tileId}
-          {hasMyBet && !isWinner && (
-            <span className={`w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)] ${reducedMotion ? "" : "animate-synced-pulse"}`} />
-          )}
-          {isSelected && !isWinner && (
-            <span className="w-2 h-2 rounded-full bg-violet-400 shrink-0 shadow-[0_0_6px_rgba(139,92,246,0.6)]" />
-          )}
         </span>
 
         <span
-          className={`lore-nums flex items-center gap-0.5 text-[7px] font-semibold leading-none sm:gap-1 sm:text-[10px] ${
+          className={`lore-hud flex items-center gap-0.5 text-[7px] font-bold leading-none sm:gap-1 sm:text-[10px] ${
             isMyWin
-              ? "text-sky-200/70"
+              ? "text-cyan-100/75"
               : isNeutralWinner
                 ? "text-amber-200/70"
                 : hasMyBet
                   ? "text-emerald-200/80"
+                  : isSelected
+                    ? "text-violet-100/70"
                   : "text-gray-400"
           }`}
         >
@@ -302,31 +368,21 @@ const Tile = React.memo(function Tile({
       </div>
 
       <div className="relative z-10 flex w-full flex-1 items-center justify-center px-0.5">
-        <span className={`lore-nums block w-full max-w-full px-0.5 text-center font-black text-[clamp(0.68rem,2.4vw,0.98rem)] leading-none tracking-tight transition-all duration-200 sm:text-lg ${
+        <span className={`lore-hud-number block w-full max-w-full px-0.5 text-center text-[clamp(0.82rem,2.65vw,1.14rem)] font-black leading-none tracking-normal transition-colors duration-200 sm:text-[1.35rem] ${
           isMyWin
-            ? "text-sky-200 drop-shadow-[0_0_12px_rgba(14,165,233,0.7)]"
+            ? "text-cyan-100 drop-shadow-[0_0_7px_rgba(45,212,191,0.42)]"
             : isNeutralWinner
-              ? "text-amber-400 drop-shadow-[0_0_10px_rgba(251,191,36,0.7)]"
-              : hasMyBet
-                ? "text-emerald-200"
-                : "text-white group-hover:text-violet-300 group-hover:drop-shadow-[0_0_8px_rgba(139,92,246,0.4)]"
+              ? "text-amber-400 drop-shadow-[0_0_6px_rgba(251,191,36,0.46)]"
+            : hasMyBet
+                ? "text-emerald-100 drop-shadow-[0_0_7px_rgba(52,211,153,0.2)]"
+                : "text-slate-50 drop-shadow-[0_1px_7px_rgba(255,255,255,0.07)] group-hover:text-violet-100 group-hover:drop-shadow-[0_0_8px_rgba(139,92,246,0.36)]"
         }`}>
           {compactAmount}
         </span>
       </div>
       {isNeutralWinner && (
         <>
-          {!reducedMotion && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
-              <div className="w-full h-full rounded-lg border-2 border-amber-400/60 winner-shockwave" />
-            </div>
-          )}
-          <div className={`absolute inset-0 rounded-lg border-2 border-amber-400/50 pointer-events-none z-0 shadow-[inset_0_0_20px_rgba(251,191,36,0.08)] ${reducedMotion ? "" : CLASS_GLOW_BREATHE}`} />
-          <div className={`absolute top-1.5 left-1/2 -translate-x-1/2 pointer-events-none z-30 ${reducedMotion ? "" : "winner-crown"}`}>
-            <svg className="w-3.5 h-3.5 text-amber-300 drop-shadow-[0_0_8px_rgba(251,191,36,0.8)]" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 2L15 8L22 9L17 14L18 21L12 18L6 21L7 14L2 9L9 8L12 2Z" />
-            </svg>
-          </div>
+          <div className="absolute inset-0 rounded-lg border-2 border-amber-400/45 pointer-events-none z-0 shadow-[inset_0_0_12px_rgba(251,191,36,0.07)]" />
           <div className={`absolute bottom-0 inset-x-0 z-20 ${reducedMotion ? "" : CLASS_BADGE_SLIDE}`}>
             <div className="bg-linear-to-r from-amber-500 via-yellow-400 to-amber-500 px-1 py-0.5 text-center text-[6px] font-black uppercase leading-none tracking-[0.08em] text-black sm:text-[8px] sm:tracking-[0.15em]">
               ROUND WIN
@@ -337,27 +393,9 @@ const Tile = React.memo(function Tile({
 
       {isMyWin && (
         <>
-          {!reducedMotion && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
-              <div className="w-full h-full rounded-lg border-2 border-sky-400/60 winner-shockwave" />
-            </div>
-          )}
-          <div className={`absolute inset-0 rounded-lg border-2 border-sky-400/40 pointer-events-none z-0 ${reducedMotion ? "" : CLASS_GLOW_BREATHE_MINE}`} />
-          {!reducedMotion && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
-              <div className="absolute w-1.5 h-1.5 rounded-full bg-sky-300 winner-particle-1" />
-              <div className="absolute w-1 h-1 rounded-full bg-sky-200 winner-particle-2" />
-              <div className="absolute w-1.5 h-1.5 rounded-full bg-cyan-300 winner-particle-3" />
-            </div>
-          )}
-          <div className={`absolute top-1.5 left-1/2 -translate-x-1/2 pointer-events-none z-30 ${reducedMotion ? "" : "winner-crown"}`}>
-            <svg className="w-4 h-4 text-sky-300 drop-shadow-[0_0_10px_rgba(14,165,233,0.8)]" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5z" />
-              <path d="M5 19h14v2H5z" opacity="0.5" />
-            </svg>
-          </div>
+          <div className="absolute inset-0 rounded-lg border-2 border-cyan-300/38 pointer-events-none z-0 shadow-[inset_0_0_12px_rgba(45,212,191,0.08)]" />
           <div className={`absolute bottom-0 inset-x-0 z-20 ${reducedMotion ? "" : CLASS_BADGE_SLIDE}`}>
-            <div className="bg-linear-to-r from-sky-500 via-cyan-400 to-sky-500 px-1 py-0.5 text-center text-[6px] font-black uppercase leading-none tracking-[0.08em] text-white shadow-[0_-4px_12px_rgba(14,165,233,0.4)] sm:text-[8px] sm:tracking-[0.15em]">
+            <div className="bg-linear-to-r from-emerald-500 via-cyan-300 to-sky-400 px-1 py-0.5 text-center text-[6px] font-black uppercase leading-none tracking-[0.08em] text-[#02110f] shadow-[0_-3px_8px_rgba(45,212,191,0.22)] sm:text-[8px] sm:tracking-[0.15em]">
               YOUR WIN
             </div>
           </div>

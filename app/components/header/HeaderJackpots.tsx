@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import type { JackpotHistoryEntry } from "../../hooks/useJackpotHistory";
+import { getJackpotVisualTheme, type JackpotVisualKind } from "../../lib/jackpotVisualTheme";
 import type { JackpotDisplayInfo } from "./types";
 
 const JACKPOT_NOTICE_MS = 30 * 60 * 1000;
@@ -21,120 +22,86 @@ interface HeaderJackpotsProps {
 }
 
 interface JackpotCardProps {
-  accent: "amber" | "violet";
-  awardedCopy: string;
-  nextCopy: string;
+  kind: Extract<JackpotVisualKind, "daily" | "weekly">;
   poolAmount: number;
-  awardedAmount: number;
   awardedEpoch: string | null;
   awardedThisWindow: boolean;
   visibleUntil: number;
   nowMs: number;
   icon: React.ReactNode;
-  awardedMessage: string;
   window: JackpotWindowInfo;
-  progressCopy: string;
 }
 
 function JackpotCard({
-  accent,
-  awardedCopy,
-  nextCopy,
+  kind,
   poolAmount,
-  awardedAmount,
   awardedEpoch,
   awardedThisWindow,
   visibleUntil,
   nowMs,
   icon,
-  awardedMessage,
   window,
-  progressCopy,
 }: JackpotCardProps) {
-  const isAmber = accent === "amber";
-  const borderClass = isAmber ? "border-amber-500/25 hover:border-amber-500/40" : "border-violet-500/25 hover:border-violet-500/40";
-  const glowClass = isAmber ? "from-amber-500/4" : "from-violet-500/4";
-  const overlayPulseClass = isAmber ? "bg-amber-400/8" : "bg-violet-400/8";
-  const overlaySweepClass = isAmber ? "via-amber-300/25" : "via-violet-300/25";
-  const titleClass = isAmber ? "text-amber-300" : "text-violet-300";
-  const amountClass = isAmber ? "text-amber-400" : "text-violet-400";
-  const amountSubtleClass = isAmber ? "text-amber-400/75" : "text-violet-400/75";
-  const windowLabelClass = isAmber ? "text-amber-500/45" : "text-violet-500/45";
-  const windowValueClass = isAmber ? "text-amber-300/70" : "text-violet-300/70";
-  const windowTrackClass = isAmber ? "bg-amber-900/35" : "bg-violet-900/35";
-  const windowFillClass = isAmber
-    ? "bg-linear-to-r from-amber-500 via-yellow-400 to-orange-400"
-    : "bg-linear-to-r from-violet-500 via-purple-400 to-fuchsia-400";
-  const bodyClass = isAmber ? "text-amber-300/65" : "text-violet-300/65";
+  const theme = getJackpotVisualTheme(kind);
+  const isAwardLive = Boolean(nowMs < visibleUntil && awardedEpoch);
+  const isAwardedWindow = Boolean(awardedThisWindow && awardedEpoch);
+  const meterPct = isAwardedWindow ? 0 : window.pct;
+  const amountText = poolAmount.toFixed(2);
+  const metricLabel = isAwardedWindow ? "Status" : "Pool";
+  const metricValue = isAwardedWindow ? "AWARDED" : amountText;
+  const metricUnit = isAwardedWindow ? `#${awardedEpoch}` : "LINEA";
 
   return (
-    <div className={`relative overflow-hidden rounded-lg border bg-surface-raised group transition-all duration-300 ${borderClass}`}>
-      <div className={`absolute inset-0 bg-linear-to-r ${glowClass} to-transparent pointer-events-none`} />
-      {nowMs < visibleUntil && awardedEpoch && (
+    <div className={`jackpot-vault-card ${theme.card.vaultClass} relative overflow-hidden rounded-xl border group transition-all duration-300`}>
+      {isAwardLive && (
         <div className="absolute inset-0 z-20 pointer-events-none">
-          <div className={`absolute inset-0 ${overlayPulseClass} animate-pulse`} />
-          <div className={`absolute inset-0 bg-linear-to-r from-transparent ${overlaySweepClass} to-transparent animate-gradient-x`} />
+          <div className={`absolute inset-0 ${theme.card.pulseClass} opacity-70`} />
+          <div className={`absolute inset-0 bg-linear-to-r from-transparent ${theme.card.sweepClass} to-transparent opacity-60`} />
         </div>
       )}
-      <div className="relative z-10 flex h-18 items-center px-2 py-1 sm:px-2.5">
-        {nowMs < visibleUntil && awardedEpoch ? (
-          <div className="flex w-full items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
-              <div className="shrink-0">{icon}</div>
-              <span className={`wrap-break-word text-[10px] font-black uppercase leading-tight tracking-[0.05em] animate-pulse sm:text-[12px] sm:tracking-widest ${titleClass}`}>
-                {awardedCopy}
+      <div className="relative z-30 grid h-14 grid-cols-[2.65rem_minmax(0,1fr)_7.5rem] items-center gap-1.5 px-2 pb-3 pt-1.5 sm:grid-cols-[2.85rem_minmax(0,1fr)_8.2rem] sm:gap-2 sm:px-2.5">
+        <div className="jackpot-vault-core">{icon}</div>
+        <div className="min-w-0 self-stretch">
+          <div className="flex h-full min-w-0 flex-col justify-center">
+            <p className={`truncate text-[6.5px] font-black uppercase leading-none tracking-[0.13em] sm:text-[7px] ${theme.card.labelClass}`}>
+              {theme.cardCaption}
+            </p>
+            <h3 className={`mt-0.5 truncate text-[11px] font-black uppercase leading-none tracking-[0.05em] sm:text-xs ${theme.card.titleClass}`}>
+              {theme.cardTitle}
+            </h3>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5">
+              <span
+                className={`lore-hud truncate font-black uppercase leading-none ${
+                  isAwardedWindow ? "text-[9px] tracking-[0.08em] sm:text-[10px]" : "text-[8px]"
+                } ${theme.card.bodyClass}`}
+              >
+                {isAwardedWindow ? `Next in ${window.leftLabel}` : window.leftLabel}
               </span>
-            </div>
-            <div className="shrink-0 text-right">
-              <div className={`lore-nums text-[11px] sm:text-[12px] font-black tabular-nums leading-none ${titleClass}`}>
-                +{awardedAmount.toFixed(2)} LINEA
-              </div>
-              <div className={`lore-nums mt-1 text-[8px] font-bold uppercase leading-none tracking-[0.08em] ${bodyClass}`}>
-                Epoch #{awardedEpoch}
-              </div>
             </div>
           </div>
-        ) : awardedThisWindow && awardedEpoch ? (
-          <div className="flex w-full items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
-              <div className="shrink-0">{icon}</div>
-              <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              <span className={`wrap-break-word text-[10px] font-black uppercase leading-tight tracking-[0.05em] sm:text-[12px] sm:tracking-widest ${titleClass}`}>
-                {nextCopy}
-              </span>
-              <span className={`lore-nums text-[13px] sm:text-[15px] font-black tabular-nums leading-none ${amountClass}`}>{poolAmount.toFixed(2)}</span>
-              <span className={`text-[9px] sm:text-[10px] font-black tracking-wide ${amountSubtleClass}`}>LINEA</span>
-              </div>
+        </div>
+
+        <div className="self-stretch text-right">
+          <div className="flex h-full flex-col justify-center">
+            <div className={`text-[6.5px] font-black uppercase leading-none tracking-[0.12em] ${theme.card.labelClass}`}>
+              {metricLabel}
             </div>
-            <div className="flex shrink-0 flex-col items-end justify-center text-right">
-              <p className="text-[7px] text-emerald-300/80 font-semibold leading-tight text-right">{awardedMessage}</p>
-              <p className="text-[7px] text-emerald-300/65 mt-0.5 font-semibold leading-tight tracking-[0.04em]">(epoch #{awardedEpoch})</p>
+            <div className={`lore-nums mt-0.5 truncate font-black tabular-nums leading-none ${isAwardedWindow ? "text-[10px] tracking-[0.08em] sm:text-[11px]" : "text-sm sm:text-base"} ${theme.card.amountClass}`}>
+              {metricValue}
+            </div>
+            <div className={`mt-0.5 text-[7px] font-black uppercase leading-none tracking-[0.08em] ${theme.card.subtleClass}`}>
+              {metricUnit}
             </div>
           </div>
-        ) : (
-          <div className="flex w-full items-center justify-between gap-x-3">
-            <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
-              <div className="shrink-0">{icon}</div>
-              <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              <span className={`wrap-break-word text-[10px] font-black uppercase leading-tight tracking-[0.05em] animate-pulse sm:text-[12px] sm:tracking-widest ${titleClass}`}>
-                {nextCopy.replace(/^Next /, "")}
-              </span>
-              <span className={`lore-nums text-[13px] sm:text-[15px] font-black tabular-nums leading-none ${amountClass}`}>{poolAmount.toFixed(2)}</span>
-              <span className={`text-[9px] sm:text-[10px] font-black tracking-wide ${amountSubtleClass}`}>LINEA</span>
-              </div>
-            </div>
-            <div className="w-34 shrink-0">
-              <div className="flex items-center justify-between mb-0.5">
-                <span className={`text-[7px] font-semibold uppercase tracking-[0.08em] ${windowLabelClass}`}>Window</span>
-                <span className={`lore-nums text-[7px] font-bold tabular-nums ${windowValueClass}`}>{window.leftLabel}</span>
-              </div>
-              <div className={`h-2 rounded-full overflow-hidden ${windowTrackClass}`}>
-                <div
-                  className={`h-full rounded-full transition-all duration-1000 shadow-[0_0_8px_rgba(139,92,246,0.3)] ${windowFillClass}`}
-                  style={{ width: `${window.pct}%` }}
-                />
-              </div>
-              <p className={`mt-0.5 text-[8px] font-semibold leading-tight truncate sm:text-[9px] ${bodyClass}`}>{progressCopy}</p>
+        </div>
+
+        {!isAwardedWindow && (
+          <div className="absolute bottom-1.5 left-[4rem] right-3 min-w-0 sm:left-[4.35rem]">
+            <div className="jackpot-vault-meter h-1 overflow-hidden rounded-full">
+              <div
+                className={`h-full rounded-full transition-all duration-1000 ${theme.card.fillClass}`}
+                style={{ width: `${meterPct}%` }}
+              />
             </div>
           </div>
         )}
@@ -145,13 +112,13 @@ function JackpotCard({
 
 function DailyJackpotIcon() {
   return (
-    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden sm:h-14 sm:w-14">
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden sm:h-11 sm:w-11">
       <Image
-        src="/Daily%20Jackpot.png"
+        src="/Daily Jackpot.png"
         alt=""
         aria-hidden="true"
-        width={56}
-        height={56}
+        width={44}
+        height={44}
         className="h-full w-full scale-[1.9] object-contain"
       />
     </div>
@@ -160,13 +127,13 @@ function DailyJackpotIcon() {
 
 function WeeklyJackpotIcon() {
   return (
-    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden sm:h-14 sm:w-14">
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden sm:h-11 sm:w-11">
       <Image
-        src="/Weekly%20Jackpot.png"
+        src="/Weekly Jackpot.png"
         alt=""
         aria-hidden="true"
-        width={56}
-        height={56}
+        width={44}
+        height={44}
         className="h-full w-full scale-[1.82] object-contain"
       />
     </div>
@@ -180,12 +147,11 @@ export const HeaderJackpots = React.memo(function HeaderJackpots({
   isPageVisible,
   jackpotHistory,
 }: HeaderJackpotsProps) {
-  const [nowMs, setNowMs] = useState(initialNowMs);
+  const [nowMs, setNowMs] = useState(() => initialNowMs);
 
   useEffect(() => {
     if (!isPageVisible) return;
-    setNowMs(Date.now());
-    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    const id = window.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => window.clearInterval(id);
   }, [isPageVisible]);
 
@@ -237,54 +203,40 @@ export const HeaderJackpots = React.memo(function HeaderJackpots({
         : null,
     [historyReady, jackpotHistory, jackpotInfo.lastWeeklyJackpotEpoch],
   );
-  // If the indexer hasn't indexed the jackpot event yet, fall back to nowMs so the
-  // awarded card shows immediately (and stays visible until history arrives or the day/week ends).
+  // Only use a real indexed timestamp for the short celebratory pulse. A moving
+  // `nowMs + notice` fallback keeps awarded jackpots visually "live" forever.
   const dailyAwardVisibleUntil = latestDailyAward?.timestamp
     ? latestDailyAward.timestamp + JACKPOT_NOTICE_MS
-    : jackpotInfo.lastDailyJackpotAmount > 0 && jackpotInfo.lastDailyJackpotEpoch && dailyAwardedToday
-      ? nowMs + JACKPOT_NOTICE_MS
-      : 0;
+    : 0;
   const weeklyAwardVisibleUntil = latestWeeklyAward?.timestamp
     ? latestWeeklyAward.timestamp + JACKPOT_NOTICE_MS
-    : jackpotInfo.lastWeeklyJackpotAmount > 0 && jackpotInfo.lastWeeklyJackpotEpoch && weeklyAwardedThisWeek
-      ? nowMs + JACKPOT_NOTICE_MS
-      : 0;
+    : 0;
 
   if (jackpotInfo.dailyPool <= 0 && jackpotInfo.weeklyPool <= 0) {
     return null;
   }
 
   return (
-    <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-1.5 mb-1.5 animate-slide-up" style={{ animationDelay: "0s" }}>
+    <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-1.5 mb-1">
       <JackpotCard
-        accent="amber"
-        awardedCopy="Daily Jackpot Awarded"
-        nextCopy="Next Daily Jackpot"
+        kind="daily"
         poolAmount={jackpotInfo.dailyPool}
-        awardedAmount={jackpotInfo.lastDailyJackpotAmount}
         awardedEpoch={jackpotInfo.lastDailyJackpotEpoch}
         awardedThisWindow={dailyAwardedToday}
         visibleUntil={dailyAwardVisibleUntil}
         nowMs={nowMs}
         icon={<DailyJackpotIcon />}
-        awardedMessage="Today JACKPOT was awarded"
         window={dailyWindow}
-        progressCopy="Day window progress - random trigger any time"
       />
       <JackpotCard
-        accent="violet"
-        awardedCopy="Weekly Jackpot Awarded"
-        nextCopy="Next Weekly Jackpot"
+        kind="weekly"
         poolAmount={jackpotInfo.weeklyPool}
-        awardedAmount={jackpotInfo.lastWeeklyJackpotAmount}
         awardedEpoch={jackpotInfo.lastWeeklyJackpotEpoch}
         awardedThisWindow={weeklyAwardedThisWeek}
         visibleUntil={weeklyAwardVisibleUntil}
         nowMs={nowMs}
         icon={<WeeklyJackpotIcon />}
-        awardedMessage="This week JACKPOT was awarded"
         window={weeklyWindow}
-        progressCopy="Week window progress - random trigger any time"
       />
     </div>
   );

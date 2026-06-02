@@ -125,7 +125,7 @@ export function useMiningRuntimeHelpers({
     if (!CONTRACT_HAS_TOKEN_GETTER) {
       if (!tokenGetterWarningShownRef.current) {
         tokenGetterWarningShownRef.current = true;
-        log.warn("AutoMine", "token preflight disabled for legacy contract profile");
+        log.warn("AutoMine", "token preflight disabled for configured contract profile");
       }
       return;
     }

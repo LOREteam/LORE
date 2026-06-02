@@ -14,6 +14,7 @@ type SilentSendFn = (
   gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint },
 ) => Promise<`0x${string}`>;
 type ExternalSendFn = (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => Promise<`0x${string}`>;
+type ClearEip7702DelegationFn = () => Promise<`0x${string}`>;
 
 interface UseLineaOreWalletRuntimeOptions {
   address?: `0x${string}`;
@@ -25,6 +26,8 @@ interface UseLineaOreWalletRuntimeOptions {
   writeContractAsync: WriteContractAsyncFn;
   sendTransactionSilent?: SilentSendFn;
   sendTransactionFromExternal: ExternalSendFn;
+  clearEip7702DelegationFromExternal?: ClearEip7702DelegationFn;
+  refreshEmbeddedWalletCode?: () => Promise<string | null> | string | null;
   publicClient?: PublicClient;
   walletTransfers: unknown;
   fetchWalletTransfers?: () => Promise<void> | void;
@@ -44,6 +47,8 @@ export function useLineaOreWalletRuntime({
   writeContractAsync,
   sendTransactionSilent,
   sendTransactionFromExternal,
+  clearEip7702DelegationFromExternal,
+  refreshEmbeddedWalletCode,
   publicClient,
   walletTransfers,
   fetchWalletTransfers,
@@ -70,6 +75,8 @@ export function useLineaOreWalletRuntime({
     writeContractAsync,
     sendTransactionSilent,
     sendTransactionFromExternal,
+    clearEip7702DelegationFromExternal,
+    refreshEmbeddedWalletCode,
     publicClient,
     refetchEmbeddedEthBalance: walletOverview.refetchEmbeddedEthBalance,
     refetchEmbeddedTokenBalance: walletOverview.refetchEmbeddedTokenBalance,

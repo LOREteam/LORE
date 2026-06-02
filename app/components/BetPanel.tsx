@@ -5,13 +5,20 @@ import type { AutoMinePhase } from "../hooks/useMining.types";
 import { GRID_SIZE } from "../lib/constants";
 import { processingQuotes } from "../lib/loreTexts";
 import { useAutoMinerForm } from "../hooks/useAutoMinerForm";
-import { useManualBetForm } from "../hooks/useManualBetForm";
+import type { ManualBetFormState } from "../hooks/useManualBetForm";
 import { LoreText } from "./LoreText";
 import { cn } from "../lib/cn";
 import { UiButton } from "./ui/UiButton";
 import { UiInput } from "./ui/UiInput";
 import { UiPanel } from "./ui/UiPanel";
 import { uiTokens } from "./ui/tokens";
+
+const PANEL_TITLE_BAR = "bet-panel-titlebar mb-2 flex items-center gap-2 border-b border-white/6 pb-2";
+const PANEL_TITLE = "text-[11px] font-black uppercase tracking-[0.08em] text-white";
+const FIELD_LABEL = "mb-1 block px-0.5 text-[8px] font-black uppercase tracking-[0.08em] text-slate-500";
+const ACTION_BUTTON_CLASS = "h-10 text-[11px] font-black";
+const QUICK_BUTTON_CLASS =
+  "console-chip h-8 rounded-lg border px-2 text-[9px] font-black uppercase tracking-[0.08em] transition-all duration-200 hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-40";
 
 function getAutoMinePhaseMeta(phase: AutoMinePhase) {
   switch (phase) {
@@ -38,10 +45,10 @@ function getAutoMinePhaseMeta(phase: AutoMinePhase) {
       };
     case "retry-wait":
       return {
-        label: "Retry Wait",
-        badgeClass: "text-amber-200",
-        defaultProgress: "Saved session is paused and will retry automatically.",
-        detail: "The previous run is waiting for RPC or wallet recovery before resuming.",
+        label: "Recovery queued",
+        badgeClass: "text-violet-200",
+        defaultProgress: "Auto-miner is paused while the previous run settles. It will resume automatically.",
+        detail: "Prevents duplicate bot loops after reloads, reconnects, or temporary RPC trouble.",
       };
     case "session-expired":
       return {
@@ -63,6 +70,7 @@ function getAutoMinePhaseMeta(phase: AutoMinePhase) {
 
 interface ManualBetProps {
   formattedBalance: string | null;
+  walletConnected: boolean;
   coldBootDefaults?: boolean;
   liveStateReady?: boolean;
   selectedTilesCount: number;
@@ -70,12 +78,13 @@ interface ManualBetProps {
   isRevealing: boolean;
   isAnalyzing?: boolean;
   isAutoMining: boolean;
+  manualBetForm: ManualBetFormState;
   onMine: (betAmount: string) => void;
   onQuickPickTiles: (tileIds: number[]) => void;
 }
 
 export const ManualBetPanel = React.memo(function ManualBetPanel({
-  formattedBalance,
+  walletConnected,
   coldBootDefaults = false,
   liveStateReady = true,
   selectedTilesCount,
@@ -83,6 +92,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   isRevealing,
   isAnalyzing = false,
   isAutoMining,
+  manualBetForm,
   onMine,
   onQuickPickTiles,
 }: ManualBetProps) {
@@ -92,23 +102,19 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     totalBet,
     betAmountError,
     manualInsufficient,
-    disabledReason,
     isDisabled,
-  } = useManualBetForm({
-    formattedBalance,
-    liveStateReady,
-    selectedTilesCount,
-    isPending,
-    isRevealing,
-    isAnalyzing,
-    isAutoMining,
-  });
-  const requiresLogin = formattedBalance == null;
+  } = manualBetForm;
+  const requiresLogin = !walletConnected;
   const manualStatusText =
     !liveStateReady && !coldBootDefaults
       ? "Waiting for live epoch sync"
       : null;
   const quickPickDisabled = !liveStateReady || isPending || isRevealing || isAnalyzing || isAutoMining;
+  const actionVariant = isPending || (!liveStateReady && !coldBootDefaults)
+    ? "pending"
+    : isDisabled
+      ? "locked"
+      : "primary";
 
   const handleQuickPick = React.useCallback(
     (count: number) => {
@@ -127,17 +133,13 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
       <UiPanel
         tone="default"
         padding="sm"
-        className={`${uiTokens.shadow.insetHighlight} animate-slide-up`}
-        style={{ animationDelay: "0.2s" }}
+        className={`${uiTokens.shadow.insetHighlight} control-panel control-panel-manual`}
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-3.5 bg-emerald-400/40 rounded-full" />
             <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Manual Bet</span>
           </div>
-          {formattedBalance && (
-            <span className="lore-nums text-[10px] text-gray-500">{formattedBalance} LINEA</span>
-          )}
         </div>
       </UiPanel>
     );
@@ -147,25 +149,19 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     <UiPanel
       tone="default"
       padding="sm"
-      className={`${uiTokens.shadow.panelInset} animate-slide-up`}
-      style={{ animationDelay: "0.2s" }}
+      className={`${uiTokens.shadow.panelInset} control-panel control-panel-manual p-2.5 sm:p-3`}
     >
-      <div className="flex items-center justify-between mb-1.5 border-b border-white/6 pb-1.5">
+      <div className={PANEL_TITLE_BAR}>
         <div className="flex items-center gap-1.5">
-          <div className="w-1.5 h-3 bg-emerald-400 rounded-full animate-synced-pulse shadow-[0_0_8px_rgba(52,211,153,0.4)]" />
-          <span className="text-[10px] font-bold text-white uppercase tracking-wider">Manual Bet</span>
+          <div className="h-3.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.32)]" />
+          <span className={PANEL_TITLE}>Manual Bet</span>
         </div>
-        {formattedBalance && (
-          <span className="text-[9px] text-gray-500">
-            <span className="lore-nums text-white font-semibold">{formattedBalance}</span> LINEA
-          </span>
-        )}
       </div>
 
-      <div className="mb-1.5">
+      <div className="mb-2">
         <label
           htmlFor="bet-amount-per-tile"
-          className="text-[7px] font-bold uppercase text-slate-500 block mb-0.5 px-0.5"
+          className={FIELD_LABEL}
         >
           Amount per tile
         </label>
@@ -179,17 +175,17 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           maxLength={20}
           tone={betAmountError ? "danger" : "default"}
           errorText={betAmountError ?? undefined}
-          className="h-8 px-2 text-sm font-bold bg-surface"
+          className="console-input h-9 px-3 text-base font-black"
         />
       </div>
 
       <div
-        className={`flex justify-between items-center rounded-lg border px-2 py-1 mb-1.5 transition-colors duration-200 ${
-          manualInsufficient ? "bg-red-500/8 border-red-500/30" : "bg-black/20 border-white/4"
+        className={`console-readout mb-2 flex min-h-9 items-center justify-between rounded-lg border px-2.5 py-1 transition-colors duration-200 ${
+          manualInsufficient ? "border-red-500/30 bg-red-500/8" : "border-emerald-300/12"
         }`}
       >
-        <span className="text-[8px] font-bold uppercase text-gray-500">{selectedTilesCount} selected</span>
-        <span className={`lore-nums font-bold text-[11px] ${manualInsufficient ? "text-red-400" : "text-violet-400"}`}>
+        <span className="text-[8px] font-black uppercase tracking-[0.08em] text-slate-500">{selectedTilesCount} selected</span>
+        <span className={`lore-nums text-xs font-black ${manualInsufficient ? "text-red-400" : "text-violet-300"}`}>
           {totalBet.toFixed(2)} LINEA
         </span>
       </div>
@@ -214,12 +210,12 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         </div>
       )}
 
-      <div className="mb-1.5 grid grid-cols-3 gap-1.5">
+      <div className="mb-2 grid grid-cols-3 gap-1.5">
         <button
           type="button"
           disabled={quickPickDisabled}
           onClick={() => handleQuickPick(3)}
-          className="rounded-lg border border-violet-500/25 bg-violet-500/10 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wider text-violet-100 transition-all duration-200 hover:-translate-y-0.5 hover:border-violet-400/45 hover:bg-violet-500/18 disabled:pointer-events-none disabled:opacity-40"
+          className={`${QUICK_BUTTON_CLASS} border-violet-500/25 bg-violet-500/10 text-violet-100 hover:border-violet-400/45 hover:bg-violet-500/18`}
         >
           Lucky 3
         </button>
@@ -227,7 +223,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           type="button"
           disabled={quickPickDisabled}
           onClick={() => handleQuickPick(5)}
-          className="rounded-lg border border-sky-500/25 bg-sky-500/10 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wider text-sky-100 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/45 hover:bg-sky-500/18 disabled:pointer-events-none disabled:opacity-40"
+          className={`${QUICK_BUTTON_CLASS} border-sky-500/25 bg-sky-500/10 text-sky-100 hover:border-sky-400/45 hover:bg-sky-500/18`}
         >
           Lucky 5
         </button>
@@ -235,7 +231,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           type="button"
           disabled={quickPickDisabled || selectedTilesCount === 0}
           onClick={() => onQuickPickTiles([])}
-          className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wider text-slate-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/9 disabled:pointer-events-none disabled:opacity-40"
+          className={`${QUICK_BUTTON_CLASS} border-white/10 bg-white/5 text-slate-200 hover:border-white/20 hover:bg-white/9`}
         >
           Clear
         </button>
@@ -244,16 +240,11 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
       <UiButton
         onClick={() => onMine(betAmount)}
         disabled={isDisabled}
-        variant={isDisabled ? "ghost" : "primary"}
-        size="md"
+        variant={actionVariant}
+        size="sm"
         uppercase
         fullWidth
-        className={cn(
-          "text-[11px]",
-          isDisabled
-            ? "bg-[#13132a] text-gray-400 border-white/4"
-            : "text-white bg-linear-to-r from-violet-600 to-indigo-600 border-violet-500/40 hover:from-violet-500 hover:to-indigo-500 shadow-lg shadow-violet-600/20 hover:shadow-violet-500/30 shimmer-btn",
-        )}
+        className={cn(ACTION_BUTTON_CLASS, "shadow-none", actionVariant === "primary" && "shimmer-btn")}
       >
         {isPending ? (
           <span className="flex items-center justify-center gap-2">
@@ -274,15 +265,9 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         )}
       </UiButton>
 
-      {isDisabled && disabledReason && !isPending && (
-        <p className="mt-1.5 text-center text-[9px] font-semibold uppercase tracking-wider text-slate-500">
-          {disabledReason}
-        </p>
-      )}
-
       {!isPending && !isRevealing && (
-        <p className="mt-1.5 text-[9px] leading-relaxed text-slate-500">
-          Keep ETH for gas and LINEA for the stake in the Privy wallet.
+        <p className="mt-2 text-center text-[8px] leading-relaxed text-slate-500">
+          Keep ETH for gas and LINEA for the stake in the Privy wallet
         </p>
       )}
     </UiPanel>
@@ -299,6 +284,7 @@ interface AutoMinerProps {
   liveStateReady?: boolean;
   autoMineProgress?: string | null;
   formattedBalance?: string | null;
+  walletConnected: boolean;
   runningParams?: { betStr: string; blocks: number; rounds: number } | null;
   lowEthForGas?: boolean;
   onToggle: (betStr: string, blocks: number, rounds: number) => void;
@@ -314,6 +300,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   liveStateReady = true,
   autoMineProgress,
   formattedBalance,
+  walletConnected,
   runningParams,
   lowEthForGas,
   onToggle,
@@ -341,19 +328,24 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
     isAnalyzing,
     liveStateReady,
     formattedBalance,
+    walletConnected,
     runningParams,
     lowEthForGas,
   });
 
   const compact = isAutoMining;
-  const requiresLogin = formattedBalance == null;
+  const requiresLogin = !walletConnected;
   const phaseMeta = getAutoMinePhaseMeta(autoMinePhase);
   const phaseProgressText = autoMineProgress ?? phaseMeta.defaultProgress;
-  const buttonDisabled = isDisabled || autoMinePhase === "retry-wait" || autoMinePhase === "session-expired";
+  const compactProgressMatch = phaseProgressText?.match(/^(\d+)\s*\/\s*(\d+)\s*-\s*(.+)$/i);
+  const compactProgressCurrent = compactProgressMatch ? Number(compactProgressMatch[1]) : null;
+  const compactProgressTotal = compactProgressMatch ? Number(compactProgressMatch[2]) : null;
+  const compactProgressDetail = compactProgressMatch ? compactProgressMatch[3] : phaseProgressText;
+  const buttonDisabled = requiresLogin || isDisabled || autoMinePhase === "retry-wait" || autoMinePhase === "session-expired";
   const buttonLabel = isAutoMining
     ? "STOP BOT"
     : autoMinePhase === "retry-wait"
-      ? "AUTO-RETRY PENDING"
+      ? "RESUME PENDING"
       : autoMinePhase === "session-expired"
         ? "SESSION EXPIRED"
         : !liveStateReady && !coldBootDefaults
@@ -362,42 +354,52 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
             ? "LOGIN TO START"
             : lowEthForGas
               ? "LOW ETH FOR GAS"
-              : "START BOT";
+            : "START BOT";
   const autoMinerStatusText =
-    autoMinePhase === "retry-wait" || autoMinePhase === "session-expired"
-      ? phaseProgressText
-      : !liveStateReady && !coldBootDefaults
+    !liveStateReady && !coldBootDefaults
         ? "Waiting for live epoch sync"
         : lowEthForGas
           ? "Top up ETH in the Privy wallet for gas"
-          : null;
+        : null;
+  const autoButtonVariant = isAutoMining
+    ? "danger"
+    : autoMinePhase === "session-expired"
+      ? "danger"
+      : autoMinePhase === "retry-wait" || (!liveStateReady && !coldBootDefaults)
+        ? "pending"
+        : buttonDisabled
+          ? "locked"
+          : "primary";
 
   return (
     <UiPanel
       tone="default"
       padding="md"
-      className={`${uiTokens.shadow.panelInset} animate-slide-up ${compact ? "p-2" : "p-3"}`}
-      style={{ animationDelay: "0.25s" }}
+      className={`${uiTokens.shadow.panelInset} control-panel control-panel-auto ${compact ? "p-2" : "p-2.5 sm:p-3"}`}
     >
       {compact ? (
         <>
-          <div className="mb-1.5 flex min-h-6 items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500 animate-synced-pulse shadow-[0_0_6px_rgba(239,68,68,0.4)]" />
-              <span className="lore-nums truncate text-[10px] font-bold uppercase tracking-wider leading-none text-gray-400">
-                {displayTargets}x{displayBetSize} <span className="text-gray-400">LINEA</span> - {displayCycles} cyc
+          <div className="mb-1.5 px-1">
+            <div className="flex min-h-6 items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="lore-nums truncate text-xs font-black uppercase tracking-[0.12em] leading-none text-slate-300">
+                  {displayTargets}x{displayBetSize} <span className="text-slate-500">LINEA</span>
+                </span>
+                <span className="text-[10px] font-black uppercase leading-none tracking-[0.1em] text-sky-200/70">
+                  {displayCycles} cyc
+                </span>
+              </div>
+              <span className="lore-nums inline-flex h-6 shrink-0 items-center text-xs font-black tabular-nums leading-none text-sky-300">
+                {totalCost.toFixed(0)} <span className="ml-1 text-slate-500">LINEA</span>
               </span>
             </div>
-            <span className="lore-nums inline-flex h-6 shrink-0 items-center text-[10px] font-bold tabular-nums leading-none text-sky-400">
-              {totalCost.toFixed(0)} <span className="text-gray-400">LINEA</span>
-            </span>
           </div>
         </>
       ) : (
         <>
-          <div className="flex items-center gap-1.5 border-b border-white/6 mb-1.5 pb-1.5">
-            <div className="w-1.5 h-3 rounded-full bg-sky-400 animate-synced-pulse shadow-[0_0_8px_rgba(56,189,248,0.4)]" />
-            <span className="text-[10px] font-bold text-white uppercase tracking-wider">Auto-Miner</span>
+          <div className={PANEL_TITLE_BAR}>
+            <div className="h-3.5 w-1.5 rounded-full bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.32)]" />
+            <span className={PANEL_TITLE}>Auto-Miner</span>
             {autoMinePhase !== "idle" && (
               <span className={`ml-auto rounded-full border px-2 py-0.5 text-[8px] font-bold uppercase tracking-[0.18em] ${phaseMeta.badgeClass}`}>
                 {phaseMeta.label}
@@ -405,7 +407,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-1 mb-1">
+          <div className="mb-1.5 grid grid-cols-2 gap-1.5">
             <SmallInput
               label="Bet Size"
               value={displayBetSize}
@@ -436,23 +438,23 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
             disabled={isPending || isRevealing || isAutoMining}
             type="number"
             min={1}
-            className="mb-1.5"
+            className="mb-2"
             accent="sky"
             compact
           />
 
           <div
-            className={`flex justify-between items-center rounded-lg border px-2 py-1 mb-1.5 transition-colors duration-200 ${
-              insufficientBalance ? "bg-red-500/8 border-red-500/30" : "bg-black/20 border-white/4"
+            className={`console-readout mb-2 flex min-h-10 items-center justify-between rounded-lg border px-2.5 py-1 transition-colors duration-200 ${
+              insufficientBalance ? "border-red-500/30 bg-red-500/8" : "border-sky-300/12"
             }`}
           >
             <div>
-              <div className="text-[8px] font-bold uppercase text-gray-500">Total reserved</div>
-              <div className="lore-nums text-[8px] text-gray-500">
+              <div className="text-[8px] font-black uppercase tracking-[0.08em] text-slate-500">Total reserved</div>
+              <div className="lore-nums text-[8px] text-slate-500">
                 {(totalCost / Math.max(1, Number(displayCycles) || 1)).toFixed(2)} LINEA / round
               </div>
             </div>
-            <span className={`lore-nums font-bold text-[11px] ${insufficientBalance ? "text-red-400" : "text-sky-400"}`}>
+            <span className={`lore-nums text-xs font-black ${insufficientBalance ? "text-red-400" : "text-sky-300"}`}>
               {totalCost.toFixed(2)} LINEA
             </span>
           </div>
@@ -476,23 +478,26 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
 
       {isAutoMining && phaseProgressText && (
         compact ? (
-          <div className="mb-1.5 flex items-center justify-between gap-3">
+          <div className="mb-2 flex min-h-5 items-center justify-between gap-3 px-1">
             <div className="flex min-w-0 items-center gap-1.5">
-              <div className="w-1 h-1 rounded-full bg-sky-400 animate-synced-pulse shrink-0" />
-              <span className="truncate text-[9px] font-bold uppercase tracking-wider text-sky-400/70" title={phaseProgressText || ""}>
-                {phaseProgressText}
+              <span className="truncate text-[9px] font-black uppercase tracking-[0.12em] text-sky-300/85" title={compactProgressDetail || ""}>
+                {compactProgressDetail}
               </span>
             </div>
+            {compactProgressCurrent !== null && compactProgressTotal !== null && (
+              <span className="lore-nums shrink-0 text-[9px] font-black leading-none text-sky-200">
+                {compactProgressCurrent}/{compactProgressTotal}
+              </span>
+            )}
           </div>
         ) : (
           <div className="relative bg-sky-500/8 rounded-lg border border-sky-500/20 overflow-hidden p-2 mb-2">
             <div
-              className="absolute inset-0 bg-linear-to-r from-transparent via-sky-400/5 to-transparent animate-shimmer pointer-events-none"
-              style={{ animation: "shimmer 2s ease-in-out infinite" }}
+              className="absolute inset-0 bg-linear-to-r from-transparent via-sky-400/5 to-transparent pointer-events-none"
             />
             <div className="relative space-y-1">
               <div className="flex items-center gap-1.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-synced-pulse shrink-0" />
+                <div className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />
                 <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider truncate" title={phaseProgressText || ""}>
                   {phaseProgressText}
                 </span>
@@ -509,36 +514,12 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
 
       {autoMinerStatusText && !isAutoMining && (
         <div
-          className={`flex items-start gap-1.5 px-2 py-1.5 ${uiTokens.radius.sm} border mb-2 ${
-            autoMinePhase === "session-expired"
-              ? "bg-red-500/10 border-red-500/25"
-              : autoMinePhase === "retry-wait"
-                ? "bg-amber-500/10 border-amber-500/25"
-                : "bg-amber-500/10 border-amber-500/25"
-          }`}
+          className={`mb-2 border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 ${uiTokens.radius.sm}`}
         >
-          <div className={`mt-0.5 h-2 w-2 rounded-full shrink-0 ${
-            autoMinePhase === "session-expired" ? "bg-red-400" : "bg-amber-400"
-          }`} />
           <div className="min-w-0">
-            {autoMinePhase === "retry-wait" || autoMinePhase === "session-expired" ? (
-              <span className={`text-[9px] font-bold uppercase tracking-wider ${
-                autoMinePhase === "session-expired" ? "text-red-300" : "text-amber-400"
-              }`}>
-                {phaseMeta.label}
-              </span>
-            ) : (
-              <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wider">
-                {autoMinerStatusText}
-              </span>
-            )}
-            {(autoMinePhase === "retry-wait" || autoMinePhase === "session-expired") ? (
-              <p className={`mt-0.5 text-[10px] leading-relaxed ${
-                autoMinePhase === "session-expired" ? "text-red-200/80" : "text-amber-100/70"
-              }`}>
-                {autoMinerStatusText}
-              </p>
-            ) : null}
+            <span className="text-[9px] font-bold uppercase tracking-wider text-amber-400">
+              {autoMinerStatusText}
+            </span>
           </div>
         </div>
       )}
@@ -546,16 +527,11 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
       <UiButton
         onClick={() => onToggle(betSize, targets, cycles)}
         disabled={buttonDisabled}
-        variant={isAutoMining ? "danger" : "sky"}
-        size={compact ? "sm" : "md"}
+        variant={autoButtonVariant}
+        size="sm"
         fullWidth
         uppercase
-        className={cn(
-          "text-[11px]",
-          isAutoMining && "bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/15 hover:shadow-[0_0_16px_rgba(239,68,68,0.15)]",
-          !isAutoMining && !buttonDisabled && "shimmer-btn",
-          !isAutoMining && buttonDisabled && "bg-[#13132a] text-gray-400 border-white/4",
-        )}
+        className={cn(ACTION_BUTTON_CLASS, "shadow-none", autoButtonVariant === "primary" && "shimmer-btn")}
       >
         {buttonLabel}
       </UiButton>
@@ -604,7 +580,7 @@ const SmallInput = React.memo(function SmallInput({
 
   return (
     <div className={className}>
-      <label htmlFor={inputId} className={`text-[8px] font-bold uppercase text-slate-500 block mb-0.5 px-0.5 ${compact ? "pt-0" : "pt-0.5"}`}>
+      <label htmlFor={inputId} className={`${FIELD_LABEL} ${compact ? "pt-0" : "pt-0.5"}`}>
         {label}
       </label>
       <UiInput
@@ -619,8 +595,8 @@ const SmallInput = React.memo(function SmallInput({
         tone={errorText ? "danger" : "default"}
         errorText={errorText ?? undefined}
         className={cn(
-          "lore-nums bg-surface font-bold text-white",
-          compact ? "h-8 px-1.5 py-0.5 text-xs" : "h-8 px-2 py-1 text-sm",
+          "console-input lore-nums font-bold text-white",
+          compact ? "h-9 px-2.5 py-1 text-sm" : "h-9 px-3 py-1 text-sm",
           inputAccent,
         )}
       />

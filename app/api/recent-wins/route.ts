@@ -121,6 +121,15 @@ export async function GET(request: Request) {
   }
 
   try {
+    const fastResult = await buildRecentWinsPayload({ allowSlowRecovery: false });
+    if (fastResult.recoveryNeeded && fastResult.payload.wins.length === 0) {
+      startRecentWinsRefresh(currentWatermark);
+      const seq = ++recentWinsBuildSeq;
+      const payload = commitRecentWinsCache(fastResult.payload, RECENT_WINS_ROUTE_CACHE_MS, seq, currentWatermark);
+      finishRouteMetric(metric, 200);
+      return jsonNoStore(payload);
+    }
+
     const payload = recentWinsInflight
       ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await recentWinsInflight)
       : await (() => {

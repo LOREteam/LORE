@@ -50,6 +50,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, reason: "bootstrap_unauthorized" }, { status: 403 });
   }
 
+  const rateLimited = await enforceSharedRateLimit(request, {
+    bucket: "api-bootstrap-resolve",
+    limit: isLocalDevBootstrapRequest(request) ? 60 : 12,
+    windowMs: 60_000,
+  });
+  if (rateLimited) return rateLimited;
+
   const keeperKeyConfigured = !!(
     process.env.BOOTSTRAP_KEEPER_PRIVATE_KEY?.trim() ||
     process.env.KEEPER_PRIVATE_KEY?.trim()
@@ -57,18 +64,11 @@ export async function POST(request: Request) {
   const account = getBootstrapKeeperAccount();
   if (!account) {
     if (keeperKeyConfigured) {
-      console.error("[bootstrap-resolve] Keeper private key is configured but invalid — bootstrap resolver is non-functional. Check BOOTSTRAP_KEEPER_PRIVATE_KEY / KEEPER_PRIVATE_KEY format (must be 64 hex chars).");
+      console.error("[bootstrap-resolve] Keeper private key is configured but invalid - bootstrap resolver is non-functional. Check BOOTSTRAP_KEEPER_PRIVATE_KEY / KEEPER_PRIVATE_KEY format (must be 64 hex chars).");
       return NextResponse.json({ ok: false, reason: "bootstrap_keeper_misconfigured" }, { status: 500 });
     }
     return NextResponse.json({ ok: true, action: "noop", reason: "bootstrap_keeper_disabled" });
   }
-
-  const rateLimited = await enforceSharedRateLimit(request, {
-    bucket: "api-bootstrap-resolve",
-    limit: isLocalDevBootstrapRequest(request) ? 60 : 12,
-    windowMs: 60_000,
-  });
-  if (rateLimited) return rateLimited;
 
   try {
     const { result: currentEpoch, rpcUrl, client: publicClient } = await readContractResilient<bigint>({
@@ -123,7 +123,7 @@ export async function POST(request: Request) {
       });
     }
 
-    // V8 atomic resolve: skip empty epochs — burning gas to resolve a
+    // V9 atomic resolve: skip empty epochs - burning gas to resolve a
     // round with zero bets is wasteful. It will sit frozen until a player
     // bet triggers the contract's built-in _autoResolveIfNeeded().
     if (totalPool === 0n) {
@@ -229,7 +229,7 @@ export async function POST(request: Request) {
 
     // Escape hatch for a nonce stuck behind an older tx whose fees are so
     // high that normal bump attempts can't replace it. Send a 0-value
-    // self-transfer at the same nonce with dramatically higher fees — this
+    // self-transfer at the same nonce with dramatically higher fees - this
     // costs ~21k gas and, once mined, frees the nonce so the next resolve
     // call can proceed with a fresh nonce.
     if (replacingPendingTx && lastFeeBumpRejection) {

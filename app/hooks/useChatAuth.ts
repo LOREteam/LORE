@@ -1,7 +1,8 @@
 "use client";
 
-import { useSignMessage } from "@privy-io/react-auth";
+import { useSignMessage, useWallets } from "@privy-io/react-auth";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toHex } from "viem";
 import { APP_CHAIN_ID } from "../lib/constants";
 import { buildChatAuthMessage, createChatAuthNonce } from "../lib/chatAuth";
 import {
@@ -15,6 +16,10 @@ import {
 
 const CHAT_AUTH_REFRESH_LEAD_MS = 24 * 60 * 60 * 1000;
 const CHAT_AUTH_REFRESH_MIN_DELAY_MS = 60_000;
+
+type Eip1193Provider = {
+  request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
+};
 
 async function createChatSession(payload: Record<string, unknown>): Promise<number> {
   const response = await fetch("/api/chat/auth", {
@@ -50,6 +55,7 @@ export function useChatAuth(walletAddress: string | null, uiTitle = "Verify wall
   const authInFlightForRef = useRef<string | null>(null);
   const refreshInFlightRef = useRef<Promise<boolean> | null>(null);
   const { signMessage } = useSignMessage();
+  const { wallets } = useWallets();
 
   useEffect(() => {
     if (!walletAddress) {
@@ -118,10 +124,33 @@ export function useChatAuth(walletAddress: string | null, uiTitle = "Verify wall
           nonce: createChatAuthNonce(),
           issuedAt,
         });
-        const { signature } = await signMessage(
-          { message },
-          { uiOptions: { title: uiTitle } },
-        );
+        const targetWallet = wallets.find((wallet) => wallet.address.toLowerCase() === normalizedWallet);
+        let signature = "";
+        if (targetWallet) {
+          const provider = (await targetWallet.getEthereumProvider()) as Eip1193Provider;
+          const messageHex = toHex(message);
+          try {
+            signature = String(
+              await provider.request({
+                method: "personal_sign",
+                params: [messageHex, normalizedWallet],
+              }),
+            );
+          } catch {
+            signature = String(
+              await provider.request({
+                method: "eth_sign",
+                params: [normalizedWallet, messageHex],
+              }),
+            );
+          }
+        } else {
+          const result = await signMessage(
+            { message },
+            { uiOptions: { title: uiTitle } },
+          );
+          signature = result.signature;
+        }
         const expiresAt = await createChatSession({
           authAddress: normalizedWallet,
           authMessage: message,
@@ -148,7 +177,7 @@ export function useChatAuth(walletAddress: string | null, uiTitle = "Verify wall
     authInFlightRef.current = task;
     authInFlightForRef.current = normalizedWallet;
     return task;
-  }, [signMessage, uiTitle, walletAddress]);
+  }, [signMessage, uiTitle, walletAddress, wallets]);
 
   const clearAuth = useCallback(() => {
     if (!walletAddress) return;

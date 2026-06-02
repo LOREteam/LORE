@@ -37,9 +37,7 @@ Important for future contract deployments:
 - Set `NEXT_PUBLIC_LINEA_TOKEN_ADDRESS` if the token address changes.
 - Set `INDEXER_START_BLOCK` and `NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK` to the new deployment block.
 - Set `NEXT_PUBLIC_LINEA_RPCS` if you need to pin reliable production RPCs for wallet broadcast.
-- Set `NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER=1` for V6/mainnet-style deployments.
-- Set `NEXT_PUBLIC_CONTRACT_HAS_REBATE_API=1` if the deployed contract supports rebate methods.
-- Keep `NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER=0` only if you intentionally point the app at the old legacy Sepolia contract that does not expose `token()`.
+- Keep `NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER=1` and `NEXT_PUBLIC_CONTRACT_HAS_REBATE_API=1` for V9 deployments.
 
 ## Scripts
 
@@ -64,7 +62,7 @@ Important for future contract deployments:
 - Any variable prefixed with `NEXT_PUBLIC_` is exposed to the client bundle.
 - Chat keeps only the latest 100 messages in SQLite; indexed game history is stored in full from the configured deploy/start block.
 - If you run only `npm run dev:ui`, gameplay works but indexed history/analytics storage will stay empty until `npm run indexer` (or `npm run dev`) is running against the same `LORE_DB_PATH`.
-- When the configured contract address changes, old contract-scoped indexer/storage data is retained by default. Set `LORE_ALLOW_CONTRACT_SCOPE_PURGE=1` only after taking a DB backup if you intentionally want startup to remove old scoped data and legacy `data/lore-v*.sqlite*` artifacts.
+- When the configured contract address changes, non-current contract-scoped indexer/storage data is retained by default. Set `LORE_ALLOW_CONTRACT_SCOPE_PURGE=1` only after taking a DB backup if you intentionally want startup to remove non-current scoped data and `data/lore-v*.sqlite*` artifacts.
 
 ## Health / Admin
 

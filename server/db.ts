@@ -102,6 +102,7 @@ function bootstrapSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_scoped_bets_scope_user_epoch ON scoped_bets(scope, user, epoch DESC, block_number DESC);
     CREATE INDEX IF NOT EXISTS idx_scoped_bets_scope_epoch ON scoped_bets(scope, epoch DESC);
+    CREATE INDEX IF NOT EXISTS idx_scoped_bets_scope_block ON scoped_bets(scope, block_number DESC, id DESC);
 
     CREATE TABLE IF NOT EXISTS jackpots (
       id TEXT PRIMARY KEY,

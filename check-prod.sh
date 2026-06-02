@@ -133,7 +133,7 @@ fi
 if [[ -n "${NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER:-}" ]]; then
   pass "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER is set"
 else
-  warn "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER is empty (frontend will infer legacy/v6 profile from contract address)"
+  warn "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER is empty (frontend will use the V9 default)"
 fi
 
 if [[ -n "${NEXT_PUBLIC_CONTRACT_HAS_REBATE_API:-}" ]]; then

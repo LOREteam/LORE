@@ -3,7 +3,6 @@
 import React from "react";
 import { JackpotBanner } from "./JackpotBanner";
 import { MiningGrid } from "./MiningGrid";
-import { RewardScanner } from "./RewardScanner";
 
 interface TileViewRow {
   tileId: number;
@@ -33,6 +32,7 @@ interface HubGameBoardProps {
   isDailyJackpot: boolean;
   isWeeklyJackpot: boolean;
   jackpotAmount?: number;
+  jackpotFallbackAmount?: number;
   hasMyWinningBet: boolean;
   unclaimedWins: UnclaimedWin[];
   isScanning: boolean;
@@ -59,19 +59,12 @@ export const HubGameBoard = React.memo(function HubGameBoard({
   isDailyJackpot,
   isWeeklyJackpot,
   jackpotAmount,
+  jackpotFallbackAmount,
   hasMyWinningBet,
-  unclaimedWins,
-  isScanning,
-  isDeepScanning,
-  isClaiming,
-  onScan,
-  onClaim,
-  onClaimAll,
 }: HubGameBoardProps) {
   return (
-    <div className="min-[900px]:col-span-9 flex min-w-0 flex-col gap-1.5">
+    <div className="gameplay-board-zone min-[900px]:col-span-9 flex min-w-0 flex-col gap-1.5">
       <MiningGrid
-        key={gridDisplayEpoch ?? "none"}
         coldBootDefaults={coldBootDefaults}
         liveStateReady={liveStateReady}
         tileViewData={tileViewData}
@@ -82,6 +75,9 @@ export const HubGameBoard = React.memo(function HubGameBoard({
         reducedMotion={reducedMotion}
         showSelection={showSelectionOnGrid}
         onTileClick={onTileClick}
+        isDailyJackpot={isDailyJackpot}
+        isWeeklyJackpot={isWeeklyJackpot}
+        jackpotAmount={jackpotAmount}
       />
 
       <JackpotBanner
@@ -93,21 +89,10 @@ export const HubGameBoard = React.memo(function HubGameBoard({
         isDailyJackpot={isDailyJackpot}
         isWeeklyJackpot={isWeeklyJackpot}
         jackpotAmount={jackpotAmount}
+        jackpotFallbackAmount={jackpotFallbackAmount}
         hasMyWinningBet={hasMyWinningBet}
         reducedMotion={reducedMotion}
       />
-
-      <div className="lg:hidden">
-        <RewardScanner
-          unclaimedWins={unclaimedWins}
-          isScanning={isScanning}
-          isDeepScanning={isDeepScanning}
-          isClaiming={isClaiming}
-          onScan={onScan}
-          onClaim={onClaim}
-          onClaimAll={onClaimAll}
-        />
-      </div>
     </div>
   );
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readJsonResponse } from "../lib/readJsonResponse";
 
 type NameMap = Map<string, string>;
@@ -43,41 +43,16 @@ function saveCachedNames(map: NameMap, fetchedAt: number) {
   }
 }
 
-async function fetchChatNames(): Promise<NameMap> {
-  if (globalCache && Date.now() - globalCache.fetchedAt < CACHE_TTL_MS) {
-    return globalCache.map;
-  }
-
-  const map: NameMap = new Map();
-  try {
-    const profileRes = await fetch("/api/chat/profile", { cache: "no-store" });
-    if (profileRes.ok) {
-      const profileData = await readJsonResponse<{ profiles?: Record<string, unknown> }>(profileRes);
-      if (profileData?.profiles && typeof profileData.profiles === "object") {
-        for (const [address, val] of Object.entries(profileData.profiles)) {
-          const v = val as Record<string, unknown>;
-          const name = typeof v.name === "string" ? v.name.trim() : "";
-          if (name) map.set(address.toLowerCase(), name);
-        }
-      }
-    }
-  } catch {
-    // silent
-  }
-
-  const fetchedAt = Date.now();
-  globalCache = { map, fetchedAt };
-  saveCachedNames(map, fetchedAt);
-  return map;
-}
-void fetchChatNames;
-
-async function fetchChatNamesForAddresses(addresses: string[]): Promise<NameMap> {
-  const normalizedAddresses = [...new Set(
+function normalizeAddressList(addresses: string[]) {
+  return [...new Set(
     addresses
       .map((address) => address.trim().toLowerCase())
       .filter((address) => /^0x[a-f0-9]{40}$/.test(address)),
-  )];
+  )].sort();
+}
+
+async function fetchChatNamesForAddresses(addresses: string[]): Promise<NameMap> {
+  const normalizedAddresses = normalizeAddressList(addresses);
   if (normalizedAddresses.length === 0) {
     return globalCache?.map ?? new Map();
   }
@@ -116,6 +91,7 @@ async function fetchChatNamesForAddresses(addresses: string[]): Promise<NameMap>
 }
 
 export function useAddressNames(addresses: string[]) {
+  const addressKey = useMemo(() => normalizeAddressList(addresses).join(","), [addresses]);
   const [nameMap, setNameMap] = useState<NameMap>(() => {
     const cached = globalCache ?? loadCachedNames();
     if (cached) {
@@ -124,22 +100,28 @@ export function useAddressNames(addresses: string[]) {
     }
     return new Map();
   });
-  const fetchedRef = useRef(false);
+  const lastFetchKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (addresses.length === 0) return;
+    if (!addressKey) return;
     if (globalCache) {
       setNameMap(globalCache.map);
     }
-    if (fetchedRef.current && globalCache && Date.now() - globalCache.fetchedAt < CACHE_TTL_MS) return;
-    fetchedRef.current = true;
+    if (
+      lastFetchKeyRef.current === addressKey &&
+      globalCache &&
+      Date.now() - globalCache.fetchedAt < CACHE_TTL_MS
+    ) {
+      return;
+    }
+    lastFetchKeyRef.current = addressKey;
     let cancelled = false;
 
-    fetchChatNamesForAddresses(addresses).then((map) => {
+    fetchChatNamesForAddresses(addressKey.split(",")).then((map) => {
       if (!cancelled) setNameMap(map);
     });
     return () => { cancelled = true; };
-  }, [addresses]);
+  }, [addressKey]);
 
   const resolveName = useCallback(
     (address: string): { display: string; source: "chat" | "raw" } => {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { getAddress, isAddressEqual, keccak256, recoverAddress, toBytes } from "viem";
 import { APP_CHAIN_ID } from "../../../lib/constants";
 import {
   CHAT_AUTH_PROOF_TTL_MS,
@@ -23,10 +24,29 @@ function isAddress(value: unknown): value is `0x${string}` {
   return typeof value === "string" && /^0x[a-fA-F0-9]{40}$/.test(value);
 }
 
-function buildProofKey(address: string, nonce: string, signature: string) {
+function buildProofKey(address: string, nonce: string, uri: string) {
   return createHash("sha256")
-    .update(`${address.toLowerCase()}:${nonce}:${signature}`)
+    .update(`${address.toLowerCase()}:${nonce}:${uri}`)
     .digest("hex");
+}
+
+async function verifyChatSignature(address: `0x${string}`, message: string, signature: `0x${string}`) {
+  const verifiedPersonalSign = await publicClient.verifyMessage({
+    address,
+    message,
+    signature,
+  });
+  if (verifiedPersonalSign) return true;
+
+  try {
+    const recoveredRawSigner = await recoverAddress({
+      hash: keccak256(toBytes(message)),
+      signature,
+    });
+    return isAddressEqual(getAddress(address), recoveredRawSigner);
+  } catch {
+    return false;
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -72,16 +92,12 @@ export async function POST(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Expired auth proof" }, { status: 401 }), { varyCookie: true });
     }
 
-    const verified = await publicClient.verifyMessage({
-      address: authAddress,
-      message: authMessage,
-      signature: authSignature as `0x${string}`,
-    });
+    const verified = await verifyChatSignature(authAddress, authMessage, authSignature as `0x${string}`);
     if (!verified) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Signature verification failed" }, { status: 401 }), { varyCookie: true });
     }
 
-    const proofKey = buildProofKey(authAddress, fields.nonce, authSignature);
+    const proofKey = buildProofKey(authAddress, fields.nonce, fields.uri);
     const issuedAtMs = Date.parse(fields.issuedAt);
     const ttlMs = Math.max(1, CHAT_AUTH_PROOF_TTL_MS - (Date.now() - issuedAtMs));
     const consumed = acquireExpiringLock(`chat-auth:${proofKey}`, fields.nonce, ttlMs);

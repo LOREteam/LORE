@@ -3,9 +3,9 @@
 import React from "react";
 import dynamic from "next/dynamic";
 import { HubContent } from "./HubContent";
-import { Analytics } from "./Analytics";
-import { Leaderboards } from "./Leaderboards";
-import { RebatePanel } from "./RebatePanel";
+import type { Analytics } from "./Analytics";
+import type { Leaderboards } from "./Leaderboards";
+import type { RebatePanel } from "./RebatePanel";
 import { isChunkLoadLikeErrorMessage } from "../lib/chunkReloadRecovery";
 
 const TabPanelFallback = () => (
@@ -28,9 +28,21 @@ async function loadStaticTabWithRetry<T>(loader: () => Promise<T>): Promise<T> {
   }
 }
 
+const loadAnalytics = () => loadStaticTabWithRetry(() => import("./Analytics")).then((mod) => mod.Analytics);
+const loadLeaderboards = () => loadStaticTabWithRetry(() => import("./Leaderboards")).then((mod) => mod.Leaderboards);
+const loadRebatePanel = () => loadStaticTabWithRetry(() => import("./RebatePanel")).then((mod) => mod.RebatePanel);
 const loadWhitePaper = () => loadStaticTabWithRetry(() => import("./WhitePaper")).then((mod) => mod.WhitePaper);
 const loadFAQ = () => loadStaticTabWithRetry(() => import("./FAQ")).then((mod) => mod.FAQ);
 
+const LazyAnalytics = dynamic(loadAnalytics, {
+  loading: TabPanelFallback,
+});
+const LazyLeaderboards = dynamic(loadLeaderboards, {
+  loading: TabPanelFallback,
+});
+const LazyRebatePanel = dynamic(loadRebatePanel, {
+  loading: TabPanelFallback,
+});
 const LazyWhitePaper = dynamic(loadWhitePaper, {
   loading: TabPanelFallback,
 });
@@ -59,13 +71,13 @@ export const PageTabPanels = React.memo(function PageTabPanels({
       activePanel = <HubContent {...hubProps} />;
       break;
     case "analytics":
-      activePanel = <Analytics {...analyticsProps} />;
+      activePanel = <LazyAnalytics {...analyticsProps} />;
       break;
     case "rebate":
-      activePanel = <RebatePanel {...rebateProps} />;
+      activePanel = <LazyRebatePanel {...rebateProps} />;
       break;
     case "leaderboards":
-      activePanel = <Leaderboards {...leaderboardsProps} />;
+      activePanel = <LazyLeaderboards {...leaderboardsProps} />;
       break;
     case "whitepaper":
       activePanel = <LazyWhitePaper />;

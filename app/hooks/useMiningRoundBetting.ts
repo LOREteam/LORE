@@ -3,6 +3,7 @@
 import { log } from "../lib/logger";
 import { delay } from "../lib/utils";
 import type { PublicClient } from "viem";
+import { CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
 import {
   isAmbiguousPendingTxError,
   isDeterministicBetExecutionError,
@@ -10,6 +11,7 @@ import {
   isInsufficientFundsError,
   isNetworkError,
   isRetryableError,
+  isWalletUnavailableError,
   withMiningRpcTimeout,
 } from "./useMining.shared";
 import type { GasOverrides } from "./useMining.types";
@@ -184,8 +186,13 @@ export async function executeAutoMineBetLoop({
       } catch (error) {
         if (isAmbiguousPendingTxError(error)) {
           pendingBetRef.current = { submittedAt: Date.now(), nonce: submittedNonce() };
+          log.warn("AutoMine", "7702 send may already be pending, avoiding duplicate silent/wallet fallback", error);
+          return "pending";
         }
         if (isDeterministicBetExecutionError(error)) {
+          throw error;
+        }
+        if (isWalletUnavailableError(error)) {
           throw error;
         }
         log.warn("AutoMine", "7702 delegated send failed, falling back to silent/wallet-write", error);
@@ -203,8 +210,13 @@ export async function executeAutoMineBetLoop({
       } catch (error) {
         if (isAmbiguousPendingTxError(error)) {
           pendingBetRef.current = { submittedAt: Date.now(), nonce: submittedNonce() };
+          log.warn("AutoMine", "silent send may already be pending, avoiding duplicate wallet fallback", error);
+          return "pending";
         }
         if (isDeterministicBetExecutionError(error)) {
+          throw error;
+        }
+        if (isWalletUnavailableError(error)) {
           throw error;
         }
         log.warn("AutoMine", "silent send failed, falling back to wallet write", error);
@@ -218,6 +230,28 @@ export async function executeAutoMineBetLoop({
     const state = await placeBets(tilesToBet, singleAmountRaw, overrides, txNonce);
     pendingBetRef.current = state === "pending" ? { submittedAt: Date.now(), nonce: submittedNonce() } : null;
     return state;
+  };
+
+  const isGenericReceiptRevert = (error: unknown) =>
+    error instanceof Error && error.message.toLowerCase().startsWith("transaction reverted (hash:");
+
+  const didEpochWindowPass = async () => {
+    const latestEpoch = await withMiningRpcTimeout(publicClient.readContract({
+      address: CONTRACT_ADDRESS,
+      abi: GAME_ABI,
+      functionName: "currentEpoch",
+    }), "bet.currentEpochAfterRevert", 8_000).catch(() => null);
+    if (typeof latestEpoch !== "bigint") return false;
+    const maxCandidateEpoch = roundCandidateEpochs.reduce(
+      (maxEpoch, epoch) => (epoch > maxEpoch ? epoch : maxEpoch),
+      currentEpoch,
+    );
+    if (latestEpoch <= maxCandidateEpoch) return false;
+    log.warn("AutoMine", `round ${currentRoundIndex + 1}: reverted tx arrived after epoch window, skipping round`, {
+      latestEpoch: latestEpoch.toString(),
+      maxCandidateEpoch: maxCandidateEpoch.toString(),
+    });
+    return true;
   };
 
   let betAttempts = 0;
@@ -276,6 +310,10 @@ export async function executeAutoMineBetLoop({
       const errorMessage = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
 
       if (isEpochEndedError(error)) {
+        pendingBetRef.current = null;
+        return { kind: "epoch-ended-skip" };
+      }
+      if (isGenericReceiptRevert(error) && await didEpochWindowPass()) {
         pendingBetRef.current = null;
         return { kind: "epoch-ended-skip" };
       }

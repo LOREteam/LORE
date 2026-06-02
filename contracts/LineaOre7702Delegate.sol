@@ -10,9 +10,11 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
  *         This contract is intentionally game-specific and self-call only:
  *         the delegated EOA must send the outer tx to itself with a 7702
  *         authorization that points at this contract.
+ *         Deploy one delegate per token/game pair.
  *
  *         Design goals:
  *         - No arbitrary target execution
+ *         - No arbitrary token, game, or spender addresses
  *         - One-tx approve + bet batching
  *         - Claims/rebates/resolve wrappers for the LORE game only
  *         - Safe failure surface for sponsored / delegated UX
@@ -24,6 +26,18 @@ contract LineaOre7702Delegate {
     error ZeroAddress();
     error EmptyArray();
     error ZeroAmount();
+    error AddressNotAllowed(address provided, address expected);
+
+    address public immutable allowedToken;
+    address public immutable allowedGame;
+    address public immutable allowedSpender;
+
+    constructor(address token_, address game_, address spender_) {
+        if (token_ == address(0) || game_ == address(0) || spender_ == address(0)) revert ZeroAddress();
+        allowedToken = token_;
+        allowedGame = game_;
+        allowedSpender = spender_;
+    }
 
     modifier onlyDelegatedSelf() {
         if (msg.sender != address(this)) revert OnlyDelegatedSelf();
@@ -38,7 +52,9 @@ contract LineaOre7702Delegate {
         address spender,
         uint256 approvalAmount
     ) external onlyDelegatedSelf {
-        if (token == address(0) || game == address(0) || spender == address(0)) revert ZeroAddress();
+        _requireAllowed(token, allowedToken);
+        _requireAllowed(game, allowedGame);
+        _requireAllowed(spender, allowedSpender);
         if (tileIds.length == 0) revert EmptyArray();
         if (amount == 0 || approvalAmount == 0) revert ZeroAmount();
 
@@ -54,7 +70,9 @@ contract LineaOre7702Delegate {
         address spender,
         uint256 approvalAmount
     ) external onlyDelegatedSelf {
-        if (token == address(0) || game == address(0) || spender == address(0)) revert ZeroAddress();
+        _requireAllowed(token, allowedToken);
+        _requireAllowed(game, allowedGame);
+        _requireAllowed(spender, allowedSpender);
         if (tileMask == 0) revert EmptyArray();
         if (amount == 0 || approvalAmount == 0) revert ZeroAmount();
 
@@ -67,7 +85,7 @@ contract LineaOre7702Delegate {
         uint256[] calldata tileIds,
         uint256 amount
     ) external onlyDelegatedSelf {
-        if (game == address(0)) revert ZeroAddress();
+        _requireAllowed(game, allowedGame);
         if (tileIds.length == 0) revert EmptyArray();
         if (amount == 0) revert ZeroAmount();
 
@@ -79,7 +97,7 @@ contract LineaOre7702Delegate {
         uint32 tileMask,
         uint256 amount
     ) external onlyDelegatedSelf {
-        if (game == address(0)) revert ZeroAddress();
+        _requireAllowed(game, allowedGame);
         if (tileMask == 0) revert EmptyArray();
         if (amount == 0) revert ZeroAmount();
 
@@ -87,27 +105,32 @@ contract LineaOre7702Delegate {
     }
 
     function claimRewards(address game, uint256[] calldata epochs) external onlyDelegatedSelf {
-        if (game == address(0)) revert ZeroAddress();
+        _requireAllowed(game, allowedGame);
         if (epochs.length == 0) revert EmptyArray();
 
         _callGame(game, abi.encodeWithSignature("claimRewards(uint256[])", epochs));
     }
 
     function claimEpochsRebate(address game, uint256[] calldata epochs) external onlyDelegatedSelf {
-        if (game == address(0)) revert ZeroAddress();
+        _requireAllowed(game, allowedGame);
         if (epochs.length == 0) revert EmptyArray();
 
         _callGame(game, abi.encodeWithSignature("claimEpochsRebate(uint256[])", epochs));
     }
 
     function resolveEpoch(address game, uint256 epoch) external onlyDelegatedSelf {
-        if (game == address(0)) revert ZeroAddress();
+        _requireAllowed(game, allowedGame);
         _callGame(game, abi.encodeWithSignature("resolveEpoch(uint256)", epoch));
     }
 
     function claimResolverRewards(address game) external onlyDelegatedSelf {
-        if (game == address(0)) revert ZeroAddress();
+        _requireAllowed(game, allowedGame);
         _callGame(game, abi.encodeWithSignature("claimResolverRewards()"));
+    }
+
+    function _requireAllowed(address provided, address expected) internal pure {
+        if (provided == address(0)) revert ZeroAddress();
+        if (provided != expected) revert AddressNotAllowed(provided, expected);
     }
 
     function _callGame(address target, bytes memory data) internal {

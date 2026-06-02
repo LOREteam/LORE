@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useBalance } from "wagmi";
+import { useBalance, useReadContract } from "wagmi";
 import { getFormattedBalance, type WagmiBalanceLike } from "../lib/balanceFormatting";
-import { APP_CHAIN_ID, CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS } from "../lib/constants";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS, TOKEN_ABI } from "../lib/constants";
 
 type CachedPrivyBalances = {
   token: string;
@@ -62,24 +62,35 @@ export function usePageWalletOverview({
     }
   }, [balanceCacheKey]);
 
-  const { data: embeddedTokenBalanceRaw, isPending: embeddedTokenPending, refetch: refetchEmbeddedTokenBalance } = useBalance({
-    address: normalizedEmbeddedAddress,
-    token: LINEA_TOKEN_ADDRESS,
+  const {
+    data: directEmbeddedTokenBalanceRaw,
+    isPending: embeddedTokenPending,
+    refetch: refetchEmbeddedTokenBalance,
+  } = useReadContract({
+    address: LINEA_TOKEN_ADDRESS,
+    abi: TOKEN_ABI,
+    functionName: "balanceOf",
+    args: normalizedEmbeddedAddress ? [normalizedEmbeddedAddress] : undefined,
     chainId: APP_CHAIN_ID,
     query: {
       enabled: Boolean(normalizedEmbeddedAddress),
-      refetchInterval: isPageVisible ? 8_000 : 30_000,
+      refetchInterval: isPageVisible ? 12_000 : 45_000,
     },
-  } as unknown as Parameters<typeof useBalance>[0]);
+  });
 
-  const embeddedTokenBalance = embeddedTokenBalanceRaw as WagmiBalanceLike;
+  const embeddedTokenBalance = useMemo<WagmiBalanceLike>(
+    () => directEmbeddedTokenBalanceRaw != null
+      ? { value: directEmbeddedTokenBalanceRaw as bigint, decimals: 18 }
+      : undefined,
+    [directEmbeddedTokenBalanceRaw],
+  );
 
   const { data: embeddedEthBalanceRaw, isPending: embeddedEthPending, refetch: refetchEmbeddedEthBalance } = useBalance({
     address: normalizedEmbeddedAddress,
     chainId: APP_CHAIN_ID,
     query: {
       enabled: Boolean(normalizedEmbeddedAddress),
-      refetchInterval: isPageVisible ? 8_000 : 30_000,
+      refetchInterval: isPageVisible ? 12_000 : 45_000,
     },
   });
   const embeddedEthBalance = embeddedEthBalanceRaw as WagmiBalanceLike;

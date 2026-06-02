@@ -43,6 +43,7 @@ export function useGameRevealState({
   const winnerFoundTimeRef = useRef(0);
   const revealTargetEpochRef = useRef<string | null>(null);
   const revealSafetyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const revealRefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refetchGridEpochDataRef = useRef(refetchGridEpochData);
   const refetchUserBetsRef = useRef(refetchUserBets);
   refetchGridEpochDataRef.current = refetchGridEpochData;
@@ -56,6 +57,10 @@ export function useGameRevealState({
     if (revealSafetyRef.current) {
       clearTimeout(revealSafetyRef.current);
       revealSafetyRef.current = null;
+    }
+    if (revealRefetchTimerRef.current) {
+      clearTimeout(revealRefetchTimerRef.current);
+      revealRefetchTimerRef.current = null;
     }
     const targetEpoch = revealTargetEpochRef.current;
     revealTargetEpochRef.current = null;
@@ -89,7 +94,7 @@ export function useGameRevealState({
       !isRevealing &&
       !revealIntervalRef.current
     ) {
-      // V8 atomic resolve: the previous epoch is finalized in the same tx
+      // V9 atomic resolve: the previous epoch is finalized in the same tx
       // that advances `currentEpoch`, so its winningTile/isResolved are
       // already on-chain. Immediately advance `visualEpoch` so the header
       // (epoch number + timer) reflects the new epoch, but keep the GRID
@@ -105,7 +110,9 @@ export function useGameRevealState({
       setLockedGridEpoch(visualEpoch);
       setIsRevealing(true);
       refetchGridEpochDataRef.current();
-      setTimeout(() => {
+      if (revealRefetchTimerRef.current) clearTimeout(revealRefetchTimerRef.current);
+      revealRefetchTimerRef.current = setTimeout(() => {
+        revealRefetchTimerRef.current = null;
         refetchUserBetsRef.current();
       }, 100);
 
@@ -148,6 +155,10 @@ export function useGameRevealState({
       if (revealSafetyRef.current) {
         clearTimeout(revealSafetyRef.current);
         revealSafetyRef.current = null;
+      }
+      if (revealRefetchTimerRef.current) {
+        clearTimeout(revealRefetchTimerRef.current);
+        revealRefetchTimerRef.current = null;
       }
     };
   }, []);

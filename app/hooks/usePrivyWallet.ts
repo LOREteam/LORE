@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getEmbeddedConnectedWallet,
   usePrivy,
@@ -12,12 +12,13 @@ import {
 } from "@privy-io/react-auth";
 import { useSetActiveWallet } from "@privy-io/wagmi";
 import { useAccount, usePublicClient } from "wagmi";
-import { toHex, createWalletClient, custom, serializeTransaction, keccak256, parseSignature } from "viem";
+import { toHex, createWalletClient, custom, serializeTransaction, keccak256, parseSignature, zeroAddress } from "viem";
 import { APP_CHAIN, APP_CHAIN_ID, APP_CHAIN_NAME } from "../lib/constants";
 import {
   EIP7702_DELEGATE_ADDRESS,
   type Signed7702AuthorizationLike,
   getEip7702CapabilityState,
+  parseEip7702DelegationCode,
 } from "../lib/eip7702";
 import { getFallbackFeeOverrides, getKeeperFeeOverrides, getLineaFeeOverrides, type FeeOverrides } from "../lib/lineaFees";
 import { withTimeout, formatUnknownError } from "../lib/utils";
@@ -87,6 +88,9 @@ function applyFeeOverrides(
 }
 
 export function usePrivyWallet() {
+  const [embeddedWalletCodeChecking, setEmbeddedWalletCodeChecking] = useState(false);
+  const [embeddedWallet7702DelegateAddress, setEmbeddedWallet7702DelegateAddress] =
+    useState<`0x${string}` | null>(null);
   const { ready: privyReady, authenticated, user } = usePrivy();
   const { wallets, ready: walletsReady } = useWallets();
   const { setActiveWallet } = useSetActiveWallet();
@@ -115,11 +119,36 @@ export function usePrivyWallet() {
   }, [wallets, embeddedWallet]);
 
   const embeddedWalletAddress = embeddedWallet?.address ?? linkedEmbeddedWalletAddress ?? null;
+  const embeddedWalletReady = Boolean(embeddedWallet);
   const externalWalletAddress = externalWallet?.address ?? null;
   const embeddedWalletSyncing =
     authenticated &&
     !embeddedWalletAddress &&
     (!privyReady || !walletsReady);
+
+  const refreshEmbeddedWalletCode = useCallback(async () => {
+    if (!embeddedWalletAddress || !publicClient) {
+      setEmbeddedWallet7702DelegateAddress(null);
+      return null;
+    }
+
+    setEmbeddedWalletCodeChecking(true);
+    try {
+      const code = await publicClient.getCode({ address: embeddedWalletAddress as `0x${string}` });
+      const delegateAddress = parseEip7702DelegationCode(code);
+      setEmbeddedWallet7702DelegateAddress(delegateAddress);
+      return delegateAddress;
+    } catch {
+      setEmbeddedWallet7702DelegateAddress(null);
+      return null;
+    } finally {
+      setEmbeddedWalletCodeChecking(false);
+    }
+  }, [embeddedWalletAddress, publicClient]);
+
+  useEffect(() => {
+    void refreshEmbeddedWalletCode();
+  }, [refreshEmbeddedWalletCode]);
 
   // Always keep embedded wallet as active signer
   useEffect(() => {
@@ -207,7 +236,7 @@ export function usePrivyWallet() {
       const effectiveFees: FeeOverrides | undefined =
         gasOverrides && ("maxFeePerGas" in gasOverrides || "gasPrice" in gasOverrides)
           ? (gasOverrides as FeeOverrides)
-          : await resolveFeeOverrides(publicClient, feeMode, APP_CHAIN_ID);
+          : ((await resolveFeeOverrides(publicClient, feeMode, APP_CHAIN_ID)) ?? getFallbackFeeOverrides(APP_CHAIN_ID, feeMode));
       applyFeeOverrides(baseRequest, effectiveFees, false);
       let receipt: Awaited<ReturnType<typeof sendTransaction>>;
       try {
@@ -243,7 +272,6 @@ export function usePrivyWallet() {
       gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint },
     ) => {
       if (!embeddedWallet || !embeddedWalletAddress) throw new Error("Privy embedded wallet not found.");
-      if (!EIP7702_DELEGATE_ADDRESS) throw new Error("EIP-7702 delegate address is not configured.");
 
       try {
         await withTimeout(setActiveWallet(embeddedWallet), ACTIVE_WALLET_TIMEOUT_MS, "Privy setActiveWallet");
@@ -261,15 +289,15 @@ export function usePrivyWallet() {
       const effectiveFees: FeeOverrides | undefined =
         gasOverrides && ("maxFeePerGas" in gasOverrides || "gasPrice" in gasOverrides)
           ? (gasOverrides as FeeOverrides)
-          : await resolveFeeOverrides(publicClient, feeMode, APP_CHAIN_ID);
+          : ((await resolveFeeOverrides(publicClient, feeMode, APP_CHAIN_ID)) ?? getFallbackFeeOverrides(APP_CHAIN_ID, feeMode));
 
       // --- Path 1: Manual sign via secp256k1_sign + sendRawTransaction ---
       // Privy's eth_sendTransaction and eth_signTransaction handlers don't support
       // type-4 (EIP-7702) transactions server-side. eth_sign is also blocked (Code 4200).
       // However, Privy's provider whitelists the secp256k1_sign method, which does raw
       // ECDSA signing (no "\x19Ethereum Signed Message" prefix) via their backend.
-      // We can: serialize the unsigned type-4 tx → hash it → sign via secp256k1_sign
-      // → assemble the signed tx → broadcast via eth_sendRawTransaction.
+      // We can: serialize the unsigned type-4 tx -> hash it -> sign via secp256k1_sign
+      // -> assemble the signed tx -> broadcast via eth_sendRawTransaction.
       try {
         const provider = (await embeddedWallet.getEthereumProvider()) as Eip1193Provider;
         await ensureProviderChain(provider, APP_CHAIN_ID);
@@ -320,7 +348,7 @@ export function usePrivyWallet() {
           })),
         };
 
-        // Serialize unsigned tx → hash → sign via secp256k1_sign (raw ECDSA).
+        // Serialize unsigned tx -> hash -> sign via secp256k1_sign (raw ECDSA).
         // Privy's provider routes secp256k1_sign to the iframe which calls the backend
         // for raw ECDSA signing (no "\x19Ethereum Signed Message" prefix).
         // eth_sign is blocked (Code 4200), but secp256k1_sign is whitelisted.
@@ -544,6 +572,92 @@ export function usePrivyWallet() {
     },
     [externalWallet],
   );
+
+  const clearEip7702DelegationFromExternal = useCallback(async () => {
+    if (!embeddedWallet || !embeddedWalletAddress) throw new Error("Privy embedded wallet not found.");
+
+    const authorization = await sign7702Authorization(
+      {
+        contractAddress: zeroAddress,
+        chainId: APP_CHAIN_ID,
+        executor: "self",
+      },
+      { address: embeddedWalletAddress },
+    );
+
+    try {
+      return await sendTransaction7702({
+        authorizationList: [authorization],
+        gas: 120_000n,
+        feeMode: "normal",
+      });
+    } catch (embeddedError) {
+      console.warn(
+        "[PrivyWallet] embedded clear 7702 delegation failed, retrying through external wallet:",
+        formatUnknownError(embeddedError),
+      );
+      if (!externalWallet) {
+        throw embeddedError;
+      }
+    }
+
+    const provider = (await externalWallet.getEthereumProvider()) as Eip1193Provider;
+    await ensureProviderChain(provider, APP_CHAIN_ID);
+
+    const sponsoredAuthorization = await sign7702Authorization(
+      {
+        contractAddress: zeroAddress,
+        chainId: APP_CHAIN_ID,
+        executor: externalWallet.address as `0x${string}`,
+      },
+      { address: embeddedWalletAddress },
+    );
+
+    const requestTx = {
+      from: externalWallet.address as `0x${string}`,
+      to: externalWallet.address as `0x${string}`,
+      chainId: toHex(APP_CHAIN_ID),
+      type: toHex(4),
+      authorizationList: [normalizeAuthorizationForRpc(sponsoredAuthorization)],
+      gas: toHex(120_000n),
+    };
+
+    try {
+      const hash = await withTimeout(
+        provider.request({
+          method: "eth_sendTransaction",
+          params: [requestTx],
+        }) as Promise<string>,
+        SILENT_SEND_TIMEOUT_MS,
+        "External wallet clear EIP-7702 delegation",
+      );
+      return hash as `0x${string}`;
+    } catch (firstError) {
+      console.warn(
+        "[PrivyWallet] external clear 7702 delegation failed, retrying via viem walletClient:",
+        formatUnknownError(firstError),
+      );
+    }
+
+    const walletClient = createWalletClient({
+      account: externalWallet.address as `0x${string}`,
+      chain: APP_CHAIN,
+      transport: custom(provider),
+    });
+    const hash = await withTimeout(
+      walletClient.sendTransaction({
+        account: externalWallet.address as `0x${string}`,
+        to: externalWallet.address as `0x${string}`,
+        chain: APP_CHAIN,
+        authorizationList: [sponsoredAuthorization],
+        gas: 120_000n,
+      } as Parameters<typeof walletClient.sendTransaction>[0]),
+      SILENT_SEND_TIMEOUT_MS,
+      "External wallet clear EIP-7702 delegation",
+    );
+    return hash as `0x${string}`;
+  }, [embeddedWallet, embeddedWalletAddress, externalWallet, sendTransaction7702, sign7702Authorization]);
+
   const { eip7702Diagnostic, runEip7702Diagnostic, runEip7702SendDiagnostic } =
     usePrivy7702Diagnostics({
       embeddedWallet,
@@ -568,7 +682,11 @@ export function usePrivyWallet() {
 
   return useMemo(
     () => ({
+      authenticated,
       embeddedWalletAddress,
+      embeddedWalletReady,
+      embeddedWalletCodeChecking,
+      embeddedWallet7702DelegateAddress,
       externalWalletAddress,
       embeddedWalletSyncing,
       eip7702,
@@ -582,9 +700,15 @@ export function usePrivyWallet() {
       sendTransactionSilent,
       sendTransaction7702,
       sendTransactionFromExternal,
+      clearEip7702DelegationFromExternal,
+      refreshEmbeddedWalletCode,
     }),
     [
+      authenticated,
       embeddedWalletAddress,
+      embeddedWalletReady,
+      embeddedWalletCodeChecking,
+      embeddedWallet7702DelegateAddress,
       externalWalletAddress,
       embeddedWalletSyncing,
       eip7702,
@@ -598,6 +722,8 @@ export function usePrivyWallet() {
       sendTransactionSilent,
       sendTransaction7702,
       sendTransactionFromExternal,
+      clearEip7702DelegationFromExternal,
+      refreshEmbeddedWalletCode,
     ],
   );
 }

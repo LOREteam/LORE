@@ -13,6 +13,8 @@ const transferBadgeVariantClasses: Record<NonNullable<TransferRowProps["assetVar
   danger: "border-red-500/35 bg-red-500/10 text-red-300",
   warning: "border-amber-500/35 bg-amber-500/10 text-amber-300",
   sky: "border-sky-500/35 bg-sky-500/10 text-sky-300",
+  locked: "border-white/5 bg-[#13132a] text-gray-400",
+  pending: "border-amber-500/30 bg-amber-500/10 text-amber-300",
 };
 
 export const WalletTransferRow = React.memo(function WalletTransferRow({

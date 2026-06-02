@@ -31,7 +31,7 @@ async function savePreviewVariant(browser, label, variant, fileName) {
     timeout: 30_000,
   });
   const expectedTitle =
-    variant === "weekly" ? "WEEKLY JACKPOT" : variant === "dual" ? "DOUBLE JACKPOT" : "DAILY JACKPOT";
+    variant === "weekly" ? "WEEKLY JACKPOT WIN" : variant === "dual" ? "DOUBLE JACKPOT WIN" : "DAILY JACKPOT WIN";
   await page.getByText(expectedTitle).waitFor({ state: "visible", timeout: 30_000 });
   await page.waitForTimeout(1000);
   const target = path.join(OUTPUT_DIR, fileName);
@@ -50,7 +50,7 @@ async function saveJackpotWinPage(browser, fileName) {
     `${BASE_URL}/jackpot-win?kind=dual&amount=185.5&tile=3&epoch=1284&winner=0x1234567890abcdef1234567890abcdef12345678`,
     { waitUntil: "load", timeout: 30_000 },
   );
-  await page.getByText("DOUBLE WINNER").waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByText("Double Jackpot Winner").waitFor({ state: "visible", timeout: 30_000 });
   const target = path.join(OUTPUT_DIR, fileName);
   await page.screenshot({ path: target, fullPage: true });
   console.log(`Saved jackpot-win: ${target}`);

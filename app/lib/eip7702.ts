@@ -23,6 +23,13 @@ export const EIP7702_DELEGATE_ADDRESS = normalizeOptionalAddress(
   getConfiguredEip7702DelegateAddress(),
 );
 
+export function parseEip7702DelegationCode(code?: string | null) {
+  if (!code?.startsWith("0xef0100")) return null;
+  const delegatedAddress = code.slice(8, 48);
+  if (delegatedAddress.length !== 40) return null;
+  return normalizeOptionalAddress(`0x${delegatedAddress}`);
+}
+
 export const EIP7702_GAME_DELEGATE_ABI = parseAbi([
   "function approveAndPlaceBatchSameAmount(address token,address game,uint256[] calldata tileIds,uint256 amount,address spender,uint256 approvalAmount) external",
   "function approveAndPlaceBatchBitmap(address token,address game,uint32 tileMask,uint256 amount,address spender,uint256 approvalAmount) external",

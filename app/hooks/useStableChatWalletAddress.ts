@@ -26,7 +26,7 @@ export function useStableChatWalletAddress(...addresses: Array<string | null | u
     if (typeof window === "undefined") return candidates[0] ?? null;
     const stored = normalizeCandidate(window.localStorage.getItem(CHAT_WALLET_STORAGE_KEY));
     if (stored && candidates.includes(stored)) return stored;
-    return candidates[0] ?? stored ?? null;
+    return candidates[0] ?? null;
   });
 
   useEffect(() => {

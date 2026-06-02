@@ -17,6 +17,7 @@
 /.next/
 /.next-check/
 /.next-build-check/
+/.next-verify/
 /.ms-playwright/
 /out/
 
@@ -43,6 +44,27 @@ yarn-error.log*
 .next-*.log
 artifacts/**/*.log
 artifacts/smoke-browser/
+/.playwright-mcp/
+/.npm-cache/
+/.tmp-npm-cache/
+/*-preview.png
+/*-current.png
+/*-debug.png
+/mobile-*.png
+/mobile-*.jpeg
+/header-*.png
+/grid-*.png
+/tiles-*.png
+/jackpot-*.png
+/weekly-*.png
+/daily-*.png
+/login-*.txt
+/snapshot-*.md
+/*-console.txt
+/*-warning.txt
+/*-snapshot.md
+/*.abi
+/*.bin
 
 # env files 
 .env*

@@ -10,20 +10,23 @@ export interface RecentWin {
   user: string;
   amount: string;
   amountRaw: string;
+  tileId?: number;
+  jackpotKind?: "daily" | "weekly" | "daily-weekly";
 }
 
 interface RecentWinsApiResponse {
-  wins?: Array<{ epoch?: string; user?: string; amount?: string; amountRaw?: string }>;
+  wins?: Array<{ epoch?: string; user?: string; amount?: string; amountRaw?: string; tileId?: number; jackpotKind?: string }>;
   error?: string;
 }
 
 interface RecentWinsCacheEnvelope {
   savedAt?: number;
-  wins?: Array<{ epoch?: string; user?: string; amount?: string; amountRaw?: string }>;
+  wins?: Array<{ epoch?: string; user?: string; amount?: string; amountRaw?: string; tileId?: number; jackpotKind?: string }>;
 }
 
 const REFRESH_MS = 45_000;
 const HIDDEN_REFRESH_MS = 180_000;
+const CACHE_WRITE_MIN_MS = 120_000;
 const MAX_WINS = 100;
 const WARN_THROTTLE_MS = 15_000;
 const STORAGE_KEY = `lore:recent-wins-cache:v3:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
@@ -33,15 +36,24 @@ function normalizeWins(rows: Array<{
   user?: string;
   amount?: string;
   amountRaw?: string;
+  tileId?: number;
+  jackpotKind?: string;
 }>): RecentWin[] {
   return rows
     .map((row) => {
       if (!row?.epoch || !row?.user || !row?.amountRaw) return null;
+      const tileId = row.tileId;
+      const jackpotKind =
+        row.jackpotKind === "daily" || row.jackpotKind === "weekly" || row.jackpotKind === "daily-weekly"
+          ? row.jackpotKind
+          : undefined;
       return {
         epoch: String(row.epoch),
         user: String(row.user),
         amount: String(row.amount ?? "0.00"),
         amountRaw: String(row.amountRaw),
+        ...(typeof tileId === "number" && Number.isInteger(tileId) && tileId > 0 ? { tileId } : {}),
+        ...(jackpotKind ? { jackpotKind } : {}),
       };
     })
     .filter((row): row is RecentWin => row !== null)
@@ -57,7 +69,9 @@ function recentWinsEqual(left: RecentWin[], right: RecentWin[]) {
       a.epoch !== b.epoch ||
       a.user !== b.user ||
       a.amount !== b.amount ||
-      a.amountRaw !== b.amountRaw
+      a.amountRaw !== b.amountRaw ||
+      a.tileId !== b.tileId ||
+      a.jackpotKind !== b.jackpotKind
     ) {
       return false;
     }
@@ -74,6 +88,8 @@ function loadCache(): { wins: RecentWin[]; savedAt: number | null } {
       user?: string;
       amount?: string;
       amountRaw?: string;
+      tileId?: number;
+      jackpotKind?: string;
     }>;
     if (Array.isArray(parsed)) {
       return { wins: normalizeWins(parsed), savedAt: null };
@@ -190,8 +206,15 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
         if (changed) {
           setWins(nextWins);
         }
-        saveCache(nextWins);
-        cacheSavedAtRef.current = Date.now();
+        const now = Date.now();
+        const shouldWriteCache =
+          changed ||
+          !cacheSavedAtRef.current ||
+          now - cacheSavedAtRef.current >= CACHE_WRITE_MIN_MS;
+        if (shouldWriteCache) {
+          saveCache(nextWins);
+          cacheSavedAtRef.current = now;
+        }
       }
     } catch (error) {
       if (controller.signal.aborted) return;

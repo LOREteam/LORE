@@ -58,7 +58,7 @@ export function useMiningGuards({
   const [lastBet, setLastBet] = useState<LastBet | null>(null);
   const [balanceWarningDismissed, setBalanceWarningDismissed] = useState(false);
   const hasPlayableWallet = Boolean(connectedWalletAddress || embeddedWalletAddress);
-  // V8 atomic resolve: the previous epoch is finalized in the same tx that
+  // V9 atomic resolve: the previous epoch is finalized in the same tx that
   // advances `currentEpoch`, so the winning tile is already on-chain when
   // the new epoch starts. The grid-reveal animation is non-blocking — never
   // gate betting on it. Only gate on liveState readiness.

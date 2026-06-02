@@ -27,7 +27,9 @@ import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs } from 
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
 const BASE_URL = process.env.TEST_WALLET_BASE_URL?.trim() || "http://localhost:3000";
+const DRY_RUN = process.env.TEST_WALLET_DRY_RUN === "1";
 const SAFE_SECONDS_LEFT = Number(process.env.TEST_WALLET_SAFE_SECONDS_LEFT ?? "35");
+const MAX_EPOCH_READY_WAIT_MS = Number(process.env.TEST_WALLET_MAX_EPOCH_READY_WAIT_MS ?? "180000");
 const POST_TX_API_WAIT_MS = Number(process.env.TEST_WALLET_POST_TX_API_WAIT_MS ?? "5000");
 const SINGLE_AMOUNT = parseUnits(process.env.TEST_WALLET_SINGLE_BET_AMOUNT ?? "1", 18);
 const BATCH_AMOUNT = parseUnits(process.env.TEST_WALLET_BATCH_BET_AMOUNT ?? "1", 18);
@@ -81,27 +83,43 @@ function buildTilePlan(epoch: bigint) {
 }
 
 async function waitForSafeEpochWindow(publicClient: PublicClient) {
+  const startedAt = Date.now();
   for (;;) {
-    const epoch = await publicClient.readContract({
-      address: CONTRACT_ADDRESS,
-      abi: GAME_ABI,
-      functionName: "currentEpoch",
-    });
-    const endTime = await publicClient.readContract({
-      address: CONTRACT_ADDRESS,
-      abi: GAME_ABI,
-      functionName: "getEpochEndTime",
-      args: [epoch],
-    });
-    const now = Math.floor(Date.now() / 1000);
-    const secondsLeft = Number(endTime) - now;
+    const epochWindow = await readEpochWindow(publicClient);
+    const { epoch, secondsLeft } = epochWindow;
     if (secondsLeft > SAFE_SECONDS_LEFT) {
-      return { epoch, secondsLeft };
+      return epochWindow;
+    }
+    if (Date.now() - startedAt >= MAX_EPOCH_READY_WAIT_MS) {
+      throw new Error(
+        `Timed out waiting for a safe betting window. epoch=${epoch.toString()} secondsLeft=${secondsLeft}. ` +
+        "Check that the keeper or auto-resolve path is advancing epochs.",
+      );
     }
     const waitMs = Math.max((secondsLeft + 3) * 1000, 5_000);
     console.log(`[playtest] epoch ${epoch.toString()} too close to end (${secondsLeft}s left), waiting ${Math.ceil(waitMs / 1000)}s`);
     await delay(waitMs);
   }
+}
+
+async function readEpochWindow(publicClient: PublicClient) {
+  const epoch = await publicClient.readContract({
+    address: CONTRACT_ADDRESS,
+    abi: GAME_ABI,
+    functionName: "currentEpoch",
+  });
+  const endTime = await publicClient.readContract({
+    address: CONTRACT_ADDRESS,
+    abi: GAME_ABI,
+    functionName: "getEpochEndTime",
+    args: [epoch],
+  });
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    epoch,
+    epochEndTime: endTime,
+    secondsLeft: Number(endTime) - now,
+  };
 }
 
 async function getFeeOverrides(publicClient: PublicClient) {
@@ -318,11 +336,101 @@ async function fetchJson(url: string) {
 }
 
 async function main() {
-  const account = privateKeyToAccount(normalizePrivateKey(getRequiredEnv("TEST_WALLET_PRIVATE_KEY")));
+  const account = process.env.TEST_WALLET_PRIVATE_KEY?.trim()
+    ? privateKeyToAccount(normalizePrivateKey(getRequiredEnv("TEST_WALLET_PRIVATE_KEY")))
+    : null;
+  const dryRunAddress = process.env.TEST_WALLET_ADDRESS?.trim()
+    ? getAddress(process.env.TEST_WALLET_ADDRESS)
+    : account?.address;
+  if (!DRY_RUN && !account) {
+    throw new Error("Missing required env var: TEST_WALLET_PRIVATE_KEY");
+  }
+
   const rpcUrls = getPreferredLineaRpcs(process.env.TEST_WALLET_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const transport = fallback(rpcUrls.map((url) => http(url)));
   const publicClient = createPublicClient({ chain: APP_CHAIN, transport });
-  const walletClient = createWalletClient({ account, chain: APP_CHAIN, transport });
+  const walletClient = account ? createWalletClient({ account, chain: APP_CHAIN, transport }) : null;
+
+  const contractToken = await publicClient.readContract({
+    address: CONTRACT_ADDRESS,
+    abi: GAME_ABI,
+    functionName: "token",
+  });
+  if (String(contractToken).toLowerCase() !== LINEA_TOKEN_ADDRESS.toLowerCase()) {
+    throw new Error(`Contract token mismatch: expected ${LINEA_TOKEN_ADDRESS}, got ${contractToken}`);
+  }
+
+  const epochWindow = DRY_RUN
+    ? await readEpochWindow(publicClient)
+    : await waitForSafeEpochWindow(publicClient);
+  const { epoch, secondsLeft } = epochWindow;
+  const { singleTile, batchTiles } = buildTilePlan(epoch);
+  const neededAmount = SINGLE_AMOUNT + BATCH_AMOUNT * BigInt(batchTiles.length);
+
+  console.log(`[playtest] dryRun=${DRY_RUN ? "yes" : "no"}`);
+  console.log(`[playtest] address=${dryRunAddress ?? "not-set"}`);
+  console.log(`[playtest] network=${APP_NETWORK} chainId=${APP_CHAIN.id}`);
+  console.log(`[playtest] rpc=${rpcUrls[0]}`);
+  console.log(`[playtest] contract=${CONTRACT_ADDRESS}`);
+  console.log(`[playtest] token=${LINEA_TOKEN_ADDRESS}`);
+  console.log(`[playtest] epoch=${epoch.toString()} secondsLeft=${secondsLeft}`);
+  console.log(`[playtest] single=${singleTile} x ${formatUnits(SINGLE_AMOUNT, 18)} LINEA`);
+  console.log(`[playtest] batch=${batchTiles.join(",")} x ${formatUnits(BATCH_AMOUNT, 18)} LINEA`);
+
+  if (DRY_RUN) {
+    let tokenBalance: bigint | null = null;
+    let nativeBalance: bigint | null = null;
+    let allowance: bigint | null = null;
+    if (dryRunAddress) {
+      [tokenBalance, nativeBalance, allowance] = await Promise.all([
+        publicClient.readContract({
+          address: LINEA_TOKEN_ADDRESS,
+          abi: TOKEN_ABI,
+          functionName: "balanceOf",
+          args: [dryRunAddress],
+        }),
+        publicClient.getBalance({ address: dryRunAddress }),
+        publicClient.readContract({
+          address: LINEA_TOKEN_ADDRESS,
+          abi: TOKEN_ABI,
+          functionName: "allowance",
+          args: [dryRunAddress, CONTRACT_ADDRESS],
+        }),
+      ]);
+      console.log(`[playtest] tokenBalance=${formatUnits(tokenBalance, 18)} LINEA`);
+      console.log(`[playtest] nativeBalance=${formatEther(nativeBalance)} ETH`);
+      console.log(`[playtest] allowance=${formatUnits(allowance, 18)} LINEA`);
+      console.log(`[playtest] needed=${formatUnits(neededAmount, 18)} LINEA`);
+    }
+
+    const [home, deposits, rebates] = await Promise.all([
+      fetch(`${BASE_URL}/`, { headers: { accept: "text/html" } }).then((response) => ({ ok: response.ok, status: response.status })),
+      dryRunAddress
+        ? fetchJson(`${BASE_URL}/api/deposits?user=${dryRunAddress.toLowerCase()}&includeRewards=1`)
+        : Promise.resolve({ ok: false, status: 0, json: "skipped: TEST_WALLET_ADDRESS not set" }),
+      dryRunAddress
+        ? fetchJson(`${BASE_URL}/api/rebates?user=${dryRunAddress.toLowerCase()}`)
+        : Promise.resolve({ ok: false, status: 0, json: "skipped: TEST_WALLET_ADDRESS not set" }),
+    ]);
+    console.log("[playtest] dry-run api snapshots");
+    console.log(JSON.stringify({
+      home,
+      depositsStatus: deposits.status,
+      depositsOk: deposits.ok,
+      rebatesStatus: rebates.status,
+      rebatesOk: rebates.ok,
+      epochEndTime: epochWindow.epochEndTime.toString(),
+      epochIsStale: secondsLeft <= 0,
+      hasEnoughToken: tokenBalance == null ? null : tokenBalance >= neededAmount,
+      hasEnoughEth: nativeBalance == null ? null : nativeBalance > 0n,
+      allowanceEnough: allowance == null ? null : allowance >= neededAmount,
+    }, (_key, value) => (typeof value === "bigint" ? value.toString() : value), 2));
+    return;
+  }
+
+  if (!account || !walletClient) {
+    throw new Error("Wallet client unavailable");
+  }
 
   const tokenBalance = await publicClient.readContract({
     address: LINEA_TOKEN_ADDRESS,
@@ -331,18 +439,8 @@ async function main() {
     args: [account.address],
   });
   const nativeBalance = await publicClient.getBalance({ address: account.address });
-  const { epoch, secondsLeft } = await waitForSafeEpochWindow(publicClient);
-  const { singleTile, batchTiles } = buildTilePlan(epoch);
-  const neededAmount = SINGLE_AMOUNT + BATCH_AMOUNT * BigInt(batchTiles.length);
-
-  console.log(`[playtest] address=${account.address}`);
-  console.log(`[playtest] network=${APP_NETWORK} chainId=${APP_CHAIN.id}`);
-  console.log(`[playtest] rpc=${rpcUrls[0]}`);
   console.log(`[playtest] tokenBalance=${formatUnits(tokenBalance, 18)} LINEA`);
   console.log(`[playtest] nativeBalance=${formatEther(nativeBalance)} ETH`);
-  console.log(`[playtest] epoch=${epoch.toString()} secondsLeft=${secondsLeft}`);
-  console.log(`[playtest] single=${singleTile} x ${formatUnits(SINGLE_AMOUNT, 18)} LINEA`);
-  console.log(`[playtest] batch=${batchTiles.join(",")} x ${formatUnits(BATCH_AMOUNT, 18)} LINEA`);
 
   if (tokenBalance < neededAmount) {
     throw new Error(`Insufficient LINEA balance: need ${formatUnits(neededAmount, 18)}, have ${formatUnits(tokenBalance, 18)}`);

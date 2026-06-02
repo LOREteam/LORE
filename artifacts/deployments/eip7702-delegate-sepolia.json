@@ -13,6 +13,8 @@
   "transactionHash": "0x17fb2f744bd2d012775367bb78365057f22b3d9b3de10be8d6109f31ea180a66",
   "blockNumber": null,
   "pending": true,
+  "obsolete": true,
+  "obsoleteReason": "Deployed before LineaOre7702Delegate was changed to bind token/game/spender via constructor args. Do not configure this delegate for production or mainnet testing.",
   "abi": [
     {
       "inputs": [],

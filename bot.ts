@@ -52,8 +52,8 @@ const NORMAL_MAX_FEE_BUMP_PERCENT = 130n;
 const NORMAL_PRIORITY_BUMP_PERCENT = 125n;
 const GAS_LIMIT_MARGIN_PERCENT = 150n;
 
-// V8 atomic resolve: a single tx finalizes the epoch. Players normally
-// trigger _autoResolveIfNeeded() via their next bet — the keeper is just a
+// V9 atomic resolve: a single tx finalizes the epoch. Players normally
+// trigger _autoResolveIfNeeded() via their next bet - the keeper is just a
 // fallback for empty/quiet rounds. Keep grace short so the UI doesn't freeze.
 const GRACE_SECONDS = (() => {
   const raw = Number(process.env.LAST_BET_GRACE_SECONDS ?? process.env.KEEPER_GRACE_SECONDS ?? "2");
@@ -356,7 +356,7 @@ async function startKeeperBot() {
           } catch (receiptCheckErr) {
             const receiptCheckMsg = receiptCheckErr instanceof Error ? (receiptCheckErr.message ?? "") : String(receiptCheckErr);
             if (isNetworkLikeError(receiptCheckMsg)) {
-              // Network error – don't assume tx is stale, just wait and retry
+              // Network error - don't assume tx is stale, just wait and retry
               console.warn(`\nPending resolve receipt check failed (network): ${receiptCheckMsg.slice(0, 100)}`);
               await delay(3000);
               continue;

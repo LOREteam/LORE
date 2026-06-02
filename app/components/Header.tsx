@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
@@ -75,7 +75,7 @@ export const Header = React.memo(function Header({
   isPageVisible = true,
   epochDurationChange = null,
 }: HeaderProps) {
-  const { login, logout, authenticated } = usePrivy();
+  const { ready: privyReady, login, logout, authenticated } = usePrivy();
   const showColdBootDefaults = coldBootDefaults && !liveStateReady && !isRevealing;
   const timerStalled = timerReady && liveStateReady && !showColdBootDefaults && !isRevealing && timeLeft === 0;
   const showNumericTimer = liveStateReady || showColdBootDefaults;
@@ -97,6 +97,11 @@ export const Header = React.memo(function Header({
     const timeoutId = window.setTimeout(() => setEmbeddedAddressCopied(false), 1400);
     return () => window.clearTimeout(timeoutId);
   }, [embeddedAddressCopied]);
+
+  const handleLogin = useCallback(() => {
+    if (authenticated) return;
+    void login();
+  }, [authenticated, login]);
 
   useEffect(() => {
     if (!liveStateReady) {
@@ -135,7 +140,7 @@ export const Header = React.memo(function Header({
       <HeaderJackpots
         jackpotInfo={jackpotInfo}
         historyReady={hydrated}
-        initialNowMs={initialNowMs || Date.now()}
+        initialNowMs={initialNowMs}
         isPageVisible={isPageVisible}
         jackpotHistory={jackpotHistory}
       />
@@ -143,24 +148,23 @@ export const Header = React.memo(function Header({
 
     <header className="grid grid-cols-1 min-[900px]:grid-cols-12 gap-2 mb-2">
       {/* Epoch + WinsTicker */}
-      <div className="min-[900px]:col-span-4 min-[900px]:h-22.5 flex flex-col rounded-xl bg-surface-raised border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] animate-slide-up overflow-hidden" style={{ animationDelay: "0.05s" }}>
+      <div className="min-[900px]:col-span-4 min-[900px]:h-22.5 flex flex-col rounded-xl bg-surface-raised border border-violet-500/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_20px_rgba(139,92,246,0.06)] overflow-hidden">
         <div className="grid grid-cols-[5.25rem_minmax(0,1fr)_4.25rem] sm:grid-cols-[7rem_minmax(0,1fr)_5.5rem] items-stretch shrink-0">
         {/* LEFT - Epoch */}
-        <div className="flex flex-col items-center justify-center py-1 px-1">
+        <div className="flex flex-col items-center justify-center px-1 py-1">
           <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Epoch</div>
-          <div className="rounded-md overflow-visible w-full max-w-25 mx-auto">
+          <div className="flex w-full justify-center overflow-visible rounded-md">
             <div
-              className={`px-2.5 h-7 rounded-md border flex items-center justify-center gap-1.5 transition-colors duration-200 ${
+              className={`flex h-7 w-[7.5rem] max-w-[calc(100%-0.5rem)] items-center justify-center gap-1.5 rounded-md border px-2.5 text-center transition-colors duration-200 ${
                 isRevealing
-                  ? "bg-amber-500/15 border-amber-500/40 text-amber-400 reveal-glow"
+                  ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
                   : "bg-violet-500/10 border-violet-500/30 text-violet-400"
               }`}
             >
-            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isRevealing ? "bg-amber-400 reveal-dot" : "bg-emerald-400 animate-synced-pulse"}`} />
-            <span key={visualEpoch ?? ""} className={`lore-nums text-[11px] font-bold uppercase tracking-widest whitespace-nowrap ${isRevealing ? "reveal-text-blink" : ""}`}>
-              {isRevealing ? "REVEAL" : visualEpoch ? `#${visualEpoch}` : showColdBootDefaults ? "#0" : "SYNC"}
-            </span>
-          </div>
+              <span key={visualEpoch ?? ""} className="lore-hud-number whitespace-nowrap text-center text-[11px] font-bold uppercase tracking-widest">
+                {isRevealing ? "REVEAL" : visualEpoch ? `#${visualEpoch}` : showColdBootDefaults ? "#0" : "SYNC"}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -181,32 +185,32 @@ export const Header = React.memo(function Header({
             }`}
           >
             {showNumericTimer ? (
-              <span className="text-[1.35rem]">{formatTime(timeLeft)}</span>
+            <span className="lore-hud-number text-[1.45rem]">{formatTime(timeLeft)}</span>
             ) : (
-              <span className="text-[1.35rem]">--:--</span>
+              <span className="lore-hud-number text-[1.45rem]">--:--</span>
             )}
           </div>
         </div>
 
         {/* RIGHT - Status */}
-        <div className="flex flex-col items-center justify-center py-1 min-h-14">
+        <div className="flex min-h-14 min-w-0 flex-col items-center justify-center px-1 py-1">
           {showAnalyzing ? (
             <>
-              <div className="flex items-end gap-0.75 h-5 mb-1 [&>span]:origin-bottom">
-                <span className="w-0.75 bg-amber-400/90 rounded-full animate-[bar-1_0.6s_ease-in-out_infinite]" style={{ height: "40%" }} />
-                <span className="w-0.75 bg-amber-400 rounded-full animate-[bar-2_0.6s_ease-in-out_infinite]" style={{ height: "70%", animationDelay: "0.1s" }} />
-                <span className="w-0.75 bg-amber-400/90 rounded-full animate-[bar-3_0.6s_ease-in-out_infinite]" style={{ height: "100%", animationDelay: "0.2s" }} />
-                <span className="w-0.75 bg-amber-400/70 rounded-full animate-[bar-2_0.6s_ease-in-out_infinite]" style={{ height: "55%", animationDelay: "0.15s" }} />
-                <span className="w-0.75 bg-amber-400/90 rounded-full animate-[bar-1_0.6s_ease-in-out_infinite]" style={{ height: "25%", animationDelay: "0.05s" }} />
+              <div className="mb-0.5 flex h-4 items-end gap-0.75 [&>span]:origin-bottom">
+                <span className={`w-0.75 bg-amber-400/90 rounded-full ${reducedMotion ? "" : "mining-eq-bar-1"}`} style={{ height: "40%" }} />
+                <span className={`w-0.75 bg-amber-400 rounded-full ${reducedMotion ? "" : "mining-eq-bar-2"}`} style={{ height: "70%" }} />
+                <span className={`w-0.75 bg-amber-400/90 rounded-full ${reducedMotion ? "" : "mining-eq-bar-3"}`} style={{ height: "100%" }} />
+                <span className={`w-0.75 bg-amber-400/70 rounded-full ${reducedMotion ? "" : "mining-eq-bar-2"}`} style={{ height: "55%" }} />
+                <span className={`w-0.75 bg-amber-400/90 rounded-full ${reducedMotion ? "" : "mining-eq-bar-1"}`} style={{ height: "25%" }} />
               </div>
-              <span className="text-[10px] font-bold text-amber-400/80 uppercase tracking-widest text-center">Analyzing</span>
+              <span className={`truncate text-center text-[9px] font-bold uppercase leading-none tracking-[0.12em] text-amber-400/80 ${reducedMotion ? "" : "status-label-pulse-amber"}`}>Analyzing</span>
             </>
           ) : (
             <div className="flex flex-col items-center">
-              <div className="animate-float" style={{ animationDuration: "2.5s" }}>
-                <PickaxeIcon className="w-8 h-8" />
+              <div className={reducedMotion ? "" : "mining-pickaxe-motion"}>
+                <PickaxeIcon className="h-7 w-7" />
               </div>
-              <span className="text-[10px] font-bold text-violet-400/50 uppercase tracking-widest mt-0.5 text-center">Mining</span>
+              <span className={`mt-0.5 truncate text-center text-[9px] font-bold uppercase leading-none tracking-[0.12em] text-violet-300/65 ${reducedMotion ? "" : "status-label-pulse-violet"}`}>Mining</span>
             </div>
           )}
         </div>
@@ -243,11 +247,12 @@ export const Header = React.memo(function Header({
 
       <HeaderWalletCard
         authenticated={authenticated}
+        privyReady={privyReady}
         embeddedWalletAddress={embeddedWalletAddress}
         embeddedWalletSyncing={embeddedWalletSyncing}
         embeddedAddressCopied={embeddedAddressCopied}
         onCopyEmbeddedAddress={handleCopyEmbeddedAddress}
-        onLogin={() => { void login(); }}
+        onLogin={handleLogin}
         onLogout={() => { void logout(); }}
         onOpenWalletSettings={onOpenWalletSettings}
         privyEthBalance={privyEthBalance}
@@ -265,7 +270,7 @@ function PickaxeIcon({ className = "" }: { className?: string }) {
     <svg
       xmlns="http://www.w3.org/2000/svg"
       viewBox="-56.32 -56.32 624.64 624.64"
-      className={`w-8 h-8 ${className}`}
+      className={className}
       transform="scale(-1,1)"
     >
       <path fill="#7E68A8" d="M355.621,157.335c66.788,66.788,112.393,144.29,134.835,220.392 c23.099-96.551-3.012-202.476-78.357-277.82C336.423,24.23,229.894-1.79,133,21.846C209.817,44.05,288.182,89.894,355.621,157.335z" />

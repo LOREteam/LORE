@@ -7,6 +7,7 @@ import { readJsonResponse } from "../lib/readJsonResponse";
 
 const STORAGE_KEY = `lore:leaderboard:v3:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 const LEADERBOARD_CACHE_TTL_MS = 60_000;
+const LEADERBOARD_CACHE_WRITE_MIN_MS = 5 * 60_000;
 
 export interface LeaderboardsData {
   biggestSingleWin: LeaderboardEntry[];
@@ -176,9 +177,18 @@ export function useLeaderboards(enabled: boolean) {
           setData(nextData);
         }
       }
-      saveCache(nextData);
-      cacheSavedAtRef.current = Date.now();
-      initialCacheRef.current = { data: nextData, savedAt: cacheSavedAtRef.current };
+      const now = Date.now();
+      const shouldWriteCache =
+        changed ||
+        !cacheSavedAtRef.current ||
+        now - cacheSavedAtRef.current >= LEADERBOARD_CACHE_WRITE_MIN_MS;
+      if (shouldWriteCache) {
+        saveCache(nextData);
+        cacheSavedAtRef.current = now;
+        initialCacheRef.current = { data: nextData, savedAt: now };
+      } else {
+        initialCacheRef.current = { data: nextData, savedAt: cacheSavedAtRef.current };
+      }
     } catch (err) {
       if (mountedRef.current) {
         setError(err instanceof Error ? err.message : String(err));
@@ -194,13 +204,27 @@ export function useLeaderboards(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     const savedAt = cacheSavedAtRef.current;
-    if (savedAt && Date.now() - savedAt < LEADERBOARD_CACHE_TTL_MS) {
-      const timeoutId = window.setTimeout(() => {
-        void fetchAll();
-      }, LEADERBOARD_CACHE_TTL_MS - (Date.now() - savedAt));
-      return () => window.clearTimeout(timeoutId);
-    }
-    void fetchAll();
+    const initialDelay =
+      savedAt && Date.now() - savedAt < LEADERBOARD_CACHE_TTL_MS
+        ? LEADERBOARD_CACHE_TTL_MS - (Date.now() - savedAt)
+        : 0;
+    let cancelled = false;
+    let timeoutId: number | null = null;
+
+    const schedule = (delayMs: number) => {
+      timeoutId = window.setTimeout(async () => {
+        if (cancelled) return;
+        await fetchAll();
+        if (cancelled) return;
+        schedule(LEADERBOARD_CACHE_TTL_MS);
+      }, delayMs);
+    };
+
+    schedule(initialDelay);
+    return () => {
+      cancelled = true;
+      if (timeoutId) window.clearTimeout(timeoutId);
+    };
   }, [enabled, fetchAll]);
 
   const refetch = useCallback(() => {
