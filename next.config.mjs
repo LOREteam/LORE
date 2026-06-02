@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { withSentryConfig } from "@sentry/nextjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname);
@@ -42,4 +43,18 @@ const nextConfig = {
   turbopack: {},
 };
 
-export default nextConfig;
+const canUploadSentrySourcemaps = Boolean(
+  process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT,
+);
+
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: !process.env.CI,
+  telemetry: false,
+  sourcemaps: {
+    disable: !canUploadSentrySourcemaps,
+    deleteSourcemapsAfterUpload: true,
+  },
+});
