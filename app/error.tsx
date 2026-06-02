@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
 import { log } from "./lib/logger";
 import {
   isChunkLoadLikeErrorMessage,
@@ -18,6 +19,12 @@ export default function ErrorPage({
 }) {
   useEffect(() => {
     stripChunkReloadCacheParam(window.location, window.history);
+
+    Sentry.captureException(error, {
+      extra: {
+        digest: error.digest,
+      },
+    });
 
     log.error("ErrorBoundary", "route render error", {
       name: error.name,
