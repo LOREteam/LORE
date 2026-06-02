@@ -360,7 +360,10 @@ export const JackpotBanner = React.memo(function JackpotBanner({
       if (activeWin.amount !== readyWin.amount) setActiveWin(readyWin);
       return;
     }
-    if (activeWin && activeWin.epoch === readyWin.epoch && activeWin.tileId === readyWin.tileId) return;
+    if (activeWin && activeWin.epoch === readyWin.epoch && activeWin.tileId === readyWin.tileId) {
+      setActiveWin(readyWin);
+      return;
+    }
     if (dismissedWinKeyRef.current === readyWin.key) return;
     if (openTimerRef.current) clearTimeout(openTimerRef.current);
 

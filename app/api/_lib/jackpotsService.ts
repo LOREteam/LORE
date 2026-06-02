@@ -559,13 +559,20 @@ export async function readJackpotPayload(options: JackpotReadOptions = {}): Prom
     return { payload, source: "rebuilt" };
   }
 
-  const { payload: recoveredPayload } = await buildJackpotsPayload({
-    allowSlowRecovery: true,
-    scheduleBackgroundRecovery: false,
-    seedJackpots: [],
-  });
-  return {
-    payload: commitJackpotResponseCache(recoveredPayload, JACKPOT_ROUTE_CACHE_MS, seq),
-    source: "rebuilt",
-  };
+  try {
+    const { payload: recoveredPayload } = await buildJackpotsPayload({
+      allowSlowRecovery: true,
+      scheduleBackgroundRecovery: false,
+      seedJackpots: [],
+    });
+    return {
+      payload: commitJackpotResponseCache(recoveredPayload, JACKPOT_ROUTE_CACHE_MS, seq),
+      source: "rebuilt",
+    };
+  } catch (error) {
+    logRouteError(ROUTE_METRIC_KEY, error, { phase: "bootstrap-recovery" });
+    const payload = commitJackpotResponseCache({ jackpots: [] }, JACKPOT_ROUTE_CACHE_MS, seq);
+    maybeStartJackpotRecovery([]);
+    return { payload, source: "rebuilt" };
+  }
 }

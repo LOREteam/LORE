@@ -121,30 +121,26 @@ export async function GET(request: Request) {
   }
 
   try {
+    if (recentWinsInflight) {
+      markRouteInflightJoin(ROUTE_METRIC_KEY);
+      const payload = await recentWinsInflight;
+      finishRouteMetric(metric, 200);
+      return jsonNoStore(payload);
+    }
+
     const fastResult = await buildRecentWinsPayload({ allowSlowRecovery: false });
-    const payload = fastResult.recoveryNeeded && fastResult.payload.wins.length === 0
-      ? recentWinsInflight
-        ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await recentWinsInflight)
-        : await (() => {
-            const seq = ++recentWinsBuildSeq;
-            recentWinsInflight = buildRecentWinsPayload({ allowSlowRecovery: true })
-              .then(({ payload: result }) => commitRecentWinsCache(result, RECENT_WINS_ROUTE_CACHE_MS, seq, currentWatermark))
-              .finally(() => {
-                recentWinsInflight = null;
-              });
-            return recentWinsInflight;
-          })()
-      : recentWinsInflight
-      ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await recentWinsInflight)
-      : await (() => {
-          const seq = ++recentWinsBuildSeq;
-          recentWinsInflight = Promise.resolve(fastResult)
-            .then(({ payload: result }) => commitRecentWinsCache(result, RECENT_WINS_ROUTE_CACHE_MS, seq, currentWatermark))
-            .finally(() => {
-              recentWinsInflight = null;
-            });
-          return recentWinsInflight;
-        })();
+    const seq = ++recentWinsBuildSeq;
+    const buildPromise =
+      fastResult.recoveryNeeded && fastResult.payload.wins.length === 0
+        ? buildRecentWinsPayload({ allowSlowRecovery: true })
+        : Promise.resolve(fastResult);
+    recentWinsInflight = buildPromise
+      .then(({ payload: result }) => commitRecentWinsCache(result, RECENT_WINS_ROUTE_CACHE_MS, seq, currentWatermark))
+      .finally(() => {
+        recentWinsInflight = null;
+      });
+
+    const payload = await recentWinsInflight;
 
     finishRouteMetric(metric, 200);
     return jsonNoStore(payload);
