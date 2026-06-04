@@ -388,12 +388,12 @@ export function useRebate(options?: UseRebateOptions) {
   const formatRebateError = useCallback((err: unknown): string => {
     const msg = err instanceof Error ? err.message : String(err);
     const low = msg.toLowerCase();
-    if (low.includes("notresolved")) return "Rebate is not claimable yet because the epoch is not resolved.";
-    if (low.includes("rebatealreadyclaimed")) return "One of the selected rebate epochs was already claimed.";
+    if (low.includes("notresolved")) return "Safety Pool is not claimable yet because the epoch is not resolved.";
+    if (low.includes("rebatealreadyclaimed")) return "One of the selected Safety Pool epochs was already claimed.";
     if (low.includes("norebateavailable") || low.includes("nothing to claim")) {
-      return "No rebate is currently claimable for the selected epochs.";
+      return "No Safety Pool payout is currently claimable for the selected epochs.";
     }
-    if (low.includes("emptyarray")) return "No rebate epochs were selected for claim.";
+    if (low.includes("emptyarray")) return "No Safety Pool epochs were selected for claim.";
     return msg;
   }, []);
 
@@ -427,7 +427,7 @@ export function useRebate(options?: UseRebateOptions) {
       }
 
       throw new Error(
-        `Rebate claim confirmation timed out after ${TX_RECEIPT_TIMEOUT_MS}ms. Refresh the rebate tab in a few seconds.`,
+        `Safety Pool claim confirmation timed out after ${TX_RECEIPT_TIMEOUT_MS}ms. Refresh the Safety Pool tab in a few seconds.`,
       );
     },
     [publicClient],
@@ -697,13 +697,13 @@ export function useRebate(options?: UseRebateOptions) {
       const connected = address ? getAddress(address) : null;
       const sender = silentSend ? rebateAddress : connected;
       if (!sender) {
-        notify?.("Connect a wallet to claim rebates.", "warning");
+        notify?.("Connect a wallet to claim Safety Pool payouts.", "warning");
         return;
       }
 
       if (!silentSend && sender.toLowerCase() !== rebateAddress.toLowerCase()) {
         throw new Error(
-          `Rebate claim sender mismatch. Rebate is loaded for ${rebateAddress}, but your connected wallet is ${sender}. Switch wallets or use the embedded wallet and try again.`,
+          `Safety Pool sender mismatch. Safety Pool is loaded for ${rebateAddress}, but your connected wallet is ${sender}. Switch wallets or use the embedded wallet and try again.`,
         );
       }
 
@@ -716,7 +716,7 @@ export function useRebate(options?: UseRebateOptions) {
 
       if (verifiedClaimableEpochs.length === 0) {
         await refetchRebateInfo({ forceFresh: true });
-        notify?.("No claimable rebate epochs were found. Rebate state has been refreshed.", "info");
+        notify?.("No claimable Safety Pool epochs were found. Safety Pool state has been refreshed.", "info");
         return;
       }
 
@@ -817,7 +817,7 @@ export function useRebate(options?: UseRebateOptions) {
 
         if (queue.length > 1) {
           usedSplitFallback = true;
-          notify?.("Rebate claim is being sent in multiple transactions. Please wait until all parts finish.", "info");
+          notify?.("Safety Pool claim is being sent in multiple transactions. Please wait until all parts finish.", "info");
         }
 
         let localClaimedCount = 0;
@@ -862,11 +862,11 @@ export function useRebate(options?: UseRebateOptions) {
       notify?.(
         claimedEpochCount === 1
           ? claimTxCount <= 1
-            ? "Rebate claimed successfully in 1 transaction."
-            : `Rebate claimed successfully in ${claimTxCount} transactions.`
+            ? "Safety Pool claimed successfully in 1 transaction."
+            : `Safety Pool claimed successfully in ${claimTxCount} transactions.`
           : claimTxCount <= 1
-            ? `Claimed rebates for ${claimedEpochCount} epochs in 1 transaction.`
-            : `Claimed rebates for ${claimedEpochCount} epochs in ${claimTxCount} transactions.`,
+            ? `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in 1 transaction.`
+            : `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transactions.`,
         "success",
       );
       await refetchRebateInfo({ forceFresh: true });
@@ -877,7 +877,7 @@ export function useRebate(options?: UseRebateOptions) {
         log.warn("Rebate", "claim cancelled", err);
         if (claimedEpochCount > 0) {
           notify?.(
-            `Claimed rebates for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"} before the remaining claim flow was cancelled.`,
+            `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"} before the remaining claim flow was cancelled.`,
             "warning",
           );
         }
@@ -886,11 +886,11 @@ export function useRebate(options?: UseRebateOptions) {
         const message = formatRebateError(err);
         if (claimedEpochCount > 0) {
           notify?.(
-            `Claimed rebates for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"}, but some epochs still failed: ${message}`,
+            `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"}, but some epochs still failed: ${message}`,
             "warning",
           );
         } else {
-          notify?.(`Rebate claim failed: ${message}`, "danger");
+          notify?.(`Safety Pool claim failed: ${message}`, "danger");
         }
       }
     } finally {

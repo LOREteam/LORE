@@ -44,8 +44,8 @@ function getTabMeta(tab: TabId) {
 
   if (tab === "rebate") {
     return {
-      label: "Rebate",
-      title: "Rebate",
+      label: "Safety",
+      title: "Safety Pool",
       icon: (
         <>
           <path d="M12 3.75V7.5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />

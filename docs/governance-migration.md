@@ -23,7 +23,7 @@ Key governance properties:
 - protocol fees now go to `feeRecipient`, not `owner()`
 - equal-size multi-bets use `placeBatchBetsSameAmount(...)`
 - compact equal-size multi-bets use `placeBatchBetsBitmap(uint32 tileMask, uint256 amount)`
-- rebate accounting now tracks per-user epoch volume incrementally, so rebate preview/claim paths do not scan all 25 tiles per epoch
+- Safety Pool accounting reuses per-user epoch volume and excludes any player with winning-tile volume from that epoch's consolation payout
 - empty rollover-only epochs no longer leak fees into jackpot / protocol / burn buckets
 
 This matters because a `TimelockController` can safely be the owner without trapping protocol fees.

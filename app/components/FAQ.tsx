@@ -144,7 +144,7 @@ const faqData: FAQItem[] = [
       "92% - base reward for winners (+ rollover + jackpot if triggered)",
       "2% - accrues to the Daily Jackpot pool",
       "3% - accrues to the Weekly Jackpot pool",
-      "2% - protocol fee: half to treasury, half to participation rebates",
+      "2% - protocol fee: half to treasury, half to the Safety Pool for players who missed the winning tile",
       "1% - permanently burned (sent to 0x...dEaD)",
     ],
   },

@@ -451,11 +451,11 @@ export async function verifyAutoMinerFailureScenarios(page, options) {
 }
 
 export async function openDesktopTab(page, options) {
-  const { baseUrl, buttonName, checks, skipMessage, timeoutMs } = options;
+  const { baseUrl, buttonName, checks, skipMessage, targetHash, timeoutMs } = options;
   const tabTimeoutMs = Math.min(timeoutMs, 8_000);
-  const normalizedTargetHash = buttonName === "Mining Hub"
+  const normalizedTargetHash = targetHash ?? (buttonName === "Mining Hub"
     ? ""
-    : `#${buttonName.toLowerCase().replace(/\s+/g, "")}`;
+    : `#${buttonName.toLowerCase().replace(/\s+/g, "")}`);
 
   const resetToHub = async () => {
     try {
@@ -527,9 +527,20 @@ export async function openDesktopTab(page, options) {
       }
       return true;
     } catch {
-      console.log(`SKIP ${skipMessage}`);
-      await resetToHub();
-      return false;
+      try {
+        await page.evaluate((targetHash) => {
+          window.location.hash = targetHash;
+        }, normalizedTargetHash);
+        await waitForDesktopTabState();
+        for (const [locator, label] of checks) {
+          await expectVisible(locator, label, tabTimeoutMs);
+        }
+        return true;
+      } catch {
+        console.log(`SKIP ${skipMessage}`);
+        await resetToHub();
+        return false;
+      }
     }
   }
 }

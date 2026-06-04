@@ -168,11 +168,12 @@ async function main() {
       skipMessage: "analytics tab did not open during smoke window",
     }));
 
-    await runStep("open desktop rebate tab", () => openDesktopTab(page, {
+    await runStep("open desktop safety pool tab", () => openDesktopTab(page, {
       ...smokeOptions,
-      buttonName: "Rebate",
-      checks: [[page.getByText("Gas Burn Bonus"), "rebate tab"]],
-      skipMessage: "rebate tab did not open during smoke window",
+      buttonName: "Safety Pool",
+      targetHash: "#rebate",
+      checks: [[page.getByRole("heading", { name: "Safety Pool" }).first(), "safety pool tab"]],
+      skipMessage: "Safety Pool tab did not open during smoke window",
     }));
 
     await runStep("open desktop leaderboards tab", () => openDesktopTab(page, {

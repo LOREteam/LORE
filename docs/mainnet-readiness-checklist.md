@@ -11,7 +11,7 @@ Use this as the final pre-launch gate. A launch is considered ready only when ev
 - [ ] Ownership is transferred to a Safe multisig or equivalent governance-safe setup.
 - [ ] Randomness hardening is explicitly signed off: at minimum, deployed winner entropy must not include `msg.sender`; for higher-value launch, use VRF or a two-phase commit/reveal with future-block entropy.
 - [ ] Public `resolveEpoch` behavior is documented and monitored so resolver withholding, resolver rewards, and stuck epochs are visible.
-- [ ] A manual verify pass confirms jackpot, rebate, deposit, reward, and resolve reads against chain.
+- [ ] A manual verify pass confirms jackpot, Safety Pool, deposit, reward, and resolve reads against chain.
 
 Ready when:
 - mainnet env boots without fail-fast config errors
@@ -93,7 +93,7 @@ Ready when:
 ### 9. UX / onboarding
 
 - [ ] First-visit tutorial is short and accurate for mainnet behavior.
-- [ ] FAQ answers mainnet questions first: gas, irreversible bets, jackpots, rebates, delays, wallet support.
+- [ ] FAQ answers mainnet questions first: gas, irreversible bets, jackpots, Safety Pool, delays, wallet support.
 - [ ] Analytics labels and freshness hints are easy to read.
 - [ ] White Paper and FAQ navigation are usable on mobile.
 

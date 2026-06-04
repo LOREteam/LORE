@@ -183,7 +183,7 @@ export const Sidebar = React.memo(function Sidebar({
             active={activeTab === "rebate"}
             onClick={goRebate}
             icon="M12 3v3m0 12v3m9-9h-3M6 12H3m15.364 6.364l-2.121-2.121M7.757 7.757L5.636 5.636m12.728 0l-2.121 2.121M7.757 16.243l-2.121 2.121"
-            label="Rebate"
+            label="Safety Pool"
             delay="0.2s"
           />
           <NavItem

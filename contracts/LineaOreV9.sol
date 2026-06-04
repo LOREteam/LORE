@@ -525,11 +525,17 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
     }
 
     function _previewRebate(uint256 epoch, address user) internal view returns (uint256) {
-        uint256 totalPool = epochs[epoch].totalPool;
+        Epoch storage ep = epochs[epoch];
+        if (!ep.isResolved) return 0;
+        uint256 totalPool = ep.totalPool;
         uint256 rebatePool = epochRebatePool[epoch];
         uint256 userVolume = _getUserEpochVolume(epoch, user);
         if (totalPool == 0 || rebatePool == 0 || userVolume == 0) return 0;
-        return (rebatePool * userVolume) / totalPool;
+        uint256 winningTile = ep.winningTile;
+        if (userBets[epoch][winningTile][user] > 0) return 0;
+        if (tilePools[epoch][winningTile] >= totalPool) return 0;
+        uint256 losingVolume = totalPool - tilePools[epoch][winningTile];
+        return (rebatePool * userVolume) / losingVolume;
     }
 
     function getTileData(uint256 epoch) external view returns (uint256[] memory pools, uint256[] memory users) {

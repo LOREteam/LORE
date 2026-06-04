@@ -102,7 +102,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
             { step: "2", title: "Place Bets", desc: "Select one or more tiles and stake LINEA tokens. Each tile accumulates its own pool from all players." },
             { step: "3", title: "Epoch Ends", desc: "When the timer reaches zero, no more bets are accepted. The smart contract resolves the epoch." },
             { step: "4", title: "Winner Revealed", desc: "The contract resolves the epoch in one transaction and maps the V9 on-chain entropy hash to tile 1–25." },
-            { step: "5", title: "Fees Split", desc: "The pool is split: 92% to winners, 2% to daily jackpot, 3% to weekly jackpot, 2% protocol fee (half to treasury, half to player rebates), 1% burn." },
+            { step: "5", title: "Fees Split", desc: "The pool is split: 92% to winners, 2% to daily jackpot, 3% to weekly jackpot, 2% protocol fee (half to treasury, half to Safety Pool), 1% burn." },
             { step: "6", title: "Jackpot Check", desc: "If there is at least one winner, the contract runs daily/weekly checks at resolve time. On trigger, the full jackpot pool is added to this epoch." },
             { step: "7", title: "Claim Rewards", desc: "Winners claim their share from the Rewards panel. If no one hit the winning tile, the base reward rolls into the next round and the jackpot pools keep growing." },
           ]} />
@@ -119,7 +119,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
             <StatCard label="Winners" value="92%" sub="base reward to winning-tile holders" color="emerald" />
             <StatCard label="Daily Jackpot" value="2%" sub="accrues every round, triggers once/day" color="amber" />
             <StatCard label="Weekly Jackpot" value="3%" sub="accrues every round, triggers once/week" color="sky" />
-            <StatCard label="Protocol + Burn" value="3%" sub="2% protocol fee (1% treasury, 1% rebates), 1% burn" color="violet" />
+            <StatCard label="Protocol + Burn" value="3%" sub="2% protocol fee (1% treasury, 1% Safety Pool), 1% burn" color="violet" />
           </Grid2>
           <InfoBox emoji="🎰" title="Dual Jackpot System">
             Every round, 2% feeds the <Accent>Daily Jackpot</Accent> pool and 3% feeds the <Accent>Weekly Jackpot</Accent> pool.
@@ -134,9 +134,9 @@ export const WhitePaper = React.memo(function WhitePaper() {
             If nobody bet on the winning tile in a round, the base reward (92%) goes back into the <Accent>rollover pool</Accent>, and jackpot pools keep growing - no jackpot can trigger without a real winner.
             This means jackpots can only get <B>bigger</B> over time.
           </InfoBox>
-          <InfoBox emoji="🔥" title="Burn & Rebate Fee">
+          <InfoBox emoji="🔥" title="Burn & Safety Pool Fee">
             1% of every round is permanently burned (sent to <Code>0x...dEaD</Code>), reducing supply forever.
-            2% goes to protocol accounting: half to treasury and half to a participation rebate pool distributed in LINEA to players who bet in that round.
+            2% goes to protocol accounting: half to treasury and half to a Safety Pool for players who missed the winning tile.
           </InfoBox>
           <P>
             No one can print new tokens, freeze transfers, or blacklist your wallet - the token is simple and predictable.
@@ -187,25 +187,26 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         <Divider />
 
-        <Section id="rebate" badge="06" title="Participation Rebate" icon={RefIcon} delay={0.25}>
+        <Section id="rebate" badge="06" title="Safety Pool" icon={RefIcon} delay={0.25}>
           <P>
-            The current live contract uses an on-chain <Accent>participation rebate</Accent>. A portion of every epoch is reserved
-            for players who actually spent gas and placed bets in that round.
+            The current game uses an on-chain <Accent>Safety Pool</Accent>. A portion of every epoch is reserved
+            for players who participated in that round but missed the winning tile.
           </P>
           <Grid2>
-            <FeatureCard icon="⛏" title="Bet To Earn" desc="Every player who bets in an epoch becomes eligible for that epoch's rebate share." />
-            <FeatureCard icon="📊" title="Volume Based" desc="The rebate is split proportionally to your total LINEA volume in that epoch." />
-            <FeatureCard icon="💰" title="1% Rebate Pool" desc="Half of the 2% protocol fee is reserved for active players as a participation rebate." />
-            <FeatureCard icon="🏦" title="Claim Anytime" desc="Rebates accumulate in the contract and can be claimed later in batches." />
+            <FeatureCard icon="⛏" title="Missed Tile Cover" desc="Only players with zero bet on the winning tile are eligible for that epoch's Safety Pool." />
+            <FeatureCard icon="📊" title="Volume Based" desc="The Safety Pool is split proportionally across eligible losing-player volume." />
+            <FeatureCard icon="💰" title="1% Safety Pool" desc="Half of the 2% protocol fee is reserved for players who missed the winning tile." />
+            <FeatureCard icon="🏦" title="Claim Anytime" desc="Safety Pool payouts accumulate in the contract and can be claimed later in batches." />
           </Grid2>
-          <InfoBox emoji="🤝" title="How Participation Rebate Works">
+          <InfoBox emoji="🤝" title="How Safety Pool Works">
             Each round, 2% of the pool goes to protocol accounting. Half of that stays with treasury, and the other half
-            becomes the epoch rebate pool. After the epoch resolves, every player can claim their LINEA rebate in
-            proportion to how much they personally staked in that round.
+            becomes the epoch Safety Pool. After the epoch resolves, players who had no bet on the winning tile can claim
+            in proportion to their eligible losing volume. If you hit the winning tile with any amount, you are not eligible
+            for that epoch&apos;s Safety Pool.
           </InfoBox>
           <P>
-            To collect it, go to the <Accent>Rebate</Accent> tab. The UI shows your pending rebate, claimable epochs, and recent
-            rebate rows where you earned LINEA back from protocol fees.
+            To collect it, go to the <Accent>Safety Pool</Accent> tab. The UI shows your pending Safety Pool balance,
+            claimable epochs, and recent rows where missed rounds created a consolation payout.
           </P>
         </Section>
 
@@ -649,7 +650,7 @@ function FormulaBlock() {
 function RoadmapTimeline() {
   const phases = [
     { phase: "Phase 1", status: "live", title: "Core Game", items: ["5×5 mining grid", "Manual betting", "Reward claiming", "Analytics module"] },
-    { phase: "Phase 2", status: "live", title: "Auto-Miner & Rebates", items: ["Automated betting bot", "Privy embedded wallet", "Participation rebate system", "Session persistence"] },
+    { phase: "Phase 2", status: "live", title: "Auto-Miner & Safety Pool", items: ["Automated betting bot", "Privy embedded wallet", "Safety Pool consolation system", "Session persistence"] },
     { phase: "Phase 3", status: "live", title: "Jackpots & Leaderboards", items: ["Daily Jackpot (2%)", "Weekly Jackpot (3%)", "Rollover pool", "Leaderboard system", "Achievements"] },
     { phase: "Phase 4", status: "next", title: "Mainnet Hardening", items: ["Final mainnet contract config", "Resolver monitoring", "Mobile QA", "Public API for stats"] },
   ];
