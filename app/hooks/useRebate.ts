@@ -13,6 +13,11 @@ import {
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { delay, isUserRejection } from "../lib/utils";
 import { log } from "../lib/logger";
+import {
+  isSafetyPoolClaimBelowMinimum,
+  MIN_SAFETY_POOL_CLAIM_FORMATTED,
+  MIN_SAFETY_POOL_CLAIM_WEI,
+} from "../lib/safetyPoolClaimThreshold";
 
 type SilentSendFn = (tx: {
   to: `0x${string}`;
@@ -720,6 +725,14 @@ export function useRebate(options?: UseRebateOptions) {
         return;
       }
 
+      if (isSafetyPoolClaimBelowMinimum(pendingRebateWei, MIN_SAFETY_POOL_CLAIM_WEI)) {
+        notify?.(
+          `Safety Pool claim is below the ${MIN_SAFETY_POOL_CLAIM_FORMATTED} LINEA minimum. Wait for more claimable epochs before paying gas.`,
+          "info",
+        );
+        return;
+      }
+
       const estimateClaimGas = async (epochArgs: bigint[]) => {
         try {
           const estimated = await publicClient.estimateContractGas({
@@ -904,6 +917,7 @@ export function useRebate(options?: UseRebateOptions) {
     claimableEpochs,
     formatRebateError,
     notify,
+    pendingRebateWei,
     publicClient,
     rebateAddress,
     rebateEpochs,
@@ -925,6 +939,9 @@ export function useRebate(options?: UseRebateOptions) {
       hasLoaded,
       claimPlanKind,
       isEstimatingClaimPlan,
+      minClaimWei: MIN_SAFETY_POOL_CLAIM_WEI,
+      minClaimAmount: MIN_SAFETY_POOL_CLAIM_FORMATTED,
+      isBelowClaimMinimum: isSafetyPoolClaimBelowMinimum(pendingRebateWei, MIN_SAFETY_POOL_CLAIM_WEI),
     }),
     [
       claimPlanKind,

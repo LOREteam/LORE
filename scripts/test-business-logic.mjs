@@ -21,6 +21,7 @@ import * as autoMineErrorModule from "../app/hooks/useMiningAutoMineError.ts";
 import * as autoMineRestoreDeduperModule from "../app/lib/mining/autoMineRestoreDeduper.ts";
 import * as chunkReloadRecoveryModule from "../app/lib/chunkReloadRecovery.ts";
 import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
+import * as safetyPoolClaimThresholdModule from "../app/lib/safetyPoolClaimThreshold.ts";
 
 async function main() {
   const utils = utilsModule.default ?? utilsModule;
@@ -42,6 +43,7 @@ async function main() {
   const autoMineRestoreDeduper = autoMineRestoreDeduperModule.default ?? autoMineRestoreDeduperModule;
   const chunkReloadRecovery = chunkReloadRecoveryModule.default ?? chunkReloadRecoveryModule;
   const miningShared = miningSharedModule.default ?? miningSharedModule;
+  const safetyPoolClaimThreshold = safetyPoolClaimThresholdModule.default ?? safetyPoolClaimThresholdModule;
   const publicConfig = publicConfigModule.default ?? publicConfigModule;
   const eip7702 = eip7702Module.default ?? eip7702Module;
 
@@ -71,6 +73,11 @@ async function main() {
   assert.equal(utils.safeToFixed(12.345, 2), "12.35");
   assert.equal(utils.safeToFixed(Number.NaN, 2), "0.00");
   assert.equal(utils.safeToFixed(Number.POSITIVE_INFINITY, 2, "fallback"), "fallback");
+  assert.equal(safetyPoolClaimThreshold.parseMinSafetyPoolClaimWei("100"), 100_000_000_000_000_000_000n);
+  assert.equal(safetyPoolClaimThreshold.parseMinSafetyPoolClaimWei("bad"), 100_000_000_000_000_000_000n);
+  assert.equal(safetyPoolClaimThreshold.isSafetyPoolClaimBelowMinimum(1n, 2n), true);
+  assert.equal(safetyPoolClaimThreshold.isSafetyPoolClaimBelowMinimum(2n, 2n), false);
+  assert.equal(safetyPoolClaimThreshold.isSafetyPoolClaimBelowMinimum(0n, 2n), false);
 
   assert.equal(
     chatAvatarUpload.validateCustomAvatarFile({ type: "text/plain", size: 42 }),

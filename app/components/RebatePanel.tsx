@@ -17,6 +17,8 @@ interface RebatePanelProps {
     hasLoaded?: boolean;
     claimPlanKind?: "none" | "single" | "split" | "unknown";
     isEstimatingClaimPlan?: boolean;
+    minClaimAmount?: string;
+    isBelowClaimMinimum?: boolean;
     recentEpochs: Array<{
       epoch: number;
       pending: string;
@@ -42,6 +44,8 @@ export const RebatePanel = React.memo(function RebatePanel({
   const hasPendingOnly = (rebateInfo?.pendingRebateWei ?? 0n) > 0n && !hasClaimable;
   const claimPlanKind = rebateInfo?.claimPlanKind ?? "none";
   const isEstimatingClaimPlan = rebateInfo?.isEstimatingClaimPlan ?? false;
+  const minClaimAmount = rebateInfo?.minClaimAmount ?? "100";
+  const isBelowClaimMinimum = rebateInfo?.isBelowClaimMinimum ?? false;
   const showInitialSkeleton = isLoading && !hasLoaded;
 
   return (
@@ -104,15 +108,26 @@ export const RebatePanel = React.memo(function RebatePanel({
               <UiButton
                 onClick={onClaimRebates}
                 loading={isClaiming}
-                disabled={!hasClaimable || !isSupported}
+                disabled={!hasClaimable || !isSupported || isBelowClaimMinimum}
                 variant="success"
                 size="md"
                 uppercase
                 fullWidth
                 className="text-xs"
               >
-                {isClaiming ? "Claiming..." : hasClaimable ? "Claim Safety Pool" : "Nothing to claim"}
+                {isClaiming
+                  ? "Claiming..."
+                  : isBelowClaimMinimum
+                    ? "Below minimum"
+                    : hasClaimable
+                      ? "Claim Safety Pool"
+                      : "Nothing to claim"}
               </UiButton>
+              {hasClaimable && isBelowClaimMinimum ? (
+                <p className="mt-3 text-xs leading-relaxed text-gray-500">
+                  Current Safety Pool is below the {minClaimAmount} LINEA minimum. Wait for more claimable epochs before paying gas.
+                </p>
+              ) : null}
               {hasPendingOnly ? (
                 <p className="mt-3 text-xs leading-relaxed text-gray-500">
                   Pending Safety Pool includes unresolved or not-yet-claimable epochs. Claim unlocks only after those epochs are resolved.
