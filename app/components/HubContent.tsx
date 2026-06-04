@@ -236,7 +236,7 @@ function MobileManualActionBar({
         : "Mine";
 
   return (
-    <div className="mobile-mine-action fixed left-2.5 right-12 z-[190] lg:hidden">
+    <div className="mobile-mine-action fixed left-2.5 right-12 z-[190] sm:right-[5.25rem] lg:hidden">
       <div className="grid grid-cols-[auto_minmax(3.5rem,1fr)_minmax(4rem,0.8fr)_auto] items-center gap-1 rounded-xl border border-emerald-300/14 bg-[#070711]/94 p-1 shadow-[0_10px_24px_rgba(2,6,23,0.38)] backdrop-blur-xl sm:gap-1.5 sm:p-1.5">
         <div className="rounded-lg border border-emerald-300/10 bg-emerald-400/6 px-1.5 py-0.75 sm:px-2">
           <div className="text-[7px] font-black uppercase leading-none tracking-[0.12em] text-slate-500">Tiles</div>

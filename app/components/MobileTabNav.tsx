@@ -102,7 +102,7 @@ function getTabMeta(tab: TabId) {
 export function MobileTabNav({ activeTab, onTabChange }: MobileTabNavProps) {
   return (
     <div className="lg:hidden">
-      <div className="mobile-hud-nav fixed left-2 right-12 z-[180] sm:left-4 sm:right-16">
+      <div className="mobile-hud-nav fixed left-2 right-12 z-[180] sm:left-4 sm:right-[5.25rem]">
         <div className="no-scrollbar overflow-x-auto overscroll-x-contain">
         <nav
           aria-label="Primary sections"
