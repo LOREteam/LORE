@@ -48,11 +48,13 @@ function getTabMeta(tab: TabId) {
       title: "Safety Pool",
       icon: (
         <>
-          <path d="M12 3.75V7.5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-          <path d="M12 16.5v3.75" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-          <path d="M20.25 12H16.5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-          <path d="M7.5 12H3.75" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-          <circle cx="12" cy="12" r="3.25" stroke="currentColor" strokeWidth="1.75" />
+          <path
+            d="M12 3.75c2.25 1.65 4.75 2.45 7.5 2.45v5.35c0 4.35-2.9 8-7.5 9.2-4.6-1.2-7.5-4.85-7.5-9.2V6.2c2.75 0 5.25-.8 7.5-2.45Z"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinejoin="round"
+          />
+          <path d="M9.25 12.35l1.85 1.85 3.9-4.45" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
         </>
       ),
     };
