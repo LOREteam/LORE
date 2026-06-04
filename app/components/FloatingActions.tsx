@@ -42,7 +42,7 @@ export const FloatingActions = React.memo(function FloatingActions({ walletAddre
           href="https://x.com/Linea_Ore"
           target="_blank"
           rel="noopener noreferrer"
-          className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(29,161,242,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] sm:flex"
+          className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(29,161,242,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] lg:flex"
           title="X (Twitter) @Linea_Ore"
           aria-label="Linea Ore on X"
         >
@@ -54,7 +54,7 @@ export const FloatingActions = React.memo(function FloatingActions({ walletAddre
           href="https://github.com/LOREteam/LORE"
           target="_blank"
           rel="noopener noreferrer"
-          className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-purple-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(139,92,246,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] sm:flex"
+          className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-purple-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(139,92,246,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] lg:flex"
           title="LORE on GitHub"
           aria-label="LORE on GitHub"
         >
