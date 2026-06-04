@@ -120,8 +120,8 @@ export function HeaderPoolChart({
               className={`pool-crystal-art ${depositPulseActive ? "pool-crystal-art-flash" : ""}`}
             />
             {visibleLinePath && (
-              <div className="absolute left-0 right-1 top-[24%] z-20 h-[48%] sm:right-0 sm:top-[32%] sm:h-[44%]">
-                <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <div className="absolute -left-[4.5rem] right-0 top-[24%] z-10 h-[48%] sm:top-[32%] sm:h-[44%]">
+                <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
                   <defs>
                     <linearGradient id={chartStrokeId} x1="0%" y1="0%" x2="100%" y2="0%">
                       <stop offset="0%" stopColor="#06b6d4" />
