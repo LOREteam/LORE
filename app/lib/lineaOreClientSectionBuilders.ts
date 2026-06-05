@@ -347,6 +347,8 @@ type BuildPageTabContentPropsOptions = {
   historyRefreshing: PageTabContentProps["analyticsProps"]["historyRefreshing"];
   deposits: PageTabContentProps["analyticsProps"]["deposits"];
   depositsLoading: PageTabContentProps["analyticsProps"]["depositsLoading"];
+  depositsMetadataLoading: PageTabContentProps["analyticsProps"]["depositsMetadataLoading"];
+  depositsLastLoadedAt: PageTabContentProps["analyticsProps"]["depositsLastLoadedAt"];
   depositsError: PageTabContentProps["analyticsProps"]["depositsError"];
   totalDeposited: PageTabContentProps["analyticsProps"]["totalDeposited"];
   fetchDeposits: PageTabContentProps["analyticsProps"]["onLoadDeposits"];
@@ -414,6 +416,8 @@ export function buildPageTabContentProps({
   historyRefreshing,
   deposits,
   depositsLoading,
+  depositsMetadataLoading,
+  depositsLastLoadedAt,
   depositsError,
   totalDeposited,
   fetchDeposits,
@@ -481,6 +485,8 @@ export function buildPageTabContentProps({
       historyRefreshing,
       deposits,
       depositsLoading,
+      depositsMetadataLoading,
+      depositsLastLoadedAt,
       depositsError,
       totalDeposited,
       onLoadDeposits: fetchDeposits,

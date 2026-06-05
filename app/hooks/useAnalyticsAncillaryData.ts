@@ -19,6 +19,8 @@ export function useAnalyticsAncillaryData({
   const {
     data: deposits,
     loading: depositsLoading,
+    metadataLoading: depositsMetadataLoading,
+    lastLoadedAt: depositsLastLoadedAt,
     totalDeposited,
     error: depositsError,
     fetch: fetchDeposits,
@@ -44,6 +46,8 @@ export function useAnalyticsAncillaryData({
     () => ({
       deposits,
       depositsLoading,
+      depositsMetadataLoading,
+      depositsLastLoadedAt,
       totalDeposited,
       depositsError,
       fetchDeposits,
@@ -56,7 +60,9 @@ export function useAnalyticsAncillaryData({
     [
       deposits,
       depositsError,
+      depositsLastLoadedAt,
       depositsLoading,
+      depositsMetadataLoading,
       fetchDeposits,
       jackpotHistory,
       jackpotHistoryError,

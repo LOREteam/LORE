@@ -24,6 +24,8 @@ interface AnalyticsProps {
   historyRefreshing: boolean;
   deposits: DepositEntry[] | null;
   depositsLoading: boolean;
+  depositsMetadataLoading: boolean;
+  depositsLastLoadedAt: number | null;
   depositsError: string | null;
   totalDeposited: number;
   onLoadDeposits: () => void;
@@ -41,6 +43,8 @@ export const Analytics = React.memo(function Analytics({
   historyRefreshing,
   deposits,
   depositsLoading,
+  depositsMetadataLoading,
+  depositsLastLoadedAt,
   depositsError,
   totalDeposited,
   onLoadDeposits,
@@ -106,6 +110,8 @@ export const Analytics = React.memo(function Analytics({
         depositsError={depositsError}
         depositsLoading={depositsLoading}
         depositsRefreshing={depositsLoading && enrichedDeposits !== null}
+        depositsMetadataLoading={depositsMetadataLoading}
+        depositsLastLoadedAt={depositsLastLoadedAt}
         newDepositIds={newDepositIds}
         onLoadDeposits={onLoadDeposits}
         onRefreshDeposits={onRefreshDeposits}

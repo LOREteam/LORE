@@ -307,7 +307,7 @@ html[data-tutorial-open="true"] .mobile-mine-action {
 
 @media (min-width: 640px) {
   .mobile-hud-chat {
-    bottom: 0.75rem;
+    bottom: 23px;
   }
 
   .mobile-mine-action {

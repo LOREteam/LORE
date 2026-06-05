@@ -49,7 +49,9 @@ interface CreateLineaOreClientViewPropsOptions {
   depositTokenAmount: string;
   deposits: PageTabContentProps["analyticsProps"]["deposits"];
   depositsError: PageTabContentProps["analyticsProps"]["depositsError"];
+  depositsLastLoadedAt: PageTabContentProps["analyticsProps"]["depositsLastLoadedAt"];
   depositsLoading: PageTabContentProps["analyticsProps"]["depositsLoading"];
+  depositsMetadataLoading: PageTabContentProps["analyticsProps"]["depositsMetadataLoading"];
   dismissBalanceWarning: PageTabContentProps["onDismissBalanceWarning"];
   embeddedAddressCopied: WalletSettingsProps["embeddedAddressCopied"];
   embeddedResolverRewards: WalletSettingsProps["embeddedResolverRewards"];
@@ -205,7 +207,9 @@ export function createLineaOreClientViewProps({
   depositTokenAmount,
   deposits,
   depositsError,
+  depositsLastLoadedAt,
   depositsLoading,
+  depositsMetadataLoading,
   dismissBalanceWarning,
   embeddedAddressCopied,
   embeddedResolverRewards,
@@ -471,6 +475,8 @@ export function createLineaOreClientViewProps({
       historyRefreshing,
       deposits,
       depositsLoading,
+      depositsMetadataLoading,
+      depositsLastLoadedAt,
       depositsError,
       totalDeposited,
       fetchDeposits,

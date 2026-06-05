@@ -245,8 +245,10 @@ function depositsEqual(left: DepositEntry[] | null, right: DepositEntry[]) {
 
 export function useDepositHistory(userAddress?: string, enabled = true) {
   const [loading, setLoading] = useState(false);
+  const [metadataLoading, setMetadataLoading] = useState(false);
   const [data, setData] = useState<DepositEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
   const runningRef = useRef(false);
   const runningForRef = useRef<string | null>(null);
   const requestIdRef = useRef(0);
@@ -281,7 +283,10 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
     }
 
     try {
-      const depositsResult = await fetch(`/api/deposits?user=${normalizedUser}&includeRewards=1`);
+      const depositsResult = await fetch(
+        `/api/deposits?user=${normalizedUser}`,
+        { cache: "no-store" },
+      );
 
       const depositsRes = depositsResult;
       let depositsJson: {
@@ -311,33 +316,48 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       let epochsMap: Record<string, ApiEpoch> = depositsJson.epochs ?? {};
       let rewardsMap: Record<string, ApiRewardInfo> = depositsJson.rewards ?? {};
 
+      const publishEntries = (entries: DepositEntry[]) => {
+        const entriesChanged = !depositsEqual(dataRef.current, entries);
+        if (mountedRef.current && requestId === requestIdRef.current && entriesChanged) {
+          setData(entries);
+        }
+        const now = Date.now();
+        const savedAt = cacheSavedAtRef.current[normalizedUser] ?? null;
+        const shouldWriteCache =
+          entriesChanged ||
+          !savedAt ||
+          now - savedAt >= DEPOSIT_CACHE_WRITE_MIN_MS;
+        if (shouldWriteCache) {
+          saveCachedDeposits(normalizedUser, entries);
+          cacheSavedAtRef.current[normalizedUser] = now;
+        }
+      };
+
+      publishEntries(mapDepositEntries(deposits, epochsMap, rewardsMap));
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setLastLoadedAt(Date.now());
+        setLoading(false);
+      }
+
       const priorityEpochs = uniqueEpochs.slice(0, SYNC_EPOCH_PREFETCH_LIMIT);
       const syncMissingEpochs = priorityEpochs.filter((epoch) => !epochsMap[String(epoch)]);
       const syncMissingRewards = priorityEpochs.filter((epoch) => !rewardsMap[String(epoch)]);
 
-      const [extraEpochsMap, extraRewardsMap] = await Promise.all([
-        fetchEpochMap(syncMissingEpochs),
-        fetchRewardsMap(normalizedUser, syncMissingRewards),
-      ]);
-      epochsMap = { ...epochsMap, ...extraEpochsMap };
-      rewardsMap = { ...rewardsMap, ...extraRewardsMap };
-
-      const entries = mapDepositEntries(deposits, epochsMap, rewardsMap);
-      const entriesChanged = !depositsEqual(dataRef.current, entries);
-      if (mountedRef.current && requestId === requestIdRef.current) {
-        if (entriesChanged) {
-          setData(entries);
+      if (syncMissingEpochs.length > 0 || syncMissingRewards.length > 0) {
+        if (mountedRef.current && requestId === requestIdRef.current) {
+          setMetadataLoading(true);
         }
-      }
-      const now = Date.now();
-      const savedAt = cacheSavedAtRef.current[normalizedUser] ?? null;
-      const shouldWriteCache =
-        entriesChanged ||
-        !savedAt ||
-        now - savedAt >= DEPOSIT_CACHE_WRITE_MIN_MS;
-      if (shouldWriteCache) {
-        saveCachedDeposits(normalizedUser, entries);
-        cacheSavedAtRef.current[normalizedUser] = now;
+        const [extraEpochsMap, extraRewardsMap] = await Promise.all([
+          fetchEpochMap(syncMissingEpochs),
+          fetchRewardsMap(normalizedUser, syncMissingRewards),
+        ]);
+        if (requestId !== requestIdRef.current) return;
+        epochsMap = { ...epochsMap, ...extraEpochsMap };
+        rewardsMap = { ...rewardsMap, ...extraRewardsMap };
+        publishEntries(mapDepositEntries(deposits, epochsMap, rewardsMap));
+        if (mountedRef.current && requestId === requestIdRef.current) {
+          setMetadataLoading(false);
+        }
       }
 
       const deferredEpochs = uniqueEpochs.slice(SYNC_EPOCH_PREFETCH_LIMIT);
@@ -382,6 +402,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
     } finally {
       if (mountedRef.current && requestId === requestIdRef.current) {
         setLoading(false);
+        setMetadataLoading(false);
       }
       if (requestId === requestIdRef.current && runningForRef.current === normalizedUser) {
         runningRef.current = false;
@@ -399,6 +420,8 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
         setData(null);
         setError(null);
         setLoading(false);
+        setMetadataLoading(false);
+        setLastLoadedAt(null);
       }
       dataRef.current = null;
       return;
@@ -411,6 +434,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       if (mountedRef.current) {
         setError(null);
         setLoading(false);
+        setMetadataLoading(false);
       }
       return;
     }
@@ -419,6 +443,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
     cacheSavedAtRef.current[userAddress.toLowerCase()] = cached.savedAt;
     if (mountedRef.current) {
       setData(cached.data);
+      setLastLoadedAt(cached.data ? cached.savedAt : null);
       setError(null);
     }
     const savedAt = cached.savedAt;
@@ -444,5 +469,5 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
     [data],
   );
 
-  return { data, loading, totalDeposited, error, fetch: fetchFromApi, refresh };
+  return { data, loading, metadataLoading, lastLoadedAt, totalDeposited, error, fetch: fetchFromApi, refresh };
 }

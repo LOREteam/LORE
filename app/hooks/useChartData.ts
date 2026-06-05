@@ -124,23 +124,28 @@ export function useChartData(realTotalStaked: number, isPageVisible = true, epoc
   const linePath = useMemo(() => {
     if (effectiveChartData.length < 2) return "";
 
-    const w = 100, h = 100, p = 1;
+    const w = 100, h = 100, p = 0;
     const topOffset = 10;
     const bottomOffset = 14;
     const cw = w - p * 2;
     const ch = h - p * 2 - topOffset - bottomOffset;
-    const minValue = Math.min(...effectiveChartData);
     const maxValue = Math.max(...effectiveChartData);
     if (maxValue <= 0) return "";
 
+    const minValue = Math.min(...effectiveChartData);
     const valueRange = maxValue - minValue;
-    const range = Math.max(valueRange, MIN_VISIBLE_DELTA);
+    const lowY = p + topOffset + ch * 0.72;
+    const highY = p + topOffset + ch * 0.18;
+    const yRange = lowY - highY;
 
     const pointCount = effectiveChartData.length;
-    const yForValue = (value: number) =>
-      valueRange < MIN_VISIBLE_DELTA
-        ? p + topOffset + ch * 0.42
-        : p + topOffset + ch - ((value - minValue) / range) * ch;
+    if (valueRange < MIN_VISIBLE_DELTA) {
+      const y = p + topOffset + ch * 0.42;
+      const lift = 1.6;
+      return `M 0,${y} C 18,${y} 18,${y - lift} 36,${y - lift} C 54,${y - lift} 54,${y - lift * 0.55} 72,${y - lift * 0.55} C 86,${y - lift * 0.55} 86,${y - lift} 100,${y - lift}`;
+    }
+
+    const yForValue = (value: number) => lowY - (Math.max(0, value) / maxValue) * yRange;
     const xForIndex = (index: number) => p + (index / (pointCount - 1)) * cw;
 
     let prevX = xForIndex(0);

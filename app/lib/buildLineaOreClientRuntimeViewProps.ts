@@ -25,6 +25,8 @@ export function buildLineaOreClientRuntimeViewProps({
   const {
     deposits,
     depositsLoading,
+    depositsMetadataLoading,
+    depositsLastLoadedAt,
     totalDeposited,
     depositsError,
     fetchDeposits,
@@ -83,6 +85,8 @@ export function buildLineaOreClientRuntimeViewProps({
     deposits,
     depositsError,
     depositsLoading,
+    depositsMetadataLoading,
+    depositsLastLoadedAt,
     dismissBalanceWarning: hubRuntime.dismissBalanceWarning,
     embeddedAddressCopied: walletRuntime.embeddedAddressCopied,
     embeddedResolverRewards: walletRuntime.embeddedResolverRewards,

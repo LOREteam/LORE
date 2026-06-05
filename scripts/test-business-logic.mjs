@@ -22,6 +22,7 @@ import * as autoMineRestoreDeduperModule from "../app/lib/mining/autoMineRestore
 import * as chunkReloadRecoveryModule from "../app/lib/chunkReloadRecovery.ts";
 import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
 import * as safetyPoolClaimThresholdModule from "../app/lib/safetyPoolClaimThreshold.ts";
+import * as analyticsDepositsStatusModule from "../app/lib/analyticsDepositsStatus.ts";
 
 async function main() {
   const utils = utilsModule.default ?? utilsModule;
@@ -44,6 +45,7 @@ async function main() {
   const chunkReloadRecovery = chunkReloadRecoveryModule.default ?? chunkReloadRecoveryModule;
   const miningShared = miningSharedModule.default ?? miningSharedModule;
   const safetyPoolClaimThreshold = safetyPoolClaimThresholdModule.default ?? safetyPoolClaimThresholdModule;
+  const analyticsDepositsStatus = analyticsDepositsStatusModule.default ?? analyticsDepositsStatusModule;
   const publicConfig = publicConfigModule.default ?? publicConfigModule;
   const eip7702 = eip7702Module.default ?? eip7702Module;
 
@@ -78,6 +80,10 @@ async function main() {
   assert.equal(safetyPoolClaimThreshold.isSafetyPoolClaimBelowMinimum(1n, 2n), true);
   assert.equal(safetyPoolClaimThreshold.isSafetyPoolClaimBelowMinimum(2n, 2n), false);
   assert.equal(safetyPoolClaimThreshold.isSafetyPoolClaimBelowMinimum(0n, 2n), false);
+  assert.equal(analyticsDepositsStatus.formatDepositFreshnessLabel(null, 10_000), null);
+  assert.equal(analyticsDepositsStatus.formatDepositFreshnessLabel(9_500, 10_000), "Updated now");
+  assert.equal(analyticsDepositsStatus.formatDepositFreshnessLabel(40_000, 100_000), "Updated 1m ago");
+  assert.equal(analyticsDepositsStatus.formatDepositFreshnessLabel(100_000, 360_000), "Updated 4m ago");
 
   assert.equal(
     chatAvatarUpload.validateCustomAvatarFile({ type: "text/plain", size: 42 }),
