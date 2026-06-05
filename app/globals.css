@@ -307,7 +307,7 @@ html[data-tutorial-open="true"] .mobile-mine-action {
 
 @media (min-width: 640px) {
   .mobile-hud-chat {
-    bottom: 0.75rem;
+    bottom: 23px;
   }
 
   .mobile-mine-action {
@@ -379,9 +379,11 @@ html[data-tutorial-open="true"] .mobile-mine-action {
 
 .pool-crystal-art {
   position: absolute;
-  inset: 0;
+  left: -4.5rem !important;
+  right: auto !important;
   z-index: 0;
-  width: 100%;
+  width: calc(100% + 4.5rem) !important;
+  max-width: none !important;
   height: 100%;
   object-fit: fill;
   object-position: center bottom;

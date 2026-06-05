@@ -31,7 +31,7 @@ const DEPOSITS_ROUTE_CACHE_MAX_KEYS = 512;
 const ROUTE_METRIC_KEY = "api/deposits";
 const DEPOSIT_RECOVERY_EPOCH_LAG = 8;
 const RECENT_RECOVERY_BLOCK_WINDOW = 100_000n;
-const CURRENT_EPOCH_CACHE_MS = 5_000;
+const CURRENT_EPOCH_CACHE_MS = 60_000;
 const INLINE_REWARD_EPOCH_LIMIT = 64;
 const depositsBuildInflight = new Map<string, Promise<DepositsBuildResult>>();
 const CURRENT_EPOCH_ABI = parseAbi([
@@ -90,7 +90,7 @@ type DepositsBuildResult = {
 
 const depositsRouteCache = createRouteCache<DepositsPayload>(DEPOSITS_ROUTE_CACHE_MAX_KEYS);
 const depositsCacheWatermarks = new Map<string, string>();
-let currentEpochCache: { value: number | null; expiresAt: number } | null = null;
+let currentEpochCache: { value: number | null; expiresAt: number; source: "indexed" | "chain" } | null = null;
 let currentEpochInflight: Promise<number | null> | null = null;
 let currentEpochBackgroundRefresh: Promise<void> | null = null;
 
@@ -177,13 +177,6 @@ function sortDepositsDesc<T extends { epoch: string; blockNumber: string; txHash
     }
     return aBlock > bBlock ? -1 : 1;
   });
-}
-
-function payloadTouchesCurrentEpoch(payload: DepositsPayload, currentEpochNum: number | null) {
-  if (!currentEpochNum || !Array.isArray(payload.deposits) || payload.deposits.length === 0) {
-    return false;
-  }
-  return payload.deposits.some((row) => Number(row.epoch) === currentEpochNum);
 }
 
 async function getLogsByTopicAndUser(
@@ -330,49 +323,11 @@ async function fetchDepositsFromChain(
   return sortDepositsDesc(Array.from(byKey.values())).slice(0, 5000);
 }
 
-async function resolveFreshCurrentEpochNumber() {
-  const now = Date.now();
-  if (currentEpochCache && currentEpochCache.expiresAt > now) {
-    return currentEpochCache.value;
-  }
+function isValidEpochNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
 
-  const storedCurrentEpoch = getMetaNumber("currentEpoch");
-  if (Number.isInteger(storedCurrentEpoch) && storedCurrentEpoch && storedCurrentEpoch > 0) {
-    currentEpochCache = {
-      value: storedCurrentEpoch,
-      expiresAt: now + CURRENT_EPOCH_CACHE_MS,
-    };
-
-    if (!currentEpochBackgroundRefresh) {
-      currentEpochBackgroundRefresh = (async () => {
-        try {
-          const onChainCurrentEpoch = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: CURRENT_EPOCH_ABI,
-            functionName: "currentEpoch",
-          });
-          const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
-          if (
-            Number.isInteger(onChainCurrentEpochNum) &&
-            onChainCurrentEpochNum > 0 &&
-            onChainCurrentEpochNum >= storedCurrentEpoch
-          ) {
-            currentEpochCache = {
-              value: onChainCurrentEpochNum,
-              expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
-            };
-          }
-        } catch {
-          // Keep serving indexed meta when RPC is slow or unavailable.
-        } finally {
-          currentEpochBackgroundRefresh = null;
-        }
-      })();
-    }
-
-    return storedCurrentEpoch;
-  }
-
+async function readCurrentEpochFromChain(fallback: number | null) {
   if (currentEpochInflight) {
     return currentEpochInflight;
   }
@@ -385,10 +340,11 @@ async function resolveFreshCurrentEpochNumber() {
         functionName: "currentEpoch",
       });
       const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
-      if (Number.isInteger(onChainCurrentEpochNum) && onChainCurrentEpochNum > 0) {
+      if (isValidEpochNumber(onChainCurrentEpochNum)) {
         currentEpochCache = {
           value: onChainCurrentEpochNum,
           expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
+          source: "chain",
         };
         return onChainCurrentEpochNum;
       }
@@ -397,15 +353,72 @@ async function resolveFreshCurrentEpochNumber() {
     }
 
     currentEpochCache = {
-      value: storedCurrentEpoch,
+      value: fallback,
       expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
+      source: "indexed",
     };
-    return storedCurrentEpoch;
+    return fallback;
   })().finally(() => {
     currentEpochInflight = null;
   });
 
   return currentEpochInflight;
+}
+
+function refreshCurrentEpochFromChainInBackground(storedCurrentEpoch: number) {
+  if (currentEpochBackgroundRefresh) return;
+
+  currentEpochBackgroundRefresh = (async () => {
+    try {
+      const onChainCurrentEpoch = await publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: CURRENT_EPOCH_ABI,
+        functionName: "currentEpoch",
+      });
+      const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
+      if (isValidEpochNumber(onChainCurrentEpochNum) && onChainCurrentEpochNum >= storedCurrentEpoch) {
+        currentEpochCache = {
+          value: onChainCurrentEpochNum,
+          expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
+          source: "chain",
+        };
+      }
+    } catch {
+      // Keep serving indexed meta when RPC is slow or unavailable.
+    } finally {
+      currentEpochBackgroundRefresh = null;
+    }
+  })();
+}
+
+async function resolveFreshCurrentEpochNumber(options: { preferOnChain?: boolean } = {}) {
+  const now = Date.now();
+  if (
+    currentEpochCache &&
+    currentEpochCache.expiresAt > now &&
+    (!options.preferOnChain || currentEpochCache.source === "chain")
+  ) {
+    return currentEpochCache.value;
+  }
+
+  const storedCurrentEpoch = getMetaNumber("currentEpoch");
+  if (options.preferOnChain) {
+    return readCurrentEpochFromChain(isValidEpochNumber(storedCurrentEpoch) ? storedCurrentEpoch : null);
+  }
+
+  if (isValidEpochNumber(storedCurrentEpoch)) {
+    currentEpochCache = {
+      value: storedCurrentEpoch,
+      expiresAt: now + CURRENT_EPOCH_CACHE_MS,
+      source: "indexed",
+    };
+
+    refreshCurrentEpochFromChainInBackground(storedCurrentEpoch);
+
+    return storedCurrentEpoch;
+  }
+
+  return readCurrentEpochFromChain(null);
 }
 
 function jsonNoStore(payload: DepositsPayload, status = 200) {
@@ -455,7 +468,9 @@ async function buildDepositsPayload(
   options: DepositsBuildOptions = {},
 ): Promise<DepositsBuildResult> {
   const indexedCurrentEpochNum = getMetaNumber("currentEpoch");
-  const currentEpochNum = await resolveFreshCurrentEpochNumber();
+  const currentEpochNum = await resolveFreshCurrentEpochNumber({
+    preferOnChain: Boolean(options.allowSlowRecovery),
+  });
   let deposits = readIndexedDeposits(user, currentEpochNum);
 
   const indexedEpochLag =
@@ -537,22 +552,16 @@ export async function GET(request: NextRequest) {
   const now = Date.now();
   const cached = depositsRouteCache.getFresh(cacheKey, now);
   if (cached) {
-    depositsCacheWatermarks.set(cacheKey, currentWatermark);
     markRouteCacheHit(ROUTE_METRIC_KEY);
     finishRouteMetric(metric, 200);
     return jsonNoStore(cached);
   }
   const staleCache = depositsRouteCache.getStale(cacheKey);
   if (staleCache) {
-    const indexedCurrentEpochNum = getMetaNumber("currentEpoch");
-    if (!payloadTouchesCurrentEpoch(staleCache, indexedCurrentEpochNum)) {
-      markRouteStaleServed(ROUTE_METRIC_KEY);
-      if (depositsCacheWatermarks.get(cacheKey) !== currentWatermark) {
-        startDepositsRefresh(cacheKey, user, includeRewards);
-      }
-      finishRouteMetric(metric, 200);
-      return jsonNoStore(staleCache);
-    }
+    markRouteStaleServed(ROUTE_METRIC_KEY);
+    startDepositsRefresh(cacheKey, user, includeRewards);
+    finishRouteMetric(metric, 200);
+    return jsonNoStore(staleCache);
   }
 
   try {
@@ -569,7 +578,11 @@ export async function GET(request: NextRequest) {
                 depositsBuildInflight.delete(cacheKey);
               }),
             toPayload: (result) => result.payload,
-            onCommit: () => {
+            onCommit: (result) => {
+              if (result.recoveryNeeded) {
+                depositsCacheWatermarks.delete(cacheKey);
+                return;
+              }
               depositsCacheWatermarks.set(cacheKey, currentWatermark);
             },
           });

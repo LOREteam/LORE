@@ -90,6 +90,25 @@ for (const feeName of [
   assert.ok(!splitFeesBody.includes(`pool * ${feeName}`), `_splitFees must not calculate ${feeName} from rollover-inclusive pool`);
 }
 
+const previewRebateBody = extractFunctionBody("_previewRebate");
+assert.match(previewRebateBody, /isResolved/, "_previewRebate must only calculate Safety Pool after resolution");
+assert.match(previewRebateBody, /winningTile/, "_previewRebate must inspect the epoch winning tile");
+assert.match(
+  previewRebateBody,
+  /userBets\[epoch\]\[winningTile\]\[user\]/,
+  "_previewRebate must exclude users who bet on the winning tile",
+);
+assert.match(
+  previewRebateBody,
+  /totalPool\s*-\s*tilePools\[epoch\]\[winningTile\]/,
+  "_previewRebate must divide Safety Pool over losing-player volume",
+);
+assert.match(
+  previewRebateBody,
+  /rebatePool\s*\*\s*userVolume\)\s*\/\s*losingVolume/,
+  "_previewRebate must calculate Safety Pool from losing volume, not total volume",
+);
+
 const DAILY_JACKPOT_PERCENT = getConstantBigInt("DAILY_JACKPOT_PERCENT");
 const WEEKLY_JACKPOT_PERCENT = getConstantBigInt("WEEKLY_JACKPOT_PERCENT");
 const PROTOCOL_FEE_PERCENT = getConstantBigInt("PROTOCOL_FEE_PERCENT");
@@ -143,6 +162,48 @@ assert.equal(rolloverCase.protocolFee, 20n * token);
 assert.equal(rolloverCase.burnAmount, 10n * token);
 assert.equal(rolloverCase.resolverReward, token / 2n);
 assert.equal(rolloverCase.baseReward, 1_420n * token);
+
+function safetyPoolModel({ isResolved, rebatePool, totalPool, winningTilePool, userVolume, userWinningVolume }) {
+  if (!isResolved || totalPool === 0n || rebatePool === 0n || userVolume === 0n) return 0n;
+  if (userWinningVolume > 0n) return 0n;
+  const losingVolume = totalPool - winningTilePool;
+  if (losingVolume === 0n) return 0n;
+  return (rebatePool * userVolume) / losingVolume;
+}
+
+assert.equal(
+  safetyPoolModel({
+    isResolved: true,
+    rebatePool: 100n * token,
+    totalPool: 10_000n * token,
+    winningTilePool: 2_000n * token,
+    userVolume: 100n * token,
+    userWinningVolume: 0n,
+  }),
+  (100n * token * 100n * token) / (8_000n * token),
+);
+assert.equal(
+  safetyPoolModel({
+    isResolved: true,
+    rebatePool: 100n * token,
+    totalPool: 10_000n * token,
+    winningTilePool: 2_000n * token,
+    userVolume: 100n * token,
+    userWinningVolume: 1n,
+  }),
+  0n,
+);
+assert.equal(
+  safetyPoolModel({
+    isResolved: false,
+    rebatePool: 100n * token,
+    totalPool: 10_000n * token,
+    winningTilePool: 2_000n * token,
+    userVolume: 100n * token,
+    userWinningVolume: 0n,
+  }),
+  0n,
+);
 
 const contractEvents = extractDeclarations(source, "event");
 const clientEvents = extractDeclarations(constants, "event");

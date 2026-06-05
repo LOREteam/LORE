@@ -17,6 +17,8 @@ interface RebatePanelProps {
     hasLoaded?: boolean;
     claimPlanKind?: "none" | "single" | "split" | "unknown";
     isEstimatingClaimPlan?: boolean;
+    minClaimAmount?: string;
+    isBelowClaimMinimum?: boolean;
     recentEpochs: Array<{
       epoch: number;
       pending: string;
@@ -42,6 +44,8 @@ export const RebatePanel = React.memo(function RebatePanel({
   const hasPendingOnly = (rebateInfo?.pendingRebateWei ?? 0n) > 0n && !hasClaimable;
   const claimPlanKind = rebateInfo?.claimPlanKind ?? "none";
   const isEstimatingClaimPlan = rebateInfo?.isEstimatingClaimPlan ?? false;
+  const minClaimAmount = rebateInfo?.minClaimAmount ?? "100";
+  const isBelowClaimMinimum = rebateInfo?.isBelowClaimMinimum ?? false;
   const showInitialSkeleton = isLoading && !hasLoaded;
 
   return (
@@ -50,21 +54,21 @@ export const RebatePanel = React.memo(function RebatePanel({
         <div className="mb-6">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 mb-4 animate-slide-up">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-synced-pulse" />
-            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Participation Rebate</span>
+            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Safety Pool</span>
           </div>
           <h1 className="text-2xl font-black text-white mb-2 animate-slide-up" style={{ animationDelay: "0.05s" }}>
-            Gas Burn Bonus
+            Safety Pool
           </h1>
           <p className="text-sm text-gray-400 leading-relaxed animate-slide-up" style={{ animationDelay: "0.1s" }}>
-            Every resolved epoch saves <span className="text-emerald-400 font-bold">1%</span> of the pool as a LINEA rebate.
-            Everyone who bet in that epoch can claim a proportional share later.
+            Every resolved epoch saves <span className="text-emerald-400 font-bold">1%</span> of the pool for players
+            who participated but missed the winning tile.
           </p>
         </div>
 
         <UiPanel tone="success" className="mb-4 animate-slide-up" style={{ animationDelay: "0.15s" }}>
-          <h2 className={`${uiTokens.sectionLabel} text-white mb-3`}>Your rebate balance</h2>
+          <h2 className={`${uiTokens.sectionLabel} text-white mb-3`}>Your Safety Pool balance</h2>
           {!address ? (
-            <p className="text-sm text-gray-500 text-center py-4">Connect your wallet to load rebate history.</p>
+            <p className="text-sm text-gray-500 text-center py-4">Connect your wallet to load Safety Pool history.</p>
           ) : showInitialSkeleton ? (
             <div className="space-y-3 py-2">
               <div className="grid grid-cols-2 gap-3">
@@ -78,12 +82,12 @@ export const RebatePanel = React.memo(function RebatePanel({
                 </div>
               </div>
               <div className="rounded-xl border border-white/6 bg-white/3 px-4 py-3 text-center text-sm text-gray-500">
-                Loading rebate ledger...
+                Loading Safety Pool ledger...
               </div>
             </div>
           ) : !isSupported ? (
             <p className="text-sm text-gray-500 text-center py-4">
-              Rebate functions are disabled for the configured contract profile.
+              Safety Pool functions are disabled for the configured contract profile.
             </p>
           ) : (
             <>
@@ -104,33 +108,44 @@ export const RebatePanel = React.memo(function RebatePanel({
               <UiButton
                 onClick={onClaimRebates}
                 loading={isClaiming}
-                disabled={!hasClaimable || !isSupported}
+                disabled={!hasClaimable || !isSupported || isBelowClaimMinimum}
                 variant="success"
                 size="md"
                 uppercase
                 fullWidth
                 className="text-xs"
               >
-                {isClaiming ? "Claiming..." : hasClaimable ? "Claim rebate" : "Nothing to claim"}
+                {isClaiming
+                  ? "Claiming..."
+                  : isBelowClaimMinimum
+                    ? "Below minimum"
+                    : hasClaimable
+                      ? "Claim Safety Pool"
+                      : "Nothing to claim"}
               </UiButton>
+              {hasClaimable && isBelowClaimMinimum ? (
+                <p className="mt-3 text-xs leading-relaxed text-gray-500">
+                  Current Safety Pool is below the {minClaimAmount} LINEA minimum. Wait for more claimable epochs before paying gas.
+                </p>
+              ) : null}
               {hasPendingOnly ? (
                 <p className="mt-3 text-xs leading-relaxed text-gray-500">
-                  Pending rebate includes unresolved or not-yet-claimable epochs. Claim unlocks only after those epochs are resolved.
+                  Pending Safety Pool includes unresolved or not-yet-claimable epochs. Claim unlocks only after those epochs are resolved.
                 </p>
               ) : null}
               {isLoading && hasLoaded ? (
                 <p className="mt-3 text-xs leading-relaxed text-gray-500">
-                  Refreshing rebate ledger in background...
+                  Refreshing Safety Pool ledger in background...
                 </p>
               ) : null}
               {hasClaimable ? (
                 <p className="mt-3 text-xs leading-relaxed text-gray-500">
                   {isEstimatingClaimPlan
-                    ? "Estimating whether the current rebate set fits in one transaction..."
+                    ? "Estimating whether the current Safety Pool set fits in one transaction..."
                     : claimPlanKind === "single"
-                      ? "Current rebate set should fit in one batched transaction. This is usually much cheaper than claiming epochs one by one."
+                      ? "Current Safety Pool set should fit in one batched transaction. This is usually much cheaper than claiming epochs one by one."
                       : claimPlanKind === "split"
-                        ? "Current rebate set looks too large for a single reliable claim, so the wallet may split it into multiple transactions."
+                        ? "Current Safety Pool set looks too large for a single reliable claim, so the wallet may split it into multiple transactions."
                         : "Claim size depends on the current epoch set and network conditions; the app will try one batched transaction first."}
                 </p>
               ) : null}
@@ -144,7 +159,7 @@ export const RebatePanel = React.memo(function RebatePanel({
         </div>
 
         <UiPanel tone="default" className="animate-slide-up" style={{ animationDelay: "0.25s" }}>
-          <h2 className={`${uiTokens.sectionLabel} text-white mb-3`}>Recent rebate epochs</h2>
+          <h2 className={`${uiTokens.sectionLabel} text-white mb-3`}>Recent Safety Pool epochs</h2>
           {showInitialSkeleton ? (
             <div className="space-y-2">
               {Array.from({ length: 3 }).map((_, index) => (
@@ -164,9 +179,9 @@ export const RebatePanel = React.memo(function RebatePanel({
             <p className="text-sm text-gray-500">
               {isSupported
                 ? rebateInfo?.totalEpochs
-                  ? "Recent rebate rows are still being indexed or there is nothing claimable yet."
-                  : "No rebate history yet."
-                : "Rebate history is unavailable on the current contract."}
+                  ? "Recent Safety Pool rows are still being indexed or there is nothing claimable yet."
+                  : "No Safety Pool history yet."
+                : "Safety Pool history is unavailable on the current contract."}
             </p>
           ) : (
             <div className="space-y-2">
@@ -180,7 +195,7 @@ export const RebatePanel = React.memo(function RebatePanel({
                   </div>
                   <div className="text-right">
                     <div className={`text-[10px] font-bold uppercase tracking-widest ${row.claimed ? "text-gray-500" : row.pendingWei > 0 ? "text-emerald-400" : "text-gray-400"}`}>
-                      {row.claimed ? "Claimed" : row.pendingWei > 0 ? "Claimable" : row.resolved ? "No rebate" : "Live"}
+                      {row.claimed ? "Claimed" : row.pendingWei > 0 ? "Claimable" : row.resolved ? "No Safety Pool" : "Live"}
                     </div>
                   </div>
                 </div>

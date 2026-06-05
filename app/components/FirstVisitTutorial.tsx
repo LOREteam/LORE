@@ -73,10 +73,10 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   },
   {
     eyebrow: "Rewards",
-    title: "Rebate and Leaderboards cover the meta game",
-    body: "Beyond direct wins, the app also tracks participation rebates and on-chain rankings.",
+    title: "Safety Pool and Leaderboards cover the meta game",
+    body: "Beyond direct wins, the app tracks consolation payouts for missed rounds and on-chain rankings.",
     bullets: [
-      "Rebate shows your pending LINEA rebate and the epochs you can claim right now.",
+      "Safety Pool shows claimable LINEA from epochs where you played but missed the winning tile.",
       "Leaderboards rank biggest wins, ROI, most wins, whales, and the most successful tile.",
       "These tabs are most useful once you have played enough rounds to build history.",
     ],
@@ -87,7 +87,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
     title: "White Paper and FAQ explain the rest",
     body: "White Paper and FAQ cover the rules, wallet flow, jackpots, and common troubleshooting questions.",
     bullets: [
-      "White Paper explains round flow, fee split, jackpots, Auto-Miner, rebates, and the wallet model.",
+      "White Paper explains round flow, fee split, jackpots, Auto-Miner, Safety Pool, and the wallet model.",
       "FAQ answers practical questions about gas, approvals, failed bets, claims, and wallet recovery.",
       "You can skip this tutorial now and reopen those docs later from the sidebar.",
     ],

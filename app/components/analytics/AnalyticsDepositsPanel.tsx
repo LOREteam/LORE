@@ -2,6 +2,7 @@
 
 import React, { useMemo } from "react";
 import type { DepositEntry } from "../../hooks/useDepositHistory";
+import { formatDepositFreshnessLabel } from "../../lib/analyticsDepositsStatus";
 import { loadingQuotes, emptyStates } from "../../lib/loreTexts";
 import { EXPLORER_TX_BASE_URL } from "../../lib/constants";
 import { LoreText } from "../LoreText";
@@ -14,6 +15,8 @@ interface AnalyticsDepositsPanelProps {
   depositsError: string | null;
   depositsLoading: boolean;
   depositsRefreshing: boolean;
+  depositsMetadataLoading: boolean;
+  depositsLastLoadedAt: number | null;
   newDepositIds: Set<string>;
   onLoadDeposits: () => void;
   onRefreshDeposits: () => void;
@@ -29,6 +32,8 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
   depositsError,
   depositsLoading,
   depositsRefreshing,
+  depositsMetadataLoading,
+  depositsLastLoadedAt,
   newDepositIds,
   onLoadDeposits,
   onRefreshDeposits,
@@ -60,6 +65,13 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
       }),
     [newDepositIds, visibleDeposits],
   );
+  const freshnessLabel = formatDepositFreshnessLabel(depositsLastLoadedAt);
+  const statusLabel = depositsRefreshing
+    ? "Refreshing"
+    : depositsMetadataLoading
+      ? "Syncing rewards"
+      : "Ready";
+  const statusActive = depositsRefreshing || depositsMetadataLoading;
 
   return (
     <UiPanel
@@ -74,10 +86,17 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
         </h2>
         <div className="flex items-center gap-3">
           {deposits !== null && (
-            <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${depositsRefreshing ? "text-sky-300" : "text-gray-500"}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${depositsRefreshing ? "bg-sky-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
-              {depositsRefreshing ? "Refreshing" : "Ready"}
-            </span>
+            <div className="flex flex-col items-end gap-0.5">
+              <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${statusActive ? "text-sky-300" : "text-gray-500"}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${statusActive ? "bg-sky-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
+                {statusLabel}
+              </span>
+              {freshnessLabel && (
+                <span className="text-[9px] font-semibold uppercase tracking-wider text-gray-600">
+                  {freshnessLabel}
+                </span>
+              )}
+            </div>
           )}
           {deposits && deposits.length > 0 && (
             <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">

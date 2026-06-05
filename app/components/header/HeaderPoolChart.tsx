@@ -29,6 +29,7 @@ export function HeaderPoolChart({
 }: HeaderPoolChartProps) {
   const chartId = React.useId().replace(/:/g, "");
   const previousTotalRef = React.useRef(realTotalStaked);
+  const lastVisibleLinePathRef = React.useRef("");
   const [depositPulseActive, setDepositPulseActive] = React.useState(false);
   const chartStrokeId = `${chartId}-chart-stroke`;
   const gridId = `${chartId}-grid-dots`;
@@ -43,7 +44,14 @@ export function HeaderPoolChart({
     ? "M 1,56 C 10,56 10,56 19,56 C 28,56 28,50 37,50 C 46,50 46,50 55,50 C 64,50 64,46 73,46 C 82,46 82,46 91,46 C 95,46 95,43 99,43"
     : "";
   const visibleLinePath = hydrated ? (linePath || fallbackLinePath) : fallbackLinePath;
-  const showChartVisual = liveStateReady && (chartHasData || Boolean(visibleLinePath));
+  const stableLinePath = visibleLinePath || (!liveStateReady ? lastVisibleLinePathRef.current : "");
+  const showChartVisual = chartHasData || Boolean(stableLinePath) || !liveStateReady;
+
+  React.useEffect(() => {
+    if (visibleLinePath) {
+      lastVisibleLinePathRef.current = visibleLinePath;
+    }
+  }, [visibleLinePath]);
 
   React.useEffect(() => {
     const previous = previousTotalRef.current;
@@ -119,9 +127,9 @@ export function HeaderPoolChart({
               sizes="(min-width: 900px) 40vw, 60vw"
               className={`pool-crystal-art ${depositPulseActive ? "pool-crystal-art-flash" : ""}`}
             />
-            {visibleLinePath && (
-              <div className="absolute left-0 right-1 top-[24%] z-20 h-[48%] sm:right-0 sm:top-[32%] sm:h-[44%]">
-                <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+            {stableLinePath && (
+              <div className="absolute -left-[4.5rem] right-0 top-[24%] z-10 h-[48%] sm:top-[32%] sm:h-[44%]">
+                <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
                   <defs>
                     <linearGradient id={chartStrokeId} x1="0%" y1="0%" x2="100%" y2="0%">
                       <stop offset="0%" stopColor="#06b6d4" />
@@ -130,7 +138,7 @@ export function HeaderPoolChart({
                     </linearGradient>
                   </defs>
 
-                  <path d={visibleLinePath} fill="none" stroke={`url(#${chartStrokeId})`} strokeWidth="2" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="transition-all duration-700" />
+                  <path d={stableLinePath} fill="none" stroke={`url(#${chartStrokeId})`} strokeWidth="2" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="transition-all duration-700" />
                 </svg>
               </div>
             )}

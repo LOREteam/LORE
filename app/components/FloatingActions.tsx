@@ -6,12 +6,12 @@ import dynamic from "next/dynamic";
 const LazyChatWidget = dynamic(() => import("./chat/ChatWidget").then((mod) => mod.ChatWidget), {
   loading: () => (
     <button
-      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-violet-400/20 bg-violet-600/80 shadow-lg shadow-violet-500/20 sm:h-11 sm:w-11"
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-600/80 shadow-lg shadow-violet-500/20 sm:h-9 sm:w-9 sm:rounded-xl"
       aria-label="Open chat"
       title="Open chat"
       disabled
     >
-      <svg aria-hidden="true" className="h-3.5 w-3.5 sm:h-[18px] sm:w-[19px]" viewBox="0 0 19 18" fill="none">
+      <svg aria-hidden="true" className="h-3.5 w-3.5 sm:h-4 sm:w-4" viewBox="0 0 19 18" fill="none">
         <path
           d="M1.5 2.75C1.5 1.784 2.284 1 3.25 1h12.5C16.716 1 17.5 1.784 17.5 2.75v8.5c0 .966-.784 1.75-1.75 1.75H11l-1.5 2.5L8 13H3.25C2.284 13 1.5 12.216 1.5 11.25v-8.5z"
           fill="white"
@@ -34,19 +34,19 @@ interface FloatingActionsProps {
 export const FloatingActions = React.memo(function FloatingActions({ walletAddress, onChatOpenChange, chatOpen = false }: FloatingActionsProps) {
   return (
     <div
-      className="mobile-hud-chat fixed right-2 z-[200] sm:right-3"
+      className="mobile-hud-chat fixed right-2 z-[200] sm:right-[21px]"
       data-chat-open={chatOpen ? "true" : "false"}
     >
-      <div className="hud-dock flex items-center gap-1 rounded-2xl border border-white/8 bg-[#070712]/88 p-0.5 shadow-[0_12px_34px_rgba(2,6,23,0.4)] backdrop-blur-xl sm:gap-2 sm:p-1.5">
+      <div className="hud-dock flex items-center gap-1 rounded-2xl border border-white/8 bg-[#070712]/88 p-1 shadow-[0_12px_34px_rgba(2,6,23,0.4)] backdrop-blur-xl">
         <a
           href="https://x.com/Linea_Ore"
           target="_blank"
           rel="noopener noreferrer"
-          className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(29,161,242,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] lg:flex"
+          className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(29,161,242,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] lg:flex"
           title="X (Twitter) @Linea_Ore"
           aria-label="Linea Ore on X"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
           </svg>
         </a>
@@ -54,11 +54,11 @@ export const FloatingActions = React.memo(function FloatingActions({ walletAddre
           href="https://github.com/LOREteam/LORE"
           target="_blank"
           rel="noopener noreferrer"
-          className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-purple-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(139,92,246,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] lg:flex"
+          className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-slate-900/90 text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-purple-400/30 hover:bg-slate-800 hover:text-white hover:shadow-[0_0_12px_rgba(139,92,246,0.25)] active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] lg:flex"
           title="LORE on GitHub"
           aria-label="LORE on GitHub"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M12 .5C5.65.5.5 5.8.5 12.33c0 5.23 3.3 9.67 7.88 11.23.58.11.79-.26.79-.58 0-.29-.01-1.23-.02-2.23-3.2.71-3.88-1.39-3.88-1.39-.52-1.37-1.28-1.73-1.28-1.73-1.05-.74.08-.73.08-.73 1.16.08 1.78 1.22 1.78 1.22 1.03 1.82 2.69 1.29 3.35.99.1-.77.4-1.29.72-1.59-2.55-.3-5.23-1.31-5.23-5.81 0-1.28.44-2.33 1.17-3.15-.12-.3-.51-1.52.11-3.17 0 0 .95-.31 3.12 1.2a10.48 10.48 0 0 1 5.68 0c2.16-1.51 3.11-1.2 3.11-1.2.62 1.65.23 2.87.12 3.17.73.82 1.17 1.87 1.17 3.15 0 4.51-2.69 5.51-5.25 5.81.42.37.78 1.08.78 2.19 0 1.58-.01 2.86-.01 3.25 0 .32.2.7.8.58a11.87 11.87 0 0 0 7.87-11.23C23.5 5.8 18.35.5 12 .5Z" />
           </svg>
         </a>
