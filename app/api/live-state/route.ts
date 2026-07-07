@@ -77,13 +77,21 @@ export async function GET(request: Request) {
   const staleCache =
     liveStateRouteCache.getStale(CACHE_KEY) ??
     loadLiveStateSnapshot(Number.POSITIVE_INFINITY);
-  const fallbackCache = staleCache ?? buildStoredLiveStateBootstrap();
+  const storedBootstrap = buildStoredLiveStateBootstrap();
+  const fallbackCache = staleCache ?? storedBootstrap;
 
   if (staleCache && canServeStaleImmediately(staleCache, now)) {
     markRouteStaleServed(ROUTE_METRIC_KEY);
     startLiveStateRefresh();
     finishRouteMetric(metric, 200);
     return jsonNoStore(staleCache);
+  }
+
+  if (storedBootstrap) {
+    markRouteStaleServed(ROUTE_METRIC_KEY);
+    startLiveStateRefresh();
+    finishRouteMetric(metric, 200);
+    return jsonNoStore(storedBootstrap);
   }
 
   const rateLimited = await enforceSharedRateLimit(request, {

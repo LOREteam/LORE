@@ -1,5 +1,6 @@
-import { formatUnits, parseAbi, parseUnits } from "viem";
-import { CONTRACT_ADDRESS, publicClient } from "./dataBridge";
+import { formatUnits, parseAbi } from "viem";
+import { CONTRACT_ADDRESS, isSafePositiveInteger, publicClient } from "./dataBridge";
+import { parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import { getEpochMapByIds, upsertEpochMap } from "../../../server/storage";
 
 const READ_ABI = parseAbi([
@@ -56,7 +57,7 @@ function getRewardSummaryCacheKey(user: string, epochs: number[]) {
 
 async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpochRuntimeRow>> {
   const normalizedEpochs = [...new Set(
-    epochs.filter((epoch) => Number.isInteger(epoch) && epoch > 0),
+    epochs.filter(isSafePositiveInteger),
   )].slice(0, MAX_EPOCHS_PER_REQUEST);
 
   const storedRows = getEpochMapByIds(normalizedEpochs);
@@ -70,7 +71,7 @@ async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpo
         winningTile: stored.winningTile,
         totalPool: stored.totalPool,
         rewardPool: stored.rewardPool,
-        rewardPoolWei: parseUnits(stored.rewardPool, 18),
+        rewardPoolWei: parseLineaAmountWei(stored.rewardPool),
         isDailyJackpot: Boolean(stored.isDailyJackpot),
         isWeeklyJackpot: Boolean(stored.isWeeklyJackpot),
       };
@@ -138,7 +139,7 @@ export async function loadRewardMapsForUserEpochs(
 ): Promise<RewardMapsForUserEpochs> {
   const normalizedUser = user.toLowerCase() as `0x${string}`;
   const normalizedEpochs = [...new Set(
-    epochs.filter((epoch) => Number.isInteger(epoch) && epoch > 0),
+    epochs.filter(isSafePositiveInteger),
   )].slice(0, MAX_EPOCHS_PER_REQUEST);
   if (normalizedEpochs.length === 0) {
     return { epochs: {}, rewards: {} };
@@ -164,7 +165,7 @@ export async function loadRewardMapsForUserEpochs(
         winningTile: BigInt(row.winningTile),
         rewardPool: row.rewardPool,
       }))
-      .filter((row) => Number.isInteger(row.epoch) && row.epoch > 0);
+      .filter((row) => isSafePositiveInteger(row.epoch));
 
     const rewards: Record<string, RewardRow> = {};
     const serializedEpochs: Record<string, RewardEpochRow> = Object.fromEntries(

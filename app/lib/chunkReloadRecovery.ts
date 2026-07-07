@@ -25,7 +25,9 @@ export function isChunkLoadLikeErrorMessage(message: string): boolean {
   return (
     lower.includes("chunkloaderror") ||
     (lower.includes("loading chunk") && lower.includes("/_next/static/chunks/")) ||
-    (lower.includes("loading chunk") && lower.includes("failed"))
+    (lower.includes("loading chunk") && lower.includes("failed")) ||
+    (lower.includes("failed to fetch dynamically imported module") && lower.includes("/_next/static/chunks/")) ||
+    (lower.includes("importing a module script failed") && lower.includes("/_next/static/chunks/"))
   );
 }
 

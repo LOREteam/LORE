@@ -5,6 +5,12 @@ import { GRID_SIZE } from "../lib/constants";
 import { safeParseFloat, validateBetAmount } from "../lib/utils";
 
 const AUTOMINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
+export const MAX_AUTO_MINER_CYCLES = 5000;
+const DEFAULT_AUTO_MINER_INPUTS = {
+  betSize: "1.0",
+  targets: 3,
+  cycles: 5,
+};
 
 interface RunningParams {
   betStr: string;
@@ -18,10 +24,29 @@ interface UseAutoMinerFormOptions {
   isRevealing: boolean;
   isAnalyzing?: boolean;
   liveStateReady?: boolean;
+  readOnlyReason?: string | null;
   formattedBalance?: string | null;
   walletConnected?: boolean;
   runningParams?: RunningParams | null;
   lowEthForGas?: boolean;
+}
+
+function sanitizePositiveInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const next = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(next)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(next)));
+}
+
+export function sanitizeAutoMinerInputs(value: unknown) {
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const betSize = typeof raw.betSize === "string" && validateBetAmount(raw.betSize) === null
+    ? raw.betSize
+    : DEFAULT_AUTO_MINER_INPUTS.betSize;
+  return {
+    betSize,
+    targets: sanitizePositiveInteger(raw.targets, DEFAULT_AUTO_MINER_INPUTS.targets, 1, GRID_SIZE),
+    cycles: sanitizePositiveInteger(raw.cycles, DEFAULT_AUTO_MINER_INPUTS.cycles, 1, MAX_AUTO_MINER_CYCLES),
+  };
 }
 
 export function useAutoMinerForm({
@@ -31,25 +56,24 @@ export function useAutoMinerForm({
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   isAnalyzing: _isAnalyzing = false,
   liveStateReady = true,
+  readOnlyReason = null,
   formattedBalance,
   walletConnected = true,
   runningParams,
   lowEthForGas,
 }: UseAutoMinerFormOptions) {
-  const [betSize, setBetSize] = useState("1.0");
-  const [targets, setTargets] = useState(3);
-  const [cycles, setCycles] = useState(5);
+  const [betSize, setBetSize] = useState(DEFAULT_AUTO_MINER_INPUTS.betSize);
+  const [targets, setTargets] = useState(DEFAULT_AUTO_MINER_INPUTS.targets);
+  const [cycles, setCycles] = useState(DEFAULT_AUTO_MINER_INPUTS.cycles);
 
   useEffect(() => {
     try {
       const raw = typeof window !== "undefined" ? window.localStorage.getItem(AUTOMINER_INPUTS_KEY) : null;
       if (raw != null) {
-        const data = JSON.parse(raw);
-        if (data && typeof data === "object") {
-          if (typeof data.betSize === "string" && data.betSize && !Number.isNaN(Number(data.betSize))) setBetSize(data.betSize);
-          if (typeof data.targets === "number" && data.targets >= 1 && data.targets <= GRID_SIZE) setTargets(data.targets);
-          if (typeof data.cycles === "number" && data.cycles >= 1) setCycles(data.cycles);
-        }
+        const data = sanitizeAutoMinerInputs(JSON.parse(raw));
+        setBetSize(data.betSize);
+        setTargets(data.targets);
+        setCycles(data.cycles);
       }
     } catch {}
   }, []);
@@ -75,13 +99,11 @@ export function useAutoMinerForm({
   const displayCycles = isAutoMining && runningParams ? runningParams.rounds : cycles;
 
   const handleTargetsChange = useCallback((value: string) => {
-    const next = Number(value);
-    if (Number.isFinite(next)) setTargets(Math.min(GRID_SIZE, Math.max(1, Math.floor(next))));
+    setTargets((current) => sanitizePositiveInteger(value, current, 1, GRID_SIZE));
   }, []);
 
   const handleCyclesChange = useCallback((value: string) => {
-    const next = Number(value);
-    if (Number.isFinite(next)) setCycles(Math.max(1, Math.floor(next)));
+    setCycles((current) => sanitizePositiveInteger(value, current, 1, MAX_AUTO_MINER_CYCLES));
   }, []);
 
   const totalCost = useMemo(() => {
@@ -94,7 +116,9 @@ export function useAutoMinerForm({
   const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
   const insufficientBalance = balance !== null && totalCost > balance;
   const disabledReason =
-    !walletConnected
+    readOnlyReason && !isAutoMining
+      ? readOnlyReason
+      : !walletConnected
       ? null
       : !liveStateReady
       ? "Waiting for live epoch sync"
@@ -109,6 +133,7 @@ export function useAutoMinerForm({
               : null;
   const isDisabled =
     (!walletConnected && !isAutoMining) ||
+    (Boolean(readOnlyReason) && !isAutoMining) ||
     (isPending && !isAutoMining) ||
     !liveStateReady ||
     (Boolean(betSizeError) && !isAutoMining) ||

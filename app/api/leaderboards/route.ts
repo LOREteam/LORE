@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { formatUnits, parseUnits } from "viem";
+import { formatUnits } from "viem";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import {
   beginRouteMetric,
@@ -12,6 +12,7 @@ import {
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { LEADERBOARD_TOP_N } from "../../lib/constants";
 import type { LeaderboardEntry, LuckyTileEntry } from "../../lib/types";
+import { computeWinningAmountWei, formatLineaAmountFixed, parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import {
   getAllBetRows,
   getAllRewardClaims,
@@ -76,7 +77,7 @@ function jsonNoStore(payload: LeaderboardsPayload, status = 200) {
 }
 
 function fmt(wei: bigint) {
-  return parseFloat(formatUnits(wei, 18)).toFixed(2);
+  return formatLineaAmountFixed(wei, 2);
 }
 
 function buildRankedEntries(
@@ -104,20 +105,6 @@ function attachLeaderboardNames(entries: LeaderboardEntry[], nameByAddress: Reco
   });
 }
 
-function computeWinningAmountWei(tileIds: number[], amounts: string[] | undefined, winningTile: number, totalAmountNum: number) {
-  if (Array.isArray(amounts) && amounts.length === tileIds.length) {
-    return tileIds.reduce((sum, tileId, index) => {
-      if (tileId !== winningTile) return sum;
-      return sum + parseUnits(amounts[index] ?? "0", 18);
-    }, 0n);
-  }
-
-  const hitCount = tileIds.filter((tileId) => tileId === winningTile).length;
-  if (hitCount <= 0 || tileIds.length === 0) return 0n;
-  const share = totalAmountNum / tileIds.length;
-  return parseUnits(String(share * hitCount), 18);
-}
-
 async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
   const bets = getAllBetRows();
   const claims = getAllRewardClaims();
@@ -137,12 +124,12 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
       maxSingleWin: 0n,
       winCount: 0,
     };
-    prev.totalWagered += parseUnits(bet.totalAmount, 18);
+    prev.totalWagered += parseLineaAmountWei(bet.totalAmount);
     users.set(address, prev);
 
     const epochRow = epochs[bet.epoch];
     if (!epochRow || !epochRow.winningTile || epochRow.winningTile <= 0) continue;
-    const winningAmountWei = computeWinningAmountWei(bet.tileIds, bet.amounts, epochRow.winningTile, bet.totalAmountNum);
+    const winningAmountWei = computeWinningAmountWei(bet.tileIds, bet.amounts, epochRow.winningTile, bet.totalAmount);
     if (winningAmountWei <= 0n) continue;
     const key = `${bet.epoch}:${address}`;
     userWinningAmounts.set(key, (userWinningAmounts.get(key) ?? 0n) + winningAmountWei);
@@ -158,7 +145,7 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
 
   for (const claim of claims) {
     const address = claim.user.toLowerCase();
-    const rewardWei = parseUnits(claim.reward, 18);
+    const rewardWei = parseLineaAmountWei(claim.reward);
     const rewardKey = `${claim.epoch}:${address}`;
     rewardByEpochUser.set(rewardKey, (rewardByEpochUser.get(rewardKey) ?? 0n) + rewardWei);
     const prev = users.get(address) ?? {
@@ -177,7 +164,7 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
     const userWinningWei = userWinningAmounts.get(`${claim.epoch}:${address}`) ?? 0n;
     if (userWinningWei <= 0n) continue;
 
-    const rewardPoolWei = parseUnits(epochRow.rewardPool, 18);
+    const rewardPoolWei = parseLineaAmountWei(epochRow.rewardPool);
     if (rewardPoolWei <= 0n) continue;
     const tilePoolWei = (rewardPoolWei * userWinningWei) / rewardWei;
     if (tilePoolWei <= 0n) continue;
@@ -204,7 +191,7 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
       bet.tileIds,
       bet.amounts,
       epochRow.winningTile,
-      bet.totalAmountNum,
+      bet.totalAmount,
     );
     if (winningAmountWei <= 0n) continue;
 

@@ -6,7 +6,7 @@ interface Props {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-const PUBLIC_SITE_URL = "https://lore.game";
+const PUBLIC_SITE_URL = "https://playlore.xyz";
 
 function getPublicSiteUrl() {
   const configured = (process.env.NEXT_PUBLIC_SITE_URL ?? PUBLIC_SITE_URL).trim();
@@ -139,7 +139,7 @@ export default async function JackpotWinPage({ searchParams }: Props) {
           href="/"
           className={`mt-8 inline-flex min-h-12 items-center justify-center rounded-xl border px-7 text-sm font-black uppercase tracking-[0.16em] transition hover:brightness-110 ${theme.banner.button} ${theme.banner.buttonBorder}`}
         >
-          Play at lore.game
+          Play at playlore.xyz
         </Link>
       </div>
     </main>

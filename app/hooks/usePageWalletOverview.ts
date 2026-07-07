@@ -15,6 +15,23 @@ const EMPTY_CACHED_BALANCES: CachedPrivyBalances = {
   eth: "0.0000",
 };
 
+function normalizeCachedBalance(value: unknown, fallback: string, fractionDigits: number): string {
+  if (typeof value !== "string" && typeof value !== "number") return fallback;
+  const text = String(value).trim();
+  if (!text || text.length > 40) return fallback;
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric) || numeric < 0) return fallback;
+  return numeric.toFixed(fractionDigits);
+}
+
+export function normalizeCachedPrivyBalances(value: unknown): CachedPrivyBalances {
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    token: normalizeCachedBalance(raw.token, EMPTY_CACHED_BALANCES.token, 2),
+    eth: normalizeCachedBalance(raw.eth, EMPTY_CACHED_BALANCES.eth, 4),
+  };
+}
+
 function getPrivyBalanceCacheKey(address?: `0x${string}`) {
   return address
     ? `lore:privy-balances:v1:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${address.toLowerCase()}`
@@ -52,11 +69,7 @@ export function usePageWalletOverview({
         setCachedBalances(EMPTY_CACHED_BALANCES);
         return;
       }
-      const parsed = JSON.parse(raw) as Partial<CachedPrivyBalances>;
-      setCachedBalances({
-        token: typeof parsed.token === "string" ? parsed.token : "0.00",
-        eth: typeof parsed.eth === "string" ? parsed.eth : "0.0000",
-      });
+      setCachedBalances(normalizeCachedPrivyBalances(JSON.parse(raw)));
     } catch {
       setCachedBalances(EMPTY_CACHED_BALANCES);
     }

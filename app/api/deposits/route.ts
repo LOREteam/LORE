@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi } from "viem";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import { tileMaskToTileIds } from "../../lib/tileMask";
+import { normalizeTileAmounts, parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import {
   beginRouteMetric,
   failRouteMetric,
@@ -16,6 +17,7 @@ import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
   filterByCurrentEpoch,
+  isSafePositiveInteger,
   patchStorage,
   publicClient,
 } from "../_lib/dataBridge";
@@ -108,6 +110,16 @@ function buildDepositKey(epoch: string, txHash: string, blockNumber: string): st
   return `${epoch}_nohash_${blockNumber}`;
 }
 
+function parseStoredBlockNumber(value: string | null | undefined): bigint {
+  if (!value || !/^\d+$/.test(value)) return 0n;
+  return BigInt(value);
+}
+
+function parseStoredEpochNumber(value: string | null | undefined): number {
+  const parsed = Number(value);
+  return isSafePositiveInteger(parsed) ? parsed : 0;
+}
+
 function dedupeDeposits(rows: DepositRow[]): DepositRow[] {
   const byKey = new Map<string, DepositRow>();
   for (const row of rows) {
@@ -117,8 +129,8 @@ function dedupeDeposits(rows: DepositRow[]): DepositRow[] {
       byKey.set(key, row);
       continue;
     }
-    const prevBlock = BigInt(prev.blockNumber || "0");
-    const nextBlock = BigInt(row.blockNumber || "0");
+    const prevBlock = parseStoredBlockNumber(prev.blockNumber);
+    const nextBlock = parseStoredBlockNumber(row.blockNumber);
     if (nextBlock >= prevBlock) {
       byKey.set(key, row);
     }
@@ -136,42 +148,28 @@ function normalizeDepositRow(row: DepositRow): DepositRow {
     return { ...row, tileIds: [], amounts: [] };
   }
 
-  const normalizedAmounts =
-    Array.isArray(row.amounts) && row.amounts.length === tileIds.length
-      ? row.amounts.map((value) => {
-          const parsed = Number.parseFloat(String(value));
-          return Number.isFinite(parsed) ? parsed : 0;
-        })
-      : tileIds.map(() => row.totalAmountNum / tileIds.length);
-
-  const aggregate = new Map<number, number>();
-  for (let index = 0; index < tileIds.length; index += 1) {
-    const tileId = Number(tileIds[index]);
-    if (!Number.isInteger(tileId) || tileId <= 0 || tileId > 25) continue;
-    aggregate.set(tileId, (aggregate.get(tileId) ?? 0) + (normalizedAmounts[index] ?? 0));
-  }
-
-  const mergedTileIds = [...aggregate.keys()];
+  const normalized = normalizeTileAmounts(tileIds, row.amounts, row.totalAmount);
+  const mergedTileIds = normalized.tileIds;
   if (mergedTileIds.length === tileIds.length) {
     return {
       ...row,
-      amounts: normalizedAmounts.map((value) => String(value)),
+      amounts: normalized.amounts,
     };
   }
 
   return {
     ...row,
     tileIds: mergedTileIds,
-    amounts: mergedTileIds.map((tileId) => String(aggregate.get(tileId) ?? 0)),
+    amounts: normalized.amounts,
   };
 }
 
 function sortDepositsDesc<T extends { epoch: string; blockNumber: string; txHash: string }>(rows: T[]) {
   return [...rows].sort((a, b) => {
-    const aBlock = BigInt(a.blockNumber || "0");
-    const bBlock = BigInt(b.blockNumber || "0");
+    const aBlock = parseStoredBlockNumber(a.blockNumber);
+    const bBlock = parseStoredBlockNumber(b.blockNumber);
     if (aBlock === bBlock) {
-      const epochDelta = Number(b.epoch) - Number(a.epoch);
+      const epochDelta = parseStoredEpochNumber(b.epoch) - parseStoredEpochNumber(a.epoch);
       if (epochDelta !== 0) return epochDelta;
       return (b.txHash ?? "").localeCompare(a.txHash ?? "");
     }
@@ -228,7 +226,7 @@ async function fetchDepositsFromChain(
         if (decoded.eventName !== "BetPlaced") continue;
         const args = decoded.args as { epoch: bigint; tileId: bigint; amount: bigint };
         const ep = Number(args.epoch);
-        if (currentEpoch && (ep < 1 || ep > currentEpoch)) continue;
+        if (!isSafePositiveInteger(ep) || (currentEpoch && ep > currentEpoch)) continue;
         const key = buildDepositKey(
           args.epoch.toString(),
           log.transactionHash ?? "",
@@ -238,8 +236,10 @@ async function fetchDepositsFromChain(
         const prev = byKey.get(key);
         if (prev) {
           prev.tileIds.push(Number(args.tileId));
-          prev.totalAmountNum += parseFloat(amount);
-          prev.totalAmount = prev.totalAmountNum.toString();
+          const totalWei = parseLineaAmountWei(prev.totalAmount) + args.amount;
+          prev.totalAmount = formatUnits(totalWei, 18);
+          prev.totalAmountNum = Number.parseFloat(prev.totalAmount);
+          prev.amounts = [...(prev.amounts ?? []), amount];
         } else {
           byKey.set(key, {
             epoch: args.epoch.toString(),
@@ -256,7 +256,7 @@ async function fetchDepositsFromChain(
         if (decoded.eventName !== "BatchBetsPlaced") continue;
         const args = decoded.args as { epoch: bigint; tileIds: readonly bigint[]; amounts: readonly bigint[]; totalAmount: bigint };
         const ep = Number(args.epoch);
-        if (currentEpoch && (ep < 1 || ep > currentEpoch)) continue;
+        if (!isSafePositiveInteger(ep) || (currentEpoch && ep > currentEpoch)) continue;
         const key = buildDepositKey(
           args.epoch.toString(),
           log.transactionHash ?? "",
@@ -276,7 +276,7 @@ async function fetchDepositsFromChain(
         if (decoded.eventName !== "BatchBetsSameAmountPlaced") continue;
         const args = decoded.args as { epoch: bigint; tileIds: readonly bigint[]; amount: bigint; totalAmount: bigint };
         const ep = Number(args.epoch);
-        if (currentEpoch && (ep < 1 || ep > currentEpoch)) continue;
+        if (!isSafePositiveInteger(ep) || (currentEpoch && ep > currentEpoch)) continue;
         const amount = formatUnits(args.amount, 18);
         const key = buildDepositKey(
           args.epoch.toString(),
@@ -297,7 +297,7 @@ async function fetchDepositsFromChain(
         if (decoded.eventName !== "BatchBetsBitmapPlaced") continue;
         const args = decoded.args as { epoch: bigint; tileMask: number; amount: bigint; totalAmount: bigint };
         const ep = Number(args.epoch);
-        if (currentEpoch && (ep < 1 || ep > currentEpoch)) continue;
+        if (!isSafePositiveInteger(ep) || (currentEpoch && ep > currentEpoch)) continue;
         const tileIds = tileMaskToTileIds(args.tileMask);
         const amount = formatUnits(args.amount, 18);
         const key = buildDepositKey(
@@ -324,7 +324,7 @@ async function fetchDepositsFromChain(
 }
 
 function isValidEpochNumber(value: number | null | undefined): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
+  return typeof value === "number" && isSafePositiveInteger(value);
 }
 
 async function readCurrentEpochFromChain(fallback: number | null) {
@@ -434,7 +434,7 @@ function readIndexedDeposits(user: string, currentEpochNum: number | null) {
   let deposits = Object.values(raw) as DepositRow[];
   deposits = filterByCurrentEpoch(deposits, currentEpochNum);
   deposits = deposits.filter((d) => {
-    const blockNumber = BigInt(d.blockNumber || "0");
+    const blockNumber = parseStoredBlockNumber(d.blockNumber);
     if (blockNumber > 0n && blockNumber < CONTRACT_DEPLOY_BLOCK) return false;
     return true;
   });
@@ -498,8 +498,8 @@ async function buildDepositsPayload(
 
   const epochs = [...new Set(
     deposits
-      .map((row) => Number(row.epoch))
-      .filter((epoch) => Number.isInteger(epoch) && epoch > 0),
+      .map((row) => parseStoredEpochNumber(row.epoch))
+      .filter(isSafePositiveInteger),
   )].slice(0, INLINE_REWARD_EPOCH_LIMIT);
   const rewardSummary = await loadRewardMapsForUserEpochs(user, epochs);
   return {

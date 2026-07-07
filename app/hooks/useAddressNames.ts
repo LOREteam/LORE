@@ -7,10 +7,27 @@ type NameMap = Map<string, string>;
 
 const CACHE_TTL_MS = 60_000;
 const STORAGE_KEY = "lore:address-names-cache:v1";
+const CACHE_MAX_FUTURE_SKEW_MS = 5_000;
 let globalCache: { map: NameMap; fetchedAt: number } | null = null;
 
 function serializeNameMap(map: NameMap) {
   return Object.fromEntries(map.entries());
+}
+
+export function normalizeCachedAddressNames(value: unknown, now = Date.now()): { map: NameMap; fetchedAt: number } | null {
+  if (!value || typeof value !== "object") return null;
+  const parsed = value as { names?: Record<string, unknown>; fetchedAt?: unknown };
+  if (!parsed.names || typeof parsed.names !== "object") return null;
+  if (typeof parsed.fetchedAt !== "number" || !Number.isFinite(parsed.fetchedAt) || parsed.fetchedAt <= 0) return null;
+  if (parsed.fetchedAt - now > CACHE_MAX_FUTURE_SKEW_MS) return null;
+  const map = new Map<string, string>();
+  for (const [address, name] of Object.entries(parsed.names)) {
+    const normalizedAddress = address.trim().toLowerCase();
+    if (!/^0x[a-f0-9]{40}$/.test(normalizedAddress)) continue;
+    const trimmed = typeof name === "string" ? name.trim() : "";
+    if (trimmed) map.set(normalizedAddress, trimmed);
+  }
+  return { map, fetchedAt: parsed.fetchedAt };
 }
 
 function loadCachedNames(): { map: NameMap; fetchedAt: number } | null {
@@ -18,14 +35,7 @@ function loadCachedNames(): { map: NameMap; fetchedAt: number } | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { names?: Record<string, string>; fetchedAt?: number };
-    if (!parsed?.names || typeof parsed.fetchedAt !== "number") return null;
-    const map = new Map<string, string>();
-    for (const [address, name] of Object.entries(parsed.names)) {
-      const trimmed = typeof name === "string" ? name.trim() : "";
-      if (trimmed) map.set(address.toLowerCase(), trimmed);
-    }
-    return { map, fetchedAt: parsed.fetchedAt };
+    return normalizeCachedAddressNames(JSON.parse(raw));
   } catch {
     return null;
   }

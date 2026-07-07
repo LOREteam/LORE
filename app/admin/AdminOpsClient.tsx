@@ -20,7 +20,10 @@ type DataSyncHealth = {
     currentEpochMeta?: number | null;
     lastIndexedBlock?: string | null;
     repairCursorBlock?: string | null;
+    headBlock?: string | null;
+    finalityTargetBlock?: string | null;
     lagBlocks?: number | null;
+    lagToFinalityTargetBlocks?: number | null;
   };
   epochs?: {
     storedCount?: number;
@@ -73,6 +76,7 @@ type DataSyncHealth = {
     network?: string;
     deployBlock?: string;
     lagWarnBlocks?: number | null;
+    indexerFinalityBlocks?: string | null;
   };
   hints?: string[];
 };
@@ -95,6 +99,15 @@ type RuntimeHealth = {
   status?: string;
   visibility?: "public" | "private";
   redacted?: boolean;
+  publicConfig?: {
+    chainId?: number;
+    chainName?: string;
+    privyAppIdConfigured?: boolean;
+    privyFallbackActive?: boolean;
+    eip7702Enabled?: boolean;
+    eip7702MiningEnabled?: boolean;
+    readOnlyMode?: boolean;
+  };
   metrics?: Record<string, RuntimeMetric>;
 };
 
@@ -184,6 +197,10 @@ type OpsData = {
     currentEpochMeta: number | null;
     lastIndexedBlock: string | null;
     repairCursorBlock: string | null;
+    headBlock: string | null;
+    finalityBlocks: string | null;
+    targetBlock: string | null;
+    lastProcessedBlock: string | null;
   };
 };
 
@@ -539,10 +556,14 @@ export default function AdminOpsClient() {
           status: dataSyncHealth?.status ?? null,
           phase: dataSyncHealth?.catchUp?.phase ?? null,
           lagBlocks: dataSyncHealth?.storage?.lagBlocks ?? null,
+          lagToFinalityTargetBlocks: dataSyncHealth?.storage?.lagToFinalityTargetBlocks ?? null,
+          finalityTargetBlock: dataSyncHealth?.storage?.finalityTargetBlock ?? null,
+          indexerFinalityBlocks: dataSyncHealth?.env?.indexerFinalityBlocks ?? null,
           currentEpochMeta: dataSyncHealth?.storage?.currentEpochMeta ?? null,
           lastIndexedBlock: dataSyncHealth?.storage?.lastIndexedBlock ?? null,
           missingCount: dataSyncHealth?.epochs?.missingCount ?? null,
         },
+        indexerStorage: opsData.storage,
         logs: opsData.logSources.map((source) => ({
           key: source.key,
           status: source.status,
@@ -571,6 +592,9 @@ export default function AdminOpsClient() {
     const missingCount = dataSyncHealth?.epochs?.missingCount ?? 0;
     const missingLatestCount = dataSyncHealth?.epochs?.missingLatest?.length ?? 0;
     const lagBlocks = dataSyncHealth?.storage?.lagBlocks ?? null;
+    const lagToFinalityTargetBlocks = dataSyncHealth?.storage?.lagToFinalityTargetBlocks ?? null;
+    const effectiveLagBlocks = lagToFinalityTargetBlocks ?? lagBlocks;
+    const effectiveLagLabel = lagToFinalityTargetBlocks != null ? "finality-target lag" : "head lag";
     const lagWarnBlocks = dataSyncHealth?.env?.lagWarnBlocks ?? 200;
     const freshRun = dataSyncHealth?.indexer?.run?.stale === false;
     const missingLatestTailOnly =
@@ -579,9 +603,9 @@ export default function AdminOpsClient() {
     const nearHeadCatchUp = Boolean(
       freshRun &&
       missingLatestTailOnly &&
-      lagBlocks != null &&
-      Number.isFinite(lagBlocks) &&
-      lagBlocks <= Math.max(lagWarnBlocks * 4, 5_000),
+      effectiveLagBlocks != null &&
+      Number.isFinite(effectiveLagBlocks) &&
+      effectiveLagBlocks <= Math.max(lagWarnBlocks * 4, 5_000),
     );
     const isLiveIndexerActive = Boolean(
       liveIndexer &&
@@ -619,6 +643,14 @@ export default function AdminOpsClient() {
       });
     }
 
+    if (runtimeHealth?.publicConfig?.readOnlyMode) {
+      items.push({
+        level: "info",
+        title: "Read-only betting is enabled",
+        detail: "New manual and auto-miner starts are paused by NEXT_PUBLIC_LORE_READ_ONLY_MODE. Existing data and health endpoints should remain visible.",
+      });
+    }
+
     if (dataSyncStatus && dataSyncStatus !== "healthy" && dataSyncStatus !== "ok") {
       items.push({
         level: indexerBootstrapping || nearHeadCatchUp ? "warn" : "error",
@@ -627,7 +659,7 @@ export default function AdminOpsClient() {
           indexerBootstrapping && isLiveIndexerActive
             ? `Data sync still reports "${dataSyncStatus}", but the local indexer is actively processing chunk ${fmtNumber(liveIndexer?.chunkIndex)} / ${fmtNumber(liveIndexer?.chunkTotal)} (${liveIndexer?.chunkFromBlock} -> ${liveIndexer?.chunkToBlock}).`
             : nearHeadCatchUp
-              ? `Data sync is still "${dataSyncStatus}", but the indexer is already near head: lag is ${fmtNumber(lagBlocks)} blocks and the only missing epochs are the latest unresolved tail.`
+              ? `Data sync is still "${dataSyncStatus}", but the indexer is already near its target: ${effectiveLagLabel} is ${fmtNumber(effectiveLagBlocks)} blocks and the only missing epochs are the latest unresolved tail.`
             : indexerBootstrapping
               ? `Data sync still reports "${dataSyncStatus}", but a fresh local indexer is already running and catching up in phase "${fmtMode(dataSyncHealth?.catchUp?.phase)}".`
               : `Data sync reports "${dataSyncStatus}" in phase "${fmtMode(dataSyncHealth?.catchUp?.phase)}". Indexer coverage or lag needs attention.`,
@@ -644,13 +676,13 @@ export default function AdminOpsClient() {
       });
     }
 
-    if (lagBlocks != null && Number.isFinite(lagBlocks) && lagBlocks > lagWarnBlocks) {
+    if (effectiveLagBlocks != null && Number.isFinite(effectiveLagBlocks) && effectiveLagBlocks > lagWarnBlocks) {
       items.push({
         level: nearHeadCatchUp ? "info" : "warn",
         title: "Indexer lag is elevated",
         detail: nearHeadCatchUp
-          ? `Lag is ${fmtNumber(lagBlocks)} blocks and still shrinking during catch-up. The current warning threshold is ${fmtNumber(lagWarnBlocks)} blocks.`
-          : `Lag is ${fmtNumber(lagBlocks)} blocks, which is above the local warning threshold of ${fmtNumber(lagWarnBlocks)} blocks.`,
+          ? `${effectiveLagLabel} is ${fmtNumber(effectiveLagBlocks)} blocks and still shrinking during catch-up. The current warning threshold is ${fmtNumber(lagWarnBlocks)} blocks.`
+          : `${effectiveLagLabel} is ${fmtNumber(effectiveLagBlocks)} blocks, which is above the local warning threshold of ${fmtNumber(lagWarnBlocks)} blocks.`,
       });
     }
 
@@ -1033,6 +1065,9 @@ export default function AdminOpsClient() {
             <div className="text-sm text-gray-400">
               Visibility: <b className="text-slate-200">{runtimeHealth?.visibility ?? "..."}</b>
             </div>
+            <div className="text-sm text-gray-400">
+              Read-only betting: <b className="text-slate-200">{runtimeHealth?.publicConfig?.readOnlyMode ? "on" : "off"}</b>
+            </div>
           </div>
           <div className="space-y-2 rounded border border-white/10 bg-white/2 p-4">
             <div className="text-xs uppercase tracking-wider text-gray-400">Data Sync</div>
@@ -1065,6 +1100,11 @@ export default function AdminOpsClient() {
               <div>Last indexed block: <b>{dataSyncHealth?.storage?.lastIndexedBlock ?? "null"}</b></div>
               <div>Repair cursor: <b>{dataSyncHealth?.storage?.repairCursorBlock ?? "null"}</b></div>
               <div>Lag blocks: <b>{fmtNumber(dataSyncHealth?.storage?.lagBlocks)}</b></div>
+              <div>Head block: <b>{opsData?.storage.headBlock ?? dataSyncHealth?.storage?.headBlock ?? "..."}</b></div>
+              <div>Finality blocks: <b>{opsData?.storage.finalityBlocks ?? dataSyncHealth?.env?.indexerFinalityBlocks ?? "..."}</b></div>
+              <div>Finality target: <b>{opsData?.storage.targetBlock ?? dataSyncHealth?.storage?.finalityTargetBlock ?? "..."}</b></div>
+              <div>Lag to finality target: <b>{fmtNumber(dataSyncHealth?.storage?.lagToFinalityTargetBlocks)}</b></div>
+              <div>Last processed run: <b>{opsData?.storage.lastProcessedBlock ?? "..."}</b></div>
               <div>Stored epochs: <b>{fmtNumber(dataSyncHealth?.epochs?.storedCount)}</b></div>
               <div>Missing epochs: <b>{fmtNumber(dataSyncHealth?.epochs?.missingCount)}</b></div>
               <div>Latest stored epoch: <b>{fmtNumber(dataSyncHealth?.epochs?.latestStoredEpoch)}</b></div>

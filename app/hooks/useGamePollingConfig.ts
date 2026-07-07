@@ -11,6 +11,45 @@ interface UseGamePollingConfigOptions {
   isRevealing: boolean;
 }
 
+export function getGamePollingIntervals({
+  isPageVisible,
+  pollPhase,
+  liveGrid,
+  autoMineSessionActive,
+  isRevealing,
+}: UseGamePollingConfigOptions) {
+  const epochInterval = isPageVisible
+    ? pollPhase === "fast"
+      ? 1200
+      : pollPhase === "medium"
+        ? 2500
+        : 5000
+    : 20_000;
+  const epochEndInterval = isPageVisible ? (pollPhase === "fast" ? 1800 : 6000) : 20_000;
+  const hiddenInactiveGridInterval = !isPageVisible && !autoMineSessionActive ? 20_000 : null;
+  const liveGridInterval = hiddenInactiveGridInterval ?? (liveGrid
+    ? autoMineSessionActive
+      ? 1000
+      : 3000
+    : 30_000);
+  const liveUserBetsInterval = hiddenInactiveGridInterval ?? (liveGrid
+    ? autoMineSessionActive
+      ? 1000
+      : 3000
+    : 30_000);
+  const gridEpochInterval = isPageVisible
+    ? (isRevealing ? 500 : autoMineSessionActive ? 1000 : pollPhase === "fast" ? 1500 : 5000)
+    : 20_000;
+
+  return {
+    epochInterval,
+    epochEndInterval,
+    liveGridInterval,
+    liveUserBetsInterval,
+    gridEpochInterval,
+  };
+}
+
 export function useGamePollingConfig({
   isPageVisible,
   pollPhase,
@@ -18,35 +57,11 @@ export function useGamePollingConfig({
   autoMineSessionActive,
   isRevealing,
 }: UseGamePollingConfigOptions) {
-  return useMemo(() => {
-    const epochInterval = isPageVisible
-      ? pollPhase === "fast"
-        ? 1200
-        : pollPhase === "medium"
-          ? 2500
-          : 5000
-      : 20_000;
-    const epochEndInterval = isPageVisible ? (pollPhase === "fast" ? 1800 : 6000) : 20_000;
-    const liveGridInterval = liveGrid
-      ? autoMineSessionActive
-        ? 1000
-        : 3000
-      : 30_000;
-    const liveUserBetsInterval = liveGrid
-      ? autoMineSessionActive
-        ? 1000
-        : 3000
-      : 30_000;
-    const gridEpochInterval = isPageVisible
-      ? (isRevealing ? 500 : autoMineSessionActive ? 1000 : pollPhase === "fast" ? 1500 : 5000)
-      : 20_000;
-
-    return {
-      epochInterval,
-      epochEndInterval,
-      liveGridInterval,
-      liveUserBetsInterval,
-      gridEpochInterval,
-    };
-  }, [autoMineSessionActive, isPageVisible, isRevealing, liveGrid, pollPhase]);
+  return useMemo(() => getGamePollingIntervals({
+    isPageVisible,
+    pollPhase,
+    liveGrid,
+    autoMineSessionActive,
+    isRevealing,
+  }), [autoMineSessionActive, isPageVisible, isRevealing, liveGrid, pollPhase]);
 }

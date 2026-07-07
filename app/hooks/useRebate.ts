@@ -18,6 +18,8 @@ import {
   MIN_SAFETY_POOL_CLAIM_FORMATTED,
   MIN_SAFETY_POOL_CLAIM_WEI,
 } from "../lib/safetyPoolClaimThreshold";
+import { getExplorerTxUrl } from "../lib/explorerLinks";
+import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 
 type SilentSendFn = (tx: {
   to: `0x${string}`;
@@ -46,6 +48,7 @@ interface RebateEpochInfo {
 }
 
 type ClaimPlanKind = "none" | "single" | "split" | "unknown";
+type RebateDataFreshness = "fresh" | "background-refresh" | "stale-cache" | "offline";
 
 interface ApiRebateEpochInfo {
   epoch: number;
@@ -92,14 +95,63 @@ function getClaimPlanCacheKey(address: string, epochs: number[]) {
   return `lore:rebate-claim-plan:v1:${address.toLowerCase()}:${epochs.join(",")}`;
 }
 
+function normalizeNumberArray(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => Number(item))
+    .filter((item) => Number.isSafeInteger(item) && item >= 0);
+}
+
+function normalizeWeiString(value: unknown): string {
+  const text = String(value ?? "0").trim();
+  return /^\d+$/.test(text) ? text : "0";
+}
+
+function normalizeRecentEpoch(row: unknown): ApiRebateEpochInfo | null {
+  if (!row || typeof row !== "object") return null;
+  const data = row as Record<string, unknown>;
+  const epoch = Number(data.epoch);
+  if (!Number.isSafeInteger(epoch) || epoch < 0) return null;
+  return {
+    epoch,
+    pendingWei: normalizeWeiString(data.pendingWei),
+    pending: String(data.pending ?? "0"),
+    claimed: Boolean(data.claimed),
+    resolved: Boolean(data.resolved),
+    userVolumeWei: normalizeWeiString(data.userVolumeWei),
+    rebatePoolWei: normalizeWeiString(data.rebatePoolWei),
+  };
+}
+
+export function normalizeRebatePayload(value: unknown): ApiRebatePayload {
+  const data = (value ?? {}) as Record<string, unknown>;
+  return {
+    isSupported: data.isSupported !== false,
+    pendingRebateWei: normalizeWeiString(data.pendingRebateWei),
+    claimableEpochCount: Math.max(0, Number(data.claimableEpochCount) || 0),
+    claimableEpochList: normalizeNumberArray(data.claimableEpochList),
+    totalEpochs: Math.max(0, Number(data.totalEpochs) || 0),
+    participatingEpochs: normalizeNumberArray(data.participatingEpochs),
+    recentEpochs: Array.isArray(data.recentEpochs)
+      ? data.recentEpochs
+          .map(normalizeRecentEpoch)
+          .filter((row): row is ApiRebateEpochInfo => row !== null)
+      : [],
+  };
+}
+
 function loadCachedRebatePayload(address: string): CachedRebateInfo | null {
   if (typeof localStorage === "undefined") return null;
   try {
     const raw = localStorage.getItem(getRebateCacheKey(address));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CachedRebateInfo;
-    if (!parsed || typeof parsed.cachedAt !== "number") return null;
-    return parsed;
+    const cachedAt = normalizeCacheTimestamp(parsed?.cachedAt);
+    if (!parsed || cachedAt === null) return null;
+    return {
+      ...normalizeRebatePayload(parsed),
+      cachedAt,
+    };
   } catch {
     return null;
   }
@@ -126,12 +178,12 @@ function loadCachedClaimPlan(address: string, epochs: number[]): { kind: ClaimPl
     const raw = localStorage.getItem(getClaimPlanCacheKey(address, epochs));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { kind?: ClaimPlanKind; savedAt?: number };
+    const savedAt = normalizeCacheTimestamp(parsed.savedAt);
     if (
       (parsed.kind === "single" || parsed.kind === "split" || parsed.kind === "unknown" || parsed.kind === "none")
-      && typeof parsed.savedAt === "number"
-      && Number.isFinite(parsed.savedAt)
+      && savedAt !== null
     ) {
-      return { kind: parsed.kind, savedAt: parsed.savedAt };
+      return { kind: parsed.kind, savedAt };
     }
     return null;
   } catch {
@@ -160,6 +212,12 @@ function isMissingContractMethodError(err: unknown, methodName: string) {
     msg.includes(`does not have the function "${methodName.toLowerCase()}"`) ||
     msg.includes("returned no data (\"0x\")")
   );
+}
+
+function formatRebateTxMessage(message: string, hash: `0x${string}` | null) {
+  if (!hash) return message;
+  const txUrl = getExplorerTxUrl(hash);
+  return txUrl ? `${message} ${txUrl}` : message;
 }
 
 async function loadClaimableEpochsExact(
@@ -270,6 +328,12 @@ function rebatePayloadEqual(left: ApiRebatePayload | null, right: ApiRebatePaylo
   return recentRebateEpochsEqual(left.recentEpochs, right.recentEpochs);
 }
 
+function getRebateDataFreshness(cacheStatus: string | null): RebateDataFreshness {
+  if (cacheStatus === "stale") return "stale-cache";
+  if (cacheStatus === "inflight") return "background-refresh";
+  return "fresh";
+}
+
 export function useRebate(options?: UseRebateOptions) {
   const { address } = useAccount();
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
@@ -285,6 +349,7 @@ export function useRebate(options?: UseRebateOptions) {
   const [isSupported, setIsSupported] = useState(CONTRACT_HAS_REBATE_API);
   const [claimPlanKind, setClaimPlanKind] = useState<ClaimPlanKind>("none");
   const [isEstimatingClaimPlan, setIsEstimatingClaimPlan] = useState(false);
+  const [dataFreshness, setDataFreshness] = useState<RebateDataFreshness>("fresh");
   const [payloadVersion, setPayloadVersion] = useState(0);
   const enabled = options?.enabled ?? true;
   const active = options?.active ?? enabled;
@@ -333,6 +398,7 @@ export function useRebate(options?: UseRebateOptions) {
     setIsSupported(CONTRACT_HAS_REBATE_API);
     setClaimPlanKind("none");
     setIsEstimatingClaimPlan(false);
+    setDataFreshness("fresh");
     setIsLoading(false);
     setHasLoaded(false);
     setPayloadVersion(0);
@@ -369,6 +435,7 @@ export function useRebate(options?: UseRebateOptions) {
       return false;
     }
     applyPayload(cached);
+    setDataFreshness("stale-cache");
     hasLoadedRef.current = true;
     cacheSavedAtRef.current = cached.cachedAt;
     return true;
@@ -481,6 +548,7 @@ export function useRebate(options?: UseRebateOptions) {
       const response = await fetch(`/api/rebates?${query.toString()}`, {
         cache: "no-store",
       });
+      const cacheStatus = response.headers.get("X-Rebate-Cache");
       const payload = await readJsonResponse<ApiRebatePayload>(response);
 
       if (!payload) {
@@ -492,14 +560,16 @@ export function useRebate(options?: UseRebateOptions) {
 
       if (requestId !== requestIdRef.current) return;
 
-      const changed = applyPayload(payload);
+      const normalizedPayload = normalizeRebatePayload(payload);
+      const changed = applyPayload(normalizedPayload);
       const fetchedAt = Date.now();
       hasLoadedRef.current = true;
       if (mountedRef.current) {
         setHasLoaded(true);
+        setDataFreshness(getRebateDataFreshness(cacheStatus));
       }
       const cachedPayload = {
-        ...payload,
+        ...normalizedPayload,
         cachedAt: fetchedAt,
       } satisfies CachedRebateInfo;
       cachedPayloadRef.current[rebateAddress] = cachedPayload;
@@ -509,7 +579,7 @@ export function useRebate(options?: UseRebateOptions) {
         fetchedAt - cacheSavedAtRef.current >= REBATE_CLIENT_CACHE_WRITE_MIN_MS;
       if (shouldWriteCache) {
         cacheSavedAtRef.current = fetchedAt;
-        saveCachedRebatePayload(rebateAddress, payload);
+        saveCachedRebatePayload(rebateAddress, normalizedPayload);
       }
       return true;
     } catch (err) {
@@ -527,6 +597,10 @@ export function useRebate(options?: UseRebateOptions) {
         }
       } else {
         log.warn("Rebate", "refetch failed", err);
+      }
+
+      if (hasLoadedRef.current && mountedRef.current) {
+        setDataFreshness("offline");
       }
 
       if (!hasLoadedRef.current) {
@@ -697,6 +771,7 @@ export function useRebate(options?: UseRebateOptions) {
     let claimedEpochCount = 0;
     let claimTxCount = 0;
     let usedSplitFallback = false;
+    let lastClaimTxHash: `0x${string}` | null = null;
 
     try {
       const connected = address ? getAddress(address) : null;
@@ -733,6 +808,7 @@ export function useRebate(options?: UseRebateOptions) {
         return;
       }
 
+      notify?.("Preparing Safety Pool claim. Confirm the wallet prompt if it appears.", "info");
       const estimateClaimGas = async (epochArgs: bigint[]) => {
         try {
           const estimated = await publicClient.estimateContractGas({
@@ -773,6 +849,7 @@ export function useRebate(options?: UseRebateOptions) {
             args: [epochArgs],
           });
           const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+          lastClaimTxHash = hash;
           claimTxCount += 1;
           await confirmClaimBatch(hash, sender, epochArgs);
           return;
@@ -786,6 +863,7 @@ export function useRebate(options?: UseRebateOptions) {
           chainId: APP_CHAIN_ID,
           gas,
         });
+        lastClaimTxHash = hash;
         claimTxCount += 1;
         await confirmClaimBatch(hash, sender, epochArgs);
       };
@@ -800,6 +878,7 @@ export function useRebate(options?: UseRebateOptions) {
             args: [epoch],
           });
           const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+          lastClaimTxHash = hash;
           claimTxCount += 1;
           await confirmClaimBatch(hash, sender, [epoch]);
           return;
@@ -813,6 +892,7 @@ export function useRebate(options?: UseRebateOptions) {
           chainId: APP_CHAIN_ID,
           gas,
         });
+        lastClaimTxHash = hash;
         claimTxCount += 1;
         await confirmClaimBatch(hash, sender, [epoch]);
       };
@@ -873,13 +953,16 @@ export function useRebate(options?: UseRebateOptions) {
         split: usedSplitFallback,
       });
       notify?.(
-        claimedEpochCount === 1
-          ? claimTxCount <= 1
-            ? "Safety Pool claimed successfully in 1 transaction."
-            : `Safety Pool claimed successfully in ${claimTxCount} transactions.`
-          : claimTxCount <= 1
-            ? `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in 1 transaction.`
-            : `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transactions.`,
+        formatRebateTxMessage(
+          claimedEpochCount === 1
+            ? claimTxCount <= 1
+              ? "Safety Pool claimed successfully in 1 transaction."
+              : `Safety Pool claimed successfully in ${claimTxCount} transactions.`
+            : claimTxCount <= 1
+              ? `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in 1 transaction.`
+              : `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transactions.`,
+          lastClaimTxHash,
+        ),
         "success",
       );
       await refetchRebateInfo({ forceFresh: true });
@@ -890,16 +973,24 @@ export function useRebate(options?: UseRebateOptions) {
         log.warn("Rebate", "claim cancelled", err);
         if (claimedEpochCount > 0) {
           notify?.(
-            `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"} before the remaining claim flow was cancelled.`,
+            formatRebateTxMessage(
+              `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"} before the remaining claim flow was cancelled.`,
+              lastClaimTxHash,
+            ),
             "warning",
           );
+        } else {
+          notify?.("Safety Pool claim rejected in wallet.", "info");
         }
       } else {
         log.error("Rebate", "claim failed", err);
         const message = formatRebateError(err);
         if (claimedEpochCount > 0) {
           notify?.(
-            `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"}, but some epochs still failed: ${message}`,
+            formatRebateTxMessage(
+              `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"}, but some epochs still failed: ${message}`,
+              lastClaimTxHash,
+            ),
             "warning",
           );
         } else {
@@ -938,6 +1029,7 @@ export function useRebate(options?: UseRebateOptions) {
       isLoading,
       hasLoaded,
       claimPlanKind,
+      dataFreshness,
       isEstimatingClaimPlan,
       minClaimWei: MIN_SAFETY_POOL_CLAIM_WEI,
       minClaimAmount: MIN_SAFETY_POOL_CLAIM_FORMATTED,
@@ -946,6 +1038,7 @@ export function useRebate(options?: UseRebateOptions) {
     [
       claimPlanKind,
       claimableEpochCount,
+      dataFreshness,
       details,
       hasLoaded,
       isEstimatingClaimPlan,

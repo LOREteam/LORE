@@ -24,6 +24,7 @@ interface CreateLineaOreClientViewPropsOptions {
   address?: PageTabContentProps["rebateProps"]["address"];
   autoMinePhase: PageTabContentProps["hubProps"]["autoMinePhase"];
   autoMineProgress: PageTabContentProps["hubProps"]["autoMineProgress"];
+  readOnlyReason?: PageTabContentProps["hubProps"]["readOnlyReason"];
   backupGateVersion: number;
   balanceWarningDismissed: boolean;
   chatOpen: PageTabContentProps["hubProps"]["chatOpen"];
@@ -182,6 +183,7 @@ export function createLineaOreClientViewProps({
   address,
   autoMinePhase,
   autoMineProgress,
+  readOnlyReason = null,
   backupGateVersion,
   balanceWarningDismissed,
   chatOpen,
@@ -487,6 +489,7 @@ export function createLineaOreClientViewProps({
       refreshJackpotHistory,
       autoMinePhase,
       autoMineProgress,
+      readOnlyReason,
       chatOpen,
       formattedLineaBalance,
       walletConnected,

@@ -339,7 +339,14 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
       </div>
 
       <div className="border-t border-violet-500/15 px-4 py-3">
-        <UiButton onClick={handleSave} variant="primary" size="md" fullWidth disabled={uploading}>
+        <UiButton
+          data-testid="chat-profile-save"
+          onClick={handleSave}
+          variant="primary"
+          size="md"
+          fullWidth
+          disabled={uploading}
+        >
           Save
         </UiButton>
       </div>

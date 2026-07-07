@@ -73,10 +73,14 @@ export async function PUT(request: NextRequest) {
     limit: 20,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
   try {
-    const body = (await request.json()) as ProfilePayload;
+    const body = (await request.json().catch(() => null)) as ProfilePayload | null;
+    if (!body || typeof body !== "object") {
+      return applyNoStoreHeaders(NextResponse.json({ error: "Invalid profile payload" }, { status: 400 }), { varyCookie: true });
+    }
+
     const walletAddress = typeof body.walletAddress === "string" ? body.walletAddress.toLowerCase() : "";
 
     if (!isAddress(walletAddress)) {
@@ -118,7 +122,7 @@ export async function GET(request: NextRequest) {
     limit: 90,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   try {
     const { searchParams } = new URL(request.url);

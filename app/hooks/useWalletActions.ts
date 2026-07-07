@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { encodeFunctionData, formatUnits, getAddress, parseUnits } from "viem";
+import { encodeFunctionData, formatUnits, getAddress } from "viem";
 import type { PublicClient } from "viem";
 import { useReadContract } from "wagmi";
 import type { useWriteContract } from "wagmi";
@@ -16,6 +16,8 @@ import {
 import { getFallbackFeeOverrides, getKeeperFeeOverrides } from "../lib/lineaFees";
 import { log } from "../lib/logger";
 import { isUserRejection, normalizeDecimalInput } from "../lib/utils";
+import { parsePositiveLineaAmountWei } from "../lib/tokenAmountMath";
+import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { withMiningRpcTimeout } from "./useMining.shared";
 
 type NotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
@@ -54,6 +56,7 @@ interface UseWalletActionsOptions {
   fetchWalletTransfers?: () => Promise<void> | void;
   notify: NotifyFn;
   onOpenWalletSettings: () => void;
+  isPageVisible?: boolean;
   minEthForGas: number;
   minEthWithdrawReserveWei: bigint;
 }
@@ -76,6 +79,7 @@ export function useWalletActions({
   fetchWalletTransfers,
   notify,
   onOpenWalletSettings,
+  isPageVisible = true,
   minEthForGas,
   minEthWithdrawReserveWei,
 }: UseWalletActionsOptions) {
@@ -123,7 +127,7 @@ export function useWalletActions({
     chainId: APP_CHAIN_ID,
     query: {
       enabled: Boolean(normalizedConnectedWalletAddress),
-      refetchInterval: 30_000,
+      refetchInterval: isPageVisible ? 30_000 : 120_000,
     },
   });
 
@@ -138,7 +142,7 @@ export function useWalletActions({
     chainId: APP_CHAIN_ID,
     query: {
       enabled: Boolean(normalizedEmbeddedWalletAddress),
-      refetchInterval: 30_000,
+      refetchInterval: isPageVisible ? 30_000 : 120_000,
     },
   });
 
@@ -161,6 +165,11 @@ export function useWalletActions({
     () => formatResolverRewards(embeddedResolverRewardsWei),
     [embeddedResolverRewardsWei, formatResolverRewards],
   );
+
+  const formatTxStatusMessage = useCallback((message: string, hash: `0x${string}`) => {
+    const txUrl = getExplorerTxUrl(hash);
+    return txUrl ? `${message} ${txUrl}` : message;
+  }, []);
 
   const waitForReceipt = useCallback(
     async (hash: `0x${string}`): Promise<ReceiptState> => {
@@ -400,6 +409,7 @@ export function useWalletActions({
 
     setIsClaimingConnectedResolverRewards(true);
     try {
+      notify("Preparing resolver reward claim. Confirm the wallet prompt if it appears.", "info");
       const gas = await estimateResolverRewardClaimGas(normalizedConnectedWalletAddress);
       const hash = await writeContractAsync({
         address: CONTRACT_ADDRESS,
@@ -410,12 +420,12 @@ export function useWalletActions({
       });
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
-        notify("Resolver reward claim submitted and is still pending confirmation.", "info");
+        notify(formatTxStatusMessage("Resolver reward claim submitted and is still pending confirmation.", hash), "info");
         refreshResolverRewardReads();
         return;
       }
       refreshResolverRewardReads();
-      notify("Resolver rewards claimed to the connected wallet.", "success");
+      notify(formatTxStatusMessage("Resolver rewards claimed to the connected wallet.", hash), "success");
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("ResolverRewards", "connected claim failed", err);
@@ -424,6 +434,8 @@ export function useWalletActions({
           message ? `Resolver reward claim failed: ${message}` : "Resolver reward claim failed.",
           "danger",
         );
+      } else {
+        notify("Resolver reward claim rejected in wallet.", "info");
       }
     } finally {
       setIsClaimingConnectedResolverRewards(false);
@@ -431,6 +443,7 @@ export function useWalletActions({
   }, [
     connectedResolverRewardsWei,
     estimateResolverRewardClaimGas,
+    formatTxStatusMessage,
     normalizedConnectedWalletAddress,
     notify,
     refreshResolverRewardReads,
@@ -455,6 +468,7 @@ export function useWalletActions({
 
     setIsClaimingEmbeddedResolverRewards(true);
     try {
+      notify("Preparing resolver reward claim from the Privy wallet.", "info");
       const data = encodeFunctionData({
         abi: GAME_ABI,
         functionName: "claimResolverRewards",
@@ -467,12 +481,12 @@ export function useWalletActions({
       });
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
-        notify("Resolver reward claim submitted and is still pending confirmation.", "info");
+        notify(formatTxStatusMessage("Resolver reward claim submitted and is still pending confirmation.", hash), "info");
         refreshResolverRewardReads();
         return;
       }
       refreshResolverRewardReads();
-      notify("Resolver rewards claimed to the Privy wallet.", "success");
+      notify(formatTxStatusMessage("Resolver rewards claimed to the Privy wallet.", hash), "success");
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("ResolverRewards", "embedded claim failed", err);
@@ -481,6 +495,8 @@ export function useWalletActions({
           message ? `Resolver reward claim failed: ${message}` : "Resolver reward claim failed.",
           "danger",
         );
+      } else {
+        notify("Resolver reward claim rejected in wallet.", "info");
       }
     } finally {
       setIsClaimingEmbeddedResolverRewards(false);
@@ -488,6 +504,7 @@ export function useWalletActions({
   }, [
     embeddedResolverRewardsWei,
     estimateResolverRewardClaimGas,
+    formatTxStatusMessage,
     normalizedEmbeddedWalletAddress,
     notify,
     onOpenWalletSettings,
@@ -502,11 +519,11 @@ export function useWalletActions({
       return;
     }
     const normalized = normalizeDecimalInput(withdrawAmount);
-    if (!normalized || isNaN(Number(normalized)) || Number(normalized) <= 0) {
+    const amountWei = parsePositiveLineaAmountWei(normalized);
+    if (!amountWei) {
       notify("Invalid withdraw amount.", "warning");
       return;
     }
-    const amountWei = parseUnits(normalized, 18);
     if (embeddedTokenBalance?.value != null && amountWei > embeddedTokenBalance.value) {
       notify("Insufficient LINEA balance.", "warning");
       return;
@@ -514,6 +531,7 @@ export function useWalletActions({
 
     setIsWithdrawing(true);
     try {
+      notify("Preparing LINEA withdraw. Confirm the wallet prompt if it appears.", "info");
       const hash = await writeContractAsync({
         address: LINEA_TOKEN_ADDRESS,
         abi: TOKEN_ABI,
@@ -523,21 +541,23 @@ export function useWalletActions({
       });
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
-        notify("LINEA withdraw submitted and is still pending confirmation.", "info");
+        notify(formatTxStatusMessage("LINEA withdraw submitted and is still pending confirmation.", hash), "info");
         return;
       }
       setWithdrawAmount("0.0");
       void refetchEmbeddedTokenBalance();
-      notify("LINEA sent to your external wallet.", "success");
+      notify(formatTxStatusMessage("LINEA sent to your external wallet.", hash), "success");
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Withdraw", "failed", err);
         notify("Withdraw failed. Check your balance and try again.", "danger");
+      } else {
+        notify("LINEA withdraw rejected in wallet.", "info");
       }
     } finally {
       setIsWithdrawing(false);
     }
-  }, [embeddedTokenBalance, externalWalletAddress, notify, refetchEmbeddedTokenBalance, waitForReceipt, withdrawAmount, writeContractAsync]);
+  }, [embeddedTokenBalance, externalWalletAddress, formatTxStatusMessage, notify, refetchEmbeddedTokenBalance, waitForReceipt, withdrawAmount, writeContractAsync]);
 
   const handleWithdrawEthToExternal = useCallback(async () => {
     if (!embeddedWalletAddress) {
@@ -554,11 +574,11 @@ export function useWalletActions({
       return;
     }
     const normalized = normalizeDecimalInput(withdrawEthAmount);
-    if (!normalized || isNaN(Number(normalized)) || Number(normalized) <= 0) {
+    const amountWei = parsePositiveLineaAmountWei(normalized);
+    if (!amountWei) {
       notify("Invalid ETH withdraw amount.", "warning");
       return;
     }
-    const amountWei = parseUnits(normalized, 18);
     if (embeddedEthBalance?.value != null) {
       if (amountWei > embeddedEthBalance.value) {
         notify("Insufficient ETH balance.", "warning");
@@ -576,23 +596,26 @@ export function useWalletActions({
 
     setIsWithdrawingEth(true);
     try {
+      notify("Preparing ETH withdraw from the Privy wallet.", "info");
       const hash = await sendTransactionSilent({
         to: getAddress(externalWalletAddress),
         value: amountWei,
       });
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
-        notify("ETH withdraw submitted and is still pending confirmation.", "info");
+        notify(formatTxStatusMessage("ETH withdraw submitted and is still pending confirmation.", hash), "info");
         return;
       }
       setWithdrawEthAmount("0.0");
       void refetchEmbeddedEthBalance();
-      notify("ETH sent to your external wallet.", "success");
+      notify(formatTxStatusMessage("ETH sent to your external wallet.", hash), "success");
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Withdraw", "ETH withdraw failed", err);
         const message = err instanceof Error ? err.message : "";
         notify(message ? `ETH withdraw failed: ${message}` : "ETH withdraw failed. Check your balance and try again.", "danger");
+      } else {
+        notify("ETH withdraw rejected in wallet.", "info");
       }
     } finally {
       setIsWithdrawingEth(false);
@@ -601,6 +624,7 @@ export function useWalletActions({
     embeddedEthBalance,
     embeddedWalletAddress,
     externalWalletAddress,
+    formatTxStatusMessage,
     minEthForGas,
     minEthWithdrawReserveWei,
     notify,
@@ -622,30 +646,33 @@ export function useWalletActions({
       return;
     }
     const normalized = normalizeDecimalInput(depositEthAmount);
-    if (!normalized || isNaN(Number(normalized)) || Number(normalized) <= 0) {
+    const value = parsePositiveLineaAmountWei(normalized);
+    if (!value) {
       notify("Invalid ETH amount.", "warning");
       return;
     }
 
     try {
-      const value = parseUnits(normalized, 18);
       setIsDepositingEth(true);
+      notify("Preparing ETH top-up. Confirm the wallet prompt if it appears.", "info");
       const hash = await sendTransactionFromExternal({
         to: getAddress(embeddedWalletAddress),
         value,
       });
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
-        notify("ETH transfer submitted and is still pending confirmation.", "info");
+        notify(formatTxStatusMessage("ETH transfer submitted and is still pending confirmation.", hash), "info");
         return;
       }
       void refetchEmbeddedEthBalance();
-      notify("ETH transfer to the Privy wallet was sent.", "success");
+      notify(formatTxStatusMessage("ETH transfer to the Privy wallet was sent.", hash), "success");
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Deposit", "ETH transfer to Privy failed", err);
         const message = err instanceof Error ? err.message : "";
         notify(message ? `ETH transfer failed: ${message}` : "ETH transfer failed. Check wallet balance and try again.", "danger");
+      } else {
+        notify("ETH top-up rejected in wallet.", "info");
       }
     } finally {
       setIsDepositingEth(false);
@@ -654,6 +681,7 @@ export function useWalletActions({
     depositEthAmount,
     embeddedWalletAddress,
     externalWalletAddress,
+    formatTxStatusMessage,
     notify,
     onOpenWalletSettings,
     refetchEmbeddedEthBalance,
@@ -672,38 +700,41 @@ export function useWalletActions({
       return;
     }
     const normalized = normalizeDecimalInput(depositTokenAmount);
-    if (!normalized || isNaN(Number(normalized)) || Number(normalized) <= 0) {
+    const amountWei = parsePositiveLineaAmountWei(normalized);
+    if (!amountWei) {
       notify("Invalid LINEA amount.", "warning");
       return;
     }
 
     try {
-      const amountWei = parseUnits(normalized, 18);
       const data = encodeFunctionData({
         abi: TOKEN_ABI,
         functionName: "transfer",
         args: [getAddress(embeddedWalletAddress), amountWei],
       });
       setIsDepositingToken(true);
+      notify("Preparing LINEA deposit. Confirm the wallet prompt if it appears.", "info");
       const hash = await sendTransactionFromExternal({
         to: LINEA_TOKEN_ADDRESS,
         data,
       });
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
-        notify("LINEA transfer submitted and is still pending confirmation.", "info");
+        notify(formatTxStatusMessage("LINEA transfer submitted and is still pending confirmation.", hash), "info");
         return;
       }
       void refetchEmbeddedTokenBalance();
       if (walletTransfersEnabled && fetchWalletTransfers) {
         void fetchWalletTransfers();
       }
-      notify("LINEA transfer to the Privy wallet was sent.", "success");
+      notify(formatTxStatusMessage("LINEA transfer to the Privy wallet was sent.", hash), "success");
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Deposit", "LINEA transfer to Privy failed", err);
         const message = err instanceof Error ? err.message : "";
         notify(message ? `LINEA transfer failed: ${message}` : "LINEA transfer failed. Check wallet balance and try again.", "danger");
+      } else {
+        notify("LINEA deposit rejected in wallet.", "info");
       }
     } finally {
       setIsDepositingToken(false);
@@ -713,6 +744,7 @@ export function useWalletActions({
     embeddedWalletAddress,
     externalWalletAddress,
     fetchWalletTransfers,
+    formatTxStatusMessage,
     notify,
     onOpenWalletSettings,
     refetchEmbeddedTokenBalance,
@@ -737,7 +769,7 @@ export function useWalletActions({
       const hash = await clearEip7702DelegationFromExternal();
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
-        notify("Privy wallet repair submitted and is still pending confirmation.", "info");
+        notify(formatTxStatusMessage("Privy wallet repair submitted and is still pending confirmation.", hash), "info");
         return;
       }
       const remainingDelegateAddress = await refreshEmbeddedWalletCode?.();
@@ -746,7 +778,7 @@ export function useWalletActions({
         return;
       }
       void refetchEmbeddedEthBalance();
-      notify("Privy wallet repaired. ETH top-up should now use normal transfers.", "success");
+      notify(formatTxStatusMessage("Privy wallet repaired. ETH top-up should now use normal transfers.", hash), "success");
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Wallet", "clear 7702 delegation failed", err);
@@ -759,6 +791,7 @@ export function useWalletActions({
   }, [
     clearEip7702DelegationFromExternal,
     embeddedWalletAddress,
+    formatTxStatusMessage,
     notify,
     onOpenWalletSettings,
     refetchEmbeddedEthBalance,

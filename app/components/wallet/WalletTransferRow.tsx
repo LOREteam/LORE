@@ -40,8 +40,9 @@ export const WalletTransferRow = React.memo(function WalletTransferRow({
         type="text"
         inputMode="decimal"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-8 min-w-0 px-4 py-1.5 text-sm"
+        onChange={(e) => onChange(e.target.value.slice(0, 20))}
+        maxLength={20}
+        className="lore-nums h-8 min-w-0 px-4 py-1.5 text-sm"
         placeholder={placeholder}
       />
       <UiButton

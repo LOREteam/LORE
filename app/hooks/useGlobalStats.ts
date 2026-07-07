@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePublicClient } from "wagmi";
-import { formatUnits, decodeEventLog, encodeEventTopics, type Log } from "viem";
+import { decodeEventLog, encodeEventTopics, type Log } from "viem";
 import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
@@ -10,6 +10,7 @@ import {
   GAME_EVENTS_ABI,
   APP_CHAIN_ID,
 } from "../lib/constants";
+import { formatLineaAmountFixed } from "../lib/tokenAmountMath";
 
 /** Refresh stats once per round (every epoch change) */
 const MULTICALL_BATCH = 200;
@@ -34,10 +35,10 @@ interface Accumulator {
 }
 
 function fmt(v: bigint): string {
-  const num = parseFloat(formatUnits(v, 18));
-  if (num >= 1_000_000) return (num / 1_000_000).toFixed(2) + "M";
-  if (num >= 1_000) return (num / 1_000).toFixed(2) + "K";
-  return num.toFixed(2);
+  const oneTokenWei = 10n ** 18n;
+  if (v >= 1_000_000n * oneTokenWei) return `${formatLineaAmountFixed(v / 1_000_000n, 2)}M`;
+  if (v >= 1_000n * oneTokenWei) return `${formatLineaAmountFixed(v / 1_000n, 2)}K`;
+  return formatLineaAmountFixed(v, 2);
 }
 
 function toStats(acc: Accumulator): GlobalStats {
@@ -50,18 +51,46 @@ function toStats(acc: Accumulator): GlobalStats {
   };
 }
 
+function parseNonNegativeBigInt(value: unknown): bigint | null {
+  try {
+    const parsed = BigInt(String(value ?? ""));
+    return parsed >= 0n ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeGlobalStatsAccumulator(value: unknown): Accumulator | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  const volumeRaw = parseNonNegativeBigInt(obj.volumeRaw);
+  const burnRaw = parseNonNegativeBigInt(obj.burnRaw ?? 0);
+  const resolvedEpochs = Number(obj.resolvedEpochs);
+  const lastScannedEpoch = Number(obj.lastScannedEpoch);
+  const lastScannedBlock = String(obj.lastScannedBlock ?? "");
+  if (volumeRaw === null || burnRaw === null) return null;
+  if (!Number.isSafeInteger(resolvedEpochs) || resolvedEpochs < 0) return null;
+  if (!Number.isSafeInteger(lastScannedEpoch) || lastScannedEpoch < 0) return null;
+  if (!/^\d+$/.test(lastScannedBlock)) return null;
+  return {
+    volumeRaw,
+    burnRaw,
+    resolvedEpochs,
+    lastScannedEpoch,
+    lastScannedBlock,
+  };
+}
+
+export function getUsableGlobalStatsAccumulator(acc: Accumulator | null, currentEpoch: number): Accumulator | null {
+  if (!acc) return null;
+  return acc.lastScannedEpoch <= currentEpoch ? acc : null;
+}
+
 function loadCache(): Accumulator | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const obj = JSON.parse(raw);
-    return {
-      volumeRaw: BigInt(obj.volumeRaw),
-      burnRaw: BigInt(obj.burnRaw ?? 0),
-      resolvedEpochs: obj.resolvedEpochs,
-      lastScannedEpoch: obj.lastScannedEpoch,
-      lastScannedBlock: obj.lastScannedBlock,
-    };
+    return normalizeGlobalStatsAccumulator(JSON.parse(raw));
   } catch { return null; }
 }
 
@@ -111,6 +140,7 @@ export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
   const fetchStats = useCallback(async (targetEpoch?: bigint | null) => {
     const epochToFetch = targetEpoch ?? currentEpoch;
     if (!publicClient || !enabled || epochToFetch == null) return;
+    if (epochToFetch > BigInt(Number.MAX_SAFE_INTEGER)) return;
     if (runningRef.current) {
       if (queuedEpochRef.current == null || epochToFetch > queuedEpochRef.current) {
         queuedEpochRef.current = epochToFetch;
@@ -123,7 +153,7 @@ export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
 
     try {
       const epochCount = Number(epochToFetch);
-      const prev = accRef.current;
+      const prev = getUsableGlobalStatsAccumulator(accRef.current, epochCount);
       const startEpoch = prev ? prev.lastScannedEpoch + 1 : 1;
 
       let addedVolume = BigInt(0);

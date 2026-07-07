@@ -55,7 +55,7 @@ export default function ErrorPage({
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0a0612] px-6">
       <div className="max-w-md w-full text-center">
-        <div className="text-6xl mb-4 opacity-40">⚠</div>
+        <div className="text-6xl mb-4 opacity-40">!</div>
         <h1 className="text-xl font-bold uppercase tracking-wider text-white mb-2">
           The Lattice flickered
         </h1>

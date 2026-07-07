@@ -2,8 +2,8 @@
 
 import React, { useMemo } from "react";
 import type { JackpotHistoryEntry } from "../../hooks/useJackpotHistory";
+import { getExplorerTxUrl } from "../../lib/explorerLinks";
 import { loadingQuotes } from "../../lib/loreTexts";
-import { EXPLORER_TX_BASE_URL } from "../../lib/constants";
 import { LoreText } from "../LoreText";
 import { UiBadge } from "../ui/UiBadge";
 import { UiButton } from "../ui/UiButton";
@@ -32,6 +32,7 @@ export const AnalyticsJackpotHistoryPanel = React.memo(function AnalyticsJackpot
         epoch: entry.epoch,
         amount: entry.amount,
         txHash: entry.txHash,
+        txUrl: getExplorerTxUrl(entry.txHash),
       })),
     [jackpotHistory],
   );
@@ -122,9 +123,9 @@ export const AnalyticsJackpotHistoryPanel = React.memo(function AnalyticsJackpot
                     <span className="text-xs text-gray-400 ml-0.5">LINEA</span>
                   </td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
-                    {entry.txHash ? (
+                    {entry.txUrl ? (
                       <a
-                        href={`${EXPLORER_TX_BASE_URL}/${entry.txHash}`}
+                        href={entry.txUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-xs font-mono text-violet-400/60 hover:text-violet-400 transition-colors"

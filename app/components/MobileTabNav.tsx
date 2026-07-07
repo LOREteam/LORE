@@ -117,7 +117,7 @@ export function MobileTabNav({ activeTab, onTabChange }: MobileTabNavProps) {
               <button
                 key={tab}
                 onClick={() => onTabChange(tab)}
-                aria-label={label}
+                aria-label={title}
                 aria-current={active ? "page" : undefined}
                 aria-pressed={active}
                 className={`group flex h-10 min-w-10 flex-1 shrink-0 snap-start items-center justify-center gap-1.5 rounded-xl border px-2 text-[9px] font-semibold uppercase tracking-[0.1em] transition-all duration-200 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-transparent ${

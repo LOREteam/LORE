@@ -29,6 +29,7 @@ interface UnclaimedWin {
 interface HubContentProps {
   autoMinePhase: AutoMinePhase;
   autoMineProgress: string | null;
+  readOnlyReason?: string | null;
   chatOpen: boolean;
   formattedBalance: string | null;
   walletConnected: boolean;
@@ -71,6 +72,7 @@ interface HubContentProps {
 export const HubContent = React.memo(function HubContent({
   autoMinePhase,
   autoMineProgress,
+  readOnlyReason = null,
   chatOpen,
   formattedBalance,
   walletConnected,
@@ -113,6 +115,7 @@ export const HubContent = React.memo(function HubContent({
     formattedBalance,
     walletConnected,
     liveStateReady,
+    readOnlyReason,
     selectedTilesCount,
     isPending,
     isRevealing,
@@ -132,6 +135,14 @@ export const HubContent = React.memo(function HubContent({
           backgroundSize: "cover",
         }}
       >
+        {readOnlyReason && (
+          <div
+            data-testid="hub-read-only-banner"
+            className="relative z-10 mb-1.5 rounded-xl border border-amber-300/24 bg-amber-400/10 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] text-amber-100"
+          >
+            {readOnlyReason}
+          </div>
+        )}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_44%_22%,rgba(167,139,250,0.12),transparent_38%),radial-gradient(circle_at_82%_78%,rgba(34,211,238,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.04),transparent_32%)]" />
         <div className="relative grid grid-cols-1 gap-2 min-[900px]:grid-cols-12">
           <HubGameBoard
@@ -169,6 +180,7 @@ export const HubContent = React.memo(function HubContent({
             formattedBalance={formattedBalance}
             walletConnected={walletConnected}
             liveStateReady={liveStateReady}
+            readOnlyReason={readOnlyReason}
             selectedTilesCount={selectedTilesCount}
             isPending={isPending}
             isRevealing={isRevealing}
@@ -193,6 +205,7 @@ export const HubContent = React.memo(function HubContent({
         isAutoMining={isAutoMining}
         isPending={isPending}
         liveStateReady={liveStateReady}
+        readOnlyReason={readOnlyReason}
         manualBetForm={manualBetForm}
         onMine={handleManualMineWithGuard}
         selectedTilesCount={selectedTilesCount}
@@ -209,6 +222,7 @@ function MobileManualActionBar({
   isAutoMining,
   isPending,
   liveStateReady,
+  readOnlyReason,
   manualBetForm,
   onMine,
   selectedTilesCount,
@@ -219,6 +233,7 @@ function MobileManualActionBar({
   isAutoMining: boolean;
   isPending: boolean;
   liveStateReady: boolean;
+  readOnlyReason?: string | null;
   manualBetForm: ReturnType<typeof useManualBetForm>;
   onMine: (betAmount: string) => Promise<void>;
   selectedTilesCount: number;
@@ -226,9 +241,11 @@ function MobileManualActionBar({
   if (chatOpen || selectedTilesCount <= 0 || isAutoMining) return null;
 
   const requiresLogin = !walletConnected;
-  const disabled = manualBetForm.isDisabled;
+  const disabled = Boolean(readOnlyReason) || manualBetForm.isDisabled;
   const buttonLabel = isPending
     ? "Mining..."
+    : readOnlyReason
+      ? "Paused"
     : !liveStateReady && !coldBootDefaults
       ? "Syncing"
       : requiresLogin
@@ -250,7 +267,7 @@ function MobileManualActionBar({
             inputMode="decimal"
             value={manualBetForm.betAmount}
             onChange={(event) => manualBetForm.setBetAmount(event.target.value.slice(0, 20))}
-            disabled={isPending}
+            disabled={Boolean(readOnlyReason) || isPending}
             maxLength={20}
           className={cn(
             "h-8 w-full rounded-lg border bg-black/34 px-2 text-sm font-black text-white outline-none transition focus:border-emerald-300/45 focus:ring-2 focus:ring-emerald-300/16 sm:h-9",

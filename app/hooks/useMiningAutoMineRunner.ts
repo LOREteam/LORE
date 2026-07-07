@@ -23,6 +23,7 @@ import { prepareAutoMineRunSetup } from "../lib/mining/autoMineRunSetup";
 import { createAutoMineLoopAdapter } from "../lib/mining/autoMineLoopAdapter";
 import { createAutoMineLoopRuntime } from "../lib/mining/autoMineLoopRuntime";
 import { writeAutoMineDiagnostics } from "../lib/mining/autoMineDiagnostics";
+import { getAutoMineRunnerCatchStopReason } from "../lib/mining/autoMineRunnerStopReason";
 import type { AutoMinePhase, GasOverrides, RunningParams } from "./useMining.types";
 import type { PendingApproveState, PendingBetState, ReceiptState } from "./useMining.stateTypes";
 import type { createAutoMineRuntimeController } from "../lib/mining/autoMineRuntimeController";
@@ -308,13 +309,18 @@ export function useMiningAutoMineRunner({
         });
         stopReason = loopResult.stopReason;
       } catch (err) {
-        stopReason = "error";
         const { diagnosticsErrorKind, rawMessage, sessionExpired, networkDown, walletUnavailable, pendingNonceBlocked, userMessage } =
           getAutoMineUserMessage(err);
         const epochWaitTimeout = isEpochWaitTimeoutError(err);
         const shouldAutoResume = !sessionExpired && (networkDown || walletUnavailable || epochWaitTimeout);
+        const insufficientFunds = isInsufficientFundsError(err);
+        stopReason = getAutoMineRunnerCatchStopReason({
+          insufficientFunds,
+          sessionExpired,
+          shouldAutoResume,
+        });
         autoResumeRequestedRef.current = shouldAutoResume;
-        if (isInsufficientFundsError(err)) {
+        if (insufficientFunds) {
           log.warn("AutoMine", "loop stopped: insufficient gas funds", err);
         } else if (epochWaitTimeout) {
           log.warn("AutoMine", "loop paused while waiting for epoch resolution", err);
@@ -342,7 +348,7 @@ export function useMiningAutoMineRunner({
           lastErrorKind: diagnosticsErrorKind,
           lastErrorMessage: userMessage,
           lastErrorRawMessage: rawMessage,
-          lastStopReason: sessionExpired ? "session-expired" : shouldAutoResume ? "retry-wait" : "error",
+          lastStopReason: stopReason as AutoMineDiagnosticsStopReason,
         });
         autoMineRef.current = false;
         if (!sessionExpired && !networkDown && !walletUnavailable) {

@@ -359,6 +359,7 @@ type BuildPageTabContentPropsOptions = {
   refreshJackpotHistory: PageTabContentProps["analyticsProps"]["onRefreshJackpotHistory"];
   autoMinePhase: PageTabContentProps["hubProps"]["autoMinePhase"];
   autoMineProgress: PageTabContentProps["hubProps"]["autoMineProgress"];
+  readOnlyReason: PageTabContentProps["hubProps"]["readOnlyReason"];
   chatOpen: PageTabContentProps["hubProps"]["chatOpen"];
   formattedLineaBalance: PageTabContentProps["hubProps"]["formattedBalance"];
   walletConnected: PageTabContentProps["hubProps"]["walletConnected"];
@@ -428,6 +429,7 @@ export function buildPageTabContentProps({
   refreshJackpotHistory,
   autoMinePhase,
   autoMineProgress,
+  readOnlyReason,
   chatOpen,
   formattedLineaBalance,
   walletConnected,
@@ -499,6 +501,7 @@ export function buildPageTabContentProps({
     hubProps: {
       autoMinePhase,
       autoMineProgress,
+      readOnlyReason,
       chatOpen,
       formattedBalance: formattedLineaBalance,
       walletConnected,

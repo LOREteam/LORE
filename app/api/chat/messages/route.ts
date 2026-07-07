@@ -66,12 +66,17 @@ export async function POST(request: NextRequest) {
     limit: 12,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
   const cacheKey = "latest";
   try {
-    const body = (await request.json()) as ChatMessagePayload;
+    const body = (await request.json().catch(() => null)) as ChatMessagePayload | null;
+    if (!body || typeof body !== "object") {
+      failRouteMetric(metric, 400);
+      return applyNoStoreHeaders(NextResponse.json({ error: "Invalid message payload" }, { status: 400 }), { varyCookie: true });
+    }
+
     const text = typeof body.text === "string" ? body.text.trim().slice(0, MAX_TEXT_LENGTH) : "";
     const sender = typeof body.sender === "string" ? body.sender.toLowerCase() : "";
 
@@ -135,7 +140,7 @@ export async function GET(request: NextRequest) {
   });
   if (rateLimited) {
     failRouteMetric(metric, 429);
-    return rateLimited;
+    return applyNoStoreHeaders(rateLimited);
   }
 
   try {

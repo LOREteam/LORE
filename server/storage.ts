@@ -123,6 +123,16 @@ function normalizeWallet(value: string) {
   return value.trim().toLowerCase();
 }
 
+function isSafePositiveInteger(value: number) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function parseSafePositiveIntegerString(value: string | null | undefined) {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return isSafePositiveInteger(parsed) ? parsed : null;
+}
+
 function parseAmountWei(value: unknown) {
   if (typeof value !== "string" || !value) return 0n;
   try {
@@ -404,7 +414,7 @@ export function getEpochMap() {
 
 export function getEpochMapByIds(epochIds: number[]) {
   const normalizedIds = [...new Set(
-    epochIds.filter((epoch) => Number.isInteger(epoch) && epoch > 0),
+    epochIds.filter(isSafePositiveInteger),
   )];
   if (normalizedIds.length === 0) {
     return {} as Record<string, EpochStorageRow>;
@@ -459,9 +469,14 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
 
   runInTransaction(() => {
     for (const [epoch, row] of entries) {
+      const epochNumber = parseSafePositiveIntegerString(epoch);
+      const resolvedBlockNumber = row.resolvedBlock == null
+        ? null
+        : parseSafePositiveIntegerString(row.resolvedBlock);
+      if (epochNumber === null) continue;
       statement.run(
         CURRENT_STORAGE_SCOPE,
-        Number(epoch),
+        epochNumber,
         row.winningTile,
         row.totalPool,
         row.rewardPool,
@@ -469,7 +484,7 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
         row.jackpotBonus ?? null,
         boolToInt(row.isDailyJackpot),
         boolToInt(row.isWeeklyJackpot),
-        row.resolvedBlock != null ? Number(row.resolvedBlock) : null,
+        resolvedBlockNumber,
       );
     }
   }, "epochs");
@@ -544,7 +559,7 @@ export function getUserParticipatingEpochs(user: string, limit?: number) {
 
   return rows
     .map((row) => Number(row.epoch ?? 0))
-    .filter((epoch) => Number.isInteger(epoch) && epoch > 0);
+    .filter(isSafePositiveInteger);
 }
 
 export function getAllBetRows() {
@@ -569,7 +584,7 @@ export function getAllBetRows() {
 
 export function getBetRowsByEpochs(epochIds: number[]) {
   const normalizedIds = [...new Set(
-    epochIds.filter((epoch) => Number.isInteger(epoch) && epoch > 0),
+    epochIds.filter(isSafePositiveInteger),
   )];
   if (normalizedIds.length === 0) return [] satisfies BetStorageRow[];
 
@@ -620,7 +635,7 @@ export function getBetJackpotContributionsWeiAfterBlocks(dailyBlockNumber: bigin
 
 export function getEpochTileUserSets(epoch: number, gridSize = 25) {
   const perTile = Array.from({ length: gridSize }, () => new Set<string>());
-  if (!Number.isInteger(epoch) || epoch <= 0) {
+  if (!isSafePositiveInteger(epoch)) {
     return perTile;
   }
 
@@ -652,7 +667,7 @@ export function getEpochTileUserCounts(epoch: number, gridSize = 25) {
 }
 
 export function getEpochTilePoolsWei(epoch: number, gridSize = 25) {
-  if (!Number.isInteger(epoch) || epoch <= 0) {
+  if (!isSafePositiveInteger(epoch)) {
     return Array.from({ length: gridSize }, () => 0n);
   }
 
@@ -715,18 +730,21 @@ export function upsertBets(rows: BetStorageRow[]) {
 
   runInTransaction(() => {
     for (const row of rows) {
+      const epochNumber = parseSafePositiveIntegerString(row.epoch);
+      const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
+      if (epochNumber === null || blockNumber === null) continue;
       const id = buildDepositKey(row.epoch, row.txHash, row.blockNumber);
       statement.run(
         CURRENT_STORAGE_SCOPE,
         id,
         normalizeWallet(row.user),
-        Number(row.epoch),
+        epochNumber,
         JSON.stringify(row.tileIds),
         JSON.stringify(row.amounts ?? []),
         row.totalAmount,
         row.totalAmountNum,
         row.txHash,
-        Number(row.blockNumber),
+        blockNumber,
       );
     }
   }, "bets");
@@ -801,16 +819,19 @@ export function upsertJackpots(rows: JackpotStorageRow[]) {
 
   runInTransaction(() => {
     for (const row of rows) {
+      const epochNumber = parseSafePositiveIntegerString(row.epoch);
+      const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
+      if (epochNumber === null || blockNumber === null) continue;
       const id = `${row.kind}_${row.epoch}`;
       statement.run(
         CURRENT_STORAGE_SCOPE,
         id,
-        Number(row.epoch),
+        epochNumber,
         row.kind,
         row.amount,
         row.amountNum,
         row.txHash,
-        Number(row.blockNumber),
+        blockNumber,
       );
     }
   }, "jackpots");
@@ -832,15 +853,18 @@ export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
 
   runInTransaction(() => {
     for (const row of rows) {
+      const epochNumber = parseSafePositiveIntegerString(row.epoch);
+      const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
+      if (epochNumber === null || blockNumber === null) continue;
       statement.run(
         CURRENT_STORAGE_SCOPE,
         row.id,
-        Number(row.epoch),
+        epochNumber,
         normalizeWallet(row.user),
         row.reward,
         row.rewardNum,
         row.txHash,
-        Number(row.blockNumber),
+        blockNumber,
       );
     }
   }, "reward_claims");
@@ -898,13 +922,15 @@ export function upsertProtocolFeeFlushes(rows: FeeFlushStorageRow[]) {
 
   runInTransaction(() => {
     for (const row of rows) {
+      const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
+      if (blockNumber === null) continue;
       statement.run(
         CURRENT_STORAGE_SCOPE,
         row.id,
         row.ownerAmount,
         row.burnAmount,
         row.txHash,
-        Number(row.blockNumber),
+        blockNumber,
       );
     }
   }, "protocol_fee_flushes");

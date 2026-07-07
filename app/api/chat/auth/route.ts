@@ -61,10 +61,14 @@ export async function POST(request: NextRequest) {
     limit: 12,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
   try {
-    const body = (await request.json()) as ChatAuthPayload;
+    const body = (await request.json().catch(() => null)) as ChatAuthPayload | null;
+    if (!body || typeof body !== "object") {
+      return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth payload" }, { status: 400 }), { varyCookie: true });
+    }
+
     const authAddress = typeof body.authAddress === "string" ? body.authAddress.toLowerCase() : "";
     const authMessage = typeof body.authMessage === "string" ? body.authMessage : "";
     const authSignature = typeof body.authSignature === "string" ? body.authSignature : "";
@@ -134,7 +138,7 @@ export async function GET(request: NextRequest) {
     limit: 60,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
   const session = readChatSession(request);
   if (!session) {

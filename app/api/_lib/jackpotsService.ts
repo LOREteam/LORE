@@ -1,6 +1,13 @@
 import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi, toHex } from "viem";
+import { parseOptionalNonNegativeBigIntEnv } from "../../../config/envParsing";
 import { getMetaBigInt, getRecentJackpots } from "../../../server/storage";
-import { CONTRACT_ADDRESS, CONTRACT_DEPLOY_BLOCK, patchStorage, publicClient } from "./dataBridge";
+import {
+  CONTRACT_ADDRESS,
+  CONTRACT_DEPLOY_BLOCK,
+  isSafePositiveInteger,
+  patchStorage,
+  publicClient,
+} from "./dataBridge";
 import { logRouteError } from "./routeError";
 import { markRouteBackgroundRefresh } from "./runtimeMetrics";
 
@@ -21,7 +28,7 @@ const JACKPOT_BACKGROUND_RECOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const MAX_JACKPOT_EVENT_CACHE_ENTRIES = 256;
 const JACKPOT_HISTORY_LIMIT = 200;
 const JACKPOT_BOOTSTRAP_SCAN_CHUNK = 500_000n;
-const JACKPOT_RECOVERY_BLOCK_LAG = BigInt(process.env.JACKPOT_RECOVERY_BLOCK_LAG ?? "256");
+const JACKPOT_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeBigIntEnv(process.env.JACKPOT_RECOVERY_BLOCK_LAG, 256n);
 const ROUTE_METRIC_KEY = "api/jackpots";
 
 export type JackpotRow = {
@@ -103,17 +110,27 @@ function isTooManyResultsError(err: unknown): boolean {
 
 function sortJackpotsDesc(rows: JackpotRow[]) {
   return [...rows].sort((a, b) => {
-    const aBlock = BigInt(a.blockNumber || "0");
-    const bBlock = BigInt(b.blockNumber || "0");
+    const aBlock = parseStoredBlockNumber(a.blockNumber);
+    const bBlock = parseStoredBlockNumber(b.blockNumber);
     if (aBlock === bBlock) {
       if (a.epoch === b.epoch) {
         if (a.kind === b.kind) return (b.txHash ?? "").localeCompare(a.txHash ?? "");
         return a.kind === "weekly" ? -1 : 1;
       }
-      return Number(b.epoch) - Number(a.epoch);
+      return parseStoredEpochNumber(b.epoch) - parseStoredEpochNumber(a.epoch);
     }
     return aBlock > bBlock ? -1 : 1;
   });
+}
+
+function parseStoredBlockNumber(value: string | null | undefined): bigint {
+  if (!value || !/^\d+$/.test(value)) return 0n;
+  return BigInt(value);
+}
+
+function parseStoredEpochNumber(value: string | null | undefined): number {
+  const parsed = Number(value);
+  return isSafePositiveInteger(parsed) ? parsed : 0;
 }
 
 function mapJackpotLog(log: JackpotLog): JackpotRow | null {
@@ -258,7 +275,7 @@ async function fetchRecentJackpotLogsFromChain(limit = JACKPOT_HISTORY_LIMIT) {
 }
 
 async function fetchJackpotEventByEpoch(kind: "daily" | "weekly", epoch: number): Promise<JackpotEventLookup> {
-  if (!Number.isInteger(epoch) || epoch <= 0) return null;
+  if (!isSafePositiveInteger(epoch)) return null;
   const cacheKey = `${kind}:${epoch}`;
   const now = Date.now();
   const cached = jackpotEventCache.get(cacheKey);
@@ -297,13 +314,7 @@ async function attachRecentBlockTimestamps(rows: JackpotRow[]): Promise<JackpotR
     ...new Set(
       recentRows
         .map((row) => row.blockNumber)
-        .filter((blockNumber) => {
-          try {
-            return BigInt(blockNumber) > 0n;
-          } catch {
-            return false;
-          }
-        }),
+        .filter((blockNumber) => parseStoredBlockNumber(blockNumber) > 0n),
     ),
   ];
 
@@ -311,7 +322,7 @@ async function attachRecentBlockTimestamps(rows: JackpotRow[]): Promise<JackpotR
   await Promise.all(
     blockNumbers.map(async (blockNumber) => {
       try {
-        const timestamp = await getBlockTimestampMs(BigInt(blockNumber));
+        const timestamp = await getBlockTimestampMs(parseStoredBlockNumber(blockNumber));
         timestampByBlock.set(blockNumber, timestamp);
       } catch {
         timestampByBlock.set(blockNumber, null);
@@ -329,13 +340,9 @@ async function attachRecentBlockTimestamps(rows: JackpotRow[]): Promise<JackpotR
 }
 
 function normalizeStoredJackpots(): JackpotRow[] {
-  const jackpots = (getRecentJackpots(JACKPOT_HISTORY_LIMIT) as JackpotRow[]).filter((row) => {
-    try {
-      return BigInt(row.blockNumber ?? "0") >= CONTRACT_DEPLOY_BLOCK;
-    } catch {
-      return false;
-    }
-  });
+  const jackpots = (getRecentJackpots(JACKPOT_HISTORY_LIMIT) as JackpotRow[]).filter(
+    (row) => parseStoredBlockNumber(row.blockNumber) >= CONTRACT_DEPLOY_BLOCK,
+  );
   return sortJackpotsDesc(jackpots).slice(0, JACKPOT_HISTORY_LIMIT);
 }
 
@@ -368,7 +375,7 @@ async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<
     byKey.set(`${row.kind}_${row.epoch}`, row);
   }
 
-  if (Number.isInteger(lastDailyEpoch) && lastDailyEpoch > 0) {
+  if (isSafePositiveInteger(lastDailyEpoch)) {
     const key = `daily_${lastDailyEpoch}`;
     if (!byKey.has(key)) {
       const dailyFormatted = formatAmount(info[6]);
@@ -387,7 +394,7 @@ async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<
     }
   }
 
-  if (Number.isInteger(lastWeeklyEpoch) && lastWeeklyEpoch > 0) {
+  if (isSafePositiveInteger(lastWeeklyEpoch)) {
     const key = `weekly_${lastWeeklyEpoch}`;
     if (!byKey.has(key)) {
       const weeklyFormatted = formatAmount(info[7]);
@@ -416,12 +423,8 @@ async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<
 
 async function fetchOnchainJackpotDelta(existingJackpots: JackpotRow[]) {
   const highestStoredBlock = existingJackpots.reduce<bigint>((max, row) => {
-    try {
-      const value = BigInt(row.blockNumber ?? "0");
-      return value > max ? value : max;
-    } catch {
-      return max;
-    }
+    const value = parseStoredBlockNumber(row.blockNumber);
+    return value > max ? value : max;
   }, 0n);
 
   const currentBlock = await publicClient.getBlockNumber();

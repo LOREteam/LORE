@@ -68,6 +68,7 @@ interface UseLineaOreHubRuntimeOptions {
   embeddedTokenBalance?: WagmiBalanceLike;
   openWalletSettings: () => void;
   minEthForGas: number;
+  readOnlyReason?: string | null;
 }
 
 export function useLineaOreHubRuntime({
@@ -105,6 +106,7 @@ export function useLineaOreHubRuntime({
   embeddedTokenBalance,
   openWalletSettings,
   minEthForGas,
+  readOnlyReason = null,
 }: UseLineaOreHubRuntimeOptions) {
   const miningEmbeddedWalletAddress = embeddedWalletReady ? embeddedWalletAddress : null;
   const miningSendTransactionSilent = embeddedWalletReady ? sendTransactionSilent : undefined;
@@ -163,6 +165,7 @@ export function useLineaOreHubRuntime({
     isAnalyzing: epochPresentation.isAnalyzing,
     isRevealing,
     liveStateReady,
+    readOnlyReason,
     selectedTiles: mining.selectedTiles,
     minEthForGas,
     onManualMine: mining.handleManualMine,
@@ -207,6 +210,7 @@ export function useLineaOreHubRuntime({
       autoMineProgress: effectiveAutoMineProgress,
       runningParams: effectiveRunningParams,
       isAutoMining: effectiveIsAutoMining,
+      readOnlyReason,
     }),
     [
       effectiveAutoMinePhase,
@@ -216,6 +220,7 @@ export function useLineaOreHubRuntime({
       epochPresentation,
       mining,
       miningGuards,
+      readOnlyReason,
       rewardScanner,
       runtimeEffects,
     ],

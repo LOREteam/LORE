@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useCallback } from "react";
-import { formatUnits } from "viem";
 import type { UnclaimedWin } from "../../lib/types";
+import { formatLineaWeiAmountDisplay } from "../../lib/tokenAmountMath";
 import { UiButton } from "../ui/UiButton";
 import { UiPanel } from "../ui/UiPanel";
 
@@ -123,7 +123,7 @@ const DeepScanWinRow = React.memo(function DeepScanWinRow({
     <div className="flex items-center justify-between px-3 py-2 hover:bg-white/2">
       <div className="flex flex-col">
         <span className="text-[9px] text-amber-500/60 font-bold uppercase tracking-wider">Epoch #{epoch}</span>
-        <span className="text-xs font-bold text-emerald-400">{parseFloat(formatUnits(BigInt(amountWei), 18)).toFixed(2)} LINEA</span>
+        <span className="text-xs font-bold text-emerald-400">{formatLineaWeiAmountDisplay(amountWei, 2)} LINEA</span>
       </div>
       <UiButton
         onClick={handleClaim}

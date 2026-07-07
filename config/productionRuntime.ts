@@ -1,5 +1,10 @@
 import { isAbsolute } from "node:path";
-import { getConfiguredLineaNetwork } from "./publicConfig";
+import {
+  getConfiguredEip7702Enabled,
+  getConfiguredEip7702MiningEnabled,
+  getConfiguredLineaNetwork,
+} from "./publicConfig";
+import { hasMainnetIndexerFinality } from "../app/lib/indexerFinality";
 
 type ProductionRuntimeScope = "web" | "bot" | "indexer" | "server";
 
@@ -18,6 +23,10 @@ function isHttpsUrl(value: string) {
   }
 }
 
+function isTruthyEnv(value: string) {
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
 function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
   const issues: string[] = [];
   const lineaNetwork = getEnv("LINEA_NETWORK");
@@ -32,6 +41,21 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
   }
   if (publicLineaNetwork && normalizedPublicLineaNetwork !== "mainnet") {
     issues.push(`NEXT_PUBLIC_LINEA_NETWORK must resolve to mainnet, got "${publicLineaNetwork}".`);
+  }
+
+  if (
+    getConfiguredEip7702Enabled() ||
+    isTruthyEnv(getEnv("NEXT_PUBLIC_EIP7702_ENABLED")) ||
+    isTruthyEnv(getEnv("EIP7702_ENABLED"))
+  ) {
+    issues.push("EIP-7702 must stay disabled for mainnet production unless a separate repair/diagnostic rollout is explicitly approved.");
+  }
+  if (
+    getConfiguredEip7702MiningEnabled() ||
+    isTruthyEnv(getEnv("NEXT_PUBLIC_EIP7702_MINING_ENABLED")) ||
+    isTruthyEnv(getEnv("EIP7702_MINING_ENABLED"))
+  ) {
+    issues.push("EIP-7702 mining must stay disabled for mainnet production.");
   }
 
   const keeperContractAddress = getEnv("KEEPER_CONTRACT_ADDRESS");
@@ -102,6 +126,10 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     if (!getEnv("KEEPER_PRIVATE_KEY")) {
       issues.push("KEEPER_PRIVATE_KEY is required for mainnet keeper runtime.");
     }
+  }
+
+  if (scope === "indexer" && !hasMainnetIndexerFinality(getEnv("INDEXER_FINALITY_BLOCKS"))) {
+    issues.push("INDEXER_FINALITY_BLOCKS must be set to a positive block count for mainnet indexer runtime.");
   }
 
   if (scope === "web" || scope === "indexer" || scope === "server") {

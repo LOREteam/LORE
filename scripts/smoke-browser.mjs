@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright-core";
+import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
 import {
   ensureLandingPage,
   expectVisible,
   findExecutablePath,
   saveSmokeScreenshot,
+  safeReload,
   warmBaseUrl,
 } from "./smoke-browser-lib/core.mjs";
 import {
@@ -15,22 +17,26 @@ import {
   openDesktopTab,
   openLoginModal,
   openMobileAnalytics,
+  openWalletSelectorFromLoginModal,
   selectSingleTile,
   verifyAutoMinerFailureScenarios,
+  verifyHubVisualRegressionGuards,
   verifyAutoMinerInputPersistence,
   verifyChatProfileModal,
+  verifyReadOnlyMode,
 } from "./smoke-browser-lib/flows.mjs";
 
 const BASE_URL = process.env.SMOKE_BASE_URL || "http://localhost:3000";
 const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "smoke-browser");
 const SCREENSHOT_PATH = path.resolve(process.env.SMOKE_BROWSER_SCREENSHOT_PATH || path.join(OUTPUT_DIR, "latest-home.local.png"));
-const TIMEOUT_MS = Number(process.env.SMOKE_BROWSER_TIMEOUT_MS || 45_000);
-const WARMUP_TIMEOUT_MS = Number(process.env.SMOKE_BROWSER_WARMUP_TIMEOUT_MS || 90_000);
-const TILE_SELECTION_TIMEOUT_MS = Number(process.env.SMOKE_TILE_SELECTION_TIMEOUT_MS || 45_000);
+const TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_BROWSER_TIMEOUT_MS, 45_000);
+const WARMUP_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_BROWSER_WARMUP_TIMEOUT_MS, 90_000);
+const TILE_SELECTION_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_TILE_SELECTION_TIMEOUT_MS, 45_000);
 const AUTO_MINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
 const AUTO_MINE_DEBUG_OVERRIDE_KEY = "lineaore:auto-mine-debug-override:v1";
 const FIRST_VISIT_TUTORIAL_KEY = "lore:first-visit-tutorial:v1";
 const INCLUDE_DEBUG_AUTOMINER_SCENARIOS = process.env.SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS === "1";
+const EXPECT_READ_ONLY = process.env.SMOKE_EXPECT_READ_ONLY === "1";
 
 const BROWSER_CANDIDATES = [
   process.env.SMOKE_BROWSER_EXECUTABLE,
@@ -46,7 +52,6 @@ function isIgnoredConsoleMessage(message) {
     "gc.kis.v2.scr.kaspersky-labs.com",
     "kaspersky-labs.com",
     "[AutoResolve] server keeper bootstrap",
-    "configured chains are not supported",
     "useActiveWallet-",
     "Applying inline style violates the following Content Security Policy directive",
     "Loading the script 'http://gc.kis.v2.scr.kaspersky-labs.com/",
@@ -58,6 +63,10 @@ function isIgnoredConsoleMessage(message) {
     "[HMR]",
     "[Fast Refresh]",
   ].some((part) => message.includes(part));
+}
+
+function isUnsupportedPrivyCoinbaseRegression(message) {
+  return message.includes("configured chains are not") && message.includes("supported");
 }
 
 function isIgnoredHydrationNoise(message) {
@@ -82,6 +91,16 @@ async function runStep(label, task) {
   return result;
 }
 
+async function openLoginModalWithReload(page, options, label) {
+  const opened = await openLoginModal(page, options.timeoutMs);
+  if (opened) return true;
+
+  console.log(`WARN ${label} login modal did not open; reloading once before retry`);
+  await safeReload(page, options.baseUrl, options.timeoutMs);
+  await expectVisible(page.getByText("Manual Bet"), `${label} manual bet panel after login reload`, options.timeoutMs);
+  return openLoginModal(page, options.timeoutMs);
+}
+
 async function main() {
   await fs.mkdir(OUTPUT_DIR, { recursive: true });
   const executablePath = await findExecutablePath(BROWSER_CANDIDATES);
@@ -93,6 +112,7 @@ async function main() {
 
   const pageErrors = [];
   const consoleErrors = [];
+  const consoleRegressions = [];
   const smokeOptions = {
     autoMineDebugOverrideKey: AUTO_MINE_DEBUG_OVERRIDE_KEY,
     autoMinerInputsKey: AUTO_MINER_INPUTS_KEY,
@@ -117,8 +137,9 @@ async function main() {
       stack: error.stack || "",
     }));
     page.on("console", (message) => {
-      if (message.type() !== "error") return;
       const text = message.text();
+      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(text);
+      if (message.type() !== "error") return;
       if (!isIgnoredConsoleMessage(text)) consoleErrors.push(text);
     });
 
@@ -132,24 +153,74 @@ async function main() {
       await expectVisible(sidebar.getByText("Most wins - last 40 rounds", { exact: true }), "sidebar hot tiles subtitle", TIMEOUT_MS);
       await expectVisible(page.getByText("Manual Bet"), "hub manual bet panel", TIMEOUT_MS);
       await expectVisible(page.getByText("Auto-Miner"), "hub auto-miner panel", TIMEOUT_MS);
-      await expectVisible(page.getByRole("button", { name: /Login \/ Connect|Connect Wallet/i }), "connect wallet button", TIMEOUT_MS);
+      await expectVisible(page.getByRole("button", { name: /Login \/ Connect|Wallet Loading/i }), "connect wallet button", TIMEOUT_MS);
       await saveSmokeScreenshot(page, SCREENSHOT_PATH);
     });
-    await runStep("verify auto-miner persistence", () => verifyAutoMinerInputPersistence(page, smokeOptions));
-    if (INCLUDE_DEBUG_AUTOMINER_SCENARIOS) {
+    await runStep("verify hub visual regression guards", () => verifyHubVisualRegressionGuards(page, TIMEOUT_MS));
+    if (EXPECT_READ_ONLY) {
+      await runStep("verify read-only betting mode", () => verifyReadOnlyMode(page, TIMEOUT_MS));
+    }
+    await runStep("verify desktop wallet selector", async () => {
+      const loginModalOpened = await openLoginModalWithReload(page, smokeOptions, "desktop");
+      if (!loginModalOpened) {
+        throw new Error("desktop login modal did not open during mandatory wallet selector smoke");
+      }
+      await openWalletSelectorFromLoginModal(page, TIMEOUT_MS);
+      await closeLoginModal(page, TIMEOUT_MS);
+    });
+
+    const mobileWalletContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await mobileWalletContext.addInitScript((tutorialKey) => {
+      try {
+        window.localStorage.setItem(tutorialKey, "1");
+      } catch {
+        // ignore storage failures in smoke
+      }
+    }, FIRST_VISIT_TUTORIAL_KEY);
+    const mobileWalletPage = await mobileWalletContext.newPage();
+    mobileWalletPage.on("pageerror", (error) => pageErrors.push({
+      message: `[mobile-wallet] ${error.message}`,
+      stack: error.stack || "",
+    }));
+    mobileWalletPage.on("console", (message) => {
+      const text = message.text();
+      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(`[mobile-wallet] ${text}`);
+      if (message.type() !== "error") return;
+      if (!isIgnoredConsoleMessage(text)) consoleErrors.push(`[mobile-wallet] ${text}`);
+    });
+    await runStep("open isolated mobile wallet page", () => ensureLandingPage(mobileWalletPage, smokeOptions));
+    await runStep("verify isolated mobile wallet selector", async () => {
+      await expectVisible(mobileWalletPage.getByRole("button", { name: "Hub" }), "isolated mobile hub nav", TIMEOUT_MS);
+      await expectVisible(mobileWalletPage.getByText("Manual Bet"), "isolated mobile manual bet panel", TIMEOUT_MS);
+      const mobileLoginModalOpened = await openLoginModalWithReload(mobileWalletPage, smokeOptions, "isolated mobile");
+      if (!mobileLoginModalOpened) {
+        throw new Error("isolated mobile login modal did not open during mandatory wallet selector smoke");
+      }
+      await openWalletSelectorFromLoginModal(mobileWalletPage, TIMEOUT_MS);
+      await closeLoginModal(mobileWalletPage, TIMEOUT_MS);
+    });
+    await mobileWalletContext.close();
+
+    if (EXPECT_READ_ONLY) {
+      console.log("SKIP auto-miner persistence step in read-only smoke");
+    } else {
+      await runStep("verify auto-miner persistence", () => verifyAutoMinerInputPersistence(page, smokeOptions));
+    }
+    if (EXPECT_READ_ONLY) {
+      console.log("SKIP auto-miner failure scenarios step in read-only smoke");
+    } else if (INCLUDE_DEBUG_AUTOMINER_SCENARIOS) {
       await runStep("verify auto-miner failure scenarios", () => verifyAutoMinerFailureScenarios(page, smokeOptions));
     } else {
       console.log("SKIP auto-miner failure scenarios step (set SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS=1 to enable)");
     }
 
-    const tileSelectionOk = await runStep("select single tile", () => selectSingleTile(page, smokeOptions));
-    if (!tileSelectionOk) {
-      throw new Error("tile selection smoke did not reach an interactive or valid closed-epoch state");
-    }
-
-    const loginModalOpened = await runStep("open login modal", () => openLoginModal(page, TIMEOUT_MS));
-    if (loginModalOpened) {
-      await runStep("close login modal", () => closeLoginModal(page, TIMEOUT_MS));
+    if (EXPECT_READ_ONLY) {
+      console.log("SKIP tile selection step in read-only smoke");
+    } else {
+      const tileSelectionOk = await runStep("select single tile", () => selectSingleTile(page, smokeOptions));
+      if (!tileSelectionOk) {
+        throw new Error("tile selection smoke did not reach an interactive or valid closed-epoch state");
+      }
     }
 
     const chatOpened = await runStep("open chat drawer", () => openChatDrawer(page, smokeOptions));
@@ -212,34 +283,37 @@ async function main() {
       ],
       skipMessage: "hub tab did not open during smoke window",
     }));
+    await page.close();
 
-    const mobilePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
-    await mobilePage.addInitScript((tutorialKey) => {
+    const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await mobileContext.addInitScript((tutorialKey) => {
       try {
         window.localStorage.setItem(tutorialKey, "1");
       } catch {
         // ignore storage failures in smoke
       }
     }, FIRST_VISIT_TUTORIAL_KEY);
+    const mobilePage = await mobileContext.newPage();
     mobilePage.on("pageerror", (error) => pageErrors.push({
       message: `[mobile] ${error.message}`,
       stack: error.stack || "",
     }));
     mobilePage.on("console", (message) => {
-      if (message.type() !== "error") return;
       const text = message.text();
+      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(`[mobile] ${text}`);
+      if (message.type() !== "error") return;
       if (!isIgnoredConsoleMessage(text)) consoleErrors.push(`[mobile] ${text}`);
     });
 
     await runStep("open mobile landing page", () => ensureLandingPage(mobilePage, smokeOptions));
     await runStep("assert mobile hub shell", async () => {
       await expectVisible(mobilePage.getByRole("button", { name: "Hub" }), "mobile hub nav", TIMEOUT_MS);
-      await expectVisible(mobilePage.getByRole("button", { name: "Top" }), "mobile top nav", TIMEOUT_MS);
+      await expectVisible(mobilePage.getByRole("button", { name: "Leaderboards" }), "mobile top nav", TIMEOUT_MS);
       await expectVisible(mobilePage.getByText("Manual Bet"), "mobile manual bet panel", TIMEOUT_MS);
       await expectVisible(mobilePage.getByText("Auto-Miner"), "mobile auto-miner panel", TIMEOUT_MS);
     });
     await runStep("open mobile analytics", () => openMobileAnalytics(mobilePage, smokeOptions));
-    await mobilePage.close();
+    await mobileContext.close();
 
     const relevantPageErrors = pageErrors.filter((entry) => !isIgnoredPageError(entry.message));
     if (relevantPageErrors.length > 0) {
@@ -250,6 +324,9 @@ async function main() {
     }
     if (pageErrors.length > 0) {
       console.log(`IGNORED page errors: ${pageErrors.slice(0, 5).map((entry) => entry.message).join(" | ")}`);
+    }
+    if (consoleRegressions.length > 0) {
+      throw new Error(`wallet connector regressions: ${consoleRegressions.slice(0, 3).join(" | ")}`);
     }
     const relevantConsoleErrors = consoleErrors.filter((message) => !isIgnoredHydrationNoise(message));
     if (relevantConsoleErrors.length > 0) {

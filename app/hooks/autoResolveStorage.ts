@@ -7,15 +7,22 @@ export interface ResolveGuardEntry {
   ts: number;
 }
 
+export function normalizeResolveGuardEntry(value: unknown): ResolveGuardEntry | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const epoch = typeof raw.epoch === "string" ? raw.epoch.trim() : "";
+  if (!/^\d+$/.test(epoch)) return null;
+  const ts = typeof raw.ts === "number" && Number.isFinite(raw.ts) && raw.ts > 0 ? raw.ts : 0;
+  return { epoch, ts };
+}
+
 export function readResolveGuard(): ResolveGuardEntry | null {
   if (typeof localStorage === "undefined") return null;
   try {
     const raw = localStorage.getItem(RESOLVE_STORAGE_KEY);
     if (!raw) return null;
-    if (raw[0] !== "{") return { epoch: raw, ts: 0 };
-    const parsed = JSON.parse(raw) as { epoch?: string; ts?: number };
-    if (!parsed?.epoch) return null;
-    return { epoch: parsed.epoch, ts: Number(parsed.ts) || 0 };
+    if (raw[0] !== "{") return normalizeResolveGuardEntry({ epoch: raw, ts: 0 });
+    return normalizeResolveGuardEntry(JSON.parse(raw));
   } catch {
     return null;
   }

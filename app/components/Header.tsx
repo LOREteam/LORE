@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
-import { formatTime } from "../lib/utils";
+import { formatTime, formatUnknownError } from "../lib/utils";
 import { WinsTicker } from "./WinsTicker";
 import type { JackpotHistoryEntry } from "../hooks/useJackpotHistory";
 import type { RecentWin } from "../hooks/useRecentWins";
@@ -10,6 +10,8 @@ import { HeaderJackpots } from "./header/HeaderJackpots";
 import { HeaderPoolChart } from "./header/HeaderPoolChart";
 import { HeaderWalletCard } from "./header/HeaderWalletCard";
 import type { JackpotDisplayInfo } from "./header/types";
+
+const LOGIN_PENDING_TIMEOUT_MS = 20_000;
 
 interface HeaderProps {
   initialNowMs?: number;
@@ -82,6 +84,9 @@ export const Header = React.memo(function Header({
   const [hydrated, setHydrated] = useState(false);
   const [showAnalyzing, setShowAnalyzing] = useState(false);
   const [embeddedAddressCopied, setEmbeddedAddressCopied] = useState(false);
+  const [loginPending, setLoginPending] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [privyReadySlow, setPrivyReadySlow] = useState(false);
   const mountedRef = useRef(false);
 
   useEffect(() => {
@@ -98,10 +103,65 @@ export const Header = React.memo(function Header({
     return () => window.clearTimeout(timeoutId);
   }, [embeddedAddressCopied]);
 
+  useEffect(() => {
+    if (!authenticated) return;
+    setLoginPending(false);
+    setLoginError(null);
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (privyReady) {
+      setPrivyReadySlow(false);
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      if (mountedRef.current) setPrivyReadySlow(true);
+    }, 20_000);
+    return () => window.clearTimeout(timeoutId);
+  }, [privyReady]);
+
+  useEffect(() => {
+    if (!loginPending || authenticated) return;
+    const timeoutId = window.setTimeout(() => {
+      if (!mountedRef.current || authenticated) return;
+      setLoginPending(false);
+      setLoginError("Wallet login timed out. Try again or reload the page.");
+    }, LOGIN_PENDING_TIMEOUT_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [authenticated, loginPending]);
+
   const handleLogin = useCallback(() => {
-    if (!privyReady || authenticated) return;
-    void login();
-  }, [authenticated, login, privyReady]);
+    if (!privyReady || authenticated || loginPending) return;
+    setLoginPending(true);
+    setLoginError(null);
+    try {
+      const loginResult = login() as unknown;
+      if (loginResult && typeof (loginResult as Promise<void>).then === "function") {
+        void (loginResult as Promise<void>)
+          .catch((error: unknown) => {
+            if (mountedRef.current) {
+              setLoginError(formatUnknownError(error));
+            }
+          })
+          .finally(() => {
+            if (mountedRef.current) {
+              setLoginPending(false);
+            }
+          });
+        return;
+      }
+      window.setTimeout(() => {
+        if (mountedRef.current) {
+          setLoginPending(false);
+        }
+      }, 800);
+    } catch (error) {
+      if (mountedRef.current) {
+        setLoginError(formatUnknownError(error));
+        setLoginPending(false);
+      }
+    }
+  }, [authenticated, login, loginPending, privyReady]);
 
   useEffect(() => {
     if (!liveStateReady) {
@@ -248,6 +308,8 @@ export const Header = React.memo(function Header({
       <HeaderWalletCard
         authenticated={authenticated}
         privyReady={privyReady}
+        loginPending={loginPending}
+        loginError={loginError ?? (privyReadySlow ? "Wallet login is still loading. Check blockers or reload the page." : null)}
         embeddedWalletAddress={embeddedWalletAddress}
         embeddedWalletSyncing={embeddedWalletSyncing}
         embeddedAddressCopied={embeddedAddressCopied}

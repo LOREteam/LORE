@@ -17,6 +17,7 @@ interface HubSidePanelProps {
   formattedBalance: string | null;
   walletConnected: boolean;
   liveStateReady: boolean;
+  readOnlyReason?: string | null;
   selectedTilesCount: number;
   isPending: boolean;
   isRevealing: boolean;
@@ -38,6 +39,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
   formattedBalance,
   walletConnected,
   liveStateReady,
+  readOnlyReason = null,
   selectedTilesCount,
   isPending,
   isRevealing,
@@ -64,6 +66,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
               formattedBalance={formattedBalance}
               walletConnected={walletConnected}
               liveStateReady={liveStateReady}
+              readOnlyReason={readOnlyReason}
               selectedTilesCount={selectedTilesCount}
               isPending={isPending}
               isRevealing={isRevealing}
@@ -82,6 +85,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
             isRevealing={isRevealing}
             isAnalyzing={isAnalyzing}
             liveStateReady={liveStateReady}
+            readOnlyReason={readOnlyReason}
             autoMinePhase={autoMinePhase}
             autoMineProgress={autoMineProgress}
             formattedBalance={formattedBalance}

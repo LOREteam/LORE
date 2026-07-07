@@ -80,6 +80,25 @@ function parseProgress(label: string) {
   };
 }
 
+function parseAchievementEpoch(value: string): bigint | null {
+  return /^\d+$/.test(value) ? BigInt(value) : null;
+}
+
+function parseAchievementEpochNumber(value: string): number {
+  if (!/^\d+$/.test(value)) return 0;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+export function compareAchievementEpochs(left: string, right: string): number {
+  const leftEpoch = parseAchievementEpoch(left);
+  const rightEpoch = parseAchievementEpoch(right);
+  if (leftEpoch === null && rightEpoch === null) return left.localeCompare(right);
+  if (leftEpoch === null) return -1;
+  if (rightEpoch === null) return 1;
+  return leftEpoch === rightEpoch ? 0 : leftEpoch < rightEpoch ? -1 : 1;
+}
+
 function getAchievementStorageKey(walletAddress: string | undefined) {
   if (!walletAddress) return null;
   return `lore:achievements:${ACHIEVEMENTS_VERSION}:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${walletAddress.toLowerCase()}`;
@@ -204,11 +223,7 @@ export function useAnalyticsAchievements<TRarity extends string>({
     const winsCount = epochWon.size;
     const lossesCount = Math.max(0, epochSet.size - winsCount);
 
-    const sortedEpochs = [...epochSet].sort((left, right) => {
-      const leftEpoch = BigInt(left);
-      const rightEpoch = BigInt(right);
-      return leftEpoch === rightEpoch ? 0 : leftEpoch < rightEpoch ? -1 : 1;
-    });
+    const sortedEpochs = [...epochSet].sort(compareAchievementEpochs);
     let maxWinStreak = 0;
     let currentStreak = 0;
     for (const epoch of sortedEpochs) {
@@ -223,11 +238,11 @@ export function useAnalyticsAchievements<TRarity extends string>({
     }
 
     const earliestDeposit = [...list].sort((left, right) => {
-      const leftOrder = left.blockNumberNum > 0 ? left.blockNumberNum : Number(left.epoch);
-      const rightOrder = right.blockNumberNum > 0 ? right.blockNumberNum : Number(right.epoch);
+      const leftOrder = left.blockNumberNum > 0 ? left.blockNumberNum : parseAchievementEpochNumber(left.epoch);
+      const rightOrder = right.blockNumberNum > 0 ? right.blockNumberNum : parseAchievementEpochNumber(right.epoch);
       if (leftOrder !== rightOrder) return leftOrder - rightOrder;
-      const leftEpoch = Number(left.epoch);
-      const rightEpoch = Number(right.epoch);
+      const leftEpoch = parseAchievementEpochNumber(left.epoch);
+      const rightEpoch = parseAchievementEpochNumber(right.epoch);
       if (leftEpoch !== rightEpoch) return leftEpoch - rightEpoch;
       return left.txHash.localeCompare(right.txHash);
     })[0];

@@ -1,54 +1,55 @@
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+# AGENTS.md
 
-Tradeoff: These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+General operating rules for this repository. Keep changes small, evidence-based, and verifiable.
 
-1. Think Before Coding
-Don't assume. Don't hide confusion. Surface tradeoffs.
+## Core
 
-Before implementing:
+- Read the relevant current code before changing it. Prefer source, logs, tests, rendered UI, and saved artifacts over memory.
+- Use the smallest complete fix. Reuse existing helpers/patterns first; then standard library/platform features; then installed dependencies. Add new code only when needed.
+- Fix root causes, not symptoms. When touching a function, hook, contract method, or script, grep its callers and patch the shared path when practical.
+- No speculative abstractions, new dependencies, boilerplate, or broad refactors unless explicitly required.
+- Touch only tightly related files. If more than 5 files are needed, update `docs/agent-progress.md` and split the work into smaller steps.
+- Never revert unrelated worktree changes. Check `git status --short` when it helps.
 
-State your assumptions explicitly. If uncertain, ask.
-If multiple interpretations exist, present them - don't pick silently.
-If a simpler approach exists, say so. Push back when warranted.
-If something is unclear, stop. Name what's confusing. Ask.
-2. Simplicity First
-Minimum code that solves the problem. Nothing speculative.
+## Context Hygiene
 
-No features beyond what was asked.
-No abstractions for single-use code.
-No "flexibility" or "configurability" that wasn't requested.
-No error handling for impossible scenarios.
-If you write 200 lines and it could be 50, rewrite it.
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+- Prefer `rg` / `rg --files`. Exclude `.next/`, `.tmp/`, `artifacts/`, `cache/`, `coverage/`, `dist/`, `logs/`, `node_modules/`, `out/`, `playwright-report/`, `test-results/`, `typechain-types/`.
+- Keep `.codexignore` updated when new build/cache/generated/report/heavy artifact paths appear.
+- Do not read large files wholesale. For files over 50 lines, find target lines first, then read only the needed range.
+- Do not read large `.json`, `.jsonl`, `.csv`, or `.log` files in full. Use bounded summaries: counts, selected keys, sample rows, or exact errors.
+- For verbose commands, inspect bounded first/last lines or exact error lines. Do not dump full terminal buffers.
+- Use `docs/current_state.md` for current repo truth. Use `docs/agent-progress.md` only for compact durable progress during long tasks.
 
-3. Surgical Changes
-Touch only what you must. Clean up only your own mess.
+## Safety
 
-When editing existing code:
+- Never print or summarize secrets from `.env*`, private keys, mnemonics, API tokens, wallet files, cookies, Privy sessions, webhook URLs, Sentry DSNs, database URLs, or keyed RPC URLs. Report only present/missing/redacted.
+- Treat smart contracts, Web3 transactions, wallets, indexers, persistence, auth, and operator scripts as high risk. Prefer explicit validation and narrow diffs.
+- Do not change security-sensitive behavior, protocol assumptions, funds movement, or experimental flows without explicit approval.
+- Do not optimize away intentionally frequent user-visible refreshes. Live game state and important real-time UI freshness are product behavior.
+- Do not claim real-world behavior from simulations alone; use real runtime evidence when the task requires it.
 
-Don't "improve" adjacent code, comments, or formatting.
-Don't refactor things that aren't broken.
-Match existing style, even if you'd do it differently.
-If you notice unrelated dead code, mention it - don't delete it.
-When your changes create orphans:
+## Web3 And Frontend
 
-Remove imports/variables/functions that YOUR changes made unused.
-Don't remove pre-existing dead code unless asked.
-The test: Every changed line should trace directly to the user's request.
+- For contract/Web3 changes, check reentrancy, replay, duplicate tx, nonce/pending behavior, late actions, epoch/block timing, overflow/large values, ABI compatibility, and frontend/indexer assumptions.
+- For wallet flows, verify rejected, reverted, pending, success, failure, wrong network, reconnect/reload, mobile Web3 browser, clean-wallet first action, and explorer links when relevant.
+- Preserve React hook order. Avoid render-time async side effects, duplicate sends, and stale local/session recovery.
+- Keep action states clear: preparing, signing, pending, success, failed, rejected, degraded/stale.
+- Avoid silent no-ops in wallet, mining, chat, profile, rewards, admin, and diagnostic flows.
+- For UI work, check mobile layout, overlays, side panels, number typography, reward/jackpot visibility, and failure/recovery messages when relevant.
 
-4. Goal-Driven Execution
-Define success criteria. Loop until verified.
+## Verification
 
-Transform tasks into verifiable goals:
+- Run the smallest relevant check first. Broaden only for shared contracts, APIs, persistence, wallet behavior, operator scripts, or user-facing flows.
+- Do not run full suites/builds automatically for minor non-breaking changes.
+- If a check fails from unrelated env/network/sandbox issues, report it instead of starting long automated troubleshooting.
+- Stop after 2 fix/verify cycles on the same failure and report status plus next step.
+- Do not claim completion until relevant verification ran, or skipped verification is explicitly explained.
+- Common checks: `npm.cmd run typecheck`, `npm.cmd run build`, `npm.cmd run smoke:browser`, `npm.cmd run load:http`, `npm.cmd run health:prod`.
 
-"Add validation" → "Write tests for invalid inputs, then make them pass"
-"Fix the bug" → "Write a test that reproduces it, then make it pass"
-"Refactor X" → "Ensure tests pass before and after"
-For multi-step tasks, state a brief plan:
+## Browser And Communication
 
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
-These guidelines are working if: fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+- Before browser/wallet/smoke/remote-site automation, read `docs/browser_automation.md`.
+- Browser evidence must use the intended origin unless explicitly local-only. Save long console/network output to artifacts and report compact summaries.
+- Update docs/tests when behavior, CLI flags, env vars, API fields, schemas, persistence format, or operator commands change.
+- Keep progress updates short: current action and relevant finding. Summarize command results by outcome and important failures, not full logs.
+- A task is complete only when the requested behavior is done, checks pass or are explained, and no unrelated work was overwritten.

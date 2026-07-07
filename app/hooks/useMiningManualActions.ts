@@ -85,6 +85,7 @@ export function useMiningManualActions({
       }
       setIsPending(true);
       try {
+        notify?.("Preparing bet transaction. Confirm the wallet prompt if it appears.", "info");
         return await submitMineAttempt("ManualMine", normalizedTiles, betAmountStr, actorAddress);
       } catch (error) {
         if (!isUserRejection(error)) {
@@ -92,6 +93,8 @@ export function useMiningManualActions({
           const reason = getBetErrorMessage(error);
           log.warn("ManualMine", "bet failed", { reason });
           notify?.(reason, "danger");
+        } else {
+          notify?.("Bet transaction rejected in wallet.", "info");
         }
         return false;
       } finally {
@@ -115,6 +118,7 @@ export function useMiningManualActions({
       setSelectedTilesEpoch(null);
       setIsPending(true);
       try {
+        notify?.("Preparing repeat bet transaction. Confirm the wallet prompt if it appears.", "info");
         return await submitMineAttempt("DirectMine", normalizedTiles, betAmountStr, actorAddress);
       } catch (error) {
         if (!isUserRejection(error)) {
@@ -122,6 +126,8 @@ export function useMiningManualActions({
           const reason = getBetErrorMessage(error);
           log.warn("DirectMine", "bet failed", { reason });
           notify?.(reason, "danger");
+        } else {
+          notify?.("Repeat bet transaction rejected in wallet.", "info");
         }
         return false;
       } finally {

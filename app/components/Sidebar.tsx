@@ -2,8 +2,8 @@
 
 import React, { useCallback, useMemo } from "react";
 import Image from "next/image";
-import { formatUnits } from "viem";
 import type { TabId, UnclaimedWin } from "../lib/types";
+import { formatLineaWeiAmountDisplay } from "../lib/tokenAmountMath";
 import { useGlobalStats } from "../hooks/useGlobalStats";
 import { searchingQuotes, emptyStates } from "../lib/loreTexts";
 import { LoreText } from "./LoreText";
@@ -43,16 +43,6 @@ const HOT_TILE_PLACEHOLDERS: HotTile[] = Array.from({ length: 5 }, (_, index) =>
   tileId: index + 1,
   wins: 0,
 }));
-
-function formatRewardAmount(amountWei: string): string {
-  try {
-    const value = Number(formatUnits(BigInt(amountWei || "0"), 18));
-    if (!Number.isFinite(value)) return "0.0";
-    return value.toFixed(1);
-  } catch {
-    return "0.0";
-  }
-}
 
 export const Sidebar = React.memo(function Sidebar({
   activeTab,
@@ -365,7 +355,7 @@ const RewardClaimRow = React.memo(function RewardClaimRow({
           #{epoch}
         </span>
         <span className="lore-nums mt-0.5 block truncate text-[9px] font-black leading-none tabular-nums text-emerald-400">
-          {formatRewardAmount(amountWei)} LINEA
+          {formatLineaWeiAmountDisplay(amountWei, 1)} LINEA
         </span>
       </div>
       <UiButton

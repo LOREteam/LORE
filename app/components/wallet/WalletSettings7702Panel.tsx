@@ -3,6 +3,7 @@
 import React from "react";
 import type { Eip7702DiagnosticState } from "../../hooks/usePrivy7702Diagnostics";
 import { EIP7702_DELEGATE_ADDRESS, EIP7702_ENABLED } from "../../lib/eip7702";
+import { getExplorerTxUrl } from "../../lib/explorerLinks";
 import { UiButton } from "../ui/UiButton";
 import { UiPanel } from "../ui/UiPanel";
 
@@ -28,6 +29,7 @@ export function WalletSettings7702Panel({
     : !EIP7702_DELEGATE_ADDRESS
       ? "EIP-7702 delegate address is not configured."
       : null;
+  const diagnosticTxUrl = eip7702Diagnostic.txHash ? getExplorerTxUrl(eip7702Diagnostic.txHash) : null;
 
   return (
     <UiPanel tone="accent" className="animate-slide-up" style={{ animationDelay: "0.08s" }}>
@@ -79,7 +81,16 @@ export function WalletSettings7702Panel({
             <div className="text-emerald-300">Estimated gas: {eip7702Diagnostic.gasEstimate}</div>
           )}
           {eip7702Diagnostic.txHash && (
-            <div className="text-emerald-300 break-all">Tx hash: {eip7702Diagnostic.txHash}</div>
+            <div className="text-emerald-300 break-all">
+              Tx hash:{" "}
+              {diagnosticTxUrl ? (
+                <a href={diagnosticTxUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                  {eip7702Diagnostic.txHash}
+                </a>
+              ) : (
+                eip7702Diagnostic.txHash
+              )}
+            </div>
           )}
           {eip7702Diagnostic.detail && (
             <div className={eip7702Diagnostic.status === "error" ? "text-red-300/90 wrap-break-word" : "text-gray-400 wrap-break-word"}>

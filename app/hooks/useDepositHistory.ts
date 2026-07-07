@@ -2,7 +2,15 @@
 
 import { log } from "../lib/logger";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatUnits } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
+import {
+  computeWinningAmountWei,
+  formatLineaAmountFixed,
+  normalizeTileAmounts,
+  parseLineaAmountWei,
+} from "../lib/tokenAmountMath";
+import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 
 export interface DepositEntry {
   epoch: string;
@@ -55,6 +63,17 @@ const SYNC_EPOCH_PREFETCH_LIMIT = 64;
 const EPOCHS_FETCH_CHUNK = 100;
 const REWARDS_FETCH_CHUNK = 200;
 
+function parseSafeNonNegativeIntegerNumber(value: string | null | undefined): number {
+  if (!value || !/^\d+$/.test(value)) return 0;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function parseSafePositiveIntegerNumber(value: string | null | undefined): number {
+  const parsed = parseSafeNonNegativeIntegerNumber(value);
+  return parsed > 0 ? parsed : 0;
+}
+
 function getDepositCacheKey(userAddress: string) {
   return `lore:deposits:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${userAddress.toLowerCase()}`;
 }
@@ -70,10 +89,7 @@ function loadCachedDeposits(userAddress: string): { data: DepositEntry[] | null;
     }
     return {
       data: Array.isArray(parsed.data) ? parsed.data : null,
-      savedAt:
-        typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
-          ? parsed.savedAt
-          : null,
+      savedAt: normalizeCacheTimestamp(parsed.savedAt),
     };
   } catch {
     return { data: null, savedAt: null };
@@ -141,47 +157,40 @@ async function fetchRewardsMap(userAddress: string, epochIds: string[]) {
   return merged;
 }
 
-function mapDepositEntries(
+export function normalizeApiDeposits(value: unknown): ApiDeposit[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is ApiDeposit => (
+    !!item &&
+    typeof item === "object" &&
+    Array.isArray((item as Partial<ApiDeposit>).tileIds)
+  ));
+}
+
+export function mapDepositEntries(
   deposits: ApiDeposit[],
   epochsMap: Record<string, ApiEpoch>,
   rewardsMap: Record<string, ApiRewardInfo>,
 ): DepositEntry[] {
   return deposits.map((d) => {
-    const normalizedTileIds = [...new Set(d.tileIds.filter((tileId) => Number.isInteger(tileId) && tileId > 0))];
+    const normalized = normalizeTileAmounts(d.tileIds, d.amounts, d.totalAmount);
+    const normalizedTileIds = normalized.tileIds;
     const epochData = epochsMap[d.epoch];
     const rewardData = rewardsMap[d.epoch];
     const winningTile = epochData?.winningTile ?? rewardData?.winningTile ?? null;
-    const normalizedAmounts =
-      Array.isArray(d.amounts) && d.amounts.length === normalizedTileIds.length
-        ? d.amounts.map((value) => {
-            const amount = parseFloat(value);
-            return Number.isFinite(amount) && amount >= 0 ? amount : 0;
-          })
-        : normalizedTileIds.length > 0
-          ? normalizedTileIds.map(() => d.totalAmountNum / normalizedTileIds.length)
-          : [];
+    const totalAmountWei = parseLineaAmountWei(d.totalAmount);
+    const normalizedAmounts = normalized.amounts.map((value) => {
+      const amount = Number(formatUnits(parseLineaAmountWei(value), 18));
+      return Number.isFinite(amount) && amount >= 0 ? amount : 0;
+    });
     let reward: number | null = null;
 
     if (rewardData && winningTile !== null && normalizedTileIds.includes(winningTile)) {
-      const userWinningAmount = parseFloat(rewardData.userWinningAmount);
-      const totalReward = parseFloat(rewardData.reward);
-      if (userWinningAmount > 0 && totalReward > 0) {
-        let rowWinningAmount = 0;
-        if (normalizedAmounts.length === normalizedTileIds.length) {
-          normalizedTileIds.forEach((tileId, index) => {
-            if (tileId === winningTile) {
-              rowWinningAmount += normalizedAmounts[index] ?? 0;
-            }
-          });
-        } else {
-          const hitCount = normalizedTileIds.filter((tileId) => tileId === winningTile).length;
-          if (hitCount > 0 && normalizedTileIds.length > 0) {
-            rowWinningAmount = (d.totalAmountNum / normalizedTileIds.length) * hitCount;
-          }
-        }
-        if (rowWinningAmount > 0) {
-          reward = (totalReward * rowWinningAmount) / userWinningAmount;
-        }
+      const userWinningAmountWei = parseLineaAmountWei(rewardData.userWinningAmount);
+      const totalRewardWei = parseLineaAmountWei(rewardData.reward);
+      const rowWinningAmountWei = computeWinningAmountWei(d.tileIds, d.amounts, winningTile, d.totalAmount);
+      if (userWinningAmountWei > 0n && totalRewardWei > 0n && rowWinningAmountWei > 0n) {
+        const rewardWei = (totalRewardWei * rowWinningAmountWei) / userWinningAmountWei;
+        reward = Number(formatUnits(rewardWei, 18));
       }
     }
 
@@ -189,11 +198,11 @@ function mapDepositEntries(
       epoch: d.epoch,
       tileIds: normalizedTileIds,
       amounts: normalizedAmounts,
-      amount: parseFloat(d.totalAmount).toFixed(2),
-      amountNum: d.totalAmountNum,
+      amount: formatLineaAmountFixed(totalAmountWei, 2),
+      amountNum: Number(formatUnits(totalAmountWei, 18)),
       txHash: d.txHash,
       blockNumber: d.blockNumber,
-      blockNumberNum: Number(d.blockNumber ?? "0"),
+      blockNumberNum: parseSafeNonNegativeIntegerNumber(d.blockNumber),
       winningTile,
       isDailyJackpot: Boolean(epochData?.isDailyJackpot),
       isWeeklyJackpot: Boolean(epochData?.isWeeklyJackpot),
@@ -201,7 +210,7 @@ function mapDepositEntries(
     };
   }).sort((a, b) => {
     if (a.blockNumberNum === b.blockNumberNum) {
-      const epochDelta = Number(b.epoch) - Number(a.epoch);
+      const epochDelta = parseSafePositiveIntegerNumber(b.epoch) - parseSafePositiveIntegerNumber(a.epoch);
       if (epochDelta !== 0) return epochDelta;
       return (b.txHash ?? "").localeCompare(a.txHash ?? "");
     }
@@ -311,7 +320,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
         return;
       }
 
-      const deposits: ApiDeposit[] = depositsJson.deposits ?? [];
+      const deposits = normalizeApiDeposits(depositsJson.deposits);
       const uniqueEpochs = [...new Set(deposits.map((d) => d.epoch))];
       let epochsMap: Record<string, ApiEpoch> = depositsJson.epochs ?? {};
       let rewardsMap: Record<string, ApiRewardInfo> = depositsJson.rewards ?? {};

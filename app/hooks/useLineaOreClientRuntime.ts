@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { parseUnits } from "viem";
 import { useWriteContract } from "wagmi";
+import { getConfiguredReadOnlyMode } from "../../config/publicConfig";
 import { buildLineaOreClientRuntimeViewProps } from "../lib/buildLineaOreClientRuntimeViewProps";
 import { type LiveStateApiResponse } from "./useGameLiveStateSnapshot";
 import { useLineaOreClientBaseState } from "./useLineaOreClientBaseState";
@@ -15,6 +16,7 @@ import type { RecentWin } from "./useRecentWins";
 
 const MIN_ETH_FOR_GAS = 0.0005;
 const MIN_ETH_WITHDRAW_RESERVE_WEI = parseUnits("0.0005", 18);
+const READ_ONLY_REASON = "Maintenance mode: betting is temporarily paused. Existing data remains visible.";
 
 interface UseLineaOreClientRuntimeOptions {
   initialLiveState?: LiveStateApiResponse | null;
@@ -32,6 +34,7 @@ export function useLineaOreClientRuntime({
   });
   const { uiHydrated, motion, sound, wallet, shell, gameData, chart, normalizedEmbeddedAddress, publicClient } =
     baseState;
+  const readOnlyReason = getConfiguredReadOnlyMode() ? READ_ONLY_REASON : null;
 
   const { rebateInfo, isClaiming: isClaimingRebate, claimRebates } = useRebate({
     enabled: Boolean(normalizedEmbeddedAddress),
@@ -108,6 +111,7 @@ export function useLineaOreClientRuntime({
     embeddedTokenBalance: walletRuntime.embeddedTokenBalance,
     openWalletSettings: shell.openWalletSettings,
     minEthForGas: MIN_ETH_FOR_GAS,
+    readOnlyReason,
   });
 
   const rebateState = useMemo(
@@ -127,8 +131,9 @@ export function useLineaOreClientRuntime({
         walletRuntime,
         hubRuntime,
         rebateState,
+        readOnlyReason,
       }),
-    [ancillaryState, baseState, hubRuntime, rebateState, walletRuntime],
+    [ancillaryState, baseState, hubRuntime, readOnlyReason, rebateState, walletRuntime],
   );
 
   return useMemo(

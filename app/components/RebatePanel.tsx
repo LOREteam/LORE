@@ -15,6 +15,7 @@ interface RebatePanelProps {
     totalEpochs: number;
     isLoading?: boolean;
     hasLoaded?: boolean;
+    dataFreshness?: "fresh" | "background-refresh" | "stale-cache" | "offline";
     claimPlanKind?: "none" | "single" | "split" | "unknown";
     isEstimatingClaimPlan?: boolean;
     minClaimAmount?: string;
@@ -29,6 +30,11 @@ interface RebatePanelProps {
   } | null;
   isClaiming: boolean;
   onClaimRebates: () => Promise<void>;
+}
+
+function formatRebateAmount(value: string | null | undefined): string {
+  const parsed = Number.parseFloat(String(value ?? ""));
+  return Number.isFinite(parsed) ? parsed.toFixed(4) : "0.0000";
 }
 
 export const RebatePanel = React.memo(function RebatePanel({
@@ -47,6 +53,14 @@ export const RebatePanel = React.memo(function RebatePanel({
   const minClaimAmount = rebateInfo?.minClaimAmount ?? "100";
   const isBelowClaimMinimum = rebateInfo?.isBelowClaimMinimum ?? false;
   const showInitialSkeleton = isLoading && !hasLoaded;
+  const freshnessMessage =
+    rebateInfo?.dataFreshness === "offline"
+      ? "Showing last loaded Safety Pool data. Refresh failed and will retry automatically."
+      : rebateInfo?.dataFreshness === "stale-cache"
+        ? "Showing cached Safety Pool data while the ledger refreshes."
+        : rebateInfo?.dataFreshness === "background-refresh"
+          ? "Safety Pool refresh is already in progress; current data remains visible."
+          : null;
 
   return (
     <div className="flex-1 overflow-y-auto pb-12 animate-fade-in">
@@ -94,8 +108,8 @@ export const RebatePanel = React.memo(function RebatePanel({
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <div>
                   <div className="text-[8px] font-bold uppercase tracking-widest text-gray-400 mb-0.5">Pending</div>
-                  <div className="text-xl font-black text-emerald-400">
-                    {rebateInfo ? parseFloat(rebateInfo.pendingRebate).toFixed(4) : "0.0000"} LINEA
+                  <div className="lore-nums text-xl font-black text-emerald-400">
+                    {formatRebateAmount(rebateInfo?.pendingRebate)} LINEA
                   </div>
                 </div>
                 <div>
@@ -136,6 +150,14 @@ export const RebatePanel = React.memo(function RebatePanel({
               {isLoading && hasLoaded ? (
                 <p className="mt-3 text-xs leading-relaxed text-gray-500">
                   Refreshing Safety Pool ledger in background...
+                </p>
+              ) : null}
+              {freshnessMessage ? (
+                <p
+                  data-testid="rebate-freshness-hint"
+                  className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-xs leading-relaxed text-amber-100/75"
+                >
+                  {freshnessMessage}
                 </p>
               ) : null}
               {hasClaimable ? (
@@ -190,7 +212,11 @@ export const RebatePanel = React.memo(function RebatePanel({
                   <div>
                     <div className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Epoch #{row.epoch}</div>
                     <div className="text-sm font-bold text-white">
-                      {row.resolved ? `${parseFloat(row.pending).toFixed(4)} LINEA` : "Pending resolve"}
+                      {row.resolved ? (
+                        <span className="lore-nums">{formatRebateAmount(row.pending)} LINEA</span>
+                      ) : (
+                        "Pending resolve"
+                      )}
                     </div>
                   </div>
                   <div className="text-right">

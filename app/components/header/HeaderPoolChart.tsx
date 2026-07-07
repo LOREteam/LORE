@@ -4,6 +4,8 @@ import Image from "next/image";
 import React from "react";
 import { UiButton } from "../ui/UiButton";
 
+const EMPTY_POOL_LINE_PATH = "M 1,57 C 14,57 14,57 27,57 C 40,57 40,57 53,57 C 66,57 66,57 79,57 C 90,57 90,57 99,57";
+
 interface HeaderPoolChartProps {
   chartHasData: boolean;
   coldBootDefaults?: boolean;
@@ -17,7 +19,6 @@ interface HeaderPoolChartProps {
 }
 
 export function HeaderPoolChart({
-  chartHasData,
   coldBootDefaults = false,
   hydrated = false,
   linePath,
@@ -42,10 +43,10 @@ export function HeaderPoolChart({
         : 0;
   const fallbackLinePath = realTotalStaked > 0
     ? "M 1,56 C 10,56 10,56 19,56 C 28,56 28,50 37,50 C 46,50 46,50 55,50 C 64,50 64,46 73,46 C 82,46 82,46 91,46 C 95,46 95,43 99,43"
-    : "";
+    : EMPTY_POOL_LINE_PATH;
   const visibleLinePath = hydrated ? (linePath || fallbackLinePath) : fallbackLinePath;
-  const stableLinePath = visibleLinePath || (!liveStateReady ? lastVisibleLinePathRef.current : "");
-  const showChartVisual = chartHasData || Boolean(stableLinePath) || !liveStateReady;
+  const stableLinePath = visibleLinePath || lastVisibleLinePathRef.current;
+  const showChartVisual = true;
 
   React.useEffect(() => {
     if (visibleLinePath) {
@@ -138,7 +139,7 @@ export function HeaderPoolChart({
                     </linearGradient>
                   </defs>
 
-                  <path d={stableLinePath} fill="none" stroke={`url(#${chartStrokeId})`} strokeWidth="2" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="transition-all duration-700" />
+                  <path data-testid="header-pool-chart-line" d={stableLinePath} fill="none" stroke={`url(#${chartStrokeId})`} strokeWidth="2" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="transition-all duration-700" />
                 </svg>
               </div>
             )}

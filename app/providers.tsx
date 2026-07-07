@@ -83,6 +83,15 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       walletList: ['detected_ethereum_wallets', 'metamask', 'coinbase_wallet', 'wallet_connect'] as const,
     },
     loginMethods: ['email', 'wallet'],
+    externalWallets: {
+      coinbaseWallet: {
+        config: {
+          preference: {
+            options: 'eoaOnly' as const,
+          },
+        },
+      },
+    },
     embeddedWallets: {
       showWalletUIs: false,
       ethereum: {

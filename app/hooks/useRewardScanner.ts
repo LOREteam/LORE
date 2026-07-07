@@ -7,6 +7,8 @@ import { encodeFunctionData } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, REWARD_SCAN_CHUNK_SIZE, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
 import type { UnclaimedWin } from "../lib/types";
 import { isUserRejection, delay } from "../lib/utils";
+import { getExplorerTxUrl } from "../lib/explorerLinks";
+import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 
 interface UseRewardScannerOptions {
   enabled?: boolean;
@@ -18,7 +20,7 @@ interface UseRewardScannerOptions {
 type EpochTuple = readonly [bigint, bigint, bigint, boolean];
 type ReceiptState = "confirmed" | "pending";
 
-const MAX_SCAN_DEPTH = BigInt(12000); // deeper history scan for late claims
+const MAX_SCAN_DEPTH = BigInt(5000); // keep automatic scans bounded; use Deep Scan for older late claims
 const FAST_SCAN_DEPTH = BigInt(1500); // quick first pass for responsive UI
 const MAX_CONSECUTIVE_EMPTY = 5;
 const MAX_BATCH_CLAIM_EPOCHS = 128;
@@ -27,7 +29,7 @@ const CLAIM_GAS_BUFFER = 20_000n;
 const CLAIM_GAS_HEADROOM_BPS = 12_000n;
 const BPS_DENOMINATOR = 10_000n;
 /** How long before a background re-scan is triggered after using cached data. */
-const REWARD_SCAN_CACHE_RESCAN_MS = 5 * 60_000; // 5 minutes
+const REWARD_SCAN_CACHE_RESCAN_MS = 15 * 60_000; // 15 minutes
 
 type RewardScanCacheEnvelope = {
   /** Timestamp of the last save */
@@ -42,6 +44,42 @@ type RewardScanCacheEnvelope = {
 
 function getRewardScanCacheKey(address: string) {
   return `lore:reward-scan:v2:${address.toLowerCase()}`;
+}
+
+export function normalizeRewardScanEpochString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) ? trimmed : null;
+}
+
+function normalizeRewardScanWeiString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) ? trimmed : null;
+}
+
+export function normalizeRewardScanWins(value: unknown): UnclaimedWin[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const row = (item ?? {}) as Partial<UnclaimedWin>;
+      const epoch = normalizeRewardScanEpochString(row.epoch);
+      const amountWei = normalizeRewardScanWeiString(row.amountWei);
+      if (!epoch || !amountWei) return null;
+      return { epoch, amountWei };
+    })
+    .filter((item): item is UnclaimedWin => item !== null);
+}
+
+export function compareRewardScanWinsDesc(left: UnclaimedWin, right: UnclaimedWin): number {
+  const leftEpoch = normalizeRewardScanEpochString(left.epoch);
+  const rightEpoch = normalizeRewardScanEpochString(right.epoch);
+  if (!leftEpoch && !rightEpoch) return left.epoch.localeCompare(right.epoch);
+  if (!leftEpoch) return 1;
+  if (!rightEpoch) return -1;
+  const a = BigInt(leftEpoch);
+  const b = BigInt(rightEpoch);
+  return a === b ? 0 : b > a ? 1 : -1;
 }
 
 function loadCachedRewardScan(address: string): {
@@ -68,26 +106,17 @@ function loadCachedRewardScan(address: string): {
     if (!parsed || !Array.isArray(parsed.wins)) {
       return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
     }
-    const wins = parsed.wins
-      .map((item) => {
-        const value = item ?? {};
-        if (typeof value.epoch !== "string" || typeof value.amountWei !== "string") return null;
-        return { epoch: value.epoch, amountWei: value.amountWei };
-      })
-      .filter((item): item is UnclaimedWin => item !== null);
+    const wins = normalizeRewardScanWins(parsed.wins);
+    const legacyEpoch = normalizeRewardScanEpochString((parsed as Record<string, unknown>).epoch);
     return {
       wins,
-      savedAt:
-        typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
-          ? parsed.savedAt
-          : null,
+      savedAt: normalizeCacheTimestamp(parsed.savedAt),
       lastScannedEpoch:
-        typeof parsed.lastScannedEpoch === "string" ? parsed.lastScannedEpoch
+        normalizeRewardScanEpochString(parsed.lastScannedEpoch)
         // Legacy v1 used `epoch` field — treat it as lastScannedEpoch
-        : typeof (parsed as Record<string, unknown>).epoch === "string" ? (parsed as Record<string, unknown>).epoch as string
-        : null,
+        ?? legacyEpoch,
       deepestScannedEpoch:
-        typeof parsed.deepestScannedEpoch === "string" ? parsed.deepestScannedEpoch : null,
+        normalizeRewardScanEpochString(parsed.deepestScannedEpoch),
     };
   } catch {
     return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
@@ -116,6 +145,13 @@ function saveCachedRewardScan(
   }
 }
 
+export function getRewardScanRescanDelayMs(savedAt: number | null, now = Date.now()) {
+  if (!savedAt) return 0;
+  const age = now - savedAt;
+  if (age < 0 || age >= REWARD_SCAN_CACHE_RESCAN_MS) return 0;
+  return REWARD_SCAN_CACHE_RESCAN_MS - age;
+}
+
 function formatClaimError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   const lower = message.toLowerCase();
@@ -127,6 +163,11 @@ function formatClaimError(err: unknown): string {
     return "No reward is available for this epoch.";
   }
   return "Claim failed. Please try again.";
+}
+
+function formatClaimTxMessage(message: string, hash: `0x${string}`) {
+  const txUrl = getExplorerTxUrl(hash);
+  return txUrl ? `${message} ${txUrl}` : message;
 }
 
 function chunkEpochIds(epochIds: string[], size: number) {
@@ -402,11 +443,7 @@ export function useRewardScanner(
       const mergeWins = (list: UnclaimedWin[]) => {
         const byEpoch = new Map<string, UnclaimedWin>();
         for (const w of list) byEpoch.set(w.epoch, w);
-        return [...byEpoch.values()].sort((a, b) => {
-          const aEpoch = BigInt(a.epoch);
-          const bEpoch = BigInt(b.epoch);
-          return aEpoch === bEpoch ? 0 : bEpoch > aEpoch ? 1 : -1;
-        });
+        return [...byEpoch.values()].sort(compareRewardScanWinsDesc);
       };
 
       const scanRange = async (rangeStart: bigint, rangeMin: bigint) => {
@@ -596,8 +633,8 @@ export function useRewardScanner(
     }
 
     // If cache is recent enough, defer the background rescan
-    if (cached.savedAt && Date.now() - cached.savedAt < REWARD_SCAN_CACHE_RESCAN_MS) {
-      const remaining = REWARD_SCAN_CACHE_RESCAN_MS - (Date.now() - cached.savedAt);
+    const remaining = getRewardScanRescanDelayMs(cached.savedAt);
+    if (remaining > 0) {
       const timeoutId = window.setTimeout(() => {
         void scanRewards();
       }, remaining);
@@ -642,11 +679,15 @@ export function useRewardScanner(
         setIsClaiming(true);
       }
       try {
+        notify?.("Preparing reward claim from the Privy wallet.", "info");
         const { data, gas } = await prepareClaimTx(epochId);
         const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
         const receiptState = await waitReceipt(hash);
         if (receiptState === "pending") {
-          notify?.("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", "info");
+          notify?.(
+            formatClaimTxMessage("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", hash),
+            "info",
+          );
           void scanRewards();
           return;
         }
@@ -661,12 +702,14 @@ export function useRewardScanner(
             return next;
           });
         }
-        notify?.("Reward claimed successfully.", "success");
+        notify?.(formatClaimTxMessage("Reward claimed successfully.", hash), "success");
       } catch (err) {
         if (!isUserRejection(err)) {
           log.warn("RewardScanner", "claim error", { message: err instanceof Error ? err.message : String(err) });
           notify?.(formatClaimError(err), "danger");
           void scanRewards();
+        } else {
+          notify?.("Reward claim rejected in wallet.", "info");
         }
       } finally {
         if (mountedRef.current) {
@@ -694,10 +737,14 @@ export function useRewardScanner(
     const claimedEpochs = new Set<string>();
     let skippedEpochs = 0;
     let claimTxCount = 0;
+    let claimRejected = false;
+    let lastRewardClaimTxHash: `0x${string}` | null = null;
+    notify?.("Preparing reward claims from the Privy wallet.", "info");
 
     const submitSingleClaim = async (epochId: string) => {
       const { data, gas } = await prepareClaimTx(epochId);
       const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+      lastRewardClaimTxHash = hash;
       claimTxCount += 1;
       const receiptState = await waitReceipt(hash);
       if (receiptState === "pending") return receiptState;
@@ -708,6 +755,7 @@ export function useRewardScanner(
     const submitBatchClaim = async (epochIds: string[]) => {
       const { data, gas } = await prepareBatchClaimTx(epochIds);
       const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+      lastRewardClaimTxHash = hash;
       claimTxCount += 1;
       const receiptState = await waitReceipt(hash);
       if (receiptState === "pending") return receiptState;
@@ -741,7 +789,10 @@ export function useRewardScanner(
           break;
         }
       } catch (err) {
-        if (isUserRejection(err)) break;
+        if (isUserRejection(err)) {
+          claimRejected = true;
+          break;
+        }
         if (batch.length === 1) {
           skippedEpochs += 1;
           continue;
@@ -765,13 +816,24 @@ export function useRewardScanner(
         });
       }
       notify?.(
-        claimedEpochs.size === 1
-          ? claimTxCount <= 1
-            ? "1 reward claimed successfully."
-            : `1 reward claimed successfully in ${claimTxCount} transactions.`
-          : claimTxCount <= 1
-            ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
-            : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
+        lastRewardClaimTxHash
+          ? formatClaimTxMessage(
+              claimedEpochs.size === 1
+                ? claimTxCount <= 1
+                  ? "1 reward claimed successfully."
+                  : `1 reward claimed successfully in ${claimTxCount} transactions.`
+                : claimTxCount <= 1
+                  ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
+                  : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
+              lastRewardClaimTxHash,
+            )
+          : claimedEpochs.size === 1
+            ? claimTxCount <= 1
+              ? "1 reward claimed successfully."
+              : `1 reward claimed successfully in ${claimTxCount} transactions.`
+            : claimTxCount <= 1
+              ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
+              : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
         "success",
       );
     }
@@ -782,8 +844,16 @@ export function useRewardScanner(
       }
     }
     if (pendingClaimTx) {
-      notify?.("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", "info");
+      notify?.(
+        lastRewardClaimTxHash
+          ? formatClaimTxMessage("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", lastRewardClaimTxHash)
+          : "Claim transaction submitted and is still pending. Rewards will refresh after confirmation.",
+        "info",
+      );
       void scanRewards();
+    }
+    if (claimRejected && claimedEpochs.size === 0 && !pendingClaimTx) {
+      notify?.("Reward claim rejected in wallet.", "info");
     }
 
     if (mountedRef.current) {

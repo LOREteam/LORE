@@ -50,9 +50,13 @@ export async function patchStorage(path: string, payload: Record<string, unknown
   }
 }
 
+export function isSafePositiveInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
 export function parseCurrentEpoch(value: unknown): number | null {
   const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0) return null;
+  if (!isSafePositiveInteger(n)) return null;
   return n;
 }
 
@@ -60,6 +64,6 @@ export function filterByCurrentEpoch<T extends { epoch: string }>(rows: T[], cur
   if (!currentEpoch) return rows;
   return rows.filter((row) => {
     const n = Number(row.epoch);
-    return Number.isInteger(n) && n >= 1 && n <= currentEpoch;
+    return isSafePositiveInteger(n) && n <= currentEpoch;
   });
 }

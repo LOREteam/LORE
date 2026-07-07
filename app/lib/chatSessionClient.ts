@@ -31,7 +31,10 @@ export function loadChatAuthSession(address: string): ChatAuthSession | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<ChatAuthSession>;
     if (!parsed.address || typeof parsed.expiresAt !== "number") return null;
-    if (parsed.expiresAt <= Date.now()) return null;
+    if (parsed.expiresAt <= Date.now()) {
+      localStorage.removeItem(getChatAuthStorageKey(address));
+      return null;
+    }
     return {
       address: parsed.address.toLowerCase(),
       expiresAt: parsed.expiresAt,

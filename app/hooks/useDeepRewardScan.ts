@@ -7,6 +7,7 @@ import { encodeFunctionData } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
 import type { UnclaimedWin } from "../lib/types";
 import { isUserRejection, delay } from "../lib/utils";
+import { getExplorerTxUrl } from "../lib/explorerLinks";
 
 type EpochTuple = readonly [bigint, bigint, bigint, boolean];
 type ReceiptState = "confirmed" | "pending";
@@ -29,6 +30,11 @@ function formatClaimError(err: unknown): string {
     return "No reward is available for this epoch.";
   }
   return "Claim failed.";
+}
+
+function formatClaimTxMessage(message: string, hash: `0x${string}`) {
+  const txUrl = getExplorerTxUrl(hash);
+  return txUrl ? `${message} ${txUrl}` : message;
 }
 
 function chunkEpochIds(epochIds: string[], size: number) {
@@ -394,13 +400,16 @@ export function useDeepRewardScan(
       const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
       const receiptState = await waitReceipt(hash);
       if (receiptState === "pending") {
-        onNotify?.("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", "info");
+        onNotify?.(
+          formatClaimTxMessage("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", hash),
+          "info",
+        );
         return;
       }
       if (mountedRef.current) {
         setWins((prev) => prev ? prev.filter((w) => w.epoch !== epochId) : prev);
       }
-      onNotify?.("Reward claimed successfully.", "success");
+      onNotify?.(formatClaimTxMessage("Reward claimed successfully.", hash), "success");
     } catch (err) {
       if (!isUserRejection(err)) onNotify?.(formatClaimError(err), "danger");
     } finally {
@@ -420,10 +429,12 @@ export function useDeepRewardScan(
       const claimedEpochs = new Set<string>();
       let skippedEpochs = 0;
       let claimTxCount = 0;
+      let lastRewardClaimTxHash: `0x${string}` | null = null;
 
       const submitSingleClaim = async (epochId: string) => {
         const { data, gas } = await prepareClaimTx(epochId);
         const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
+        lastRewardClaimTxHash = hash;
         claimTxCount += 1;
         const receiptState = await waitReceipt(hash);
         if (receiptState === "pending") return receiptState;
@@ -434,6 +445,7 @@ export function useDeepRewardScan(
       const submitBatchClaim = async (epochIds: string[]) => {
         const { data, gas } = await prepareBatchClaimTx(epochIds);
         const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
+        lastRewardClaimTxHash = hash;
         claimTxCount += 1;
         const receiptState = await waitReceipt(hash);
         if (receiptState === "pending") return receiptState;
@@ -483,13 +495,24 @@ export function useDeepRewardScan(
           setWins((prev) => prev ? prev.filter((w) => !claimedEpochs.has(w.epoch)) : prev);
         }
         onNotify?.(
-          claimedEpochs.size === 1
-            ? claimTxCount <= 1
-              ? "1 reward claimed successfully."
-              : `1 reward claimed successfully in ${claimTxCount} transactions.`
-            : claimTxCount <= 1
-              ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
-              : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
+          lastRewardClaimTxHash
+            ? formatClaimTxMessage(
+                claimedEpochs.size === 1
+                  ? claimTxCount <= 1
+                    ? "1 reward claimed successfully."
+                    : `1 reward claimed successfully in ${claimTxCount} transactions.`
+                  : claimTxCount <= 1
+                    ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
+                    : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
+                lastRewardClaimTxHash,
+              )
+            : claimedEpochs.size === 1
+              ? claimTxCount <= 1
+                ? "1 reward claimed successfully."
+                : `1 reward claimed successfully in ${claimTxCount} transactions.`
+              : claimTxCount <= 1
+                ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
+                : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
           "success",
         );
       }
@@ -497,7 +520,12 @@ export function useDeepRewardScan(
         onNotify?.("Some rewards are no longer claimable.", "info");
       }
       if (pendingClaimTx) {
-        onNotify?.("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", "info");
+        onNotify?.(
+          lastRewardClaimTxHash
+            ? formatClaimTxMessage("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", lastRewardClaimTxHash)
+            : "Claim transaction submitted and is still pending. Rewards will refresh after confirmation.",
+          "info",
+        );
       }
     } finally {
       if (mountedRef.current) {

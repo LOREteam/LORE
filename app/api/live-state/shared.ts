@@ -1,5 +1,11 @@
-import { decodeEventLog, encodeEventTopics, parseAbi, parseUnits, toHex } from "viem";
-import { publicClient, CONTRACT_ADDRESS, CONTRACT_DEPLOY_BLOCK } from "../_lib/dataBridge";
+import { decodeEventLog, encodeEventTopics, parseAbi, toHex } from "viem";
+import {
+  publicClient,
+  CONTRACT_ADDRESS,
+  CONTRACT_DEPLOY_BLOCK,
+  isSafePositiveInteger,
+} from "../_lib/dataBridge";
+import { parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import { tileMaskToTileIds } from "../../lib/tileMask";
 import {
   getBetJackpotContributionsWeiAfterBlocks,
@@ -146,6 +152,11 @@ function hasAnyPositivePool(tileData: LiveStateTileTuple | null) {
 
 function hasAnyPositiveCount(counts: number[] | null) {
   return Boolean(counts?.some((value) => Number.isFinite(value) && value > 0));
+}
+
+function parseStoredBlockNumber(value: string | null | undefined): bigint {
+  if (!value || !/^\d+$/.test(value)) return 0n;
+  return BigInt(value);
 }
 
 async function fetchEpochTileUserCountsFromChain(
@@ -344,7 +355,7 @@ function getStoredLiveStateBootstrapWatermark(recentJackpots = getRecentJackpots
   const latestDaily = recentJackpots.find((row) => row.kind === "daily") ?? null;
   const latestWeekly = recentJackpots.find((row) => row.kind === "weekly") ?? null;
   return [
-    Number.isInteger(currentEpoch) ? String(currentEpoch) : "null",
+    isSafePositiveInteger(currentEpoch ?? 0) ? String(currentEpoch) : "null",
     lastIndexedBlock,
     latestDaily ? `d:${latestDaily.epoch}:${latestDaily.blockNumber}` : "d:none",
     latestWeekly ? `w:${latestWeekly.epoch}:${latestWeekly.blockNumber}` : "w:none",
@@ -361,8 +372,8 @@ function buildStoredJackpotInfoFallback(snapshot: LiveStatePayload | null, recen
 
   let dailyPoolWei = 0n;
   let weeklyPoolWei = 0n;
-  const lastDailyBlock = latestDaily ? BigInt(latestDaily.blockNumber || "0") : 0n;
-  const lastWeeklyBlock = latestWeekly ? BigInt(latestWeekly.blockNumber || "0") : 0n;
+  const lastDailyBlock = latestDaily ? parseStoredBlockNumber(latestDaily.blockNumber) : 0n;
+  const lastWeeklyBlock = latestWeekly ? parseStoredBlockNumber(latestWeekly.blockNumber) : 0n;
 
   const jackpotContributions = getBetJackpotContributionsWeiAfterBlocks(lastDailyBlock, lastWeeklyBlock);
   dailyPoolWei = jackpotContributions.dailyWei;
@@ -372,8 +383,8 @@ function buildStoredJackpotInfoFallback(snapshot: LiveStatePayload | null, recen
     return null;
   }
 
-  const lastDailyAmountWei = latestDaily ? parseUnits(latestDaily.amount || "0", 18) : 0n;
-  const lastWeeklyAmountWei = latestWeekly ? parseUnits(latestWeekly.amount || "0", 18) : 0n;
+  const lastDailyAmountWei = latestDaily ? parseLineaAmountWei(latestDaily.amount) : 0n;
+  const lastWeeklyAmountWei = latestWeekly ? parseLineaAmountWei(latestWeekly.amount) : 0n;
 
   return [
     dailyPoolWei.toString(),
@@ -395,16 +406,17 @@ export function buildStoredLiveStateBootstrap(): LiveStatePayload | null {
   }
 
   const storedCurrentEpoch = getMetaNumber("currentEpoch");
-  if (!Number.isInteger(storedCurrentEpoch) || !storedCurrentEpoch || storedCurrentEpoch <= 0) {
+  const storedCurrentEpochNumber = storedCurrentEpoch ?? 0;
+  if (!isSafePositiveInteger(storedCurrentEpochNumber)) {
     storedBootstrapCache = { payload: null, watermark };
     return null;
   }
 
-  const currentEpoch = String(storedCurrentEpoch);
-  const indexedTilePoolsWei = getEpochTilePoolsWei(storedCurrentEpoch);
+  const currentEpoch = String(storedCurrentEpochNumber);
+  const indexedTilePoolsWei = getEpochTilePoolsWei(storedCurrentEpochNumber);
   const indexedTilePools = indexedTilePoolsWei.map((value) => value.toString());
-  const tileUserCounts = getEpochTileUserCounts(storedCurrentEpoch);
-  const epochRow = getEpochMapByIds([storedCurrentEpoch])[currentEpoch];
+  const tileUserCounts = getEpochTileUserCounts(storedCurrentEpochNumber);
+  const epochRow = getEpochMapByIds([storedCurrentEpochNumber])[currentEpoch];
   const totalPoolWei = indexedTilePoolsWei.reduce((acc, value) => acc + value, 0n);
   const snapshot = loadLiveStateSnapshot(Number.POSITIVE_INFINITY);
   const sameEpochSnapshot = snapshot?.currentEpoch === currentEpoch ? snapshot : null;
@@ -533,18 +545,17 @@ export async function buildLiveStatePayload(): Promise<LiveStatePayload> {
   const sameEpochSnapshot = snapshot?.currentEpoch === currentEpochString ? snapshot : null;
   const currentEpochNumber = Number(currentEpoch);
   const indexedTileUserCounts =
-    Number.isInteger(currentEpochNumber) && currentEpochNumber > 0
+    isSafePositiveInteger(currentEpochNumber)
       ? getEpochTileUserCounts(currentEpochNumber)
       : null;
   const indexedTilePools =
-    Number.isInteger(currentEpochNumber) && currentEpochNumber > 0
+    isSafePositiveInteger(currentEpochNumber)
       ? getEpochTilePoolsWei(currentEpochNumber).map((value) => value.toString())
       : sameEpochSnapshot?.indexedTilePools ?? null;
   const liveTileTuple =
     tileData.status === "success" ? (tileData.result as LiveStateTileTuple) : null;
   const shouldRefreshCurrentEpochTileUserCounts =
-    Number.isInteger(currentEpochNumber) &&
-    currentEpochNumber > 0 &&
+    isSafePositiveInteger(currentEpochNumber) &&
     hasAnyPositivePool(liveTileTuple);
   let tileUserCounts = indexedTileUserCounts ?? sameEpochSnapshot?.tileUserCounts ?? null;
   if (shouldRefreshCurrentEpochTileUserCounts) {

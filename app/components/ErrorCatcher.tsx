@@ -106,6 +106,23 @@ export function ErrorCatcher() {
       return true;
     };
 
+    const isPrivyAuthSessionTimeout = (message: string): boolean => {
+      const normalized = message.toLowerCase();
+      return (
+        normalized.includes("auth.privy.io/api/v1/sessions") &&
+        (normalized.includes("timeout") ||
+          normalized.includes("timed out") ||
+          normalized.includes("aborted due to timeout") ||
+          normalized.includes("<no response>"))
+      );
+    };
+
+    const suppressPrivyAuthSessionTimeout = (event: Event, message: string) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      log.warn("Global", "privy auth session timeout suppressed", { message: message.slice(0, 180) });
+    };
+
     const originalConsoleError = console.error;
     console.error = (...args: unknown[]) => {
       if (isBenignConsoleWarning(args)) {
@@ -119,6 +136,10 @@ export function ErrorCatcher() {
         (e.error instanceof Error ? e.error.message : "") ||
         e.message ||
         "";
+      if (reasonMessage && isPrivyAuthSessionTimeout(reasonMessage)) {
+        suppressPrivyAuthSessionTimeout(e, reasonMessage);
+        return;
+      }
       if (reasonMessage && tryRecoverChunkLoad(reasonMessage)) {
         e.preventDefault();
         return;
@@ -133,6 +154,10 @@ export function ErrorCatcher() {
           : typeof reason === "string"
             ? reason
             : stringifySafe(reason);
+      if (reasonMessage && isPrivyAuthSessionTimeout(reasonMessage)) {
+        suppressPrivyAuthSessionTimeout(e, reasonMessage);
+        return;
+      }
       if (reasonMessage && tryRecoverChunkLoad(reasonMessage)) {
         e.preventDefault();
         return;
@@ -155,8 +180,9 @@ export function ErrorCatcher() {
       log.error("Global", "unhandled promise rejection", payload);
     };
 
-    window.addEventListener("error", onError);
-    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    const captureListenerOptions = { capture: true };
+    window.addEventListener("error", onError, captureListenerOptions);
+    window.addEventListener("unhandledrejection", onUnhandledRejection, captureListenerOptions);
 
     const cleanupId = window.setTimeout(() => {
       clearExpiredChunkReloadAttempt(typeof sessionStorage !== "undefined" ? sessionStorage : null);
@@ -165,8 +191,8 @@ export function ErrorCatcher() {
     return () => {
       window.clearTimeout(cleanupId);
       console.error = originalConsoleError;
-      window.removeEventListener("error", onError);
-      window.removeEventListener("unhandledrejection", onUnhandledRejection);
+      window.removeEventListener("error", onError, captureListenerOptions);
+      window.removeEventListener("unhandledrejection", onUnhandledRejection, captureListenerOptions);
     };
   }, []);
 

@@ -6,7 +6,12 @@ import {
   getConfiguredLineaNetwork,
 } from "../../../../config/publicConfig";
 import {
+  parseOptionalNonNegativeNumberEnv,
+  parseOptionalPositiveIntegerEnv,
+} from "../../../../config/envParsing";
+import {
   fetchStorageJson,
+  isSafePositiveInteger,
   parseCurrentEpoch,
   publicClient,
   CONTRACT_ADDRESS,
@@ -16,6 +21,11 @@ import { isAuthorizedHealthDiagnosticsRequest } from "../_lib/diagnosticsAuth";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { dbPath } from "../../../../server/db";
 import { getMetaJson, getRecentRewardClaims } from "../../../../server/storage";
+import {
+  getIndexerFinalityTargetBlock,
+  getIndexerTargetLagBlocks,
+  parseIndexerFinalityBlocks,
+} from "../../../lib/indexerFinality";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -25,11 +35,15 @@ const READ_ABI = parseAbi([
   "function getJackpotInfo() view returns (uint256 dailyPool, uint256 weeklyPool, uint256 lastDailyDay, uint256 lastWeeklyWeek, uint256 lastDailyEpoch, uint256 lastWeeklyEpoch, uint256 lastDailyAmount, uint256 lastWeeklyAmount)",
 ]);
 
-const LAG_WARN_BLOCKS = Number(process.env.DATA_SYNC_LAG_WARN_BLOCKS ?? String(DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS));
-const JACKPOT_RECOVERY_BLOCK_LAG = Number(process.env.JACKPOT_RECOVERY_BLOCK_LAG ?? "256");
-const RECENT_WINS_RECOVERY_BLOCK_LAG = Number(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG ?? "256");
-const INDEXER_HEARTBEAT_STALE_MS = Number(process.env.INDEXER_HEARTBEAT_STALE_MS ?? "180000");
-const DATA_SYNC_CACHE_TTL_MS = Number(process.env.DATA_SYNC_HEALTH_CACHE_TTL_MS ?? "15000");
+const LAG_WARN_BLOCKS = parseOptionalNonNegativeNumberEnv(
+  process.env.DATA_SYNC_LAG_WARN_BLOCKS,
+  DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS,
+);
+const JACKPOT_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeNumberEnv(process.env.JACKPOT_RECOVERY_BLOCK_LAG, 256);
+const RECENT_WINS_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeNumberEnv(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG, 256);
+const INDEXER_HEARTBEAT_STALE_MS = parseOptionalPositiveIntegerEnv(process.env.INDEXER_HEARTBEAT_STALE_MS, 180_000);
+const INDEXER_FINALITY_BLOCKS = parseIndexerFinalityBlocks(process.env.INDEXER_FINALITY_BLOCKS);
+const DATA_SYNC_CACHE_TTL_MS = parseOptionalPositiveIntegerEnv(process.env.DATA_SYNC_HEALTH_CACHE_TTL_MS, 15_000);
 const DATA_SYNC_CACHE_KEY = "default";
 const APP_NETWORK = getConfiguredLineaNetwork();
 const DEPLOY_BLOCK = getConfiguredDeployBlock(
@@ -98,12 +112,14 @@ type DataSyncHealthResponse = {
   contract: {
     currentEpoch: number | null;
     headBlock: string | null;
+    finalityTargetBlock: string | null;
   };
   storage: {
     currentEpochMeta: number | null;
     lastIndexedBlock: string | null;
     repairCursorBlock: string | null;
     lagBlocks: number | null;
+    lagToFinalityTargetBlocks: number | null;
     latestStoredJackpotBlock: string | null;
     latestRewardClaimBlock: string | null;
     rewardClaimsLagToHead: number | null;
@@ -194,6 +210,7 @@ type DataSyncHealthResponse = {
     dbPath: string | null;
     deployBlock: string | null;
     lagWarnBlocks: number | null;
+    indexerFinalityBlocks: string | null;
     jackpotRecoveryBlockLag: number | null;
     recentWinsRecoveryBlockLag: number | null;
     indexerHeartbeatStaleMs: number | null;
@@ -212,6 +229,11 @@ function clampPercent(value: number) {
 function ageMs(timestamp: number | null, now: number) {
   if (!Number.isFinite(timestamp ?? NaN)) return null;
   return Math.max(0, now - Number(timestamp));
+}
+
+function parseStoredBlockNumber(value: string | null | undefined): bigint | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  return BigInt(value);
 }
 
 function deriveServingMode(options: {
@@ -234,12 +256,14 @@ function redactHealthResponse(payload: DataSyncHealthResponse): DataSyncHealthRe
     contract: {
       currentEpoch: payload.contract.currentEpoch,
       headBlock: null,
+      finalityTargetBlock: null,
     },
     storage: {
       currentEpochMeta: payload.storage.currentEpochMeta,
       lastIndexedBlock: null,
       repairCursorBlock: null,
       lagBlocks: payload.storage.lagBlocks,
+      lagToFinalityTargetBlocks: payload.storage.lagToFinalityTargetBlocks,
       latestStoredJackpotBlock: null,
       latestRewardClaimBlock: null,
       rewardClaimsLagToHead: null,
@@ -324,6 +348,7 @@ function redactHealthResponse(payload: DataSyncHealthResponse): DataSyncHealthRe
       dbPath: null,
       deployBlock: null,
       lagWarnBlocks: null,
+      indexerFinalityBlocks: payload.env.indexerFinalityBlocks,
       jackpotRecoveryBlockLag: null,
       recentWinsRecoveryBlockLag: null,
       indexerHeartbeatStaleMs: null,
@@ -359,16 +384,18 @@ async function buildDataSyncHealthPayload() {
 
   const chainCurrentEpoch = Number(chainEpochRaw);
   const dbCurrentEpoch = parseCurrentEpoch(dbEpochMeta.data);
-  const dbLastIndexedBlock = dbLastIndexed.ok && dbLastIndexed.data ? BigInt(dbLastIndexed.data) : null;
-  const dbRepairCursorBlock = dbRepairCursor.ok && dbRepairCursor.data ? BigInt(dbRepairCursor.data) : null;
+  const dbLastIndexedBlock = dbLastIndexed.ok ? parseStoredBlockNumber(dbLastIndexed.data) : null;
+  const dbRepairCursorBlock = dbRepairCursor.ok ? parseStoredBlockNumber(dbRepairCursor.data) : null;
+  const finalityTargetBlock = getIndexerFinalityTargetBlock(head, INDEXER_FINALITY_BLOCKS);
   const lagBlocks = dbLastIndexedBlock !== null ? Number(head - dbLastIndexedBlock) : null;
+  const lagToFinalityTargetBlocks = getIndexerTargetLagBlocks(dbLastIndexedBlock, finalityTargetBlock);
 
   const dbEpochs = dbEpochsRaw.ok && dbEpochsRaw.data ? dbEpochsRaw.data : {};
   const maxEpochToCheck = Math.max(0, chainCurrentEpoch - 1);
   const presentEpochs = new Set<number>(
     Object.keys(dbEpochs)
       .map((k) => Number(k))
-      .filter((n) => Number.isInteger(n) && n >= 1 && n <= maxEpochToCheck),
+      .filter((n) => isSafePositiveInteger(n) && n <= maxEpochToCheck),
   );
 
   const missingEpochs: number[] = [];
@@ -394,27 +421,27 @@ async function buildDataSyncHealthPayload() {
       .map((j) => `${j.kind}_${j.epoch}`),
   );
   const jackpotBlocks = dbJackpots
-    .map((row) => Number(row.blockNumber ?? 0))
-    .filter((value) => Number.isFinite(value) && value > 0);
-  const latestStoredJackpotBlock = jackpotBlocks.length > 0 ? Math.max(...jackpotBlocks) : null;
+    .map((row) => parseStoredBlockNumber(row.blockNumber))
+    .filter((value): value is bigint => value !== null && value > 0n);
+  const latestStoredJackpotBlock = jackpotBlocks.length > 0
+    ? jackpotBlocks.reduce((max, value) => (value > max ? value : max), 0n)
+    : null;
 
   const hasLatestDailyInDb = lastDailyEpoch > 0 ? dbJackpotKeys.has(`daily_${lastDailyEpoch}`) : true;
   const hasLatestWeeklyInDb = lastWeeklyEpoch > 0 ? dbJackpotKeys.has(`weekly_${lastWeeklyEpoch}`) : true;
-  const latestRewardClaimBlock =
-    recentRewardClaims.length > 0
-      ? Math.max(
-          ...recentRewardClaims
-            .map((row) => Number(row.blockNumber))
-            .filter((value) => Number.isFinite(value) && value > 0),
-        )
-      : null;
+  const rewardClaimBlocks = recentRewardClaims
+    .map((row) => parseStoredBlockNumber(row.blockNumber))
+    .filter((value): value is bigint => value !== null && value > 0n);
+  const latestRewardClaimBlock = rewardClaimBlocks.length > 0
+    ? rewardClaimBlocks.reduce((max, value) => (value > max ? value : max), 0n)
+    : null;
   const rewardClaimsLagToHead =
     latestRewardClaimBlock !== null
-      ? Number(head - BigInt(latestRewardClaimBlock))
+      ? Number(head - latestRewardClaimBlock)
       : null;
   const rewardClaimsLagToIndexer =
     dbLastIndexedBlock !== null && latestRewardClaimBlock !== null
-      ? Math.max(0, Number(dbLastIndexedBlock - BigInt(latestRewardClaimBlock)))
+      ? Math.max(0, Number(dbLastIndexedBlock - latestRewardClaimBlock))
       : null;
 
   const totalBlocksToIndex =
@@ -451,8 +478,9 @@ async function buildDataSyncHealthPayload() {
     if (elapsedMs >= 5_000 && deltaBlocks > 0) {
       blockRatePerMinute = Number(((deltaBlocks * 60_000) / elapsedMs).toFixed(2));
       epochRatePerMinute = Number(((deltaEpochs * 60_000) / elapsedMs).toFixed(2));
-      if (lagBlocks !== null && blockRatePerMinute > 0) {
-        estimatedMinutesToHead = Number((lagBlocks / blockRatePerMinute).toFixed(1));
+      const effectiveLag = lagToFinalityTargetBlocks ?? lagBlocks;
+      if (effectiveLag !== null && blockRatePerMinute > 0) {
+        estimatedMinutesToHead = Number((effectiveLag / blockRatePerMinute).toFixed(1));
       }
     }
   }
@@ -477,9 +505,9 @@ async function buildDataSyncHealthPayload() {
   const syncState =
     dbLastIndexedBlock === null
       ? "bootstrapping"
-      : lagBlocks !== null && lagBlocks <= LAG_WARN_BLOCKS && missingEpochs.length === 0
+      : lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks <= LAG_WARN_BLOCKS && missingEpochs.length === 0
         ? "synced"
-        : lagBlocks !== null && lagBlocks <= Math.max(LAG_WARN_BLOCKS, 512) && missingEpochs.length <= 3
+        : lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks <= Math.max(LAG_WARN_BLOCKS, 512) && missingEpochs.length <= 3
           ? "near_head"
           : "catching_up";
 
@@ -497,6 +525,7 @@ async function buildDataSyncHealthPayload() {
   const runHeartbeatAgeMs = ageMs(indexerRunStatus?.lastHeartbeatAt ?? null, now);
   const repairAgeMs = ageMs(indexerRepairStatus?.at ?? null, now);
   const reconcileAgeMs = ageMs(indexerReconcileStatus?.at ?? null, now);
+  const effectiveIndexerLagForStaleness = lagToFinalityTargetBlocks ?? lagBlocks;
   const runIsActive =
     runHeartbeatAgeMs !== null &&
     runHeartbeatAgeMs <= INDEXER_HEARTBEAT_STALE_MS &&
@@ -521,7 +550,7 @@ async function buildDataSyncHealthPayload() {
     reconcileAgeMs !== null &&
     reconcileAgeMs > INDEXER_HEARTBEAT_STALE_MS;
   const degraded =
-    (lagBlocks !== null && lagBlocks > LAG_WARN_BLOCKS) ||
+    (lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks > LAG_WARN_BLOCKS) ||
     (syncState === "catching_up" && missingEpochs.length > 0) ||
     missingEpochsAreStale ||
     !hasLatestDailyInDb ||
@@ -536,12 +565,14 @@ async function buildDataSyncHealthPayload() {
       contract: {
         currentEpoch: chainCurrentEpoch,
         headBlock: head.toString(),
+        finalityTargetBlock: finalityTargetBlock?.toString() ?? null,
       },
       storage: {
         currentEpochMeta: dbCurrentEpoch,
         lastIndexedBlock: dbLastIndexedBlock?.toString() ?? null,
         repairCursorBlock: dbRepairCursorBlock?.toString() ?? null,
         lagBlocks,
+        lagToFinalityTargetBlocks,
         latestStoredJackpotBlock: latestStoredJackpotBlock?.toString() ?? null,
         latestRewardClaimBlock: latestRewardClaimBlock?.toString() ?? null,
         rewardClaimsLagToHead,
@@ -604,8 +635,8 @@ async function buildDataSyncHealthPayload() {
           ageMs: repairAgeMs,
           stale:
             repairAgeMs !== null &&
-            lagBlocks !== null &&
-            lagBlocks > LAG_WARN_BLOCKS &&
+            effectiveIndexerLagForStaleness !== null &&
+            effectiveIndexerLagForStaleness > LAG_WARN_BLOCKS &&
             repairAgeMs > INDEXER_HEARTBEAT_STALE_MS,
         },
         reconcile: {
@@ -620,7 +651,7 @@ async function buildDataSyncHealthPayload() {
       },
       hints: [
         missingEpochs.length > 0 && !nearHeadGapIsTolerable ? "Indexer repair/reconcile is still catching up missing epochs." : null,
-        lagBlocks !== null && lagBlocks > LAG_WARN_BLOCKS ? "Indexer is lagging by blocks; check bot/indexer supervisor." : null,
+        lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks > LAG_WARN_BLOCKS ? "Indexer is lagging behind the finality target; check bot/indexer supervisor." : null,
         !hasLatestDailyInDb || !hasLatestWeeklyInDb ? "Latest jackpot event not in DB yet; API fallback should still show it." : null,
         jackpotServingMode !== "indexer_fast_path" ? "Jackpots API is in recovery-capable mode and may pull a fresh tail from chain." : null,
         recentWinsServingMode !== "indexer_fast_path" ? "Recent wins API is in recovery-capable mode and may pull RewardClaimed logs from chain." : null,
@@ -633,6 +664,7 @@ async function buildDataSyncHealthPayload() {
         dbPath,
         deployBlock: DEPLOY_BLOCK.toString(),
         lagWarnBlocks: toNum(LAG_WARN_BLOCKS),
+        indexerFinalityBlocks: INDEXER_FINALITY_BLOCKS.toString(),
         jackpotRecoveryBlockLag: toNum(JACKPOT_RECOVERY_BLOCK_LAG),
         recentWinsRecoveryBlockLag: toNum(RECENT_WINS_RECOVERY_BLOCK_LAG),
         indexerHeartbeatStaleMs: toNum(INDEXER_HEARTBEAT_STALE_MS),
@@ -644,6 +676,25 @@ function toHealthResponse(request: NextRequest, payload: DataSyncHealthResponse)
   return NextResponse.json(
     isAuthorizedHealthDiagnosticsRequest(request) ? payload : redactHealthResponse(payload),
     {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      },
+    },
+  );
+}
+
+function toHealthErrorResponse(request: NextRequest, err: unknown) {
+  const authorized = isAuthorizedHealthDiagnosticsRequest(request);
+  const privateError = err instanceof Error ? (err.message || "unknown") : String(err ?? "unknown");
+  return NextResponse.json(
+    {
+      status: "error",
+      error: authorized ? privateError : "Internal error",
+    },
+    {
+      status: 500,
       headers: {
         "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
         Pragma: "no-cache",
@@ -692,16 +743,7 @@ export async function GET(request: NextRequest) {
       return toHealthResponse(request, await inflight);
     } catch (err) {
       console.error("[api/health/data-sync] Error:", err);
-      const authorized = isAuthorizedHealthDiagnosticsRequest(request);
-      return NextResponse.json(
-        {
-          status: "error",
-          error: authorized
-            ? ((err as Error).message || "unknown")
-            : "Internal error",
-        },
-        { status: 500 },
-      );
+      return toHealthErrorResponse(request, err);
     }
   }
 
@@ -726,15 +768,6 @@ export async function GET(request: NextRequest) {
       scheduleDataSyncRefresh();
       return toHealthResponse(request, stale);
     }
-    const authorized = isAuthorizedHealthDiagnosticsRequest(request);
-    return NextResponse.json(
-      {
-        status: "error",
-        error: authorized
-          ? ((err as Error).message || "unknown")
-          : "Internal error",
-      },
-      { status: 500 },
-    );
+    return toHealthErrorResponse(request, err);
   }
 }

@@ -1,8 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatUnits } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { log } from "../lib/logger";
+import { formatLineaAmountFixed, parseLineaAmountWei } from "../lib/tokenAmountMath";
+import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 
 export interface JackpotHistoryEntry {
   epoch: string;
@@ -52,13 +55,29 @@ function normalizeAmount(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseSafePositiveIntegerNumber(value: string | null | undefined): number {
+  if (!value || !/^\d+$/.test(value)) return 0;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function normalizeAmountWei(row: Record<string, unknown>) {
+  const fromAmount = parseLineaAmountWei(typeof row.amount === "string" ? row.amount : undefined);
+  if (fromAmount > 0n) return fromAmount;
+  return parseLineaAmountWei(String(row.amountNum ?? ""));
+}
+
 function toEntry(row: Record<string, unknown>): JackpotHistoryEntry | null {
   const epoch = String(row.epoch ?? "").trim();
   if (!epoch) return null;
 
   const kind = row.kind === "weekly" ? "weekly" : "daily";
-  const amountNum = normalizeAmount(row.amountNum, normalizeAmount(row.amount));
-  const amount = amountNum.toFixed(2);
+  const amountWei = normalizeAmountWei(row);
+  const amountNum =
+    amountWei > 0n
+      ? normalizeAmount(formatUnits(amountWei, 18))
+      : normalizeAmount(row.amountNum, normalizeAmount(row.amount));
+  const amount = amountWei > 0n ? formatLineaAmountFixed(amountWei, 2) : amountNum.toFixed(2);
 
   return {
     epoch,
@@ -77,7 +96,7 @@ function toEntry(row: Record<string, unknown>): JackpotHistoryEntry | null {
 function sortByBlockDesc(entries: JackpotHistoryEntry[]) {
   return [...entries].sort((a, b) => {
     if (a.blockNumber === b.blockNumber) {
-      const epochDelta = Number(b.epoch) - Number(a.epoch);
+      const epochDelta = parseSafePositiveIntegerNumber(b.epoch) - parseSafePositiveIntegerNumber(a.epoch);
       if (epochDelta !== 0) return epochDelta;
       if (a.kind !== b.kind) return a.kind === "weekly" ? -1 : 1;
       return (b.txHash ?? "").localeCompare(a.txHash ?? "");
@@ -86,7 +105,8 @@ function sortByBlockDesc(entries: JackpotHistoryEntry[]) {
   });
 }
 
-function normalizeEntries(rows: unknown[]): JackpotHistoryEntry[] {
+export function normalizeEntries(rows: unknown): JackpotHistoryEntry[] {
+  if (!Array.isArray(rows)) return [];
   return rows
     .map((item) => toEntry((item ?? {}) as Record<string, unknown>))
     .filter((item): item is JackpotHistoryEntry => item !== null);
@@ -123,10 +143,7 @@ function loadCachedEntries(): { entries: JackpotHistoryEntry[]; savedAt: number 
     }
     return {
       entries: normalizeEntries(Array.isArray(parsed.jackpots) ? parsed.jackpots : []),
-      savedAt:
-        typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
-          ? parsed.savedAt
-          : null,
+      savedAt: normalizeCacheTimestamp(parsed.savedAt),
     };
   } catch {
     return { entries: [], savedAt: null };
@@ -155,16 +172,11 @@ function saveCachedEntries(entries: JackpotHistoryEntry[]) {
 async function fetchFromApi(): Promise<JackpotHistoryEntry[]> {
   const res = await fetch("/api/jackpots", { cache: "no-store" });
   const json = (await res.json()) as JackpotApiResponse;
-  const jackpots = (json.jackpots ?? []) as Array<Record<string, unknown>>;
-
   if (!res.ok || json.error) {
     throw new Error(json.error || `HTTP ${res.status}`);
   }
 
-  return jackpots
-    .map((row) => toEntry(row))
-    .filter((item): item is JackpotHistoryEntry => item !== null)
-    .slice(0, JACKPOT_LIMIT);
+  return normalizeEntries(json.jackpots).slice(0, JACKPOT_LIMIT);
 }
 
 export function useJackpotHistory(enabled = true) {

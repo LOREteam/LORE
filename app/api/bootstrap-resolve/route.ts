@@ -32,6 +32,7 @@ const REPLACE_PENDING_FEE_BUMP_STEPS = [
 const CANCEL_TX_GAS_LIMIT = 21_000n;
 const CANCEL_TX_BALANCE_HEADROOM_PERCENT = 98n;
 const INSUFFICIENT_FUNDS_RETRY_MS = 300_000;
+const RESOLVE_RECEIPT_TIMEOUT_MS = 25_000;
 
 function isKeeperInsufficientFundsError(message: string) {
   const lower = message.toLowerCase();
@@ -202,11 +203,60 @@ export async function POST(request: Request) {
               }),
         });
 
+        const receipt = await publicClient.waitForTransactionReceipt({
+          hash,
+          timeout: RESOLVE_RECEIPT_TIMEOUT_MS,
+        }).catch(() => null);
+
+        if (receipt?.status === "reverted") {
+          const latestEpoch = await publicClient.readContract({
+            address: CONTRACT_ADDRESS,
+            abi: BOOTSTRAP_RESOLVE_ABI,
+            functionName: "currentEpoch",
+          }) as bigint;
+          if (latestEpoch > currentEpoch) {
+            return NextResponse.json({
+              ok: true,
+              action: "noop",
+              reason: "epoch_no_longer_current",
+              currentEpoch: currentEpoch.toString(),
+              latestEpoch: latestEpoch.toString(),
+              hash,
+            });
+          }
+
+          const latestEpochData = await publicClient.readContract({
+            address: CONTRACT_ADDRESS,
+            abi: BOOTSTRAP_RESOLVE_ABI,
+            functionName: "epochs",
+            args: [currentEpoch],
+          }) as [bigint, bigint, bigint, boolean, boolean, boolean];
+          if (Boolean(latestEpochData[3])) {
+            return NextResponse.json({
+              ok: true,
+              action: "noop",
+              reason: "epoch_already_resolved",
+              currentEpoch: currentEpoch.toString(),
+              hash,
+            });
+          }
+
+          return NextResponse.json({
+            ok: true,
+            action: "noop",
+            reason: "resolve_tx_reverted",
+            currentEpoch: currentEpoch.toString(),
+            hash,
+            retryAfter: Math.max(1, Math.ceil(RESOLVE_THROTTLE_MS / 1000)),
+          });
+        }
+
         return NextResponse.json({
           ok: true,
           action: "sent",
           currentEpoch: currentEpoch.toString(),
           hash,
+          txStatus: receipt?.status,
         });
       } catch (err) {
         lastWriteError = err;

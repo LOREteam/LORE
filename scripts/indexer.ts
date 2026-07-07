@@ -26,10 +26,16 @@ import {
   getConfiguredLineaNetwork,
   getDefaultLineaRpcs,
   getLineaChain,
-  getPreferredLineaRpcs,
+  getStableLineaReadRpcs,
 } from "../config/publicConfig";
 import { assertProductionRuntimeConfig } from "../config/productionRuntime";
+import {
+  parseOptionalNonNegativeBigIntEnv,
+  parseOptionalPositiveIntegerEnv,
+} from "../config/envParsing";
 import { tileMaskToTileIds } from "../app/lib/tileMask";
+import { normalizeTileAmounts } from "../app/lib/tokenAmountMath";
+import { getIndexerFinalityTargetBlock, parseIndexerFinalityBlocks } from "../app/lib/indexerFinality";
 import {
   patchJsonPath,
   putJsonPath,
@@ -65,10 +71,17 @@ const POLL_INTERVAL_MS = 15_000;
 const RETRY_COUNT = 5;
 const RETRY_DELAY_MS = 5_000;
 const INTER_CHUNK_DELAY_MS = 400;
-const RPC_CALL_TIMEOUT_MS = Number(process.env.INDEXER_RPC_TIMEOUT_MS ?? "45000");
-const MIN_ADAPTIVE_LOG_RANGE_BLOCKS = BigInt(process.env.INDEXER_MIN_ADAPTIVE_LOG_RANGE_BLOCKS ?? "250");
-const RECONCILE_INTERVAL_MS = Number(process.env.INDEXER_RECONCILE_INTERVAL_MS ?? String(DEFAULT_INDEXER_RECONCILE_INTERVAL_MS));
-const RECONCILE_MAX_EPOCHS_PER_PASS = Number(process.env.INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS ?? String(DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS));
+const RPC_CALL_TIMEOUT_MS = parseOptionalPositiveIntegerEnv(process.env.INDEXER_RPC_TIMEOUT_MS, 45_000);
+const MIN_ADAPTIVE_LOG_RANGE_BLOCKS = parseOptionalNonNegativeBigIntEnv(process.env.INDEXER_MIN_ADAPTIVE_LOG_RANGE_BLOCKS, 250n);
+const INDEXER_FINALITY_BLOCKS = parseIndexerFinalityBlocks(process.env.INDEXER_FINALITY_BLOCKS);
+const RECONCILE_INTERVAL_MS = parseOptionalPositiveIntegerEnv(
+  process.env.INDEXER_RECONCILE_INTERVAL_MS,
+  DEFAULT_INDEXER_RECONCILE_INTERVAL_MS,
+);
+const RECONCILE_MAX_EPOCHS_PER_PASS = parseOptionalPositiveIntegerEnv(
+  process.env.INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS,
+  DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS,
+);
 
 let lastReconcileAtMs = 0;
 
@@ -78,6 +91,9 @@ type IndexerRunStatus = {
   lastHeartbeatAt?: number;
   fromBlock: string;
   toBlock: string;
+  headBlock?: string;
+  finalityBlocks?: string;
+  targetBlock?: string | null;
   totalLogs: number;
   currentChunk?: number;
   totalChunks?: number;
@@ -124,7 +140,7 @@ const READ_ABI = parseAbi([
 const client = createPublicClient({
   chain: APP_CHAIN,
   transport: fallback(
-    getPreferredLineaRpcs(
+    getStableLineaReadRpcs(
       process.env.KEEPER_RPC_URL ?? getDefaultLineaRpcs(APP_NETWORK)[0],
       APP_NETWORK,
     ).map((url) => http(url, {
@@ -479,25 +495,12 @@ function normalizeBetRecord(bet: BetRecord): BetRecord {
     return { ...bet, amounts: [] };
   }
 
-  const normalizedAmounts =
-    Array.isArray(bet.amounts) && bet.amounts.length === bet.tileIds.length
-      ? bet.amounts.map((value) => {
-          const parsed = Number.parseFloat(String(value));
-          return Number.isFinite(parsed) ? parsed : 0;
-        })
-      : bet.tileIds.map(() => bet.totalAmountNum / bet.tileIds.length);
-
-  const aggregate = new Map<number, number>();
-  for (let index = 0; index < bet.tileIds.length; index += 1) {
-    const tileId = Number(bet.tileIds[index]);
-    if (!Number.isInteger(tileId) || tileId <= 0 || tileId > 25) continue;
-    aggregate.set(tileId, (aggregate.get(tileId) ?? 0) + (normalizedAmounts[index] ?? 0));
-  }
+  const normalized = normalizeTileAmounts(bet.tileIds, bet.amounts, bet.totalAmount);
 
   return {
     ...bet,
-    tileIds: [...aggregate.keys()],
-    amounts: [...aggregate.values()].map((value) => String(value)),
+    tileIds: normalized.tileIds,
+    amounts: normalized.amounts,
   };
 }
 
@@ -509,6 +512,11 @@ function processLogs(logs: Log[]) {
   const feeFlushes: FeeFlushRecord[] = [];
   const batchClaims: BatchClaimRecord[] = [];
   const resolverRewards: ResolverRewardRecord[] = [];
+  const rebateBatchClaimTxs = new Set(
+    logs
+      .filter((log) => log.topics[0] === rebateBatchClaimedSig && log.transactionHash)
+      .map((log) => log.transactionHash!.toLowerCase()),
+  );
 
   for (const log of logs) {
     const topic0 = log.topics[0];
@@ -653,7 +661,19 @@ function processLogs(logs: Log[]) {
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
       } else if (topic0 === rebateClaimedSig) {
-        continue;
+        if (log.transactionHash && rebateBatchClaimTxs.has(log.transactionHash.toLowerCase())) continue;
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "RebateClaimed") continue;
+        const args = decoded.args as { user: string; epoch: bigint; amount: bigint };
+        batchClaims.push({
+          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          kind: "rebate",
+          user: args.user.toLowerCase(),
+          totalAmount: formatUnits(args.amount, 18),
+          epochsClaimed: 1,
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
       } else if (topic0 === rebateBatchClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RebateBatchClaimed") continue;
@@ -1069,10 +1089,31 @@ async function runEpochReconcile(currentBlock: bigint) {
 // Main loop
 async function runOnce() {
   const lastBlock = await getLastBlock();
-  const currentBlock = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
+  const headBlock = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
+  const currentBlock = getIndexerFinalityTargetBlock(headBlock, INDEXER_FINALITY_BLOCKS);
 
   const fromBlock = lastBlock + 1n;
   const startedAt = Date.now();
+  if (currentBlock === null) {
+    const status: IndexerRunStatus = {
+      startedAt,
+      lastHeartbeatAt: startedAt,
+      completedAt: Date.now(),
+      fromBlock: fromBlock.toString(),
+      toBlock: headBlock.toString(),
+      headBlock: headBlock.toString(),
+      finalityBlocks: INDEXER_FINALITY_BLOCKS.toString(),
+      targetBlock: null,
+      totalLogs: 0,
+      currentChunk: 0,
+      totalChunks: 0,
+      lastProcessedBlock: lastBlock.toString(),
+    };
+    setIndexerStatus("indexerRunStatus", status);
+    await updateCurrentEpochMeta();
+    return 0;
+  }
+
   if (fromBlock > currentBlock) {
     const status: IndexerRunStatus = {
       startedAt,
@@ -1080,6 +1121,9 @@ async function runOnce() {
       completedAt: Date.now(),
       fromBlock: fromBlock.toString(),
       toBlock: currentBlock.toString(),
+      headBlock: headBlock.toString(),
+      finalityBlocks: INDEXER_FINALITY_BLOCKS.toString(),
+      targetBlock: currentBlock.toString(),
       totalLogs: 0,
       currentChunk: 0,
       totalChunks: 0,
@@ -1089,7 +1133,9 @@ async function runOnce() {
     return 0;
   }
 
-  console.log(`[indexer] Scanning blocks ${fromBlock} -> ${currentBlock} (${currentBlock - fromBlock + 1n} blocks)`);
+  console.log(
+    `[indexer] Scanning blocks ${fromBlock} -> ${currentBlock} (${currentBlock - fromBlock + 1n} blocks, head ${headBlock}, finality ${INDEXER_FINALITY_BLOCKS})`,
+  );
 
   let totalLogs = 0;
   let chunkCount = 0;
@@ -1103,6 +1149,9 @@ async function runOnce() {
     lastHeartbeatAt: startedAt,
     fromBlock: fromBlock.toString(),
     toBlock: currentBlock.toString(),
+    headBlock: headBlock.toString(),
+    finalityBlocks: INDEXER_FINALITY_BLOCKS.toString(),
+    targetBlock: currentBlock.toString(),
     totalLogs: 0,
     currentChunk: 0,
     totalChunks: chunkCount,
@@ -1140,6 +1189,9 @@ async function runOnce() {
       lastHeartbeatAt: Date.now(),
       fromBlock: fromBlock.toString(),
       toBlock: currentBlock.toString(),
+      headBlock: headBlock.toString(),
+      finalityBlocks: INDEXER_FINALITY_BLOCKS.toString(),
+      targetBlock: currentBlock.toString(),
       totalLogs,
       currentChunk: chunkIndex,
       totalChunks: chunkCount,
@@ -1155,6 +1207,9 @@ async function runOnce() {
     completedAt: Date.now(),
     fromBlock: fromBlock.toString(),
     toBlock: currentBlock.toString(),
+    headBlock: headBlock.toString(),
+    finalityBlocks: INDEXER_FINALITY_BLOCKS.toString(),
+    targetBlock: currentBlock.toString(),
     totalLogs,
     currentChunk: chunkCount,
     totalChunks: chunkCount,
@@ -1170,13 +1225,19 @@ async function main() {
   console.log(`[indexer] Contract: ${CONTRACT}`);
   console.log(`[indexer] Deploy block: ${DEPLOY_BLOCK}`);
   console.log(`[indexer] Start block: ${INDEXER_START_BLOCK}`);
+  console.log(`[indexer] Finality blocks: ${INDEXER_FINALITY_BLOCKS}`);
   console.log(`[indexer] Mode: ${isWatch ? "watch (continuous)" : "one-shot"}`);
 
   await runOnce();
   {
     const head = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
-    await runRepairPass(head);
-    await runEpochReconcile(head);
+    const target = getIndexerFinalityTargetBlock(head, INDEXER_FINALITY_BLOCKS);
+    if (target === null) {
+      await updateCurrentEpochMeta();
+    } else {
+      await runRepairPass(target);
+      await runEpochReconcile(target);
+    }
   }
 
   if (isWatch) {
@@ -1188,8 +1249,13 @@ async function main() {
       try {
         await runOnce();
         const head = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
-        await runRepairPass(head);
-        await runEpochReconcile(head);
+        const target = getIndexerFinalityTargetBlock(head, INDEXER_FINALITY_BLOCKS);
+        if (target === null) {
+          await updateCurrentEpochMeta();
+        } else {
+          await runRepairPass(target);
+          await runEpochReconcile(target);
+        }
       } catch (err) {
         console.error(`[indexer] Error in watch loop:`, (err as Error).message);
       } finally {
@@ -1199,7 +1265,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("[indexer] Fatal:", err);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    if (!process.argv.includes("--watch")) {
+      process.exit(0);
+    }
+  })
+  .catch((err) => {
+    console.error("[indexer] Fatal:", err);
+    process.exit(1);
+  });

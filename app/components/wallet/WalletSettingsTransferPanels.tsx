@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { EXPLORER_TX_BASE_URL } from "../../lib/constants";
+import { getExplorerTxUrl } from "../../lib/explorerLinks";
 import { shortenAddress } from "../../lib/utils";
 import type { WalletTransfersSummary } from "../../hooks/useWalletTransfers";
 import { UiButton } from "../ui/UiButton";
@@ -109,12 +109,12 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
               <div className="flex gap-3 mb-3">
                 <div className="flex-1 rounded-lg bg-emerald-500/6 border border-emerald-500/20 p-2.5 text-center">
                   <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Deposited</div>
-                  <div className="text-sm font-bold text-emerald-400 font-mono">{walletTransfers.totalIn.toFixed(2)}</div>
+                  <div className="lore-nums text-sm font-bold text-emerald-400">{walletTransfers.totalIn.toFixed(2)}</div>
                   <div className="text-[9px] text-gray-400">LINEA</div>
                 </div>
                 <div className="flex-1 rounded-lg bg-red-500/6 border border-red-500/20 p-2.5 text-center">
                   <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Withdrawn</div>
-                  <div className="text-sm font-bold text-red-400 font-mono">{walletTransfers.totalOut.toFixed(2)}</div>
+                  <div className="lore-nums text-sm font-bold text-red-400">{walletTransfers.totalOut.toFixed(2)}</div>
                   <div className="text-[9px] text-gray-400">LINEA</div>
                 </div>
               </div>
@@ -142,6 +142,7 @@ const WalletTransferHistoryRow = React.memo(function WalletTransferHistoryRow({
   transfer: NonNullable<WalletTransfersSummary["transfers"]>[number];
 }) {
   const isInbound = transfer.direction === "in";
+  const txUrl = getExplorerTxUrl(transfer.txHash);
 
   return (
     <div className="flex items-center justify-between px-3 py-2 hover:bg-white/2">
@@ -149,16 +150,20 @@ const WalletTransferHistoryRow = React.memo(function WalletTransferHistoryRow({
         <span className={`text-[10px] font-bold uppercase tracking-wider ${isInbound ? "text-emerald-400" : "text-red-400"}`}>
           {isInbound ? "IN" : "OUT"}
         </span>
-        <a
-          href={`${EXPLORER_TX_BASE_URL}/${transfer.txHash}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[9px] font-mono text-violet-400/50 hover:text-violet-400 transition-colors"
-        >
-          {transfer.txHash.slice(0, 8)}...{transfer.txHash.slice(-4)}
-        </a>
+        {txUrl ? (
+          <a
+            href={txUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[9px] font-mono text-violet-400/50 hover:text-violet-400 transition-colors"
+          >
+            {transfer.txHash.slice(0, 8)}...{transfer.txHash.slice(-4)}
+          </a>
+        ) : (
+          <span className="text-[9px] font-mono text-gray-500">pending</span>
+        )}
       </div>
-      <span className={`text-xs font-bold font-mono ${isInbound ? "text-emerald-400" : "text-red-400"}`}>
+      <span className={`lore-nums text-xs font-bold ${isInbound ? "text-emerald-400" : "text-red-400"}`}>
         {isInbound ? "+" : "-"}{transfer.amount} <span className="text-gray-400 text-[9px]">LINEA</span>
       </span>
     </div>

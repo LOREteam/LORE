@@ -73,6 +73,7 @@ interface ManualBetProps {
   walletConnected: boolean;
   coldBootDefaults?: boolean;
   liveStateReady?: boolean;
+  readOnlyReason?: string | null;
   selectedTilesCount: number;
   isPending: boolean;
   isRevealing: boolean;
@@ -87,6 +88,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   walletConnected,
   coldBootDefaults = false,
   liveStateReady = true,
+  readOnlyReason = null,
   selectedTilesCount,
   isPending,
   isRevealing,
@@ -109,10 +111,10 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     !liveStateReady && !coldBootDefaults
       ? "Waiting for live epoch sync"
       : null;
-  const quickPickDisabled = !liveStateReady || isPending || isRevealing || isAnalyzing || isAutoMining;
+  const quickPickDisabled = Boolean(readOnlyReason) || !liveStateReady || isPending || isRevealing || isAnalyzing || isAutoMining;
   const actionVariant = isPending || (!liveStateReady && !coldBootDefaults)
     ? "pending"
-    : isDisabled
+    : readOnlyReason || isDisabled
       ? "locked"
       : "primary";
 
@@ -171,11 +173,11 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           inputMode="decimal"
           value={betAmount}
           onChange={(e) => setBetAmount(e.target.value.slice(0, 20))}
-          disabled={isPending || isRevealing}
+          disabled={Boolean(readOnlyReason) || isPending || isRevealing}
           maxLength={20}
           tone={betAmountError ? "danger" : "default"}
           errorText={betAmountError ?? undefined}
-          className="console-input h-9 px-3 text-base font-black"
+          className="console-input lore-nums h-9 px-3 text-base font-black"
         />
       </div>
 
@@ -194,6 +196,14 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-violet-500/8 border border-violet-500/20 mb-1.5">
           <span className="text-[8px] font-bold text-violet-300/80 uppercase tracking-wide">
             {manualStatusText}
+          </span>
+        </div>
+      )}
+
+      {readOnlyReason && (
+        <div className="mb-1.5 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2 py-1.5">
+          <span className="text-[8px] font-bold uppercase tracking-wide text-amber-300">
+            {readOnlyReason}
           </span>
         </div>
       )}
@@ -238,8 +248,9 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
       </div>
 
       <UiButton
+        data-testid="manual-bet-action"
         onClick={() => onMine(betAmount)}
-        disabled={isDisabled}
+        disabled={Boolean(readOnlyReason) || isDisabled}
         variant={actionVariant}
         size="sm"
         uppercase
@@ -256,6 +267,8 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           </span>
         ) : !liveStateReady && !coldBootDefaults ? (
           "SYNCING..."
+        ) : readOnlyReason ? (
+          "BETTING PAUSED"
         ) : requiresLogin ? (
           "LOGIN TO BET"
         ) : selectedTilesCount > 0 ? (
@@ -282,6 +295,7 @@ interface AutoMinerProps {
   isAnalyzing?: boolean;
   coldBootDefaults?: boolean;
   liveStateReady?: boolean;
+  readOnlyReason?: string | null;
   autoMineProgress?: string | null;
   formattedBalance?: string | null;
   walletConnected: boolean;
@@ -298,6 +312,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   isAnalyzing = false,
   coldBootDefaults = false,
   liveStateReady = true,
+  readOnlyReason = null,
   autoMineProgress,
   formattedBalance,
   walletConnected,
@@ -327,6 +342,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
     isRevealing,
     isAnalyzing,
     liveStateReady,
+    readOnlyReason,
     formattedBalance,
     walletConnected,
     runningParams,
@@ -337,6 +353,11 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   const requiresLogin = !walletConnected;
   const phaseMeta = getAutoMinePhaseMeta(autoMinePhase);
   const phaseProgressText = autoMineProgress ?? phaseMeta.defaultProgress;
+  const showAutoMineProgress = Boolean(phaseProgressText) && (
+    isAutoMining ||
+    autoMinePhase === "retry-wait" ||
+    autoMinePhase === "session-expired"
+  );
   const compactProgressMatch = phaseProgressText?.match(/^(\d+)\s*\/\s*(\d+)\s*-\s*(.+)$/i);
   const compactProgressCurrent = compactProgressMatch ? Number(compactProgressMatch[1]) : null;
   const compactProgressTotal = compactProgressMatch ? Number(compactProgressMatch[2]) : null;
@@ -344,6 +365,8 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   const buttonDisabled = requiresLogin || isDisabled || autoMinePhase === "retry-wait" || autoMinePhase === "session-expired";
   const buttonLabel = isAutoMining
     ? "STOP BOT"
+    : readOnlyReason
+      ? "BETTING PAUSED"
     : autoMinePhase === "retry-wait"
       ? "RESUME PENDING"
       : autoMinePhase === "session-expired"
@@ -412,7 +435,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
               label="Bet Size"
               value={displayBetSize}
               onChange={setBetSize}
-              disabled={isPending || isRevealing || isAutoMining}
+              disabled={Boolean(readOnlyReason) || isPending || isRevealing || isAutoMining}
               inputMode="decimal"
               errorText={betSizeError}
               accent="sky"
@@ -422,7 +445,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
               label="Targets"
               value={displayTargets}
               onChange={handleTargetsChange}
-              disabled={isPending || isRevealing || isAutoMining}
+              disabled={Boolean(readOnlyReason) || isPending || isRevealing || isAutoMining}
               type="number"
               min={1}
               max={GRID_SIZE}
@@ -435,7 +458,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
             label="Cycles"
             value={displayCycles}
             onChange={handleCyclesChange}
-            disabled={isPending || isRevealing || isAutoMining}
+            disabled={Boolean(readOnlyReason) || isPending || isRevealing || isAutoMining}
             type="number"
             min={1}
             className="mb-2"
@@ -476,7 +499,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
         </>
       )}
 
-      {isAutoMining && phaseProgressText && (
+      {showAutoMineProgress && phaseProgressText && (
         compact ? (
           <div className="mb-2 flex min-h-5 items-center justify-between gap-3 px-1">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -525,6 +548,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
       )}
 
       <UiButton
+        data-testid="auto-miner-action"
         onClick={() => onToggle(betSize, targets, cycles)}
         disabled={buttonDisabled}
         variant={autoButtonVariant}

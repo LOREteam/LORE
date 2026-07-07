@@ -106,7 +106,7 @@ export async function GET(request: NextRequest) {
     limit: 30,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
   if (!isAuthorizedAdminRouteRequest(request)) {
     return applyNoStoreHeaders(
@@ -135,7 +135,7 @@ export async function POST(request: NextRequest) {
     limit: 10,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
   if (!isAuthorizedAdminRouteRequest(request)) {
     return applyNoStoreHeaders(

@@ -84,6 +84,7 @@ export function useLineaOreWalletRuntime({
     fetchWalletTransfers,
     notify,
     onOpenWalletSettings: openWalletSettings,
+    isPageVisible,
     minEthForGas,
     minEthWithdrawReserveWei,
   });

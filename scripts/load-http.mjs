@@ -1,12 +1,18 @@
 import { performance } from "node:perf_hooks";
+import {
+  parseNonNegativeNumberInRangeEnv,
+  parsePositiveIntegerEnv,
+  parsePositiveIntegerInRangeEnv,
+} from "./env-parsing.mjs";
 
 const BASE_URL = process.env.LOAD_BASE_URL || process.env.SMOKE_BASE_URL || "http://localhost:3001";
-const DURATION_MS = Number(process.env.LOAD_DURATION_MS || 60_000);
-const CONCURRENCY = Number(process.env.LOAD_CONCURRENCY || 500);
-const TIMEOUT_MS = Number(process.env.LOAD_TIMEOUT_MS || 10_000);
-const MAX_ERROR_RATE = Number(process.env.LOAD_MAX_ERROR_RATE || 0.01);
-const MAX_P95_MS = Number(process.env.LOAD_MAX_P95_MS || 1_500);
-const CLIENT_IPS = Math.max(1, Number(process.env.LOAD_CLIENT_IPS || CONCURRENCY));
+const ALLOW_LOCAL = process.env.LOAD_ALLOW_LOCAL === "1";
+const DURATION_MS = parsePositiveIntegerEnv(process.env.LOAD_DURATION_MS, 60_000);
+const CONCURRENCY = parsePositiveIntegerEnv(process.env.LOAD_CONCURRENCY, 50);
+const TIMEOUT_MS = parsePositiveIntegerEnv(process.env.LOAD_TIMEOUT_MS, 10_000);
+const MAX_ERROR_RATE = parseNonNegativeNumberInRangeEnv(process.env.LOAD_MAX_ERROR_RATE, 0.01, 0, 1);
+const MAX_P95_MS = parsePositiveIntegerEnv(process.env.LOAD_MAX_P95_MS, 1_500);
+const CLIENT_IPS = parsePositiveIntegerInRangeEnv(process.env.LOAD_CLIENT_IPS, CONCURRENCY, 1, CONCURRENCY);
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000001";
 
 const endpoints = [
@@ -26,6 +32,21 @@ const weightedEndpoints = endpoints.flatMap((endpoint) =>
   Array.from({ length: endpoint.weight }, () => endpoint),
 );
 
+
+function isNonLocalHttpsOrigin(value) {
+  try {
+    const url = new URL(String(value ?? "").trim());
+    const host = url.hostname.toLowerCase();
+    return url.protocol === "https:" &&
+      url.pathname === "/" &&
+      url.search === "" &&
+      url.hash === "" &&
+      !["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host) &&
+      !host.endsWith(".local");
+  } catch {
+    return false;
+  }
+}
 function percentile(values, pct) {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -81,15 +102,23 @@ async function fetchWithTimeout(path, workerId = 0) {
 }
 
 async function warmUp() {
-  await Promise.all(
+  const results = await Promise.all(
     endpoints.map(async (endpoint) => {
       try {
         await fetchWithTimeout(endpoint.path);
+        return null;
       } catch {
-        // The measured run below reports real failures.
+        return endpoint.name;
       }
     }),
   );
+  const failed = results.filter((name) => name !== null);
+  if (failed.length === endpoints.length) {
+    throw new Error(`load warm-up could not reach ${BASE_URL}; all endpoints failed`);
+  }
+  if (failed.length > 0) {
+    console.warn(`Warm-up skipped failed endpoints: ${failed.join(", ")}`);
+  }
 }
 
 async function runWorker(workerId, deadline, globalStats, byEndpoint) {
@@ -151,6 +180,10 @@ function printStats(name, stats) {
 }
 
 async function main() {
+  if (!ALLOW_LOCAL && !isNonLocalHttpsOrigin(BASE_URL)) {
+    throw new Error("LOAD_BASE_URL must be a non-local HTTPS origin for launch load evidence; set LOAD_ALLOW_LOCAL=1 only for local smoke checks");
+  }
+
   if (!Number.isFinite(CONCURRENCY) || CONCURRENCY <= 0) {
     throw new Error("LOAD_CONCURRENCY must be a positive number");
   }

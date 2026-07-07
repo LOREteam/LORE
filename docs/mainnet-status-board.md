@@ -1,39 +1,22 @@
-# Mainnet status board
+# Mainnet Status Board
 
-Snapshot date: 2026-05-28
+Current state: local launch-proof tooling is consistent, but external production/canary evidence is still missing. Mainnet launch is not approved until G1-G14 are Complete in both this board and docs/mainnet-proof-record.md.
 
-## GREEN
+Last local verification: 2026-07-05 - `npm.cmd run proof:local`, `proof:remaining`, `proof:gates -- --structure-only`, `proof:launch-map`, and `proof:readiness` passed; G1-G14 remain Missing pending external evidence.
 
-- Production runtime validation is in place via [productionRuntime.ts](/C:/Users/bogda/linea-miner-main/config/productionRuntime.ts).
-- Security headers and CSP hardening are in place via [middleware.ts](/C:/Users/bogda/linea-miner-main/app/middleware.ts).
-- The checked-in process topology is split into `lore-site`, `lore-bot`, and `lore-indexer` in [ecosystem.config.cjs](/C:/Users/bogda/linea-miner-main/ecosystem.config.cjs).
-- Browser smoke, build, and logic tests are currently green in local verification.
-- Chunk-load recovery and route-level fallback logic are in place for known lazy-load failures.
-- Production health probing exists via [check-production-health.mjs](/C:/Users/bogda/linea-miner-main/scripts/check-production-health.mjs).
-- SQLite is explicitly treated as single-node only, with a persistent-path requirement in the docs and runtime validation.
-
-## YELLOW
-
-- Auto-mine duplicate-restore and stale-nonce fixes are implemented, but still need a real-wallet mainnet canary.
-- Failure-state UX is improved, but still needs a dedicated pass over all disabled, pending, retry, and degraded states.
-- User-facing audit visibility is decent but not complete; bet history and tx-level support surfaces can still be stronger.
-- Observability exists at the app level, but host-side alerts and log aggregation are not verified from this repo alone.
-- Visual consistency across hub, overlays, and right-column surfaces is much better, but still needs a final launch QA pass.
-- First-time education exists, but mainnet-first wording and trust/risk messaging can still be tightened.
-- Winner entropy in the source no longer includes `msg.sender`, but the current model is still transparent pseudo-randomness rather than VRF/commit-reveal randomness.
-
-## RED
-
-- No final randomness model has been signed off for a money launch. A high-value launch should use VRF or a two-phase future-block reveal, or explicitly accept the remaining sequencer/timing trust model.
-- No real mainnet canary run is confirmed yet for `AutoMine` over a long enough sample.
-- No confirmed production host is green yet under `npm run health:prod`.
-- No confirmed external monitoring/alerting deployment exists yet for `site / bot / indexer`.
-- No confirmed backup-restore drill has been run yet for the SQLite file.
-
-## Recommended next moves
-
-1. Stand up the real host with persistent SQLite and split processes.
-2. Make `npm run health:prod` green on that host.
-3. Run a 50-100 round real-wallet canary for `AutoMine`.
-4. Freeze layout changes and do one final UX pass for first-time and degraded flows.
-5. Launch only after every `RED` item is cleared.
+| ID | Gate | Required proof | First check | Status |
+| --- | --- | --- | --- | --- |
+| G1 | Final contract env and funds safety | docs/signoff-proof.json with concrete contractEnv, token, deploy block, finality, and operator sign-off evidence | npm.cmd run proof:mainnet -- --strict --out=docs/mainnet-env-proof.log | Missing |
+| G2 | Owner Safe or multisig | docs/signoff-proof.json ownership section with concrete ownership.directOwnerReadEvidence and Safe/multisig governance evidence | npm.cmd run proof:signoff -- --strict | Missing |
+| G3 | Randomness model sign-off | docs/signoff-proof.json randomness section with randomness.decision and operator/signer sign-off evidence | npm.cmd run proof:signoff -- --strict | Missing |
+| G4 | Chain reconciliation | docs/signoff-proof.json chainComparison with concrete direct-chain and app/indexer evidence for jackpot, safetyPool, deposits, rewards, rebates, resolve | npm.cmd run proof:chain -- --strict --out=docs/chain-proof-snapshot.json | Missing |
+| G5 | Production process model | docs/host-proof.json showing lore-site, lore-bot, lore-indexer supervised separately with concrete supervisor evidence and persistent DB evidence | npm.cmd run proof:host:collect -- --origin=https://playlore.xyz --host-type=production --load-origin=https://canary.playlore.xyz --load-host-type=canary --health-log=docs/host-health-prod.log --load-log=docs/host-load-http.log --out=docs/host-proof.draft.json | Missing |
+| G6 | Production health and load | docs/host-proof.json with concrete health:prod evidence including numeric finalityLagBlocks, plus concrete load:http evidence on real HTTPS origins | npm.cmd run proof:host -- --strict | Missing |
+| G7 | Indexer fresh DB dry-run | docs/indexer-proof.json from fresh external DB and deploy block with concrete dry-run, INDEXER_FINALITY_BLOCKS, docs/indexer-once.log, mainnet finality, chain snapshot, and chainComparison evidence | npm.cmd run proof:indexer:collect -- --fresh-db=true --epochs=<count> --chain-id=59144 --deploy-block=<deploy-block> --finality-blocks=<finality-blocks> --indexer-log=docs/indexer-once.log --health-log=docs/indexer-health-prod.log --chain-snapshot=docs/chain-proof-snapshot.json --out=docs/indexer-proof.draft.json | Missing |
+| G8 | Backup and restore drill | docs/restore-proof.json with concrete backupSchedule, docs/restore-drill.log, docs/restore-health-prod.log, finality-aware restored health, and indexerPreservation evidence | npm.cmd run proof:restore:collect -- --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --restored-origin=https://restore.playlore.xyz --restored-host-type=restore --restore-log=docs/restore-drill.log --health-log=docs/restore-health-prod.log --out=docs/restore-proof.draft.json | Missing |
+| G9 | Monitoring and error tracking | docs/monitoring-proof.json with complete enabled health-prod, data-sync, stale-indexer-heartbeat, indexer-lag, bot-restart, indexer-restart, reverted-tx monitors, fired/recovery alerts, alert target, and error event evidence | npm.cmd run proof:monitoring:plan -- --provider=<provider> --error-provider=<error-provider> --origin=https://playlore.xyz --out=docs/monitoring-alert-test-plan.draft.md | Missing |
+| G10 | Real canary epochs | docs/canary-proof.json and live canary log with target-RPC JSONL, 50 successful auto-miner unique epochs, unique tx hashes, and concrete target/session evidence | npm.cmd run proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict | Missing |
+| G11 | Transaction recovery safety | docs/canary-proof.json and live canary log proving noDuplicateBets, noNonceLoops, noStuckPending, pendingRecoveryConverged, and concrete recovery evidence | npm.cmd run proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict | Missing |
+| G12 | Wallet QA | docs/qa-proof.json with concrete artifact-like evidence for Privy allowed origins, connect/disconnect/reconnect, wrong network, mobile Web3 browser, clean-wallet first tx, and slow auth | npm.cmd run proof:qa:plan -- --origin=https://playlore.xyz --network=linea-mainnet --chain-id=59144 --out=docs/qa-canary-test-plan.draft.md | Missing |
+| G13 | Failure UX and audit visibility | docs/qa-proof.json with concrete artifact-like evidence for disabled reasons, pending states, degraded data, bet history, auto-miner logs, and diagnostics | npm.cmd run proof:qa -- --strict | Missing |
+| G14 | Final launch QA | docs/qa-proof.json plus live canary log and concrete debug autominer smoke, mobile layout, overlays, chat geometry, and mainnet wording evidence | npm.cmd run proof:files -- --canary-log=<canary-log-file> | Missing |

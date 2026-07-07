@@ -1,8 +1,8 @@
 "use client";
 
 import React from "react";
-import { formatUnits } from "viem";
 import type { UnclaimedWin } from "../lib/types";
+import { formatLineaWeiAmountDisplay } from "../lib/tokenAmountMath";
 import { searchingQuotes, emptyStates } from "../lib/loreTexts";
 import { LoreText } from "./LoreText";
 
@@ -14,19 +14,6 @@ interface RewardScannerProps {
   onScan: () => void;
   onClaim: (epochId: string) => void;
   onClaimAll: () => void;
-}
-
-function formatRewardAmount(amountWei: string): string {
-  try {
-    const value = Number(formatUnits(BigInt(amountWei || "0"), 18));
-    if (!Number.isFinite(value)) return "0.0000";
-    return value.toLocaleString("en-US", {
-      minimumFractionDigits: 4,
-      maximumFractionDigits: 4,
-    });
-  } catch {
-    return "0.0000";
-  }
 }
 
 export const RewardScanner = React.memo(function RewardScanner({
@@ -105,8 +92,8 @@ export const RewardScanner = React.memo(function RewardScanner({
                 <span className="text-[9px] text-cyan-300/62 uppercase font-bold tracking-wider">
                   #{win.epoch}
                 </span>
-                <span className="text-[10px] font-bold text-emerald-400 whitespace-nowrap">
-                  {formatRewardAmount(win.amountWei)} LINEA
+                <span className="lore-nums text-[10px] font-bold text-emerald-400 whitespace-nowrap">
+                  {formatLineaWeiAmountDisplay(win.amountWei, 4)} LINEA
                 </span>
               </div>
               <button

@@ -207,6 +207,12 @@ export const ChatWindow = React.memo(function ChatWindow({
 
   const myAddr = walletAddress?.toLowerCase() ?? "";
   const sendLocked = sendCooldownRemainingMs > 0;
+  const sendCooldownSeconds = Math.max(1, Math.ceil(sendCooldownRemainingMs / 1000));
+  const sendButtonTitle = sendLocked
+    ? `Message cooldown active (${sendCooldownSeconds}s)`
+    : isSending
+      ? "Sending message"
+      : "Send message";
   const sendCooldownCircumference = 2 * Math.PI * 18;
   const containerShadowClass =
     variant === "floating"
@@ -259,6 +265,7 @@ export const ChatWindow = React.memo(function ChatWindow({
         <div className="flex items-center gap-1">
           <button
             type="button"
+            data-testid="chat-profile-open"
             onClick={handleOpenProfile}
             aria-label="Profile"
             title="Profile"
@@ -308,26 +315,28 @@ export const ChatWindow = React.memo(function ChatWindow({
         <div className="border-t border-violet-500/14 px-3 pb-2.5 pt-2">
           {walletAddress ? (
             authReady ? (
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  maxLength={280}
-                  placeholder={`Message as ${displayName}`}
-                  className="h-11 min-w-0 flex-1 rounded-xl border border-violet-500/14 bg-[#1a1a30] px-4 text-[15px] text-slate-100 placeholder:text-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] focus:outline-none focus:border-violet-500/38"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    void handleSend();
-                  }}
-                  disabled={!input.trim() || sendLocked || isSending}
-                  aria-label="Send message"
-                  className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-violet-600 text-white transition-all duration-200 hover:bg-violet-500 active:scale-95 disabled:pointer-events-none disabled:opacity-55"
-                  title={sendLocked ? "Message cooldown active" : "Send message"}
-                >
+              <div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    maxLength={280}
+                    placeholder={`Message as ${displayName}`}
+                    className="h-11 min-w-0 flex-1 rounded-xl border border-violet-500/14 bg-[#1a1a30] px-4 text-[15px] text-slate-100 placeholder:text-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] focus:outline-none focus:border-violet-500/38"
+                  />
+                  <button
+                    type="button"
+                    data-testid="chat-send-action"
+                    onClick={() => {
+                      void handleSend();
+                    }}
+                    disabled={!input.trim() || sendLocked || isSending}
+                    aria-label={sendButtonTitle}
+                    className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-violet-600 text-white transition-all duration-200 hover:bg-violet-500 active:scale-95 disabled:pointer-events-none disabled:opacity-55"
+                    title={sendButtonTitle}
+                  >
                   {(sendLocked || isSending) && (
                     <svg
                       aria-hidden="true"
@@ -366,7 +375,11 @@ export const ChatWindow = React.memo(function ChatWindow({
                       strokeLinejoin="round"
                     />
                   </svg>
-                </button>
+                  </button>
+                </div>
+                <div aria-live="polite" className="h-4 pt-1 text-right text-[10px] font-semibold uppercase tracking-wider text-violet-200/65">
+                  {sendLocked ? `Cooldown ${sendCooldownSeconds}s` : "\u00A0"}
+                </div>
               </div>
             ) : (
               <div className="flex flex-col gap-1">

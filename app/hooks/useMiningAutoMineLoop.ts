@@ -154,17 +154,26 @@ export async function runAutoMineLoop({
               maxMs: networkBackoffMaxMs,
               retryMax: EPOCH_WAIT_RETRY_MAX,
             });
-            if (retryDecision.kind === "give-up") {
-              log.warn("AutoMine", `epoch wait failed for ${EPOCH_WAIT_RETRY_MAX} retries, pausing loop`);
-              throw error;
-            }
+            const retryCount = retryDecision.kind === "give-up"
+              ? EPOCH_WAIT_RETRY_MAX
+              : retryDecision.retryCount;
+            const waitMs = retryDecision.kind === "give-up"
+              ? networkBackoffMaxMs
+              : retryDecision.waitMs;
             const networkErrorDecision = planAutoMineNetworkErrorTransition({
-              retryCount: retryDecision.retryCount,
-              waitMs: retryDecision.waitMs,
+              retryCount,
+              waitMs,
             });
+            if (retryDecision.kind === "give-up") {
+              log.warn(
+                "AutoMine",
+                `epoch wait still failing after ${EPOCH_WAIT_RETRY_MAX} retries, continuing recovery wait`,
+                error,
+              );
+            }
             log.warn(
               "AutoMine",
-              `epoch wait failed on round ${roundIndex + 1} (retry ${retryDecision.retryCount}/${EPOCH_WAIT_RETRY_MAX}), waiting ${(retryDecision.waitMs / 1000).toFixed(0)}s...`,
+              `epoch wait failed on round ${roundIndex + 1} (retry ${retryCount}/${EPOCH_WAIT_RETRY_MAX}), waiting ${(waitMs / 1000).toFixed(0)}s...`,
               error,
             );
             loopState = await applyTransitionAction({
@@ -345,11 +354,24 @@ export async function runAutoMineLoop({
         });
 
         if (activeRoundCommand) {
-          const recoveredRound = await adapter.recoverRoundCommand({
-            command: activeRoundCommand,
-            roundIndex,
-            rounds,
-          });
+          let recoveredRound;
+          try {
+            recoveredRound = await adapter.recoverRoundCommand({
+              command: activeRoundCommand,
+              roundIndex,
+              rounds,
+            });
+          } catch (recoveryError) {
+            if (!isNetworkError(recoveryError)) {
+              throw recoveryError;
+            }
+            log.warn(
+              "AutoMine",
+              `round ${roundIndex + 1}: recovery check failed while RPC is offline, continuing retry loop`,
+              recoveryError,
+            );
+            continue;
+          }
           const recoveryDecision = planAutoMineRecoveryTransition(recoveredRound);
           if (recoveryDecision.kind === "confirmed") {
             if (recoveryDecision.commandsBefore?.length) {

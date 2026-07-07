@@ -1,4 +1,6 @@
-import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi, parseUnits } from "viem";
+import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi } from "viem";
+import { parseOptionalNonNegativeBigIntEnv } from "../../../config/envParsing";
+import { computeWinningAmountWei, parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import {
   getMetaBigInt,
   getMetaJson,
@@ -11,6 +13,7 @@ import {
 import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
+  isSafePositiveInteger,
   publicClient,
 } from "../_lib/dataBridge";
 
@@ -20,7 +23,7 @@ const RECENT_WINS_SNAPSHOT_META_KEY = "snapshot:recent-wins:v1";
 const RECENT_WINS_LOG_SCAN_CHUNK = 50_000n;
 const RECENT_WINS_LOG_SCAN_MIN_CHUNK = 2_000n;
 const RECENT_WINS_BOOTSTRAP_SCAN_CHUNK = 500_000n;
-const RECENT_WINS_RECOVERY_BLOCK_LAG = BigInt(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG ?? "256");
+const RECENT_WINS_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeBigIntEnv(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG, 256n);
 
 const EVENTS_ABI = parseAbi([
   "event RewardClaimed(uint256 indexed epoch, address indexed user, uint256 reward)",
@@ -75,32 +78,21 @@ export function getRecentWinsDataWatermark() {
 }
 
 function parseAmountWei(value: string | undefined) {
-  if (!value) return 0n;
-  try {
-    return parseUnits(value, 18);
-  } catch {
-    return 0n;
-  }
+  return parseLineaAmountWei(value);
+}
+
+function parseStoredBlockNumber(value: string | null | undefined): bigint {
+  if (!value || !/^\d+$/.test(value)) return 0n;
+  return BigInt(value);
+}
+
+function parseStoredEpochNumber(value: string | null | undefined): number {
+  const parsed = Number(value);
+  return isSafePositiveInteger(parsed) ? parsed : 0;
 }
 
 function getWinningAmountWeiForBet(row: StoredBetRow, winningTile: number) {
-  if (!Number.isInteger(winningTile) || winningTile <= 0) return 0n;
-  const tileIds = Array.isArray(row.tileIds) ? row.tileIds : [];
-  if (tileIds.length === 0) return 0n;
-
-  const amounts = Array.isArray(row.amounts) ? row.amounts : [];
-  if (amounts.length === tileIds.length) {
-    return tileIds.reduce((sum, tileId, index) => {
-      if (Number(tileId) !== winningTile) return sum;
-      return sum + parseAmountWei(amounts[index]);
-    }, 0n);
-  }
-
-  const hitCount = tileIds.reduce((count, tileId) => count + (Number(tileId) === winningTile ? 1 : 0), 0);
-  if (hitCount <= 0) return 0n;
-  const totalWei = parseAmountWei(row.totalAmount);
-  if (totalWei <= 0n) return 0n;
-  return (totalWei / BigInt(tileIds.length)) * BigInt(hitCount);
+  return computeWinningAmountWei(row.tileIds, row.amounts, winningTile, row.totalAmount);
 }
 
 function buildRecentResolvedWins(limit = RECENT_WINS_LIMIT): RecentWinRow[] {
@@ -108,10 +100,10 @@ function buildRecentResolvedWins(limit = RECENT_WINS_LIMIT): RecentWinRow[] {
   const recentResolvedEpochs = Object.entries(epochs)
     .filter(([, row]) => row.winningTile > 0 && parseAmountWei(row.rewardPool) > 0n)
     .sort((a, b) => {
-      const aBlock = BigInt(a[1].resolvedBlock ?? "0");
-      const bBlock = BigInt(b[1].resolvedBlock ?? "0");
+      const aBlock = parseStoredBlockNumber(a[1].resolvedBlock);
+      const bBlock = parseStoredBlockNumber(b[1].resolvedBlock);
       if (aBlock === bBlock) {
-        return Number(b[0]) - Number(a[0]);
+        return parseStoredEpochNumber(b[0]) - parseStoredEpochNumber(a[0]);
       }
       return aBlock > bBlock ? -1 : 1;
     })
@@ -143,7 +135,10 @@ function buildRecentResolvedWins(limit = RECENT_WINS_LIMIT): RecentWinRow[] {
 
   const byEpochUser = new Map<string, Map<string, bigint>>();
   const totalWinningByEpoch = new Map<string, bigint>();
-  for (const bet of getBetRowsByEpochs(recentResolvedEpochs.map(([epoch]) => Number(epoch)))) {
+  const recentResolvedEpochIds = recentResolvedEpochs
+    .map(([epoch]) => parseStoredEpochNumber(epoch))
+    .filter(isSafePositiveInteger);
+  for (const bet of getBetRowsByEpochs(recentResolvedEpochIds)) {
     const epochInfo = epochRows.get(bet.epoch);
     if (!epochInfo) continue;
     const winningAmountWei = getWinningAmountWeiForBet(bet, epochInfo.winningTile);
@@ -201,12 +196,12 @@ function isTooManyResultsError(err: unknown): boolean {
 
 function sortClaimsDesc<T extends { blockNumber: string; txHash?: string; user: string; epoch: string }>(rows: T[]) {
   return [...rows].sort((a, b) => {
-    const aBlock = BigInt(a.blockNumber || "0");
-    const bBlock = BigInt(b.blockNumber || "0");
+    const aBlock = parseStoredBlockNumber(a.blockNumber);
+    const bBlock = parseStoredBlockNumber(b.blockNumber);
     if (aBlock === bBlock) {
       if ((a.txHash ?? "") === (b.txHash ?? "")) {
         if (a.epoch === b.epoch) return a.user.localeCompare(b.user);
-        return Number(b.epoch) - Number(a.epoch);
+        return parseStoredEpochNumber(b.epoch) - parseStoredEpochNumber(a.epoch);
       }
       return (b.txHash ?? "").localeCompare(a.txHash ?? "");
     }
@@ -318,12 +313,8 @@ async function shouldRecoverRecentWins(storedClaims: StoredClaimRow[]) {
 
 async function fetchOnchainClaims(existingClaims: StoredClaimRow[]) {
   const highestStoredBlock = existingClaims.reduce<bigint>((max, row) => {
-    try {
-      const value = BigInt(row.blockNumber ?? "0");
-      return value > max ? value : max;
-    } catch {
-      return max;
-    }
+    const value = parseStoredBlockNumber(row.blockNumber);
+    return value > max ? value : max;
   }, 0n);
 
   const claimRows =

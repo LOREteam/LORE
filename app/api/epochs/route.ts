@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { formatUnits, parseAbi } from "viem";
 import { DEFAULT_API_EPOCHS_RECONCILE_MAX } from "../../../config/publicConfig";
+import { parseOptionalPositiveIntegerEnv } from "../../../config/envParsing";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import {
   beginRouteMetric,
@@ -15,13 +16,17 @@ import { getEpochMap, getEpochMapByIds, getMetaNumber } from "../../../server/st
 import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
+  isSafePositiveInteger,
   patchStorage,
   publicClient,
 } from "../_lib/dataBridge";
 import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { createRouteCache } from "../_lib/routeCache";
-const MAX_CHAIN_RECONCILE_EPOCHS = Number(process.env.API_EPOCHS_RECONCILE_MAX ?? String(DEFAULT_API_EPOCHS_RECONCILE_MAX));
+const MAX_CHAIN_RECONCILE_EPOCHS = parseOptionalPositiveIntegerEnv(
+  process.env.API_EPOCHS_RECONCILE_MAX,
+  DEFAULT_API_EPOCHS_RECONCILE_MAX,
+);
 const EPOCHS_ROUTE_CACHE_MS = 15_000;
 const EPOCHS_STALE_REFRESH_MS = 60_000;
 const EPOCHS_CHAIN_MULTICALL_CHUNK = 96;
@@ -77,7 +82,7 @@ function parseRequestedEpochs(request: Request): number[] {
     search
       .split(",")
       .map((value) => Number(value.trim()))
-      .filter((value) => Number.isInteger(value) && value > 0 && value <= 1_000_000),
+      .filter((value) => isSafePositiveInteger(value) && value <= 1_000_000),
   )];
 }
 
@@ -93,9 +98,10 @@ async function resolveCachedCurrentEpoch(): Promise<number | null> {
   }
 
   const storedCurrentEpoch = getMetaNumber("currentEpoch");
-  if (Number.isInteger(storedCurrentEpoch) && storedCurrentEpoch && storedCurrentEpoch > 0) {
+  const storedCurrentEpochNumber = storedCurrentEpoch ?? 0;
+  if (isSafePositiveInteger(storedCurrentEpochNumber)) {
     currentEpochCache = {
-      value: storedCurrentEpoch,
+      value: storedCurrentEpochNumber,
       expiresAt: now + CURRENT_EPOCH_CACHE_MS,
     };
 
@@ -109,9 +115,8 @@ async function resolveCachedCurrentEpoch(): Promise<number | null> {
           });
           const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
           if (
-            Number.isInteger(onChainCurrentEpochNum) &&
-            onChainCurrentEpochNum > 0 &&
-            onChainCurrentEpochNum >= storedCurrentEpoch
+            isSafePositiveInteger(onChainCurrentEpochNum) &&
+            onChainCurrentEpochNum >= storedCurrentEpochNumber
           ) {
             currentEpochCache = {
               value: onChainCurrentEpochNum,
@@ -126,7 +131,7 @@ async function resolveCachedCurrentEpoch(): Promise<number | null> {
       })();
     }
 
-    return storedCurrentEpoch;
+    return storedCurrentEpochNumber;
   }
 
   if (currentEpochInflight) {
@@ -141,7 +146,7 @@ async function resolveCachedCurrentEpoch(): Promise<number | null> {
         functionName: "currentEpoch",
       });
       const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
-      if (Number.isInteger(onChainCurrentEpochNum) && onChainCurrentEpochNum > 0) {
+      if (isSafePositiveInteger(onChainCurrentEpochNum)) {
         currentEpochCache = {
           value: onChainCurrentEpochNum,
           expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
@@ -168,16 +173,17 @@ function filterEpochRowsByCurrentEpoch(
   rows: Record<string, EpochRow>,
   currentEpoch: number | null,
 ) {
-  if (!Number.isInteger(currentEpoch) || !currentEpoch || currentEpoch <= 0) {
+  if (!isSafePositiveInteger(currentEpoch ?? 0)) {
     return rows;
   }
+  const currentEpochNumber = currentEpoch ?? 0;
 
   return Object.fromEntries(
     Object.entries(rows).filter(([key, value]) => {
       const epoch = Number(key);
-      if (!Number.isInteger(epoch) || epoch < 1 || epoch > currentEpoch) return false;
-      const resolvedBlock = Number(value.resolvedBlock ?? "0");
-      if (resolvedBlock > 0 && BigInt(resolvedBlock) < CONTRACT_DEPLOY_BLOCK) return false;
+      if (!isSafePositiveInteger(epoch) || epoch > currentEpochNumber) return false;
+      const resolvedBlock = value.resolvedBlock ?? "0";
+      if (/^\d+$/.test(resolvedBlock) && BigInt(resolvedBlock) > 0n && BigInt(resolvedBlock) < CONTRACT_DEPLOY_BLOCK) return false;
       return true;
     }),
   );
@@ -187,7 +193,7 @@ async function readEpochRowsFromChain(epochIds: number[]): Promise<{
   responseRows: Record<string, EpochRow>;
   resolvedPatch: Record<string, EpochRow>;
 }> {
-  const normalizedIds = [...new Set(epochIds.filter((epoch) => Number.isInteger(epoch) && epoch > 0))];
+  const normalizedIds = [...new Set(epochIds.filter(isSafePositiveInteger))];
   const responseRows: Record<string, EpochRow> = {};
   const resolvedPatch: Record<string, EpochRow> = {};
 
@@ -282,7 +288,8 @@ async function buildEpochsPayload(
       : (getEpochMapByIds(requestedEpochs) as Record<string, EpochRow | null>);
   let epochs = filterEpochRowsByCurrentEpoch(compactEpochRows(raw), currentEpoch);
 
-  if (!Number.isInteger(currentEpoch) || !currentEpoch || currentEpoch <= 1) {
+  const currentEpochNumber = currentEpoch ?? 0;
+  if (!isSafePositiveInteger(currentEpochNumber) || currentEpochNumber <= 1) {
     return {
       payload: { epochs },
       refreshNeeded: false,
@@ -292,18 +299,18 @@ async function buildEpochsPayload(
   const present = new Set<number>(
     Object.keys(epochs)
       .map((key) => Number(key))
-      .filter((epoch) => Number.isInteger(epoch) && epoch > 0),
+      .filter(isSafePositiveInteger),
   );
   const missing: number[] = [];
   if (requestedEpochs.length > 0) {
     for (const epoch of requestedEpochs) {
-      if (epoch < currentEpoch && !present.has(epoch)) {
+      if (epoch < currentEpochNumber && !present.has(epoch)) {
         missing.push(epoch);
       }
     }
   } else {
-    const reconcileStart = Math.max(1, currentEpoch - Math.max(1, MAX_CHAIN_RECONCILE_EPOCHS));
-    for (let epoch = reconcileStart; epoch < currentEpoch; epoch += 1) {
+    const reconcileStart = Math.max(1, currentEpochNumber - Math.max(1, MAX_CHAIN_RECONCILE_EPOCHS));
+    for (let epoch = reconcileStart; epoch < currentEpochNumber; epoch += 1) {
       if (!present.has(epoch)) {
         missing.push(epoch);
       }

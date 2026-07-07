@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { consumeRateLimit } from "../../../server/storage";
+import { applyNoStoreHeaders } from "./responseHeaders";
 
 type RateLimitState = {
   count: number;
@@ -69,12 +70,14 @@ function enforceLocalFallback(
       : current;
 
   if (normalized.count >= limit) {
-    return NextResponse.json(
-      {
-        error: "Too many requests",
-        retryAfter: Math.max(1, Math.ceil((normalized.resetAt - now) / 1000)),
-      },
-      { status: 429 },
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          error: "Too many requests",
+          retryAfter: Math.max(1, Math.ceil((normalized.resetAt - now) / 1000)),
+        },
+        { status: 429 },
+      ),
     );
   }
 
@@ -113,12 +116,14 @@ function enforceWeakIdentityFallback(
 
   const weakBucketLimit = Math.max(limit * 4, limit + 10);
   if (normalized.count >= weakBucketLimit) {
-    return NextResponse.json(
-      {
-        error: "Too many requests",
-        retryAfter: Math.max(1, Math.ceil((normalized.resetAt - now) / 1000)),
-      },
-      { status: 429 },
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          error: "Too many requests",
+          retryAfter: Math.max(1, Math.ceil((normalized.resetAt - now) / 1000)),
+        },
+        { status: 429 },
+      ),
     );
   }
 
@@ -162,12 +167,14 @@ export async function enforceSharedRateLimit(
     const result = consumeRateLimit(bucket, key, limit, windowMs);
     if (result.allowed) return null;
 
-    return NextResponse.json(
-      {
-        error: "Too many requests",
-        retryAfter: result.retryAfter ?? 1,
-      },
-      { status: 429 },
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          error: "Too many requests",
+          retryAfter: result.retryAfter ?? 1,
+        },
+        { status: 429 },
+      ),
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

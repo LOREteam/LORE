@@ -64,7 +64,11 @@ export function useGameData(options?: UseGameDataOptions) {
     fallbackPendingEpochDurationEffectiveFromEpoch,
     liveStateBootstrapPending,
     liveContractReadsEnabled,
-  } = useGameLiveStateSnapshot({ initialSnapshot: initialServerLiveState, isPageVisible });
+  } = useGameLiveStateSnapshot({
+    initialSnapshot: initialServerLiveState,
+    isPageVisible,
+    forceLiveContractReads: autoMineSessionActive,
+  });
 
   const {
     visualEpoch,

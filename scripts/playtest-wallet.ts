@@ -8,13 +8,13 @@ import {
   formatUnits,
   getAddress,
   http,
-  parseUnits,
   type Address,
   type PublicClient,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { GAME_ABI, LINEA_TOKEN_ADDRESS, TOKEN_ABI, CONTRACT_ADDRESS } from "../app/lib/constants";
+import { parsePositiveLineaAmountWeiOrFallback } from "../app/lib/tokenAmountMath";
 import {
   clampKeeperFeeOverridesToBalance,
   getAffordableKeeperGasLimit,
@@ -22,18 +22,19 @@ import {
   getKeeperFeeOverrides,
 } from "../app/lib/lineaFees";
 import { tileIdsToMask } from "../app/lib/tileMask";
-import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs } from "../config/publicConfig";
+import { parseOptionalPositiveIntegerEnv, parseOptionalPositiveIntegerInRangeEnv } from "../config/envParsing";
+import { getConfiguredLineaNetwork, getLineaChain, getStableLineaReadRpcs } from "../config/publicConfig";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
 const BASE_URL = process.env.TEST_WALLET_BASE_URL?.trim() || "http://localhost:3000";
 const DRY_RUN = process.env.TEST_WALLET_DRY_RUN === "1";
-const SAFE_SECONDS_LEFT = Number(process.env.TEST_WALLET_SAFE_SECONDS_LEFT ?? "35");
-const MAX_EPOCH_READY_WAIT_MS = Number(process.env.TEST_WALLET_MAX_EPOCH_READY_WAIT_MS ?? "180000");
-const POST_TX_API_WAIT_MS = Number(process.env.TEST_WALLET_POST_TX_API_WAIT_MS ?? "5000");
-const SINGLE_AMOUNT = parseUnits(process.env.TEST_WALLET_SINGLE_BET_AMOUNT ?? "1", 18);
-const BATCH_AMOUNT = parseUnits(process.env.TEST_WALLET_BATCH_BET_AMOUNT ?? "1", 18);
-const BATCH_TILE_COUNT = Number(process.env.TEST_WALLET_BATCH_TILE_COUNT ?? "3");
+const SAFE_SECONDS_LEFT = parseOptionalPositiveIntegerEnv(process.env.TEST_WALLET_SAFE_SECONDS_LEFT, 35);
+const MAX_EPOCH_READY_WAIT_MS = parseOptionalPositiveIntegerEnv(process.env.TEST_WALLET_MAX_EPOCH_READY_WAIT_MS, 180_000);
+const POST_TX_API_WAIT_MS = parseOptionalPositiveIntegerEnv(process.env.TEST_WALLET_POST_TX_API_WAIT_MS, 5_000);
+const SINGLE_AMOUNT = parsePositiveLineaAmountWeiOrFallback(process.env.TEST_WALLET_SINGLE_BET_AMOUNT, "1");
+const BATCH_AMOUNT = parsePositiveLineaAmountWeiOrFallback(process.env.TEST_WALLET_BATCH_BET_AMOUNT, "1");
+const BATCH_TILE_COUNT = parseOptionalPositiveIntegerInRangeEnv(process.env.TEST_WALLET_BATCH_TILE_COUNT, 3, 1, 24);
 const APPROVE_GAS_FALLBACK = 80_000n;
 const SINGLE_GAS_FALLBACK = 140_000n;
 const BATCH_GAS_FALLBACK = 240_000n;
@@ -346,7 +347,7 @@ async function main() {
     throw new Error("Missing required env var: TEST_WALLET_PRIVATE_KEY");
   }
 
-  const rpcUrls = getPreferredLineaRpcs(process.env.TEST_WALLET_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
+  const rpcUrls = getStableLineaReadRpcs(process.env.TEST_WALLET_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const transport = fallback(rpcUrls.map((url) => http(url)));
   const publicClient = createPublicClient({ chain: APP_CHAIN, transport });
   const walletClient = account ? createWalletClient({ account, chain: APP_CHAIN, transport }) : null;

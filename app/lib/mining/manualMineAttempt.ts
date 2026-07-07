@@ -52,11 +52,23 @@ export async function runManualMineAttempt({
       return "pending";
     }
   } catch (error) {
-    if (isDeterministicBetExecutionError(error) && !isAllowanceError(error)) {
+    const allowanceRetry = isAllowanceError(error);
+    if (isDeterministicBetExecutionError(error) && !allowanceRetry) {
+      try {
+        const alreadyConfirmed = await checkBetAlreadyConfirmed(actorAddress, normalizedTiles);
+        if (alreadyConfirmed) {
+          log.info(source, "skipping error - bets already on-chain", {
+            confirmedTiles: normalizedTiles.length,
+          });
+          finalizeMineSuccess();
+          return "confirmed";
+        }
+      } catch (statusError) {
+        log.warn(source, "bet status check failed after contract error", statusError);
+      }
       throw error;
     }
     if (!isRetryableError(error)) throw error;
-    const allowanceRetry = isAllowanceError(error);
     if (isAllowanceError(error)) {
       await ensureAllowance(totalAmountRaw);
     }

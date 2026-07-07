@@ -4,7 +4,9 @@ import { log } from "../lib/logger";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePublicClient } from "wagmi";
 import { parseAbi, decodeEventLog, formatUnits, encodeEventTopics, pad, type Log, type Hex } from "viem";
+import { formatLineaAmountFixed } from "../lib/tokenAmountMath";
 import {
+  CONTRACT_DEPLOY_BLOCK,
   CONTRACT_ADDRESS,
   LINEA_TOKEN_ADDRESS,
   APP_CHAIN_ID,
@@ -15,7 +17,29 @@ const TRANSFER_ABI = parseAbi([
 ]);
 
 const CHUNK_BLOCKS = 100_000;
+const FALLBACK_CHUNK_BLOCKS = 20_000;
+const FALLBACK_MAX_BLOCKS = 250_000n;
 const CACHE_MS = 120_000;
+
+function toDisplayNumberWei(value: bigint) {
+  const amount = Number(formatUnits(value, 18));
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+export function getWalletTransferScanFromBlock(headBlock: bigint, deployBlock = CONTRACT_DEPLOY_BLOCK): bigint | null {
+  if (deployBlock <= 0n) return 0n;
+  return deployBlock <= headBlock ? deployBlock : null;
+}
+
+export function getWalletTransferFallbackFromBlock(
+  fromBlock: bigint,
+  toBlock: bigint,
+  maxBlocks = FALLBACK_MAX_BLOCKS,
+): bigint {
+  if (maxBlocks <= 0n) return toBlock;
+  const windowStart = toBlock >= maxBlocks ? toBlock - maxBlocks + 1n : 0n;
+  return windowStart > fromBlock ? windowStart : fromBlock;
+}
 
 export interface WalletTransfer {
   direction: "in" | "out";
@@ -85,7 +109,17 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
     }
     try {
       const toBlock = await publicClient.getBlockNumber();
-      const fromBlock = BigInt(0);
+      const fromBlock = getWalletTransferScanFromBlock(toBlock);
+      if (fromBlock === null) {
+        const emptySummary = { transfers: [], totalIn: 0, totalOut: 0 };
+        cachedAtRef.current = Date.now();
+        cachedForRef.current = cacheKey;
+        dataRef.current = emptySummary;
+        if (mountedRef.current && requestId === requestIdRef.current) {
+          setData(emptySummary);
+        }
+        return;
+      }
 
       const transferSig = encodeEventTopics({ abi: TRANSFER_ABI, eventName: "Transfer" })[0];
       if (!transferSig) {
@@ -139,11 +173,11 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
         inLogs = inResult.value;
       } else {
         // Fallback: fetch all Transfer events (only by sig) and filter client-side
-        // Use smaller chunks to avoid RPC limits
-        const FALLBACK_CHUNK = 20_000;
+        // Limit the unfiltered scan window; full-token Transfer scans are too heavy on mainnet.
         const allLogs: Log[] = [];
-        for (let from = fromBlock; from <= toBlock; from += BigInt(FALLBACK_CHUNK)) {
-          const to = from + BigInt(FALLBACK_CHUNK) > toBlock ? toBlock : from + BigInt(FALLBACK_CHUNK - 1);
+        const fallbackFromBlock = getWalletTransferFallbackFromBlock(fromBlock, toBlock);
+        for (let from = fallbackFromBlock; from <= toBlock; from += BigInt(FALLBACK_CHUNK_BLOCKS)) {
+          const to = from + BigInt(FALLBACK_CHUNK_BLOCKS) > toBlock ? toBlock : from + BigInt(FALLBACK_CHUNK_BLOCKS - 1);
           try {
             const request = {
               address: LINEA_TOKEN_ADDRESS,
@@ -162,8 +196,8 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
 
       const contractAddr = CONTRACT_ADDRESS.toLowerCase();
       const transfers: WalletTransfer[] = [];
-      let totalIn = 0;
-      let totalOut = 0;
+      let totalInWei = 0n;
+      let totalOutWei = 0n;
       const seenTx = new Set<string>();
 
       // Deposits and withdrawals only: between embedded and external wallets (game rewards remain claimable separately)
@@ -182,14 +216,14 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
           if (args.from.toLowerCase() !== addr) continue;
           if (args.to.toLowerCase() === contractAddr) continue;
           if (!isDepositOrWithdrawal("out", args.to)) continue;
-          const amountNum = parseFloat(formatUnits(args.value, 18));
-          totalOut += amountNum;
+          const amountNum = toDisplayNumberWei(args.value);
+          totalOutWei += args.value;
           const txHash = log.transactionHash ?? "";
           seenTx.add(txHash);
           transfers.push({
             direction: "out",
             counterparty: args.to,
-            amount: amountNum.toFixed(2),
+            amount: formatLineaAmountFixed(args.value, 2),
             amountNum,
             txHash,
             blockNumber: log.blockNumber ?? undefined,
@@ -208,12 +242,12 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
           if (!isDepositOrWithdrawal("in", args.from)) continue;
           const txHash = log.transactionHash ?? "";
           if (seenTx.has(txHash)) continue;
-          const amountNum = parseFloat(formatUnits(args.value, 18));
-          totalIn += amountNum;
+          const amountNum = toDisplayNumberWei(args.value);
+          totalInWei += args.value;
           transfers.push({
             direction: "in",
             counterparty: args.from,
-            amount: amountNum.toFixed(2),
+            amount: formatLineaAmountFixed(args.value, 2),
             amountNum,
             txHash,
             blockNumber: log.blockNumber ?? undefined,
@@ -234,7 +268,11 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
         return (b.txHash ?? "").localeCompare(a.txHash ?? "");
       });
 
-      const summary: WalletTransfersSummary = { transfers, totalIn, totalOut };
+      const summary: WalletTransfersSummary = {
+        transfers,
+        totalIn: toDisplayNumberWei(totalInWei),
+        totalOut: toDisplayNumberWei(totalOutWei),
+      };
       cachedAtRef.current = Date.now();
       cachedForRef.current = cacheKey;
       dataRef.current = summary;

@@ -1,5 +1,6 @@
 "use client";
 import React, { useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
 import { MobileTabNav } from "./components/MobileTabNav";
@@ -9,10 +10,14 @@ import { OfflineBanner } from "./components/OfflineBanner";
 import { NoticeStack } from "./components/NoticeStack";
 import { PageBackdrop } from "./components/PageBackdrop";
 import { FloatingActions } from "./components/FloatingActions";
-import { FirstVisitTutorial } from "./components/FirstVisitTutorial";
 import type { LiveStateApiResponse } from "./hooks/useGameLiveStateSnapshot";
 import type { RecentWin } from "./hooks/useRecentWins";
 import { useLineaOreClientRuntime } from "./hooks/useLineaOreClientRuntime";
+
+const LazyFirstVisitTutorial = dynamic(
+  () => import("./components/FirstVisitTutorial").then((mod) => mod.FirstVisitTutorial),
+  { ssr: false },
+);
 
 interface LineaOreClientProps {
   initialLiveState?: LiveStateApiResponse | null;
@@ -89,7 +94,7 @@ export default function LineaOreClient({
         />
 
         <PageTabContent {...pageTabContentProps} />
-        <FirstVisitTutorial activeTab={activeTab} onTabChange={handleTabChange} />
+        <LazyFirstVisitTutorial activeTab={activeTab} onTabChange={handleTabChange} />
 
       </main>
       <FloatingActions {...floatingActionsProps} />

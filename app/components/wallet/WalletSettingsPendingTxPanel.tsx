@@ -52,7 +52,14 @@ export const WalletSettingsPendingTxPanel = React.memo(function WalletSettingsPe
           )}
         </div>
         <div className="flex shrink-0 gap-2">
-          <UiButton onClick={onRefreshPendingTx} variant="secondary" size="sm" uppercase disabled={isRefreshingPendingTx}>
+          <UiButton
+            onClick={onRefreshPendingTx}
+            variant="secondary"
+            size="sm"
+            uppercase
+            disabled={isRefreshingPendingTx}
+            title="Check latest and pending nonces for the Privy wallet"
+          >
             {isRefreshingPendingTx ? "Checking..." : "Check"}
           </UiButton>
           <UiButton
@@ -61,6 +68,7 @@ export const WalletSettingsPendingTxPanel = React.memo(function WalletSettingsPe
             size="sm"
             uppercase
             disabled={isCancellingPendingTx || !hasPending}
+            title={hasPending ? "Replace the oldest stuck nonce with a 0 ETH self-transaction" : "Run Check first; available only when a stuck nonce is detected"}
           >
             {isCancellingPendingTx ? "Clearing..." : "Clear Stuck Tx"}
           </UiButton>

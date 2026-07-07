@@ -1,4 +1,5 @@
 import type { Chain } from "viem";
+import { parseRequiredNonNegativeBigIntEnv } from "./envParsing";
 
 // Non-secret project defaults.
 // Keep values here so deployment does not require duplicating them in server .env.
@@ -23,6 +24,7 @@ export const DEFAULT_EIP7702_ENABLED = false;
 export const DEFAULT_EIP7702_MINING_ENABLED = false;
 export const DEFAULT_CLIENT_AUTO_RESOLVE_ENABLED = false;
 export const DEFAULT_AUTO_RESOLVE_SWEEP_ENABLED = false;
+export const DEFAULT_READ_ONLY_MODE = false;
 
 const LINEA_MAINNET_CHAIN = {
   id: 59144,
@@ -152,7 +154,8 @@ export function getConfiguredDeployBlock(
   network: LineaNetwork = getConfiguredLineaNetwork(),
 ) {
   const configured = getRequiredConfigValue(explicitValue, "INDEXER_START_BLOCK", network);
-  return BigInt(configured || String(DEFAULT_INDEXER_START_BLOCK));
+  const value = configured || String(DEFAULT_INDEXER_START_BLOCK);
+  return parseRequiredNonNegativeBigIntEnv(value, "INDEXER_START_BLOCK");
 }
 
 export function isDeprecatedLineaRpc(url: string | null | undefined) {
@@ -166,7 +169,13 @@ export function isUnstableLineaReadRpc(
 ) {
   if (!url) return false;
   const normalized = url.toLowerCase();
-  if (network === "sepolia" && normalized.includes("linea-sepolia.drpc.org")) {
+  if (
+    network === "sepolia" &&
+    (
+      normalized.includes("linea-sepolia.drpc.org") ||
+      normalized.includes("rpc.sepolia.linea.build")
+    )
+  ) {
     return true;
   }
   return false;
@@ -242,6 +251,13 @@ export function getConfiguredAutoResolveSweepEnabled(explicitFlag?: string | nul
       process.env.NEXT_PUBLIC_ENABLE_AUTO_RESOLVE_SWEEP,
   );
   return envValue ?? DEFAULT_AUTO_RESOLVE_SWEEP_ENABLED;
+}
+
+export function getConfiguredReadOnlyMode(explicitFlag?: string | null) {
+  const envValue = parseBooleanEnv(
+    explicitFlag ?? process.env.NEXT_PUBLIC_LORE_READ_ONLY_MODE,
+  );
+  return envValue ?? DEFAULT_READ_ONLY_MODE;
 }
 
 export function getConfiguredEip7702DelegateAddress(

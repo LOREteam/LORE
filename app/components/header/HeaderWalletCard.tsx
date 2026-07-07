@@ -1,12 +1,14 @@
 "use client";
 
-import { getConfiguredLineaNetwork, getLineaExplorerAddressBaseUrl } from "../../../config/publicConfig";
+import { getExplorerAddressUrl } from "../../lib/explorerLinks";
 import { shortenAddress } from "../../lib/utils";
 import { UiButton } from "../ui/UiButton";
 
 interface HeaderWalletCardProps {
   authenticated: boolean;
   privyReady: boolean;
+  loginPending: boolean;
+  loginError: string | null;
   embeddedWalletAddress: string | null;
   embeddedWalletSyncing: boolean;
   embeddedAddressCopied: boolean;
@@ -52,6 +54,8 @@ function HeaderWalletActions({
 export function HeaderWalletCard({
   authenticated,
   privyReady,
+  loginPending,
+  loginError,
   embeddedWalletAddress,
   embeddedWalletSyncing,
   embeddedAddressCopied,
@@ -64,25 +68,48 @@ export function HeaderWalletCard({
   privyTokenBalance,
   privyTokenBalanceLoading,
 }: HeaderWalletCardProps) {
-  const explorerAddressBaseUrl = getLineaExplorerAddressBaseUrl(getConfiguredLineaNetwork());
-  const explorerAddressUrl = embeddedWalletAddress
-    ? `${explorerAddressBaseUrl}/${embeddedWalletAddress}`
-    : null;
+  const explorerAddressUrl = getExplorerAddressUrl(embeddedWalletAddress);
 
   return (
     <div id="header-wallet-card" className="min-[900px]:col-span-3 min-[900px]:h-22.5 min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-surface-raised shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden">
       {!authenticated ? (
-        <UiButton
-          onClick={onLogin}
-          aria-busy={!privyReady}
-          variant={privyReady ? "secondary" : "pending"}
-          size="md"
-          fullWidth
-          uppercase
-          className="h-14 min-h-14 rounded-xl border-violet-300/14 bg-linear-to-r from-violet-700/38 via-violet-600/32 to-indigo-600/38 px-4 py-2 text-[11px] font-black tracking-[0.1em] text-violet-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.055)] hover:border-violet-300/24 hover:from-violet-600/46 hover:via-violet-500/38 hover:to-indigo-500/46 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_18px_rgba(124,58,237,0.12)] min-[900px]:h-full min-[900px]:min-h-16"
-        >
-          {privyReady ? "Login / Connect" : "Connect Wallet"}
-        </UiButton>
+        <div className="flex h-full min-h-14 flex-col justify-center gap-1 p-1">
+          <UiButton
+            onClick={onLogin}
+            aria-busy={!privyReady || loginPending}
+            disabled={!privyReady || loginPending}
+            title={
+              !privyReady
+                ? "Wallet login is still loading"
+                : loginPending
+                  ? "Opening wallet login"
+                  : "Open wallet login"
+            }
+            variant={privyReady && !loginPending ? "secondary" : "pending"}
+            size="md"
+            fullWidth
+            uppercase
+            className="h-12 min-h-12 rounded-xl border-violet-300/14 bg-linear-to-r from-violet-700/38 via-violet-600/32 to-indigo-600/38 px-4 py-2 text-[11px] font-black tracking-[0.1em] text-violet-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.055)] hover:border-violet-300/24 hover:from-violet-600/46 hover:via-violet-500/38 hover:to-indigo-500/46 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_18px_rgba(124,58,237,0.12)]"
+          >
+            {loginPending ? "Connecting..." : privyReady ? "Login / Connect" : "Wallet Loading..."}
+          </UiButton>
+          {loginError && (
+            <div className="flex max-h-9 items-center justify-center gap-2 overflow-hidden px-1">
+              <p className="min-w-0 truncate text-center text-[10px] font-semibold leading-tight text-red-300/90">
+                {loginError}
+              </p>
+              {loginError.includes("still loading") && (
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="shrink-0 rounded border border-red-300/20 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-red-200/90 hover:border-red-300/35 hover:bg-red-400/10"
+                >
+                  Reload
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       ) : embeddedWalletAddress ? (
         <>
           <HeaderWalletActions onLogout={onLogout} onOpenWalletSettings={onOpenWalletSettings} />

@@ -7,6 +7,7 @@ import {
   GAME_ABI,
   GRID_SIZE,
 } from "../lib/constants";
+import { validateBetAmount } from "../lib/utils";
 
 export interface PersistedAutoMinerSession {
   active: boolean;
@@ -17,11 +18,18 @@ export interface PersistedAutoMinerSession {
   lastPlacedEpoch: string | null;
 }
 
+export interface PersistedTabLock {
+  id: string;
+  ts: number;
+  tx?: string;
+}
+
 export const AUTO_MINER_STORAGE_KEY = `lineaore:auto-miner-session:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 export const AUTO_MINER_SESSION_EVENT = `lineaore:auto-mine-session-change:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 export const TAB_LOCK_KEY = `lore:auto-mine-tab-lock:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 export const TAB_LOCK_TTL_MS = 90_000;
 export const TAB_LOCK_PING_TIMEOUT_MS = 700;
+const TAB_LOCK_MAX_FUTURE_SKEW_MS = 5_000;
 export const SESSION_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
 
 function dispatchAutoMinerSessionEvent() {
@@ -262,6 +270,7 @@ export function withMiningRpcTimeout<T>(
   timeoutMs: number = MINING_RPC_TIMEOUT_MS,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let raceSettled = false;
   const timeoutPromise = new Promise<T>((_, reject) => {
     timeoutId = setTimeout(() => {
       const timeoutError = new Error(`${label} timed out after ${timeoutMs}ms`);
@@ -269,7 +278,12 @@ export function withMiningRpcTimeout<T>(
       reject(timeoutError);
     }, timeoutMs);
   });
-  return Promise.race([promise, timeoutPromise]).finally(() => {
+  const guarded = promise.catch((error) => {
+    if (raceSettled) return new Promise<T>(() => {});
+    throw error;
+  });
+  return Promise.race([guarded, timeoutPromise]).finally(() => {
+    raceSettled = true;
     if (timeoutId !== null) {
       clearTimeout(timeoutId);
       timeoutId = null;
@@ -374,15 +388,67 @@ export function isDeterministicBetExecutionError(err: unknown): boolean {
   );
 }
 
+export function sanitizePersistedAutoMinerSession(value: unknown): PersistedAutoMinerSession | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const active = raw.active;
+  const betStr = raw.betStr;
+  const blocks = raw.blocks;
+  const rounds = raw.rounds;
+  const nextRoundIndex = raw.nextRoundIndex;
+  const lastPlacedEpoch = raw.lastPlacedEpoch;
+
+  if (typeof active !== "boolean") return null;
+  if (typeof betStr !== "string" || validateBetAmount(betStr) !== null) return null;
+  if (typeof blocks !== "number" || !Number.isInteger(blocks) || blocks < 1 || blocks > GRID_SIZE) return null;
+  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) return null;
+  if (
+    typeof nextRoundIndex !== "number" ||
+    !Number.isInteger(nextRoundIndex) ||
+    nextRoundIndex < 0 ||
+    nextRoundIndex > rounds
+  ) {
+    return null;
+  }
+  if (lastPlacedEpoch !== null && lastPlacedEpoch !== undefined) {
+    if (typeof lastPlacedEpoch !== "string" || !/^\d+$/.test(lastPlacedEpoch)) return null;
+  }
+
+  return {
+    active,
+    betStr,
+    blocks,
+    rounds,
+    nextRoundIndex,
+    lastPlacedEpoch: lastPlacedEpoch ?? null,
+  };
+}
+
 export function readSession(): PersistedAutoMinerSession | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(AUTO_MINER_STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as PersistedAutoMinerSession;
+    return sanitizePersistedAutoMinerSession(JSON.parse(raw));
   } catch {
     return null;
   }
+}
+
+export function sanitizeTabLock(value: unknown, now = Date.now()): PersistedTabLock | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  const ts = raw.ts;
+  const tx = raw.tx;
+  if (!id) return null;
+  if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) return null;
+  if (ts - now > TAB_LOCK_MAX_FUTURE_SKEW_MS) return null;
+  return {
+    id,
+    ts,
+    ...(typeof tx === "string" && tx ? { tx } : {}),
+  };
 }
 
 export function saveSession(session: PersistedAutoMinerSession) {

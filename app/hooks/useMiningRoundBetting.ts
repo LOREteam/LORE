@@ -331,6 +331,7 @@ export async function executeAutoMineBetLoop({
         log.warn("AutoMine", `bet network error (attempt ${betAttempts}/${maxBetAttempts}), waiting ${(wait / 1000).toFixed(0)}s...`, error);
         onProgress(`${currentRoundIndex + 1} / ${rounds} - RPC offline, retry in ${(wait / 1000).toFixed(0)}s...`);
         await delay(wait);
+        onProgress(`${currentRoundIndex + 1} / ${rounds} - reconnecting RPC...`);
         continue;
       }
       if (isDeterministicBetExecutionError(error)) {

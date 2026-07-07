@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAddress, parseAbi } from "viem";
 import { CONTRACT_ADDRESS } from "../../../lib/constants";
 import { publicClient } from "../../_lib/dataBridge";
+import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 
 const OWNER_ABI = parseAbi(["function owner() view returns (address)"]);
@@ -12,14 +13,14 @@ export async function GET(request: NextRequest) {
     limit: 5,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   try {
     const { searchParams } = new URL(request.url);
     const address = searchParams.get("address");
 
     if (!address || !/^0x[0-9a-f]{40}$/i.test(address)) {
-      return NextResponse.json({ isOwner: false, error: "Invalid address" }, { status: 400 });
+      return applyNoStoreHeaders(NextResponse.json({ isOwner: false, error: "Invalid address" }, { status: 400 }));
     }
 
     const ownerAddress = await publicClient.readContract({
@@ -31,9 +32,9 @@ export async function GET(request: NextRequest) {
     const normalizedOwner = getAddress(ownerAddress);
     const isOwner = normalizedOwner.toLowerCase() === address.toLowerCase();
 
-    return NextResponse.json({ isOwner, owner: normalizedOwner });
+    return applyNoStoreHeaders(NextResponse.json({ isOwner, owner: normalizedOwner }));
   } catch (err) {
     console.error("[api/admin/check-owner] Error:", err);
-    return NextResponse.json({ isOwner: false, error: "Internal error" }, { status: 500 });
+    return applyNoStoreHeaders(NextResponse.json({ isOwner: false, error: "Internal error" }, { status: 500 }));
   }
 }

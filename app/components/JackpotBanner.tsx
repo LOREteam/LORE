@@ -23,7 +23,6 @@ const WEEKLY_JACKPOT_EVENT = parseAbiItem("event WeeklyJackpotAwarded(uint256 in
 const EPOCH_RESOLVED_EVENT = parseAbiItem(
   "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
 );
-const PUBLIC_SHARE_ORIGIN = "https://lore.game";
 const FOCUSABLE_SELECTOR = [
   "a[href]",
   "button:not([disabled])",
@@ -74,13 +73,6 @@ function getPreviousEpoch(epoch: string | null) {
 
 function getCandidateEpochs(epoch: string | null) {
   return [epoch, getPreviousEpoch(epoch)].filter((item): item is string => Boolean(item));
-}
-
-function getShareOrigin() {
-  const configuredSiteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? PUBLIC_SHARE_ORIGIN).trim();
-  if (!configuredSiteUrl.startsWith("http")) return PUBLIC_SHARE_ORIGIN;
-  const normalized = configuredSiteUrl.replace(/\/+$/, "");
-  return /localhost|127\.0\.0\.1/i.test(normalized) ? PUBLIC_SHARE_ORIGIN : normalized;
 }
 
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
@@ -434,29 +426,20 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   const share = useCallback(() => {
     if (typeof window === "undefined") return;
     if (!amountText) return;
-    const ogParams = new URLSearchParams();
-    ogParams.set("kind", theme.kind);
-    ogParams.set("amount", amountText);
-    if (activeTileId !== null) ogParams.set("tile", String(activeTileId));
-    if (activeEpoch) ogParams.set("epoch", activeEpoch);
-    const shareOrigin = getShareOrigin();
-    const sharePageUrl = `${shareOrigin}/jackpot-win?${ogParams.toString()}`;
-
     const lines = [
       `I just mined the ${jackpotLabel} in LORE.`,
       `Won: ${amountShareText}`,
       [activeEpoch ? `Epoch #${activeEpoch}` : null, activeTileId !== null ? `Tile #${activeTileId}` : null].filter(Boolean).join(" - ") || null,
-      "Play: lore.game",
+      "playlore.xyz",
+      "#LORE #Linea",
     ].filter((l) => l !== null);
 
     const tweetParams = new URLSearchParams({
       text: lines.join("\n"),
-      url: sharePageUrl,
-      hashtags: "LORE,Linea",
     });
     const tweetUrl = `https://x.com/intent/tweet?${tweetParams.toString()}`;
     window.open(tweetUrl, "_blank", "noopener,noreferrer");
-  }, [activeEpoch, activeTileId, amountShareText, amountText, jackpotLabel, theme.kind]);
+  }, [activeEpoch, activeTileId, amountShareText, amountText, jackpotLabel]);
 
   useEffect(() => {
     if (!isModalOpen) return;
@@ -571,7 +554,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cn(
-          "pointer-events-auto relative z-10 w-full max-w-[56rem] overflow-hidden rounded-[1.15rem] border bg-[#07040d] text-center",
+          "pointer-events-auto relative z-10 w-full max-w-[58rem] overflow-hidden rounded-[1.15rem] border bg-[#07040d] text-center",
           palette.frame,
         )}
         style={{
@@ -579,13 +562,14 @@ export const JackpotBanner = React.memo(function JackpotBanner({
           animation: !reducedMotion && showContent ? "jackpot-scale 0.52s cubic-bezier(0.22, 1, 0.36, 1)" : undefined,
         }}
       >
-        <div className="relative aspect-[16/9] min-h-[27rem] overflow-hidden sm:min-h-0">
+        <div className="relative flex h-[min(42rem,calc(100dvh-2rem))] min-h-[33rem] overflow-hidden">
           <div
             className="absolute inset-0 scale-[1.035] bg-cover bg-center"
             style={{ backgroundImage: `url('${theme.ogArt}')` }}
           />
-          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.78)_0%,rgba(0,0,0,0.30)_32%,rgba(0,0,0,0.28)_58%,rgba(0,0,0,0.86)_100%)]" />
-          <div className="absolute inset-x-0 bottom-0 h-[42%] bg-[linear-gradient(180deg,transparent,rgba(0,0,0,0.72))]" />
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.70)_0%,rgba(0,0,0,0.28)_30%,rgba(0,0,0,0.30)_58%,rgba(0,0,0,0.88)_100%)]" />
+          <div className="absolute inset-x-0 top-0 h-[26%] bg-[linear-gradient(180deg,rgba(0,0,0,0.72),transparent)]" />
+          <div className="absolute inset-x-0 bottom-0 h-[44%] bg-[linear-gradient(180deg,transparent,rgba(0,0,0,0.78))]" />
           <div
             className="absolute inset-0"
             style={{
@@ -602,38 +586,60 @@ export const JackpotBanner = React.memo(function JackpotBanner({
             <span aria-hidden="true">&times;</span>
           </button>
 
-          <div className="relative z-10 flex h-full flex-col items-center justify-between px-5 py-7 sm:px-9 sm:py-8">
-            <h2
-              id={titleId}
-              className="lore-display mx-auto max-w-[42rem] bg-clip-text text-[2.2rem] font-black uppercase leading-[0.88] text-transparent sm:text-[4.2rem] lg:text-[4.75rem]"
-              style={{
-                backgroundImage: `linear-gradient(180deg, ${palette.headlineFrom} 0%, ${palette.headlineVia} 48%, ${palette.headlineTo} 100%)`,
-                textShadow: "0 16px 42px rgba(0,0,0,0.98)",
-                filter: `drop-shadow(0 0 22px ${theme.colors.shadow}) drop-shadow(0 8px 22px rgba(0,0,0,0.9))`,
-              }}
-            >
-              {theme.winTitle}
-            </h2>
+          <div className="relative z-10 flex h-full min-h-0 w-full flex-col items-center justify-between gap-4 px-5 py-6 sm:px-9 sm:py-7">
+            <div className="flex w-full flex-col items-center pt-1">
+              <div className={cn(
+                "rounded-full border border-white/12 bg-black/36 px-4 py-1.5 text-[0.62rem] font-black uppercase leading-none tracking-[0.24em] text-white/70 shadow-[0_10px_30px_rgba(0,0,0,0.36)] backdrop-blur-sm",
+                palette.shareBorder,
+              )}>
+                {jackpotLabel} unlocked
+              </div>
+              <h2
+                id={titleId}
+                className="lore-display mx-auto mt-4 max-w-[42rem] bg-clip-text px-2 pb-2 text-[2.45rem] font-black uppercase leading-[1.02] text-transparent sm:text-[4.2rem] lg:text-[4.75rem]"
+                style={{
+                  backgroundImage: `linear-gradient(180deg, ${palette.headlineFrom} 0%, ${palette.headlineVia} 50%, ${palette.headlineTo} 100%)`,
+                  textShadow: "0 16px 42px rgba(0,0,0,0.98)",
+                  filter: `drop-shadow(0 0 20px ${theme.colors.shadow}) drop-shadow(0 8px 22px rgba(0,0,0,0.9))`,
+                  textWrap: "balance",
+                }}
+              >
+                {theme.winTitle}
+              </h2>
+            </div>
 
-            <div className="flex w-full flex-col items-center">
+            <div className="flex w-full min-h-0 flex-1 flex-col items-center justify-center">
               <div
                 className={cn(
-                  "w-full max-w-[34rem] rounded-[1rem] border bg-black/62 px-5 py-4 shadow-[0_18px_42px_rgba(0,0,0,0.55)] backdrop-blur-md sm:px-7",
+                  "relative w-full max-w-[38rem] overflow-hidden rounded-[1rem] border bg-black/62 px-5 py-5 shadow-[0_18px_48px_rgba(0,0,0,0.60)] backdrop-blur-md sm:px-8 sm:py-6",
                   palette.prizeBorder,
                 )}
               >
-                <div className="text-[0.66rem] font-black uppercase tracking-[0.28em] text-white/70">
+                <div
+                  className="pointer-events-none absolute inset-x-6 top-0 h-px"
+                  style={{ background: `linear-gradient(90deg, transparent, ${theme.colors.accentSoft}, transparent)` }}
+                />
+                <div className="text-[0.64rem] font-black uppercase tracking-[0.28em] text-white/68">
                   You mined the jackpot
                 </div>
                 <div
                   className={cn(
-                    "lore-hud-number mt-2 break-words font-black leading-none",
-                    "text-[2.35rem] sm:text-[4rem]",
+                    "lore-hud-number mt-3 break-words font-black leading-[1.02]",
+                    "text-[2.2rem] sm:text-[3.85rem]",
                     palette.accent,
                   )}
                   style={{ textShadow: `0 0 18px ${theme.colors.shadow}, 0 10px 30px rgba(0,0,0,0.96)` }}
                 >
-                  {amountText} LINEA
+                  {amountText}
+                </div>
+                <div
+                  className={cn(
+                    "lore-hud-number mt-2 text-[1.9rem] font-black uppercase leading-none tracking-[0.10em] sm:text-[2.55rem]",
+                    palette.accent,
+                  )}
+                  style={{ textShadow: `0 0 16px ${theme.colors.shadow}, 0 8px 24px rgba(0,0,0,0.96)` }}
+                >
+                  LINEA
                 </div>
               </div>
 
@@ -659,7 +665,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
               </div>
             </div>
 
-            <div className="flex w-full flex-col gap-2.5 sm:flex-row sm:justify-center">
+            <div className="flex w-full flex-col gap-2.5 pb-1 sm:flex-row sm:justify-center">
               <UiButton
                 onClick={share}
                 variant="ghost"

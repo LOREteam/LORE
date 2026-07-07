@@ -1,120 +1,82 @@
-# Mainnet readiness checklist
+# Mainnet Readiness Checklist
 
-Use this as the final pre-launch gate. A launch is considered ready only when every `Blocker` is complete and signed off.
+Do not mark a checkbox complete from memory or intent. A checked item must include a concrete evidence marker: proof JSON path, command output path, chain tx/hash, external URL, or recorded operator sign-off.
+
+Primary command map: docs/launch-evidence-command-map.md
+Status board: docs/mainnet-status-board.md
+Proof record: docs/mainnet-proof-record.md
+Runbook: docs/production-runbook.md
+Final proof manifests: docs/signoff-proof.json, docs/host-proof.json, docs/indexer-proof.json, docs/restore-proof.json, docs/monitoring-proof.json, docs/qa-proof.json, docs/canary-proof.json
 
 ## Blockers
 
 ### 1. Contract / funds safety
 
-- [ ] Final mainnet contract addresses are set in both `KEEPER_CONTRACT_ADDRESS` and `NEXT_PUBLIC_CONTRACT_ADDRESS`.
-- [ ] `INDEXER_START_BLOCK` and `NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK` match the real deploy block.
-- [ ] Ownership is transferred to a Safe multisig or equivalent governance-safe setup.
-- [ ] Randomness hardening is explicitly signed off: at minimum, deployed winner entropy must not include `msg.sender`; for higher-value launch, use VRF or a two-phase commit/reveal with future-block entropy.
-- [ ] Public `resolveEpoch` behavior is documented and monitored so resolver withholding, resolver rewards, and stuck epochs are visible.
-- [ ] A manual verify pass confirms jackpot, Safety Pool, deposit, reward, and resolve reads against chain.
-
-Ready when:
-- mainnet env boots without fail-fast config errors
-- web values and keeper values point at the same contract
-- no privileged EOA remains as the long-term owner
-- randomness risk is accepted in writing or mitigated in the deployed contract
+- [ ] Final redacted env snapshot passes with `npm.cmd run proof:mainnet -- --strict --out=docs/mainnet-env-proof.log`.
+- [ ] Final redacted `proof:mainnet` and `proof:chain` outputs are saved with `npm.cmd run proof:mainnet -- --strict --out=docs/mainnet-env-proof.log` and `npm.cmd run proof:chain -- --strict --out=docs/chain-proof-snapshot.json` for sign-off collection.
+- [ ] Sign-off collector runs with `npm.cmd run proof:signoff:collect -- --epochs=<count> --user=<wallet> --env-log=docs/mainnet-env-proof.log --chain-log=docs/chain-proof-snapshot.json --out=docs/signoff-proof.draft.json`.
+- [ ] Final strict signoff passes with `npm.cmd run proof:signoff -- --strict`; env, owner, randomness, and chain comparison evidence contains concrete paths, links, commands, artifacts, addresses, or tx hashes.
+- [ ] Owner is verified as Safe/multisig or explicitly approved governance path.
+- [ ] Randomness model has explicit operator sign-off.
+- [ ] Jackpot, Safety Pool, rewards, rebates, deposits, and resolve are checked against direct chain reads.
 
 ### 2. Auto-mine runtime safety
 
-- [ ] Run a canary session of at least 50 real rounds on the target network/RPC.
-- [ ] Verify there are no duplicate round starts after refresh, remount, route switch, or reconnect.
-- [ ] Verify there are no repeated `replacement transaction underpriced` or `nonce too low` loops.
-- [ ] Verify a pending tx survives reload and recovers to the correct next state.
-- [ ] Verify tab-close and restore behavior does not create duplicate bets.
-
-Ready when:
-- each round produces at most one effective bet action
-- pending bet recovery converges without duplicate broadcast
-- restore logic does not start a second runtime in the same tab
+- [ ] Real canary epochs are recorded on target RPC, not simulated tx counts; strict proof requires at least 50 successful auto-miner unique epochs.
+- [ ] Auto-miner reload, reconnect, tab-close restore, pending tx recovery, and remount recovery are tested with concrete evidence paths, reports, tx hashes, or browser artifacts.
+- [ ] Duplicate bet, duplicate tx hash, nonce loop, and stuck pending scans are clean.
+- [ ] Canary proof draft is collected with `npm.cmd run proof:canary:draft -- --network=linea-mainnet --chain-id=59144 --contract=<contract> --rpc-label=<redacted-rpc-label> --live-log=data/live-test-runs/live-canary-YYYY.jsonl --target-artifact=docs/canary-target-proof.log --recovery-artifact=docs/canary-recovery-proof.log --session-artifact=docs/canary-session-summary.log --tx-artifact=docs/canary-transaction-scan.log --out=docs/canary-proof.draft.json` after the real canary JSONL and recovery/session/transaction artifacts are available.
+- [ ] Final canary proof passes with `npm.cmd run proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict`; target network, recovery, auto-miner session, and transaction health sections include concrete evidence.
 
 ### 3. Production health / supervision
 
 - [ ] `lore-site`, `lore-bot`, and `lore-indexer` run as separate supervised processes.
-- [ ] `LORE_DB_PATH` points to a persistent absolute SQLite path outside the repo.
-- [ ] `npm run health:prod` is wired into external monitoring or cron.
-- [ ] `/api/health/runtime` and `/api/health/data-sync` are tested with the diagnostics secret.
-- [ ] `TRUST_PROXY_HEADERS=1` is enabled only after the edge proxy is confirmed to strip spoofed client IP headers.
-- [ ] Backups for SQLite are scheduled and a restore test has been done once.
-
-Ready when:
-- `health:prod` stays green on the real host
-- PM2 or equivalent restarts failed processes automatically
-- DB survives process restarts and host reboot
+- [ ] Persistent `LORE_DB_PATH` is outside the repo and survives restart/reboot.
+- [ ] Host collector runs with `npm.cmd run proof:host:collect -- --origin=https://playlore.xyz --host-type=production --load-origin=https://canary.playlore.xyz --load-host-type=canary --health-log=docs/host-health-prod.log --load-log=docs/host-load-http.log --out=docs/host-proof.draft.json`.
+- [ ] Host strict check passes with `npm.cmd run proof:host -- --strict`; supervisor, persistent DB, `health:prod`, and `load:http` sections include concrete evidence, and health evidence includes numeric `finalityLagBlocks`.
+- [ ] Restore drill log is produced before collection with `npm.cmd run proof:restore -- --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo>` using external source, backup, and restore paths; save redacted output as `docs/restore-drill.log`.
+- [ ] Restore collector runs with `npm.cmd run proof:restore:collect -- --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --restored-origin=https://restore.playlore.xyz --restored-host-type=restore --restore-log=docs/restore-drill.log --health-log=docs/restore-health-prod.log --out=docs/restore-proof.draft.json`.
+- [ ] Restored host `health:prod` is run against `https://restore.playlore.xyz` and saved as `docs/restore-health-prod.log` with numeric `finalityLagBlocks` before `proof:restore:collect`.
+- [ ] Restore strict check passes with `npm.cmd run proof:restore -- --strict --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --manifest=docs/restore-proof.json`, including concrete backup schedule, restore drill, restored `health:prod` evidence with numeric `finalityLagBlocks`, and concrete indexer preservation evidence.
 
 ### 4. Failure-state UX
 
-- [ ] Every disabled action in the hub explains why it is disabled.
-- [ ] Pending states are explicit for bet submit, resolve, chat auth, and profile save.
-- [ ] Degraded backend states show a visible hint instead of silently serving stale data.
-- [ ] Error recovery paths exist for route chunk issues and failed lazy loads.
-- [ ] Maintenance/read-only mode can be enabled without code changes.
-
-Ready when:
-- there is no silent no-op button in the main user flows
-- users can tell whether data is fresh, pending, or degraded
+- [ ] Disabled wallet/bet/chat/profile actions explain the reason.
+- [ ] Pending states are visible for bet, resolve, chat auth, and profile save.
+- [ ] Degraded or stale data is labelled clearly.
+- [ ] No silent no-op remains in wallet, mining, chat, or profile flows.
 
 ### 5. Wallet / network correctness
 
-- [ ] Connect, disconnect, reconnect, and wrong-network flows are tested on desktop and mobile.
-- [ ] Gas guidance is visible enough for first-time users.
-- [ ] First real transaction flow is tested with a clean wallet.
-- [ ] Auth modal, Privy, and chat auth are tested under slow network conditions.
-
-Ready when:
-- a first-time user can connect, place one bet, and understand what happened without guessing
+- [ ] Privy allowed origins include exact production origin.
+- [ ] Connect, disconnect, reconnect, wrong network, mobile Web3 browser, clean wallet first tx, and slow auth modal are tested.
+- [ ] QA plan is generated with `npm.cmd run proof:qa:plan -- --origin=https://playlore.xyz --network=linea-mainnet --chain-id=59144 --out=docs/qa-canary-test-plan.draft.md`.
+- [ ] QA proof draft is collected with `npm.cmd run proof:qa:draft -- --origin=https://playlore.xyz --network=linea-mainnet --chain-id=59144 --wallet-artifact=docs/qa-wallet-flow-report.md --failure-artifact=docs/qa-failure-state-report.md --support-artifact=docs/qa-support-audit-report.md --finalqa-artifact=docs/qa-final-browser-report.md --smoke-artifact=docs/qa-smoke-debug-autominer.log --clean-wallet-tx=<txHash> --out=docs/qa-proof.draft.json` after wallet, failure-state, support/audit, final browser, smoke, and clean-wallet tx artifacts are available.
+- [ ] QA strict proof passes with `npm.cmd run proof:qa -- --strict`; every completed item has concrete artifact-like evidence such as a real path, URL, screenshot, log, report, command output, or tx hash, not generic text like `checked`.
 
 ## Should-have
 
-### 6. Support / audit visibility
-
-- [ ] User-facing bet history includes epoch, tile, amount, tx hash, and result state.
-- [ ] Auto-mine logs include stable fields for round, epoch, nonce, tx hash, and retry count.
-- [ ] Admin or diagnostics view exposes indexer lag, last heartbeat, and serving mode clearly.
-
-### 7. Observability
-
-- [ ] Errors are centralized in Sentry or equivalent.
-- [ ] Alerts exist for stale indexer heartbeat, large lag, repeated bot restarts, and repeated chunk failures.
-- [ ] Log format is consistent enough to grep by scope, epoch, tx hash, and wallet.
-
-### 8. Browser reliability
-
-- [ ] Critical UI elements expose stable `data-*` selectors for smoke tests.
-- [ ] Known environment-only browser noise is isolated from real regressions.
-- [ ] Cold-load performance of hub, analytics, whitepaper, and FAQ is checked on a clean browser profile.
+- [ ] Fresh indexer DB dry-run from deploy block is executed with `npm.cmd run indexer:once` using a fresh external `LORE_DB_PATH`, matching `INDEXER_START_BLOCK` / `NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK`, and positive `INDEXER_FINALITY_BLOCKS`.
+- [ ] Indexer proof draft is collected with `npm.cmd run proof:indexer:collect -- --fresh-db=true --epochs=<count> --chain-id=59144 --deploy-block=<deploy-block> --finality-blocks=<finality-blocks> --indexer-log=docs/indexer-once.log --health-log=docs/indexer-health-prod.log --chain-snapshot=docs/chain-proof-snapshot.json --out=docs/indexer-proof.draft.json` after direct chain snapshot/comparison evidence is available.
+- [ ] Indexer strict check passes with `npm.cmd run proof:indexer -- --strict`; dry-run, finality, chain snapshot, and each chain comparison include concrete evidence paths, links, artifacts, command output, or direct-chain summaries.
+- [ ] Monitoring plan is generated with `npm.cmd run proof:monitoring:plan -- --provider=<provider> --error-provider=<error-provider> --origin=https://playlore.xyz --out=docs/monitoring-alert-test-plan.draft.md`.
+- [ ] Monitoring draft is collected with `npm.cmd run proof:monitoring:draft -- --provider=<provider> --error-provider=<error-provider> --origin=https://playlore.xyz --monitor-artifact=docs/monitoring-alert-export.log --recovery-artifact=docs/monitoring-recovery-export.log --alert-target-artifact=docs/monitoring-alert-target-test.log --error-event-artifact=docs/error-tracking-test-event.log --out=docs/monitoring-proof.draft.json` after fired/recovery alert, alert-target, and error-event artifacts are available.
+- [ ] Monitoring strict check passes with `npm.cmd run proof:monitoring -- --strict`.
+- [ ] External alerts include one complete enabled monitor entry per required kind, with concrete fired and recovery/resolution evidence for health:prod, stale indexer, lag, bot/indexer restarts, and repeated reverted tx.
+- [ ] Centralized error tracking has a real test event with concrete event id/link/evidence and redaction proof.
 
 ## Polish
 
-### 9. UX / onboarding
-
-- [ ] First-visit tutorial is short and accurate for mainnet behavior.
-- [ ] FAQ answers mainnet questions first: gas, irreversible bets, jackpots, Safety Pool, delays, wallet support.
-- [ ] Analytics labels and freshness hints are easy to read.
-- [ ] White Paper and FAQ navigation are usable on mobile.
-
-### 10. Chat / community
-
-- [ ] Chat rate-limit feedback remains visible and non-jittery.
-- [ ] Chat moderation policy exists before launch.
-- [ ] Profile modal works reliably on desktop and mobile with long avatar lists.
-
-### 11. Visual consistency
-
-- [ ] Right-side layouts behave consistently across Hub and non-Hub tabs.
-- [ ] Chat geometry is locked and visually consistent across pages.
-- [ ] Dock, floating actions, and overlays do not overlap on common desktop/mobile breakpoints.
+- [ ] Bet history exposes epoch, tile, amount, tx hash, and result.
+- [ ] Auto-miner logs expose round, epoch, nonce, tx, retry, and stop reason.
+- [ ] Diagnostics/admin view exposes indexer lag, heartbeat, and serving mode.
+- [ ] Mobile layout, right panel, overlays, chat geometry, FAQ, Whitepaper, and onboarding have mainnet-first wording.
 
 ## Recommended launch order
 
-1. Complete every `Blocker`.
-2. Run `npm run build`.
-3. Run `npm run smoke:browser`.
-4. Run `npm run health:prod` against the production origin.
-5. Run the real-wallet mainnet canary.
-6. Freeze UI/layout changes.
-7. Launch.
+1. Restore and review all draft proof files.
+2. Collect G1-G9 external evidence on staging/canary/production targets.
+3. Run real canary epochs and wallet QA for G10-G14.
+4. Run `npm.cmd run proof:files -- --canary-log=<canary-log-file>`.
+5. Run `npm.cmd run proof:launch -- --strict --canary-log=<canary-log-file>`.
+6. Launch only when docs/mainnet-proof-record.md and docs/mainnet-status-board.md show G1-G14 Complete with concrete evidence.

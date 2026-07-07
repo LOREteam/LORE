@@ -24,29 +24,36 @@ export interface LiveStateApiResponse {
 interface UseGameLiveStateSnapshotOptions {
   initialSnapshot?: LiveStateApiResponse | null;
   isPageVisible: boolean;
+  forceLiveContractReads?: boolean;
 }
 
 const LIVE_STATE_FALLBACK_POLL_MS = 5_000;
 const LIVE_STATE_FETCH_TIMEOUT_MS = 10_000;
 const LIVE_STATE_SNAPSHOT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const LIVE_STATE_SNAPSHOT_MAX_FUTURE_SKEW_MS = 5_000;
 const LIVE_STATE_BOOT_TIMEOUT_MS = 2_500;
 const LIVE_READ_DEFER_MS = 1_200;
 const LIVE_STATE_CACHE_WRITE_MIN_MS = 60_000;
 const LIVE_STATE_DISPOSE_ABORT_REASON = "live-state-effect-disposed";
 const LIVE_STATE_TIMEOUT_ABORT_REASON = "live-state-request-timeout";
 
-function getLiveStateSnapshotKey() {
+export function getLiveStateSnapshotKey() {
   return `lore:live-state-snapshot:v1:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 }
 
-function loadLiveStateSnapshot(): LiveStateApiResponse | null {
+export function isLiveStateSnapshotFresh(fetchedAt: unknown, now = Date.now()): boolean {
+  if (typeof fetchedAt !== "number" || !Number.isFinite(fetchedAt) || fetchedAt <= 0) return false;
+  if (fetchedAt - now > LIVE_STATE_SNAPSHOT_MAX_FUTURE_SKEW_MS) return false;
+  return now - fetchedAt <= LIVE_STATE_SNAPSHOT_MAX_AGE_MS;
+}
+
+export function loadLiveStateSnapshot(): LiveStateApiResponse | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(getLiveStateSnapshotKey());
     if (!raw) return null;
     const parsed = JSON.parse(raw) as LiveStateApiResponse;
-    if (!parsed || typeof parsed.fetchedAt !== "number") return null;
-    if (Date.now() - parsed.fetchedAt > LIVE_STATE_SNAPSHOT_MAX_AGE_MS) return null;
+    if (!parsed || !isLiveStateSnapshotFresh(parsed.fetchedAt)) return null;
     return parsed;
   } catch {
     return null;
@@ -87,7 +94,7 @@ function toBigIntArray(values?: string[] | null) {
 }
 
 export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOptions) {
-  const { initialSnapshot = null, isPageVisible } = options;
+  const { initialSnapshot = null, isPageVisible, forceLiveContractReads = false } = options;
   const [snapshotState, setSnapshotState] = useState(() => {
     const snapshot = initialSnapshot;
     return {
@@ -133,6 +140,13 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
 
   useEffect(() => {
     if (liveContractReadsEnabled) return;
+    if (forceLiveContractReads) {
+      setSnapshotState((current) =>
+        current.liveContractReadsEnabled ? current : { ...current, liveContractReadsEnabled: true },
+      );
+      return;
+    }
+    if (snapshotState.snapshot != null && !snapshotState.bootstrapPending) return;
     const timeoutMs =
       snapshotState.snapshot == null && snapshotState.bootstrapPending
         ? LIVE_STATE_BOOT_TIMEOUT_MS
@@ -143,7 +157,7 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
       );
     }, timeoutMs);
     return () => window.clearTimeout(timeoutId);
-  }, [liveContractReadsEnabled, snapshotState.bootstrapPending, snapshotState.snapshot]);
+  }, [forceLiveContractReads, liveContractReadsEnabled, snapshotState.bootstrapPending, snapshotState.snapshot]);
 
   useEffect(() => {
     if (!isPageVisible) return;
@@ -161,12 +175,19 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
         LIVE_STATE_FETCH_TIMEOUT_MS,
       );
       controller.signal.addEventListener("abort", abortRequest, { once: true });
+      const enableLiveReadsAfterFailure = () => {
+        if (consecutiveFailures < 2) return;
+        setSnapshotState((current) =>
+          current.liveContractReadsEnabled ? current : { ...current, liveContractReadsEnabled: true },
+        );
+      };
 
       try {
         const response = await fetch("/api/live-state", { cache: "no-store", signal: requestController.signal });
         if (controller.signal.aborted || requestController.signal.aborted) return;
         if (!response.ok) {
           consecutiveFailures++;
+          enableLiveReadsAfterFailure();
           return;
         }
         consecutiveFailures = 0;
@@ -208,6 +229,7 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
           return;
         }
         consecutiveFailures++;
+        enableLiveReadsAfterFailure();
         if (consecutiveFailures <= 2) {
           log.warn("LiveState", "fetch failed", {
             message:

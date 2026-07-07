@@ -8,6 +8,7 @@ import {
   createTabId,
   getSecureRandomNumber,
   getStableTabId,
+  sanitizeTabLock,
 } from "./useMining.shared";
 
 const TAB_ID = getStableTabId();
@@ -19,12 +20,12 @@ const lockChannel =
 
 const pendingLockPingResolvers = new Map<string, (ownerAlive: boolean) => void>();
 
-function readTabLock(): { id: string; ts: number; tx?: string } | null {
+function readTabLock() {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(TAB_LOCK_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as { id: string; ts: number; tx?: string };
+    return sanitizeTabLock(JSON.parse(raw));
   } catch {
     return null;
   }
@@ -34,8 +35,8 @@ export function acquireTabLock(): boolean {
   try {
     const raw = localStorage.getItem(TAB_LOCK_KEY);
     if (raw) {
-      const lock = JSON.parse(raw) as { id: string; ts: number };
-      if (lock.id !== TAB_ID && Date.now() - lock.ts < TAB_LOCK_TTL_MS) {
+      const lock = sanitizeTabLock(JSON.parse(raw));
+      if (lock && lock.id !== TAB_ID && Date.now() - lock.ts < TAB_LOCK_TTL_MS) {
         return false;
       }
     }
@@ -45,8 +46,8 @@ export function acquireTabLock(): boolean {
 
     const verifyRaw = localStorage.getItem(TAB_LOCK_KEY);
     if (!verifyRaw) return false;
-    const verifyLock = JSON.parse(verifyRaw) as { id: string; ts: number; tx?: string };
-    return verifyLock.id === TAB_ID;
+    const verifyLock = sanitizeTabLock(JSON.parse(verifyRaw));
+    return verifyLock?.id === TAB_ID;
   } catch {
     return false;
   }
@@ -99,7 +100,8 @@ export function renewTabLock() {
   try {
     const raw = localStorage.getItem(TAB_LOCK_KEY);
     if (!raw) return;
-    const lock = JSON.parse(raw) as { id: string; ts: number; tx?: string };
+    const lock = sanitizeTabLock(JSON.parse(raw));
+    if (!lock) return;
     if (lock.id === TAB_ID) {
       localStorage.setItem(TAB_LOCK_KEY, JSON.stringify({ id: TAB_ID, ts: Date.now(), tx: lock.tx }));
     }
@@ -112,7 +114,8 @@ export function releaseTabLock() {
   try {
     const raw = localStorage.getItem(TAB_LOCK_KEY);
     if (!raw) return;
-    const lock = JSON.parse(raw) as { id: string; tx?: string };
+    const lock = sanitizeTabLock(JSON.parse(raw));
+    if (!lock) return;
     if (lock.id === TAB_ID) {
       localStorage.removeItem(TAB_LOCK_KEY);
       lockChannel?.postMessage({ type: "lock-released", from: TAB_ID });

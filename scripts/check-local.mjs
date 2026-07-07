@@ -2,13 +2,14 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
 
-const CHECK_LOCAL_PORT = Number(process.env.CHECK_LOCAL_PORT || "3101");
+const CHECK_LOCAL_PORT = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_PORT, 3101);
 const CHECK_LOCAL_DIST_DIR = process.env.CHECK_LOCAL_DIST_DIR || ".next-check";
 const DEFAULT_LOCAL_SMOKE_BASE_URL = `http://127.0.0.1:${CHECK_LOCAL_PORT}`;
 const SMOKE_BASE_URL = process.env.SMOKE_BASE_URL || DEFAULT_LOCAL_SMOKE_BASE_URL;
 const SHOULD_START_LOCAL_SERVER = !process.env.SMOKE_BASE_URL;
-const SERVER_START_TIMEOUT_MS = Number(process.env.CHECK_LOCAL_SERVER_START_TIMEOUT_MS || "90000");
+const SERVER_START_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_SERVER_START_TIMEOUT_MS, 90_000);
 const CHECK_LOCAL_NEXT_ENV = { NEXT_DIST_DIR: CHECK_LOCAL_DIST_DIR };
 
 const npmCommand = process.env.npm_execpath && process.execPath ? process.execPath : null;
@@ -17,12 +18,14 @@ const steps = npmCommand
   ? [
       { command: npmCommand, args: ["run", "lint"] },
       { command: npmCommand, args: ["run", "test:logic"] },
+      { command: npmCommand, args: ["run", "test:contract"] },
       { command: npmCommand, args: ["run", "build"] },
       { command: npmCommand, args: ["run", "typecheck"], retryOnce: true },
     ]
   : [
       { command: process.execPath, args: [resolve("node_modules", "eslint", "bin", "eslint.js"), "."] },
       { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-business-logic.mjs")] },
+      { command: process.execPath, args: [resolve("scripts", "test-contract-v9-invariants.mjs")] },
       { command: process.execPath, args: [resolve("scripts", "patch-privy-7702.mjs")] },
       { command: process.execPath, args: [nextBin, "build", "--webpack"], kind: "build" },
       { command: process.execPath, args: [nextBin, "typegen"], retryOnce: true },

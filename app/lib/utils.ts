@@ -53,14 +53,20 @@ export const safeToFixed = (value: number, decimals: number, fallback = "0.00"):
 /** Race a promise against a timeout. Rejects with a named error on timeout. */
 export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timerId: ReturnType<typeof setTimeout> | null = null;
+  let raceSettled = false;
   const timeoutPromise = new Promise<T>((_, reject) => {
     timerId = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+      const timeoutError = new Error(`${label} timed out after ${timeoutMs}ms`);
+      timeoutError.name = "TimeoutError";
+      reject(timeoutError);
     }, timeoutMs);
   });
-  // Prevent unhandled rejection noise when timeout wins the race.
-  const guarded = promise.catch((err) => { throw err; });
+  const guarded = promise.catch((err) => {
+    if (raceSettled) return new Promise<T>(() => {});
+    throw err;
+  });
   return Promise.race([guarded, timeoutPromise]).finally(() => {
+    raceSettled = true;
     if (timerId !== null) { clearTimeout(timerId); timerId = null; }
   });
 }
@@ -119,14 +125,40 @@ export function formatUnknownError(error: unknown): string {
 
 /** Check if an error was a user rejection (MetaMask, WalletConnect, Coinbase, etc.) */
 export const isUserRejection = (err: unknown): boolean => {
-  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const values: string[] = [];
+  const collect = (value: unknown, depth = 0) => {
+    if (value == null || depth > 2) return;
+    if (typeof value === "string" || typeof value === "number") {
+      values.push(String(value));
+      return;
+    }
+    if (value instanceof Error) {
+      values.push(value.name, value.message);
+      collect((value as Error & { code?: unknown }).code, depth + 1);
+      collect((value as Error & { cause?: unknown }).cause, depth + 1);
+      return;
+    }
+    if (typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      collect(record.code, depth + 1);
+      collect(record.name, depth + 1);
+      collect(record.message, depth + 1);
+      collect(record.details, depth + 1);
+      collect(record.shortMessage, depth + 1);
+      collect(record.cause, depth + 1);
+    }
+  };
+  collect(err);
+  const msg = values.join(" ").toLowerCase();
   return (
+    msg.includes("4001") ||
     msg.includes("user rejected") ||
     msg.includes("user denied") ||
     msg.includes("rejected by user") ||
     msg.includes("user cancelled") ||
     msg.includes("user canceled") ||
     msg.includes("action_rejected") ||
+    msg.includes("userrejectedrequesterror") ||
     msg.includes("request rejected")
   );
 };

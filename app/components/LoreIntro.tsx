@@ -10,8 +10,12 @@ export const LoreIntro = React.memo(function LoreIntro() {
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
-    const d = localStorage.getItem(DISMISSED_KEY);
-    if (!d) setVisible(true);
+    try {
+      const d = localStorage.getItem(DISMISSED_KEY);
+      if (!d) setVisible(true);
+    } catch {
+      setVisible(true);
+    }
   }, []);
 
   const dismiss = () => {

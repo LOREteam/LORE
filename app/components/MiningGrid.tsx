@@ -263,9 +263,15 @@ const Tile = React.memo(function Tile({
   const isMyWin = isWinner && hasMyBet;
   const isNeutralWinner = isWinner && !hasMyBet;
   const compactAmount = liveStateReady || coldBootDefaults ? compactTileAmount(displayAmount) : "...";
+  const displayAmountNumber = Number.parseFloat(displayAmount);
+  const hasDisplayedStake = Number.isFinite(displayAmountNumber) && displayAmountNumber > 0;
+  const isLiveDisplayReady = liveStateReady || coldBootDefaults;
+  const showUserBadge = !isLiveDisplayReady || hasDisplayedStake;
   const displayedUsers =
-    liveStateReady || coldBootDefaults
-      ? Math.max(users, hasMyBet ? 1 : 0)
+    isLiveDisplayReady
+      ? hasDisplayedStake
+        ? Math.max(users, hasMyBet ? 1 : 0)
+        : 0
       : users;
   const ariaLabel = buildTileAriaLabel({
     tileId,
@@ -326,35 +332,37 @@ const Tile = React.memo(function Tile({
           #{tileId}
         </span>
 
-        <span
-          className={`lore-hud flex items-center gap-0.5 text-[7px] font-bold leading-none sm:gap-1 sm:text-[10px] ${
-            isMyWin
-              ? "text-cyan-100/75"
-              : isNeutralWinner
-                ? "text-amber-200/70"
-                : hasMyBet
-                  ? "text-emerald-200/80"
-                  : isSelected
-                    ? "text-violet-100/70"
-                  : "text-gray-400"
-          }`}
-        >
-          <span>{liveStateReady || coldBootDefaults ? displayedUsers : "-"}</span>
-          <svg
-            viewBox="0 0 16 16"
-            fill="none"
-            aria-hidden="true"
-            className="h-2.5 w-2.5 sm:h-3 sm:w-3"
+        {showUserBadge && (
+          <span
+            className={`lore-hud flex items-center gap-0.5 text-[7px] font-bold leading-none sm:gap-1 sm:text-[10px] ${
+              isMyWin
+                ? "text-cyan-100/75"
+                : isNeutralWinner
+                  ? "text-amber-200/70"
+                  : hasMyBet
+                    ? "text-emerald-200/80"
+                    : isSelected
+                      ? "text-violet-100/70"
+                    : "text-gray-400"
+            }`}
           >
-            <path
-              d="M8 8.167A2.417 2.417 0 1 0 8 3.333a2.417 2.417 0 0 0 0 4.834ZM3.833 12.667c0-1.61 1.94-2.917 4.167-2.917s4.167 1.306 4.167 2.917"
-              stroke="currentColor"
-              strokeWidth="1.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </span>
+            <span>{isLiveDisplayReady ? displayedUsers : "-"}</span>
+            <svg
+              viewBox="0 0 16 16"
+              fill="none"
+              aria-hidden="true"
+              className="h-2.5 w-2.5 sm:h-3 sm:w-3"
+            >
+              <path
+                d="M8 8.167A2.417 2.417 0 1 0 8 3.333a2.417 2.417 0 0 0 0 4.834ZM3.833 12.667c0-1.61 1.94-2.917 4.167-2.917s4.167 1.306 4.167 2.917"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+        )}
       </div>
 
       <div className="relative z-10 flex w-full flex-1 items-center justify-center px-0.5">

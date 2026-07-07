@@ -15,35 +15,46 @@ export function createZeroTileUserCounts(): number[] {
   return ZERO_TILE_USER_COUNTS;
 }
 
+function isBigIntValue(value: unknown): value is bigint {
+  return typeof value === "bigint";
+}
+
+function formatWeiToNumber(value: unknown): number {
+  if (!isBigIntValue(value)) return 0;
+  const parsed = Number(formatUnits(value, 18));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export function buildJackpotInfo(jackpotInfoRaw: unknown) {
   if (!jackpotInfoRaw) return null;
-  const t = jackpotInfoRaw as JackpotInfoTuple;
+  if (!Array.isArray(jackpotInfoRaw) || jackpotInfoRaw.length < 8) return null;
+  if (!jackpotInfoRaw.every(isBigIntValue)) return null;
+  const t = jackpotInfoRaw as unknown as JackpotInfoTuple;
   return {
-    dailyPool: parseFloat(formatUnits(t[0], 18)),
+    dailyPool: formatWeiToNumber(t[0]),
     dailyPoolWei: t[0],
-    weeklyPool: parseFloat(formatUnits(t[1], 18)),
+    weeklyPool: formatWeiToNumber(t[1]),
     weeklyPoolWei: t[1],
     lastDailyDay: Number(t[2]),
     lastWeeklyWeek: Number(t[3]),
     lastDailyJackpotEpoch: t[4] > 0n ? t[4].toString() : null,
     lastWeeklyJackpotEpoch: t[5] > 0n ? t[5].toString() : null,
-    lastDailyJackpotAmount: parseFloat(formatUnits(t[6], 18)),
-    lastWeeklyJackpotAmount: parseFloat(formatUnits(t[7], 18)),
+    lastDailyJackpotAmount: formatWeiToNumber(t[6]),
+    lastWeeklyJackpotAmount: formatWeiToNumber(t[7]),
   };
 }
 
 export function buildRolloverAmount(rolloverPoolRaw: unknown) {
-  if (rolloverPoolRaw === undefined) return 0;
-  return parseFloat(formatUnits(rolloverPoolRaw as bigint, 18));
+  return formatWeiToNumber(rolloverPoolRaw);
 }
 
 export function buildRealTotalStaked(tileData: unknown, rolloverPoolRaw: unknown) {
   if (!tileData) return 0;
   const pools = (tileData as [unknown])[0];
   if (!Array.isArray(pools)) return 0;
-  const currentPool = (pools as bigint[]).reduce((acc, val) => acc + val, 0n);
-  const roll = rolloverPoolRaw !== undefined ? (rolloverPoolRaw as bigint) : 0n;
-  return parseFloat(formatUnits(currentPool + roll, 18));
+  const currentPool = pools.reduce((acc, val) => acc + (isBigIntValue(val) ? val : 0n), 0n);
+  const roll = isBigIntValue(rolloverPoolRaw) ? rolloverPoolRaw : 0n;
+  return formatWeiToNumber(currentPool + roll);
 }
 
 export function buildWinningTileId(isRevealing: boolean, gridEpochData: unknown) {
@@ -86,16 +97,20 @@ export function buildTileViewData(tileData: unknown, tileUserCounts: number[], u
   return Array.from({ length: GRID_SIZE }, (_, i) => {
     const myBetRaw = userBetsAll?.[i];
     const hasMyBet = myBetRaw !== undefined && myBetRaw > 0n;
-    const poolWei = poolsArr?.[i] ?? 0n;
-    const poolDisplay = parseFloat(formatUnits(poolWei, 18)).toFixed(2);
+    const poolWei = isBigIntValue(poolsArr?.[i]) ? poolsArr[i] : 0n;
+    const poolAmount = formatWeiToNumber(poolWei);
+    const poolDisplay = poolAmount.toFixed(2);
+    const hasDisplayedPool = Number(poolDisplay) > 0;
     const indexedUsers = tileUserCounts[i] ?? 0;
     const liveUsers = Number(liveUsersArr?.[i] ?? 0n);
-    const users =
-      Math.max(
-        indexedUsers,
-        Number.isFinite(liveUsers) ? liveUsers : 0,
-        hasMyBet ? 1 : 0,
-      );
+    const users = hasDisplayedPool
+      ? Math.max(
+          indexedUsers,
+          Number.isFinite(liveUsers) ? liveUsers : 0,
+          hasMyBet ? 1 : 0,
+          1,
+        )
+      : 0;
     return { tileId: i + 1, users, poolDisplay, hasMyBet };
   });
 }

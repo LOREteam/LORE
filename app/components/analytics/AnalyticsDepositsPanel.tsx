@@ -3,8 +3,8 @@
 import React, { useMemo } from "react";
 import type { DepositEntry } from "../../hooks/useDepositHistory";
 import { formatDepositFreshnessLabel } from "../../lib/analyticsDepositsStatus";
+import { getExplorerTxUrl } from "../../lib/explorerLinks";
 import { loadingQuotes, emptyStates } from "../../lib/loreTexts";
-import { EXPLORER_TX_BASE_URL } from "../../lib/constants";
 import { LoreText } from "../LoreText";
 import { UiButton } from "../ui/UiButton";
 import { UiPanel } from "../ui/UiPanel";
@@ -60,6 +60,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
           amount: deposit.amount,
           reward: deposit.reward,
           txHash: deposit.txHash,
+          txUrl: getExplorerTxUrl(deposit.txHash),
           isNew: deposit.txHash ? newDepositIds.has(deposit.txHash) : false,
         };
       }),
@@ -241,9 +242,9 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
                         <span className="text-xs text-gray-400 ml-0.5">LINEA</span>
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
-                        {row.txHash ? (
+                        {row.txUrl ? (
                           <a
-                            href={`${EXPLORER_TX_BASE_URL}/${row.txHash}`}
+                            href={row.txUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-xs font-mono text-violet-400/60 hover:text-violet-400 transition-colors"

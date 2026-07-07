@@ -19,6 +19,7 @@ const ENABLE_CLIENT_BOOTSTRAP_RESOLVE = getConfiguredClientAutoResolveEnabled();
 // player gas needlessly.
 const ENABLE_CLIENT_WALLET_RESOLVE_FALLBACK = false;
 const BOOTSTRAP_RESOLVE_RETRY_MS = 30_000;
+const BOOTSTRAP_RESOLVE_MAX_RETRY_MS = 300_000;
 const ENABLE_AUTO_RESOLVE_SWEEP = getConfiguredAutoResolveSweepEnabled();
 const AUTO_RESOLVE_RETRY_AFTER_MS = 60_000;
 const MIN_ETH_FOR_GAS = 0.0005;
@@ -32,6 +33,20 @@ const BOOTSTRAP_RESOLVE_REQUEST_TIMEOUT_MS = 35_000;
  * contract's built-in `_autoResolveIfNeeded()` first, so the keeper only
  * fires when nobody actually wants to play. */
 const KEEPER_TRIGGER_INITIAL_DELAY_MS = 4_000;
+
+function getBootstrapRetryDelayMs(retryAfter: unknown): number {
+  const retryAfterSeconds =
+    typeof retryAfter === "number" || typeof retryAfter === "string"
+      ? Number(retryAfter)
+      : 0;
+  if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
+    return BOOTSTRAP_RESOLVE_RETRY_MS;
+  }
+  return Math.min(
+    BOOTSTRAP_RESOLVE_MAX_RETRY_MS,
+    Math.max(BOOTSTRAP_RESOLVE_RETRY_MS, retryAfterSeconds * 1000),
+  );
+}
 
 type SilentSender = (
   tx: {
@@ -288,10 +303,7 @@ export function useAutoResolve({
               nonce: payload.cancelledNonce,
             });
             markRetryScheduled(epochKey);
-            const retryMs = Math.max(
-              BOOTSTRAP_RESOLVE_RETRY_MS,
-              Number(payload.retryAfter ?? 0) * 1000,
-            );
+            const retryMs = getBootstrapRetryDelayMs(payload.retryAfter);
             if (!(await waitUnlessCancelled(() => cancelled, retryMs))) return;
             continue;
           }
@@ -315,20 +327,14 @@ export function useAutoResolve({
 
             if (noopReason === "bootstrap_resolve_throttled") {
               markRetryScheduled(epochKey);
-              const retryMs = Math.max(
-                BOOTSTRAP_RESOLVE_RETRY_MS,
-                Number(payload.retryAfter ?? 0) * 1000,
-              );
+              const retryMs = getBootstrapRetryDelayMs(payload.retryAfter);
               if (!(await waitUnlessCancelled(() => cancelled, retryMs))) return;
               continue;
             }
 
             if (noopReason === "bootstrap_rpc_unavailable") {
               markRetryScheduled(epochKey);
-              const retryMs = Math.max(
-                BOOTSTRAP_RESOLVE_RETRY_MS,
-                Number(payload.retryAfter ?? 0) * 1000,
-              );
+              const retryMs = getBootstrapRetryDelayMs(payload.retryAfter);
               if (!(await waitUnlessCancelled(() => cancelled, retryMs))) return;
               continue;
             }
@@ -338,10 +344,7 @@ export function useAutoResolve({
               noopReason === "cancel_stuck_tx_failed"
             ) {
               markRetryScheduled(epochKey);
-              const retryMs = Math.max(
-                BOOTSTRAP_RESOLVE_RETRY_MS,
-                Number(payload.retryAfter ?? 0) * 1000,
-              );
+              const retryMs = getBootstrapRetryDelayMs(payload.retryAfter);
               if (!(await waitUnlessCancelled(() => cancelled, retryMs))) return;
               continue;
             }
@@ -381,10 +384,7 @@ export function useAutoResolve({
             }
 
             markRetryScheduled(epochKey);
-            const retryMs = Math.max(
-              BOOTSTRAP_RESOLVE_RETRY_MS,
-              Number(payload.retryAfter ?? 0) * 1000,
-            );
+            const retryMs = getBootstrapRetryDelayMs(payload.retryAfter);
             if (!(await waitUnlessCancelled(() => cancelled, retryMs))) return;
             continue;
           }
@@ -404,10 +404,7 @@ export function useAutoResolve({
               retryAfter: payload?.retryAfter,
             });
             markRetryScheduled(epochKey);
-            const retryMs = Math.max(
-              BOOTSTRAP_RESOLVE_RETRY_MS,
-              Number(payload?.retryAfter ?? 0) * 1000,
-            );
+            const retryMs = getBootstrapRetryDelayMs(payload?.retryAfter);
             if (!(await waitUnlessCancelled(() => cancelled, retryMs))) return;
             continue;
           }

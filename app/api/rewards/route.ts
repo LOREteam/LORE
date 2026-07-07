@@ -38,7 +38,7 @@ function normalizeEpochs(epochsRaw: unknown) {
   return [...new Set(
     (Array.isArray(epochsRaw) ? epochsRaw : [])
       .map((value) => Number(value))
-      .filter((value) => Number.isInteger(value) && value > 0),
+      .filter((value) => Number.isSafeInteger(value) && value > 0),
   )].slice(0, MAX_EPOCHS_PER_REQUEST);
 }
 
@@ -57,13 +57,18 @@ export async function POST(request: Request) {
     limit: 20,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   let staleCache: RewardsPayload | null = null;
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
 
   try {
-    const body = (await request.json()) as RewardsRequest;
+    const body = (await request.json().catch(() => null)) as RewardsRequest | null;
+    if (!body || typeof body !== "object") {
+      failRouteMetric(metric, 400);
+      return jsonNoStore({ error: "Invalid rewards payload" }, 400);
+    }
+
     const user = typeof body.user === "string" ? body.user.toLowerCase() : "";
     if (!/^0x[0-9a-f]{40}$/.test(user)) {
       failRouteMetric(metric, 400);

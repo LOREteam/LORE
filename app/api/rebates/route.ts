@@ -10,7 +10,7 @@ import {
   markRouteStaleServed,
 } from "../_lib/runtimeMetrics";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
-import { CONTRACT_ADDRESS, publicClient } from "../_lib/dataBridge";
+import { CONTRACT_ADDRESS, isSafePositiveInteger, publicClient } from "../_lib/dataBridge";
 import { CONTRACT_HAS_REBATE_API, GAME_ABI } from "../../lib/constants";
 import { createRouteCache } from "../_lib/routeCache";
 import { logRouteError } from "../_lib/routeError";
@@ -26,6 +26,7 @@ const REBATE_SUMMARY_CONCURRENCY = 6;
 const REBATE_EXACT_CONCURRENCY = 6;
 const ROUTE_METRIC_KEY = "api/rebates";
 const REBATE_INDEXED_EPOCHS_CACHE_MS = 30_000;
+const REBATE_UNCHANGED_WATERMARK_REFRESH_MS = 5 * 60_000;
 
 type RebateEpochInfo = {
   epoch: number;
@@ -62,6 +63,7 @@ type RebateInfoResult = [bigint, bigint, bigint, boolean, boolean];
 
 const rebateRouteCache = createRouteCache<RebatePayload>(REBATE_ROUTE_CACHE_MAX_KEYS);
 const rebateIndexedEpochsCache = createRouteCache<number[]>(REBATE_ROUTE_CACHE_MAX_KEYS);
+const rebateCacheWatermarks = new Map<string, { refreshedAt: number; watermark: string }>();
 
 function formatServerTiming(params: {
   cacheStatus: "fresh" | "stale" | "miss" | "inflight";
@@ -103,13 +105,25 @@ function startRebateBackgroundRefresh(
   user: `0x${string}`,
   includeExact: boolean,
 ) {
+  const watermark = getRebateDataWatermark();
   startVersionedBackgroundRefresh({
     cache: rebateRouteCache,
     cacheKey,
     ttlMs: REBATE_ROUTE_CACHE_MS,
     routeMetricKey: ROUTE_METRIC_KEY,
+    shouldSkip: () => {
+      const cachedWatermark = rebateCacheWatermarks.get(cacheKey);
+      return Boolean(
+        cachedWatermark &&
+          cachedWatermark.watermark === watermark &&
+          Date.now() - cachedWatermark.refreshedAt < REBATE_UNCHANGED_WATERMARK_REFRESH_MS,
+      );
+    },
     build: () => buildRebatePayload(user, { includeExact }),
     toPayload: ({ payload }) => payload,
+    onCommit: () => {
+      rebateCacheWatermarks.set(cacheKey, { watermark, refreshedAt: Date.now() });
+    },
     onError: (error) => {
       logRouteError(ROUTE_METRIC_KEY, error, { user, phase: "background-refresh" });
     },
@@ -151,9 +165,7 @@ async function mapWithConcurrency<T, R>(
 }
 
 async function getIndexedEpochs(user: `0x${string}`): Promise<number[]> {
-  const currentEpoch = getMetaNumber("currentEpoch");
-  const lastIndexedBlock = getMetaBigInt("lastIndexedBlock")?.toString() ?? "null";
-  const cacheKey = `${user.toLowerCase()}:${Number.isInteger(currentEpoch) ? String(currentEpoch) : "null"}:${lastIndexedBlock}`;
+  const cacheKey = `${user.toLowerCase()}:${getRebateDataWatermark()}`;
   const cached = rebateIndexedEpochsCache.getFresh(cacheKey);
   if (cached) {
     return cached;
@@ -172,6 +184,12 @@ async function getIndexedEpochs(user: `0x${string}`): Promise<number[]> {
 
   rebateIndexedEpochsCache.setInflight(cacheKey, task);
   return task;
+}
+
+function getRebateDataWatermark() {
+  const currentEpoch = getMetaNumber("currentEpoch");
+  const lastIndexedBlock = getMetaBigInt("lastIndexedBlock")?.toString() ?? "null";
+  return `${isSafePositiveInteger(currentEpoch ?? 0) ? String(currentEpoch) : "null"}:${lastIndexedBlock}`;
 }
 
 async function loadClaimableEpochsExact(
@@ -199,7 +217,10 @@ async function loadClaimableEpochsExact(
         if (result.status !== "success") return;
         const [, , pendingWei, claimed, resolved] = result.result as [bigint, bigint, bigint, boolean, boolean];
         if (pendingWei > 0n && !claimed && resolved) {
-          claimable.add(Number(chunk[index]));
+          const epoch = Number(chunk[index]);
+          if (isSafePositiveInteger(epoch)) {
+            claimable.add(epoch);
+          }
         }
       });
     } catch {
@@ -213,7 +234,10 @@ async function loadClaimableEpochsExact(
           }) as [bigint, bigint, bigint, boolean, boolean];
           const [, , pendingWei, claimed, resolved] = result;
           if (pendingWei > 0n && !claimed && resolved) {
-            claimable.add(Number(epoch));
+            const epochNumber = Number(epoch);
+            if (isSafePositiveInteger(epochNumber)) {
+              claimable.add(epochNumber);
+            }
           }
         } catch {
           // ignore per-epoch read failures here
@@ -256,7 +280,7 @@ async function buildRebatePayload(
   }
 
   const indexedStartedAt = performance.now();
-  const epochs = await getIndexedEpochs(user);
+  const epochs = (await getIndexedEpochs(user)).filter(isSafePositiveInteger);
   const indexedMs = performance.now() - indexedStartedAt;
   if (epochs.length === 0) {
     return {
@@ -337,6 +361,7 @@ async function buildRebatePayload(
   recentResults.forEach((result, index) => {
     if (result.status !== "success") return;
     const epoch = Number(recentEpochBigInts[index]);
+    if (!isSafePositiveInteger(epoch)) return;
     const [rebatePoolWei, userVolumeWei, pendingWei, claimed, resolved] = result.result;
     recentEpochs.push({
       epoch,
@@ -415,6 +440,7 @@ export async function GET(request: NextRequest) {
   const forceFresh = request.nextUrl.searchParams.has("refresh");
   const includeExact = request.nextUrl.searchParams.get("exact") === "1";
   const effectiveCacheKey = includeExact ? `${cacheKey}:exact` : cacheKey;
+  const currentWatermark = getRebateDataWatermark();
   const cached = forceFresh ? null : rebateRouteCache.getFresh(effectiveCacheKey, now);
   if (cached) {
     markRouteCacheHit(ROUTE_METRIC_KEY);
@@ -440,6 +466,12 @@ export async function GET(request: NextRequest) {
             ttlMs: REBATE_ROUTE_CACHE_MS,
             build: () => buildRebatePayload(user, { includeExact }),
             toPayload: ({ payload }) => payload,
+            onCommit: () => {
+              rebateCacheWatermarks.set(effectiveCacheKey, {
+                watermark: currentWatermark,
+                refreshedAt: Date.now(),
+              });
+            },
           });
           return buildPromise.then(({ payload, timings }) => ({
             payload,

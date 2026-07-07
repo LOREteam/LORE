@@ -5,6 +5,60 @@ import {
   waitForUiHydration,
 } from "./core.mjs";
 
+async function readVisibleButtonTexts(page) {
+  return page.evaluate(() => [...document.querySelectorAll("button")]
+    .filter((button) => {
+      const style = window.getComputedStyle(button);
+      return style.visibility !== "hidden"
+        && style.display !== "none"
+        && Boolean(button.offsetWidth || button.offsetHeight || button.getClientRects().length);
+    })
+    .map((button) => (button.textContent ?? "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(-80));
+}
+
+async function clickVisibleEnabledButton(page, labels, timeoutMs) {
+  await page.waitForFunction((expectedLabels) => {
+    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    return [...document.querySelectorAll("button")].some((button) => {
+      const style = window.getComputedStyle(button);
+      const visible = style.visibility !== "hidden"
+        && style.display !== "none"
+        && Boolean(button.offsetWidth || button.offsetHeight || button.getClientRects().length);
+      return visible
+        && !button.disabled
+        && expectedLabels.includes(normalize(button.textContent));
+    });
+  }, labels, { timeout: timeoutMs });
+
+  const buttonMatch = await page.evaluate((expectedLabels) => {
+    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const buttons = [...document.querySelectorAll("button")];
+    const index = buttons.findIndex((button) => {
+      const style = window.getComputedStyle(button);
+      const visible = style.visibility !== "hidden"
+        && style.display !== "none"
+        && Boolean(button.offsetWidth || button.offsetHeight || button.getClientRects().length);
+      return visible
+        && !button.disabled
+        && expectedLabels.includes(normalize(button.textContent));
+    });
+    return {
+      index,
+      text: index >= 0 ? normalize(buttons[index]?.textContent) : "",
+    };
+  }, labels);
+
+  if (buttonMatch.index < 0) {
+    const visibleButtonTexts = await readVisibleButtonTexts(page);
+    throw new Error(`visible enabled button not found for ${labels.join(" | ")}; visible buttons: ${visibleButtonTexts.join(" | ")}`);
+  }
+
+  await page.locator("button").nth(buttonMatch.index).click({ timeout: Math.min(timeoutMs, 5_000) });
+  return buttonMatch.text;
+}
+
 async function clickFirstEnabledTile(page, timeoutMs, hydrationTimeoutMs) {
   await waitForUiHydration(page, hydrationTimeoutMs, "hub ui hydrated before tile click");
   try {
@@ -219,46 +273,121 @@ export async function openMobileAnalytics(page, options) {
 }
 
 export async function openLoginModal(page, timeoutMs) {
-  const modalTimeoutMs = Math.min(timeoutMs, 6_000);
-  const loginButton = page.getByRole("button", { name: /Login \/ Connect|Connect Wallet/i }).first();
+  const modalTimeoutMs = Math.min(timeoutMs, 15_000);
+  const privyReadyTimeoutMs = Math.max(modalTimeoutMs, timeoutMs);
+  const authEntrypointAttempts = [
+    ["Login / Connect"],
+    ["LOGIN TO BET"],
+    ["LOGIN TO START"],
+  ];
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  for (let attempt = 1; attempt <= authEntrypointAttempts.length; attempt += 1) {
     try {
-      await loginButton.click({ timeout: modalTimeoutMs });
+      await waitForUiHydration(page, privyReadyTimeoutMs, "hub ui hydrated before login modal");
+      const entrypointTimeoutMs = attempt === 1 ? privyReadyTimeoutMs : modalTimeoutMs;
+      const clickedLabel = await clickVisibleEnabledButton(page, authEntrypointAttempts[attempt - 1], entrypointTimeoutMs);
       await expectVisible(page.getByRole("heading", { name: "Log in or sign up" }), "login modal opens", modalTimeoutMs);
+      console.log(`PASS login modal entrypoint ${clickedLabel}`);
       await expectVisible(page.locator("input[type='email']"), "login modal email option", modalTimeoutMs);
       await expectVisible(page.getByRole("button", { name: "Continue with a wallet" }), "login modal wallet option", modalTimeoutMs);
       return true;
     } catch {
-      if (attempt === 1) {
-        try {
-          await page.evaluate(() => {
-            const buttons = [...document.querySelectorAll("button")];
-            const loginButton = buttons.find((button) => /^(Login \/ Connect|Connect Wallet)$/i.test(button.textContent?.trim() ?? ""));
-            loginButton?.click();
-          });
-        } catch (error) {
-          if (!isTransientNavigationError(error)) throw error;
-          await page.waitForTimeout(1500);
-        }
-        try {
-          await expectVisible(page.getByRole("heading", { name: "Log in or sign up" }), "login modal opens", modalTimeoutMs);
-          await expectVisible(page.locator("input[type='email']"), "login modal email option", modalTimeoutMs);
-          await expectVisible(page.getByRole("button", { name: "Continue with a wallet" }), "login modal wallet option", modalTimeoutMs);
-          return true;
-        } catch {
-          // continue to retry path below
-        }
-      }
-
-      if (attempt === 2) {
-        console.log("SKIP login modal smoke (auth widget did not open during smoke window)");
+      if (attempt === authEntrypointAttempts.length) {
+        const visibleButtonTexts = await readVisibleButtonTexts(page);
+        console.log(`SKIP login modal smoke (auth widget did not open during smoke window; visible buttons: ${visibleButtonTexts.join(" | ")})`);
         return false;
       }
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(1000 * attempt);
     }
   }
 
   return false;
+}
+
+export async function openWalletSelectorFromLoginModal(page, timeoutMs) {
+  const modalTimeoutMs = Math.min(timeoutMs, 10_000);
+  const walletOptionsTimeoutMs = Math.min(timeoutMs, 15_000);
+
+  const waitForWalletOptions = async () => {
+    await page.waitForFunction(() => {
+      const visibleButtonTexts = [...document.querySelectorAll("button")]
+        .filter((button) => Boolean(button.offsetWidth || button.offsetHeight || button.getClientRects().length))
+        .map((button) => (button.textContent ?? "").replace(/\s+/g, " ").trim());
+      return visibleButtonTexts.some((text) => text.includes("MetaMask"))
+        && visibleButtonTexts.some((text) => text.includes("Coinbase Wallet"));
+    }, undefined, { timeout: walletOptionsTimeoutMs });
+  };
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      await clickVisibleEnabledButton(page, ["Continue with a wallet"], modalTimeoutMs);
+      await expectVisible(
+        page.getByRole("heading", { name: "Select your wallet" }),
+        "wallet selector heading",
+        modalTimeoutMs,
+      );
+      await waitForWalletOptions();
+      break;
+    } catch (error) {
+      if (attempt >= 2) {
+        const visibleButtonTexts = await readVisibleButtonTexts(page);
+        throw new Error(`wallet selector options did not load; visible buttons: ${visibleButtonTexts.join(" | ")}`, { cause: error });
+      }
+      console.log("WARN wallet selector options did not load on first attempt; retrying auth widget");
+      await page.keyboard.press("Escape");
+      await expectVisible(page.getByRole("button", { name: /Login \/ Connect|Wallet Loading/i }), "login modal closes before wallet retry", modalTimeoutMs);
+      const reopened = await openLoginModal(page, timeoutMs);
+      if (!reopened) throw new Error("login modal did not reopen before wallet selector retry");
+    }
+  }
+
+  console.log("PASS MetaMask wallet option");
+  console.log("PASS Coinbase wallet option");
+  return true;
+}
+
+export async function verifyHubVisualRegressionGuards(page, timeoutMs) {
+  const guardTimeoutMs = Math.min(timeoutMs, 6_000);
+  await page.waitForFunction(() => {
+    const manualInput = document.getElementById("bet-amount-per-tile");
+    return manualInput instanceof HTMLInputElement && manualInput.classList.contains("lore-nums");
+  }, undefined, { timeout: guardTimeoutMs });
+  console.log("PASS manual bet numeric font");
+
+  await page.waitForFunction(() => {
+    const autoInputs = [...document.querySelectorAll(".control-panel-auto input.console-input")];
+    return autoInputs.length >= 3 && autoInputs.every((input) => input.classList.contains("lore-nums"));
+  }, undefined, { timeout: guardTimeoutMs });
+  console.log("PASS auto-miner numeric font");
+
+  await page.waitForFunction(() => {
+    const path = document.querySelector('[data-testid="header-pool-chart-line"]');
+    return path instanceof SVGPathElement && (path.getAttribute("d") ?? "").trim().length > 0;
+  }, undefined, { timeout: guardTimeoutMs });
+  console.log("PASS header pool chart line remains mounted");
+
+  return true;
+}
+
+export async function verifyReadOnlyMode(page, timeoutMs) {
+  const guardTimeoutMs = Math.min(timeoutMs, 6_000);
+  await expectVisible(page.locator('[data-testid="hub-read-only-banner"]').first(), "read-only hub banner", guardTimeoutMs);
+  await expectVisible(page.locator('[data-testid="manual-bet-action"]').first(), "manual bet read-only action", guardTimeoutMs);
+  await expectVisible(page.locator('[data-testid="auto-miner-action"]').first(), "auto-miner read-only action", guardTimeoutMs);
+  await page.waitForFunction(() => {
+    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
+    const manualAction = document.querySelector('[data-testid="manual-bet-action"]');
+    const autoMinerAction = document.querySelector('[data-testid="auto-miner-action"]');
+    return manualAction instanceof HTMLButtonElement
+      && autoMinerAction instanceof HTMLButtonElement
+      && normalize(manualAction.textContent) === "BETTING PAUSED"
+      && normalize(autoMinerAction.textContent) === "BETTING PAUSED"
+      && manualAction.disabled
+      && autoMinerAction.disabled;
+  }, undefined, { timeout: guardTimeoutMs });
+  console.log("PASS read-only betting controls disabled");
+  return true;
 }
 
 export async function closeLoginModal(page, timeoutMs) {
@@ -271,7 +400,7 @@ export async function closeLoginModal(page, timeoutMs) {
     await page.keyboard.press("Escape");
   }
 
-  await expectVisible(page.getByRole("button", { name: /Login \/ Connect|Connect Wallet/i }), "login modal closes", modalTimeoutMs);
+  await expectVisible(page.getByRole("button", { name: /Login \/ Connect|Wallet Loading/i }), "login modal closes", modalTimeoutMs);
 }
 
 export async function openChatDrawer(page, options) {
@@ -424,6 +553,7 @@ export async function verifyAutoMinerFailureScenarios(page, options) {
       runningParams: { betStr: "1.25", blocks: 4, rounds: 12 },
     });
     await expectVisible(page.getByText("Recovery queued", { exact: true }).first(), "auto-miner retry-wait badge", scenarioTimeoutMs);
+    await expectVisible(page.getByText("Auto-miner paused: RPC offline for too long. Retrying automatically...", { exact: true }).first(), "auto-miner retry-wait progress", scenarioTimeoutMs);
     await expectVisible(page.getByText("RESUME PENDING", { exact: true }).first(), "auto-miner retry-wait button", scenarioTimeoutMs);
     console.log("PASS auto-miner retry-wait scenario");
 
@@ -433,6 +563,7 @@ export async function verifyAutoMinerFailureScenarios(page, options) {
       runningParams: { betStr: "1.25", blocks: 4, rounds: 12 },
     });
     await expectVisible(page.getByText("Session Expired", { exact: true }).first(), "auto-miner session-expired badge", scenarioTimeoutMs);
+    await expectVisible(page.getByText("Session expired. Log out, log in again, then reload this page - the bot will auto-resume.", { exact: true }).first(), "auto-miner session-expired progress", scenarioTimeoutMs);
     await expectVisible(page.getByText("SESSION EXPIRED", { exact: true }).first(), "auto-miner session-expired button", scenarioTimeoutMs);
     console.log("PASS auto-miner session-expired scenario");
   } catch (error) {

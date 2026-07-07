@@ -1,29 +1,35 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { sanitizeChatAvatarValue } from "../lib/chatAvatar";
+import {
+  normalizeChatMessageAvatar,
+  normalizeChatMessages,
+  sortChatMessagesAsc,
+  type ChatMessage,
+} from "../lib/chatMessages";
+import { getChatPollDelayMs } from "../lib/chatPollDelay";
+import { CHAT_RATE_LIMIT_MS, parseChatRetryAfterMs } from "../lib/chatRateLimit";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { type ChatAuthControls, useChatAuth } from "./useChatAuth";
 
-export interface ChatMessage {
-  id: string;
-  text: string;
-  sender: string;
-  senderName: string | null;
-  senderAvatar: string | null;
-  timestamp: number;
-}
+export type { ChatMessage } from "../lib/chatMessages";
+
+export { CHAT_RATE_LIMIT_MS } from "../lib/chatRateLimit";
 
 const MESSAGES_LIMIT = 100;
-export const CHAT_RATE_LIMIT_MS = 1_500;
 const MAX_TEXT_LENGTH = 280;
-const POLL_INTERVAL_MS = 3_000;
-const HIDDEN_POLL_INTERVAL_MS = 30_000;
-const CLOSED_POLL_INTERVAL_MS = 20_000;
-const HIDDEN_CLOSED_POLL_INTERVAL_MS = 60_000;
 const CHAT_CACHE_KEY = "lore:chat-cache:v1";
 const NETWORK_WARN_THROTTLE_MS = 15_000;
-const MAX_AVATAR_LENGTH = 8_000;
+
+class ChatRateLimitError extends Error {
+  readonly retryAfterMs: number;
+
+  constructor(message: string, retryAfterMs: number) {
+    super(message);
+    this.name = "ChatRateLimitError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
 
 function areMessagesEqual(a: ChatMessage[], b: ChatMessage[]): boolean {
   if (a === b) return true;
@@ -57,6 +63,10 @@ function isChatAuthError(err: unknown): boolean {
   return msg.includes("http 401") || msg.includes("chat auth required");
 }
 
+function isChatRateLimitError(err: unknown): err is ChatRateLimitError {
+  return err instanceof ChatRateLimitError;
+}
+
 function warnNetworkOnce(tag: string, ref: { current: number }, err: unknown) {
   const now = Date.now();
   if (now - ref.current < NETWORK_WARN_THROTTLE_MS) return;
@@ -71,21 +81,7 @@ function loadCachedMessages(): ChatMessage[] {
     const raw = localStorage.getItem(CHAT_CACHE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item) => {
-        const v = (item ?? {}) as Record<string, unknown>;
-        return {
-          id: typeof v.id === "string" ? v.id : "",
-          text: typeof v.text === "string" ? v.text : "",
-          sender: typeof v.sender === "string" ? v.sender : "",
-          senderName: typeof v.senderName === "string" ? v.senderName : null,
-          senderAvatar: sanitizeChatAvatarValue(v.senderAvatar, MAX_AVATAR_LENGTH),
-          timestamp: typeof v.timestamp === "number" ? v.timestamp : Number(v.timestamp ?? 0),
-        } as ChatMessage;
-      })
-      .filter((m) => m.id && m.sender && m.text)
-      .sort((a, b) => a.timestamp - b.timestamp);
+    return normalizeChatMessages(parsed);
   } catch {
     return [];
   }
@@ -103,13 +99,6 @@ function saveCachedMessages(messages: ChatMessage[]) {
   }
 }
 
-function sortChatMessagesAsc(messages: ChatMessage[]) {
-  return [...messages].sort((a, b) => {
-    if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
-    return a.id.localeCompare(b.id);
-  });
-}
-
 async function fetchMessages(signal?: AbortSignal): Promise<ChatMessage[]> {
   const res = await fetch("/api/chat/messages", { cache: "no-store", signal });
   const json = await readJsonResponse<{ messages?: ChatMessage[]; error?: string }>(res);
@@ -119,7 +108,7 @@ async function fetchMessages(signal?: AbortSignal): Promise<ChatMessage[]> {
   if (!res.ok || json.error) {
     throw new Error(json.error || `HTTP ${res.status}`);
   }
-  return sortChatMessagesAsc((json.messages ?? []).slice(-MESSAGES_LIMIT));
+  return normalizeChatMessages(json.messages).slice(-MESSAGES_LIMIT);
 }
 
 async function postMessage(payload: Record<string, unknown>, signal?: AbortSignal): Promise<ChatMessage | null> {
@@ -130,7 +119,10 @@ async function postMessage(payload: Record<string, unknown>, signal?: AbortSigna
     body: JSON.stringify(payload),
     signal,
   });
-  const json = await readJsonResponse<{ ok?: boolean; message?: ChatMessage; error?: string }>(res);
+  const json = await readJsonResponse<{ ok?: boolean; message?: ChatMessage; error?: string; retryAfter?: unknown }>(res);
+  if (res.status === 429) {
+    throw new ChatRateLimitError(json?.error || "Too many requests", parseChatRetryAfterMs(json?.retryAfter));
+  }
   if (!res.ok) {
     throw new Error(json?.error || `Chat write HTTP ${res.status}`);
   }
@@ -148,6 +140,7 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
   const [isSending, setIsSending] = useState(false);
   const open = options?.open ?? false;
   const lastSentRef = useRef(0);
+  const sendCooldownUntilRef = useRef(0);
   const messagesRef = useRef(messages);
   const pollWarnAtRef = useRef(0);
   const sendWarnAtRef = useRef(0);
@@ -187,22 +180,36 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
 
   useEffect(() => {
     if (sendCooldownRemainingMs <= 0) return;
-    const remaining = Math.max(0, CHAT_RATE_LIMIT_MS - (Date.now() - lastSentRef.current));
+    const remaining = Math.max(0, sendCooldownUntilRef.current - Date.now());
     if (remaining <= 0) {
       setSendCooldownRemainingMs(0);
       return;
     }
     const timer = window.setTimeout(() => {
-      setSendCooldownRemainingMs(0);
-    }, remaining);
+      setSendCooldownRemainingMs(Math.max(0, sendCooldownUntilRef.current - Date.now()));
+    }, Math.min(remaining, 1000));
     return () => {
       window.clearTimeout(timer);
     };
   }, [sendCooldownRemainingMs]);
 
+  const startSendCooldown = useCallback((durationMs: number) => {
+    const now = Date.now();
+    const cooldownMs = parseChatRetryAfterMs(durationMs / 1000);
+    lastSentRef.current = now;
+    sendCooldownUntilRef.current = now + cooldownMs;
+    setSendCooldownRemainingMs(cooldownMs);
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     let pollRunning = false;
+    let cancelled = false;
+    let failureCount = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const getNextPollDelay = () => {
+      return getChatPollDelayMs({ failureCount, isPageVisible, open });
+    };
 
     async function poll() {
       if (pollRunning) return;
@@ -216,9 +223,11 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         }
         setConnected(true);
         pollWarnAtRef.current = 0;
+        failureCount = 0;
       } catch (err) {
         if (controller.signal.aborted) return;
         setConnected(false);
+        failureCount = Math.min(3, failureCount + 1);
         if (isNetworkFetchError(err)) {
           warnNetworkOnce("[Chat] Poll network unavailable:", pollWarnAtRef, err);
         } else {
@@ -229,18 +238,24 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
       }
     }
 
-    void poll();
-    const pollInterval = open
-      ? (isPageVisible ? POLL_INTERVAL_MS : HIDDEN_POLL_INTERVAL_MS)
-      : (isPageVisible ? CLOSED_POLL_INTERVAL_MS : HIDDEN_CLOSED_POLL_INTERVAL_MS);
-    const timer = setInterval(() => {
-      void poll();
-    }, pollInterval);
+    const schedule = (delayMs: number) => {
+      timer = setTimeout(async () => {
+        if (cancelled) return;
+        await poll();
+        if (cancelled) return;
+        schedule(getNextPollDelay());
+      }, delayMs);
+    };
+
+    void poll().finally(() => {
+      if (!cancelled) schedule(getNextPollDelay());
+    });
 
     return () => {
+      cancelled = true;
       controller.abort();
       pollRunning = false;
-      clearInterval(timer);
+      if (timer) clearTimeout(timer);
     };
   }, [commitMessages, isPageVisible, mergeLocalPendingMessages, open]);
 
@@ -251,12 +266,12 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
       if (!trimmed) return false;
 
       const now = Date.now();
-      if (now - lastSentRef.current < CHAT_RATE_LIMIT_MS) {
-        setSendCooldownRemainingMs(Math.max(0, CHAT_RATE_LIMIT_MS - (now - lastSentRef.current)));
+      const cooldownRemainingMs = Math.max(0, sendCooldownUntilRef.current - now);
+      if (cooldownRemainingMs > 0) {
+        setSendCooldownRemainingMs(cooldownRemainingMs);
         return false;
       }
-      lastSentRef.current = now;
-      setSendCooldownRemainingMs(CHAT_RATE_LIMIT_MS);
+      startSendCooldown(CHAT_RATE_LIMIT_MS);
       setIsSending(true);
 
       const authOk = await ensureChatAuth();
@@ -271,7 +286,7 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         timestamp: { ".sv": "timestamp" },
       };
       if (senderName) payload.senderName = senderName;
-      const normalizedAvatar = sanitizeChatAvatarValue(senderAvatar, MAX_AVATAR_LENGTH);
+      const normalizedAvatar = normalizeChatMessageAvatar(senderAvatar);
       if (normalizedAvatar) payload.senderAvatar = normalizedAvatar;
       const optimisticMessage: ChatMessage = {
         id: `local:${now}:${Math.random().toString(36).slice(2)}`,
@@ -326,7 +341,10 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
       } catch (err) {
         removeOptimisticMessage();
         setConnected(false);
-        if (isNetworkFetchError(err)) {
+        if (isChatRateLimitError(err)) {
+          startSendCooldown(err.retryAfterMs);
+          warnNetworkOnce("[Chat] Send rate limited:", sendWarnAtRef, err);
+        } else if (isNetworkFetchError(err)) {
           warnNetworkOnce("[Chat] Send network unavailable:", sendWarnAtRef, err);
         } else {
           warnNetworkOnce("[Chat] Send failed:", sendWarnAtRef, err);
@@ -335,7 +353,7 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         return false;
       }
     },
-    [walletAddress, clearAuth, commitMessages, ensureChatAuth, refreshAuth],
+    [walletAddress, clearAuth, commitMessages, ensureChatAuth, refreshAuth, startSendCooldown],
   );
 
   return { messages, sendMessage, connected, authReady, ensureChatAuth, sendCooldownRemainingMs, isSending };

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { log } from "../lib/logger";
+import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 
 export interface RecentWin {
   epoch: string;
@@ -31,15 +32,17 @@ const MAX_WINS = 100;
 const WARN_THROTTLE_MS = 15_000;
 const STORAGE_KEY = `lore:recent-wins-cache:v3:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 
-function normalizeWins(rows: Array<{
+export function normalizeWins(rows: unknown): RecentWin[] {
+  if (!Array.isArray(rows)) return [];
+  const items = rows as Array<{
   epoch?: string;
   user?: string;
   amount?: string;
   amountRaw?: string;
   tileId?: number;
   jackpotKind?: string;
-}>): RecentWin[] {
-  return rows
+  }>;
+  return items
     .map((row) => {
       if (!row?.epoch || !row?.user || !row?.amountRaw) return null;
       const tileId = row.tileId;
@@ -96,10 +99,7 @@ function loadCache(): { wins: RecentWin[]; savedAt: number | null } {
     }
     return {
       wins: normalizeWins(Array.isArray(parsed.wins) ? parsed.wins : []),
-      savedAt:
-        typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
-          ? parsed.savedAt
-          : null,
+      savedAt: normalizeCacheTimestamp(parsed.savedAt),
     };
   } catch {
     return { wins: [], savedAt: null };

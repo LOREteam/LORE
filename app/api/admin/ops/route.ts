@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthorizedAdminRouteRequest } from "../../_lib/adminRouteAuth";
-import { getEpochMap, getMetaBigInt, getMetaNumber, getRecentJackpots, getRecentRewardClaims } from "../../../../server/storage";
+import { getEpochMap, getMetaBigInt, getMetaJson, getMetaNumber, getRecentJackpots, getRecentRewardClaims } from "../../../../server/storage";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 
@@ -50,6 +50,13 @@ type LiveIndexerProgress = {
   parsedClaims: number | null;
   wroteChunk: boolean;
   progressPct: number | null;
+};
+
+type IndexerRunStatus = {
+  headBlock?: string;
+  finalityBlocks?: string;
+  targetBlock?: string | null;
+  lastProcessedBlock?: string;
 };
 
 type LoadedLogSource = {
@@ -131,6 +138,12 @@ function trimLogPrefix(line: string) {
 
 function matchesAny(line: string, patterns: readonly RegExp[]) {
   return patterns.some((pattern) => pattern.test(line));
+}
+
+function parseStoredEpochNumber(value: string | null | undefined) {
+  if (!value || !/^\d+$/.test(value)) return 0;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function summarizeLogSource(file: string, key: string, label: string): LogSourceSummary {
@@ -262,16 +275,19 @@ function collectRecentLogEntries(
 function getRecentResolvedEpochs(limit = 8): RecentResolvedEpoch[] {
   const epochs = getEpochMap();
   return Object.entries(epochs)
-    .map(([epoch, row]) => ({
-      epoch: Number(epoch),
-      winningTile: row.winningTile,
-      totalPool: row.totalPool,
-      rewardPool: row.rewardPool,
-      resolvedBlock: row.resolvedBlock ?? null,
-      isDailyJackpot: row.isDailyJackpot,
-      isWeeklyJackpot: row.isWeeklyJackpot,
-    }))
-    .filter((row) => Number.isInteger(row.epoch) && row.epoch > 0)
+    .map(([epoch, row]) => {
+      const epochNumber = parseStoredEpochNumber(epoch);
+      return {
+        epoch: epochNumber,
+        winningTile: row.winningTile,
+        totalPool: row.totalPool,
+        rewardPool: row.rewardPool,
+        resolvedBlock: row.resolvedBlock ?? null,
+        isDailyJackpot: row.isDailyJackpot,
+        isWeeklyJackpot: row.isWeeklyJackpot,
+      };
+    })
+    .filter((row) => row.epoch > 0)
     .sort((left, right) => right.epoch - left.epoch)
     .slice(0, limit);
 }
@@ -379,7 +395,7 @@ export async function GET(request: NextRequest) {
     limit: 30,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
   if (!isAuthorizedAdminRouteRequest(request)) {
     return applyNoStoreHeaders(
@@ -401,6 +417,7 @@ export async function GET(request: NextRequest) {
   const currentEpochMeta = getMetaNumber("currentEpoch");
   const lastIndexedBlock = getMetaBigInt("lastIndexedBlock")?.toString() ?? null;
   const repairCursorBlock = getMetaBigInt("repairCursorBlock")?.toString() ?? null;
+  const indexerRunStatus = getMetaJson<IndexerRunStatus>("indexerRunStatus");
 
   const payload = {
     status: "ok" as const,
@@ -416,6 +433,10 @@ export async function GET(request: NextRequest) {
       currentEpochMeta,
       lastIndexedBlock,
       repairCursorBlock,
+      headBlock: indexerRunStatus?.headBlock ?? null,
+      finalityBlocks: indexerRunStatus?.finalityBlocks ?? null,
+      targetBlock: indexerRunStatus?.targetBlock ?? null,
+      lastProcessedBlock: indexerRunStatus?.lastProcessedBlock ?? null,
     },
   };
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import type { LeaderboardEntry, LuckyTileEntry } from "../lib/types";
 import { readJsonResponse } from "../lib/readJsonResponse";
+import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 
 const STORAGE_KEY = `lore:leaderboard:v3:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 const LEADERBOARD_CACHE_TTL_MS = 60_000;
@@ -26,6 +27,65 @@ interface LeaderboardsApiPayload extends LeaderboardsData {
 interface LeaderboardsCacheEnvelope {
   savedAt?: number;
   data?: LeaderboardsData;
+}
+
+function finiteNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeLeaderboardEntries(value: unknown): LeaderboardEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as Record<string, unknown>;
+      const address = typeof row.address === "string" ? row.address.trim() : "";
+      if (!address) return null;
+      const extra = row.extra === undefined || row.extra === null ? undefined : String(row.extra);
+      return {
+        rank: Math.max(0, Math.trunc(finiteNumber(row.rank))),
+        address,
+        ...(typeof row.name === "string" && row.name.trim() ? { name: row.name.trim() } : {}),
+        value: String(row.value ?? "0"),
+        valueNum: finiteNumber(row.valueNum),
+        ...(extra ? { extra } : {}),
+      } satisfies LeaderboardEntry;
+    })
+    .filter((entry): entry is LeaderboardEntry => entry !== null);
+}
+
+function normalizeLuckyTileEntries(value: unknown): LuckyTileEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as Record<string, unknown>;
+      const tileId = finiteNumber(row.tileId, Number.NaN);
+      const wins = finiteNumber(row.wins, Number.NaN);
+      const pct = finiteNumber(row.pct, 0);
+      if (!Number.isSafeInteger(tileId) || tileId <= 0) return null;
+      if (!Number.isSafeInteger(wins) || wins < 0) return null;
+      return {
+        tileId,
+        wins,
+        pct,
+      } satisfies LuckyTileEntry;
+    })
+    .filter((entry): entry is LuckyTileEntry => entry !== null);
+}
+
+export function normalizeLeaderboardsData(value: unknown): LeaderboardsData {
+  const data = (value ?? {}) as Partial<Record<keyof LeaderboardsData, unknown>>;
+  return {
+    biggestSingleWin: normalizeLeaderboardEntries(data.biggestSingleWin),
+    luckiest: normalizeLeaderboardEntries(data.luckiest),
+    oneTileWonder: normalizeLeaderboardEntries(data.oneTileWonder),
+    mostWins: normalizeLeaderboardEntries(data.mostWins),
+    whales: normalizeLeaderboardEntries(data.whales),
+    underdog: normalizeLeaderboardEntries(data.underdog),
+    luckyTile: normalizeLuckyTileEntries(data.luckyTile),
+  };
 }
 
 function leaderboardEntryArrayEqual<
@@ -78,14 +138,11 @@ function loadCache(): { data: LeaderboardsData | null; savedAt: number | null } 
       typeof parsed.data === "object"
     ) {
       return {
-        data: parsed.data,
-        savedAt:
-          typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
-            ? parsed.savedAt
-            : null,
+        data: normalizeLeaderboardsData(parsed.data),
+        savedAt: normalizeCacheTimestamp(parsed.savedAt),
       };
     }
-    return { data: parsed as LeaderboardsData, savedAt: null };
+    return { data: normalizeLeaderboardsData(parsed), savedAt: null };
   } catch {
     return { data: null, savedAt: null };
   }
@@ -161,15 +218,7 @@ export function useLeaderboards(enabled: boolean) {
         throw new Error(payload.error || `HTTP ${response.status}`);
       }
 
-      const nextData: LeaderboardsData = {
-        biggestSingleWin: payload.biggestSingleWin,
-        luckiest: payload.luckiest,
-        oneTileWonder: payload.oneTileWonder,
-        mostWins: payload.mostWins,
-        whales: payload.whales,
-        underdog: payload.underdog,
-        luckyTile: payload.luckyTile,
-      };
+      const nextData = normalizeLeaderboardsData(payload);
       const changed = !leaderboardsEqual(dataRef.current, nextData);
 
       if (mountedRef.current) {
