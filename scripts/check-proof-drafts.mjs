@@ -59,10 +59,12 @@ const restoreDir = mkdtempSync(join(tmpdir(), "lore-proof-restore-restored-"));
 const restoreBackupPath = join(restoreBackupDir, "backup.sqlite");
 const restoreLog = join(tmp, "restore-drill.log");
 const restoreHealthLog = join(tmp, "restore-health-prod.log");
+const restoreHealthMissingRuntimeLog = join(tmp, "restore-health-missing-runtime.log");
 writeFileSync(restoreSourcePath, "synthetic source db for collector draft guard", "utf8");
 writeFileSync(restoreBackupPath, "synthetic backup artifact for collector draft guard", "utf8");
 writeFileSync(restoreLog, "Summary: backup/restore drill completed without detected issues.\n", "utf8");
 writeFileSync(restoreHealthLog, "[prod-health] OK\nbase=https://restore.playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
+writeFileSync(restoreHealthMissingRuntimeLog, "[prod-health] OK\nbase=https://restore.playlore.xyz dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
 
 const draftCases = [
   {
@@ -194,6 +196,12 @@ const collectorRejectCases = [
     create: ["scripts/collect-indexer-evidence.mjs"],
     createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerRepoDbLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
     expected: "--indexer-log [indexer] SQLite path must be outside the repo checkout",
+  },
+  {
+    id: "restore-collector-missing-runtime",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthMissingRuntimeLog}`],
+    expected: "--health-log must include runtime=ok/pass/healthy",
   },
 ];
 

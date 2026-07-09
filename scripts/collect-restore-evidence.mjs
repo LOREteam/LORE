@@ -144,6 +144,8 @@ if (!isPrintPlan()) {
   requireCondition(restoreOk, "--restore-log must include successful restore drill summary");
   requireCondition(/\[prod-health\]\s+OK/i.test(healthLog), "--health-log must include [prod-health] OK");
   requireCondition(healthBaseMatches(healthSummary, restoredOrigin), "--health-log must include base=<restored-origin>");
+  requireCondition(/^(ok|pass|healthy)$/i.test(healthValues.runtime ?? ""), "--health-log must include runtime=ok/pass/healthy");
+  requireCondition(/^(ok|pass|healthy)$/i.test(healthValues.dataSync ?? ""), "--health-log must include dataSync=ok/pass/healthy");
   requireCondition(Number.isFinite(Number(healthValues.finalityLagBlocks)), "--health-log must include numeric finalityLagBlocks=<number>");
 }
 const manifest = {
