@@ -5,11 +5,14 @@ import { spawnSync } from "node:child_process";
 
 const tmp = mkdtempSync(join(tmpdir(), "lore-proof-drafts-"));
 const canaryLog = join(tmp, "canary.jsonl");
+const emptyCanaryLog = join(tmp, "empty-canary.jsonl");
 const canaryTargetArtifact = join(tmp, "canary-target-proof.log");
 const canaryRecoveryArtifact = join(tmp, "canary-recovery-proof.log");
 const canarySessionArtifact = join(tmp, "canary-session-summary.log");
 const canaryTxArtifact = join(tmp, "canary-transaction-scan.log");
-writeFileSync(canaryLog, "", "utf8");
+const canaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
+writeFileSync(canaryLog, `${canaryEvent}\n`, "utf8");
+writeFileSync(emptyCanaryLog, "", "utf8");
 writeFileSync(canaryTargetArtifact, "synthetic canary target proof\n", "utf8");
 writeFileSync(canaryRecoveryArtifact, "synthetic canary recovery proof\n", "utf8");
 writeFileSync(canarySessionArtifact, "synthetic canary session proof\n", "utf8");
@@ -202,6 +205,12 @@ const collectorRejectCases = [
     create: ["scripts/collect-restore-evidence.mjs"],
     createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthMissingRuntimeLog}`],
     expected: "--health-log must include runtime=ok/pass/healthy",
+  },
+  {
+    id: "canary-draft-empty-live-log",
+    create: ["scripts/create-canary-proof-draft.mjs"],
+    createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${emptyCanaryLog}`, `--target-artifact=${canaryTargetArtifact}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--session-artifact=${canarySessionArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
+    expected: "--live-log must include at least one successful auto-miner canary tx",
   },
 ];
 

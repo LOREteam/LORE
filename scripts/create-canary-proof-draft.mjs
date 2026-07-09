@@ -121,6 +121,13 @@ const liveEvents = readJsonlArtifact(liveLog);
 const summary = canarySummary(liveEvents);
 const now = new Date().toISOString();
 
+if (summary.autoMinerRounds <= 0) {
+  throw new Error("--live-log must include at least one successful auto-miner canary tx");
+}
+if (summary.txHashes.length === 0) {
+  throw new Error("--live-log must include at least one real successful tx hash");
+}
+
 if (!hasRealText(network)) {
   throw new Error("--network must identify the target network");
 }
