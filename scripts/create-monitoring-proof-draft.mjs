@@ -52,9 +52,11 @@ function hasRealText(value) {
   return String(value ?? "").trim().length > 0 && !/TODO|TBD/i.test(String(value));
 }
 
-function optionalExistingArtifact(name) {
+function requireExistingArtifact(name) {
   const value = argValue(name);
-  if (!value) return "";
+  if (!value) {
+    throw new Error(`--${name} is required when drafting monitoring launch evidence`);
+  }
   const resolved = path.resolve(process.cwd(), value);
   if (!existsSync(resolved)) {
     throw new Error(`--${name} must point to an existing redacted artifact`);
@@ -69,10 +71,10 @@ const origin = argValue("origin", process.env.NEXT_PUBLIC_SITE_URL || "TODO: pro
 const environment = argValue("environment", process.env.NODE_ENV || "production");
 const errorProvider = argValue("error-provider", "TODO: Sentry/Datadog/etc");
 const releaseOrDeploy = argValue("release", process.env.VERCEL_GIT_COMMIT_SHA || process.env.RELEASE_ID || "TODO: release or deploy id");
-const monitorArtifact = optionalExistingArtifact("monitor-artifact");
-const recoveryArtifact = optionalExistingArtifact("recovery-artifact");
-const alertTargetArtifact = optionalExistingArtifact("alert-target-artifact");
-const errorEventArtifact = optionalExistingArtifact("error-event-artifact");
+const monitorArtifact = requireExistingArtifact("monitor-artifact");
+const recoveryArtifact = requireExistingArtifact("recovery-artifact");
+const alertTargetArtifact = requireExistingArtifact("alert-target-artifact");
+const errorEventArtifact = requireExistingArtifact("error-event-artifact");
 
 if (!isFinalHttpsOrigin(origin)) {
   throw new Error("--origin must be a non-local HTTPS origin without path, query, or hash");

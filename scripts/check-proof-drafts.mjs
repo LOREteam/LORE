@@ -300,6 +300,12 @@ const finalOutputCases = [
     createArgs: ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", "--out=docs/monitoring-proof.json"],
     expected: "writes incomplete drafts only",
   },
+  {
+    id: "monitoring-missing-monitor-artifact",
+    create: ["scripts/create-monitoring-proof-draft.mjs"],
+    createArgs: ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", `--recovery-artifact=${monitoringRecoveryArtifact}`, `--alert-target-artifact=${monitoringAlertTargetArtifact}`, `--error-event-artifact=${monitoringErrorEventArtifact}`],
+    expected: "--monitor-artifact is required when drafting monitoring launch evidence",
+  },
 ];
 
 function runNode(args) {
@@ -313,7 +319,8 @@ function runNode(args) {
 
 function oneLine(output) {
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const preferred = lines.find((line) => /writes incomplete drafts only|collector writes incomplete evidence drafts only/i.test(line));
+  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted artifact/i;
+  const preferred = lines.find((line) => /^Error: /i.test(line) && guardPattern.test(line)) || lines.find((line) => guardPattern.test(line));
   const compact = preferred || lines.slice(-3).join(" | ");
   return compact.length > 260 ? `${compact.slice(0, 257)}...` : compact;
 }

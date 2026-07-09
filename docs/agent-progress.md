@@ -3553,3 +3553,10 @@ as historical progress only.
 - Updated G8 command map, readiness checklist, status board, proof record, and remaining/gate guards to require `docs/restore-backup-schedule.log` and `docs/restore-indexer-preservation.log`.
 - Added a draft guard fixture that rejects missing backup schedule evidence before a restore proof draft is written.
 - Verified `npm.cmd run proof:drafts`, `npm.cmd run proof:launch-map`, `npm.cmd run proof:gates -- --structure-only`, `npm.cmd run proof:remaining -- --json`, `npm.cmd run proof:readiness`, `npm.cmd run proof:launch-docs`, and `npm.cmd run proof:local`.
+## 2026-07-09 - Monitoring draft artifact guard
+
+- Tightened scripts/create-monitoring-proof-draft.mjs so G9 monitoring drafts require existing fired-alert, recovery, alert-target, and error-event artifacts before writing a draft.
+- Updated scripts/create-all-proof-drafts.mjs with synthetic non-proof monitoring artifacts so local draft bundle generation still exercises the artifact-backed path.
+- Added a draft regression case that rejects missing --monitor-artifact before G9 draft output is written.
+
+- Verified node --check for changed monitoring draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.
