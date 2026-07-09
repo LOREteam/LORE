@@ -3577,3 +3577,10 @@ as historical progress only.
 - Improved proof draft compact error output so empty live canary logs show the actual guard message instead of a stack tail.
 
 - Verified node --check for changed canary draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.
+
+## 2026-07-09 - Signoff collector evidence guard
+
+- Tightened scripts/collect-signoff-evidence.mjs so G1-G4 signoff collector drafts require existing --env-log and --chain-log artifacts before writing a draft.
+- Added a collector regression case that rejects missing --env-log before signoff draft output is written.
+
+- Verified node --check for changed signoff/redaction scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, npm.cmd run proof:collector-redaction, and npm.cmd run proof:local.

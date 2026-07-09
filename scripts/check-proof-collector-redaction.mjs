@@ -11,6 +11,10 @@ const restoreBackupPath = join(restoreBackupDir, "backup.sqlite");
 writeFileSync(restoreSourcePath, "synthetic source db for redaction guard");
 writeFileSync(restoreBackupPath, "synthetic backup artifact for redaction guard");
 const finalRejectOutPath = join(process.cwd(), "docs", "collector-redaction-proof.json");
+const signoffEnvLog = join(mkdtempSync(join(tmpdir(), "lore-signoff-env-")), "mainnet-env-proof.log");
+const signoffChainLog = join(mkdtempSync(join(tmpdir(), "lore-signoff-chain-")), "chain-proof-snapshot.json");
+writeFileSync(signoffEnvLog, "Summary: synthetic redacted proof:mainnet output for redaction guard\n");
+writeFileSync(signoffChainLog, "Summary: synthetic redacted proof:chain output for redaction guard\n");
 
 const cases = [
   {
@@ -26,6 +30,8 @@ const cases = [
       "--epochs=1",
       "--user=0x1111111111111111111111111111111111111111",
       "--rpc-url=https://rpc.example/?key=secret-token",
+      `--env-log=${signoffEnvLog}`,
+      `--chain-log=${signoffChainLog}`,
       "--print-plan",
     ],
     forbidden: ["secret-token"],

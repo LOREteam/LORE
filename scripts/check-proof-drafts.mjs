@@ -191,6 +191,12 @@ const collectorDraftCases = [
 ];
 const collectorRejectCases = [
   {
+    id: "signoff-collector-missing-env-log",
+    create: ["scripts/collect-signoff-evidence.mjs"],
+    createArgs: ["--epochs=1", "--user=0x1111111111111111111111111111111111111111", `--chain-log=${signoffChainLog}`],
+    expected: "--env-log is required when collecting signoff launch evidence",
+  },
+  {
     id: "host-collector-missing-logs",
     create: ["scripts/collect-host-evidence.mjs"],
     createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`],

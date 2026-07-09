@@ -1,4 +1,4 @@
-﻿import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { argValue, baseCollectorMeta, hasFlag, isAddress, isPositiveInteger, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
 
@@ -33,11 +33,13 @@ function isPositiveIntegerString(value) {
   return Number.isSafeInteger(parsed) && parsed > 0;
 }
 
-function readOptionalLog(filePath) {
-  if (!filePath) return "";
+function readRequiredLog(name, filePath) {
+  if (!filePath) {
+    throw new Error(`--${name} is required when collecting signoff launch evidence`);
+  }
   const resolved = resolve(process.cwd(), filePath);
   if (!existsSync(resolved)) {
-    throw new Error(`${filePath} does not exist`);
+    throw new Error(`--${name} must point to an existing redacted artifact`);
   }
   return readFileSync(resolved, "utf8");
 }
@@ -78,8 +80,8 @@ requireCondition(isAddress(user), "--user must be a non-zero EVM address");
 const now = new Date().toISOString();
 const envLogPath = argValue("env-log");
 const chainLogPath = argValue("chain-log");
-const envLog = readOptionalLog(envLogPath);
-const chainLog = readOptionalLog(chainLogPath);
+const envLog = readRequiredLog("env-log", envLogPath);
+const chainLog = readRequiredLog("chain-log", chainLogPath);
 const envSummary = summarizeLog(envLog, "TODO: paste redacted proof:mainnet summary for final host env", envLogPath);
 const chainSummary = summarizeLog(chainLog, "", chainLogPath);
 const network = argValue("network", envValue("LINEA_NETWORK", "NEXT_PUBLIC_LINEA_NETWORK") || "TODO: target network");

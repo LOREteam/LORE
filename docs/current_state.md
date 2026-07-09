@@ -43,7 +43,7 @@ Current focus: launch readiness / production proof. Runtime feature work is seco
 - Signoff proof validation now requires Linea mainnet (`network=mainnet`, `chainId=59144`) and concrete evidence markers for contract/env, owner Safe/multisig, randomness sign-off, and direct chain/app-indexer comparisons.
 - Signoff evidence collection now writes a validator-shaped draft with contractEnv, ownership, randomness, and chainComparison sections so G1-G4 evidence can be filled without inventing a second schema.
 - `proof:mainnet` now supports `--out=<path>` and writes a redacted text proof snapshot suitable for `proof:signoff:collect --env-log=...`.
-- Signoff collection now accepts saved `proof:mainnet` and `proof:chain` logs through `--env-log` and `--chain-log`, so one collector command can carry G1 env evidence and G4 direct-chain evidence into the same draft.
+- Signoff collection now requires saved `proof:mainnet` and `proof:chain` logs through `--env-log` and `--chain-log`, so one collector command can carry G1 env evidence and G4 direct-chain evidence into the same draft.
 - Signoff proof draft generation now refuses direct writes to final `docs/signoff-proof.json`; final G1-G4 proof still requires real contract/env, owner, randomness sign-off, and chain comparison evidence.
 - Indexer proof validation now requires Linea mainnet chain snapshots (`expectedChainId=59144`, `rpcChainId=59144`).
 - Indexer evidence collection now requires Linea mainnet chain id, deploy block, and positive finality blocks before writing a G7 draft.
