@@ -363,6 +363,7 @@ async function resolveIfNeeded(params: {
 }
 
 async function waitForSafeWindow(params: {
+  afterEpoch?: bigint | null;
   logPath: string;
   publicClient: PublicClient;
   resolver: LiveWallet | null;
@@ -375,7 +376,10 @@ async function waitForSafeWindow(params: {
     await resolveIfNeeded(params);
     const window = await readEpochWindow(params.publicClient);
     lastWindow = window;
-    if (window.secondsLeft > SAFE_SECONDS_LEFT) return window;
+    if (
+      window.secondsLeft > SAFE_SECONDS_LEFT &&
+      (params.afterEpoch == null || window.epoch > params.afterEpoch)
+    ) return window;
     const now = Date.now();
     if (now >= nextHeartbeatAt) {
       writeEvent(params.logPath, {
@@ -645,6 +649,7 @@ async function main() {
 
   let successes = 0;
   let failures = 0;
+  let lastAttemptedEpoch: bigint | null = null;
   const errorKinds = new Map<string, number>();
   for (let round = 0; round < TARGET_ROUNDS; round += 1) {
     const walletIndex = round % wallets.length;
@@ -652,7 +657,14 @@ async function main() {
     const mode = pickMode(round);
     const plan = pickRoundPlan(round, walletIndex, mode);
     try {
-      const { epoch, secondsLeft } = await waitForSafeWindow({ logPath, publicClient, resolver, transport });
+      const { epoch, secondsLeft } = await waitForSafeWindow({
+        afterEpoch: lastAttemptedEpoch,
+        logPath,
+        publicClient,
+        resolver,
+        transport,
+      });
+      lastAttemptedEpoch = epoch;
       const tiles = pickTiles(epoch, round, walletIndex, plan.tileCount);
       const event = await placeRound({
         epoch,

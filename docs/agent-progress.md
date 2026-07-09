@@ -3983,3 +3983,9 @@ as historical progress only.
 - A real wallet playtest completed allowance approval, one single bet, and one batch bet with on-chain verification and deposits/rebates API status 200.
 - Local browser smoke passed on desktop and mobile, including wallet selector, numeric font/chart guards, auto-miner persistence, chat, tabs, and retry-wait/session-expired debug scenarios.
 - Remaining: signed Privy/mobile-wallet QA, durable direct chain-to-DB comparison evidence, and a wall-clock-proven 50-epoch varied canary.
+
+## 2026-07-10 Canary Unique-Epoch Guard
+
+- A real varied canary revealed a root-cause defect: consecutive loop iterations reused the same still-safe epoch, so the run was stopped after three duplicate-epoch testnet bets.
+- Updated waitForSafeWindow to require an epoch strictly greater than the last attempted epoch before every transaction attempt.
+- Added a regression assertion and verified typecheck/test:logic plus a real two-round Sepolia canary: first bet in epoch 1722, second in 1723, zero failures.

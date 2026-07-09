@@ -1704,6 +1704,11 @@ async function main() {
     /const REPAIR_CHUNK_BLOCKS = 10_000n/,
     "indexer repair must stay within the confirmed Sepolia RPC log range",
   );
+  assert.match(
+    liveRoundCanarySource,
+    /afterEpoch\?: bigint \| null[\s\S]*window\.epoch > params\.afterEpoch[\s\S]*lastAttemptedEpoch = epoch/,
+    "canary must require a strictly newer epoch before every transaction attempt",
+  );
   const walletPlaytestSource = readFileSync("scripts/playtest-wallet.ts", "utf8");
   assert.match(
     walletPlaytestSource,

@@ -145,7 +145,7 @@ Current focus: Linea Sepolia testnet readiness. Mainnet proof tooling is retaine
 - Restarting the same DB resumed from its persisted block and repair cursor; reconciliation reported no missing epochs.
 - The local Sepolia SQLite backup/restore drill completed with SQLite integrity_check `ok` and restored scoped data.
 - These temporary local artifacts are testnet validation only, not mainnet proof or production evidence.
-- A resolver canary advanced stale Sepolia epoch 1717 to active epochs and completed three small canary bets; a wallet playtest then completed approval, single, and batch bets with on-chain verification and deposits/rebates API status 200.
+- A resolver canary advanced stale Sepolia epoch 1717 to active epochs. A duplicate-epoch canary defect was found during the first varied run, fixed, and verified with consecutive bets in unique epochs 1722 and 1723; the wallet playtest completed approval, single, and batch bets with on-chain verification and deposits/rebates API status 200.
 - Local desktop/mobile browser smoke passed, including wallet selector, chart/font guards, auto-miner persistence, retry-wait/session-expired debug states, chat, and tabs.
 ## Current Blockers
 
