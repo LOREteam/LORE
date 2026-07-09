@@ -52,6 +52,11 @@ function pathStatus(rawPath) {
   return { absolute, isAbsolute: isAbsolute(rawPath), insideRepo };
 }
 
+function samePath(left, right) {
+  if (!left || !right) return false;
+  return resolve(left).replace(/[\\/]+/g, "/").toLowerCase() === resolve(right).replace(/[\\/]+/g, "/").toLowerCase();
+}
+
 function isNonNegativeInteger(value) {
   return /^\d+$/.test(value || "");
 }
@@ -258,6 +263,16 @@ function validateManifest(manifest, issues) {
   if (!String(dryRun.command ?? "").includes("indexer:once")) issues.push("dryRun.command must record npm run indexer:once");
   if (dryRun.freshDb !== true) issues.push("dryRun.freshDb must be true");
   if (dryRun.fromDeployBlock !== true) issues.push("dryRun.fromDeployBlock must be true");
+  if (!hasRealText(dryRun.dbPath)) {
+    issues.push("dryRun.dbPath must record the [indexer] SQLite path used by indexer:once");
+  } else {
+    const dryRunDb = pathStatus(dryRun.dbPath);
+    if (!dryRunDb.isAbsolute) issues.push("dryRun.dbPath must be absolute");
+    if (dryRunDb.insideRepo) issues.push("dryRun.dbPath must be outside the repo checkout");
+    if (sourceRaw && !samePath(dryRunDb.absolute, source.absolute)) {
+      issues.push("dryRun.dbPath must match LORE_DB_PATH or --db");
+    }
+  }
   const manifestStartBlock = integerString(dryRun.startBlock);
   const manifestDeployBlock = integerString(dryRun.deployBlock);
   if (!manifestStartBlock) issues.push("dryRun.startBlock must be a non-negative integer");

@@ -76,6 +76,10 @@ function relativeArtifact(filePath) {
   return filePath ? relative(process.cwd(), resolve(process.cwd(), filePath)).replace(/\\/g, "/") : "";
 }
 
+function indexerLogValue(line) {
+  return String(line ?? "").replace(/^\[indexer\]\s+[^:]+:\s*/i, "").trim();
+}
+
 const sqliteLine = firstMatchingLine(indexerLog, /^\[indexer\]\s+SQLite path:/i);
 const contractLine = firstMatchingLine(indexerLog, /^\[indexer\]\s+Contract:/i);
 const deployLine = firstMatchingLine(indexerLog, /^\[indexer\]\s+Deploy block:/i);
@@ -103,6 +107,7 @@ const contractAddressMatches = Boolean(
   snapshotContractAddress &&
   normalizeAddress(configuredContractAddress) === normalizeAddress(snapshotContractAddress),
 );
+const dryRunDbPath = indexerLogValue(sqliteLine);
 const completed = Boolean(finishLine) && !/\[indexer\]\s+Fatal:/i.test(indexerLog);
 const summary = [sqliteLine, contractLine, deployLine, startLine, finalityLine, scanLine, finishLine]
   .filter(Boolean)
@@ -116,6 +121,7 @@ const manifest = {
     command: "npm.cmd run indexer:once",
     freshDb: true,
     fromDeployBlock: true,
+    dbPath: dryRunDbPath || "TODO: absolute fresh external LORE_DB_PATH from [indexer] SQLite path",
     startBlock: deployBlock,
     deployBlock,
     summary,

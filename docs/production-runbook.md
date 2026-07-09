@@ -46,7 +46,7 @@ npm.cmd run proof:host -- --strict
 
 ## 4. Indexer and DB
 
-Indexer evidence must come from a fresh external DB at the final deploy block. Save the redacted `indexer:once` output as `docs/indexer-once.log` for the collector.
+Indexer evidence must come from a fresh external DB at the final deploy block. Save the redacted `indexer:once` output as `docs/indexer-once.log` for the collector; the log must include `[indexer] SQLite path:` matching the external `LORE_DB_PATH`.
 Restore evidence must be collected in order: run the restore drill, save `docs/restore-drill.log`, run restored `health:prod`, save `docs/restore-health-prod.log`, then run `proof:restore:collect`.
 
 ```powershell

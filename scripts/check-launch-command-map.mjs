@@ -305,7 +305,7 @@ for (const marker of ["$env:LORE_BACKUP_DIR", "$env:LORE_RESTORE_DRILL_DIR", "do
     issues.push(`docs/production-runbook.md must show restore drill evidence marker ${marker}`);
   }
 }
-for (const marker of ["fresh external DB", "docs/indexer-once.log", "$env:LORE_DB_PATH", "$env:INDEXER_START_BLOCK", "$env:NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK", "$env:INDEXER_FINALITY_BLOCKS"]) {
+for (const marker of ["fresh external DB", "docs/indexer-once.log", "[indexer] SQLite path:", "matching the external `LORE_DB_PATH`", "$env:LORE_DB_PATH", "$env:INDEXER_START_BLOCK", "$env:NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK", "$env:INDEXER_FINALITY_BLOCKS"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show fresh indexer dry-run marker ${marker}`);
   }

@@ -3515,3 +3515,9 @@ as historical progress only.
 - Updated `docs/mainnet-status-board.md` last local verification to the current 2026-07-09 proof run while keeping G1-G14 marked Missing pending external evidence.
 - Strengthened `scripts/check-launch-gates.mjs` so the status board must retain the last-verification line with `proof:local`, `proof:remaining`, `proof:gates -- --structure-only`, `proof:launch-map`, `proof:launch-docs`, `proof:readiness`, and the explicit G1-G14 Missing warning.
 - Verified `node --check scripts/check-launch-gates.mjs`, `npm.cmd run proof:gates -- --structure-only`, `npm.cmd run proof:remaining`, and `npm.cmd run proof:local`.
+## 2026-07-09 - indexer dry-run DB path proof guard
+
+- Added `dryRun.dbPath` to `scripts/collect-indexer-evidence.mjs`, sourced from `[indexer] SQLite path:` in the real `indexer:once` log.
+- Strengthened `scripts/check-indexer-dry-run.mjs` so strict indexer proof requires `dryRun.dbPath` to be absolute, outside the repo, and matching `LORE_DB_PATH` or `--db`.
+- Updated `docs/production-runbook.md`, `docs/mainnet-readiness-checklist.md`, and `scripts/check-launch-command-map.mjs` so G7 evidence explicitly requires `[indexer] SQLite path:` matching the external `LORE_DB_PATH`.
+- Verified `node --check scripts/check-indexer-dry-run.mjs`, `node --check scripts/collect-indexer-evidence.mjs`, `node --check scripts/check-launch-command-map.mjs`, `npm.cmd run proof:launch-map`, `npm.cmd run proof:readiness`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, plus synthetic negative and positive checks for `dryRun.dbPath`.

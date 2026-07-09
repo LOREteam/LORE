@@ -56,7 +56,7 @@ Final proof manifests: docs/signoff-proof.json, docs/host-proof.json, docs/index
 
 ## Should-have
 
-- [ ] Fresh indexer DB dry-run from deploy block is executed with `npm.cmd run indexer:once` using a fresh external `LORE_DB_PATH`, matching `INDEXER_START_BLOCK` / `NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK`, and positive `INDEXER_FINALITY_BLOCKS`.
+- [ ] Fresh indexer DB dry-run from deploy block is executed with `npm.cmd run indexer:once` using a fresh external `LORE_DB_PATH`; `docs/indexer-once.log` includes `[indexer] SQLite path:` matching that `LORE_DB_PATH`, matching `INDEXER_START_BLOCK` / `NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK`, and positive `INDEXER_FINALITY_BLOCKS`.
 - [ ] Indexer proof draft is collected with `npm.cmd run proof:indexer:collect -- --fresh-db=true --epochs=<count> --chain-id=59144 --deploy-block=<deploy-block> --finality-blocks=<finality-blocks> --indexer-log=docs/indexer-once.log --health-log=docs/indexer-health-prod.log --chain-snapshot=docs/chain-proof-snapshot.json --out=docs/indexer-proof.draft.json` after direct chain snapshot/comparison evidence is available.
 - [ ] Indexer strict check passes with `npm.cmd run proof:indexer -- --strict`; dry-run, finality, chain snapshot, and each chain comparison include concrete evidence paths, links, artifacts, command output, or direct-chain summaries.
 - [ ] Monitoring plan is generated with `npm.cmd run proof:monitoring:plan -- --provider=<provider> --error-provider=<error-provider> --origin=https://playlore.xyz --out=docs/monitoring-alert-test-plan.draft.md`.
