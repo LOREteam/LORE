@@ -80,7 +80,7 @@ npm.cmd run proof:monitoring -- --strict
 
 ## 6. Canary and final QA
 
-Canary evidence must be a real target-RPC JSONL run with at least 50 successful auto-miner unique epochs, recovery checks for reload/reconnect/tab-close/pending tx/remount, and transaction scans proving no duplicate bets, nonce loops, or stuck pending.
+Canary evidence must be a real target-RPC JSONL run with at least 50 successful auto-miner unique epochs, recovery checks for reload/reconnect/tab-close/pending tx/remount, and transaction scans proving no duplicate bets, nonce loops, or stuck pending. The canary draft command requires `--live-log` to point to the saved JSONL artifact.
 QA evidence must include Privy allowed origins, connect/disconnect/reconnect, wrong network, mobile Web3 browser, clean-wallet first tx, slow auth, failure states, support/audit visibility, final browser/mobile layout, mainnet wording, and debug autominer smoke artifacts. Wallet browser checks must record the exact production origin.
 
 ```powershell

@@ -110,6 +110,9 @@ const chainId = argValue("chain-id", process.env.NEXT_PUBLIC_LINEA_CHAIN_ID || p
 const contractAddress = argValue("contract", process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || process.env.KEEPER_CONTRACT_ADDRESS || "");
 const rpcLabel = argValue("rpc-label", "");
 const liveLog = optionalExistingArtifact("live-log");
+if (!liveLog) {
+  throw new Error("--live-log must point to an existing live canary JSONL artifact");
+}
 const targetArtifact = optionalExistingArtifact("target-artifact");
 const recoveryArtifact = optionalExistingArtifact("recovery-artifact");
 const sessionArtifact = optionalExistingArtifact("session-artifact");

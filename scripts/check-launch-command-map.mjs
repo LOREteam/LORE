@@ -228,7 +228,7 @@ const commandExpectations = [
   ["proof:monitoring:draft", ["--provider=", "--error-provider=", "--origin=", "--monitor-artifact=docs/monitoring-alert-export.log", "--recovery-artifact=docs/monitoring-recovery-export.log", "--alert-target-artifact=docs/monitoring-alert-target-test.log", "--error-event-artifact=docs/error-tracking-test-event.log"]],
   ["proof:qa:plan", ["--origin=", "--network="]],
   ["proof:qa:draft", ["--origin=", "--network=", "--wallet-artifact=docs/qa-wallet-flow-report.md", "--failure-artifact=docs/qa-failure-state-report.md", "--support-artifact=docs/qa-support-audit-report.md", "--finalqa-artifact=docs/qa-final-browser-report.md", "--smoke-artifact=docs/qa-smoke-debug-autominer.log", "--clean-wallet-tx="]],
-  ["proof:canary:draft", ["--network=", "--chain-id=", "--contract=", "--rpc-label=", "--live-log=data/live-test-runs/live-canary-YYYY.jsonl", "--target-artifact=docs/canary-target-proof.log", "--recovery-artifact=docs/canary-recovery-proof.log", "--session-artifact=docs/canary-session-summary.log", "--tx-artifact=docs/canary-transaction-scan.log"]],
+  ["proof:canary:draft", ["--network=", "--chain-id=", "--contract=", "--rpc-label=", "--live-log=data/live-test-runs/live-canary-YYYY.jsonl", "--target-artifact=docs/canary-target-proof.log", "--recovery-artifact=docs/canary-recovery-proof.log", "--session-artifact=docs/canary-session-summary.log", "--tx-artifact=docs/canary-transaction-scan.log", "<redacted-provider-rpc-label>"]],
   ["proof:canary", [".jsonl", "--strict"]],
 ];
 

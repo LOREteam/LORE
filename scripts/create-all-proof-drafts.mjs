@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -11,6 +11,17 @@ function argValue(name, fallback) {
 const outDir = resolve(process.cwd(), argValue("out-dir", "docs/proof-drafts"));
 mkdirSync(outDir, { recursive: true });
 
+const syntheticCanaryLog = join(outDir, "synthetic-canary-live-log.jsonl");
+const syntheticCanaryTarget = join(outDir, "synthetic-canary-target-proof.log");
+const syntheticCanaryRecovery = join(outDir, "synthetic-canary-recovery-proof.log");
+const syntheticCanarySession = join(outDir, "synthetic-canary-session-summary.log");
+const syntheticCanaryTx = join(outDir, "synthetic-canary-transaction-scan.log");
+writeFileSync(syntheticCanaryLog, "", "utf8");
+writeFileSync(syntheticCanaryTarget, "synthetic non-proof canary target artifact for draft bundle only\n", "utf8");
+writeFileSync(syntheticCanaryRecovery, "synthetic non-proof canary recovery artifact for draft bundle only\n", "utf8");
+writeFileSync(syntheticCanarySession, "synthetic non-proof canary session artifact for draft bundle only\n", "utf8");
+writeFileSync(syntheticCanaryTx, "synthetic non-proof canary transaction artifact for draft bundle only\n", "utf8");
+
 const tasks = [
   ["signoff", "scripts/create-signoff-proof-draft.mjs", []],
   ["host", "scripts/create-host-proof-draft.mjs", ["--origin=https://playlore.xyz", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary"]],
@@ -18,7 +29,7 @@ const tasks = [
   ["restore", "scripts/create-restore-proof-draft.mjs", ["--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore"]],
   ["monitoring", "scripts/create-monitoring-proof-draft.mjs", ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz"]],
   ["qa", "scripts/create-qa-proof-draft.mjs", ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144"]],
-  ["canary", "scripts/create-canary-proof-draft.mjs", ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc"]],
+  ["canary", "scripts/create-canary-proof-draft.mjs", ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${syntheticCanaryLog}`, `--target-artifact=${syntheticCanaryTarget}`, `--recovery-artifact=${syntheticCanaryRecovery}`, `--session-artifact=${syntheticCanarySession}`, `--tx-artifact=${syntheticCanaryTx}`]],
 ];
 
 const rows = [];
