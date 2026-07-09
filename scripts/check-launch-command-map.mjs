@@ -300,7 +300,7 @@ for (const marker of ["health-prod", "data-sync", "stale-indexer-heartbeat", "in
     issues.push(`docs/production-runbook.md must show monitoring evidence marker ${marker}`);
   }
 }
-for (const marker of ["$env:LORE_BACKUP_DIR", "$env:LORE_RESTORE_DRILL_DIR", "--backup=<absolute-backup-file-inside-backup-dir>", "docs/restore-drill.log", "https://restore.playlore.xyz", "docs/restore-health-prod.log", "--manifest=docs/restore-proof.json"]) {
+for (const marker of ["$env:LORE_BACKUP_DIR", "$env:LORE_RESTORE_DRILL_DIR", "--backup=<absolute-backup-file-inside-backup-dir>", "docs/restore-drill.log", "successful restore summary", "https://restore.playlore.xyz", "docs/restore-health-prod.log", "[prod-health] OK", "base=<restored-origin>", "finalityLagBlocks", "--manifest=docs/restore-proof.json"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show restore drill evidence marker ${marker}`);
   }

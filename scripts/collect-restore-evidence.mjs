@@ -36,6 +36,28 @@ function hasOkSummary(text, okText) {
   return new RegExp(`Summary:\\s*${okText}`, "i").test(text);
 }
 
+function isPrintPlan() {
+  return hasFlag("print-plan");
+}
+
+function requireArtifact(name, value) {
+  if (!isPrintPlan()) requireCondition(Boolean(value), `--${name} is required when collecting restore launch evidence`);
+}
+
+function normalizedOrigin(value) {
+  if (!value) return "";
+  try {
+    return new URL(String(value).trim()).origin.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function healthBaseMatches(summary, expectedOrigin) {
+  const expected = normalizedOrigin(expectedOrigin);
+  const base = parseKeyValues(summary).base;
+  return Boolean(expected && base && normalizedOrigin(base) === expected);
+}
 function parseKeyValues(line = "") {
   const values = {};
   for (const match of line.matchAll(/\b([A-Za-z][A-Za-z0-9_-]*)=([^\s]+)/g)) {
@@ -113,7 +135,17 @@ const restoreSummary =
   firstMatchingLine(restoreLog, /^Summary:/i) ||
   firstMatchingLine(restoreLog, /^Copy this summary/i) ||
   "TODO: paste completed restore drill summary";
+const healthSummary = firstMatchingLine(healthLog, /\bbase=|\bruntime=|\bdataSync=/i) || "";
+const healthValues = parseKeyValues(healthSummary);
 const restoreOk = hasOkSummary(restoreLog, "backup/restore drill completed without detected issues");
+if (!isPrintPlan()) {
+  requireArtifact("restore-log", restoreLogPath);
+  requireArtifact("health-log", healthLogPath);
+  requireCondition(restoreOk, "--restore-log must include successful restore drill summary");
+  requireCondition(/\[prod-health\]\s+OK/i.test(healthLog), "--health-log must include [prod-health] OK");
+  requireCondition(healthBaseMatches(healthSummary, restoredOrigin), "--health-log must include base=<restored-origin>");
+  requireCondition(Number.isFinite(Number(healthValues.finalityLagBlocks)), "--health-log must include numeric finalityLagBlocks=<number>");
+}
 const manifest = {
   ...baseCollectorMeta("restore"),
   source,
