@@ -3508,4 +3508,10 @@ as historical progress only.
 - Updated canary template guard fixture and canary draft generator summary to include observed `rpcLabel` values; matching live labels now set `autoMinerSession.targetRpcConfirmed` in drafts.
 - Verified `node --check scripts/analyze-live-canary-proof.mjs`, `node --check scripts/check-proof-templates.mjs`, `node --check scripts/create-canary-proof-draft.mjs`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, a synthetic negative check that fails when canary JSONL misses `rpcLabel`, and a synthetic draft check for `observedRpcLabels`.
 - Added `LIVE_CANARY_RPC_LABEL` and `npm.cmd run live:canary` to the production runbook canary block, and strengthened launch docs/command-map guards so the operator flow cannot omit the redacted RPC label step.
-- Re-verified `node --check scripts/check-launch-doc-command-syntax.mjs`, `node --check scripts/check-launch-command-map.mjs`, `npm.cmd run proof:launch-docs`, `npm.cmd run proof:launch-map`, and `npm.cmd run proof:local` after the runbook update.`r`n- `npm.cmd run typecheck` could not start because local `next` is not available in `node_modules/.bin`; no TypeScript result was produced.
+- Re-verified `node --check scripts/check-launch-doc-command-syntax.mjs`, `node --check scripts/check-launch-command-map.mjs`, `npm.cmd run proof:launch-docs`, `npm.cmd run proof:launch-map`, and `npm.cmd run proof:local` after the runbook update.
+- `npm.cmd run typecheck` could not start because local `next` is not available in `node_modules/.bin`; no TypeScript result was produced.
+## 2026-07-09 - status board verification freshness guard
+
+- Updated `docs/mainnet-status-board.md` last local verification to the current 2026-07-09 proof run while keeping G1-G14 marked Missing pending external evidence.
+- Strengthened `scripts/check-launch-gates.mjs` so the status board must retain the last-verification line with `proof:local`, `proof:remaining`, `proof:gates -- --structure-only`, `proof:launch-map`, `proof:launch-docs`, `proof:readiness`, and the explicit G1-G14 Missing warning.
+- Verified `node --check scripts/check-launch-gates.mjs`, `npm.cmd run proof:gates -- --structure-only`, `npm.cmd run proof:remaining`, and `npm.cmd run proof:local`.

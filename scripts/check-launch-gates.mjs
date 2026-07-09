@@ -57,6 +57,16 @@ const requiredProofMarkerExpectations = new Map([
   ["G14", ["debug autominer smoke", "mobile layout", "overlays", "chat geometry", "mainnet wording"]],
 ]);
 const proofRecordMarkerExpectations = requiredProofMarkerExpectations;
+const requiredStatusBoardVerificationSnippets = [
+  "Last local verification:",
+  "npm.cmd run proof:local",
+  "proof:remaining",
+  "proof:gates -- --structure-only",
+  "proof:launch-map",
+  "proof:launch-docs",
+  "proof:readiness",
+  "G1-G14 remain Missing pending external evidence",
+];
 const requiredProofRecordSnippets = [
   "## Required final command",
   `$env:CANARY_PROOF_PATH = "docs/canary-proof.json"`,
@@ -158,8 +168,9 @@ function proofRecordReferenceIssuesFor(id, evidence) {
 }
 
 const proofMarkdown = readMarkdown(proofPath);
+const boardMarkdown = readMarkdown(boardPath);
 const proofRows = parseTable(proofMarkdown, ["ID", "Gate", "Status", "Evidence"]);
-const boardRows = parseTable(readMarkdown(boardPath), ["ID", "Gate", "Required proof", "First check", "Status"]);
+const boardRows = parseTable(boardMarkdown, ["ID", "Gate", "Required proof", "First check", "Status"]);
 const proofById = byId(proofRows);
 const boardById = byId(boardRows);
 const issues = [];
@@ -172,6 +183,11 @@ for (const snippet of requiredProofRecordSnippets) {
   }
 }
 if (duplicateBoard.length > 0) issues.push(`duplicate status board gates: ${duplicateBoard.join(", ")}`);
+for (const snippet of requiredStatusBoardVerificationSnippets) {
+  if (!boardMarkdown.includes(snippet)) {
+    issues.push(`status board last local verification must include: ${snippet}`);
+  }
+}
 
 for (const id of expected) {
   const proof = proofById.get(id);
