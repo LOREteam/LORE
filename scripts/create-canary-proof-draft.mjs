@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const GENERIC_RPC_LABEL_RE = /^(?:configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)(?:[-_ ]?rpc(?:[-_ ]?label)?(?:[-_ ]?required)?)?$/i;
 
 function refuseFinalProofOutput(outPath) {
   const normalized = path.relative(process.cwd(), outPath).replace(/\\/g, "/");
@@ -31,6 +32,11 @@ function isAddress(value) {
 
 function looksLikeUrl(value) {
   return /^https?:\/\//i.test(String(value ?? "").trim());
+}
+
+function hasConcreteRpcLabel(value) {
+  const text = String(value ?? "").trim();
+  return hasRealText(text) && !looksLikeUrl(text) && !GENERIC_RPC_LABEL_RE.test(text);
 }
 
 function normalizeNetwork(value) {
@@ -127,8 +133,8 @@ if (Number(chainId) !== 59144) {
 if (!isAddress(contractAddress)) {
   throw new Error("--contract must be a non-zero EVM address");
 }
-if (!hasRealText(rpcLabel) || looksLikeUrl(rpcLabel)) {
-  throw new Error("--rpc-label must be a redacted RPC label, not a raw URL");
+if (!hasConcreteRpcLabel(rpcLabel)) {
+  throw new Error("--rpc-label must be a concrete redacted RPC label, not a raw URL or generic placeholder");
 }
 
 const pendingEvidence = {

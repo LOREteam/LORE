@@ -61,7 +61,7 @@ Current focus: launch readiness / production proof. Runtime feature work is seco
 - Canary proof commands now require an explicit live JSONL log path in launch docs and command-map validation.
 - Canary analyzer can now execute strict live-log validation with its filesystem imports present.
 - Canary proof validation now requires at least 50 successful auto-miner unique epochs, concrete target/recovery/session/transaction evidence markers, and rejects missing or duplicate successful bet tx hashes in the live JSONL log.
-- Canary proof draft generation now refuses direct writes to final `docs/canary-proof.json`; final G10/G11 proof still requires real live JSONL canary evidence and strict validation.
+- Canary proof draft generation now refuses direct writes to final `docs/canary-proof.json` and rejects generic RPC labels; final G10/G11 proof still requires real live JSONL canary evidence and strict validation.
 - Canary proof draft generation now accepts a real live JSONL log plus target, recovery, session, and transaction artifacts through `--live-log`, `--target-artifact`, `--recovery-artifact`, `--session-artifact`, and `--tx-artifact`; it pre-fills observed auto-miner counts and tx hashes but still leaves recovery/status/safety booleans explicit.
 - Production runbook and command-map validation now require G10-G14 canary/QA evidence markers: real target-RPC JSONL, 50 successful auto-miner unique epochs, recovery checks, duplicate/nonce/stuck-pending scans, Privy/wrong-network/mobile/clean-wallet evidence, and debug autominer smoke artifacts.
 - Proof file guard now exercises strict validators for collected final proof JSON files.

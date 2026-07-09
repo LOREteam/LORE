@@ -86,12 +86,12 @@ QA evidence must include Privy allowed origins, connect/disconnect/reconnect, wr
 ```powershell
 $env:CANARY_PROOF_PATH = "docs/canary-proof.json"
 $env:LIVE_CANARY_MIN_EPOCHS = "50"
-$env:LIVE_CANARY_RPC_LABEL = "<redacted-rpc-label>"
+$env:LIVE_CANARY_RPC_LABEL = "<redacted-provider-rpc-label>"
 npm.cmd run live:canary
 npm.cmd run proof:qa:plan -- --origin=https://playlore.xyz --network=linea-mainnet --chain-id=59144 --out=docs/qa-canary-test-plan.draft.md
 npm.cmd run proof:qa:draft -- --origin=https://playlore.xyz --network=linea-mainnet --chain-id=59144 --wallet-artifact=docs/qa-wallet-flow-report.md --failure-artifact=docs/qa-failure-state-report.md --support-artifact=docs/qa-support-audit-report.md --finalqa-artifact=docs/qa-final-browser-report.md --smoke-artifact=docs/qa-smoke-debug-autominer.log --clean-wallet-tx=<txHash> --out=docs/qa-proof.draft.json
 npm.cmd run proof:qa -- --strict
-npm.cmd run proof:canary:draft -- --network=linea-mainnet --chain-id=59144 --contract=<contract> --rpc-label=<redacted-rpc-label> --live-log=data/live-test-runs/live-canary-YYYY.jsonl --target-artifact=docs/canary-target-proof.log --recovery-artifact=docs/canary-recovery-proof.log --session-artifact=docs/canary-session-summary.log --tx-artifact=docs/canary-transaction-scan.log --out=docs/canary-proof.draft.json
+npm.cmd run proof:canary:draft -- --network=linea-mainnet --chain-id=59144 --contract=<contract> --rpc-label=<redacted-provider-rpc-label> --live-log=data/live-test-runs/live-canary-YYYY.jsonl --target-artifact=docs/canary-target-proof.log --recovery-artifact=docs/canary-recovery-proof.log --session-artifact=docs/canary-session-summary.log --tx-artifact=docs/canary-transaction-scan.log --out=docs/canary-proof.draft.json
 npm.cmd run proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict
 npm.cmd run proof:files -- --canary-log=<canary-log-file>
 npm.cmd run proof:launch -- --strict --canary-log=<canary-log-file>
