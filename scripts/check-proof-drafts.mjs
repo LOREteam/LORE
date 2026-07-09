@@ -197,10 +197,22 @@ const collectorRejectCases = [
     expected: "--env-log is required when collecting signoff launch evidence",
   },
   {
+    id: "signoff-collector-missing-chain-log",
+    create: ["scripts/collect-signoff-evidence.mjs"],
+    createArgs: ["--epochs=1", "--user=0x1111111111111111111111111111111111111111", `--env-log=${signoffEnvLog}`],
+    expected: "--chain-log is required when collecting signoff launch evidence",
+  },
+  {
     id: "host-collector-missing-logs",
     create: ["scripts/collect-host-evidence.mjs"],
     createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`],
     expected: "--health-log is required when collecting launch host evidence",
+  },
+  {
+    id: "host-collector-missing-load-log",
+    create: ["scripts/collect-host-evidence.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`, `--health-log=${hostHealthLog}`],
+    expected: "--load-log is required when collecting launch host evidence",
   },
   {
     id: "host-collector-missing-process-evidence",
@@ -227,6 +239,24 @@ const collectorRejectCases = [
     expected: "--load-log must include Load base URL line",
   },
   {
+    id: "indexer-collector-missing-indexer-log",
+    create: ["scripts/collect-indexer-evidence.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
+    expected: "--indexer-log is required when collecting indexer launch evidence",
+  },
+  {
+    id: "indexer-collector-missing-health-log",
+    create: ["scripts/collect-indexer-evidence.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
+    expected: "--health-log is required when collecting indexer launch evidence",
+  },
+  {
+    id: "indexer-collector-missing-chain-snapshot",
+    create: ["scripts/collect-indexer-evidence.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`],
+    expected: "--chain-snapshot is required when collecting indexer launch evidence",
+  },
+  {
     id: "indexer-collector-repo-db",
     create: ["scripts/collect-indexer-evidence.mjs"],
     createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerRepoDbLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
@@ -249,17 +279,60 @@ const collectorRejectCases = [
     create: ["scripts/collect-restore-evidence.mjs"],
     createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthMissingRuntimeLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
     expected: "--health-log must include runtime=ok/pass/healthy",
-  },  {
+  },
+  {
+    id: "restore-collector-missing-restore-log",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--restore-log is required when collecting restore launch evidence",
+  },
+  {
+    id: "restore-collector-missing-health-log",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--health-log is required when collecting restore launch evidence",
+  },
+  {
     id: "restore-collector-missing-backup-schedule-artifact",
     create: ["scripts/collect-restore-evidence.mjs"],
     createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--preservation-artifact=${restorePreservationArtifact}`],
     expected: "--backup-schedule-artifact is required when collecting restore launch evidence",
   },
   {
+    id: "restore-collector-missing-preservation-artifact",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`],
+    expected: "--preservation-artifact is required when collecting restore launch evidence",
+  },
+  {
+    id: "canary-draft-missing-live-log",
+    create: ["scripts/create-canary-proof-draft.mjs"],
+    createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--target-artifact=${canaryTargetArtifact}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--session-artifact=${canarySessionArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
+    expected: "--live-log is required when drafting canary launch evidence",
+  },
+  {
     id: "canary-draft-missing-target-artifact",
     create: ["scripts/create-canary-proof-draft.mjs"],
     createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${canaryLog}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--session-artifact=${canarySessionArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
     expected: "--target-artifact is required when drafting canary launch evidence",
+  },
+  {
+    id: "canary-draft-missing-recovery-artifact",
+    create: ["scripts/create-canary-proof-draft.mjs"],
+    createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${canaryLog}`, `--target-artifact=${canaryTargetArtifact}`, `--session-artifact=${canarySessionArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
+    expected: "--recovery-artifact is required when drafting canary launch evidence",
+  },
+  {
+    id: "canary-draft-missing-session-artifact",
+    create: ["scripts/create-canary-proof-draft.mjs"],
+    createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${canaryLog}`, `--target-artifact=${canaryTargetArtifact}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
+    expected: "--session-artifact is required when drafting canary launch evidence",
+  },
+  {
+    id: "canary-draft-missing-tx-artifact",
+    create: ["scripts/create-canary-proof-draft.mjs"],
+    createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${canaryLog}`, `--target-artifact=${canaryTargetArtifact}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--session-artifact=${canarySessionArtifact}`],
+    expected: "--tx-artifact is required when drafting canary launch evidence",
   },
   {
     id: "canary-draft-empty-live-log",
@@ -313,6 +386,18 @@ const finalOutputCases = [
     expected: "--restore-log is required when drafting restore launch evidence",
   },
   {
+    id: "restore-draft-missing-backup-schedule-artifact",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--backup-schedule-artifact is required when drafting restore launch evidence",
+  },
+  {
+    id: "restore-draft-missing-preservation-artifact",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`],
+    expected: "--preservation-artifact is required when drafting restore launch evidence",
+  },
+  {
     id: "restore-final-output",
     create: ["scripts/create-restore-proof-draft.mjs"],
     createArgs: ["--out=docs/restore-proof.json"],
@@ -337,6 +422,30 @@ const finalOutputCases = [
     expected: "--wallet-artifact is required when drafting QA launch evidence",
   },
   {
+    id: "qa-missing-failure-artifact",
+    create: ["scripts/create-qa-proof-draft.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--wallet-artifact=${qaWalletArtifact}`, `--support-artifact=${qaSupportArtifact}`, `--finalqa-artifact=${qaFinalArtifact}`, `--smoke-artifact=${qaSmokeArtifact}`, "--clean-wallet-tx=0x1111111111111111111111111111111111111111111111111111111111111111"],
+    expected: "--failure-artifact is required when drafting QA launch evidence",
+  },
+  {
+    id: "qa-missing-support-artifact",
+    create: ["scripts/create-qa-proof-draft.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--wallet-artifact=${qaWalletArtifact}`, `--failure-artifact=${qaFailureArtifact}`, `--finalqa-artifact=${qaFinalArtifact}`, `--smoke-artifact=${qaSmokeArtifact}`, "--clean-wallet-tx=0x1111111111111111111111111111111111111111111111111111111111111111"],
+    expected: "--support-artifact is required when drafting QA launch evidence",
+  },
+  {
+    id: "qa-missing-finalqa-artifact",
+    create: ["scripts/create-qa-proof-draft.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--wallet-artifact=${qaWalletArtifact}`, `--failure-artifact=${qaFailureArtifact}`, `--support-artifact=${qaSupportArtifact}`, `--smoke-artifact=${qaSmokeArtifact}`, "--clean-wallet-tx=0x1111111111111111111111111111111111111111111111111111111111111111"],
+    expected: "--finalqa-artifact is required when drafting QA launch evidence",
+  },
+  {
+    id: "qa-missing-smoke-artifact",
+    create: ["scripts/create-qa-proof-draft.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--wallet-artifact=${qaWalletArtifact}`, `--failure-artifact=${qaFailureArtifact}`, `--support-artifact=${qaSupportArtifact}`, `--finalqa-artifact=${qaFinalArtifact}`, "--clean-wallet-tx=0x1111111111111111111111111111111111111111111111111111111111111111"],
+    expected: "--smoke-artifact is required when drafting QA launch evidence",
+  },
+  {
     id: "qa-missing-clean-wallet-tx",
     create: ["scripts/create-qa-proof-draft.mjs"],
     createArgs: ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--wallet-artifact=${qaWalletArtifact}`, `--failure-artifact=${qaFailureArtifact}`, `--support-artifact=${qaSupportArtifact}`, `--finalqa-artifact=${qaFinalArtifact}`, `--smoke-artifact=${qaSmokeArtifact}`],
@@ -353,6 +462,24 @@ const finalOutputCases = [
     create: ["scripts/create-monitoring-proof-draft.mjs"],
     createArgs: ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", `--recovery-artifact=${monitoringRecoveryArtifact}`, `--alert-target-artifact=${monitoringAlertTargetArtifact}`, `--error-event-artifact=${monitoringErrorEventArtifact}`],
     expected: "--monitor-artifact is required when drafting monitoring launch evidence",
+  },
+  {
+    id: "monitoring-missing-recovery-artifact",
+    create: ["scripts/create-monitoring-proof-draft.mjs"],
+    createArgs: ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", `--monitor-artifact=${monitoringAlertArtifact}`, `--alert-target-artifact=${monitoringAlertTargetArtifact}`, `--error-event-artifact=${monitoringErrorEventArtifact}`],
+    expected: "--recovery-artifact is required when drafting monitoring launch evidence",
+  },
+  {
+    id: "monitoring-missing-alert-target-artifact",
+    create: ["scripts/create-monitoring-proof-draft.mjs"],
+    createArgs: ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", `--monitor-artifact=${monitoringAlertArtifact}`, `--recovery-artifact=${monitoringRecoveryArtifact}`, `--error-event-artifact=${monitoringErrorEventArtifact}`],
+    expected: "--alert-target-artifact is required when drafting monitoring launch evidence",
+  },
+  {
+    id: "monitoring-missing-error-event-artifact",
+    create: ["scripts/create-monitoring-proof-draft.mjs"],
+    createArgs: ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", `--monitor-artifact=${monitoringAlertArtifact}`, `--recovery-artifact=${monitoringRecoveryArtifact}`, `--alert-target-artifact=${monitoringAlertTargetArtifact}`],
+    expected: "--error-event-artifact is required when drafting monitoring launch evidence",
   },
 ];
 

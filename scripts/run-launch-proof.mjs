@@ -18,7 +18,7 @@ const commonArgs = strict ? ["--strict"] : [];
 const checks = [
   { id: "LOCAL", label: "template guard", script: "scripts/check-proof-templates.mjs", args: [] },
   { id: "LOCAL", label: "draft guard", script: "scripts/check-proof-drafts.mjs", args: [] },
-  { id: "LOCAL", label: "proof file guard", script: "scripts/check-proof-files.mjs", args: canaryLog ? [`--canary-log=${canaryLog}`] : [] },
+  { id: "LOCAL", label: "proof file guard", script: "scripts/check-proof-files.mjs", args: [...commonArgs, ...(canaryLog ? [`--canary-log=${canaryLog}`] : [])] },
   { id: "LOCAL", label: "gate table structure", script: "scripts/check-launch-gates.mjs", args: ["--structure-only"] },
   { id: "LOCAL", label: "command map guard", script: "scripts/check-launch-command-map.mjs", args: [] },
   { id: "LOCAL", label: "launch doc command guard", script: "scripts/check-launch-doc-command-syntax.mjs", args: [] },

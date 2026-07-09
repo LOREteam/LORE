@@ -6,17 +6,20 @@ Current focus: launch readiness / production proof. Runtime feature work is seco
 
 - Serena project config exists and is read-only with navigation/symbol/diagnostics tools only.
 - Launch proof docs/scripts that were NUL-corrupted have been restored to readable files.
-- `npm.cmd run proof:local` passes local launch-proof preflight L1-L12.
+- `npm.cmd run proof:local` passes local launch-proof preflight L1-L13, including an expected-fail strict launch runner check while G1-G14 evidence is missing.
 - `proof:launch-map`, `proof:drafts`, `proof:drafts:create`, `proof:launch-docs`, `proof:readiness`, `proof:gates -- --structure-only`, and `proof:remaining` are green locally.
 - Launch command-map validation now also checks `docs/production-runbook.md` and `docs/mainnet-readiness-checklist.md` for required artifact-backed launch evidence arguments, preventing stale non-artifact commands from reappearing outside the command map.
 - Launch evidence command map now includes a compact `Required Evidence Markers` section for G1-G14, and `proof:launch-map` fails if those command-map markers drift or disappear.
 - `proof:drafts` now also checks signoff/host/indexer/restore collector-shaped drafts: they must contain strict-validator sections and still be rejected while incomplete.
+- `proof:drafts` collector rejection coverage now explicitly protects required signoff, host, indexer, and restore evidence inputs, including chain logs, load logs, indexer/health/snapshot artifacts, restore logs, restored health logs, backup schedule, and preservation artifacts.
+- `proof:drafts` now also has explicit missing-artifact regressions for standalone restore, monitoring, canary, and QA draft generators, so G8-G14 draft paths cannot silently lose required saved evidence inputs.
 - `proof:drafts:create` now prints an explicit warning that generated draft bundles are not launch proof and must be promoted only after real external evidence and strict validation.
 - `proof:drafts` now also runs strict validators against every draft produced by `proof:drafts:create`, ensuring the starter bundle cannot be mistaken for accepted launch proof.
 - `proof:remaining` now reports `completeGateEvidenceIssues` and fails if a `Complete` gate references missing final proof artifacts or required canary logs.
 - `proof:launch` now fails without strict mode and treats remaining external evidence as a launch-blocking failure, not a clean local guard.
 - `proof:launch` now also runs `proof:remaining -- --json` and only treats JSON remaining evidence as clean when it reports zero remaining gates and zero structural/reference issues.
 - `proof:launch` recognizes the hardened final `proof:files` success summary, so a complete final proof-file pass will not be misclassified as a launch failure.
+- `proof:launch -- --strict` now also runs the proof-file guard in final-manifest mode even when the canary log is missing, so strict launch cannot rely on the soft local proof-file preflight.
 - Collectors now write draft evidence by default and reject direct writes to final `docs/*-proof.json` paths.
 - Proof collectors can write draft JSON via the shared helper, and absolute paths to final `docs/*-proof.json` are rejected.
 - Restore evidence collection now requires an absolute existing backup file outside the repo checkout.
@@ -25,6 +28,7 @@ Current focus: launch readiness / production proof. Runtime feature work is seco
 - Restore collection now requires saved backup schedule, `proof:restore`, restored `health:prod`, and indexer preservation artifacts through `--backup-schedule-artifact`, `--restore-log`, `--health-log`, and `--preservation-artifact`; the restore log must include the successful restore summary, and the health log must include `[prod-health] OK`, matching `base=<restored-origin>`, runtime/dataSync OK, and numeric `finalityLagBlocks` before a G8 draft is written.
 - Production runbook, readiness checklist, and command-map/readiness validation now describe the two-phase G8 restore flow: non-strict restore drill log, restored `health:prod` log, `proof:restore:collect`, then final strict `proof:restore` against `docs/restore-proof.json`.
 - Restore proof draft generation now refuses direct writes to final `docs/restore-proof.json`; final G8 proof still requires real backup schedule, restore drill, finality-aware restored health, and preservation evidence.
+- Standalone restore proof draft generation now requires concrete source/backup/restore paths plus saved `--restore-log`, `--health-log`, `--backup-schedule-artifact`, and `--preservation-artifact` inputs before writing a G8 draft; `proof:drafts` covers missing restore, schedule, and preservation artifact regressions.
 - Restore proof validation now requires restored `health:prod` evidence with numeric `finalityLagBlocks`; restore drafts no longer mark restored health finality from generic `dataSync` alone. Strict G8 proof also requires concrete backup schedule, restore drill, restored health, and indexer preservation evidence markers.
 - Strict restore proof now also requires `restoredStagingHealth` evidence to include `base=<restored origin>` from the restored `health:prod` output.
 - Monitoring proof validation now requires concrete fired alert and recovery/resolution evidence for each required monitor, fired and recovery evidence must be distinct, recovery timestamps cannot precede fired-alert timestamps, and each required kind must have one complete enabled monitor entry rather than evidence spread across duplicates.
@@ -69,6 +73,7 @@ Current focus: launch readiness / production proof. Runtime feature work is seco
 - Production runbook and command-map validation now require G10-G14 canary/QA evidence markers: real target-RPC JSONL, 50 successful auto-miner unique epochs, recovery checks, duplicate/nonce/stuck-pending scans, Privy/wrong-network/mobile/clean-wallet evidence, and debug autominer smoke artifacts.
 - Proof file guard now exercises strict validators for collected final proof JSON files.
 - `proof:files` remains a soft local preflight without a canary log, but with `--canary-log` or `--strict` it now requires every final proof manifest plus the canary log to exist before launch.
+- `proof:files` now allows the documented auxiliary `docs/chain-proof-snapshot.json` artifact, so the final proof-file guard does not reject the G4/G7 chain snapshot produced by the launch runbook while still rejecting unexpected proof-like JSON files.
 - Final canary proof file validation now fails without an explicit live JSONL log path.
 - Complete launch gates now require expected local final proof artifacts, and canary/final QA gates also require a local live JSONL log reference.
 - Launch gate structure validation now also requires every status-board `Required proof` cell to reference the expected final proof JSON, and canary-dependent gates G10/G11/G14 must explicitly mention a live canary log.
@@ -83,6 +88,7 @@ Current focus: launch readiness / production proof. Runtime feature work is seco
 - `proof:gates` now validates expected `First check` command markers for every G1-G14 status-board row, including artifact-backed collector arguments and strict proof commands.
 - `proof:remaining` now reports `first check issues` and `proof:local` L11 requires that counter to stay `none`, so the main remaining-evidence report catches status-board command drift directly.
 - `proof:local` L12 now validates `proof:remaining --json` and summarizes JSON output compactly, including remaining gate count and first-check issue count.
+- `docs/mainnet-status-board.md` last-verification text and `proof:gates` now require `proof:files` plus expected-fail `proof:launch` coverage, so the board records that local tooling is green while final launch remains blocked.
 - Readiness checklist validation now requires the exact saved `proof:chain -- --strict --out=docs/chain-proof-snapshot.json`, canary draft/strict, QA draft, and monitoring draft command references.
 - Readiness checklist validation now also requires explicit references to every final proof manifest: signoff, host, indexer, restore, monitoring, QA, and canary proof JSON.
 - Final operator flow now explicitly runs `proof:files -- --canary-log=<canary-log-file>` before `proof:launch -- --strict`; readiness and command-map guards require that step in linked docs.

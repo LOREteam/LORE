@@ -3423,7 +3423,7 @@ as historical progress only.
 ## 2026-07-05 - local proof JSON remaining guard verified
 
 - Verified `node --check scripts/run-local-proof-preflight.mjs`, `node --check scripts/report-launch-remaining.mjs`, `npm.cmd run proof:remaining`, and `npm.cmd run proof:local` after the L12 remaining-evidence JSON guard.
-- `proof:local` now reports L1-L12 passing; L12 summarizes `proof:remaining --json` as `JSON: 14 remaining gate(s), 0 first-check issue(s)`.
+- At that point, `proof:local` reported L1 through L12 passing; L12 summarized `proof:remaining --json` as `JSON: 14 remaining gate(s), 0 first-check issue(s)`.
 - Added `docs/mainnet-status-board.md` last local verification line for 2026-07-05, then re-verified `npm.cmd run proof:gates -- --structure-only` and `npm.cmd run proof:remaining`.
 - Launch is still blocked by missing external G1-G14 evidence; this step only confirms the local proof guard and status-board command drift checks remain green.
 ## 2026-07-05 - production runbook fresh indexer guard
@@ -3608,3 +3608,55 @@ as historical progress only.
 - Added a draft regression case that rejects missing --indexer-log before standalone indexer draft output is written.
 
 - Verified node --check for changed standalone indexer draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.
+
+## 2026-07-09 - restore draft artifact regression coverage
+
+- Expanded `scripts/check-proof-drafts.mjs` so standalone G8 restore draft regression checks reject missing `--backup-schedule-artifact` and `--preservation-artifact`, not only missing `--restore-log`.
+- Updated `docs/current_state.md` to record that standalone restore draft generation now requires concrete source/backup/restore paths plus saved restore, health, schedule, and preservation artifacts.
+## 2026-07-09 - QA draft artifact regression coverage
+
+- Expanded `scripts/check-proof-drafts.mjs` so G12-G14 QA draft regression checks reject missing failure-state, support/audit, final browser, and debug smoke artifacts in addition to wallet evidence and clean-wallet tx.
+## 2026-07-09 - Monitoring and canary draft artifact regression coverage
+
+- Expanded `scripts/check-proof-drafts.mjs` so G9 monitoring draft regressions reject missing recovery, alert-target, and error-event artifacts in addition to fired-alert evidence.
+- Expanded G10-G11 canary draft regressions so missing live log, recovery, session, and transaction artifacts are rejected explicitly before incomplete canary drafts can be written.
+## 2026-07-09 - Launch collector artifact regression coverage
+
+- Expanded `scripts/check-proof-drafts.mjs` collector rejection coverage so signoff, host, indexer, and restore collectors explicitly reject missing required launch evidence inputs for chain logs, load logs, indexer/health/snapshot artifacts, restore logs, restored health logs, and preservation artifacts.
+## 2026-07-09 - Proof files chain snapshot allowlist
+
+- Fixed `scripts/check-proof-files.mjs` so the documented auxiliary `docs/chain-proof-snapshot.json` artifact is allowed by the proof-file guard instead of being treated as an unexpected proof-like JSON file.
+- This keeps the G4/G7 runbook flow compatible with the final `proof:files` preflight while preserving rejection of other unexpected proof-like JSON artifacts.
+## 2026-07-09 - Local preflight chain snapshot regression
+
+- Updated `scripts/run-local-proof-preflight.mjs` so L3 `proof file guard` exercises the documented `docs/chain-proof-snapshot.json` auxiliary artifact path by creating a temporary snapshot only when absent and deleting it in `finally`.
+## 2026-07-09 - Proof files unexpected artifact regression
+
+- Extended L3 in `scripts/run-local-proof-preflight.mjs` so local preflight also creates a temporary unexpected `docs/unexpected-proof-regression.json` file and requires `scripts/check-proof-files.mjs` to reject it.
+- This keeps the `docs/chain-proof-snapshot.json` allowlist narrow instead of weakening the unexpected proof-like JSON guard.
+## 2026-07-09 - Launch runner expected-fail verification
+
+- Verified `npm.cmd run proof:launch` fails without strict mode and reports `proof:launch requires --strict or PROOF_STRICT=1`.
+- Verified `npm.cmd run proof:launch -- --strict` still fails without canary log and external G1-G14 evidence, including missing final proof manifests and incomplete gates.
+## 2026-07-09 - Strict launch proof-file mode
+
+- Updated `scripts/run-launch-proof.mjs` so `proof:launch -- --strict` passes `--strict` into `scripts/check-proof-files.mjs`, even when `--canary-log` is missing.
+- This makes strict launch enforce final proof manifest presence through the proof-file guard instead of leaving that row in soft local-preflight mode.
+## 2026-07-09 - Status board launch verification coverage
+
+- Updated `docs/mainnet-status-board.md` so the last local verification line includes `proof:files` and expected-fail `proof:launch` / strict-launch checks while G1-G14 remain Missing.
+- Strengthened `scripts/check-launch-gates.mjs` so status-board verification text must retain those proof-file and expected-fail launch markers.
+## 2026-07-09 - Exact status-board launch markers
+
+- Tightened `scripts/check-launch-gates.mjs` status-board verification snippets from broad `proof:launch` to exact backtick-wrapped `proof:launch` and `proof:launch -- --strict` markers, preventing `proof:launch-map` from satisfying the launch expected-fail evidence requirement.
+## 2026-07-09 - Local preflight strict launch expected-fail
+
+- Added L13 to `scripts/run-local-proof-preflight.mjs`: `scripts/run-launch-proof.mjs --strict` must fail while final proof manifests, G1-G14 evidence, and live canary log are missing.
+- Updated `docs/mainnet-status-board.md`, `docs/current_state.md`, and `scripts/check-launch-gates.mjs` so local verification records and requires L1-L13 plus strict launch expected-fail coverage.
+## 2026-07-09 - Future-compatible strict launch L13
+
+- Adjusted `scripts/run-local-proof-preflight.mjs` L13 so it accepts the current expected-fail strict launch state, but will also pass if strict launch later reaches `Overall: all launch proof checks passed.` after real G1-G14 evidence and canary log are collected.
+## 2026-07-09 - L13 incomplete-gate expected-fail pattern
+
+- Loosened `scripts/run-local-proof-preflight.mjs` L13 from requiring missing final proof manifests to requiring strict launch output with `Incomplete gates:` plus failed launch summary.
+- This keeps the current missing-evidence launch blocked while allowing future partial proof collection states to keep using `proof:local` until all G1-G14 evidence is complete.

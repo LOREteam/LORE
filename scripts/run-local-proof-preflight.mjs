@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const checks = [
@@ -23,6 +23,8 @@ const checks = [
     script: "scripts/check-proof-files.mjs",
     args: [],
     cleanPattern: /Summary: proof manifest files are clean or not yet collected\./i,
+    withTemporaryChainSnapshot: true,
+    withUnexpectedProofRegression: true,
   },
   {
     id: "L4",
@@ -79,12 +81,20 @@ const checks = [
     script: "scripts/report-launch-remaining.mjs",
     args: [],
     cleanPattern: /\|\s*inconsistent gate rows\s*\|\s*none\s*\|[\s\S]*\|\s*complete gate evidence issues\s*\|\s*none\s*\|[\s\S]*\|\s*required proof issues\s*\|\s*none\s*\|[\s\S]*\|\s*proof record reference issues\s*\|\s*none\s*\|[\s\S]*\|\s*first check issues\s*\|\s*none\s*\|/i,
-  },  {
+  },
+  {
     id: "L12",
     label: "remaining evidence JSON",
     script: "scripts/report-launch-remaining.mjs",
     args: ["--json"],
     cleanPattern: /"inconsistentGates": \[\][\s\S]*"completeGateEvidenceIssues": \[\][\s\S]*"requiredProofIssues": \[\][\s\S]*"proofRecordReferenceIssues": \[\][\s\S]*"firstCheckIssues": \[\]/i,
+  },
+  {
+    id: "L13",
+    label: "strict launch expected fail",
+    script: "scripts/run-launch-proof.mjs",
+    args: ["--strict"],
+    expectedFailurePattern: /Incomplete gates: G[\d,\s]+[\s\S]*Overall: \d+ launch proof check\(s\) failed or missing/i,
   },
 ];
 
@@ -128,16 +138,63 @@ for (const check of checks) {
     continue;
   }
 
-  const result = spawnSync(process.execPath, [check.script, ...check.args], {
-    cwd: process.cwd(),
-    env: process.env,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-  });
+  const chainSnapshotPath = resolve(process.cwd(), "docs/chain-proof-snapshot.json");
+  const createdChainSnapshot = Boolean(check.withTemporaryChainSnapshot && !existsSync(chainSnapshotPath));
+  if (createdChainSnapshot) {
+    writeFileSync(
+      chainSnapshotPath,
+      JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z", expectedChainId: 59144, rpcChainId: 59144, contractAddress: "0x1111111111111111111111111111111111111111", epochs: [] }),
+      "utf8",
+    );
+  }
+
+  let result;
+  try {
+    result = spawnSync(process.execPath, [check.script, ...check.args], {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+    });
+  } finally {
+    if (createdChainSnapshot && existsSync(chainSnapshotPath)) unlinkSync(chainSnapshotPath);
+  }
   const output = `${result.stdout || ""}\n${result.stderr || ""}`;
   const exitCode = typeof result.status === "number" ? result.status : 1;
-  const summary = summarizeOutput(output);
-  const clean = exitCode === 0 && check.cleanPattern.test(output);
+  let summary = summarizeOutput(output);
+  let clean = check.expectedFailurePattern
+    ? (exitCode !== 0 && check.expectedFailurePattern.test(output)) || (exitCode === 0 && /Overall: all launch proof checks passed\./i.test(output))
+    : exitCode === 0 && check.cleanPattern.test(output);
+  if (check.expectedFailurePattern && clean && exitCode !== 0) summary = `expected fail: ${summary}`;
+
+  if (clean && check.withUnexpectedProofRegression) {
+    const unexpectedProofPath = resolve(process.cwd(), "docs/unexpected-proof-regression.json");
+    const createdUnexpectedProof = !existsSync(unexpectedProofPath);
+    if (!createdUnexpectedProof) {
+      clean = false;
+      summary = "unexpected proof regression path already exists";
+    } else {
+      let unexpectedResult;
+      try {
+        writeFileSync(unexpectedProofPath, JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z" }), "utf8");
+        unexpectedResult = spawnSync(process.execPath, [check.script, ...check.args], {
+          cwd: process.cwd(),
+          env: process.env,
+          encoding: "utf8",
+          maxBuffer: 1024 * 1024,
+        });
+      } finally {
+        if (existsSync(unexpectedProofPath)) unlinkSync(unexpectedProofPath);
+      }
+      const unexpectedOutput = `${unexpectedResult.stdout || ""}\n${unexpectedResult.stderr || ""}`;
+      const unexpectedExitCode = typeof unexpectedResult.status === "number" ? unexpectedResult.status : 1;
+      if (unexpectedExitCode === 0 || !/unexpected proof-like JSON file docs\/unexpected-proof-regression\.json/i.test(unexpectedOutput)) {
+        clean = false;
+        summary = `unexpected proof regression failed: ${summarizeOutput(unexpectedOutput)}`;
+      }
+    }
+  }
+
   if (!clean) issues.push(`${check.id}: ${check.label} failed local preflight`);
   rows.push([check.id, check.label, clean ? "pass" : "fail", String(exitCode), summary.replace(/\|/g, "\\|") || "no summary"]);
 }

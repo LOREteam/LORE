@@ -54,6 +54,7 @@ const expectedFinalManifests = {
   },
 };
 const expectedFinalManifestNames = Object.keys(expectedFinalManifests);
+const expectedAuxiliaryProofArtifacts = new Set(["chain-proof-snapshot.json"]);
 const TEMPLATE_VALUE_RE = /REPLACE_|<REDACTED>|TODO|TBD/i;
 const secretKeyPattern =
   /(secret|private[_-]?key|mnemonic|webhook|dsn|api[_-]?key|api[_-]?token|auth[_-]?token|access[_-]?token|bearer|session|cookie|password)/i;
@@ -142,7 +143,7 @@ const issues = [];
 const existingDocs = existsSync(docsDir) ? readdirSync(docsDir) : [];
 const unexpectedProofFiles = existingDocs
   .filter((name) => /-proof.*\.json$/i.test(name))
-  .filter((name) => !expectedFinalManifestNames.includes(name) && !/\.draft\.json$/i.test(name));
+  .filter((name) => !expectedFinalManifestNames.includes(name) && !expectedAuxiliaryProofArtifacts.has(name) && !/\.draft\.json$/i.test(name));
 
 for (const name of unexpectedProofFiles) {
   issues.push(`unexpected proof-like JSON file docs/${name}`);
