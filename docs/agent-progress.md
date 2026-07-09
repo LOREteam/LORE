@@ -3960,3 +3960,9 @@ as historical progress only.
 - Tightened `scripts/create-indexer-proof-draft.mjs` and `scripts/collect-indexer-evidence.mjs` so `--chain-snapshot` must parse as a JSON object artifact before indexer launch evidence can be drafted or collected.
 - Added `scripts/check-proof-drafts.mjs` regression cases for non-object chain snapshots in both the indexer draft generator and collector paths.
 - Verified `node --check scripts\create-indexer-proof-draft.mjs`, `node --check scripts\collect-indexer-evidence.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
+
+## 2026-07-10 - Production readiness baseline and commit split
+
+- Verified the current local baseline: `git diff --check`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local` (L1-L14), `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run test:contract`, `npm.cmd run build`, and `npm.cmd run proof:deps:all` all passed. Full dependency audit reports 0 critical / 0 high; moderate and low advisories remain tracked for later review.
+- Split the accumulated work into `2e99bd9 chore: clear high dependency audit findings`, `47ab240 feat: harden launch proof evidence gates`, and `48c5f17 chore: ignore local diagnostic artifacts`; the worktree was clean afterward.
+- `npm.cmd run proof:mainnet -- --strict` correctly remains a G1 blocker in the current shell: required mainnet network, contract/token, deploy block, finality, RPC, production origin, Privy, diagnostics, proxy, and external DB configuration are not present. No values were guessed or written as proof.
