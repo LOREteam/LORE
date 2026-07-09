@@ -33,7 +33,7 @@ function isPositiveInteger(value) {
 
 function normalizeNetwork(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (["main", "linea", "prod", "production"].includes(normalized)) return "mainnet";
+  if (["main", "linea", "prod", "production", "linea-mainnet"].includes(normalized)) return "mainnet";
   if (["testnet", "linea-sepolia", "sepolia-testnet"].includes(normalized)) return "sepolia";
   return normalized;
 }
@@ -45,11 +45,13 @@ function chainIdForNetwork(value) {
   return "";
 }
 
-function readOptionalLog(filePath) {
-  if (!filePath) return "";
+function readRequiredLog(name, filePath) {
+  if (!filePath) {
+    throw new Error(`--${name} is required when drafting signoff launch evidence`);
+  }
   const resolved = path.resolve(process.cwd(), filePath);
   if (!existsSync(resolved)) {
-    throw new Error(`${filePath} does not exist`);
+    throw new Error(`--${name} must point to an existing redacted artifact`);
   }
   return readFileSync(resolved, "utf8");
 }
@@ -79,8 +81,8 @@ function comparisonDraft(label, chainSummary) {
 
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/signoff-proof.draft.json"));
 refuseFinalProofOutput(outPath);
-const envLog = readOptionalLog(argValue("env-log"));
-const chainLog = readOptionalLog(argValue("chain-log"));
+const envLog = readRequiredLog("env-log", argValue("env-log"));
+const chainLog = readRequiredLog("chain-log", argValue("chain-log"));
 const envSummary = summarizeLog(envLog, "TODO: paste redacted proof:mainnet summary for final host env");
 const chainSummary = summarizeLog(chainLog, "");
 const network = argValue("network", envValue("LINEA_NETWORK", "NEXT_PUBLIC_LINEA_NETWORK") || "TODO: target network");

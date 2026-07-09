@@ -11,6 +11,8 @@ function argValue(name, fallback) {
 const outDir = resolve(process.cwd(), argValue("out-dir", "docs/proof-drafts"));
 mkdirSync(outDir, { recursive: true });
 
+const syntheticSignoffEnvLog = join(outDir, "synthetic-signoff-mainnet-env.log");
+const syntheticSignoffChainLog = join(outDir, "synthetic-signoff-chain-snapshot.log");
 const syntheticCanaryLog = join(outDir, "synthetic-canary-live-log.jsonl");
 const syntheticCanaryTarget = join(outDir, "synthetic-canary-target-proof.log");
 const syntheticCanaryRecovery = join(outDir, "synthetic-canary-recovery-proof.log");
@@ -25,6 +27,8 @@ const syntheticQaFailure = join(outDir, "synthetic-qa-failure-state-report.md");
 const syntheticQaSupport = join(outDir, "synthetic-qa-support-audit-report.md");
 const syntheticQaFinal = join(outDir, "synthetic-qa-final-browser-report.md");
 const syntheticQaSmoke = join(outDir, "synthetic-qa-smoke-debug-autominer.log");
+writeFileSync(syntheticSignoffEnvLog, "Summary: synthetic non-proof proof:mainnet output for draft bundle only\n", "utf8");
+writeFileSync(syntheticSignoffChainLog, "Summary: synthetic non-proof proof:chain output for draft bundle only\n", "utf8");
 const syntheticCanaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", network: "linea-mainnet", chainId: 59144, contractAddress: "0x1111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
 writeFileSync(syntheticCanaryLog, `${syntheticCanaryEvent}\n`, "utf8");
 writeFileSync(syntheticCanaryTarget, "synthetic non-proof canary target artifact for draft bundle only\n", "utf8");
@@ -42,7 +46,7 @@ writeFileSync(syntheticQaFinal, "synthetic non-proof QA final browser artifact f
 writeFileSync(syntheticQaSmoke, "synthetic non-proof QA smoke artifact for draft bundle only\n", "utf8");
 
 const tasks = [
-  ["signoff", "scripts/create-signoff-proof-draft.mjs", []],
+  ["signoff", "scripts/create-signoff-proof-draft.mjs", [`--env-log=${syntheticSignoffEnvLog}`, `--chain-log=${syntheticSignoffChainLog}`]],
   ["host", "scripts/create-host-proof-draft.mjs", ["--origin=https://playlore.xyz", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary"]],
   ["indexer", "scripts/create-indexer-proof-draft.mjs", []],
   ["restore", "scripts/create-restore-proof-draft.mjs", ["--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore"]],

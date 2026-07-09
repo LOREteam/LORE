@@ -86,7 +86,7 @@ const draftCases = [
     id: "signoff",
     out: join(tmp, "signoff-proof.draft.json"),
     create: ["scripts/create-signoff-proof-draft.mjs"],
-    createArgs: [],
+    createArgs: [`--env-log=${signoffEnvLog}`, `--chain-log=${signoffChainLog}`],
     check: ["scripts/check-signoff-proof.mjs"],
     checkArgs: (out) => ["--strict", `--file=${out}`],
   },
@@ -270,6 +270,12 @@ const collectorRejectCases = [
 ];
 
 const finalOutputCases = [
+  {
+    id: "signoff-draft-missing-env-log",
+    create: ["scripts/create-signoff-proof-draft.mjs"],
+    createArgs: [`--chain-log=${signoffChainLog}`],
+    expected: "--env-log is required when drafting signoff launch evidence",
+  },
   {
     id: "signoff-final-output",
     create: ["scripts/create-signoff-proof-draft.mjs"],
