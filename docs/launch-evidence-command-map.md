@@ -66,6 +66,7 @@ npm.cmd run proof:monitoring -- --strict
 npm.cmd run proof:qa -- --strict
 npm.cmd run proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict
 npm.cmd run proof:deps
+npm.cmd run proof:deps:all
 npm.cmd run proof:files -- --canary-log=<canary-log-file>
 npm.cmd run proof:gates -- --strict
 npm.cmd run proof:readiness
@@ -85,6 +86,7 @@ Use PowerShell environment variables for local launch proof orchestration when n
 $env:CANARY_LOG = "C:\\path\\to\\canary-log.jsonl"
 # Keep LORE_DB_PATH, LORE_BACKUP_DIR, LORE_RESTORE_DRILL_DIR, and LORE_RESTORE_BACKUP set to the reviewed external restore-proof paths.
 npm.cmd run proof:deps
+npm.cmd run proof:deps:all
 npm.cmd run proof:files -- --canary-log=$env:CANARY_LOG
 npm.cmd run proof:launch -- --strict --canary-log=$env:CANARY_LOG
 ```

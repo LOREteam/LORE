@@ -3682,12 +3682,12 @@ as historical progress only.
 
 - Tightened `scripts/check-host-proof.mjs` so strict G5-G6 host proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, `artifact`, log/report, and command-output path fields while still allowing external HTTPS evidence links.
 - Added a `scripts/check-proof-drafts.mjs` regression manifest proving strict host validation fails when a final-looking host proof points at a missing local process-model artifact.
-- Verified `node --check scripts\check-host-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+- Verified `node --check scripts\check-host-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, and `git diff --check`.
 ## 2026-07-09 - Indexer final artifact existence guard
 
 - Tightened `scripts/check-indexer-dry-run.mjs` so strict G7 indexer proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, `artifact`, and link fields while leaving `dryRun.dbPath` as the separately validated runtime DB path.
 - Added a `scripts/check-proof-drafts.mjs` regression manifest proving strict indexer validation fails when a final-looking indexer proof points at a missing local `indexer:once` artifact.
-- Verified `node --check scripts\check-indexer-dry-run.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+- Verified `node --check scripts\check-indexer-dry-run.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, and `git diff --check`.
 ## 2026-07-09 - Restore final artifact existence guard
 
 - Tightened `scripts/verify-db-restore.mjs` so strict G8 restore proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, `artifact`, and link fields while leaving source DB, backup dir, restore dir, and backup artifact paths on their existing dedicated validation path.
@@ -3698,7 +3698,7 @@ as historical progress only.
 
 - Tightened `scripts/check-signoff-proof.mjs` so strict G1-G4 signoff proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, `artifact`, owner evidence, chain evidence, and command/report path fields while still allowing external HTTPS evidence links and real tx hashes.
 - Added a `scripts/check-proof-drafts.mjs` regression manifest proving strict signoff validation fails when a final-looking contract/env proof points at a missing local redacted artifact.
-- Verified `node --check scripts\check-signoff-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+- Verified `node --check scripts\check-signoff-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, and `git diff --check`.
 
 ## 2026-07-09 - Status board saved-artifact launch markers
 
@@ -3799,3 +3799,164 @@ as historical progress only.
 - Fixed `scripts/run-launch-proof.mjs` so a passing dependency audit summary is classified as a pass in strict launch output.
 - Updated the synthetic host proof fixture in `scripts/test-business-logic.mjs` to match the current strict G5/G6 manifest requirements: production host type, role commands, ISO timestamps, concrete supervisor/health/load evidence, finality lag, and real `Load base URL:` output format.
 - Verified `npm.cmd run proof:deps`, `npm.cmd run proof:launch -- --strict`, `npm.cmd run proof:local`, and `npm.cmd run test:logic`.
+
+## 2026-07-09 - Full dependency high-critical cleared
+
+- Found the remaining full `npm audit` critical path was dev-only: `concurrently@9.2.1` -> `shell-quote@1.8.3`.
+- Added a minimal `shell-quote` 1.8.4 override instead of a `concurrently` major upgrade, preserving the existing `start:all` CLI package while removing the critical advisory.
+- Extended `scripts/check-production-dependency-audit.mjs` with `--include-dev` and added `npm.cmd run proof:deps:all` for compact all-dependency high/critical audit output.
+- Verified `node --check scripts\check-production-dependency-audit.mjs`, `npm.cmd ls concurrently shell-quote --all --depth=4`, `npm.cmd run proof:deps`, and `npm.cmd run proof:deps:all`.
+
+## 2026-07-09 - Final launch all-dependency audit guard
+
+- Wired `scripts/run-launch-proof.mjs` so final `proof:launch -- --strict` runs the compact full dependency/toolchain audit via `scripts/check-production-dependency-audit.mjs --include-dev`, not only the production-only audit.
+- Updated launch gate and readiness guards so status-board/readiness docs must keep the full dependency high/critical preflight marker.
+- Verified syntax and launch proof checks after the change.
+
+## 2026-07-09 - Host supervisor role evidence guard
+
+- Tightened `scripts/check-host-proof.mjs` so strict G5 host proof requires each `processModel` evidence artifact or inline supervisor output to mention the matching role name: `lore-site`, `lore-bot`, or `lore-indexer`.
+- Added a `scripts/check-proof-drafts.mjs` regression where a final-looking host manifest points at an existing but unrelated supervisor log; strict host validation now rejects it.
+- Updated current state and production runbook so operators capture role-specific supervisor output before collecting G5/G6 host proof.
+
+## 2026-07-09 - Indexer health production-origin guard
+
+- Tightened G7 indexer proof validation so finality health evidence must include `base=<production origin>` from `health:prod`, not only numeric `finalityLagBlocks`.
+- Applied the same requirement to `proof:indexer:collect` and `proof:indexer:draft`, so missing production-base health logs are rejected before draft/final proof promotion.
+- Added collector and draft regressions in `scripts/check-proof-drafts.mjs` for indexer health logs missing the production base marker.
+
+## 2026-07-09 - Restore artifact content guard
+
+- Tightened `scripts/verify-db-restore.mjs` so strict G8 proof reads local backup schedule and indexer preservation artifacts instead of accepting any existing file path.
+- Added `scripts/check-proof-drafts.mjs` regressions for existing but irrelevant restore artifacts: one for backup schedule evidence and one for indexer preservation evidence.
+- Verified `node --check scripts\verify-db-restore.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+
+## 2026-07-09 - Monitoring artifact content guard
+
+- Tightened `scripts/check-monitoring-proof.mjs` so strict G9 proof reads local fired-alert, recovery, alert-target, and error-tracking event artifacts instead of accepting any existing file path.
+- Kept `testEventId` valid as basic event evidence, but removed it from the content-proof matcher so an ID cannot mask an irrelevant error-event artifact.
+- Added `scripts/check-proof-drafts.mjs` regressions for existing but irrelevant monitoring artifacts across alert, recovery, alert-target, and error-event evidence.
+- Verified `node --check scripts\check-monitoring-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+
+## 2026-07-09 - Canary artifact content guard
+
+- Tightened `scripts/analyze-live-canary-proof.mjs` so strict G10-G11 proof reads local target, recovery, auto-miner session, and transaction-health artifacts instead of accepting any existing file path.
+- Added `scripts/check-proof-drafts.mjs` regressions for existing but irrelevant canary artifacts across target, recovery, session, and transaction health evidence.
+- Verified `node --check scripts\analyze-live-canary-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+
+## 2026-07-09 - QA artifact content guard
+
+- Tightened `scripts/check-qa-proof.mjs` so strict G12-G14 proof reads local wallet, failure-state UX, support/audit, final browser QA, and debug autominer smoke artifacts instead of accepting any existing file path.
+- Added `scripts/check-proof-drafts.mjs` regressions for existing but irrelevant QA artifacts across wallet, failure-state, support/audit, final browser QA, and debug autominer smoke evidence.
+- Verified `node --check scripts\check-qa-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+
+## 2026-07-09 - Signoff artifact content guard
+
+- Tightened `scripts/check-signoff-proof.mjs` so strict G1-G4 proof reads local contract/env, direct owner read, randomness sign-off, and chain-comparison artifacts instead of accepting any existing file path.
+- Added `scripts/check-proof-drafts.mjs` regressions for existing but irrelevant signoff artifacts across contractEnv, ownership, randomness, and chainComparison evidence.
+- Verified `node --check scripts\check-signoff-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Indexer artifact content guard
+
+- Tightened `scripts/check-indexer-dry-run.mjs` so strict G7 proof reads local dry-run, finality health, chain snapshot, and chain-comparison artifacts instead of accepting any existing file path plus inline summary.
+- Added `scripts/check-proof-drafts.mjs` regressions for existing but irrelevant indexer artifacts across dryRun, finality, chainSnapshot, and chainComparison evidence.
+- Verified `node --check scripts\check-indexer-dry-run.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Host artifact content guard
+
+- Tightened `scripts/check-host-proof.mjs` so strict G5-G6 proof reads local persistent DB, health:prod, and load:http artifacts instead of accepting any existing file path plus inline summary.
+- Added `scripts/check-proof-drafts.mjs` regressions for existing but irrelevant host artifacts across persistentDb, healthProd, and loadHttp evidence.
+- Verified `node --check scripts\check-host-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Complete gate marker guard
+
+- Tightened `scripts/check-launch-gates.mjs` and `scripts/report-launch-remaining.mjs` so `Complete` G1-G14 proof-record evidence must keep the same gate-specific markers required from incomplete placeholders.
+- Verified `node --check scripts\check-launch-gates.mjs`, `node --check scripts\report-launch-remaining.mjs`, `npm.cmd run proof:gates -- --structure-only`, `npm.cmd run proof:remaining -- --json`, a synthetic incomplete `Complete` gate rejection, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Readiness checked-item evidence guard
+
+- Tightened `scripts/check-readiness-checklist.mjs` so checked checklist items require concrete path, URL, API route, or real hash evidence instead of generic words like `recorded`, `exposes`, `via`, or `tx hash`.
+- Added `--checklist=<path>` support for cheap synthetic readiness checks, then verified a generic checked row fails and a checked row with `docs/qa-support-audit-report.md` passes.
+
+## 2026-07-09 - Readiness checked local artifact guard
+
+- Tightened `scripts/check-readiness-checklist.mjs` so checked checklist rows that cite local `docs/...` or `data/...` evidence must point at existing files, not missing artifact paths.
+- Verified a checked row with `docs/missing-evidence.md` fails and a checked row with existing `docs/current_state.md` passes via `--checklist=<path>` synthetic runs.
+
+## 2026-07-09 - Proof files canary log shape guard
+
+- Tightened `scripts/check-proof-files.mjs` so `--canary-log` must point to an existing local `.jsonl` file, rejecting directories and non-JSONL files before final proof validation.
+- Verified negative directory and `.txt` canary-log checks, plus a `.jsonl` control that reaches the expected missing-final-manifest failures.
+
+## 2026-07-09 - Proof files auxiliary snapshot content guard
+
+- Tightened `scripts/check-proof-files.mjs` so allowed auxiliary `docs/chain-proof-snapshot.json` is parsed and checked for template-like and secret-like values instead of only being allowlisted by filename.
+- Verified a temporary auxiliary snapshot with `TODO` fails and a clean temporary snapshot passes from isolated `.tmp` workdirs.
+
+## 2026-07-09 - Local preflight canary-log shape regression
+
+- Added L3 regression coverage in `scripts/run-local-proof-preflight.mjs` for the `proof:files -- --canary-log` shape guard: a temporary directory must fail as not-a-file and a temporary `.txt` file must fail as non-JSONL.
+- Verified `node --check scripts\run-local-proof-preflight.mjs`, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Local preflight auxiliary snapshot regression
+
+- Added L3 regression coverage in `scripts/run-local-proof-preflight.mjs` for the auxiliary `chain-proof-snapshot.json` content guard using isolated bad (`TODO`) and clean temporary snapshots.
+- Verified `node --check scripts\run-local-proof-preflight.mjs`, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Local preflight auxiliary snapshot secret regression
+
+- Extended L3 auxiliary snapshot regression in `scripts/run-local-proof-preflight.mjs` so a temporary `chain-proof-snapshot.json` with raw `rpcUrl` is rejected as secret-like before the clean snapshot control runs.
+- Verified `node --check scripts\run-local-proof-preflight.mjs`, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Proof files empty canary log guard
+
+- Tightened `scripts/check-proof-files.mjs` so `--canary-log` rejects empty `.jsonl` files before final launch proof.
+- Extended L3 regression coverage in `scripts/run-local-proof-preflight.mjs` so a temporary empty `.jsonl` canary log must fail with `canary log is empty`.
+- Verified direct negative `check-proof-files --canary-log=<empty.jsonl>`, `node --check` for changed scripts, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Proof files whitespace canary log guard
+
+- Tightened `scripts/check-proof-files.mjs` so `--canary-log` rejects whitespace-only `.jsonl` files with no non-empty JSONL lines.
+- Extended L3 regression coverage in `scripts/run-local-proof-preflight.mjs` so a temporary whitespace-only `.jsonl` canary log must fail before final launch proof.
+- Verified direct negative `check-proof-files --canary-log=<whitespace.jsonl>`, `node --check` for changed scripts, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Proof files canary JSONL parse guard
+
+- Tightened `scripts/check-proof-files.mjs` so `--canary-log` parses the first non-empty JSONL line and rejects malformed JSON or non-object first records before final launch proof.
+- Extended L3 regression coverage in `scripts/run-local-proof-preflight.mjs` so a temporary malformed `.jsonl` canary log must fail with `canary log first non-empty line is not valid JSON`.
+- Verified direct negative `check-proof-files --canary-log=<malformed.jsonl>`, `node --check` for changed scripts, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Local preflight canary JSONL object regression
+
+- Extended L3 canary-log regression coverage in `scripts/run-local-proof-preflight.mjs` so a temporary `.jsonl` with first record `[]` must fail with `canary log first JSONL record must be an object`.
+- Verified direct negative `check-proof-files --canary-log=<array-first-record.jsonl>`, `node --check scripts\run-local-proof-preflight.mjs`, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Proof files canary first-record redaction guard
+
+- Tightened `scripts/check-proof-files.mjs` so the first non-empty canary JSONL record is scanned for template-like values and secret-like raw fields after passing JSON object shape checks.
+- Extended L3 canary-log regression coverage in `scripts/run-local-proof-preflight.mjs` so temporary `TODO` and raw `rpcUrl` canary records must fail before final launch proof.
+- Verified direct negative `check-proof-files --canary-log=<template.jsonl>` and `--canary-log=<secret.jsonl>`, `node --check` for changed scripts, `npm.cmd run proof:local`, and `git diff --check`.
+
+## 2026-07-09 - Canary analyzer live-log redaction guard
+
+- Tightened `scripts/analyze-live-canary-proof.mjs` so strict analysis scans parsed live JSONL events for template-like values and secret-like raw fields, including raw RPC URLs.
+- Added `scripts/check-proof-drafts.mjs` regression cases for canary live logs containing `TODO` and raw `rpcUrl`, both using an otherwise valid strict canary manifest.
+- Verified `node --check scripts\analyze-live-canary-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+
+## 2026-07-09 - Canary analyzer JSONL parse guard
+
+- Tightened `scripts/analyze-live-canary-proof.mjs` so malformed live canary JSONL and non-object JSONL records fail with concise `Invalid JSONL at ...` messages instead of raw stack traces or silent ignored records.
+- Added `scripts/check-proof-drafts.mjs` regression cases for malformed and non-object canary live logs using an otherwise valid strict canary manifest.
+- Verified `node --check scripts\analyze-live-canary-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Canary draft JSONL parse guard
+
+- Tightened `scripts/create-canary-proof-draft.mjs` so malformed and non-object live canary JSONL records fail before a canary draft can be written.
+- Added `scripts/check-proof-drafts.mjs` regression cases for `canary-draft-malformed-live-log` and `canary-draft-non-object-live-log` with concise `Invalid JSONL at ...` output.
+- Verified `node --check scripts\create-canary-proof-draft.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Indexer chain snapshot object guard
+
+- Tightened `scripts/create-indexer-proof-draft.mjs` and `scripts/collect-indexer-evidence.mjs` so `--chain-snapshot` must parse as a JSON object artifact before indexer launch evidence can be drafted or collected.
+- Added `scripts/check-proof-drafts.mjs` regression cases for non-object chain snapshots in both the indexer draft generator and collector paths.
+- Verified `node --check scripts\create-indexer-proof-draft.mjs`, `node --check scripts\collect-indexer-evidence.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.

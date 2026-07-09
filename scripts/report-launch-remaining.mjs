@@ -130,6 +130,11 @@ function completeEvidenceIssuesFor(id, evidence) {
     issues.push("must include a concrete proof marker, not only prose");
   }
   const normalizedEvidence = normalizeEvidencePath(evidence);
+  for (const marker of proofRecordMarkerExpectations.get(id) ?? []) {
+    if (!normalizedEvidence.includes(marker)) {
+      issues.push(`must reference ${marker}`);
+    }
+  }
   for (const proofFile of requiredProofFilesByGate.get(id) ?? []) {
     if (!normalizedEvidence.includes(proofFile)) {
       issues.push(`must reference ${proofFile}`);

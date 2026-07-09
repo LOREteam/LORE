@@ -2,7 +2,7 @@
 
 Current state: local launch-proof tooling is consistent, but external production/canary evidence is still missing. Mainnet launch is not approved until G1-G14 are Complete in both this board and docs/mainnet-proof-record.md.
 
-Last local verification: 2026-07-09 - `npm.cmd run proof:local` passed L1-L14, including `proof:files`, `proof:remaining`, `proof:gates -- --structure-only`, `proof:launch-map`, `proof:launch-docs`, `proof:readiness`, mainnet proof output guard, production dependency audit high/critical pass, and strict launch expected-fail coverage; `proof:launch` and `proof:launch -- --strict` were verified as expected-fail until G1-G14 evidence and the live canary log exist; G1-G14 remain Missing pending external evidence.
+Last local verification: 2026-07-09 - `npm.cmd run proof:local` passed L1-L14, including `proof:files`, `proof:remaining`, `proof:gates -- --structure-only`, `proof:launch-map`, `proof:launch-docs`, `proof:readiness`, mainnet proof output guard, production dependency audit high/critical pass, full dependency/toolchain high/critical pass, and strict launch expected-fail coverage; `proof:launch` and `proof:launch -- --strict` were verified as expected-fail until G1-G14 evidence and the live canary log exist; G1-G14 remain Missing pending external evidence.
 
 | ID | Gate | Required proof | First check | Status |
 | --- | --- | --- | --- | --- |

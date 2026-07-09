@@ -34,6 +34,7 @@ Required runtime shape:
 - `health:prod` evidence must use a non-local HTTPS origin; `PROD_HEALTH_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
 - `load:http` evidence must use a staging/canary non-local HTTPS origin; `LOAD_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
 - Save redacted supervisor output as `docs/host-process-model.log`, use an absolute external `--db-path`, and save redacted command outputs as `docs/host-health-prod.log` and `docs/host-load-http.log` before `proof:host:collect`; the collector refuses missing process evidence, repo-local DB paths, missing logs, health logs without `[prod-health] OK` / matching `base=` / numeric `finalityLagBlocks`, and load logs without `Load base URL:` matching the staging/canary `LOAD_BASE_URL` or successful latency/error evidence.
+- The supervisor artifact must show concrete entries for `lore-site`, `lore-bot`, and `lore-indexer`; strict host proof rejects process evidence that points to a generic or unrelated supervisor log.
 
 ```powershell
 $env:PROD_HEALTH_BASE_URL = "https://playlore.xyz"
@@ -46,7 +47,7 @@ npm.cmd run proof:host -- --strict
 
 ## 4. Indexer and DB
 
-Indexer evidence must come from a fresh external DB at the final deploy block. Save the redacted `indexer:once` output as `docs/indexer-once.log` for the collector; the log must include `[indexer] SQLite path:` matching the external `LORE_DB_PATH`, `[indexer] Contract:` matching `docs/chain-proof-snapshot.json`, matching `[indexer] Deploy block:` / `[indexer] Start block:` / `[indexer] Finality blocks:`, `[indexer] Finished runOnce`, and no `[indexer] Fatal:` line. The chain snapshot must include ISO `generatedAt` and at least the requested `--epochs` unique checked epochs.
+Indexer evidence must come from a fresh external DB at the final deploy block. Save the redacted `indexer:once` output as `docs/indexer-once.log` for the collector; the log must include `[indexer] SQLite path:` matching the external `LORE_DB_PATH`, `[indexer] Contract:` matching `docs/chain-proof-snapshot.json`, matching `[indexer] Deploy block:` / `[indexer] Start block:` / `[indexer] Finality blocks:`, `[indexer] Finished runOnce`, and no `[indexer] Fatal:` line. The `health:prod` evidence for G7 must include `base=<production origin>` plus numeric `finalityLagBlocks`. The chain snapshot must include ISO `generatedAt` and at least the requested `--epochs` unique checked epochs.
 Restore evidence must be collected in order: export backup schedule proof to `docs/restore-backup-schedule.log`, run the restore drill, save `docs/restore-drill.log` with the successful restore summary, run restored `health:prod`, save `docs/restore-health-prod.log` with `[prod-health] OK`, `base=<restored-origin>`, and numeric `finalityLagBlocks`, export heartbeat/latest-indexed-epoch preservation proof to `docs/restore-indexer-preservation.log`, then run `proof:restore:collect`; the final `docs/restore-proof.json` must keep existing saved artifacts for every local artifact reference.
 
 ```powershell
@@ -95,6 +96,7 @@ npm.cmd run proof:canary:draft -- --network=linea-mainnet --chain-id=59144 --con
 npm.cmd run proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict
 # Keep LORE_DB_PATH, LORE_BACKUP_DIR, LORE_RESTORE_DRILL_DIR, and LORE_RESTORE_BACKUP set to the reviewed external restore-proof paths before final launch proof.
 npm.cmd run proof:deps
+npm.cmd run proof:deps:all
 npm.cmd run proof:files -- --canary-log=<canary-log-file>
 npm.cmd run proof:launch -- --strict --canary-log=<canary-log-file>
 ```
@@ -105,6 +107,7 @@ Stop launch if any of these remain true:
 - Any G1-G14 gate is not Complete.
 - Any strict proof command fails.
 - Production dependency audit reports any high or critical advisories.
+- Full dependency/toolchain audit reports any high or critical advisories before build or release.
 - Any proof JSON still contains TODO/template values.
 - Canary evidence is simulated, too short, not run against the target RPC, or lacks concrete recovery/session/transaction artifacts.
 - Monitoring lacks concrete fired alert and recovery evidence.

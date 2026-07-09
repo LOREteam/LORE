@@ -26,6 +26,7 @@ const checks = [
   { id: "LOCAL", label: "collector redaction guard", script: "scripts/check-proof-collector-redaction.mjs", args: [] },
   { id: "LOCAL", label: "host load target guard", script: "scripts/check-host-proof-load-target.mjs", args: [] },
   { id: "LOCAL", label: "production dependency audit", script: "scripts/check-production-dependency-audit.mjs", args: [] },
+  { id: "LOCAL", label: "full dependency/toolchain audit", script: "scripts/check-production-dependency-audit.mjs", args: ["--include-dev"] },
   { id: "LOCAL", label: "remaining evidence report", script: "scripts/report-launch-remaining.mjs", args: [] },
   { id: "LOCAL", label: "remaining evidence JSON", script: "scripts/report-launch-remaining.mjs", args: ["--json"] },
   { id: "G1", label: "final contract/env", script: "scripts/collect-mainnet-proof.mjs", args: commonArgs },
@@ -75,7 +76,7 @@ function summaryIsClean(summary) {
   if (/^JSON:/i.test(summary)) return /JSON:\s*0 remaining gate\(s\), 0 issue\(s\)/i.test(summary);
   if (/\b\d+\s+(?:proof\s+)?issue\(s\)|\b\d+\s+env gate\(s\)|\b\d+\s+issue\(s\)/i.test(summary)) return false;
   if (/missing|invalid|failing|failed/i.test(summary)) return false;
-  return /without detected issues|all checked env gates passed|all proof templates are rejected by strict validators|all proof drafts are rejected by strict validators|proof manifest files are clean or not yet collected|all required proof manifest files are present and clean|launch gate table structure is consistent|launch evidence command map is consistent|launch docs command syntax is PowerShell-safe|readiness checklist structure is consistent|proof collector redaction guard passed|host proof load target guard passed|production dependency audit passed with no high or critical advisories|no remaining launch evidence rows/i.test(summary);
+  return /without detected issues|all checked env gates passed|all proof templates are rejected by strict validators|all proof drafts are rejected by strict validators|proof manifest files are clean or not yet collected|all required proof manifest files are present and clean|launch gate table structure is consistent|launch evidence command map is consistent|launch docs command syntax is PowerShell-safe|readiness checklist structure is consistent|proof collector redaction guard passed|host proof load target guard passed|production dependency audit passed with no high or critical advisories|all dependency audit passed with no high or critical advisories|no remaining launch evidence rows/i.test(summary);
 }
 
 function printTable(headers, rows) {

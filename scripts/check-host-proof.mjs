@@ -124,11 +124,76 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   return findings;
 }
 
+function localArtifactContentFromText(value, key = "") {
+  const artifactPath = localArtifactPathFromText(value, key);
+  if (!artifactPath) return "";
+  try {
+    return readFileSync(resolve(process.cwd(), artifactPath), "utf8").slice(0, 256 * 1024);
+  } catch {
+    return "";
+  }
+}
+
+function localArtifactContents(value, key = "") {
+  if (typeof value === "string") {
+    const content = localArtifactContentFromText(value, key);
+    return content ? [content] : [];
+  }
+  if (Array.isArray(value)) return value.flatMap((entry) => localArtifactContents(entry, key));
+  if (!isPlainObject(value)) return [];
+  return Object.entries(value).flatMap(([childKey, entry]) => localArtifactContents(entry, childKey));
+}
+
+function hasLocalArtifactRefs(value, key = "") {
+  if (typeof value === "string") return Boolean(localArtifactPathFromText(value, key));
+  if (Array.isArray(value)) return value.some((entry) => hasLocalArtifactRefs(entry, key));
+  if (!isPlainObject(value)) return false;
+  return Object.entries(value).some(([childKey, entry]) => hasLocalArtifactRefs(entry, childKey));
+}
+
+function localArtifactEvidenceMentions(value, pattern) {
+  const contents = localArtifactContents(value);
+  return contents.length > 0 && contents.some((content) => pattern.test(content));
+}
+
+function evidenceContentText(value) {
+  return [evidenceText(value), ...localArtifactContents(value)].filter(Boolean).join("\n");
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function processEvidenceMentionsRole(processInfo, roleName) {
+  if (!isPlainObject(processInfo)) return false;
+  const rolePattern = new RegExp(`\\b${escapeRegExp(roleName)}\\b`, "i");
+  const fields = [
+    ["evidence", processInfo.evidence],
+    ["evidencePath", processInfo.evidencePath],
+    ["artifact", processInfo.artifact],
+    ["logPath", processInfo.logPath],
+    ["reportPath", processInfo.reportPath],
+    ["commandOutputPath", processInfo.commandOutputPath],
+    ["summary", processInfo.summary],
+    ["notes", processInfo.notes],
+  ];
+  for (const [, value] of fields) {
+    if (hasRealText(value) && rolePattern.test(String(value))) return true;
+  }
+  for (const [key, value] of fields) {
+    const artifactPath = localArtifactPathFromText(value, key);
+    if (!artifactPath) continue;
+    const absolute = resolve(process.cwd(), artifactPath);
+    if (!existsSync(absolute)) continue;
+    const artifactText = readFileSync(absolute, "utf8").slice(0, 256 * 1024);
+    if (rolePattern.test(artifactText)) return true;
+  }
+  return false;
+}
+
 function hasNumericFinalityLagEvidence(value) {
   if (!isPlainObject(value)) return false;
-  const text = [value.evidence, value.summary, value.notes, value.artifact, value.logPath, value.reportPath]
-    .filter(hasRealText)
-    .join("\n");
+  const text = evidenceContentText(value);
   const match = text.match(/\bfinalityLagBlocks=([^\s]+)/i);
   return Boolean(match && Number.isFinite(Number(match[1])));
 }
@@ -177,7 +242,7 @@ function evidenceText(value) {
 function healthEvidenceBaseMatches(value, expectedOrigin) {
   const expected = normalizedOrigin(expectedOrigin);
   if (!expected) return false;
-  const text = evidenceText(value);
+  const text = evidenceContentText(value);
   const matches = [...text.matchAll(/\bbase=([^\s|]+)/gi)];
   return matches.some((match) => normalizedOrigin(match[1]) === expected);
 }
@@ -185,7 +250,7 @@ function healthEvidenceBaseMatches(value, expectedOrigin) {
 function loadEvidenceBaseMatches(value, expectedOrigin) {
   const expected = normalizedOrigin(expectedOrigin);
   if (!expected) return false;
-  const text = evidenceText(value);
+  const text = evidenceContentText(value);
   const matches = [...text.matchAll(/^\s*Load base URL:\s*([^\s|]+)/gim)];
   return matches.some((match) => normalizedOrigin(match[1]) === expected);
 }
@@ -354,6 +419,9 @@ if (manifest) {
       if (hasEvidence(process) && !hasConcreteEvidence(process)) {
         issues.push(`processModel.${name} must include concrete supervisor evidence path, link, artifact, command output, or pm2/systemd/docker marker`);
       }
+      if (hasEvidence(process) && !processEvidenceMentionsRole(process, name)) {
+        issues.push(`processModel.${name} evidence must mention ${name} in supervisor output`);
+      }
     }
     const commandCounts = new Map();
     for (const [, command] of processCommands) {
@@ -381,6 +449,9 @@ if (manifest) {
     if (hasEvidence(persistentDb) && !hasConcreteEvidence(persistentDb)) {
       issues.push("persistentDb must include concrete restart/reboot persistence evidence path, link, artifact, or command output");
     }
+    if (hasLocalArtifactRefs(persistentDb) && !localArtifactEvidenceMentions(persistentDb, /\b(?:persistent|persistence|restart|reboot|LORE_DB_PATH|database|sqlite|db path)\b/i)) {
+      issues.push("persistentDb evidence artifact must mention persistence, restart/reboot, or DB path proof");
+    }
 
     const healthProd = isPlainObject(manifest.healthProd) ? manifest.healthProd : {};
     if (!isPlainObject(manifest.healthProd)) issues.push("healthProd section is missing");
@@ -405,6 +476,9 @@ if (manifest) {
     }
     if (!hasNumericFinalityLagEvidence(healthProd)) {
       issues.push("healthProd evidence must include numeric finalityLagBlocks from health:prod");
+    }
+    if (hasLocalArtifactRefs(healthProd) && !localArtifactEvidenceMentions(healthProd, /\[prod-health\]\s+OK[\s\S]*\bbase=[^\s]+[\s\S]*\bfinalityLagBlocks=\d+\b|\bbase=[^\s]+[\s\S]*\[prod-health\]\s+OK[\s\S]*\bfinalityLagBlocks=\d+\b/i)) {
+      issues.push("healthProd evidence artifact must include [prod-health] OK, base, and numeric finalityLagBlocks");
     }
 
     const loadHttp = isPlainObject(manifest.loadHttp) ? manifest.loadHttp : {};
@@ -444,6 +518,9 @@ if (manifest) {
     if (!hasEvidence(loadHttp)) issues.push("loadHttp has no evidence");
     if (hasEvidence(loadHttp) && !hasConcreteEvidence(loadHttp)) {
       issues.push("loadHttp must include concrete load:http evidence path, link, artifact, command output, or summary marker");
+    }
+    if (hasLocalArtifactRefs(loadHttp) && !localArtifactEvidenceMentions(loadHttp, /^\s*Load base URL:\s*[^\s|]+[\s\S]*\bTOTAL\b[\s\S]*\bp95\b/im)) {
+      issues.push("loadHttp evidence artifact must include Load base URL, TOTAL, and p95 output");
     }
 
     printTable(["Section", "Status"], [

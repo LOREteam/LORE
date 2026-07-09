@@ -19,8 +19,8 @@ function samePath(left, right) {
 function readOptionalLog(filePath) {
   if (!filePath) return "";
   const resolved = resolve(process.cwd(), filePath);
-  if (!existsSync(resolved)) {
-    throw new Error(`${filePath} does not exist`);
+  if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+    throw new Error(`${filePath} must be an existing redacted file artifact`);
   }
   return readFileSync(resolved, "utf8");
 }
@@ -46,7 +46,8 @@ function requireArtifact(name, value) {
 
 function requireExistingArtifact(name, value) {
   requireArtifact(name, value);
-  if (!isPrintPlan()) requireCondition(existsSync(resolve(process.cwd(), value)), `--${name} must point to an existing redacted artifact`);
+  const resolved = resolve(process.cwd(), value || "");
+  if (!isPrintPlan()) requireCondition(existsSync(resolved) && statSync(resolved).isFile(), `--${name} must point to an existing redacted file artifact`);
 }
 
 function normalizedOrigin(value) {

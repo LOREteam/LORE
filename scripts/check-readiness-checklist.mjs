@@ -1,7 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const checklistPath = resolve(process.cwd(), "docs/mainnet-readiness-checklist.md");
+function argValue(name, fallback) {
+  const prefix = `--${name}=`;
+  const found = process.argv.find((arg) => arg.startsWith(prefix));
+  return found ? found.slice(prefix.length).trim() : fallback;
+}
+
+const checklistPath = resolve(process.cwd(), argValue("checklist", "docs/mainnet-readiness-checklist.md"));
 const requiredSections = [
   "## Blockers",
   "### 1. Contract / funds safety",
@@ -43,6 +49,7 @@ const requiredSnippets = [
   "proof:canary:draft",
   "proof:qa:draft",
   "proof:deps",
+  "proof:deps:all",
   "proof:files -- --canary-log=",
   "LORE_RESTORE_BACKUP",
   "proof:launch -- --strict",
@@ -54,7 +61,25 @@ const requiredSnippets = [
   "proof:monitoring -- --strict",
   "proof:qa -- --strict",
 ];
-const checkedEvidencePattern = /`[^`]+`|docs\/|https?:\/\/|0x[a-fA-F0-9]{40,64}|\/api\/|via\b|exposes\b|recorded\b/i;
+const checkedEvidencePattern = /\b(?:docs|data)\/[^\s`|)]+|[A-Za-z]:\\[^|\r\n]+|https?:\/\/|0x[a-fA-F0-9]{40,64}|\/api\//i;
+
+function localEvidencePaths(value) {
+  return [...String(value ?? "").matchAll(/\b(?:docs|data)\/[^\s`|)]+/gi)]
+    .map((match) => match[0].replace(/[.,;:]+$/g, ""));
+}
+
+function checkedEvidenceIssuesFor(item) {
+  const itemIssues = [];
+  if (!checkedEvidencePattern.test(item.line)) {
+    itemIssues.push(`checked item lacks evidence marker at ${item.lineNo}`);
+  }
+  for (const evidencePath of localEvidencePaths(item.line)) {
+    if (!existsSync(resolve(process.cwd(), evidencePath))) {
+      itemIssues.push(`checked item references missing local evidence ${evidencePath} at ${item.lineNo}`);
+    }
+  }
+  return itemIssues;
+}
 
 function readText(filePath) {
   if (!existsSync(filePath)) throw new Error(`${filePath} does not exist`);
@@ -91,11 +116,8 @@ const checkedItems = checklist
   .map((line, index) => ({ line, lineNo: index + 1 }))
   .filter(({ line }) => /^-\s+\[x\]/i.test(line.trim()));
 
-for (const item of checkedItems) {
-  if (!checkedEvidencePattern.test(item.line)) {
-    issues.push(`checked item lacks evidence marker at ${item.lineNo}`);
-  }
-}
+const checkedEvidenceIssues = checkedItems.flatMap((item) => checkedEvidenceIssuesFor(item));
+issues.push(...checkedEvidenceIssues);
 
 if (!/Do not mark a checkbox complete from memory or intent/i.test(checklist)) {
   issues.push("checklist must warn against checking items from memory or intent");
@@ -105,7 +127,7 @@ printTable(["Check", "Status"], [
   ["required sections", requiredSections.every((section) => checklist.includes(section)) ? "pass" : "fail"],
   ["required proof commands", requiredSnippets.every((snippet) => checklist.includes(snippet)) ? "pass" : "fail"],
   ["required final proof files", requiredFinalProofFiles.every((file) => checklist.includes(file)) ? "pass" : "fail"],
-  ["checked item evidence", checkedItems.every((item) => checkedEvidencePattern.test(item.line)) ? `pass (${checkedItems.length})` : "fail"],
+  ["checked item evidence", checkedEvidenceIssues.length === 0 ? `pass (${checkedItems.length})` : "fail"],
 ]);
 
 console.log(`Summary: ${issues.length === 0 ? "readiness checklist structure is consistent" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);

@@ -39,6 +39,19 @@ function firstMatchingLine(text, pattern) {
     .find((line) => pattern.test(line));
 }
 
+function normalizedOrigin(value) {
+  try {
+    const url = new URL(String(value ?? "").trim());
+    return `${url.protocol}//${url.host}`.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function expectedProductionHealthOrigin() {
+  return normalizedOrigin(process.env.PROD_HEALTH_BASE_URL || "https://playlore.xyz");
+}
+
 function parseKeyValues(line = "") {
   const result = {};
   for (const match of line.matchAll(/([a-zA-Z][a-zA-Z0-9]*)=([^\s]+)/g)) {
@@ -70,13 +83,28 @@ function boolFromArg(name, fallback = false) {
   return ["1", "true", "yes", "pass", "verified"].includes(raw.trim().toLowerCase());
 }
 
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function readRequiredJson(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
   if (!existsSync(resolved)) {
     throw new Error(`--${name} must point to an existing redacted artifact`);
   }
-  return JSON.parse(readFileSync(resolved, "utf8"));
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(resolved, "utf8"));
+  } catch (error) {
+    console.error(`--${name} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+  if (!isPlainObject(parsed)) {
+    console.error(`--${name} must be a JSON object artifact`);
+    process.exit(1);
+  }
+  return parsed;
 }
 
 function normalizeAddress(value) {
@@ -190,6 +218,7 @@ requireMatchingIndexerLine(finalityLine, "Finality blocks", finalityBlocks);
 requireCondition(Boolean(finishLine), "--indexer-log must include [indexer] Finished runOnce");
 requireCondition(!/\[indexer\]\s+Fatal:/i.test(indexerLog), "--indexer-log must not include [indexer] Fatal");
 requireCondition(finalityLagIsNumeric, "--health-log must include numeric finalityLagBlocks=<number>");
+requireCondition(normalizedOrigin(healthValues.base) === expectedProductionHealthOrigin(), "--health-log must include base=<production origin>");
 requireMatchingChainId("expectedChainId", expectedSnapshotChainId, chainId);
 requireMatchingChainId("rpcChainId", rpcSnapshotChainId, chainId);
 requireCondition(hasIsoTimestamp(snapshotGeneratedAt), "--chain-snapshot must include generatedAt as ISO-8601 UTC");

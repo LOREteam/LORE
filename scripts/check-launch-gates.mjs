@@ -71,6 +71,7 @@ const requiredStatusBoardVerificationSnippets = [
   "`proof:launch -- --strict`",
   "expected-fail",
   "production dependency audit high/critical pass",
+  "full dependency/toolchain high/critical pass",
   "strict launch expected-fail coverage",
   "G1-G14 remain Missing pending external evidence",
 ];
@@ -229,6 +230,11 @@ for (const id of expected) {
   }
   if (proof.Status === "Complete") {
     const normalizedEvidence = normalizeEvidencePath(proof.Evidence);
+    for (const marker of proofRecordMarkerExpectations.get(id) ?? []) {
+      if (!normalizedEvidence.includes(marker)) {
+        issues.push(`${id}: complete gate evidence must reference ${marker}`);
+      }
+    }
     for (const proofFile of requiredProofFilesByGate.get(id) ?? []) {
       if (!normalizedEvidence.includes(proofFile)) {
         issues.push(`${id}: complete gate evidence must reference ${proofFile}`);

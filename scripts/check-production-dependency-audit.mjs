@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
 
+const includeDev = process.argv.includes("--include-dev");
+const auditArgs = ["audit", ...(includeDev ? [] : ["--omit=dev"]), "--json"];
 const auditCommand = process.platform === "win32"
-  ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "npm.cmd audit --omit=dev --json"] }
-  : { command: "npm", args: ["audit", "--omit=dev", "--json"] };
+  ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `npm.cmd ${auditArgs.join(" ")}`] }
+  : { command: "npm", args: auditArgs };
 const result = spawnSync(auditCommand.command, auditCommand.args, {
   cwd: process.cwd(),
   encoding: "utf8",
@@ -10,7 +12,7 @@ const result = spawnSync(auditCommand.command, auditCommand.args, {
 });
 
 if (result.error) {
-  console.error("# Production Dependency Audit");
+  console.error(`# ${includeDev ? "All Dependency" : "Production Dependency"} Audit`);
   console.error("");
   console.error(`Summary: npm audit could not be started: ${result.error.message}`);
   process.exitCode = 1;
@@ -22,7 +24,7 @@ let audit;
 try {
   audit = JSON.parse(raw);
 } catch {
-  console.error("# Production Dependency Audit");
+  console.error(`# ${includeDev ? "All Dependency" : "Production Dependency"} Audit`);
   console.error("");
   console.error("Summary: npm audit did not return parseable JSON output.");
   if (raw) console.error(raw.split(/\r?\n/).slice(0, 20).join("\n"));
@@ -53,10 +55,10 @@ function printTable(headers, rows) {
   for (const row of rows) console.log(`| ${row.join(" | ")} |`);
 }
 
-console.log("# Production Dependency Audit");
+console.log(`# ${includeDev ? "All Dependency" : "Production Dependency"} Audit`);
 console.log("");
 console.log(`Timestamp: ${new Date().toISOString()}`);
-console.log("Scope: npm audit --omit=dev");
+console.log(`Scope: ${includeDev ? "npm audit" : "npm audit --omit=dev"}`);
 console.log("");
 printTable(["Severity", "Count"], [
   ["critical", String(countOf("critical"))],
@@ -87,9 +89,9 @@ if (breakingFixes.length > 0) {
 
 if (countOf("critical") > 0 || countOf("high") > 0) {
   console.log("");
-  console.log(`Summary: production dependency audit failed: ${countOf("critical")} critical, ${countOf("high")} high, ${countOf("total")} total advisories.`);
+  console.log(`Summary: ${includeDev ? "all" : "production"} dependency audit failed: ${countOf("critical")} critical, ${countOf("high")} high, ${countOf("total")} total advisories.`);
   process.exitCode = 1;
 } else {
   console.log("");
-  console.log("Summary: production dependency audit passed with no high or critical advisories.");
+  console.log(`Summary: ${includeDev ? "all" : "production"} dependency audit passed with no high or critical advisories.`);
 }

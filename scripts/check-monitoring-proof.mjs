@@ -107,6 +107,61 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   return findings;
 }
 
+function localArtifactPathsFromEntries(entries) {
+  return entries.map(([key, value]) => localArtifactPathFromText(value, key)).filter(Boolean);
+}
+
+function artifactBackedText(entries) {
+  const chunks = [compactEvidenceText(entries.map(([, value]) => value))];
+  for (const artifactPath of localArtifactPathsFromEntries(entries)) {
+    const resolved = resolve(process.cwd(), artifactPath);
+    if (!existsSync(resolved)) continue;
+    chunks.push(readFileSync(resolved, "utf8").slice(0, 256 * 1024));
+  }
+  return chunks.join("\n");
+}
+
+function monitorAlertProof(monitor) {
+  const text = artifactBackedText([
+    ["link", monitor.link],
+    ["evidence", monitor.evidence],
+    ["evidencePath", monitor.evidencePath],
+    ["artifact", monitor.artifact],
+    ["notes", monitor.notes],
+  ]);
+  return /\b(?:alert|fired|triggered|monitor|incident)\b/i.test(text);
+}
+
+function monitorRecoveryProof(monitor) {
+  const text = artifactBackedText([
+    ["recoveryLink", monitor.recoveryLink],
+    ["recoveryEvidence", monitor.recoveryEvidence],
+    ["recoveryEvidencePath", monitor.recoveryEvidencePath],
+    ["resolvedAlertLink", monitor.resolvedAlertLink],
+    ["resolutionLink", monitor.resolutionLink],
+    ["recoveryNotes", monitor.recoveryNotes],
+  ]);
+  return /\b(?:recovery|recovered|resolved|resolution)\b/i.test(text);
+}
+
+function alertTargetProof(target) {
+  const text = artifactBackedText([
+    ["link", target.link],
+    ["evidence", target.evidence],
+    ["evidencePath", target.evidencePath],
+    ["notes", target.notes],
+  ]);
+  return /\b(?:alert\s+target|notification|slack|pagerduty|opsgenie|discord|telegram|email|sms|incident)\b/i.test(text);
+}
+
+function errorTrackingEventProof(errorTracking) {
+  const text = artifactBackedText([
+    ["testEventLink", errorTracking.testEventLink],
+    ["testEventEvidence", errorTracking.testEventEvidence],
+    ["testEventEvidencePath", errorTracking.testEventEvidencePath],
+  ]);
+  return /\b(?:sentry|datadog|newrelic|error|exception|event|issue|test\s+event)\b/i.test(text);
+}
 function statusOk(value) {
   return okStatuses.has(String(value ?? "").trim().toLowerCase());
 }
@@ -418,6 +473,12 @@ if (manifest) {
     }
     for (const monitor of matching.filter((entry) => entry?.enabled === true)) {
       issues.push(...monitorAlertRecoveryIssues(monitor, `monitor kind ${kind}`));
+      if (monitorEvidence(monitor) && !monitorAlertProof(monitor)) {
+        issues.push(`monitor kind ${kind} fired-alert evidence must mention alert, monitor, fired, triggered, or incident proof`);
+      }
+      if (monitorRecoveryEvidence(monitor) && !monitorRecoveryProof(monitor)) {
+        issues.push(`monitor kind ${kind} recovery evidence must mention recovery, recovered, resolved, or resolution proof`);
+      }
     }
   }
 
@@ -468,6 +529,9 @@ if (manifest) {
     if (!alertTargetEvidence(target)) {
       issues.push(`alertTargets[${index}] must include evidence or link for the fired test alert`);
     }
+    if (alertTargetEvidence(target) && !alertTargetProof(target)) {
+      issues.push(`alertTargets[${index}] evidence must mention alert target or notification channel proof`);
+    }
   }
 
   if (!errorTracking) {
@@ -487,6 +551,9 @@ if (manifest) {
     }
     if (!errorTrackingTestEventEvidence(errorTracking)) {
       issues.push("error tracking test event must include event id, link, or redacted evidence");
+    }
+    if (errorTrackingTestEventEvidence(errorTracking) && !errorTrackingEventProof(errorTracking)) {
+      issues.push("error tracking test event evidence must mention error, exception, event, issue, or provider proof");
     }
   }
 

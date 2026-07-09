@@ -71,6 +71,10 @@ function eventTxHash(event) {
   return event?.txHash ?? event?.hash ?? "";
 }
 
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function readJsonlArtifact(filePath) {
   if (!filePath) return [];
   return readFileSync(path.resolve(process.cwd(), filePath), "utf8")
@@ -78,9 +82,15 @@ function readJsonlArtifact(filePath) {
     .filter(Boolean)
     .map((line, index) => {
       try {
-        return JSON.parse(line);
+        const event = JSON.parse(line);
+        if (!isPlainObject(event)) {
+          console.error(`Invalid JSONL at ${filePath}:${index + 1}: record must be an object`);
+          process.exit(1);
+        }
+        return event;
       } catch (error) {
-        throw new Error(`Invalid JSONL at ${filePath}:${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`Invalid JSONL at ${filePath}:${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
       }
     });
 }

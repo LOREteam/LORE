@@ -17,7 +17,7 @@ function baseManifest() {
         running: true,
         supervised: true,
         command: "npm.cmd run start",
-        evidence: ".tmp/pm2-process-list.log",
+        evidence: "pm2 lore-site online .tmp/pm2-process-list.log",
         checkedAt: timestamp,
       },
       "lore-bot": {
@@ -25,7 +25,7 @@ function baseManifest() {
         running: true,
         supervised: true,
         command: "npm.cmd run bot",
-        evidence: ".tmp/pm2-process-list.log",
+        evidence: "pm2 lore-bot online .tmp/pm2-process-list.log",
         checkedAt: timestamp,
       },
       "lore-indexer": {
@@ -33,7 +33,7 @@ function baseManifest() {
         running: true,
         supervised: true,
         command: "npm.cmd run indexer",
-        evidence: ".tmp/pm2-process-list.log",
+        evidence: "pm2 lore-indexer online .tmp/pm2-process-list.log",
         checkedAt: timestamp,
       },
     },

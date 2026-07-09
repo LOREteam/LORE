@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 function refuseFinalProofOutput(outPath) {
@@ -24,8 +24,8 @@ function requireConcreteValue(name, value) {
 function readRequiredLog(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  if (!existsSync(resolved)) {
-    throw new Error(`--${name} must point to an existing redacted artifact`);
+  if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+    throw new Error(`--${name} must point to an existing redacted file artifact`);
   }
   return readFileSync(resolved, "utf8");
 }
@@ -33,8 +33,8 @@ function readRequiredLog(name, filePath) {
 function requireExistingArtifact(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  if (!existsSync(resolved)) {
-    throw new Error(`--${name} must point to an existing redacted artifact`);
+  if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+    throw new Error(`--${name} must point to an existing redacted file artifact`);
   }
   return filePath;
 }

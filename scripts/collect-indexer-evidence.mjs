@@ -55,13 +55,28 @@ function readOptionalLog(filePath) {
   return readFileSync(resolved, "utf8");
 }
 
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function readOptionalJson(filePath) {
   if (!filePath) return null;
   const resolved = resolve(process.cwd(), filePath);
   if (!existsSync(resolved)) {
     throw new Error(`${filePath} does not exist`);
   }
-  return JSON.parse(readFileSync(resolved, "utf8").replace(/^\uFEFF/, ""));
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(resolved, "utf8").replace(/^\uFEFF/, ""));
+  } catch (error) {
+    console.error(`${filePath} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+  if (!isPlainObject(parsed)) {
+    console.error(`${filePath} must be a JSON object artifact`);
+    process.exit(1);
+  }
+  return parsed;
 }
 
 function firstMatchingLine(text, pattern) {
@@ -77,6 +92,19 @@ function lastMatchingLine(text, pattern) {
     .map((line) => line.trim())
     .filter((line) => pattern.test(line))
     .at(-1);
+}
+
+function normalizedOrigin(value) {
+  try {
+    const url = new URL(String(value ?? "").trim());
+    return `${url.protocol}//${url.host}`.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function expectedProductionHealthOrigin() {
+  return normalizedOrigin(process.env.PROD_HEALTH_BASE_URL || "https://playlore.xyz");
 }
 
 function parseKeyValues(line = "") {
@@ -172,6 +200,7 @@ if (!isPrintPlan()) {
   requireCondition(Boolean(finishLine), "--indexer-log must include [indexer] Finished runOnce");
   requireCondition(!/\[indexer\]\s+Fatal:/i.test(indexerLog), "--indexer-log must not include [indexer] Fatal");
   requireCondition(finalityLagIsNumeric, "--health-log must include numeric finalityLagBlocks=<number>");
+  requireCondition(normalizedOrigin(healthValues.base) === expectedProductionHealthOrigin(), "--health-log must include base=<production origin>");
   requireMatchingChainId("expectedChainId", expectedSnapshotChainId, chainId);
   requireMatchingChainId("rpcChainId", rpcSnapshotChainId, chainId);
   requireCondition(hasIsoTimestamp(snapshotGeneratedAt), "--chain-snapshot must include generatedAt as ISO-8601 UTC");

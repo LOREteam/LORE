@@ -211,6 +211,33 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   }
   return findings;
 }
+
+function localArtifactContentFromText(value, key = "") {
+  const artifactPath = localArtifactPathFromText(value, key);
+  if (!artifactPath) return "";
+  try {
+    return readFileSync(resolve(process.cwd(), artifactPath), "utf8").slice(0, 256 * 1024);
+  } catch {
+    return "";
+  }
+}
+
+function evidenceContentText(value, key = "") {
+  if (typeof value === "string") {
+    const artifactPath = localArtifactPathFromText(value, key);
+    const inline = artifactPath ? value.replace(/^artifact:\s*\S+/i, "").trim() : value;
+    return [inline, localArtifactContentFromText(value, key)].filter(Boolean).join("\n");
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => evidenceContentText(entry, key)).filter(Boolean).join("\n");
+  }
+  if (!isPlainObject(value)) return "";
+  return Object.entries(value).map(([childKey, entry]) => evidenceContentText(entry, childKey)).filter(Boolean).join("\n");
+}
+
+function evidenceMentions(value, pattern) {
+  return pattern.test(evidenceContentText(value));
+}
 function findSecretLikeValues(value, path = "$") {
   const findings = [];
   if (Array.isArray(value)) {
@@ -375,6 +402,9 @@ if (manifest) {
     if (hasEvidence(contractEnv) && !hasConcreteEvidence(contractEnv)) {
       issues.push("contractEnv must include concrete evidence path, link, artifact, command output, proof command, or address/tx marker");
     }
+    if (hasConcreteEvidence(contractEnv) && !evidenceMentions(contractEnv, /\b(?:proof:mainnet|env gates?|contract|deploy|chainId|LINEA_CHAIN_ID|NEXT_PUBLIC_CONTRACT_ADDRESS)\b/i)) {
+      issues.push("contractEnv evidence must mention proof:mainnet, env, contract, deploy, or chainId proof");
+    }
 
     const ownership = isPlainObject(manifest.ownership) ? manifest.ownership : {};
     if (!isPlainObject(manifest.ownership)) issues.push("ownership section is missing");
@@ -392,6 +422,9 @@ if (manifest) {
     if (!hasEvidence(ownership)) issues.push("ownership has no evidence");
     if (hasEvidence(ownership) && !hasConcreteEvidence(ownership)) {
       issues.push("ownership must include concrete direct owner read or Safe/multisig evidence");
+    }
+    if (hasRealText(ownership.directOwnerReadEvidence) && !evidenceMentions(ownership.directOwnerReadEvidence, /\b(?:owner|safe|multisig|direct[-\s]?owner|direct[-\s]?chain|governance)\b/i)) {
+      issues.push("ownership.directOwnerReadEvidence evidence must mention owner, Safe/multisig, governance, or direct-chain proof");
     }
 
     const randomness = isPlainObject(manifest.randomness) ? manifest.randomness : {};
@@ -412,6 +445,18 @@ if (manifest) {
     if (!hasEvidence(randomness)) issues.push("randomness has no evidence");
     if (hasEvidence(randomness) && !hasConcreteEvidence(randomness)) {
       issues.push("randomness must include concrete sign-off link, artifact, command output, or tx marker");
+    }
+    const randomnessEvidence = {
+      evidence: randomness.evidence,
+      evidencePath: randomness.evidencePath,
+      link: randomness.link,
+      artifact: randomness.artifact,
+      commandOutputPath: randomness.commandOutputPath,
+      reportPath: randomness.reportPath,
+      notes: randomness.notes,
+    };
+    if (hasConcreteEvidence(randomness) && !evidenceMentions(randomnessEvidence, /\b(?:randomness|decision|sign[-\s]?off|accepted[-\s]?risk|mitigated|mitigation)\b/i)) {
+      issues.push("randomness evidence must mention randomness decision or operator sign-off proof");
     }
 
     const chainComparison = isPlainObject(manifest.chainComparison) ? manifest.chainComparison : {};
@@ -434,6 +479,10 @@ if (manifest) {
       if (!hasEvidence(value)) issues.push(`chainComparison.${check} has no evidence`);
       if (hasEvidence(value) && !hasConcreteEvidence(value)) {
         issues.push(`chainComparison.${check} must include concrete direct-chain/app-indexer evidence path, link, command output, proof command, or address/tx marker`);
+      }
+      const chainEvidencePattern = new RegExp(`\\b(?:${check}|direct[-\\s]?chain|app|indexer|chain comparison|proof:chain)\\b`, "i");
+      if (hasConcreteEvidence(value) && !evidenceMentions(value, chainEvidencePattern)) {
+        issues.push(`chainComparison.${check} evidence must mention ${check}, direct-chain, app, or indexer proof`);
       }
     }
 

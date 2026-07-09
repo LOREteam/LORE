@@ -31,12 +31,37 @@ const canaryFullEvents = canaryFullTxHashes.map((txHash, index) => JSON.stringif
   rpcLabel: "redacted-mainnet-rpc",
 }));
 writeFileSync(canaryFullLog, `${canaryFullEvents.join("\n")}\n`, "utf8");
+const canaryTemplateLiveLog = join(tmp, "canary-template-live.jsonl");
+const canarySecretLiveLog = join(tmp, "canary-secret-live.jsonl");
+const canaryMalformedLiveLog = join(tmp, "canary-malformed-live.jsonl");
+const canaryNonObjectLiveLog = join(tmp, "canary-non-object-live.jsonl");
+writeFileSync(
+  canaryTemplateLiveLog,
+  `${canaryFullEvents.map((event, index) => index === 1 ? JSON.stringify({ ...JSON.parse(event), diagnostic: "TODO" }) : event).join("\n")}\n`,
+  "utf8",
+);
+writeFileSync(
+  canarySecretLiveLog,
+  `${canaryFullEvents.map((event, index) => index === 2 ? JSON.stringify({ ...JSON.parse(event), rpcUrl: "https://rpc.example.test/secret-key" }) : event).join("\n")}\n`,
+  "utf8",
+);
+writeFileSync(
+  canaryMalformedLiveLog,
+  `${canaryFullEvents.map((event, index) => index === 3 ? "not-json" : event).join("\n")}\n`,
+  "utf8",
+);
+writeFileSync(
+  canaryNonObjectLiveLog,
+  `${canaryFullEvents.map((event, index) => index === 4 ? "[]" : event).join("\n")}\n`,
+  "utf8",
+);
 writeFileSync(canaryTargetArtifact, "synthetic canary target proof\n", "utf8");
 writeFileSync(canaryRecoveryArtifact, "synthetic canary recovery proof\n", "utf8");
 writeFileSync(canarySessionArtifact, "synthetic canary session proof\n", "utf8");
 writeFileSync(canaryTxArtifact, "synthetic canary transaction proof\n", "utf8");
 const canaryMissingArtifact = join(tmp, "missing-canary-target-proof.log");
 const canaryMissingArtifactManifest = join(tmp, "canary-missing-local-artifact.json");
+const canaryValidStrictManifestPath = join(tmp, "canary-valid-strict.json");
 writeFileSync(
   canaryMissingArtifactManifest,
   JSON.stringify({
@@ -73,6 +98,80 @@ writeFileSync(
       checkedAt: "2026-07-09T00:49:00.000Z",
       evidencePath: canaryTxArtifact,
     },
+  }),
+  "utf8",
+);
+const canaryIrrelevantArtifact = join(tmp, "canary-irrelevant.log");
+const canaryIrrelevantTargetManifest = join(tmp, "canary-irrelevant-target.json");
+const canaryIrrelevantRecoveryManifest = join(tmp, "canary-irrelevant-recovery.json");
+const canaryIrrelevantSessionManifest = join(tmp, "canary-irrelevant-session.json");
+const canaryIrrelevantTxManifest = join(tmp, "canary-irrelevant-transaction.json");
+writeFileSync(canaryIrrelevantArtifact, "pm2 process list only\n", "utf8");
+const canaryValidStrictManifest = {
+  targetNetwork: {
+    realTargetNetwork: true,
+    network: "linea-mainnet",
+    chainId: 59144,
+    rpc: "redacted-mainnet-rpc",
+    contractAddress: "0x1111111111111111111111111111111111111111",
+    checkedAt: "2026-07-09T00:00:00.000Z",
+    evidencePath: canaryTargetArtifact,
+  },
+  recovery: {
+    reload: { status: "verified", checkedAt: "2026-07-09T00:00:00.000Z", evidencePath: canaryRecoveryArtifact },
+    reconnect: { status: "verified", checkedAt: "2026-07-09T00:00:00.000Z", evidencePath: canaryRecoveryArtifact },
+    tabCloseRestore: { status: "verified", checkedAt: "2026-07-09T00:00:00.000Z", evidencePath: canaryRecoveryArtifact },
+    pendingTxRecovery: { status: "verified", checkedAt: "2026-07-09T00:00:00.000Z", txHash: canaryFullTxHashes[0], evidencePath: canaryRecoveryArtifact },
+    routeSwitchOrRemount: { status: "verified", checkedAt: "2026-07-09T00:00:00.000Z", evidencePath: canaryRecoveryArtifact },
+  },
+  autoMinerSession: {
+    status: "verified",
+    targetRpcConfirmed: true,
+    rounds: 50,
+    uniqueEpochs: 50,
+    checkedAt: "2026-07-09T00:49:00.000Z",
+    evidencePath: canarySessionArtifact,
+  },
+  transactionHealth: {
+    noDuplicateBets: true,
+    noNonceLoops: true,
+    noStuckPending: true,
+    pendingRecoveryConverged: true,
+    txHashes: [canaryFullTxHashes[0]],
+    checkedAt: "2026-07-09T00:49:00.000Z",
+    evidencePath: canaryTxArtifact,
+  },
+};
+writeFileSync(canaryValidStrictManifestPath, JSON.stringify(canaryValidStrictManifest), "utf8");
+writeFileSync(
+  canaryIrrelevantTargetManifest,
+  JSON.stringify({
+    ...canaryValidStrictManifest,
+    targetNetwork: { ...canaryValidStrictManifest.targetNetwork, evidencePath: canaryIrrelevantArtifact },
+  }),
+  "utf8",
+);
+writeFileSync(
+  canaryIrrelevantRecoveryManifest,
+  JSON.stringify({
+    ...canaryValidStrictManifest,
+    recovery: Object.fromEntries(Object.entries(canaryValidStrictManifest.recovery).map(([key, value]) => [key, { ...value, evidencePath: canaryIrrelevantArtifact }])),
+  }),
+  "utf8",
+);
+writeFileSync(
+  canaryIrrelevantSessionManifest,
+  JSON.stringify({
+    ...canaryValidStrictManifest,
+    autoMinerSession: { ...canaryValidStrictManifest.autoMinerSession, evidencePath: canaryIrrelevantArtifact },
+  }),
+  "utf8",
+);
+writeFileSync(
+  canaryIrrelevantTxManifest,
+  JSON.stringify({
+    ...canaryValidStrictManifest,
+    transactionHealth: { ...canaryValidStrictManifest.transactionHealth, evidencePath: canaryIrrelevantArtifact },
   }),
   "utf8",
 );
@@ -168,14 +267,117 @@ writeFileSync(
   }),
   "utf8",
 );
+const qaIrrelevantArtifact = join(tmp, "qa-irrelevant.log");
+const qaIrrelevantWalletManifest = join(tmp, "qa-irrelevant-wallet.json");
+const qaIrrelevantFailureManifest = join(tmp, "qa-irrelevant-failure.json");
+const qaIrrelevantSupportManifest = join(tmp, "qa-irrelevant-support.json");
+const qaIrrelevantFinalManifest = join(tmp, "qa-irrelevant-final.json");
+const qaIrrelevantSmokeManifest = join(tmp, "qa-irrelevant-smoke.json");
+writeFileSync(qaIrrelevantArtifact, "pm2 process list only\n", "utf8");
+const qaValidStrictManifest = {
+  targetNetwork: "linea-mainnet",
+  targetChainId: 59144,
+  wallet: {
+    privyAllowedOrigins: {
+      ...qaCheck(qaWalletArtifact),
+      origin: "https://playlore.xyz",
+      exactProductionOrigin: true,
+      developmentFallbackAppIdUsed: false,
+    },
+    desktopConnect: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+    desktopDisconnect: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+    desktopReconnect: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+    wrongNetwork: {
+      ...qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+      unsupportedChainWarningVisible: true,
+      targetChainId: 59144,
+      testedChainId: 1,
+    },
+    mobileWeb3Browser: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+    cleanWalletFirstTx: {
+      ...qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+      txHash: "0x1111111111111111111111111111111111111111111111111111111111111111",
+      network: "linea-mainnet",
+      chainId: 59144,
+    },
+    slowNetworkAuthModal: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+    slowNetworkChatAuth: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+  },
+  failureStateUx: {
+    disabledActionsExplainReason: qaCheck(qaFailureArtifact),
+    pendingBet: qaCheck(qaFailureArtifact),
+    pendingResolve: qaCheck(qaFailureArtifact),
+    pendingChatAuth: qaCheck(qaFailureArtifact),
+    pendingProfileSave: qaCheck(qaFailureArtifact),
+    degradedDataVisible: qaCheck(qaFailureArtifact),
+    routeChunkRecovery: qaCheck(qaFailureArtifact),
+    noSilentNoop: qaCheck(qaFailureArtifact),
+  },
+  supportAuditVisibility: {
+    betHistoryFields: {
+      ...qaCheck(qaSupportArtifact),
+      fields: ["epoch", "tile", "amount", "txHash", "result"],
+    },
+    autoMinerLogFields: {
+      ...qaCheck(qaSupportArtifact),
+      fields: ["round", "epoch", "nonce", "txHash", "retryCount"],
+    },
+    diagnosticsIndexerLag: qaCheck(qaSupportArtifact),
+    diagnosticsHeartbeat: qaCheck(qaSupportArtifact),
+    diagnosticsServingMode: qaCheck(qaSupportArtifact),
+  },
+  finalQa: {
+    browserSmokeDebugAutominer: {
+      ...qaCheck(qaSmokeArtifact),
+      origin: "https://playlore.xyz",
+      command: '$env:SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS = "1"; npm.cmd run smoke:browser',
+      debugAutominerScenariosPassed: true,
+      noUnexpectedConsoleErrors: true,
+      unsupportedWalletWarningsNotMasked: true,
+    },
+    mobileLayout: qaCheck(qaFinalArtifact),
+    rightPanelOverlays: qaCheck(qaFinalArtifact),
+    chatGeometry: qaCheck(qaFinalArtifact),
+    faqMainnetWording: qaCheck(qaFinalArtifact),
+    whitepaperMainnetWording: qaCheck(qaFinalArtifact),
+    onboardingMainnetWording: qaCheck(qaFinalArtifact),
+  },
+};
+const withQaArtifact = (manifest, path, replacement) => JSON.stringify(replacement(structuredClone(manifest), path));
+writeFileSync(qaIrrelevantWalletManifest, withQaArtifact(qaValidStrictManifest, qaIrrelevantArtifact, (manifest, artifact) => {
+  for (const check of Object.values(manifest.wallet)) check.evidencePath = artifact;
+  return manifest;
+}), "utf8");
+writeFileSync(qaIrrelevantFailureManifest, withQaArtifact(qaValidStrictManifest, qaIrrelevantArtifact, (manifest, artifact) => {
+  for (const check of Object.values(manifest.failureStateUx)) check.evidencePath = artifact;
+  return manifest;
+}), "utf8");
+writeFileSync(qaIrrelevantSupportManifest, withQaArtifact(qaValidStrictManifest, qaIrrelevantArtifact, (manifest, artifact) => {
+  for (const check of Object.values(manifest.supportAuditVisibility)) check.evidencePath = artifact;
+  return manifest;
+}), "utf8");
+writeFileSync(qaIrrelevantFinalManifest, withQaArtifact(qaValidStrictManifest, qaIrrelevantArtifact, (manifest, artifact) => {
+  for (const [key, check] of Object.entries(manifest.finalQa)) if (key !== "browserSmokeDebugAutominer") check.evidencePath = artifact;
+  return manifest;
+}), "utf8");
+writeFileSync(qaIrrelevantSmokeManifest, withQaArtifact(qaValidStrictManifest, qaIrrelevantArtifact, (manifest, artifact) => {
+  manifest.finalQa.browserSmokeDebugAutominer.evidencePath = artifact;
+  return manifest;
+}), "utf8");
 const signoffEnvLog = join(tmp, "signoff-env.log");
 const signoffFailedEnvLog = join(tmp, "signoff-env-failed.log");
 const signoffChainLog = join(tmp, "signoff-chain.log");
-writeFileSync(signoffEnvLog, "Summary: all checked env gates passed.", "utf8");
+writeFileSync(signoffEnvLog, "Summary: all checked env gates passed. proof:mainnet contract env chainId deploy owner Safe multisig direct owner read randomness decision accepted-risk operator sign-off app indexer chain comparison jackpot safetyPool deposits rewards rebates resolve.", "utf8");
 writeFileSync(signoffFailedEnvLog, "Summary: 30 env gate(s) missing or failing.", "utf8");
-writeFileSync(signoffChainLog, "Summary: synthetic direct-chain proof output", "utf8");
+writeFileSync(signoffChainLog, "Summary: synthetic proof:chain direct-chain proof output owner direct owner read jackpot safetyPool deposits rewards rebates resolve chain comparison.", "utf8");
 const signoffMissingArtifact = join(tmp, "missing-signoff-env.log");
 const signoffMissingArtifactManifest = join(tmp, "signoff-missing-local-artifact.json");
+const signoffIrrelevantArtifact = join(tmp, "irrelevant-signoff-evidence.log");
+const signoffIrrelevantEnvManifest = join(tmp, "signoff-irrelevant-env-artifact.json");
+const signoffIrrelevantOwnerManifest = join(tmp, "signoff-irrelevant-owner-artifact.json");
+const signoffIrrelevantRandomnessManifest = join(tmp, "signoff-irrelevant-randomness-artifact.json");
+const signoffIrrelevantChainManifest = join(tmp, "signoff-irrelevant-chain-artifact.json");
+writeFileSync(signoffIrrelevantArtifact, "Summary: archived generic operator note with no launch proof markers.", "utf8");
 const signoffAddress = "0x1111111111111111111111111111111111111111";
 const signoffTx = "0x1111111111111111111111111111111111111111111111111111111111111111";
 const signoffComparison = (key) => ({
@@ -232,6 +434,26 @@ writeFileSync(
   }),
   "utf8",
 );
+const signoffValidStrictManifest = JSON.parse(readFileSync(signoffMissingArtifactManifest, "utf8"));
+signoffValidStrictManifest.contractEnv.evidencePath = signoffEnvLog;
+const withSignoffArtifact = (mutator) => {
+  const manifest = JSON.parse(JSON.stringify(signoffValidStrictManifest));
+  mutator(manifest);
+  return JSON.stringify(manifest);
+};
+writeFileSync(signoffIrrelevantEnvManifest, withSignoffArtifact((manifest) => {
+  manifest.contractEnv.evidencePath = signoffIrrelevantArtifact;
+}), "utf8");
+writeFileSync(signoffIrrelevantOwnerManifest, withSignoffArtifact((manifest) => {
+  manifest.ownership.directOwnerReadEvidence = `artifact: ${signoffIrrelevantArtifact}`;
+}), "utf8");
+writeFileSync(signoffIrrelevantRandomnessManifest, withSignoffArtifact((manifest) => {
+  manifest.randomness.evidence = `artifact: ${signoffIrrelevantArtifact}`;
+}), "utf8");
+writeFileSync(signoffIrrelevantChainManifest, withSignoffArtifact((manifest) => {
+  manifest.chainComparison.jackpot.directChainEvidence = `artifact: ${signoffIrrelevantArtifact}`;
+  manifest.chainComparison.jackpot.appOrIndexerEvidence = `artifact: ${signoffIrrelevantArtifact}`;
+}), "utf8");
 const signoffEnvPatch = {
   LINEA_NETWORK: "mainnet",
   NEXT_PUBLIC_LINEA_NETWORK: "mainnet",
@@ -247,12 +469,14 @@ const signoffEnvPatch = {
 const hostHealthLog = join(tmp, "host-health-prod.log");
 const hostLoadLog = join(tmp, "host-load-http.log");
 const hostProcessEvidence = join(tmp, "host-process-model.log");
+const hostPersistenceEvidence = join(tmp, "host-persistence.log");
 const hostExternalDbPath = join(tmp, "host-prod.sqlite");
 const hostHealthMissingBaseLog = join(tmp, "host-health-missing-base.log");
 const hostLoadMissingBaseLog = join(tmp, "host-load-missing-base.log");
 writeFileSync(hostHealthLog, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=2 finalityLagBlocks=2\n", "utf8");
 writeFileSync(hostLoadLog, "Load base URL: https://canary.playlore.xyz\nConcurrency: 10; client IPs: 10; duration: 60000ms; timeout: 10000ms\nTOTAL count= 100 fail= 0 err= 0.00% p50= 100ms p95= 400ms p99= 700ms\n", "utf8");
 writeFileSync(hostProcessEvidence, "pm2 lore-site online\npm2 lore-bot online\npm2 lore-indexer online\n", "utf8");
+writeFileSync(hostPersistenceEvidence, "persistent DB proof: LORE_DB_PATH C:\\external\\lore.sqlite restart survived reboot survived sqlite database path verified\n", "utf8");
 writeFileSync(hostExternalDbPath, "synthetic external host db path marker", "utf8");
 writeFileSync(hostHealthMissingBaseLog, "[prod-health] OK\nruntime=ok dataSync=ok effectiveLagBlocks=2 finalityLagBlocks=2\n", "utf8");
 writeFileSync(hostLoadMissingBaseLog, "Concurrency: 10; client IPs: 10; duration: 60000ms; timeout: 10000ms\nTOTAL count= 100 fail= 0 err= 0.00% p50= 100ms p95= 400ms p99= 700ms\n", "utf8");
@@ -317,18 +541,103 @@ writeFileSync(
   }),
   "utf8",
 );
+const hostIrrelevantProcessEvidence = join(tmp, "host-irrelevant-process-model.log");
+const hostIrrelevantProcessManifest = join(tmp, "host-irrelevant-process-model.json");
+writeFileSync(hostIrrelevantProcessEvidence, "pm2 unrelated-service online\n", "utf8");
+writeFileSync(
+  hostIrrelevantProcessManifest,
+  JSON.stringify({
+    origin: "https://playlore.xyz",
+    hostType: "production",
+    processModel: {
+      supervisor: "pm2",
+      "lore-site": hostProcess("lore-site", "npm.cmd run start", hostIrrelevantProcessEvidence),
+      "lore-bot": hostProcess("lore-bot", "npm.cmd run bot", hostIrrelevantProcessEvidence),
+      "lore-indexer": hostProcess("lore-indexer", "npm.cmd run indexer", hostIrrelevantProcessEvidence),
+    },
+    persistentDb: {
+      absolutePathOutsideRepo: true,
+      restartSurvived: true,
+      rebootSurvived: true,
+      path: hostExternalDbPath,
+      checkedAt: "2026-07-09T00:00:00.000Z",
+      evidencePath: hostProcessEvidence,
+    },
+    healthProd: {
+      status: "ok",
+      command: "npm.cmd run health:prod",
+      url: "https://playlore.xyz",
+      runtimeHealthPassed: true,
+      dataSyncHealthPassed: true,
+      diagnosticsAuthPassed: true,
+      finalityLagChecked: true,
+      jackpotRowsChecked: true,
+      timestamp: "2026-07-09T00:00:00.000Z",
+      evidencePath: hostHealthLog,
+      summary: "[prod-health] OK base=https://playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=2",
+    },
+    loadHttp: {
+      status: "ok",
+      command: "npm.cmd run load:http",
+      url: "https://canary.playlore.xyz",
+      hostType: "canary",
+      requestCount: 100,
+      errorRate: 0,
+      maxErrorRate: 0.01,
+      p95Ms: 400,
+      maxP95Ms: 1000,
+      durationMs: 60000,
+      concurrency: 10,
+      timestamp: "2026-07-09T00:00:00.000Z",
+      evidencePath: hostLoadLog,
+      summary: "Load base URL: https://canary.playlore.xyz TOTAL count=100 fail=0 err=0.00% p95=400ms",
+    },
+  }),
+  "utf8",
+);
+const hostIrrelevantArtifact = join(tmp, "host-irrelevant-evidence.log");
+const hostIrrelevantPersistentManifest = join(tmp, "host-irrelevant-persistent-artifact.json");
+const hostIrrelevantHealthManifest = join(tmp, "host-irrelevant-health-artifact.json");
+const hostIrrelevantLoadManifest = join(tmp, "host-irrelevant-load-artifact.json");
+writeFileSync(hostIrrelevantArtifact, "Summary: generic archived note without launch proof markers.\n", "utf8");
+const hostValidStrictManifest = JSON.parse(readFileSync(hostMissingArtifactManifest, "utf8"));
+hostValidStrictManifest.processModel["lore-site"].evidencePath = hostProcessEvidence;
+hostValidStrictManifest.persistentDb.evidencePath = hostPersistenceEvidence;
+const withHostArtifact = (mutator) => {
+  const manifest = JSON.parse(JSON.stringify(hostValidStrictManifest));
+  mutator(manifest);
+  return JSON.stringify(manifest);
+};
+writeFileSync(hostIrrelevantPersistentManifest, withHostArtifact((manifest) => {
+  manifest.persistentDb.evidencePath = hostIrrelevantArtifact;
+}), "utf8");
+writeFileSync(hostIrrelevantHealthManifest, withHostArtifact((manifest) => {
+  manifest.healthProd.evidencePath = hostIrrelevantArtifact;
+}), "utf8");
+writeFileSync(hostIrrelevantLoadManifest, withHostArtifact((manifest) => {
+  manifest.loadHttp.evidencePath = hostIrrelevantArtifact;
+}), "utf8");
 const indexerLog = join(tmp, "indexer-once.log");
 const indexerRepoDbLog = join(tmp, "indexer-repo-db.log");
 const indexerHealthLog = join(tmp, "indexer-health-prod.log");
+const indexerHealthMissingBaseLog = join(tmp, "indexer-health-missing-base.log");
 const indexerChainSnapshot = join(tmp, "chain-proof-snapshot.json");
 const indexerChainSnapshotMissingGeneratedAt = join(tmp, "chain-proof-missing-generated-at.json");
 const indexerChainSnapshotTooFewEpochs = join(tmp, "chain-proof-too-few-epochs.json");
+const indexerChainSnapshotNonObject = join(tmp, "chain-proof-non-object.json");
 writeFileSync(indexerLog, "[indexer] SQLite path: C:\\external\\lore.sqlite\n[indexer] Contract: 0x1111111111111111111111111111111111111111\n[indexer] Deploy block: 1\n[indexer] Start block: 1\n[indexer] Finality blocks: 1\n[indexer] Scanning blocks 1..10\n[indexer] Finished runOnce\n", "utf8");
 writeFileSync(indexerRepoDbLog, `[indexer] SQLite path: ${join(process.cwd(), "repo-indexer.sqlite")}\n[indexer] Contract: 0x1111111111111111111111111111111111111111\n[indexer] Deploy block: 1\n[indexer] Start block: 1\n[indexer] Finality blocks: 1\n[indexer] Scanning blocks 1..10\n[indexer] Finished runOnce\n`, "utf8");
 writeFileSync(indexerHealthLog, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
+writeFileSync(indexerHealthMissingBaseLog, "[prod-health] OK\nruntime=ok dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
 writeFileSync(indexerChainSnapshot, JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z", expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
 const indexerMissingArtifact = join(tmp, "missing-indexer-once.log");
 const indexerMissingArtifactManifest = join(tmp, "indexer-missing-local-artifact.json");
+const indexerIrrelevantArtifact = join(tmp, "indexer-irrelevant-evidence.log");
+const indexerIrrelevantDryRunManifest = join(tmp, "indexer-irrelevant-dry-run-artifact.json");
+const indexerIrrelevantFinalityManifest = join(tmp, "indexer-irrelevant-finality-artifact.json");
+const indexerIrrelevantSnapshotManifest = join(tmp, "indexer-irrelevant-snapshot-artifact.json");
+const indexerIrrelevantComparisonManifest = join(tmp, "indexer-irrelevant-comparison-artifact.json");
+writeFileSync(indexerIrrelevantArtifact, "Summary: generic archived note without indexer or chain proof markers.\n", "utf8");
 const indexerComparison = (key) => ({
   matches: true,
   checkedEpochs: [1],
@@ -379,8 +688,28 @@ writeFileSync(
   }),
   "utf8",
 );
+const indexerValidStrictManifest = JSON.parse(readFileSync(indexerMissingArtifactManifest, "utf8"));
+indexerValidStrictManifest.dryRun.evidencePath = indexerLog;
+const withIndexerArtifact = (mutator) => {
+  const manifest = JSON.parse(JSON.stringify(indexerValidStrictManifest));
+  mutator(manifest);
+  return JSON.stringify(manifest);
+};
+writeFileSync(indexerIrrelevantDryRunManifest, withIndexerArtifact((manifest) => {
+  manifest.dryRun.evidencePath = indexerIrrelevantArtifact;
+}), "utf8");
+writeFileSync(indexerIrrelevantFinalityManifest, withIndexerArtifact((manifest) => {
+  manifest.finality.evidencePath = indexerIrrelevantArtifact;
+}), "utf8");
+writeFileSync(indexerIrrelevantSnapshotManifest, withIndexerArtifact((manifest) => {
+  manifest.chainSnapshot.path = indexerIrrelevantArtifact;
+}), "utf8");
+writeFileSync(indexerIrrelevantComparisonManifest, withIndexerArtifact((manifest) => {
+  manifest.chainComparison.jackpot.evidence = `artifact: ${indexerIrrelevantArtifact}`;
+}), "utf8");
 writeFileSync(indexerChainSnapshotMissingGeneratedAt, JSON.stringify({ expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
 writeFileSync(indexerChainSnapshotTooFewEpochs, JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z", expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
+writeFileSync(indexerChainSnapshotNonObject, "[]", "utf8");
 const monitoringAlertArtifact = join(tmp, "monitoring-alert-export.log");
 const monitoringRecoveryArtifact = join(tmp, "monitoring-recovery-export.log");
 const monitoringAlertTargetArtifact = join(tmp, "monitoring-alert-target-test.log");
@@ -442,6 +771,81 @@ writeFileSync(
   "utf8",
 );
 
+const monitoringIrrelevantArtifact = join(tmp, "monitoring-irrelevant.log");
+const monitoringIrrelevantAlertManifest = join(tmp, "monitoring-irrelevant-alert.json");
+const monitoringIrrelevantRecoveryManifest = join(tmp, "monitoring-irrelevant-recovery.json");
+const monitoringIrrelevantTargetManifest = join(tmp, "monitoring-irrelevant-target.json");
+const monitoringIrrelevantErrorManifest = join(tmp, "monitoring-irrelevant-error.json");
+writeFileSync(monitoringIrrelevantArtifact, "pm2 process list only\n", "utf8");
+const monitoringValidStrictManifest = {
+  origin: "https://playlore.xyz",
+  monitors: monitoringKinds.map((kind) => ({
+    kind,
+    enabled: true,
+    provider: "synthetic-monitor",
+    cadenceSeconds: kind === "health-prod" ? 60 : 120,
+    url: kind === "health-prod" ? "https://playlore.xyz/api/health/runtime" : "https://playlore.xyz/api/health/data-sync",
+    alertCondition: `${kind} synthetic alert condition`,
+    evidencePath: monitoringAlertArtifact,
+    link: `artifact: ${monitoringAlertArtifact}`,
+    lastAlertTestAt: "2026-07-09T00:00:00.000Z",
+    recoveryEvidencePath: monitoringRecoveryArtifact,
+    recoveryLink: `artifact: ${monitoringRecoveryArtifact}`,
+    lastRecoveryAt: "2026-07-09T00:01:00.000Z",
+  })),
+  alertTargets: [{
+    name: "synthetic slack",
+    kind: "slack",
+    verified: true,
+    lastTestAt: "2026-07-09T00:00:00.000Z",
+    evidencePath: monitoringAlertTargetArtifact,
+    link: `artifact: ${monitoringAlertTargetArtifact}`,
+  }],
+  errorTracking: {
+    enabled: true,
+    provider: "synthetic-error-tracker",
+    project: "lore-mainnet",
+    environment: "production",
+    releaseOrDeploy: "synthetic-release",
+    testEventStatus: "success",
+    testEventAt: "2026-07-09T00:00:00.000Z",
+    testEventId: "SENTRY-123456",
+    testEventEvidencePath: monitoringErrorEventArtifact,
+    testEventLink: `artifact: ${monitoringErrorEventArtifact}`,
+  },
+};
+writeFileSync(
+  monitoringIrrelevantAlertManifest,
+  JSON.stringify({
+    ...monitoringValidStrictManifest,
+    monitors: monitoringValidStrictManifest.monitors.map((monitor) => ({ ...monitor, evidencePath: monitoringIrrelevantArtifact, link: `artifact: ${monitoringIrrelevantArtifact}` })),
+  }),
+  "utf8",
+);
+writeFileSync(
+  monitoringIrrelevantRecoveryManifest,
+  JSON.stringify({
+    ...monitoringValidStrictManifest,
+    monitors: monitoringValidStrictManifest.monitors.map((monitor) => ({ ...monitor, recoveryEvidencePath: monitoringIrrelevantArtifact, recoveryLink: `artifact: ${monitoringIrrelevantArtifact}` })),
+  }),
+  "utf8",
+);
+writeFileSync(
+  monitoringIrrelevantTargetManifest,
+  JSON.stringify({
+    ...monitoringValidStrictManifest,
+    alertTargets: monitoringValidStrictManifest.alertTargets.map((target) => ({ ...target, evidencePath: monitoringIrrelevantArtifact, link: `artifact: ${monitoringIrrelevantArtifact}` })),
+  }),
+  "utf8",
+);
+writeFileSync(
+  monitoringIrrelevantErrorManifest,
+  JSON.stringify({
+    ...monitoringValidStrictManifest,
+    errorTracking: { ...monitoringValidStrictManifest.errorTracking, testEventEvidencePath: monitoringIrrelevantArtifact, testEventLink: `artifact: ${monitoringIrrelevantArtifact}` },
+  }),
+  "utf8",
+);
 const restoreSourcePath = join(mkdtempSync(join(tmpdir(), "lore-proof-restore-source-")), "source.sqlite");
 const restoreBackupDir = mkdtempSync(join(tmpdir(), "lore-proof-restore-backup-"));
 const restoreDir = mkdtempSync(join(tmpdir(), "lore-proof-restore-restored-"));
@@ -451,6 +855,7 @@ const restoreHealthLog = join(tmp, "restore-health-prod.log");
 const restoreHealthMissingRuntimeLog = join(tmp, "restore-health-missing-runtime.log");
 const restoreBackupScheduleArtifact = join(tmp, "restore-backup-schedule.log");
 const restorePreservationArtifact = join(tmp, "restore-indexer-preservation.log");
+const restoreDirectoryArtifact = mkdtempSync(join(tmpdir(), "lore-proof-restore-artifact-dir-"));
 writeFileSync(restoreSourcePath, "synthetic source db for collector draft guard", "utf8");
 writeFileSync(restoreBackupPath, "synthetic backup artifact for collector draft guard", "utf8");
 writeFileSync(restoreLog, "Summary: backup/restore drill completed without detected issues.\n", "utf8");
@@ -510,6 +915,80 @@ writeFileSync(
   "utf8",
 );
 
+const restoreIrrelevantScheduleArtifact = join(tmp, "restore-irrelevant-schedule.log");
+const restoreIrrelevantPreservationArtifact = join(tmp, "restore-irrelevant-preservation.log");
+const restoreIrrelevantScheduleManifest = join(tmp, "restore-irrelevant-schedule-artifact.json");
+const restoreIrrelevantPreservationManifest = join(tmp, "restore-irrelevant-preservation-artifact.json");
+writeFileSync(restoreIrrelevantScheduleArtifact, "pm2 process list only\n", "utf8");
+writeFileSync(restoreIrrelevantPreservationArtifact, "restore drill completed without indexer comparison\n", "utf8");
+const restoreValidStrictManifest = {
+  backupSchedule: {
+    enabled: true,
+    cadence: "daily cron backup",
+    checkedAt: "2026-07-09T00:00:00.000Z",
+    evidencePath: restoreBackupScheduleArtifact,
+    link: `artifact: ${restoreBackupScheduleArtifact}`,
+  },
+  restoreDrill: {
+    status: "verified",
+    command: "npm run proof:restore -- --strict",
+    backupPathOutsideRepo: true,
+    restorePathOutsideRepo: true,
+    backupRestoreDirsDistinct: true,
+    sourceDbOutsideBackupRestoreDirs: true,
+    sourceDbPath: restoreSourcePath,
+    backupDir: restoreBackupDir,
+    restoreDir,
+    backupArtifact: restoreBackupPath,
+    timestamp: "2026-07-09T00:00:00.000Z",
+    evidencePath: restoreLog,
+  },
+  restoredStagingHealth: {
+    status: "healthy",
+    command: "npm run health:prod -- --base=https://restore.playlore.xyz",
+    hostType: "restore",
+    url: "https://restore.playlore.xyz",
+    runtimeHealthPassed: true,
+    dataSyncHealthPassed: true,
+    finalityLagChecked: true,
+    timestamp: "2026-07-09T00:00:00.000Z",
+    evidence: `base=https://restore.playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=1 artifact: ${restoreHealthLog}`,
+    evidencePath: restoreHealthLog,
+  },
+  indexerPreservation: {
+    heartbeatPreserved: true,
+    latestIndexedEpochPreserved: true,
+    heartbeatBefore: "abc",
+    heartbeatAfter: "abc",
+    latestIndexedEpochBefore: "1",
+    latestIndexedEpochAfter: "1",
+    checkedAt: "2026-07-09T00:00:00.000Z",
+    evidencePath: restorePreservationArtifact,
+  },
+};
+writeFileSync(
+  restoreIrrelevantScheduleManifest,
+  JSON.stringify({
+    ...restoreValidStrictManifest,
+    backupSchedule: {
+      ...restoreValidStrictManifest.backupSchedule,
+      evidencePath: restoreIrrelevantScheduleArtifact,
+      link: `artifact: ${restoreIrrelevantScheduleArtifact}`,
+    },
+  }),
+  "utf8",
+);
+writeFileSync(
+  restoreIrrelevantPreservationManifest,
+  JSON.stringify({
+    ...restoreValidStrictManifest,
+    indexerPreservation: {
+      ...restoreValidStrictManifest.indexerPreservation,
+      evidencePath: restoreIrrelevantPreservationArtifact,
+    },
+  }),
+  "utf8",
+);
 const draftCases = [
   {
     id: "signoff",
@@ -686,6 +1165,12 @@ const collectorRejectCases = [
     expected: "--health-log is required when collecting indexer launch evidence",
   },
   {
+    id: "indexer-collector-missing-health-base",
+    create: ["scripts/collect-indexer-evidence.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthMissingBaseLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
+    expected: "--health-log must include base=<production origin>",
+  },
+  {
     id: "indexer-collector-missing-chain-snapshot",
     create: ["scripts/collect-indexer-evidence.mjs"],
     createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`],
@@ -710,6 +1195,11 @@ const collectorRejectCases = [
     expected: "--chain-snapshot epochs must include at least --epochs unique checked epochs",
   },
   {
+    id: "indexer-collector-non-object-chain-snapshot",
+    create: ["scripts/collect-indexer-evidence.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshotNonObject}`],
+    expected: "must be a JSON object artifact",
+  },  {
     id: "restore-collector-missing-runtime",
     create: ["scripts/collect-restore-evidence.mjs"],
     createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthMissingRuntimeLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
@@ -740,6 +1230,11 @@ const collectorRejectCases = [
     expected: "--preservation-artifact is required when collecting restore launch evidence",
   },
   {
+    id: "restore-collector-directory-backup-schedule-artifact",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreDirectoryArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "must point to an existing redacted file artifact",
+  },  {
     id: "canary-draft-missing-live-log",
     create: ["scripts/create-canary-proof-draft.mjs"],
     createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--target-artifact=${canaryTargetArtifact}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--session-artifact=${canarySessionArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
@@ -775,6 +1270,18 @@ const collectorRejectCases = [
     createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${emptyCanaryLog}`, `--target-artifact=${canaryTargetArtifact}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--session-artifact=${canarySessionArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
     expected: "--live-log must include at least one successful auto-miner canary tx",
   },
+  {
+    id: "canary-draft-malformed-live-log",
+    create: ["scripts/create-canary-proof-draft.mjs"],
+    createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${canaryMalformedLiveLog}`, `--target-artifact=${canaryTargetArtifact}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--session-artifact=${canarySessionArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
+    expected: "Invalid JSONL at",
+  },
+  {
+    id: "canary-draft-non-object-live-log",
+    create: ["scripts/create-canary-proof-draft.mjs"],
+    createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${canaryNonObjectLiveLog}`, `--target-artifact=${canaryTargetArtifact}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--session-artifact=${canarySessionArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
+    expected: "record must be an object",
+  },
 ];
 
 const strictRejectCases = [
@@ -786,10 +1293,62 @@ const strictRejectCases = [
     expected: "local signoff artifact references must exist",
   },
   {
+    id: "signoff-irrelevant-env-artifact",
+    check: ["scripts/check-signoff-proof.mjs"],
+    checkArgs: ["--strict", `--file=${signoffIrrelevantEnvManifest}`],
+    env: signoffEnvPatch,
+    expected: "contractEnv evidence must mention proof:mainnet, env, contract, deploy, or chainId proof",
+  },
+  {
+    id: "signoff-irrelevant-owner-artifact",
+    check: ["scripts/check-signoff-proof.mjs"],
+    checkArgs: ["--strict", `--file=${signoffIrrelevantOwnerManifest}`],
+    env: signoffEnvPatch,
+    expected: "ownership.directOwnerReadEvidence evidence must mention owner, Safe/multisig, governance, or direct-chain proof",
+  },
+  {
+    id: "signoff-irrelevant-randomness-artifact",
+    check: ["scripts/check-signoff-proof.mjs"],
+    checkArgs: ["--strict", `--file=${signoffIrrelevantRandomnessManifest}`],
+    env: signoffEnvPatch,
+    expected: "randomness evidence must mention randomness decision or operator sign-off proof",
+  },
+  {
+    id: "signoff-irrelevant-chain-artifact",
+    check: ["scripts/check-signoff-proof.mjs"],
+    checkArgs: ["--strict", `--file=${signoffIrrelevantChainManifest}`],
+    env: signoffEnvPatch,
+    expected: "chainComparison.jackpot evidence must mention jackpot, direct-chain, app, or indexer proof",
+  },
+  {
     id: "host-missing-local-artifact-ref",
     check: ["scripts/check-host-proof.mjs"],
     checkArgs: ["--strict", `--file=${hostMissingArtifactManifest}`],
     expected: "local host artifact references must exist",
+  },
+  {
+    id: "host-irrelevant-process-evidence",
+    check: ["scripts/check-host-proof.mjs"],
+    checkArgs: ["--strict", `--file=${hostIrrelevantProcessManifest}`],
+    expected: "processModel.lore-site evidence must mention lore-site in supervisor output",
+  },
+  {
+    id: "host-irrelevant-persistent-artifact",
+    check: ["scripts/check-host-proof.mjs"],
+    checkArgs: ["--strict", `--file=${hostIrrelevantPersistentManifest}`],
+    expected: "persistentDb evidence artifact must mention persistence, restart/reboot, or DB path proof",
+  },
+  {
+    id: "host-irrelevant-health-artifact",
+    check: ["scripts/check-host-proof.mjs"],
+    checkArgs: ["--strict", `--file=${hostIrrelevantHealthManifest}`],
+    expected: "healthProd evidence artifact must include [prod-health] OK, base, and numeric finalityLagBlocks",
+  },
+  {
+    id: "host-irrelevant-load-artifact",
+    check: ["scripts/check-host-proof.mjs"],
+    checkArgs: ["--strict", `--file=${hostIrrelevantLoadManifest}`],
+    expected: "loadHttp evidence artifact must include Load base URL, TOTAL, and p95 output",
   },
   {
     id: "indexer-missing-local-artifact-ref",
@@ -799,10 +1358,50 @@ const strictRejectCases = [
     expected: "local indexer artifact references must exist",
   },
   {
+    id: "indexer-irrelevant-dry-run-artifact",
+    check: ["scripts/check-indexer-dry-run.mjs"],
+    checkArgs: ["--strict", `--db=${hostExternalDbPath}`, `--manifest=${indexerIrrelevantDryRunManifest}`],
+    env: { INDEXER_START_BLOCK: "1", NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "1", INDEXER_FINALITY_BLOCKS: "1" },
+    expected: "dryRun evidence artifact must include [indexer] Deploy block and [indexer] Start block",
+  },
+  {
+    id: "indexer-irrelevant-finality-artifact",
+    check: ["scripts/check-indexer-dry-run.mjs"],
+    checkArgs: ["--strict", `--db=${hostExternalDbPath}`, `--manifest=${indexerIrrelevantFinalityManifest}`],
+    env: { INDEXER_START_BLOCK: "1", NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "1", INDEXER_FINALITY_BLOCKS: "1" },
+    expected: "finality evidence artifact must include health:prod base and numeric finalityLagBlocks",
+  },
+  {
+    id: "indexer-irrelevant-snapshot-artifact",
+    check: ["scripts/check-indexer-dry-run.mjs"],
+    checkArgs: ["--strict", `--db=${hostExternalDbPath}`, `--manifest=${indexerIrrelevantSnapshotManifest}`],
+    env: { INDEXER_START_BLOCK: "1", NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "1", INDEXER_FINALITY_BLOCKS: "1" },
+    expected: "chainSnapshot.path artifact must include generatedAt, rpcChainId, and contractAddress",
+  },
+  {
+    id: "indexer-irrelevant-comparison-artifact",
+    check: ["scripts/check-indexer-dry-run.mjs"],
+    checkArgs: ["--strict", `--db=${hostExternalDbPath}`, `--manifest=${indexerIrrelevantComparisonManifest}`],
+    env: { INDEXER_START_BLOCK: "1", NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "1", INDEXER_FINALITY_BLOCKS: "1" },
+    expected: "chainComparison.jackpot evidence artifact must mention jackpot, direct-chain, chain comparison, or indexer proof",
+  },
+  {
     id: "restore-missing-local-artifact-ref",
     check: ["scripts/verify-db-restore.mjs"],
     checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreMissingArtifactManifest}`],
     expected: "local restore artifact references must exist",
+  },
+  {
+    id: "restore-irrelevant-backup-schedule-artifact",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreIrrelevantScheduleManifest}`],
+    expected: "backupSchedule evidence must mention recurring scheduler/backup proof",
+  },
+  {
+    id: "restore-irrelevant-preservation-artifact",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreIrrelevantPreservationManifest}`],
+    expected: "indexerPreservation evidence must mention heartbeat and latest indexed epoch before/after restore",
   },
   {
     id: "monitoring-missing-local-artifact-ref",
@@ -811,16 +1410,117 @@ const strictRejectCases = [
     expected: "local monitoring artifact references must exist",
   },
   {
+    id: "monitoring-irrelevant-alert-artifact",
+    check: ["scripts/check-monitoring-proof.mjs"],
+    checkArgs: ["--strict", `--file=${monitoringIrrelevantAlertManifest}`],
+    expected: "fired-alert evidence must mention alert, monitor, fired, triggered, or incident proof",
+  },
+  {
+    id: "monitoring-irrelevant-recovery-artifact",
+    check: ["scripts/check-monitoring-proof.mjs"],
+    checkArgs: ["--strict", `--file=${monitoringIrrelevantRecoveryManifest}`],
+    expected: "recovery evidence must mention recovery, recovered, resolved, or resolution proof",
+  },
+  {
+    id: "monitoring-irrelevant-alert-target-artifact",
+    check: ["scripts/check-monitoring-proof.mjs"],
+    checkArgs: ["--strict", `--file=${monitoringIrrelevantTargetManifest}`],
+    expected: "alertTargets[0] evidence must mention alert target or notification channel proof",
+  },
+  {
+    id: "monitoring-irrelevant-error-event-artifact",
+    check: ["scripts/check-monitoring-proof.mjs"],
+    checkArgs: ["--strict", `--file=${monitoringIrrelevantErrorManifest}`],
+    expected: "error tracking test event evidence must mention error, exception, event, issue, or provider proof",
+  },
+  {
     id: "qa-missing-local-artifact-ref",
     check: ["scripts/check-qa-proof.mjs"],
     checkArgs: ["--strict", `--file=${qaMissingArtifactManifest}`],
     expected: "local QA artifact references must exist",
   },
   {
+    id: "qa-irrelevant-wallet-artifact",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaIrrelevantWalletManifest}`],
+    expected: "wallet.privyAllowedOrigins evidence must mention wallet/Privy/connect/mobile/wrong-network proof",
+  },
+  {
+    id: "qa-irrelevant-failure-artifact",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaIrrelevantFailureManifest}`],
+    expected: "failureStateUx.disabledActionsExplainReason evidence must mention failure-state/pending/degraded/no-op UX proof",
+  },
+  {
+    id: "qa-irrelevant-support-artifact",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaIrrelevantSupportManifest}`],
+    expected: "supportAuditVisibility.betHistoryFields evidence must mention support/audit/diagnostics visibility proof",
+  },
+  {
+    id: "qa-irrelevant-final-artifact",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaIrrelevantFinalManifest}`],
+    expected: "finalQa.mobileLayout evidence must mention final browser/mobile/mainnet wording QA proof",
+  },
+  {
+    id: "qa-irrelevant-smoke-artifact",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaIrrelevantSmokeManifest}`],
+    expected: "finalQa.browserSmokeDebugAutominer evidence must mention debug autominer browser smoke proof",
+  },  {
+    id: "canary-irrelevant-target-artifact",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [canaryFullLog, "--strict", `--manifest=${canaryIrrelevantTargetManifest}`],
+    expected: "targetNetwork evidence must mention target RPC, chain, or mainnet proof",
+  },
+  {
+    id: "canary-irrelevant-recovery-artifact",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [canaryFullLog, "--strict", `--manifest=${canaryIrrelevantRecoveryManifest}`],
+    expected: "recovery.reload evidence must mention reload, reconnect, tab-close, pending-tx, remount, or recovery proof",
+  },
+  {
+    id: "canary-irrelevant-session-artifact",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [canaryFullLog, "--strict", `--manifest=${canaryIrrelevantSessionManifest}`],
+    expected: "autoMinerSession evidence must mention auto-miner session, rounds, epochs, or target RPC proof",
+  },
+  {
+    id: "canary-irrelevant-transaction-artifact",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [canaryFullLog, "--strict", `--manifest=${canaryIrrelevantTxManifest}`],
+    expected: "transactionHealth evidence must mention transaction, tx, nonce, duplicate, stuck pending, or pending recovery proof",
+  },
+  {
     id: "canary-missing-local-artifact-ref",
     check: ["scripts/analyze-live-canary-proof.mjs"],
     checkArgs: [canaryFullLog, "--strict", `--manifest=${canaryMissingArtifactManifest}`],
     expected: "local canary artifact references must exist",
+  },
+  {
+    id: "canary-live-log-template-value",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [canaryTemplateLiveLog, "--strict", `--manifest=${canaryValidStrictManifestPath}`],
+    expected: "live canary log contains template-like values",
+  },
+  {
+    id: "canary-live-log-secret-value",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [canarySecretLiveLog, "--strict", `--manifest=${canaryValidStrictManifestPath}`],
+    expected: "live canary log contains secret-like values",
+  },
+  {
+    id: "canary-live-log-malformed-jsonl",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [canaryMalformedLiveLog, "--strict", `--manifest=${canaryValidStrictManifestPath}`],
+    expected: "Invalid JSONL at",
+  },
+  {
+    id: "canary-live-log-non-object-jsonl",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [canaryNonObjectLiveLog, "--strict", `--manifest=${canaryValidStrictManifestPath}`],
+    expected: "record must be an object",
   },
 ];
 
@@ -880,6 +1580,12 @@ const finalOutputCases = [
     expected: "--indexer-log [indexer] SQLite path must be outside the repo checkout",
   },
   {
+    id: "indexer-draft-missing-health-base",
+    create: ["scripts/create-indexer-proof-draft.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthMissingBaseLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
+    expected: "--health-log must include base=<production origin>",
+  },
+  {
     id: "indexer-draft-missing-snapshot-generated-at",
     create: ["scripts/create-indexer-proof-draft.mjs"],
     createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshotMissingGeneratedAt}`],
@@ -892,6 +1598,11 @@ const finalOutputCases = [
     expected: "--chain-snapshot epochs must include at least --epochs unique checked epochs",
   },
   {
+    id: "indexer-draft-non-object-chain-snapshot",
+    create: ["scripts/create-indexer-proof-draft.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshotNonObject}`],
+    expected: "must be a JSON object artifact",
+  },  {
     id: "indexer-final-output",
     create: ["scripts/create-indexer-proof-draft.mjs"],
     createArgs: ["--out=docs/indexer-proof.json"],
@@ -934,6 +1645,11 @@ const finalOutputCases = [
     expected: "--preservation-artifact is required when drafting restore launch evidence",
   },
   {
+    id: "restore-draft-directory-backup-schedule-artifact",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreDirectoryArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "must point to an existing redacted file artifact",
+  },  {
     id: "restore-final-output",
     create: ["scripts/create-restore-proof-draft.mjs"],
     createArgs: ["--out=docs/restore-proof.json"],
@@ -1030,7 +1746,7 @@ function runNode(args, envPatch = {}) {
 
 function oneLine(output) {
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted artifact|must contain successful proof:mainnet summary|must include successful restore drill summary|must include base=<production origin>|must include Load base URL line|must include \[prod-health\] OK|must include runtime=ok\/pass\/healthy|must include dataSync=ok\/pass\/healthy|must include numeric finalityLagBlocks=<number>|must be outside the repo checkout|must include generatedAt as ISO-8601 UTC|must include at least --epochs unique checked epochs|must match --deploy-block|must match --chain-snapshot contractAddress|must be a real non-zero tx hash|must include at least one successful auto-miner canary tx|local signoff artifact references must exist|local host artifact references must exist|local indexer artifact references must exist|local monitoring artifact references must exist|local restore artifact references must exist|local QA artifact references must exist|local canary artifact references must exist/i;
+  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted file artifact|must point to an existing redacted artifact|must contain successful proof:mainnet summary|must include successful restore drill summary|must include base=<production origin>|must include Load base URL line|must include \[prod-health\] OK|must include runtime=ok\/pass\/healthy|must include dataSync=ok\/pass\/healthy|must include numeric finalityLagBlocks=<number>|must be outside the repo checkout|must include generatedAt as ISO-8601 UTC|must include at least --epochs unique checked epochs|must match --deploy-block|must match --chain-snapshot contractAddress|must be a real non-zero tx hash|must include at least one successful auto-miner canary tx|local signoff artifact references must exist|contractEnv evidence must mention proof:mainnet, env, contract, deploy, or chainId proof|ownership\.directOwnerReadEvidence evidence must mention owner, Safe\/multisig, governance, or direct-chain proof|randomness evidence must mention randomness decision or operator sign-off proof|chainComparison\.jackpot evidence must mention jackpot, direct-chain, app, or indexer proof|local host artifact references must exist|persistentDb evidence artifact must mention persistence, restart\/reboot, or DB path proof|healthProd evidence artifact must include \[prod-health\] OK, base, and numeric finalityLagBlocks|loadHttp evidence artifact must include Load base URL, TOTAL, and p95 output|local indexer artifact references must exist|dryRun evidence artifact must include \[indexer\] Deploy block and \[indexer\] Start block|finality evidence artifact must include health:prod base and numeric finalityLagBlocks|chainSnapshot\.path artifact must include generatedAt, rpcChainId, and contractAddress|chainComparison\.jackpot evidence artifact must mention jackpot, direct-chain, chain comparison, or indexer proof|local monitoring artifact references must exist|fired-alert evidence must mention alert, monitor, fired, triggered, or incident proof|recovery evidence must mention recovery, recovered, resolved, or resolution proof|alertTargets\[0\] evidence must mention alert target or notification channel proof|error tracking test event evidence must mention error, exception, event, issue, or provider proof|local restore artifact references must exist|local QA artifact references must exist|wallet\.privyAllowedOrigins evidence must mention wallet\/Privy\/connect\/mobile\/wrong-network proof|failureStateUx\.disabledActionsExplainReason evidence must mention failure-state\/pending\/degraded\/no-op UX proof|supportAuditVisibility\.betHistoryFields evidence must mention support\/audit\/diagnostics visibility proof|finalQa\.mobileLayout evidence must mention final browser\/mobile\/mainnet wording QA proof|finalQa\.browserSmokeDebugAutominer evidence must mention debug autominer browser smoke proof|targetNetwork evidence must mention target RPC, chain, or mainnet proof|recovery\.reload evidence must mention reload, reconnect, tab-close, pending-tx, remount, or recovery proof|autoMinerSession evidence must mention auto-miner session, rounds, epochs, or target RPC proof|transactionHealth evidence must mention transaction, tx, nonce, duplicate, stuck pending, or pending recovery proof|local canary artifact references must exist/i;
   const preferred = lines.find((line) => /^Error: /i.test(line) && guardPattern.test(line)) || lines.find((line) => guardPattern.test(line));
   const compact = preferred || lines.slice(-3).join(" | ");
   return compact.length > 260 ? `${compact.slice(0, 257)}...` : compact;

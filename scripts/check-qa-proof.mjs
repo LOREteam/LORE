@@ -177,6 +177,75 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   return findings;
 }
 
+
+function localArtifactPaths(check) {
+  if (!isPlainObject(check)) return [];
+  return [
+    ["evidence", check.evidence],
+    ["evidencePath", check.evidencePath],
+    ["link", check.link],
+    ["artifact", check.artifact],
+    ["screenshot", check.screenshot],
+    ["screenshotPath", check.screenshotPath],
+    ["logPath", check.logPath],
+    ["reportPath", check.reportPath],
+    ["commandOutputPath", check.commandOutputPath],
+    ["notes", check.notes],
+  ].map(([key, entry]) => localArtifactPathFromText(entry, key)).filter(Boolean);
+}
+
+function artifactBackedEvidenceText(check) {
+  const chunks = [];
+  if (isPlainObject(check)) {
+    chunks.push([
+      check.evidence,
+      check.evidencePath,
+      check.link,
+      check.artifact,
+      check.screenshot,
+      check.screenshotPath,
+      check.logPath,
+      check.reportPath,
+      check.commandOutputPath,
+      check.notes,
+    ].filter(hasRealText).join("\n"));
+  }
+  for (const artifactPath of localArtifactPaths(check)) {
+    const resolved = resolve(process.cwd(), artifactPath);
+    if (!existsSync(resolved)) continue;
+    chunks.push(readFileSync(resolved, "utf8").slice(0, 256 * 1024));
+  }
+  return chunks.join("\n");
+}
+
+function hasQaContentProof(group, checkId, check) {
+  const text = artifactBackedEvidenceText(check);
+  if (group === "wallet") {
+    return /\b(?:wallet|privy|connect|disconnect|reconnect|wrong\s+network|mobile|clean\s+wallet|auth|transaction|tx)\b/i.test(text);
+  }
+  if (group === "failureStateUx") {
+    return /\b(?:failure|failed|disabled|reason|pending|degraded|stale|silent|no-op|route|recovery|ux)\b/i.test(text);
+  }
+  if (group === "supportAuditVisibility") {
+    return /\b(?:support|audit|bet\s+history|auto[-\s]?miner|diagnostics|indexer\s+lag|heartbeat|serving\s+mode)\b/i.test(text);
+  }
+  if (group === "finalQa" && checkId === "browserSmokeDebugAutominer") {
+    return /\b(?:debug\s+autominer|smoke:browser|browser\s+smoke|console|wallet\s+warning)\b/i.test(text);
+  }
+  if (group === "finalQa") {
+    return /\b(?:final|browser|mobile|layout|overlay|panel|chat|faq|whitepaper|onboarding|mainnet|wording)\b/i.test(text);
+  }
+  return true;
+}
+
+function qaContentProofDescription(group, checkId) {
+  if (group === "wallet") return "wallet/Privy/connect/mobile/wrong-network proof";
+  if (group === "failureStateUx") return "failure-state/pending/degraded/no-op UX proof";
+  if (group === "supportAuditVisibility") return "support/audit/diagnostics visibility proof";
+  if (group === "finalQa" && checkId === "browserSmokeDebugAutominer") return "debug autominer browser smoke proof";
+  if (group === "finalQa") return "final browser/mobile/mainnet wording QA proof";
+  return "QA proof";
+}
 function findSecretLikeValues(value, path = "$") {
   const findings = [];
   if (Array.isArray(value)) {
@@ -362,6 +431,9 @@ if (manifest) {
         if (!evidenceOk) issues.push(`${group}.${checkId} has no evidence`);
         if (evidenceOk && !concreteEvidenceOk) {
           issues.push(`${group}.${checkId} must include concrete evidence path, link, artifact, screenshot, log, report, or tx hash`);
+        }
+        if (concreteEvidenceOk && !hasQaContentProof(group, checkId, check)) {
+          issues.push(`${group}.${checkId} evidence must mention ${qaContentProofDescription(group, checkId)}`);
         }
         if (requiresQaTimestamp(group, checkId) && !hasIsoTimestamp(check?.checkedAt)) {
           issues.push(`${group}.${checkId}.checkedAt must be ISO-8601 UTC`);

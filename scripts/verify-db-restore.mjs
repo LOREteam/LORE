@@ -241,6 +241,41 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   }
   return findings;
 }
+
+function localArtifactPaths(value) {
+  if (!isPlainObject(value)) return [];
+  return [
+    ["evidence", value.evidence],
+    ["evidencePath", value.evidencePath],
+    ["link", value.link],
+    ["summary", value.summary],
+    ["artifact", value.artifact],
+    ["notes", value.notes],
+  ].map(([key, entry]) => localArtifactPathFromText(entry, key)).filter(Boolean);
+}
+
+function artifactBackedEvidenceText(value) {
+  const chunks = [evidenceText(value)];
+  for (const artifactPath of localArtifactPaths(value)) {
+    const resolved = resolve(repoRoot, artifactPath);
+    if (!existsSync(resolved) || !statSync(resolved).isFile()) continue;
+    chunks.push(readFileSync(resolved, "utf8").slice(0, 256 * 1024));
+  }
+  return chunks.join("\n");
+}
+
+function hasBackupScheduleProof(value) {
+  const text = artifactBackedEvidenceText(value);
+  return /\bbackup\b/i.test(text) &&
+    /\b(?:cron|crontab|systemd\s+timer|systemctl|timer|scheduled\s+task|task\s+scheduler|backup\s+schedule|backup\s+job|cadence|every|hourly|daily|weekly|monthly|\*\/)\b/i.test(text);
+}
+
+function hasIndexerPreservationProof(value) {
+  const text = artifactBackedEvidenceText(value);
+  return /(?:\bheartbeat\b|heartbeatBefore|heartbeatAfter)/i.test(text) &&
+    /(?:latestIndexedEpoch|latest\s+indexed\s+epoch|lastIndexedEpoch|indexed\s+epoch)/i.test(text) &&
+    /(?:Before|After|\bbefore\b|\bafter\b|pre[-\s]?restore|post[-\s]?restore)/i.test(text);
+}
 function normalizedOrigin(value) {
   if (!hasRealText(value)) return "";
   try {
@@ -338,6 +373,9 @@ function validateManifest(manifest, issues) {
   if (hasEvidence(backupSchedule) && !hasConcreteEvidence(backupSchedule)) {
     issues.push("backupSchedule must include concrete scheduler/backup evidence path, link, artifact, or command output");
   }
+  if (hasEvidence(backupSchedule) && !hasBackupScheduleProof(backupSchedule)) {
+    issues.push("backupSchedule evidence must mention recurring scheduler/backup proof");
+  }
 
   const restoreDrill = isPlainObject(manifest.restoreDrill) ? manifest.restoreDrill : {};
   if (!isPlainObject(manifest.restoreDrill)) issues.push("restoreDrill section is missing");
@@ -422,6 +460,9 @@ function validateManifest(manifest, issues) {
   if (!hasEvidence(indexerPreservation)) issues.push("indexerPreservation has no evidence");
   if (hasEvidence(indexerPreservation) && !hasConcreteEvidence(indexerPreservation)) {
     issues.push("indexerPreservation must include concrete heartbeat/indexer preservation evidence path, link, artifact, or command output");
+  }
+  if (hasEvidence(indexerPreservation) && !hasIndexerPreservationProof(indexerPreservation)) {
+    issues.push("indexerPreservation evidence must mention heartbeat and latest indexed epoch before/after restore");
   }
 
   return { backupSchedule, restoreDrill, restoredStagingHealth, indexerPreservation };

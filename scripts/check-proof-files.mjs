@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 const args = new Map(
@@ -149,9 +149,73 @@ for (const name of unexpectedProofFiles) {
   issues.push(`unexpected proof-like JSON file docs/${name}`);
 }
 
-if (canaryLogPath && !existsSync(canaryLogPath)) {
-  issues.push(`canary log does not exist: ${canaryLogPath}`);
+if (canaryLogPath) {
+  const canaryLogAbsolutePath = path.isAbsolute(canaryLogPath) ? canaryLogPath : path.join(process.cwd(), canaryLogPath);
+  if (!existsSync(canaryLogAbsolutePath)) {
+    issues.push(`canary log does not exist: ${canaryLogPath}`);
+  } else if (!statSync(canaryLogAbsolutePath).isFile()) {
+    issues.push(`canary log is not a file: ${canaryLogPath}`);
+  } else if (!/\.jsonl$/i.test(canaryLogPath)) {
+    issues.push(`canary log must be a .jsonl file: ${canaryLogPath}`);
+  } else if (statSync(canaryLogAbsolutePath).size === 0) {
+    issues.push(`canary log is empty: ${canaryLogPath}`);
+  } else {
+    const firstNonEmptyCanaryLine = readFileSync(canaryLogAbsolutePath, "utf8").split(/\r?\n/).find((line) => line.trim());
+    if (!firstNonEmptyCanaryLine) {
+      issues.push(`canary log has no non-empty JSONL lines: ${canaryLogPath}`);
+    } else {
+      try {
+        const firstCanaryRecord = JSON.parse(firstNonEmptyCanaryLine);
+        if (!isPlainObject(firstCanaryRecord)) {
+          issues.push(`canary log first JSONL record must be an object: ${canaryLogPath}`);
+        } else {
+          const templateFindings = findTemplateLikeValues(firstCanaryRecord);
+          const secretFindings = findSecretLikeValues(firstCanaryRecord);
+          if (templateFindings.length > 0) {
+            issues.push(`canary log first JSONL record has template-like values at ${templateFindings.slice(0, 5).join(", ")}: ${canaryLogPath}`);
+          }
+          if (secretFindings.length > 0) {
+            issues.push(`canary log first JSONL record has secret-like values at ${secretFindings.slice(0, 5).join(", ")}: ${canaryLogPath}`);
+          }
+        }
+      } catch {
+        issues.push(`canary log first non-empty line is not valid JSON: ${canaryLogPath}`);
+      }
+    }
+  }
 }
+
+for (const name of expectedAuxiliaryProofArtifacts) {
+  const filePath = path.join(docsDir, name);
+  if (!existsSync(filePath)) continue;
+
+  let artifact;
+  try {
+    artifact = JSON.parse(readFileSync(filePath, "utf8"));
+  } catch (error) {
+    issues.push(`${name}: invalid JSON`);
+    rows.push([name, "invalid auxiliary", "n/a", "n/a", "n/a", error instanceof Error ? error.message : String(error)]);
+    continue;
+  }
+
+  const templateFindings = findTemplateLikeValues(artifact);
+  const secretFindings = findSecretLikeValues(artifact);
+  if (templateFindings.length > 0) {
+    issues.push(`${name}: template-like values at ${templateFindings.slice(0, 5).join(", ")}`);
+  }
+  if (secretFindings.length > 0) {
+    issues.push(`${name}: secret-like values at ${secretFindings.slice(0, 5).join(", ")}`);
+  }
+  rows.push([
+    name,
+    "present auxiliary",
+    templateFindings.length === 0 ? "no" : "yes",
+    secretFindings.length === 0 ? "no" : "yes",
+    "n/a",
+    templateFindings.length === 0 && secretFindings.length === 0 ? "clean" : "issue",
+  ]);
+}
+
 
 for (const name of expectedFinalManifestNames) {
   const validator = expectedFinalManifests[name];

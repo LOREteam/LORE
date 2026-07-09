@@ -22,6 +22,7 @@ const expectedChainId = process.env.NEXT_PUBLIC_LINEA_CHAIN_ID?.trim() || proces
 const TEMPLATE_VALUE_RE = /REPLACE_|<REDACTED>|TODO|TBD/i;
 const GENERIC_RPC_LABEL_RE = /^(?:configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)(?:[-_ ]?rpc(?:[-_ ]?label)?(?:[-_ ]?required)?)?$/i;
 const secretKeyPattern = /(secret|private[_-]?key|mnemonic|webhook|dsn|api[_-]?key|api[_-]?token|auth[_-]?token|access[_-]?token|bearer|session|cookie|password)/i;
+const rpcUrlKeyPattern = /^(rpc|rpc[_-]?url|.*rpc.*url)$/i;
 const TX_RE = /^0x[a-fA-F0-9]{64}$/;
 const ZERO_TX = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -66,6 +67,8 @@ if (!logPath) {
     targetContractAddress,
     targetNetwork.rpc,
   );
+  const liveLogTemplateFindings = findTemplateLikeValues(events);
+  const liveLogSecretFindings = findSecretLikeValues(events);
 
   const strictFailures = [];
   if (betEpochs.length < minEpochs) strictFailures.push(`unique bet epochs ${betEpochs.length} < ${minEpochs}`);
@@ -80,6 +83,8 @@ if (!logPath) {
   if (duplicateKeys.length > 0) strictFailures.push(`duplicate role/epoch/tile keys ${duplicateKeys.length}`);
   if (failedResolve.length > 0) strictFailures.push(`failed resolve tx ${failedResolve.length}`);
   if (targetEventMismatches.length > 0) strictFailures.push(`target metadata mismatches ${targetEventMismatches.length}`);
+  if (liveLogTemplateFindings.length > 0) strictFailures.push(`live canary log contains template-like values at ${liveLogTemplateFindings.slice(0, 5).join(", ")}`);
+  if (liveLogSecretFindings.length > 0) strictFailures.push(`live canary log contains secret-like values at ${liveLogSecretFindings.slice(0, 5).join(", ")}`);
   if (manifestSummary) {
     const manifestAutoMinerRounds = Number(manifestSummary.autoMinerSession.rounds);
     const manifestAutoMinerUniqueEpochs = Number(manifestSummary.autoMinerSession.uniqueEpochs);
@@ -140,7 +145,7 @@ if (!logPath) {
     console.log("## Canary Manifest");
     console.log("| Section | Status |");
     console.log("| --- | --- |");
-    console.log(`| targetNetwork | ${manifestSummary.targetNetwork.realTargetNetwork === true ? "checked" : "issue"} |`);
+    console.log(`| targetNetwork | ${manifestSummary.targetNetworkOk ? "checked" : "issue"} |`);
     console.log(`| recovery | ${manifestSummary.recoveryOk ? "checked" : "issue"} |`);
     console.log(`| autoMinerSession | ${manifestSummary.autoMinerSessionOk ? "checked" : "issue"} |`);
     console.log(`| transactionHealth | ${manifestSummary.transactionHealthOk ? "checked" : "issue"} |`);
@@ -188,9 +193,15 @@ function readJsonl(path) {
     .filter(Boolean)
     .map((line, index) => {
       try {
-        return JSON.parse(line);
+        const event = JSON.parse(line);
+        if (!isPlainObject(event)) {
+          console.error(`Invalid JSONL at ${path}:${index + 1}: record must be an object`);
+          process.exit(1);
+        }
+        return event;
       } catch (error) {
-        throw new Error(`Invalid JSONL at ${path}:${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`Invalid JSONL at ${path}:${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
       }
     });
 }
@@ -319,6 +330,56 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   return findings;
 }
 
+
+function localArtifactPaths(value) {
+  if (!isPlainObject(value)) return [];
+  return [
+    ["evidence", value.evidence],
+    ["evidencePath", value.evidencePath],
+    ["link", value.link],
+    ["command", value.command],
+    ["summary", value.summary],
+    ["artifact", value.artifact],
+    ["notes", value.notes],
+  ].map(([key, entry]) => localArtifactPathFromText(entry, key)).filter(Boolean);
+}
+
+function artifactBackedEvidenceText(value) {
+  const chunks = [];
+  if (isPlainObject(value)) {
+    chunks.push([
+      value.evidence,
+      value.evidencePath,
+      value.link,
+      value.command,
+      value.summary,
+      value.artifact,
+      value.notes,
+    ].filter(hasRealText).join("\n"));
+  }
+  for (const artifactPath of localArtifactPaths(value)) {
+    const resolved = resolve(process.cwd(), artifactPath);
+    if (!existsSync(resolved)) continue;
+    chunks.push(readFileSync(resolved, "utf8").slice(0, 256 * 1024));
+  }
+  return chunks.join("\n");
+}
+
+function hasTargetNetworkProof(value) {
+  return /\b(?:target|rpc|chain|mainnet)\b/i.test(artifactBackedEvidenceText(value));
+}
+
+function hasRecoveryProof(value) {
+  return /\b(?:recovery|reload|reconnect|tab[-\s]?close|pending[-\s]?tx|remount)\b/i.test(artifactBackedEvidenceText(value));
+}
+
+function hasAutoMinerSessionProof(value) {
+  return /\b(?:auto[-\s]?miner|autominer|session|round|epoch|target[-\s]?rpc)\b/i.test(artifactBackedEvidenceText(value));
+}
+
+function hasTransactionHealthProof(value) {
+  return /\b(?:transaction|tx|nonce|duplicate|stuck[-\s]?pending|pending[-\s]?recovery)\b/i.test(artifactBackedEvidenceText(value));
+}
 function findSecretLikeValues(value, path = "$") {
   const findings = [];
   if (Array.isArray(value)) {
@@ -328,7 +389,7 @@ function findSecretLikeValues(value, path = "$") {
   if (!isPlainObject(value)) return findings;
   for (const [key, entry] of Object.entries(value)) {
     const childPath = `${path}.${key}`;
-    if (secretKeyPattern.test(key) && typeof entry === "string") {
+    if ((secretKeyPattern.test(key) || (rpcUrlKeyPattern.test(key) && looksLikeUrl(entry))) && typeof entry === "string") {
       const normalized = entry.trim().toLowerCase();
       if (!["", "present", "configured", "redacted", "<redacted>"].includes(normalized)) {
         findings.push(childPath);
@@ -414,6 +475,9 @@ function loadAndValidateManifest(path, issues) {
   }
   if (!hasIsoTimestamp(targetNetwork.checkedAt)) issues.push("targetNetwork.checkedAt must be ISO-8601 UTC");
   if (!hasEvidence(targetNetwork)) issues.push("targetNetwork has no evidence");
+  if (hasEvidence(targetNetwork) && !hasTargetNetworkProof(targetNetwork)) {
+    issues.push("targetNetwork evidence must mention target RPC, chain, or mainnet proof");
+  }
 
   const recovery = isPlainObject(manifest.recovery) ? manifest.recovery : {};
   if (!isPlainObject(manifest.recovery)) issues.push("recovery section is missing");
@@ -430,6 +494,9 @@ function loadAndValidateManifest(path, issues) {
       issues.push("recovery.pendingTxRecovery.txHash must be a real non-zero tx hash");
     }
     if (!hasEvidence(value)) issues.push(`recovery.${check} has no evidence`);
+    if (hasEvidence(value) && !hasRecoveryProof(value)) {
+      issues.push(`recovery.${check} evidence must mention reload, reconnect, tab-close, pending-tx, remount, or recovery proof`);
+    }
   }
 
   const autoMinerSession = isPlainObject(manifest.autoMinerSession) ? manifest.autoMinerSession : {};
@@ -440,6 +507,9 @@ function loadAndValidateManifest(path, issues) {
   if (!isPositiveInteger(autoMinerSession.uniqueEpochs)) issues.push("autoMinerSession.uniqueEpochs must be a positive integer");
   if (!hasIsoTimestamp(autoMinerSession.checkedAt)) issues.push("autoMinerSession.checkedAt must be ISO-8601 UTC");
   if (!hasEvidence(autoMinerSession)) issues.push("autoMinerSession has no evidence");
+  if (hasEvidence(autoMinerSession) && !hasAutoMinerSessionProof(autoMinerSession)) {
+    issues.push("autoMinerSession evidence must mention auto-miner session, rounds, epochs, or target RPC proof");
+  }
 
   const transactionHealth = isPlainObject(manifest.transactionHealth) ? manifest.transactionHealth : {};
   if (!isPlainObject(manifest.transactionHealth)) issues.push("transactionHealth section is missing");
@@ -452,9 +522,23 @@ function loadAndValidateManifest(path, issues) {
   }
   if (!hasIsoTimestamp(transactionHealth.checkedAt)) issues.push("transactionHealth.checkedAt must be ISO-8601 UTC");
   if (!hasEvidence(transactionHealth)) issues.push("transactionHealth has no evidence");
+  if (hasEvidence(transactionHealth) && !hasTransactionHealthProof(transactionHealth)) {
+    issues.push("transactionHealth evidence must mention transaction, tx, nonce, duplicate, stuck pending, or pending recovery proof");
+  }
 
   return {
     targetNetwork,
+    targetNetworkOk:
+      targetNetwork.realTargetNetwork === true &&
+      hasRealText(targetNetwork.network) &&
+      normalizeNetwork(targetNetwork.network) === "mainnet" &&
+      isPositiveInteger(targetNetwork.chainId) &&
+      Number(targetNetwork.chainId) === 59144 &&
+      hasConcreteRpcLabel(targetNetwork.rpc) &&
+      hasRealText(targetNetwork.contractAddress) &&
+      hasIsoTimestamp(targetNetwork.checkedAt) &&
+      hasEvidence(targetNetwork) &&
+      hasTargetNetworkProof(targetNetwork),
     autoMinerSession,
     transactionHealth,
     recoveryOk: recoveryChecks.every(
@@ -462,7 +546,8 @@ function loadAndValidateManifest(path, issues) {
         statusOk(recovery[check]?.status) &&
         hasIsoTimestamp(recovery[check]?.checkedAt) &&
         (check !== "pendingTxRecovery" || isRealTx(recovery[check]?.txHash)) &&
-        hasEvidence(recovery[check]),
+        hasEvidence(recovery[check]) &&
+        hasRecoveryProof(recovery[check]),
     ),
     autoMinerSessionOk:
       statusOk(autoMinerSession.status) &&

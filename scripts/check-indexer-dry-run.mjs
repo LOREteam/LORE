@@ -171,9 +171,45 @@ function localArtifactPathFromText(value, key = "") {
   const artifactMatch = text.match(/^artifact:\s*(\S+)/i);
   const candidate = (artifactMatch ? artifactMatch[1] : text).trim().replace(/^`|`$/g, "").replace(/[),.;]+$/g, "");
   if (/^https?:\/\//i.test(candidate)) return "";
-  const keySuggestsPath = /(?:evidencePath|artifact|link)$/i.test(key);
+  const keySuggestsPath = key === "path" || /(?:evidencePath|artifact|link)$/i.test(key);
   const valueLooksLikePath = /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv|sqlite|db)(?:\b|$)/i.test(candidate);
   return (artifactMatch || keySuggestsPath) && valueLooksLikePath ? candidate : "";
+}
+
+function localArtifactContentFromText(value, key = "") {
+  const artifactPath = localArtifactPathFromText(value, key);
+  if (!artifactPath) return "";
+  try {
+    return readFileSync(resolve(process.cwd(), artifactPath), "utf8").slice(0, 256 * 1024);
+  } catch {
+    return "";
+  }
+}
+
+function localArtifactContents(value, key = "") {
+  if (typeof value === "string") {
+    const content = localArtifactContentFromText(value, key);
+    return content ? [content] : [];
+  }
+  if (Array.isArray(value)) return value.flatMap((entry) => localArtifactContents(entry, key));
+  if (!isPlainObject(value)) return [];
+  return Object.entries(value).flatMap(([childKey, entry]) => localArtifactContents(entry, childKey));
+}
+
+function hasLocalArtifactRefs(value, key = "") {
+  if (typeof value === "string") return Boolean(localArtifactPathFromText(value, key));
+  if (Array.isArray(value)) return value.some((entry) => hasLocalArtifactRefs(entry, key));
+  if (!isPlainObject(value)) return false;
+  return Object.entries(value).some(([childKey, entry]) => hasLocalArtifactRefs(entry, childKey));
+}
+
+function localArtifactEvidenceMentions(value, pattern) {
+  const contents = localArtifactContents(value);
+  return contents.length > 0 && contents.some((content) => pattern.test(content));
+}
+
+function evidenceContentText(value) {
+  return [evidenceText(value), ...localArtifactContents(value)].filter(Boolean).join("\n");
 }
 
 function findMissingLocalArtifactRefs(value, path = "$", key = "") {
@@ -214,10 +250,40 @@ function escapeRegExp(value) {
 }
 
 function hasIndexerBlockMarker(value, label, expected) {
-  const text = evidenceText(value);
+  const text = evidenceContentText(value);
   if (!text || !expected) return false;
   const pattern = new RegExp(`\\[indexer\\]\\s+${escapeRegExp(label)}:\\s*${escapeRegExp(expected)}\\b`, "i");
   return pattern.test(text);
+}
+
+function normalizedOrigin(value) {
+  try {
+    const url = new URL(String(value ?? "").trim());
+    return `${url.protocol}//${url.host}`.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function expectedProductionHealthOrigin() {
+  return normalizedOrigin(env("PROD_HEALTH_BASE_URL") || "https://playlore.xyz");
+}
+
+function hasProductionHealthBaseEvidence(value) {
+  if (!isPlainObject(value)) return false;
+  const expected = expectedProductionHealthOrigin();
+  const texts = [evidenceText(value)];
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string") continue;
+    const artifactPath = localArtifactPathFromText(entry, key);
+    if (!artifactPath) continue;
+    const absolute = resolve(process.cwd(), artifactPath);
+    if (existsSync(absolute)) texts.push(readFileSync(absolute, "utf8").slice(0, 256 * 1024));
+  }
+  return texts.some((text) => {
+    const match = String(text).match(/\bbase=([^\s]+)/i);
+    return match && normalizedOrigin(match[1]) === expected;
+  });
 }
 
 function hasNumericFinalityLagEvidence(value) {
@@ -331,6 +397,12 @@ function validateManifest(manifest, issues) {
   if (!hasIsoTimestamp(dryRun.timestamp)) issues.push("dryRun.timestamp must be ISO-8601 UTC");
   if (!hasEvidence(dryRun)) issues.push("dryRun has no evidence");
   if (hasEvidence(dryRun) && !hasConcreteEvidence(dryRun)) issues.push("dryRun must include concrete indexer:once evidence path, command output, or indexer log summary");
+  if (hasLocalArtifactRefs(dryRun)) {
+    const dryRunArtifactPattern = new RegExp(`\\[indexer\\]\\s+Deploy block:\\s*${escapeRegExp(manifestDeployBlock)}\\b[\\s\\S]*\\[indexer\\]\\s+Start block:\\s*${escapeRegExp(manifestStartBlock)}\\b`, "i");
+    if (manifestDeployBlock && manifestStartBlock && !localArtifactEvidenceMentions(dryRun, dryRunArtifactPattern)) {
+      issues.push("dryRun evidence artifact must include [indexer] Deploy block and [indexer] Start block");
+    }
+  }
 
   const finality = isPlainObject(manifest.finality) ? manifest.finality : {};
   if (!isPlainObject(manifest.finality)) issues.push("finality section is missing");
@@ -342,9 +414,13 @@ function validateManifest(manifest, issues) {
   }
   if (finality.dataSyncHealthFinalityAware !== true) issues.push("finality.dataSyncHealthFinalityAware must be true");
   if (!hasNumericFinalityLagEvidence(finality)) issues.push("finality.evidence must include numeric finalityLagBlocks from health:prod");
+  if (!hasProductionHealthBaseEvidence(finality)) issues.push("finality.evidence must include base=<production origin> from health:prod");
   if (!hasIsoTimestamp(finality.checkedAt)) issues.push("finality.checkedAt must be ISO-8601 UTC");
   if (!hasEvidence(finality)) issues.push("finality has no evidence");
   if (hasEvidence(finality) && !hasConcreteEvidence(finality)) issues.push("finality must include concrete health:prod/finality evidence path, command output, or finalityLagBlocks summary");
+  if (hasLocalArtifactRefs(finality) && !localArtifactEvidenceMentions(finality, /\bbase=[^\s]+[\s\S]*\bfinalityLagBlocks=\d+\b|\bfinalityLagBlocks=\d+\b[\s\S]*\bbase=[^\s]+/i)) {
+    issues.push("finality evidence artifact must include health:prod base and numeric finalityLagBlocks");
+  }
 
   const chainSnapshot = isPlainObject(manifest.chainSnapshot) ? manifest.chainSnapshot : {};
   if (!isPlainObject(manifest.chainSnapshot)) issues.push("chainSnapshot section is missing");
@@ -387,6 +463,16 @@ function validateManifest(manifest, issues) {
   if (!hasIsoTimestamp(chainSnapshot.checkedAt)) issues.push("chainSnapshot.checkedAt must be ISO-8601 UTC");
   if (!hasEvidence(chainSnapshot)) issues.push("chainSnapshot has no evidence");
   if (hasEvidence(chainSnapshot) && !hasConcreteEvidence(chainSnapshot)) issues.push("chainSnapshot must include concrete direct-chain snapshot path, link, artifact, or RPC/contract summary");
+  if (hasRealText(chainSnapshot.path)) {
+    const snapshotArtifact = localArtifactPathFromText(chainSnapshot.path, "path");
+    const snapshotContent = localArtifactContentFromText(chainSnapshot.path, "path");
+    if (snapshotArtifact && !existsSync(resolve(process.cwd(), snapshotArtifact))) {
+      issues.push("chainSnapshot.path must point to an existing local artifact");
+    }
+    if (snapshotArtifact && snapshotContent && !/\bgeneratedAt\b[\s\S]*\brpcChainId\b[\s\S]*\bcontractAddress\b|\bcontractAddress\b[\s\S]*\brpcChainId\b[\s\S]*\bgeneratedAt\b/i.test(snapshotContent)) {
+      issues.push("chainSnapshot.path artifact must include generatedAt, rpcChainId, and contractAddress");
+    }
+  }
 
   const chainComparison = isPlainObject(manifest.chainComparison) ? manifest.chainComparison : {};
   if (!isPlainObject(manifest.chainComparison)) issues.push("chainComparison section is missing");
@@ -406,6 +492,13 @@ function validateManifest(manifest, issues) {
     if (!hasEvidence(comparison)) issues.push(`chainComparison.${key} has no evidence`);
     if (hasEvidence(comparison) && !hasConcreteEvidence(comparison)) {
       issues.push(`chainComparison.${key} must include concrete direct-chain comparison path, link, artifact, or summary`);
+    }
+    if (hasLocalArtifactRefs(comparison)) {
+      const comparisonTextPattern = new RegExp(`\\b(?:${escapeRegExp(key)}|direct[-\\s]?chain|chain comparison|indexer)\\b`, "i");
+      const comparisonArtifactPattern = /\b(?:direct[-\s]?chain|chain comparison)\b|\bgeneratedAt\b[\s\S]*\brpcChainId\b[\s\S]*\bcontractAddress\b|\bcontractAddress\b[\s\S]*\brpcChainId\b[\s\S]*\bgeneratedAt\b/i;
+      if (!comparisonTextPattern.test(evidenceContentText(comparison)) || !localArtifactEvidenceMentions(comparison, comparisonArtifactPattern)) {
+        issues.push(`chainComparison.${key} evidence artifact must mention ${key}, direct-chain, chain comparison, or indexer proof`);
+      }
     }
   }
 
