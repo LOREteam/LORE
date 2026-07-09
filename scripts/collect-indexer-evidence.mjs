@@ -1,4 +1,4 @@
-﻿import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { argValue, baseCollectorMeta, hasFlag, isPositiveInteger, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
 
@@ -26,6 +26,25 @@ const indexerLog = readOptionalLog(indexerLogPath);
 const healthLog = readOptionalLog(healthLogPath);
 const chainSnapshot = readOptionalJson(chainSnapshotPath);
 const configuredContractAddress = process.env.KEEPER_CONTRACT_ADDRESS || process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "";
+
+function isPrintPlan() {
+  return hasFlag("print-plan");
+}
+
+function requireArtifact(name, value) {
+  if (!isPrintPlan()) requireCondition(Boolean(value), `--${name} is required when collecting indexer launch evidence`);
+}
+
+function requireMatchingIndexerLine(line, label, expected) {
+  if (isPrintPlan()) return;
+  requireCondition(Boolean(line), `--indexer-log must include [indexer] ${label}: ${expected}`);
+  requireCondition(indexerLogValue(line) === String(expected), `--indexer-log [indexer] ${label} must match ${expected}`);
+}
+
+function requireMatchingChainId(label, value, expected) {
+  if (isPrintPlan()) return;
+  requireCondition(Number(value) === Number(expected), `--chain-snapshot ${label} must match ${expected}`);
+}
 
 function readOptionalLog(filePath) {
   if (!filePath) return "";
@@ -108,6 +127,20 @@ const contractAddressMatches = Boolean(
   normalizeAddress(configuredContractAddress) === normalizeAddress(snapshotContractAddress),
 );
 const dryRunDbPath = indexerLogValue(sqliteLine);
+requireArtifact("indexer-log", indexerLogPath);
+requireArtifact("health-log", healthLogPath);
+requireArtifact("chain-snapshot", chainSnapshotPath);
+requireMatchingIndexerLine(sqliteLine, "SQLite path", dryRunDbPath);
+requireMatchingIndexerLine(deployLine, "Deploy block", deployBlock);
+requireMatchingIndexerLine(startLine, "Start block", deployBlock);
+requireMatchingIndexerLine(finalityLine, "Finality blocks", finalityBlocks);
+if (!isPrintPlan()) {
+  requireCondition(Boolean(finishLine), "--indexer-log must include [indexer] Finished runOnce");
+  requireCondition(!/\[indexer\]\s+Fatal:/i.test(indexerLog), "--indexer-log must not include [indexer] Fatal");
+  requireCondition(finalityLagIsNumeric, "--health-log must include numeric finalityLagBlocks=<number>");
+  requireMatchingChainId("expectedChainId", expectedSnapshotChainId, chainId);
+  requireMatchingChainId("rpcChainId", rpcSnapshotChainId, chainId);
+}
 const completed = Boolean(finishLine) && !/\[indexer\]\s+Fatal:/i.test(indexerLog);
 const summary = [sqliteLine, contractLine, deployLine, startLine, finalityLine, scanLine, finishLine]
   .filter(Boolean)
