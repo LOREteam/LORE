@@ -94,6 +94,7 @@ npm.cmd run proof:qa -- --strict
 npm.cmd run proof:canary:draft -- --network=linea-mainnet --chain-id=59144 --contract=<contract> --rpc-label=<redacted-provider-rpc-label> --live-log=data/live-test-runs/live-canary-YYYY.jsonl --target-artifact=docs/canary-target-proof.log --recovery-artifact=docs/canary-recovery-proof.log --session-artifact=docs/canary-session-summary.log --tx-artifact=docs/canary-transaction-scan.log --out=docs/canary-proof.draft.json
 npm.cmd run proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict
 # Keep LORE_DB_PATH, LORE_BACKUP_DIR, LORE_RESTORE_DRILL_DIR, and LORE_RESTORE_BACKUP set to the reviewed external restore-proof paths before final launch proof.
+npm.cmd run proof:deps
 npm.cmd run proof:files -- --canary-log=<canary-log-file>
 npm.cmd run proof:launch -- --strict --canary-log=<canary-log-file>
 ```
@@ -103,6 +104,7 @@ npm.cmd run proof:launch -- --strict --canary-log=<canary-log-file>
 Stop launch if any of these remain true:
 - Any G1-G14 gate is not Complete.
 - Any strict proof command fails.
+- Production dependency audit reports any high or critical advisories.
 - Any proof JSON still contains TODO/template values.
 - Canary evidence is simulated, too short, not run against the target RPC, or lacks concrete recovery/session/transaction artifacts.
 - Monitoring lacks concrete fired alert and recovery evidence.

@@ -3760,3 +3760,42 @@ as historical progress only.
 - Tightened `scripts/create-restore-proof-draft.mjs` so standalone G8 draft generation now mirrors restore collector checks for existing external source DB, backup dir, restore dir, backup artifact, successful restore summary, restored non-local HTTPS origin, restored host type, and restored health finality evidence before writing a draft.
 - Updated synthetic draft bundle generation and `scripts/check-proof-drafts.mjs` reject coverage for missing backup, failed restore logs, and failed restored health logs, while keeping compact proof output readable.
 - Verified `node --check scripts\create-restore-proof-draft.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Status board L14 verification scope
+
+- Updated `docs/mainnet-status-board.md` and `docs/current_state.md` so the recorded local launch-proof verification matches the current `proof:local` scope: L1-L14, including the mainnet proof output guard and strict launch expected-fail guard.
+- Strengthened `scripts/check-launch-gates.mjs` so the status board cannot regress back to the stale L1-L13 verification claim.
+- Verified `node --check scripts\check-launch-gates.mjs`, `npm.cmd run proof:gates -- --structure-only`, `npm.cmd run proof:remaining`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Read-only env and health blocker probe
+
+- Restored local npm dependencies from the existing lockfile with `npm.cmd install`; no tracked package files changed, and postinstall kept EIP-7702 disabled.
+- Ran read-only `npm.cmd run proof:mainnet -- --strict`: it failed as expected with 30 missing/failing env gates in this shell, so no G1 final env proof is available yet.
+- Re-ran `npm.cmd run health:prod` against `https://playlore.xyz`; after dependency restore it now fails at the intended production guard because `HEALTH_DIAGNOSTICS_SECRET` is not configured, so G6 production health evidence is still uncollected.
+
+## 2026-07-09 - Production dependency audit blocker
+
+- Ran `npm.cmd audit --omit=dev --audit-level=high`; it fails with 45 production advisories, including 7 high.
+- Did not run `npm audit fix` automatically because part of the suggested remediation path requires breaking Privy/WalletConnect-related dependency upgrades; this needs a separate dependency-upgrade branch plus wallet/connect smoke verification.
+- Re-ran `npm.cmd run proof:local`; local launch proof tooling still passes L1-L14, but audit remains a separate mainnet-readiness blocker.
+
+## 2026-07-09 - Production dependency audit launch gate
+
+- Added `scripts/check-production-dependency-audit.mjs` and `npm.cmd run proof:deps` to produce compact production-only npm audit summaries without running auto-fixes.
+- Wired `proof:deps` into final `proof:launch -- --strict` so high/critical production dependency advisories are launch-blocking, while keeping `proof:local` as a green tooling preflight with strict-launch expected-fail coverage.
+- Updated launch command map, production runbook, readiness checklist, status board, and guard scripts so the dependency audit step cannot disappear from final launch flow.
+- Verified `npm.cmd run proof:deps` expected-fails with 0 critical, 7 high, 45 total advisories; `npm.cmd run proof:launch -- --strict` expected-fails with the dependency audit row; `npm.cmd run proof:launch-map`, `npm.cmd run proof:readiness`, and `npm.cmd run proof:local` pass.
+
+## 2026-07-09 - Targeted production audit reduction
+
+- Updated only targeted transitive overrides that had non-breaking patched versions: `hono` from 4.12.18 to 4.12.25, `form-data` to 4.0.6, and `protobufjs` to 7.6.5, then synced `package-lock.json` with `npm.cmd install`.
+- `npm.cmd run proof:deps` now expected-fails with 0 critical, 4 high, 40 total production advisories, down from 0 critical, 7 high, 45 total; remaining high advisories are in the Privy/viem/ws wallet-Web3 chain and should be handled in a separate wallet dependency QA pass.
+- Verified `package.json` parses, `npm.cmd run proof:launch -- --strict` expected-fails with the updated dependency audit row, `npm.cmd run proof:local` passes, and `npm.cmd run proof:launch-map` passes.
+
+## 2026-07-09 - Production audit high-critical cleared
+
+- Added a targeted `ws` 8.21.0 override and synced `package-lock.json`; npm deduped the previous nested vulnerable `ws` copies to the single patched top-level package.
+- `npm.cmd run proof:deps` now passes the launch threshold with 0 critical and 0 high production advisories, down from 0 critical, 7 high, 45 total at the start of this audit pass; remaining production advisories are 23 moderate and 1 low.
+- Fixed `scripts/run-launch-proof.mjs` so a passing dependency audit summary is classified as a pass in strict launch output.
+- Updated the synthetic host proof fixture in `scripts/test-business-logic.mjs` to match the current strict G5/G6 manifest requirements: production host type, role commands, ISO timestamps, concrete supervisor/health/load evidence, finality lag, and real `Load base URL:` output format.
+- Verified `npm.cmd run proof:deps`, `npm.cmd run proof:launch -- --strict`, `npm.cmd run proof:local`, and `npm.cmd run test:logic`.

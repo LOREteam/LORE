@@ -42,6 +42,7 @@ const requiredSnippets = [
   "proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict",
   "proof:canary:draft",
   "proof:qa:draft",
+  "proof:deps",
   "proof:files -- --canary-log=",
   "LORE_RESTORE_BACKUP",
   "proof:launch -- --strict",

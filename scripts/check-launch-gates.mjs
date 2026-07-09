@@ -60,7 +60,7 @@ const proofRecordMarkerExpectations = requiredProofMarkerExpectations;
 const requiredStatusBoardVerificationSnippets = [
   "Last local verification:",
   "npm.cmd run proof:local",
-  "L1-L13",
+  "L1-L14",
   "proof:remaining",
   "proof:files",
   "proof:gates -- --structure-only",
@@ -70,6 +70,7 @@ const requiredStatusBoardVerificationSnippets = [
   "`proof:launch`",
   "`proof:launch -- --strict`",
   "expected-fail",
+  "production dependency audit high/critical pass",
   "strict launch expected-fail coverage",
   "G1-G14 remain Missing pending external evidence",
 ];

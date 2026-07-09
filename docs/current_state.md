@@ -6,7 +6,7 @@ Current focus: launch readiness / production proof. Runtime feature work is seco
 
 - Serena project config exists and is read-only with navigation/symbol/diagnostics tools only.
 - Launch proof docs/scripts that were NUL-corrupted have been restored to readable files.
-- `npm.cmd run proof:local` passes local launch-proof preflight L1-L13, including an expected-fail strict launch runner check while G1-G14 evidence is missing.
+- `npm.cmd run proof:local` passes local launch-proof preflight L1-L14, including the mainnet proof output guard and an expected-fail strict launch runner check while G1-G14 evidence is missing.
 - `proof:launch-map`, `proof:drafts`, `proof:drafts:create`, `proof:launch-docs`, `proof:readiness`, `proof:gates -- --structure-only`, and `proof:remaining` are green locally.
 - Launch command-map validation now also checks `docs/production-runbook.md` and `docs/mainnet-readiness-checklist.md` for required artifact-backed launch evidence arguments, preventing stale non-artifact commands from reappearing outside the command map.
 - Launch evidence command map now includes a compact `Required Evidence Markers` section for G1-G14, and `proof:launch-map` fails if those command-map markers drift or disappear.
@@ -108,13 +108,14 @@ Current focus: launch readiness / production proof. Runtime feature work is seco
 - Final proof validators use a consistent local `artifact: <path>` parser that tolerates labels or punctuation after the saved artifact path without weakening missing-file detection.
 - Command-map validation now also enforces production runbook order: prepare evidence, G1-G4 signoff, production host, indexer/restore, monitoring, QA/canary, proof files, strict launch, then hold conditions.
 - Production runbook and command-map validation now require the G7 indexer dry-run to show fresh external DB markers: `docs/indexer-once.log`, `$env:LORE_DB_PATH`, `$env:INDEXER_START_BLOCK`, `$env:NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK`, and `$env:INDEXER_FINALITY_BLOCKS` before `proof:indexer:collect`.
+- Production dependency audit now passes the launch high/critical gate: `npm.cmd run proof:deps` reports 0 critical and 0 high advisories after targeted `form-data`, `hono`, `protobufjs`, and `ws` overrides; remaining production advisories are moderate/low and still need follow-up dependency review before final launch confidence.
 - Mainnet launch remains blocked by missing external evidence for G1-G14; local proof tooling passing does not mean launch-ready.
 - No NUL-leading docs/scripts files remain after the latest recovery scan.
 
 ## Current Blockers
 
-- Final contract/env/funds safety sign-off is not collected.
-- Production host evidence is not collected from real HTTPS origin.
+- Final contract/env/funds safety sign-off is not collected; current `npm.cmd run proof:mainnet -- --strict` shows required G1 env values missing in this shell and does not write final proof.
+- Production host evidence is not collected from real HTTPS origin; after local dependencies were restored, `npm.cmd run health:prod` now reaches its own guard and requires `HEALTH_DIAGNOSTICS_SECRET` before any production health evidence can be collected.
 - Indexer fresh DB dry-run from deploy block is not collected.
 - Backup/restore drill evidence is not collected; strict G8 also requires external source, backup dir, restore dir, finality-aware restored `health:prod`, and final `docs/restore-proof.json`.
 - External monitoring and error tracking evidence is not collected.

@@ -30,6 +30,7 @@
     "proof:collector-redaction": "node scripts/check-proof-collector-redaction.mjs",
     "proof:drafts:create": "node scripts/create-all-proof-drafts.mjs",
     "proof:drafts": "node scripts/check-proof-drafts.mjs",
+    "proof:deps": "node scripts/check-production-dependency-audit.mjs",
     "proof:files": "node scripts/check-proof-files.mjs",
     "proof:gates": "node scripts/check-launch-gates.mjs",
     "proof:host": "node scripts/check-host-proof.mjs",
@@ -109,7 +110,10 @@
   "overrides": {
     "axios": "1.16.0",
     "bn.js": "5.2.3",
-    "hono": "4.12.18",
+    "form-data": "4.0.6",
+    "hono": "4.12.25",
+    "protobufjs": "7.6.5",
+    "ws": "8.21.0",
     "postcss": "8.5.14",
     "tmp": "0.2.7",
     "@typescript-eslint/typescript-estree": {

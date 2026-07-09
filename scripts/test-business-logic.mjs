@@ -391,20 +391,23 @@ async function main() {
     "default load test concurrency must stay suitable for local production smoke; use LOAD_CONCURRENCY for stress tests",
   );
   const hostProofTempDir = mkdtempSync(join(tmpdir(), "lore-host-proof-"));
+  const hostProofCheckedAt = "2026-07-09T00:00:00.000Z";
   const baseHostProof = {
     origin: "https://playlore.xyz",
+    hostType: "production",
     processModel: {
       supervisor: "pm2",
-      "lore-site": { status: "running", running: true, supervised: true, command: "npm.cmd run start:site", evidence: "process-list" },
-      "lore-bot": { status: "running", running: true, supervised: true, command: "npm.cmd run worker:bot", evidence: "process-list" },
-      "lore-indexer": { status: "running", running: true, supervised: true, command: "npm.cmd run worker:indexer", evidence: "process-list" },
+      "lore-site": { status: "running", running: true, supervised: true, command: "npm.cmd run start", checkedAt: hostProofCheckedAt, evidence: "pm2 lore-site online docs/host-process-model.log" },
+      "lore-bot": { status: "running", running: true, supervised: true, command: "npm.cmd run bot", checkedAt: hostProofCheckedAt, evidence: "pm2 lore-bot online docs/host-process-model.log" },
+      "lore-indexer": { status: "running", running: true, supervised: true, command: "npm.cmd run indexer", checkedAt: hostProofCheckedAt, evidence: "pm2 lore-indexer online docs/host-process-model.log" },
     },
     persistentDb: {
       path: join(hostProofTempDir, "lore-mainnet.sqlite"),
       absolutePathOutsideRepo: true,
       restartSurvived: true,
       rebootSurvived: true,
-      evidence: "db-path-check",
+      checkedAt: hostProofCheckedAt,
+      evidence: "npm.cmd run proof:host persistentDb restartSurvived=true rebootSurvived=true",
     },
     healthProd: {
       status: "pass",
@@ -415,7 +418,8 @@ async function main() {
       diagnosticsAuthPassed: true,
       finalityLagChecked: true,
       jackpotRowsChecked: true,
-      evidence: "health-log",
+      timestamp: hostProofCheckedAt,
+      evidence: "npm.cmd run health:prod [prod-health] OK base=https://playlore.xyz runtime=ok dataSync=healthy finalityLagBlocks=3",
     },
     loadHttp: {
       status: "pass",
@@ -429,7 +433,8 @@ async function main() {
       maxP95Ms: 1000,
       durationMs: 60000,
       concurrency: 10,
-      evidence: "load-log",
+      timestamp: hostProofCheckedAt,
+      evidence: "Load base URL: https://canary.playlore.xyz | TOTAL requestCount=120 p95=250ms",
     },
   };
   const runHostProof = (manifest, name) => {

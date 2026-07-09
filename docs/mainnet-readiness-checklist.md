@@ -77,6 +77,6 @@ Final proof manifests: docs/signoff-proof.json, docs/host-proof.json, docs/index
 1. Restore and review all draft proof files.
 2. Collect G1-G9 external evidence on staging/canary/production targets.
 3. Run real canary epochs and wallet QA for G10-G14.
-4. Confirm `LORE_DB_PATH`, `LORE_BACKUP_DIR`, `LORE_RESTORE_DRILL_DIR`, and `LORE_RESTORE_BACKUP` still point to the reviewed external restore-proof paths, then run `npm.cmd run proof:files -- --canary-log=<canary-log-file>`.
+4. Confirm `LORE_DB_PATH`, `LORE_BACKUP_DIR`, `LORE_RESTORE_DRILL_DIR`, and `LORE_RESTORE_BACKUP` still point to the reviewed external restore-proof paths, then run `npm.cmd run proof:deps` and `npm.cmd run proof:files -- --canary-log=<canary-log-file>`.
 5. Run `npm.cmd run proof:launch -- --strict --canary-log=<canary-log-file>`.
 6. Launch only when docs/mainnet-proof-record.md and docs/mainnet-status-board.md show G1-G14 Complete with concrete evidence and existing saved artifacts.
