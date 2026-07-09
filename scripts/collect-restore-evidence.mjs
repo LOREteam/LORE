@@ -44,6 +44,11 @@ function requireArtifact(name, value) {
   if (!isPrintPlan()) requireCondition(Boolean(value), `--${name} is required when collecting restore launch evidence`);
 }
 
+function requireExistingArtifact(name, value) {
+  requireArtifact(name, value);
+  if (!isPrintPlan()) requireCondition(existsSync(resolve(process.cwd(), value)), `--${name} must point to an existing redacted artifact`);
+}
+
 function normalizedOrigin(value) {
   if (!value) return "";
   try {
@@ -94,6 +99,8 @@ const restoredOrigin = argValue("restored-origin");
 const restoredHostType = argValue("restored-host-type");
 const restoreLogPath = argValue("restore-log");
 const healthLogPath = argValue("health-log");
+const backupScheduleArtifact = argValue("backup-schedule-artifact");
+const preservationArtifact = argValue("preservation-artifact");
 const out = argValue("out", "docs/restore-proof.draft.json");
 refuseFinalProofOutput(out, "restore");
 
@@ -141,6 +148,8 @@ const restoreOk = hasOkSummary(restoreLog, "backup/restore drill completed witho
 if (!isPrintPlan()) {
   requireArtifact("restore-log", restoreLogPath);
   requireArtifact("health-log", healthLogPath);
+  requireExistingArtifact("backup-schedule-artifact", backupScheduleArtifact);
+  requireExistingArtifact("preservation-artifact", preservationArtifact);
   requireCondition(restoreOk, "--restore-log must include successful restore drill summary");
   requireCondition(/\[prod-health\]\s+OK/i.test(healthLog), "--health-log must include [prod-health] OK");
   requireCondition(healthBaseMatches(healthSummary, restoredOrigin), "--health-log must include base=<restored-origin>");
@@ -159,7 +168,7 @@ const manifest = {
   backupSchedule: {
     enabled: false,
     cadence: "TODO: recurring backup cadence, for example every 5 minutes",
-    evidence: "TODO: paste concrete backup schedule or cron proof",
+    evidence: backupScheduleArtifact ? `artifact: ${backupScheduleArtifact}` : "TODO: paste concrete backup schedule or cron proof",
     checkedAt: now,
   },
   restoreDrill: {
@@ -186,14 +195,14 @@ const manifest = {
     heartbeatAfter: "TODO: heartbeat value after restore",
     latestIndexedEpochBefore: "TODO: latest indexed epoch before restore",
     latestIndexedEpochAfter: "TODO: latest indexed epoch after restore",
-    evidence: "TODO: paste heartbeat and latest indexed epoch comparison before/after restore",
+    evidence: preservationArtifact ? `artifact: ${preservationArtifact}` : "TODO: paste heartbeat and latest indexed epoch comparison before/after restore",
     checkedAt: now,
   },
   requiredManualEvidence: [
-    "enable and prove recurring backup schedule",
+    "enable and prove recurring backup schedule with --backup-schedule-artifact=<redacted-scheduler-export>",
     "run restore drill from the backup artifact into the restore directory and pass --restore-log=<redacted-restore-drill-log>",
     "run health:prod against the restored staging/canary/restore origin with numeric finalityLagBlocks and pass --health-log=<redacted-health-prod-log>",
-    "prove heartbeat and latest indexed epoch values are preserved after restore",
+    "prove heartbeat and latest indexed epoch values are preserved after restore with --preservation-artifact=<redacted-comparison-export>",
   ],
 };
 

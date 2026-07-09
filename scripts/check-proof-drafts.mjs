@@ -71,11 +71,15 @@ const restoreBackupPath = join(restoreBackupDir, "backup.sqlite");
 const restoreLog = join(tmp, "restore-drill.log");
 const restoreHealthLog = join(tmp, "restore-health-prod.log");
 const restoreHealthMissingRuntimeLog = join(tmp, "restore-health-missing-runtime.log");
+const restoreBackupScheduleArtifact = join(tmp, "restore-backup-schedule.log");
+const restorePreservationArtifact = join(tmp, "restore-indexer-preservation.log");
 writeFileSync(restoreSourcePath, "synthetic source db for collector draft guard", "utf8");
 writeFileSync(restoreBackupPath, "synthetic backup artifact for collector draft guard", "utf8");
 writeFileSync(restoreLog, "Summary: backup/restore drill completed without detected issues.\n", "utf8");
 writeFileSync(restoreHealthLog, "[prod-health] OK\nbase=https://restore.playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
 writeFileSync(restoreHealthMissingRuntimeLog, "[prod-health] OK\nbase=https://restore.playlore.xyz dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
+writeFileSync(restoreBackupScheduleArtifact, "synthetic backup schedule export\n", "utf8");
+writeFileSync(restorePreservationArtifact, "heartbeatBefore=abc heartbeatAfter=abc latestIndexedEpochBefore=1 latestIndexedEpochAfter=1\n", "utf8");
 
 const draftCases = [
   {
@@ -177,6 +181,8 @@ const collectorDraftCases = [
       "--restored-host-type=restore",
       `--restore-log=${restoreLog}`,
       `--health-log=${restoreHealthLog}`,
+      `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`,
+      `--preservation-artifact=${restorePreservationArtifact}`,
     ],
     requiredSections: ["backupSchedule", "restoreDrill", "restoredStagingHealth", "indexerPreservation"],
     check: ["scripts/verify-db-restore.mjs"],
@@ -235,8 +241,13 @@ const collectorRejectCases = [
   {
     id: "restore-collector-missing-runtime",
     create: ["scripts/collect-restore-evidence.mjs"],
-    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthMissingRuntimeLog}`],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthMissingRuntimeLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
     expected: "--health-log must include runtime=ok/pass/healthy",
+  },  {
+    id: "restore-collector-missing-backup-schedule-artifact",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--backup-schedule-artifact is required when collecting restore launch evidence",
   },
   {
     id: "canary-draft-empty-live-log",

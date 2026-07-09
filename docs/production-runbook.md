@@ -47,7 +47,7 @@ npm.cmd run proof:host -- --strict
 ## 4. Indexer and DB
 
 Indexer evidence must come from a fresh external DB at the final deploy block. Save the redacted `indexer:once` output as `docs/indexer-once.log` for the collector; the log must include `[indexer] SQLite path:` matching the external `LORE_DB_PATH`, `[indexer] Contract:` matching `docs/chain-proof-snapshot.json`, matching `[indexer] Deploy block:` / `[indexer] Start block:` / `[indexer] Finality blocks:`, `[indexer] Finished runOnce`, and no `[indexer] Fatal:` line. The chain snapshot must include ISO `generatedAt` and at least the requested `--epochs` unique checked epochs.
-Restore evidence must be collected in order: run the restore drill, save `docs/restore-drill.log` with the successful restore summary, run restored `health:prod`, save `docs/restore-health-prod.log` with `[prod-health] OK`, `base=<restored-origin>`, and numeric `finalityLagBlocks`, then run `proof:restore:collect`.
+Restore evidence must be collected in order: export backup schedule proof to `docs/restore-backup-schedule.log`, run the restore drill, save `docs/restore-drill.log` with the successful restore summary, run restored `health:prod`, save `docs/restore-health-prod.log` with `[prod-health] OK`, `base=<restored-origin>`, and numeric `finalityLagBlocks`, export heartbeat/latest-indexed-epoch preservation proof to `docs/restore-indexer-preservation.log`, then run `proof:restore:collect`.
 
 ```powershell
 $env:LORE_DB_PATH = "C:\absolute\external\fresh-mainnet-indexer.sqlite"
@@ -63,7 +63,7 @@ $env:LORE_RESTORE_DRILL_DIR = "C:\absolute\external\lore-restore-drill"
 npm.cmd run proof:restore -- --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo>
 $env:PROD_HEALTH_BASE_URL = "https://restore.playlore.xyz"
 npm.cmd run health:prod
-npm.cmd run proof:restore:collect -- --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --restored-origin=https://restore.playlore.xyz --restored-host-type=restore --restore-log=docs/restore-drill.log --health-log=docs/restore-health-prod.log --out=docs/restore-proof.draft.json
+npm.cmd run proof:restore:collect -- --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --restored-origin=https://restore.playlore.xyz --restored-host-type=restore --restore-log=docs/restore-drill.log --health-log=docs/restore-health-prod.log --backup-schedule-artifact=docs/restore-backup-schedule.log --preservation-artifact=docs/restore-indexer-preservation.log --out=docs/restore-proof.draft.json
 npm.cmd run proof:restore -- --strict --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --manifest=docs/restore-proof.json
 ```
 

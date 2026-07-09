@@ -3546,3 +3546,10 @@ as historical progress only.
 - Added draft guard fixtures for missing snapshot timestamp and too-few checked epochs.
 - Updated G7 docs/current state to document the stronger direct-chain snapshot requirements.
 - Verified `npm.cmd run proof:drafts`, `npm.cmd run proof:launch-docs`, `npm.cmd run proof:readiness`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Restore evidence artifact guard
+
+- Tightened `proof:restore:collect` so G8 drafts require existing backup schedule and indexer preservation artifacts through `--backup-schedule-artifact` and `--preservation-artifact` in addition to restore and health logs.
+- Updated G8 command map, readiness checklist, status board, proof record, and remaining/gate guards to require `docs/restore-backup-schedule.log` and `docs/restore-indexer-preservation.log`.
+- Added a draft guard fixture that rejects missing backup schedule evidence before a restore proof draft is written.
+- Verified `npm.cmd run proof:drafts`, `npm.cmd run proof:launch-map`, `npm.cmd run proof:gates -- --structure-only`, `npm.cmd run proof:remaining -- --json`, `npm.cmd run proof:readiness`, `npm.cmd run proof:launch-docs`, and `npm.cmd run proof:local`.
