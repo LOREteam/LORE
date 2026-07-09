@@ -19,6 +19,10 @@ const syntheticHostProcess = join(outDir, "synthetic-host-process-model.log");
 const syntheticIndexerLog = join(outDir, "synthetic-indexer-once.log");
 const syntheticIndexerHealth = join(outDir, "synthetic-indexer-health-prod.log");
 const syntheticIndexerSnapshot = join(outDir, "synthetic-indexer-chain-snapshot.json");
+const syntheticRestoreLog = join(outDir, "synthetic-restore-drill.log");
+const syntheticRestoreHealth = join(outDir, "synthetic-restore-health-prod.log");
+const syntheticRestoreSchedule = join(outDir, "synthetic-restore-backup-schedule.log");
+const syntheticRestorePreservation = join(outDir, "synthetic-restore-indexer-preservation.log");
 const syntheticCanaryLog = join(outDir, "synthetic-canary-live-log.jsonl");
 const syntheticCanaryTarget = join(outDir, "synthetic-canary-target-proof.log");
 const syntheticCanaryRecovery = join(outDir, "synthetic-canary-recovery-proof.log");
@@ -41,6 +45,10 @@ writeFileSync(syntheticHostProcess, "synthetic non-proof host process model arti
 writeFileSync(syntheticIndexerLog, "[indexer] SQLite path: C:\\\\external\\\\lore-indexer.sqlite\n[indexer] Contract: 0x1111111111111111111111111111111111111111\n[indexer] Deploy block: 1\n[indexer] Start block: 1\n[indexer] Finality blocks: 1\n[indexer] Scanning blocks 1..10\n[indexer] Finished runOnce\n", "utf8");
 writeFileSync(syntheticIndexerHealth, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=1\n", "utf8");
 writeFileSync(syntheticIndexerSnapshot, JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z", expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
+writeFileSync(syntheticRestoreLog, "Summary: backup/restore drill completed without detected issues.\n", "utf8");
+writeFileSync(syntheticRestoreHealth, "[prod-health] OK\nbase=https://restore.playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=1\n", "utf8");
+writeFileSync(syntheticRestoreSchedule, "synthetic non-proof restore backup schedule artifact for draft bundle only\n", "utf8");
+writeFileSync(syntheticRestorePreservation, "heartbeatBefore=abc heartbeatAfter=abc latestIndexedEpochBefore=1 latestIndexedEpochAfter=1\n", "utf8");
 const syntheticCanaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", network: "linea-mainnet", chainId: 59144, contractAddress: "0x1111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
 writeFileSync(syntheticCanaryLog, `${syntheticCanaryEvent}\n`, "utf8");
 writeFileSync(syntheticCanaryTarget, "synthetic non-proof canary target artifact for draft bundle only\n", "utf8");
@@ -61,7 +69,7 @@ const tasks = [
   ["signoff", "scripts/create-signoff-proof-draft.mjs", [`--env-log=${syntheticSignoffEnvLog}`, `--chain-log=${syntheticSignoffChainLog}`]],
   ["host", "scripts/create-host-proof-draft.mjs", ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", "--db-path=C:\\\\external\\\\lore-prod.sqlite", "--supervisor=pm2", `--process-evidence=${syntheticHostProcess}`, `--health-log=${syntheticHostHealthLog}`, `--load-log=${syntheticHostLoadLog}`]],
   ["indexer", "scripts/create-indexer-proof-draft.mjs", ["--fresh-db=true", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--indexer-log=${syntheticIndexerLog}`, `--health-log=${syntheticIndexerHealth}`, `--chain-snapshot=${syntheticIndexerSnapshot}`]],
-  ["restore", "scripts/create-restore-proof-draft.mjs", ["--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore"]],
+  ["restore", "scripts/create-restore-proof-draft.mjs", ["--source=C:\\\\external\\\\lore-source.sqlite", "--backup-dir=C:\\\\external\\\\lore-backups", "--restore-dir=C:\\\\external\\\\lore-restore", "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${syntheticRestoreLog}`, `--health-log=${syntheticRestoreHealth}`, `--backup-schedule-artifact=${syntheticRestoreSchedule}`, `--preservation-artifact=${syntheticRestorePreservation}`]],
   ["monitoring", "scripts/create-monitoring-proof-draft.mjs", ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", `--monitor-artifact=${syntheticMonitoringAlert}`, `--recovery-artifact=${syntheticMonitoringRecovery}`, `--alert-target-artifact=${syntheticMonitoringTarget}`, `--error-event-artifact=${syntheticMonitoringError}`]],
   ["qa", "scripts/create-qa-proof-draft.mjs", ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--wallet-artifact=${syntheticQaWallet}`, `--failure-artifact=${syntheticQaFailure}`, `--support-artifact=${syntheticQaSupport}`, `--finalqa-artifact=${syntheticQaFinal}`, `--smoke-artifact=${syntheticQaSmoke}`, "--clean-wallet-tx=0x1111111111111111111111111111111111111111111111111111111111111111"]],
   ["canary", "scripts/create-canary-proof-draft.mjs", ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${syntheticCanaryLog}`, `--target-artifact=${syntheticCanaryTarget}`, `--recovery-artifact=${syntheticCanaryRecovery}`, `--session-artifact=${syntheticCanarySession}`, `--tx-artifact=${syntheticCanaryTx}`]],

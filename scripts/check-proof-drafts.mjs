@@ -110,7 +110,7 @@ const draftCases = [
     id: "restore",
     out: join(tmp, "restore-proof.draft.json"),
     create: ["scripts/create-restore-proof-draft.mjs"],
-    createArgs: ["--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
     check: ["scripts/verify-db-restore.mjs"],
     checkArgs: (out) => ["--strict", `--manifest=${out}`],
   },
@@ -305,6 +305,12 @@ const finalOutputCases = [
     create: ["scripts/create-indexer-proof-draft.mjs"],
     createArgs: ["--out=docs/indexer-proof.json"],
     expected: "writes incomplete drafts only",
+  },
+  {
+    id: "restore-draft-missing-restore-log",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--restore-log is required when drafting restore launch evidence",
   },
   {
     id: "restore-final-output",

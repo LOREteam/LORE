@@ -14,13 +14,29 @@ function argValue(name, fallback = "") {
   return value ? value.slice(prefix.length) : process.env[name.toUpperCase().replaceAll("-", "_")] || fallback;
 }
 
-function readOptionalLog(filePath) {
-  if (!filePath) return "";
+function requireConcreteValue(name, value) {
+  if (!String(value ?? "").trim() || /^(?:TODO|TBD|REPLACE|<)/i.test(String(value).trim())) {
+    throw new Error(`--${name} is required when drafting restore launch evidence`);
+  }
+  return value;
+}
+
+function readRequiredLog(name, filePath) {
+  requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
   if (!existsSync(resolved)) {
-    throw new Error(`${filePath} does not exist`);
+    throw new Error(`--${name} must point to an existing redacted artifact`);
   }
   return readFileSync(resolved, "utf8");
+}
+
+function requireExistingArtifact(name, filePath) {
+  requireConcreteValue(name, filePath);
+  const resolved = path.resolve(process.cwd(), filePath);
+  if (!existsSync(resolved)) {
+    throw new Error(`--${name} must point to an existing redacted artifact`);
+  }
+  return filePath;
 }
 
 function firstMatchingLine(text, pattern) {
@@ -84,12 +100,16 @@ function parseHealth(log) {
 
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/restore-proof.draft.json"));
 refuseFinalProofOutput(outPath);
-const restoreLog = readOptionalLog(argValue("restore-log"));
-const healthLog = readOptionalLog(argValue("health-log"));
+const restoreLogPath = argValue("restore-log");
+const healthLogPath = argValue("health-log");
+const restoreLog = readRequiredLog("restore-log", restoreLogPath);
+const healthLog = readRequiredLog("health-log", healthLogPath);
 const now = new Date().toISOString();
-const sourceDbPath = argValue("source", process.env.LORE_DB_PATH || "");
-const backupDir = argValue("backup-dir", process.env.LORE_BACKUP_DIR || "");
-const restoreDir = argValue("restore-dir", process.env.LORE_RESTORE_DRILL_DIR || "");
+const sourceDbPath = requireConcreteValue("source", argValue("source", process.env.LORE_DB_PATH || ""));
+const backupDir = requireConcreteValue("backup-dir", argValue("backup-dir", process.env.LORE_BACKUP_DIR || ""));
+const restoreDir = requireConcreteValue("restore-dir", argValue("restore-dir", process.env.LORE_RESTORE_DRILL_DIR || ""));
+const backupScheduleArtifact = requireExistingArtifact("backup-schedule-artifact", argValue("backup-schedule-artifact", ""));
+const preservationArtifact = requireExistingArtifact("preservation-artifact", argValue("preservation-artifact", ""));
 const sourceDbOutsideBackupRestoreDirs = Boolean(
   sourceDbPath &&
   backupDir &&
@@ -107,7 +127,7 @@ const manifest = {
   backupSchedule: {
     enabled: false,
     cadence: "TODO: recurring backup cadence, for example every 5 minutes",
-    evidence: "TODO: paste backup schedule or cron proof",
+    evidence: `artifact: ${backupScheduleArtifact}`,
     checkedAt: now,
   },
   restoreDrill: {
@@ -121,9 +141,10 @@ const manifest = {
     backupDir: backupDir || "TODO",
     restoreDir: restoreDir || "TODO",
     summary: restoreSummary,
+    artifact: `artifact: ${restoreLogPath}`,
     timestamp: now,
   },
-  restoredStagingHealth: parseHealth(healthLog),
+  restoredStagingHealth: { ...parseHealth(healthLog), evidence: `artifact: ${healthLogPath}` },
   indexerPreservation: {
     heartbeatPreserved: false,
     latestIndexedEpochPreserved: false,
@@ -131,7 +152,7 @@ const manifest = {
     heartbeatAfter: "TODO: heartbeat value after restore",
     latestIndexedEpochBefore: "TODO: latest indexed epoch before restore",
     latestIndexedEpochAfter: "TODO: latest indexed epoch after restore",
-    evidence: "TODO: paste heartbeat and latest indexed epoch comparison before/after restore",
+    evidence: `artifact: ${preservationArtifact}`,
     checkedAt: now,
   },
 };
