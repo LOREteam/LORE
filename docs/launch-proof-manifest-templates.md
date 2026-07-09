@@ -199,7 +199,7 @@ npm run proof:indexer -- --strict
   },
   "restoreDrill": {
     "status": "pass",
-    "command": "npm run proof:restore -- --strict",
+    "command": "npm run proof:restore -- --strict --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --manifest=docs/restore-proof.json",
     "backupPathOutsideRepo": true,
     "restorePathOutsideRepo": true,
     "backupRestoreDirsDistinct": true,
@@ -237,7 +237,7 @@ npm run proof:indexer -- --strict
 Verify with:
 
 ```bash
-npm run proof:restore -- --strict
+npm run proof:restore -- --strict --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --manifest=docs/restore-proof.json
 ```
 
 ## `docs/monitoring-proof.json`

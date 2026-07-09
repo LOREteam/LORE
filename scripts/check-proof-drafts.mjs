@@ -161,7 +161,7 @@ const collectorDraftCases = [
     ],
     requiredSections: ["backupSchedule", "restoreDrill", "restoredStagingHealth", "indexerPreservation"],
     check: ["scripts/verify-db-restore.mjs"],
-    checkArgs: (out) => ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--manifest=${out}`],
+    checkArgs: (out) => ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${out}`],
   },
 ];
 const finalOutputCases = [

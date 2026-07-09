@@ -54,7 +54,7 @@ function pathInsideOrSame(childPath, parentPath) {
 function validateManifestPath(label, value, expected, issues) {
   if (!hasRealText(value)) {
     issues.push(`${label} is missing`);
-    return;
+    return null;
   }
   const checked = pathStatus(value);
   if (!checked.isAbsolute) issues.push(`${label} must be absolute`);
@@ -62,6 +62,7 @@ function validateManifestPath(label, value, expected, issues) {
   if (expected && !samePath(checked.absolute, expected)) {
     issues.push(`${label} must match the restore command path`);
   }
+  return checked;
 }
 
 function copyIfExists(source, target) {
@@ -316,6 +317,13 @@ function validateManifest(manifest, issues) {
   validateManifestPath("restoreDrill.sourceDbPath", restoreDrill.sourceDbPath, source.absolute, issues);
   validateManifestPath("restoreDrill.backupDir", restoreDrill.backupDir, backupDir.absolute, issues);
   validateManifestPath("restoreDrill.restoreDir", restoreDrill.restoreDir, restoreDir.absolute, issues);
+  const backupArtifact = validateManifestPath("restoreDrill.backupArtifact", restoreDrill.backupArtifact, backup.absolute, issues);
+  if (backupArtifact && backupDir.absolute && !pathInsideOrSame(backupArtifact.absolute, backupDir.absolute)) {
+    issues.push("restoreDrill.backupArtifact must be inside restoreDrill.backupDir");
+  }
+  if (backupArtifact && !existsSync(backupArtifact.absolute)) {
+    issues.push("restoreDrill.backupArtifact must exist on disk for launch proof");
+  }
   if (!hasIsoTimestamp(restoreDrill.timestamp)) issues.push("restoreDrill.timestamp must be ISO-8601 UTC");
   if (!hasEvidence(restoreDrill)) issues.push("restoreDrill has no evidence");
   if (hasEvidence(restoreDrill) && !hasConcreteEvidence(restoreDrill)) {
@@ -387,10 +395,12 @@ function validateManifest(manifest, issues) {
 const sourceRaw = argOrEnv("source", "LORE_DB_PATH");
 const backupDirRaw = argOrEnv("backup-dir", "LORE_BACKUP_DIR", "data/restore-proof/backups");
 const restoreDirRaw = argOrEnv("restore-dir", "LORE_RESTORE_DRILL_DIR", "data/restore-proof/restored");
+const backupRaw = argOrEnv("backup", "LORE_RESTORE_BACKUP");
 const manifestPath = argOrEnv("manifest", "RESTORE_PROOF_PATH", "docs/restore-proof.json");
 const source = pathStatus(sourceRaw);
 const backupDir = pathStatus(backupDirRaw);
 const restoreDir = pathStatus(restoreDirRaw);
+const backup = pathStatus(backupRaw);
 const issues = [];
 const slug = timestampSlug();
 let manifestSummary = null;
@@ -422,6 +432,18 @@ if (sourceRaw && restoreDirRaw && pathInsideOrSame(source.absolute, restoreDir.a
 if (backupDirRaw && restoreDirRaw && samePath(backupDir.absolute, restoreDir.absolute)) {
   issues.push("backup dir and restore dir must be different");
 }
+if (strict && !backupRaw) {
+  issues.push("backup artifact path must be provided with --backup or LORE_RESTORE_BACKUP for launch proof");
+}
+if (backupRaw && !existsSync(backup.absolute)) {
+  issues.push("backup artifact does not exist");
+}
+if (strict && backupRaw && (!backup.isAbsolute || backup.insideRepo)) {
+  issues.push("backup artifact must be absolute and outside repo for launch proof");
+}
+if (backupRaw && backupDirRaw && !pathInsideOrSame(backup.absolute, backupDir.absolute)) {
+  issues.push("backup artifact must be inside backup dir");
+}
 if (strict && /\.draft\.json$/i.test(resolve(repoRoot, manifestPath))) {
   issues.push("draft proof manifests are not accepted as launch proof");
 }
@@ -443,6 +465,7 @@ printTable(["Field", "Value"], [
   ["source size", sourceRaw ? fmtSize(source.absolute) : "missing"],
   ["backup dir", backupDir.absolute],
   ["restore dir", restoreDir.absolute],
+  ["backup artifact", backupRaw ? backup.absolute : "missing"],
   ["manifest", resolve(repoRoot, manifestPath)],
 ]);
 

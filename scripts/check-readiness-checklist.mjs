@@ -32,6 +32,7 @@ const requiredSnippets = [
   "proof:restore -- --source=",
   "docs/restore-drill.log",
   "docs/restore-health-prod.log",
+  "--backup=<absolute-backup-file-inside-backup-dir>",
   "--manifest=docs/restore-proof.json",
   "indexer:once",
   "proof:indexer:collect",

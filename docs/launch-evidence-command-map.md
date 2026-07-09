@@ -61,7 +61,7 @@ npm.cmd run proof:process-model -- --strict
 npm.cmd run proof:host -- --strict
 npm.cmd run proof:host-guard
 npm.cmd run proof:indexer -- --strict
-npm.cmd run proof:restore -- --strict
+npm.cmd run proof:restore -- --strict --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --manifest=docs/restore-proof.json
 npm.cmd run proof:monitoring -- --strict
 npm.cmd run proof:qa -- --strict
 npm.cmd run proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict

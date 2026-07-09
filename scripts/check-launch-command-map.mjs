@@ -300,7 +300,7 @@ for (const marker of ["health-prod", "data-sync", "stale-indexer-heartbeat", "in
     issues.push(`docs/production-runbook.md must show monitoring evidence marker ${marker}`);
   }
 }
-for (const marker of ["$env:LORE_BACKUP_DIR", "$env:LORE_RESTORE_DRILL_DIR", "docs/restore-drill.log", "https://restore.playlore.xyz", "docs/restore-health-prod.log", "--manifest=docs/restore-proof.json"]) {
+for (const marker of ["$env:LORE_BACKUP_DIR", "$env:LORE_RESTORE_DRILL_DIR", "--backup=<absolute-backup-file-inside-backup-dir>", "docs/restore-drill.log", "https://restore.playlore.xyz", "docs/restore-health-prod.log", "--manifest=docs/restore-proof.json"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show restore drill evidence marker ${marker}`);
   }
@@ -329,7 +329,7 @@ assertOrderedMarkers("docs/production-runbook.md", productionRunbook, [
   ["restore drill", "npm.cmd run proof:restore -- --source="],
   ["restored health", "https://restore.playlore.xyz"],
   ["restore collector", "npm.cmd run proof:restore:collect"],
-  ["strict restore", "npm.cmd run proof:restore -- --strict"],
+  ["strict restore", "npm.cmd run proof:restore -- --strict --source="],
   ["monitoring", "## 5. Monitoring"],
   ["monitoring required kinds", "stale-indexer-heartbeat"],
   ["monitoring plan", "npm.cmd run proof:monitoring:plan"],

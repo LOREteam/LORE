@@ -3521,3 +3521,9 @@ as historical progress only.
 - Strengthened `scripts/check-indexer-dry-run.mjs` so strict indexer proof requires `dryRun.dbPath` to be absolute, outside the repo, and matching `LORE_DB_PATH` or `--db`.
 - Updated `docs/production-runbook.md`, `docs/mainnet-readiness-checklist.md`, and `scripts/check-launch-command-map.mjs` so G7 evidence explicitly requires `[indexer] SQLite path:` matching the external `LORE_DB_PATH`.
 - Verified `node --check scripts/check-indexer-dry-run.mjs`, `node --check scripts/collect-indexer-evidence.mjs`, `node --check scripts/check-launch-command-map.mjs`, `npm.cmd run proof:launch-map`, `npm.cmd run proof:readiness`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, plus synthetic negative and positive checks for `dryRun.dbPath`.
+## 2026-07-09 - restore backup artifact proof guard
+
+- Strengthened `scripts/verify-db-restore.mjs` so strict G8 proof requires the backup artifact path via `--backup` or `LORE_RESTORE_BACKUP`, and validates `restoreDrill.backupArtifact` as absolute, outside the repo, inside `restoreDrill.backupDir`, existing on disk, and matching the supplied backup artifact path.
+- Updated restore launch commands in runbook/readiness/command-map/template docs to include `--backup=<absolute-backup-file-inside-backup-dir>` in the final strict restore proof.
+- Updated `scripts/check-proof-drafts.mjs` restore collector fixture to pass the same backup artifact into strict validation.
+- Verified `node --check scripts/verify-db-restore.mjs`, `node --check scripts/check-proof-drafts.mjs`, `node --check scripts/check-launch-command-map.mjs`, `node --check scripts/check-readiness-checklist.mjs`, `npm.cmd run proof:launch-map`, `npm.cmd run proof:readiness`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, and a synthetic negative/positive check for missing/present `restoreDrill.backupArtifact`.
