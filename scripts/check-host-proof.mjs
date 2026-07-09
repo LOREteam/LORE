@@ -150,6 +150,14 @@ function healthEvidenceBaseMatches(value, expectedOrigin) {
   return matches.some((match) => normalizedOrigin(match[1]) === expected);
 }
 
+function loadEvidenceBaseMatches(value, expectedOrigin) {
+  const expected = normalizedOrigin(expectedOrigin);
+  if (!expected) return false;
+  const text = evidenceText(value);
+  const matches = [...text.matchAll(/^\s*Load base URL:\s*([^\s|]+)/gim)];
+  return matches.some((match) => normalizedOrigin(match[1]) === expected);
+}
+
 function configuredSiteOrigin() {
   return env("NEXT_PUBLIC_SITE_URL") || env("PUBLIC_SITE_URL") || env("SITE_URL");
 }
@@ -376,6 +384,9 @@ if (manifest) {
     }
     if (hasRealText(loadHttp.url) && originMatches(loadHttp.url, origin)) {
       issues.push("loadHttp.url must not be the final production origin");
+    }
+    if (!loadEvidenceBaseMatches(loadHttp, loadHttp.url)) {
+      issues.push("loadHttp evidence must include Load base URL matching loadHttp.url from load:http");
     }
     const requestCount = asFiniteNumber(loadHttp.requestCount);
     const errorRate = asFiniteNumber(loadHttp.errorRate);

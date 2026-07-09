@@ -285,7 +285,7 @@ for (const marker of ["docs/signoff-proof.json", "contractEnv", "ownership.direc
     issues.push(`docs/production-runbook.md must show signoff evidence marker ${marker}`);
   }
 }
-for (const marker of ["$env:PROD_HEALTH_BASE_URL", "https://playlore.xyz", "npm.cmd run health:prod", "docs/host-health-prod.log", "$env:LOAD_BASE_URL", "https://canary.playlore.xyz", "npm.cmd run load:http", "docs/host-load-http.log"]) {
+for (const marker of ["$env:PROD_HEALTH_BASE_URL", "https://playlore.xyz", "npm.cmd run health:prod", "docs/host-health-prod.log", "$env:LOAD_BASE_URL", "https://canary.playlore.xyz", "npm.cmd run load:http", "docs/host-load-http.log", "Load base URL:"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show production host evidence marker ${marker}`);
   }

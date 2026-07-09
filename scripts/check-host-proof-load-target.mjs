@@ -69,7 +69,7 @@ function baseManifest() {
       maxP95Ms: 1000,
       durationMs: 60000,
       concurrency: 10,
-      evidence: "npm.cmd run load:http requestCount=120 p95=250 .tmp/load-http.log",
+      evidence: "Load base URL: https://canary.playlore.xyz | TOTAL count= 120 fail= 0 err= 0.00% p95=250ms .tmp/load-http.log",
       timestamp,
     },
   };
@@ -119,6 +119,15 @@ if (!/loadHttp\.url must not be the final production origin/.test(outputOf(final
   issues.push("final production origin load proof failure reason is missing");
 }
 
+const missingLoadBaseManifest = clone(baseManifest());
+missingLoadBaseManifest.loadHttp.evidence = "TOTAL count= 120 fail= 0 err= 0.00% p95=250ms .tmp/load-http.log";
+const missingLoadBaseResult = runHostProof(missingLoadBaseManifest, "missing-load-base-proof");
+if (missingLoadBaseResult.status !== 1) {
+  issues.push("missing loadHttp Load base URL fixture should fail");
+}
+if (!/loadHttp evidence must include Load base URL matching loadHttp\.url from load:http/.test(outputOf(missingLoadBaseResult))) {
+  issues.push("missing loadHttp Load base URL failure reason is missing");
+}
 const missingHostTypeManifest = clone(baseManifest());
 delete missingHostTypeManifest.loadHttp.hostType;
 const missingHostTypeResult = runHostProof(missingHostTypeManifest, "missing-host-type-proof");
