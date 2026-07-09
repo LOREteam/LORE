@@ -21,8 +21,8 @@ Related docs:
 
 Each final proof file must contain concrete external evidence, not placeholders:
 
-- G1-G4 signoff: `contractEnv`, token, deploy block, finality, `ownership.directOwnerReadEvidence`, Safe/multisig governance evidence, `randomness.decision`, operator/signer sign-off, and `chainComparison` for jackpot, safetyPool, deposits, rewards, rebates, resolve.
-- G5-G8 host/indexer/restore: `docs/host-health-prod.log`, `docs/host-load-http.log`, fresh external DB, `docs/indexer-once.log`, `$env:LORE_DB_PATH`, `$env:INDEXER_START_BLOCK`, `$env:NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK`, `$env:INDEXER_FINALITY_BLOCKS`, backup schedule, `docs/restore-drill.log`, `docs/restore-health-prod.log`, and indexer preservation evidence.
+- G1-G4 signoff: `contractEnv`, token, deploy block, finality, `ownership.directOwnerReadEvidence`, Safe/multisig governance evidence, `randomness.decision`, operator/signer sign-off, `chainComparison` for jackpot, safetyPool, deposits, rewards, rebates, resolve, and existing saved artifacts for every local artifact reference.
+- G5-G8 host/indexer/restore: `docs/host-health-prod.log`, `docs/host-load-http.log`, fresh external DB, `docs/indexer-once.log`, `$env:LORE_DB_PATH`, `$env:INDEXER_START_BLOCK`, `$env:NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK`, `$env:INDEXER_FINALITY_BLOCKS`, backup schedule, `docs/restore-drill.log`, `docs/restore-health-prod.log`, indexer preservation evidence, and existing saved artifacts for every local restore artifact reference.
 - G9 monitoring: health-prod, data-sync, stale-indexer-heartbeat, indexer-lag, bot-restart, indexer-restart, reverted-tx, fired alert, recovery alert, alert target, and error event artifacts.
 - G10-G14 canary/QA: target-RPC JSONL, 50 successful auto-miner unique epochs, unique tx hashes, reload/reconnect/tab-close/pending tx/remount recovery, noDuplicateBets, noNonceLoops, noStuckPending, Privy allowed origins, wrong network, mobile Web3 browser, clean-wallet first tx, failure-state UX, support/audit visibility, debug autominer smoke, mobile layout, overlays, chat geometry, and mainnet wording.
 
@@ -82,6 +82,7 @@ Use PowerShell environment variables for local launch proof orchestration when n
 
 ```powershell
 $env:CANARY_LOG = "C:\\path\\to\\canary-log.jsonl"
+# Keep LORE_DB_PATH, LORE_BACKUP_DIR, LORE_RESTORE_DRILL_DIR, and LORE_RESTORE_BACKUP set to the reviewed external restore-proof paths.
 npm.cmd run proof:files -- --canary-log=$env:CANARY_LOG
 npm.cmd run proof:launch -- --strict --canary-log=$env:CANARY_LOG
 ```

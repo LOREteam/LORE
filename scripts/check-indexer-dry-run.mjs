@@ -168,9 +168,8 @@ function localArtifactPathFromText(value, key = "") {
   if (!hasRealText(value)) return "";
   const text = String(value).trim().replace(/^`|`$/g, "");
   if (/^https?:\/\//i.test(text)) return "";
-  const artifactMatch = text.match(/^artifact:\s*(.+)$/i);
-  const rawCandidate = artifactMatch ? artifactMatch[1].split(/[;\r\n]/)[0].trim().split(/\s+/)[0] : text;
-  const candidate = rawCandidate.trim().replace(/^`|`$/g, "");
+  const artifactMatch = text.match(/^artifact:\s*(\S+)/i);
+  const candidate = (artifactMatch ? artifactMatch[1] : text).trim().replace(/^`|`$/g, "").replace(/[),.;]+$/g, "");
   if (/^https?:\/\//i.test(candidate)) return "";
   const keySuggestsPath = /(?:evidencePath|artifact|link)$/i.test(key);
   const valueLooksLikePath = /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv|sqlite|db)(?:\b|$)/i.test(candidate);

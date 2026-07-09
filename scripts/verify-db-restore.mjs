@@ -210,6 +210,37 @@ function evidenceText(value) {
   ].filter(hasRealText).join("\n");
 }
 
+function localArtifactPathFromText(value, key = "") {
+  if (!hasRealText(value)) return "";
+  const text = String(value).trim().replace(/^`|`$/g, "");
+  if (/^https?:\/\//i.test(text)) return "";
+  const artifactMatch = text.match(/^artifact:\s*(\S+)/i);
+  const candidate = (artifactMatch ? artifactMatch[1] : text).trim().replace(/^`|`$/g, "").replace(/[),.;]+$/g, "");
+  if (/^https?:\/\//i.test(candidate)) return "";
+  const keySuggestsPath = /(?:evidencePath|artifact|link|logPath|reportPath|commandOutputPath)$/i.test(key);
+  const valueLooksLikePath = /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv)(?:\b|$)/i.test(candidate);
+  return (artifactMatch || keySuggestsPath) && valueLooksLikePath ? candidate : "";
+}
+
+function findMissingLocalArtifactRefs(value, path = "$", key = "") {
+  const findings = [];
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => findings.push(...findMissingLocalArtifactRefs(entry, `${path}[${index}]`, key)));
+    return findings;
+  }
+  if (typeof value === "string") {
+    const artifactPath = localArtifactPathFromText(value, key);
+    if (artifactPath && !existsSync(resolve(repoRoot, artifactPath))) {
+      findings.push(`${path} -> ${artifactPath}`);
+    }
+    return findings;
+  }
+  if (!isPlainObject(value)) return findings;
+  for (const [childKey, entry] of Object.entries(value)) {
+    findings.push(...findMissingLocalArtifactRefs(entry, `${path}.${childKey}`, childKey));
+  }
+  return findings;
+}
 function normalizedOrigin(value) {
   if (!hasRealText(value)) return "";
   try {
@@ -291,6 +322,10 @@ function validateManifest(manifest, issues) {
     issues.push(`template placeholder values must be replaced: ${templateFindings.slice(0, 5).join(", ")}`);
   }
 
+  const missingArtifactRefs = findMissingLocalArtifactRefs(manifest);
+  if (missingArtifactRefs.length > 0) {
+    issues.push(`local restore artifact references must exist: ${missingArtifactRefs.slice(0, 5).join(", ")}`);
+  }
   const backupSchedule = isPlainObject(manifest.backupSchedule) ? manifest.backupSchedule : {};
   if (!isPlainObject(manifest.backupSchedule)) issues.push("backupSchedule section is missing");
   if (backupSchedule.enabled !== true) issues.push("backupSchedule.enabled must be true");

@@ -172,6 +172,76 @@ const signoffEnvLog = join(tmp, "signoff-env.log");
 const signoffChainLog = join(tmp, "signoff-chain.log");
 writeFileSync(signoffEnvLog, "Summary: synthetic redacted proof:mainnet output", "utf8");
 writeFileSync(signoffChainLog, "Summary: synthetic direct-chain proof output", "utf8");
+const signoffMissingArtifact = join(tmp, "missing-signoff-env.log");
+const signoffMissingArtifactManifest = join(tmp, "signoff-missing-local-artifact.json");
+const signoffAddress = "0x1111111111111111111111111111111111111111";
+const signoffTx = "0x1111111111111111111111111111111111111111111111111111111111111111";
+const signoffComparison = (key) => ({
+  matches: true,
+  directChainEvidence: `artifact: ${signoffChainLog} direct ${key}`,
+  appOrIndexerEvidence: `artifact: ${signoffEnvLog} app ${key}`,
+  checkedEpochs: [1],
+  checkedAt: "2026-07-09T00:00:00.000Z",
+});
+writeFileSync(
+  signoffMissingArtifactManifest,
+  JSON.stringify({
+    contractEnv: {
+      network: "mainnet",
+      chainId: 59144,
+      contractAddress: signoffAddress,
+      tokenAddress: signoffAddress,
+      publicContractAddress: signoffAddress,
+      keeperContractAddress: signoffAddress,
+      deployBlock: "1",
+      publicDeployBlock: "1",
+      indexerStartBlock: "1",
+      finalityBlocks: "1",
+      keeperMatchesPublic: true,
+      indexerStartBlockMatchesDeployBlock: true,
+      finalityBlocksPositive: true,
+      checkedAt: "2026-07-09T00:00:00.000Z",
+      evidencePath: signoffMissingArtifact,
+    },
+    ownership: {
+      ownerAddress: signoffAddress,
+      safeOrMultisig: true,
+      directOwnerReadMatches: true,
+      directOwnerReadEvidence: `artifact: ${signoffChainLog}`,
+      governanceRecordEvidence: "https://safe.linea.build/tx/0x1111111111111111111111111111111111111111",
+      proofTx: signoffTx,
+      checkedAt: "2026-07-09T00:00:00.000Z",
+    },
+    randomness: {
+      decision: "accepted-risk",
+      operator: "launch-operator",
+      signedAt: "2026-07-09T00:00:00.000Z",
+      riskAcceptedByOperator: true,
+      evidence: `artifact: ${signoffEnvLog}`,
+    },
+    chainComparison: {
+      jackpot: signoffComparison("jackpot"),
+      safetyPool: signoffComparison("safetyPool"),
+      deposits: signoffComparison("deposits"),
+      rewards: signoffComparison("rewards"),
+      rebates: signoffComparison("rebates"),
+      resolve: signoffComparison("resolve"),
+    },
+  }),
+  "utf8",
+);
+const signoffEnvPatch = {
+  LINEA_NETWORK: "mainnet",
+  NEXT_PUBLIC_LINEA_NETWORK: "mainnet",
+  LINEA_CHAIN_ID: "59144",
+  NEXT_PUBLIC_LINEA_CHAIN_ID: "59144",
+  NEXT_PUBLIC_CONTRACT_ADDRESS: signoffAddress,
+  KEEPER_CONTRACT_ADDRESS: signoffAddress,
+  NEXT_PUBLIC_LINEA_TOKEN_ADDRESS: signoffAddress,
+  NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "1",
+  INDEXER_START_BLOCK: "1",
+  INDEXER_FINALITY_BLOCKS: "1",
+};
 const hostHealthLog = join(tmp, "host-health-prod.log");
 const hostLoadLog = join(tmp, "host-load-http.log");
 const hostProcessEvidence = join(tmp, "host-process-model.log");
@@ -386,6 +456,57 @@ writeFileSync(restoreHealthLog, "[prod-health] OK\nbase=https://restore.playlore
 writeFileSync(restoreHealthMissingRuntimeLog, "[prod-health] OK\nbase=https://restore.playlore.xyz dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
 writeFileSync(restoreBackupScheduleArtifact, "synthetic backup schedule export\n", "utf8");
 writeFileSync(restorePreservationArtifact, "heartbeatBefore=abc heartbeatAfter=abc latestIndexedEpochBefore=1 latestIndexedEpochAfter=1\n", "utf8");
+const restoreMissingArtifact = join(tmp, "missing-restore-backup-schedule.log");
+const restoreMissingArtifactManifest = join(tmp, "restore-missing-local-artifact.json");
+writeFileSync(
+  restoreMissingArtifactManifest,
+  JSON.stringify({
+    backupSchedule: {
+      enabled: true,
+      cadence: "daily cron backup",
+      checkedAt: "2026-07-09T00:00:00.000Z",
+      evidencePath: restoreMissingArtifact,
+      link: `artifact: ${restoreMissingArtifact}`,
+    },
+    restoreDrill: {
+      status: "verified",
+      command: "npm run proof:restore -- --strict",
+      backupPathOutsideRepo: true,
+      restorePathOutsideRepo: true,
+      backupRestoreDirsDistinct: true,
+      sourceDbOutsideBackupRestoreDirs: true,
+      sourceDbPath: restoreSourcePath,
+      backupDir: restoreBackupDir,
+      restoreDir,
+      backupArtifact: restoreBackupPath,
+      timestamp: "2026-07-09T00:00:00.000Z",
+      evidencePath: restoreLog,
+    },
+    restoredStagingHealth: {
+      status: "healthy",
+      command: "npm run health:prod -- --base=https://restore.playlore.xyz",
+      hostType: "restore",
+      url: "https://restore.playlore.xyz",
+      runtimeHealthPassed: true,
+      dataSyncHealthPassed: true,
+      finalityLagChecked: true,
+      timestamp: "2026-07-09T00:00:00.000Z",
+      evidence: `base=https://restore.playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=1 artifact: ${restoreHealthLog}`,
+      evidencePath: restoreHealthLog,
+    },
+    indexerPreservation: {
+      heartbeatPreserved: true,
+      latestIndexedEpochPreserved: true,
+      heartbeatBefore: "abc",
+      heartbeatAfter: "abc",
+      latestIndexedEpochBefore: "1",
+      latestIndexedEpochAfter: "1",
+      checkedAt: "2026-07-09T00:00:00.000Z",
+      evidencePath: restorePreservationArtifact,
+    },
+  }),
+  "utf8",
+);
 
 const draftCases = [
   {
@@ -650,6 +771,13 @@ const collectorRejectCases = [
 
 const strictRejectCases = [
   {
+    id: "signoff-missing-local-artifact-ref",
+    check: ["scripts/check-signoff-proof.mjs"],
+    checkArgs: ["--strict", `--file=${signoffMissingArtifactManifest}`],
+    env: signoffEnvPatch,
+    expected: "local signoff artifact references must exist",
+  },
+  {
     id: "host-missing-local-artifact-ref",
     check: ["scripts/check-host-proof.mjs"],
     checkArgs: ["--strict", `--file=${hostMissingArtifactManifest}`],
@@ -661,6 +789,12 @@ const strictRejectCases = [
     checkArgs: ["--strict", `--db=${hostExternalDbPath}`, `--manifest=${indexerMissingArtifactManifest}`],
     env: { INDEXER_START_BLOCK: "1", NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "1", INDEXER_FINALITY_BLOCKS: "1" },
     expected: "local indexer artifact references must exist",
+  },
+  {
+    id: "restore-missing-local-artifact-ref",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreMissingArtifactManifest}`],
+    expected: "local restore artifact references must exist",
   },
   {
     id: "monitoring-missing-local-artifact-ref",
@@ -834,7 +968,7 @@ function runNode(args, envPatch = {}) {
 
 function oneLine(output) {
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted artifact|must be a real non-zero tx hash|must include at least one successful auto-miner canary tx|local host artifact references must exist|local indexer artifact references must exist|local monitoring artifact references must exist|local QA artifact references must exist|local canary artifact references must exist/i;
+  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted artifact|must be a real non-zero tx hash|must include at least one successful auto-miner canary tx|local signoff artifact references must exist|local host artifact references must exist|local indexer artifact references must exist|local monitoring artifact references must exist|local restore artifact references must exist|local QA artifact references must exist|local canary artifact references must exist/i;
   const preferred = lines.find((line) => /^Error: /i.test(line) && guardPattern.test(line)) || lines.find((line) => guardPattern.test(line));
   const compact = preferred || lines.slice(-3).join(" | ");
   return compact.length > 260 ? `${compact.slice(0, 257)}...` : compact;

@@ -15,7 +15,7 @@ Final proof manifests: docs/signoff-proof.json, docs/host-proof.json, docs/index
 - [ ] Final redacted env snapshot passes with `npm.cmd run proof:mainnet -- --strict --out=docs/mainnet-env-proof.log`.
 - [ ] Final redacted `proof:mainnet` and `proof:chain` outputs are saved with `npm.cmd run proof:mainnet -- --strict --out=docs/mainnet-env-proof.log` and `npm.cmd run proof:chain -- --strict --out=docs/chain-proof-snapshot.json` for sign-off collection.
 - [ ] Sign-off collector runs with `npm.cmd run proof:signoff:collect -- --epochs=<count> --user=<wallet> --env-log=docs/mainnet-env-proof.log --chain-log=docs/chain-proof-snapshot.json --out=docs/signoff-proof.draft.json`.
-- [ ] Final strict signoff passes with `npm.cmd run proof:signoff -- --strict`; env, owner, randomness, and chain comparison evidence contains concrete paths, links, commands, artifacts, addresses, or tx hashes.
+- [ ] Final strict signoff passes with `npm.cmd run proof:signoff -- --strict`; env, owner, randomness, and chain comparison evidence contains concrete paths, links, commands, artifacts, addresses, or tx hashes, and every local artifact reference points to an existing saved artifact.
 - [ ] Owner is verified as Safe/multisig or explicitly approved governance path.
 - [ ] Randomness model has explicit operator sign-off.
 - [ ] Jackpot, Safety Pool, rewards, rebates, deposits, and resolve are checked against direct chain reads.
@@ -37,7 +37,7 @@ Final proof manifests: docs/signoff-proof.json, docs/host-proof.json, docs/index
 - [ ] Restore drill log is produced before collection with `npm.cmd run proof:restore -- --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo>` using external source, backup, and restore paths; save redacted output as `docs/restore-drill.log` with the successful restore summary.
 - [ ] Restore collector runs with `npm.cmd run proof:restore:collect -- --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --restored-origin=https://restore.playlore.xyz --restored-host-type=restore --restore-log=docs/restore-drill.log --health-log=docs/restore-health-prod.log --backup-schedule-artifact=docs/restore-backup-schedule.log --preservation-artifact=docs/restore-indexer-preservation.log --out=docs/restore-proof.draft.json`; missing backup schedule or indexer preservation artifacts are rejected before a draft is written.
 - [ ] Restored host `health:prod` is run against `https://restore.playlore.xyz` and saved as `docs/restore-health-prod.log` with `[prod-health] OK`, `base=https://restore.playlore.xyz`, and numeric `finalityLagBlocks` before `proof:restore:collect`.
-- [ ] Restore strict check passes with `npm.cmd run proof:restore -- --strict --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --manifest=docs/restore-proof.json`, including concrete backup schedule, restore drill, restored `health:prod` evidence with numeric `finalityLagBlocks`, and concrete indexer preservation evidence.
+- [ ] Restore strict check passes with `npm.cmd run proof:restore -- --strict --source=<absolute-source-db-outside-repo> --backup-dir=<absolute-backup-dir-outside-repo> --restore-dir=<absolute-restore-dir-outside-repo> --backup=<absolute-backup-file-inside-backup-dir> --manifest=docs/restore-proof.json`, including concrete backup schedule, restore drill, restored `health:prod` evidence with numeric `finalityLagBlocks`, concrete indexer preservation evidence, and existing saved artifacts for every local artifact reference.
 
 ### 4. Failure-state UX
 
@@ -77,6 +77,6 @@ Final proof manifests: docs/signoff-proof.json, docs/host-proof.json, docs/index
 1. Restore and review all draft proof files.
 2. Collect G1-G9 external evidence on staging/canary/production targets.
 3. Run real canary epochs and wallet QA for G10-G14.
-4. Run `npm.cmd run proof:files -- --canary-log=<canary-log-file>`.
+4. Confirm `LORE_DB_PATH`, `LORE_BACKUP_DIR`, `LORE_RESTORE_DRILL_DIR`, and `LORE_RESTORE_BACKUP` still point to the reviewed external restore-proof paths, then run `npm.cmd run proof:files -- --canary-log=<canary-log-file>`.
 5. Run `npm.cmd run proof:launch -- --strict --canary-log=<canary-log-file>`.
-6. Launch only when docs/mainnet-proof-record.md and docs/mainnet-status-board.md show G1-G14 Complete with concrete evidence.
+6. Launch only when docs/mainnet-proof-record.md and docs/mainnet-status-board.md show G1-G14 Complete with concrete evidence and existing saved artifacts.

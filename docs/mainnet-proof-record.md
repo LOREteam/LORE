@@ -4,14 +4,14 @@ This record is the launch gate ledger. Do not change a gate to Complete without 
 
 | ID | Gate | Status | Evidence |
 | --- | --- | --- | --- |
-| G1 | Final contract env and funds safety | Missing | TBD docs/signoff-proof.json with contractEnv, deploy block, token, finality, and mainnet env evidence |
-| G2 | Owner Safe or multisig | Missing | TBD docs/signoff-proof.json with ownership.directOwnerReadEvidence and Safe/multisig governance evidence or proof tx |
-| G3 | Randomness model sign-off | Missing | TBD docs/signoff-proof.json with randomness.decision and operator/signer sign-off evidence |
-| G4 | Chain reconciliation | Missing | TBD docs/signoff-proof.json with chainComparison evidence for jackpot, safetyPool, deposits, rewards, rebates, and resolve |
+| G1 | Final contract env and funds safety | Missing | TBD docs/signoff-proof.json with contractEnv, deploy block, token, finality, mainnet env evidence, and existing saved artifacts |
+| G2 | Owner Safe or multisig | Missing | TBD docs/signoff-proof.json with ownership.directOwnerReadEvidence, Safe/multisig governance evidence or proof tx, and existing saved artifacts |
+| G3 | Randomness model sign-off | Missing | TBD docs/signoff-proof.json with randomness.decision, operator/signer sign-off evidence, and existing saved artifacts |
+| G4 | Chain reconciliation | Missing | TBD docs/signoff-proof.json with chainComparison evidence for jackpot, safetyPool, deposits, rewards, rebates, resolve, and existing saved artifacts |
 | G5 | Production process model | Missing | TBD docs/host-proof.json with lore-site, lore-bot, lore-indexer, supervisor evidence, and persistent DB evidence |
 | G6 | Production health and load | Missing | TBD docs/host-proof.json with docs/host-health-prod.log health:prod base=<production origin> finalityLagBlocks and docs/host-load-http.log load:http Load base URL: evidence |
 | G7 | Indexer fresh DB dry-run | Missing | TBD docs/indexer-proof.json with fresh external DB, deploy block, INDEXER_FINALITY_BLOCKS, docs/indexer-once.log, and chainComparison evidence |
-| G8 | Backup and restore drill | Missing | TBD docs/restore-proof.json with backupSchedule, docs/restore-backup-schedule.log, docs/restore-drill.log, docs/restore-health-prod.log, docs/restore-indexer-preservation.log, and indexerPreservation evidence |
+| G8 | Backup and restore drill | Missing | TBD docs/restore-proof.json with backupSchedule, docs/restore-backup-schedule.log, docs/restore-drill.log, docs/restore-health-prod.log, docs/restore-indexer-preservation.log, indexerPreservation evidence, and existing saved artifacts |
 | G9 | Monitoring and error tracking | Missing | TBD docs/monitoring-proof.json with health-prod, data-sync, stale-indexer-heartbeat, indexer-lag, bot-restart, indexer-restart, reverted-tx, docs/monitoring-alert-export.log, docs/monitoring-recovery-export.log, docs/monitoring-alert-target-test.log, docs/error-tracking-test-event.log, fired/recovery alerts, alert target, and error event evidence |
 | G10 | Real canary epochs | Missing | TBD docs/canary-proof.json and live canary log with target-RPC JSONL and 50 successful auto-miner unique epochs |
 | G11 | Transaction recovery safety | Missing | TBD docs/canary-proof.json and live canary log with noDuplicateBets, noNonceLoops, noStuckPending, pendingRecoveryConverged, and recovery evidence |

@@ -280,7 +280,7 @@ for (const [doc, expectations] of artifactBackedDocExpectations) {
 }
 
 const productionRunbook = linkedDocTexts.get("docs/production-runbook.md") ?? "";
-for (const marker of ["docs/signoff-proof.json", "contractEnv", "ownership.directOwnerReadEvidence", "Safe/multisig governance evidence", "proof tx", "randomness.decision", "operator/signer sign-off", "chainComparison", "jackpot", "safetyPool", "deposits", "rewards", "rebates", "resolve"]) {
+for (const marker of ["docs/signoff-proof.json", "contractEnv", "ownership.directOwnerReadEvidence", "Safe/multisig governance evidence", "proof tx", "randomness.decision", "operator/signer sign-off", "chainComparison", "jackpot", "safetyPool", "deposits", "rewards", "rebates", "resolve", "existing saved artifacts"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show signoff evidence marker ${marker}`);
   }
@@ -300,7 +300,7 @@ for (const marker of ["health-prod", "data-sync", "stale-indexer-heartbeat", "in
     issues.push(`docs/production-runbook.md must show monitoring evidence marker ${marker}`);
   }
 }
-for (const marker of ["$env:LORE_BACKUP_DIR", "$env:LORE_RESTORE_DRILL_DIR", "--backup=<absolute-backup-file-inside-backup-dir>", "docs/restore-drill.log", "successful restore summary", "https://restore.playlore.xyz", "docs/restore-health-prod.log", "[prod-health] OK", "base=<restored-origin>", "finalityLagBlocks", "--manifest=docs/restore-proof.json"]) {
+for (const marker of ["$env:LORE_BACKUP_DIR", "$env:LORE_RESTORE_DRILL_DIR", "--backup=<absolute-backup-file-inside-backup-dir>", "docs/restore-drill.log", "successful restore summary", "https://restore.playlore.xyz", "docs/restore-health-prod.log", "[prod-health] OK", "base=<restored-origin>", "finalityLagBlocks", "--manifest=docs/restore-proof.json", "existing saved artifacts"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show restore drill evidence marker ${marker}`);
   }
@@ -341,6 +341,7 @@ assertOrderedMarkers("docs/production-runbook.md", productionRunbook, [
   ["strict qa", "npm.cmd run proof:qa -- --strict"],
   ["canary draft", "npm.cmd run proof:canary:draft"],
   ["strict canary", "npm.cmd run proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict"],
+  ["final restore env reminder", "LORE_RESTORE_BACKUP"],
   ["proof files", "npm.cmd run proof:files -- --canary-log=<canary-log-file>"],
   ["strict launch", "npm.cmd run proof:launch -- --strict --canary-log=<canary-log-file>"],
   ["launch hold conditions", "## 7. Launch hold conditions"],

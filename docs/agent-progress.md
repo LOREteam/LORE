@@ -3688,3 +3688,38 @@ as historical progress only.
 - Tightened `scripts/check-indexer-dry-run.mjs` so strict G7 indexer proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, `artifact`, and link fields while leaving `dryRun.dbPath` as the separately validated runtime DB path.
 - Added a `scripts/check-proof-drafts.mjs` regression manifest proving strict indexer validation fails when a final-looking indexer proof points at a missing local `indexer:once` artifact.
 - Verified `node --check scripts\check-indexer-dry-run.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+## 2026-07-09 - Restore final artifact existence guard
+
+- Tightened `scripts/verify-db-restore.mjs` so strict G8 restore proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, `artifact`, and link fields while leaving source DB, backup dir, restore dir, and backup artifact paths on their existing dedicated validation path.
+- Added a `scripts/check-proof-drafts.mjs` regression manifest proving strict restore validation fails when a final-looking restore proof points at a missing backup-schedule evidence artifact.
+- Verified `node --check scripts\verify-db-restore.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Signoff final artifact existence guard
+
+- Tightened `scripts/check-signoff-proof.mjs` so strict G1-G4 signoff proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, `artifact`, owner evidence, chain evidence, and command/report path fields while still allowing external HTTPS evidence links and real tx hashes.
+- Added a `scripts/check-proof-drafts.mjs` regression manifest proving strict signoff validation fails when a final-looking contract/env proof points at a missing local redacted artifact.
+- Verified `node --check scripts\check-signoff-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+
+## 2026-07-09 - Status board saved-artifact launch markers
+
+- Updated `docs/mainnet-status-board.md` and `docs/mainnet-proof-record.md` so G1-G4 signoff and G8 restore rows explicitly require existing saved artifacts, matching the strict local-artifact validators.
+- Strengthened `scripts/check-launch-gates.mjs` so those status-board and proof-record markers cannot drift back to generic proof text.
+- Verified `node --check scripts\check-launch-gates.mjs`, `npm.cmd run proof:gates -- --structure-only`, `npm.cmd run proof:remaining`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Operator docs saved-artifact launch markers
+
+- Updated `docs/mainnet-readiness-checklist.md`, `docs/production-runbook.md`, and `docs/launch-evidence-command-map.md` so G1-G4 signoff and G8 restore operator flows explicitly require existing saved artifacts for local artifact references.
+- Strengthened `scripts/check-readiness-checklist.mjs` and `scripts/check-launch-command-map.mjs` so readiness/runbook/command-map docs cannot drift back to generic concrete-evidence wording.
+- Verified `node --check` for both guards, `npm.cmd run proof:readiness`, `npm.cmd run proof:launch-map`, `npm.cmd run proof:launch-docs`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Final launch restore env reminder
+
+- Updated `docs/production-runbook.md`, `docs/launch-evidence-command-map.md`, and `docs/mainnet-readiness-checklist.md` so final `proof:files` / `proof:launch` steps explicitly keep `LORE_DB_PATH`, `LORE_BACKUP_DIR`, `LORE_RESTORE_DRILL_DIR`, and `LORE_RESTORE_BACKUP` pointed at reviewed external restore-proof paths.
+- Strengthened `scripts/check-launch-command-map.mjs` and `scripts/check-readiness-checklist.mjs` so the final launch docs keep that restore env reminder.
+- Verified `node --check` for both guards, `npm.cmd run proof:launch-map`, `npm.cmd run proof:readiness`, `npm.cmd run proof:launch-docs`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Proof artifact parser consistency
+
+- Unified local `artifact: <path>` parsing across signoff, host, indexer, restore, monitoring, QA, and canary proof validators so labels or punctuation after a saved artifact path do not become false missing-file references.
+- Kept missing-file detection intact for actual local artifact path fields and explicit `artifact:` references.
+- Verified `node --check` for all touched proof validators, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
