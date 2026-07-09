@@ -47,10 +47,14 @@ const indexerLog = join(tmp, "indexer-once.log");
 const indexerRepoDbLog = join(tmp, "indexer-repo-db.log");
 const indexerHealthLog = join(tmp, "indexer-health-prod.log");
 const indexerChainSnapshot = join(tmp, "chain-proof-snapshot.json");
+const indexerChainSnapshotMissingGeneratedAt = join(tmp, "chain-proof-missing-generated-at.json");
+const indexerChainSnapshotTooFewEpochs = join(tmp, "chain-proof-too-few-epochs.json");
 writeFileSync(indexerLog, "[indexer] SQLite path: C:\\external\\lore.sqlite\n[indexer] Contract: 0x1111111111111111111111111111111111111111\n[indexer] Deploy block: 1\n[indexer] Start block: 1\n[indexer] Finality blocks: 1\n[indexer] Scanning blocks 1..10\n[indexer] Finished runOnce\n", "utf8");
 writeFileSync(indexerRepoDbLog, `[indexer] SQLite path: ${join(process.cwd(), "repo-indexer.sqlite")}\n[indexer] Contract: 0x1111111111111111111111111111111111111111\n[indexer] Deploy block: 1\n[indexer] Start block: 1\n[indexer] Finality blocks: 1\n[indexer] Scanning blocks 1..10\n[indexer] Finished runOnce\n`, "utf8");
 writeFileSync(indexerHealthLog, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
-writeFileSync(indexerChainSnapshot, JSON.stringify({ expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
+writeFileSync(indexerChainSnapshot, JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z", expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
+writeFileSync(indexerChainSnapshotMissingGeneratedAt, JSON.stringify({ expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
+writeFileSync(indexerChainSnapshotTooFewEpochs, JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z", expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
 const monitoringAlertArtifact = join(tmp, "monitoring-alert-export.log");
 const monitoringRecoveryArtifact = join(tmp, "monitoring-recovery-export.log");
 const monitoringAlertTargetArtifact = join(tmp, "monitoring-alert-target-test.log");
@@ -215,6 +219,18 @@ const collectorRejectCases = [
     create: ["scripts/collect-indexer-evidence.mjs"],
     createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerRepoDbLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
     expected: "--indexer-log [indexer] SQLite path must be outside the repo checkout",
+  },
+  {
+    id: "indexer-collector-missing-snapshot-generated-at",
+    create: ["scripts/collect-indexer-evidence.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshotMissingGeneratedAt}`],
+    expected: "--chain-snapshot must include generatedAt as ISO-8601 UTC",
+  },
+  {
+    id: "indexer-collector-too-few-snapshot-epochs",
+    create: ["scripts/collect-indexer-evidence.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=2", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshotTooFewEpochs}`],
+    expected: "--chain-snapshot epochs must include at least --epochs unique checked epochs",
   },
   {
     id: "restore-collector-missing-runtime",

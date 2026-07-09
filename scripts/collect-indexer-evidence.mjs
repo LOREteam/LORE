@@ -90,6 +90,14 @@ function parseKeyValues(line = "") {
 function normalizeAddress(value) {
   return String(value ?? "").trim().toLowerCase();
 }
+function hasIsoTimestamp(value) {
+  const text = String(value ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(text)) return false;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return false;
+  const normalized = text.includes(".") ? text : text.replace("Z", ".000Z");
+  return parsed.toISOString() === normalized;
+}
 
 function relativeArtifact(filePath) {
   return filePath ? relative(process.cwd(), resolve(process.cwd(), filePath)).replace(/\\/g, "/") : "";
@@ -143,6 +151,8 @@ const snapshotContractAddress = chainSnapshot?.contractAddress ?? "TODO: final c
 const checkedEpochs = Array.isArray(chainSnapshot?.epochs)
   ? chainSnapshot.epochs.map((entry) => entry?.epoch).filter((epoch) => epoch != null)
   : [];
+const uniqueCheckedEpochs = [...new Set(checkedEpochs.map((epoch) => String(epoch)))];
+const snapshotGeneratedAt = chainSnapshot?.generatedAt ?? chainSnapshot?.checkedAt ?? "";
 const rpcChainIdMatches = Number(expectedSnapshotChainId) > 0 && Number(expectedSnapshotChainId) === Number(rpcSnapshotChainId);
 const contractAddressMatches = Boolean(
   configuredContractAddress &&
@@ -164,6 +174,10 @@ if (!isPrintPlan()) {
   requireCondition(finalityLagIsNumeric, "--health-log must include numeric finalityLagBlocks=<number>");
   requireMatchingChainId("expectedChainId", expectedSnapshotChainId, chainId);
   requireMatchingChainId("rpcChainId", rpcSnapshotChainId, chainId);
+  requireCondition(hasIsoTimestamp(snapshotGeneratedAt), "--chain-snapshot must include generatedAt as ISO-8601 UTC");
+  requireCondition(uniqueCheckedEpochs.length >= Number(epochs), "--chain-snapshot epochs must include at least --epochs unique checked epochs");
+  requireCondition(Boolean(contractLine), "--indexer-log must include [indexer] Contract: <address>");
+  requireCondition(normalizeAddress(indexerLogValue(contractLine)) === normalizeAddress(snapshotContractAddress), "--indexer-log [indexer] Contract must match --chain-snapshot contractAddress");
 }
 const completed = Boolean(finishLine) && !/\[indexer\]\s+Fatal:/i.test(indexerLog);
 const summary = [sqliteLine, contractLine, deployLine, startLine, finalityLine, scanLine, finishLine]
@@ -199,6 +213,7 @@ const manifest = {
     rpcChainId: rpcSnapshotChainId,
     rpcChainIdMatches,
     rpcSource,
+    sourceGeneratedAt: snapshotGeneratedAt,
     contractAddress: snapshotContractAddress,
     contractAddressMatches,
     evidence: chainSnapshotArtifact ? `artifact: ${chainSnapshotArtifact}` : "TODO: paste concrete direct-chain snapshot evidence",
