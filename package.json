@@ -68,7 +68,8 @@
     "live:canary": "tsx scripts/live-round-canary.ts",
     "check": "node scripts/check-local.mjs",
     "postinstall": "node scripts/patch-privy-7702.mjs",
-    "patch:privy-7702": "node scripts/patch-privy-7702.mjs"
+    "patch:privy-7702": "node scripts/patch-privy-7702.mjs",
+    "proof:deps:all": "node scripts/check-production-dependency-audit.mjs --include-dev"
   },
   "dependencies": {
     "@base-org/account": "2.5.6",
@@ -120,6 +121,7 @@
       "minimatch": {
         "brace-expansion": "5.0.6"
       }
-    }
+    },
+    "shell-quote": "1.8.4"
   }
 }
