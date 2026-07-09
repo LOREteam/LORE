@@ -16,11 +16,18 @@ function argValue(name, fallback = "") {
   return value ? value.slice(prefix.length) : process.env[name.toUpperCase().replaceAll("-", "_")] || fallback;
 }
 
-function readOptionalLog(filePath) {
-  if (!filePath) return "";
+function requireConcreteValue(name, value) {
+  if (!String(value ?? "").trim() || /^(?:TODO|TBD|REPLACE|<)/i.test(String(value).trim())) {
+    throw new Error(`--${name} is required when drafting indexer launch evidence`);
+  }
+  return value;
+}
+
+function readRequiredLog(name, filePath) {
+  requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
   if (!existsSync(resolved)) {
-    throw new Error(`${filePath} does not exist`);
+    throw new Error(`--${name} must point to an existing redacted artifact`);
   }
   return readFileSync(resolved, "utf8");
 }
@@ -63,10 +70,12 @@ function boolFromArg(name, fallback = false) {
   return ["1", "true", "yes", "pass", "verified"].includes(raw.trim().toLowerCase());
 }
 
-function readOptionalJson(filePath) {
-  if (!filePath) return null;
+function readRequiredJson(name, filePath) {
+  requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  if (!existsSync(resolved)) return null;
+  if (!existsSync(resolved)) {
+    throw new Error(`--${name} must point to an existing redacted artifact`);
+  }
   return JSON.parse(readFileSync(resolved, "utf8"));
 }
 
@@ -76,14 +85,14 @@ function normalizeAddress(value) {
 
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/indexer-proof.draft.json"));
 refuseFinalProofOutput(outPath);
-const indexerLog = readOptionalLog(argValue("indexer-log"));
-const healthLog = readOptionalLog(argValue("health-log"));
-const chainSnapshotPath = argValue("chain-snapshot");
-const chainSnapshot = readOptionalJson(chainSnapshotPath);
+const indexerLog = readRequiredLog("indexer-log", argValue("indexer-log"));
+const healthLog = readRequiredLog("health-log", argValue("health-log"));
+const chainSnapshotPath = requireConcreteValue("chain-snapshot", argValue("chain-snapshot"));
+const chainSnapshot = readRequiredJson("chain-snapshot", chainSnapshotPath);
 const now = new Date().toISOString();
-const startBlock = argValue("start-block", process.env.INDEXER_START_BLOCK || "");
-const deployBlock = argValue("deploy-block", process.env.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK || "");
-const finalityBlocks = argValue("finality-blocks", process.env.INDEXER_FINALITY_BLOCKS || "");
+const deployBlock = requireConcreteValue("deploy-block", argValue("deploy-block", process.env.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK || ""));
+const startBlock = requireConcreteValue("start-block", argValue("start-block", process.env.INDEXER_START_BLOCK || deployBlock));
+const finalityBlocks = requireConcreteValue("finality-blocks", argValue("finality-blocks", process.env.INDEXER_FINALITY_BLOCKS || ""));
 const configuredContractAddress = process.env.KEEPER_CONTRACT_ADDRESS || process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "";
 
 const sqliteLine = firstMatchingLine(indexerLog, /^\[indexer\]\s+SQLite path:/i);

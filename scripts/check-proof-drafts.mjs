@@ -102,7 +102,7 @@ const draftCases = [
     id: "indexer",
     out: join(tmp, "indexer-proof.draft.json"),
     create: ["scripts/create-indexer-proof-draft.mjs"],
-    createArgs: [],
+    createArgs: ["--fresh-db=true", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
     check: ["scripts/check-indexer-dry-run.mjs"],
     checkArgs: (out) => ["--strict", `--manifest=${out}`],
   },
@@ -293,6 +293,12 @@ const finalOutputCases = [
     create: ["scripts/create-host-proof-draft.mjs"],
     createArgs: ["--origin=https://playlore.xyz", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", "--out=docs/host-proof.json"],
     expected: "writes incomplete drafts only",
+  },
+  {
+    id: "indexer-draft-missing-indexer-log",
+    create: ["scripts/create-indexer-proof-draft.mjs"],
+    createArgs: ["--fresh-db=true", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
+    expected: "--indexer-log is required when drafting indexer launch evidence",
   },
   {
     id: "indexer-final-output",

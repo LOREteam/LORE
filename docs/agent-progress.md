@@ -3600,3 +3600,11 @@ as historical progress only.
 - Added a draft regression case that rejects missing --health-log before standalone host draft output is written.
 
 - Verified node --check for changed standalone host draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.
+
+## 2026-07-09 - Indexer draft artifact guard
+
+- Tightened scripts/create-indexer-proof-draft.mjs so standalone G7 indexer drafts require existing indexer, health, and chain snapshot artifacts plus concrete deploy/start/finality inputs before writing a draft.
+- Updated scripts/create-all-proof-drafts.mjs with synthetic non-proof indexer artifacts so local draft bundle generation still exercises the artifact-backed path.
+- Added a draft regression case that rejects missing --indexer-log before standalone indexer draft output is written.
+
+- Verified node --check for changed standalone indexer draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.
