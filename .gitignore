@@ -48,6 +48,10 @@ artifacts/smoke-browser/
 /.playwright-mcp/
 /.npm-cache/
 /.tmp-npm-cache/
+/.tmp/
+/System.Management.Automation.Internal.Host.InternalHost
+/lore-fixed-home-3000.png
+/privy-console-errors.log
 /*-preview.png
 /*-current.png
 /*-debug.png
