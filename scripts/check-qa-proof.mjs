@@ -230,6 +230,21 @@ function includesAll(values, required) {
   return required.every((field) => normalized.has(field));
 }
 
+function requiresQaOrigin(group, checkId) {
+  return group === "wallet" && checkId !== "privyAllowedOrigins";
+}
+
+function qaOriginIssues(check, label, expectedOrigin) {
+  const issues = [];
+  const origin = check?.origin;
+  if (!hasHttpsOrigin(origin)) {
+    issues.push(`${label}.origin must be the exact HTTPS production origin`);
+  } else if (expectedOrigin && normalizeOrigin(origin) !== normalizeOrigin(expectedOrigin)) {
+    issues.push(`${label}.origin must match configured production origin`);
+  }
+  return issues;
+}
+
 function printTable(headers, rows) {
   console.log(`| ${headers.join(" | ")} |`);
   console.log(`| ${headers.map(() => "---").join(" | ")} |`);
@@ -314,6 +329,9 @@ if (manifest) {
         }
         if (requiresQaTimestamp(group, checkId) && !hasIsoTimestamp(check?.checkedAt)) {
           issues.push(`${group}.${checkId}.checkedAt must be ISO-8601 UTC`);
+        }
+        if (requiresQaOrigin(group, checkId)) {
+          issues.push(...qaOriginIssues(check, `${group}.${checkId}`, expectedOrigin));
         }
         rows.push([group, checkId, statusOk ? "yes" : "no", concreteEvidenceOk ? "yes" : "no"]);
       }

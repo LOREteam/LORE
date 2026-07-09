@@ -65,9 +65,10 @@ function isRealTx(value) {
   return /^0x[a-fA-F0-9]{64}$/.test(normalized) && normalized.toLowerCase() !== ZERO_TX;
 }
 
-function check(label, artifact = "") {
+function check(label, artifact = "", origin = "") {
   return {
     status: "TODO",
+    ...(origin ? { origin } : {}),
     evidence: artifact ? `artifact: ${artifact}` : `TODO: record QA evidence for ${label}`,
     checkedAt: "TODO: ISO timestamp",
   };
@@ -119,28 +120,30 @@ const manifest = {
       evidence: walletArtifact ? `artifact: ${walletArtifact}` : "TODO: Privy dashboard allowed-origin proof",
       checkedAt: "TODO: ISO timestamp",
     },
-    desktopConnect: check("desktop wallet connect", walletArtifact),
-    desktopDisconnect: check("desktop wallet disconnect", walletArtifact),
-    desktopReconnect: check("desktop wallet reconnect", walletArtifact),
+    desktopConnect: check("desktop wallet connect", walletArtifact, origin),
+    desktopDisconnect: check("desktop wallet disconnect", walletArtifact, origin),
+    desktopReconnect: check("desktop wallet reconnect", walletArtifact, origin),
     wrongNetwork: {
       status: "TODO",
+      origin,
       targetChainId: chainId,
       testedChainId: "TODO: wrong chain id used for negative test",
       unsupportedChainWarningVisible: false,
       evidence: walletArtifact ? `artifact: ${walletArtifact}` : "TODO: wrong-network warning screenshot or QA note",
       checkedAt: "TODO: ISO timestamp",
     },
-    mobileWeb3Browser: check("mobile Web3 browser", walletArtifact),
+    mobileWeb3Browser: check("mobile Web3 browser", walletArtifact, origin),
     cleanWalletFirstTx: {
       status: "TODO",
+      origin,
       network,
       chainId,
       txHash: cleanWalletTx,
       evidence: walletArtifact ? `artifact: ${walletArtifact}` : "TODO: real clean-wallet first transaction hash and QA note",
       checkedAt: "TODO: ISO timestamp",
     },
-    slowNetworkAuthModal: check("slow network auth modal", walletArtifact),
-    slowNetworkChatAuth: check("slow network chat auth", walletArtifact),
+    slowNetworkAuthModal: check("slow network auth modal", walletArtifact, origin),
+    slowNetworkChatAuth: check("slow network chat auth", walletArtifact, origin),
   },
   failureStateUx: {
     disabledActionsExplainReason: check("disabled buttons explain reason", failureArtifact),

@@ -49,7 +49,7 @@ Final proof manifests: docs/signoff-proof.json, docs/host-proof.json, docs/index
 ### 5. Wallet / network correctness
 
 - [ ] Privy allowed origins include exact production origin.
-- [ ] Connect, disconnect, reconnect, wrong network, mobile Web3 browser, clean wallet first tx, and slow auth modal are tested.
+- [ ] Connect, disconnect, reconnect, wrong network, mobile Web3 browser, clean wallet first tx, and slow auth modal are tested on the exact production origin.
 - [ ] QA plan is generated with `npm.cmd run proof:qa:plan -- --origin=https://playlore.xyz --network=linea-mainnet --chain-id=59144 --out=docs/qa-canary-test-plan.draft.md`.
 - [ ] QA proof draft is collected with `npm.cmd run proof:qa:draft -- --origin=https://playlore.xyz --network=linea-mainnet --chain-id=59144 --wallet-artifact=docs/qa-wallet-flow-report.md --failure-artifact=docs/qa-failure-state-report.md --support-artifact=docs/qa-support-audit-report.md --finalqa-artifact=docs/qa-final-browser-report.md --smoke-artifact=docs/qa-smoke-debug-autominer.log --clean-wallet-tx=<txHash> --out=docs/qa-proof.draft.json` after wallet, failure-state, support/audit, final browser, smoke, and clean-wallet tx artifacts are available.
 - [ ] QA strict proof passes with `npm.cmd run proof:qa -- --strict`; every completed item has concrete artifact-like evidence such as a real path, URL, screenshot, log, report, command output, or tx hash, not generic text like `checked`.
