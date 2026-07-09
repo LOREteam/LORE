@@ -3592,3 +3592,11 @@ as historical progress only.
 - Added a draft regression case that rejects missing --env-log before standalone signoff draft output is written.
 
 - Verified node --check for changed standalone signoff draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.
+
+## 2026-07-09 - Host draft artifact guard
+
+- Tightened scripts/create-host-proof-draft.mjs so standalone G5-G6 host drafts require existing process, health, and load artifacts plus concrete --db-path and --supervisor before writing a draft.
+- Updated scripts/create-all-proof-drafts.mjs with synthetic non-proof host artifacts so local draft bundle generation still exercises the artifact-backed path.
+- Added a draft regression case that rejects missing --health-log before standalone host draft output is written.
+
+- Verified node --check for changed standalone host draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.

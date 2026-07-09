@@ -13,6 +13,9 @@ mkdirSync(outDir, { recursive: true });
 
 const syntheticSignoffEnvLog = join(outDir, "synthetic-signoff-mainnet-env.log");
 const syntheticSignoffChainLog = join(outDir, "synthetic-signoff-chain-snapshot.log");
+const syntheticHostHealthLog = join(outDir, "synthetic-host-health-prod.log");
+const syntheticHostLoadLog = join(outDir, "synthetic-host-load-http.log");
+const syntheticHostProcess = join(outDir, "synthetic-host-process-model.log");
 const syntheticCanaryLog = join(outDir, "synthetic-canary-live-log.jsonl");
 const syntheticCanaryTarget = join(outDir, "synthetic-canary-target-proof.log");
 const syntheticCanaryRecovery = join(outDir, "synthetic-canary-recovery-proof.log");
@@ -29,6 +32,9 @@ const syntheticQaFinal = join(outDir, "synthetic-qa-final-browser-report.md");
 const syntheticQaSmoke = join(outDir, "synthetic-qa-smoke-debug-autominer.log");
 writeFileSync(syntheticSignoffEnvLog, "Summary: synthetic non-proof proof:mainnet output for draft bundle only\n", "utf8");
 writeFileSync(syntheticSignoffChainLog, "Summary: synthetic non-proof proof:chain output for draft bundle only\n", "utf8");
+writeFileSync(syntheticHostHealthLog, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=1\n", "utf8");
+writeFileSync(syntheticHostLoadLog, "Load base URL: https://canary.playlore.xyz\nConcurrency: 1; client IPs: 1; duration: 1000ms; timeout: 10000ms\nTOTAL count= 1 fail= 0 err= 0.00% p50= 100ms p95= 100ms p99= 100ms\n", "utf8");
+writeFileSync(syntheticHostProcess, "synthetic non-proof host process model artifact for draft bundle only\n", "utf8");
 const syntheticCanaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", network: "linea-mainnet", chainId: 59144, contractAddress: "0x1111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
 writeFileSync(syntheticCanaryLog, `${syntheticCanaryEvent}\n`, "utf8");
 writeFileSync(syntheticCanaryTarget, "synthetic non-proof canary target artifact for draft bundle only\n", "utf8");
@@ -47,7 +53,7 @@ writeFileSync(syntheticQaSmoke, "synthetic non-proof QA smoke artifact for draft
 
 const tasks = [
   ["signoff", "scripts/create-signoff-proof-draft.mjs", [`--env-log=${syntheticSignoffEnvLog}`, `--chain-log=${syntheticSignoffChainLog}`]],
-  ["host", "scripts/create-host-proof-draft.mjs", ["--origin=https://playlore.xyz", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary"]],
+  ["host", "scripts/create-host-proof-draft.mjs", ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", "--db-path=C:\\\\external\\\\lore-prod.sqlite", "--supervisor=pm2", `--process-evidence=${syntheticHostProcess}`, `--health-log=${syntheticHostHealthLog}`, `--load-log=${syntheticHostLoadLog}`]],
   ["indexer", "scripts/create-indexer-proof-draft.mjs", []],
   ["restore", "scripts/create-restore-proof-draft.mjs", ["--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore"]],
   ["monitoring", "scripts/create-monitoring-proof-draft.mjs", ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", `--monitor-artifact=${syntheticMonitoringAlert}`, `--recovery-artifact=${syntheticMonitoringRecovery}`, `--alert-target-artifact=${syntheticMonitoringTarget}`, `--error-event-artifact=${syntheticMonitoringError}`]],

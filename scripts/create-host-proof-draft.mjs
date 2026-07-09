@@ -15,13 +15,29 @@ function argValue(name, fallback = "") {
   return value ? value.slice(prefix.length) : process.env[name.toUpperCase().replaceAll("-", "_")] || fallback;
 }
 
-function readOptionalLog(filePath) {
-  if (!filePath) return "";
+function requireConcreteValue(name, value) {
+  if (!String(value ?? "").trim() || /^(?:TODO|TBD|REPLACE|<)/i.test(String(value).trim())) {
+    throw new Error(`--${name} is required when drafting host launch evidence`);
+  }
+  return value;
+}
+
+function readRequiredLog(name, filePath) {
+  requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
   if (!existsSync(resolved)) {
-    throw new Error(`${filePath} does not exist`);
+    throw new Error(`--${name} must point to an existing redacted artifact`);
   }
   return readFileSync(resolved, "utf8");
+}
+
+function requireExistingArtifact(name, filePath) {
+  requireConcreteValue(name, filePath);
+  const resolved = path.resolve(process.cwd(), filePath);
+  if (!existsSync(resolved)) {
+    throw new Error(`--${name} must point to an existing redacted artifact`);
+  }
+  return filePath;
 }
 
 function firstMatchingLine(text, pattern) {
@@ -100,19 +116,20 @@ function parseLoad(log) {
 
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/host-proof.draft.json"));
 refuseFinalProofOutput(outPath);
-const healthLog = readOptionalLog(argValue("health-log"));
-const loadLog = readOptionalLog(argValue("load-log"));
+const healthLog = readRequiredLog("health-log", argValue("health-log"));
+const loadLog = readRequiredLog("load-log", argValue("load-log"));
 const origin = argValue("origin", process.env.NEXT_PUBLIC_SITE_URL || "TODO: https://final-origin");
 const hostType = argValue("host-type", "production");
-const dbPath = argValue("db-path", process.env.LORE_DB_PATH || "TODO: absolute DB path outside repo");
-const processEvidence = argValue("process-evidence", "TODO: paste pm2/supervisor output");
+const dbPath = requireConcreteValue("db-path", argValue("db-path", process.env.LORE_DB_PATH || ""));
+const supervisor = requireConcreteValue("supervisor", argValue("supervisor", ""));
+const processEvidence = requireExistingArtifact("process-evidence", argValue("process-evidence", ""));
 const now = new Date().toISOString();
 
 const manifest = {
   origin,
   hostType,
   processModel: {
-    supervisor: argValue("supervisor", "pm2"),
+    supervisor,
     "lore-site": {
       supervised: true,
       running: false,

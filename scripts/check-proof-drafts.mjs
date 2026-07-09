@@ -94,7 +94,7 @@ const draftCases = [
     id: "host",
     out: join(tmp, "host-proof.draft.json"),
     create: ["scripts/create-host-proof-draft.mjs"],
-    createArgs: ["--origin=https://playlore.xyz", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`, `--health-log=${hostHealthLog}`, `--load-log=${hostLoadLog}`],
     check: ["scripts/check-host-proof.mjs"],
     checkArgs: (out) => ["--strict", `--file=${out}`],
   },
@@ -281,6 +281,12 @@ const finalOutputCases = [
     create: ["scripts/create-signoff-proof-draft.mjs"],
     createArgs: ["--out=docs/signoff-proof.json"],
     expected: "writes incomplete drafts only",
+  },
+  {
+    id: "host-draft-missing-health-log",
+    create: ["scripts/create-host-proof-draft.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`, `--load-log=${hostLoadLog}`],
+    expected: "--health-log is required when drafting host launch evidence",
   },
   {
     id: "host-final-output",
