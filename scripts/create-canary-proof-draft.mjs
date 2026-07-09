@@ -50,9 +50,11 @@ function normalizeNetwork(value) {
   return normalized;
 }
 
-function optionalExistingArtifact(name) {
+function requireExistingArtifact(name) {
   const value = argValue(name);
-  if (!value) return "";
+  if (!value) {
+    throw new Error(`--${name} is required when drafting canary launch evidence`);
+  }
   const resolved = path.resolve(process.cwd(), value);
   if (!existsSync(resolved)) {
     throw new Error(`--${name} must point to an existing redacted artifact`);
@@ -130,14 +132,11 @@ const network = argValue("network", process.env.NEXT_PUBLIC_LINEA_NETWORK || pro
 const chainId = argValue("chain-id", process.env.NEXT_PUBLIC_LINEA_CHAIN_ID || process.env.LINEA_CHAIN_ID || "");
 const contractAddress = argValue("contract", process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || process.env.KEEPER_CONTRACT_ADDRESS || "");
 const rpcLabel = argValue("rpc-label", "");
-const liveLog = optionalExistingArtifact("live-log");
-if (!liveLog) {
-  throw new Error("--live-log must point to an existing live canary JSONL artifact");
-}
-const targetArtifact = optionalExistingArtifact("target-artifact");
-const recoveryArtifact = optionalExistingArtifact("recovery-artifact");
-const sessionArtifact = optionalExistingArtifact("session-artifact");
-const txArtifact = optionalExistingArtifact("tx-artifact");
+const liveLog = requireExistingArtifact("live-log");
+const targetArtifact = requireExistingArtifact("target-artifact");
+const recoveryArtifact = requireExistingArtifact("recovery-artifact");
+const sessionArtifact = requireExistingArtifact("session-artifact");
+const txArtifact = requireExistingArtifact("tx-artifact");
 const liveEvents = readJsonlArtifact(liveLog);
 const summary = canarySummary(liveEvents);
 const now = new Date().toISOString();

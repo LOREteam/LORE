@@ -3569,3 +3569,11 @@ as historical progress only.
 - Added draft regression cases that reject missing --wallet-artifact and missing --clean-wallet-tx before QA draft output is written.
 
 - Verified node --check for changed QA draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.
+
+## 2026-07-09 - Canary draft artifact guard
+
+- Tightened scripts/create-canary-proof-draft.mjs so G10-G11 canary drafts require existing live-log, target, recovery, session, and transaction artifacts before writing a draft.
+- Added a draft regression case that rejects missing --target-artifact before canary draft output is written.
+- Improved proof draft compact error output so empty live canary logs show the actual guard message instead of a stack tail.
+
+- Verified node --check for changed canary draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.
