@@ -44,7 +44,7 @@ const requiredProofMarkerExpectations = new Map([
   ["G6", ["health:prod", "docs/host-health-prod.log", "base=<production origin>", "finalityLagBlocks", "load:http", "docs/host-load-http.log", "Load base URL:"]],
   ["G7", ["fresh external DB", "deploy block", "INDEXER_FINALITY_BLOCKS", "docs/indexer-once.log", "chainComparison"]],
   ["G8", ["backupSchedule", "docs/restore-drill.log", "docs/restore-health-prod.log", "indexerPreservation"]],
-  ["G9", ["health-prod", "data-sync", "stale-indexer-heartbeat", "indexer-lag", "bot-restart", "indexer-restart", "reverted-tx", "fired/recovery alerts", "alert target", "error event"]],
+  ["G9", ["health-prod", "data-sync", "stale-indexer-heartbeat", "indexer-lag", "bot-restart", "indexer-restart", "reverted-tx", "docs/monitoring-alert-export.log", "docs/monitoring-recovery-export.log", "docs/monitoring-alert-target-test.log", "docs/error-tracking-test-event.log", "fired/recovery alerts", "alert target", "error event"]],
   ["G10", ["target-RPC JSONL", "50 successful auto-miner unique epochs"]],
   ["G11", ["noDuplicateBets", "noNonceLoops", "noStuckPending", "pendingRecoveryConverged", "recovery evidence"]],
   ["G12", ["Privy allowed origins", "wrong network", "mobile Web3 browser", "clean-wallet first tx", "slow auth"]],
