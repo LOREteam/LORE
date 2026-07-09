@@ -13,10 +13,69 @@ const canaryTxArtifact = join(tmp, "canary-transaction-scan.log");
 const canaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", network: "linea-mainnet", chainId: 59144, contractAddress: "0x1111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
 writeFileSync(canaryLog, `${canaryEvent}\n`, "utf8");
 writeFileSync(emptyCanaryLog, "", "utf8");
+const canaryFullLog = join(tmp, "canary-full.jsonl");
+const canaryFullTxHashes = Array.from({ length: 50 }, (_, index) => `0x${(index + 1).toString(16).padStart(64, "0")}`);
+const canaryFullEvents = canaryFullTxHashes.map((txHash, index) => JSON.stringify({
+  timestamp: new Date(Date.UTC(2026, 6, 9, 0, index, 0)).toISOString(),
+  round: index,
+  ok: true,
+  txStatus: "success",
+  role: "AUTOMINER_A",
+  mode: "bet",
+  epoch: index + 1,
+  tiles: [1],
+  txHash,
+  network: "linea-mainnet",
+  chainId: 59144,
+  contractAddress: "0x1111111111111111111111111111111111111111",
+  rpcLabel: "redacted-mainnet-rpc",
+}));
+writeFileSync(canaryFullLog, `${canaryFullEvents.join("\n")}\n`, "utf8");
 writeFileSync(canaryTargetArtifact, "synthetic canary target proof\n", "utf8");
 writeFileSync(canaryRecoveryArtifact, "synthetic canary recovery proof\n", "utf8");
 writeFileSync(canarySessionArtifact, "synthetic canary session proof\n", "utf8");
 writeFileSync(canaryTxArtifact, "synthetic canary transaction proof\n", "utf8");
+const canaryMissingArtifact = join(tmp, "missing-canary-target-proof.log");
+const canaryMissingArtifactManifest = join(tmp, "canary-missing-local-artifact.json");
+writeFileSync(
+  canaryMissingArtifactManifest,
+  JSON.stringify({
+    targetNetwork: {
+      realTargetNetwork: true,
+      network: "linea-mainnet",
+      chainId: 59144,
+      rpc: "redacted-mainnet-rpc",
+      contractAddress: "0x1111111111111111111111111111111111111111",
+      checkedAt: "2026-07-09T00:00:00.000Z",
+      evidencePath: canaryMissingArtifact,
+    },
+    recovery: {
+      reload: { status: "verified", checkedAt: "2026-07-09T00:00:00.000Z", evidencePath: canaryRecoveryArtifact },
+      reconnect: { status: "verified", checkedAt: "2026-07-09T00:00:00.000Z", evidencePath: canaryRecoveryArtifact },
+      tabCloseRestore: { status: "verified", checkedAt: "2026-07-09T00:00:00.000Z", evidencePath: canaryRecoveryArtifact },
+      pendingTxRecovery: { status: "verified", checkedAt: "2026-07-09T00:00:00.000Z", txHash: canaryFullTxHashes[0], evidencePath: canaryRecoveryArtifact },
+      routeSwitchOrRemount: { status: "verified", checkedAt: "2026-07-09T00:00:00.000Z", evidencePath: canaryRecoveryArtifact },
+    },
+    autoMinerSession: {
+      status: "verified",
+      targetRpcConfirmed: true,
+      rounds: 50,
+      uniqueEpochs: 50,
+      checkedAt: "2026-07-09T00:49:00.000Z",
+      evidencePath: canarySessionArtifact,
+    },
+    transactionHealth: {
+      noDuplicateBets: true,
+      noNonceLoops: true,
+      noStuckPending: true,
+      pendingRecoveryConverged: true,
+      txHashes: [canaryFullTxHashes[0]],
+      checkedAt: "2026-07-09T00:49:00.000Z",
+      evidencePath: canaryTxArtifact,
+    },
+  }),
+  "utf8",
+);
 const qaWalletArtifact = join(tmp, "qa-wallet-flow-report.md");
 const qaFailureArtifact = join(tmp, "qa-failure-state-report.md");
 const qaSupportArtifact = join(tmp, "qa-support-audit-report.md");
@@ -27,6 +86,88 @@ writeFileSync(qaFailureArtifact, "synthetic failure-state QA report\n", "utf8");
 writeFileSync(qaSupportArtifact, "synthetic support audit QA report\n", "utf8");
 writeFileSync(qaFinalArtifact, "synthetic final browser QA report\n", "utf8");
 writeFileSync(qaSmokeArtifact, "synthetic debug autominer smoke log\n", "utf8");
+const qaMissingArtifact = join(tmp, "missing-qa-wallet-flow-report.md");
+const qaMissingArtifactManifest = join(tmp, "qa-missing-local-artifact.json");
+const checkedAt = "2026-07-09T00:00:00.000Z";
+const qaCheck = (artifact, origin = undefined) => ({
+  status: "verified",
+  checkedAt,
+  evidencePath: artifact,
+  ...(origin ? { origin } : {}),
+});
+writeFileSync(
+  qaMissingArtifactManifest,
+  JSON.stringify({
+    targetNetwork: "linea-mainnet",
+    targetChainId: 59144,
+    wallet: {
+      privyAllowedOrigins: {
+        ...qaCheck(qaMissingArtifact),
+        origin: "https://playlore.xyz",
+        exactProductionOrigin: true,
+        developmentFallbackAppIdUsed: false,
+      },
+      desktopConnect: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+      desktopDisconnect: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+      desktopReconnect: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+      wrongNetwork: {
+        ...qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+        unsupportedChainWarningVisible: true,
+        targetChainId: 59144,
+        testedChainId: 1,
+      },
+      mobileWeb3Browser: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+      cleanWalletFirstTx: {
+        ...qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+        txHash: "0x1111111111111111111111111111111111111111111111111111111111111111",
+        network: "linea-mainnet",
+        chainId: 59144,
+      },
+      slowNetworkAuthModal: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+      slowNetworkChatAuth: qaCheck(qaWalletArtifact, "https://playlore.xyz"),
+    },
+    failureStateUx: {
+      disabledActionsExplainReason: qaCheck(qaFailureArtifact),
+      pendingBet: qaCheck(qaFailureArtifact),
+      pendingResolve: qaCheck(qaFailureArtifact),
+      pendingChatAuth: qaCheck(qaFailureArtifact),
+      pendingProfileSave: qaCheck(qaFailureArtifact),
+      degradedDataVisible: qaCheck(qaFailureArtifact),
+      routeChunkRecovery: qaCheck(qaFailureArtifact),
+      noSilentNoop: qaCheck(qaFailureArtifact),
+    },
+    supportAuditVisibility: {
+      betHistoryFields: {
+        ...qaCheck(qaSupportArtifact),
+        fields: ["epoch", "tile", "amount", "txHash", "result"],
+      },
+      autoMinerLogFields: {
+        ...qaCheck(qaSupportArtifact),
+        fields: ["round", "epoch", "nonce", "txHash", "retryCount"],
+      },
+      diagnosticsIndexerLag: qaCheck(qaSupportArtifact),
+      diagnosticsHeartbeat: qaCheck(qaSupportArtifact),
+      diagnosticsServingMode: qaCheck(qaSupportArtifact),
+    },
+    finalQa: {
+      browserSmokeDebugAutominer: {
+        ...qaCheck(qaSmokeArtifact),
+        origin: "https://playlore.xyz",
+        command: '$env:SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS = "1"; npm.cmd run smoke:browser',
+        debugAutominerScenariosPassed: true,
+        noUnexpectedConsoleErrors: true,
+        unsupportedWalletWarningsNotMasked: true,
+      },
+      mobileLayout: qaCheck(qaFinalArtifact),
+      rightPanelOverlays: qaCheck(qaFinalArtifact),
+      chatGeometry: qaCheck(qaFinalArtifact),
+      faqMainnetWording: qaCheck(qaFinalArtifact),
+      whitepaperMainnetWording: qaCheck(qaFinalArtifact),
+      onboardingMainnetWording: qaCheck(qaFinalArtifact),
+    },
+  }),
+  "utf8",
+);
 const signoffEnvLog = join(tmp, "signoff-env.log");
 const signoffChainLog = join(tmp, "signoff-chain.log");
 writeFileSync(signoffEnvLog, "Summary: synthetic redacted proof:mainnet output", "utf8");
@@ -43,6 +184,67 @@ writeFileSync(hostProcessEvidence, "pm2 lore-site online\npm2 lore-bot online\np
 writeFileSync(hostExternalDbPath, "synthetic external host db path marker", "utf8");
 writeFileSync(hostHealthMissingBaseLog, "[prod-health] OK\nruntime=ok dataSync=ok effectiveLagBlocks=2 finalityLagBlocks=2\n", "utf8");
 writeFileSync(hostLoadMissingBaseLog, "Concurrency: 10; client IPs: 10; duration: 60000ms; timeout: 10000ms\nTOTAL count= 100 fail= 0 err= 0.00% p50= 100ms p95= 400ms p99= 700ms\n", "utf8");
+const hostMissingArtifact = join(tmp, "missing-host-process-model.log");
+const hostMissingArtifactManifest = join(tmp, "host-missing-local-artifact.json");
+const hostProcess = (name, command, evidencePath) => ({
+  status: "running",
+  running: true,
+  supervised: true,
+  command,
+  checkedAt: "2026-07-09T00:00:00.000Z",
+  evidencePath,
+});
+writeFileSync(
+  hostMissingArtifactManifest,
+  JSON.stringify({
+    origin: "https://playlore.xyz",
+    hostType: "production",
+    processModel: {
+      supervisor: "pm2",
+      "lore-site": hostProcess("lore-site", "npm.cmd run start", hostMissingArtifact),
+      "lore-bot": hostProcess("lore-bot", "npm.cmd run bot", hostProcessEvidence),
+      "lore-indexer": hostProcess("lore-indexer", "npm.cmd run indexer", hostProcessEvidence),
+    },
+    persistentDb: {
+      absolutePathOutsideRepo: true,
+      restartSurvived: true,
+      rebootSurvived: true,
+      path: hostExternalDbPath,
+      checkedAt: "2026-07-09T00:00:00.000Z",
+      evidencePath: hostProcessEvidence,
+    },
+    healthProd: {
+      status: "ok",
+      command: "npm.cmd run health:prod",
+      url: "https://playlore.xyz",
+      runtimeHealthPassed: true,
+      dataSyncHealthPassed: true,
+      diagnosticsAuthPassed: true,
+      finalityLagChecked: true,
+      jackpotRowsChecked: true,
+      timestamp: "2026-07-09T00:00:00.000Z",
+      evidencePath: hostHealthLog,
+      summary: "[prod-health] OK base=https://playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=2",
+    },
+    loadHttp: {
+      status: "ok",
+      command: "npm.cmd run load:http",
+      url: "https://canary.playlore.xyz",
+      hostType: "canary",
+      requestCount: 100,
+      errorRate: 0,
+      maxErrorRate: 0.01,
+      p95Ms: 400,
+      maxP95Ms: 1000,
+      durationMs: 60000,
+      concurrency: 10,
+      timestamp: "2026-07-09T00:00:00.000Z",
+      evidencePath: hostLoadLog,
+      summary: "Load base URL: https://canary.playlore.xyz TOTAL count=100 fail=0 err=0.00% p95=400ms",
+    },
+  }),
+  "utf8",
+);
 const indexerLog = join(tmp, "indexer-once.log");
 const indexerRepoDbLog = join(tmp, "indexer-repo-db.log");
 const indexerHealthLog = join(tmp, "indexer-health-prod.log");
@@ -53,6 +255,58 @@ writeFileSync(indexerLog, "[indexer] SQLite path: C:\\external\\lore.sqlite\n[in
 writeFileSync(indexerRepoDbLog, `[indexer] SQLite path: ${join(process.cwd(), "repo-indexer.sqlite")}\n[indexer] Contract: 0x1111111111111111111111111111111111111111\n[indexer] Deploy block: 1\n[indexer] Start block: 1\n[indexer] Finality blocks: 1\n[indexer] Scanning blocks 1..10\n[indexer] Finished runOnce\n`, "utf8");
 writeFileSync(indexerHealthLog, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
 writeFileSync(indexerChainSnapshot, JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z", expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
+const indexerMissingArtifact = join(tmp, "missing-indexer-once.log");
+const indexerMissingArtifactManifest = join(tmp, "indexer-missing-local-artifact.json");
+const indexerComparison = (key) => ({
+  matches: true,
+  checkedEpochs: [1],
+  checkedAt: "2026-07-09T00:00:00.000Z",
+  evidence: `artifact: ${indexerChainSnapshot} for ${key}`,
+});
+writeFileSync(
+  indexerMissingArtifactManifest,
+  JSON.stringify({
+    dryRun: {
+      status: "verified",
+      command: "npm.cmd run indexer:once",
+      freshDb: true,
+      fromDeployBlock: true,
+      dbPath: hostExternalDbPath,
+      startBlock: 1,
+      deployBlock: 1,
+      timestamp: "2026-07-09T00:00:00.000Z",
+      evidencePath: indexerMissingArtifact,
+      summary: "[indexer] Deploy block: 1\n[indexer] Start block: 1\n[indexer] Finished runOnce",
+    },
+    finality: {
+      finalityBlocksPositive: true,
+      finalityBlocks: 1,
+      dataSyncHealthFinalityAware: true,
+      checkedAt: "2026-07-09T00:00:00.000Z",
+      evidencePath: indexerHealthLog,
+      summary: "[prod-health] OK base=https://playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=1",
+    },
+    chainSnapshot: {
+      path: indexerChainSnapshot,
+      expectedChainId: 59144,
+      rpcChainId: 59144,
+      rpcChainIdMatches: true,
+      rpcSource: "redacted-mainnet-rpc",
+      contractAddress: "0x1111111111111111111111111111111111111111",
+      contractAddressMatches: true,
+      checkedAt: "2026-07-09T00:00:00.000Z",
+      evidence: `artifact: ${indexerChainSnapshot}`,
+    },
+    chainComparison: {
+      jackpot: indexerComparison("jackpot"),
+      deposits: indexerComparison("deposits"),
+      rewards: indexerComparison("rewards"),
+      rebates: indexerComparison("rebates"),
+      latestEpochs: indexerComparison("latestEpochs"),
+    },
+  }),
+  "utf8",
+);
 writeFileSync(indexerChainSnapshotMissingGeneratedAt, JSON.stringify({ expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
 writeFileSync(indexerChainSnapshotTooFewEpochs, JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z", expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
 const monitoringAlertArtifact = join(tmp, "monitoring-alert-export.log");
@@ -63,6 +317,58 @@ writeFileSync(monitoringAlertArtifact, "ALERT synthetic fired monitor export\n",
 writeFileSync(monitoringRecoveryArtifact, "RECOVERY synthetic resolved monitor export\n", "utf8");
 writeFileSync(monitoringAlertTargetArtifact, "SLACK synthetic alert target test export\n", "utf8");
 writeFileSync(monitoringErrorEventArtifact, "SENTRY synthetic error tracking test event\n", "utf8");
+const monitoringMissingArtifact = join(tmp, "missing-monitoring-alert-export.log");
+const monitoringMissingArtifactManifest = join(tmp, "monitoring-missing-local-artifact.json");
+const monitoringKinds = [
+  "health-prod",
+  "data-sync",
+  "stale-indexer-heartbeat",
+  "indexer-lag",
+  "bot-restart",
+  "indexer-restart",
+  "reverted-tx",
+];
+writeFileSync(
+  monitoringMissingArtifactManifest,
+  JSON.stringify({
+    origin: "https://playlore.xyz",
+    monitors: monitoringKinds.map((kind) => ({
+      kind,
+      enabled: true,
+      provider: "synthetic-monitor",
+      cadenceSeconds: kind === "health-prod" ? 60 : 120,
+      url: kind === "health-prod" ? "https://playlore.xyz/api/health/runtime" : "https://playlore.xyz/api/health/data-sync",
+      alertCondition: `${kind} synthetic alert condition`,
+      evidencePath: kind === "health-prod" ? monitoringMissingArtifact : monitoringAlertArtifact,
+      link: `artifact: ${kind === "health-prod" ? monitoringMissingArtifact : monitoringAlertArtifact}`,
+      lastAlertTestAt: "2026-07-09T00:00:00.000Z",
+      recoveryEvidencePath: monitoringRecoveryArtifact,
+      recoveryLink: `artifact: ${monitoringRecoveryArtifact}`,
+      lastRecoveryAt: "2026-07-09T00:01:00.000Z",
+    })),
+    alertTargets: [{
+      name: "synthetic slack",
+      kind: "slack",
+      verified: true,
+      lastTestAt: "2026-07-09T00:00:00.000Z",
+      evidencePath: monitoringAlertTargetArtifact,
+      link: `artifact: ${monitoringAlertTargetArtifact}`,
+    }],
+    errorTracking: {
+      enabled: true,
+      provider: "synthetic-error-tracker",
+      project: "lore-mainnet",
+      environment: "production",
+      releaseOrDeploy: "synthetic-release",
+      testEventStatus: "success",
+      testEventAt: "2026-07-09T00:00:00.000Z",
+      testEventId: "SENTRY-123456",
+      testEventEvidencePath: monitoringErrorEventArtifact,
+      testEventLink: `artifact: ${monitoringErrorEventArtifact}`,
+    },
+  }),
+  "utf8",
+);
 
 const restoreSourcePath = join(mkdtempSync(join(tmpdir(), "lore-proof-restore-source-")), "source.sqlite");
 const restoreBackupDir = mkdtempSync(join(tmpdir(), "lore-proof-restore-backup-"));
@@ -342,6 +648,40 @@ const collectorRejectCases = [
   },
 ];
 
+const strictRejectCases = [
+  {
+    id: "host-missing-local-artifact-ref",
+    check: ["scripts/check-host-proof.mjs"],
+    checkArgs: ["--strict", `--file=${hostMissingArtifactManifest}`],
+    expected: "local host artifact references must exist",
+  },
+  {
+    id: "indexer-missing-local-artifact-ref",
+    check: ["scripts/check-indexer-dry-run.mjs"],
+    checkArgs: ["--strict", `--db=${hostExternalDbPath}`, `--manifest=${indexerMissingArtifactManifest}`],
+    env: { INDEXER_START_BLOCK: "1", NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "1", INDEXER_FINALITY_BLOCKS: "1" },
+    expected: "local indexer artifact references must exist",
+  },
+  {
+    id: "monitoring-missing-local-artifact-ref",
+    check: ["scripts/check-monitoring-proof.mjs"],
+    checkArgs: ["--strict", `--file=${monitoringMissingArtifactManifest}`],
+    expected: "local monitoring artifact references must exist",
+  },
+  {
+    id: "qa-missing-local-artifact-ref",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaMissingArtifactManifest}`],
+    expected: "local QA artifact references must exist",
+  },
+  {
+    id: "canary-missing-local-artifact-ref",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [canaryFullLog, "--strict", `--manifest=${canaryMissingArtifactManifest}`],
+    expected: "local canary artifact references must exist",
+  },
+];
+
 const finalOutputCases = [
   {
     id: "signoff-draft-missing-env-log",
@@ -483,10 +823,10 @@ const finalOutputCases = [
   },
 ];
 
-function runNode(args) {
+function runNode(args, envPatch = {}) {
   return spawnSync(process.execPath, args, {
     cwd: process.cwd(),
-    env: process.env,
+    env: { ...process.env, ...envPatch },
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
   });
@@ -494,7 +834,7 @@ function runNode(args) {
 
 function oneLine(output) {
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted artifact|must be a real non-zero tx hash|must include at least one successful auto-miner canary tx/i;
+  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted artifact|must be a real non-zero tx hash|must include at least one successful auto-miner canary tx|local host artifact references must exist|local indexer artifact references must exist|local monitoring artifact references must exist|local QA artifact references must exist|local canary artifact references must exist/i;
   const preferred = lines.find((line) => /^Error: /i.test(line) && guardPattern.test(line)) || lines.find((line) => guardPattern.test(line));
   const compact = preferred || lines.slice(-3).join(" | ");
   return compact.length > 260 ? `${compact.slice(0, 257)}...` : compact;
@@ -563,6 +903,16 @@ for (const item of collectorRejectCases) {
     issues.push(`${item.id}: incomplete collector evidence was not rejected`);
   }
   rows.push([item.id, rejected ? "rejected" : "issue", String(createResult.status), oneLine(createOutput).replace(/\|/g, "\\|")]);
+}
+
+for (const item of strictRejectCases) {
+  const checkResult = runNode([...item.check, ...item.checkArgs], item.env);
+  const checkOutput = `${checkResult.stdout || ""}\n${checkResult.stderr || ""}`;
+  const rejected = checkResult.status !== 0 && checkOutput.includes(item.expected);
+  if (!rejected) {
+    issues.push(`${item.id}: strict validator did not reject missing local artifact evidence`);
+  }
+  rows.push([item.id, rejected ? "rejected" : "issue", String(checkResult.status), oneLine(checkOutput).replace(/\|/g, "\\|")]);
 }
 
 for (const item of finalOutputCases) {

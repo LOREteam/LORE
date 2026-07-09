@@ -287,6 +287,38 @@ function hasEvidence(value) {
   ].some(hasConcreteText);
 }
 
+function localArtifactPathFromText(value, key = "") {
+  if (!hasRealText(value)) return "";
+  const text = String(value).trim().replace(/^`|`$/g, "");
+  if (/^https?:\/\//i.test(text)) return "";
+  const artifactMatch = text.match(/^artifact:\s*(.+)$/i);
+  const candidate = (artifactMatch ? artifactMatch[1] : text).trim().replace(/^`|`$/g, "");
+  if (/^https?:\/\//i.test(candidate)) return "";
+  const keySuggestsPath = /(?:evidencePath|artifact|link)$/i.test(key);
+  const valueLooksLikePath = /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv|png|jpg|jpeg|webp)(?:\b|$)/i.test(candidate);
+  return (artifactMatch || keySuggestsPath) && valueLooksLikePath ? candidate : "";
+}
+
+function findMissingLocalArtifactRefs(value, path = "$", key = "") {
+  const findings = [];
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => findings.push(...findMissingLocalArtifactRefs(entry, `${path}[${index}]`, key)));
+    return findings;
+  }
+  if (typeof value === "string") {
+    const artifactPath = localArtifactPathFromText(value, key);
+    if (artifactPath && !existsSync(resolve(process.cwd(), artifactPath))) {
+      findings.push(`${path} -> ${artifactPath}`);
+    }
+    return findings;
+  }
+  if (!isPlainObject(value)) return findings;
+  for (const [childKey, entry] of Object.entries(value)) {
+    findings.push(...findMissingLocalArtifactRefs(entry, `${path}.${childKey}`, childKey));
+  }
+  return findings;
+}
+
 function findSecretLikeValues(value, path = "$") {
   const findings = [];
   if (Array.isArray(value)) {
@@ -348,6 +380,10 @@ function loadAndValidateManifest(path, issues) {
   const templateFindings = findTemplateLikeValues(manifest);
   if (templateFindings.length > 0) {
     issues.push(`template placeholder values must be replaced: ${templateFindings.slice(0, 5).join(", ")}`);
+  }
+  const missingArtifactRefs = findMissingLocalArtifactRefs(manifest);
+  if (missingArtifactRefs.length > 0) {
+    issues.push(`local canary artifact references must exist: ${missingArtifactRefs.slice(0, 5).join(", ")}`);
   }
 
   const targetNetwork = isPlainObject(manifest.targetNetwork) ? manifest.targetNetwork : {};

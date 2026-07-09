@@ -3653,10 +3653,38 @@ as historical progress only.
 
 - Added L13 to `scripts/run-local-proof-preflight.mjs`: `scripts/run-launch-proof.mjs --strict` must fail while final proof manifests, G1-G14 evidence, and live canary log are missing.
 - Updated `docs/mainnet-status-board.md`, `docs/current_state.md`, and `scripts/check-launch-gates.mjs` so local verification records and requires L1-L13 plus strict launch expected-fail coverage.
+
 ## 2026-07-09 - Future-compatible strict launch L13
 
 - Adjusted `scripts/run-local-proof-preflight.mjs` L13 so it accepts the current expected-fail strict launch state, but will also pass if strict launch later reaches `Overall: all launch proof checks passed.` after real G1-G14 evidence and canary log are collected.
+
 ## 2026-07-09 - L13 incomplete-gate expected-fail pattern
 
 - Loosened `scripts/run-local-proof-preflight.mjs` L13 from requiring missing final proof manifests to requiring strict launch output with `Incomplete gates:` plus failed launch summary.
 - This keeps the current missing-evidence launch blocked while allowing future partial proof collection states to keep using `proof:local` until all G1-G14 evidence is complete.
+
+## 2026-07-09 - Monitoring final artifact existence guard
+
+- Tightened `scripts/check-monitoring-proof.mjs` so strict G9 monitoring proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, and `artifact` fields while still allowing external HTTPS provider links.
+- Added a `scripts/check-proof-drafts.mjs` regression manifest proving strict monitoring validation fails when a final-looking monitoring proof points at a missing local redacted artifact.
+- Verified `node --check scripts\check-monitoring-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+## 2026-07-09 - QA final artifact existence guard
+
+- Tightened `scripts/check-qa-proof.mjs` so strict G12-G14 QA proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, `artifact`, screenshot, log, report, and command-output path fields while still allowing external HTTPS evidence links.
+- Added a `scripts/check-proof-drafts.mjs` regression manifest proving strict QA validation fails when a final-looking QA proof points at a missing local wallet QA artifact.
+- Verified `node --check scripts\check-qa-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+## 2026-07-09 - Canary final artifact existence guard
+
+- Tightened `scripts/analyze-live-canary-proof.mjs` so strict G10-G11 canary proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, and `artifact` fields while still allowing external HTTPS evidence links.
+- Added a `scripts/check-proof-drafts.mjs` regression with a 50-epoch synthetic canary JSONL and final-looking manifest proving strict canary validation fails when target evidence points at a missing local artifact.
+- Verified `node --check scripts\analyze-live-canary-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+## 2026-07-09 - Host final artifact existence guard
+
+- Tightened `scripts/check-host-proof.mjs` so strict G5-G6 host proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, `artifact`, log/report, and command-output path fields while still allowing external HTTPS evidence links.
+- Added a `scripts/check-proof-drafts.mjs` regression manifest proving strict host validation fails when a final-looking host proof points at a missing local process-model artifact.
+- Verified `node --check scripts\check-host-proof.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
+## 2026-07-09 - Indexer final artifact existence guard
+
+- Tightened `scripts/check-indexer-dry-run.mjs` so strict G7 indexer proof rejects missing local artifact references in `artifact: ...`, `evidencePath`, `artifact`, and link fields while leaving `dryRun.dbPath` as the separately validated runtime DB path.
+- Added a `scripts/check-proof-drafts.mjs` regression manifest proving strict indexer validation fails when a final-looking indexer proof points at a missing local `indexer:once` artifact.
+- Verified `node --check scripts\check-indexer-dry-run.mjs`, `node --check scripts\check-proof-drafts.mjs`, and `npm.cmd run proof:drafts`.
