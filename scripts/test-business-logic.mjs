@@ -141,11 +141,12 @@ async function main() {
   assert.equal(publicConfig.getConfiguredReadOnlyMode("true"), true);
   assert.equal(publicConfig.getConfiguredReadOnlyMode("0"), false);
   assert.equal(publicConfig.getConfiguredReadOnlyMode("bogus"), false);
-  assert.equal(publicConfig.isUnstableLineaReadRpc("https://rpc.sepolia.linea.build", "sepolia"), true);
-  assert.equal(publicConfig.isUnstableLineaReadRpc("https://linea-sepolia.drpc.org", "sepolia"), true);
+  assert.equal(publicConfig.isUnstableLineaReadRpc("https://linea-sepolia-rpc.publicnode.com", "sepolia"), true);
+  assert.equal(publicConfig.isUnstableLineaReadRpc("https://rpc.sepolia.linea.build", "sepolia"), false);
+  assert.equal(publicConfig.isUnstableLineaReadRpc("https://linea-sepolia.drpc.org", "sepolia"), false);
   assert.deepEqual(
     publicConfig.getStableLineaReadRpcs(undefined, "sepolia"),
-    ["https://linea-sepolia-rpc.publicnode.com"],
+    ["https://linea-sepolia.drpc.org", "https://rpc.sepolia.linea.build"],
   );
   assert.throws(
     () => publicConfig.getConfiguredDeployBlock("bad", "sepolia"),
@@ -1676,7 +1677,39 @@ async function main() {
     /tileCount/,
     "live canary logs must include tile count for stress analysis",
   );
+  assert.match(
+    liveRoundCanarySource,
+    /LIVE_TEST_VERBOSE_WALLETS/,
+    "live canary must keep detailed wallet inventory behind an explicit opt-in",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /walletPreflight ready=.*roles=.*\n.*if \(VERBOSE_WALLET_PREFLIGHT\) console\.table\(rows\)/s,
+    "live canary must default to a redacted wallet preflight summary",
+  );
 
+  const indexerSource = readFileSync("scripts/indexer.ts", "utf8");
+  assert.match(
+    indexerSource,
+    /function filterLogsByTopics[\s\S]*topics\.every/,
+    "indexer reconciliation must locally verify every requested topic",
+  );
+  assert.match(
+    indexerSource,
+    /fetchAllLogs[\s\S]*fetchLogsRequestAdaptiveSplit\(\[\], "ContractEvents"/,
+    "indexer must fetch each contract chunk once instead of duplicating raw topic queries",
+  );
+  assert.match(
+    indexerSource,
+    /const REPAIR_CHUNK_BLOCKS = 10_000n/,
+    "indexer repair must stay within the confirmed Sepolia RPC log range",
+  );
+  const restoreProofSource = readFileSync("scripts/verify-db-restore.mjs", "utf8");
+  assert.match(
+    restoreProofSource,
+    /mkdirSync\(dirname\(restoreMain\), \{ recursive: true \}\);\s*copyFileSync\(backupMain, restoreMain\)/,
+    "restore drill must create its target directory before copying the backup",
+  );
   const previousWindow = globalThis.window;
   try {
     const storage = new Map();

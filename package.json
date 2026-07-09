@@ -27,6 +27,8 @@
     "proof:chain": "node scripts/collect-chain-proof.mjs",
     "proof:canary": "node scripts/analyze-live-canary-proof.mjs",
     "proof:canary:draft": "node scripts/create-canary-proof-draft.mjs",
+    "proof:testnet:canary": "node scripts/analyze-live-canary-proof.mjs --profile=testnet",
+    "proof:testnet:canary:draft": "node scripts/create-canary-proof-draft.mjs --profile=testnet",
     "proof:collector-redaction": "node scripts/check-proof-collector-redaction.mjs",
     "proof:drafts:create": "node scripts/create-all-proof-drafts.mjs",
     "proof:drafts": "node scripts/check-proof-drafts.mjs",

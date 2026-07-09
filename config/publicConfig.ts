@@ -169,13 +169,7 @@ export function isUnstableLineaReadRpc(
 ) {
   if (!url) return false;
   const normalized = url.toLowerCase();
-  if (
-    network === "sepolia" &&
-    (
-      normalized.includes("linea-sepolia.drpc.org") ||
-      normalized.includes("rpc.sepolia.linea.build")
-    )
-  ) {
+  if (network === "sepolia" && normalized.includes("linea-sepolia-rpc.publicnode.com")) {
     return true;
   }
   return false;

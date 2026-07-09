@@ -572,6 +572,7 @@ if (issues.length === 0) {
     }
   }
 
+  mkdirSync(dirname(restoreMain), { recursive: true });
   copyFileSync(backupMain, restoreMain);
   for (const suffix of ["-wal", "-shm"]) {
     const backupSidecar = `${backupMain}${suffix}`;

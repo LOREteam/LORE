@@ -3966,3 +3966,12 @@ as historical progress only.
 - Verified the current local baseline: `git diff --check`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local` (L1-L14), `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run test:contract`, `npm.cmd run build`, and `npm.cmd run proof:deps:all` all passed. Full dependency audit reports 0 critical / 0 high; moderate and low advisories remain tracked for later review.
 - Split the accumulated work into `2e99bd9 chore: clear high dependency audit findings`, `47ab240 feat: harden launch proof evidence gates`, and `48c5f17 chore: ignore local diagnostic artifacts`; the worktree was clean afterward.
 - `npm.cmd run proof:mainnet -- --strict` correctly remains a G1 blocker in the current shell: required mainnet network, contract/token, deploy block, finality, RPC, production origin, Privy, diagnostics, proxy, and external DB configuration are not present. No values were guessed or written as proof.
+## 2026-07-10 Sepolia Indexer and Restore Validation
+
+- Reframed active work as Sepolia testnet readiness; mainnet proof remains paused.
+- Found and fixed Sepolia read RPC selection: PublicNode returned 403 for eth_getLogs, while dRPC/official RPC accept reads.
+- Found and fixed indexer duplication: raw topics were ignored by the installed viem client form, so one contract log fetch per chunk is now classified locally; reconciliation also locally verifies requested topics.
+- Reduced repair chunks from 20k to 10k after real Sepolia RPC evidence showed 20k triggers retry/split.
+- Fresh external SQLite catch-up from deploy block completed (376 chunks, 7,139 raw logs); restart resumed from persisted block/repair cursor and reconciliation reported no missing epochs.
+- Fixed restore drill creating no restore directory; a real temporary Sepolia DB backup/restore completed with integrity_check ok and restored scoped data.
+- Verified test:logic, typecheck, proof:drafts, and live dry preflight. Mainnet artifacts were not written.

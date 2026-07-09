@@ -64,7 +64,8 @@ const DEPLOY_BLOCK = getConfiguredDeployBlock(
 const INDEXER_START_BLOCK = DEPLOY_BLOCK;
 const CHUNK_BLOCKS = 2_000n;
 const RUN_CHUNK_BLOCKS = 5_000n;
-const REPAIR_CHUNK_BLOCKS = 20_000n;
+// Sepolia public RPC rejects 20k eth_getLogs ranges; 10k avoids retry splitting.
+const REPAIR_CHUNK_BLOCKS = 10_000n;
 const RECONCILE_SCAN_CHUNK_BLOCKS = 20_000n;
 const RECONCILE_RECENT_LOOKBACK_BLOCKS = 150_000n;
 const POLL_INTERVAL_MS = 15_000;
@@ -373,43 +374,13 @@ async function fetchLogsByTopic(
   return all;
 }
 
+function filterLogsByTopics(logs: Log[], topics: Array<`0x${string}`>) {
+  return logs.filter((log) => topics.every((topic, index) => log.topics[index] === topic));
+}
+
 async function fetchAllLogs(from: bigint, to: bigint): Promise<Log[]> {
-  const topics: Array<{ sig: `0x${string}`; label: string }> = [
-    { sig: betSig, label: "BetPlaced" },
-    { sig: batchSig, label: "BatchBets" },
-    { sig: batchSameAmountSig, label: "BatchBetsSameAmount" },
-    { sig: batchBitmapSig, label: "BatchBetsBitmap" },
-    { sig: resolvedSig, label: "EpochResolved" },
-    { sig: dailySig, label: "DailyJackpot" },
-    { sig: weeklySig, label: "WeeklyJackpot" },
-    { sig: rewardClaimedSig, label: "RewardClaimed" },
-    { sig: rewardBatchClaimedSig, label: "RewardBatchClaimed" },
-    { sig: rebateClaimedSig, label: "RebateClaimed" },
-    { sig: rebateBatchClaimedSig, label: "RebateBatchClaimed" },
-    { sig: resolverRewardAccruedSig, label: "ResolverRewardAccrued" },
-    { sig: resolverRewardClaimedSig, label: "ResolverRewardClaimed" },
-    { sig: feesFlushedSig, label: "ProtocolFeesFlushed" },
-  ];
-
-  const all: Log[] = [];
-  for (const { sig, label } of topics) {
-    const logs = await fetchLogsByTopic(sig, label, from, to);
-    all.push(...logs);
-  }
-  all.sort((a, b) => {
-    const aBlock = a.blockNumber ?? 0n;
-    const bBlock = b.blockNumber ?? 0n;
-    if (aBlock !== bBlock) return aBlock < bBlock ? -1 : 1;
-
-    const aTxIndex = a.transactionIndex ?? 0;
-    const bTxIndex = b.transactionIndex ?? 0;
-    if (aTxIndex !== bTxIndex) return aTxIndex - bTxIndex;
-
-    const aLogIndex = a.logIndex ?? 0;
-    const bLogIndex = b.logIndex ?? 0;
-    return aLogIndex - bLogIndex;
-  });
-  return all;
+  // viem ignores raw `topics` in this client form, so fetch once and classify locally.
+  return fetchLogsRequestAdaptiveSplit([], "ContractEvents", from, to);
 }
 
 // Process a single log
@@ -1011,6 +982,7 @@ async function runEpochReconcile(currentBlock: bigint) {
       recentFrom,
       currentBlock,
     );
+    logs = filterLogsByTopics(logs, [resolvedSig, epTopic]);
     if (logs.length === 0 && recentFrom > INDEXER_START_BLOCK) {
       console.log(`[indexer][reconcile] Epoch ${epNum} not found in recent tail, falling back to full scan`);
       logs = await fetchLogsByTopicsChunked(
@@ -1019,6 +991,7 @@ async function runEpochReconcile(currentBlock: bigint) {
         INDEXER_START_BLOCK,
         recentFrom - 1n,
       );
+      logs = filterLogsByTopics(logs, [resolvedSig, epTopic]);
     }
     if (logs.length === 0) continue;
 

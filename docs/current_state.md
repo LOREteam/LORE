@@ -1,6 +1,6 @@
 # Current State
 
-Current focus: launch readiness / production proof. Runtime feature work is secondary until proof tooling and external evidence are reliable.
+Current focus: Linea Sepolia testnet readiness. Mainnet proof tooling is retained, but G1-G14 production evidence and the mainnet transition are explicitly out of scope until separately resumed.
 
 ## Known State
 - 2026-07-10 local baseline: `git diff --check`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local` (L1-L14), `npm.cmd run typecheck`, `npm.cmd run test:logic`, and `npm.cmd run build` passed. `.gitignore` excludes the current local `.tmp/`, shell-host artifact, diagnostic log, and screenshot artifacts so they are not commit candidates.
@@ -139,15 +139,17 @@ Current focus: launch readiness / production proof. Runtime feature work is seco
 - Mainnet launch remains blocked by missing external evidence for G1-G14; local proof tooling passing does not mean launch-ready.
 - No NUL-leading docs/scripts files remain after the latest recovery scan.
 
+## Testnet Evidence (2026-07-10)
+
+- A fresh external Sepolia SQLite indexer run from deploy block completed: 376 chunks and 7,139 raw contract logs.
+- Restarting the same DB resumed from its persisted block and repair cursor; reconciliation reported no missing epochs.
+- The local Sepolia SQLite backup/restore drill completed with SQLite integrity_check `ok` and restored scoped data.
+- These temporary local artifacts are testnet validation only, not mainnet proof or production evidence.
 ## Current Blockers
 
-- Final contract/env/funds safety sign-off is not collected; current `npm.cmd run proof:mainnet -- --strict` shows required G1 env values missing in this shell and does not write final proof.
-- Production host evidence is not collected from real HTTPS origin; after local dependencies were restored, `npm.cmd run health:prod` now reaches its own guard and requires `HEALTH_DIAGNOSTICS_SECRET` before any production health evidence can be collected.
-- Indexer fresh DB dry-run from deploy block is not collected.
-- Backup/restore drill evidence is not collected; strict G8 also requires external source, backup dir, restore dir, finality-aware restored `health:prod`, and final `docs/restore-proof.json`.
-- External monitoring and error tracking evidence is not collected.
-- Real canary epoch run and wallet QA proof are not collected.
+- Strict testnet canary evidence needs a concrete redacted LIVE_CANARY_RPC_LABEL; the current unlabeled-rpc value is intentionally rejected.
+- Real browser wallet UX proof and the 50-epoch canary run are not collected yet.
 
 ## Next Best Step
 
-Collect production host evidence, then indexer fresh DB dry-run, backup/restore drill, monitoring/error tracking, real canary epochs, wallet QA, and final launch evidence in that order.
+Set a concrete redacted RPC label in the private testnet environment, run the 50-epoch Sepolia canary, then collect browser wallet/mobile UX and selected direct chain-to-DB comparison evidence. Mainnet G1-G14 proof remains paused.

@@ -31,6 +31,14 @@ const canaryFullEvents = canaryFullTxHashes.map((txHash, index) => JSON.stringif
   rpcLabel: "redacted-mainnet-rpc",
 }));
 writeFileSync(canaryFullLog, `${canaryFullEvents.join("\n")}\n`, "utf8");
+const testnetCanaryFullLog = join(tmp, "testnet-canary-full.jsonl");
+const testnetCanaryFullEvents = canaryFullEvents.map((event) => JSON.stringify({
+  ...JSON.parse(event),
+  network: "linea-sepolia",
+  chainId: 59141,
+  rpcLabel: "redacted-sepolia-rpc",
+}));
+writeFileSync(testnetCanaryFullLog, `${testnetCanaryFullEvents.join("\n")}\n`, "utf8");
 const canaryTemplateLiveLog = join(tmp, "canary-template-live.jsonl");
 const canarySecretLiveLog = join(tmp, "canary-secret-live.jsonl");
 const canaryMalformedLiveLog = join(tmp, "canary-malformed-live.jsonl");
@@ -143,6 +151,17 @@ const canaryValidStrictManifest = {
   },
 };
 writeFileSync(canaryValidStrictManifestPath, JSON.stringify(canaryValidStrictManifest), "utf8");
+const testnetCanaryValidStrictManifestPath = join(tmp, "testnet-canary-valid-strict.json");
+const testnetCanaryValidStrictManifest = {
+  ...canaryValidStrictManifest,
+  targetNetwork: {
+    ...canaryValidStrictManifest.targetNetwork,
+    network: "linea-sepolia",
+    chainId: 59141,
+    rpc: "redacted-sepolia-rpc",
+  },
+};
+writeFileSync(testnetCanaryValidStrictManifestPath, JSON.stringify(testnetCanaryValidStrictManifest), "utf8");
 writeFileSync(
   canaryIrrelevantTargetManifest,
   JSON.stringify({
@@ -1046,6 +1065,14 @@ const draftCases = [
     check: ["scripts/analyze-live-canary-proof.mjs"],
     checkArgs: (out) => [canaryLog, "--strict", `--manifest=${out}`],
   },
+  {
+    id: "canary-testnet",
+    out: join(tmp, "testnet-canary-proof.draft.json"),
+    create: ["scripts/create-canary-proof-draft.mjs"],
+    createArgs: ["--profile=testnet", "--network=linea-sepolia", "--chain-id=59141", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-sepolia-rpc", `--live-log=${testnetCanaryFullLog}`, `--target-artifact=${canaryTargetArtifact}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--session-artifact=${canarySessionArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: (out) => [testnetCanaryFullLog, "--profile=testnet", "--strict", `--manifest=${out}`],
+  },
 ];
 
 const collectorDraftCases = [
@@ -1472,7 +1499,7 @@ const strictRejectCases = [
     id: "canary-irrelevant-target-artifact",
     check: ["scripts/analyze-live-canary-proof.mjs"],
     checkArgs: [canaryFullLog, "--strict", `--manifest=${canaryIrrelevantTargetManifest}`],
-    expected: "targetNetwork evidence must mention target RPC, chain, or mainnet proof",
+    expected: "targetNetwork evidence must mention target RPC, chain, or Linea mainnet launch proof",
   },
   {
     id: "canary-irrelevant-recovery-artifact",
@@ -1668,6 +1695,12 @@ const finalOutputCases = [
     expected: "writes incomplete drafts only",
   },
   {
+    id: "canary-testnet-final-output",
+    create: ["scripts/create-canary-proof-draft.mjs"],
+    createArgs: ["--profile=testnet", "--network=linea-sepolia", "--chain-id=59141", "--out=docs/testnet-canary-proof.json"],
+    expected: "writes incomplete drafts only",
+  },
+  {
     id: "qa-missing-wallet-artifact",
     create: ["scripts/create-qa-proof-draft.mjs"],
     createArgs: ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--failure-artifact=${qaFailureArtifact}`, `--support-artifact=${qaSupportArtifact}`, `--finalqa-artifact=${qaFinalArtifact}`, `--smoke-artifact=${qaSmokeArtifact}`, "--clean-wallet-tx=0x1111111111111111111111111111111111111111111111111111111111111111"],
@@ -1735,6 +1768,21 @@ const finalOutputCases = [
   },
 ];
 
+const strictPassCases = [
+  {
+    id: "canary-testnet-profile",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [testnetCanaryFullLog, "--profile=testnet", "--strict", `--manifest=${testnetCanaryValidStrictManifestPath}`],
+    env: {
+      LINEA_NETWORK: "sepolia",
+      NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
+      LINEA_CHAIN_ID: "59141",
+      NEXT_PUBLIC_LINEA_CHAIN_ID: "59141",
+      NEXT_PUBLIC_CONTRACT_ADDRESS: "0x1111111111111111111111111111111111111111",
+    },
+  },
+];
+
 function runNode(args, envPatch = {}) {
   return spawnSync(process.execPath, args, {
     cwd: process.cwd(),
@@ -1746,7 +1794,7 @@ function runNode(args, envPatch = {}) {
 
 function oneLine(output) {
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted file artifact|must point to an existing redacted artifact|must contain successful proof:mainnet summary|must include successful restore drill summary|must include base=<production origin>|must include Load base URL line|must include \[prod-health\] OK|must include runtime=ok\/pass\/healthy|must include dataSync=ok\/pass\/healthy|must include numeric finalityLagBlocks=<number>|must be outside the repo checkout|must include generatedAt as ISO-8601 UTC|must include at least --epochs unique checked epochs|must match --deploy-block|must match --chain-snapshot contractAddress|must be a real non-zero tx hash|must include at least one successful auto-miner canary tx|local signoff artifact references must exist|contractEnv evidence must mention proof:mainnet, env, contract, deploy, or chainId proof|ownership\.directOwnerReadEvidence evidence must mention owner, Safe\/multisig, governance, or direct-chain proof|randomness evidence must mention randomness decision or operator sign-off proof|chainComparison\.jackpot evidence must mention jackpot, direct-chain, app, or indexer proof|local host artifact references must exist|persistentDb evidence artifact must mention persistence, restart\/reboot, or DB path proof|healthProd evidence artifact must include \[prod-health\] OK, base, and numeric finalityLagBlocks|loadHttp evidence artifact must include Load base URL, TOTAL, and p95 output|local indexer artifact references must exist|dryRun evidence artifact must include \[indexer\] Deploy block and \[indexer\] Start block|finality evidence artifact must include health:prod base and numeric finalityLagBlocks|chainSnapshot\.path artifact must include generatedAt, rpcChainId, and contractAddress|chainComparison\.jackpot evidence artifact must mention jackpot, direct-chain, chain comparison, or indexer proof|local monitoring artifact references must exist|fired-alert evidence must mention alert, monitor, fired, triggered, or incident proof|recovery evidence must mention recovery, recovered, resolved, or resolution proof|alertTargets\[0\] evidence must mention alert target or notification channel proof|error tracking test event evidence must mention error, exception, event, issue, or provider proof|local restore artifact references must exist|local QA artifact references must exist|wallet\.privyAllowedOrigins evidence must mention wallet\/Privy\/connect\/mobile\/wrong-network proof|failureStateUx\.disabledActionsExplainReason evidence must mention failure-state\/pending\/degraded\/no-op UX proof|supportAuditVisibility\.betHistoryFields evidence must mention support\/audit\/diagnostics visibility proof|finalQa\.mobileLayout evidence must mention final browser\/mobile\/mainnet wording QA proof|finalQa\.browserSmokeDebugAutominer evidence must mention debug autominer browser smoke proof|targetNetwork evidence must mention target RPC, chain, or mainnet proof|recovery\.reload evidence must mention reload, reconnect, tab-close, pending-tx, remount, or recovery proof|autoMinerSession evidence must mention auto-miner session, rounds, epochs, or target RPC proof|transactionHealth evidence must mention transaction, tx, nonce, duplicate, stuck pending, or pending recovery proof|local canary artifact references must exist/i;
+  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted file artifact|must point to an existing redacted artifact|must contain successful proof:mainnet summary|must include successful restore drill summary|must include base=<production origin>|must include Load base URL line|must include \[prod-health\] OK|must include runtime=ok\/pass\/healthy|must include dataSync=ok\/pass\/healthy|must include numeric finalityLagBlocks=<number>|must be outside the repo checkout|must include generatedAt as ISO-8601 UTC|must include at least --epochs unique checked epochs|must match --deploy-block|must match --chain-snapshot contractAddress|must be a real non-zero tx hash|must include at least one successful auto-miner canary tx|local signoff artifact references must exist|contractEnv evidence must mention proof:mainnet, env, contract, deploy, or chainId proof|ownership\.directOwnerReadEvidence evidence must mention owner, Safe\/multisig, governance, or direct-chain proof|randomness evidence must mention randomness decision or operator sign-off proof|chainComparison\.jackpot evidence must mention jackpot, direct-chain, app, or indexer proof|local host artifact references must exist|persistentDb evidence artifact must mention persistence, restart\/reboot, or DB path proof|healthProd evidence artifact must include \[prod-health\] OK, base, and numeric finalityLagBlocks|loadHttp evidence artifact must include Load base URL, TOTAL, and p95 output|local indexer artifact references must exist|dryRun evidence artifact must include \[indexer\] Deploy block and \[indexer\] Start block|finality evidence artifact must include health:prod base and numeric finalityLagBlocks|chainSnapshot\.path artifact must include generatedAt, rpcChainId, and contractAddress|chainComparison\.jackpot evidence artifact must mention jackpot, direct-chain, chain comparison, or indexer proof|local monitoring artifact references must exist|fired-alert evidence must mention alert, monitor, fired, triggered, or incident proof|recovery evidence must mention recovery, recovered, resolved, or resolution proof|alertTargets\[0\] evidence must mention alert target or notification channel proof|error tracking test event evidence must mention error, exception, event, issue, or provider proof|local restore artifact references must exist|local QA artifact references must exist|wallet\.privyAllowedOrigins evidence must mention wallet\/Privy\/connect\/mobile\/wrong-network proof|failureStateUx\.disabledActionsExplainReason evidence must mention failure-state\/pending\/degraded\/no-op UX proof|supportAuditVisibility\.betHistoryFields evidence must mention support\/audit\/diagnostics visibility proof|finalQa\.mobileLayout evidence must mention final browser\/mobile\/mainnet wording QA proof|finalQa\.browserSmokeDebugAutominer evidence must mention debug autominer browser smoke proof|targetNetwork evidence must mention target RPC, chain, or Linea mainnet launch proof|recovery\.reload evidence must mention reload, reconnect, tab-close, pending-tx, remount, or recovery proof|autoMinerSession evidence must mention auto-miner session, rounds, epochs, or target RPC proof|transactionHealth evidence must mention transaction, tx, nonce, duplicate, stuck pending, or pending recovery proof|local canary artifact references must exist/i;
   const preferred = lines.find((line) => /^Error: /i.test(line) && guardPattern.test(line)) || lines.find((line) => guardPattern.test(line));
   const compact = preferred || lines.slice(-3).join(" | ");
   return compact.length > 260 ? `${compact.slice(0, 257)}...` : compact;
@@ -1815,6 +1863,16 @@ for (const item of collectorRejectCases) {
     issues.push(`${item.id}: incomplete collector evidence was not rejected`);
   }
   rows.push([item.id, rejected ? "rejected" : "issue", String(createResult.status), oneLine(createOutput).replace(/\|/g, "\\|")]);
+}
+
+for (const item of strictPassCases) {
+  const checkResult = runNode([...item.check, ...item.checkArgs], item.env);
+  const checkOutput = `${checkResult.stdout || ""}\n${checkResult.stderr || ""}`;
+  const passed = checkResult.status === 0 && /Summary: live canary proof checks passed\./i.test(checkOutput);
+  if (!passed) {
+    issues.push(`${item.id}: strict validator did not accept valid testnet canary evidence`);
+  }
+  rows.push([item.id, passed ? "passed testnet" : "issue", String(checkResult.status), oneLine(checkOutput).replace(/\|/g, "\\|")]);
 }
 
 for (const item of strictRejectCases) {

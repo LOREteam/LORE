@@ -38,6 +38,7 @@ const RESOLVE_RETRY_COOLDOWN_MS = parseIntegerEnv("LIVE_TEST_RESOLVE_RETRY_COOLD
 const LOOP_PAUSE_MS = parseIntegerEnv("LIVE_TEST_LOOP_PAUSE_MS", 1_500, 0, 120_000);
 const MAX_FAILURES = parseIntegerEnv("LIVE_TEST_MAX_FAILURES", 20, 1, 10_000);
 const DRY_RUN = process.env.LIVE_TEST_DRY_RUN === "1";
+const VERBOSE_WALLET_PREFLIGHT = process.env.LIVE_TEST_VERBOSE_WALLETS === "1";
 const BET_AMOUNT = parseTokenAmountEnv("LIVE_TEST_BET_AMOUNT", "0.01");
 const APPROVE_AMOUNT = parseTokenAmountEnv("LIVE_TEST_APPROVE_AMOUNT", "1000000000");
 const MIN_TOKEN_PER_WALLET = parseTokenAmountEnv("LIVE_TEST_MIN_TOKEN_PER_WALLET", "5");
@@ -586,7 +587,9 @@ async function runPreflight(
       totalAmount: formatUnits(plannedSpend, 18),
     });
   }
-  console.table(rows);
+  const readyWallets = rows.filter((row) => row.enoughEth && row.enoughToken).length;
+  console.log(`[live-canary] walletPreflight ready=${readyWallets}/${rows.length} roles=${rows.map((row) => row.role).join(",")}`);
+  if (VERBOSE_WALLET_PREFLIGHT) console.table(rows);
   if (rows.some((row) => !row.enoughEth || !row.enoughToken)) {
     throw new Error("Preflight balances are below configured minimums");
   }

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
+import { resolveCanaryProofProfile } from "./canary-proof-profile.mjs";
 
 const optionArgs = new Map(
   process.argv
@@ -10,15 +11,16 @@ const optionArgs = new Map(
       return [key, rest.join("=")];
     }),
 );
+const profile = resolveCanaryProofProfile(optionArgs.get("profile") || process.env.CANARY_PROOF_PROFILE || "launch");
 const positionalArgs = process.argv.slice(2).filter((arg) => !arg.startsWith("--"));
 const logPath = positionalArgs[0] || process.env.LIVE_CANARY_LOG_PATH || "";
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
 const minEpochs = parsePositiveInteger(process.env.LIVE_CANARY_MIN_EPOCHS, 50);
 const minElapsedMsPerEpoch = parsePositiveInteger(process.env.LIVE_CANARY_MIN_ELAPSED_MS_PER_EPOCH, 45_000);
-const manifestPath = optionArgs.get("manifest")?.trim() || process.env.CANARY_PROOF_PATH || "docs/canary-proof.json";
-const expectedNetwork = process.env.NEXT_PUBLIC_LINEA_NETWORK?.trim() || process.env.LINEA_NETWORK?.trim() || "";
+const manifestPath = optionArgs.get("manifest")?.trim() || process.env.CANARY_PROOF_PATH || profile.manifestPath;
+const expectedNetwork = process.env.NEXT_PUBLIC_LINEA_NETWORK?.trim() || process.env.LINEA_NETWORK?.trim() || profile.network;
 const expectedContract = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS?.trim() || process.env.KEEPER_CONTRACT_ADDRESS?.trim() || "";
-const expectedChainId = process.env.NEXT_PUBLIC_LINEA_CHAIN_ID?.trim() || process.env.LINEA_CHAIN_ID?.trim() || "";
+const expectedChainId = process.env.NEXT_PUBLIC_LINEA_CHAIN_ID?.trim() || process.env.LINEA_CHAIN_ID?.trim() || String(profile.chainId);
 const TEMPLATE_VALUE_RE = /REPLACE_|<REDACTED>|TODO|TBD/i;
 const GENERIC_RPC_LABEL_RE = /^(?:configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)(?:[-_ ]?rpc(?:[-_ ]?label)?(?:[-_ ]?required)?)?$/i;
 const secretKeyPattern = /(secret|private[_-]?key|mnemonic|webhook|dsn|api[_-]?key|api[_-]?token|auth[_-]?token|access[_-]?token|bearer|session|cookie|password)/i;
@@ -27,7 +29,7 @@ const TX_RE = /^0x[a-fA-F0-9]{64}$/;
 const ZERO_TX = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 if (!logPath) {
-  console.error("Usage: node scripts/analyze-live-canary-proof.mjs <live-canary.jsonl> [--strict] [--manifest=docs/canary-proof.json]");
+  console.error("Usage: node scripts/analyze-live-canary-proof.mjs <live-canary.jsonl> [--profile=launch|testnet] [--strict] [--manifest=<path>]");
   process.exitCode = 1;
 } else if (!existsSync(logPath)) {
   console.error(`Live canary log not found: ${logPath}`);
@@ -113,6 +115,7 @@ if (!logPath) {
   console.log(`Log: ${basename(logPath)}`);
   console.log(`Timestamp: ${new Date().toISOString()}`);
   console.log(`Strict: ${strict ? "yes" : "no"}`);
+  console.log(`Profile: ${profile.key} (${profile.label})`);
   console.log(`Minimum epochs: ${minEpochs}`);
   console.log(`Minimum elapsed ms per epoch: ${minElapsedMsPerEpoch}`);
   console.log(`Manifest: ${resolve(process.cwd(), manifestPath)}`);
@@ -366,7 +369,7 @@ function artifactBackedEvidenceText(value) {
 }
 
 function hasTargetNetworkProof(value) {
-  return /\b(?:target|rpc|chain|mainnet)\b/i.test(artifactBackedEvidenceText(value));
+  return new RegExp(`\\b(?:target|rpc|chain|${profile.evidenceTerms})\\b`, "i").test(artifactBackedEvidenceText(value));
 }
 
 function hasRecoveryProof(value) {
@@ -451,15 +454,15 @@ function loadAndValidateManifest(path, issues) {
   if (!isPlainObject(manifest.targetNetwork)) issues.push("targetNetwork section is missing");
   if (targetNetwork.realTargetNetwork !== true) issues.push("targetNetwork.realTargetNetwork must be true");
   if (!hasRealText(targetNetwork.network)) issues.push("targetNetwork.network is missing");
-  if (hasRealText(targetNetwork.network) && normalizeNetwork(targetNetwork.network) !== "mainnet") {
-    issues.push("targetNetwork.network must be mainnet for launch canary proof");
+  if (hasRealText(targetNetwork.network) && normalizeNetwork(targetNetwork.network) !== profile.network) {
+    issues.push(`targetNetwork.network must be ${profile.network} for ${profile.label} canary proof`);
   }
   if (expectedNetwork && hasRealText(targetNetwork.network) && normalizeNetwork(targetNetwork.network) !== normalizeNetwork(expectedNetwork)) {
     issues.push("targetNetwork.network must match configured Linea network");
   }
   if (!isPositiveInteger(targetNetwork.chainId)) issues.push("targetNetwork.chainId must be a positive integer");
-  if (isPositiveInteger(targetNetwork.chainId) && Number(targetNetwork.chainId) !== 59144) {
-    issues.push("targetNetwork.chainId must be 59144 for Linea mainnet launch proof");
+  if (isPositiveInteger(targetNetwork.chainId) && Number(targetNetwork.chainId) !== profile.chainId) {
+    issues.push(`targetNetwork.chainId must be ${profile.chainId} for ${profile.label} canary proof`);
   }
   if (expectedChainId && isPositiveInteger(targetNetwork.chainId) && Number(targetNetwork.chainId) !== Number(expectedChainId)) {
     issues.push("targetNetwork.chainId must match configured chain id");
@@ -476,7 +479,7 @@ function loadAndValidateManifest(path, issues) {
   if (!hasIsoTimestamp(targetNetwork.checkedAt)) issues.push("targetNetwork.checkedAt must be ISO-8601 UTC");
   if (!hasEvidence(targetNetwork)) issues.push("targetNetwork has no evidence");
   if (hasEvidence(targetNetwork) && !hasTargetNetworkProof(targetNetwork)) {
-    issues.push("targetNetwork evidence must mention target RPC, chain, or mainnet proof");
+    issues.push(`targetNetwork evidence must mention target RPC, chain, or ${profile.label} proof`);
   }
 
   const recovery = isPlainObject(manifest.recovery) ? manifest.recovery : {};
@@ -531,9 +534,9 @@ function loadAndValidateManifest(path, issues) {
     targetNetworkOk:
       targetNetwork.realTargetNetwork === true &&
       hasRealText(targetNetwork.network) &&
-      normalizeNetwork(targetNetwork.network) === "mainnet" &&
+      normalizeNetwork(targetNetwork.network) === profile.network &&
       isPositiveInteger(targetNetwork.chainId) &&
-      Number(targetNetwork.chainId) === 59144 &&
+      Number(targetNetwork.chainId) === profile.chainId &&
       hasConcreteRpcLabel(targetNetwork.rpc) &&
       hasRealText(targetNetwork.contractAddress) &&
       hasIsoTimestamp(targetNetwork.checkedAt) &&

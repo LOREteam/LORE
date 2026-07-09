@@ -1,13 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { resolveCanaryProofProfile } from "./canary-proof-profile.mjs";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const GENERIC_RPC_LABEL_RE = /^(?:configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)(?:[-_ ]?rpc(?:[-_ ]?label)?(?:[-_ ]?required)?)?$/i;
 
-function refuseFinalProofOutput(outPath) {
+function refuseFinalProofOutput(outPath, profile) {
   const normalized = path.relative(process.cwd(), outPath).replace(/\\/g, "/");
-  if (normalized === "docs/canary-proof.json") {
-    throw new Error("canary draft generator writes incomplete drafts only; use --out=docs/canary-proof.draft.json, then promote to docs/canary-proof.json only after real canary evidence and strict validation");
+  if (["docs/canary-proof.json", "docs/testnet-canary-proof.json"].includes(normalized)) {
+    throw new Error(`canary draft generator writes incomplete drafts only; use --out=${profile.draftManifestPath}, then promote to ${profile.manifestPath} only after real ${profile.label} canary evidence and strict validation`);
   }
 }
 function argValue(name, fallback = "") {
@@ -136,8 +137,9 @@ function findTargetMismatches(events, expectedNetwork, expectedChainId, expected
     });
 }
 
-const outPath = path.resolve(process.cwd(), argValue("out", "docs/canary-proof.draft.json"));
-refuseFinalProofOutput(outPath);
+const profile = resolveCanaryProofProfile(argValue("profile", process.env.CANARY_PROOF_PROFILE || "launch"));
+const outPath = path.resolve(process.cwd(), argValue("out", profile.draftManifestPath));
+refuseFinalProofOutput(outPath, profile);
 const network = argValue("network", process.env.NEXT_PUBLIC_LINEA_NETWORK || process.env.LINEA_NETWORK || "");
 const chainId = argValue("chain-id", process.env.NEXT_PUBLIC_LINEA_CHAIN_ID || process.env.LINEA_CHAIN_ID || "");
 const contractAddress = argValue("contract", process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || process.env.KEEPER_CONTRACT_ADDRESS || "");
@@ -161,14 +163,14 @@ if (summary.txHashes.length === 0) {
 if (!hasRealText(network)) {
   throw new Error("--network must identify the target network");
 }
-if (normalizeNetwork(network) !== "mainnet") {
-  throw new Error("--network must be mainnet for launch canary proof");
+if (normalizeNetwork(network) !== profile.network) {
+  throw new Error(`--network must be ${profile.network} for ${profile.label} canary proof`);
 }
 if (!isPositiveInteger(chainId)) {
   throw new Error("--chain-id must be a positive integer");
 }
-if (Number(chainId) !== 59144) {
-  throw new Error("--chain-id must be 59144 for Linea mainnet launch proof");
+if (Number(chainId) !== profile.chainId) {
+  throw new Error(`--chain-id must be ${profile.chainId} for ${profile.label} canary proof`);
 }
 if (!isAddress(contractAddress)) {
   throw new Error("--contract must be a non-zero EVM address");
@@ -230,4 +232,4 @@ const manifest = {
 mkdirSync(path.dirname(outPath), { recursive: true });
 writeFileSync(outPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 console.log(`Canary proof draft written: ${path.relative(process.cwd(), outPath)}`);
-console.log("Review TODO fields, run real canary epochs, then save as docs/canary-proof.json.");
+console.log(`Review TODO fields, run real canary epochs, then save as ${profile.manifestPath}.`);
