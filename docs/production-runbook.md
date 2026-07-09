@@ -14,6 +14,8 @@ npm.cmd run proof:readiness
 ## 2. Contract and funds safety
 
 Collect G1-G4 before host/indexer evidence. Final signoff must prove the exact contract/env, owner Safe or multisig path, randomness sign-off, and direct chain reconciliation for jackpot, Safety Pool, rewards, rebates, deposits, and resolve.
+
+Run this section only in the intended production or controlled canary shell after the deployment secret manager has supplied the reviewed environment. Never paste private keys, keyed RPC URLs, Privy secrets, or diagnostics secrets into proof artifacts; the collectors record only redacted status/evidence.
 The final `docs/signoff-proof.json` must include concrete `contractEnv`, `ownership.directOwnerReadEvidence`, Safe/multisig governance evidence or proof tx, `randomness.decision` with operator/signer sign-off, `chainComparison` evidence for `jackpot`, `safetyPool`, `deposits`, `rewards`, `rebates`, and `resolve`, and existing saved artifacts for every local artifact reference.
 
 ```powershell
