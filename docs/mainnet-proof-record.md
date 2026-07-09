@@ -9,7 +9,7 @@ This record is the launch gate ledger. Do not change a gate to Complete without 
 | G3 | Randomness model sign-off | Missing | TBD docs/signoff-proof.json with randomness.decision and operator/signer sign-off evidence |
 | G4 | Chain reconciliation | Missing | TBD docs/signoff-proof.json with chainComparison evidence for jackpot, safetyPool, deposits, rewards, rebates, and resolve |
 | G5 | Production process model | Missing | TBD docs/host-proof.json with lore-site, lore-bot, lore-indexer, supervisor evidence, and persistent DB evidence |
-| G6 | Production health and load | Missing | TBD docs/host-proof.json with health:prod finalityLagBlocks and load:http evidence |
+| G6 | Production health and load | Missing | TBD docs/host-proof.json with docs/host-health-prod.log health:prod base=<production origin> finalityLagBlocks and docs/host-load-http.log load:http Load base URL: evidence |
 | G7 | Indexer fresh DB dry-run | Missing | TBD docs/indexer-proof.json with fresh external DB, deploy block, INDEXER_FINALITY_BLOCKS, docs/indexer-once.log, and chainComparison evidence |
 | G8 | Backup and restore drill | Missing | TBD docs/restore-proof.json with backupSchedule, docs/restore-drill.log, docs/restore-health-prod.log, and indexerPreservation evidence |
 | G9 | Monitoring and error tracking | Missing | TBD docs/monitoring-proof.json with health-prod, data-sync, stale-indexer-heartbeat, indexer-lag, bot-restart, indexer-restart, reverted-tx, fired/recovery alerts, alert target, and error event evidence |
