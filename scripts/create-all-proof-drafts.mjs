@@ -16,7 +16,7 @@ const syntheticCanaryTarget = join(outDir, "synthetic-canary-target-proof.log");
 const syntheticCanaryRecovery = join(outDir, "synthetic-canary-recovery-proof.log");
 const syntheticCanarySession = join(outDir, "synthetic-canary-session-summary.log");
 const syntheticCanaryTx = join(outDir, "synthetic-canary-transaction-scan.log");
-const syntheticCanaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
+const syntheticCanaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", network: "linea-mainnet", chainId: 59144, contractAddress: "0x1111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
 writeFileSync(syntheticCanaryLog, `${syntheticCanaryEvent}\n`, "utf8");
 writeFileSync(syntheticCanaryTarget, "synthetic non-proof canary target artifact for draft bundle only\n", "utf8");
 writeFileSync(syntheticCanaryRecovery, "synthetic non-proof canary recovery artifact for draft bundle only\n", "utf8");

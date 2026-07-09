@@ -30,6 +30,10 @@ function isAddress(value) {
   return /^0x[a-fA-F0-9]{40}$/.test(String(value ?? "")) && String(value).toLowerCase() !== ZERO_ADDRESS;
 }
 
+function normalizeAddress(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
 function looksLikeUrl(value) {
   return /^https?:\/\//i.test(String(value ?? "").trim());
 }
@@ -103,6 +107,23 @@ function canarySummary(events) {
   };
 }
 
+function findTargetMismatches(events, expectedNetwork, expectedChainId, expectedContractAddress, expectedRpcLabel) {
+  const expectedNetworkName = normalizeNetwork(expectedNetwork);
+  const expectedContract = normalizeAddress(expectedContractAddress);
+  const expectedRpc = String(expectedRpcLabel ?? "").trim().toLowerCase();
+  return events
+    .filter((event) => event.ok === true && event.mode !== "epoch-wait")
+    .flatMap((event, index) => {
+      const label = `event#${index + 1}`;
+      const mismatches = [];
+      if (expectedNetworkName && normalizeNetwork(event.network) !== expectedNetworkName) mismatches.push(`${label} network=${event.network ?? "missing"}`);
+      if (Number(event.chainId) !== Number(expectedChainId)) mismatches.push(`${label} chainId=${event.chainId ?? "missing"}`);
+      if (normalizeAddress(event.contractAddress) !== expectedContract) mismatches.push(`${label} contractAddress=${event.contractAddress ?? "missing"}`);
+      if (String(event.rpcLabel ?? "").trim().toLowerCase() !== expectedRpc) mismatches.push(`${label} rpcLabel=${event.rpcLabel ?? "missing"}`);
+      return mismatches;
+    });
+}
+
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/canary-proof.draft.json"));
 refuseFinalProofOutput(outPath);
 const network = argValue("network", process.env.NEXT_PUBLIC_LINEA_NETWORK || process.env.LINEA_NETWORK || "");
@@ -145,6 +166,10 @@ if (!isAddress(contractAddress)) {
 }
 if (!hasConcreteRpcLabel(rpcLabel)) {
   throw new Error("--rpc-label must be a concrete redacted RPC label, not a raw URL or generic placeholder");
+}
+const targetMismatches = findTargetMismatches(liveEvents, network, chainId, contractAddress, rpcLabel);
+if (targetMismatches.length > 0) {
+  throw new Error(`--live-log target metadata must match --network, --chain-id, --contract, and --rpc-label (${targetMismatches.slice(0, 3).join("; ")})`);
 }
 
 const pendingEvidence = {

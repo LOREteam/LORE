@@ -10,7 +10,7 @@ const canaryTargetArtifact = join(tmp, "canary-target-proof.log");
 const canaryRecoveryArtifact = join(tmp, "canary-recovery-proof.log");
 const canarySessionArtifact = join(tmp, "canary-session-summary.log");
 const canaryTxArtifact = join(tmp, "canary-transaction-scan.log");
-const canaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
+const canaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", network: "linea-mainnet", chainId: 59144, contractAddress: "0x1111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
 writeFileSync(canaryLog, `${canaryEvent}\n`, "utf8");
 writeFileSync(emptyCanaryLog, "", "utf8");
 writeFileSync(canaryTargetArtifact, "synthetic canary target proof\n", "utf8");
