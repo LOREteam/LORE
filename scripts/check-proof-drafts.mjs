@@ -37,9 +37,11 @@ writeFileSync(hostLoadLog, "Load base URL: https://canary.playlore.xyz\nConcurre
 writeFileSync(hostHealthMissingBaseLog, "[prod-health] OK\nruntime=ok dataSync=ok effectiveLagBlocks=2 finalityLagBlocks=2\n", "utf8");
 writeFileSync(hostLoadMissingBaseLog, "Concurrency: 10; client IPs: 10; duration: 60000ms; timeout: 10000ms\nTOTAL count= 100 fail= 0 err= 0.00% p50= 100ms p95= 400ms p99= 700ms\n", "utf8");
 const indexerLog = join(tmp, "indexer-once.log");
+const indexerRepoDbLog = join(tmp, "indexer-repo-db.log");
 const indexerHealthLog = join(tmp, "indexer-health-prod.log");
 const indexerChainSnapshot = join(tmp, "chain-proof-snapshot.json");
 writeFileSync(indexerLog, "[indexer] SQLite path: C:\\external\\lore.sqlite\n[indexer] Contract: 0x1111111111111111111111111111111111111111\n[indexer] Deploy block: 1\n[indexer] Start block: 1\n[indexer] Finality blocks: 1\n[indexer] Scanning blocks 1..10\n[indexer] Finished runOnce\n", "utf8");
+writeFileSync(indexerRepoDbLog, `[indexer] SQLite path: ${join(process.cwd(), "repo-indexer.sqlite")}\n[indexer] Contract: 0x1111111111111111111111111111111111111111\n[indexer] Deploy block: 1\n[indexer] Start block: 1\n[indexer] Finality blocks: 1\n[indexer] Scanning blocks 1..10\n[indexer] Finished runOnce\n`, "utf8");
 writeFileSync(indexerHealthLog, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
 writeFileSync(indexerChainSnapshot, JSON.stringify({ expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
 const monitoringAlertArtifact = join(tmp, "monitoring-alert-export.log");
@@ -186,6 +188,12 @@ const collectorRejectCases = [
     create: ["scripts/collect-host-evidence.mjs"],
     createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--health-log=${hostHealthLog}`, `--load-log=${hostLoadMissingBaseLog}`],
     expected: "--load-log must include Load base URL line",
+  },
+  {
+    id: "indexer-collector-repo-db",
+    create: ["scripts/collect-indexer-evidence.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--finality-blocks=1", `--indexer-log=${indexerRepoDbLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
+    expected: "--indexer-log [indexer] SQLite path must be outside the repo checkout",
   },
 ];
 

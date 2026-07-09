@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { argValue, baseCollectorMeta, hasFlag, isPositiveInteger, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
 
 const COMPARISON_KEYS = ["jackpot", "deposits", "rewards", "rebates", "latestEpochs"];
@@ -95,6 +95,29 @@ function relativeArtifact(filePath) {
   return filePath ? relative(process.cwd(), resolve(process.cwd(), filePath)).replace(/\\/g, "/") : "";
 }
 
+function isAnyPlatformAbsolute(filePath) {
+  const value = String(filePath ?? "").trim();
+  return isAbsolute(value) || /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value) || value.startsWith("/");
+}
+
+function pathStatus(filePath) {
+  const value = String(filePath ?? "").trim();
+  const absolute = isAnyPlatformAbsolute(value) ? resolve(value) : resolve(process.cwd(), value || ".");
+  const relativeToRepo = relative(process.cwd(), absolute);
+  return {
+    isAbsolute: isAnyPlatformAbsolute(value),
+    insideRepo: relativeToRepo === "" || (!relativeToRepo.startsWith("..") && !isAbsolute(relativeToRepo)),
+  };
+}
+
+function requireExternalDbPath(filePath) {
+  if (isPrintPlan()) return;
+  const status = pathStatus(filePath);
+  requireCondition(Boolean(filePath), "--indexer-log must include [indexer] SQLite path");
+  requireCondition(status.isAbsolute, "--indexer-log [indexer] SQLite path must be absolute");
+  requireCondition(!status.insideRepo, "--indexer-log [indexer] SQLite path must be outside the repo checkout");
+}
+
 function indexerLogValue(line) {
   return String(line ?? "").replace(/^\[indexer\]\s+[^:]+:\s*/i, "").trim();
 }
@@ -131,6 +154,7 @@ requireArtifact("indexer-log", indexerLogPath);
 requireArtifact("health-log", healthLogPath);
 requireArtifact("chain-snapshot", chainSnapshotPath);
 requireMatchingIndexerLine(sqliteLine, "SQLite path", dryRunDbPath);
+requireExternalDbPath(dryRunDbPath);
 requireMatchingIndexerLine(deployLine, "Deploy block", deployBlock);
 requireMatchingIndexerLine(startLine, "Start block", deployBlock);
 requireMatchingIndexerLine(finalityLine, "Finality blocks", finalityBlocks);
