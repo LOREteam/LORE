@@ -147,7 +147,7 @@ function parseLoad(log, logPath) {
     count: parseNumber(totalLine.match(/\bcount=\s*(\d+)/i)?.[1], 0),
     fail: parseNumber(totalLine.match(/\bfail=\s*(\d+)/i)?.[1], 0),
     errorPercent: parseNumber(totalLine.match(/\berr=\s*([\d.]+)%/i)?.[1], 100),
-    p95Ms: parseNumber(totalLine.match(/\bp95=\s*(\d+)ms/i)?.[1], 0),
+    p95Ms: parseNumber(totalLine.match(/\bp95=\s*(\d+)\s*ms/i)?.[1], 0),
   };
   const errorRate = total.errorPercent / 100;
   const url = baseLine.match(/^Load base URL:\s*(\S+)/i)?.[1] || loadOrigin;

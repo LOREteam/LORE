@@ -322,6 +322,17 @@ if (jsonOutput) {
   }
 
   if (rows.length > 0) {
+    const nextGate = rows[0];
+    printTable(
+      ["Next Gate", "First check", "Required proof"],
+      [[
+        `${nextGate.id} ${nextGate.gate}`,
+        nextGate.firstCheck.replace(/\|/g, "\\|"),
+        nextGate.requiredProof.replace(/\|/g, "\\|"),
+      ]],
+    );
+    console.log("");
+
     printTable(
       ["ID", "Gate", "Status", "First check", "Required proof"],
       rows.map((row) => [

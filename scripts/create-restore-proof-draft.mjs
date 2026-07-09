@@ -62,7 +62,25 @@ function pathLooksOutsideRepo(rawPath) {
   if (!rawPath) return false;
   const resolved = path.resolve(process.cwd(), rawPath);
   const relative = path.relative(process.cwd(), resolved);
-  return path.isAbsolute(resolved) && (relative.startsWith("..") || path.isAbsolute(relative));
+  return path.isAbsolute(rawPath) && (relative.startsWith("..") || path.isAbsolute(relative));
+}
+
+function requireCondition(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function requireExistingFile(name, filePath) {
+  requireConcreteValue(name, filePath);
+  const resolved = path.resolve(process.cwd(), filePath);
+  requireCondition(existsSync(resolved), `--${name} must point to an existing file`);
+  return resolved;
+}
+
+function requireExistingDirectory(name, dirPath) {
+  requireConcreteValue(name, dirPath);
+  const resolved = path.resolve(process.cwd(), dirPath);
+  requireCondition(existsSync(resolved), `--${name} must point to an existing directory`);
+  return resolved;
 }
 
 function samePath(left, right) {
@@ -75,6 +93,36 @@ function pathInsideOrSame(childPath, parentPath) {
   const child = path.resolve(childPath).toLowerCase();
   const parent = path.resolve(parentPath).replace(/[\\/]+$/, "").toLowerCase();
   return child === parent || child.startsWith(`${parent}\\`) || child.startsWith(`${parent}/`);
+}
+
+function normalizedOrigin(value) {
+  if (!value) return "";
+  try {
+    return new URL(String(value).trim()).origin.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isFinalHttpsOrigin(value) {
+  try {
+    const url = new URL(String(value ?? "").trim());
+    const host = url.hostname.toLowerCase();
+    return url.protocol === "https:" &&
+      url.pathname === "/" &&
+      url.search === "" &&
+      url.hash === "" &&
+      !["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host) &&
+      !host.endsWith(".local");
+  } catch {
+    return false;
+  }
+}
+
+function healthBaseMatches(summary, expectedOrigin) {
+  const expected = normalizedOrigin(expectedOrigin);
+  const base = parseKeyValues(summary).base;
+  return Boolean(expected && base && normalizedOrigin(base) === expected);
 }
 
 function parseHealth(log) {
@@ -98,6 +146,14 @@ function parseHealth(log) {
   };
 }
 
+function requireValidHealthArtifact(health, log, restoredOrigin) {
+  requireCondition(/\[prod-health\]\s+OK/i.test(log), "--health-log must include [prod-health] OK");
+  requireCondition(healthBaseMatches(health.summary, restoredOrigin), "--health-log must include base=<restored-origin>");
+  requireCondition(health.runtimeHealthPassed === true, "--health-log must include runtime=ok/pass/healthy");
+  requireCondition(health.dataSyncHealthPassed === true, "--health-log must include dataSync=ok/pass/healthy");
+  requireCondition(health.finalityLagChecked === true, "--health-log must include numeric finalityLagBlocks=<number>");
+}
+
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/restore-proof.draft.json"));
 refuseFinalProofOutput(outPath);
 const restoreLogPath = argValue("restore-log");
@@ -108,8 +164,25 @@ const now = new Date().toISOString();
 const sourceDbPath = requireConcreteValue("source", argValue("source", process.env.LORE_DB_PATH || ""));
 const backupDir = requireConcreteValue("backup-dir", argValue("backup-dir", process.env.LORE_BACKUP_DIR || ""));
 const restoreDir = requireConcreteValue("restore-dir", argValue("restore-dir", process.env.LORE_RESTORE_DRILL_DIR || ""));
+const backupPath = requireConcreteValue("backup", argValue("backup", process.env.LORE_RESTORE_BACKUP || ""));
+const restoredOrigin = requireConcreteValue("restored-origin", argValue("restored-origin", ""));
+const restoredHostType = requireConcreteValue("restored-host-type", argValue("restored-host-type", ""));
 const backupScheduleArtifact = requireExistingArtifact("backup-schedule-artifact", argValue("backup-schedule-artifact", ""));
 const preservationArtifact = requireExistingArtifact("preservation-artifact", argValue("preservation-artifact", ""));
+const resolvedSourceDbPath = requireExistingFile("source", sourceDbPath);
+const resolvedBackupDir = requireExistingDirectory("backup-dir", backupDir);
+const resolvedRestoreDir = requireExistingDirectory("restore-dir", restoreDir);
+const resolvedBackupPath = requireExistingFile("backup", backupPath);
+requireCondition(pathLooksOutsideRepo(sourceDbPath), "--source DB must be outside the repo checkout for launch evidence");
+requireCondition(pathLooksOutsideRepo(backupDir), "--backup-dir must be outside the repo checkout for launch evidence");
+requireCondition(pathLooksOutsideRepo(restoreDir), "--restore-dir must be outside the repo checkout for launch evidence");
+requireCondition(pathLooksOutsideRepo(backupPath), "--backup file must be outside the repo checkout for launch evidence");
+requireCondition(!pathInsideOrSame(resolvedSourceDbPath, resolvedBackupDir), "--source DB must not be inside --backup-dir");
+requireCondition(!pathInsideOrSame(resolvedSourceDbPath, resolvedRestoreDir), "--source DB must not be inside --restore-dir");
+requireCondition(!samePath(resolvedBackupDir, resolvedRestoreDir), "--backup-dir and --restore-dir must be different");
+requireCondition(pathInsideOrSame(resolvedBackupPath, resolvedBackupDir), "--backup file must be inside --backup-dir");
+requireCondition(isFinalHttpsOrigin(restoredOrigin), "--restored-origin must be a non-local HTTPS origin without path, query, or hash");
+requireCondition(["staging", "canary", "restore"].includes(restoredHostType), "--restored-host-type must be staging, canary, or restore");
 const sourceDbOutsideBackupRestoreDirs = Boolean(
   sourceDbPath &&
   backupDir &&
@@ -122,6 +195,9 @@ const restoreSummary =
   firstMatchingLine(restoreLog, /^Copy this summary/i) ||
   "TODO: paste npm.cmd run proof:restore summary";
 const restoreOk = hasOkSummary(restoreLog, "backup/restore drill completed without detected issues");
+const restoredHealth = parseHealth(healthLog);
+requireCondition(restoreOk, "--restore-log must include successful restore drill summary");
+requireValidHealthArtifact(restoredHealth, healthLog, restoredOrigin);
 
 const manifest = {
   backupSchedule: {
@@ -133,18 +209,19 @@ const manifest = {
   restoreDrill: {
     status: restoreOk ? "pass" : "TODO",
     command: "npm.cmd run proof:restore -- --strict",
-    backupPathOutsideRepo: pathLooksOutsideRepo(backupDir),
+    backupPathOutsideRepo: pathLooksOutsideRepo(backupPath),
     restorePathOutsideRepo: pathLooksOutsideRepo(restoreDir),
     backupRestoreDirsDistinct: Boolean(backupDir && restoreDir && !samePath(backupDir, restoreDir)),
     sourceDbOutsideBackupRestoreDirs,
     sourceDbPath: sourceDbPath || "TODO",
     backupDir: backupDir || "TODO",
     restoreDir: restoreDir || "TODO",
+    backupArtifact: backupPath,
     summary: restoreSummary,
     artifact: `artifact: ${restoreLogPath}`,
     timestamp: now,
   },
-  restoredStagingHealth: { ...parseHealth(healthLog), evidence: `artifact: ${healthLogPath}` },
+  restoredStagingHealth: { ...restoredHealth, hostType: restoredHostType, evidence: `artifact: ${healthLogPath}` },
   indexerPreservation: {
     heartbeatPreserved: false,
     latestIndexedEpochPreserved: false,

@@ -3723,3 +3723,40 @@ as historical progress only.
 - Unified local `artifact: <path>` parsing across signoff, host, indexer, restore, monitoring, QA, and canary proof validators so labels or punctuation after a saved artifact path do not become false missing-file references.
 - Kept missing-file detection intact for actual local artifact path fields and explicit `artifact:` references.
 - Verified `node --check` for all touched proof validators, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Remaining evidence next action
+
+- Updated `scripts/report-launch-remaining.mjs` so human `proof:remaining` output prints a compact `Next Gate` table before the full remaining G1-G14 evidence table.
+- Kept JSON automation compatible with the existing `nextGate` field and strengthened the L11 `proof:local` guard so the human `Next Gate` output cannot silently disappear.
+- Verified `node --check scripts\report-launch-remaining.mjs`, `npm.cmd run proof:remaining`, `npm.cmd run proof:remaining -- --json`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Signoff env-log success guard
+
+- Tightened `scripts/collect-signoff-evidence.mjs` and `scripts/create-signoff-proof-draft.mjs` so `--env-log` must contain the successful `proof:mainnet` summary instead of any existing redacted artifact.
+- Added failed-env-log rejection coverage to `scripts/check-proof-drafts.mjs` for both signoff collector and draft generation, and updated synthetic proof fixtures accordingly.
+- Verified `npm.cmd run proof:mainnet -- --strict` currently fails safely without writing a final artifact in this shell, `npm.cmd run proof:drafts`, `node scripts\check-proof-collector-redaction.mjs`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Mainnet env final artifact write guard
+
+- Tightened `scripts/collect-mainnet-proof.mjs` so `npm.cmd run proof:mainnet -- --strict --out=docs/mainnet-env-proof.log` does not write the final env proof artifact when strict env gates fail.
+- Added `scripts/check-mainnet-proof-output.mjs` and wired it into `proof:local` as L13, proving failed strict env checks leave `docs/mainnet-env-proof.log` absent and explain why no final artifact was written.
+- Verified `node --check` for the touched scripts, `node scripts\check-mainnet-proof-output.mjs`, the documented failing `npm.cmd run proof:mainnet -- --strict --out=docs/mainnet-env-proof.log`, `Test-Path docs\mainnet-env-proof.log` remains false, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Host draft health/load fail-fast guard
+
+- Tightened `scripts/create-host-proof-draft.mjs` so standalone G5-G6 draft generation now mirrors host collector checks for production origin, staging/canary load origin, external DB path, successful `health:prod`, and successful `load:http` evidence before writing a draft.
+- Fixed host load parsing so `p95=400ms` and `p95= 400ms` formats both satisfy the same bounded p95 check, and aligned the collector parser with the draft parser.
+- Added `scripts/check-proof-drafts.mjs` reject coverage for failed host draft health/load logs and kept compact error output readable.
+- Verified `node --check scripts\create-host-proof-draft.mjs`, `node --check scripts\collect-host-evidence.mjs`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Indexer draft fail-fast guard
+
+- Tightened `scripts/create-indexer-proof-draft.mjs` so standalone G7 draft generation now mirrors indexer collector checks for `--fresh-db=true`, Linea mainnet chain id, external SQLite path, matching deploy/start/finality lines, finished `indexer:once`, numeric `finalityLagBlocks`, generated chain snapshot, matching snapshot chain ids, and requested epoch coverage before writing a draft.
+- Added `scripts/check-proof-drafts.mjs` reject coverage for repo-local indexer DB paths, missing chain snapshot `generatedAt`, and too-few checked epochs in standalone indexer draft generation.
+- Verified `node --check scripts\create-indexer-proof-draft.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Restore draft fail-fast guard
+
+- Tightened `scripts/create-restore-proof-draft.mjs` so standalone G8 draft generation now mirrors restore collector checks for existing external source DB, backup dir, restore dir, backup artifact, successful restore summary, restored non-local HTTPS origin, restored host type, and restored health finality evidence before writing a draft.
+- Updated synthetic draft bundle generation and `scripts/check-proof-drafts.mjs` reject coverage for missing backup, failed restore logs, and failed restored health logs, while keeping compact proof output readable.
+- Verified `node --check scripts\create-restore-proof-draft.mjs`, `node --check scripts\check-proof-drafts.mjs`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.

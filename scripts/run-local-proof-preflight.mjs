@@ -80,7 +80,7 @@ const checks = [
     label: "remaining evidence report",
     script: "scripts/report-launch-remaining.mjs",
     args: [],
-    cleanPattern: /\|\s*inconsistent gate rows\s*\|\s*none\s*\|[\s\S]*\|\s*complete gate evidence issues\s*\|\s*none\s*\|[\s\S]*\|\s*required proof issues\s*\|\s*none\s*\|[\s\S]*\|\s*proof record reference issues\s*\|\s*none\s*\|[\s\S]*\|\s*first check issues\s*\|\s*none\s*\|/i,
+    cleanPattern: /\|\s*inconsistent gate rows\s*\|\s*none\s*\|[\s\S]*\|\s*complete gate evidence issues\s*\|\s*none\s*\|[\s\S]*\|\s*required proof issues\s*\|\s*none\s*\|[\s\S]*\|\s*proof record reference issues\s*\|\s*none\s*\|[\s\S]*\|\s*first check issues\s*\|\s*none\s*\|[\s\S]*(?:\|\s*Next Gate\s*\|\s*First check\s*\|\s*Required proof\s*\||All G1-G14 gates are marked Complete)/i,
   },
   {
     id: "L12",
@@ -91,6 +91,13 @@ const checks = [
   },
   {
     id: "L13",
+    label: "mainnet proof output",
+    script: "scripts/check-mainnet-proof-output.mjs",
+    args: [],
+    cleanPattern: /Summary: mainnet proof strict-fail output guard passed\./i,
+  },
+  {
+    id: "L14",
     label: "strict launch expected fail",
     script: "scripts/run-launch-proof.mjs",
     args: ["--strict"],

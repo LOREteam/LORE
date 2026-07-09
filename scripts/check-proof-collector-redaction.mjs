@@ -13,7 +13,7 @@ writeFileSync(restoreBackupPath, "synthetic backup artifact for redaction guard"
 const finalRejectOutPath = join(process.cwd(), "docs", "collector-redaction-proof.json");
 const signoffEnvLog = join(mkdtempSync(join(tmpdir(), "lore-signoff-env-")), "mainnet-env-proof.log");
 const signoffChainLog = join(mkdtempSync(join(tmpdir(), "lore-signoff-chain-")), "chain-proof-snapshot.json");
-writeFileSync(signoffEnvLog, "Summary: synthetic redacted proof:mainnet output for redaction guard\n");
+writeFileSync(signoffEnvLog, "Summary: all checked env gates passed. Synthetic redaction guard only.\n");
 writeFileSync(signoffChainLog, "Summary: synthetic redacted proof:chain output for redaction guard\n");
 
 const cases = [

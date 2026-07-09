@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -10,6 +11,14 @@ function argValue(name, fallback) {
 
 const outDir = resolve(process.cwd(), argValue("out-dir", "docs/proof-drafts"));
 mkdirSync(outDir, { recursive: true });
+const externalRestoreRoot = mkdtempSync(join(tmpdir(), "lore-proof-draft-restore-"));
+const syntheticRestoreSourceDb = join(externalRestoreRoot, "source", "lore-source.sqlite");
+const syntheticRestoreBackupDir = join(externalRestoreRoot, "backups");
+const syntheticRestoreDir = join(externalRestoreRoot, "restore");
+const syntheticRestoreBackup = join(syntheticRestoreBackupDir, "synthetic-backup.sqlite");
+mkdirSync(join(externalRestoreRoot, "source"), { recursive: true });
+mkdirSync(syntheticRestoreBackupDir, { recursive: true });
+mkdirSync(syntheticRestoreDir, { recursive: true });
 
 const syntheticSignoffEnvLog = join(outDir, "synthetic-signoff-mainnet-env.log");
 const syntheticSignoffChainLog = join(outDir, "synthetic-signoff-chain-snapshot.log");
@@ -37,7 +46,7 @@ const syntheticQaFailure = join(outDir, "synthetic-qa-failure-state-report.md");
 const syntheticQaSupport = join(outDir, "synthetic-qa-support-audit-report.md");
 const syntheticQaFinal = join(outDir, "synthetic-qa-final-browser-report.md");
 const syntheticQaSmoke = join(outDir, "synthetic-qa-smoke-debug-autominer.log");
-writeFileSync(syntheticSignoffEnvLog, "Summary: synthetic non-proof proof:mainnet output for draft bundle only\n", "utf8");
+writeFileSync(syntheticSignoffEnvLog, "Summary: all checked env gates passed. Synthetic draft bundle only; not launch proof.\n", "utf8");
 writeFileSync(syntheticSignoffChainLog, "Summary: synthetic non-proof proof:chain output for draft bundle only\n", "utf8");
 writeFileSync(syntheticHostHealthLog, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=1\n", "utf8");
 writeFileSync(syntheticHostLoadLog, "Load base URL: https://canary.playlore.xyz\nConcurrency: 1; client IPs: 1; duration: 1000ms; timeout: 10000ms\nTOTAL count= 1 fail= 0 err= 0.00% p50= 100ms p95= 100ms p99= 100ms\n", "utf8");
@@ -47,6 +56,8 @@ writeFileSync(syntheticIndexerHealth, "[prod-health] OK\nbase=https://playlore.x
 writeFileSync(syntheticIndexerSnapshot, JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z", expectedChainId: 59144, rpcChainId: 59144, rpcSource: "redacted-mainnet-rpc", contractAddress: "0x1111111111111111111111111111111111111111", epochs: [{ epoch: 1 }] }), "utf8");
 writeFileSync(syntheticRestoreLog, "Summary: backup/restore drill completed without detected issues.\n", "utf8");
 writeFileSync(syntheticRestoreHealth, "[prod-health] OK\nbase=https://restore.playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=1\n", "utf8");
+writeFileSync(syntheticRestoreSourceDb, "synthetic source db for draft bundle only", "utf8");
+writeFileSync(syntheticRestoreBackup, "synthetic backup artifact for draft bundle only", "utf8");
 writeFileSync(syntheticRestoreSchedule, "synthetic non-proof restore backup schedule artifact for draft bundle only\n", "utf8");
 writeFileSync(syntheticRestorePreservation, "heartbeatBefore=abc heartbeatAfter=abc latestIndexedEpochBefore=1 latestIndexedEpochAfter=1\n", "utf8");
 const syntheticCanaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", network: "linea-mainnet", chainId: 59144, contractAddress: "0x1111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
@@ -69,7 +80,7 @@ const tasks = [
   ["signoff", "scripts/create-signoff-proof-draft.mjs", [`--env-log=${syntheticSignoffEnvLog}`, `--chain-log=${syntheticSignoffChainLog}`]],
   ["host", "scripts/create-host-proof-draft.mjs", ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", "--db-path=C:\\\\external\\\\lore-prod.sqlite", "--supervisor=pm2", `--process-evidence=${syntheticHostProcess}`, `--health-log=${syntheticHostHealthLog}`, `--load-log=${syntheticHostLoadLog}`]],
   ["indexer", "scripts/create-indexer-proof-draft.mjs", ["--fresh-db=true", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--indexer-log=${syntheticIndexerLog}`, `--health-log=${syntheticIndexerHealth}`, `--chain-snapshot=${syntheticIndexerSnapshot}`]],
-  ["restore", "scripts/create-restore-proof-draft.mjs", ["--source=C:\\\\external\\\\lore-source.sqlite", "--backup-dir=C:\\\\external\\\\lore-backups", "--restore-dir=C:\\\\external\\\\lore-restore", "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${syntheticRestoreLog}`, `--health-log=${syntheticRestoreHealth}`, `--backup-schedule-artifact=${syntheticRestoreSchedule}`, `--preservation-artifact=${syntheticRestorePreservation}`]],
+  ["restore", "scripts/create-restore-proof-draft.mjs", [`--source=${syntheticRestoreSourceDb}`, `--backup-dir=${syntheticRestoreBackupDir}`, `--restore-dir=${syntheticRestoreDir}`, `--backup=${syntheticRestoreBackup}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${syntheticRestoreLog}`, `--health-log=${syntheticRestoreHealth}`, `--backup-schedule-artifact=${syntheticRestoreSchedule}`, `--preservation-artifact=${syntheticRestorePreservation}`]],
   ["monitoring", "scripts/create-monitoring-proof-draft.mjs", ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", `--monitor-artifact=${syntheticMonitoringAlert}`, `--recovery-artifact=${syntheticMonitoringRecovery}`, `--alert-target-artifact=${syntheticMonitoringTarget}`, `--error-event-artifact=${syntheticMonitoringError}`]],
   ["qa", "scripts/create-qa-proof-draft.mjs", ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--wallet-artifact=${syntheticQaWallet}`, `--failure-artifact=${syntheticQaFailure}`, `--support-artifact=${syntheticQaSupport}`, `--finalqa-artifact=${syntheticQaFinal}`, `--smoke-artifact=${syntheticQaSmoke}`, "--clean-wallet-tx=0x1111111111111111111111111111111111111111111111111111111111111111"]],
   ["canary", "scripts/create-canary-proof-draft.mjs", ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${syntheticCanaryLog}`, `--target-artifact=${syntheticCanaryTarget}`, `--recovery-artifact=${syntheticCanaryRecovery}`, `--session-artifact=${syntheticCanarySession}`, `--tx-artifact=${syntheticCanaryTx}`]],

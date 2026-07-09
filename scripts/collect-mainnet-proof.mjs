@@ -1,4 +1,4 @@
-﻿import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve, relative } from "node:path";
 
 const STRICT = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
@@ -112,6 +112,10 @@ function getDbPathStatus() {
   if (insideRepo) return status(false, "inside repo");
   if (/[/\\]data[/\\]lore\.sqlite$/i.test(absolute)) return status(false, "repo-local default");
   return status(true, "absolute outside repo");
+}
+
+function isFinalMainnetEnvProofPath(filePath) {
+  return relative(process.cwd(), resolve(process.cwd(), filePath)).replace(/\\/g, "/") === "docs/mainnet-env-proof.log";
 }
 
 const checks = [];
@@ -267,9 +271,13 @@ console.log(outputLines.join("\n"));
 
 if (outPath) {
   const resolved = resolve(process.cwd(), outPath);
-  mkdirSync(dirname(resolved), { recursive: true });
-  writeFileSync(resolved, `${outputLines.join("\n")}\n`, "utf8");
-  console.log(`Proof snapshot written: ${relative(process.cwd(), resolved)}`);
+  if (STRICT && failed.length > 0 && isFinalMainnetEnvProofPath(resolved)) {
+    console.log("Proof snapshot not written: strict check failed for final docs/mainnet-env-proof.log.");
+  } else {
+    mkdirSync(dirname(resolved), { recursive: true });
+    writeFileSync(resolved, `${outputLines.join("\n")}\n`, "utf8");
+    console.log(`Proof snapshot written: ${relative(process.cwd(), resolved)}`);
+  }
 }
 
 if (STRICT && failed.length > 0) {

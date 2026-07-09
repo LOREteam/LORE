@@ -67,6 +67,12 @@ function summarizeLog(text, fallback) {
   return firstMatchingLine(text, /^Summary:/i) || fallback;
 }
 
+function requireSuccessfulMainnetEnvLog(name, text) {
+  if (!/^Summary:\s*all checked env gates passed\./mi.test(text)) {
+    throw new Error(`--${name} must contain successful proof:mainnet summary: Summary: all checked env gates passed.`);
+  }
+}
+
 function comparisonDraft(label, chainSummary) {
   return {
     matches: false,
@@ -82,6 +88,7 @@ function comparisonDraft(label, chainSummary) {
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/signoff-proof.draft.json"));
 refuseFinalProofOutput(outPath);
 const envLog = readRequiredLog("env-log", argValue("env-log"));
+requireSuccessfulMainnetEnvLog("env-log", envLog);
 const chainLog = readRequiredLog("chain-log", argValue("chain-log"));
 const envSummary = summarizeLog(envLog, "TODO: paste redacted proof:mainnet summary for final host env");
 const chainSummary = summarizeLog(chainLog, "");

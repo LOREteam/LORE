@@ -169,8 +169,10 @@ writeFileSync(
   "utf8",
 );
 const signoffEnvLog = join(tmp, "signoff-env.log");
+const signoffFailedEnvLog = join(tmp, "signoff-env-failed.log");
 const signoffChainLog = join(tmp, "signoff-chain.log");
-writeFileSync(signoffEnvLog, "Summary: synthetic redacted proof:mainnet output", "utf8");
+writeFileSync(signoffEnvLog, "Summary: all checked env gates passed.", "utf8");
+writeFileSync(signoffFailedEnvLog, "Summary: 30 env gate(s) missing or failing.", "utf8");
 writeFileSync(signoffChainLog, "Summary: synthetic direct-chain proof output", "utf8");
 const signoffMissingArtifact = join(tmp, "missing-signoff-env.log");
 const signoffMissingArtifactManifest = join(tmp, "signoff-missing-local-artifact.json");
@@ -529,7 +531,7 @@ const draftCases = [
     id: "indexer",
     out: join(tmp, "indexer-proof.draft.json"),
     create: ["scripts/create-indexer-proof-draft.mjs"],
-    createArgs: ["--fresh-db=true", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
     check: ["scripts/check-indexer-dry-run.mjs"],
     checkArgs: (out) => ["--strict", `--manifest=${out}`],
   },
@@ -537,7 +539,7 @@ const draftCases = [
     id: "restore",
     out: join(tmp, "restore-proof.draft.json"),
     create: ["scripts/create-restore-proof-draft.mjs"],
-    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
     check: ["scripts/verify-db-restore.mjs"],
     checkArgs: (out) => ["--strict", `--manifest=${out}`],
   },
@@ -630,6 +632,12 @@ const collectorRejectCases = [
     expected: "--chain-log is required when collecting signoff launch evidence",
   },
   {
+    id: "signoff-collector-failed-env-log",
+    create: ["scripts/collect-signoff-evidence.mjs"],
+    createArgs: ["--epochs=1", "--user=0x1111111111111111111111111111111111111111", `--env-log=${signoffFailedEnvLog}`, `--chain-log=${signoffChainLog}`],
+    expected: "--env-log must contain successful proof:mainnet summary",
+  },
+  {
     id: "host-collector-missing-logs",
     create: ["scripts/collect-host-evidence.mjs"],
     createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`],
@@ -705,7 +713,7 @@ const collectorRejectCases = [
     id: "restore-collector-missing-runtime",
     create: ["scripts/collect-restore-evidence.mjs"],
     createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthMissingRuntimeLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
-    expected: "--health-log must include runtime=ok/pass/healthy",
+    expected: "--health-log must include runtime=ok\/pass\/healthy",
   },
   {
     id: "restore-collector-missing-restore-log",
@@ -824,6 +832,12 @@ const finalOutputCases = [
     expected: "--env-log is required when drafting signoff launch evidence",
   },
   {
+    id: "signoff-draft-failed-env-log",
+    create: ["scripts/create-signoff-proof-draft.mjs"],
+    createArgs: [`--env-log=${signoffFailedEnvLog}`, `--chain-log=${signoffChainLog}`],
+    expected: "--env-log must contain successful proof:mainnet summary",
+  },
+  {
     id: "signoff-final-output",
     create: ["scripts/create-signoff-proof-draft.mjs"],
     createArgs: ["--out=docs/signoff-proof.json"],
@@ -836,6 +850,18 @@ const finalOutputCases = [
     expected: "--health-log is required when drafting host launch evidence",
   },
   {
+    id: "host-draft-missing-health-base",
+    create: ["scripts/create-host-proof-draft.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`, `--health-log=${hostHealthMissingBaseLog}`, `--load-log=${hostLoadLog}`],
+    expected: "--health-log must include base=<production origin>",
+  },
+  {
+    id: "host-draft-missing-load-base",
+    create: ["scripts/create-host-proof-draft.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`, `--health-log=${hostHealthLog}`, `--load-log=${hostLoadMissingBaseLog}`],
+    expected: "--load-log must include Load base URL line",
+  },
+  {
     id: "host-final-output",
     create: ["scripts/create-host-proof-draft.mjs"],
     createArgs: ["--origin=https://playlore.xyz", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", "--out=docs/host-proof.json"],
@@ -844,8 +870,26 @@ const finalOutputCases = [
   {
     id: "indexer-draft-missing-indexer-log",
     create: ["scripts/create-indexer-proof-draft.mjs"],
-    createArgs: ["--fresh-db=true", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
     expected: "--indexer-log is required when drafting indexer launch evidence",
+  },
+  {
+    id: "indexer-draft-repo-db",
+    create: ["scripts/create-indexer-proof-draft.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--indexer-log=${indexerRepoDbLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshot}`],
+    expected: "--indexer-log [indexer] SQLite path must be outside the repo checkout",
+  },
+  {
+    id: "indexer-draft-missing-snapshot-generated-at",
+    create: ["scripts/create-indexer-proof-draft.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=1", "--chain-id=59144", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshotMissingGeneratedAt}`],
+    expected: "--chain-snapshot must include generatedAt as ISO-8601 UTC",
+  },
+  {
+    id: "indexer-draft-too-few-snapshot-epochs",
+    create: ["scripts/create-indexer-proof-draft.mjs"],
+    createArgs: ["--fresh-db=true", "--epochs=2", "--chain-id=59144", "--deploy-block=1", "--start-block=1", "--finality-blocks=1", `--indexer-log=${indexerLog}`, `--health-log=${indexerHealthLog}`, `--chain-snapshot=${indexerChainSnapshotTooFewEpochs}`],
+    expected: "--chain-snapshot epochs must include at least --epochs unique checked epochs",
   },
   {
     id: "indexer-final-output",
@@ -856,19 +900,37 @@ const finalOutputCases = [
   {
     id: "restore-draft-missing-restore-log",
     create: ["scripts/create-restore-proof-draft.mjs"],
-    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
     expected: "--restore-log is required when drafting restore launch evidence",
+  },
+  {
+    id: "restore-draft-missing-backup",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--backup is required when drafting restore launch evidence",
+  },
+  {
+    id: "restore-draft-failed-restore-log",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${signoffChainLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--restore-log must include successful restore drill summary",
+  },
+  {
+    id: "restore-draft-missing-runtime",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthMissingRuntimeLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--health-log must include runtime=ok/pass/healthy",
   },
   {
     id: "restore-draft-missing-backup-schedule-artifact",
     create: ["scripts/create-restore-proof-draft.mjs"],
-    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--preservation-artifact=${restorePreservationArtifact}`],
     expected: "--backup-schedule-artifact is required when drafting restore launch evidence",
   },
   {
     id: "restore-draft-missing-preservation-artifact",
     create: ["scripts/create-restore-proof-draft.mjs"],
-    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`],
     expected: "--preservation-artifact is required when drafting restore launch evidence",
   },
   {
@@ -968,7 +1030,7 @@ function runNode(args, envPatch = {}) {
 
 function oneLine(output) {
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted artifact|must be a real non-zero tx hash|must include at least one successful auto-miner canary tx|local signoff artifact references must exist|local host artifact references must exist|local indexer artifact references must exist|local monitoring artifact references must exist|local restore artifact references must exist|local QA artifact references must exist|local canary artifact references must exist/i;
+  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted artifact|must contain successful proof:mainnet summary|must include successful restore drill summary|must include base=<production origin>|must include Load base URL line|must include \[prod-health\] OK|must include runtime=ok\/pass\/healthy|must include dataSync=ok\/pass\/healthy|must include numeric finalityLagBlocks=<number>|must be outside the repo checkout|must include generatedAt as ISO-8601 UTC|must include at least --epochs unique checked epochs|must match --deploy-block|must match --chain-snapshot contractAddress|must be a real non-zero tx hash|must include at least one successful auto-miner canary tx|local signoff artifact references must exist|local host artifact references must exist|local indexer artifact references must exist|local monitoring artifact references must exist|local restore artifact references must exist|local QA artifact references must exist|local canary artifact references must exist/i;
   const preferred = lines.find((line) => /^Error: /i.test(line) && guardPattern.test(line)) || lines.find((line) => guardPattern.test(line));
   const compact = preferred || lines.slice(-3).join(" | ");
   return compact.length > 260 ? `${compact.slice(0, 257)}...` : compact;

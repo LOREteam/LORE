@@ -55,6 +55,12 @@ function summarizeLog(text, fallback, artifactPath = "") {
   return firstMatchingLine(text, /^Summary:/i) || (text && artifactPath ? `artifact: ${artifactPath}` : fallback);
 }
 
+function requireSuccessfulMainnetEnvLog(name, text) {
+  if (!/^Summary:\s*all checked env gates passed\./mi.test(text)) {
+    throw new Error(`--${name} must contain successful proof:mainnet summary: Summary: all checked env gates passed.`);
+  }
+}
+
 function comparisonDraft(label, user, requestedEpochs, now, chainSummary) {
   return {
     matches: false,
@@ -81,6 +87,7 @@ const now = new Date().toISOString();
 const envLogPath = argValue("env-log");
 const chainLogPath = argValue("chain-log");
 const envLog = readRequiredLog("env-log", envLogPath);
+requireSuccessfulMainnetEnvLog("env-log", envLog);
 const chainLog = readRequiredLog("chain-log", chainLogPath);
 const envSummary = summarizeLog(envLog, "TODO: paste redacted proof:mainnet summary for final host env", envLogPath);
 const chainSummary = summarizeLog(chainLog, "", chainLogPath);
