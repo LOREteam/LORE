@@ -3501,3 +3501,11 @@ as historical progress only.
 - Strengthened `scripts/check-monitoring-proof.mjs` so strict G9 monitoring proof requires a verified alert target (`verified=true`) with ISO timestamp and concrete fired-alert evidence.
 - The validator now also fails any recorded alert target that is not marked verified after a real alert target test.
 - Verified `node --check scripts/check-monitoring-proof.mjs`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
+## 2026-07-09 - canary target RPC JSONL guard
+
+- Added redacted `rpcLabel` to live canary JSONL events and replaced raw RPC URL console output with `rpcLabel` plus RPC count.
+- Strengthened `scripts/analyze-live-canary-proof.mjs` so strict canary proof requires a concrete redacted `targetNetwork.rpc` label and successful canary events must match it.
+- Updated canary template guard fixture and canary draft generator summary to include observed `rpcLabel` values; matching live labels now set `autoMinerSession.targetRpcConfirmed` in drafts.
+- Verified `node --check scripts/analyze-live-canary-proof.mjs`, `node --check scripts/check-proof-templates.mjs`, `node --check scripts/create-canary-proof-draft.mjs`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local`, a synthetic negative check that fails when canary JSONL misses `rpcLabel`, and a synthetic draft check for `observedRpcLabels`.
+- Added `LIVE_CANARY_RPC_LABEL` and `npm.cmd run live:canary` to the production runbook canary block, and strengthened launch docs/command-map guards so the operator flow cannot omit the redacted RPC label step.
+- Re-verified `node --check scripts/check-launch-doc-command-syntax.mjs`, `node --check scripts/check-launch-command-map.mjs`, `npm.cmd run proof:launch-docs`, `npm.cmd run proof:launch-map`, and `npm.cmd run proof:local` after the runbook update.`r`n- `npm.cmd run typecheck` could not start because local `next` is not available in `node_modules/.bin`; no TypeScript result was produced.

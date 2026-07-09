@@ -87,10 +87,12 @@ function canarySummary(events) {
   const autoMinerBets = okBets.filter((event) => String(event.role ?? "").toUpperCase().includes("AUTOMINER"));
   const uniqueEpochs = new Set(autoMinerBets.map((event) => event.epoch).filter(Boolean));
   const txHashes = [...new Set(okBets.map(eventTxHash).filter(isRealTx).map((hash) => hash.toLowerCase()))];
+  const rpcLabels = [...new Set(okBets.map((event) => String(event.rpcLabel ?? "").trim()).filter(Boolean))].sort();
   return {
     autoMinerRounds: autoMinerBets.length,
     autoMinerUniqueEpochs: uniqueEpochs.size,
     checkedAt: latestIsoTimestamp(okBets),
+    rpcLabels,
     txHashes,
   };
 }
@@ -157,7 +159,8 @@ const manifest = {
   },
   autoMinerSession: {
     status: "TODO: verified/pass after real canary run",
-    targetRpcConfirmed: false,
+    targetRpcConfirmed: summary.rpcLabels.length > 0 && summary.rpcLabels.every((label) => label.toLowerCase() === rpcLabel.toLowerCase()),
+    observedRpcLabels: summary.rpcLabels,
     rounds: summary.autoMinerRounds,
     uniqueEpochs: summary.autoMinerUniqueEpochs,
     checkedAt: summary.checkedAt,

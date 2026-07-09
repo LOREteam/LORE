@@ -86,6 +86,8 @@ QA evidence must include Privy allowed origins, connect/disconnect/reconnect, wr
 ```powershell
 $env:CANARY_PROOF_PATH = "docs/canary-proof.json"
 $env:LIVE_CANARY_MIN_EPOCHS = "50"
+$env:LIVE_CANARY_RPC_LABEL = "<redacted-rpc-label>"
+npm.cmd run live:canary
 npm.cmd run proof:qa:plan -- --origin=https://playlore.xyz --network=linea-mainnet --chain-id=59144 --out=docs/qa-canary-test-plan.draft.md
 npm.cmd run proof:qa:draft -- --origin=https://playlore.xyz --network=linea-mainnet --chain-id=59144 --wallet-artifact=docs/qa-wallet-flow-report.md --failure-artifact=docs/qa-failure-state-report.md --support-artifact=docs/qa-support-audit-report.md --finalqa-artifact=docs/qa-final-browser-report.md --smoke-artifact=docs/qa-smoke-debug-autominer.log --clean-wallet-tx=<txHash> --out=docs/qa-proof.draft.json
 npm.cmd run proof:qa -- --strict

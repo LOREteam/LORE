@@ -20,6 +20,7 @@ const expectedNetwork = process.env.NEXT_PUBLIC_LINEA_NETWORK?.trim() || process
 const expectedContract = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS?.trim() || process.env.KEEPER_CONTRACT_ADDRESS?.trim() || "";
 const expectedChainId = process.env.NEXT_PUBLIC_LINEA_CHAIN_ID?.trim() || process.env.LINEA_CHAIN_ID?.trim() || "";
 const TEMPLATE_VALUE_RE = /REPLACE_|<REDACTED>|TODO|TBD/i;
+const GENERIC_RPC_LABEL_RE = /^(configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)[-_ ]?rpc([-_ ]?label)?([-_ ]?required)?$/i;
 const secretKeyPattern = /(secret|private[_-]?key|mnemonic|webhook|dsn|api[_-]?key|api[_-]?token|auth[_-]?token|access[_-]?token|bearer|session|cookie|password)/i;
 const TX_RE = /^0x[a-fA-F0-9]{64}$/;
 const ZERO_TX = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -63,6 +64,7 @@ if (!logPath) {
     targetNetworkName,
     targetChainId,
     targetContractAddress,
+    targetNetwork.rpc,
   );
 
   const strictFailures = [];
@@ -253,6 +255,11 @@ function looksLikeUrl(value) {
   }
 }
 
+function hasConcreteRpcLabel(value) {
+  const normalized = String(value ?? "").trim();
+  return hasRealText(normalized) && !looksLikeUrl(normalized) && !GENERIC_RPC_LABEL_RE.test(normalized);
+}
+
 function hasConcreteText(value) {
   if (Array.isArray(value)) return value.some(hasConcreteText);
   if (isRealTx(value)) return true;
@@ -362,8 +369,8 @@ function loadAndValidateManifest(path, issues) {
   }
   if (!hasRealText(targetNetwork.rpc)) {
     issues.push("targetNetwork.rpc is missing");
-  } else if (looksLikeUrl(targetNetwork.rpc)) {
-    issues.push("targetNetwork.rpc must be a redacted RPC label, not a raw URL");
+  } else if (!hasConcreteRpcLabel(targetNetwork.rpc)) {
+    issues.push("targetNetwork.rpc must be a concrete redacted RPC label, not a raw URL or generic placeholder");
   }
   if (!hasRealText(targetNetwork.contractAddress)) issues.push("targetNetwork.contractAddress is missing");
   if (expectedContract && hasRealText(targetNetwork.contractAddress) && normalizeAddress(targetNetwork.contractAddress) !== normalizeAddress(expectedContract)) {
@@ -521,11 +528,12 @@ function findDuplicateTxHashes(events) {
   return [...duplicateHashes].sort();
 }
 
-function findTargetEventMismatches(events, network, chainId, contractAddress) {
+function findTargetEventMismatches(events, network, chainId, contractAddress, rpcLabel) {
   const mismatches = [];
   const expectedNetworkName = normalizeNetwork(network);
   const expectedChainId = isPositiveInteger(chainId) ? Number(chainId) : null;
   const expectedContractAddress = normalizeAddress(contractAddress);
+  const expectedRpcLabel = hasConcreteRpcLabel(rpcLabel) ? String(rpcLabel).trim().toLowerCase() : "";
   for (const event of events) {
     const label = `round=${event.round ?? "n/a"} mode=${event.mode ?? "n/a"} epoch=${event.epoch ?? "n/a"}`;
     if (expectedNetworkName && normalizeNetwork(event.network) !== expectedNetworkName) {
@@ -536,6 +544,9 @@ function findTargetEventMismatches(events, network, chainId, contractAddress) {
     }
     if (expectedContractAddress && normalizeAddress(event.contractAddress) !== expectedContractAddress) {
       mismatches.push(`${label} contractAddress=${event.contractAddress ?? "missing"}`);
+    }
+    if (expectedRpcLabel && String(event.rpcLabel ?? "").trim().toLowerCase() !== expectedRpcLabel) {
+      mismatches.push(`${label} rpcLabel=${event.rpcLabel ?? "missing"}`);
     }
   }
   return mismatches;

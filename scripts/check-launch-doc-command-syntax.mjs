@@ -22,6 +22,7 @@ const shellFenceLanguages = new Set(["", "bash", "sh", "shell", "zsh", "powershe
 const requiredPowerShellEnvExamples = [
   "$env:CANARY_PROOF_PATH",
   "$env:LIVE_CANARY_MIN_EPOCHS",
+  "$env:LIVE_CANARY_RPC_LABEL",
 ];
 
 function readText(filePath) {

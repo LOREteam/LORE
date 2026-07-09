@@ -290,7 +290,7 @@ for (const marker of ["$env:PROD_HEALTH_BASE_URL", "https://playlore.xyz", "npm.
     issues.push(`docs/production-runbook.md must show production host evidence marker ${marker}`);
   }
 }
-for (const marker of ["target-RPC JSONL", "50 successful auto-miner unique epochs", "reload/reconnect/tab-close/pending tx/remount", "no duplicate bets", "nonce loops", "stuck pending", "Privy allowed origins", "wrong network", "mobile Web3 browser", "clean-wallet first tx", "debug autominer smoke", "docs/qa-wallet-flow-report.md", "docs/qa-failure-state-report.md", "docs/qa-support-audit-report.md", "docs/qa-final-browser-report.md", "docs/qa-smoke-debug-autominer.log", "data/live-test-runs/live-canary-YYYY.jsonl", "docs/canary-target-proof.log", "docs/canary-recovery-proof.log", "docs/canary-session-summary.log", "docs/canary-transaction-scan.log"]) {
+for (const marker of ["target-RPC JSONL", "$env:LIVE_CANARY_RPC_LABEL", "npm.cmd run live:canary", "50 successful auto-miner unique epochs", "reload/reconnect/tab-close/pending tx/remount", "no duplicate bets", "nonce loops", "stuck pending", "Privy allowed origins", "wrong network", "mobile Web3 browser", "clean-wallet first tx", "debug autominer smoke", "docs/qa-wallet-flow-report.md", "docs/qa-failure-state-report.md", "docs/qa-support-audit-report.md", "docs/qa-final-browser-report.md", "docs/qa-smoke-debug-autominer.log", "data/live-test-runs/live-canary-YYYY.jsonl", "docs/canary-target-proof.log", "docs/canary-recovery-proof.log", "docs/canary-session-summary.log", "docs/canary-transaction-scan.log"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show canary/QA evidence marker ${marker}`);
   }

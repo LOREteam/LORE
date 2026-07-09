@@ -96,6 +96,7 @@ type RoundEvent = {
   nonceLatest?: number;
   noncePending?: number;
   ok: boolean;
+  rpcLabel?: string;
   role: string;
   round: number;
   secondsLeft?: number;
@@ -108,6 +109,12 @@ type RoundEvent = {
 };
 
 const attemptedResolveEpochs = new Map<string, number>();
+
+function getRpcLabel() {
+  const label = process.env.LIVE_CANARY_RPC_LABEL?.trim() || process.env.LINEA_RPC_LABEL?.trim();
+  if (!label || /^https?:\/\//i.test(label)) return "unlabeled-rpc";
+  return label;
+}
 
 function parseIntegerEnv(name: string, fallbackValue: number, min: number, max: number) {
   const raw = process.env[name];
@@ -159,6 +166,7 @@ function writeEvent(logPath: string, event: RoundEvent) {
     network: APP_NETWORK,
     chainId: APP_CHAIN.id,
     contractAddress: CONTRACT_ADDRESS,
+    rpcLabel: getRpcLabel(),
     ...event,
   })}\n`);
 }
@@ -601,7 +609,7 @@ async function main() {
   console.log(`[live-canary] network=${APP_NETWORK} chainId=${APP_CHAIN.id}`);
   console.log(`[live-canary] contract=${CONTRACT_ADDRESS}`);
   console.log(`[live-canary] token=${LINEA_TOKEN_ADDRESS}`);
-  console.log(`[live-canary] rpc=${rpcUrls.join(",")}`);
+  console.log(`[live-canary] rpcLabel=${getRpcLabel()} rpcCount=${rpcUrls.length}`);
   console.log(
     `[live-canary] rounds=${TARGET_ROUNDS} randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +
       `total=${formatUnits(MIN_TOTAL_BET_AMOUNT, 18)}..${formatUnits(MAX_TOTAL_BET_AMOUNT, 18)} ` +
