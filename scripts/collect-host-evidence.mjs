@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { argValue, baseCollectorMeta, hasFlag, isFinalHttpsOrigin, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
 
 const origin = argValue("origin");
@@ -16,19 +16,47 @@ requireCondition(["staging", "canary"].includes(loadHostType), "--load-host-type
 requireCondition(origin.toLowerCase() !== loadOrigin.toLowerCase(), "--load-origin must differ from the production --origin");
 
 const now = new Date().toISOString();
-const dbPath = argValue("db-path", process.env.LORE_DB_PATH || "TODO: absolute LORE_DB_PATH outside repo");
-const supervisor = argValue("supervisor", "TODO: pm2/systemd/docker compose supervisor name");
-const processEvidence = argValue("process-evidence", "TODO: paste or link concrete supervisor output path");
+const printPlanMode = hasFlag("print-plan");
+const dbPath = argValue("db-path", process.env.LORE_DB_PATH || "");
+const supervisor = argValue("supervisor", "");
+const processEvidence = argValue("process-evidence", "");
 const healthLogPath = argValue("health-log");
 const loadLogPath = argValue("load-log");
-const printPlanMode = hasFlag("print-plan");
+requireConcreteValue("db-path", dbPath);
+requireConcreteValue("supervisor", supervisor);
+requireExistingArtifact("process-evidence", processEvidence);
+requireExternalDbPath(dbPath);
 requireArtifact("health-log", healthLogPath);
 requireArtifact("load-log", loadLogPath);
 const healthLog = readOptionalLog(healthLogPath);
 const loadLog = readOptionalLog(loadLogPath);
 
+function hasConcreteValue(value) {
+  return Boolean(String(value ?? "").trim()) && !/^(?:TODO|TBD|REPLACE|<)/i.test(String(value).trim());
+}
+
+function pathInsideOrSame(child, parent) {
+  const rel = relative(parent, child);
+  return rel === "" || (Boolean(rel) && !rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function requireConcreteValue(name, value) {
+  if (!printPlanMode) requireCondition(hasConcreteValue(value), `--${name} is required when collecting launch host evidence`);
+}
+
 function requireArtifact(name, value) {
   if (!printPlanMode) requireCondition(Boolean(value), `--${name} is required when collecting launch host evidence`);
+}
+
+function requireExistingArtifact(name, value) {
+  requireConcreteValue(name, value);
+  if (!printPlanMode) requireCondition(existsSync(resolve(process.cwd(), value)), `--${name} must point to an existing redacted artifact`);
+}
+
+function requireExternalDbPath(value) {
+  if (printPlanMode) return;
+  const absolute = resolve(value);
+  requireCondition(isAbsolute(value) && !pathInsideOrSame(absolute, process.cwd()), "--db-path/LORE_DB_PATH must be an absolute path outside the repo checkout");
 }
 
 function readOptionalLog(filePath) {
@@ -160,7 +188,7 @@ function processDraft(command) {
     running: false,
     status: "TODO",
     command,
-    evidence: processEvidence,
+    evidence: `artifact: ${processEvidence}`,
     checkedAt: now,
   };
 }
@@ -184,7 +212,7 @@ const manifest = {
   },
   persistentDb: {
     path: dbPath,
-    absolutePathOutsideRepo: false,
+    absolutePathOutsideRepo: true,
     restartSurvived: false,
     rebootSurvived: false,
     evidence: "TODO: paste or link concrete restart/reboot persistence proof",

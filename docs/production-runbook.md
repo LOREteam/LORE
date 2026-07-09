@@ -33,14 +33,14 @@ Required runtime shape:
 - `LORE_DB_PATH` points to a persistent absolute path outside the repo.
 - `health:prod` evidence must use a non-local HTTPS origin; `PROD_HEALTH_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
 - `load:http` evidence must use a staging/canary non-local HTTPS origin; `LOAD_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
-- Save redacted command outputs as `docs/host-health-prod.log` and `docs/host-load-http.log` before `proof:host:collect`; the collector refuses missing logs, health logs without `[prod-health] OK` / matching `base=` / numeric `finalityLagBlocks`, and load logs without `Load base URL:` matching the staging/canary `LOAD_BASE_URL` or successful latency/error evidence.
+- Save redacted supervisor output as `docs/host-process-model.log`, use an absolute external `--db-path`, and save redacted command outputs as `docs/host-health-prod.log` and `docs/host-load-http.log` before `proof:host:collect`; the collector refuses missing process evidence, repo-local DB paths, missing logs, health logs without `[prod-health] OK` / matching `base=` / numeric `finalityLagBlocks`, and load logs without `Load base URL:` matching the staging/canary `LOAD_BASE_URL` or successful latency/error evidence.
 
 ```powershell
 $env:PROD_HEALTH_BASE_URL = "https://playlore.xyz"
 npm.cmd run health:prod
 $env:LOAD_BASE_URL = "https://canary.playlore.xyz"
 npm.cmd run load:http
-npm.cmd run proof:host:collect -- --origin=https://playlore.xyz --host-type=production --load-origin=https://canary.playlore.xyz --load-host-type=canary --health-log=docs/host-health-prod.log --load-log=docs/host-load-http.log --out=docs/host-proof.draft.json
+npm.cmd run proof:host:collect -- --origin=https://playlore.xyz --host-type=production --load-origin=https://canary.playlore.xyz --load-host-type=canary --db-path=<absolute-external-LORE_DB_PATH> --supervisor=<pm2-systemd-docker-compose> --process-evidence=docs/host-process-model.log --health-log=docs/host-health-prod.log --load-log=docs/host-load-http.log --out=docs/host-proof.draft.json
 npm.cmd run proof:host -- --strict
 ```
 

@@ -3533,3 +3533,9 @@ as historical progress only.
 - Updated `scripts/check-host-proof-load-target.mjs` with a passing fixture containing the canary load base URL and a negative fixture that proves missing load base evidence fails with the expected reason.
 - Updated `docs/production-runbook.md`, `docs/mainnet-readiness-checklist.md`, and `scripts/check-launch-command-map.mjs` so host load evidence explicitly requires `Load base URL:` matching the staging/canary `LOAD_BASE_URL`.
 - Verified `node --check scripts/check-host-proof.mjs`, `node --check scripts/check-host-proof-load-target.mjs`, `node --check scripts/check-launch-command-map.mjs`, `npm.cmd run proof:host-guard`, `npm.cmd run proof:launch-map`, `npm.cmd run proof:readiness`, `npm.cmd run proof:drafts`, and `npm.cmd run proof:local`.
+
+## 2026-07-09 - Host collector evidence guard
+
+- Tightened `proof:host:collect` so G5-G6 drafts require an absolute external `--db-path`, concrete `--supervisor`, and an existing `--process-evidence=docs/host-process-model.log` artifact before health/load logs are accepted.
+- Updated host proof fixtures, command-map docs, readiness/status board, and remaining/gate guards to keep the stronger host evidence command from drifting.
+- Verified `npm.cmd run proof:drafts`, `npm.cmd run proof:launch-map`, `npm.cmd run proof:gates -- --structure-only`, `npm.cmd run proof:readiness`, `npm.cmd run proof:remaining -- --json`, and `npm.cmd run proof:local`.

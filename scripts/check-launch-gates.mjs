@@ -29,7 +29,7 @@ const statusBoardFirstCheckExpectations = new Map([
   ["G2", ["proof:signoff", "--strict"]],
   ["G3", ["proof:signoff", "--strict"]],
   ["G4", ["proof:chain", "--strict", "--out=docs/chain-proof-snapshot.json"]],
-  ["G5", ["proof:host:collect", "--host-type=production", "--health-log=docs/host-health-prod.log", "--load-log=docs/host-load-http.log", "--out=docs/host-proof.draft.json"]],
+  ["G5", ["proof:host:collect", "--host-type=production", "--db-path=", "--supervisor=", "--process-evidence=docs/host-process-model.log", "--health-log=docs/host-health-prod.log", "--load-log=docs/host-load-http.log", "--out=docs/host-proof.draft.json"]],
   ["G6", ["proof:host", "--strict"]],
   ["G7", ["proof:indexer:collect", "--chain-id=59144", "--indexer-log=docs/indexer-once.log", "--health-log=docs/indexer-health-prod.log", "--chain-snapshot=docs/chain-proof-snapshot.json", "--out=docs/indexer-proof.draft.json"]],
   ["G8", ["proof:restore:collect", "--restore-log=docs/restore-drill.log", "--health-log=docs/restore-health-prod.log", "--out=docs/restore-proof.draft.json"]],

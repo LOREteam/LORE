@@ -33,10 +33,14 @@ writeFileSync(signoffEnvLog, "Summary: synthetic redacted proof:mainnet output",
 writeFileSync(signoffChainLog, "Summary: synthetic direct-chain proof output", "utf8");
 const hostHealthLog = join(tmp, "host-health-prod.log");
 const hostLoadLog = join(tmp, "host-load-http.log");
+const hostProcessEvidence = join(tmp, "host-process-model.log");
+const hostExternalDbPath = join(tmp, "host-prod.sqlite");
 const hostHealthMissingBaseLog = join(tmp, "host-health-missing-base.log");
 const hostLoadMissingBaseLog = join(tmp, "host-load-missing-base.log");
 writeFileSync(hostHealthLog, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=2 finalityLagBlocks=2\n", "utf8");
 writeFileSync(hostLoadLog, "Load base URL: https://canary.playlore.xyz\nConcurrency: 10; client IPs: 10; duration: 60000ms; timeout: 10000ms\nTOTAL count= 100 fail= 0 err= 0.00% p50= 100ms p95= 400ms p99= 700ms\n", "utf8");
+writeFileSync(hostProcessEvidence, "pm2 lore-site online\npm2 lore-bot online\npm2 lore-indexer online\n", "utf8");
+writeFileSync(hostExternalDbPath, "synthetic external host db path marker", "utf8");
 writeFileSync(hostHealthMissingBaseLog, "[prod-health] OK\nruntime=ok dataSync=ok effectiveLagBlocks=2 finalityLagBlocks=2\n", "utf8");
 writeFileSync(hostLoadMissingBaseLog, "Concurrency: 10; client IPs: 10; duration: 60000ms; timeout: 10000ms\nTOTAL count= 100 fail= 0 err= 0.00% p50= 100ms p95= 400ms p99= 700ms\n", "utf8");
 const indexerLog = join(tmp, "indexer-once.log");
@@ -142,7 +146,7 @@ const collectorDraftCases = [
     id: "host-collector",
     out: join(tmp, "host-proof.collector.json"),
     create: ["scripts/collect-host-evidence.mjs"],
-    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--health-log=${hostHealthLog}`, `--load-log=${hostLoadLog}`],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`, `--health-log=${hostHealthLog}`, `--load-log=${hostLoadLog}`],
     requiredSections: ["processModel", "persistentDb", "healthProd", "loadHttp"],
     check: ["scripts/check-host-proof.mjs"],
     checkArgs: (out) => ["--strict", `--file=${out}`],
@@ -179,19 +183,31 @@ const collectorRejectCases = [
   {
     id: "host-collector-missing-logs",
     create: ["scripts/collect-host-evidence.mjs"],
-    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`],
     expected: "--health-log is required when collecting launch host evidence",
+  },
+  {
+    id: "host-collector-missing-process-evidence",
+    create: ["scripts/collect-host-evidence.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--health-log=${hostHealthLog}`, `--load-log=${hostLoadLog}`],
+    expected: "--process-evidence is required when collecting launch host evidence",
+  },
+  {
+    id: "host-collector-repo-db",
+    create: ["scripts/collect-host-evidence.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${join(process.cwd(), "repo-host.sqlite")}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`, `--health-log=${hostHealthLog}`, `--load-log=${hostLoadLog}`],
+    expected: "--db-path/LORE_DB_PATH must be an absolute path outside the repo checkout",
   },
   {
     id: "host-collector-missing-health-base",
     create: ["scripts/collect-host-evidence.mjs"],
-    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--health-log=${hostHealthMissingBaseLog}`, `--load-log=${hostLoadLog}`],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`, `--health-log=${hostHealthMissingBaseLog}`, `--load-log=${hostLoadLog}`],
     expected: "--health-log must include base=<production origin>",
   },
   {
     id: "host-collector-missing-load-base",
     create: ["scripts/collect-host-evidence.mjs"],
-    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--health-log=${hostHealthLog}`, `--load-log=${hostLoadMissingBaseLog}`],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--db-path=${hostExternalDbPath}`, "--supervisor=pm2", `--process-evidence=${hostProcessEvidence}`, `--health-log=${hostHealthLog}`, `--load-log=${hostLoadMissingBaseLog}`],
     expected: "--load-log must include Load base URL line",
   },
   {
