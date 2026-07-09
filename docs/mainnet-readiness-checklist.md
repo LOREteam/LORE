@@ -62,7 +62,7 @@ Final proof manifests: docs/signoff-proof.json, docs/host-proof.json, docs/index
 - [ ] Monitoring plan is generated with `npm.cmd run proof:monitoring:plan -- --provider=<provider> --error-provider=<error-provider> --origin=https://playlore.xyz --out=docs/monitoring-alert-test-plan.draft.md`.
 - [ ] Monitoring draft is collected with `npm.cmd run proof:monitoring:draft -- --provider=<provider> --error-provider=<error-provider> --origin=https://playlore.xyz --monitor-artifact=docs/monitoring-alert-export.log --recovery-artifact=docs/monitoring-recovery-export.log --alert-target-artifact=docs/monitoring-alert-target-test.log --error-event-artifact=docs/error-tracking-test-event.log --out=docs/monitoring-proof.draft.json` after fired/recovery alert, alert-target, and error-event artifacts are available.
 - [ ] Monitoring strict check passes with `npm.cmd run proof:monitoring -- --strict`.
-- [ ] External alerts include one complete enabled monitor entry per required kind, with concrete fired and recovery/resolution evidence for health:prod, stale indexer, lag, bot/indexer restarts, and repeated reverted tx.
+- [ ] External alerts include one complete enabled monitor entry per required kind, with distinct concrete fired and recovery/resolution evidence for health:prod, stale indexer, lag, bot/indexer restarts, and repeated reverted tx; recovery timestamps are not earlier than fired-alert timestamps.
 - [ ] Centralized error tracking has a real test event with concrete event id/link/evidence and redaction proof.
 
 ## Polish

@@ -295,7 +295,7 @@ for (const marker of ["target-RPC JSONL", "$env:LIVE_CANARY_RPC_LABEL", "npm.cmd
     issues.push(`docs/production-runbook.md must show canary/QA evidence marker ${marker}`);
   }
 }
-for (const marker of ["health-prod", "data-sync", "stale-indexer-heartbeat", "indexer-lag", "bot-restart", "indexer-restart", "reverted-tx", "docs/monitoring-alert-export.log", "docs/monitoring-recovery-export.log", "docs/monitoring-alert-target-test.log", "docs/error-tracking-test-event.log"]) {
+for (const marker of ["health-prod", "data-sync", "stale-indexer-heartbeat", "indexer-lag", "bot-restart", "indexer-restart", "reverted-tx", "distinct fired alert", "recovery timestamp", "docs/monitoring-alert-export.log", "docs/monitoring-recovery-export.log", "docs/monitoring-alert-target-test.log", "docs/error-tracking-test-event.log"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show monitoring evidence marker ${marker}`);
   }
