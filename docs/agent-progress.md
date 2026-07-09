@@ -3975,3 +3975,11 @@ as historical progress only.
 - Fresh external SQLite catch-up from deploy block completed (376 chunks, 7,139 raw logs); restart resumed from persisted block/repair cursor and reconciliation reported no missing epochs.
 - Fixed restore drill creating no restore directory; a real temporary Sepolia DB backup/restore completed with integrity_check ok and restored scoped data.
 - Verified test:logic, typecheck, proof:drafts, and live dry preflight. Mainnet artifacts were not written.
+
+## 2026-07-10 Sepolia Wallet and Browser Validation
+
+- Hardened wallet playtest console output: it now reports only wallet/RPC readiness and API statuses, not raw RPC URLs, wallet balances, addresses, or full API payloads.
+- A wallet dry run found stale epoch 1717; the existing resolver canary advanced it, then three limited canary bets succeeded.
+- A real wallet playtest completed allowance approval, one single bet, and one batch bet with on-chain verification and deposits/rebates API status 200.
+- Local browser smoke passed on desktop and mobile, including wallet selector, numeric font/chart guards, auto-miner persistence, chat, tabs, and retry-wait/session-expired debug scenarios.
+- Remaining: signed Privy/mobile-wallet QA, durable direct chain-to-DB comparison evidence, and a wall-clock-proven 50-epoch varied canary.

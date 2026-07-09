@@ -145,10 +145,13 @@ Current focus: Linea Sepolia testnet readiness. Mainnet proof tooling is retaine
 - Restarting the same DB resumed from its persisted block and repair cursor; reconciliation reported no missing epochs.
 - The local Sepolia SQLite backup/restore drill completed with SQLite integrity_check `ok` and restored scoped data.
 - These temporary local artifacts are testnet validation only, not mainnet proof or production evidence.
+- A resolver canary advanced stale Sepolia epoch 1717 to active epochs and completed three small canary bets; a wallet playtest then completed approval, single, and batch bets with on-chain verification and deposits/rebates API status 200.
+- Local desktop/mobile browser smoke passed, including wallet selector, chart/font guards, auto-miner persistence, retry-wait/session-expired debug states, chat, and tabs.
 ## Current Blockers
 
-- Strict testnet canary evidence needs a concrete redacted LIVE_CANARY_RPC_LABEL; the current unlabeled-rpc value is intentionally rejected.
-- Real browser wallet UX proof and the 50-epoch canary run are not collected yet.
+- A real signed Privy/mobile Web3 wallet flow (connect, reconnect, wrong network, rejection, pending/revert) is not collected yet.
+- The required 50 unique-epoch canary with wall-clock timing, varied amount/tile plans, and recovery analysis is not collected yet.
+- Durable redacted selected direct chain-to-DB comparison evidence is not collected yet.
 
 ## Next Best Step
 

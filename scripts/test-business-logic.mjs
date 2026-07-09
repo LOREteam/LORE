@@ -1704,6 +1704,17 @@ async function main() {
     /const REPAIR_CHUNK_BLOCKS = 10_000n/,
     "indexer repair must stay within the confirmed Sepolia RPC log range",
   );
+  const walletPlaytestSource = readFileSync("scripts/playtest-wallet.ts", "utf8");
+  assert.match(
+    walletPlaytestSource,
+    /rpcCount=\$\{rpcUrls\.length\}/,
+    "wallet playtest must report only RPC count by default",
+  );
+  assert.doesNotMatch(
+    walletPlaytestSource,
+    /rpc=\$\{rpcUrls\[0\]\}|depositsJson:|rebatesJson:/,
+    "wallet playtest must not print raw RPC URLs or API payloads",
+  );
   const restoreProofSource = readFileSync("scripts/verify-db-restore.mjs", "utf8");
   assert.match(
     restoreProofSource,

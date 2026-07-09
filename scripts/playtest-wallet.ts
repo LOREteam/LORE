@@ -4,7 +4,6 @@ import {
   createPublicClient,
   createWalletClient,
   fallback,
-  formatEther,
   formatUnits,
   getAddress,
   http,
@@ -369,9 +368,9 @@ async function main() {
   const neededAmount = SINGLE_AMOUNT + BATCH_AMOUNT * BigInt(batchTiles.length);
 
   console.log(`[playtest] dryRun=${DRY_RUN ? "yes" : "no"}`);
-  console.log(`[playtest] address=${dryRunAddress ?? "not-set"}`);
+  console.log(`[playtest] wallet=${dryRunAddress ? "configured" : "not-set"}`);
   console.log(`[playtest] network=${APP_NETWORK} chainId=${APP_CHAIN.id}`);
-  console.log(`[playtest] rpc=${rpcUrls[0]}`);
+  console.log(`[playtest] rpcCount=${rpcUrls.length}`);
   console.log(`[playtest] contract=${CONTRACT_ADDRESS}`);
   console.log(`[playtest] token=${LINEA_TOKEN_ADDRESS}`);
   console.log(`[playtest] epoch=${epoch.toString()} secondsLeft=${secondsLeft}`);
@@ -398,10 +397,11 @@ async function main() {
           args: [dryRunAddress, CONTRACT_ADDRESS],
         }),
       ]);
-      console.log(`[playtest] tokenBalance=${formatUnits(tokenBalance, 18)} LINEA`);
-      console.log(`[playtest] nativeBalance=${formatEther(nativeBalance)} ETH`);
-      console.log(`[playtest] allowance=${formatUnits(allowance, 18)} LINEA`);
-      console.log(`[playtest] needed=${formatUnits(neededAmount, 18)} LINEA`);
+      console.log(
+        `[playtest] walletPreflight token=${tokenBalance >= neededAmount ? "ready" : "insufficient"} ` +
+        `gas=${nativeBalance > 0n ? "ready" : "insufficient"} ` +
+        `allowance=${allowance >= neededAmount ? "ready" : "approval-needed"}`,
+      );
     }
 
     const [home, deposits, rebates] = await Promise.all([
@@ -440,11 +440,10 @@ async function main() {
     args: [account.address],
   });
   const nativeBalance = await publicClient.getBalance({ address: account.address });
-  console.log(`[playtest] tokenBalance=${formatUnits(tokenBalance, 18)} LINEA`);
-  console.log(`[playtest] nativeBalance=${formatEther(nativeBalance)} ETH`);
+  console.log(`[playtest] walletPreflight token=${tokenBalance >= neededAmount ? "ready" : "insufficient"} gas=${nativeBalance > 0n ? "ready" : "insufficient"}`);
 
   if (tokenBalance < neededAmount) {
-    throw new Error(`Insufficient LINEA balance: need ${formatUnits(neededAmount, 18)}, have ${formatUnits(tokenBalance, 18)}`);
+    throw new Error("Insufficient LINEA balance for the requested test");
   }
   if (nativeBalance <= 0n) {
     throw new Error("Insufficient ETH for gas");
@@ -491,14 +490,13 @@ async function main() {
   }
 
   console.log("[playtest] api snapshots");
+  const { address: _address, ...safeSummary } = summary;
   console.log(JSON.stringify({
-    summary,
+    summary: safeSummary,
     depositsStatus: deposits.status,
     depositsOk: deposits.ok,
-    depositsJson: deposits.json,
     rebatesStatus: rewards.status,
     rebatesOk: rewards.ok,
-    rebatesJson: rewards.json,
   }, null, 2));
 }
 
