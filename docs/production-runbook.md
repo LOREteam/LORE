@@ -33,7 +33,7 @@ Required runtime shape:
 - `LORE_DB_PATH` points to a persistent absolute path outside the repo.
 - `health:prod` evidence must use a non-local HTTPS origin; `PROD_HEALTH_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
 - `load:http` evidence must use a staging/canary non-local HTTPS origin; `LOAD_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
-- Save redacted command outputs as `docs/host-health-prod.log` and `docs/host-load-http.log` for `proof:host:collect`; the load log must include `Load base URL:` matching the staging/canary `LOAD_BASE_URL`.
+- Save redacted command outputs as `docs/host-health-prod.log` and `docs/host-load-http.log` before `proof:host:collect`; the collector refuses missing logs, health logs without `[prod-health] OK` / matching `base=` / numeric `finalityLagBlocks`, and load logs without `Load base URL:` matching the staging/canary `LOAD_BASE_URL` or successful latency/error evidence.
 
 ```powershell
 $env:PROD_HEALTH_BASE_URL = "https://playlore.xyz"

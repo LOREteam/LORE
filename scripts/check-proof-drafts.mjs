@@ -30,8 +30,12 @@ writeFileSync(signoffEnvLog, "Summary: synthetic redacted proof:mainnet output",
 writeFileSync(signoffChainLog, "Summary: synthetic direct-chain proof output", "utf8");
 const hostHealthLog = join(tmp, "host-health-prod.log");
 const hostLoadLog = join(tmp, "host-load-http.log");
+const hostHealthMissingBaseLog = join(tmp, "host-health-missing-base.log");
+const hostLoadMissingBaseLog = join(tmp, "host-load-missing-base.log");
 writeFileSync(hostHealthLog, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=2 finalityLagBlocks=2\n", "utf8");
 writeFileSync(hostLoadLog, "Load base URL: https://canary.playlore.xyz\nConcurrency: 10; client IPs: 10; duration: 60000ms; timeout: 10000ms\nTOTAL count= 100 fail= 0 err= 0.00% p50= 100ms p95= 400ms p99= 700ms\n", "utf8");
+writeFileSync(hostHealthMissingBaseLog, "[prod-health] OK\nruntime=ok dataSync=ok effectiveLagBlocks=2 finalityLagBlocks=2\n", "utf8");
+writeFileSync(hostLoadMissingBaseLog, "Concurrency: 10; client IPs: 10; duration: 60000ms; timeout: 10000ms\nTOTAL count= 100 fail= 0 err= 0.00% p50= 100ms p95= 400ms p99= 700ms\n", "utf8");
 const indexerLog = join(tmp, "indexer-once.log");
 const indexerHealthLog = join(tmp, "indexer-health-prod.log");
 const indexerChainSnapshot = join(tmp, "chain-proof-snapshot.json");
@@ -164,6 +168,27 @@ const collectorDraftCases = [
     checkArgs: (out) => ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${out}`],
   },
 ];
+const collectorRejectCases = [
+  {
+    id: "host-collector-missing-logs",
+    create: ["scripts/collect-host-evidence.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary"],
+    expected: "--health-log is required when collecting launch host evidence",
+  },
+  {
+    id: "host-collector-missing-health-base",
+    create: ["scripts/collect-host-evidence.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--health-log=${hostHealthMissingBaseLog}`, `--load-log=${hostLoadLog}`],
+    expected: "--health-log must include base=<production origin>",
+  },
+  {
+    id: "host-collector-missing-load-base",
+    create: ["scripts/collect-host-evidence.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--host-type=production", "--load-origin=https://canary.playlore.xyz", "--load-host-type=canary", `--health-log=${hostHealthLog}`, `--load-log=${hostLoadMissingBaseLog}`],
+    expected: "--load-log must include Load base URL line",
+  },
+];
+
 const finalOutputCases = [
   {
     id: "signoff-final-output",
@@ -280,6 +305,16 @@ for (const item of collectorDraftCases) {
   }
   rows.push([item.id, rejectedAsIncomplete && missingSections.length === 0 ? "rejected incomplete" : "issue", String(checkResult.status), oneLine(checkOutput).replace(/\|/g, "\\|")]);
 }
+for (const item of collectorRejectCases) {
+  const createResult = runNode([...item.create, ...item.createArgs]);
+  const createOutput = `${createResult.stdout || ""}\n${createResult.stderr || ""}`;
+  const rejected = createResult.status !== 0 && createOutput.includes(item.expected);
+  if (!rejected) {
+    issues.push(`${item.id}: incomplete collector evidence was not rejected`);
+  }
+  rows.push([item.id, rejected ? "rejected" : "issue", String(createResult.status), oneLine(createOutput).replace(/\|/g, "\\|")]);
+}
+
 for (const item of finalOutputCases) {
   const createResult = runNode([...item.create, ...item.createArgs]);
   const createOutput = `${createResult.stdout || ""}\n${createResult.stderr || ""}`;

@@ -1,4 +1,4 @@
-﻿import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { argValue, baseCollectorMeta, hasFlag, isFinalHttpsOrigin, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
 
@@ -21,8 +21,15 @@ const supervisor = argValue("supervisor", "TODO: pm2/systemd/docker compose supe
 const processEvidence = argValue("process-evidence", "TODO: paste or link concrete supervisor output path");
 const healthLogPath = argValue("health-log");
 const loadLogPath = argValue("load-log");
+const printPlanMode = hasFlag("print-plan");
+requireArtifact("health-log", healthLogPath);
+requireArtifact("load-log", loadLogPath);
 const healthLog = readOptionalLog(healthLogPath);
 const loadLog = readOptionalLog(loadLogPath);
+
+function requireArtifact(name, value) {
+  if (!printPlanMode) requireCondition(Boolean(value), `--${name} is required when collecting launch host evidence`);
+}
 
 function readOptionalLog(filePath) {
   if (!filePath) return "";
@@ -55,6 +62,20 @@ function parseNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function normalizedOrigin(value) {
+  try {
+    return new URL(String(value ?? "").trim()).origin.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function sameOrigin(left, right) {
+  const normalizedLeft = normalizedOrigin(left);
+  const normalizedRight = normalizedOrigin(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
 function parseHealth(log, logPath) {
   const ok = /\[prod-health\]\s+OK/i.test(log);
   const summary = firstMatchingLine(log, /\bbase=|\bruntime=|\bdataSync=/i) || "TODO: paste health:prod output with numeric finalityLagBlocks=<number>";
@@ -74,6 +95,16 @@ function parseHealth(log, logPath) {
     commandOutputPath: logPath || "TODO: path to redacted health:prod log",
     timestamp: now,
   };
+}
+
+function requireValidHealthArtifact(health) {
+  if (printPlanMode) return;
+  requireCondition(health.status === "pass", "--health-log must include [prod-health] OK");
+  requireCondition(/\bbase=\S+/i.test(health.summary), "--health-log must include base=<production origin>");
+  requireCondition(sameOrigin(health.url, origin), "--health-log base must match --origin");
+  requireCondition(health.runtimeHealthPassed === true, "--health-log must include runtime=ok/pass/healthy");
+  requireCondition(health.dataSyncHealthPassed === true, "--health-log must include dataSync=ok/pass/healthy");
+  requireCondition(health.finalityLagChecked === true, "--health-log must include numeric finalityLagBlocks=<number>");
 }
 
 function parseLoad(log, logPath) {
@@ -112,6 +143,17 @@ function parseLoad(log, logPath) {
   };
 }
 
+function requireValidLoadArtifact(load) {
+  if (printPlanMode) return;
+  requireCondition(/^Load base URL:/im.test(load.summary), "--load-log must include Load base URL line");
+  requireCondition(sameOrigin(load.url, loadOrigin), "--load-log Load base URL must match --load-origin");
+  requireCondition(load.requestCount > 0, "--load-log TOTAL line must include positive count");
+  requireCondition(load.durationMs > 0, "--load-log Concurrency line must include positive duration");
+  requireCondition(load.concurrency > 0, "--load-log Concurrency line must include positive concurrency");
+  requireCondition(load.errorRate <= load.maxErrorRate, "--load-log error rate must be <= LOAD_MAX_ERROR_RATE");
+  requireCondition(load.p95Ms > 0 && load.p95Ms <= load.maxP95Ms, "--load-log p95 must be positive and <= LOAD_MAX_P95_MS");
+}
+
 function processDraft(command) {
   return {
     supervised: true,
@@ -122,6 +164,11 @@ function processDraft(command) {
     checkedAt: now,
   };
 }
+
+const healthProd = parseHealth(healthLog, healthLogPath);
+const loadHttp = parseLoad(loadLog, loadLogPath);
+requireValidHealthArtifact(healthProd);
+requireValidLoadArtifact(loadHttp);
 
 const manifest = {
   ...baseCollectorMeta("host"),
@@ -143,8 +190,8 @@ const manifest = {
     evidence: "TODO: paste or link concrete restart/reboot persistence proof",
     checkedAt: now,
   },
-  healthProd: parseHealth(healthLog, healthLogPath),
-  loadHttp: parseLoad(loadLog, loadLogPath),
+  healthProd,
+  loadHttp,
   requiredManualEvidence: [
     "set running=true/status=pass for separately supervised lore-site/lore-bot/lore-indexer after concrete supervisor evidence",
     "set persistentDb booleans true only after restart and reboot survival proof for LORE_DB_PATH outside repo",
@@ -153,7 +200,7 @@ const manifest = {
   ],
 };
 
-if (hasFlag("print-plan")) {
+if (printPlanMode) {
   printPlan("Host Evidence Collection Plan", manifest);
 } else {
   const written = writeJson(out, manifest);
