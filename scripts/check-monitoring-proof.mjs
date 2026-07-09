@@ -122,6 +122,20 @@ function findTemplateLikeValues(value, path = "$") {
   return findings;
 }
 
+function compactEvidenceText(values) {
+  return values.filter(hasRealText).map((value) => String(value).trim()).join("\n");
+}
+
+function monitorAlertEvidenceText(monitor) {
+  return compactEvidenceText([
+    monitor.link,
+    monitor.evidence,
+    monitor.evidencePath,
+    monitor.artifact,
+    monitor.notes,
+  ]);
+}
+
 function monitorEvidence(monitor) {
   return [
     monitor.link,
@@ -171,6 +185,17 @@ function monitorHasIsoAlertTest(monitor) {
   return [monitor.lastAlertTestAt, monitor.lastTestAt, monitor.testAlertAt].some(hasIsoTimestamp);
 }
 
+function monitorRecoveryEvidenceText(monitor) {
+  return compactEvidenceText([
+    monitor.recoveryLink,
+    monitor.recoveryEvidence,
+    monitor.recoveryEvidencePath,
+    monitor.resolvedAlertLink,
+    monitor.resolutionLink,
+    monitor.recoveryNotes,
+  ]);
+}
+
 function monitorRecoveryEvidence(monitor) {
   return [
     monitor.recoveryLink,
@@ -192,6 +217,21 @@ function monitorHasIsoRecoveryTest(monitor) {
 
 function monitorHasAlertCondition(monitor) {
   return hasRealText(monitor.alertCondition) || hasRealText(monitor.threshold);
+}
+
+function monitorAlertRecoveryIssues(monitor, label) {
+  const issues = [];
+  const alertEvidence = monitorAlertEvidenceText(monitor);
+  const recoveryEvidence = monitorRecoveryEvidenceText(monitor);
+  if (alertEvidence && recoveryEvidence && alertEvidence === recoveryEvidence) {
+    issues.push(`${label} fired-alert evidence must be distinct from recovery evidence`);
+  }
+  const alertAt = firstAlertTimestamp(monitor);
+  const recoveryAt = [monitor.lastRecoveryAt, monitor.lastResolvedAt, monitor.recoveryAt, monitor.resolvedAt].find(hasRealText);
+  if (hasIsoTimestamp(alertAt) && hasIsoTimestamp(recoveryAt) && Date.parse(recoveryAt) < Date.parse(alertAt)) {
+    issues.push(`${label} recovery timestamp must not be before fired-alert timestamp`);
+  }
+  return issues;
 }
 
 function monitorComplete(monitor) {
@@ -339,6 +379,9 @@ if (manifest) {
     if (!hasProvider) issues.push(`monitor kind ${kind} has no provider`);
     if (!matching.some(monitorComplete)) {
       issues.push(`monitor kind ${kind} must have one enabled monitor with provider, condition, fired-alert evidence, recovery evidence, and ISO timestamps`);
+    }
+    for (const monitor of matching.filter((entry) => entry?.enabled === true)) {
+      issues.push(...monitorAlertRecoveryIssues(monitor, `monitor kind ${kind}`));
     }
   }
 
