@@ -20,6 +20,11 @@ const syntheticMonitoringAlert = join(outDir, "synthetic-monitoring-alert-export
 const syntheticMonitoringRecovery = join(outDir, "synthetic-monitoring-recovery-export.log");
 const syntheticMonitoringTarget = join(outDir, "synthetic-monitoring-alert-target.log");
 const syntheticMonitoringError = join(outDir, "synthetic-monitoring-error-event.log");
+const syntheticQaWallet = join(outDir, "synthetic-qa-wallet-flow-report.md");
+const syntheticQaFailure = join(outDir, "synthetic-qa-failure-state-report.md");
+const syntheticQaSupport = join(outDir, "synthetic-qa-support-audit-report.md");
+const syntheticQaFinal = join(outDir, "synthetic-qa-final-browser-report.md");
+const syntheticQaSmoke = join(outDir, "synthetic-qa-smoke-debug-autominer.log");
 const syntheticCanaryEvent = JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", round: 0, ok: true, txStatus: "success", role: "AUTOMINER_A", mode: "bet", epoch: 1, tiles: [1], txHash: "0x1111111111111111111111111111111111111111111111111111111111111111", network: "linea-mainnet", chainId: 59144, contractAddress: "0x1111111111111111111111111111111111111111", rpcLabel: "redacted-mainnet-rpc" });
 writeFileSync(syntheticCanaryLog, `${syntheticCanaryEvent}\n`, "utf8");
 writeFileSync(syntheticCanaryTarget, "synthetic non-proof canary target artifact for draft bundle only\n", "utf8");
@@ -30,6 +35,11 @@ writeFileSync(syntheticMonitoringAlert, "synthetic non-proof monitoring fired-al
 writeFileSync(syntheticMonitoringRecovery, "synthetic non-proof monitoring recovery artifact for draft bundle only\n", "utf8");
 writeFileSync(syntheticMonitoringTarget, "synthetic non-proof monitoring alert-target artifact for draft bundle only\n", "utf8");
 writeFileSync(syntheticMonitoringError, "synthetic non-proof monitoring error-event artifact for draft bundle only\n", "utf8");
+writeFileSync(syntheticQaWallet, "synthetic non-proof QA wallet artifact for draft bundle only\n", "utf8");
+writeFileSync(syntheticQaFailure, "synthetic non-proof QA failure-state artifact for draft bundle only\n", "utf8");
+writeFileSync(syntheticQaSupport, "synthetic non-proof QA support audit artifact for draft bundle only\n", "utf8");
+writeFileSync(syntheticQaFinal, "synthetic non-proof QA final browser artifact for draft bundle only\n", "utf8");
+writeFileSync(syntheticQaSmoke, "synthetic non-proof QA smoke artifact for draft bundle only\n", "utf8");
 
 const tasks = [
   ["signoff", "scripts/create-signoff-proof-draft.mjs", []],
@@ -37,7 +47,7 @@ const tasks = [
   ["indexer", "scripts/create-indexer-proof-draft.mjs", []],
   ["restore", "scripts/create-restore-proof-draft.mjs", ["--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore"]],
   ["monitoring", "scripts/create-monitoring-proof-draft.mjs", ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", `--monitor-artifact=${syntheticMonitoringAlert}`, `--recovery-artifact=${syntheticMonitoringRecovery}`, `--alert-target-artifact=${syntheticMonitoringTarget}`, `--error-event-artifact=${syntheticMonitoringError}`]],
-  ["qa", "scripts/create-qa-proof-draft.mjs", ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144"]],
+  ["qa", "scripts/create-qa-proof-draft.mjs", ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--wallet-artifact=${syntheticQaWallet}`, `--failure-artifact=${syntheticQaFailure}`, `--support-artifact=${syntheticQaSupport}`, `--finalqa-artifact=${syntheticQaFinal}`, `--smoke-artifact=${syntheticQaSmoke}`, "--clean-wallet-tx=0x1111111111111111111111111111111111111111111111111111111111111111"]],
   ["canary", "scripts/create-canary-proof-draft.mjs", ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--live-log=${syntheticCanaryLog}`, `--target-artifact=${syntheticCanaryTarget}`, `--recovery-artifact=${syntheticCanaryRecovery}`, `--session-artifact=${syntheticCanarySession}`, `--tx-artifact=${syntheticCanaryTx}`]],
 ];
 

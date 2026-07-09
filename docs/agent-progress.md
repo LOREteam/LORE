@@ -3560,3 +3560,12 @@ as historical progress only.
 - Added a draft regression case that rejects missing --monitor-artifact before G9 draft output is written.
 
 - Verified node --check for changed monitoring draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.
+
+## 2026-07-09 - QA draft artifact guard
+
+- Tightened scripts/create-qa-proof-draft.mjs so G12-G14 QA drafts require existing wallet, failure-state, support/audit, final-browser, and debug-smoke artifacts before writing a draft.
+- Required --clean-wallet-tx to be a real non-zero transaction hash instead of allowing an omitted zero placeholder in QA drafts.
+- Updated scripts/create-all-proof-drafts.mjs with synthetic non-proof QA artifacts so local draft bundle generation still exercises the artifact-backed path.
+- Added draft regression cases that reject missing --wallet-artifact and missing --clean-wallet-tx before QA draft output is written.
+
+- Verified node --check for changed QA draft scripts, npm.cmd run proof:drafts, npm.cmd run proof:launch-map, and npm.cmd run proof:local.

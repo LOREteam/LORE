@@ -295,6 +295,18 @@ const finalOutputCases = [
     expected: "writes incomplete drafts only",
   },
   {
+    id: "qa-missing-wallet-artifact",
+    create: ["scripts/create-qa-proof-draft.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--failure-artifact=${qaFailureArtifact}`, `--support-artifact=${qaSupportArtifact}`, `--finalqa-artifact=${qaFinalArtifact}`, `--smoke-artifact=${qaSmokeArtifact}`, "--clean-wallet-tx=0x1111111111111111111111111111111111111111111111111111111111111111"],
+    expected: "--wallet-artifact is required when drafting QA launch evidence",
+  },
+  {
+    id: "qa-missing-clean-wallet-tx",
+    create: ["scripts/create-qa-proof-draft.mjs"],
+    createArgs: ["--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", `--wallet-artifact=${qaWalletArtifact}`, `--failure-artifact=${qaFailureArtifact}`, `--support-artifact=${qaSupportArtifact}`, `--finalqa-artifact=${qaFinalArtifact}`, `--smoke-artifact=${qaSmokeArtifact}`],
+    expected: "--clean-wallet-tx must be a real non-zero tx hash",
+  },
+  {
     id: "monitoring-final-output",
     create: ["scripts/create-monitoring-proof-draft.mjs"],
     createArgs: ["--provider=synthetic-monitor", "--error-provider=synthetic-error-tracker", "--origin=https://playlore.xyz", "--out=docs/monitoring-proof.json"],
@@ -319,7 +331,7 @@ function runNode(args) {
 
 function oneLine(output) {
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted artifact/i;
+  const guardPattern = /writes incomplete drafts only|collector writes incomplete evidence drafts only|is required when (?:collecting|drafting)|must point to an existing redacted artifact|must be a real non-zero tx hash/i;
   const preferred = lines.find((line) => /^Error: /i.test(line) && guardPattern.test(line)) || lines.find((line) => guardPattern.test(line));
   const compact = preferred || lines.slice(-3).join(" | ");
   return compact.length > 260 ? `${compact.slice(0, 257)}...` : compact;

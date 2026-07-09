@@ -50,9 +50,11 @@ function isPositiveInteger(value) {
   return Number.isSafeInteger(Number(normalized));
 }
 
-function optionalExistingArtifact(name) {
+function requireExistingArtifact(name) {
   const value = argValue(name);
-  if (!value) return "";
+  if (!value) {
+    throw new Error(`--${name} is required when drafting QA launch evidence`);
+  }
   const resolved = path.resolve(process.cwd(), value);
   if (!existsSync(resolved)) {
     throw new Error(`--${name} must point to an existing redacted artifact`);
@@ -82,12 +84,12 @@ const chainId = argValue(
   "chain-id",
   process.env.NEXT_PUBLIC_LINEA_CHAIN_ID || process.env.LINEA_CHAIN_ID || knownChainId(network) || "TODO: target chain id",
 );
-const walletArtifact = optionalExistingArtifact("wallet-artifact");
-const failureArtifact = optionalExistingArtifact("failure-artifact");
-const supportArtifact = optionalExistingArtifact("support-artifact");
-const finalQaArtifact = optionalExistingArtifact("finalqa-artifact");
-const smokeArtifact = optionalExistingArtifact("smoke-artifact");
-const cleanWalletTx = argValue("clean-wallet-tx", ZERO_TX);
+const walletArtifact = requireExistingArtifact("wallet-artifact");
+const failureArtifact = requireExistingArtifact("failure-artifact");
+const supportArtifact = requireExistingArtifact("support-artifact");
+const finalQaArtifact = requireExistingArtifact("finalqa-artifact");
+const smokeArtifact = requireExistingArtifact("smoke-artifact");
+const cleanWalletTx = argValue("clean-wallet-tx");
 
 if (!isFinalHttpsOrigin(origin)) {
   throw new Error("--origin must be a non-local HTTPS origin without path, query, or hash");
@@ -104,7 +106,7 @@ if (!isPositiveInteger(chainId)) {
 if (Number(chainId) !== 59144) {
   throw new Error("--chain-id must be 59144 for Linea mainnet launch proof");
 }
-if (cleanWalletTx !== ZERO_TX && !isRealTx(cleanWalletTx)) {
+if (!isRealTx(cleanWalletTx)) {
   throw new Error("--clean-wallet-tx must be a real non-zero tx hash");
 }
 
