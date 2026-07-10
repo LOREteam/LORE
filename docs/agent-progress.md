@@ -3996,3 +3996,11 @@ as historical progress only.
 - Committed `b16b003 fix: harden testnet resolver broadcast recovery`: canary now separates stable read RPC from preferred broadcast RPC and skips resolve with `insufficient-native-gas` before signing when the resolver cannot afford estimated gas.
 - Verified `npm.cmd run typecheck` and `npm.cmd run test:logic`; the latter includes guards for preferred Sepolia broadcast ordering and unaffordable keeper gas.
 - Live canary remains paused until the resolver test wallet receives enough Linea Sepolia native ETH to replace the queued nonces; no mainnet, EIP-7702, or protocol behavior was changed.
+
+## 2026-07-10 - Canary Recovery And Redaction
+
+- Recovered the resolver nonce queue after replacement/cancel receipts confirmed, then separated stable read RPC from preferred broadcast RPC and added resolver gas buffering/native-gas guards in prior commits.
+- A varied 50-epoch Sepolia stress run reached 50 submitted epochs with successful resolve recovery and no nonce gaps, but one 12-tile arrays `eth_estimateGas` simulation failed before signing; the log also exposed that raw RPC payloads could enter `event.error`. The run is retained only as diagnostic evidence, not proof.
+- Commit `ca49a6b` adds a safe 700k batch-estimate fallback for that specific RPC simulation error, redacts canary error text, adds the matching frontend estimate fallback, and makes strict analyzer/proof-drafts reject unsafe error strings.
+- Real 4-epoch recovery run verified single, bitmap, sameAmount, and arrays at 12 tiles, all successful with resolver recovery and no nonce backlog; observed arrays gas was below the conservative fallback floor.
+- Remaining for final testnet canary: replenish native Sepolia ETH for resolver and AUTOMINER_A, then run a fresh redacted 50-successful-auto-miner-epoch log. Mainnet proof remains out of scope.
