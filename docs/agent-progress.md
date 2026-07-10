@@ -3989,3 +3989,10 @@ as historical progress only.
 - A real varied canary revealed a root-cause defect: consecutive loop iterations reused the same still-safe epoch, so the run was stopped after three duplicate-epoch testnet bets.
 - Updated waitForSafeWindow to require an epoch strictly greater than the last attempted epoch before every transaction attempt.
 - Added a regression assertion and verified typecheck/test:logic plus a real two-round Sepolia canary: first bet in epoch 1722, second in 1723, zero failures.
+
+## 2026-07-10 Resolver Broadcast Recovery
+
+- Diagnosed a stuck Sepolia resolver queue: the canary used a read-RPC fallback for signed writes; official RPC accepted replacements without propagating them to the sequencer, while PublicNode correctly exposed insufficient native gas.
+- Committed `b16b003 fix: harden testnet resolver broadcast recovery`: canary now separates stable read RPC from preferred broadcast RPC and skips resolve with `insufficient-native-gas` before signing when the resolver cannot afford estimated gas.
+- Verified `npm.cmd run typecheck` and `npm.cmd run test:logic`; the latter includes guards for preferred Sepolia broadcast ordering and unaffordable keeper gas.
+- Live canary remains paused until the resolver test wallet receives enough Linea Sepolia native ETH to replace the queued nonces; no mainnet, EIP-7702, or protocol behavior was changed.
