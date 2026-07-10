@@ -55,6 +55,7 @@ import * as recentWinsModule from "../app/hooks/useRecentWins.ts";
 import * as explorerLinksModule from "../app/lib/explorerLinks.ts";
 import * as cacheTimestampModule from "../app/lib/cacheTimestamp.ts";
 import * as productionRuntimeModule from "../config/productionRuntime.ts";
+import * as lineaFeesModule from "../app/lib/lineaFees.ts";
 import * as chatSessionClientModule from "../app/lib/chatSessionClient.ts";
 
 function withTemporaryEnv(values, fn) {
@@ -132,8 +133,10 @@ async function main() {
   const publicConfig = publicConfigModule.default ?? publicConfigModule;
   const eip7702 = eip7702Module.default ?? eip7702Module;
   const productionRuntime = productionRuntimeModule.default ?? productionRuntimeModule;
+  const lineaFees = lineaFeesModule.default ?? lineaFeesModule;
   const chatSessionClient = chatSessionClientModule.default ?? chatSessionClientModule;
 
+  assert.equal(lineaFees.getAffordableKeeperGasLimit(180000n, 100000n, { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }), null);
   assert.equal(publicConfig.getConfiguredEip7702MiningEnabled("1", "0"), false);
   assert.equal(publicConfig.getConfiguredEip7702MiningEnabled("1", "1"), true);
   assert.equal(publicConfig.getConfiguredEip7702MiningEnabled("0", "1"), false);
@@ -147,6 +150,10 @@ async function main() {
   assert.deepEqual(
     publicConfig.getStableLineaReadRpcs(undefined, "sepolia"),
     ["https://linea-sepolia.drpc.org", "https://rpc.sepolia.linea.build"],
+  );
+  assert.equal(
+    publicConfig.getPreferredLineaRpcs(undefined, "sepolia")[0],
+    "https://linea-sepolia-rpc.publicnode.com",
   );
   assert.throws(
     () => publicConfig.getConfiguredDeployBlock("bad", "sepolia"),

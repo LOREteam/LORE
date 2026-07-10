@@ -23,7 +23,7 @@ import {
   getKeeperFeeOverrides,
 } from "../app/lib/lineaFees";
 import { tileIdsToMask } from "../app/lib/tileMask";
-import { getConfiguredLineaNetwork, getLineaChain, getStableLineaReadRpcs } from "../config/publicConfig";
+import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs, getStableLineaReadRpcs } from "../config/publicConfig";
 
 loadDotenv({ path: ".env.live-test-wallets", override: false });
 
@@ -324,6 +324,22 @@ async function resolveIfNeeded(params: {
       args: [epoch],
     });
     const fees = await getFeeOverrides(publicClient);
+    const nativeBalance = await publicClient.getBalance({ address: resolver.account.address });
+    if (getAffordableKeeperGasLimit(gas, nativeBalance, fees) == null) {
+      writeEvent(logPath, {
+        amount: "0",
+        epoch: epoch.toString(),
+        error: "resolver has insufficient native gas",
+        errorKind: "insufficient-native-gas",
+        mode: "resolve",
+        ok: false,
+        role: resolver.role,
+        round: -1,
+        secondsLeft,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
     const hash = await walletClient.writeContract({
       account: resolver.account,
       chain: APP_CHAIN,
@@ -614,16 +630,18 @@ async function main() {
         account: privateKeyToAccount(normalizePrivateKey(process.env.LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY)),
       }
     : null;
-  const rpcUrls = getStableLineaReadRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
-  const transport = fallback(rpcUrls.map((url) => http(url, { timeout: 20_000, retryCount: 1 })));
-  const publicClient = createPublicClient({ chain: APP_CHAIN, transport });
+  const readRpcUrls = getStableLineaReadRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
+  const broadcastRpcUrls = getPreferredLineaRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
+  const readTransport = fallback(readRpcUrls.map((url) => http(url, { timeout: 20_000, retryCount: 1 })));
+  const broadcastTransport = fallback(broadcastRpcUrls.map((url) => http(url, { timeout: 20_000, retryCount: 1 })));
+  const publicClient = createPublicClient({ chain: APP_CHAIN, transport: readTransport });
   const logPath = createRunLogPath();
 
   writeFileSync(logPath, "");
   console.log(`[live-canary] network=${APP_NETWORK} chainId=${APP_CHAIN.id}`);
   console.log(`[live-canary] contract=${CONTRACT_ADDRESS}`);
   console.log(`[live-canary] token=${LINEA_TOKEN_ADDRESS}`);
-  console.log(`[live-canary] rpcLabel=${getRpcLabel()} rpcCount=${rpcUrls.length}`);
+  console.log(`[live-canary] rpcLabel=${getRpcLabel()} readRpcCount=${readRpcUrls.length} broadcastRpcCount=${broadcastRpcUrls.length}`);
   console.log(
     `[live-canary] rounds=${TARGET_ROUNDS} randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +
       `total=${formatUnits(MIN_TOTAL_BET_AMOUNT, 18)}..${formatUnits(MAX_TOTAL_BET_AMOUNT, 18)} ` +
@@ -649,7 +667,7 @@ async function main() {
       logPath,
       publicClient,
       requiredAllowance: plannedSpendByRole.get(wallet.role) ?? 0n,
-      transport,
+      transport: broadcastTransport,
       wallet,
     });
   }
@@ -669,7 +687,7 @@ async function main() {
         logPath,
         publicClient,
         resolver,
-        transport,
+        transport: broadcastTransport,
       });
       lastAttemptedEpoch = epoch;
       const tiles = pickTiles(epoch, round, walletIndex, plan.tileCount);
@@ -682,7 +700,7 @@ async function main() {
         round,
         secondsLeft,
         tiles,
-        transport,
+        transport: broadcastTransport,
         wallet,
       });
       if (event.ok) {
