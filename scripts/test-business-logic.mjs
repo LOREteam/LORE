@@ -138,6 +138,7 @@ async function main() {
 
   assert.equal(lineaFees.getAffordableKeeperGasLimit(180000n, 100000n, { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }), null);
   assert.equal(lineaFees.getAffordableKeeperGasLimit(180000n, 270000n, { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }), 270000n);
+  assert.equal(lineaFees.getLineaFeeOverrides({ maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n }, 59141)?.maxPriorityFeePerGas, 80_000_000n);
   assert.equal(publicConfig.getConfiguredEip7702MiningEnabled("1", "0"), false);
   assert.equal(publicConfig.getConfiguredEip7702MiningEnabled("1", "1"), true);
   assert.equal(publicConfig.getConfiguredEip7702MiningEnabled("0", "1"), false);

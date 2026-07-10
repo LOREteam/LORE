@@ -21,6 +21,7 @@ import {
   getAffordableKeeperGasLimit,
   getFallbackFeeOverrides,
   getKeeperFeeOverrides,
+  getLineaFeeOverrides,
 } from "../app/lib/lineaFees";
 import { tileIdsToMask } from "../app/lib/tileMask";
 import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs, getStableLineaReadRpcs } from "../config/publicConfig";
@@ -286,6 +287,14 @@ async function getFeeOverrides(publicClient: PublicClient) {
   }
 }
 
+async function getBetFeeOverrides(publicClient: PublicClient) {
+  try {
+    const fees = await publicClient.estimateFeesPerGas();
+    return getLineaFeeOverrides(fees, APP_CHAIN.id) ?? getFallbackFeeOverrides(APP_CHAIN.id, "normal");
+  } catch {
+    return getFallbackFeeOverrides(APP_CHAIN.id, "normal");
+  }
+}
 async function readEpochWindow(publicClient: PublicClient) {
   const epoch = await publicClient.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "currentEpoch" });
   const [endTime, block] = await Promise.all([
@@ -521,7 +530,7 @@ async function placeRound(params: {
   const startedAt = Date.now();
   const walletClient = createWalletClient({ account: wallet.account, chain: APP_CHAIN, transport });
   const nativeBalance = await publicClient.getBalance({ address: wallet.account.address });
-  let fees = await getFeeOverrides(publicClient);
+  let fees = await getBetFeeOverrides(publicClient);
   const functionName =
     mode === "single"
       ? "placeBet"
