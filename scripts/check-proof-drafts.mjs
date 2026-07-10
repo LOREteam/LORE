@@ -41,6 +41,7 @@ const testnetCanaryFullEvents = canaryFullEvents.map((event) => JSON.stringify({
 writeFileSync(testnetCanaryFullLog, `${testnetCanaryFullEvents.join("\n")}\n`, "utf8");
 const canaryTemplateLiveLog = join(tmp, "canary-template-live.jsonl");
 const canarySecretLiveLog = join(tmp, "canary-secret-live.jsonl");
+const canaryUnsafeErrorLiveLog = join(tmp, "canary-unsafe-error-live.jsonl");
 const canaryMalformedLiveLog = join(tmp, "canary-malformed-live.jsonl");
 const canaryNonObjectLiveLog = join(tmp, "canary-non-object-live.jsonl");
 writeFileSync(
@@ -51,6 +52,11 @@ writeFileSync(
 writeFileSync(
   canarySecretLiveLog,
   `${canaryFullEvents.map((event, index) => index === 2 ? JSON.stringify({ ...JSON.parse(event), rpcUrl: "https://rpc.example.test/secret-key" }) : event).join("\n")}\n`,
+  "utf8",
+);
+writeFileSync(
+  canaryUnsafeErrorLiveLog,
+  `${canaryFullEvents.map((event, index) => index === 2 ? JSON.stringify({ ...JSON.parse(event), error: "estimate failed at https://rpc.example.test from 0x1111111111111111111111111111111111111111" }) : event).join("\n")}\n`,
   "utf8",
 );
 writeFileSync(
@@ -1536,6 +1542,12 @@ const strictRejectCases = [
     check: ["scripts/analyze-live-canary-proof.mjs"],
     checkArgs: [canarySecretLiveLog, "--strict", `--manifest=${canaryValidStrictManifestPath}`],
     expected: "live canary log contains secret-like values",
+  },
+  {
+    id: "canary-live-log-unsafe-error-text",
+    check: ["scripts/analyze-live-canary-proof.mjs"],
+    checkArgs: [canaryUnsafeErrorLiveLog, "--strict", `--manifest=${canaryValidStrictManifestPath}`],
+    expected: "live canary log contains unsafe error text",
   },
   {
     id: "canary-live-log-malformed-jsonl",

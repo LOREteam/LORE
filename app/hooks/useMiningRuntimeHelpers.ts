@@ -13,7 +13,7 @@ import {
 import { getFallbackFeeOverrides, getKeeperFeeOverrides, getLineaFeeOverrides } from "../lib/lineaFees";
 import { log } from "../lib/logger";
 import type { GasOverrides } from "./useMining.types";
-import { isMissingTokenGetterError, isNetworkError, withMiningRpcTimeout } from "./useMining.shared";
+import { isEstimateGasOutOfGasError, isMissingTokenGetterError, isNetworkError, withMiningRpcTimeout } from "./useMining.shared";
 
 type FeeEstimate = Awaited<ReturnType<PublicClient["estimateFeesPerGas"]>>;
 const FEE_ESTIMATE_CACHE_TTL_MS = 3_000;
@@ -215,7 +215,7 @@ export function useMiningRuntimeHelpers({
         const withBuffer = (est * 180n) / 100n + bufferExtra;
         return withBuffer > minGas ? withBuffer : minGas;
       } catch (err) {
-        if (isNetworkError(err)) return minGas;
+        if (isNetworkError(err) || isEstimateGasOutOfGasError(err)) return minGas;
         throw err;
       }
     },

@@ -257,6 +257,11 @@ export function isNetworkError(err: unknown): boolean {
   );
 }
 
+export function isEstimateGasOutOfGasError(err: unknown): boolean {
+  const msg = flattenErrorMessage(err);
+  return msg.includes("eth_estimategas") && msg.includes("out of gas");
+}
+
 export function firstErrorLine(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   return raw.split("\n")[0].trim();

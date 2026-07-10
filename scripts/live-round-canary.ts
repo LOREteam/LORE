@@ -90,6 +90,7 @@ type RoundEvent = {
   error?: string;
   errorKind?: string;
   epoch?: string;
+  gasEstimateFallback?: boolean;
   gasUsed?: string;
   hash?: Hash;
   mode?: BetMode | "approve" | "epoch-wait" | "resolve" | "preflight";
@@ -111,6 +112,7 @@ type RoundEvent = {
 
 const attemptedResolveEpochs = new Map<string, number>();
 const pendingResolveEpochs = new Set<string>();
+const BATCH_GAS_FALLBACK = 700_000n;
 
 function getRpcLabel() {
   const label = process.env.LIVE_CANARY_RPC_LABEL?.trim() || process.env.LINEA_RPC_LABEL?.trim();
@@ -118,6 +120,20 @@ function getRpcLabel() {
   return label;
 }
 
+function isEstimateGasOutOfGasError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  return lower.includes("eth_estimategas") && lower.includes("out of gas");
+}
+
+function redactCanaryErrorMessage(message: string) {
+  const firstLine = message.split(/\r?\n/).find((line) => line.trim())?.trim() || "Unknown error";
+  return firstLine
+    .replace(/https?:\/\/[^\s"']+/gi, "<redacted-url>")
+    .replace(/\b0x[a-fA-F0-9]{80,}\b/g, "<redacted-calldata>")
+    .replace(/\b0x[a-fA-F0-9]{40}\b/g, "<redacted-address>")
+    .slice(0, 280);
+}
 function parseIntegerEnv(name: string, fallbackValue: number, min: number, max: number) {
   const raw = process.env[name];
   if (raw == null || raw.trim() === "") return fallbackValue;
@@ -180,22 +196,23 @@ function delay(ms: number) {
 function classifyError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const lower = message.toLowerCase();
-  if (lower.includes("user rejected")) return { kind: "user-rejected", message };
-  if (lower.includes("insufficient")) return { kind: "insufficient-funds", message };
-  if (lower.includes("nonce too low")) return { kind: "nonce-too-low", message };
-  if (lower.includes("already known") || lower.includes("known transaction")) return { kind: "already-known", message };
-  if (lower.includes("replacement transaction underpriced")) return { kind: "replacement-underpriced", message };
-  if (lower.includes("epochclosing") || lower.includes("epochended")) return { kind: "late-bet", message };
-  if (lower.includes("safe window") || lower.includes("epoch wait")) return { kind: "epoch-window", message };
-  if (lower.includes("alreadyresolved")) return { kind: "already-resolved", message };
-  if (lower.includes("timernotended")) return { kind: "timer-not-ended", message };
+  const safeMessage = redactCanaryErrorMessage(message);
+  if (isEstimateGasOutOfGasError(error)) return { kind: "estimate-out-of-gas", message: "eth_estimateGas out of gas" };
+  if (lower.includes("user rejected")) return { kind: "user-rejected", message: safeMessage };
+  if (lower.includes("insufficient")) return { kind: "insufficient-funds", message: safeMessage };
+  if (lower.includes("nonce too low")) return { kind: "nonce-too-low", message: safeMessage };
+  if (lower.includes("already known") || lower.includes("known transaction")) return { kind: "already-known", message: safeMessage };
+  if (lower.includes("replacement transaction underpriced")) return { kind: "replacement-underpriced", message: safeMessage };
+  if (lower.includes("epochclosing") || lower.includes("epochended")) return { kind: "late-bet", message: safeMessage };
+  if (lower.includes("safe window") || lower.includes("epoch wait")) return { kind: "epoch-window", message: safeMessage };
+  if (lower.includes("alreadyresolved")) return { kind: "already-resolved", message: safeMessage };
+  if (lower.includes("timernotended")) return { kind: "timer-not-ended", message: safeMessage };
   if (lower.includes("network") || lower.includes("timeout") || lower.includes("fetch failed") || lower.includes("429")) {
-    return { kind: "network", message };
+    return { kind: "network", message: safeMessage };
   }
-  if (lower.includes("revert") || lower.includes("execution reverted")) return { kind: "revert", message };
-  return { kind: "unknown", message };
+  if (lower.includes("revert") || lower.includes("execution reverted")) return { kind: "revert", message: safeMessage };
+  return { kind: "unknown", message: safeMessage };
 }
-
 function pickMode(round: number): BetMode {
   const modes: BetMode[] = ["single", "bitmap", "sameAmount", "arrays"];
   return modes[round % modes.length];
@@ -521,14 +538,22 @@ async function placeRound(params: {
         : mode === "sameAmount"
           ? [tiles.map(BigInt), plan.amount]
           : [tiles.map(BigInt), plan.amounts];
-  let gas = await publicClient.estimateContractGas({
-    account: wallet.account.address,
-    address: CONTRACT_ADDRESS,
-    abi: GAME_ABI,
-    functionName,
-    args,
-    ...fees,
-  } as never);
+  let gasEstimateFallback = false;
+  let gas: bigint;
+  try {
+    gas = await publicClient.estimateContractGas({
+      account: wallet.account.address,
+      address: CONTRACT_ADDRESS,
+      abi: GAME_ABI,
+      functionName,
+      args,
+      ...fees,
+    } as never);
+  } catch (error) {
+    if (mode === "single" || !isEstimateGasOutOfGasError(error)) throw error;
+    gas = BATCH_GAS_FALLBACK;
+    gasEstimateFallback = true;
+  }
   fees = clampKeeperFeeOverridesToBalance(fees, gas, nativeBalance) ?? fees;
   gas = getAffordableKeeperGasLimit(gas, nativeBalance, fees) ?? gas;
   const [nonceLatest, noncePending] = await Promise.all([
@@ -551,6 +576,7 @@ async function placeRound(params: {
     amounts: mode === "arrays" ? plan.amounts.map((value) => formatUnits(value, 18)) : undefined,
     durationMs: Date.now() - startedAt,
     epoch: epoch.toString(),
+    gasEstimateFallback,
     gasUsed: receipt.gasUsed.toString(),
     hash,
     mode,

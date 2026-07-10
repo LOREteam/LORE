@@ -71,6 +71,7 @@ if (!logPath) {
   );
   const liveLogTemplateFindings = findTemplateLikeValues(events);
   const liveLogSecretFindings = findSecretLikeValues(events);
+  const liveLogUnsafeErrorFindings = findUnsafeErrorText(events);
 
   const strictFailures = [];
   if (betEpochs.length < minEpochs) strictFailures.push(`unique bet epochs ${betEpochs.length} < ${minEpochs}`);
@@ -87,6 +88,7 @@ if (!logPath) {
   if (targetEventMismatches.length > 0) strictFailures.push(`target metadata mismatches ${targetEventMismatches.length}`);
   if (liveLogTemplateFindings.length > 0) strictFailures.push(`live canary log contains template-like values at ${liveLogTemplateFindings.slice(0, 5).join(", ")}`);
   if (liveLogSecretFindings.length > 0) strictFailures.push(`live canary log contains secret-like values at ${liveLogSecretFindings.slice(0, 5).join(", ")}`);
+  if (liveLogUnsafeErrorFindings.length > 0) strictFailures.push(`live canary log contains unsafe error text at ${liveLogUnsafeErrorFindings.slice(0, 5).join(", ")}`);
   if (manifestSummary) {
     const manifestAutoMinerRounds = Number(manifestSummary.autoMinerSession.rounds);
     const manifestAutoMinerUniqueEpochs = Number(manifestSummary.autoMinerSession.uniqueEpochs);
@@ -403,6 +405,21 @@ function findSecretLikeValues(value, path = "$") {
   return findings;
 }
 
+function findUnsafeErrorText(value, path = "$") {
+  const findings = [];
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => findings.push(...findUnsafeErrorText(entry, `${path}[${index}]`)));
+    return findings;
+  }
+  if (!isPlainObject(value)) return findings;
+  if (typeof value.error === "string" && /(?:https?:\/\/|\b0x[a-fA-F0-9]{40}\b|\b0x[a-fA-F0-9]{80,}\b)/i.test(value.error)) {
+    findings.push(`${path}.error`);
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    findings.push(...findUnsafeErrorText(entry, `${path}.${key}`));
+  }
+  return findings;
+}
 function findTemplateLikeValues(value, path = "$") {
   const findings = [];
   if (Array.isArray(value)) {
