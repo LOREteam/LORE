@@ -269,18 +269,12 @@ async function getFeeOverrides(publicClient: PublicClient) {
 }
 
 async function readEpochWindow(publicClient: PublicClient) {
-  const epoch = await publicClient.readContract({
-    address: CONTRACT_ADDRESS,
-    abi: GAME_ABI,
-    functionName: "currentEpoch",
-  });
-  const endTime = await publicClient.readContract({
-    address: CONTRACT_ADDRESS,
-    abi: GAME_ABI,
-    functionName: "getEpochEndTime",
-    args: [epoch],
-  });
-  const secondsLeft = Number(endTime) - Math.floor(Date.now() / 1000);
+  const epoch = await publicClient.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "currentEpoch" });
+  const [endTime, block] = await Promise.all([
+    publicClient.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getEpochEndTime", args: [epoch] }),
+    publicClient.getBlock(),
+  ]);
+  const secondsLeft = Number(endTime - block.timestamp);
   return { epoch, secondsLeft };
 }
 
