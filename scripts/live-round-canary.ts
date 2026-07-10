@@ -307,6 +307,14 @@ async function resolveIfNeeded(params: {
   const startedAt = Date.now();
   let pendingHash: Hash | undefined;
   const walletClient = createWalletClient({ account: resolver.account, chain: APP_CHAIN, transport });
+  const [nonceLatest, noncePending] = await Promise.all([
+    publicClient.getTransactionCount({ address: resolver.account.address, blockTag: "latest" }),
+    publicClient.getTransactionCount({ address: resolver.account.address, blockTag: "pending" }),
+  ]);
+  if (noncePending > nonceLatest) {
+    writeEvent(logPath, { amount: "0", epoch: epoch.toString(), error: "resolver has pending transactions", errorKind: "pending-nonce", mode: "resolve", ok: false, role: resolver.role, round: -1, secondsLeft, timestamp: new Date().toISOString() });
+    return;
+  }
   try {
     const gas = await publicClient.estimateContractGas({
       account: resolver.account.address,
@@ -344,6 +352,7 @@ async function resolveIfNeeded(params: {
     });
   } catch (error) {
     const classified = classifyError(error);
+    if (pendingHash && /timed out while waiting for transaction/i.test(classified.message)) pendingResolveEpochs.add(epochKey);
     writeEvent(logPath, {
       amount: "0",
       durationMs: Date.now() - startedAt,
