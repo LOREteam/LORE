@@ -110,6 +110,7 @@ type RoundEvent = {
 };
 
 const attemptedResolveEpochs = new Map<string, number>();
+const pendingResolveEpochs = new Set<string>();
 
 function getRpcLabel() {
   const label = process.env.LIVE_CANARY_RPC_LABEL?.trim() || process.env.LINEA_RPC_LABEL?.trim();
@@ -298,11 +299,13 @@ async function resolveIfNeeded(params: {
   if (isResolved) return;
   const epochKey = epoch.toString();
   const now = Date.now();
+  if (pendingResolveEpochs.has(epochKey)) return;
   const lastAttemptAt = attemptedResolveEpochs.get(epochKey);
   if (lastAttemptAt != null && now - lastAttemptAt < RESOLVE_RETRY_COOLDOWN_MS) return;
   attemptedResolveEpochs.set(epochKey, now);
 
   const startedAt = Date.now();
+  let pendingHash: Hash | undefined;
   const walletClient = createWalletClient({ account: resolver.account, chain: APP_CHAIN, transport });
   try {
     const gas = await publicClient.estimateContractGas({
@@ -323,6 +326,7 @@ async function resolveIfNeeded(params: {
       gas,
       ...fees,
     } as never);
+    pendingHash = hash;
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
     writeEvent(logPath, {
       amount: "0",
