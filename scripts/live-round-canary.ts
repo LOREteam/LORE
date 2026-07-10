@@ -316,7 +316,7 @@ async function resolveIfNeeded(params: {
     return;
   }
   try {
-    const gas = await publicClient.estimateContractGas({
+    let gas = await publicClient.estimateContractGas({
       account: resolver.account.address,
       address: CONTRACT_ADDRESS,
       abi: GAME_ABI,
@@ -325,7 +325,8 @@ async function resolveIfNeeded(params: {
     });
     const fees = await getFeeOverrides(publicClient);
     const nativeBalance = await publicClient.getBalance({ address: resolver.account.address });
-    if (getAffordableKeeperGasLimit(gas, nativeBalance, fees) == null) {
+    const affordableGasLimit = getAffordableKeeperGasLimit(gas, nativeBalance, fees);
+    if (affordableGasLimit == null) {
       writeEvent(logPath, {
         amount: "0",
         epoch: epoch.toString(),
@@ -340,6 +341,7 @@ async function resolveIfNeeded(params: {
       });
       return;
     }
+    gas = affordableGasLimit;
     const hash = await walletClient.writeContract({
       account: resolver.account,
       chain: APP_CHAIN,
