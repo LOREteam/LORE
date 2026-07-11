@@ -32,12 +32,17 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   secret-like name. Five local name candidates remain confined to ignored
   runtime areas and their contents were not printed.
 - `OPEN` `.tmp/` still contains the active 300-round canary plus older local
-  evidence. It must not be deleted while the canary processes are running. Once
-  the canary finishes, compare its result with tracked `docs/testnet-canary-*`,
-  archive the accepted dated proof, and remove superseded local logs.
+  wallet material. It must not be deleted while the canary processes are
+  running. Once the canary finishes, compare its result with tracked
+  `docs/testnet-canary-*`, archive the accepted dated proof, and remove the final
+  two runtime logs plus ignored burner-wallet file.
 - `DONE` five unreferenced failed/incomplete 2026-07-11 canary JSONL files and
   their four closed stdout/stderr logs were moved to the ignored dated archive;
   the accepted 2026-07-10 logs and active 300-round log stayed in place.
+- `DONE` 124 older proof/testnet/smoke/browser/indexer/host files were moved from
+  `.tmp` into the ignored dated evidence archive. Five non-evidence diagnostic
+  files and 14 empty directories were removed. `.tmp` now contains only the two
+  active canary logs and one ignored burner-wallet env file.
 - `DONE` `LoreIntro.tsx` and `useAddressNames.ts` had no production importer and
   were removed with only their obsolete test-only invariants. The unrelated
   canary hunks in the same test file were excluded through partial staging;

@@ -27,6 +27,7 @@ data/backtests/
 data/historical/
 data/history/
 data/live-runs/
+data/evidence-archive/
 data/**/*.csv
 data/**/*.jsonl
 data/**/*.log
