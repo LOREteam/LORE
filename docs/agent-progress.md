@@ -4188,3 +4188,10 @@ as historical progress only.
 - A 300-round Sepolia stress run reached 190 successful unique-epoch bets before missing the safe window for empty epoch 2167. With empty resolves disabled, the old runner repeated 20 three-minute safe-window timeouts and then stopped.
 - `live-round-canary.ts` now fails immediately with `empty-epoch-blocked` when a stale empty epoch cannot advance. The existing `LIVE_TEST_ALLOW_EMPTY_RESOLVE=1` override is enforced as one successful bootstrap resolve per run, so it cannot spend keeper ETH across an unbounded sequence of empty epochs.
 - `npm.cmd run test:logic` and `npm.cmd run typecheck` pass. A new 300-round run must use the explicit one-time bootstrap flag only if the current epoch is still stale and empty.
+
+## 2026-07-11 - Repository Cleanup Baseline
+
+- Published the pre-cleanup snapshot at `f7cb349` to `codex/testnet-readiness-baseline`, then created `codex/repo-cleanup` so maintenance stays separate from functional changes.
+- Removed 57 tracked generated/diagnostic files totaling about 99 MiB: the checked-in Node binary, duplicate favicon, screenshot/report outputs, PID files, generated solc output, superseded PNG chat avatars, unused starter SVGs, and the disconnected avatar/screenshot generators. The EIP-7702 deployment record and proof-referenced testnet evidence remain preserved.
+- Added ignore coverage for the local Node runtime, Playwright CLI/report outputs, test results, runtime PID files, and regenerated artifact folders. The active `.tmp` canary evidence was deliberately excluded from cleanup pending its final status.
+- Production build and HTTP smoke passed after the cleanup; no runtime/build references to the removed assets or scripts remain.

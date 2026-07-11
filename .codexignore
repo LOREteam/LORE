@@ -3,6 +3,7 @@ artifacts/
 cache/
 typechain-types/
 node_modules/
+node.exe
 coverage/
 out/
 build/
@@ -13,7 +14,10 @@ temp/
 .next-build-check/
 .next-verify/
 .ms-playwright/
+.playwright-cli/
 .playwright-mcp/
+playwright-report/
+test-results/
 .npm-cache/
 .tmp-npm-cache/
 data/proof-runs/

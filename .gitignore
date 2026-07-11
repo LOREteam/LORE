@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+/node.exe
 /.pnp
 .pnp.*
 .yarn/*
@@ -12,6 +13,9 @@
 
 # testing
 /coverage
+/playwright-report/
+/test-results/
+/.playwright-cli/
 
 # next.js
 /.next/
@@ -43,8 +47,12 @@ yarn-error.log*
 .codex-next-start*.log
 .next-*.log
 artifacts/**/*.log
+artifacts/*.pid
 artifacts/jackpot-preview/
+artifacts/jackpot-pages/
+artifacts/manual-check/
 artifacts/smoke-browser/
+artifacts/solc/
 /.playwright-mcp/
 /.npm-cache/
 /.tmp-npm-cache/
