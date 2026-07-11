@@ -37,8 +37,8 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   Web Vitals, resource bytes, request counts, RPC method names, heap, DOM nodes,
   long tasks, and categorized errors without URLs or payloads.
 - `DONE` reproducible bundle baseline: `npm.cmd run baseline:bundle` records the
-  static output totals and largest files. Current output is 8,368,089 bytes,
-  including 6,973,159 bytes JavaScript, 217,406 bytes CSS, and 120,664 bytes
+  static output totals and largest files. Current output is 8,369,046 bytes,
+  including 6,974,116 bytes JavaScript, 217,406 bytes CSS, and 120,664 bytes
   WOFF2.
 - `DONE` HTTP/API baseline: the warmed smoke suite passed; most routes completed
   in 3–10 ms locally, with zero smoke failures.
@@ -106,8 +106,8 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   authenticated dev reload instead hit a stale `ChunkLoadError` twice while the
   isolated production build remained green; the long-running user dev server
   was intentionally not restarted during the active canary.
-- `DONE` local mobile baseline at 390x844 measured LCP 1.060–1.328 s, CLS 0,
-  2.089–2.090 MiB transfer, and zero horizontal overflow.
+- `DONE` final local mobile reruns at 390x844 measured LCP 1.272–1.288 s, CLS 0,
+  2.090 MiB transfer, and zero horizontal overflow.
 - `OPEN` run the browser baseline at the intended production origin before
   sign-off. The tracked candidate `https://playlore.xyz` currently resolves and
   accepts TCP 443, but HTTPS validation fails before any HTTP response. The
