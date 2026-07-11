@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Cinzel, Inter, Rajdhani } from 'next/font/google';
+import localFont from 'next/font/local';
 import { headers } from 'next/headers';
 import './globals.css';
 import './lib/installBigIntJson';
@@ -10,23 +10,26 @@ import { assertProductionRuntimeConfig } from '../config/productionRuntime';
 
 assertProductionRuntimeConfig("web");
 
-const interDigits = Inter({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700', '800', '900'],
+const interDigits = localFont({
+  src: './fonts/Inter-latin.woff2',
+  weight: '400 900',
   display: 'swap',
   variable: '--font-lore-digits',
 });
 
-const loreTitle = Cinzel({
-  subsets: ['latin'],
-  weight: ['600', '700', '800', '900'],
+const loreTitle = localFont({
+  src: './fonts/Cinzel-latin.woff2',
+  weight: '600 900',
   display: 'swap',
   variable: '--font-lore-title',
 });
 
-const loreHud = Rajdhani({
-  subsets: ['latin'],
-  weight: ['500', '600', '700'],
+const loreHud = localFont({
+  src: [
+    { path: './fonts/Rajdhani-500-latin.woff2', weight: '500' },
+    { path: './fonts/Rajdhani-600-latin.woff2', weight: '600' },
+    { path: './fonts/Rajdhani-700-latin.woff2', weight: '700' },
+  ],
   display: 'swap',
   variable: '--font-lore-hud',
 });

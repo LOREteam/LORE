@@ -1,0 +1,75 @@
+Local testnet browser smoke summary
+Checked: 2026-07-10
+Origin: http://localhost:3000 (local-only, not launch evidence)
+
+PASS: desktop and mobile hub shells, manual/auto-miner numeric typography, mounted
+pool-chart line, desktop/mobile Privy wallet selector options, auto-miner local
+persistence, chat/profile modal, and Analytics, Safety Pool, Leaderboards,
+White Paper, FAQ, and Hub navigation.
+
+Tile selection reached a valid closed/resolving-epoch state after 45,226 ms; the
+UI remained responsive and surfaced the locked state rather than silently failing.
+
+This smoke did not connect a signed Privy wallet and did not submit a transaction.
+It is runtime/UI evidence only, not signed wallet recovery or final testnet proof.
+
+Signed desktop Privy recovery addendum (2026-07-10, local-only): PASS.
+After a production-server restart and browser reload, the embedded wallet returned
+to Active within 6 seconds; LOGIN remained absent and the auto-miner controls were
+available. This does not cover mobile browser, wrong-network, rejection, pending,
+revert, tab-close, or route-remount recovery states.
+
+Signed desktop recovery follow-up (reviewed 2026-07-10T20:52:09.046Z): PASS.
+- Hub -> Analytics -> Hub preserved the Active embedded wallet.
+- Closing the temporary LORE tab, opening a new tab, and a full reload each restored
+  Active without LOGIN; the grid and controls returned with zero console errors.
+- After an intentionally cancelled MetaMask login attempt, closing the Privy modal
+  restored Login / Connect without reloading. A subsequent approved MetaMask login
+  restored the Active Privy session.
+- A signed 1 LINEA Privy bet entered a disabled pending state, then confirmed and
+  cleared selection without duplicate submission. Epoch 1996, tile 1, block
+  30767779, tx 0x270d688ae535270e2ccc02f18b59f0d3deaef1ed783dfb3b11183a3ab4868d50.
+
+Local failure-state UI follow-up (reviewed 2026-07-10T20:52:09.046Z): PASS.
+Extended browser smoke rendered RPC-offline retry wait, Recovery queued,
+RESUME PENDING, Session Expired guidance, and recovery-state cleanup on desktop;
+the complete desktop/mobile smoke also passed wallet selectors, mounted pool chart,
+numeric typography, persistence, navigation, chat, and mobile layout.
+
+Wrong-network limitation: a pre-fix Ethereum Sepolia top-up attempt exposed an
+unbounded network-switch wait. The switch and chain checks are now bounded and
+cannot launch a duplicate fallback after rejection/timeout, but a signed post-fix
+MetaMask rejection is not yet recorded. A true mobile-device session and a signed
+reverted transaction are also still missing; responsive viewport checks do not
+claim either result.
+
+Post-fix wrong-network follow-up (reviewed 2026-07-10T21:22:47.693Z): PARTIAL.
+With MetaMask on Ethereum Sepolia, a 0.000001 ETH top-up switched to Linea Sepolia
+and opened the expected transaction confirmation to the embedded Privy address.
+MetaMask displayed two queued confirmations because the top-up button was clicked
+twice explicitly. A synchronous shared wallet-transfer lock was then added so rapid
+duplicate clicks cannot submit a second ETH/LINEA deposit or withdrawal before the
+loading-state rerender. Transaction rejection or settlement was not yet recorded.
+
+Signed ETH top-up settlement follow-up: PASS.
+The post-switch 0.001 ETH transfer confirmed on Linea Sepolia at block 30770269,
+receipt status 1, gas used 21,000, tx
+0x3aa666275356f9600f4cc2c49d8fca990bace5fef5d97826912c331797856f5c.
+This closes successful ETH top-up and wrong-network-to-target switching. Explicit
+wallet rejection remains a separate Missing test.
+
+Signed LINEA deposit follow-up (reviewed 2026-07-10T21:51:08.109Z): PASS.
+One external-wallet ERC-20 transfer deposited 10 LINEA into the embedded Privy
+wallet at block 30770567, receipt status 1, gas used 35,060, tx
+0xc6d280600638c6b8d5e0dc37c07e4236c691a7ccd57a3169ac453f27b25a77b8.
+No second matching transfer was found and the resulting embedded token balance was
+99,009 LINEA. Explicit rejection is not inferred from this successful settlement.
+
+Signed embedded-wallet withdrawals (reviewed 2026-07-10T21:54:45.280Z): PASS.
+- 0.001 ETH transferred to the external wallet at block 30770653, receipt status 1,
+  gas used 21,000, tx
+  0x5abf31f78e874890826ca905f291a01489dd4cbdd341c13c3cb5197cd63f6ec5.
+- 1 LINEA transferred to the external wallet at block 30770656, receipt status 1,
+  gas used 35,060, tx
+  0xa8fe376451c3bf09707792de4e58992475858c9744e567ee92cc502d970830ef.
+Exactly one matching transfer of each asset was found in the checked chain range.

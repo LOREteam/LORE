@@ -582,6 +582,36 @@ export function getAllBetRows() {
   })) satisfies BetStorageRow[];
 }
 
+export function getGlobalStatsAggregate() {
+  const parseAmount = (value: unknown) => {
+    const [whole, fraction = ""] = String(value ?? "").trim().split(".");
+    if (!/^\d+$/.test(whole) || !/^\d*$/.test(fraction)) return 0n;
+    return BigInt(`${whole}${fraction.slice(0, 18).padEnd(18, "0")}`);
+  };
+  const betRows = db.prepare(`
+    SELECT total_amount
+    FROM ${SCOPED_BETS_TABLE}
+    WHERE scope = ?
+  `).all(CURRENT_STORAGE_SCOPE) as Array<Record<string, unknown>>;
+  const feeRows = db.prepare(`
+    SELECT burn_amount
+    FROM ${SCOPED_PROTOCOL_FEE_FLUSHES_TABLE}
+    WHERE scope = ?
+  `).all(CURRENT_STORAGE_SCOPE) as Array<Record<string, unknown>>;
+  const resolved = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM ${SCOPED_EPOCHS_TABLE}
+    WHERE scope = ?
+  `).get(CURRENT_STORAGE_SCOPE) as { count?: number } | undefined;
+
+  return {
+    totalVolumeWei: betRows.reduce((total, row) => total + parseAmount(row.total_amount), 0n).toString(),
+    totalBurnWei: feeRows.reduce((total, row) => total + parseAmount(row.burn_amount), 0n).toString(),
+    resolvedEpochs: Number(resolved?.count ?? 0),
+    lastIndexedBlock: String(getMetaNumber("lastIndexedBlock") ?? 0),
+  };
+}
+
 export function getBetRowsByEpochs(epochIds: number[]) {
   const normalizedIds = [...new Set(
     epochIds.filter(isSafePositiveInteger),

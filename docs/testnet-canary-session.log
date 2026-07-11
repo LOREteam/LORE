@@ -1,0 +1,10 @@
+Testnet auto-miner session summary
+Checked at: 2026-07-10T10:45:35.707Z
+Source: data/live-test-runs/live-canary-2026-07-10T09-48-13-561Z.jsonl
+
+Auto-miner session: 50 successful rounds across 50 unique epochs (1857-1906).
+Elapsed wall-clock evidence: 3,391,757 ms.
+Roles: AUTOMINER_A=17, AUTOMINER_B=17, AUTOMINER_C=16.
+Modes: single=13, bitmap=13, sameAmount=12, arrays=12.
+All events used target RPC label sepolia-publicnode-broadcast.
+No failed auto-miner bet events were recorded.

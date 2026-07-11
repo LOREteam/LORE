@@ -1,0 +1,19 @@
+Testnet transaction health scan
+Checked at: 2026-07-10T10:45:35.707Z
+Source: data/live-test-runs/live-canary-2026-07-10T09-48-13-561Z.jsonl
+
+Successful bet transactions: 50.
+Successful resolve transactions: 50.
+Failed bet transactions: 0.
+Failed resolve transactions: 0.
+Missing successful transaction hashes: 0.
+Duplicate successful transaction hashes: 0.
+Duplicate role/epoch/tile keys: 0.
+Nonce gaps: 0.
+Stuck pending transactions: 0 observed.
+Gas-estimate fallback events: 0.
+Prior resolver pending-recovery evidence: the Sepolia nonce queue converged after
+replacement/cancel receipts before this final clean canary began.
+
+This scan is derived from the saved redacted JSONL transaction events. The final
+proof manifest will carry the verified transaction hash set generated from it.

@@ -184,7 +184,7 @@ if (targetMismatches.length > 0) {
 }
 
 const pendingEvidence = {
-  status: "TODO: verified/pass after real canary run",
+  status: "TODO: replace with verified or pass after real canary run",
   checkedAt: "TODO: ISO timestamp",
   evidence: recoveryArtifact ? `artifact: ${recoveryArtifact}` : "TODO: link or redacted artifact from canary run",
 };
@@ -210,7 +210,7 @@ const manifest = {
     routeSwitchOrRemount: { ...pendingEvidence },
   },
   autoMinerSession: {
-    status: "TODO: verified/pass after real canary run",
+    status: "TODO: replace with verified or pass after real canary run",
     targetRpcConfirmed: summary.rpcLabels.length > 0 && summary.rpcLabels.every((label) => label.toLowerCase() === rpcLabel.toLowerCase()),
     observedRpcLabels: summary.rpcLabels,
     rounds: summary.autoMinerRounds,

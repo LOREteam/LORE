@@ -12,7 +12,7 @@ import {
 } from "@privy-io/react-auth";
 import { useSetActiveWallet } from "@privy-io/wagmi";
 import { useAccount, usePublicClient } from "wagmi";
-import { toHex, createWalletClient, custom, serializeTransaction, keccak256, parseSignature, zeroAddress } from "viem";
+import { toHex, createWalletClient, custom, getAddress, serializeTransaction, keccak256, parseSignature, zeroAddress } from "viem";
 import { APP_CHAIN, APP_CHAIN_ID, APP_CHAIN_NAME } from "../lib/constants";
 import {
   EIP7702_DELEGATE_ADDRESS,
@@ -21,16 +21,28 @@ import {
   parseEip7702DelegationCode,
 } from "../lib/eip7702";
 import { getFallbackFeeOverrides, getKeeperFeeOverrides, getLineaFeeOverrides, type FeeOverrides } from "../lib/lineaFees";
-import { withTimeout, formatUnknownError } from "../lib/utils";
+import { withTimeout, formatUnknownError, isUserRejection } from "../lib/utils";
 import { usePrivy7702Diagnostics } from "./usePrivy7702Diagnostics";
 
 const SILENT_SEND_TIMEOUT_MS = 45_000;
 const EIP7702_SEND_TIMEOUT_MS = 12_000;
 const ACTIVE_WALLET_TIMEOUT_MS = 12_000;
+const EXTERNAL_WALLET_NETWORK_TIMEOUT_MS = 15_000;
 
 type Eip1193Provider = {
   request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
+  on?: (event: "accountsChanged", listener: (accounts: unknown) => void) => void;
+  removeListener?: (event: "accountsChanged", listener: (accounts: unknown) => void) => void;
 };
+
+function getProviderSelectedAddress(accounts: unknown): `0x${string}` | null {
+  if (!Array.isArray(accounts) || typeof accounts[0] !== "string") return null;
+  try {
+    return getAddress(accounts[0]);
+  } catch {
+    return null;
+  }
+}
 
 function summarizeSendStep(step: string, error: unknown) {
   return `${step}: ${formatUnknownError(error)}`;
@@ -100,6 +112,7 @@ export function usePrivyWallet() {
   const { signAuthorization: sign7702Authorization } = useSign7702Authorization();
   const { address } = useAccount();
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
+  const [providerExternalWalletAddress, setProviderExternalWalletAddress] = useState<`0x${string}` | null>(null);
 
   const embeddedWallet = useMemo(() => getEmbeddedConnectedWallet(wallets), [wallets]);
   const linkedEmbeddedWalletAddress = useMemo(() => {
@@ -118,9 +131,35 @@ export function usePrivyWallet() {
     return wallets.find((wallet) => wallet.address.toLowerCase() !== embeddedWallet.address.toLowerCase());
   }, [wallets, embeddedWallet]);
 
+  useEffect(() => {
+    let cancelled = false;
+    let provider: Eip1193Provider | undefined;
+    const updateAccount = (accounts: unknown) => {
+      if (!cancelled) setProviderExternalWalletAddress(getProviderSelectedAddress(accounts));
+    };
+
+    if (!externalWallet) {
+      setProviderExternalWalletAddress(null);
+      return;
+    }
+
+    void externalWallet.getEthereumProvider().then((nextProvider) => {
+      provider = nextProvider as Eip1193Provider;
+      provider.on?.("accountsChanged", updateAccount);
+      return provider.request({ method: "eth_accounts" });
+    }).then(updateAccount).catch(() => {
+      if (!cancelled) setProviderExternalWalletAddress(null);
+    });
+
+    return () => {
+      cancelled = true;
+      provider?.removeListener?.("accountsChanged", updateAccount);
+    };
+  }, [externalWallet]);
+
   const embeddedWalletAddress = embeddedWallet?.address ?? linkedEmbeddedWalletAddress ?? null;
   const embeddedWalletReady = Boolean(embeddedWallet);
-  const externalWalletAddress = externalWallet?.address ?? null;
+  const externalWalletAddress = providerExternalWalletAddress ?? externalWallet?.address ?? null;
   const embeddedWalletSyncing =
     authenticated &&
     !embeddedWalletAddress &&
@@ -530,19 +569,36 @@ export function usePrivyWallet() {
       // External-wallet flow: trigger the wallet's own send tx prompt directly.
       // This is more reliable than routing through embedded sendTransaction flow.
       const provider = await externalWallet.getEthereumProvider();
+      const providerAccount = getProviderSelectedAddress(await provider.request({ method: "eth_accounts" }));
+      if (!providerAccount) throw new Error("Select an account in your external wallet and try again.");
+      setProviderExternalWalletAddress(providerAccount);
       const targetChainIdHex = toHex(APP_CHAIN_ID) as `0x${string}`;
       try {
-        await externalWallet.switchChain(APP_CHAIN_ID);
+        await withTimeout(
+          externalWallet.switchChain(APP_CHAIN_ID),
+          EXTERNAL_WALLET_NETWORK_TIMEOUT_MS,
+          "External wallet switchChain",
+        );
       } catch (switchErr) {
+        if (isUserRejection(switchErr)) throw switchErr;
+        if (switchErr instanceof Error && switchErr.name === "TimeoutError") {
+          throw new Error(`Network switch timed out. Switch your external wallet to ${APP_CHAIN_NAME} and try again.`);
+        }
         console.warn("[PrivyWallet] switchChain failed, trying EIP-1193 fallback:", switchErr instanceof Error ? switchErr.message : String(switchErr));
-        await provider.request({
-          method: "wallet_switchEthereumChain",
-          params: [{ chainId: targetChainIdHex }],
-        }).catch((fbErr) => {
-          console.warn("[PrivyWallet] EIP-1193 switchChain fallback also failed:", fbErr instanceof Error ? fbErr.message : String(fbErr));
-        });
+        await withTimeout(
+          provider.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: targetChainIdHex }],
+          }),
+          EXTERNAL_WALLET_NETWORK_TIMEOUT_MS,
+          "External wallet wallet_switchEthereumChain",
+        );
       }
-      const currentChainId = (await provider.request({ method: "eth_chainId" }) as string | undefined)?.toLowerCase();
+      const currentChainId = (await withTimeout(
+        provider.request({ method: "eth_chainId" }),
+        EXTERNAL_WALLET_NETWORK_TIMEOUT_MS,
+        "External wallet eth_chainId",
+      ) as string | undefined)?.toLowerCase();
       if (!currentChainId || currentChainId !== targetChainIdHex.toLowerCase()) {
         throw new Error(`Switch your external wallet to ${APP_CHAIN_NAME} and try again.`);
       }
@@ -553,7 +609,7 @@ export function usePrivyWallet() {
         value?: `0x${string}`;
         gas?: `0x${string}`;
       } = {
-        from: externalWallet.address as `0x${string}`,
+        from: providerAccount,
         to: tx.to,
       };
       if (tx.data) requestTx.data = tx.data;

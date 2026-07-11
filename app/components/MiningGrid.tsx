@@ -245,7 +245,7 @@ const Tile = React.memo(function Tile({
   isSelected,
   hasMyBet,
   isRevealing,
-  isAnalyzing,
+  isAnalyzing: _isAnalyzing,
   reducedMotion,
 }: {
   tileId: number;
@@ -314,13 +314,13 @@ const Tile = React.memo(function Tile({
         : isSelected
           ? "ore-tile-selected"
           : "";
-  const disabledClass = !liveStateReady || isRevealing || isAnalyzing ? "cursor-not-allowed" : "";
+  const disabledClass = !liveStateReady || isRevealing ? "cursor-not-allowed" : "";
 
   return (
     <button
       type="button"
       data-tile-id={tileId}
-      disabled={!liveStateReady || isRevealing || isAnalyzing}
+      disabled={!liveStateReady || isRevealing}
       aria-label={ariaLabel}
       aria-pressed={isSelected && !isWinner}
       className={`ore-tile ${isBackgroundWindow ? "ore-tile-window" : "ore-tile-stone"} ${stateClass} relative h-full w-full min-h-0 overflow-hidden rounded-lg border p-1 transition-[border-color,background-color,box-shadow,opacity,transform,color] duration-200 group flex flex-col items-center justify-between sm:p-1.5 contain-[layout_paint] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-[#070712] ${base} ${faded} ${disabledClass}`}

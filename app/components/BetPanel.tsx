@@ -92,7 +92,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   selectedTilesCount,
   isPending,
   isRevealing,
-  isAnalyzing = false,
+  isAnalyzing: _isAnalyzing = false,
   isAutoMining,
   manualBetForm,
   onMine,
@@ -111,7 +111,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     !liveStateReady && !coldBootDefaults
       ? "Waiting for live epoch sync"
       : null;
-  const quickPickDisabled = Boolean(readOnlyReason) || !liveStateReady || isPending || isRevealing || isAnalyzing || isAutoMining;
+  const quickPickDisabled = Boolean(readOnlyReason) || !liveStateReady || isPending || isRevealing || isAutoMining;
   const actionVariant = isPending || (!liveStateReady && !coldBootDefaults)
     ? "pending"
     : readOnlyReason || isDisabled

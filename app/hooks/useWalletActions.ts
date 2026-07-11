@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { encodeFunctionData, formatUnits, getAddress } from "viem";
 import type { PublicClient } from "viem";
 import { useReadContract } from "wagmi";
@@ -30,6 +30,16 @@ type ClearEip7702DelegationFn = () => Promise<`0x${string}`>;
 type WriteContractAsyncFn = ReturnType<typeof useWriteContract>["writeContractAsync"];
 type BalanceData = { value: bigint } | null | undefined;
 type ReceiptState = "confirmed" | "pending";
+
+function formatWalletTransferFailure(error: unknown, asset: "ETH" | "LINEA") {
+  const message = error instanceof Error ? error.message : "";
+  if (/transaction gas limit cap exceeded/i.test(message)) {
+    return `${asset} transfer was rejected before submission. Check the amount and try again.`;
+  }
+  return message
+    ? `${asset} transfer failed: ${message}`
+    : `${asset} transfer failed. Check wallet balance and try again.`;
+}
 export interface PendingTransactionStatus {
   latestNonce: number;
   pendingNonce: number;
@@ -91,6 +101,7 @@ export function useWalletActions({
   const [isWithdrawingEth, setIsWithdrawingEth] = useState(false);
   const [isDepositingEth, setIsDepositingEth] = useState(false);
   const [isDepositingToken, setIsDepositingToken] = useState(false);
+  const walletTransferInFlightRef = useRef(false);
   const [pendingTransactionStatus, setPendingTransactionStatus] = useState<PendingTransactionStatus | null>(null);
   const [isRefreshingPendingTx, setIsRefreshingPendingTx] = useState(false);
   const [isCancellingPendingTx, setIsCancellingPendingTx] = useState(false);
@@ -528,6 +539,8 @@ export function useWalletActions({
       notify("Insufficient LINEA balance.", "warning");
       return;
     }
+    if (walletTransferInFlightRef.current) return;
+    walletTransferInFlightRef.current = true;
 
     setIsWithdrawing(true);
     try {
@@ -555,6 +568,7 @@ export function useWalletActions({
         notify("LINEA withdraw rejected in wallet.", "info");
       }
     } finally {
+      walletTransferInFlightRef.current = false;
       setIsWithdrawing(false);
     }
   }, [embeddedTokenBalance, externalWalletAddress, formatTxStatusMessage, notify, refetchEmbeddedTokenBalance, waitForReceipt, withdrawAmount, writeContractAsync]);
@@ -593,6 +607,8 @@ export function useWalletActions({
         return;
       }
     }
+    if (walletTransferInFlightRef.current) return;
+    walletTransferInFlightRef.current = true;
 
     setIsWithdrawingEth(true);
     try {
@@ -618,6 +634,7 @@ export function useWalletActions({
         notify("ETH withdraw rejected in wallet.", "info");
       }
     } finally {
+      walletTransferInFlightRef.current = false;
       setIsWithdrawingEth(false);
     }
   }, [
@@ -651,6 +668,8 @@ export function useWalletActions({
       notify("Invalid ETH amount.", "warning");
       return;
     }
+    if (walletTransferInFlightRef.current) return;
+    walletTransferInFlightRef.current = true;
 
     try {
       setIsDepositingEth(true);
@@ -675,6 +694,7 @@ export function useWalletActions({
         notify("ETH top-up rejected in wallet.", "info");
       }
     } finally {
+      walletTransferInFlightRef.current = false;
       setIsDepositingEth(false);
     }
   }, [
@@ -705,8 +725,22 @@ export function useWalletActions({
       notify("Invalid LINEA amount.", "warning");
       return;
     }
+    if (walletTransferInFlightRef.current) return;
+    walletTransferInFlightRef.current = true;
 
     try {
+      if (publicClient) {
+        const externalTokenBalance = await publicClient.readContract({
+          address: LINEA_TOKEN_ADDRESS,
+          abi: TOKEN_ABI,
+          functionName: "balanceOf",
+          args: [getAddress(externalWalletAddress)],
+        });
+        if (amountWei > externalTokenBalance) {
+          notify("Insufficient LINEA balance in external wallet.", "warning");
+          return;
+        }
+      }
       const data = encodeFunctionData({
         abi: TOKEN_ABI,
         functionName: "transfer",
@@ -731,12 +765,12 @@ export function useWalletActions({
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Deposit", "LINEA transfer to Privy failed", err);
-        const message = err instanceof Error ? err.message : "";
-        notify(message ? `LINEA transfer failed: ${message}` : "LINEA transfer failed. Check wallet balance and try again.", "danger");
+        notify(formatWalletTransferFailure(err, "LINEA"), "danger");
       } else {
         notify("LINEA deposit rejected in wallet.", "info");
       }
     } finally {
+      walletTransferInFlightRef.current = false;
       setIsDepositingToken(false);
     }
   }, [
@@ -747,6 +781,7 @@ export function useWalletActions({
     formatTxStatusMessage,
     notify,
     onOpenWalletSettings,
+    publicClient,
     refetchEmbeddedTokenBalance,
     sendTransactionFromExternal,
     waitForReceipt,

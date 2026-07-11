@@ -54,7 +54,8 @@ const expectedFinalManifests = {
   },
 };
 const expectedFinalManifestNames = Object.keys(expectedFinalManifests);
-const expectedAuxiliaryProofArtifacts = new Set(["chain-proof-snapshot.json"]);
+// These files are valid local/testnet evidence, never mainnet launch manifests.
+const expectedAuxiliaryProofArtifacts = new Set(["chain-proof-snapshot.json", "testnet-canary-proof.json"]);
 const TEMPLATE_VALUE_RE = /REPLACE_|<REDACTED>|TODO|TBD/i;
 const secretKeyPattern =
   /(secret|private[_-]?key|mnemonic|webhook|dsn|api[_-]?key|api[_-]?token|auth[_-]?token|access[_-]?token|bearer|session|cookie|password)/i;

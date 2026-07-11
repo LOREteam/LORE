@@ -1,0 +1,10 @@
+{
+  "kind": "testnet-signed-revert",
+  "network": "linea-sepolia",
+  "chainId": 59141,
+  "token": "0xad986C50D411055484D38BF779bA2450A42afD60",
+  "transactionHash": "0x57721fab36afdc81d38caec36409da3274ffc080a39617df35a46e55b0175c9c",
+  "receiptStatus": "reverted",
+  "gasUsed": "22364",
+  "checkedAt": "2026-07-10T22:53:52.641Z"
+}

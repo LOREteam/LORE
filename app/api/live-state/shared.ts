@@ -22,7 +22,7 @@ import {
 
 const LIVE_STATE_RPC_TIMEOUT_MS = 15_000;
 const LIVE_STATE_TILE_USER_COUNTS_TIMEOUT_MS = 3_000;
-const LIVE_STATE_LOG_SCAN_CHUNK = 50_000n;
+const LIVE_STATE_LOG_SCAN_CHUNK = 10_000n;
 const LIVE_STATE_LOG_SCAN_MIN_CHUNK = 2_000n;
 const LIVE_STATE_SNAPSHOT_META_KEY = "snapshot:live-state:v1";
 const LIVE_STATE_SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -103,6 +103,7 @@ function isTooManyResultsError(err: unknown): boolean {
   return (
     message.includes("more than 10000 results") ||
     message.includes("query returned more than 10000 results") ||
+    (message.includes("range") && message.includes("exceeds limit")) ||
     message.includes("request exceeds defined limit")
   );
 }

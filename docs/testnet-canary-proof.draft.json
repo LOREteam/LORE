@@ -1,0 +1,110 @@
+{
+  "targetNetwork": {
+    "realTargetNetwork": true,
+    "network": "linea-sepolia",
+    "chainId": 59141,
+    "rpc": "sepolia-publicnode-broadcast",
+    "contractAddress": "0x98eef041b012668529fb66ac3133900fdffc7282",
+    "checkedAt": "2026-07-10T10:48:01.700Z",
+    "evidence": "artifact: docs/testnet-canary-target.log"
+  },
+  "recovery": {
+    "reload": {
+      "status": "verified",
+      "checkedAt": "2026-07-10T20:52:09.046Z",
+      "evidence": "artifact: docs/testnet-canary-recovery.log"
+    },
+    "reconnect": {
+      "status": "verified",
+      "checkedAt": "2026-07-10T20:52:09.046Z",
+      "evidence": "artifact: docs/testnet-canary-recovery.log"
+    },
+    "tabCloseRestore": {
+      "status": "verified",
+      "checkedAt": "2026-07-10T20:52:09.046Z",
+      "evidence": "artifact: docs/testnet-canary-recovery.log"
+    },
+    "pendingTxRecovery": {
+      "status": "verified",
+      "checkedAt": "2026-07-10T20:52:09.046Z",
+      "evidence": "artifact: docs/testnet-canary-recovery.log",
+      "txHash": "0x270d688ae535270e2ccc02f18b59f0d3deaef1ed783dfb3b11183a3ab4868d50"
+    },
+    "routeSwitchOrRemount": {
+      "status": "verified",
+      "checkedAt": "2026-07-10T20:52:09.046Z",
+      "evidence": "artifact: docs/testnet-canary-recovery.log"
+    }
+  },
+  "autoMinerSession": {
+    "status": "verified",
+    "targetRpcConfirmed": true,
+    "observedRpcLabels": [
+      "sepolia-publicnode-broadcast"
+    ],
+    "rounds": 50,
+    "uniqueEpochs": 50,
+    "checkedAt": "2026-07-10T10:45:01.306Z",
+    "evidence": "artifact: docs/testnet-canary-session.log"
+  },
+  "transactionHealth": {
+    "noDuplicateBets": true,
+    "noNonceLoops": true,
+    "noStuckPending": true,
+    "pendingRecoveryConverged": true,
+    "txHashes": [
+      "0xbd717a6a612f1966ddedabdbd463d119dda703a3afaa3e72059b79c73927a4ab",
+      "0x27cce2668b52d4445daa35ececb9d08fb82b3d93dc2ab0f58fe4b41049f59ae2",
+      "0xfcc50cd200e47eec1a58b643f38f5a75650cab565a2facd6ddc2d3220121e442",
+      "0x2e77a80be34d61eb986a6ff7d5e8a6348e2b0f2ee83bf1488c2d593fd09447a4",
+      "0xdc82da2276600c019407b839dfe7d1a78d9e3e2d526337cc915b06eedb3ffe64",
+      "0x6811c798e2fd1afbd16e6a8d307a87692ac90a7d821a1c468b6deb4056fc8bc9",
+      "0x55d36ef182a3645a3f72c8b09282f5690c8cdc0babad191f5968da4e2e145a03",
+      "0x7ec492745305bcd46809e940c5e85d8f64d2592a898b363db9091d9a8c5e2dac",
+      "0x79709b2fedca05847a469a0a308497e0c344bbdacdee0fea793f42b1fa6a2a3f",
+      "0xc38b948ca6f5af87fdbc93bf2b4ce80360cf63442a2544cef5335c694ac4ac65",
+      "0xfcf8bbdc9d1c28cfd88c37b1a2dc001180deddb4ec409e5bf4ac934df9c7c05b",
+      "0x0260c169c3362cb2df06262c9d7d4772b282cb8b270a676451f6ac14b106bd04",
+      "0x7d8cd0668e4e7f2807f60172dcd2e8da890ccf8b1564209d5473cb05f90f840f",
+      "0xbb4c6584a9d98ec5b2eb7a979c732cb822a7ebd6ac7fccc1ae75fe7fef1f1ff1",
+      "0x53ee95848d28495064821c88b40ed584755d3d9916d1a67da965d08b601e60b6",
+      "0xb33676ee02f0bb5bdb821b8f728e5dd95eb33810c26b0045ddadd9fa176faaae",
+      "0x7c4d90e5e65a284854f17020c88648d7cafd81aeb65858e3d5b571a85b1cb2d6",
+      "0x521aeda543de7a9e2fdfca414330535a2d5cdf6f7a42cbac1ccca8e42ce6c79e",
+      "0x468649a1bd2b43346ca67db16cd9360f6ccaeceee73f56e981cbc1a9fbd9dc17",
+      "0xe81f0da0933ef4a584be3fd4f63b4efe5c9c81b18b7c4ec75aac57fe44a67aae",
+      "0xa08fd6f4ba09767f22f4e2436f23f0a3eab10975976fd5629dde71319dd8826d",
+      "0xe8142d343279c7edd5e50ba8bab92d1585fb71cb1ead7358b8e91473737a98b0",
+      "0x88464250e8f0c33442df40c7ca5634291d349fef9fddd6917c99f9ea2e27cfa5",
+      "0x8472e0fa602fcb9bf5dab0549f91b90e95e6968adde301caba08c701a7c9bf5a",
+      "0x0af837089467369cfb253964e8b0203e073a4e8e9500f97d3d35edf4a5f91156",
+      "0xf73853fc55aeec7dac438874b7d3a565d823c1a8993b7b42b63692988a7ae309",
+      "0x039cce7adecd10cf9b17ad072aaeaa731a37162f521895787c1b19dbdee8fbed",
+      "0xa930079f616df1fd89c47ed448a1f49e2ae7192d08bd00dac473c66211760cdf",
+      "0x1d49e73de2d4dd4cb14d7924d2a26fe4af67d0d40e4adf32df5560b157a3a64c",
+      "0x89a11a9b48a15ab2041d747051162081047041e2928b9c9825c9da6383ccf9a9",
+      "0x49d1caada1da681fcf60ad990d1960784130f86be0c994f2b3d7e82983f5a55e",
+      "0x224d9bbdaa5800676fbb912d275c38b7536b8679beec2708bf8af14a65db83dc",
+      "0xabab964dff26df02b2c8be14c19f6a21fd392a423279b80903ba8c64fb9f1caa",
+      "0xd7ec74ba0849c1de921f371d1c49c9c0ee7ef59db79e412155a87506095b1891",
+      "0x007aef526c9d88cad69ae25a7e0dfd8583cbd1a26d1a8044ba9a9a12467a808a",
+      "0x4d352e0d95be2b41a6271eb166691488c96a90c725909ba936dd63204fd5cfc6",
+      "0xc45fd41b01fcab5b0b8cdd1c03a5d95e72a47678524e91db4f5f6277e2f3e553",
+      "0x5d35f67dec3a24b4c38051d35011b1d555a34563090ae1a2ef6ca1ff5a787668",
+      "0xb6a2e4487ac50c7c31429c767a5f39aaf4c8115d67bb3dbf7f177e46c4ec7e7d",
+      "0x09dd1c1b7b8afd3736512761ec08a0bb30020d230ce8dc4662829e6f4586632e",
+      "0x0750fe61d316132044699175930bc590bc905e219576c2de980f70a2a35fc6b4",
+      "0x1db179a64b8052273e2e2288763c3ce1ac9cea438d3a5640588bf81160b133a3",
+      "0xd3db1ca86ef04f9d9130348f22cf31af9153949da0f9900344adcbb5c2527724",
+      "0x4857ca51bbdad953d8d4b3b8ad9713f8fe6f7a6cb5b07c7935a2148dedb6a6cf",
+      "0xee2628c3b5d2c1620ef3e733d1dfa37f879b9359fd8192757236f8ea35d9a63a",
+      "0x261c16d6d4a8d050608d7b351a5c1b34530160d8abb7bf2330cc173ff938d2f2",
+      "0xc3b3363d840b623eac127d7a79a028d7f4896402f0081d22646d78a8dd7446d8",
+      "0x2012acc46ddfac2f59b1384d194672e24331d15f7716100d0aff55f3f1ce5868",
+      "0x4dc19fcd2e4c5f478119958ee2dcc4525a9b5d79989499405e86be95390f1147",
+      "0x970e216eaf78888798a591da275db1efce9a0aed710b14afbc8104e7a1ec2ad4"
+    ],
+    "checkedAt": "2026-07-10T10:45:01.306Z",
+    "evidence": "artifact: docs/testnet-canary-transactions.log"
+  }
+}

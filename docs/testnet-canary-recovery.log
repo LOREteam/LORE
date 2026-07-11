@@ -1,0 +1,18 @@
+Testnet recovery evidence status
+Checked at: 2026-07-10T10:45:35.707Z
+
+The final 50-epoch auto-miner canary completed with no stuck pending transaction,
+no nonce gap, and 50 successful resolver closures. Previous Sepolia resolver
+recovery work restored a blocked nonce queue after replacement/cancel receipts.
+
+Signed browser recovery was subsequently collected and reviewed at
+2026-07-10T20:52:09.046Z. Reload, an approved reconnect after a deliberately
+cancelled attempt, tab close/open, and Hub -> Analytics -> Hub remount all restored
+the Active Privy wallet. A signed 1 LINEA bet entered pending UI and converged to a
+confirmed transaction without duplicate submission:
+0x270d688ae535270e2ccc02f18b59f0d3deaef1ed783dfb3b11183a3ab4868d50.
+Detailed local-only evidence and explicit remaining limitations are recorded in
+docs/testnet-browser-smoke.log.
+
+This recovery evidence does not claim a post-fix signed wrong-network rejection,
+a deliberately reverted transaction, or a true mobile-device wallet session.

@@ -20,9 +20,9 @@ import {
 const RECENT_WINS_LIMIT = 100;
 const RECENT_WINS_SNAPSHOT_MAX_AGE_MS = 60 * 60 * 1000;
 const RECENT_WINS_SNAPSHOT_META_KEY = "snapshot:recent-wins:v1";
-const RECENT_WINS_LOG_SCAN_CHUNK = 50_000n;
+const RECENT_WINS_LOG_SCAN_CHUNK = 10_000n;
 const RECENT_WINS_LOG_SCAN_MIN_CHUNK = 2_000n;
-const RECENT_WINS_BOOTSTRAP_SCAN_CHUNK = 500_000n;
+const RECENT_WINS_BOOTSTRAP_SCAN_CHUNK = 10_000n;
 const RECENT_WINS_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeBigIntEnv(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG, 256n);
 
 const EVENTS_ABI = parseAbi([
@@ -190,6 +190,7 @@ function isTooManyResultsError(err: unknown): boolean {
   return (
     message.includes("more than 10000 results") ||
     message.includes("query returned more than 10000 results") ||
+    (message.includes("range") && message.includes("exceeds limit")) ||
     message.includes("request exceeds defined limit")
   );
 }

@@ -20,14 +20,14 @@ const EVENTS_ABI = parseAbi([
 ]);
 const [dailySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "DailyJackpotAwarded" });
 const [weeklySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "WeeklyJackpotAwarded" });
-const JACKPOT_LOG_SCAN_CHUNK = 50_000n;
+const JACKPOT_LOG_SCAN_CHUNK = 10_000n;
 const JACKPOT_LOG_SCAN_MIN_CHUNK = 2_000n;
 const JACKPOT_ROUTE_CACHE_MS = 60_000;
 const JACKPOT_EVENT_CACHE_MS = 5 * 60 * 1000;
 const JACKPOT_BACKGROUND_RECOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const MAX_JACKPOT_EVENT_CACHE_ENTRIES = 256;
 const JACKPOT_HISTORY_LIMIT = 200;
-const JACKPOT_BOOTSTRAP_SCAN_CHUNK = 500_000n;
+const JACKPOT_BOOTSTRAP_SCAN_CHUNK = 10_000n;
 const JACKPOT_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeBigIntEnv(process.env.JACKPOT_RECOVERY_BLOCK_LAG, 256n);
 const ROUTE_METRIC_KEY = "api/jackpots";
 
@@ -104,6 +104,7 @@ function isTooManyResultsError(err: unknown): boolean {
   return (
     message.includes("more than 10000 results") ||
     message.includes("query returned more than 10000 results") ||
+    (message.includes("range") && message.includes("exceeds limit")) ||
     message.includes("request exceeds defined limit")
   );
 }

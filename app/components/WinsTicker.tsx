@@ -71,16 +71,21 @@ export const WinsTicker = memo(function WinsTicker({
       }`}
     >
       {visibleWins.length > 0 ? (
-        <div
-          className={`absolute inset-y-0 left-0 flex min-w-max items-center gap-1.5 whitespace-nowrap pr-2 ${
-            reducedMotion ? "" : "animate-ticker"
-          }`}
-          style={reducedMotion ? undefined : { animationDuration: "96s" }}
-        >
-          {[...visibleWins, ...visibleWins].map((w, i) => (
-            <WinItem key={`ticker-${i < visibleWins.length ? "a" : "b"}-${w.epoch}-${w.user}-${i}`} w={w} />
-          ))}
-        </div>
+        <>
+          <div className="absolute inset-0 flex items-center justify-center px-2 sm:hidden">
+            <WinItem w={visibleWins[0]} />
+          </div>
+          <div
+            className={`absolute inset-y-0 left-0 hidden min-w-max items-center gap-1.5 whitespace-nowrap pr-2 sm:flex ${
+              reducedMotion ? "" : "animate-ticker"
+            }`}
+            style={reducedMotion ? undefined : { animationDuration: "96s" }}
+          >
+            {[...visibleWins, ...visibleWins].map((w, i) => (
+              <WinItem key={`ticker-${i < visibleWins.length ? "a" : "b"}-${w.epoch}-${w.user}-${i}`} w={w} />
+            ))}
+          </div>
+        </>
       ) : (
         <span className="absolute inset-y-0 left-0 inline-flex items-center px-2.5 leading-none whitespace-nowrap text-[10px] text-slate-500">
           Waiting for winners&hellip;

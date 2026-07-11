@@ -1,0 +1,11 @@
+Testnet canary target verification
+Checked at: 2026-07-10T10:45:35.707Z
+Network: Linea Sepolia testnet
+Chain ID: 59141
+Contract: 0x98eef041b012668529fb66ac3133900fdffc7282
+Broadcast RPC label: sepolia-publicnode-broadcast
+Source: data/live-test-runs/live-canary-2026-07-10T09-48-13-561Z.jsonl
+
+The saved canary events identify the Linea Sepolia target, chain ID, contract, and
+concrete redacted broadcast-RPC label. No raw RPC URL, wallet secret, or session
+data is included in this artifact.

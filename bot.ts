@@ -421,7 +421,7 @@ async function startKeeperBot() {
           ? "resolved"
           : secondsLeft <= 0
             ? totalPool === BigInt(0)
-              ? `empty | waiting ${overdue}s`
+              ? "idle | no bets"
               : `pending | grace ${Math.max(0, GRACE_SECONDS - overdue)}s`
             : "open";
         process.stdout.write(

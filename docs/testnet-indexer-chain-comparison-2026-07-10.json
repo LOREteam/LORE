@@ -1,0 +1,114 @@
+{
+  "kind": "testnet-indexer-chain-comparison",
+  "generatedAt": "2026-07-10T13:51:16.989Z",
+  "network": "sepolia",
+  "chainId": 59141,
+  "contractAddress": "0x98eef041b012668529fb66ac3133900fdffc7282",
+  "comparisonBasis": "EpochResolved event fields plus current epochs() jackpot flags; epochs().totalPool alone excludes rollover after resolve.",
+  "apiError": null,
+  "rows": [
+    {
+      "epoch": 1935,
+      "eventFound": true,
+      "matches": true,
+      "expected": {
+        "winningTile": 24,
+        "totalPool": "24016.061053437949666923",
+        "fee": "0",
+        "rewardPool": "0",
+        "jackpotBonus": "0",
+        "isDailyJackpot": false,
+        "isWeeklyJackpot": false
+      },
+      "indexed": {
+        "winningTile": 24,
+        "totalPool": "24016.061053437949666923",
+        "rewardPool": "0",
+        "fee": "0",
+        "jackpotBonus": "0",
+        "isDailyJackpot": false,
+        "isWeeklyJackpot": false,
+        "resolvedBlock": "30762508"
+      }
+    },
+    {
+      "epoch": 1936,
+      "eventFound": true,
+      "matches": true,
+      "expected": {
+        "winningTile": 22,
+        "totalPool": "24016.061053437949666923",
+        "fee": "0",
+        "rewardPool": "0",
+        "jackpotBonus": "0",
+        "isDailyJackpot": false,
+        "isWeeklyJackpot": false
+      },
+      "indexed": {
+        "winningTile": 22,
+        "totalPool": "24016.061053437949666923",
+        "rewardPool": "0",
+        "fee": "0",
+        "jackpotBonus": "0",
+        "isDailyJackpot": false,
+        "isWeeklyJackpot": false,
+        "resolvedBlock": "30762526"
+      }
+    },
+    {
+      "epoch": 1937,
+      "eventFound": true,
+      "matches": true,
+      "expected": {
+        "winningTile": 23,
+        "totalPool": "24016.061053437949666923",
+        "fee": "0",
+        "rewardPool": "0",
+        "jackpotBonus": "0",
+        "isDailyJackpot": false,
+        "isWeeklyJackpot": false
+      },
+      "indexed": {
+        "winningTile": 23,
+        "totalPool": "24016.061053437949666923",
+        "rewardPool": "0",
+        "fee": "0",
+        "jackpotBonus": "0",
+        "isDailyJackpot": false,
+        "isWeeklyJackpot": false,
+        "resolvedBlock": "30762544"
+      }
+    },
+    {
+      "epoch": 1938,
+      "eventFound": true,
+      "matches": true,
+      "expected": {
+        "winningTile": 3,
+        "totalPool": "24016.061053437949666923",
+        "fee": "0",
+        "rewardPool": "0",
+        "jackpotBonus": "0",
+        "isDailyJackpot": false,
+        "isWeeklyJackpot": false
+      },
+      "indexed": {
+        "winningTile": 3,
+        "totalPool": "24016.061053437949666923",
+        "rewardPool": "0",
+        "fee": "0",
+        "jackpotBonus": "0",
+        "isDailyJackpot": false,
+        "isWeeklyJackpot": false,
+        "resolvedBlock": "30762561"
+      }
+    }
+  ],
+  "summary": {
+    "checkedEpochs": 4,
+    "eventMatches": 4,
+    "exactMatches": 4,
+    "mismatches": 0,
+    "status": "pass"
+  }
+}

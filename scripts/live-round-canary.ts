@@ -39,6 +39,7 @@ const RESOLVE_RETRY_COOLDOWN_MS = parseIntegerEnv("LIVE_TEST_RESOLVE_RETRY_COOLD
 const LOOP_PAUSE_MS = parseIntegerEnv("LIVE_TEST_LOOP_PAUSE_MS", 1_500, 0, 120_000);
 const MAX_FAILURES = parseIntegerEnv("LIVE_TEST_MAX_FAILURES", 20, 1, 10_000);
 const DRY_RUN = process.env.LIVE_TEST_DRY_RUN === "1";
+const ALLOW_EMPTY_RESOLVE = process.env.LIVE_TEST_ALLOW_EMPTY_RESOLVE === "1";
 const VERBOSE_WALLET_PREFLIGHT = process.env.LIVE_TEST_VERBOSE_WALLETS === "1";
 const BET_AMOUNT = parseTokenAmountEnv("LIVE_TEST_BET_AMOUNT", "0.01");
 const APPROVE_AMOUNT = parseTokenAmountEnv("LIVE_TEST_APPROVE_AMOUNT", "1000000000");
@@ -113,6 +114,7 @@ type RoundEvent = {
 
 const attemptedResolveEpochs = new Map<string, number>();
 const pendingResolveEpochs = new Set<string>();
+let emptyResolveBootstrapUsed = false;
 const BATCH_GAS_FALLBACK = 700_000n;
 
 function getRpcLabel() {
@@ -205,6 +207,7 @@ function classifyError(error: unknown) {
   if (lower.includes("already known") || lower.includes("known transaction")) return { kind: "already-known", message: safeMessage };
   if (lower.includes("replacement transaction underpriced")) return { kind: "replacement-underpriced", message: safeMessage };
   if (lower.includes("epochclosing") || lower.includes("epochended")) return { kind: "late-bet", message: safeMessage };
+  if (lower.includes("empty expired epoch")) return { kind: "empty-epoch-blocked", message: safeMessage };
   if (lower.includes("safe window") || lower.includes("epoch wait")) return { kind: "epoch-window", message: safeMessage };
   if (lower.includes("alreadyresolved")) return { kind: "already-resolved", message: safeMessage };
   if (lower.includes("timernotended")) return { kind: "timer-not-ended", message: safeMessage };
@@ -323,6 +326,13 @@ async function resolveIfNeeded(params: {
   });
   const isResolved = Boolean(epochData[3]);
   if (isResolved) return;
+  const emptyEpoch = epochData[0] === 0n;
+  if (emptyEpoch && (!ALLOW_EMPTY_RESOLVE || emptyResolveBootstrapUsed)) {
+    const detail = ALLOW_EMPTY_RESOLVE
+      ? "the one-time empty bootstrap was already used"
+      : "set LIVE_TEST_ALLOW_EMPTY_RESOLVE=1 for one controlled bootstrap";
+    throw new Error(`empty expired epoch ${epoch} blocks live canary; ${detail}`);
+  }
   const epochKey = epoch.toString();
   const now = Date.now();
   if (pendingResolveEpochs.has(epochKey)) return;
@@ -380,6 +390,7 @@ async function resolveIfNeeded(params: {
     } as never);
     pendingHash = hash;
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
+    if (emptyEpoch && receipt.status === "success") emptyResolveBootstrapUsed = true;
     writeEvent(logPath, {
       amount: "0",
       durationMs: Date.now() - startedAt,
@@ -684,6 +695,7 @@ async function main() {
       `total=${formatUnits(MIN_TOTAL_BET_AMOUNT, 18)}..${formatUnits(MAX_TOTAL_BET_AMOUNT, 18)} ` +
       `tiles=${MIN_TILES_PER_ROUND}..${MAX_TILES_PER_ROUND}`,
   );
+  console.log(`[live-canary] emptyResolveBootstrap=${ALLOW_EMPTY_RESOLVE ? "enabled" : "disabled"}`);
   console.log(`[live-canary] log=${logPath}`);
 
   const contractToken = await publicClient.readContract({
@@ -757,8 +769,9 @@ async function main() {
         }
       }
     } catch (error) {
-      failures += 1;
       const classified = classifyError(error);
+      if (classified.kind === "empty-epoch-blocked") throw error;
+      failures += 1;
       errorKinds.set(classified.kind, (errorKinds.get(classified.kind) ?? 0) + 1);
       writeEvent(logPath, {
         amount: formatUnits(plan.amount, 18),

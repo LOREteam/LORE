@@ -27,7 +27,7 @@ export function useManualBetForm({
   selectedTilesCount,
   isPending,
   isRevealing,
-  isAnalyzing = false,
+  isAnalyzing: _isAnalyzing = false,
   isAutoMining,
 }: UseManualBetFormOptions) {
   const [betAmount, setBetAmount] = useState("10.0");
@@ -69,7 +69,7 @@ export function useManualBetForm({
       ? "Waiting for live epoch sync"
       : betAmountError
         ? betAmountError
-        : isRevealing || isAnalyzing
+        : isRevealing
             ? "Round is resolving"
             : isAutoMining
               ? "Auto-Miner is running"
@@ -84,7 +84,6 @@ export function useManualBetForm({
     isPending ||
     selectedTilesCount === 0 ||
     isRevealing ||
-    isAnalyzing ||
     isAutoMining ||
     manualInsufficient;
 

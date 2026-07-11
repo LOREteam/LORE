@@ -510,6 +510,25 @@ const checks = [
     },
   },
   {
+    name: "global-stats",
+    path: "/api/global-stats",
+    assert: async (response, body) => {
+      if (!response.headers.get("content-type")?.includes("application/json")) {
+        throw new Error("expected json");
+      }
+      if (!response.headers.get("cache-control")?.includes("no-store")) {
+        throw new Error("global-stats responses must be no-store");
+      }
+      const json = JSON.parse(body);
+      assertIntegerString(json.totalVolumeWei, "global-stats totalVolumeWei");
+      assertIntegerString(json.totalBurnWei, "global-stats totalBurnWei");
+      assertIntegerString(json.lastIndexedBlock, "global-stats lastIndexedBlock");
+      if (!Number.isSafeInteger(json.resolvedEpochs) || json.resolvedEpochs < 0) {
+        throw new Error("global-stats resolvedEpochs must be a non-negative safe integer");
+      }
+    },
+  },
+  {
     name: "leaderboards",
     path: "/api/leaderboards",
     assert: async (response, body) => {

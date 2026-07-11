@@ -40,7 +40,6 @@ export function usePageEpochPresentation({
 
   const showSelectionOnGrid =
     !isRevealing &&
-    !isAnalyzing &&
     actualCurrentEpoch != null &&
     gridDisplayEpoch != null &&
     gridDisplayEpoch === actualCurrentEpoch.toString();

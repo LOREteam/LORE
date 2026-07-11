@@ -52,7 +52,6 @@ export function usePageRuntimeEffects({
   embeddedWalletAddress,
   handleTileClick,
   historyViewData,
-  isAnalyzing,
   isRevealing,
   liveStateReady,
   playSound,
@@ -121,11 +120,9 @@ export function usePageRuntimeEffects({
 
   const isRevealingRef = useRef(isRevealing);
   isRevealingRef.current = isRevealing;
-  const isAnalyzingRef = useRef(isAnalyzing);
-  isAnalyzingRef.current = isAnalyzing;
 
   const stableTileClick = useCallback(
-    (id: number) => handleTileClick(id, isRevealingRef.current || isAnalyzingRef.current),
+    (id: number) => handleTileClick(id, isRevealingRef.current),
     [handleTileClick],
   );
 

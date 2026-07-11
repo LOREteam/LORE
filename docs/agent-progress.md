@@ -4004,3 +4004,187 @@ as historical progress only.
 - Commit `ca49a6b` adds a safe 700k batch-estimate fallback for that specific RPC simulation error, redacts canary error text, adds the matching frontend estimate fallback, and makes strict analyzer/proof-drafts reject unsafe error strings.
 - Real 4-epoch recovery run verified single, bitmap, sameAmount, and arrays at 12 tiles, all successful with resolver recovery and no nonce backlog; observed arrays gas was below the conservative fallback floor.
 - Remaining for final testnet canary: replenish native Sepolia ETH for resolver and AUTOMINER_A, then run a fresh redacted 50-successful-auto-miner-epoch log. Mainnet proof remains out of scope.
+
+
+## 2026-07-10 - Sepolia 50-Epoch Auto-Miner Canary
+
+- Completed a clean live Sepolia canary in `data/live-test-runs/live-canary-2026-07-10T09-48-13-561Z.jsonl`: 50 successful auto-miner bets on 50 unique epochs (1857-1906) over 3,391,757 ms, with three wallets, four bet methods, varied amounts/tile counts, 50 successful resolves, no failures, nonce gaps, duplicate hashes/keys, or gas-estimate fallbacks.
+- Strict `proof:testnet:canary` analysis confirms all live-log invariants; it correctly stops before promotion because a final manifest does not exist yet.
+- Added redacted target/session/transaction/recovery-status artifacts and generated `docs/testnet-canary-proof.draft.json`. The draft is deliberately not promoted: final signed browser evidence for reload, reconnect, tab-close restore, pending-transaction recovery, and route remount is still required.
+- The real same-operation arrays bet is now approximately 29.94x cheaper than the previously reported screenshot because the canary uses normal Linea bet fees rather than keeper urgency fees; gas usage is unchanged.
+
+## 2026-07-10 - Privy Desktop Flow And Empty Epoch Recovery
+
+- Verified in the connected Chrome profile that the Privy embedded wallet restores as Active after a local production-server restart. A manual 1,000 LINEA test stake was confirmed by the embedded balance delta; no MetaMask transaction confirmation is part of this bet path.
+- Re-verified the signed desktop recovery after a browser reload: the embedded wallet returned Active within six seconds, LOGIN remained absent, and the auto-miner controls were available. This is recorded in `docs/testnet-browser-smoke.log` and is not claimed as mobile coverage.
+- Removed the redundant manual/repeat bet preparation toast; the pending button state and final success/error notifications remain.
+- Reverted unbounded empty-epoch resolving after testnet evidence showed it spends keeper ETH without player activity. The permanent bot now resolves only non-empty pools; the controlled live canary also skips empty resolve unless `LIVE_TEST_ALLOW_EMPTY_RESOLVE=1` is explicitly set for a one-time bootstrap.
+- Remaining browser evidence is mobile wrong-network, rejection, pending/revert, reconnect, and route/tab recovery. Durable selected chain-to-indexer comparison is complete below.
+
+## 2026-07-10 - Testnet Chain-To-Indexer Comparison
+
+- Ran a one-shot Sepolia indexer catch-up (58 logs; 55 epoch records) into the local SQLite database.
+- Directly compared EpochResolved event values and current jackpot flags for epochs 1935-1938 with `/api/epochs`: 4/4 exact matches and 0 mismatches. Evidence: `docs/testnet-chain-snapshot-2026-07-10.json` and `docs/testnet-indexer-chain-comparison-2026-07-10.json`.
+- The first comparison correctly exposed a semantic distinction rather than data loss: post-resolve `epochs().totalPool` contains only fresh bets, while the historical indexer/API total uses `EpochResolved.totalPool`, which includes rollover. The durable check compares the matching event semantics.
+
+## 2026-07-10 - Activity-Aware Resolver Smoke
+
+- Stopped four duplicate local resolver process trees after they were found attempting to advance empty epochs in parallel.
+- Restored the permanent bot's non-empty-pool guard and made `live:canary` skip empty resolve by default. `LIVE_TEST_ALLOW_EMPTY_RESOLVE=1` is now an explicit one-time bootstrap override for a known stale empty epoch.
+- A two-round live Sepolia smoke with three funded auto-miner roles and one resolver completed 2/2 varied bets in unique epochs 1993 and 1994: single + bitmap, 1 and 5 tiles, 1539.6 and 1970 LINEA, zero failed bets/resolves, nonce gaps, or duplicates. It used one intentional empty bootstrap for 1992 and one non-empty resolve for 1993. Evidence: `docs/testnet-idle-resolver-smoke.log`.
+- Verified `npm.cmd run test:logic` and `npm.cmd run typecheck` after the guard and UX-test updates.
+
+## 2026-07-10 - Current Local Regression Baseline
+
+- Re-ran `npm.cmd run test:contract` (V9 invariants) and `npm.cmd run typecheck`; both passed.
+- `npm.cmd run proof:local` started without a reported local validation error, but its available terminal output contained only the preflight header; it is not recorded here as a renewed L1-L14 pass.
+- A fresh `npm.cmd run build` reached the optimized build phase, then encountered repeated external Google-font `ETIMEDOUT` retries. This is an external dependency failure, not a claimed successful build; it needs one later successful retry before the current worktree receives a renewed build-green mark.
+
+## 2026-07-10 - Indexer-Backed Global Stats Runtime Fix
+
+- Browser evidence exposed sidebar global-stats history scans as the source of repeated dRPC `eth_getLogs` 400/500 responses: viem sent raw-topic calls as `topics: []`, and a fresh browser could issue hundreds of historical RPC requests.
+- Replaced the client-side multicall/log-history scan with rate-limited `/api/global-stats`, which aggregates indexed SQLite bet volume, protocol burn, resolved epoch count, and the persisted indexer block. SQLite stores formatted token decimals, so the aggregate explicitly converts them back to wei at the API boundary.
+- Verified `npm.cmd run typecheck` and `npm.cmd run test:logic`. On an isolated `next dev` smoke, `/api/global-stats` returned 200 and a fresh browser load had zero console errors; the only warning was Next dev CSS preload timing. The temporary dev server was stopped afterward.
+- Added `/api/global-stats` schema/no-store assertions to `smoke:http`; `node --check scripts/smoke-http.mjs` passes. A full dev-server HTTP smoke terminal lost its final output after successful warm-up checks, so it is not recorded as a complete smoke pass. The direct endpoint and browser checks above remain the valid evidence.
+
+## 2026-07-10 - Terminal Launcher Diagnosis
+
+- The default WindowsApps `pwsh.exe` launcher fails before command execution in the sandbox with `CreateProcessAsUserW: Access denied`; this was unrelated to the repository, tests, or RPC.
+- Explicit `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` succeeds in the same workspace. Use the system PowerShell binary for subsequent local checks; escalated approval stream failures are a separate Codex service issue.
+
+## 2026-07-10 - Connected Chrome Stale-Epoch Recovery
+
+- Connected Chrome was available with the LORE page and an Active Privy wallet. At a 390x844 viewport, the wallet panel, manual-bet controls, Auto-Miner controls, and fixed bottom navigation did not overlap.
+- Epoch 1994 remained at `00:00 / Analyzing` with all tiles disabled for more than 15 seconds and no application-console error. A bounded run of the existing fallback keeper resolved its 1,970 LINEA pool in 280,079 gas: `0x38dc3f35b22b8e8ab7a57b429bd7813b4e066c865397c967f3aafcfb777aa2d5`. The chain advanced to open epoch 1995; the keeper was immediately stopped to avoid unrelated gas spend.
+- Result: this was missing keeper liveness, not a frontend failure. Non-empty expired epochs require a supervised keeper or the next player bet's atomic resolve path; empty epochs remain intentionally skipped.
+
+## 2026-07-10 - Empty-Epoch Manual Recovery Fix
+
+- The connected Chrome check then exposed a separate UI defect: after the keeper intentionally skipped empty expired epoch 1995, `isAnalyzing` disabled the grid, quick-picks, and manual action even though V9 `placeBet` can atomically advance that epoch. This could permanently freeze a quiet game until an operator intervened.
+- Removed only `isAnalyzing` as an input lock from manual selection and the grid. Reveal animation, live-state readiness, pending transactions, read-only mode, and balance guards remain unchanged; `Analyzing` remains a visual status.
+- `npm.cmd run typecheck` and `npm.cmd run test:logic` pass. A temporary source dev server at `localhost:3002` verified all 25 tiles and `Lucky 3/5` enabled on the same expired empty epoch; `Lucky 3` selected tiles 10, 11, and 22, with zero console errors. The server was stopped after the check.
+
+## 2026-07-10 - Local Production Fonts
+
+- Replaced `next/font/google` in `app/layout.tsx` with `next/font/local` using the same official Latin WOFF2 families and weights: Inter 400-900, Cinzel 600-900, and Rajdhani 500/600/700. Existing `--font-lore-digits`, `--font-lore-title`, and `--font-lore-hud` variables are unchanged.
+- `npm.cmd run typecheck` and `npm.cmd run build` now pass. The previous external Google Fonts timeout is removed from the production build path.
+- Restarted the rebuilt production bundle on `localhost:3000`; `npm.cmd run smoke:http` passed all homepage, health, API, auth/error, redaction, and `/api/global-stats` assertions. Connected Chrome restored Privy as Active, loaded the local font families, exposed all 25 tiles on the expired empty epoch, and reported zero console errors on desktop and 390x844 mobile. Manual/Auto-Miner controls and fixed bottom navigation rendered without overlap.
+- Re-ran `npm.cmd run test:contract`, `npm.cmd run test:logic`, and `npm.cmd run proof:drafts` after the production smoke. V9 invariants and business logic passed; proof drafts remained correctly rejected as incomplete launch proof while their regression matrix passed.
+
+## 2026-07-10 - Connected Privy Recovery
+
+- In the connected Chrome profile, `Mining Hub -> Analytics -> Mining Hub` preserved the embedded wallet as Active and returned with Manual Bet and Auto-Miner available.
+- Opened LORE in an agent-created temporary tab, confirmed Active with no LOGIN state, closed it, reopened a second temporary tab, and confirmed the same recovery. A subsequent full reload restored Active, no LOGIN state, and 25 enabled tiles with zero console errors.
+- Remaining signed wallet evidence is narrowed to deliberate rejection, wrong-network, pending/revert behavior, and a true mobile-device session. Responsive Chrome viewport checks remain layout evidence, not a claim of native mobile-wallet coverage.
+
+## 2026-07-10 - Signed Quiet-Epoch Manual Bet
+
+- The first production click attempt found a final stale guard in `usePageRuntimeEffects`: `stableTileClick` still treated visual `isAnalyzing` as a selection lock, so an enabled tile silently no-op'd. Removed that shared guard and added a business-logic source regression.
+- `npm.cmd run typecheck`, `npm.cmd run test:logic`, and `npm.cmd run build` passed; the rebuilt production server was restarted with EIP-7702 still disabled.
+- A connected Privy wallet placed 1 LINEA on tile 1 in epoch 1996. The UI entered a disabled pending state, then cleared selection and showed `1 players, 1 LINEA pooled, your bet is here`; console errors were zero. The one-shot indexer recorded block 30767779 and tx `0x270d688ae535270e2ccc02f18b59f0d3deaef1ed783dfb3b11183a3ab4868d50`.
+
+## 2026-07-10 - Wallet Rejection Observation
+
+- Logged out of Privy and initiated MetaMask login. After the user closed the MetaMask connect prompt, Privy's modal remained at `Waiting for MetaMask` for more than five seconds instead of surfacing a rejection state.
+- Closing the Privy modal manually restored `Login / Connect` without reload and without console errors. This is partial rejection evidence with a residual third-party modal UX limitation, not a clean rejection pass.
+- A second MetaMask connect prompt was opened to restore the authenticated Privy session; completion requires the user to approve the extension-owned prompt.
+
+## 2026-07-10 - Wrong-Network Timeout And RPC Range Fixes
+
+- Deliberately leaving the connected external MetaMask wallet on Ethereum Sepolia exposed an unbounded `externalWallet.switchChain` wait: the ETH top-up action remained at `Sending...` and never reached chain verification or the existing transaction-send timeout.
+- Time-bounded external-wallet network switching and `eth_chainId` verification at 15 seconds. User rejection or switch timeout now exits immediately instead of opening the EIP-1193 fallback as a second prompt; fallback remains available for non-rejection SDK switch failures.
+- Production logs then exposed Linea public RPC rejecting a 10,170-block jackpot background scan with `range ... exceeds limit of 10000`. Capped jackpot, recent-wins, and live-state log ranges at 10,000 blocks and taught their adaptive classifiers that provider wording.
+- Verified `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run build`, `npm.cmd run smoke:http`, and a complete `npm.cmd run smoke:browser`. The second browser run passed desktop/mobile wallet selectors, typography/chart guards, navigation/chat, and persistence; the rebuilt server did not repeat the jackpot background-recovery error.
+- Signed post-fix MetaMask wrong-network prompt/recovery evidence remains required; this entry does not mark that wallet case Pass.
+
+## 2026-07-10 - Extended Failure-State And Baseline Recheck
+
+- Ran browser smoke with `SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS=1`. Desktop and isolated mobile wallet selectors, chart/font guards, persistence, RPC-offline `Recovery queued`, `RESUME PENDING`, session-expired guidance, recovery cleanup, navigation, chat, and mobile layout all passed.
+- Revalidated the saved 50-epoch Sepolia log: 50 successful auto-miner bets and resolves across 50 unique epochs over 3,391,757 ms, with zero failed bets/resolves, nonce gaps, missing/duplicate tx hashes, or duplicate role/epoch/tile keys.
+- Re-ran V9 contract invariants and proof-draft guards successfully. A production health command correctly rejected localhost, and its local mode then refused to expose diagnostics without `HEALTH_DIAGNOSTICS_SECRET`; no secret was read or printed, and existing HTTP/runtime smoke remains the valid local health evidence.
+- Corrected stale current-status text that still described the former Google Fonts build timeout. Local WOFF2 fonts and the latest production build are green; mainnet proof remains out of scope.
+- Ran a fresh Sepolia `indexer:once` twice while checking heartbeat semantics. The latest run caught up 80 blocks, advanced the bounded historical repair cursor by 10,000 blocks with 1,082 repaired logs, and reconciled with no missing epochs. An immediate public `/api/health/data-sync` response was `healthy`, `synced`, lag 3, 100% coverage, and redacted; `/api/health/runtime` returned `ok` and redacted. A completed one-shot naturally becomes stale after the configured 180-second heartbeat window; production-like continuous health requires the documented watch/supervisor process.
+
+## 2026-07-10 - Strict Testnet Canary Promotion
+
+- Updated the redacted browser/recovery artifacts with the already collected signed reload, reconnect, tab-close/open, route-remount, and 1 LINEA pending-to-confirmation evidence. The pending tx converged at block 30767779 with tx `0x270d688ae535270e2ccc02f18b59f0d3deaef1ed783dfb3b11183a3ab4868d50` and no duplicate submission.
+- Found and fixed a proof-tooling mismatch: generated TODO guidance suggested status `verified/pass`, while the strict validator accepts `verified` or `pass` as separate values. The generator now gives unambiguous replacement guidance and business-logic regression coverage protects it.
+- Promoted only the completed testnet manifest to `docs/testnet-canary-proof.json`. Strict validation passed all target, recovery, auto-miner session, and transaction-health sections against the saved 50-epoch JSONL. Mainnet `docs/canary-proof.json` remains absent/unchanged.
+- Broader testnet wallet readiness still does not claim a post-fix signed wrong-network rejection, a deliberately reverted transaction, or a true mobile-device wallet session.
+
+## 2026-07-10 - Final Testnet Wallet Gap Audit
+
+- Audited the explicit wallet requirements against saved `docs/testnet-*.log` evidence rather than treating strict canary success as full wallet QA.
+- Confirmed signed pending-to-success, reconnect, reload, route/tab recovery, transaction uniqueness, and explorer rendering evidence exists.
+- Confirmed no saved evidence yet proves successful ETH top-up, LINEA external deposit, embedded-wallet withdrawal, rejected/failed/reverted transfer UX, a post-fix wrong-network rejection, a genuinely clean-wallet first transaction, or a true mobile-device wallet session.
+- These cases require extension-owned signatures, a newly funded unused wallet for clean-first-tx proof, or a real mobile device. They remain explicit Missing testnet evidence and are not replaced by local simulation or responsive viewport checks.
+
+## 2026-07-11 - External Wallet Switch And Duplicate-Click Guard
+
+- The post-fix signed ETH top-up flow switched MetaMask from Ethereum Sepolia to Linea Sepolia and opened the expected 0.000001 ETH confirmation to the embedded Privy wallet. This proves the former switch hang is fixed through the transaction-prompt boundary.
+- MetaMask showed two queued confirmations because the user explicitly clicked top-up twice. React disabled-state rendering alone leaves a same-tick double-click window, so all four Wallet Settings transfer handlers now share a synchronous in-flight ref guard: ETH/LINEA deposit and ETH/LINEA withdrawal.
+- Added business-logic regression coverage requiring all four guards. `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run build`, and rebuilt production `npm.cmd run smoke:http` passed; EIP-7702 remained disabled during build/start.
+- The confirmation has not yet been rejected or settled, so successful/rejected top-up evidence is still Missing rather than inferred from the prompt.
+- Follow-up direct chain evidence found the confirmed 0.001 ETH top-up at block 30770269 with receipt status 1, 21,000 gas used, and tx `0x3aa666275356f9600f4cc2c49d8fca990bace5fef5d97826912c331797856f5c`. Successful ETH top-up and wrong-network switching are now Pass; explicit rejection remains Missing.
+- A later signed external-wallet deposit confirmed exactly one 10 LINEA ERC-20 transfer to the embedded wallet at block 30770567 with receipt status 1, 35,060 gas used, tx `0xc6d280600638c6b8d5e0dc37c07e4236c691a7ccd57a3169ac453f27b25a77b8`, and resulting embedded balance 99,009 LINEA. No duplicate matching transfer was found.
+- Signed embedded-wallet withdrawals then confirmed 0.001 ETH at block 30770653 / tx `0x5abf31f78e874890826ca905f291a01489dd4cbdd341c13c3cb5197cd63f6ec5` and 1 LINEA at block 30770656 / tx `0xa8fe376451c3bf09707792de4e58992475858c9744e567ee92cc502d970830ef`; both receipts had status 1 and exactly one matching transfer was found for each asset.
+
+## 2026-07-11 - Testnet Evidence Proof-Guard Separation
+
+- `proof:local` L3 incorrectly rejected the valid `docs/testnet-canary-proof.json` as an unexpected mainnet proof file. The proof-file guard now recognizes it as non-launch testnet evidence while retaining template and secret-like value scanning.
+- Re-ran strict Sepolia canary validation: 50 successful auto-miner bets and resolves across 50 unique epochs, no failed bets/resolves, duplicate hashes/keys, or nonce gaps. `npm.cmd run proof:local` then passed L1-L14; `npm.cmd run test:contract` (V9 invariants) and `npm.cmd run typecheck` also passed. The expected-fail mainnet launch gate remains unchanged.
+
+## 2026-07-11 - Current Indexer And Browser Runtime Recheck
+
+- A new Linea Sepolia `indexer:once` scanned the current 1,433-block interval with zero new logs, ran one bounded 10,000-block repair slice, and reported no missing epochs. This is a current incremental health check; the earlier fresh-DB/restart/restore evidence remains the proof for those broader cases.
+- The prior `localhost:3000` production server had stopped, so the first HTTP smoke was correctly recorded as an unavailable-origin failure rather than an application result. Restarted the built server with the EIP-7702 guard still disabled; the following HTTP smoke and browser smoke passed.
+- Browser smoke covered desktop/mobile shells, manual/Auto-Miner number fonts, mounted pool-chart line, wallet selector, Auto-Miner persistence, chat/profile overlay, and all primary tabs. Its single bounded login-modal reload retry succeeded; no application-console failure was reported.
+
+## 2026-07-11 - Signed LINEA Deposit Rejection
+
+- In Wallet Settings, one external MetaMask LINEA deposit prompt was explicitly rejected. The application displayed `LINEA deposit rejected in wallet.` and returned from its sending state; no transfer was submitted. This closes the explicit external-wallet rejection case without treating it as a failed/reverted on-chain transaction.
+
+## 2026-07-11 - Oversized Deposit Failure And Balance Guard
+
+- An intentionally oversized LINEA deposit reached the external provider but was rejected before broadcast with `eth_sendRawTransaction: Transaction gas limit cap exceeded`. The application cleared its sending state, so this is signed pre-submission failure evidence, not an on-chain revert.
+- The raw provider-specific text was unsuitable for users. LINEA deposit now reads the external wallet's on-chain `balanceOf` before opening a wallet prompt and returns `Insufficient LINEA balance in external wallet.` when needed. A remaining provider gas-cap error is presented as generic pre-submission guidance while the raw error remains in technical logs.
+- `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run build`, and `npm.cmd run smoke:http` passed. The rebuilt server is running with EIP-7702 disabled.
+
+## 2026-07-11 - Guarded Signed Testnet Revert
+
+- Added `test:testnet-revert`, a guarded operator-only script that requires `--confirm`, refuses any chain other than Linea Sepolia, simulates `Test LINEA.transfer(zeroAddress, 1)` before broadcast, and requires a reverted receipt. It does not expose keys or RPC URLs.
+- With explicit approval, the testnet wallet submitted `0x57721fab36afdc81d38caec36409da3274ffc080a39617df35a46e55b0175c9c`. The receipt is `reverted`, used 22,364 gas, transferred no token, and is recorded in `docs/testnet-signed-revert.json`.
+
+## 2026-07-11 - Clean-Wallet Account-Switch Timeout Fix
+
+- The funded clean wallet remained nonce 0, but Wallet Settings showed an old external address after MetaMask switched to the imported account. The subsequent LINEA deposit timed out in `eth_sendTransaction` rather than opening a prompt.
+- Root cause: normal external sends used stale `externalWallet.address` from Privy's wallet list as `from`. The shared sender now reads the current provider `eth_accounts` immediately before send and subscribes to `accountsChanged` for the displayed address. It refuses to send if the provider has no selected account.
+- `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run build`, and `npm.cmd run smoke:http` passed with EIP-7702 disabled. The signed clean-wallet retry is still required before marking the first-use wallet scenario Pass.
+
+## 2026-07-11 - Signed Clean-Wallet First-Use Transfer
+
+- The fresh test account was funded while its nonce remained 0. The initial UI attempt exposed the stale Privy external-address timeout above; after the account-sync fix and production rebuild, Wallet Settings used the currently selected MetaMask account.
+- The account sent its first and only outbound transaction: 10 LINEA to the current Privy address `0x092b1dC85B4BC9Faa1FFDb3fB6E21F6D9cA89cEB`, block 30772251 / tx `0xaa59151220b267582040c68280ebe99b5202b735246e8a11d9ffa1ab8a6e21ea`. Sender nonce advanced 0 -> 1, token balance moved 20,000 -> 19,990, and the outgoing event scan found no duplicate.
+
+## 2026-07-11 - Mobile Recent-Wins Ticker Geometry
+
+- User screenshot exposed a narrow-viewport visual defect: the desktop animated recent-wins marquee entered from offscreen and left clipped pills at both edges.
+- On mobile, `WinsTicker` now renders one current win centered and fully visible; the existing animated duplicated feed remains unchanged from `sm` upward. A 390px browser check measured the chip entirely inside the feed container, verified the desktop marquee remains active at 1440px, and found zero console errors after reload.
+- `npm.cmd run typecheck`, `npm.cmd run build`, and `npm.cmd run smoke:http` passed. EIP-7702 remains disabled.
+
+## 2026-07-11 - Mobile Device Scope Decision
+
+- Physical MetaMask/Rabby mobile-browser validation is deferred to mainnet rollout at the user's direction. It needs the final HTTPS origin and remains separate from testnet evidence and all mainnet proof manifests.
+- Testnet retains responsive mobile layout, wallet-selector, overlay, chart, typography, and console-error coverage; no physical-device result is claimed.
+
+## 2026-07-11 - Testnet Scope Closeout Recheck
+
+- Final recheck passed: V9 contract invariants, business logic, local proof preflight L1-L14, and strict Linea Sepolia canary validation.
+- The strict canary still proves 50 successful auto-miner bets and 50 resolves across unique epochs 1857-1906 over 3,391,757 ms, with zero failed bets/resolves, nonce gaps, duplicate tx hashes, or duplicate role/epoch/tile keys.
+- Mainnet G1-G14 remain intentionally Missing. No testnet evidence was promoted into a mainnet proof artifact.
+
+## 2026-07-11 - Live Canary Empty-Epoch Fail-Fast
+
+- A 300-round Sepolia stress run reached 190 successful unique-epoch bets before missing the safe window for empty epoch 2167. With empty resolves disabled, the old runner repeated 20 three-minute safe-window timeouts and then stopped.
+- `live-round-canary.ts` now fails immediately with `empty-epoch-blocked` when a stale empty epoch cannot advance. The existing `LIVE_TEST_ALLOW_EMPTY_RESOLVE=1` override is enforced as one successful bootstrap resolve per run, so it cannot spend keeper ETH across an unbounded sequence of empty epochs.
+- `npm.cmd run test:logic` and `npm.cmd run typecheck` pass. A new 300-round run must use the explicit one-time bootstrap flag only if the current epoch is still stale and empty.

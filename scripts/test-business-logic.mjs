@@ -577,13 +577,13 @@ async function main() {
   const miningManualActionsSource = readFileSync("app/hooks/useMiningManualActions.ts", "utf8");
   assert.match(
     miningManualActionsSource,
-    /Preparing bet transaction/,
-    "manual bet must show a preparing/signing notification before the wallet prompt",
+    /setIsPending\(true\)/,
+    "manual bet must expose its pending state while the Privy transaction is sent",
   );
-  assert.match(
+  assert.doesNotMatch(
     miningManualActionsSource,
-    /Preparing repeat bet transaction/,
-    "repeat bet must show a preparing/signing notification before the wallet prompt",
+    /Preparing (?:repeat )?bet(?: transaction)?/,
+    "manual and repeat bets must not show a redundant preparation toast",
   );
   const autoResolveSource = readFileSync("app/hooks/useAutoResolve.ts", "utf8");
   assert.match(
@@ -857,6 +857,11 @@ async function main() {
   const recentWinsApiSource = readFileSync("app/api/recent-wins/data.ts", "utf8");
   assert.match(
     recentWinsApiSource,
+    /RECENT_WINS_LOG_SCAN_CHUNK = 10_000n[\s\S]*RECENT_WINS_BOOTSTRAP_SCAN_CHUNK = 10_000n/,
+    "recent-wins RPC scans must stay within the Linea public RPC 10k-block range limit",
+  );
+  assert.match(
+    recentWinsApiSource,
     /function parseStoredBlockNumber/,
     "recent wins API must tolerate corrupted stored block numbers",
   );
@@ -1045,6 +1050,63 @@ async function main() {
     walletActionsSource,
     /formatTxStatusMessage/,
     "wallet actions must share tx status message formatting",
+  );
+  assert.equal(
+    [...walletActionsSource.matchAll(/if \(walletTransferInFlightRef\.current\) return;/g)].length,
+    4,
+    "all wallet deposit and withdrawal handlers must reject rapid duplicate submissions before React rerenders",
+  );
+  assert.match(
+    walletActionsSource,
+    /publicClient\.readContract\([\s\S]*functionName: "balanceOf"[\s\S]*Insufficient LINEA balance in external wallet\./,
+    "LINEA deposits must reject an amount above the current external-wallet balance before opening a wallet prompt",
+  );
+  assert.match(
+    walletActionsSource,
+    /transaction gas limit cap exceeded[\s\S]*transfer was rejected before submission/,
+    "wallet transfer UI must replace the provider gas-cap error with actionable pre-submission guidance",
+  );
+  const testnetRevertSource = readFileSync("scripts/run-testnet-revert-check.ts", "utf8");
+  assert.match(
+    testnetRevertSource,
+    /Refusing to broadcast without \$\{CONFIRMATION_FLAG\}/,
+    "testnet revert check must require explicit broadcast confirmation",
+  );
+  assert.match(
+    testnetRevertSource,
+    /chain\.id !== TESTNET_CHAIN_ID[\s\S]*Refusing non-testnet revert check/,
+    "testnet revert check must refuse any non-Sepolia chain",
+  );
+  assert.match(
+    testnetRevertSource,
+    /simulateContract[\s\S]*invalidreceiver[\s\S]*writeContract[\s\S]*receipt\.status !== "reverted"/,
+    "testnet revert check must simulate first and require a reverted receipt",
+  );
+  const privyWalletSource = readFileSync("app/hooks/usePrivyWallet.ts", "utf8");
+  assert.match(
+    privyWalletSource,
+    /withTimeout\([\s\S]*externalWallet\.switchChain\(APP_CHAIN_ID\)[\s\S]*EXTERNAL_WALLET_NETWORK_TIMEOUT_MS/,
+    "external wallet network switching must not leave transfer actions pending indefinitely",
+  );
+  assert.match(
+    privyWalletSource,
+    /isUserRejection\(switchErr\)\) throw switchErr;[\s\S]*switchErr\.name === "TimeoutError"[\s\S]*Network switch timed out/,
+    "external wallet switch rejection or timeout must not trigger a duplicate fallback prompt",
+  );
+  assert.match(
+    privyWalletSource,
+    /method: "eth_accounts"[\s\S]*setProviderExternalWalletAddress\(providerAccount\)[\s\S]*from: providerAccount/,
+    "external transfers must use the account currently selected in the provider instead of a stale Privy wallet-list address",
+  );
+  assert.match(
+    privyWalletSource,
+    /accountsChanged[\s\S]*setProviderExternalWalletAddress\(getProviderSelectedAddress\(accounts\)\)/,
+    "wallet settings must refresh the displayed external address after an injected-wallet account change",
+  );
+  assert.match(
+    privyWalletSource,
+    /"External wallet eth_chainId"/,
+    "external wallet chain verification must be time bounded",
   );
   const globalErrorSource = readFileSync("app/global-error.tsx", "utf8");
   assert.match(
@@ -1337,8 +1399,13 @@ async function main() {
   const globalStatsSource = readFileSync("app/hooks/useGlobalStats.ts", "utf8");
   assert.match(
     globalStatsSource,
-    /epochToFetch\s*>\s*BigInt\(Number\.MAX_SAFE_INTEGER\)/,
-    "global stats must not coerce unsafe bigint epochs to Number",
+    /fetch\("\/api\/global-stats", \{ cache: "no-store", signal: controller\.signal \}\)/,
+    "global stats must use the indexer-backed aggregate API instead of rescanning chain logs in every browser",
+  );
+  assert.doesNotMatch(
+    globalStatsSource,
+    /\.getLogs\(/,
+    "global stats must not perform historical eth_getLogs scans in the browser",
   );
   const mappedDeposits = depositHistory.mapDepositEntries(
     [
@@ -1567,6 +1634,11 @@ async function main() {
   const liveStateSharedSource = readFileSync("app/api/live-state/shared.ts", "utf8");
   assert.match(
     liveStateSharedSource,
+    /LIVE_STATE_LOG_SCAN_CHUNK = 10_000n/,
+    "live-state RPC scans must stay within the Linea public RPC 10k-block range limit",
+  );
+  assert.match(
+    liveStateSharedSource,
     /isSafePositiveInteger/,
     "live-state bootstrap must use safe current epoch validation",
   );
@@ -1586,6 +1658,16 @@ async function main() {
     "live-state stored current epoch check must reject unsafe integers",
   );
   const jackpotsServiceSource = readFileSync("app/api/_lib/jackpotsService.ts", "utf8");
+  assert.match(
+    jackpotsServiceSource,
+    /JACKPOT_LOG_SCAN_CHUNK = 10_000n[\s\S]*JACKPOT_BOOTSTRAP_SCAN_CHUNK = 10_000n/,
+    "jackpot RPC scans must stay within the Linea public RPC 10k-block range limit",
+  );
+  assert.match(
+    jackpotsServiceSource,
+    /message\.includes\("range"\) && message\.includes\("exceeds limit"\)/,
+    "jackpot RPC scans must recognize provider block-range limit errors",
+  );
   assert.match(
     jackpotsServiceSource,
     /function parseStoredBlockNumber/,
@@ -1661,6 +1743,12 @@ async function main() {
     "rebates API stale refresh must skip unchanged indexed-data watermarks for a bounded interval",
   );
   const liveRoundCanarySource = readFileSync("scripts/live-round-canary.ts", "utf8");
+  const createCanaryDraftSource = readFileSync("scripts/create-canary-proof-draft.mjs", "utf8");
+  assert.doesNotMatch(
+    createCanaryDraftSource,
+    /TODO: verified\/pass/,
+    "canary draft instructions must not suggest a combined status rejected by the strict validator",
+  );
   assert.match(
     liveRoundCanarySource,
     /LIVE_TEST_RANDOMIZE_ROUNDS/,
@@ -1695,6 +1783,16 @@ async function main() {
     liveRoundCanarySource,
     /walletPreflight ready=.*roles=.*\n.*if \(VERBOSE_WALLET_PREFLIGHT\) console\.table\(rows\)/s,
     "live canary must default to a redacted wallet preflight summary",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /let emptyResolveBootstrapUsed = false[\s\S]*emptyEpoch && \(!ALLOW_EMPTY_RESOLVE \|\| emptyResolveBootstrapUsed\)[\s\S]*emptyEpoch && receipt\.status === "success"\) emptyResolveBootstrapUsed = true/,
+    "live canary must allow at most one explicit empty-epoch bootstrap",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /empty expired epoch.*blocks live canary[\s\S]*classified\.kind === "empty-epoch-blocked"\) throw error/,
+    "live canary must fail fast instead of repeating timeouts after an unresolvable empty epoch",
   );
 
   const indexerSource = readFileSync("scripts/indexer.ts", "utf8");
@@ -1934,6 +2032,29 @@ async function main() {
     miningGridSource,
     /showUserBadge[\s\S]*hasDisplayedStake[\s\S]*showUserBadge &&/,
     "mining grid must hide the player badge on display-zero tiles",
+  );
+  assert.doesNotMatch(
+    miningGridSource,
+    /disabled=\{!liveStateReady \|\| isRevealing \|\| isAnalyzing\}/,
+    "an expired quiet epoch must remain selectable so the next bet can atomically advance it",
+  );
+  const manualBetFormSource = readFileSync("app/hooks/useManualBetForm.ts", "utf8");
+  assert.doesNotMatch(
+    manualBetFormSource,
+    /isRevealing \|\| isAnalyzing/,
+    "manual bets must not be disabled solely because an expired epoch is awaiting atomic resolution",
+  );
+  const manualBetPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
+  assert.doesNotMatch(
+    manualBetPanelSource,
+    /quickPickDisabled[^\n]*isAnalyzing/,
+    "quick picks must stay available for a quiet expired epoch",
+  );
+  const pageRuntimeEffectsSource = readFileSync("app/hooks/usePageRuntimeEffects.ts", "utf8");
+  assert.doesNotMatch(
+    pageRuntimeEffectsSource,
+    /handleTileClick\(id,\s*isRevealingRef\.current\s*\|\|\s*isAnalyzingRef\.current\)/,
+    "tile selection must not silently no-op while a quiet expired epoch is awaiting atomic resolution",
   );
 
   assert.equal(networkRetry.getNetworkRetryDelayMs(0, 500, 10_000), 500);

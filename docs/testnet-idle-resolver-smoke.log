@@ -1,0 +1,17 @@
+Testnet activity-aware resolver smoke
+Checked: 2026-07-10
+Network: Linea Sepolia
+Log: data/live-test-runs/live-canary-2026-07-10T14-30-42-205Z.jsonl
+
+Configuration:
+- 2 controlled auto-miner rounds across AUTOMINER_A and AUTOMINER_B.
+- Randomized total bet amounts 1000..3000 LINEA and 1..5 tiles.
+- LIVE_TEST_ALLOW_EMPTY_RESOLVE=1 was set only to bootstrap one already-expired empty epoch.
+
+Result: PASS
+- 2 successful bets in 2 unique epochs (1993, 1994).
+- Modes: single and bitmap.
+- 0 failed bets, 0 failed resolves, 0 nonce gaps, 0 duplicate successful hashes.
+- 2 resolve transactions: one explicit empty bootstrap for epoch 1992, then one resolve for the bet-bearing epoch 1993.
+
+This is a focused idle-policy smoke, not a replacement for the completed 50-epoch canary.
