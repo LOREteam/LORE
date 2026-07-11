@@ -143,7 +143,14 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `DONE` current pre-canary `proof:local` passed L1–L14. L14 correctly treated
   the strict launch result as an expected failure: 13 launch checks remain
   missing because external mainnet evidence has not been collected.
-- `OPEN` consume and validate the completed 300-round canary proof.
+- `DONE` an in-progress strict testnet analysis of the 300-round log found zero
+  failed bets/resolves, nonce gaps, duplicate hashes, duplicate role/epoch/tile
+  keys, or malformed JSONL records. It also proved every event uses the generic
+  `unlabeled-rpc` marker, so this run cannot replace strict target-RPC proof.
+  Future `live:canary` runs now fail before transactions unless a concrete
+  redacted `LIVE_CANARY_RPC_LABEL` is configured.
+- `OPEN` consume the completed 300-round run as soak evidence and preserve the
+  accepted labeled 50-epoch 2026-07-10 log as the current strict testnet proof.
 - `OPEN` run `proof:local` and the applicable mainnet/readiness proof gates after
   the canary changes are committed or explicitly excluded.
 - `DONE` cleanup-branch review against `f7cb349`: 42 commits change 115 files
