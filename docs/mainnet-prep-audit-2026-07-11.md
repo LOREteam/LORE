@@ -104,8 +104,11 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   listener leak was identified.
 - `OPEN` an authenticated Privy session was confirmed and its console sources
   were attributed, but the connected Chrome surface does not expose Resource
-  Timing or network events. A request-count measurement is still required to
-  quantify the removed balance observer.
+  Timing or network events. A post-canary Chrome retry loaded the local app with
+  zero console errors, but remained at `Wallet Loading`; its read-only Resource
+  Timing probe explicitly reported `supported=false` and zero entries. A real
+  authenticated request-count measurement is still required to quantify the
+  removed balance observer.
 - `OPEN` React Profiler evidence is still required before changing component
   boundaries. Static review shows memoized section components, but a measured
   rerender hotspot has not yet been established. A temporary React 19 DevTools
@@ -119,10 +122,10 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   so no speculative split was accepted.
 - `OPEN` verify local CSP/resource errors on the intended deployment origin.
   Local wallet-provider startup produced either zero errors or four CSP plus one
-  resource error depending on run; no local API response failed. The latest
-  authenticated dev reload instead hit a stale `ChunkLoadError` twice while the
-  isolated production build remained green; the long-running user dev server
-  was intentionally not restarted during the active canary.
+  resource error depending on run; no local API response failed. A prior
+  authenticated dev reload hit a stale `ChunkLoadError` twice; the post-canary
+  Chrome retry loaded without console errors but did not restore Privy state.
+  The isolated production build remains green.
 - `DONE` final local mobile reruns at 390x844 measured LCP 1.272–1.288 s, CLS 0,
   2.090 MiB transfer, and zero horizontal overflow.
 - `OPEN` run the browser baseline at the intended production origin before
@@ -159,8 +162,8 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   `proof:local` L1-L14, and the accepted labeled 50-epoch strict testnet canary
   proof all passed. The mainnet launch proof remains an expected strict failure
   because its external evidence has not been collected.
-- `DONE` the final cleanup-branch review against `f7cb349` covers 48 commits and
-  116 changed files, with 1,023 text additions and 2,490 deletions, no generated
+- `DONE` the final cleanup-branch review against `f7cb349` covers 49 commits and
+  116 changed files, with 1,026 text additions and 2,490 deletions, no generated
   or binary additions, and no whitespace errors. All six remaining tracked
   assets over 1 MiB have production references.
 - `OPEN` push the cleanup branch only with explicit user authorization. The
