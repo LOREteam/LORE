@@ -71,7 +71,10 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   removed balance observer; clean browser contexts cannot exercise that query.
 - `OPEN` React Profiler evidence is still required before changing component
   boundaries. Static review shows memoized section components, but a measured
-  rerender hotspot has not yet been established.
+  rerender hotspot has not yet been established. A temporary React 19 DevTools
+  root-hook probe was rejected because its callback count included internal
+  commit/passive cycles and contradicted the near-idle CPU baseline; no
+  memoization change was accepted from that invalid signal.
 - `OPEN` investigate the 308 KiB transferred / 1.04 MiB decoded initial JS chunk
   with a bundle analyzer or source map before splitting it.
 - `OPEN` verify local CSP/resource errors on the intended deployment origin.
