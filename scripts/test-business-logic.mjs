@@ -1904,6 +1904,28 @@ async function main() {
     /data-testid="chat-profile-save"/,
     "chat profile save action must expose a stable smoke-test selector",
   );
+  const chatAuthRouteSource = readFileSync("app/api/chat/auth/route.ts", "utf8");
+  assert.match(
+    chatAuthRouteSource,
+    /return publicClient\.verifyMessage\(/,
+    "chat auth must verify the intended personal-sign message",
+  );
+  assert.doesNotMatch(
+    chatAuthRouteSource,
+    /recoverAddress|keccak256\(toBytes\(message\)\)/,
+    "chat auth must not accept raw eth_sign digest recovery as a login fallback",
+  );
+  const useChatAuthSource = readFileSync("app/hooks/useChatAuth.ts", "utf8");
+  assert.match(
+    useChatAuthSource,
+    /method: "personal_sign"/,
+    "chat auth must request personal_sign from injected wallets",
+  );
+  assert.doesNotMatch(
+    useChatAuthSource,
+    /method: "eth_sign"/,
+    "chat auth must not ask wallets for raw eth_sign fallback signatures",
+  );
 
   const previousLocalStorage = globalThis.localStorage;
   try {

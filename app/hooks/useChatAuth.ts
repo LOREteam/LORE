@@ -130,21 +130,12 @@ export function useChatAuth(walletAddress: string | null, uiTitle = "Verify wall
         if (targetWallet) {
           const provider = (await targetWallet.getEthereumProvider()) as Eip1193Provider;
           const messageHex = toHex(message);
-          try {
-            signature = String(
-              await provider.request({
-                method: "personal_sign",
-                params: [messageHex, normalizedWallet],
-              }),
-            );
-          } catch {
-            signature = String(
-              await provider.request({
-                method: "eth_sign",
-                params: [normalizedWallet, messageHex],
-              }),
-            );
-          }
+          signature = String(
+            await provider.request({
+              method: "personal_sign",
+              params: [messageHex, normalizedWallet],
+            }),
+          );
         } else {
           const result = await signMessage(
             { message },

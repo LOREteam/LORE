@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getAddress, isAddressEqual, keccak256, recoverAddress, toBytes } from "viem";
 import { APP_CHAIN_ID } from "../../../lib/constants";
 import {
   CHAT_AUTH_PROOF_TTL_MS,
@@ -37,22 +36,11 @@ function buildLegacyProofKey(address: string, nonce: string, signature: string) 
 }
 
 async function verifyChatSignature(address: `0x${string}`, message: string, signature: `0x${string}`) {
-  const verifiedPersonalSign = await publicClient.verifyMessage({
+  return publicClient.verifyMessage({
     address,
     message,
     signature,
   });
-  if (verifiedPersonalSign) return true;
-
-  try {
-    const recoveredRawSigner = await recoverAddress({
-      hash: keccak256(toBytes(message)),
-      signature,
-    });
-    return isAddressEqual(getAddress(address), recoveredRawSigner);
-  } catch {
-    return false;
-  }
 }
 
 export async function POST(request: NextRequest) {
