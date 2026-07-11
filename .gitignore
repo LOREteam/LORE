@@ -51,6 +51,7 @@ artifacts/*.pid
 artifacts/jackpot-preview/
 artifacts/jackpot-pages/
 artifacts/manual-check/
+artifacts/performance/
 artifacts/smoke-browser/
 artifacts/solc/
 /.playwright-mcp/
