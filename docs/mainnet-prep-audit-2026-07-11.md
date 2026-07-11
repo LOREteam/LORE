@@ -60,14 +60,31 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `DONE` duplicate wallet polling: the second identical
   `balanceOf(embeddedWallet)` wagmi observer was removed while keeping the
   original 12/45-second visible/hidden interval and refetch handle.
-- `DONE` secondary UI requests, including chat read/write requests, now have
-  abort-aware 12-second timeouts. Telegram alert requests have a 10-second
+- `DONE` React Query/wagmi cache audit: the application has one QueryClient with
+  a 10-second default `staleTime` and focus refetch disabled, no manual query
+  keys or invalidation calls, and contract reads derive keys from
+  chain/address/function/args. Grid prefetches use distinct epoch arguments;
+  identical resolver reads share the same TanStack query key. No live polling
+  interval was reduced without runtime evidence.
+- `DONE` chat, auth, admin, deposits/epochs/rewards, rebate, recent-wins,
+  jackpot, leaderboard, profile, and address-name UI requests now have
+  abort-aware 12-second timeouts. Bootstrap resolve and live-state retain their
+  existing custom request bounds. Telegram alert requests have a 10-second
   timeout; bot retry/backoff remains intact.
   Indexer RPC reads already use timeout/retry and its watch loop has an overlap
   guard.
+- `OPEN` the one-per-epoch global-stats request still uses a caller abort without
+  a timeout. Its source-level invariant currently requires a literal `fetch`
+  expression in the dirty canary test file; update the implementation and the
+  invariant together after the canary changes are committed or excluded.
 - `DONE` duplicated stored block/epoch parsing in deposits, recent wins, and
   jackpot service now delegates to one tested validation contract.
 - `DONE` two admin action timers are cleared on unmount and replacement.
+- `DONE` timer/listener/retry-loop audit: DOM listeners are paired with cleanup,
+  mining and jackpot timers are cancelled by lifecycle effects, auto-resolve
+  loops check cancellation, indexer watch rejects overlap, and keeper/supervisor
+  loops have bounded waits plus SIGINT/SIGTERM handling. No additional app-owned
+  listener leak was identified.
 - `OPEN` an authenticated Privy session was confirmed and its console sources
   were attributed, but the connected Chrome surface does not expose Resource
   Timing or network events. A request-count measurement is still required to
