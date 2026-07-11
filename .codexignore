@@ -13,6 +13,7 @@ temp/
 .next-check/
 .next-build-check/
 .next-verify/
+.next-isolated/
 .ms-playwright/
 .playwright-cli/
 .playwright-mcp/

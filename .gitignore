@@ -22,6 +22,7 @@
 /.next-check/
 /.next-build-check/
 /.next-verify/
+/.next-isolated/
 /.ms-playwright/
 /out/
 
