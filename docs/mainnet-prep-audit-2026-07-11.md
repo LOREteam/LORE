@@ -38,10 +38,10 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `DONE` five unreferenced failed/incomplete 2026-07-11 canary JSONL files and
   their four closed stdout/stderr logs were moved to the ignored dated archive;
   the accepted 2026-07-10 logs and active 300-round log stayed in place.
-- `OPEN` `LoreIntro.tsx` and `useAddressNames.ts` have no production importer,
-  but their source invariants are currently in the dirty canary test file.
-  Recheck and remove or retain them only after those test changes are committed
-  or explicitly excluded.
+- `DONE` `LoreIntro.tsx` and `useAddressNames.ts` had no production importer and
+  were removed with only their obsolete test-only invariants. The unrelated
+  canary hunks in the same test file were excluded through partial staging;
+  `kael-hero.png` was retained because White Paper still imports it.
 - `OPEN` repeat the secret/redaction audit after the accepted canary artifact is
   archived, then remove obsolete ignored wallet/session files; never commit raw
   RPC URLs, wallet/session data, or alert tokens.
