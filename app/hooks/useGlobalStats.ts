@@ -8,6 +8,7 @@ import {
 import { formatLineaAmountFixed } from "../lib/tokenAmountMath";
 
 const STORAGE_KEY = `lore:global-stats-cache:v4:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+const GLOBAL_STATS_REQUEST_TIMEOUT_MS = 12_000;
 
 export interface GlobalStats {
   totalVolume: string;
@@ -132,6 +133,11 @@ export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
     if (currentEpoch > BigInt(Number.MAX_SAFE_INTEGER)) return;
 
     const controller = new AbortController();
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort(new DOMException("Global stats request timed out", "TimeoutError"));
+    }, GLOBAL_STATS_REQUEST_TIMEOUT_MS);
     if (accRef.current === null && mountedRef.current) setLoading(true);
     void fetch("/api/global-stats", { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
@@ -167,10 +173,14 @@ export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
         // Non-critical: keep the last indexer-backed value when the API is unavailable.
       })
       .finally(() => {
-        if (mountedRef.current && !controller.signal.aborted) setLoading(false);
+        window.clearTimeout(timeoutId);
+        if (mountedRef.current && (!controller.signal.aborted || timedOut)) setLoading(false);
       });
 
-    return () => controller.abort();
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [currentEpoch, enabled]);
 
   return { stats, loading };
