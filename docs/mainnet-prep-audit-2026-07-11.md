@@ -104,11 +104,12 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   listener leak was identified.
 - `OPEN` an authenticated Privy session was confirmed and its console sources
   were attributed, but the connected Chrome surface does not expose Resource
-  Timing or network events. A post-canary Chrome retry loaded the local app with
-  zero console errors, but remained at `Wallet Loading`; its read-only Resource
-  Timing probe explicitly reported `supported=false` and zero entries. A real
-  authenticated request-count measurement is still required to quantify the
-  removed balance observer.
+  Timing or network events. After the canary, a clean standard production build
+  removed stale `.next/dev` types and restored the login UI with zero console
+  errors; the Privy dialog is open for user sign-in. The read-only Resource
+  Timing probe still reports `supported=false` and zero entries. A real
+  authenticated request-count measurement is required to quantify the removed
+  balance observer.
 - `OPEN` React Profiler evidence is still required before changing component
   boundaries. Static review shows memoized section components, but a measured
   rerender hotspot has not yet been established. A temporary React 19 DevTools
@@ -162,9 +163,9 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   `proof:local` L1-L14, and the accepted labeled 50-epoch strict testnet canary
   proof all passed. The mainnet launch proof remains an expected strict failure
   because its external evidence has not been collected.
-- `DONE` the final cleanup-branch review against `f7cb349` covers 49 commits and
-  116 changed files, with 1,026 text additions and 2,490 deletions, no generated
+- `DONE` the final cleanup-branch review against `f7cb349` covers 50 commits and
+  116 changed files, with 1,027 text additions and 2,490 deletions, no generated
   or binary additions, and no whitespace errors. All six remaining tracked
   assets over 1 MiB have production references.
-- `OPEN` push the cleanup branch only with explicit user authorization. The
-  branch is intentionally local at this stage.
+- `DONE` after explicit user authorization, `codex/repo-cleanup` was pushed to
+  `origin` without force and configured to track the remote branch.
