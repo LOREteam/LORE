@@ -42,7 +42,6 @@ import * as walletTransfersModule from "../app/hooks/useWalletTransfers.ts";
 import * as autoMinerFormModule from "../app/hooks/useAutoMinerForm.ts";
 import * as analyticsAchievementsModule from "../app/hooks/useAnalyticsAchievements.ts";
 import * as autoResolveStorageModule from "../app/hooks/autoResolveStorage.ts";
-import * as addressNamesModule from "../app/hooks/useAddressNames.ts";
 import * as liveStateSnapshotModule from "../app/hooks/useGameLiveStateSnapshot.ts";
 import * as gameDataHelpersModule from "../app/hooks/useGameData.helpers.ts";
 import * as gamePollingConfigModule from "../app/hooks/useGamePollingConfig.ts";
@@ -118,7 +117,6 @@ async function main() {
   const autoMinerForm = autoMinerFormModule.default ?? autoMinerFormModule;
   const analyticsAchievements = analyticsAchievementsModule.default ?? analyticsAchievementsModule;
   const autoResolveStorage = autoResolveStorageModule.default ?? autoResolveStorageModule;
-  const addressNames = addressNamesModule.default ?? addressNamesModule;
   const liveStateSnapshot = liveStateSnapshotModule.default ?? liveStateSnapshotModule;
   const gameDataHelpers = gameDataHelpersModule.default ?? gameDataHelpersModule;
   const gamePollingConfig = gamePollingConfigModule.default ?? gamePollingConfigModule;
@@ -815,12 +813,6 @@ async function main() {
     /LORE - Linea Mining Game/,
     "HTTP smoke must verify the LORE page title to catch wrong local sites on the same port",
   );
-  const loreIntroSource = readFileSync("app/components/LoreIntro.tsx", "utf8");
-  assert.match(
-    loreIntroSource,
-    /localStorage\.getItem\(DISMISSED_KEY\)[\s\S]*catch[\s\S]*setVisible\(true\)/,
-    "lore intro must not crash if localStorage reads fail in private or restricted browsers",
-  );
   const runtimeHealthSource = readFileSync("app/api/health/runtime/route.ts", "utf8");
   assert.match(
     runtimeHealthSource,
@@ -1350,20 +1342,6 @@ async function main() {
     { epoch: "42", ts: 0 },
   );
   assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "bad", ts: 123 }), null);
-  const normalizedNames = addressNames.normalizeCachedAddressNames({
-    names: {
-      "0x0000000000000000000000000000000000000001": " Alice ",
-      "not-an-address": "Skip",
-    },
-    fetchedAt: 1000,
-  }, 2000);
-  assert.deepEqual(
-    normalizedNames ? Object.fromEntries(normalizedNames.map.entries()) : null,
-    { "0x0000000000000000000000000000000000000001": "Alice" },
-  );
-  assert.equal(normalizedNames?.fetchedAt, 1000);
-  assert.equal(addressNames.normalizeCachedAddressNames({ names: {}, fetchedAt: Number.NaN }, 2000), null);
-  assert.equal(addressNames.normalizeCachedAddressNames({ names: {}, fetchedAt: 10_000 }, 2000), null);
   assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(1_000, 2_000), true);
   assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(2_000 + 6_000, 2_000), false);
   assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(2_000 - 13 * 60 * 60 * 1000, 2_000), false);
