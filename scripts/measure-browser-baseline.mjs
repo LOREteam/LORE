@@ -5,12 +5,25 @@ import { findExecutablePath, warmBaseUrl } from "./smoke-browser-lib/core.mjs";
 
 const BASE_URL = process.env.BASELINE_BASE_URL || "http://localhost:3000";
 const OBSERVE_MS = Number.parseInt(process.env.BASELINE_OBSERVE_MS || "10000", 10);
+const VIEWPORT_TEXT = process.env.BASELINE_VIEWPORT || "1440x900";
 const OUTPUT_PATH = path.resolve(
   process.env.BASELINE_OUT || "artifacts/performance/browser-baseline.json",
 );
 
 if (!Number.isFinite(OBSERVE_MS) || OBSERVE_MS < 1_000 || OBSERVE_MS > 120_000) {
   throw new Error("BASELINE_OBSERVE_MS must be between 1000 and 120000");
+}
+
+const viewportMatch = /^(\d{3,4})x(\d{3,4})$/.exec(VIEWPORT_TEXT);
+if (!viewportMatch) {
+  throw new Error("BASELINE_VIEWPORT must use WIDTHxHEIGHT, for example 390x844");
+}
+const viewport = {
+  width: Number.parseInt(viewportMatch[1], 10),
+  height: Number.parseInt(viewportMatch[2], 10),
+};
+if (viewport.width < 320 || viewport.width > 3840 || viewport.height < 320 || viewport.height > 3840) {
+  throw new Error("BASELINE_VIEWPORT dimensions must be between 320 and 3840 pixels");
 }
 
 const browserCandidates = [
@@ -28,7 +41,7 @@ const browser = await chromium.launch({ executablePath, headless: true });
 
 try {
   const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
+    viewport,
     serviceWorkers: "block",
   });
   const page = await context.newPage();
@@ -160,6 +173,8 @@ try {
         transferBytes: entry.transferSize || 0,
         decodedBytes: entry.decodedBodySize || 0,
       })),
+      viewportWidth: window.innerWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
       domNodes: document.getElementsByTagName("*").length,
       jsHeapUsedBytes: memory?.usedJSHeapSize ?? null,
       jsHeapTotalBytes: memory?.totalJSHeapSize ?? null,
@@ -170,7 +185,7 @@ try {
   const report = {
     schemaVersion: 1,
     startedAt,
-    target: { kind: "local", origin: baseOrigin, viewport: "1440x900" },
+    target: { kind: "local", origin: baseOrigin, viewport: VIEWPORT_TEXT },
     observationMs: OBSERVE_MS,
     vitals: {
       fcpMs: round(metrics.fcp),
@@ -185,6 +200,11 @@ try {
       domContentLoadedMs: round(metrics.navigation?.domContentLoaded),
       loadMs: round(metrics.navigation?.load),
       transferredBytes: metrics.navigation?.transferredBytes ?? null,
+    },
+    layout: {
+      viewportWidth: metrics.viewportWidth,
+      documentScrollWidth: metrics.documentScrollWidth,
+      horizontalOverflowPx: Math.max(0, metrics.documentScrollWidth - metrics.viewportWidth),
     },
     resources: {
       count: metrics.resourceCount,

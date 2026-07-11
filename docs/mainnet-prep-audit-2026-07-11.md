@@ -77,8 +77,10 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `OPEN` verify local CSP/resource errors on the intended deployment origin.
   Local wallet-provider startup produced either zero errors or four CSP plus one
   resource error depending on run; no local API response failed.
-- `OPEN` run the browser baseline at the mobile viewport and intended production
-  origin before sign-off.
+- `DONE` local mobile baseline at 390x844 measured LCP 1.060–1.328 s, CLS 0,
+  2.089–2.090 MiB transfer, and zero horizontal overflow.
+- `OPEN` run the browser baseline at the intended production origin before
+  sign-off.
 
 ## Final gates
 

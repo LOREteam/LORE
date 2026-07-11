@@ -19,6 +19,10 @@ The final transfer is about 91% below the original observation. LCP values are
 local-run measurements and should be compared as a range, not as a production
 SLO.
 
+At 390x844 the two local production runs measured 2.089–2.090 MB transfer,
+LCP 1.060–1.328 s, CLS 0, and zero horizontal overflow
+(`documentScrollWidth === viewportWidth === 390`).
+
 ## Build output
 
 `npm.cmd run baseline:bundle` measured the static production output in
@@ -67,6 +71,7 @@ $env:NEXT_DIST_DIR='.next-isolated'
 $env:NEXT_TSCONFIG_PATH='tsconfig.build.json'
 node .\node_modules\next\dist\bin\next start --port 3002
 $env:BASELINE_BASE_URL='http://localhost:3002'
+$env:BASELINE_VIEWPORT='390x844' # optional; defaults to 1440x900
 npm.cmd run baseline:browser
 $env:SMOKE_BASE_URL='http://localhost:3002'
 npm.cmd run smoke:http
