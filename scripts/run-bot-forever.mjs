@@ -9,6 +9,7 @@ const ALERT_BOT_TOKEN = process.env.ALERT_TELEGRAM_BOT_TOKEN ?? "";
 const ALERT_CHAT_ID = process.env.ALERT_TELEGRAM_CHAT_ID ?? "";
 const ALERT_THREAD_ID = process.env.ALERT_TELEGRAM_THREAD_ID ?? "";
 const ALERT_PREFIX = process.env.ALERT_PREFIX ?? "LORE Supervisor";
+const ALERT_REQUEST_TIMEOUT_MS = 10_000;
 
 let stopping = false;
 const MIN_UPTIME_MS = 5000;
@@ -55,6 +56,7 @@ async function sendAlert(text, key, cooldownMs = 300000) {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
+      signal: AbortSignal.timeout(ALERT_REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
     console.error("[bot-supervisor] failed to send alert:", err);

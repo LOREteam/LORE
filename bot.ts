@@ -32,6 +32,7 @@ const ALERT_BOT_TOKEN = process.env.ALERT_TELEGRAM_BOT_TOKEN ?? "";
 const ALERT_CHAT_ID = process.env.ALERT_TELEGRAM_CHAT_ID ?? "";
 const ALERT_THREAD_ID = process.env.ALERT_TELEGRAM_THREAD_ID ?? "";
 const ALERT_PREFIX = process.env.ALERT_PREFIX ?? "LORE Keeper";
+const ALERT_REQUEST_TIMEOUT_MS = 10_000;
 const PENDING_RESOLVE_STALE_MS = (() => {
   const raw = Number(process.env.PENDING_RESOLVE_STALE_MS ?? "45000");
   if (Number.isFinite(raw) && raw > 0) return raw;
@@ -136,6 +137,7 @@ async function sendTelegramAlert(text: string, key: string, cooldownMs = ALERT_C
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body,
+        signal: AbortSignal.timeout(ALERT_REQUEST_TIMEOUT_MS),
       });
       if (res.ok) return;
       const msg = await res.text();
