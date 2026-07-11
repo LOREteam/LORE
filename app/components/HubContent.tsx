@@ -134,6 +134,7 @@ export const HubContent = React.memo(function HubContent({
           src="/jackpot-og-weekly-painted.png"
           alt=""
           fill
+          priority
           sizes="100vw"
           quality={85}
           className="pointer-events-none object-cover"

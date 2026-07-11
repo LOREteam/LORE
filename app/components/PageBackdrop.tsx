@@ -22,7 +22,6 @@ export function PageBackdrop({ motionReady, reducedMotion }: PageBackdropProps) 
           src="/jackpot-og-weekly-painted.png"
           alt=""
           fill
-          priority
           sizes="100vw"
           quality={85}
           className="object-cover object-center opacity-30 scale-[1.04] md:opacity-36"
