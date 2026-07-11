@@ -29,13 +29,13 @@ LCP 1.272–1.288 s, CLS 0, and zero horizontal overflow
 `npm.cmd run baseline:bundle` measured the static production output in
 `.next-isolated`:
 
-- 219 files / 8,369,046 bytes total;
-- JavaScript: 6,974,116 bytes;
+- 219 files / 8,369,216 bytes total;
+- JavaScript: 6,974,286 bytes;
 - lazy Brotli WASM: 1,056,860 bytes;
 - CSS: 217,406 bytes;
 - local WOFF2 fonts: 120,664 bytes.
 
-The reliability changes added 957 bytes of JavaScript (about 0.011% of the
+The reliability changes added 1,127 bytes of JavaScript (about 0.013% of the
 static output) while WASM, CSS, and font totals remained unchanged.
 
 The largest JavaScript file is 1,040,594 bytes uncompressed and 308,282 bytes

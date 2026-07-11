@@ -37,8 +37,8 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   Web Vitals, resource bytes, request counts, RPC method names, heap, DOM nodes,
   long tasks, and categorized errors without URLs or payloads.
 - `DONE` reproducible bundle baseline: `npm.cmd run baseline:bundle` records the
-  static output totals and largest files. Current output is 8,369,046 bytes,
-  including 6,974,116 bytes JavaScript, 217,406 bytes CSS, and 120,664 bytes
+  static output totals and largest files. Current output is 8,369,216 bytes,
+  including 6,974,286 bytes JavaScript, 217,406 bytes CSS, and 120,664 bytes
   WOFF2.
 - `DONE` HTTP/API baseline: the warmed smoke suite passed; most routes completed
   in 3–10 ms locally, with zero smoke failures.
@@ -67,16 +67,12 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   identical resolver reads share the same TanStack query key. No live polling
   interval was reduced without runtime evidence.
 - `DONE` chat, auth, admin, deposits/epochs/rewards, rebate, recent-wins,
-  jackpot, leaderboard, profile, and address-name UI requests now have
+  jackpot, global-stats, leaderboard, profile, and address-name UI requests have
   abort-aware 12-second timeouts. Bootstrap resolve and live-state retain their
   existing custom request bounds. Telegram alert requests have a 10-second
   timeout; bot retry/backoff remains intact.
   Indexer RPC reads already use timeout/retry and its watch loop has an overlap
   guard.
-- `OPEN` the one-per-epoch global-stats request still uses a caller abort without
-  a timeout. Its source-level invariant currently requires a literal `fetch`
-  expression in the dirty canary test file; update the implementation and the
-  invariant together after the canary changes are committed or excluded.
 - `DONE` duplicated stored block/epoch parsing in deposits, recent wins, and
   jackpot service now delegates to one tested validation contract.
 - `DONE` two admin action timers are cleared on unmount and replacement.
