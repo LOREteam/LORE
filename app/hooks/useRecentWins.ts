@@ -5,6 +5,7 @@ import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { log } from "../lib/logger";
 import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 
 export interface RecentWin {
   epoch: string;
@@ -188,7 +189,10 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
     abortRef.current = controller;
 
     try {
-      const response = await fetch("/api/recent-wins", { cache: "no-store", signal: controller.signal });
+      const response = await fetchWithTimeout("/api/recent-wins", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
       if (controller.signal.aborted) return;
       const payload = await readJsonResponse<RecentWinsApiResponse>(response);
 

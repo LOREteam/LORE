@@ -7,6 +7,7 @@ import { cn } from "../lib/cn";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, CONTRACT_DEPLOY_BLOCK } from "../lib/constants";
 import { getJackpotVisualTheme, resolveJackpotVisualKind, type JackpotVisualKind } from "../lib/jackpotVisualTheme";
 import { readJsonResponse } from "../lib/readJsonResponse";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { UiButton } from "./ui/UiButton";
 
 interface JackpotApiPayload {
@@ -298,7 +299,10 @@ export const JackpotBanner = React.memo(function JackpotBanner({
 
     const fetchAmount = async (attempt: number) => {
       try {
-        const response = await fetch("/api/jackpots?fresh=1", { cache: "no-store", signal: controller.signal });
+        const response = await fetchWithTimeout("/api/jackpots?fresh=1", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
         if (controller.signal.aborted) return;
         const payload = await readJsonResponse<JackpotApiPayload>(response);
         if (!response.ok || !payload) throw new Error(`HTTP ${response.status}`);

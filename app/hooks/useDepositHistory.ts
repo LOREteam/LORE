@@ -11,6 +11,7 @@ import {
   parseLineaAmountWei,
 } from "../lib/tokenAmountMath";
 import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 
 export interface DepositEntry {
   epoch: string;
@@ -118,7 +119,7 @@ async function fetchEpochMap(epochIds: string[]) {
   for (let index = 0; index < epochIds.length; index += EPOCHS_FETCH_CHUNK) {
     const chunk = epochIds.slice(index, index + EPOCHS_FETCH_CHUNK);
     const epochsQuery = encodeURIComponent(chunk.join(","));
-    const response = await fetch(`/api/epochs?epochs=${epochsQuery}`);
+    const response = await fetchWithTimeout(`/api/epochs?epochs=${epochsQuery}`);
     if (!response.ok) continue;
     try {
       const json = (await response.json()) as { epochs?: Record<string, ApiEpoch> };
@@ -137,7 +138,7 @@ async function fetchRewardsMap(userAddress: string, epochIds: string[]) {
   const merged: Record<string, ApiRewardInfo> = {};
   for (let index = 0; index < epochIds.length; index += REWARDS_FETCH_CHUNK) {
     const chunk = epochIds.slice(index, index + REWARDS_FETCH_CHUNK);
-    const response = await fetch("/api/rewards", {
+    const response = await fetchWithTimeout("/api/rewards", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -292,7 +293,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
     }
 
     try {
-      const depositsResult = await fetch(
+      const depositsResult = await fetchWithTimeout(
         `/api/deposits?user=${normalizedUser}`,
         { cache: "no-store" },
       );

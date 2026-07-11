@@ -13,6 +13,7 @@ import {
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { delay, isUserRejection } from "../lib/utils";
 import { log } from "../lib/logger";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import {
   isSafetyPoolClaimBelowMinimum,
   MIN_SAFETY_POOL_CLAIM_FORMATTED,
@@ -545,7 +546,7 @@ export function useRebate(options?: UseRebateOptions) {
       const query = new URLSearchParams({ user: rebateAddress.toLowerCase() });
       if (options?.forceFresh) query.set("refresh", String(Date.now()));
       if (options?.includeExact) query.set("exact", "1");
-      const response = await fetch(`/api/rebates?${query.toString()}`, {
+      const response = await fetchWithTimeout(`/api/rebates?${query.toString()}`, {
         cache: "no-store",
       });
       const cacheStatus = response.headers.get("X-Rebate-Cache");
