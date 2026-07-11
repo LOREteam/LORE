@@ -141,5 +141,9 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `OPEN` consume and validate the completed 300-round canary proof.
 - `OPEN` run `proof:local` and the applicable mainnet/readiness proof gates after
   the canary changes are committed or explicitly excluded.
-- `OPEN` review the cleanup branch diff, then push it only with explicit user
-  authorization. The branch is intentionally local at this stage.
+- `DONE` cleanup-branch review against `f7cb349`: 42 commits change 115 files
+  with 949 text additions and 2,466 deletions, no runtime/proof additions, no
+  binary additions, and no whitespace errors. All six remaining tracked assets
+  over 1 MiB have production references.
+- `OPEN` push the cleanup branch only with explicit user authorization. The
+  branch is intentionally local at this stage.
