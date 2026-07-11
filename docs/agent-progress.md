@@ -4186,8 +4186,12 @@ as historical progress only.
 ## 2026-07-11 - Live Canary Empty-Epoch Fail-Fast
 
 - A 300-round Sepolia stress run reached 190 successful unique-epoch bets before missing the safe window for empty epoch 2167. With empty resolves disabled, the old runner repeated 20 three-minute safe-window timeouts and then stopped.
-- `live-round-canary.ts` now fails immediately with `empty-epoch-blocked` when a stale empty epoch cannot advance. The existing `LIVE_TEST_ALLOW_EMPTY_RESOLVE=1` override is enforced as one successful bootstrap resolve per run, so it cannot spend keeper ETH across an unbounded sequence of empty epochs.
-- `npm.cmd run test:logic` and `npm.cmd run typecheck` pass. A new 300-round run must use the explicit one-time bootstrap flag only if the current epoch is still stale and empty.
+- The runner now uses V9's existing atomic `placeBet` advance when it encounters a later expired empty epoch: the player transaction resolves that empty epoch and records its bet in the next epoch. `LIVE_TEST_ALLOW_EMPTY_RESOLVE=1` remains one successful bootstrap resolve per run, so the keeper cannot spend ETH across an unbounded sequence of empty epochs.
+- The follow-up stress run verified the recovery path across 300 successful
+  unique-epoch bets, including 225 auto-miner bets, with zero failed bets or
+  resolves, nonce gaps, duplicate hashes, or duplicate role/epoch/tile keys.
+  Because its RPC label was generic, it is archived as soak evidence and does
+  not replace the accepted labeled 50-epoch strict testnet proof.
 
 ## 2026-07-11 - Repository Cleanup Baseline
 

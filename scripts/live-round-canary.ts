@@ -86,6 +86,7 @@ type RoundPlan = {
 type RoundEvent = {
   amount: string;
   amounts?: string[];
+  atomicAdvance?: boolean;
   chainId?: number;
   contractAddress?: string;
   durationMs?: number;
@@ -214,7 +215,6 @@ function classifyError(error: unknown) {
   if (lower.includes("already known") || lower.includes("known transaction")) return { kind: "already-known", message: safeMessage };
   if (lower.includes("replacement transaction underpriced")) return { kind: "replacement-underpriced", message: safeMessage };
   if (lower.includes("epochclosing") || lower.includes("epochended")) return { kind: "late-bet", message: safeMessage };
-  if (lower.includes("empty expired epoch")) return { kind: "empty-epoch-blocked", message: safeMessage };
   if (lower.includes("safe window") || lower.includes("epoch wait")) return { kind: "epoch-window", message: safeMessage };
   if (lower.includes("alreadyresolved")) return { kind: "already-resolved", message: safeMessage };
   if (lower.includes("timernotended")) return { kind: "timer-not-ended", message: safeMessage };
@@ -334,12 +334,7 @@ async function resolveIfNeeded(params: {
   const isResolved = Boolean(epochData[3]);
   if (isResolved) return;
   const emptyEpoch = epochData[0] === 0n;
-  if (emptyEpoch && (!ALLOW_EMPTY_RESOLVE || emptyResolveBootstrapUsed)) {
-    const detail = ALLOW_EMPTY_RESOLVE
-      ? "the one-time empty bootstrap was already used"
-      : "set LIVE_TEST_ALLOW_EMPTY_RESOLVE=1 for one controlled bootstrap";
-    throw new Error(`empty expired epoch ${epoch} blocks live canary; ${detail}`);
-  }
+  if (emptyEpoch && (!ALLOW_EMPTY_RESOLVE || emptyResolveBootstrapUsed)) return;
   const epochKey = epoch.toString();
   const now = Date.now();
   if (pendingResolveEpochs.has(epochKey)) return;
@@ -446,9 +441,21 @@ async function waitForSafeWindow(params: {
     const window = await readEpochWindow(params.publicClient);
     lastWindow = window;
     if (
+      window.secondsLeft <= 0 &&
+      (params.afterEpoch == null || window.epoch > params.afterEpoch)
+    ) {
+      const epochData = await params.publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "epochs",
+        args: [window.epoch],
+      });
+      if (epochData[0] === 0n) return { ...window, atomicAdvance: true };
+    }
+    if (
       window.secondsLeft > SAFE_SECONDS_LEFT &&
       (params.afterEpoch == null || window.epoch > params.afterEpoch)
-    ) return window;
+    ) return { ...window, atomicAdvance: false };
     const now = Date.now();
     if (now >= nextHeartbeatAt) {
       writeEvent(params.logPath, {
@@ -534,6 +541,7 @@ async function ensureAllowance(params: {
 
 async function placeRound(params: {
   epoch: bigint;
+  atomicAdvance?: boolean;
   logPath: string;
   mode: BetMode;
   plan: RoundPlan;
@@ -544,7 +552,7 @@ async function placeRound(params: {
   transport: ReturnType<typeof fallback>;
   wallet: LiveWallet;
 }) {
-  const { epoch, logPath, mode, plan, publicClient, round, secondsLeft, tiles, transport, wallet } = params;
+  const { atomicAdvance = false, epoch, logPath, mode, plan, publicClient, round, secondsLeft, tiles, transport, wallet } = params;
   const startedAt = Date.now();
   const walletClient = createWalletClient({ account: wallet.account, chain: APP_CHAIN, transport });
   const nativeBalance = await publicClient.getBalance({ address: wallet.account.address });
@@ -598,11 +606,14 @@ async function placeRound(params: {
     ...fees,
   } as never);
   const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
+  // V9 advances exactly one expired epoch before recording this bet.
+  const recordedEpoch = atomicAdvance && receipt.status === "success" ? epoch + 1n : epoch;
   const event: RoundEvent = {
     amount: formatUnits(plan.amount, 18),
     amounts: mode === "arrays" ? plan.amounts.map((value) => formatUnits(value, 18)) : undefined,
+    atomicAdvance,
     durationMs: Date.now() - startedAt,
-    epoch: epoch.toString(),
+    epoch: recordedEpoch.toString(),
     gasEstimateFallback,
     gasUsed: receipt.gasUsed.toString(),
     hash,
@@ -738,16 +749,16 @@ async function main() {
     const mode = pickMode(round);
     const plan = pickRoundPlan(round, walletIndex, mode);
     try {
-      const { epoch, secondsLeft } = await waitForSafeWindow({
+      const { atomicAdvance, epoch, secondsLeft } = await waitForSafeWindow({
         afterEpoch: lastAttemptedEpoch,
         logPath,
         publicClient,
         resolver,
         transport: broadcastTransport,
       });
-      lastAttemptedEpoch = epoch;
       const tiles = pickTiles(epoch, round, walletIndex, plan.tileCount);
       const event = await placeRound({
+        atomicAdvance,
         epoch,
         logPath,
         mode,
@@ -760,10 +771,11 @@ async function main() {
         wallet,
       });
       if (event.ok) {
+        lastAttemptedEpoch = BigInt(event.epoch ?? epoch);
         successes += 1;
         console.log(
           `[live-canary] ok round=${round + 1}/${TARGET_ROUNDS} role=${wallet.role} mode=${mode} ` +
-            `total=${event.totalAmount} tiles=${plan.tileCount} epoch=${epoch} tx=${event.hash}`,
+            `total=${event.totalAmount} tiles=${plan.tileCount} epoch=${event.epoch} tx=${event.hash}`,
         );
       } else {
         failures += 1;
@@ -777,7 +789,6 @@ async function main() {
       }
     } catch (error) {
       const classified = classifyError(error);
-      if (classified.kind === "empty-epoch-blocked") throw error;
       failures += 1;
       errorKinds.set(classified.kind, (errorKinds.get(classified.kind) ?? 0) + 1);
       writeEvent(logPath, {

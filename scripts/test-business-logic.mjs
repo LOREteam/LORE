@@ -1769,13 +1769,13 @@ async function main() {
   );
   assert.match(
     liveRoundCanarySource,
-    /let emptyResolveBootstrapUsed = false[\s\S]*emptyEpoch && \(!ALLOW_EMPTY_RESOLVE \|\| emptyResolveBootstrapUsed\)[\s\S]*emptyEpoch && receipt\.status === "success"\) emptyResolveBootstrapUsed = true/,
+    /let emptyResolveBootstrapUsed = false[\s\S]*emptyEpoch && \(!ALLOW_EMPTY_RESOLVE \|\| emptyResolveBootstrapUsed\)\) return[\s\S]*emptyEpoch && receipt\.status === "success"\) emptyResolveBootstrapUsed = true/,
     "live canary must allow at most one explicit empty-epoch bootstrap",
   );
   assert.match(
     liveRoundCanarySource,
-    /empty expired epoch.*blocks live canary[\s\S]*classified\.kind === "empty-epoch-blocked"\) throw error/,
-    "live canary must fail fast instead of repeating timeouts after an unresolvable empty epoch",
+    /window\.secondsLeft <= 0[\s\S]*epochData\[0\] === 0n\) return \{ \.\.\.window, atomicAdvance: true \}[\s\S]*recordedEpoch = atomicAdvance && receipt\.status === "success" \? epoch \+ 1n : epoch/,
+    "live canary must atomically advance an expired empty epoch without paying the resolver",
   );
 
   const indexerSource = readFileSync("scripts/indexer.ts", "utf8");
@@ -1796,8 +1796,8 @@ async function main() {
   );
   assert.match(
     liveRoundCanarySource,
-    /afterEpoch\?: bigint \| null[\s\S]*window\.epoch > params\.afterEpoch[\s\S]*lastAttemptedEpoch = epoch/,
-    "canary must require a strictly newer epoch before every transaction attempt",
+    /afterEpoch\?: bigint \| null[\s\S]*window\.epoch > params\.afterEpoch[\s\S]*lastAttemptedEpoch = BigInt\(event\.epoch \?\? epoch\)/,
+    "canary must require a strictly newer epoch and retain the actual epoch after an atomic advance",
   );
   const walletPlaytestSource = readFileSync("scripts/playtest-wallet.ts", "utf8");
   assert.match(
