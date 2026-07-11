@@ -31,6 +31,15 @@ npm.cmd run build
 
 Use the dedicated test profile and funded test wallets. Record exact testnet origin, timestamp, tx hash, result, and concise error/recovery evidence for:
 
+Create a fresh ignored burner-wallet file only when one does not already exist:
+
+```powershell
+npm.cmd run live:wallets:create
+```
+
+The generator refuses to overwrite `.env.live-test-wallets`. Never print or
+copy that file into logs, reports, proof artifacts, or commits.
+
 live:canary now prints only roles and aggregate readiness by default. Keep LIVE_TEST_VERBOSE_WALLETS unset for evidence runs so addresses and balances are not emitted to the console.
 
 - connect, disconnect, reconnect, reload, wrong network, and clean-wallet first transaction;

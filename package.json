@@ -73,6 +73,7 @@
     "baseline:browser": "node scripts/measure-browser-baseline.mjs",
     "baseline:bundle": "node scripts/measure-build-output.mjs",
     "playtest:wallet": "tsx scripts/playtest-wallet.ts",
+    "live:wallets:create": "node scripts/create-live-test-wallets.mjs",
     "live:canary": "tsx scripts/live-round-canary.ts",
     "check": "node scripts/check-local.mjs",
     "postinstall": "node scripts/patch-privy-7702.mjs",
