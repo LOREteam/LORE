@@ -19,6 +19,22 @@ The final transfer is about 91% below the original observation. LCP values are
 local-run measurements and should be compared as a range, not as a production
 SLO.
 
+## Build output
+
+`npm.cmd run baseline:bundle` measured the static production output in
+`.next-isolated`:
+
+- 219 files / 8,368,089 bytes total;
+- JavaScript: 6,973,159 bytes;
+- lazy Brotli WASM: 1,056,860 bytes;
+- CSS: 217,406 bytes;
+- local WOFF2 fonts: 120,664 bytes.
+
+The largest JavaScript file is 1,040,594 bytes uncompressed and 308,282 bytes
+transferred in the browser baseline. The WASM file was not requested during the
+default Hub observation, so it is not an initial-load target without evidence
+from the wallet flows that load it.
+
 The remaining largest local resources are:
 
 - `/icon.png`: 1,019,706 bytes. A lossless PNG re-encode preserved the exact
@@ -46,6 +62,7 @@ observed local app and canary processes. The isolated production server used
 
 ```powershell
 npm.cmd run build:isolated
+npm.cmd run baseline:bundle
 $env:NEXT_DIST_DIR='.next-isolated'
 $env:NEXT_TSCONFIG_PATH='tsconfig.build.json'
 node .\node_modules\next\dist\bin\next start --port 3002

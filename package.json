@@ -71,6 +71,7 @@
     "load:http": "node scripts/load-http.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs",
     "baseline:browser": "node scripts/measure-browser-baseline.mjs",
+    "baseline:bundle": "node scripts/measure-build-output.mjs",
     "playtest:wallet": "tsx scripts/playtest-wallet.ts",
     "live:canary": "tsx scripts/live-round-canary.ts",
     "check": "node scripts/check-local.mjs",
