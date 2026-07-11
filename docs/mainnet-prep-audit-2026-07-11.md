@@ -60,15 +60,18 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `DONE` duplicate wallet polling: the second identical
   `balanceOf(embeddedWallet)` wagmi observer was removed while keeping the
   original 12/45-second visible/hidden interval and refetch handle.
-- `DONE` secondary UI requests now have abort-aware 12-second timeouts. Telegram
-  alert requests have a 10-second timeout; bot retry/backoff remains intact.
+- `DONE` secondary UI requests, including chat read/write requests, now have
+  abort-aware 12-second timeouts. Telegram alert requests have a 10-second
+  timeout; bot retry/backoff remains intact.
   Indexer RPC reads already use timeout/retry and its watch loop has an overlap
   guard.
 - `DONE` duplicated stored block/epoch parsing in deposits, recent wins, and
   jackpot service now delegates to one tested validation contract.
 - `DONE` two admin action timers are cleared on unmount and replacement.
-- `OPEN` authenticated wallet measurement is still required to quantify the
-  removed balance observer; clean browser contexts cannot exercise that query.
+- `OPEN` an authenticated Privy session was confirmed and its console sources
+  were attributed, but the connected Chrome surface does not expose Resource
+  Timing or network events. A request-count measurement is still required to
+  quantify the removed balance observer.
 - `OPEN` React Profiler evidence is still required before changing component
   boundaries. Static review shows memoized section components, but a measured
   rerender hotspot has not yet been established. A temporary React 19 DevTools
@@ -82,7 +85,10 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   so no speculative split was accepted.
 - `OPEN` verify local CSP/resource errors on the intended deployment origin.
   Local wallet-provider startup produced either zero errors or four CSP plus one
-  resource error depending on run; no local API response failed.
+  resource error depending on run; no local API response failed. The latest
+  authenticated dev reload instead hit a stale `ChunkLoadError` twice while the
+  isolated production build remained green; the long-running user dev server
+  was intentionally not restarted during the active canary.
 - `DONE` local mobile baseline at 390x844 measured LCP 1.060–1.328 s, CLS 0,
   2.089–2.090 MiB transfer, and zero horizontal overflow.
 - `OPEN` run the browser baseline at the intended production origin before
