@@ -1722,6 +1722,11 @@ async function main() {
   );
   const liveRoundCanarySource = readFileSync("scripts/live-round-canary.ts", "utf8");
   const createCanaryDraftSource = readFileSync("scripts/create-canary-proof-draft.mjs", "utf8");
+  assert.match(
+    liveRoundCanarySource,
+    /GENERIC_RPC_LABEL_RE[\s\S]*LIVE_CANARY_RPC_LABEL must be a concrete redacted RPC label/,
+    "live canary must fail before transactions when the redacted RPC label is missing or generic",
+  );
   assert.doesNotMatch(
     createCanaryDraftSource,
     /TODO: verified\/pass/,

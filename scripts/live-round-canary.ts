@@ -116,12 +116,19 @@ const attemptedResolveEpochs = new Map<string, number>();
 const pendingResolveEpochs = new Set<string>();
 let emptyResolveBootstrapUsed = false;
 const BATCH_GAS_FALLBACK = 700_000n;
+const GENERIC_RPC_LABEL_RE = /^(?:configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)(?:[-_ ]?rpc(?:[-_ ]?label)?(?:[-_ ]?required)?)?$/i;
 
 function getRpcLabel() {
   const label = process.env.LIVE_CANARY_RPC_LABEL?.trim() || process.env.LINEA_RPC_LABEL?.trim();
-  if (!label || /^https?:\/\//i.test(label)) return "unlabeled-rpc";
+  if (!label || /^https?:\/\//i.test(label) || GENERIC_RPC_LABEL_RE.test(label)) {
+    throw new Error(
+      "LIVE_CANARY_RPC_LABEL must be a concrete redacted RPC label, not a raw URL or generic placeholder",
+    );
+  }
   return label;
 }
+
+const RPC_LABEL = getRpcLabel();
 
 function isEstimateGasOutOfGasError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -187,7 +194,7 @@ function writeEvent(logPath: string, event: RoundEvent) {
     network: APP_NETWORK,
     chainId: APP_CHAIN.id,
     contractAddress: CONTRACT_ADDRESS,
-    rpcLabel: getRpcLabel(),
+    rpcLabel: RPC_LABEL,
     ...event,
   })}\n`);
 }
@@ -689,7 +696,7 @@ async function main() {
   console.log(`[live-canary] network=${APP_NETWORK} chainId=${APP_CHAIN.id}`);
   console.log(`[live-canary] contract=${CONTRACT_ADDRESS}`);
   console.log(`[live-canary] token=${LINEA_TOKEN_ADDRESS}`);
-  console.log(`[live-canary] rpcLabel=${getRpcLabel()} readRpcCount=${readRpcUrls.length} broadcastRpcCount=${broadcastRpcUrls.length}`);
+  console.log(`[live-canary] rpcLabel=${RPC_LABEL} readRpcCount=${readRpcUrls.length} broadcastRpcCount=${broadcastRpcUrls.length}`);
   console.log(
     `[live-canary] rounds=${TARGET_ROUNDS} randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +
       `total=${formatUnits(MIN_TOTAL_BET_AMOUNT, 18)}..${formatUnits(MAX_TOTAL_BET_AMOUNT, 18)} ` +
