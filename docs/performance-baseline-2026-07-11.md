@@ -35,9 +35,12 @@ LCP 1.060–1.328 s, CLS 0, and zero horizontal overflow
 - local WOFF2 fonts: 120,664 bytes.
 
 The largest JavaScript file is 1,040,594 bytes uncompressed and 308,282 bytes
-transferred in the browser baseline. The WASM file was not requested during the
-default Hub observation, so it is not an initial-load target without evidence
-from the wallet flows that load it.
+transferred in the browser baseline. Signature inspection identifies it as the
+root Privy/wallet vendor chunk (Privy, WalletConnect, Coinbase, Solana, MetaMask,
+and Porto). Secondary Privy screens remain lazy in the loadable manifest; the
+root provider stays eager to preserve wallet/session restoration. The WASM file
+was not requested during the default Hub observation, so it is not an
+initial-load target without evidence from the wallet flows that load it.
 
 The remaining largest local resources are:
 
@@ -81,11 +84,9 @@ npm.cmd run smoke:http
 
 1. Confirm production CSP/resource errors against the intended deployed origin;
    local wallet-provider traffic produced 0 or 5 categorized errors between runs.
-2. Profile the 308 KB transferred JavaScript chunk before changing bundle
-   boundaries; existing secondary tab panels are already lazy-loaded.
-3. Replace the 1 MB icon only when an approved visually equivalent source asset
+2. Replace the 1 MB icon only when an approved visually equivalent source asset
    is available; recompression alone does not reduce it.
-4. Use React Profiler on the intended origin to identify expensive rerenders.
+3. Use React Profiler on the intended origin to identify expensive rerenders.
    Do not reduce live game refresh frequencies without product evidence.
-5. Re-run this baseline on mobile and on the deployment origin before mainnet
+4. Re-run this baseline on mobile and on the deployment origin before mainnet
    sign-off.

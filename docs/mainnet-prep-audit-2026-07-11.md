@@ -75,8 +75,11 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   root-hook probe was rejected because its callback count included internal
   commit/passive cycles and contradicted the near-idle CPU baseline; no
   memoization change was accepted from that invalid signal.
-- `OPEN` investigate the 308 KiB transferred / 1.04 MiB decoded initial JS chunk
-  with a bundle analyzer or source map before splitting it.
+- `DONE` the 308 KiB transferred / 1.04 MiB decoded initial JS chunk is the root
+  wallet/auth vendor: it contains Privy, WalletConnect, Coinbase, Solana,
+  MetaMask, and Porto signatures. Privy secondary screens are already emitted as
+  lazy chunks. Moving the root provider would risk wallet/session restoration,
+  so no speculative split was accepted.
 - `OPEN` verify local CSP/resource errors on the intended deployment origin.
   Local wallet-provider startup produced either zero errors or four CSP plus one
   resource error depending on run; no local API response failed.
