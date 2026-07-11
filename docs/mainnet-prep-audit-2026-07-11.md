@@ -26,30 +26,31 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `DONE` tracked-only secret filename/pattern scan found only example env files,
   transaction/proof-shaped hex strings, and scanner fixtures. Local proof
   redaction checks passed before cleanup commits.
-- `DONE` the repeated pre-final scan found zero tracked files matching private
-  key, mnemonic, token/session-secret, or keyed-URL assignment patterns. The
-  only tracked env files are two examples; zero visible untracked files have a
-  secret-like name. Five local name candidates remain confined to ignored
-  runtime areas and their contents were not printed.
-- `OPEN` `.tmp/` still contains the active 300-round canary plus older local
-  wallet material. It must not be deleted while the canary processes are
-  running. Once the canary finishes, compare its result with tracked
-  `docs/testnet-canary-*`, archive the accepted dated proof, and remove the final
-  two runtime logs plus ignored burner-wallet file.
+- `DONE` the repeated final scan found zero tracked files matching private key,
+  mnemonic, token/session-secret, or keyed-URL assignment patterns. The only
+  tracked env files are two examples; zero visible untracked files have a
+  secret-like name. The archived 300-round soak JSONL contains no raw URL,
+  private-key, mnemonic, cookie, session-secret, or `rpcUrl` field.
+- `DONE` the 300-round canary finished with 300 successful bets, zero failed
+  bets, zero failed resolves, zero nonce gaps, and zero duplicate hashes or
+  role/epoch/tile keys. Its JSONL and stdout/stderr were moved to the ignored
+  dated evidence archive; the obsolete burner-wallet file was removed and
+  `.tmp/` no longer exists.
 - `DONE` five unreferenced failed/incomplete 2026-07-11 canary JSONL files and
   their four closed stdout/stderr logs were moved to the ignored dated archive;
-  the accepted 2026-07-10 logs and active 300-round log stayed in place.
+  the completed 300-round soak JSONL and its two runtime logs are archived
+  there too. The accepted strict 2026-07-10 testnet proof stayed in place.
 - `DONE` 124 older proof/testnet/smoke/browser/indexer/host files were moved from
   `.tmp` into the ignored dated evidence archive. Five non-evidence diagnostic
-  files and 14 empty directories were removed. `.tmp` now contains only the two
-  active canary logs and one ignored burner-wallet env file.
+  files and 14 empty directories were removed. After canary completion, the
+  final two runtime logs were archived and `.tmp` was removed.
 - `DONE` `LoreIntro.tsx` and `useAddressNames.ts` had no production importer and
   were removed with only their obsolete test-only invariants. The unrelated
   canary hunks in the same test file were excluded through partial staging;
   `kael-hero.png` was retained because White Paper still imports it.
-- `OPEN` repeat the secret/redaction audit after the accepted canary artifact is
-  archived, then remove obsolete ignored wallet/session files; never commit raw
-  RPC URLs, wallet/session data, or alert tokens.
+- `DONE` the post-archive secret/redaction audit passed and the obsolete ignored
+  burner-wallet file was removed. No raw RPC URL, wallet/session data, or alert
+  token was committed.
 
 ## Performance and reliability
 
@@ -143,19 +144,24 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `DONE` current pre-canary `proof:local` passed L1–L14. L14 correctly treated
   the strict launch result as an expected failure: 13 launch checks remain
   missing because external mainnet evidence has not been collected.
-- `DONE` an in-progress strict testnet analysis of the 300-round log found zero
-  failed bets/resolves, nonce gaps, duplicate hashes, duplicate role/epoch/tile
-  keys, or malformed JSONL records. It also proved every event uses the generic
-  `unlabeled-rpc` marker, so this run cannot replace strict target-RPC proof.
-  Future `live:canary` runs now fail before transactions unless a concrete
-  redacted `LIVE_CANARY_RPC_LABEL` is configured.
-- `OPEN` consume the completed 300-round run as soak evidence and preserve the
-  accepted labeled 50-epoch 2026-07-10 log as the current strict testnet proof.
-- `OPEN` run `proof:local` and the applicable mainnet/readiness proof gates after
-  the canary changes are committed or explicitly excluded.
-- `DONE` cleanup-branch review against `f7cb349`: 42 commits change 115 files
-  with 949 text additions and 2,466 deletions, no runtime/proof additions, no
-  binary additions, and no whitespace errors. All six remaining tracked assets
-  over 1 MiB have production references.
+- `DONE` final strict analysis of the 300-round log found 300 successful bets
+  across 300 unique epochs, including 225 successful auto-miner bets across 225
+  unique epochs, plus 298 successful resolves. It found zero failed bets or
+  resolves, nonce gaps, missing/duplicate hashes, duplicate role/epoch/tile
+  keys, or malformed JSONL records. All 887 JSONL rows parsed successfully.
+- `DONE` the completed run is classified only as soak evidence because all 602
+  target metadata checks use the generic `unlabeled-rpc` marker and its manifest
+  belongs to the accepted 50-epoch run. The labeled 2026-07-10 log remains the
+  current strict testnet proof. Future `live:canary` runs fail before
+  transactions unless a concrete redacted `LIVE_CANARY_RPC_LABEL` is configured.
+- `DONE` after the atomic-advance canary change was committed separately,
+  `test:logic`, the isolated production build and TypeScript pass, HTTP smoke,
+  `proof:local` L1-L14, and the accepted labeled 50-epoch strict testnet canary
+  proof all passed. The mainnet launch proof remains an expected strict failure
+  because its external evidence has not been collected.
+- `DONE` the final cleanup-branch review against `f7cb349` covers 48 commits and
+  116 changed files, with 1,023 text additions and 2,490 deletions, no generated
+  or binary additions, and no whitespace errors. All six remaining tracked
+  assets over 1 MiB have production references.
 - `OPEN` push the cleanup branch only with explicit user authorization. The
   branch is intentionally local at this stage.
