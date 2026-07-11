@@ -52,9 +52,19 @@ try {
   const increment = (map, key) => map.set(key, (map.get(key) || 0) + 1);
 
   await page.addInitScript(() => {
-    window.__lorePerformanceBaseline = { cls: 0, lcp: 0, longTasks: [] };
+    window.__lorePerformanceBaseline = { cls: 0, lcp: 0, lcpElement: null, longTasks: [] };
     new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) window.__lorePerformanceBaseline.lcp = entry.startTime;
+      for (const entry of list.getEntries()) {
+        window.__lorePerformanceBaseline.lcp = entry.startTime;
+        const element = entry.element;
+        window.__lorePerformanceBaseline.lcpElement = element
+          ? {
+              tag: element.tagName.toLowerCase(),
+              id: element.id.slice(0, 80) || null,
+              className: typeof element.className === "string" ? element.className.slice(0, 160) || null : null,
+            }
+          : null;
+      }
     }).observe({ type: "largest-contentful-paint", buffered: true });
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
@@ -138,6 +148,7 @@ try {
         : null,
       fcp: paints["first-contentful-paint"] ?? null,
       lcp: window.__lorePerformanceBaseline?.lcp ?? null,
+      lcpElement: window.__lorePerformanceBaseline?.lcpElement ?? null,
       cls: window.__lorePerformanceBaseline?.cls ?? null,
       longTasks: window.__lorePerformanceBaseline?.longTasks ?? [],
       resourceCount: resources.length,
@@ -164,6 +175,7 @@ try {
     vitals: {
       fcpMs: round(metrics.fcp),
       lcpMs: round(metrics.lcp),
+      lcpElement: metrics.lcpElement,
       cls: round(metrics.cls),
       inpMs: null,
       inpNote: "Not collected because the baseline performs no synthetic user action.",
