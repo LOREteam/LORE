@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo, useRef, useState, useEffect } from "react";
+import Image from "next/image";
 import { GRID_SIZE } from "../lib/constants";
 import { pickRandom, yourWinQuotes, roundWinQuotes } from "../lib/loreTexts";
 import { Confetti } from "./Confetti";
@@ -175,15 +176,17 @@ function MiningGridView({
   }, [onTileClick]);
 
   return (
-    <div
-      className="ore-board-shell relative w-full aspect-square min-h-72 overflow-hidden rounded-[1.1rem] border border-violet-200/22 bg-[#070611]/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_0_32px_rgba(124,58,237,0.12),0_18px_54px_rgba(0,0,0,0.36)] sm:min-h-80 min-[900px]:aspect-auto min-[900px]:h-[calc(100dvh-13rem)] min-[900px]:min-h-88"
-      style={{
-        backgroundImage:
-          "linear-gradient(180deg, rgba(7,6,17,0.76), rgba(7,6,17,0.9)), url('/jackpot-og-weekly-painted.png')",
-        backgroundPosition: "center bottom",
-        backgroundSize: "cover",
-      }}
-    >
+    <div className="ore-board-shell relative w-full aspect-square min-h-72 overflow-hidden rounded-[1.1rem] border border-violet-200/22 bg-[#070611]/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_0_32px_rgba(124,58,237,0.12),0_18px_54px_rgba(0,0,0,0.36)] sm:min-h-80 min-[900px]:aspect-auto min-[900px]:h-[calc(100dvh-13rem)] min-[900px]:min-h-88">
+      <Image
+        src="/jackpot-og-weekly-painted.png"
+        alt=""
+        fill
+        sizes="(min-width: 900px) 75vw, 100vw"
+        quality={85}
+        className="pointer-events-none object-cover object-bottom"
+        aria-hidden="true"
+      />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(7,6,17,0.76),rgba(7,6,17,0.9))]" />
       <div
         ref={gridRef}
         data-round-transition={roundTransitionActive ? "true" : undefined}

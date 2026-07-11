@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import Image from "next/image";
 import type { AutoMinePhase } from "../hooks/useMining.types";
 import { useManualBetForm } from "../hooks/useManualBetForm";
 import { cn } from "../lib/cn";
@@ -128,13 +129,18 @@ export const HubContent = React.memo(function HubContent({
       <section
         aria-label="Mining game stage"
         className="gameplay-stage relative overflow-hidden rounded-[1.35rem] border border-violet-300/14 bg-[#05040b]/58 p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_24px_80px_rgba(0,0,0,0.34)] backdrop-blur-md"
-        style={{
-          backgroundImage:
-            "linear-gradient(180deg, rgba(5,4,11,0.74), rgba(5,4,11,0.86)), url('/jackpot-og-weekly-painted.png')",
-          backgroundPosition: "center 42%",
-          backgroundSize: "cover",
-        }}
       >
+        <Image
+          src="/jackpot-og-weekly-painted.png"
+          alt=""
+          fill
+          sizes="100vw"
+          quality={85}
+          className="pointer-events-none object-cover"
+          style={{ objectPosition: "center 42%" }}
+          aria-hidden="true"
+        />
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(5,4,11,0.74),rgba(5,4,11,0.86))]" />
         {readOnlyReason && (
           <div
             data-testid="hub-read-only-banner"
@@ -144,7 +150,7 @@ export const HubContent = React.memo(function HubContent({
           </div>
         )}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_44%_22%,rgba(167,139,250,0.12),transparent_38%),radial-gradient(circle_at_82%_78%,rgba(34,211,238,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.04),transparent_32%)]" />
-        <div className="relative grid grid-cols-1 gap-2 min-[900px]:grid-cols-12">
+        <div className="relative z-10 grid grid-cols-1 gap-2 min-[900px]:grid-cols-12">
           <HubGameBoard
             gridDisplayEpoch={gridDisplayEpoch}
             coldBootDefaults={coldBootDefaults}
