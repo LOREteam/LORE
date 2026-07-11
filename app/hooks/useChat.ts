@@ -9,6 +9,7 @@ import {
 } from "../lib/chatMessages";
 import { getChatPollDelayMs } from "../lib/chatPollDelay";
 import { CHAT_RATE_LIMIT_MS, parseChatRetryAfterMs } from "../lib/chatRateLimit";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { type ChatAuthControls, useChatAuth } from "./useChatAuth";
 
@@ -100,7 +101,7 @@ function saveCachedMessages(messages: ChatMessage[]) {
 }
 
 async function fetchMessages(signal?: AbortSignal): Promise<ChatMessage[]> {
-  const res = await fetch("/api/chat/messages", { cache: "no-store", signal });
+  const res = await fetchWithTimeout("/api/chat/messages", { cache: "no-store", signal });
   const json = await readJsonResponse<{ messages?: ChatMessage[]; error?: string }>(res);
   if (!json) {
     throw new Error(`Empty response from /api/chat/messages (HTTP ${res.status})`);
@@ -112,7 +113,7 @@ async function fetchMessages(signal?: AbortSignal): Promise<ChatMessage[]> {
 }
 
 async function postMessage(payload: Record<string, unknown>, signal?: AbortSignal): Promise<ChatMessage | null> {
-  const res = await fetch("/api/chat/messages", {
+  const res = await fetchWithTimeout("/api/chat/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
