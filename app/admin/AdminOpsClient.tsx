@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { useAccount } from "wagmi";
 import { toHex } from "viem";
@@ -335,6 +335,17 @@ export default function AdminOpsClient() {
   const [processStates, setProcessStates] = useState<Record<"indexer" | "bot", AdminProcessState> | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [processActionBusy, setProcessActionBusy] = useState<"indexer" | "bot" | null>(null);
+  const copyResetTimeoutRef = useRef<number | null>(null);
+  const processRefreshTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (copyResetTimeoutRef.current !== null) {
+      window.clearTimeout(copyResetTimeoutRef.current);
+    }
+    if (processRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(processRefreshTimeoutRef.current);
+    }
+  }, []);
 
   const connectedAddresses = useMemo(() => {
     const values = new Set<string>();
@@ -877,7 +888,13 @@ export default function AdminOpsClient() {
     } catch {
       setCopyState("failed");
     } finally {
-      window.setTimeout(() => setCopyState("idle"), 2000);
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current);
+      }
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        copyResetTimeoutRef.current = null;
+        setCopyState("idle");
+      }, 2000);
     }
   }, [diagnosticsSnapshot]);
 
@@ -898,7 +915,11 @@ export default function AdminOpsClient() {
       }
       await fetchProcesses();
       await fetchHealth();
-      window.setTimeout(() => {
+      if (processRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(processRefreshTimeoutRef.current);
+      }
+      processRefreshTimeoutRef.current = window.setTimeout(() => {
+        processRefreshTimeoutRef.current = null;
         void fetchProcesses();
         void fetchOps();
         void fetchHealth();
