@@ -10,6 +10,9 @@ const devWatchIgnored =
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   distDir: process.env.NEXT_DIST_DIR?.trim() || ".next",
+  typescript: {
+    tsconfigPath: process.env.NEXT_TSCONFIG_PATH?.trim() || "tsconfig.json",
+  },
   allowedDevOrigins: ["localhost", "127.0.0.1"],
   reactStrictMode: true,
   outputFileTracingRoot: projectRoot,

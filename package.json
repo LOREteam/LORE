@@ -13,6 +13,7 @@
     "dev": "node scripts/dev-runner.mjs",
     "prebuild": "node scripts/patch-privy-7702.mjs",
     "build": "next build --webpack",
+    "build:isolated": "node scripts/run-isolated-build.mjs",
     "prestart": "node scripts/patch-privy-7702.mjs",
     "start": "next start --port 3001",
     "prestart:3000": "node scripts/patch-privy-7702.mjs",
