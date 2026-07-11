@@ -19,8 +19,10 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   them unused. Old raster chat avatars were removed only after confirming that
   runtime avatars are inline SVG components.
 - `DONE` direct dependency cleanup retained hidden wagmi connector requirements;
-  only redundant root markers were removed. Dependency proof reported no high
-  or critical advisories.
+  redundant root markers were removed. The burner-wallet generator now reuses
+  `viem/accounts`, removing the sole direct `ethers` dependency while preserving
+  its five-role output shape. Dependency proof reported no high or critical
+  advisories.
 - `DONE` tracked-only secret filename/pattern scan found only example env files,
   transaction/proof-shaped hex strings, and scanner fixtures. Local proof
   redaction checks passed before cleanup commits.
@@ -28,6 +30,13 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   evidence. It must not be deleted while the canary processes are running. Once
   the canary finishes, compare its result with tracked `docs/testnet-canary-*`,
   archive the accepted dated proof, and remove superseded local logs.
+- `DONE` five unreferenced failed/incomplete 2026-07-11 canary JSONL files and
+  their four closed stdout/stderr logs were moved to the ignored dated archive;
+  the accepted 2026-07-10 logs and active 300-round log stayed in place.
+- `OPEN` `LoreIntro.tsx` and `useAddressNames.ts` have no production importer,
+  but their source invariants are currently in the dirty canary test file.
+  Recheck and remove or retain them only after those test changes are committed
+  or explicitly excluded.
 - `OPEN` repeat the secret/redaction audit after the accepted canary artifact is
   archived; never commit raw RPC URLs, wallet/session data, or alert tokens.
 
