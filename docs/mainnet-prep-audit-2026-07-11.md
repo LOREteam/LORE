@@ -120,6 +120,9 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `DONE` latest isolated production build, TypeScript, targeted ESLint,
   `test:logic`, timeout/parser tests, and HTTP smoke passed for the cleanup
   branch state.
+- `DONE` current pre-canary `proof:local` passed L1–L14. L14 correctly treated
+  the strict launch result as an expected failure: 13 launch checks remain
+  missing because external mainnet evidence has not been collected.
 - `OPEN` consume and validate the completed 300-round canary proof.
 - `OPEN` run `proof:local` and the applicable mainnet/readiness proof gates after
   the canary changes are committed or explicitly excluded.
