@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import type { PublicClient } from "viem";
 import type { useWriteContract } from "wagmi";
+import type { WagmiBalanceLike } from "../lib/balanceFormatting";
 import { useEmbeddedWalletUi } from "./useEmbeddedWalletUi";
 import { usePageWalletOverview } from "./usePageWalletOverview";
 import { useWalletActions } from "./useWalletActions";
@@ -20,6 +21,9 @@ interface UseLineaOreWalletRuntimeOptions {
   address?: `0x${string}`;
   normalizedEmbeddedAddress?: `0x${string}`;
   formattedLineaBalance: string | null;
+  embeddedTokenBalance: WagmiBalanceLike;
+  embeddedTokenPending: boolean;
+  refetchEmbeddedTokenBalance: () => Promise<unknown> | unknown;
   isPageVisible: boolean;
   embeddedWalletAddress: string | null;
   externalWalletAddress: string | null;
@@ -41,6 +45,9 @@ export function useLineaOreWalletRuntime({
   address,
   normalizedEmbeddedAddress,
   formattedLineaBalance,
+  embeddedTokenBalance,
+  embeddedTokenPending,
+  refetchEmbeddedTokenBalance,
   isPageVisible,
   embeddedWalletAddress,
   externalWalletAddress,
@@ -61,6 +68,9 @@ export function useLineaOreWalletRuntime({
     address,
     normalizedEmbeddedAddress,
     formattedLineaBalance,
+    embeddedTokenBalance,
+    embeddedTokenPending,
+    refetchEmbeddedTokenBalance,
     isPageVisible,
   });
 

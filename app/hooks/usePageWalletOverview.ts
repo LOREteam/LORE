@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useBalance, useReadContract } from "wagmi";
+import { useBalance } from "wagmi";
 import { getFormattedBalance, type WagmiBalanceLike } from "../lib/balanceFormatting";
-import { APP_CHAIN_ID, CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS, TOKEN_ABI } from "../lib/constants";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 
 type CachedPrivyBalances = {
   token: string;
@@ -42,6 +42,9 @@ interface UsePageWalletOverviewOptions {
   address?: string | null;
   normalizedEmbeddedAddress?: `0x${string}` | undefined;
   formattedLineaBalance?: string | null;
+  embeddedTokenBalance: WagmiBalanceLike;
+  embeddedTokenPending: boolean;
+  refetchEmbeddedTokenBalance: () => Promise<unknown> | unknown;
   isPageVisible: boolean;
 }
 
@@ -49,6 +52,9 @@ export function usePageWalletOverview({
   address,
   normalizedEmbeddedAddress,
   formattedLineaBalance,
+  embeddedTokenBalance,
+  embeddedTokenPending,
+  refetchEmbeddedTokenBalance,
   isPageVisible,
 }: UsePageWalletOverviewOptions) {
   const [cachedBalances, setCachedBalances] = useState<CachedPrivyBalances>(EMPTY_CACHED_BALANCES);
@@ -74,29 +80,6 @@ export function usePageWalletOverview({
       setCachedBalances(EMPTY_CACHED_BALANCES);
     }
   }, [balanceCacheKey]);
-
-  const {
-    data: directEmbeddedTokenBalanceRaw,
-    isPending: embeddedTokenPending,
-    refetch: refetchEmbeddedTokenBalance,
-  } = useReadContract({
-    address: LINEA_TOKEN_ADDRESS,
-    abi: TOKEN_ABI,
-    functionName: "balanceOf",
-    args: normalizedEmbeddedAddress ? [normalizedEmbeddedAddress] : undefined,
-    chainId: APP_CHAIN_ID,
-    query: {
-      enabled: Boolean(normalizedEmbeddedAddress),
-      refetchInterval: isPageVisible ? 12_000 : 45_000,
-    },
-  });
-
-  const embeddedTokenBalance = useMemo<WagmiBalanceLike>(
-    () => directEmbeddedTokenBalanceRaw != null
-      ? { value: directEmbeddedTokenBalanceRaw as bigint, decimals: 18 }
-      : undefined,
-    [directEmbeddedTokenBalanceRaw],
-  );
 
   const { data: embeddedEthBalanceRaw, isPending: embeddedEthPending, refetch: refetchEmbeddedEthBalance } = useBalance({
     address: normalizedEmbeddedAddress,

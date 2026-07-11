@@ -26,7 +26,11 @@ export function useGameWalletContext({ preferredAddress }: UseGameWalletContextO
   }, [preferredAddress, address]);
   const isPageVisible = usePageVisibility();
 
-  const { data: directTokenBalanceRaw } = useReadContract({
+  const {
+    data: directTokenBalanceRaw,
+    isPending: tokenBalancePending,
+    refetch: refetchTokenBalance,
+  } = useReadContract({
     address: LINEA_TOKEN_ADDRESS,
     abi: TOKEN_ABI,
     functionName: "balanceOf",
@@ -51,9 +55,20 @@ export function useGameWalletContext({ preferredAddress }: UseGameWalletContextO
       chainId,
       walletAddress,
       tokenBalance,
+      tokenBalancePending,
+      refetchTokenBalance,
       isPageVisible,
       autoMineSessionActive,
     }),
-    [address, chainId, walletAddress, tokenBalance, isPageVisible, autoMineSessionActive],
+    [
+      address,
+      chainId,
+      walletAddress,
+      tokenBalance,
+      tokenBalancePending,
+      refetchTokenBalance,
+      isPageVisible,
+      autoMineSessionActive,
+    ],
   );
 }
