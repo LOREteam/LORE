@@ -117,7 +117,7 @@ try {
   });
 
   const startedAt = new Date().toISOString();
-  await page.goto(BASE_URL, { waitUntil: "networkidle", timeout: 90_000 });
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: 90_000 });
   await page.waitForTimeout(OBSERVE_MS);
 
   const metrics = await page.evaluate(() => {
@@ -143,6 +143,12 @@ try {
       resourceCount: resources.length,
       resourceTransferBytes: resources.reduce((sum, entry) => sum + (entry.transferSize || 0), 0),
       resourceDecodedBytes: resources.reduce((sum, entry) => sum + (entry.decodedBodySize || 0), 0),
+      resourceDetails: resources.map((entry) => ({
+        name: entry.name,
+        type: entry.initiatorType,
+        transferBytes: entry.transferSize || 0,
+        decodedBytes: entry.decodedBodySize || 0,
+      })),
       domNodes: document.getElementsByTagName("*").length,
       jsHeapUsedBytes: memory?.usedJSHeapSize ?? null,
       jsHeapTotalBytes: memory?.totalJSHeapSize ?? null,
@@ -173,6 +179,16 @@ try {
       transferredBytes: metrics.resourceTransferBytes,
       decodedBytes: metrics.resourceDecodedBytes,
       byType: Object.fromEntries([...resourceTypeCounts.entries()].sort()),
+      largestLocal: metrics.resourceDetails
+        .filter((entry) => isLocalTarget(new URL(entry.name)))
+        .sort((a, b) => b.transferBytes - a.transferBytes)
+        .slice(0, 12)
+        .map((entry) => ({
+          path: new URL(entry.name).pathname,
+          type: entry.type,
+          transferBytes: entry.transferBytes,
+          decodedBytes: entry.decodedBytes,
+        })),
     },
     requests: {
       sameOriginApiCount: [...apiCounts.values()].reduce((sum, count) => sum + count, 0),

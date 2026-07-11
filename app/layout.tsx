@@ -41,11 +41,7 @@ export const metadata: Metadata = {
   description: 'Mine, bet, and earn on Linea. LORE = Linea + ORE.',
   metadataBase: new URL(siteUrl),
   icons: {
-    icon: [
-      { url: '/favicon.ico', sizes: 'any' },
-      { url: '/icon.png', type: 'image/png', sizes: '512x512' },
-    ],
-    shortcut: '/favicon.ico',
+    icon: { url: '/icon.png', type: 'image/png', sizes: '512x512' },
     apple: '/icon.png',
   },
   openGraph: {
@@ -72,9 +68,6 @@ export default async function RootLayout({
   return (
     <html lang="en">
       <head>
-        <link rel="icon" href="/favicon.ico" sizes="any" />
-        <link rel="icon" href="/icon.png" type="image/png" sizes="512x512" />
-        <link rel="apple-touch-icon" href="/icon.png" />
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
         <script nonce={nonce} src="/early-runtime.js" />
       </head>
