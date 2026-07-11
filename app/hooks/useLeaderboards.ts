@@ -5,6 +5,7 @@ import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import type { LeaderboardEntry, LuckyTileEntry } from "../lib/types";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 
 const STORAGE_KEY = `lore:leaderboard:v3:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 const LEADERBOARD_CACHE_TTL_MS = 60_000;
@@ -208,7 +209,7 @@ export function useLeaderboards(enabled: boolean) {
         }
       }
 
-      const response = await fetch("/api/leaderboards", { cache: "no-store" });
+      const response = await fetchWithTimeout("/api/leaderboards", { cache: "no-store" });
       const payload = await readJsonResponse<LeaderboardsApiPayload>(response);
 
       if (!payload) {

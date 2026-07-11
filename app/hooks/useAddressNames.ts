@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readJsonResponse } from "../lib/readJsonResponse";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 
 type NameMap = Map<string, string>;
 
@@ -79,7 +80,7 @@ async function fetchChatNamesForAddresses(addresses: string[]): Promise<NameMap>
 
   try {
     const query = encodeURIComponent(missing.join(","));
-    const profileRes = await fetch(`/api/chat/profile?walletAddresses=${query}`, { cache: "no-store" });
+    const profileRes = await fetchWithTimeout(`/api/chat/profile?walletAddresses=${query}`, { cache: "no-store" });
     if (profileRes.ok) {
       const profileData = await readJsonResponse<{ profiles?: Record<string, unknown> }>(profileRes);
       if (profileData?.profiles && typeof profileData.profiles === "object") {

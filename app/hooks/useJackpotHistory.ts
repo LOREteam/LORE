@@ -6,6 +6,7 @@ import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { log } from "../lib/logger";
 import { formatLineaAmountFixed, parseLineaAmountWei } from "../lib/tokenAmountMath";
 import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 
 export interface JackpotHistoryEntry {
   epoch: string;
@@ -170,7 +171,7 @@ function saveCachedEntries(entries: JackpotHistoryEntry[]) {
 }
 
 async function fetchFromApi(): Promise<JackpotHistoryEntry[]> {
-  const res = await fetch("/api/jackpots", { cache: "no-store" });
+  const res = await fetchWithTimeout("/api/jackpots", { cache: "no-store" });
   const json = (await res.json()) as JackpotApiResponse;
   if (!res.ok || json.error) {
     throw new Error(json.error || `HTTP ${res.status}`);

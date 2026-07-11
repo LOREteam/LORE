@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { sanitizeCustomChatAvatar, sanitizePresetChatAvatar } from "../lib/chatAvatar";
 import { loadChatAuthSession } from "../lib/chatSessionClient";
 import { readJsonResponse } from "../lib/readJsonResponse";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { type ChatAuthControls, useChatAuth } from "./useChatAuth";
 
 const LEGACY_STORAGE_KEY = "lore:chat-profile";
@@ -83,7 +84,7 @@ function newerProfile(a: ChatProfile | null, b: ChatProfile | null): ChatProfile
 
 async function fetchRemoteProfile(walletAddress: string): Promise<ChatProfile | null> {
   try {
-    const res = await fetch(`/api/chat/profile?walletAddress=${walletAddress.toLowerCase()}`, { cache: "no-store" });
+    const res = await fetchWithTimeout(`/api/chat/profile?walletAddress=${walletAddress.toLowerCase()}`, { cache: "no-store" });
     if (!res.ok) return null;
     const json = await readJsonResponse<{ profile?: Partial<ChatProfile> | null }>(res);
     if (!json) return null;
@@ -103,7 +104,7 @@ async function saveRemoteProfile(walletAddress: string, profile: ChatProfile): P
     customAvatar: profile.customAvatar,
     updatedAt: profile.updatedAt ?? Date.now(),
   };
-  const response = await fetch("/api/chat/profile", {
+  const response = await fetchWithTimeout("/api/chat/profile", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -224,4 +225,3 @@ export function useChatProfile(walletAddress: string | null, auth?: ChatAuthCont
 function shortenAddr(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
-
