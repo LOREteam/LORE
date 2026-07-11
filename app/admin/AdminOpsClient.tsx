@@ -5,6 +5,7 @@ import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { useAccount } from "wagmi";
 import { toHex } from "viem";
 import { APP_CHAIN_ID } from "../lib/constants";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import {
   ADMIN_AUTH_WALLET,
   ADMIN_AUTH_WALLET_CONFIGURED,
@@ -374,8 +375,8 @@ export default function AdminOpsClient() {
     setErrorText(null);
     try {
       const [dataSyncRes, runtimeRes] = await Promise.all([
-        fetch("/api/health/data-sync", { cache: "no-store" }),
-        fetch("/api/health/runtime", { cache: "no-store" }),
+        fetchWithTimeout("/api/health/data-sync", { cache: "no-store" }),
+        fetchWithTimeout("/api/health/runtime", { cache: "no-store" }),
       ]);
 
       const [dataSyncJson, runtimeJson] = await Promise.all([
@@ -400,7 +401,7 @@ export default function AdminOpsClient() {
 
     setOpsLoading(true);
     try {
-      const response = await fetch("/api/admin/ops", { cache: "no-store" });
+      const response = await fetchWithTimeout("/api/admin/ops", { cache: "no-store" });
       const payload = (await response.json().catch(() => null)) as OpsData | OpsErrorPayload | null;
       const payloadError = getOpsPayloadError(payload);
       if (!response.ok || !payload || payloadError) {
@@ -421,7 +422,7 @@ export default function AdminOpsClient() {
     }
 
     try {
-      const response = await fetch("/api/admin/processes", { cache: "no-store" });
+      const response = await fetchWithTimeout("/api/admin/processes", { cache: "no-store" });
       const payload = (await response.json().catch(() => null)) as
         | AdminProcessesPayload
         | OpsErrorPayload
@@ -444,7 +445,7 @@ export default function AdminOpsClient() {
     }
 
     try {
-      const response = await fetch("/api/admin/auth", {
+      const response = await fetchWithTimeout("/api/admin/auth", {
         method: "GET",
         cache: "no-store",
       });
@@ -836,7 +837,7 @@ export default function AdminOpsClient() {
         );
       }
 
-      const response = await fetch("/api/admin/auth", {
+      const response = await fetchWithTimeout("/api/admin/auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
@@ -866,7 +867,7 @@ export default function AdminOpsClient() {
 
   const handleLogout = useCallback(async () => {
     try {
-      await fetch("/api/admin/auth", {
+      await fetchWithTimeout("/api/admin/auth", {
         method: "DELETE",
         cache: "no-store",
       });
@@ -903,7 +904,7 @@ export default function AdminOpsClient() {
     setProcessActionBusy(target);
     setErrorText(null);
     try {
-      const response = await fetch("/api/admin/processes", {
+      const response = await fetchWithTimeout("/api/admin/processes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toHex } from "viem";
 import { APP_CHAIN_ID } from "../lib/constants";
 import { buildChatAuthMessage, createChatAuthNonce } from "../lib/chatAuth";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import {
   buildFallbackChatAuthSession,
   CHAT_AUTH_SESSION_EVENT,
@@ -22,7 +23,7 @@ type Eip1193Provider = {
 };
 
 async function createChatSession(payload: Record<string, unknown>): Promise<number> {
-  const response = await fetch("/api/chat/auth", {
+  const response = await fetchWithTimeout("/api/chat/auth", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
@@ -36,7 +37,7 @@ async function createChatSession(payload: Record<string, unknown>): Promise<numb
 }
 
 async function refreshChatSession(): Promise<number> {
-  const response = await fetch("/api/chat/auth", {
+  const response = await fetchWithTimeout("/api/chat/auth", {
     method: "GET",
     cache: "no-store",
   });
