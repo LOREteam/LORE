@@ -83,7 +83,15 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `DONE` local mobile baseline at 390x844 measured LCP 1.060–1.328 s, CLS 0,
   2.089–2.090 MiB transfer, and zero horizontal overflow.
 - `OPEN` run the browser baseline at the intended production origin before
-  sign-off.
+  sign-off. The tracked candidate `https://playlore.xyz` currently resolves and
+  accepts TCP 443, but HTTPS validation fails before any HTTP response. The
+  certificate observed from this Windows host had subject
+  `CN=catnet.vspandexe.com`, issuer
+  `Kaspersky Anti-Virus Personal Root Certificate`, and
+  `RemoteCertificateNameMismatch`. This may be local TLS interception, DNS
+  filtering, or an upstream host/certificate problem; verify from an independent
+  clean network and fix the origin certificate before collecting browser or
+  production-health evidence. Do not bypass certificate validation for proof.
 
 ## Final gates
 
