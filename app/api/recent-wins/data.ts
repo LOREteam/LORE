@@ -16,6 +16,10 @@ import {
   isSafePositiveInteger,
   publicClient,
 } from "../_lib/dataBridge";
+import {
+  parseStoredBlockNumberOrZero,
+  parseStoredPositiveIntegerOrZero,
+} from "../_lib/storedNumberParsing";
 
 const RECENT_WINS_LIMIT = 100;
 const RECENT_WINS_SNAPSHOT_MAX_AGE_MS = 60 * 60 * 1000;
@@ -82,13 +86,11 @@ function parseAmountWei(value: string | undefined) {
 }
 
 function parseStoredBlockNumber(value: string | null | undefined): bigint {
-  if (!value || !/^\d+$/.test(value)) return 0n;
-  return BigInt(value);
+  return parseStoredBlockNumberOrZero(value);
 }
 
 function parseStoredEpochNumber(value: string | null | undefined): number {
-  const parsed = Number(value);
-  return isSafePositiveInteger(parsed) ? parsed : 0;
+  return parseStoredPositiveIntegerOrZero(value);
 }
 
 function getWinningAmountWeiForBet(row: StoredBetRow, winningTile: number) {

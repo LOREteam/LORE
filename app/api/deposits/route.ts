@@ -21,6 +21,10 @@ import {
   patchStorage,
   publicClient,
 } from "../_lib/dataBridge";
+import {
+  parseStoredBlockNumberOrZero,
+  parseStoredPositiveIntegerOrZero,
+} from "../_lib/storedNumberParsing";
 import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { createRouteCache } from "../_lib/routeCache";
@@ -111,13 +115,11 @@ function buildDepositKey(epoch: string, txHash: string, blockNumber: string): st
 }
 
 function parseStoredBlockNumber(value: string | null | undefined): bigint {
-  if (!value || !/^\d+$/.test(value)) return 0n;
-  return BigInt(value);
+  return parseStoredBlockNumberOrZero(value);
 }
 
 function parseStoredEpochNumber(value: string | null | undefined): number {
-  const parsed = Number(value);
-  return isSafePositiveInteger(parsed) ? parsed : 0;
+  return parseStoredPositiveIntegerOrZero(value);
 }
 
 function dedupeDeposits(rows: DepositRow[]): DepositRow[] {

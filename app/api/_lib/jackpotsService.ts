@@ -8,6 +8,10 @@ import {
   patchStorage,
   publicClient,
 } from "./dataBridge";
+import {
+  parseStoredBlockNumberOrZero,
+  parseStoredPositiveIntegerOrZero,
+} from "./storedNumberParsing";
 import { logRouteError } from "./routeError";
 import { markRouteBackgroundRefresh } from "./runtimeMetrics";
 
@@ -125,13 +129,11 @@ function sortJackpotsDesc(rows: JackpotRow[]) {
 }
 
 function parseStoredBlockNumber(value: string | null | undefined): bigint {
-  if (!value || !/^\d+$/.test(value)) return 0n;
-  return BigInt(value);
+  return parseStoredBlockNumberOrZero(value);
 }
 
 function parseStoredEpochNumber(value: string | null | undefined): number {
-  const parsed = Number(value);
-  return isSafePositiveInteger(parsed) ? parsed : 0;
+  return parseStoredPositiveIntegerOrZero(value);
 }
 
 function mapJackpotLog(log: JackpotLog): JackpotRow | null {
