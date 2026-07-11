@@ -26,6 +26,11 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
 - `DONE` tracked-only secret filename/pattern scan found only example env files,
   transaction/proof-shaped hex strings, and scanner fixtures. Local proof
   redaction checks passed before cleanup commits.
+- `DONE` the repeated pre-final scan found zero tracked files matching private
+  key, mnemonic, token/session-secret, or keyed-URL assignment patterns. The
+  only tracked env files are two examples; zero visible untracked files have a
+  secret-like name. Five local name candidates remain confined to ignored
+  runtime areas and their contents were not printed.
 - `OPEN` `.tmp/` still contains the active 300-round canary plus older local
   evidence. It must not be deleted while the canary processes are running. Once
   the canary finishes, compare its result with tracked `docs/testnet-canary-*`,
@@ -38,7 +43,8 @@ evidence exists; `OPEN` means mainnet preparation is not yet complete.
   Recheck and remove or retain them only after those test changes are committed
   or explicitly excluded.
 - `OPEN` repeat the secret/redaction audit after the accepted canary artifact is
-  archived; never commit raw RPC URLs, wallet/session data, or alert tokens.
+  archived, then remove obsolete ignored wallet/session files; never commit raw
+  RPC URLs, wallet/session data, or alert tokens.
 
 ## Performance and reliability
 
