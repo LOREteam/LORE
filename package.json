@@ -22,6 +22,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test:logic": "tsx scripts/test-business-logic.mjs",
+    "test:fetch-timeout": "tsx scripts/test-fetch-with-timeout.ts",
     "test:contract": "node scripts/test-contract-v9-invariants.mjs",
     "test:testnet-revert": "tsx scripts/run-testnet-revert-check.ts",
     "health:prod": "node scripts/check-production-health.mjs",
