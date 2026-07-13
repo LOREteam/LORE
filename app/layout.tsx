@@ -41,7 +41,7 @@ export const metadata: Metadata = {
   description: 'Mine, bet, and earn on Linea. LORE = Linea + ORE.',
   metadataBase: new URL(siteUrl),
   icons: {
-    icon: { url: '/icon.png', type: 'image/png', sizes: '512x512' },
+    icon: { url: '/icon-64.png', type: 'image/png', sizes: '64x64' },
     apple: '/icon.png',
   },
   openGraph: {
