@@ -95,3 +95,31 @@ npm.cmd run smoke:http
    Do not reduce live game refresh frequencies without product evidence.
 4. Re-run this baseline on the deployment origin before mainnet sign-off. The
    local mobile rerun is complete.
+
+## Current candidate refresh - 2026-07-13
+
+The current isolated production build completed successfully and retained 219
+static files / 8,371,009 bytes. JavaScript is 6,977,947 bytes, CSS is 215,538
+bytes, and the largest uncompressed wallet-vendor chunk remains 1,040,600
+bytes. Existing lazy boundaries for Analytics, Wallet Settings, chat,
+leaderboards, Safety Pool, White Paper, and FAQ remain present; the root wallet
+provider stays eager for session restoration.
+
+| Viewport | Transfer | FCP | LCP | Lab INP | CLS | Overflow |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1440x900 | 2.410 MB | 1.060 s | 1.060 s | 32 ms | 0 | 0 px |
+| 390x844 | 2.100 MB | 1.056 s | 1.056 s | 16 ms | 0 | 0 px |
+
+INP is measured from one safe synthetic sound-toggle interaction and is a local
+lab value, not field telemetry. Both runs made five same-origin API requests in
+ten seconds, including two `/api/live-state` reads; no local response failed.
+The source-level polling matrix keeps active chart/game data responsive while
+slowing inactive grid/epoch reads to 20 seconds, closed hidden chat to at least
+60 seconds, and disabling history/prefetch work that requires a visible page.
+The 25-tile grid has both a value-aware `React.memo` comparator and memoized
+individual tiles, so unrelated parent updates do not invalidate all tile rows.
+
+The local antivirus/browser environment still injected four categorized CSP
+messages and one resource message per run. The standard clean browser smoke
+filters this known local injection and passed without an application console
+regression. Production-origin CSP remains a deployment verification item.

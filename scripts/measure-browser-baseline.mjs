@@ -65,7 +65,7 @@ try {
   const increment = (map, key) => map.set(key, (map.get(key) || 0) + 1);
 
   await page.addInitScript(() => {
-    window.__lorePerformanceBaseline = { cls: 0, lcp: 0, lcpElement: null, longTasks: [] };
+    window.__lorePerformanceBaseline = { cls: 0, inp: 0, inpEvent: null, lcp: 0, lcpElement: null, longTasks: [] };
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
         window.__lorePerformanceBaseline.lcp = entry.startTime;
@@ -89,6 +89,13 @@ try {
         window.__lorePerformanceBaseline.longTasks.push(entry.duration);
       }
     }).observe({ type: "longtask", buffered: true });
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (!entry.interactionId || entry.duration <= window.__lorePerformanceBaseline.inp) continue;
+        window.__lorePerformanceBaseline.inp = entry.duration;
+        window.__lorePerformanceBaseline.inpEvent = entry.name;
+      }
+    }).observe({ type: "event", buffered: true, durationThreshold: 16 });
   });
 
   page.on("console", (message) => {
@@ -141,7 +148,15 @@ try {
 
   const startedAt = new Date().toISOString();
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: 90_000 });
-  await page.waitForTimeout(OBSERVE_MS);
+  const interactionDelayMs = Math.min(2_500, Math.max(500, Math.floor(OBSERVE_MS / 4)));
+  await page.waitForTimeout(interactionDelayMs);
+  const soundToggle = page.getByRole("button", { name: /Mute sounds|Unmute sounds/ });
+  let syntheticInteraction = false;
+  if (await soundToggle.isVisible().catch(() => false)) {
+    await soundToggle.click();
+    syntheticInteraction = true;
+  }
+  await page.waitForTimeout(Math.max(0, OBSERVE_MS - interactionDelayMs));
 
   const metrics = await page.evaluate(() => {
     const navigation = performance.getEntriesByType("navigation")[0];
@@ -163,6 +178,8 @@ try {
       lcp: window.__lorePerformanceBaseline?.lcp ?? null,
       lcpElement: window.__lorePerformanceBaseline?.lcpElement ?? null,
       cls: window.__lorePerformanceBaseline?.cls ?? null,
+      inp: window.__lorePerformanceBaseline?.inp ?? null,
+      inpEvent: window.__lorePerformanceBaseline?.inpEvent ?? null,
       longTasks: window.__lorePerformanceBaseline?.longTasks ?? [],
       resourceCount: resources.length,
       resourceTransferBytes: resources.reduce((sum, entry) => sum + (entry.transferSize || 0), 0),
@@ -192,8 +209,11 @@ try {
       lcpMs: round(metrics.lcp),
       lcpElement: metrics.lcpElement,
       cls: round(metrics.cls),
-      inpMs: null,
-      inpNote: "Not collected because the baseline performs no synthetic user action.",
+      inpMs: metrics.inp > 0 ? round(metrics.inp) : null,
+      inpEvent: metrics.inpEvent,
+      inpNote: syntheticInteraction
+        ? "Synthetic sound-toggle interaction; local lab value, not field INP."
+        : "Not collected because the sound toggle was unavailable.",
     },
     navigation: {
       ttfbMs: round(metrics.navigation?.ttfb),

@@ -4381,3 +4381,9 @@ as historical progress only.
 - The shared reduced-motion hook now uses the operating-system `prefers-reduced-motion` value when the user has not saved an explicit LORE preference, follows live OS preference changes, and preserves an explicit in-app override.
 - Browser smoke now tabs through the rendered desktop UI until it observes a visible `:focus-visible` indicator and emulates both reduced and normal motion preferences while checking the root motion state and effective animation duration.
 - `npm.cmd run typecheck`, `npm.cmd run test:logic`, and the full UI-only `npm.cmd run smoke:browser` passed. Desktop/mobile wallet selectors, grid, chart, chat, navigation, 430px responsive guards, keyboard focus, and reduced motion completed without browser errors. The UI-only process was stopped and port `3004` was verified closed.
+
+## 2026-07-13 - Current Production Performance Baseline
+
+- The isolated production build passed and retained the established lazy boundaries for Analytics, Wallet Settings, chat, leaderboards, Safety Pool, White Paper, and FAQ. Static output is 8,371,009 bytes across 219 files; the wallet-vendor root chunk remains the largest JavaScript dependency and stays eager for session recovery.
+- The browser baseline now records a safe synthetic sound-toggle Event Timing interaction instead of leaving INP empty. Desktop 1440x900 measured FCP/LCP 1.060s, lab INP 32ms, CLS 0, and no horizontal overflow; mobile 390x844 measured FCP/LCP 1.056s, lab INP 16ms, CLS 0, and no horizontal overflow.
+- Both ten-second runs made five same-origin API requests with no failed local response. Existing source and logic checks preserve visible chart freshness while slowing hidden inactive grid/epoch reads, closed chat, and inactive history work. The production-only process was stopped and port `3002` was verified closed.

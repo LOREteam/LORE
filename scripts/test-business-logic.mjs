@@ -716,6 +716,17 @@ async function main() {
     /verify system reduced-motion preference[\s\S]*emulateMedia\(\{ reducedMotion: "reduce" \}\)/,
     "browser smoke must verify the operating-system reduced-motion preference",
   );
+  const browserBaselineSource = readFileSync("scripts/measure-browser-baseline.mjs", "utf8");
+  assert.match(
+    browserBaselineSource,
+    /interactionId[\s\S]*type: "event"/,
+    "production browser baseline must observe Event Timing interactions",
+  );
+  assert.match(
+    browserBaselineSource,
+    /soundToggle\.click\(\)[\s\S]*Synthetic sound-toggle interaction/,
+    "production browser baseline must measure a safe synthetic interaction instead of leaving INP permanently empty",
+  );
   const reducedMotionSource = readFileSync("app/hooks/useReducedMotion.ts", "utf8");
   assert.match(
     reducedMotionSource,
