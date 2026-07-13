@@ -102,6 +102,43 @@ async function openLoginModalWithReload(page, options, label) {
   return openLoginModal(page, options.timeoutMs);
 }
 
+async function verifyViewportShell(browser, viewport, label, smokeOptions, pageErrors) {
+  const context = await browser.newContext({ viewport });
+  await context.addInitScript((tutorialKey) => {
+    window.localStorage.setItem(tutorialKey, "1");
+  }, FIRST_VISIT_TUTORIAL_KEY);
+  const page = await context.newPage();
+  page.on("pageerror", (error) => pageErrors.push({ message: error.message, source: label }));
+  await ensureLandingPage(page, smokeOptions);
+  const layout = await page.evaluate(() => {
+    const selectors = [
+      "main",
+      "header",
+      ".control-panel-manual",
+      ".control-panel-auto",
+    ];
+    const missing = selectors.filter((selector) => !document.querySelector(selector));
+    const outsideViewport = selectors.flatMap((selector) => {
+      const element = document.querySelector(selector);
+      if (!(element instanceof HTMLElement) && !(element instanceof SVGElement)) return [];
+      const rect = element.getBoundingClientRect();
+      return rect.left < -1 || rect.right > window.innerWidth + 1
+        ? [{ selector, left: rect.left, right: rect.right }]
+        : [];
+    });
+    return {
+      horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      missing,
+      outsideViewport,
+    };
+  });
+  await context.close();
+  if (layout.horizontalOverflow > 1 || layout.missing.length > 0 || layout.outsideViewport.length > 0) {
+    throw new Error(`${label} layout failed: ${JSON.stringify(layout)}`);
+  }
+  console.log(`PASS ${label} shell stays inside the viewport`);
+}
+
 async function main() {
   await fs.mkdir(OUTPUT_DIR, { recursive: true });
   const executablePath = await findExecutablePath(BROWSER_CANDIDATES);
@@ -158,6 +195,21 @@ async function main() {
       await saveSmokeScreenshot(page, SCREENSHOT_PATH);
     });
     await runStep("verify hub visual regression guards", () => verifyHubVisualRegressionGuards(page, TIMEOUT_MS));
+
+    await runStep("verify tablet viewport", () => verifyViewportShell(
+      browser,
+      { width: 768, height: 1024 },
+      "768px tablet",
+      smokeOptions,
+      pageErrors,
+    ));
+    await runStep("verify wide desktop viewport", () => verifyViewportShell(
+      browser,
+      { width: 1920, height: 1080 },
+      "1920px desktop",
+      smokeOptions,
+      pageErrors,
+    ));
     await runStep("verify keyboard focus indicator", async () => {
       await page.locator("body").click({ position: { x: 1, y: 1 } });
       let focused = null;
@@ -180,6 +232,38 @@ async function main() {
       if (!focused?.visibleIndicator) {
         throw new Error(`keyboard focus indicator missing${focused?.label ? ` on ${focused.label}` : ""}`);
       }
+    });
+    await runStep("verify visible controls have accessible names", async () => {
+      const unnamed = await page.evaluate(() => {
+        const isVisible = (element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        };
+        const accessibleName = (element) => {
+          const labelledBy = element.getAttribute("aria-labelledby");
+          const labelledText = labelledBy
+            ? labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? "").join(" ")
+            : "";
+          const associatedLabel = element.id
+            ? document.querySelector(`label[for="${CSS.escape(element.id)}"]`)?.textContent ?? ""
+            : "";
+          return [
+            element.getAttribute("aria-label"),
+            labelledText,
+            associatedLabel,
+            element.getAttribute("title"),
+            element.textContent,
+            element.querySelector("img[alt]")?.getAttribute("alt"),
+          ].find((value) => value?.trim());
+        };
+        return [...document.querySelectorAll("button, a[href], input, select, textarea")]
+          .filter((element) => element instanceof HTMLElement && isVisible(element) && !accessibleName(element))
+          .map((element) => `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}.${[...element.classList].slice(0, 2).join(".")}`)
+          .slice(0, 10);
+      });
+      if (unnamed.length > 0) throw new Error(`visible controls without accessible names: ${unnamed.join(", ")}`);
+      console.log("PASS visible interactive controls have accessible names");
     });
     await runStep("verify system reduced-motion preference", async () => {
       await page.emulateMedia({ reducedMotion: "reduce" });
@@ -457,6 +541,75 @@ async function main() {
         throw new Error(`extreme-value layout failed: ${JSON.stringify(stressLayout)}`);
       }
       console.log("PASS long epoch, pool, rollover, jackpot, reward, and address values stay bounded");
+    });
+
+    await runStep("verify empty game and history states", async () => {
+      const emptyContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+      await emptyContext.addInitScript((tutorialKey) => {
+        window.localStorage.clear();
+        window.localStorage.setItem(tutorialKey, "1");
+      }, FIRST_VISIT_TUTORIAL_KEY);
+      const emptyPage = await emptyContext.newPage();
+      emptyPage.on("pageerror", (error) => pageErrors.push({ message: error.message, source: "empty-states" }));
+      await emptyPage.route("**/api/live-state", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          currentEpoch: "0",
+          epochEndTime: String(Math.floor(Date.now() / 1000) - 5),
+          jackpotInfo: ["0", "0", "0", "0", "0", "0", "0", "0"],
+          rolloverPool: "0",
+          currentEpochData: ["0", "0", "0", false, false, false],
+          tileData: { pools: Array(25).fill("0"), users: Array(25).fill("0") },
+          tileUserCounts: Array(25).fill(0),
+          indexedTilePools: Array(25).fill("0"),
+          epochDuration: "60",
+          pendingEpochDuration: null,
+          pendingEpochDurationEta: null,
+          pendingEpochDurationEffectiveFromEpoch: null,
+          fetchedAt: Date.now(),
+        }),
+      }));
+      await emptyPage.route("**/api/recent-wins", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ wins: [] }),
+      }));
+      await emptyPage.route("**/api/jackpots**", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ jackpots: [] }),
+      }));
+      await emptyPage.route("**/api/leaderboards", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          biggestSingleWin: [], luckiest: [], oneTileWonder: [], mostWins: [],
+          whales: [], underdog: [], luckyTile: [],
+        }),
+      }));
+      await ensureLandingPage(emptyPage, smokeOptions);
+      await expectVisible(emptyPage.getByText("No bets", { exact: true }), "expired empty epoch state", TIMEOUT_MS);
+      await expectVisible(emptyPage.locator('[data-testid="header-pool-chart-line"]'), "empty pool chart line", TIMEOUT_MS);
+      await expectVisible(emptyPage.locator('[data-testid="rewards-empty-state"]'), "empty rewards state", TIMEOUT_MS);
+      const analyticsEmptyOpened = await openDesktopTab(emptyPage, {
+        ...smokeOptions,
+        buttonName: "Analytics",
+        checks: [
+          [emptyPage.getByText("No jackpot awards yet.", { exact: true }), "empty jackpot history"],
+        ],
+        skipMessage: "analytics empty states did not open",
+      });
+      if (!analyticsEmptyOpened) throw new Error("analytics empty states did not become ready");
+      const leaderboardEmptyOpened = await openDesktopTab(emptyPage, {
+        ...smokeOptions,
+        buttonName: "Leaderboards",
+        checks: [[emptyPage.locator('[data-testid="leaderboard-empty-state"]').first(), "empty leaderboards"]],
+        skipMessage: "leaderboard empty state did not open",
+      });
+      if (!leaderboardEmptyOpened) throw new Error("leaderboard empty state did not become ready");
+      await emptyContext.close();
+      console.log("PASS empty pool, rewards, leaderboards, and jackpots remain explicit");
     });
 
     const relevantPageErrors = pageErrors.filter((entry) => !isIgnoredPageError(entry.message));

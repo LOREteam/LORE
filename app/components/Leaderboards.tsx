@@ -81,7 +81,7 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400" 
 }) {
   if (!entries.length) {
     return (
-      <UiPanel tone="subtle" padding="md" className="py-8 text-center text-gray-500 text-sm italic">
+      <UiPanel data-testid="leaderboard-empty-state" tone="subtle" padding="md" className="py-8 text-center text-gray-500 text-sm italic">
         <LoreText items={emptyStates.leaderboard} />
       </UiPanel>
     );
