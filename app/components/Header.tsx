@@ -213,7 +213,7 @@ export const Header = React.memo(function Header({
         <div className="grid grid-cols-[5.25rem_minmax(0,1fr)_4.25rem] sm:grid-cols-[7rem_minmax(0,1fr)_5.5rem] items-stretch shrink-0">
         {/* LEFT - Epoch */}
         <div className="flex flex-col items-center justify-center px-1 py-1">
-          <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Epoch</div>
+          <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Epoch</div>
           <div className="flex w-full justify-center overflow-visible rounded-md">
             <div
               className={`flex h-7 w-[7.5rem] max-w-[calc(100%-0.5rem)] items-center justify-center gap-1.5 rounded-md border px-2.5 text-center transition-colors duration-200 ${
@@ -236,7 +236,7 @@ export const Header = React.memo(function Header({
 
         {/* CENTER - Timer (expands to fill, content fixed) */}
         <div className="flex flex-col items-center justify-center py-1 border-x border-white/6 min-w-0">
-          <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Timer</div>
+          <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Timer</div>
           <div
             className={`lore-nums w-[5.8rem] h-[1.6rem] flex items-center justify-center font-black leading-none tracking-tight tabular-nums transition-colors duration-300 ${
               isRevealing
@@ -271,7 +271,7 @@ export const Header = React.memo(function Header({
               </div>
               <span
                 aria-live="polite"
-                className={`max-w-full truncate px-0.5 text-center text-[9px] font-bold uppercase leading-none tracking-[0.08em] text-amber-400/80 ${reducedMotion ? "" : "status-label-pulse-amber"}`}
+                className={`max-w-full truncate px-0.5 text-center text-[9px] font-bold uppercase leading-none tracking-[0.08em] text-amber-300 ${reducedMotion ? "" : "status-label-pulse-amber"}`}
                 title={isRevealing ? "Analyzing resolved epoch" : stalledStatusLabel}
               >
                 {isRevealing ? "Analyzing" : stalledStatusLabel}
@@ -282,7 +282,7 @@ export const Header = React.memo(function Header({
               <div className={reducedMotion ? "" : "mining-pickaxe-motion"}>
                 <PickaxeIcon className="h-7 w-7" />
               </div>
-              <span className={`mt-0.5 truncate text-center text-[9px] font-bold uppercase leading-none tracking-[0.12em] text-violet-300/65 ${reducedMotion ? "" : "status-label-pulse-violet"}`}>Mining</span>
+              <span className={`mt-0.5 truncate text-center text-[9px] font-bold uppercase leading-none tracking-[0.12em] text-violet-200 ${reducedMotion ? "" : "status-label-pulse-violet"}`}>Mining</span>
             </div>
           )}
         </div>
