@@ -27,6 +27,7 @@
     "test:contract": "node scripts/test-contract-v9-invariants.mjs",
     "test:testnet-revert": "tsx scripts/run-testnet-revert-check.ts",
     "health:prod": "node scripts/check-production-health.mjs",
+    "monitor:runtime": "node scripts/monitor-runtime-health.mjs",
     "proof:mainnet": "node scripts/collect-mainnet-proof.mjs",
     "proof:chain": "node scripts/collect-chain-proof.mjs",
     "proof:canary": "node scripts/analyze-live-canary-proof.mjs",

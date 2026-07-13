@@ -56,6 +56,7 @@ import * as cacheTimestampModule from "../app/lib/cacheTimestamp.ts";
 import * as productionRuntimeModule from "../config/productionRuntime.ts";
 import * as lineaFeesModule from "../app/lib/lineaFees.ts";
 import * as chatSessionClientModule from "../app/lib/chatSessionClient.ts";
+import * as runtimeMonitorModule from "./runtime-monitor-lib.mjs";
 
 function withTemporaryEnv(values, fn) {
   const previous = new Map();
@@ -133,6 +134,36 @@ async function main() {
   const productionRuntime = productionRuntimeModule.default ?? productionRuntimeModule;
   const lineaFees = lineaFeesModule.default ?? lineaFeesModule;
   const chatSessionClient = chatSessionClientModule.default ?? chatSessionClientModule;
+  const runtimeMonitor = runtimeMonitorModule.default ?? runtimeMonitorModule;
+
+  assert.deepEqual(
+    runtimeMonitor.evaluateRuntimeSnapshot({
+      runtime: { status: "ok" },
+      dataSync: { status: "healthy", storage: { lagToFinalityTargetBlocks: 1 }, env: { lagWarnBlocks: 5 } },
+      liveState: { currentEpoch: "42", epochEndTime: "100", currentEpochData: ["1000", "0", "0", false], fetchedAt: 220_000 },
+      nowMs: 221_000,
+      stuckGraceMs: 120_000,
+    }),
+    [{ key: "stuck-non-empty-epoch", message: "Non-empty epoch #42 is overdue by 121s and still unresolved." }],
+  );
+  assert.deepEqual(
+    runtimeMonitor.evaluateRuntimeSnapshot({
+      runtime: { status: "ok" },
+      dataSync: { status: "healthy", storage: { lagToFinalityTargetBlocks: 1 }, env: { lagWarnBlocks: 5 } },
+      liveState: { currentEpoch: "43", epochEndTime: "100", currentEpochData: ["0", "0", "0", false], fetchedAt: 499_000 },
+      nowMs: 500_000,
+    }),
+    [],
+  );
+  assert.deepEqual(
+    runtimeMonitor.evaluateRuntimeSnapshot({
+      runtime: { status: "ok" },
+      dataSync: { status: "healthy" },
+      liveState: { currentEpoch: "44", epochEndTime: "100", currentEpochData: ["1000", "0", "0", false], fetchedAt: 1 },
+      nowMs: 500_000,
+    }),
+    [{ key: "live-state-stale", message: "Live-state snapshot is missing or stale." }],
+  );
 
   assert.equal(
     miningShared.getBetErrorMessage(new Error("HTTP request failed: private provider endpoint")),
