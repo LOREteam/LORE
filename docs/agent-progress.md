@@ -4387,3 +4387,9 @@ as historical progress only.
 - The isolated production build passed and retained the established lazy boundaries for Analytics, Wallet Settings, chat, leaderboards, Safety Pool, White Paper, and FAQ. Static output is 8,371,009 bytes across 219 files; the wallet-vendor root chunk remains the largest JavaScript dependency and stays eager for session recovery.
 - The browser baseline now records a safe synthetic sound-toggle Event Timing interaction instead of leaving INP empty. Desktop 1440x900 measured FCP/LCP 1.060s, lab INP 32ms, CLS 0, and no horizontal overflow; mobile 390x844 measured FCP/LCP 1.056s, lab INP 16ms, CLS 0, and no horizontal overflow.
 - Both ten-second runs made five same-origin API requests with no failed local response. Existing source and logic checks preserve visible chart freshness while slowing hidden inactive grid/epoch reads, closed chat, and inactive history work. The production-only process was stopped and port `3002` was verified closed.
+
+## 2026-07-13 - Sentry Redaction And Testnet SQLite Recovery
+
+- Added one shared recursive `beforeSend` / `beforeBreadcrumb` sanitizer to browser, Node, and edge Sentry initialization. Tests prove nested wallet/address, RPC/provider, bearer/cookie, URL, and transaction-like values are removed while safe route/status fields survive. `typecheck` and `test:logic` passed.
+- Ran `proof:restore` with the active testnet SQLite as a read-only source and distinct external temporary backup/restore directories. The restored copy passed `PRAGMA integrity_check`, retained all 16 tables, and did not modify the active DB.
+- The restored copy completed one indexer catch-up and one restart run. Final aggregate counts were 80 scoped bets, 78 scoped epochs, 1 scoped jackpot, and 2 scoped reward claims; the restart resumed from its cursor, ingested zero duplicate rows, and reconcile found no missing epochs.
