@@ -9,6 +9,7 @@ const expectedApps = new Map([
   ["lore-site", { args: "run start", packageScript: "start" }],
   ["lore-bot", { args: "run bot", packageScript: "bot" }],
   ["lore-indexer", { args: "run indexer", packageScript: "indexer" }],
+  ["lore-monitor", { args: "run monitor:runtime", packageScript: "monitor:runtime" }],
 ]);
 
 function hasText(value) {

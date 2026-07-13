@@ -51,5 +51,21 @@ module.exports = {
       merge_logs: true,
       time: true,
     },
+    {
+      name: "lore-monitor",
+      cwd: PROJECT_ROOT,
+      script: "npm",
+      args: "run monitor:runtime",
+      env: {
+        NODE_ENV: "production",
+      },
+      autorestart: true,
+      max_restarts: 50,
+      restart_delay: 10000,
+      out_file: `${PM2_LOG_DIR}/lore-monitor-out.log`,
+      error_file: `${PM2_LOG_DIR}/lore-monitor-error.log`,
+      merge_logs: true,
+      time: true,
+    },
   ],
 };

@@ -32,11 +32,12 @@ Required runtime shape:
 - `lore-site` serves the Next.js app.
 - `lore-bot` runs auto resolve/mining support separately from the web process.
 - `lore-indexer` runs separately from both.
+- `lore-monitor` polls private runtime/data-sync diagnostics and live state, then alerts on API failure, stale indexer heartbeat, excessive lag, stale snapshots, and overdue non-empty epochs.
 - `LORE_DB_PATH` points to a persistent absolute path outside the repo.
 - `health:prod` evidence must use a non-local HTTPS origin; `PROD_HEALTH_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
 - `load:http` evidence must use a staging/canary non-local HTTPS origin; `LOAD_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
 - Save redacted supervisor output as `docs/host-process-model.log`, use an absolute external `--db-path`, and save redacted command outputs as `docs/host-health-prod.log` and `docs/host-load-http.log` before `proof:host:collect`; the collector refuses missing process evidence, repo-local DB paths, missing logs, health logs without `[prod-health] OK` / matching `base=` / numeric `finalityLagBlocks`, and load logs without `Load base URL:` matching the staging/canary `LOAD_BASE_URL` or successful latency/error evidence.
-- The supervisor artifact must show concrete entries for `lore-site`, `lore-bot`, and `lore-indexer`; strict host proof rejects process evidence that points to a generic or unrelated supervisor log.
+- The supervisor artifact must show concrete entries for `lore-site`, `lore-bot`, `lore-indexer`, and `lore-monitor`; strict host proof rejects process evidence that points to a generic or unrelated supervisor log.
 
 ```powershell
 $env:PROD_HEALTH_BASE_URL = "https://playlore.xyz"
@@ -74,8 +75,11 @@ npm.cmd run proof:restore -- --strict --source=<absolute-source-db-outside-repo>
 
 Monitoring evidence must prove one complete enabled monitor for every required kind: `health-prod`, `data-sync`, `stale-indexer-heartbeat`, `indexer-lag`, `bot-restart`, `indexer-restart`, and `reverted-tx`.
 Collect distinct fired alert and recovery/resolution artifacts before creating the draft, and verify the recovery timestamp is not earlier than the fired alert timestamp: `docs/monitoring-alert-export.log`, `docs/monitoring-recovery-export.log`, `docs/monitoring-alert-target-test.log`, and `docs/error-tracking-test-event.log`.
+The host-local `lore-monitor` is the fast operational fallback and requires `RUNTIME_MONITOR_BASE_URL`, `HEALTH_DIAGNOSTICS_SECRET`, and Telegram alert credentials. It never sends transactions. Keep an external uptime/error provider enabled as well: a monitor on the same host cannot report a full host or network outage.
 
 ```powershell
+$env:RUNTIME_MONITOR_BASE_URL = "https://playlore.xyz"
+npm.cmd run monitor:runtime
 npm.cmd run proof:monitoring:plan -- --provider=<provider> --error-provider=<error-provider> --origin=https://playlore.xyz --out=docs/monitoring-alert-test-plan.draft.md
 npm.cmd run proof:monitoring:draft -- --provider=<provider> --error-provider=<error-provider> --origin=https://playlore.xyz --monitor-artifact=docs/monitoring-alert-export.log --recovery-artifact=docs/monitoring-recovery-export.log --alert-target-artifact=docs/monitoring-alert-target-test.log --error-event-artifact=docs/error-tracking-test-event.log --out=docs/monitoring-proof.draft.json
 npm.cmd run proof:monitoring -- --strict
