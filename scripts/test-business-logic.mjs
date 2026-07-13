@@ -708,6 +708,27 @@ async function main() {
   );
   assert.match(
     smokeBrowserSource,
+    /verify keyboard focus indicator[\s\S]*keyboard\.press\("Tab"\)[\s\S]*:focus-visible/,
+    "browser smoke must verify a visible focus indicator through keyboard navigation",
+  );
+  assert.match(
+    smokeBrowserSource,
+    /verify system reduced-motion preference[\s\S]*emulateMedia\(\{ reducedMotion: "reduce" \}\)/,
+    "browser smoke must verify the operating-system reduced-motion preference",
+  );
+  const reducedMotionSource = readFileSync("app/hooks/useReducedMotion.ts", "utf8");
+  assert.match(
+    reducedMotionSource,
+    /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/,
+    "reduced-motion state must fall back to the operating-system preference",
+  );
+  assert.match(
+    reducedMotionSource,
+    /media\.addEventListener\("change", handleChange\)/,
+    "reduced-motion state must follow operating-system preference changes until the user overrides it",
+  );
+  assert.match(
+    smokeBrowserSource,
     /SMOKE_EXPECT_READ_ONLY/,
     "browser smoke must support an explicit read-only maintenance mode check",
   );

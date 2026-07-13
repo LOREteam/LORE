@@ -4375,3 +4375,9 @@ as historical progress only.
 - Manual disabled actions now reference their computed reason for accessible UI output. Pending/ambiguous receipts continue to fail closed without automatic duplicate sends.
 - Auto-Miner progress now includes the active or last confirmed epoch and exact cycles remaining for placing, confirmed, recovered, existing, and ended-round outcomes.
 - `npm.cmd run test:logic` and `npm.cmd run typecheck` passed with focused formatter and progress-state assertions.
+
+## 2026-07-13 - Keyboard Focus And System Reduced Motion
+
+- The shared reduced-motion hook now uses the operating-system `prefers-reduced-motion` value when the user has not saved an explicit LORE preference, follows live OS preference changes, and preserves an explicit in-app override.
+- Browser smoke now tabs through the rendered desktop UI until it observes a visible `:focus-visible` indicator and emulates both reduced and normal motion preferences while checking the root motion state and effective animation duration.
+- `npm.cmd run typecheck`, `npm.cmd run test:logic`, and the full UI-only `npm.cmd run smoke:browser` passed. Desktop/mobile wallet selectors, grid, chart, chat, navigation, 430px responsive guards, keyboard focus, and reduced motion completed without browser errors. The UI-only process was stopped and port `3004` was verified closed.

@@ -158,6 +158,45 @@ async function main() {
       await saveSmokeScreenshot(page, SCREENSHOT_PATH);
     });
     await runStep("verify hub visual regression guards", () => verifyHubVisualRegressionGuards(page, TIMEOUT_MS));
+    await runStep("verify keyboard focus indicator", async () => {
+      await page.locator("body").click({ position: { x: 1, y: 1 } });
+      let focused = null;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await page.keyboard.press("Tab");
+        focused = await page.evaluate(() => {
+          const element = document.activeElement;
+          if (!(element instanceof HTMLElement) || element === document.body) return null;
+          const rect = element.getBoundingClientRect();
+          if (rect.width < 1 || rect.height < 1) return null;
+          const style = window.getComputedStyle(element);
+          return {
+            label: element.getAttribute("aria-label") || element.textContent?.trim().slice(0, 40) || element.tagName,
+            visibleIndicator: element.matches(":focus-visible")
+              && (style.outlineStyle !== "none" || style.boxShadow !== "none"),
+          };
+        });
+        if (focused?.visibleIndicator) break;
+      }
+      if (!focused?.visibleIndicator) {
+        throw new Error(`keyboard focus indicator missing${focused?.label ? ` on ${focused.label}` : ""}`);
+      }
+    });
+    await runStep("verify system reduced-motion preference", async () => {
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.locator("html[data-motion='reduced']").waitFor({ state: "attached", timeout: TIMEOUT_MS });
+      const reducedAnimation = await page.evaluate(() => {
+        const animated = document.querySelector(".animate-pulse, .animate-fade-in, .animate-slide-up");
+        return animated ? window.getComputedStyle(animated).animationDuration : null;
+      });
+      const reducedAnimationSeconds = reducedAnimation
+        ? Number.parseFloat(reducedAnimation) / (reducedAnimation.endsWith("ms") ? 1000 : 1)
+        : 0;
+      if (!Number.isFinite(reducedAnimationSeconds) || reducedAnimationSeconds > 0.00001) {
+        throw new Error(`reduced-motion animation duration is ${reducedAnimation}`);
+      }
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+      await page.locator("html[data-motion='reduced']").waitFor({ state: "detached", timeout: TIMEOUT_MS });
+    });
     if (EXPECT_READ_ONLY) {
       await runStep("verify read-only betting mode", () => verifyReadOnlyMode(page, TIMEOUT_MS));
     }
