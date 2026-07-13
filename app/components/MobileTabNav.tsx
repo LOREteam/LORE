@@ -104,7 +104,7 @@ function getTabMeta(tab: TabId) {
 export function MobileTabNav({ activeTab, onTabChange }: MobileTabNavProps) {
   return (
     <div className="lg:hidden">
-      <div className="mobile-hud-nav fixed left-2 right-12 z-[180] sm:left-4 sm:right-[5.25rem]">
+      <div className="mobile-hud-nav fixed left-2 right-16 z-[180] sm:left-4 sm:right-[5.25rem]">
         <div className="no-scrollbar overflow-x-auto overscroll-x-contain">
         <nav
           aria-label="Primary sections"
@@ -120,7 +120,7 @@ export function MobileTabNav({ activeTab, onTabChange }: MobileTabNavProps) {
                 aria-label={title}
                 aria-current={active ? "page" : undefined}
                 aria-pressed={active}
-                className={`group flex h-10 min-w-10 flex-1 shrink-0 snap-start items-center justify-center gap-1.5 rounded-xl border px-2 text-[9px] font-semibold uppercase tracking-[0.1em] transition-all duration-200 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-transparent ${
+                className={`group flex h-11 min-w-11 flex-1 shrink-0 snap-start items-center justify-center gap-1.5 rounded-xl border px-2 text-[9px] font-semibold uppercase tracking-[0.1em] transition-all duration-200 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-transparent ${
                   active
                     ? "border-violet-400/35 bg-linear-to-r from-violet-500/26 via-violet-500/18 to-sky-500/18 text-violet-100 shadow-[0_0_0_1px_rgba(167,139,250,0.12),0_8px_18px_rgba(76,29,149,0.18)]"
                     : "border-white/5 bg-white/2 text-slate-400 hover:border-white/10 hover:bg-white/4 hover:text-slate-200"

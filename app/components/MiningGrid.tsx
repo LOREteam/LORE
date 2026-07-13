@@ -181,6 +181,7 @@ function MiningGridView({
         src="/jackpot-og-weekly-painted.png"
         alt=""
         fill
+        loading="eager"
         sizes="(min-width: 900px) 75vw, 100vw"
         quality={85}
         className="pointer-events-none object-cover object-bottom"

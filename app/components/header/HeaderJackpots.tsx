@@ -220,7 +220,7 @@ export const HeaderJackpots = React.memo(function HeaderJackpots({
   }
 
   return (
-    <div className="grid grid-cols-1 min-[420px]:grid-cols-2 gap-1.5 mb-1">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mb-1">
       <JackpotCard
         kind="daily"
         poolAmount={jackpotInfo.dailyPool}

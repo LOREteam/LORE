@@ -370,6 +370,42 @@ export async function verifyHubVisualRegressionGuards(page, timeoutMs) {
   return true;
 }
 
+export async function verifyMobileHubResponsiveGuards(page, timeoutMs) {
+  const guardTimeoutMs = Math.min(timeoutMs, 6_000);
+  await page.waitForFunction(() => {
+    const cards = [...document.querySelectorAll(".jackpot-vault-card")];
+    if (cards.length < 2) return false;
+    const [first, second] = cards.map((card) => card.getBoundingClientRect());
+    return second.top >= first.bottom && Math.abs(first.left - second.left) < 2;
+  }, undefined, { timeout: guardTimeoutMs });
+
+  const result = await page.evaluate(() => {
+    const targets = [
+      document.querySelector('[aria-label="Open sidebar menu"]'),
+      document.querySelector('[aria-label="Open chat"]'),
+      ...document.querySelectorAll('[aria-label="Primary sections"] button'),
+    ].filter((element) => element instanceof HTMLElement);
+    const undersized = targets
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return { label: element.getAttribute("aria-label") || element.textContent?.trim() || "control", width: rect.width, height: rect.height };
+      })
+      .filter(({ width, height }) => width < 44 || height < 44);
+    return {
+      horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      undersized,
+    };
+  });
+  if (result.horizontalOverflow > 1) {
+    throw new Error(`430px hub horizontal overflow: ${result.horizontalOverflow}px`);
+  }
+  if (result.undersized.length > 0) {
+    throw new Error(`430px hub undersized controls: ${JSON.stringify(result.undersized)}`);
+  }
+  console.log("PASS 430px jackpot layout, touch targets, and horizontal overflow");
+  return true;
+}
+
 export async function verifyReadOnlyMode(page, timeoutMs) {
   const guardTimeoutMs = Math.min(timeoutMs, 6_000);
   await expectVisible(page.locator('[data-testid="hub-read-only-banner"]').first(), "read-only hub banner", guardTimeoutMs);

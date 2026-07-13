@@ -151,7 +151,7 @@ export function HeaderPoolChart({
         onClick={onToggleMute}
         variant="ghost"
         size="xs"
-        className={`absolute top-2 right-2 z-20 h-5 w-5 p-0 rounded-full bg-transparent border-0 text-violet-200 hover:bg-white/6 hover:text-violet-100`}
+        className="absolute right-0 top-0 z-20 h-11 w-11 rounded-full border-0 bg-transparent p-0 text-violet-200 hover:bg-white/6 hover:text-violet-100"
         title={muted ? "Unmute sounds" : "Mute sounds"}
         aria-label={muted ? "Unmute sounds" : "Mute sounds"}
       >

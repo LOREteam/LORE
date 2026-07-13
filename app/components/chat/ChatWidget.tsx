@@ -55,7 +55,7 @@ export const ChatWidget = React.memo(function ChatWidget({ walletAddress, onOpen
       {/* Chat toggle button (positioned by parent floating container) */}
       <button
         onClick={handleToggle}
-        className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-violet-300/18 bg-violet-600 shadow-lg shadow-violet-500/20 transition-all duration-200 hover:-translate-y-0.5 hover:bg-violet-500 hover:shadow-violet-500/28 active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712] sm:h-9 sm:w-9"
+        className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-violet-300/18 bg-violet-600 shadow-lg shadow-violet-500/20 transition-all duration-200 hover:-translate-y-0.5 hover:bg-violet-500 hover:shadow-violet-500/28 active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
         aria-label={open ? "Close chat" : "Open chat"}
         title={open ? "Close chat" : "Open chat"}
       >

@@ -21,6 +21,7 @@ import {
   selectSingleTile,
   verifyAutoMinerFailureScenarios,
   verifyHubVisualRegressionGuards,
+  verifyMobileHubResponsiveGuards,
   verifyAutoMinerInputPersistence,
   verifyChatProfileModal,
   verifyReadOnlyMode,
@@ -311,6 +312,11 @@ async function main() {
       await expectVisible(mobilePage.getByRole("button", { name: "Leaderboards" }), "mobile top nav", TIMEOUT_MS);
       await expectVisible(mobilePage.getByText("Manual Bet"), "mobile manual bet panel", TIMEOUT_MS);
       await expectVisible(mobilePage.getByText("Auto-Miner"), "mobile auto-miner panel", TIMEOUT_MS);
+    });
+    await runStep("verify 430px mobile hub guards", async () => {
+      await mobilePage.setViewportSize({ width: 430, height: 932 });
+      await verifyMobileHubResponsiveGuards(mobilePage, TIMEOUT_MS);
+      await mobilePage.setViewportSize({ width: 390, height: 844 });
     });
     await runStep("open mobile analytics", () => openMobileAnalytics(mobilePage, smokeOptions));
     await mobileContext.close();

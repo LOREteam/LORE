@@ -71,7 +71,7 @@ export default function LineaOreClient({
         <button
           type="button"
           onClick={openMobileSidebar}
-          className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl border border-white/8 bg-[#080814]/78 text-slate-300 backdrop-blur-xl transition-colors hover:bg-white/6 hover:text-white lg:hidden"
+          className="mb-2 flex h-11 w-11 items-center justify-center rounded-xl border border-white/8 bg-[#080814]/78 text-slate-300 backdrop-blur-xl transition-colors hover:bg-white/6 hover:text-white focus-visible:ring-2 focus-visible:ring-violet-400 lg:hidden"
           aria-label="Open sidebar menu"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">

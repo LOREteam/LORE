@@ -4360,3 +4360,11 @@ as historical progress only.
 - Removed 57 tracked generated/diagnostic files totaling about 99 MiB: the checked-in Node binary, duplicate favicon, screenshot/report outputs, PID files, generated solc output, superseded PNG chat avatars, unused starter SVGs, and the disconnected avatar/screenshot generators. The EIP-7702 deployment record and proof-referenced testnet evidence remain preserved.
 - Added ignore coverage for the local Node runtime, Playwright CLI/report outputs, test results, runtime PID files, and regenerated artifact folders. The active `.tmp` canary evidence was deliberately excluded from cleanup pending its final status.
 - Production build and HTTP smoke passed after the cleanup; no runtime/build references to the removed assets or scripts remain.
+
+## 2026-07-13 - Responsive HUD And Browser Regression Guards
+
+- Audited the live hub at 360x800, 390x844, 430x932, 768px tablet, and 1920px desktop. Jackpot cards now remain single-column below 640px, preventing crushed titles around 420-560px.
+- Raised the mobile menu, bottom navigation, chat, quick-pick, primary bet actions, betting inputs, and chart sound hit area to at least 44px without changing game state, polling, or wallet behavior.
+- Added a 430px browser guard for jackpot stacking, horizontal overflow, and key touch targets. The standard browser smoke passed desktop/mobile wallet selectors, number typography, mounted pool chart, tile selection, Auto-Miner persistence, chat/profile, navigation, and mobile analytics.
+- Configured the existing image quality and eager loading for above-fold painted backgrounds. A clean UI-only run reported zero image-quality, LCP-loading, or unmounted-state React warnings. TypeScript and `git diff --check` passed.
+- Remaining runtime follow-up: classify cold-start live-state/chat request timeouts, harden weak-identity fallback rate limiting where appropriate, and document stale contract-scope cleanup with a verified SQLite backup/restore runbook.

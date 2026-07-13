@@ -16,9 +16,9 @@ import { uiTokens } from "./ui/tokens";
 const PANEL_TITLE_BAR = "bet-panel-titlebar mb-2 flex items-center gap-2 border-b border-white/6 pb-2";
 const PANEL_TITLE = "text-[11px] font-black uppercase tracking-[0.08em] text-white";
 const FIELD_LABEL = "mb-1 block px-0.5 text-[8px] font-black uppercase tracking-[0.08em] text-slate-500";
-const ACTION_BUTTON_CLASS = "h-10 text-[11px] font-black";
+const ACTION_BUTTON_CLASS = "h-11 text-[11px] font-black";
 const QUICK_BUTTON_CLASS =
-  "console-chip h-8 rounded-lg border px-2 text-[9px] font-black uppercase tracking-[0.08em] transition-all duration-200 hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-40";
+  "console-chip h-11 rounded-lg border px-2 text-[9px] font-black uppercase tracking-[0.08em] transition-all duration-200 hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-40";
 
 function getAutoMinePhaseMeta(phase: AutoMinePhase) {
   switch (phase) {
@@ -180,7 +180,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           maxLength={20}
           tone={betAmountError ? "danger" : "default"}
           errorText={betAmountError ?? undefined}
-          className="console-input lore-nums h-9 px-3 text-base font-black"
+          className="console-input lore-nums h-11 px-3 text-base font-black"
         />
       </div>
 
@@ -632,7 +632,7 @@ const SmallInput = React.memo(function SmallInput({
         errorText={errorText ?? undefined}
         className={cn(
           "console-input lore-nums font-bold text-white",
-          compact ? "h-9 px-2.5 py-1 text-sm" : "h-9 px-3 py-1 text-sm",
+          compact ? "h-11 px-2.5 py-1 text-sm" : "h-11 px-3 py-1 text-sm",
           inputAccent,
         )}
       />
