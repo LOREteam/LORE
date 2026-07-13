@@ -2414,6 +2414,7 @@ async function main() {
     selectionEpoch: "21",
   });
   assert.deepEqual(loopState.selection, { tiles: [4, 8], epoch: "21" });
+  assert.equal(loopState.progressMessage, "1 / 3 - epoch #21: placing bet (2 tiles)...");
   assert.deepEqual(loopState.sessionCheckpoint, {
     nextRoundIndex: 0,
     lastPlacedEpoch: "21",
@@ -2438,14 +2439,15 @@ async function main() {
   assert.equal(loopState.networkRetries, 0);
   assert.equal(loopState.lastPlacedEpoch, 21n);
   assert.deepEqual(loopState.selection, { tiles: [4, 8], epoch: "21" });
+  assert.equal(loopState.progressMessage, "1 / 3 - epoch #21 confirmed after RPC recovery; 2 cycles left");
 
   loopState = autoMineLoopModel.reduceAutoMineLoopEvent(loopState, {
     type: "round-epoch-ended",
     liveEpoch: 22n,
   });
   assert.equal(loopState.roundIndex, 2);
+  assert.equal(loopState.progressMessage, "2 / 3 - epoch #22 skipped (ended); 1 cycle left");
   assert.equal(loopState.lastPlacedEpoch, 22n);
-  assert.equal(loopState.progressMessage, "2 / 3 - skipped (epoch ended), next round...");
   assert.deepEqual(loopState.sessionCheckpoint, {
     nextRoundIndex: 2,
     lastPlacedEpoch: "22",
@@ -2458,7 +2460,7 @@ async function main() {
   });
   assert.equal(loopState.roundIndex, 3);
   assert.equal(loopState.lastPlacedEpoch, 23n);
-  assert.equal(loopState.progressMessage, "3 / 3 - confirmed");
+  assert.equal(loopState.progressMessage, "3 / 3 - epoch #23 confirmed; 0 cycles left");
   assert.deepEqual(loopState.selection, { tiles: [6], epoch: "23" });
   assert.equal(loopState.sessionCheckpoint, null);
 
@@ -2474,7 +2476,7 @@ async function main() {
   });
   assert.equal(loopState.roundIndex, 3);
   assert.equal(loopState.lastPlacedEpoch, 23n);
-  assert.equal(loopState.progressMessage, "3 / 3 - confirmed (detected on-chain)");
+  assert.equal(loopState.progressMessage, "3 / 3 - epoch #23 confirmed on-chain; 0 cycles left");
   assert.deepEqual(loopState.selection, { tiles: [6], epoch: "23" });
   assert.equal(loopState.sessionCheckpoint, null);
 

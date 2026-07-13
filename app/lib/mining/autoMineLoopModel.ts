@@ -26,6 +26,10 @@ export interface AutoMineLoopState {
   sessionCheckpoint: AutoMineLoopSessionCheckpoint | null;
 }
 
+function formatCyclesLeft(count: number): string {
+  return `${count} ${count === 1 ? "cycle" : "cycles"} left`;
+}
+
 export type AutoMineLoopEvent =
   | { type: "round-betting-started"; liveEpoch: bigint; tiles: number[]; selectionEpoch: string }
   | { type: "round-skipped-existing"; liveEpoch?: bigint; placedEpoch?: bigint }
@@ -64,7 +68,7 @@ export function reduceAutoMineLoopEvent(
     case "round-betting-started":
       return {
         ...state,
-        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - placing bet (${event.tiles.length} tiles)...`,
+        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - epoch #${event.liveEpoch}: placing bet (${event.tiles.length} tiles)...`,
         selection: { tiles: event.tiles, epoch: event.selectionEpoch },
         sessionCheckpoint: {
           nextRoundIndex: state.roundIndex,
@@ -82,6 +86,7 @@ export function reduceAutoMineLoopEvent(
         roundIndex: state.roundIndex + 1,
         lastPlacedEpoch: skippedEpoch,
         networkRetries: 0,
+        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - epoch #${skippedEpoch} already confirmed; ${formatCyclesLeft(Math.max(0, state.rounds - state.roundIndex - 1))}`,
         selection: { tiles: [], epoch: null },
         sessionCheckpoint: {
           nextRoundIndex: state.roundIndex + 1,
@@ -95,7 +100,7 @@ export function reduceAutoMineLoopEvent(
         roundIndex: state.roundIndex + 1,
         lastPlacedEpoch: event.liveEpoch,
         networkRetries: 0,
-        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - skipped (epoch ended), next round...`,
+        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - epoch #${event.liveEpoch} skipped (ended); ${formatCyclesLeft(Math.max(0, state.rounds - state.roundIndex - 1))}`,
         selection: { tiles: [], epoch: null },
         sessionCheckpoint: {
           nextRoundIndex: state.roundIndex + 1,
@@ -109,7 +114,7 @@ export function reduceAutoMineLoopEvent(
         roundIndex: state.roundIndex + 1,
         lastPlacedEpoch: event.placedEpoch,
         networkRetries: 0,
-        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - confirmed`,
+        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - epoch #${event.placedEpoch} confirmed; ${formatCyclesLeft(Math.max(0, state.rounds - state.roundIndex - 1))}`,
         selection: { tiles: event.tiles, epoch: event.placedEpoch.toString() },
         sessionCheckpoint: null,
       };
@@ -120,7 +125,7 @@ export function reduceAutoMineLoopEvent(
         roundIndex: state.roundIndex + 1,
         lastPlacedEpoch: event.placedEpoch,
         networkRetries: 0,
-        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - confirmed (detected on-chain)`,
+        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - epoch #${event.placedEpoch} confirmed on-chain; ${formatCyclesLeft(Math.max(0, state.rounds - state.roundIndex - 1))}`,
         selection: { tiles: event.tiles, epoch: event.placedEpoch.toString() },
         sessionCheckpoint: null,
       };
@@ -131,7 +136,7 @@ export function reduceAutoMineLoopEvent(
         roundIndex: state.roundIndex + 1,
         lastPlacedEpoch: event.placedEpoch,
         networkRetries: 0,
-        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - confirmed (detected after RPC error)`,
+        progressMessage: `${state.roundIndex + 1} / ${state.rounds} - epoch #${event.placedEpoch} confirmed after RPC recovery; ${formatCyclesLeft(Math.max(0, state.rounds - state.roundIndex - 1))}`,
         selection: { tiles: event.tiles, epoch: event.placedEpoch.toString() },
         sessionCheckpoint: null,
       };

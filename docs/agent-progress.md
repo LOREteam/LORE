@@ -4368,3 +4368,10 @@ as historical progress only.
 - Added a 430px browser guard for jackpot stacking, horizontal overflow, and key touch targets. The standard browser smoke passed desktop/mobile wallet selectors, number typography, mounted pool chart, tile selection, Auto-Miner persistence, chat/profile, navigation, and mobile analytics.
 - Configured the existing image quality and eager loading for above-fold painted backgrounds. A clean UI-only run reported zero image-quality, LCP-loading, or unmounted-state React warnings. TypeScript and `git diff --check` passed.
 - Remaining runtime follow-up: classify cold-start live-state/chat request timeouts, harden weak-identity fallback rate limiting where appropriate, and document stale contract-scope cleanup with a verified SQLite backup/restore runbook.
+
+## 2026-07-13 - Betting Error And Auto-Miner Status UX
+
+- Manual and Auto-Miner error formatters no longer expose raw RPC/provider/revert text to notices. Users receive a short category and recovery action; the original error object remains available only through the existing redacted logger.
+- Manual disabled actions now reference their computed reason for accessible UI output. Pending/ambiguous receipts continue to fail closed without automatic duplicate sends.
+- Auto-Miner progress now includes the active or last confirmed epoch and exact cycles remaining for placing, confirmed, recovered, existing, and ended-round outcomes.
+- `npm.cmd run test:logic` and `npm.cmd run typecheck` passed with focused formatter and progress-state assertions.
