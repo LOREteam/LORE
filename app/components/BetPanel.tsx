@@ -75,6 +75,8 @@ interface ManualBetProps {
   liveStateReady?: boolean;
   readOnlyReason?: string | null;
   selectedTilesCount: number;
+  feeEstimate: string | null;
+  feeEstimateUnavailable: boolean;
   isPending: boolean;
   isRevealing: boolean;
   isAnalyzing?: boolean;
@@ -90,6 +92,8 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   liveStateReady = true,
   readOnlyReason = null,
   selectedTilesCount,
+  feeEstimate,
+  feeEstimateUnavailable,
   isPending,
   isRevealing,
   isAnalyzing: _isAnalyzing = false,
@@ -117,7 +121,6 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     : readOnlyReason || isDisabled
       ? "locked"
       : "primary";
-
   const handleQuickPick = React.useCallback(
     (count: number) => {
       const tiles = Array.from({ length: GRID_SIZE }, (_, index) => index + 1);
@@ -196,6 +199,15 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-violet-500/8 border border-violet-500/20 mb-1.5">
           <span className="text-[8px] font-bold text-violet-300/80 uppercase tracking-wide">
             {manualStatusText}
+          </span>
+        </div>
+      )}
+
+      {selectedTilesCount > 0 && walletConnected && (
+        <div className="mb-1.5 flex min-h-6 items-center justify-between px-1 text-[8px] font-bold uppercase tracking-[0.08em] text-slate-500">
+          <span>Bet network fee</span>
+          <span className="lore-nums text-sky-200">
+            {feeEstimate ? `~${feeEstimate} ETH` : feeEstimateUnavailable ? "Unavailable" : "Calculating..."}
           </span>
         </div>
       )}
@@ -280,7 +292,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
 
       {!isPending && !isRevealing && (
         <p className="mt-2 text-center text-[8px] leading-relaxed text-slate-500">
-          Keep ETH for gas and LINEA for the stake in the Privy wallet
+          {feeEstimate ? "Estimate covers the bet; a first approval may cost extra" : "Keep ETH for gas and LINEA for the stake in the Privy wallet"}
         </p>
       )}
     </UiPanel>

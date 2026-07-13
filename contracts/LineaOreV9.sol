@@ -69,7 +69,6 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
     mapping(uint256 => mapping(uint256 => uint256)) public tilePools;
     mapping(uint256 => mapping(uint256 => uint256)) public tileUserCounts;
     mapping(uint256 => mapping(uint256 => mapping(address => uint256))) public userBets;
-    mapping(uint256 => mapping(uint256 => mapping(address => bool))) private hasUserBetOnTile;
     mapping(uint256 => mapping(address => uint256)) public userEpochVolumes;
     mapping(address => mapping(uint256 => bool)) public hasClaimed;
     mapping(uint256 => uint256) public epochRewardClaimed;
@@ -223,8 +222,9 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         if (tileId == 0 || tileId > GRID_SIZE) revert InvalidTile();
         if (amount == 0) revert ZeroAmount();
         token.safeTransferFrom(msg.sender, address(this), amount);
-        _recordBet(msg.sender, tileId, amount);
-        emit BetPlaced(currentEpoch, msg.sender, tileId, amount);
+        uint256 epoch = currentEpoch;
+        _recordBet(epoch, msg.sender, tileId, amount);
+        emit BetPlaced(epoch, msg.sender, tileId, amount);
     }
 
     function placeBatchBets(uint256[] calldata tileIds, uint256[] calldata amounts) external nonReentrant {
@@ -241,11 +241,12 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
             unchecked { ++i; }
         }
         token.safeTransferFrom(msg.sender, address(this), totalAmount);
+        uint256 epoch = currentEpoch;
         for (uint256 i = 0; i < len; ) {
-            _recordBet(msg.sender, tileIds[i], amounts[i]);
+            _recordBet(epoch, msg.sender, tileIds[i], amounts[i]);
             unchecked { ++i; }
         }
-        emit BatchBetsPlaced(currentEpoch, msg.sender, tileIds, amounts, totalAmount);
+        emit BatchBetsPlaced(epoch, msg.sender, tileIds, amounts, totalAmount);
     }
 
     function placeBatchBetsSameAmount(uint256[] calldata tileIds, uint256 amount) external nonReentrant {
@@ -256,13 +257,14 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
         uint256 totalAmount = amount * len;
         token.safeTransferFrom(msg.sender, address(this), totalAmount);
+        uint256 epoch = currentEpoch;
         for (uint256 i = 0; i < len; ) {
             uint256 tileId = tileIds[i];
             if (tileId == 0 || tileId > GRID_SIZE) revert InvalidTile();
-            _recordBet(msg.sender, tileId, amount);
+            _recordBet(epoch, msg.sender, tileId, amount);
             unchecked { ++i; }
         }
-        emit BatchBetsSameAmountPlaced(currentEpoch, msg.sender, tileIds, amount, totalAmount);
+        emit BatchBetsSameAmountPlaced(epoch, msg.sender, tileIds, amount, totalAmount);
     }
 
     function placeBatchBetsBitmap(uint32 tileMask, uint256 amount) external nonReentrant {
@@ -275,18 +277,19 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         uint256 tileCount = _countSelectedTiles(tileMask);
         uint256 totalAmount = amount * tileCount;
         token.safeTransferFrom(msg.sender, address(this), totalAmount);
+        uint256 epoch = currentEpoch;
 
         uint32 remainingMask = tileMask;
         uint256 tileId = 1;
         while (remainingMask != 0) {
             if ((remainingMask & 1) == 1) {
-                _recordBet(msg.sender, tileId, amount);
+                _recordBet(epoch, msg.sender, tileId, amount);
             }
             remainingMask >>= 1;
             unchecked { ++tileId; }
         }
 
-        emit BatchBetsBitmapPlaced(currentEpoch, msg.sender, tileMask, amount, totalAmount);
+        emit BatchBetsBitmapPlaced(epoch, msg.sender, tileMask, amount, totalAmount);
     }
 
     function _countSelectedTiles(uint32 tileMask) internal pure returns (uint256 count) {
@@ -297,13 +300,12 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         }
     }
 
-    function _recordBet(address user, uint256 tileId, uint256 amount) internal {
-        uint256 epoch = currentEpoch;
-        if (!hasUserBetOnTile[epoch][tileId][user]) {
-            hasUserBetOnTile[epoch][tileId][user] = true;
+    function _recordBet(uint256 epoch, address user, uint256 tileId, uint256 amount) internal {
+        uint256 previousBet = userBets[epoch][tileId][user];
+        if (previousBet == 0) {
             tileUserCounts[epoch][tileId] += 1;
         }
-        userBets[epoch][tileId][user] += amount;
+        userBets[epoch][tileId][user] = previousBet + amount;
         userEpochVolumes[epoch][user] += amount;
         tilePools[epoch][tileId] += amount;
         epochs[epoch].totalPool += amount;

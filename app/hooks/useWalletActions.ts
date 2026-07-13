@@ -33,6 +33,12 @@ type ReceiptState = "confirmed" | "pending";
 
 function formatWalletTransferFailure(error: unknown, asset: "ETH" | "LINEA") {
   const message = error instanceof Error ? error.message : "";
+  if (/\btimed out\b|\btimeout\b/i.test(message)) {
+    return `${asset} transfer status is unknown after a wallet timeout. Check wallet activity before retrying.`;
+  }
+  if (/\brevert(?:ed)?\b|execution reverted/i.test(message)) {
+    return `${asset} transfer reverted on-chain. Funds were not moved.`;
+  }
   if (/transaction gas limit cap exceeded/i.test(message)) {
     return `${asset} transfer was rejected before submission. Check the amount and try again.`;
   }
@@ -628,8 +634,7 @@ export function useWalletActions({
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Withdraw", "ETH withdraw failed", err);
-        const message = err instanceof Error ? err.message : "";
-        notify(message ? `ETH withdraw failed: ${message}` : "ETH withdraw failed. Check your balance and try again.", "danger");
+        notify(formatWalletTransferFailure(err, "ETH"), "danger");
       } else {
         notify("ETH withdraw rejected in wallet.", "info");
       }
@@ -688,8 +693,7 @@ export function useWalletActions({
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Deposit", "ETH transfer to Privy failed", err);
-        const message = err instanceof Error ? err.message : "";
-        notify(message ? `ETH transfer failed: ${message}` : "ETH transfer failed. Check wallet balance and try again.", "danger");
+        notify(formatWalletTransferFailure(err, "ETH"), "danger");
       } else {
         notify("ETH top-up rejected in wallet.", "info");
       }

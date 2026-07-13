@@ -569,9 +569,6 @@ export function usePrivyWallet() {
       // External-wallet flow: trigger the wallet's own send tx prompt directly.
       // This is more reliable than routing through embedded sendTransaction flow.
       const provider = await externalWallet.getEthereumProvider();
-      const providerAccount = getProviderSelectedAddress(await provider.request({ method: "eth_accounts" }));
-      if (!providerAccount) throw new Error("Select an account in your external wallet and try again.");
-      setProviderExternalWalletAddress(providerAccount);
       const targetChainIdHex = toHex(APP_CHAIN_ID) as `0x${string}`;
       try {
         await withTimeout(
@@ -602,6 +599,9 @@ export function usePrivyWallet() {
       if (!currentChainId || currentChainId !== targetChainIdHex.toLowerCase()) {
         throw new Error(`Switch your external wallet to ${APP_CHAIN_NAME} and try again.`);
       }
+      const providerAccount = getProviderSelectedAddress(await provider.request({ method: "eth_accounts" }));
+      if (!providerAccount) throw new Error("Select an account in your external wallet and try again.");
+      setProviderExternalWalletAddress(providerAccount);
       const requestTx: {
         from: `0x${string}`;
         to: `0x${string}`;

@@ -19,6 +19,8 @@
 
 # next.js
 /.next/
+/.next-candidate/
+/.next-candidate-*/
 /.next-check/
 /.next-build-check/
 /.next-verify/

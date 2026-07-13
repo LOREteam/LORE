@@ -19,6 +19,8 @@ interface HubSidePanelProps {
   liveStateReady: boolean;
   readOnlyReason?: string | null;
   selectedTilesCount: number;
+  feeEstimate: string | null;
+  feeEstimateUnavailable: boolean;
   isPending: boolean;
   isRevealing: boolean;
   isAnalyzing: boolean;
@@ -41,6 +43,8 @@ export const HubSidePanel = React.memo(function HubSidePanel({
   liveStateReady,
   readOnlyReason = null,
   selectedTilesCount,
+  feeEstimate,
+  feeEstimateUnavailable,
   isPending,
   isRevealing,
   isAnalyzing,
@@ -68,6 +72,8 @@ export const HubSidePanel = React.memo(function HubSidePanel({
               liveStateReady={liveStateReady}
               readOnlyReason={readOnlyReason}
               selectedTilesCount={selectedTilesCount}
+              feeEstimate={feeEstimate}
+              feeEstimateUnavailable={feeEstimateUnavailable}
               isPending={isPending}
               isRevealing={isRevealing}
               isAnalyzing={isAnalyzing}

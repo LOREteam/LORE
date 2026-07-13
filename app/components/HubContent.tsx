@@ -2,9 +2,12 @@
 
 import React from "react";
 import Image from "next/image";
+import { formatEther, parseUnits } from "viem";
+import { usePublicClient } from "wagmi";
 import type { AutoMinePhase } from "../hooks/useMining.types";
 import { useManualBetForm } from "../hooks/useManualBetForm";
 import { cn } from "../lib/cn";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
 import { HubGameBoard } from "./HubGameBoard";
 import { HubSidePanel } from "./HubSidePanel";
 import { UiButton } from "./ui/UiButton";
@@ -112,6 +115,7 @@ export const HubContent = React.memo(function HubContent({
   winningTileId,
   hasMyWinningBet,
 }: HubContentProps) {
+  const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
   const manualBetForm = useManualBetForm({
     formattedBalance,
     walletConnected,
@@ -123,6 +127,59 @@ export const HubContent = React.memo(function HubContent({
     isAnalyzing,
     isAutoMining,
   });
+  const [feeEstimate, setFeeEstimate] = React.useState<string | null>(null);
+  const [feeEstimateUnavailable, setFeeEstimateUnavailable] = React.useState(false);
+  const selectedTilesKey = gridSelectedTiles.join(",");
+
+  React.useEffect(() => {
+    if (!publicClient || !walletAddress || !walletConnected || !liveStateReady || gridSelectedTiles.length === 0) {
+      setFeeEstimate(null);
+      setFeeEstimateUnavailable(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const amount = parseUnits(manualBetForm.betAmount || "0", 18);
+          if (amount <= 0n) throw new Error("Invalid bet amount");
+          const tiles = [...new Set(gridSelectedTiles)].sort((a, b) => a - b);
+          const request = tiles.length === 1
+            ? { functionName: "placeBet" as const, args: [BigInt(tiles[0]), amount] as const }
+            : {
+                functionName: "placeBatchBetsBitmap" as const,
+                args: [tiles.reduce((mask, tile) => mask | (1n << BigInt(tile - 1)), 0n), amount] as const,
+              };
+          const [gas, fees] = await Promise.all([
+            publicClient.estimateContractGas({
+              account: walletAddress as `0x${string}`,
+              address: CONTRACT_ADDRESS,
+              abi: GAME_ABI,
+              ...request,
+            }),
+            publicClient.estimateFeesPerGas(),
+          ]);
+          const feePerGas = fees.maxFeePerGas ?? fees.gasPrice;
+          if (!feePerGas) throw new Error("No fee quote");
+          if (!cancelled) {
+            setFeeEstimate(Number(formatEther(gas * feePerGas)).toFixed(6));
+            setFeeEstimateUnavailable(false);
+          }
+        } catch {
+          if (!cancelled) {
+            setFeeEstimate(null);
+            setFeeEstimateUnavailable(true);
+          }
+        }
+      })();
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [liveStateReady, manualBetForm.betAmount, publicClient, selectedTilesKey, walletAddress, walletConnected]);
 
   return (
     <>
@@ -189,6 +246,8 @@ export const HubContent = React.memo(function HubContent({
             liveStateReady={liveStateReady}
             readOnlyReason={readOnlyReason}
             selectedTilesCount={selectedTilesCount}
+            feeEstimate={feeEstimate}
+            feeEstimateUnavailable={feeEstimateUnavailable}
             isPending={isPending}
             isRevealing={isRevealing}
             isAnalyzing={isAnalyzing}
@@ -216,6 +275,8 @@ export const HubContent = React.memo(function HubContent({
         manualBetForm={manualBetForm}
         onMine={handleManualMineWithGuard}
         selectedTilesCount={selectedTilesCount}
+        feeEstimate={feeEstimate}
+        feeEstimateUnavailable={feeEstimateUnavailable}
       />
       {selectedTilesCount > 0 && !isAutoMining && !chatOpen && <div className="h-18 lg:hidden" aria-hidden="true" />}
     </>
@@ -233,6 +294,8 @@ function MobileManualActionBar({
   manualBetForm,
   onMine,
   selectedTilesCount,
+  feeEstimate,
+  feeEstimateUnavailable,
 }: {
   chatOpen: boolean;
   coldBootDefaults: boolean;
@@ -244,6 +307,8 @@ function MobileManualActionBar({
   manualBetForm: ReturnType<typeof useManualBetForm>;
   onMine: (betAmount: string) => Promise<void>;
   selectedTilesCount: number;
+  feeEstimate: string | null;
+  feeEstimateUnavailable: boolean;
 }) {
   if (chatOpen || selectedTilesCount <= 0 || isAutoMining) return null;
 
@@ -306,6 +371,11 @@ function MobileManualActionBar({
         >
           {buttonLabel}
         </UiButton>
+        {walletConnected && (
+          <div className="col-span-4 px-1 pb-0.5 text-right text-[7px] font-bold uppercase tracking-[0.08em] text-slate-500">
+            Bet fee: <span className="lore-nums text-sky-200">{feeEstimate ? `~${feeEstimate} ETH` : feeEstimateUnavailable ? "Unavailable" : "Calculating..."}</span>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -7,6 +7,17 @@ full chat history.
 Current launch-readiness truth lives in `docs/current_state.md`. Keep this file
 as historical progress only.
 
+## 2026-07-11 Fee Audit And Contract Audit Follow-Up
+
+- Added mandatory fee-audit work before any fee optimization: collect redacted
+  receipt/gas baselines for approve, one tile, 3/5/25 bitmap tiles, repeat
+  bets, and pre-approved allowance; separate contract gas from network price.
+- Do not change accounting, randomness, or user-visible refresh behavior before
+  that baseline identifies a measured hotspot and a narrow proposed change.
+- Contract audit is in validation: preliminary candidates are resolver-timed
+  randomness bias and unrecoverable rebate residue. No contract patch is
+  approved from preliminary findings alone.
+
 ## 2026-06-29 Indexer Collector Fresh-DB/Epoch Print-Plan Guard
 
 - Strengthened `scripts/collect-indexer-evidence.mjs` so indexer evidence
@@ -4192,6 +4203,156 @@ as historical progress only.
   resolves, nonce gaps, duplicate hashes, or duplicate role/epoch/tile keys.
   Because its RPC label was generic, it is archived as soak evidence and does
   not replace the accepted labeled 50-epoch strict testnet proof.
+
+## 2026-07-12 - Testnet Bet Fee Baseline
+
+- Collected real Linea Sepolia receipts for 1/3/5/25 tiles and all three batch encodings. The major cost is per-tile state, not calldata: 25 selected tiles used about 1.28M gas regardless of encoding.
+- A controlled same-epoch probe measured 149,299 gas for the first user/tile bet and 80,899 gas for the immediate repeat on that tile. The former redundant `hasUserBetOnTile` write is replaced by the already authoritative `userBets == 0` sentinel; payout/rebate accounting and ABI are unchanged.
+- `npm.cmd run test:contract` and a temporary-output Solidity compile passed. Matched optimizer-enabled isolated Sepolia deployments proved the complete first-bet matrix: 1 tile 209,463 -> 186,992 gas; 3 tiles 377,382 -> 309,969; 5 tiles 559,812 -> 447,457; 25 tiles 2,376,720 -> 1,814,945. Every new user/tile saves exactly 22,471 gas; the active testnet configuration is unchanged.
+- Current token EIP-2612 support is not proven by read-only `DOMAIN_SEPARATOR`/`nonces` probes, and the game has no permit/Permit2 consumption path. No permit work was started.
+- Compact receipt table and adoption checklist: `docs/testnet-bet-fee-baseline-2026-07-12.md`.
+
+## 2026-07-12 - New V9 Deployment Canary Matrix
+
+- The new deployment has a fresh-indexer baseline and passed short all-role canaries. The 5-tile matrix completed all four methods with four successful bets; the subsequent 25-tile matrix completed `single` (1 tile), `bitmap` (25), `sameAmount` (25), and `arrays` (25) with four successful bets and four successful resolves.
+- New-deployment 25-tile receipts used 1,837,128 gas (`bitmap`), 1,842,020 (`sameAmount`), and 1,866,386 (`arrays`). These are live receipts, kept separate from the controlled optimizer A/B baseline because epoch state and gas price differ.
+- Two early resolver transactions reverted after consuming their entire 278,841 gas limit. Root cause is estimate variance across the contract's random winner and jackpot branches: `eth_estimateGas` can simulate a cheaper branch than the mined block executes. The canary now records estimate, sent limit, effective gas price, and actual fee for every resolve and applies a 500,000 gas floor before its existing keeper headroom calculation. A follow-up 25-tile run resolved four epochs successfully with a 750,000 sent limit and only 180,472-210,070 gas actually used; the larger limit does not itself increase the paid fee.
+- Verification: `npm.cmd run typecheck` and `npm.cmd run test:logic` passed. This is testnet canary hardening only; it does not change the contract or enable EIP-7702.
+
+## 2026-07-12 - New V9 Rewards, Rebates, And Indexer Evidence
+
+- Fresh SQLite re-indexing for the new deployment found 13 bets, 13 resolved epochs, and one jackpot. A second one-shot run added no logs. Direct chain topic counts matched the same totals, and the fresh DB contains exactly one contract scope, so old-contract rows are not mixed into the active API data.
+- The new deployment passed a real batch reward claim: one test role claimed two winning epochs for 58.88 LINEA in one `claimRewards` transaction (171,319 gas). Post-state marks both epochs claimed. A repeat claim and a no-winning-bet claim both reverted in simulation with the expected custom-error classifications.
+- A dedicated multi-user epoch proved rebate flow: an all-tile bettor and a single-tile bettor joined the same pool; the single-tile bettor lost and received a 0.010125 LINEA rebate. `claimEpochRebate` succeeded (82,216 gas); the repeat claim reverted in simulation as already claimed.
+- Accounting reads for that epoch are internally consistent with the configured split: total pool 27 LINEA, reward pool 25.76, rebate pool 0.26325, with nonzero accrued owner/burn/resolver balances. EIP-7702 remains disabled.
+
+## 2026-07-12 - New V9 Long Canary In Progress
+
+- Started a 50-epoch Linea Sepolia canary after the completed short matrices. It rotates all four test roles, randomizes 1-25 tiles and total stake from 1,000 to 10,000 test LINEA, records receipt gas/fee/nonce data, and uses the resolver gas floor introduced above.
+- This is a real-time run because epochs last one minute. Preserve the current JSONL evidence and inspect its aggregate counters only after the process stops; do not launch a concurrent canary.
+- The deployed bytecode's CBOR metadata confirms Solidity `0.8.34`. Remix optimizer on/off, optimizer runs, and EVM target are not encoded in a way that this lightweight read can prove; retain the Remix Compiler-tab screenshot/export before deployment provenance is marked complete.
+
+## 2026-07-12 - Indexer Reconcile Gap Recovery
+
+- An isolated fresh SQLite test intentionally deleted one resolved epoch. Reconcile detected the gap but its topic-filtered 20,000-block request was rejected by the Sepolia RPC, even though the regular indexer uses 2,000-block chunks.
+- Reconcile now reuses `CHUNK_BLOCKS` and clamps its recent lookup start to the deployment block. The same isolated gap test then restored the deleted epoch in one valid request; it no longer scans the 150,000-block lookback before this contract existed.
+- `npm.cmd run typecheck` and `npm.cmd run test:logic` passed. The test only modified a temporary SQLite under the system temp directory; the active indexer DB and on-chain state were untouched.
+
+## 2026-07-12 - Deployed V9 Compiler And Source Provenance
+
+- The deployed bytecode CBOR/IPFS metadata establishes the compiler/version target; the authoritative Remix Compiler-panel capture confirms Solidity `0.8.34+commit.80d5c536`, optimization enabled with `200` runs, EVM target `osaka`, and compilation target `contracts/LineaOreV9.sol:LineaOreV9`.
+- All 12 deployed compilation sources match the local source set semantically. The V9 raw metadata hash initially differed because Remix published CRLF source text while the worktree uses LF; normalized lines are identical and the local V9 source hash matches the published metadata hash after CRLF normalization.
+- This proves the deployed source contains the sentinel-based first-user/tile optimization currently under test. No EIP-7702 behavior was enabled or changed.
+
+## 2026-07-12 - New V9 50-Epoch Canary And Fee Paths
+
+- The randomized testnet canary completed all 50 bets and 50 resolves with zero failed entries, unique hashes, unique role/epoch/tile keys, and no pending-versus-latest nonce mismatch. Coverage: all four on-chain bet methods, all four roles, 1-25 tiles, and 1,236.7-9,734.5 test LINEA per transaction.
+- First-approve measurement from zero allowance passed: `approve` used 46,930 gas. A clean first bet on a new user/tile used 171,714 gas. In a separately resolved fresh epoch, the immediate same-user/same-tile repeat used 76,051 gas, confirming the repeat path does not pay the first-user/tile storage cost.
+- An earlier four-transaction attempt crossed an epoch boundary before its fourth transaction; the runner guard prevented late sends on subsequent attempts. That 348,374-gas auto-resolve receipt is retained only as timing evidence and is excluded from the first-versus-repeat gas comparison.
+
+## 2026-07-12 - Candidate HTTP Smoke Reproduction
+
+- A fresh temporary candidate SQLite was indexed from deployment block and used only by an isolated Next runtime on a separate localhost port. The complete HTTP smoke passed, including cold `/api/leaderboards` with `200`; the prior leaderboard `500` was not reproducible.
+- The isolated runtime and its temporary generated TypeScript includes were removed after the check. The active runtime, active database, and chain state were not changed.
+
+## 2026-07-12 - Candidate Source Invariants
+
+- `npm.cmd run test:contract` passed against the normalized local V9 source set that matches the candidate compiler metadata. The check covers ABI/event compatibility, reentrancy guards, epoch windows, fee/rollover math, and aggregate reward/rebate claims.
+
+## 2026-07-12 - Candidate Browser Baseline
+
+- The isolated candidate desktop hub rendered the game data, chart, grid, Manual Bet and Auto-Miner controls; captured browser-console errors were empty. Mobile viewport navigation timed out in the in-app browser CDP path, so no mobile sign-off is claimed.
+- The dev server emitted one React asynchronous-state warning without a component stack. It was not reproduced in captured browser console errors, so it remains an investigation item rather than a speculative code patch.
+
+## 2026-07-12 - Candidate 50-Epoch Canary
+
+- Candidate-scoped canary completed 50 sequential bets and 50 resolves across epochs 22-71 in 3,503,373 ms. It covered four roles, four bet methods, 1-25 tiles, and 1,017.1-9,749.8 Test LINEA per bet with zero failed bets/resolves, nonce gaps, duplicate hashes, or duplicate role/epoch/tile keys.
+- Aggregate evidence is saved in `docs/testnet-candidate-canary-2026-07-12.md`; raw JSONL remains local evidence and is not copied into documentation.
+
+## 2026-07-12 - Candidate Mobile Browser Baseline
+
+- Chrome at `390x844` rendered the candidate mobile sidebar, navigation, ticker, grid, Manual Bet and Auto-Miner controls. The connector lost the tab before console/auth checks, so this confirms layout availability only, not authenticated mobile wallet sign-off.
+
+## 2026-07-12 - Candidate Authenticated Privy Manual Bet
+
+- After the production candidate runtime was rebuilt with the configured Privy App ID, the user authenticated and placed a 10 Test LINEA manual bet on tile `#25` through the active embedded wallet without a MetaMask confirmation.
+- A subsequent read-only candidate indexer pass ingested exactly one additional bet and one resolved epoch; repair/reconcile found no missing epochs.
+- The full isolated production HTTP smoke then passed again against that rebuilt runtime. Public game/health endpoints remained available, while protected admin/chat checks retained their expected authentication failures.
+
+## 2026-07-13 - Candidate Fee-Estimate UX Gap
+
+- The shared mining runtime estimates contract gas and current network fees before a bet is submitted, but the Manual Bet panel currently only tells users to keep ETH for gas. There is no pre-confirmation ETH estimate rendered for the selected transaction path.
+- This remains a deliberate pending gate: the fix must derive a debounced read-only estimate from the exact selected method and wallet state, without adding a fixed estimate or increasing the normal game polling load.
+
+## 2026-07-13 - Candidate Fee-Estimate UI Implementation
+
+- Added a debounced, read-only `estimateContractGas` plus current fee quote for the selected single/bitmap bet path. The estimate is rendered in both the desktop Manual Bet panel and mobile action bar; an RPC/simulation failure renders `Unavailable`, never a fixed fallback value. A first approval remains explicitly described as a separate possible cost.
+- `npm.cmd run typecheck` and `npm.cmd run test:logic` passed. The logic suite now keeps a source-invariant regression check for debounce, live gas/fee simulation, and desktop/mobile unavailable states. Three isolated production build attempts stopped at Next's optimized-build stage without an error or `BUILD_ID`, so browser proof of this UI change remains pending and no fourth build retry was started.
+- A controlled `smoke:browser` retry then stopped before browser launch because `http://localhost:3000` did not answer its warm-up request. This is an unavailable local dev origin, not a candidate UI or console result; no automatic server restart or third smoke was attempted.
+
+## 2026-07-13 - Dev Runner Safety Incident
+
+- An attempted isolated UI runtime used `npm run dev`, whose repository wrapper starts the UI together with a keeper bot and indexer watcher. The keeper submitted one resolve for an overdue epoch before the full process tree was identified and stopped.
+- The entire newly created dev/bot/indexer tree and its listener were stopped immediately. No further transactions were submitted. Future browser-only work must use an explicit UI-only command or a server proven not to launch operator workers; never use the composite dev runner for this purpose.
+- `test:logic` now asserts that `dev:ui` remains direct `next dev` and that the browser runbook preserves the composite-runner prohibition.
+
+## 2026-07-13 - Candidate UI-Only Browser Smoke
+
+- The verified `npm run dev:ui -- -p 3004` path was used without bot/indexer children. The standard browser smoke passed against the candidate source: desktop/mobile hydration, wallet selector, grid/tile interaction, chart, numeric typography, Auto-Miner input persistence, chat and navigation had no unexpected page or console errors.
+- The UI-only process tree was stopped after the smoke, and the port was verified closed. This is structural browser evidence only; it does not substitute for authenticated Privy fee-quote or external-wallet transaction evidence.
+
+## 2026-07-13 - Auto-Miner Retest Waived
+
+- The user declined another live candidate Auto-Miner/reload run, stating that this flow has already been refined. Existing smoke evidence remains recorded, but no fresh authenticated run is claimed in the candidate checklist.
+
+## 2026-07-13 - Wallet Transfer Error Consistency
+
+- Unified ETH top-up and ETH withdrawal failure handling with the existing LINEA transfer classifier. Provider gas-cap failures now give the same actionable pre-submission guidance instead of exposing raw RPC text; ambiguous wallet timeouts instruct users to check activity before retrying, and reverted transfers state that funds were not moved.
+- `test:logic` and `typecheck` passed; the logic suite asserts that all three ETH/LINEA transfer paths use the shared classifier and preserves timeout/revert guidance.
+
+## 2026-07-13 - External Wallet Account-Switch Race
+
+- External ETH/LINEA sends now re-read the account selected by the injected provider after the target-network switch completes. This prevents a stale pre-switch MetaMask/Rabby account from being placed in the transaction `from` field when account context changes during the network prompt.
+- `npm.cmd run test:logic` and `npm.cmd run typecheck` passed. The regression check preserves the required order: verify chain, refresh selected account, then send. Live Rabby and authenticated mobile transaction evidence remains pending.
+
+## 2026-07-13 - Live-State RPC Recovery Deadlock
+
+- Replaced the live-state failure backoff's modulo-on-failure-count condition. At failure counts not divisible by the capped modulus, the old code skipped forever because only an attempted request could change that count.
+- Recovery now tracks elapsed poll intervals independently and always retries after at most three skipped intervals. Healthy polling and the user-visible pool/chart refresh interval are unchanged.
+- Temporary direct-contract fallback reads now turn off after two consecutive successful API snapshots, unless an active Auto-Miner session explicitly requires them. This prevents a transient outage from leaving API polling and 8+ direct wagmi reads active together for the rest of the page session.
+- `npm.cmd run test:logic` and `npm.cmd run typecheck` passed. The regression matrix covers healthy reads, the backoff threshold, capped retry intervals after long failure streaks, recovery hysteresis, and the Auto-Miner force-live exception.
+
+## 2026-07-13 - Live-State Browser Recovery Drill
+
+- Added the focused `node scripts/smoke-live-state-recovery.mjs` check. Against a UI-only candidate runtime it injected five consecutive `/api/live-state` 503 responses, then restored successful responses without touching wallets, RPC transactions, keeper, or indexer processes.
+- The browser observed eight polling attempts, two successful recovery reads, a maximum retry gap of 20 seconds, a continuously mounted pool chart, and zero page errors. The UI-only process was stopped and port `3004` was verified closed after the drill.
+
+## 2026-07-13 - Candidate Wallet Reruns Waived
+
+- The user accepted the existing wallet/mobile and Auto-Miner evidence and explicitly declined another authenticated fee-quote, Rabby, mobile-wallet, and Auto-Miner rerun. The candidate checklist records these as accepted without a fresh rerun rather than presenting old evidence as new.
+- The remaining testnet work is monitoring for new regressions. Mainnet proof and permit work stay paused.
+- Final candidate verification passed: `npm.cmd run test:logic`, `npm.cmd run test:contract`, `npm.cmd run typecheck`, the controlled live-state recovery browser drill, and `git diff --check` (line-ending warnings only).
+
+## 2026-07-12 - Chrome MetaMask Login Blocker
+
+- In the Chrome connector session, the Privy wallet chooser offered MetaMask but then showed a WalletConnect QR flow. The connector's isolated page evaluation did not expose `window.ethereum`; that result is not sufficient to attribute the QR fallback to the user's MetaMask installation or to the application configuration.
+- Local Privy configuration explicitly includes `detected_ethereum_wallets` and `metamask`. The remaining task is to reproduce and diagnose the fallback in a normal browser page context before changing that configuration. No wallet account, address, key, or transaction data was read.
+- The LORE tab remains at the login handoff. Do not change the working wallet flow based only on the connector observation.
+
+## 2026-07-12 - Testnet Runtime Regression Refresh
+
+- `npm.cmd run test:logic` passed. Its expected offline, pending, receipt-timeout, and epoch-wait simulations completed without a duplicate resend.
+- The standard `npm.cmd run smoke:browser` passed on the active local server: desktop/mobile shell, wallet selector, manual/auto-miner numeric typography, pool chart mount, persistence, navigation, chat, and responsive layout all passed.
+- The expanded debug Auto-Miner browser smoke completed without a process error, but its terminal tail was truncated before a compact final summary. Treat the prior saved debug-smoke evidence as authoritative rather than promoting this rerun as a separate pass.
+- A new `test:contract` rerun did not start because the local approval runner timed out twice before process creation. This is an execution-environment limitation, not a contract test result; no third retry was attempted.
+- A fresh read-only `GET /api/health/runtime` returned public status `ok` for Linea Sepolia. EIP-7702 and EIP-7702 mining are both disabled. The development Privy fallback is active, which is acceptable for this testnet-only server and remains a hard blocker for any future mainnet promotion.
+
+## 2026-07-12 - V9 Cached Epoch Micro-Optimization
+
+- Audited every bet-path storage write. `userBets`, `userEpochVolumes`, `tilePools`, `epochs[epoch].totalPool`, and `tileUserCounts` are all consumed by payout, rebate, accounting, or live UI/indexer reads; removing any of them would change the protocol model or its observable state.
+- The safe remaining change is to cache `currentEpoch` once after `transferFrom`, pass it into `_recordBet`, and reuse it for the emitted event. Single, arrays, same-amount, and bitmap paths previously re-read the same warm storage slot once per selected tile. No storage write, event payload, ABI, reward/rebate path, randomness, or reentrancy guard changed.
+- `npm.cmd run test:contract` passed with a new assertion that the helper cannot re-read `currentEpoch`; the changed contract also compiled with the installed local `solc` into `.tmp/v9-gas-audit`.
+- A receipt-level delta is intentionally not claimed yet: the changed source needs a separate controlled Sepolia deployment and identical first-bet matrix before a gas number can be recorded. The expected saving is only the repeated warm `SLOAD` cost (approximately 100 gas per `_recordBet` invocation), not a material reduction like the earlier 22,471-gas storage-write removal.
 
 ## 2026-07-11 - Repository Cleanup Baseline
 

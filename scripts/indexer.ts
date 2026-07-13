@@ -66,7 +66,8 @@ const CHUNK_BLOCKS = 2_000n;
 const RUN_CHUNK_BLOCKS = 5_000n;
 // Sepolia public RPC rejects 20k eth_getLogs ranges; 10k avoids retry splitting.
 const REPAIR_CHUNK_BLOCKS = 10_000n;
-const RECONCILE_SCAN_CHUNK_BLOCKS = 20_000n;
+// Reconcile adds indexed topic filters, so keep it within the proven regular fetch limit.
+const RECONCILE_SCAN_CHUNK_BLOCKS = CHUNK_BLOCKS;
 const RECONCILE_RECENT_LOOKBACK_BLOCKS = 150_000n;
 const POLL_INTERVAL_MS = 15_000;
 const RETRY_COUNT = 5;
@@ -972,10 +973,11 @@ async function runEpochReconcile(currentBlock: bigint) {
   const epochsPatch = new Map<string, EpochRecord>();
   for (const epNum of targets) {
     const epTopic = toHex(BigInt(epNum), { size: 32 });
-    const recentFrom =
+    const recentCandidate =
       currentBlock > RECONCILE_RECENT_LOOKBACK_BLOCKS
         ? currentBlock - RECONCILE_RECENT_LOOKBACK_BLOCKS
         : INDEXER_START_BLOCK;
+    const recentFrom = recentCandidate > INDEXER_START_BLOCK ? recentCandidate : INDEXER_START_BLOCK;
     let logs = await fetchLogsByTopicsChunked(
       [resolvedSig, epTopic],
       `EpochResolved:${epNum}:recent`,

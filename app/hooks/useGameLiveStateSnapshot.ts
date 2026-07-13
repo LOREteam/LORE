@@ -47,6 +47,17 @@ export function isLiveStateSnapshotFresh(fetchedAt: unknown, now = Date.now()): 
   return now - fetchedAt <= LIVE_STATE_SNAPSHOT_MAX_AGE_MS;
 }
 
+export function getLiveStateFailurePollIntervalCount(consecutiveFailures: number): number {
+  return 1 + Math.min(Math.max(Math.trunc(consecutiveFailures) - 2, 0), 3);
+}
+
+export function shouldDisableLiveContractReadsAfterRecovery(
+  forceLiveContractReads: boolean,
+  consecutiveSuccesses: number,
+): boolean {
+  return !forceLiveContractReads && consecutiveSuccesses >= 2;
+}
+
 export function loadLiveStateSnapshot(): LiveStateApiResponse | null {
   if (typeof window === "undefined") return null;
   try {
@@ -163,10 +174,13 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
     if (!isPageVisible) return;
     const controller = new AbortController();
     let consecutiveFailures = 0;
+    let consecutiveSuccesses = 0;
+    let pollIntervalsSinceAttempt = 0;
     let requestInFlight = false;
 
     const fetchLiveState = async () => {
       if (requestInFlight) return;
+      pollIntervalsSinceAttempt = 0;
       requestInFlight = true;
       const requestController = new AbortController();
       const abortRequest = () => requestController.abort(LIVE_STATE_DISPOSE_ABORT_REASON);
@@ -187,19 +201,25 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
         if (controller.signal.aborted || requestController.signal.aborted) return;
         if (!response.ok) {
           consecutiveFailures++;
+          consecutiveSuccesses = 0;
           enableLiveReadsAfterFailure();
           return;
         }
         consecutiveFailures = 0;
         const payload = (await response.json()) as LiveStateApiResponse;
         if (controller.signal.aborted || requestController.signal.aborted) return;
+        consecutiveSuccesses += 1;
+        const disableLiveReads = shouldDisableLiveContractReadsAfterRecovery(
+          forceLiveContractReads,
+          consecutiveSuccesses,
+        );
         const nextSignature = getSnapshotSignature(payload);
         if (nextSignature !== snapshotSignatureRef.current) {
           snapshotSignatureRef.current = nextSignature;
           setSnapshotState((current) => ({
             snapshot: payload,
             bootstrapPending: false,
-            liveContractReadsEnabled: current.liveContractReadsEnabled,
+            liveContractReadsEnabled: disableLiveReads ? false : current.liveContractReadsEnabled,
           }));
           try {
             window.localStorage.setItem(getLiveStateSnapshotKey(), JSON.stringify(payload));
@@ -217,9 +237,15 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
               // Ignore storage quota/privacy mode failures.
             }
           }
-          setSnapshotState((current) =>
-            current.bootstrapPending ? { ...current, bootstrapPending: false } : current,
-          );
+          setSnapshotState((current) => {
+            const nextLiveReadsEnabled = disableLiveReads ? false : current.liveContractReadsEnabled;
+            if (!current.bootstrapPending && nextLiveReadsEnabled === current.liveContractReadsEnabled) return current;
+            return {
+              ...current,
+              bootstrapPending: false,
+              liveContractReadsEnabled: nextLiveReadsEnabled,
+            };
+          });
         }
       } catch (err) {
         if (
@@ -229,6 +255,7 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
           return;
         }
         consecutiveFailures++;
+        consecutiveSuccesses = 0;
         enableLiveReadsAfterFailure();
         if (consecutiveFailures <= 2) {
           log.warn("LiveState", "fetch failed", {
@@ -251,15 +278,16 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
 
     void fetchLiveState();
     const intervalId = window.setInterval(() => {
-      // Exponential backoff: skip polls when failures stack up (max skip = 3 intervals)
-      if (consecutiveFailures > 2 && consecutiveFailures % Math.min(consecutiveFailures, 4) !== 0) return;
+      // Back off failed reads by at most three intervals, but always retry.
+      pollIntervalsSinceAttempt += 1;
+      if (pollIntervalsSinceAttempt < getLiveStateFailurePollIntervalCount(consecutiveFailures)) return;
       void fetchLiveState();
     }, LIVE_STATE_FALLBACK_POLL_MS);
     return () => {
       controller.abort(LIVE_STATE_DISPOSE_ABORT_REASON);
       window.clearInterval(intervalId);
     };
-  }, [isPageVisible]);
+  }, [forceLiveContractReads, isPageVisible]);
 
   const fallbackCurrentEpoch = useMemo(
     () => toBigIntOrNull(serverLiveState?.currentEpoch ?? null),

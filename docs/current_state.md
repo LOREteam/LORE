@@ -174,4 +174,4 @@ Current focus: Linea Sepolia testnet readiness. Mainnet proof tooling is retaine
 
 ## Next Best Step
 
-Collect deliberate signed wallet UX for external-wallet rejection, transfer failure/revert, a clean-wallet first transaction, and a true mobile-device session. Wrong-network switching, ETH/LINEA deposits and withdrawals, pending-to-success, reconnect, route/tab recovery, and explorer rendering are already collected. Mainnet G1-G14 proof remains paused.
+The testnet candidate is accepted on the recorded contract, gas, indexer/API, canary, browser, RPC-recovery, and existing wallet evidence. The user explicitly waived another authenticated fee-quote, Rabby, mobile-wallet, and Auto-Miner rerun; those checks remain labelled as not freshly rerun. Keep the shared testnet runtime monitored and collect only new regressions. Mainnet G1-G14 proof remains paused.

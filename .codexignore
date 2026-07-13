@@ -1,4 +1,6 @@
 .next/
+.next-candidate/
+.next-candidate-*/
 artifacts/
 cache/
 typechain-types/

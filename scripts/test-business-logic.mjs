@@ -606,6 +606,18 @@ async function main() {
     "bootstrap resolver must surface reverted resolve txs as retryable noop responses",
   );
   const smokeBrowserSource = readFileSync("scripts/smoke-browser.mjs", "utf8");
+  const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+  assert.equal(
+    packageScripts["dev:ui"],
+    "next dev --webpack",
+    "browser-only development must keep a direct UI-only command",
+  );
+  const browserAutomationSource = readFileSync("docs/browser_automation.md", "utf8");
+  assert.match(
+    browserAutomationSource,
+    /Never use `npm run dev` for browser-only work[\s\S]*npm run dev:ui -- -p <port>/,
+    "browser runbook must prevent composite dev runner from starting operator workers",
+  );
   assert.doesNotMatch(
     smokeBrowserSource,
     /configured chains are not supported/,
@@ -708,6 +720,16 @@ async function main() {
     hubContentSource,
     /readOnlyReason=\{readOnlyReason\}/,
     "hub must pass read-only reason to desktop and mobile betting controls",
+  );
+  assert.match(
+    hubContentSource,
+    /window\.setTimeout\([\s\S]*estimateContractGas[\s\S]*estimateFeesPerGas[\s\S]*\}, 600\)/,
+    "hub fee estimate must use a debounced live gas and fee quote instead of a fixed value",
+  );
+  assert.match(
+    hubContentSource,
+    /Bet fee:[\s\S]*feeEstimateUnavailable[\s\S]*Unavailable/,
+    "mobile manual bet must show an explicit unavailable fee state",
   );
   const smokeBrowserFlowsSource = readFileSync("scripts/smoke-browser-lib/flows.mjs", "utf8");
   assert.match(
@@ -960,6 +982,11 @@ async function main() {
   );
   assert.match(
     betPanelSource,
+    /Bet network fee[\s\S]*feeEstimateUnavailable[\s\S]*Unavailable/,
+    "desktop manual bet must show the live fee estimate or an explicit unavailable state",
+  );
+  assert.match(
+    betPanelSource,
     /data-testid="auto-miner-action"/,
     "auto-miner primary action must expose a stable smoke-test selector",
   );
@@ -1058,6 +1085,21 @@ async function main() {
     /transaction gas limit cap exceeded[\s\S]*transfer was rejected before submission/,
     "wallet transfer UI must replace the provider gas-cap error with actionable pre-submission guidance",
   );
+  assert.match(
+    walletActionsSource,
+    /timed out[\s\S]*status is unknown[\s\S]*Check wallet activity before retrying/,
+    "wallet transfer timeout must warn against an unsafe duplicate retry",
+  );
+  assert.match(
+    walletActionsSource,
+    /reverted on-chain[\s\S]*Funds were not moved/,
+    "wallet transfer revert must explain that the transfer did not settle",
+  );
+  assert.equal(
+    [...walletActionsSource.matchAll(/notify\(formatWalletTransferFailure\(err, "(?:ETH|LINEA)"\), "danger"\)/g)].length,
+    3,
+    "all ETH and LINEA transfer failures must use the shared actionable classifier",
+  );
   const testnetRevertSource = readFileSync("scripts/run-testnet-revert-check.ts", "utf8");
   assert.match(
     testnetRevertSource,
@@ -1089,6 +1131,11 @@ async function main() {
     privyWalletSource,
     /method: "eth_accounts"[\s\S]*setProviderExternalWalletAddress\(providerAccount\)[\s\S]*from: providerAccount/,
     "external transfers must use the account currently selected in the provider instead of a stale Privy wallet-list address",
+  );
+  assert.match(
+    privyWalletSource,
+    /const currentChainId =[\s\S]*method: "eth_chainId"[\s\S]*method: "eth_accounts"[\s\S]*from: providerAccount/,
+    "external transfers must refresh the selected account after the network switch before sending",
   );
   assert.match(
     privyWalletSource,
@@ -1345,6 +1392,14 @@ async function main() {
   assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(1_000, 2_000), true);
   assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(2_000 + 6_000, 2_000), false);
   assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(2_000 - 13 * 60 * 60 * 1000, 2_000), false);
+  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(0), 1);
+  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(2), 1);
+  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(3), 2);
+  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(5), 4);
+  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(100), 4);
+  assert.equal(liveStateSnapshot.shouldDisableLiveContractReadsAfterRecovery(false, 1), false);
+  assert.equal(liveStateSnapshot.shouldDisableLiveContractReadsAfterRecovery(false, 2), true);
+  assert.equal(liveStateSnapshot.shouldDisableLiveContractReadsAfterRecovery(true, 2), false);
   assert.equal(cacheTimestamp.normalizeCacheTimestamp(1_000, 2_000), 1_000);
   assert.equal(cacheTimestamp.normalizeCacheTimestamp(Number.NaN, 2_000), null);
   assert.equal(cacheTimestamp.normalizeCacheTimestamp(2_000 + 6_000, 2_000), null);
@@ -1764,6 +1819,11 @@ async function main() {
   );
   assert.match(
     liveRoundCanarySource,
+    /LIVE_TEST_REPEAT_SAME_BET[\s\S]*repeat: true[\s\S]*if \(REPEAT_SAME_BET\) throw error/,
+    "live canary fee measurement must be explicit and stop after a failed duplicate bet",
+  );
+  assert.match(
+    liveRoundCanarySource,
     /walletPreflight ready=.*roles=.*\n.*if \(VERBOSE_WALLET_PREFLIGHT\) console\.table\(rows\)/s,
     "live canary must default to a redacted wallet preflight summary",
   );
@@ -1771,6 +1831,11 @@ async function main() {
     liveRoundCanarySource,
     /let emptyResolveBootstrapUsed = false[\s\S]*emptyEpoch && \(!ALLOW_EMPTY_RESOLVE \|\| emptyResolveBootstrapUsed\)\) return[\s\S]*emptyEpoch && receipt\.status === "success"\) emptyResolveBootstrapUsed = true/,
     "live canary must allow at most one explicit empty-epoch bootstrap",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /RESOLVE_GAS_FLOOR[\s\S]*gasEstimate > RESOLVE_GAS_FLOOR \? gasEstimate : RESOLVE_GAS_FLOOR[\s\S]*gasEstimate: gasEstimate\.toString\(\)[\s\S]*gasLimit: gas\.toString\(\)/,
+    "resolver canary must protect variable randomness branches with a floor and preserve estimate-versus-limit evidence",
   );
   assert.match(
     liveRoundCanarySource,
@@ -1793,6 +1858,11 @@ async function main() {
     indexerSource,
     /const REPAIR_CHUNK_BLOCKS = 10_000n/,
     "indexer repair must stay within the confirmed Sepolia RPC log range",
+  );
+  assert.match(
+    indexerSource,
+    /RECONCILE_SCAN_CHUNK_BLOCKS = CHUNK_BLOCKS[\s\S]*recentCandidate[\s\S]*recentCandidate > INDEXER_START_BLOCK/,
+    "indexer reconcile must stay within the supported log range and never scan before deployment",
   );
   assert.match(
     liveRoundCanarySource,

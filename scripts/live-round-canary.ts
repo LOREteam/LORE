@@ -31,14 +31,18 @@ loadDotenv({ path: ".env.live-test-wallets", override: false });
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
 const TARGET_ROUNDS = parseIntegerEnv("LIVE_TEST_TARGET_ROUNDS", 300, 1, 10_000);
-const TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_TILES_PER_ROUND", 3, 1, 24);
+const TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_TILES_PER_ROUND", 3, 1, 25);
 const SAFE_SECONDS_LEFT = parseIntegerEnv("LIVE_TEST_SAFE_SECONDS_LEFT", 35, 5, 600);
 const SAFE_WINDOW_TIMEOUT_MS = parseIntegerEnv("LIVE_TEST_SAFE_WINDOW_TIMEOUT_MS", 180_000, 30_000, 3_600_000);
 const SAFE_WINDOW_HEARTBEAT_MS = parseIntegerEnv("LIVE_TEST_SAFE_WINDOW_HEARTBEAT_MS", 30_000, 5_000, 600_000);
 const RESOLVE_RETRY_COOLDOWN_MS = parseIntegerEnv("LIVE_TEST_RESOLVE_RETRY_COOLDOWN_MS", 15_000, 5_000, 600_000);
+// Randomness can make the mined resolve take a costlier winner branch than eth_estimateGas simulated.
+const RESOLVE_GAS_FLOOR = BigInt(parseIntegerEnv("LIVE_TEST_RESOLVE_GAS_FLOOR", 500_000, 100_000, 1_000_000));
 const LOOP_PAUSE_MS = parseIntegerEnv("LIVE_TEST_LOOP_PAUSE_MS", 1_500, 0, 120_000);
 const MAX_FAILURES = parseIntegerEnv("LIVE_TEST_MAX_FAILURES", 20, 1, 10_000);
 const DRY_RUN = process.env.LIVE_TEST_DRY_RUN === "1";
+const FORCE_ALLOWANCE_APPROVE = process.env.LIVE_TEST_FORCE_ALLOWANCE_APPROVE === "1";
+const REPEAT_SAME_BET = process.env.LIVE_TEST_REPEAT_SAME_BET === "1";
 const ALLOW_EMPTY_RESOLVE = process.env.LIVE_TEST_ALLOW_EMPTY_RESOLVE === "1";
 const VERBOSE_WALLET_PREFLIGHT = process.env.LIVE_TEST_VERBOSE_WALLETS === "1";
 const BET_AMOUNT = parseTokenAmountEnv("LIVE_TEST_BET_AMOUNT", "0.01");
@@ -54,8 +58,8 @@ const MAX_TOTAL_BET_AMOUNT = parseTokenAmountEnv(
   "LIVE_TEST_MAX_TOTAL_BET_AMOUNT",
   process.env.LIVE_TEST_MAX_BET_AMOUNT ?? formatUnits(BET_AMOUNT * BigInt(TILES_PER_ROUND), 18),
 );
-const MIN_TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_MIN_TILES_PER_ROUND", RANDOMIZE_ROUNDS ? 1 : TILES_PER_ROUND, 1, 24);
-const MAX_TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_MAX_TILES_PER_ROUND", RANDOMIZE_ROUNDS ? 24 : TILES_PER_ROUND, 1, 24);
+const MIN_TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_MIN_TILES_PER_ROUND", RANDOMIZE_ROUNDS ? 1 : TILES_PER_ROUND, 1, 25);
+const MAX_TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_MAX_TILES_PER_ROUND", RANDOMIZE_ROUNDS ? 25 : TILES_PER_ROUND, 1, 25);
 const STRESS_SEED = parseIntegerEnv("LIVE_TEST_STRESS_SEED", 13_337, 1, Number.MAX_SAFE_INTEGER);
 if (MIN_TOTAL_BET_AMOUNT > MAX_TOTAL_BET_AMOUNT) {
   throw new Error("LIVE_TEST_MIN_TOTAL_BET_AMOUNT must be <= LIVE_TEST_MAX_TOTAL_BET_AMOUNT");
@@ -93,14 +97,19 @@ type RoundEvent = {
   error?: string;
   errorKind?: string;
   epoch?: string;
+  effectiveGasPrice?: string;
+  gasEstimate?: string;
   gasEstimateFallback?: boolean;
+  gasLimit?: string;
   gasUsed?: string;
   hash?: Hash;
   mode?: BetMode | "approve" | "epoch-wait" | "resolve" | "preflight";
   network?: string;
+  networkFeeWei?: string;
   nonceLatest?: number;
   noncePending?: number;
   ok: boolean;
+  repeat?: boolean;
   rpcLabel?: string;
   role: string;
   round: number;
@@ -283,7 +292,8 @@ function getPlannedSpendByRole(wallets: LiveWallet[]) {
     const wallet = wallets[walletIndex];
     const mode = pickMode(round);
     const plan = pickRoundPlan(round, walletIndex, mode);
-    plannedSpendByRole.set(wallet.role, (plannedSpendByRole.get(wallet.role) ?? 0n) + plan.totalAmount);
+    const plannedSpend = REPEAT_SAME_BET ? plan.totalAmount * 2n : plan.totalAmount;
+    plannedSpendByRole.set(wallet.role, (plannedSpendByRole.get(wallet.role) ?? 0n) + plannedSpend);
   }
   return plannedSpendByRole;
 }
@@ -354,13 +364,14 @@ async function resolveIfNeeded(params: {
     return;
   }
   try {
-    let gas = await publicClient.estimateContractGas({
+    const gasEstimate = await publicClient.estimateContractGas({
       account: resolver.account.address,
       address: CONTRACT_ADDRESS,
       abi: GAME_ABI,
       functionName: "resolveEpoch",
       args: [epoch],
     });
+    let gas = gasEstimate > RESOLVE_GAS_FLOOR ? gasEstimate : RESOLVE_GAS_FLOOR;
     const fees = await getFeeOverrides(publicClient);
     const nativeBalance = await publicClient.getBalance({ address: resolver.account.address });
     const affordableGasLimit = getAffordableKeeperGasLimit(gas, nativeBalance, fees);
@@ -397,9 +408,13 @@ async function resolveIfNeeded(params: {
       amount: "0",
       durationMs: Date.now() - startedAt,
       epoch: epoch.toString(),
+      effectiveGasPrice: receipt.effectiveGasPrice.toString(),
+      gasEstimate: gasEstimate.toString(),
+      gasLimit: gas.toString(),
       gasUsed: receipt.gasUsed.toString(),
       hash,
       mode: "resolve",
+      networkFeeWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(),
       ok: receipt.status === "success",
       role: resolver.role,
       round: -1,
@@ -498,7 +513,7 @@ async function ensureAllowance(params: {
     functionName: "allowance",
     args: [wallet.account.address, CONTRACT_ADDRESS],
   });
-  if (allowance >= requiredAllowance) return;
+  if (!FORCE_ALLOWANCE_APPROVE && allowance >= requiredAllowance) return;
 
   const startedAt = Date.now();
   const approveAmount = APPROVE_AMOUNT > requiredAllowance ? APPROVE_AMOUNT : requiredAllowance;
@@ -529,7 +544,9 @@ async function ensureAllowance(params: {
   writeEvent(logPath, {
     amount: formatUnits(approveAmount, 18),
     durationMs: Date.now() - startedAt,
+    effectiveGasPrice: receipt.effectiveGasPrice.toString(),
     gasUsed: receipt.gasUsed.toString(),
+    networkFeeWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(),
     hash,
     mode: "approve",
     ok: receipt.status === "success",
@@ -546,13 +563,14 @@ async function placeRound(params: {
   mode: BetMode;
   plan: RoundPlan;
   publicClient: PublicClient;
+  repeat?: boolean;
   round: number;
   secondsLeft: number;
   tiles: number[];
   transport: ReturnType<typeof fallback>;
   wallet: LiveWallet;
 }) {
-  const { atomicAdvance = false, epoch, logPath, mode, plan, publicClient, round, secondsLeft, tiles, transport, wallet } = params;
+  const { atomicAdvance = false, epoch, logPath, mode, plan, publicClient, repeat = false, round, secondsLeft, tiles, transport, wallet } = params;
   const startedAt = Date.now();
   const walletClient = createWalletClient({ account: wallet.account, chain: APP_CHAIN, transport });
   const nativeBalance = await publicClient.getBalance({ address: wallet.account.address });
@@ -613,14 +631,17 @@ async function placeRound(params: {
     amounts: mode === "arrays" ? plan.amounts.map((value) => formatUnits(value, 18)) : undefined,
     atomicAdvance,
     durationMs: Date.now() - startedAt,
+    effectiveGasPrice: receipt.effectiveGasPrice.toString(),
     epoch: recordedEpoch.toString(),
     gasEstimateFallback,
     gasUsed: receipt.gasUsed.toString(),
+    networkFeeWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(),
     hash,
     mode,
     nonceLatest,
     noncePending,
     ok: receipt.status === "success",
+    repeat,
     role: wallet.role,
     round,
     secondsLeft,
@@ -714,6 +735,7 @@ async function main() {
       `tiles=${MIN_TILES_PER_ROUND}..${MAX_TILES_PER_ROUND}`,
   );
   console.log(`[live-canary] emptyResolveBootstrap=${ALLOW_EMPTY_RESOLVE ? "enabled" : "disabled"}`);
+  console.log(`[live-canary] feeMeasurement repeatSameBet=${REPEAT_SAME_BET ? "enabled" : "disabled"} forceAllowanceApprove=${FORCE_ALLOWANCE_APPROVE ? "enabled" : "disabled"}`);
   console.log(`[live-canary] log=${logPath}`);
 
   const contractToken = await publicClient.readContract({
@@ -771,12 +793,40 @@ async function main() {
         wallet,
       });
       if (event.ok) {
-        lastAttemptedEpoch = BigInt(event.epoch ?? epoch);
         successes += 1;
         console.log(
           `[live-canary] ok round=${round + 1}/${TARGET_ROUNDS} role=${wallet.role} mode=${mode} ` +
             `total=${event.totalAmount} tiles=${plan.tileCount} epoch=${event.epoch} tx=${event.hash}`,
         );
+        if (REPEAT_SAME_BET) {
+          const repeatEvent = await placeRound({
+            atomicAdvance: false,
+            epoch: BigInt(event.epoch ?? epoch),
+            logPath,
+            mode,
+            plan,
+            publicClient,
+            repeat: true,
+            round,
+            secondsLeft,
+            tiles,
+            transport: broadcastTransport,
+            wallet,
+          });
+          if (!repeatEvent.ok) {
+            failures += 1;
+            errorKinds.set("repeat-tx-reverted", (errorKinds.get("repeat-tx-reverted") ?? 0) + 1);
+            throw new Error(`Repeat fee measurement reverted; see ${logPath}`);
+          }
+          successes += 1;
+          console.log(
+            `[live-canary] ok repeat round=${round + 1}/${TARGET_ROUNDS} role=${wallet.role} mode=${mode} ` +
+              `total=${repeatEvent.totalAmount} tiles=${plan.tileCount} epoch=${repeatEvent.epoch} tx=${repeatEvent.hash}`,
+          );
+          lastAttemptedEpoch = BigInt(repeatEvent.epoch ?? epoch);
+        } else {
+          lastAttemptedEpoch = BigInt(event.epoch ?? epoch);
+        }
       } else {
         failures += 1;
         errorKinds.set("tx-reverted", (errorKinds.get("tx-reverted") ?? 0) + 1);
@@ -806,6 +856,7 @@ async function main() {
         totalAmount: formatUnits(plan.totalAmount, 18),
       });
       console.warn(`[live-canary] fail round=${round + 1}/${TARGET_ROUNDS} role=${wallet.role} mode=${mode} kind=${classified.kind}: ${classified.message}`);
+      if (REPEAT_SAME_BET) throw error;
       if (failures >= MAX_FAILURES) {
         throw new Error(`Stopping after ${failures} failures; see ${logPath}`);
       }

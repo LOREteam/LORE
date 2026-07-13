@@ -107,6 +107,37 @@ function declarationsFromAbi(abi, kind) {
 }
 
 const splitFeesBody = extractFunctionBody("_splitFees");
+const recordBetBody = extractFunctionBody("_recordBet");
+assert.match(
+  source,
+  /function\s+_recordBet\(uint256\s+epoch,\s*address\s+user,\s*uint256\s+tileId,\s*uint256\s+amount\)\s+internal/,
+  "_recordBet must receive the caller-cached epoch instead of re-reading currentEpoch per tile",
+);
+assert.doesNotMatch(
+  recordBetBody,
+  /currentEpoch/,
+  "_recordBet must not re-read currentEpoch for each selected tile",
+);
+assert.match(
+  recordBetBody,
+  /uint256\s+previousBet\s*=\s*userBets\[epoch\]\[tileId\]\[user\];/,
+  "_recordBet must use the existing user bet as the first-tile sentinel",
+);
+assert.match(
+  recordBetBody,
+  /if\s*\(previousBet\s*==\s*0\)\s*\{\s*tileUserCounts\[epoch\]\[tileId\]\s*\+=\s*1;/s,
+  "_recordBet must increment a tile's user count exactly once per user and epoch",
+);
+assert.match(
+  recordBetBody,
+  /userBets\[epoch\]\[tileId\]\[user\]\s*=\s*previousBet\s*\+\s*amount;/,
+  "_recordBet must preserve cumulative user bet accounting",
+);
+assert.doesNotMatch(
+  source,
+  /hasUserBetOnTile/,
+  "V9 must not pay for a duplicate first-bet boolean when userBets already provides that sentinel",
+);
 assert.match(splitFeesBody, /uint256\s+freshPool\s*=\s*ep\.totalPool;/);
 assert.match(splitFeesBody, /uint256\s+pool\s*=\s*L\.totalPoolWithRollover;/);
 for (const feeName of [
