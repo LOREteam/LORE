@@ -2,14 +2,12 @@
 
 import {
   flattenErrorMessage,
-  firstErrorLine,
   isEpochWaitTimeoutError,
   isInsufficientFundsError,
   isNetworkError,
   isSessionExpiredError,
   isWalletUnavailableError,
 } from "./useMining.shared";
-import { formatUnknownError } from "../lib/utils";
 import type { AutoMineDiagnosticsErrorKind } from "../lib/mining/autoMineDiagnostics";
 
 function isPendingNonceBlockedError(message: string) {
@@ -24,9 +22,7 @@ function isPendingNonceBlockedError(message: string) {
 
 export function getAutoMineUserMessage(error: unknown) {
   const flattenedMessage = flattenErrorMessage(error);
-  const formattedMessage = formatUnknownError(error);
-  const rawMessage = (flattenedMessage || formattedMessage || String(error)).toLowerCase();
-  const displayMessage = flattenedMessage || formattedMessage || "Unknown auto-miner error";
+  const rawMessage = (flattenedMessage || String(error)).toLowerCase();
   const sessionExpired = isSessionExpiredError(error);
   const networkDown = isNetworkError(error);
   const walletUnavailable = isWalletUnavailableError(error);
@@ -51,16 +47,16 @@ export function getAutoMineUserMessage(error: unknown) {
     userMessage = "Stopped: replacement tx underpriced. Press START BOT again to continue.";
   } else if (isInsufficientFundsError(error) || rawMessage.includes("not enough eth for gas")) {
     diagnosticsErrorKind = "insufficient-funds";
-    userMessage = `Auto-miner stopped: ${firstErrorLine(error)}`;
+    userMessage = "Auto-miner stopped: not enough ETH for gas in the Privy wallet.";
   } else if (rawMessage.includes("contract token mismatch")) {
     diagnosticsErrorKind = "unknown";
-    userMessage = `Auto-miner stopped: ${firstErrorLine(error)}`;
+    userMessage = "Auto-miner stopped: configured token does not match the game contract.";
   } else if (rawMessage.includes("epoch ended") || rawMessage.includes("epochclosing")) {
     diagnosticsErrorKind = "unknown";
     userMessage = "Round skipped (epoch ended). Press START BOT to continue.";
   } else if (rawMessage.includes("gas required exceeds") || rawMessage.includes("reverted")) {
     diagnosticsErrorKind = "unknown";
-    userMessage = `Auto-miner stopped: ${firstErrorLine(error)}`;
+    userMessage = "Auto-miner stopped: transaction reverted on-chain. No bet was placed.";
   } else if (rawMessage.includes("timeout")) {
     diagnosticsErrorKind = "timeout";
     userMessage = "Auto-miner stopped: network timeout.";
@@ -69,7 +65,7 @@ export function getAutoMineUserMessage(error: unknown) {
     userMessage = "Auto-miner paused: Privy wallet not ready. Retrying automatically...";
   } else {
     diagnosticsErrorKind = "unknown";
-    userMessage = `Auto-miner error: ${displayMessage}`;
+    userMessage = "Auto-miner stopped. Try again or export logs if the problem continues.";
   }
 
   return {

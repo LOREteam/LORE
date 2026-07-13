@@ -134,6 +134,23 @@ async function main() {
   const lineaFees = lineaFeesModule.default ?? lineaFeesModule;
   const chatSessionClient = chatSessionClientModule.default ?? chatSessionClientModule;
 
+  assert.equal(
+    miningShared.getBetErrorMessage(new Error("HTTP request failed: private provider endpoint")),
+    "Bet failed: RPC unavailable. Check your connection and try again.",
+  );
+  assert.equal(
+    miningShared.getBetErrorMessage(new Error("execution reverted: internal provider payload")),
+    "Bet reverted on-chain. No bet was placed.",
+  );
+  assert.equal(
+    miningShared.getBetErrorMessage(new Error("unclassified provider detail")),
+    "Bet failed. Try again or export logs if the problem continues.",
+  );
+  assert.equal(
+    autoMineError.getAutoMineUserMessage(new Error("unclassified provider detail")).userMessage,
+    "Auto-miner stopped. Try again or export logs if the problem continues.",
+  );
+
   assert.equal(lineaFees.getAffordableKeeperGasLimit(180000n, 100000n, { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }), null);
   assert.equal(lineaFees.getAffordableKeeperGasLimit(180000n, 270000n, { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }), 270000n);
   assert.equal(lineaFees.getLineaFeeOverrides({ maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n }, 59141)?.maxPriorityFeePerGas, 80_000_000n);
@@ -967,8 +984,8 @@ async function main() {
   const betPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
   assert.match(
     betPanelSource,
-    /className="console-input lore-nums h-9 px-3 text-base font-black"/,
-    "manual bet amount input must use the shared numeric font class",
+    /className="console-input lore-nums h-11 px-3 text-base font-black"/,
+    "manual bet amount input must use the shared numeric font class and 44px touch height",
   );
   assert.match(
     betPanelSource,

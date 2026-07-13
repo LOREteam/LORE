@@ -337,15 +337,27 @@ export function getBetErrorMessage(err: unknown): string {
   if (isInsufficientFundsError(err)) {
     return "Bet failed: not enough ETH for gas on Privy wallet.";
   }
+  if (isReceiptTimeoutError(err) || isAmbiguousPendingTxError(err)) {
+    return "Bet status is still pending or unavailable. Check wallet activity before retrying.";
+  }
+  if (isSessionExpiredError(err)) {
+    return "Bet failed: wallet session expired. Log in again and retry.";
+  }
+  if (isWalletUnavailableError(err)) {
+    return "Bet failed: Privy wallet is not ready. Reconnect and retry.";
+  }
+  if (isNetworkError(err)) {
+    return "Bet failed: RPC unavailable. Check your connection and try again.";
+  }
 
   const msg = firstErrorLine(err);
   const lower = msg.toLowerCase();
 
   if (lower.includes("contract token mismatch")) {
-    return `Bet failed: ${msg}`;
+    return "Betting is unavailable: configured token does not match the game contract.";
   }
   if (lower.includes("token() getter is required")) {
-    return `Bet failed: ${msg}`;
+    return "Betting is unavailable: the game contract token could not be verified.";
   }
   if (lower.includes("erc20insufficientallowance") || lower.includes("0xfb8f41b2")) {
     return "Bet failed: token approve is still pending or too low. Wait for approve confirmation, then retry.";
@@ -360,10 +372,10 @@ export function getBetErrorMessage(err: unknown): string {
     return "Bet failed: epoch already ended. Try again.";
   }
   if (lower.includes("reverted")) {
-    return `Bet failed: ${msg}`;
+    return "Bet reverted on-chain. No bet was placed.";
   }
 
-  return `Bet failed: ${msg}`;
+  return "Bet failed. Try again or export logs if the problem continues.";
 }
 
 export function isMissingTokenGetterError(err: unknown): boolean {

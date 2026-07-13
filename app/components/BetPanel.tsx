@@ -108,6 +108,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     totalBet,
     betAmountError,
     manualInsufficient,
+    disabledReason,
     isDisabled,
   } = manualBetForm;
   const requiresLogin = !walletConnected;
@@ -261,6 +262,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
 
       <UiButton
         data-testid="manual-bet-action"
+        aria-describedby={disabledReason && !isPending ? "manual-bet-disabled-reason" : undefined}
         onClick={() => onMine(betAmount)}
         disabled={Boolean(readOnlyReason) || isDisabled}
         variant={actionVariant}
@@ -289,6 +291,12 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           "SELECT TILES"
         )}
       </UiButton>
+
+      {disabledReason && !isPending && !readOnlyReason && !manualInsufficient && !betAmountError && !manualStatusText && (
+        <p id="manual-bet-disabled-reason" className="mt-1.5 text-center text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+          {disabledReason}
+        </p>
+      )}
 
       {!isPending && !isRevealing && (
         <p className="mt-2 text-center text-[8px] leading-relaxed text-slate-500">

@@ -90,7 +90,7 @@ export function useMiningManualActions({
         if (!isUserRejection(error)) {
           clearMiningTxPathState();
           const reason = getBetErrorMessage(error);
-          log.warn("ManualMine", "bet failed", { reason });
+          log.warn("ManualMine", "bet failed", error);
           notify?.(reason, "danger");
         } else {
           notify?.("Bet transaction rejected in wallet.", "info");
@@ -122,7 +122,7 @@ export function useMiningManualActions({
         if (!isUserRejection(error)) {
           clearMiningTxPathState();
           const reason = getBetErrorMessage(error);
-          log.warn("DirectMine", "bet failed", { reason });
+          log.warn("DirectMine", "bet failed", error);
           notify?.(reason, "danger");
         } else {
           notify?.("Repeat bet transaction rejected in wallet.", "info");
