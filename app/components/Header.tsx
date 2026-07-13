@@ -80,6 +80,7 @@ export const Header = React.memo(function Header({
   const { ready: privyReady, login, logout, authenticated } = usePrivy();
   const showColdBootDefaults = coldBootDefaults && !liveStateReady && !isRevealing;
   const timerStalled = timerReady && liveStateReady && !showColdBootDefaults && !isRevealing && timeLeft === 0;
+  const stalledStatusLabel = realTotalStaked > 0 ? "Waiting resolver" : "No bets";
   const showNumericTimer = liveStateReady || showColdBootDefaults;
   const [hydrated, setHydrated] = useState(false);
   const [showAnalyzing, setShowAnalyzing] = useState(false);
@@ -263,7 +264,13 @@ export const Header = React.memo(function Header({
                 <span className={`w-0.75 bg-amber-400/70 rounded-full ${reducedMotion ? "" : "mining-eq-bar-2"}`} style={{ height: "55%" }} />
                 <span className={`w-0.75 bg-amber-400/90 rounded-full ${reducedMotion ? "" : "mining-eq-bar-1"}`} style={{ height: "25%" }} />
               </div>
-              <span className={`truncate text-center text-[9px] font-bold uppercase leading-none tracking-[0.12em] text-amber-400/80 ${reducedMotion ? "" : "status-label-pulse-amber"}`}>Analyzing</span>
+              <span
+                aria-live="polite"
+                className={`max-w-full truncate px-0.5 text-center text-[9px] font-bold uppercase leading-none tracking-[0.08em] text-amber-400/80 ${reducedMotion ? "" : "status-label-pulse-amber"}`}
+                title={isRevealing ? "Analyzing resolved epoch" : stalledStatusLabel}
+              >
+                {isRevealing ? "Analyzing" : stalledStatusLabel}
+              </span>
             </>
           ) : (
             <div className="flex flex-col items-center">

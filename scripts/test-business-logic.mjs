@@ -1291,6 +1291,33 @@ async function main() {
     /loginPending/,
     "wallet connect header must expose an in-flight login state after the user clicks connect",
   );
+  assert.match(
+    headerSource,
+    /realTotalStaked > 0 \? "Waiting resolver" : "No bets"/,
+    "expired epochs must distinguish resolver wait from an empty idle epoch",
+  );
+  assert.match(
+    headerSource,
+    /isRevealing \? "Analyzing" : stalledStatusLabel/,
+    "the header must reserve Analyzing for the reveal state",
+  );
+  const fundingManualFormSource = readFileSync("app/hooks/useManualBetForm.ts", "utf8");
+  const fundingBetPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
+  const fundingPrivyPanelSource = readFileSync("app/components/wallet/WalletSettingsPrivyPanel.tsx", "utf8");
+  assert.match(fundingManualFormSource, /lineaDeficit/, "manual betting must expose the exact LINEA shortfall");
+  assert.match(fundingBetPanelSource, /top up \{lineaDeficit\.toFixed\(2\)\} LINEA/, "manual betting must show the exact top-up amount");
+  assert.match(fundingPrivyPanelSource, /From external:/, "Privy top-up must identify the source wallet");
+  assert.match(fundingPrivyPanelSource, /To Privy:/, "Privy top-up must identify the recipient wallet");
+  assert.match(
+    walletSettingsModalSource,
+    /max-h-\[calc\(100dvh-1rem\)\]/,
+    "Wallet Settings must stay inside the dynamic viewport when a mobile keyboard opens",
+  );
+  assert.match(walletSettingsModalSource, /min-h-0 flex-1/, "Wallet Settings content must shrink and scroll inside the modal");
+  assert.match(miningGuardsSource, /Signing bet transaction\./, "manual betting must identify the signing phase");
+  assert.match(miningGuardsSource, /submitted and is still pending/, "manual betting must identify the pending phase");
+  assert.match(miningGuardsSource, /Bet confirmed on-chain\./, "manual betting must identify the confirmed phase");
+  assert.doesNotMatch(miningGuardsSource, /Preparing bet transaction/, "manual betting must not use an ambiguous preparing phase");
   const headerWalletConnectSource = readFileSync("app/components/header/HeaderWalletCard.tsx", "utf8");
   assert.match(
     headerWalletConnectSource,

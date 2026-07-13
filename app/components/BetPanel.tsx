@@ -107,6 +107,8 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     setBetAmount,
     totalBet,
     betAmountError,
+    balance,
+    lineaDeficit,
     manualInsufficient,
     disabledReason,
     isDisabled,
@@ -226,9 +228,11 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           <svg className="w-3 h-3 text-red-400 shrink-0 mt-px" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
           </svg>
-          <div>
-            <span className="text-[8px] font-bold text-red-400 block">Insufficient balance</span>
-            <span className="text-[7px] text-red-400/70 block mt-0.5">Top up your Privy wallet via Settings to continue</span>
+          <div className="min-w-0">
+            <span className="block text-[9px] font-bold text-red-300">Insufficient LINEA</span>
+            <span className="lore-nums mt-0.5 block text-[8px] leading-tight text-red-300/80">
+              Need {totalBet.toFixed(2)}, have {(balance ?? 0).toFixed(2)}; top up {lineaDeficit.toFixed(2)} LINEA
+            </span>
           </div>
         </div>
       )}

@@ -102,8 +102,13 @@ export const WalletSettingsPrivyPanel = React.memo(function WalletSettingsPrivyP
 
           <div className="mt-3 rounded-lg border border-violet-500/15 bg-black/20 p-3">
             <div className="text-[10px] text-gray-300 font-bold uppercase tracking-widest mb-1.5">Quick top-up from external wallet</div>
-            <div className="text-[10px] text-gray-500 mb-2">
-              From: {externalWalletAddress ? shortenAddress(externalWalletAddress) : "none"}
+            <div className="mb-2 grid gap-1 text-[10px] text-gray-400 sm:grid-cols-2">
+              <div className="min-w-0">
+                From external: <span className="font-mono text-gray-300">{externalWalletAddress ? shortenAddress(externalWalletAddress) : "none"}</span>
+              </div>
+              <div className="min-w-0">
+                To Privy: <span className="font-mono text-gray-300">{shortenAddress(embeddedWalletAddress)}</span>
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -132,6 +137,9 @@ export const WalletSettingsPrivyPanel = React.memo(function WalletSettingsPrivyP
                 buttonVariant="success"
               />
             </div>
+            <p className="mt-2 text-[9px] leading-relaxed text-gray-500">
+              Send at least the LINEA deficit shown in Manual Bet or Auto-Miner. Use the live ETH fee estimate shown before a bet and keep extra ETH for a possible first approval.
+            </p>
           </div>
         </>
       ) : (

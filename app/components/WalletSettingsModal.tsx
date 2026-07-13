@@ -145,7 +145,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 animate-fade-in sm:p-4">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={onClose} />
 
       <div
@@ -154,7 +154,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
         aria-modal="true"
         aria-labelledby="wallet-settings-title"
         aria-describedby="wallet-settings-description"
-        className={`relative w-full max-w-2xl ${uiTokens.radius.lg} ${uiTokens.modalSurface} animate-slide-up overflow-hidden`}
+        className={`relative flex max-h-[calc(100dvh-1rem)] w-full max-w-2xl flex-col ${uiTokens.radius.lg} ${uiTokens.modalSurface} animate-slide-up overflow-hidden sm:max-h-[calc(100dvh-2rem)]`}
       >
         <div className="flex items-center justify-between border-b border-violet-500/10 px-5 py-4">
           <div>
@@ -199,7 +199,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
           ))}
         </div>
 
-        <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 sm:p-5">
           {(activeSection === "all" || activeSection === "overview") && (
             <>
               <WalletSettingsOverviewPanel

@@ -124,7 +124,7 @@ export function useMiningGuards({
         return;
       }
       const tilesSnapshot = [...selectedTiles];
-      notify("Preparing bet transaction. Confirm the wallet prompt if it appears.", "info");
+      notify("Signing bet transaction.", "info");
       const result = await onManualMine(amount);
       if (result === "pending") {
         notify("Bet transaction submitted and is still pending. Waiting for on-chain confirmation.", "info");
@@ -164,7 +164,7 @@ export function useMiningGuards({
       );
       return;
     }
-    notify("Preparing repeat bet transaction. Confirm the wallet prompt if it appears.", "info");
+    notify("Signing repeat bet transaction.", "info");
     const result = await onDirectMine(lastBet.tiles, lastBet.amount);
     if (result === "pending") {
       notify("Repeat bet transaction submitted and is still pending. Waiting for on-chain confirmation.", "info");

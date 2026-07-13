@@ -60,6 +60,7 @@ export function useManualBetForm({
   const betAmountError = useMemo(() => validateBetAmount(betAmount), [betAmount]);
   const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
   const manualInsufficient = balance !== null && totalBet > 0 && totalBet > balance;
+  const lineaDeficit = manualInsufficient && balance !== null ? totalBet - balance : 0;
   const disabledReason =
     readOnlyReason
       ? readOnlyReason
@@ -92,6 +93,8 @@ export function useManualBetForm({
     setBetAmount,
     totalBet,
     betAmountError,
+    balance,
+    lineaDeficit,
     manualInsufficient,
     disabledReason,
     isDisabled,

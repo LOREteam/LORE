@@ -357,6 +357,31 @@ async function main() {
       await verifyMobileHubResponsiveGuards(mobilePage, TIMEOUT_MS);
       await mobilePage.setViewportSize({ width: 390, height: 844 });
     });
+    const mobileChatOpened = await runStep("verify mobile chat keyboard viewport", () => openChatDrawer(mobilePage, smokeOptions));
+    if (mobileChatOpened) {
+      await mobilePage.setViewportSize({ width: 390, height: 520 });
+      const chatFooter = mobilePage.getByText("Connect wallet to chat");
+      await chatFooter.scrollIntoViewIfNeeded();
+      const mobileChatLayout = await mobilePage.evaluate(() => {
+        const footer = [...document.querySelectorAll("div")].find((element) => element.textContent?.trim() === "Connect wallet to chat");
+        if (!(footer instanceof HTMLElement)) return null;
+        const rect = footer.getBoundingClientRect();
+        return {
+          footerTop: rect.top,
+          footerBottom: rect.bottom,
+          viewportHeight: window.innerHeight,
+          horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      });
+      if (!mobileChatLayout || mobileChatLayout.footerTop < 0 || mobileChatLayout.footerBottom > mobileChatLayout.viewportHeight + 1) {
+        throw new Error(`mobile chat footer is obscured after viewport shrink: ${JSON.stringify(mobileChatLayout)}`);
+      }
+      if (mobileChatLayout.horizontalOverflow > 1) {
+        throw new Error(`mobile chat horizontal overflow after viewport shrink: ${mobileChatLayout.horizontalOverflow}px`);
+      }
+      await closeChatDrawer(mobilePage, smokeOptions);
+      await mobilePage.setViewportSize({ width: 390, height: 844 });
+    }
     await runStep("open mobile analytics", () => openMobileAnalytics(mobilePage, smokeOptions));
     await mobileContext.close();
 
