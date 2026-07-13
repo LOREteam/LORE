@@ -57,6 +57,7 @@ import * as productionRuntimeModule from "../config/productionRuntime.ts";
 import * as lineaFeesModule from "../app/lib/lineaFees.ts";
 import * as chatSessionClientModule from "../app/lib/chatSessionClient.ts";
 import * as runtimeMonitorModule from "./runtime-monitor-lib.mjs";
+import * as sentrySanitizeModule from "../app/lib/sentrySanitize.ts";
 
 function withTemporaryEnv(values, fn) {
   const previous = new Map();
@@ -133,8 +134,32 @@ async function main() {
   const eip7702 = eip7702Module.default ?? eip7702Module;
   const productionRuntime = productionRuntimeModule.default ?? productionRuntimeModule;
   const lineaFees = lineaFeesModule.default ?? lineaFeesModule;
+  const sentrySanitize = sentrySanitizeModule.default ?? sentrySanitizeModule;
   const chatSessionClient = chatSessionClientModule.default ?? chatSessionClientModule;
   const runtimeMonitor = runtimeMonitorModule.default ?? runtimeMonitorModule;
+
+  const sanitizedSentryPayload = sentrySanitize.sanitizeSentryPayload({
+    exception: {
+      values: [{
+        value: "wallet 0x1111111111111111111111111111111111111111 failed via https://rpc.example.test/private",
+      }],
+    },
+    extra: {
+      walletAddress: "0x2222222222222222222222222222222222222222",
+      rpcUrl: "https://rpc.example.test/key",
+      provider: { request: "raw wallet payload" },
+      safeStatus: "pending",
+    },
+    request: {
+      headers: { authorization: "Bearer synthetic-secret", cookie: "session=synthetic" },
+      url: "/api/live-state",
+    },
+  });
+  const serializedSentryPayload = JSON.stringify(sanitizedSentryPayload);
+  assert.doesNotMatch(serializedSentryPayload, /0x[1-2]{40}|rpc\.example\.test|synthetic-secret|raw wallet payload/);
+  assert.equal(sanitizedSentryPayload.extra.walletAddress, "<redacted>");
+  assert.equal(sanitizedSentryPayload.extra.safeStatus, "pending");
+  assert.equal(sanitizedSentryPayload.request.url, "/api/live-state");
 
   assert.deepEqual(
     runtimeMonitor.evaluateRuntimeSnapshot({

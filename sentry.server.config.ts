@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
+import { sanitizeSentryPayload } from "./app/lib/sentrySanitize";
 
 function readSampleRate(value: string | undefined, fallback: number) {
   if (!value) {
@@ -17,4 +18,6 @@ Sentry.init({
   release: process.env.SENTRY_RELEASE || process.env.NEXT_PUBLIC_SENTRY_RELEASE,
   tracesSampleRate: readSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE, 0),
   sendDefaultPii: false,
+  beforeSend: sanitizeSentryPayload,
+  beforeBreadcrumb: sanitizeSentryPayload,
 });
