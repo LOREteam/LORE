@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import * as envParsingModule from "../config/envParsing.ts";
 import * as scriptEnvParsingModule from "./env-parsing.mjs";
 import * as publicConfigModule from "../config/publicConfig.ts";
@@ -58,6 +60,7 @@ import * as lineaFeesModule from "../app/lib/lineaFees.ts";
 import * as chatSessionClientModule from "../app/lib/chatSessionClient.ts";
 import * as runtimeMonitorModule from "./runtime-monitor-lib.mjs";
 import * as sentrySanitizeModule from "../app/lib/sentrySanitize.ts";
+import * as analyticsBlockchainHistoryPanelModule from "../app/components/analytics/AnalyticsBlockchainHistoryPanel.tsx";
 
 function withTemporaryEnv(values, fn) {
   const previous = new Map();
@@ -3268,6 +3271,19 @@ async function main() {
   } finally {
     process.off("unhandledRejection", onLateUnhandledRejection);
   }
+
+  const AnalyticsBlockchainHistoryPanel = analyticsBlockchainHistoryPanelModule.AnalyticsBlockchainHistoryPanel
+    ?? analyticsBlockchainHistoryPanelModule.default?.AnalyticsBlockchainHistoryPanel
+    ?? analyticsBlockchainHistoryPanelModule.default;
+  assert.ok(AnalyticsBlockchainHistoryPanel, "blockchain history component export must remain available");
+  const emptyHistoryMarkup = renderToStaticMarkup(createElement(AnalyticsBlockchainHistoryPanel, {
+    historyViewData: [],
+    historyLoading: false,
+    historyRefreshing: false,
+    newHistoryIds: new Set(),
+  }));
+  assert.match(emptyHistoryMarkup, /No rounds yet/, "empty blockchain history must render an explicit empty state");
+  assert.doesNotMatch(emptyHistoryMarkup, /Loading rounds/, "settled empty blockchain history must not look stuck loading");
 
   console.log("Business logic tests passed.");
 }
