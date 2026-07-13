@@ -71,7 +71,11 @@ export function HeaderPoolChart({
           <div className="text-[8px] uppercase font-bold text-slate-500 tracking-wider leading-none">
             Total Pool
           </div>
-          <div className="lore-hud-number mt-0.5 max-w-full truncate text-[15px] font-black text-white leading-none sm:text-lg">
+          <div
+            data-testid="header-total-pool-value"
+            className="lore-hud-number mt-0.5 max-w-full truncate text-[15px] font-black text-white leading-none sm:text-lg"
+            title={liveStateReady || coldBootDefaults ? `${realTotalStaked.toFixed(2)} LINEA` : undefined}
+          >
             {liveStateReady || coldBootDefaults ? (
               <>
                 {realTotalStaked.toFixed(2)}
@@ -92,7 +96,11 @@ export function HeaderPoolChart({
             <div className="text-[7px] uppercase font-black tracking-[0.18em] text-emerald-300/70 leading-none">
               Rollover
             </div>
-            <div className="lore-hud-number mt-0.5 max-w-full truncate text-[13px] font-black leading-none text-emerald-300 sm:text-sm">
+            <div
+              data-testid="header-rollover-value"
+              className="lore-hud-number mt-0.5 max-w-full truncate text-[13px] font-black leading-none text-emerald-300 sm:text-sm"
+              title={`Rollover +${displayRolloverAmount.toFixed(2)} LINEA`}
+            >
               +{displayRolloverAmount.toFixed(2)}
             </div>
           </div>

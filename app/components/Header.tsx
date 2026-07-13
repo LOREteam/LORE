@@ -222,7 +222,12 @@ export const Header = React.memo(function Header({
                   : "bg-violet-500/10 border-violet-500/30 text-violet-400"
               }`}
             >
-              <span key={visualEpoch ?? ""} className="lore-hud-number whitespace-nowrap text-center text-[11px] font-bold uppercase tracking-widest">
+              <span
+                key={visualEpoch ?? ""}
+                data-testid="header-epoch-value"
+                className="lore-hud-number max-w-full truncate whitespace-nowrap text-center text-[11px] font-bold uppercase tracking-widest"
+                title={isRevealing ? "Reveal" : visualEpoch ? `Epoch #${String(visualEpoch)}` : undefined}
+              >
                 {isRevealing ? "REVEAL" : visualEpoch ? `#${visualEpoch}` : showColdBootDefaults ? "#0" : "SYNC"}
               </span>
             </div>

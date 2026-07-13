@@ -88,7 +88,11 @@ function JackpotCard({
             <div className={`text-[6.5px] font-black uppercase leading-none tracking-[0.12em] ${theme.card.labelClass}`}>
               {metricLabel}
             </div>
-            <div className={`lore-nums mt-0.5 truncate font-black tabular-nums leading-none ${isAwardedWindow ? "text-[10px] tracking-[0.08em] sm:text-[11px]" : "text-sm sm:text-base"} ${theme.card.amountClass}`}>
+            <div
+              data-testid={`jackpot-${kind}-metric`}
+              className={`lore-nums mt-0.5 truncate font-black tabular-nums leading-none ${isAwardedWindow ? "text-[10px] tracking-[0.08em] sm:text-[11px]" : "text-sm sm:text-base"} ${theme.card.amountClass}`}
+              title={`${metricValue} ${metricUnit}`}
+            >
               {metricValue}
             </div>
             <div className={`mt-0.5 text-[7px] font-black uppercase leading-none tracking-[0.08em] ${theme.card.subtleClass}`}>

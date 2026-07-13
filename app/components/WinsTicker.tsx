@@ -31,9 +31,12 @@ function WinItem({ w }: { w: RecentWin }) {
     : "";
 
   return (
-    <span className={`chain-feed-chip flex h-[1.45rem] w-[14.75rem] shrink-0 items-center gap-1.5 overflow-hidden rounded-full border px-2 font-sans leading-none ${chipClass}`}>
+    <span
+      className={`chain-feed-chip flex h-[1.45rem] w-[14.75rem] shrink-0 items-center gap-1.5 overflow-hidden rounded-full border px-2 font-sans leading-none ${chipClass}`}
+      title={`Epoch #${w.epoch}, +${w.amount} LINEA, ${w.user}`}
+    >
       <span className={`h-1.5 w-1.5 rounded-full ${jackpot ? "bg-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.65)]" : "bg-emerald-400/85 shadow-[0_0_7px_rgba(52,211,153,0.45)]"}`} />
-      <span className="lore-hud shrink-0 rounded-full border border-violet-300/10 bg-violet-300/6 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.08em] text-violet-200/80">
+      <span className="lore-hud max-w-[5.25rem] shrink truncate rounded-full border border-violet-300/10 bg-violet-300/6 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.08em] text-violet-200/80">
         #{w.epoch}
       </span>
       {w.tileId && (

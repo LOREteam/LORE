@@ -385,6 +385,80 @@ async function main() {
     await runStep("open mobile analytics", () => openMobileAnalytics(mobilePage, smokeOptions));
     await mobileContext.close();
 
+    await runStep("verify 360px extreme-value overflow", async () => {
+      const hugeEpoch = "123456789012345678901234";
+      const hugeWei = "123456789012345678901234567890123456789012345678";
+      const stressContext = await browser.newContext({ viewport: { width: 360, height: 800 } });
+      await stressContext.addInitScript((tutorialKey) => {
+        window.localStorage.setItem(tutorialKey, "1");
+      }, FIRST_VISIT_TUTORIAL_KEY);
+      const stressPage = await stressContext.newPage();
+      stressPage.on("pageerror", (error) => pageErrors.push({ message: error.message, source: "extreme-values" }));
+      await stressPage.route("**/api/live-state", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          currentEpoch: hugeEpoch,
+          epochEndTime: String(Math.floor(Date.now() / 1000) + 3600),
+          jackpotInfo: [hugeWei, hugeWei, "0", "0", hugeEpoch, hugeEpoch, hugeWei, hugeWei],
+          rolloverPool: hugeWei,
+          currentEpochData: [hugeWei, "0", "0", false, false, false],
+          tileData: { pools: Array(25).fill(hugeWei), users: Array(25).fill("99999999") },
+          tileUserCounts: Array(25).fill(99999999),
+          indexedTilePools: Array(25).fill(hugeWei),
+          epochDuration: "60",
+          pendingEpochDuration: null,
+          pendingEpochDurationEta: null,
+          pendingEpochDurationEffectiveFromEpoch: null,
+          fetchedAt: Date.now(),
+        }),
+      }));
+      await stressPage.route("**/api/recent-wins", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          wins: [{
+            epoch: hugeEpoch,
+            user: "0xffffffffffffffffffffffffffffffffffffffff",
+            amount: "123456789012345678901234567890.12",
+            amountRaw: hugeWei,
+            tileId: 25,
+            jackpotKind: "daily-weekly",
+          }],
+        }),
+      }));
+      await ensureLandingPage(stressPage, smokeOptions);
+      await stressPage.waitForFunction(
+        (epoch) => document.querySelector('[data-testid="header-epoch-value"]')?.getAttribute("title") === `Epoch #${epoch}`,
+        hugeEpoch,
+        { timeout: TIMEOUT_MS },
+      );
+      const stressLayout = await stressPage.evaluate(() => {
+        const selectors = [
+          '[data-testid="header-epoch-value"]',
+          '[data-testid="header-total-pool-value"]',
+          '[data-testid="header-rollover-value"]',
+          '[data-testid="jackpot-daily-metric"]',
+          '[data-testid="jackpot-weekly-metric"]',
+          ".chain-feed-chip",
+        ];
+        const elements = selectors.map((selector) => document.querySelector(selector)).filter((element) => element instanceof HTMLElement);
+        return {
+          horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          missingTitles: elements.filter((element) => !element.getAttribute("title")).map((element) => element.getAttribute("data-testid") || element.className),
+          outsideViewport: elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            return { label: element.getAttribute("data-testid") || "chain-feed-chip", left: rect.left, right: rect.right };
+          }).filter(({ left, right }) => left < -1 || right > window.innerWidth + 1),
+        };
+      });
+      await stressContext.close();
+      if (stressLayout.horizontalOverflow > 1 || stressLayout.missingTitles.length > 0 || stressLayout.outsideViewport.length > 0) {
+        throw new Error(`extreme-value layout failed: ${JSON.stringify(stressLayout)}`);
+      }
+      console.log("PASS long epoch, pool, rollover, jackpot, reward, and address values stay bounded");
+    });
+
     const relevantPageErrors = pageErrors.filter((entry) => !isIgnoredPageError(entry.message));
     if (relevantPageErrors.length > 0) {
       const details = relevantPageErrors
