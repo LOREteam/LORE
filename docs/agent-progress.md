@@ -44,6 +44,14 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   and the same 50-epoch chain audit passed. A second run on the same database
   processed only the new head range; the post-restart audit remained clean,
   proving restart/idempotent writes for this testnet snapshot.
+- A clean production site cold start with a new SQLite path passed all 23 HTTP
+  smoke checks. Initial RPC ranking made the first data-sync/jackpot reads slow,
+  but subsequent expired-cache data-sync refresh completed in 371 ms and the
+  timeout did not reproduce.
+- An unavailable DB path failed before opening a listener. A separate process
+  with an unreachable primary RPC recovered through the configured fallback:
+  homepage, live-state, runtime/data-sync health, leaderboards, chat, and global
+  stats all returned 200; live-state was 26 ms and data-sync was 366 ms.
 
 - Fixed the strict testnet canary proof fixture to use the supported `single`
   mode. `proof:drafts` and the complete `proof:local` L1-L14 preflight pass.

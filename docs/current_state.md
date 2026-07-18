@@ -169,6 +169,11 @@ Open linked evidence only when a task needs it.
   blocks from the current deployment. Reconciliation and the 50-epoch audit
   passed before and after an immediate restart, with no duplicate or mismatched
   indexed records.
+- A clean production-site cold start with a new SQLite path passed all 23 HTTP
+  checks. An invalid DB path failed before the listener opened. With an
+  unreachable primary RPC, configured fallback recovered and homepage,
+  live-state, health, leaderboards, chat, and global stats all returned 200;
+  live-state completed in 26 ms and data-sync in 366 ms.
 - Live canary output now records a final summary event. Optional monitor stale
   detection alerts when an unfinished soak stops producing events without
   treating an intentionally completed zero-failure log as stale.
