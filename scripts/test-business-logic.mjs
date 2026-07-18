@@ -109,6 +109,7 @@ async function withTemporaryEnvAsync(values, fn) {
 }
 
 async function main() {
+  const absoluteTestDbPath = join(tmpdir(), "lore-mainnet.sqlite");
   const envParsing = envParsingModule.default ?? envParsingModule;
   const scriptEnvParsing = scriptEnvParsingModule.default ?? scriptEnvParsingModule;
   const utils = utilsModule.default ?? utilsModule;
@@ -408,7 +409,7 @@ async function main() {
       NEXT_PUBLIC_ADMIN_WALLET_ADDRESS: "0x0000000000000000000000000000000000000003",
       BOOTSTRAP_RESOLVE_SECRET: "resolve-secret",
       BOOTSTRAP_KEEPER_PRIVATE_KEY: "keeper-private-key",
-      LORE_DB_PATH: "C:\\lore\\mainnet.sqlite",
+      LORE_DB_PATH: absoluteTestDbPath,
       NEXT_PUBLIC_EIP7702_ENABLED: "1",
       NEXT_PUBLIC_EIP7702_MINING_ENABLED: "1",
     },
@@ -447,7 +448,7 @@ async function main() {
       NEXT_PUBLIC_ADMIN_WALLET_ADDRESS: "0x0000000000000000000000000000000000000003",
       BOOTSTRAP_RESOLVE_SECRET: "resolve-secret",
       BOOTSTRAP_KEEPER_PRIVATE_KEY: "keeper-private-key",
-      LORE_DB_PATH: "C:\\lore\\mainnet.sqlite",
+      LORE_DB_PATH: absoluteTestDbPath,
       NEXT_PUBLIC_EIP7702_ENABLED: "0",
       NEXT_PUBLIC_EIP7702_MINING_ENABLED: "0",
     },
@@ -482,7 +483,7 @@ async function main() {
       NEXT_PUBLIC_ADMIN_WALLET_ADDRESS: "0x0000000000000000000000000000000000000003",
       BOOTSTRAP_RESOLVE_SECRET: "resolve-secret",
       BOOTSTRAP_KEEPER_PRIVATE_KEY: "keeper-private-key",
-      LORE_DB_PATH: "C:\\lore\\mainnet.sqlite",
+      LORE_DB_PATH: absoluteTestDbPath,
       NEXT_PUBLIC_EIP7702_ENABLED: "0",
       NEXT_PUBLIC_EIP7702_MINING_ENABLED: "0",
     },
@@ -512,7 +513,7 @@ async function main() {
       BOOTSTRAP_RESOLVE_SECRET: "resolve-secret",
       BOOTSTRAP_KEEPER_PRIVATE_KEY: "keeper-private-key",
       KEEPER_PRIVATE_KEY: "keeper-private-key",
-      LORE_DB_PATH: "C:\\lore\\mainnet.sqlite",
+      LORE_DB_PATH: absoluteTestDbPath,
       NEXT_PUBLIC_EIP7702_ENABLED: "0",
       NEXT_PUBLIC_EIP7702_MINING_ENABLED: "1",
     },
@@ -535,7 +536,7 @@ async function main() {
       KEEPER_RPC_URL: "https://rpc.example",
       NEXT_PUBLIC_SITE_URL: "https://play.example",
       HEALTH_DIAGNOSTICS_SECRET: "health-secret",
-      LORE_DB_PATH: "C:\\lore\\mainnet.sqlite",
+      LORE_DB_PATH: absoluteTestDbPath,
       INDEXER_FINALITY_BLOCKS: undefined,
       NEXT_PUBLIC_EIP7702_ENABLED: "0",
       NEXT_PUBLIC_EIP7702_MINING_ENABLED: "0",
@@ -559,7 +560,7 @@ async function main() {
       KEEPER_RPC_URL: "https://rpc.example",
       NEXT_PUBLIC_SITE_URL: "https://play.example",
       HEALTH_DIAGNOSTICS_SECRET: "health-secret",
-      LORE_DB_PATH: "C:\\lore\\mainnet.sqlite",
+      LORE_DB_PATH: absoluteTestDbPath,
       INDEXER_FINALITY_BLOCKS: "64",
       NEXT_PUBLIC_EIP7702_ENABLED: "0",
       NEXT_PUBLIC_EIP7702_MINING_ENABLED: "0",
