@@ -26,6 +26,21 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Clean-checkout proof for profiler quality patch
+
+- Created a detached temporary worktree at exact commit `02e3660`. The first
+  `npm ci` could not access the sandboxed npm cache; after removing only that
+  partial temporary install, one cache-enabled retry installed 1,167 packages
+  from the lockfile with EIP-7702 still disabled.
+- Wallet dependency integrity, production audit, lint, typecheck, business
+  logic, contract invariants, exact compilation provenance, SQLite operations,
+  monitoring alert/recovery, production build, and full responsive browser smoke
+  passed. The smoke retained pool-chart freshness and covered desktop, tablet,
+  mobile, wallet selectors, numeric typography, Auto-Miner persistence,
+  accessibility, and empty-state guards.
+- The temporary server stopped, the worktree had no tracked changes, and the
+  isolated checkout was removed.
+
 ## 2026-07-18 - Browser-profile quality verdict
 
 - Browser profiling now counts local and external network failures separately

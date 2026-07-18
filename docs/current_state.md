@@ -15,6 +15,11 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Exact commit `02e3660` passed a detached clean-checkout reproduction: lockfile
+  install, wallet dependency integrity, production audit, lint, typecheck,
+  business logic, contract invariants, compile provenance, SQLite operations,
+  monitoring drill, production build, and full responsive browser smoke. The
+  temporary server and worktree were removed after verification.
 - Browser baseline reports now expose an explicit `quality` verdict. Failed
   local HTTP responses, local network failures, or local console errors mark a
   run `degraded`, while third-party-only failures remain separately visible.
