@@ -2360,6 +2360,16 @@ async function main() {
     /await buildJackpotsPayload\(\{[\s\S]{0,180}seedJackpots: \[\]/,
     "empty jackpot storage must not block the HTTP request on historical RPC recovery",
   );
+  assert.match(
+    jackpotsServiceSource,
+    /JACKPOT_FORCE_FRESH_WAIT_MS = 2_000[\s\S]*Promise\.race\(\[promise, timeout\]\)/,
+    "forced jackpot refresh must have a bounded server-side wait",
+  );
+  assert.match(
+    jackpotsServiceSource,
+    /if \(!freshPayload\)[\s\S]*jackpotResponseCache\?\.payload[\s\S]*source: "stale-cache"/,
+    "a slow forced jackpot refresh must return stored or cached data while recovery continues",
+  );
   const walletDeepScanPanelSource = readFileSync("app/components/wallet/WalletSettingsDeepScanPanel.tsx", "utf8");
   assert.match(
     walletDeepScanPanelSource,

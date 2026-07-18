@@ -26,6 +26,19 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Bounded forced jackpot refresh
+
+- A deterministic failure injection seeded an isolated SQLite with a valid
+  post-deploy jackpot row and replaced `getBlockNumber` with a never-resolving
+  RPC promise. `fresh=1` reproduced an unbounded server wait.
+- Forced refresh now waits at most two seconds. Fast recovery still returns the
+  rebuilt payload; slow recovery remains one deduplicated in-flight promise and
+  the request returns stored/cache data instead of hanging.
+- The same injection completed through the bounded stale path. Focused logic,
+  ESLint, typecheck, production build, all 23 HTTP checks, and responsive browser
+  smoke passed. A healthy `fresh=1` request returned 200 in 375 ms, and the pool
+  chart freshness guard remained green.
+
 ## 2026-07-18 - Post-fix production load profile
 
 - Ran the weighted homepage/API harness for 30 seconds at concurrency 50 against

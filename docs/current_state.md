@@ -234,6 +234,10 @@ Open linked evidence only when a task needs it.
   returned 200 in 231 ms for the initial request and 15 ms for `fresh=1`, then
   passed all HTTP and responsive browser checks without weakening pool-chart
   freshness.
+- Non-empty `fresh=1` recovery is also bounded: the route waits at most two
+  seconds, then returns stored/cache data while the existing deduplicated RPC
+  promise continues. A never-resolving RPC failure injection proved the stale
+  fallback, while the healthy production request returned 200 in 375 ms.
 - Production proxy identity fails closed for missing/wrong proxy secrets and
   malformed forwarded IPs. The local drill enforced the configured 30-request
   limit per trusted IP, kept a second IP independent, and grouped different
