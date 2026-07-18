@@ -318,8 +318,10 @@ Open linked evidence only when a task needs it.
 
 ## Next Best Step
 
-The production baseline after disk recovery passes typecheck, logic, contract
-invariants, compilation provenance, build, HTTP smoke, and responsive browser
+The published `bbe02a7` baseline passes an exact detached clean-checkout
+reproduction: lockfile install, wallet peer/dependency gates, lint, typecheck,
+logic, contract invariants, compilation provenance, SQLite operations,
+monitoring drill, production build, all 23 HTTP checks, and responsive browser
 smoke. A new 1,440-round testnet soak attempted to start after that baseline,
 but its transaction-free wallet preflight found insufficient native gas for
 `AUTOMINER_C`; no bet was sent. The redacted `soak:testnet:status` output now

@@ -26,6 +26,17 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Clean-checkout proof for soak diagnostics
+
+- Detached commit `bbe02a7` installed 1,167 lockfile packages; EIP-7702 stayed
+  disabled and wallet peer integrity remained clean.
+- Production audit passed with zero critical/high advisories; full lint,
+  typecheck, logic, contract, provenance, SQLite, monitoring, and build gates
+  passed. Compilation remained Solidity 0.8.34, optimizer 200, EVM Osaka.
+- A fresh empty SQLite runtime passed all 23 HTTP checks and the complete
+  responsive browser smoke, including wallet selector, pending reload recovery,
+  number fonts, mobile overflow, empty chart/history states, and pool freshness.
+
 ## 2026-07-18 - Redacted soak preflight diagnostics
 
 - A fresh transaction-free soak preflight stopped before any bet because
