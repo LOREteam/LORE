@@ -37,6 +37,11 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 - Wallet peer-integrity proof, typecheck, logic tests, production build, and all
   23 production HTTP smoke checks pass. The temporary server was stopped and
   port 3001 is free.
+- A fresh 30-second production browser baseline on the same bundle completed
+  with zero failed local responses, zero DOM growth, a -822,313 byte final heap
+  delta, CLS 0, no horizontal overflow, and 24 ms synthetic INP. Four CSP
+  messages were external Privy-origin diagnostics; no local CSP violation was
+  observed. The profiling server was stopped.
 
 ## 2026-07-18 - Clean-checkout CI and indexer recovery
 

@@ -65,6 +65,11 @@ Open linked evidence only when a task needs it.
   critical findings;
   wallet dependency integrity, typecheck, logic tests, production build, and all
   23 HTTP smoke checks pass on the updated lockfile.
+- A post-update 30-second production browser profile with the documented
+  local-only rate-limit identity reported zero failed local responses, zero DOM
+  growth, a negative final heap delta, CLS 0, horizontal overflow 0, and a 24 ms
+  synthetic interaction. The remaining CSP console messages came from the
+  external Privy origin rather than the application response.
 - Testnet SQLite backup, integrity, restore, catch-up, and restart/reconcile drills passed without modifying the active database.
 - The current production bundle retains lazy boundaries for non-critical views; the wallet/session code remains eager for reliable recovery.
 - Bundle measurement now targets the current completed `.next` output by
