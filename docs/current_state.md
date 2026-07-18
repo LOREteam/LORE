@@ -15,6 +15,12 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- A five-minute local production-browser profile completed with zero failed
+  local responses, no local console errors, a negative final JS heap delta, and
+  one additional DOM node. Same-origin polling averaged 16.6 requests/minute;
+  the intentionally fresh `/api/live-state` path accounted for 12/minute while
+  chat, recent wins, and global stats remained bounded. See
+  `docs/testnet-browser-profile-2026-07-18.md`.
 - A fresh 2026-07-17 baseline passed typecheck, logic, contract invariants,
   production build/start, focused desktop/tablet/mobile browser smoke, lint,
   monitoring, SQLite operations, exact contract compilation, dependency audit,

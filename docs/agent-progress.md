@@ -26,6 +26,17 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Five-minute production-browser profile
+
+- Ran a transaction-free desktop profile against the local production build
+  with the documented local-only rate-limit identity bypass.
+- Zero local response or console failures occurred. JS heap finished 239,518
+  bytes below its initial sample, DOM grew by one node, and API polling averaged
+  16.6 requests/minute. The intentionally fresh live-state path accounted for
+  12/minute; no polling or memory defect was reproduced.
+- Compact evidence is in `docs/testnet-browser-profile-2026-07-18.md`; the raw
+  profiler JSON remains an ignored local artifact.
+
 ## 2026-07-18 - Fresh post-CI chain/indexer audit
 
 - A read-only 50-epoch audit over epochs 417-466 compared finalized chain logs
