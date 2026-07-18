@@ -3,8 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { PublicClient } from "viem";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import type { Eip7702CapabilityState } from "../lib/eip7702";
 import { writeAutoMineDiagnostics } from "../lib/mining/autoMineDiagnostics";
+import {
+  clearPendingMiningTxState,
+  readPendingMiningTxState,
+  recoverPendingMiningTx,
+} from "../lib/miningTxPath";
 import type {
   AutoMinePhase,
   AutoMineUiState,
@@ -250,6 +256,52 @@ export function useMiningRuntimeState({
   refetchGridEpochDataRef.current = refetchGridEpochData;
   onAutoMineBetConfirmedRef.current = onAutoMineBetConfirmed;
   notifyRef.current = onNotify;
+
+  useEffect(() => {
+    const actor = preferredAddress ?? address;
+    if (!publicClient || !actor) {
+      setIsPending(false);
+      return;
+    }
+    const pending = readPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
+    if (!pending) {
+      setIsPending(false);
+      return;
+    }
+
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    setIsPending(true);
+
+    const checkReceipt = async () => {
+      const recovery = await recoverPendingMiningTx(
+        publicClient,
+        pending,
+      );
+      if (cancelled) return;
+      if (recovery === "pending") {
+        timeoutId = setTimeout(() => void checkReceipt(), 3_000);
+        return;
+      }
+
+      clearPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
+      setIsPending(false);
+      if (recovery === "confirmed") {
+        refetchTileDataRef.current();
+        refetchUserBetsRef.current();
+        refetchEpochRef.current?.();
+        notifyRef.current?.("Pending bet confirmed on-chain after reload.", "success");
+      } else {
+        notifyRef.current?.("Previous pending bet is no longer pending.", "info");
+      }
+    };
+
+    void checkReceipt();
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [address, preferredAddress, publicClient]);
 
   const hasPreferredActor = Boolean(preferredAddress ?? (preserveTransientRuntime ? preferredAddressRef.current : null));
   const getActorAddress = useCallback(() => preferredAddressRef.current ?? address ?? null, [address]);

@@ -39,6 +39,7 @@ export function useMiningBetExecution({
   ensureContractPreflight,
   estimateGas,
   getBumpedFees,
+  getActorAddress,
   waitReceipt,
   readPublicClient,
   readSilentSend,
@@ -63,6 +64,7 @@ export function useMiningBetExecution({
     readEip7702Capability,
     readWriteContractAsync,
     ensurePreferredWallet,
+    getActorAddress,
   });
 
   /** Try 7702, silent, then wallet-write, in order of preference. */

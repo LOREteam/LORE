@@ -5,7 +5,13 @@ import { encodeFunctionData, maxUint256 } from "viem";
 import type { PublicClient } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
 import { log } from "../lib/logger";
-import { writeMiningTxPathState } from "../lib/miningTxPath";
+import {
+  clearPendingMiningTxState,
+  readPendingMiningTxState,
+  recoverPendingMiningTx,
+  writeMiningTxPathState,
+  writePendingMiningTxState,
+} from "../lib/miningTxPath";
 import { tileIdsToMask } from "../lib/tileMask";
 import {
   buildApproveAndBet7702Call,
@@ -50,6 +56,7 @@ interface UseMiningStandardBetPathOptions {
   readEip7702Capability?: () => Eip7702CapabilityState | undefined;
   readWriteContractAsync: () => (args: unknown) => Promise<`0x${string}`>;
   ensurePreferredWallet: () => Promise<void> | void;
+  getActorAddress: () => string | null;
 }
 
 export function useMiningStandardBetPath({
@@ -67,9 +74,54 @@ export function useMiningStandardBetPath({
   readEip7702Capability,
   readWriteContractAsync,
   ensurePreferredWallet,
+  getActorAddress,
 }: UseMiningStandardBetPathOptions) {
   const batchBitmapSupportedRef = useRef<boolean | null>(null);
   const batchSameAmountSupportedRef = useRef<boolean | null>(null);
+
+  const recoverTrackedPending = useCallback(
+    async (): Promise<ReceiptState | null> => {
+      const actor = getActorAddress();
+      if (!actor) return null;
+      const state = readPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
+      if (!state) return null;
+      const client = readPublicClient();
+      if (!client) return "pending";
+      const recovery = await recoverPendingMiningTx(client, state);
+      if (recovery === "pending") return "pending";
+      clearPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
+      return null;
+    },
+    [getActorAddress, readPublicClient],
+  );
+
+  const waitTrackedReceipt = useCallback(
+    async (
+      hash: `0x${string}`,
+      client?: PublicClient,
+      nonce?: number,
+    ): Promise<ReceiptState> => {
+      log.info("Mine", "bet transaction submitted", {
+        hash,
+        nonce: nonce ?? null,
+      });
+      const actor = getActorAddress();
+      if (actor) {
+        writePendingMiningTxState({
+          chainId: APP_CHAIN_ID,
+          contract: CONTRACT_ADDRESS,
+          actor: actor as `0x${string}`,
+          hash,
+        });
+      }
+      const state = await waitReceipt(hash, client);
+      if (state === "confirmed" && actor) {
+        clearPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
+      }
+      return state;
+    },
+    [getActorAddress, waitReceipt],
+  );
 
   const placeBets = useCallback(
     async (
@@ -82,6 +134,8 @@ export function useMiningStandardBetPath({
       if (normalizedTiles.length === 0) throw new Error("No valid tiles selected");
       await ensurePreferredWallet();
       await ensureContractPreflight();
+      const recoveredPending = await recoverTrackedPending();
+      if (recoveredPending) return recoveredPending;
       const totalAmountRaw = singleAmountRaw * BigInt(normalizedTiles.length);
       await ensureAllowance(totalAmountRaw);
       await assertSufficientAllowance(totalAmountRaw);
@@ -102,7 +156,7 @@ export function useMiningStandardBetPath({
           ...(overrides ?? {}),
         });
         writeMiningTxPathState("wallet-write", "direct-wallet");
-        return waitReceipt(txHash);
+        return waitTrackedReceipt(txHash, undefined, txNonce);
       }
 
       const tileArgs = normalizedTiles.map((id) => BigInt(id));
@@ -124,7 +178,7 @@ export function useMiningStandardBetPath({
           });
           batchBitmapSupportedRef.current = true;
           writeMiningTxPathState("wallet-write", "direct-wallet");
-          return waitReceipt(txHash);
+          return waitTrackedReceipt(txHash, undefined, txNonce);
         } catch (error) {
           if (!isMissingMethodError(error, "placeBatchBetsBitmap")) {
             throw error;
@@ -154,7 +208,7 @@ export function useMiningStandardBetPath({
           });
           batchSameAmountSupportedRef.current = true;
           writeMiningTxPathState("wallet-write", "direct-wallet");
-          return waitReceipt(txHash);
+          return waitTrackedReceipt(txHash, undefined, txNonce);
         } catch (error) {
           if (!isMissingMethodError(error, "placeBatchBetsSameAmount")) {
             throw error;
@@ -182,7 +236,7 @@ export function useMiningStandardBetPath({
         ...(overrides ?? {}),
       });
       writeMiningTxPathState("wallet-write", "direct-wallet");
-      return waitReceipt(txHash);
+      return waitTrackedReceipt(txHash, undefined, txNonce);
     },
     [
       assertNativeGasBalance,
@@ -192,8 +246,9 @@ export function useMiningStandardBetPath({
       ensurePreferredWallet,
       estimateGas,
       getBumpedFees,
+      recoverTrackedPending,
       readWriteContractAsync,
-      waitReceipt,
+      waitTrackedReceipt,
     ],
   );
 
@@ -212,6 +267,8 @@ export function useMiningStandardBetPath({
       const client = readPublicClient();
       const silentSend = readSilentSend();
       if (!client || !silentSend) throw new Error("Privy wallet not ready");
+      const recoveredPending = await recoverTrackedPending();
+      if (recoveredPending) return recoveredPending;
 
       const totalAmountRaw = singleAmountRaw * BigInt(normalizedTiles.length);
       await ensureAllowance(totalAmountRaw);
@@ -315,7 +372,7 @@ export function useMiningStandardBetPath({
         throw error;
       }
 
-      return waitReceipt(hash, client);
+      return waitTrackedReceipt(hash, client, txNonce);
     },
     [
       assertNativeGasBalance,
@@ -326,7 +383,8 @@ export function useMiningStandardBetPath({
       estimateGas,
       readPublicClient,
       readSilentSend,
-      waitReceipt,
+      recoverTrackedPending,
+      waitTrackedReceipt,
     ],
   );
 
