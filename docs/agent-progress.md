@@ -26,6 +26,18 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Targeted Sentry dependency hardening
+
+- Updated only `@sentry/nextjs` from 10.56.0 to 10.66.0. The resulting
+  OpenTelemetry 2.9.0 tree removes the unbounded W3C baggage advisory while
+  leaving Privy, wagmi, and viem versions unchanged.
+- The refreshed production audit reports 29 findings, with zero high or critical
+  findings. Remaining wallet advisories, including `uuid`, require a coordinated
+  breaking dependency upgrade and were not force-fixed.
+- Wallet peer-integrity proof, typecheck, logic tests, production build, and all
+  23 production HTTP smoke checks pass. The temporary server was stopped and
+  port 3001 is free.
+
 ## 2026-07-18 - Clean-checkout CI and indexer recovery
 
 - GitHub Actions run `29634688258` passed from clean checkout at `129314f`,
@@ -231,8 +243,9 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   durable supervisor and retain its PID/heartbeat plus the canary JSONL.
 - Keep the expanded clean-checkout workflow required on subsequent published
   revisions; the current published baseline passed it.
-- Start the targeted Codex Security diff scan from its app UI when interactive
-  scan setup is available.
+- Start a fresh targeted Codex Security diff scan for the current snapshot. The
+  prior two-file scan closed coverage 2/2 with no reportable findings, but its
+  finalizer correctly refused sealing after repository HEAD advanced.
 
 ## 2026-07-17 - Canary soak telemetry
 

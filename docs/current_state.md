@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-07-17.
+Last updated: 2026-07-18.
 
 Detailed history through this date is archived in
 [`docs/archive/current-state-through-2026-07-13.md`](archive/current-state-through-2026-07-13.md).
@@ -58,6 +58,13 @@ Open linked evidence only when a task needs it.
 - Empty epochs intentionally do not require keeper spending; the next bet can atomically advance an expired empty epoch. Non-empty expired epochs still require the monitored keeper.
 - Pool-chart freshness is preserved. Hidden or inactive work is reduced without slowing the visible live-state behavior.
 - Browser, server, and edge Sentry paths share recursive redaction for wallet, RPC, auth, URL, and transaction-like data.
+- `@sentry/nextjs` is updated from 10.56.0 to 10.66.0 without changing the
+  Privy/wagmi/viem versions. Its OpenTelemetry core moved from 2.7.1 to 2.9.0,
+  removing the W3C baggage memory-allocation advisory. The current production
+  audit has 29 findings after the advisory database refresh, with zero high or
+  critical findings;
+  wallet dependency integrity, typecheck, logic tests, production build, and all
+  23 HTTP smoke checks pass on the updated lockfile.
 - Testnet SQLite backup, integrity, restore, catch-up, and restart/reconcile drills passed without modifying the active database.
 - The current production bundle retains lazy boundaries for non-critical views; the wallet/session code remains eager for reliable recovery.
 - Bundle measurement now targets the current completed `.next` output by
@@ -207,6 +214,10 @@ Open linked evidence only when a task needs it.
 - Existing evidence must not be presented as a fresh rerun.
 - Responsive mobile coverage is recorded; true-device HTTPS wallet coverage remains a deployment-stage check.
 - Local proof tooling passing does not satisfy mainnet G1-G14 evidence.
+- The remaining production dependency advisories are concentrated in the wallet
+  dependency graph, including `uuid`. Their available automated fixes require
+  coordinated breaking Privy/wagmi changes, so they are deferred rather than
+  force-upgraded.
 
 ## Follow-Ups
 
