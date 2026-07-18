@@ -15,6 +15,10 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Browser baseline reports now expose an explicit `quality` verdict. Failed
+  local HTTP responses, local network failures, or local console errors mark a
+  run `degraded`, while third-party-only failures remain separately visible.
+  Focused 10-second drills reproduced both `pass` and `degraded` outcomes.
 - A five-minute local production-browser profile completed with zero failed
   local responses, no local console errors, a negative final JS heap delta, and
   one additional DOM node. Same-origin polling averaged 16.6 requests/minute;

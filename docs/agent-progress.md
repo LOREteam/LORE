@@ -26,6 +26,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Browser-profile quality verdict
+
+- Browser profiling now counts local and external network failures separately
+  and marks reports with local HTTP, request, or console failures as degraded.
+- A 10-second valid local production run reported `quality=pass`; the same run
+  without the documented local identity bypass reproduced two protected API
+  failures and reported `quality=degraded` with both reasons.
+- Business logic tests pass, and no application polling cadence was changed.
+
 ## 2026-07-18 - Five-minute production-browser profile
 
 - Ran a transaction-free desktop profile against the local production build

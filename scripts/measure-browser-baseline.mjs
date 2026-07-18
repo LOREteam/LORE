@@ -66,6 +66,8 @@ try {
   let failedLocalResponseCount = 0;
   let failedExternalResponseCount = 0;
   let requestFailureCount = 0;
+  let localRequestFailureCount = 0;
+  let externalRequestFailureCount = 0;
   const consoleErrorKinds = new Map();
   const consoleErrorTargets = new Map();
   const consoleErrorSamples = [];
@@ -170,11 +172,14 @@ try {
   });
   page.on("requestfailed", (request) => {
     requestFailureCount += 1;
+    const url = new URL(request.url());
+    const target = isLocalTarget(url) ? "local" : "external";
+    if (target === "local") localRequestFailureCount += 1;
+    else externalRequestFailureCount += 1;
     if (requestFailureSamples.length < 5) {
-      const url = new URL(request.url());
       requestFailureSamples.push({
-        target: isLocalTarget(url) ? "local" : "external",
-        path: isLocalTarget(url) ? url.pathname : undefined,
+        target,
+        path: target === "local" ? url.pathname : undefined,
         resourceType: request.resourceType(),
         error: sanitizeDiagnostic(request.failure()?.errorText || "unknown"),
       });
@@ -260,11 +265,20 @@ try {
     .filter((value) => Number.isFinite(value));
   const maxJsHeapUsedBytes = heapSamples.length > 0 ? Math.max(...heapSamples) : null;
   const maxDomNodes = Math.max(...runtimeSamples.map((sample) => sample.domNodes));
+  const localConsoleErrorCount = consoleErrorTargets.get("local") || 0;
+  const qualityIssues = [];
+  if (failedLocalResponseCount > 0) qualityIssues.push(`${failedLocalResponseCount} failed local response(s)`);
+  if (localRequestFailureCount > 0) qualityIssues.push(`${localRequestFailureCount} failed local request(s)`);
+  if (localConsoleErrorCount > 0) qualityIssues.push(`${localConsoleErrorCount} local console error(s)`);
   const report = {
     schemaVersion: 1,
     startedAt,
     target: { kind: "local", origin: baseOrigin, viewport: VIEWPORT_TEXT },
     observationMs: OBSERVE_MS,
+    quality: {
+      status: qualityIssues.length === 0 ? "pass" : "degraded",
+      issues: qualityIssues,
+    },
     vitals: {
       fcpMs: round(metrics.fcp),
       lcpMs: round(metrics.lcp),
@@ -314,6 +328,8 @@ try {
       failedLocalResponseCount,
       failedExternalResponseCount,
       requestFailureCount,
+      localRequestFailureCount,
+      externalRequestFailureCount,
       requestFailureSamples,
     },
     runtime: {

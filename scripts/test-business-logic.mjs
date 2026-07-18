@@ -1107,6 +1107,11 @@ async function main() {
     /increment\(consoleErrorTargets, target\)[\s\S]*consoleErrorsByTarget/,
     "production browser baseline must separate local and external console errors",
   );
+  assert.match(
+    browserBaselineSource,
+    /failedLocalResponseCount > 0[\s\S]*localRequestFailureCount > 0[\s\S]*localConsoleErrorCount > 0[\s\S]*status: qualityIssues\.length === 0 \? "pass" : "degraded"/,
+    "production browser baseline must mark local HTTP, network, or console failures as degraded",
+  );
   const reducedMotionSource = readFileSync("app/hooks/useReducedMotion.ts", "utf8");
   assert.match(
     reducedMotionSource,
