@@ -26,6 +26,18 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Post-fix production load profile
+
+- Ran the weighted homepage/API harness for 30 seconds at concurrency 50 against
+  a production build with a new SQLite path.
+- Completed 11,385 requests at 378.4 requests/second with zero unexpected
+  failures. Aggregate p50/p95/p99 were 68/816/1,092 ms; live-state p95 was
+  114 ms and jackpots p95 was 121 ms.
+- The 4,854 HTTP 429 responses came only from intentionally bounded APIs and
+  were classified separately from failures. Homepage and live-state remained
+  unthrottled, and the preceding browser smoke retained the pool-chart freshness
+  guard. The temporary runtime was stopped.
+
 ## 2026-07-18 - Clean-checkout proof for bounded jackpot recovery
 
 - Created a detached checkout at exact published commit `e7a75b4` and installed

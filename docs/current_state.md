@@ -187,6 +187,11 @@ Open linked evidence only when a task needs it.
   checkout after `npm ci`. Its isolated empty-DB production runtime also passed
   all 23 HTTP checks and the responsive browser smoke; the first jackpot read
   completed in 340 ms and `fresh=1` in 15 ms.
+- A subsequent 30-second weighted production load completed 11,385 requests at
+  378.4 requests/second with zero unexpected failures. Aggregate p95/p99 were
+  816/1,092 ms, live-state p95 was 114 ms, and jackpot p95 was 121 ms. Expected
+  429 responses remained separated from errors and did not throttle homepage or
+  live-state freshness.
 - Clean-checkout GitHub Actions run `29634688258` passed all of those gates on
   published commit `129314f`, including wallet dependency peer integrity and
   production browser smoke.
