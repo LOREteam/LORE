@@ -238,6 +238,10 @@ Open linked evidence only when a task needs it.
   seconds, then returns stored/cache data while the existing deduplicated RPC
   promise continues. A never-resolving RPC failure injection proved the stale
   fallback, while the healthy production request returned 200 in 375 ms.
+- Published commit `188fea1` reproduced the full lockfile/dependency, lint/type,
+  logic/contract/provenance, SQLite, monitoring, production build, HTTP, and
+  responsive browser gates from a detached clean checkout. The checkout stayed
+  clean and its temporary runtime was stopped.
 - Production proxy identity fails closed for missing/wrong proxy secrets and
   malformed forwarded IPs. The local drill enforced the configured 30-request
   limit per trusted IP, kept a second IP independent, and grouped different

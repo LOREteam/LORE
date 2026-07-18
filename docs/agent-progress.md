@@ -26,6 +26,19 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Clean-checkout proof for forced-refresh bound
+
+- Created a detached checkout at exact published commit `188fea1`; `npm ci`
+  installed 1,167 packages and kept EIP-7702 disabled.
+- Wallet dependency integrity, production audit (0 high/critical), full lint,
+  typecheck, logic, contract invariants, compilation provenance, SQLite fault
+  drills, monitoring recovery, and production build passed.
+- A new empty SQLite production runtime passed all 23 HTTP checks and the full
+  responsive browser smoke, including numeric fonts, empty jackpot state, and
+  same-epoch pool-chart freshness. Privy's wallet selector needed its existing
+  bounded first-attempt retry once and then loaded MetaMask/Coinbase normally.
+  The runtime was stopped and the detached checkout remained clean.
+
 ## 2026-07-18 - Bounded forced jackpot refresh
 
 - A deterministic failure injection seeded an isolated SQLite with a valid
