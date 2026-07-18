@@ -165,6 +165,10 @@ Open linked evidence only when a task needs it.
   window. The normal one-shot catch-up restored the missing rows, and the repeat
   audit passed over epochs 417-466 with 50 resolves, 45 bets, 45 resolver
   rewards, and zero mismatches.
+- A fresh isolated SQLite cold start then indexed 1,386 logs across 131,125
+  blocks from the current deployment. Reconciliation and the 50-epoch audit
+  passed before and after an immediate restart, with no duplicate or mismatched
+  indexed records.
 - Live canary output now records a final summary event. Optional monitor stale
   detection alerts when an unfinished soak stops producing events without
   treating an intentionally completed zero-failure log as stale.

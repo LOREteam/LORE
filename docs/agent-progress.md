@@ -39,6 +39,11 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   reconciliation reported no missing epochs. Repeating the same audit over
   epochs 417-466 passed with 50 resolved epochs, 45 bets, 45 resolver rewards,
   and zero mismatches.
+- A separate cold-start drill used a new isolated SQLite database and scanned
+  131,125 blocks from the current deployment, indexing 1,386 logs. Reconciliation
+  and the same 50-epoch chain audit passed. A second run on the same database
+  processed only the new head range; the post-restart audit remained clean,
+  proving restart/idempotent writes for this testnet snapshot.
 
 - Fixed the strict testnet canary proof fixture to use the supported `single`
   mode. `proof:drafts` and the complete `proof:local` L1-L14 preflight pass.
