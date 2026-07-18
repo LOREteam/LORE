@@ -15,6 +15,11 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- The Next.js 16 security boundary now uses root `proxy.ts`. The prior nested
+  `app/middleware.ts` was not part of the production request pipeline, so its CSP
+  and hardening headers were absent. Production build now lists Proxy, HTTP smoke
+  requires the CSP/clickjacking/MIME/referrer/permissions headers, and full
+  browser smoke passes with the policy enforced.
 - Exact commit `02e3660` passed a detached clean-checkout reproduction: lockfile
   install, wallet dependency integrity, production audit, lint, typecheck,
   business logic, contract invariants, compile provenance, SQLite operations,

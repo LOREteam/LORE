@@ -26,6 +26,17 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Activated Next.js 16 security Proxy
+
+- A direct production response check proved that `app/middleware.ts` was not
+  active: CSP and the related hardening headers were absent. Next.js 16 requires
+  root `proxy.ts` at the same level as `app`.
+- Moved the existing policy without weakening it and renamed the handler to the
+  Next.js 16 `proxy` export. Build now reports `Proxy (Middleware)`.
+- HTTP smoke now rejects missing CSP, clickjacking, MIME-sniffing, referrer, or
+  permissions protections. Focused lint, typecheck, logic, production build,
+  HTTP smoke, and full responsive browser smoke pass with headers enforced.
+
 ## 2026-07-18 - Clean-checkout proof for profiler quality patch
 
 - Created a detached temporary worktree at exact commit `02e3660`. The first
