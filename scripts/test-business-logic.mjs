@@ -1102,6 +1102,11 @@ async function main() {
     /soundToggle\.click\(\)[\s\S]*Synthetic sound-toggle interaction/,
     "production browser baseline must measure a safe synthetic interaction instead of leaving INP permanently empty",
   );
+  assert.match(
+    browserBaselineSource,
+    /increment\(consoleErrorTargets, target\)[\s\S]*consoleErrorsByTarget/,
+    "production browser baseline must separate local and external console errors",
+  );
   const reducedMotionSource = readFileSync("app/hooks/useReducedMotion.ts", "utf8");
   assert.match(
     reducedMotionSource,

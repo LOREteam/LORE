@@ -67,6 +67,7 @@ try {
   let failedExternalResponseCount = 0;
   let requestFailureCount = 0;
   const consoleErrorKinds = new Map();
+  const consoleErrorTargets = new Map();
   const consoleErrorSamples = [];
   const requestFailureSamples = [];
 
@@ -132,6 +133,7 @@ try {
             ? "wallet"
             : "other";
     increment(consoleErrorKinds, kind);
+    increment(consoleErrorTargets, target);
     if (consoleErrorSamples.length < 5) {
       consoleErrorSamples.push({ kind, target, path: locationPath, message: sanitizeDiagnostic(text) });
     }
@@ -339,6 +341,7 @@ try {
       longestTaskMs: round(Math.max(0, ...longTasks)),
       consoleErrorCount: [...consoleErrorKinds.values()].reduce((sum, count) => sum + count, 0),
       consoleErrorsByKind: Object.fromEntries([...consoleErrorKinds.entries()].sort()),
+      consoleErrorsByTarget: Object.fromEntries([...consoleErrorTargets.entries()].sort()),
       consoleErrorSamples,
     },
   };

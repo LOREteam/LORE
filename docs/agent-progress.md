@@ -42,6 +42,10 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   delta, CLS 0, no horizontal overflow, and 24 ms synthetic INP. Four CSP
   messages were external Privy-origin diagnostics; no local CSP violation was
   observed. The profiling server was stopped.
+- Browser baseline diagnostics now retain `consoleErrorsByTarget`, separating
+  local application errors from external wallet/provider errors without hiding
+  either. The focused logic guard and a 10-second production runtime check pass;
+  the runtime check had zero console errors and zero failed responses.
 
 ## 2026-07-18 - Clean-checkout CI and indexer recovery
 
