@@ -26,6 +26,18 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Clean-checkout proof for bounded jackpot recovery
+
+- Created a detached checkout at exact published commit `e7a75b4` and installed
+  1,167 packages with `npm ci`; postinstall kept EIP-7702 disabled.
+- Wallet dependency integrity, production dependency audit (0 high/critical),
+  full lint, typecheck, logic, contract invariants, compilation provenance,
+  SQLite fault drills, monitoring recovery, and production build passed.
+- On a new empty SQLite path, the first `/api/jackpots` returned 200 in 340 ms,
+  `fresh=1` returned 200 in 15 ms, all 23 HTTP checks passed, and the full
+  responsive browser smoke preserved number fonts, empty states, and pool-chart
+  freshness. The temporary runtime was stopped and the checkout remained clean.
+
 ## 2026-07-18 - Bounded empty-DB jackpot cold start
 
 - Reproduced `/api/jackpots` blocking for three 60-second smoke timeouts when a
