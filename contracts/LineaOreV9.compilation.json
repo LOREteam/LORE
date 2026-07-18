@@ -1,0 +1,12 @@
+{
+  "compilerVersion": "0.8.34+commit.80d5c536.Emscripten.clang",
+  "settings": {
+    "optimizer": true,
+    "runs": 200,
+    "evmVersion": "osaka"
+  },
+  "sourceSha256": "a29972e3d5ced71c06996e7b4e85a13d1b34f15c140c9db457bbe2f2f6cf34b8",
+  "abiSha256": "8373494b986a39e300f31e9a85324e0ca1e4df0b8bd9fb23c4268a87af2a32fc",
+  "bytecodeSha256": "84ac9a1e73bf044162a1dff43058e4e3265d893adbaf710127f609def9652c57",
+  "bytecodeBytes": 14266
+}

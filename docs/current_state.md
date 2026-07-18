@@ -1,179 +1,256 @@
 # Current State
 
-Current focus: Linea Sepolia testnet readiness. Mainnet proof tooling is retained, but G1-G14 production evidence and the mainnet transition are explicitly out of scope until separately resumed.
+Last updated: 2026-07-17.
 
-## Known State
-- 2026-07-10 local baseline: `git diff --check`, `npm.cmd run proof:drafts`, `npm.cmd run proof:local` (L1-L14), `npm.cmd run typecheck`, `npm.cmd run test:logic`, and `npm.cmd run build` passed. `.gitignore` excludes the current local `.tmp/`, shell-host artifact, diagnostic log, and screenshot artifacts so they are not commit candidates.
+Detailed history through this date is archived in
+[`docs/archive/current-state-through-2026-07-13.md`](archive/current-state-through-2026-07-13.md).
+Open linked evidence only when a task needs it.
 
-- Serena project config exists and is read-only with navigation/symbol/diagnostics tools only.
-- Launch proof docs/scripts that were NUL-corrupted have been restored to readable files.
-- `npm.cmd run proof:local` passes local launch-proof preflight L1-L14, including the mainnet proof output guard and an expected-fail strict launch runner check while G1-G14 evidence is missing.
-- `proof:files` treats `docs/testnet-canary-proof.json` as redacted non-launch evidence: it still checks that file for template and secret-like values, but it cannot satisfy or alter mainnet final-proof validation. This prevents the local preflight from rejecting valid Sepolia evidence.
-- `proof:launch-map`, `proof:drafts`, `proof:drafts:create`, `proof:launch-docs`, `proof:readiness`, `proof:gates -- --structure-only`, and `proof:remaining` are green locally.
-- Launch command-map validation now also checks `docs/production-runbook.md` and `docs/mainnet-readiness-checklist.md` for required artifact-backed launch evidence arguments, preventing stale non-artifact commands from reappearing outside the command map.
-- Launch evidence command map now includes a compact `Required Evidence Markers` section for G1-G14, and `proof:launch-map` fails if those command-map markers drift or disappear.
-- `proof:drafts` now also checks signoff/host/indexer/restore collector-shaped drafts: they must contain strict-validator sections and still be rejected while incomplete.
-- `proof:drafts` collector rejection coverage now explicitly protects required signoff, host, indexer, and restore evidence inputs, including chain logs, load logs, indexer/health/snapshot artifacts, restore logs, restored health logs, backup schedule, and preservation artifacts.
-- `proof:drafts` now also has explicit missing-artifact regressions for signoff, restore, monitoring, canary, and QA proof paths, so final G1-G4/G8-G14 validation cannot silently accept deleted or uncollected saved evidence inputs.
-- `proof:drafts:create` now prints an explicit warning that generated draft bundles are not launch proof and must be promoted only after real external evidence and strict validation.
-- `proof:drafts` now also runs strict validators against every draft produced by `proof:drafts:create`, ensuring the starter bundle cannot be mistaken for accepted launch proof.
-- `proof:remaining` now reports `completeGateEvidenceIssues` and fails if a `Complete` gate references missing final proof artifacts or required canary logs.
-- `proof:remaining` now prints a compact `Next Gate` action before the full G1-G14 table, while JSON keeps `nextGate` for automation and `proof:local` protects the human output from drifting away.
-- `proof:launch` now fails without strict mode and treats remaining external evidence as a launch-blocking failure, not a clean local guard.
-- `proof:launch` now also runs `proof:remaining -- --json` and only treats JSON remaining evidence as clean when it reports zero remaining gates and zero structural/reference issues.
-- `proof:launch` recognizes the hardened final `proof:files` success summary, so a complete final proof-file pass will not be misclassified as a launch failure.
-- `proof:launch -- --strict` now also runs the proof-file guard in final-manifest mode even when the canary log is missing, so strict launch cannot rely on the soft local proof-file preflight.
-- Collectors now write draft evidence by default and reject direct writes to final `docs/*-proof.json` paths.
-- Proof collectors can write draft JSON via the shared helper, and absolute paths to final `docs/*-proof.json` are rejected.
-- Restore evidence collection now requires an absolute existing backup file outside the repo checkout.
-- Restore evidence collection now requires absolute external source DB, backup dir, restore dir, and a backup artifact inside the backup dir.
-- Restore evidence collection now writes a validator-shaped draft with backupSchedule, restoreDrill, restoredStagingHealth, and indexerPreservation sections so G8 evidence can be filled without inventing a second schema.
-- Restore collection now requires saved backup schedule, `proof:restore`, restored `health:prod`, and indexer preservation artifacts through `--backup-schedule-artifact`, `--restore-log`, `--health-log`, and `--preservation-artifact`; the restore log must include the successful restore summary, and the health log must include `[prod-health] OK`, matching `base=<restored-origin>`, runtime/dataSync OK, and numeric `finalityLagBlocks` before a G8 draft is written.
-- Production runbook, readiness checklist, and command-map/readiness validation now describe the two-phase G8 restore flow: non-strict restore drill log, restored `health:prod` log, `proof:restore:collect`, then final strict `proof:restore` against `docs/restore-proof.json`.
-- Restore proof draft generation now refuses direct writes to final `docs/restore-proof.json`; final G8 proof still requires real backup schedule, restore drill, finality-aware restored health, and preservation evidence.
-- Standalone restore proof draft generation now requires concrete external source DB, backup dir, restore dir, and backup artifact paths plus saved successful `--restore-log`, restored-origin `--health-log` with numeric finality lag, `--backup-schedule-artifact`, and `--preservation-artifact` inputs before writing a G8 draft; `proof:drafts` covers missing/failed restore, health, schedule, and preservation artifact regressions.
-- Restore proof validation now requires restored `health:prod` evidence with numeric `finalityLagBlocks`; restore drafts no longer mark restored health finality from generic `dataSync` alone. Strict G8 proof also requires concrete backup schedule, restore drill, restored health, and indexer preservation evidence markers.
-- Strict restore proof now also requires `restoredStagingHealth` evidence to include `base=<restored origin>` from the restored `health:prod` output.
-- Strict restore proof now rejects missing local artifact references in final G8 evidence fields such as `evidencePath`, `artifact`, and `link`, while keeping DB/backup path validation separate.
-- Strict restore proof now also reads local backup schedule and indexer preservation artifacts and rejects artifacts that do not actually mention recurring scheduler/backup proof or heartbeat/latest indexed epoch before/after restore.
-- Monitoring proof validation now requires concrete fired alert and recovery/resolution evidence for each required monitor, fired and recovery evidence must be distinct, recovery timestamps cannot precede fired-alert timestamps, and each required kind must have one complete enabled monitor entry rather than evidence spread across duplicates.
-- Monitoring proof draft generation now refuses direct writes to final `docs/monitoring-proof.json`; final G9 proof still requires real fired/recovery alert evidence, concrete alert target evidence, concrete error tracking test-event evidence, and strict validation.
-- Monitoring proof draft generation now requires saved fired-alert, recovery, alert-target, and error-event artifacts through `--monitor-artifact`, `--recovery-artifact`, `--alert-target-artifact`, and `--error-event-artifact`; strict G9 still requires real enabled monitors, ISO timestamps, conditions, target verification, and error tracking evidence.
-- Strict monitoring proof now requires at least one alert target with `verified=true`, ISO timestamp, and concrete fired-alert evidence, and every recorded alert target must be verified after a real test.
-- Strict monitoring proof now also rejects missing local monitoring artifact references from `artifact: ...`, `evidencePath`, and `artifact` fields, so final G9 proof cannot point at deleted or uncollected redacted evidence files.
-- Strict monitoring proof now also reads local fired-alert, recovery, alert-target, and error-tracking event artifacts and rejects artifacts that do not mention the expected monitoring/error proof content.
-- Production runbook, status-board/proof-record guards, and command-map validation now require G9 monitoring evidence markers for all required monitor kinds plus `docs/monitoring-alert-export.log`, `docs/monitoring-recovery-export.log`, `docs/monitoring-alert-target-test.log`, and `docs/error-tracking-test-event.log` before strict monitoring proof.
-- Host proof validation now requires `hostType=production` for launch production host evidence.
-- Host evidence collection now requires production host type and a distinct staging/canary load origin.
-- Host evidence collection now writes a validator-shaped draft with processModel, persistentDb, healthProd, and loadHttp sections so G5-G6 evidence can be filled without inventing a second schema.
-- Host collection now requires an absolute external `--db-path`, concrete `--supervisor`, saved process evidence through `--process-evidence=docs/host-process-model.log`, and saved `health:prod` / `load:http` logs through `--health-log` and `--load-log` before writing a G5-G6 draft; health logs must include `[prod-health] OK`, matching `base=<production origin>`, runtime/dataSync OK, and numeric `finalityLagBlocks`, while load logs must include matching `Load base URL:` plus successful bounded latency/error evidence.
-- Production runbook and command-map validation now require explicit G6 artifact generation markers before host collection: `$env:PROD_HEALTH_BASE_URL`, `npm.cmd run health:prod`, `docs/host-health-prod.log`, `$env:LOAD_BASE_URL`, `npm.cmd run load:http`, and `docs/host-load-http.log`.
-- Host proof draft generation now refuses direct writes to final `docs/host-proof.json`; final G5-G6 proof still requires real production supervisor, persistent DB, health, load, and persistence evidence.
-- Standalone host proof draft generation now requires saved process, `health:prod`, and `load:http` artifacts plus concrete external `--db-path`, production `--origin`, staging/canary `--load-origin`, and `--supervisor`; it fail-fast rejects failed health/load logs before writing a G5-G6 draft.
-- Production `health:prod` now requires numeric finality-target lag evidence, and host proof drafts only mark `finalityLagChecked` from numeric `finalityLagBlocks`. Strict host proof also requires concrete supervisor, persistent DB, health, and load evidence markers.
-- Strict host proof now also requires `healthProd` evidence to include `base=<production origin>` from the `health:prod` output, and status-board/proof-record guards require G6 to keep `docs/host-health-prod.log`, `docs/host-load-http.log`, `base=<production origin>`, and `Load base URL:` markers so host evidence cannot degrade to generic health/load prose.
-- Strict host proof now also rejects missing local host artifact references from `artifact: ...`, `evidencePath`, `artifact`, log/report path, and command-output path fields, so final G5-G6 proof cannot point at deleted or uncollected process, health, load, or persistence evidence files.
-- Strict host proof now also requires each `processModel` evidence artifact or inline supervisor output to mention its exact role name (`lore-site`, `lore-bot`, `lore-indexer`), preventing a generic unrelated process log from satisfying G5.
-- Strict host proof now also reads local persistent DB, `health:prod`, and `load:http` artifacts and rejects artifacts that do not mention the expected G5-G6 proof content.
-- Signoff proof validation now requires Linea mainnet (`network=mainnet`, `chainId=59144`) and concrete evidence markers for contract/env, owner Safe/multisig, randomness sign-off, and direct chain/app-indexer comparisons.
-- Signoff evidence collection now writes a validator-shaped draft with contractEnv, ownership, randomness, and chainComparison sections so G1-G4 evidence can be filled without inventing a second schema.
-- `proof:mainnet` now supports `--out=<path>` and writes a redacted text proof snapshot suitable for `proof:signoff:collect --env-log=...`; strict failed runs do not write the final `docs/mainnet-env-proof.log` artifact.
-- Signoff collection now requires saved `proof:mainnet` and `proof:chain` logs through `--env-log` and `--chain-log`, so one collector command can carry G1 env evidence and G4 direct-chain evidence into the same draft.
-- Signoff draft/collection now rejects `--env-log` unless the saved `proof:mainnet` output contains `Summary: all checked env gates passed.`, preventing failed env snapshots from becoming G1-G4 draft evidence.
-- Signoff proof draft generation now refuses direct writes to final `docs/signoff-proof.json`; final G1-G4 proof still requires real contract/env, owner, randomness sign-off, and chain comparison evidence.
-- Standalone signoff proof draft generation now requires saved `proof:mainnet` and `proof:chain` artifacts through `--env-log` and `--chain-log`; `proof:signoff:collect` remains the launch operator path for G1-G4 evidence collection.
-- Strict signoff proof now rejects missing local artifact references in final G1-G4 evidence fields such as `evidencePath`, `artifact`, `link`, owner evidence, chain evidence, and command/report output paths.
-- Strict signoff proof now also reads local contract/env, owner-read, randomness sign-off, and chain-comparison artifacts and rejects artifacts that do not mention the expected G1-G4 proof content.
-- Indexer proof validation now requires Linea mainnet chain snapshots (`expectedChainId=59144`, `rpcChainId=59144`).
-- Indexer evidence collection now requires Linea mainnet chain id, deploy block, and positive finality blocks before writing a G7 draft.
-- Indexer evidence collection now writes a validator-shaped draft with dryRun, finality, chainSnapshot, and chainComparison sections so G7 evidence can be filled without inventing a second schema.
-- Indexer collection now requires saved `indexer:once`, `health:prod`, and direct-chain snapshot artifacts through `--indexer-log`, `--health-log`, and `--chain-snapshot`; the indexer log must match contract/deploy/start/finality args, finish with `Finished runOnce`, and contain no fatal marker before a G7 draft is written. The chain snapshot must include ISO `generatedAt` and at least the requested `--epochs` unique checked epochs.
-- Indexer proof draft generation now refuses direct writes to final `docs/indexer-proof.json`; final G7 proof still requires real fresh DB dry-run, finality, chain snapshot, and direct chain comparison evidence.
-- Standalone indexer proof draft generation now requires saved `indexer:once`, `health:prod`, and chain snapshot artifacts plus `--fresh-db=true`, Linea mainnet chain id, external SQLite path, matching deploy/start/finality inputs, generated chain snapshot, and enough checked epochs before writing a G7 draft.
-- Indexer proof draft generation and collection now also require the `--chain-snapshot` artifact to parse as a JSON object, rejecting array/null snapshots with concise errors before any G7 draft is written.
-- Indexer proof validation now requires finality health evidence with numeric `finalityLagBlocks` and `base=<production origin>` from `health:prod`; indexer drafts no longer mark `dataSyncHealthFinalityAware` from generic `dataSync` or `effectiveLagBlocks` lines. Strict G7 proof also requires concrete dry-run, finality, chain snapshot, and direct-chain comparison evidence markers.
-- Strict indexer proof now also requires `dryRun` evidence to include `[indexer] Deploy block:` and `[indexer] Start block:` markers matching the manifest deploy/start block values; indexer collection also rejects `[indexer] SQLite path:` values that are not absolute or are inside the repo checkout, preventing repo-local DB dry-runs from becoming G7 drafts.
-- Strict indexer proof now also rejects missing local indexer artifact references from `artifact: ...`, `evidencePath`, `artifact`, and link fields, so final G7 proof cannot point at deleted or uncollected indexer, health, chain snapshot, or chain-comparison evidence files.
-- Strict indexer proof now also reads local dry-run, finality health, chain snapshot, and chain-comparison artifacts and rejects artifacts that do not mention the expected G7 proof content.
-- Canary proof validation now requires Linea mainnet target metadata (`mainnet`/`linea-mainnet`, `chainId=59144`).
-- QA proof validation now requires Linea mainnet target metadata (`mainnet`/`linea-mainnet`, `targetChainId=59144`), exact production origin on wallet browser checks, and concrete artifact-like evidence paths, links, screenshots, logs, reports, command output, or tx hashes for each required G12-G14 check. Generic text-only values such as `checked` do not satisfy QA evidence.
-- QA proof draft generation now refuses direct writes to final `docs/qa-proof.json`; final G12-G14 proof still requires real wallet/browser/mobile evidence and strict validation.
-- QA proof draft generation now requires wallet, failure-state, support/audit, final-browser, and smoke artifacts plus a real clean-wallet tx hash through `--wallet-artifact`, `--failure-artifact`, `--support-artifact`, `--finalqa-artifact`, `--smoke-artifact`, and `--clean-wallet-tx`; strict G12-G14 still requires reviewed statuses, booleans, timestamps, wrong-network data, and mainnet wording evidence.
-- Strict QA proof now also rejects missing local QA artifact references from `artifact: ...`, `evidencePath`, `artifact`, screenshot/log/report path fields, so final G12-G14 proof cannot point at deleted or uncollected wallet, UX, support, smoke, or browser evidence files.
-- Strict QA proof now also reads local wallet, failure-state UX, support/audit, final browser QA, and debug autominer smoke artifacts and rejects artifacts that do not mention the expected QA proof content.
-- Launch proof templates are aligned with recovery-alert, mainnet QA, and 50-epoch canary guard expectations.
-- QA plan generation now requires Linea mainnet (`linea-mainnet`, `chain-id=59144`), matching QA proof validation.
-- Canary proof commands now require an explicit live JSONL log path in launch docs and command-map validation.
-- Canary analyzer can now execute strict live-log validation with its filesystem imports present.
-- Canary proof validation now requires at least 50 successful auto-miner unique epochs, concrete target/recovery/session/transaction evidence markers, and rejects missing or duplicate successful bet tx hashes in the live JSONL log.
-- Canary proof validation now also scans parsed live JSONL events for template-like values and secret-like raw fields such as RPC URLs, with `proof:drafts` regression coverage for `TODO` and raw `rpcUrl` cases.
-- Canary proof validation now also rejects malformed JSONL lines and non-object JSONL records with concise `Invalid JSONL at ...` errors; `proof:drafts` regression-tests both cases against an otherwise valid strict canary manifest.
-- Canary proof draft generation now rejects malformed and non-object live JSONL records before writing a draft, using concise `Invalid JSONL at ...` errors and `proof:drafts` regression coverage.
-- Canary proof draft generation now refuses direct writes to final `docs/canary-proof.json`, rejects generic RPC labels, and requires an existing `--live-log` JSONL artifact containing at least one successful auto-miner canary tx with a real tx hash and matching target metadata (`network`, `chainId`, `contractAddress`, `rpcLabel`); final G10/G11 proof still requires real live JSONL canary evidence and strict validation.
-- Canary proof draft generation now requires a real live JSONL log plus target, recovery, session, and transaction artifacts through `--live-log`, `--target-artifact`, `--recovery-artifact`, `--session-artifact`, and `--tx-artifact`; it pre-fills observed auto-miner counts and tx hashes but still leaves recovery/status/safety booleans explicit.
-- Strict canary proof now also rejects missing local canary artifact references from `artifact: ...`, `evidencePath`, and `artifact` fields, so final G10-G11 proof cannot point at deleted or uncollected target, recovery, session, or transaction scan evidence files.
-- Strict canary proof now also reads local target, recovery, auto-miner session, and transaction-health artifacts and rejects artifacts that do not mention the expected target/recovery/session/transaction proof content.
-- Production runbook and command-map validation now require G10-G14 canary/QA evidence markers: real target-RPC JSONL, 50 successful auto-miner unique epochs, recovery checks, duplicate/nonce/stuck-pending scans, Privy/wrong-network/mobile/clean-wallet evidence, and debug autominer smoke artifacts.
-- Proof file guard now exercises strict validators for collected final proof JSON files.
-- `proof:files` remains a soft local preflight without a canary log, but with `--canary-log` or `--strict` it now requires every final proof manifest plus the canary log to exist before launch.
-- `proof:files -- --canary-log=<path>` now also requires the canary log path to be an actual local `.jsonl` file, rejecting directories and non-JSONL files before final launch proof.
-- `proof:files -- --canary-log=<path>` now also rejects empty `.jsonl` files, and `proof:local` L3 regression-tests that empty-log guard.
-- `proof:files -- --canary-log=<path>` now also rejects whitespace-only `.jsonl` files, and `proof:local` L3 regression-tests that no-non-empty-lines guard.
-- `proof:files -- --canary-log=<path>` now also parses the first non-empty JSONL line and rejects malformed or non-object first records; `proof:local` L3 regression-tests malformed JSONL input.
-- `proof:local` L3 now also regression-tests non-object first JSONL records, so the canary-log object-shape guard cannot silently weaken.
-- `proof:files -- --canary-log=<path>` now also scans the first canary JSONL record for template-like and secret-like values, and `proof:local` L3 regression-tests TODO and raw RPC URL cases.
-- `proof:local` L3 now regression-tests the `proof:files -- --canary-log` shape guard with temporary directory and non-JSONL inputs, so that final canary-log validation cannot silently weaken.
-- `proof:files` now allows the documented auxiliary `docs/chain-proof-snapshot.json` artifact, so the final proof-file guard does not reject the G4/G7 chain snapshot produced by the launch runbook while still rejecting unexpected proof-like JSON files.
-- `proof:files` now also scans the auxiliary `docs/chain-proof-snapshot.json` for template-like and secret-like values when it exists, so the allowed G4/G7 snapshot cannot carry TODOs or raw secret fields into launch proof.
-- `proof:local` L3 now regression-tests the auxiliary `chain-proof-snapshot.json` content guard with isolated bad and clean temporary snapshots.
-- `proof:local` L3 auxiliary snapshot regression now also covers secret-like raw RPC URL fields, not only template-like values.
-- Final canary proof file validation now fails without an explicit live JSONL log path.
-- Complete launch gates now require expected local final proof artifacts, and canary/final QA gates also require a local live JSONL log reference.
-- Complete launch gates now also require gate-specific evidence markers in `docs/mainnet-proof-record.md`, so final rows cannot degrade to generic `docs/*-proof.json` references after artifacts are collected.
-- Launch gate structure validation now also requires every status-board `Required proof` cell to reference the expected final proof JSON, and canary-dependent gates G10/G11/G14 must explicitly mention a live canary log.
-- `proof:gates` and `proof:remaining` now require status-board `Required proof` cells to retain gate-specific evidence markers for G1-G14, matching the proof record marker expectations.
-- `proof:remaining` now reports `requiredProofIssues` and fails if status-board `Required proof` cells lose the expected final proof JSON or live canary log requirement.
-- `proof:local` L11 now explicitly requires `proof:remaining` to report no inconsistent rows, no complete-gate evidence issues, no required-proof issues, and no proof-record reference issues.
-- `proof:gates` and `proof:remaining` now also protect non-complete `docs/mainnet-proof-record.md` evidence placeholders from losing their expected final proof JSON references; G10/G11/G14 placeholders must mention live canary log evidence.
-- `proof:gates` and `proof:remaining` now also require `docs/mainnet-proof-record.md` placeholders to retain gate-specific evidence markers for G1-G14, preventing the proof ledger from degrading to generic `TBD docs/*.json` references.
-- `docs/mainnet-proof-record.md` final command now includes `proof:files -- --canary-log=<canary-log-file>` before strict launch, and `proof:gates` validates those final command snippets.
-- `proof:remaining` final all-complete guidance now tells operators to run `proof:files -- --canary-log=<path>` before strict `proof:launch`.
-- `docs/mainnet-status-board.md` G14 first check now points to `proof:files -- --canary-log=<canary-log-file>`, and `proof:gates` enforces that final-launch first check.
-- `proof:gates` now validates expected `First check` command markers for every G1-G14 status-board row, including artifact-backed collector arguments and strict proof commands.
-- `proof:remaining` now reports `first check issues` and `proof:local` L11 requires that counter to stay `none`, so the main remaining-evidence report catches status-board command drift directly.
-- `proof:local` L12 now validates `proof:remaining --json` and summarizes JSON output compactly, including remaining gate count and first-check issue count.
-- `docs/mainnet-status-board.md` last-verification text and `proof:gates` now require `proof:files` plus expected-fail `proof:launch` coverage, so the board records that local tooling is green while final launch remains blocked.
-- Readiness checklist validation now requires the exact saved `proof:chain -- --strict --out=docs/chain-proof-snapshot.json`, canary draft/strict, QA draft, and monitoring draft command references.
-- Readiness checklist validation now also requires explicit references to every final proof manifest: signoff, host, indexer, restore, monitoring, QA, and canary proof JSON.
-- Readiness checklist validation now rejects checked items backed only by generic words such as recorded, exposes, via, or tx hash; checked rows need concrete path, URL, API route, or real hash evidence.
-- Readiness checklist validation now also rejects checked local `docs/...` or `data/...` evidence paths that do not exist, preventing completed checklist rows from pointing at missing artifacts.
-- Final operator flow now explicitly runs `proof:files -- --canary-log=<canary-log-file>` before `proof:launch -- --strict`; readiness and command-map guards require that step in linked docs.
-- Production runbook now includes an explicit G1-G4 contract/funds safety section before host/indexer work, and command-map validation requires `proof:mainnet`, `proof:chain`, `proof:signoff:collect`, and strict `proof:signoff` in that runbook.
-- Production runbook and command-map validation now also require G1-G4 signoff evidence markers for `contractEnv`, direct owner read, Safe/multisig governance or proof tx, `randomness.decision`, operator/signer sign-off, and `chainComparison` for jackpot, safetyPool, deposits, rewards, rebates, and resolve.
-- Production runbook, readiness checklist, launch evidence command map, status board, and proof record now also require existing saved artifacts for G1-G4 signoff and G8 restore local artifact references.
-- Final `proof:files` / `proof:launch` operator docs now remind that `LORE_DB_PATH`, `LORE_BACKUP_DIR`, `LORE_RESTORE_DRILL_DIR`, and `LORE_RESTORE_BACKUP` must remain set to the reviewed external restore-proof paths before final launch proof.
-- Final proof validators use a consistent local `artifact: <path>` parser that tolerates labels or punctuation after the saved artifact path without weakening missing-file detection.
-- Command-map validation now also enforces production runbook order: prepare evidence, G1-G4 signoff, production host, indexer/restore, monitoring, QA/canary, proof files, strict launch, then hold conditions.
-- Production runbook and command-map validation now require the G7 indexer dry-run to show fresh external DB markers: `docs/indexer-once.log`, `$env:LORE_DB_PATH`, `$env:INDEXER_START_BLOCK`, `$env:NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK`, and `$env:INDEXER_FINALITY_BLOCKS` before `proof:indexer:collect`.
-- Production dependency audit now passes the launch high/critical gate: `npm.cmd run proof:deps` reports 0 critical and 0 high advisories after targeted `form-data`, `hono`, `protobufjs`, and `ws` overrides; remaining production advisories are moderate/low and still need follow-up dependency review before final launch confidence.
-- Full dependency audit high/critical is also clear: `npm.cmd run proof:deps:all` reports 0 critical and 0 high after a minimal `shell-quote` 1.8.4 override for the `concurrently` dev-toolchain path; `proof:launch -- --strict` now runs this check alongside production-only `proof:deps`. Remaining full-audit advisories are moderate/low.
-- Mainnet launch remains blocked by missing external evidence for G1-G14; local proof tooling passing does not mean launch-ready.
-- No NUL-leading docs/scripts files remain after the latest recovery scan.
+## Scope
 
-## Testnet Evidence (2026-07-10)
+- Active scope is Linea Sepolia testnet readiness and regression monitoring.
+- The configured V9 candidate is the accepted testnet contract for current runtime checks.
+- Mainnet transition and G1-G14 production evidence are paused until explicitly resumed.
+- EIP-7702 remains disabled in normal runtime flows.
 
-- A fresh external Sepolia SQLite indexer run from deploy block completed: 376 chunks and 7,139 raw contract logs.
-- Restarting the same DB resumed from its persisted block and repair cursor; reconciliation reported no missing epochs.
-- A latest one-shot catch-up after the wallet/RPC fixes advanced the local indexer to the current head, continued the 10,000-block repair cursor, and again reported no missing epochs. An immediate public data-sync read was `healthy`/`synced` with finality-target lag 3, 100% epoch coverage, inactive-but-not-stale completed run state, and redacted diagnostics; public runtime health was `ok`.
-- The local Sepolia SQLite backup/restore drill completed with SQLite integrity_check `ok` and restored scoped data.
-- These temporary local artifacts are testnet validation only, not mainnet proof or production evidence.
-- A resolver canary advanced stale Sepolia epoch 1717 to active epochs. A duplicate-epoch canary defect was found during the first varied run, fixed, and verified with consecutive bets in unique epochs 1722 and 1723; the wallet playtest completed approval, single, and batch bets with on-chain verification and deposits/rebates API status 200.
-- Local desktop/mobile browser smoke passed, including wallet selector, chart/font guards, auto-miner persistence, retry-wait/session-expired debug states, chat, and tabs.
-- A real Chrome desktop Privy session restored after a production-server restart and a browser reload; the embedded wallet returned Active within six seconds, LOGIN stayed absent, and a manual 1,000 LINEA stake was confirmed by the embedded-wallet balance change. MetaMask is used only for login in this test path, not for the bet confirmation.
-- A fresh one-shot Sepolia indexer catch-up completed, then four resolved epochs were compared against direct `EpochResolved` event fields and current jackpot flags: 4/4 exact matches, 0 mismatches. The saved evidence is `docs/testnet-indexer-chain-comparison-2026-07-10.json`; it records that historical indexer `totalPool` intentionally includes rollover while post-resolve `epochs().totalPool` does not.
-- A controlled activity-aware resolver smoke completed two varied auto-miner bets in two unique epochs with no failures, nonce gaps, or duplicate sends. It used exactly one explicit empty bootstrap before activity and then resolved only a bet-bearing epoch; evidence is `docs/testnet-idle-resolver-smoke.log` and its redacted JSONL log.
-- A clean Sepolia auto-miner canary completed 50 successful bets over 50 unique epochs (1857-1906) in 3,391,757 ms. It covered three auto-miner wallets, four bet methods, varied amounts/tile counts, 50 successful resolves, zero failed bets/resolves, zero nonce gaps, and zero gas-estimate fallbacks. The redacted log is `data/live-test-runs/live-canary-2026-07-10T09-48-13-561Z.jsonl`; strict testnet validation passes with `docs/testnet-canary-proof.json`.
-- Browser runtime smoke exposed repeated client-side 50k-block `eth_getLogs` scans for sidebar global stats; dRPC returned 400/500 and could leave the UI in a degraded live state. Global stats now use the local indexer-backed `/api/global-stats` aggregate instead. A fresh isolated browser load returned API 200 with zero console errors; only a Next dev CSS-preload warning remained.
-- Current rebuilt local production-server HTTP smoke passed: homepage, runtime/data-sync health, epochs/live-state/jackpots/leaderboards/deposits/rebates APIs, and expected auth/error/redaction paths all returned their asserted statuses.
-- Browser, server, and edge Sentry pipelines now run the same recursive sanitizer before sending events or breadcrumbs. Wallet/account/address fields, RPC/provider data, authorization/cookies, URLs, and address/transaction-like hex identifiers are redacted while safe route/status fields remain available.
-- A local testnet SQLite backup/restore drill passed integrity and table checks. An isolated restored copy caught up to 80 scoped bets / 78 epochs / 1 jackpot / 2 reward claims; a second one-shot indexer run resumed from the persisted cursor with no new logs, duplicate growth, or missing epochs. Production scheduling and restored HTTPS health remain deployment-host work.
-- The latest rebuilt production server also passed HTTP and browser smoke. Browser coverage included desktop and mobile shells, manual/Auto-Miner numeric font guards, mounted pool-chart line, wallet selector, Auto-Miner persistence, chat/profile overlay, and navigation tabs. The login modal needed one bounded reload retry before opening; the retry then passed, with no application-console failure recorded.
-- Mobile viewport retest found the recent-wins ticker visually clipped pills because its desktop marquee was active at a narrow width. Mobile now shows one centered current win without animation; desktop keeps the live marquee. At 390px the chip fit fully inside its feed container, desktop marquee remained active, and a post-reload mobile console check had zero errors.
-- A connected Chrome mobile-viewport check confirmed that the active Privy wallet, manual-bet panel, Auto-Miner controls, explorer link, number formatting, and fixed bottom navigation render without overlap. During the check, epoch 1994 stayed at `00:00 / Analyzing` with every tile disabled for more than 15 seconds and no application-console error. The existing fallback keeper was not running; one bounded keeper run resolved the non-empty 1,970 LINEA epoch in 280,079 gas (`0x38dc3f35b22b8e8ab7a57b429bd7813b4e066c865397c967f3aafcfb777aa2d5`) and chain state advanced to epoch 1995. The keeper was then stopped. The following empty expired epoch exposed a UI-only lock that hid the contract's atomic next-bet recovery; it is fixed and verified below.
-- A signed Chrome manual bet then exposed one remaining stale `isAnalyzing` guard in the shared tile-click callback: the tile appeared enabled but selection silently no-op'd. The callback now blocks only during reveal. After rebuilding, a 1 LINEA Privy bet on tile 1 succeeded in epoch 1996 with no duplicate send or console error; indexer evidence is block 30767779 and tx `0x270d688ae535270e2ccc02f18b59f0d3deaef1ed783dfb3b11183a3ab4868d50`.
-- A deliberate Ethereum Sepolia external-wallet state exposed an unbounded `switchChain` wait in the ETH top-up flow. External network switching and chain-ID verification are now time bounded, rejection/timeout no longer starts a duplicate fallback prompt, and the action always clears its pending state. A post-fix signed check switched MetaMask to Linea Sepolia and a 0.001 ETH top-up confirmed on-chain at block 30770269 with status 1 and tx `0x3aa666275356f9600f4cc2c49d8fca990bace5fef5d97826912c331797856f5c`. Two queued confirmations were traced to two explicit clicks, so a synchronous shared transfer lock now prevents rapid duplicate ETH/LINEA deposits and withdrawals before React rerenders. Explicit rejection remains a separate Missing case.
-- Production runtime logs also exposed Linea public RPC rejecting a 10,170-block jackpot recovery scan (`range ... exceeds limit of 10000`). Jackpot, recent-wins, and live-state log scans now cap requests at 10,000 blocks and recognize that provider error for adaptive retry. Typecheck, business logic, build, HTTP smoke, and a complete desktop/mobile browser smoke passed after the fix; no repeat jackpot background error appeared.
-- Extended local browser failure-state smoke passed for RPC-offline retry wait, `Recovery queued`, `RESUME PENDING`, expired wallet session guidance, and recovery-state cleanup. This proves rendered failure/recovery UX only; it is not substituted for a signed reverted or deliberately pending testnet transaction.
-## Current Blockers
+## Confirmed State
 
-- The production bundle was rebuilt successfully after localizing the existing Inter, Cinzel, and Rajdhani Latin WOFF2 assets through `next/font/local`. The original `--font-lore-*` variables and weight ranges are preserved. A fresh `next start` HTTP smoke passed, and connected Chrome desktop/mobile checks confirmed loaded local fonts, Active Privy restore, 25 enabled tiles on an expired empty epoch, intact manual/Auto-Miner panels, and zero console errors.
-- Clean-wallet testing exposed a stale external-wallet address after a MetaMask account switch: Wallet Settings displayed the old Privy-list address while MetaMask had selected the clean account, and `eth_sendTransaction` timed out. Normal external sends now read `eth_accounts` immediately before submission and synchronize `accountsChanged` into the displayed address. Typecheck, business logic, build, and HTTP smoke pass; a signed clean-wallet retry remains required.
-- Privy reload, route remount, and tab-close/reopen recovery are now collected in connected Chrome: each restored the embedded wallet as Active without a LOGIN state. The wrong-network hang is fixed locally but still needs a signed post-fix observation; remaining wallet cases are true mobile-device coverage plus deliberate wrong-network, rejection, and pending/revert scenarios.
-- Idle-epoch economics need an explicit product decision before mainnet: the keeper now skips empty epochs to avoid wasting ETH, while the next `placeBet` atomically advances an expired epoch and pays that gas in the player transaction. The controlled test canary permits a deliberate one-time empty bootstrap only through `LIVE_TEST_ALLOW_EMPTY_RESOLVE=1`.
-- The running site needs an explicit, monitored keeper deployment for autonomous resolution of non-empty expired epochs. Empty epochs intentionally need no keeper: the next manual or auto-miner bet may atomically advance them, and the UI now keeps selection and quick-pick controls available while the `Analyzing` indicator is shown.
-- The final testnet canary manifest is promoted and strict-valid. An explicit MetaMask LINEA-deposit rejection now showed `LINEA deposit rejected in wallet.` and cleared the sending state. An intentionally oversized deposit also exercised a pre-submission RPC failure, which is now normalized and prevented by an external-token-balance check. A separately guarded Linea Sepolia zero-recipient token transfer produced a signed reverted receipt in `docs/testnet-signed-revert.json`. A funded clean MetaMask wallet at nonce 0 then completed its one first-use 10 LINEA transfer to the current Privy wallet at block 30772251 / tx `0xaa59151220b267582040c68280ebe99b5202b735246e8a11d9ffa1ab8a6e21ea`, with no duplicate. The true mobile-device wallet session is explicitly deferred to mainnet rollout because it requires the final HTTPS origin; responsive mobile testnet coverage remains recorded separately. Wrong-network switching, successful ETH/LINEA deposits, and successful embedded-wallet ETH/LINEA withdrawals are confirmed.
-- Durable selected direct chain-to-indexer comparison evidence is collected for epochs 1935-1938. Broader wallet/mobile recovery coverage remains outstanding.
+- A fresh 2026-07-17 baseline passed typecheck, logic, contract invariants,
+  production build/start, focused desktop/tablet/mobile browser smoke, lint,
+  monitoring, SQLite operations, exact contract compilation, dependency audit,
+  and local launch proof L1-L14.
+- The local proof fixture now emits the supported `single` bet mode instead of
+  the obsolete generic `bet` label; strict testnet canary validation and the
+  complete local launch preflight pass again.
+- The PM2 process model now includes non-looping scheduled jobs for the existing
+  integrity-checked SQLite backup command and bounded chain/indexer audit. A
+  scheduler-style backup passed integrity checking, and a fresh 50-epoch
+  read-only audit completed with zero mismatches.
+- Scheduled chain/indexer output is replaced atomically through a PID-scoped
+  temporary file, preventing the monitor from reading truncated JSON during a
+  cron run. The post-fix 50-epoch audit and regression guard pass.
+- Scheduled backups support an explicit bounded retention window. It is off
+  unless `LORE_BACKUP_RETENTION_DAYS` is set and then removes only old regular
+  files matching the generated backup filename in the selected directory. The
+  fault drill preserves recent, excluded, unrelated, and non-matching files.
+- Runtime monitoring now checks bounded backup-directory metadata using
+  `LORE_BACKUP_DIR` by default. Missing, stale, invalid, and unavailable backup
+  states alert; a fresh backup produces a deduplicated recovery. The expanded
+  restart drill passes 10 alerts and 10 recoveries with no duplicate delivery.
+- A fresh 50-epoch read-only audit correctly failed while the local indexer was
+  stale, then passed with zero mismatches after one bounded catch-up plus
+  repair/reconcile run. This verifies both alert value and operational recovery.
+- During the active soak, a fresh one-shot indexer catch-up ingested 25 live
+  bets/epochs while the production server remained healthy. The following
+  50-epoch chain-to-indexer audit passed with zero mismatches across bets,
+  resolves, jackpots, resolver rewards, rewards, claims, fees, and rebates.
+- A later live catch-up exposed and fixed an auditor-only epoch-boundary bug:
+  `ResolverRewardAccrued` is now constrained to the selected epoch window while
+  epochless resolver claims remain block-scoped. The reproduced 50-epoch window
+  now has exactly 50 resolver accruals and zero mismatches.
+- A fresh local-only production load handled 4,459 requests in 10 seconds with
+  zero unexpected failures; expected rate-limit responses remained separated
+  from errors, `live-state` p95 was 110 ms, and total p95 was 715 ms.
+- Contract, logic, TypeScript, production build, HTTP, desktop/mobile browser, and focused RPC-recovery checks have passed on the recorded candidate state.
+- Manual betting through the active Privy embedded wallet has been observed on-chain without a MetaMask confirmation for the bet itself.
+- The 50-epoch Sepolia canary completed with unique epochs, varied wallets/methods/amounts/tile counts, successful resolves, and no failed bets, nonce gaps, duplicate sends, or gas-estimate fallbacks.
+- Selected direct chain-to-indexer comparisons matched, indexer restart/reconcile found no missing epochs, and public runtime/data-sync health was healthy in the recorded checks.
+- Empty epochs intentionally do not require keeper spending; the next bet can atomically advance an expired empty epoch. Non-empty expired epochs still require the monitored keeper.
+- Pool-chart freshness is preserved. Hidden or inactive work is reduced without slowing the visible live-state behavior.
+- Browser, server, and edge Sentry paths share recursive redaction for wallet, RPC, auth, URL, and transaction-like data.
+- Testnet SQLite backup, integrity, restore, catch-up, and restart/reconcile drills passed without modifying the active database.
+- The current production bundle retains lazy boundaries for non-critical views; the wallet/session code remains eager for reliable recovery.
+- Bundle measurement now targets the current completed `.next` output by
+  default and records `BUILD_ID` completion time instead of silently reading a
+  potentially stale isolated build.
+- Pending manual bets survive reload/tab recovery without duplicate sends, and
+  the focused browser guard passes.
+- Pending recovery uses independent actor+chain+contract storage keys, so account
+  switches neither inherit nor overwrite another wallet's pending recovery;
+  typecheck, logic tests, production build, and focused browser smoke pass.
+- Trusted proxy identity, optional shared external rate limiting, support-log
+  redaction, and persisted runtime alert deduplication/recovery are covered by
+  logic tests and a local delivery drill.
+- Production-mode API rate limits now fail closed when trusted proxy identity is
+  unavailable. A clearly named weak-identity bypass exists only for local/CI
+  production smoke and the mainnet runtime validator rejects it.
+- Every JSON write-route now uses a shared streaming byte cap before parsing.
+  Oversized chat, auth, admin-control, and rewards requests return 413 instead
+  of allowing one request to consume unbounded server memory.
+- Contract model fuzz now also covers 5,000 Safety Pool distributions across
+  1-25 losing participants, verifies aggregate rebate conservation, excludes
+  winning-tile participants, and exercises a safe `uint128` arithmetic edge.
+- A 15-minute production long-tab profile collected 31 heap/DOM samples. DOM
+  stayed at 482 nodes, heap fell from 36.3 MB to 19.2 MB with no higher sampled
+  peak, and no local API response failed. Live-state remained at 12 requests per
+  minute so the pool chart freshness was preserved; no polling reduction was made.
+- A fresh read-only chain-to-indexer audit matched all 89 available resolved
+  testnet epochs with zero mismatches, including bets, jackpots, rewards, batch
+  claims, resolver rewards, and rebates. No fee flush exists before epoch 120.
+- The shared external limiter test now exercises concurrent consumers against
+  one stateful bucket: two requests pass a limit of two and the third is
+  rejected. Real two-replica Upstash/proxy evidence remains a staging check.
+- Trusted proxy identities now accept only bounded valid IPv4/IPv6 values;
+  malformed authenticated headers fall back to the existing production
+  fail-closed path. Persisted monitor state also rejects oversized files,
+  keys, and messages. Logic, monitoring, typecheck, lint, and build pass.
+- Support-log export now includes a whitelisted persisted Auto-Miner snapshot
+  (phase, progress, run parameters, error kind, stop reason, latest confirmed
+  epoch, retry count, and timestamp). Submitted standard bets add a sanitized
+  public tx hash and known nonce to the support log without wallet identity.
+  Raw provider errors remain excluded and the complete metadata object is
+  passed through the existing secret/address/URL sanitizer before download.
+- Wallet Settings keeps support-log export available on mobile as an accessible
+  icon button instead of hiding the action below the `sm` breakpoint. Focused
+  logic/lint, production build, and the full responsive browser smoke pass.
+- A fresh full-history chain-to-indexer audit matched bets, epochs, jackpots,
+  rewards, batch claims, resolver rewards, fees, and rebates with no mismatch.
+- Isolated SQLite WAL/checkpoint/backup/read-only/corruption/disk-full drills pass.
+- The active testnet SQLite database was backed up and its obsolete contract scopes were removed after a read-only audit. A cleanup guard now preserves the active DB, WAL, and SHM artifacts; the final audit has no foreign scopes, stale metadata, or legacy rows.
+- The post-cleanup production build, HTTP smoke, responsive/debug browser smoke, and 60-second local load pass. The load produced zero unexpected failures at 630.9 requests/second; live-state p95 was 59 ms while bounded APIs returned expected 429 responses under saturation.
+- A 30-second production load handled 23,073 requests with no unexpected
+  failures; a ten-minute browser observation showed no DOM or heap growth signal.
+- The fresh ten-minute profile retained zero horizontal overflow, stable DOM,
+  heap -9.5 MB, 16.5 same-origin API requests/minute, and 12 visible `live-state`
+  requests/minute. Its CSP/resource console samples were all classified as
+  external wallet/auth sources, so the application CSP was not weakened.
+- The load runner now reports cold first-request latency separately and covers
+  global stats, fails on any cold-route error, and enforces per-route thresholds;
+  a local production smoke handled 2,236 warmed requests in five seconds with
+  zero unexpected failures and 117 ms total p95.
+- Full desktop/tablet/mobile smoke and debug Auto-Miner failure-state scenarios pass.
+- Browser smoke now also proves that the pool chart changes after a fresh
+  same-epoch live-state snapshot; empty-pool mounting and intentional polling
+  frequency remain unchanged.
+- The main content landmark now follows the active section for screen readers;
+  focused production browser smoke passed keyboard focus, accessible names,
+  reduced motion, mobile geometry, wallet selector, chart, and empty-state guards.
+  It also rejects visible enabled mobile controls smaller than 44 by 44 CSS pixels.
+- Manual-bet and auto-miner phase transitions now have polite screen-reader
+  status announcements without announcing frequent progress counters. Mobile
+  Wallet Settings section controls expose selected state, a 44px touch target,
+  and visible keyboard focus; typecheck, logic, contract, production build, and
+  the full responsive browser smoke pass on this state.
+- Contract properties now cover 10,000 randomized fee/rollover cases, 10,000
+  bitmap cases, 2,000 reward distributions, all 25 tiles, and claim/resolve guards.
+- Solidity compilation is pinned to 0.8.34 with optimizer 200 and Osaka; the
+  tracked source/ABI/bytecode manifest reproduces exactly in the local gate.
+- CI now runs logic, contract, SQLite, monitoring, provenance, build, production
+  browser, and high/critical dependency checks from the lockfile instead of
+  relying on ignored local ABI/BIN artifacts.
+- Online SQLite backup and stale-scope dry-run are now explicit operator commands;
+  both require a caller-selected source and the dry-run is strictly read-only.
+- A corrupt SQLite cold start now fails before Next.js opens its listener, while
+  a missing/empty new DB path remains allowed for normal initialization.
+- Continuous indexer mode now exits after a bounded number of consecutive full
+  watch-cycle failures so PM2 can restart a persistently degraded process. A
+  successful cycle resets the counter; the default threshold is five.
+- Authorized runtime health now exposes process memory/uptime and private
+  data-sync health exposes SQLite/WAL/SHM sizes for soak trend collection;
+  public responses redact all new fields. Typecheck, logic, lint, build, HTTP
+  smoke, and focused authorization/redaction checks pass. The earlier stale
+  local indexer was caught up and its repeated 50-epoch audit now passes.
+- Runtime monitoring can optionally alert on RSS and SQLite WAL byte thresholds;
+  both remain disabled unless explicitly configured. The persisted restart drill
+  passes threshold and bounded-canary-log reverted-series alerts with zero
+  duplicates after restart and matching recovery notifications.
+- Runtime monitoring can also consume the bounded output of a separately
+  scheduled chain/indexer audit. Mismatch, stale, invalid, oversized, and
+  unavailable artifacts alert without putting chain scans in the 30-second
+  health loop; fresh pass output produces a deduplicated recovery.
+- Live canary output now records a final summary event. Optional monitor stale
+  detection alerts when an unfinished soak stops producing events without
+  treating an intentionally completed zero-failure log as stale.
+
+## Accepted Limitations
+
+- The public testnet runbook and `.env.example` now match the accepted V9
+  candidate used by the private runtime environment. The previous 50-epoch
+  canary is explicitly historical evidence; it is not presented as proof for
+  the current candidate.
+- A fresh 60-second local production-build HTTP load run completed 38,558
+  requests at 642.2 requests/second with zero failures, p95 520 ms, and p99
+  708 ms. This is local evidence only, not the required HTTPS canary proof.
+  Rate-limited endpoints returned expected 429 responses while `live-state`
+  remained unthrottled and responsive.
+- A fresh production process correctly returned 503 for protected endpoints
+  without trusted client identity. With the documented local-only weak-identity
+  bypass, all 23 cold HTTP smoke checks passed. A prior 31-second `deposits`
+  response did not reproduce and therefore was not patched speculatively.
+- The user accepted existing wallet/mobile and Auto-Miner evidence and waived another authenticated fee-quote, Rabby, true-device mobile-wallet, and Auto-Miner rerun for this testnet candidate.
+- Existing evidence must not be presented as a fresh rerun.
+- Responsive mobile coverage is recorded; true-device HTTPS wallet coverage remains a deployment-stage check.
+- Local proof tooling passing does not satisfy mainnet G1-G14 evidence.
+
+## Follow-Ups
+
+- Monitor the shared testnet runtime and investigate only new regressions.
+- Validate the shared limiter with real external-store credentials across two replicas.
+- Validate HTTPS Privy and true-device mobile Web3 flows on the final origin.
+- Validate real monitoring delivery/recovery and schedule operational backups.
+- Complete the funded 24-48 hour soak and let the remote clean-checkout CI gate
+  run on the published branch. Local `npm ci` now passes from the committed
+  lockfile shape.
+- The active 1,440-round randomized soak covers all four configured roles with
+  RPC-failover injection and production-like health telemetry. Its supervisor
+  creates the diagnostics secret in memory and records only redacted labels and
+  aggregates; RSS, heap, SQLite DB, and WAL growth are present in compact status.
+- The Privy/wagmi peer mismatch is resolved by pinning the root `viem` to the
+  exact `2.50.4` required by `@privy-io/wagmi@4.0.9`. A clean `npm ci`, clean
+  `npm ls`, typecheck, logic tests, contract invariants, compilation provenance,
+  production build, and responsive browser smoke pass. CI now runs the same
+  wallet dependency peer-integrity check immediately after `npm ci`. Real signed
+  Privy wallet connect/rejection/pending recovery still requires the HTTPS
+  testnet flow.
+- Run the soak under a deployment supervisor or external job runner; the first
+  1,440-round attempt ended with its managed command session after 11 successful
+  unique epochs and is retained only as partial diagnostic evidence.
+- Keep stale contract-scope cleanup tied to the verified SQLite backup/restore runbook.
+- Require an explicit product decision before changing idle-epoch economics or keeper behavior.
+
+## Evidence Index
+
+- Testnet readiness: [`docs/testnet-readiness.md`](testnet-readiness.md)
+- Direct chain/indexer comparison: [`docs/testnet-indexer-chain-comparison-2026-07-10.json`](testnet-indexer-chain-comparison-2026-07-10.json)
+- Signed revert evidence: [`docs/testnet-signed-revert.json`](testnet-signed-revert.json)
+- Mainnet status board: [`docs/mainnet-status-board.md`](mainnet-status-board.md)
+- Durable work log: [`docs/agent-progress.md`](agent-progress.md)
 
 ## Next Best Step
 
-The testnet candidate is accepted on the recorded contract, gas, indexer/API, canary, browser, RPC-recovery, and existing wallet evidence. The user explicitly waived another authenticated fee-quote, Rabby, mobile-wallet, and Auto-Miner rerun; those checks remain labelled as not freshly rerun. Keep the shared testnet runtime monitored and collect only new regressions. Mainnet G1-G14 proof remains paused.
+The production baseline after disk recovery passes typecheck, logic, contract
+invariants, compilation provenance, build, HTTP smoke, and responsive browser
+smoke. A new 1,440-round testnet soak attempted to start after that baseline,
+but its transaction-free wallet preflight found insufficient native gas for
+`AUTOMINER_C`; no bet was sent. Top up that role before restarting.
+
+The previous 1,440-round testnet soak started under the local supervisor at
+`2026-07-17T23:51:19.638Z` and stopped after 64 successful unique bets when the
+host volume reached `ENOSPC`; no transaction reverted or duplicated. Do not
+restart it until generated build outputs are explicitly cleared and free space
+is restored. Use
+`npm.cmd run soak:testnet:status` for redacted progress. The wrapper runs
+randomized testnet rounds with bounded
+small bets, 1-25 tiles, RPC-failover injection, and health telemetry that
+correlates transaction latency/reverts/nonces with RSS, heap, SQLite DB, and WAL
+growth. Its transaction-free `soak:testnet:dry-run` preflight passes locally.
+Use `npm.cmd run soak:testnet:status` for a compact
+redacted status with successful/failed bet, unique epoch/tx/nonce, duplicate,
+revert, health-retry, RPC-injection-tagged event, slow-send, total/phase latency
+percentile, and
+resolver-fallback/health-growth summaries. It also reports the latest event
+timestamp and its age, so an alive supervisor with a stalled child is visible
+without opening the JSONL log; use
+`npm.cmd run soak:testnet:stop` for lock-verified shutdown.
+Private data-sync health now exposes free bytes on the SQLite volume, soak
+telemetry preserves its minimum/delta, and runtime monitoring alerts below a
+configurable 1 GiB default before writes fail.
+The soak supervisor independently enforces the same 1 GiB default before it
+starts Next.js or the canary, so low disk space cannot consume test funds and
+then fail while persisting evidence.
+`npm.cmd run cleanup:next-candidates` lists only root-level
+`.next-candidate*` build directories; its separate `:apply` command is the only
+path that removes them and requires explicit operator approval.
+Then run the remaining deployment-dependent checks on a testnet staging environment:
+shared-store replicas, HTTPS wallet/mobile flows, monitoring delivery, scheduled
+backup, and the funded 24-48 hour soak. Keep mainnet deployment paused.

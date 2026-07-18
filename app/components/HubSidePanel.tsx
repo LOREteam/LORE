@@ -76,7 +76,6 @@ export const HubSidePanel = React.memo(function HubSidePanel({
               feeEstimateUnavailable={feeEstimateUnavailable}
               isPending={isPending}
               isRevealing={isRevealing}
-              isAnalyzing={isAnalyzing}
               isAutoMining={isAutoMining}
               manualBetForm={manualBetForm}
               onMine={handleManualMineWithGuard}

@@ -490,7 +490,7 @@ async function main() {
   }
 
   console.log("[playtest] api snapshots");
-  const { address: _address, ...safeSummary } = summary;
+  const safeSummary = Object.fromEntries(Object.entries(summary).filter(([key]) => key !== "address"));
   console.log(JSON.stringify({
     summary: safeSummary,
     depositsStatus: deposits.status,

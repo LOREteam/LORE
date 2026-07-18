@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -463,3 +464,5 @@ if (!isRealAddress(contractAddress)) {
     process.exitCode = 1;
   }
 }
+
+process.exit(process.exitCode ?? 0);

@@ -79,7 +79,6 @@ interface ManualBetProps {
   feeEstimateUnavailable: boolean;
   isPending: boolean;
   isRevealing: boolean;
-  isAnalyzing?: boolean;
   isAutoMining: boolean;
   manualBetForm: ManualBetFormState;
   onMine: (betAmount: string) => void;
@@ -96,7 +95,6 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   feeEstimateUnavailable,
   isPending,
   isRevealing,
-  isAnalyzing: _isAnalyzing = false,
   isAutoMining,
   manualBetForm,
   onMine,
@@ -118,6 +116,9 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     !liveStateReady && !coldBootDefaults
       ? "Waiting for live epoch sync"
       : null;
+  const manualAnnouncement = isPending
+    ? "Bet transaction pending."
+    : manualStatusText ?? readOnlyReason ?? "";
   const quickPickDisabled = Boolean(readOnlyReason) || !liveStateReady || isPending || isRevealing || isAutoMining;
   const actionVariant = isPending || (!liveStateReady && !coldBootDefaults)
     ? "pending"
@@ -165,6 +166,10 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           <span className={PANEL_TITLE}>Manual Bet</span>
         </div>
       </div>
+
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {manualAnnouncement}
+      </span>
 
       <div className="mb-2">
         <label
@@ -408,6 +413,9 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
         : lowEthForGas
           ? "Top up ETH in the Privy wallet for gas"
         : null;
+  const autoMinerAnnouncement = autoMinePhase !== "idle"
+    ? `Auto-miner ${phaseMeta.label}. ${phaseMeta.detail ?? ""}`
+    : autoMinerStatusText ?? "";
   const autoButtonVariant = isAutoMining
     ? "danger"
     : autoMinePhase === "session-expired"
@@ -424,6 +432,10 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
       padding="md"
       className={`${uiTokens.shadow.panelInset} control-panel control-panel-auto ${compact ? "p-2" : "p-2.5 sm:p-3"}`}
     >
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {autoMinerAnnouncement}
+      </span>
+
       {compact ? (
         <>
           <div className="mb-1.5 px-1">

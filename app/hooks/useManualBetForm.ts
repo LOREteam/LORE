@@ -15,7 +15,6 @@ interface UseManualBetFormOptions {
   selectedTilesCount: number;
   isPending: boolean;
   isRevealing: boolean;
-  isAnalyzing?: boolean;
   isAutoMining: boolean;
 }
 
@@ -27,7 +26,6 @@ export function useManualBetForm({
   selectedTilesCount,
   isPending,
   isRevealing,
-  isAnalyzing: _isAnalyzing = false,
   isAutoMining,
 }: UseManualBetFormOptions) {
   const [betAmount, setBetAmount] = useState("10.0");

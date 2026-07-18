@@ -35,7 +35,6 @@ try {
 const counts = audit.metadata?.vulnerabilities ?? {};
 const vulnerabilities = Object.values(audit.vulnerabilities ?? {});
 const severityRank = new Map([["critical", 4], ["high", 3], ["moderate", 2], ["low", 1], ["info", 0]]);
-const highOrCritical = vulnerabilities.filter((item) => ["high", "critical"].includes(item.severity));
 const breakingFixes = vulnerabilities.filter((item) => item.fixAvailable && typeof item.fixAvailable === "object" && item.fixAvailable.isSemVerMajor);
 
 function countOf(name) {

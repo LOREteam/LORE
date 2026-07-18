@@ -5,6 +5,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAuthorizedAdminRouteRequest } from "../../_lib/adminRouteAuth";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
+import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
+
+const MAX_REQUEST_BODY_BYTES = 1_024;
 
 const PROCESS_CONFIG = {
   indexer: {
@@ -144,7 +147,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const body = (await request.json().catch(() => null)) as { target?: string } | null;
+  const parsedBody = await readBoundedJsonBody<{ target?: string }>(request, MAX_REQUEST_BODY_BYTES);
+  if (!parsedBody.ok && parsedBody.reason === "too-large") {
+    return applyNoStoreHeaders(
+      NextResponse.json({ error: "Process payload too large" }, { status: 413 }),
+      { varyCookie: true },
+    );
+  }
+  const body = parsedBody.ok ? parsedBody.value : null;
   if (!body?.target || !(body.target in PROCESS_CONFIG)) {
     return applyNoStoreHeaders(
       NextResponse.json({ error: "Unknown process target" }, { status: 400 }),

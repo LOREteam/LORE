@@ -25,6 +25,7 @@ type DataSyncHealth = {
     finalityTargetBlock?: string | null;
     lagBlocks?: number | null;
     lagToFinalityTargetBlocks?: number | null;
+    diskFreeBytes?: number | null;
   };
   epochs?: {
     storedCount?: number;
@@ -1126,6 +1127,7 @@ export default function AdminOpsClient() {
               <div>Finality blocks: <b>{opsData?.storage.finalityBlocks ?? dataSyncHealth?.env?.indexerFinalityBlocks ?? "..."}</b></div>
               <div>Finality target: <b>{opsData?.storage.targetBlock ?? dataSyncHealth?.storage?.finalityTargetBlock ?? "..."}</b></div>
               <div>Lag to finality target: <b>{fmtNumber(dataSyncHealth?.storage?.lagToFinalityTargetBlocks)}</b></div>
+              <div>Disk free: <b>{dataSyncHealth?.storage?.diskFreeBytes == null ? "..." : `${(dataSyncHealth.storage.diskFreeBytes / 1_073_741_824).toFixed(2)} GiB`}</b></div>
               <div>Last processed run: <b>{opsData?.storage.lastProcessedBlock ?? "..."}</b></div>
               <div>Stored epochs: <b>{fmtNumber(dataSyncHealth?.epochs?.storedCount)}</b></div>
               <div>Missing epochs: <b>{fmtNumber(dataSyncHealth?.epochs?.missingCount)}</b></div>

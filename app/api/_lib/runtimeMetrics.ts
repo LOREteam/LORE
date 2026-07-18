@@ -122,3 +122,14 @@ export function getRuntimeMetricsSnapshot() {
     ]),
   );
 }
+
+export function getRuntimeProcessSnapshot() {
+  const memory = process.memoryUsage();
+  return {
+    uptimeSeconds: Math.floor(process.uptime()),
+    rssBytes: memory.rss,
+    heapUsedBytes: memory.heapUsed,
+    heapTotalBytes: memory.heapTotal,
+    externalBytes: memory.external,
+  };
+}

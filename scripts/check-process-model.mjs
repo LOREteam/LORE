@@ -10,6 +10,8 @@ const expectedApps = new Map([
   ["lore-bot", { args: "run bot", packageScript: "bot" }],
   ["lore-indexer", { args: "run indexer", packageScript: "indexer" }],
   ["lore-monitor", { args: "run monitor:runtime", packageScript: "monitor:runtime" }],
+  ["lore-backup", { args: "run db:backup", packageScript: "db:backup", scheduled: true }],
+  ["lore-chain-audit", { args: "run audit:chain-indexer", packageScript: "audit:chain-indexer", scheduled: true }],
 ]);
 
 function hasText(value) {
@@ -66,9 +68,14 @@ for (const [name, expected] of expectedApps) {
     if (app.args !== expected.args) rowIssues.push(`args must be "${expected.args}"`);
     if (!hasText(app.cwd)) rowIssues.push("cwd is missing");
     if (app.env?.NODE_ENV !== "production") rowIssues.push("NODE_ENV must be production");
-    if (app.autorestart !== true) rowIssues.push("autorestart must be true");
-    if (typeof app.max_restarts !== "number" || app.max_restarts <= 0) rowIssues.push("max_restarts must be positive");
-    if (typeof app.restart_delay !== "number" || app.restart_delay < 1000) rowIssues.push("restart_delay must be >= 1000");
+    if (expected.scheduled) {
+      if (app.autorestart !== false) rowIssues.push("scheduled job autorestart must be false");
+      if (!hasText(app.cron_restart)) rowIssues.push("scheduled job cron_restart is missing");
+    } else {
+      if (app.autorestart !== true) rowIssues.push("autorestart must be true");
+      if (typeof app.max_restarts !== "number" || app.max_restarts <= 0) rowIssues.push("max_restarts must be positive");
+      if (typeof app.restart_delay !== "number" || app.restart_delay < 1000) rowIssues.push("restart_delay must be >= 1000");
+    }
     if (!hasText(app.out_file) || !hasText(app.error_file)) rowIssues.push("log files are missing");
     if (app.merge_logs !== true) rowIssues.push("merge_logs must be true");
     if (app.time !== true) rowIssues.push("time must be true");

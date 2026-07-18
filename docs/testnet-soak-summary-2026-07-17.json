@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "network": "linea-sepolia",
+  "startedAt": "2026-07-17T23:51:19.638Z",
+  "finishedAt": "2026-07-18T01:25:19.838Z",
+  "status": "partial-failed",
+  "stopReason": "host-disk-enospc",
+  "evidence": {
+    "liveLog": "data/live-test-runs/live-canary-2026-07-17T23-51-22-124Z.jsonl",
+    "chainIndexerAudit": {
+      "generatedAt": "2026-07-18T01:00:39.277Z",
+      "epochFrom": 401,
+      "epochTo": 450,
+      "status": "pass",
+      "mismatchCount": 0
+    }
+  },
+  "transactions": {
+    "successfulBets": 64,
+    "failedBets": 1,
+    "uniqueEpochs": 64,
+    "uniqueTransactions": 64,
+    "duplicateTransactions": 0,
+    "duplicateNonces": 0,
+    "revertedTransactions": 0,
+    "resolverFallbacks": 64
+  },
+  "runtime": {
+    "healthSamples": 13,
+    "healthFailures": 1,
+    "healthRetries": 2,
+    "slowSendsAtOrAbove20Seconds": 3,
+    "malformedLines": 0,
+    "rssDeltaBytes": -18202624,
+    "heapDeltaBytes": -4718176,
+    "dbDeltaBytes": 0,
+    "walDeltaBytes": 0
+  },
+  "latencyMs": {
+    "totalP50": 6759,
+    "totalP95": 36763,
+    "totalP99": 48176,
+    "sendP95": 11312,
+    "receiptP95": 5313
+  },
+  "assessment": {
+    "transactionSafetyPassed": true,
+    "durationTargetPassed": false,
+    "requiresRerunAfterDiskCleanup": true
+  }
+}

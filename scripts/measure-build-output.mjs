@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const projectRoot = process.cwd();
-const distDir = path.resolve(projectRoot, process.env.NEXT_DIST_DIR || ".next-isolated");
+const distDir = path.resolve(projectRoot, process.env.NEXT_DIST_DIR?.trim() || ".next");
 const staticDir = path.join(distDir, "static");
+const buildIdPath = path.join(distDir, "BUILD_ID");
 const outputPath = path.resolve(
   projectRoot,
   process.env.BUNDLE_BASELINE_OUT || "artifacts/performance/build-output.json",
@@ -12,6 +13,12 @@ const outputPath = path.resolve(
 if (!distDir.startsWith(`${projectRoot}${path.sep}`)) {
   throw new Error("NEXT_DIST_DIR must resolve inside the project");
 }
+
+const [buildId, buildIdStat] = await Promise.all([
+  fs.readFile(buildIdPath, "utf8").then((value) => value.trim()),
+  fs.stat(buildIdPath),
+]);
+if (!buildId) throw new Error(`${path.relative(projectRoot, buildIdPath)} is empty`);
 
 async function collectFiles(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true });
@@ -43,6 +50,7 @@ const report = {
   measuredAt: new Date().toISOString(),
   scope: "static production output only",
   distDir: path.relative(projectRoot, distDir).replaceAll(path.sep, "/"),
+  buildCompletedAt: buildIdStat.mtime.toISOString(),
   fileCount: files.length,
   totalBytes: files.reduce((sum, file) => sum + file.bytes, 0),
   bytesByExtension: Object.fromEntries(

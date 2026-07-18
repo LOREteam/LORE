@@ -209,7 +209,6 @@ function MiningGridView({
               isSelected={selectionSet.has(tileId)}
               hasMyBet={tile.hasMyBet}
               isRevealing={isRevealing}
-              isAnalyzing={isAnalyzing}
               reducedMotion={reducedMotion}
             />
           );
@@ -249,7 +248,6 @@ const Tile = React.memo(function Tile({
   isSelected,
   hasMyBet,
   isRevealing,
-  isAnalyzing: _isAnalyzing,
   reducedMotion,
 }: {
   tileId: number;
@@ -261,7 +259,6 @@ const Tile = React.memo(function Tile({
   isSelected: boolean;
   hasMyBet: boolean;
   isRevealing: boolean;
-  isAnalyzing: boolean;
   reducedMotion: boolean;
 }) {
   const isMyWin = isWinner && hasMyBet;

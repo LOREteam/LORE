@@ -6,7 +6,7 @@ import {
 } from "../../../../config/publicConfig";
 import { APP_CHAIN_ID, APP_CHAIN_NAME } from "../../../lib/constants";
 import { isAuthorizedHealthDiagnosticsRequest } from "../_lib/diagnosticsAuth";
-import { getRuntimeMetricsSnapshot } from "../../_lib/runtimeMetrics";
+import { getRuntimeMetricsSnapshot, getRuntimeProcessSnapshot } from "../../_lib/runtimeMetrics";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 
 export async function GET(request: NextRequest) {
@@ -36,6 +36,7 @@ export async function GET(request: NextRequest) {
     ts: Date.now(),
     publicConfig,
     metrics: authorized ? getRuntimeMetricsSnapshot() : {},
+    process: authorized ? getRuntimeProcessSnapshot() : undefined,
   }, {
     headers: {
       "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",

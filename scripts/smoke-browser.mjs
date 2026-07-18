@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import "dotenv/config";
 import { chromium } from "playwright-core";
 import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
 import {
@@ -20,6 +21,7 @@ import {
   openWalletSelectorFromLoginModal,
   selectSingleTile,
   verifyAutoMinerFailureScenarios,
+  verifyPendingBetReloadRecovery,
   verifyHubVisualRegressionGuards,
   verifyMobileHubResponsiveGuards,
   verifyAutoMinerInputPersistence,
@@ -35,12 +37,17 @@ const WARMUP_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_BROWSER_WARM
 const TILE_SELECTION_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_TILE_SELECTION_TIMEOUT_MS, 45_000);
 const AUTO_MINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
 const AUTO_MINE_DEBUG_OVERRIDE_KEY = "lineaore:auto-mine-debug-override:v1";
+const PENDING_MINING_TX_KEY = "lineaore:pending-mining-tx:v1";
 const FIRST_VISIT_TUTORIAL_KEY = "lore:first-visit-tutorial:v1";
 const INCLUDE_DEBUG_AUTOMINER_SCENARIOS = process.env.SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS === "1";
+const ONLY_PENDING_RECOVERY = process.env.SMOKE_ONLY_PENDING_RECOVERY === "1";
 const EXPECT_READ_ONLY = process.env.SMOKE_EXPECT_READ_ONLY === "1";
 
 const BROWSER_CANDIDATES = [
   process.env.SMOKE_BROWSER_EXECUTABLE,
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -155,6 +162,9 @@ async function main() {
     autoMineDebugOverrideKey: AUTO_MINE_DEBUG_OVERRIDE_KEY,
     autoMinerInputsKey: AUTO_MINER_INPUTS_KEY,
     baseUrl: BASE_URL,
+    chainId: Number(process.env.NEXT_PUBLIC_LINEA_CHAIN_ID || 59141),
+    contractAddress: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS,
+    pendingMiningTxKey: PENDING_MINING_TX_KEY,
     tileSelectionTimeoutMs: TILE_SELECTION_TIMEOUT_MS,
     timeoutMs: TIMEOUT_MS,
   };
@@ -162,7 +172,8 @@ async function main() {
   try {
     await runStep(`warm ${BASE_URL}`, () => warmBaseUrl(BASE_URL, WARMUP_TIMEOUT_MS));
 
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+    const desktopContext = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
+    const page = await desktopContext.newPage();
     await page.addInitScript((tutorialKey) => {
       try {
         window.localStorage.setItem(tutorialKey, "1");
@@ -195,6 +206,11 @@ async function main() {
       await saveSmokeScreenshot(page, SCREENSHOT_PATH);
     });
     await runStep("verify hub visual regression guards", () => verifyHubVisualRegressionGuards(page, TIMEOUT_MS));
+    if (ONLY_PENDING_RECOVERY) {
+      await runStep("verify pending bet reload recovery", () => verifyPendingBetReloadRecovery(page, smokeOptions));
+      console.log("\nPending bet reload/reopen smoke passed.");
+      return;
+    }
 
     await runStep("verify tablet viewport", () => verifyViewportShell(
       browser,
@@ -265,6 +281,10 @@ async function main() {
       if (unnamed.length > 0) throw new Error(`visible controls without accessible names: ${unnamed.join(", ")}`);
       console.log("PASS visible interactive controls have accessible names");
     });
+    await runStep("verify named main landmark", async () => {
+      const label = await page.locator("main").getAttribute("aria-label");
+      if (!label?.trim()) throw new Error("main landmark is missing an accessible name");
+    });
     await runStep("verify system reduced-motion preference", async () => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.locator("html[data-motion='reduced']").waitFor({ state: "attached", timeout: TIMEOUT_MS });
@@ -334,6 +354,7 @@ async function main() {
       console.log("SKIP auto-miner failure scenarios step in read-only smoke");
     } else if (INCLUDE_DEBUG_AUTOMINER_SCENARIOS) {
       await runStep("verify auto-miner failure scenarios", () => verifyAutoMinerFailureScenarios(page, smokeOptions));
+      await runStep("verify pending bet reload recovery", () => verifyPendingBetReloadRecovery(page, smokeOptions));
     } else {
       console.log("SKIP auto-miner failure scenarios step (set SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS=1 to enable)");
     }
@@ -435,6 +456,32 @@ async function main() {
       await expectVisible(mobilePage.getByRole("button", { name: "Leaderboards" }), "mobile top nav", TIMEOUT_MS);
       await expectVisible(mobilePage.getByText("Manual Bet"), "mobile manual bet panel", TIMEOUT_MS);
       await expectVisible(mobilePage.getByText("Auto-Miner"), "mobile auto-miner panel", TIMEOUT_MS);
+    });
+    await runStep("verify mobile touch targets", async () => {
+      const undersized = await mobilePage.evaluate(() => [...document.querySelectorAll(
+        'button, input:not([type="hidden"]), select, textarea, [role="button"]',
+      )]
+        .filter((element) => {
+          if (!(element instanceof HTMLElement) || element.hasAttribute("disabled")) return false;
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) > 0
+            && rect.width > 0 && rect.height > 0;
+        })
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            label: element.getAttribute("aria-label") || element.getAttribute("title")
+              || element.textContent?.trim().replace(/\s+/g, " ").slice(0, 40) || element.tagName,
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          };
+        })
+        .filter((target) => target.width < 44 || target.height < 44)
+        .slice(0, 10));
+      if (undersized.length > 0) {
+        throw new Error(`mobile touch targets below 44px: ${JSON.stringify(undersized)}`);
+      }
     });
     await runStep("verify 430px mobile hub guards", async () => {
       await mobilePage.setViewportSize({ width: 430, height: 932 });
@@ -610,6 +657,52 @@ async function main() {
       if (!leaderboardEmptyOpened) throw new Error("leaderboard empty state did not become ready");
       await emptyContext.close();
       console.log("PASS empty pool, rewards, leaderboards, and jackpots remain explicit");
+    });
+
+    await runStep("verify pool chart freshness", async () => {
+      const chartContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+      await chartContext.addInitScript((tutorialKey) => {
+        window.localStorage.clear();
+        window.localStorage.setItem(tutorialKey, "1");
+      }, FIRST_VISIT_TUTORIAL_KEY);
+      const chartPage = await chartContext.newPage();
+      chartPage.on("pageerror", (error) => pageErrors.push({ message: error.message, source: "pool-chart-freshness" }));
+      let updatedPool = false;
+      await chartPage.route("**/api/live-state", (route) => {
+        const poolWei = updatedPool ? "20000000000000000000" : "10000000000000000000";
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          headers: { "cache-control": "no-store" },
+          body: JSON.stringify({
+            currentEpoch: "500",
+            epochEndTime: String(Math.floor(Date.now() / 1000) + 3600),
+            jackpotInfo: ["0", "0", "0", "0", "0", "0", "0", "0"],
+            rolloverPool: "0",
+            currentEpochData: [poolWei, "0", "0", false, false, false],
+            tileData: { pools: [poolWei, ...Array(24).fill("0")], users: Array(25).fill("0") },
+            tileUserCounts: Array(25).fill(0),
+            indexedTilePools: [poolWei, ...Array(24).fill("0")],
+            epochDuration: "60",
+            pendingEpochDuration: null,
+            pendingEpochDurationEta: null,
+            pendingEpochDurationEffectiveFromEpoch: null,
+            fetchedAt: Date.now(),
+          }),
+        });
+      });
+      await ensureLandingPage(chartPage, smokeOptions);
+      const chartLine = chartPage.locator('[data-testid="header-pool-chart-line"]');
+      await expectVisible(chartLine, "initial pool chart line", TIMEOUT_MS);
+      const initialPath = await chartLine.getAttribute("d");
+      if (!initialPath) throw new Error("initial pool chart path is empty");
+      updatedPool = true;
+      await chartPage.waitForFunction((previousPath) => {
+        const path = document.querySelector('[data-testid="header-pool-chart-line"]');
+        return path instanceof SVGPathElement && path.getAttribute("d") !== previousPath;
+      }, initialPath, { timeout: 12_000 });
+      await chartContext.close();
+      console.log("PASS pool chart reacts to a fresh same-epoch pool snapshot");
     });
 
     const relevantPageErrors = pageErrors.filter((entry) => !isIgnoredPageError(entry.message));

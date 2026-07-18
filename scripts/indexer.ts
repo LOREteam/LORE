@@ -36,6 +36,7 @@ import {
 import { tileMaskToTileIds } from "../app/lib/tileMask";
 import { normalizeTileAmounts } from "../app/lib/tokenAmountMath";
 import { getIndexerFinalityTargetBlock, parseIndexerFinalityBlocks } from "../app/lib/indexerFinality";
+import { parseIndexerWatchFailureLimit, recordIndexerWatchFailure } from "../app/lib/indexerWatchPolicy";
 import {
   patchJsonPath,
   putJsonPath,
@@ -76,6 +77,7 @@ const INTER_CHUNK_DELAY_MS = 400;
 const RPC_CALL_TIMEOUT_MS = parseOptionalPositiveIntegerEnv(process.env.INDEXER_RPC_TIMEOUT_MS, 45_000);
 const MIN_ADAPTIVE_LOG_RANGE_BLOCKS = parseOptionalNonNegativeBigIntEnv(process.env.INDEXER_MIN_ADAPTIVE_LOG_RANGE_BLOCKS, 250n);
 const INDEXER_FINALITY_BLOCKS = parseIndexerFinalityBlocks(process.env.INDEXER_FINALITY_BLOCKS);
+const WATCH_FAILURE_LIMIT = parseIndexerWatchFailureLimit(process.env.INDEXER_WATCH_FAILURE_LIMIT);
 const RECONCILE_INTERVAL_MS = parseOptionalPositiveIntegerEnv(
   process.env.INDEXER_RECONCILE_INTERVAL_MS,
   DEFAULT_INDEXER_RECONCILE_INTERVAL_MS,
@@ -304,15 +306,6 @@ async function fetchLogsByTopicsAdaptive(
   return fetchLogsRequestAdaptiveSplit(topics, label, from, to);
 }
 
-async function fetchLogTopicAdaptive(
-  topic: `0x${string}`,
-  label: string,
-  from: bigint,
-  to: bigint,
-): Promise<Log[]> {
-  return fetchLogsRequestAdaptiveSplit([topic], label, from, to);
-}
-
 async function fetchLogsByTopicsChunked(
   topics: Array<`0x${string}`>,
   label: string,
@@ -342,36 +335,6 @@ async function fetchLogsByTopicsChunked(
     }
   }
 
-  return all;
-}
-
-async function fetchLogsByTopic(
-  topic: `0x${string}`,
-  label: string,
-  from: bigint,
-  to: bigint,
-): Promise<Log[]> {
-  const all: Log[] = [];
-  const ranges: Array<{ from: bigint; to: bigint }> = [];
-  for (let f = from; f <= to; f += CHUNK_BLOCKS) {
-    const t = f + CHUNK_BLOCKS - 1n > to ? to : f + CHUNK_BLOCKS - 1n;
-    ranges.push({ from: f, to: t });
-  }
-
-  for (let i = 0; i < ranges.length; i++) {
-    const r = ranges[i];
-    const logs = await fetchLogTopicAdaptive(
-      topic,
-      `${label}:${i + 1}/${ranges.length}`,
-      r.from,
-      r.to,
-    );
-    all.push(...logs);
-    if (i < ranges.length - 1) await delay(INTER_CHUNK_DELAY_MS);
-    if ((i + 1) % 10 === 0 || i === ranges.length - 1) {
-      console.log(`  [${label}] ${i + 1}/${ranges.length} chunks, ${all.length} logs`);
-    }
-  }
   return all;
 }
 
@@ -1218,6 +1181,7 @@ async function main() {
   if (isWatch) {
     console.log(`[indexer] Watching for new blocks every ${POLL_INTERVAL_MS / 1000}s...`);
     let running = false;
+    let consecutiveFailures = 0;
     setInterval(async () => {
       if (running) return;
       running = true;
@@ -1231,8 +1195,18 @@ async function main() {
           await runRepairPass(target);
           await runEpochReconcile(target);
         }
+        consecutiveFailures = 0;
       } catch (err) {
-        console.error(`[indexer] Error in watch loop:`, (err as Error).message);
+        const failure = recordIndexerWatchFailure(consecutiveFailures, WATCH_FAILURE_LIMIT);
+        consecutiveFailures = failure.failures;
+        console.error(
+          `[indexer] Error in watch loop (${consecutiveFailures}/${WATCH_FAILURE_LIMIT}):`,
+          (err as Error).message,
+        );
+        if (failure.shouldRestart) {
+          console.error("[indexer] Persistent watch failure threshold reached; exiting for supervisor restart.");
+          process.exit(1);
+        }
       } finally {
         running = false;
       }

@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { statfsSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import { formatUnits, parseAbi } from "viem";
 import {
   DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS,
@@ -115,6 +117,10 @@ type DataSyncHealthResponse = {
     finalityTargetBlock: string | null;
   };
   storage: {
+    dbBytes: number | null;
+    walBytes: number | null;
+    shmBytes: number | null;
+    diskFreeBytes: number | null;
     currentEpochMeta: number | null;
     lastIndexedBlock: string | null;
     repairCursorBlock: string | null;
@@ -259,6 +265,10 @@ function redactHealthResponse(payload: DataSyncHealthResponse): DataSyncHealthRe
       finalityTargetBlock: null,
     },
     storage: {
+      dbBytes: null,
+      walBytes: null,
+      shmBytes: null,
+      diskFreeBytes: null,
       currentEpochMeta: payload.storage.currentEpochMeta,
       lastIndexedBlock: null,
       repairCursorBlock: null,
@@ -354,6 +364,24 @@ function redactHealthResponse(payload: DataSyncHealthResponse): DataSyncHealthRe
       indexerHeartbeatStaleMs: null,
     },
   };
+}
+
+function safeFileSize(filePath: string) {
+  try {
+    return statSync(filePath).size;
+  } catch {
+    return null;
+  }
+}
+
+function safeDiskFreeBytes(filePath: string) {
+  try {
+    const stats = statfsSync(dirname(filePath), { bigint: true });
+    const bytes = stats.bavail * stats.bsize;
+    return Number(bytes > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : bytes);
+  } catch {
+    return null;
+  }
 }
 
 async function buildDataSyncHealthPayload() {
@@ -568,6 +596,10 @@ async function buildDataSyncHealthPayload() {
         finalityTargetBlock: finalityTargetBlock?.toString() ?? null,
       },
       storage: {
+        dbBytes: safeFileSize(dbPath),
+        walBytes: safeFileSize(`${dbPath}-wal`),
+        shmBytes: safeFileSize(`${dbPath}-shm`),
+        diskFreeBytes: safeDiskFreeBytes(dbPath),
         currentEpochMeta: dbCurrentEpoch,
         lastIndexedBlock: dbLastIndexedBlock?.toString() ?? null,
         repairCursorBlock: dbRepairCursorBlock?.toString() ?? null,

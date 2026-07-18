@@ -16,6 +16,8 @@ import * as chatPollDelayModule from "../app/lib/chatPollDelay.ts";
 import * as chatMessagesModule from "../app/lib/chatMessages.ts";
 import * as chatRateLimitModule from "../app/lib/chatRateLimit.ts";
 import * as indexerFinalityModule from "../app/lib/indexerFinality.ts";
+import * as indexerWatchPolicyModule from "../app/lib/indexerWatchPolicy.ts";
+import * as canaryHealthTelemetryModule from "../app/lib/canaryHealthTelemetry.ts";
 import * as networkRetryModule from "../app/lib/mining/networkRetry.ts";
 import * as manualMineAttemptModule from "../app/lib/mining/manualMineAttempt.ts";
 import * as autoMineLoopModule from "../app/hooks/useMiningAutoMineLoop.ts";
@@ -29,6 +31,9 @@ import * as autoMineDiagnosticsModule from "../app/lib/mining/autoMineDiagnostic
 import * as autoMineDebugOverrideModule from "../app/lib/mining/autoMineDebugOverride.ts";
 import * as autoMineRunnerStopReasonModule from "../app/lib/mining/autoMineRunnerStopReason.ts";
 import * as routeCacheModule from "../app/api/_lib/routeCache.ts";
+import * as clientIdentityModule from "../app/api/_lib/clientIdentity.ts";
+import * as externalRateLimitModule from "../app/api/_lib/externalRateLimit.ts";
+import * as runtimeMetricsModule from "../app/api/_lib/runtimeMetrics.ts";
 import * as autoMineRuntimeControllerModule from "../app/lib/mining/autoMineRuntimeController.ts";
 import * as autoMineErrorModule from "../app/hooks/useMiningAutoMineError.ts";
 import * as autoMineRestoreDeduperModule from "../app/lib/mining/autoMineRestoreDeduper.ts";
@@ -61,6 +66,7 @@ import * as chatSessionClientModule from "../app/lib/chatSessionClient.ts";
 import * as runtimeMonitorModule from "./runtime-monitor-lib.mjs";
 import * as sentrySanitizeModule from "../app/lib/sentrySanitize.ts";
 import * as analyticsBlockchainHistoryPanelModule from "../app/components/analytics/AnalyticsBlockchainHistoryPanel.tsx";
+import * as boundedJsonBodyModule from "../app/api/_lib/boundedJsonBody.ts";
 
 function withTemporaryEnv(values, fn) {
   const previous = new Map();
@@ -85,6 +91,23 @@ function withTemporaryEnv(values, fn) {
   }
 }
 
+async function withTemporaryEnvAsync(values, fn) {
+  const previous = new Map();
+  for (const [key, value] of Object.entries(values)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 async function main() {
   const envParsing = envParsingModule.default ?? envParsingModule;
   const scriptEnvParsing = scriptEnvParsingModule.default ?? scriptEnvParsingModule;
@@ -94,6 +117,8 @@ async function main() {
   const chatMessages = chatMessagesModule.default ?? chatMessagesModule;
   const chatRateLimit = chatRateLimitModule.default ?? chatRateLimitModule;
   const indexerFinality = indexerFinalityModule.default ?? indexerFinalityModule;
+  const indexerWatchPolicy = indexerWatchPolicyModule.default ?? indexerWatchPolicyModule;
+  const canaryHealthTelemetry = canaryHealthTelemetryModule.default ?? canaryHealthTelemetryModule;
   const networkRetry = networkRetryModule.default ?? networkRetryModule;
   const manualMineAttempt = manualMineAttemptModule.default ?? manualMineAttemptModule;
   const autoMineLoop = autoMineLoopModule.default ?? autoMineLoopModule;
@@ -107,6 +132,9 @@ async function main() {
   const autoMineDebugOverride = autoMineDebugOverrideModule.default ?? autoMineDebugOverrideModule;
   const autoMineRunnerStopReason = autoMineRunnerStopReasonModule.default ?? autoMineRunnerStopReasonModule;
   const routeCache = routeCacheModule.default ?? routeCacheModule;
+  const clientIdentity = clientIdentityModule.default ?? clientIdentityModule;
+  const externalRateLimit = externalRateLimitModule.default ?? externalRateLimitModule;
+  const runtimeMetrics = runtimeMetricsModule.default ?? runtimeMetricsModule;
   const autoMineRuntimeController = autoMineRuntimeControllerModule.default ?? autoMineRuntimeControllerModule;
   const autoMineError = autoMineErrorModule.default ?? autoMineErrorModule;
   const autoMineRestoreDeduper = autoMineRestoreDeduperModule.default ?? autoMineRestoreDeduperModule;
@@ -140,6 +168,11 @@ async function main() {
   const sentrySanitize = sentrySanitizeModule.default ?? sentrySanitizeModule;
   const chatSessionClient = chatSessionClientModule.default ?? chatSessionClientModule;
   const runtimeMonitor = runtimeMonitorModule.default ?? runtimeMonitorModule;
+  const boundedJsonBody = boundedJsonBodyModule.default ?? boundedJsonBodyModule;
+  const processSnapshot = runtimeMetrics.getRuntimeProcessSnapshot();
+  for (const field of ["uptimeSeconds", "rssBytes", "heapUsedBytes", "heapTotalBytes", "externalBytes"]) {
+    assert.ok(Number.isFinite(processSnapshot[field]) && processSnapshot[field] >= 0, `${field} must be bounded runtime evidence`);
+  }
 
   const sanitizedSentryPayload = sentrySanitize.sanitizeSentryPayload({
     exception: {
@@ -163,6 +196,51 @@ async function main() {
   assert.equal(sanitizedSentryPayload.extra.walletAddress, "<redacted>");
   assert.equal(sanitizedSentryPayload.extra.safeStatus, "pending");
   assert.equal(sanitizedSentryPayload.request.url, "/api/live-state");
+  const supportTxHash = `0x${"a".repeat(64)}`;
+  const sanitizedSupportLog = sentrySanitize.sanitizeSupportLogPayload({
+    epoch: "78",
+    nonce: 4,
+    retryCount: 2,
+    stopReason: "retry-wait",
+    txHash: supportTxHash,
+    privateKey: `0x${"b".repeat(64)}`,
+    walletAddress: `0x${"c".repeat(40)}`,
+    error: `Bearer secret via https://rpc.example.test/key ${`0x${"d".repeat(64)}`}`,
+  });
+  assert.equal(sanitizedSupportLog.txHash, supportTxHash);
+  assert.equal(sanitizedSupportLog.epoch, "78");
+  assert.equal(sanitizedSupportLog.nonce, 4);
+  assert.equal(sanitizedSupportLog.retryCount, 2);
+  assert.equal(sanitizedSupportLog.stopReason, "retry-wait");
+  assert.equal(sanitizedSupportLog.privateKey, "<redacted>");
+  assert.equal(sanitizedSupportLog.walletAddress, "<redacted>");
+  assert.doesNotMatch(sanitizedSupportLog.error, /secret|rpc\.example|0x[d]{64}/i);
+  const loggerSource = readFileSync("app/lib/logger.ts", "utf8");
+  assert.match(loggerSource, /sanitizeSupportLogPayload\(sanitize\(data\)\)/);
+  assert.doesNotMatch(loggerSource, /window\.location\.href/);
+  assert.match(
+    loggerSource,
+    /autoMiner:\s*getAutoMineSupportDiagnostics\(readAutoMineDiagnostics\(\)\)/,
+    "support log export must include the safe persisted Auto-Miner snapshot",
+  );
+  assert.match(loggerSource, /safeMeta\s*=\s*sanitizeSupportLogPayload\(meta\)/);
+  const standardBetPathSource = readFileSync("app/hooks/useMiningStandardBetPath.ts", "utf8");
+  assert.match(
+    standardBetPathSource,
+    /bet transaction submitted[\s\S]*hash,[\s\S]*nonce: nonce \?\? null/,
+    "support logs must capture the submitted bet hash and known nonce without wallet identity",
+  );
+  const autoMineLoopSource = readFileSync("app/hooks/useMiningAutoMineLoop.ts", "utf8");
+  assert.match(
+    autoMineLoopSource,
+    /writeAutoMineDiagnostics\(\{[\s\S]*lastEpoch: outcome\.placedEpoch\.toString\(\),[\s\S]*retryCount: 0/,
+    "Auto-Miner diagnostics must retain the latest confirmed epoch and reset retries",
+  );
+  assert.match(
+    autoMineLoopSource,
+    /writeAutoMineDiagnostics\(\{ retryCount/,
+    "Auto-Miner diagnostics must retain retry progress for support export",
+  );
 
   assert.deepEqual(
     runtimeMonitor.evaluateRuntimeSnapshot({
@@ -192,6 +270,20 @@ async function main() {
     }),
     [{ key: "live-state-stale", message: "Live-state snapshot is missing or stale." }],
   );
+  const activeRuntimeIssues = new Map();
+  const runtimeIssue = { key: "indexer-heartbeat", message: "Indexer heartbeat is stale." };
+  assert.deepEqual(runtimeMonitor.reconcileRuntimeIssues(activeRuntimeIssues, [runtimeIssue]), {
+    alerts: [runtimeIssue],
+    recoveries: [],
+  });
+  assert.deepEqual(runtimeMonitor.reconcileRuntimeIssues(activeRuntimeIssues, [runtimeIssue]), {
+    alerts: [],
+    recoveries: [],
+  });
+  assert.deepEqual(runtimeMonitor.reconcileRuntimeIssues(activeRuntimeIssues, []), {
+    alerts: [],
+    recoveries: [runtimeIssue],
+  });
 
   assert.equal(
     miningShared.getBetErrorMessage(new Error("HTTP request failed: private provider endpoint")),
@@ -259,6 +351,44 @@ async function main() {
   assert.equal(scriptEnvParsing.parsePositiveIntegerInRangeEnv("999", 3, 1, 24), 24);
   assert.equal(scriptEnvParsing.parseNonNegativeNumberInRangeEnv("-1", 0.01, 0, 1), 0.01);
   assert.equal(scriptEnvParsing.parseNonNegativeNumberInRangeEnv("1.5", 0.01, 0, 1), 1);
+  assert.deepEqual(
+    await boundedJsonBody.readBoundedJsonBody(
+      new Request("https://play.example/api", {
+        method: "POST",
+        body: JSON.stringify({ ok: true }),
+      }),
+      64,
+    ),
+    { ok: true, value: { ok: true } },
+  );
+  assert.deepEqual(
+    await boundedJsonBody.readBoundedJsonBody(
+      new Request("https://play.example/api", {
+        method: "POST",
+        headers: { "content-length": "65" },
+        body: "{}",
+      }),
+      64,
+    ),
+    { ok: false, reason: "too-large" },
+  );
+  assert.deepEqual(
+    await boundedJsonBody.readBoundedJsonBody(
+      new Request("https://play.example/api", {
+        method: "POST",
+        body: JSON.stringify({ value: "x".repeat(65) }),
+      }),
+      64,
+    ),
+    { ok: false, reason: "too-large" },
+  );
+  assert.deepEqual(
+    await boundedJsonBody.readBoundedJsonBody(
+      new Request("https://play.example/api", { method: "POST", body: "{" }),
+      64,
+    ),
+    { ok: false, reason: "invalid" },
+  );
   withTemporaryEnv(
     {
       LINEA_NETWORK: "mainnet",
@@ -272,6 +402,7 @@ async function main() {
       NEXT_PUBLIC_SITE_URL: "https://play.example",
       HEALTH_DIAGNOSTICS_SECRET: "health-secret",
       TRUST_PROXY_HEADERS: "1",
+      ALLOW_WEAK_RATE_LIMIT_IDENTITY: "1",
       NEXT_PUBLIC_PRIVY_APP_ID: "privy-app",
       CHAT_AUTH_SECRET: "chat-secret",
       NEXT_PUBLIC_ADMIN_WALLET_ADDRESS: "0x0000000000000000000000000000000000000003",
@@ -282,10 +413,55 @@ async function main() {
       NEXT_PUBLIC_EIP7702_MINING_ENABLED: "1",
     },
     () => {
-      assert.throws(
-        () => productionRuntime.assertProductionRuntimeConfig("web"),
-        /EIP-7702 must stay disabled/,
-      );
+      let error;
+      try {
+        productionRuntime.assertProductionRuntimeConfig("web");
+      } catch (caught) {
+        error = caught;
+      }
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /EIP-7702 must stay disabled/);
+      assert.match(error.message, /ALLOW_WEAK_RATE_LIMIT_IDENTITY must not be enabled/);
+    },
+  );
+  withTemporaryEnv(
+    {
+      LINEA_NETWORK: "mainnet",
+      NEXT_PUBLIC_LINEA_NETWORK: "mainnet",
+      KEEPER_CONTRACT_ADDRESS: "0x0000000000000000000000000000000000000001",
+      NEXT_PUBLIC_CONTRACT_ADDRESS: "0x0000000000000000000000000000000000000001",
+      NEXT_PUBLIC_LINEA_TOKEN_ADDRESS: "0x0000000000000000000000000000000000000002",
+      INDEXER_START_BLOCK: "1",
+      NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "1",
+      KEEPER_RPC_URL: "https://rpc.example",
+      NEXT_PUBLIC_SITE_URL: "https://play.example",
+      HEALTH_DIAGNOSTICS_SECRET: "health-secret",
+      TRUST_PROXY_HEADERS: "1",
+      TRUST_PROXY_SECRET: undefined,
+      WEB_REPLICA_COUNT: "2",
+      UPSTASH_REDIS_REST_URL: undefined,
+      UPSTASH_REDIS_REST_TOKEN: undefined,
+      RATE_LIMIT_EXTERNAL_FAIL_CLOSED: undefined,
+      NEXT_PUBLIC_PRIVY_APP_ID: "privy-app",
+      CHAT_AUTH_SECRET: "chat-secret",
+      NEXT_PUBLIC_ADMIN_WALLET_ADDRESS: "0x0000000000000000000000000000000000000003",
+      BOOTSTRAP_RESOLVE_SECRET: "resolve-secret",
+      BOOTSTRAP_KEEPER_PRIVATE_KEY: "keeper-private-key",
+      LORE_DB_PATH: "C:\\lore\\mainnet.sqlite",
+      NEXT_PUBLIC_EIP7702_ENABLED: "0",
+      NEXT_PUBLIC_EIP7702_MINING_ENABLED: "0",
+    },
+    () => {
+      let error;
+      try {
+        productionRuntime.assertProductionRuntimeConfig("web");
+      } catch (caught) {
+        error = caught;
+      }
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /TRUST_PROXY_SECRET must contain at least 32 characters/);
+      assert.match(error.message, /Multiple mainnet web replicas require UPSTASH_REDIS_REST_URL/);
+      assert.match(error.message, /RATE_LIMIT_EXTERNAL_FAIL_CLOSED=1 is required/);
     },
   );
   withTemporaryEnv(
@@ -474,6 +650,21 @@ async function main() {
     /LOAD_CONCURRENCY,\s*50/,
     "default load test concurrency must stay suitable for local production smoke; use LOAD_CONCURRENCY for stress tests",
   );
+  assert.match(
+    loadHttpSource,
+    /name: "global-stats", path: "\/api\/global-stats"/,
+    "load test must cover the global stats aggregate endpoint",
+  );
+  assert.match(
+    loadHttpSource,
+    /Cold first requests:[\s\S]*COLD \$\{endpoint\.name\}/,
+    "load test must report the first request separately from warmed traffic",
+  );
+  assert.match(
+    loadHttpSource,
+    /cold load checks failed:[\s\S]*for \(const endpoint of endpoints\)[\s\S]*endpointErrorRate[\s\S]*endpointP95/,
+    "load test must fail closed for cold and per-endpoint regressions instead of relying only on aggregate latency",
+  );
   const hostProofTempDir = mkdtempSync(join(tmpdir(), "lore-host-proof-"));
   const hostProofCheckedAt = "2026-07-09T00:00:00.000Z";
   const baseHostProof = {
@@ -581,17 +772,34 @@ async function main() {
     /err instanceof Error/,
     "data-sync private health error formatting must handle primitive rejection values",
   );
+  assert.match(
+    dataSyncHealthSource,
+    /function redactHealthResponse[\s\S]*diskFreeBytes: null/,
+    "public data-sync health must not disclose host disk capacity",
+  );
   const adminAuthSource = readFileSync("app/api/admin/auth/route.ts", "utf8");
   assert.match(
     adminAuthSource,
-    /request\.json\(\)\.catch\(\(\)\s*=>\s*null\)/,
-    "admin auth POST must not turn malformed JSON into a 500",
+    /readBoundedJsonBody<AdminAuthPayload>/,
+    "admin auth POST must bound and safely parse malformed JSON",
   );
   assert.match(
     adminAuthSource,
     /Invalid auth payload/,
     "admin auth POST must return a clear invalid-payload error for malformed JSON",
   );
+  for (const routePath of [
+    "app/api/admin/auth/route.ts",
+    "app/api/admin/processes/route.ts",
+    "app/api/chat/auth/route.ts",
+    "app/api/chat/messages/route.ts",
+    "app/api/chat/profile/route.ts",
+    "app/api/rewards/route.ts",
+  ]) {
+    const routeSource = readFileSync(routePath, "utf8");
+    assert.match(routeSource, /readBoundedJsonBody/, `${routePath} must bound JSON request bodies`);
+    assert.doesNotMatch(routeSource, /request\.json\(/, `${routePath} must not read unbounded JSON bodies`);
+  }
   const adminOpsSource = readFileSync("app/api/admin/ops/route.ts", "utf8");
   assert.match(
     adminOpsSource,
@@ -609,10 +817,138 @@ async function main() {
     "admin ops must reject unsafe epoch numbers",
   );
   const sharedRateLimitSource = readFileSync("app/api/_lib/sharedRateLimit.ts", "utf8");
+  const chainIndexerAuditSource = readFileSync("scripts/audit-chain-indexer-window.mjs", "utf8");
   assert.match(
     sharedRateLimitSource,
     /applyNoStoreHeaders/,
     "rate-limit 429 responses must be no-store",
+  );
+  assert.match(
+    sharedRateLimitSource,
+    /NODE_ENV === "production"[\s\S]*ALLOW_WEAK_RATE_LIMIT_IDENTITY !== "1"/,
+    "production mode must fail closed when trusted proxy identity is missing",
+  );
+  assert.match(
+    chainIndexerAuditSource,
+    /writeFileSync\(temporaryOutPath[\s\S]*renameSync\(temporaryOutPath, outPath\)/,
+    "scheduled chain/indexer audit output must be atomically replaced so monitoring cannot read partial JSON",
+  );
+  withTemporaryEnv(
+    { TRUST_PROXY_HEADERS: "1", TRUST_PROXY_SECRET: "test-proxy-secret-with-at-least-32-characters" },
+    () => {
+      const directSpoof = clientIdentity.getClientIdentity(new Request("https://play.example/api/live-state", {
+        headers: {
+          "accept-language": "en-US",
+          "user-agent": "same-nat-browser",
+          "x-forwarded-for": "203.0.113.7",
+        },
+      }));
+      assert.equal(directSpoof.weak, true, "proxy IP headers without the private proxy secret must be ignored");
+
+      const trustedForward = clientIdentity.getClientIdentity(new Request("https://play.example/api/live-state", {
+        headers: {
+          "x-forwarded-for": "203.0.113.7, 10.0.0.2",
+          "x-lore-proxy-secret": "test-proxy-secret-with-at-least-32-characters",
+        },
+      }));
+      assert.deepEqual(trustedForward, { key: "xff:203.0.113.7", weak: false });
+
+      const invalidTrustedForward = clientIdentity.getClientIdentity(new Request("https://play.example/api/live-state", {
+        headers: {
+          "x-forwarded-for": "not-an-ip, 10.0.0.2",
+          "x-lore-proxy-secret": "test-proxy-secret-with-at-least-32-characters",
+        },
+      }));
+      assert.equal(invalidTrustedForward.weak, true, "invalid trusted proxy IPs must fail closed");
+
+      const trustedIpv6 = clientIdentity.getClientIdentity(new Request("https://play.example/api/live-state", {
+        headers: {
+          "cf-connecting-ip": "2001:db8::7",
+          "x-lore-proxy-secret": "test-proxy-secret-with-at-least-32-characters",
+        },
+      }));
+      assert.deepEqual(trustedIpv6, { key: "cf:2001:db8::7", weak: false });
+
+      const wrongSecret = clientIdentity.getClientIdentity(new Request("https://play.example/api/live-state", {
+        headers: {
+          "user-agent": "same-nat-browser",
+          "x-forwarded-for": "198.51.100.9",
+          "x-lore-proxy-secret": "wrong-secret",
+        },
+      }));
+      assert.equal(wrongSecret.weak, true, "a wrong proxy secret must not unlock forwarded IP trust");
+
+      const sameNatIdentity = clientIdentity.getClientIdentity(new Request("https://play.example/api/live-state", {
+        headers: {
+          "accept-language": "en-US",
+          "user-agent": "same-nat-browser",
+          "x-forwarded-for": "192.0.2.99",
+        },
+      }));
+      assert.equal(sameNatIdentity.key, directSpoof.key, "spoofed IP rotation must not bypass the weak identity bucket");
+    },
+  );
+  await withTemporaryEnvAsync(
+    {
+      UPSTASH_REDIS_REST_URL: "https://redis.example",
+      UPSTASH_REDIS_REST_TOKEN: "server-only-token",
+    },
+    async () => {
+      let sentBody = null;
+      const allowed = await externalRateLimit.consumeExternalRateLimit(
+        "api-live-state",
+        "identity-hash",
+        2,
+        60_000,
+        60_001,
+        async (_url, init) => {
+          sentBody = JSON.parse(String(init?.body));
+          return new Response(JSON.stringify({ result: [1, 59_999] }), { status: 200 });
+        },
+      );
+      assert.deepEqual(allowed, { allowed: true });
+      assert.deepEqual(sentBody.slice(0, 3), ["EVAL", sentBody[1], "1"]);
+      assert.match(sentBody[3], /^lore:rate-limit:api-live-state:identity-hash:60000$/);
+
+      const blocked = await externalRateLimit.consumeExternalRateLimit(
+        "api-live-state",
+        "identity-hash",
+        2,
+        60_000,
+        60_001,
+        async () => new Response(JSON.stringify({ result: [3, 12_001] }), { status: 200 }),
+      );
+      assert.deepEqual(blocked, { allowed: false, retryAfter: 13 });
+      const sharedCounts = new Map();
+      const sharedStoreFetch = async (_url, init) => {
+        const command = JSON.parse(String(init?.body));
+        const redisKey = String(command[3]);
+        const count = (sharedCounts.get(redisKey) ?? 0) + 1;
+        sharedCounts.set(redisKey, count);
+        return new Response(JSON.stringify({ result: [count, 60_000] }), { status: 200 });
+      };
+      const replicaResults = await Promise.all([
+        externalRateLimit.consumeExternalRateLimit("api-chat", "shared-user", 2, 60_000, 120_001, sharedStoreFetch),
+        externalRateLimit.consumeExternalRateLimit("api-chat", "shared-user", 2, 60_000, 120_001, sharedStoreFetch),
+        externalRateLimit.consumeExternalRateLimit("api-chat", "shared-user", 2, 60_000, 120_001, sharedStoreFetch),
+      ]);
+      assert.deepEqual(
+        replicaResults.map((result) => result.allowed),
+        [true, true, false],
+        "multiple web replicas must consume one shared external rate-limit bucket",
+      );
+      await assert.rejects(
+        () => externalRateLimit.consumeExternalRateLimit(
+          "api-live-state",
+          "identity-hash",
+          2,
+          60_000,
+          60_001,
+          async () => new Response(JSON.stringify({ error: "ERR test" }), { status: 400 }),
+        ),
+        /rejected request/,
+      );
+    },
   );
   const providersSource = readFileSync("app/providers.tsx", "utf8");
   assert.match(
@@ -641,6 +977,11 @@ async function main() {
     walletSettingsModalSource,
     /EIP7702_ENABLED\s*&&\s*\(activeSection === "all" \|\| activeSection === "7702"\)/,
     "wallet settings must render the 7702 diagnostic panel only behind the explicit EIP-7702 flag",
+  );
+  assert.match(
+    walletSettingsModalSource,
+    /aria-label="Export support logs"[\s\S]*className="text-xs"[\s\S]*hidden sm:inline">Export Logs/,
+    "mobile Wallet Settings must keep support-log export available as an accessible icon button",
   );
   const miningRoundBettingSource = readFileSync("app/hooks/useMiningRoundBetting.ts", "utf8");
   assert.match(
@@ -738,6 +1079,11 @@ async function main() {
     smokeBrowserSource,
     /verify keyboard focus indicator[\s\S]*keyboard\.press\("Tab"\)[\s\S]*:focus-visible/,
     "browser smoke must verify a visible focus indicator through keyboard navigation",
+  );
+  assert.match(
+    smokeBrowserSource,
+    /verify mobile touch targets[\s\S]*target\.width < 44 \|\| target\.height < 44/,
+    "browser smoke must reject undersized mobile controls",
   );
   assert.match(
     smokeBrowserSource,
@@ -1023,7 +1369,17 @@ async function main() {
     /Number\(b\.epoch\)\s*-\s*Number\(a\.epoch\)/,
     "deposits API must not sort using unchecked stored epoch numbers",
   );
+  assert.match(
+    depositsRouteSource,
+    /const LOG_CHUNK_BLOCKS = 10_000n/,
+    "deposits API log scans must stay within the Linea public RPC 10k block limit",
+  );
   const storageSource = readFileSync("server/storage.ts", "utf8");
+  assert.match(
+    storageSource,
+    /new Set\(\[currentBase, `\$\{currentBase\}-shm`, `\$\{currentBase\}-wal`\]\)[\s\S]*currentArtifacts\.has\(entry\)/,
+    "contract-scope cleanup must never remove the active SQLite DB, WAL, or SHM files",
+  );
   assert.match(
     storageSource,
     /function isSafePositiveInteger/,
@@ -1100,6 +1456,16 @@ async function main() {
   );
   assert.match(
     betPanelSource,
+    /manualAnnouncement[\s\S]*role="status" aria-live="polite" aria-atomic="true"[\s\S]*\{manualAnnouncement\}/,
+    "manual bet state transitions must be announced without relying on visible text changes",
+  );
+  assert.match(
+    betPanelSource,
+    /autoMinerAnnouncement[\s\S]*role="status" aria-live="polite" aria-atomic="true"[\s\S]*\{autoMinerAnnouncement\}/,
+    "auto-miner phase transitions must be announced without reading every progress update",
+  );
+  assert.match(
+    betPanelSource,
     /showAutoMineProgress[\s\S]*autoMinePhase === "retry-wait"[\s\S]*autoMinePhase === "session-expired"/,
     "auto-miner recovery states must keep the progress message visible after the active loop pauses",
   );
@@ -1140,6 +1506,16 @@ async function main() {
     pendingTxPanelSource,
     /Run Check first; available only when a stuck nonce is detected/,
     "pending tx clear action must explain why it is disabled",
+  );
+  assert.match(
+    walletSettingsModalSource,
+    /aria-pressed=\{activeSection === s\.id\}/,
+    "mobile wallet settings sections must expose their selected state",
+  );
+  assert.match(
+    walletSettingsModalSource,
+    /min-h-11[^"]*focus-visible:ring-2/,
+    "mobile wallet settings sections must keep a 44px touch target and visible keyboard focus",
   );
   const headerPoolChartSource = readFileSync("app/components/header/HeaderPoolChart.tsx", "utf8");
   assert.match(
@@ -1474,6 +1850,115 @@ async function main() {
     miningTxPath.sanitizeMiningTxPathState({ mode: "7702-delegated", ts: 123 }, { allowDelegated7702: true }),
     { mode: "7702-delegated", ts: 123 },
   );
+  const pendingMiningState = miningTxPath.sanitizePendingMiningTxState({
+    chainId: 59141,
+    contract: "0x1111111111111111111111111111111111111111",
+    actor: "0x2222222222222222222222222222222222222222",
+    hash: `0x${"a".repeat(64)}`,
+    ts: Date.now(),
+  });
+  assert.ok(pendingMiningState);
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => ({ status: "success" }),
+      getTransaction: async () => {
+        throw new Error("should not read transaction after receipt");
+      },
+    }, pendingMiningState),
+    "confirmed",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => ({ status: "reverted" }),
+      getTransaction: async () => {
+        throw new Error("should not read transaction after receipt");
+      },
+    }, pendingMiningState),
+    "clear",
+  );
+  const receiptNotFound = () => Object.assign(new Error("transaction receipt not found"), { name: "TransactionReceiptNotFoundError" });
+  const transactionNotFound = () => Object.assign(new Error("transaction not found"), { name: "TransactionNotFoundError" });
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw receiptNotFound(); },
+      getTransaction: async () => ({ blockNumber: null }),
+    }, pendingMiningState),
+    "pending",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw receiptNotFound(); },
+      getTransaction: async () => { throw transactionNotFound(); },
+    }, pendingMiningState, pendingMiningState.ts + 15 * 60_000),
+    "clear",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("RPC offline"); },
+      getTransaction: async () => { throw new Error("should fail closed before transaction lookup"); },
+    }, pendingMiningState),
+    "pending",
+  );
+  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, chainId: 0 }), null);
+  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, actor: "0x1234" }), null);
+  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, hash: "0x1234" }), null);
+  const priorWindow = globalThis.window;
+  const pendingStorage = new Map();
+  try {
+    globalThis.window = {
+      localStorage: {
+        getItem: (key) => pendingStorage.get(key) ?? null,
+        removeItem: (key) => pendingStorage.delete(key),
+        setItem: (key, value) => pendingStorage.set(key, value),
+      },
+    };
+    miningTxPath.writePendingMiningTxState({
+      chainId: pendingMiningState.chainId,
+      contract: pendingMiningState.contract,
+      actor: pendingMiningState.actor,
+      hash: pendingMiningState.hash,
+    });
+    assert.deepEqual(
+      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor),
+      { ...pendingMiningState, ts: [...pendingStorage.values()].map((raw) => JSON.parse(raw).ts)[0] },
+    );
+    assert.equal(miningTxPath.readPendingMiningTxState(59144, pendingMiningState.contract, pendingMiningState.actor), null);
+    assert.equal(
+      miningTxPath.readPendingMiningTxState(
+        pendingMiningState.chainId,
+        pendingMiningState.contract,
+        "0x3333333333333333333333333333333333333333",
+      ),
+      null,
+    );
+    miningTxPath.writePendingMiningTxState({
+      chainId: pendingMiningState.chainId,
+      contract: pendingMiningState.contract,
+      actor: "0x3333333333333333333333333333333333333333",
+      hash: `0x${"b".repeat(64)}`,
+    });
+    assert.equal(pendingStorage.size, 2, "different actors must keep independent pending recovery records");
+    miningTxPath.clearPendingMiningTxState(
+      pendingMiningState.chainId,
+      pendingMiningState.contract,
+      pendingMiningState.actor,
+    );
+    assert.equal(
+      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor),
+      null,
+    );
+    assert.ok(
+      miningTxPath.readPendingMiningTxState(
+        pendingMiningState.chainId,
+        pendingMiningState.contract,
+        "0x3333333333333333333333333333333333333333",
+      ),
+      "clearing one actor must preserve another actor's pending record",
+    );
+  } finally {
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
   assert.equal(walletTransfers.getWalletTransferScanFromBlock(10n, 1n), 1n);
   assert.equal(walletTransfers.getWalletTransferScanFromBlock(10n, 7n), 7n);
   assert.equal(walletTransfers.getWalletTransferScanFromBlock(10n, 11n), null);
@@ -1911,11 +2396,24 @@ async function main() {
     "rebates API stale refresh must skip unchanged indexed-data watermarks for a bounded interval",
   );
   const liveRoundCanarySource = readFileSync("scripts/live-round-canary.ts", "utf8");
+  const soakSupervisorSource = readFileSync("scripts/run-testnet-soak-supervisor.mjs", "utf8");
+  const cleanupNextCandidatesSource = readFileSync("scripts/cleanup-next-candidates.mjs", "utf8");
+  const analyzeCanarySource = readFileSync("scripts/analyze-live-canary-proof.mjs", "utf8");
   const createCanaryDraftSource = readFileSync("scripts/create-canary-proof-draft.mjs", "utf8");
   assert.match(
     liveRoundCanarySource,
     /GENERIC_RPC_LABEL_RE[\s\S]*LIVE_CANARY_RPC_LABEL must be a concrete redacted RPC label/,
     "live canary must fail before transactions when the redacted RPC label is missing or generic",
+  );
+  assert.match(
+    chainIndexerAuditSource,
+    /decoded\.eventName === "ResolverRewardAccrued" && inEpochWindow[\s\S]*decoded\.eventName === "ResolverRewardClaimed"/,
+    "chain/indexer audit must keep epoch-scoped resolver accruals inside the selected epoch window",
+  );
+  assert.match(
+    analyzeCanarySource,
+    /BET_MODES\.has\(event\.mode\)/,
+    "canary analyzer must not count preflight, resolve, wait, or summary events as bet transactions",
   );
   assert.doesNotMatch(
     createCanaryDraftSource,
@@ -1926,6 +2424,121 @@ async function main() {
     liveRoundCanarySource,
     /LIVE_TEST_RANDOMIZE_ROUNDS/,
     "live canary must support randomized stress rounds for amount/tile coverage",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /LIVE_TEST_HEALTH_BASE_URL[\s\S]*x-health-diagnostics-secret[\s\S]*mode: "diagnostic"/,
+    "live canary must support redacted runtime and storage telemetry during long soak runs",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /enoughEth: eth >= MIN_ETH_PER_WALLET[\s\S]*enoughToken: token >= requiredToken[\s\S]*insufficient-native-and-token[\s\S]*insufficient-token/,
+    "wallet preflight failures must expose only safe balance sufficiency categories",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /for \(let attempt = 0; attempt < 2; attempt \+= 1\)[\s\S]*healthRetryCount: attempt[\s\S]*healthRetryCount: 1/,
+    "live canary health telemetry must retry one transient timeout while preserving retry evidence",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /prepareMs: preparedAt - startedAt[\s\S]*receiptMs: receiptAt - sentAt[\s\S]*sendMs: sentAt - nonceReadAt/,
+    "live canary must preserve prepare, estimate, nonce, send, and receipt latency phases",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /for \(const \[resolverIndex, resolver\] of resolvers\.entries\(\)\)[\s\S]*insufficient-native-gas[\s\S]*mode: "resolver-candidate"[\s\S]*continue;[\s\S]*pendingHash[\s\S]*return;/,
+    "live canary may fall back before resolve dispatch but must not switch wallets after an uncertain send",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /mode: "resolve"[\s\S]*resolverFallbackUsed: resolverIndex > 0/,
+    "live canary must record successful resolver fallback without classifying pre-send skips as failed resolves",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /randomBytes\(32\)[\s\S]*HEALTH_DIAGNOSTICS_SECRET: HEALTH_SECRET/,
+    "testnet soak supervisor must generate and pass an ephemeral diagnostics secret without persisting it",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /process\.argv\.includes\("--dry-run"\)[\s\S]*LIVE_TEST_DRY_RUN: DRY_RUN/,
+    "testnet soak supervisor must retain a transaction-free preflight mode",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /writeFileSync\(STATUS_TMP_PATH[\s\S]*renameSync\(STATUS_TMP_PATH, STATUS_PATH\)/,
+    "testnet soak status must be atomically replaced",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /stopChild\(canary\)[\s\S]*stopChild\(server\)/,
+    "testnet soak supervisor must stop both managed children on completion or failure",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /lockMatches[\s\S]*process\.kill\(supervisorPid, "SIGTERM"\)[\s\S]*finalizeStoppedStatus/,
+    "testnet soak stop command must only signal the supervisor recorded by the matching lock",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /status: "stopped"[\s\S]*stopReason: "operator-stop"[\s\S]*rmSync\(LOCK_PATH/,
+    "testnet soak stop command must repair Windows stale status and remove its matching lock",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /createReadStream[\s\S]*summarizeLiveLog[\s\S]*uniqueTxHashes[\s\S]*duplicateNonces/,
+    "testnet soak status command must stream compact transaction progress without loading raw artifacts into memory",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /printSafeStatus[\s\S]*hasLiveLog: Boolean[\s\S]*progress/,
+    "testnet soak status command must emit compact state and progress without raw artifact contents",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /status\?\.artifacts\?\.liveLog \|\| readLiveLogPath\(\)/,
+    "running soak status must recover the JSONL marker written after the initial status snapshot",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /numericSummary[\s\S]*p95[\s\S]*growthSummary[\s\S]*rpcFailoverInjectionEvents[\s\S]*healthGrowth/,
+    "running soak status must summarize latency, failover, and bounded health growth without raw telemetry",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /SLOW_SEND_THRESHOLD_MS = 20_000[\s\S]*slowSendCount/,
+    "running soak status must count send delays that cross the RPC timeout threshold",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /SOAK_MIN_DISK_FREE_BYTES[\s\S]*while \(!existsSync\(capacityPath\)\)[\s\S]*assertDiskCapacity\(\)[\s\S]*acquireLock\(\)[\s\S]*managedRunStarted = true[\s\S]*writeStatus\("starting"\)/,
+    "testnet soak must reject low disk capacity before starting runtime processes or transactions",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /if \(managedRunStarted\) await shutdown\(message, 1\)/,
+    "preflight failures must preserve the previous completed soak status and evidence pointers",
+  );
+  assert.match(
+    cleanupNextCandidatesSource,
+    /candidatePattern = \/\^\\\.next-candidate[\s\S]*dirname\(candidate\.path\) !== root[\s\S]*if \(apply\) rmSync/,
+    "generated Next cleanup must default to dry-run and constrain recursive deletion to root candidate directories",
+  );
+  assert.match(
+    soakSupervisorSource,
+    /lastEventAt[\s\S]*secondsSinceLastEvent/,
+    "running soak status must expose a compact event-age signal for stall diagnosis",
+  );
+  assert.match(
+    analyzeCanarySource,
+    /successful health samples[\s\S]*failed health samples/,
+    "strict canary proof must reject incomplete health telemetry when sampling was enabled",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /LIVE_TEST_INJECT_RPC_FAILOVER[\s\S]*Injected RPC transport failure before dispatch[\s\S]*fallback\(transports\)/,
+    "live canary RPC injection must fail before dispatch and exercise the configured fallback transport",
   );
   assert.match(
     liveRoundCanarySource,
@@ -1998,6 +2611,16 @@ async function main() {
     indexerSource,
     /RECONCILE_SCAN_CHUNK_BLOCKS = CHUNK_BLOCKS[\s\S]*recentCandidate[\s\S]*recentCandidate > INDEXER_START_BLOCK/,
     "indexer reconcile must stay within the supported log range and never scan before deployment",
+  );
+  assert.match(
+    indexerSource,
+    /recordIndexerWatchFailure\(consecutiveFailures, WATCH_FAILURE_LIMIT\)[\s\S]*Persistent watch failure threshold reached; exiting for supervisor restart[\s\S]*process\.exit\(1\)/,
+    "persistent indexer watch failures must exit for supervisor restart",
+  );
+  assert.match(
+    indexerSource,
+    /await runEpochReconcile\(target\);[\s\S]*consecutiveFailures = 0;/,
+    "a successful indexer watch cycle must reset the failure threshold",
   );
   assert.match(
     liveRoundCanarySource,
@@ -2171,6 +2794,31 @@ async function main() {
   assert.equal(indexerFinality.hasMainnetIndexerFinality("12"), true);
   assert.equal(indexerFinality.hasMainnetIndexerFinality("0"), false);
   assert.equal(indexerFinality.hasMainnetIndexerFinality("bad"), false);
+  assert.equal(indexerWatchPolicy.parseIndexerWatchFailureLimit("3"), 3);
+  assert.equal(indexerWatchPolicy.parseIndexerWatchFailureLimit("0"), 5);
+  assert.equal(indexerWatchPolicy.parseIndexerWatchFailureLimit("101"), 5);
+  assert.deepEqual(indexerWatchPolicy.recordIndexerWatchFailure(0, 3), {
+    failures: 1,
+    shouldRestart: false,
+  });
+  assert.deepEqual(indexerWatchPolicy.recordIndexerWatchFailure(2, 3), {
+    failures: 3,
+    shouldRestart: true,
+  });
+  assert.equal(canaryHealthTelemetry.parseCanaryHealthBaseUrl(undefined), null);
+  assert.equal(canaryHealthTelemetry.parseCanaryHealthBaseUrl("http://localhost:3000").origin, "http://localhost:3000");
+  assert.throws(() => canaryHealthTelemetry.parseCanaryHealthBaseUrl("http://example.com"), /must use HTTPS/);
+  assert.deepEqual(
+    canaryHealthTelemetry.parseCanaryHealthPayloads(
+      { redacted: false, process: { uptimeSeconds: 10, rssBytes: 20, heapUsedBytes: 15 } },
+      { redacted: false, storage: { dbBytes: 30, walBytes: 5, diskFreeBytes: 100 } },
+    ),
+    { dbBytes: 30, diskFreeBytes: 100, heapUsedBytes: 15, rssBytes: 20, runtimeUptimeSeconds: 10, walBytes: 5 },
+  );
+  assert.throws(
+    () => canaryHealthTelemetry.parseCanaryHealthPayloads({ redacted: true }, { redacted: false }),
+    /redacted/,
+  );
   assert.deepEqual(
     gamePollingConfig.getGamePollingIntervals({
       isPageVisible: true,
@@ -2294,6 +2942,8 @@ async function main() {
     lastErrorMessage: null,
     lastErrorRawMessage: null,
     lastStopReason: null,
+    lastEpoch: null,
+    retryCount: 0,
     updatedAt: 0,
   });
   autoMineDiagnostics.writeAutoMineDiagnostics({
@@ -2314,8 +2964,25 @@ async function main() {
     lastErrorMessage: null,
     lastErrorRawMessage: null,
     lastStopReason: "retry-wait",
+    lastEpoch: null,
+    retryCount: 0,
     updatedAt: 1234,
   });
+  const supportDiagnostics = autoMineDiagnostics.getAutoMineSupportDiagnostics({
+    ...autoMineDiagnostics.createDefaultAutoMineDiagnosticsSnapshot(),
+    lastErrorKind: "network",
+    lastErrorMessage: "RPC unavailable",
+    lastErrorRawMessage: "sensitive raw provider detail",
+    lastStopReason: "retry-wait",
+    lastEpoch: "2414",
+    retryCount: 3,
+    updatedAt: 123,
+  });
+  assert.equal(supportDiagnostics.lastStopReason, "retry-wait");
+  assert.equal(supportDiagnostics.lastErrorKind, "network");
+  assert.equal(supportDiagnostics.lastEpoch, "2414");
+  assert.equal(supportDiagnostics.retryCount, 3);
+  assert.equal("lastErrorRawMessage" in supportDiagnostics, false);
   assert.equal(
     autoMineDiagnostics.sanitizeAutoMineDiagnosticsSnapshot({
       phase: "bogus",

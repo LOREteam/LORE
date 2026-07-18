@@ -253,8 +253,9 @@ function purgeLegacyScopedDbFiles(currentDbPath: string) {
     return removedCount;
   }
 
+  const currentArtifacts = new Set([currentBase, `${currentBase}-shm`, `${currentBase}-wal`]);
   for (const entry of entries) {
-    if (entry === currentBase) continue;
+    if (currentArtifacts.has(entry)) continue;
     if (!/^lore-v\d+\.sqlite(?:-(?:shm|wal))?$/.test(entry)) continue;
     try {
       rmSync(join(dbDir, entry), { force: true });

@@ -77,12 +77,6 @@ function isPositiveInteger(value) {
   return parsed != null && parsed > 0;
 }
 
-function boolFromArg(name, fallback = false) {
-  const raw = argValue(name);
-  if (!raw) return fallback;
-  return ["1", "true", "yes", "pass", "verified"].includes(raw.trim().toLowerCase());
-}
-
 function isPlainObject(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

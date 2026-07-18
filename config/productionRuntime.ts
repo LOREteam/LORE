@@ -102,8 +102,25 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
   }
 
   if (scope === "web" || scope === "server") {
+    if (isTruthyEnv(getEnv("ALLOW_WEAK_RATE_LIMIT_IDENTITY"))) {
+      issues.push("ALLOW_WEAK_RATE_LIMIT_IDENTITY must not be enabled on mainnet.");
+    }
     if (getEnv("TRUST_PROXY_HEADERS") !== "1") {
       issues.push("TRUST_PROXY_HEADERS=1 is required for mainnet web runtime behind a trusted proxy; otherwise high-traffic rate limits collapse to weak browser fingerprints.");
+    }
+    if (getEnv("TRUST_PROXY_SECRET").length < 32) {
+      issues.push("TRUST_PROXY_SECRET must contain at least 32 characters on mainnet so direct clients cannot spoof trusted IP headers.");
+    }
+    const replicaCount = Number(getEnv("WEB_REPLICA_COUNT") || "1");
+    if (!Number.isSafeInteger(replicaCount) || replicaCount < 1) {
+      issues.push("WEB_REPLICA_COUNT must be a positive integer when set.");
+    } else if (replicaCount > 1) {
+      if (!isHttpsUrl(getEnv("UPSTASH_REDIS_REST_URL")) || !getEnv("UPSTASH_REDIS_REST_TOKEN")) {
+        issues.push("Multiple mainnet web replicas require UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for shared rate limiting.");
+      }
+      if (getEnv("RATE_LIMIT_EXTERNAL_FAIL_CLOSED") !== "1") {
+        issues.push("RATE_LIMIT_EXTERNAL_FAIL_CLOSED=1 is required with multiple mainnet web replicas.");
+      }
     }
     if (!getEnv("NEXT_PUBLIC_PRIVY_APP_ID")) {
       issues.push("NEXT_PUBLIC_PRIVY_APP_ID is required for mainnet web runtime.");

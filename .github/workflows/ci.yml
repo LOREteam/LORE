@@ -22,11 +22,54 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Wallet dependency peer integrity
+        run: npm run proof:wallet-deps
+
+      - name: Production dependency audit
+        run: npm run proof:deps
+
       - name: Lint
         run: npm run lint
 
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Business logic tests
+        run: npm run test:logic
+
+      - name: Contract invariants
+        run: npm run test:contract
+
+      - name: Contract compilation provenance
+        run: npm run proof:contract-compile
+
+      - name: SQLite operational tests
+        run: npm run test:db-operations
+
+      - name: Runtime monitoring drill
+        run: npm run test:monitoring
+
       - name: Build
         run: npm run build
+
+      - name: Production browser smoke
+        env:
+          LORE_DB_PATH: .tmp/ci-runtime.sqlite
+          SMOKE_BASE_URL: http://127.0.0.1:3001
+          SMOKE_BROWSER_EXECUTABLE: /usr/bin/google-chrome
+          SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS: "1"
+          ALLOW_WEAK_RATE_LIMIT_IDENTITY: "1"
+        run: |
+          mkdir -p .tmp
+          npm run start > .tmp/ci-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          npm run smoke:browser
+
+      - name: Upload compilation provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-compilation-provenance
+          path: .tmp/contract-compilation-provenance.json
+          if-no-files-found: error

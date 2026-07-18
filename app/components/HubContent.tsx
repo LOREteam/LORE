@@ -124,7 +124,6 @@ export const HubContent = React.memo(function HubContent({
     selectedTilesCount,
     isPending,
     isRevealing,
-    isAnalyzing,
     isAutoMining,
   });
   const [feeEstimate, setFeeEstimate] = React.useState<string | null>(null);
@@ -179,6 +178,8 @@ export const HubContent = React.memo(function HubContent({
       cancelled = true;
       window.clearTimeout(timer);
     };
+  // The content key intentionally represents the tile array so identity-only rerenders do not repeat fee RPC calls.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStateReady, manualBetForm.betAmount, publicClient, selectedTilesKey, walletAddress, walletConnected]);
 
   return (

@@ -5,7 +5,7 @@ Use this runbook for Linea Sepolia validation only. It does not close or modify 
 ## Scope
 
 - Target network: `sepolia` / Linea Sepolia (`59141`).
-- Current deployed game: contract `0x98eef041b012668529fb66ac3133900fdffc7282`, deploy block `28869863`.
+- Current deployed game: contract `0x235ba811b69f4e449c11ae1264a611e67386ee4d`, deploy block `30804467`.
 - Keep EIP-7702 disabled for normal wallet transactions. The diagnostic/repair path is out of the normal test plan.
 - Do not copy testnet artifacts into `docs/canary-proof.json`, `docs/qa-proof.json`, or any mainnet proof record.
 
@@ -60,10 +60,27 @@ $env:LIVE_CANARY_RPC_LABEL = "<concrete-redacted-sepolia-provider-label>"
 npm.cmd run live:canary
 ```
 
+For the production-like 24-hour soak, first run the transaction-free supervisor
+preflight, then keep the real supervisor in a durable foreground terminal or an
+external process manager:
+
+```powershell
+npm.cmd run soak:testnet:dry-run
+npm.cmd run soak:testnet
+```
+
+The supervisor creates an ephemeral diagnostics secret in memory, starts an
+isolated production server, enables randomized 1-25 tile rounds with bounded
+small bets and RPC-failover injection, records atomic status under
+`.tmp/testnet-soak/status.json`, and stops the server after the canary exits.
+The real run defaults to 1,440 rounds and health sampling every five rounds.
+The supervisor process itself must remain alive; a short-lived shell is not a
+durable process manager.
+
 After the real log exists, create redacted target, recovery, session, and transaction-scan artifacts. Then create a separate draft:
 
 ```powershell
-npm.cmd run proof:testnet:canary:draft -- --network=linea-sepolia --chain-id=59141 --contract=0x98eef041b012668529fb66ac3133900fdffc7282 --rpc-label=<concrete-redacted-sepolia-provider-label> --live-log=data/live-test-runs/<real-log>.jsonl --target-artifact=docs/testnet-canary-target.log --recovery-artifact=docs/testnet-canary-recovery.log --session-artifact=docs/testnet-canary-session.log --tx-artifact=docs/testnet-canary-transactions.log --out=docs/testnet-canary-proof.draft.json
+npm.cmd run proof:testnet:canary:draft -- --network=linea-sepolia --chain-id=59141 --contract=0x235ba811b69f4e449c11ae1264a611e67386ee4d --rpc-label=<concrete-redacted-sepolia-provider-label> --live-log=data/live-test-runs/<real-log>.jsonl --target-artifact=docs/testnet-canary-target.log --recovery-artifact=docs/testnet-canary-recovery.log --session-artifact=docs/testnet-canary-session.log --tx-artifact=docs/testnet-canary-transactions.log --out=docs/testnet-canary-proof.draft.json
 ```
 
 Review and replace draft TODO fields only with real evidence, then promote it manually to `docs/testnet-canary-proof.json` and validate:
@@ -78,14 +95,14 @@ The strict testnet validator requires: Sepolia target metadata, 50 unique succes
 
 Keep testnet reports and the live JSONL separate from mainnet proof manifests. A passing testnet canary is readiness evidence for testnet only; it is not mainnet launch approval.
 
-### Current Ledger (2026-07-10)
+### Current Ledger (2026-07-17)
 
 | Area | Status | Evidence / limit |
 | --- | --- | --- |
 | Local logic and V9 invariants | Pass | `typecheck`, `test:logic`, `test:contract`, and the rebuilt production `build` passed after the latest runtime changes. Fonts are local WOFF2 assets, so the former Google Fonts build dependency is removed. |
 | Contract/indexer reconciliation | Pass | `docs/testnet-indexer-chain-comparison-2026-07-10.json`: four selected resolved epochs matched direct chain events exactly; the fresh-indexer restart and local restore drill are recorded in `docs/current_state.md`. |
 | Current indexer/runtime recheck | Pass | Latest `indexer:once` scanned the current 1,433-block interval, completed one bounded repair slice, and reported no missing epochs. Rebuilt `next start` then passed HTTP and browser smoke; this is incremental testnet evidence, not a replacement for the fresh-DB/restart/restore drill. |
-| 50-epoch live canary | Pass | `data/live-test-runs/live-canary-2026-07-10T09-48-13-561Z.jsonl`: 50 unique successful auto-miner epochs with wall-clock duration, zero failed bets/resolves, duplicate keys, and nonce gaps. `docs/testnet-canary-proof.json` passes the strict testnet validator; it is not mainnet proof. |
+| Current-candidate live canary | Pending | The 2026-07-10 50-epoch canary passed for the previous testnet candidate and remains historical regression evidence only. The accepted V9 candidate still requires the 1,440-round production-like soak with health telemetry and RPC-failover injection described above. |
 | Basic browser UX | Pass | `docs/testnet-browser-smoke.log`: desktop/mobile layout, chart, number typography, navigation, chat, and local persistence. The global-stats browser RPC scan was replaced by indexer-backed `/api/global-stats`; the rebuilt production bundle uses local WOFF2 fonts and passed desktop/mobile Chrome checks with zero console errors. |
 | Local failure-state UX | Pass | Extended browser smoke rendered RPC-offline retry wait, `Recovery queued`, `RESUME PENDING`, session-expired guidance, and state cleanup. This is local UI evidence, not a signed reverted/pending transaction claim. |
 | Signed desktop Privy reload | Pass | Recorded in `docs/testnet-browser-smoke.log`: embedded wallet restored Active after reload; no manual MetaMask confirmation was required for the Privy bet path. |

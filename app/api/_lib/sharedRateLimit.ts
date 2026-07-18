@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { consumeRateLimit } from "../../../server/storage";
+import { getClientIdentity } from "./clientIdentity";
+import { consumeExternalRateLimit, hasExternalRateLimitStore } from "./externalRateLimit";
 import { applyNoStoreHeaders } from "./responseHeaders";
 
 type RateLimitState = {
@@ -19,35 +21,7 @@ const localFallbackMap = new Map<string, RateLimitState>();
 const weakBucketFallbackMap = new Map<string, RateLimitState>();
 const sharedLimiterMisconfigBuckets = new Set<string>();
 const weakIdentityWarnedBuckets = new Set<string>();
-
-type ClientIdentity = {
-  key: string;
-  weak: boolean;
-};
-
-function isTrustedProxyHeadersEnabled() {
-  return process.env.TRUST_PROXY_HEADERS === "1";
-}
-
-function getClientIdentity(request: Request): ClientIdentity {
-  if (isTrustedProxyHeadersEnabled()) {
-    const cfConnectingIp = request.headers.get("cf-connecting-ip");
-    if (cfConnectingIp) return { key: `cf:${cfConnectingIp}`, weak: false };
-
-    const realIp = request.headers.get("x-real-ip");
-    if (realIp) return { key: `real:${realIp}`, weak: false };
-
-    const xForwardedFor = request.headers.get("x-forwarded-for");
-    if (xForwardedFor) {
-      const ip = xForwardedFor.split(",")[0]?.trim();
-      if (ip) return { key: `xff:${ip}`, weak: false };
-    }
-  }
-
-  const userAgent = request.headers.get("user-agent")?.slice(0, 120) ?? "unknown";
-  const lang = request.headers.get("accept-language")?.slice(0, 64) ?? "";
-  return { key: `anon:${userAgent}:${lang}`, weak: true };
-}
+const externalLimiterWarnedBuckets = new Set<string>();
 
 function hashIdentity(identity: string) {
   return createHash("sha256").update(identity).digest("hex").slice(0, 32);
@@ -151,6 +125,14 @@ export async function enforceSharedRateLimit(
   const now = Date.now();
 
   if (identity.weak) {
+    if (
+      process.env.NODE_ENV === "production"
+      && process.env.ALLOW_WEAK_RATE_LIMIT_IDENTITY !== "1"
+    ) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ error: "Trusted proxy identity unavailable" }, { status: 503 }),
+      );
+    }
     const warnKey = `${bucket}:weak-identity`;
     if (!weakIdentityWarnedBuckets.has(warnKey)) {
       weakIdentityWarnedBuckets.add(warnKey);
@@ -161,6 +143,31 @@ export async function enforceSharedRateLimit(
 
   if (process.env.NODE_ENV !== "production") {
     return enforceLocalFallback(bucket, key, limit, windowMs, now);
+  }
+
+  if (hasExternalRateLimitStore()) {
+    try {
+      const result = await consumeExternalRateLimit(bucket, key, limit, windowMs, now);
+      if (result.allowed) return null;
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { error: "Too many requests", retryAfter: result.retryAfter ?? 1 },
+          { status: 429 },
+        ),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const warnKey = `${bucket}:${message}`;
+      if (!externalLimiterWarnedBuckets.has(warnKey)) {
+        externalLimiterWarnedBuckets.add(warnKey);
+        console.warn(`[rate-limit:${bucket}] external store fallback: ${message}`);
+      }
+      if (process.env.RATE_LIMIT_EXTERNAL_FAIL_CLOSED === "1") {
+        return applyNoStoreHeaders(
+          NextResponse.json({ error: "Rate limit service unavailable" }, { status: 503 }),
+        );
+      }
+    }
   }
 
   try {

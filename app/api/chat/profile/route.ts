@@ -6,9 +6,11 @@ import { createRouteCache } from "../../_lib/routeCache";
 import { logRouteError } from "../../_lib/routeError";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { sanitizeCustomChatAvatar, sanitizePresetChatAvatar } from "../../../lib/chatAvatar";
+import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
 
 const MAX_NAME_LENGTH = 20;
 const MAX_AVATAR_LENGTH = 8_000;
+const MAX_REQUEST_BODY_BYTES = 16_384;
 const CHAT_PROFILE_CACHE_MS = 5_000;
 const CHAT_PROFILE_CACHE_MAX_ENTRIES = 48;
 const chatProfileRouteCache = createRouteCache<{ profile?: ReturnType<typeof getChatProfile>; profiles?: ReturnType<typeof getChatProfiles> }>(CHAT_PROFILE_CACHE_MAX_ENTRIES);
@@ -76,7 +78,11 @@ export async function PUT(request: NextRequest) {
   if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
   try {
-    const body = (await request.json().catch(() => null)) as ProfilePayload | null;
+    const parsedBody = await readBoundedJsonBody<ProfilePayload>(request, MAX_REQUEST_BODY_BYTES);
+    if (!parsedBody.ok && parsedBody.reason === "too-large") {
+      return applyNoStoreHeaders(NextResponse.json({ error: "Profile payload too large" }, { status: 413 }), { varyCookie: true });
+    }
+    const body = parsedBody.ok ? parsedBody.value : null;
     if (!body || typeof body !== "object") {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid profile payload" }, { status: 400 }), { varyCookie: true });
     }

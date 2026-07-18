@@ -27,6 +27,7 @@ const secretKeyPattern = /(secret|private[_-]?key|mnemonic|webhook|dsn|api[_-]?k
 const rpcUrlKeyPattern = /^(rpc|rpc[_-]?url|.*rpc.*url)$/i;
 const TX_RE = /^0x[a-fA-F0-9]{64}$/;
 const ZERO_TX = "0x0000000000000000000000000000000000000000000000000000000000000000";
+const BET_MODES = new Set(["single", "bitmap", "sameAmount", "arrays"]);
 
 if (!logPath) {
   console.error("Usage: node scripts/analyze-live-canary-proof.mjs <live-canary.jsonl> [--profile=launch|testnet] [--strict] [--manifest=<path>]");
@@ -36,7 +37,11 @@ if (!logPath) {
   process.exitCode = 1;
 } else {
   const events = readJsonl(logPath);
-  const bets = events.filter((event) => Number.isInteger(event.round) && event.round >= 0);
+  const bets = events.filter((event) => (
+    Number.isInteger(event.round)
+    && event.round >= 0
+    && BET_MODES.has(event.mode)
+  ));
   const okBets = bets.filter((event) => event.ok === true && event.txStatus === "success");
   const failedBets = bets.filter((event) => event.ok !== true || event.txStatus === "reverted");
   const autoMinerBets = okBets.filter((event) => String(event.role ?? "").toUpperCase().includes("AUTOMINER"));
@@ -51,6 +56,13 @@ if (!logPath) {
   const nonceGaps = okBets.filter((event) => Number(event.noncePending) > Number(event.nonceLatest));
   const durationStats = stats(okBets.map((event) => Number(event.durationMs)));
   const gasStats = stats(okBets.map((event) => Number(event.gasUsed)));
+  const healthSamples = events.filter((event) => event.mode === "diagnostic" && event.sampleKind === "health" && event.ok === true);
+  const healthFailures = events.filter((event) => event.mode === "diagnostic" && event.sampleKind === "health" && event.ok !== true);
+  const healthDiagnosticsEnabled = healthSamples.length + healthFailures.length > 0;
+  const rssTrend = trend(healthSamples, "rssBytes");
+  const heapTrend = trend(healthSamples, "heapUsedBytes");
+  const dbTrend = trend(healthSamples, "dbBytes");
+  const walTrend = trend(healthSamples, "walBytes");
   const elapsedMs = elapsedRunMs(okBets);
   const minElapsedMs = Math.max(0, (Math.min(betEpochs.length, minEpochs) - 1) * minElapsedMsPerEpoch);
   const byRole = countBy(okBets, "role");
@@ -85,6 +97,8 @@ if (!logPath) {
   if (nonceGaps.length > 0) strictFailures.push(`nonce gaps ${nonceGaps.length}`);
   if (duplicateKeys.length > 0) strictFailures.push(`duplicate role/epoch/tile keys ${duplicateKeys.length}`);
   if (failedResolve.length > 0) strictFailures.push(`failed resolve tx ${failedResolve.length}`);
+  if (healthDiagnosticsEnabled && healthSamples.length < 2) strictFailures.push(`successful health samples ${healthSamples.length} < 2`);
+  if (healthFailures.length > 0) strictFailures.push(`failed health samples ${healthFailures.length}`);
   if (targetEventMismatches.length > 0) strictFailures.push(`target metadata mismatches ${targetEventMismatches.length}`);
   if (liveLogTemplateFindings.length > 0) strictFailures.push(`live canary log contains template-like values at ${liveLogTemplateFindings.slice(0, 5).join(", ")}`);
   if (liveLogSecretFindings.length > 0) strictFailures.push(`live canary log contains secret-like values at ${liveLogSecretFindings.slice(0, 5).join(", ")}`);
@@ -141,6 +155,11 @@ if (!logPath) {
   console.log(`| duplicate role/epoch/tile keys | ${duplicateKeys.length} |`);
   console.log(`| duration ms p50 / p95 / max | ${durationStats.p50} / ${durationStats.p95} / ${durationStats.max} |`);
   console.log(`| gas p50 / p95 / max | ${gasStats.p50} / ${gasStats.p95} / ${gasStats.max} |`);
+  console.log(`| health samples / failures | ${healthSamples.length} / ${healthFailures.length} |`);
+  console.log(`| RSS bytes first / max / delta | ${formatTrend(rssTrend)} |`);
+  console.log(`| heap bytes first / max / delta | ${formatTrend(heapTrend)} |`);
+  console.log(`| DB bytes first / max / delta | ${formatTrend(dbTrend)} |`);
+  console.log(`| WAL bytes first / max / delta | ${formatTrend(walTrend)} |`);
   console.log(`| roles | ${formatCounts(byRole)} |`);
   console.log(`| modes | ${formatCounts(byMode)} |`);
   console.log(`| bet error kinds | ${formatCounts(byErrorKind) || "none"} |`);
@@ -626,6 +645,16 @@ function stats(values) {
     p95: percentile(sorted, 0.95),
     max: sorted.at(-1),
   };
+}
+
+function trend(events, field) {
+  const values = events.map((event) => Number(event[field])).filter(Number.isFinite);
+  if (values.length === 0) return null;
+  return { first: values[0], max: Math.max(...values), delta: values.at(-1) - values[0] };
+}
+
+function formatTrend(value) {
+  return value ? `${value.first} / ${value.max} / ${value.delta}` : "n/a / n/a / n/a";
 }
 
 function elapsedRunMs(events) {

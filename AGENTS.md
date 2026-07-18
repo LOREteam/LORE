@@ -15,10 +15,11 @@ General operating rules for this repository. Keep changes small, evidence-based,
 
 - Prefer `rg` / `rg --files`. Exclude `.next/`, `.tmp/`, `artifacts/`, `cache/`, `coverage/`, `dist/`, `logs/`, `node_modules/`, `out/`, `playwright-report/`, `test-results/`, `typechain-types/`.
 - Keep `.codexignore` updated when new build/cache/generated/report/heavy artifact paths appear.
-- Do not read large files wholesale. For files over 50 lines, find target lines first, then read only the needed range.
+- Prefer targeted reads for large files: locate relevant symbols first, then read the complete function and enough surrounding flow to understand callers, state, and side effects. Read the whole file only when its structure is necessary.
 - Do not read large `.json`, `.jsonl`, `.csv`, or `.log` files in full. Use bounded summaries: counts, selected keys, sample rows, or exact errors.
 - For verbose commands, inspect bounded first/last lines or exact error lines. Do not dump full terminal buffers.
 - Use `docs/current_state.md` for current repo truth. Use `docs/agent-progress.md` only for compact durable progress during long tasks.
+- Read only the summary, blockers, and next-step sections of state/progress documents first; open linked evidence only when needed.
 
 ## Safety
 
@@ -42,7 +43,7 @@ General operating rules for this repository. Keep changes small, evidence-based,
 - Run the smallest relevant check first. Broaden only for shared contracts, APIs, persistence, wallet behavior, operator scripts, or user-facing flows.
 - Do not run full suites/builds automatically for minor non-breaking changes.
 - If a check fails from unrelated env/network/sandbox issues, report it instead of starting long automated troubleshooting.
-- Stop after 2 fix/verify cycles on the same failure and report status plus next step.
+- After 2 unsuccessful fix/verify cycles on the same failure, stop repeating the same approach, reassess the root cause, gather new evidence, and report only if still blocked.
 - Do not claim completion until relevant verification ran, or skipped verification is explicitly explained.
 - Common checks: `npm.cmd run typecheck`, `npm.cmd run build`, `npm.cmd run smoke:browser`, `npm.cmd run load:http`, `npm.cmd run health:prod`.
 
@@ -51,5 +52,6 @@ General operating rules for this repository. Keep changes small, evidence-based,
 - Before browser/wallet/smoke/remote-site automation, read `docs/browser_automation.md`.
 - Browser evidence must use the intended origin unless explicitly local-only. Save long console/network output to artifacts and report compact summaries.
 - Update docs/tests when behavior, CLI flags, env vars, API fields, schemas, persistence format, or operator commands change.
+- Ask only when ambiguity can materially affect security, funds, public behavior, or irreversible work. Otherwise proceed with the safest reversible assumption.
 - Keep progress updates short: current action and relevant finding. Summarize command results by outcome and important failures, not full logs.
 - A task is complete only when the requested behavior is done, checks pass or are explained, and no unrelated work was overwritten.

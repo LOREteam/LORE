@@ -168,11 +168,19 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
             <p id="wallet-settings-description" className="text-gray-500 text-xs mt-0.5">Manage Privy wallet, export keys, withdraw</p>
           </div>
           <div className="flex items-center gap-2">
-            <UiButton onClick={downloadLogs} variant="secondary" size="sm" uppercase className="text-xs hidden sm:inline-flex">
+            <UiButton
+              onClick={downloadLogs}
+              variant="secondary"
+              size="sm"
+              uppercase
+              aria-label="Export support logs"
+              title="Export support logs"
+              className="text-xs"
+            >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              Export Logs
+              <span className="hidden sm:inline">Export Logs</span>
             </UiButton>
             <UiButton onClick={onClose} variant="ghost" size="sm" uppercase className="text-xs">
               Close
@@ -187,8 +195,9 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
               key={s.id}
               type="button"
               onClick={() => setActiveSection(s.id)}
+              aria-pressed={activeSection === s.id}
               className={cn(
-                "shrink-0 rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors",
+                "min-h-11 shrink-0 rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400",
                 activeSection === s.id
                   ? "bg-violet-500/15 text-violet-300 border border-violet-400/30"
                   : "text-slate-500 hover:text-slate-300 border border-transparent",

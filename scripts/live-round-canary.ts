@@ -5,6 +5,7 @@ import { config as loadDotenv } from "dotenv";
 import {
   createPublicClient,
   createWalletClient,
+  custom,
   fallback,
   formatEther,
   formatUnits,
@@ -12,10 +13,12 @@ import {
   parseUnits,
   type Hash,
   type PublicClient,
+  type Transport,
 } from "viem";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 
 import { GAME_ABI, LINEA_TOKEN_ADDRESS, TOKEN_ABI, CONTRACT_ADDRESS, TX_RECEIPT_TIMEOUT_MS } from "../app/lib/constants";
+import { parseCanaryHealthBaseUrl, parseCanaryHealthPayloads } from "../app/lib/canaryHealthTelemetry";
 import {
   clampKeeperFeeOverridesToBalance,
   getAffordableKeeperGasLimit,
@@ -50,6 +53,10 @@ const APPROVE_AMOUNT = parseTokenAmountEnv("LIVE_TEST_APPROVE_AMOUNT", "10000000
 const MIN_TOKEN_PER_WALLET = parseTokenAmountEnv("LIVE_TEST_MIN_TOKEN_PER_WALLET", "5");
 const MIN_ETH_PER_WALLET = parseTokenAmountEnv("LIVE_TEST_MIN_ETH_PER_WALLET", "0.005");
 const RANDOMIZE_ROUNDS = process.env.LIVE_TEST_RANDOMIZE_ROUNDS === "1";
+const INJECT_RPC_FAILOVER = process.env.LIVE_TEST_INJECT_RPC_FAILOVER === "1";
+const HEALTH_BASE_URL = parseCanaryHealthBaseUrl(process.env.LIVE_TEST_HEALTH_BASE_URL);
+const HEALTH_SAMPLE_EVERY_ROUNDS = parseIntegerEnv("LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS", 10, 1, 10_000);
+const HEALTH_TIMEOUT_MS = parseIntegerEnv("LIVE_TEST_HEALTH_TIMEOUT_MS", 10_000, 1_000, 60_000);
 const MIN_TOTAL_BET_AMOUNT = parseTokenAmountEnv(
   "LIVE_TEST_MIN_TOTAL_BET_AMOUNT",
   process.env.LIVE_TEST_MIN_BET_AMOUNT ?? formatUnits(BET_AMOUNT, 18),
@@ -93,33 +100,53 @@ type RoundEvent = {
   atomicAdvance?: boolean;
   chainId?: number;
   contractAddress?: string;
+  dbBytes?: number;
+  diskFreeBytes?: number;
   durationMs?: number;
   error?: string;
   errorKind?: string;
+  enoughEth?: boolean;
+  enoughToken?: boolean;
   epoch?: string;
   effectiveGasPrice?: string;
   gasEstimate?: string;
+  estimateGasMs?: number;
   gasEstimateFallback?: boolean;
   gasLimit?: string;
   gasUsed?: string;
+  heapUsedBytes?: number;
+  healthRetryCount?: number;
   hash?: Hash;
-  mode?: BetMode | "approve" | "epoch-wait" | "resolve" | "preflight";
+  mode?: BetMode | "approve" | "diagnostic" | "epoch-wait" | "resolve" | "resolver-candidate" | "preflight" | "summary";
   network?: string;
   networkFeeWei?: string;
+  nonceReadMs?: number;
   nonceLatest?: number;
   noncePending?: number;
   ok: boolean;
   repeat?: boolean;
+  prepareMs?: number;
+  receiptMs?: number;
+  resolverFallbackUsed?: boolean;
+  rssBytes?: number;
   rpcLabel?: string;
+  rpcFailoverInjected?: boolean;
   role: string;
   round: number;
+  runtimeUptimeSeconds?: number;
+  sampleKind?: "health";
   secondsLeft?: number;
+  sendMs?: number;
   targetTotalAmount?: string;
+  targetRounds?: number;
   tileCount?: number;
   tiles?: number[];
   timestamp: string;
   totalAmount?: string;
   txStatus?: string;
+  walBytes?: number;
+  successes?: number;
+  failures?: number;
 };
 
 const attemptedResolveEpochs = new Map<string, number>();
@@ -176,6 +203,61 @@ function parseTokenAmountEnv(name: string, fallbackValue: string) {
   }
 }
 
+async function sampleHealth(logPath: string, round: number) {
+  if (!HEALTH_BASE_URL) return;
+  const secret = process.env.HEALTH_DIAGNOSTICS_SECRET?.trim();
+  if (!secret) throw new Error("HEALTH_DIAGNOSTICS_SECRET is required when LIVE_TEST_HEALTH_BASE_URL is configured");
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+    try {
+      const headers = { "cache-control": "no-cache", "x-health-diagnostics-secret": secret };
+      const [runtimeResponse, dataSyncResponse] = await Promise.all([
+        fetch(new URL("/api/health/runtime", HEALTH_BASE_URL), { headers, signal: controller.signal }),
+        fetch(new URL("/api/health/data-sync", HEALTH_BASE_URL), { headers, signal: controller.signal }),
+      ]);
+      if (!runtimeResponse.ok || !dataSyncResponse.ok) {
+        throw new Error(`Health endpoints returned runtime=${runtimeResponse.status} dataSync=${dataSyncResponse.status}`);
+      }
+      const sample = parseCanaryHealthPayloads(await runtimeResponse.json(), await dataSyncResponse.json());
+      writeEvent(logPath, {
+        amount: "0",
+        ...sample,
+        chainId: APP_CHAIN.id,
+        contractAddress: CONTRACT_ADDRESS,
+        healthRetryCount: attempt,
+        mode: "diagnostic",
+        network: APP_NETWORK,
+        ok: true,
+        role: "SYSTEM",
+        round,
+        rpcLabel: RPC_LABEL,
+        sampleKind: "health",
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+    } finally {
+      clearTimeout(timeout);
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+  }
+  writeEvent(logPath, {
+    amount: "0",
+    error: redactCanaryErrorMessage(lastError instanceof Error ? lastError.message : String(lastError)),
+    errorKind: "health-telemetry",
+    healthRetryCount: 1,
+    mode: "diagnostic",
+    ok: false,
+    role: "SYSTEM",
+    round,
+    sampleKind: "health",
+    timestamp: new Date().toISOString(),
+  });
+}
+
 function normalizePrivateKey(raw: string): `0x${string}` {
   const trimmed = raw.trim();
   return trimmed.startsWith("0x") ? (trimmed as `0x${string}`) : (`0x${trimmed}` as `0x${string}`);
@@ -205,8 +287,21 @@ function writeEvent(logPath: string, event: RoundEvent) {
     chainId: APP_CHAIN.id,
     contractAddress: CONTRACT_ADDRESS,
     rpcLabel: RPC_LABEL,
+    rpcFailoverInjected: INJECT_RPC_FAILOVER,
     ...event,
   })}\n`);
+}
+
+function createCanaryTransport(urls: string[]) {
+  const transports: Transport[] = urls.map((url) => http(url, { timeout: 20_000, retryCount: 1 }));
+  if (INJECT_RPC_FAILOVER) {
+    transports.unshift(custom({
+      request: async () => {
+        throw new Error("Injected RPC transport failure before dispatch");
+      },
+    }, { key: "injectedFailover", name: "Injected failover transport" }));
+  }
+  return fallback(transports);
 }
 
 function delay(ms: number) {
@@ -328,11 +423,11 @@ async function readEpochWindow(publicClient: PublicClient) {
 async function resolveIfNeeded(params: {
   logPath: string;
   publicClient: PublicClient;
-  resolver: LiveWallet | null;
+  resolvers: LiveWallet[];
   transport: ReturnType<typeof fallback>;
 }) {
-  const { logPath, publicClient, resolver, transport } = params;
-  if (!resolver) return;
+  const { logPath, publicClient, resolvers, transport } = params;
+  if (resolvers.length === 0) return;
   const { epoch, secondsLeft } = await readEpochWindow(publicClient);
   if (secondsLeft > 0) return;
   const epochData = await publicClient.readContract({
@@ -352,35 +447,88 @@ async function resolveIfNeeded(params: {
   if (lastAttemptAt != null && now - lastAttemptAt < RESOLVE_RETRY_COOLDOWN_MS) return;
   attemptedResolveEpochs.set(epochKey, now);
 
-  const startedAt = Date.now();
-  let pendingHash: Hash | undefined;
-  const walletClient = createWalletClient({ account: resolver.account, chain: APP_CHAIN, transport });
-  const [nonceLatest, noncePending] = await Promise.all([
-    publicClient.getTransactionCount({ address: resolver.account.address, blockTag: "latest" }),
-    publicClient.getTransactionCount({ address: resolver.account.address, blockTag: "pending" }),
-  ]);
-  if (noncePending > nonceLatest) {
-    writeEvent(logPath, { amount: "0", epoch: epoch.toString(), error: "resolver has pending transactions", errorKind: "pending-nonce", mode: "resolve", ok: false, role: resolver.role, round: -1, secondsLeft, timestamp: new Date().toISOString() });
-    return;
-  }
-  try {
-    const gasEstimate = await publicClient.estimateContractGas({
-      account: resolver.account.address,
-      address: CONTRACT_ADDRESS,
-      abi: GAME_ABI,
-      functionName: "resolveEpoch",
-      args: [epoch],
-    });
-    let gas = gasEstimate > RESOLVE_GAS_FLOOR ? gasEstimate : RESOLVE_GAS_FLOOR;
-    const fees = await getFeeOverrides(publicClient);
-    const nativeBalance = await publicClient.getBalance({ address: resolver.account.address });
-    const affordableGasLimit = getAffordableKeeperGasLimit(gas, nativeBalance, fees);
-    if (affordableGasLimit == null) {
+  for (const [resolverIndex, resolver] of resolvers.entries()) {
+    const startedAt = Date.now();
+    let pendingHash: Hash | undefined;
+    const walletClient = createWalletClient({ account: resolver.account, chain: APP_CHAIN, transport });
+    const [nonceLatest, noncePending] = await Promise.all([
+      publicClient.getTransactionCount({ address: resolver.account.address, blockTag: "latest" }),
+      publicClient.getTransactionCount({ address: resolver.account.address, blockTag: "pending" }),
+    ]);
+    if (noncePending > nonceLatest) {
+      writeEvent(logPath, { amount: "0", epoch: epoch.toString(), error: "resolver candidate has pending transactions", errorKind: "pending-nonce", mode: "resolver-candidate", ok: false, role: resolver.role, round: -1, secondsLeft, timestamp: new Date().toISOString() });
+      continue;
+    }
+    try {
+      const gasEstimate = await publicClient.estimateContractGas({
+        account: resolver.account.address,
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "resolveEpoch",
+        args: [epoch],
+      });
+      let gas = gasEstimate > RESOLVE_GAS_FLOOR ? gasEstimate : RESOLVE_GAS_FLOOR;
+      const fees = await getFeeOverrides(publicClient);
+      const nativeBalance = await publicClient.getBalance({ address: resolver.account.address });
+      const affordableGasLimit = getAffordableKeeperGasLimit(gas, nativeBalance, fees);
+      if (affordableGasLimit == null) {
+        writeEvent(logPath, {
+          amount: "0",
+          epoch: epoch.toString(),
+          error: "resolver has insufficient native gas",
+          errorKind: "insufficient-native-gas",
+          mode: "resolver-candidate",
+          ok: false,
+          role: resolver.role,
+          round: -1,
+          secondsLeft,
+          timestamp: new Date().toISOString(),
+        });
+        continue;
+      }
+      gas = affordableGasLimit;
+      const hash = await walletClient.writeContract({
+        account: resolver.account,
+        chain: APP_CHAIN,
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "resolveEpoch",
+        args: [epoch],
+        gas,
+        ...fees,
+      } as never);
+      pendingHash = hash;
+      const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
+      if (emptyEpoch && receipt.status === "success") emptyResolveBootstrapUsed = true;
       writeEvent(logPath, {
         amount: "0",
+        durationMs: Date.now() - startedAt,
         epoch: epoch.toString(),
-        error: "resolver has insufficient native gas",
-        errorKind: "insufficient-native-gas",
+        effectiveGasPrice: receipt.effectiveGasPrice.toString(),
+        gasEstimate: gasEstimate.toString(),
+        gasLimit: gas.toString(),
+        gasUsed: receipt.gasUsed.toString(),
+        hash,
+        mode: "resolve",
+        networkFeeWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(),
+        ok: receipt.status === "success",
+        role: resolver.role,
+        round: -1,
+        resolverFallbackUsed: resolverIndex > 0,
+        secondsLeft,
+        timestamp: new Date().toISOString(),
+        txStatus: receipt.status,
+      });
+      return;
+    } catch (error) {
+      const classified = classifyError(error);
+      if (pendingHash && /timed out while waiting for transaction/i.test(classified.message)) pendingResolveEpochs.add(epochKey);
+      writeEvent(logPath, {
+        amount: "0",
+        durationMs: Date.now() - startedAt,
+        epoch: epoch.toString(),
+        error: classified.message,
+        errorKind: classified.kind,
         mode: "resolve",
         ok: false,
         role: resolver.role,
@@ -390,54 +538,6 @@ async function resolveIfNeeded(params: {
       });
       return;
     }
-    gas = affordableGasLimit;
-    const hash = await walletClient.writeContract({
-      account: resolver.account,
-      chain: APP_CHAIN,
-      address: CONTRACT_ADDRESS,
-      abi: GAME_ABI,
-      functionName: "resolveEpoch",
-      args: [epoch],
-      gas,
-      ...fees,
-    } as never);
-    pendingHash = hash;
-    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
-    if (emptyEpoch && receipt.status === "success") emptyResolveBootstrapUsed = true;
-    writeEvent(logPath, {
-      amount: "0",
-      durationMs: Date.now() - startedAt,
-      epoch: epoch.toString(),
-      effectiveGasPrice: receipt.effectiveGasPrice.toString(),
-      gasEstimate: gasEstimate.toString(),
-      gasLimit: gas.toString(),
-      gasUsed: receipt.gasUsed.toString(),
-      hash,
-      mode: "resolve",
-      networkFeeWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(),
-      ok: receipt.status === "success",
-      role: resolver.role,
-      round: -1,
-      secondsLeft,
-      timestamp: new Date().toISOString(),
-      txStatus: receipt.status,
-    });
-  } catch (error) {
-    const classified = classifyError(error);
-    if (pendingHash && /timed out while waiting for transaction/i.test(classified.message)) pendingResolveEpochs.add(epochKey);
-    writeEvent(logPath, {
-      amount: "0",
-      durationMs: Date.now() - startedAt,
-      epoch: epoch.toString(),
-      error: classified.message,
-      errorKind: classified.kind,
-      mode: "resolve",
-      ok: false,
-      role: resolver.role,
-      round: -1,
-      secondsLeft,
-      timestamp: new Date().toISOString(),
-    });
   }
 }
 
@@ -445,7 +545,7 @@ async function waitForSafeWindow(params: {
   afterEpoch?: bigint | null;
   logPath: string;
   publicClient: PublicClient;
-  resolver: LiveWallet | null;
+  resolvers: LiveWallet[];
   transport: ReturnType<typeof fallback>;
 }) {
   const startedAt = Date.now();
@@ -479,7 +579,7 @@ async function waitForSafeWindow(params: {
         epoch: window.epoch.toString(),
         mode: "epoch-wait",
         ok: true,
-        role: params.resolver?.role ?? "SYSTEM",
+        role: params.resolvers[0]?.role ?? "SYSTEM",
         round: -1,
         secondsLeft: window.secondsLeft,
         timestamp: new Date().toISOString(),
@@ -575,6 +675,7 @@ async function placeRound(params: {
   const walletClient = createWalletClient({ account: wallet.account, chain: APP_CHAIN, transport });
   const nativeBalance = await publicClient.getBalance({ address: wallet.account.address });
   let fees = await getBetFeeOverrides(publicClient);
+  const preparedAt = Date.now();
   const functionName =
     mode === "single"
       ? "placeBet"
@@ -607,12 +708,14 @@ async function placeRound(params: {
     gas = BATCH_GAS_FALLBACK;
     gasEstimateFallback = true;
   }
+  const gasEstimatedAt = Date.now();
   fees = clampKeeperFeeOverridesToBalance(fees, gas, nativeBalance) ?? fees;
   gas = getAffordableKeeperGasLimit(gas, nativeBalance, fees) ?? gas;
   const [nonceLatest, noncePending] = await Promise.all([
     publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "latest" }),
     publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "pending" }),
   ]);
+  const nonceReadAt = Date.now();
   const hash = await walletClient.writeContract({
     account: wallet.account,
     chain: APP_CHAIN,
@@ -623,16 +726,19 @@ async function placeRound(params: {
     gas,
     ...fees,
   } as never);
+  const sentAt = Date.now();
   const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
+  const receiptAt = Date.now();
   // V9 advances exactly one expired epoch before recording this bet.
   const recordedEpoch = atomicAdvance && receipt.status === "success" ? epoch + 1n : epoch;
   const event: RoundEvent = {
     amount: formatUnits(plan.amount, 18),
     amounts: mode === "arrays" ? plan.amounts.map((value) => formatUnits(value, 18)) : undefined,
     atomicAdvance,
-    durationMs: Date.now() - startedAt,
+    durationMs: receiptAt - startedAt,
     effectiveGasPrice: receipt.effectiveGasPrice.toString(),
     epoch: recordedEpoch.toString(),
+    estimateGasMs: gasEstimatedAt - preparedAt,
     gasEstimateFallback,
     gasUsed: receipt.gasUsed.toString(),
     networkFeeWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(),
@@ -640,11 +746,15 @@ async function placeRound(params: {
     mode,
     nonceLatest,
     noncePending,
+    nonceReadMs: nonceReadAt - gasEstimatedAt,
     ok: receipt.status === "success",
+    prepareMs: preparedAt - startedAt,
+    receiptMs: receiptAt - sentAt,
     repeat,
     role: wallet.role,
     round,
     secondsLeft,
+    sendMs: sentAt - nonceReadAt,
     targetTotalAmount: formatUnits(plan.targetTotalAmount, 18),
     tileCount: plan.tileCount,
     tiles,
@@ -693,6 +803,15 @@ async function runPreflight(
     });
     writeEvent(logPath, {
       amount: "0",
+      enoughEth: eth >= MIN_ETH_PER_WALLET,
+      enoughToken: token >= requiredToken,
+      errorKind: eth < MIN_ETH_PER_WALLET && token < requiredToken
+        ? "insufficient-native-and-token"
+        : eth < MIN_ETH_PER_WALLET
+          ? "insufficient-native-gas"
+          : token < requiredToken
+            ? "insufficient-token"
+            : undefined,
       mode: "preflight",
       ok: eth >= MIN_ETH_PER_WALLET && token >= requiredToken,
       role: wallet.role,
@@ -717,10 +836,14 @@ async function main() {
         account: privateKeyToAccount(normalizePrivateKey(process.env.LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY)),
       }
     : null;
+  const resolverCandidates = [
+    ...(resolver ? [resolver] : []),
+    ...wallets.filter((wallet) => wallet.account.address.toLowerCase() !== resolver?.account.address.toLowerCase()),
+  ];
   const readRpcUrls = getStableLineaReadRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const broadcastRpcUrls = getPreferredLineaRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
-  const readTransport = fallback(readRpcUrls.map((url) => http(url, { timeout: 20_000, retryCount: 1 })));
-  const broadcastTransport = fallback(broadcastRpcUrls.map((url) => http(url, { timeout: 20_000, retryCount: 1 })));
+  const readTransport = createCanaryTransport(readRpcUrls);
+  const broadcastTransport = createCanaryTransport(broadcastRpcUrls);
   const publicClient = createPublicClient({ chain: APP_CHAIN, transport: readTransport });
   const logPath = createRunLogPath();
 
@@ -729,6 +852,7 @@ async function main() {
   console.log(`[live-canary] contract=${CONTRACT_ADDRESS}`);
   console.log(`[live-canary] token=${LINEA_TOKEN_ADDRESS}`);
   console.log(`[live-canary] rpcLabel=${RPC_LABEL} readRpcCount=${readRpcUrls.length} broadcastRpcCount=${broadcastRpcUrls.length}`);
+  console.log(`[live-canary] rpcFailoverInjection=${INJECT_RPC_FAILOVER ? "enabled" : "disabled"}`);
   console.log(
     `[live-canary] rounds=${TARGET_ROUNDS} randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +
       `total=${formatUnits(MIN_TOTAL_BET_AMOUNT, 18)}..${formatUnits(MAX_TOTAL_BET_AMOUNT, 18)} ` +
@@ -750,6 +874,10 @@ async function main() {
   const plannedSpendByRole = getPlannedSpendByRole(wallets);
   await runPreflight(logPath, publicClient, wallets, plannedSpendByRole);
   if (DRY_RUN) return;
+  if (HEALTH_BASE_URL && !process.env.HEALTH_DIAGNOSTICS_SECRET?.trim()) {
+    throw new Error("HEALTH_DIAGNOSTICS_SECRET is required when LIVE_TEST_HEALTH_BASE_URL is configured");
+  }
+  await sampleHealth(logPath, 0);
 
   for (const wallet of wallets) {
     await ensureAllowance({
@@ -775,7 +903,7 @@ async function main() {
         afterEpoch: lastAttemptedEpoch,
         logPath,
         publicClient,
-        resolver,
+        resolvers: resolverCandidates,
         transport: broadcastTransport,
       });
       const tiles = pickTiles(epoch, round, walletIndex, plan.tileCount);
@@ -861,9 +989,23 @@ async function main() {
         throw new Error(`Stopping after ${failures} failures; see ${logPath}`);
       }
     }
+    if ((round + 1) % HEALTH_SAMPLE_EVERY_ROUNDS === 0) await sampleHealth(logPath, round + 1);
     if (LOOP_PAUSE_MS > 0) await delay(LOOP_PAUSE_MS);
   }
 
+  if (TARGET_ROUNDS % HEALTH_SAMPLE_EVERY_ROUNDS !== 0) await sampleHealth(logPath, TARGET_ROUNDS);
+
+  writeEvent(logPath, {
+    amount: "0",
+    failures,
+    mode: "summary",
+    ok: failures === 0,
+    role: "SYSTEM",
+    round: TARGET_ROUNDS,
+    successes,
+    targetRounds: TARGET_ROUNDS,
+    timestamp: new Date().toISOString(),
+  });
   console.log("[live-canary] summary");
   console.log(JSON.stringify({
     successes,

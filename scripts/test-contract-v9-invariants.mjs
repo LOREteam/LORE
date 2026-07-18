@@ -5,13 +5,11 @@ const contractPath = "contracts/LineaOreV9.sol";
 const delegatePath = "contracts/LineaOre7702Delegate.sol";
 const constantsPath = "app/lib/constants.ts";
 const indexerPath = "scripts/indexer.ts";
-const artifactAbiPath = "contracts_LineaOreV9_sol_LineaOreV9.abi";
 
 const source = readFileSync(contractPath, "utf8");
 const delegateSource = readFileSync(delegatePath, "utf8");
 const constants = readFileSync(constantsPath, "utf8");
 const indexerSource = readFileSync(indexerPath, "utf8");
-const artifactAbi = JSON.parse(readFileSync(artifactAbiPath, "utf8"));
 
 function getConstantBigInt(name) {
   const match = source.match(new RegExp(`uint256\\s+public\\s+constant\\s+${name}\\s*=\\s*([^;]+);`));
@@ -96,15 +94,6 @@ function filterDeclarationsByName(declarations, names) {
   return new Set([...declarations].filter((item) => names.has(item.match(/^\w+\s+(\w+)\(/)?.[1])));
 }
 
-function declarationsFromAbi(abi, kind) {
-  const out = new Set();
-  for (const item of abi) {
-    if (item?.type !== kind || typeof item.name !== "string") continue;
-    const inputs = Array.isArray(item.inputs) ? item.inputs : [];
-    out.add(`${kind} ${item.name}(${inputs.map((input) => normalizeType(input.type)).join(",")})`);
-  }
-  return out;
-}
 
 const splitFeesBody = extractFunctionBody("_splitFees");
 const recordBetBody = extractFunctionBody("_recordBet");
@@ -299,6 +288,93 @@ assert.equal(rolloverCase.burnAmount, 10n * token);
 assert.equal(rolloverCase.resolverReward, token / 2n);
 assert.equal(rolloverCase.baseReward, 1_420n * token);
 
+const MAX_UINT256 = (1n << 256n) - 1n;
+const feeMultipliers = [
+  DAILY_JACKPOT_PERCENT,
+  WEEKLY_JACKPOT_PERCENT,
+  PROTOCOL_FEE_PERCENT,
+  BURN_FEE_PERCENT,
+  RESOLVER_REWARD_BPS,
+];
+const maxFeeMultiplier = feeMultipliers.reduce((max, value) => (value > max ? value : max), 1n);
+const MAX_SAFE_PERCENT_POOL = MAX_UINT256 / maxFeeMultiplier;
+let fuzzState = 0x6c6f7265n;
+function nextFuzzValue() {
+  fuzzState ^= fuzzState << 13n;
+  fuzzState ^= fuzzState >> 7n;
+  fuzzState ^= fuzzState << 17n;
+  return fuzzState & ((1n << 128n) - 1n);
+}
+
+const feeEdgeCases = [
+  [0n, 0n],
+  [0n, MAX_UINT256],
+  [1n, 0n],
+  [100n, 1n],
+  [MAX_SAFE_PERCENT_POOL, MAX_UINT256 - MAX_SAFE_PERCENT_POOL],
+];
+for (let index = 0; index < 10_000; index += 1) {
+  const freshPool = nextFuzzValue() % (10n ** 36n);
+  const rolloverPool = nextFuzzValue() % (10n ** 36n);
+  feeEdgeCases.push([freshPool, rolloverPool]);
+}
+for (const [freshPool, rolloverPool] of feeEdgeCases) {
+  const result = splitFeesModel(freshPool, rolloverPool);
+  assert.equal(
+    result.baseReward + result.dailyAccrual + result.weeklyAccrual + result.protocolFee + result.burnAmount,
+    freshPool + rolloverPool,
+    "fee split must conserve the rollover-inclusive pool",
+  );
+  assert.ok(result.resolverReward <= result.protocolFee, "resolver reward must stay inside protocol fees");
+  assert.ok(result.baseReward >= rolloverPool, "fees must never be charged against rollover");
+  for (const multiplier of feeMultipliers) {
+    assert.ok(freshPool * multiplier <= MAX_UINT256, "configured test domain must not overflow Solidity fee math");
+  }
+}
+
+const bitmapBody = extractFunctionBody("placeBatchBetsBitmap");
+assert.match(bitmapBody, /tileMask\s*&\s*~MAX_TILE_MASK/, "bitmap path must reject bits above tile 25");
+assert.match(bitmapBody, /amount\s*\*\s*tileCount/, "bitmap path must charge exactly amount times selected tiles");
+const maxTileMask = (1n << 25n) - 1n;
+assert.equal(maxTileMask.toString(2).length, 25);
+for (let index = 0; index < 10_000; index += 1) {
+  const mask = nextFuzzValue() & maxTileMask;
+  const expectedCount = mask.toString(2).replaceAll("0", "").length;
+  let remaining = mask;
+  let actualCount = 0;
+  while (remaining !== 0n) {
+    actualCount += Number(remaining & 1n);
+    remaining >>= 1n;
+  }
+  assert.equal(actualCount, expectedCount, "bitmap tile count must match popcount");
+  assert.ok(actualCount >= 0 && actualCount <= 25, "bitmap must select at most 25 tiles");
+}
+assert.equal(maxTileMask.toString(2).replaceAll("0", "").length, 25, "all 25 tiles must fit the bitmap path");
+
+for (let index = 0; index < 2_000; index += 1) {
+  const participantCount = Number(nextFuzzValue() % 25n) + 1;
+  const bets = Array.from({ length: participantCount }, () => (nextFuzzValue() % (10n ** 24n)) + 1n);
+  const totalBet = bets.reduce((sum, bet) => sum + bet, 0n);
+  const rewardPool = nextFuzzValue() % (10n ** 30n);
+  const claims = bets.map((bet) => (rewardPool * bet) / totalBet);
+  assert.ok(
+    claims.reduce((sum, claim) => sum + claim, 0n) <= rewardPool,
+    "rounded winner claims must not exceed the reward pool",
+  );
+}
+
+assert.match(source, /using\s+SafeERC20\s+for\s+IERC20\s*;/, "token operations must retain SafeERC20 compatibility");
+assert.doesNotMatch(source, /token\.(?:transfer|transferFrom)\s*\(/, "raw ERC-20 transfer calls must not bypass SafeERC20");
+for (const fn of ["claimReward", "claimEpochRebate"]) {
+  const body = extractFunctionBody(fn);
+  assert.match(body, /AlreadyClaimed/, `${fn} must reject a repeated claim`);
+  assert.ok(
+    body.indexOf("= true") < body.indexOf("token.safeTransfer"),
+    `${fn} must mark the claim before the external token transfer`,
+  );
+}
+assert.match(extractFunctionBody("resolveEpoch"), /AlreadyResolved/, "resolveEpoch must reject repeated resolution");
+
 function safetyPoolModel({ isResolved, rebatePool, totalPool, winningTilePool, userVolume, userWinningVolume }) {
   if (!isResolved || totalPool === 0n || rebatePool === 0n || userVolume === 0n) return 0n;
   if (userWinningVolume > 0n) return 0n;
@@ -341,6 +417,56 @@ assert.equal(
   0n,
 );
 
+for (let index = 0; index < 5_000; index += 1) {
+  const losingParticipantCount = Number(nextFuzzValue() % 25n) + 1;
+  const losingVolumes = Array.from(
+    { length: losingParticipantCount },
+    () => (nextFuzzValue() % (10n ** 24n)) + 1n,
+  );
+  const losingVolume = losingVolumes.reduce((sum, value) => sum + value, 0n);
+  const winningTilePool = nextFuzzValue() % (10n ** 30n);
+  const totalPool = winningTilePool + losingVolume;
+  const rebatePool = nextFuzzValue() % (10n ** 30n);
+  const rebates = losingVolumes.map((userVolume) => safetyPoolModel({
+    isResolved: true,
+    rebatePool,
+    totalPool,
+    winningTilePool,
+    userVolume,
+    userWinningVolume: 0n,
+  }));
+
+  assert.ok(
+    rebates.reduce((sum, rebate) => sum + rebate, 0n) <= rebatePool,
+    "rounded Safety Pool claims must not exceed the epoch rebate pool",
+  );
+  assert.equal(
+    safetyPoolModel({
+      isResolved: true,
+      rebatePool,
+      totalPool,
+      winningTilePool,
+      userVolume: losingVolumes[0],
+      userWinningVolume: 1n,
+    }),
+    0n,
+    "a winning-tile participant must not receive a Safety Pool rebate",
+  );
+}
+
+assert.equal(
+  safetyPoolModel({
+    isResolved: true,
+    rebatePool: (1n << 128n) - 1n,
+    totalPool: (1n << 128n) - 1n,
+    winningTilePool: 0n,
+    userVolume: (1n << 128n) - 1n,
+    userWinningVolume: 0n,
+  }),
+  (1n << 128n) - 1n,
+  "a sole losing participant must receive the complete rebate pool within the safe arithmetic domain",
+);
+
 const contractEvents = extractDeclarations(source, "event");
 const clientEvents = extractDeclarations(constants, "event");
 const contractErrors = extractDeclarations(source, "error");
@@ -350,8 +476,6 @@ const gameEventsAbiBlock = extractParseAbiBlock("GAME_EVENTS_ABI", constants);
 const contractFunctions = extractDeclarations(source, "function");
 const clientGameFunctions = extractDeclarations(gameAbiBlock, "function");
 const clientGameEvents = extractDeclarations(gameEventsAbiBlock, "event");
-const artifactFunctions = declarationsFromAbi(artifactAbi, "function");
-const artifactEvents = declarationsFromAbi(artifactAbi, "event");
 
 assertSubset({ expected: contractEvents, actual: clientEvents, label: "events" });
 assertSubset({ expected: contractErrors, actual: clientErrors, label: "errors" });
@@ -385,31 +509,6 @@ assertSubset({
   label: "critical game functions",
 });
 assertSubset({
-  expected: filterDeclarationsByName(contractFunctions, new Set([
-    "placeBet",
-    "placeBatchBets",
-    "placeBatchBetsSameAmount",
-    "placeBatchBetsBitmap",
-    "claimReward",
-    "claimRewards",
-    "claimEpochRebate",
-    "claimEpochsRebate",
-    "settleEpochDust",
-    "resolveEpoch",
-    "claimResolverRewards",
-    "flushProtocolFees",
-    "getEpochEndTime",
-    "getJackpotInfo",
-    "previewRebate",
-    "getRebateInfo",
-    "getRebateSummary",
-    "getTileData",
-    "getUserBetsAll",
-  ])),
-  actual: artifactFunctions,
-  label: "critical artifact functions",
-});
-assertSubset({
   expected: filterDeclarationsByName(contractEvents, new Set([
     "BetPlaced",
     "BatchBetsPlaced",
@@ -429,27 +528,6 @@ assertSubset({
   ])),
   actual: clientGameEvents,
   label: "critical game events",
-});
-assertSubset({
-  expected: filterDeclarationsByName(contractEvents, new Set([
-    "BetPlaced",
-    "BatchBetsPlaced",
-    "BatchBetsSameAmountPlaced",
-    "BatchBetsBitmapPlaced",
-    "EpochResolved",
-    "RewardClaimed",
-    "RewardBatchClaimed",
-    "DailyJackpotAwarded",
-    "WeeklyJackpotAwarded",
-    "RewardDustSettled",
-    "ResolverRewardAccrued",
-    "ResolverRewardClaimed",
-    "ProtocolFeesFlushed",
-    "RebateClaimed",
-    "RebateBatchClaimed",
-  ])),
-  actual: artifactEvents,
-  label: "critical artifact events",
 });
 
 const indexerEvents = extractDeclarations(indexerSource, "event");

@@ -1,3 +1,6 @@
+import { sanitizeSupportLogPayload } from "./sentrySanitize";
+import { getAutoMineSupportDiagnostics, readAutoMineDiagnostics } from "./mining/autoMineDiagnostics";
+
 const MAX_ENTRIES = 500;
 const STORAGE_KEY = "lineaore:logs";
 
@@ -62,7 +65,7 @@ function loadBuffer(): LogEntry[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as LogEntry[]) : [];
+    return raw ? sanitizeSupportLogPayload(JSON.parse(raw) as LogEntry[]) : [];
   } catch {
     return [];
   }
@@ -110,12 +113,12 @@ function scheduleFlush() {
 
 function push(lvl: LogLevel, tag: string, msg: string, data?: unknown) {
   if (buffer.length === 0) buffer = loadBuffer();
-  const safeData = data !== undefined ? sanitize(data) : undefined;
+  const safeData = data !== undefined ? sanitizeSupportLogPayload(sanitize(data)) : undefined;
   const entry: LogEntry = {
     ts: new Date().toISOString(),
     lvl,
     tag,
-    msg,
+    msg: sanitizeSupportLogPayload(msg),
     ...(safeData !== undefined && { data: safeData }),
   };
   buffer.push(entry);
@@ -158,15 +161,17 @@ export function exportLogs(): string {
   if (buffer.length === 0) buffer = loadBuffer();
   const meta = {
     exportedAt: new Date().toISOString(),
-    url: typeof window !== "undefined" ? window.location.href : "",
+    origin: typeof window !== "undefined" ? window.location.origin : "",
     userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
     entries: buffer.length,
+    autoMiner: getAutoMineSupportDiagnostics(readAutoMineDiagnostics()),
   };
-  const lines = buffer.map((e) => {
+  const safeMeta = sanitizeSupportLogPayload(meta);
+  const lines = sanitizeSupportLogPayload(buffer).map((e) => {
     const d = e.data !== undefined ? ` | ${safeJsonStringify(e.data)}` : "";
     return `${e.ts} [${e.lvl.toUpperCase().padEnd(5)}] <${e.tag}> ${e.msg}${d}`;
   });
-  return `=== LORE DApp Logs ===\n${safeJsonStringify(meta, 2)}\n${"=".repeat(40)}\n${lines.join("\n")}\n`;
+  return `=== LORE DApp Logs ===\n${safeJsonStringify(safeMeta, 2)}\n${"=".repeat(40)}\n${lines.join("\n")}\n`;
 }
 
 export function downloadLogs() {

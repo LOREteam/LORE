@@ -1,6 +1,7 @@
 "use client";
 
 import { log } from "../lib/logger";
+import { writeAutoMineDiagnostics } from "../lib/mining/autoMineDiagnostics";
 import { isEpochWaitTimeoutError, isInsufficientFundsError, isNetworkError } from "./useMining.shared";
 import { createAutoMineLoopState, reduceAutoMineLoopEvent } from "../lib/mining/autoMineLoopModel";
 import { planAutoMineLoopPrelude } from "../lib/mining/autoMineLoopPreludePlanner";
@@ -52,6 +53,10 @@ async function handleConfirmedRoundOutcome(params: {
       tiles: tilesToBet,
     }),
   );
+  writeAutoMineDiagnostics({
+    lastEpoch: outcome.placedEpoch.toString(),
+    retryCount: 0,
+  });
   runtime.syncState(nextLoopState, { progress: true, selection: true, session: false });
   await runtime.handleConfirmedRound({
     placedEpoch: outcome.placedEpoch,
@@ -164,6 +169,7 @@ export async function runAutoMineLoop({
               retryCount,
               waitMs,
             });
+            writeAutoMineDiagnostics({ retryCount });
             if (retryDecision.kind === "give-up") {
               log.warn(
                 "AutoMine",
@@ -342,6 +348,7 @@ export async function runAutoMineLoop({
           retryCount: retryDecision.retryCount,
           waitMs: retryDecision.waitMs,
         });
+        writeAutoMineDiagnostics({ retryCount: retryDecision.retryCount });
         log.warn(
           "AutoMine",
           `network error on round ${roundIndex + 1} (retry ${retryDecision.retryCount}/${networkRetryMax}), waiting ${(retryDecision.waitMs / 1000).toFixed(0)}s...`,

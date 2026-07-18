@@ -21,7 +21,7 @@ const canaryFullEvents = canaryFullTxHashes.map((txHash, index) => JSON.stringif
   ok: true,
   txStatus: "success",
   role: "AUTOMINER_A",
-  mode: "bet",
+  mode: "single",
   epoch: index + 1,
   tiles: [1],
   txHash,

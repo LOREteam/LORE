@@ -12,6 +12,7 @@ import {
 import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { RewardRow, loadRewardMapsForUserEpochs } from "../_lib/rewardSummary";
+import { readBoundedJsonBody } from "../_lib/boundedJsonBody";
 
 type RewardsRequest = {
   user?: unknown;
@@ -19,6 +20,7 @@ type RewardsRequest = {
 };
 
 const MAX_EPOCHS_PER_REQUEST = 400;
+const MAX_REQUEST_BODY_BYTES = 16_384;
 const REWARDS_ROUTE_CACHE_MS = 15_000;
 const MAX_REWARDS_CACHE_ENTRIES = 200;
 const ROUTE_METRIC_KEY = "api/rewards";
@@ -63,7 +65,12 @@ export async function POST(request: Request) {
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
 
   try {
-    const body = (await request.json().catch(() => null)) as RewardsRequest | null;
+    const parsedBody = await readBoundedJsonBody<RewardsRequest>(request, MAX_REQUEST_BODY_BYTES);
+    if (!parsedBody.ok && parsedBody.reason === "too-large") {
+      failRouteMetric(metric, 413);
+      return jsonNoStore({ error: "Rewards payload too large" }, 413);
+    }
+    const body = parsedBody.ok ? parsedBody.value : null;
     if (!body || typeof body !== "object") {
       failRouteMetric(metric, 400);
       return jsonNoStore({ error: "Invalid rewards payload" }, 400);

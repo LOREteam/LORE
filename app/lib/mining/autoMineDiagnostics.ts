@@ -28,8 +28,12 @@ export interface AutoMineDiagnosticsSnapshot {
   lastErrorMessage: string | null;
   lastErrorRawMessage: string | null;
   lastStopReason: AutoMineDiagnosticsStopReason | null;
+  lastEpoch: string | null;
+  retryCount: number;
   updatedAt: number;
 }
+
+export type AutoMineSupportDiagnostics = Omit<AutoMineDiagnosticsSnapshot, "lastErrorRawMessage">;
 
 type AutoMineDiagnosticsStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
@@ -113,6 +117,8 @@ export function createDefaultAutoMineDiagnosticsSnapshot(): AutoMineDiagnosticsS
     lastErrorMessage: null,
     lastErrorRawMessage: null,
     lastStopReason: null,
+    lastEpoch: null,
+    retryCount: 0,
     updatedAt: 0,
   };
 }
@@ -133,7 +139,31 @@ export function sanitizeAutoMineDiagnosticsSnapshot(value: unknown): AutoMineDia
     lastErrorMessage: typeof candidate.lastErrorMessage === "string" ? candidate.lastErrorMessage : null,
     lastErrorRawMessage: typeof candidate.lastErrorRawMessage === "string" ? candidate.lastErrorRawMessage : null,
     lastStopReason: isStopReason(candidate.lastStopReason) ? candidate.lastStopReason : null,
+    lastEpoch: typeof candidate.lastEpoch === "string" && /^\d+$/.test(candidate.lastEpoch) ? candidate.lastEpoch : null,
+    retryCount: Number.isInteger(candidate.retryCount) && Number(candidate.retryCount) >= 0
+      ? Number(candidate.retryCount)
+      : 0,
     updatedAt: Number.isFinite(candidate.updatedAt) ? Number(candidate.updatedAt) : 0,
+  };
+}
+
+export function getAutoMineSupportDiagnostics(
+  snapshot: AutoMineDiagnosticsSnapshot | null,
+): AutoMineSupportDiagnostics | null {
+  if (!snapshot) return null;
+  return {
+    phase: snapshot.phase,
+    progress: snapshot.progress,
+    runningParams: snapshot.runningParams,
+    isAutoMining: snapshot.isAutoMining,
+    autoResumeRequested: snapshot.autoResumeRequested,
+    sessionExpired: snapshot.sessionExpired,
+    lastErrorKind: snapshot.lastErrorKind,
+    lastErrorMessage: snapshot.lastErrorMessage,
+    lastStopReason: snapshot.lastStopReason,
+    lastEpoch: snapshot.lastEpoch,
+    retryCount: snapshot.retryCount,
+    updatedAt: snapshot.updatedAt,
   };
 }
 

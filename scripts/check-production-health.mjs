@@ -169,6 +169,11 @@ async function main() {
   if (runtime?.redacted && DIAGNOSTICS_SECRET) {
     runtimeProblems.push("runtime payload is still redacted; diagnostics secret was not accepted");
   }
+  for (const field of ["uptimeSeconds", "rssBytes", "heapUsedBytes", "heapTotalBytes", "externalBytes"]) {
+    if (parsePayloadNonNegativeNumber(runtime?.process?.[field]) === null) {
+      runtimeProblems.push(`runtime process.${field} is missing`);
+    }
+  }
   if (runtime?.publicConfig && typeof runtime.publicConfig === "object") {
     const publicConfig = runtime.publicConfig;
     if (!Number.isInteger(publicConfig.chainId)) {
@@ -230,6 +235,10 @@ async function main() {
       `effectiveLagBlocks=${String(dataSyncSummary.effectiveLagBlocks ?? "n/a")}`,
       `rawLagBlocks=${String(dataSyncSummary.lagBlocks ?? "n/a")}`,
       `indexerRunAgeMs=${String(dataSyncSummary.runCompletedAgeMs ?? "n/a")}`,
+      `rssBytes=${String(parsePayloadNonNegativeNumber(runtime?.process?.rssBytes) ?? "n/a")}`,
+      `heapUsedBytes=${String(parsePayloadNonNegativeNumber(runtime?.process?.heapUsedBytes) ?? "n/a")}`,
+      `dbBytes=${String(parsePayloadNonNegativeNumber(dataSync?.storage?.dbBytes) ?? "n/a")}`,
+      `walBytes=${String(parsePayloadNonNegativeNumber(dataSync?.storage?.walBytes) ?? "n/a")}`,
     ].join(" "),
   );
 }

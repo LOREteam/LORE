@@ -5,13 +5,17 @@ import { findExecutablePath, warmBaseUrl } from "./smoke-browser-lib/core.mjs";
 
 const BASE_URL = process.env.BASELINE_BASE_URL || "http://localhost:3000";
 const OBSERVE_MS = Number.parseInt(process.env.BASELINE_OBSERVE_MS || "10000", 10);
+const SAMPLE_MS = Number.parseInt(process.env.BASELINE_SAMPLE_MS || "30000", 10);
 const VIEWPORT_TEXT = process.env.BASELINE_VIEWPORT || "1440x900";
 const OUTPUT_PATH = path.resolve(
   process.env.BASELINE_OUT || "artifacts/performance/browser-baseline.json",
 );
 
-if (!Number.isFinite(OBSERVE_MS) || OBSERVE_MS < 1_000 || OBSERVE_MS > 120_000) {
-  throw new Error("BASELINE_OBSERVE_MS must be between 1000 and 120000");
+if (!Number.isFinite(OBSERVE_MS) || OBSERVE_MS < 1_000 || OBSERVE_MS > 900_000) {
+  throw new Error("BASELINE_OBSERVE_MS must be between 1000 and 900000");
+}
+if (!Number.isFinite(SAMPLE_MS) || SAMPLE_MS < 1_000 || SAMPLE_MS > 60_000) {
+  throw new Error("BASELINE_SAMPLE_MS must be between 1000 and 60000");
 }
 
 const viewportMatch = /^(\d{3,4})x(\d{3,4})$/.exec(VIEWPORT_TEXT);
@@ -34,6 +38,14 @@ const browserCandidates = [
 ].filter(Boolean);
 
 const round = (value) => (Number.isFinite(value) ? Math.round(value * 100) / 100 : null);
+const sanitizeDiagnostic = (value) =>
+  String(value || "")
+    .replace(/(?:https?|wss?):\/\/\S+/gi, "<url>")
+    .replace(/nonce-[^'\s;]+/gi, "nonce-<redacted>")
+    .replace(/sha256-[^'\s;]+/gi, "sha256-<redacted>")
+    .replace(/0x[a-f0-9]{40,64}/gi, "<hex>")
+    .replace(/\b[a-f0-9]{64}\b/gi, "<hex>")
+    .slice(0, 500);
 
 await warmBaseUrl(BASE_URL, 90_000);
 const executablePath = await findExecutablePath(browserCandidates);
@@ -55,6 +67,8 @@ try {
   let failedExternalResponseCount = 0;
   let requestFailureCount = 0;
   const consoleErrorKinds = new Map();
+  const consoleErrorSamples = [];
+  const requestFailureSamples = [];
 
   const isLocalTarget = (url) => {
     if (url.origin === baseOrigin) return true;
@@ -101,6 +115,13 @@ try {
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
+    let target = "unknown";
+    let locationPath;
+    try {
+      const locationUrl = new URL(message.location().url);
+      target = isLocalTarget(locationUrl) ? "local" : "external";
+      if (target === "local") locationPath = locationUrl.pathname;
+    } catch { /* Console messages may not have a source URL. */ }
     const kind = /content security policy|violates the following/i.test(text)
       ? "csp"
       : /failed to load resource|net::err/i.test(text)
@@ -111,6 +132,9 @@ try {
             ? "wallet"
             : "other";
     increment(consoleErrorKinds, kind);
+    if (consoleErrorSamples.length < 5) {
+      consoleErrorSamples.push({ kind, target, path: locationPath, message: sanitizeDiagnostic(text) });
+    }
   });
   page.on("request", (request) => {
     resourceTypeCounts.set(
@@ -142,8 +166,17 @@ try {
     if (isLocalTarget(url)) failedLocalResponseCount += 1;
     else failedExternalResponseCount += 1;
   });
-  page.on("requestfailed", () => {
+  page.on("requestfailed", (request) => {
     requestFailureCount += 1;
+    if (requestFailureSamples.length < 5) {
+      const url = new URL(request.url());
+      requestFailureSamples.push({
+        target: isLocalTarget(url) ? "local" : "external",
+        path: isLocalTarget(url) ? url.pathname : undefined,
+        resourceType: request.resourceType(),
+        error: sanitizeDiagnostic(request.failure()?.errorText || "unknown"),
+      });
+    }
   });
 
   const startedAt = new Date().toISOString();
@@ -156,7 +189,22 @@ try {
     await soundToggle.click();
     syntheticInteraction = true;
   }
-  await page.waitForTimeout(Math.max(0, OBSERVE_MS - interactionDelayMs));
+  const readRuntimeSnapshot = () => page.evaluate(() => ({
+    domNodes: document.getElementsByTagName("*").length,
+    jsHeapUsedBytes: performance.memory?.usedJSHeapSize ?? null,
+  }));
+  const initialRuntime = await readRuntimeSnapshot();
+  const runtimeSamples = [{ elapsedMs: interactionDelayMs, ...initialRuntime }];
+  const remainingObservationMs = Math.max(0, OBSERVE_MS - interactionDelayMs);
+  const samplingStartedAt = Date.now();
+  while (Date.now() - samplingStartedAt < remainingObservationMs) {
+    const elapsedMs = Date.now() - samplingStartedAt;
+    await page.waitForTimeout(Math.min(SAMPLE_MS, remainingObservationMs - elapsedMs));
+    runtimeSamples.push({
+      elapsedMs: Math.min(OBSERVE_MS, interactionDelayMs + Date.now() - samplingStartedAt),
+      ...await readRuntimeSnapshot(),
+    });
+  }
 
   const metrics = await page.evaluate(() => {
     const navigation = performance.getEntriesByType("navigation")[0];
@@ -199,6 +247,17 @@ try {
   });
 
   const longTasks = metrics.longTasks;
+  const finalRuntimeSample = {
+    elapsedMs: OBSERVE_MS,
+    domNodes: metrics.domNodes,
+    jsHeapUsedBytes: metrics.jsHeapUsedBytes,
+  };
+  if (runtimeSamples.at(-1)?.elapsedMs !== OBSERVE_MS) runtimeSamples.push(finalRuntimeSample);
+  const heapSamples = runtimeSamples
+    .map((sample) => sample.jsHeapUsedBytes)
+    .filter((value) => Number.isFinite(value));
+  const maxJsHeapUsedBytes = heapSamples.length > 0 ? Math.max(...heapSamples) : null;
+  const maxDomNodes = Math.max(...runtimeSamples.map((sample) => sample.domNodes));
   const report = {
     schemaVersion: 1,
     startedAt,
@@ -244,22 +303,43 @@ try {
     },
     requests: {
       sameOriginApiCount: [...apiCounts.values()].reduce((sum, count) => sum + count, 0),
+      sameOriginApiPerMinute: round(
+        ([...apiCounts.values()].reduce((sum, count) => sum + count, 0) * 60_000) / OBSERVE_MS,
+      ),
       sameOriginApiByPath: Object.fromEntries([...apiCounts.entries()].sort()),
       externalFetchCount,
       externalJsonRpcByMethod: Object.fromEntries([...jsonRpcMethodCounts.entries()].sort()),
       failedLocalResponseCount,
       failedExternalResponseCount,
       requestFailureCount,
+      requestFailureSamples,
     },
     runtime: {
+      initialDomNodes: initialRuntime.domNodes,
       domNodes: metrics.domNodes,
+      domNodeDelta: metrics.domNodes - initialRuntime.domNodes,
+      initialJsHeapUsedBytes: initialRuntime.jsHeapUsedBytes,
       jsHeapUsedBytes: metrics.jsHeapUsedBytes,
+      jsHeapUsedDeltaBytes:
+        metrics.jsHeapUsedBytes == null || initialRuntime.jsHeapUsedBytes == null
+          ? null
+          : metrics.jsHeapUsedBytes - initialRuntime.jsHeapUsedBytes,
+      maxJsHeapUsedBytes,
+      jsHeapPeakDeltaBytes:
+        maxJsHeapUsedBytes == null || initialRuntime.jsHeapUsedBytes == null
+          ? null
+          : maxJsHeapUsedBytes - initialRuntime.jsHeapUsedBytes,
       jsHeapTotalBytes: metrics.jsHeapTotalBytes,
+      maxDomNodes,
+      domNodePeakDelta: maxDomNodes - initialRuntime.domNodes,
+      sampleIntervalMs: SAMPLE_MS,
+      samples: runtimeSamples,
       longTaskCount: longTasks.length,
       longTaskTotalMs: round(longTasks.reduce((sum, duration) => sum + duration, 0)),
       longestTaskMs: round(Math.max(0, ...longTasks)),
       consoleErrorCount: [...consoleErrorKinds.values()].reduce((sum, count) => sum + count, 0),
       consoleErrorsByKind: Object.fromEntries([...consoleErrorKinds.entries()].sort()),
+      consoleErrorSamples,
     },
   };
 

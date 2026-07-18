@@ -13,6 +13,16 @@ import { FloatingActions } from "./components/FloatingActions";
 import type { LiveStateApiResponse } from "./hooks/useGameLiveStateSnapshot";
 import type { RecentWin } from "./hooks/useRecentWins";
 import { useLineaOreClientRuntime } from "./hooks/useLineaOreClientRuntime";
+import type { TabId } from "./lib/types";
+
+const MAIN_SECTION_LABELS: Record<TabId, string> = {
+  hub: "Mining Hub",
+  analytics: "Analytics",
+  rebate: "Safety Pool",
+  leaderboards: "Leaderboards",
+  whitepaper: "White Paper",
+  faq: "FAQ",
+};
 
 const LazyFirstVisitTutorial = dynamic(
   () => import("./components/FirstVisitTutorial").then((mod) => mod.FirstVisitTutorial),
@@ -65,7 +75,10 @@ export default function LineaOreClient({
 
       <Sidebar {...sidebarProps} mobileOpen={mobileSidebarOpen} onMobileClose={closeMobileSidebar} />
 
-      <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-visible p-2.5 pb-[calc(6.35rem+env(safe-area-inset-bottom))] md:p-4 md:pb-24 lg:pb-4 lg:overflow-x-hidden lg:overflow-y-auto">
+      <main
+        aria-label={MAIN_SECTION_LABELS[activeTab]}
+        className="relative z-10 flex min-w-0 flex-1 flex-col overflow-visible p-2.5 pb-[calc(6.35rem+env(safe-area-inset-bottom))] md:p-4 md:pb-24 lg:pb-4 lg:overflow-x-hidden lg:overflow-y-auto"
+      >
         <OfflineBanner />
         {/* Mobile sidebar toggle */}
         <button

@@ -1,0 +1,38 @@
+import "dotenv/config";
+import { existsSync, statSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { DatabaseSync } from "node:sqlite";
+
+export function verifySqliteStartup(sourceInput) {
+  if (sourceInput === ":memory:") return { status: "pass", state: "memory" };
+  const sourcePath = path.resolve(sourceInput);
+  if (!existsSync(sourcePath)) return { status: "pass", state: "missing-new" };
+  const stat = statSync(sourcePath);
+  if (!stat.isFile()) throw new Error("SQLite startup path is not a regular file");
+  if (stat.size === 0) return { status: "pass", state: "empty-new" };
+
+  let db;
+  try {
+    db = new DatabaseSync(sourcePath, { readOnly: true });
+    const result = String(db.prepare("PRAGMA quick_check").get()?.quick_check ?? "");
+    if (result !== "ok") throw new Error(result || "unknown integrity result");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`SQLite startup validation failed: ${message}`);
+  } finally {
+    db?.close();
+  }
+  return { status: "pass", state: "existing", bytes: stat.size };
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isMain) {
+  try {
+    const result = verifySqliteStartup(process.env.LORE_DB_PATH || "data/lore.sqlite");
+    console.log(JSON.stringify({ status: result.status, state: result.state, bytes: result.bytes ?? 0 }));
+  } catch (error) {
+    console.error(`[db-startup] FAIL ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
+}

@@ -30,7 +30,7 @@ import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { createRouteCache } from "../_lib/routeCache";
 import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
 
-const LOG_CHUNK_BLOCKS = 50_000n;
+const LOG_CHUNK_BLOCKS = 10_000n;
 const ENABLE_CHAIN_RECOVERY = process.env.API_DEPOSITS_CHAIN_RECOVERY === "1";
 const DEPOSITS_ROUTE_CACHE_MS = 15_000;
 const DEPOSITS_ROUTE_CACHE_MAX_KEYS = 512;

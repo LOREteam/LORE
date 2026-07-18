@@ -20,6 +20,7 @@ const endpoints = [
   { name: "live-state", path: "/api/live-state", weight: 34 },
   { name: "epochs", path: "/api/epochs?epochs=1,2,3", weight: 12 },
   { name: "jackpots", path: "/api/jackpots", weight: 9 },
+  { name: "global-stats", path: "/api/global-stats", weight: 6 },
   { name: "leaderboards", path: "/api/leaderboards", weight: 8 },
   { name: "recent-wins", path: "/api/recent-wins", weight: 8 },
   { name: "chat-messages", path: "/api/chat/messages", weight: 9 },
@@ -102,12 +103,27 @@ async function fetchWithTimeout(path, workerId = 0) {
 }
 
 async function warmUp() {
+  const coldStats = new Map();
   const results = await Promise.all(
     endpoints.map(async (endpoint) => {
+      const stats = emptyStats();
+      coldStats.set(endpoint.name, stats);
+      const startedAt = performance.now();
+      stats.count = 1;
       try {
-        await fetchWithTimeout(endpoint.path);
+        const response = await fetchWithTimeout(endpoint.path);
+        stats.latencies.push(performance.now() - startedAt);
+        recordStatus(stats, response.status);
+        if (response.ok || response.status === 429) stats.ok = 1;
+        else {
+          stats.failed = 1;
+          recordError(stats, new Error(`status ${response.status}`));
+        }
         return null;
-      } catch {
+      } catch (error) {
+        stats.latencies.push(performance.now() - startedAt);
+        stats.failed = 1;
+        recordError(stats, error);
         return endpoint.name;
       }
     }),
@@ -119,6 +135,7 @@ async function warmUp() {
   if (failed.length > 0) {
     console.warn(`Warm-up skipped failed endpoints: ${failed.join(", ")}`);
   }
+  return coldStats;
 }
 
 async function runWorker(workerId, deadline, globalStats, byEndpoint) {
@@ -193,7 +210,15 @@ async function main() {
 
   console.log(`Load base URL: ${BASE_URL}`);
   console.log(`Concurrency: ${CONCURRENCY}; client IPs: ${CLIENT_IPS}; duration: ${DURATION_MS}ms; timeout: ${TIMEOUT_MS}ms`);
-  await warmUp();
+  const coldStats = await warmUp();
+  console.log("\nCold first requests:");
+  for (const endpoint of endpoints) {
+    printStats(`COLD ${endpoint.name}`, coldStats.get(endpoint.name) ?? emptyStats());
+  }
+  const coldFailures = endpoints.filter((endpoint) => (coldStats.get(endpoint.name)?.failed ?? 1) > 0);
+  if (coldFailures.length > 0) {
+    throw new Error(`cold load checks failed: ${coldFailures.map((endpoint) => endpoint.name).join(", ")}`);
+  }
 
   const globalStats = emptyStats();
   const byEndpoint = new Map();
@@ -226,6 +251,17 @@ async function main() {
   }
   if (p95 > MAX_P95_MS) {
     throw new Error(`load test failed: p95 ${p95.toFixed(0)}ms > ${MAX_P95_MS}ms`);
+  }
+  for (const endpoint of endpoints) {
+    const stats = byEndpoint.get(endpoint.name) ?? emptyStats();
+    const endpointErrorRate = stats.count > 0 ? stats.failed / stats.count : 1;
+    const endpointP95 = percentile(stats.latencies, 95);
+    if (endpointErrorRate > MAX_ERROR_RATE) {
+      throw new Error(`${endpoint.name} load failed: error rate ${(endpointErrorRate * 100).toFixed(2)}% > ${(MAX_ERROR_RATE * 100).toFixed(2)}%`);
+    }
+    if (endpointP95 > MAX_P95_MS) {
+      throw new Error(`${endpoint.name} load failed: p95 ${endpointP95.toFixed(0)}ms > ${MAX_P95_MS}ms`);
+    }
   }
 }
 

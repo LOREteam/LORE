@@ -14,10 +14,12 @@ import {
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { sanitizeChatAvatarValue } from "../../../lib/chatAvatar";
 import { logRouteError } from "../../_lib/routeError";
+import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
 
 const MAX_TEXT_LENGTH = 280;
 const MAX_NAME_LENGTH = 20;
 const MAX_AVATAR_LENGTH = 8_000;
+const MAX_REQUEST_BODY_BYTES = 16_384;
 const CHAT_MESSAGES_CACHE_MS = 1_000;
 const MAX_CHAT_CACHE_ENTRIES = 4;
 const ROUTE_METRIC_KEY = "api/chat/messages";
@@ -71,7 +73,12 @@ export async function POST(request: NextRequest) {
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
   const cacheKey = "latest";
   try {
-    const body = (await request.json().catch(() => null)) as ChatMessagePayload | null;
+    const parsedBody = await readBoundedJsonBody<ChatMessagePayload>(request, MAX_REQUEST_BODY_BYTES);
+    if (!parsedBody.ok && parsedBody.reason === "too-large") {
+      failRouteMetric(metric, 413);
+      return applyNoStoreHeaders(NextResponse.json({ error: "Message payload too large" }, { status: 413 }), { varyCookie: true });
+    }
+    const body = parsedBody.ok ? parsedBody.value : null;
     if (!body || typeof body !== "object") {
       failRouteMetric(metric, 400);
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid message payload" }, { status: 400 }), { varyCookie: true });

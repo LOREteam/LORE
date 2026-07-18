@@ -13,6 +13,9 @@ import { logRouteError } from "../../_lib/routeError";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { clearAdminSession, issueAdminSession, readAdminSession } from "../../_lib/adminSession";
 import { acquireExpiringLock } from "../../../../server/storage";
+import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
+
+const MAX_REQUEST_BODY_BYTES = 8_192;
 
 type AdminAuthPayload = {
   authAddress?: unknown;
@@ -44,7 +47,11 @@ export async function POST(request: NextRequest) {
   if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
   try {
-    const body = (await request.json().catch(() => null)) as AdminAuthPayload | null;
+    const parsedBody = await readBoundedJsonBody<AdminAuthPayload>(request, MAX_REQUEST_BODY_BYTES);
+    if (!parsedBody.ok && parsedBody.reason === "too-large") {
+      return applyNoStoreHeaders(NextResponse.json({ error: "Auth payload too large" }, { status: 413 }), { varyCookie: true });
+    }
+    const body = parsedBody.ok ? parsedBody.value : null;
     if (!body || typeof body !== "object") {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth payload" }, { status: 400 }), { varyCookie: true });
     }
