@@ -28,7 +28,8 @@ if (!compilerVersion.startsWith(EXPECTED_COMPILER)) {
   throw new Error(`Expected solc ${EXPECTED_COMPILER}, received ${compilerVersion}`);
 }
 
-const source = fs.readFileSync(CONTRACT_PATH, "utf8");
+// Solidity metadata hashes source bytes, so canonicalize checkout-specific line endings.
+const source = fs.readFileSync(CONTRACT_PATH, "utf8").replace(/\r\n?/g, "\n");
 const input = {
   language: "Solidity",
   sources: { [CONTRACT_PATH]: { content: source } },
