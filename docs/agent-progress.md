@@ -52,6 +52,11 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   with an unreachable primary RPC recovered through the configured fallback:
   homepage, live-state, runtime/data-sync health, leaderboards, chat, and global
   stats all returned 200; live-state was 26 ms and data-sync was 366 ms.
+- A production proxy-identity drill rejected missing secret, wrong secret, and
+  malformed forwarded IP with 503. A trusted IP received exactly the configured
+  30 runtime-health requests before 429 responses; a second IP had an independent
+  bucket, while alternating User-Agent values behind one NAT/IP shared the same
+  limit. External-store behavior across two replicas still needs deployed proof.
 
 - Fixed the strict testnet canary proof fixture to use the supported `single`
   mode. `proof:drafts` and the complete `proof:local` L1-L14 preflight pass.

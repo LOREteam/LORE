@@ -174,6 +174,10 @@ Open linked evidence only when a task needs it.
   unreachable primary RPC, configured fallback recovered and homepage,
   live-state, health, leaderboards, chat, and global stats all returned 200;
   live-state completed in 26 ms and data-sync in 366 ms.
+- Production proxy identity fails closed for missing/wrong proxy secrets and
+  malformed forwarded IPs. The local drill enforced the configured 30-request
+  limit per trusted IP, kept a second IP independent, and grouped different
+  User-Agent values behind the same NAT/IP into one bucket.
 - Live canary output now records a final summary event. Optional monitor stale
   detection alerts when an unfinished soak stops producing events without
   treating an intentionally completed zero-failure log as stale.
