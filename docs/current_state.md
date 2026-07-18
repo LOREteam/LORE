@@ -74,6 +74,12 @@ Open linked evidence only when a task needs it.
   unknown target while preserving the total and kind counts. A focused 10-second
   production run verified the new field with zero console errors and zero failed
   local or external responses.
+- Exact commit `82d8d4a` passed a separate local clean-checkout CI reproduction:
+  `npm ci`, wallet peer integrity, production dependency audit, lint, typecheck,
+  logic and contract tests, compilation provenance, SQLite and monitoring
+  drills, production build, and the full responsive browser smoke. The first
+  install attempt hit a transient `ECONNRESET`; one clean retry succeeded. The
+  temporary worktree and production server were removed afterward.
 - Testnet SQLite backup, integrity, restore, catch-up, and restart/reconcile drills passed without modifying the active database.
 - The current production bundle retains lazy boundaries for non-critical views; the wallet/session code remains eager for reliable recovery.
 - Bundle measurement now targets the current completed `.next` output by
@@ -223,6 +229,9 @@ Open linked evidence only when a task needs it.
 - Existing evidence must not be presented as a fresh rerun.
 - Responsive mobile coverage is recorded; true-device HTTPS wallet coverage remains a deployment-stage check.
 - Local proof tooling passing does not satisfy mainnet G1-G14 evidence.
+- The repository workflow runs on every branch push, but the available GitHub
+  connector exposes only pull-request-triggered runs. The current commit therefore
+  has complete local clean-checkout evidence but no connector-readable remote run.
 - The remaining production dependency advisories are concentrated in the wallet
   dependency graph, including `uuid`. Their available automated fixes require
   coordinated breaking Privy/wagmi changes, so they are deferred rather than

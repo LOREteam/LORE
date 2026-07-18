@@ -26,6 +26,22 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Current-commit clean-checkout reproduction
+
+- Created a detached temporary worktree at exact commit `82d8d4a`. The first
+  `npm ci` ended on a transient network `ECONNRESET`; after removing only that
+  partial install, the single retry installed 1,167 packages from the lockfile.
+- Wallet peer integrity, production audit, lint, typecheck, business logic,
+  contract invariants, exact compilation provenance, SQLite operations,
+  monitoring alert/recovery, production build, and full responsive browser smoke
+  passed in the isolated checkout. Browser smoke covered numeric typography,
+  persistent and failure-state Auto-Miner UI, pending reload/reopen recovery,
+  mobile layouts, empty states, and live pool-chart freshness.
+- The temporary server was stopped and the isolated worktree was removed. The
+  push workflow is configured for all branches, but the available connector
+  cannot read push-triggered runs, so this is local clean-checkout evidence rather
+  than a claim about the current remote Actions run.
+
 ## 2026-07-18 - Targeted Sentry dependency hardening
 
 - Updated only `@sentry/nextjs` from 10.56.0 to 10.66.0. The resulting
