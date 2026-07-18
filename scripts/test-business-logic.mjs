@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -2564,6 +2564,42 @@ async function main() {
     /lastEventAt[\s\S]*secondsSinceLastEvent/,
     "running soak status must expose a compact event-age signal for stall diagnosis",
   );
+  const soakStatusDir = mkdtempSync(join(tmpdir(), "lore-soak-status-"));
+  try {
+    const soakLiveLogPath = join(soakStatusDir, "live.jsonl");
+    writeFileSync(soakLiveLogPath, `${JSON.stringify({
+      mode: "preflight",
+      ok: false,
+      role: "AUTOMINER_C",
+      enoughEth: false,
+      enoughToken: true,
+      errorKind: "untrusted raw error text",
+      timestamp: "2026-07-18T00:00:00.000Z",
+    })}\n`, "utf8");
+    writeFileSync(join(soakStatusDir, "status.json"), `${JSON.stringify({
+      status: "failed",
+      dryRun: true,
+      startedAt: "2026-07-18T00:00:00.000Z",
+      finishedAt: "2026-07-18T00:00:01.000Z",
+      exitCode: 1,
+      stopReason: "canary-1",
+      supervisorPid: -1,
+      artifacts: { liveLog: soakLiveLogPath },
+    })}\n`, "utf8");
+    const soakStatusResult = spawnSync(process.execPath, ["scripts/run-testnet-soak-supervisor.mjs", "--status"], {
+      cwd: process.cwd(),
+      env: { ...process.env, SOAK_OUT_DIR: soakStatusDir },
+      encoding: "utf8",
+    });
+    assert.equal(soakStatusResult.status, 0, soakStatusResult.stderr);
+    const safeSoakStatus = JSON.parse(soakStatusResult.stdout);
+    assert.deepEqual(safeSoakStatus.progress.preflightFailures, [
+      { role: "AUTOMINER_C", reason: "insufficient-native-gas" },
+    ]);
+    assert.doesNotMatch(soakStatusResult.stdout, /untrusted raw error text/);
+  } finally {
+    rmSync(soakStatusDir, { recursive: true, force: true });
+  }
   assert.match(
     analyzeCanarySource,
     /successful health samples[\s\S]*failed health samples/,

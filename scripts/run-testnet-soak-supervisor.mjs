@@ -119,6 +119,7 @@ async function summarizeLiveLog(path) {
     rpcFailoverInjectionEvents: 0,
     resolverFallbacks: 0,
     slowSendCount: 0,
+    preflightFailures: [],
     malformedLines: 0,
     lastEventAt: null,
     latencyMs: null,
@@ -145,6 +146,21 @@ async function summarizeLiveLog(path) {
     }
     if (typeof event.timestamp === "string" && Number.isFinite(Date.parse(event.timestamp))) {
       summary.lastEventAt = event.timestamp;
+    }
+    if (event.mode === "preflight" && event.ok === false) {
+      const role = typeof event.role === "string" && /^[A-Z0-9_]{1,32}$/.test(event.role)
+        ? event.role
+        : "UNKNOWN";
+      const reason = event.enoughEth === false && event.enoughToken === false
+        ? "insufficient-native-and-token"
+        : event.enoughEth === false
+          ? "insufficient-native-gas"
+          : event.enoughToken === false
+            ? "insufficient-token"
+            : "preflight-failed";
+      if (!summary.preflightFailures.some((failure) => failure.role === role && failure.reason === reason)) {
+        summary.preflightFailures.push({ role, reason });
+      }
     }
     if (event.mode === "diagnostic" && event.sampleKind === "health") {
       if (Number.isSafeInteger(event.healthRetryCount) && event.healthRetryCount > 0) {

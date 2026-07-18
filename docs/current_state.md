@@ -322,7 +322,10 @@ The production baseline after disk recovery passes typecheck, logic, contract
 invariants, compilation provenance, build, HTTP smoke, and responsive browser
 smoke. A new 1,440-round testnet soak attempted to start after that baseline,
 but its transaction-free wallet preflight found insufficient native gas for
-`AUTOMINER_C`; no bet was sent. Top up that role before restarting.
+`AUTOMINER_C`; no bet was sent. The redacted `soak:testnet:status` output now
+includes `progress.preflightFailures` with the allowlisted role and normalized
+balance category, so this blocker no longer requires opening the raw canary log.
+Top up that role before restarting.
 
 The previous 1,440-round testnet soak started under the local supervisor at
 `2026-07-17T23:51:19.638Z` and stopped after 64 successful unique bets when the

@@ -26,6 +26,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Redacted soak preflight diagnostics
+
+- A fresh transaction-free soak preflight stopped before any bet because
+  `AUTOMINER_C` lacks native gas; the other three configured roles passed.
+- `soak:testnet:status` now reports only allowlisted preflight role/reason pairs
+  and does not surface raw error, address, RPC, or secret fields.
+- A synthetic CLI status check, the real failed preflight artifact, focused
+  ESLint, and `test:logic` all verify the behavior.
+
 ## 2026-07-18 - Clean-checkout proof for forced-refresh bound
 
 - Created a detached checkout at exact published commit `188fea1`; `npm ci`
