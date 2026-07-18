@@ -80,6 +80,9 @@ Open linked evidence only when a task needs it.
   drills, production build, and the full responsive browser smoke. The first
   install attempt hit a transient `ECONNRESET`; one clean retry succeeded. The
   temporary worktree and production server were removed afterward.
+- A subsequent fresh read-only chain/indexer audit over epochs 417-466 matched
+  50 resolves, 45 bets, and 45 resolver reward accruals with zero mismatches.
+  No transaction was sent.
 - Testnet SQLite backup, integrity, restore, catch-up, and restart/reconcile drills passed without modifying the active database.
 - The current production bundle retains lazy boundaries for non-critical views; the wallet/session code remains eager for reliable recovery.
 - Bundle measurement now targets the current completed `.next` output by

@@ -26,6 +26,13 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Fresh post-CI chain/indexer audit
+
+- A read-only 50-epoch audit over epochs 417-466 compared finalized chain logs
+  with the current scoped SQLite index. It matched 50 resolves, 45 bets, and 45
+  resolver reward accruals with zero missing, duplicate, or mismatched rows.
+- The audit sent no transaction and wrote only its ignored compact JSON result.
+
 ## 2026-07-18 - Current-commit clean-checkout reproduction
 
 - Created a detached temporary worktree at exact commit `82d8d4a`. The first
