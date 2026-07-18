@@ -181,6 +181,9 @@ Open linked evidence only when a task needs it.
 - Empty-DB health semantics are explicit: runtime remains available, while the
   public redacted data-sync response reports `degraded`, no last indexed block,
   and the missing-epoch count.
+- A real online backup of the current testnet DB was restored from the generated
+  backup artifact into a separate external path. Both copies passed integrity,
+  and their 15-table schema, 963 row counts, and hashed indexer metadata matched.
 - Live canary output now records a final summary event. Optional monitor stale
   detection alerts when an unfinished soak stops producing events without
   treating an intentionally completed zero-failure log as stale.

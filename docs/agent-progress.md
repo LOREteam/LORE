@@ -60,6 +60,11 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 - On a separate empty-DB process, public runtime health remained `ok` while
   data-sync correctly returned `degraded`, redacted diagnostics, no indexed
   block, and the missing-epoch count instead of presenting a false healthy state.
+- A real online backup of the current testnet SQLite was written outside the
+  repository and restored from that exact backup into a distinct external path.
+  Source and restored copies both returned `integrity_check=ok`; all 15 tables,
+  963 rows, and the hashed last-indexed metadata matched. The configured daily
+  PM2 backup schedule remains covered by the process-model preflight.
 
 - Fixed the strict testnet canary proof fixture to use the supported `single`
   mode. `proof:drafts` and the complete `proof:local` L1-L14 preflight pass.
