@@ -178,6 +178,9 @@ Open linked evidence only when a task needs it.
   malformed forwarded IPs. The local drill enforced the configured 30-request
   limit per trusted IP, kept a second IP independent, and grouped different
   User-Agent values behind the same NAT/IP into one bucket.
+- Empty-DB health semantics are explicit: runtime remains available, while the
+  public redacted data-sync response reports `degraded`, no last indexed block,
+  and the missing-epoch count.
 - Live canary output now records a final summary event. Optional monitor stale
   detection alerts when an unfinished soak stops producing events without
   treating an intentionally completed zero-failure log as stale.

@@ -57,6 +57,9 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   30 runtime-health requests before 429 responses; a second IP had an independent
   bucket, while alternating User-Agent values behind one NAT/IP shared the same
   limit. External-store behavior across two replicas still needs deployed proof.
+- On a separate empty-DB process, public runtime health remained `ok` while
+  data-sync correctly returned `degraded`, redacted diagnostics, no indexed
+  block, and the missing-epoch count instead of presenting a false healthy state.
 
 - Fixed the strict testnet canary proof fixture to use the supported `single`
   mode. `proof:drafts` and the complete `proof:local` L1-L14 preflight pass.
