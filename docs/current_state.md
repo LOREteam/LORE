@@ -219,6 +219,12 @@ Open linked evidence only when a task needs it.
   unreachable primary RPC, configured fallback recovered and homepage,
   live-state, health, leaderboards, chat, and global stats all returned 200;
   live-state completed in 26 ms and data-sync in 366 ms.
+- Empty jackpot storage no longer blocks `/api/jackpots` on a synchronous
+  historical RPC scan. It returns an explicit empty/stale payload and starts the
+  existing deduplicated background recovery. A fresh isolated-DB production run
+  returned 200 in 231 ms for the initial request and 15 ms for `fresh=1`, then
+  passed all HTTP and responsive browser checks without weakening pool-chart
+  freshness.
 - Production proxy identity fails closed for missing/wrong proxy secrets and
   malformed forwarded IPs. The local drill enforced the configured 30-request
   limit per trusted IP, kept a second IP independent, and grouped different

@@ -26,6 +26,19 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Bounded empty-DB jackpot cold start
+
+- Reproduced `/api/jackpots` blocking for three 60-second smoke timeouts when a
+  new SQLite database had no indexed jackpot rows and the route synchronously
+  scanned chain history.
+- Empty storage now returns an explicit empty/stale payload immediately and uses
+  the existing deduplicated background recovery. The same bounded path covers
+  `fresh=1` without reducing client refresh frequency.
+- On a new isolated SQLite path, the first normal request returned 200 in 231 ms
+  and `fresh=1` returned 200 in 15 ms. Logic, focused ESLint, typecheck,
+  production build, all 23 HTTP checks, and responsive browser smoke passed;
+  pool-chart freshness and empty jackpot history remained covered.
+
 ## 2026-07-18 - Activated Next.js 16 security Proxy
 
 - A direct production response check proved that `app/middleware.ts` was not

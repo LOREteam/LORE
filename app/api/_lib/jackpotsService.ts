@@ -525,6 +525,20 @@ export async function readJackpotPayload(options: JackpotReadOptions = {}): Prom
     return { payload: jackpotResponseCache.payload, source: "cache" };
   }
 
+  const seedJackpots = normalizeStoredJackpots();
+  if (seedJackpots.length === 0) {
+    const staleCache = jackpotResponseCache?.payload ?? null;
+    if (staleCache) {
+      maybeStartJackpotRecovery(staleCache.jackpots);
+      return { payload: staleCache, source: "stale-cache" };
+    }
+
+    const seq = ++jackpotBuildSeq;
+    const payload = commitJackpotResponseCache({ jackpots: [] }, JACKPOT_ROUTE_CACHE_MS, seq);
+    maybeStartJackpotRecovery([]);
+    return { payload, source: "rebuilt" };
+  }
+
   if (options.forceFresh) {
     if (jackpotForceFreshInflight) {
       return { payload: await jackpotForceFreshInflight, source: "inflight" };
@@ -535,6 +549,7 @@ export async function readJackpotPayload(options: JackpotReadOptions = {}): Prom
       const { payload } = await buildJackpotsPayload({
         allowSlowRecovery: true,
         scheduleBackgroundRecovery: false,
+        seedJackpots,
       });
       return commitJackpotResponseCache(payload, JACKPOT_ROUTE_CACHE_MS, seq);
     })().finally(() => {
@@ -554,31 +569,11 @@ export async function readJackpotPayload(options: JackpotReadOptions = {}): Prom
   }
 
   const seq = ++jackpotBuildSeq;
-  const seedJackpots = normalizeStoredJackpots();
-  if (seedJackpots.length > 0) {
-    const payload = commitJackpotResponseCache(
-      { jackpots: seedJackpots.slice(0, JACKPOT_HISTORY_LIMIT) },
-      JACKPOT_ROUTE_CACHE_MS,
-      seq,
-    );
-    maybeStartJackpotRecovery(seedJackpots);
-    return { payload, source: "rebuilt" };
-  }
-
-  try {
-    const { payload: recoveredPayload } = await buildJackpotsPayload({
-      allowSlowRecovery: true,
-      scheduleBackgroundRecovery: false,
-      seedJackpots: [],
-    });
-    return {
-      payload: commitJackpotResponseCache(recoveredPayload, JACKPOT_ROUTE_CACHE_MS, seq),
-      source: "rebuilt",
-    };
-  } catch (error) {
-    logRouteError(ROUTE_METRIC_KEY, error, { phase: "bootstrap-recovery" });
-    const payload = commitJackpotResponseCache({ jackpots: [] }, JACKPOT_ROUTE_CACHE_MS, seq);
-    maybeStartJackpotRecovery([]);
-    return { payload, source: "rebuilt" };
-  }
+  const payload = commitJackpotResponseCache(
+    { jackpots: seedJackpots.slice(0, JACKPOT_HISTORY_LIMIT) },
+    JACKPOT_ROUTE_CACHE_MS,
+    seq,
+  );
+  maybeStartJackpotRecovery(seedJackpots);
+  return { payload, source: "rebuilt" };
 }

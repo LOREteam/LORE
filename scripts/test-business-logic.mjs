@@ -2350,6 +2350,16 @@ async function main() {
     /BigInt\([^)]*(?:row\.blockNumber|blockNumber|a\.blockNumber|b\.blockNumber)[^)]*\)/,
     "jackpot service must not BigInt-parse unchecked stored block numbers",
   );
+  assert.match(
+    jackpotsServiceSource,
+    /if \(seedJackpots\.length === 0\)[\s\S]*commitJackpotResponseCache\(\{ jackpots: \[\] \}[\s\S]*maybeStartJackpotRecovery\(\[\]\)[\s\S]*return \{ payload, source: "rebuilt" \}/,
+    "empty jackpot storage must return immediately and recover in the background",
+  );
+  assert.doesNotMatch(
+    jackpotsServiceSource,
+    /await buildJackpotsPayload\(\{[\s\S]{0,180}seedJackpots: \[\]/,
+    "empty jackpot storage must not block the HTTP request on historical RPC recovery",
+  );
   const walletDeepScanPanelSource = readFileSync("app/components/wallet/WalletSettingsDeepScanPanel.tsx", "utf8");
   assert.match(
     walletDeepScanPanelSource,
