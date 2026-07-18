@@ -138,6 +138,9 @@ Open linked evidence only when a task needs it.
 - CI now runs logic, contract, SQLite, monitoring, provenance, build, production
   browser, and high/critical dependency checks from the lockfile instead of
   relying on ignored local ABI/BIN artifacts.
+- Clean-checkout GitHub Actions run `29634688258` passed all of those gates on
+  published commit `129314f`, including wallet dependency peer integrity and
+  production browser smoke.
 - Online SQLite backup and stale-scope dry-run are now explicit operator commands;
   both require a caller-selected source and the dry-run is strictly read-only.
 - A corrupt SQLite cold start now fails before Next.js opens its listener, while
@@ -158,6 +161,10 @@ Open linked evidence only when a task needs it.
   scheduled chain/indexer audit. Mismatch, stale, invalid, oversized, and
   unavailable artifacts alert without putting chain scans in the 30-second
   health loop; fresh pass output produces a deduplicated recovery.
+- On 2026-07-18 that audit detected a stale local indexer in a real 50-epoch
+  window. The normal one-shot catch-up restored the missing rows, and the repeat
+  audit passed over epochs 417-466 with 50 resolves, 45 bets, 45 resolver
+  rewards, and zero mismatches.
 - Live canary output now records a final summary event. Optional monitor stale
   detection alerts when an unfinished soak stops producing events without
   treating an intentionally completed zero-failure log as stale.
@@ -188,9 +195,8 @@ Open linked evidence only when a task needs it.
 - Validate the shared limiter with real external-store credentials across two replicas.
 - Validate HTTPS Privy and true-device mobile Web3 flows on the final origin.
 - Validate real monitoring delivery/recovery and schedule operational backups.
-- Complete the funded 24-48 hour soak and let the remote clean-checkout CI gate
-  run on the published branch. Local `npm ci` now passes from the committed
-  lockfile shape.
+- Complete the funded 24-48 hour soak. Remote clean-checkout CI is green on the
+  published baseline and remains required for subsequent revisions.
 - The active 1,440-round randomized soak covers all four configured roles with
   RPC-failover injection and production-like health telemetry. Its supervisor
   creates the diagnostics secret in memory and records only redacted labels and

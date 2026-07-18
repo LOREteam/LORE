@@ -26,6 +26,20 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-18 - Clean-checkout CI and indexer recovery
+
+- GitHub Actions run `29634688258` passed from clean checkout at `129314f`,
+  including lockfile install, wallet peer integrity, dependency audit, lint,
+  typecheck, logic and contract tests, compilation provenance, SQLite and
+  monitoring drills, production build, and browser smoke.
+- A fresh read-only 50-epoch chain/indexer audit detected an operationally stale
+  local indexer: missing/mismatched bet and resolve rows plus absent resolver
+  reward metadata. No transaction was sent.
+- The normal one-shot indexer catch-up processed the missing finalized logs and
+  reconciliation reported no missing epochs. Repeating the same audit over
+  epochs 417-466 passed with 50 resolved epochs, 45 bets, 45 resolver rewards,
+  and zero mismatches.
+
 - Fixed the strict testnet canary proof fixture to use the supported `single`
   mode. `proof:drafts` and the complete `proof:local` L1-L14 preflight pass.
 - Added `lore-backup` and `lore-chain-audit` as non-restarting PM2 cron jobs,
@@ -185,14 +199,14 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   Web3 browser, including signed pending/reject/revert recovery.
 - Verify alert delivery/recovery through the real monitoring provider and install
   the backup/checkpoint drill in the deployment scheduler.
-- Complete a 24-48 hour funded soak and clean-checkout CI before mainnet signoff.
+- Complete a 24-48 hour funded soak before mainnet signoff; clean-checkout CI is
+  green for the published testnet baseline.
 - Do not launch another long funded soak from a managed terminal session; use a
   durable supervisor and retain its PID/heartbeat plus the canary JSONL.
-- Let GitHub run the expanded clean-checkout workflow; a local isolated `npm ci`
-  reached package extraction but could not finish because the host disk filled.
+- Keep the expanded clean-checkout workflow required on subsequent published
+  revisions; the current published baseline passed it.
 - Start the targeted Codex Security diff scan from its app UI when interactive
   scan setup is available.
-- Commit/push remains blocked in this environment because `.git` is read-only.
 
 ## 2026-07-17 - Canary soak telemetry
 
