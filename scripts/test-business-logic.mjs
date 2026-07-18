@@ -1112,6 +1112,9 @@ async function main() {
     /failedLocalResponseCount > 0[\s\S]*localRequestFailureCount > 0[\s\S]*localConsoleErrorCount > 0[\s\S]*status: qualityIssues\.length === 0 \? "pass" : "degraded"/,
     "production browser baseline must mark local HTTP, network, or console failures as degraded",
   );
+  const proxySource = readFileSync("proxy.ts", "utf8");
+  assert.match(proxySource, /export function proxy\(request: NextRequest\)/, "Next.js 16 security headers must use the root Proxy convention");
+  assert.match(proxySource, /Content-Security-Policy[\s\S]*X-Frame-Options[\s\S]*Permissions-Policy/, "root Proxy must enforce the security header set");
   const reducedMotionSource = readFileSync("app/hooks/useReducedMotion.ts", "utf8");
   assert.match(
     reducedMotionSource,

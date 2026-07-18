@@ -58,6 +58,22 @@ const checks = [
       if (!response.headers.get("content-type")?.includes("text/html")) {
         throw new Error("expected text/html");
       }
+      const csp = response.headers.get("content-security-policy") || "";
+      if (!csp.includes("default-src 'self'") || !csp.includes("frame-ancestors 'none'")) {
+        throw new Error("homepage is missing the enforced content security policy");
+      }
+      if (response.headers.get("x-content-type-options") !== "nosniff") {
+        throw new Error("homepage is missing MIME sniffing protection");
+      }
+      if (response.headers.get("x-frame-options") !== "DENY") {
+        throw new Error("homepage is missing clickjacking protection");
+      }
+      if (response.headers.get("referrer-policy") !== "strict-origin-when-cross-origin") {
+        throw new Error("homepage is missing the expected referrer policy");
+      }
+      if (!response.headers.get("permissions-policy")?.includes("camera=()")) {
+        throw new Error("homepage is missing the restricted permissions policy");
+      }
       if (body.length < 1000) {
         throw new Error("homepage body too small");
       }

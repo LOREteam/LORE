@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-// API routes now enforce their own per-route limits. Keep middleware passive so
-// chat polling and analytics refreshes do not hit an extra global throttle.
+// API routes enforce their own per-route limits. Keep Proxy passive so chat
+// polling and analytics refreshes do not hit an extra global throttle.
 const isDev = process.env.NODE_ENV !== "production";
 
 function createNonce() {
@@ -34,7 +34,7 @@ function buildContentSecurityPolicy(nonce: string) {
   ].join("; ");
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const nonce = createNonce();
   const contentSecurityPolicy = buildContentSecurityPolicy(nonce);
   const requestHeaders = new Headers(request.headers);
