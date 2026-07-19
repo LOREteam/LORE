@@ -4,7 +4,7 @@ import Image from "next/image";
 import React from "react";
 import { UiButton } from "../ui/UiButton";
 
-const EMPTY_POOL_LINE_PATH = "M 1,57 C 14,57 14,57 27,57 C 40,57 40,57 53,57 C 66,57 66,57 79,57 C 90,57 90,57 99,57";
+const EMPTY_POOL_LINE_PATH = "M 1,57 C 14,57 14,56 27,56 C 40,56 40,57 53,57 C 66,57 66,55 79,55 C 90,55 90,56 99,56";
 
 interface HeaderPoolChartProps {
   chartHasData: boolean;

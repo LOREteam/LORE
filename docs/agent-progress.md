@@ -7,6 +7,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Active Handoff
 
+- The latest durable soak completed 433 successful unique bets with no duplicate
+  transactions or nonces, then stopped at the 20-failure safety gate. Two
+  receipts reverted; 13 later pre-send failures were transient
+  `eth_estimateGas` method-unavailable responses. A bounded estimate-only retry
+  now covers approve and all bet modes without retrying transaction sends.
+- Typecheck, logic tests, and transaction-free soak dry-run pass. The next live
+  start stopped before any transaction because `AUTOMINER_B` is below the
+  native-gas preflight minimum. Keep `AUTOMINER_C` excluded; restart only after
+  the funded role passes the unchanged minimum.
 - A 1,440-round Linea Sepolia soak started at 2026-07-16T23:01:20Z with
   randomized 0.01-0.05 LINEA totals, 1-25 tiles, four wallet roles, and
   pre-dispatch RPC failover injection, but the managed execution session ended
@@ -25,6 +34,32 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 - Preserve visible live-state and pool-chart freshness.
 
 ## Latest Completed Work
+
+## 2026-07-19 - Bounded estimate-gas recovery
+
+- Added two bounded retries only around pre-send gas estimation when the exact
+  RPC failure is `eth_estimateGas` method unavailable. Reverts and transaction
+  sends are never retried by this helper.
+- Canary evidence records recovered estimate retries and compact soak status
+  aggregates them. The default role set is now exactly MANUAL, AUTOMINER_A, and
+  AUTOMINER_B.
+- Two configured read endpoints passed repeated transaction-free estimate
+  probes. Typecheck, logic tests, and dry-run pass; live execution remains
+  blocked by AUTOMINER_B native gas, with zero transactions sent in that start.
+- Browser smoke exposed and verified two chart guards: the empty pool trace now
+  has non-zero SVG geometry, and the same-epoch freshness fixture now follows
+  the current chain epoch instead of stale hard-coded epoch 500. Full responsive
+  smoke passes with the existing five-second live-state polling unchanged.
+- Added a bounded `--end-epoch` selector to the read-only chain/indexer audit.
+  After repair catch-up, the exact historical 50-epoch window and the latest
+  window both passed with zero mismatches; logic tests now guard the bounded SQL.
+- SQLite fault/backup operations, alert fire/recovery drills, production and
+  full dependency audits, wallet dependency integrity, compile provenance, and
+  local launch preflight all pass. Production dependencies have zero high or
+  critical advisories; coordinated wallet upgrades remain separate work.
+- Focused security review found no new send/retry path: only pre-send gas
+  estimation retries, while contract reverts and transaction sends fail closed.
+  Typecheck, logic, contract invariants, and `git diff --check` pass.
 
 ## 2026-07-18 - Clean-checkout proof for soak diagnostics
 

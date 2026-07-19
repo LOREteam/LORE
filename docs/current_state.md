@@ -49,6 +49,13 @@ Open linked evidence only when a task needs it.
 - Scheduled chain/indexer output is replaced atomically through a PID-scoped
   temporary file, preventing the monitor from reading truncated JSON during a
   cron run. The post-fix 50-epoch audit and regression guard pass.
+- The audit also accepts a validated `--end-epoch` bound for reproducible
+  historical checks. After indexer repair catch-up, both the exact prior
+  50-epoch window and the latest 50 resolved epochs pass with zero mismatches.
+- Current SQLite operations and monitoring drills pass, including backup/restore
+  integrity, WAL/read-only/corrupt/disk-full cases, alert recovery, and restart
+  deduplication. Production dependency audit has zero high or critical findings,
+  and local launch proof preflight L1-L14 passes.
 - Scheduled backups support an explicit bounded retention window. It is off
   unless `LORE_BACKUP_RETENTION_DAYS` is set and then removes only old regular
   files matching the generated backup filename in the selected directory. The
@@ -323,11 +330,21 @@ reproduction: lockfile install, wallet peer/dependency gates, lint, typecheck,
 logic, contract invariants, compilation provenance, SQLite operations,
 monitoring drill, production build, all 23 HTTP checks, and responsive browser
 smoke. A new 1,440-round testnet soak attempted to start after that baseline,
-but its transaction-free wallet preflight found insufficient native gas for
-`AUTOMINER_C`; no bet was sent. The redacted `soak:testnet:status` output now
+and a later durable soak recorded 433 successful unique bets with zero duplicate
+transactions or nonces before its 20-failure safety stop. Two receipts reverted;
+the dominant later pre-send failure was transient `eth_estimateGas` method
+unavailability. Gas estimation now retries that exact pre-send failure twice
+without retrying sends, and compact status reports recovered estimate retries.
+A transaction-free dry-run passes, but the next live start found insufficient
+native gas for `AUTOMINER_B`; no bet was sent. `AUTOMINER_C` is excluded from the
+default role set. The redacted `soak:testnet:status` output now
 includes `progress.preflightFailures` with the allowlisted role and normalized
 balance category, so this blocker no longer requires opening the raw canary log.
 Top up that role before restarting.
+The latest production build and responsive browser smoke pass. The empty pool
+chart remains visibly mounted, and a second pool snapshot in the same current
+epoch changes the rendered path without reducing the five-second polling
+interval.
 
 The previous 1,440-round testnet soak started under the local supervisor at
 `2026-07-17T23:51:19.638Z` and stopped after 64 successful unique bets when the

@@ -116,6 +116,7 @@ async function summarizeLiveLog(path) {
     healthSamples: 0,
     healthFailures: 0,
     healthRetries: 0,
+    estimateGasRetries: 0,
     rpcFailoverInjectionEvents: 0,
     resolverFallbacks: 0,
     slowSendCount: 0,
@@ -175,6 +176,9 @@ async function summarizeLiveLog(path) {
       else summary.healthFailures += 1;
     }
     if (event.rpcFailoverInjected === true) summary.rpcFailoverInjectionEvents += 1;
+    if (Number.isSafeInteger(event.gasEstimateRetryCount) && event.gasEstimateRetryCount > 0) {
+      summary.estimateGasRetries += event.gasEstimateRetryCount;
+    }
     if (event.mode === "resolve" && event.ok === true && event.resolverFallbackUsed === true) {
       summary.resolverFallbacks += 1;
     }

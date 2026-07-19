@@ -67,6 +67,7 @@ import * as runtimeMonitorModule from "./runtime-monitor-lib.mjs";
 import * as sentrySanitizeModule from "../app/lib/sentrySanitize.ts";
 import * as analyticsBlockchainHistoryPanelModule from "../app/components/analytics/AnalyticsBlockchainHistoryPanel.tsx";
 import * as boundedJsonBodyModule from "../app/api/_lib/boundedJsonBody.ts";
+import * as estimateGasRetryModule from "./lib/estimate-gas-retry.ts";
 
 function withTemporaryEnv(values, fn) {
   const previous = new Map();
@@ -109,6 +110,29 @@ async function withTemporaryEnvAsync(values, fn) {
 }
 
 async function main() {
+  const estimateGasWithMethodRetry = estimateGasRetryModule.estimateGasWithMethodRetry
+    ?? estimateGasRetryModule.default?.estimateGasWithMethodRetry;
+  assert.equal(typeof estimateGasWithMethodRetry, "function");
+  let estimateAttempts = 0;
+  const estimateWaits = [];
+  const recoveredEstimate = await estimateGasWithMethodRetry(
+    async () => {
+      estimateAttempts += 1;
+      if (estimateAttempts < 3) throw new Error('Method "eth_estimateGas" is not supported.');
+      return 123n;
+    },
+    async (ms) => estimateWaits.push(ms),
+  );
+  assert.deepEqual(recoveredEstimate, { value: 123n, retryCount: 2 });
+  assert.deepEqual(estimateWaits, [500, 1_000]);
+  await assert.rejects(
+    () => estimateGasWithMethodRetry(
+      async () => { throw new Error("execution reverted"); },
+      async () => { throw new Error("must not retry a contract revert"); },
+    ),
+    /execution reverted/,
+  );
+
   const absoluteTestDbPath = join(tmpdir(), "lore-mainnet.sqlite");
   const envParsing = envParsingModule.default ?? envParsingModule;
   const scriptEnvParsing = scriptEnvParsingModule.default ?? scriptEnvParsingModule;
@@ -833,6 +857,16 @@ async function main() {
     chainIndexerAuditSource,
     /writeFileSync\(temporaryOutPath[\s\S]*renameSync\(temporaryOutPath, outPath\)/,
     "scheduled chain/indexer audit output must be atomically replaced so monitoring cannot read partial JSON",
+  );
+  assert.match(
+    chainIndexerAuditSource,
+    /--end-epoch must be a non-negative safe integer/,
+    "historical chain/indexer audits must reject invalid end epochs",
+  );
+  assert.match(
+    chainIndexerAuditSource,
+    /WHERE scope = \? AND epoch <= \? ORDER BY epoch DESC LIMIT \?/,
+    "historical chain/indexer audits must select a bounded resolved-epoch window",
   );
   withTemporaryEnv(
     { TRUST_PROXY_HEADERS: "1", TRUST_PROXY_SECRET: "test-proxy-secret-with-at-least-32-characters" },
@@ -2536,7 +2570,7 @@ async function main() {
   );
   assert.match(
     soakSupervisorSource,
-    /numericSummary[\s\S]*p95[\s\S]*growthSummary[\s\S]*rpcFailoverInjectionEvents[\s\S]*healthGrowth/,
+    /numericSummary[\s\S]*p95[\s\S]*growthSummary[\s\S]*estimateGasRetries[\s\S]*rpcFailoverInjectionEvents[\s\S]*healthGrowth/,
     "running soak status must summarize latency, failover, and bounded health growth without raw telemetry",
   );
   assert.match(
@@ -2604,6 +2638,11 @@ async function main() {
     analyzeCanarySource,
     /successful health samples[\s\S]*failed health samples/,
     "strict canary proof must reject incomplete health telemetry when sampling was enabled",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /LIVE_TEST_ROLES \?\? "MANUAL,AUTOMINER_A,AUTOMINER_B"/,
+    "live canary must exclude AUTOMINER_C from the default funded role set",
   );
   assert.match(
     liveRoundCanarySource,

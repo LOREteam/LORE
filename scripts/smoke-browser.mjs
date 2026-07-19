@@ -660,6 +660,11 @@ async function main() {
     });
 
     await runStep("verify pool chart freshness", async () => {
+      const currentStateResponse = await fetch(new URL("/api/live-state", BASE_URL), { cache: "no-store" });
+      if (!currentStateResponse.ok) throw new Error(`live-state epoch probe returned ${currentStateResponse.status}`);
+      const currentState = await currentStateResponse.json();
+      const chartEpoch = String(currentState?.currentEpoch ?? "");
+      if (!/^\d+$/.test(chartEpoch)) throw new Error("live-state epoch probe returned an invalid epoch");
       const chartContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
       await chartContext.addInitScript((tutorialKey) => {
         window.localStorage.clear();
@@ -668,14 +673,16 @@ async function main() {
       const chartPage = await chartContext.newPage();
       chartPage.on("pageerror", (error) => pageErrors.push({ message: error.message, source: "pool-chart-freshness" }));
       let updatedPool = false;
+      let liveStateRequests = 0;
       await chartPage.route("**/api/live-state", (route) => {
+        liveStateRequests += 1;
         const poolWei = updatedPool ? "20000000000000000000" : "10000000000000000000";
         return route.fulfill({
           status: 200,
           contentType: "application/json",
           headers: { "cache-control": "no-store" },
           body: JSON.stringify({
-            currentEpoch: "500",
+            currentEpoch: chartEpoch,
             epochEndTime: String(Math.floor(Date.now() / 1000) + 3600),
             jackpotInfo: ["0", "0", "0", "0", "0", "0", "0", "0"],
             rolloverPool: "0",
@@ -692,11 +699,23 @@ async function main() {
         });
       });
       await ensureLandingPage(chartPage, smokeOptions);
+      const initialSnapshotDeadline = Date.now() + 12_000;
+      while (liveStateRequests < 1 && Date.now() < initialSnapshotDeadline) await chartPage.waitForTimeout(100);
+      if (liveStateRequests < 1) throw new Error("initial live-state snapshot was not requested");
+      await chartPage.waitForFunction(() => (
+        document.querySelector('[data-testid="header-total-pool-value"]')?.textContent?.includes("10.00")
+      ), undefined, { timeout: 12_000 });
       const chartLine = chartPage.locator('[data-testid="header-pool-chart-line"]');
       await expectVisible(chartLine, "initial pool chart line", TIMEOUT_MS);
       const initialPath = await chartLine.getAttribute("d");
       if (!initialPath) throw new Error("initial pool chart path is empty");
       updatedPool = true;
+      const updatedSnapshotDeadline = Date.now() + 12_000;
+      while (liveStateRequests < 2 && Date.now() < updatedSnapshotDeadline) await chartPage.waitForTimeout(100);
+      if (liveStateRequests < 2) throw new Error("updated live-state snapshot was not requested");
+      await chartPage.waitForFunction(() => (
+        document.querySelector('[data-testid="header-total-pool-value"]')?.textContent?.includes("20.00")
+      ), undefined, { timeout: 12_000 });
       await chartPage.waitForFunction((previousPath) => {
         const path = document.querySelector('[data-testid="header-pool-chart-line"]');
         return path instanceof SVGPathElement && path.getAttribute("d") !== previousPath;

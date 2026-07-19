@@ -28,6 +28,7 @@ import {
 } from "../app/lib/lineaFees";
 import { tileIdsToMask } from "../app/lib/tileMask";
 import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs, getStableLineaReadRpcs } from "../config/publicConfig";
+import { estimateGasWithMethodRetry, isEstimateGasMethodUnsupported } from "./lib/estimate-gas-retry";
 
 loadDotenv({ path: ".env.live-test-wallets", override: false });
 
@@ -74,7 +75,7 @@ if (MIN_TOTAL_BET_AMOUNT > MAX_TOTAL_BET_AMOUNT) {
 if (MIN_TILES_PER_ROUND > MAX_TILES_PER_ROUND) {
   throw new Error("LIVE_TEST_MIN_TILES_PER_ROUND must be <= LIVE_TEST_MAX_TILES_PER_ROUND");
 }
-const ROLES = (process.env.LIVE_TEST_ROLES ?? "MANUAL,AUTOMINER_A,AUTOMINER_B,AUTOMINER_C")
+const ROLES = (process.env.LIVE_TEST_ROLES ?? "MANUAL,AUTOMINER_A,AUTOMINER_B")
   .split(",")
   .map((item) => item.trim().toUpperCase())
   .filter(Boolean);
@@ -112,6 +113,7 @@ type RoundEvent = {
   gasEstimate?: string;
   estimateGasMs?: number;
   gasEstimateFallback?: boolean;
+  gasEstimateRetryCount?: number;
   gasLimit?: string;
   gasUsed?: string;
   heapUsedBytes?: number;
@@ -313,6 +315,7 @@ function classifyError(error: unknown) {
   const lower = message.toLowerCase();
   const safeMessage = redactCanaryErrorMessage(message);
   if (isEstimateGasOutOfGasError(error)) return { kind: "estimate-out-of-gas", message: "eth_estimateGas out of gas" };
+  if (isEstimateGasMethodUnsupported(error)) return { kind: "estimate-method-unsupported", message: "eth_estimateGas temporarily unsupported" };
   if (lower.includes("user rejected")) return { kind: "user-rejected", message: safeMessage };
   if (lower.includes("insufficient")) return { kind: "insufficient-funds", message: safeMessage };
   if (lower.includes("nonce too low")) return { kind: "nonce-too-low", message: safeMessage };
@@ -619,14 +622,15 @@ async function ensureAllowance(params: {
   const approveAmount = APPROVE_AMOUNT > requiredAllowance ? APPROVE_AMOUNT : requiredAllowance;
   const nativeBalance = await publicClient.getBalance({ address: wallet.account.address });
   let fees = await getFeeOverrides(publicClient);
-  let gas = await publicClient.estimateContractGas({
+  const gasEstimate = await estimateGasWithMethodRetry(() => publicClient.estimateContractGas({
     account: wallet.account.address,
     address: LINEA_TOKEN_ADDRESS,
     abi: TOKEN_ABI,
     functionName: "approve",
     args: [CONTRACT_ADDRESS, approveAmount],
     ...fees,
-  } as never);
+  } as never));
+  let gas = gasEstimate.value;
   fees = clampKeeperFeeOverridesToBalance(fees, gas, nativeBalance) ?? fees;
   gas = getAffordableKeeperGasLimit(gas, nativeBalance, fees) ?? gas;
   const walletClient = createWalletClient({ account: wallet.account, chain: APP_CHAIN, transport });
@@ -693,16 +697,19 @@ async function placeRound(params: {
           ? [tiles.map(BigInt), plan.amount]
           : [tiles.map(BigInt), plan.amounts];
   let gasEstimateFallback = false;
+  let gasEstimateRetryCount = 0;
   let gas: bigint;
   try {
-    gas = await publicClient.estimateContractGas({
+    const estimate = await estimateGasWithMethodRetry(() => publicClient.estimateContractGas({
       account: wallet.account.address,
       address: CONTRACT_ADDRESS,
       abi: GAME_ABI,
       functionName,
       args,
       ...fees,
-    } as never);
+    } as never));
+    gas = estimate.value;
+    gasEstimateRetryCount = estimate.retryCount;
   } catch (error) {
     if (mode === "single" || !isEstimateGasOutOfGasError(error)) throw error;
     gas = BATCH_GAS_FALLBACK;
@@ -740,6 +747,7 @@ async function placeRound(params: {
     epoch: recordedEpoch.toString(),
     estimateGasMs: gasEstimatedAt - preparedAt,
     gasEstimateFallback,
+    gasEstimateRetryCount,
     gasUsed: receipt.gasUsed.toString(),
     networkFeeWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(),
     hash,

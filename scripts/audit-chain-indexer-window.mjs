@@ -38,12 +38,17 @@ const contractAddress = (process.env.KEEPER_CONTRACT_ADDRESS || process.env.NEXT
 const dbRaw = process.env.LORE_DB_PATH?.trim();
 const dbPath = dbRaw ? (isAbsolute(dbRaw) ? dbRaw : resolve(dbRaw)) : "";
 const windowEpochs = Math.min(500, Math.max(1, Number(process.env.CHAIN_INDEXER_AUDIT_EPOCHS || 50)));
+const endEpochArg = process.argv.find((value) => value.startsWith("--end-epoch="));
+const auditEndEpoch = endEpochArg ? Number(endEpochArg.slice("--end-epoch=".length)) : null;
 const finalityBlocks = BigInt(process.env.INDEXER_FINALITY_BLOCKS || "0");
 const outPath = resolve(process.env.CHAIN_INDEXER_AUDIT_OUT || ".tmp/pre-mainnet/chain-indexer-audit.json");
 
 if (!/^0x[0-9a-f]{40}$/.test(contractAddress)) throw new Error("configured contract address is missing or invalid");
 if (!dbPath || !existsSync(dbPath)) throw new Error("LORE_DB_PATH must point to an existing indexer SQLite database");
 if (!Number.isSafeInteger(windowEpochs)) throw new Error("CHAIN_INDEXER_AUDIT_EPOCHS must be an integer");
+if (auditEndEpoch !== null && (!Number.isSafeInteger(auditEndEpoch) || auditEndEpoch < 0)) {
+  throw new Error("--end-epoch must be a non-negative safe integer");
+}
 
 const rpcList = (process.env.KEEPER_RPC_URL || process.env.NEXT_PUBLIC_LINEA_RPCS || process.env.NEXT_PUBLIC_LINEA_SEPOLIA_RPCS || chain.rpcUrls.default.http.join(","))
   .split(",")
@@ -55,10 +60,16 @@ const client = createPublicClient({
 });
 const db = new DatabaseSync(dbPath, { readOnly: true });
 const scope = `${network}:${contractAddress}`;
-const epochRows = db.prepare(`
-  SELECT epoch, winning_tile, total_pool, reward_pool, fee, jackpot_bonus, resolved_block
-  FROM scoped_epochs WHERE scope = ? ORDER BY epoch DESC LIMIT ?
-`).all(scope, windowEpochs).reverse();
+const epochRows = (auditEndEpoch === null
+  ? db.prepare(`
+      SELECT epoch, winning_tile, total_pool, reward_pool, fee, jackpot_bonus, resolved_block
+      FROM scoped_epochs WHERE scope = ? ORDER BY epoch DESC LIMIT ?
+    `).all(scope, windowEpochs)
+  : db.prepare(`
+      SELECT epoch, winning_tile, total_pool, reward_pool, fee, jackpot_bonus, resolved_block
+      FROM scoped_epochs WHERE scope = ? AND epoch <= ? ORDER BY epoch DESC LIMIT ?
+    `).all(scope, auditEndEpoch, windowEpochs)
+).reverse();
 if (epochRows.length === 0) throw new Error("indexer database has no resolved epochs for the configured contract scope");
 
 const startEpoch = Number(epochRows[0].epoch);
