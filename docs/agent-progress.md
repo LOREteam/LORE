@@ -35,6 +35,20 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-19 - Current-commit clean-checkout reproduction
+
+- Exact commit `23e611f` was exported into an isolated checkout and installed
+  1,167 lockfile packages. EIP-7702 remained disabled during install, build,
+  and start; wallet dependencies retained one deduplicated `viem@2.50.4`.
+- Typecheck, logic, contract invariants, Solidity compilation provenance, and
+  production build passed. With the existing redacted runtime fixture and the
+  documented local-only weak-identity override, all 23 HTTP checks and the full
+  responsive browser smoke passed.
+- The first HTTP attempt without the local override correctly failed closed with
+  `Trusted proxy identity unavailable`; no production limiter behavior changed.
+  The temporary checkout, copied `.env`, server, build output, and dependencies
+  were removed after verification.
+
 ## 2026-07-19 - Bounded estimate-gas recovery
 
 - Added two bounded retries only around pre-send gas estimation when the exact

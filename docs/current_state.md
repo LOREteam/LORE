@@ -15,6 +15,12 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Exact commit `23e611f` passes an isolated clean-checkout reproduction:
+  lockfile install, wallet peer integrity, typecheck, logic, contract invariants,
+  compile provenance, production build, all 23 HTTP checks, and responsive
+  browser smoke. The local-only weak-identity fixture was required for smoke;
+  without it the production limiter correctly failed closed. Temporary runtime
+  files and the copied `.env` were removed after verification.
 - The Next.js 16 security boundary now uses root `proxy.ts`. The prior nested
   `app/middleware.ts` was not part of the production request pipeline, so its CSP
   and hardening headers were absent. Production build now lists Proxy, HTTP smoke
