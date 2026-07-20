@@ -68,6 +68,8 @@ try {
   let requestFailureCount = 0;
   let localRequestFailureCount = 0;
   let externalRequestFailureCount = 0;
+  let ignoredLocalRscAbortCount = 0;
+  let ignoredLocalWalletCoopAbortCount = 0;
   const consoleErrorKinds = new Map();
   const consoleErrorTargets = new Map();
   const consoleErrorSamples = [];
@@ -171,17 +173,52 @@ try {
     else failedExternalResponseCount += 1;
   });
   page.on("requestfailed", (request) => {
-    requestFailureCount += 1;
     const url = new URL(request.url());
     const target = isLocalTarget(url) ? "local" : "external";
+    const error = sanitizeDiagnostic(request.failure()?.errorText || "unknown");
+    const isExpectedLocalRscAbort =
+      target === "local"
+      && request.method() === "GET"
+      && request.resourceType() === "fetch"
+      && !url.pathname.startsWith("/api/")
+      && error === "net::ERR_ABORTED"
+      && (request.headers().rsc === "1" || url.searchParams.has("_rsc"));
+    const isExpectedLocalWalletCoopAbort =
+      target === "local"
+      && request.method() === "HEAD"
+      && request.resourceType() === "fetch"
+      && url.pathname === baseUrl.pathname
+      && url.search === ""
+      && error === "net::ERR_ABORTED";
+    if (isExpectedLocalRscAbort) {
+      ignoredLocalRscAbortCount += 1;
+      return;
+    }
+    if (isExpectedLocalWalletCoopAbort) {
+      // Coinbase Wallet SDK probes the current page's COOP header with HEAD.
+      ignoredLocalWalletCoopAbortCount += 1;
+      return;
+    }
+
+    requestFailureCount += 1;
     if (target === "local") localRequestFailureCount += 1;
     else externalRequestFailureCount += 1;
     if (requestFailureSamples.length < 5) {
+      const headers = request.headers();
       requestFailureSamples.push({
         target,
         path: target === "local" ? url.pathname : undefined,
+        method: request.method(),
         resourceType: request.resourceType(),
-        error: sanitizeDiagnostic(request.failure()?.errorText || "unknown"),
+        error,
+        ...(target === "local"
+          ? {
+              hasRscHeader: headers.rsc === "1",
+              hasRscQuery: url.searchParams.has("_rsc"),
+              hasRouterStateHeader: Boolean(headers["next-router-state-tree"]),
+              hasRouterPrefetchHeader: headers["next-router-prefetch"] === "1",
+            }
+          : {}),
       });
     }
   });
@@ -330,6 +367,8 @@ try {
       requestFailureCount,
       localRequestFailureCount,
       externalRequestFailureCount,
+      ignoredLocalRscAbortCount,
+      ignoredLocalWalletCoopAbortCount,
       requestFailureSamples,
     },
     runtime: {

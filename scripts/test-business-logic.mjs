@@ -1233,6 +1233,16 @@ async function main() {
     /failedLocalResponseCount > 0[\s\S]*localRequestFailureCount > 0[\s\S]*localConsoleErrorCount > 0[\s\S]*status: qualityIssues\.length === 0 \? "pass" : "degraded"/,
     "production browser baseline must mark local HTTP, network, or console failures as degraded",
   );
+  assert.match(
+    browserBaselineSource,
+    /isExpectedLocalRscAbort[\s\S]*!url\.pathname\.startsWith\("\/api\/"\)[\s\S]*request\.headers\(\)\.rsc === "1"[\s\S]*ignoredLocalRscAbortCount/,
+    "browser baseline may ignore only explicit non-API Next RSC aborts and must count them",
+  );
+  assert.match(
+    browserBaselineSource,
+    /isExpectedLocalWalletCoopAbort[\s\S]*request\.method\(\) === "HEAD"[\s\S]*url\.pathname === baseUrl\.pathname[\s\S]*url\.search === ""[\s\S]*ignoredLocalWalletCoopAbortCount/,
+    "browser baseline may ignore only the exact local wallet COOP HEAD abort and must count it",
+  );
   const proxySource = readFileSync("proxy.ts", "utf8");
   assert.match(proxySource, /export function proxy\(request: NextRequest\)/, "Next.js 16 security headers must use the root Proxy convention");
   assert.match(proxySource, /Content-Security-Policy[\s\S]*X-Frame-Options[\s\S]*Permissions-Policy/, "root Proxy must enforce the security header set");

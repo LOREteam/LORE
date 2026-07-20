@@ -14,11 +14,10 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 - A transaction-free rerun identified insufficient native gas for
   `AUTOMINER_A` and `AUTOMINER_B`. Do not restart until both roles pass the
   unchanged gas preflight; keep `AUTOMINER_C` excluded.
-- The current uncommitted hardening batch fixes alert-delivery retry state,
-  bounds route/reward/rebate/jackpot cache metadata, deduplicates forced rebate
-  refreshes, redacts console/server errors, makes small Safety Pool claims an
-  explicit two-step choice, traps focus in blocking dialogs, and adds financial
-  chain-accounting replay.
+- Browser-profiler hardening classifies only exact local
+  Next RSC aborts and the Coinbase Wallet SDK COOP `HEAD` probe as expected;
+  both remain separately counted and all other local failures still degrade the
+  baseline.
 - Route-cache writes now supersede older async builds without allowing stale
   watermark/snapshot commits. Direct epochs, rewards, and private data-sync
   builds release version metadata on both success and failure.
@@ -41,6 +40,21 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 - Preserve visible live-state and pool-chart freshness.
 
 ## Latest Completed Work
+
+## 2026-07-20 - Two-minute production browser attribution
+
+- Traced the reproducible local `HEAD /` abort to the Coinbase Wallet SDK COOP
+  header probe rather than application polling or an API timeout. A direct
+  `HEAD /` returns `200`; the profiler now ignores only that exact current-path
+  `HEAD` fetch abort and reports its count separately.
+- The repeated 120-second profile passes with zero failed local responses,
+  requests, or console errors; 17 same-origin API requests/minute; zero DOM
+  growth; heap ending below its initial sample after GC; CLS 0; local lab LCP
+  1,204 ms and synthetic INP 24 ms. One external provider failure remains
+  visible but does not misclassify site runtime health.
+- Scoped lint, business logic, and diff hygiene pass. The soak remains stopped
+  because the unchanged transaction-free preflight reports insufficient native
+  gas for `AUTOMINER_A` and `AUTOMINER_B`; no transaction was sent.
 
 ## 2026-07-20 - Exact clean-checkout baseline
 
