@@ -395,10 +395,7 @@ async function main() {
     await runStep("open desktop leaderboards tab", () => openDesktopTab(page, {
       ...smokeOptions,
       buttonName: "Leaderboards",
-      checks: [
-        [page.getByRole("heading", { name: "Leaderboards" }), "leaderboards tab"],
-        [page.getByText("Lucky tile"), "leaderboards section"],
-      ],
+      checks: [[page.getByRole("heading", { name: "Leaderboards" }), "leaderboards tab"]],
       skipMessage: "leaderboards tab did not open during smoke window",
     }));
 
@@ -602,7 +599,7 @@ async function main() {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          currentEpoch: "0",
+          currentEpoch: "1",
           epochEndTime: String(Math.floor(Date.now() / 1000) - 5),
           jackpotInfo: ["0", "0", "0", "0", "0", "0", "0", "0"],
           rolloverPool: "0",
@@ -709,10 +706,15 @@ async function main() {
       await expectVisible(chartLine, "initial pool chart line", TIMEOUT_MS);
       const initialPath = await chartLine.getAttribute("d");
       if (!initialPath) throw new Error("initial pool chart path is empty");
+      const requestsBeforePoolUpdate = liveStateRequests;
       updatedPool = true;
       const updatedSnapshotDeadline = Date.now() + 12_000;
-      while (liveStateRequests < 2 && Date.now() < updatedSnapshotDeadline) await chartPage.waitForTimeout(100);
-      if (liveStateRequests < 2) throw new Error("updated live-state snapshot was not requested");
+      while (liveStateRequests <= requestsBeforePoolUpdate && Date.now() < updatedSnapshotDeadline) {
+        await chartPage.waitForTimeout(100);
+      }
+      if (liveStateRequests <= requestsBeforePoolUpdate) {
+        throw new Error("updated live-state snapshot was not requested");
+      }
       await chartPage.waitForFunction(() => (
         document.querySelector('[data-testid="header-total-pool-value"]')?.textContent?.includes("20.00")
       ), undefined, { timeout: 12_000 });

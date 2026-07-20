@@ -36,7 +36,6 @@ const ROUTE_METRIC_KEY = "api/epochs";
 
 const READ_ABI = parseAbi([
   "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
-  "function getEpochEndTime(uint256 epoch) view returns (uint256)",
   "function currentEpoch() view returns (uint256)",
 ]);
 
@@ -205,32 +204,18 @@ async function readEpochRowsFromChain(epochIds: number[]): Promise<{
       functionName: "epochs" as const,
       args: [BigInt(epoch)] as const,
     }));
-    const endTimeContracts = chunk.map((epoch) => ({
-      address: CONTRACT_ADDRESS,
-      abi: READ_ABI,
-      functionName: "getEpochEndTime" as const,
-      args: [BigInt(epoch)] as const,
-    }));
-
     try {
-      const [epochResults, endTimeResults] = await Promise.all([
-        publicClient.multicall({ contracts: epochContracts }),
-        publicClient.multicall({ contracts: endTimeContracts }),
-      ]);
+      const epochResults = await publicClient.multicall({ contracts: epochContracts });
       chunk.forEach((epoch, index) => {
         const result = epochResults[index];
-        const endTimeResult = endTimeResults[index];
         if (result?.status !== "success") return;
         const row = result.result as [bigint, bigint, bigint, boolean, boolean, boolean];
-        const endTime =
-          endTimeResult?.status === "success" ? (endTimeResult.result as bigint).toString() : undefined;
         const epochRow: EpochRow = {
           winningTile: Number(row[2]),
           totalPool: formatUnits(row[0], 18),
           rewardPool: formatUnits(row[1], 18),
           isDailyJackpot: row[4],
           isWeeklyJackpot: row[5],
-          endTime,
         };
         if (!row[3]) return;
         responseRows[String(epoch)] = epochRow;
@@ -239,27 +224,18 @@ async function readEpochRowsFromChain(epochIds: number[]): Promise<{
     } catch {
       for (const epoch of chunk) {
         try {
-          const [row, endTime] = await Promise.all([
-            publicClient.readContract({
-              address: CONTRACT_ADDRESS,
-              abi: READ_ABI,
-              functionName: "epochs",
-              args: [BigInt(epoch)],
-            }) as Promise<[bigint, bigint, bigint, boolean, boolean, boolean]>,
-            publicClient.readContract({
-              address: CONTRACT_ADDRESS,
-              abi: READ_ABI,
-              functionName: "getEpochEndTime",
-              args: [BigInt(epoch)],
-            }).catch(() => null) as Promise<bigint | null>,
-          ]);
+          const row = await publicClient.readContract({
+            address: CONTRACT_ADDRESS,
+            abi: READ_ABI,
+            functionName: "epochs",
+            args: [BigInt(epoch)],
+          }) as [bigint, bigint, bigint, boolean, boolean, boolean];
           const epochRow: EpochRow = {
             winningTile: Number(row[2]),
             totalPool: formatUnits(row[0], 18),
             rewardPool: formatUnits(row[1], 18),
             isDailyJackpot: row[4],
             isWeeklyJackpot: row[5],
-            endTime: endTime?.toString(),
           };
           if (!row[3]) continue;
           responseRows[String(epoch)] = epochRow;

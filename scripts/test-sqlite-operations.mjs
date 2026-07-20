@@ -30,6 +30,7 @@ source.exec(`
   CREATE TABLE IF NOT EXISTS scoped_jackpots (scope TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS scoped_reward_claims (scope TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS scoped_protocol_fee_flushes (scope TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS scoped_indexer_events (scope TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS epochs (id INTEGER PRIMARY KEY);
   DELETE FROM drill_rows;
   DELETE FROM meta;
@@ -41,6 +42,7 @@ source.exec(`
   INSERT INTO meta(key, value) VALUES ('sepolia:0x0000000000000000000000000000000000000002:lastIndexedBlock', '1');
   INSERT INTO scoped_epochs(scope) VALUES ('sepolia:0x0000000000000000000000000000000000000001');
   INSERT INTO scoped_bets(scope) VALUES ('sepolia:0x0000000000000000000000000000000000000002');
+  INSERT INTO scoped_indexer_events(scope) VALUES ('sepolia:0x0000000000000000000000000000000000000001');
   INSERT INTO epochs DEFAULT VALUES;
 `);
 

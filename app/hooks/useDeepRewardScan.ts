@@ -1,36 +1,32 @@
 "use client";
 
 import { log } from "../lib/logger";
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { usePublicClient, useAccount } from "wagmi";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, getAddress } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
 import type { UnclaimedWin } from "../lib/types";
+import { formatRewardClaimError, isRewardClaimWindowOpen } from "./useRewardScanner";
 import { isUserRejection, delay } from "../lib/utils";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
+import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 type EpochTuple = readonly [bigint, bigint, bigint, boolean];
 type ReceiptState = "confirmed" | "pending";
 
-const DEEP_CHUNK = BigInt(200);
 const MAX_BATCH_CLAIM_EPOCHS = 128;
 const CLAIM_GAS_FALLBACK = 200_000n;
 const CLAIM_GAS_BUFFER = 20_000n;
 const CLAIM_GAS_HEADROOM_BPS = 12_000n;
 const BPS_DENOMINATOR = 10_000n;
+const CANDIDATE_PAGE_SIZE = 200;
 
-function formatClaimError(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
-  const lower = message.toLowerCase();
-  if (lower.includes("notresolved")) return "Reward is not claimable yet because the epoch is not resolved.";
-  if (lower.includes("already claimed") || lower.includes("hasclaimed") || lower.includes("claimed")) {
-    return "This reward was already claimed.";
-  }
-  if (lower.includes("nothingtoclaim") || lower.includes("no reward")) {
-    return "No reward is available for this epoch.";
-  }
-  return "Claim failed.";
-}
+type ClaimCandidatePage = {
+  epochs: number[];
+  hasMore: boolean;
+  nextCursor: number | null;
+  error?: string;
+};
 
 function formatClaimTxMessage(message: string, hash: `0x${string}`) {
   const txUrl = getExplorerTxUrl(hash);
@@ -48,9 +44,19 @@ function chunkEpochIds(epochIds: string[], size: number) {
 export function useDeepRewardScan(
   sendTransactionSilent?: (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => Promise<`0x${string}`>,
   onNotify?: (message: string, tone?: "info" | "success" | "warning" | "danger") => void,
+  preferredAddress?: string | null,
 ) {
-  const { address } = useAccount();
+  const { address: connectedAddress } = useAccount();
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
+  const address = useMemo(() => {
+    const candidate = preferredAddress ?? connectedAddress;
+    if (!candidate) return null;
+    try {
+      return getAddress(candidate);
+    } catch {
+      return null;
+    }
+  }, [connectedAddress, preferredAddress]);
 
   const [wins, setWins] = useState<UnclaimedWin[] | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -268,31 +274,37 @@ export function useDeepRewardScan(
     if (mountedRef.current) {
       setScanning(true);
       setWins(null);
-      setProgress("Reading current epoch…");
+      setProgress("Loading indexed wallet activity...");
     }
 
     try {
-      const currentEpoch = await publicClient.readContract({
-        address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "currentEpoch",
-      }) as bigint;
-
-      const startEpoch = currentEpoch > BigInt(1) ? currentEpoch - BigInt(1) : BigInt(0);
-      const totalEpochs = Number(startEpoch);
+      const chainTimestamp = (await publicClient.getBlock({ blockTag: "latest" })).timestamp;
       const found: UnclaimedWin[] = [];
       let scanned = 0;
+      let cursor: number | null = null;
 
-      let cursor = startEpoch;
-      while (cursor > BigInt(0) && !abortRef.current) {
+      while (!abortRef.current) {
         if (scanAddressRef.current !== normalizedAddress) return;
-        let end = cursor - DEEP_CHUNK + BigInt(1);
-        if (end < BigInt(1)) end = BigInt(1);
-
-        const epochIds: bigint[] = [];
-        for (let i = cursor; i >= end; i--) epochIds.push(i);
-        if (epochIds.length === 0) break;
+        const query = new URLSearchParams({
+          user: normalizedAddress,
+          limit: String(CANDIDATE_PAGE_SIZE),
+        });
+        if (cursor !== null) query.set("cursor", String(cursor));
+        const response = await fetch(`/api/claim-candidates?${query.toString()}`, { cache: "no-store" });
+        const page = await response.json() as ClaimCandidatePage;
+        if (!response.ok || page.error) {
+          throw new Error(page.error || `Claim candidate lookup failed (HTTP ${response.status})`);
+        }
+        const epochIds = [...new Set(Array.isArray(page.epochs) ? page.epochs : [])]
+          .filter((epoch) => Number.isSafeInteger(epoch) && epoch > 0)
+          .map((epoch) => BigInt(epoch));
+        if (epochIds.length === 0) {
+          if (page.hasMore) throw new Error("Claim candidate pagination returned an empty page");
+          break;
+        }
 
         if (mountedRef.current) {
-          setProgress(`Scanning ${scanned}/${totalEpochs} epochs… (${found.length} found)`);
+          setProgress(`Checking ${scanned + epochIds.length} indexed epochs... (${found.length} found)`);
         }
 
         const [epochResults, claimResults, dustSettledResults] = await Promise.all([
@@ -325,7 +337,7 @@ export function useDeepRewardScan(
         });
 
         if (potentialWins.length > 0) {
-          const [betResults, tilePoolResults] = await Promise.all([
+          const [betResults, tilePoolResults, resolvedAtResults] = await Promise.all([
             publicClient.multicall({
               contracts: potentialWins.map((w) => ({
                 address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "userBets" as const, args: [w.id, w.winTile, address],
@@ -336,30 +348,45 @@ export function useDeepRewardScan(
                 address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "tilePools" as const, args: [w.id, w.winTile],
               })),
             }),
+            publicClient.multicall({
+              contracts: potentialWins.map((w) => ({
+                address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochResolvedAt" as const, args: [w.id],
+              })),
+            }),
           ]);
           if (scanAddressRef.current !== normalizedAddress) return;
 
           potentialWins.forEach((w, index) => {
             const betAmt = betResults[index]?.result as unknown as bigint | undefined;
             const tileTotal = tilePoolResults[index]?.result as unknown as bigint | undefined;
-            if (betAmt && betAmt > BigInt(0) && tileTotal && tileTotal > BigInt(0)) {
+            const resolvedAt = resolvedAtResults[index]?.result as unknown as bigint | undefined;
+            if (
+              betAmt && betAmt > 0n && tileTotal && tileTotal > 0n && resolvedAt !== undefined
+              && isRewardClaimWindowOpen(resolvedAt, chainTimestamp)
+            ) {
+              const amountWei = (w.rewardPool * betAmt) / tileTotal;
+              if (amountWei === 0n) return;
               found.push({
                 epoch: w.id.toString(),
-                amountWei: ((w.rewardPool * betAmt) / tileTotal).toString(),
+                amountWei: amountWei.toString(),
               });
             }
           });
         }
 
         scanned += epochIds.length;
-        cursor = end - BigInt(1);
+        if (!page.hasMore) break;
+        if (!page.nextCursor || page.nextCursor === cursor) {
+          throw new Error("Claim candidate pagination did not advance");
+        }
+        cursor = page.nextCursor;
       }
 
       if (scanAddressRef.current === normalizedAddress && mountedRef.current) {
         setWins(found);
       }
       if (scanAddressRef.current === normalizedAddress && mountedRef.current) {
-        setProgress(abortRef.current ? "Cancelled" : `Done – ${found.length} unclaimed reward${found.length !== 1 ? "s" : ""}`);
+        setProgress(abortRef.current ? "Cancelled" : `Done - ${found.length} unclaimed reward${found.length !== 1 ? "s" : ""} in indexed history`);
       }
     } catch (e) {
       if (scanAddressRef.current === normalizedAddress && mountedRef.current) {
@@ -411,7 +438,11 @@ export function useDeepRewardScan(
       }
       onNotify?.(formatClaimTxMessage("Reward claimed successfully.", hash), "success");
     } catch (err) {
-      if (!isUserRejection(err)) onNotify?.(formatClaimError(err), "danger");
+      if (isAmbiguousPendingTxError(err)) {
+        onNotify?.("Reward claim may already be pending. Check wallet activity before retrying.", "warning");
+      } else if (!isUserRejection(err)) {
+        onNotify?.(formatRewardClaimError(err), "danger");
+      }
     } finally {
       if (mountedRef.current) {
         setClaiming(false);
@@ -479,6 +510,10 @@ export function useDeepRewardScan(
             break;
           }
         } catch (err) {
+          if (isAmbiguousPendingTxError(err)) {
+            pendingClaimTx = true;
+            break;
+          }
           if (isUserRejection(err)) break;
           if (batch.length === 1) {
             skippedEpochs += 1;

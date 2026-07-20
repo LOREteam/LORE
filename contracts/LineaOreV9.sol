@@ -79,6 +79,7 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
     uint256 public accruedBurnFees;
     mapping(address => uint256) public pendingResolverRewards;
     mapping(uint256 => uint256) public epochRebatePool;
+    mapping(uint256 => uint256) public epochRebateClaimed;
     mapping(uint256 => mapping(address => bool)) public rebateClaimed;
 
     event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount);
@@ -91,11 +92,14 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
     event RewardClaimed(uint256 indexed epoch, address indexed user, uint256 reward);
     event RewardBatchClaimed(address indexed user, uint256 totalAmount, uint256 epochsClaimed);
     event RewardDustSettled(uint256 indexed epoch, uint256 amount);
+    event RewardDustBatchSettled(uint256 amount, uint256 epochsSettled);
     event ResolverRewardAccrued(address indexed resolver, uint256 indexed epoch, uint256 amount);
     event ResolverRewardClaimed(address indexed resolver, uint256 amount);
     event ProtocolFeesFlushed(uint256 ownerAmount, uint256 burnAmount);
     event RebateClaimed(address indexed user, uint256 indexed epoch, uint256 amount);
     event RebateBatchClaimed(address indexed user, uint256 amount, uint256 epochsClaimed);
+    event RebateDustSettled(uint256 indexed epoch, uint256 amount);
+    event RebateDustBatchSettled(uint256 amount, uint256 epochsSettled);
     event EpochDurationChangeScheduled(uint256 oldValue, uint256 newValue, uint256 eta, uint256 effectiveFromEpoch);
     event EpochDurationChangeCancelled(uint256 pendingValue);
     event EpochDurationUpdated(uint256 oldValue, uint256 newValue);
@@ -157,9 +161,8 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
     function claimEpochRebate(uint256 epoch) external nonReentrant {
         if (!epochs[epoch].isResolved) revert NotResolved();
         if (rebateClaimed[epoch][msg.sender]) revert RebateAlreadyClaimed();
-        uint256 amount = _previewRebate(epoch, msg.sender);
+        uint256 amount = _consumeRebate(epoch, msg.sender);
         if (amount == 0) revert NoRebateAvailable();
-        rebateClaimed[epoch][msg.sender] = true;
         token.safeTransfer(msg.sender, amount);
         emit RebateClaimed(msg.sender, epoch, amount);
     }
@@ -172,9 +175,8 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         for (uint256 i = 0; i < len; ) {
             uint256 epoch = claimEpochs[i];
             if (epochs[epoch].isResolved && !rebateClaimed[epoch][msg.sender]) {
-                uint256 amount = _previewRebate(epoch, msg.sender);
+                uint256 amount = _consumeRebate(epoch, msg.sender);
                 if (amount > 0) {
-                    rebateClaimed[epoch][msg.sender] = true;
                     totalAmount += amount;
                     epochsClaimedCount += 1;
                     emit RebateClaimed(msg.sender, epoch, amount);
@@ -187,21 +189,99 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         emit RebateBatchClaimed(msg.sender, totalAmount, epochsClaimedCount);
     }
 
+    function _consumeRebate(uint256 epoch, address user) internal returns (uint256 amount) {
+        amount = _previewRebate(epoch, user);
+        if (amount == 0) return 0;
+        rebateClaimed[epoch][user] = true;
+        epochRebateClaimed[epoch] += amount;
+    }
+
     function settleEpochDust(uint256 epoch) external nonReentrant {
         if (!epochs[epoch].isResolved) revert NotResolved();
         if (epochDustSettled[epoch]) revert DustAlreadySettled();
         if (!(epochResolvedAt[epoch] > 0 && block.timestamp >= epochResolvedAt[epoch] + DUST_SETTLE_DELAY)) {
             revert DustSettlementDelayNotReached();
         }
-        epochDustSettled[epoch] = true;
-        uint256 rewardPool = epochs[epoch].rewardPool;
-        uint256 claimed = epochRewardClaimed[epoch];
-        uint256 dust = rewardPool > claimed ? rewardPool - claimed : 0;
+        (uint256 dust, ) = _settleRewardDustIfAvailable(epoch);
         if (dust > 0) {
             _applyPendingFeeRecipientIfReady();
             token.safeTransfer(feeRecipient, dust);
         }
+    }
+
+    function settleEpochsDust(uint256[] calldata rewardEpochs) external nonReentrant {
+        uint256 len = rewardEpochs.length;
+        if (len == 0) revert EmptyArray();
+        uint256 totalDust;
+        uint256 epochsSettled;
+        for (uint256 i = 0; i < len; ) {
+            (uint256 dust, bool settled) = _settleRewardDustIfAvailable(rewardEpochs[i]);
+            if (settled) {
+                totalDust += dust;
+                epochsSettled += 1;
+            }
+            unchecked { ++i; }
+        }
+        if (epochsSettled == 0) revert NothingToClaim();
+        if (totalDust > 0) {
+            _applyPendingFeeRecipientIfReady();
+            token.safeTransfer(feeRecipient, totalDust);
+        }
+        emit RewardDustBatchSettled(totalDust, epochsSettled);
+    }
+
+    function _settleRewardDustIfAvailable(uint256 epoch) internal returns (uint256 dust, bool settled) {
+        if (!epochs[epoch].isResolved || epochDustSettled[epoch]) return (0, false);
+        uint256 resolvedAt = epochResolvedAt[epoch];
+        if (resolvedAt == 0 || block.timestamp < resolvedAt + DUST_SETTLE_DELAY) return (0, false);
+        epochDustSettled[epoch] = true;
+        uint256 rewardPool = epochs[epoch].rewardPool;
+        uint256 claimed = epochRewardClaimed[epoch];
+        dust = rewardPool > claimed ? rewardPool - claimed : 0;
         emit RewardDustSettled(epoch, dust);
+        return (dust, true);
+    }
+
+    function settleEpochRebateDust(uint256 epoch) external nonReentrant {
+        if (!epochs[epoch].isResolved) revert NotResolved();
+        if (!(epochResolvedAt[epoch] > 0 && block.timestamp >= epochResolvedAt[epoch] + DUST_SETTLE_DELAY)) {
+            revert DustSettlementDelayNotReached();
+        }
+        uint256 dust = _settleRebateDustIfAvailable(epoch);
+        if (dust == 0) revert NothingToClaim();
+        _applyPendingFeeRecipientIfReady();
+        token.safeTransfer(feeRecipient, dust);
+    }
+
+    function settleEpochsRebateDust(uint256[] calldata rebateEpochs) external nonReentrant {
+        uint256 len = rebateEpochs.length;
+        if (len == 0) revert EmptyArray();
+        uint256 totalDust;
+        uint256 epochsSettled;
+        for (uint256 i = 0; i < len; ) {
+            uint256 dust = _settleRebateDustIfAvailable(rebateEpochs[i]);
+            if (dust > 0) {
+                totalDust += dust;
+                epochsSettled += 1;
+            }
+            unchecked { ++i; }
+        }
+        if (totalDust == 0) revert NothingToClaim();
+        _applyPendingFeeRecipientIfReady();
+        token.safeTransfer(feeRecipient, totalDust);
+        emit RebateDustBatchSettled(totalDust, epochsSettled);
+    }
+
+    function _settleRebateDustIfAvailable(uint256 epoch) internal returns (uint256 dust) {
+        if (!epochs[epoch].isResolved) return 0;
+        uint256 resolvedAt = epochResolvedAt[epoch];
+        if (resolvedAt == 0 || block.timestamp < resolvedAt + DUST_SETTLE_DELAY) return 0;
+        uint256 rebatePool = epochRebatePool[epoch];
+        uint256 claimed = epochRebateClaimed[epoch];
+        if (claimed >= rebatePool) return 0;
+        dust = rebatePool - claimed;
+        epochRebateClaimed[epoch] = rebatePool;
+        emit RebateDustSettled(epoch, dust);
     }
 
     function _autoResolveIfNeeded() internal {
@@ -223,6 +303,7 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
         token.safeTransferFrom(msg.sender, address(this), amount);
         uint256 epoch = currentEpoch;
+        _recordEpochVolume(epoch, msg.sender, amount);
         _recordBet(epoch, msg.sender, tileId, amount);
         emit BetPlaced(epoch, msg.sender, tileId, amount);
     }
@@ -242,6 +323,7 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         }
         token.safeTransferFrom(msg.sender, address(this), totalAmount);
         uint256 epoch = currentEpoch;
+        _recordEpochVolume(epoch, msg.sender, totalAmount);
         for (uint256 i = 0; i < len; ) {
             _recordBet(epoch, msg.sender, tileIds[i], amounts[i]);
             unchecked { ++i; }
@@ -258,6 +340,7 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         uint256 totalAmount = amount * len;
         token.safeTransferFrom(msg.sender, address(this), totalAmount);
         uint256 epoch = currentEpoch;
+        _recordEpochVolume(epoch, msg.sender, totalAmount);
         for (uint256 i = 0; i < len; ) {
             uint256 tileId = tileIds[i];
             if (tileId == 0 || tileId > GRID_SIZE) revert InvalidTile();
@@ -278,6 +361,7 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         uint256 totalAmount = amount * tileCount;
         token.safeTransferFrom(msg.sender, address(this), totalAmount);
         uint256 epoch = currentEpoch;
+        _recordEpochVolume(epoch, msg.sender, totalAmount);
 
         uint32 remainingMask = tileMask;
         uint256 tileId = 1;
@@ -306,9 +390,12 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
             tileUserCounts[epoch][tileId] += 1;
         }
         userBets[epoch][tileId][user] = previousBet + amount;
-        userEpochVolumes[epoch][user] += amount;
         tilePools[epoch][tileId] += amount;
-        epochs[epoch].totalPool += amount;
+    }
+
+    function _recordEpochVolume(uint256 epoch, address user, uint256 totalAmount) internal {
+        userEpochVolumes[epoch][user] += totalAmount;
+        epochs[epoch].totalPool += totalAmount;
     }
 
     function resolveEpoch(uint256 epoch) external nonReentrant {
@@ -483,9 +570,10 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
         uint256 winTile = epochs[epoch].winningTile;
         uint256 userBet = userBets[epoch][winTile][msg.sender];
         if (userBet == 0) revert NoWinningBet();
-        hasClaimed[msg.sender][epoch] = true;
         uint256 tileTotal = tilePools[epoch][winTile];
         uint256 reward = (epochs[epoch].rewardPool * userBet) / tileTotal;
+        if (reward == 0) revert NothingToClaim();
+        hasClaimed[msg.sender][epoch] = true;
         epochRewardClaimed[epoch] += reward;
         token.safeTransfer(msg.sender, reward);
         emit RewardClaimed(epoch, msg.sender, reward);
@@ -510,13 +598,15 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
                 uint256 winTile = epochs[epoch].winningTile;
                 uint256 userBet = userBets[epoch][winTile][msg.sender];
                 if (userBet > 0) {
-                    hasClaimed[msg.sender][epoch] = true;
                     uint256 tileTotal = tilePools[epoch][winTile];
                     uint256 reward = (epochs[epoch].rewardPool * userBet) / tileTotal;
-                    epochRewardClaimed[epoch] += reward;
-                    totalReward += reward;
-                    epochsClaimedCount += 1;
-                    emit RewardClaimed(epoch, msg.sender, reward);
+                    if (reward > 0) {
+                        hasClaimed[msg.sender][epoch] = true;
+                        epochRewardClaimed[epoch] += reward;
+                        totalReward += reward;
+                        epochsClaimedCount += 1;
+                        emit RewardClaimed(epoch, msg.sender, reward);
+                    }
                 }
             }
             unchecked { ++i; }
@@ -529,15 +619,19 @@ contract LineaOreV9 is Ownable2Step, ReentrancyGuard {
     function _previewRebate(uint256 epoch, address user) internal view returns (uint256) {
         Epoch storage ep = epochs[epoch];
         if (!ep.isResolved) return 0;
+        if (epochResolvedAt[epoch] > 0 && block.timestamp >= epochResolvedAt[epoch] + DUST_SETTLE_DELAY) return 0;
         uint256 totalPool = ep.totalPool;
         uint256 rebatePool = epochRebatePool[epoch];
+        uint256 claimedTotal = epochRebateClaimed[epoch];
         uint256 userVolume = _getUserEpochVolume(epoch, user);
-        if (totalPool == 0 || rebatePool == 0 || userVolume == 0) return 0;
+        if (totalPool == 0 || rebatePool == 0 || claimedTotal >= rebatePool || userVolume == 0) return 0;
         uint256 winningTile = ep.winningTile;
         if (userBets[epoch][winningTile][user] > 0) return 0;
         if (tilePools[epoch][winningTile] >= totalPool) return 0;
         uint256 losingVolume = totalPool - tilePools[epoch][winningTile];
-        return (rebatePool * userVolume) / losingVolume;
+        uint256 amount = (rebatePool * userVolume) / losingVolume;
+        uint256 remaining = rebatePool - claimedTotal;
+        return amount > remaining ? remaining : amount;
     }
 
     function getTileData(uint256 epoch) external view returns (uint256[] memory pools, uint256[] memory users) {

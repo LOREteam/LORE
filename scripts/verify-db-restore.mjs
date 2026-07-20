@@ -90,7 +90,11 @@ async function openRestoredDb(dbPath) {
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
     const tableNames = tables.map((row) => String(row.name));
     const counts = {};
-    for (const table of ["meta", "epochs", "scoped_epochs", "bets", "scoped_bets", "jackpots", "scoped_jackpots", "reward_claims", "scoped_reward_claims"]) {
+    for (const table of [
+      "meta", "epochs", "scoped_epochs", "bets", "scoped_bets", "jackpots", "scoped_jackpots",
+      "reward_claims", "scoped_reward_claims", "protocol_fee_flushes", "scoped_protocol_fee_flushes",
+      "scoped_indexer_events",
+    ]) {
       counts[table] = readCount(db, table);
     }
     return { integrity, tableNames, counts };

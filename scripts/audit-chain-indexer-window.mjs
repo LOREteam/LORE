@@ -23,6 +23,8 @@ const EVENTS_ABI = parseAbi([
   "event RewardBatchClaimed(address indexed user, uint256 totalAmount, uint256 epochsClaimed)",
   "event RebateClaimed(address indexed user, uint256 indexed epoch, uint256 amount)",
   "event RebateBatchClaimed(address indexed user, uint256 amount, uint256 epochsClaimed)",
+  "event RewardDustSettled(uint256 indexed epoch, uint256 amount)",
+  "event RebateDustSettled(uint256 indexed epoch, uint256 amount)",
   "event ResolverRewardAccrued(address indexed resolver, uint256 indexed epoch, uint256 amount)",
   "event ResolverRewardClaimed(address indexed resolver, uint256 amount)",
   "event ProtocolFeesFlushed(uint256 ownerAmount, uint256 burnAmount)",
@@ -99,6 +101,22 @@ const storedObject = (key) => {
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(`${scope}:${key}`);
   try { return JSON.parse(String(row?.value ?? "{}")); } catch { return {}; }
 };
+const storedIndexerEvents = (category, legacyKey) => {
+  const records = storedObject(legacyKey);
+  let rows = [];
+  try {
+    rows = db.prepare(`
+      SELECT id, payload_json FROM scoped_indexer_events
+      WHERE scope = ? AND category = ? AND block_number BETWEEN ? AND ?
+    `).all(scope, category, Number(fromBlock), Number(toBlock));
+  } catch {
+    return records;
+  }
+  for (const row of rows) {
+    try { records[String(row.id)] = JSON.parse(String(row.payload_json)); } catch { /* reported as missing below */ }
+  }
+  return records;
+};
 const dbEpochs = new Map(epochRows.map((row) => [Number(row.epoch), row]));
 const dbBets = new Map(db.prepare(`
   SELECT id, epoch, total_amount FROM scoped_bets WHERE scope = ? AND epoch BETWEEN ? AND ?
@@ -113,12 +131,13 @@ const dbFees = new Map(db.prepare(`
   SELECT id, owner_amount, burn_amount FROM scoped_protocol_fee_flushes
   WHERE scope = ? AND block_number BETWEEN ? AND ?
 `).all(scope, Number(fromBlock), Number(toBlock)).map((row) => [String(row.id).toLowerCase(), row]));
-const batchClaims = storedObject("gamedata:batchClaims");
-const resolverRewards = storedObject("gamedata:resolverRewards");
+const batchClaims = storedIndexerEvents("batch_claim", "gamedata:batchClaims");
+const resolverRewards = storedIndexerEvents("resolver_reward", "gamedata:resolverRewards");
+const dustSettlements = storedIndexerEvents("dust_settlement", "gamedata:dustSettlements");
 
 const seen = {
   bets: new Set(), epochs: new Set(), jackpots: new Set(), rewards: new Set(),
-  batchClaims: new Set(), resolverRewards: new Set(), fees: new Set(), rebates: 0,
+  batchClaims: new Set(), resolverRewards: new Set(), dustSettlements: new Set(), fees: new Set(), rebates: 0,
 };
 const rebateBatchClaimTxs = new Set();
 for (const log of logs) {
@@ -179,6 +198,14 @@ for (const log of logs) {
   } else if (decoded.eventName === "ResolverRewardClaimed") {
     seen.resolverRewards.add(id);
     if (!resolverRewards[id]) addMismatch("resolver-reward", `${decoded.eventName} missing index metadata`);
+  } else if (["RewardDustSettled", "RebateDustSettled"].includes(decoded.eventName) && inEpochWindow) {
+    seen.dustSettlements.add(id);
+    const row = dustSettlements[id];
+    const expectedKind = decoded.eventName === "RewardDustSettled" ? "reward" : "rebate";
+    if (!row) addMismatch("dust-settlement", `${decoded.eventName} missing index metadata`);
+    else if (row.kind !== expectedKind || Number(row.epoch) !== epoch || parseStoredWei(row.amount) !== args.amount) {
+      addMismatch("dust-settlement", `${decoded.eventName} metadata mismatch`);
+    }
   } else if (decoded.eventName === "ProtocolFeesFlushed") {
     seen.fees.add(id);
     const row = dbFees.get(id);

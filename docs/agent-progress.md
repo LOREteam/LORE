@@ -35,6 +35,50 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Indexed claim candidate pagination
+
+- Added a bounded cursor-based API over indexed wallet participation. Pages are
+  deduplicated by epoch, capped at 400 rows, rate limited, and never trigger
+  browser-wide historical RPC polling.
+- Deep Reward Scan now checks only indexed epochs where the embedded Privy
+  wallet actually participated. It no longer scans every protocol epoch and no
+  longer falls back to the external wagmi address when a Privy address exists.
+- SQLite pagination/duplicate tests, scoped ESLint, typecheck, contract
+  invariants, and business-logic tests pass. Dependency audit remains at zero
+  critical/high advisories; moderate/low wallet-tree upgrades remain separate
+  compatibility work.
+- Full indexed Safety Pool history is still open: the normal rebate summary is
+  intentionally capped at 5,000 participating epochs until a bounded load-older
+  UX accumulates and verifies additional pages on demand.
+- Codex Security scan `7c15831c-78e4-4e9c-9ae2-b1b6a6932abc` has complete
+  2/2 coverage artifacts and zero findings for its old snapshot, but finalization
+  now rejects it because repository HEAD changed. Do not treat it as coverage of
+  the current worktree; start a fresh diff scan after the changes are frozen.
+
+## 2026-07-19 - One-year unclaimed rebate settlement candidate
+
+- The V9 source candidate tracks aggregate rebate claims and lets any caller
+  settle the unclaimed remainder to the timelocked `feeRecipient` after the
+  existing 365-day claim window. Bet and resolve paths are unchanged; rebate
+  claims add one accounting write so settlement cannot overdraw shared funds.
+- A batch entrypoint closes multiple mature epochs in one transaction and makes
+  one aggregate token transfer. Unresolved, immature, duplicate, and already
+  settled epoch entries are safely skipped; a batch with no recoverable dust
+  reverts without moving funds.
+- The existing winning-reward dust path now has the same batch capability, so
+  mature unclaimed winnings and mature unclaimed rebates can both be settled
+  without one token transfer transaction per epoch.
+- The client ABI and contract invariants cover the new getter, settlement call,
+  batch call, and events. The current deployed testnet contract is unchanged;
+  this behavior requires a future redeploy.
+- Contract invariants, business logic, focused lint, typecheck, exact Solidity
+  compilation provenance, and `git diff --check` pass. Optimized bytecode grew
+  by 1,457 bytes to 15,723 bytes; normal bet and resolve code paths are
+  unchanged.
+- White Paper now includes concise player terms and risk disclosure. The
+  Scheduled Mining Sessions launch experiment is parked in
+  `docs/product-backlog.md` and is not active runtime behavior.
+
 ## 2026-07-19 - Current-commit clean-checkout reproduction
 
 - Exact commit `23e611f` was exported into an isolated checkout and installed
@@ -687,3 +731,17 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 Append only short entries that materially change current state, verification,
 blockers, or the next step. Move completed history to a dated archive before this
 file grows beyond a compact handoff.
+## 2026-07-19 - Mutation-path and ambiguous-send hardening
+
+- Audited every V9 claim, settlement, resolver-liability, fee-flush, and bet transfer path for replay, zero rounding, state-before-transfer ordering, and operational evidence.
+- Mixed batch reward claims now skip zero-rounded payouts before closing state. Annual reward/rebate dust settlements are persisted by the indexer and compared against chain events.
+- Ambiguous Privy silent-send timeouts now persist a nonce-only pending guard, preventing a manual repeat click from creating a second bet while the first send outcome is unknown.
+- Batch bets now update epoch/user aggregate volume once per transaction instead of once per tile, avoiding up to 48 redundant aggregate storage rewrites for a 25-tile bet without changing accounting or ABI.
+- Claim/indexer mutation audit: normalized batch-claim, resolver-reward, and dust-settlement evidence into scoped O(1) SQLite upserts; preserved legacy reads; fixed jackpot flags when award logs precede resolve; suppressed reward/rebate fallback resends after ambiguous wallet submission timeouts. Open launch gap: one-year claim window still exceeds the 5,000-epoch automatic discovery horizon.
+- Contract/model logic, exact optimizer/Osaka compilation provenance, TypeScript, full lint, production HTTP smoke, and diff hygiene pass. Open product/protocol decisions remain documented in `docs/testnet-deep-audit-2026-07-19.md`.
+
+## 2026-07-20 - Indexed claims and funded soak baseline
+
+- Reward/rebate discovery now pages only indexed participating epochs and prefers the embedded Privy address; storage pagination and duplicate-boundary coverage pass.
+- Fixed two browser-smoke races: empty-state coverage now uses a valid positive epoch, and same-epoch chart freshness waits for a request made after the pool mutation. Scoped ESLint, production HTTP smoke, and the full responsive browser smoke pass.
+- A funded three-role testnet soak is running under the managed supervisor with `AUTOMINER_C` excluded. Preserve this worktree snapshot and monitor it through `soak:testnet:status`; do not start a second supervisor.

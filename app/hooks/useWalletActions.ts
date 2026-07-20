@@ -18,7 +18,7 @@ import { log } from "../lib/logger";
 import { isUserRejection, normalizeDecimalInput } from "../lib/utils";
 import { parsePositiveLineaAmountWei } from "../lib/tokenAmountMath";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
-import { withMiningRpcTimeout } from "./useMining.shared";
+import { isAmbiguousPendingTxError, withMiningRpcTimeout } from "./useMining.shared";
 
 type NotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 type SilentSendFn = (
@@ -444,7 +444,9 @@ export function useWalletActions({
       refreshResolverRewardReads();
       notify(formatTxStatusMessage("Resolver rewards claimed to the connected wallet.", hash), "success");
     } catch (err) {
-      if (!isUserRejection(err)) {
+      if (isAmbiguousPendingTxError(err)) {
+        notify("Resolver reward claim may already be pending. Check wallet activity before retrying.", "warning");
+      } else if (!isUserRejection(err)) {
         log.error("ResolverRewards", "connected claim failed", err);
         const message = err instanceof Error ? err.message : "";
         notify(
@@ -505,7 +507,9 @@ export function useWalletActions({
       refreshResolverRewardReads();
       notify(formatTxStatusMessage("Resolver rewards claimed to the Privy wallet.", hash), "success");
     } catch (err) {
-      if (!isUserRejection(err)) {
+      if (isAmbiguousPendingTxError(err)) {
+        notify("Resolver reward claim may already be pending. Check wallet activity before retrying.", "warning");
+      } else if (!isUserRejection(err)) {
         log.error("ResolverRewards", "embedded claim failed", err);
         const message = err instanceof Error ? err.message : "";
         notify(

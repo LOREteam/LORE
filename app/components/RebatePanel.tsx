@@ -114,7 +114,7 @@ export const RebatePanel = React.memo(function RebatePanel({
                 </div>
                 <div>
                   <div className="text-[8px] font-bold uppercase tracking-widest text-gray-400 mb-0.5">Claimable epochs</div>
-                  <div className="text-xl font-black text-sky-400">
+                  <div className="lore-nums text-xl font-black text-sky-400">
                     {rebateInfo?.claimableEpochs ?? 0}
                   </div>
                 </div>
@@ -244,7 +244,7 @@ function StatBox({ label, value, accent }: { label: string; value: string; accen
   return (
     <div className={`p-3 border ${uiTokens.radius.md} ${colors[accent]}`}>
       <div className="text-[8px] font-bold uppercase tracking-widest text-gray-400 mb-1">{label}</div>
-      <div className="text-lg font-black">{value}</div>
+      <div className="lore-nums text-lg font-black">{value}</div>
     </div>
   );
 }

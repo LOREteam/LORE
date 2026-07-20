@@ -39,7 +39,7 @@ export function useWalletAncillaryData({
     stop: deepScanStop,
     claimOne: deepClaimOne,
     claimAllDeep,
-  } = useDeepRewardScan(sendTransactionSilent, notify);
+  } = useDeepRewardScan(sendTransactionSilent, notify, embeddedWalletAddress);
 
   return useMemo(
     () => ({

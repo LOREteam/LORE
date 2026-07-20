@@ -131,6 +131,8 @@ const EVENTS_ABI = parseAbi([
   "event RewardBatchClaimed(address indexed user, uint256 totalAmount, uint256 epochsClaimed)",
   "event RebateClaimed(address indexed user, uint256 indexed epoch, uint256 amount)",
   "event RebateBatchClaimed(address indexed user, uint256 amount, uint256 epochsClaimed)",
+  "event RewardDustSettled(uint256 indexed epoch, uint256 amount)",
+  "event RebateDustSettled(uint256 indexed epoch, uint256 amount)",
   "event ResolverRewardAccrued(address indexed resolver, uint256 indexed epoch, uint256 amount)",
   "event ResolverRewardClaimed(address indexed resolver, uint256 amount)",
   "event ProtocolFeesFlushed(uint256 ownerAmount, uint256 burnAmount)",
@@ -184,6 +186,8 @@ const [rewardClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "Rewa
 const [rewardBatchClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RewardBatchClaimed" });
 const [rebateClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RebateClaimed" });
 const [rebateBatchClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RebateBatchClaimed" });
+const [rewardDustSettledSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RewardDustSettled" });
+const [rebateDustSettledSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RebateDustSettled" });
 const [resolverRewardAccruedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "ResolverRewardAccrued" });
 const [resolverRewardClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "ResolverRewardClaimed" });
 const [feesFlushedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "ProtocolFeesFlushed" });
@@ -439,6 +443,15 @@ function normalizeBetRecord(bet: BetRecord): BetRecord {
   };
 }
 
+interface DustSettlementRecord {
+  id: string;
+  kind: "reward" | "rebate";
+  epoch: string;
+  amount: string;
+  txHash: string;
+  blockNumber: string;
+}
+
 function processLogs(logs: Log[]) {
   const bets: BetRecord[] = [];
   const epochs: Map<string, EpochRecord> = new Map();
@@ -447,6 +460,9 @@ function processLogs(logs: Log[]) {
   const feeFlushes: FeeFlushRecord[] = [];
   const batchClaims: BatchClaimRecord[] = [];
   const resolverRewards: ResolverRewardRecord[] = [];
+  const dustSettlements: DustSettlementRecord[] = [];
+  const dailyJackpotEpochs = new Set<string>();
+  const weeklyJackpotEpochs = new Set<string>();
   const rebateBatchClaimTxs = new Set(
     logs
       .filter((log) => log.topics[0] === rebateBatchClaimedSig && log.transactionHash)
@@ -535,8 +551,8 @@ function processLogs(logs: Log[]) {
           rewardPool: formatUnits(args.rewardPool, 18),
           fee: formatUnits(args.fee, 18),
           jackpotBonus: formatUnits(args.jackpotBonus, 18),
-          isDailyJackpot: false,
-          isWeeklyJackpot: false,
+          isDailyJackpot: dailyJackpotEpochs.has(args.epoch.toString()),
+          isWeeklyJackpot: weeklyJackpotEpochs.has(args.epoch.toString()),
           resolvedBlock: (log.blockNumber ?? 0n).toString(),
         });
       } else if (topic0 === dailySig) {
@@ -544,6 +560,7 @@ function processLogs(logs: Log[]) {
         if (decoded.eventName !== "DailyJackpotAwarded") continue;
         const args = decoded.args as { epoch: bigint; amount: bigint };
         const ep = args.epoch.toString();
+        dailyJackpotEpochs.add(ep);
         const existing = epochs.get(ep);
         if (existing) existing.isDailyJackpot = true;
         jackpots.push({
@@ -559,6 +576,7 @@ function processLogs(logs: Log[]) {
         if (decoded.eventName !== "WeeklyJackpotAwarded") continue;
         const args = decoded.args as { epoch: bigint; amount: bigint };
         const ep = args.epoch.toString();
+        weeklyJackpotEpochs.add(ep);
         const existing = epochs.get(ep);
         if (existing) existing.isWeeklyJackpot = true;
         jackpots.push({
@@ -622,6 +640,18 @@ function processLogs(logs: Log[]) {
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
+      } else if (topic0 === rewardDustSettledSig || topic0 === rebateDustSettledSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "RewardDustSettled" && decoded.eventName !== "RebateDustSettled") continue;
+        const args = decoded.args as { epoch: bigint; amount: bigint };
+        dustSettlements.push({
+          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          kind: decoded.eventName === "RewardDustSettled" ? "reward" : "rebate",
+          epoch: args.epoch.toString(),
+          amount: formatUnits(args.amount, 18),
+          txHash: log.transactionHash ?? "",
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
       } else if (topic0 === resolverRewardAccruedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "ResolverRewardAccrued") continue;
@@ -672,6 +702,7 @@ function processLogs(logs: Log[]) {
     feeFlushes,
     batchClaims,
     resolverRewards,
+    dustSettlements,
   };
 }
 
@@ -753,6 +784,13 @@ async function writeResolverRewards(records: ResolverRewardRecord[]) {
     patch[row.id] = row;
   }
   storagePatch("gamedata/resolverRewards", patch);
+}
+
+async function writeDustSettlements(records: DustSettlementRecord[]) {
+  if (records.length === 0) return;
+  const patch: Record<string, unknown> = {};
+  for (const row of records) patch[row.id] = row;
+  storagePatch("gamedata/dustSettlements", patch);
 }
 
 async function writeFeeFlushes(feeFlushes: FeeFlushRecord[]) {
@@ -848,7 +886,7 @@ async function runRepairPass(currentBlock: bigint) {
 
   const logs = await fetchAllLogs(from, to);
   if (logs.length > 0) {
-    const { bets, epochs, jackpots, rewardClaims, feeFlushes, batchClaims, resolverRewards } = processLogs(logs);
+    const { bets, epochs, jackpots, rewardClaims, feeFlushes, batchClaims, resolverRewards, dustSettlements } = processLogs(logs);
     await writeBets(bets);
     await writeEpochs(epochs);
     await writeJackpots(jackpots);
@@ -856,6 +894,7 @@ async function runRepairPass(currentBlock: bigint) {
     await writeFeeFlushes(feeFlushes);
     await writeBatchClaims(batchClaims);
     await writeResolverRewards(resolverRewards);
+    await writeDustSettlements(dustSettlements);
     console.log(`[indexer][repair] Repaired ${logs.length} logs (${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots, ${rewardClaims.length} claims)`);
   } else {
     console.log("[indexer][repair] No logs in this range");
@@ -1107,7 +1146,7 @@ async function runOnce() {
     console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} fetched ${logs.length} logs`);
 
     if (logs.length > 0) {
-      const { bets, epochs, jackpots, rewardClaims, feeFlushes, batchClaims, resolverRewards } = processLogs(logs);
+      const { bets, epochs, jackpots, rewardClaims, feeFlushes, batchClaims, resolverRewards, dustSettlements } = processLogs(logs);
       console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} parsed: ${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots, ${rewardClaims.length} claims`);
 
       await writeBets(bets);
@@ -1117,6 +1156,7 @@ async function runOnce() {
       await writeFeeFlushes(feeFlushes);
       await writeBatchClaims(batchClaims);
       await writeResolverRewards(resolverRewards);
+      await writeDustSettlements(dustSettlements);
       console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} written to local SQLite`);
     }
 

@@ -14,7 +14,8 @@ export interface PendingMiningTxState {
   chainId: number;
   contract: `0x${string}`;
   actor: `0x${string}`;
-  hash: `0x${string}`;
+  hash?: `0x${string}`;
+  nonce?: number;
   ts: number;
 }
 
@@ -23,6 +24,7 @@ export type PendingMiningTxRecovery = "clear" | "confirmed" | "pending";
 type PendingMiningTxClient = {
   getTransaction: (args: { hash: `0x${string}` }) => Promise<{ blockNumber?: bigint | null }>;
   getTransactionReceipt: (args: { hash: `0x${string}` }) => Promise<{ status: "reverted" | "success" }>;
+  getTransactionCount?: (args: { address: `0x${string}`; blockTag: "latest" | "pending" }) => Promise<number>;
 };
 
 interface SanitizeMiningTxPathOptions {
@@ -103,14 +105,17 @@ export function sanitizePendingMiningTxState(value: unknown): PendingMiningTxSta
   if (!Number.isSafeInteger(raw.chainId) || Number(raw.chainId) <= 0) return null;
   if (typeof raw.contract !== "string" || !ADDRESS_RE.test(raw.contract)) return null;
   if (typeof raw.actor !== "string" || !ADDRESS_RE.test(raw.actor)) return null;
-  if (typeof raw.hash !== "string" || !HEX_32_RE.test(raw.hash)) return null;
+  const hash = typeof raw.hash === "string" && HEX_32_RE.test(raw.hash) ? raw.hash.toLowerCase() as `0x${string}` : undefined;
+  const nonce = Number.isSafeInteger(raw.nonce) && Number(raw.nonce) >= 0 ? Number(raw.nonce) : undefined;
+  if (!hash && nonce === undefined) return null;
   if (typeof raw.ts !== "number" || !Number.isFinite(raw.ts) || raw.ts <= 0) return null;
   if (raw.ts - Date.now() > MINING_TX_PATH_MAX_FUTURE_SKEW_MS) return null;
   return {
     chainId: Number(raw.chainId),
     contract: raw.contract.toLowerCase() as `0x${string}`,
     actor: raw.actor.toLowerCase() as `0x${string}`,
-    hash: raw.hash.toLowerCase() as `0x${string}`,
+    ...(hash ? { hash } : {}),
+    ...(nonce !== undefined ? { nonce } : {}),
     ts: raw.ts,
   };
 }
@@ -171,6 +176,21 @@ export async function recoverPendingMiningTx(
   state: PendingMiningTxState,
   now = Date.now(),
 ): Promise<PendingMiningTxRecovery> {
+  if (!state.hash) {
+    if (state.nonce === undefined || !client.getTransactionCount) return "pending";
+    try {
+      const [latestNonce, pendingNonce] = await Promise.all([
+        client.getTransactionCount({ address: state.actor, blockTag: "latest" }),
+        client.getTransactionCount({ address: state.actor, blockTag: "pending" }),
+      ]);
+      if (latestNonce > state.nonce) return "confirmed";
+      if (pendingNonce > state.nonce) return "pending";
+      return now - state.ts >= PENDING_TX_NOT_FOUND_GRACE_MS ? "clear" : "pending";
+    } catch {
+      return "pending";
+    }
+  }
+
   try {
     const receipt = await client.getTransactionReceipt({ hash: state.hash });
     if (receipt.status === "reverted") return "clear";

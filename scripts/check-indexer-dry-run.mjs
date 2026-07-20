@@ -23,6 +23,9 @@ const REQUIRED_TABLES = [
   "scoped_jackpots",
   "reward_claims",
   "scoped_reward_claims",
+  "protocol_fee_flushes",
+  "scoped_protocol_fee_flushes",
+  "scoped_indexer_events",
 ];
 const REQUIRED_CHAIN_COMPARISONS = ["jackpot", "deposits", "rewards", "rebates", "latestEpochs"];
 const TEMPLATE_VALUE_RE = /REPLACE_|<REDACTED>|TODO|TBD/i;

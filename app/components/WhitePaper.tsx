@@ -102,7 +102,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
             { step: "2", title: "Place Bets", desc: "Select one or more tiles and stake LINEA tokens. Each tile accumulates its own pool from all players." },
             { step: "3", title: "Epoch Ends", desc: "When the timer reaches zero, no more bets are accepted. The smart contract resolves the epoch." },
             { step: "4", title: "Winner Revealed", desc: "The contract resolves the epoch in one transaction and maps the V9 on-chain entropy hash to tile 1–25." },
-            { step: "5", title: "Fees Split", desc: "The pool is split: 92% to winners, 2% to daily jackpot, 3% to weekly jackpot, 2% protocol fee (half to treasury, half to Safety Pool), 1% burn." },
+            { step: "5", title: "Fees Split", desc: "Fresh stake is split: 92% to winners, 2% to daily jackpot, 3% to weekly jackpot, 2% protocol fee, and 1% burn. A 0.05% resolver reward comes from the protocol fee; the remainder is split between treasury and Safety Pool." },
             { step: "6", title: "Jackpot Check", desc: "If there is at least one winner, the contract runs daily/weekly checks at resolve time. On trigger, the full jackpot pool is added to this epoch." },
             { step: "7", title: "Claim Rewards", desc: "Winners claim their share from the Rewards panel. If no one hit the winning tile, the base reward rolls into the next round and the jackpot pools keep growing." },
           ]} />
@@ -113,13 +113,14 @@ export const WhitePaper = React.memo(function WhitePaper() {
         <Section id="tokenomics" badge="03" title="Tokenomics & Fee Split" icon={TokenIcon} delay={0.1}>
           <P>
             LORE uses the <Accent>LINEA token</Accent> for all in-game operations.
-            Every round&apos;s total pool (all bets + rollover from previous no-winner rounds) is split as follows:
+            Fresh stake in each non-empty round is split as follows. Rollover from previous no-winner rounds is added
+            to the next base reward without being charged the percentages again:
           </P>
           <Grid2>
-            <StatCard label="Winners" value="92%" sub="base reward to winning-tile holders" color="emerald" />
+            <StatCard label="Winners" value="92%" sub="of fresh stake, plus 100% of rollover" color="emerald" />
             <StatCard label="Daily Jackpot" value="2%" sub="accrues every round, triggers once/day" color="amber" />
             <StatCard label="Weekly Jackpot" value="3%" sub="accrues every round, triggers once/week" color="sky" />
-            <StatCard label="Protocol + Burn" value="3%" sub="2% protocol fee (1% treasury, 1% Safety Pool), 1% burn" color="violet" />
+            <StatCard label="Protocol + Burn" value="3%" sub="2% protocol fee, including resolver and Safety Pool; 1% burn" color="violet" />
           </Grid2>
           <InfoBox emoji="🎰" title="Dual Jackpot System">
             Every round, 2% feeds the <Accent>Daily Jackpot</Accent> pool and 3% feeds the <Accent>Weekly Jackpot</Accent> pool.
@@ -195,12 +196,13 @@ export const WhitePaper = React.memo(function WhitePaper() {
           <Grid2>
             <FeatureCard icon="⛏" title="Missed Tile Cover" desc="Only players with zero bet on the winning tile are eligible for that epoch's Safety Pool." />
             <FeatureCard icon="📊" title="Volume Based" desc="The Safety Pool is split proportionally across eligible losing-player volume." />
-            <FeatureCard icon="💰" title="1% Safety Pool" desc="Half of the 2% protocol fee is reserved for players who missed the winning tile." />
-            <FeatureCard icon="🏦" title="Claim Anytime" desc="Safety Pool payouts accumulate in the contract and can be claimed later in batches." />
+            <FeatureCard icon="💰" title="0.975% Safety Pool" desc="After the 0.05% resolver reward, half of the remaining protocol fee is reserved for eligible players." />
+            <FeatureCard icon="🏦" title="One-Year Claim Window" desc="Safety Pool payouts can be claimed individually or in batches for one year after resolution." />
           </Grid2>
           <InfoBox emoji="🤝" title="How Safety Pool Works">
-            Each round, 2% of the pool goes to protocol accounting. Half of that stays with treasury, and the other half
-            becomes the epoch Safety Pool. After the epoch resolves, players who had no bet on the winning tile can claim
+            Each non-empty round sends 2% of fresh stake to protocol accounting. The resolver receives 0.05%; the remaining
+            1.95% is split approximately equally between treasury and the epoch Safety Pool, with integer rounding assigned
+            by the contract. After the epoch resolves, players who had no bet on the winning tile can claim
             in proportion to their eligible losing volume. If you hit the winning tile with any amount, you are not eligible
             for that epoch&apos;s Safety Pool.
           </InfoBox>
@@ -279,7 +281,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
           </P>
           <FormulaBlock />
           <P>
-            The <Accent>rewardPool</Accent> = 92% of the total pool (all bets + rollover from previous no-winner rounds).
+            The <Accent>rewardPool</Accent> = 92% of fresh stake plus the full rollover from previous no-winner rounds.
             If a jackpot triggers on your round, the entire accumulated jackpot pool is <B>added on top</B>.
           </P>
           <P>
@@ -362,6 +364,35 @@ export const WhitePaper = React.memo(function WhitePaper() {
             <TechBadge name="Solidity" color="amber" />
             <TechBadge name="Linea" color="indigo" />
           </div>
+        </Section>
+
+        <Divider />
+
+        <Section id="transparent-play" badge="14" title="Transparent Play" icon={ContractIcon} delay={0.65}>
+          <P>
+            LORE is designed around narrow, visible on-chain rules. Bets, round results, reward pools, jackpots,
+            and claims can be independently verified. The contract does not include an arbitrary owner withdrawal
+            for active player rewards or jackpot balances, and sensitive configuration changes use explicit limits
+            or timelocks.
+          </P>
+          <InfoBox emoji="🛡" title="Know the remaining risks">
+            On-chain rules reduce trust assumptions, but no blockchain game is risk-free. Smart-contract defects,
+            wallet or RPC failures, network congestion, token-price changes, and transaction fees can affect play.
+            Winning outcomes are probabilistic and are not guaranteed; the current randomness uses public on-chain
+            inputs rather than an external VRF oracle.
+          </InfoBox>
+          <InfoBox emoji="⚖" title="Play on your terms">
+            Use only funds you are comfortable risking, keep enough ETH for network fees, and review every wallet
+            action before confirming it. By playing, you confirm that you meet the age and legal requirements that
+            apply in your jurisdiction. Rewards and Safety Pool rebates remain claimable for one year after a round
+            resolves; any unclaimed remainder may then be settled to the timelocked fee recipient. LORE is an
+            entertainment product, not an investment or a promise of profit.
+          </InfoBox>
+          <P>
+            These disclosures are here to keep the game fair and understandable, not to hide the experience behind
+            legal language. The best protection is simple: transparent rules, bounded permissions, clear transaction
+            states, and player-controlled wallets.
+          </P>
         </Section>
 
         <Footer />

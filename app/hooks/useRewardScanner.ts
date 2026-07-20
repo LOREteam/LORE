@@ -9,6 +9,7 @@ import type { UnclaimedWin } from "../lib/types";
 import { isUserRejection, delay } from "../lib/utils";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 interface UseRewardScannerOptions {
   enabled?: boolean;
@@ -28,6 +29,7 @@ const CLAIM_GAS_FALLBACK = 200_000n;
 const CLAIM_GAS_BUFFER = 20_000n;
 const CLAIM_GAS_HEADROOM_BPS = 12_000n;
 const BPS_DENOMINATOR = 10_000n;
+const REWARD_CLAIM_WINDOW_SECONDS = 365n * 24n * 60n * 60n;
 /** How long before a background re-scan is triggered after using cached data. */
 const REWARD_SCAN_CACHE_RESCAN_MS = 15 * 60_000; // 15 minutes
 
@@ -80,6 +82,10 @@ export function compareRewardScanWinsDesc(left: UnclaimedWin, right: UnclaimedWi
   const a = BigInt(leftEpoch);
   const b = BigInt(rightEpoch);
   return a === b ? 0 : b > a ? 1 : -1;
+}
+
+export function isRewardClaimWindowOpen(resolvedAt: bigint, chainTimestamp: bigint): boolean {
+  return resolvedAt === 0n || chainTimestamp < resolvedAt + REWARD_CLAIM_WINDOW_SECONDS;
 }
 
 function loadCachedRewardScan(address: string): {
@@ -152,9 +158,12 @@ export function getRewardScanRescanDelayMs(savedAt: number | null, now = Date.no
   return REWARD_SCAN_CACHE_RESCAN_MS - age;
 }
 
-function formatClaimError(err: unknown): string {
+export function formatRewardClaimError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   const lower = message.toLowerCase();
+  if (lower.includes("rewardclaimwindowexpired") || lower.includes("claim window expired")) {
+    return "This reward claim window has expired.";
+  }
   if (lower.includes("notresolved")) return "Reward is not claimable yet because the epoch is not resolved.";
   if (lower.includes("already claimed") || lower.includes("hasclaimed") || lower.includes("claimed")) {
     return "This reward was already claimed.";
@@ -434,6 +443,7 @@ export function useRewardScanner(
     }
 
     try {
+      const chainTimestamp = (await publicClient.getBlock({ blockTag: "latest" })).timestamp;
       // Start with any cached wins (they'll be re-validated for claimed status)
       const wins: UnclaimedWin[] = [];
       const startEpoch = actualCurrentEpoch > BigInt(1) ? actualCurrentEpoch - BigInt(1) : BigInt(0);
@@ -493,7 +503,7 @@ export function useRewardScanner(
 
           if (potentialWins.length > 0) {
             consecutiveEmpty = 0;
-            const [betResults, tilePoolResults] = await Promise.all([
+            const [betResults, tilePoolResults, resolvedAtResults] = await Promise.all([
               publicClient.multicall({
                 contracts: potentialWins.map((w) => ({
                   address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "userBets" as const, args: [w.id, w.winTile, address],
@@ -504,16 +514,27 @@ export function useRewardScanner(
                   address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "tilePools" as const, args: [w.id, w.winTile],
                 })),
               }),
+              publicClient.multicall({
+                contracts: potentialWins.map((w) => ({
+                  address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochResolvedAt" as const, args: [w.id],
+                })),
+              }),
             ]);
             if (requestId !== requestIdRef.current) return;
 
             potentialWins.forEach((w, index) => {
               const betAmt = betResults[index]?.result as unknown as bigint | undefined;
               const tileTotal = tilePoolResults[index]?.result as unknown as bigint | undefined;
-              if (betAmt && betAmt > BigInt(0) && tileTotal && tileTotal > BigInt(0)) {
+              const resolvedAt = resolvedAtResults[index]?.result as unknown as bigint | undefined;
+              if (
+                betAmt && betAmt > 0n && tileTotal && tileTotal > 0n && resolvedAt !== undefined
+                && isRewardClaimWindowOpen(resolvedAt, chainTimestamp)
+              ) {
+                const amountWei = (w.rewardPool * betAmt) / tileTotal;
+                if (amountWei === 0n) return;
                 wins.push({
                   epoch: w.id.toString(),
-                  amountWei: ((w.rewardPool * betAmt) / tileTotal).toString(),
+                  amountWei: amountWei.toString(),
                 });
               }
             });
@@ -538,7 +559,7 @@ export function useRewardScanner(
         // Re-validate cached wins: check if any were claimed or dust-settled since last scan
         if (cached.wins.length > 0) {
           const cachedEpochIds = cached.wins.map((w) => w.epoch);
-          const [claimChecks, dustChecks] = await Promise.all([
+          const [claimChecks, dustChecks, resolvedAtChecks] = await Promise.all([
             publicClient.multicall({
               contracts: cachedEpochIds.map((epochId) => ({
                 address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "hasClaimed" as const, args: [address, BigInt(epochId)],
@@ -549,13 +570,22 @@ export function useRewardScanner(
                 address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochDustSettled" as const, args: [BigInt(epochId)],
               })),
             }),
+            publicClient.multicall({
+              contracts: cachedEpochIds.map((epochId) => ({
+                address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochResolvedAt" as const, args: [BigInt(epochId)],
+              })),
+            }),
           ]);
           if (requestId !== requestIdRef.current) return;
 
           cached.wins.forEach((w, index) => {
             const claimed = claimChecks[index]?.result as unknown as boolean | undefined;
             const dustSettled = dustChecks[index]?.result as unknown as boolean | undefined;
-            if (claimed !== true && dustSettled !== true) {
+            const resolvedAt = resolvedAtChecks[index]?.result as unknown as bigint | undefined;
+            if (
+              claimed !== true && dustSettled !== true && resolvedAt !== undefined
+              && isRewardClaimWindowOpen(resolvedAt, chainTimestamp)
+            ) {
               wins.push(w);
             }
           });
@@ -704,9 +734,12 @@ export function useRewardScanner(
         }
         notify?.(formatClaimTxMessage("Reward claimed successfully.", hash), "success");
       } catch (err) {
-        if (!isUserRejection(err)) {
+        if (isAmbiguousPendingTxError(err)) {
+          notify?.("Reward claim may already be pending. Check wallet activity and refresh rewards before retrying.", "warning");
+          void scanRewards();
+        } else if (!isUserRejection(err)) {
           log.warn("RewardScanner", "claim error", { message: err instanceof Error ? err.message : String(err) });
-          notify?.(formatClaimError(err), "danger");
+          notify?.(formatRewardClaimError(err), "danger");
           void scanRewards();
         } else {
           notify?.("Reward claim rejected in wallet.", "info");
@@ -789,6 +822,10 @@ export function useRewardScanner(
           break;
         }
       } catch (err) {
+        if (isAmbiguousPendingTxError(err)) {
+          pendingClaimTx = true;
+          break;
+        }
         if (isUserRejection(err)) {
           claimRejected = true;
           break;

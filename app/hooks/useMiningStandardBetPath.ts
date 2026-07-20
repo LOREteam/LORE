@@ -112,6 +112,7 @@ export function useMiningStandardBetPath({
           contract: CONTRACT_ADDRESS,
           actor: actor as `0x${string}`,
           hash,
+          ...(nonce !== undefined ? { nonce } : {}),
         });
       }
       const state = await waitReceipt(hash, client);
@@ -348,13 +349,17 @@ export function useMiningStandardBetPath({
       }
 
       let hash: `0x${string}`;
+      const actor = getActorAddress();
+      const effectiveNonce = txNonce ?? (actor
+        ? Number(await client.getTransactionCount({ address: actor as `0x${string}`, blockTag: "pending" }))
+        : undefined);
       try {
         hash = await silentSend(
           {
             to: CONTRACT_ADDRESS,
             data,
             gas,
-            ...(txNonce !== undefined ? { nonce: txNonce } : {}),
+            ...(effectiveNonce !== undefined ? { nonce: effectiveNonce } : {}),
           },
           gasOverrides,
         );
@@ -366,13 +371,21 @@ export function useMiningStandardBetPath({
         });
       } catch (error) {
         if (isAmbiguousPendingTxError(error)) {
+          if (actor && effectiveNonce !== undefined) {
+            writePendingMiningTxState({
+              chainId: APP_CHAIN_ID,
+              contract: CONTRACT_ADDRESS,
+              actor: actor as `0x${string}`,
+              nonce: effectiveNonce,
+            });
+          }
           log.warn("Mine", "silent send may already be pending, avoiding duplicate wallet fallback", error);
           return "pending";
         }
         throw error;
       }
 
-      return waitTrackedReceipt(hash, client, txNonce);
+      return waitTrackedReceipt(hash, client, effectiveNonce);
     },
     [
       assertNativeGasBalance,
@@ -381,6 +394,7 @@ export function useMiningStandardBetPath({
       ensureContractPreflight,
       ensurePreferredWallet,
       estimateGas,
+      getActorAddress,
       readPublicClient,
       readSilentSend,
       recoverTrackedPending,

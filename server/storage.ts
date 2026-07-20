@@ -21,6 +21,7 @@ const SCOPED_BETS_TABLE = "scoped_bets";
 const SCOPED_JACKPOTS_TABLE = "scoped_jackpots";
 const SCOPED_REWARD_CLAIMS_TABLE = "scoped_reward_claims";
 const SCOPED_PROTOCOL_FEE_FLUSHES_TABLE = "scoped_protocol_fee_flushes";
+const SCOPED_INDEXER_EVENTS_TABLE = "scoped_indexer_events";
 const ACTIVE_CONTRACT_SCOPE_META_KEY = "__storage_active_contract_scope";
 const LEGACY_CONTRACT_META_KEYS = [
   "currentEpoch",
@@ -30,6 +31,7 @@ const LEGACY_CONTRACT_META_KEYS = [
   "gamedata:epochLifecycle",
   "gamedata:batchClaims",
   "gamedata:resolverRewards",
+  "gamedata:dustSettlements",
 ] as const;
 const CONTRACT_SCOPE_PURGE_ENV = "LORE_ALLOW_CONTRACT_SCOPE_PURGE";
 
@@ -99,6 +101,13 @@ export interface ChatProfileRow {
 }
 
 type JsonMap = Record<string, unknown>;
+type IndexerEventCategory = "batch_claim" | "resolver_reward" | "dust_settlement";
+
+const INDEXER_EVENT_PATHS: Record<string, IndexerEventCategory> = {
+  "gamedata/batchClaims": "batch_claim",
+  "gamedata/resolverRewards": "resolver_reward",
+  "gamedata/dustSettlements": "dust_settlement",
+};
 
 function parseJsonArray<T>(value: unknown): T[] {
   if (typeof value !== "string") return [];
@@ -214,6 +223,7 @@ function purgeScopedContractData(exceptScope: string) {
     SCOPED_JACKPOTS_TABLE,
     SCOPED_REWARD_CLAIMS_TABLE,
     SCOPED_PROTOCOL_FEE_FLUSHES_TABLE,
+    SCOPED_INDEXER_EVENTS_TABLE,
   ];
 
   runInTransaction(() => {
@@ -280,6 +290,7 @@ function hasForeignScopedContractData(exceptScope: string) {
     SCOPED_JACKPOTS_TABLE,
     SCOPED_REWARD_CLAIMS_TABLE,
     SCOPED_PROTOCOL_FEE_FLUSHES_TABLE,
+    SCOPED_INDEXER_EVENTS_TABLE,
   ];
 
   for (const table of scopedTables) {
@@ -561,6 +572,44 @@ export function getUserParticipatingEpochs(user: string, limit?: number) {
   return rows
     .map((row) => Number(row.epoch ?? 0))
     .filter(isSafePositiveInteger);
+}
+
+export function getUserParticipatingEpochPage(
+  user: string,
+  options?: { beforeEpoch?: number | null; limit?: number },
+) {
+  const normalized = normalizeWallet(user);
+  const beforeEpoch = options?.beforeEpoch;
+  const limit = Math.min(400, Math.max(1, Math.trunc(options?.limit ?? 200)));
+  const rows = (
+    isSafePositiveInteger(beforeEpoch ?? 0)
+      ? db.prepare(`
+          SELECT DISTINCT epoch
+          FROM ${SCOPED_BETS_TABLE}
+          WHERE scope = ? AND user = ? AND epoch < ?
+          ORDER BY epoch DESC
+          LIMIT ?
+        `).all(CURRENT_STORAGE_SCOPE, normalized, beforeEpoch, limit + 1)
+      : db.prepare(`
+          SELECT DISTINCT epoch
+          FROM ${SCOPED_BETS_TABLE}
+          WHERE scope = ? AND user = ?
+          ORDER BY epoch DESC
+          LIMIT ?
+        `).all(CURRENT_STORAGE_SCOPE, normalized, limit + 1)
+  ) as Array<Record<string, unknown>>;
+
+  const epochs = rows
+    .slice(0, limit)
+    .map((row) => Number(row.epoch ?? 0))
+    .filter(isSafePositiveInteger);
+  const hasMore = rows.length > limit;
+
+  return {
+    epochs,
+    hasMore,
+    nextCursor: hasMore && epochs.length > 0 ? epochs[epochs.length - 1] : null,
+  };
 }
 
 export function getAllBetRows() {
@@ -967,6 +1016,44 @@ export function upsertProtocolFeeFlushes(rows: FeeFlushStorageRow[]) {
   }, "protocol_fee_flushes");
 }
 
+function getIndexerEventMap(category: IndexerEventCategory) {
+  const rows = db.prepare(`
+    SELECT id, payload_json
+    FROM ${SCOPED_INDEXER_EVENTS_TABLE}
+    WHERE scope = ? AND category = ?
+    ORDER BY block_number ASC, id ASC
+  `).all(CURRENT_STORAGE_SCOPE, category) as Array<Record<string, unknown>>;
+  const result: JsonMap = {};
+  for (const row of rows) {
+    const id = String(row.id ?? "");
+    if (!id) continue;
+    try {
+      result[id] = JSON.parse(String(row.payload_json ?? "{}"));
+    } catch (err) {
+      console.warn("[storage] Invalid indexed event payload:", (err as Error).message ?? err);
+    }
+  }
+  return result;
+}
+
+function upsertIndexerEvents(category: IndexerEventCategory, records: JsonMap) {
+  const statement = db.prepare(`
+    INSERT INTO ${SCOPED_INDEXER_EVENTS_TABLE}(scope, category, id, payload_json, block_number)
+    VALUES(?, ?, ?, ?, ?)
+    ON CONFLICT(scope, category, id) DO UPDATE SET
+      payload_json = excluded.payload_json,
+      block_number = excluded.block_number
+  `);
+  runInTransaction(() => {
+    for (const [id, payload] of Object.entries(records)) {
+      if (!payload || typeof payload !== "object") continue;
+      const blockNumber = parseSafePositiveIntegerString(String((payload as JsonMap).blockNumber ?? ""));
+      if (blockNumber === null) continue;
+      statement.run(CURRENT_STORAGE_SCOPE, category, id, JSON.stringify(payload), blockNumber);
+    }
+  }, "indexer_events");
+}
+
 export function getChatMessages(limit = MAX_CHAT_MESSAGES): ChatMessageRow[] {
   const rows = db.prepare(`
     SELECT id, sender, sender_name, sender_avatar, text, timestamp
@@ -1229,12 +1316,10 @@ export function readJsonPath<T>(path: string, limitToLast?: number): T | null {
     return getMetaJsonMap<T & JsonMap>("gamedata:epochLifecycle") as T;
   }
 
-  if (path === "gamedata/batchClaims") {
-    return getMetaJsonMap<T & JsonMap>("gamedata:batchClaims") as T;
-  }
-
-  if (path === "gamedata/resolverRewards") {
-    return getMetaJsonMap<T & JsonMap>("gamedata:resolverRewards") as T;
+  const indexerEventCategory = INDEXER_EVENT_PATHS[path];
+  if (indexerEventCategory) {
+    const legacy = getMetaJsonMap<JsonMap>(path.replace("/", ":"));
+    return { ...legacy, ...getIndexerEventMap(indexerEventCategory) } as T;
   }
 
   return null;
@@ -1266,13 +1351,9 @@ export function patchJsonPath(path: string, data: JsonMap) {
     return;
   }
 
-  if (path === "gamedata/batchClaims") {
-    patchMetaJsonMap("gamedata:batchClaims", data);
-    return;
-  }
-
-  if (path === "gamedata/resolverRewards") {
-    patchMetaJsonMap("gamedata:resolverRewards", data);
+  const indexerEventCategory = INDEXER_EVENT_PATHS[path];
+  if (indexerEventCategory) {
+    upsertIndexerEvents(indexerEventCategory, data);
     return;
   }
 

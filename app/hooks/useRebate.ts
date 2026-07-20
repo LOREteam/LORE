@@ -21,6 +21,7 @@ import {
 } from "../lib/safetyPoolClaimThreshold";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 type SilentSendFn = (tx: {
   to: `0x${string}`;
@@ -923,6 +924,7 @@ export function useRebate(options?: UseRebateOptions) {
             await submitClaimBatch(batch);
             localClaimedCount += batch.length;
           } catch (err) {
+            if (isAmbiguousPendingTxError(err)) throw err;
             if (batch.length === 1) {
               usedSplitFallback = true;
               log.warn("Rebate", "batch claim failed for single epoch, trying claimEpochRebate fallback", {
@@ -970,7 +972,13 @@ export function useRebate(options?: UseRebateOptions) {
     } catch (err) {
       await refetchRebateInfo({ forceFresh: true });
 
-      if (isUserRejection(err)) {
+      if (isAmbiguousPendingTxError(err)) {
+        log.warn("Rebate", "claim submission status is ambiguous; fallback suppressed", err);
+        notify?.(
+          "Safety Pool claim may already be pending. Check wallet activity and refresh Safety Pool before retrying.",
+          "warning",
+        );
+      } else if (isUserRejection(err)) {
         log.warn("Rebate", "claim cancelled", err);
         if (claimedEpochCount > 0) {
           notify?.(

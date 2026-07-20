@@ -5,11 +5,13 @@ const contractPath = "contracts/LineaOreV9.sol";
 const delegatePath = "contracts/LineaOre7702Delegate.sol";
 const constantsPath = "app/lib/constants.ts";
 const indexerPath = "scripts/indexer.ts";
+const chainIndexerAuditPath = "scripts/audit-chain-indexer-window.mjs";
 
 const source = readFileSync(contractPath, "utf8");
 const delegateSource = readFileSync(delegatePath, "utf8");
 const constants = readFileSync(constantsPath, "utf8");
 const indexerSource = readFileSync(indexerPath, "utf8");
+const chainIndexerAuditSource = readFileSync(chainIndexerAuditPath, "utf8");
 
 function getConstantBigInt(name) {
   const match = source.match(new RegExp(`uint256\\s+public\\s+constant\\s+${name}\\s*=\\s*([^;]+);`));
@@ -97,6 +99,7 @@ function filterDeclarationsByName(declarations, names) {
 
 const splitFeesBody = extractFunctionBody("_splitFees");
 const recordBetBody = extractFunctionBody("_recordBet");
+const recordEpochVolumeBody = extractFunctionBody("_recordEpochVolume");
 assert.match(
   source,
   /function\s+_recordBet\(uint256\s+epoch,\s*address\s+user,\s*uint256\s+tileId,\s*uint256\s+amount\)\s+internal/,
@@ -122,6 +125,17 @@ assert.match(
   /userBets\[epoch\]\[tileId\]\[user\]\s*=\s*previousBet\s*\+\s*amount;/,
   "_recordBet must preserve cumulative user bet accounting",
 );
+assert.doesNotMatch(recordBetBody, /userEpochVolumes|epochs\[epoch\]\.totalPool/, "per-tile accounting must not rewrite aggregate epoch volume");
+assert.match(recordEpochVolumeBody, /userEpochVolumes\[epoch\]\[user\]\s*\+=\s*totalAmount/);
+assert.match(recordEpochVolumeBody, /epochs\[epoch\]\.totalPool\s*\+=\s*totalAmount/);
+for (const fn of ["placeBet", "placeBatchBets", "placeBatchBetsSameAmount", "placeBatchBetsBitmap"]) {
+  const body = extractFunctionBody(fn);
+  assert.equal(
+    body.match(/_recordEpochVolume\(/g)?.length,
+    1,
+    `${fn} must update aggregate epoch volume exactly once per transaction`,
+  );
+}
 assert.doesNotMatch(
   source,
   /hasUserBetOnTile/,
@@ -146,6 +160,8 @@ for (const feeName of [
 
 const previewRebateBody = extractFunctionBody("_previewRebate");
 assert.match(previewRebateBody, /isResolved/, "_previewRebate must only calculate Safety Pool after resolution");
+assert.match(previewRebateBody, /DUST_SETTLE_DELAY/, "_previewRebate must expire after the one-year claim window");
+assert.match(previewRebateBody, /epochRebateClaimed\[epoch\]/, "_previewRebate must cap claims by the unclaimed rebate balance");
 assert.match(previewRebateBody, /winningTile/, "_previewRebate must inspect the epoch winning tile");
 assert.match(
   previewRebateBody,
@@ -163,12 +179,55 @@ assert.match(
   "_previewRebate must calculate Safety Pool from losing volume, not total volume",
 );
 
+const consumeRebateBody = extractFunctionBody("_consumeRebate");
+assert.match(consumeRebateBody, /rebateClaimed\[epoch\]\[user\]\s*=\s*true/, "rebate consumption must prevent duplicate claims");
+assert.match(consumeRebateBody, /epochRebateClaimed\[epoch\]\s*\+=\s*amount/, "rebate consumption must track aggregate claims");
+
+const settleEpochDustBody = extractFunctionBody("settleEpochDust");
+assert.match(settleEpochDustBody, /DUST_SETTLE_DELAY/, "single reward dust settlement must wait one year");
+assert.match(settleEpochDustBody, /_settleRewardDustIfAvailable\(epoch\)/, "single reward dust settlement must reuse shared accounting");
+assert.match(settleEpochDustBody, /token\.safeTransfer\(feeRecipient,\s*dust\)/, "reward dust must only go to the timelocked fee recipient");
+
+const settleEpochsDustBody = extractFunctionBody("settleEpochsDust");
+assert.match(settleEpochsDustBody, /_settleRewardDustIfAvailable\(rewardEpochs\[i\]\)/, "batch reward settlement must reuse shared accounting");
+assert.match(settleEpochsDustBody, /token\.safeTransfer\(feeRecipient,\s*totalDust\)/, "batch reward settlement must use one aggregate transfer");
+assert.match(settleEpochsDustBody, /emit RewardDustBatchSettled\(totalDust,\s*epochsSettled\)/, "batch reward settlement must emit its aggregate result");
+
+const settleRewardDustIfAvailableBody = extractFunctionBody("_settleRewardDustIfAvailable");
+assert.match(settleRewardDustIfAvailableBody, /DUST_SETTLE_DELAY/, "shared reward dust accounting must enforce the one-year delay");
+assert.match(settleRewardDustIfAvailableBody, /epochDustSettled\[epoch\]\s*=\s*true/, "shared reward dust accounting must close liabilities before transfer");
+assert.match(settleRewardDustIfAvailableBody, /emit RewardDustSettled\(epoch,\s*dust\)/, "shared reward dust accounting must preserve per-epoch evidence");
+
+const settleEpochRebateDustBody = extractFunctionBody("settleEpochRebateDust");
+assert.match(settleEpochRebateDustBody, /DUST_SETTLE_DELAY/, "rebate dust settlement must wait one year");
+assert.match(settleEpochRebateDustBody, /token\.safeTransfer\(feeRecipient,\s*dust\)/, "rebate dust must only go to the timelocked fee recipient");
+
+const settleEpochsRebateDustBody = extractFunctionBody("settleEpochsRebateDust");
+assert.match(settleEpochsRebateDustBody, /_settleRebateDustIfAvailable\(rebateEpochs\[i\]\)/, "batch rebate settlement must reuse the shared accounting path");
+assert.match(settleEpochsRebateDustBody, /token\.safeTransfer\(feeRecipient,\s*totalDust\)/, "batch rebate settlement must use one aggregate transfer");
+assert.match(settleEpochsRebateDustBody, /emit RebateDustBatchSettled\(totalDust,\s*epochsSettled\)/, "batch rebate settlement must emit its aggregate result");
+
+const settleRebateDustIfAvailableBody = extractFunctionBody("_settleRebateDustIfAvailable");
+assert.match(settleRebateDustIfAvailableBody, /DUST_SETTLE_DELAY/, "shared rebate dust accounting must enforce the one-year delay");
+assert.match(settleRebateDustIfAvailableBody, /epochRebateClaimed\[epoch\]\s*=\s*rebatePool/, "shared rebate dust accounting must close liabilities before transfer");
+assert.match(settleRebateDustIfAvailableBody, /emit RebateDustSettled\(epoch,\s*dust\)/, "shared rebate dust accounting must preserve per-epoch evidence");
+
+const claimRewardBody = extractFunctionBody("claimReward");
+assert.match(claimRewardBody, /if\s*\(reward\s*==\s*0\)\s*revert\s+NothingToClaim\(\)/, "single reward claims must reject zero-rounded payouts");
+assert.ok(
+  claimRewardBody.indexOf("if (reward == 0)") < claimRewardBody.indexOf("hasClaimed[msg.sender][epoch] = true"),
+  "single reward claims must validate a non-zero payout before closing user state",
+);
+
 for (const fn of [
   "claimResolverRewards",
   "flushProtocolFees",
   "claimEpochRebate",
   "claimEpochsRebate",
   "settleEpochDust",
+  "settleEpochsDust",
+  "settleEpochRebateDust",
+  "settleEpochsRebateDust",
   "placeBet",
   "placeBatchBets",
   "placeBatchBetsSameAmount",
@@ -211,6 +270,11 @@ assert.match(renounceOwnershipTail, /\bonlyOwner\b/, "renounceOwnership must rem
 assert.match(renounceOwnershipBody, /OwnershipRenounceDisabled/, "renounceOwnership must remain disabled for production safety");
 
 const claimRewardsBody = extractFunctionBody("claimRewards");
+assert.match(claimRewardsBody, /if\s*\(reward\s*>\s*0\)/, "batch reward claims must skip zero-rounded payouts");
+assert.ok(
+  claimRewardsBody.indexOf("if (reward > 0)") < claimRewardsBody.indexOf("hasClaimed[msg.sender][epoch] = true"),
+  "batch reward claims must validate a non-zero payout before closing user state",
+);
 const rewardPerEpochEventIndex = claimRewardsBody.indexOf("emit RewardClaimed");
 const rewardTransferIndex = claimRewardsBody.indexOf("token.safeTransfer(msg.sender, totalReward)");
 const rewardBatchEventIndex = claimRewardsBody.indexOf("emit RewardBatchClaimed");
@@ -490,6 +554,9 @@ assertSubset({
     "claimEpochRebate",
     "claimEpochsRebate",
     "settleEpochDust",
+    "settleEpochsDust",
+    "settleEpochRebateDust",
+    "settleEpochsRebateDust",
     "resolveEpoch",
     "claimResolverRewards",
     "flushProtocolFees",
@@ -520,11 +587,14 @@ assertSubset({
     "DailyJackpotAwarded",
     "WeeklyJackpotAwarded",
     "RewardDustSettled",
+    "RewardDustBatchSettled",
     "ResolverRewardAccrued",
     "ResolverRewardClaimed",
     "ProtocolFeesFlushed",
     "RebateClaimed",
     "RebateBatchClaimed",
+    "RebateDustSettled",
+    "RebateDustBatchSettled",
   ])),
   actual: clientGameEvents,
   label: "critical game events",
@@ -547,6 +617,8 @@ assertSubset({
     "ProtocolFeesFlushed",
     "RebateClaimed",
     "RebateBatchClaimed",
+    "RewardDustSettled",
+    "RebateDustSettled",
   ])),
   actual: indexerEvents,
   label: "critical indexer events",
@@ -560,6 +632,21 @@ assert.match(
   indexerSource,
   /rebateBatchClaimTxs[\s\S]*topic0 === rebateClaimedSig[\s\S]*rebateBatchClaimTxs\.has/,
   "indexer must not duplicate RebateClaimed rows when the same tx also has RebateBatchClaimed",
+);
+assert.match(
+  indexerSource,
+  /decoded\.eventName !== "RewardDustSettled"[\s\S]*decoded\.eventName !== "RebateDustSettled"[\s\S]*gamedata\/dustSettlements/,
+  "indexer must retain per-epoch reward and rebate dust settlement evidence",
+);
+assert.match(
+  indexerSource,
+  /dailyJackpotEpochs\.has\(args\.epoch\.toString\(\)\)[\s\S]*weeklyJackpotEpochs\.has\(args\.epoch\.toString\(\)\)/,
+  "resolved epoch rows must preserve jackpot flags when award events precede EpochResolved",
+);
+assert.match(
+  chainIndexerAuditSource,
+  /RewardDustSettled[\s\S]*RebateDustSettled[\s\S]*gamedata:dustSettlements[\s\S]*dust-settlement/,
+  "chain-to-indexer audit must verify reward and rebate dust settlement evidence",
 );
 
 assert.match(delegateSource, /address\s+public\s+immutable\s+allowedToken\s*;/);

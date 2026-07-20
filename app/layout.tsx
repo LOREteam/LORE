@@ -34,7 +34,7 @@ const loreHud = localFont({
   variable: '--font-lore-hud',
 });
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://lore.game';
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://playlore.xyz';
 
 export const metadata: Metadata = {
   title: 'LORE - Linea Mining Game',

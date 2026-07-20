@@ -19,6 +19,7 @@ const steps = npmCommand
       { command: npmCommand, args: ["run", "lint"] },
       { command: npmCommand, args: ["run", "test:logic"] },
       { command: npmCommand, args: ["run", "test:contract"] },
+      { command: npmCommand, args: ["run", "test:indexer-storage"] },
       { command: npmCommand, args: ["run", "build"] },
       { command: npmCommand, args: ["run", "typecheck"], retryOnce: true },
     ]
@@ -26,6 +27,7 @@ const steps = npmCommand
       { command: process.execPath, args: [resolve("node_modules", "eslint", "bin", "eslint.js"), "."] },
       { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-business-logic.mjs")] },
       { command: process.execPath, args: [resolve("scripts", "test-contract-v9-invariants.mjs")] },
+      { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-indexer-event-storage.ts")] },
       { command: process.execPath, args: [resolve("scripts", "patch-privy-7702.mjs")] },
       { command: process.execPath, args: [nextBin, "build", "--webpack"], kind: "build" },
       { command: process.execPath, args: [nextBin, "typegen"], retryOnce: true },

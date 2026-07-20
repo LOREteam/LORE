@@ -5,8 +5,8 @@
     "runs": 200,
     "evmVersion": "osaka"
   },
-  "sourceSha256": "c5219af4727b224db182ce211a75edda01a52764151867e5ab6ca3f614e90e53",
-  "abiSha256": "8373494b986a39e300f31e9a85324e0ca1e4df0b8bd9fb23c4268a87af2a32fc",
-  "bytecodeSha256": "b3e16ee0d2984f820e5d6d88f4c4a22cf1ec2b310bbcb3181634c0161ab1eb41",
-  "bytecodeBytes": 14266
+  "sourceSha256": "483f8b26ea0bc71a2eb787f9e1d93ec5de080bb752918af2b83bbf0fd4f314ec",
+  "abiSha256": "ad5c5c1603808e8f031ab8c13cbcbb72dba31f57653d2cdc747f7d6b6eadfa34",
+  "bytecodeSha256": "33d1fc36d591020e0ca84dab2d044a4e969d088ee1a9aac5e7b9cc64b0e71e17",
+  "bytecodeBytes": 15813
 }

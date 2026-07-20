@@ -31,6 +31,7 @@ const REPLACE_PENDING_FEE_BUMP_STEPS = [
 
 const CANCEL_TX_GAS_LIMIT = 21_000n;
 const CANCEL_TX_BALANCE_HEADROOM_PERCENT = 98n;
+const CANCEL_TX_MAX_COST_WEI = 1_000_000_000_000_000n; // 0.001 ETH hard loss ceiling.
 const INSUFFICIENT_FUNDS_RETRY_MS = 300_000;
 const RESOLVE_RECEIPT_TIMEOUT_MS = 25_000;
 
@@ -43,7 +44,9 @@ function isKeeperInsufficientFundsError(message: string) {
 }
 
 function getMaxAffordableCancelFeePerGas(balanceWei: bigint) {
-  return ((balanceWei * CANCEL_TX_BALANCE_HEADROOM_PERCENT) / 100n) / CANCEL_TX_GAS_LIMIT;
+  const affordableCost = (balanceWei * CANCEL_TX_BALANCE_HEADROOM_PERCENT) / 100n;
+  const boundedCost = affordableCost < CANCEL_TX_MAX_COST_WEI ? affordableCost : CANCEL_TX_MAX_COST_WEI;
+  return boundedCost / CANCEL_TX_GAS_LIMIT;
 }
 
 export async function POST(request: Request) {

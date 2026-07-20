@@ -1057,6 +1057,16 @@ async function main() {
     /resolve_tx_reverted/,
     "bootstrap resolver must surface reverted resolve txs as retryable noop responses",
   );
+  assert.match(
+    bootstrapResolveRouteSource,
+    /CANCEL_TX_MAX_COST_WEI\s*=\s*1_000_000_000_000_000n/,
+    "bootstrap resolver emergency cancellation must have a hard native-token loss ceiling",
+  );
+  assert.match(
+    bootstrapResolveRouteSource,
+    /affordableCost\s*<\s*CANCEL_TX_MAX_COST_WEI\s*\?\s*affordableCost\s*:\s*CANCEL_TX_MAX_COST_WEI/,
+    "bootstrap resolver cancellation fee must use the lower of balance headroom and the hard loss ceiling",
+  );
   const smokeBrowserSource = readFileSync("scripts/smoke-browser.mjs", "utf8");
   const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
   assert.equal(
@@ -1320,6 +1330,18 @@ async function main() {
     /https:\/\/lore\.game|Play: lore\.game/,
     "jackpot Share on X must not use the old lore.game share URL",
   );
+  const rootLayoutSource = readFileSync("app/layout.tsx", "utf8");
+  const robotsSource = readFileSync("app/robots.ts", "utf8");
+  assert.match(
+    rootLayoutSource,
+    /NEXT_PUBLIC_SITE_URL\s*\?\?\s*['"]https:\/\/playlore\.xyz['"]/,
+    "root metadata must default to the canonical playlore.xyz origin",
+  );
+  assert.match(
+    robotsSource,
+    /NEXT_PUBLIC_SITE_URL\s*\?\?\s*['"]https:\/\/playlore\.xyz['"]/,
+    "robots and sitemap must default to the canonical playlore.xyz origin",
+  );
   const jackpotWinPageSource = readFileSync("app/jackpot-win/page.tsx", "utf8");
   assert.match(
     jackpotWinPageSource,
@@ -1330,6 +1352,24 @@ async function main() {
     jackpotWinPageSource,
     /Play at playlore\.xyz/,
     "jackpot share preview page CTA must display playlore.xyz",
+  );
+  const whitePaperSource = readFileSync("app/components/WhitePaper.tsx", "utf8");
+  const faqSource = readFileSync("app/components/FAQ.tsx", "utf8");
+  assert.doesNotMatch(whitePaperSource, /Claim Anytime/, "White Paper must not promise perpetual claims");
+  assert.match(
+    whitePaperSource,
+    /92% of fresh stake plus the full rollover/,
+    "White Paper must explain that rollover is not charged fees again",
+  );
+  assert.match(
+    whitePaperSource,
+    /0\.05% resolver reward[\s\S]*1\.95% is split approximately equally/,
+    "White Paper must disclose the exact resolver-first protocol fee split",
+  );
+  assert.match(
+    faqSource,
+    /one year[\s\S]*timelocked fee-recipient address/,
+    "FAQ must disclose the bounded unclaimed-funds settlement path",
   );
   const smokeHttpSource = readFileSync("scripts/smoke-http.mjs", "utf8");
   assert.match(
@@ -1475,6 +1515,11 @@ async function main() {
     epochsRouteSource,
     /Number\.isInteger\(epoch\)/,
     "epochs API must reject unsafe epoch numbers",
+  );
+  assert.doesNotMatch(
+    epochsRouteSource,
+    /getEpochEndTime/,
+    "resolved-epoch chain fallback must not issue guaranteed-zero end-time RPC reads",
   );
   const betPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
   assert.match(
@@ -1947,6 +1992,46 @@ async function main() {
     }, pendingMiningState),
     "pending",
   );
+  const ambiguousPendingMiningState = miningTxPath.sanitizePendingMiningTxState({
+    chainId: 59141,
+    contract: "0x1111111111111111111111111111111111111111",
+    actor: "0x2222222222222222222222222222222222222222",
+    nonce: 7,
+    ts: Date.now(),
+  });
+  assert.ok(ambiguousPendingMiningState);
+  assert.equal(
+    miningShared.isAmbiguousPendingTxError(new Error("External wallet eth_sendTransaction timed out after 45000ms")),
+    true,
+  );
+  assert.equal(
+    miningShared.isAmbiguousPendingTxError(new Error("RPC read timed out after 45000ms")),
+    false,
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 8 : 8,
+    }, ambiguousPendingMiningState),
+    "confirmed",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 7 : 8,
+    }, ambiguousPendingMiningState),
+    "pending",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async () => 7,
+    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
+    "clear",
+  );
   assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, chainId: 0 }), null);
   assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, actor: "0x1234" }), null);
   assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, hash: "0x1234" }), null);
@@ -2310,6 +2395,14 @@ async function main() {
   assert.equal(rewardScanner.getRewardScanRescanDelayMs(rewardScanNow - 14 * 60_000, rewardScanNow), 60_000);
   assert.equal(rewardScanner.getRewardScanRescanDelayMs(rewardScanNow - 15 * 60_000, rewardScanNow), 0);
   assert.equal(rewardScanner.getRewardScanRescanDelayMs(rewardScanNow + 1, rewardScanNow), 0);
+  const claimWindow = 365n * 24n * 60n * 60n;
+  assert.equal(rewardScanner.isRewardClaimWindowOpen(0n, claimWindow * 2n), true);
+  assert.equal(rewardScanner.isRewardClaimWindowOpen(10n, 10n + claimWindow - 1n), true);
+  assert.equal(rewardScanner.isRewardClaimWindowOpen(10n, 10n + claimWindow), false);
+  assert.equal(
+    rewardScanner.formatRewardClaimError(new Error("RewardClaimWindowExpired()")),
+    "This reward claim window has expired.",
+  );
   const rewardScannerSource = readFileSync("app/hooks/useRewardScanner.ts", "utf8");
   assert.match(
     rewardScannerSource,
@@ -2320,6 +2413,17 @@ async function main() {
     rewardScannerSource,
     /getExplorerTxUrl/,
     "single reward claim notifications must include explorer links when a tx hash is available",
+  );
+  assert.match(
+    rewardScannerSource,
+    /functionName:\s*"epochResolvedAt"[\s\S]*isRewardClaimWindowOpen/,
+    "automatic reward scans must remove expired candidates without adding reads for every scanned epoch",
+  );
+  const deepRewardScannerSource = readFileSync("app/hooks/useDeepRewardScan.ts", "utf8");
+  assert.match(
+    deepRewardScannerSource,
+    /functionName:\s*"epochResolvedAt"[\s\S]*isRewardClaimWindowOpen/,
+    "deep reward scans must apply the same on-chain claim deadline",
   );
   assert.match(
     rewardScannerSource,

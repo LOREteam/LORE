@@ -177,6 +177,17 @@ function bootstrapSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_scoped_protocol_fee_flushes_scope_block ON scoped_protocol_fee_flushes(scope, block_number DESC, id DESC);
 
+    CREATE TABLE IF NOT EXISTS scoped_indexer_events (
+      scope TEXT NOT NULL,
+      category TEXT NOT NULL,
+      id TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      block_number INTEGER NOT NULL,
+      PRIMARY KEY(scope, category, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_scoped_indexer_events_scope_category_block
+      ON scoped_indexer_events(scope, category, block_number DESC, id DESC);
+
     CREATE TABLE IF NOT EXISTS chat_profiles (
       wallet TEXT PRIMARY KEY,
       name TEXT,

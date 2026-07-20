@@ -99,8 +99,8 @@ const faqData: FAQItem[] = [
     q: "What is the rollover pool?",
     a: [
       "When nobody bets on the winning tile in a round, the 92% base reward doesn't disappear - it flows into the rollover pool.",
-      "The rollover pool is added to the NEXT round's total pool, making it bigger. This cascading effect means that after several no-winner rounds, the pool can become very large.",
-      "Note: the rollover only carries the base reward. The 2% daily and 3% weekly jackpot accruals still happen normally - they go to the jackpot pools regardless of whether someone won.",
+      "The rollover pool is added in full to the NEXT round's base reward, making it bigger. It is not charged protocol, burn, or jackpot percentages a second time.",
+      "Fresh bets in that next round still fund the daily and weekly jackpots normally.",
     ],
   },
 
@@ -141,10 +141,10 @@ const faqData: FAQItem[] = [
     category: "Betting & Strategy",
     q: "What's the fee breakdown on each round?",
     a: [
-      "92% - base reward for winners (+ rollover + jackpot if triggered)",
+      "92% of fresh stake - base reward for winners, plus 100% of any rollover and any triggered jackpot",
       "2% - accrues to the Daily Jackpot pool",
       "3% - accrues to the Weekly Jackpot pool",
-      "2% - protocol fee: half to treasury, half to the Safety Pool for players who missed the winning tile",
+      "2% - protocol fee: 0.05% resolver reward, then the remaining 1.95% is split approximately equally between treasury and the Safety Pool",
       "1% - permanently burned (sent to 0x...dEaD)",
     ],
   },
@@ -184,7 +184,7 @@ const faqData: FAQItem[] = [
   {
     category: "Troubleshooting",
     q: "The site is slow or tiles aren't updating.",
-    a: "The game polls the blockchain every ~1 second. If Linea RPC is congested, updates may lag. Try: hard refresh (Ctrl+Shift+R), switch to a different RPC endpoint if you're self-hosting, or just wait a few seconds.",
+    a: "The live board refreshes frequently while history and account data use slower intervals. If Linea RPC is congested, updates may lag. Try a hard refresh (Ctrl+Shift+R), switch RPC endpoints if you're self-hosting, or wait a few seconds.",
   },
   {
     category: "Troubleshooting",
@@ -211,7 +211,7 @@ const faqData: FAQItem[] = [
   {
     category: "Wallet & Security",
     q: "Can the developer rug-pull the prize pool?",
-    a: "No. The contract has no admin withdrawal function. Funds can only go to winners (via claimReward), to the jackpot pools (automatically), or roll over to the next epoch. The contract code is verifiable on-chain.",
+    a: "The contract has no arbitrary admin withdrawal function. Active prize and jackpot accounting cannot be manually drained. Winner rewards and Safety Pool rebates remain claimable for one year; after that deadline, anyone may close the unclaimed remainder, but the contract can send it only to the timelocked fee-recipient address. The code and settlement events are verifiable on-chain.",
   },
   {
     category: "Wallet & Security",

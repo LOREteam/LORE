@@ -320,7 +320,11 @@ export function isAmbiguousPendingTxError(err: unknown): boolean {
     msg.includes("already known") ||
     msg.includes("known transaction") ||
     msg.includes("nonce too low") ||
-    msg.includes("lower than the current nonce")
+    msg.includes("lower than the current nonce") ||
+    (
+      (msg.includes("eth_sendtransaction") || msg.includes("eth_sendrawtransaction")) &&
+      (msg.includes("timed out") || msg.includes("timeout"))
+    )
   );
 }
 
