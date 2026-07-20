@@ -43,6 +43,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-21 - Current-head clean-checkout CI reproduction
+
+- Detached commit `963b6c90` installed exactly from the lockfile without a
+  copied `.env` and passed production dependency audit, wallet peer integrity,
+  business logic, V9 invariants, optimizer/Osaka compilation provenance,
+  typecheck, production build, and the complete responsive browser smoke.
+- EIP-7702 remained disabled. Disk free space stayed above the 1 GiB safety
+  floor; the temporary server and isolated worktree were removed afterward.
+
 ## 2026-07-21 - Production dependency high-advisory closure
 
 - A fresh production audit exposed four high advisories through Sentry's

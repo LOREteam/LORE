@@ -15,6 +15,12 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Exact commit `963b6c90` passes a detached clean-checkout reproduction without
+  a copied `.env`: `npm ci`, production dependency audit, wallet peer
+  integrity, business logic, V9 invariants, optimizer/Osaka compilation
+  provenance, typecheck, production build, and the full responsive browser
+  smoke. EIP-7702 remained disabled, the temporary server stopped, and the
+  isolated worktree was removed after verification.
 - Production dependency audit again reports zero high or critical advisories.
   The only required package change is a scoped `brace-expansion` 5.0.7
   override beneath the Sentry `glob` chain and the existing TypeScript parser
