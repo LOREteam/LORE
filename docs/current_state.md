@@ -19,6 +19,9 @@ Open linked evidence only when a task needs it.
   background refreshes. An invalidated older promise cannot remove a newer
   registered promise; the overlapping-build regression test, business logic,
   TypeScript, and focused ESLint pass.
+- All direct shared-cache callers in epochs, rewards, rebate discovery, reward
+  summaries, and data-sync health also release only their own registered
+  request or refresh promise.
 
 - Exact commit `00ba0570` passes a detached clean-checkout reproduction:
   lockfile install, wallet dependency-tree integrity, typecheck, business

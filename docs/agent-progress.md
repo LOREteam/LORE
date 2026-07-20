@@ -51,6 +51,9 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   route builds.
 - A behavior test reproduces invalidation followed by overlapping old/new
   builds. Business logic, TypeScript, focused ESLint, and diff hygiene pass.
+- Epochs, rewards, rebate discovery, reward summaries, and data-sync health now
+  pass their registered promise into cleanup as well, so legacy route paths use
+  the same ownership guarantee as the shared versioned wrapper.
 
 ## 2026-07-20 - Exact clean-checkout reproduction after hardening
 
