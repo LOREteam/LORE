@@ -135,6 +135,10 @@ Open linked evidence only when a task needs it.
 - Trusted proxy identity, optional shared external rate limiting, support-log
   redaction, and persisted runtime alert deduplication/recovery are covered by
   logic tests and a local delivery drill.
+- Central server/Sentry/support redaction also removes bare 64-hex secrets,
+  assignment-style credentials, and JWT values embedded inside error text;
+  explicitly allowlisted public transaction hashes remain available in support
+  exports.
 - Production-mode API rate limits now fail closed when trusted proxy identity is
   unavailable. A clearly named weak-identity bypass exists only for local/CI
   production smoke and the mainnet runtime validator rejects it.

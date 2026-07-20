@@ -41,6 +41,16 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Inline credential redaction
+
+- Closed a shared logging boundary gap: server, Sentry, and support sanitization
+  now removes bare 64-hex secrets, assignment-style credentials, and JWT values
+  embedded in error strings. Public transaction hashes remain preserved only in
+  their allowlisted support-log fields.
+- Scoped lint, business logic, and diff hygiene pass. Codex Security diff-scan
+  remains unstarted because its mandatory capability preflight produced no
+  result in both worker and direct execution; no scan result is being claimed.
+
 ## 2026-07-20 - Two-minute production browser attribution
 
 - Traced the reproducible local `HEAD /` abort to the Coinbase Wallet SDK COOP

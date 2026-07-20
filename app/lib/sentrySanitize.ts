@@ -4,14 +4,23 @@ const SENSITIVE_KEY = /(?:authorization|cookie|set-cookie|token|secret|password|
 const BEARER_VALUE = /\bBearer\s+[^\s,;]+/gi;
 const HEX_IDENTIFIER = /\b0x(?:[a-fA-F0-9]{64}|[a-fA-F0-9]{40})\b/g;
 const ADDRESS_IDENTIFIER = /\b0x[a-fA-F0-9]{40}\b/g;
+const BARE_HEX_SECRET = /(^|[^a-fA-F0-9])([a-fA-F0-9]{64})(?![a-fA-F0-9])/g;
+const ASSIGNED_SECRET = /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|private[_-]?key)\s*[:=]\s*["']?[^\s,;"']+/gi;
+const JWT_VALUE = /\beyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b/g;
 const HTTP_URL = /https?:\/\/[^\s"'<>)}\]]+/gi;
 const TRANSACTION_HASH_KEY = /^(?:txHash|transactionHash)$/i;
 
 function sanitizeString(value: string, preserveTransactionHash = false) {
-  return value
+  const sanitized = value
     .replace(BEARER_VALUE, REDACTED)
+    .replace(ASSIGNED_SECRET, REDACTED)
+    .replace(JWT_VALUE, REDACTED)
     .replace(preserveTransactionHash ? ADDRESS_IDENTIFIER : HEX_IDENTIFIER, REDACTED)
     .replace(HTTP_URL, REDACTED);
+  return sanitized.replace(BARE_HEX_SECRET, (match, prefix: string, _secret: string, offset: number, input: string) => {
+    if ((prefix === "x" || prefix === "X") && offset > 0 && input[offset - 1] === "0") return match;
+    return `${prefix}${REDACTED}`;
+  });
 }
 
 function sanitizeValue(value: unknown, key: string, seen: WeakSet<object>, depth: number, preserveTransactionHashes = false): unknown {

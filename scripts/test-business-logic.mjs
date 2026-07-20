@@ -244,6 +244,10 @@ async function main() {
   assert.equal(sanitizedSentryPayload.extra.walletAddress, "<redacted>");
   assert.equal(sanitizedSentryPayload.extra.safeStatus, "pending");
   assert.equal(sanitizedSentryPayload.request.url, "/api/live-state");
+  const sanitizedInlineSecrets = sentrySanitize.sanitizeSentryPayload(
+    `api_key=inline-secret private=${"e".repeat(64)} token eyJhbGciOiJIUzI1NiJ9.cGF5bG9hZA.signature`,
+  );
+  assert.doesNotMatch(sanitizedInlineSecrets, /inline-secret|e{64}|eyJhbGciOiJIUzI1NiJ9|cGF5bG9hZA/);
   const supportTxHash = `0x${"a".repeat(64)}`;
   const sanitizedSupportLog = sentrySanitize.sanitizeSupportLogPayload({
     epoch: "78",
