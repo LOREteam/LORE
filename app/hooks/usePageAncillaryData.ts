@@ -51,7 +51,7 @@ export function usePageAncillaryData({
     loading: leaderboardsLoading,
     error: leaderboardsError,
     refetch: leaderboardsRefetch,
-  } = useLeaderboards(activeTab === "leaderboards");
+  } = useLeaderboards(activeTab === "leaderboards" && isPageVisible);
 
   const recentWins = useRecentWins(initialRecentWins);
 

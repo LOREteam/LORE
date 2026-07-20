@@ -15,6 +15,10 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Leaderboards now disables its native cache-refresh timer while the document
+  is hidden and resumes through its existing TTL-aware hook when visible. Its
+  visible behavior is unchanged. Focused lint, business logic, typecheck, and
+  production build pass.
 - The recent-wins ticker no longer keeps a three-minute native polling loop in
   hidden tabs. Hiding the page cancels its timer and in-flight request; returning
   resumes the existing cache-aware 45-second visible cadence. Pool-chart and

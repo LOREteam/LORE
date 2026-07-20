@@ -1051,3 +1051,11 @@ file grows beyond a compact handoff.
   cadence; live game-state and pool-chart polling are unchanged.
 - Focused lint, business logic, typecheck, production build, and diff hygiene
   pass with EIP-7702 disabled.
+
+## 2026-07-21 - Pause hidden Leaderboards refresh
+
+- The page-level ancillary hook now disables Leaderboards while the document is
+  hidden, stopping its native cache timer without changing visible refreshes.
+- Its TTL-aware hook resumes from cache when the page becomes visible.
+- Focused lint, business logic, production build, post-build typecheck, and
+  diff hygiene pass with EIP-7702 disabled.

@@ -2555,6 +2555,12 @@ async function main() {
     /Number\.isSafeInteger\(tileId\)/,
     "leaderboards lucky tile normalizer must reject unsafe tile ids",
   );
+  const pageAncillarySource = readFileSync("app/hooks/usePageAncillaryData.ts", "utf8");
+  assert.match(
+    pageAncillarySource,
+    /useLeaderboards\(activeTab === "leaderboards" && isPageVisible\)/,
+    "hidden leaderboard tabs must pause their native cache refresh timer",
+  );
   assert.deepEqual(
     rebate.normalizeRebatePayload({
       isSupported: true,
