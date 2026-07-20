@@ -346,6 +346,27 @@ async function main() {
     });
     await mobileWalletContext.close();
 
+    const tutorialContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await tutorialContext.addInitScript(() => {
+      const userAgent = navigator.userAgent.replace(/Headless/g, "");
+      Object.defineProperty(navigator, "webdriver", { configurable: true, get: () => false });
+      Object.defineProperty(navigator, "userAgent", { configurable: true, get: () => userAgent });
+    });
+    const tutorialPage = await tutorialContext.newPage();
+    tutorialPage.on("pageerror", (error) => pageErrors.push({
+      message: `[tutorial] ${error.message}`,
+      stack: error.stack || "",
+    }));
+    await runStep("verify first-visit tutorial accessibility", async () => {
+      await ensureLandingPage(tutorialPage, smokeOptions);
+      const tutorialDialog = tutorialPage.getByRole("dialog", { name: "First visit tutorial" });
+      await expectVisible(tutorialDialog, "first-visit tutorial dialog", TIMEOUT_MS);
+      await verifyVisibleTouchTargets(tutorialPage, "first-visit tutorial");
+      await tutorialPage.keyboard.press("Escape");
+      await tutorialDialog.waitFor({ state: "detached", timeout: TIMEOUT_MS });
+    });
+    await tutorialContext.close();
+
     if (EXPECT_READ_ONLY) {
       console.log("SKIP auto-miner persistence step in read-only smoke");
     } else {

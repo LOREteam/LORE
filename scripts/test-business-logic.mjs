@@ -1235,6 +1235,11 @@ async function main() {
     "browser smoke must run touch-target checks across the mobile hub and secondary tabs",
   );
   assert.match(
+    smokeBrowserSource,
+    /verify first-visit tutorial accessibility[\s\S]*First visit tutorial[\s\S]*verifyVisibleTouchTargets\(tutorialPage, "first-visit tutorial"\)[\s\S]*keyboard\.press\("Escape"\)/,
+    "browser smoke must cover first-visit tutorial touch targets and keyboard dismissal",
+  );
+  assert.match(
     smokeBrowserFlowsSource,
     /verifyVisibleTouchTargets[\s\S]*target\.width < 44 \|\| target\.height < 44/,
     "shared browser smoke touch-target guard must reject controls below 44px",

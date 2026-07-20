@@ -15,6 +15,11 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- The first-visit tutorial now keeps every visible action at a 44px minimum
+  touch height. Responsive browser smoke opens it in a clean 390px mobile
+  context, checks all visible touch targets, and verifies Escape dismissal.
+  Business logic, focused lint, typecheck, production build, and the full
+  responsive browser smoke pass.
 - Notifications use one live region per message: danger notices are assertive
   alerts, while informational, success, and warning notices remain polite
   statuses. Adding a notice no longer re-announces the entire stack, and every

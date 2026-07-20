@@ -185,7 +185,7 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
             </p>
           </div>
 
-          <UiButton variant="ghost" size="xs" uppercase onClick={dismiss} className="shrink-0">
+          <UiButton variant="ghost" size="xs" uppercase onClick={dismiss} className="min-h-11 shrink-0">
             Skip
           </UiButton>
         </div>
@@ -223,6 +223,7 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
             uppercase
             onClick={() => setStepIndex((current) => Math.max(0, current - 1))}
             disabled={isFirstStep}
+            className="min-h-11"
           >
             Back
           </UiButton>
@@ -234,6 +235,7 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
                 size="sm"
                 uppercase
                 onClick={() => onTabChange(currentStep.tab as TabId)}
+                className="min-h-11"
               >
                 Open {currentStep.tab}
               </UiButton>
@@ -243,6 +245,7 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
               variant={isLastStep ? "success" : "primary"}
               size="sm"
               uppercase
+              className="min-h-11"
               onClick={() => {
                 if (isLastStep) {
                   dismiss();

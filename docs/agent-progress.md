@@ -1015,3 +1015,11 @@ file grows beyond a compact handoff.
   prevents stale balance/history display and a delayed cross-wallet overwrite;
   scoped lint, logic, typecheck, production build, and responsive browser smoke
   pass.
+
+## 2026-07-21 - First-visit tutorial accessibility coverage
+
+- Raised every tutorial action to the shared 44px mobile touch-target minimum.
+- Added an isolated clean mobile browser context that exercises the real
+  first-visit dialog, scans its visible controls, and verifies Escape dismissal.
+- Business logic, focused lint, typecheck, production build, and the full
+  responsive browser smoke pass. The temporary production server was stopped.
