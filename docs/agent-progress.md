@@ -52,6 +52,8 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 - Profile, Close chat, and Close profile icon controls now use stable 44px touch
   targets. Smoke measures all three controls; typecheck, focused ESLint,
   production build, and responsive browser smoke pass.
+- The jackpot result overlay close control also uses a 44px target; focused
+  TypeScript, ESLint, and diff hygiene pass.
 
 ## 2026-07-20 - Route-cache ownership race hardening
 

@@ -20,6 +20,8 @@ Open linked evidence only when a task needs it.
   The profile and chat close icon controls are also measured at a minimum 44px
   touch target. Typecheck, focused lint, production build, and the full
   responsive browser smoke pass.
+- The jackpot result overlay close control also meets the 44px touch-target
+  floor; focused type and lint checks pass.
 
 - Versioned route-cache cleanup is ownership-aware for both request builds and
   background refreshes. An invalidated older promise cannot remove a newer
