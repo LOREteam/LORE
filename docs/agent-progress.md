@@ -54,6 +54,9 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 - Epochs, rewards, rebate discovery, reward summaries, and data-sync health now
   pass their registered promise into cleanup as well, so legacy route paths use
   the same ownership guarantee as the shared versioned wrapper.
+- The broadened production build, SQLite operational drill, monitoring
+  alert/recovery drill, and responsive browser smoke pass. EIP-7702 remained
+  disabled and the temporary production server was stopped.
 
 ## 2026-07-20 - Exact clean-checkout reproduction after hardening
 

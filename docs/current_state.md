@@ -22,6 +22,9 @@ Open linked evidence only when a task needs it.
 - All direct shared-cache callers in epochs, rewards, rebate discovery, reward
   summaries, and data-sync health also release only their own registered
   request or refresh promise.
+- Post-change production build, SQLite operations, monitoring alert/recovery,
+  and responsive browser smoke pass; EIP-7702 remained disabled and no test
+  server was left running.
 
 - Exact commit `00ba0570` passes a detached clean-checkout reproduction:
   lockfile install, wallet dependency-tree integrity, typecheck, business
