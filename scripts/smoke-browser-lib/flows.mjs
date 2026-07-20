@@ -223,13 +223,10 @@ export async function selectSingleTile(page, options) {
   return false;
 }
 
-export async function openMobileAnalytics(page, options) {
-  const { baseUrl, timeoutMs } = options;
-  const tabTimeoutMs = Math.min(timeoutMs, 8_000);
-  const verifyTouchTargets = async () => {
-    const undersized = await page.evaluate(() => [...document.querySelectorAll(
+export async function verifyVisibleTouchTargets(page, context) {
+  const undersized = await page.evaluate(() => [...document.querySelectorAll(
       'button, input:not([type="hidden"]), select, textarea, [role="button"]',
-    )]
+  )]
       .filter((element) => {
         if (!(element instanceof HTMLElement) || element.hasAttribute("disabled")) return false;
         const style = getComputedStyle(element);
@@ -248,10 +245,14 @@ export async function openMobileAnalytics(page, options) {
       })
       .filter((target) => target.width < 44 || target.height < 44)
       .slice(0, 10));
-    if (undersized.length > 0) {
-      throw new Error(`mobile analytics touch targets below 44px: ${JSON.stringify(undersized)}`);
-    }
-  };
+  if (undersized.length > 0) {
+    throw new Error(`${context} touch targets below 44px: ${JSON.stringify(undersized)}`);
+  }
+}
+
+export async function openMobileAnalytics(page, options) {
+  const { baseUrl, timeoutMs } = options;
+  const tabTimeoutMs = Math.min(timeoutMs, 8_000);
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const analyticsButton = page.getByRole("button", { name: "Analytics" });
@@ -262,7 +263,7 @@ export async function openMobileAnalytics(page, options) {
           || document.body.innerText.includes("Achievements");
       }, undefined, { timeout: tabTimeoutMs });
       await expectVisible(page.getByRole("heading", { name: "My Deposits" }), "mobile analytics deposits panel", tabTimeoutMs);
-      await verifyTouchTargets();
+      await verifyVisibleTouchTargets(page, "mobile analytics");
       return;
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("mobile analytics touch targets")) throw error;
@@ -284,7 +285,7 @@ export async function openMobileAnalytics(page, options) {
               || document.body.innerText.includes("Achievements");
           }, undefined, { timeout: tabTimeoutMs });
           await expectVisible(page.getByRole("heading", { name: "My Deposits" }), "mobile analytics deposits panel", tabTimeoutMs);
-          await verifyTouchTargets();
+          await verifyVisibleTouchTargets(page, "mobile analytics");
           return;
         } catch (error) {
           if (error instanceof Error && error.message.startsWith("mobile analytics touch targets")) throw error;

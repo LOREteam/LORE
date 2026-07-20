@@ -256,7 +256,7 @@ export const RebatePanel = React.memo(function RebatePanel({
               variant="ghost"
               size="sm"
               fullWidth
-              className="mt-3"
+              className="mt-3 min-h-11"
             >
               {isLoadingOlder ? "Loading older epochs..." : "Load older epochs"}
             </UiButton>

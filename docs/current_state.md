@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-07-20.
+Last updated: 2026-07-21.
 
 Detailed history through this date is archived in
 [`docs/archive/current-state-through-2026-07-13.md`](archive/current-state-through-2026-07-13.md).
@@ -15,6 +15,12 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Responsive smoke now scans every visible mobile control on the Hub,
+  Analytics, Safety Pool, and Leaderboards against the 44px touch-target floor.
+  The expanded coverage fixed the conditional older-epoch Safety Pool action
+  and the Leaderboards retry/refresh actions. Typecheck, focused lint,
+  production build, and the complete browser smoke pass; pool-chart freshness
+  remains covered and the temporary server was stopped.
 - Chat profile accessibility smoke now exercises initial field focus,
   reverse-tab containment, Escape close, and focus restoration to the opener.
   The profile and chat close icon controls are also measured at a minimum 44px

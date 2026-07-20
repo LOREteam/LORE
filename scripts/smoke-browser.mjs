@@ -24,6 +24,7 @@ import {
   verifyPendingBetReloadRecovery,
   verifyHubVisualRegressionGuards,
   verifyMobileHubResponsiveGuards,
+  verifyVisibleTouchTargets,
   verifyAutoMinerInputPersistence,
   verifyChatProfileModal,
   verifyReadOnlyMode,
@@ -454,32 +455,7 @@ async function main() {
       await expectVisible(mobilePage.getByText("Manual Bet"), "mobile manual bet panel", TIMEOUT_MS);
       await expectVisible(mobilePage.getByText("Auto-Miner"), "mobile auto-miner panel", TIMEOUT_MS);
     });
-    await runStep("verify mobile touch targets", async () => {
-      const undersized = await mobilePage.evaluate(() => [...document.querySelectorAll(
-        'button, input:not([type="hidden"]), select, textarea, [role="button"]',
-      )]
-        .filter((element) => {
-          if (!(element instanceof HTMLElement) || element.hasAttribute("disabled")) return false;
-          const style = getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) > 0
-            && rect.width > 0 && rect.height > 0;
-        })
-        .map((element) => {
-          const rect = element.getBoundingClientRect();
-          return {
-            label: element.getAttribute("aria-label") || element.getAttribute("title")
-              || element.textContent?.trim().replace(/\s+/g, " ").slice(0, 40) || element.tagName,
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-          };
-        })
-        .filter((target) => target.width < 44 || target.height < 44)
-        .slice(0, 10));
-      if (undersized.length > 0) {
-        throw new Error(`mobile touch targets below 44px: ${JSON.stringify(undersized)}`);
-      }
-    });
+    await runStep("verify mobile touch targets", () => verifyVisibleTouchTargets(mobilePage, "mobile hub"));
     await runStep("verify 430px mobile hub guards", async () => {
       await mobilePage.setViewportSize({ width: 430, height: 932 });
       await verifyMobileHubResponsiveGuards(mobilePage, TIMEOUT_MS);
@@ -511,6 +487,25 @@ async function main() {
       await mobilePage.setViewportSize({ width: 390, height: 844 });
     }
     await runStep("open mobile analytics", () => openMobileAnalytics(mobilePage, smokeOptions));
+    const mobileSafetyPoolOpened = await runStep("open mobile safety pool", () => openDesktopTab(mobilePage, {
+      ...smokeOptions,
+      buttonName: "Safety Pool",
+      targetHash: "#rebate",
+      checks: [[mobilePage.getByRole("heading", { name: "Safety Pool" }).first(), "mobile safety pool tab"]],
+      skipMessage: "mobile Safety Pool tab did not open during smoke window",
+    }));
+    if (mobileSafetyPoolOpened) {
+      await runStep("verify mobile safety pool touch targets", () => verifyVisibleTouchTargets(mobilePage, "mobile safety pool"));
+    }
+    const mobileLeaderboardsOpened = await runStep("open mobile leaderboards", () => openDesktopTab(mobilePage, {
+      ...smokeOptions,
+      buttonName: "Leaderboards",
+      checks: [[mobilePage.getByRole("heading", { name: "Leaderboards" }).first(), "mobile leaderboards tab"]],
+      skipMessage: "mobile Leaderboards tab did not open during smoke window",
+    }));
+    if (mobileLeaderboardsOpened) {
+      await runStep("verify mobile leaderboards touch targets", () => verifyVisibleTouchTargets(mobilePage, "mobile leaderboards"));
+    }
     await mobileContext.close();
 
     await runStep("verify 360px extreme-value overflow", async () => {

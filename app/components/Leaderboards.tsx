@@ -266,7 +266,7 @@ export function Leaderboards({
                   variant="danger"
                   size="xs"
                   uppercase
-                  className="ml-3"
+                  className="ml-3 min-h-11"
                 >
                   Retry
                 </UiButton>
@@ -278,7 +278,7 @@ export function Leaderboards({
                 variant="secondary"
                 size="xs"
                 uppercase
-                className="mt-3 sm:mt-4"
+                className="mt-3 min-h-11 sm:mt-4"
               >
                 Refresh data
               </UiButton>

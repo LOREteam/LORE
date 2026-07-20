@@ -43,6 +43,16 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-21 - Mobile tab touch-target coverage
+
+- Extracted the existing visible-control touch-target assertion and reused it
+  across the mobile Hub, Analytics, Safety Pool, and Leaderboards screens.
+- Safety Pool older-history and Leaderboards retry/refresh actions now keep a
+  44px minimum height without changing global compact button sizing.
+- Typecheck, focused ESLint, production build, and full responsive browser
+  smoke pass, including the same-epoch pool-chart freshness scenario. EIP-7702
+  remained disabled and the temporary production server was stopped.
+
 ## 2026-07-20 - Chat profile keyboard regression coverage
 
 - Responsive browser smoke now verifies the profile dialog's initial focus,
