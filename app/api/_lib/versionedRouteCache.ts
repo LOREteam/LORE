@@ -3,10 +3,10 @@ import { markRouteBackgroundRefresh } from "./runtimeMetrics";
 type RefreshCapableCache<TPayload> = {
   getRefresh(key: string): Promise<void> | null;
   setRefresh(key: string, promise: Promise<void>): Promise<void>;
-  clearRefresh(key: string): void;
+  clearRefresh(key: string, expected?: Promise<void>): void;
   getInflight(key: string): Promise<TPayload> | null;
   setInflight(key: string, promise: Promise<TPayload>): Promise<TPayload>;
-  clearInflight(key: string): void;
+  clearInflight(key: string, expected?: Promise<TPayload>): void;
   beginWrite(key: string): number;
   getWriteVersion(key: string): number;
   finishWrite(key: string, version: number): void;
@@ -44,7 +44,7 @@ export function startVersionedBackgroundRefresh<TBuildResult, TPayload>(
 
   markRouteBackgroundRefresh(routeMetricKey);
   const writeVersion = cache.beginWrite(cacheKey);
-  const refreshPromise = build()
+  const refreshPromise: Promise<void> = build()
     .then((result) => {
       const payload = toPayload(result);
       const shouldCommit = cache.getWriteVersion(cacheKey) === writeVersion;
@@ -56,7 +56,7 @@ export function startVersionedBackgroundRefresh<TBuildResult, TPayload>(
     })
     .finally(() => {
       cache.finishWrite(cacheKey, writeVersion);
-      cache.clearRefresh(cacheKey);
+      cache.clearRefresh(cacheKey, refreshPromise);
     });
 
   cache.setRefresh(cacheKey, refreshPromise);
@@ -68,7 +68,7 @@ export function startVersionedInflightBuild<TBuildResult, TPayload>(
   const { cache, cacheKey, ttlMs, build, toPayload, onCommit } = options;
   const writeVersion = cache.beginWrite(cacheKey);
   const buildPromise = build();
-  const requestPromise = buildPromise
+  const requestPromise: Promise<TPayload> = buildPromise
     .then((result) => {
       const payload = toPayload(result);
       const shouldCommit = cache.getWriteVersion(cacheKey) === writeVersion;
@@ -78,7 +78,7 @@ export function startVersionedInflightBuild<TBuildResult, TPayload>(
     })
     .finally(() => {
       cache.finishWrite(cacheKey, writeVersion);
-      cache.clearInflight(cacheKey);
+      cache.clearInflight(cacheKey, requestPromise);
     });
 
   cache.setInflight(cacheKey, requestPromise);

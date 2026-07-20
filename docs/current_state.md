@@ -15,6 +15,11 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Versioned route-cache cleanup is ownership-aware for both request builds and
+  background refreshes. An invalidated older promise cannot remove a newer
+  registered promise; the overlapping-build regression test, business logic,
+  TypeScript, and focused ESLint pass.
+
 - Exact commit `00ba0570` passes a detached clean-checkout reproduction:
   lockfile install, wallet dependency-tree integrity, typecheck, business
   logic, V9 invariants, and production build without a copied `.env`.

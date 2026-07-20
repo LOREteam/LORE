@@ -112,7 +112,8 @@ export function createRouteCache<T>(maxEntries: number) {
       inflight.set(key, promise);
       return promise;
     },
-    clearInflight(key: string) {
+    clearInflight(key: string, expected?: Promise<T>) {
+      if (expected && inflight.get(key) !== expected) return;
       inflight.delete(key);
       cleanupWriteVersionIfOrphaned(key);
     },
@@ -123,7 +124,8 @@ export function createRouteCache<T>(maxEntries: number) {
       refresh.set(key, promise);
       return promise;
     },
-    clearRefresh(key: string) {
+    clearRefresh(key: string, expected?: Promise<void>) {
+      if (expected && refresh.get(key) !== expected) return;
       refresh.delete(key);
       cleanupWriteVersionIfOrphaned(key);
     },

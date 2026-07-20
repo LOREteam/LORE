@@ -43,6 +43,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Route-cache ownership race hardening
+
+- Invalidated in-flight and background-refresh promises now release cache
+  ownership only when they still own the registered entry. A superseded async
+  completion can no longer delete the replacement promise and allow duplicate
+  route builds.
+- A behavior test reproduces invalidation followed by overlapping old/new
+  builds. Business logic, TypeScript, focused ESLint, and diff hygiene pass.
+
 ## 2026-07-20 - Exact clean-checkout reproduction after hardening
 
 - Detached commit `00ba0570` installed from the lockfile in an isolated

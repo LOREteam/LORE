@@ -3755,6 +3755,68 @@ async function main() {
   assert.deepEqual(await staleRequest, { fresh: true });
   assert.equal(staleCommitCount, 0, "superseded async builds must not commit stale metadata");
 
+  const inflightRaceCache = routeCache.createRouteCache(2);
+  let resolveOldInflight;
+  let resolveNewInflight;
+  const { requestPromise: oldInflight } = versionedRouteCache.startVersionedInflightBuild({
+    cache: inflightRaceCache,
+    cacheKey: "race",
+    ttlMs: 1000,
+    build: () => new Promise((resolve) => { resolveOldInflight = resolve; }),
+    toPayload: (payload) => payload,
+  });
+  inflightRaceCache.invalidate("race");
+  const { requestPromise: newInflight } = versionedRouteCache.startVersionedInflightBuild({
+    cache: inflightRaceCache,
+    cacheKey: "race",
+    ttlMs: 1000,
+    build: () => new Promise((resolve) => { resolveNewInflight = resolve; }),
+    toPayload: (payload) => payload,
+  });
+  resolveOldInflight({ stale: true });
+  await oldInflight;
+  assert.equal(
+    inflightRaceCache.getInflight("race"),
+    newInflight,
+    "an invalidated stale build must not clear the replacement inflight owner",
+  );
+  resolveNewInflight({ fresh: true });
+  await newInflight;
+
+  const refreshRaceCache = routeCache.createRouteCache(2);
+  let resolveOldRefresh;
+  let resolveNewRefresh;
+  versionedRouteCache.startVersionedBackgroundRefresh({
+    cache: refreshRaceCache,
+    cacheKey: "race",
+    ttlMs: 1000,
+    routeMetricKey: "test-refresh-race",
+    build: () => new Promise((resolve) => { resolveOldRefresh = resolve; }),
+    toPayload: (payload) => payload,
+    onError: (error) => { throw error; },
+  });
+  const oldRefresh = refreshRaceCache.getRefresh("race");
+  refreshRaceCache.invalidate("race");
+  versionedRouteCache.startVersionedBackgroundRefresh({
+    cache: refreshRaceCache,
+    cacheKey: "race",
+    ttlMs: 1000,
+    routeMetricKey: "test-refresh-race",
+    build: () => new Promise((resolve) => { resolveNewRefresh = resolve; }),
+    toPayload: (payload) => payload,
+    onError: (error) => { throw error; },
+  });
+  const newRefresh = refreshRaceCache.getRefresh("race");
+  resolveOldRefresh({ stale: true });
+  await oldRefresh;
+  assert.equal(
+    refreshRaceCache.getRefresh("race"),
+    newRefresh,
+    "an invalidated stale refresh must not clear the replacement refresh owner",
+  );
+  resolveNewRefresh({ fresh: true });
+  await newRefresh;
+
   const backgroundCache = routeCache.createRouteCache(2);
   let resolveBackgroundBuild;
   let backgroundCommitCount = 0;
