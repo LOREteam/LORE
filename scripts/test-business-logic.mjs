@@ -1239,6 +1239,22 @@ async function main() {
     /verifyVisibleTouchTargets[\s\S]*target\.width < 44 \|\| target\.height < 44/,
     "shared browser smoke touch-target guard must reject controls below 44px",
   );
+  const noticeStackSource = readFileSync("app/components/NoticeStack.tsx", "utf8");
+  assert.match(
+    noticeStackSource,
+    /role=\{notice\.tone === "danger" \? "alert" : "status"\}[\s\S]*aria-live=\{notice\.tone === "danger" \? "assertive" : "polite"\}[\s\S]*aria-atomic="true"/,
+    "danger notices must announce assertively while non-danger notices remain polite",
+  );
+  assert.match(
+    noticeStackSource,
+    /aria-label="Dismiss notice"[\s\S]*h-11 w-11|h-11 w-11[\s\S]*aria-label="Dismiss notice"/,
+    "notice dismiss control must preserve a 44px touch target",
+  );
+  assert.doesNotMatch(
+    noticeStackSource,
+    /<div role="status" aria-live="polite" aria-label="Notifications"/,
+    "notification container must not re-announce the full stack for each new notice",
+  );
   assert.match(
     smokeBrowserSource,
     /verify system reduced-motion preference[\s\S]*emulateMedia\(\{ reducedMotion: "reduce" \}\)/,

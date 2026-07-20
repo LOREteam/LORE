@@ -28,7 +28,7 @@ export function NoticeStack({ notices, onDismiss }: NoticeStackProps) {
   if (notices.length === 0) return null;
 
   return (
-    <div role="status" aria-live="polite" aria-label="Notifications" className="fixed right-3 z-220 flex w-[min(26rem,calc(100vw-1.5rem))] flex-col gap-2 sm:right-4" style={{ top: "max(0.75rem, env(safe-area-inset-top, 0.75rem))" }}>
+    <div aria-label="Notifications" className="fixed right-3 z-220 flex w-[min(26rem,calc(100vw-1.5rem))] flex-col gap-2 sm:right-4" style={{ top: "max(0.75rem, env(safe-area-inset-top, 0.75rem))" }}>
       {notices.map((notice) => {
         const tone = toneMap[notice.tone];
         return (
@@ -36,6 +36,9 @@ export function NoticeStack({ notices, onDismiss }: NoticeStackProps) {
             key={notice.id}
             tone={tone.panel}
             padding="sm"
+            role={notice.tone === "danger" ? "alert" : "status"}
+            aria-live={notice.tone === "danger" ? "assertive" : "polite"}
+            aria-atomic="true"
             className="animate-slide-up shadow-2xl shadow-black/30 backdrop-blur-md"
           >
             <div className="flex items-start gap-3">
@@ -50,7 +53,7 @@ export function NoticeStack({ notices, onDismiss }: NoticeStackProps) {
               <button
                 type="button"
                 onClick={() => onDismiss(notice.id)}
-                className="shrink-0 rounded-md p-2 text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400"
                 aria-label="Dismiss notice"
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">

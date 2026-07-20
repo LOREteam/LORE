@@ -15,6 +15,11 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Notifications use one live region per message: danger notices are assertive
+  alerts, while informational, success, and warning notices remain polite
+  statuses. Adding a notice no longer re-announces the entire stack, and every
+  dismiss action has a stable 44px target. Business logic, focused lint,
+  typecheck, and production build pass.
 - Exact commit `963b6c90` passes a detached clean-checkout reproduction without
   a copied `.env`: `npm ci`, production dependency audit, wallet peer
   integrity, business logic, V9 invariants, optimizer/Osaka compilation
@@ -429,8 +434,8 @@ The latest funded managed soak was stopped after six successful unique bets and
 three receipt timeouts from `AUTOMINER_A`. The sends remain unconfirmed and the
 role's pending nonce is ahead of latest nonce. The canary now records those
 events as post-send, blocks further sends behind a pending queue, and enforces
-that guard in transaction-free preflight. The current dry-run fails closed with
-zero transactions. Do not clear or replace the queue automatically; restart only
+that guard in transaction-free preflight. A fresh 2026-07-21 dry-run still fails
+closed on the pending nonce with zero transactions. Do not clear or replace the queue automatically; restart only
 after the strengthened preflight passes, and keep `AUTOMINER_C` excluded.
 
 After that blocker is cleared, continue the same durable soak toward the 24-48

@@ -43,6 +43,18 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-21 - Notification screen-reader semantics
+
+- Notification messages now own their live-region semantics instead of using
+  one polite wrapper for the entire stack. Danger messages announce as
+  assertive alerts; other tones remain polite statuses, avoiding stale notice
+  re-announcement.
+- The conditional dismiss control now has a 44px target. Business logic guards,
+  focused ESLint, typecheck, and production build pass.
+- A fresh transaction-free soak preflight still fails closed only on the
+  `AUTOMINER_A` pending nonce; it emitted no transaction, nonce, or revert
+  evidence, so no supervisor was started.
+
 ## 2026-07-21 - Current-head clean-checkout CI reproduction
 
 - Detached commit `963b6c90` installed exactly from the lockfile without a
