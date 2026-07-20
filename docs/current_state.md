@@ -39,7 +39,8 @@ Open linked evidence only when a task needs it.
   pages. Routine refresh remains capped, each page is one atomic multicall, and
   discovered overflow epochs join visible balances and claim planning without
   duplicate accounting. Full lint, logic, typecheck, contract invariants,
-  production build, and responsive browser smoke pass on the local snapshot.
+  production build, HTTP smoke, and responsive browser smoke pass on the local
+  snapshot; the no-identity HTTP run separately remained fail-closed at 503.
 - Exact commit `02e3660` passed a detached clean-checkout reproduction: lockfile
   install, wallet dependency integrity, production audit, lint, typecheck,
   business logic, contract invariants, compile provenance, SQLite operations,

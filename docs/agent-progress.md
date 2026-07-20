@@ -51,9 +51,9 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   loaded pages, and claim completion clears stale older rows before reloading.
 - Normalization, merge, bounded-route, and explicit-load guards pass with
   focused ESLint, business logic, TypeScript, diff hygiene, and a production
-  build that registers `/api/rebate-history`. Full local HTTP smoke remains
-  fail-closed without the trusted-proxy identity fixture; the limiter returned
-  503 before route validation and was not weakened for this check.
+  build that registers `/api/rebate-history`. A first local HTTP run without
+  proxy identity failed closed at 503; the documented localhost-only identity
+  fixture then passed all HTTP checks, including the new page shape.
 
 ## 2026-07-20 - Wallet Settings focus-trap reuse
 
