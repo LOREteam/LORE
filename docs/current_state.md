@@ -55,6 +55,10 @@ Open linked evidence only when a task needs it.
   Mainnet runtime validation also requires the effective diagnostics, chat,
   admin, and bootstrap-resolver secrets to contain at least 32 characters.
   Storage, logic, TypeScript, focused ESLint, and diff hygiene checks pass.
+- Global render-error fallback logging and the browser `console.error`
+  interceptor sanitize normalized values before direct console output. This
+  uses the existing support-log redaction rules and leaves chunk/session
+  recovery behavior unchanged. Logic, TypeScript, and focused ESLint pass.
 - Exact commit `02e3660` passed a detached clean-checkout reproduction: lockfile
   install, wallet dependency integrity, production audit, lint, typecheck,
   business logic, contract invariants, compile provenance, SQLite operations,

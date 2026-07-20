@@ -8,6 +8,7 @@ import {
   shouldAttemptChunkReloadOnce,
   stripChunkReloadCacheParam,
 } from "./lib/chunkReloadRecovery";
+import { sanitizeSupportLogPayload } from "./lib/sentrySanitize";
 
 export default function GlobalError({
   error,
@@ -27,7 +28,12 @@ export default function GlobalError({
 
     // Last-resort logging — logger may itself be broken at this point.
     try {
-      console.error("[GlobalError]", error?.name, error?.message, error?.digest);
+      const safeError = sanitizeSupportLogPayload({
+        name: error?.name,
+        message: error?.message,
+        digest: error?.digest,
+      });
+      console.error("[GlobalError]", safeError.name, safeError.message, safeError.digest);
     } catch {
       // ignore
     }

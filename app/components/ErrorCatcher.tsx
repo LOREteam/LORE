@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { log } from "../lib/logger";
+import { sanitizeSupportLogPayload } from "../lib/sentrySanitize";
 import { formatUnknownError } from "../lib/utils";
 import {
   CHUNK_RELOAD_WINDOW_MS,
@@ -32,7 +33,7 @@ export function ErrorCatcher() {
       return current;
     };
 
-    const sanitizeConsoleArg = (value: unknown): unknown => {
+    const normalizeConsoleArg = (value: unknown): unknown => {
       if (value instanceof Error) {
         return {
           name: value.name,
@@ -63,6 +64,9 @@ export function ErrorCatcher() {
       }
       return value;
     };
+
+    const sanitizeConsoleArg = (value: unknown): unknown =>
+      sanitizeSupportLogPayload(normalizeConsoleArg(value));
 
     const stringifySafe = (value: unknown) => {
       try {

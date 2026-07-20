@@ -281,6 +281,12 @@ async function main() {
   assert.match(routeErrorSource, /describeSafeRouteError\(error\)/);
   assert.match(routeErrorSource, /sanitizeSentryPayload\(describeRouteError\(error\)\)/);
   assert.match(routeErrorSource, /sanitizeSentryPayload\(extra\)/);
+  const redactedErrorCatcherSource = readFileSync("app/components/ErrorCatcher.tsx", "utf8");
+  assert.match(redactedErrorCatcherSource, /sanitizeSupportLogPayload\(normalizeConsoleArg\(value\)\)/);
+  assert.match(redactedErrorCatcherSource, /originalConsoleError\(\.\.\.args\.map\(sanitizeConsoleArg\)\)/);
+  const redactedGlobalErrorSource = readFileSync("app/global-error.tsx", "utf8");
+  assert.match(redactedGlobalErrorSource, /safeError\s*=\s*sanitizeSupportLogPayload\(\{/);
+  assert.match(redactedGlobalErrorSource, /console\.error\("\[GlobalError\]", safeError\.name, safeError\.message, safeError\.digest\)/);
   const safeRouteError = routeError.describeSafeRouteError(
     new Error(`RPC https://rpc.example.test/private failed for 0x${"ab".repeat(20)}`),
   );

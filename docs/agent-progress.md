@@ -43,6 +43,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Browser console fallback redaction
+
+- The global render-error fallback and the browser `console.error` interceptor
+  now pass normalized values through the existing support-log sanitizer before
+  writing them to the console. This closes the path that previously preceded
+  persisted-log and Sentry redaction.
+- Business logic source guards, TypeScript, focused ESLint, and diff hygiene
+  pass. No user-visible error recovery behavior changed.
+
 ## 2026-07-20 - Storage warning redaction and production secret floor
 
 - Malformed SQLite/indexer values now emit fixed diagnostic labels instead of
