@@ -1094,6 +1094,11 @@ async function main() {
     /aria-label="Export support logs"[\s\S]*className="text-xs"[\s\S]*hidden sm:inline">Export Logs/,
     "mobile Wallet Settings must keep support-log export available as an accessible icon button",
   );
+  assert.match(
+    walletSettingsModalSource,
+    /useDialogFocusTrap<HTMLDivElement>\(isOpen, onClose\)/,
+    "Wallet Settings must use the shared focus trap with hidden-control and escaped-focus recovery",
+  );
   const miningRoundBettingSource = readFileSync("app/hooks/useMiningRoundBetting.ts", "utf8");
   assert.match(
     miningRoundBettingSource,

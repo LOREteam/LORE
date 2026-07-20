@@ -41,6 +41,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Wallet Settings focus-trap reuse
+
+- Wallet Settings now uses the shared dialog focus trap instead of maintaining
+  a weaker duplicate. Hidden controls are excluded, escaped focus is recovered,
+  Escape closes the dialog, and focus returns to the opener.
+- Focused ESLint, business logic, typecheck, and diff hygiene pass. The managed
+  soak remains stopped at transaction-free preflight because two allowed roles
+  lack native gas; no transaction was sent and `AUTOMINER_C` stays excluded.
+
 ## 2026-07-20 - Inline credential redaction
 
 - Closed a shared logging boundary gap: server, Sentry, and support sanitization

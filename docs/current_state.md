@@ -32,6 +32,9 @@ Open linked evidence only when a task needs it.
   and hardening headers were absent. Production build now lists Proxy, HTTP smoke
   requires the CSP/clickjacking/MIME/referrer/permissions headers, and full
   browser smoke passes with the policy enforced.
+- Wallet Settings uses the shared hardened dialog focus trap, including hidden
+  control filtering, escaped-focus recovery, Escape handling, and opener focus
+  restoration. The focused lint, business-logic, typecheck, and diff gates pass.
 - Exact commit `02e3660` passed a detached clean-checkout reproduction: lockfile
   install, wallet dependency integrity, production audit, lint, typecheck,
   business logic, contract invariants, compile provenance, SQLite operations,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import { downloadLogs } from "../lib/logger";
 import { UiButton } from "./ui/UiButton";
 import { uiTokens } from "./ui/tokens";
@@ -13,6 +13,7 @@ import { WalletSettingsPrivyPanel } from "./wallet/WalletSettingsPrivyPanel";
 import { WalletSettings7702Panel } from "./wallet/WalletSettings7702Panel";
 import { WalletSettingsTransferPanels } from "./wallet/WalletSettingsTransferPanels";
 import type { WalletSettingsModalProps } from "./wallet/types";
+import { useDialogFocusTrap } from "../hooks/useDialogFocusTrap";
 
 type WalletSettingsSection = "all" | "overview" | "7702" | "privy" | "transfer" | "scan";
 
@@ -27,15 +28,6 @@ const BASE_SECTIONS: Array<{ id: Exclude<WalletSettingsSection, "7702">; label: 
 const SECTIONS: Array<{ id: WalletSettingsSection; label: string }> = EIP7702_ENABLED
   ? [...BASE_SECTIONS.slice(0, 2), { id: "7702" as const, label: "7702" }, ...BASE_SECTIONS.slice(2)]
   : BASE_SECTIONS;
-
-const FOCUSABLE_SELECTOR = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  "[tabindex]:not([tabindex='-1'])",
-].join(",");
 
 export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   isOpen,
@@ -102,45 +94,7 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   onRunEip7702SendDiagnostic,
 }: WalletSettingsModalProps) {
   const [activeSection, setActiveSection] = useState<WalletSettingsSection>("all");
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusable = dialogRef.current?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
-    focusable?.focus();
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") return;
-
-      const focusableElements = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [],
-      ).filter((element) => element.offsetParent !== null);
-      if (focusableElements.length === 0) return;
-
-      const first = focusableElements[0];
-      const last = focusableElements[focusableElements.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      previousFocusRef.current?.focus();
-    };
-  }, [isOpen, onClose]);
+  const dialogRef = useDialogFocusTrap<HTMLDivElement>(isOpen, onClose);
 
   if (!isOpen) return null;
 
