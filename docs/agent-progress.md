@@ -54,6 +54,10 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   production build, and responsive browser smoke pass.
 - The jackpot result overlay close control also uses a 44px target; focused
   TypeScript, ESLint, and diff hygiene pass.
+- Chat header icon controls are non-shrinking, closing a measured narrow-panel
+  regression below 44px. Analytics deposit/jackpot refresh controls are 44px;
+  mobile smoke measures the visible deposit refresh target. Typecheck, focused
+  lint, production build, and responsive browser smoke pass.
 
 ## 2026-07-20 - Route-cache ownership race hardening
 

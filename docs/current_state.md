@@ -22,6 +22,9 @@ Open linked evidence only when a task needs it.
   responsive browser smoke pass.
 - The jackpot result overlay close control also meets the 44px touch-target
   floor; focused type and lint checks pass.
+- Chat header controls cannot flex-shrink below their measured 44px target, and
+  Analytics refresh controls use the same floor. Mobile Analytics measurement,
+  typecheck, production build, and responsive browser smoke pass.
 
 - Versioned route-cache cleanup is ownership-aware for both request builds and
   background refreshes. An invalidated older promise cannot remove a newer
