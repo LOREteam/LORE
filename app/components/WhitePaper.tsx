@@ -258,7 +258,10 @@ export const WhitePaper = React.memo(function WhitePaper() {
           </P>
           <ul className="space-y-2 mb-6 ml-1">
             <Li emoji="🎲">Transparent V9 winner entropy: <Code>keccak256(block.prevrandao, blockhash(block.number - 1), epoch, totalPoolWithRollover, dailyJackpotPool, weeklyJackpotPool) % 25 + 1</Code></Li>
-            <Li emoji="🔒">No admin withdrawal functions - funds are only claimable by winners via <Code>claimReward()</Code></Li>
+            <Li emoji="🔒">
+              No arbitrary owner withdrawal of active player rewards or jackpot balances. Funds move only through explicit
+              reward, Safety Pool, resolver reward, protocol-fee, and one-year dust-settlement paths.
+            </Li>
             <Li emoji="📊"><Code>getTileData()</Code> returns all 25 tiles&apos; stake totals and on-chain unique-player counts in one call</Li>
             <Li emoji="⏰">Epoch end times enforced on-chain - no bets after the deadline</Li>
             <Li emoji="🎰">Daily/weekly jackpot checks are on-chain and based on elapsed UTC day/week windows at resolve time</Li>

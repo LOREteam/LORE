@@ -1473,6 +1473,16 @@ async function main() {
     /2% goes to protocol accounting: half to treasury and half to a Safety Pool/,
     "White Paper must not describe the protocol fee as an exact half split before the resolver reward",
   );
+  assert.doesNotMatch(
+    whitePaperSource,
+    /funds are only claimable by winners/,
+    "White Paper must not hide Safety Pool, resolver, fee, or bounded dust-settlement paths",
+  );
+  assert.match(
+    whitePaperSource,
+    /No arbitrary owner withdrawal[\s\S]*one-year dust-settlement paths/,
+    "White Paper must describe the bounded V9 fund-movement paths accurately",
+  );
   assert.match(
     faqSource,
     /one year[\s\S]*timelocked fee-recipient address/,
