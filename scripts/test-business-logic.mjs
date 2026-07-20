@@ -1938,6 +1938,17 @@ async function main() {
     /!container\?\.contains\(active\)/,
     "dialog focus traps must recover when focus escapes the active dialog",
   );
+  const chatProfileFocusSource = readFileSync("app/components/chat/ChatProfileModal.tsx", "utf8");
+  assert.match(
+    chatProfileFocusSource,
+    /useDialogFocusTrap<HTMLDivElement>\(true, onClose, "#profile-name"\)/,
+    "chat profile must use the shared focus trap while preserving its initial name-field focus",
+  );
+  assert.doesNotMatch(
+    chatProfileFocusSource,
+    /document\.addEventListener\("keydown"/,
+    "chat profile must not maintain a second dialog keyboard trap",
+  );
   const headerSource = readFileSync("app/components/Header.tsx", "utf8");
   assert.match(
     headerSource,

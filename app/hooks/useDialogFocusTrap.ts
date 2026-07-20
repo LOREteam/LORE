@@ -11,7 +11,11 @@ const FOCUSABLE_SELECTOR = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function useDialogFocusTrap<T extends HTMLElement>(active: boolean, onEscape?: () => void) {
+export function useDialogFocusTrap<T extends HTMLElement>(
+  active: boolean,
+  onEscape?: () => void,
+  initialFocusSelector?: string,
+) {
   const containerRef = useRef<T>(null);
 
   useEffect(() => {
@@ -22,7 +26,10 @@ export function useDialogFocusTrap<T extends HTMLElement>(active: boolean, onEsc
       Array.from(container?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? []).filter(
         (element) => element.getClientRects().length > 0 && !element.closest("[aria-hidden='true']"),
       );
-    (focusable()[0] ?? container)?.focus();
+    const initialFocus = initialFocusSelector
+      ? container?.querySelector<HTMLElement>(initialFocusSelector)
+      : null;
+    (initialFocus ?? focusable()[0] ?? container)?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && onEscape) {
@@ -54,7 +61,7 @@ export function useDialogFocusTrap<T extends HTMLElement>(active: boolean, onEsc
       document.removeEventListener("keydown", handleKeyDown);
       previousFocus?.focus();
     };
-  }, [active, onEscape]);
+  }, [active, initialFocusSelector, onEscape]);
 
   return containerRef;
 }

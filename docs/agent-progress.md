@@ -1033,3 +1033,12 @@ file grows beyond a compact handoff.
   unchanged.
 - Focused lint, business logic, typecheck, production build, and diff hygiene
   pass with EIP-7702 disabled.
+
+## 2026-07-21 - Unify Chat Profile focus handling
+
+- Removed the modal's duplicate document-level keyboard trap and moved it to
+  the existing shared dialog focus helper.
+- Added optional initial-focus targeting so Chat Profile still opens on the
+  name field while preserving Tab wrap, Escape close, and focus restoration.
+- Focused lint, business logic, post-build typecheck, production build, and the
+  full responsive browser smoke pass. The temporary server was stopped.

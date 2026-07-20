@@ -4,6 +4,7 @@ import React, { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { ChatProfile } from "../../hooks/useChatProfile";
 import { ChatAvatar, AVATAR_IDS, isAvatarId, type AvatarId } from "./chatAvatars";
 import { resizeImageToBase64, validateCustomAvatarFile } from "../../lib/chatAvatarUpload";
+import { useDialogFocusTrap } from "../../hooks/useDialogFocusTrap";
 import { UiButton } from "../ui/UiButton";
 import { UiInput } from "../ui/UiInput";
 import { uiTokens } from "../ui/tokens";
@@ -15,33 +16,15 @@ interface Props {
   onClose: () => void;
 }
 
-const FOCUSABLE_SELECTOR = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  "[tabindex]:not([tabindex='-1'])",
-].join(", ");
-
-function getFocusableElements(container: HTMLElement): HTMLElement[] {
-  return [...container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter((element) => {
-    if (element.hasAttribute("disabled")) return false;
-    if (element.getAttribute("aria-hidden") === "true") return false;
-    return element.offsetParent !== null || document.activeElement === element;
-  });
-}
-
 export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Props) {
   const [name, setName] = useState(profile.name ?? "");
   const [avatar, setAvatar] = useState<string | null>(profile.customAvatar ? null : profile.avatar);
   const [customAvatar, setCustomAvatar] = useState<string | null>(profile.customAvatar ?? null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useDialogFocusTrap<HTMLDivElement>(true, onClose, "#profile-name");
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const restoreFocusRef = useRef<HTMLElement | null>(null);
   const lastScrollTopRef = useRef(0);
   const restoreFrameARef = useRef<number | null>(null);
   const restoreFrameBRef = useRef<number | null>(null);
@@ -75,55 +58,11 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
   });
 
   React.useEffect(() => {
-    restoreFocusRef.current =
-      typeof document !== "undefined" && document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-
-    const dialog = dialogRef.current;
-    const initialFocus = dialog?.querySelector<HTMLElement>("#profile-name");
-    initialFocus?.focus();
-
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-
-      if (event.key !== "Tab" || !dialog) return;
-      const focusable = getFocusableElements(dialog);
-      if (focusable.length === 0) {
-        event.preventDefault();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
-      if (event.shiftKey) {
-        if (!active || active === first || !dialog.contains(active)) {
-          event.preventDefault();
-          last.focus();
-        }
-        return;
-      }
-
-      if (!active || active === last || !dialog.contains(active)) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("keydown", onKey);
       if (restoreFrameARef.current !== null) cancelAnimationFrame(restoreFrameARef.current);
       if (restoreFrameBRef.current !== null) cancelAnimationFrame(restoreFrameBRef.current);
-      restoreFocusRef.current?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   const handleSave = useCallback(() => {
     onSave({

@@ -15,6 +15,12 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Chat Profile now uses the shared dialog focus trap instead of maintaining a
+  second keyboard implementation. The shared hook supports an explicit initial
+  focus target, preserving focus on the profile-name field as well as Tab
+  wrapping, Escape dismissal, and opener-focus restoration. Focused lint,
+  business logic, typecheck, production build, and responsive browser smoke
+  pass.
 - Analytics deposit and jackpot-history refreshes now stop completely while
   the browser tab is hidden and resume through their existing cache-aware
   hooks when it becomes visible. The visible 30-second deposit cadence and the
