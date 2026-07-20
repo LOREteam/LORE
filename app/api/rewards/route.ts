@@ -98,13 +98,13 @@ export async function POST(request: Request) {
       ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await inflight)
       : await (() => {
           const writeVersion = rewardsRouteCache.beginWrite(cacheKey);
-          const requestPromise = buildRewardsPayload(user, epochs)
+          const requestPromise: Promise<RewardsPayload> = buildRewardsPayload(user, epochs)
             .then((result) => {
               return rewardsRouteCache.setIfLatest(cacheKey, result, REWARDS_ROUTE_CACHE_MS, writeVersion);
             })
             .finally(() => {
               rewardsRouteCache.finishWrite(cacheKey, writeVersion);
-              rewardsRouteCache.clearInflight(cacheKey);
+              rewardsRouteCache.clearInflight(cacheKey, requestPromise);
             });
           return rewardsRouteCache.setInflight(cacheKey, requestPromise);
         })();

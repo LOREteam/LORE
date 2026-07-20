@@ -152,7 +152,7 @@ export async function loadRewardMapsForUserEpochs(
     return inflight;
   }
 
-  const task = (async (): Promise<RewardMapsForUserEpochs> => {
+  const task: Promise<RewardMapsForUserEpochs> = (async (): Promise<RewardMapsForUserEpochs> => {
     const epochMap = await loadEpochRows(normalizedEpochs);
     const winningEpochs = Object.entries(epochMap)
       .map(([epoch, row]) => ({
@@ -224,7 +224,7 @@ export async function loadRewardMapsForUserEpochs(
       return rewardSummaryCache.set(cacheKey, payload, REWARD_SUMMARY_CACHE_TTL_MS);
     })
     .finally(() => {
-      rewardSummaryCache.clearInflight(cacheKey);
+      rewardSummaryCache.clearInflight(cacheKey, task);
     });
 
   return rewardSummaryCache.setInflight(cacheKey, task);

@@ -743,17 +743,17 @@ function scheduleDataSyncRefresh() {
   }
 
   const version = dataSyncHealthCache.beginWrite(DATA_SYNC_CACHE_KEY);
-  const refreshPromise = (async () => {
-    try {
-      const payload = await buildDataSyncHealthPayload();
+  const refreshPromise: Promise<void> = buildDataSyncHealthPayload()
+    .then((payload) => {
       dataSyncHealthCache.setIfLatest(DATA_SYNC_CACHE_KEY, payload, DATA_SYNC_CACHE_TTL_MS, version);
-    } catch (error) {
+    })
+    .catch((error) => {
       logRouteError("api/health/data-sync", error, { phase: "background-refresh" });
-    } finally {
+    })
+    .finally(() => {
       dataSyncHealthCache.finishWrite(DATA_SYNC_CACHE_KEY, version);
-      dataSyncHealthCache.clearRefresh(DATA_SYNC_CACHE_KEY);
-    }
-  })();
+      dataSyncHealthCache.clearRefresh(DATA_SYNC_CACHE_KEY, refreshPromise);
+    });
 
   dataSyncHealthCache.setRefresh(DATA_SYNC_CACHE_KEY, refreshPromise);
 }
@@ -784,15 +784,14 @@ export async function GET(request: NextRequest) {
   const stale = dataSyncHealthCache.getStale(DATA_SYNC_CACHE_KEY);
 
   const version = dataSyncHealthCache.beginWrite(DATA_SYNC_CACHE_KEY);
-  const requestPromise = (async () => {
-    try {
-      const payload = await buildDataSyncHealthPayload();
+  const requestPromise: Promise<DataSyncHealthResponse> = buildDataSyncHealthPayload()
+    .then((payload) => {
       return dataSyncHealthCache.setIfLatest(DATA_SYNC_CACHE_KEY, payload, DATA_SYNC_CACHE_TTL_MS, version);
-    } finally {
+    })
+    .finally(() => {
       dataSyncHealthCache.finishWrite(DATA_SYNC_CACHE_KEY, version);
-      dataSyncHealthCache.clearInflight(DATA_SYNC_CACHE_KEY);
-    }
-  })();
+      dataSyncHealthCache.clearInflight(DATA_SYNC_CACHE_KEY, requestPromise);
+    });
   dataSyncHealthCache.setInflight(DATA_SYNC_CACHE_KEY, requestPromise);
 
   try {

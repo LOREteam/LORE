@@ -182,10 +182,10 @@ async function getIndexedEpochs(user: `0x${string}`): Promise<number[]> {
     return inflight;
   }
 
-  const task = Promise.resolve(getUserParticipatingEpochs(user, 5000))
+  const task: Promise<number[]> = Promise.resolve(getUserParticipatingEpochs(user, 5000))
     .then((epochs) => rebateIndexedEpochsCache.set(cacheKey, epochs, REBATE_INDEXED_EPOCHS_CACHE_MS))
     .finally(() => {
-      rebateIndexedEpochsCache.clearInflight(cacheKey);
+      rebateIndexedEpochsCache.clearInflight(cacheKey, task);
     });
 
   rebateIndexedEpochsCache.setInflight(cacheKey, task);

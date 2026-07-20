@@ -334,7 +334,7 @@ function startEpochsRefresh(cacheKey: string, requestedEpochs: number[]) {
 
   markRouteBackgroundRefresh(ROUTE_METRIC_KEY);
   const writeVersion = epochsRouteCache.beginWrite(cacheKey);
-  const refreshPromise = buildEpochsPayload(requestedEpochs, { allowChainReconcile: true })
+  const refreshPromise: Promise<void> = buildEpochsPayload(requestedEpochs, { allowChainReconcile: true })
     .then(({ payload }) => {
       epochsRouteCache.setIfLatest(cacheKey, payload, EPOCHS_STALE_REFRESH_MS, writeVersion);
     })
@@ -343,7 +343,7 @@ function startEpochsRefresh(cacheKey: string, requestedEpochs: number[]) {
     })
     .finally(() => {
       epochsRouteCache.finishWrite(cacheKey, writeVersion);
-      epochsRouteCache.clearRefresh(cacheKey);
+      epochsRouteCache.clearRefresh(cacheKey, refreshPromise);
     });
 
   epochsRouteCache.setRefresh(cacheKey, refreshPromise);
@@ -385,13 +385,13 @@ export async function GET(request: Request) {
           const buildPromise = buildEpochsPayload(requestedEpochs, {
             allowChainReconcile: requestedEpochs.length > 0,
           });
-          const requestPromise = buildPromise
+          const requestPromise: Promise<EpochPayload> = buildPromise
             .then(({ payload }) => {
               return epochsRouteCache.setIfLatest(cacheKey, payload, EPOCHS_ROUTE_CACHE_MS, writeVersion);
             })
             .finally(() => {
               epochsRouteCache.finishWrite(cacheKey, writeVersion);
-              epochsRouteCache.clearInflight(cacheKey);
+              epochsRouteCache.clearInflight(cacheKey, requestPromise);
             });
           epochsRouteCache.setInflight(cacheKey, requestPromise);
           return buildPromise;
