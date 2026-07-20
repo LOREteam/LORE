@@ -2757,6 +2757,11 @@ async function main() {
     /Load older epochs/,
     "Safety Pool must expose explicit on-demand older history instead of background historical polling",
   );
+  assert.match(
+    smokeHttpSource,
+    /name: "rebate-history"[\s\S]*\/api\/rebate-history\?user=/,
+    "HTTP smoke must cover the paginated Safety Pool history route",
+  );
   assert.doesNotMatch(jackpotsRouteSource, /error: message/);
   const liveRoundCanarySource = readFileSync("scripts/live-round-canary.ts", "utf8");
   const soakSupervisorSource = readFileSync("scripts/run-testnet-soak-supervisor.mjs", "utf8");

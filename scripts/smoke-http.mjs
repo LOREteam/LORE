@@ -697,6 +697,22 @@ const checks = [
       JSON.parse(body);
     },
   },
+  {
+    name: "rebate-history",
+    path: `/api/rebate-history?user=${ZERO_ADDRESS}&limit=32`,
+    assert: async (response, body) => {
+      if (!response.headers.get("content-type")?.includes("application/json")) {
+        throw new Error("expected json");
+      }
+      const json = JSON.parse(body);
+      if (!Array.isArray(json.rows) || typeof json.hasMore !== "boolean") {
+        throw new Error("rebate history payload has an invalid page shape");
+      }
+      if (json.nextCursor !== null && (!Number.isSafeInteger(json.nextCursor) || json.nextCursor <= 0)) {
+        throw new Error("rebate history payload has an invalid cursor");
+      }
+    },
+  },
 ];
 
 async function fetchWithTimeout(url, options) {
