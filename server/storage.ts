@@ -114,8 +114,8 @@ function parseJsonArray<T>(value: unknown): T[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch (err) {
-    console.warn("[storage] parseJsonArray failed:", (err as Error).message ?? err);
+  } catch {
+    console.warn("[storage] Invalid JSON array value");
     return [];
   }
 }
@@ -146,8 +146,8 @@ function parseAmountWei(value: unknown) {
   if (typeof value !== "string" || !value) return 0n;
   try {
     return parseUnits(value, 18);
-  } catch (err) {
-    console.warn("[storage] parseAmountWei failed for value:", value, (err as Error).message ?? err);
+  } catch {
+    console.warn("[storage] Invalid token amount value");
     return 0n;
   }
 }
@@ -350,8 +350,8 @@ export function getMetaJson<T>(key: string): T | null {
   if (raw == null) return null;
   try {
     return JSON.parse(raw) as T;
-  } catch (err) {
-    console.warn(`[storage] getMetaJson: failed to parse key "${key}":`, (err as Error).message ?? err);
+  } catch {
+    console.warn("[storage] Invalid JSON metadata value");
     return null;
   }
 }
@@ -1029,8 +1029,8 @@ function getIndexerEventMap(category: IndexerEventCategory) {
     if (!id) continue;
     try {
       result[id] = JSON.parse(String(row.payload_json ?? "{}"));
-    } catch (err) {
-      console.warn("[storage] Invalid indexed event payload:", (err as Error).message ?? err);
+    } catch {
+      console.warn("[storage] Invalid indexed event payload");
     }
   }
   return result;

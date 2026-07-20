@@ -97,8 +97,8 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     issues.push("NEXT_PUBLIC_SITE_URL must be a valid https:// URL on mainnet.");
   }
 
-  if (!getEnv("HEALTH_DIAGNOSTICS_SECRET")) {
-    issues.push("HEALTH_DIAGNOSTICS_SECRET is required for mainnet.");
+  if (getEnv("HEALTH_DIAGNOSTICS_SECRET").length < 32) {
+    issues.push("HEALTH_DIAGNOSTICS_SECRET must contain at least 32 characters on mainnet.");
   }
 
   if (scope === "web" || scope === "server") {
@@ -125,14 +125,19 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     if (!getEnv("NEXT_PUBLIC_PRIVY_APP_ID")) {
       issues.push("NEXT_PUBLIC_PRIVY_APP_ID is required for mainnet web runtime.");
     }
-    if (!getEnv("CHAT_AUTH_SECRET") && !getEnv("NEXTAUTH_SECRET")) {
-      issues.push("CHAT_AUTH_SECRET or NEXTAUTH_SECRET is required for mainnet web runtime.");
+    const chatAuthSecret = getEnv("CHAT_AUTH_SECRET") || getEnv("NEXTAUTH_SECRET");
+    if (chatAuthSecret.length < 32) {
+      issues.push("CHAT_AUTH_SECRET or NEXTAUTH_SECRET must contain at least 32 characters for mainnet web runtime.");
+    }
+    const adminAuthSecret = getEnv("ADMIN_AUTH_SECRET") || chatAuthSecret;
+    if (adminAuthSecret.length < 32) {
+      issues.push("The effective ADMIN_AUTH_SECRET must contain at least 32 characters for mainnet admin sessions.");
     }
     if (!getEnv("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS")) {
       issues.push("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS is required for mainnet admin auth.");
     }
-    if (!getEnv("BOOTSTRAP_RESOLVE_SECRET")) {
-      issues.push("BOOTSTRAP_RESOLVE_SECRET is required for mainnet bootstrap resolve.");
+    if (getEnv("BOOTSTRAP_RESOLVE_SECRET").length < 32) {
+      issues.push("BOOTSTRAP_RESOLVE_SECRET must contain at least 32 characters for mainnet bootstrap resolve.");
     }
     if (!getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") && !getEnv("KEEPER_PRIVATE_KEY")) {
       issues.push("BOOTSTRAP_KEEPER_PRIVATE_KEY or KEEPER_PRIVATE_KEY is required for mainnet bootstrap resolve.");

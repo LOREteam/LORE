@@ -43,6 +43,17 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Storage warning redaction and production secret floor
+
+- Malformed SQLite/indexer values now emit fixed diagnostic labels instead of
+  interpolating raw payloads or parser errors. A focused storage test injects a
+  sensitive marker and proves that it does not reach `console.warn`.
+- Mainnet validation now requires at least 32 characters for the effective
+  diagnostics, chat-auth, admin-auth, and bootstrap-resolver secrets. Existing
+  fallback relationships are preserved; only weak effective values fail.
+- Indexer storage, business logic, TypeScript, focused ESLint, and diff hygiene
+  pass. No runtime transaction, contract, or testnet configuration was changed.
+
 ## 2026-07-20 - Pending receipt and nonce-queue fail-closed guard
 
 - Reproduced three receipt timeouts from one soak role and confirmed a pending

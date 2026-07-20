@@ -66,6 +66,21 @@ async function main() {
   assert.deepEqual(firstPage, { epochs: [9, 8], hasMore: true, nextCursor: 8 });
   const secondPage = getUserParticipatingEpochPage(user, { beforeEpoch: firstPage.nextCursor, limit: 2 });
   assert.deepEqual(secondPage, { epochs: [7], hasMore: false, nextCursor: null });
+
+  const sensitiveMarker = "storage-payload-must-not-reach-logs";
+  db.prepare("UPDATE scoped_indexer_events SET payload_json = ? WHERE category = ?")
+    .run(`${sensitiveMarker}{`, "batch_claim");
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+  try {
+    readJsonPath<Record<string, unknown>>("gamedata/batchClaims");
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1, "malformed indexed payload should emit one bounded warning");
+  assert.ok(!warnings.join(" ").includes(sensitiveMarker), "storage warnings must not echo malformed payloads");
+
     console.log(JSON.stringify({ status: "pass", categories: rows.length, legacyRead: true, candidatePagination: true }));
   } finally {
     (db as unknown as { close(): void }).close();

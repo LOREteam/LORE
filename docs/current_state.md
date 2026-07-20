@@ -49,6 +49,12 @@ Open linked evidence only when a task needs it.
   ahead of latest nonce. Transaction-free preflight enforces the same guard.
   Logic, TypeScript, focused ESLint, and a real zero-transaction dry-run pass;
   the dry-run correctly reports the remaining pending nonce queue.
+- Malformed SQLite/indexer values use bounded fixed warnings and no longer
+  interpolate the rejected payload or parser error. A focused regression test
+  proves that an injected sensitive marker is absent from `console.warn`.
+  Mainnet runtime validation also requires the effective diagnostics, chat,
+  admin, and bootstrap-resolver secrets to contain at least 32 characters.
+  Storage, logic, TypeScript, focused ESLint, and diff hygiene checks pass.
 - Exact commit `02e3660` passed a detached clean-checkout reproduction: lockfile
   install, wallet dependency integrity, production audit, lint, typecheck,
   business logic, contract invariants, compile provenance, SQLite operations,
