@@ -43,6 +43,18 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Claim and resolver duplicate-send guards
+
+- Safety Pool batch claiming now exits immediately on wallet rejection and
+  classifies every post-submit confirmation outage as ambiguous pending unless
+  an on-chain revert is proven. It no longer splits or retries a submitted batch
+  when receipt or claim-state RPC reads are unavailable.
+- Bootstrap resolve now fails closed in production when its SQLite coordination
+  lock is unavailable. The process-local throttle remains development-only, so
+  multi-instance or restart scenarios cannot silently bypass the shared lock.
+- Business logic, TypeScript, focused ESLint, and diff hygiene pass. No live
+  transaction was sent.
+
 ## 2026-07-20 - Browser console fallback redaction
 
 - The global render-error fallback and the browser `console.error` interceptor

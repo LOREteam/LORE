@@ -77,7 +77,12 @@ export async function acquireResolveLock(epoch: bigint) {
   try {
     return acquireExpiringLock(RESOLVE_LOCK_PATH, epoch.toString(), RESOLVE_THROTTLE_MS);
   } catch (err) {
-    logRouteError("api/bootstrap-resolve", err, { phase: "sqlite-lock", fallback: "memory-throttle" });
+    const production = process.env.NODE_ENV === "production";
+    logRouteError("api/bootstrap-resolve", err, {
+      phase: "sqlite-lock",
+      fallback: production ? "deny" : "memory-throttle",
+    });
+    if (production) return false;
     const now = Date.now();
     if (now - lastResolveAttemptAt < RESOLVE_THROTTLE_MS) return false;
     lastResolveAttemptAt = now;

@@ -59,6 +59,11 @@ Open linked evidence only when a task needs it.
   interceptor sanitize normalized values before direct console output. This
   uses the existing support-log redaction rules and leaves chunk/session
   recovery behavior unchanged. Logic, TypeScript, and focused ESLint pass.
+- Safety Pool claims suppress split/single fallback after user rejection or any
+  post-submit confirmation uncertainty; only a proven revert can enter the
+  salvage path. Bootstrap resolve also denies production sends when its SQLite
+  coordination lock is unavailable, while retaining the memory throttle only
+  for development. Logic, TypeScript, and focused ESLint pass.
 - Exact commit `02e3660` passed a detached clean-checkout reproduction: lockfile
   install, wallet dependency integrity, production audit, lint, typecheck,
   business logic, contract invariants, compile provenance, SQLite operations,

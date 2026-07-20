@@ -98,6 +98,12 @@ const REBATE_CONFIRM_POLL_INTERVAL_MS = 2_000;
 const REBATE_CONFIRM_ATTEMPTS = Math.max(1, Math.floor(TX_RECEIPT_TIMEOUT_MS / REBATE_CONFIRM_POLL_INTERVAL_MS));
 const REBATE_HISTORY_PAGE_SIZE = 32;
 
+function createClaimConfirmationPendingError(message: string) {
+  const error = new Error(message);
+  error.name = "TransactionReceiptTimeoutError";
+  return error;
+}
+
 function getRebateCacheKey(address: string) {
   return `lore:rebate:v1:${address.toLowerCase()}`;
 }
@@ -546,15 +552,25 @@ export function useRebate(options?: UseRebateOptions) {
           return;
         } catch (err) {
           const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+          if (message.startsWith("transaction reverted:")) throw err;
           const missingReceipt =
             message.includes("could not be found") ||
             message.includes("not found");
           if (!missingReceipt) {
-            throw err;
+            throw createClaimConfirmationPendingError(
+              "Safety Pool claim was submitted, but confirmation is temporarily unavailable. Refresh the Safety Pool tab before retrying.",
+            );
           }
         }
 
-        const remainingEpochs = await loadClaimableEpochsExact(publicClient, sender, epochArgs);
+        let remainingEpochs: number[];
+        try {
+          remainingEpochs = await loadClaimableEpochsExact(publicClient, sender, epochArgs);
+        } catch {
+          throw createClaimConfirmationPendingError(
+            "Safety Pool claim was submitted, but claim state is temporarily unavailable. Refresh the Safety Pool tab before retrying.",
+          );
+        }
         if (remainingEpochs.length === 0) {
           return;
         }
@@ -562,7 +578,7 @@ export function useRebate(options?: UseRebateOptions) {
         await delay(REBATE_CONFIRM_POLL_INTERVAL_MS);
       }
 
-      throw new Error(
+      throw createClaimConfirmationPendingError(
         `Safety Pool claim confirmation timed out after ${TX_RECEIPT_TIMEOUT_MS}ms. Refresh the Safety Pool tab in a few seconds.`,
       );
     },
@@ -1077,7 +1093,7 @@ export function useRebate(options?: UseRebateOptions) {
             await submitClaimBatch(batch);
             localClaimedCount += batch.length;
           } catch (err) {
-            if (isAmbiguousPendingTxError(err)) throw err;
+            if (isAmbiguousPendingTxError(err) || isUserRejection(err)) throw err;
             if (batch.length === 1) {
               usedSplitFallback = true;
               log.warn("Rebate", "batch claim failed for single epoch, trying claimEpochRebate fallback", {

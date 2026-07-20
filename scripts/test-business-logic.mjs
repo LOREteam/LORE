@@ -1164,6 +1164,12 @@ async function main() {
     /error:\s*(?:message|`)/,
     "bootstrap resolver responses must not expose raw provider or keeper-balance errors",
   );
+  const bootstrapResolveSharedSource = readFileSync("app/api/bootstrap-resolve/shared.ts", "utf8");
+  assert.match(
+    bootstrapResolveSharedSource,
+    /const production = process\.env\.NODE_ENV === "production";[\s\S]*if \(production\) return false;[\s\S]*lastResolveAttemptAt/,
+    "bootstrap resolver must fail closed before the development-only memory throttle when the shared lock is unavailable",
+  );
   const smokeBrowserSource = readFileSync("scripts/smoke-browser.mjs", "utf8");
   const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
   assert.equal(
@@ -2722,6 +2728,21 @@ async function main() {
     rebateSource,
     /const resetState = useCallback[\s\S]*requestIdRef\.current \+= 1/,
     "Safety Pool reset must invalidate in-flight responses from the previous wallet",
+  );
+  assert.match(
+    rebateSource,
+    /isAmbiguousPendingTxError\(err\) \|\| isUserRejection\(err\)/,
+    "Safety Pool batch fallback must not prompt again after a user rejection or ambiguous submission",
+  );
+  assert.match(
+    rebateSource,
+    /createClaimConfirmationPendingError[\s\S]*error\.name = "TransactionReceiptTimeoutError"/,
+    "Safety Pool confirmation timeout must use the shared ambiguous-pending classification",
+  );
+  assert.match(
+    rebateSource,
+    /let remainingEpochs: number\[\];[\s\S]*loadClaimableEpochsExact[\s\S]*createClaimConfirmationPendingError/,
+    "Safety Pool post-send state reads must fail as ambiguous pending rather than trigger a duplicate fallback",
   );
   const rebatePanelSource = readFileSync("app/components/RebatePanel.tsx", "utf8");
   assert.match(
