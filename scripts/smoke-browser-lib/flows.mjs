@@ -463,12 +463,27 @@ export async function openChatDrawer(page, options) {
 
 export async function verifyChatProfileModal(page, timeoutMs) {
   const modalTimeoutMs = Math.min(timeoutMs, 6_000);
-  await page.getByRole("button", { name: "Profile" }).click();
+  const profileButton = page.getByRole("button", { name: "Profile" });
+  await profileButton.click();
   await expectVisible(page.getByText("Profile Settings"), "chat profile modal opens", modalTimeoutMs);
   await expectVisible(page.getByText("Custom Avatar"), "chat profile custom avatar section", modalTimeoutMs);
   await expectVisible(page.getByRole("button", { name: "Upload image" }), "chat profile upload button", modalTimeoutMs);
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.waitForFunction(() => document.activeElement?.id === "profile-name", undefined, { timeout: modalTimeoutMs });
+  const closeButton = page.getByRole("button", { name: "Close", exact: true });
+  await closeButton.focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute("data-testid") === "chat-profile-save",
+    undefined,
+    { timeout: modalTimeoutMs },
+  );
+  await page.keyboard.press("Escape");
   await expectVisible(page.getByText("Connect wallet to chat"), "chat profile modal closes", modalTimeoutMs);
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute("aria-label") === "Profile",
+    undefined,
+    { timeout: modalTimeoutMs },
+  );
 }
 
 export async function verifyAutoMinerInputPersistence(page, options) {

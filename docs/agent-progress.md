@@ -43,6 +43,13 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Chat profile keyboard regression coverage
+
+- Responsive browser smoke now verifies the profile dialog's initial focus,
+  reverse-tab wrap, Escape close, and opener-focus restoration. The focused
+  ESLint check and full desktop/tablet/mobile browser smoke pass; production UI
+  code was unchanged and the temporary server was stopped.
+
 ## 2026-07-20 - Route-cache ownership race hardening
 
 - Invalidated in-flight and background-refresh promises now release cache

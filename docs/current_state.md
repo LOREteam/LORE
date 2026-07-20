@@ -15,6 +15,10 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Chat profile accessibility smoke now exercises initial field focus,
+  reverse-tab containment, Escape close, and focus restoration to the opener.
+  Focused lint and the full responsive browser smoke pass.
+
 - Versioned route-cache cleanup is ownership-aware for both request builds and
   background refreshes. An invalidated older promise cannot remove a newer
   registered promise; the overlapping-build regression test, business logic,
