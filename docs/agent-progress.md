@@ -1042,3 +1042,12 @@ file grows beyond a compact handoff.
   name field while preserving Tab wrap, Escape close, and focus restoration.
 - Focused lint, business logic, post-build typecheck, production build, and the
   full responsive browser smoke pass. The temporary server was stopped.
+
+## 2026-07-21 - Pause hidden recent-wins polling
+
+- Removed the ticker's three-minute hidden-tab timer and abort its in-flight
+  request when the document becomes hidden.
+- Visibility restoration restarts the existing cache-aware 45-second visible
+  cadence; live game-state and pool-chart polling are unchanged.
+- Focused lint, business logic, typecheck, production build, and diff hygiene
+  pass with EIP-7702 disabled.

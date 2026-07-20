@@ -15,6 +15,11 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- The recent-wins ticker no longer keeps a three-minute native polling loop in
+  hidden tabs. Hiding the page cancels its timer and in-flight request; returning
+  resumes the existing cache-aware 45-second visible cadence. Pool-chart and
+  live game-state polling are unchanged. Focused lint, business logic,
+  typecheck, and production build pass.
 - Chat Profile now uses the shared dialog focus trap instead of maintaining a
   second keyboard implementation. The shared hook supports an explicit initial
   focus target, preserving focus on the profile-name field as well as Tab

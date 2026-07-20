@@ -2490,6 +2490,17 @@ async function main() {
     "analytics ancillary polling must stop while hidden instead of keeping a background interval",
   );
   assert.deepEqual(recentWins.normalizeWins("bad-shape"), []);
+  const recentWinsSource = readFileSync("app/hooks/useRecentWins.ts", "utf8");
+  assert.match(
+    recentWinsSource,
+    /if \(!isPageVisible\) \{[\s\S]*abortRef\.current\?\.abort\(\);[\s\S]*return;/,
+    "recent wins must stop its native polling loop and abort an in-flight request while hidden",
+  );
+  assert.doesNotMatch(
+    recentWinsSource,
+    /HIDDEN_REFRESH_MS/,
+    "recent wins must resume cache-aware visible polling instead of keeping a hidden timer",
+  );
   assert.deepEqual(
     recentWins.normalizeWins([
       { epoch: "11", user: "0x1", amount: "2.00", amountRaw: "2000000000000000000", tileId: 3 },

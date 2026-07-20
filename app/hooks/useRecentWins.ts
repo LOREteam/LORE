@@ -27,7 +27,6 @@ interface RecentWinsCacheEnvelope {
 }
 
 const REFRESH_MS = 45_000;
-const HIDDEN_REFRESH_MS = 180_000;
 const CACHE_WRITE_MIN_MS = 120_000;
 const MAX_WINS = 100;
 const WARN_THROTTLE_MS = 15_000;
@@ -234,13 +233,16 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
   }, []);
 
   useEffect(() => {
-    const intervalMs = isPageVisible ? REFRESH_MS : HIDDEN_REFRESH_MS;
+    if (!isPageVisible) {
+      abortRef.current?.abort();
+      return;
+    }
     const savedAt = cacheSavedAtRef.current;
     const initialDelay =
       savedAt &&
       cachedWinsCountRef.current > 0 &&
-      Date.now() - savedAt < intervalMs
-        ? intervalMs - (Date.now() - savedAt)
+      Date.now() - savedAt < REFRESH_MS
+        ? REFRESH_MS - (Date.now() - savedAt)
         : 0;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -250,7 +252,7 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
         if (cancelled) return;
         await fetchWins();
         if (cancelled) return;
-        schedule(intervalMs);
+        schedule(REFRESH_MS);
       }, delayMs);
     };
 
