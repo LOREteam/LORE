@@ -42,6 +42,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Exact clean-checkout baseline
+
+- Created local baseline commit `3bc812e` and reproduced it in a detached clean
+  checkout. Lockfile install, wallet peer integrity, lint, typecheck, logic,
+  contract invariants, compile provenance, SQLite drills, monitoring recovery,
+  production build, and responsive empty-DB browser smoke all passed. EIP-7702
+  stayed disabled; the temporary server/worktree were removed. Push remains
+  intentionally pending a fresh explicit request.
+
 ## 2026-07-20 - Trusted proxy deployment contract
 
 - Closed an operational spoofing ambiguity in the production runbook: the edge

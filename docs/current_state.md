@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-07-18.
+Last updated: 2026-07-20.
 
 Detailed history through this date is archived in
 [`docs/archive/current-state-through-2026-07-13.md`](archive/current-state-through-2026-07-13.md).
@@ -15,6 +15,12 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Exact commit `3bc812e` passes a detached clean-checkout reproduction: `npm ci`,
+  wallet peer integrity, full lint, typecheck, business logic, V9 invariants,
+  optimizer/Osaka compilation provenance, SQLite operations, monitoring alert
+  and recovery drills, production build, and responsive empty-DB browser smoke.
+  EIP-7702 remained disabled during install, build, and start. The temporary
+  server and detached worktree were removed afterward.
 - Exact commit `23e611f` passes an isolated clean-checkout reproduction:
   lockfile install, wallet peer integrity, typecheck, logic, contract invariants,
   compile provenance, production build, all 23 HTTP checks, and responsive
