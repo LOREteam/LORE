@@ -1,6 +1,7 @@
 import "dotenv/config";
 import {
   createTelegramAlertSender,
+  applyRuntimeIssueDeliveryResult,
   evaluateChainIndexerAudit,
   evaluateBackupFreshness,
   evaluateCanaryActivity,
@@ -119,18 +120,26 @@ async function poll(origin) {
   }
 
   const transitions = reconcileRuntimeIssues(activeIssues, issues);
+  for (const issue of transitions.alerts) {
+    console.error(`[runtime-monitor] ALERT ${issue.key}: ${issue.message}`);
+    const delivered = await alertSender.send(`ALERT: ${issue.message}`, `runtime-${issue.key}`);
+    applyRuntimeIssueDeliveryResult(activeIssues, { ...issue, kind: "alert" }, {
+      configured: alertSender.configured,
+      delivered,
+    });
+  }
+  for (const recovery of transitions.recoveries) {
+    console.log(`[runtime-monitor] RECOVERED ${recovery.key}`);
+    const delivered = await alertSender.send(`RECOVERED: ${recovery.message}`, `runtime-recovered-${recovery.key}`, 60_000);
+    applyRuntimeIssueDeliveryResult(activeIssues, { ...recovery, kind: "recovery" }, {
+      configured: alertSender.configured,
+      delivered,
+    });
+  }
   try {
     saveRuntimeIssueState(statePath, activeIssues);
   } catch {
     console.error("[runtime-monitor] state persistence failed");
-  }
-  for (const issue of transitions.alerts) {
-    console.error(`[runtime-monitor] ALERT ${issue.key}: ${issue.message}`);
-    await alertSender.send(`ALERT: ${issue.message}`, `runtime-${issue.key}`);
-  }
-  for (const recovery of transitions.recoveries) {
-    console.log(`[runtime-monitor] RECOVERED ${recovery.key}`);
-    await alertSender.send(`RECOVERED: ${recovery.message}`, `runtime-recovered-${recovery.key}`, 60_000);
   }
   if (issues.length === 0) console.log(`[runtime-monitor] OK ${new Date().toISOString()}`);
 }

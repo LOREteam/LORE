@@ -39,9 +39,8 @@ export async function GET(request: Request) {
     return jsonNoStore(result.payload);
   } catch (err) {
     logRouteError(ROUTE_METRIC_KEY, err);
-    const message = err instanceof Error ? err.message : "fetch failed";
     const status = 500;
     failRouteMetric(metric, status);
-    return jsonNoStore({ jackpots: [], error: message }, status);
+    return jsonNoStore({ jackpots: [], error: "Unable to load jackpots" }, status);
   }
 }

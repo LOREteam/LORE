@@ -9,11 +9,14 @@ function touchEntry<T>(cache: Map<string, CacheEntry<T>>, key: string, entry: Ca
 }
 
 function pruneOldest<T>(cache: Map<string, CacheEntry<T>>, maxEntries: number) {
+  const evicted: string[] = [];
   while (cache.size > maxEntries) {
     const oldestKey = cache.keys().next().value;
     if (!oldestKey) break;
     cache.delete(oldestKey);
+    evicted.push(oldestKey);
   }
+  return evicted;
 }
 
 export function createRouteCache<T>(maxEntries: number) {
@@ -21,6 +24,16 @@ export function createRouteCache<T>(maxEntries: number) {
   const inflight = new Map<string, Promise<T>>();
   const refresh = new Map<string, Promise<void>>();
   const writeVersion = new Map<string, number>();
+  const pendingWrites = new Map<string, Set<number>>();
+
+  const cleanupWriteVersionIfOrphaned = (key: string) => {
+    if (!cache.has(key) && !inflight.has(key) && !refresh.has(key) && !pendingWrites.has(key)) {
+      writeVersion.delete(key);
+    }
+  };
+  const pruneCache = () => {
+    for (const key of pruneOldest(cache, maxEntries)) cleanupWriteVersionIfOrphaned(key);
+  };
 
   return {
     getFresh(key: string, now = Date.now()) {
@@ -36,31 +49,39 @@ export function createRouteCache<T>(maxEntries: number) {
       return entry.payload;
     },
     set(key: string, payload: T, ttlMs: number) {
+      writeVersion.set(key, (writeVersion.get(key) ?? 0) + 1);
       touchEntry(cache, key, {
         payload,
         expiresAt: Date.now() + ttlMs,
       });
-      pruneOldest(cache, maxEntries);
+      pruneCache();
       return payload;
     },
     beginWrite(key: string) {
       const nextVersion = (writeVersion.get(key) ?? 0) + 1;
       writeVersion.set(key, nextVersion);
+      const versions = pendingWrites.get(key) ?? new Set<number>();
+      versions.add(nextVersion);
+      pendingWrites.set(key, versions);
       return nextVersion;
     },
     getWriteVersion(key: string) {
       return writeVersion.get(key) ?? 0;
     },
     setIfLatest(key: string, payload: T, ttlMs: number, version: number) {
+      const versions = pendingWrites.get(key);
+      versions?.delete(version);
+      if (versions?.size === 0) pendingWrites.delete(key);
       const latestVersion = writeVersion.get(key) ?? 0;
       if (version < latestVersion) {
+        cleanupWriteVersionIfOrphaned(key);
         return cache.get(key)?.payload ?? payload;
       }
       touchEntry(cache, key, {
         payload,
         expiresAt: Date.now() + ttlMs,
       });
-      pruneOldest(cache, maxEntries);
+      pruneCache();
       return payload;
     },
     invalidate(key: string) {
@@ -68,18 +89,21 @@ export function createRouteCache<T>(maxEntries: number) {
       cache.delete(key);
       inflight.delete(key);
       refresh.delete(key);
+      cleanupWriteVersionIfOrphaned(key);
     },
     delete(key: string) {
+      writeVersion.set(key, (writeVersion.get(key) ?? 0) + 1);
       cache.delete(key);
       inflight.delete(key);
       refresh.delete(key);
-      writeVersion.delete(key);
+      cleanupWriteVersionIfOrphaned(key);
     },
     clear() {
       cache.clear();
       inflight.clear();
       refresh.clear();
       writeVersion.clear();
+      pendingWrites.clear();
     },
     getInflight(key: string) {
       return inflight.get(key) ?? null;
@@ -90,6 +114,7 @@ export function createRouteCache<T>(maxEntries: number) {
     },
     clearInflight(key: string) {
       inflight.delete(key);
+      cleanupWriteVersionIfOrphaned(key);
     },
     getRefresh(key: string) {
       return refresh.get(key) ?? null;
@@ -100,6 +125,13 @@ export function createRouteCache<T>(maxEntries: number) {
     },
     clearRefresh(key: string) {
       refresh.delete(key);
+      cleanupWriteVersionIfOrphaned(key);
+    },
+    finishWrite(key: string, version: number) {
+      const versions = pendingWrites.get(key);
+      versions?.delete(version);
+      if (versions?.size === 0) pendingWrites.delete(key);
+      cleanupWriteVersionIfOrphaned(key);
     },
     size() {
       return cache.size;

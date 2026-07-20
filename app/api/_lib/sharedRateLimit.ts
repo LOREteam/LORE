@@ -4,6 +4,7 @@ import { consumeRateLimit } from "../../../server/storage";
 import { getClientIdentity } from "./clientIdentity";
 import { consumeExternalRateLimit, hasExternalRateLimitStore } from "./externalRateLimit";
 import { applyNoStoreHeaders } from "./responseHeaders";
+import { describeSafeRouteError } from "./routeError";
 
 type RateLimitState = {
   count: number;
@@ -18,6 +19,7 @@ type RateLimitOptions = {
 };
 
 const localFallbackMap = new Map<string, RateLimitState>();
+const MAX_LOCAL_FALLBACK_ENTRIES = 2_000;
 const weakBucketFallbackMap = new Map<string, RateLimitState>();
 const sharedLimiterMisconfigBuckets = new Set<string>();
 const weakIdentityWarnedBuckets = new Set<string>();
@@ -38,6 +40,19 @@ function enforceLocalFallback(
   const windowStartedAt = now - (now % windowMs);
   const resetAt = windowStartedAt + windowMs;
   const current = localFallbackMap.get(fallbackKey);
+  if (!current && localFallbackMap.size >= MAX_LOCAL_FALLBACK_ENTRIES) {
+    for (const [storedKey, state] of localFallbackMap.entries()) {
+      if (state.resetAt <= now) localFallbackMap.delete(storedKey);
+    }
+    if (localFallbackMap.size >= MAX_LOCAL_FALLBACK_ENTRIES) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { error: "Too many requests", retryAfter: Math.max(1, Math.ceil((resetAt - now) / 1000)) },
+          { status: 429 },
+        ),
+      );
+    }
+  }
   const normalized =
     !current || current.resetAt <= now || current.windowStartedAt !== windowStartedAt
       ? { count: 0, windowStartedAt, resetAt }
@@ -61,12 +76,6 @@ function enforceLocalFallback(
     resetAt,
   });
 
-  if (localFallbackMap.size > 2000) {
-    for (const [storedKey, state] of localFallbackMap.entries()) {
-      if (state.resetAt <= now) localFallbackMap.delete(storedKey);
-    }
-  }
-
   return null;
 }
 
@@ -77,9 +86,6 @@ function enforceWeakIdentityFallback(
   windowMs: number,
   now: number,
 ): NextResponse | null {
-  const identityLimited = enforceLocalFallback(bucket, key, limit, windowMs, now);
-  if (identityLimited) return identityLimited;
-
   const windowStartedAt = now - (now % windowMs);
   const resetAt = windowStartedAt + windowMs;
   const current = weakBucketFallbackMap.get(bucket);
@@ -100,6 +106,9 @@ function enforceWeakIdentityFallback(
       ),
     );
   }
+
+  const identityLimited = enforceLocalFallback(bucket, key, limit, windowMs, now);
+  if (identityLimited) return identityLimited;
 
   weakBucketFallbackMap.set(bucket, {
     count: normalized.count + 1,
@@ -156,11 +165,11 @@ export async function enforceSharedRateLimit(
         ),
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const warnKey = `${bucket}:${message}`;
+      const warnKey = bucket;
       if (!externalLimiterWarnedBuckets.has(warnKey)) {
         externalLimiterWarnedBuckets.add(warnKey);
-        console.warn(`[rate-limit:${bucket}] external store fallback: ${message}`);
+        const details = describeSafeRouteError(error);
+        console.warn(`[rate-limit:${bucket}] external store fallback: ${details.name}: ${details.message}`);
       }
       if (process.env.RATE_LIMIT_EXTERNAL_FAIL_CLOSED === "1") {
         return applyNoStoreHeaders(
@@ -184,11 +193,11 @@ export async function enforceSharedRateLimit(
       ),
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const warnKey = `${bucket}:${message}`;
+    const warnKey = bucket;
     if (!sharedLimiterMisconfigBuckets.has(warnKey)) {
       sharedLimiterMisconfigBuckets.add(warnKey);
-      console.warn(`[rate-limit:${bucket}] sqlite fallback: ${message}`);
+      const details = describeSafeRouteError(error);
+      console.warn(`[rate-limit:${bucket}] sqlite fallback: ${details.name}: ${details.message}`);
     }
     return enforceLocalFallback(bucket, key, limit, windowMs, now);
   }

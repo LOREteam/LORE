@@ -199,6 +199,11 @@ async function getBlockTimestampMs(blockNumber: bigint): Promise<number | null> 
     value,
     expiresAt: now + JACKPOT_EVENT_CACHE_MS,
   });
+  while (jackpotBlockTimestampCache.size > MAX_JACKPOT_EVENT_CACHE_ENTRIES) {
+    const oldestKey = jackpotBlockTimestampCache.keys().next().value;
+    if (!oldestKey) break;
+    jackpotBlockTimestampCache.delete(oldestKey);
+  }
   return value;
 }
 

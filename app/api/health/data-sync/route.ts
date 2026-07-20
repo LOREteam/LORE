@@ -19,6 +19,7 @@ import {
   CONTRACT_ADDRESS,
 } from "../../_lib/dataBridge";
 import { createRouteCache } from "../../_lib/routeCache";
+import { describeSafeRouteError, logRouteError } from "../../_lib/routeError";
 import { isAuthorizedHealthDiagnosticsRequest } from "../_lib/diagnosticsAuth";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { dbPath } from "../../../../server/db";
@@ -719,7 +720,7 @@ function toHealthResponse(request: NextRequest, payload: DataSyncHealthResponse)
 
 function toHealthErrorResponse(request: NextRequest, err: unknown) {
   const authorized = isAuthorizedHealthDiagnosticsRequest(request);
-  const privateError = err instanceof Error ? (err.message || "unknown") : String(err ?? "unknown");
+  const privateError = describeSafeRouteError(err).message;
   return NextResponse.json(
     {
       status: "error",
@@ -747,8 +748,9 @@ function scheduleDataSyncRefresh() {
       const payload = await buildDataSyncHealthPayload();
       dataSyncHealthCache.setIfLatest(DATA_SYNC_CACHE_KEY, payload, DATA_SYNC_CACHE_TTL_MS, version);
     } catch (error) {
-      console.error("[api/health/data-sync] Background refresh error:", error);
+      logRouteError("api/health/data-sync", error, { phase: "background-refresh" });
     } finally {
+      dataSyncHealthCache.finishWrite(DATA_SYNC_CACHE_KEY, version);
       dataSyncHealthCache.clearRefresh(DATA_SYNC_CACHE_KEY);
     }
   })();
@@ -774,7 +776,7 @@ export async function GET(request: NextRequest) {
     try {
       return toHealthResponse(request, await inflight);
     } catch (err) {
-      console.error("[api/health/data-sync] Error:", err);
+      logRouteError("api/health/data-sync", err);
       return toHealthErrorResponse(request, err);
     }
   }
@@ -787,6 +789,7 @@ export async function GET(request: NextRequest) {
       const payload = await buildDataSyncHealthPayload();
       return dataSyncHealthCache.setIfLatest(DATA_SYNC_CACHE_KEY, payload, DATA_SYNC_CACHE_TTL_MS, version);
     } finally {
+      dataSyncHealthCache.finishWrite(DATA_SYNC_CACHE_KEY, version);
       dataSyncHealthCache.clearInflight(DATA_SYNC_CACHE_KEY);
     }
   })();
@@ -795,7 +798,7 @@ export async function GET(request: NextRequest) {
   try {
     return toHealthResponse(request, await requestPromise);
   } catch (err) {
-    console.error("[api/health/data-sync] Error:", err);
+    logRouteError("api/health/data-sync", err);
     if (stale) {
       scheduleDataSyncRefresh();
       return toHealthResponse(request, stale);

@@ -6,6 +6,7 @@ import {
   getKeeperFeeOverrides,
 } from "../../lib/lineaFees";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
+import { logRouteError } from "../_lib/routeError";
 import {
   acquireResolveLock,
   APP_CHAIN,
@@ -185,7 +186,6 @@ export async function POST(request: Request) {
           ok: true,
           action: "noop",
           reason: "keeper_insufficient_funds",
-          error: `keeper_insufficient_funds balance=${keeperBalance.toString()} estimatedGas=${gasEstimate.toString()}`,
           retryAfter: Math.max(1, Math.ceil(INSUFFICIENT_FUNDS_RETRY_MS / 1000)),
         });
       }
@@ -293,7 +293,6 @@ export async function POST(request: Request) {
             ok: true,
             action: "noop",
             reason: "keeper_insufficient_funds",
-            error: `cancel_stuck_tx_insufficient_funds balance=${keeperBalance.toString()} needed=${CANCEL_TX_GAS_LIMIT.toString()}`,
             retryAfter: Math.max(1, Math.ceil(INSUFFICIENT_FUNDS_RETRY_MS / 1000)),
           });
         }
@@ -315,12 +314,12 @@ export async function POST(request: Request) {
         });
       } catch (cancelErr) {
         const message = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+        logRouteError("api/bootstrap-resolve", cancelErr, { phase: "cancel-stuck-transaction" });
         if (isKeeperInsufficientFundsError(message)) {
           return NextResponse.json({
             ok: true,
             action: "noop",
             reason: "keeper_insufficient_funds",
-            error: message,
             retryAfter: Math.max(1, Math.ceil(INSUFFICIENT_FUNDS_RETRY_MS / 1000)),
           });
         }
@@ -328,7 +327,6 @@ export async function POST(request: Request) {
           ok: true,
           action: "noop",
           reason: "cancel_stuck_tx_failed",
-          error: message,
           retryAfter: Math.max(1, Math.ceil(RESOLVE_THROTTLE_MS / 1000)),
         });
       }
@@ -353,7 +351,6 @@ export async function POST(request: Request) {
         ok: true,
         action: "noop",
         reason: "keeper_insufficient_funds",
-        error: message,
         retryAfter: Math.max(1, Math.ceil(INSUFFICIENT_FUNDS_RETRY_MS / 1000)),
       });
     }
@@ -365,6 +362,7 @@ export async function POST(request: Request) {
         retryAfter: Math.max(1, Math.ceil(BOOTSTRAP_RPC_UNAVAILABLE_RETRY_MS / 1000)),
       });
     }
-    return NextResponse.json({ ok: false, reason: "resolve_failed", error: message }, { status: 500 });
+    logRouteError("api/bootstrap-resolve", err, { phase: "resolve" });
+    return NextResponse.json({ ok: false, reason: "resolve_failed" }, { status: 500 });
   }
 }

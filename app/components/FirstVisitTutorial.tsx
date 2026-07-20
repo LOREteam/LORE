@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { TabId } from "../lib/types";
+import { useDialogFocusTrap } from "../hooks/useDialogFocusTrap";
 import { UiButton } from "./ui/UiButton";
 import { UiPanel } from "./ui/UiPanel";
 
@@ -147,24 +148,29 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
     [stepIndex],
   );
 
-  const dismiss = () => {
+  const dismiss = useCallback(() => {
     setVisible(false);
     try {
       window.localStorage.setItem(FIRST_VISIT_TUTORIAL_KEY, "1");
     } catch {
       // ignore private mode / quota errors
     }
-  };
+  }, []);
+  const dialogRef = useDialogFocusTrap<HTMLDivElement>(visible, dismiss);
 
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-0 z-[260] flex items-end justify-center bg-black/70 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-sm md:items-center md:p-6">
+    <div
+      ref={dialogRef}
+      className="fixed inset-0 z-[260] flex items-end justify-center bg-black/70 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-sm md:items-center md:p-6"
+    >
       <UiPanel
         tone="default"
         padding="md"
         className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden border-violet-400/20 bg-[#090914]/96 shadow-[0_24px_80px_rgba(2,6,23,0.6)] md:max-h-[min(42rem,calc(100dvh-3rem))]"
         role="dialog"
+        tabIndex={-1}
         aria-modal="true"
         aria-label="First visit tutorial"
       >

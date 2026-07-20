@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { compareAccountingSnapshot, replayV9Accounting } from "./lib/chain-accounting-model.mjs";
 
 const contractPath = "contracts/LineaOreV9.sol";
 const delegatePath = "contracts/LineaOre7702Delegate.sol";
@@ -12,6 +13,58 @@ const delegateSource = readFileSync(delegatePath, "utf8");
 const constants = readFileSync(constantsPath, "utf8");
 const indexerSource = readFileSync(indexerPath, "utf8");
 const chainIndexerAuditSource = readFileSync(chainIndexerAuditPath, "utf8");
+
+const accountingReplay = replayV9Accounting({
+  initial: {
+    rolloverPool: 50n,
+    dailyJackpotPool: 20n,
+    weeklyJackpotPool: 30n,
+    accruedOwnerFees: 0n,
+    accruedBurnFees: 0n,
+  },
+  events: [
+    { kind: "bet", epoch: 1, amount: 10_000n },
+    { kind: "resolver-reward", epoch: 1, amount: 5n },
+    { kind: "daily-jackpot", epoch: 1, amount: 220n },
+    { kind: "resolve", epoch: 1, totalPool: 10_050n, fee: 300n, rewardPool: 9_470n, jackpotBonus: 220n },
+    { kind: "fee-flush", epoch: 1, ownerAmount: 98n, burnAmount: 100n },
+  ],
+});
+assert.deepEqual(accountingReplay.mismatches, []);
+assert.deepEqual(compareAccountingSnapshot(accountingReplay.state, {
+  rolloverPool: 0n,
+  dailyJackpotPool: 0n,
+  weeklyJackpotPool: 330n,
+  accruedOwnerFees: 0n,
+  accruedBurnFees: 0n,
+}), []);
+
+const tamperedFeeReplay = replayV9Accounting({
+  initial: { rolloverPool: 0n, dailyJackpotPool: 0n, weeklyJackpotPool: 0n, accruedOwnerFees: 0n, accruedBurnFees: 0n },
+  events: [
+    { kind: "bet", epoch: 1, amount: 1_000n },
+    { kind: "resolve", epoch: 1, totalPool: 1_000n, fee: 31n, rewardPool: 920n, jackpotBonus: 0n },
+  ],
+});
+assert.deepEqual(tamperedFeeReplay.mismatches.map(({ kind }) => kind), ["resolve-fee"]);
+assert.deepEqual(
+  compareAccountingSnapshot(accountingReplay.state, {
+    ...accountingReplay.state,
+    dailyJackpotPool: accountingReplay.state.dailyJackpotPool + 1n,
+  }).map(({ kind }) => kind),
+  ["dailyJackpotPool"],
+);
+
+const rolloverReplay = replayV9Accounting({
+  initial: { rolloverPool: 0n, dailyJackpotPool: 0n, weeklyJackpotPool: 0n, accruedOwnerFees: 0n, accruedBurnFees: 0n },
+  events: [
+    { kind: "bet", epoch: 2, amount: 1_000n },
+    { kind: "resolve", epoch: 2, totalPool: 1_000n, fee: 30n, rewardPool: 0n, jackpotBonus: 0n },
+    { kind: "bet", epoch: 3, amount: 1_000n },
+    { kind: "resolve", epoch: 3, totalPool: 1_920n, fee: 30n, rewardPool: 1_840n, jackpotBonus: 0n },
+  ],
+});
+assert.deepEqual(rolloverReplay.mismatches, []);
 
 function getConstantBigInt(name) {
   const match = source.match(new RegExp(`uint256\\s+public\\s+constant\\s+${name}\\s*=\\s*([^;]+);`));
@@ -647,6 +700,11 @@ assert.match(
   chainIndexerAuditSource,
   /RewardDustSettled[\s\S]*RebateDustSettled[\s\S]*gamedata:dustSettlements[\s\S]*dust-settlement/,
   "chain-to-indexer audit must verify reward and rebate dust settlement evidence",
+);
+assert.match(
+  chainIndexerAuditSource,
+  /readAccountingSnapshot[\s\S]*replayV9Accounting[\s\S]*compareAccountingSnapshot/,
+  "chain-to-indexer audit must replay rollover, jackpot, and fee-bucket accounting against historical snapshots",
 );
 
 assert.match(delegateSource, /address\s+public\s+immutable\s+allowedToken\s*;/);

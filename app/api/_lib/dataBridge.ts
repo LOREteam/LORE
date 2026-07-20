@@ -7,6 +7,7 @@ import {
   getStableLineaReadRpcs,
 } from "../../../config/publicConfig";
 import { patchJsonPath, readJsonPath } from "../../../server/storage";
+import { logRouteError } from "./routeError";
 
 export const APP_NETWORK = getConfiguredLineaNetwork();
 export const APP_CHAIN = getLineaChain(APP_NETWORK);
@@ -37,7 +38,7 @@ export async function fetchStorageJson<T>(path: string) {
     const data = readJsonPath<T>(path);
     return { ok: true as const, status: 200, data };
   } catch (err) {
-    console.warn(`[api] fetchStorageJson failed for ${path}:`, err instanceof Error ? err.message : err);
+    logRouteError("api/storage-read", err);
     return { ok: false as const, status: 500, data: null as T | null };
   }
 }
@@ -46,7 +47,7 @@ export async function patchStorage(path: string, payload: Record<string, unknown
   try {
     patchJsonPath(path, payload);
   } catch (error) {
-    console.warn(`[api] Storage patch failed for ${path}:`, error);
+    logRouteError("api/storage-write", error);
   }
 }
 

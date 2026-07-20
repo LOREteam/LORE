@@ -37,6 +37,12 @@ Required runtime shape:
 - `health:prod` evidence must use a non-local HTTPS origin; `PROD_HEALTH_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
 - `load:http` evidence must use a staging/canary non-local HTTPS origin; `LOAD_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
 - Deployed testnet, staging, and mainnet hosts must provide trusted proxy identity. `ALLOW_WEAK_RATE_LIMIT_IDENTITY=1` is only for local/CI production smoke and is rejected by the mainnet runtime validator.
+- The edge proxy must remove client-supplied `x-lore-proxy-secret`,
+  `cf-connecting-ip`, `x-real-ip`, and `x-forwarded-for` headers, then inject the
+  proxy secret from protected configuration and overwrite exactly one supported
+  client-IP header with its verified remote address. App origins must reject
+  direct public traffic; appending to an untrusted forwarded chain is not
+  sufficient and allows identity spoofing behind the trusted secret.
 - Save redacted supervisor output as `docs/host-process-model.log`, use an absolute external `--db-path`, and save redacted command outputs as `docs/host-health-prod.log` and `docs/host-load-http.log` before `proof:host:collect`; the collector refuses missing process evidence, repo-local DB paths, missing logs, health logs without `[prod-health] OK` / matching `base=` / numeric `finalityLagBlocks`, and load logs without `Load base URL:` matching the staging/canary `LOAD_BASE_URL` or successful latency/error evidence.
 - The supervisor artifact must show concrete entries for `lore-site`, `lore-bot`, `lore-indexer`, and `lore-monitor`; strict host proof rejects process evidence that points to a generic or unrelated supervisor log.
 

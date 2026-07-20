@@ -69,6 +69,7 @@ export const TOKEN_ABI = parseAbi([
   "function balanceOf(address account) external view returns (uint256)",
   "function transfer(address to, uint256 amount) external returns (bool)",
   "error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)",
+  "error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed)",
 ]);
 
 export const GAME_ABI = parseAbi([
@@ -126,6 +127,7 @@ export const GAME_ABI = parseAbi([
   "function tilePools(uint256 epoch, uint256 tile) public view returns (uint256)",
   "function hasClaimed(address user, uint256 epoch) public view returns (bool)",
   "error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)",
+  "error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed)",
   "error TimerNotEnded()",
   "error AlreadyResolved()",
   "error CanOnlyResolveCurrent()",

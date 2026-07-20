@@ -63,7 +63,9 @@ type RebateInfoResult = [bigint, bigint, bigint, boolean, boolean];
 
 const rebateRouteCache = createRouteCache<RebatePayload>(REBATE_ROUTE_CACHE_MAX_KEYS);
 const rebateIndexedEpochsCache = createRouteCache<number[]>(REBATE_ROUTE_CACHE_MAX_KEYS);
-const rebateCacheWatermarks = new Map<string, { refreshedAt: number; watermark: string }>();
+const rebateCacheWatermarks = createRouteCache<{ refreshedAt: number; watermark: string }>(
+  REBATE_ROUTE_CACHE_MAX_KEYS,
+);
 
 function formatServerTiming(params: {
   cacheStatus: "fresh" | "stale" | "miss" | "inflight";
@@ -112,7 +114,7 @@ function startRebateBackgroundRefresh(
     ttlMs: REBATE_ROUTE_CACHE_MS,
     routeMetricKey: ROUTE_METRIC_KEY,
     shouldSkip: () => {
-      const cachedWatermark = rebateCacheWatermarks.get(cacheKey);
+      const cachedWatermark = rebateCacheWatermarks.getStale(cacheKey);
       return Boolean(
         cachedWatermark &&
           cachedWatermark.watermark === watermark &&
@@ -122,7 +124,11 @@ function startRebateBackgroundRefresh(
     build: () => buildRebatePayload(user, { includeExact }),
     toPayload: ({ payload }) => payload,
     onCommit: () => {
-      rebateCacheWatermarks.set(cacheKey, { watermark, refreshedAt: Date.now() });
+      rebateCacheWatermarks.set(
+        cacheKey,
+        { watermark, refreshedAt: Date.now() },
+        REBATE_UNCHANGED_WATERMARK_REFRESH_MS,
+      );
     },
     onError: (error) => {
       logRouteError(ROUTE_METRIC_KEY, error, { user, phase: "background-refresh" });
@@ -388,7 +394,6 @@ async function buildRebatePayload(
 
   if (timings.totalMs >= 800) {
     console.warn("[api/rebates] slow build", {
-      user,
       epochCount: timings.epochCount,
       summaryChunks: timings.summaryChunks,
       exactChunks: timings.exactChunks,
@@ -422,6 +427,16 @@ export async function GET(request: NextRequest) {
   });
   if (rateLimited) return rateLimited;
 
+  const includeExact = request.nextUrl.searchParams.get("exact") === "1";
+  if (includeExact) {
+    const exactRateLimited = await enforceSharedRateLimit(request, {
+      bucket: "api-rebates-exact",
+      limit: 6,
+      windowMs: 60_000,
+    });
+    if (exactRateLimited) return exactRateLimited;
+  }
+
   const userParam = request.nextUrl.searchParams.get("user");
   if (!userParam) {
     return jsonNoStore({ error: "Missing ?user=0x..." }, 400);
@@ -438,7 +453,6 @@ export async function GET(request: NextRequest) {
   const cacheKey = user.toLowerCase();
   const now = Date.now();
   const forceFresh = request.nextUrl.searchParams.has("refresh");
-  const includeExact = request.nextUrl.searchParams.get("exact") === "1";
   const effectiveCacheKey = includeExact ? `${cacheKey}:exact` : cacheKey;
   const currentWatermark = getRebateDataWatermark();
   const cached = forceFresh ? null : rebateRouteCache.getFresh(effectiveCacheKey, now);
@@ -456,7 +470,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const inflight = forceFresh ? null : rebateRouteCache.getInflight(effectiveCacheKey);
+    const inflight = rebateRouteCache.getInflight(effectiveCacheKey);
     const result = inflight
       ? (markRouteInflightJoin(ROUTE_METRIC_KEY), { payload: await inflight, timings: null, cacheStatus: "inflight" as const })
       : await (() => {
@@ -467,10 +481,14 @@ export async function GET(request: NextRequest) {
             build: () => buildRebatePayload(user, { includeExact }),
             toPayload: ({ payload }) => payload,
             onCommit: () => {
-              rebateCacheWatermarks.set(effectiveCacheKey, {
-                watermark: currentWatermark,
-                refreshedAt: Date.now(),
-              });
+              rebateCacheWatermarks.set(
+                effectiveCacheKey,
+                {
+                  watermark: currentWatermark,
+                  refreshedAt: Date.now(),
+                },
+                REBATE_UNCHANGED_WATERMARK_REFRESH_MS,
+              );
             },
           });
           return buildPromise.then(({ payload, timings }) => ({
@@ -509,8 +527,7 @@ export async function GET(request: NextRequest) {
       finishRouteMetric(metric, 200);
       return jsonNoStore(staleCache, 200, { cacheStatus: "stale" });
     }
-    const message = err instanceof Error ? err.message : "fetch failed";
     failRouteMetric(metric, 500);
-    return jsonNoStore({ error: message }, 500, { cacheStatus: "miss" });
+    return jsonNoStore({ error: "Unable to load Safety Pool" }, 500, { cacheStatus: "miss" });
   }
 }

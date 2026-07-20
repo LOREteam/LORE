@@ -3,6 +3,7 @@ import { getChatMessages, insertChatMessage } from "../../../../server/storage";
 import { clearChatSession, readChatSession } from "../../_lib/chatSession";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { createRouteCache } from "../../_lib/routeCache";
+import { startVersionedInflightBuild } from "../../_lib/versionedRouteCache";
 import {
   beginRouteMetric,
   failRouteMetric,
@@ -155,15 +156,14 @@ export async function GET(request: NextRequest) {
     const payload = inflight
       ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await inflight)
       : await (() => {
-          const version = chatMessagesRouteCache.getWriteVersion(cacheKey);
-          const requestPromise = Promise.resolve({ messages: sortChatMessagesAsc(getChatMessages()) })
-            .then((result) => {
-              return chatMessagesRouteCache.setIfLatest(cacheKey, result, CHAT_MESSAGES_CACHE_MS, version);
-            })
-            .finally(() => {
-              chatMessagesRouteCache.clearInflight(cacheKey);
-            });
-          return chatMessagesRouteCache.setInflight(cacheKey, requestPromise);
+          const { requestPromise } = startVersionedInflightBuild({
+            cache: chatMessagesRouteCache,
+            cacheKey,
+            ttlMs: CHAT_MESSAGES_CACHE_MS,
+            build: async () => ({ messages: sortChatMessagesAsc(getChatMessages()) }),
+            toPayload: (result) => result,
+          });
+          return requestPromise;
         })();
 
     finishRouteMetric(metric, 200);

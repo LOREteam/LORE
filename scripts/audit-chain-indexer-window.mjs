@@ -10,6 +10,7 @@ import {
   parseAbi,
   parseUnits,
 } from "viem";
+import { compareAccountingSnapshot, replayV9Accounting } from "./lib/chain-accounting-model.mjs";
 
 const EVENTS_ABI = parseAbi([
   "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
@@ -28,6 +29,13 @@ const EVENTS_ABI = parseAbi([
   "event ResolverRewardAccrued(address indexed resolver, uint256 indexed epoch, uint256 amount)",
   "event ResolverRewardClaimed(address indexed resolver, uint256 amount)",
   "event ProtocolFeesFlushed(uint256 ownerAmount, uint256 burnAmount)",
+]);
+const ACCOUNTING_ABI = parseAbi([
+  "function rolloverPool() view returns (uint256)",
+  "function dailyJackpotPool() view returns (uint256)",
+  "function weeklyJackpotPool() view returns (uint256)",
+  "function accruedOwnerFees() view returns (uint256)",
+  "function accruedBurnFees() view returns (uint256)",
 ]);
 
 const network = (process.env.LINEA_NETWORK || process.env.NEXT_PUBLIC_LINEA_NETWORK || "sepolia").toLowerCase() === "mainnet"
@@ -60,6 +68,18 @@ const client = createPublicClient({
   chain,
   transport: fallback(rpcList.map((url) => http(url, { timeout: 30_000, retryCount: 1 })), { rank: true }),
 });
+async function readAccountingSnapshot(blockNumber) {
+  const keys = ["rolloverPool", "dailyJackpotPool", "weeklyJackpotPool", "accruedOwnerFees", "accruedBurnFees"];
+  const values = await Promise.all(keys.map((functionName) => (
+    client.readContract({
+      address: contractAddress,
+      abi: ACCOUNTING_ABI,
+      functionName,
+      blockNumber,
+    })
+  )));
+  return Object.fromEntries(keys.map((key, index) => [key, values[index]]));
+}
 const db = new DatabaseSync(dbPath, { readOnly: true });
 const scope = `${network}:${contractAddress}`;
 const epochRows = (auditEndEpoch === null
@@ -84,6 +104,10 @@ const headBlock = await client.getBlockNumber();
 const toBlock = headBlock > finalityBlocks ? headBlock - finalityBlocks : 0n;
 if (toBlock < fromBlock) throw new Error("chain finality target is before the audit window");
 if (toBlock - fromBlock > 250_000n) throw new Error("audit window exceeds 250000 blocks; reduce CHAIN_INDEXER_AUDIT_EPOCHS");
+const accountingToBlock = BigInt(epochRows.at(-1).resolved_block);
+if (accountingToBlock > toBlock) throw new Error("last indexed resolve is beyond the finalized audit head");
+const accountingStartSnapshot = await readAccountingSnapshot(fromBlock > 0n ? fromBlock - 1n : 0n);
+const accountingEndSnapshot = await readAccountingSnapshot(accountingToBlock);
 
 const logs = [];
 for (let cursor = fromBlock; cursor <= toBlock; cursor += 10_000n) {
@@ -140,6 +164,7 @@ const seen = {
   batchClaims: new Set(), resolverRewards: new Set(), dustSettlements: new Set(), fees: new Set(), rebates: 0,
 };
 const rebateBatchClaimTxs = new Set();
+const accountingEvents = [];
 for (const log of logs) {
   try {
     const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics, strict: false });
@@ -162,10 +187,19 @@ for (const log of logs) {
     seen.bets.add(key);
     const row = dbBets.get(key);
     const totalAmount = decoded.eventName === "BetPlaced" ? args.amount : args.totalAmount;
+    accountingEvents.push({ kind: "bet", epoch, amount: totalAmount });
     if (!row) addMismatch("bet", `epoch ${epoch} missing index row`);
     else if (parseStoredWei(row.total_amount) !== totalAmount) addMismatch("bet", `epoch ${epoch} total amount mismatch`);
   } else if (decoded.eventName === "EpochResolved" && inEpochWindow) {
     seen.epochs.add(epoch);
+    accountingEvents.push({
+      kind: "resolve",
+      epoch,
+      totalPool: args.totalPool,
+      fee: args.fee,
+      rewardPool: args.rewardPool,
+      jackpotBonus: args.jackpotBonus,
+    });
     const row = dbEpochs.get(epoch);
     if (!row) addMismatch("resolve", `epoch ${epoch} missing index row`);
     else {
@@ -177,6 +211,7 @@ for (const log of logs) {
     }
   } else if (["DailyJackpotAwarded", "WeeklyJackpotAwarded"].includes(decoded.eventName) && inEpochWindow) {
     const kind = decoded.eventName === "DailyJackpotAwarded" ? "daily" : "weekly";
+    accountingEvents.push({ kind: `${kind}-jackpot`, epoch, amount: args.amount });
     const key = `${kind}_${epoch}`;
     seen.jackpots.add(key);
     const row = dbJackpots.get(key);
@@ -194,6 +229,7 @@ for (const log of logs) {
     if (!batchClaims[id]) addMismatch("claim", `${decoded.eventName} missing index metadata`);
   } else if (decoded.eventName === "ResolverRewardAccrued" && inEpochWindow) {
     seen.resolverRewards.add(id);
+    accountingEvents.push({ kind: "resolver-reward", epoch, amount: args.amount });
     if (!resolverRewards[id]) addMismatch("resolver-reward", `${decoded.eventName} missing index metadata`);
   } else if (decoded.eventName === "ResolverRewardClaimed") {
     seen.resolverRewards.add(id);
@@ -208,6 +244,9 @@ for (const log of logs) {
     }
   } else if (decoded.eventName === "ProtocolFeesFlushed") {
     seen.fees.add(id);
+    if ((log.blockNumber ?? 0n) <= accountingToBlock) {
+      accountingEvents.push({ kind: "fee-flush", ownerAmount: args.ownerAmount, burnAmount: args.burnAmount });
+    }
     const row = dbFees.get(id);
     if (!row) addMismatch("fee-flush", "event missing index row");
     else if (parseStoredWei(row.owner_amount) !== args.ownerAmount || parseStoredWei(row.burn_amount) !== args.burnAmount) {
@@ -222,6 +261,15 @@ for (const key of dbJackpots.keys()) if (!seen.jackpots.has(key)) addMismatch("j
 for (const key of dbRewards.keys()) if (!seen.rewards.has(key)) addMismatch("reward", "index row has no chain event in window");
 for (const key of dbFees.keys()) if (!seen.fees.has(key)) addMismatch("fee-flush", "index row has no chain event in window");
 
+const accountingReplay = replayV9Accounting({ initial: accountingStartSnapshot, events: accountingEvents });
+const accountingSnapshotMismatches = compareAccountingSnapshot(accountingEndSnapshot, accountingReplay.state);
+for (const mismatch of [...accountingReplay.mismatches, ...accountingSnapshotMismatches]) {
+  addMismatch("accounting", `${mismatch.kind}${mismatch.epoch ? ` epoch ${mismatch.epoch}` : ""} expected ${mismatch.expected} actual ${mismatch.actual}`);
+}
+const serializeSnapshot = (snapshot) => Object.fromEntries(
+  Object.entries(snapshot).map(([key, value]) => [key, value.toString()]),
+);
+
 db.close();
 const summary = {
   generatedAt: new Date().toISOString(),
@@ -230,6 +278,15 @@ const summary = {
   epochWindow: { from: startEpoch, to: endEpoch, count: epochRows.length },
   blockWindow: { from: fromBlock.toString(), to: toBlock.toString() },
   counts: Object.fromEntries(Object.entries(seen).map(([key, value]) => [key, value instanceof Set ? value.size : value])),
+  accounting: {
+    fromBlock: (fromBlock > 0n ? fromBlock - 1n : 0n).toString(),
+    toBlock: accountingToBlock.toString(),
+    events: accountingEvents.length,
+    start: serializeSnapshot(accountingStartSnapshot),
+    expectedEnd: serializeSnapshot(accountingReplay.state),
+    actualEnd: serializeSnapshot(accountingEndSnapshot),
+    mismatchCount: accountingReplay.mismatches.length + accountingSnapshotMismatches.length,
+  },
   mismatches,
 };
 mkdirSync(dirname(outPath), { recursive: true });

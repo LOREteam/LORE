@@ -5,6 +5,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { RESOLVE_ABI } from "../../../config/abi";
 import { acquireExpiringLock } from "../../../server/storage";
 import { APP_CHAIN, CONTRACT_ADDRESS, SERVER_RPC_URLS } from "../_lib/dataBridge";
+import { logRouteError } from "../_lib/routeError";
 
 export const BOOTSTRAP_RESOLVE_ABI = RESOLVE_ABI;
 
@@ -76,7 +77,7 @@ export async function acquireResolveLock(epoch: bigint) {
   try {
     return acquireExpiringLock(RESOLVE_LOCK_PATH, epoch.toString(), RESOLVE_THROTTLE_MS);
   } catch (err) {
-    console.warn("[bootstrap-resolve] SQLite lock unavailable, using in-memory throttle:", err instanceof Error ? err.message : err);
+    logRouteError("api/bootstrap-resolve", err, { phase: "sqlite-lock", fallback: "memory-throttle" });
     const now = Date.now();
     if (now - lastResolveAttemptAt < RESOLVE_THROTTLE_MS) return false;
     lastResolveAttemptAt = now;

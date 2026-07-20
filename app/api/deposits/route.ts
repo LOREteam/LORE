@@ -95,7 +95,7 @@ type DepositsBuildResult = {
 };
 
 const depositsRouteCache = createRouteCache<DepositsPayload>(DEPOSITS_ROUTE_CACHE_MAX_KEYS);
-const depositsCacheWatermarks = new Map<string, string>();
+const depositsCacheWatermarks = createRouteCache<string>(DEPOSITS_ROUTE_CACHE_MAX_KEYS);
 let currentEpochCache: { value: number | null; expiresAt: number; source: "indexed" | "chain" } | null = null;
 let currentEpochInflight: Promise<number | null> | null = null;
 let currentEpochBackgroundRefresh: Promise<void> | null = null;
@@ -522,11 +522,11 @@ function startDepositsRefresh(cacheKey: string, user: string, includeRewards: bo
     ttlMs: DEPOSITS_ROUTE_CACHE_MS,
     routeMetricKey: ROUTE_METRIC_KEY,
     shouldSkip: () =>
-      depositsBuildInflight.has(cacheKey) || depositsCacheWatermarks.get(cacheKey) === watermark,
+      depositsBuildInflight.has(cacheKey) || depositsCacheWatermarks.getStale(cacheKey) === watermark,
     build: () => buildDepositsPayload(user, includeRewards, { allowSlowRecovery: true }),
     toPayload: (result) => result.payload,
     onCommit: () => {
-      depositsCacheWatermarks.set(cacheKey, watermark);
+      depositsCacheWatermarks.set(cacheKey, watermark, DEPOSITS_ROUTE_CACHE_MS);
     },
     onError: (error) => {
       logRouteError(ROUTE_METRIC_KEY, error, { user, includeRewards, phase: "background-refresh" });
@@ -585,7 +585,7 @@ export async function GET(request: NextRequest) {
                 depositsCacheWatermarks.delete(cacheKey);
                 return;
               }
-              depositsCacheWatermarks.set(cacheKey, currentWatermark);
+              depositsCacheWatermarks.set(cacheKey, currentWatermark, DEPOSITS_ROUTE_CACHE_MS);
             },
           });
           depositsBuildInflight.set(cacheKey, buildPromise);
@@ -603,6 +603,9 @@ export async function GET(request: NextRequest) {
     const message = err instanceof Error ? err.message : "fetch failed";
     const status = message.startsWith("Firebase ") ? 502 : 500;
     failRouteMetric(metric, status);
-    return jsonNoStore({ deposits: [], error: message }, status);
+    return jsonNoStore(
+      { deposits: [], error: status === 502 ? "Deposit data service unavailable" : "Unable to load deposits" },
+      status,
+    );
   }
 }

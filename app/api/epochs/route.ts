@@ -342,6 +342,7 @@ function startEpochsRefresh(cacheKey: string, requestedEpochs: number[]) {
       logRouteError(ROUTE_METRIC_KEY, error, { phase: "background-refresh", requestedEpochs });
     })
     .finally(() => {
+      epochsRouteCache.finishWrite(cacheKey, writeVersion);
       epochsRouteCache.clearRefresh(cacheKey);
     });
 
@@ -389,6 +390,7 @@ export async function GET(request: Request) {
               return epochsRouteCache.setIfLatest(cacheKey, payload, EPOCHS_ROUTE_CACHE_MS, writeVersion);
             })
             .finally(() => {
+              epochsRouteCache.finishWrite(cacheKey, writeVersion);
               epochsRouteCache.clearInflight(cacheKey);
             });
           epochsRouteCache.setInflight(cacheKey, requestPromise);

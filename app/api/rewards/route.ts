@@ -103,6 +103,7 @@ export async function POST(request: Request) {
               return rewardsRouteCache.setIfLatest(cacheKey, result, REWARDS_ROUTE_CACHE_MS, writeVersion);
             })
             .finally(() => {
+              rewardsRouteCache.finishWrite(cacheKey, writeVersion);
               rewardsRouteCache.clearInflight(cacheKey);
             });
           return rewardsRouteCache.setInflight(cacheKey, requestPromise);

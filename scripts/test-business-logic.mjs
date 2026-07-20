@@ -31,6 +31,8 @@ import * as autoMineDiagnosticsModule from "../app/lib/mining/autoMineDiagnostic
 import * as autoMineDebugOverrideModule from "../app/lib/mining/autoMineDebugOverride.ts";
 import * as autoMineRunnerStopReasonModule from "../app/lib/mining/autoMineRunnerStopReason.ts";
 import * as routeCacheModule from "../app/api/_lib/routeCache.ts";
+import * as versionedRouteCacheModule from "../app/api/_lib/versionedRouteCache.ts";
+import * as routeErrorModule from "../app/api/_lib/routeError.ts";
 import * as clientIdentityModule from "../app/api/_lib/clientIdentity.ts";
 import * as externalRateLimitModule from "../app/api/_lib/externalRateLimit.ts";
 import * as runtimeMetricsModule from "../app/api/_lib/runtimeMetrics.ts";
@@ -68,6 +70,7 @@ import * as sentrySanitizeModule from "../app/lib/sentrySanitize.ts";
 import * as analyticsBlockchainHistoryPanelModule from "../app/components/analytics/AnalyticsBlockchainHistoryPanel.tsx";
 import * as boundedJsonBodyModule from "../app/api/_lib/boundedJsonBody.ts";
 import * as estimateGasRetryModule from "./lib/estimate-gas-retry.ts";
+import * as canaryContractErrorModule from "./lib/canary-contract-error.ts";
 
 function withTemporaryEnv(values, fn) {
   const previous = new Map();
@@ -110,6 +113,24 @@ async function withTemporaryEnvAsync(values, fn) {
 }
 
 async function main() {
+  const canaryContractError = canaryContractErrorModule.default ?? canaryContractErrorModule;
+  assert.deepEqual(
+    canaryContractError.classifyCanaryContractError({
+      cause: { data: { errorName: "EpochClosing" } },
+    }),
+    { kind: "late-bet", message: "contract custom error EpochClosing" },
+  );
+  assert.deepEqual(
+    canaryContractError.classifyCanaryContractError({
+      cause: { cause: { data: { errorName: "ERC20InsufficientBalance" } } },
+    }),
+    { kind: "insufficient-balance", message: "contract custom error ERC20InsufficientBalance" },
+  );
+  assert.deepEqual(
+    canaryContractError.classifyCanaryContractError({ data: { errorName: "InvalidTileMask" } }),
+    { kind: "contract-revert", message: "contract custom error InvalidTileMask" },
+  );
+  assert.equal(canaryContractError.classifyCanaryContractError({ data: { errorName: "UnknownError" } }), null);
   const estimateGasWithMethodRetry = estimateGasRetryModule.estimateGasWithMethodRetry
     ?? estimateGasRetryModule.default?.estimateGasWithMethodRetry;
   assert.equal(typeof estimateGasWithMethodRetry, "function");
@@ -157,6 +178,8 @@ async function main() {
   const autoMineDebugOverride = autoMineDebugOverrideModule.default ?? autoMineDebugOverrideModule;
   const autoMineRunnerStopReason = autoMineRunnerStopReasonModule.default ?? autoMineRunnerStopReasonModule;
   const routeCache = routeCacheModule.default ?? routeCacheModule;
+  const versionedRouteCache = versionedRouteCacheModule.default ?? versionedRouteCacheModule;
+  const routeError = routeErrorModule.default ?? routeErrorModule;
   const clientIdentity = clientIdentityModule.default ?? clientIdentityModule;
   const externalRateLimit = externalRateLimitModule.default ?? externalRateLimitModule;
   const runtimeMetrics = runtimeMetricsModule.default ?? runtimeMetricsModule;
@@ -242,6 +265,7 @@ async function main() {
   assert.doesNotMatch(sanitizedSupportLog.error, /secret|rpc\.example|0x[d]{64}/i);
   const loggerSource = readFileSync("app/lib/logger.ts", "utf8");
   assert.match(loggerSource, /sanitizeSupportLogPayload\(sanitize\(data\)\)/);
+  assert.match(loggerSource, /writeError\(`\[\$\{tag\}\]`, entry\.msg, safeData/);
   assert.doesNotMatch(loggerSource, /window\.location\.href/);
   assert.match(
     loggerSource,
@@ -249,6 +273,15 @@ async function main() {
     "support log export must include the safe persisted Auto-Miner snapshot",
   );
   assert.match(loggerSource, /safeMeta\s*=\s*sanitizeSupportLogPayload\(meta\)/);
+  const routeErrorSource = readFileSync("app/api/_lib/routeError.ts", "utf8");
+  assert.match(routeErrorSource, /describeSafeRouteError\(error\)/);
+  assert.match(routeErrorSource, /sanitizeSentryPayload\(describeRouteError\(error\)\)/);
+  assert.match(routeErrorSource, /sanitizeSentryPayload\(extra\)/);
+  const safeRouteError = routeError.describeSafeRouteError(
+    new Error(`RPC https://rpc.example.test/private failed for 0x${"ab".repeat(20)}`),
+  );
+  assert.equal(safeRouteError.message.includes("rpc.example.test"), false);
+  assert.equal(safeRouteError.message.includes("ab".repeat(20)), false);
   const standardBetPathSource = readFileSync("app/hooks/useMiningStandardBetPath.ts", "utf8");
   assert.match(
     standardBetPathSource,
@@ -794,8 +827,8 @@ async function main() {
   );
   assert.match(
     dataSyncHealthSource,
-    /err instanceof Error/,
-    "data-sync private health error formatting must handle primitive rejection values",
+    /describeSafeRouteError\(err\)\.message/,
+    "data-sync private health errors must redact provider URLs and identifiers",
   );
   assert.match(
     dataSyncHealthSource,
@@ -843,6 +876,13 @@ async function main() {
   );
   const sharedRateLimitSource = readFileSync("app/api/_lib/sharedRateLimit.ts", "utf8");
   const chainIndexerAuditSource = readFileSync("scripts/audit-chain-indexer-window.mjs", "utf8");
+  assert.match(sharedRateLimitSource, /describeSafeRouteError\(error\)/);
+  assert.doesNotMatch(sharedRateLimitSource, /warnKey\s*=\s*`\$\{bucket\}:\$\{message\}`/);
+  assert.match(
+    sharedRateLimitSource,
+    /MAX_LOCAL_FALLBACK_ENTRIES[\s\S]*localFallbackMap\.size >= MAX_LOCAL_FALLBACK_ENTRIES[\s\S]*Too many requests/,
+    "local rate-limit fallback must fail closed instead of growing beyond its active-key cap",
+  );
   assert.match(
     sharedRateLimitSource,
     /applyNoStoreHeaders/,
@@ -852,6 +892,11 @@ async function main() {
     sharedRateLimitSource,
     /NODE_ENV === "production"[\s\S]*ALLOW_WEAK_RATE_LIMIT_IDENTITY !== "1"/,
     "production mode must fail closed when trusted proxy identity is missing",
+  );
+  assert.ok(
+    sharedRateLimitSource.indexOf("normalized.count >= weakBucketLimit") <
+      sharedRateLimitSource.indexOf("enforceLocalFallback(bucket, key, limit, windowMs, now)"),
+    "weak-identity bucket cap must run before inserting a new per-client fallback key",
   );
   assert.match(
     chainIndexerAuditSource,
@@ -867,6 +912,16 @@ async function main() {
     chainIndexerAuditSource,
     /WHERE scope = \? AND epoch <= \? ORDER BY epoch DESC LIMIT \?/,
     "historical chain/indexer audits must select a bounded resolved-epoch window",
+  );
+  assert.match(
+    chainIndexerAuditSource,
+    /Promise\.all\(keys\.map/,
+    "chain/indexer accounting snapshots must work without a configured multicall contract",
+  );
+  assert.doesNotMatch(
+    chainIndexerAuditSource,
+    /client\.multicall/,
+    "chain/indexer audits must not require multicall metadata on the local chain definition",
   );
   withTemporaryEnv(
     { TRUST_PROXY_HEADERS: "1", TRUST_PROXY_SECRET: "test-proxy-secret-with-at-least-32-characters" },
@@ -921,6 +976,23 @@ async function main() {
         },
       }));
       assert.equal(sameNatIdentity.key, directSpoof.key, "spoofed IP rotation must not bypass the weak identity bucket");
+
+      const productionRunbookSource = readFileSync("docs/production-runbook.md", "utf8");
+      assert.match(
+        productionRunbookSource,
+        /remove client-supplied `x-lore-proxy-secret`/,
+        "production proxy guidance must require stripping the client-supplied trust secret",
+      );
+      assert.match(
+        productionRunbookSource,
+        /overwrite exactly one supported\s+client-IP header/,
+        "production proxy guidance must require overwriting the trusted client IP",
+      );
+      assert.match(
+        productionRunbookSource,
+        /App origins must reject\s+direct public traffic/,
+        "production proxy guidance must require blocking direct app-origin traffic",
+      );
     },
   );
   await withTemporaryEnvAsync(
@@ -1066,6 +1138,11 @@ async function main() {
     bootstrapResolveRouteSource,
     /affordableCost\s*<\s*CANCEL_TX_MAX_COST_WEI\s*\?\s*affordableCost\s*:\s*CANCEL_TX_MAX_COST_WEI/,
     "bootstrap resolver cancellation fee must use the lower of balance headroom and the hard loss ceiling",
+  );
+  assert.doesNotMatch(
+    bootstrapResolveRouteSource,
+    /error:\s*(?:message|`)/,
+    "bootstrap resolver responses must not expose raw provider or keeper-balance errors",
   );
   const smokeBrowserSource = readFileSync("scripts/smoke-browser.mjs", "utf8");
   const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
@@ -1355,6 +1432,12 @@ async function main() {
   );
   const whitePaperSource = readFileSync("app/components/WhitePaper.tsx", "utf8");
   const faqSource = readFileSync("app/components/FAQ.tsx", "utf8");
+  const homePageSource = readFileSync("app/page.tsx", "utf8");
+  assert.match(
+    homePageSource,
+    /Promise\.all\(\[\s*getInitialLiveState\(\),\s*getInitialRecentWins\(\),?\s*\]\)/,
+    "homepage SSR must load independent live-state and recent-wins bootstrap data concurrently",
+  );
   assert.doesNotMatch(whitePaperSource, /Claim Anytime/, "White Paper must not promise perpetual claims");
   assert.match(
     whitePaperSource,
@@ -1365,6 +1448,11 @@ async function main() {
     whitePaperSource,
     /0\.05% resolver reward[\s\S]*1\.95% is split approximately equally/,
     "White Paper must disclose the exact resolver-first protocol fee split",
+  );
+  assert.doesNotMatch(
+    whitePaperSource,
+    /2% goes to protocol accounting: half to treasury and half to a Safety Pool/,
+    "White Paper must not describe the protocol fee as an exact half split before the resolver reward",
   );
   assert.match(
     faqSource,
@@ -1756,6 +1844,17 @@ async function main() {
     lineaOreClientSource,
     /import\s+\{\s*FirstVisitTutorial\s*\}\s+from\s+"\.\/components\/FirstVisitTutorial"/,
     "first-visit tutorial must not be statically imported by LineaOreClient",
+  );
+  const dialogFocusTrapSource = readFileSync("app/hooks/useDialogFocusTrap.ts", "utf8");
+  assert.match(
+    dialogFocusTrapSource,
+    /getClientRects\(\)\.length > 0[\s\S]*aria-hidden/,
+    "dialog focus traps must skip hidden or aria-hidden controls",
+  );
+  assert.match(
+    dialogFocusTrapSource,
+    /!container\?\.contains\(active\)/,
+    "dialog focus traps must recover when focus escapes the active dialog",
   );
   const headerSource = readFileSync("app/components/Header.tsx", "utf8");
   assert.match(
@@ -2463,6 +2562,7 @@ async function main() {
     "live-state stored current epoch check must reject unsafe integers",
   );
   const jackpotsServiceSource = readFileSync("app/api/_lib/jackpotsService.ts", "utf8");
+  const jackpotsRouteSource = readFileSync("app/api/jackpots/route.ts", "utf8");
   assert.match(
     jackpotsServiceSource,
     /JACKPOT_LOG_SCAN_CHUNK = 10_000n[\s\S]*JACKPOT_BOOTSTRAP_SCAN_CHUNK = 10_000n/,
@@ -2505,6 +2605,11 @@ async function main() {
   );
   assert.match(
     jackpotsServiceSource,
+    /jackpotBlockTimestampCache\.size > MAX_JACKPOT_EVENT_CACHE_ENTRIES/,
+    "jackpot block timestamp cache must stay bounded",
+  );
+  assert.match(
+    jackpotsServiceSource,
     /if \(!freshPayload\)[\s\S]*jackpotResponseCache\?\.payload[\s\S]*source: "stale-cache"/,
     "a slow forced jackpot refresh must return stored or cached data while recovery continues",
   );
@@ -2540,6 +2645,16 @@ async function main() {
     /dataFreshness/,
     "Safety Pool info must expose data freshness for degraded-state UI hints",
   );
+  assert.match(
+    rebateSource,
+    /activeRebateAddressRef\.current === rebateAddress[\s\S]*cacheSavedAtRef\.current = null;[\s\S]*resetState\(\)/,
+    "Safety Pool must clear prior-wallet state and cache timing when the active wallet changes",
+  );
+  assert.match(
+    rebateSource,
+    /const resetState = useCallback[\s\S]*requestIdRef\.current \+= 1/,
+    "Safety Pool reset must invalidate in-flight responses from the previous wallet",
+  );
   const rebatePanelSource = readFileSync("app/components/RebatePanel.tsx", "utf8");
   assert.match(
     rebatePanelSource,
@@ -2567,6 +2682,14 @@ async function main() {
     /shouldSkip:[\s\S]*REBATE_UNCHANGED_WATERMARK_REFRESH_MS/,
     "rebates API stale refresh must skip unchanged indexed-data watermarks for a bounded interval",
   );
+  assert.match(
+    rebatesRouteSource,
+    /bucket: "api-rebates-exact"[\s\S]*limit: 6/,
+    "expensive exact rebate scans must have a stricter rate limit",
+  );
+  assert.doesNotMatch(depositsRouteSource, /deposits: \[\], error: message/);
+  assert.doesNotMatch(rebatesRouteSource, /error: message/);
+  assert.doesNotMatch(jackpotsRouteSource, /error: message/);
   const liveRoundCanarySource = readFileSync("scripts/live-round-canary.ts", "utf8");
   const soakSupervisorSource = readFileSync("scripts/run-testnet-soak-supervisor.mjs", "utf8");
   const cleanupNextCandidatesSource = readFileSync("scripts/cleanup-next-candidates.mjs", "utf8");
@@ -2576,6 +2699,11 @@ async function main() {
     liveRoundCanarySource,
     /GENERIC_RPC_LABEL_RE[\s\S]*LIVE_CANARY_RPC_LABEL must be a concrete redacted RPC label/,
     "live canary must fail before transactions when the redacted RPC label is missing or generic",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /http request[\s\S]*rpc[\s\S]*connection[\s\S]*socket/,
+    "live canary must classify common provider transport failures as network errors",
   );
   assert.match(
     chainIndexerAuditSource,
@@ -2713,6 +2841,20 @@ async function main() {
       enoughToken: true,
       errorKind: "untrusted raw error text",
       timestamp: "2026-07-18T00:00:00.000Z",
+    })}\n${JSON.stringify({
+      mode: "single",
+      ok: false,
+      round: 0,
+      errorKind: "network",
+      role: "MANUAL",
+      timestamp: "2026-07-18T00:00:02.000Z",
+    })}\n${JSON.stringify({
+      mode: "bitmap",
+      ok: false,
+      round: 1,
+      errorKind: "untrusted raw error text",
+      role: "AUTOMINER_A",
+      timestamp: "2026-07-18T00:00:03.000Z",
     })}\n`, "utf8");
     writeFileSync(join(soakStatusDir, "status.json"), `${JSON.stringify({
       status: "failed",
@@ -2734,6 +2876,14 @@ async function main() {
     assert.deepEqual(safeSoakStatus.progress.preflightFailures, [
       { role: "AUTOMINER_C", reason: "insufficient-native-gas" },
     ]);
+    assert.equal(safeSoakStatus.progress.failedBets, 2);
+    assert.deepEqual(safeSoakStatus.progress.failedBetErrorKinds, { network: 1, unknown: 1 });
+    assert.deepEqual(safeSoakStatus.progress.failedBetFamilies, { network: 1, "missing-error": 1 });
+    assert.deepEqual(safeSoakStatus.progress.failedBetModes, { single: 1, bitmap: 1 });
+    assert.deepEqual(safeSoakStatus.progress.failedBetRoles, { MANUAL: 1, AUTOMINER_A: 1 });
+    assert.deepEqual(safeSoakStatus.progress.consecutiveFailedBetsByRole, { MANUAL: 1, AUTOMINER_A: 1 });
+    assert.deepEqual(safeSoakStatus.progress.maxConsecutiveFailedBetsByRole, { MANUAL: 1, AUTOMINER_A: 1 });
+    assert.deepEqual(safeSoakStatus.progress.failedBetStages, { "pre-send": 2 });
     assert.doesNotMatch(soakStatusResult.stdout, /untrusted raw error text/);
   } finally {
     rmSync(soakStatusDir, { recursive: true, force: true });
@@ -3391,14 +3541,84 @@ async function main() {
 
   const cache = routeCache.createRouteCache(2);
   const cacheKey = "messages";
-  const inflightVersion = cache.getWriteVersion(cacheKey);
+  const inflightVersion = cache.beginWrite(cacheKey);
   cache.invalidate(cacheKey);
   cache.setIfLatest(cacheKey, { stale: true }, 1000, inflightVersion);
   assert.equal(cache.getStale(cacheKey), null);
 
-  const freshVersion = cache.getWriteVersion(cacheKey);
+  const freshVersion = cache.beginWrite(cacheKey);
   cache.setIfLatest(cacheKey, { fresh: true }, 1000, freshVersion);
   assert.deepEqual(cache.getStale(cacheKey), { fresh: true });
+
+  const boundedCache = routeCache.createRouteCache(1);
+  const evictedVersion = boundedCache.beginWrite("evicted");
+  boundedCache.setIfLatest("evicted", { value: 1 }, 1000, evictedVersion);
+  boundedCache.set("retained", { value: 2 }, 1000);
+  assert.equal(boundedCache.beginWrite("evicted"), 1, "LRU eviction must prune orphaned write metadata");
+
+  const pendingCache = routeCache.createRouteCache(1);
+  const pendingVersion = pendingCache.beginWrite("pending");
+  pendingCache.setInflight("pending", Promise.resolve({ value: 1 }));
+  pendingCache.setIfLatest("pending", { value: 1 }, 1000, pendingVersion);
+  pendingCache.set("other", { value: 2 }, 1000);
+  assert.equal(pendingCache.getWriteVersion("pending"), pendingVersion, "active writes must retain their version after eviction");
+  pendingCache.clearInflight("pending");
+  assert.equal(pendingCache.getWriteVersion("pending"), 0, "completed evicted writes must release version metadata");
+
+  const invalidatedCache = routeCache.createRouteCache(1);
+  const staleVersion = invalidatedCache.beginWrite("invalidated");
+  invalidatedCache.setInflight("invalidated", Promise.resolve({ stale: true }));
+  invalidatedCache.invalidate("invalidated");
+  invalidatedCache.setIfLatest("invalidated", { stale: true }, 1000, staleVersion);
+  invalidatedCache.clearInflight("invalidated");
+  assert.equal(invalidatedCache.getStale("invalidated"), null, "invalidated async writes must not repopulate cache");
+  assert.equal(invalidatedCache.getWriteVersion("invalidated"), 0, "settled invalidation tombstones must be pruned");
+
+  const directWriteCache = routeCache.createRouteCache(2);
+  const supersededVersion = directWriteCache.beginWrite("shared");
+  directWriteCache.set("shared", { fresh: true }, 1000);
+  directWriteCache.setIfLatest("shared", { stale: true }, 1000, supersededVersion);
+  assert.deepEqual(
+    directWriteCache.getStale("shared"),
+    { fresh: true },
+    "direct writes must supersede older async builds",
+  );
+
+  const helperCache = routeCache.createRouteCache(2);
+  let resolveStaleBuild;
+  let staleCommitCount = 0;
+  const { requestPromise: staleRequest } = versionedRouteCache.startVersionedInflightBuild({
+    cache: helperCache,
+    cacheKey: "shared",
+    ttlMs: 1000,
+    build: () => new Promise((resolve) => { resolveStaleBuild = resolve; }),
+    toPayload: (payload) => payload,
+    onCommit: () => { staleCommitCount += 1; },
+  });
+  helperCache.set("shared", { fresh: true }, 1000);
+  resolveStaleBuild({ stale: true });
+  assert.deepEqual(await staleRequest, { fresh: true });
+  assert.equal(staleCommitCount, 0, "superseded async builds must not commit stale metadata");
+
+  const backgroundCache = routeCache.createRouteCache(2);
+  let resolveBackgroundBuild;
+  let backgroundCommitCount = 0;
+  versionedRouteCache.startVersionedBackgroundRefresh({
+    cache: backgroundCache,
+    cacheKey: "background",
+    ttlMs: 1000,
+    routeMetricKey: "test-background-cache",
+    build: () => new Promise((resolve) => { resolveBackgroundBuild = resolve; }),
+    toPayload: (payload) => payload,
+    onCommit: () => { backgroundCommitCount += 1; },
+    onError: (error) => { throw error; },
+  });
+  const backgroundRefresh = backgroundCache.getRefresh("background");
+  backgroundCache.set("background", { fresh: true }, 1000);
+  resolveBackgroundBuild({ stale: true });
+  await backgroundRefresh;
+  assert.deepEqual(backgroundCache.getStale("background"), { fresh: true });
+  assert.equal(backgroundCommitCount, 0, "superseded background refreshes must not commit stale metadata");
 
   let loopState = autoMineLoopModel.createAutoMineLoopState({
     rounds: 3,

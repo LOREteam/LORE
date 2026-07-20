@@ -29,6 +29,7 @@ import {
 import { tileIdsToMask } from "../app/lib/tileMask";
 import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs, getStableLineaReadRpcs } from "../config/publicConfig";
 import { estimateGasWithMethodRetry, isEstimateGasMethodUnsupported } from "./lib/estimate-gas-retry";
+import { classifyCanaryContractError } from "./lib/canary-contract-error";
 
 loadDotenv({ path: ".env.live-test-wallets", override: false });
 
@@ -314,6 +315,8 @@ function classifyError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const lower = message.toLowerCase();
   const safeMessage = redactCanaryErrorMessage(message);
+  const contractError = classifyCanaryContractError(error);
+  if (contractError) return contractError;
   if (isEstimateGasOutOfGasError(error)) return { kind: "estimate-out-of-gas", message: "eth_estimateGas out of gas" };
   if (isEstimateGasMethodUnsupported(error)) return { kind: "estimate-method-unsupported", message: "eth_estimateGas temporarily unsupported" };
   if (lower.includes("user rejected")) return { kind: "user-rejected", message: safeMessage };
@@ -325,7 +328,16 @@ function classifyError(error: unknown) {
   if (lower.includes("safe window") || lower.includes("epoch wait")) return { kind: "epoch-window", message: safeMessage };
   if (lower.includes("alreadyresolved")) return { kind: "already-resolved", message: safeMessage };
   if (lower.includes("timernotended")) return { kind: "timer-not-ended", message: safeMessage };
-  if (lower.includes("network") || lower.includes("timeout") || lower.includes("fetch failed") || lower.includes("429")) {
+  if (
+    lower.includes("network") ||
+    lower.includes("timeout") ||
+    lower.includes("fetch failed") ||
+    lower.includes("http request") ||
+    lower.includes("rpc") ||
+    lower.includes("connection") ||
+    lower.includes("socket") ||
+    lower.includes("429")
+  ) {
     return { kind: "network", message: safeMessage };
   }
   if (lower.includes("revert") || lower.includes("execution reverted")) return { kind: "revert", message: safeMessage };

@@ -125,9 +125,9 @@ function push(lvl: LogLevel, tag: string, msg: string, data?: unknown) {
 
   if (lvl === "error") {
     const writeError = mirrorErrorsToConsoleError ? console.error : console.warn;
-    writeError(`[${tag}]`, msg, safeData ?? "");
+    writeError(`[${tag}]`, entry.msg, safeData ?? "");
   } else if (lvl === "warn") {
-    console.warn(`[${tag}]`, msg, safeData ?? "");
+    console.warn(`[${tag}]`, entry.msg, safeData ?? "");
   }
 
   scheduleFlush();

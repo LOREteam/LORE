@@ -303,6 +303,12 @@ export function saveRuntimeIssueState(filePath, activeIssues) {
   renameSync(temporary, resolved);
 }
 
+export function applyRuntimeIssueDeliveryResult(activeIssues, transition, { configured, delivered }) {
+  if (!configured || delivered) return;
+  if (transition.kind === "alert") activeIssues.delete(transition.key);
+  else activeIssues.set(transition.key, transition.message);
+}
+
 export function createTelegramAlertSender({ env = process.env, fetchImpl = fetch, now = () => Date.now() } = {}) {
   const token = env.ALERT_TELEGRAM_BOT_TOKEN?.trim() || "";
   const chatId = env.ALERT_TELEGRAM_CHAT_ID?.trim() || "";
@@ -316,7 +322,6 @@ export function createTelegramAlertSender({ env = process.env, fetchImpl = fetch
       if (!token || !chatId) return false;
       const timestamp = now();
       if (timestamp - (cooldowns.get(key) ?? 0) < cooldownMs) return false;
-      cooldowns.set(key, timestamp);
       const body = new URLSearchParams({
         chat_id: chatId,
         text: `${prefix}\n${message}`,
@@ -330,7 +335,9 @@ export function createTelegramAlertSender({ env = process.env, fetchImpl = fetch
           body,
           signal: AbortSignal.timeout(10_000),
         });
-        return response.ok;
+        if (!response.ok) return false;
+        cooldowns.set(key, timestamp);
+        return true;
       } catch {
         console.error("[runtime-monitor] alert delivery failed");
         return false;

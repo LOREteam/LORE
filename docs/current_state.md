@@ -302,12 +302,8 @@ Open linked evidence only when a task needs it.
 - Validate the shared limiter with real external-store credentials across two replicas.
 - Validate HTTPS Privy and true-device mobile Web3 flows on the final origin.
 - Validate real monitoring delivery/recovery and schedule operational backups.
-- Complete the funded 24-48 hour soak. Remote clean-checkout CI is green on the
-  published baseline and remains required for subsequent revisions.
-- The active 1,440-round randomized soak covers all four configured roles with
-  RPC-failover injection and production-like health telemetry. Its supervisor
-  creates the diagnostics secret in memory and records only redacted labels and
-  aggregates; RSS, heap, SQLite DB, and WAL growth are present in compact status.
+- Complete the funded 24-48 hour soak after `AUTOMINER_A` and `AUTOMINER_B` both
+  pass the unchanged native-gas preflight. Keep `AUTOMINER_C` excluded.
 - The Privy/wagmi peer mismatch is resolved by pinning the root `viem` to the
   exact `2.50.4` required by `@privy-io/wagmi@4.0.9`. A clean `npm ci`, clean
   `npm ls`, typecheck, logic tests, contract invariants, compilation provenance,
@@ -315,9 +311,8 @@ Open linked evidence only when a task needs it.
   wallet dependency peer-integrity check immediately after `npm ci`. Real signed
   Privy wallet connect/rejection/pending recovery still requires the HTTPS
   testnet flow.
-- Run the soak under a deployment supervisor or external job runner; the first
-  1,440-round attempt ended with its managed command session after 11 successful
-  unique epochs and is retained only as partial diagnostic evidence.
+- Run the soak only through the existing durable supervisor and retain its
+  compact status and canary evidence; never start a second supervisor.
 - Keep stale contract-scope cleanup tied to the verified SQLite backup/restore runbook.
 - Require an explicit product decision before changing idle-epoch economics or keeper behavior.
 
@@ -331,54 +326,21 @@ Open linked evidence only when a task needs it.
 
 ## Next Best Step
 
-The published `bbe02a7` baseline passes an exact detached clean-checkout
-reproduction: lockfile install, wallet peer/dependency gates, lint, typecheck,
-logic, contract invariants, compilation provenance, SQLite operations,
-monitoring drill, production build, all 23 HTTP checks, and responsive browser
-smoke. A new 1,440-round testnet soak attempted to start after that baseline,
-and a later durable soak recorded 433 successful unique bets with zero duplicate
-transactions or nonces before its 20-failure safety stop. Two receipts reverted;
-the dominant later pre-send failure was transient `eth_estimateGas` method
-unavailability. Gas estimation now retries that exact pre-send failure twice
-without retrying sends, and compact status reports recovered estimate retries.
-A transaction-free dry-run passes, but the next live start found insufficient
-native gas for `AUTOMINER_B`; no bet was sent. `AUTOMINER_C` is excluded from the
-default role set. The redacted `soak:testnet:status` output now
-includes `progress.preflightFailures` with the allowlisted role and normalized
-balance category, so this blocker no longer requires opening the raw canary log.
-Top up that role before restarting.
-The latest production build and responsive browser smoke pass. The empty pool
-chart remains visibly mounted, and a second pool snapshot in the same current
-epoch changes the rendered path without reducing the five-second polling
-interval.
+The current uncommitted candidate passes typecheck, business logic, contract
+invariants, compilation provenance, production build, HTTP smoke, responsive
+browser smoke, dependency high/critical audit, monitoring drill, and diff
+hygiene. Both the latest and the original fixed historical chain/indexer audit
+windows pass after an integrity-checked backup and one bounded indexer repair.
 
-The previous 1,440-round testnet soak started under the local supervisor at
-`2026-07-17T23:51:19.638Z` and stopped after 64 successful unique bets when the
-host volume reached `ENOSPC`; no transaction reverted or duplicated. Do not
-restart it until generated build outputs are explicitly cleared and free space
-is restored. Use
-`npm.cmd run soak:testnet:status` for redacted progress. The wrapper runs
-randomized testnet rounds with bounded
-small bets, 1-25 tiles, RPC-failover injection, and health telemetry that
-correlates transaction latency/reverts/nonces with RSS, heap, SQLite DB, and WAL
-growth. Its transaction-free `soak:testnet:dry-run` preflight passes locally.
-Use `npm.cmd run soak:testnet:status` for a compact
-redacted status with successful/failed bet, unique epoch/tx/nonce, duplicate,
-revert, health-retry, RPC-injection-tagged event, slow-send, total/phase latency
-percentile, and
-resolver-fallback/health-growth summaries. It also reports the latest event
-timestamp and its age, so an alive supervisor with a stalled child is visible
-without opening the JSONL log; use
-`npm.cmd run soak:testnet:stop` for lock-verified shutdown.
-Private data-sync health now exposes free bytes on the SQLite volume, soak
-telemetry preserves its minimum/delta, and runtime monitoring alerts below a
-configurable 1 GiB default before writes fail.
-The soak supervisor independently enforces the same 1 GiB default before it
-starts Next.js or the canary, so low disk space cannot consume test funds and
-then fail while persisting evidence.
-`npm.cmd run cleanup:next-candidates` lists only root-level
-`.next-candidate*` build directories; its separate `:apply` command is the only
-path that removes them and requires explicit operator approval.
-Then run the remaining deployment-dependent checks on a testnet staging environment:
-shared-store replicas, HTTPS wallet/mobile flows, monitoring delivery, scheduled
-backup, and the funded 24-48 hour soak. Keep mainnet deployment paused.
+The latest managed three-role soak stopped safely after 384 successful unique
+bets/epochs/transactions/nonces and 20 pre-send failures from `AUTOMINER_A`.
+It recorded zero duplicate transactions/nonces, zero on-chain reverts, zero
+health failures, and stable RSS/DB/WAL telemetry. The required transaction-free
+preflight then failed closed because `AUTOMINER_A` and `AUTOMINER_B` lack the
+configured native gas reserve; no transaction was sent. Do not restart until
+both roles pass the unchanged preflight, and keep `AUTOMINER_C` excluded.
+
+After that blocker is cleared, continue the same durable soak toward the 24-48
+hour gate. Remaining deployment-dependent checks are the real shared limiter
+across two replicas, HTTPS Privy/true-mobile wallet recovery, real alert
+delivery/recovery, and scheduled backup execution. Keep mainnet work paused.

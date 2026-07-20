@@ -43,6 +43,7 @@ export const RebatePanel = React.memo(function RebatePanel({
   isClaiming,
   onClaimRebates,
 }: RebatePanelProps) {
+  const [smallClaimConfirmed, setSmallClaimConfirmed] = React.useState(false);
   const isSupported = rebateInfo?.isSupported ?? true;
   const hasClaimable = (rebateInfo?.claimableEpochs ?? 0) > 0;
   const isLoading = rebateInfo?.isLoading ?? false;
@@ -62,6 +63,19 @@ export const RebatePanel = React.memo(function RebatePanel({
           ? "Safety Pool refresh is already in progress; current data remains visible."
           : null;
 
+  React.useEffect(() => {
+    setSmallClaimConfirmed(false);
+  }, [address, rebateInfo?.pendingRebateWei, isBelowClaimMinimum]);
+
+  const handleClaim = async () => {
+    if (isBelowClaimMinimum && !smallClaimConfirmed) {
+      setSmallClaimConfirmed(true);
+      return;
+    }
+    setSmallClaimConfirmed(false);
+    await onClaimRebates();
+  };
+
   return (
     <div className="flex-1 overflow-y-auto pb-12 animate-fade-in">
       <div className="max-w-2xl mx-auto px-4 md:px-8 pt-6">
@@ -74,7 +88,7 @@ export const RebatePanel = React.memo(function RebatePanel({
             Safety Pool
           </h1>
           <p className="text-sm text-gray-400 leading-relaxed animate-slide-up" style={{ animationDelay: "0.1s" }}>
-            Every resolved epoch saves <span className="text-emerald-400 font-bold">1%</span> of the pool for players
+            Every resolved epoch directs about <span className="text-emerald-400 font-bold">0.975%</span> of the fresh pool to players
             who participated but missed the winning tile.
           </p>
         </div>
@@ -120,9 +134,9 @@ export const RebatePanel = React.memo(function RebatePanel({
                 </div>
               </div>
               <UiButton
-                onClick={onClaimRebates}
+                onClick={handleClaim}
                 loading={isClaiming}
-                disabled={!hasClaimable || !isSupported || isBelowClaimMinimum}
+                disabled={!hasClaimable || !isSupported}
                 variant="success"
                 size="md"
                 uppercase
@@ -131,15 +145,17 @@ export const RebatePanel = React.memo(function RebatePanel({
               >
                 {isClaiming
                   ? "Claiming..."
-                  : isBelowClaimMinimum
-                    ? "Below minimum"
+                  : isBelowClaimMinimum && smallClaimConfirmed
+                    ? "Claim anyway"
                     : hasClaimable
                       ? "Claim Safety Pool"
                       : "Nothing to claim"}
               </UiButton>
               {hasClaimable && isBelowClaimMinimum ? (
-                <p className="mt-3 text-xs leading-relaxed text-gray-500">
-                  Current Safety Pool is below the {minClaimAmount} LINEA minimum. Wait for more claimable epochs before paying gas.
+                <p className="mt-3 text-xs leading-relaxed text-gray-500" aria-live="polite">
+                  {smallClaimConfirmed
+                    ? "This claim may cost more in gas than it returns. Select Claim anyway to continue."
+                    : `Below ${minClaimAmount} LINEA, waiting for more claimable epochs is usually more economical. You can still claim now.`}
                 </p>
               ) : null}
               {hasPendingOnly ? (

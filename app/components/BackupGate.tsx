@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useDialogFocusTrap } from "../hooks/useDialogFocusTrap";
 
 const STORAGE_KEY = "lineaore:privy-backup-confirmed";
 
@@ -41,6 +42,8 @@ export function BackupGate({
   const [checked, setChecked] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const mountedRef = useRef(false);
+  const isVisible = Boolean(embeddedWalletAddress && !isBackupConfirmedFor(embeddedWalletAddress));
+  const dialogRef = useDialogFocusTrap<HTMLDivElement>(isVisible);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -68,18 +71,24 @@ export function BackupGate({
     onConfirm();
   }, [embeddedWalletAddress, checked, onConfirm]);
 
-  if (!embeddedWalletAddress) return null;
-  if (isBackupConfirmedFor(embeddedWalletAddress)) return null;
+  if (!isVisible) return null;
 
   return (
     <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-black/95 backdrop-blur-md animate-fade-in">
-      <div className="relative w-full max-w-md rounded-2xl border-2 border-amber-500/40 bg-surface-raised shadow-2xl shadow-amber-500/10 overflow-hidden animate-slide-up">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="backup-gate-title"
+        tabIndex={-1}
+        className="relative w-full max-w-md rounded-2xl border-2 border-amber-500/40 bg-surface-raised shadow-2xl shadow-amber-500/10 overflow-hidden animate-slide-up"
+      >
         <div className="p-6 sm:p-8 space-y-5">
           <div className="flex items-center justify-center gap-2 text-amber-400">
             <svg className="w-10 h-10 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
             </svg>
-            <h2 className="text-xl font-black uppercase tracking-wider text-white">
+            <h2 id="backup-gate-title" className="text-xl font-black uppercase tracking-wider text-white">
               Save your wallet
             </h2>
           </div>

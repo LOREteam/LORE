@@ -8,6 +8,8 @@ type RefreshCapableCache<TPayload> = {
   setInflight(key: string, promise: Promise<TPayload>): Promise<TPayload>;
   clearInflight(key: string): void;
   beginWrite(key: string): number;
+  getWriteVersion(key: string): number;
+  finishWrite(key: string, version: number): void;
   setIfLatest(key: string, payload: TPayload, ttlMs: number, version: number): TPayload;
 };
 
@@ -45,13 +47,15 @@ export function startVersionedBackgroundRefresh<TBuildResult, TPayload>(
   const refreshPromise = build()
     .then((result) => {
       const payload = toPayload(result);
+      const shouldCommit = cache.getWriteVersion(cacheKey) === writeVersion;
       cache.setIfLatest(cacheKey, payload, ttlMs, writeVersion);
-      onCommit?.(result, payload);
+      if (shouldCommit) onCommit?.(result, payload);
     })
     .catch((error) => {
       onError(error);
     })
     .finally(() => {
+      cache.finishWrite(cacheKey, writeVersion);
       cache.clearRefresh(cacheKey);
     });
 
@@ -67,10 +71,13 @@ export function startVersionedInflightBuild<TBuildResult, TPayload>(
   const requestPromise = buildPromise
     .then((result) => {
       const payload = toPayload(result);
-      onCommit?.(result, payload);
-      return cache.setIfLatest(cacheKey, payload, ttlMs, writeVersion);
+      const shouldCommit = cache.getWriteVersion(cacheKey) === writeVersion;
+      const selectedPayload = cache.setIfLatest(cacheKey, payload, ttlMs, writeVersion);
+      if (shouldCommit) onCommit?.(result, payload);
+      return selectedPayload;
     })
     .finally(() => {
+      cache.finishWrite(cacheKey, writeVersion);
       cache.clearInflight(cacheKey);
     });
 

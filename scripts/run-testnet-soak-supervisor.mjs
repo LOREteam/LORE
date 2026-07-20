@@ -32,6 +32,26 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 const SERVER_READY_TIMEOUT_MS = parseInteger("SOAK_SERVER_READY_TIMEOUT_MS", 60_000, 5_000, 300_000);
 const SLOW_SEND_THRESHOLD_MS = 20_000;
 const MIN_DISK_FREE_BYTES = parseInteger("SOAK_MIN_DISK_FREE_BYTES", 1_073_741_824, 1, Number.MAX_SAFE_INTEGER);
+const SAFE_BET_ERROR_KINDS = new Set([
+  "already-known",
+  "already-resolved",
+  "contract-revert",
+  "epoch-window",
+  "estimate-method-unsupported",
+  "estimate-out-of-gas",
+  "insufficient-funds",
+  "insufficient-allowance",
+  "insufficient-balance",
+  "late-bet",
+  "network",
+  "nonce-too-low",
+  "replacement-underpriced",
+  "timer-not-ended",
+  "revert",
+  "tx-reverted",
+  "user-rejected",
+]);
+const SAFE_SOAK_ROLES = new Set(["MANUAL", "AUTOMINER_A", "AUTOMINER_B"]);
 
 let server = null;
 let canary = null;
@@ -103,10 +123,38 @@ function growthSummary(values) {
   };
 }
 
+function classifyFailedBetFamily(event) {
+  if (event.ok === true && event.txStatus !== "success") return "inconsistent-success-event";
+  if (event.errorKind === "insufficient-allowance" || event.errorKind === "insufficient-balance" || event.errorKind === "insufficient-funds") return "funding";
+  if (event.errorKind === "late-bet" || event.errorKind === "epoch-window" || event.errorKind === "already-resolved" || event.errorKind === "timer-not-ended") return "epoch-state";
+  if (event.errorKind === "contract-revert") return "contract-call";
+  if (event.errorKind === "network") return "network";
+  if (event.errorKind === "nonce-too-low" || event.errorKind === "already-known" || event.errorKind === "replacement-underpriced") return "nonce-state";
+  if (typeof event.error !== "string") return "missing-error";
+  const message = event.error.toLowerCase();
+  if (message.includes("cannot read") || message.includes("is not a function")) return "runtime-type-error";
+  if (message.includes("returned no data")) return "rpc-no-data";
+  if (message.includes("contract function")) return "contract-call";
+  if (message.includes("transaction execution")) return "transaction-execution";
+  if (message.includes("rate limit") || message.includes("too many requests")) return "rate-limit";
+  if (message.includes("http") || message.includes("rpc") || message.includes("connection") || message.includes("socket")) return "network";
+  if (message.includes("epoch")) return "epoch-state";
+  if (message.includes("gas")) return "gas";
+  return "unknown";
+}
+
 async function summarizeLiveLog(path) {
   const summary = {
     successfulBets: 0,
+    successfulBetRoles: {},
     failedBets: 0,
+    failedBetErrorKinds: {},
+    failedBetFamilies: {},
+    failedBetModes: {},
+    failedBetRoles: {},
+    consecutiveFailedBetsByRole: {},
+    maxConsecutiveFailedBetsByRole: {},
+    failedBetStages: {},
     uniqueEpochs: 0,
     uniqueTxHashes: 0,
     duplicateTxHashes: 0,
@@ -186,9 +234,30 @@ async function summarizeLiveLog(path) {
     if (!betModes.has(event.mode) || !Number.isInteger(event.round)) continue;
     if (event.ok !== true || event.txStatus !== "success") {
       summary.failedBets += 1;
+      const errorKind = SAFE_BET_ERROR_KINDS.has(event.errorKind) ? event.errorKind : "unknown";
+      summary.failedBetErrorKinds[errorKind] = (summary.failedBetErrorKinds[errorKind] ?? 0) + 1;
+      const errorFamily = classifyFailedBetFamily(event);
+      summary.failedBetFamilies[errorFamily] = (summary.failedBetFamilies[errorFamily] ?? 0) + 1;
+      summary.failedBetModes[event.mode] = (summary.failedBetModes[event.mode] ?? 0) + 1;
+      const role = SAFE_SOAK_ROLES.has(event.role) ? event.role : "UNKNOWN";
+      summary.failedBetRoles[role] = (summary.failedBetRoles[role] ?? 0) + 1;
+      summary.consecutiveFailedBetsByRole[role] = (summary.consecutiveFailedBetsByRole[role] ?? 0) + 1;
+      summary.maxConsecutiveFailedBetsByRole[role] = Math.max(
+        summary.maxConsecutiveFailedBetsByRole[role] ?? 0,
+        summary.consecutiveFailedBetsByRole[role],
+      );
+      const stage = event.txStatus === "reverted"
+        ? "receipt-reverted"
+        : typeof event.hash === "string" && /^0x[a-fA-F0-9]{64}$/.test(event.hash)
+          ? "post-send-unconfirmed"
+          : "pre-send";
+      summary.failedBetStages[stage] = (summary.failedBetStages[stage] ?? 0) + 1;
       continue;
     }
     summary.successfulBets += 1;
+    const successRole = SAFE_SOAK_ROLES.has(event.role) ? event.role : "UNKNOWN";
+    summary.successfulBetRoles[successRole] = (summary.successfulBetRoles[successRole] ?? 0) + 1;
+    summary.consecutiveFailedBetsByRole[successRole] = 0;
     if (Number.isFinite(event.durationMs) && event.durationMs >= 0) latencies.push(event.durationMs);
     for (const key of Object.keys(phaseLatencies)) {
       if (Number.isFinite(event[key]) && event[key] >= 0) phaseLatencies[key].push(event[key]);

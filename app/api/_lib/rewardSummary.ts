@@ -2,6 +2,7 @@ import { formatUnits, parseAbi } from "viem";
 import { CONTRACT_ADDRESS, isSafePositiveInteger, publicClient } from "./dataBridge";
 import { parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import { getEpochMapByIds, upsertEpochMap } from "../../../server/storage";
+import { createRouteCache } from "./routeCache";
 
 const READ_ABI = parseAbi([
   "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
@@ -12,6 +13,7 @@ const READ_ABI = parseAbi([
 const MULTICALL_CHUNK = 100;
 const MAX_EPOCHS_PER_REQUEST = 400;
 const REWARD_SUMMARY_CACHE_TTL_MS = 30_000;
+const REWARD_SUMMARY_CACHE_MAX_KEYS = 200;
 
 export type RewardEpochRow = {
   winningTile: number;
@@ -43,13 +45,7 @@ type RewardEpochRuntimeRow = {
   isWeeklyJackpot: boolean;
 };
 
-type RewardSummaryCacheEntry = {
-  payload: RewardMapsForUserEpochs;
-  expiresAt: number;
-};
-
-const rewardSummaryCache = new Map<string, RewardSummaryCacheEntry>();
-const rewardSummaryInflight = new Map<string, Promise<RewardMapsForUserEpochs>>();
+const rewardSummaryCache = createRouteCache<RewardMapsForUserEpochs>(REWARD_SUMMARY_CACHE_MAX_KEYS);
 
 function getRewardSummaryCacheKey(user: string, epochs: number[]) {
   return `${user.toLowerCase()}:${epochs.join(",")}`;
@@ -146,13 +142,12 @@ export async function loadRewardMapsForUserEpochs(
   }
 
   const cacheKey = getRewardSummaryCacheKey(normalizedUser, normalizedEpochs);
-  const now = Date.now();
-  const cached = rewardSummaryCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    return cached.payload;
+  const cached = rewardSummaryCache.getFresh(cacheKey);
+  if (cached) {
+    return cached;
   }
 
-  const inflight = rewardSummaryInflight.get(cacheKey);
+  const inflight = rewardSummaryCache.getInflight(cacheKey);
   if (inflight) {
     return inflight;
   }
@@ -226,16 +221,11 @@ export async function loadRewardMapsForUserEpochs(
     return { epochs: serializedEpochs, rewards };
   })()
     .then((payload) => {
-      rewardSummaryCache.set(cacheKey, {
-        payload,
-        expiresAt: Date.now() + REWARD_SUMMARY_CACHE_TTL_MS,
-      });
-      return payload;
+      return rewardSummaryCache.set(cacheKey, payload, REWARD_SUMMARY_CACHE_TTL_MS);
     })
     .finally(() => {
-      rewardSummaryInflight.delete(cacheKey);
+      rewardSummaryCache.clearInflight(cacheKey);
     });
 
-  rewardSummaryInflight.set(cacheKey, task);
-  return task;
+  return rewardSummaryCache.setInflight(cacheKey, task);
 }

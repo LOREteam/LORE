@@ -137,7 +137,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
           </InfoBox>
           <InfoBox emoji="🔥" title="Burn & Safety Pool Fee">
             1% of every round is permanently burned (sent to <Code>0x...dEaD</Code>), reducing supply forever.
-            2% goes to protocol accounting: half to treasury and half to a Safety Pool for players who missed the winning tile.
+            2% goes to protocol accounting: 0.05% rewards the resolver, then the remaining 1.95% is split approximately equally between treasury and the Safety Pool.
           </InfoBox>
           <P>
             No one can print new tokens, freeze transfers, or blacklist your wallet - the token is simple and predictable.

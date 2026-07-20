@@ -120,8 +120,10 @@ async function getInitialRecentWins() {
 }
 
 export default async function Page() {
-  const initialLiveState = await getInitialLiveState();
-  const initialRecentWins = await getInitialRecentWins();
+  const [initialLiveState, initialRecentWins] = await Promise.all([
+    getInitialLiveState(),
+    getInitialRecentWins(),
+  ]);
   return (
     <LineaOreClient
       initialLiveState={initialLiveState}

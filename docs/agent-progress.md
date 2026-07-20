@@ -7,23 +7,30 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Active Handoff
 
-- The latest durable soak completed 433 successful unique bets with no duplicate
-  transactions or nonces, then stopped at the 20-failure safety gate. Two
-  receipts reverted; 13 later pre-send failures were transient
-  `eth_estimateGas` method-unavailable responses. A bounded estimate-only retry
-  now covers approve and all bet modes without retrying transaction sends.
-- Typecheck, logic tests, and transaction-free soak dry-run pass. The next live
-  start stopped before any transaction because `AUTOMINER_B` is below the
-  native-gas preflight minimum. Keep `AUTOMINER_C` excluded; restart only after
-  the funded role passes the unchanged minimum.
-- A 1,440-round Linea Sepolia soak started at 2026-07-16T23:01:20Z with
-  randomized 0.01-0.05 LINEA totals, 1-25 tiles, four wallet roles, and
-  pre-dispatch RPC failover injection, but the managed execution session ended
-  early. The retained diagnostic log contains 11 successful bets in 11 unique
-  epochs, 10 successful resolves, all four bet modes, and zero failed bets,
-  failed resolves, nonce gaps, or duplicate transaction evidence. It is not a
-  completed soak proof. Evidence is in
-  `data/live-test-runs/live-canary-2026-07-16T23-01-20-253Z.jsonl`.
+- The managed three-role Linea Sepolia soak stopped safely after 384 successful
+  unique bets/epochs/transactions/nonces and 20 consecutive pre-send failures
+  from `AUTOMINER_A`. It recorded zero duplicate tx/nonces, zero on-chain
+  reverts, zero health failures, stable RSS/DB/WAL, and one slow send.
+- A transaction-free rerun identified insufficient native gas for
+  `AUTOMINER_A` and `AUTOMINER_B`. Do not restart until both roles pass the
+  unchanged gas preflight; keep `AUTOMINER_C` excluded.
+- The current uncommitted hardening batch fixes alert-delivery retry state,
+  bounds route/reward/rebate/jackpot cache metadata, deduplicates forced rebate
+  refreshes, redacts console/server errors, makes small Safety Pool claims an
+  explicit two-step choice, traps focus in blocking dialogs, and adds financial
+  chain-accounting replay.
+- Route-cache writes now supersede older async builds without allowing stale
+  watermark/snapshot commits. Direct epochs, rewards, and private data-sync
+  builds release version metadata on both success and failure.
+- A second claim/settlement/flush symmetry pass found no new contract change:
+  all external money-moving paths remain non-reentrant, close liabilities before
+  transfer, and preserve atomic rollback and duplicate-safe batch behavior.
+- Focused typecheck, business logic, monitoring drill, contract invariants,
+  dependency audit, production build, responsive browser smoke, HTTP smoke, and
+  diff hygiene pass. The required MetaMask connector remains installed because
+  wagmi/Privy resolves it during production compilation.
+- The latest and fixed historical chain/indexer audit windows both pass after an
+  integrity-checked backup and one bounded legacy fee-flush repair pass.
 - Active objective: monitor the accepted Linea Sepolia testnet candidate and fix
   only evidence-backed regressions.
 - Mainnet G1-G14 collection and transition work are paused.
@@ -34,6 +41,23 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 - Preserve visible live-state and pool-chart freshness.
 
 ## Latest Completed Work
+
+## 2026-07-20 - Trusted proxy deployment contract
+
+- Closed an operational spoofing ambiguity in the production runbook: the edge
+  must strip all client-supplied trust/IP headers, inject its protected secret,
+  overwrite one verified client-IP header, and block direct public access to
+  the app origin. Business-logic guards preserve these requirements. Real
+  proxy/two-replica evidence remains an external staging check.
+
+## 2026-07-20 - Dialog focus recovery hardening
+
+- Hardened the shared dialog focus trap used by the backup gate and first-visit
+  tutorial: hidden and `aria-hidden` controls are excluded, initial focus falls
+  back to the dialog container, and Tab/Shift+Tab recover focus if it escapes
+  the active dialog. Focused ESLint, business-logic guards, typecheck,
+  production build, and full responsive browser smoke pass; the temporary
+  local server was stopped afterward.
 
 ## 2026-07-20 - Indexed claim candidate pagination
 
@@ -745,3 +769,39 @@ file grows beyond a compact handoff.
 - Reward/rebate discovery now pages only indexed participating epochs and prefers the embedded Privy address; storage pagination and duplicate-boundary coverage pass.
 - Fixed two browser-smoke races: empty-state coverage now uses a valid positive epoch, and same-epoch chart freshness waits for a request made after the pool mutation. Scoped ESLint, production HTTP smoke, and the full responsive browser smoke pass.
 - A funded three-role testnet soak is running under the managed supervisor with `AUTOMINER_C` excluded. Preserve this worktree snapshot and monitor it through `soak:testnet:status`; do not start a second supervisor.
+
+## 2026-07-20 - Soak safety stop and final local baseline
+
+- The managed run produced 384 successful unique bets across the three funded
+  roles with no duplicate tx/nonces, no on-chain revert, and healthy runtime,
+  DB, WAL, and disk telemetry. It stopped at the configured 20-failure gate
+  after only `AUTOMINER_A` began failing before send.
+- The required transaction-free rerun failed closed before any transaction and
+  identified insufficient native gas for `AUTOMINER_A` and `AUTOMINER_B`.
+- Added bounded nested Viem custom-error decoding and the missing
+  `ERC20InsufficientBalance` ABI declaration so future status can distinguish
+  funding, epoch-state, nonce-state, and contract-call failures without raw
+  provider errors.
+- Restored `@metamask/connect-evm`: wagmi/Privy requires it during production
+  compilation. Typecheck, business logic, V9 invariants, production build,
+  responsive browser smoke, HTTP smoke, and diff hygiene pass.
+- Fixed the historical chain/indexer accounting audit so it does not require a
+  configured multicall contract. The first real run exposed four legacy missing
+  fee-flush rows; after an integrity-checked SQLite backup and one bounded
+  indexer repair pass, both the latest 50-epoch window and the original fixed
+  historical window pass with zero accounting or event mismatches.
+- The homepage now loads independent live-state and recent-wins SSR bootstrap
+  data concurrently instead of adding their cold waits. On the same local
+  production profile, homepage p95 improved from 1,545 ms to 1,279 ms, total p95
+  from 994 ms to 854 ms, and throughput from about 322 to 390 req/s. The new run
+  completed 23,437 requests with zero unexpected failures; it is local evidence,
+  not a substitute for final HTTPS canary load proof.
+- Corrected the remaining White Paper sentence that described the protocol fee
+  as an exact half split before the resolver reward. Public copy now consistently
+  states 0.05% resolver reward followed by an approximately equal split of the
+  remaining 1.95%; the source guard and business-logic suite pass.
+- Safety Pool state now resets its loaded/cache timing when the active Privy
+  address changes and invalidates the previous wallet's in-flight response. This
+  prevents stale balance/history display and a delayed cross-wallet overwrite;
+  scoped lint, logic, typecheck, production build, and responsive browser smoke
+  pass.

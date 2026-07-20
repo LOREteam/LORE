@@ -368,6 +368,7 @@ export function useRebate(options?: UseRebateOptions) {
   const cachedPayloadRef = useRef<Record<string, CachedRebateInfo | null>>({});
   const claimPlanCacheRef = useRef<Record<string, { kind: ClaimPlanKind; savedAt: number } | null>>({});
   const exactAttemptVersionRef = useRef<number | null>(null);
+  const activeRebateAddressRef = useRef<string | null>(null);
   const rebateAddress = useMemo(() => {
     const candidate = options?.preferredAddress ?? address;
     if (!candidate) return null;
@@ -392,6 +393,7 @@ export function useRebate(options?: UseRebateOptions) {
 
   const resetState = useCallback(() => {
     if (!mountedRef.current) return;
+    requestIdRef.current += 1;
     setRebateEpochs([]);
     setClaimableEpochs([]);
     setClaimableEpochCount(0);
@@ -408,6 +410,13 @@ export function useRebate(options?: UseRebateOptions) {
     lastPayloadRef.current = null;
     exactAttemptVersionRef.current = null;
   }, []);
+
+  useEffect(() => {
+    if (activeRebateAddressRef.current === rebateAddress) return;
+    activeRebateAddressRef.current = rebateAddress;
+    cacheSavedAtRef.current = null;
+    resetState();
+  }, [rebateAddress, resetState]);
 
   const applyPayload = useCallback((payload: ApiRebatePayload) => {
     if (!mountedRef.current) return false;
@@ -802,14 +811,6 @@ export function useRebate(options?: UseRebateOptions) {
         return;
       }
 
-      if (isSafetyPoolClaimBelowMinimum(pendingRebateWei, MIN_SAFETY_POOL_CLAIM_WEI)) {
-        notify?.(
-          `Safety Pool claim is below the ${MIN_SAFETY_POOL_CLAIM_FORMATTED} LINEA minimum. Wait for more claimable epochs before paying gas.`,
-          "info",
-        );
-        return;
-      }
-
       notify?.("Preparing Safety Pool claim. Confirm the wallet prompt if it appears.", "info");
       const estimateClaimGas = async (epochArgs: bigint[]) => {
         try {
@@ -1017,7 +1018,6 @@ export function useRebate(options?: UseRebateOptions) {
     claimableEpochs,
     formatRebateError,
     notify,
-    pendingRebateWei,
     publicClient,
     rebateAddress,
     rebateEpochs,

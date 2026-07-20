@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
+  applyRuntimeIssueDeliveryResult,
   createTelegramAlertSender,
   evaluateChainIndexerAudit,
   evaluateBackupFreshness,
@@ -40,6 +41,36 @@ const sender = createTelegramAlertSender({
     return { ok: true };
   },
 });
+
+const failedDeliveries = [];
+const retryingSender = createTelegramAlertSender({
+  env: {
+    ALERT_TELEGRAM_BOT_TOKEN: "test-token",
+    ALERT_TELEGRAM_CHAT_ID: "test-chat",
+  },
+  now: () => now,
+  fetchImpl: async () => {
+    failedDeliveries.push(now);
+    return { ok: failedDeliveries.length > 1 };
+  },
+});
+assert.equal(await retryingSender.send("retry", "retry-key"), false);
+assert.equal(await retryingSender.send("retry", "retry-key"), true, "failed delivery must not consume cooldown");
+assert.equal(failedDeliveries.length, 2);
+
+const deliveryRetryState = new Map([["alert-key", "Alert message"]]);
+applyRuntimeIssueDeliveryResult(
+  deliveryRetryState,
+  { kind: "alert", key: "alert-key", message: "Alert message" },
+  { configured: true, delivered: false },
+);
+assert.equal(deliveryRetryState.has("alert-key"), false, "failed alert must be eligible on the next poll");
+applyRuntimeIssueDeliveryResult(
+  deliveryRetryState,
+  { kind: "recovery", key: "recovery-key", message: "Recovery message" },
+  { configured: true, delivered: false },
+);
+assert.equal(deliveryRetryState.get("recovery-key"), "Recovery message", "failed recovery must be retried while healthy");
 
 const unhealthy = evaluateRuntimeSnapshot({
   runtime: { status: "degraded", redacted: false, process: { rssBytes: 2_000 } },
