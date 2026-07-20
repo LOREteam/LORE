@@ -1867,8 +1867,8 @@ async function main() {
   const dialogFocusTrapSource = readFileSync("app/hooks/useDialogFocusTrap.ts", "utf8");
   assert.match(
     dialogFocusTrapSource,
-    /getClientRects\(\)\.length > 0[\s\S]*aria-hidden/,
-    "dialog focus traps must skip hidden or aria-hidden controls",
+    /getClientRects\(\)\.length > 0[\s\S]*closest\("\[aria-hidden='true'\]"\)/,
+    "dialog focus traps must skip hidden controls and aria-hidden subtrees",
   );
   assert.match(
     dialogFocusTrapSource,

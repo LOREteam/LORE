@@ -20,7 +20,7 @@ export function useDialogFocusTrap<T extends HTMLElement>(active: boolean, onEsc
     const container = containerRef.current;
     const focusable = () =>
       Array.from(container?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? []).filter(
-        (element) => element.getClientRects().length > 0 && element.getAttribute("aria-hidden") !== "true",
+        (element) => element.getClientRects().length > 0 && !element.closest("[aria-hidden='true']"),
       );
     (focusable()[0] ?? container)?.focus();
 
