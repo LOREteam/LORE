@@ -15,6 +15,10 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Exact commit `00ba0570` passes a detached clean-checkout reproduction:
+  lockfile install, wallet dependency-tree integrity, typecheck, business
+  logic, V9 invariants, and production build without a copied `.env`.
+  EIP-7702 remained disabled and the temporary worktree was removed.
 - The latest local hardening candidate passes V9 invariants, production build,
   full responsive browser smoke, and all HTTP checks with the documented
   local-only identity fixture. A preceding no-fixture HTTP run correctly failed

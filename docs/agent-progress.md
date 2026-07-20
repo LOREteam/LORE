@@ -43,6 +43,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Exact clean-checkout reproduction after hardening
+
+- Detached commit `00ba0570` installed from the lockfile in an isolated
+  worktree and passed wallet dependency-tree integrity, typecheck, business
+  logic, V9 invariants, and production build without copying `.env`.
+- Install initially hit Windows sandbox `EPERM` on the shared npm cache; the
+  permitted retry succeeded. EIP-7702 stayed disabled and the temporary
+  worktree was removed after verification.
+
 ## 2026-07-20 - Post-hardening production baseline
 
 - Re-ran V9 contract invariants and the production build after the claim,
