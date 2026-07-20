@@ -43,6 +43,17 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Post-hardening production baseline
+
+- Re-ran V9 contract invariants and the production build after the claim,
+  resolver, console, storage, and secret hardening commits; both pass and the
+  build confirms EIP-7702 remains disabled.
+- Full local responsive browser smoke passes, including wallet selectors,
+  number typography, empty/fresh pool chart, Safety Pool, mobile overflow, and
+  accessible control names. HTTP smoke first failed closed at 503 without
+  trusted proxy identity, then all checks passed with the documented local-only
+  weak-identity fixture. The temporary production server was stopped.
+
 ## 2026-07-20 - SQLite operational error redaction
 
 - All shared SQLite write, transaction rollback, and scoped-artifact cleanup

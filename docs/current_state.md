@@ -15,6 +15,10 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- The latest local hardening candidate passes V9 invariants, production build,
+  full responsive browser smoke, and all HTTP checks with the documented
+  local-only identity fixture. A preceding no-fixture HTTP run correctly failed
+  closed at 503. EIP-7702 stayed disabled and the temporary server was stopped.
 - Exact commit `3bc812e` passes a detached clean-checkout reproduction: `npm ci`,
   wallet peer integrity, full lint, typecheck, business logic, V9 invariants,
   optimizer/Osaka compilation provenance, SQLite operations, monitoring alert
