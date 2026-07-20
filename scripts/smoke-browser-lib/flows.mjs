@@ -226,10 +226,30 @@ export async function selectSingleTile(page, options) {
 export async function openMobileAnalytics(page, options) {
   const { baseUrl, timeoutMs } = options;
   const tabTimeoutMs = Math.min(timeoutMs, 8_000);
-  const verifyRefreshTarget = async () => {
-    const box = await page.getByRole("button", { name: "Refresh deposits" }).boundingBox();
-    if (!box || box.width < 44 || box.height < 44) {
-      throw new Error("mobile analytics refresh touch target must be at least 44px");
+  const verifyTouchTargets = async () => {
+    const undersized = await page.evaluate(() => [...document.querySelectorAll(
+      'button, input:not([type="hidden"]), select, textarea, [role="button"]',
+    )]
+      .filter((element) => {
+        if (!(element instanceof HTMLElement) || element.hasAttribute("disabled")) return false;
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) > 0
+          && rect.width > 0 && rect.height > 0;
+      })
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          label: element.getAttribute("aria-label") || element.getAttribute("title")
+            || element.textContent?.trim().replace(/\s+/g, " ").slice(0, 40) || element.tagName,
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        };
+      })
+      .filter((target) => target.width < 44 || target.height < 44)
+      .slice(0, 10));
+    if (undersized.length > 0) {
+      throw new Error(`mobile analytics touch targets below 44px: ${JSON.stringify(undersized)}`);
     }
   };
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -242,9 +262,10 @@ export async function openMobileAnalytics(page, options) {
           || document.body.innerText.includes("Achievements");
       }, undefined, { timeout: tabTimeoutMs });
       await expectVisible(page.getByRole("heading", { name: "My Deposits" }), "mobile analytics deposits panel", tabTimeoutMs);
-      await verifyRefreshTarget();
+      await verifyTouchTargets();
       return;
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("mobile analytics touch targets")) throw error;
       if (attempt <= 2) {
         try {
           await page.evaluate(() => {
@@ -263,9 +284,10 @@ export async function openMobileAnalytics(page, options) {
               || document.body.innerText.includes("Achievements");
           }, undefined, { timeout: tabTimeoutMs });
           await expectVisible(page.getByRole("heading", { name: "My Deposits" }), "mobile analytics deposits panel", tabTimeoutMs);
-          await verifyRefreshTarget();
+          await verifyTouchTargets();
           return;
-        } catch {
+        } catch (error) {
+          if (error instanceof Error && error.message.startsWith("mobile analytics touch targets")) throw error;
           // fall through to retry path below
         }
       }

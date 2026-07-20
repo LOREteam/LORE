@@ -58,6 +58,10 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   regression below 44px. Analytics deposit/jackpot refresh controls are 44px;
   mobile smoke measures the visible deposit refresh target. Typecheck, focused
   lint, production build, and responsive browser smoke pass.
+- Mobile Analytics smoke now scans every visible interactive control instead of
+  one known refresh button and preserves accessibility failures across
+  navigation retries. It exposed and fixed a 30px `Load History` action; the
+  strict scan, typecheck, lint, build, and responsive smoke pass.
 
 ## 2026-07-20 - Route-cache ownership race hardening
 

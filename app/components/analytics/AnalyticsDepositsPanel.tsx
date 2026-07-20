@@ -138,6 +138,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
             variant="sky"
             size="sm"
             uppercase
+            className="min-h-11"
           >
             {depositsLoading ? <LoreText items={loadingQuotes} /> : "Load History"}
           </UiButton>

@@ -25,6 +25,9 @@ Open linked evidence only when a task needs it.
 - Chat header controls cannot flex-shrink below their measured 44px target, and
   Analytics refresh controls use the same floor. Mobile Analytics measurement,
   typecheck, production build, and responsive browser smoke pass.
+- Mobile Analytics now has a complete visible-control 44px scan. The scan found
+  and fixed the undersized history-load action and no longer retries away an
+  accessibility assertion failure.
 
 - Versioned route-cache cleanup is ownership-aware for both request builds and
   background refreshes. An invalidated older promise cannot remove a newer
