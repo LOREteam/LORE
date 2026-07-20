@@ -1,6 +1,7 @@
 import { readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { parseUnits } from "viem";
+import { sanitizeSentryPayload } from "../app/lib/sentrySanitize";
 import {
   getConfiguredContractAddress,
   getConfiguredLineaNetwork,
@@ -152,6 +153,13 @@ function parseAmountWei(value: unknown) {
   }
 }
 
+function describeStorageError(error: unknown) {
+  return sanitizeSentryPayload({
+    name: error instanceof Error ? error.name : "Error",
+    message: error instanceof Error ? error.message : String(error),
+  });
+}
+
 function runInTransaction<T>(action: () => T, label = "tx"): T {
   db.exec("BEGIN IMMEDIATE");
   let committed = false;
@@ -165,10 +173,12 @@ function runInTransaction<T>(action: () => T, label = "tx"): T {
       try {
         db.exec("ROLLBACK");
       } catch (rollbackErr) {
-        console.error("[storage] Rollback failed:", rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr));
+        const details = describeStorageError(rollbackErr);
+        console.error(`[storage] Rollback failed: ${details.name}: ${details.message}`);
       }
     }
-    console.error(`[storage] ${label} failed:`, error instanceof Error ? error.message : String(error));
+    const details = describeStorageError(error);
+    console.error(`[storage] ${label} failed: ${details.name}: ${details.message}`);
     throw error;
   }
 }
@@ -177,7 +187,8 @@ function runWrite<T>(action: () => T, label = "write"): T {
   try {
     return action();
   } catch (error) {
-    console.error(`[storage] ${label} failed:`, error instanceof Error ? error.message : String(error));
+    const details = describeStorageError(error);
+    console.error(`[storage] ${label} failed: ${details.name}: ${details.message}`);
     throw error;
   }
 }
@@ -271,7 +282,8 @@ function purgeLegacyScopedDbFiles(currentDbPath: string) {
       rmSync(join(dbDir, entry), { force: true });
       removedCount += 1;
     } catch (error) {
-      console.warn("[storage] Failed to remove non-current DB artifact:", entry, error instanceof Error ? error.message : String(error));
+      const details = describeStorageError(error);
+      console.warn(`[storage] Failed to remove non-current DB artifact ${entry}: ${details.name}: ${details.message}`);
     }
   }
 

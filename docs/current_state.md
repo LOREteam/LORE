@@ -64,6 +64,9 @@ Open linked evidence only when a task needs it.
   salvage path. Bootstrap resolve also denies production sends when its SQLite
   coordination lock is unavailable, while retaining the memory throttle only
   for development. Logic, TypeScript, and focused ESLint pass.
+- Shared SQLite write, rollback, and cleanup errors sanitize their operational
+  name/message before console output. Indexer storage, logic, TypeScript, and
+  focused ESLint pass.
 - Exact commit `02e3660` passed a detached clean-checkout reproduction: lockfile
   install, wallet dependency integrity, production audit, lint, typecheck,
   business logic, contract invariants, compile provenance, SQLite operations,

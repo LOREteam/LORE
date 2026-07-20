@@ -1622,6 +1622,16 @@ async function main() {
     /Number\(row\.(?:epoch|blockNumber)\)/,
     "storage upserts must not write unvalidated row epoch or blockNumber values",
   );
+  assert.match(
+    storageSource,
+    /function describeStorageError[\s\S]*sanitizeSentryPayload/,
+    "storage write and cleanup errors must use the shared server-side redaction boundary",
+  );
+  assert.doesNotMatch(
+    storageSource,
+    /console\.(?:error|warn)\([^\n]*(?:error|rollbackErr) instanceof Error/,
+    "storage write errors must not print raw provider or database messages",
+  );
   const dataBridgeSource = readFileSync("app/api/_lib/dataBridge.ts", "utf8");
   assert.match(
     dataBridgeSource,

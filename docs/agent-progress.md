@@ -43,6 +43,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - SQLite operational error redaction
+
+- All shared SQLite write, transaction rollback, and scoped-artifact cleanup
+  errors now pass through the existing server sanitizer before console output.
+  Operational error name/message remain available without exposing embedded
+  wallet, RPC, URL, token, or secret-like fragments.
+- Indexer storage, business logic, TypeScript, focused ESLint, and diff hygiene
+  pass.
+
 ## 2026-07-20 - Claim and resolver duplicate-send guards
 
 - Safety Pool batch claiming now exits immediately on wallet rejection and
