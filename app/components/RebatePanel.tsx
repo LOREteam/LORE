@@ -20,6 +20,9 @@ interface RebatePanelProps {
     isEstimatingClaimPlan?: boolean;
     minClaimAmount?: string;
     isBelowClaimMinimum?: boolean;
+    isLoadingOlder?: boolean;
+    hasMoreOlder?: boolean;
+    loadOlder?: () => Promise<boolean>;
     recentEpochs: Array<{
       epoch: number;
       pending: string;
@@ -53,6 +56,8 @@ export const RebatePanel = React.memo(function RebatePanel({
   const isEstimatingClaimPlan = rebateInfo?.isEstimatingClaimPlan ?? false;
   const minClaimAmount = rebateInfo?.minClaimAmount ?? "100";
   const isBelowClaimMinimum = rebateInfo?.isBelowClaimMinimum ?? false;
+  const isLoadingOlder = rebateInfo?.isLoadingOlder ?? false;
+  const hasMoreOlder = rebateInfo?.hasMoreOlder ?? false;
   const showInitialSkeleton = isLoading && !hasLoaded;
   const freshnessMessage =
     rebateInfo?.dataFreshness === "offline"
@@ -244,6 +249,18 @@ export const RebatePanel = React.memo(function RebatePanel({
               ))}
             </div>
           )}
+          {hasMoreOlder && rebateInfo?.loadOlder ? (
+            <UiButton
+              onClick={() => void rebateInfo.loadOlder?.()}
+              loading={isLoadingOlder}
+              variant="ghost"
+              size="sm"
+              fullWidth
+              className="mt-3"
+            >
+              {isLoadingOlder ? "Loading older epochs..." : "Load older epochs"}
+            </UiButton>
+          ) : null}
         </UiPanel>
       </div>
     </div>

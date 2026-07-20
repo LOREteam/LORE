@@ -41,6 +41,20 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-20 - Paginated Safety Pool history
+
+- Added a rate-limited, no-store Safety Pool history page over indexed wallet
+  participation. Each explicit request reads at most 32 epochs in one atomic
+  multicall; partial RPC results fail the page without advancing its cursor.
+- The Safety Pool tab can load older epochs on demand. Pages are deduplicated,
+  overflow balances join the visible total and claim plan, refresh cannot erase
+  loaded pages, and claim completion clears stale older rows before reloading.
+- Normalization, merge, bounded-route, and explicit-load guards pass with
+  focused ESLint, business logic, TypeScript, diff hygiene, and a production
+  build that registers `/api/rebate-history`. Full local HTTP smoke remains
+  fail-closed without the trusted-proxy identity fixture; the limiter returned
+  503 before route validation and was not weakened for this check.
+
 ## 2026-07-20 - Wallet Settings focus-trap reuse
 
 - Wallet Settings now uses the shared dialog focus trap instead of maintaining
@@ -113,9 +127,9 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   invariants, and business-logic tests pass. Dependency audit remains at zero
   critical/high advisories; moderate/low wallet-tree upgrades remain separate
   compatibility work.
-- Full indexed Safety Pool history is still open: the normal rebate summary is
-  intentionally capped at 5,000 participating epochs until a bounded load-older
-  UX accumulates and verifies additional pages on demand.
+- Full indexed Safety Pool history is available through bounded on-demand pages;
+  the normal background rebate summary remains capped at 5,000 participating
+  epochs so routine refresh does not become an unbounded RPC scan.
 - Codex Security scan `7c15831c-78e4-4e9c-9ae2-b1b6a6932abc` has complete
   2/2 coverage artifacts and zero findings for its old snapshot, but finalization
   now rejects it because repository HEAD changed. Do not treat it as coverage of

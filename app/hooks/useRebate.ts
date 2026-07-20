@@ -73,6 +73,14 @@ interface ApiRebatePayload {
   error?: string;
 }
 
+interface ApiRebateHistoryPayload {
+  isSupported?: boolean;
+  rows: ApiRebateEpochInfo[];
+  hasMore: boolean;
+  nextCursor: number | null;
+  error?: string;
+}
+
 type CachedRebateInfo = Omit<ApiRebatePayload, "error"> & { cachedAt: number };
 
 const GAS_CLAIM_REBATES = BigInt(1_200_000);
@@ -88,6 +96,7 @@ const REBATE_WARM_REFRESH_MS = 90_000;
 const CLAIM_PLAN_CACHE_TTL_MS = 60_000;
 const REBATE_CONFIRM_POLL_INTERVAL_MS = 2_000;
 const REBATE_CONFIRM_ATTEMPTS = Math.max(1, Math.floor(TX_RECEIPT_TIMEOUT_MS / REBATE_CONFIRM_POLL_INTERVAL_MS));
+const REBATE_HISTORY_PAGE_SIZE = 32;
 
 function getRebateCacheKey(address: string) {
   return `lore:rebate:v1:${address.toLowerCase()}`;
@@ -140,6 +149,26 @@ export function normalizeRebatePayload(value: unknown): ApiRebatePayload {
           .filter((row): row is ApiRebateEpochInfo => row !== null)
       : [],
   };
+}
+
+export function normalizeRebateHistoryPayload(value: unknown): ApiRebateHistoryPayload {
+  const data = (value ?? {}) as Record<string, unknown>;
+  const nextCursor = Number(data.nextCursor);
+  return {
+    isSupported: data.isSupported !== false,
+    rows: Array.isArray(data.rows)
+      ? data.rows.map(normalizeRecentEpoch).filter((row): row is ApiRebateEpochInfo => row !== null)
+      : [],
+    hasMore: data.hasMore === true,
+    nextCursor: Number.isSafeInteger(nextCursor) && nextCursor > 0 ? nextCursor : null,
+    error: typeof data.error === "string" ? data.error : undefined,
+  };
+}
+
+export function mergeRebateEpochDetails(base: RebateEpochInfo[], older: RebateEpochInfo[]) {
+  const byEpoch = new Map(older.map((row) => [row.epoch, row]));
+  base.forEach((row) => byEpoch.set(row.epoch, row));
+  return [...byEpoch.values()].sort((a, b) => b.epoch - a.epoch);
 }
 
 function loadCachedRebatePayload(address: string): CachedRebateInfo | null {
@@ -348,6 +377,9 @@ export function useRebate(options?: UseRebateOptions) {
   const [claimableEpochCount, setClaimableEpochCount] = useState(0);
   const [pendingRebateWei, setPendingRebateWei] = useState(0n);
   const [details, setDetails] = useState<RebateEpochInfo[]>([]);
+  const [olderDetails, setOlderDetails] = useState<RebateEpochInfo[]>([]);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const [hasMoreOlder, setHasMoreOlder] = useState(false);
   const [isSupported, setIsSupported] = useState(CONTRACT_HAS_REBATE_API);
   const [claimPlanKind, setClaimPlanKind] = useState<ClaimPlanKind>("none");
   const [isEstimatingClaimPlan, setIsEstimatingClaimPlan] = useState(false);
@@ -369,6 +401,11 @@ export function useRebate(options?: UseRebateOptions) {
   const claimPlanCacheRef = useRef<Record<string, { kind: ClaimPlanKind; savedAt: number } | null>>({});
   const exactAttemptVersionRef = useRef<number | null>(null);
   const activeRebateAddressRef = useRef<string | null>(null);
+  const olderCursorRef = useRef<number | null>(null);
+  const olderInitializedRef = useRef(false);
+  const olderLoadingRef = useRef(false);
+  const olderRequestIdRef = useRef(0);
+  const olderLoadedCountRef = useRef(0);
   const rebateAddress = useMemo(() => {
     const candidate = options?.preferredAddress ?? address;
     if (!candidate) return null;
@@ -384,6 +421,8 @@ export function useRebate(options?: UseRebateOptions) {
     return () => {
       mountedRef.current = false;
       requestIdRef.current += 1;
+      olderRequestIdRef.current += 1;
+      olderLoadingRef.current = false;
       if (timeoutRef.current !== null) {
         window.clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
@@ -399,6 +438,9 @@ export function useRebate(options?: UseRebateOptions) {
     setClaimableEpochCount(0);
     setPendingRebateWei(0n);
     setDetails([]);
+    setOlderDetails([]);
+    setIsLoadingOlder(false);
+    setHasMoreOlder(false);
     setIsSupported(CONTRACT_HAS_REBATE_API);
     setClaimPlanKind("none");
     setIsEstimatingClaimPlan(false);
@@ -409,6 +451,11 @@ export function useRebate(options?: UseRebateOptions) {
     hasLoadedRef.current = false;
     lastPayloadRef.current = null;
     exactAttemptVersionRef.current = null;
+    olderCursorRef.current = null;
+    olderInitializedRef.current = false;
+    olderLoadingRef.current = false;
+    olderRequestIdRef.current += 1;
+    olderLoadedCountRef.current = 0;
   }, []);
 
   useEffect(() => {
@@ -431,7 +478,13 @@ export function useRebate(options?: UseRebateOptions) {
     setClaimableEpochs(payload.claimableEpochList);
     setClaimableEpochCount(payload.claimableEpochCount);
     setPendingRebateWei(BigInt(payload.pendingRebateWei || "0"));
-    setDetails(payload.recentEpochs.map(parseApiEpochInfo).sort((a, b) => b.epoch - a.epoch));
+    const recentDetails = payload.recentEpochs.map(parseApiEpochInfo).sort((a, b) => b.epoch - a.epoch);
+    setDetails(recentDetails);
+    if (!olderInitializedRef.current) {
+      olderInitializedRef.current = true;
+      olderCursorRef.current = recentDetails.at(-1)?.epoch ?? null;
+    }
+    setHasMoreOlder((current) => current || payload.totalEpochs > recentDetails.length + olderLoadedCountRef.current);
     setHasLoaded(true);
     setPayloadVersion((current) => current + 1);
     return true;
@@ -535,7 +588,15 @@ export function useRebate(options?: UseRebateOptions) {
         setClaimableEpochCount(0);
         setPendingRebateWei(0n);
         setDetails([]);
+        setOlderDetails([]);
+        setHasMoreOlder(false);
+        setIsLoadingOlder(false);
       }
+      olderCursorRef.current = null;
+      olderInitializedRef.current = false;
+      olderLoadingRef.current = false;
+      olderRequestIdRef.current += 1;
+      olderLoadedCountRef.current = 0;
       hasLoadedRef.current = true;
       if (mountedRef.current) {
         setHasLoaded(true);
@@ -632,6 +693,51 @@ export function useRebate(options?: UseRebateOptions) {
     }
   }, [applyPayload, enabled, primeFromDisplayCache, rebateAddress, resetState]);
 
+  const loadOlderRebateHistory = useCallback(async () => {
+    if (!enabled || !rebateAddress || olderLoadingRef.current || !hasMoreOlder) return false;
+    olderLoadingRef.current = true;
+    const requestId = ++olderRequestIdRef.current;
+    if (mountedRef.current) setIsLoadingOlder(true);
+
+    try {
+      const query = new URLSearchParams({
+        user: rebateAddress.toLowerCase(),
+        limit: String(REBATE_HISTORY_PAGE_SIZE),
+      });
+      if (olderCursorRef.current !== null) query.set("cursor", String(olderCursorRef.current));
+      const response = await fetchWithTimeout(`/api/rebate-history?${query.toString()}`, { cache: "no-store" });
+      const payload = await readJsonResponse<ApiRebateHistoryPayload>(response);
+      if (!payload) throw new Error(`Empty response from /api/rebate-history (HTTP ${response.status})`);
+      const normalized = normalizeRebateHistoryPayload(payload);
+      if (!response.ok || normalized.error) {
+        throw new Error(normalized.error || `HTTP ${response.status}`);
+      }
+      if (normalized.hasMore && normalized.nextCursor === null) {
+        throw new Error("Safety Pool history returned an invalid continuation cursor");
+      }
+      if (requestId !== olderRequestIdRef.current || activeRebateAddressRef.current !== rebateAddress) return false;
+
+      const pageDetails = normalized.rows.map(parseApiEpochInfo);
+      setOlderDetails((current) => {
+        const merged = mergeRebateEpochDetails(current, pageDetails);
+        olderLoadedCountRef.current = merged.length;
+        return merged;
+      });
+      olderCursorRef.current = normalized.nextCursor;
+      setHasMoreOlder(normalized.hasMore);
+      return true;
+    } catch (error) {
+      log.warn("Rebate", "older history load failed", error);
+      notify?.("Older Safety Pool history could not be loaded. Try again in a moment.", "warning");
+      return false;
+    } finally {
+      if (requestId === olderRequestIdRef.current) {
+        olderLoadingRef.current = false;
+        if (mountedRef.current) setIsLoadingOlder(false);
+      }
+    }
+  }, [enabled, hasMoreOlder, notify, rebateAddress]);
+
   useEffect(() => {
     if (timeoutRef.current !== null) {
       window.clearTimeout(timeoutRef.current);
@@ -702,6 +808,41 @@ export function useRebate(options?: UseRebateOptions) {
     refetchRebateInfo,
   ]);
 
+  const mergedDetails = useMemo(
+    () => mergeRebateEpochDetails(details, olderDetails),
+    [details, olderDetails],
+  );
+  const baseEpochSet = useMemo(() => new Set(rebateEpochs), [rebateEpochs]);
+  const overflowOlderDetails = useMemo(
+    () => olderDetails.filter((row) => !baseEpochSet.has(row.epoch)),
+    [baseEpochSet, olderDetails],
+  );
+  const allRebateEpochs = useMemo(
+    () => [...new Set([...rebateEpochs, ...olderDetails.map((row) => row.epoch)])].sort((a, b) => b - a),
+    [olderDetails, rebateEpochs],
+  );
+  const allClaimableEpochs = useMemo(
+    () => [
+      ...new Set([
+        ...claimableEpochs,
+        ...olderDetails
+          .filter((row) => row.resolved && !row.claimed && row.pendingWei > 0n)
+          .map((row) => row.epoch),
+      ]),
+    ].sort((a, b) => b - a),
+    [claimableEpochs, olderDetails],
+  );
+  const effectivePendingRebateWei = useMemo(
+    () => pendingRebateWei + overflowOlderDetails.reduce((total, row) => total + row.pendingWei, 0n),
+    [overflowOlderDetails, pendingRebateWei],
+  );
+  const effectiveClaimableEpochCount = useMemo(
+    () => Math.max(claimableEpochCount, claimableEpochs.length) + overflowOlderDetails.filter(
+      (row) => row.resolved && !row.claimed && row.pendingWei > 0n,
+    ).length,
+    [claimableEpochCount, claimableEpochs.length, overflowOlderDetails],
+  );
+
   useEffect(() => {
     if (!enabled || !CONTRACT_HAS_REBATE_API) {
       if (mountedRef.current) {
@@ -719,7 +860,7 @@ export function useRebate(options?: UseRebateOptions) {
       return;
     }
 
-    if (claimableEpochs.length === 0) {
+    if (allClaimableEpochs.length === 0) {
       if (mountedRef.current) {
         setClaimPlanKind("none");
         setIsEstimatingClaimPlan(false);
@@ -735,8 +876,8 @@ export function useRebate(options?: UseRebateOptions) {
     }
 
     let cancelled = false;
-    const epochArgs = claimableEpochs.map((epoch) => BigInt(epoch));
-    const cachedPlan = readClaimPlanCache(rebateAddress, claimableEpochs);
+    const epochArgs = allClaimableEpochs.map((epoch) => BigInt(epoch));
+    const cachedPlan = readClaimPlanCache(rebateAddress, allClaimableEpochs);
     if (cachedPlan && Date.now() - cachedPlan.savedAt < CLAIM_PLAN_CACHE_TTL_MS) {
       if (mountedRef.current) {
         setClaimPlanKind(cachedPlan.kind);
@@ -757,12 +898,12 @@ export function useRebate(options?: UseRebateOptions) {
     }).then(() => {
       if (cancelled) return;
       setClaimPlanKind("single");
-      writeClaimPlanCache(rebateAddress, claimableEpochs, "single");
+      writeClaimPlanCache(rebateAddress, allClaimableEpochs, "single");
     }).catch(() => {
       if (cancelled) return;
-      const fallbackKind = claimableEpochs.length > 1 ? "split" : "unknown";
+      const fallbackKind = allClaimableEpochs.length > 1 ? "split" : "unknown";
       setClaimPlanKind(fallbackKind);
-      writeClaimPlanCache(rebateAddress, claimableEpochs, fallbackKind);
+      writeClaimPlanCache(rebateAddress, allClaimableEpochs, fallbackKind);
     }).finally(() => {
       if (cancelled) return;
       setIsEstimatingClaimPlan(false);
@@ -771,10 +912,20 @@ export function useRebate(options?: UseRebateOptions) {
     return () => {
       cancelled = true;
     };
-  }, [active, claimableEpochs, enabled, isPageVisible, publicClient, readClaimPlanCache, rebateAddress, writeClaimPlanCache]);
+  }, [active, allClaimableEpochs, enabled, isPageVisible, publicClient, readClaimPlanCache, rebateAddress, writeClaimPlanCache]);
+
+  const clearOlderRebateHistory = useCallback(() => {
+    olderRequestIdRef.current += 1;
+    olderLoadingRef.current = false;
+    olderCursorRef.current = details.at(-1)?.epoch ?? null;
+    olderLoadedCountRef.current = 0;
+    setOlderDetails([]);
+    setIsLoadingOlder(false);
+    setHasMoreOlder(rebateEpochs.length > details.length);
+  }, [details, rebateEpochs.length]);
 
   const claimRebates = useCallback(async () => {
-    if (!CONTRACT_HAS_REBATE_API || !rebateAddress || !publicClient || rebateEpochs.length === 0) return;
+    if (!CONTRACT_HAS_REBATE_API || !rebateAddress || !publicClient || allRebateEpochs.length === 0) return;
     if (mountedRef.current) {
       setIsClaiming(true);
     }
@@ -798,7 +949,7 @@ export function useRebate(options?: UseRebateOptions) {
         );
       }
 
-      const candidateEpochs = claimableEpochs.length > 0 ? claimableEpochs : rebateEpochs;
+      const candidateEpochs = allClaimableEpochs.length > 0 ? allClaimableEpochs : allRebateEpochs;
       const verifiedClaimableEpochs = await loadClaimableEpochsExact(
         publicClient,
         sender,
@@ -806,6 +957,7 @@ export function useRebate(options?: UseRebateOptions) {
       );
 
       if (verifiedClaimableEpochs.length === 0) {
+        clearOlderRebateHistory();
         await refetchRebateInfo({ forceFresh: true });
         notify?.("No claimable Safety Pool epochs were found. Safety Pool state has been refreshed.", "info");
         return;
@@ -969,8 +1121,10 @@ export function useRebate(options?: UseRebateOptions) {
         ),
         "success",
       );
+      clearOlderRebateHistory();
       await refetchRebateInfo({ forceFresh: true });
     } catch (err) {
+      clearOlderRebateHistory();
       await refetchRebateInfo({ forceFresh: true });
 
       if (isAmbiguousPendingTxError(err)) {
@@ -1014,13 +1168,14 @@ export function useRebate(options?: UseRebateOptions) {
     }
   }, [
     address,
+    allClaimableEpochs,
+    allRebateEpochs,
     claimPlanKind,
-    claimableEpochs,
+    clearOlderRebateHistory,
     formatRebateError,
     notify,
     publicClient,
     rebateAddress,
-    rebateEpochs,
     refetchRebateInfo,
     silentSend,
     confirmClaimBatch,
@@ -1030,31 +1185,37 @@ export function useRebate(options?: UseRebateOptions) {
   const rebateInfo = useMemo(
     () => ({
       isSupported,
-      pendingRebateWei,
-      pendingRebate: formatUnits(pendingRebateWei, 18),
-      claimableEpochs: claimableEpochCount,
-      totalEpochs: rebateEpochs.length,
-      recentEpochs: details,
+      pendingRebateWei: effectivePendingRebateWei,
+      pendingRebate: formatUnits(effectivePendingRebateWei, 18),
+      claimableEpochs: effectiveClaimableEpochCount,
+      totalEpochs: allRebateEpochs.length,
+      recentEpochs: mergedDetails,
       isLoading,
+      isLoadingOlder,
+      hasMoreOlder,
+      loadOlder: loadOlderRebateHistory,
       hasLoaded,
       claimPlanKind,
       dataFreshness,
       isEstimatingClaimPlan,
       minClaimWei: MIN_SAFETY_POOL_CLAIM_WEI,
       minClaimAmount: MIN_SAFETY_POOL_CLAIM_FORMATTED,
-      isBelowClaimMinimum: isSafetyPoolClaimBelowMinimum(pendingRebateWei, MIN_SAFETY_POOL_CLAIM_WEI),
+      isBelowClaimMinimum: isSafetyPoolClaimBelowMinimum(effectivePendingRebateWei, MIN_SAFETY_POOL_CLAIM_WEI),
     }),
     [
+      allRebateEpochs.length,
       claimPlanKind,
-      claimableEpochCount,
       dataFreshness,
-      details,
+      effectiveClaimableEpochCount,
+      effectivePendingRebateWei,
+      hasMoreOlder,
       hasLoaded,
       isEstimatingClaimPlan,
       isLoading,
+      isLoadingOlder,
       isSupported,
-      pendingRebateWei,
-      rebateEpochs.length,
+      loadOlderRebateHistory,
+      mergedDetails,
     ],
   );
 

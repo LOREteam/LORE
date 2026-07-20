@@ -2495,6 +2495,34 @@ async function main() {
     rebate.normalizeRebatePayload({ pendingRebateWei: "bad" }).pendingRebateWei,
     "0",
   );
+  assert.deepEqual(
+    rebate.normalizeRebateHistoryPayload({
+      rows: [
+        { epoch: 12, pendingWei: "7", pending: "0.0000", resolved: true },
+        { epoch: "bad", pendingWei: "9" },
+      ],
+      hasMore: true,
+      nextCursor: 12,
+    }),
+    {
+      isSupported: true,
+      rows: [{ epoch: 12, pendingWei: "7", pending: "0.0000", claimed: false, resolved: true, userVolumeWei: "0", rebatePoolWei: "0" }],
+      hasMore: true,
+      nextCursor: 12,
+      error: undefined,
+    },
+  );
+  assert.equal(rebate.normalizeRebateHistoryPayload({ hasMore: true, nextCursor: "bad" }).nextCursor, null);
+  assert.deepEqual(
+    rebate.mergeRebateEpochDetails(
+      [{ epoch: 8, pendingWei: 2n, pending: "2", claimed: false, resolved: true, userVolumeWei: 1n, rebatePoolWei: 2n }],
+      [
+        { epoch: 8, pendingWei: 1n, pending: "1", claimed: false, resolved: true, userVolumeWei: 1n, rebatePoolWei: 1n },
+        { epoch: 7, pendingWei: 3n, pending: "3", claimed: false, resolved: true, userVolumeWei: 1n, rebatePoolWei: 3n },
+      ],
+    ).map((row) => [row.epoch, row.pendingWei]),
+    [[8, 2n], [7, 3n]],
+  );
 
   const rewardScanNow = 1_000_000;
   assert.equal(rewardScanner.normalizeRewardScanEpochString("42"), "42");
@@ -2691,6 +2719,7 @@ async function main() {
     "Safety Pool panel must show a stable visible freshness hint when serving stale data",
   );
   const rebatesRouteSource = readFileSync("app/api/rebates/route.ts", "utf8");
+  const rebateHistoryRouteSource = readFileSync("app/api/rebate-history/route.ts", "utf8");
   assert.match(
     rebatesRouteSource,
     /isSafePositiveInteger/,
@@ -2718,6 +2747,16 @@ async function main() {
   );
   assert.doesNotMatch(depositsRouteSource, /deposits: \[\], error: message/);
   assert.doesNotMatch(rebatesRouteSource, /error: message/);
+  assert.match(
+    rebateHistoryRouteSource,
+    /MAX_PAGE_SIZE = 64[\s\S]*allowFailure: false/,
+    "older Safety Pool history must stay bounded and fail the whole page instead of skipping unread epochs",
+  );
+  assert.match(
+    rebatePanelSource,
+    /Load older epochs/,
+    "Safety Pool must expose explicit on-demand older history instead of background historical polling",
+  );
   assert.doesNotMatch(jackpotsRouteSource, /error: message/);
   const liveRoundCanarySource = readFileSync("scripts/live-round-canary.ts", "utf8");
   const soakSupervisorSource = readFileSync("scripts/run-testnet-soak-supervisor.mjs", "utf8");
