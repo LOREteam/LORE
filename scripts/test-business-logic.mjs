@@ -2462,6 +2462,22 @@ async function main() {
     /Number\(b\.epoch\)\s*-\s*Number\(a\.epoch\)/,
     "jackpot history must not sort with unchecked epoch numbers",
   );
+  const analyticsAncillarySource = readFileSync("app/hooks/useAnalyticsAncillaryData.ts", "utf8");
+  assert.match(
+    analyticsAncillarySource,
+    /useDepositHistory\(embeddedWalletAddress \?\? undefined, analyticsActive && isPageVisible\)/,
+    "hidden analytics tabs must pause deposit-history work",
+  );
+  assert.match(
+    analyticsAncillarySource,
+    /useJackpotHistory\(analyticsActive && isPageVisible\)/,
+    "hidden analytics tabs must pause jackpot-history work",
+  );
+  assert.doesNotMatch(
+    analyticsAncillarySource,
+    /120_000/,
+    "analytics ancillary polling must stop while hidden instead of keeping a background interval",
+  );
   assert.deepEqual(recentWins.normalizeWins("bad-shape"), []);
   assert.deepEqual(
     recentWins.normalizeWins([

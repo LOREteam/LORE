@@ -15,6 +15,11 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Analytics deposit and jackpot-history refreshes now stop completely while
+  the browser tab is hidden and resume through their existing cache-aware
+  hooks when it becomes visible. The visible 30-second deposit cadence and the
+  live pool-chart cadence are unchanged. Focused lint, business logic,
+  typecheck, and production build pass.
 - The first-visit tutorial now keeps every visible action at a 44px minimum
   touch height. Responsive browser smoke opens it in a clean 390px mobile
   context, checks all visible touch targets, and verifies Escape dismissal.

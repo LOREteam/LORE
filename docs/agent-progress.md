@@ -1023,3 +1023,13 @@ file grows beyond a compact handoff.
   first-visit dialog, scans its visible controls, and verifies Escape dismissal.
 - Business logic, focused lint, typecheck, production build, and the full
   responsive browser smoke pass. The temporary production server was stopped.
+
+## 2026-07-21 - Pause hidden Analytics polling
+
+- Confirmed that an open Analytics tab continued deposit and jackpot-history
+  requests after the document became hidden.
+- Both cache-aware history hooks are now disabled while hidden and resume when
+  visible; the visible 30-second deposit refresh and pool-chart freshness are
+  unchanged.
+- Focused lint, business logic, typecheck, production build, and diff hygiene
+  pass with EIP-7702 disabled.

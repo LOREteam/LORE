@@ -25,13 +25,13 @@ export function useAnalyticsAncillaryData({
     error: depositsError,
     fetch: fetchDeposits,
     refresh: refreshDeposits,
-  } = useDepositHistory(embeddedWalletAddress ?? undefined, analyticsActive);
+  } = useDepositHistory(embeddedWalletAddress ?? undefined, analyticsActive && isPageVisible);
 
   useEffect(() => {
-    if (!analyticsActive || !embeddedWalletAddress) return;
+    if (!analyticsActive || !isPageVisible || !embeddedWalletAddress) return;
     const intervalId = setInterval(() => {
       void refreshDeposits();
-    }, isPageVisible ? 30_000 : 120_000);
+    }, 30_000);
     return () => clearInterval(intervalId);
   }, [analyticsActive, embeddedWalletAddress, isPageVisible, refreshDeposits]);
 
@@ -40,7 +40,7 @@ export function useAnalyticsAncillaryData({
     loading: jackpotHistoryLoading,
     error: jackpotHistoryError,
     refresh: refreshJackpotHistory,
-  } = useJackpotHistory(analyticsActive);
+  } = useJackpotHistory(analyticsActive && isPageVisible);
 
   return useMemo(
     () => ({
