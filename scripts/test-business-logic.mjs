@@ -2805,8 +2805,8 @@ async function main() {
   );
   assert.match(
     liveRoundCanarySource,
-    /enoughEth: eth >= MIN_ETH_PER_WALLET[\s\S]*enoughToken: token >= requiredToken[\s\S]*insufficient-native-and-token[\s\S]*insufficient-token/,
-    "wallet preflight failures must expose only safe balance sufficiency categories",
+    /nonceQueueClear = noncePending <= nonceLatest[\s\S]*enoughEth: eth >= MIN_ETH_PER_WALLET[\s\S]*enoughToken: token >= requiredToken[\s\S]*pending-nonce-blocked[\s\S]*insufficient-native-and-token[\s\S]*insufficient-token/,
+    "wallet preflight must expose safe balance categories and reject an existing pending nonce queue",
   );
   assert.match(
     liveRoundCanarySource,
@@ -2815,8 +2815,18 @@ async function main() {
   );
   assert.match(
     liveRoundCanarySource,
-    /prepareMs: preparedAt - startedAt[\s\S]*receiptMs: receiptAt - sentAt[\s\S]*sendMs: sentAt - nonceReadAt/,
+    /estimateGasMs: gasEstimatedAt - preparedAt[\s\S]*nonceReadMs: nonceReadAt - gasEstimatedAt[\s\S]*prepareMs: preparedAt - startedAt[\s\S]*sendMs: sentAt - nonceReadAt[\s\S]*receiptMs: receiptAt - sentAt/,
     "live canary must preserve prepare, estimate, nonce, send, and receipt latency phases",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /noncePending > nonceLatest[\s\S]*Pending transaction blocked by nonce/,
+    "live canary must not dispatch another transaction while a wallet already has a pending nonce",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /const sentEvent = \{[\s\S]*hash,[\s\S]*catch \(error\)[\s\S]*\.\.\.sentEvent[\s\S]*errorKind: classified\.kind[\s\S]*txStatus: "pending"/,
+    "live canary must retain post-send transaction evidence when receipt polling times out",
   );
   assert.match(
     liveRoundCanarySource,
@@ -2915,6 +2925,14 @@ async function main() {
       errorKind: "untrusted raw error text",
       timestamp: "2026-07-18T00:00:00.000Z",
     })}\n${JSON.stringify({
+      mode: "preflight",
+      ok: false,
+      role: "AUTOMINER_A",
+      enoughEth: true,
+      enoughToken: true,
+      errorKind: "pending-nonce-blocked",
+      timestamp: "2026-07-18T00:00:01.000Z",
+    })}\n${JSON.stringify({
       mode: "single",
       ok: false,
       round: 0,
@@ -2928,6 +2946,22 @@ async function main() {
       errorKind: "untrusted raw error text",
       role: "AUTOMINER_A",
       timestamp: "2026-07-18T00:00:03.000Z",
+    })}\n${JSON.stringify({
+      mode: "arrays",
+      ok: false,
+      round: 2,
+      errorKind: "receipt-timeout",
+      role: "AUTOMINER_A",
+      hash: `0x${"1".repeat(64)}`,
+      txStatus: "pending",
+      timestamp: "2026-07-18T00:00:04.000Z",
+    })}\n${JSON.stringify({
+      mode: "sameAmount",
+      ok: false,
+      round: 3,
+      errorKind: "pending-nonce-blocked",
+      role: "AUTOMINER_B",
+      timestamp: "2026-07-18T00:00:05.000Z",
     })}\n`, "utf8");
     writeFileSync(join(soakStatusDir, "status.json"), `${JSON.stringify({
       status: "failed",
@@ -2948,15 +2982,21 @@ async function main() {
     const safeSoakStatus = JSON.parse(soakStatusResult.stdout);
     assert.deepEqual(safeSoakStatus.progress.preflightFailures, [
       { role: "AUTOMINER_C", reason: "insufficient-native-gas" },
+      { role: "AUTOMINER_A", reason: "pending-nonce-blocked" },
     ]);
-    assert.equal(safeSoakStatus.progress.failedBets, 2);
-    assert.deepEqual(safeSoakStatus.progress.failedBetErrorKinds, { network: 1, unknown: 1 });
-    assert.deepEqual(safeSoakStatus.progress.failedBetFamilies, { network: 1, "missing-error": 1 });
-    assert.deepEqual(safeSoakStatus.progress.failedBetModes, { single: 1, bitmap: 1 });
-    assert.deepEqual(safeSoakStatus.progress.failedBetRoles, { MANUAL: 1, AUTOMINER_A: 1 });
-    assert.deepEqual(safeSoakStatus.progress.consecutiveFailedBetsByRole, { MANUAL: 1, AUTOMINER_A: 1 });
-    assert.deepEqual(safeSoakStatus.progress.maxConsecutiveFailedBetsByRole, { MANUAL: 1, AUTOMINER_A: 1 });
-    assert.deepEqual(safeSoakStatus.progress.failedBetStages, { "pre-send": 2 });
+    assert.equal(safeSoakStatus.progress.failedBets, 4);
+    assert.deepEqual(safeSoakStatus.progress.failedBetErrorKinds, {
+      network: 1,
+      unknown: 1,
+      "receipt-timeout": 1,
+      "pending-nonce-blocked": 1,
+    });
+    assert.deepEqual(safeSoakStatus.progress.failedBetFamilies, { network: 2, "missing-error": 1, "nonce-state": 1 });
+    assert.deepEqual(safeSoakStatus.progress.failedBetModes, { single: 1, bitmap: 1, arrays: 1, sameAmount: 1 });
+    assert.deepEqual(safeSoakStatus.progress.failedBetRoles, { MANUAL: 1, AUTOMINER_A: 2, AUTOMINER_B: 1 });
+    assert.deepEqual(safeSoakStatus.progress.consecutiveFailedBetsByRole, { MANUAL: 1, AUTOMINER_A: 2, AUTOMINER_B: 1 });
+    assert.deepEqual(safeSoakStatus.progress.maxConsecutiveFailedBetsByRole, { MANUAL: 1, AUTOMINER_A: 2, AUTOMINER_B: 1 });
+    assert.deepEqual(safeSoakStatus.progress.failedBetStages, { "pre-send": 3, "post-send-unconfirmed": 1 });
     assert.doesNotMatch(soakStatusResult.stdout, /untrusted raw error text/);
   } finally {
     rmSync(soakStatusDir, { recursive: true, force: true });

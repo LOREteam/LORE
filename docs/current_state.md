@@ -41,6 +41,14 @@ Open linked evidence only when a task needs it.
   duplicate accounting. Full lint, logic, typecheck, contract invariants,
   production build, HTTP smoke, and responsive browser smoke pass on the local
   snapshot; the no-identity HTTP run separately remained fail-closed at 503.
+- A funded managed soak exposed three receipt timeouts from one role. Those
+  transactions were broadcast even though the old evidence path labeled them
+  pre-send, so the supervisor was stopped with six successful unique bets and
+  no duplicate hashes/nonces or confirmed reverts. The canary now preserves
+  post-send hash/nonce evidence and blocks new sends whenever pending nonce is
+  ahead of latest nonce. Transaction-free preflight enforces the same guard.
+  Logic, TypeScript, focused ESLint, and a real zero-transaction dry-run pass;
+  the dry-run correctly reports the remaining pending nonce queue.
 - Exact commit `02e3660` passed a detached clean-checkout reproduction: lockfile
   install, wallet dependency integrity, production audit, lint, typecheck,
   business logic, contract invariants, compile provenance, SQLite operations,
@@ -108,11 +116,9 @@ Open linked evidence only when a task needs it.
 - Browser, server, and edge Sentry paths share recursive redaction for wallet, RPC, auth, URL, and transaction-like data.
 - `@sentry/nextjs` is updated from 10.56.0 to 10.66.0 without changing the
   Privy/wagmi/viem versions. Its OpenTelemetry core moved from 2.7.1 to 2.9.0,
-  removing the W3C baggage memory-allocation advisory. The current production
-  audit has 29 findings after the advisory database refresh, with zero high or
-  critical findings;
-  wallet dependency integrity, typecheck, logic tests, production build, and all
-  23 HTTP smoke checks pass on the updated lockfile.
+  removing the W3C baggage memory-allocation advisory. Wallet dependency
+  integrity, typecheck, logic tests, production build, and all 23 HTTP smoke
+  checks pass on the updated lockfile.
 - A post-update 30-second production browser profile with the documented
   local-only rate-limit identity reported zero failed local responses, zero DOM
   growth, a negative final heap delta, CLS 0, horizontal overflow 0, and a 24 ms
@@ -310,10 +316,8 @@ Open linked evidence only when a task needs it.
 - The repository workflow runs on every branch push, but the available GitHub
   connector exposes only pull-request-triggered runs. The current commit therefore
   has complete local clean-checkout evidence but no connector-readable remote run.
-- The remaining production dependency advisories are concentrated in the wallet
-  dependency graph, including `uuid`. Their available automated fixes require
-  coordinated breaking Privy/wagmi changes, so they are deferred rather than
-  force-upgraded.
+- Fresh production-only and all-dependency audits on the current lockfile report
+  zero advisories at every severity. Wallet peer integrity also passes.
 
 ## Follow-Ups
 
@@ -321,8 +325,9 @@ Open linked evidence only when a task needs it.
 - Validate the shared limiter with real external-store credentials across two replicas.
 - Validate HTTPS Privy and true-device mobile Web3 flows on the final origin.
 - Validate real monitoring delivery/recovery and schedule operational backups.
-- Complete the funded 24-48 hour soak after `AUTOMINER_A` and `AUTOMINER_B` both
-  pass the unchanged native-gas preflight. Keep `AUTOMINER_C` excluded.
+- Continue the funded 24-48 hour soak only after the pending nonce queue clears
+  and the strengthened transaction-free preflight passes. Keep `AUTOMINER_C`
+  excluded.
 - The Privy/wagmi peer mismatch is resolved by pinning the root `viem` to the
   exact `2.50.4` required by `@privy-io/wagmi@4.0.9`. A clean `npm ci`, clean
   `npm ls`, typecheck, logic tests, contract invariants, compilation provenance,
@@ -351,13 +356,13 @@ browser smoke, dependency high/critical audit, monitoring drill, and diff
 hygiene. Both the latest and the original fixed historical chain/indexer audit
 windows pass after an integrity-checked backup and one bounded indexer repair.
 
-The latest managed three-role soak stopped safely after 384 successful unique
-bets/epochs/transactions/nonces and 20 pre-send failures from `AUTOMINER_A`.
-It recorded zero duplicate transactions/nonces, zero on-chain reverts, zero
-health failures, and stable RSS/DB/WAL telemetry. The required transaction-free
-preflight then failed closed because `AUTOMINER_A` and `AUTOMINER_B` lack the
-configured native gas reserve; no transaction was sent. Do not restart until
-both roles pass the unchanged preflight, and keep `AUTOMINER_C` excluded.
+The latest funded managed soak was stopped after six successful unique bets and
+three receipt timeouts from `AUTOMINER_A`. The sends remain unconfirmed and the
+role's pending nonce is ahead of latest nonce. The canary now records those
+events as post-send, blocks further sends behind a pending queue, and enforces
+that guard in transaction-free preflight. The current dry-run fails closed with
+zero transactions. Do not clear or replace the queue automatically; restart only
+after the strengthened preflight passes, and keep `AUTOMINER_C` excluded.
 
 After that blocker is cleared, continue the same durable soak toward the 24-48
 hour gate. Remaining deployment-dependent checks are the real shared limiter

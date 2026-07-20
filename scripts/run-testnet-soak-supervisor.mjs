@@ -45,6 +45,8 @@ const SAFE_BET_ERROR_KINDS = new Set([
   "late-bet",
   "network",
   "nonce-too-low",
+  "pending-nonce-blocked",
+  "receipt-timeout",
   "replacement-underpriced",
   "timer-not-ended",
   "revert",
@@ -128,8 +130,8 @@ function classifyFailedBetFamily(event) {
   if (event.errorKind === "insufficient-allowance" || event.errorKind === "insufficient-balance" || event.errorKind === "insufficient-funds") return "funding";
   if (event.errorKind === "late-bet" || event.errorKind === "epoch-window" || event.errorKind === "already-resolved" || event.errorKind === "timer-not-ended") return "epoch-state";
   if (event.errorKind === "contract-revert") return "contract-call";
-  if (event.errorKind === "network") return "network";
-  if (event.errorKind === "nonce-too-low" || event.errorKind === "already-known" || event.errorKind === "replacement-underpriced") return "nonce-state";
+  if (event.errorKind === "network" || event.errorKind === "receipt-timeout") return "network";
+  if (event.errorKind === "nonce-too-low" || event.errorKind === "already-known" || event.errorKind === "replacement-underpriced" || event.errorKind === "pending-nonce-blocked") return "nonce-state";
   if (typeof event.error !== "string") return "missing-error";
   const message = event.error.toLowerCase();
   if (message.includes("cannot read") || message.includes("is not a function")) return "runtime-type-error";
@@ -200,13 +202,15 @@ async function summarizeLiveLog(path) {
       const role = typeof event.role === "string" && /^[A-Z0-9_]{1,32}$/.test(event.role)
         ? event.role
         : "UNKNOWN";
-      const reason = event.enoughEth === false && event.enoughToken === false
-        ? "insufficient-native-and-token"
-        : event.enoughEth === false
-          ? "insufficient-native-gas"
-          : event.enoughToken === false
-            ? "insufficient-token"
-            : "preflight-failed";
+      const reason = event.errorKind === "pending-nonce-blocked"
+        ? "pending-nonce-blocked"
+        : event.enoughEth === false && event.enoughToken === false
+          ? "insufficient-native-and-token"
+          : event.enoughEth === false
+            ? "insufficient-native-gas"
+            : event.enoughToken === false
+              ? "insufficient-token"
+              : "preflight-failed";
       if (!summary.preflightFailures.some((failure) => failure.role === role && failure.reason === reason)) {
         summary.preflightFailures.push({ role, reason });
       }

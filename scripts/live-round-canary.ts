@@ -324,6 +324,8 @@ function classifyError(error: unknown) {
   if (lower.includes("nonce too low")) return { kind: "nonce-too-low", message: safeMessage };
   if (lower.includes("already known") || lower.includes("known transaction")) return { kind: "already-known", message: safeMessage };
   if (lower.includes("replacement transaction underpriced")) return { kind: "replacement-underpriced", message: safeMessage };
+  if (lower.includes("pending transaction blocked by nonce")) return { kind: "pending-nonce-blocked", message: safeMessage };
+  if (lower.includes("timed out while waiting for transaction")) return { kind: "receipt-timeout", message: safeMessage };
   if (lower.includes("epochclosing") || lower.includes("epochended")) return { kind: "late-bet", message: safeMessage };
   if (lower.includes("safe window") || lower.includes("epoch wait")) return { kind: "epoch-window", message: safeMessage };
   if (lower.includes("alreadyresolved")) return { kind: "already-resolved", message: safeMessage };
@@ -735,6 +737,9 @@ async function placeRound(params: {
     publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "pending" }),
   ]);
   const nonceReadAt = Date.now();
+  if (noncePending > nonceLatest) {
+    throw new Error(`Pending transaction blocked by nonce: latest=${nonceLatest} pending=${noncePending}`);
+  }
   const hash = await walletClient.writeContract({
     account: wallet.account,
     chain: APP_CHAIN,
@@ -746,30 +751,20 @@ async function placeRound(params: {
     ...fees,
   } as never);
   const sentAt = Date.now();
-  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
-  const receiptAt = Date.now();
-  // V9 advances exactly one expired epoch before recording this bet.
-  const recordedEpoch = atomicAdvance && receipt.status === "success" ? epoch + 1n : epoch;
-  const event: RoundEvent = {
+  const sentEvent = {
     amount: formatUnits(plan.amount, 18),
     amounts: mode === "arrays" ? plan.amounts.map((value) => formatUnits(value, 18)) : undefined,
     atomicAdvance,
-    durationMs: receiptAt - startedAt,
-    effectiveGasPrice: receipt.effectiveGasPrice.toString(),
-    epoch: recordedEpoch.toString(),
+    epoch: epoch.toString(),
     estimateGasMs: gasEstimatedAt - preparedAt,
     gasEstimateFallback,
     gasEstimateRetryCount,
-    gasUsed: receipt.gasUsed.toString(),
-    networkFeeWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(),
     hash,
     mode,
     nonceLatest,
     noncePending,
     nonceReadMs: nonceReadAt - gasEstimatedAt,
-    ok: receipt.status === "success",
     prepareMs: preparedAt - startedAt,
-    receiptMs: receiptAt - sentAt,
     repeat,
     role: wallet.role,
     round,
@@ -778,8 +773,40 @@ async function placeRound(params: {
     targetTotalAmount: formatUnits(plan.targetTotalAmount, 18),
     tileCount: plan.tileCount,
     tiles,
-    timestamp: new Date().toISOString(),
     totalAmount: formatUnits(plan.totalAmount, 18),
+  };
+  let receipt;
+  try {
+    receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
+  } catch (error) {
+    const classified = classifyError(error);
+    const receiptAt = Date.now();
+    const event: RoundEvent = {
+      ...sentEvent,
+      durationMs: receiptAt - startedAt,
+      error: classified.message,
+      errorKind: classified.kind,
+      ok: false,
+      receiptMs: receiptAt - sentAt,
+      timestamp: new Date().toISOString(),
+      txStatus: "pending",
+    };
+    writeEvent(logPath, event);
+    return event;
+  }
+  const receiptAt = Date.now();
+  // V9 advances exactly one expired epoch before recording this bet.
+  const recordedEpoch = atomicAdvance && receipt.status === "success" ? epoch + 1n : epoch;
+  const event: RoundEvent = {
+    ...sentEvent,
+    durationMs: receiptAt - startedAt,
+    effectiveGasPrice: receipt.effectiveGasPrice.toString(),
+    epoch: recordedEpoch.toString(),
+    gasUsed: receipt.gasUsed.toString(),
+    networkFeeWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(),
+    ok: receipt.status === "success",
+    receiptMs: receiptAt - sentAt,
+    timestamp: new Date().toISOString(),
     txStatus: receipt.status,
   };
   writeEvent(logPath, event);
@@ -796,7 +823,7 @@ async function runPreflight(
   for (const wallet of wallets) {
     const plannedSpend = plannedSpendByRole.get(wallet.role) ?? 0n;
     const requiredToken = plannedSpend > MIN_TOKEN_PER_WALLET ? plannedSpend : MIN_TOKEN_PER_WALLET;
-    const [eth, token, allowance] = await Promise.all([
+    const [eth, token, allowance, nonceLatest, noncePending] = await Promise.all([
       publicClient.getBalance({ address: wallet.account.address }),
       publicClient.readContract({
         address: LINEA_TOKEN_ADDRESS,
@@ -810,7 +837,10 @@ async function runPreflight(
         functionName: "allowance",
         args: [wallet.account.address, CONTRACT_ADDRESS],
       }),
+      publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "latest" }),
+      publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "pending" }),
     ]);
+    const nonceQueueClear = noncePending <= nonceLatest;
     rows.push({
       role: wallet.role,
       address: wallet.account.address,
@@ -820,31 +850,38 @@ async function runPreflight(
       plannedSpend: formatUnits(plannedSpend, 18),
       enoughEth: eth >= MIN_ETH_PER_WALLET,
       enoughToken: token >= requiredToken,
+      nonceLatest,
+      noncePending,
+      nonceQueueClear,
     });
     writeEvent(logPath, {
       amount: "0",
       enoughEth: eth >= MIN_ETH_PER_WALLET,
       enoughToken: token >= requiredToken,
-      errorKind: eth < MIN_ETH_PER_WALLET && token < requiredToken
-        ? "insufficient-native-and-token"
-        : eth < MIN_ETH_PER_WALLET
-          ? "insufficient-native-gas"
-          : token < requiredToken
-            ? "insufficient-token"
-            : undefined,
+      errorKind: !nonceQueueClear
+        ? "pending-nonce-blocked"
+        : eth < MIN_ETH_PER_WALLET && token < requiredToken
+          ? "insufficient-native-and-token"
+          : eth < MIN_ETH_PER_WALLET
+            ? "insufficient-native-gas"
+            : token < requiredToken
+              ? "insufficient-token"
+              : undefined,
       mode: "preflight",
-      ok: eth >= MIN_ETH_PER_WALLET && token >= requiredToken,
+      nonceLatest,
+      noncePending,
+      ok: eth >= MIN_ETH_PER_WALLET && token >= requiredToken && nonceQueueClear,
       role: wallet.role,
       round: -1,
       timestamp: new Date().toISOString(),
       totalAmount: formatUnits(plannedSpend, 18),
     });
   }
-  const readyWallets = rows.filter((row) => row.enoughEth && row.enoughToken).length;
+  const readyWallets = rows.filter((row) => row.enoughEth && row.enoughToken && row.nonceQueueClear).length;
   console.log(`[live-canary] walletPreflight ready=${readyWallets}/${rows.length} roles=${rows.map((row) => row.role).join(",")}`);
   if (VERBOSE_WALLET_PREFLIGHT) console.table(rows);
-  if (rows.some((row) => !row.enoughEth || !row.enoughToken)) {
-    throw new Error("Preflight balances are below configured minimums");
+  if (rows.some((row) => !row.enoughEth || !row.enoughToken || !row.nonceQueueClear)) {
+    throw new Error("Preflight wallet safety checks failed");
   }
 }
 
@@ -977,7 +1014,9 @@ async function main() {
         }
       } else {
         failures += 1;
-        errorKinds.set("tx-reverted", (errorKinds.get("tx-reverted") ?? 0) + 1);
+        const errorKind = event.errorKind ?? (event.txStatus === "reverted" ? "tx-reverted" : "unknown");
+        errorKinds.set(errorKind, (errorKinds.get(errorKind) ?? 0) + 1);
+        lastAttemptedEpoch = epoch;
         console.warn(
           `[live-canary] fail round=${round + 1}/${TARGET_ROUNDS} role=${wallet.role} mode=${mode} status=${event.txStatus} epoch=${epoch} tx=${event.hash}`,
         );

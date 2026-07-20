@@ -7,13 +7,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Active Handoff
 
-- The managed three-role Linea Sepolia soak stopped safely after 384 successful
-  unique bets/epochs/transactions/nonces and 20 consecutive pre-send failures
-  from `AUTOMINER_A`. It recorded zero duplicate tx/nonces, zero on-chain
-  reverts, zero health failures, stable RSS/DB/WAL, and one slow send.
-- A transaction-free rerun identified insufficient native gas for
-  `AUTOMINER_A` and `AUTOMINER_B`. Do not restart until both roles pass the
-  unchanged gas preflight; keep `AUTOMINER_C` excluded.
+- A funded managed three-role soak was stopped after six successful unique
+  bets and three receipt timeouts from `AUTOMINER_A`. The timed-out sends were
+  actually broadcast but the old evidence path mislabeled them as pre-send;
+  there were no duplicate hashes/nonces or confirmed reverts.
+- `AUTOMINER_A` currently has a pending nonce queue. The canary now preserves
+  hash/nonce evidence after receipt timeout, refuses another send while pending
+  exceeds latest nonce, and applies the same guard in transaction-free
+  preflight. Do not restart until that preflight passes; keep `AUTOMINER_C`
+  excluded.
 - Browser-profiler hardening classifies only exact local
   Next RSC aborts and the Coinbase Wallet SDK COOP `HEAD` probe as expected;
   both remain separately counted and all other local failures still degrade the
@@ -40,6 +42,18 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 - Preserve visible live-state and pool-chart freshness.
 
 ## Latest Completed Work
+
+## 2026-07-20 - Pending receipt and nonce-queue fail-closed guard
+
+- Reproduced three receipt timeouts from one soak role and confirmed a pending
+  nonce queue. The managed supervisor was stopped before more sends accumulated.
+- Timed-out sends now retain hash, nonce, phase timing, and `pending` status;
+  supervisor summaries classify them as post-send `receipt-timeout` evidence.
+  A wallet with `pending > latest` is blocked both immediately before dispatch
+  and during transaction-free preflight.
+- Business logic, TypeScript, focused ESLint, and diff hygiene pass. A real
+  dry-run now fails closed with `pending-nonce-blocked` and zero transactions.
+  No automatic nonce clearing or replacement transaction was attempted.
 
 ## 2026-07-20 - Paginated Safety Pool history
 
