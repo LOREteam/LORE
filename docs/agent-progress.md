@@ -49,6 +49,9 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   reverse-tab wrap, Escape close, and opener-focus restoration. The focused
   ESLint check and full desktop/tablet/mobile browser smoke pass; production UI
   code was unchanged and the temporary server was stopped.
+- Profile, Close chat, and Close profile icon controls now use stable 44px touch
+  targets. Smoke measures all three controls; typecheck, focused ESLint,
+  production build, and responsive browser smoke pass.
 
 ## 2026-07-20 - Route-cache ownership race hardening
 

@@ -269,7 +269,7 @@ export const ChatWindow = React.memo(function ChatWindow({
             onClick={handleOpenProfile}
             aria-label="Profile"
             title="Profile"
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/4 hover:text-violet-300"
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/4 hover:text-violet-300"
           >
             <svg aria-hidden="true" width="17" height="17" viewBox="0 0 17 17" fill="none">
               <circle cx="8.5" cy="5.5" r="2.9" fill="currentColor" opacity="0.85" />
@@ -287,7 +287,7 @@ export const ChatWindow = React.memo(function ChatWindow({
             onClick={onClose}
             aria-label="Close chat panel"
             title="Close chat"
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/4 hover:text-slate-200"
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/4 hover:text-slate-200"
           >
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none">
               <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />

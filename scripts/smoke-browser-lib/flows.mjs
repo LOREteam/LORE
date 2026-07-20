@@ -464,12 +464,24 @@ export async function openChatDrawer(page, options) {
 export async function verifyChatProfileModal(page, timeoutMs) {
   const modalTimeoutMs = Math.min(timeoutMs, 6_000);
   const profileButton = page.getByRole("button", { name: "Profile" });
+  const profileButtonBox = await profileButton.boundingBox();
+  if (!profileButtonBox || profileButtonBox.width < 44 || profileButtonBox.height < 44) {
+    throw new Error("chat profile touch target must be at least 44px");
+  }
+  const closeChatButtonBox = await page.getByRole("button", { name: "Close chat panel" }).boundingBox();
+  if (!closeChatButtonBox || closeChatButtonBox.width < 44 || closeChatButtonBox.height < 44) {
+    throw new Error("close chat touch target must be at least 44px");
+  }
   await profileButton.click();
   await expectVisible(page.getByText("Profile Settings"), "chat profile modal opens", modalTimeoutMs);
   await expectVisible(page.getByText("Custom Avatar"), "chat profile custom avatar section", modalTimeoutMs);
   await expectVisible(page.getByRole("button", { name: "Upload image" }), "chat profile upload button", modalTimeoutMs);
   await page.waitForFunction(() => document.activeElement?.id === "profile-name", undefined, { timeout: modalTimeoutMs });
   const closeButton = page.getByRole("button", { name: "Close", exact: true });
+  const closeButtonBox = await closeButton.boundingBox();
+  if (!closeButtonBox || closeButtonBox.width < 44 || closeButtonBox.height < 44) {
+    throw new Error("chat profile close touch target must be at least 44px");
+  }
   await closeButton.focus();
   await page.keyboard.press("Shift+Tab");
   await page.waitForFunction(

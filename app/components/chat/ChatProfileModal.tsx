@@ -198,7 +198,7 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white/6 hover:text-slate-300"
+          className="flex h-11 w-11 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white/6 hover:text-slate-300"
         >
           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none">
             <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
