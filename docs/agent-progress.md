@@ -43,6 +43,19 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-21 - Production dependency high-advisory closure
+
+- A fresh production audit exposed four high advisories through Sentry's
+  `glob -> minimatch -> brace-expansion` chain. Scoped nested overrides now
+  resolve `brace-expansion` 5.0.7 without changing wallet dependency versions
+  or forcing incompatible legacy minimatch trees.
+- Updated the business-logic source guard after the mobile touch-target check
+  moved into its shared flow helper; it now requires the shared 44px threshold
+  and Hub/Safety Pool/Leaderboards call sites.
+- Production audit has zero high/critical advisories. Business logic, V9
+  invariants, focused ESLint, typecheck, wallet peer integrity, and production
+  build pass; EIP-7702 remained disabled.
+
 ## 2026-07-21 - Mobile tab touch-target coverage
 
 - Extracted the existing visible-control touch-target assertion and reused it

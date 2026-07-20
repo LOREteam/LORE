@@ -15,6 +15,12 @@ Open linked evidence only when a task needs it.
 
 ## Confirmed State
 
+- Production dependency audit again reports zero high or critical advisories.
+  The only required package change is a scoped `brace-expansion` 5.0.7
+  override beneath the Sentry `glob` chain and the existing TypeScript parser
+  chain; Privy/wagmi/viem versions and peer resolution are unchanged. Business
+  logic, V9 invariants, focused lint, typecheck, wallet peer integrity, and the
+  production build pass with EIP-7702 disabled.
 - Responsive smoke now scans every visible mobile control on the Hub,
   Analytics, Safety Pool, and Leaderboards against the 44px touch-target floor.
   The expanded coverage fixed the conditional older-epoch Safety Pool action

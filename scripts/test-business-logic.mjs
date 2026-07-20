@@ -1171,6 +1171,7 @@ async function main() {
     "bootstrap resolver must fail closed before the development-only memory throttle when the shared lock is unavailable",
   );
   const smokeBrowserSource = readFileSync("scripts/smoke-browser.mjs", "utf8");
+  const smokeBrowserFlowsSource = readFileSync("scripts/smoke-browser-lib/flows.mjs", "utf8");
   const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
   assert.equal(
     packageScripts["dev:ui"],
@@ -1230,8 +1231,13 @@ async function main() {
   );
   assert.match(
     smokeBrowserSource,
-    /verify mobile touch targets[\s\S]*target\.width < 44 \|\| target\.height < 44/,
-    "browser smoke must reject undersized mobile controls",
+    /verify mobile touch targets[\s\S]*verifyVisibleTouchTargets\(mobilePage, "mobile hub"\)[\s\S]*verify mobile safety pool touch targets[\s\S]*verify mobile leaderboards touch targets/,
+    "browser smoke must run touch-target checks across the mobile hub and secondary tabs",
+  );
+  assert.match(
+    smokeBrowserFlowsSource,
+    /verifyVisibleTouchTargets[\s\S]*target\.width < 44 \|\| target\.height < 44/,
+    "shared browser smoke touch-target guard must reject controls below 44px",
   );
   assert.match(
     smokeBrowserSource,
@@ -1356,7 +1362,6 @@ async function main() {
     /Bet fee:[\s\S]*feeEstimateUnavailable[\s\S]*Unavailable/,
     "mobile manual bet must show an explicit unavailable fee state",
   );
-  const smokeBrowserFlowsSource = readFileSync("scripts/smoke-browser-lib/flows.mjs", "utf8");
   assert.match(
     smokeBrowserFlowsSource,
     /openWalletSelectorFromLoginModal/,
