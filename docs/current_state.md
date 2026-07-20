@@ -35,6 +35,11 @@ Open linked evidence only when a task needs it.
 - Wallet Settings uses the shared hardened dialog focus trap, including hidden
   control filtering, escaped-focus recovery, Escape handling, and opener focus
   restoration. The focused lint, business-logic, typecheck, and diff gates pass.
+- Safety Pool history can load older indexed participation in explicit bounded
+  pages. Routine refresh remains capped, each page is one atomic multicall, and
+  discovered overflow epochs join visible balances and claim planning without
+  duplicate accounting. Full lint, logic, typecheck, contract invariants,
+  production build, and responsive browser smoke pass on the local snapshot.
 - Exact commit `02e3660` passed a detached clean-checkout reproduction: lockfile
   install, wallet dependency integrity, production audit, lint, typecheck,
   business logic, contract invariants, compile provenance, SQLite operations,
@@ -339,7 +344,7 @@ Open linked evidence only when a task needs it.
 
 ## Next Best Step
 
-The current uncommitted candidate passes typecheck, business logic, contract
+The current local candidate passes typecheck, business logic, contract
 invariants, compilation provenance, production build, HTTP smoke, responsive
 browser smoke, dependency high/critical audit, monitoring drill, and diff
 hygiene. Both the latest and the original fixed historical chain/indexer audit
