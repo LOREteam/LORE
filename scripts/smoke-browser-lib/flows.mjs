@@ -226,6 +226,12 @@ export async function selectSingleTile(page, options) {
 export async function openMobileAnalytics(page, options) {
   const { baseUrl, timeoutMs } = options;
   const tabTimeoutMs = Math.min(timeoutMs, 8_000);
+  const verifyRefreshTarget = async () => {
+    const box = await page.getByRole("button", { name: "Refresh deposits" }).boundingBox();
+    if (!box || box.width < 44 || box.height < 44) {
+      throw new Error("mobile analytics refresh touch target must be at least 44px");
+    }
+  };
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const analyticsButton = page.getByRole("button", { name: "Analytics" });
@@ -236,6 +242,7 @@ export async function openMobileAnalytics(page, options) {
           || document.body.innerText.includes("Achievements");
       }, undefined, { timeout: tabTimeoutMs });
       await expectVisible(page.getByRole("heading", { name: "My Deposits" }), "mobile analytics deposits panel", tabTimeoutMs);
+      await verifyRefreshTarget();
       return;
     } catch {
       if (attempt <= 2) {
@@ -256,6 +263,7 @@ export async function openMobileAnalytics(page, options) {
               || document.body.innerText.includes("Achievements");
           }, undefined, { timeout: tabTimeoutMs });
           await expectVisible(page.getByRole("heading", { name: "My Deposits" }), "mobile analytics deposits panel", tabTimeoutMs);
+          await verifyRefreshTarget();
           return;
         } catch {
           // fall through to retry path below

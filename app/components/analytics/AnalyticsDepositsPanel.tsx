@@ -110,7 +110,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
             disabled={depositsLoading}
             variant="ghost"
             size="xs"
-            className="h-10 w-10 p-0 text-gray-500 hover:text-sky-300 hover:border-sky-500/20 hover:bg-sky-500/6 active:scale-95"
+            className="h-11 w-11 p-0 text-gray-500 hover:text-sky-300 hover:border-sky-500/20 hover:bg-sky-500/6 active:scale-95"
             title="Refresh"
             aria-label="Refresh deposits"
           >
