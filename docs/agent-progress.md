@@ -43,6 +43,15 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-21 - Enforce all-dependency audit in CI
+
+- CI previously enforced production dependency audit and wallet peer integrity
+  but did not run the existing dev/toolchain audit. That gap would have allowed
+  high advisories limited to build/test packages to pass remote checks.
+- Added `proof:deps:all` immediately after the production audit. The workflow
+  YAML parses and the new gate passes with zero high/critical findings. Source
+  commit is `3449d6f1`.
+
 ## 2026-07-21 - Patch newly published transitive dependency advisories
 
 - A fresh registry-backed audit detected new high advisories after the prior

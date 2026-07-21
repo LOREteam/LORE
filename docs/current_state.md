@@ -429,6 +429,9 @@ Open linked evidence only when a task needs it.
   caller-provided output buffer. Forcing transitive uuid 8/9 to 11 would be an
   unsafe wallet-SDK major override; retain the current zero high/critical gate
   and remove this residual only through a compatible upstream wallet release.
+- CI now runs both production-only and all-dependency audits after clean install
+  and wallet peer validation, preventing future high/critical dev-toolchain
+  advisories from passing while production audit remains green.
 - A production-build axe pass now covers desktop Hub, Analytics, Safety Pool,
   Leaderboards, White Paper, FAQ, and mobile Hub. Confirmed Analytics contrast
   and keyboard-scroll violations were fixed; the repeated seven-view audit has
