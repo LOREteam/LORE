@@ -56,6 +56,9 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
   wallet peer integrity, typecheck, business logic, V9 invariants, production
   build, responsive browser smoke, and diff hygiene pass. Temporary audit files
   and the server were removed; source commit is `c365f059`.
+- A subsequent clean `npm ci --ignore-scripts` reproduced the patched dependency
+  tree from the lockfile. Both audits, wallet peer integrity, typecheck, and a
+  fresh production build pass on that clean installation.
 
 ## 2026-07-21 - Analytics automated accessibility audit
 

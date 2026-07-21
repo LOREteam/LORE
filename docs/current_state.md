@@ -420,7 +420,9 @@ Open linked evidence only when a task needs it.
   overrides for axios, shell-quote, js-yaml, and the affected brace-expansion
   tree. Remaining moderate/low findings are inherited wallet-ecosystem items
   whose suggested fixes are breaking or unavailable. Wallet peer integrity,
-  typecheck, logic, V9 invariants, build, and responsive browser smoke pass.
+  typecheck, logic, V9 invariants, build, and responsive browser smoke pass. A
+  clean lockfile-only `npm ci` also reproduces the patched tree and passes both
+  audits, peer integrity, typecheck, and production build.
 - A production-build axe pass now covers desktop Hub, Analytics, Safety Pool,
   Leaderboards, White Paper, FAQ, and mobile Hub. Confirmed Analytics contrast
   and keyboard-scroll violations were fixed; the repeated seven-view audit has
