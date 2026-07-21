@@ -28,6 +28,9 @@ jobs:
       - name: Production dependency audit
         run: npm run proof:deps
 
+      - name: All dependency audit
+        run: npm run proof:deps:all
+
       - name: Lint
         run: npm run lint
 
