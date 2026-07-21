@@ -43,6 +43,20 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-21 - Patch newly published transitive dependency advisories
+
+- A fresh registry-backed audit detected new high advisories after the prior
+  clean audit. The production path was the existing `axios@1.16.0` override;
+  dev/toolchain paths were `shell-quote`, `js-yaml`, and the ESLint/minimatch 3
+  copy of `brace-expansion`.
+- Updated only compatible transitive overrides: axios `1.18.1`, shell-quote
+  `1.10.0`, js-yaml `4.3.0`, and brace-expansion `1.1.16` in the affected
+  minimatch tree. Privy, wagmi, viem, Next, and application APIs were unchanged.
+- Production and all-dependency audits now report zero high/critical findings;
+  wallet peer integrity, typecheck, business logic, V9 invariants, production
+  build, responsive browser smoke, and diff hygiene pass. Temporary audit files
+  and the server were removed; source commit is `c365f059`.
+
 ## 2026-07-21 - Analytics automated accessibility audit
 
 - Ran axe against the production build across desktop Hub, Analytics, Safety

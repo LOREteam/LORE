@@ -415,8 +415,12 @@ Open linked evidence only when a task needs it.
 - The repository workflow runs on every branch push, but the available GitHub
   connector exposes only pull-request-triggered runs. The current commit therefore
   has complete local clean-checkout evidence but no connector-readable remote run.
-- Fresh production-only and all-dependency audits on the current lockfile report
-  zero advisories at every severity. Wallet peer integrity also passes.
+- Fresh registry-backed production-only and all-dependency audits on the current
+  lockfile report zero high or critical advisories after patched transitive
+  overrides for axios, shell-quote, js-yaml, and the affected brace-expansion
+  tree. Remaining moderate/low findings are inherited wallet-ecosystem items
+  whose suggested fixes are breaking or unavailable. Wallet peer integrity,
+  typecheck, logic, V9 invariants, build, and responsive browser smoke pass.
 - A production-build axe pass now covers desktop Hub, Analytics, Safety Pool,
   Leaderboards, White Paper, FAQ, and mobile Hub. Confirmed Analytics contrast
   and keyboard-scroll violations were fixed; the repeated seven-view audit has
