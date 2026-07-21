@@ -11,6 +11,7 @@ const frameToneClasses: Record<UiTableTone, string> = {
 };
 
 export interface UiTableProps extends React.HTMLAttributes<HTMLDivElement> {
+  "aria-label": string;
   tone?: UiTableTone;
   maxHeightClass?: string;
 }
@@ -24,6 +25,8 @@ export function UiTable({
 }: UiTableProps) {
   return (
     <div
+      role="region"
+      tabIndex={0}
       className={cn(
         "overflow-x-auto overflow-y-auto border",
         uiTokens.radius.sm,
@@ -46,7 +49,7 @@ export function UiTableHead({
   return (
     <thead
       className={cn(
-        "sticky top-0 z-10 bg-surface text-xs font-bold uppercase tracking-widest text-gray-500",
+        "sticky top-0 z-10 bg-surface text-xs font-bold uppercase tracking-widest text-gray-300",
         className,
       )}
       {...props}

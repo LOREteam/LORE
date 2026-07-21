@@ -88,12 +88,12 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
         <div className="flex items-center gap-3">
           {deposits !== null && (
             <div className="flex flex-col items-end gap-0.5">
-              <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${statusActive ? "text-sky-300" : "text-gray-500"}`}>
+              <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${statusActive ? "text-sky-300" : "text-gray-400"}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${statusActive ? "bg-sky-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
                 {statusLabel}
               </span>
               {freshnessLabel && (
-                <span className="text-[9px] font-semibold uppercase tracking-wider text-gray-600">
+                <span className="text-[9px] font-semibold uppercase tracking-wider text-gray-400">
                   {freshnessLabel}
                 </span>
               )}
@@ -127,11 +127,11 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
           </svg>
           <span className="text-[11px] text-amber-400/90">Unable to load deposit history</span>
-          <span className="text-[10px] text-gray-500">Please try refreshing in a moment. If the issue persists, the server may need attention.</span>
+          <span className="text-[10px] text-gray-400">Please try refreshing in a moment. If the issue persists, the server may need attention.</span>
         </div>
       ) : deposits === null && !depositsLoading ? (
         <div className="flex flex-col items-center justify-center py-3 gap-2">
-          <span className="text-[12px] text-gray-500">Scans full chain history for your bets (cached incrementally)</span>
+          <span className="text-[12px] text-gray-300">Scans full chain history for your bets (cached incrementally)</span>
           <UiButton
             onClick={onLoadDeposits}
             disabled={depositsLoading}
@@ -164,11 +164,11 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
       ) : deposits && deposits.length === 0 ? (
         <div className="text-center py-4 flex flex-col items-center gap-2">
           <span className="text-[11px] text-gray-400 italic"><LoreText items={emptyStates.analytics} /></span>
-          <span className="text-[10px] text-gray-500">If you&apos;ve already placed bets, use <strong className="text-sky-400/90">Refresh</strong> above to load history.</span>
+          <span className="text-[10px] text-gray-400">If you&apos;ve already placed bets, use <strong className="text-sky-400/90">Refresh</strong> above to load history.</span>
         </div>
       ) : (
         <>
-          <UiTable tone="sky" maxHeightClass="max-h-[260px]">
+          <UiTable aria-label="Deposit history" tone="sky" maxHeightClass="max-h-[260px]">
             <table className="w-full text-left">
               <UiTableHead>
                 <tr>

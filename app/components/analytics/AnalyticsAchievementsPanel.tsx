@@ -72,22 +72,27 @@ export const AnalyticsAchievementsPanel = React.memo(function AnalyticsAchieveme
           Achievements
         </h2>
         {(deposits === null || depositsLoading) && (
-          <p className="text-[10px] leading-tight text-slate-500 sm:absolute sm:left-1/2 sm:-translate-x-1/2 sm:whitespace-nowrap">
+          <p className="text-[10px] leading-tight text-slate-300 sm:absolute sm:left-1/2 sm:-translate-x-1/2 sm:whitespace-nowrap">
             Progress fills after My Deposits loads below
           </p>
         )}
-        <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500 sm:ml-auto">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-gray-300 sm:ml-auto">
           Unlocked: <span className="text-amber-400">{unlockedCount}/{achievementCards.length}</span>
         </span>
       </div>
 
-      <div className="flex gap-3 overflow-x-auto pb-1 pr-1 [scrollbar-width:thin]">
+      <div
+        role="region"
+        aria-label="Achievements"
+        tabIndex={0}
+        className="flex gap-3 overflow-x-auto pb-1 pr-1 [scrollbar-width:thin]"
+      >
         {cards.length === 0 && !depositsLoading && (
           <div className="flex w-full flex-col items-center justify-center gap-2 py-6 text-center">
             <svg className="h-8 w-8 text-amber-400/25" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 18.75h-9m9 0a3 3 0 013 3h-15a3 3 0 013-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 01-.982-3.172M9.497 14.25a7.454 7.454 0 00.981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 007.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M7.73 9.728a6.726 6.726 0 002.748 1.35m8.272-6.842V4.5c0 2.108-.966 3.99-2.48 5.228m2.48-5.492a46.32 46.32 0 012.916.52 6.003 6.003 0 01-5.395 4.972m0 0a6.726 6.726 0 01-2.749 1.35m0 0a6.772 6.772 0 01-3.044 0" />
             </svg>
-            <span className="text-[11px] text-slate-500">No achievements available yet</span>
+            <span className="text-[11px] text-slate-400">No achievements available yet</span>
           </div>
         )}
         {cards.map((achievement) => (
@@ -122,7 +127,7 @@ export const AnalyticsAchievementsPanel = React.memo(function AnalyticsAchieveme
               <div className="line-clamp-2 min-h-[24px] text-[10px] leading-[1.2] text-slate-400">
                 {achievement.description}
               </div>
-              <div className="flex items-center justify-between gap-2 text-[8px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+              <div className="flex items-center justify-between gap-2 text-[8px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                 <span>{achievement.unlocked ? "Unlocked" : "In Progress"}</span>
                 <span>{Math.round(achievement.progressPct)}%</span>
               </div>
@@ -145,7 +150,7 @@ export const AnalyticsAchievementsPanel = React.memo(function AnalyticsAchieveme
             </div>
 
             {achievement.unlocked && achievement.unlockedAt ? (
-              <div className="mt-1 shrink-0 text-[8px] leading-none text-slate-500">
+              <div className="mt-1 shrink-0 text-[8px] leading-none text-slate-400">
                 unlocked {achievement.unlockedDateLabel}
               </div>
             ) : (

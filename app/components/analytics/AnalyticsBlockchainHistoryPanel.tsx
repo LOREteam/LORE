@@ -70,7 +70,7 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
           <p className="mt-1 text-[10px] text-gray-400">Place your first bet to start mining the Lattice</p>
         </div>
       ) : (
-        <UiTable tone="violet" maxHeightClass="max-h-[260px]">
+        <UiTable aria-label="Blockchain history" tone="violet" maxHeightClass="max-h-[260px]">
           <table className="w-full text-left">
             <UiTableHead>
               <tr>
@@ -134,8 +134,8 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
                       )}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <span className="font-bold text-violet-400 font-mono text-sm">{row.poolDisplay}</span>
-                      <span className="text-[11px] text-gray-400 ml-1">LINEA</span>
+                      <span className="font-bold text-violet-300 font-mono text-sm">{row.poolDisplay}</span>
+                      <span className="text-[11px] text-gray-300 ml-1">LINEA</span>
                     </td>
                   </UiTableRow>
                 );

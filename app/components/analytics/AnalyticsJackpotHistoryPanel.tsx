@@ -69,21 +69,21 @@ export const AnalyticsJackpotHistoryPanel = React.memo(function AnalyticsJackpot
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
           </svg>
           <span className="text-[11px] text-amber-400/90">Unable to load jackpot history</span>
-          <span className="text-[10px] text-gray-500">Please try refreshing in a moment.</span>
+          <span className="text-[10px] text-gray-300">Please try refreshing in a moment.</span>
         </div>
       ) : jackpotHistory.length === 0 ? (
         <div className="text-center py-4 flex flex-col items-center gap-2">
           {jackpotHistoryLoading ? (
-            <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider"><LoreText items={loadingQuotes} /></span>
+            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider"><LoreText items={loadingQuotes} /></span>
           ) : (
             <>
               <span className="text-[11px] text-gray-400 italic">No jackpot awards yet.</span>
-              <span className="text-[10px] text-gray-500">If a jackpot was awarded, the indexer may still be syncing. Use Refresh above.</span>
+              <span className="text-[10px] text-gray-400">If a jackpot was awarded, the indexer may still be syncing. Use Refresh above.</span>
             </>
           )}
         </div>
       ) : (
-        <UiTable tone="amber" maxHeightClass="max-h-[220px]">
+        <UiTable aria-label="Jackpot history" tone="amber" maxHeightClass="max-h-[220px]">
           <table className="w-full text-left">
             <UiTableHead>
               <tr>
