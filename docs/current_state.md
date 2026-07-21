@@ -417,6 +417,10 @@ Open linked evidence only when a task needs it.
   has complete local clean-checkout evidence but no connector-readable remote run.
 - Fresh production-only and all-dependency audits on the current lockfile report
   zero advisories at every severity. Wallet peer integrity also passes.
+- A production-build axe pass now covers desktop Hub, Analytics, Safety Pool,
+  Leaderboards, White Paper, FAQ, and mobile Hub. Confirmed Analytics contrast
+  and keyboard-scroll violations were fixed; the repeated seven-view audit has
+  zero violations, and the full responsive browser smoke still passes.
 
 ## Follow-Ups
 

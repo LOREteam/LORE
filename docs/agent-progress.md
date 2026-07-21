@@ -43,6 +43,20 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 
 ## Latest Completed Work
 
+## 2026-07-21 - Analytics automated accessibility audit
+
+- Ran axe against the production build across desktop Hub, Analytics, Safety
+  Pool, Leaderboards, White Paper, FAQ, and mobile Hub. The first pass confirmed
+  serious Analytics contrast and keyboard-scroll findings; all other audited
+  views were clean.
+- Shared tables and the achievements rail are now named keyboard-focusable
+  regions. Confirmed low-contrast Analytics labels, headers, and pool units were
+  raised without changing layout, data flow, or refresh cadence.
+- The repeated axe audit reports zero violations on all seven views. Focused
+  ESLint, typecheck, business logic, production build, full responsive browser
+  smoke, and diff hygiene pass. Temporary audit tooling and the server were
+  removed/stopped; source commit is `291a7486`.
+
 ## 2026-07-21 - Notification screen-reader semantics
 
 - Notification messages now own their live-region semantics instead of using
