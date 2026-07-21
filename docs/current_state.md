@@ -423,6 +423,12 @@ Open linked evidence only when a task needs it.
   typecheck, logic, V9 invariants, build, and responsive browser smoke pass. A
   clean lockfile-only `npm ci` also reproduces the patched tree and passes both
   audits, peer integrity, typecheck, and production build.
+- The 20 remaining production moderate audit rows all propagate one upstream
+  uuid buffer-bounds advisory through MetaMask/Privy wallet packages. LORE does
+  not import uuid directly, and the affected API requires v3/v5/v6 with a
+  caller-provided output buffer. Forcing transitive uuid 8/9 to 11 would be an
+  unsafe wallet-SDK major override; retain the current zero high/critical gate
+  and remove this residual only through a compatible upstream wallet release.
 - A production-build axe pass now covers desktop Hub, Analytics, Safety Pool,
   Leaderboards, White Paper, FAQ, and mobile Hub. Confirmed Analytics contrast
   and keyboard-scroll violations were fixed; the repeated seven-view audit has

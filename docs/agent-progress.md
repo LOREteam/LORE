@@ -59,6 +59,12 @@ Current repository truth lives in [`docs/current_state.md`](current_state.md).
 - A subsequent clean `npm ci --ignore-scripts` reproduced the patched dependency
   tree from the lockfile. Both audits, wallet peer integrity, typecheck, and a
   fresh production build pass on that clean installation.
+- Triaged all 20 remaining production moderate rows. They are propagated wallet
+  dependency paths for one `uuid <11.1.1` buffer-bounds advisory; application
+  source does not import uuid directly. The affected API requires v3/v5/v6 with
+  a caller-provided output buffer. A forced uuid 8/9 to 11 override would cross
+  package majors inside MetaMask SDK, so it was rejected in favor of an upstream
+  wallet update. No runtime dependency was changed by this triage.
 
 ## 2026-07-21 - Analytics automated accessibility audit
 
