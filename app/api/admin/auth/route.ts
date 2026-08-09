@@ -15,7 +15,13 @@ import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { logRouteError } from "../../_lib/routeError";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { acquireExternalExpiringLock, requiresExternalSharedLock } from "../../_lib/externalRateLimit";
-import { clearAdminSession, issueAdminSession, readAdminSession } from "../../_lib/adminSession";
+import {
+  clearAdminSession,
+  issueAdminSession,
+  readAdminSessionForRefresh,
+  revokeAdminSession,
+  rotateAdminSession,
+} from "../../_lib/adminSession";
 import { acquireExpiringLock } from "../../../../server/storage";
 import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
 import { getTrustedAuthOrigin, isTrustedAuthUri } from "../../_lib/trustedAuthOrigin";
@@ -121,7 +127,7 @@ export async function POST(request: NextRequest) {
     }
 
     const response = applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });
-    const expiresAt = issueAdminSession(response, authAddress);
+    const expiresAt = await issueAdminSession(response, authAddress);
     response.headers.set("x-admin-session-expires-at", String(expiresAt));
     return response;
   } catch (error) {
@@ -140,7 +146,16 @@ export async function GET(request: NextRequest) {
   });
   if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
-  const session = readAdminSession(request);
+  let session;
+  try {
+    session = await readAdminSessionForRefresh(request);
+  } catch (error) {
+    logRouteError("api/admin/auth", error, { action: "refresh-read" });
+    return applyNoStoreHeaders(
+      NextResponse.json({ error: "Admin session refresh unavailable" }, { status: 503 }),
+      { varyCookie: true },
+    );
+  }
   if (!session) {
     const response = applyNoStoreHeaders(
       NextResponse.json({ error: "Admin auth required" }, { status: 401 }),
@@ -150,14 +165,41 @@ export async function GET(request: NextRequest) {
     return response;
   }
 
-  const response = applyNoStoreHeaders(NextResponse.json({ ok: true, address: session.address }), { varyCookie: true });
-  const expiresAt = issueAdminSession(response, session.address);
-  response.headers.set("x-admin-session-expires-at", String(expiresAt));
-  return response;
+  try {
+    const response = applyNoStoreHeaders(NextResponse.json({ ok: true, address: session.address }), { varyCookie: true });
+    const expiresAt = await rotateAdminSession(response, session);
+    if (expiresAt === null) {
+      const unauthorized = applyNoStoreHeaders(
+        NextResponse.json({ error: "Admin session is no longer active" }, { status: 401 }),
+        { varyCookie: true },
+      );
+      clearAdminSession(unauthorized);
+      return unauthorized;
+    }
+    response.headers.set("x-admin-session-expires-at", String(expiresAt));
+    return response;
+  } catch (error) {
+    logRouteError("api/admin/auth", error, { action: "refresh" });
+    const response = applyNoStoreHeaders(
+      NextResponse.json({ error: "Admin session refresh unavailable" }, { status: 503 }),
+      { varyCookie: true },
+    );
+    return response;
+  }
 }
 
-export async function DELETE() {
-  const response = applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });
-  clearAdminSession(response);
-  return response;
+export async function DELETE(request: NextRequest) {
+  try {
+    await revokeAdminSession(request);
+    const response = applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });
+    clearAdminSession(response);
+    return response;
+  } catch (error) {
+    logRouteError("api/admin/auth", error, { action: "logout" });
+    const response = applyNoStoreHeaders(
+      NextResponse.json({ error: "Admin session logout unavailable" }, { status: 503 }),
+      { varyCookie: true },
+    );
+    return response;
+  }
 }

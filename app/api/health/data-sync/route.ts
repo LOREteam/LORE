@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { statfsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
-import { formatUnits, parseAbi } from "viem";
+import { formatUnits } from "viem";
+import { GAME_ABI as READ_ABI } from "../../../../config/generated/lineaOreV10Abi";
 import {
   DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS,
   getConfiguredDeployBlock,
@@ -29,14 +30,10 @@ import {
   getIndexerTargetLagBlocks,
   parseIndexerFinalityBlocks,
 } from "../../../lib/indexerFinality";
+import { summarizeEpochCoverage } from "./epochCoverage";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-const READ_ABI = parseAbi([
-  "function currentEpoch() view returns (uint256)",
-  "function getJackpotInfo() view returns (uint256 dailyPool, uint256 weeklyPool, uint256 lastDailyDay, uint256 lastWeeklyWeek, uint256 lastDailyEpoch, uint256 lastWeeklyEpoch, uint256 lastDailyAmount, uint256 lastWeeklyAmount)",
-]);
 
 const LAG_WARN_BLOCKS = parseOptionalNonNegativeNumberEnv(
   process.env.DATA_SYNC_LAG_WARN_BLOCKS,
@@ -477,15 +474,12 @@ async function buildDataSyncHealthPayload() {
       .filter((epoch): epoch is number => epoch !== null && epoch <= maxEpochToCheck),
   );
 
-  const missingEpochs: number[] = [];
-  for (let ep = 1; ep <= maxEpochToCheck; ep += 1) {
-    if (!presentEpochs.has(ep)) missingEpochs.push(ep);
-  }
-  const latestStoredEpoch = presentEpochs.size > 0 ? Math.max(...presentEpochs) : null;
-  const highestContiguousEpoch =
-    missingEpochs.length > 0
-      ? Math.max(0, missingEpochs[0] - 1)
-      : maxEpochToCheck;
+  const {
+    missingCount: missingEpochCount,
+    latestStoredEpoch,
+    highestContiguousEpoch,
+    missingLatest: missingLatestEpochs,
+  } = summarizeEpochCoverage(presentEpochs, maxEpochToCheck);
 
   const jackpotsInfo = jackpotInfoRaw as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
   const lastDailyEpoch = parseChainUintNumber(jackpotsInfo[4]);
@@ -584,9 +578,9 @@ async function buildDataSyncHealthPayload() {
   const syncState =
     dbLastIndexedBlock === null
       ? "bootstrapping"
-      : lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks <= LAG_WARN_BLOCKS && missingEpochs.length === 0
+      : lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks <= LAG_WARN_BLOCKS && missingEpochCount === 0
         ? "synced"
-        : lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks <= Math.max(LAG_WARN_BLOCKS, 512) && missingEpochs.length <= 3
+        : lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks <= Math.max(LAG_WARN_BLOCKS, 512) && missingEpochCount <= 3
           ? "near_head"
           : "catching_up";
 
@@ -628,16 +622,16 @@ async function buildDataSyncHealthPayload() {
     );
   const nearHeadGapIsTolerable =
     syncState === "near_head" &&
-    missingEpochs.length > 0 &&
-    missingEpochs.length <= 3;
+    missingEpochCount > 0 &&
+    missingEpochCount <= 3;
   const missingEpochsAreStale =
     !nearHeadGapIsTolerable &&
-    missingEpochs.length > 0 &&
+    missingEpochCount > 0 &&
     reconcileAgeMs !== null &&
     reconcileAgeMs > INDEXER_HEARTBEAT_STALE_MS;
   const degraded =
     (lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks > LAG_WARN_BLOCKS) ||
-    (syncState === "catching_up" && missingEpochs.length > 0) ||
+    (syncState === "catching_up" && missingEpochCount > 0) ||
     missingEpochsAreStale ||
     !hasLatestDailyInDb ||
     !hasLatestWeeklyInDb ||
@@ -673,12 +667,12 @@ async function buildDataSyncHealthPayload() {
       epochs: {
         expectedResolvedRange: maxEpochToCheck > 0 ? `1..${maxEpochToCheck}` : "none",
         storedCount: presentEpochs.size,
-        missingCount: missingEpochs.length,
+        missingCount: missingEpochCount,
         latestStoredEpoch,
         highestContiguousEpoch,
         coveragePct: Number(epochCoveragePct.toFixed(2)),
         contiguousCoveragePct: Number(contiguousEpochCoveragePct.toFixed(2)),
-        missingLatest: missingEpochs.slice(-20),
+        missingLatest: missingLatestEpochs,
       },
       catchUp: {
         phase: syncState,
@@ -752,12 +746,12 @@ async function buildDataSyncHealthPayload() {
           stale:
             !nearHeadGapIsTolerable &&
             reconcileAgeMs !== null &&
-            missingEpochs.length > 0 &&
+            missingEpochCount > 0 &&
             reconcileAgeMs > INDEXER_HEARTBEAT_STALE_MS,
         },
       },
       hints: [
-        missingEpochs.length > 0 && !nearHeadGapIsTolerable ? "Indexer repair/reconcile is still catching up missing epochs." : null,
+        missingEpochCount > 0 && !nearHeadGapIsTolerable ? "Indexer repair/reconcile is still catching up missing epochs." : null,
         lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks > LAG_WARN_BLOCKS ? "Indexer is lagging behind the finality target; check bot/indexer supervisor." : null,
         dbLastIndexedAheadOfHead ? "Indexer DB cursor is ahead of the current chain head; verify chain and DB scope." : null,
         !hasLatestDailyInDb || !hasLatestWeeklyInDb ? "Latest jackpot event not in DB yet; API fallback should still show it." : null,
@@ -780,14 +774,13 @@ async function buildDataSyncHealthPayload() {
     } satisfies DataSyncHealthResponse;
 }
 
-function toHealthResponse(request: NextRequest, payload: DataSyncHealthResponse) {
+function toHealthResponse(authorized: boolean, payload: DataSyncHealthResponse) {
   return applyNoStoreHeaders(NextResponse.json(
-    isAuthorizedHealthDiagnosticsRequest(request) ? payload : redactHealthResponse(payload),
+    authorized ? payload : redactHealthResponse(payload),
   ));
 }
 
-function toHealthErrorResponse(request: NextRequest, err: unknown) {
-  const authorized = isAuthorizedHealthDiagnosticsRequest(request);
+function toHealthErrorResponse(authorized: boolean, err: unknown) {
   const privateError = describeSafeRouteError(err).message;
   return applyNoStoreHeaders(NextResponse.json(
     {
@@ -828,19 +821,20 @@ export async function GET(request: NextRequest) {
     windowMs: 60_000,
   });
   if (rateLimited) return applyNoStoreHeaders(rateLimited);
+  const authorized = await isAuthorizedHealthDiagnosticsRequest(request);
 
   const fresh = dataSyncHealthCache.getFresh(DATA_SYNC_CACHE_KEY);
   if (fresh) {
-    return toHealthResponse(request, fresh);
+    return toHealthResponse(authorized, fresh);
   }
 
   const inflight = dataSyncHealthCache.getInflight(DATA_SYNC_CACHE_KEY);
   if (inflight) {
     try {
-      return toHealthResponse(request, await inflight);
+      return toHealthResponse(authorized, await inflight);
     } catch (err) {
       logRouteError("api/health/data-sync", err);
-      return toHealthErrorResponse(request, err);
+      return toHealthErrorResponse(authorized, err);
     }
   }
 
@@ -858,13 +852,13 @@ export async function GET(request: NextRequest) {
   dataSyncHealthCache.setInflight(DATA_SYNC_CACHE_KEY, requestPromise);
 
   try {
-    return toHealthResponse(request, await requestPromise);
+    return toHealthResponse(authorized, await requestPromise);
   } catch (err) {
     logRouteError("api/health/data-sync", err);
     if (stale) {
       scheduleDataSyncRefresh();
-      return toHealthResponse(request, stale);
+      return toHealthResponse(authorized, stale);
     }
-    return toHealthErrorResponse(request, err);
+    return toHealthErrorResponse(authorized, err);
   }
 }

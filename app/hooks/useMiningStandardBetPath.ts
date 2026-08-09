@@ -20,7 +20,12 @@ import {
 import { tileIdsToMask } from "../lib/tileMask";
 import type { GasOverrides, SilentSendFn } from "./useMining.types";
 import type { ReceiptState } from "./useMining.stateTypes";
-import { isAmbiguousPendingTxError, normalizeTiles, withMiningRpcTimeout } from "./useMining.shared";
+import {
+  isAmbiguousPendingTxError,
+  isNetworkError,
+  normalizeTiles,
+  withMiningRpcTimeout,
+} from "./useMining.shared";
 
 const EPOCH_BOUND_BITMAP_SELECTOR = toFunctionSelector(
   "placeBatchBetsBitmapForEpoch(uint256,uint32,uint256)",
@@ -36,6 +41,10 @@ function isMissingMethodError(error: unknown, methodName: string) {
     msg.includes(`does not have the function "${normalizedMethod}"`) ||
     msg.includes('returned no data ("0x")')
   );
+}
+
+export function shouldRecoverSilentSendAsPending(error: unknown): boolean {
+  return isAmbiguousPendingTxError(error) || isNetworkError(error);
 }
 
 interface UseMiningStandardBetPathOptions {
@@ -452,7 +461,7 @@ export function useMiningStandardBetPath({
           hash,
         });
       } catch (error) {
-        if (isAmbiguousPendingTxError(error)) {
+        if (shouldRecoverSilentSendAsPending(error)) {
           if (actor && effectiveNonce !== undefined) {
             writePendingMiningTxState({
               chainId: APP_CHAIN_ID,

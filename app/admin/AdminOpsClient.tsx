@@ -1,9 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { useModalStatus, usePrivy, useWallets } from "@privy-io/react-auth";
 import { useAccount } from "wagmi";
 import { toHex } from "viem";
+import {
+  PRIVY_LOGIN_ACCESSIBLE_NAME,
+  usePrivyLoginAccessibility,
+} from "../hooks/usePrivyLoginAccessibility";
 import { APP_CHAIN_ID } from "../lib/constants";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { readJsonResponse } from "../lib/readJsonResponse";
@@ -334,6 +338,13 @@ function fmtPct(value: number | null) {
 
 export default function AdminOpsClient() {
   const { ready, authenticated, login, logout } = usePrivy();
+  const { isOpen: privyModalOpen } = useModalStatus();
+  const privyLogin = usePrivyLoginAccessibility({
+    authenticated,
+    login,
+    modalOpen: privyModalOpen,
+    ready,
+  });
   const { wallets } = useWallets();
   const { address } = useAccount();
   const [dataSyncHealth, setDataSyncHealth] = useState<DataSyncHealth | null>(null);
@@ -349,6 +360,10 @@ export default function AdminOpsClient() {
   const [processStates, setProcessStates] = useState<Record<"indexer" | "bot", AdminProcessState> | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [processActionBusy, setProcessActionBusy] = useState<"indexer" | "bot" | null>(null);
+  const showLoginReload = Boolean(
+    privyLogin.uiState.error &&
+      (privyLogin.uiState.error.includes("still loading") || privyLogin.uiState.error.includes("timed out")),
+  );
   const copyResetTimeoutRef = useRef<number | null>(null);
   const processRefreshTimeoutRef = useRef<number | null>(null);
 
@@ -955,7 +970,16 @@ export default function AdminOpsClient() {
           <p className="text-sm text-gray-400">
             Runtime, indexer, and API health dashboard. Full admin details unlock only for the approved wallet.
           </p>
-          <div className="flex flex-wrap gap-2">
+          <div
+            data-privy-login-focus-root
+            role="group"
+            aria-label="Admin operations controls"
+            tabIndex={-1}
+            className="flex flex-wrap gap-2"
+          >
+            <span id="admin-privy-login-status" className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+              {privyLogin.uiState.statusAnnouncement}
+            </span>
             {canSeePrivateDiagnostics ? (
               <>
                 <a
@@ -990,10 +1014,19 @@ export default function AdminOpsClient() {
             {!authenticated ? (
               <button
                 type="button"
-                onClick={login}
-                className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200 hover:bg-emerald-500/20"
+                onClick={(event) => privyLogin.requestLogin(
+                  event.currentTarget,
+                  event.currentTarget.closest<HTMLElement>("[data-privy-login-focus-root]"),
+                )}
+                aria-label={PRIVY_LOGIN_ACCESSIBLE_NAME}
+                aria-describedby="admin-privy-login-status"
+                aria-haspopup="dialog"
+                aria-expanded={privyLogin.uiState.modalOpen}
+                aria-busy={privyLogin.uiState.busy}
+                disabled={privyLogin.uiState.disabled}
+                className="inline-flex min-h-11 items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200 outline-none hover:bg-emerald-500/20 focus-visible:ring-2 focus-visible:ring-emerald-300/80 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Login / Connect
+                {privyLogin.uiState.buttonText}
               </button>
             ) : isAdminWallet && !adminAuthReady ? (
               <button
@@ -1025,6 +1058,25 @@ export default function AdminOpsClient() {
         {adminAuthError ? (
           <div className="rounded border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
             {adminAuthError}
+          </div>
+        ) : null}
+
+        {!authenticated && privyLogin.uiState.error ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex items-center justify-between gap-3 rounded border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200"
+          >
+            <span>{privyLogin.uiState.error}</span>
+            {showLoginReload ? (
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded border border-red-300/30 px-3 text-xs font-bold uppercase tracking-wider outline-none hover:bg-red-300/10 focus-visible:ring-2 focus-visible:ring-red-200/80 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                Reload
+              </button>
+            ) : null}
           </div>
         ) : null}
 

@@ -448,7 +448,7 @@ export async function GET(request: NextRequest) {
   });
   if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
-  if (!readAdminSession(request)) {
+  if (!(await readAdminSession(request))) {
     return applyNoStoreHeaders(
       NextResponse.json({ error: "Admin auth required" }, { status: 401 }),
       { varyCookie: true },

@@ -1,4 +1,5 @@
-import { decodeEventLog, encodeEventTopics, formatUnits, getAddress, parseAbi } from "viem";
+import { decodeEventLog, encodeEventTopics, formatUnits, getAddress } from "viem";
+import { GAME_EVENTS_ABI as EVENTS_ABI } from "../../../config/generated/lineaOreV10Abi";
 import { parseOptionalNonNegativeBigIntEnv } from "../../../config/envParsing";
 import {
   computeWinningAmountWei,
@@ -35,9 +36,6 @@ const RECENT_WINS_BOOTSTRAP_SCAN_CHUNK = 10_000n;
 const RECENT_WINS_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeBigIntEnv(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG, 256n);
 const MAX_TILE_ID = 25;
 
-const EVENTS_ABI = parseAbi([
-  "event RewardClaimed(uint256 indexed epoch, address indexed user, uint256 reward)",
-]);
 const [rewardClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RewardClaimed" });
 
 export type RecentWinJackpotKind = "daily" | "weekly" | "daily-weekly";

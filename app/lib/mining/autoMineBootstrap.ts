@@ -36,6 +36,13 @@ function normalizeBootstrapApprovalNonce(value: unknown): number | null {
   return value;
 }
 
+export function selectBootstrapApprovalSubmissionNonce(
+  trackedNonce: unknown,
+  freshPendingNonce: unknown,
+): number | null {
+  return normalizeBootstrapApprovalNonce(trackedNonce ?? freshPendingNonce);
+}
+
 function getPendingApproveAgeMs(pendingApprove: PendingApproveState, now: number): number | null {
   if (
     !Number.isSafeInteger(now) ||
@@ -207,14 +214,15 @@ export async function prepareAutoMineBootstrap({
           "Approval transaction is still pending. Wait for confirmation before auto-mine continues.",
         );
       }
-      const approvalNonceRaw = pendingApproveRef.current?.nonce ?? await withMiningRpcTimeout(
+      const trackedApprovalNonce = pendingApproveRef.current?.nonce;
+      const approvalNonceRaw = trackedApprovalNonce ?? await withMiningRpcTimeout(
         publicClient.getTransactionCount({
           address: actorAddress,
-          blockTag: "latest",
+          blockTag: "pending",
         }),
         "bootstrap.getTransactionCount",
       );
-      approvalNonce = normalizeBootstrapApprovalNonce(approvalNonceRaw);
+      approvalNonce = selectBootstrapApprovalSubmissionNonce(trackedApprovalNonce, approvalNonceRaw);
       if (approvalNonce === null) {
         throw new Error("Approval nonce is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
       }

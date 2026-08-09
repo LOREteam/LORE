@@ -11,6 +11,7 @@ import { useGameGridReads } from "./useGameGridReads";
 import { useGameHistoryData } from "./useGameHistoryData";
 import { useGameLiveStateSnapshot, type LiveStateApiResponse } from "./useGameLiveStateSnapshot";
 import { getFormattedBalance } from "../lib/balanceFormatting";
+import { deriveCurrentRoundEvidence } from "../lib/currentRoundEvidence";
 import { useGamePollingConfig } from "./useGamePollingConfig";
 import { useGameTileUserCounts } from "./useGameTileUserCounts";
 import { useGameUserBets } from "./useGameUserBets";
@@ -145,6 +146,7 @@ export function useGameData(options?: UseGameDataOptions) {
     serverStateMatchesGrid,
     effectiveGridEpochData,
     effectiveTileData,
+    currentEpochData,
     currentEpochResolved,
     effectiveEpochEndTime,
     effectiveJackpotInfoRaw,
@@ -181,6 +183,16 @@ export function useGameData(options?: UseGameDataOptions) {
     pendingEpochDurationEffectiveFromEpoch,
     fallbackPendingEpochDurationEffectiveFromEpoch,
   });
+
+  const currentRoundEvidence = useMemo(
+    () =>
+      deriveCurrentRoundEvidence({
+        currentEpoch: resolvedCurrentEpoch,
+        currentEpochData,
+        effectiveEpochEndTime,
+      }),
+    [currentEpochData, effectiveEpochEndTime, resolvedCurrentEpoch],
+  );
 
   const { userBetsAll, refetchUserBets } = useGameUserBets({
     chainId,
@@ -291,6 +303,7 @@ export function useGameData(options?: UseGameDataOptions) {
       isWeeklyJackpot: currentEpochJackpotInfo.isWeeklyJackpot,
       jackpotAmount,
       currentEpochResolved,
+      currentRoundEvidence,
       tileViewData,
       currentAllowance,
       actualCurrentEpoch: resolvedCurrentEpoch,
@@ -331,6 +344,7 @@ export function useGameData(options?: UseGameDataOptions) {
       currentEpochJackpotInfo.isWeeklyJackpot,
       jackpotAmount,
       currentEpochResolved,
+      currentRoundEvidence,
       tileViewData,
       currentAllowance,
       resolvedCurrentEpoch,

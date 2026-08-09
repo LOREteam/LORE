@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { decodeEventLog, encodeEventTopics, formatUnits, getAddress, parseAbi } from "viem";
+import { decodeEventLog, encodeEventTopics, formatUnits, getAddress } from "viem";
+import {
+  GAME_ABI as CURRENT_EPOCH_ABI,
+  GAME_EVENTS_ABI as EVENTS_ABI,
+} from "../../../config/generated/lineaOreV10Abi";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
+import { getIndexerFinalityTargetBlock, parseIndexerFinalityBlocks } from "../../lib/indexerFinality";
 import { tileMaskToTileIds } from "../../lib/tileMask";
 import { formatLineaWeiDisplayNumber, normalizeTileAmounts, parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import {
@@ -32,6 +37,8 @@ import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "..
 
 const LOG_CHUNK_BLOCKS = 10_000n;
 const ENABLE_CHAIN_RECOVERY = process.env.API_DEPOSITS_CHAIN_RECOVERY === "1";
+const INDEXER_FINALITY_BLOCKS = parseIndexerFinalityBlocks(process.env.INDEXER_FINALITY_BLOCKS);
+const ENABLE_FINALIZED_CHAIN_RECOVERY = ENABLE_CHAIN_RECOVERY && INDEXER_FINALITY_BLOCKS > 0n;
 const DEPOSITS_ROUTE_CACHE_MS = 15_000;
 const DEPOSITS_ROUTE_CACHE_MAX_KEYS = 512;
 const ROUTE_METRIC_KEY = "api/deposits";
@@ -43,16 +50,6 @@ const INLINE_REWARD_EPOCH_LIMIT = 64;
 const MAX_TILE_ID = 25;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const depositsBuildInflight = new Map<string, Promise<DepositsBuildResult>>();
-const CURRENT_EPOCH_ABI = parseAbi([
-  "function currentEpoch() view returns (uint256)",
-]);
-
-const EVENTS_ABI = parseAbi([
-  "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
-  "event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)",
-  "event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount)",
-  "event BatchBetsBitmapPlaced(uint256 indexed epoch, address indexed user, uint32 tileMask, uint256 amount, uint256 totalAmount)",
-]);
 const [betSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BetPlaced" });
 const [batchSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsPlaced" });
 const [batchSameAmountSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "BatchBetsSameAmountPlaced" });
@@ -226,13 +223,14 @@ function sortDepositsDesc<T extends { epoch: string; blockNumber: string; txHash
 async function getLogsByTopicAndUser(
   topic0: `0x${string}`,
   userTopic: `0x${string}`,
-  fromBlock: bigint = CONTRACT_DEPLOY_BLOCK,
+  fromBlock: bigint,
+  toBlock: bigint,
 ) {
   const all: Awaited<ReturnType<typeof publicClient.getLogs>> = [];
-  const head = await publicClient.getBlockNumber();
   const startBlock = fromBlock > CONTRACT_DEPLOY_BLOCK ? fromBlock : CONTRACT_DEPLOY_BLOCK;
-  for (let from = startBlock; from <= head; from += LOG_CHUNK_BLOCKS) {
-    const to = from + LOG_CHUNK_BLOCKS - 1n > head ? head : from + LOG_CHUNK_BLOCKS - 1n;
+  if (startBlock > toBlock) return all;
+  for (let from = startBlock; from <= toBlock; from += LOG_CHUNK_BLOCKS) {
+    const to = from + LOG_CHUNK_BLOCKS - 1n > toBlock ? toBlock : from + LOG_CHUNK_BLOCKS - 1n;
     const logsRequest = {
       address: CONTRACT_ADDRESS,
       topics: [topic0, null, userTopic],
@@ -248,13 +246,18 @@ async function getLogsByTopicAndUser(
 async function fetchDepositsFromChain(
   user: string,
   currentEpoch: number | null,
-  fromBlock: bigint = CONTRACT_DEPLOY_BLOCK,
+  fromBlock: bigint,
+  toBlock: bigint,
 ) {
   const userTopic = addressToTopic(user);
-  const betLogs = betSig ? await getLogsByTopicAndUser(betSig, userTopic, fromBlock) : [];
-  const batchLogs = batchSig ? await getLogsByTopicAndUser(batchSig, userTopic, fromBlock) : [];
-  const batchSameAmountLogs = batchSameAmountSig ? await getLogsByTopicAndUser(batchSameAmountSig, userTopic, fromBlock) : [];
-  const batchBitmapLogs = batchBitmapSig ? await getLogsByTopicAndUser(batchBitmapSig, userTopic, fromBlock) : [];
+  const betLogs = betSig ? await getLogsByTopicAndUser(betSig, userTopic, fromBlock, toBlock) : [];
+  const batchLogs = batchSig ? await getLogsByTopicAndUser(batchSig, userTopic, fromBlock, toBlock) : [];
+  const batchSameAmountLogs = batchSameAmountSig
+    ? await getLogsByTopicAndUser(batchSameAmountSig, userTopic, fromBlock, toBlock)
+    : [];
+  const batchBitmapLogs = batchBitmapSig
+    ? await getLogsByTopicAndUser(batchBitmapSig, userTopic, fromBlock, toBlock)
+    : [];
   const byKey = new Map<string, DepositRow>();
   const all = [...betLogs, ...batchLogs, ...batchSameAmountLogs, ...batchBitmapLogs];
   all.sort((a, b) => {
@@ -498,15 +501,32 @@ function readIndexedDeposits(user: string, currentEpochNum: number | null) {
 }
 
 async function recoverDepositsAndPersist(user: string, currentEpochNum: number | null) {
+  if (!ENABLE_FINALIZED_CHAIN_RECOVERY) return [];
+
   const latestIndexedBlock = getMetaBigInt("lastIndexedBlock");
   const headBlock = await publicClient.getBlockNumber();
-  const recoveryFromBlock =
-    latestIndexedBlock && latestIndexedBlock >= CONTRACT_DEPLOY_BLOCK
+  const finalityTargetBlock = getIndexerFinalityTargetBlock(headBlock, INDEXER_FINALITY_BLOCKS);
+  if (finalityTargetBlock === null || finalityTargetBlock < CONTRACT_DEPLOY_BLOCK) return [];
+
+  const recoveryWindowStart =
+    finalityTargetBlock >= RECENT_RECOVERY_BLOCK_WINDOW
+      ? finalityTargetBlock - RECENT_RECOVERY_BLOCK_WINDOW + 1n
+      : 0n;
+  const boundedWindowStart =
+    recoveryWindowStart > CONTRACT_DEPLOY_BLOCK ? recoveryWindowStart : CONTRACT_DEPLOY_BLOCK;
+  const indexedStart =
+    latestIndexedBlock !== null && latestIndexedBlock >= CONTRACT_DEPLOY_BLOCK
       ? latestIndexedBlock + 1n
-      : headBlock > RECENT_RECOVERY_BLOCK_WINDOW
-        ? headBlock - RECENT_RECOVERY_BLOCK_WINDOW
-        : CONTRACT_DEPLOY_BLOCK;
-  const recovered = await fetchDepositsFromChain(user, currentEpochNum, recoveryFromBlock);
+      : CONTRACT_DEPLOY_BLOCK;
+  const recoveryFromBlock = indexedStart > boundedWindowStart ? indexedStart : boundedWindowStart;
+  if (recoveryFromBlock > finalityTargetBlock) return [];
+
+  const recovered = await fetchDepositsFromChain(
+    user,
+    currentEpochNum,
+    recoveryFromBlock,
+    finalityTargetBlock,
+  );
   if (recovered.length > 0) {
     const patch: Record<string, unknown> = {};
     for (const d of recovered) {
@@ -545,17 +565,20 @@ async function buildDepositsPayload(
   options: DepositsBuildOptions = {},
 ): Promise<DepositsBuildResult> {
   const indexedCurrentEpochNum = getMetaNumber("currentEpoch");
-  const currentEpochNum = await resolveFreshCurrentEpochNumber({
-    preferOnChain: Boolean(options.allowSlowRecovery),
-  });
+  const currentEpochNum = ENABLE_FINALIZED_CHAIN_RECOVERY
+    ? await resolveFreshCurrentEpochNumber({
+        preferOnChain: Boolean(options.allowSlowRecovery),
+      })
+    : isValidEpochNumber(indexedCurrentEpochNum)
+      ? indexedCurrentEpochNum
+      : null;
   let deposits = readIndexedDeposits(user, currentEpochNum);
 
   const indexedEpochLag =
     currentEpochNum && indexedCurrentEpochNum ? currentEpochNum - indexedCurrentEpochNum : 0;
   const shouldAttemptRecovery =
-    ENABLE_CHAIN_RECOVERY ||
-    deposits.length === 0 ||
-    indexedEpochLag >= DEPOSIT_RECOVERY_EPOCH_LAG;
+    ENABLE_FINALIZED_CHAIN_RECOVERY &&
+    (deposits.length === 0 || indexedEpochLag >= DEPOSIT_RECOVERY_EPOCH_LAG);
 
   if (shouldAttemptRecovery && options.allowSlowRecovery) {
     const recovered = await recoverDepositsWithGlobalBound(user, currentEpochNum);

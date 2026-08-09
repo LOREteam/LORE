@@ -10,7 +10,13 @@ import {
   GAME_ABI,
   LINEA_TOKEN_ADDRESS,
 } from "../lib/constants";
-import { getFallbackFeeOverrides, getKeeperFeeOverrides, getLineaFeeOverrides } from "../lib/lineaFees";
+import {
+  assertKeeperFeeBudget,
+  getFallbackFeeOverrides,
+  getKeeperFeeOverrides,
+  getLineaFeeOverrides,
+  isLineaFeePolicyError,
+} from "../lib/lineaFees";
 import { recordLineaEstimateGasShadow } from "../lib/lineaEstimateGasShadow";
 import { log } from "../lib/logger";
 import type { GasOverrides } from "./useMining.types";
@@ -18,6 +24,7 @@ import { isEstimateGasOutOfGasError, isMissingTokenGetterError, isNetworkError, 
 
 type FeeEstimate = Awaited<ReturnType<PublicClient["estimateFeesPerGas"]>>;
 const FEE_ESTIMATE_CACHE_TTL_MS = 3_000;
+const APPROVAL_GAS_LIMIT = 90_000n;
 
 function formatNativeWeiSixDecimals(rawValue: bigint): string {
   const value = rawValue < 0n ? 0n : rawValue;
@@ -125,8 +132,11 @@ export function useMiningRuntimeHelpers({
       if (!fees) return getFallbackFeeOverrides(APP_CHAIN_ID, "keeper");
       const maxFeeBump = 130n + BigInt(attempt) * 25n;
       const priorityBump = 125n + BigInt(attempt) * 20n;
-      return getKeeperFeeOverrides(fees, APP_CHAIN_ID, maxFeeBump, priorityBump);
+      const feeOverrides = getKeeperFeeOverrides(fees, APP_CHAIN_ID, maxFeeBump, priorityBump);
+      assertKeeperFeeBudget(feeOverrides, APPROVAL_GAS_LIMIT, APP_CHAIN_ID, "approval");
+      return feeOverrides;
     } catch (err) {
+      if (isLineaFeePolicyError(err)) throw err;
       log.warn("Approve", "approve fee estimation failed, falling back", err);
     }
     return getFallbackFeeOverrides(APP_CHAIN_ID, "keeper");

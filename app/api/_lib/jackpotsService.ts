@@ -1,4 +1,8 @@
-import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi, toHex } from "viem";
+import { decodeEventLog, encodeEventTopics, formatUnits, toHex } from "viem";
+import {
+  GAME_ABI as READ_ABI,
+  GAME_EVENTS_ABI as EVENTS_ABI,
+} from "../../../config/generated/lineaOreV10Abi";
 import { parseOptionalNonNegativeBigIntEnv } from "../../../config/envParsing";
 import { formatLineaWeiDisplayNumber } from "../../lib/tokenAmountMath";
 import { getMetaBigInt, getRecentJackpots } from "../../../server/storage";
@@ -16,13 +20,6 @@ import {
 import { logRouteError } from "./routeError";
 import { markRouteBackgroundRefresh } from "./runtimeMetrics";
 
-const READ_ABI = parseAbi([
-  "function getJackpotInfo() view returns (uint256 dailyPool, uint256 weeklyPool, uint256 lastDailyDay, uint256 lastWeeklyWeek, uint256 lastDailyEpoch, uint256 lastWeeklyEpoch, uint256 lastDailyAmount, uint256 lastWeeklyAmount)",
-]);
-const EVENTS_ABI = parseAbi([
-  "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
-  "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
-]);
 const [dailySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "DailyJackpotAwarded" });
 const [weeklySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "WeeklyJackpotAwarded" });
 const JACKPOT_LOG_SCAN_CHUNK = 10_000n;
@@ -30,7 +27,6 @@ const JACKPOT_LOG_SCAN_MIN_CHUNK = 2_000n;
 const JACKPOT_ROUTE_CACHE_MS = 60_000;
 const JACKPOT_EVENT_CACHE_MS = 5 * 60 * 1000;
 const JACKPOT_BACKGROUND_RECOVERY_COOLDOWN_MS = 2 * 60 * 1000;
-const JACKPOT_FORCE_FRESH_WAIT_MS = 2_000;
 const MAX_JACKPOT_EVENT_CACHE_ENTRIES = 256;
 const JACKPOT_HISTORY_LIMIT = 200;
 const JACKPOT_BOOTSTRAP_SCAN_CHUNK = 10_000n;
@@ -54,10 +50,10 @@ export type JackpotPayload = {
 
 export type JackpotReadResult = {
   payload: JackpotPayload;
-  source: "cache" | "stale-cache" | "inflight" | "rebuilt";
+  source: "cache" | "stale-cache" | "rebuilt";
 };
 type JackpotReadOptions = {
-  forceFresh?: boolean;
+  bypassResponseCache?: boolean;
 };
 
 type JackpotEventLookup = { txHash: string; blockNumber: string; timestamp: number | null } | null;
@@ -76,7 +72,6 @@ type JackpotBuildResult = { payload: JackpotPayload; recoveryNeeded: boolean };
 
 let jackpotResponseCache: JackpotCacheEntry | null = null;
 let jackpotBackgroundRecoveryPromise: Promise<void> | null = null;
-let jackpotForceFreshInflight: Promise<JackpotPayload> | null = null;
 let jackpotBackgroundRecoveryStartedAt = 0;
 let jackpotBuildSeq = 0;
 let jackpotAppliedSeq = 0;
@@ -517,19 +512,6 @@ function maybeStartJackpotRecovery(existingJackpots: JackpotRow[]) {
     });
 }
 
-async function waitForForceFreshPayload(promise: Promise<JackpotPayload>) {
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const timeout = new Promise<null>((resolve) => {
-    timeoutId = setTimeout(() => resolve(null), JACKPOT_FORCE_FRESH_WAIT_MS);
-  });
-
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
-}
-
 async function buildJackpotsPayload(
   options: {
     allowSlowRecovery?: boolean;
@@ -563,7 +545,7 @@ async function buildJackpotsPayload(
 
 export async function readJackpotPayload(options: JackpotReadOptions = {}): Promise<JackpotReadResult> {
   const now = Date.now();
-  if (!options.forceFresh && jackpotResponseCache && jackpotResponseCache.expiresAt > now) {
+  if (!options.bypassResponseCache && jackpotResponseCache && jackpotResponseCache.expiresAt > now) {
     return { payload: jackpotResponseCache.payload, source: "cache" };
   }
 
@@ -581,35 +563,15 @@ export async function readJackpotPayload(options: JackpotReadOptions = {}): Prom
     return { payload, source: "rebuilt" };
   }
 
-  if (options.forceFresh) {
-    const joinedInflight = Boolean(jackpotForceFreshInflight);
-
-    if (!jackpotForceFreshInflight) {
-      jackpotForceFreshInflight = (async () => {
-        const seq = ++jackpotBuildSeq;
-        const { payload } = await buildJackpotsPayload({
-          allowSlowRecovery: true,
-          scheduleBackgroundRecovery: false,
-          seedJackpots,
-        });
-        return commitJackpotResponseCache(payload, JACKPOT_ROUTE_CACHE_MS, seq);
-      })().finally(() => {
-        jackpotForceFreshInflight = null;
-      });
-    }
-
-    const freshPayload = await waitForForceFreshPayload(jackpotForceFreshInflight);
-    if (!freshPayload) {
-      return {
-        payload: jackpotResponseCache?.payload ?? { jackpots: seedJackpots.slice(0, JACKPOT_HISTORY_LIMIT) },
-        source: "stale-cache",
-      };
-    }
-
-    return {
-      payload: freshPayload,
-      source: joinedInflight ? "inflight" : "rebuilt",
-    };
+  if (options.bypassResponseCache) {
+    const seq = ++jackpotBuildSeq;
+    const payload = commitJackpotResponseCache(
+      { jackpots: seedJackpots.slice(0, JACKPOT_HISTORY_LIMIT) },
+      JACKPOT_ROUTE_CACHE_MS,
+      seq,
+    );
+    maybeStartJackpotRecovery(seedJackpots);
+    return { payload, source: "rebuilt" };
   }
 
   const staleCache = jackpotResponseCache?.payload ?? null;

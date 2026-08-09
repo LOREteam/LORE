@@ -6,6 +6,7 @@ import { useReducedMotion } from "../hooks/useReducedMotion";
 interface ConfettiProps {
   active: boolean;
   isMyWin?: boolean;
+  reducedMotion?: boolean;
 }
 
 const PARTICLE_COUNT = 10;
@@ -13,13 +14,15 @@ const MAX_FRAMES = 36;
 const COLORS_WIN = ["#f59e0b", "#fbbf24", "#f97316", "#eab308", "#d97706"];
 const COLORS_MY_WIN = ["#0ea5e9", "#38bdf8", "#06b6d4", "#22d3ee", "#67e8f9", "#f59e0b"];
 
-export const Confetti = memo(function Confetti({ active, isMyWin }: ConfettiProps) {
+export const Confetti = memo(function Confetti({ active, isMyWin, reducedMotion: reducedMotionOverride }: ConfettiProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
-  const { reducedMotion } = useReducedMotion();
+  const motionPreference = useReducedMotion();
+  const motionReady = reducedMotionOverride !== undefined || motionPreference.motionReady;
+  const reducedMotion = reducedMotionOverride ?? motionPreference.reducedMotion;
 
   useEffect(() => {
-    if (!active || reducedMotion) return;
+    if (!active || !motionReady || reducedMotion) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d", { alpha: true });
@@ -47,10 +50,16 @@ export const Confetti = memo(function Confetti({ active, isMyWin }: ConfettiProp
     }));
 
     let frame = 0;
+    let isIntersecting = typeof IntersectionObserver === "undefined";
 
     const animate = () => {
+      if (document.hidden || !isIntersecting) {
+        animRef.current = 0;
+        return;
+      }
       if (frame >= MAX_FRAMES) {
         ctx.clearRect(0, 0, width, height);
+        animRef.current = 0;
         return;
       }
       ctx.clearRect(0, 0, width, height);
@@ -81,17 +90,53 @@ export const Confetti = memo(function Confetti({ active, isMyWin }: ConfettiProp
       animRef.current = requestAnimationFrame(animate);
     };
 
-    animRef.current = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animRef.current);
-  }, [active, isMyWin, reducedMotion]);
+    const start = () => {
+      if (!document.hidden && isIntersecting && animRef.current === 0 && frame < MAX_FRAMES) {
+        animRef.current = requestAnimationFrame(animate);
+      }
+    };
+    const stop = () => {
+      if (animRef.current !== 0) {
+        cancelAnimationFrame(animRef.current);
+        animRef.current = 0;
+      }
+    };
+    const syncActivity = () => {
+      if (document.hidden || !isIntersecting) stop();
+      else start();
+    };
+    const observer = typeof IntersectionObserver === "undefined"
+      ? null
+      : new IntersectionObserver(([entry]) => {
+          isIntersecting = entry?.isIntersecting ?? false;
+          syncActivity();
+        });
 
-  if (!active || reducedMotion) return null;
+    observer?.observe(canvas);
+    document.addEventListener("visibilitychange", syncActivity);
+    start();
+
+    return () => {
+      stop();
+      observer?.disconnect();
+      document.removeEventListener("visibilitychange", syncActivity);
+    };
+  }, [active, isMyWin, motionReady, reducedMotion]);
+
+  if (!active) return null;
 
   return (
-    <canvas
-      ref={canvasRef}
-      aria-hidden="true"
-      className="absolute inset-0 w-full h-full pointer-events-none z-50"
-    />
+    <>
+      <span className="sr-only" role="status" aria-live="polite">
+        {isMyWin ? "Your winning tile has been revealed." : "The winning tile has been revealed."}
+      </span>
+      {motionReady && !reducedMotion && (
+        <canvas
+          ref={canvasRef}
+          aria-hidden="true"
+          className="absolute inset-0 w-full h-full pointer-events-none z-50"
+        />
+      )}
+    </>
   );
 });

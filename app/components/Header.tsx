@@ -1,8 +1,15 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePrivy } from "@privy-io/react-auth";
+import { useModalStatus, usePrivy } from "@privy-io/react-auth";
+import {
+  deriveRoundPresentation,
+  KEEPER_DELAY_THRESHOLD_MS,
+  normalizeRoundEpochEndMs,
+} from "../lib/roundPresentation";
+import type { CurrentRoundEvidence } from "../lib/currentRoundEvidence";
 import { formatTime } from "../lib/utils";
+import { usePrivyLoginAccessibility } from "../hooks/usePrivyLoginAccessibility";
 import { WinsTicker } from "./WinsTicker";
 import type { JackpotHistoryEntry } from "../hooks/useJackpotHistory";
 import type { RecentWin } from "../hooks/useRecentWins";
@@ -11,22 +18,13 @@ import { HeaderPoolChart } from "./header/HeaderPoolChart";
 import { HeaderWalletCard } from "./header/HeaderWalletCard";
 import type { JackpotDisplayInfo } from "./header/types";
 
-const LOGIN_PENDING_TIMEOUT_MS = 20_000;
-const LOGIN_FAILURE_MESSAGE = "Wallet login failed. Try again or reload the page.";
-
-function formatLoginFailure(error: unknown): string {
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  if (message.includes("timeout") || message.includes("timed out")) {
-    return "Wallet login timed out. Try again or reload the page.";
-  }
-  if (message.includes("rejected") || message.includes("denied") || message.includes("closed")) {
-    return "Wallet login was cancelled.";
-  }
-  return LOGIN_FAILURE_MESSAGE;
-}
+const MAX_BROWSER_TIMEOUT_MS = 2_147_483_647;
 
 interface HeaderProps {
   initialNowMs?: number;
+  actualCurrentEpoch?: bigint;
+  gridDisplayEpoch?: string | null;
+  currentRoundEvidence: CurrentRoundEvidence;
   visualEpoch: string | null;
   isRevealing: boolean;
   coldBootDefaults?: boolean;
@@ -61,6 +59,9 @@ interface HeaderProps {
 
 export const Header = React.memo(function Header({
   initialNowMs = 0,
+  actualCurrentEpoch,
+  gridDisplayEpoch = null,
+  currentRoundEvidence,
   visualEpoch,
   isRevealing,
   coldBootDefaults = false,
@@ -88,17 +89,20 @@ export const Header = React.memo(function Header({
   epochDurationChange = null,
 }: HeaderProps) {
   const { ready: privyReady, login, logout, authenticated } = usePrivy();
+  const { isOpen: privyModalOpen } = useModalStatus();
   const showColdBootDefaults = coldBootDefaults && !liveStateReady && !isRevealing;
-  const timerStalled = timerReady && liveStateReady && !showColdBootDefaults && !isRevealing && timeLeft === 0;
-  const stalledStatusLabel = realTotalStaked > 0 ? "Waiting resolver" : "No bets";
-  const showNumericTimer = liveStateReady || showColdBootDefaults;
   const [hydrated, setHydrated] = useState(false);
-  const [showAnalyzing, setShowAnalyzing] = useState(false);
+  const [roundNowMs, setRoundNowMs] = useState(() =>
+    Number.isSafeInteger(initialNowMs) && initialNowMs > 0 ? initialNowMs : 0,
+  );
   const [embeddedAddressCopied, setEmbeddedAddressCopied] = useState(false);
-  const [loginPending, setLoginPending] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [privyReadySlow, setPrivyReadySlow] = useState(false);
   const mountedRef = useRef(false);
+  const privyLogin = usePrivyLoginAccessibility({
+    authenticated,
+    login,
+    modalOpen: privyModalOpen,
+    ready: privyReady,
+  });
 
   useEffect(() => {
     mountedRef.current = true;
@@ -115,73 +119,69 @@ export const Header = React.memo(function Header({
   }, [embeddedAddressCopied]);
 
   useEffect(() => {
-    if (!authenticated) return;
-    setLoginPending(false);
-    setLoginError(null);
-  }, [authenticated]);
+    const now = Date.now();
+    setRoundNowMs(now);
+    const endMs = normalizeRoundEpochEndMs(currentRoundEvidence.effectiveEpochEndTime);
+    if (endMs === null) return;
 
-  useEffect(() => {
-    if (privyReady) {
-      setPrivyReadySlow(false);
-      return;
-    }
-    const timeoutId = window.setTimeout(() => {
-      if (mountedRef.current) setPrivyReadySlow(true);
-    }, 20_000);
-    return () => window.clearTimeout(timeoutId);
-  }, [privyReady]);
+    const transitionTargets = [endMs, endMs + KEEPER_DELAY_THRESHOLD_MS + 1];
+    const timeoutIds = transitionTargets.flatMap((targetMs) => {
+      const delayMs = targetMs - now;
+      if (delayMs < 0 || delayMs >= MAX_BROWSER_TIMEOUT_MS) return [];
+      return [
+        window.setTimeout(() => {
+          setRoundNowMs(Date.now());
+        }, delayMs + 1),
+      ];
+    });
 
-  useEffect(() => {
-    if (!loginPending || authenticated) return;
-    const timeoutId = window.setTimeout(() => {
-      if (!mountedRef.current || authenticated) return;
-      setLoginPending(false);
-      setLoginError("Wallet login timed out. Try again or reload the page.");
-    }, LOGIN_PENDING_TIMEOUT_MS);
-    return () => window.clearTimeout(timeoutId);
-  }, [authenticated, loginPending]);
+    return () => {
+      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    };
+  }, [currentRoundEvidence, timeLeft]);
 
-  const handleLogin = useCallback(() => {
-    if (!privyReady || authenticated || loginPending) return;
-    setLoginPending(true);
-    setLoginError(null);
-    try {
-      const loginResult = login() as unknown;
-      if (loginResult && typeof (loginResult as Promise<void>).then === "function") {
-        void (loginResult as Promise<void>)
-          .catch((error: unknown) => {
-            if (mountedRef.current) {
-              setLoginError(formatLoginFailure(error));
-            }
-          })
-          .finally(() => {
-            if (mountedRef.current) {
-              setLoginPending(false);
-            }
-          });
-        return;
-      }
-      window.setTimeout(() => {
-        if (mountedRef.current) {
-          setLoginPending(false);
-        }
-      }, 800);
-    } catch (error) {
-      if (mountedRef.current) {
-        setLoginError(formatLoginFailure(error));
-        setLoginPending(false);
-      }
-    }
-  }, [authenticated, login, loginPending, privyReady]);
-
-  useEffect(() => {
-    if (!liveStateReady) {
-      setShowAnalyzing(false);
-      return;
-    }
-    if (timeLeft === 0 || isRevealing) setShowAnalyzing(true);
-    else if (timeLeft > 0 && !isRevealing) setShowAnalyzing(false);
-  }, [liveStateReady, timeLeft, isRevealing]);
+  const roundPresentation = useMemo(
+    () =>
+      deriveRoundPresentation({
+        actualCurrentEpoch,
+        gridDisplayEpoch,
+        visualEpoch,
+        isRevealing,
+        liveStateReady,
+        timerReady,
+        timeLeft,
+        currentRoundEvidence,
+        nowMs: roundNowMs,
+      }),
+    [
+      actualCurrentEpoch,
+      currentRoundEvidence,
+      gridDisplayEpoch,
+      isRevealing,
+      liveStateReady,
+      timeLeft,
+      timerReady,
+      visualEpoch,
+      roundNowMs,
+    ],
+  );
+  const showNumericTimer = roundPresentation.timerDisplay === "countdown" || showColdBootDefaults;
+  const epochBadgeClass =
+    roundPresentation.accent === "amber"
+      ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
+      : roundPresentation.accent === "danger"
+        ? "bg-red-500/10 border-red-500/35 text-red-300"
+        : roundPresentation.accent === "muted"
+          ? "bg-white/5 border-white/10 text-gray-400"
+          : "bg-violet-500/10 border-violet-500/30 text-violet-400";
+  const statusClass =
+    roundPresentation.accent === "danger"
+      ? `text-red-300 ${reducedMotion ? "" : "status-label-pulse-amber"}`
+      : roundPresentation.accent === "amber"
+        ? `text-amber-300 ${reducedMotion ? "" : "status-label-pulse-amber"}`
+        : roundPresentation.accent === "muted"
+          ? "text-gray-400"
+          : `text-violet-200 ${reducedMotion ? "" : "status-label-pulse-violet"}`;
 
   const epochDurationEta = epochDurationChange?.eta ?? null;
   const epochDurationEtaLabel = useMemo(() => {
@@ -223,22 +223,28 @@ export const Header = React.memo(function Header({
         <div className="grid grid-cols-[5.25rem_minmax(0,1fr)_4.25rem] sm:grid-cols-[7rem_minmax(0,1fr)_5.5rem] items-stretch shrink-0">
         {/* LEFT - Epoch */}
         <div className="flex flex-col items-center justify-center px-1 py-1">
-          <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Epoch</div>
+          <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">
+            {roundPresentation.epochHeading}
+          </div>
           <div className="flex w-full justify-center overflow-visible rounded-md">
             <div
-              className={`flex h-7 w-[7.5rem] max-w-[calc(100%-0.5rem)] items-center justify-center gap-1.5 rounded-md border px-2.5 text-center transition-colors duration-200 ${
-                isRevealing
-                  ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
-                  : "bg-violet-500/10 border-violet-500/30 text-violet-400"
-              }`}
+              className={`flex h-7 w-[7.5rem] max-w-[calc(100%-0.5rem)] items-center justify-center gap-1.5 rounded-md border px-2.5 text-center transition-colors duration-200 ${epochBadgeClass}`}
             >
               <span
-                key={visualEpoch ?? ""}
+                key={`${roundPresentation.kind}:${roundPresentation.epoch ?? ""}`}
                 data-testid="header-epoch-value"
                 className="lore-hud-number max-w-full truncate whitespace-nowrap text-center text-[11px] font-bold uppercase tracking-widest"
-                title={isRevealing ? "Reveal" : visualEpoch ? `Epoch #${String(visualEpoch)}` : undefined}
+                title={
+                  roundPresentation.epoch
+                    ? `${roundPresentation.epochHeading} #${roundPresentation.epoch}`
+                    : roundPresentation.statusDescription
+                }
               >
-                {isRevealing ? "REVEAL" : visualEpoch ? `#${visualEpoch}` : showColdBootDefaults ? "#0" : "SYNC"}
+                {roundPresentation.epoch
+                  ? `#${roundPresentation.epoch}`
+                  : showColdBootDefaults
+                    ? "#0"
+                    : "SYNC"}
               </span>
             </div>
           </div>
@@ -246,14 +252,21 @@ export const Header = React.memo(function Header({
 
         {/* CENTER - Timer (expands to fill, content fixed) */}
         <div className="flex flex-col items-center justify-center py-1 border-x border-white/6 min-w-0">
-          <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Timer</div>
+          <div
+            className="max-w-full truncate px-1 text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-1"
+            title={roundPresentation.nextEpoch ? `Next round #${roundPresentation.nextEpoch}` : undefined}
+          >
+            {roundPresentation.timerHeading}
+          </div>
           <div
             className={`lore-nums w-[5.8rem] h-[1.6rem] flex items-center justify-center font-black leading-none tracking-tight tabular-nums transition-colors duration-300 ${
-              isRevealing
-                ? "text-amber-400 drop-shadow-[0_0_12px_rgba(251,191,36,0.5)]"
-                : !timerReady && !showColdBootDefaults
+              roundPresentation.accent === "danger"
+                ? "text-red-300 drop-shadow-[0_0_8px_rgba(239,68,68,0.35)]"
+                : roundPresentation.accent === "amber"
+                  ? "text-amber-400 drop-shadow-[0_0_12px_rgba(251,191,36,0.5)]"
+                  : !showNumericTimer
                   ? "text-gray-500"
-                  : timerStalled
+                  : roundPresentation.timerStalled
                     ? "text-amber-300/90"
                     : timeLeft <= 10
                     ? "text-red-400 drop-shadow-[0_0_8px_rgba(239,68,68,0.4)]"
@@ -270,30 +283,51 @@ export const Header = React.memo(function Header({
 
         {/* RIGHT - Status */}
         <div className="flex min-h-14 min-w-0 flex-col items-center justify-center px-1 py-1">
-          {showAnalyzing ? (
+          {roundPresentation.showSettlementIndicator ? (
             <>
-              <div className="mb-0.5 flex h-4 items-end gap-0.75 [&>span]:origin-bottom">
-                <span className={`w-0.75 bg-amber-400/90 rounded-full ${reducedMotion ? "" : "mining-eq-bar-1"}`} style={{ height: "40%" }} />
-                <span className={`w-0.75 bg-amber-400 rounded-full ${reducedMotion ? "" : "mining-eq-bar-2"}`} style={{ height: "70%" }} />
-                <span className={`w-0.75 bg-amber-400/90 rounded-full ${reducedMotion ? "" : "mining-eq-bar-3"}`} style={{ height: "100%" }} />
-                <span className={`w-0.75 bg-amber-400/70 rounded-full ${reducedMotion ? "" : "mining-eq-bar-2"}`} style={{ height: "55%" }} />
-                <span className={`w-0.75 bg-amber-400/90 rounded-full ${reducedMotion ? "" : "mining-eq-bar-1"}`} style={{ height: "25%" }} />
+              <div
+                className={`mb-0.5 flex h-4 items-end gap-0.75 [&>span]:origin-bottom ${
+                  roundPresentation.accent === "danger" ? "text-red-400" : "text-amber-400"
+                }`}
+              >
+                <span className={`w-0.75 rounded-full bg-current ${reducedMotion ? "" : "mining-eq-bar-1"}`} style={{ height: "40%" }} />
+                <span className={`w-0.75 rounded-full bg-current ${reducedMotion ? "" : "mining-eq-bar-2"}`} style={{ height: "70%" }} />
+                <span className={`w-0.75 rounded-full bg-current ${reducedMotion ? "" : "mining-eq-bar-3"}`} style={{ height: "100%" }} />
+                <span className={`w-0.75 rounded-full bg-current ${reducedMotion ? "" : "mining-eq-bar-2"}`} style={{ height: "55%" }} />
+                <span className={`w-0.75 rounded-full bg-current ${reducedMotion ? "" : "mining-eq-bar-1"}`} style={{ height: "25%" }} />
               </div>
               <span
                 aria-live="polite"
-                className={`max-w-full truncate px-0.5 text-center text-[9px] font-bold uppercase leading-none tracking-[0.08em] text-amber-300 ${reducedMotion ? "" : "status-label-pulse-amber"}`}
-                title={isRevealing ? "Analyzing resolved epoch" : stalledStatusLabel}
+                aria-atomic="true"
+                className={`max-w-full truncate px-0.5 text-center text-[9px] font-bold uppercase leading-none tracking-[0.08em] ${statusClass}`}
+                title={roundPresentation.statusDescription}
               >
-                {isRevealing ? "Analyzing" : stalledStatusLabel}
+                {roundPresentation.statusLabel}
               </span>
             </>
-          ) : (
+          ) : roundPresentation.showMiningIndicator ? (
             <div className="flex flex-col items-center">
               <div className={reducedMotion ? "" : "mining-pickaxe-motion"}>
                 <PickaxeIcon className="h-7 w-7" />
               </div>
-              <span className={`mt-0.5 truncate text-center text-[9px] font-bold uppercase leading-none tracking-[0.12em] text-violet-200 ${reducedMotion ? "" : "status-label-pulse-violet"}`}>Mining</span>
+              <span
+                aria-live="polite"
+                aria-atomic="true"
+                className={`mt-0.5 max-w-full truncate text-center text-[9px] font-bold uppercase leading-none tracking-[0.08em] ${statusClass}`}
+                title={roundPresentation.statusDescription}
+              >
+                {roundPresentation.statusLabel}
+              </span>
             </div>
+          ) : (
+            <span
+              aria-live="polite"
+              aria-atomic="true"
+              className={`max-w-full truncate px-0.5 text-center text-[9px] font-bold uppercase leading-tight tracking-[0.08em] ${statusClass}`}
+              title={roundPresentation.statusDescription}
+            >
+              {roundPresentation.statusLabel}
+            </span>
           )}
         </div>
         </div>
@@ -328,14 +362,12 @@ export const Header = React.memo(function Header({
 
       <HeaderWalletCard
         authenticated={authenticated}
-        privyReady={privyReady}
-        loginPending={loginPending}
-        loginError={loginError ?? (privyReadySlow ? "Wallet login is still loading. Check blockers or reload the page." : null)}
+        loginState={privyLogin.uiState}
         embeddedWalletAddress={embeddedWalletAddress}
         embeddedWalletSyncing={embeddedWalletSyncing}
         embeddedAddressCopied={embeddedAddressCopied}
         onCopyEmbeddedAddress={handleCopyEmbeddedAddress}
-        onLogin={handleLogin}
+        onLogin={privyLogin.requestLogin}
         onLogout={() => { void logout(); }}
         onOpenWalletSettings={onOpenWalletSettings}
         privyEthBalance={privyEthBalance}

@@ -13,6 +13,9 @@ export const BOOTSTRAP_RESOLVE_ABI = RESOLVE_ABI;
 // Empty epochs advance on demand through the contract bet paths, so the keeper
 // is reserved for funded epochs that remain stuck after their deadline.
 export const RESOLVE_THROTTLE_MS = 5_000;
+// The lock covers RPC failover, gas/fee estimation, signing, submission, and
+// the bounded receipt wait. Keep it separate from the short polling throttle.
+export const RESOLVE_OPERATION_LOCK_TTL_MS = 5 * 60 * 1000;
 export const BOOTSTRAP_RPC_UNAVAILABLE_RETRY_MS = 12_000;
 const RESOLVE_LOCK_PATH = "_internal/bootstrapResolveLock";
 const MIN_BOOTSTRAP_RESOLVE_SECRET_LENGTH = 32;
@@ -89,9 +92,15 @@ export function createRpcClient(url: string) {
 }
 
 export async function acquireResolveLock(epoch: bigint) {
+  // The keeper account is the serialized resource. A different epoch must not
+  // bypass the lock while the previous submission/receipt path is still live.
+  void epoch;
   if (requiresExternalSharedLock()) {
     try {
-      return await acquireExternalExpiringLock(`${RESOLVE_LOCK_PATH}:${epoch}`, RESOLVE_THROTTLE_MS);
+      return await acquireExternalExpiringLock(
+        RESOLVE_LOCK_PATH,
+        RESOLVE_OPERATION_LOCK_TTL_MS,
+      );
     } catch (err) {
       logRouteError("api/bootstrap-resolve", err, {
         phase: "external-lock",
@@ -102,7 +111,11 @@ export async function acquireResolveLock(epoch: bigint) {
   }
 
   try {
-    return acquireExpiringLock(RESOLVE_LOCK_PATH, epoch.toString(), RESOLVE_THROTTLE_MS);
+    return acquireExpiringLock(
+      RESOLVE_LOCK_PATH,
+      "keeper",
+      RESOLVE_OPERATION_LOCK_TTL_MS,
+    );
   } catch (err) {
     const production = process.env.NODE_ENV === "production";
     logRouteError("api/bootstrap-resolve", err, {
@@ -111,7 +124,7 @@ export async function acquireResolveLock(epoch: bigint) {
     });
     if (production) return false;
     const now = Date.now();
-    if (now - lastResolveAttemptAt < RESOLVE_THROTTLE_MS) return false;
+    if (now - lastResolveAttemptAt < RESOLVE_OPERATION_LOCK_TTL_MS) return false;
     lastResolveAttemptAt = now;
     return true;
   }

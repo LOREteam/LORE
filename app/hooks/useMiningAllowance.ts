@@ -47,6 +47,10 @@ function normalizeApprovalNonce(value: unknown): number | null {
   return value;
 }
 
+export function selectApprovalSubmissionNonce(trackedNonce: unknown, freshPendingNonce: unknown): number | null {
+  return normalizeApprovalNonce(trackedNonce ?? freshPendingNonce);
+}
+
 function getPendingApproveAgeMs(pendingApprove: PendingApproveState, now: number): number | null {
   if (
     !Number.isSafeInteger(now) ||
@@ -196,14 +200,15 @@ export function useMiningAllowance({
               }
             : {};
         await assertNativeGasBalance(MIN_GAS_APPROVE, approveOverrides);
-        const approvalNonceRaw = pendingApproveRef.current?.nonce ?? await withMiningRpcTimeout(
+        const trackedApprovalNonce = pendingApproveRef.current?.nonce;
+        const approvalNonceRaw = trackedApprovalNonce ?? await withMiningRpcTimeout(
           pc.getTransactionCount({
             address: actor,
-            blockTag: "latest",
+            blockTag: "pending",
           }),
           "approve.getTransactionCount",
         );
-        const approvalNonce = normalizeApprovalNonce(approvalNonceRaw);
+        const approvalNonce = selectApprovalSubmissionNonce(trackedApprovalNonce, approvalNonceRaw);
         if (approvalNonce === null) {
           throw new Error("Approval nonce is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
         }

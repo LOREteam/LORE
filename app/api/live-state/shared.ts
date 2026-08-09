@@ -1,4 +1,8 @@
-import { decodeEventLog, encodeEventTopics, parseAbi, toHex } from "viem";
+import { decodeEventLog, encodeEventTopics, toHex } from "viem";
+import {
+  GAME_ABI as GENERATED_LIVE_STATE_ABI,
+  GAME_EVENTS_ABI as LIVE_STATE_EVENTS_ABI,
+} from "../../../config/generated/lineaOreV10Abi";
 import {
   publicClient,
   CONTRACT_ADDRESS,
@@ -30,25 +34,7 @@ const LIVE_STATE_SNAPSHOT_CACHE_MS = 2_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
-export const LIVE_STATE_ABI = parseAbi([
-  "function currentEpoch() view returns (uint256)",
-  "function getEpochEndTime(uint256 epoch) view returns (uint256)",
-  "function getJackpotInfo() view returns (uint256 dailyPool, uint256 weeklyPool, uint256 lastDailyDay, uint256 lastWeeklyWeek, uint256 lastDailyEpoch, uint256 lastWeeklyEpoch, uint256 lastDailyAmount, uint256 lastWeeklyAmount)",
-  "function rolloverPool() view returns (uint256)",
-  "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
-  "function getTileData(uint256 epoch) view returns (uint256[] pools, uint256[] users)",
-  "function epochDuration() view returns (uint256)",
-  "function pendingEpochDuration() view returns (uint256)",
-  "function pendingEpochDurationEta() view returns (uint256)",
-  "function pendingEpochDurationEffectiveFromEpoch() view returns (uint256)",
-]);
-
-const LIVE_STATE_EVENTS_ABI = parseAbi([
-  "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
-  "event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)",
-  "event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount)",
-  "event BatchBetsBitmapPlaced(uint256 indexed epoch, address indexed user, uint32 tileMask, uint256 amount, uint256 totalAmount)",
-]);
+export const LIVE_STATE_ABI = GENERATED_LIVE_STATE_ABI;
 const [betPlacedSig] = encodeEventTopics({ abi: LIVE_STATE_EVENTS_ABI, eventName: "BetPlaced" });
 const [batchPlacedSig] = encodeEventTopics({ abi: LIVE_STATE_EVENTS_ABI, eventName: "BatchBetsPlaced" });
 const [batchSameAmountPlacedSig] = encodeEventTopics({

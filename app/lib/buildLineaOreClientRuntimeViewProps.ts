@@ -73,6 +73,7 @@ export function buildLineaOreClientRuntimeViewProps({
     claimReward: hubRuntime.claimReward,
     closeWalletSettings: shell.closeWalletSettings,
     coldBootDefaults,
+    currentRoundEvidence: gameData.currentRoundEvidence,
     createEmbeddedWallet: wallet.createEmbeddedWallet,
     deepClaimOne,
     deepScan,

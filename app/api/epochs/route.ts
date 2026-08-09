@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { formatUnits, parseAbi } from "viem";
+import { formatUnits } from "viem";
+import { GAME_ABI as READ_ABI } from "../../../config/generated/lineaOreV10Abi";
 import { DEFAULT_API_EPOCHS_RECONCILE_MAX } from "../../../config/publicConfig";
 import { parseOptionalPositiveIntegerEnv } from "../../../config/envParsing";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
@@ -38,11 +39,6 @@ const CURRENT_EPOCH_CACHE_MS = 5_000;
 const ROUTE_METRIC_KEY = "api/epochs";
 const MAX_TILE_ID = 25;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-
-const READ_ABI = parseAbi([
-  "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
-  "function currentEpoch() view returns (uint256)",
-]);
 
 type EpochRow = {
   winningTile: number;

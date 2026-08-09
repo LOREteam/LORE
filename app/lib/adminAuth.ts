@@ -2,7 +2,10 @@ import { getAddress, type Address } from "viem";
 
 export const ADMIN_AUTH_HEADER = "LORE Admin Verification";
 export const ADMIN_AUTH_PROOF_TTL_MS = 5 * 60 * 1000;
-export const ADMIN_AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const ADMIN_AUTH_SESSION_IDLE_TTL_MS = 15 * 60 * 1000;
+export const ADMIN_AUTH_SESSION_ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1000;
+// Compatibility alias for callers that only need the cookie's next idle expiry.
+export const ADMIN_AUTH_SESSION_TTL_MS = ADMIN_AUTH_SESSION_IDLE_TTL_MS;
 const configuredAdminWallet = normalizeAdminAuthAddress(process.env.NEXT_PUBLIC_ADMIN_WALLET_ADDRESS);
 export const ADMIN_AUTH_WALLET = configuredAdminWallet;
 export const ADMIN_AUTH_WALLET_CONFIGURED = Boolean(ADMIN_AUTH_WALLET);

@@ -11,6 +11,7 @@ import { cn } from "../lib/cn";
 import { UiButton } from "./ui/UiButton";
 import { UiPanel } from "./ui/UiPanel";
 import { uiTokens } from "./ui/tokens";
+import { useDialogFocusTrap } from "../hooks/useDialogFocusTrap";
 
 interface HotTile {
   tileId: number;
@@ -84,39 +85,34 @@ export const Sidebar = React.memo(function Sidebar({
   const goLeaderboards = createTabHandler("leaderboards");
   const goWhitepaper = createTabHandler("whitepaper");
   const goFaq = createTabHandler("faq");
-
-  const handleBackdropKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Escape" || e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        onMobileClose?.();
-      }
-    },
-    [onMobileClose],
-  );
+  const dialogRef = useDialogFocusTrap<HTMLElement>(mobileOpen, onMobileClose);
 
   return (
     <>
       {/* Mobile backdrop */}
       {mobileOpen && (
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label="Close sidebar"
-          aria-controls="lore-sidebar"
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
           className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden animate-fade-in"
           onClick={onMobileClose}
-          onKeyDown={handleBackdropKeyDown}
         />
       )}
       <aside
+        ref={dialogRef}
         id="lore-sidebar"
-        aria-label="LORE navigation"
+        role={mobileOpen ? "dialog" : undefined}
+        aria-modal={mobileOpen ? "true" : undefined}
+        aria-labelledby={mobileOpen ? "lore-sidebar-title" : undefined}
+        aria-label={mobileOpen ? undefined : "LORE navigation"}
+        tabIndex={mobileOpen ? -1 : undefined}
         className={cn(
           "fixed inset-y-0 left-0 z-50 h-screen w-[calc(14rem+1cm)] flex-col overflow-hidden border-r border-violet-500/15 bg-[#0a0a18]/95 backdrop-blur-md transition-transform duration-300 lg:relative lg:z-auto lg:translate-x-0 lg:flex animate-slide-in-left",
           mobileOpen ? "flex translate-x-0" : "hidden lg:flex -translate-x-full lg:translate-x-0",
         )}
       >
+      <h2 id="lore-sidebar-title" className="sr-only">LORE navigation menu</h2>
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
         <div className="absolute left-[-22%] top-[-10%] h-52 w-52 rounded-full bg-violet-600/10 blur-3xl" />
         <div className="absolute bottom-[-12%] right-[-18%] h-48 w-48 rounded-full bg-sky-500/8 blur-3xl" />

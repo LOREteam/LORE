@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAddress, parseAbi } from "viem";
-import { CONTRACT_ADDRESS } from "../../../lib/constants";
+import { getAddress } from "viem";
+import { CONTRACT_ADDRESS, GAME_ABI as OWNER_ABI } from "../../../lib/constants";
 import { publicClient } from "../../_lib/dataBridge";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { logRouteError } from "../../_lib/routeError";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
-
-const OWNER_ABI = parseAbi(["function owner() view returns (address)"]);
 
 export async function GET(request: NextRequest) {
   const rateLimited = await enforceSharedRateLimit(request, {

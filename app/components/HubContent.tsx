@@ -7,7 +7,6 @@ import { usePublicClient } from "wagmi";
 import type { AutoMinePhase } from "../hooks/useMining.types";
 import { useManualBetForm } from "../hooks/useManualBetForm";
 import { formatBalanceFixed } from "../lib/balanceFormatting";
-import { cn } from "../lib/cn";
 import {
   APP_CHAIN_ID,
   CONTRACT_ADDRESS,
@@ -17,7 +16,6 @@ import {
 } from "../lib/constants";
 import { HubGameBoard } from "./HubGameBoard";
 import { HubSidePanel } from "./HubSidePanel";
-import { UiButton } from "./ui/UiButton";
 
 interface TileViewRow {
   tileId: number;
@@ -229,7 +227,7 @@ export const HubContent = React.memo(function HubContent({
     <>
       <section
         aria-label="Mining game stage"
-        className="gameplay-stage relative overflow-hidden rounded-[1.35rem] border border-violet-300/14 bg-[#05040b]/58 p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_24px_80px_rgba(0,0,0,0.34)] backdrop-blur-md"
+        className="gameplay-stage relative overflow-hidden rounded-[1.35rem] border border-violet-300/14 bg-[#05040b]/58 p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_24px_80px_rgba(0,0,0,0.34)] min-[900px]:backdrop-blur-md"
       >
         <Image
           src="/jackpot-og-weekly-painted.png"
@@ -289,6 +287,7 @@ export const HubContent = React.memo(function HubContent({
             walletConnected={walletConnected}
             liveStateReady={liveStateReady}
             readOnlyReason={readOnlyReason}
+            gridSelectedTiles={gridSelectedTiles}
             selectedTilesCount={selectedTilesCount}
             feeEstimate={feeEstimate}
             feeEstimateUnavailable={feeEstimateUnavailable}
@@ -307,120 +306,6 @@ export const HubContent = React.memo(function HubContent({
           />
         </div>
       </section>
-
-      <MobileManualActionBar
-        chatOpen={chatOpen}
-        coldBootDefaults={coldBootDefaults}
-        walletConnected={walletConnected}
-        isAutoMining={isAutoMining}
-        isPending={isPending}
-        liveStateReady={liveStateReady}
-        readOnlyReason={readOnlyReason}
-        manualBetForm={manualBetForm}
-        onMine={handleManualMineWithGuard}
-        selectedTilesCount={selectedTilesCount}
-        feeEstimate={feeEstimate}
-        feeEstimateUnavailable={feeEstimateUnavailable}
-      />
-      {selectedTilesCount > 0 && !isAutoMining && !chatOpen && <div className="h-18 lg:hidden" aria-hidden="true" />}
     </>
   );
 });
-
-function MobileManualActionBar({
-  chatOpen,
-  coldBootDefaults,
-  walletConnected,
-  isAutoMining,
-  isPending,
-  liveStateReady,
-  readOnlyReason,
-  manualBetForm,
-  onMine,
-  selectedTilesCount,
-  feeEstimate,
-  feeEstimateUnavailable,
-}: {
-  chatOpen: boolean;
-  coldBootDefaults: boolean;
-  walletConnected: boolean;
-  isAutoMining: boolean;
-  isPending: boolean;
-  liveStateReady: boolean;
-  readOnlyReason?: string | null;
-  manualBetForm: ReturnType<typeof useManualBetForm>;
-  onMine: (betAmount: string) => Promise<void>;
-  selectedTilesCount: number;
-  feeEstimate: string | null;
-  feeEstimateUnavailable: boolean;
-}) {
-  if (chatOpen || selectedTilesCount <= 0 || isAutoMining) return null;
-
-  const requiresLogin = !walletConnected;
-  const disabled = Boolean(readOnlyReason) || manualBetForm.isDisabled;
-  const buttonLabel = isPending
-    ? "Mining..."
-    : readOnlyReason
-      ? "Paused"
-    : !liveStateReady && !coldBootDefaults
-      ? "Syncing"
-      : requiresLogin
-        ? "Login"
-        : "Mine";
-
-  return (
-    <div className="mobile-mine-action fixed left-2.5 right-12 z-[190] sm:right-[5.25rem] lg:hidden">
-      <div className="grid grid-cols-[auto_minmax(3.5rem,1fr)_minmax(4rem,0.8fr)_auto] items-center gap-1 rounded-xl border border-emerald-300/14 bg-[#070711]/94 p-1 shadow-[0_10px_24px_rgba(2,6,23,0.38)] backdrop-blur-xl sm:gap-1.5 sm:p-1.5">
-        <div className="rounded-lg border border-emerald-300/10 bg-emerald-400/6 px-1.5 py-0.75 sm:px-2">
-          <div className="text-[7px] font-black uppercase leading-none tracking-[0.12em] text-slate-500">Tiles</div>
-          <div className="lore-hud-number mt-0.5 text-sm font-black leading-none text-emerald-200">{selectedTilesCount}</div>
-        </div>
-
-        <label className="min-w-0">
-          <span className="sr-only">Amount per tile</span>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={manualBetForm.betAmount}
-            onChange={(event) => manualBetForm.setBetAmount(event.target.value.slice(0, 20))}
-            disabled={Boolean(readOnlyReason) || isPending}
-            maxLength={20}
-          className={cn(
-            "lore-nums h-8 w-full rounded-lg border bg-black/34 px-2 text-sm font-black tabular-nums text-white outline-none transition focus:border-emerald-300/45 focus:ring-2 focus:ring-emerald-300/16 sm:h-9",
-            manualBetForm.betAmountError ? "border-red-400/35" : "border-white/8",
-          )}
-          />
-        </label>
-
-        <div className="min-w-0 rounded-lg border border-violet-300/10 bg-violet-400/6 px-1.5 py-0.75 text-right sm:px-2">
-          <div className="text-[7px] font-black uppercase leading-none tracking-[0.12em] text-slate-500">Total</div>
-          <div className={cn(
-            "lore-nums mt-0.5 truncate text-sm font-black leading-none tabular-nums",
-            manualBetForm.manualInsufficient ? "text-red-300" : "text-violet-200",
-          )}>
-            {manualBetForm.totalBetDisplay}
-          </div>
-        </div>
-
-        <UiButton
-          onClick={() => onMine(manualBetForm.betAmount)}
-          disabled={disabled}
-          variant={disabled ? "locked" : "primary"}
-          size="sm"
-          uppercase
-          className={cn(
-            "h-8 min-w-14 rounded-lg px-2 text-[9px] sm:h-9 sm:min-w-19 sm:px-3 sm:text-[10px]",
-            !disabled && "border-emerald-300/30 bg-linear-to-r from-emerald-500 to-sky-500 text-[#03110d] shadow-lg shadow-emerald-500/16",
-          )}
-        >
-          {buttonLabel}
-        </UiButton>
-        {walletConnected && (
-          <div className="col-span-4 px-1 pb-0.5 text-right text-[7px] font-bold uppercase tracking-[0.08em] text-slate-500">
-            Bet fee: <span className="lore-nums text-sky-200">{feeEstimate ? `~${feeEstimate} ETH` : feeEstimateUnavailable ? "Unavailable" : "Calculating..."}</span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}

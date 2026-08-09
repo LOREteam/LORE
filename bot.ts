@@ -3,8 +3,7 @@ import { createPublicClient, createWalletClient, getAddress, http, fallback, for
 import { privateKeyToAccount } from "viem/accounts";
 import { sanitizeSentryPayload } from "./app/lib/sentrySanitize";
 import {
-  clampKeeperFeeOverridesToBalance,
-  getAffordableKeeperGasLimit,
+  assertKeeperFeeBudget,
   getKeeperFeeOverrides,
 } from "./app/lib/lineaFees";
 import {
@@ -301,17 +300,18 @@ async function tryResolveEpochAction(options: {
     replacingPendingTx ? REPLACE_PENDING_PRIORITY_BUMP_PERCENT : NORMAL_PRIORITY_BUMP_PERCENT,
   );
   const rawFeeOverrides = extractFeeOverrideFields(estimatedFeeOverrides);
+  const txFeeOverrides = extractFeeOverrideFields(rawFeeOverrides);
+  const gas = (est * gasLimitMarginPercent + 99n) / 100n;
+  const requiredMaxCost = assertKeeperFeeBudget(
+    txFeeOverrides,
+    gas,
+    APP_CHAIN.id,
+    "keeper",
+  );
   const keeperBalance = await publicClient.getBalance({ address: accountAddress });
-  const feeOverrides = clampKeeperFeeOverridesToBalance(
-    rawFeeOverrides,
-    est,
-    keeperBalance,
-  ) ?? {};
-  const txFeeOverrides = extractFeeOverrideFields(feeOverrides);
-  const gas = getAffordableKeeperGasLimit(est, keeperBalance, feeOverrides, gasLimitMarginPercent);
-  if (gas === null) {
+  if (keeperBalance < requiredMaxCost) {
     throw new Error(
-      `keeper_insufficient_funds balance=${keeperBalance.toString()} estimatedGas=${est.toString()}`,
+      `keeper_insufficient_funds balance=${keeperBalance.toString()} requiredMaxCost=${requiredMaxCost.toString()} estimatedGas=${est.toString()}`,
     );
   }
   if (replacingPendingTx) {

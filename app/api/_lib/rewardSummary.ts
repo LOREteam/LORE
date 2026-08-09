@@ -1,16 +1,12 @@
-import { formatUnits, getAddress, parseAbi } from "viem";
+import { formatUnits, getAddress, type Abi } from "viem";
+import { GAME_ABI } from "../../../config/generated/lineaOreV10Abi";
 import { CONTRACT_ADDRESS, isSafePositiveInteger, publicClient } from "./dataBridge";
 import { parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import { getEpochMapByIds, upsertEpochMap } from "../../../server/storage";
 import { createRouteCache } from "./routeCache";
 import { parseStoredPositiveIntegerOrZero } from "./storedNumberParsing";
 
-const READ_ABI = parseAbi([
-  "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
-  "function userBets(uint256 epoch, uint256 tile, address user) view returns (uint256)",
-  "function tilePools(uint256 epoch, uint256 tile) view returns (uint256)",
-]);
-
+const READ_ABI: Abi = GAME_ABI;
 const MULTICALL_CHUNK = 100;
 const MAX_EPOCHS_PER_REQUEST = 400;
 const REWARD_SUMMARY_CACHE_TTL_MS = 30_000;

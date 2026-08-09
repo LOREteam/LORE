@@ -7,17 +7,21 @@
  * Or with --watch flag for continuous mode (polls every 15s).
  */
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import {
   createPublicClient,
   fallback,
   http,
-  parseAbi,
   decodeEventLog,
   formatUnits,
   encodeEventTopics,
   toHex,
   type Log,
 } from "viem";
+import {
+  GAME_ABI as READ_ABI,
+  GAME_EVENTS_ABI as EVENTS_ABI,
+} from "../config/generated/lineaOreV10Abi";
 import {
   DEFAULT_INDEXER_RECONCILE_INTERVAL_MS,
   DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS,
@@ -39,15 +43,30 @@ import { getIndexerFinalityTargetBlock, parseIndexerFinalityBlocks } from "../ap
 import { parseIndexerWatchFailureLimit, recordIndexerWatchFailure } from "../app/lib/indexerWatchPolicy";
 import { sanitizeSentryPayload } from "../app/lib/sentrySanitize";
 import {
+  acquireIndexerLease,
+  buildIndexerBetIdentity,
+  commitIndexerChunk,
+  getIndexerBlockCheckpoints,
+  heartbeatIndexerLease,
+  normalizeIndexerLogIndex,
   patchJsonPath,
   putJsonPath,
   readJsonPath,
+  releaseIndexerLease,
+  rollbackIndexerToBlock,
+  runIndexerStorageTransaction,
   setMetaJson,
   upsertProtocolFeeFlushes,
   upsertRewardClaims,
   type FeeFlushStorageRow,
+  type IndexerBlockCheckpoint,
   type RewardClaimStorageRow,
 } from "../server/storage";
+import {
+  findLatestCanonicalCheckpoint,
+  normalizeBlockHash,
+  verifyCanonicalLogBlockHashes,
+} from "./indexerForkRecovery";
 
 assertProductionRuntimeConfig("indexer");
 
@@ -72,6 +91,8 @@ const REPAIR_CHUNK_BLOCKS = 10_000n;
 const RECONCILE_SCAN_CHUNK_BLOCKS = CHUNK_BLOCKS;
 const RECONCILE_RECENT_LOOKBACK_BLOCKS = 150_000n;
 const POLL_INTERVAL_MS = 15_000;
+const INDEXER_LEASE_TTL_MS = 60_000;
+const INDEXER_LEASE_HEARTBEAT_INTERVAL_MS = 15_000;
 const RETRY_COUNT = 5;
 const RETRY_DELAY_MS = 5_000;
 const MAX_TILE_ID = 25;
@@ -97,6 +118,21 @@ const RECONCILE_MAX_EPOCHS_PER_PASS = parseOptionalPositiveIntegerEnv(
 );
 
 let lastReconcileAtMs = 0;
+class IndexerLeaseError extends Error {
+  override name = "IndexerLeaseError";
+}
+
+let activeIndexerLeaseOwnerToken: string | null = null;
+let assertActiveIndexerLease: () => void = () => {
+  throw new IndexerLeaseError("indexer lease is not initialized");
+};
+
+function getActiveIndexerLeaseOwnerToken() {
+  if (activeIndexerLeaseOwnerToken === null) {
+    throw new IndexerLeaseError("indexer lease is not initialized");
+  }
+  return activeIndexerLeaseOwnerToken;
+}
 
 function parseChainCurrentEpochNumber(value: bigint): number | null {
   if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
@@ -170,30 +206,6 @@ type IndexerReconcileStatus = {
   targetEpochs: number[];
 };
 
-const EVENTS_ABI = parseAbi([
-  "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
-  "event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)",
-  "event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount)",
-  "event BatchBetsBitmapPlaced(uint256 indexed epoch, address indexed user, uint32 tileMask, uint256 amount, uint256 totalAmount)",
-  "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
-  "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
-  "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
-  "event RewardClaimed(uint256 indexed epoch, address indexed user, uint256 reward)",
-  "event RewardBatchClaimed(address indexed user, uint256 totalAmount, uint256 epochsClaimed)",
-  "event RebateClaimed(address indexed user, uint256 indexed epoch, uint256 amount)",
-  "event RebateBatchClaimed(address indexed user, uint256 amount, uint256 epochsClaimed)",
-  "event RewardDustSettled(uint256 indexed epoch, uint256 amount)",
-  "event RebateDustSettled(uint256 indexed epoch, uint256 amount)",
-  "event ResolverRewardAccrued(address indexed resolver, uint256 indexed epoch, uint256 amount)",
-  "event ResolverRewardClaimed(address indexed resolver, uint256 amount)",
-  "event ProtocolFeesFlushed(uint256 ownerAmount, uint256 burnAmount)",
-]);
-
-const READ_ABI = parseAbi([
-  "function currentEpoch() view returns (uint256)",
-  "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
-]);
-
 const client = createPublicClient({
   chain: APP_CHAIN,
   transport: fallback(
@@ -222,6 +234,7 @@ function storageGet<T = unknown>(path: string): T | null {
 }
 
 function setIndexerStatus(key: string, value: unknown) {
+  assertActiveIndexerLease();
   setMetaJson(key, value);
 }
 
@@ -412,6 +425,7 @@ interface BetRecord {
   totalAmountNum: number;
   txHash: string;
   blockNumber: string;
+  logIndex: string;
 }
 
 interface EpochRecord {
@@ -470,14 +484,6 @@ interface ResolverRewardRecord {
   amount: string;
   txHash: string;
   blockNumber: string;
-}
-
-function buildBetKey(epoch: string, txHash: string, blockNumber: string): string {
-  const normalizedHash = txHash.toLowerCase().trim();
-  if (/^0x[0-9a-f]{64}$/.test(normalizedHash)) {
-    return `${epoch}_${normalizedHash}`;
-  }
-  return `${epoch}_nohash_${blockNumber}`;
 }
 
 function buildNormalizedEventId(log: Log): string | null {
@@ -539,7 +545,8 @@ function processLogs(logs: Log[]) {
         if (decoded.eventName !== "BetPlaced") continue;
         const args = decoded.args as { epoch: bigint; user: string; tileId: bigint; amount: bigint };
         const tileId = parseChainTileId(args.tileId);
-        if (tileId === null) continue;
+        const logIndex = normalizeIndexerLogIndex(log.logIndex);
+        if (tileId === null || !log.transactionHash || logIndex === null) continue;
         bets.push({
           epoch: args.epoch.toString(),
           user: args.user.toLowerCase(),
@@ -549,6 +556,7 @@ function processLogs(logs: Log[]) {
           totalAmountNum: toDisplayNumberWei(args.amount),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
+          logIndex,
         });
       } else if (topic0 === batchSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
@@ -557,7 +565,13 @@ function processLogs(logs: Log[]) {
           epoch: bigint; user: string; tileIds: bigint[]; amounts: bigint[]; totalAmount: bigint;
         };
         const tileIds = parseChainTileIds(args.tileIds);
-        if (tileIds === null || tileIds.length !== args.amounts.length) continue;
+        const logIndex = normalizeIndexerLogIndex(log.logIndex);
+        if (
+          tileIds === null ||
+          tileIds.length !== args.amounts.length ||
+          !log.transactionHash ||
+          logIndex === null
+        ) continue;
         bets.push({
           epoch: args.epoch.toString(),
           user: args.user.toLowerCase(),
@@ -567,6 +581,7 @@ function processLogs(logs: Log[]) {
           totalAmountNum: toDisplayNumberWei(args.totalAmount),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
+          logIndex,
         });
       } else if (topic0 === batchSameAmountSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
@@ -575,7 +590,8 @@ function processLogs(logs: Log[]) {
           epoch: bigint; user: string; tileIds: bigint[]; amount: bigint; totalAmount: bigint;
         };
         const tileIds = parseChainTileIds(args.tileIds);
-        if (tileIds === null) continue;
+        const logIndex = normalizeIndexerLogIndex(log.logIndex);
+        if (tileIds === null || !log.transactionHash || logIndex === null) continue;
         const formattedAmount = formatUnits(args.amount, 18);
         bets.push({
           epoch: args.epoch.toString(),
@@ -586,6 +602,7 @@ function processLogs(logs: Log[]) {
           totalAmountNum: toDisplayNumberWei(args.totalAmount),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
+          logIndex,
         });
       } else if (topic0 === batchBitmapSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
@@ -594,6 +611,8 @@ function processLogs(logs: Log[]) {
           epoch: bigint; user: string; tileMask: number; amount: bigint; totalAmount: bigint;
         };
         const tileIds = tileMaskToTileIds(args.tileMask);
+        const logIndex = normalizeIndexerLogIndex(log.logIndex);
+        if (!log.transactionHash || logIndex === null) continue;
         const formattedAmount = formatUnits(args.amount, 18);
         bets.push({
           epoch: args.epoch.toString(),
@@ -604,6 +623,7 @@ function processLogs(logs: Log[]) {
           totalAmountNum: toDisplayNumberWei(args.totalAmount),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
+          logIndex,
         });
       } else if (topic0 === resolvedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
@@ -795,7 +815,7 @@ function processLogs(logs: Log[]) {
 }
 
 // Write to local SQLite
-async function writeBets(bets: BetRecord[]) {
+function writeBets(bets: BetRecord[]) {
   if (bets.length === 0) return;
   const byUser = new Map<string, BetRecord[]>();
   for (const bet of bets) {
@@ -808,8 +828,14 @@ async function writeBets(bets: BetRecord[]) {
     const patch: Record<string, unknown> = {};
     for (const bet of userBets) {
       const normalizedBet = normalizeBetRecord(bet);
-      const key = buildBetKey(normalizedBet.epoch, normalizedBet.txHash, normalizedBet.blockNumber);
-      patch[key] = {
+      const identity = buildIndexerBetIdentity(
+        normalizedBet.epoch,
+        normalizedBet.txHash,
+        normalizedBet.blockNumber,
+        normalizedBet.logIndex,
+      );
+      if (identity === null) continue;
+      patch[identity.id] = {
         epoch: normalizedBet.epoch,
         tileIds: normalizedBet.tileIds,
         amounts: normalizedBet.amounts,
@@ -817,13 +843,14 @@ async function writeBets(bets: BetRecord[]) {
         totalAmountNum: normalizedBet.totalAmountNum,
         txHash: normalizedBet.txHash,
         blockNumber: normalizedBet.blockNumber,
+        logIndex: normalizedBet.logIndex,
       };
     }
     storagePatch(`gamedata/bets/${user}`, patch);
   }
 }
 
-async function writeEpochs(epochs: Map<string, EpochRecord>) {
+function writeEpochs(epochs: Map<string, EpochRecord>) {
   if (epochs.size === 0) return;
   const patch: Record<string, unknown> = {};
   for (const [ep, data] of epochs) {
@@ -832,7 +859,7 @@ async function writeEpochs(epochs: Map<string, EpochRecord>) {
   storagePatch("gamedata/epochs", patch);
 }
 
-async function writeJackpots(jackpots: JackpotRecord[]) {
+function writeJackpots(jackpots: JackpotRecord[]) {
   if (jackpots.length === 0) return;
   const patch: Record<string, unknown> = {};
   for (const j of jackpots) {
@@ -842,7 +869,7 @@ async function writeJackpots(jackpots: JackpotRecord[]) {
   storagePatch("gamedata/jackpots", patch);
 }
 
-async function writeRewardClaims(rewardClaims: RewardClaimRecord[]) {
+function writeRewardClaims(rewardClaims: RewardClaimRecord[]) {
   if (rewardClaims.length === 0) return;
   const rows: RewardClaimStorageRow[] = rewardClaims.map((row) => ({
     id: row.id,
@@ -856,7 +883,7 @@ async function writeRewardClaims(rewardClaims: RewardClaimRecord[]) {
   upsertRewardClaims(rows);
 }
 
-async function writeBatchClaims(records: BatchClaimRecord[]) {
+function writeBatchClaims(records: BatchClaimRecord[]) {
   if (records.length === 0) return;
   const patch: Record<string, unknown> = {};
   for (const row of records) {
@@ -865,7 +892,7 @@ async function writeBatchClaims(records: BatchClaimRecord[]) {
   storagePatch("gamedata/batchClaims", patch);
 }
 
-async function writeResolverRewards(records: ResolverRewardRecord[]) {
+function writeResolverRewards(records: ResolverRewardRecord[]) {
   if (records.length === 0) return;
   const patch: Record<string, unknown> = {};
   for (const row of records) {
@@ -874,14 +901,14 @@ async function writeResolverRewards(records: ResolverRewardRecord[]) {
   storagePatch("gamedata/resolverRewards", patch);
 }
 
-async function writeDustSettlements(records: DustSettlementRecord[]) {
+function writeDustSettlements(records: DustSettlementRecord[]) {
   if (records.length === 0) return;
   const patch: Record<string, unknown> = {};
   for (const row of records) patch[row.id] = row;
   storagePatch("gamedata/dustSettlements", patch);
 }
 
-async function writeFeeFlushes(feeFlushes: FeeFlushRecord[]) {
+function writeFeeFlushes(feeFlushes: FeeFlushRecord[]) {
   if (feeFlushes.length === 0) return;
   const rows: FeeFlushStorageRow[] = feeFlushes.map((row) => ({
     id: row.id,
@@ -893,8 +920,95 @@ async function writeFeeFlushes(feeFlushes: FeeFlushRecord[]) {
   upsertProtocolFeeFlushes(rows);
 }
 
-async function setLastBlock(block: bigint) {
-  storagePut("gamedata/_meta/lastIndexedBlock", block.toString());
+async function readCanonicalBlockHash(blockNumber: bigint) {
+  const block = await withRpcTimeout(
+    client.getBlock({ blockNumber }),
+    `getBlock(${blockNumber})`,
+  );
+  const blockHash = normalizeBlockHash(block.hash);
+  if (blockHash === null) {
+    throw new Error(`RPC returned an invalid block hash at block ${blockNumber}`);
+  }
+  return blockHash;
+}
+
+async function readStableCanonicalBlockHash(blockNumber: bigint) {
+  const firstHash = await readCanonicalBlockHash(blockNumber);
+  const secondHash = await readCanonicalBlockHash(blockNumber);
+  if (firstHash !== secondHash) {
+    throw new Error(`RPC block hash changed during fork recovery at block ${blockNumber}`);
+  }
+  return secondHash;
+}
+
+async function fetchCanonicalChunk(
+  fromBlock: bigint,
+  toBlock: bigint,
+  previousCheckpoint: IndexerBlockCheckpoint | null,
+) {
+  if (
+    previousCheckpoint !== null &&
+    BigInt(previousCheckpoint.blockNumber) !== fromBlock - 1n
+  ) {
+    throw new Error("indexer chunk predecessor does not match the stored checkpoint");
+  }
+
+  if (previousCheckpoint !== null) {
+    const previousHashBefore = await readCanonicalBlockHash(fromBlock - 1n);
+    if (previousHashBefore !== previousCheckpoint.blockHash) {
+      throw new Error(`indexer predecessor checkpoint changed at block ${fromBlock - 1n}`);
+    }
+  }
+  const endHashBefore = await readCanonicalBlockHash(toBlock);
+  const logs = await fetchAllLogs(fromBlock, toBlock);
+  await verifyCanonicalLogBlockHashes(logs, readCanonicalBlockHash);
+  const endHashAfter = await readCanonicalBlockHash(toBlock);
+  if (endHashAfter !== endHashBefore) {
+    throw new Error(`canonical chain changed while indexing blocks ${fromBlock}-${toBlock}`);
+  }
+  if (previousCheckpoint !== null) {
+    const previousHashAfter = await readCanonicalBlockHash(fromBlock - 1n);
+    if (previousHashAfter !== previousCheckpoint.blockHash) {
+      throw new Error(`indexer predecessor checkpoint changed at block ${fromBlock - 1n}`);
+    }
+  }
+
+  return { logs, blockHash: endHashAfter };
+}
+
+async function recoverCanonicalIndexerState(lastBlock: bigint) {
+  const checkpoints = getIndexerBlockCheckpoints().filter(
+    (checkpoint) => BigInt(checkpoint.blockNumber) <= lastBlock,
+  );
+  const commonCheckpoint = checkpoints.length > 0
+    ? await findLatestCanonicalCheckpoint(checkpoints, readStableCanonicalBlockHash)
+    : null;
+  const usableCommonCheckpoint =
+    commonCheckpoint !== null && BigInt(commonCheckpoint.blockNumber) >= INDEXER_START_BLOCK
+      ? commonCheckpoint
+      : null;
+
+  if (
+    usableCommonCheckpoint !== null &&
+    BigInt(usableCommonCheckpoint.blockNumber) === lastBlock
+  ) {
+    return { lastBlock, checkpoint: usableCommonCheckpoint };
+  }
+
+  const rollbackBlock = usableCommonCheckpoint === null
+    ? INDEXER_START_BLOCK
+    : BigInt(usableCommonCheckpoint.blockNumber);
+  rollbackIndexerToBlock(
+    rollbackBlock,
+    usableCommonCheckpoint?.blockHash ?? null,
+    getActiveIndexerLeaseOwnerToken(),
+  );
+  console.warn(
+    usableCommonCheckpoint === null
+      ? `[indexer] No canonical block checkpoint found; replaying from ${rollbackBlock}.`
+      : `[indexer] Canonical fork detected; rolled back to checkpoint ${rollbackBlock}.`,
+  );
+  return { lastBlock: rollbackBlock, checkpoint: usableCommonCheckpoint };
 }
 
 async function updateCurrentEpochMeta() {
@@ -909,8 +1023,10 @@ async function updateCurrentEpochMeta() {
       console.warn("[indexer] Ignoring unsafe currentEpoch value from contract.");
       return;
     }
+    assertActiveIndexerLease();
     storagePut("gamedata/_meta/currentEpoch", currentEpochNumber);
   } catch (err) {
+    if (err instanceof IndexerLeaseError) throw err;
     console.warn("[indexer] Could not read currentEpoch from contract:", describeIndexerError(err));
   }
 }
@@ -951,7 +1067,7 @@ async function getRepairCursorBlock(): Promise<bigint> {
   }
 }
 
-async function setRepairCursorBlock(block: bigint) {
+function setRepairCursorBlock(block: bigint) {
   storagePut("gamedata/_meta/repairCursorBlock", block.toString());
 }
 
@@ -977,23 +1093,25 @@ async function runRepairPass(currentBlock: bigint) {
 
   console.log(`[indexer][repair] Scanning ${from} -> ${to} (${to - from + 1n} blocks)`);
 
-  const logs = await fetchAllLogs(from, to);
+  const { logs } = await fetchCanonicalChunk(from, to, null);
+  const parsed = processLogs(logs);
+  runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+    writeBets(parsed.bets);
+    writeEpochs(parsed.epochs);
+    writeJackpots(parsed.jackpots);
+    writeRewardClaims(parsed.rewardClaims);
+    writeFeeFlushes(parsed.feeFlushes);
+    writeBatchClaims(parsed.batchClaims);
+    writeResolverRewards(parsed.resolverRewards);
+    writeDustSettlements(parsed.dustSettlements);
+    setRepairCursorBlock(to + 1n);
+  });
   if (logs.length > 0) {
-    const { bets, epochs, jackpots, rewardClaims, feeFlushes, batchClaims, resolverRewards, dustSettlements } = processLogs(logs);
-    await writeBets(bets);
-    await writeEpochs(epochs);
-    await writeJackpots(jackpots);
-    await writeRewardClaims(rewardClaims);
-    await writeFeeFlushes(feeFlushes);
-    await writeBatchClaims(batchClaims);
-    await writeResolverRewards(resolverRewards);
-    await writeDustSettlements(dustSettlements);
-    console.log(`[indexer][repair] Repaired ${logs.length} logs (${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots, ${rewardClaims.length} claims)`);
+    console.log(`[indexer][repair] Repaired ${logs.length} logs (${parsed.bets.length} bets, ${parsed.epochs.size} epochs, ${parsed.jackpots.length} jackpots, ${parsed.rewardClaims.length} claims)`);
   } else {
     console.log("[indexer][repair] No logs in this range");
   }
 
-  await setRepairCursorBlock(to + 1n);
   await updateCurrentEpochMeta();
   const status: IndexerRepairStatus = {
     at: Date.now(),
@@ -1006,6 +1124,7 @@ async function runRepairPass(currentBlock: bigint) {
 }
 
 async function runEpochReconcile(currentBlock: bigint) {
+  assertActiveIndexerLease();
   const now = Date.now();
   if (now - lastReconcileAtMs < RECONCILE_INTERVAL_MS) return 0;
   lastReconcileAtMs = now;
@@ -1023,6 +1142,7 @@ async function runEpochReconcile(currentBlock: bigint) {
     } satisfies IndexerReconcileStatus);
     return 0;
   }
+  assertActiveIndexerLease();
   storagePut("gamedata/_meta/currentEpoch", currentEpochNumber);
 
   if (currentEpoch <= 1n) {
@@ -1122,6 +1242,7 @@ async function runEpochReconcile(currentBlock: bigint) {
     // Keep last resolved log for epoch (safety)
     const log = logs[logs.length - 1];
     try {
+      await verifyCanonicalLogBlockHashes([log], readCanonicalBlockHash);
       const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
       if (decoded.eventName !== "EpochResolved") continue;
       const args = decoded.args as {
@@ -1146,7 +1267,10 @@ async function runEpochReconcile(currentBlock: bigint) {
   }
 
   if (epochsPatch.size > 0) {
-    await writeEpochs(epochsPatch);
+    runIndexerStorageTransaction(
+      getActiveIndexerLeaseOwnerToken(),
+      () => writeEpochs(epochsPatch),
+    );
     console.log(`[indexer][reconcile] Repaired ${epochsPatch.size} epochs`);
     const status: IndexerReconcileStatus = {
       at: Date.now(),
@@ -1170,11 +1294,27 @@ async function runEpochReconcile(currentBlock: bigint) {
   return 0;
 }
 
+async function runIndexedMaintenance(chainTargetBlock: bigint) {
+  assertActiveIndexerLease();
+  const indexedBlock = await getLastBlock();
+  const maintenanceTarget = indexedBlock < chainTargetBlock ? indexedBlock : chainTargetBlock;
+  await runRepairPass(maintenanceTarget);
+  await runEpochReconcile(maintenanceTarget);
+}
+
 // Main loop
 async function runOnce() {
-  const lastBlock = await getLastBlock();
+  assertActiveIndexerLease();
+  let lastBlock = await getLastBlock();
   const headBlock = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
   const currentBlock = getIndexerFinalityTargetBlock(headBlock, INDEXER_FINALITY_BLOCKS);
+
+  let previousCheckpoint: IndexerBlockCheckpoint | null = null;
+  if (currentBlock !== null) {
+    const recovered = await recoverCanonicalIndexerState(lastBlock);
+    lastBlock = recovered.lastBlock;
+    previousCheckpoint = recovered.checkpoint;
+  }
 
   const fromBlock = lastBlock + 1n;
   const startedAt = Date.now();
@@ -1248,26 +1388,37 @@ async function runOnce() {
     chunkIndex += 1;
 
     console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount}: ${start} -> ${end}`);
-    const logs = await fetchAllLogs(start, end);
+    const canonicalChunk = await fetchCanonicalChunk(start, end, previousCheckpoint);
+    const logs = canonicalChunk.logs;
     totalLogs += logs.length;
     console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} fetched ${logs.length} logs`);
 
+    const parsed = processLogs(logs);
     if (logs.length > 0) {
-      const { bets, epochs, jackpots, rewardClaims, feeFlushes, batchClaims, resolverRewards, dustSettlements } = processLogs(logs);
-      console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} parsed: ${bets.length} bets, ${epochs.size} epochs, ${jackpots.length} jackpots, ${rewardClaims.length} claims`);
-
-      await writeBets(bets);
-      await writeEpochs(epochs);
-      await writeJackpots(jackpots);
-      await writeRewardClaims(rewardClaims);
-      await writeFeeFlushes(feeFlushes);
-      await writeBatchClaims(batchClaims);
-      await writeResolverRewards(resolverRewards);
-      await writeDustSettlements(dustSettlements);
-      console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} written to local SQLite`);
+      console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} parsed: ${parsed.bets.length} bets, ${parsed.epochs.size} epochs, ${parsed.jackpots.length} jackpots, ${parsed.rewardClaims.length} claims`);
     }
 
-    await setLastBlock(end);
+    commitIndexerChunk({
+      leaseOwnerToken: getActiveIndexerLeaseOwnerToken(),
+      expectedPreviousBlock: start - 1n,
+      expectedPreviousBlockHash: previousCheckpoint?.blockHash ?? null,
+      blockNumber: end,
+      blockHash: canonicalChunk.blockHash,
+    }, () => {
+      writeBets(parsed.bets);
+      writeEpochs(parsed.epochs);
+      writeJackpots(parsed.jackpots);
+      writeRewardClaims(parsed.rewardClaims);
+      writeFeeFlushes(parsed.feeFlushes);
+      writeBatchClaims(parsed.batchClaims);
+      writeResolverRewards(parsed.resolverRewards);
+      writeDustSettlements(parsed.dustSettlements);
+    });
+    previousCheckpoint = {
+      blockNumber: end.toString(),
+      blockHash: canonicalChunk.blockHash,
+    };
+    console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} committed to local SQLite`);
     await updateCurrentEpochMeta();
     setIndexerStatus("indexerRunStatus", {
       startedAt,
@@ -1306,44 +1457,122 @@ async function runOnce() {
 
 async function main() {
   const isWatch = process.argv.includes("--watch");
-  console.log(`[indexer] SQLite path: ${process.env.LORE_DB_PATH ?? "data/lore.sqlite"}`);
-  console.log(`[indexer] Contract: ${CONTRACT}`);
-  console.log(`[indexer] Deploy block: ${DEPLOY_BLOCK}`);
-  console.log(`[indexer] Start block: ${INDEXER_START_BLOCK}`);
-  console.log(`[indexer] Finality blocks: ${INDEXER_FINALITY_BLOCKS}`);
-  console.log(`[indexer] Mode: ${isWatch ? "watch (continuous)" : "one-shot"}`);
-
-  await runOnce();
-  {
-    const head = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
-    const target = getIndexerFinalityTargetBlock(head, INDEXER_FINALITY_BLOCKS);
-    if (target === null) {
-      await updateCurrentEpochMeta();
-    } else {
-      await runRepairPass(target);
-      await runEpochReconcile(target);
-    }
+  const leaseOwnerToken = randomUUID();
+  if (!acquireIndexerLease(leaseOwnerToken, INDEXER_LEASE_TTL_MS)) {
+    throw new Error("indexer lease is already held for this storage scope");
   }
 
-  if (isWatch) {
+  activeIndexerLeaseOwnerToken = leaseOwnerToken;
+  let leaseLost = false;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let watchTimer: ReturnType<typeof setInterval> | null = null;
+
+  const markLeaseLost = () => {
+    if (leaseLost) return;
+    leaseLost = true;
+    if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+    if (watchTimer !== null) clearInterval(watchTimer);
+    console.error("[indexer] SQLite indexer lease lost; stopping without further indexed writes.");
+    process.exitCode = 1;
+    if (isWatch) {
+      setImmediate(() => process.exit(1));
+    }
+  };
+
+  assertActiveIndexerLease = () => {
+    if (leaseLost) {
+      throw new IndexerLeaseError("indexer lease is unavailable or lost");
+    }
+    let held = false;
+    try {
+      held = heartbeatIndexerLease(leaseOwnerToken, INDEXER_LEASE_TTL_MS);
+    } catch {
+      markLeaseLost();
+      throw new IndexerLeaseError("indexer lease heartbeat failed");
+    }
+    if (!held) {
+      markLeaseLost();
+      throw new IndexerLeaseError("indexer lease is unavailable or lost");
+    }
+  };
+
+  const stopAndReleaseLease = (strict: boolean) => {
+    if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+    if (watchTimer !== null) clearInterval(watchTimer);
+    heartbeatTimer = null;
+    watchTimer = null;
+    let released = false;
+    try {
+      released = releaseIndexerLease(leaseOwnerToken);
+    } catch {
+      if (strict) throw new Error("indexer lease release failed");
+    } finally {
+      activeIndexerLeaseOwnerToken = null;
+      assertActiveIndexerLease = () => {
+        throw new IndexerLeaseError("indexer lease is not initialized");
+      };
+    }
+    if (strict && !released) {
+      throw new Error("indexer lease was lost before release");
+    }
+  };
+
+  heartbeatTimer = setInterval(() => {
+    try {
+      assertActiveIndexerLease();
+    } catch {
+      // The assertion marks the lease lost and stops both timers.
+    }
+  }, INDEXER_LEASE_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref();
+
+  try {
+    assertActiveIndexerLease();
+    console.log(`[indexer] SQLite path: ${process.env.LORE_DB_PATH ?? "data/lore.sqlite"}`);
+    console.log(`[indexer] Contract: ${CONTRACT}`);
+    console.log(`[indexer] Deploy block: ${DEPLOY_BLOCK}`);
+    console.log(`[indexer] Start block: ${INDEXER_START_BLOCK}`);
+    console.log(`[indexer] Finality blocks: ${INDEXER_FINALITY_BLOCKS}`);
+    console.log(`[indexer] Mode: ${isWatch ? "watch (continuous)" : "one-shot"}`);
+
+    await runOnce();
+    {
+      const head = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
+      const target = getIndexerFinalityTargetBlock(head, INDEXER_FINALITY_BLOCKS);
+      if (target === null) {
+        await updateCurrentEpochMeta();
+      } else {
+        await runIndexedMaintenance(target);
+      }
+    }
+
+    if (!isWatch) {
+      stopAndReleaseLease(true);
+      return;
+    }
+
     console.log(`[indexer] Watching for new blocks every ${POLL_INTERVAL_MS / 1000}s...`);
     let running = false;
     let consecutiveFailures = 0;
-    setInterval(async () => {
-      if (running) return;
+    watchTimer = setInterval(async () => {
+      if (running || leaseLost) return;
       running = true;
       try {
+        assertActiveIndexerLease();
         await runOnce();
         const head = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
         const target = getIndexerFinalityTargetBlock(head, INDEXER_FINALITY_BLOCKS);
         if (target === null) {
           await updateCurrentEpochMeta();
         } else {
-          await runRepairPass(target);
-          await runEpochReconcile(target);
+          await runIndexedMaintenance(target);
         }
         consecutiveFailures = 0;
       } catch (err) {
+        if (leaseLost) {
+          process.exitCode = 1;
+          return;
+        }
         const failure = recordIndexerWatchFailure(consecutiveFailures, WATCH_FAILURE_LIMIT);
         consecutiveFailures = failure.failures;
         console.error(
@@ -1352,12 +1581,16 @@ async function main() {
         );
         if (failure.shouldRestart) {
           console.error("[indexer] Persistent watch failure threshold reached; exiting for supervisor restart.");
+          stopAndReleaseLease(false);
           process.exit(1);
         }
       } finally {
         running = false;
       }
     }, POLL_INTERVAL_MS);
+  } catch (error) {
+    stopAndReleaseLease(false);
+    throw error;
   }
 }
 

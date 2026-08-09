@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
   });
   if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
-  const authorized = isAuthorizedHealthDiagnosticsRequest(request);
+  const authorized = await isAuthorizedHealthDiagnosticsRequest(request);
   const privyAppIdConfigured = Boolean(process.env.NEXT_PUBLIC_PRIVY_APP_ID?.trim());
   const productionLikeMonitoring =
     process.env.NODE_ENV === "production" ||

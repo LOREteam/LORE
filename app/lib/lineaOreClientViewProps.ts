@@ -11,6 +11,7 @@ import {
   buildSidebarProps,
   buildWalletShellProps,
 } from "./lineaOreClientSectionBuilders";
+import type { CurrentRoundEvidence } from "./currentRoundEvidence";
 
 type SidebarProps = React.ComponentProps<typeof Sidebar>;
 type HeaderProps = React.ComponentProps<typeof Header>;
@@ -36,6 +37,7 @@ interface CreateLineaOreClientViewPropsOptions {
   claimReward: SidebarProps["onClaim"];
   closeWalletSettings: WalletSettingsProps["onClose"];
   coldBootDefaults: boolean;
+  currentRoundEvidence: CurrentRoundEvidence;
   createEmbeddedWallet: WalletSettingsProps["onCreateEmbeddedWallet"];
   deepClaimOne: WalletSettingsProps["onDeepClaimOne"];
   deepScan: WalletSettingsProps["onDeepScan"];
@@ -194,6 +196,7 @@ export function createLineaOreClientViewProps({
   claimReward,
   closeWalletSettings,
   coldBootDefaults,
+  currentRoundEvidence,
   createEmbeddedWallet,
   deepClaimOne,
   deepScan,
@@ -352,6 +355,7 @@ export function createLineaOreClientViewProps({
   const jackpotFallbackAmount = dailyJackpotFallbackAmount + weeklyJackpotFallbackAmount;
 
   return {
+    currentRoundEvidence,
     sidebarProps: buildSidebarProps({
       activeTab,
       actualCurrentEpoch,
@@ -366,12 +370,11 @@ export function createLineaOreClientViewProps({
       claimAll,
     }),
     headerProps: buildHeaderProps({
+      actualCurrentEpoch,
+      gridDisplayEpoch,
+      currentRoundEvidence,
       visualEpoch,
-      // V9 resolve is atomic: the winning tile is known the moment the
-      // resolve tx lands, so the header always reflects the live epoch
-      // (number + countdown) without any "REVEAL"/ANALYZING placeholder.
-      // The winner announcement is handled by the wins ticker.
-      isRevealing: false,
+      isRevealing,
       coldBootDefaults,
       liveStateReady,
       timerReady,

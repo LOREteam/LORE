@@ -1,4 +1,4 @@
-import { parseGwei } from "viem";
+import { parseEther, parseGwei } from "viem";
 
 type FeeEstimate = {
   maxFeePerGas?: bigint;
@@ -10,6 +10,16 @@ export type FeeOverrides = {
   maxFeePerGas?: bigint;
   maxPriorityFeePerGas?: bigint;
   gasPrice?: bigint;
+};
+
+export type KeeperFeeBudgetKind = "approval" | "keeper";
+
+type KeeperFeePolicy = {
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+  maxGasPrice: bigint;
+  maxApprovalCostWei: bigint;
+  maxKeeperCostWei: bigint;
 };
 
 const ONE_HUNDRED = 100n;
@@ -32,6 +42,32 @@ const LINEA_SEPOLIA_CHAIN_ID = 59141;
 const LINEA_SEPOLIA_KEEPER_PRIORITY_FLOOR = parseGwei("0.001");
 const LINEA_MAINNET_KEEPER_GAS_PRICE_FLOOR = parseGwei("0.05");
 const LINEA_SEPOLIA_KEEPER_GAS_PRICE_FLOOR = parseGwei("0.001");
+// These are absolute safety ceilings, not target fees. They deliberately leave
+// ample headroom over the normal Linea floors while bounding a compromised RPC.
+const LINEA_MAINNET_KEEPER_FEE_POLICY: KeeperFeePolicy = {
+  maxFeePerGas: parseGwei("1"),
+  maxPriorityFeePerGas: parseGwei("0.2"),
+  maxGasPrice: parseGwei("1"),
+  maxApprovalCostWei: parseEther("0.0001"),
+  maxKeeperCostWei: parseEther("0.001"),
+};
+const LINEA_SEPOLIA_KEEPER_FEE_POLICY: KeeperFeePolicy = {
+  maxFeePerGas: parseGwei("2"),
+  maxPriorityFeePerGas: parseGwei("0.25"),
+  maxGasPrice: parseGwei("2"),
+  maxApprovalCostWei: parseEther("0.0002"),
+  maxKeeperCostWei: parseEther("0.002"),
+};
+
+function feePolicyError(message: string) {
+  const error = new Error(message);
+  error.name = "LineaFeePolicyError";
+  return error;
+}
+
+export function isLineaFeePolicyError(error: unknown): error is Error {
+  return error instanceof Error && error.name === "LineaFeePolicyError";
+}
 
 function supportsEip1559Fallback(chainId?: number) {
   return chainId === LINEA_MAINNET_CHAIN_ID || chainId === LINEA_SEPOLIA_CHAIN_ID;
@@ -42,7 +78,6 @@ function getPriorityCap(chainId?: number) {
   if (chainId === LINEA_SEPOLIA_CHAIN_ID) return LINEA_SEPOLIA_PRIORITY_CAP;
   return undefined;
 }
-
 function getPriorityFloor(chainId?: number) {
   if (chainId === LINEA_MAINNET_CHAIN_ID) return LINEA_MAINNET_PRIORITY_FLOOR;
   if (chainId === LINEA_SEPOLIA_CHAIN_ID) return LINEA_SEPOLIA_PRIORITY_FLOOR;
@@ -59,6 +94,79 @@ function getKeeperGasPriceFloor(chainId?: number) {
   if (chainId === LINEA_MAINNET_CHAIN_ID) return LINEA_MAINNET_KEEPER_GAS_PRICE_FLOOR;
   if (chainId === LINEA_SEPOLIA_CHAIN_ID) return LINEA_SEPOLIA_KEEPER_GAS_PRICE_FLOOR;
   return MIN_PRIORITY_FEE_WEI;
+}
+
+function getKeeperFeePolicy(chainId?: number): KeeperFeePolicy {
+  if (chainId === LINEA_MAINNET_CHAIN_ID) return LINEA_MAINNET_KEEPER_FEE_POLICY;
+  if (chainId === LINEA_SEPOLIA_CHAIN_ID) return LINEA_SEPOLIA_KEEPER_FEE_POLICY;
+  throw feePolicyError(`linea_fee_policy_unsupported_chain chainId=${String(chainId ?? "missing")}`);
+}
+
+function assertKeeperFeeFieldsWithinPolicy(
+  feeOverrides: FeeOverrides | undefined,
+  chainId?: number,
+): asserts feeOverrides is FeeOverrides {
+  const policy = getKeeperFeePolicy(chainId);
+  if (!feeOverrides) {
+    throw feePolicyError("linea_fee_policy_missing_overrides");
+  }
+
+  const hasLegacyFee = feeOverrides.gasPrice !== undefined;
+  const hasEip1559Fee =
+    feeOverrides.maxFeePerGas !== undefined || feeOverrides.maxPriorityFeePerGas !== undefined;
+  if (hasLegacyFee && hasEip1559Fee) {
+    throw feePolicyError("linea_fee_policy_mixed_fee_fields");
+  }
+
+  if (feeOverrides.gasPrice !== undefined) {
+    if (feeOverrides.gasPrice <= 0n || feeOverrides.gasPrice > policy.maxGasPrice) {
+      throw feePolicyError(`linea_fee_field_cap_exceeded field=gasPrice chainId=${String(chainId)}`);
+    }
+    return;
+  }
+
+  const maxFeePerGas = feeOverrides.maxFeePerGas;
+  const maxPriorityFeePerGas = feeOverrides.maxPriorityFeePerGas;
+  if (maxFeePerGas === undefined || maxPriorityFeePerGas === undefined) {
+    throw feePolicyError("linea_fee_policy_incomplete_eip1559_fields");
+  }
+  if (maxFeePerGas <= 0n || maxFeePerGas > policy.maxFeePerGas) {
+    throw feePolicyError(`linea_fee_field_cap_exceeded field=maxFeePerGas chainId=${String(chainId)}`);
+  }
+  if (
+    maxPriorityFeePerGas <= 0n ||
+    maxPriorityFeePerGas > policy.maxPriorityFeePerGas
+  ) {
+    throw feePolicyError(`linea_fee_field_cap_exceeded field=maxPriorityFeePerGas chainId=${String(chainId)}`);
+  }
+  if (maxPriorityFeePerGas > maxFeePerGas) {
+    throw feePolicyError("linea_fee_policy_priority_exceeds_max_fee");
+  }
+}
+
+export function assertKeeperFeeBudget(
+  feeOverrides: FeeOverrides | undefined,
+  gasLimit: bigint,
+  chainId: number | undefined,
+  kind: KeeperFeeBudgetKind,
+): bigint {
+  assertKeeperFeeFieldsWithinPolicy(feeOverrides, chainId);
+  if (gasLimit <= 0n) {
+    throw feePolicyError("linea_fee_policy_invalid_gas_limit");
+  }
+
+  const policy = getKeeperFeePolicy(chainId);
+  const feePerGas = feeOverrides.gasPrice ?? feeOverrides.maxFeePerGas;
+  if (feePerGas === undefined) {
+    throw feePolicyError("linea_fee_policy_missing_effective_fee");
+  }
+  const maximumCostWei = gasLimit * feePerGas;
+  const maximumBudgetWei =
+    kind === "approval" ? policy.maxApprovalCostWei : policy.maxKeeperCostWei;
+  if (maximumCostWei > maximumBudgetWei) {
+    throw feePolicyError(`linea_fee_total_cap_exceeded kind=${kind} chainId=${String(chainId)}`);
+  }
+  return maximumCostWei;
 }
 
 export function getFallbackFeeOverrides(
@@ -137,7 +245,6 @@ export function getLineaFeeOverrides(
 
   return undefined;
 }
-
 export function getKeeperFeeOverrides(
   fees: FeeEstimate | null | undefined,
   chainId?: number,
@@ -145,6 +252,9 @@ export function getKeeperFeeOverrides(
   priorityBumpPercent = 125n,
 ): FeeOverrides | undefined {
   if (!fees) return undefined;
+  if (maxFeeBumpPercent <= 0n || priorityBumpPercent <= 0n) {
+    throw feePolicyError("linea_fee_policy_invalid_bump");
+  }
 
   const priorityFloor = getKeeperPriorityFloor(chainId);
   if (fees.maxFeePerGas !== undefined) {
@@ -162,10 +272,12 @@ export function getKeeperFeeOverrides(
       maxFee = priority;
     }
 
-    return {
+    const feeOverrides = {
       maxFeePerGas: maxFee,
       maxPriorityFeePerGas: priority,
     };
+    assertKeeperFeeFieldsWithinPolicy(feeOverrides, chainId);
+    return feeOverrides;
   }
 
   if (fees.gasPrice !== undefined) {
@@ -174,75 +286,10 @@ export function getKeeperFeeOverrides(
     if (gasPrice < floor) {
       gasPrice = floor;
     }
-    return { gasPrice };
+    const feeOverrides = { gasPrice };
+    assertKeeperFeeFieldsWithinPolicy(feeOverrides, chainId);
+    return feeOverrides;
   }
 
   return undefined;
-}
-
-export function getAffordableKeeperGasLimit(
-  estimatedGas: bigint,
-  balanceWei: bigint,
-  feeOverrides: FeeOverrides | undefined,
-  preferredBufferPercent = 150n,
-) {
-  const effectiveGasPrice = feeOverrides?.gasPrice ?? feeOverrides?.maxFeePerGas;
-  if (!effectiveGasPrice || effectiveGasPrice <= 0n) {
-    return (estimatedGas * preferredBufferPercent) / ONE_HUNDRED;
-  }
-
-  const candidates = [
-    preferredBufferPercent,
-    130n,
-    120n,
-    110n,
-    105n,
-    100n,
-  ];
-
-  for (const percent of candidates) {
-    const gasLimit = (estimatedGas * percent + (ONE_HUNDRED - 1n)) / ONE_HUNDRED;
-    if (gasLimit * effectiveGasPrice <= balanceWei) {
-      return gasLimit;
-    }
-  }
-
-  return null;
-}
-
-export function clampKeeperFeeOverridesToBalance(
-  feeOverrides: FeeOverrides | undefined,
-  estimatedGas: bigint,
-  balanceWei: bigint,
-  headroomPercent = 98n,
-): FeeOverrides | undefined {
-  if (!feeOverrides || estimatedGas <= 0n || balanceWei <= 0n) return feeOverrides;
-
-  const affordablePerGas = ((balanceWei * headroomPercent) / ONE_HUNDRED) / estimatedGas;
-  if (affordablePerGas <= 0n) return feeOverrides;
-
-  if (feeOverrides.gasPrice !== undefined) {
-    if (feeOverrides.gasPrice <= affordablePerGas) return feeOverrides;
-    return { gasPrice: affordablePerGas };
-  }
-
-  if (feeOverrides.maxFeePerGas !== undefined) {
-    const maxFeePerGas =
-      feeOverrides.maxFeePerGas <= affordablePerGas
-        ? feeOverrides.maxFeePerGas
-        : affordablePerGas;
-    const maxPriorityFeePerGas =
-      feeOverrides.maxPriorityFeePerGas === undefined
-        ? maxFeePerGas
-        : feeOverrides.maxPriorityFeePerGas <= maxFeePerGas
-          ? feeOverrides.maxPriorityFeePerGas
-          : maxFeePerGas;
-
-    return {
-      maxFeePerGas,
-      maxPriorityFeePerGas,
-    };
-  }
-
-  return feeOverrides;
 }

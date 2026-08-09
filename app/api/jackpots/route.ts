@@ -6,7 +6,6 @@ import {
   failRouteMetric,
   finishRouteMetric,
   markRouteCacheHit,
-  markRouteInflightJoin,
   markRouteStaleServed,
 } from "../_lib/runtimeMetrics";
 import { logRouteError } from "../_lib/routeError";
@@ -30,10 +29,9 @@ export async function GET(request: Request) {
 
   try {
     const { searchParams } = new URL(request.url);
-    const result = await readJackpotPayload({ forceFresh: searchParams.get("fresh") === "1" });
+    const result = await readJackpotPayload({ bypassResponseCache: searchParams.get("fresh") === "1" });
     if (result.source === "cache") markRouteCacheHit(ROUTE_METRIC_KEY);
     if (result.source === "stale-cache") markRouteStaleServed(ROUTE_METRIC_KEY);
-    if (result.source === "inflight") markRouteInflightJoin(ROUTE_METRIC_KEY);
 
     finishRouteMetric(metric, 200);
     return jsonNoStore(result.payload);

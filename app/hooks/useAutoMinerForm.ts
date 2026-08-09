@@ -154,7 +154,7 @@ export function useAutoMinerForm({
     (Boolean(betSizeError) && !isAutoMining) ||
     isRevealing ||
     (insufficientBalance && !isAutoMining) ||
-    (lowEthForGas && !isAutoMining);
+    (Boolean(lowEthForGas) && !isAutoMining);
 
   return {
     betSize,

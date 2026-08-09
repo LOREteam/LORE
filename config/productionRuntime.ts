@@ -326,9 +326,11 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     if (chatAuthSecret.length < 32) {
       issues.push("CHAT_AUTH_SECRET or NEXTAUTH_SECRET must contain at least 32 characters for mainnet web runtime.");
     }
-    const adminAuthSecret = getEnv("ADMIN_AUTH_SECRET") || chatAuthSecret;
+    const adminAuthSecret = getEnv("ADMIN_AUTH_SECRET");
     if (adminAuthSecret.length < 32) {
       issues.push("The effective ADMIN_AUTH_SECRET must contain at least 32 characters for mainnet admin sessions.");
+    } else if (chatAuthSecret && adminAuthSecret === chatAuthSecret) {
+      issues.push("ADMIN_AUTH_SECRET must be distinct from the chat authentication secret on mainnet.");
     }
     const adminWalletAddress = getEnv("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS");
     if (!adminWalletAddress) {
@@ -559,9 +561,11 @@ function validatePremainnetTestnetProductionEnv(scope: ProductionRuntimeScope) {
     if (chatAuthSecret.length < 32) {
       issues.push("CHAT_AUTH_SECRET or NEXTAUTH_SECRET must contain at least 32 characters for pre-mainnet testnet web runtime.");
     }
-    const adminAuthSecret = getEnv("ADMIN_AUTH_SECRET") || chatAuthSecret;
+    const adminAuthSecret = getEnv("ADMIN_AUTH_SECRET");
     if (adminAuthSecret.length < 32) {
       issues.push("The effective ADMIN_AUTH_SECRET must contain at least 32 characters for pre-mainnet testnet admin sessions.");
+    } else if (chatAuthSecret && adminAuthSecret === chatAuthSecret) {
+      issues.push("ADMIN_AUTH_SECRET must be distinct from the chat authentication secret on pre-mainnet testnet.");
     }
     const adminWalletAddress = getEnv("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS");
     if (!adminWalletAddress) {

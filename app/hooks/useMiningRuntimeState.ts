@@ -84,6 +84,14 @@ interface UseMiningRuntimeStateResult {
 
 const ACTIVE_AUTO_MINE_PHASES = new Set<AutoMinePhase>(["starting", "restoring", "running"]);
 
+export function didPreferredMiningActorChange(
+  capturedAddress: string | null | undefined,
+  liveAddress: string | null | undefined,
+): boolean {
+  if (!capturedAddress || !liveAddress) return false;
+  return capturedAddress.toLowerCase() !== liveAddress.toLowerCase();
+}
+
 function resolveSetterValue<T>(value: SetStateAction<T>, current: T): T {
   return typeof value === "function" ? (value as (prevState: T) => T)(current) : value;
 }
@@ -223,13 +231,19 @@ export function useMiningRuntimeState({
   const onAutoMineBetConfirmedRef = useRef(onAutoMineBetConfirmed);
   const notifyRef = useRef(onNotify);
   const preserveTransientRuntime = isAutoMining || autoResumeRequestedRef.current;
+  const preferredActorChanged = preserveTransientRuntime && didPreferredMiningActorChange(
+    preferredAddressRef.current,
+    preferredAddress,
+  );
 
   publicClientRef.current = publicClient ?? (preserveTransientRuntime ? publicClientRef.current : undefined);
-  silentSendRef.current = sendTransactionSilent ?? (preserveTransientRuntime ? silentSendRef.current : undefined);
-  refreshSessionRef.current = refreshSession ?? (preserveTransientRuntime ? refreshSessionRef.current : undefined);
-  writeContractAsyncRef.current = writeContractAsync;
-  preferredAddressRef.current = preferredAddress ?? (preserveTransientRuntime ? preferredAddressRef.current : null);
-  ensurePreferredWalletRef.current = ensurePreferredWallet ?? (preserveTransientRuntime ? ensurePreferredWalletRef.current : undefined);
+  if (!preferredActorChanged) {
+    silentSendRef.current = sendTransactionSilent ?? (preserveTransientRuntime ? silentSendRef.current : undefined);
+    refreshSessionRef.current = refreshSession ?? (preserveTransientRuntime ? refreshSessionRef.current : undefined);
+    writeContractAsyncRef.current = writeContractAsync;
+    preferredAddressRef.current = preferredAddress ?? (preserveTransientRuntime ? preferredAddressRef.current : null);
+    ensurePreferredWalletRef.current = ensurePreferredWallet ?? (preserveTransientRuntime ? ensurePreferredWalletRef.current : undefined);
+  }
   refetchAllowanceRef.current = refetchAllowance;
   refetchTileDataRef.current = refetchTileData;
   refetchUserBetsRef.current = refetchUserBets;
@@ -237,6 +251,17 @@ export function useMiningRuntimeState({
   refetchGridEpochDataRef.current = refetchGridEpochData;
   onAutoMineBetConfirmedRef.current = onAutoMineBetConfirmed;
   notifyRef.current = onNotify;
+
+  useEffect(() => {
+    if (!preferredActorChanged) return;
+    autoMineRef.current = false;
+    autoResumeRequestedRef.current = false;
+    deactivateAutoMineUi({
+      phase: "idle",
+      progress: "Auto-Miner stopped because the embedded wallet changed. Start it again to authorize this wallet.",
+    });
+    notifyRef.current?.("Auto-Miner stopped because the embedded wallet changed.", "warning");
+  }, [deactivateAutoMineUi, preferredActorChanged]);
 
   useEffect(() => {
     const actor = preferredAddress ?? address;

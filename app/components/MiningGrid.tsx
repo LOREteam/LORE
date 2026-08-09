@@ -160,11 +160,11 @@ function MiningGridView({
       return;
     }
     setLoreMsg(pickRandom(winningTileHasMyBet ? yourWinQuotes : roundWinQuotes));
-    setShowConfetti(!reducedMotion && winningTileHasMyBet);
+    setShowConfetti(winningTileHasMyBet);
     setConfettiIsMyWin(winningTileHasMyBet);
     const timer = setTimeout(() => setLoreMsg(null), 4000);
     return () => clearTimeout(timer);
-  }, [isRevealing, winningTileId, reducedMotion, winningTileHasMyBet]);
+  }, [isRevealing, winningTileId, winningTileHasMyBet]);
 
   useEffect(() => {
     const gridElement = gridRef.current;
@@ -227,7 +227,7 @@ function MiningGridView({
         })}
       </div>
 
-      <Confetti active={!reducedMotion && showConfetti} isMyWin={confettiIsMyWin} />
+      <Confetti active={showConfetti} isMyWin={confettiIsMyWin} reducedMotion={reducedMotion} />
 
       {loreMsg && (
         <div

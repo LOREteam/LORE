@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 
 const PARTICLE_COUNT = 22;
 const MOBILE_PARTICLE_COUNT = 10;
@@ -45,8 +46,10 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const particlesRef = useRef<Particle[]>([]);
+  const { motionReady, reducedMotion } = useReducedMotion();
 
   useEffect(() => {
+    if (!motionReady || reducedMotion) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d", { alpha: true });
@@ -56,6 +59,7 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
     let lastDrawAt = 0;
     let canvasWidth = 0;
     let canvasHeight = 0;
+    let isIntersecting = typeof IntersectionObserver === "undefined";
     const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
     const getParticleCount = () => window.innerWidth < 768 ? MOBILE_PARTICLE_COUNT : PARTICLE_COUNT;
     const seedParticles = () => {
@@ -81,7 +85,7 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
     window.addEventListener("resize", resize);
 
     const draw = (timestamp: number) => {
-      if (document.hidden) {
+      if (document.hidden || !isIntersecting) {
         animRef.current = 0;
         return;
       }
@@ -135,7 +139,7 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
     };
 
     const start = () => {
-      if (animRef.current === 0) {
+      if (!document.hidden && isIntersecting && animRef.current === 0) {
         animRef.current = requestAnimationFrame(draw);
       }
     };
@@ -145,24 +149,34 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
         animRef.current = 0;
       }
     };
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
+    const syncActivity = () => {
+      if (document.hidden || !isIntersecting) {
         stop();
       } else {
         start();
       }
     };
+    const observer = typeof IntersectionObserver === "undefined"
+      ? null
+      : new IntersectionObserver(([entry]) => {
+          isIntersecting = entry?.isIntersecting ?? false;
+          syncActivity();
+        });
 
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    start();
+    observer?.observe(canvas);
+    document.addEventListener("visibilitychange", syncActivity);
+    syncActivity();
 
     return () => {
       stop();
+      observer?.disconnect();
       if (resizeTimer) clearTimeout(resizeTimer);
       window.removeEventListener("resize", resize);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      document.removeEventListener("visibilitychange", syncActivity);
     };
-  }, []);
+  }, [motionReady, reducedMotion]);
+
+  if (!motionReady || reducedMotion) return null;
 
   return (
     <canvas

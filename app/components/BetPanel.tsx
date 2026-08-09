@@ -21,6 +21,111 @@ const ACTION_BUTTON_CLASS = "h-11 text-[11px] font-black";
 const QUICK_BUTTON_CLASS =
   "console-chip h-11 rounded-lg border px-2 text-[9px] font-black uppercase tracking-[0.08em] transition-all duration-200 hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-40";
 
+type MiningActionVariant = "primary" | "danger" | "locked" | "pending";
+
+export type AutoMinerFormState = ReturnType<typeof useAutoMinerForm>;
+
+interface ManualMiningActionInput {
+  coldBootDefaults: boolean;
+  isDisabled: boolean;
+  isPending: boolean;
+  liveStateReady: boolean;
+  readOnlyReason?: string | null;
+  selectedTilesCount: number;
+  walletConnected: boolean;
+}
+
+export function deriveManualMiningAction({
+  coldBootDefaults,
+  isDisabled,
+  isPending,
+  liveStateReady,
+  readOnlyReason,
+  selectedTilesCount,
+  walletConnected,
+}: ManualMiningActionInput): {
+  disabled: boolean;
+  label: string;
+  variant: MiningActionVariant;
+} {
+  const syncing = !liveStateReady && !coldBootDefaults;
+  const disabled = Boolean(readOnlyReason) || isDisabled;
+  const variant: MiningActionVariant = isPending || syncing
+    ? "pending"
+    : disabled
+      ? "locked"
+      : "primary";
+  const label = isPending
+    ? "BET PENDING"
+    : syncing
+      ? "SYNCING..."
+      : readOnlyReason
+        ? "BETTING PAUSED"
+        : !walletConnected
+          ? "LOGIN TO BET"
+          : selectedTilesCount > 0
+            ? `BET ON ${selectedTilesCount} TILES`
+            : "SELECT TILES";
+  return { disabled, label, variant };
+}
+
+interface AutoMinerActionInput {
+  autoMinePhase: AutoMinePhase;
+  coldBootDefaults: boolean;
+  isAutoMining: boolean;
+  isDisabled: boolean;
+  isPending: boolean;
+  liveStateReady: boolean;
+  lowEthForGas?: boolean;
+  readOnlyReason?: string | null;
+  walletConnected: boolean;
+}
+
+export function deriveAutoMinerAction({
+  autoMinePhase,
+  coldBootDefaults,
+  isAutoMining,
+  isDisabled,
+  isPending,
+  liveStateReady,
+  lowEthForGas,
+  readOnlyReason,
+  walletConnected,
+}: AutoMinerActionInput): {
+  disabled: boolean;
+  label: string;
+  variant: MiningActionVariant;
+} {
+  const disabled = !walletConnected || isDisabled || autoMinePhase === "retry-wait" || autoMinePhase === "session-expired";
+  const label = isAutoMining
+    ? "STOP BOT"
+    : isPending
+      ? "TX PENDING"
+      : readOnlyReason
+        ? "BETTING PAUSED"
+        : autoMinePhase === "retry-wait"
+          ? "RESUME PENDING"
+          : autoMinePhase === "session-expired"
+            ? "SESSION EXPIRED"
+            : !liveStateReady && !coldBootDefaults
+              ? "SYNCING..."
+              : !walletConnected
+                ? "LOGIN TO START"
+                : lowEthForGas
+                  ? "LOW ETH FOR GAS"
+                  : "START BOT";
+  const variant: MiningActionVariant = isAutoMining
+    ? "danger"
+    : autoMinePhase === "session-expired"
+      ? "danger"
+      : isPending || autoMinePhase === "retry-wait" || (!liveStateReady && !coldBootDefaults)
+        ? "pending"
+        : disabled
+          ? "locked"
+          : "primary";
+  return { disabled, label, variant };
+}
+
 function formatPanelNumber(value: number | null | undefined, fractionDigits: number, fallback: string) {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return formatDecimalTextFixed(String(value), fractionDigits) ?? fallback;
@@ -86,6 +191,7 @@ interface ManualBetProps {
   isPending: boolean;
   isRevealing: boolean;
   isAutoMining: boolean;
+  mobileActionDocked?: boolean;
   manualBetForm: ManualBetFormState;
   onMine: (betAmount: string) => void;
   onQuickPickTiles: (tileIds: number[]) => void;
@@ -102,6 +208,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   isPending,
   isRevealing,
   isAutoMining,
+  mobileActionDocked = false,
   manualBetForm,
   onMine,
   onQuickPickTiles,
@@ -117,7 +224,6 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     disabledReason,
     isDisabled,
   } = manualBetForm;
-  const requiresLogin = !walletConnected;
   const manualStatusText =
     !liveStateReady && !coldBootDefaults
       ? "Waiting for live epoch sync"
@@ -126,11 +232,15 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     ? "Bet transaction pending."
     : manualStatusText ?? readOnlyReason ?? "";
   const quickPickDisabled = Boolean(readOnlyReason) || !liveStateReady || isPending || isRevealing || isAutoMining;
-  const actionVariant = isPending || (!liveStateReady && !coldBootDefaults)
-    ? "pending"
-    : readOnlyReason || isDisabled
-      ? "locked"
-      : "primary";
+  const manualAction = deriveManualMiningAction({
+    coldBootDefaults,
+    isDisabled,
+    isPending,
+    liveStateReady,
+    readOnlyReason,
+    selectedTilesCount,
+    walletConnected,
+  });
   const manualButtonDescriptionId = readOnlyReason
     ? "manual-bet-readonly-reason"
     : manualInsufficient
@@ -290,12 +400,17 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         data-testid="manual-bet-action"
         aria-describedby={manualButtonDescriptionId}
         onClick={() => onMine(betAmount)}
-        disabled={Boolean(readOnlyReason) || isDisabled}
-        variant={actionVariant}
+        disabled={manualAction.disabled}
+        variant={manualAction.variant}
         size="sm"
         uppercase
         fullWidth
-        className={cn(ACTION_BUTTON_CLASS, "shadow-none", actionVariant === "primary" && "shimmer-btn")}
+        className={cn(
+          ACTION_BUTTON_CLASS,
+          "shadow-none",
+          mobileActionDocked && "max-[899px]:hidden",
+          manualAction.variant === "primary" && "shimmer-btn",
+        )}
       >
         {isPending ? (
           <span className="flex items-center justify-center gap-2">
@@ -305,16 +420,8 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
             </svg>
             <LoreText items={processingQuotes} />
           </span>
-        ) : !liveStateReady && !coldBootDefaults ? (
-          "SYNCING..."
-        ) : readOnlyReason ? (
-          "BETTING PAUSED"
-        ) : requiresLogin ? (
-          "LOGIN TO BET"
-        ) : selectedTilesCount > 0 ? (
-          `BET ON ${selectedTilesCount} TILES`
         ) : (
-          "SELECT TILES"
+          manualAction.label
         )}
       </UiButton>
 
@@ -334,36 +441,34 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
 });
 
 interface AutoMinerProps {
+  form: AutoMinerFormState;
   autoMinePhase: AutoMinePhase;
   isAutoMining: boolean;
   isPending: boolean;
   isRevealing: boolean;
-  isAnalyzing?: boolean;
   coldBootDefaults?: boolean;
   liveStateReady?: boolean;
   readOnlyReason?: string | null;
   autoMineProgress?: string | null;
-  formattedBalance?: string | null;
   walletConnected: boolean;
-  runningParams?: { betStr: string; blocks: number; rounds: number } | null;
   lowEthForGas?: boolean;
+  mobileActionDocked?: boolean;
   onToggle: (betStr: string, blocks: number, rounds: number) => void;
 }
 
 export const AutoMinerPanel = React.memo(function AutoMinerPanel({
+  form,
   autoMinePhase,
   isAutoMining,
   isPending,
   isRevealing,
-  isAnalyzing = false,
   coldBootDefaults = false,
   liveStateReady = true,
   readOnlyReason = null,
   autoMineProgress,
-  formattedBalance,
   walletConnected,
-  runningParams,
   lowEthForGas,
+  mobileActionDocked = false,
   onToggle,
 }: AutoMinerProps) {
   const {
@@ -382,21 +487,9 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
     isDisabled,
     handleTargetsChange,
     handleCyclesChange,
-  } = useAutoMinerForm({
-    isAutoMining,
-    isPending,
-    isRevealing,
-    isAnalyzing,
-    liveStateReady,
-    readOnlyReason,
-    formattedBalance,
-    walletConnected,
-    runningParams,
-    lowEthForGas,
-  });
+  } = form;
 
   const compact = isAutoMining;
-  const requiresLogin = !walletConnected;
   const phaseMeta = getAutoMinePhaseMeta(autoMinePhase);
   const phaseProgressText = autoMineProgress ?? phaseMeta.defaultProgress;
   const showAutoMineProgress = Boolean(phaseProgressText) && (
@@ -408,7 +501,6 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   const compactProgressCurrent = compactProgressMatch ? Number(compactProgressMatch[1]) : null;
   const compactProgressTotal = compactProgressMatch ? Number(compactProgressMatch[2]) : null;
   const compactProgressDetail = compactProgressMatch ? compactProgressMatch[3] : phaseProgressText;
-  const buttonDisabled = requiresLogin || isDisabled || autoMinePhase === "retry-wait" || autoMinePhase === "session-expired";
   const lineaDeficit = insufficientBalance && balance !== null ? Math.max(0, totalCost - balance) : 0;
   const displayCycleCount = Math.max(1, Number(displayCycles) || 1);
   const totalCostDisplay = formatPanelNumber(totalCost, 2, "0.00");
@@ -416,21 +508,17 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   const costPerRoundDisplay = formatPanelNumber(totalCost / displayCycleCount, 2, "0.00");
   const balanceDisplay = formatPanelNumber(balance, 2, "0.00");
   const lineaDeficitDisplay = formatPanelNumber(lineaDeficit, 2, "0.00");
-  const buttonLabel = isAutoMining
-    ? "STOP BOT"
-    : readOnlyReason
-      ? "BETTING PAUSED"
-    : autoMinePhase === "retry-wait"
-      ? "RESUME PENDING"
-      : autoMinePhase === "session-expired"
-        ? "SESSION EXPIRED"
-        : !liveStateReady && !coldBootDefaults
-          ? "SYNCING..."
-          : requiresLogin
-            ? "LOGIN TO START"
-            : lowEthForGas
-              ? "LOW ETH FOR GAS"
-            : "START BOT";
+  const autoAction = deriveAutoMinerAction({
+    autoMinePhase,
+    coldBootDefaults,
+    isAutoMining,
+    isDisabled,
+    isPending,
+    liveStateReady,
+    lowEthForGas,
+    readOnlyReason,
+    walletConnected,
+  });
   const autoMinerStatusText =
     !liveStateReady && !coldBootDefaults
         ? "Waiting for live epoch sync"
@@ -440,16 +528,6 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   const autoMinerAnnouncement = autoMinePhase !== "idle"
     ? `Auto-miner ${phaseMeta.label}. ${phaseMeta.detail ?? ""}`
     : autoMinerStatusText ?? "";
-  const autoButtonVariant = isAutoMining
-    ? "danger"
-    : autoMinePhase === "session-expired"
-      ? "danger"
-      : autoMinePhase === "retry-wait" || (!liveStateReady && !coldBootDefaults)
-        ? "pending"
-        : buttonDisabled
-          ? "locked"
-          : "primary";
-
   return (
     <UiPanel
       tone="default"
@@ -609,19 +687,24 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
 
       <UiButton
         data-testid="auto-miner-action"
-        aria-describedby={buttonDisabled && disabledReason && !isAutoMining ? "auto-miner-disabled-reason" : undefined}
+        aria-describedby={autoAction.disabled && disabledReason && !isAutoMining ? "auto-miner-disabled-reason" : undefined}
         onClick={() => onToggle(betSize, targets, cycles)}
-        disabled={buttonDisabled}
-        variant={autoButtonVariant}
+        disabled={autoAction.disabled}
+        variant={autoAction.variant}
         size="sm"
         fullWidth
         uppercase
-        className={cn(ACTION_BUTTON_CLASS, "shadow-none", autoButtonVariant === "primary" && "shimmer-btn")}
+        className={cn(
+          ACTION_BUTTON_CLASS,
+          "shadow-none",
+          mobileActionDocked && "max-[899px]:hidden",
+          autoAction.variant === "primary" && "shimmer-btn",
+        )}
       >
-        {buttonLabel}
+        {autoAction.label}
       </UiButton>
 
-      {buttonDisabled && disabledReason && !isAutoMining && (
+      {autoAction.disabled && disabledReason && !isAutoMining && (
         <p id="auto-miner-disabled-reason" className="mt-1.5 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500">
           {disabledReason}
         </p>

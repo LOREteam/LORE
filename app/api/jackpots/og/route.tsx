@@ -1,13 +1,30 @@
 import { ImageResponse } from "next/og";
-import { type NextRequest } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { parseBoundedPositiveIntegerParam } from "../../_lib/queryParams";
+import {
+  acquireResponseConcurrencySlot,
+  releaseResponseConcurrencySlotOnSettled,
+} from "../../_lib/responseConcurrencyBudget";
+import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
+import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
+import { getTrustedAuthOrigin } from "../../_lib/trustedAuthOrigin";
 import { getJackpotVisualTheme, type JackpotVisualKind } from "../../../lib/jackpotVisualTheme";
 
 /* eslint-disable @next/next/no-img-element -- next/og ImageResponse renders raw img assets. */
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 const SIZE = { width: 1200, height: 630 };
+const CANONICAL_SITE_ORIGIN = "https://playlore.xyz";
+const OG_RENDER_BUDGET_KEY = "api-jackpots-og-render";
+const MAX_CONCURRENT_OG_RENDERS = 2;
+
+function renderBudgetExceededResponse() {
+  return applyNoStoreHeaders(NextResponse.json(
+    { error: "OpenGraph render capacity is busy", retryAfter: 1 },
+    { status: 503, headers: { "Retry-After": "1" } },
+  ));
+}
 
 function resolveKind(raw: string | null): JackpotVisualKind {
   if (raw === "weekly") return "weekly";
@@ -30,19 +47,26 @@ function sanitizePositiveInt(raw: string | null, max: number) {
 }
 
 export async function GET(request: NextRequest) {
+  const rateLimited = await enforceSharedRateLimit(request, {
+    bucket: "api-jackpots-og",
+    limit: 20,
+    windowMs: 60_000,
+  });
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
+
   const { searchParams } = request.nextUrl;
   const kind = resolveKind(searchParams.get("kind"));
   const amount = sanitizeAmount(searchParams.get("amount"));
   const tile = sanitizePositiveInt(searchParams.get("tile"), 25);
   const epoch = sanitizePositiveInt(searchParams.get("epoch"), 1_000_000_000);
   const theme = getJackpotVisualTheme(kind);
-  const artUrl = new URL(theme.ogArt, request.url).toString();
+  const artOrigin = getTrustedAuthOrigin(request.url) ?? CANONICAL_SITE_ORIGIN;
+  const artUrl = new URL(theme.ogArt, artOrigin).toString();
   const rewardDisplay = amount ? amount : "REWARD";
   const rewardUnit = amount ? "LINEA" : "CONFIRMED";
 
-  return new ImageResponse(
-    (
-      <div
+  const image = (
+    <div
         style={{
           width: "100%",
           height: "100%",
@@ -274,7 +298,19 @@ export async function GET(request: NextRequest) {
           </div>
         </div>
       </div>
-    ),
-    { ...SIZE },
   );
+
+  const releaseRenderSlot = acquireResponseConcurrencySlot(
+    OG_RENDER_BUDGET_KEY,
+    MAX_CONCURRENT_OG_RENDERS,
+  );
+  if (!releaseRenderSlot) return renderBudgetExceededResponse();
+
+  try {
+    const imageResponse = new ImageResponse(image, { ...SIZE });
+    return releaseResponseConcurrencySlotOnSettled(imageResponse, releaseRenderSlot);
+  } catch (error) {
+    releaseRenderSlot();
+    throw error;
+  }
 }

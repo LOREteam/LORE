@@ -55,6 +55,9 @@ export function buildSidebarProps({
 }
 
 type BuildHeaderPropsOptions = {
+  actualCurrentEpoch: HeaderProps["actualCurrentEpoch"];
+  gridDisplayEpoch: HeaderProps["gridDisplayEpoch"];
+  currentRoundEvidence: HeaderProps["currentRoundEvidence"];
   visualEpoch: HeaderProps["visualEpoch"];
   isRevealing: HeaderProps["isRevealing"];
   coldBootDefaults: HeaderProps["coldBootDefaults"];
@@ -80,6 +83,9 @@ type BuildHeaderPropsOptions = {
 };
 
 export function buildHeaderProps({
+  actualCurrentEpoch,
+  gridDisplayEpoch,
+  currentRoundEvidence,
   visualEpoch,
   isRevealing,
   coldBootDefaults,
@@ -104,6 +110,9 @@ export function buildHeaderProps({
   epochDurationChange,
 }: BuildHeaderPropsOptions): Omit<HeaderProps, "initialNowMs" | "realTotalStaked" | "linePath"> {
   return {
+    actualCurrentEpoch,
+    gridDisplayEpoch,
+    currentRoundEvidence,
     visualEpoch,
     isRevealing,
     coldBootDefaults,

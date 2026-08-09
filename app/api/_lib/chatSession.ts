@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { CHAT_AUTH_SESSION_TTL_MS, normalizeChatAuthAddress } from "../../lib/chatAuth";
 
 const COOKIE_NAME = "lore_chat_session";
+const SESSION_AUDIENCE = "lore-chat";
+const SESSION_TYPE = "chat-session";
+const SIGNING_CONTEXT = "lore-chat-session-v2\0";
 const SESSION_COOKIE_MAX_LENGTH = 1024;
 const SESSION_COOKIE_PART_RE = /^[A-Za-z0-9_-]+$/;
 const SESSION_MAX_FUTURE_SKEW_MS = 60_000;
@@ -29,6 +32,8 @@ function getSessionSecret() {
 }
 
 type SessionPayload = {
+  aud: typeof SESSION_AUDIENCE;
+  type: typeof SESSION_TYPE;
   address: string;
   expiresAt: number;
 };
@@ -42,7 +47,10 @@ function fromBase64Url(value: string) {
 }
 
 function sign(payload: string) {
-  return createHmac("sha256", getSessionSecret()).update(payload).digest("base64url");
+  return createHmac("sha256", getSessionSecret())
+    .update(SIGNING_CONTEXT)
+    .update(payload)
+    .digest("base64url");
 }
 
 function safeEqual(left: string, right: string) {
@@ -84,12 +92,15 @@ function parse(raw: string): SessionPayload | null {
 
   try {
     const parsed = JSON.parse(fromBase64Url(encoded)) as Partial<SessionPayload>;
+    if (parsed.aud !== SESSION_AUDIENCE || parsed.type !== SESSION_TYPE) return null;
     if (!parsed.address || typeof parsed.address !== "string") return null;
     const expiresAt = normalizeChatSessionExpiresAt(parsed.expiresAt);
     if (expiresAt === null) return null;
     const address = normalizeChatAuthAddress(parsed.address);
     if (!address) return null;
     return {
+      aud: SESSION_AUDIENCE,
+      type: SESSION_TYPE,
       address,
       expiresAt,
     };
@@ -102,7 +113,12 @@ export function issueChatSession(response: NextResponse, address: string) {
   const expiresAt = Date.now() + CHAT_AUTH_SESSION_TTL_MS;
   const normalizedAddress = normalizeChatAuthAddress(address);
   if (!normalizedAddress) throw new Error("Cannot issue chat session for an invalid wallet address.");
-  const token = serialize({ address: normalizedAddress, expiresAt });
+  const token = serialize({
+    aud: SESSION_AUDIENCE,
+    type: SESSION_TYPE,
+    address: normalizedAddress,
+    expiresAt,
+  });
   response.cookies.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",

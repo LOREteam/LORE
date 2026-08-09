@@ -23,6 +23,8 @@ const SCOPED_JACKPOTS_TABLE = "scoped_jackpots";
 const SCOPED_REWARD_CLAIMS_TABLE = "scoped_reward_claims";
 const SCOPED_PROTOCOL_FEE_FLUSHES_TABLE = "scoped_protocol_fee_flushes";
 const SCOPED_INDEXER_EVENTS_TABLE = "scoped_indexer_events";
+const SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE = "scoped_indexer_block_checkpoints";
+const SCOPED_INDEXER_LEASES_TABLE = "scoped_indexer_leases";
 const ACTIVE_CONTRACT_SCOPE_META_KEY = "__storage_active_contract_scope";
 const LEGACY_CONTRACT_META_KEYS = [
   "currentEpoch",
@@ -35,6 +37,10 @@ const LEGACY_CONTRACT_META_KEYS = [
   "gamedata:dustSettlements",
 ] as const;
 const CONTRACT_SCOPE_PURGE_ENV = "LORE_ALLOW_CONTRACT_SCOPE_PURGE";
+export const MIN_INDEXER_LEASE_TTL_MS = 1_000;
+export const MAX_INDEXER_LEASE_TTL_MS = 120_000;
+const MIN_INDEXER_LEASE_OWNER_TOKEN_LENGTH = 16;
+const MAX_INDEXER_LEASE_OWNER_TOKEN_LENGTH = 200;
 
 export interface EpochStorageRow {
   winningTile: number;
@@ -56,6 +62,7 @@ export interface BetStorageRow {
   totalAmountNum: number;
   txHash: string;
   blockNumber: string;
+  logIndex?: string;
 }
 
 export interface JackpotStorageRow {
@@ -83,6 +90,19 @@ export interface FeeFlushStorageRow {
   burnAmount: string;
   txHash: string;
   blockNumber: string;
+}
+
+export interface IndexerBlockCheckpoint {
+  blockNumber: string;
+  blockHash: string;
+}
+
+export interface IndexerChunkCommit {
+  leaseOwnerToken: string;
+  expectedPreviousBlock: bigint;
+  expectedPreviousBlockHash: string | null;
+  blockNumber: bigint;
+  blockHash: string;
 }
 
 export interface ChatMessageRow {
@@ -156,6 +176,43 @@ function parseSafePositiveIntegerString(value: string | null | undefined) {
   return isSafePositiveInteger(parsed) ? parsed : null;
 }
 
+function parseSafeNonNegativeIntegerString(value: string | null | undefined) {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function normalizeIndexerBlockHash(value: string | null | undefined) {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? normalized : null;
+}
+
+function validateIndexerLeaseOwnerToken(value: string) {
+  if (
+    typeof value !== "string" ||
+    value.length < MIN_INDEXER_LEASE_OWNER_TOKEN_LENGTH ||
+    value.length > MAX_INDEXER_LEASE_OWNER_TOKEN_LENGTH ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new Error("invalid opaque indexer lease owner token");
+  }
+  return value;
+}
+
+function validateIndexerLeaseTtlMs(value: number) {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < MIN_INDEXER_LEASE_TTL_MS ||
+    value > MAX_INDEXER_LEASE_TTL_MS
+  ) {
+    throw new Error(
+      `indexer lease TTL must be between ${MIN_INDEXER_LEASE_TTL_MS} and ${MAX_INDEXER_LEASE_TTL_MS} milliseconds`,
+    );
+  }
+  return value;
+}
+
 function normalizePageLimit(value: number | null | undefined, defaultValue: number, maxValue: number) {
   if (value === null || value === undefined) return defaultValue;
   if (!Number.isSafeInteger(value) || value <= 0) return defaultValue;
@@ -179,22 +236,31 @@ function describeStorageError(error: unknown) {
   });
 }
 
+let transactionDepth = 0;
+let savepointSequence = 0;
+
 function runInTransaction<T>(action: () => T, label = "tx"): T {
-  db.exec("BEGIN IMMEDIATE");
-  let committed = false;
+  const isOuterTransaction = transactionDepth === 0;
+  const savepoint = `storage_tx_${savepointSequence++}`;
+  db.exec(isOuterTransaction ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
+  transactionDepth += 1;
   try {
     const result = action();
-    db.exec("COMMIT");
-    committed = true;
+    db.exec(isOuterTransaction ? "COMMIT" : `RELEASE SAVEPOINT ${savepoint}`);
+    transactionDepth -= 1;
     return result;
   } catch (error) {
-    if (!committed) {
-      try {
+    transactionDepth -= 1;
+    try {
+      if (isOuterTransaction) {
         db.exec("ROLLBACK");
-      } catch (rollbackErr) {
-        const details = describeStorageError(rollbackErr);
-        console.error(`[storage] Rollback failed: ${details.name}: ${details.message}`);
+      } else {
+        db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        db.exec(`RELEASE SAVEPOINT ${savepoint}`);
       }
+    } catch (rollbackErr) {
+      const details = describeStorageError(rollbackErr);
+      console.error(`[storage] Rollback failed: ${details.name}: ${details.message}`);
     }
     const details = describeStorageError(error);
     console.error(`[storage] ${label} failed: ${details.name}: ${details.message}`);
@@ -254,6 +320,7 @@ function purgeScopedContractData(exceptScope: string) {
     SCOPED_REWARD_CLAIMS_TABLE,
     SCOPED_PROTOCOL_FEE_FLUSHES_TABLE,
     SCOPED_INDEXER_EVENTS_TABLE,
+    SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE,
   ];
 
   runInTransaction(() => {
@@ -322,6 +389,7 @@ function hasForeignScopedContractData(exceptScope: string) {
     SCOPED_REWARD_CLAIMS_TABLE,
     SCOPED_PROTOCOL_FEE_FLUSHES_TABLE,
     SCOPED_INDEXER_EVENTS_TABLE,
+    SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE,
   ];
 
   for (const table of scopedTables) {
@@ -427,6 +495,267 @@ export function setMetaNumber(key: string, value: number) {
 
 export function setMetaBigInt(key: string, value: bigint) {
   setMetaValue(key, value.toString());
+}
+
+export function getCurrentStorageScope() {
+  return CURRENT_STORAGE_SCOPE;
+}
+
+function didStatementChangeRow(result: unknown) {
+  const changes = (result as { changes?: number | bigint } | null)?.changes;
+  return typeof changes === "bigint" ? changes > 0n : Number(changes ?? 0) > 0;
+}
+
+export function acquireIndexerLease(ownerToken: string, ttlMs: number) {
+  const owner = validateIndexerLeaseOwnerToken(ownerToken);
+  const ttl = validateIndexerLeaseTtlMs(ttlMs);
+  return runInTransaction(() => {
+    const now = Date.now();
+    const result = db.prepare(`
+      INSERT INTO ${SCOPED_INDEXER_LEASES_TABLE}(
+        scope, owner_token, acquired_at, heartbeat_at, expires_at
+      ) VALUES(?, ?, ?, ?, ?)
+      ON CONFLICT(scope) DO UPDATE SET
+        owner_token = excluded.owner_token,
+        acquired_at = excluded.acquired_at,
+        heartbeat_at = excluded.heartbeat_at,
+        expires_at = excluded.expires_at
+      WHERE ${SCOPED_INDEXER_LEASES_TABLE}.expires_at <= ?
+         OR ${SCOPED_INDEXER_LEASES_TABLE}.owner_token = excluded.owner_token
+    `).run(
+      CURRENT_STORAGE_SCOPE,
+      owner,
+      now,
+      now,
+      now + ttl,
+      now,
+    );
+    return didStatementChangeRow(result);
+  }, "indexer_lease_acquire");
+}
+
+export function heartbeatIndexerLease(ownerToken: string, ttlMs: number) {
+  const owner = validateIndexerLeaseOwnerToken(ownerToken);
+  const ttl = validateIndexerLeaseTtlMs(ttlMs);
+  return runInTransaction(() => {
+    const now = Date.now();
+    const result = db.prepare(`
+      UPDATE ${SCOPED_INDEXER_LEASES_TABLE}
+      SET heartbeat_at = ?, expires_at = ?
+      WHERE scope = ?
+        AND owner_token = ?
+        AND expires_at > ?
+    `).run(now, now + ttl, CURRENT_STORAGE_SCOPE, owner, now);
+    return didStatementChangeRow(result);
+  }, "indexer_lease_heartbeat");
+}
+
+export function releaseIndexerLease(ownerToken: string) {
+  const owner = validateIndexerLeaseOwnerToken(ownerToken);
+  return runInTransaction(() => {
+    const result = db.prepare(`
+      DELETE FROM ${SCOPED_INDEXER_LEASES_TABLE}
+      WHERE scope = ? AND owner_token = ?
+    `).run(CURRENT_STORAGE_SCOPE, owner);
+    return didStatementChangeRow(result);
+  }, "indexer_lease_release");
+}
+
+function assertIndexerLeaseOwner(ownerToken: string) {
+  const owner = validateIndexerLeaseOwnerToken(ownerToken);
+  const row = db.prepare(`
+    SELECT 1 AS held
+    FROM ${SCOPED_INDEXER_LEASES_TABLE}
+    WHERE scope = ?
+      AND owner_token = ?
+      AND expires_at > ?
+  `).get(CURRENT_STORAGE_SCOPE, owner, Date.now());
+  if (row?.held !== 1) {
+    throw new Error("indexer lease is unavailable or lost");
+  }
+}
+
+function toSafeIndexerBlockNumber(value: bigint, label: string) {
+  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${label} is outside the safe SQLite integer range`);
+  }
+  return Number(value);
+}
+
+function getStoredIndexerCheckpointHash(blockNumber: number) {
+  const row = db.prepare(`
+    SELECT block_hash
+    FROM ${SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE}
+    WHERE scope = ? AND block_number = ?
+  `).get(CURRENT_STORAGE_SCOPE, blockNumber);
+  return typeof row?.block_hash === "string" ? row.block_hash : null;
+}
+
+export function getIndexerBlockCheckpoints(): IndexerBlockCheckpoint[] {
+  const rows = db.prepare(`
+    SELECT block_number, block_hash
+    FROM ${SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE}
+    WHERE scope = ?
+    ORDER BY block_number DESC
+  `).all(CURRENT_STORAGE_SCOPE) as Array<Record<string, unknown>>;
+
+  return rows.map((row) => ({
+    blockNumber: String(row.block_number ?? ""),
+    blockHash: String(row.block_hash ?? ""),
+  }));
+}
+
+export function runIndexerStorageTransaction<T>(
+  leaseOwnerToken: string,
+  action: () => T,
+): T {
+  return runInTransaction(() => {
+    assertIndexerLeaseOwner(leaseOwnerToken);
+    return action();
+  }, "indexer_mutation");
+}
+
+export function commitIndexerChunk(commit: IndexerChunkCommit, action: () => void) {
+  const previousBlockNumber = toSafeIndexerBlockNumber(
+    commit.expectedPreviousBlock,
+    "expected previous indexer block",
+  );
+  const blockNumber = toSafeIndexerBlockNumber(commit.blockNumber, "indexer checkpoint block");
+  if (blockNumber <= previousBlockNumber) {
+    throw new Error("indexer checkpoint block must advance the cursor");
+  }
+  const blockHash = normalizeIndexerBlockHash(commit.blockHash);
+  if (blockHash === null) {
+    throw new Error("invalid indexer checkpoint block hash");
+  }
+  const previousBlockHash = commit.expectedPreviousBlockHash === null
+    ? null
+    : normalizeIndexerBlockHash(commit.expectedPreviousBlockHash);
+  if (commit.expectedPreviousBlockHash !== null && previousBlockHash === null) {
+    throw new Error("invalid previous indexer checkpoint block hash");
+  }
+
+  runInTransaction(() => {
+    assertIndexerLeaseOwner(commit.leaseOwnerToken);
+    const storedCursor = getMetaBigInt("lastIndexedBlock");
+    if (storedCursor !== commit.expectedPreviousBlock) {
+      throw new Error("indexer cursor changed before chunk commit");
+    }
+    const storedPreviousHash = normalizeIndexerBlockHash(
+      getStoredIndexerCheckpointHash(previousBlockNumber),
+    );
+    if (previousBlockHash === null) {
+      if (storedPreviousHash !== null) {
+        throw new Error("indexer predecessor checkpoint changed before chunk commit");
+      }
+    } else if (storedPreviousHash !== previousBlockHash) {
+      throw new Error("indexer predecessor checkpoint changed before chunk commit");
+    }
+
+    action();
+    db.prepare(`
+      INSERT INTO ${SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE}(
+        scope, block_number, block_hash
+      ) VALUES(?, ?, ?)
+      ON CONFLICT(scope, block_number) DO UPDATE SET
+        block_hash = excluded.block_hash
+    `).run(CURRENT_STORAGE_SCOPE, blockNumber, blockHash);
+    setMetaValue("lastIndexedBlock", String(blockNumber));
+  }, "indexer_chunk");
+}
+
+function pruneLegacyIndexerEventMeta(key: string, rollbackBlock: number) {
+  const raw = getMetaValue(key);
+  if (raw === null) return;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    db.prepare("DELETE FROM meta WHERE key = ?").run(scopeMetaKey(key));
+    return;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    db.prepare("DELETE FROM meta WHERE key = ?").run(scopeMetaKey(key));
+    return;
+  }
+
+  const retained: JsonMap = {};
+  for (const [id, payload] of Object.entries(parsed as JsonMap)) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) continue;
+    const eventBlock = parseSafeNonNegativeIntegerString(
+      String((payload as JsonMap).blockNumber ?? ""),
+    );
+    if (eventBlock !== null && eventBlock <= rollbackBlock) {
+      retained[id] = payload;
+    }
+  }
+  setMetaValue(key, JSON.stringify(retained));
+}
+
+export function rollbackIndexerToBlock(
+  rollbackBlock: bigint,
+  retainedCheckpointHash: string | null,
+  leaseOwnerToken: string,
+) {
+  const blockNumber = toSafeIndexerBlockNumber(rollbackBlock, "indexer rollback block");
+  const normalizedRetainedHash = retainedCheckpointHash === null
+    ? null
+    : normalizeIndexerBlockHash(retainedCheckpointHash);
+  if (retainedCheckpointHash !== null && normalizedRetainedHash === null) {
+    throw new Error("invalid retained indexer checkpoint block hash");
+  }
+
+  runInTransaction(() => {
+    assertIndexerLeaseOwner(leaseOwnerToken);
+    if (normalizedRetainedHash !== null) {
+      const storedHash = normalizeIndexerBlockHash(getStoredIndexerCheckpointHash(blockNumber));
+      if (storedHash !== normalizedRetainedHash) {
+        throw new Error("retained indexer checkpoint does not match storage");
+      }
+    }
+
+    db.prepare(`
+      DELETE FROM ${SCOPED_EPOCHS_TABLE}
+      WHERE scope = ? AND (resolved_block IS NULL OR resolved_block > ?)
+    `)
+      .run(CURRENT_STORAGE_SCOPE, blockNumber);
+    db.prepare(`DELETE FROM ${SCOPED_BETS_TABLE} WHERE scope = ? AND block_number > ?`)
+      .run(CURRENT_STORAGE_SCOPE, blockNumber);
+    db.prepare(`DELETE FROM ${SCOPED_JACKPOTS_TABLE} WHERE scope = ? AND block_number > ?`)
+      .run(CURRENT_STORAGE_SCOPE, blockNumber);
+    db.prepare(`DELETE FROM ${SCOPED_REWARD_CLAIMS_TABLE} WHERE scope = ? AND block_number > ?`)
+      .run(CURRENT_STORAGE_SCOPE, blockNumber);
+    db.prepare(`DELETE FROM ${SCOPED_PROTOCOL_FEE_FLUSHES_TABLE} WHERE scope = ? AND block_number > ?`)
+      .run(CURRENT_STORAGE_SCOPE, blockNumber);
+    db.prepare(`DELETE FROM ${SCOPED_INDEXER_EVENTS_TABLE} WHERE scope = ? AND block_number > ?`)
+      .run(CURRENT_STORAGE_SCOPE, blockNumber);
+    db.prepare(`
+      DELETE FROM ${SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE}
+      WHERE scope = ? AND block_number > ?
+    `).run(CURRENT_STORAGE_SCOPE, blockNumber);
+    if (normalizedRetainedHash === null) {
+      db.prepare(`
+        DELETE FROM ${SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE}
+        WHERE scope = ? AND block_number = ?
+      `).run(CURRENT_STORAGE_SCOPE, blockNumber);
+    }
+
+    for (const key of [
+      "gamedata:batchClaims",
+      "gamedata:resolverRewards",
+      "gamedata:dustSettlements",
+    ]) {
+      pruneLegacyIndexerEventMeta(key, blockNumber);
+    }
+
+    setMetaValue("lastIndexedBlock", String(blockNumber));
+    const repairCursor = getMetaBigInt("repairCursorBlock");
+    const nextRepairBlock = rollbackBlock + 1n;
+    if (repairCursor === null || repairCursor > nextRepairBlock) {
+      setMetaValue("repairCursorBlock", nextRepairBlock.toString());
+    }
+  }, "indexer_rollback");
 }
 
 export function getEpochMap() {
@@ -535,12 +864,39 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
   }, "epochs");
 }
 
-function buildDepositKey(epoch: string, txHash: string, blockNumber: string) {
-  const normalizedHash = txHash.toLowerCase().trim();
-  if (/^0x[0-9a-f]{64}$/.test(normalizedHash)) {
-    return `${epoch}_${normalizedHash}`;
+export function normalizeIndexerLogIndex(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? String(value) : null;
   }
-  return `${epoch}_nohash_${blockNumber}`;
+  if (typeof value === "bigint") {
+    return value >= 0n && value <= BigInt(Number.MAX_SAFE_INTEGER) ? value.toString() : null;
+  }
+  if (typeof value === "string") {
+    const parsed = parseSafeNonNegativeIntegerString(value);
+    return parsed === null ? null : String(parsed);
+  }
+  return null;
+}
+
+export function buildIndexerBetIdentity(
+  epoch: string,
+  txHash: string,
+  blockNumber: string,
+  logIndex?: unknown,
+) {
+  const normalizedHash = txHash.toLowerCase().trim();
+  const legacyId = /^0x[0-9a-f]{64}$/.test(normalizedHash)
+    ? `${epoch}_${normalizedHash}`
+    : `${epoch}_nohash_${blockNumber}`;
+  if (logIndex === undefined) {
+    return { id: legacyId, legacyId };
+  }
+  const normalizedLogIndex = normalizeIndexerLogIndex(logIndex);
+  if (normalizedLogIndex === null) return null;
+  return {
+    id: `${legacyId}_${normalizedLogIndex}`,
+    legacyId,
+  };
 }
 
 function mapBetRows(rows: Array<Record<string, unknown>>) {
@@ -824,6 +1180,18 @@ export function getEpochTilePoolsWei(epoch: number, gridSize = 25) {
 
 export function upsertBets(rows: BetStorageRow[]) {
   if (rows.length === 0) return;
+  const migrateLegacyStatement = db.prepare(`
+    UPDATE ${SCOPED_BETS_TABLE}
+    SET id = ?
+    WHERE scope = ?
+      AND id = ?
+      AND epoch = ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ${SCOPED_BETS_TABLE} AS canonical
+        WHERE canonical.scope = ? AND canonical.id = ?
+      )
+  `);
   const statement = db.prepare(`
     INSERT INTO ${SCOPED_BETS_TABLE}(
       scope, id, user, epoch, tile_ids_json, amounts_json,
@@ -847,10 +1215,26 @@ export function upsertBets(rows: BetStorageRow[]) {
       const epochNumber = parseSafePositiveIntegerString(row.epoch);
       const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
       if (epochNumber === null || blockNumber === null) continue;
-      const id = buildDepositKey(row.epoch, row.txHash, row.blockNumber);
+      const identity = buildIndexerBetIdentity(
+        row.epoch,
+        row.txHash,
+        row.blockNumber,
+        row.logIndex,
+      );
+      if (identity === null) continue;
+      if (identity.id !== identity.legacyId) {
+        migrateLegacyStatement.run(
+          identity.id,
+          CURRENT_STORAGE_SCOPE,
+          identity.legacyId,
+          epochNumber,
+          CURRENT_STORAGE_SCOPE,
+          identity.id,
+        );
+      }
       statement.run(
         CURRENT_STORAGE_SCOPE,
-        id,
+        identity.id,
         normalizeWallet(row.user),
         epochNumber,
         JSON.stringify(row.tileIds),
@@ -1279,6 +1663,90 @@ export function acquireExpiringLock(name: string, epoch: string, ttlMs: number) 
 
     return true;
   }, "ephemeral_lock");
+}
+
+function assertAdminSessionStorageTimestamp(value: number, label: string) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative safe integer`);
+  }
+}
+
+function adminSessionStorageChangedOneRow(result: unknown) {
+  if (!result || typeof result !== "object" || !("changes" in result)) {
+    throw new Error("admin session storage returned an invalid mutation result");
+  }
+  const changes = result.changes;
+  if (changes !== 0 && changes !== 0n && changes !== 1 && changes !== 1n) {
+    throw new Error("admin session storage changed an unexpected number of rows");
+  }
+  return changes === 1 || changes === 1n;
+}
+
+export function createLocalAdminSessionRecord(
+  sessionKey: string,
+  recordValue: string,
+  expiresAt: number,
+  now: number,
+) {
+  assertAdminSessionStorageTimestamp(expiresAt, "admin session expiry");
+  assertAdminSessionStorageTimestamp(now, "admin session clock");
+  if (expiresAt <= now) throw new Error("admin session expiry must be in the future");
+
+  return runInTransaction(() => {
+    db.prepare("DELETE FROM admin_sessions WHERE expires_at <= ?").run(now);
+    const result = db.prepare(`
+      INSERT INTO admin_sessions(scope, session_key, record_value, expires_at)
+      VALUES(?, ?, ?, ?)
+      ON CONFLICT(scope, session_key) DO NOTHING
+    `).run(CURRENT_STORAGE_SCOPE, sessionKey, recordValue, expiresAt);
+    return adminSessionStorageChangedOneRow(result);
+  }, "admin_session_create");
+}
+
+export function readLocalAdminSessionRecord(sessionKey: string, now: number) {
+  assertAdminSessionStorageTimestamp(now, "admin session clock");
+  const row = db.prepare(`
+    SELECT record_value
+    FROM admin_sessions
+    WHERE scope = ? AND session_key = ? AND expires_at > ?
+  `).get(CURRENT_STORAGE_SCOPE, sessionKey, now);
+  return typeof row?.record_value === "string" ? row.record_value : null;
+}
+
+export function rotateLocalAdminSessionRecord(
+  sessionKey: string,
+  previousValue: string,
+  nextValue: string,
+  expiresAt: number,
+  now: number,
+) {
+  assertAdminSessionStorageTimestamp(expiresAt, "admin session expiry");
+  assertAdminSessionStorageTimestamp(now, "admin session clock");
+  if (expiresAt <= now) return false;
+
+  const result = db.prepare(`
+    UPDATE admin_sessions
+    SET record_value = ?, expires_at = ?
+    WHERE scope = ?
+      AND session_key = ?
+      AND record_value = ?
+      AND expires_at > ?
+  `).run(
+    nextValue,
+    expiresAt,
+    CURRENT_STORAGE_SCOPE,
+    sessionKey,
+    previousValue,
+    now,
+  );
+  return adminSessionStorageChangedOneRow(result);
+}
+
+export function deleteLocalAdminSessionRecord(sessionKey: string) {
+  db.prepare(`
+    DELETE FROM admin_sessions
+    WHERE scope = ? AND session_key = ?
+  `).run(CURRENT_STORAGE_SCOPE, sessionKey);
 }
 
 export function consumeRateLimit(bucket: string, key: string, limit: number, windowMs: number) {

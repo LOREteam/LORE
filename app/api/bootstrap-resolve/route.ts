@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createWalletClient, http } from "viem";
 import {
-  clampKeeperFeeOverridesToBalance,
-  getAffordableKeeperGasLimit,
+  assertKeeperFeeBudget,
   getKeeperFeeOverrides,
 } from "../../lib/lineaFees";
 import { recordLineaEstimateGasShadow } from "../../lib/lineaEstimateGasShadow";
@@ -21,11 +20,13 @@ import {
   isLocalDevBootstrapRequest,
   isRpcReadRetryableError,
   readContractResilient,
+  RESOLVE_OPERATION_LOCK_TTL_MS,
   RESOLVE_THROTTLE_MS,
 } from "./shared";
 
 const INSUFFICIENT_FUNDS_RETRY_MS = 300_000;
 const RESOLVE_RECEIPT_TIMEOUT_MS = 25_000;
+const RESOLVE_GAS_BUFFER_PERCENT = 150n;
 const ZERO_CONTENT_LENGTH_RE = /^0$/;
 
 function hasUnexpectedRequestBody(request: Request) {
@@ -85,16 +86,6 @@ export async function POST(request: Request) {
       functionName: "currentEpoch",
     });
 
-    if (!(await acquireResolveLock(currentEpoch))) {
-      return json({
-        ok: true,
-        action: "noop",
-        reason: "bootstrap_resolve_throttled",
-        currentEpoch: currentEpoch.toString(),
-        retryAfter: Math.max(1, Math.ceil(RESOLVE_THROTTLE_MS / 1000)),
-      });
-    }
-
     const [{ result: epochEndTime }, { result: epochData }] = await Promise.all([
       readContractResilient<bigint>({
         address: CONTRACT_ADDRESS,
@@ -141,6 +132,16 @@ export async function POST(request: Request) {
         currentEpoch: currentEpoch.toString(),
         isResolved,
         isExpired,
+      });
+    }
+
+    if (!(await acquireResolveLock(currentEpoch))) {
+      return json({
+        ok: true,
+        action: "noop",
+        reason: "bootstrap_resolve_throttled",
+        currentEpoch: currentEpoch.toString(),
+        retryAfter: Math.max(1, Math.ceil(RESOLVE_OPERATION_LOCK_TTL_MS / 1000)),
       });
     }
 
@@ -191,14 +192,17 @@ export async function POST(request: Request) {
         bumpStep.maxFeeBumpPercent,
         bumpStep.priorityBumpPercent,
       );
-      const feeOverrides = clampKeeperFeeOverridesToBalance(
+      const gas = (
+        gasEstimate * RESOLVE_GAS_BUFFER_PERCENT + 99n
+      ) / 100n;
+      const requiredMaxCost = assertKeeperFeeBudget(
         estimatedFeeOverrides,
-        gasEstimate,
-        keeperBalance,
+        gas,
+        APP_CHAIN.id,
+        "keeper",
       );
-      const gas = getAffordableKeeperGasLimit(gasEstimate, keeperBalance, feeOverrides, 150n);
 
-      if (gas === null) {
+      if (keeperBalance < requiredMaxCost) {
         return json({
           ok: true,
           action: "noop",
@@ -215,11 +219,11 @@ export async function POST(request: Request) {
           args: [currentEpoch],
           gas,
           nonce: latestNonce,
-          ...(feeOverrides?.gasPrice !== undefined
-            ? { gasPrice: feeOverrides.gasPrice }
+          ...(estimatedFeeOverrides?.gasPrice !== undefined
+            ? { gasPrice: estimatedFeeOverrides.gasPrice }
             : {
-                maxFeePerGas: feeOverrides?.maxFeePerGas,
-                maxPriorityFeePerGas: feeOverrides?.maxPriorityFeePerGas,
+                maxFeePerGas: estimatedFeeOverrides?.maxFeePerGas,
+                maxPriorityFeePerGas: estimatedFeeOverrides?.maxPriorityFeePerGas,
               }),
         });
 

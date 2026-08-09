@@ -19,11 +19,11 @@ function normalizeHealthDiagnosticsSecret(value: string | null | undefined) {
   return secret;
 }
 
-export function isAuthorizedHealthDiagnosticsRequest(
+export async function isAuthorizedHealthDiagnosticsRequest(
   request: NextRequest,
   headerName = "x-health-diagnostics-secret",
 ) {
-  if (readAdminSession(request)) return true;
+  if (await readAdminSession(request)) return true;
 
   const secret = normalizeHealthDiagnosticsSecret(process.env.HEALTH_DIAGNOSTICS_SECRET);
   if (!secret) return false;

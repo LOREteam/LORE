@@ -2,18 +2,20 @@
 
 import { getExplorerAddressUrl } from "../../lib/explorerLinks";
 import { shortenAddress } from "../../lib/utils";
+import {
+  PRIVY_LOGIN_ACCESSIBLE_NAME,
+  type PrivyLoginUiState,
+} from "../../hooks/usePrivyLoginAccessibility";
 import { UiButton } from "../ui/UiButton";
 
 interface HeaderWalletCardProps {
   authenticated: boolean;
-  privyReady: boolean;
-  loginPending: boolean;
-  loginError: string | null;
+  loginState: PrivyLoginUiState;
   embeddedWalletAddress: string | null;
   embeddedWalletSyncing: boolean;
   embeddedAddressCopied: boolean;
   onCopyEmbeddedAddress: () => void;
-  onLogin: () => void;
+  onLogin: (trigger: HTMLButtonElement, focusFallback?: HTMLElement | null) => void;
   onLogout: () => void;
   onOpenWalletSettings: () => void;
   privyEthBalance: string;
@@ -53,9 +55,7 @@ function HeaderWalletActions({
 
 export function HeaderWalletCard({
   authenticated,
-  privyReady,
-  loginPending,
-  loginError,
+  loginState,
   embeddedWalletAddress,
   embeddedWalletSyncing,
   embeddedAddressCopied,
@@ -69,49 +69,58 @@ export function HeaderWalletCard({
   privyTokenBalanceLoading,
 }: HeaderWalletCardProps) {
   const explorerAddressUrl = getExplorerAddressUrl(embeddedWalletAddress);
-  const loginStatusAnnouncement = loginError
-    ? loginError
-    : loginPending
-      ? "Wallet login is opening."
-      : privyReady
-        ? "Wallet login is ready."
-        : "Wallet login is loading.";
-  const showLoginReload = Boolean(loginError && (loginError.includes("still loading") || loginError.includes("timed out")));
+  const showLoginReload = Boolean(
+    loginState.error && (loginState.error.includes("still loading") || loginState.error.includes("timed out")),
+  );
 
   return (
-    <div id="header-wallet-card" className="min-[900px]:col-span-3 min-[900px]:h-22.5 min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-surface-raised shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden">
+    <div
+      id="header-wallet-card"
+      data-privy-login-focus-root
+      role="group"
+      aria-label={authenticated ? "Wallet account" : "Wallet login"}
+      tabIndex={-1}
+      className="min-[900px]:col-span-3 min-[900px]:min-h-22.5 min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-surface-raised shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden"
+    >
       {!authenticated ? (
         <div className="flex h-full min-h-14 flex-col justify-center gap-1 p-1">
-          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-            {loginStatusAnnouncement}
+          <span id="header-privy-login-status" className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {loginState.statusAnnouncement}
           </span>
           <UiButton
-            onClick={onLogin}
-            aria-busy={!privyReady || loginPending}
-            disabled={!privyReady || loginPending}
+            id="header-privy-login-trigger"
+            onClick={(event) => onLogin(event.currentTarget, event.currentTarget.closest<HTMLElement>("[data-privy-login-focus-root]"))}
+            aria-label={PRIVY_LOGIN_ACCESSIBLE_NAME}
+            aria-describedby="header-privy-login-status"
+            aria-haspopup="dialog"
+            aria-expanded={loginState.modalOpen}
+            aria-busy={loginState.busy}
+            disabled={loginState.disabled}
             title={
-              !privyReady
+              !loginState.error && loginState.modalOpen
+                ? "Wallet login dialog is open"
+                : loginState.error
+                  ? loginState.error
+                  : loginState.busy
                 ? "Wallet login is still loading"
-                : loginPending
-                  ? "Opening wallet login"
-                  : "Open wallet login"
+                : "Open wallet login"
             }
-            variant={privyReady && !loginPending ? "secondary" : "pending"}
+            variant={!loginState.disabled ? "secondary" : "pending"}
             size="md"
             fullWidth
             uppercase
             className="h-12 min-h-12 rounded-xl border-violet-300/14 bg-linear-to-r from-violet-700/38 via-violet-600/32 to-indigo-600/38 px-4 py-2 text-[11px] font-black tracking-[0.1em] text-violet-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.055)] hover:border-violet-300/24 hover:from-violet-600/46 hover:via-violet-500/38 hover:to-indigo-500/46 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_18px_rgba(124,58,237,0.12)]"
           >
-            {loginPending ? "Connecting..." : privyReady ? "Login / Connect" : "Wallet Loading..."}
+            {loginState.buttonText}
           </UiButton>
-          {loginError && (
+          {loginState.error && (
             <div
               role="status"
               aria-live="polite"
-              className="flex max-h-9 items-center justify-center gap-2 overflow-hidden px-1"
+              className="flex min-h-11 items-center justify-center gap-2 px-1"
             >
               <p className="min-w-0 truncate text-center text-[10px] font-semibold leading-tight text-red-300/90">
-                {loginError}
+                {loginState.error}
               </p>
               {showLoginReload && (
                 <button
@@ -119,7 +128,7 @@ export function HeaderWalletCard({
                   onClick={() => window.location.reload()}
                   aria-label="Reload page to retry wallet login"
                   title="Reload page to retry wallet login"
-                  className="shrink-0 rounded border border-red-300/20 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-red-200/90 outline-none transition-colors hover:border-red-300/35 hover:bg-red-400/10 focus-visible:ring-2 focus-visible:ring-red-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090914]"
+                  className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded border border-red-300/20 px-3 py-1 text-[9px] font-black uppercase tracking-[0.08em] text-red-200/90 outline-none transition-colors hover:border-red-300/35 hover:bg-red-400/10 focus-visible:ring-2 focus-visible:ring-red-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090914]"
                 >
                   Reload
                 </button>

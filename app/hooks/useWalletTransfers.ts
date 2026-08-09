@@ -3,18 +3,15 @@
 import { log } from "../lib/logger";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePublicClient } from "wagmi";
-import { parseAbi, decodeEventLog, encodeEventTopics, getAddress, pad, type Log, type Hex } from "viem";
+import { decodeEventLog, encodeEventTopics, getAddress, pad, type Log, type Hex } from "viem";
 import { formatLineaAmountFixed, formatLineaWeiDisplayNumber } from "../lib/tokenAmountMath";
 import {
   CONTRACT_DEPLOY_BLOCK,
   CONTRACT_ADDRESS,
   LINEA_TOKEN_ADDRESS,
   APP_CHAIN_ID,
+  TOKEN_ABI as TRANSFER_ABI,
 } from "../lib/constants";
-
-const TRANSFER_ABI = parseAbi([
-  "event Transfer(address indexed from, address indexed to, uint256 value)",
-]);
 
 const CHUNK_BLOCKS = 100_000;
 const FALLBACK_CHUNK_BLOCKS = 20_000;

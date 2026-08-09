@@ -188,6 +188,23 @@ function bootstrapSchema() {
     CREATE INDEX IF NOT EXISTS idx_scoped_indexer_events_scope_category_block
       ON scoped_indexer_events(scope, category, block_number DESC, id DESC);
 
+    CREATE TABLE IF NOT EXISTS scoped_indexer_block_checkpoints (
+      scope TEXT NOT NULL,
+      block_number INTEGER NOT NULL,
+      block_hash TEXT NOT NULL,
+      PRIMARY KEY(scope, block_number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_scoped_indexer_block_checkpoints_scope_block
+      ON scoped_indexer_block_checkpoints(scope, block_number DESC);
+
+    CREATE TABLE IF NOT EXISTS scoped_indexer_leases (
+      scope TEXT PRIMARY KEY,
+      owner_token TEXT NOT NULL CHECK(length(owner_token) BETWEEN 16 AND 200),
+      acquired_at INTEGER NOT NULL,
+      heartbeat_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS chat_profiles (
       wallet TEXT PRIMARY KEY,
       name TEXT,
@@ -221,6 +238,16 @@ function bootstrapSchema() {
       acquired_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS admin_sessions (
+      scope TEXT NOT NULL,
+      session_key TEXT NOT NULL,
+      record_value TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      PRIMARY KEY(scope, session_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_admin_sessions_scope_expires
+      ON admin_sessions(scope, expires_at);
   `);
 }
 
