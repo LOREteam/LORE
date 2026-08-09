@@ -81,6 +81,7 @@ assert.equal(
 
 const hookSource = readSource("app/hooks/usePrivyLoginAccessibility.ts");
 const headerSource = readSource("app/components/Header.tsx");
+const modalStatusBridgeSource = readSource("app/components/PrivyModalStatusBridge.tsx");
 const walletCardSource = readSource("app/components/header/HeaderWalletCard.tsx");
 const adminSource = readSource("app/admin/AdminOpsClient.tsx");
 const sdkTypes = readSource("node_modules/@privy-io/react-auth/dist/dts/index.d.ts");
@@ -88,12 +89,18 @@ const sdkTypes = readSource("node_modules/@privy-io/react-auth/dist/dts/index.d.
 assert.match(sdkTypes, /declare const useModalStatus:\s*\(\)\s*=>\s*\{\s*isOpen:\s*boolean;/s);
 assert.match(sdkTypes, /export \{[^}]*\buseModalStatus\b[^}]*\};/s);
 assert.doesNotMatch(hookSource, /@privy-io\/react-auth/);
-assert.match(headerSource, /useModalStatus\(\)/);
-assert.match(adminSource, /useModalStatus\(\)/);
+assert.match(modalStatusBridgeSource, /useModalStatus\(\)/);
+assert.match(modalStatusBridgeSource, /onChange\(isOpen\)/);
+for (const source of [headerSource, adminSource]) {
+  assert.match(source, /dynamic\(\(\) => import\([^)]*PrivyModalStatusBridge[^)]*\), \{ ssr: false \}\)/);
+  assert.match(source, /ready:\s*\w+\s*&&\s*privyModalStatus\.ready/);
+  assert.doesNotMatch(source, /useModalStatus/);
+}
 assert.match(hookSource, /invocationPendingRef\.current/);
 assert.match(hookSource, /modalWasOpenRef\.current/);
 assert.match(hookSource, /destination\?\.focus\(\{ preventScroll: true \}\)/);
 assert.doesNotMatch(hookSource, /querySelector|privy-dialog|privy-modal|input\[type=["']email/i);
+assert.doesNotMatch(modalStatusBridgeSource, /querySelector|privy-dialog|privy-modal|input\[type=["']email/i);
 
 for (const source of [walletCardSource, adminSource]) {
   assert.match(source, /aria-label=\{PRIVY_LOGIN_ACCESSIBLE_NAME\}/);
@@ -116,6 +123,7 @@ console.log(JSON.stringify({
   status: "pass",
   runtimeCases: 17,
   sdkModalStatusContract: true,
+  lazyModalStatusBridge: true,
   duplicateInvocationGuard: true,
   appOwnedRecoveryTargetsAtLeast44Px: true,
   sdkInternalDomOverrides: false,

@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useModalStatus, usePrivy } from "@privy-io/react-auth";
+import { usePrivy } from "@privy-io/react-auth";
+import dynamic from "next/dynamic";
 import {
   deriveRoundPresentation,
   KEEPER_DELAY_THRESHOLD_MS,
@@ -19,6 +20,7 @@ import { HeaderWalletCard } from "./header/HeaderWalletCard";
 import type { JackpotDisplayInfo } from "./header/types";
 
 const MAX_BROWSER_TIMEOUT_MS = 2_147_483_647;
+const PrivyModalStatusBridge = dynamic(() => import("./PrivyModalStatusBridge"), { ssr: false });
 
 interface HeaderProps {
   initialNowMs?: number;
@@ -89,7 +91,7 @@ export const Header = React.memo(function Header({
   epochDurationChange = null,
 }: HeaderProps) {
   const { ready: privyReady, login, logout, authenticated } = usePrivy();
-  const { isOpen: privyModalOpen } = useModalStatus();
+  const [privyModalStatus, setPrivyModalStatus] = useState({ isOpen: false, ready: false });
   const showColdBootDefaults = coldBootDefaults && !liveStateReady && !isRevealing;
   const [hydrated, setHydrated] = useState(false);
   const [roundNowMs, setRoundNowMs] = useState(() =>
@@ -97,11 +99,16 @@ export const Header = React.memo(function Header({
   );
   const [embeddedAddressCopied, setEmbeddedAddressCopied] = useState(false);
   const mountedRef = useRef(false);
+  const handlePrivyModalStatusChange = useCallback((isOpen: boolean) => {
+    setPrivyModalStatus((current) =>
+      current.ready && current.isOpen === isOpen ? current : { isOpen, ready: true },
+    );
+  }, []);
   const privyLogin = usePrivyLoginAccessibility({
     authenticated,
     login,
-    modalOpen: privyModalOpen,
-    ready: privyReady,
+    modalOpen: privyModalStatus.isOpen,
+    ready: privyReady && privyModalStatus.ready,
   });
 
   useEffect(() => {
@@ -207,6 +214,7 @@ export const Header = React.memo(function Header({
   }, [embeddedWalletAddress]);
   return (
     <>
+    <PrivyModalStatusBridge onChange={handlePrivyModalStatusChange} />
     {jackpotInfo && (
       <HeaderJackpots
         jackpotInfo={jackpotInfo}

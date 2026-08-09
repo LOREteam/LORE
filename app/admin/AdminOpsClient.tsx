@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useModalStatus, usePrivy, useWallets } from "@privy-io/react-auth";
+import { usePrivy, useWallets } from "@privy-io/react-auth";
+import dynamic from "next/dynamic";
 import { useAccount } from "wagmi";
 import { toHex } from "viem";
 import {
@@ -20,6 +21,8 @@ import {
   createAdminAuthNonce,
   normalizeAdminAuthAddress,
 } from "../lib/adminAuth";
+
+const PrivyModalStatusBridge = dynamic(() => import("../components/PrivyModalStatusBridge"), { ssr: false });
 
 type DataSyncHealth = {
   status?: string;
@@ -338,12 +341,17 @@ function fmtPct(value: number | null) {
 
 export default function AdminOpsClient() {
   const { ready, authenticated, login, logout } = usePrivy();
-  const { isOpen: privyModalOpen } = useModalStatus();
+  const [privyModalStatus, setPrivyModalStatus] = useState({ isOpen: false, ready: false });
+  const handlePrivyModalStatusChange = useCallback((isOpen: boolean) => {
+    setPrivyModalStatus((current) =>
+      current.ready && current.isOpen === isOpen ? current : { isOpen, ready: true },
+    );
+  }, []);
   const privyLogin = usePrivyLoginAccessibility({
     authenticated,
     login,
-    modalOpen: privyModalOpen,
-    ready,
+    modalOpen: privyModalStatus.isOpen,
+    ready: ready && privyModalStatus.ready,
   });
   const { wallets } = useWallets();
   const { address } = useAccount();
@@ -964,6 +972,7 @@ export default function AdminOpsClient() {
 
   return (
     <main className="min-h-screen bg-background px-6 py-8 text-slate-200">
+      <PrivyModalStatusBridge onChange={handlePrivyModalStatusChange} />
       <div className="mx-auto max-w-5xl space-y-4">
         <div className="space-y-2">
           <h1 className="text-2xl font-bold">LORE Ops</h1>
