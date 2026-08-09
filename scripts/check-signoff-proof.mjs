@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
+const summaryOnly = process.argv.includes("--summary-only");
 const args = new Map(
   process.argv
     .slice(2)
@@ -19,6 +20,13 @@ const ZERO_TX = "0x0000000000000000000000000000000000000000000000000000000000000
 const TEMPLATE_VALUE_RE = /REPLACE_|<REDACTED>|TODO|TBD/i;
 const secretKeyPattern = /(secret|private[_-]?key|mnemonic|webhook|dsn|api[_-]?key|api[_-]?token|auth[_-]?token|access[_-]?token|bearer|session|cookie)/i;
 const chainReadChecks = ["jackpot", "safetyPool", "deposits", "rewards", "rebates", "resolve"];
+const signoffLaunchGates = ["G1", "G2", "G3", "G4"];
+const signoffLaunchGateGroups = "chain=1, env=1, signoff=2";
+const MAX_SIGNOFF_ARTIFACT_TEXT_BYTES = 256 * 1024;
+const MAX_SIGNOFF_PROOF_MANIFEST_BYTES = 512 * 1024;
+const CANONICAL_POSITIVE_INTEGER_RE = /^[1-9]\d{0,15}$/;
+const CANONICAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const knownChainIds = new Map([
   ["mainnet", 59144],
   ["sepolia", 59141],
@@ -45,21 +53,30 @@ function hasRealText(value) {
 }
 
 function isPositiveIntegerString(value) {
-  return typeof value === "string" && /^[1-9]\d*$/.test(value);
+  return typeof value === "string" && parsePositiveInteger(value) !== null;
 }
 
 function parsePositiveInteger(value) {
   const normalized = String(value ?? "").trim();
-  if (!/^[1-9]\d*$/.test(normalized)) return null;
-  const parsed = Number(normalized);
-  return Number.isSafeInteger(parsed) ? parsed : null;
+  if (!CANONICAL_POSITIVE_INTEGER_RE.test(normalized)) return null;
+  const parsed = BigInt(normalized);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(parsed);
+}
+
+function parseNonNegativeInteger(value) {
+  const normalized = String(value ?? "").trim();
+  if (!CANONICAL_NON_NEGATIVE_INTEGER_RE.test(normalized)) return null;
+  const parsed = BigInt(normalized);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(parsed);
 }
 
 function nonEmptyEpochList(value) {
   if (!Array.isArray(value) || value.length === 0) return false;
   return value.every((entry) => {
     if (typeof entry === "number") return Number.isSafeInteger(entry) && entry >= 0;
-    return typeof entry === "string" && /^\d+$/.test(entry.trim());
+    return typeof entry === "string" && parseNonNegativeInteger(entry) !== null;
   });
 }
 
@@ -71,6 +88,15 @@ function hasIsoTimestamp(value) {
   if (Number.isNaN(parsed.getTime())) return false;
   const normalized = text.includes(".") ? text : text.replace("Z", ".000Z");
   return parsed.toISOString() === normalized;
+}
+
+function isoTimestampMs(value) {
+  return hasIsoTimestamp(value) ? new Date(String(value).trim()).getTime() : Number.NaN;
+}
+
+function hasNonFutureIsoTimestamp(value) {
+  const timestampMs = isoTimestampMs(value);
+  return Number.isFinite(timestampMs) && timestampMs <= Date.now() + 5 * 60 * 1000;
 }
 
 function normalizeNetwork(value) {
@@ -152,10 +178,42 @@ function hasEvidence(value) {
   ].some(hasRealText);
 }
 
+function hasPublicHttpsUrl(value) {
+  const text = String(value ?? "").trim();
+  const match = text.match(/https?:\/\/[^\s),.;]+/i);
+  if (!match) return false;
+  try {
+    const url = new URL(match[0]);
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+    return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+      );
+  } catch {
+    return false;
+  }
+}
+
 function hasConcreteText(value) {
   if (!hasRealText(value)) return false;
   const text = String(value).trim();
-  return /https?:\/\//i.test(text) ||
+  return hasPublicHttpsUrl(text) ||
     /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv)(?:\b|$)/i.test(text) ||
     /\bnpm(?:\.cmd)?\s+run\b/i.test(text) ||
     /\bproof:[a-z0-9:-]+\b/i.test(text) ||
@@ -192,6 +250,19 @@ function localArtifactPathFromText(value, key = "") {
   return (artifactMatch || keySuggestsPath) && valueLooksLikePath ? candidate : "";
 }
 
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function localArtifactIsFile(artifactPath) {
+  return regularFileStat(resolve(process.cwd(), artifactPath)) !== null;
+}
+
 function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   const findings = [];
   if (Array.isArray(value)) {
@@ -200,7 +271,7 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   }
   if (typeof value === "string") {
     const artifactPath = localArtifactPathFromText(value, key);
-    if (artifactPath && !existsSync(resolve(process.cwd(), artifactPath))) {
+    if (artifactPath && !localArtifactIsFile(artifactPath)) {
       findings.push(`${path} -> ${artifactPath}`);
     }
     return findings;
@@ -212,11 +283,68 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   return findings;
 }
 
+function formatMissingLocalArtifactRefs(findings) {
+  const visible = summaryOnly ? findings.map((entry) => entry.split(" -> ")[0]) : findings;
+  return visible.slice(0, 5).join(", ");
+}
+
+function normalizedArtifactPathSet(value, key = "") {
+  if (typeof value === "string") {
+    const artifactPath = localArtifactPathFromText(value, key);
+    return artifactPath ? new Set([resolve(process.cwd(), artifactPath).replace(/[\\/]+/g, "/").toLowerCase()]) : new Set();
+  }
+  if (Array.isArray(value)) {
+    const paths = new Set();
+    for (const entry of value) {
+      for (const artifactPath of normalizedArtifactPathSet(entry, key)) paths.add(artifactPath);
+    }
+    return paths;
+  }
+  if (!isPlainObject(value)) return new Set();
+  const paths = new Set();
+  for (const [childKey, entry] of Object.entries(value)) {
+    for (const artifactPath of normalizedArtifactPathSet(entry, childKey)) paths.add(artifactPath);
+  }
+  return paths;
+}
+
+function sharedSignoffSectionArtifactIssues(manifest) {
+  const sections = [
+    ["contractEnv", manifest.contractEnv],
+    ["ownership", manifest.ownership],
+    ["randomness", manifest.randomness],
+    ["chainComparison", manifest.chainComparison],
+  ].map(([name, value]) => [name, normalizedArtifactPathSet(value)]);
+  const findings = [];
+  for (let i = 0; i < sections.length; i += 1) {
+    for (let j = i + 1; j < sections.length; j += 1) {
+      const [leftName, leftPaths] = sections[i];
+      const [rightName, rightPaths] = sections[j];
+      for (const artifactPath of leftPaths) {
+        if (rightPaths.has(artifactPath)) findings.push(`${leftName} and ${rightName}`);
+      }
+    }
+  }
+  return [...new Set(findings)];
+}
+
+function readBoundedArtifactText(resolved) {
+  const fd = openSync(resolved, "r");
+  try {
+    const buffer = Buffer.alloc(MAX_SIGNOFF_ARTIFACT_TEXT_BYTES);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function localArtifactContentFromText(value, key = "") {
   const artifactPath = localArtifactPathFromText(value, key);
   if (!artifactPath) return "";
+  if (!localArtifactIsFile(artifactPath)) return "";
   try {
-    return readFileSync(resolve(process.cwd(), artifactPath), "utf8").slice(0, 256 * 1024);
+    return readBoundedArtifactText(resolve(process.cwd(), artifactPath));
   } catch {
     return "";
   }
@@ -238,6 +366,24 @@ function evidenceContentText(value, key = "") {
 function evidenceMentions(value, pattern) {
   return pattern.test(evidenceContentText(value));
 }
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function evidenceMentionsCheckAndSide(value, check, sidePattern) {
+  const text = evidenceContentText(value);
+  return new RegExp(`\\b${escapeRegExp(check)}\\b`, "i").test(text) && sidePattern.test(text);
+}
+
+function comparisonDirectChainProof(check, value) {
+  return evidenceMentionsCheckAndSide(value.directChainEvidence, check, /\b(?:direct[-\s]?chain|proof:chain|chain\s+read|on[-\s]?chain)\b/i);
+}
+
+function comparisonAppOrIndexerProof(check, value) {
+  return evidenceMentionsCheckAndSide(value.appOrIndexerEvidence, check, /\b(?:app|indexer|api|ui|chain comparison)\b/i);
+}
+
 function findSecretLikeValues(value, path = "$") {
   const findings = [];
   if (Array.isArray(value)) {
@@ -281,6 +427,15 @@ function printTable(headers, rows) {
   for (const row of rows) console.log(`| ${row.join(" | ")} |`);
 }
 
+function fileSummaryStatus(filePath) {
+  return regularFileStat(filePath) ? "present" : "missing";
+}
+
+function launchGateSummary(issueCount) {
+  const label = issueCount > 0 ? "blocked" : "covered";
+  return `${label} gates: ${signoffLaunchGates.join(", ")}; groups: ${signoffLaunchGateGroups}`;
+}
+
 const manifestPath = resolve(process.cwd(), argOrEnv("file", "SIGNOFF_PROOF_PATH", "docs/signoff-proof.json"));
 const issues = [];
 let manifest = null;
@@ -289,20 +444,27 @@ console.log("# Contract / Funds Sign-Off Proof Summary");
 console.log("");
 console.log(`Timestamp: ${new Date().toISOString()}`);
 console.log(`Strict: ${strict ? "yes" : "no"}`);
-console.log(`Manifest: ${manifestPath}`);
+console.log(`Manifest: ${summaryOnly ? fileSummaryStatus(manifestPath) : manifestPath}`);
 console.log("");
 
 if (strict && /\.draft\.json$/i.test(manifestPath)) {
   issues.push("draft proof manifests are not accepted as launch proof");
 }
 
+const manifestStat = regularFileStat(manifestPath);
 if (!existsSync(manifestPath)) {
   issues.push("sign-off proof manifest is missing");
+} else if (!manifestStat) {
+  issues.push("sign-off proof manifest must be a file");
 } else {
-  try {
-    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  } catch (error) {
-    issues.push(`sign-off proof manifest is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  if (manifestStat.size > MAX_SIGNOFF_PROOF_MANIFEST_BYTES) {
+    issues.push("sign-off proof manifest is too large to validate safely");
+  } else {
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch (error) {
+      issues.push(`sign-off proof manifest is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }
 
@@ -321,7 +483,11 @@ if (manifest) {
 
     const missingArtifactRefs = findMissingLocalArtifactRefs(manifest);
     if (missingArtifactRefs.length > 0) {
-      issues.push(`local signoff artifact references must exist: ${missingArtifactRefs.slice(0, 5).join(", ")}`);
+      issues.push(`local signoff artifact references must exist: ${formatMissingLocalArtifactRefs(missingArtifactRefs)}`);
+    }
+    const sharedSectionArtifacts = sharedSignoffSectionArtifactIssues(manifest);
+    if (sharedSectionArtifacts.length > 0) {
+      issues.push(`signoff evidence sections must use distinct local artifact files across ${sharedSectionArtifacts.slice(0, 3).join(", ")}`);
     }
     const contractEnv = isPlainObject(manifest.contractEnv) ? manifest.contractEnv : {};
     if (!isPlainObject(manifest.contractEnv)) issues.push("contractEnv section is missing");
@@ -397,7 +563,14 @@ if (manifest) {
     if (contractEnv.keeperMatchesPublic !== true) issues.push("contractEnv.keeperMatchesPublic must be true");
     if (contractEnv.indexerStartBlockMatchesDeployBlock !== true) issues.push("contractEnv.indexerStartBlockMatchesDeployBlock must be true");
     if (contractEnv.finalityBlocksPositive !== true) issues.push("contractEnv.finalityBlocksPositive must be true");
-    if (!hasIsoTimestamp(contractEnv.checkedAt)) issues.push("contractEnv.checkedAt must be ISO-8601 UTC");
+    if (contractEnv.protectedBetsRequired !== true) {
+      issues.push("contractEnv.protectedBetsRequired must be true for the V10 mainnet launch");
+    }
+    if (!hasIsoTimestamp(contractEnv.checkedAt)) {
+      issues.push("contractEnv.checkedAt must be ISO-8601 UTC");
+    } else if (!hasNonFutureIsoTimestamp(contractEnv.checkedAt)) {
+      issues.push("contractEnv.checkedAt must not be in the future");
+    }
     if (!hasEvidence(contractEnv)) issues.push("contractEnv has no evidence");
     if (hasEvidence(contractEnv) && !hasConcreteEvidence(contractEnv)) {
       issues.push("contractEnv must include concrete evidence path, link, artifact, command output, proof command, or address/tx marker");
@@ -418,7 +591,11 @@ if (manifest) {
     if (!isRealTx(ownership.proofTx) && !hasRealText(ownership.governanceRecordEvidence)) {
       issues.push("ownership must include proofTx or governanceRecordEvidence");
     }
-    if (!hasIsoTimestamp(ownership.checkedAt)) issues.push("ownership.checkedAt must be ISO-8601 UTC");
+    if (!hasIsoTimestamp(ownership.checkedAt)) {
+      issues.push("ownership.checkedAt must be ISO-8601 UTC");
+    } else if (!hasNonFutureIsoTimestamp(ownership.checkedAt)) {
+      issues.push("ownership.checkedAt must not be in the future");
+    }
     if (!hasEvidence(ownership)) issues.push("ownership has no evidence");
     if (hasEvidence(ownership) && !hasConcreteEvidence(ownership)) {
       issues.push("ownership must include concrete direct owner read or Safe/multisig evidence");
@@ -435,7 +612,11 @@ if (manifest) {
     if (!hasRealText(randomness.operator) && !hasRealText(randomness.signer)) {
       issues.push("randomness operator/signer is missing");
     }
-    if (!hasIsoTimestamp(randomness.signedAt)) issues.push("randomness.signedAt must be ISO-8601 UTC");
+    if (!hasIsoTimestamp(randomness.signedAt)) {
+      issues.push("randomness.signedAt must be ISO-8601 UTC");
+    } else if (!hasNonFutureIsoTimestamp(randomness.signedAt)) {
+      issues.push("randomness.signedAt must not be in the future");
+    }
     if (randomness.decision === "accepted-risk" && randomness.riskAcceptedByOperator !== true) {
       issues.push("randomness.riskAcceptedByOperator must be true when decision is accepted-risk");
     }
@@ -475,6 +656,8 @@ if (manifest) {
       }
       if (!hasIsoTimestamp(value.checkedAt)) {
         issues.push(`chainComparison.${check}.checkedAt must be ISO-8601 UTC`);
+      } else if (!hasNonFutureIsoTimestamp(value.checkedAt)) {
+        issues.push(`chainComparison.${check}.checkedAt must not be in the future`);
       }
       if (!hasEvidence(value)) issues.push(`chainComparison.${check} has no evidence`);
       if (hasEvidence(value) && !hasConcreteEvidence(value)) {
@@ -483,6 +666,12 @@ if (manifest) {
       const chainEvidencePattern = new RegExp(`\\b(?:${check}|direct[-\\s]?chain|app|indexer|chain comparison|proof:chain)\\b`, "i");
       if (hasConcreteEvidence(value) && !evidenceMentions(value, chainEvidencePattern)) {
         issues.push(`chainComparison.${check} evidence must mention ${check}, direct-chain, app, or indexer proof`);
+      }
+      if (hasRealText(value.directChainEvidence) && !comparisonDirectChainProof(check, value)) {
+        issues.push(`chainComparison.${check}.directChainEvidence must mention ${check} and direct-chain/on-chain proof`);
+      }
+      if (hasRealText(value.appOrIndexerEvidence) && !comparisonAppOrIndexerProof(check, value)) {
+        issues.push(`chainComparison.${check}.appOrIndexerEvidence must mention ${check} and app/indexer proof`);
       }
     }
 
@@ -496,7 +685,7 @@ if (manifest) {
 }
 
 console.log("");
-console.log(`Summary: ${issues.length === 0 ? "contract/funds sign-off proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+console.log(`Summary: ${issues.length === 0 ? "contract/funds sign-off proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}; ${launchGateSummary(issues.length)}.`);
 console.log("Copy this summary into `docs/mainnet-proof-record.md` only after confirming the manifest reflects real operator sign-offs and chain/API comparison evidence.");
 
 if (strict && issues.length > 0) {

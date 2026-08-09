@@ -1,7 +1,13 @@
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
+const summaryOnly = process.argv.includes("--summary-only");
+const monitoringLaunchGates = ["G9"];
+const monitoringLaunchGateGroups = "monitoring=1";
+const MAX_MONITORING_ARTIFACT_TEXT_BYTES = 256 * 1024;
+const MAX_MONITORING_PROOF_MANIFEST_BYTES = 512 * 1024;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const args = new Map(
   process.argv
     .slice(2)
@@ -11,6 +17,11 @@ const args = new Map(
       return [key, rest.join("=")];
     }),
 );
+
+function launchGateSummary(issueCount) {
+  const label = issueCount > 0 ? "blocked" : "covered";
+  return `${label} gates: ${monitoringLaunchGates.join(", ")}; groups: ${monitoringLaunchGateGroups}`;
+}
 
 const requiredKinds = [
   "health-prod",
@@ -61,18 +72,91 @@ function hasRealText(value) {
   return hasText(value) && !TEMPLATE_VALUE_RE.test(value);
 }
 
+function isEmailAddress(value) {
+  return typeof value === "string" &&
+    /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(value.trim());
+}
+
+function normalizeDomain(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^@/, "")
+    .replace(/^\*\./, "")
+    .replace(/^www\./, "");
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function originEmailDomains(manifest) {
+  try {
+    const host = normalizeDomain(new URL(String(manifest?.origin ?? "")).hostname);
+    return host ? [host] : [];
+  } catch {
+    return [];
+  }
+}
+
+function hasPublicHttpsUrl(value) {
+  const text = String(value ?? "").trim();
+  const match = text.match(/https?:\/\/[^\s),.;]+/i);
+  if (!match) return false;
+  try {
+    const url = new URL(match[0]);
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+    return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      );
+  } catch {
+    return false;
+  }
+}
+
 function hasConcreteText(value) {
   if (!hasRealText(value)) return false;
   const text = String(value).trim();
-  return /https?:\/\//i.test(text) ||
+  return hasPublicHttpsUrl(text) ||
     /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv|png|jpg|jpeg|webp)(?:\b|$)/i.test(text) ||
-    /\b(?:sentry|datadog|newrelic|grafana|pagerduty|opsgenie|slack|discord|telegram|incident|alert|monitor|recovery|resolved)\b/i.test(text) ||
     /\b(?:INC|PD|DD|NR|SENTRY|EVT|ALERT)[-_]?[a-z0-9]{4,}\b/i.test(text) ||
     /\b[a-f0-9]{16,64}\b/i.test(text);
 }
 
-function isPositiveNumber(value) {
-  return Number.isFinite(Number(value)) && Number(value) > 0;
+function asPositiveSafeInteger(value) {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? value : null;
+  const normalized = String(value ?? "").trim();
+  if (!/^(?:[1-9]\d{0,15})$/.test(normalized)) return null;
+  const parsed = BigInt(normalized);
+  return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
 }
 
 function localArtifactPathFromText(value, key = "") {
@@ -84,7 +168,20 @@ function localArtifactPathFromText(value, key = "") {
   if (/^https?:\/\//i.test(candidate)) return "";
   const keySuggestsPath = /(?:evidencePath|artifact|link)$/i.test(key);
   const valueLooksLikePath = /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv|png|jpg|jpeg|webp)(?:\b|$)/i.test(candidate);
-  return keySuggestsPath && valueLooksLikePath ? candidate : "";
+  return (artifactMatch || keySuggestsPath) && valueLooksLikePath ? candidate : "";
+}
+
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function localArtifactIsFile(artifactPath) {
+  return regularFileStat(resolve(process.cwd(), artifactPath)) !== null;
 }
 
 function findMissingLocalArtifactRefs(value, path = "$", key = "") {
@@ -95,7 +192,7 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   }
   if (typeof value === "string") {
     const artifactPath = localArtifactPathFromText(value, key);
-    if (artifactPath && !existsSync(resolve(process.cwd(), artifactPath))) {
+    if (artifactPath && !localArtifactIsFile(artifactPath)) {
       findings.push(`${path} -> ${artifactPath}`);
     }
     return findings;
@@ -107,16 +204,96 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   return findings;
 }
 
+function formatMissingLocalArtifactRefs(findings) {
+  const visible = summaryOnly ? findings.map((entry) => entry.split(" -> ")[0]) : findings;
+  return visible.slice(0, 5).join(", ");
+}
+
 function localArtifactPathsFromEntries(entries) {
   return entries.map(([key, value]) => localArtifactPathFromText(value, key)).filter(Boolean);
+}
+
+function normalizedArtifactPathSet(entries) {
+  return new Set(localArtifactPathsFromEntries(entries).map((artifactPath) => resolve(process.cwd(), artifactPath).toLowerCase()));
+}
+
+function sharedLocalArtifactPaths(leftEntries, rightEntries) {
+  const left = normalizedArtifactPathSet(leftEntries);
+  const right = normalizedArtifactPathSet(rightEntries);
+  return [...left].filter((artifactPath) => right.has(artifactPath));
+}
+
+function sharedMonitoringSectionArtifactIssues(manifest) {
+  const groups = [
+    [
+      "monitors",
+      asArray(manifest.monitors).flatMap((monitor) => [
+        ["link", monitor?.link],
+        ["evidence", monitor?.evidence],
+        ["evidencePath", monitor?.evidencePath],
+        ["artifact", monitor?.artifact],
+        ["notes", monitor?.notes],
+        ["recoveryLink", monitor?.recoveryLink],
+        ["recoveryEvidence", monitor?.recoveryEvidence],
+        ["recoveryEvidencePath", monitor?.recoveryEvidencePath],
+        ["resolvedAlertLink", monitor?.resolvedAlertLink],
+        ["resolutionLink", monitor?.resolutionLink],
+        ["recoveryNotes", monitor?.recoveryNotes],
+      ]),
+    ],
+    [
+      "alertTargets",
+      asArray(manifest.alertTargets).flatMap((target) => [
+        ["link", target?.link],
+        ["evidence", target?.evidence],
+        ["evidencePath", target?.evidencePath],
+        ["artifact", target?.artifact],
+        ["notes", target?.notes],
+      ]),
+    ],
+    [
+      "errorTracking",
+      isPlainObject(manifest.errorTracking)
+        ? [
+            ["testEventLink", manifest.errorTracking.testEventLink],
+            ["testEventEvidence", manifest.errorTracking.testEventEvidence],
+            ["testEventEvidencePath", manifest.errorTracking.testEventEvidencePath],
+            ["testEventArtifact", manifest.errorTracking.testEventArtifact],
+            ["artifact", manifest.errorTracking.artifact],
+          ]
+        : [],
+    ],
+  ].map(([name, entries]) => [name, normalizedArtifactPathSet(entries)]);
+  const issues = [];
+  for (let leftIndex = 0; leftIndex < groups.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < groups.length; rightIndex += 1) {
+      const [leftName, leftArtifacts] = groups[leftIndex];
+      const [rightName, rightArtifacts] = groups[rightIndex];
+      if ([...leftArtifacts].some((artifactPath) => rightArtifacts.has(artifactPath))) {
+        issues.push(`monitoring evidence sections must use distinct local artifact files across ${leftName} and ${rightName}`);
+      }
+    }
+  }
+  return issues;
+}
+
+function readBoundedArtifactText(resolved) {
+  const fd = openSync(resolved, "r");
+  try {
+    const buffer = Buffer.alloc(MAX_MONITORING_ARTIFACT_TEXT_BYTES);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function artifactBackedText(entries) {
   const chunks = [compactEvidenceText(entries.map(([, value]) => value))];
   for (const artifactPath of localArtifactPathsFromEntries(entries)) {
     const resolved = resolve(process.cwd(), artifactPath);
-    if (!existsSync(resolved)) continue;
-    chunks.push(readFileSync(resolved, "utf8").slice(0, 256 * 1024));
+    if (!localArtifactIsFile(artifactPath)) continue;
+    chunks.push(readBoundedArtifactText(resolved));
   }
   return chunks.join("\n");
 }
@@ -149,9 +326,82 @@ function alertTargetProof(target) {
     ["link", target.link],
     ["evidence", target.evidence],
     ["evidencePath", target.evidencePath],
+    ["artifact", target.artifact],
     ["notes", target.notes],
   ]);
   return /\b(?:alert\s+target|notification|slack|pagerduty|opsgenie|discord|telegram|email|sms|incident)\b/i.test(text);
+}
+
+function emailAlertTargetProof(target) {
+  const text = artifactBackedText([
+    ["name", target.name],
+    ["link", target.link],
+    ["evidence", target.evidence],
+    ["evidencePath", target.evidencePath],
+    ["artifact", target.artifact],
+    ["notes", target.notes],
+  ]);
+  return /\b(?:email|resend|recipient|inbox|message[-\s]?id|delivered|delivery)\b/i.test(text);
+}
+
+function emailAlertTargetRecipientProof(target) {
+  const explicitRecipients = [
+    target.recipient,
+    target.email,
+    target.address,
+    target.to,
+    target.target,
+    ...(Array.isArray(target.recipients) ? target.recipients : []),
+  ];
+  if (explicitRecipients.some(isEmailAddress)) return true;
+  const text = artifactBackedText([
+    ["name", target.name],
+    ["link", target.link],
+    ["evidence", target.evidence],
+    ["evidencePath", target.evidencePath],
+    ["artifact", target.artifact],
+    ["notes", target.notes],
+  ]);
+  return /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text);
+}
+
+function senderFieldMatchesDomain(value, domains) {
+  if (!hasRealText(value)) return false;
+  const text = String(value).trim();
+  if (isEmailAddress(text)) {
+    const domain = normalizeDomain(text.split("@").pop());
+    return domains.includes(domain);
+  }
+  const domain = normalizeDomain(text);
+  return domains.includes(domain);
+}
+
+function emailAlertTargetSenderDomainProof(target, manifest) {
+  const domains = originEmailDomains(manifest);
+  if (domains.length === 0) return false;
+  const explicitSenderFields = [
+    target.sender,
+    target.from,
+    target.emailFrom,
+    target.senderEmail,
+    target.senderDomain,
+    target.domain,
+    target.verifiedDomain,
+  ];
+  if (explicitSenderFields.some((value) => senderFieldMatchesDomain(value, domains))) return true;
+  const text = artifactBackedText([
+    ["name", target.name],
+    ["link", target.link],
+    ["evidence", target.evidence],
+    ["evidencePath", target.evidencePath],
+    ["artifact", target.artifact],
+    ["notes", target.notes],
+  ]);
+  return domains.some((domain) => {
+    const domainPattern = escapeRegExp(domain);
+    return new RegExp(`\\b(?:resend|sender|from|verified\\s+domain|domain\\s+verified)[\\s\\S]{0,160}\\b${domainPattern}\\b`, "i").test(text) ||
+      new RegExp(`\\b${domainPattern}\\b[\\s\\S]{0,160}\\b(?:resend|sender|from|verified\\s+domain|domain\\s+verified)\\b`, "i").test(text);
+  });
 }
 
 function errorTrackingEventProof(errorTracking) {
@@ -159,6 +409,8 @@ function errorTrackingEventProof(errorTracking) {
     ["testEventLink", errorTracking.testEventLink],
     ["testEventEvidence", errorTracking.testEventEvidence],
     ["testEventEvidencePath", errorTracking.testEventEvidencePath],
+    ["testEventArtifact", errorTracking.testEventArtifact],
+    ["artifact", errorTracking.artifact],
   ]);
   return /\b(?:sentry|datadog|newrelic|error|exception|event|issue|test\s+event)\b/i.test(text);
 }
@@ -170,6 +422,10 @@ function printTable(headers, rows) {
   console.log(`| ${headers.join(" | ")} |`);
   console.log(`| ${headers.map(() => "---").join(" | ")} |`);
   for (const row of rows) console.log(`| ${row.join(" | ")} |`);
+}
+
+function fileSummaryStatus(filePath) {
+  return regularFileStat(filePath) ? "present" : "missing";
 }
 
 function findSecretLikeValues(value, path = "$") {
@@ -213,16 +469,6 @@ function compactEvidenceText(values) {
   return values.filter(hasRealText).map((value) => String(value).trim()).join("\n");
 }
 
-function monitorAlertEvidenceText(monitor) {
-  return compactEvidenceText([
-    monitor.link,
-    monitor.evidence,
-    monitor.evidencePath,
-    monitor.artifact,
-    monitor.notes,
-  ]);
-}
-
 function monitorEvidence(monitor) {
   return [
     monitor.link,
@@ -234,7 +480,7 @@ function monitorEvidence(monitor) {
 }
 
 function alertTargetEvidence(target) {
-  return [target.link, target.evidence, target.evidencePath, target.notes].some(hasConcreteText);
+  return [target.link, target.evidence, target.evidencePath, target.artifact, target.notes].some(hasConcreteText);
 }
 
 function errorTrackingTestEventEvidence(errorTracking) {
@@ -242,12 +488,24 @@ function errorTrackingTestEventEvidence(errorTracking) {
     errorTracking.testEventLink,
     errorTracking.testEventEvidence,
     errorTracking.testEventEvidencePath,
+    errorTracking.testEventArtifact,
+    errorTracking.artifact,
     errorTracking.testEventId,
   ].some(hasConcreteText);
 }
 
 function alertTargetKindOk(target) {
   return allowedAlertTargetKinds.has(String(target.kind ?? "").trim().toLowerCase());
+}
+
+function verifiedEmailAlertTarget(target, manifest) {
+  return String(target?.kind ?? "").trim().toLowerCase() === "email" &&
+    target?.verified === true &&
+    [target.lastTestAt, target.testAlertAt].some(hasNonFutureIsoTimestamp) &&
+    alertTargetEvidence(target) &&
+    emailAlertTargetProof(target) &&
+    emailAlertTargetRecipientProof(target) &&
+    emailAlertTargetSenderDomainProof(target, manifest);
 }
 
 function hasIsoTimestamp(value) {
@@ -258,6 +516,11 @@ function hasIsoTimestamp(value) {
   if (Number.isNaN(parsed.getTime())) return false;
   const normalized = text.includes(".") ? text : text.replace("Z", ".000Z");
   return parsed.toISOString() === normalized;
+}
+
+function hasNonFutureIsoTimestamp(value) {
+  if (!hasIsoTimestamp(value)) return false;
+  return Date.parse(String(value).trim()) <= Date.now() + 5 * 60 * 1000;
 }
 
 function firstAlertTimestamp(monitor) {
@@ -272,15 +535,8 @@ function monitorHasIsoAlertTest(monitor) {
   return [monitor.lastAlertTestAt, monitor.lastTestAt, monitor.testAlertAt].some(hasIsoTimestamp);
 }
 
-function monitorRecoveryEvidenceText(monitor) {
-  return compactEvidenceText([
-    monitor.recoveryLink,
-    monitor.recoveryEvidence,
-    monitor.recoveryEvidencePath,
-    monitor.resolvedAlertLink,
-    monitor.resolutionLink,
-    monitor.recoveryNotes,
-  ]);
+function monitorHasNonFutureAlertTest(monitor) {
+  return [monitor.lastAlertTestAt, monitor.lastTestAt, monitor.testAlertAt].some(hasNonFutureIsoTimestamp);
 }
 
 function monitorRecoveryEvidence(monitor) {
@@ -302,16 +558,38 @@ function monitorHasIsoRecoveryTest(monitor) {
   return [monitor.lastRecoveryAt, monitor.lastResolvedAt, monitor.recoveryAt, monitor.resolvedAt].some(hasIsoTimestamp);
 }
 
+function monitorHasNonFutureRecoveryTest(monitor) {
+  return [monitor.lastRecoveryAt, monitor.lastResolvedAt, monitor.recoveryAt, monitor.resolvedAt].some(hasNonFutureIsoTimestamp);
+}
+
 function monitorHasAlertCondition(monitor) {
   return hasRealText(monitor.alertCondition) || hasRealText(monitor.threshold);
 }
 
 function monitorAlertRecoveryIssues(monitor, label) {
   const issues = [];
-  const alertEvidence = monitorAlertEvidenceText(monitor);
-  const recoveryEvidence = monitorRecoveryEvidenceText(monitor);
+  const alertEntries = [
+    ["link", monitor.link],
+    ["evidence", monitor.evidence],
+    ["evidencePath", monitor.evidencePath],
+    ["artifact", monitor.artifact],
+    ["notes", monitor.notes],
+  ];
+  const recoveryEntries = [
+    ["recoveryLink", monitor.recoveryLink],
+    ["recoveryEvidence", monitor.recoveryEvidence],
+    ["recoveryEvidencePath", monitor.recoveryEvidencePath],
+    ["resolvedAlertLink", monitor.resolvedAlertLink],
+    ["resolutionLink", monitor.resolutionLink],
+    ["recoveryNotes", monitor.recoveryNotes],
+  ];
+  const alertEvidence = compactEvidenceText(alertEntries.map(([, value]) => value));
+  const recoveryEvidence = compactEvidenceText(recoveryEntries.map(([, value]) => value));
   if (alertEvidence && recoveryEvidence && alertEvidence === recoveryEvidence) {
     issues.push(`${label} fired-alert evidence must be distinct from recovery evidence`);
+  }
+  if (sharedLocalArtifactPaths(alertEntries, recoveryEntries).length > 0) {
+    issues.push(`${label} fired-alert and recovery evidence must use distinct artifact files`);
   }
   const alertAt = firstAlertTimestamp(monitor);
   const recoveryAt = [monitor.lastRecoveryAt, monitor.lastResolvedAt, monitor.recoveryAt, monitor.resolvedAt].find(hasRealText);
@@ -326,14 +604,16 @@ function monitorComplete(monitor) {
     hasRealText(monitor.provider) &&
     monitorHasAlertCondition(monitor) &&
     monitorEvidence(monitor) &&
-    monitorHasIsoAlertTest(monitor) &&
+    monitorHasNonFutureAlertTest(monitor) &&
     monitorRecoveryEvidence(monitor) &&
-    monitorHasIsoRecoveryTest(monitor);
+    monitorHasNonFutureRecoveryTest(monitor);
 }
 
 function normalizeOrigin(value) {
   try {
-    return new URL(String(value ?? "").trim()).origin;
+    const url = new URL(String(value ?? "").trim());
+    if (url.username || url.password) return "";
+    return url.origin;
   } catch {
     return "";
   }
@@ -342,13 +622,41 @@ function normalizeOrigin(value) {
 function isFinalHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase();
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
     return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
       url.pathname === "/" &&
       url.search === "" &&
       url.hash === "" &&
-      !["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host) &&
-      !host.endsWith(".local");
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      );
   } catch {
     return false;
   }
@@ -364,7 +672,7 @@ function parseUrl(value) {
 
 function requireDataSyncUrl(monitor, label, origin, issues) {
   const dataSyncUrl = parseUrl(monitor?.url);
-  if (!dataSyncUrl || dataSyncUrl.protocol !== "https:") {
+  if (!dataSyncUrl || dataSyncUrl.protocol !== "https:" || dataSyncUrl.username || dataSyncUrl.password) {
     issues.push(`${label} monitor must record the monitored HTTPS URL`);
     return;
   }
@@ -378,7 +686,7 @@ function requireDataSyncUrl(monitor, label, origin, issues) {
 
 function requireRuntimeHealthUrl(monitor, label, origin, issues) {
   const runtimeUrl = parseUrl(monitor?.url);
-  if (!runtimeUrl || runtimeUrl.protocol !== "https:") {
+  if (!runtimeUrl || runtimeUrl.protocol !== "https:" || runtimeUrl.username || runtimeUrl.password) {
     issues.push(`${label} monitor must record the monitored HTTPS URL`);
     return;
   }
@@ -398,20 +706,27 @@ console.log("# Monitoring Proof Summary");
 console.log("");
 console.log(`Timestamp: ${new Date().toISOString()}`);
 console.log(`Strict: ${strict ? "yes" : "no"}`);
-console.log(`Manifest: ${manifestPath}`);
+console.log(`Manifest: ${summaryOnly ? fileSummaryStatus(manifestPath) : manifestPath}`);
 console.log("");
 
 if (strict && /\.draft\.json$/i.test(manifestPath)) {
   issues.push("draft proof manifests are not accepted as launch proof");
 }
 
+const manifestStat = regularFileStat(manifestPath);
 if (!existsSync(manifestPath)) {
   issues.push("monitoring proof manifest is missing");
+} else if (!manifestStat) {
+  issues.push("monitoring proof manifest must be a file");
 } else {
-  try {
-    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  } catch (error) {
-    issues.push(`monitoring proof manifest is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  if (manifestStat.size > MAX_MONITORING_PROOF_MANIFEST_BYTES) {
+    issues.push("monitoring proof manifest is too large to validate safely");
+  } else {
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch (error) {
+      issues.push(`monitoring proof manifest is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }
 
@@ -431,11 +746,12 @@ if (manifest) {
   }
   const missingArtifactRefs = findMissingLocalArtifactRefs(manifest);
   if (missingArtifactRefs.length > 0) {
-    issues.push(`local monitoring artifact references must exist: ${missingArtifactRefs.slice(0, 5).join(", ")}`);
+    issues.push(`local monitoring artifact references must exist: ${formatMissingLocalArtifactRefs(missingArtifactRefs)}`);
   }
+  issues.push(...sharedMonitoringSectionArtifactIssues(manifest));
   const normalizedOrigin = normalizeOrigin(origin);
   if (!hasRealText(origin) || !isFinalHttpsOrigin(origin) || !normalizedOrigin) {
-    issues.push("origin must be a final HTTPS origin without path, query, or hash");
+    issues.push("origin must be a final public HTTPS origin without path, query, or hash");
   }
   const expectedOrigin = env("NEXT_PUBLIC_SITE_URL") || env("PUBLIC_SITE_URL") || env("SITE_URL");
   if (expectedOrigin && normalizedOrigin && normalizeOrigin(expectedOrigin) !== normalizedOrigin) {
@@ -457,12 +773,18 @@ if (manifest) {
     if (hasAlertTest && !matching.some(monitorHasIsoAlertTest)) {
       issues.push(`monitor kind ${kind} alert test timestamp must be ISO-8601 UTC`);
     }
+    if (matching.some(monitorHasIsoAlertTest) && !matching.some(monitorHasNonFutureAlertTest)) {
+      issues.push(`monitor kind ${kind} alert test timestamp must not be in the future`);
+    }
     const hasRecoveryEvidence = matching.some(monitorRecoveryEvidence);
     if (!hasRecoveryEvidence) issues.push(`monitor kind ${kind} has no recovery or resolution evidence`);
     const hasRecoveryTest = matching.some(monitorHasRecoveryTest);
     if (!hasRecoveryTest) issues.push(`monitor kind ${kind} has no recovery or resolution timestamp`);
     if (hasRecoveryTest && !matching.some(monitorHasIsoRecoveryTest)) {
       issues.push(`monitor kind ${kind} recovery or resolution timestamp must be ISO-8601 UTC`);
+    }
+    if (matching.some(monitorHasIsoRecoveryTest) && !matching.some(monitorHasNonFutureRecoveryTest)) {
+      issues.push(`monitor kind ${kind} recovery or resolution timestamp must not be in the future`);
     }
     const hasAlertCondition = matching.some(monitorHasAlertCondition);
     if (!hasAlertCondition) issues.push(`monitor kind ${kind} has no alert condition or threshold`);
@@ -485,8 +807,9 @@ if (manifest) {
   const healthMonitor = monitors.find((monitor) => monitor?.kind === "health-prod");
   if (healthMonitor) {
     const cadence = healthMonitor.cadenceSeconds ?? healthMonitor.intervalSeconds;
-    if (!isPositiveNumber(cadence)) issues.push("health-prod monitor cadence is missing");
-    if (isPositiveNumber(cadence) && Number(cadence) > 60) {
+    const cadenceSeconds = asPositiveSafeInteger(cadence);
+    if (cadenceSeconds == null) issues.push("health-prod monitor cadence must be a canonical positive integer");
+    if (cadenceSeconds != null && cadenceSeconds > 60) {
       issues.push("health-prod monitor cadence must be 60s or less for launch proof");
     }
     if (!hasRealText(healthMonitor.command) && !hasRealText(healthMonitor.url)) {
@@ -513,8 +836,11 @@ if (manifest) {
 
   if (alertTargets.length === 0) {
     issues.push("no alert targets recorded");
-  } else if (!alertTargets.some((target) => target.verified === true && [target.lastTestAt, target.testAlertAt].some(hasIsoTimestamp) && alertTargetEvidence(target))) {
+  } else if (!alertTargets.some((target) => target.verified === true && [target.lastTestAt, target.testAlertAt].some(hasNonFutureIsoTimestamp) && alertTargetEvidence(target))) {
     issues.push("no verified alert target with ISO timestamp and concrete evidence recorded");
+  }
+  if (!alertTargets.some((target) => verifiedEmailAlertTarget(target, manifest))) {
+    issues.push("no verified email alert target with ISO timestamp, concrete evidence, recipient, and sender domain proof recorded");
   }
   for (const [index, target] of alertTargets.entries()) {
     if (target.verified !== true) {
@@ -526,11 +852,23 @@ if (manifest) {
     if (![target.lastTestAt, target.testAlertAt].some(hasIsoTimestamp)) {
       issues.push(`alertTargets[${index}] test timestamp must be ISO-8601 UTC`);
     }
+    if ([target.lastTestAt, target.testAlertAt].some(hasIsoTimestamp) && ![target.lastTestAt, target.testAlertAt].some(hasNonFutureIsoTimestamp)) {
+      issues.push(`alertTargets[${index}] test timestamp must not be in the future`);
+    }
     if (!alertTargetEvidence(target)) {
       issues.push(`alertTargets[${index}] must include evidence or link for the fired test alert`);
     }
     if (alertTargetEvidence(target) && !alertTargetProof(target)) {
       issues.push(`alertTargets[${index}] evidence must mention alert target or notification channel proof`);
+    }
+    if (String(target.kind ?? "").trim().toLowerCase() === "email" && alertTargetEvidence(target) && !emailAlertTargetProof(target)) {
+      issues.push(`alertTargets[${index}] email evidence must mention email, Resend, recipient, inbox, message id, or delivery proof`);
+    }
+    if (String(target.kind ?? "").trim().toLowerCase() === "email" && !emailAlertTargetRecipientProof(target)) {
+      issues.push(`alertTargets[${index}] email target must record the recipient address or recipient evidence`);
+    }
+    if (String(target.kind ?? "").trim().toLowerCase() === "email" && !emailAlertTargetSenderDomainProof(target, manifest)) {
+      issues.push(`alertTargets[${index}] email target must record a verified sender or domain matching the proof origin`);
     }
   }
 
@@ -548,6 +886,8 @@ if (manifest) {
       issues.push("error tracking test event is missing");
     } else if (!hasIsoTimestamp(errorTracking.testEventAt)) {
       issues.push("error tracking test event timestamp must be ISO-8601 UTC");
+    } else if (!hasNonFutureIsoTimestamp(errorTracking.testEventAt)) {
+      issues.push("error tracking test event timestamp must not be in the future");
     }
     if (!errorTrackingTestEventEvidence(errorTracking)) {
       issues.push("error tracking test event must include event id, link, or redacted evidence");
@@ -557,45 +897,57 @@ if (manifest) {
     }
   }
 
-  const monitorRows = monitors.map((monitor) => [
-    String(monitor.kind ?? "missing"),
-    monitor.enabled === true ? "yes" : "no",
-    String(monitor.provider ?? "missing"),
-    String(monitor.cadenceSeconds ?? monitor.intervalSeconds ?? "missing"),
-    monitorEvidence(monitor) ? "yes" : "no",
-    monitorHasAlertTest(monitor) ? "yes" : "no",
-    monitorHasRecoveryTest(monitor) ? "yes" : "no",
-  ]);
+  if (summaryOnly) {
+    const enabledMonitorCount = monitors.filter((monitor) => monitor?.enabled === true).length;
+    const verifiedTargetCount = alertTargets.filter((target) =>
+      target?.verified === true && [target.lastTestAt, target.testAlertAt].some(hasNonFutureIsoTimestamp)
+    ).length;
+    const verifiedEmailTargetCount = alertTargets.filter((target) => verifiedEmailAlertTarget(target, manifest)).length;
+    console.log(`Monitors: ${enabledMonitorCount}/${requiredKinds.length} enabled`);
+    console.log(`Alert targets: ${verifiedTargetCount}/${alertTargets.length} verified`);
+    console.log(`Email alert targets: ${verifiedEmailTargetCount} verified`);
+    console.log(`Error tracking: ${errorTracking?.enabled === true ? "enabled" : "issue"}`);
+  } else {
+    const monitorRows = monitors.map((monitor) => [
+      String(monitor.kind ?? "missing"),
+      monitor.enabled === true ? "yes" : "no",
+      String(monitor.provider ?? "missing"),
+      String(monitor.cadenceSeconds ?? monitor.intervalSeconds ?? "missing"),
+      monitorEvidence(monitor) ? "yes" : "no",
+      monitorHasAlertTest(monitor) ? "yes" : "no",
+      monitorHasRecoveryTest(monitor) ? "yes" : "no",
+    ]);
 
-  console.log("## Monitors");
-  console.log(`Origin: ${String(origin ?? "missing")}`);
-  console.log("");
-  printTable(["Kind", "Enabled", "Provider", "Cadence seconds", "Evidence", "Alert Test", "Recovery"], monitorRows);
-  console.log("");
-  console.log("## Alert Targets");
-  printTable(
-    ["Name", "Kind", "Verified"],
-    alertTargets.map((target) => [
-      String(target.name ?? "missing"),
-      String(target.kind ?? "missing"),
-      target.verified === true || hasRealText(target.lastTestAt) || hasRealText(target.testAlertAt) ? "yes" : "no",
-    ]),
-  );
-  console.log("");
-  console.log("## Error Tracking");
-  printTable(["Field", "Value"], [
-    ["provider", String(errorTracking?.provider ?? "missing")],
-    ["enabled", errorTracking?.enabled === true ? "yes" : "no"],
-    ["project/link", hasRealText(errorTracking?.project) || hasRealText(errorTracking?.link) ? "yes" : "no"],
-    ["environment", hasRealText(errorTracking?.environment) ? "yes" : "no"],
-    ["release/deploy", hasRealText(errorTracking?.releaseOrDeploy) ? "yes" : "no"],
-    ["test event", statusOk(errorTracking?.testEventStatus) || hasRealText(errorTracking?.testEventAt) ? "yes" : "no"],
-    ["test event evidence", errorTracking ? (errorTrackingTestEventEvidence(errorTracking) ? "yes" : "no") : "no"],
-  ]);
+    console.log("## Monitors");
+    console.log(`Origin: ${String(origin ?? "missing")}`);
+    console.log("");
+    printTable(["Kind", "Enabled", "Provider", "Cadence seconds", "Evidence", "Alert Test", "Recovery"], monitorRows);
+    console.log("");
+    console.log("## Alert Targets");
+    printTable(
+      ["Name", "Kind", "Verified"],
+      alertTargets.map((target) => [
+        String(target.name ?? "missing"),
+        String(target.kind ?? "missing"),
+        target.verified === true || hasRealText(target.lastTestAt) || hasRealText(target.testAlertAt) ? "yes" : "no",
+      ]),
+    );
+    console.log("");
+    console.log("## Error Tracking");
+    printTable(["Field", "Value"], [
+      ["provider", String(errorTracking?.provider ?? "missing")],
+      ["enabled", errorTracking?.enabled === true ? "yes" : "no"],
+      ["project/link", hasRealText(errorTracking?.project) || hasRealText(errorTracking?.link) ? "yes" : "no"],
+      ["environment", hasRealText(errorTracking?.environment) ? "yes" : "no"],
+      ["release/deploy", hasRealText(errorTracking?.releaseOrDeploy) ? "yes" : "no"],
+      ["test event", statusOk(errorTracking?.testEventStatus) || hasRealText(errorTracking?.testEventAt) ? "yes" : "no"],
+      ["test event evidence", errorTracking ? (errorTrackingTestEventEvidence(errorTracking) ? "yes" : "no") : "no"],
+    ]);
+  }
 }
 
 console.log("");
-console.log(`Summary: ${issues.length === 0 ? "monitoring proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+console.log(`Summary: ${issues.length === 0 ? "monitoring proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}; ${launchGateSummary(issues.length)}.`);
 console.log("Copy this summary into `docs/mainnet-proof-record.md` only after confirming the manifest reflects deployed external monitors and a real test alert.");
 
 if (strict && issues.length > 0) {

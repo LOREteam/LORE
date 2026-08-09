@@ -3,6 +3,17 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { redactProofText } from "./redact-proof-output.mjs";
+
+const MAX_DB_STARTUP_ERROR_CHARS = 500;
+
+function describeStartupError(error) {
+  const text = redactProofText(error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_DB_STARTUP_ERROR_CHARS) return text;
+  return `${text.slice(0, MAX_DB_STARTUP_ERROR_CHARS - 15)}...<truncated>`;
+}
 
 export function verifySqliteStartup(sourceInput) {
   if (sourceInput === ":memory:") return { status: "pass", state: "memory" };
@@ -32,7 +43,7 @@ if (isMain) {
     const result = verifySqliteStartup(process.env.LORE_DB_PATH || "data/lore.sqlite");
     console.log(JSON.stringify({ status: result.status, state: result.state, bytes: result.bytes ?? 0 }));
   } catch (error) {
-    console.error(`[db-startup] FAIL ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[db-startup] FAIL ${describeStartupError(error)}`);
     process.exitCode = 1;
   }
 }

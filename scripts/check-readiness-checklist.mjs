@@ -1,5 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+
+const MAX_READINESS_CHECKLIST_TEXT_BYTES = 1024 * 1024;
 
 function argValue(name, fallback) {
   const prefix = `--${name}=`;
@@ -7,6 +9,7 @@ function argValue(name, fallback) {
   return found ? found.slice(prefix.length).trim() : fallback;
 }
 
+const summaryOnly = process.argv.includes("--summary-only");
 const checklistPath = resolve(process.cwd(), argValue("checklist", "docs/mainnet-readiness-checklist.md"));
 const requiredSections = [
   "## Blockers",
@@ -48,6 +51,10 @@ const requiredSnippets = [
   "proof:canary -- data/live-test-runs/live-canary-YYYY.jsonl --strict",
   "proof:canary:draft",
   "proof:qa:draft",
+  "Final security scan evidence",
+  "fresh Codex Security scan report or sealed scan artifact",
+  "no open High/Medium local findings",
+  "proof:security-followup:summary",
   "proof:deps",
   "proof:deps:all",
   "proof:files -- --canary-log=",
@@ -62,10 +69,35 @@ const requiredSnippets = [
   "proof:qa -- --strict",
 ];
 const checkedEvidencePattern = /\b(?:docs|data)\/[^\s`|)]+|[A-Za-z]:\\[^|\r\n]+|https?:\/\/|0x[a-fA-F0-9]{40,64}|\/api\//i;
+const MAX_LOCAL_EVIDENCE_PATHS = 64;
 
-function localEvidencePaths(value) {
-  return [...String(value ?? "").matchAll(/\b(?:docs|data)\/[^\s`|)]+/gi)]
-    .map((match) => match[0].replace(/[.,;:]+$/g, ""));
+function localEvidencePathScan(value) {
+  const text = String(value ?? "");
+  const pattern = /\b(?:docs|data)\/[^\s`|)]+/gi;
+  const paths = [];
+  let match = pattern.exec(text);
+  while (match) {
+    if (paths.length >= MAX_LOCAL_EVIDENCE_PATHS) {
+      return { paths, overLimit: true };
+    }
+    paths.push(match[0].replace(/[.,;:]+$/g, ""));
+    match = pattern.exec(text);
+  }
+  return { paths, overLimit: false };
+}
+
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function localEvidenceFileExists(evidencePath) {
+  const resolved = resolve(process.cwd(), evidencePath);
+  return regularFileStat(resolved) !== null;
 }
 
 function checkedEvidenceIssuesFor(item) {
@@ -73,8 +105,12 @@ function checkedEvidenceIssuesFor(item) {
   if (!checkedEvidencePattern.test(item.line)) {
     itemIssues.push(`checked item lacks evidence marker at ${item.lineNo}`);
   }
-  for (const evidencePath of localEvidencePaths(item.line)) {
-    if (!existsSync(resolve(process.cwd(), evidencePath))) {
+  const evidencePathScan = localEvidencePathScan(item.line);
+  if (evidencePathScan.overLimit) {
+    itemIssues.push(`checked item has too many local evidence references at ${item.lineNo}`);
+  }
+  for (const evidencePath of evidencePathScan.paths) {
+    if (!localEvidenceFileExists(evidencePath)) {
       itemIssues.push(`checked item references missing local evidence ${evidencePath} at ${item.lineNo}`);
     }
   }
@@ -82,7 +118,12 @@ function checkedEvidenceIssuesFor(item) {
 }
 
 function readText(filePath) {
-  if (!existsSync(filePath)) throw new Error(`${filePath} does not exist`);
+  const stats = regularFileStat(filePath);
+  if (!stats) throw new Error(`${filePath} does not exist or must be a file`);
+  if (!stats.isFile()) throw new Error(`${filePath} must be a file`);
+  if (stats.size > MAX_READINESS_CHECKLIST_TEXT_BYTES) {
+    throw new Error(`${filePath} is too large to validate safely`);
+  }
   return readFileSync(filePath, "utf8");
 }
 
@@ -98,7 +139,7 @@ let checklist = "";
 try {
   checklist = readText(checklistPath);
 } catch (error) {
-  issues.push(error instanceof Error ? error.message : String(error));
+  issues.push(summaryOnly ? "readiness checklist could not be read" : error instanceof Error ? error.message : String(error));
 }
 
 for (const section of requiredSections) {
@@ -123,14 +164,20 @@ if (!/Do not mark a checkbox complete from memory or intent/i.test(checklist)) {
   issues.push("checklist must warn against checking items from memory or intent");
 }
 
-printTable(["Check", "Status"], [
+const rows = [
   ["required sections", requiredSections.every((section) => checklist.includes(section)) ? "pass" : "fail"],
   ["required proof commands", requiredSnippets.every((snippet) => checklist.includes(snippet)) ? "pass" : "fail"],
   ["required final proof files", requiredFinalProofFiles.every((file) => checklist.includes(file)) ? "pass" : "fail"],
   ["checked item evidence", checkedEvidenceIssues.length === 0 ? `pass (${checkedItems.length})` : "fail"],
-]);
+];
 
-console.log(`Summary: ${issues.length === 0 ? "readiness checklist structure is consistent" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+if (summaryOnly) {
+  console.log(`status=${issues.length === 0 ? "pass" : "fail"}, checks=${rows.length}, checkedItems=${checkedItems.length}, evidenceIssues=${checkedEvidenceIssues.length}, issues=${issues.length}`);
+  console.log(`Summary: ${issues.length === 0 ? "readiness checklist structure is consistent" : `${issues.length} readiness checklist issue(s)`}.`);
+} else {
+  printTable(["Check", "Status"], rows);
+  console.log(`Summary: ${issues.length === 0 ? "readiness checklist structure is consistent" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+}
 
 if (issues.length > 0) {
   process.exitCode = 1;

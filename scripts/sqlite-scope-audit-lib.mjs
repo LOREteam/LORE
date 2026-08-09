@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -13,9 +13,36 @@ const SCOPED_TABLES = [
 ];
 const LEGACY_TABLES = ["epochs", "bets", "jackpots", "reward_claims", "protocol_fee_flushes"];
 
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeSqliteCount(value, label = "SQLite count") {
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error(`${label} must be a non-negative safe integer`);
+    }
+    return Number(value);
+  }
+  if (typeof value === "number") {
+    if (Number.isSafeInteger(value) && value >= 0) return value;
+    throw new Error(`${label} must be a non-negative safe integer`);
+  }
+  if (typeof value === "string" && /^(?:0|[1-9]\d*)$/.test(value)) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed)) return parsed;
+  }
+  throw new Error(`${label} must be a non-negative safe integer`);
+}
+
 export function auditSqliteScopes(sourceInput, activeScope) {
   const sourcePath = resolve(sourceInput);
-  if (!existsSync(sourcePath) || !statSync(sourcePath).isFile()) {
+  if (!regularFileStat(sourcePath)) {
     throw new Error("Scope audit source must be an existing regular file");
   }
   if (!/^(?:mainnet|sepolia):0x[a-f0-9]{40}$/.test(activeScope)) {
@@ -37,24 +64,27 @@ export function auditSqliteScopes(sourceInput, activeScope) {
         const scope = String(row.scope ?? "");
         if (scope === activeScope) continue;
         if (scope) foreignScopes.add(scope);
-        foreignRowsByTable[table] += Number(row.count ?? 0);
+        foreignRowsByTable[table] += normalizeSqliteCount(row.count ?? 0, `${table} foreign row count`);
       }
     }
 
     const legacyRowsByTable = {};
     for (const table of LEGACY_TABLES) {
       if (!tables.has(table)) continue;
-      legacyRowsByTable[table] = Number(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count ?? 0);
+      legacyRowsByTable[table] = normalizeSqliteCount(
+        db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count ?? 0,
+        `${table} legacy row count`,
+      );
     }
 
     let staleMetaKeys = 0;
     let previousScopeMatches = null;
     if (tables.has("meta")) {
-      staleMetaKeys = Number(db.prepare(`
+      staleMetaKeys = normalizeSqliteCount(db.prepare(`
         SELECT COUNT(*) AS count FROM meta
         WHERE (key GLOB 'mainnet:0x*:*' OR key GLOB 'sepolia:0x*:*')
           AND key NOT GLOB ?
-      `).get(`${activeScope}:*`)?.count ?? 0);
+      `).get(`${activeScope}:*`)?.count ?? 0, "stale meta key count");
       const previous = db.prepare("SELECT value FROM meta WHERE key = ?").get("__storage_active_contract_scope");
       previousScopeMatches = previous ? String(previous.value ?? "") === activeScope : null;
     }

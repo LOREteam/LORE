@@ -1,10 +1,12 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import { argValue, baseCollectorMeta, hasFlag, isAddress, isPositiveInteger, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
+import { argValue, baseCollectorMeta, hasFlag, isAddress, parsePositiveInteger, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const ZERO_TX = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const CHAIN_CHECKS = ["jackpot", "safetyPool", "deposits", "rewards", "rebates", "resolve"];
+const MAX_SIGNOFF_LOG_BYTES = 512 * 1024;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 function envValue(...names) {
   for (const name of names) {
@@ -29,8 +31,23 @@ function chainIdForNetwork(value) {
 }
 
 function isPositiveIntegerString(value) {
-  const parsed = Number(String(value ?? "").trim());
-  return Number.isSafeInteger(parsed) && parsed > 0;
+  const normalized = String(value ?? "").trim();
+  if (!/^[1-9]\d{0,15}$/.test(normalized)) return false;
+  const parsed = BigInt(normalized);
+  return parsed <= MAX_SAFE_INTEGER_BIGINT;
+}
+
+function isTruthyEnvValue(value) {
+  return ["1", "true", "yes", "on", "enabled"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+function regularFileStat(filePath) {
+  try {
+    const stat = statSync(filePath);
+    return stat.isFile() ? stat : null;
+  } catch {
+    return null;
+  }
 }
 
 function readRequiredLog(name, filePath) {
@@ -38,10 +55,32 @@ function readRequiredLog(name, filePath) {
     throw new Error(`--${name} is required when collecting signoff launch evidence`);
   }
   const resolved = resolve(process.cwd(), filePath);
-  if (!existsSync(resolved)) {
+  const stat = regularFileStat(resolved);
+  if (!stat) {
     throw new Error(`--${name} must point to an existing redacted artifact`);
   }
+  if (stat.size > MAX_SIGNOFF_LOG_BYTES) {
+    throw new Error(`--${name} artifact is too large to validate safely`);
+  }
   return readFileSync(resolved, "utf8");
+}
+
+function sameArtifact(left, right) {
+  if (!left || !right) return false;
+  return resolve(process.cwd(), left).replace(/[\\/]+/g, "/").toLowerCase() ===
+    resolve(process.cwd(), right).replace(/[\\/]+/g, "/").toLowerCase();
+}
+
+function requireDistinctArtifactInputs(entries) {
+  for (let i = 0; i < entries.length; i += 1) {
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const { name: leftName, filePath: leftPath } = entries[i];
+      const { name: rightName, filePath: rightPath } = entries[j];
+      if (sameArtifact(leftPath, rightPath)) {
+        throw new Error(`--${leftName} and --${rightName} must point to distinct signoff evidence files`);
+      }
+    }
+  }
 }
 
 function firstMatchingLine(text, pattern) {
@@ -58,6 +97,13 @@ function summarizeLog(text, fallback, artifactPath = "") {
 function requireSuccessfulMainnetEnvLog(name, text) {
   if (!/^Summary:\s*all checked env gates passed\./mi.test(text)) {
     throw new Error(`--${name} must contain successful proof:mainnet summary: Summary: all checked env gates passed.`);
+  }
+}
+
+function requireChainComparisonLog(name, text) {
+  const missingChecks = CHAIN_CHECKS.filter((check) => !new RegExp(`\\b${check}\\b`, "i").test(text));
+  if (!/\b(?:proof:chain|direct[-\s]?chain|on[-\s]?chain|chain comparison)\b/i.test(text) || missingChecks.length > 0) {
+    throw new Error(`--${name} must contain direct-chain comparison evidence for jackpot, safetyPool, deposits, rewards, rebates, and resolve`);
   }
 }
 
@@ -80,15 +126,21 @@ const user = argValue("user");
 const out = argValue("out", "docs/signoff-proof.draft.json");
 refuseFinalProofOutput(out, "signoff");
 
-requireCondition(isPositiveInteger(epochs), "--epochs must be a positive integer");
+const requestedEpochs = parsePositiveInteger(epochs);
+requireCondition(requestedEpochs !== null, "--epochs must be a positive integer");
 requireCondition(isAddress(user), "--user must be a non-zero EVM address");
 
 const now = new Date().toISOString();
 const envLogPath = argValue("env-log");
 const chainLogPath = argValue("chain-log");
+requireDistinctArtifactInputs([
+  { name: "env-log", filePath: envLogPath },
+  { name: "chain-log", filePath: chainLogPath },
+]);
 const envLog = readRequiredLog("env-log", envLogPath);
 requireSuccessfulMainnetEnvLog("env-log", envLog);
 const chainLog = readRequiredLog("chain-log", chainLogPath);
+requireChainComparisonLog("chain-log", chainLog);
 const envSummary = summarizeLog(envLog, "TODO: paste redacted proof:mainnet summary for final host env", envLogPath);
 const chainSummary = summarizeLog(chainLog, "", chainLogPath);
 const network = argValue("network", envValue("LINEA_NETWORK", "NEXT_PUBLIC_LINEA_NETWORK") || "TODO: target network");
@@ -96,12 +148,18 @@ const chainId = argValue("chain-id", envValue("LINEA_CHAIN_ID", "NEXT_PUBLIC_LIN
 const contractAddress = argValue("contract", envValue("NEXT_PUBLIC_CONTRACT_ADDRESS", "KEEPER_CONTRACT_ADDRESS") || ZERO_ADDRESS);
 const tokenAddress = argValue("token", envValue("NEXT_PUBLIC_LINEA_TOKEN_ADDRESS", "LINEA_TOKEN_ADDRESS") || ZERO_ADDRESS);
 const deployBlock = argValue("deploy-block", envValue("NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK", "INDEXER_START_BLOCK") || "0");
+const protectedBetsRequired = argValue("protected-bets-required", envValue("NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS") || "false");
+const randomnessDecision = argValue("randomness-decision", "TODO");
+const randomnessOperator = argValue("randomness-operator", "TODO: operator or signer handle");
+const randomnessSignedAt = argValue("randomness-signed-at", "TODO: ISO timestamp");
+const randomnessEvidence = argValue("randomness-evidence", "TODO: explicit randomness risk acceptance or mitigation proof");
+const randomnessRiskAccepted = argValue("randomness-risk-accepted", "false").toLowerCase() === "true";
+const randomnessMitigationDeployed = argValue("randomness-mitigation-deployed", "false").toLowerCase() === "true";
 const publicContract = envValue("NEXT_PUBLIC_CONTRACT_ADDRESS");
 const keeperContract = envValue("KEEPER_CONTRACT_ADDRESS");
 const publicDeployBlock = envValue("NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK");
 const indexerStartBlock = envValue("INDEXER_START_BLOCK");
 const finalityBlocks = envValue("INDEXER_FINALITY_BLOCKS");
-const requestedEpochs = Number(epochs);
 
 const manifest = {
   ...baseCollectorMeta("signoff"),
@@ -121,6 +179,7 @@ const manifest = {
     keeperMatchesPublic: Boolean(publicContract && keeperContract && publicContract.toLowerCase() === keeperContract.toLowerCase()),
     indexerStartBlockMatchesDeployBlock: Boolean(indexerStartBlock && deployBlock && indexerStartBlock === deployBlock),
     finalityBlocksPositive: isPositiveIntegerString(finalityBlocks),
+    protectedBetsRequired: isTruthyEnvValue(protectedBetsRequired),
     command: "npm.cmd run proof:mainnet -- --strict",
     evidence: envSummary,
     checkedAt: now,
@@ -136,12 +195,12 @@ const manifest = {
     checkedAt: now,
   },
   randomness: {
-    decision: "TODO",
-    riskAcceptedByOperator: false,
-    mitigationDeployed: false,
-    operator: "TODO: operator or signer handle",
-    signedAt: "TODO: ISO timestamp",
-    evidence: "TODO: explicit randomness risk acceptance or mitigation proof",
+    decision: randomnessDecision,
+    riskAcceptedByOperator: randomnessRiskAccepted,
+    mitigationDeployed: randomnessMitigationDeployed,
+    operator: randomnessOperator,
+    signedAt: randomnessSignedAt,
+    evidence: randomnessEvidence,
   },
   chainComparison: Object.fromEntries(CHAIN_CHECKS.map((check) => [check, comparisonDraft(check, user, requestedEpochs, now, chainSummary)])),
   requiredManualEvidence: [

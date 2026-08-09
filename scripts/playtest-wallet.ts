@@ -7,12 +7,19 @@ import {
   formatUnits,
   getAddress,
   http,
+  toFunctionSelector,
   type Address,
   type PublicClient,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { GAME_ABI, LINEA_TOKEN_ADDRESS, TOKEN_ABI, CONTRACT_ADDRESS } from "../app/lib/constants";
+import {
+  CONTRACT_ADDRESS,
+  CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
+  GAME_ABI,
+  LINEA_TOKEN_ADDRESS,
+  TOKEN_ABI,
+} from "../app/lib/constants";
 import { parsePositiveLineaAmountWeiOrFallback } from "../app/lib/tokenAmountMath";
 import {
   clampKeeperFeeOverridesToBalance,
@@ -23,21 +30,32 @@ import {
 import { tileIdsToMask } from "../app/lib/tileMask";
 import { parseOptionalPositiveIntegerEnv, parseOptionalPositiveIntegerInRangeEnv } from "../config/envParsing";
 import { getConfiguredLineaNetwork, getLineaChain, getStableLineaReadRpcs } from "../config/publicConfig";
+import { redactProofText } from "./redact-proof-output.mjs";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
 const BASE_URL = process.env.TEST_WALLET_BASE_URL?.trim() || "http://localhost:3000";
-const DRY_RUN = process.env.TEST_WALLET_DRY_RUN === "1";
+const EXECUTE_REQUESTED = process.argv.includes("--execute");
+const LIVE_EXECUTION_CONFIRMED = process.env.TEST_WALLET_EXECUTE === "1" && EXECUTE_REQUESTED;
+const DRY_RUN = !LIVE_EXECUTION_CONFIRMED;
 const SAFE_SECONDS_LEFT = parseOptionalPositiveIntegerEnv(process.env.TEST_WALLET_SAFE_SECONDS_LEFT, 35);
 const MAX_EPOCH_READY_WAIT_MS = parseOptionalPositiveIntegerEnv(process.env.TEST_WALLET_MAX_EPOCH_READY_WAIT_MS, 180_000);
 const POST_TX_API_WAIT_MS = parseOptionalPositiveIntegerEnv(process.env.TEST_WALLET_POST_TX_API_WAIT_MS, 5_000);
+const API_FETCH_TIMEOUT_MS = parseOptionalPositiveIntegerEnv(process.env.TEST_WALLET_API_FETCH_TIMEOUT_MS, 10_000);
 const SINGLE_AMOUNT = parsePositiveLineaAmountWeiOrFallback(process.env.TEST_WALLET_SINGLE_BET_AMOUNT, "1");
 const BATCH_AMOUNT = parsePositiveLineaAmountWeiOrFallback(process.env.TEST_WALLET_BATCH_BET_AMOUNT, "1");
 const BATCH_TILE_COUNT = parseOptionalPositiveIntegerInRangeEnv(process.env.TEST_WALLET_BATCH_TILE_COUNT, 3, 1, 24);
 const APPROVE_GAS_FALLBACK = 80_000n;
 const SINGLE_GAS_FALLBACK = 140_000n;
 const BATCH_GAS_FALLBACK = 240_000n;
+const MAX_PLAYTEST_JSON_RESPONSE_BYTES = 512 * 1024;
+const MAX_PLAYTEST_ERROR_CHARS = 500;
+const CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const MAX_UINT256 = (1n << 256n) - 1n;
+const EPOCH_BOUND_BITMAP_SELECTOR = toFunctionSelector(
+  "placeBatchBetsBitmapForEpoch(uint256,uint32,uint256)",
+);
 
 type PlaytestSummary = {
   address: Address;
@@ -56,6 +74,14 @@ type TestAccount = ReturnType<typeof privateKeyToAccount>;
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function describePlaytestError(error: unknown) {
+  const text = redactProofText(error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_PLAYTEST_ERROR_CHARS) return text;
+  return `${text.slice(0, MAX_PLAYTEST_ERROR_CHARS - 15)}...<truncated>`;
 }
 
 function getRequiredEnv(name: string) {
@@ -129,6 +155,16 @@ async function getFeeOverrides(publicClient: PublicClient) {
   } catch {
     return getFallbackFeeOverrides(APP_CHAIN.id, "keeper");
   }
+}
+
+async function supportsEpochBoundBets(publicClient: PublicClient) {
+  const bytecode = await publicClient.getBytecode({ address: CONTRACT_ADDRESS });
+  if (!bytecode) throw new Error("Configured game contract has no bytecode");
+  const supported = bytecode.toLowerCase().includes(EPOCH_BOUND_BITMAP_SELECTOR.slice(2).toLowerCase());
+  if (!supported && CONTRACT_REQUIRES_EPOCH_BOUND_BETS) {
+    throw new Error("Configured contract is missing required epoch-bound betting support");
+  }
+  return supported;
 }
 
 async function ensureAllowance(
@@ -262,7 +298,7 @@ async function placeBatchBet(
       ...feeOverrides,
     } as never);
   } catch (bitmapError) {
-    const bitmapMessage = bitmapError instanceof Error ? bitmapError.message : String(bitmapError);
+    const bitmapMessage = describePlaytestError(bitmapError);
     console.log(`[playtest] placeBatchBetsBitmap unavailable or failed, falling back: ${bitmapMessage}`);
     try {
       estimatedGas = await publicClient.estimateContractGas({
@@ -286,7 +322,7 @@ async function placeBatchBet(
         ...feeOverrides,
       } as never);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describePlaytestError(error);
       console.log(`[playtest] placeBatchBetsSameAmount unavailable or failed, falling back: ${message}`);
       const amountArgs = tiles.map(() => amount);
       try {
@@ -323,9 +359,49 @@ async function placeBatchBet(
   return hash;
 }
 
+async function placeEpochBoundBitmapBet(
+  publicClient: PublicClient,
+  walletClient: ReturnType<typeof createWalletClient>,
+  account: TestAccount,
+  epoch: bigint,
+  tiles: number[],
+  amount: bigint,
+) {
+  const nativeBalance = await publicClient.getBalance({ address: account.address });
+  let feeOverrides = await getFeeOverrides(publicClient);
+  const estimatedGas = await publicClient.estimateContractGas({
+    account: account.address,
+    address: CONTRACT_ADDRESS,
+    abi: GAME_ABI,
+    functionName: "placeBatchBetsBitmapForEpoch",
+    args: [epoch, tileIdsToMask(tiles), amount],
+    ...feeOverrides,
+  } as never);
+  feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
+  const gas = getAffordableKeeperGasLimit(estimatedGas, nativeBalance, feeOverrides) ?? estimatedGas;
+  const hash = await walletClient.writeContract({
+    account,
+    chain: APP_CHAIN,
+    address: CONTRACT_ADDRESS,
+    abi: GAME_ABI,
+    functionName: "placeBatchBetsBitmapForEpoch",
+    args: [epoch, tileIdsToMask(tiles), amount],
+    gas,
+    ...feeOverrides,
+  } as never);
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") {
+    throw new Error(`epoch-bound bet failed: ${hash}`);
+  }
+  return hash;
+}
+
 async function fetchJson(url: string) {
-  const response = await fetch(url, { headers: { accept: "application/json" } });
-  const text = await response.text();
+  const response = await fetch(url, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS),
+  });
+  const text = await readBoundedResponseText(response);
   let json: unknown = null;
   try {
     json = JSON.parse(text);
@@ -335,13 +411,47 @@ async function fetchJson(url: string) {
   return { status: response.status, ok: response.ok, json };
 }
 
+async function readBoundedResponseText(response: Response) {
+  const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
+  if (contentLength !== null && contentLength > MAX_PLAYTEST_JSON_RESPONSE_BYTES) {
+    throw new Error("playtest JSON response body too large");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let totalBytes = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_PLAYTEST_JSON_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("playtest JSON response body too large");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+function parseContentLengthHeader(value: string | null) {
+  if (value == null || value === "") return null;
+  if (!CONTENT_LENGTH_RE.test(value)) throw new Error("playtest JSON response has invalid content-length");
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) throw new Error("playtest JSON response has invalid content-length");
+  return Number(parsed);
+}
+
 async function main() {
-  const account = process.env.TEST_WALLET_PRIVATE_KEY?.trim()
+  if (EXECUTE_REQUESTED && process.env.TEST_WALLET_EXECUTE !== "1") {
+    throw new Error("Refusing wallet playtest execution without TEST_WALLET_EXECUTE=1");
+  }
+  const account = LIVE_EXECUTION_CONFIRMED && process.env.TEST_WALLET_PRIVATE_KEY?.trim()
     ? privateKeyToAccount(normalizePrivateKey(getRequiredEnv("TEST_WALLET_PRIVATE_KEY")))
     : null;
   const dryRunAddress = process.env.TEST_WALLET_ADDRESS?.trim()
     ? getAddress(process.env.TEST_WALLET_ADDRESS)
-    : account?.address;
+    : null;
   if (!DRY_RUN && !account) {
     throw new Error("Missing required env var: TEST_WALLET_PRIVATE_KEY");
   }
@@ -359,6 +469,7 @@ async function main() {
   if (String(contractToken).toLowerCase() !== LINEA_TOKEN_ADDRESS.toLowerCase()) {
     throw new Error(`Contract token mismatch: expected ${LINEA_TOKEN_ADDRESS}, got ${contractToken}`);
   }
+  const useEpochBoundBets = await supportsEpochBoundBets(publicClient);
 
   const epochWindow = DRY_RUN
     ? await readEpochWindow(publicClient)
@@ -373,6 +484,7 @@ async function main() {
   console.log(`[playtest] rpcCount=${rpcUrls.length}`);
   console.log(`[playtest] contract=${CONTRACT_ADDRESS}`);
   console.log(`[playtest] token=${LINEA_TOKEN_ADDRESS}`);
+  console.log(`[playtest] betPath=${useEpochBoundBets ? "epoch-bound-bitmap" : "legacy-compatible"}`);
   console.log(`[playtest] epoch=${epoch.toString()} secondsLeft=${secondsLeft}`);
   console.log(`[playtest] single=${singleTile} x ${formatUnits(SINGLE_AMOUNT, 18)} LINEA`);
   console.log(`[playtest] batch=${batchTiles.join(",")} x ${formatUnits(BATCH_AMOUNT, 18)} LINEA`);
@@ -405,7 +517,10 @@ async function main() {
     }
 
     const [home, deposits, rebates] = await Promise.all([
-      fetch(`${BASE_URL}/`, { headers: { accept: "text/html" } }).then((response) => ({ ok: response.ok, status: response.status })),
+      fetch(`${BASE_URL}/`, {
+        headers: { accept: "text/html" },
+        signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS),
+      }).then((response) => ({ ok: response.ok, status: response.status })),
       dryRunAddress
         ? fetchJson(`${BASE_URL}/api/deposits?user=${dryRunAddress.toLowerCase()}&includeRewards=1`)
         : Promise.resolve({ ok: false, status: 0, json: "skipped: TEST_WALLET_ADDRESS not set" }),
@@ -450,8 +565,12 @@ async function main() {
   }
 
   const approvedTx = await ensureAllowance(publicClient, walletClient, account, neededAmount);
-  const singleTx = await placeSingleBet(publicClient, walletClient, account, singleTile, SINGLE_AMOUNT);
-  const batchTx = await placeBatchBet(publicClient, walletClient, account, batchTiles, BATCH_AMOUNT);
+  const singleTx = useEpochBoundBets
+    ? await placeEpochBoundBitmapBet(publicClient, walletClient, account, epoch, [singleTile], SINGLE_AMOUNT)
+    : await placeSingleBet(publicClient, walletClient, account, singleTile, SINGLE_AMOUNT);
+  const batchTx = useEpochBoundBets
+    ? await placeEpochBoundBitmapBet(publicClient, walletClient, account, epoch, batchTiles, BATCH_AMOUNT)
+    : await placeBatchBet(publicClient, walletClient, account, batchTiles, BATCH_AMOUNT);
 
   const userBets = await publicClient.readContract({
     address: CONTRACT_ADDRESS,
@@ -501,6 +620,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("[playtest] failed", error);
+  console.error(`[playtest] failed: ${describePlaytestError(error)}`);
   process.exitCode = 1;
 });

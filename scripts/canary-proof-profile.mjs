@@ -6,6 +6,7 @@ const profiles = {
     draftManifestPath: "docs/canary-proof.draft.json",
     label: "Linea mainnet launch",
     evidenceTerms: "mainnet",
+    requiredRoles: ["MANUAL", "AUTOMINER_A", "AUTOMINER_B"],
   },
   testnet: {
     network: "sepolia",
@@ -14,6 +15,18 @@ const profiles = {
     draftManifestPath: "docs/testnet-canary-proof.draft.json",
     label: "Linea Sepolia testnet",
     evidenceTerms: "sepolia|testnet",
+    requiredRoles: ["MANUAL", "AUTOMINER_A", "AUTOMINER_B"],
+  },
+  "v10-matrix": {
+    network: "sepolia",
+    chainId: 59141,
+    manifestPath: "",
+    draftManifestPath: "",
+    label: "Linea Sepolia bounded V10 matrix",
+    evidenceTerms: "sepolia|testnet",
+    manifestRequired: false,
+    minEpochs: 6,
+    minAutoMinerEpochs: 4,
   },
 };
 

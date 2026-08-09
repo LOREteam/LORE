@@ -1,9 +1,11 @@
 import { createRequire } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
+const summaryOnly = process.argv.includes("--summary-only");
+const MAX_PACKAGE_JSON_BYTES = 512 * 1024;
 
 const expectedApps = new Map([
   ["lore-site", { args: "run start", packageScript: "start" }],
@@ -27,8 +29,14 @@ function printTable(headers, rows) {
 function packageScripts() {
   const packagePath = resolve(process.cwd(), "package.json");
   if (!existsSync(packagePath)) return {};
-  const parsed = JSON.parse(readFileSync(packagePath, "utf8"));
-  return parsed.scripts && typeof parsed.scripts === "object" ? parsed.scripts : {};
+  try {
+    const packageStat = statSync(packagePath);
+    if (!packageStat.isFile() || packageStat.size > MAX_PACKAGE_JSON_BYTES) return {};
+    const parsed = JSON.parse(readFileSync(packagePath, "utf8"));
+    return parsed.scripts && typeof parsed.scripts === "object" ? parsed.scripts : {};
+  } catch {
+    return {};
+  }
 }
 
 const issues = [];
@@ -41,7 +49,7 @@ console.log("# Process Model Preflight");
 console.log("");
 console.log(`Timestamp: ${new Date().toISOString()}`);
 console.log(`Strict: ${strict ? "yes" : "no"}`);
-console.log(`Config: ${ecosystemPath}`);
+console.log(`Config: ${summaryOnly ? (existsSync(ecosystemPath) ? "present" : "missing") : ecosystemPath}`);
 console.log("");
 
 if (!existsSync(ecosystemPath)) {
@@ -52,7 +60,11 @@ if (!existsSync(ecosystemPath)) {
     apps = Array.isArray(config?.apps) ? config.apps : [];
     if (apps.length === 0) issues.push("ecosystem.config.cjs must export a non-empty apps array");
   } catch (error) {
-    issues.push(`ecosystem.config.cjs could not be loaded: ${error instanceof Error ? error.message : String(error)}`);
+    issues.push(
+      summaryOnly
+        ? "ecosystem.config.cjs could not be loaded"
+        : `ecosystem.config.cjs could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 

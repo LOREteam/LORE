@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 
+const MAX_WARMUP_RESPONSE_BYTES = 1024 * 1024;
+const CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
 export async function findExecutablePath(browserCandidates) {
   for (const candidate of browserCandidates) {
     try {
@@ -78,6 +82,37 @@ export async function safeReload(page, baseUrl, timeoutMs) {
   }
 }
 
+async function readBoundedWarmupText(response) {
+  const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
+  if (contentLength !== null && contentLength > MAX_WARMUP_RESPONSE_BYTES) {
+    throw new Error("warmup response body too large");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let totalBytes = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_WARMUP_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("warmup response body too large");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+function parseContentLengthHeader(value) {
+  if (value == null || value === "") return null;
+  if (!CONTENT_LENGTH_RE.test(value)) throw new Error("warmup response has invalid content-length");
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) throw new Error("warmup response has invalid content-length");
+  return Number(parsed);
+}
+
 export async function warmBaseUrl(baseUrl, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
@@ -97,7 +132,7 @@ export async function warmBaseUrl(baseUrl, timeoutMs) {
       if (!response.ok) {
         throw new Error(`warmup returned ${response.status}`);
       }
-      await response.text();
+      await readBoundedWarmupText(response);
       console.log(`PASS warmup ${baseUrl}`);
       return;
     } catch (error) {

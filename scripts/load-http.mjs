@@ -4,6 +4,7 @@ import {
   parsePositiveIntegerEnv,
   parsePositiveIntegerInRangeEnv,
 } from "./env-parsing.mjs";
+import { redactProofText } from "./redact-proof-output.mjs";
 
 const BASE_URL = process.env.LOAD_BASE_URL || process.env.SMOKE_BASE_URL || "http://localhost:3001";
 const ALLOW_LOCAL = process.env.LOAD_ALLOW_LOCAL === "1";
@@ -14,6 +15,8 @@ const MAX_ERROR_RATE = parseNonNegativeNumberInRangeEnv(process.env.LOAD_MAX_ERR
 const MAX_P95_MS = parsePositiveIntegerEnv(process.env.LOAD_MAX_P95_MS, 1_500);
 const CLIENT_IPS = parsePositiveIntegerInRangeEnv(process.env.LOAD_CLIENT_IPS, CONCURRENCY, 1, CONCURRENCY);
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000001";
+const MAX_LOAD_ERROR_CHARS = 500;
+const HTTP_STATUS_RE = /^[1-5]\d{2}$/;
 
 const endpoints = [
   { name: "home", path: "/", weight: 8 },
@@ -33,17 +36,50 @@ const weightedEndpoints = endpoints.flatMap((endpoint) =>
   Array.from({ length: endpoint.weight }, () => endpoint),
 );
 
+function describeLoadError(error) {
+  const text = redactProofText(error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_LOAD_ERROR_CHARS) return text;
+  return `${text.slice(0, MAX_LOAD_ERROR_CHARS - 15)}...<truncated>`;
+}
 
 function isNonLocalHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase();
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
     return url.protocol === "https:" &&
       url.pathname === "/" &&
       url.search === "" &&
       url.hash === "" &&
-      !["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host) &&
-      !host.endsWith(".local");
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      );
   } catch {
     return false;
   }
@@ -178,9 +214,23 @@ async function runWorker(workerId, deadline, globalStats, byEndpoint) {
 }
 
 function formatStatuses(statuses) {
+  function normalizeStatus(value) {
+    const text = String(value ?? "").trim();
+    if (!HTTP_STATUS_RE.test(text)) return null;
+    const status = Number(text);
+    return Number.isSafeInteger(status) ? status : null;
+  }
+
   return [...statuses.entries()]
-    .sort((a, b) => Number(a[0]) - Number(b[0]))
-    .map(([status, count]) => `${status}:${count}`)
+    .sort((a, b) => {
+      const left = normalizeStatus(a[0]);
+      const right = normalizeStatus(b[0]);
+      if (left !== null && right !== null) return left - right;
+      if (left !== null) return -1;
+      if (right !== null) return 1;
+      return 0;
+    })
+    .map(([status, count]) => `${normalizeStatus(status) ?? "invalid-status"}:${count}`)
     .join(" ");
 }
 
@@ -198,7 +248,7 @@ function printStats(name, stats) {
 
 async function main() {
   if (!ALLOW_LOCAL && !isNonLocalHttpsOrigin(BASE_URL)) {
-    throw new Error("LOAD_BASE_URL must be a non-local HTTPS origin for launch load evidence; set LOAD_ALLOW_LOCAL=1 only for local smoke checks");
+    throw new Error("LOAD_BASE_URL must be a public HTTPS origin for launch load evidence; localhost/private/reserved/example/test origins are launch-proof invalid. Set LOAD_ALLOW_LOCAL=1 only for local smoke checks");
   }
 
   if (!Number.isFinite(CONCURRENCY) || CONCURRENCY <= 0) {
@@ -266,6 +316,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error);
+  console.error(describeLoadError(error));
   process.exit(1);
 });

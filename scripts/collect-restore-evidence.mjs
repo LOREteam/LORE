@@ -1,6 +1,11 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { argValue, baseCollectorMeta, hasFlag, isFinalHttpsOrigin, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
+
+const CANONICAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const MAX_KEY_VALUE_MARKERS = 64;
+const MAX_RESTORE_EVIDENCE_BYTES = 512 * 1024;
 
 function isInsideRepo(absolutePath) {
   const relativeToRepo = relative(process.cwd(), absolutePath);
@@ -16,11 +21,33 @@ function samePath(left, right) {
   return relative(left, right) === "";
 }
 
-function readOptionalLog(filePath) {
+function regularFileStat(filePath) {
+  try {
+    const stat = statSync(filePath);
+    return stat.isFile() ? stat : null;
+  } catch {
+    return null;
+  }
+}
+
+function regularDirectoryStat(dirPath) {
+  try {
+    const stat = statSync(dirPath);
+    return stat.isDirectory() ? stat : null;
+  } catch {
+    return null;
+  }
+}
+
+function readOptionalLog(name, filePath) {
   if (!filePath) return "";
   const resolved = resolve(process.cwd(), filePath);
-  if (!existsSync(resolved) || !statSync(resolved).isFile()) {
-    throw new Error(`${filePath} must be an existing redacted file artifact`);
+  const stat = regularFileStat(resolved);
+  if (!stat) {
+    throw new Error(`--${name} must point to an existing redacted file artifact`);
+  }
+  if (stat.size > MAX_RESTORE_EVIDENCE_BYTES) {
+    throw new Error(`--${name} artifact is too large to validate safely`);
   }
   return readFileSync(resolved, "utf8");
 }
@@ -47,13 +74,28 @@ function requireArtifact(name, value) {
 function requireExistingArtifact(name, value) {
   requireArtifact(name, value);
   const resolved = resolve(process.cwd(), value || "");
-  if (!isPrintPlan()) requireCondition(existsSync(resolved) && statSync(resolved).isFile(), `--${name} must point to an existing redacted file artifact`);
+  if (!isPrintPlan()) requireCondition(Boolean(regularFileStat(resolved)), `--${name} must point to an existing redacted file artifact`);
+}
+
+function requireDistinctArtifactInputs(entries) {
+  for (let leftIndex = 0; leftIndex < entries.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
+      const [leftName, leftPath] = entries[leftIndex];
+      const [rightName, rightPath] = entries[rightIndex];
+      if (!leftPath || !rightPath) continue;
+      if (resolve(process.cwd(), leftPath).toLowerCase() === resolve(process.cwd(), rightPath).toLowerCase()) {
+        throw new Error(`--${leftName} and --${rightName} must point to distinct restore evidence files`);
+      }
+    }
+  }
 }
 
 function normalizedOrigin(value) {
   if (!value) return "";
   try {
-    return new URL(String(value).trim()).origin.toLowerCase();
+    const url = new URL(String(value).trim());
+    if (url.username || url.password) return "";
+    return url.origin.toLowerCase();
   } catch {
     return "";
   }
@@ -66,17 +108,37 @@ function healthBaseMatches(summary, expectedOrigin) {
 }
 function parseKeyValues(line = "") {
   const values = {};
-  for (const match of line.matchAll(/\b([A-Za-z][A-Za-z0-9_-]*)=([^\s]+)/g)) {
+  const pattern = /\b([A-Za-z][A-Za-z0-9_-]*)=([^\s]+)/g;
+  let inspected = 0;
+  let match = pattern.exec(line);
+  while (match) {
+    inspected += 1;
+    if (inspected > MAX_KEY_VALUE_MARKERS) {
+      throw new Error("restore health evidence has too many key/value markers to validate safely");
+    }
     values[match[1]] = match[2];
+    match = pattern.exec(line);
   }
   return values;
+}
+
+function hasCanonicalNonNegativeInteger(value) {
+  return parseCanonicalNonNegativeInteger(value) !== null;
+}
+
+function parseCanonicalNonNegativeInteger(value) {
+  const text = String(value ?? "").trim();
+  if (!CANONICAL_NON_NEGATIVE_INTEGER_RE.test(text)) return null;
+  const parsed = BigInt(text);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(parsed);
 }
 
 function parseHealth(log, logPath) {
   const ok = /\[prod-health\]\s+OK/i.test(log);
   const summary = firstMatchingLine(log, /\bbase=|\bruntime=|\bdataSync=/i) || "TODO: paste restored health:prod output with numeric finalityLagBlocks=<number>";
   const values = parseKeyValues(summary);
-  const finalityLagChecked = Number.isFinite(Number(values.finalityLagBlocks));
+  const finalityLagChecked = hasCanonicalNonNegativeInteger(values.finalityLagBlocks);
 
   return {
     status: ok ? "pass" : "TODO",
@@ -111,34 +173,30 @@ const restoreDirPath = restoreDir ? resolve(process.cwd(), restoreDir) : "";
 const backupPath = backup ? resolve(process.cwd(), backup) : "";
 requireCondition(Boolean(source), "--source must point to the source DB used for the restore drill");
 requireCondition(isAbsolute(source), "--source must be an absolute source DB path");
-requireCondition(existsSync(sourcePath), "--source DB must exist before collecting restore evidence");
-requireCondition(statSync(sourcePath).isFile(), "--source must point to a DB file, not a directory");
+requireCondition(Boolean(regularFileStat(sourcePath)), "--source DB must exist before collecting restore evidence");
 requireCondition(!isInsideRepo(sourcePath), "--source DB must be outside the repo checkout for launch evidence");
 requireCondition(Boolean(backupDir), "--backup-dir must point to the backup directory used for the restore drill");
 requireCondition(isAbsolute(backupDir), "--backup-dir must be an absolute path");
-requireCondition(existsSync(backupDirPath), "--backup-dir must exist before collecting restore evidence");
-requireCondition(statSync(backupDirPath).isDirectory(), "--backup-dir must point to a directory");
+requireCondition(Boolean(regularDirectoryStat(backupDirPath)), "--backup-dir must point to a directory");
 requireCondition(!isInsideRepo(backupDirPath), "--backup-dir must be outside the repo checkout for launch evidence");
 requireCondition(Boolean(restoreDir), "--restore-dir must point to the restore drill directory");
 requireCondition(isAbsolute(restoreDir), "--restore-dir must be an absolute path");
-requireCondition(existsSync(restoreDirPath), "--restore-dir must exist before collecting restore evidence");
-requireCondition(statSync(restoreDirPath).isDirectory(), "--restore-dir must point to a directory");
+requireCondition(Boolean(regularDirectoryStat(restoreDirPath)), "--restore-dir must point to a directory");
 requireCondition(!isInsideRepo(restoreDirPath), "--restore-dir must be outside the repo checkout for launch evidence");
 requireCondition(!pathInsideOrSame(sourcePath, backupDirPath), "--source DB must not be inside --backup-dir");
 requireCondition(!pathInsideOrSame(sourcePath, restoreDirPath), "--source DB must not be inside --restore-dir");
 requireCondition(!samePath(backupDirPath, restoreDirPath), "--backup-dir and --restore-dir must be different");
 requireCondition(Boolean(backup), "--backup must point to the backup artifact used for the restore drill");
 requireCondition(isAbsolute(backup), "--backup must be an absolute path to the backup artifact used for the restore drill");
-requireCondition(existsSync(backupPath), "--backup file must exist before collecting restore evidence");
-requireCondition(statSync(backupPath).isFile(), "--backup must point to a backup file, not a directory");
+requireCondition(Boolean(regularFileStat(backupPath)), "--backup file must exist before collecting restore evidence");
 requireCondition(!isInsideRepo(backupPath), "--backup file must be outside the repo checkout for launch evidence");
 requireCondition(pathInsideOrSame(backupPath, backupDirPath), "--backup file must be inside --backup-dir");
-requireCondition(isFinalHttpsOrigin(restoredOrigin), "--restored-origin must be a non-local HTTPS origin without path, query, or hash");
+requireCondition(isFinalHttpsOrigin(restoredOrigin), "--restored-origin must be a public HTTPS origin without path, query, or hash");
 requireCondition(["staging", "canary", "restore"].includes(restoredHostType), "--restored-host-type must be staging, canary, or restore");
 
 const now = new Date().toISOString();
-const restoreLog = readOptionalLog(restoreLogPath);
-const healthLog = readOptionalLog(healthLogPath);
+const restoreLog = readOptionalLog("restore-log", restoreLogPath);
+const healthLog = readOptionalLog("health-log", healthLogPath);
 const restoreSummary =
   firstMatchingLine(restoreLog, /^Summary:/i) ||
   firstMatchingLine(restoreLog, /^Copy this summary/i) ||
@@ -151,12 +209,18 @@ if (!isPrintPlan()) {
   requireArtifact("health-log", healthLogPath);
   requireExistingArtifact("backup-schedule-artifact", backupScheduleArtifact);
   requireExistingArtifact("preservation-artifact", preservationArtifact);
+  requireDistinctArtifactInputs([
+    ["restore-log", restoreLogPath],
+    ["health-log", healthLogPath],
+    ["backup-schedule-artifact", backupScheduleArtifact],
+    ["preservation-artifact", preservationArtifact],
+  ]);
   requireCondition(restoreOk, "--restore-log must include successful restore drill summary");
   requireCondition(/\[prod-health\]\s+OK/i.test(healthLog), "--health-log must include [prod-health] OK");
   requireCondition(healthBaseMatches(healthSummary, restoredOrigin), "--health-log must include base=<restored-origin>");
   requireCondition(/^(ok|pass|healthy)$/i.test(healthValues.runtime ?? ""), "--health-log must include runtime=ok/pass/healthy");
   requireCondition(/^(ok|pass|healthy)$/i.test(healthValues.dataSync ?? ""), "--health-log must include dataSync=ok/pass/healthy");
-  requireCondition(Number.isFinite(Number(healthValues.finalityLagBlocks)), "--health-log must include numeric finalityLagBlocks=<number>");
+  requireCondition(hasCanonicalNonNegativeInteger(healthValues.finalityLagBlocks), "--health-log must include canonical non-negative decimal finalityLagBlocks=<number>");
 }
 const manifest = {
   ...baseCollectorMeta("restore"),
@@ -169,6 +233,8 @@ const manifest = {
   backupSchedule: {
     enabled: false,
     cadence: "TODO: recurring backup cadence, for example every 5 minutes",
+    retentionDays: "TODO: positive integer retention window in days",
+    lastSuccessfulBackupAt: "TODO: ISO timestamp of the latest successful scheduled backup",
     evidence: backupScheduleArtifact ? `artifact: ${backupScheduleArtifact}` : "TODO: paste concrete backup schedule or cron proof",
     checkedAt: now,
   },
@@ -200,7 +266,7 @@ const manifest = {
     checkedAt: now,
   },
   requiredManualEvidence: [
-    "enable and prove recurring backup schedule with --backup-schedule-artifact=<redacted-scheduler-export>",
+    "enable and prove recurring backup schedule, retention window, and latest successful backup with --backup-schedule-artifact=<redacted-scheduler-export>",
     "run restore drill from the backup artifact into the restore directory and pass --restore-log=<redacted-restore-drill-log>",
     "run health:prod against the restored staging/canary/restore origin with numeric finalityLagBlocks and pass --health-log=<redacted-health-prod-log>",
     "prove heartbeat and latest indexed epoch values are preserved after restore with --preservation-artifact=<redacted-comparison-export>",

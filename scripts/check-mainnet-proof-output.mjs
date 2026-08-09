@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -47,6 +47,12 @@ if (!/Proof snapshot not written: strict check failed for final docs\/mainnet-en
 }
 if (/Proof snapshot written: docs[\\/]mainnet-env-proof\.log/.test(output)) {
   issues.push("strict failed-env proof reported writing the final env artifact");
+}
+
+try {
+  rmSync(tempRoot, { recursive: true, force: true });
+} catch {
+  // Best-effort temp cleanup; validation status is already captured.
 }
 
 if (issues.length > 0) {

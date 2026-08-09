@@ -43,5 +43,10 @@ output/
 *.sqlite-shm
 *.sqlite-wal
 *.log
+artifacts/autonomous-summary-*.txt
+artifacts/business-logic-summary-*.json
+logs/workspace-cleanup-loop.pid
+logs/workspace-cleanup-loop.status.json
+logs/workspace-cleanup-loop.stop
 *.abi
 *.bin

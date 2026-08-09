@@ -10,6 +10,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { LINEA_TOKEN_ADDRESS, TOKEN_ABI } from "../app/lib/constants";
 import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs, getStableLineaReadRpcs } from "../config/publicConfig";
+import { redactProofText } from "./redact-proof-output.mjs";
 
 loadDotenv({ path: ".env.live-test-wallets", override: false, quiet: true });
 
@@ -17,7 +18,16 @@ const CONFIRMATION_FLAG = "--confirm";
 const REVERT_GAS_LIMIT = 100_000n;
 const TEST_AMOUNT = 1n;
 const TESTNET_CHAIN_ID = 59141;
+const MAX_REVERT_CHECK_ERROR_CHARS = 500;
 const roles = ["MANUAL", "AUTOMINER_A", "AUTOMINER_B", "AUTOMINER_C"];
+
+function describeRevertCheckError(error: unknown) {
+  const text = redactProofText(error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_REVERT_CHECK_ERROR_CHARS) return text;
+  return `${text.slice(0, MAX_REVERT_CHECK_ERROR_CHARS - 15)}...<truncated>`;
+}
 
 function getFundedTestAccount() {
   for (const role of roles) {
@@ -99,6 +109,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : "Testnet revert check failed.");
+  console.error(describeRevertCheckError(error));
   process.exitCode = 1;
 });

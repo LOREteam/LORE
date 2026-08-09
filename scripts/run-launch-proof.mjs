@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
+const summaryOnly = process.argv.includes("--summary-only");
+const launchSummaryGroups = "launch=1";
 const args = new Map(
   process.argv
     .slice(2)
@@ -15,6 +17,11 @@ const args = new Map(
 
 const canaryLog = args.get("canary-log") || process.env.PROOF_CANARY_LOG || "";
 const commonArgs = strict ? ["--strict"] : [];
+
+function launchGroupSummary() {
+  return `groups: ${launchSummaryGroups}`;
+}
+
 const checks = [
   { id: "LOCAL", label: "template guard", script: "scripts/check-proof-templates.mjs", args: [] },
   { id: "LOCAL", label: "draft guard", script: "scripts/check-proof-drafts.mjs", args: [] },
@@ -26,7 +33,7 @@ const checks = [
   { id: "LOCAL", label: "collector redaction guard", script: "scripts/check-proof-collector-redaction.mjs", args: [] },
   { id: "LOCAL", label: "host load target guard", script: "scripts/check-host-proof-load-target.mjs", args: [] },
   { id: "LOCAL", label: "production dependency audit", script: "scripts/check-production-dependency-audit.mjs", args: [] },
-  { id: "LOCAL", label: "full dependency/toolchain audit", script: "scripts/check-production-dependency-audit.mjs", args: ["--include-dev"] },
+  { id: "LOCAL", label: "full dependency/toolchain audit", script: "scripts/check-production-dependency-audit.mjs", args: ["--include-dev", "--allow-known-dev-toolchain-high"] },
   { id: "LOCAL", label: "remaining evidence report", script: "scripts/report-launch-remaining.mjs", args: [] },
   { id: "LOCAL", label: "remaining evidence JSON", script: "scripts/report-launch-remaining.mjs", args: ["--json"] },
   { id: "G1", label: "final contract/env", script: "scripts/collect-mainnet-proof.mjs", args: commonArgs },
@@ -76,7 +83,7 @@ function summaryIsClean(summary) {
   if (/^JSON:/i.test(summary)) return /JSON:\s*0 remaining gate\(s\), 0 issue\(s\)/i.test(summary);
   if (/\b\d+\s+(?:proof\s+)?issue\(s\)|\b\d+\s+env gate\(s\)|\b\d+\s+issue\(s\)/i.test(summary)) return false;
   if (/missing|invalid|failing|failed/i.test(summary)) return false;
-  return /without detected issues|all checked env gates passed|all proof templates are rejected by strict validators|all proof drafts are rejected by strict validators|proof manifest files are clean or not yet collected|all required proof manifest files are present and clean|launch gate table structure is consistent|launch evidence command map is consistent|launch docs command syntax is PowerShell-safe|readiness checklist structure is consistent|proof collector redaction guard passed|host proof load target guard passed|production dependency audit passed with no high or critical advisories|all dependency audit passed with no high or critical advisories|no remaining launch evidence rows/i.test(summary);
+  return /without detected issues|all checked env gates passed|all proof templates are rejected by strict validators|all proof drafts are rejected by strict validators|proof manifest files are clean or not yet collected|all required proof manifest files are present and clean|launch gate table structure is consistent|launch evidence command map is consistent|launch docs command syntax is PowerShell-safe|readiness checklist structure is consistent|proof collector redaction guard passed|host proof load target guard passed|production dependency audit passed with no high or critical advisories|all dependency audit passed with no high or critical advisories|all dependency audit passed with \d+ known dev-toolchain high advisory exception\(s\), 0 blocking high\/critical advisories|no remaining launch evidence rows/i.test(summary);
 }
 
 function printTable(headers, rows) {
@@ -85,15 +92,42 @@ function printTable(headers, rows) {
   for (const row of rows) console.log(`| ${row.join(" | ")} |`);
 }
 
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function scriptFileExists(scriptPath) {
+  return regularFileStat(scriptPath) !== null;
+}
+
 console.log("# Launch Proof Summary");
 console.log("");
 console.log(`Timestamp: ${new Date().toISOString()}`);
 console.log(`Strict: ${strict ? "yes" : "no"}`);
-console.log(`Canary log: ${canaryLog || "missing"}`);
+console.log(`Canary log: ${summaryOnly ? (canaryLog ? "present" : "missing") : (canaryLog || "missing")}`);
 console.log("");
 
 const rows = [];
 let failed = 0;
+if (summaryOnly) {
+  const issues = [];
+  if (!strict) issues.push("proof:launch requires --strict or PROOF_STRICT=1");
+  if (!canaryLog) issues.push("missing --canary-log or PROOF_CANARY_LOG");
+  console.log("# Launch Proof Status Summary");
+  console.log(`Strict: ${strict ? "yes" : "no"}`);
+  console.log(`Canary log: ${canaryLog ? "present" : "missing"}`);
+  console.log("Would run child checks: false");
+  console.log(
+    `Summary: ${issues.length === 0 ? "launch proof status inputs are ready" : `${issues.length} issue(s): ${issues.join("; ")}`}; ${launchGroupSummary()}.`,
+  );
+  if (strict && issues.length > 0) process.exitCode = 1;
+  process.exit(process.exitCode ?? 0);
+}
 if (!strict) {
   failed += 1;
   rows.push(["G1-G14", "strict launch mode", "fail", "n/a", "proof:launch requires --strict or PROOF_STRICT=1"]);
@@ -108,9 +142,9 @@ for (const check of checks) {
   }
 
   const scriptPath = resolve(process.cwd(), check.script);
-  if (!existsSync(scriptPath)) {
+  if (!scriptFileExists(scriptPath)) {
     failed += 1;
-    rows.push([check.id, check.label, "fail", "n/a", `missing script ${check.script}`]);
+    rows.push([check.id, check.label, "fail", "n/a", `missing or non-file script ${check.script}`]);
     continue;
   }
 

@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+
+const summaryOnly = process.argv.includes("--summary-only");
 
 const checks = [
   {
@@ -54,7 +56,7 @@ const checks = [
     label: "launch doc commands",
     script: "scripts/check-launch-doc-command-syntax.mjs",
     args: [],
-    cleanPattern: /Summary: launch docs command syntax is PowerShell-safe\./i,
+    cleanPattern: /Summary: launch docs commands are PowerShell-safe and reference existing package scripts\./i,
   },
   {
     id: "L8",
@@ -79,39 +81,96 @@ const checks = [
   },
   {
     id: "L11",
+    label: "production dependency audit",
+    script: "scripts/check-production-dependency-audit.mjs",
+    args: [],
+    cleanPattern: /Summary: production dependency audit passed with no high or critical advisories\./i,
+  },
+  {
+    id: "L12",
+    label: "full dependency/toolchain audit",
+    script: "scripts/check-production-dependency-audit.mjs",
+    args: ["--include-dev", "--allow-known-dev-toolchain-high"],
+    cleanPattern: /Summary: all dependency audit passed with \d+ known dev-toolchain high advisory exception\(s\), 0 blocking high\/critical advisories,/i,
+  },
+  {
+    id: "L13",
     label: "remaining evidence report",
     script: "scripts/report-launch-remaining.mjs",
     args: [],
     cleanPattern: /\|\s*inconsistent gate rows\s*\|\s*none\s*\|[\s\S]*\|\s*complete gate evidence issues\s*\|\s*none\s*\|[\s\S]*\|\s*required proof issues\s*\|\s*none\s*\|[\s\S]*\|\s*proof record reference issues\s*\|\s*none\s*\|[\s\S]*\|\s*first check issues\s*\|\s*none\s*\|[\s\S]*(?:\|\s*Next Gate\s*\|\s*First check\s*\|\s*Required proof\s*\||All G1-G14 gates are marked Complete)/i,
   },
   {
-    id: "L12",
+    id: "L14",
     label: "remaining evidence JSON",
     script: "scripts/report-launch-remaining.mjs",
     args: ["--json"],
     cleanPattern: /"inconsistentGates": \[\][\s\S]*"completeGateEvidenceIssues": \[\][\s\S]*"requiredProofIssues": \[\][\s\S]*"proofRecordReferenceIssues": \[\][\s\S]*"firstCheckIssues": \[\]/i,
   },
   {
-    id: "L13",
+    id: "L15",
     label: "mainnet proof output",
     script: "scripts/check-mainnet-proof-output.mjs",
     args: [],
     cleanPattern: /Summary: mainnet proof strict-fail output guard passed\./i,
   },
   {
-    id: "L14",
+    id: "L16",
+    label: "security follow-up",
+    script: "scripts/check-security-followup.mjs",
+    args: [],
+    summaryArgs: ["--summary-only"],
+    cleanPattern: /"status":\s*"pass"[\s\S]*"id":\s*"host-auth"[\s\S]*"id":\s*"web-locks"[\s\S]*"id":\s*"keeper-nonce"[\s\S]*"id":\s*"deposit-limiter"[\s\S]*"id":\s*"dry-run-defaults"[\s\S]*"id":\s*"ci-security"[\s\S]*"id":\s*"auto-resolve"[\s\S]*"appResolveEpochFiles":\s*\[\]/i,
+    summaryCleanPattern: /"status":\s*"pass"[\s\S]*"checks":\s*8[\s\S]*"passed":\s*8[\s\S]*"failed":\s*0[\s\S]*"failedIds":\s*\[\][\s\S]*"appResolveEpochFiles":\s*0/i,
+  },
+  {
+    id: "L17",
     label: "strict launch expected fail",
     script: "scripts/run-launch-proof.mjs",
     args: ["--strict"],
+    summaryArgs: ["--strict", "--summary-only"],
     expectedFailurePattern: /Incomplete gates: G[\d,\s]+[\s\S]*Overall: \d+ launch proof check\(s\) failed or missing/i,
+    summaryExpectedFailurePattern: /Summary: \d+ issue\(s\): missing --canary-log or PROOF_CANARY_LOG(?:; groups: launch=1)?\./i,
   },
 ];
+
+function nonNegativeIntegerField(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function safeToken(value) {
+  const token = String(value ?? "").trim().replace(/[^a-z0-9-]/gi, "");
+  return token.length > 0 && token.length <= 48 ? token : "";
+}
+
+function safeTokenList(value) {
+  const entries = Array.isArray(value) ? value : [];
+  const tokens = entries.map(safeToken).filter(Boolean).slice(0, 8);
+  return tokens.length > 0 ? tokens.join(",") : "none";
+}
+
+function safeStatus(value) {
+  const token = safeToken(value);
+  return ["pass", "fail", "ok", "blocked"].includes(token.toLowerCase()) ? token.toLowerCase() : "unknown";
+}
 
 function summarizeOutput(output) {
   const trimmed = output.trim();
   if (trimmed.startsWith("{")) {
     try {
       const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === "object" && "checks" in parsed && "failedIds" in parsed) {
+        const failedIds = safeTokenList(parsed.failedIds);
+        const appResolveEpochFiles = "appResolveEpochFiles" in parsed
+          ? `, appResolveEpochFiles=${nonNegativeIntegerField(parsed.appResolveEpochFiles)}`
+          : "";
+        return `status=${safeStatus(parsed.status)}, checks=${nonNegativeIntegerField(parsed.checks)}, passed=${nonNegativeIntegerField(parsed.passed)}, failed=${nonNegativeIntegerField(parsed.failed)}, failedIds=${failedIds}${appResolveEpochFiles}`;
+      }
+      if (parsed && typeof parsed === "object" && Array.isArray(parsed.checks)) {
+        const failed = parsed.checks.filter((entry) => entry?.status !== "pass");
+        const failedIds = safeTokenList(failed.map((entry) => entry?.id));
+        return `status=${safeStatus(parsed.status)}, checks=${parsed.checks.length}, passed=${parsed.checks.length - failed.length}, failed=${failed.length}, failedIds=${failedIds}`;
+      }
       return `JSON: ${(parsed.remainingGates ?? []).length} remaining gate(s), ${(parsed.firstCheckIssues ?? []).length} first-check issue(s)`;
     } catch {
       return "invalid JSON output";
@@ -131,9 +190,25 @@ function printTable(headers, rows) {
   for (const row of rows) console.log(`| ${row.join(" | ")} |`);
 }
 
-console.log("# Local Launch Proof Preflight");
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function scriptFileExists(scriptPath) {
+  return regularFileStat(scriptPath) !== null;
+}
+
+console.log(summaryOnly ? "# Local Launch Proof Preflight Summary" : "# Local Launch Proof Preflight");
 console.log("");
 console.log(`Timestamp: ${new Date().toISOString()}`);
+if (summaryOnly) {
+  console.log("Regression artifact writes: false");
+}
 console.log("");
 
 const rows = [];
@@ -141,14 +216,15 @@ const issues = [];
 
 for (const check of checks) {
   const scriptPath = resolve(process.cwd(), check.script);
-  if (!existsSync(scriptPath)) {
-    issues.push(`${check.id}: missing script ${check.script}`);
-    rows.push([check.id, check.label, "fail", "n/a", `missing script ${check.script}`]);
+  if (!scriptFileExists(scriptPath)) {
+    issues.push(`${check.id}: missing or non-file script ${check.script}`);
+    rows.push([check.id, check.label, "fail", "n/a", `missing or non-file script ${check.script}`]);
     continue;
   }
 
+  const checkArgs = summaryOnly && check.summaryArgs ? check.summaryArgs : check.args;
   const chainSnapshotPath = resolve(process.cwd(), "docs/chain-proof-snapshot.json");
-  const createdChainSnapshot = Boolean(check.withTemporaryChainSnapshot && !existsSync(chainSnapshotPath));
+  const createdChainSnapshot = Boolean(!summaryOnly && check.withTemporaryChainSnapshot && !existsSync(chainSnapshotPath));
   if (createdChainSnapshot) {
     writeFileSync(
       chainSnapshotPath,
@@ -159,7 +235,7 @@ for (const check of checks) {
 
   let result;
   try {
-    result = spawnSync(process.execPath, [check.script, ...check.args], {
+    result = spawnSync(process.execPath, [check.script, ...checkArgs], {
       cwd: process.cwd(),
       env: process.env,
       encoding: "utf8",
@@ -171,12 +247,18 @@ for (const check of checks) {
   const output = `${result.stdout || ""}\n${result.stderr || ""}`;
   const exitCode = typeof result.status === "number" ? result.status : 1;
   let summary = summarizeOutput(output);
-  let clean = check.expectedFailurePattern
-    ? (exitCode !== 0 && check.expectedFailurePattern.test(output)) || (exitCode === 0 && /Overall: all launch proof checks passed\./i.test(output))
-    : exitCode === 0 && check.cleanPattern.test(output);
-  if (check.expectedFailurePattern && clean && exitCode !== 0) summary = `expected fail: ${summary}`;
+  const expectedFailurePattern = summaryOnly && check.summaryExpectedFailurePattern
+    ? check.summaryExpectedFailurePattern
+    : check.expectedFailurePattern;
+  const cleanPattern = summaryOnly && check.summaryCleanPattern
+    ? check.summaryCleanPattern
+    : check.cleanPattern;
+  let clean = expectedFailurePattern
+    ? (exitCode !== 0 && expectedFailurePattern.test(output)) || (exitCode === 0 && /Overall: all launch proof checks passed\./i.test(output))
+    : exitCode === 0 && cleanPattern.test(output);
+  if (expectedFailurePattern && clean && exitCode !== 0) summary = `expected fail: ${summary}`;
 
-  if (clean && check.withUnexpectedProofRegression) {
+  if (clean && !summaryOnly && check.withUnexpectedProofRegression) {
     const unexpectedProofPath = resolve(process.cwd(), "docs/unexpected-proof-regression.json");
     const createdUnexpectedProof = !existsSync(unexpectedProofPath);
     if (!createdUnexpectedProof) {
@@ -204,7 +286,7 @@ for (const check of checks) {
     }
   }
 
-  if (clean && check.withAuxiliarySnapshotContentRegression) {
+  if (clean && !summaryOnly && check.withAuxiliarySnapshotContentRegression) {
     const auxiliaryRegressionRoot = resolve(process.cwd(), ".tmp", `local-proof-aux-snapshot-regression-${process.pid}`);
     const auxiliaryDocsDir = resolve(auxiliaryRegressionRoot, "docs");
     const auxiliarySnapshotPath = resolve(auxiliaryDocsDir, "chain-proof-snapshot.json");
@@ -251,7 +333,7 @@ for (const check of checks) {
       rmSync(auxiliaryRegressionRoot, { recursive: true, force: true });
     }
   }
-  if (clean && check.withCanaryLogShapeRegression) {
+  if (clean && !summaryOnly && check.withCanaryLogShapeRegression) {
     const canaryRegressionRoot = resolve(process.cwd(), ".tmp", `local-proof-canary-log-regression-${process.pid}`);
     const canaryDirectoryPath = resolve(canaryRegressionRoot, "canary-log-dir");
     const canaryTextPath = resolve(canaryRegressionRoot, "live-canary.txt");
@@ -261,6 +343,7 @@ for (const check of checks) {
     const canaryNonObjectJsonlPath = resolve(canaryRegressionRoot, "live-canary-non-object.jsonl");
     const canaryTemplateJsonlPath = resolve(canaryRegressionRoot, "live-canary-template.jsonl");
     const canarySecretJsonlPath = resolve(canaryRegressionRoot, "live-canary-secret.jsonl");
+    const canaryUnsafeDiagnosticJsonlPath = resolve(canaryRegressionRoot, "live-canary-unsafe-diagnostic.jsonl");
     try {
       mkdirSync(canaryDirectoryPath, { recursive: true });
       writeFileSync(canaryTextPath, "{}\n", "utf8");
@@ -270,6 +353,10 @@ for (const check of checks) {
       writeFileSync(canaryNonObjectJsonlPath, "[]\n", "utf8");
       writeFileSync(canaryTemplateJsonlPath, JSON.stringify({ generatedAt: "TODO" }) + "\n", "utf8");
       writeFileSync(canarySecretJsonlPath, JSON.stringify({ generatedAt: "2026-07-09T00:00:00.000Z", rpcUrl: "https://rpc.example.test/secret-key" }) + "\n", "utf8");
+      writeFileSync(canaryUnsafeDiagnosticJsonlPath, JSON.stringify({
+        generatedAt: "2026-07-09T00:00:00.000Z",
+        diagnostic: "wallet retry used https://rpc.example.test for 0x1111111111111111111111111111111111111111",
+      }) + "\n", "utf8");
       const directoryResult = spawnSync(process.execPath, [check.script, ...check.args, `--canary-log=${canaryDirectoryPath}`], {
         cwd: process.cwd(),
         env: process.env,
@@ -334,6 +421,14 @@ for (const check of checks) {
       });
       const secretOutput = `${secretResult.stdout || ""}\n${secretResult.stderr || ""}`;
       const secretExitCode = typeof secretResult.status === "number" ? secretResult.status : 1;
+      const unsafeDiagnosticResult = spawnSync(process.execPath, [check.script, ...check.args, `--canary-log=${canaryUnsafeDiagnosticJsonlPath}`], {
+        cwd: process.cwd(),
+        env: process.env,
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+      });
+      const unsafeDiagnosticOutput = `${unsafeDiagnosticResult.stdout || ""}\n${unsafeDiagnosticResult.stderr || ""}`;
+      const unsafeDiagnosticExitCode = typeof unsafeDiagnosticResult.status === "number" ? unsafeDiagnosticResult.status : 1;
       if (directoryExitCode === 0 || !/canary log is not a file/i.test(directoryOutput)) {
         clean = false;
         summary = `canary log directory regression failed: ${summarizeOutput(directoryOutput)}`;
@@ -358,6 +453,9 @@ for (const check of checks) {
       } else if (secretExitCode === 0 || !/canary log first JSONL record has secret-like values/i.test(secretOutput)) {
         clean = false;
         summary = `canary log secret regression failed: ${summarizeOutput(secretOutput)}`;
+      } else if (unsafeDiagnosticExitCode === 0 || !/canary log first JSONL record has unsafe diagnostic values/i.test(unsafeDiagnosticOutput)) {
+        clean = false;
+        summary = `canary log unsafe diagnostic regression failed: ${summarizeOutput(unsafeDiagnosticOutput)}`;
       }
     } finally {
       rmSync(canaryRegressionRoot, { recursive: true, force: true });

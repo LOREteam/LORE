@@ -1,8 +1,11 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
+const summaryOnly = process.argv.includes("--summary-only");
 const repoRoot = process.cwd();
+const MAX_INDEXER_ARTIFACT_TEXT_BYTES = 256 * 1024;
+const MAX_INDEXER_PROOF_MANIFEST_BYTES = 512 * 1024;
 const args = new Map(
   process.argv
     .slice(2)
@@ -28,9 +31,13 @@ const REQUIRED_TABLES = [
   "scoped_indexer_events",
 ];
 const REQUIRED_CHAIN_COMPARISONS = ["jackpot", "deposits", "rewards", "rebates", "latestEpochs"];
+const indexerLaunchGates = ["G7"];
+const indexerLaunchGateGroups = "indexer=1";
 const TEMPLATE_VALUE_RE = /REPLACE_|<REDACTED>|TODO|TBD/i;
 const secretKeyPattern = /(secret|private[_-]?key|mnemonic|webhook|dsn|api[_-]?key|api[_-]?token|auth[_-]?token|access[_-]?token|bearer|session|cookie|password)/i;
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+const CANONICAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const knownNetworkChainIds = new Map([
   ["mainnet", "59144"],
   ["sepolia", "59141"],
@@ -61,16 +68,29 @@ function samePath(left, right) {
 }
 
 function isNonNegativeInteger(value) {
-  return /^\d+$/.test(value || "");
+  return parseCanonicalNonNegativeInteger(value) !== null;
 }
 
 function isPositiveInteger(value) {
-  return /^[1-9]\d*$/.test(value || "");
+  return parseCanonicalPositiveInteger(value) !== null;
+}
+
+function parseCanonicalNonNegativeInteger(value) {
+  const text = String(value ?? "").trim();
+  if (!CANONICAL_NON_NEGATIVE_INTEGER_RE.test(text)) return null;
+  const parsed = BigInt(text);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(parsed);
+}
+
+function parseCanonicalPositiveInteger(value) {
+  const parsed = parseCanonicalNonNegativeInteger(value);
+  return parsed !== null && parsed > 0 ? parsed : null;
 }
 
 function integerString(value) {
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return String(value);
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) return value.trim();
+  if (typeof value === "string" && parseCanonicalNonNegativeInteger(value) !== null) return value.trim();
   return "";
 }
 
@@ -78,7 +98,7 @@ function nonEmptyEpochList(value) {
   if (!Array.isArray(value) || value.length === 0) return false;
   return value.every((entry) => {
     if (typeof entry === "number") return Number.isSafeInteger(entry) && entry >= 0;
-    return typeof entry === "string" && /^\d+$/.test(entry.trim());
+    return typeof entry === "string" && parseCanonicalNonNegativeInteger(entry) !== null;
   });
 }
 
@@ -126,6 +146,15 @@ function hasIsoTimestamp(value) {
   return parsed.toISOString() === normalized;
 }
 
+function isoTimestampMs(value) {
+  return hasIsoTimestamp(value) ? new Date(String(value).trim()).getTime() : Number.NaN;
+}
+
+function hasNonFutureIsoTimestamp(value) {
+  const timestampMs = isoTimestampMs(value);
+  return Number.isFinite(timestampMs) && timestampMs <= Date.now() + 5 * 60 * 1000;
+}
+
 function statusOk(value) {
   return ["ok", "pass", "passed", "healthy", "success", "green", "verified"].includes(String(value ?? "").trim().toLowerCase());
 }
@@ -142,10 +171,42 @@ function hasEvidence(value) {
   ].some(hasRealText);
 }
 
+function hasPublicHttpsUrl(value) {
+  const text = String(value ?? "").trim();
+  const match = text.match(/https?:\/\/[^\s),.;]+/i);
+  if (!match) return false;
+  try {
+    const url = new URL(match[0]);
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+    return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+      );
+  } catch {
+    return false;
+  }
+}
+
 function hasConcreteText(value) {
   if (!hasRealText(value)) return false;
   const text = String(value).trim();
-  return /https?:\/\//i.test(text) ||
+  return hasPublicHttpsUrl(text) ||
     /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv|sqlite|db)(?:\b|$)/i.test(text) ||
     /\bnpm(?:\.cmd)?\s+run\s+(?:indexer:once|health:prod|proof:[a-z0-9:-]+)\b/i.test(text) ||
     /\bproof:[a-z0-9:-]+\b/i.test(text) ||
@@ -179,11 +240,27 @@ function localArtifactPathFromText(value, key = "") {
   return (artifactMatch || keySuggestsPath) && valueLooksLikePath ? candidate : "";
 }
 
+function localArtifactIsFile(artifactPath) {
+  return regularFileStat(resolve(process.cwd(), artifactPath)) !== null;
+}
+
+function readBoundedArtifactText(resolved) {
+  const fd = openSync(resolved, "r");
+  try {
+    const buffer = Buffer.alloc(MAX_INDEXER_ARTIFACT_TEXT_BYTES);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function localArtifactContentFromText(value, key = "") {
   const artifactPath = localArtifactPathFromText(value, key);
   if (!artifactPath) return "";
+  if (!localArtifactIsFile(artifactPath)) return "";
   try {
-    return readFileSync(resolve(process.cwd(), artifactPath), "utf8").slice(0, 256 * 1024);
+    return readBoundedArtifactText(resolve(process.cwd(), artifactPath));
   } catch {
     return "";
   }
@@ -223,7 +300,7 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   }
   if (typeof value === "string") {
     const artifactPath = localArtifactPathFromText(value, key);
-    if (artifactPath && !existsSync(resolve(process.cwd(), artifactPath))) {
+    if (artifactPath && !localArtifactIsFile(artifactPath)) {
       findings.push(`${path} -> ${artifactPath}`);
     }
     return findings;
@@ -233,6 +310,50 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
     findings.push(...findMissingLocalArtifactRefs(entry, `${path}.${childKey}`, childKey));
   }
   return findings;
+}
+
+function formatMissingLocalArtifactRefs(findings) {
+  const visible = summaryOnly ? findings.map((entry) => entry.split(" -> ")[0]) : findings;
+  return visible.slice(0, 5).join(", ");
+}
+
+function normalizedArtifactPathSet(value, key = "") {
+  if (typeof value === "string") {
+    const artifactPath = localArtifactPathFromText(value, key);
+    return artifactPath ? new Set([resolve(process.cwd(), artifactPath).replace(/[\\/]+/g, "/").toLowerCase()]) : new Set();
+  }
+  if (Array.isArray(value)) {
+    const paths = new Set();
+    for (const entry of value) {
+      for (const artifactPath of normalizedArtifactPathSet(entry, key)) paths.add(artifactPath);
+    }
+    return paths;
+  }
+  if (!isPlainObject(value)) return new Set();
+  const paths = new Set();
+  for (const [childKey, entry] of Object.entries(value)) {
+    for (const artifactPath of normalizedArtifactPathSet(entry, childKey)) paths.add(artifactPath);
+  }
+  return paths;
+}
+
+function sharedIndexerSectionArtifactIssues(manifest) {
+  const sections = [
+    ["dryRun", manifest.dryRun],
+    ["finality", manifest.finality],
+    ["chainSnapshot", manifest.chainSnapshot],
+  ].map(([name, value]) => [name, normalizedArtifactPathSet(value)]);
+  const findings = [];
+  for (let i = 0; i < sections.length; i += 1) {
+    for (let j = i + 1; j < sections.length; j += 1) {
+      const [leftName, leftPaths] = sections[i];
+      const [rightName, rightPaths] = sections[j];
+      for (const artifactPath of leftPaths) {
+        if (rightPaths.has(artifactPath)) findings.push(`${leftName} and ${rightName}`);
+      }
+    }
+  }
+  return [...new Set(findings)];
 }
 
 function evidenceText(value) {
@@ -262,6 +383,7 @@ function hasIndexerBlockMarker(value, label, expected) {
 function normalizedOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
+    if (url.username || url.password) return "";
     return `${url.protocol}//${url.host}`.toLowerCase();
   } catch {
     return "";
@@ -281,7 +403,7 @@ function hasProductionHealthBaseEvidence(value) {
     const artifactPath = localArtifactPathFromText(entry, key);
     if (!artifactPath) continue;
     const absolute = resolve(process.cwd(), artifactPath);
-    if (existsSync(absolute)) texts.push(readFileSync(absolute, "utf8").slice(0, 256 * 1024));
+    if (localArtifactIsFile(artifactPath)) texts.push(readBoundedArtifactText(absolute));
   }
   return texts.some((text) => {
     const match = String(text).match(/\bbase=([^\s]+)/i);
@@ -295,15 +417,48 @@ function hasNumericFinalityLagEvidence(value) {
     .filter(hasRealText)
     .join("\n");
   const match = text.match(/\bfinalityLagBlocks=([^\s]+)/i);
-  return Boolean(match && Number.isFinite(Number(match[1])));
+  return Boolean(match && parseCanonicalNonNegativeInteger(match[1]) !== null);
+}
+
+function textHasProductionBaseAndSafeFinality(text) {
+  const content = String(text ?? "");
+  const expected = expectedProductionHealthOrigin();
+  const basePattern = /\bbase=([^\s]+)/gi;
+  let baseMatches = false;
+  let baseMatch = basePattern.exec(content);
+  while (baseMatch !== null) {
+    if (normalizedOrigin(baseMatch[1]) === expected) {
+      baseMatches = true;
+      break;
+    }
+    baseMatch = basePattern.exec(content);
+  }
+  const finalityMatch = content.match(/\bfinalityLagBlocks=([^\s]+)/i);
+  return Boolean(baseMatches && finalityMatch && parseCanonicalNonNegativeInteger(finalityMatch[1]) !== null);
+}
+
+function localArtifactFinalityEvidenceHasSafeLag(value) {
+  const contents = localArtifactContents(value);
+  return contents.length > 0 && contents.some((content) => textHasProductionBaseAndSafeFinality(content));
 }
 function hasConfiguredRpcSource(value) {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  return normalized.length > 0 &&
-    !TEMPLATE_VALUE_RE.test(normalized) &&
-    normalized !== "built-in fallback" &&
-    normalized !== "fallback" &&
-    normalized !== "default";
+  const raw = String(value ?? "").trim();
+  const normalized = raw.toLowerCase();
+  if (
+    normalized.length === 0 ||
+    TEMPLATE_VALUE_RE.test(normalized) ||
+    normalized === "built-in fallback" ||
+    normalized === "fallback" ||
+    normalized === "default"
+  ) return false;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return true;
+
+  try {
+    const parsed = new URL(raw);
+    return !parsed.username && !parsed.password && !parsed.search && !parsed.hash;
+  } catch {
+    return false;
+  }
 }
 
 function findSecretLikeValues(value, path = "$") {
@@ -359,7 +514,11 @@ function validateManifest(manifest, issues) {
   }
   const missingArtifactRefs = findMissingLocalArtifactRefs(manifest);
   if (missingArtifactRefs.length > 0) {
-    issues.push(`local indexer artifact references must exist: ${missingArtifactRefs.slice(0, 5).join(", ")}`);
+    issues.push(`local indexer artifact references must exist: ${formatMissingLocalArtifactRefs(missingArtifactRefs)}`);
+  }
+  const sharedSectionArtifacts = sharedIndexerSectionArtifactIssues(manifest);
+  if (sharedSectionArtifacts.length > 0) {
+    issues.push(`indexer evidence sections must use distinct local artifact files across ${sharedSectionArtifacts.slice(0, 3).join(", ")}`);
   }
 
   const dryRun = isPlainObject(manifest.dryRun) ? manifest.dryRun : {};
@@ -397,7 +556,11 @@ function validateManifest(manifest, issues) {
   if (manifestStartBlock && !hasIndexerBlockMarker(dryRun, "Start block", manifestStartBlock)) {
     issues.push("dryRun evidence must include [indexer] Start block matching dryRun.startBlock");
   }
-  if (!hasIsoTimestamp(dryRun.timestamp)) issues.push("dryRun.timestamp must be ISO-8601 UTC");
+  if (!hasIsoTimestamp(dryRun.timestamp)) {
+    issues.push("dryRun.timestamp must be ISO-8601 UTC");
+  } else if (!hasNonFutureIsoTimestamp(dryRun.timestamp)) {
+    issues.push("dryRun.timestamp must not be in the future");
+  }
   if (!hasEvidence(dryRun)) issues.push("dryRun has no evidence");
   if (hasEvidence(dryRun) && !hasConcreteEvidence(dryRun)) issues.push("dryRun must include concrete indexer:once evidence path, command output, or indexer log summary");
   if (hasLocalArtifactRefs(dryRun)) {
@@ -418,11 +581,15 @@ function validateManifest(manifest, issues) {
   if (finality.dataSyncHealthFinalityAware !== true) issues.push("finality.dataSyncHealthFinalityAware must be true");
   if (!hasNumericFinalityLagEvidence(finality)) issues.push("finality.evidence must include numeric finalityLagBlocks from health:prod");
   if (!hasProductionHealthBaseEvidence(finality)) issues.push("finality.evidence must include base=<production origin> from health:prod");
-  if (!hasIsoTimestamp(finality.checkedAt)) issues.push("finality.checkedAt must be ISO-8601 UTC");
+  if (!hasIsoTimestamp(finality.checkedAt)) {
+    issues.push("finality.checkedAt must be ISO-8601 UTC");
+  } else if (!hasNonFutureIsoTimestamp(finality.checkedAt)) {
+    issues.push("finality.checkedAt must not be in the future");
+  }
   if (!hasEvidence(finality)) issues.push("finality has no evidence");
   if (hasEvidence(finality) && !hasConcreteEvidence(finality)) issues.push("finality must include concrete health:prod/finality evidence path, command output, or finalityLagBlocks summary");
-  if (hasLocalArtifactRefs(finality) && !localArtifactEvidenceMentions(finality, /\bbase=[^\s]+[\s\S]*\bfinalityLagBlocks=\d+\b|\bfinalityLagBlocks=\d+\b[\s\S]*\bbase=[^\s]+/i)) {
-    issues.push("finality evidence artifact must include health:prod base and numeric finalityLagBlocks");
+  if (hasLocalArtifactRefs(finality) && !localArtifactFinalityEvidenceHasSafeLag(finality)) {
+    issues.push("finality evidence artifact must include health:prod base and canonical non-negative decimal finalityLagBlocks");
   }
 
   const chainSnapshot = isPlainObject(manifest.chainSnapshot) ? manifest.chainSnapshot : {};
@@ -463,13 +630,17 @@ function validateManifest(manifest, issues) {
   if (chainSnapshot.contractAddressMatches !== true) {
     issues.push("chainSnapshot.contractAddressMatches must be true");
   }
-  if (!hasIsoTimestamp(chainSnapshot.checkedAt)) issues.push("chainSnapshot.checkedAt must be ISO-8601 UTC");
+  if (!hasIsoTimestamp(chainSnapshot.checkedAt)) {
+    issues.push("chainSnapshot.checkedAt must be ISO-8601 UTC");
+  } else if (!hasNonFutureIsoTimestamp(chainSnapshot.checkedAt)) {
+    issues.push("chainSnapshot.checkedAt must not be in the future");
+  }
   if (!hasEvidence(chainSnapshot)) issues.push("chainSnapshot has no evidence");
   if (hasEvidence(chainSnapshot) && !hasConcreteEvidence(chainSnapshot)) issues.push("chainSnapshot must include concrete direct-chain snapshot path, link, artifact, or RPC/contract summary");
   if (hasRealText(chainSnapshot.path)) {
     const snapshotArtifact = localArtifactPathFromText(chainSnapshot.path, "path");
     const snapshotContent = localArtifactContentFromText(chainSnapshot.path, "path");
-    if (snapshotArtifact && !existsSync(resolve(process.cwd(), snapshotArtifact))) {
+    if (snapshotArtifact && !localArtifactIsFile(snapshotArtifact)) {
       issues.push("chainSnapshot.path must point to an existing local artifact");
     }
     if (snapshotArtifact && snapshotContent && !/\bgeneratedAt\b[\s\S]*\brpcChainId\b[\s\S]*\bcontractAddress\b|\bcontractAddress\b[\s\S]*\brpcChainId\b[\s\S]*\bgeneratedAt\b/i.test(snapshotContent)) {
@@ -491,6 +662,8 @@ function validateManifest(manifest, issues) {
     }
     if (!hasIsoTimestamp(comparison.checkedAt)) {
       issues.push(`chainComparison.${key}.checkedAt must be ISO-8601 UTC`);
+    } else if (!hasNonFutureIsoTimestamp(comparison.checkedAt)) {
+      issues.push(`chainComparison.${key}.checkedAt must not be in the future`);
     }
     if (!hasEvidence(comparison)) issues.push(`chainComparison.${key} has no evidence`);
     if (hasEvidence(comparison) && !hasConcreteEvidence(comparison)) {
@@ -511,7 +684,7 @@ function validateManifest(manifest, issues) {
 function readCount(db, table) {
   try {
     const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get();
-    return Number(row?.count ?? 0);
+    return parseCanonicalNonNegativeInteger(row?.count);
   } catch {
     return null;
   }
@@ -543,9 +716,22 @@ function findMetaValue(rows, suffix) {
   return typeof row?.value === "string" ? row.value : "";
 }
 
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
 function fmtMtime(filePath) {
-  if (!existsSync(filePath)) return "missing";
-  return statSync(filePath).mtime.toISOString();
+  const stats = regularFileStat(filePath);
+  return stats ? stats.mtime.toISOString() : "missing";
+}
+
+function fileExists(filePath) {
+  return regularFileStat(filePath) !== null;
 }
 
 async function inspectDb(dbPath) {
@@ -564,62 +750,87 @@ async function inspectDb(dbPath) {
   }
 }
 
+function launchGateSummary(issueCount) {
+  const label = issueCount > 0 ? "blocked" : "covered";
+  return `${label} gates: ${indexerLaunchGates.join(", ")}; groups: ${indexerLaunchGateGroups}`;
+}
+
 const sourceRaw = argOrEnv("db", "LORE_DB_PATH");
 const source = pathStatus(sourceRaw);
 const startBlock = env("INDEXER_START_BLOCK");
 const publicDeployBlock = env("NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK");
 const finalityBlocks = env("INDEXER_FINALITY_BLOCKS");
-const minScopedEpochs = Number(env("INDEXER_DRY_RUN_MIN_SCOPED_EPOCHS") || args.get("min-scoped-epochs") || "0");
-const minScopedBets = Number(env("INDEXER_DRY_RUN_MIN_SCOPED_BETS") || args.get("min-scoped-bets") || "0");
 const manifestPath = args.get("manifest")?.trim() || env("INDEXER_PROOF_PATH") || "docs/indexer-proof.json";
 const issues = [];
+const startBlockParsed = parseCanonicalNonNegativeInteger(startBlock);
+const publicDeployBlockParsed = parseCanonicalNonNegativeInteger(publicDeployBlock);
+const finalityBlocksParsed = parseCanonicalPositiveInteger(finalityBlocks);
+const minScopedEpochsRaw = env("INDEXER_DRY_RUN_MIN_SCOPED_EPOCHS") || args.get("min-scoped-epochs")?.trim() || "0";
+const minScopedBetsRaw = env("INDEXER_DRY_RUN_MIN_SCOPED_BETS") || args.get("min-scoped-bets")?.trim() || "0";
+const minScopedEpochs = parseCanonicalNonNegativeInteger(minScopedEpochsRaw);
+const minScopedBets = parseCanonicalNonNegativeInteger(minScopedBetsRaw);
 let manifestSummary = null;
 
 console.log("# Indexer Dry-Run Proof");
 console.log("");
 console.log(`Timestamp: ${new Date().toISOString()}`);
 console.log(`Strict: ${strict ? "yes" : "no"}`);
-console.log(`Manifest: ${resolve(repoRoot, manifestPath)}`);
+console.log(`Manifest: ${summaryOnly ? (fileExists(resolve(repoRoot, manifestPath)) ? "present" : "missing") : resolve(repoRoot, manifestPath)}`);
 console.log("");
 
 if (!sourceRaw) issues.push("LORE_DB_PATH or --db is missing");
 if (sourceRaw && !existsSync(source.absolute)) issues.push("dry-run DB does not exist");
+if (sourceRaw && existsSync(source.absolute) && !fileExists(source.absolute)) issues.push("dry-run DB must be a file");
 if (strict && sourceRaw && (!source.isAbsolute || source.insideRepo)) {
   issues.push("dry-run DB path must be absolute and outside repo for launch proof");
 }
-if (strict && (!isNonNegativeInteger(startBlock) || !isNonNegativeInteger(publicDeployBlock))) {
-  issues.push("INDEXER_START_BLOCK and NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK must be non-negative integers");
+if (strict && (startBlockParsed === null || publicDeployBlockParsed === null)) {
+  issues.push("INDEXER_START_BLOCK and NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK must be canonical non-negative decimal integers");
 }
-if (strict && startBlock && publicDeployBlock && startBlock !== publicDeployBlock) {
+if (strict && startBlockParsed !== null && publicDeployBlockParsed !== null && startBlock !== publicDeployBlock) {
   issues.push("INDEXER_START_BLOCK and NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK must match");
 }
-if (strict && !isPositiveInteger(finalityBlocks)) {
-  issues.push("INDEXER_FINALITY_BLOCKS must be positive for launch proof");
+if (strict && finalityBlocksParsed === null) {
+  issues.push("INDEXER_FINALITY_BLOCKS must be a canonical positive decimal integer for launch proof");
+}
+if (minScopedEpochs === null) {
+  issues.push("INDEXER_DRY_RUN_MIN_SCOPED_EPOCHS/--min-scoped-epochs must be a canonical non-negative decimal integer");
+}
+if (minScopedBets === null) {
+  issues.push("INDEXER_DRY_RUN_MIN_SCOPED_BETS/--min-scoped-bets must be a canonical non-negative decimal integer");
 }
 if (strict && /\.draft\.json$/i.test(resolve(repoRoot, manifestPath))) {
   issues.push("draft proof manifests are not accepted as launch proof");
 }
-if (strict && !existsSync(resolve(repoRoot, manifestPath))) {
+const resolvedManifestPath = resolve(repoRoot, manifestPath);
+if (strict && !existsSync(resolvedManifestPath)) {
   issues.push("indexer proof manifest is missing");
 }
-if (existsSync(resolve(repoRoot, manifestPath))) {
-  try {
-    const manifest = JSON.parse(readFileSync(resolve(repoRoot, manifestPath), "utf8"));
-    manifestSummary = validateManifest(manifest, issues);
-  } catch (error) {
-    issues.push(`indexer proof manifest is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+if (existsSync(resolvedManifestPath)) {
+  const manifestStat = statSync(resolvedManifestPath);
+  if (!manifestStat.isFile()) {
+    issues.push("indexer proof manifest must be a file");
+  } else if (manifestStat.size > MAX_INDEXER_PROOF_MANIFEST_BYTES) {
+    issues.push("indexer proof manifest is too large to validate safely");
+  } else {
+    try {
+      const manifest = JSON.parse(readFileSync(resolvedManifestPath, "utf8"));
+      manifestSummary = validateManifest(manifest, issues);
+    } catch (error) {
+      issues.push(`indexer proof manifest is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }
 
 printTable(["Field", "Value"], [
-  ["db", sourceRaw ? source.absolute : "missing"],
-  ["db mtime", sourceRaw ? fmtMtime(source.absolute) : "missing"],
+  ["db", summaryOnly ? (sourceRaw && fileExists(source.absolute) ? "present" : "missing") : (sourceRaw ? source.absolute : "missing")],
+  ["db mtime", summaryOnly ? (sourceRaw && fileExists(source.absolute) ? "present" : "missing") : (sourceRaw ? fmtMtime(source.absolute) : "missing")],
   ["INDEXER_START_BLOCK", startBlock || "missing"],
   ["NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK", publicDeployBlock || "missing"],
   ["INDEXER_FINALITY_BLOCKS", finalityBlocks || "missing"],
-  ["min scoped epochs", String(minScopedEpochs)],
-  ["min scoped bets", String(minScopedBets)],
-  ["manifest", resolve(repoRoot, manifestPath)],
+  ["min scoped epochs", minScopedEpochs === null ? "invalid" : String(minScopedEpochs)],
+  ["min scoped bets", minScopedBets === null ? "invalid" : String(minScopedBets)],
+  ["manifest", summaryOnly ? (fileExists(resolve(repoRoot, manifestPath)) ? "present" : "missing") : resolve(repoRoot, manifestPath)],
 ]);
 
 if (manifestSummary) {
@@ -651,40 +862,50 @@ if (issues.length === 0) {
   if (strict && startBlock && isNonNegativeInteger(lastIndexedBlock) && BigInt(lastIndexedBlock) < BigInt(startBlock)) {
     issues.push("lastIndexedBlock is lower than INDEXER_START_BLOCK");
   }
-  if (strict && inspected.counts.scoped_epochs != null && inspected.counts.scoped_epochs < minScopedEpochs) {
+  if (strict && minScopedEpochs !== null && inspected.counts.scoped_epochs != null && inspected.counts.scoped_epochs < minScopedEpochs) {
     issues.push(`scoped_epochs count ${inspected.counts.scoped_epochs} < ${minScopedEpochs}`);
   }
-  if (strict && inspected.counts.scoped_bets != null && inspected.counts.scoped_bets < minScopedBets) {
+  if (strict && minScopedBets !== null && inspected.counts.scoped_bets != null && inspected.counts.scoped_bets < minScopedBets) {
     issues.push(`scoped_bets count ${inspected.counts.scoped_bets} < ${minScopedBets}`);
   }
 
-  console.log("");
-  console.log("## DB Integrity");
-  printTable(["Field", "Value"], [
-    ["integrity_check", inspected.integrity],
-    ["tables", inspected.tables.join(", ") || "none"],
-    ["lastIndexedBlock", lastIndexedBlock || "missing"],
-    ["currentEpoch", currentEpoch || "missing"],
-    ["repairCursorBlock", repairCursorBlock || "missing"],
-  ]);
+  if (summaryOnly) {
+    console.log("");
+    console.log("## DB Summary");
+    printTable(["Field", "Value"], [
+      ["integrity_check", inspected.integrity],
+      ["required tables", inspected.tables.length >= REQUIRED_TABLES.length ? "present" : "missing"],
+      ["meta rows", String(inspected.metaRows.length)],
+    ]);
+  } else {
+    console.log("");
+    console.log("## DB Integrity");
+    printTable(["Field", "Value"], [
+      ["integrity_check", inspected.integrity],
+      ["tables", inspected.tables.join(", ") || "none"],
+      ["lastIndexedBlock", lastIndexedBlock || "missing"],
+      ["currentEpoch", currentEpoch || "missing"],
+      ["repairCursorBlock", repairCursorBlock || "missing"],
+    ]);
 
-  console.log("");
-  console.log("## Row Counts");
-  printTable(
-    ["Table", "Rows"],
-    Object.entries(inspected.counts).map(([table, count]) => [table, count == null ? "missing" : String(count)]),
-  );
+    console.log("");
+    console.log("## Row Counts");
+    printTable(
+      ["Table", "Rows"],
+      Object.entries(inspected.counts).map(([table, count]) => [table, count == null ? "missing" : String(count)]),
+    );
 
-  console.log("");
-  console.log("## Relevant Meta");
-  printTable(
-    ["Key", "Value"],
-    inspected.metaRows.map((row) => [String(row.key ?? ""), String(row.value ?? "")]),
-  );
+    console.log("");
+    console.log("## Relevant Meta");
+    printTable(
+      ["Key", "Value"],
+      inspected.metaRows.map((row) => [String(row.key ?? ""), String(row.value ?? "")]),
+    );
+  }
 }
 
 console.log("");
-console.log(`Summary: ${issues.length === 0 ? "indexer dry-run proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+console.log(`Summary: ${issues.length === 0 ? "indexer dry-run proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}; ${launchGateSummary(issues.length)}.`);
 console.log("Copy this summary into `docs/mainnet-proof-record.md` only after confirming `npm run indexer:once` used a fresh DB, intended RPC/deploy block, finality lag, and direct chain comparison evidence.");
 
 if (strict && issues.length > 0) {

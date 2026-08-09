@@ -78,13 +78,42 @@ function hasRealText(value) {
 function isFinalHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
     return (
       url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
       url.pathname === "/" &&
       url.search === "" &&
       url.hash === "" &&
-      !["localhost", "127.0.0.1", "0.0.0.0"].includes(url.hostname) &&
-      !url.hostname.endsWith(".local")
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      )
     );
   } catch {
     return false;
@@ -98,7 +127,7 @@ function printHelp() {
 Options:
   --provider=<name>          External monitor provider, e.g. Better Stack, Datadog, Grafana Cloud.
   --error-provider=<name>    Error tracking provider, e.g. Sentry or Datadog.
-  --origin=<https-origin>    Final non-local HTTPS origin without path/query/hash.
+  --origin=<https-origin>    Final public HTTPS origin without path/query/hash.
   --alert-target=<target>    Alert delivery target label. Default: TODO: alert target.
   --release=<id>             Release/deploy id for the test plan. Default: TODO: release or deploy id.
   --out=<path>               Output markdown path. Default: docs/monitoring-alert-test-plan.draft.md.
@@ -119,7 +148,7 @@ const releaseOrDeploy = argValue("release", process.env.VERCEL_GIT_COMMIT_SHA ||
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/monitoring-alert-test-plan.draft.md"));
 
 if (!isFinalHttpsOrigin(origin)) {
-  throw new Error("--origin must be a non-local HTTPS origin without path, query, or hash");
+  throw new Error("--origin must be a public HTTPS origin without path, query, or hash");
 }
 if (!hasRealText(provider)) {
   throw new Error("--provider must identify the monitoring provider");
@@ -141,7 +170,7 @@ This is a draft checklist. It is not launch proof until every TODO is replaced w
 
 - Provider: ${provider}
 - Origin: ${origin}
-- Alert target: ${alertTarget}
+- Required email alert target: ${alertTarget}
 - Error tracking: ${errorProvider}
 - Release/deploy: ${releaseOrDeploy}
 
@@ -156,6 +185,7 @@ ${rows}
 - Run tests on staging/canary first; do not use synthetic failures against production users.
 - Keep payloads redacted: no private keys, auth tokens, raw cookies, or full wallet inventory dumps.
 - Every alert needs a fired event and a recovery/resolution event.
+- Strict proof requires a verified email alert target with concrete fired-alert evidence.
 - Reverted transaction monitoring must prove repeated failures are visible without leaking sensitive wallet/session data.
 - Stale indexer and lag checks must use the same finality assumptions as production.
 

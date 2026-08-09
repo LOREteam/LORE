@@ -2,20 +2,36 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright-core";
 import { findExecutablePath, warmBaseUrl } from "./smoke-browser-lib/core.mjs";
+import { redactProofText } from "./redact-proof-output.mjs";
 
+const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const BASE_URL = process.env.BASELINE_BASE_URL || "http://localhost:3000";
-const OBSERVE_MS = Number.parseInt(process.env.BASELINE_OBSERVE_MS || "10000", 10);
-const SAMPLE_MS = Number.parseInt(process.env.BASELINE_SAMPLE_MS || "30000", 10);
+const SUMMARY_ONLY = process.argv.includes("--summary-only");
+const OBSERVE_MS = parsePositiveIntegerEnv("BASELINE_OBSERVE_MS", 10_000, 1_000, 900_000);
+const SAMPLE_MS = parsePositiveIntegerEnv("BASELINE_SAMPLE_MS", 30_000, 1_000, 60_000);
 const VIEWPORT_TEXT = process.env.BASELINE_VIEWPORT || "1440x900";
 const OUTPUT_PATH = path.resolve(
   process.env.BASELINE_OUT || "artifacts/performance/browser-baseline.json",
 );
+const MAX_BASELINE_DIAGNOSTIC_CHARS = 500;
+const MAX_API_LATENCY_SAMPLES_PER_PATH = 128;
 
-if (!Number.isFinite(OBSERVE_MS) || OBSERVE_MS < 1_000 || OBSERVE_MS > 900_000) {
-  throw new Error("BASELINE_OBSERVE_MS must be between 1000 and 900000");
-}
-if (!Number.isFinite(SAMPLE_MS) || SAMPLE_MS < 1_000 || SAMPLE_MS > 60_000) {
-  throw new Error("BASELINE_SAMPLE_MS must be between 1000 and 60000");
+function parsePositiveIntegerEnv(name, fallback, min, max) {
+  const raw = process.env[name]?.trim();
+  const value = raw && raw.length > 0 ? raw : String(fallback);
+  if (!DECIMAL_INTEGER_RE.test(value)) {
+    throw new Error(`${name} must be a decimal integer between ${min} and ${max}`);
+  }
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) {
+    throw new Error(`${name} must be a decimal integer between ${min} and ${max}`);
+  }
+  const numeric = Number(parsed);
+  if (!Number.isSafeInteger(numeric) || numeric < min || numeric > max) {
+    throw new Error(`${name} must be a decimal integer between ${min} and ${max}`);
+  }
+  return numeric;
 }
 
 const viewportMatch = /^(\d{3,4})x(\d{3,4})$/.exec(VIEWPORT_TEXT);
@@ -38,14 +54,31 @@ const browserCandidates = [
 ].filter(Boolean);
 
 const round = (value) => (Number.isFinite(value) ? Math.round(value * 100) / 100 : null);
-const sanitizeDiagnostic = (value) =>
-  String(value || "")
+function sanitizeDiagnostic(value) {
+  const text = redactProofText(value)
     .replace(/(?:https?|wss?):\/\/\S+/gi, "<url>")
     .replace(/nonce-[^'\s;]+/gi, "nonce-<redacted>")
     .replace(/sha256-[^'\s;]+/gi, "sha256-<redacted>")
     .replace(/0x[a-f0-9]{40,64}/gi, "<hex>")
     .replace(/\b[a-f0-9]{64}\b/gi, "<hex>")
-    .slice(0, 500);
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_BASELINE_DIAGNOSTIC_CHARS) return text;
+  return `${text.slice(0, MAX_BASELINE_DIAGNOSTIC_CHARS - 15)}...<truncated>`;
+}
+
+function summarizeLatencySamples(samples) {
+  if (samples.length === 0) return null;
+  const sorted = [...samples].sort((left, right) => left - right);
+  const percentileIndex = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1);
+  return {
+    samples: sorted.length,
+    minMs: round(sorted[0]),
+    meanMs: round(sorted.reduce((sum, value) => sum + value, 0) / sorted.length),
+    p95Ms: round(sorted[percentileIndex]),
+    maxMs: round(sorted.at(-1)),
+  };
+}
 
 await warmBaseUrl(BASE_URL, 90_000);
 const executablePath = await findExecutablePath(browserCandidates);
@@ -60,6 +93,8 @@ try {
   const baseOrigin = new URL(BASE_URL).origin;
   const baseUrl = new URL(BASE_URL);
   const apiCounts = new Map();
+  const apiRequestStartedAt = new WeakMap();
+  const apiResponseLatencyByPath = new Map();
   const jsonRpcMethodCounts = new Map();
   const resourceTypeCounts = new Map();
   let externalFetchCount = 0;
@@ -70,6 +105,8 @@ try {
   let externalRequestFailureCount = 0;
   let ignoredLocalRscAbortCount = 0;
   let ignoredLocalWalletCoopAbortCount = 0;
+  let ignoredLocalChatPollAbortCount = 0;
+  let ignoredLocalRecentWinsPollAbortCount = 0;
   const consoleErrorKinds = new Map();
   const consoleErrorTargets = new Map();
   const consoleErrorSamples = [];
@@ -82,6 +119,13 @@ try {
   };
 
   const increment = (map, key) => map.set(key, (map.get(key) || 0) + 1);
+  const addApiLatencySample = (path, durationMs) => {
+    if (!Number.isFinite(durationMs) || durationMs < 0) return;
+    const samples = apiResponseLatencyByPath.get(path) || [];
+    if (samples.length >= MAX_API_LATENCY_SAMPLES_PER_PATH) return;
+    samples.push(durationMs);
+    apiResponseLatencyByPath.set(path, samples);
+  };
 
   await page.addInitScript(() => {
     window.__lorePerformanceBaseline = { cls: 0, inp: 0, inpEvent: null, lcp: 0, lcpElement: null, longTasks: [] };
@@ -151,6 +195,7 @@ try {
     const url = new URL(request.url());
     if (isLocalTarget(url) && url.pathname.startsWith("/api/")) {
       increment(apiCounts, url.pathname);
+      apiRequestStartedAt.set(request, Date.now());
     } else if (!isLocalTarget(url)) {
       externalFetchCount += 1;
       try {
@@ -167,12 +212,19 @@ try {
     }
   });
   page.on("response", (response) => {
-    if (response.status() < 400) return;
     const url = new URL(response.url());
+    const request = response.request();
+    const requestStartedAt = apiRequestStartedAt.get(request);
+    if (isLocalTarget(url) && url.pathname.startsWith("/api/") && requestStartedAt !== undefined) {
+      addApiLatencySample(url.pathname, Date.now() - requestStartedAt);
+      apiRequestStartedAt.delete(request);
+    }
+    if (response.status() < 400) return;
     if (isLocalTarget(url)) failedLocalResponseCount += 1;
     else failedExternalResponseCount += 1;
   });
   page.on("requestfailed", (request) => {
+    apiRequestStartedAt.delete(request);
     const url = new URL(request.url());
     const target = isLocalTarget(url) ? "local" : "external";
     const error = sanitizeDiagnostic(request.failure()?.errorText || "unknown");
@@ -190,6 +242,18 @@ try {
       && url.pathname === baseUrl.pathname
       && url.search === ""
       && error === "net::ERR_ABORTED";
+    const isExpectedLocalChatPollAbort =
+      target === "local"
+      && request.method() === "GET"
+      && request.resourceType() === "fetch"
+      && url.pathname === "/api/chat/messages"
+      && error === "net::ERR_ABORTED";
+    const isExpectedLocalRecentWinsPollAbort =
+      target === "local"
+      && request.method() === "GET"
+      && request.resourceType() === "fetch"
+      && url.pathname === "/api/recent-wins"
+      && error === "net::ERR_ABORTED";
     if (isExpectedLocalRscAbort) {
       ignoredLocalRscAbortCount += 1;
       return;
@@ -197,6 +261,16 @@ try {
     if (isExpectedLocalWalletCoopAbort) {
       // Coinbase Wallet SDK probes the current page's COOP header with HEAD.
       ignoredLocalWalletCoopAbortCount += 1;
+      return;
+    }
+    if (isExpectedLocalChatPollAbort) {
+      // React dev cleanup can abort the stale chat poll; keep it visible without degrading the page.
+      ignoredLocalChatPollAbortCount += 1;
+      return;
+    }
+    if (isExpectedLocalRecentWinsPollAbort) {
+      // React dev cleanup can abort the stale recent-wins poll; keep it visible without degrading the page.
+      ignoredLocalRecentWinsPollAbortCount += 1;
       return;
     }
 
@@ -360,6 +434,11 @@ try {
         ([...apiCounts.values()].reduce((sum, count) => sum + count, 0) * 60_000) / OBSERVE_MS,
       ),
       sameOriginApiByPath: Object.fromEntries([...apiCounts.entries()].sort()),
+      sameOriginApiResponseLatencyByPath: Object.fromEntries(
+        [...apiResponseLatencyByPath.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([path, samples]) => [path, summarizeLatencySamples(samples)]),
+      ),
       externalFetchCount,
       externalJsonRpcByMethod: Object.fromEntries([...jsonRpcMethodCounts.entries()].sort()),
       failedLocalResponseCount,
@@ -369,6 +448,8 @@ try {
       externalRequestFailureCount,
       ignoredLocalRscAbortCount,
       ignoredLocalWalletCoopAbortCount,
+      ignoredLocalChatPollAbortCount,
+      ignoredLocalRecentWinsPollAbortCount,
       requestFailureSamples,
     },
     runtime: {
@@ -401,10 +482,62 @@ try {
     },
   };
 
-  await fs.mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
-  await fs.writeFile(OUTPUT_PATH, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  console.log(JSON.stringify(report, null, 2));
-  console.log(`Browser baseline written: ${path.relative(process.cwd(), OUTPUT_PATH)}`);
+  const summaryReport = {
+    schemaVersion: report.schemaVersion,
+    startedAt: report.startedAt,
+    target: report.target,
+    observationMs: report.observationMs,
+    quality: report.quality,
+    vitals: report.vitals,
+    resources: {
+      count: report.resources.count,
+      transferredBytes: report.resources.transferredBytes,
+      decodedBytes: report.resources.decodedBytes,
+      byType: report.resources.byType,
+    },
+    requests: {
+      sameOriginApiCount: report.requests.sameOriginApiCount,
+      sameOriginApiPerMinute: report.requests.sameOriginApiPerMinute,
+      sameOriginApiResponseLatencyByPath: report.requests.sameOriginApiResponseLatencyByPath,
+      externalFetchCount: report.requests.externalFetchCount,
+      failedLocalResponseCount: report.requests.failedLocalResponseCount,
+      failedExternalResponseCount: report.requests.failedExternalResponseCount,
+      requestFailureCount: report.requests.requestFailureCount,
+      localRequestFailureCount: report.requests.localRequestFailureCount,
+      externalRequestFailureCount: report.requests.externalRequestFailureCount,
+      ignoredLocalRscAbortCount: report.requests.ignoredLocalRscAbortCount,
+      ignoredLocalWalletCoopAbortCount: report.requests.ignoredLocalWalletCoopAbortCount,
+      ignoredLocalChatPollAbortCount: report.requests.ignoredLocalChatPollAbortCount,
+      ignoredLocalRecentWinsPollAbortCount: report.requests.ignoredLocalRecentWinsPollAbortCount,
+    },
+    runtime: {
+      initialDomNodes: report.runtime.initialDomNodes,
+      domNodes: report.runtime.domNodes,
+      domNodeDelta: report.runtime.domNodeDelta,
+      jsHeapUsedBytes: report.runtime.jsHeapUsedBytes,
+      jsHeapUsedDeltaBytes: report.runtime.jsHeapUsedDeltaBytes,
+      maxJsHeapUsedBytes: report.runtime.maxJsHeapUsedBytes,
+      jsHeapPeakDeltaBytes: report.runtime.jsHeapPeakDeltaBytes,
+      maxDomNodes: report.runtime.maxDomNodes,
+      domNodePeakDelta: report.runtime.domNodePeakDelta,
+      sampleCount: report.runtime.samples.length,
+      longTaskCount: report.runtime.longTaskCount,
+      longTaskTotalMs: report.runtime.longTaskTotalMs,
+      longestTaskMs: report.runtime.longestTaskMs,
+      consoleErrorCount: report.runtime.consoleErrorCount,
+      consoleErrorsByKind: report.runtime.consoleErrorsByKind,
+      consoleErrorsByTarget: report.runtime.consoleErrorsByTarget,
+    },
+  };
+
+  if (SUMMARY_ONLY) {
+    console.log(JSON.stringify(summaryReport, null, 2));
+  } else {
+    await fs.mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
+    await fs.writeFile(OUTPUT_PATH, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    console.log(JSON.stringify(report, null, 2));
+    console.log(`Browser baseline written: ${path.relative(process.cwd(), OUTPUT_PATH)}`);
+  }
   await context.close();
 } finally {
   await browser.close();

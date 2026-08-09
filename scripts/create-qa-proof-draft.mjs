@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const ZERO_TX = "0x0000000000000000000000000000000000000000000000000000000000000000";
+const MAX_QA_DRAFT_ARTIFACT_BYTES = 512 * 1024;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 function refuseFinalProofOutput(outPath) {
   const normalized = path.relative(process.cwd(), outPath).replace(/\\/g, "/");
@@ -18,13 +20,41 @@ function argValue(name, fallback = "") {
 function isFinalHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase();
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
     return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
       url.pathname === "/" &&
       url.search === "" &&
       url.hash === "" &&
-      !["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host) &&
-      !host.endsWith(".local");
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      );
   } catch {
     return false;
   }
@@ -45,9 +75,23 @@ function knownChainId(network) {
 }
 
 function isPositiveInteger(value) {
+  return parsePositiveInteger(value) !== null;
+}
+
+function parsePositiveInteger(value) {
   const normalized = String(value ?? "").trim();
-  if (!/^[1-9]\d*$/.test(normalized)) return false;
-  return Number.isSafeInteger(Number(normalized));
+  if (!/^[1-9]\d{0,15}$/.test(normalized)) return null;
+  const parsed = BigInt(normalized);
+  return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
+}
+
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
 }
 
 function requireExistingArtifact(name) {
@@ -56,10 +100,30 @@ function requireExistingArtifact(name) {
     throw new Error(`--${name} is required when drafting QA launch evidence`);
   }
   const resolved = path.resolve(process.cwd(), value);
-  if (!existsSync(resolved)) {
-    throw new Error(`--${name} must point to an existing redacted artifact`);
+  const stats = regularFileStat(resolved);
+  if (!stats) {
+    throw new Error(`--${name} must point to an existing redacted file artifact`);
+  }
+  if (stats.size > MAX_QA_DRAFT_ARTIFACT_BYTES) {
+    throw new Error(`--${name} artifact is too large to reference safely`);
   }
   return value;
+}
+
+function sameArtifact(left, right) {
+  return path.resolve(process.cwd(), left).toLowerCase() === path.resolve(process.cwd(), right).toLowerCase();
+}
+
+function requireDistinctArtifacts(entries) {
+  for (let leftIndex = 0; leftIndex < entries.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
+      const [leftName, leftPath] = entries[leftIndex];
+      const [rightName, rightPath] = entries[rightIndex];
+      if (sameArtifact(leftPath, rightPath)) {
+        throw new Error(`--${leftName} and --${rightName} must point to distinct QA evidence files`);
+      }
+    }
+  }
 }
 
 function isRealTx(value) {
@@ -91,8 +155,16 @@ const finalQaArtifact = requireExistingArtifact("finalqa-artifact");
 const smokeArtifact = requireExistingArtifact("smoke-artifact");
 const cleanWalletTx = argValue("clean-wallet-tx");
 
+requireDistinctArtifacts([
+  ["wallet-artifact", walletArtifact],
+  ["failure-artifact", failureArtifact],
+  ["support-artifact", supportArtifact],
+  ["finalqa-artifact", finalQaArtifact],
+  ["smoke-artifact", smokeArtifact],
+]);
+
 if (!isFinalHttpsOrigin(origin)) {
-  throw new Error("--origin must be a non-local HTTPS origin without path, query, or hash");
+  throw new Error("--origin must be a public HTTPS origin without path, query, or hash");
 }
 if (!String(network).trim() || /TODO|TBD/i.test(network)) {
   throw new Error("--network must identify the target network");
@@ -103,7 +175,11 @@ if (normalizeNetwork(network) !== "mainnet") {
 if (!isPositiveInteger(chainId)) {
   throw new Error("--chain-id must be a positive integer or derivable from --network");
 }
-if (Number(chainId) !== 59144) {
+const parsedChainId = parsePositiveInteger(chainId);
+if (parsedChainId === null) {
+  throw new Error("--chain-id must be a safe positive integer or derivable from --network");
+}
+if (parsedChainId !== 59144) {
   throw new Error("--chain-id must be 59144 for Linea mainnet launch proof");
 }
 if (!isRealTx(cleanWalletTx)) {
@@ -112,14 +188,15 @@ if (!isRealTx(cleanWalletTx)) {
 
 const manifest = {
   targetNetwork: network,
-  targetChainId: chainId,
+  targetChainId: parsedChainId,
   wallet: {
     privyAllowedOrigins: {
       status: "TODO",
       origin,
       exactProductionOrigin: false,
       developmentFallbackAppIdUsed: true,
-      evidence: walletArtifact ? `artifact: ${walletArtifact}` : "TODO: Privy dashboard allowed-origin proof",
+      productionAppIdConfigured: false,
+      evidence: walletArtifact ? `artifact: ${walletArtifact}` : "TODO: Privy dashboard allowed-origin and production app id proof",
       checkedAt: "TODO: ISO timestamp",
     },
     desktopConnect: check("desktop wallet connect", walletArtifact, origin),
@@ -128,7 +205,7 @@ const manifest = {
     wrongNetwork: {
       status: "TODO",
       origin,
-      targetChainId: chainId,
+      targetChainId: parsedChainId,
       testedChainId: "TODO: wrong chain id used for negative test",
       unsupportedChainWarningVisible: false,
       evidence: walletArtifact ? `artifact: ${walletArtifact}` : "TODO: wrong-network warning screenshot or QA note",
@@ -139,7 +216,7 @@ const manifest = {
       status: "TODO",
       origin,
       network,
-      chainId,
+      chainId: parsedChainId,
       txHash: cleanWalletTx,
       evidence: walletArtifact ? `artifact: ${walletArtifact}` : "TODO: real clean-wallet first transaction hash and QA note",
       checkedAt: "TODO: ISO timestamp",
@@ -166,7 +243,7 @@ const manifest = {
     },
     autoMinerLogFields: {
       status: "TODO",
-      fields: ["round", "epoch", "nonce", "txHash", "retryCount"],
+      fields: ["round", "epoch", "nonce", "txHash", "retryCount", "stopReason"],
       evidence: supportArtifact ? `artifact: ${supportArtifact}` : "TODO: auto-miner log QA note or screenshot",
       checkedAt: "TODO: ISO timestamp",
     },

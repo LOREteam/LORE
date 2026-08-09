@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 function refuseFinalProofOutput(outPath) {
@@ -9,6 +9,11 @@ function refuseFinalProofOutput(outPath) {
 }
 
 const COMPARISON_KEYS = ["jackpot", "deposits", "rewards", "rebates", "latestEpochs"];
+const CANONICAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const CANONICAL_POSITIVE_INTEGER_RE = /^[1-9]\d{0,15}$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const MAX_KEY_VALUE_MARKERS = 64;
+const MAX_INDEXER_EVIDENCE_BYTES = 512 * 1024;
 
 function argValue(name, fallback = "") {
   const prefix = `--${name}=`;
@@ -23,11 +28,24 @@ function requireConcreteValue(name, value) {
   return value;
 }
 
+function regularFileStat(filePath) {
+  try {
+    const stat = statSync(filePath);
+    return stat.isFile() ? stat : null;
+  } catch {
+    return null;
+  }
+}
+
 function readRequiredLog(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  if (!existsSync(resolved)) {
+  const stat = regularFileStat(resolved);
+  if (!stat) {
     throw new Error(`--${name} must point to an existing redacted artifact`);
+  }
+  if (stat.size > MAX_INDEXER_EVIDENCE_BYTES) {
+    throw new Error(`--${name} artifact is too large to validate safely`);
   }
   return readFileSync(resolved, "utf8");
 }
@@ -42,6 +60,7 @@ function firstMatchingLine(text, pattern) {
 function normalizedOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
+    if (url.username || url.password) return "";
     return `${url.protocol}//${url.host}`.toLowerCase();
   } catch {
     return "";
@@ -54,7 +73,14 @@ function expectedProductionHealthOrigin() {
 
 function parseKeyValues(line = "") {
   const result = {};
-  for (const match of line.matchAll(/([a-zA-Z][a-zA-Z0-9]*)=([^\s]+)/g)) {
+  const pattern = /([a-zA-Z][a-zA-Z0-9]*)=([^\s]+)/g;
+  let inspected = 0;
+  let match;
+  while ((match = pattern.exec(line)) !== null) {
+    inspected += 1;
+    if (inspected > MAX_KEY_VALUE_MARKERS) {
+      throw new Error("indexer evidence has too many key/value markers to validate safely");
+    }
     result[match[1]] = match[2];
   }
   return result;
@@ -68,13 +94,20 @@ function lastMatchingLine(text, pattern) {
 }
 
 function parseInteger(value) {
-  const parsed = Number(String(value ?? "").trim());
-  return Number.isSafeInteger(parsed) ? parsed : null;
+  const text = String(value ?? "").trim();
+  if (!CANONICAL_NON_NEGATIVE_INTEGER_RE.test(text)) return null;
+  const parsed = BigInt(text);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(parsed);
 }
 
 function isPositiveInteger(value) {
   const parsed = parseInteger(value);
-  return parsed != null && parsed > 0;
+  return parsed !== null && parsed > 0 && CANONICAL_POSITIVE_INTEGER_RE.test(String(value ?? "").trim());
+}
+
+function isNonNegativeInteger(value) {
+  return parseInteger(value) != null;
 }
 
 function isPlainObject(value) {
@@ -84,14 +117,18 @@ function isPlainObject(value) {
 function readRequiredJson(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  if (!existsSync(resolved)) {
-    throw new Error(`--${name} must point to an existing redacted artifact`);
+  const stat = regularFileStat(resolved);
+  if (!stat) {
+    throw new Error(`--${name} must point to an existing redacted JSON artifact`);
+  }
+  if (stat.size > MAX_INDEXER_EVIDENCE_BYTES) {
+    throw new Error(`--${name} JSON artifact is too large to validate safely`);
   }
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(resolved, "utf8"));
-  } catch (error) {
-    console.error(`--${name} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  } catch {
+    console.error(`--${name} must be valid JSON`);
     process.exit(1);
   }
   if (!isPlainObject(parsed)) {
@@ -99,6 +136,37 @@ function readRequiredJson(name, filePath) {
     process.exit(1);
   }
   return parsed;
+}
+
+function normalizeRpcSource(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
+
+  const parsed = new URL(raw);
+  requireCondition(
+    !parsed.username && !parsed.password && !parsed.search && !parsed.hash,
+    "--chain-snapshot rpcSource must be a redacted label or origin-only URL",
+  );
+  return parsed.origin;
+}
+
+function sameArtifact(left, right) {
+  if (!left || !right) return false;
+  return path.resolve(process.cwd(), left).replace(/[\\/]+/g, "/").toLowerCase() ===
+    path.resolve(process.cwd(), right).replace(/[\\/]+/g, "/").toLowerCase();
+}
+
+function requireDistinctArtifactInputs(entries) {
+  for (let i = 0; i < entries.length; i += 1) {
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const { name: leftName, filePath: leftPath } = entries[i];
+      const { name: rightName, filePath: rightPath } = entries[j];
+      if (sameArtifact(leftPath, rightPath)) {
+        throw new Error(`--${leftName} and --${rightName} must point to distinct indexer evidence files`);
+      }
+    }
+  }
 }
 
 function normalizeAddress(value) {
@@ -150,14 +218,23 @@ function requireMatchingIndexerLine(line, label, expected) {
 }
 
 function requireMatchingChainId(label, value, expected) {
-  requireCondition(Number(value) === Number(expected), `--chain-snapshot ${label} must match ${expected}`);
+  requireCondition(isPositiveInteger(value), `--chain-snapshot ${label} must be a canonical positive decimal integer`);
+  requireCondition(String(value).trim() === String(expected).trim(), `--chain-snapshot ${label} must match ${expected}`);
 }
 
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/indexer-proof.draft.json"));
 refuseFinalProofOutput(outPath);
-const indexerLog = readRequiredLog("indexer-log", argValue("indexer-log"));
-const healthLog = readRequiredLog("health-log", argValue("health-log"));
-const chainSnapshotPath = requireConcreteValue("chain-snapshot", argValue("chain-snapshot"));
+const indexerLogPath = argValue("indexer-log");
+const healthLogPath = argValue("health-log");
+const chainSnapshotPath = argValue("chain-snapshot");
+requireDistinctArtifactInputs([
+  { name: "indexer-log", filePath: indexerLogPath },
+  { name: "health-log", filePath: healthLogPath },
+  { name: "chain-snapshot", filePath: chainSnapshotPath },
+]);
+const indexerLog = readRequiredLog("indexer-log", indexerLogPath);
+const healthLog = readRequiredLog("health-log", healthLogPath);
+requireConcreteValue("chain-snapshot", chainSnapshotPath);
 const chainSnapshot = readRequiredJson("chain-snapshot", chainSnapshotPath);
 const now = new Date().toISOString();
 const freshDb = argValue("fresh-db");
@@ -174,6 +251,8 @@ requireCondition(isPositiveInteger(deployBlock), "--deploy-block must be a posit
 requireCondition(isPositiveInteger(startBlock), "--start-block must be a positive integer");
 requireCondition(startBlock === deployBlock, "--start-block must match --deploy-block for fresh deploy-block dry-run evidence");
 requireCondition(isPositiveInteger(finalityBlocks), "--finality-blocks must be a positive integer");
+const requestedEpochs = parseInteger(epochs);
+requireCondition(requestedEpochs !== null && requestedEpochs > 0, "--epochs must be a canonical positive safe integer");
 
 const sqliteLine = firstMatchingLine(indexerLog, /^\[indexer\]\s+SQLite path:/i);
 const contractLine = firstMatchingLine(indexerLog, /^\[indexer\]\s+Contract:/i);
@@ -184,20 +263,21 @@ const scanLine = firstMatchingLine(indexerLog, /^\[indexer\]\s+Scanning blocks/i
 const finishLine = lastMatchingLine(indexerLog, /^\[indexer\]\s+Finished runOnce/i);
 const healthSummary = firstMatchingLine(healthLog, /\bfinalityLagBlocks=/i);
 const healthValues = parseKeyValues(healthSummary);
-const finalityLagIsNumeric = Number.isFinite(Number(healthValues.finalityLagBlocks));
+const finalityLagIsNumeric = isNonNegativeInteger(healthValues.finalityLagBlocks);
 const chainSnapshotEvidence = chainSnapshotPath
   ? `TODO: compare indexer data against ${path.relative(process.cwd(), path.resolve(process.cwd(), chainSnapshotPath))}`
   : "TODO: paste direct chain versus indexer comparison";
 const expectedSnapshotChainId = chainSnapshot?.expectedChainId ?? chainSnapshot?.chainId ?? "TODO";
 const rpcSnapshotChainId = chainSnapshot?.rpcChainId ?? "TODO";
-const rpcSource = chainSnapshot?.rpcSource ?? "TODO";
+const rpcSource = normalizeRpcSource(chainSnapshot?.rpcSource) || "TODO";
 const snapshotContractAddress = chainSnapshot?.contractAddress ?? "TODO";
 const checkedEpochs = Array.isArray(chainSnapshot?.epochs)
   ? chainSnapshot.epochs.map((entry) => entry?.epoch).filter((epoch) => epoch != null)
   : [];
 const uniqueCheckedEpochs = [...new Set(checkedEpochs.map((epoch) => String(epoch)))];
 const snapshotGeneratedAt = chainSnapshot?.generatedAt ?? chainSnapshot?.checkedAt ?? "";
-const rpcChainIdMatches = Number(expectedSnapshotChainId) > 0 && Number(expectedSnapshotChainId) === Number(rpcSnapshotChainId);
+const rpcChainIdMatches = isPositiveInteger(expectedSnapshotChainId) &&
+  String(expectedSnapshotChainId).trim() === String(rpcSnapshotChainId).trim();
 const contractAddressMatches = Boolean(
   configuredContractAddress &&
   snapshotContractAddress &&
@@ -211,12 +291,12 @@ requireMatchingIndexerLine(startLine, "Start block", deployBlock);
 requireMatchingIndexerLine(finalityLine, "Finality blocks", finalityBlocks);
 requireCondition(Boolean(finishLine), "--indexer-log must include [indexer] Finished runOnce");
 requireCondition(!/\[indexer\]\s+Fatal:/i.test(indexerLog), "--indexer-log must not include [indexer] Fatal");
-requireCondition(finalityLagIsNumeric, "--health-log must include numeric finalityLagBlocks=<number>");
+requireCondition(finalityLagIsNumeric, "--health-log must include canonical non-negative decimal finalityLagBlocks=<number>");
 requireCondition(normalizedOrigin(healthValues.base) === expectedProductionHealthOrigin(), "--health-log must include base=<production origin>");
 requireMatchingChainId("expectedChainId", expectedSnapshotChainId, chainId);
 requireMatchingChainId("rpcChainId", rpcSnapshotChainId, chainId);
 requireCondition(hasIsoTimestamp(snapshotGeneratedAt), "--chain-snapshot must include generatedAt as ISO-8601 UTC");
-requireCondition(uniqueCheckedEpochs.length >= Number(epochs), "--chain-snapshot epochs must include at least --epochs unique checked epochs");
+requireCondition(uniqueCheckedEpochs.length >= requestedEpochs, "--chain-snapshot epochs must include at least --epochs unique checked epochs");
 requireCondition(Boolean(contractLine), "--indexer-log must include [indexer] Contract: <address>");
 requireCondition(normalizeAddress(indexerLogValue(contractLine)) === normalizeAddress(snapshotContractAddress), "--indexer-log [indexer] Contract must match --chain-snapshot contractAddress");
 
@@ -237,7 +317,7 @@ const manifest = {
     startBlock: startBlock || "TODO",
     deployBlock: deployBlock || "TODO",
     summary,
-    evidencePath: argValue("indexer-log"),
+    evidencePath: indexerLogPath,
     timestamp: now,
   },
   finality: {
@@ -245,7 +325,7 @@ const manifest = {
     finalityBlocks: finalityBlocks || "TODO",
     dataSyncHealthFinalityAware: finalityLagIsNumeric && positiveFinality,
     evidence: healthSummary || "TODO: paste finality-aware health/data-sync proof",
-    evidencePath: argValue("health-log"),
+    evidencePath: healthLogPath,
     checkedAt: now,
   },
   chainSnapshot: {

@@ -1,5 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+
+const MAX_KEY_VALUE_MARKERS = 64;
+const MAX_HOST_EVIDENCE_BYTES = 512 * 1024;
 
 function refuseFinalProofOutput(outPath) {
   const normalized = path.relative(process.cwd(), outPath).replace(/\\/g, "/");
@@ -22,11 +25,24 @@ function requireConcreteValue(name, value) {
   return value;
 }
 
+function regularFileStat(filePath) {
+  try {
+    const stat = statSync(filePath);
+    return stat.isFile() ? stat : null;
+  } catch {
+    return null;
+  }
+}
+
 function readRequiredLog(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  if (!existsSync(resolved)) {
+  const stat = regularFileStat(resolved);
+  if (!stat) {
     throw new Error(`--${name} must point to an existing redacted artifact`);
+  }
+  if (stat.size > MAX_HOST_EVIDENCE_BYTES) {
+    throw new Error(`--${name} artifact is too large to validate safely`);
   }
   return readFileSync(resolved, "utf8");
 }
@@ -34,10 +50,27 @@ function readRequiredLog(name, filePath) {
 function requireExistingArtifact(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  if (!existsSync(resolved)) {
+  if (!regularFileStat(resolved)) {
     throw new Error(`--${name} must point to an existing redacted artifact`);
   }
   return filePath;
+}
+
+function sameArtifact(left, right) {
+  return path.resolve(process.cwd(), left).toLowerCase() === path.resolve(process.cwd(), right).toLowerCase();
+}
+
+function requireDistinctArtifactInputs(entries) {
+  for (let i = 0; i < entries.length; i += 1) {
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const [leftName, leftPath] = entries[i];
+      const [rightName, rightPath] = entries[j];
+      if (!leftPath || !rightPath) continue;
+      if (sameArtifact(leftPath, rightPath)) {
+        throw new Error(`--${leftName} and --${rightName} must point to distinct host evidence files`);
+      }
+    }
+  }
 }
 
 function requireCondition(condition, message) {
@@ -56,7 +89,9 @@ function requireExternalDbPath(value) {
 
 function normalizedOrigin(value) {
   try {
-    return new URL(String(value ?? "").trim()).origin.toLowerCase();
+    const url = new URL(String(value ?? "").trim());
+    if (url.username || url.password) return "";
+    return url.origin.toLowerCase();
   } catch {
     return "";
   }
@@ -65,13 +100,41 @@ function normalizedOrigin(value) {
 function isFinalHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase();
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
     return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
       url.pathname === "/" &&
       url.search === "" &&
       url.hash === "" &&
-      !["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host) &&
-      !host.endsWith(".local");
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      );
   } catch {
     return false;
   }
@@ -92,17 +155,59 @@ function firstMatchingLine(text, pattern) {
 
 function parseKeyValues(line = "") {
   const result = {};
-  for (const match of line.matchAll(/([a-zA-Z][a-zA-Z0-9]*)=([^\s]+)/g)) {
+  const pattern = /([a-zA-Z][a-zA-Z0-9]*)=([^\s]+)/g;
+  let inspected = 0;
+  let match = pattern.exec(line);
+  while (match) {
+    inspected += 1;
+    if (inspected > MAX_KEY_VALUE_MARKERS) {
+      throw new Error("host health evidence has too many key/value markers to validate safely");
+    }
     result[match[1]] = match[2];
+    match = pattern.exec(line);
   }
   return result;
 }
 
-function parseNumber(value, fallback) {
-  const normalized = String(value ?? "").replace(/[,%]/g, "").trim();
+const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const DECIMAL_NUMBER_RE = /^(?:0|[1-9]\d{0,15})(?:\.\d{1,6})?$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+function parseNonNegativeInteger(value, fallback) {
+  const normalized = String(value ?? "").trim();
   if (normalized === "") return fallback;
+  if (!DECIMAL_INTEGER_RE.test(normalized)) return fallback;
+  const parsed = BigInt(normalized);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return fallback;
+  return Number(parsed);
+}
+
+function parseNonNegativeDecimal(value, fallback) {
+  const normalized = String(value ?? "").trim();
+  if (normalized === "") return fallback;
+  if (!DECIMAL_NUMBER_RE.test(normalized)) return fallback;
   const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function parseLoadMaxErrorRate() {
+  const raw = process.env.LOAD_MAX_ERROR_RATE;
+  if (raw == null || raw === "") return 0.01;
+  const parsed = parseNonNegativeDecimal(raw, Number.NaN);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new Error("LOAD_MAX_ERROR_RATE must be a canonical decimal rate between 0 and 1");
+  }
+  return parsed;
+}
+
+function parseLoadMaxP95Ms() {
+  const raw = process.env.LOAD_MAX_P95_MS;
+  if (raw == null || raw === "") return 1500;
+  const parsed = parseNonNegativeInteger(raw, Number.NaN);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error("LOAD_MAX_P95_MS must be a canonical positive integer of milliseconds");
+  }
+  return parsed;
 }
 
 function parseHealth(log) {
@@ -117,7 +222,7 @@ function parseHealth(log) {
     runtimeHealthPassed: ok && /^(ok|pass|healthy)$/i.test(values.runtime ?? ""),
     dataSyncHealthPassed: ok && /^(ok|pass|healthy)$/i.test(values.dataSync ?? ""),
     diagnosticsAuthPassed: ok,
-    finalityLagChecked: Number.isFinite(Number(values.finalityLagBlocks)),
+    finalityLagChecked: parseNonNegativeInteger(values.finalityLagBlocks, null) !== null,
     jackpotRowsChecked: false,
     summary,
     timestamp: new Date().toISOString(),
@@ -130,7 +235,7 @@ function requireValidHealthArtifact(health, origin) {
   requireCondition(sameOrigin(health.url, origin), "--health-log base must match --origin");
   requireCondition(health.runtimeHealthPassed === true, "--health-log must include runtime=ok/pass/healthy");
   requireCondition(health.dataSyncHealthPassed === true, "--health-log must include dataSync=ok/pass/healthy");
-  requireCondition(health.finalityLagChecked === true, "--health-log must include numeric finalityLagBlocks=<number>");
+  requireCondition(health.finalityLagChecked === true, "--health-log must include canonical non-negative decimal finalityLagBlocks=<number>");
 }
 
 function parseLoad(log) {
@@ -139,14 +244,14 @@ function parseLoad(log) {
   const totalLine = firstMatchingLine(log, /^TOTAL\s+/i) || "";
   const summary = totalLine || "TODO: paste npm.cmd run load:http TOTAL summary";
   const config = {
-    durationMs: parseNumber(configLine.match(/duration:\s*(\d+)ms/i)?.[1], 0),
-    concurrency: parseNumber(configLine.match(/Concurrency:\s*(\d+)/i)?.[1], 0),
+    durationMs: parseNonNegativeInteger(configLine.match(/duration:\s*(\d+)ms/i)?.[1], 0),
+    concurrency: parseNonNegativeInteger(configLine.match(/Concurrency:\s*(\d+)/i)?.[1], 0),
   };
   const total = {
-    count: parseNumber(totalLine.match(/\bcount=\s*(\d+)/i)?.[1], 0),
-    fail: parseNumber(totalLine.match(/\bfail=\s*(\d+)/i)?.[1], 0),
-    errorPercent: parseNumber(totalLine.match(/\berr=\s*([\d.]+)%/i)?.[1], 100),
-    p95Ms: parseNumber(totalLine.match(/\bp95=\s*(\d+)\s*ms/i)?.[1], 0),
+    count: parseNonNegativeInteger(totalLine.match(/\bcount=\s*(\d+)/i)?.[1], 0),
+    fail: parseNonNegativeInteger(totalLine.match(/\bfail=\s*(\d+)/i)?.[1], 0),
+    errorPercent: parseNonNegativeDecimal(totalLine.match(/\berr=\s*((?:0|[1-9]\d*)(?:\.\d+)?)%/i)?.[1], 100),
+    p95Ms: parseNonNegativeInteger(totalLine.match(/\bp95=\s*(\d+)\s*ms/i)?.[1], 0),
   };
   const errorRate = total.errorPercent / 100;
 
@@ -159,9 +264,9 @@ function parseLoad(log) {
     concurrency: config.concurrency,
     requestCount: total.count,
     errorRate,
-    maxErrorRate: parseNumber(process.env.LOAD_MAX_ERROR_RATE, 0.01),
+    maxErrorRate: parseLoadMaxErrorRate(),
     p95Ms: total.p95Ms,
-    maxP95Ms: parseNumber(process.env.LOAD_MAX_P95_MS, 1500),
+    maxP95Ms: parseLoadMaxP95Ms(),
     summary: [baseLine, summary].filter(Boolean).join(" | "),
     timestamp: new Date().toISOString(),
   };
@@ -179,18 +284,22 @@ function requireValidLoadArtifact(load, loadOrigin) {
 
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/host-proof.draft.json"));
 refuseFinalProofOutput(outPath);
-const healthLog = readRequiredLog("health-log", argValue("health-log"));
-const loadLog = readRequiredLog("load-log", argValue("load-log"));
+const healthLogPath = argValue("health-log");
+const loadLogPath = argValue("load-log");
+const processEvidencePath = argValue("process-evidence", "");
+requireDistinctArtifactInputs([["process-evidence", processEvidencePath], ["health-log", healthLogPath], ["load-log", loadLogPath]]);
+const healthLog = readRequiredLog("health-log", healthLogPath);
+const loadLog = readRequiredLog("load-log", loadLogPath);
 const origin = requireConcreteValue("origin", argValue("origin", process.env.NEXT_PUBLIC_SITE_URL || ""));
 const hostType = argValue("host-type", "production");
 const loadOrigin = requireConcreteValue("load-origin", argValue("load-origin", process.env.LOAD_BASE_URL || process.env.LOAD_HTTP_BASE_URL || ""));
 const loadHostType = requireConcreteValue("load-host-type", argValue("load-host-type", ""));
 const dbPath = requireConcreteValue("db-path", argValue("db-path", process.env.LORE_DB_PATH || ""));
 const supervisor = requireConcreteValue("supervisor", argValue("supervisor", ""));
-const processEvidence = requireExistingArtifact("process-evidence", argValue("process-evidence", ""));
-requireCondition(isFinalHttpsOrigin(origin), "--origin must be a non-local HTTPS origin without path, query, or hash");
+const processEvidence = requireExistingArtifact("process-evidence", processEvidencePath);
+requireCondition(isFinalHttpsOrigin(origin), "--origin must be a public HTTPS origin without path, query, or hash");
 requireCondition(hostType === "production", "--host-type must be production for launch host evidence");
-requireCondition(isFinalHttpsOrigin(loadOrigin), "--load-origin must be a non-local HTTPS origin without path, query, or hash");
+requireCondition(isFinalHttpsOrigin(loadOrigin), "--load-origin must be a public HTTPS origin without path, query, or hash");
 requireCondition(["staging", "canary"].includes(loadHostType), "--load-host-type must be staging or canary");
 requireCondition(origin.toLowerCase() !== loadOrigin.toLowerCase(), "--load-origin must differ from the production --origin");
 requireExternalDbPath(dbPath);
@@ -242,6 +351,15 @@ const manifest = {
   },
   healthProd,
   loadHttp,
+  externalRateLimit: {
+    status: "TODO",
+    webReplicaCount: 2,
+    distinctReplicas: 2,
+    failClosed: false,
+    sharedBucketVerified: false,
+    evidence: "TODO: paste redacted two-replica shared rate-limit bucket proof",
+    checkedAt: now,
+  },
 };
 
 mkdirSync(path.dirname(outPath), { recursive: true });

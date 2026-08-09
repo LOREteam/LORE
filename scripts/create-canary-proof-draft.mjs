@@ -1,8 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { resolveCanaryProofProfile } from "./canary-proof-profile.mjs";
 
+const JSONL_READ_CHUNK_BYTES = 64 * 1024;
+const MAX_CANARY_DRAFT_SIDE_ARTIFACT_BYTES = 512 * 1024;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const CANONICAL_POSITIVE_INTEGER_RE = /^[1-9]\d{0,15}$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const GENERIC_RPC_LABEL_RE = /^(?:configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)(?:[-_ ]?rpc(?:[-_ ]?label)?(?:[-_ ]?required)?)?$/i;
 
 function refuseFinalProofOutput(outPath, profile) {
@@ -23,8 +27,18 @@ function hasRealText(value) {
 }
 
 function isPositiveInteger(value) {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0;
+  return parsePositiveInteger(value) !== null;
+}
+
+function parsePositiveInteger(value) {
+  const text = String(value ?? "").trim();
+  if (!CANONICAL_POSITIVE_INTEGER_RE.test(text)) return null;
+  const parsed = BigInt(text);
+  return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
+}
+
+function positiveIntegerString(value) {
+  return isPositiveInteger(value) ? String(value).trim() : "";
 }
 
 function isAddress(value) {
@@ -51,16 +65,56 @@ function normalizeNetwork(value) {
   return normalized;
 }
 
+function normalizeRole(value) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  return /^[A-Z0-9_]{1,32}$/.test(normalized) ? normalized : "";
+}
+
+function normalizeRoleList(value) {
+  const entries = Array.isArray(value) ? value : String(value ?? "").split(",");
+  return [...new Set(entries.map(normalizeRole).filter(Boolean))].sort();
+}
+
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
 function requireExistingArtifact(name) {
   const value = argValue(name);
   if (!value) {
     throw new Error(`--${name} is required when drafting canary launch evidence`);
   }
   const resolved = path.resolve(process.cwd(), value);
-  if (!existsSync(resolved)) {
+  const stats = regularFileStat(resolved);
+  if (!stats) {
     throw new Error(`--${name} must point to an existing redacted artifact`);
   }
+  if (stats.size > MAX_CANARY_DRAFT_SIDE_ARTIFACT_BYTES) {
+    throw new Error(`--${name} artifact is too large to reference safely`);
+  }
   return value;
+}
+
+function sameArtifact(left, right) {
+  return path.resolve(process.cwd(), left).toLowerCase() === path.resolve(process.cwd(), right).toLowerCase();
+}
+
+function requireDistinctArtifactInputs(entries) {
+  for (let i = 0; i < entries.length; i += 1) {
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const [leftName, leftPath] = entries[i];
+      const [rightName, rightPath] = entries[j];
+      if (!leftPath || !rightPath) continue;
+      if (sameArtifact(leftPath, rightPath)) {
+        throw new Error(`--${leftName} and --${rightName} must point to distinct canary evidence files`);
+      }
+    }
+  }
 }
 
 function isRealTx(value) {
@@ -78,22 +132,43 @@ function isPlainObject(value) {
 
 function readJsonlArtifact(filePath) {
   if (!filePath) return [];
-  return readFileSync(path.resolve(process.cwd(), filePath), "utf8")
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line, index) => {
-      try {
-        const event = JSON.parse(line);
-        if (!isPlainObject(event)) {
-          console.error(`Invalid JSONL at ${filePath}:${index + 1}: record must be an object`);
-          process.exit(1);
-        }
-        return event;
-      } catch (error) {
-        console.error(`Invalid JSONL at ${filePath}:${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+  const events = [];
+  const resolvedPath = path.resolve(process.cwd(), filePath);
+  const displayPath = path.basename(filePath);
+  const fd = openSync(resolvedPath, "r");
+  const buffer = Buffer.alloc(JSONL_READ_CHUNK_BYTES);
+  let pending = "";
+  let lineNumber = 0;
+  const parseLine = (line) => {
+    lineNumber += 1;
+    if (!line.trim()) return;
+    try {
+      const event = JSON.parse(line.replace(/^\uFEFF/, ""));
+      if (!isPlainObject(event)) {
+        console.error(`Invalid JSONL at ${displayPath}:${lineNumber}: record must be an object`);
         process.exit(1);
       }
-    });
+      events.push(event);
+    } catch {
+      console.error(`Invalid JSONL at ${displayPath}:${lineNumber}: parse error`);
+      process.exit(1);
+    }
+  };
+
+  try {
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      pending += buffer.toString("utf8", 0, bytesRead);
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const line of lines) parseLine(line);
+    }
+    if (pending) parseLine(pending);
+  } finally {
+    closeSync(fd);
+  }
+  return events;
 }
 
 function latestIsoTimestamp(events) {
@@ -111,9 +186,11 @@ function canarySummary(events) {
   const uniqueEpochs = new Set(autoMinerBets.map((event) => event.epoch).filter(Boolean));
   const txHashes = [...new Set(okBets.map(eventTxHash).filter(isRealTx).map((hash) => hash.toLowerCase()))];
   const rpcLabels = [...new Set(okBets.map((event) => String(event.rpcLabel ?? "").trim()).filter(Boolean))].sort();
+  const successfulRoles = normalizeRoleList(okBets.map((event) => event.role));
   return {
     autoMinerRounds: autoMinerBets.length,
     autoMinerUniqueEpochs: uniqueEpochs.size,
+    successfulRoles,
     checkedAt: latestIsoTimestamp(okBets),
     rpcLabels,
     txHashes,
@@ -122,6 +199,7 @@ function canarySummary(events) {
 
 function findTargetMismatches(events, expectedNetwork, expectedChainId, expectedContractAddress, expectedRpcLabel) {
   const expectedNetworkName = normalizeNetwork(expectedNetwork);
+  const expectedChain = positiveIntegerString(expectedChainId);
   const expectedContract = normalizeAddress(expectedContractAddress);
   const expectedRpc = String(expectedRpcLabel ?? "").trim().toLowerCase();
   return events
@@ -130,7 +208,7 @@ function findTargetMismatches(events, expectedNetwork, expectedChainId, expected
       const label = `event#${index + 1}`;
       const mismatches = [];
       if (expectedNetworkName && normalizeNetwork(event.network) !== expectedNetworkName) mismatches.push(`${label} network=${event.network ?? "missing"}`);
-      if (Number(event.chainId) !== Number(expectedChainId)) mismatches.push(`${label} chainId=${event.chainId ?? "missing"}`);
+      if (expectedChain && positiveIntegerString(event.chainId) !== expectedChain) mismatches.push(`${label} chainId=${event.chainId ?? "missing"}`);
       if (normalizeAddress(event.contractAddress) !== expectedContract) mismatches.push(`${label} contractAddress=${event.contractAddress ?? "missing"}`);
       if (String(event.rpcLabel ?? "").trim().toLowerCase() !== expectedRpc) mismatches.push(`${label} rpcLabel=${event.rpcLabel ?? "missing"}`);
       return mismatches;
@@ -138,6 +216,7 @@ function findTargetMismatches(events, expectedNetwork, expectedChainId, expected
 }
 
 const profile = resolveCanaryProofProfile(argValue("profile", process.env.CANARY_PROOF_PROFILE || "launch"));
+const requiredRoles = normalizeRoleList(profile.requiredRoles);
 const outPath = path.resolve(process.cwd(), argValue("out", profile.draftManifestPath));
 refuseFinalProofOutput(outPath, profile);
 const network = argValue("network", process.env.NEXT_PUBLIC_LINEA_NETWORK || process.env.LINEA_NETWORK || "");
@@ -149,6 +228,12 @@ const targetArtifact = requireExistingArtifact("target-artifact");
 const recoveryArtifact = requireExistingArtifact("recovery-artifact");
 const sessionArtifact = requireExistingArtifact("session-artifact");
 const txArtifact = requireExistingArtifact("tx-artifact");
+requireDistinctArtifactInputs([
+  ["target-artifact", targetArtifact],
+  ["recovery-artifact", recoveryArtifact],
+  ["session-artifact", sessionArtifact],
+  ["tx-artifact", txArtifact],
+]);
 const liveEvents = readJsonlArtifact(liveLog);
 const summary = canarySummary(liveEvents);
 const now = new Date().toISOString();
@@ -167,9 +252,13 @@ if (normalizeNetwork(network) !== profile.network) {
   throw new Error(`--network must be ${profile.network} for ${profile.label} canary proof`);
 }
 if (!isPositiveInteger(chainId)) {
-  throw new Error("--chain-id must be a positive integer");
+  throw new Error("--chain-id must be a canonical positive decimal integer");
 }
-if (Number(chainId) !== profile.chainId) {
+const parsedChainId = parsePositiveInteger(chainId);
+if (parsedChainId === null) {
+  throw new Error("--chain-id must be a safe canonical positive decimal integer");
+}
+if (positiveIntegerString(chainId) !== String(profile.chainId)) {
   throw new Error(`--chain-id must be ${profile.chainId} for ${profile.label} canary proof`);
 }
 if (!isAddress(contractAddress)) {
@@ -193,7 +282,7 @@ const manifest = {
   targetNetwork: {
     realTargetNetwork: true,
     network,
-    chainId: Number(chainId),
+    chainId: parsedChainId,
     rpc: rpcLabel,
     contractAddress,
     checkedAt: now,
@@ -215,6 +304,8 @@ const manifest = {
     observedRpcLabels: summary.rpcLabels,
     rounds: summary.autoMinerRounds,
     uniqueEpochs: summary.autoMinerUniqueEpochs,
+    requiredRoles,
+    successfulRoles: summary.successfulRoles,
     checkedAt: summary.checkedAt,
     evidence: sessionArtifact ? `artifact: ${sessionArtifact}` : liveLog ? `artifact: ${liveLog}` : "TODO: link to canary log summary",
   },

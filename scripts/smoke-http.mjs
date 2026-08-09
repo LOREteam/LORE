@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
+import { redactProofText } from "./redact-proof-output.mjs";
 
 const BASE_URL = process.env.SMOKE_BASE_URL || "http://localhost:3000";
 const TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_TIMEOUT_MS, 60_000);
@@ -7,12 +8,53 @@ const WARMUP_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_WARMUP_TIMEO
 const SKIP_WARMUP = process.env.SMOKE_SKIP_WARMUP === "1";
 const RETRYABLE_ATTEMPTS = parsePositiveIntegerEnv(process.env.SMOKE_RETRY_ATTEMPTS, 3);
 const RETRY_DELAY_MS = parsePositiveIntegerEnv(process.env.SMOKE_RETRY_DELAY_MS, 1_500);
+const MAX_SMOKE_RESPONSE_BYTES = 1024 * 1024;
+const MAX_SMOKE_ERROR_CHARS = 500;
+const CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const EXPECT_EPOCH_BOUND_BETS = ["1", "true", "yes", "on"].includes(
+  (process.env.NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS ?? "").trim().toLowerCase(),
+);
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000001";
 const HOME_TITLE = "LORE - Linea Mining Game";
 const HOME_MARKERS = ["LORE", "Hot Tiles", "Analytics", "FAQ", "Leaderboards"];
 const DECIMAL_STRING_RE = /^\d+(?:\.\d+)?$/;
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const TX_HASH_RE = /^0x[a-fA-F0-9]{64}$/;
+
+function parseOptionalPositiveIntegerText(name, value) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return { value: null, issue: null };
+  if (!/^[1-9]\d{0,15}$/.test(normalized)) {
+    return { value: null, issue: `${name} must be a canonical positive decimal integer` };
+  }
+  const parsed = Number(normalized);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return { value: null, issue: `${name} must be a safe positive integer` };
+  }
+  return { value: parsed, issue: null };
+}
+
+const EXPECTED_PUBLIC_CHAIN_ID = parseOptionalPositiveIntegerText("NEXT_PUBLIC_LINEA_CHAIN_ID", process.env.NEXT_PUBLIC_LINEA_CHAIN_ID);
+const EXPECTED_SERVER_CHAIN_ID = parseOptionalPositiveIntegerText("LINEA_CHAIN_ID", process.env.LINEA_CHAIN_ID);
+const EXPECTED_CHAIN_ID = EXPECTED_PUBLIC_CHAIN_ID.value ?? EXPECTED_SERVER_CHAIN_ID.value;
+const EXPECTED_CHAIN_ID_ISSUES = [
+  EXPECTED_PUBLIC_CHAIN_ID.issue,
+  EXPECTED_SERVER_CHAIN_ID.issue,
+  EXPECTED_PUBLIC_CHAIN_ID.value !== null &&
+    EXPECTED_SERVER_CHAIN_ID.value !== null &&
+    EXPECTED_PUBLIC_CHAIN_ID.value !== EXPECTED_SERVER_CHAIN_ID.value
+    ? "LINEA_CHAIN_ID and NEXT_PUBLIC_LINEA_CHAIN_ID must match"
+    : null,
+].filter(Boolean);
+
+function describeSmokeError(error) {
+  const text = redactProofText(error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_SMOKE_ERROR_CHARS) return text;
+  return `${text.slice(0, MAX_SMOKE_ERROR_CHARS - 15)}...<truncated>`;
+}
 
 function assertDecimalString(value, label) {
   if (typeof value !== "string" || !DECIMAL_STRING_RE.test(value)) {
@@ -23,6 +65,31 @@ function assertDecimalString(value, label) {
 function assertFiniteNumber(value, label) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${label} must be finite`);
+  }
+}
+
+function assertNonNegativeSafeIntegerOrNull(value, label) {
+  if (value === null) return;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative safe integer or null`);
+  }
+}
+
+function assertNonNegativeSafeInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative safe integer`);
+  }
+}
+
+function assertPositiveSafeInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive safe integer`);
+  }
+}
+
+function assertTileId(value, label) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 25) {
+    throw new Error(`${label} must be between 1 and 25`);
   }
 }
 
@@ -50,6 +117,37 @@ function assertAddress(value, label) {
   }
 }
 
+function parseContentLengthHeader(value) {
+  if (value == null || value === "") return null;
+  if (!CONTENT_LENGTH_RE.test(value)) throw new Error("invalid response content-length");
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) throw new Error("invalid response content-length");
+  return Number(parsed);
+}
+
+async function readBoundedResponseText(response) {
+  const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
+  if (contentLength !== null && contentLength > MAX_SMOKE_RESPONSE_BYTES) {
+    throw new Error("response body too large");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let totalBytes = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_SMOKE_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("response body too large");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
 const checks = [
   {
     name: "home",
@@ -67,6 +165,9 @@ const checks = [
       }
       if (response.headers.get("x-frame-options") !== "DENY") {
         throw new Error("homepage is missing clickjacking protection");
+      }
+      if (response.headers.get("x-permitted-cross-domain-policies") !== "none") {
+        throw new Error("homepage is missing cross-domain policy hardening");
       }
       if (response.headers.get("referrer-policy") !== "strict-origin-when-cross-origin") {
         throw new Error("homepage is missing the expected referrer policy");
@@ -105,6 +206,74 @@ const checks = [
       }
       if (body.includes("ReferenceError") || body.includes("Internal Server Error")) {
         throw new Error("admin page contains server error markers");
+      }
+    },
+  },
+  {
+    name: "privacy-page",
+    path: "/privacy",
+    assert: async (response, body) => {
+      if (!response.headers.get("content-type")?.includes("text/html")) {
+        throw new Error("expected text/html");
+      }
+      if (!body.includes("Privacy Policy") || !body.includes("Wallet-first sign-in") || !body.includes("Third-party services")) {
+        throw new Error("privacy page missing disclosure markers");
+      }
+      if (body.includes("We do not ask for your email")) {
+        throw new Error("privacy page contains stale email-login disclosure");
+      }
+      if (body.includes("ReferenceError") || body.includes("Internal Server Error")) {
+        throw new Error("privacy page contains server error markers");
+      }
+    },
+  },
+  {
+    name: "terms-page",
+    path: "/terms",
+    assert: async (response, body) => {
+      if (!response.headers.get("content-type")?.includes("text/html")) {
+        throw new Error("expected text/html");
+      }
+      if (!body.includes("Terms of Play") || !body.includes("Entertainment game") || !body.includes("Risk and fees")) {
+        throw new Error("terms page missing player terms markers");
+      }
+      if (body.includes("promise of profit") && !body.includes("not an investment product")) {
+        throw new Error("terms page has unclear profit-risk wording");
+      }
+      if (body.includes("ReferenceError") || body.includes("Internal Server Error")) {
+        throw new Error("terms page contains server error markers");
+      }
+    },
+  },
+  {
+    name: "robots",
+    path: "/robots.txt",
+    assert: async (response, body) => {
+      if (!response.headers.get("content-type")?.includes("text/plain")) {
+        throw new Error("expected text/plain");
+      }
+      if (!body.includes("Sitemap:") || !body.includes("/sitemap.xml")) {
+        throw new Error("robots.txt is missing sitemap reference");
+      }
+      if (body.includes("ReferenceError") || body.includes("Internal Server Error")) {
+        throw new Error("robots.txt contains server error markers");
+      }
+    },
+  },
+  {
+    name: "sitemap",
+    path: "/sitemap.xml",
+    assert: async (response, body) => {
+      if (!response.headers.get("content-type")?.includes("application/xml")) {
+        throw new Error("expected application/xml");
+      }
+      for (const path of ["/jackpot-win", "/privacy", "/terms"]) {
+        if (!body.includes(path)) {
+          throw new Error(`sitemap missing path: ${path}`);
+        }
+      }
+      if (body.includes("ReferenceError") || body.includes("Internal Server Error")) {
+        throw new Error("sitemap contains server error markers");
       }
     },
   },
@@ -320,7 +489,7 @@ const checks = [
       }
       const json = JSON.parse(body);
       assertIntegerString(json.currentEpoch, "live-state currentEpoch");
-      assertFiniteNumber(json.fetchedAt, "live-state fetchedAt");
+      assertNonNegativeSafeInteger(json.fetchedAt, "live-state fetchedAt");
       if (json.epochEndTime !== null) assertIntegerString(json.epochEndTime, "live-state epochEndTime");
       if (json.rolloverPool !== null) assertIntegerString(json.rolloverPool, "live-state rolloverPool");
       if (json.epochDuration !== null) assertIntegerString(json.epochDuration, "live-state epochDuration");
@@ -376,9 +545,7 @@ const checks = [
           throw new Error("live-state tileUserCounts must have 25 entries");
         }
         json.tileUserCounts.forEach((value, index) => {
-          if (!Number.isInteger(value) || value < 0) {
-            throw new Error(`live-state tileUserCounts[${index}] must be a non-negative integer`);
-          }
+          assertNonNegativeSafeInteger(value, `live-state tileUserCounts[${index}]`);
         });
       }
       if (json.indexedTilePools !== null) {
@@ -408,9 +575,7 @@ const checks = [
       if (!json.contract || typeof json.contract !== "object") {
         throw new Error("health-sync contract object missing");
       }
-      if (json.contract.currentEpoch !== null && !Number.isInteger(json.contract.currentEpoch)) {
-        throw new Error("health-sync contract.currentEpoch must be an integer or null");
-      }
+      assertNonNegativeSafeIntegerOrNull(json.contract.currentEpoch, "health-sync contract.currentEpoch");
       if (json.contract.headBlock !== null || json.contract.finalityTargetBlock !== null) {
         throw new Error("health-sync public contract block details must be redacted");
       }
@@ -425,15 +590,11 @@ const checks = [
       ) {
         throw new Error("health-sync public storage block details must be redacted");
       }
-      if (json.storage.lagBlocks !== null && !Number.isFinite(json.storage.lagBlocks)) {
-        throw new Error("health-sync storage.lagBlocks must be finite or null");
-      }
-      if (
-        json.storage.lagToFinalityTargetBlocks !== null &&
-        !Number.isFinite(json.storage.lagToFinalityTargetBlocks)
-      ) {
-        throw new Error("health-sync storage.lagToFinalityTargetBlocks must be finite or null");
-      }
+      assertNonNegativeSafeIntegerOrNull(json.storage.lagBlocks, "health-sync storage.lagBlocks");
+      assertNonNegativeSafeIntegerOrNull(
+        json.storage.lagToFinalityTargetBlocks,
+        "health-sync storage.lagToFinalityTargetBlocks",
+      );
       if (!json.env || typeof json.env.indexerFinalityBlocks !== "string") {
         throw new Error("health-sync env.indexerFinalityBlocks must be present");
       }
@@ -470,14 +631,18 @@ const checks = [
       if (!json.metrics || typeof json.metrics !== "object" || Object.keys(json.metrics).length !== 0) {
         throw new Error("health-runtime public metrics must be redacted");
       }
-      if (!Number.isFinite(json.ts)) {
-        throw new Error("health-runtime timestamp must be finite");
-      }
+      assertNonNegativeSafeInteger(json.ts, "health-runtime timestamp");
       if (!json.publicConfig || typeof json.publicConfig !== "object") {
         throw new Error("health-runtime must include public config diagnostics");
       }
-      if (!Number.isInteger(json.publicConfig.chainId)) {
+      if (EXPECTED_CHAIN_ID_ISSUES.length > 0) {
+        throw new Error(`health-runtime configured chain id is invalid: ${EXPECTED_CHAIN_ID_ISSUES[0]}`);
+      }
+      if (!Number.isSafeInteger(json.publicConfig.chainId) || json.publicConfig.chainId <= 0) {
         throw new Error("health-runtime public config must include chain id");
+      }
+      if (EXPECTED_CHAIN_ID !== null && json.publicConfig.chainId !== EXPECTED_CHAIN_ID) {
+        throw new Error("health-runtime public config chain id must match configured Linea chain id");
       }
       if (typeof json.publicConfig.chainName !== "string" || json.publicConfig.chainName.length === 0) {
         throw new Error("health-runtime public config must include chain name");
@@ -488,14 +653,38 @@ const checks = [
       if (typeof json.publicConfig.privyFallbackActive !== "boolean") {
         throw new Error("health-runtime public config must include Privy fallback status");
       }
-      if (
-        typeof json.publicConfig.eip7702Enabled !== "boolean" ||
-        typeof json.publicConfig.eip7702MiningEnabled !== "boolean"
-      ) {
-        throw new Error("health-runtime public config must include EIP-7702 disabled-state diagnostics");
-      }
       if (typeof json.publicConfig.readOnlyMode !== "boolean") {
         throw new Error("health-runtime public config must include read-only mode diagnostics");
+      }
+      if (typeof json.publicConfig.contractRequiresEpochBoundBets !== "boolean") {
+        throw new Error("health-runtime public config must include protected-bet mode diagnostics");
+      }
+      if (typeof json.publicConfig.productionLikeMonitoring !== "boolean") {
+        throw new Error("health-runtime public config must include production-like monitoring diagnostics");
+      }
+      if (typeof json.publicConfig.backupMonitorConfigured !== "boolean") {
+        throw new Error("health-runtime public config must include backup monitoring diagnostics");
+      }
+      if (typeof json.publicConfig.backupMonitorMaxAgeConfigured !== "boolean") {
+        throw new Error("health-runtime public config must include backup freshness diagnostics");
+      }
+      if (typeof json.publicConfig.emailAlertConfigured !== "boolean") {
+        throw new Error("health-runtime public config must include email alert diagnostics");
+      }
+      if (typeof json.publicConfig.multiReplicaWeb !== "boolean") {
+        throw new Error("health-runtime public config must include multi-replica diagnostics");
+      }
+      if (typeof json.publicConfig.externalRateLimitConfigured !== "boolean") {
+        throw new Error("health-runtime public config must include external rate-limit diagnostics");
+      }
+      if (typeof json.publicConfig.trustedProxyConfigured !== "boolean") {
+        throw new Error("health-runtime public config must include trusted proxy diagnostics");
+      }
+      if (typeof json.publicConfig.weakRateLimitIdentityAllowed !== "boolean") {
+        throw new Error("health-runtime public config must include weak identity diagnostics");
+      }
+      if (EXPECT_EPOCH_BOUND_BETS && json.publicConfig.contractRequiresEpochBoundBets !== true) {
+        throw new Error("health-runtime reports a stale build without required protected V10 bets");
       }
     },
   },
@@ -559,9 +748,7 @@ const checks = [
           throw new Error(`leaderboards payload missing ${boardName} array`);
         }
         for (const row of rows.slice(0, 20)) {
-          if (!Number.isInteger(row.rank) || row.rank <= 0) {
-            throw new Error(`${boardName} entry rank must be a positive integer`);
-          }
+          assertPositiveSafeInteger(row.rank, `${boardName} entry rank`);
           assertAddress(row.address, `${boardName} entry address`);
           if (typeof row.value !== "string" || row.value.length === 0) {
             throw new Error(`${boardName} entry value must be a non-empty string`);
@@ -573,12 +760,8 @@ const checks = [
         throw new Error("leaderboards payload missing luckyTile array");
       }
       for (const row of json.luckyTile.slice(0, 25)) {
-        if (!Number.isInteger(row.tileId) || row.tileId < 1 || row.tileId > 25) {
-          throw new Error("luckyTile tileId must be between 1 and 25");
-        }
-        if (!Number.isInteger(row.wins) || row.wins < 0) {
-          throw new Error("luckyTile wins must be a non-negative integer");
-        }
+        assertTileId(row.tileId, "luckyTile tileId");
+        assertNonNegativeSafeInteger(row.wins, "luckyTile wins");
         assertFiniteNumber(row.pct, "luckyTile pct");
       }
     },
@@ -609,9 +792,7 @@ const checks = [
         assertAddress(row.user, `recent win ${row.epoch} user`);
         assertDecimalString(row.amount, `recent win ${row.epoch} amount`);
         assertDecimalString(row.amountRaw, `recent win ${row.epoch} amountRaw`);
-        if (row.tileId !== undefined && (!Number.isInteger(row.tileId) || row.tileId < 1 || row.tileId > 25)) {
-          throw new Error(`recent win ${row.epoch} tileId must be between 1 and 25`);
-        }
+        if (row.tileId !== undefined) assertTileId(row.tileId, `recent win ${row.epoch} tileId`);
         if (
           row.jackpotKind !== undefined &&
           row.jackpotKind !== "daily" &&
@@ -646,6 +827,9 @@ const checks = [
         if (uniqueTileCount !== row.tileIds.length) {
           throw new Error(`deposit row ${row.epoch} still has duplicate tile ids`);
         }
+        row.tileIds.forEach((tileId) => {
+          assertTileId(tileId, `deposit row ${row.epoch} tileId`);
+        });
         if (Array.isArray(row.amounts) && row.amounts.length !== row.tileIds.length) {
           throw new Error(`deposit row ${row.epoch} has mismatched amounts length`);
         }
@@ -680,9 +864,7 @@ const checks = [
           assertDecimalString(reward.rewardPool, `reward ${epoch} rewardPool`);
           assertDecimalString(reward.winningTilePool, `reward ${epoch} winningTilePool`);
           assertDecimalString(reward.userWinningAmount, `reward ${epoch} userWinningAmount`);
-          if (typeof reward.winningTile !== "number" || !Number.isInteger(reward.winningTile)) {
-            throw new Error(`reward ${epoch} winningTile must be an integer`);
-          }
+          assertTileId(reward.winningTile, `reward ${epoch} winningTile`);
         }
       }
     },
@@ -758,7 +940,7 @@ async function runCheck(check) {
         body: check.body,
         headers: check.headers,
       });
-      const body = await response.text();
+      const body = await readBoundedResponseText(response);
       const elapsedMs = Math.round(performance.now() - startedAt);
       const expectedStatus = check.expectedStatus ?? 200;
       const expectedStatuses = check.expectedStatuses ?? [expectedStatus];
@@ -798,12 +980,12 @@ async function warmUpChecks() {
 
     try {
       const response = await fetchWithCustomTimeout(url, WARMUP_TIMEOUT_MS);
-      await response.text();
+      await readBoundedResponseText(response);
       const elapsedMs = Math.round(performance.now() - startedAt);
       console.log(`WARM ${check.name.padEnd(14)} ${String(response.status).padEnd(3)} ${String(elapsedMs).padStart(5)} ms ${check.path}`);
     } catch (error) {
       const elapsedMs = Math.round(performance.now() - startedAt);
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeSmokeError(error);
       console.warn(`WARM ${check.name.padEnd(14)} --- ${String(elapsedMs).padStart(5)} ms ${check.path} :: ${message}`);
     }
   }
@@ -832,6 +1014,6 @@ async function run() {
 }
 
 run().catch((error) => {
-  console.error(error);
+  console.error(describeSmokeError(error));
   process.exit(1);
 });

@@ -1,0 +1,405 @@
+import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+import { redactProofText } from "./redact-proof-output.mjs";
+import { parseSummaryTimeoutEnv } from "./summary-timeout.mjs";
+
+const DEFAULT_RPC_LABEL = "linea-sepolia-public-fallback";
+const PREVIEW_PATH = path.join("docs", "v10-canary-dry-run-preview.md");
+const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
+const MAX_PREVIEW_FIELD_CHARS = 180;
+const CHILD_TIMEOUT_MS = parseSummaryTimeoutEnv("V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS", 240_000);
+
+function npmRun(script) {
+  if (process.env.npm_execpath) {
+    return {
+      command: process.execPath,
+      args: [process.env.npm_execpath, "run", script],
+      display: `npm.cmd run ${script}`,
+    };
+  }
+  return {
+    command: process.platform === "win32" ? "npm.cmd" : "npm",
+    args: ["run", script],
+    display: `npm.cmd run ${script}`,
+  };
+}
+
+function nodeCommand(args) {
+  return {
+    command: process.execPath,
+    args,
+    display: `node ${args.join(" ")}`,
+  };
+}
+
+function safeChildEnv(extra = {}) {
+  return {
+    ...process.env,
+    NO_UPDATE_NOTIFIER: "1",
+    npm_config_update_notifier: "false",
+    npm_config_fund: "false",
+    LIVE_TEST_DRY_RUN: "1",
+    LIVE_TEST_EXECUTE: "0",
+    SOAK_EXECUTE_LIVE: "0",
+    TEST_WALLET_EXECUTE: "0",
+    LIVE_CANARY_RPC_LABEL: process.env.LIVE_CANARY_RPC_LABEL || DEFAULT_RPC_LABEL,
+    ...extra,
+  };
+}
+
+function runStep(name, spec, options = {}) {
+  const result = spawnSync(spec.command, spec.args, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    maxBuffer: MAX_CAPTURE_BYTES,
+    timeout: CHILD_TIMEOUT_MS,
+    env: safeChildEnv(options.env),
+  });
+  const rawOutput = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const output = redactProofText(rawOutput).trim();
+  const timedOut = result.error?.code === "ETIMEDOUT";
+  const outputTooLarge = result.error?.code === "ENOBUFS";
+  return {
+    name,
+    command: spec.display,
+    status: result.status ?? null,
+    signal: result.signal ?? null,
+    timedOut,
+    outputTooLarge,
+    output,
+    errorCode: result.error?.code ?? null,
+    ok: result.status === 0 && !timedOut && !outputTooLarge,
+  };
+}
+
+function extractValue(output, pattern) {
+  return output.match(pattern)?.[1] ?? null;
+}
+
+function extractScalar(output, name) {
+  return (
+    extractValue(output, new RegExp(`"${name}"\\s*:\\s*"([^"]+)"`)) ??
+    extractValue(output, new RegExp(`"${name}"\\s*:\\s*([^,}\\r\\n]+)`))?.trim() ??
+    extractValue(output, new RegExp(`${name}=([^,\\s]+)`))
+  );
+}
+
+function extractBooleanFlag(output, name) {
+  const value = extractScalar(output, name);
+  return value === "true" ? true : value === "false" ? false : null;
+}
+
+function extractCanaryLog(output) {
+  const raw = extractValue(output, /\[live-canary\]\s+log=([^\r\n]+)/) ?? extractValue(output, /\blog=([^\s]+\.jsonl)\b/);
+  if (!raw) return null;
+  return safeCanaryLogPath(raw);
+}
+
+function safeCanaryLogPath(value) {
+  const normalized = path.normalize(String(value ?? "").trim());
+  if (
+    !normalized ||
+    path.isAbsolute(normalized) ||
+    normalized.split(/[\\/]+/).includes("..")
+  ) {
+    return null;
+  }
+  const parts = normalized.split(/[\\/]+/);
+  if (
+    parts.length !== 3 ||
+    parts[0] !== "data" ||
+    parts[1] !== "live-test-runs" ||
+    !/^live-canary-[0-9TZ-]+\.jsonl$/.test(parts[2])
+  ) {
+    return null;
+  }
+  return path.join(...parts);
+}
+
+function compactLines(output, limit = 24) {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function formatCodeBlock(value) {
+  const lines = compactLines(value);
+  if (lines.length === 0) return "_No output captured._";
+  return ["```text", ...lines, "```"].join("\n");
+}
+
+function summarizePlanner(step) {
+  return {
+    mode: extractScalar(step.output, "mode"),
+    network: extractScalar(step.output, "network"),
+    chainId: extractScalar(step.output, "chainId"),
+    transactionSent: extractBooleanFlag(step.output, "transactionSent"),
+    signingMaterialLoaded: extractBooleanFlag(step.output, "signingMaterialLoaded"),
+    walletClientCreated: extractBooleanFlag(step.output, "walletClientCreated"),
+    contractWriteSubmitted: extractBooleanFlag(step.output, "contractWriteSubmitted"),
+    transactionLimit: extractScalar(step.output, "transactionLimit"),
+    estimatedGas: extractScalar(step.output, "estimatedGas"),
+    plannedTransfersLinea: extractScalar(step.output, "plannedTransfersLinea"),
+  };
+}
+
+function summarizePendingNonce(step) {
+  return {
+    role: extractScalar(step.output, "role"),
+    mode: extractScalar(step.output, "mode"),
+    pendingGap: extractScalar(step.output, "pendingNonceGap") ?? extractScalar(step.output, "pendingGap"),
+    wouldSend: extractScalar(step.output, "wouldSendReplacement") ?? extractScalar(step.output, "wouldSend"),
+    transactionSent: extractBooleanFlag(step.output, "txSent") ?? extractBooleanFlag(step.output, "transactionSent"),
+    signingMaterialLoaded: extractBooleanFlag(step.output, "signing") ?? extractBooleanFlag(step.output, "signingMaterialLoaded"),
+    walletClientCreated: extractBooleanFlag(step.output, "walletClient") ?? extractBooleanFlag(step.output, "walletClientCreated"),
+    contractWriteSubmitted: extractBooleanFlag(step.output, "contractWrite") ?? extractBooleanFlag(step.output, "contractWriteSubmitted"),
+  };
+}
+
+function summarizeMatrix(step) {
+  return {
+    network: extractValue(step.output, /\bnetwork=([a-z0-9_-]+)/i),
+    chainId: extractValue(step.output, /\bchainId=([0-9]+)/),
+    execution: extractValue(step.output, /\bexecution=([a-z-]+)/i),
+    rounds: extractValue(step.output, /\brounds=([0-9]+)/),
+    plannedBetTx: extractValue(step.output, /\bplannedBetTx=([0-9]+)/),
+    plannedStake: extractValue(step.output, /\bplannedStake=([0-9.]+)/),
+    walletReady: extractValue(step.output, /\bready=([0-9]+\/[0-9]+)/),
+    log: extractCanaryLog(step.output),
+  };
+}
+
+function summarizeAnalyzer(step) {
+  return {
+    status: step.status,
+    dryRunProofBlocksG10G11: /blocked gates:\s*G10,\s*G11/i.test(step.output) || /\bG10\b[\s\S]*\bG11\b/.test(step.output),
+    successfulBetTx:
+      extractValue(step.output, /\bsuccessful bet tx:\s*([0-9]+)/i) ??
+      extractValue(step.output, /\|\s*successful bet tx\s*\|\s*([0-9]+)\s*\|/i),
+    uniqueBetEpochs:
+      extractValue(step.output, /\bunique bet epochs:\s*([0-9]+)/i) ??
+      extractValue(step.output, /\|\s*unique bet epochs\s*\|\s*([0-9]+)\s*\|/i),
+    missingGasCases:
+      extractValue(step.output, /missing V10 gas cases:\s*([^\r\n]+)/i) ??
+      extractValue(step.output, /missing gas cases:\s*([^\r\n]+)/i),
+  };
+}
+
+function bullet(label, value) {
+  if (value === null || value === undefined || value === "") return null;
+  return `- ${label}: ${formatPreviewField(value)}`;
+}
+
+function formatPreviewField(value) {
+  const text = redactProofText(String(value))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_PREVIEW_FIELD_CHARS) return text;
+  return `${text.slice(0, MAX_PREVIEW_FIELD_CHARS - 15)}...<truncated>`;
+}
+
+function renderBullets(items) {
+  return items.filter(Boolean).join("\n") || "- no compact fields parsed; see redacted excerpt";
+}
+
+const planner = runStep("read-only planner", npmRun("plan:canary:v10:postdeploy:summary"));
+const pendingNonce = runStep("pending nonce dry-run", npmRun("soak:testnet:clear-pending:summary"));
+const matrix = runStep("V10 matrix dry-run", npmRun("live:canary:v10:matrix"));
+const matrixSummary = summarizeMatrix(matrix);
+
+let analyzer = null;
+if (matrixSummary.log) {
+  analyzer = runStep(
+    "dry-run proof analyzer",
+    nodeCommand([
+      "scripts/analyze-live-canary-proof.mjs",
+      matrixSummary.log,
+      "--profile=v10-matrix",
+      "--strict",
+      "--summary-only",
+      "--require-epoch-bound",
+      "--require-v10-gas-matrix",
+    ]),
+  );
+}
+
+const plannerSummary = summarizePlanner(planner);
+const pendingSummary = summarizePendingNonce(pendingNonce);
+const analyzerSummary = analyzer ? summarizeAnalyzer(analyzer) : null;
+
+const hardFailures = [planner, pendingNonce, matrix].filter((step) => !step.ok);
+const dryRunAnalyzerBlockedAsExpected =
+  analyzer && analyzer.status !== 0 && analyzerSummary?.dryRunProofBlocksG10G11 === true;
+const status = hardFailures.length === 0 && (analyzer?.ok || dryRunAnalyzerBlockedAsExpected) ? "pass" : "fail";
+
+const markdown = `# V10 Canary Dry-Run Preview
+
+Last updated: ${new Date().toISOString()}.
+
+Scope: Linea Sepolia V10 read-only and dry-run readiness only. This document is
+not an authorization to send transactions, start a soak, deploy, or change
+contract behavior.
+
+Generated by:
+
+\`\`\`powershell
+npm.cmd run preview:canary:v10:dry-run
+\`\`\`
+
+## Overall Status
+
+${renderBullets([
+  bullet("status", status),
+  bullet("rpcLabel", process.env.LIVE_CANARY_RPC_LABEL || DEFAULT_RPC_LABEL),
+  bullet("transactionSent", false),
+  bullet("signingMaterialLoaded", false),
+  bullet("walletClientCreated", false),
+  bullet("contractWriteSubmitted", false),
+  bullet("dryRunProofBlocksG10G11", Boolean(dryRunAnalyzerBlockedAsExpected)),
+])}
+
+## Read-Only Planner
+
+Command:
+
+\`\`\`powershell
+npm.cmd run plan:canary:v10:postdeploy:summary
+\`\`\`
+
+${renderBullets([
+  bullet("exit", planner.status),
+  bullet("errorCode", planner.errorCode),
+  bullet("mode", plannerSummary.mode),
+  bullet("network", plannerSummary.network),
+  bullet("chainId", plannerSummary.chainId),
+  bullet("transactionSent", plannerSummary.transactionSent),
+  bullet("signingMaterialLoaded", plannerSummary.signingMaterialLoaded),
+  bullet("walletClientCreated", plannerSummary.walletClientCreated),
+  bullet("contractWriteSubmitted", plannerSummary.contractWriteSubmitted),
+  bullet("transactionLimit", plannerSummary.transactionLimit),
+  bullet("estimatedGas", plannerSummary.estimatedGas),
+  bullet("plannedTransfersLinea", plannerSummary.plannedTransfersLinea),
+])}
+
+Redacted excerpt:
+
+${formatCodeBlock(planner.output)}
+
+## Pending Nonce Dry-Run
+
+Command:
+
+\`\`\`powershell
+npm.cmd run soak:testnet:clear-pending:summary
+\`\`\`
+
+${renderBullets([
+  bullet("exit", pendingNonce.status),
+  bullet("errorCode", pendingNonce.errorCode),
+  bullet("role", pendingSummary.role),
+  bullet("mode", pendingSummary.mode),
+  bullet("pendingGap", pendingSummary.pendingGap),
+  bullet("wouldSend", pendingSummary.wouldSend),
+  bullet("transactionSent", pendingSummary.transactionSent),
+  bullet("signingMaterialLoaded", pendingSummary.signingMaterialLoaded),
+  bullet("walletClientCreated", pendingSummary.walletClientCreated),
+  bullet("contractWriteSubmitted", pendingSummary.contractWriteSubmitted),
+])}
+
+Redacted excerpt:
+
+${formatCodeBlock(pendingNonce.output)}
+
+## V10 Matrix Dry-Run
+
+Command:
+
+\`\`\`powershell
+$env:LIVE_CANARY_RPC_LABEL = "${process.env.LIVE_CANARY_RPC_LABEL || DEFAULT_RPC_LABEL}"
+npm.cmd run live:canary:v10:matrix
+\`\`\`
+
+${renderBullets([
+  bullet("exit", matrix.status),
+  bullet("errorCode", matrix.errorCode),
+  bullet("network", matrixSummary.network),
+  bullet("chainId", matrixSummary.chainId),
+  bullet("execution", matrixSummary.execution),
+  bullet("rounds", matrixSummary.rounds),
+  bullet("plannedBetTx", matrixSummary.plannedBetTx),
+  bullet("plannedStake", matrixSummary.plannedStake),
+  bullet("walletPreflightReady", matrixSummary.walletReady),
+  bullet("log", matrixSummary.log),
+])}
+
+Redacted excerpt:
+
+${formatCodeBlock(matrix.output)}
+
+## Dry-Run Proof Analysis
+
+Command:
+
+\`\`\`powershell
+node scripts/analyze-live-canary-proof.mjs ${matrixSummary.log ?? "<missing-log>"} --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix
+\`\`\`
+
+${analyzer ? renderBullets([
+  bullet("exit", analyzer.status),
+  bullet("dryRunProofBlocksG10G11", analyzerSummary.dryRunProofBlocksG10G11),
+  bullet("successfulBetTx", analyzerSummary.successfulBetTx),
+  bullet("uniqueBetEpochs", analyzerSummary.uniqueBetEpochs),
+  bullet("missingGasCases", analyzerSummary.missingGasCases),
+]) : "- analyzer skipped because the matrix dry-run did not expose a log path"}
+
+Redacted excerpt:
+
+${formatCodeBlock(analyzer?.output ?? "")}
+
+## Fresh Consent Boundary
+
+Do not execute any of the following without a fresh exact authorization after a
+fresh Preview rerun:
+
+- claim, rebate, resolver-reward, or protocol-fee transactions from the planner;
+- V10 matrix bet transactions;
+- approval transactions required by wallet preflight;
+- resolver transactions;
+- pending-nonce replacements;
+- managed soak or live supervisor execution.
+
+Minimum fresh authorization fields:
+
+- chain and contract target: Linea Sepolia V10
+- exact tranche: claim/flush, V10 matrix bets, approvals, resolver, or soak
+- maximum transaction count
+- maximum stake or transfer amount
+- maximum native gas budget
+- permitted roles
+- stop criteria
+- confirmation that no already-completed transaction should be repeated
+`;
+
+writeFileSync(PREVIEW_PATH, markdown, "utf8");
+
+console.log(JSON.stringify({
+  status,
+  previewPath: PREVIEW_PATH,
+  plannerExit: planner.status,
+  pendingNonceExit: pendingNonce.status,
+  matrixExit: matrix.status,
+  analyzerExit: analyzer?.status ?? null,
+  canaryLog: matrixSummary.log ?? null,
+  dryRunProofBlocksG10G11: Boolean(dryRunAnalyzerBlockedAsExpected),
+  transactionSent: false,
+  signingMaterialLoaded: false,
+  walletClientCreated: false,
+  contractWriteSubmitted: false,
+}));
+
+if (status !== "pass") {
+  process.exitCode = 1;
+}

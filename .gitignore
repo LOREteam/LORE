@@ -52,6 +52,11 @@ yarn-error.log*
 .next-*.log
 artifacts/**/*.log
 artifacts/*.pid
+artifacts/autonomous-summary-*.txt
+artifacts/business-logic-summary-*.json
+logs/workspace-cleanup-loop.pid
+logs/workspace-cleanup-loop.status.json
+logs/workspace-cleanup-loop.stop
 artifacts/jackpot-preview/
 artifacts/jackpot-pages/
 artifacts/manual-check/

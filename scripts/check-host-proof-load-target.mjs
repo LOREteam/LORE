@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const summaryOnly = process.argv.includes("--summary-only");
 const tempDir = mkdtempSync(join(tmpdir(), "lore-host-proof-load-"));
+const fixtureCount = 5;
 
 function baseManifest() {
   const timestamp = new Date().toISOString();
@@ -72,6 +74,15 @@ function baseManifest() {
       evidence: "Load base URL: https://canary.playlore.xyz | TOTAL count= 120 fail= 0 err= 0.00% p95=250ms .tmp/load-http.log",
       timestamp,
     },
+    externalRateLimit: {
+      status: "pass",
+      webReplicaCount: 2,
+      distinctReplicas: 2,
+      failClosed: true,
+      sharedBucketVerified: true,
+      checkedAt: timestamp,
+      evidence: "synthetic shared rate-limit bucket proof across replica-a and replica-b with fail-closed store behavior .tmp/rate-limit-shared.log",
+    },
   };
 }
 
@@ -138,11 +149,28 @@ if (!/loadHttp\.hostType must be staging or canary/.test(outputOf(missingHostTyp
   issues.push("missing loadHttp.hostType failure reason is missing");
 }
 
-console.log("# Host Proof Load Target Guard");
-console.log("");
-console.log(`Timestamp: ${new Date().toISOString()}`);
-console.log("");
-console.log(`Summary: ${issues.length === 0 ? "host proof load target guard passed" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+if (summaryOnly) {
+  console.log(
+    JSON.stringify({
+      status: issues.length === 0 ? "pass" : "fail",
+      fixtures: fixtureCount,
+      issues: issues.length,
+      launchGate: "host",
+    }),
+  );
+} else {
+  console.log("# Host Proof Load Target Guard");
+  console.log("");
+  console.log(`Timestamp: ${new Date().toISOString()}`);
+  console.log("");
+  console.log(`Summary: ${issues.length === 0 ? "host proof load target guard passed" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+}
+
+try {
+  rmSync(tempDir, { recursive: true, force: true });
+} catch {
+  // Best-effort temp cleanup; validation status is already captured.
+}
 
 if (issues.length > 0) {
   process.exitCode = 1;

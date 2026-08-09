@@ -1,5 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+
+const CANONICAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const MAX_KEY_VALUE_MARKERS = 64;
+const MAX_RESTORE_EVIDENCE_BYTES = 512 * 1024;
 
 function refuseFinalProofOutput(outPath) {
   const normalized = path.relative(process.cwd(), outPath).replace(/\\/g, "/");
@@ -21,11 +26,33 @@ function requireConcreteValue(name, value) {
   return value;
 }
 
+function regularFileStat(filePath) {
+  try {
+    const stat = statSync(filePath);
+    return stat.isFile() ? stat : null;
+  } catch {
+    return null;
+  }
+}
+
+function regularDirectoryStat(dirPath) {
+  try {
+    const stat = statSync(dirPath);
+    return stat.isDirectory() ? stat : null;
+  } catch {
+    return null;
+  }
+}
+
 function readRequiredLog(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+  const stat = regularFileStat(resolved);
+  if (!stat) {
     throw new Error(`--${name} must point to an existing redacted file artifact`);
+  }
+  if (stat.size > MAX_RESTORE_EVIDENCE_BYTES) {
+    throw new Error(`--${name} artifact is too large to validate safely`);
   }
   return readFileSync(resolved, "utf8");
 }
@@ -33,10 +60,23 @@ function readRequiredLog(name, filePath) {
 function requireExistingArtifact(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  if (!existsSync(resolved) || !statSync(resolved).isFile()) {
+  if (!regularFileStat(resolved)) {
     throw new Error(`--${name} must point to an existing redacted file artifact`);
   }
   return filePath;
+}
+
+function requireDistinctArtifactInputs(entries) {
+  for (let leftIndex = 0; leftIndex < entries.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
+      const [leftName, leftPath] = entries[leftIndex];
+      const [rightName, rightPath] = entries[rightIndex];
+      if (!leftPath || !rightPath) continue;
+      if (path.resolve(process.cwd(), leftPath).toLowerCase() === path.resolve(process.cwd(), rightPath).toLowerCase()) {
+        throw new Error(`--${leftName} and --${rightName} must point to distinct restore evidence files`);
+      }
+    }
+  }
 }
 
 function firstMatchingLine(text, pattern) {
@@ -52,10 +92,30 @@ function hasOkSummary(text, okText) {
 
 function parseKeyValues(line = "") {
   const values = {};
-  for (const match of line.matchAll(/\b([A-Za-z][A-Za-z0-9_-]*)=([^\s]+)/g)) {
+  const pattern = /\b([A-Za-z][A-Za-z0-9_-]*)=([^\s]+)/g;
+  let inspected = 0;
+  let match = pattern.exec(line);
+  while (match) {
+    inspected += 1;
+    if (inspected > MAX_KEY_VALUE_MARKERS) {
+      throw new Error("restore health evidence has too many key/value markers to validate safely");
+    }
     values[match[1]] = match[2];
+    match = pattern.exec(line);
   }
   return values;
+}
+
+function hasCanonicalNonNegativeInteger(value) {
+  return parseCanonicalNonNegativeInteger(value) !== null;
+}
+
+function parseCanonicalNonNegativeInteger(value) {
+  const text = String(value ?? "").trim();
+  if (!CANONICAL_NON_NEGATIVE_INTEGER_RE.test(text)) return null;
+  const parsed = BigInt(text);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(parsed);
 }
 
 function pathLooksOutsideRepo(rawPath) {
@@ -72,14 +132,14 @@ function requireCondition(condition, message) {
 function requireExistingFile(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  requireCondition(existsSync(resolved), `--${name} must point to an existing file`);
+  requireCondition(Boolean(regularFileStat(resolved)), `--${name} must point to an existing file`);
   return resolved;
 }
 
 function requireExistingDirectory(name, dirPath) {
   requireConcreteValue(name, dirPath);
   const resolved = path.resolve(process.cwd(), dirPath);
-  requireCondition(existsSync(resolved), `--${name} must point to an existing directory`);
+  requireCondition(Boolean(regularDirectoryStat(resolved)), `--${name} must point to an existing directory`);
   return resolved;
 }
 
@@ -98,7 +158,9 @@ function pathInsideOrSame(childPath, parentPath) {
 function normalizedOrigin(value) {
   if (!value) return "";
   try {
-    return new URL(String(value).trim()).origin.toLowerCase();
+    const url = new URL(String(value).trim());
+    if (url.username || url.password) return "";
+    return url.origin.toLowerCase();
   } catch {
     return "";
   }
@@ -107,13 +169,41 @@ function normalizedOrigin(value) {
 function isFinalHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase();
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
     return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
       url.pathname === "/" &&
       url.search === "" &&
       url.hash === "" &&
-      !["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host) &&
-      !host.endsWith(".local");
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      );
   } catch {
     return false;
   }
@@ -140,7 +230,7 @@ function parseHealth(log) {
     url: url || argValue("restored-origin", "TODO: restored staging/canary/restore HTTPS origin"),
     runtimeHealthPassed: ok && /^(ok|pass|healthy)$/i.test(runtime),
     dataSyncHealthPassed: ok && /^(ok|pass|healthy)$/i.test(dataSync),
-    finalityLagChecked: Number.isFinite(Number(values.finalityLagBlocks)),
+    finalityLagChecked: hasCanonicalNonNegativeInteger(values.finalityLagBlocks),
     summary,
     timestamp: new Date().toISOString(),
   };
@@ -151,13 +241,21 @@ function requireValidHealthArtifact(health, log, restoredOrigin) {
   requireCondition(healthBaseMatches(health.summary, restoredOrigin), "--health-log must include base=<restored-origin>");
   requireCondition(health.runtimeHealthPassed === true, "--health-log must include runtime=ok/pass/healthy");
   requireCondition(health.dataSyncHealthPassed === true, "--health-log must include dataSync=ok/pass/healthy");
-  requireCondition(health.finalityLagChecked === true, "--health-log must include numeric finalityLagBlocks=<number>");
+  requireCondition(health.finalityLagChecked === true, "--health-log must include canonical non-negative decimal finalityLagBlocks=<number>");
 }
 
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/restore-proof.draft.json"));
 refuseFinalProofOutput(outPath);
 const restoreLogPath = argValue("restore-log");
 const healthLogPath = argValue("health-log");
+const backupScheduleArtifactPath = argValue("backup-schedule-artifact", "");
+const preservationArtifactPath = argValue("preservation-artifact", "");
+requireDistinctArtifactInputs([
+  ["restore-log", restoreLogPath],
+  ["health-log", healthLogPath],
+  ["backup-schedule-artifact", backupScheduleArtifactPath],
+  ["preservation-artifact", preservationArtifactPath],
+]);
 const restoreLog = readRequiredLog("restore-log", restoreLogPath);
 const healthLog = readRequiredLog("health-log", healthLogPath);
 const now = new Date().toISOString();
@@ -167,8 +265,8 @@ const restoreDir = requireConcreteValue("restore-dir", argValue("restore-dir", p
 const backupPath = requireConcreteValue("backup", argValue("backup", process.env.LORE_RESTORE_BACKUP || ""));
 const restoredOrigin = requireConcreteValue("restored-origin", argValue("restored-origin", ""));
 const restoredHostType = requireConcreteValue("restored-host-type", argValue("restored-host-type", ""));
-const backupScheduleArtifact = requireExistingArtifact("backup-schedule-artifact", argValue("backup-schedule-artifact", ""));
-const preservationArtifact = requireExistingArtifact("preservation-artifact", argValue("preservation-artifact", ""));
+const backupScheduleArtifact = requireExistingArtifact("backup-schedule-artifact", backupScheduleArtifactPath);
+const preservationArtifact = requireExistingArtifact("preservation-artifact", preservationArtifactPath);
 const resolvedSourceDbPath = requireExistingFile("source", sourceDbPath);
 const resolvedBackupDir = requireExistingDirectory("backup-dir", backupDir);
 const resolvedRestoreDir = requireExistingDirectory("restore-dir", restoreDir);
@@ -181,7 +279,7 @@ requireCondition(!pathInsideOrSame(resolvedSourceDbPath, resolvedBackupDir), "--
 requireCondition(!pathInsideOrSame(resolvedSourceDbPath, resolvedRestoreDir), "--source DB must not be inside --restore-dir");
 requireCondition(!samePath(resolvedBackupDir, resolvedRestoreDir), "--backup-dir and --restore-dir must be different");
 requireCondition(pathInsideOrSame(resolvedBackupPath, resolvedBackupDir), "--backup file must be inside --backup-dir");
-requireCondition(isFinalHttpsOrigin(restoredOrigin), "--restored-origin must be a non-local HTTPS origin without path, query, or hash");
+requireCondition(isFinalHttpsOrigin(restoredOrigin), "--restored-origin must be a public HTTPS origin without path, query, or hash");
 requireCondition(["staging", "canary", "restore"].includes(restoredHostType), "--restored-host-type must be staging, canary, or restore");
 const sourceDbOutsideBackupRestoreDirs = Boolean(
   sourceDbPath &&
@@ -203,6 +301,8 @@ const manifest = {
   backupSchedule: {
     enabled: false,
     cadence: "TODO: recurring backup cadence, for example every 5 minutes",
+    retentionDays: "TODO: positive integer retention window in days",
+    lastSuccessfulBackupAt: "TODO: ISO timestamp of the latest successful scheduled backup",
     evidence: `artifact: ${backupScheduleArtifact}`,
     checkedAt: now,
   },

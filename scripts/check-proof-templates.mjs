@@ -1,10 +1,23 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const templateDoc = "docs/launch-proof-manifest-templates.md";
-const templateSource = readFileSync(templateDoc, "utf8");
+const MAX_PROOF_TEMPLATE_DOC_BYTES = 512 * 1024;
+const summaryOnly = process.argv.includes("--summary-only");
+
+function readTemplateDoc(filePath) {
+  if (!existsSync(filePath)) throw new Error(`Missing proof template doc: ${filePath}`);
+  const stats = statSync(filePath);
+  if (!stats.isFile()) throw new Error(`Proof template doc must be a file: ${filePath}`);
+  if (stats.size > MAX_PROOF_TEMPLATE_DOC_BYTES) {
+    throw new Error(`Proof template doc is too large to validate safely: ${filePath}`);
+  }
+  return readFileSync(filePath, "utf8");
+}
+
+const templateSource = readTemplateDoc(templateDoc);
 const checks = [
   {
     id: "signoff",
@@ -137,9 +150,15 @@ console.log("# Proof Template Guard");
 console.log("");
 console.log(`Timestamp: ${new Date().toISOString()}`);
 console.log("");
-printTable(["Template", "Strict result", "Rejected as template", "Summary"], rows);
-console.log("");
-console.log(`Summary: ${issues.length === 0 ? "all proof templates are rejected by strict validators" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+if (summaryOnly) {
+  const rejected = rows.filter((row) => row[2] === "yes").length;
+  console.log(`status=${issues.length === 0 ? "pass" : "fail"}, templates=${rows.length}, rejected=${rejected}, issues=${issues.length}`);
+  console.log(`Summary: ${issues.length === 0 ? "all proof templates are rejected by strict validators" : `${issues.length} proof template issue(s)`}.`);
+} else {
+  printTable(["Template", "Strict result", "Rejected as template", "Summary"], rows);
+  console.log("");
+  console.log(`Summary: ${issues.length === 0 ? "all proof templates are rejected by strict validators" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+}
 
 if (issues.length > 0) {
   process.exitCode = 1;

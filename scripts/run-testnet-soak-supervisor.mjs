@@ -6,14 +6,17 @@ import {
   openSync,
   createReadStream,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
+  statSync,
   statfsSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { redactProofText } from "./redact-proof-output.mjs";
 
 const ROOT = process.cwd();
 const OUT_DIR = resolve(process.env.SOAK_OUT_DIR || join(".tmp", "testnet-soak"));
@@ -22,16 +25,30 @@ const STATUS_TMP_PATH = `${STATUS_PATH}.tmp`;
 const LOCK_PATH = join(OUT_DIR, "supervisor.lock");
 const SERVER_LOG_PATH = join(OUT_DIR, "server.log");
 const CANARY_LOG_PATH = join(OUT_DIR, "canary.log");
+const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const PORT = parseInteger("SOAK_PORT", 3011, 1024, 65_535);
-const DRY_RUN = process.env.SOAK_DRY_RUN === "1" || process.argv.includes("--dry-run");
+const LIVE_EXECUTION_CONFIRMED =
+  process.env.SOAK_EXECUTE_LIVE === "1" && process.argv.includes("--execute-live");
+const DRY_RUN = !LIVE_EXECUTION_CONFIRMED;
 const STATUS_ONLY = process.argv.includes("--status");
+const STATUS_SUMMARY_ONLY = process.argv.includes("--summary-only");
+const STATUS_COMPACT_ONLY = process.argv.includes("--compact");
 const STOP_ONLY = process.argv.includes("--stop");
 const STARTED_AT = new Date().toISOString();
 const HEALTH_SECRET = randomBytes(32).toString("hex");
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const SERVER_READY_TIMEOUT_MS = parseInteger("SOAK_SERVER_READY_TIMEOUT_MS", 60_000, 5_000, 300_000);
+const DISK_CAPACITY_CHECK_INTERVAL_MS = parseInteger("SOAK_DISK_CHECK_INTERVAL_MS", 30_000, 1_000, 300_000);
 const SLOW_SEND_THRESHOLD_MS = 20_000;
 const MIN_DISK_FREE_BYTES = parseInteger("SOAK_MIN_DISK_FREE_BYTES", 1_073_741_824, 1, Number.MAX_SAFE_INTEGER);
+const LIVE_LOG_MARKER_SCAN_BYTES = 64 * 1024;
+const MAX_SOAK_SUPERVISOR_ERROR_CHARS = 500;
+const MAX_SOAK_STATUS_JSON_BYTES = 128 * 1024;
+const MAX_SOAK_LOCK_JSON_BYTES = 4 * 1024;
+const TRACKED_PID_RE = /^[1-9]\d{0,9}$/;
+const MAX_TRACKED_PID = 2_147_483_647;
+const MAX_TRACKED_PID_BIGINT = BigInt(MAX_TRACKED_PID);
 const SAFE_BET_ERROR_KINDS = new Set([
   "already-known",
   "already-resolved",
@@ -53,21 +70,54 @@ const SAFE_BET_ERROR_KINDS = new Set([
   "tx-reverted",
   "user-rejected",
 ]);
-const SAFE_SOAK_ROLES = new Set(["MANUAL", "AUTOMINER_A", "AUTOMINER_B"]);
+const SAFE_SOAK_ROLES = new Set(["MANUAL", "AUTOMINER_A", "AUTOMINER_B", "AUTOMINER_C"]);
 
 let server = null;
 let canary = null;
 let stopping = false;
 let managedRunStarted = false;
 
+function describeSupervisorError(error) {
+  const text = redactProofText(error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_SOAK_SUPERVISOR_ERROR_CHARS) return text;
+  return `${text.slice(0, MAX_SOAK_SUPERVISOR_ERROR_CHARS - 15)}...<truncated>`;
+}
+
 function parseInteger(name, fallbackValue, min, max) {
-  const raw = process.env[name];
+  const raw = process.env[name]?.trim();
   if (!raw) return fallbackValue;
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${name} must be an integer in [${min}, ${max}]`);
+  if (!DECIMAL_INTEGER_RE.test(raw)) {
+    throw new Error(`${name} must be a canonical decimal integer in [${min}, ${max}]`);
   }
-  return parsed;
+  const parsed = BigInt(raw);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT || parsed < BigInt(min) || parsed > BigInt(max)) {
+    throw new Error(`${name} must be a canonical decimal integer in [${min}, ${max}]`);
+  }
+  return Number(parsed);
+}
+
+function parseTrackedPid(value) {
+  const raw = String(value ?? "").trim();
+  if (!TRACKED_PID_RE.test(raw)) return null;
+  const pid = BigInt(raw);
+  return pid <= MAX_TRACKED_PID_BIGINT ? Number(pid) : null;
+}
+
+function matchingSupervisorPid(status, lock) {
+  const supervisorPid = parseTrackedPid(status?.supervisorPid);
+  const lockPid = parseTrackedPid(lock?.pid);
+  const statusStartedAt = typeof status?.startedAt === "string" ? status.startedAt : null;
+  const lockStartedAt = typeof lock?.startedAt === "string" ? lock.startedAt : null;
+  if (supervisorPid === null || lockPid === null || supervisorPid !== lockPid) return null;
+  if (!statusStartedAt || !lockStartedAt || statusStartedAt !== lockStartedAt) return null;
+  return supervisorPid;
+}
+
+function bigIntToNonNegativeSafeInteger(value) {
+  if (typeof value !== "bigint" || value <= 0n) return 0;
+  return value > MAX_SAFE_INTEGER_BIGINT ? Number.MAX_SAFE_INTEGER : Number(value);
 }
 
 function processIsAlive(pid) {
@@ -80,25 +130,67 @@ function processIsAlive(pid) {
   }
 }
 
-function assertDiskCapacity() {
+function findDiskCapacityPath() {
   let capacityPath = OUT_DIR;
   while (!existsSync(capacityPath)) {
     const parent = dirname(capacityPath);
     if (parent === capacityPath) throw new Error("testnet soak artifact volume is unavailable");
     capacityPath = parent;
   }
-  const stats = statfsSync(capacityPath, { bigint: true });
-  if (stats.bavail * stats.bsize < BigInt(MIN_DISK_FREE_BYTES)) {
+  return capacityPath;
+}
+
+function readDiskCapacity() {
+  const stats = statfsSync(findDiskCapacityPath(), { bigint: true });
+  const freeBytes = stats.bavail * stats.bsize;
+  return {
+    diskCapacityAvailable: true,
+    diskFreeBytesNow: bigIntToNonNegativeSafeInteger(freeBytes),
+    diskFreeBelowMinimum: freeBytes < BigInt(MIN_DISK_FREE_BYTES),
+    diskFreeMinimumBytes: MIN_DISK_FREE_BYTES,
+  };
+}
+
+function readDiskCapacitySummary() {
+  try {
+    return readDiskCapacity();
+  } catch {
+    return {
+      diskCapacityAvailable: false,
+      diskFreeBytesNow: null,
+      diskFreeBelowMinimum: null,
+      diskFreeMinimumBytes: MIN_DISK_FREE_BYTES,
+    };
+  }
+}
+
+function assertDiskCapacity() {
+  const capacity = readDiskCapacity();
+  if (capacity.diskFreeBelowMinimum) {
     throw new Error(`testnet soak requires at least ${MIN_DISK_FREE_BYTES} free bytes`);
   }
 }
 
-function readJson(path) {
+function readJson(path, maxBytes = MAX_SOAK_STATUS_JSON_BYTES) {
   try {
+    const stats = statSync(path);
+    if (!stats.isFile() || stats.size > maxBytes) return null;
     return JSON.parse(readFileSync(path, "utf8"));
   } catch {
     return null;
   }
+}
+
+function fileExists(path) {
+  try {
+    return existsSync(path) && statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function removeLockFile() {
+  if (fileExists(LOCK_PATH)) rmSync(LOCK_PATH, { force: true });
 }
 
 function numericSummary(values) {
@@ -125,6 +217,114 @@ function growthSummary(values) {
   };
 }
 
+function hasMetricSamples(metric) {
+  return Number.isSafeInteger(metric?.samples) && metric.samples > 0;
+}
+
+function compactStatusProgress(current) {
+  const progress = {
+    successfulBets: current.successfulBets,
+    epochBoundBets: current.epochBoundBets,
+    epochUnboundBets: current.epochUnboundBets,
+    successfulBetRoles: current.successfulBetRoles,
+    failedBets: current.failedBets,
+    failedBetRoles: current.failedBetRoles,
+    failedBetErrorKinds: current.failedBetErrorKinds,
+    failedBetFamilies: current.failedBetFamilies,
+    failedBetModes: current.failedBetModes,
+    failedBetStages: current.failedBetStages,
+    maxConsecutiveFailedBetsByRole: current.maxConsecutiveFailedBetsByRole,
+    uniqueEpochs: current.uniqueEpochs,
+    uniqueTxHashes: current.uniqueTxHashes,
+    duplicateTxHashes: current.duplicateTxHashes,
+    uniqueNonces: current.uniqueNonces,
+    duplicateNonces: current.duplicateNonces,
+    revertedTransactions: current.revertedTransactions,
+    healthFailures: current.healthFailures,
+    healthRetries: current.healthRetries,
+    estimateGasRetries: current.estimateGasRetries,
+    rpcFailoverInjectionEvents: current.rpcFailoverInjectionEvents,
+    resolverFallbacks: current.resolverFallbacks,
+    slowSendCount: current.slowSendCount,
+    preflightFailures: current.preflightFailures,
+  };
+  if (hasMetricSamples(current.latencyMs)) progress.latencyMs = current.latencyMs;
+  const activeGrowth = Object.fromEntries(
+    Object.entries(current.healthGrowth ?? {}).filter(([, metric]) => hasMetricSamples(metric)),
+  );
+  if (Object.keys(activeGrowth).length > 0) progress.healthGrowth = activeGrowth;
+  return progress;
+}
+
+function formatStatusCounts(counts) {
+  const entries = Object.entries(counts ?? {})
+    .map(([key, count]) => [key, safePositiveStatusCount(count)])
+    .filter(([, count]) => count !== null);
+  if (entries.length === 0) return "none";
+  return entries
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, count]) => `${String(key).replace(/[^A-Za-z0-9_-]+/g, "-")}=${count}`)
+    .join(",");
+}
+
+function safePositiveStatusCount(value) {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? value : null;
+  if (typeof value === "bigint") return value > 0n && value <= MAX_SAFE_INTEGER_BIGINT ? Number(value) : null;
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!DECIMAL_INTEGER_RE.test(raw)) return null;
+  const parsed = BigInt(raw);
+  return parsed > 0n && parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
+}
+
+function formatStatusMetric(value) {
+  return Number.isFinite(value) ? String(value) : "n/a";
+}
+
+function formatCompactPreflightFailures(failures) {
+  if (!Array.isArray(failures) || failures.length === 0) return "none";
+  return failures
+    .slice(0, 8)
+    .map((failure) => {
+      const role = SAFE_SOAK_ROLES.has(failure?.role) ? failure.role : "unknown";
+      const reason = String(failure?.reason ?? "unknown").replace(/[^A-Za-z0-9_-]+/g, "-");
+      return `${role}:${reason}`;
+    })
+    .join(",");
+}
+
+function compactSafeStatusLine(safeStatus) {
+  const progress = compactStatusProgress(safeStatus.progress ?? {});
+  return [
+    `status=${safeStatus.status}`,
+    `dry=${safeStatus.dryRun === true}`,
+    `alive=${safeStatus.supervisorAlive === true}`,
+    `stop=${String(safeStatus.stopReason ?? "none").replace(/[^A-Za-z0-9_-]+/g, "-")}`,
+    `ok=${progress.successfulBets ?? 0}`,
+    `bound=${progress.epochBoundBets ?? 0}`,
+    `unbound=${progress.epochUnboundBets ?? 0}`,
+    `fail=${progress.failedBets ?? 0}`,
+    `roles=${formatStatusCounts(progress.successfulBetRoles)}/${formatStatusCounts(progress.failedBetRoles)}`,
+    `epochs=${progress.uniqueEpochs ?? 0}`,
+    `tx=${progress.uniqueTxHashes ?? 0}`,
+    `nonces=${progress.uniqueNonces ?? 0}`,
+    `dupTx=${progress.duplicateTxHashes ?? 0}`,
+    `dupNonce=${progress.duplicateNonces ?? 0}`,
+    `rev=${progress.revertedTransactions ?? 0}`,
+    `health=${progress.healthFailures ?? 0}/${progress.healthRetries ?? 0}`,
+    `rpc=${progress.rpcFailoverInjectionEvents ?? 0}`,
+    `gas=${progress.estimateGasRetries ?? 0}`,
+    `resolver=${progress.resolverFallbacks ?? 0}`,
+    `slow=${progress.slowSendCount ?? 0}`,
+    `p95=${formatStatusMetric(progress.latencyMs?.p95)}`,
+    `diskLow=${safeStatus.diskCapacity?.diskFreeBelowMinimum === true}`,
+    `diskFree=${formatStatusMetric(safeStatus.diskCapacity?.diskFreeBytesNow)}`,
+    `preflight=${formatCompactPreflightFailures(progress.preflightFailures)}`,
+    `fk=${formatStatusCounts(progress.failedBetErrorKinds)}`,
+    `ff=${formatStatusCounts(progress.failedBetFamilies)}`,
+  ].join(" ");
+}
+
 function classifyFailedBetFamily(event) {
   if (event.ok === true && event.txStatus !== "success") return "inconsistent-success-event";
   if (event.errorKind === "insufficient-allowance" || event.errorKind === "insufficient-balance" || event.errorKind === "insufficient-funds") return "funding";
@@ -148,6 +348,8 @@ function classifyFailedBetFamily(event) {
 async function summarizeLiveLog(path) {
   const summary = {
     successfulBets: 0,
+    epochBoundBets: 0,
+    epochUnboundBets: 0,
     successfulBetRoles: {},
     failedBets: 0,
     failedBetErrorKinds: {},
@@ -177,7 +379,7 @@ async function summarizeLiveLog(path) {
     phaseLatencyMs: null,
     healthGrowth: null,
   };
-  if (!path || !existsSync(path)) return summary;
+  if (!path || !fileExists(path)) return summary;
   const epochs = new Set();
   const txHashes = new Set();
   const nonces = new Set();
@@ -259,6 +461,8 @@ async function summarizeLiveLog(path) {
       continue;
     }
     summary.successfulBets += 1;
+    if (event.epochBound === true) summary.epochBoundBets += 1;
+    else summary.epochUnboundBets += 1;
     const successRole = SAFE_SOAK_ROLES.has(event.role) ? event.role : "UNKNOWN";
     summary.successfulBetRoles[successRole] = (summary.successfulBetRoles[successRole] ?? 0) + 1;
     summary.consecutiveFailedBetsByRole[successRole] = 0;
@@ -295,13 +499,15 @@ async function summarizeLiveLog(path) {
 
 async function printSafeStatus() {
   const status = readJson(STATUS_PATH);
-  const lock = readJson(LOCK_PATH);
-  const supervisorPid = Number(status?.supervisorPid);
-  const lockMatches = Number(lock?.pid) === supervisorPid && lock?.startedAt === status?.startedAt;
+  const lock = readJson(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES);
+  const supervisorPid = matchingSupervisorPid(status, lock);
+  const lockMatches = supervisorPid !== null;
   const liveLogPath = status?.artifacts?.liveLog || readLiveLogPath();
+  const liveLogReady = Boolean(liveLogPath && fileExists(liveLogPath));
   const progress = await summarizeLiveLog(liveLogPath);
   const lastEventMs = progress.lastEventAt ? Date.parse(progress.lastEventAt) : NaN;
-  console.log(JSON.stringify({
+  const diskCapacity = readDiskCapacitySummary();
+  const safeStatus = {
     status: status?.status || "not-started",
     dryRun: status?.dryRun ?? null,
     startedAt: status?.startedAt || null,
@@ -309,12 +515,29 @@ async function printSafeStatus() {
     exitCode: status?.exitCode ?? null,
     stopReason: status?.stopReason || null,
     supervisorAlive: lockMatches && processIsAlive(supervisorPid),
-    hasLiveLog: Boolean(liveLogPath),
+    hasLiveLog: liveLogReady,
     secondsSinceLastEvent: Number.isFinite(lastEventMs)
       ? Math.max(0, Math.floor((Date.now() - lastEventMs) / 1000))
       : null,
+    diskCapacity,
     progress,
-  }, null, 2));
+  };
+  if (diskCapacity.diskCapacityAvailable !== true || diskCapacity.diskFreeBelowMinimum === true) {
+    process.exitCode = 1;
+  }
+  if (STATUS_COMPACT_ONLY) {
+    console.log(compactSafeStatusLine(safeStatus));
+    return;
+  }
+  if (STATUS_SUMMARY_ONLY) {
+    const { progress: current, ...run } = safeStatus;
+    console.log(JSON.stringify({
+      ...run,
+      progress: compactStatusProgress(current),
+    }));
+    return;
+  }
+  console.log(JSON.stringify(safeStatus, null, 2));
 }
 
 function finalizeStoppedStatus(status) {
@@ -330,14 +553,14 @@ function finalizeStoppedStatus(status) {
     writeFileSync(STATUS_TMP_PATH, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
     renameSync(STATUS_TMP_PATH, STATUS_PATH);
   }
-  rmSync(LOCK_PATH, { force: true });
+  removeLockFile();
 }
 
 async function stopManagedSupervisor() {
   const status = readJson(STATUS_PATH);
-  const lock = readJson(LOCK_PATH);
-  const supervisorPid = Number(status?.supervisorPid);
-  const lockMatches = Number(lock?.pid) === supervisorPid && lock?.startedAt === status?.startedAt;
+  const lock = readJson(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES);
+  const supervisorPid = matchingSupervisorPid(status, lock);
+  const lockMatches = supervisorPid !== null;
   if (!lockMatches) {
     console.log("[testnet-soak] no managed supervisor is running");
     return;
@@ -360,14 +583,18 @@ async function stopManagedSupervisor() {
 function acquireLock() {
   mkdirSync(OUT_DIR, { recursive: true });
   if (existsSync(LOCK_PATH)) {
+    if (!fileExists(LOCK_PATH)) throw new Error("testnet soak supervisor lock path exists but is not a file");
+    if (statSync(LOCK_PATH).size > MAX_SOAK_LOCK_JSON_BYTES) {
+      throw new Error("testnet soak supervisor lock file is too large to validate safely");
+    }
     let previousPid = 0;
     try {
-      previousPid = Number(JSON.parse(readFileSync(LOCK_PATH, "utf8")).pid);
+      previousPid = parseTrackedPid(readJson(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES)?.pid) ?? 0;
     } catch {
       previousPid = 0;
     }
     if (processIsAlive(previousPid)) throw new Error(`testnet soak supervisor is already running (pid ${previousPid})`);
-    rmSync(LOCK_PATH, { force: true });
+    removeLockFile();
   }
   const handle = openSync(LOCK_PATH, "wx");
   writeFileSync(handle, JSON.stringify({ pid: process.pid, startedAt: STARTED_AT }));
@@ -377,10 +604,16 @@ function acquireLock() {
 }
 
 function readLiveLogPath() {
+  let handle = null;
   try {
-    return readFileSync(CANARY_LOG_PATH, "utf8").match(/^\[live-canary\] log=(.+)$/m)?.[1]?.trim() || null;
+    handle = openSync(CANARY_LOG_PATH, "r");
+    const buffer = Buffer.alloc(LIVE_LOG_MARKER_SCAN_BYTES);
+    const bytesRead = readSync(handle, buffer, 0, buffer.length, 0);
+    return buffer.toString("utf8", 0, bytesRead).match(/^\[live-canary\] log=(.+)$/m)?.[1]?.trim() || null;
   } catch {
     return null;
+  } finally {
+    if (handle !== null) closeSync(handle);
   }
 }
 
@@ -417,8 +650,43 @@ function spawnLogged(command, args, env, logPath) {
 
 async function waitForExit(child) {
   return new Promise((resolveExit, rejectExit) => {
-    child.once("error", rejectExit);
-    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+    let settled = false;
+    const diskMonitor = setInterval(() => {
+      const capacity = readDiskCapacitySummary();
+      if (capacity.diskCapacityAvailable && !capacity.diskFreeBelowMinimum) return;
+      settle(resolveExit, {
+        code: null,
+        signal: capacity.diskCapacityAvailable ? "disk-capacity-below-minimum" : "disk-capacity-unavailable",
+      });
+      stopChild(child);
+    }, DISK_CAPACITY_CHECK_INTERVAL_MS);
+
+    function cleanup() {
+      clearInterval(diskMonitor);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    }
+
+    function settle(resolve, value) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    }
+
+    function onError(error) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      rejectExit(error);
+    }
+
+    function onExit(code, signal) {
+      settle(resolveExit, { code, signal });
+    }
+
+    child.once("error", onError);
+    child.once("exit", onExit);
   });
 }
 
@@ -455,7 +723,7 @@ async function shutdown(stopReason, exitCode) {
     exitCode,
     stopReason,
   });
-  rmSync(LOCK_PATH, { force: true });
+  removeLockFile();
 }
 
 async function main() {
@@ -482,6 +750,7 @@ async function main() {
     ...sharedEnv,
     LIVE_CANARY_RPC_LABEL: process.env.LIVE_CANARY_RPC_LABEL || "local-production-like-sepolia",
     LIVE_TEST_DRY_RUN: DRY_RUN ? "1" : "0",
+    LIVE_TEST_EXECUTE: LIVE_EXECUTION_CONFIRMED ? "1" : "0",
     LIVE_TEST_HEALTH_BASE_URL: BASE_URL,
     LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS: process.env.LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS || "5",
     LIVE_TEST_INJECT_RPC_FAILOVER: "1",
@@ -490,11 +759,16 @@ async function main() {
     LIVE_TEST_MIN_TILES_PER_ROUND: process.env.LIVE_TEST_MIN_TILES_PER_ROUND || "1",
     LIVE_TEST_MIN_TOTAL_BET_AMOUNT: process.env.LIVE_TEST_MIN_TOTAL_BET_AMOUNT || "0.01",
     LIVE_TEST_RANDOMIZE_ROUNDS: "1",
+    LIVE_TEST_ROLES: process.env.LIVE_TEST_ROLES || "MANUAL,AUTOMINER_A,AUTOMINER_B",
     LIVE_TEST_TARGET_ROUNDS: DRY_RUN ? "1" : (process.env.LIVE_TEST_TARGET_ROUNDS || "1440"),
   };
   canary = spawnLogged(
     process.execPath,
-    [join(ROOT, "node_modules", "tsx", "dist", "cli.mjs"), "scripts/live-round-canary.ts"],
+    [
+      join(ROOT, "node_modules", "tsx", "dist", "cli.mjs"),
+      "scripts/live-round-canary.ts",
+      ...(LIVE_EXECUTION_CONFIRMED ? ["--execute-live"] : []),
+    ],
     canaryEnv,
     CANARY_LOG_PATH,
   );
@@ -515,16 +789,16 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 if (STATUS_ONLY) {
   printSafeStatus().catch((error) => {
-    console.error(`[testnet-soak] status failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[testnet-soak] status failed: ${describeSupervisorError(error)}`);
     process.exitCode = 1;
   });
 } else if (STOP_ONLY) {
   stopManagedSupervisor().catch((error) => {
-    console.error(`[testnet-soak] stop failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[testnet-soak] stop failed: ${describeSupervisorError(error)}`);
     process.exitCode = 1;
   });
 } else main().catch(async (error) => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeSupervisorError(error);
   if (managedRunStarted) await shutdown(message, 1);
   console.error(`[testnet-soak] ${message}`);
   process.exitCode = 1;

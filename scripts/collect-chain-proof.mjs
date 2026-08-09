@@ -3,6 +3,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
+const summaryOnly = process.argv.includes("--summary-only");
+const chainLaunchGates = ["G1"];
+const chainLaunchGateGroups = "chain=1";
+const MAX_TILE_ID = 25;
+const CANONICAL_POSITIVE_INTEGER_RE = /^[1-9]\d{0,15}$/;
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const args = new Map(
@@ -14,6 +19,11 @@ const args = new Map(
       return [key, rest.join("=")];
     }),
 );
+
+function launchGateSummary(issueCount) {
+  const label = issueCount > 0 ? "blocked" : "covered";
+  return `${label} gates: ${chainLaunchGates.join(", ")}; groups: ${chainLaunchGateGroups}`;
+}
 
 const READ_ABI_SOURCE = [
   "function owner() view returns (address)",
@@ -81,6 +91,15 @@ function configuredRpcSource() {
   return "";
 }
 
+function isHttpsRpcUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password && Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function redactAddress(value) {
   if (!value || !isAddress(value)) return value || "missing";
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
@@ -98,10 +117,46 @@ function fmtBool(value) {
   return value ? "yes" : "no";
 }
 
+function parseChainTileId(value, tileCount = MAX_TILE_ID) {
+  if (typeof value !== "bigint") return null;
+  if (value < 1n || value > BigInt(tileCount)) return null;
+  return toSafeDisplayInteger("chain tile id", value, 1, tileCount);
+}
+
+function toSafeDisplayInteger(label, value, min, max) {
+  if (typeof value !== "bigint" || value < BigInt(min) || value > BigInt(max)) {
+    throw new Error(`${label} must be between ${min} and ${max}`);
+  }
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${label} exceeds the safe integer display range`);
+  }
+  return Number(value);
+}
+
+function compareBigIntAscending(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function parseCanonicalPositiveBigInt(value) {
+  const text = String(value ?? "").trim();
+  if (!CANONICAL_POSITIVE_INTEGER_RE.test(text)) return null;
+  return BigInt(text);
+}
+
+function parseEpochArgValues(raw) {
+  if (!raw) return [];
+  return raw.split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map(parseCanonicalPositiveBigInt);
+}
+
 function parseEpochs(raw, currentEpoch) {
   if (raw) {
-    const values = raw.split(",").map((part) => part.trim()).filter(Boolean);
-    return [...new Set(values.map((value) => BigInt(value)).filter((value) => value > 0n))].sort((a, b) => Number(a - b));
+    const values = parseEpochArgValues(raw).filter((value) => value !== null);
+    return [...new Set(values)].sort(compareBigIntAscending);
   }
   const epochs = [];
   const start = currentEpoch > 3n ? currentEpoch - 3n : 1n;
@@ -111,20 +166,21 @@ function parseEpochs(raw, currentEpoch) {
 
 function validateEpochArg(raw) {
   if (!raw) return [];
-  const values = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  const rawValues = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  const values = parseEpochArgValues(raw);
   const errors = [];
   let positiveCount = 0;
   for (const value of values) {
-    try {
-      if (BigInt(value) > 0n) positiveCount += 1;
-    } catch {
-      errors.push(`epoch value ${value} is not a valid integer`);
+    if (value === null) {
+      errors.push("epoch values must be canonical positive decimal integers");
+    } else if (value > 0n) {
+      positiveCount += 1;
     }
   }
-  if (values.length === 0 || positiveCount === 0) {
+  if (rawValues.length === 0 || positiveCount === 0) {
     errors.push("at least one positive epoch must be checked");
   }
-  return errors;
+  return [...new Set(errors)];
 }
 
 function sum(values) {
@@ -201,6 +257,9 @@ console.log("");
 if (strict && !rpcSource) {
   issues.push("strict chain proof requires configured RPC env, not built-in fallback RPCs");
 }
+if (strict && rpcSource && (rpcs.length === 0 || rpcs.some((url) => !isHttpsRpcUrl(url)))) {
+  issues.push("strict chain proof requires configured HTTPS RPC endpoints");
+}
 
 if (configuredToken && !isRealAddress(configuredToken)) {
   issues.push("configured token address is zero or invalid");
@@ -214,7 +273,25 @@ issues.push(...validateEpochArg(epochArg));
 
 if (!isRealAddress(contractAddress)) {
   issues.push("contract address is missing, zero, or invalid");
-  console.log(`Summary: ${issues.length} issue(s): ${issues.join("; ")}.`);
+}
+
+if (summaryOnly) {
+  console.log("# Chain / Funds Proof Summary");
+  console.log(`Strict: ${strict ? "yes" : "no"}`);
+  console.log(`Network: ${network}`);
+  console.log(`RPC source: ${rpcSource ? "configured" : "built-in fallback"}`);
+  console.log(`Contract: ${isRealAddress(contractAddress) ? "present" : "missing"}`);
+  console.log(`Token: ${isRealAddress(configuredToken) ? "present" : "missing"}`);
+  console.log(`Epochs: ${epochArg ? "provided" : "default-window"}`);
+  console.log("Would read RPC: false");
+  console.log(`Summary: ${issues.length === 0 ? "chain proof status inputs are ready" : `${issues.length} issue(s): ${issues.join("; ")}`}; ${launchGateSummary(issues.length)}.`);
+  if (strict && issues.length > 0) process.exitCode = 1;
+} else if (!isRealAddress(contractAddress)) {
+  console.log(`Summary: ${issues.length} issue(s): ${issues.join("; ")}; ${launchGateSummary(issues.length)}.`);
+  writeSnapshot();
+  if (strict) process.exitCode = 1;
+} else if (issues.length > 0) {
+  console.log(`Summary: ${issues.length} issue(s): ${issues.join("; ")}; ${launchGateSummary(issues.length)}.`);
   writeSnapshot();
   if (strict) process.exitCode = 1;
 } else {
@@ -227,7 +304,7 @@ if (!isRealAddress(contractAddress)) {
     READ_ABI = parseAbi(READ_ABI_SOURCE);
   } catch (error) {
     issues.push(`viem dependency is unavailable: ${error instanceof Error ? error.code || error.message : String(error)}`);
-    console.log(`Summary: ${issues.length} issue(s): ${issues.join("; ")}.`);
+    console.log(`Summary: ${issues.length} issue(s): ${issues.join("; ")}; ${launchGateSummary(issues.length)}.`);
     writeSnapshot();
     if (strict) process.exitCode = 1;
     process.exit();
@@ -368,6 +445,9 @@ if (!isRealAddress(contractAddress)) {
       const totalPool = epochData[0];
       const tileSumMatches = tilePoolSum === totalPool;
       if (!tileSumMatches) issues.push(`epoch ${epoch.toString()} tile pool sum does not match totalPool`);
+      if (epochData[3] && parseChainTileId(epochData[2], tileData[0].length) === null) {
+        issues.push(`epoch ${epoch.toString()} resolved with invalid winningTile`);
+      }
       snapshot.epochs.push({
         epoch: epoch.toString(),
         resolved: Boolean(epochData[3]),
@@ -416,9 +496,10 @@ if (!isRealAddress(contractAddress)) {
             read(client, contractAddress, "getUserBetsAll", [epoch, userAddress]),
             read(client, contractAddress, "hasClaimed", [userAddress, epoch]),
           ]);
-          const winningTile = Number(epochData[2]);
-          const winningBet = winningTile >= 1 && winningTile <= bets.length ? bets[winningTile - 1] : 0n;
-          const winningTilePool = winningTile >= 1 && winningTile <= tileData[0].length ? tileData[0][winningTile - 1] : 0n;
+          const winningTile = parseChainTileId(epochData[2], Math.min(bets.length, tileData[0].length));
+          const winningIndex = winningTile === null ? -1 : winningTile - 1;
+          const winningBet = winningIndex >= 0 ? bets[winningIndex] : 0n;
+          const winningTilePool = winningIndex >= 0 ? tileData[0][winningIndex] : 0n;
           const estimatedReward = epochData[3] && winningBet > 0n && winningTilePool > 0n
             ? (epochData[1] * winningBet) / winningTilePool
             : 0n;
@@ -456,7 +537,7 @@ if (!isRealAddress(contractAddress)) {
   }
 
   console.log("");
-  console.log(`Summary: ${issues.length === 0 ? "chain proof reads completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+  console.log(`Summary: ${issues.length === 0 ? "chain proof reads completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}; ${launchGateSummary(issues.length)}.`);
   writeSnapshot();
   console.log("Copy this summary into `docs/mainnet-proof-record.md` only after confirming it was run against the intended network/RPC.");
 

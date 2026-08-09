@@ -1,8 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
-import { resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
+import { redactProofText } from "./redact-proof-output.mjs";
 
 const CHECK_LOCAL_PORT = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_PORT, 3101);
 const CHECK_LOCAL_DIST_DIR = process.env.CHECK_LOCAL_DIST_DIR || ".next-check";
@@ -10,7 +12,65 @@ const DEFAULT_LOCAL_SMOKE_BASE_URL = `http://127.0.0.1:${CHECK_LOCAL_PORT}`;
 const SMOKE_BASE_URL = process.env.SMOKE_BASE_URL || DEFAULT_LOCAL_SMOKE_BASE_URL;
 const SHOULD_START_LOCAL_SERVER = !process.env.SMOKE_BASE_URL;
 const SERVER_START_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_SERVER_START_TIMEOUT_MS, 90_000);
-const CHECK_LOCAL_NEXT_ENV = { NEXT_DIST_DIR: CHECK_LOCAL_DIST_DIR };
+const MAX_CHECK_LOCAL_ERROR_CHARS = 500;
+const MAX_CHECK_LOCAL_SUMMARY_LINES = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_SUMMARY_LINES, 40);
+const summaryOnly = process.argv.includes("--summary-only");
+const CHECK_LOCAL_TEMP_ROOT = resolve(".tmp");
+mkdirSync(CHECK_LOCAL_TEMP_ROOT, { recursive: true });
+const CHECK_LOCAL_TEMP_DIR = mkdtempSync(join(CHECK_LOCAL_TEMP_ROOT, "check-local-"));
+const CHECK_LOCAL_DB_PATH = join(CHECK_LOCAL_TEMP_DIR, "lore.sqlite");
+const CHECK_LOCAL_PROTECTED_DB_PATHS = [
+  resolve("data", "lore-v10.sqlite"),
+  resolve("data", "lore-v10.sqlite-wal"),
+  resolve("data", "lore-v10.sqlite-shm"),
+];
+const CHECK_LOCAL_PROTECTED_DB_SNAPSHOT = snapshotDatabaseFiles(CHECK_LOCAL_PROTECTED_DB_PATHS);
+const CHECK_LOCAL_ENV = {
+  LORE_DB_PATH: CHECK_LOCAL_DB_PATH,
+};
+const CHECK_LOCAL_NEXT_ENV = {
+  ...CHECK_LOCAL_ENV,
+  NEXT_DIST_DIR: CHECK_LOCAL_DIST_DIR,
+  ALLOW_WEAK_RATE_LIMIT_IDENTITY: "1",
+};
+
+function snapshotDatabaseFiles(filePaths) {
+  return filePaths.map((filePath) => {
+    if (!existsSync(filePath)) {
+      return { filePath, exists: false };
+    }
+
+    const stats = statSync(filePath, { bigint: true });
+    return {
+      filePath,
+      exists: true,
+      regularFile: stats.isFile(),
+      size: stats.size.toString(),
+      mtimeNs: stats.mtimeNs.toString(),
+      sha256: stats.isFile()
+        ? createHash("sha256").update(readFileSync(filePath)).digest("hex")
+        : null,
+    };
+  });
+}
+
+function assertProtectedDatabaseFilesUnchanged() {
+  const after = snapshotDatabaseFiles(CHECK_LOCAL_PROTECTED_DB_PATHS);
+  const changed = CHECK_LOCAL_PROTECTED_DB_SNAPSHOT
+    .filter((before, index) => JSON.stringify(before) !== JSON.stringify(after[index]))
+    .map(({ filePath }) => basename(filePath));
+  if (changed.length > 0) {
+    throw new Error(`Local check changed protected database state: ${changed.join(", ")}`);
+  }
+}
+
+function describeCheckLocalError(error) {
+  const text = redactProofText(error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_CHECK_LOCAL_ERROR_CHARS) return text;
+  return `${text.slice(0, MAX_CHECK_LOCAL_ERROR_CHARS - 15)}...<truncated>`;
+}
 
 const npmCommand = process.env.npm_execpath && process.execPath ? process.execPath : null;
 const nextBin = resolve("node_modules", "next", "dist", "bin", "next");
@@ -18,17 +78,28 @@ const steps = npmCommand
   ? [
       { command: npmCommand, args: ["run", "lint"] },
       { command: npmCommand, args: ["run", "test:logic"] },
+      { command: npmCommand, args: ["run", "proof:security-followup"] },
+      { command: npmCommand, args: ["run", "test:fetch-timeout"] },
+      { command: npmCommand, args: ["run", "test:stored-number-parsing"] },
       { command: npmCommand, args: ["run", "test:contract"] },
+      { command: npmCommand, args: ["run", "test:contract:v10"] },
       { command: npmCommand, args: ["run", "test:indexer-storage"] },
+      { command: npmCommand, args: ["run", "test:db-operations"] },
+      { command: npmCommand, args: ["run", "test:monitoring"] },
       { command: npmCommand, args: ["run", "build"] },
       { command: npmCommand, args: ["run", "typecheck"], retryOnce: true },
     ]
   : [
       { command: process.execPath, args: [resolve("node_modules", "eslint", "bin", "eslint.js"), "."] },
       { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-business-logic.mjs")] },
+      { command: process.execPath, args: [resolve("scripts", "check-security-followup.mjs")] },
+      { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-fetch-with-timeout.ts")] },
+      { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-stored-number-parsing.ts")] },
       { command: process.execPath, args: [resolve("scripts", "test-contract-v9-invariants.mjs")] },
+      { command: process.execPath, args: [resolve("scripts", "test-contract-v10-invariants.mjs")] },
       { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-indexer-event-storage.ts")] },
-      { command: process.execPath, args: [resolve("scripts", "patch-privy-7702.mjs")] },
+      { command: process.execPath, args: [resolve("scripts", "test-sqlite-operations.mjs")] },
+      { command: process.execPath, args: [resolve("scripts", "test-runtime-monitor-drill.mjs")] },
       { command: process.execPath, args: [nextBin, "build", "--webpack"], kind: "build" },
       { command: process.execPath, args: [nextBin, "typegen"], retryOnce: true },
       { command: process.execPath, args: [resolve("node_modules", "typescript", "bin", "tsc"), "--noEmit", "--incremental", "false"], retryOnce: true },
@@ -43,7 +114,7 @@ const smokeSteps = npmCommand
       {
         command: npmCommand,
         args: ["run", "smoke:browser"],
-        env: { SMOKE_BROWSER_TIMEOUT_MS: "60000" },
+        env: { SMOKE_BROWSER_TIMEOUT_MS: "60000", SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS: "1" },
         retryOnce: true,
       },
     ]
@@ -56,7 +127,7 @@ const smokeSteps = npmCommand
       {
         command: process.execPath,
         args: [resolve("scripts", "smoke-browser.mjs")],
-        env: { SMOKE_BROWSER_TIMEOUT_MS: "60000" },
+        env: { SMOKE_BROWSER_TIMEOUT_MS: "60000", SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS: "1" },
         retryOnce: true,
       },
     ];
@@ -93,7 +164,7 @@ function runStep(step) {
   const { command, args, env } = step;
   const stepEnv = shouldUseIsolatedNextDistDir(step)
     ? { ...process.env, ...CHECK_LOCAL_NEXT_ENV, ...(env ?? {}) }
-    : { ...process.env, ...(env ?? {}) };
+    : { ...process.env, ...CHECK_LOCAL_ENV, ...(env ?? {}) };
   if (npmCommand && process.env.npm_execpath) {
     return spawnSync(command, [process.env.npm_execpath, ...args], {
       stdio: "pipe",
@@ -118,20 +189,35 @@ function filterKnownWarnings(output) {
     return "";
   }
 
-  return output
+  const filtered = output
     .split(/\r?\n/)
     .filter((line) => !FILTERED_WARNING_PATTERNS.some((pattern) => pattern.test(line)))
     .join("\n");
+  return redactProofText(filtered);
 }
 
-function flushStepOutput(result) {
+function tailLines(output, maxLines = MAX_CHECK_LOCAL_SUMMARY_LINES) {
+  const lines = output.split(/\r?\n/).filter(Boolean);
+  if (lines.length <= maxLines) return lines.join("\n");
+  return [
+    `...<truncated ${lines.length - maxLines} line(s)>`,
+    ...lines.slice(-maxLines),
+  ].join("\n");
+}
+
+function flushStepOutput(result, { compact = false } = {}) {
   const stdout = filterKnownWarnings(result.stdout);
   const stderr = filterKnownWarnings(result.stderr);
-  if (stdout) {
-    process.stdout.write(stdout.endsWith("\n") ? stdout : `${stdout}\n`);
+  if (compact && result.status === 0) {
+    return;
   }
-  if (stderr) {
-    process.stderr.write(stderr.endsWith("\n") ? stderr : `${stderr}\n`);
+  const visibleStdout = compact ? tailLines(stdout) : stdout;
+  const visibleStderr = compact ? tailLines(stderr) : stderr;
+  if (visibleStdout) {
+    process.stdout.write(visibleStdout.endsWith("\n") ? visibleStdout : `${visibleStdout}\n`);
+  }
+  if (visibleStderr) {
+    process.stderr.write(visibleStderr.endsWith("\n") ? visibleStderr : `${visibleStderr}\n`);
   }
 }
 
@@ -229,14 +315,8 @@ async function stopLocalServer(serverProcess) {
 }
 
 async function startLocalServer(baseUrl) {
-  const patchResult = spawnSync(process.execPath, [resolve("scripts/patch-privy-7702.mjs")], {
-    stdio: "pipe",
-    encoding: "utf8",
-    env: process.env,
-  });
-  flushStepOutput(patchResult);
-  if (patchResult.status !== 0 || patchResult.error) {
-    throw patchResult.error ?? new Error("Failed to patch Privy runtime before local start");
+  if (await canReachSmokeBaseUrl(baseUrl)) {
+    throw new Error(`Refusing to start local server because smoke base URL is already reachable: ${baseUrl}`);
   }
 
   const serverLogs = [];
@@ -290,13 +370,13 @@ async function runStepWithRetries(step, extraEnv = {}) {
     },
   };
   let result = runStep(preparedStep);
-  flushStepOutput(result);
+  flushStepOutput(result, { compact: summaryOnly });
 
   if (retryOnce && typeof result.status === "number" && result.status !== 0) {
     console.warn(`Retrying ${formatStepLabel(command, args)} once after initial failure...`);
     prepareStep(step);
     result = runStep(preparedStep);
-    flushStepOutput(result);
+    flushStepOutput(result, { compact: summaryOnly });
   }
 
   if (typeof result.status === "number" && result.status !== 0 && shouldSkipStepFailure(step, result)) {
@@ -305,12 +385,17 @@ async function runStepWithRetries(step, extraEnv = {}) {
   }
 
   if (typeof result.status === "number" && result.status !== 0) {
-    process.exit(result.status);
+    const error = new Error(`${formatStepLabel(command, args)} failed with exit code ${result.status}.`);
+    error.exitCode = result.status;
+    throw error;
   }
 
   if (result.error) {
-    console.error(result.error);
-    process.exit(1);
+    throw result.error;
+  }
+
+  if (result.status === null) {
+    throw new Error(`${formatStepLabel(command, args)} ended without an exit code.`);
   }
 
   const elapsedMs = Date.now() - startedAt;
@@ -318,6 +403,16 @@ async function runStepWithRetries(step, extraEnv = {}) {
 }
 
 let localServer = null;
+let checkFailure = null;
+
+function captureCheckFailure(error, context = "") {
+  if (!checkFailure) {
+    checkFailure = error;
+    return;
+  }
+  const prefix = context ? `${context}: ` : "Additional local-check failure: ";
+  console.error(`${prefix}${describeCheckLocalError(error)}`);
+}
 
 try {
   for (const step of steps) {
@@ -335,9 +430,32 @@ try {
     await runStepWithRetries(step, { SMOKE_BASE_URL });
   }
 
-  console.log("\nLocal check completed successfully.");
+} catch (error) {
+  captureCheckFailure(error);
 } finally {
   if (localServer?.serverProcess) {
-    await stopLocalServer(localServer.serverProcess);
+    try {
+      await stopLocalServer(localServer.serverProcess);
+    } catch (error) {
+      captureCheckFailure(error, "Failed to stop local smoke server");
+    }
   }
+  try {
+    rmSync(CHECK_LOCAL_TEMP_DIR, { recursive: true, force: true });
+  } catch (error) {
+    captureCheckFailure(error, "Failed to clean isolated local-check directory");
+  }
+  try {
+    assertProtectedDatabaseFilesUnchanged();
+  } catch (error) {
+    captureCheckFailure(error);
+  }
+}
+
+if (checkFailure) {
+  console.error(describeCheckLocalError(checkFailure));
+  const exitCode = Number(checkFailure.exitCode);
+  process.exitCode = Number.isSafeInteger(exitCode) && exitCode > 0 ? exitCode : 1;
+} else {
+  console.log("\nLocal check completed successfully.");
 }

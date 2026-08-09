@@ -1,0 +1,101 @@
+{
+  "compilerVersion": "0.8.36+commit.8a079791.Emscripten.clang",
+  "settings": {
+    "optimizer": true,
+    "runs": 200,
+    "viaIR": false,
+    "evmVersion": "osaka"
+  },
+  "sourceSha256": "41d07b684cfeb1fd6cd97ec8a93b57096bcf391482b1b15dee2e468c61a6e3df",
+  "abiSha256": "96bddbce113f0c1ef7903434a1262492302a8baa0c756ca7a896240084f7aed8",
+  "bytecodeSha256": "10ac4550a3712e55ffcf71619025ee14001785526e3b415e8694546c36c1d8c4",
+  "bytecodeBytes": 17278,
+  "openzeppelinContractsVersion": "5.6.1",
+  "sourceUnitsSha256": {
+    "contracts/LineaOreV10.sol": "41d07b684cfeb1fd6cd97ec8a93b57096bcf391482b1b15dee2e468c61a6e3df",
+    "@openzeppelin/contracts/access/Ownable.sol": "38578bd71c0a909840e67202db527cc6b4e6b437e0f39f0c909da32c1e30cb81",
+    "@openzeppelin/contracts/access/Ownable2Step.sol": "c75345d7b9feef17ae29f2a800ca2f65f8021cf80436a41d6ec00f57f5180f36",
+    "@openzeppelin/contracts/interfaces/IERC1363.sol": "9c3a75a925a6dac9e88b03cddc58d42fe3131b0aaaad84408521f3f7af2f991b",
+    "@openzeppelin/contracts/interfaces/IERC165.sol": "dfb3f56fa928a7c6cae41a7ce2c86b9210fa18d33fa26389099d66a0fa790368",
+    "@openzeppelin/contracts/interfaces/IERC20.sol": "0158e2d3e0e28bedd99eec13dcf1a8aa3a70a5b7e4bb2ad709609c95fcc740d1",
+    "@openzeppelin/contracts/token/ERC20/IERC20.sol": "01b6f5c4fa45fd38822b286ecef6daf983d27306dd6362496fa71b3e4600b72c",
+    "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol": "c2394cb2a327f234711da34884947f4aa0f6dd2791d1d6303a0c7acfaf81bca3",
+    "@openzeppelin/contracts/utils/Context.sol": "847fda5460fee70f56f4200f59b82ae622bb03c79c77e67af010e31b7e2cc5b6",
+    "@openzeppelin/contracts/utils/introspection/IERC165.sol": "9055c2994b37dea1a41b7b7926dcb510f05dbe2540b0aafc5fbee9558fffd0ca",
+    "@openzeppelin/contracts/utils/math/Math.sol": "bdfdbe133991c0c78042957ff5cd97167926fcaf6d15664f3835a076cb066457",
+    "@openzeppelin/contracts/utils/math/SafeCast.sol": "5779bc848bde39f1ad7bc02b4f708a0040888e0083b1a33f119cd94639350134",
+    "@openzeppelin/contracts/utils/Panic.sol": "270fc8401c1a13fae6a7a4a2dd6e381b95d658896701e51f0d3e2688acab3dec",
+    "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol": "cff7c20aed945d939b764d876adbd42e1b7725d62d5b1f2bd303db237567b575",
+    "@openzeppelin/contracts/utils/TransientSlot.sol": "ea92f361d697ba8b1fbd322b4d84b989998862c21fbebfa4b45289dc94a9eea2"
+  },
+  "runtimeBytecodeSha256": "aac4663525ab2b738bfd62fc419aeb09a2daeb69448ec67305851ef73557e75e",
+  "runtimeBytecodeBytes": 16488,
+  "normalizedExecutableRuntimeSha256": "247fd0402f97c4d5524005f163e87faacf2044fdbe0bc2eee9a4c7d4323f28fa",
+  "executableRuntimeBytes": 16435,
+  "runtimeImmutableReferences": [
+    {
+      "start": 2892,
+      "length": 32
+    },
+    {
+      "start": 3124,
+      "length": 32
+    },
+    {
+      "start": 3542,
+      "length": 32
+    },
+    {
+      "start": 3977,
+      "length": 32
+    },
+    {
+      "start": 4713,
+      "length": 32
+    },
+    {
+      "start": 5176,
+      "length": 32
+    },
+    {
+      "start": 5835,
+      "length": 32
+    },
+    {
+      "start": 6133,
+      "length": 32
+    },
+    {
+      "start": 6801,
+      "length": 32
+    },
+    {
+      "start": 7529,
+      "length": 32
+    },
+    {
+      "start": 7838,
+      "length": 32
+    },
+    {
+      "start": 8386,
+      "length": 32
+    },
+    {
+      "start": 8958,
+      "length": 32
+    },
+    {
+      "start": 9087,
+      "length": 32
+    },
+    {
+      "start": 12544,
+      "length": 32
+    },
+    {
+      "start": 12608,
+      "length": 32
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const MONITOR_KINDS = [
@@ -20,6 +20,7 @@ const DEFAULT_CONDITIONS = {
   "indexer-restart": "TODO: indexer restart threshold",
   "reverted-tx": "TODO: repeated reverted tx threshold",
 };
+const MAX_MONITORING_DRAFT_ARTIFACT_BYTES = 512 * 1024;
 
 function argValue(name, fallback = "") {
   const prefix = `--${name}=`;
@@ -30,13 +31,41 @@ function argValue(name, fallback = "") {
 function isFinalHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase();
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
     return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
       url.pathname === "/" &&
       url.search === "" &&
       url.hash === "" &&
-      !["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host) &&
-      !host.endsWith(".local");
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      );
   } catch {
     return false;
   }
@@ -52,22 +81,63 @@ function hasRealText(value) {
   return String(value ?? "").trim().length > 0 && !/TODO|TBD/i.test(String(value));
 }
 
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
 function requireExistingArtifact(name) {
   const value = argValue(name);
   if (!value) {
     throw new Error(`--${name} is required when drafting monitoring launch evidence`);
   }
   const resolved = path.resolve(process.cwd(), value);
-  if (!existsSync(resolved)) {
-    throw new Error(`--${name} must point to an existing redacted artifact`);
+  const stats = regularFileStat(resolved);
+  if (!stats) {
+    throw new Error(`--${name} must point to an existing redacted file artifact`);
+  }
+  if (stats.size > MAX_MONITORING_DRAFT_ARTIFACT_BYTES) {
+    throw new Error(`--${name} artifact is too large to reference safely`);
   }
   return value;
+}
+
+function sameArtifact(left, right) {
+  return path.resolve(process.cwd(), left).toLowerCase() === path.resolve(process.cwd(), right).toLowerCase();
+}
+
+function requireDistinctArtifactInputs(entries) {
+  for (let leftIndex = 0; leftIndex < entries.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
+      const [leftName, leftPath] = entries[leftIndex];
+      const [rightName, rightPath] = entries[rightIndex];
+      if (sameArtifact(leftPath, rightPath)) {
+        if (leftName === "monitor-artifact" && rightName === "recovery-artifact") {
+          throw new Error("--monitor-artifact and --recovery-artifact must point to distinct fired-alert and recovery evidence files");
+        }
+        throw new Error(`--${leftName} and --${rightName} must point to distinct monitoring evidence files`);
+      }
+    }
+  }
+}
+
+function emailDomainForOrigin(value) {
+  try {
+    return new URL(String(value ?? "").trim()).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "TODO: production domain";
+  }
 }
 
 const outPath = path.resolve(process.cwd(), argValue("out", "docs/monitoring-proof.draft.json"));
 refuseFinalProofOutput(outPath);
 const provider = argValue("provider", "TODO: monitoring provider");
 const origin = argValue("origin", process.env.NEXT_PUBLIC_SITE_URL || "TODO: production origin");
+const emailDomain = emailDomainForOrigin(origin);
 const environment = argValue("environment", process.env.NODE_ENV || "production");
 const errorProvider = argValue("error-provider", "TODO: Sentry/Datadog/etc");
 const releaseOrDeploy = argValue("release", process.env.VERCEL_GIT_COMMIT_SHA || process.env.RELEASE_ID || "TODO: release or deploy id");
@@ -75,9 +145,15 @@ const monitorArtifact = requireExistingArtifact("monitor-artifact");
 const recoveryArtifact = requireExistingArtifact("recovery-artifact");
 const alertTargetArtifact = requireExistingArtifact("alert-target-artifact");
 const errorEventArtifact = requireExistingArtifact("error-event-artifact");
+requireDistinctArtifactInputs([
+  ["monitor-artifact", monitorArtifact],
+  ["recovery-artifact", recoveryArtifact],
+  ["alert-target-artifact", alertTargetArtifact],
+  ["error-event-artifact", errorEventArtifact],
+]);
 
 if (!isFinalHttpsOrigin(origin)) {
-  throw new Error("--origin must be a non-local HTTPS origin without path, query, or hash");
+  throw new Error("--origin must be a public HTTPS origin without path, query, or hash");
 }
 if (!hasRealText(provider)) {
   throw new Error("--provider must identify the monitoring provider");
@@ -112,12 +188,16 @@ const manifest = {
   monitors,
   alertTargets: [
     {
-      name: "TODO: alert target label",
-      kind: "TODO: pagerduty/slack/email/etc",
+      name: "TODO: verified Resend email alert target",
+      kind: "email",
+      recipient: "TODO: verified recipient email address",
+      sender: `TODO: verified Resend sender such as alerts@${emailDomain}`,
+      senderDomain: emailDomain,
       verified: false,
       lastTestAt: "TODO: ISO timestamp from alert target test",
       link: alertTargetArtifact ? `artifact: ${alertTargetArtifact}` : "TODO: alert target test event or provider link",
       evidence: alertTargetArtifact ? `redacted alert target artifact: ${alertTargetArtifact}` : "TODO: redacted fired alert proof",
+      artifact: alertTargetArtifact || undefined,
     },
   ],
   errorTracking: {
@@ -132,6 +212,7 @@ const manifest = {
     testEventId: "TODO: provider event id or issue id",
     testEventLink: errorEventArtifact ? `artifact: ${errorEventArtifact}` : "TODO: provider test event link",
     testEventEvidencePath: errorEventArtifact || undefined,
+    testEventArtifact: errorEventArtifact || undefined,
   },
 };
 

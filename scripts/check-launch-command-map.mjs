@@ -1,8 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const commandMapPath = resolve(process.cwd(), "docs/launch-evidence-command-map.md");
 const packagePath = resolve(process.cwd(), "package.json");
+const summaryOnly = process.argv.includes("--summary-only");
+const MAX_LAUNCH_COMMAND_MAP_TEXT_BYTES = 1024 * 1024;
 
 const linkedDocs = [
   "docs/mainnet-readiness-checklist.md",
@@ -43,6 +45,7 @@ const requiredScripts = [
   "proof:remaining",
   "proof:local",
   "proof:launch",
+  "preview:canary:v10:dry-run",
 ];
 
 const requiredProofFiles = [
@@ -58,8 +61,10 @@ const requiredProofFiles = [
 const commandMapEvidenceMarkers = [
   "## Required Evidence Markers",
   "contractEnv",
+  "V10 protected bets flag",
   "ownership.directOwnerReadEvidence",
   "Safe/multisig governance evidence",
+  "proof tx",
   "randomness.decision",
   "operator/signer sign-off",
   "chainComparison",
@@ -71,13 +76,23 @@ const commandMapEvidenceMarkers = [
   "resolve",
   "docs/host-health-prod.log",
   "docs/host-load-http.log",
+  "externalRateLimit",
+  "webReplicaCount",
+  "sharedBucketVerified",
+  "failClosed",
   "fresh external DB",
   "docs/indexer-once.log",
+  "chainSnapshot",
+  "rpcChainId",
+  "contractAddress",
+  "finalityLagBlocks",
   "$env:LORE_DB_PATH",
   "$env:INDEXER_START_BLOCK",
   "$env:NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK",
   "$env:INDEXER_FINALITY_BLOCKS",
   "backup schedule",
+  "retentionDays",
+  "lastSuccessfulBackupAt",
   "docs/restore-drill.log",
   "docs/restore-health-prod.log",
   "indexer preservation evidence",
@@ -90,7 +105,7 @@ const commandMapEvidenceMarkers = [
   "reverted-tx",
   "fired alert",
   "recovery alert",
-  "alert target",
+  "verified email alert target",
   "error event artifacts",
   "target-RPC JSONL",
   "50 successful auto-miner unique epochs",
@@ -100,6 +115,7 @@ const commandMapEvidenceMarkers = [
   "noNonceLoops",
   "noStuckPending",
   "Privy allowed origins",
+  "redacted production Privy App ID configured proof",
   "wrong network",
   "mobile Web3 browser",
   "clean-wallet first tx",
@@ -110,6 +126,12 @@ const commandMapEvidenceMarkers = [
   "overlays",
   "chat geometry",
   "mainnet wording",
+  "fresh Codex Security scan report or sealed scan artifact",
+  "no open High/Medium local findings",
+  "proof:security-followup:summary",
+  "Pre-Bet Dry-Run Preview",
+  "docs/v10-canary-dry-run-preview.md",
+  "does not satisfy G10",
 ];
 
 const strictRequiredScripts = [
@@ -130,6 +152,13 @@ const strictRequiredScripts = [
 function readText(filePath) {
   if (!existsSync(filePath)) {
     throw new Error(`Missing required file: ${filePath}`);
+  }
+  const stats = statSync(filePath);
+  if (!stats.isFile()) {
+    throw new Error(`Required file must be a file: ${filePath}`);
+  }
+  if (stats.size > MAX_LAUNCH_COMMAND_MAP_TEXT_BYTES) {
+    throw new Error(`Required file is too large to validate safely: ${filePath}`);
   }
   return readFileSync(filePath, "utf8");
 }
@@ -222,7 +251,7 @@ const commandExpectations = [
   ["proof:chain", ["--strict", "--out="]],
   ["proof:launch", ["--strict", "--canary-log="]],
   ["proof:files", ["--canary-log="]],
-  ["proof:signoff:collect", ["--epochs=", "--user=", "--env-log=docs/mainnet-env-proof.log", "--chain-log=docs/chain-proof-snapshot.json", "--out=docs/signoff-proof.draft.json"]],
+  ["proof:signoff:collect", ["--epochs=", "--user=", "--env-log=docs/mainnet-env-proof.log", "--chain-log=docs/chain-proof-snapshot.json", "--randomness-decision=accepted-risk", "--randomness-risk-accepted=true", "--randomness-operator=", "--randomness-signed-at=", "--randomness-evidence=", "--out=docs/signoff-proof.draft.json"]],
   ["proof:host:collect", ["--load-origin=", "--load-host-type=", "--db-path=", "--supervisor=", "--process-evidence=docs/host-process-model.log", "--health-log=docs/host-health-prod.log", "--load-log=docs/host-load-http.log", "--out=docs/host-proof.draft.json"]],
   ["proof:indexer:collect", ["--fresh-db=true", "--epochs=", "--chain-id=59144", "--deploy-block=", "--finality-blocks=", "--indexer-log=docs/indexer-once.log", "--health-log=docs/indexer-health-prod.log", "--chain-snapshot=docs/chain-proof-snapshot.json", "--out=docs/indexer-proof.draft.json"]],
   ["proof:restore:collect", ["--source=", "--backup-dir=", "--restore-dir=", "--backup=", "--restored-origin=", "--restored-host-type=", "--restore-log=docs/restore-drill.log", "--health-log=docs/restore-health-prod.log", "--backup-schedule-artifact=docs/restore-backup-schedule.log", "--preservation-artifact=docs/restore-indexer-preservation.log", "--out=docs/restore-proof.draft.json"]],
@@ -246,7 +275,7 @@ const artifactBackedDocExpectations = [
     [
       ["proof:mainnet", ["--strict", "--out=docs/mainnet-env-proof.log"]],
       ["proof:chain", ["--strict", "--out=docs/chain-proof-snapshot.json"]],
-      ["proof:signoff:collect", ["--env-log=docs/mainnet-env-proof.log", "--chain-log=docs/chain-proof-snapshot.json", "--out=docs/signoff-proof.draft.json"]],
+      ["proof:signoff:collect", ["--env-log=docs/mainnet-env-proof.log", "--chain-log=docs/chain-proof-snapshot.json", "--randomness-decision=accepted-risk", "--randomness-risk-accepted=true", "--randomness-operator=", "--randomness-signed-at=", "--randomness-evidence=", "--out=docs/signoff-proof.draft.json"]],
       ["proof:signoff", ["--strict"]],
       ["proof:host:collect", ["--db-path=", "--supervisor=", "--process-evidence=docs/host-process-model.log", "--health-log=docs/host-health-prod.log", "--load-log=docs/host-load-http.log"]],
       ["proof:indexer:collect", ["--indexer-log=docs/indexer-once.log", "--health-log=docs/indexer-health-prod.log", "--chain-snapshot=docs/chain-proof-snapshot.json"]],
@@ -286,7 +315,7 @@ for (const [doc, expectations] of artifactBackedDocExpectations) {
 }
 
 const productionRunbook = linkedDocTexts.get("docs/production-runbook.md") ?? "";
-for (const marker of ["docs/signoff-proof.json", "contractEnv", "ownership.directOwnerReadEvidence", "Safe/multisig governance evidence", "proof tx", "randomness.decision", "operator/signer sign-off", "chainComparison", "jackpot", "safetyPool", "deposits", "rewards", "rebates", "resolve", "existing saved artifacts"]) {
+for (const marker of ["docs/signoff-proof.json", "contractEnv", "V10 protected bets flag", "ownership.directOwnerReadEvidence", "Safe/multisig governance evidence", "proof tx", "randomness.decision", "operator/signer sign-off", "chainComparison", "jackpot", "safetyPool", "deposits", "rewards", "rebates", "resolve", "existing saved artifacts"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show signoff evidence marker ${marker}`);
   }
@@ -296,22 +325,27 @@ for (const marker of ["$env:PROD_HEALTH_BASE_URL", "https://playlore.xyz", "npm.
     issues.push(`docs/production-runbook.md must show production host evidence marker ${marker}`);
   }
 }
-for (const marker of ["target-RPC JSONL", "$env:LIVE_CANARY_RPC_LABEL", "<redacted-provider-rpc-label>", "npm.cmd run live:canary", "50 successful auto-miner unique epochs", "reload/reconnect/tab-close/pending tx/remount", "no duplicate bets", "nonce loops", "stuck pending", "Privy allowed origins", "wrong network", "mobile Web3 browser", "clean-wallet first tx", "Wallet browser checks must record the exact production origin", "debug autominer smoke", "docs/qa-wallet-flow-report.md", "docs/qa-failure-state-report.md", "docs/qa-support-audit-report.md", "docs/qa-final-browser-report.md", "docs/qa-smoke-debug-autominer.log", "data/live-test-runs/live-canary-YYYY.jsonl", "docs/canary-target-proof.log", "docs/canary-recovery-proof.log", "docs/canary-session-summary.log", "docs/canary-transaction-scan.log"]) {
+for (const marker of ["target-RPC JSONL", "$env:LIVE_CANARY_RPC_LABEL", "<redacted-provider-rpc-label>", "npm.cmd run live:canary", "50 successful auto-miner unique epochs", "reload/reconnect/tab-close/pending tx/remount", "no duplicate bets", "nonce loops", "stuck pending", "Privy allowed origins", "redacted production Privy App ID configured proof", "wrong network", "mobile Web3 browser", "clean-wallet first tx", "Wallet browser checks must record the exact production origin", "debug autominer smoke", "fresh Codex Security scan report or sealed scan artifact", "no open High/Medium local findings", "proof:security-followup:summary", "docs/qa-wallet-flow-report.md", "docs/qa-failure-state-report.md", "docs/qa-support-audit-report.md", "docs/qa-final-browser-report.md", "docs/qa-smoke-debug-autominer.log", "data/live-test-runs/live-canary-YYYY.jsonl", "docs/canary-target-proof.log", "docs/canary-recovery-proof.log", "docs/canary-session-summary.log", "docs/canary-transaction-scan.log"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show canary/QA evidence marker ${marker}`);
   }
 }
-for (const marker of ["health-prod", "data-sync", "stale-indexer-heartbeat", "indexer-lag", "bot-restart", "indexer-restart", "reverted-tx", "distinct fired alert", "recovery timestamp", "docs/monitoring-alert-export.log", "docs/monitoring-recovery-export.log", "docs/monitoring-alert-target-test.log", "docs/error-tracking-test-event.log"]) {
+for (const marker of ["npm.cmd run preview:canary:v10:dry-run", "docs/v10-canary-dry-run-preview.md", "fresh consent input", "leaves G10/G11 blocked"]) {
+  if (!productionRunbook.includes(marker)) {
+    issues.push(`docs/production-runbook.md must show V10 dry-run Preview marker ${marker}`);
+  }
+}
+for (const marker of ["health-prod", "data-sync", "stale-indexer-heartbeat", "indexer-lag", "bot-restart", "indexer-restart", "reverted-tx", "distinct fired alert", "recovery timestamp", "verified email alert target", "docs/monitoring-alert-export.log", "docs/monitoring-recovery-export.log", "docs/monitoring-alert-target-test.log", "docs/error-tracking-test-event.log"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show monitoring evidence marker ${marker}`);
   }
 }
-for (const marker of ["$env:LORE_BACKUP_DIR", "$env:LORE_RESTORE_DRILL_DIR", "--backup=<absolute-backup-file-inside-backup-dir>", "docs/restore-drill.log", "successful restore summary", "https://restore.playlore.xyz", "docs/restore-health-prod.log", "[prod-health] OK", "base=<restored-origin>", "finalityLagBlocks", "--manifest=docs/restore-proof.json", "existing saved artifacts"]) {
+for (const marker of ["$env:LORE_BACKUP_DIR", "$env:LORE_RESTORE_DRILL_DIR", "--backup=<absolute-backup-file-inside-backup-dir>", "retentionDays", "lastSuccessfulBackupAt", "docs/restore-drill.log", "successful restore summary", "https://restore.playlore.xyz", "docs/restore-health-prod.log", "[prod-health] OK", "base=<restored-origin>", "finalityLagBlocks", "--manifest=docs/restore-proof.json", "existing saved artifacts"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show restore drill evidence marker ${marker}`);
   }
 }
-for (const marker of ["fresh external DB", "docs/indexer-once.log", "[indexer] SQLite path:", "matching the external `LORE_DB_PATH`", "[indexer] Finished runOnce", "no `[indexer] Fatal:` line", "$env:LORE_DB_PATH", "$env:INDEXER_START_BLOCK", "$env:NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK", "$env:INDEXER_FINALITY_BLOCKS"]) {
+for (const marker of ["fresh external DB", "docs/indexer-once.log", "[indexer] SQLite path:", "matching the external `LORE_DB_PATH`", "[indexer] Finished runOnce", "no `[indexer] Fatal:` line", "chainSnapshot", "rpcChainId", "contractAddress", "finalityLagBlocks", "$env:LORE_DB_PATH", "$env:INDEXER_START_BLOCK", "$env:NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK", "$env:INDEXER_FINALITY_BLOCKS"]) {
   if (!productionRunbook.includes(marker)) {
     issues.push(`docs/production-runbook.md must show fresh indexer dry-run marker ${marker}`);
   }
@@ -342,6 +376,7 @@ assertOrderedMarkers("docs/production-runbook.md", productionRunbook, [
   ["monitoring draft", "npm.cmd run proof:monitoring:draft"],
   ["strict monitoring", "npm.cmd run proof:monitoring -- --strict"],
   ["canary and final QA", "## 6. Canary and final QA"],
+  ["v10 dry-run preview", "npm.cmd run preview:canary:v10:dry-run"],
   ["canary qa invariants", "50 successful auto-miner unique epochs"],
   ["qa draft", "npm.cmd run proof:qa:draft"],
   ["strict qa", "npm.cmd run proof:qa -- --strict"],
@@ -364,12 +399,23 @@ if (commandMap.includes("CANARY_LOG=") && !commandMap.includes("$env:CANARY_LOG"
   issues.push("canary env examples must use PowerShell $env: variables, not bash inline variables");
 }
 
-printTable("Launch command map coverage", requiredScripts.map((scriptName) => `${scriptName}: ${scripts[scriptName] ? "package" : "missing package"}, ${commandLinesFor(commandMap, scriptName).length} doc line(s)`));
+if (!summaryOnly) {
+  printTable("Launch command map coverage", requiredScripts.map((scriptName) => `${scriptName}: ${scripts[scriptName] ? "package" : "missing package"}, ${commandLinesFor(commandMap, scriptName).length} doc line(s)`));
+}
 
 if (issues.length > 0) {
-  printTable("Launch command map issues", issues);
+  if (summaryOnly) {
+    console.log(`status=fail, scripts=${requiredScripts.length}, linkedDocs=${linkedDocs.length}, proofFiles=${requiredProofFiles.length}, issues=${issues.length}`);
+    console.log(`Summary: ${issues.length} launch command map issue(s).`);
+  } else {
+    printTable("Launch command map issues", issues);
+  }
   process.exit(1);
 }
 
-console.log("Launch command map checks passed.");
+if (summaryOnly) {
+  console.log(`status=pass, scripts=${requiredScripts.length}, linkedDocs=${linkedDocs.length}, proofFiles=${requiredProofFiles.length}, issues=0`);
+} else {
+  console.log("Launch command map checks passed.");
+}
 console.log("Summary: launch evidence command map is consistent.");

@@ -37,6 +37,7 @@ import { tileMaskToTileIds } from "../app/lib/tileMask";
 import { normalizeTileAmounts } from "../app/lib/tokenAmountMath";
 import { getIndexerFinalityTargetBlock, parseIndexerFinalityBlocks } from "../app/lib/indexerFinality";
 import { parseIndexerWatchFailureLimit, recordIndexerWatchFailure } from "../app/lib/indexerWatchPolicy";
+import { sanitizeSentryPayload } from "../app/lib/sentrySanitize";
 import {
   patchJsonPath,
   putJsonPath,
@@ -73,6 +74,14 @@ const RECONCILE_RECENT_LOOKBACK_BLOCKS = 150_000n;
 const POLL_INTERVAL_MS = 15_000;
 const RETRY_COUNT = 5;
 const RETRY_DELAY_MS = 5_000;
+const MAX_TILE_ID = 25;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const CANONICAL_INDEXED_EPOCH_RE = /^[1-9]\d{0,15}$/;
+
+function describeIndexerError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "unknown");
+  return sanitizeSentryPayload(message).slice(0, 160);
+}
 const INTER_CHUNK_DELAY_MS = 400;
 const RPC_CALL_TIMEOUT_MS = parseOptionalPositiveIntegerEnv(process.env.INDEXER_RPC_TIMEOUT_MS, 45_000);
 const MIN_ADAPTIVE_LOG_RANGE_BLOCKS = parseOptionalNonNegativeBigIntEnv(process.env.INDEXER_MIN_ADAPTIVE_LOG_RANGE_BLOCKS, 250n);
@@ -88,6 +97,48 @@ const RECONCILE_MAX_EPOCHS_PER_PASS = parseOptionalPositiveIntegerEnv(
 );
 
 let lastReconcileAtMs = 0;
+
+function parseChainCurrentEpochNumber(value: bigint): number | null {
+  if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseChainPositiveSafeInteger(value: bigint): number | null {
+  if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseIndexedEpochKey(value: string): number | null {
+  if (!CANONICAL_INDEXED_EPOCH_RE.test(value)) return null;
+  const parsed = BigInt(value);
+  return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
+}
+
+function parseChainTileId(value: bigint): number | null {
+  if (value <= 0n || value > BigInt(MAX_TILE_ID)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_TILE_ID ? parsed : null;
+}
+
+function parseChainTileIds(values: readonly bigint[]): number[] | null {
+  const tileIds: number[] = [];
+  for (const value of values) {
+    const tileId = parseChainTileId(value);
+    if (tileId === null) return null;
+    tileIds.push(tileId);
+  }
+  return tileIds;
+}
+
+function toDisplayNumberWei(value: bigint): number {
+  if (value <= 0n) return 0;
+  const scale = 1_000_000_000_000n;
+  const scaled = (value + (scale / 2n)) / scale;
+  if (scaled > MAX_SAFE_INTEGER_BIGINT) return Number.MAX_SAFE_INTEGER;
+  return Number(scaled) / 1_000_000;
+}
 
 type IndexerRunStatus = {
   startedAt: number;
@@ -227,7 +278,7 @@ async function fetchLogsRequestWithRetry(
       } as unknown as Parameters<typeof client.getLogs>[0];
       return await withRpcTimeout(client.getLogs(request), `getLogs(${from}-${to})`);
     } catch (err) {
-      const msg = (err as Error).message?.slice(0, 80) ?? "unknown";
+      const msg = describeIndexerError(err).slice(0, 80);
       if (attempt < RETRY_COUNT - 1) {
         const wait = RETRY_DELAY_MS * (attempt + 1);
         console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} - wait ${wait}ms`);
@@ -256,7 +307,7 @@ async function fetchLogsRequestAdaptive(
       } as unknown as Parameters<typeof client.getLogs>[0];
       return await withRpcTimeout(client.getLogs(request), `getLogs(${from}-${to})`);
     } catch (err) {
-      const msg = (err as Error).message?.slice(0, 80) ?? "unknown";
+      const msg = describeIndexerError(err).slice(0, 80);
       if (attempt < RETRY_COUNT - 1) {
         const wait = RETRY_DELAY_MS * (attempt + 1);
         console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} - wait ${wait}ms`);
@@ -287,7 +338,7 @@ async function fetchLogsRequestAdaptiveSplit(
     const leftTo = from + (span / 2n) - 1n;
     const rightFrom = leftTo + 1n;
     console.warn(
-      `  [split] ${label} ${from}-${to}: ${(err as Error).message}. splitting into ${from}-${leftTo} and ${rightFrom}-${to}`,
+      `  [split] ${label} ${from}-${to}: ${describeIndexerError(err)}. splitting into ${from}-${leftTo} and ${rightFrom}-${to}`,
     );
     const left = await fetchLogsRequestAdaptiveSplit(topics, `${label}:L`, from, leftTo);
     if (rightFrom <= to) {
@@ -423,10 +474,19 @@ interface ResolverRewardRecord {
 
 function buildBetKey(epoch: string, txHash: string, blockNumber: string): string {
   const normalizedHash = txHash.toLowerCase().trim();
-  if (/^0x[0-9a-f]+$/.test(normalizedHash)) {
+  if (/^0x[0-9a-f]{64}$/.test(normalizedHash)) {
     return `${epoch}_${normalizedHash}`;
   }
   return `${epoch}_nohash_${blockNumber}`;
+}
+
+function buildNormalizedEventId(log: Log): string | null {
+  if (!log.transactionHash || log.logIndex === null || log.logIndex === undefined) {
+    return null;
+  }
+  const normalizedHash = log.transactionHash.toLowerCase().trim();
+  if (!/^0x[0-9a-f]{64}$/.test(normalizedHash)) return null;
+  return `${normalizedHash}_${log.logIndex.toString()}`;
 }
 
 function normalizeBetRecord(bet: BetRecord): BetRecord {
@@ -478,13 +538,15 @@ function processLogs(logs: Log[]) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "BetPlaced") continue;
         const args = decoded.args as { epoch: bigint; user: string; tileId: bigint; amount: bigint };
+        const tileId = parseChainTileId(args.tileId);
+        if (tileId === null) continue;
         bets.push({
           epoch: args.epoch.toString(),
           user: args.user.toLowerCase(),
-          tileIds: [Number(args.tileId)],
+          tileIds: [tileId],
           amounts: [formatUnits(args.amount, 18)],
           totalAmount: formatUnits(args.amount, 18),
-          totalAmountNum: parseFloat(formatUnits(args.amount, 18)),
+          totalAmountNum: toDisplayNumberWei(args.amount),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
@@ -494,13 +556,15 @@ function processLogs(logs: Log[]) {
         const args = decoded.args as {
           epoch: bigint; user: string; tileIds: bigint[]; amounts: bigint[]; totalAmount: bigint;
         };
+        const tileIds = parseChainTileIds(args.tileIds);
+        if (tileIds === null || tileIds.length !== args.amounts.length) continue;
         bets.push({
           epoch: args.epoch.toString(),
           user: args.user.toLowerCase(),
-          tileIds: args.tileIds.map(Number),
+          tileIds,
           amounts: args.amounts.map((a) => formatUnits(a, 18)),
           totalAmount: formatUnits(args.totalAmount, 18),
-          totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
+          totalAmountNum: toDisplayNumberWei(args.totalAmount),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
@@ -510,14 +574,16 @@ function processLogs(logs: Log[]) {
         const args = decoded.args as {
           epoch: bigint; user: string; tileIds: bigint[]; amount: bigint; totalAmount: bigint;
         };
+        const tileIds = parseChainTileIds(args.tileIds);
+        if (tileIds === null) continue;
         const formattedAmount = formatUnits(args.amount, 18);
         bets.push({
           epoch: args.epoch.toString(),
           user: args.user.toLowerCase(),
-          tileIds: args.tileIds.map(Number),
-          amounts: args.tileIds.map(() => formattedAmount),
+          tileIds,
+          amounts: tileIds.map(() => formattedAmount),
           totalAmount: formatUnits(args.totalAmount, 18),
-          totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
+          totalAmountNum: toDisplayNumberWei(args.totalAmount),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
@@ -535,7 +601,7 @@ function processLogs(logs: Log[]) {
           tileIds,
           amounts: tileIds.map(() => formattedAmount),
           totalAmount: formatUnits(args.totalAmount, 18),
-          totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
+          totalAmountNum: toDisplayNumberWei(args.totalAmount),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
@@ -545,8 +611,10 @@ function processLogs(logs: Log[]) {
         const args = decoded.args as {
           epoch: bigint; winningTile: bigint; totalPool: bigint; fee: bigint; rewardPool: bigint; jackpotBonus: bigint;
         };
+        const winningTile = parseChainTileId(args.winningTile);
+        if (winningTile === null) continue;
         epochs.set(args.epoch.toString(), {
-          winningTile: Number(args.winningTile),
+          winningTile,
           totalPool: formatUnits(args.totalPool, 18),
           rewardPool: formatUnits(args.rewardPool, 18),
           fee: formatUnits(args.fee, 18),
@@ -567,7 +635,7 @@ function processLogs(logs: Log[]) {
           epoch: ep,
           kind: "daily",
           amount: formatUnits(args.amount, 18),
-          amountNum: parseFloat(formatUnits(args.amount, 18)),
+          amountNum: toDisplayNumberWei(args.amount),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
@@ -583,33 +651,39 @@ function processLogs(logs: Log[]) {
           epoch: ep,
           kind: "weekly",
           amount: formatUnits(args.amount, 18),
-          amountNum: parseFloat(formatUnits(args.amount, 18)),
+          amountNum: toDisplayNumberWei(args.amount),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
       } else if (topic0 === rewardClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RewardClaimed") continue;
+        const id = buildNormalizedEventId(log);
+        if (!id) continue;
         const args = decoded.args as { epoch: bigint; user: string; reward: bigint };
         rewardClaims.push({
-          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          id,
           epoch: args.epoch.toString(),
           user: args.user.toLowerCase(),
           reward: formatUnits(args.reward, 18),
-          rewardNum: parseFloat(formatUnits(args.reward, 18)),
+          rewardNum: toDisplayNumberWei(args.reward),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
       } else if (topic0 === rewardBatchClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RewardBatchClaimed") continue;
+        const id = buildNormalizedEventId(log);
+        if (!id) continue;
         const args = decoded.args as { user: string; totalAmount: bigint; epochsClaimed: bigint };
+        const epochsClaimed = parseChainPositiveSafeInteger(args.epochsClaimed);
+        if (epochsClaimed === null) continue;
         batchClaims.push({
-          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          id,
           kind: "reward",
           user: args.user.toLowerCase(),
           totalAmount: formatUnits(args.totalAmount, 18),
-          epochsClaimed: Number(args.epochsClaimed),
+          epochsClaimed,
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
@@ -617,9 +691,11 @@ function processLogs(logs: Log[]) {
         if (log.transactionHash && rebateBatchClaimTxs.has(log.transactionHash.toLowerCase())) continue;
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RebateClaimed") continue;
+        const id = buildNormalizedEventId(log);
+        if (!id) continue;
         const args = decoded.args as { user: string; epoch: bigint; amount: bigint };
         batchClaims.push({
-          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          id,
           kind: "rebate",
           user: args.user.toLowerCase(),
           totalAmount: formatUnits(args.amount, 18),
@@ -630,22 +706,28 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === rebateBatchClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RebateBatchClaimed") continue;
+        const id = buildNormalizedEventId(log);
+        if (!id) continue;
         const args = decoded.args as { user: string; amount: bigint; epochsClaimed: bigint };
+        const epochsClaimed = parseChainPositiveSafeInteger(args.epochsClaimed);
+        if (epochsClaimed === null) continue;
         batchClaims.push({
-          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          id,
           kind: "rebate",
           user: args.user.toLowerCase(),
           totalAmount: formatUnits(args.amount, 18),
-          epochsClaimed: Number(args.epochsClaimed),
+          epochsClaimed,
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
       } else if (topic0 === rewardDustSettledSig || topic0 === rebateDustSettledSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RewardDustSettled" && decoded.eventName !== "RebateDustSettled") continue;
+        const id = buildNormalizedEventId(log);
+        if (!id) continue;
         const args = decoded.args as { epoch: bigint; amount: bigint };
         dustSettlements.push({
-          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          id,
           kind: decoded.eventName === "RewardDustSettled" ? "reward" : "rebate",
           epoch: args.epoch.toString(),
           amount: formatUnits(args.amount, 18),
@@ -655,9 +737,11 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === resolverRewardAccruedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "ResolverRewardAccrued") continue;
+        const id = buildNormalizedEventId(log);
+        if (!id) continue;
         const args = decoded.args as { resolver: string; epoch: bigint; amount: bigint };
         resolverRewards.push({
-          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          id,
           kind: "accrued",
           resolver: args.resolver.toLowerCase(),
           epoch: args.epoch.toString(),
@@ -668,9 +752,11 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === resolverRewardClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "ResolverRewardClaimed") continue;
+        const id = buildNormalizedEventId(log);
+        if (!id) continue;
         const args = decoded.args as { resolver: string; amount: bigint };
         resolverRewards.push({
-          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          id,
           kind: "claimed",
           resolver: args.resolver.toLowerCase(),
           amount: formatUnits(args.amount, 18),
@@ -680,9 +766,11 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === feesFlushedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "ProtocolFeesFlushed") continue;
+        const id = buildNormalizedEventId(log);
+        if (!id) continue;
         const args = decoded.args as { ownerAmount: bigint; burnAmount: bigint };
         feeFlushes.push({
-          id: `${log.transactionHash ?? "nohash"}_${log.logIndex?.toString() ?? "0"}`,
+          id,
           ownerAmount: formatUnits(args.ownerAmount, 18),
           burnAmount: formatUnits(args.burnAmount, 18),
           txHash: log.transactionHash ?? "",
@@ -690,7 +778,7 @@ function processLogs(logs: Log[]) {
         });
       }
     } catch (err) {
-      console.warn("[indexer] Failed to decode log in processLogs:", (err as Error).message ?? err);
+      console.warn("[indexer] Failed to decode log in processLogs:", describeIndexerError(err));
     }
   }
 
@@ -816,9 +904,14 @@ async function updateCurrentEpochMeta() {
       abi: READ_ABI,
       functionName: "currentEpoch",
     }), "read currentEpoch");
-    storagePut("gamedata/_meta/currentEpoch", Number(currentEpoch));
+    const currentEpochNumber = parseChainCurrentEpochNumber(currentEpoch);
+    if (currentEpochNumber === null) {
+      console.warn("[indexer] Ignoring unsafe currentEpoch value from contract.");
+      return;
+    }
+    storagePut("gamedata/_meta/currentEpoch", currentEpochNumber);
   } catch (err) {
-    console.warn("[indexer] Could not read currentEpoch from contract:", (err as Error).message);
+    console.warn("[indexer] Could not read currentEpoch from contract:", describeIndexerError(err));
   }
 }
 
@@ -918,12 +1011,24 @@ async function runEpochReconcile(currentBlock: bigint) {
   lastReconcileAtMs = now;
 
   const currentEpoch = await getCurrentEpochFromChain();
-  storagePut("gamedata/_meta/currentEpoch", Number(currentEpoch));
+  const currentEpochNumber = parseChainCurrentEpochNumber(currentEpoch);
+  if (currentEpochNumber === null) {
+    console.warn("[indexer][reconcile] Skipping reconcile for unsafe currentEpoch value from contract.");
+    setIndexerStatus("indexerReconcileStatus", {
+      at: now,
+      currentEpoch: 0,
+      missingEpochs: 0,
+      repairedEpochs: 0,
+      targetEpochs: [],
+    } satisfies IndexerReconcileStatus);
+    return 0;
+  }
+  storagePut("gamedata/_meta/currentEpoch", currentEpochNumber);
 
   if (currentEpoch <= 1n) {
     const status: IndexerReconcileStatus = {
       at: now,
-      currentEpoch: Number(currentEpoch),
+      currentEpoch: currentEpochNumber,
       missingEpochs: 0,
       repairedEpochs: 0,
       targetEpochs: [],
@@ -935,19 +1040,19 @@ async function runEpochReconcile(currentBlock: bigint) {
   const rawEpochs = storageGet<Record<string, EpochRecord>>("gamedata/epochs") ?? {};
   const have = new Set<number>();
   for (const key of Object.keys(rawEpochs)) {
-    const n = Number(key);
-    if (Number.isInteger(n) && n > 0) have.add(n);
+    const n = parseIndexedEpochKey(key);
+    if (n !== null) have.add(n);
   }
 
   const missing: number[] = [];
-  for (let ep = 1; ep < Number(currentEpoch); ep++) {
+  for (let ep = 1; ep < currentEpochNumber; ep++) {
     if (!have.has(ep)) missing.push(ep);
   }
   if (missing.length === 0) {
     console.log("[indexer][reconcile] No missing epochs");
     const status: IndexerReconcileStatus = {
       at: now,
-      currentEpoch: Number(currentEpoch),
+      currentEpoch: currentEpochNumber,
       missingEpochs: 0,
       repairedEpochs: 0,
       targetEpochs: [],
@@ -966,7 +1071,7 @@ async function runEpochReconcile(currentBlock: bigint) {
   console.log(`[indexer][reconcile] Missing epochs: ${missing.length}, repairing now: ${targets.join(", ")}`);
   setIndexerStatus("indexerReconcileStatus", {
     at: Date.now(),
-    currentEpoch: Number(currentEpoch),
+    currentEpoch: currentEpochNumber,
     missingEpochs: missing.length,
     repairedEpochs: 0,
     targetEpochs: targets,
@@ -1011,7 +1116,7 @@ async function runEpochReconcile(currentBlock: bigint) {
       isDailyJackpot = Boolean(epochState[4]);
       isWeeklyJackpot = Boolean(epochState[5]);
     } catch (err) {
-      console.warn(`[indexer][reconcile] Could not read jackpot flags for epoch ${epNum}: ${(err as Error).message}`);
+      console.warn(`[indexer][reconcile] Could not read jackpot flags for epoch ${epNum}: ${describeIndexerError(err)}`);
     }
 
     // Keep last resolved log for epoch (safety)
@@ -1022,8 +1127,10 @@ async function runEpochReconcile(currentBlock: bigint) {
       const args = decoded.args as {
         epoch: bigint; winningTile: bigint; totalPool: bigint; fee: bigint; rewardPool: bigint; jackpotBonus: bigint;
       };
+      const winningTile = parseChainTileId(args.winningTile);
+      if (winningTile === null) continue;
       epochsPatch.set(args.epoch.toString(), {
-        winningTile: Number(args.winningTile),
+        winningTile,
         totalPool: formatUnits(args.totalPool, 18),
         rewardPool: formatUnits(args.rewardPool, 18),
         fee: formatUnits(args.fee, 18),
@@ -1033,7 +1140,7 @@ async function runEpochReconcile(currentBlock: bigint) {
         resolvedBlock: (log.blockNumber ?? 0n).toString(),
       });
     } catch (err) {
-      console.warn("[indexer][reconcile] Failed to decode epoch log:", (err as Error).message ?? err);
+      console.warn("[indexer][reconcile] Failed to decode epoch log:", describeIndexerError(err));
     }
     await delay(targets.length <= 8 ? 50 : 150);
   }
@@ -1043,7 +1150,7 @@ async function runEpochReconcile(currentBlock: bigint) {
     console.log(`[indexer][reconcile] Repaired ${epochsPatch.size} epochs`);
     const status: IndexerReconcileStatus = {
       at: Date.now(),
-      currentEpoch: Number(currentEpoch),
+      currentEpoch: currentEpochNumber,
       missingEpochs: missing.length,
       repairedEpochs: epochsPatch.size,
       targetEpochs: targets,
@@ -1054,7 +1161,7 @@ async function runEpochReconcile(currentBlock: bigint) {
   console.log("[indexer][reconcile] No resolvable missing epochs in this pass");
   const status: IndexerReconcileStatus = {
     at: Date.now(),
-    currentEpoch: Number(currentEpoch),
+    currentEpoch: currentEpochNumber,
     missingEpochs: missing.length,
     repairedEpochs: 0,
     targetEpochs: targets,
@@ -1241,7 +1348,7 @@ async function main() {
         consecutiveFailures = failure.failures;
         console.error(
           `[indexer] Error in watch loop (${consecutiveFailures}/${WATCH_FAILURE_LIMIT}):`,
-          (err as Error).message,
+          describeIndexerError(err),
         );
         if (failure.shouldRestart) {
           console.error("[indexer] Persistent watch failure threshold reached; exiting for supervisor restart.");
@@ -1261,6 +1368,6 @@ main()
     }
   })
   .catch((err) => {
-    console.error("[indexer] Fatal:", err);
+    console.error("[indexer] Fatal:", describeIndexerError(err));
     process.exit(1);
   });

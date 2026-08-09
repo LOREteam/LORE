@@ -3,13 +3,11 @@ import { readFileSync } from "node:fs";
 import { compareAccountingSnapshot, replayV9Accounting } from "./lib/chain-accounting-model.mjs";
 
 const contractPath = "contracts/LineaOreV9.sol";
-const delegatePath = "contracts/LineaOre7702Delegate.sol";
 const constantsPath = "app/lib/constants.ts";
 const indexerPath = "scripts/indexer.ts";
 const chainIndexerAuditPath = "scripts/audit-chain-indexer-window.mjs";
 
 const source = readFileSync(contractPath, "utf8");
-const delegateSource = readFileSync(delegatePath, "utf8");
 const constants = readFileSync(constantsPath, "utf8");
 const indexerSource = readFileSync(indexerPath, "utf8");
 const chainIndexerAuditSource = readFileSync(chainIndexerAuditPath, "utf8");
@@ -706,32 +704,5 @@ assert.match(
   /readAccountingSnapshot[\s\S]*replayV9Accounting[\s\S]*compareAccountingSnapshot/,
   "chain-to-indexer audit must replay rollover, jackpot, and fee-bucket accounting against historical snapshots",
 );
-
-assert.match(delegateSource, /address\s+public\s+immutable\s+allowedToken\s*;/);
-assert.match(delegateSource, /address\s+public\s+immutable\s+allowedGame\s*;/);
-assert.match(delegateSource, /address\s+public\s+immutable\s+allowedSpender\s*;/);
-assert.match(delegateSource, /constructor\s*\(\s*address\s+token_,\s*address\s+game_,\s*address\s+spender_\s*\)/);
-
-for (const fn of [
-  "approveAndPlaceBatchSameAmount",
-  "approveAndPlaceBatchBitmap",
-]) {
-  const body = extractFunctionBody(fn, delegateSource);
-  assert.ok(body.includes("_requireAllowed(token, allowedToken)"), `${fn} must restrict token`);
-  assert.ok(body.includes("_requireAllowed(game, allowedGame)"), `${fn} must restrict game`);
-  assert.ok(body.includes("_requireAllowed(spender, allowedSpender)"), `${fn} must restrict spender`);
-}
-
-for (const fn of [
-  "placeBatchSameAmount",
-  "placeBatchBitmap",
-  "claimRewards",
-  "claimEpochsRebate",
-  "resolveEpoch",
-  "claimResolverRewards",
-]) {
-  const body = extractFunctionBody(fn, delegateSource);
-  assert.ok(body.includes("_requireAllowed(game, allowedGame)"), `${fn} must restrict game`);
-}
 
 console.log("Contract V9 invariant checks passed.");

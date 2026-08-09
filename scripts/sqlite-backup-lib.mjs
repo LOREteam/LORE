@@ -1,36 +1,58 @@
-import { existsSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, renameSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 
 const BACKUP_FILE_PATTERN = /^lore-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.sqlite$/;
 
+function removeTemporaryBackupArtifacts(filePath) {
+  for (const suffix of ["", "-shm", "-wal"]) {
+    rmSync(`${filePath}${suffix}`, { force: true });
+  }
+}
+
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function createSqliteBackup(sourceInput, outputInput) {
   const sourcePath = resolve(sourceInput);
   const outputPath = resolve(outputInput);
   if (sourcePath === outputPath) throw new Error("Backup output must differ from source DB");
-  if (!existsSync(sourcePath) || !statSync(sourcePath).isFile()) {
+  if (!regularFileStat(sourcePath)) {
     throw new Error("Backup source must be an existing regular file");
   }
   if (existsSync(outputPath)) throw new Error("Backup output already exists");
+  const temporaryOutputPath = `${outputPath}.partial-${process.pid}-${Date.now()}`;
+  if (existsSync(temporaryOutputPath)) throw new Error("Backup temporary output already exists");
 
-  const source = new DatabaseSync(sourcePath, { readOnly: true });
   try {
-    const sourceIntegrity = String(source.prepare("PRAGMA integrity_check").get()?.integrity_check ?? "");
-    if (sourceIntegrity !== "ok") throw new Error(`Source integrity check failed: ${sourceIntegrity || "unknown"}`);
-    await backup(source, outputPath);
-  } catch (error) {
-    rmSync(outputPath, { force: true });
-    throw error;
-  } finally {
-    source.close();
-  }
+    const source = new DatabaseSync(sourcePath, { readOnly: true });
+    try {
+      const sourceIntegrity = String(source.prepare("PRAGMA integrity_check").get()?.integrity_check ?? "");
+      if (sourceIntegrity !== "ok") throw new Error(`Source integrity check failed: ${sourceIntegrity || "unknown"}`);
+      await backup(source, temporaryOutputPath);
+    } finally {
+      source.close();
+    }
 
-  const copied = new DatabaseSync(outputPath, { readOnly: true });
-  try {
-    const integrity = String(copied.prepare("PRAGMA integrity_check").get()?.integrity_check ?? "");
+    const copied = new DatabaseSync(temporaryOutputPath, { readOnly: true });
+    let integrity = "";
+    try {
+      integrity = String(copied.prepare("PRAGMA integrity_check").get()?.integrity_check ?? "");
+    } finally {
+      copied.close();
+    }
     if (integrity !== "ok") throw new Error(`Backup integrity check failed: ${integrity || "unknown"}`);
-  } finally {
-    copied.close();
+    renameSync(temporaryOutputPath, outputPath);
+    removeTemporaryBackupArtifacts(temporaryOutputPath);
+  } catch (error) {
+    removeTemporaryBackupArtifacts(temporaryOutputPath);
+    throw error;
   }
 
   return { sourcePath, outputPath, bytes: statSync(outputPath).size, integrity: "ok" };
@@ -39,6 +61,9 @@ export async function createSqliteBackup(sourceInput, outputInput) {
 export function pruneSqliteBackups(directoryInput, retentionDays, excludePaths = [], now = Date.now()) {
   if (!Number.isSafeInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) {
     throw new Error("Backup retention days must be an integer between 1 and 3650");
+  }
+  if (!Number.isSafeInteger(now) || now < 0) {
+    throw new Error("Backup retention clock must be a safe non-negative integer");
   }
   const directory = resolve(directoryInput);
   if (!existsSync(directory) || !statSync(directory).isDirectory()) {

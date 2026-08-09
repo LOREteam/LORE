@@ -1,6 +1,20 @@
 import { spawnSync } from "node:child_process";
+import { redactProofText } from "./redact-proof-output.mjs";
 
 const includeDev = process.argv.includes("--include-dev");
+const summaryOnly = process.argv.includes("--summary-only");
+const MAX_AUDIT_ERROR_CHARS = 500;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+function describeAuditError(error) {
+  const text = redactProofText(error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_AUDIT_ERROR_CHARS) return text;
+  return `${text.slice(0, MAX_AUDIT_ERROR_CHARS - 15)}...<truncated>`;
+}
+
+const allowKnownDevToolchainHigh = includeDev && process.argv.includes("--allow-known-dev-toolchain-high");
 const auditArgs = ["audit", ...(includeDev ? [] : ["--omit=dev"]), "--json"];
 const auditCommand = process.platform === "win32"
   ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `npm.cmd ${auditArgs.join(" ")}`] }
@@ -12,9 +26,19 @@ const result = spawnSync(auditCommand.command, auditCommand.args, {
 });
 
 if (result.error) {
+  if (summaryOnly) {
+    console.log(JSON.stringify({
+      status: "fail",
+      scope: includeDev ? "all" : "production",
+      issue: "audit-startup",
+      detail: describeAuditError(result.error),
+    }));
+    process.exitCode = 1;
+    process.exit();
+  }
   console.error(`# ${includeDev ? "All Dependency" : "Production Dependency"} Audit`);
   console.error("");
-  console.error(`Summary: npm audit could not be started: ${result.error.message}`);
+  console.error(`Summary: npm audit could not be started: ${describeAuditError(result.error)}`);
   process.exitCode = 1;
   process.exit();
 }
@@ -24,10 +48,20 @@ let audit;
 try {
   audit = JSON.parse(raw);
 } catch {
+  if (summaryOnly) {
+    console.log(JSON.stringify({
+      status: "fail",
+      scope: includeDev ? "all" : "production",
+      issue: "audit-json",
+      sample: raw ? describeAuditError(raw) : "",
+    }));
+    process.exitCode = 1;
+    process.exit();
+  }
   console.error(`# ${includeDev ? "All Dependency" : "Production Dependency"} Audit`);
   console.error("");
   console.error("Summary: npm audit did not return parseable JSON output.");
-  if (raw) console.error(raw.split(/\r?\n/).slice(0, 20).join("\n"));
+  if (raw) console.error(`Output sample: ${describeAuditError(raw)}`);
   process.exitCode = 1;
   process.exit();
 }
@@ -36,9 +70,45 @@ const counts = audit.metadata?.vulnerabilities ?? {};
 const vulnerabilities = Object.values(audit.vulnerabilities ?? {});
 const severityRank = new Map([["critical", 4], ["high", 3], ["moderate", 2], ["low", 1], ["info", 0]]);
 const breakingFixes = vulnerabilities.filter((item) => item.fixAvailable && typeof item.fixAvailable === "object" && item.fixAvailable.isSemVerMajor);
+const knownDevToolchainHighNames = new Set([
+  "@eslint/config-array",
+  "@eslint/eslintrc",
+  "brace-expansion",
+  "eslint",
+  "eslint-config-next",
+  "eslint-plugin-import",
+  "eslint-plugin-jsx-a11y",
+  "eslint-plugin-react",
+  "minimatch",
+]);
+const countIssues = new Set();
+const countCache = new Map();
+
+function nonNegativeSafeInteger(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  const text = String(value ?? "").trim();
+  if (!/^(?:0|[1-9]\d{0,15})$/.test(text)) return null;
+  const parsed = BigInt(text);
+  return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
+}
 
 function countOf(name) {
-  return Number(counts[name] ?? 0);
+  if (countCache.has(name)) return countCache.get(name);
+  const value = counts[name];
+  if (value === undefined) {
+    countCache.set(name, 0);
+    return 0;
+  }
+  const parsed = nonNegativeSafeInteger(value);
+  if (parsed !== null) {
+    countCache.set(name, parsed);
+    return parsed;
+  }
+  countIssues.add(`metadata-${name}`);
+  countCache.set(name, 0);
+  return 0;
 }
 
 function formatFix(value) {
@@ -52,6 +122,40 @@ function printTable(headers, rows) {
   console.log(`| ${headers.join(" | ")} |`);
   console.log(`| ${headers.map(() => "---").join(" | ")} |`);
   for (const row of rows) console.log(`| ${row.join(" | ")} |`);
+}
+
+function isKnownDevToolchainHigh(item) {
+  return allowKnownDevToolchainHigh && item.severity === "high" && knownDevToolchainHighNames.has(item.name);
+}
+
+const allowedKnownDevToolchainHigh = vulnerabilities
+  .filter(isKnownDevToolchainHigh)
+  .map((item) => item.name)
+  .sort();
+const blockingHighCritical = vulnerabilities.filter(
+  (item) => ["critical", "high"].includes(item.severity) && !isKnownDevToolchainHigh(item),
+);
+
+if (summaryOnly) {
+  const summaryCounts = {
+    total: countOf("total"),
+    critical: countOf("critical"),
+    high: countOf("high"),
+    moderate: countOf("moderate"),
+    low: countOf("low"),
+  };
+  console.log(JSON.stringify({
+    status: blockingHighCritical.length > 0 || countIssues.size > 0 ? "fail" : "pass",
+    scope: includeDev ? "all" : "production",
+    ...summaryCounts,
+    blockingHighCritical: blockingHighCritical.length,
+    knownDevToolchainHigh: allowedKnownDevToolchainHigh.length,
+    breakingFixes: breakingFixes.length,
+    countIssues: countIssues.size,
+    ...(countIssues.size > 0 ? { issue: "audit-counts" } : {}),
+  }));
+  if (blockingHighCritical.length > 0 || countIssues.size > 0) process.exitCode = 1;
+  process.exit();
 }
 
 console.log(`# ${includeDev ? "All Dependency" : "Production Dependency"} Audit`);
@@ -81,15 +185,28 @@ const top = vulnerabilities
 console.log("");
 printTable(["Package", "Severity", "Via", "Fix"], top.length > 0 ? top : [["none", "none", "0", "none"]]);
 
+if (allowedKnownDevToolchainHigh.length > 0) {
+  console.log("");
+  console.log(`Allowed known dev-toolchain high advisories: ${allowedKnownDevToolchainHigh.join(", ")}`);
+  console.log("These are non-production ESLint/minimatch advisories; production audit must pass separately.");
+}
+
 if (breakingFixes.length > 0) {
   console.log("");
   console.log(`Breaking fixes suggested: ${breakingFixes.map((item) => item.name).sort().join(", ")}`);
 }
 
-if (countOf("critical") > 0 || countOf("high") > 0) {
+if (blockingHighCritical.length > 0) {
   console.log("");
-  console.log(`Summary: ${includeDev ? "all" : "production"} dependency audit failed: ${countOf("critical")} critical, ${countOf("high")} high, ${countOf("total")} total advisories.`);
+  console.log(`Summary: ${includeDev ? "all" : "production"} dependency audit failed: ${blockingHighCritical.length} blocking high/critical advisories, ${countOf("total")} total advisories.`);
   process.exitCode = 1;
+} else if (countIssues.size > 0) {
+  console.log("");
+  console.log(`Summary: ${includeDev ? "all" : "production"} dependency audit failed: ${countIssues.size} malformed audit metadata count(s).`);
+  process.exitCode = 1;
+} else if (allowedKnownDevToolchainHigh.length > 0) {
+  console.log("");
+  console.log(`Summary: all dependency audit passed with ${allowedKnownDevToolchainHigh.length} known dev-toolchain high advisory exception(s), 0 blocking high/critical advisories, ${countOf("total")} total advisories.`);
 } else {
   console.log("");
   console.log(`Summary: ${includeDev ? "all" : "production"} dependency audit passed with no high or critical advisories.`);

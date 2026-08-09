@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { mkdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { config as loadDotenv } from "dotenv";
 import {
@@ -9,15 +9,25 @@ import {
   fallback,
   formatEther,
   formatUnits,
+  getAddress,
   http,
   parseUnits,
+  toFunctionSelector,
+  type Address,
   type Hash,
   type PublicClient,
   type Transport,
 } from "viem";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 
-import { GAME_ABI, LINEA_TOKEN_ADDRESS, TOKEN_ABI, CONTRACT_ADDRESS, TX_RECEIPT_TIMEOUT_MS } from "../app/lib/constants";
+import {
+  CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
+  GAME_ABI,
+  LINEA_TOKEN_ADDRESS,
+  TOKEN_ABI,
+  CONTRACT_ADDRESS,
+  TX_RECEIPT_TIMEOUT_MS,
+} from "../app/lib/constants";
 import { parseCanaryHealthBaseUrl, parseCanaryHealthPayloads } from "../app/lib/canaryHealthTelemetry";
 import {
   clampKeeperFeeOverridesToBalance,
@@ -30,12 +40,39 @@ import { tileIdsToMask } from "../app/lib/tileMask";
 import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs, getStableLineaReadRpcs } from "../config/publicConfig";
 import { estimateGasWithMethodRetry, isEstimateGasMethodUnsupported } from "./lib/estimate-gas-retry";
 import { classifyCanaryContractError } from "./lib/canary-contract-error";
-
-loadDotenv({ path: ".env.live-test-wallets", override: false });
+import { sanitizeSupportLogPayload } from "../app/lib/sentrySanitize";
+import { recordLineaEstimateGasShadow } from "../app/lib/lineaEstimateGasShadow";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
-const TARGET_ROUNDS = parseIntegerEnv("LIVE_TEST_TARGET_ROUNDS", 300, 1, 10_000);
+if (APP_NETWORK !== "sepolia" || APP_CHAIN.id !== 59141) {
+  throw new Error("live-round-canary is testnet-only and requires Linea Sepolia (chain ID 59141).");
+}
+const EPOCH_BOUND_BITMAP_SELECTOR = toFunctionSelector(
+  "placeBatchBetsBitmapForEpoch(uint256,uint32,uint256)",
+);
+const V10_MATRIX_ONLY = process.argv.includes("--v10-matrix-only");
+const V10_MATRIX_EXECUTE = process.argv.includes("--execute");
+if (V10_MATRIX_ONLY && !CONTRACT_REQUIRES_EPOCH_BOUND_BETS) {
+  throw new Error("V10 matrix mode requires NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1");
+}
+const LIVE_EXECUTION_CONFIRMED =
+  process.env.LIVE_TEST_EXECUTE === "1" && process.argv.includes("--execute-live");
+const DRY_RUN = !LIVE_EXECUTION_CONFIRMED || (V10_MATRIX_ONLY && !V10_MATRIX_EXECUTE);
+const PUBLIC_ADDRESS_ENV_PATH = ".env.live-test-addresses";
+const LIVE_WALLET_ENV_PATH = ".env.live-test-wallets";
+const CANONICAL_INTEGER_ENV_RE = /^(?:0|[1-9]\d{0,15})$/;
+
+function loadEnvFileIfPresent(path: string, description: string) {
+  if (existsSync(path) && !statSync(path).isFile()) {
+    throw new Error(`${path} must be ${description}, not a directory`);
+  }
+  loadDotenv({ path, override: false, quiet: true });
+}
+
+loadEnvFileIfPresent(PUBLIC_ADDRESS_ENV_PATH, "an address env file");
+const TARGET_ROUNDS = V10_MATRIX_ONLY ? 6 : parseIntegerEnv("LIVE_TEST_TARGET_ROUNDS", 300, 1, 10_000);
+const MAX_RESOLVE_TRANSACTIONS = V10_MATRIX_ONLY ? TARGET_ROUNDS - 1 : null;
 const TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_TILES_PER_ROUND", 3, 1, 25);
 const SAFE_SECONDS_LEFT = parseIntegerEnv("LIVE_TEST_SAFE_SECONDS_LEFT", 35, 5, 600);
 const SAFE_WINDOW_TIMEOUT_MS = parseIntegerEnv("LIVE_TEST_SAFE_WINDOW_TIMEOUT_MS", 180_000, 30_000, 3_600_000);
@@ -45,10 +82,10 @@ const RESOLVE_RETRY_COOLDOWN_MS = parseIntegerEnv("LIVE_TEST_RESOLVE_RETRY_COOLD
 const RESOLVE_GAS_FLOOR = BigInt(parseIntegerEnv("LIVE_TEST_RESOLVE_GAS_FLOOR", 500_000, 100_000, 1_000_000));
 const LOOP_PAUSE_MS = parseIntegerEnv("LIVE_TEST_LOOP_PAUSE_MS", 1_500, 0, 120_000);
 const MAX_FAILURES = parseIntegerEnv("LIVE_TEST_MAX_FAILURES", 20, 1, 10_000);
-const DRY_RUN = process.env.LIVE_TEST_DRY_RUN === "1";
 const FORCE_ALLOWANCE_APPROVE = process.env.LIVE_TEST_FORCE_ALLOWANCE_APPROVE === "1";
-const REPEAT_SAME_BET = process.env.LIVE_TEST_REPEAT_SAME_BET === "1";
+const REPEAT_SAME_BET = V10_MATRIX_ONLY || process.env.LIVE_TEST_REPEAT_SAME_BET === "1";
 const ALLOW_EMPTY_RESOLVE = process.env.LIVE_TEST_ALLOW_EMPTY_RESOLVE === "1";
+const VERBOSE_TARGETS = process.env.LIVE_TEST_VERBOSE_TARGETS === "1";
 const VERBOSE_WALLET_PREFLIGHT = process.env.LIVE_TEST_VERBOSE_WALLETS === "1";
 const BET_AMOUNT = parseTokenAmountEnv("LIVE_TEST_BET_AMOUNT", "0.01");
 const APPROVE_AMOUNT = parseTokenAmountEnv("LIVE_TEST_APPROVE_AMOUNT", "1000000000");
@@ -59,6 +96,9 @@ const INJECT_RPC_FAILOVER = process.env.LIVE_TEST_INJECT_RPC_FAILOVER === "1";
 const HEALTH_BASE_URL = parseCanaryHealthBaseUrl(process.env.LIVE_TEST_HEALTH_BASE_URL);
 const HEALTH_SAMPLE_EVERY_ROUNDS = parseIntegerEnv("LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS", 10, 1, 10_000);
 const HEALTH_TIMEOUT_MS = parseIntegerEnv("LIVE_TEST_HEALTH_TIMEOUT_MS", 10_000, 1_000, 60_000);
+const MAX_HEALTH_SAMPLE_RESPONSE_BYTES = 256 * 1024;
+const CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const MIN_TOTAL_BET_AMOUNT = parseTokenAmountEnv(
   "LIVE_TEST_MIN_TOTAL_BET_AMOUNT",
   process.env.LIVE_TEST_MIN_BET_AMOUNT ?? formatUnits(BET_AMOUNT, 18),
@@ -67,8 +107,9 @@ const MAX_TOTAL_BET_AMOUNT = parseTokenAmountEnv(
   "LIVE_TEST_MAX_TOTAL_BET_AMOUNT",
   process.env.LIVE_TEST_MAX_BET_AMOUNT ?? formatUnits(BET_AMOUNT * BigInt(TILES_PER_ROUND), 18),
 );
-const MIN_TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_MIN_TILES_PER_ROUND", RANDOMIZE_ROUNDS ? 1 : TILES_PER_ROUND, 1, 25);
-const MAX_TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_MAX_TILES_PER_ROUND", RANDOMIZE_ROUNDS ? 25 : TILES_PER_ROUND, 1, 25);
+const MATRIX_TILE_RANGE = V10_MATRIX_ONLY || CONTRACT_REQUIRES_EPOCH_BOUND_BETS;
+const MIN_TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_MIN_TILES_PER_ROUND", RANDOMIZE_ROUNDS || MATRIX_TILE_RANGE ? 1 : TILES_PER_ROUND, 1, 25);
+const MAX_TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_MAX_TILES_PER_ROUND", RANDOMIZE_ROUNDS || MATRIX_TILE_RANGE ? 25 : TILES_PER_ROUND, 1, 25);
 const STRESS_SEED = parseIntegerEnv("LIVE_TEST_STRESS_SEED", 13_337, 1, Number.MAX_SAFE_INTEGER);
 if (MIN_TOTAL_BET_AMOUNT > MAX_TOTAL_BET_AMOUNT) {
   throw new Error("LIVE_TEST_MIN_TOTAL_BET_AMOUNT must be <= LIVE_TEST_MAX_TOTAL_BET_AMOUNT");
@@ -80,11 +121,27 @@ const ROLES = (process.env.LIVE_TEST_ROLES ?? "MANUAL,AUTOMINER_A,AUTOMINER_B")
   .split(",")
   .map((item) => item.trim().toUpperCase())
   .filter(Boolean);
+const SAFE_ROLE_NAMES = new Set(["MANUAL", "AUTOMINER_A", "AUTOMINER_B", "AUTOMINER_C"]);
+if (ROLES.length === 0) {
+  throw new Error("LIVE_TEST_ROLES must include at least one supported role");
+}
+if (new Set(ROLES).size !== ROLES.length) {
+  throw new Error("LIVE_TEST_ROLES contains duplicate roles");
+}
+for (const role of ROLES) {
+  if (!SAFE_ROLE_NAMES.has(role)) {
+    throw new Error(`LIVE_TEST_ROLES contains unsupported role ${role}`);
+  }
+}
 
 type BetMode = "single" | "bitmap" | "sameAmount" | "arrays";
 
-type LiveWallet = {
+type CanaryWallet = {
   role: string;
+  address: Address;
+};
+
+type LiveWallet = CanaryWallet & {
   account: PrivateKeyAccount;
 };
 
@@ -96,9 +153,19 @@ type RoundPlan = {
   totalAmount: bigint;
 };
 
+const V10_CANARY_MATRIX = [
+  { tileCount: 1, sparse: false },
+  { tileCount: 3, sparse: false },
+  { tileCount: 3, sparse: true },
+  { tileCount: 5, sparse: false },
+  { tileCount: 5, sparse: true },
+  { tileCount: 25, sparse: false },
+] as const;
+
 type RoundEvent = {
   amount: string;
   amounts?: string[];
+  approvalRequired?: boolean;
   atomicAdvance?: boolean;
   chainId?: number;
   contractAddress?: string;
@@ -111,6 +178,7 @@ type RoundEvent = {
   enoughToken?: boolean;
   epoch?: string;
   effectiveGasPrice?: string;
+  epochBound?: boolean;
   gasEstimate?: string;
   estimateGasMs?: number;
   gasEstimateFallback?: boolean;
@@ -155,6 +223,7 @@ type RoundEvent = {
 const attemptedResolveEpochs = new Map<string, number>();
 const pendingResolveEpochs = new Set<string>();
 let emptyResolveBootstrapUsed = false;
+let submittedResolveTransactions = 0;
 const BATCH_GAS_FALLBACK = 700_000n;
 const GENERIC_RPC_LABEL_RE = /^(?:configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)(?:[-_ ]?rpc(?:[-_ ]?label)?(?:[-_ ]?required)?)?$/i;
 
@@ -177,7 +246,10 @@ function isEstimateGasOutOfGasError(error: unknown) {
 }
 
 function redactCanaryErrorMessage(message: string) {
-  const firstLine = message.split(/\r?\n/).find((line) => line.trim())?.trim() || "Unknown error";
+  const sanitized = sanitizeSupportLogPayload({ message }).message;
+  const firstLine = (typeof sanitized === "string" ? sanitized : "Unknown error")
+    .split(/\r?\n/)
+    .find((line) => line.trim())?.trim() || "Unknown error";
   return firstLine
     .replace(/https?:\/\/[^\s"']+/gi, "<redacted-url>")
     .replace(/\b0x[a-fA-F0-9]{80,}\b/g, "<redacted-calldata>")
@@ -185,11 +257,14 @@ function redactCanaryErrorMessage(message: string) {
     .slice(0, 280);
 }
 function parseIntegerEnv(name: string, fallbackValue: number, min: number, max: number) {
-  const raw = process.env[name];
-  if (raw == null || raw.trim() === "") return fallbackValue;
+  const raw = process.env[name]?.trim();
+  if (raw == null || raw === "") return fallbackValue;
+  if (!CANONICAL_INTEGER_ENV_RE.test(raw)) {
+    throw new Error(`${name} must be a canonical integer in [${min}, ${max}]`);
+  }
   const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${name} must be an integer in [${min}, ${max}], got ${raw}`);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be a canonical integer in [${min}, ${max}]`);
   }
   return parsed;
 }
@@ -223,7 +298,10 @@ async function sampleHealth(logPath: string, round: number) {
       if (!runtimeResponse.ok || !dataSyncResponse.ok) {
         throw new Error(`Health endpoints returned runtime=${runtimeResponse.status} dataSync=${dataSyncResponse.status}`);
       }
-      const sample = parseCanaryHealthPayloads(await runtimeResponse.json(), await dataSyncResponse.json());
+      const sample = parseCanaryHealthPayloads(
+        await readBoundedHealthJson(runtimeResponse),
+        await readBoundedHealthJson(dataSyncResponse),
+      );
       writeEvent(logPath, {
         amount: "0",
         ...sample,
@@ -261,19 +339,64 @@ async function sampleHealth(logPath: string, round: number) {
   });
 }
 
+async function readBoundedHealthJson(response: Response): Promise<unknown> {
+  const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
+  if (contentLength !== null && contentLength > MAX_HEALTH_SAMPLE_RESPONSE_BYTES) {
+    throw new Error("health sample response body too large");
+  }
+  if (!response.body) throw new Error("health sample response body is empty");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let totalBytes = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_HEALTH_SAMPLE_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("health sample response body too large");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();
+  return JSON.parse(text);
+}
+
+function parseContentLengthHeader(value: string | null) {
+  if (value == null || value === "") return null;
+  if (!CONTENT_LENGTH_RE.test(value)) throw new Error("health sample response has invalid content-length");
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) throw new Error("health sample response has invalid content-length");
+  return Number(parsed);
+}
+
 function normalizePrivateKey(raw: string): `0x${string}` {
   const trimmed = raw.trim();
   return trimmed.startsWith("0x") ? (trimmed as `0x${string}`) : (`0x${trimmed}` as `0x${string}`);
 }
 
 function loadWallets(): LiveWallet[] {
+  loadEnvFileIfPresent(LIVE_WALLET_ENV_PATH, "a wallet env file");
   const wallets = ROLES.map((role) => {
     const key = process.env[`LORE_LIVE_TEST_${role}_PRIVATE_KEY`]?.trim();
     if (!key) throw new Error(`Missing LORE_LIVE_TEST_${role}_PRIVATE_KEY in .env.live-test-wallets`);
-    return { role, account: privateKeyToAccount(normalizePrivateKey(key)) };
+    const account = privateKeyToAccount(normalizePrivateKey(key));
+    return { role, address: account.address, account };
   });
-  const unique = new Set(wallets.map((wallet) => wallet.account.address.toLowerCase()));
+  const unique = new Set(wallets.map((wallet) => wallet.address.toLowerCase()));
   if (unique.size !== wallets.length) throw new Error("Live test wallet list contains duplicate addresses");
+  return wallets;
+}
+
+function loadDryRunWallets(): CanaryWallet[] {
+  const wallets = ROLES.map((role) => {
+    const rawAddress = process.env[`LORE_LIVE_TEST_${role}_ADDRESS`]?.trim();
+    if (!rawAddress) throw new Error(`Missing LORE_LIVE_TEST_${role}_ADDRESS in .env.live-test-addresses`);
+    return { role, address: getAddress(rawAddress) };
+  });
+  const unique = new Set(wallets.map((wallet) => wallet.address.toLowerCase()));
+  if (unique.size !== wallets.length) throw new Error("Live test address list contains duplicate addresses");
   return wallets;
 }
 
@@ -346,11 +469,31 @@ function classifyError(error: unknown) {
   return { kind: "unknown", message: safeMessage };
 }
 function pickMode(round: number): BetMode {
+  if (CONTRACT_REQUIRES_EPOCH_BOUND_BETS) return "bitmap";
   const modes: BetMode[] = ["single", "bitmap", "sameAmount", "arrays"];
   return modes[round % modes.length];
 }
 
+async function assertEpochBoundBetCapability(publicClient: PublicClient) {
+  if (!CONTRACT_REQUIRES_EPOCH_BOUND_BETS) return;
+  const bytecode = await publicClient.getBytecode({ address: CONTRACT_ADDRESS });
+  if (!bytecode?.toLowerCase().includes(EPOCH_BOUND_BITMAP_SELECTOR.slice(2).toLowerCase())) {
+    throw new Error("Configured contract is missing the required epoch-bound bet selector");
+  }
+}
+
 function pickTiles(epoch: bigint, round: number, walletIndex: number, count: number) {
+  const matrixCase = CONTRACT_REQUIRES_EPOCH_BOUND_BETS ? V10_CANARY_MATRIX[round] : undefined;
+  if (matrixCase) {
+    const seed = epoch + BigInt(round * 7 + walletIndex * 11);
+    if (!matrixCase.sparse) {
+      const maxStart = 26 - count;
+      const start = Number(seed % BigInt(maxStart)) + 1;
+      return Array.from({ length: count }, (_, index) => start + index);
+    }
+    const start = Number(seed % 25n) + 1;
+    return Array.from({ length: count }, (_, index) => ((start - 1 + index * 7) % 25) + 1);
+  }
   const tiles: number[] = [];
   let candidate = Number((epoch + BigInt(round * 7 + walletIndex * 11)) % 25n) + 1;
   while (tiles.length < count) {
@@ -373,12 +516,18 @@ function seededBasisPoints(round: number, walletIndex: number, salt: number) {
 
 function pickRoundPlan(round: number, walletIndex: number, mode: BetMode): RoundPlan {
   const tileRange = MAX_TILES_PER_ROUND - MIN_TILES_PER_ROUND + 1;
+  const matrixTileCount = CONTRACT_REQUIRES_EPOCH_BOUND_BETS ? V10_CANARY_MATRIX[round]?.tileCount : undefined;
+  if (matrixTileCount != null && (matrixTileCount < MIN_TILES_PER_ROUND || matrixTileCount > MAX_TILES_PER_ROUND)) {
+    throw new Error(
+      `V10 canary matrix requires ${matrixTileCount} tiles, outside configured ${MIN_TILES_PER_ROUND}-${MAX_TILES_PER_ROUND}`,
+    );
+  }
   const tileCount =
-    mode === "single"
+    matrixTileCount ?? (mode === "single"
       ? 1
       : RANDOMIZE_ROUNDS
         ? MIN_TILES_PER_ROUND + (seededBasisPoints(round, walletIndex, 1) % tileRange)
-        : TILES_PER_ROUND;
+        : TILES_PER_ROUND);
   const amountRange = MAX_TOTAL_BET_AMOUNT - MIN_TOTAL_BET_AMOUNT;
   const targetTotalAmount = RANDOMIZE_ROUNDS
     ? MIN_TOTAL_BET_AMOUNT + (amountRange * BigInt(seededBasisPoints(round, walletIndex, 2))) / 10_000n
@@ -397,7 +546,7 @@ function pickRoundPlan(round: number, walletIndex: number, mode: BetMode): Round
   return { amount, amounts, targetTotalAmount, tileCount, totalAmount };
 }
 
-function getPlannedSpendByRole(wallets: LiveWallet[]) {
+function getPlannedSpendByRole(wallets: CanaryWallet[]) {
   const plannedSpendByRole = new Map<string, bigint>();
   for (let round = 0; round < TARGET_ROUNDS; round += 1) {
     const walletIndex = round % wallets.length;
@@ -427,13 +576,23 @@ async function getBetFeeOverrides(publicClient: PublicClient) {
     return getFallbackFeeOverrides(APP_CHAIN.id, "normal");
   }
 }
+
+function bigintDeltaToBoundedSeconds(upper: bigint, lower: bigint): number {
+  const delta = upper - lower;
+  const maxSafeSeconds = BigInt(Number.MAX_SAFE_INTEGER);
+  const minSafeSeconds = BigInt(Number.MIN_SAFE_INTEGER);
+  if (delta > maxSafeSeconds) return Number.MAX_SAFE_INTEGER;
+  if (delta < minSafeSeconds) return Number.MIN_SAFE_INTEGER;
+  return Number(delta);
+}
+
 async function readEpochWindow(publicClient: PublicClient) {
   const epoch = await publicClient.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "currentEpoch" });
   const [endTime, block] = await Promise.all([
     publicClient.readContract({ address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "getEpochEndTime", args: [epoch] }),
     publicClient.getBlock(),
   ]);
-  const secondsLeft = Number(endTime - block.timestamp);
+  const secondsLeft = bigintDeltaToBoundedSeconds(endTime, block.timestamp);
   return { epoch, secondsLeft };
 }
 
@@ -484,6 +643,16 @@ async function resolveIfNeeded(params: {
         functionName: "resolveEpoch",
         args: [epoch],
       });
+      await recordLineaEstimateGasShadow({
+        publicClient,
+        account: resolver.account.address,
+        to: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "resolveEpoch",
+        args: [epoch],
+        baselineGas: gasEstimate,
+        tag: "live-canary-resolve",
+      });
       let gas = gasEstimate > RESOLVE_GAS_FLOOR ? gasEstimate : RESOLVE_GAS_FLOOR;
       const fees = await getFeeOverrides(publicClient);
       const nativeBalance = await publicClient.getBalance({ address: resolver.account.address });
@@ -504,6 +673,12 @@ async function resolveIfNeeded(params: {
         continue;
       }
       gas = affordableGasLimit;
+      if (
+        MAX_RESOLVE_TRANSACTIONS !== null &&
+        submittedResolveTransactions >= MAX_RESOLVE_TRANSACTIONS
+      ) {
+        throw new Error("V10 matrix resolve transaction limit reached");
+      }
       const hash = await walletClient.writeContract({
         account: resolver.account,
         chain: APP_CHAIN,
@@ -515,6 +690,7 @@ async function resolveIfNeeded(params: {
         ...fees,
       } as never);
       pendingHash = hash;
+      submittedResolveTransactions += 1;
       const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
       if (emptyEpoch && receipt.status === "success") emptyResolveBootstrapUsed = true;
       writeEvent(logPath, {
@@ -574,7 +750,9 @@ async function waitForSafeWindow(params: {
     lastWindow = window;
     if (
       window.secondsLeft <= 0 &&
-      (params.afterEpoch == null || window.epoch > params.afterEpoch)
+      // A reverted bet can leave the current epoch empty. The next bet may
+      // advance that same expired epoch atomically, without a paid resolver call.
+      (params.afterEpoch == null || window.epoch >= params.afterEpoch)
     ) {
       const epochData = await params.publicClient.readContract({
         address: CONTRACT_ADDRESS,
@@ -694,16 +872,18 @@ async function placeRound(params: {
   const nativeBalance = await publicClient.getBalance({ address: wallet.account.address });
   let fees = await getBetFeeOverrides(publicClient);
   const preparedAt = Date.now();
-  const functionName =
-    mode === "single"
+  const functionName = CONTRACT_REQUIRES_EPOCH_BOUND_BETS
+    ? "placeBatchBetsBitmapForEpoch"
+    : mode === "single"
       ? "placeBet"
       : mode === "bitmap"
         ? "placeBatchBetsBitmap"
         : mode === "sameAmount"
           ? "placeBatchBetsSameAmount"
           : "placeBatchBets";
-  const args =
-    mode === "single"
+  const args = CONTRACT_REQUIRES_EPOCH_BOUND_BETS
+    ? [epoch, tileIdsToMask(tiles), plan.amount]
+    : mode === "single"
       ? [BigInt(tiles[0]), plan.amounts[0]]
       : mode === "bitmap"
         ? [tileIdsToMask(tiles), plan.amount]
@@ -724,6 +904,16 @@ async function placeRound(params: {
     } as never));
     gas = estimate.value;
     gasEstimateRetryCount = estimate.retryCount;
+    await recordLineaEstimateGasShadow({
+      publicClient,
+      account: wallet.account.address,
+      to: CONTRACT_ADDRESS,
+      abi: GAME_ABI,
+      functionName,
+      args,
+      baselineGas: gas,
+      tag: `live-canary-bet-${mode}`,
+    });
   } catch (error) {
     if (mode === "single" || !isEstimateGasOutOfGasError(error)) throw error;
     gas = BATCH_GAS_FALLBACK;
@@ -756,6 +946,7 @@ async function placeRound(params: {
     amounts: mode === "arrays" ? plan.amounts.map((value) => formatUnits(value, 18)) : undefined,
     atomicAdvance,
     epoch: epoch.toString(),
+    epochBound: CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
     estimateGasMs: gasEstimatedAt - preparedAt,
     gasEstimateFallback,
     gasEstimateRetryCount,
@@ -795,12 +986,13 @@ async function placeRound(params: {
     return event;
   }
   const receiptAt = Date.now();
-  // V9 advances exactly one expired epoch before recording this bet.
+  // V9 legacy and V10 protected empty-epoch paths advance exactly one epoch.
   const recordedEpoch = atomicAdvance && receipt.status === "success" ? epoch + 1n : epoch;
   const event: RoundEvent = {
     ...sentEvent,
     durationMs: receiptAt - startedAt,
     effectiveGasPrice: receipt.effectiveGasPrice.toString(),
+    errorKind: receipt.status === "reverted" ? "contract-revert" : undefined,
     epoch: recordedEpoch.toString(),
     gasUsed: receipt.gasUsed.toString(),
     networkFeeWei: (receipt.gasUsed * receipt.effectiveGasPrice).toString(),
@@ -816,7 +1008,7 @@ async function placeRound(params: {
 async function runPreflight(
   logPath: string,
   publicClient: PublicClient,
-  wallets: LiveWallet[],
+  wallets: CanaryWallet[],
   plannedSpendByRole: Map<string, bigint>,
 ) {
   const rows = [];
@@ -824,29 +1016,31 @@ async function runPreflight(
     const plannedSpend = plannedSpendByRole.get(wallet.role) ?? 0n;
     const requiredToken = plannedSpend > MIN_TOKEN_PER_WALLET ? plannedSpend : MIN_TOKEN_PER_WALLET;
     const [eth, token, allowance, nonceLatest, noncePending] = await Promise.all([
-      publicClient.getBalance({ address: wallet.account.address }),
+      publicClient.getBalance({ address: wallet.address }),
       publicClient.readContract({
         address: LINEA_TOKEN_ADDRESS,
         abi: TOKEN_ABI,
         functionName: "balanceOf",
-        args: [wallet.account.address],
+        args: [wallet.address],
       }),
       publicClient.readContract({
         address: LINEA_TOKEN_ADDRESS,
         abi: TOKEN_ABI,
         functionName: "allowance",
-        args: [wallet.account.address, CONTRACT_ADDRESS],
+        args: [wallet.address, CONTRACT_ADDRESS],
       }),
-      publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "latest" }),
-      publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "pending" }),
+      publicClient.getTransactionCount({ address: wallet.address, blockTag: "latest" }),
+      publicClient.getTransactionCount({ address: wallet.address, blockTag: "pending" }),
     ]);
     const nonceQueueClear = noncePending <= nonceLatest;
+    const approvalRequired = FORCE_ALLOWANCE_APPROVE || allowance < plannedSpend;
     rows.push({
       role: wallet.role,
-      address: wallet.account.address,
+      address: wallet.address,
       eth: formatEther(eth),
       linea: formatUnits(token, 18),
       allowance: formatUnits(allowance, 18),
+      approvalRequired,
       plannedSpend: formatUnits(plannedSpend, 18),
       enoughEth: eth >= MIN_ETH_PER_WALLET,
       enoughToken: token >= requiredToken,
@@ -856,6 +1050,7 @@ async function runPreflight(
     });
     writeEvent(logPath, {
       amount: "0",
+      approvalRequired,
       enoughEth: eth >= MIN_ETH_PER_WALLET,
       enoughToken: token >= requiredToken,
       errorKind: !nonceQueueClear
@@ -878,7 +1073,11 @@ async function runPreflight(
     });
   }
   const readyWallets = rows.filter((row) => row.enoughEth && row.enoughToken && row.nonceQueueClear).length;
-  console.log(`[live-canary] walletPreflight ready=${readyWallets}/${rows.length} roles=${rows.map((row) => row.role).join(",")}`);
+  const approvalsRequired = rows.filter((row) => row.approvalRequired).length;
+  console.log(
+    `[live-canary] walletPreflight ready=${readyWallets}/${rows.length} approvalsRequired=${approvalsRequired} ` +
+      `roles=${rows.map((row) => row.role).join(",")}`,
+  );
   if (VERBOSE_WALLET_PREFLIGHT) console.table(rows);
   if (rows.some((row) => !row.enoughEth || !row.enoughToken || !row.nonceQueueClear)) {
     throw new Error("Preflight wallet safety checks failed");
@@ -886,36 +1085,34 @@ async function runPreflight(
 }
 
 async function main() {
-  const wallets = loadWallets();
-  const resolver = process.env.LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY
-    ? {
-        role: "RESOLVER",
-        account: privateKeyToAccount(normalizePrivateKey(process.env.LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY)),
-      }
-    : null;
-  const resolverCandidates = [
-    ...(resolver ? [resolver] : []),
-    ...wallets.filter((wallet) => wallet.account.address.toLowerCase() !== resolver?.account.address.toLowerCase()),
-  ];
+  const wallets = DRY_RUN ? loadDryRunWallets() : loadWallets();
   const readRpcUrls = getStableLineaReadRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const broadcastRpcUrls = getPreferredLineaRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const readTransport = createCanaryTransport(readRpcUrls);
   const broadcastTransport = createCanaryTransport(broadcastRpcUrls);
   const publicClient = createPublicClient({ chain: APP_CHAIN, transport: readTransport });
   const logPath = createRunLogPath();
+  const plannedSpendByRole = getPlannedSpendByRole(wallets);
+  const plannedStake = [...plannedSpendByRole.values()].reduce((sum, value) => sum + value, 0n);
+  const plannedBetTransactions = TARGET_ROUNDS * (REPEAT_SAME_BET ? 2 : 1);
 
   writeFileSync(logPath, "");
   console.log(`[live-canary] network=${APP_NETWORK} chainId=${APP_CHAIN.id}`);
-  console.log(`[live-canary] contract=${CONTRACT_ADDRESS}`);
-  console.log(`[live-canary] token=${LINEA_TOKEN_ADDRESS}`);
+  console.log(`[live-canary] contract=${VERBOSE_TARGETS ? CONTRACT_ADDRESS : "configured"}`);
+  console.log(`[live-canary] token=${VERBOSE_TARGETS ? LINEA_TOKEN_ADDRESS : "configured"}`);
   console.log(`[live-canary] rpcLabel=${RPC_LABEL} readRpcCount=${readRpcUrls.length} broadcastRpcCount=${broadcastRpcUrls.length}`);
   console.log(`[live-canary] rpcFailoverInjection=${INJECT_RPC_FAILOVER ? "enabled" : "disabled"}`);
+  console.log(`[live-canary] v10Matrix=${V10_MATRIX_ONLY ? "bounded" : "disabled"} execution=${DRY_RUN ? "dry-run" : "enabled"}`);
   console.log(
-    `[live-canary] rounds=${TARGET_ROUNDS} randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +
-      `total=${formatUnits(MIN_TOTAL_BET_AMOUNT, 18)}..${formatUnits(MAX_TOTAL_BET_AMOUNT, 18)} ` +
+    `[live-canary] rounds=${TARGET_ROUNDS} plannedBetTx=${plannedBetTransactions} ` +
+      `plannedStake=${formatUnits(plannedStake, 18)} LINEA randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +
+      `configuredTotal=${formatUnits(MIN_TOTAL_BET_AMOUNT, 18)}..${formatUnits(MAX_TOTAL_BET_AMOUNT, 18)} ` +
       `tiles=${MIN_TILES_PER_ROUND}..${MAX_TILES_PER_ROUND}`,
   );
   console.log(`[live-canary] emptyResolveBootstrap=${ALLOW_EMPTY_RESOLVE ? "enabled" : "disabled"}`);
+  if (MAX_RESOLVE_TRANSACTIONS !== null) {
+    console.log(`[live-canary] resolveTxLimit=${MAX_RESOLVE_TRANSACTIONS}`);
+  }
   console.log(`[live-canary] feeMeasurement repeatSameBet=${REPEAT_SAME_BET ? "enabled" : "disabled"} forceAllowanceApprove=${FORCE_ALLOWANCE_APPROVE ? "enabled" : "disabled"}`);
   console.log(`[live-canary] log=${logPath}`);
 
@@ -927,16 +1124,27 @@ async function main() {
   if (String(contractToken).toLowerCase() !== LINEA_TOKEN_ADDRESS.toLowerCase()) {
     throw new Error(`Contract token mismatch: expected ${LINEA_TOKEN_ADDRESS}, got ${contractToken}`);
   }
+  await assertEpochBoundBetCapability(publicClient);
 
-  const plannedSpendByRole = getPlannedSpendByRole(wallets);
   await runPreflight(logPath, publicClient, wallets, plannedSpendByRole);
   if (DRY_RUN) return;
+  const liveWallets = wallets as LiveWallet[];
+  const resolver = process.env.LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY
+    ? (() => {
+        const account = privateKeyToAccount(normalizePrivateKey(process.env.LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY));
+        return { role: "RESOLVER", address: account.address, account };
+      })()
+    : null;
+  const resolverCandidates = [
+    ...(resolver ? [resolver] : []),
+    ...liveWallets.filter((wallet) => wallet.account.address.toLowerCase() !== resolver?.account.address.toLowerCase()),
+  ];
   if (HEALTH_BASE_URL && !process.env.HEALTH_DIAGNOSTICS_SECRET?.trim()) {
     throw new Error("HEALTH_DIAGNOSTICS_SECRET is required when LIVE_TEST_HEALTH_BASE_URL is configured");
   }
   await sampleHealth(logPath, 0);
 
-  for (const wallet of wallets) {
+  for (const wallet of liveWallets) {
     await ensureAllowance({
       logPath,
       publicClient,
@@ -951,8 +1159,8 @@ async function main() {
   let lastAttemptedEpoch: bigint | null = null;
   const errorKinds = new Map<string, number>();
   for (let round = 0; round < TARGET_ROUNDS; round += 1) {
-    const walletIndex = round % wallets.length;
-    const wallet = wallets[walletIndex];
+    const walletIndex = round % liveWallets.length;
+    const wallet = liveWallets[walletIndex];
     const mode = pickMode(round);
     const plan = pickRoundPlan(round, walletIndex, mode);
     try {
@@ -1075,6 +1283,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("[live-canary] failed", error);
+  const message = error instanceof Error ? error.message : "Unknown error";
+  console.error(`[live-canary] failed: ${redactCanaryErrorMessage(message)}`);
   process.exitCode = 1;
 });

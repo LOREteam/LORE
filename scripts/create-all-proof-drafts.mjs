@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -10,6 +10,7 @@ function argValue(name, fallback) {
 }
 
 const outDir = resolve(process.cwd(), argValue("out-dir", "docs/proof-drafts"));
+const summaryOnly = process.argv.includes("--summary-only");
 mkdirSync(outDir, { recursive: true });
 const externalRestoreRoot = mkdtempSync(join(tmpdir(), "lore-proof-draft-restore-"));
 const syntheticRestoreSourceDb = join(externalRestoreRoot, "source", "lore-source.sqlite");
@@ -47,7 +48,7 @@ const syntheticQaSupport = join(outDir, "synthetic-qa-support-audit-report.md");
 const syntheticQaFinal = join(outDir, "synthetic-qa-final-browser-report.md");
 const syntheticQaSmoke = join(outDir, "synthetic-qa-smoke-debug-autominer.log");
 writeFileSync(syntheticSignoffEnvLog, "Summary: all checked env gates passed. Synthetic draft bundle only; not launch proof.\n", "utf8");
-writeFileSync(syntheticSignoffChainLog, "Summary: synthetic non-proof proof:chain output for draft bundle only\n", "utf8");
+writeFileSync(syntheticSignoffChainLog, "Summary: synthetic non-proof proof:chain direct-chain comparison output for draft bundle only: jackpot safetyPool deposits rewards rebates resolve\n", "utf8");
 writeFileSync(syntheticHostHealthLog, "[prod-health] OK\nbase=https://playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=1\n", "utf8");
 writeFileSync(syntheticHostLoadLog, "Load base URL: https://canary.playlore.xyz\nConcurrency: 1; client IPs: 1; duration: 1000ms; timeout: 10000ms\nTOTAL count= 1 fail= 0 err= 0.00% p50= 100ms p95= 100ms p99= 100ms\n", "utf8");
 writeFileSync(syntheticHostProcess, "synthetic non-proof host process model artifact for draft bundle only\n", "utf8");
@@ -101,9 +102,21 @@ for (const [id, script, args] of tasks) {
   rows.push([id, result.status === 0 ? "written" : "failed", out]);
 }
 
-console.log("| Draft | Status | Path |");
-console.log("| --- | --- | --- |");
-for (const row of rows) console.log(`| ${row.join(" | ")} |`);
+if (summaryOnly) {
+  const written = rows.filter((row) => row[1] === "written").length;
+  const failed = rows.length - written;
+  console.log(`status=${issues.length === 0 ? "pass" : "fail"}, drafts=${rows.length}, written=${written}, failed=${failed}, summaryOnly=true`);
+} else {
+  console.log("| Draft | Status | Path |");
+  console.log("| --- | --- | --- |");
+  for (const row of rows) console.log(`| ${row.join(" | ")} |`);
+}
 console.log(`Summary: ${issues.length === 0 ? "all proof drafts were created; Draft files are not launch proof; promote only after real external evidence and strict validation" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+
+try {
+  rmSync(externalRestoreRoot, { recursive: true, force: true });
+} catch {
+  // Best-effort temp cleanup; draft generation status is already captured.
+}
 
 if (issues.length > 0) process.exitCode = 1;

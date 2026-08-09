@@ -3,6 +3,7 @@ import path from "node:path";
 import "dotenv/config";
 import { chromium } from "playwright-core";
 import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
+import { redactProofText } from "./redact-proof-output.mjs";
 import {
   ensureLandingPage,
   expectVisible,
@@ -36,10 +37,64 @@ const SCREENSHOT_PATH = path.resolve(process.env.SMOKE_BROWSER_SCREENSHOT_PATH |
 const TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_BROWSER_TIMEOUT_MS, 45_000);
 const WARMUP_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_BROWSER_WARMUP_TIMEOUT_MS, 90_000);
 const TILE_SELECTION_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_TILE_SELECTION_TIMEOUT_MS, 45_000);
-const AUTO_MINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
+const LIVE_STATE_PROBE_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_LIVE_STATE_PROBE_TIMEOUT_MS, 15_000);
+const MAX_BROWSER_SMOKE_JSON_BYTES = 256 * 1024;
+const MAX_BROWSER_SMOKE_DIAGNOSTIC_CHARS = 500;
+const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const CONTENT_LENGTH_RE = DECIMAL_INTEGER_RE;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const SMOKE_CHAIN_ID = parseSmokeChainId(process.env.NEXT_PUBLIC_LINEA_CHAIN_ID);
+const LEGACY_AUTO_MINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
+const AUTO_MINER_INPUTS_KEY = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS
+  ? `lineaore:auto-miner-inputs:v2:${SMOKE_CHAIN_ID}:${process.env.NEXT_PUBLIC_CONTRACT_ADDRESS.toLowerCase()}`
+  : LEGACY_AUTO_MINER_INPUTS_KEY;
 const AUTO_MINE_DEBUG_OVERRIDE_KEY = "lineaore:auto-mine-debug-override:v1";
 const PENDING_MINING_TX_KEY = "lineaore:pending-mining-tx:v1";
 const FIRST_VISIT_TUTORIAL_KEY = "lore:first-visit-tutorial:v1";
+
+function parseSmokeChainId(value) {
+  if (value == null || value === "") return 59141;
+  if (!DECIMAL_INTEGER_RE.test(value)) {
+    throw new Error("NEXT_PUBLIC_LINEA_CHAIN_ID must be a canonical decimal integer");
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 1_000_000_000) {
+    throw new Error("NEXT_PUBLIC_LINEA_CHAIN_ID must be between 1 and 1000000000");
+  }
+  return parsed;
+}
+
+function parseContentLengthHeader(value) {
+  if (value == null || value === "") return null;
+  if (!CONTENT_LENGTH_RE.test(value)) throw new Error("invalid browser smoke response content-length");
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) throw new Error("invalid browser smoke response content-length");
+  return Number(parsed);
+}
+
+async function readBoundedJsonResponse(response) {
+  const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
+  if (contentLength !== null && contentLength > MAX_BROWSER_SMOKE_JSON_BYTES) {
+    throw new Error("browser smoke JSON response body too large");
+  }
+  if (!response.body) throw new Error("browser smoke JSON response body is empty");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let totalBytes = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_BROWSER_SMOKE_JSON_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("browser smoke JSON response body too large");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();
+  return JSON.parse(text);
+}
 const INCLUDE_DEBUG_AUTOMINER_SCENARIOS = process.env.SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS === "1";
 const ONLY_PENDING_RECOVERY = process.env.SMOKE_ONLY_PENDING_RECOVERY === "1";
 const EXPECT_READ_ONLY = process.env.SMOKE_EXPECT_READ_ONLY === "1";
@@ -74,6 +129,25 @@ function isIgnoredConsoleMessage(message) {
   ].some((part) => message.includes(part));
 }
 
+function compactBrowserDiagnostic(value) {
+  const text = redactProofText(value).replace(/\s+/g, " ").trim();
+  if (text.length <= MAX_BROWSER_SMOKE_DIAGNOSTIC_CHARS) return text;
+  return `${text.slice(0, MAX_BROWSER_SMOKE_DIAGNOSTIC_CHARS - 15)}...<truncated>`;
+}
+
+function scopedBrowserDiagnostic(scope, value) {
+  const text = compactBrowserDiagnostic(value);
+  return scope ? `[${scope}] ${text}` : text;
+}
+
+function compactPageError(error, source) {
+  return {
+    message: compactBrowserDiagnostic(error?.message || error),
+    stack: compactBrowserDiagnostic(error?.stack || ""),
+    source,
+  };
+}
+
 function isUnsupportedPrivyCoinbaseRegression(message) {
   return message.includes("configured chains are not") && message.includes("supported");
 }
@@ -88,7 +162,6 @@ function isIgnoredPageError(message) {
     "Do not know how to serialize a BigInt",
     "Loading chunk app/layout failed",
     "ChunkLoadError",
-    "Invalid or unexpected token",
   ].some((part) => message.includes(part));
 }
 
@@ -98,6 +171,65 @@ async function runStep(label, task) {
   const result = await task();
   console.log(`STEP ${label} done in ${Date.now() - startedAt}ms`);
   return result;
+}
+
+async function verifyNativeWebLocksAcrossTabs(context) {
+  const owner = await context.newPage();
+  const contender = await context.newPage();
+  const lockName = `lore-smoke-web-lock:${Date.now()}`;
+
+  try {
+    await Promise.all([
+      owner.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT_MS }),
+      contender.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT_MS }),
+    ]);
+    const ownerAcquired = await owner.evaluate(async (name) => {
+      if (!navigator.locks) return false;
+      let resolveReady;
+      const ready = new Promise((resolve) => {
+        resolveReady = resolve;
+      });
+      const hold = new Promise((resolve) => {
+        window.__loreSmokeReleaseWebLock = resolve;
+      });
+      void navigator.locks.request(name, { ifAvailable: true, mode: "exclusive" }, async (lock) => {
+        resolveReady(Boolean(lock));
+        if (lock) await hold;
+      });
+      return ready;
+    }, lockName);
+    if (!ownerAcquired) throw new Error("browser does not provide an exclusive Web Lock to the owner tab");
+
+    const contenderBlocked = await contender.evaluate(async (name) => {
+      if (!navigator.locks) return false;
+      return navigator.locks.request(name, { ifAvailable: true, mode: "exclusive" }, (lock) => !lock);
+    }, lockName);
+    if (!contenderBlocked) throw new Error("second tab acquired an Auto-Miner-style Web Lock while the owner held it");
+
+    await owner.evaluate(() => {
+      window.__loreSmokeReleaseWebLock?.();
+      delete window.__loreSmokeReleaseWebLock;
+    });
+    const contenderAcquiredAfterRelease = await contender.evaluate(async (name) => {
+      if (!navigator.locks) return false;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const acquired = await navigator.locks.request(
+          name,
+          { ifAvailable: true, mode: "exclusive" },
+          (lock) => Boolean(lock),
+        );
+        if (acquired) return true;
+        await new Promise((resolve) => window.setTimeout(resolve, 25));
+      }
+      return false;
+    }, lockName);
+    if (!contenderAcquiredAfterRelease) {
+      throw new Error("second tab could not acquire the Web Lock after the owner released it");
+    }
+    console.log("PASS native Web Locks exclude a second tab and release cleanly");
+  } finally {
+    await Promise.allSettled([owner.close(), contender.close()]);
+  }
 }
 
 async function openLoginModalWithReload(page, options, label) {
@@ -116,7 +248,7 @@ async function verifyViewportShell(browser, viewport, label, smokeOptions, pageE
     window.localStorage.setItem(tutorialKey, "1");
   }, FIRST_VISIT_TUTORIAL_KEY);
   const page = await context.newPage();
-  page.on("pageerror", (error) => pageErrors.push({ message: error.message, source: label }));
+  page.on("pageerror", (error) => pageErrors.push(compactPageError(error, label)));
   await ensureLandingPage(page, smokeOptions);
   const layout = await page.evaluate(() => {
     const selectors = [
@@ -159,11 +291,12 @@ async function main() {
   const pageErrors = [];
   const consoleErrors = [];
   const consoleRegressions = [];
+  const bootstrapResolveRequests = [];
   const smokeOptions = {
     autoMineDebugOverrideKey: AUTO_MINE_DEBUG_OVERRIDE_KEY,
     autoMinerInputsKey: AUTO_MINER_INPUTS_KEY,
     baseUrl: BASE_URL,
-    chainId: Number(process.env.NEXT_PUBLIC_LINEA_CHAIN_ID || 59141),
+    chainId: SMOKE_CHAIN_ID,
     contractAddress: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS,
     pendingMiningTxKey: PENDING_MINING_TX_KEY,
     tileSelectionTimeoutMs: TILE_SELECTION_TIMEOUT_MS,
@@ -182,19 +315,29 @@ async function main() {
         // ignore storage failures in smoke
       }
     }, FIRST_VISIT_TUTORIAL_KEY);
-    page.on("pageerror", (error) => pageErrors.push({
-      message: error.message,
-      stack: error.stack || "",
-    }));
+    page.on("pageerror", (error) => pageErrors.push(compactPageError(error, "desktop")));
     page.on("console", (message) => {
       const text = message.text();
-      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(text);
+      const diagnostic = compactBrowserDiagnostic(text);
+      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(diagnostic);
       if (message.type() !== "error") return;
-      if (!isIgnoredConsoleMessage(text)) consoleErrors.push(text);
+      if (!isIgnoredConsoleMessage(text)) consoleErrors.push(diagnostic);
+    });
+    page.on("request", (request) => {
+      const requestUrl = new URL(request.url());
+      if (request.method() === "POST" && requestUrl.pathname === "/api/bootstrap-resolve") {
+        bootstrapResolveRequests.push(requestUrl.pathname);
+      }
     });
 
     console.log(`Browser smoke URL: ${BASE_URL}`);
     await runStep("open desktop landing page", () => ensureLandingPage(page, smokeOptions));
+    await runStep("verify browser boot does not trigger keeper resolve", async () => {
+      if (bootstrapResolveRequests.length > 0) {
+        throw new Error("browser boot made an unattended bootstrap-resolve request");
+      }
+    });
+    await runStep("verify native Web Locks across two tabs", () => verifyNativeWebLocksAcrossTabs(desktopContext));
 
     await runStep("assert desktop hub shell", async () => {
       await expectVisible(page.getByRole("button", { name: "Mining Hub" }), "hub nav", TIMEOUT_MS);
@@ -323,15 +466,13 @@ async function main() {
       }
     }, FIRST_VISIT_TUTORIAL_KEY);
     const mobileWalletPage = await mobileWalletContext.newPage();
-    mobileWalletPage.on("pageerror", (error) => pageErrors.push({
-      message: `[mobile-wallet] ${error.message}`,
-      stack: error.stack || "",
-    }));
+    mobileWalletPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "mobile-wallet")));
     mobileWalletPage.on("console", (message) => {
       const text = message.text();
-      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(`[mobile-wallet] ${text}`);
+      const diagnostic = scopedBrowserDiagnostic("mobile-wallet", text);
+      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(diagnostic);
       if (message.type() !== "error") return;
-      if (!isIgnoredConsoleMessage(text)) consoleErrors.push(`[mobile-wallet] ${text}`);
+      if (!isIgnoredConsoleMessage(text)) consoleErrors.push(diagnostic);
     });
     await runStep("open isolated mobile wallet page", () => ensureLandingPage(mobileWalletPage, smokeOptions));
     await runStep("verify isolated mobile wallet selector", async () => {
@@ -353,10 +494,7 @@ async function main() {
       Object.defineProperty(navigator, "userAgent", { configurable: true, get: () => userAgent });
     });
     const tutorialPage = await tutorialContext.newPage();
-    tutorialPage.on("pageerror", (error) => pageErrors.push({
-      message: `[tutorial] ${error.message}`,
-      stack: error.stack || "",
-    }));
+    tutorialPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "tutorial")));
     await runStep("verify first-visit tutorial accessibility", async () => {
       await ensureLandingPage(tutorialPage, smokeOptions);
       const tutorialDialog = tutorialPage.getByRole("dialog", { name: "First visit tutorial" });
@@ -427,6 +565,8 @@ async function main() {
       checks: [
         [page.getByText("Introduction"), "whitepaper tab"],
         [page.getByText("Tokenomics & Fee Split"), "whitepaper tokenomics section"],
+        [page.getByText("Transparent Play"), "whitepaper transparent play section"],
+        [page.getByText("Winning outcomes are probabilistic and are not guaranteed"), "whitepaper risk disclosure"],
       ],
       skipMessage: "white paper tab did not open during smoke window",
     }));
@@ -458,15 +598,13 @@ async function main() {
       }
     }, FIRST_VISIT_TUTORIAL_KEY);
     const mobilePage = await mobileContext.newPage();
-    mobilePage.on("pageerror", (error) => pageErrors.push({
-      message: `[mobile] ${error.message}`,
-      stack: error.stack || "",
-    }));
+    mobilePage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "mobile")));
     mobilePage.on("console", (message) => {
       const text = message.text();
-      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(`[mobile] ${text}`);
+      const diagnostic = scopedBrowserDiagnostic("mobile", text);
+      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(diagnostic);
       if (message.type() !== "error") return;
-      if (!isIgnoredConsoleMessage(text)) consoleErrors.push(`[mobile] ${text}`);
+      if (!isIgnoredConsoleMessage(text)) consoleErrors.push(diagnostic);
     });
 
     await runStep("open mobile landing page", () => ensureLandingPage(mobilePage, smokeOptions));
@@ -537,7 +675,7 @@ async function main() {
         window.localStorage.setItem(tutorialKey, "1");
       }, FIRST_VISIT_TUTORIAL_KEY);
       const stressPage = await stressContext.newPage();
-      stressPage.on("pageerror", (error) => pageErrors.push({ message: error.message, source: "extreme-values" }));
+      stressPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "extreme-values")));
       await stressPage.route("**/api/live-state", (route) => route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -610,7 +748,7 @@ async function main() {
         window.localStorage.setItem(tutorialKey, "1");
       }, FIRST_VISIT_TUTORIAL_KEY);
       const emptyPage = await emptyContext.newPage();
-      emptyPage.on("pageerror", (error) => pageErrors.push({ message: error.message, source: "empty-states" }));
+      emptyPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "empty-states")));
       await emptyPage.route("**/api/live-state", (route) => route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -650,6 +788,16 @@ async function main() {
       }));
       await ensureLandingPage(emptyPage, smokeOptions);
       await expectVisible(emptyPage.getByText("No bets", { exact: true }), "expired empty epoch state", TIMEOUT_MS);
+      const emptyPoolChartVisual = emptyPage.locator('[data-testid="header-pool-chart-visual"]');
+      await expectVisible(emptyPoolChartVisual, "empty pool chart visual", TIMEOUT_MS);
+      const emptyPoolState = await emptyPoolChartVisual.getAttribute("data-empty-pool");
+      if (emptyPoolState !== "true") {
+        throw new Error(`empty pool chart did not expose empty state: ${emptyPoolState ?? "missing"}`);
+      }
+      const emptyPoolLabel = await emptyPoolChartVisual.getAttribute("aria-label");
+      if (emptyPoolLabel !== "Pool chart empty state") {
+        throw new Error(`empty pool chart aria label mismatch: ${emptyPoolLabel ?? "missing"}`);
+      }
       await expectVisible(emptyPage.locator('[data-testid="header-pool-chart-line"]'), "empty pool chart line", TIMEOUT_MS);
       await expectVisible(emptyPage.locator('[data-testid="rewards-empty-state"]'), "empty rewards state", TIMEOUT_MS);
       const analyticsEmptyOpened = await openDesktopTab(emptyPage, {
@@ -673,9 +821,12 @@ async function main() {
     });
 
     await runStep("verify pool chart freshness", async () => {
-      const currentStateResponse = await fetch(new URL("/api/live-state", BASE_URL), { cache: "no-store" });
+      const currentStateResponse = await fetch(new URL("/api/live-state", BASE_URL), {
+        cache: "no-store",
+        signal: AbortSignal.timeout(LIVE_STATE_PROBE_TIMEOUT_MS),
+      });
       if (!currentStateResponse.ok) throw new Error(`live-state epoch probe returned ${currentStateResponse.status}`);
-      const currentState = await currentStateResponse.json();
+      const currentState = await readBoundedJsonResponse(currentStateResponse);
       const chartEpoch = String(currentState?.currentEpoch ?? "");
       if (!/^\d+$/.test(chartEpoch)) throw new Error("live-state epoch probe returned an invalid epoch");
       const chartContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -684,7 +835,7 @@ async function main() {
         window.localStorage.setItem(tutorialKey, "1");
       }, FIRST_VISIT_TUTORIAL_KEY);
       const chartPage = await chartContext.newPage();
-      chartPage.on("pageerror", (error) => pageErrors.push({ message: error.message, source: "pool-chart-freshness" }));
+      chartPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "pool-chart-freshness")));
       let updatedPool = false;
       let liveStateRequests = 0;
       await chartPage.route("**/api/live-state", (route) => {
@@ -746,11 +897,11 @@ async function main() {
     if (relevantPageErrors.length > 0) {
       const details = relevantPageErrors
         .slice(0, 3)
-        .map((entry) => `${entry.message}${entry.stack ? ` :: ${entry.stack.split("\n")[1] ?? ""}` : ""}`);
+        .map((entry) => `${entry.source ? `[${entry.source}] ` : ""}${entry.message}${entry.stack ? ` :: ${entry.stack.split("\n")[1] ?? ""}` : ""}`);
       throw new Error(`page errors: ${details.join(" | ")}`);
     }
     if (pageErrors.length > 0) {
-      console.log(`IGNORED page errors: ${pageErrors.slice(0, 5).map((entry) => entry.message).join(" | ")}`);
+      console.log(`IGNORED page errors: ${pageErrors.slice(0, 5).map((entry) => `${entry.source ? `[${entry.source}] ` : ""}${entry.message}`).join(" | ")}`);
     }
     if (consoleRegressions.length > 0) {
       throw new Error(`wallet connector regressions: ${consoleRegressions.slice(0, 3).join(" | ")}`);
@@ -770,6 +921,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
+  console.error(compactBrowserDiagnostic(error instanceof Error ? error.message : error));
   process.exit(1);
 });

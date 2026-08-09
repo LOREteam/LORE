@@ -5,16 +5,21 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   checks:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -40,11 +45,15 @@ jobs:
       - name: Business logic tests
         run: npm run test:logic
 
-      - name: Contract invariants
-        run: npm run test:contract
+      - name: Contract invariants (V9 and V10)
+        run: |
+          npm run test:contract
+          npm run test:contract:v10
 
-      - name: Contract compilation provenance
-        run: npm run proof:contract-compile
+      - name: Contract compilation provenance (V9 and V10)
+        run: |
+          npm run proof:contract-compile
+          npm run proof:contract-compile:v10
 
       - name: SQLite operational tests
         run: npm run test:db-operations
@@ -71,8 +80,10 @@ jobs:
 
       - name: Upload compilation provenance
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: contract-compilation-provenance
-          path: .tmp/contract-compilation-provenance.json
+          path: |
+            .tmp/contract-compilation-provenance.json
+            .tmp/contract-compilation-provenance-v10.json
           if-no-files-found: error

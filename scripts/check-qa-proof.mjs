@@ -1,7 +1,13 @@
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
+const summaryOnly = process.argv.includes("--summary-only");
+const qaLaunchGates = ["G12", "G13", "G14"];
+const qaLaunchGateGroups = "qa=3";
+const MAX_QA_ARTIFACT_TEXT_BYTES = 256 * 1024;
+const MAX_QA_PROOF_MANIFEST_BYTES = 512 * 1024;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const args = new Map(
   process.argv
     .slice(2)
@@ -11,6 +17,11 @@ const args = new Map(
       return [key, rest.join("=")];
     }),
 );
+
+function launchGateSummary(issueCount) {
+  const label = issueCount > 0 ? "blocked" : "covered";
+  return `${label} gates: ${qaLaunchGates.join(", ")}; groups: ${qaLaunchGateGroups}`;
+}
 
 const requiredGroups = {
   wallet: [
@@ -58,7 +69,7 @@ const ZERO_TX = "0x0000000000000000000000000000000000000000000000000000000000000
 const TEMPLATE_VALUE_RE = /REPLACE_|<REDACTED>|TODO|TBD/i;
 const secretKeyPattern = /(secret|private[_-]?key|mnemonic|webhook|dsn|api[_-]?key|api[_-]?token|auth[_-]?token|access[_-]?token|bearer|session|cookie)/i;
 const REQUIRED_BET_HISTORY_FIELDS = ["epoch", "tile", "amount", "txHash", "result"];
-const REQUIRED_AUTOMINER_LOG_FIELDS = ["round", "epoch", "nonce", "txHash", "retryCount"];
+const REQUIRED_AUTOMINER_LOG_FIELDS = ["round", "epoch", "nonce", "txHash", "retryCount", "stopReason"];
 const knownNetworkChainIds = new Map([
   ["mainnet", 59144],
   ["sepolia", 59141],
@@ -86,6 +97,49 @@ function hasRealText(value) {
   return hasText(value) && !TEMPLATE_VALUE_RE.test(value);
 }
 
+function hasPublicHttpsUrl(value) {
+  const text = String(value ?? "").trim();
+  const match = text.match(/https?:\/\/[^\s),.;]+/i);
+  if (!match) return false;
+  try {
+    const url = new URL(match[0]);
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+    return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      );
+  } catch {
+    return false;
+  }
+}
+
 function hasIsoTimestamp(value) {
   if (!hasRealText(value)) return false;
   const text = String(value).trim();
@@ -94,6 +148,11 @@ function hasIsoTimestamp(value) {
   if (Number.isNaN(parsed.getTime())) return false;
   const normalized = text.includes(".") ? text : text.replace("Z", ".000Z");
   return parsed.toISOString() === normalized;
+}
+
+function hasNonFutureIsoTimestamp(value) {
+  if (!hasIsoTimestamp(value)) return false;
+  return Date.parse(String(value).trim()) <= Date.now() + 5 * 60 * 1000;
 }
 
 function isPlainObject(value) {
@@ -123,11 +182,8 @@ function hasEvidence(check) {
 function hasConcreteText(value) {
   if (!hasRealText(value)) return false;
   const text = String(value).trim();
-  return /https?:\/\//i.test(text) ||
-    /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv|png|jpg|jpeg|webp|html|zip)(?:\b|$)/i.test(text) ||
-    /\bnpm(?:\.cmd)?\s+run\s+(?:smoke:browser|proof:qa|proof:[a-z0-9:-]+)\b/i.test(text) ||
-    /\bproof:[a-z0-9:-]+\b/i.test(text) ||
-    /\b(?:screenshot|playwright|browser\s+smoke|mobile|privy|wrong\s+network|pending|diagnostics|bet\s+history|auto[-\s]?miner\s+log|debug\s+autominer)\b/i.test(text);
+  return hasPublicHttpsUrl(text) ||
+    /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv|png|jpg|jpeg|webp|html|zip)(?:\b|$)/i.test(text);
 }
 
 function hasConcreteEvidence(check) {
@@ -157,6 +213,19 @@ function localArtifactPathFromText(value, key = "") {
   return (artifactMatch || keySuggestsPath) && valueLooksLikePath ? candidate : "";
 }
 
+function regularFileStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function localArtifactIsFile(artifactPath) {
+  return regularFileStat(resolve(process.cwd(), artifactPath)) !== null;
+}
+
 function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   const findings = [];
   if (Array.isArray(value)) {
@@ -165,7 +234,7 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   }
   if (typeof value === "string") {
     const artifactPath = localArtifactPathFromText(value, key);
-    if (artifactPath && !existsSync(resolve(process.cwd(), artifactPath))) {
+    if (artifactPath && !localArtifactIsFile(artifactPath)) {
       findings.push(`${path} -> ${artifactPath}`);
     }
     return findings;
@@ -177,6 +246,10 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
   return findings;
 }
 
+function formatMissingLocalArtifactRefs(findings) {
+  const visible = summaryOnly ? findings.map((entry) => entry.split(" -> ")[0]) : findings;
+  return visible.slice(0, 5).join(", ");
+}
 
 function localArtifactPaths(check) {
   if (!isPlainObject(check)) return [];
@@ -192,6 +265,45 @@ function localArtifactPaths(check) {
     ["commandOutputPath", check.commandOutputPath],
     ["notes", check.notes],
   ].map(([key, entry]) => localArtifactPathFromText(entry, key)).filter(Boolean);
+}
+
+function normalizedArtifactPathSetForGroup(manifest, group) {
+  const section = isPlainObject(manifest?.[group]) ? manifest[group] : {};
+  const paths = new Set();
+  for (const checkId of requiredGroups[group] ?? []) {
+    for (const artifactPath of localArtifactPaths(section[checkId])) {
+      paths.add(resolve(process.cwd(), artifactPath).toLowerCase());
+    }
+  }
+  return paths;
+}
+
+function sharedQaEvidenceGroupArtifactIssues(manifest) {
+  const groups = Object.keys(requiredGroups);
+  const groupPaths = new Map(groups.map((group) => [group, normalizedArtifactPathSetForGroup(manifest, group)]));
+  const issues = [];
+  for (let leftIndex = 0; leftIndex < groups.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < groups.length; rightIndex += 1) {
+      const left = groups[leftIndex];
+      const right = groups[rightIndex];
+      const rightPaths = groupPaths.get(right) ?? new Set();
+      if ([...(groupPaths.get(left) ?? [])].some((artifactPath) => rightPaths.has(artifactPath))) {
+        issues.push(`QA evidence groups must use distinct local artifact files across ${left} and ${right}`);
+      }
+    }
+  }
+  return issues;
+}
+
+function readBoundedArtifactText(resolved) {
+  const fd = openSync(resolved, "r");
+  try {
+    const buffer = Buffer.alloc(MAX_QA_ARTIFACT_TEXT_BYTES);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function artifactBackedEvidenceText(check) {
@@ -212,14 +324,43 @@ function artifactBackedEvidenceText(check) {
   }
   for (const artifactPath of localArtifactPaths(check)) {
     const resolved = resolve(process.cwd(), artifactPath);
-    if (!existsSync(resolved)) continue;
-    chunks.push(readFileSync(resolved, "utf8").slice(0, 256 * 1024));
+    if (!localArtifactIsFile(artifactPath)) continue;
+    chunks.push(readBoundedArtifactText(resolved));
   }
   return chunks.join("\n");
 }
 
 function hasQaContentProof(group, checkId, check) {
   const text = artifactBackedEvidenceText(check);
+  if (group === "wallet" && checkId === "privyAllowedOrigins") {
+    return /\bprivy\b/i.test(text) &&
+      /\b(?:allowed[-\s]?origin|dashboard|production\s+origin)\b/i.test(text) &&
+      /\bapp[-\s]?id\b/i.test(text);
+  }
+  if (group === "wallet" && checkId === "desktopConnect") {
+    return /\b(?:desktop|browser)\b/i.test(text) && /\b(?:connect|connected|wallet\s+ready)\b/i.test(text);
+  }
+  if (group === "wallet" && checkId === "desktopDisconnect") {
+    return /\b(?:desktop|browser)\b/i.test(text) && /\b(?:disconnect|disconnected|sign\s*out|log\s*out)\b/i.test(text);
+  }
+  if (group === "wallet" && checkId === "desktopReconnect") {
+    return /\b(?:desktop|browser)\b/i.test(text) && /\b(?:reconnect|reload|session\s+recovery|wallet\s+ready)\b/i.test(text);
+  }
+  if (group === "wallet" && checkId === "wrongNetwork") {
+    return /\bwrong\s+network|unsupported\s+chain|switch\s+network|chain\s+mismatch\b/i.test(text);
+  }
+  if (group === "wallet" && checkId === "mobileWeb3Browser") {
+    return /\bmobile\b/i.test(text) && /\b(?:web3|in[-\s]?app|browser|wallet)\b/i.test(text);
+  }
+  if (group === "wallet" && checkId === "cleanWalletFirstTx") {
+    return /\bclean\s+wallet|first\s+(?:tx|transaction)|first\s+bet|fresh\s+wallet\b/i.test(text);
+  }
+  if (group === "wallet" && checkId === "slowNetworkAuthModal") {
+    return /\bslow\s+network|timeout|delayed|latency\b/i.test(text) && /\bauth|modal|privy\b/i.test(text);
+  }
+  if (group === "wallet" && checkId === "slowNetworkChatAuth") {
+    return /\bslow\s+network|timeout|delayed|latency\b/i.test(text) && /\bchat\s+auth|chat|message\b/i.test(text);
+  }
   if (group === "wallet") {
     return /\b(?:wallet|privy|connect|disconnect|reconnect|wrong\s+network|mobile|clean\s+wallet|auth|transaction|tx)\b/i.test(text);
   }
@@ -239,6 +380,7 @@ function hasQaContentProof(group, checkId, check) {
 }
 
 function qaContentProofDescription(group, checkId) {
+  if (group === "wallet" && checkId === "privyAllowedOrigins") return "Privy dashboard allowed-origin production proof";
   if (group === "wallet") return "wallet/Privy/connect/mobile/wrong-network proof";
   if (group === "failureStateUx") return "failure-state/pending/degraded/no-op UX proof";
   if (group === "supportAuditVisibility") return "support/audit/diagnostics visibility proof";
@@ -246,6 +388,60 @@ function qaContentProofDescription(group, checkId) {
   if (group === "finalQa") return "final browser/mobile/mainnet wording QA proof";
   return "QA proof";
 }
+
+function receiptEvidenceText(check) {
+  const chunks = [];
+  if (isPlainObject(check)) {
+    chunks.push([
+      check.evidence,
+      check.link,
+      check.notes,
+    ].filter((entry) => hasRealText(entry) && !localArtifactPathFromText(entry)).join("\n"));
+  }
+  for (const artifactPath of localArtifactPaths(check)) {
+    const resolved = resolve(process.cwd(), artifactPath);
+    if (!localArtifactIsFile(artifactPath)) continue;
+    chunks.push(readBoundedArtifactText(resolved));
+  }
+  return chunks.join("\n");
+}
+
+function hasCleanWalletReceiptProof(check) {
+  const text = receiptEvidenceText(check);
+  return /\b(?:receipt|confirmed|confirmation|success|successful|status\s*:?\s*1|block\s+#?\d+|lineascan|explorer)\b/i.test(text);
+}
+
+function parseCanonicalViewportDimension(value) {
+  const normalized = String(value ?? "").trim();
+  if (!/^[1-9]\d{2,3}$/.test(normalized)) return null;
+  const parsed = BigInt(normalized);
+  return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
+}
+
+const MAX_VIEWPORT_MARKERS = 32;
+
+function hasMobileViewportProofText(text) {
+  const viewportMatches = String(text ?? "").matchAll(/\b(?:mobile\s+viewport|viewport)\s*[:=]?\s*(\d{3,4})\s*x\s*(\d{3,4})\b/gi);
+  let inspected = 0;
+  for (const match of viewportMatches) {
+    inspected += 1;
+    if (inspected > MAX_VIEWPORT_MARKERS) return false;
+    const width = parseCanonicalViewportDimension(match[1]);
+    const height = parseCanonicalViewportDimension(match[2]);
+    if (width == null || height == null) continue;
+    const portraitMobile = width >= 320 && width <= 480 && height >= 568 && height <= 1100;
+    const landscapeMobile = height >= 320 && height <= 480 && width >= 568 && width <= 1100;
+    if (portraitMobile || landscapeMobile) return true;
+  }
+  return false;
+}
+
+function hasMobileDeviceProof(check) {
+  const text = artifactBackedEvidenceText(check);
+  return /\b(?:ios|android|iphone|metamask\s+mobile|rabby\s+mobile|trust\s+wallet|coinbase\s+wallet|walletconnect|in[-\s]?app\s+wallet)\b/i.test(text) ||
+    hasMobileViewportProofText(text);
+}
+
 function findSecretLikeValues(value, path = "$") {
   const findings = [];
   if (Array.isArray(value)) {
@@ -291,13 +487,41 @@ function isRealTx(value) {
 function hasHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase();
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
     return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
       url.pathname === "/" &&
       !url.search &&
       !url.hash &&
-      !["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host) &&
-      !host.endsWith(".local");
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      );
   } catch {
     return false;
   }
@@ -305,7 +529,9 @@ function hasHttpsOrigin(value) {
 
 function normalizeOrigin(value) {
   try {
-    return new URL(String(value ?? "").trim()).origin.toLowerCase();
+    const url = new URL(String(value ?? "").trim());
+    if (url.username || url.password) return "";
+    return url.origin.toLowerCase();
   } catch {
     return "";
   }
@@ -320,9 +546,9 @@ function normalizeNetwork(value) {
 
 function positiveInteger(value) {
   const normalized = String(value ?? "").trim();
-  if (!/^[1-9]\d*$/.test(normalized)) return null;
-  const parsed = Number(normalized);
-  return Number.isSafeInteger(parsed) ? parsed : null;
+  if (!/^[1-9]\d{0,15}$/.test(normalized)) return null;
+  const parsed = BigInt(normalized);
+  return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
 }
 
 function includesAll(values, required) {
@@ -352,6 +578,10 @@ function printTable(headers, rows) {
   for (const row of rows) console.log(`| ${row.join(" | ")} |`);
 }
 
+function fileSummaryStatus(filePath) {
+  return regularFileStat(filePath) ? "present" : "missing";
+}
+
 const manifestPath = resolve(process.cwd(), argOrEnv("file", "QA_PROOF_PATH", "docs/qa-proof.json"));
 const issues = [];
 let manifest = null;
@@ -360,20 +590,27 @@ console.log("# Wallet / UX / Final QA Proof Summary");
 console.log("");
 console.log(`Timestamp: ${new Date().toISOString()}`);
 console.log(`Strict: ${strict ? "yes" : "no"}`);
-console.log(`Manifest: ${manifestPath}`);
+console.log(`Manifest: ${summaryOnly ? fileSummaryStatus(manifestPath) : manifestPath}`);
 console.log("");
 
 if (strict && /\.draft\.json$/i.test(manifestPath)) {
   issues.push("draft proof manifests are not accepted as launch proof");
 }
 
+const manifestStat = regularFileStat(manifestPath);
 if (!existsSync(manifestPath)) {
   issues.push("QA proof manifest is missing");
+} else if (!manifestStat) {
+  issues.push("QA proof manifest must be a file");
 } else {
-  try {
-    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  } catch (error) {
-    issues.push(`QA proof manifest is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  if (manifestStat.size > MAX_QA_PROOF_MANIFEST_BYTES) {
+    issues.push("QA proof manifest is too large to validate safely");
+  } else {
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch (error) {
+      issues.push(`QA proof manifest is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }
 
@@ -397,8 +634,9 @@ if (manifest) {
     }
     const missingArtifactRefs = findMissingLocalArtifactRefs(manifest);
     if (missingArtifactRefs.length > 0) {
-      issues.push(`local QA artifact references must exist: ${missingArtifactRefs.slice(0, 5).join(", ")}`);
+      issues.push(`local QA artifact references must exist: ${formatMissingLocalArtifactRefs(missingArtifactRefs)}`);
     }
+    issues.push(...sharedQaEvidenceGroupArtifactIssues(manifest));
     if (!hasRealText(targetNetwork)) {
       issues.push("targetNetwork is missing");
     }
@@ -438,6 +676,9 @@ if (manifest) {
         if (requiresQaTimestamp(group, checkId) && !hasIsoTimestamp(check?.checkedAt)) {
           issues.push(`${group}.${checkId}.checkedAt must be ISO-8601 UTC`);
         }
+        if (requiresQaTimestamp(group, checkId) && hasIsoTimestamp(check?.checkedAt) && !hasNonFutureIsoTimestamp(check?.checkedAt)) {
+          issues.push(`${group}.${checkId}.checkedAt must not be in the future`);
+        }
         if (requiresQaOrigin(group, checkId)) {
           issues.push(...qaOriginIssues(check, `${group}.${checkId}`, expectedOrigin));
         }
@@ -453,6 +694,8 @@ if (manifest) {
       }
       if (!hasIsoTimestamp(smoke.checkedAt)) {
         issues.push("finalQa.browserSmokeDebugAutominer.checkedAt must be ISO-8601 UTC");
+      } else if (!hasNonFutureIsoTimestamp(smoke.checkedAt)) {
+        issues.push("finalQa.browserSmokeDebugAutominer.checkedAt must not be in the future");
       }
       if (!hasHttpsOrigin(smoke.origin)) {
         issues.push("finalQa.browserSmokeDebugAutominer.origin must be the exact HTTPS production origin");
@@ -487,6 +730,14 @@ if (manifest) {
       } else if (targetChainId && cleanWalletChainId !== targetChainId) {
         issues.push("wallet.cleanWalletFirstTx.chainId must match targetChainId");
       }
+      if (!hasCleanWalletReceiptProof(cleanWallet)) {
+        issues.push("wallet.cleanWalletFirstTx evidence must include receipt/explorer confirmation proof");
+      }
+    }
+
+    const mobileWeb3Browser = manifest.wallet?.mobileWeb3Browser;
+    if (isPlainObject(mobileWeb3Browser) && !hasMobileDeviceProof(mobileWeb3Browser)) {
+      issues.push("wallet.mobileWeb3Browser evidence must include mobile device, wallet app, or viewport proof");
     }
 
     const privyAllowedOrigins = manifest.wallet?.privyAllowedOrigins;
@@ -507,8 +758,13 @@ if (manifest) {
       if (privyAllowedOrigins.developmentFallbackAppIdUsed === true) {
         issues.push("wallet.privyAllowedOrigins.developmentFallbackAppIdUsed must not be true");
       }
+      if (privyAllowedOrigins.productionAppIdConfigured !== true) {
+        issues.push("wallet.privyAllowedOrigins.productionAppIdConfigured must be true");
+      }
       if (!hasIsoTimestamp(privyAllowedOrigins.checkedAt)) {
         issues.push("wallet.privyAllowedOrigins.checkedAt must be ISO-8601 UTC");
+      } else if (!hasNonFutureIsoTimestamp(privyAllowedOrigins.checkedAt)) {
+        issues.push("wallet.privyAllowedOrigins.checkedAt must not be in the future");
       }
     }
 
@@ -542,12 +798,19 @@ if (manifest) {
     }
 
     console.log("## Required Checks");
-    printTable(["Group", "Check", "Status OK", "Evidence"], rows);
+    if (summaryOnly) {
+      printTable(
+        ["Group", "Checks"],
+        Object.entries(requiredGroups).map(([group, checks]) => [group, String(checks.length)]),
+      );
+    } else {
+      printTable(["Group", "Check", "Status OK", "Evidence"], rows);
+    }
   }
 }
 
 console.log("");
-console.log(`Summary: ${issues.length === 0 ? "QA proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+console.log(`Summary: ${issues.length === 0 ? "QA proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}; ${launchGateSummary(issues.length)}.`);
 console.log("Copy this summary into `docs/mainnet-proof-record.md` only after confirming the manifest reflects real wallet, UX, browser, and mobile QA.");
 
 if (strict && issues.length > 0) {

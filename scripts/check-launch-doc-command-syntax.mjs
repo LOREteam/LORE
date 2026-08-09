@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const extraDocs = process.argv
@@ -6,6 +6,7 @@ const extraDocs = process.argv
   .filter((arg) => arg.startsWith("--extra-doc="))
   .map((arg) => arg.slice("--extra-doc=".length).trim())
   .filter(Boolean);
+const summaryOnly = process.argv.includes("--summary-only");
 const docs = [
   "docs/launch-evidence-command-map.md",
   "docs/launch-proof-manifest-templates.md",
@@ -24,9 +25,15 @@ const requiredPowerShellEnvExamples = [
   "$env:LIVE_CANARY_MIN_EPOCHS",
   "$env:LIVE_CANARY_RPC_LABEL",
 ];
+const MAX_LAUNCH_DOC_TEXT_BYTES = 1024 * 1024;
+const packageScripts = JSON.parse(readText("package.json")).scripts ?? {};
+const MAX_DOC_PACKAGE_SCRIPT_REFS = 256;
 
 function readText(filePath) {
   if (!existsSync(filePath)) throw new Error(`${filePath} does not exist`);
+  const stats = statSync(filePath);
+  if (!stats.isFile()) throw new Error(`${filePath} must be a file`);
+  if (stats.size > MAX_LAUNCH_DOC_TEXT_BYTES) throw new Error(`${filePath} is too large to validate safely`);
   return readFileSync(filePath, "utf8");
 }
 
@@ -63,8 +70,31 @@ function findCommandSyntaxIssues(text) {
   return matches;
 }
 
+function scanMissingPackageScripts(text) {
+  const missing = [];
+  const pattern = /\bnpm\.cmd\s+run\s+([A-Za-z0-9:_-]+)/g;
+  let scanned = 0;
+  let overLimit = false;
+  let match = pattern.exec(text);
+  while (match) {
+    scanned += 1;
+    if (scanned > MAX_DOC_PACKAGE_SCRIPT_REFS) {
+      overLimit = true;
+      break;
+    }
+    const script = match[1];
+    if (!(script in packageScripts)) missing.push(script);
+    match = pattern.exec(text);
+  }
+  return { missing: [...new Set(missing)].sort(), overLimit };
+}
+
 const rows = [];
 const issues = [];
+let inlineSyntaxIssueCount = 0;
+let missingPackageScriptCount = 0;
+let readIssueCount = 0;
+let missingPowerShellExampleCount = 0;
 let combined = "";
 
 for (const doc of docs) {
@@ -73,26 +103,54 @@ for (const doc of docs) {
     const text = readText(docPath);
     combined += `\n${text}`;
     const matches = findCommandSyntaxIssues(text);
+    const packageScriptScan = scanMissingPackageScripts(text);
+    const missingPackageScripts = packageScriptScan.missing;
     if (matches.length > 0) {
+      inlineSyntaxIssueCount += matches.length;
       for (const match of matches) {
         issues.push(`${doc}:${match.lineNo} ${match.reason}`);
       }
     }
-    rows.push([doc, matches.length === 0 ? "pass" : "fail"]);
+    if (missingPackageScripts.length > 0) {
+      missingPackageScriptCount += missingPackageScripts.length;
+      issues.push(`${doc} references missing package script(s): ${missingPackageScripts.join(", ")}`);
+    }
+    if (packageScriptScan.overLimit) {
+      issues.push(`${doc} references too many package scripts to validate safely`);
+    }
+    rows.push([doc, matches.length === 0 ? "pass" : "fail", missingPackageScripts.length === 0 && !packageScriptScan.overLimit ? "pass" : "fail"]);
   } catch (error) {
+    readIssueCount += 1;
     issues.push(error instanceof Error ? error.message : String(error));
-    rows.push([doc, "fail"]);
+    rows.push([doc, "fail", "fail"]);
   }
 }
 
 for (const example of requiredPowerShellEnvExamples) {
   if (!combined.includes(example)) {
+    missingPowerShellExampleCount += 1;
     issues.push(`launch docs are missing PowerShell example ${example}`);
   }
 }
 
-printTable(["Doc", "Inline Env Syntax"], rows);
-console.log(`Summary: ${issues.length === 0 ? "launch docs command syntax is PowerShell-safe" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
+if (summaryOnly) {
+  console.log(
+    JSON.stringify({
+      status: issues.length === 0 ? "pass" : "fail",
+      checkedDocs: rows.length,
+      inlineSyntaxIssues: inlineSyntaxIssueCount,
+      missingPackageScripts: missingPackageScriptCount,
+      readIssues: readIssueCount,
+      missingPowerShellExamples: missingPowerShellExampleCount,
+      launchGate: "local-ops",
+    }),
+  );
+  if (issues.length > 0) process.exitCode = 1;
+  process.exit();
+}
+
+printTable(["Doc", "Inline Env Syntax", "Package Scripts"], rows);
+console.log(`Summary: ${issues.length === 0 ? "launch docs commands are PowerShell-safe and reference existing package scripts" : `${issues.length} issue(s): ${issues.join("; ")}`}.`);
 
 if (issues.length > 0) {
   process.exitCode = 1;

@@ -15,6 +15,13 @@ let stopping = false;
 const MIN_UPTIME_MS = 5000;
 const MAX_FAST_CRASHES = 3;
 const alertCooldowns = new Map();
+const REDACTED = "<redacted>";
+const SECRET_PATTERNS = [
+  /\b(?:bot|token|secret|password|passphrase|api[_-]?key|webhook[_-]?url|rpc[_-]?url)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;"']+)/gi,
+  /\bBearer\s+[^\s,;]+/gi,
+  /\bhttps?:\/\/[^\s"'<>)}\]]+/gi,
+  /\b0x[a-fA-F0-9]{40,}\b/g,
+];
 
 const managed = {
   bot: {
@@ -41,6 +48,14 @@ function shouldSendAlert(key, cooldownMs = 300000) {
   return true;
 }
 
+function describeSupervisorError(error) {
+  const raw = error instanceof Error ? error.message : String(error ?? "unknown error");
+  return SECRET_PATTERNS.reduce((message, pattern) => message.replace(pattern, REDACTED), raw)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240) || "unknown error";
+}
+
 async function sendAlert(text, key, cooldownMs = 300000) {
   if (!ALERT_BOT_TOKEN || !ALERT_CHAT_ID) return;
   if (!shouldSendAlert(key, cooldownMs)) return;
@@ -59,7 +74,7 @@ async function sendAlert(text, key, cooldownMs = 300000) {
       signal: AbortSignal.timeout(ALERT_REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
-    console.error("[bot-supervisor] failed to send alert:", err);
+    console.error(`[bot-supervisor] failed to send alert: ${describeSupervisorError(err)}`);
   }
 }
 
@@ -86,7 +101,7 @@ function startManaged(name) {
 
   child.on("error", (error) => {
     if (stopping) return;
-    console.error(`[bot-supervisor] ${name} process error: ${error.message}`);
+    console.error(`[bot-supervisor] ${name} process error: ${describeSupervisorError(error)}`);
   });
 
   child.on("exit", (code, signal) => {

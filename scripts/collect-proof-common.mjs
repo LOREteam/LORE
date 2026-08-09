@@ -3,6 +3,7 @@ import path from "node:path";
 import { redactProofText } from "./redact-proof-output.mjs";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 export function argValue(name, fallback = "") {
   const prefix = `--${name}=`;
@@ -14,9 +15,16 @@ export function hasFlag(name) {
   return process.argv.includes(`--${name}`);
 }
 
+export function parsePositiveInteger(value) {
+  const normalized = String(value ?? "").trim();
+  if (!/^[1-9]\d{0,15}$/.test(normalized)) return null;
+  const parsed = BigInt(normalized);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(parsed);
+}
+
 export function isPositiveInteger(value) {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0;
+  return parsePositiveInteger(value) !== null;
 }
 
 export function isAddress(value) {
@@ -27,7 +35,41 @@ export function isAddress(value) {
 export function isFinalHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
-    return url.protocol === "https:" && url.pathname === "/" && url.search === "" && url.hash === "" && !["localhost", "127.0.0.1", "0.0.0.0"].includes(url.hostname) && !url.hostname.endsWith(".local");
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+    return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      url.pathname === "/" &&
+      url.search === "" &&
+      url.hash === "" &&
+      (host.includes(".") || host.includes(":")) &&
+      !(
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "::" ||
+        host === "::1" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".example") ||
+        host.endsWith(".test") ||
+        host.endsWith(".invalid") ||
+        /^0\./.test(host) ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+        /^192\.0\.2\./.test(host) ||
+        /^198\.(1[89])\./.test(host) ||
+        /^198\.51\.100\./.test(host) ||
+        /^203\.0\.113\./.test(host) ||
+        /^::ffff:/i.test(host) ||
+        /^f[cd][0-9a-f]*:/i.test(host) ||
+        /^fe[89ab][0-9a-f]*:/i.test(host) ||
+        /^2001:db8:/i.test(host)
+      );
   } catch {
     return false;
   }
