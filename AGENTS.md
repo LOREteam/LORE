@@ -13,8 +13,9 @@ General operating rules for this repository. Keep changes small, evidence-based,
 
 ## Context Hygiene
 
-- Prefer `rg` / `rg --files`. Exclude `.next/`, `.tmp/`, `artifacts/`, `cache/`, `coverage/`, `dist/`, `logs/`, `node_modules/`, `out/`, `playwright-report/`, `test-results/`, `typechain-types/`.
+- Prefer `rg` / `rg --files`. Exclude `.next/`, `.tmp/`, `artifacts/`, `cache/`, `coverage/`, `dist/`, `logs/`, `node_modules/`, `out/`, `playwright-report/`, `test-results/`, `typechain-types/`, and build metadata such as `*.tsbuildinfo`.
 - Keep `.codexignore` updated when new build/cache/generated/report/heavy artifact paths appear.
+- Do not include `.env*` in broad recursive searches. Use env validators or presence-only checks unless the task explicitly requires inspecting an env template.
 - Prefer targeted reads for large files: locate relevant symbols first, then read the complete function and enough surrounding flow to understand callers, state, and side effects. Read the whole file only when its structure is necessary.
 - Do not read large `.json`, `.jsonl`, `.csv`, or `.log` files in full. Use bounded summaries: counts, selected keys, sample rows, or exact errors.
 - For verbose commands, inspect bounded first/last lines or exact error lines. Do not dump full terminal buffers.

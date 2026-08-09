@@ -321,6 +321,7 @@ npm run proof:monitoring -- --strict
       "origin": "https://REPLACE_WITH_PRODUCTION_ORIGIN",
       "exactProductionOrigin": true,
       "developmentFallbackAppIdUsed": false,
+      "productionAppIdConfigured": true,
       "evidence": "REPLACE_WITH_PRIVY_DASHBOARD_URL_OR_SCREENSHOT_PATH",
       "checkedAt": "REPLACE_WITH_ISO_TIMESTAMP"
     },

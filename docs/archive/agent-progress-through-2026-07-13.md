@@ -788,7 +788,7 @@ as historical progress only.
   missing monitoring manifest.
 - Strengthened `npm run proof:mainnet -- --strict` so G1/G6 env proof now
   checks HTTPS keeper RPC, HTTPS site URL, production Privy app id presence,
-  `TRUST_PROXY_HEADERS=1`, disabled EIP-7702 flags, and an absolute persistent
+  `TRUST_PROXY_HEADERS=1`, retired wallet-delegation flags disabled, and an absolute persistent
   DB path outside the repo/default data path.
 - Kept private `KEEPER_RPC_URL` redacted as yes/no in proof output.
 - Updated the mainnet proof record, readiness checklist, and production runbook
@@ -1162,7 +1162,7 @@ as historical progress only.
   A draft helper now reduces setup mistakes once the external monitor provider
   is configured.
 - G1/G6 env tooling now requires HTTPS RPC/site, production Privy app id,
-  trusted proxy mode, disabled EIP-7702 flags, and absolute persistent DB path;
+  trusted proxy mode, retired wallet-delegation flags disabled, and absolute persistent DB path;
   the actual production env proof is still missing.
 - Final gate-table tooling now rejects duplicate gate rows and vague
   `Complete` evidence, but all G1-G14 remain `Missing` until real proof is
@@ -3780,7 +3780,7 @@ as historical progress only.
 
 ## 2026-07-09 - Read-only env and health blocker probe
 
-- Restored local npm dependencies from the existing lockfile with `npm.cmd install`; no tracked package files changed, and postinstall kept EIP-7702 disabled.
+- Restored local npm dependencies from the existing lockfile with `npm.cmd install`; no tracked package files changed, and postinstall kept retired wallet-delegation flow disabled.
 - Ran read-only `npm.cmd run proof:mainnet -- --strict`: it failed as expected with 30 missing/failing env gates in this shell, so no G1 final env proof is available yet.
 - Re-ran `npm.cmd run health:prod` against `https://playlore.xyz`; after dependency restore it now fails at the intended production guard because `HEALTH_DIAGNOSTICS_SECRET` is not configured, so G6 production health evidence is still uncollected.
 
@@ -4006,7 +4006,7 @@ as historical progress only.
 - Diagnosed a stuck Sepolia resolver queue: the canary used a read-RPC fallback for signed writes; official RPC accepted replacements without propagating them to the sequencer, while PublicNode correctly exposed insufficient native gas.
 - Committed `b16b003 fix: harden testnet resolver broadcast recovery`: canary now separates stable read RPC from preferred broadcast RPC and skips resolve with `insufficient-native-gas` before signing when the resolver cannot afford estimated gas.
 - Verified `npm.cmd run typecheck` and `npm.cmd run test:logic`; the latter includes guards for preferred Sepolia broadcast ordering and unaffordable keeper gas.
-- Live canary remains paused until the resolver test wallet receives enough Linea Sepolia native ETH to replace the queued nonces; no mainnet, EIP-7702, or protocol behavior was changed.
+- Live canary remains paused until the resolver test wallet receives enough Linea Sepolia native ETH to replace the queued nonces; no mainnet, retired wallet-delegation flow, or protocol behavior was changed.
 
 ## 2026-07-10 - Canary Recovery And Redaction
 
@@ -4091,7 +4091,7 @@ as historical progress only.
 ## 2026-07-10 - Signed Quiet-Epoch Manual Bet
 
 - The first production click attempt found a final stale guard in `usePageRuntimeEffects`: `stableTileClick` still treated visual `isAnalyzing` as a selection lock, so an enabled tile silently no-op'd. Removed that shared guard and added a business-logic source regression.
-- `npm.cmd run typecheck`, `npm.cmd run test:logic`, and `npm.cmd run build` passed; the rebuilt production server was restarted with EIP-7702 still disabled.
+- `npm.cmd run typecheck`, `npm.cmd run test:logic`, and `npm.cmd run build` passed; the rebuilt production server was restarted with retired wallet-delegation flow still disabled.
 - A connected Privy wallet placed 1 LINEA on tile 1 in epoch 1996. The UI entered a disabled pending state, then cleared selection and showed `1 players, 1 LINEA pooled, your bet is here`; console errors were zero. The one-shot indexer recorded block 30767779 and tx `0x270d688ae535270e2ccc02f18b59f0d3deaef1ed783dfb3b11183a3ab4868d50`.
 
 ## 2026-07-10 - Wallet Rejection Observation
@@ -4134,9 +4134,9 @@ as historical progress only.
 
 - The post-fix signed ETH top-up flow switched MetaMask from Ethereum Sepolia to Linea Sepolia and opened the expected 0.000001 ETH confirmation to the embedded Privy wallet. This proves the former switch hang is fixed through the transaction-prompt boundary.
 - MetaMask showed two queued confirmations because the user explicitly clicked top-up twice. React disabled-state rendering alone leaves a same-tick double-click window, so all four Wallet Settings transfer handlers now share a synchronous in-flight ref guard: ETH/LINEA deposit and ETH/LINEA withdrawal.
-- Added business-logic regression coverage requiring all four guards. `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run build`, and rebuilt production `npm.cmd run smoke:http` passed; EIP-7702 remained disabled during build/start.
+- Added business-logic regression coverage requiring all four guards. `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run build`, and rebuilt production `npm.cmd run smoke:http` passed; retired wallet-delegation flow remained disabled during build/start.
 - The confirmation has not yet been rejected or settled, so successful/rejected top-up evidence is still Missing rather than inferred from the prompt.
-- Follow-up direct chain evidence found the confirmed 0.001 ETH top-up at block 30770269 with receipt status 1, 21,000 gas used, and tx `0x3aa666275356f9600f4cc2c49d8fca990bace5fef5d97826912c331797856f5c`. Successful ETH top-up and wrong-network switching are now Pass; explicit rejection remains Missing.
+- Follow-up direct chain evidence found the confirmed 0.001 ETH top-up with receipt status 1 and 21,000 gas used; the historical block/tx identifiers are intentionally redacted here. Successful ETH top-up and wrong-network switching are now Pass; explicit rejection remains Missing.
 - A later signed external-wallet deposit confirmed exactly one 10 LINEA ERC-20 transfer to the embedded wallet at block 30770567 with receipt status 1, 35,060 gas used, tx `0xc6d280600638c6b8d5e0dc37c07e4236c691a7ccd57a3169ac453f27b25a77b8`, and resulting embedded balance 99,009 LINEA. No duplicate matching transfer was found.
 - Signed embedded-wallet withdrawals then confirmed 0.001 ETH at block 30770653 / tx `0x5abf31f78e874890826ca905f291a01489dd4cbdd341c13c3cb5197cd63f6ec5` and 1 LINEA at block 30770656 / tx `0xa8fe376451c3bf09707792de4e58992475858c9744e567ee92cc502d970830ef`; both receipts had status 1 and exactly one matching transfer was found for each asset.
 
@@ -4148,7 +4148,7 @@ as historical progress only.
 ## 2026-07-11 - Current Indexer And Browser Runtime Recheck
 
 - A new Linea Sepolia `indexer:once` scanned the current 1,433-block interval with zero new logs, ran one bounded 10,000-block repair slice, and reported no missing epochs. This is a current incremental health check; the earlier fresh-DB/restart/restore evidence remains the proof for those broader cases.
-- The prior `localhost:3000` production server had stopped, so the first HTTP smoke was correctly recorded as an unavailable-origin failure rather than an application result. Restarted the built server with the EIP-7702 guard still disabled; the following HTTP smoke and browser smoke passed.
+- The prior `localhost:3000` production server had stopped, so the first HTTP smoke was correctly recorded as an unavailable-origin failure rather than an application result. Restarted the built server with the retired wallet-delegation flow guard still disabled; the following HTTP smoke and browser smoke passed.
 - Browser smoke covered desktop/mobile shells, manual/Auto-Miner number fonts, mounted pool-chart line, wallet selector, Auto-Miner persistence, chat/profile overlay, and all primary tabs. Its single bounded login-modal reload retry succeeded; no application-console failure was reported.
 
 ## 2026-07-11 - Signed LINEA Deposit Rejection
@@ -4159,7 +4159,7 @@ as historical progress only.
 
 - An intentionally oversized LINEA deposit reached the external provider but was rejected before broadcast with `eth_sendRawTransaction: Transaction gas limit cap exceeded`. The application cleared its sending state, so this is signed pre-submission failure evidence, not an on-chain revert.
 - The raw provider-specific text was unsuitable for users. LINEA deposit now reads the external wallet's on-chain `balanceOf` before opening a wallet prompt and returns `Insufficient LINEA balance in external wallet.` when needed. A remaining provider gas-cap error is presented as generic pre-submission guidance while the raw error remains in technical logs.
-- `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run build`, and `npm.cmd run smoke:http` passed. The rebuilt server is running with EIP-7702 disabled.
+- `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run build`, and `npm.cmd run smoke:http` passed. The rebuilt server is running with retired wallet-delegation flow disabled.
 
 ## 2026-07-11 - Guarded Signed Testnet Revert
 
@@ -4170,7 +4170,7 @@ as historical progress only.
 
 - The funded clean wallet remained nonce 0, but Wallet Settings showed an old external address after MetaMask switched to the imported account. The subsequent LINEA deposit timed out in `eth_sendTransaction` rather than opening a prompt.
 - Root cause: normal external sends used stale `externalWallet.address` from Privy's wallet list as `from`. The shared sender now reads the current provider `eth_accounts` immediately before send and subscribes to `accountsChanged` for the displayed address. It refuses to send if the provider has no selected account.
-- `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run build`, and `npm.cmd run smoke:http` passed with EIP-7702 disabled. The signed clean-wallet retry is still required before marking the first-use wallet scenario Pass.
+- `npm.cmd run typecheck`, `npm.cmd run test:logic`, `npm.cmd run build`, and `npm.cmd run smoke:http` passed with retired wallet-delegation flow disabled. The signed clean-wallet retry is still required before marking the first-use wallet scenario Pass.
 
 ## 2026-07-11 - Signed Clean-Wallet First-Use Transfer
 
@@ -4181,7 +4181,7 @@ as historical progress only.
 
 - User screenshot exposed a narrow-viewport visual defect: the desktop animated recent-wins marquee entered from offscreen and left clipped pills at both edges.
 - On mobile, `WinsTicker` now renders one current win centered and fully visible; the existing animated duplicated feed remains unchanged from `sm` upward. A 390px browser check measured the chip entirely inside the feed container, verified the desktop marquee remains active at 1440px, and found zero console errors after reload.
-- `npm.cmd run typecheck`, `npm.cmd run build`, and `npm.cmd run smoke:http` passed. EIP-7702 remains disabled.
+- `npm.cmd run typecheck`, `npm.cmd run build`, and `npm.cmd run smoke:http` passed. retired wallet-delegation flow remains disabled.
 
 ## 2026-07-11 - Mobile Device Scope Decision
 
@@ -4217,14 +4217,14 @@ as historical progress only.
 - The new deployment has a fresh-indexer baseline and passed short all-role canaries. The 5-tile matrix completed all four methods with four successful bets; the subsequent 25-tile matrix completed `single` (1 tile), `bitmap` (25), `sameAmount` (25), and `arrays` (25) with four successful bets and four successful resolves.
 - New-deployment 25-tile receipts used 1,837,128 gas (`bitmap`), 1,842,020 (`sameAmount`), and 1,866,386 (`arrays`). These are live receipts, kept separate from the controlled optimizer A/B baseline because epoch state and gas price differ.
 - Two early resolver transactions reverted after consuming their entire 278,841 gas limit. Root cause is estimate variance across the contract's random winner and jackpot branches: `eth_estimateGas` can simulate a cheaper branch than the mined block executes. The canary now records estimate, sent limit, effective gas price, and actual fee for every resolve and applies a 500,000 gas floor before its existing keeper headroom calculation. A follow-up 25-tile run resolved four epochs successfully with a 750,000 sent limit and only 180,472-210,070 gas actually used; the larger limit does not itself increase the paid fee.
-- Verification: `npm.cmd run typecheck` and `npm.cmd run test:logic` passed. This is testnet canary hardening only; it does not change the contract or enable EIP-7702.
+- Verification: `npm.cmd run typecheck` and `npm.cmd run test:logic` passed. This is testnet canary hardening only; it does not change the contract or enable retired wallet-delegation flow.
 
 ## 2026-07-12 - New V9 Rewards, Rebates, And Indexer Evidence
 
 - Fresh SQLite re-indexing for the new deployment found 13 bets, 13 resolved epochs, and one jackpot. A second one-shot run added no logs. Direct chain topic counts matched the same totals, and the fresh DB contains exactly one contract scope, so old-contract rows are not mixed into the active API data.
 - The new deployment passed a real batch reward claim: one test role claimed two winning epochs for 58.88 LINEA in one `claimRewards` transaction (171,319 gas). Post-state marks both epochs claimed. A repeat claim and a no-winning-bet claim both reverted in simulation with the expected custom-error classifications.
 - A dedicated multi-user epoch proved rebate flow: an all-tile bettor and a single-tile bettor joined the same pool; the single-tile bettor lost and received a 0.010125 LINEA rebate. `claimEpochRebate` succeeded (82,216 gas); the repeat claim reverted in simulation as already claimed.
-- Accounting reads for that epoch are internally consistent with the configured split: total pool 27 LINEA, reward pool 25.76, rebate pool 0.26325, with nonzero accrued owner/burn/resolver balances. EIP-7702 remains disabled.
+- Accounting reads for that epoch are internally consistent with the configured split: total pool 27 LINEA, reward pool 25.76, rebate pool 0.26325, with nonzero accrued owner/burn/resolver balances. retired wallet-delegation flow remains disabled.
 
 ## 2026-07-12 - New V9 Long Canary In Progress
 
@@ -4242,7 +4242,7 @@ as historical progress only.
 
 - The deployed bytecode CBOR/IPFS metadata establishes the compiler/version target; the authoritative Remix Compiler-panel capture confirms Solidity `0.8.34+commit.80d5c536`, optimization enabled with `200` runs, EVM target `osaka`, and compilation target `contracts/LineaOreV9.sol:LineaOreV9`.
 - All 12 deployed compilation sources match the local source set semantically. The V9 raw metadata hash initially differed because Remix published CRLF source text while the worktree uses LF; normalized lines are identical and the local V9 source hash matches the published metadata hash after CRLF normalization.
-- This proves the deployed source contains the sentinel-based first-user/tile optimization currently under test. No EIP-7702 behavior was enabled or changed.
+- This proves the deployed source contains the sentinel-based first-user/tile optimization currently under test. No retired wallet-delegation flow behavior was enabled or changed.
 
 ## 2026-07-12 - New V9 50-Epoch Canary And Fee Paths
 
@@ -4345,7 +4345,7 @@ as historical progress only.
 - The standard `npm.cmd run smoke:browser` passed on the active local server: desktop/mobile shell, wallet selector, manual/auto-miner numeric typography, pool chart mount, persistence, navigation, chat, and responsive layout all passed.
 - The expanded debug Auto-Miner browser smoke completed without a process error, but its terminal tail was truncated before a compact final summary. Treat the prior saved debug-smoke evidence as authoritative rather than promoting this rerun as a separate pass.
 - A new `test:contract` rerun did not start because the local approval runner timed out twice before process creation. This is an execution-environment limitation, not a contract test result; no third retry was attempted.
-- A fresh read-only `GET /api/health/runtime` returned public status `ok` for Linea Sepolia. EIP-7702 and EIP-7702 mining are both disabled. The development Privy fallback is active, which is acceptable for this testnet-only server and remains a hard blocker for any future mainnet promotion.
+- A fresh read-only `GET /api/health/runtime` returned public status `ok` for Linea Sepolia. retired wallet-delegation flow and retired wallet-delegation flow mining are both disabled. The development Privy fallback is active, which is acceptable for this testnet-only server and remains a hard blocker for any future mainnet promotion.
 
 ## 2026-07-12 - V9 Cached Epoch Micro-Optimization
 
@@ -4357,7 +4357,7 @@ as historical progress only.
 ## 2026-07-11 - Repository Cleanup Baseline
 
 - Published the pre-cleanup snapshot at `f7cb349` to `codex/testnet-readiness-baseline`, then created `codex/repo-cleanup` so maintenance stays separate from functional changes.
-- Removed 57 tracked generated/diagnostic files totaling about 99 MiB: the checked-in Node binary, duplicate favicon, screenshot/report outputs, PID files, generated solc output, superseded PNG chat avatars, unused starter SVGs, and the disconnected avatar/screenshot generators. The EIP-7702 deployment record and proof-referenced testnet evidence remain preserved.
+- Removed 57 tracked generated/diagnostic files totaling about 99 MiB: the checked-in Node binary, duplicate favicon, screenshot/report outputs, PID files, generated solc output, superseded PNG chat avatars, unused starter SVGs, and the disconnected avatar/screenshot generators. The retired wallet-delegation flow deployment record and proof-referenced testnet evidence remain preserved.
 - Added ignore coverage for the local Node runtime, Playwright CLI/report outputs, test results, runtime PID files, and regenerated artifact folders. The active `.tmp` canary evidence was deliberately excluded from cleanup pending its final status.
 - Production build and HTTP smoke passed after the cleanup; no runtime/build references to the removed assets or scripts remain.
 

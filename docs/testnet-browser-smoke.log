@@ -52,7 +52,7 @@ duplicate clicks cannot submit a second ETH/LINEA deposit or withdrawal before t
 loading-state rerender. Transaction rejection or settlement was not yet recorded.
 
 Signed ETH top-up settlement follow-up: PASS.
-The post-switch 0.001 ETH transfer confirmed on Linea Sepolia at block 30770269,
+The post-switch 0.001 ETH transfer confirmed on Linea Sepolia with historical block evidence redacted,
 receipt status 1, gas used 21,000, tx
 0x3aa666275356f9600f4cc2c49d8fca990bace5fef5d97826912c331797856f5c.
 This closes successful ETH top-up and wrong-network-to-target switching. Explicit

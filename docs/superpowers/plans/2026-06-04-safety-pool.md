@@ -33,7 +33,6 @@
 - Modify: `scripts/smoke-browser.mjs`
 - Modify: `docs/mainnet-readiness-checklist.md`
 - Modify: `docs/governance-migration.md`
-- Modify: `docs/EIP7702.md`
 
 - [ ] Replace visible Rebate/Gas Burn Bonus/Participation Rebate copy with Safety Pool language.
 - [ ] Keep internal route/tab id `rebate` unchanged.

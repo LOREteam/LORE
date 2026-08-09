@@ -8,9 +8,11 @@ Move LORE from a single-key `Ownable` setup to an ownership model that is accept
 - timelock + multisig ownership when operationally ready
 - no ownership renounce for the live game contract
 
-## V9 Contract Profile
+## Current Contract Profile
 
-The active contract source is [contracts/LineaOreV9.sol](../contracts/LineaOreV9.sol).
+The reviewed deployment candidate is
+[contracts/LineaOreV10.sol](../contracts/LineaOreV10.sol). The currently active
+address remains environment-defined until the V10 cutover is verified.
 
 Key governance properties:
 
@@ -60,7 +62,7 @@ For LORE, immutability is less important than removing single-key risk.
 
 ## Deployment checklist
 
-1. Deploy `LineaOreV9` with:
+1. Deploy the exact manifest-matched `LineaOreV10` candidate with:
    - `tokenAddress`
    - `initialOwner`
    - `initialFeeRecipient`
@@ -68,12 +70,12 @@ For LORE, immutability is less important than removing single-key risk.
 3. If using the preferred model:
    - deploy `TimelockController`
    - set the Safe as proposer/executor/admin as planned
-   - transfer ownership of `LineaOreV9` to the timelock
+   - transfer ownership of `LineaOreV10` to the timelock
    - call `acceptOwnership` from the timelock flow
 4. Update frontend constants:
    - `LINEA_NETWORK` / `NEXT_PUBLIC_LINEA_NETWORK`
-   - `CONTRACT_ADDRESS`
-   - `CONTRACT_DEPLOY_BLOCK`
+   - `KEEPER_CONTRACT_ADDRESS` / `NEXT_PUBLIC_CONTRACT_ADDRESS`
+   - `INDEXER_START_BLOCK` / `NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK`
    - `NEXT_PUBLIC_LINEA_RPCS` if you want pinned production RPCs
 5. Update any indexer/backfill assumptions if deployment block changes.
 6. Announce the ownership model publicly:
@@ -87,9 +89,9 @@ The app/runtime reads deployment settings from env and defaults in [config/publi
 
 After a new deployment, update:
 
-- `CONTRACT_ADDRESS`
-- `CONTRACT_DEPLOY_BLOCK`
+- `KEEPER_CONTRACT_ADDRESS` / `NEXT_PUBLIC_CONTRACT_ADDRESS`
+- `INDEXER_START_BLOCK` / `NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK`
 - `LINEA_NETWORK` / `NEXT_PUBLIC_LINEA_NETWORK` when switching between Sepolia and mainnet
 - `NEXT_PUBLIC_LINEA_TOKEN_ADDRESS` if the token address changes
 
-The ABI in [app/lib/constants.ts](../app/lib/constants.ts) includes the V9 methods, including `placeBatchBetsBitmap(...)`.
+The ABI in [config/abi.ts](../config/abi.ts) preserves the V9-compatible methods and includes the V10 epoch-bound `placeBatchBetsBitmapForEpoch(...)` selector.

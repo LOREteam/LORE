@@ -30,14 +30,24 @@ Useful optional vars are documented in `.env.example` and `.env.local.example`.
 
 Important for future contract deployments:
 
-- Current testnet deploy: `Linea Sepolia`, contract `0x98eef041b012668529fb66ac3133900fdffc7282`, deploy block `28869863`.
-- Set `LINEA_NETWORK` and `NEXT_PUBLIC_LINEA_NETWORK` to `mainnet` for production.
+- Do not copy a contract address or deploy block from this README. Treat the
+  active environment and `docs/current_state.md` as the deployment source of
+  truth, and keep every address/block pair internally consistent.
+- V10 must be compiled from `contracts/LineaOreV10.sol` with
+  `contracts/LineaOreV10.compiler-config.json` and verified against
+  `contracts/LineaOreV10.compilation.json` before application cutover.
+- Set `LINEA_NETWORK` / `NEXT_PUBLIC_LINEA_NETWORK` to `mainnet` and
+  `LINEA_CHAIN_ID` / `NEXT_PUBLIC_LINEA_CHAIN_ID` to `59144` for production.
 - Set `KEEPER_CONTRACT_ADDRESS` for server routes and keeper bot.
 - Set `NEXT_PUBLIC_CONTRACT_ADDRESS` for the frontend.
 - Set `NEXT_PUBLIC_LINEA_TOKEN_ADDRESS` if the token address changes.
 - Set `INDEXER_START_BLOCK` and `NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK` to the new deployment block.
 - Set `NEXT_PUBLIC_LINEA_RPCS` if you need to pin reliable production RPCs for wallet broadcast.
-- Keep `NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER=1` and `NEXT_PUBLIC_CONTRACT_HAS_REBATE_API=1` for V9 deployments.
+- Keep `NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER=1` and
+  `NEXT_PUBLIC_CONTRACT_HAS_REBATE_API=1` for V9 and V10 deployments.
+- Set `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1` for V10. This makes a
+  missing V10 protected-bet selector fail before signing instead of falling
+  back to a legacy epoch-unbound bet.
 
 ## Scripts
 
@@ -49,11 +59,20 @@ Important for future contract deployments:
 - `npm run build` - production build
 - `npm run start` - run production server on port `3001`
 - `npm run health:prod` - fail-fast external health probe for runtime + data-sync
+- `npm run health:prod:summary` - compact health preflight; use full `health:prod`
+  for saved launch evidence
 - `npm run typecheck` - TypeScript checks
 - `npm run lint` - ESLint checks
+- `npm run gate:contract:v10:local` - complete no-RPC V10 contract gate
+- `npm run gate:contract:v10:predeploy` - local gate plus compiler advisory and
+  explicitly approved read-only Linea state-override evidence
 - `npm run smoke:http` - smoke-check the local app/API on `http://localhost:3000` (override with `SMOKE_BASE_URL`); validates homepage markers plus core JSON routes
 - `npm run smoke:browser` - click through the main UI in a real browser (Hub, Chat, Analytics, Rebate, Leaderboards, White Paper, FAQ) using local Chrome/Edge
-- `npm run check` - run `lint -> build -> typecheck -> smoke:http -> smoke:browser` in the safe order required by `.next/types`
+- `npm run check` - run the normal local gate: lint, business logic tests,
+  fetch-timeout and stored-number parsing tests, V9 compatibility invariants,
+  active V10 invariants, indexer storage, SQLite operations, runtime monitoring
+  drill, build, typecheck, HTTP smoke, and browser smoke with Auto-Miner
+  failure/recovery scenarios enabled
 
 ## Environment notes
 
@@ -72,6 +91,7 @@ Important for future contract deployments:
 
 ## Security notes
 
+- Private vulnerability reporting scope and research boundaries are documented in [SECURITY.md](SECURITY.md).
 - Frontend CSP/security headers are enforced in [app/middleware.ts](/C:/Users/bogda/linea-miner-main/app/middleware.ts).
 - Mainnet startup now fails fast if critical runtime env is missing for web, indexer, bot, or DB-backed server paths.
 - Governance migration guidance for the next contract deployment is in `docs/governance-migration.md`.

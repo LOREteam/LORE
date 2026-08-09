@@ -75,7 +75,7 @@ The shared local UI browser smoke also passed on desktop and mobile. It covered 
 
 A short shared-runtime local load-smoke completed 5,146 responses in 10 seconds with no failed requests and a 109 ms total p95. The test intentionally exercised rate limiting; `429` responses were accepted protective responses, not transport errors. This remains shared-runtime evidence, not launch or candidate-server load proof.
 
-The candidate runtime health handler reported `eip7702Enabled=false` and `eip7702MiningEnabled=false`.
+The candidate runtime health handler recorded the then-disabled experimental path. The code was later removed from the application.
 
 ## Provenance Status
 
