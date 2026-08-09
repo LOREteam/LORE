@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChatAuth } from "./useChatAuth";
 import { useChat } from "./useChat";
 import { useChatProfile } from "./useChatProfile";
+import { normalizeChatAuthAddress } from "../lib/chatAuth";
 
 interface UseChatWidgetRuntimeOptions {
   walletAddress: string | null;
@@ -28,9 +29,9 @@ export function useChatWidgetRuntime({
   const { messages, sendMessage, connected, authReady, ensureChatAuth, sendCooldownRemainingMs, isSending } = useChat(walletAddress, { open, auth: chatAuth });
   const { profile, displayName, effectiveAvatar, updateProfile } = useChatProfile(walletAddress, chatAuth);
 
-  const myAddr = walletAddress?.toLowerCase() ?? "";
+  const myAddr = normalizeChatAuthAddress(walletAddress);
   const othersCount = useMemo(
-    () => messages.filter((message) => message.sender.toLowerCase() !== myAddr).length,
+    () => messages.filter((message) => normalizeChatAuthAddress(message.sender) !== myAddr).length,
     [messages, myAddr],
   );
 

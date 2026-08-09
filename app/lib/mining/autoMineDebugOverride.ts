@@ -55,6 +55,10 @@ function isAutoMinePhase(value: unknown): value is AutoMinePhase {
   return AUTO_MINE_PHASES.includes(value as AutoMinePhase);
 }
 
+function normalizeAutoMineDebugUpdatedAt(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
 export function sanitizeAutoMineDebugOverride(value: unknown): AutoMineDebugOverride | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Record<string, unknown>;
@@ -63,7 +67,7 @@ export function sanitizeAutoMineDebugOverride(value: unknown): AutoMineDebugOver
     phase: candidate.phase,
     progress: typeof candidate.progress === "string" ? candidate.progress : null,
     runningParams: isRunningParams(candidate.runningParams) ? candidate.runningParams : null,
-    updatedAt: Number.isFinite(candidate.updatedAt) ? Number(candidate.updatedAt) : 0,
+    updatedAt: normalizeAutoMineDebugUpdatedAt(candidate.updatedAt),
   };
 }
 
@@ -73,8 +77,15 @@ export function readAutoMineDebugOverride(storage?: OverrideStorage | null): Aut
   try {
     const raw = targetStorage.getItem(AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY);
     if (!raw) return null;
-    return sanitizeAutoMineDebugOverride(JSON.parse(raw));
+    const override = sanitizeAutoMineDebugOverride(JSON.parse(raw));
+    if (!override) targetStorage.removeItem(AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY);
+    return override;
   } catch {
+    try {
+      targetStorage.removeItem(AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY);
+    } catch {
+      // ignore storage cleanup failures
+    }
     return null;
   }
 }
@@ -87,7 +98,7 @@ export function writeAutoMineDebugOverride(
   if (!targetStorage) return null;
   const nextValue: AutoMineDebugOverride = {
     ...override,
-    updatedAt: options?.now ?? Date.now(),
+    updatedAt: normalizeAutoMineDebugUpdatedAt(options?.now ?? Date.now()),
   };
   try {
     targetStorage.setItem(AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY, JSON.stringify(nextValue));

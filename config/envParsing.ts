@@ -1,3 +1,5 @@
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
 export function parseRequiredNonNegativeBigIntEnv(value: string, label: string): bigint {
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) {
@@ -15,8 +17,9 @@ export function parseOptionalNonNegativeBigIntEnv(value: string | null | undefin
 export function parseOptionalNonNegativeNumberEnv(value: string | null | undefined, fallback: number): number {
   const trimmed = value?.trim();
   if (!trimmed || !/^\d+$/.test(trimmed)) return fallback;
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) ? parsed : fallback;
+  const parsed = BigInt(trimmed);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return fallback;
+  return Number(parsed);
 }
 
 export function parseOptionalPositiveIntegerEnv(value: string | null | undefined, fallback: number): number {

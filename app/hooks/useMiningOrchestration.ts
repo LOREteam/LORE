@@ -2,7 +2,6 @@
 
 import { useMemo } from "react";
 import { REFETCH_DELAY_MS, MAX_BET_ATTEMPTS } from "../lib/constants";
-import type { Eip7702CapabilityState, Signed7702AuthorizationLike } from "../lib/eip7702";
 import { clearSession, readSession, saveSession } from "./useMining.shared";
 import { useMiningAllowance } from "./useMiningAllowance";
 import { useMiningRuntimeHelpers } from "./useMiningRuntimeHelpers";
@@ -41,26 +40,6 @@ interface UseMiningOrchestrationOptions {
       ) => Promise<`0x${string}`>)
     | undefined
   >;
-  silentSend7702Ref: MutableRefObject<
-    | ((
-        tx: {
-          data?: `0x${string}`;
-          value?: bigint;
-          gas?: bigint;
-          nonce?: number;
-          authorizationList: readonly Signed7702AuthorizationLike[];
-          sponsor?: boolean;
-          feeMode?: "normal" | "keeper";
-        },
-        gasOverrides?: GasOverrides,
-      ) => Promise<`0x${string}`>)
-    | undefined
-  >;
-  signEip7702DelegationRef: MutableRefObject<
-    | ((executor?: "self" | `0x${string}`) => Promise<Signed7702AuthorizationLike>)
-    | undefined
-  >;
-  eip7702Ref: MutableRefObject<Eip7702CapabilityState | undefined>;
   refreshSessionRef: MutableRefObject<RefreshSessionFn | undefined>;
   writeContractAsyncRef: MutableRefObject<(args: unknown) => Promise<`0x${string}`>>;
   ensurePreferredWalletRef: MutableRefObject<(() => Promise<void> | void) | undefined>;
@@ -118,9 +97,6 @@ export function useMiningOrchestration({
   pendingBetRef,
   publicClientRef,
   silentSendRef,
-  silentSend7702Ref,
-  signEip7702DelegationRef,
-  eip7702Ref,
   refreshSessionRef,
   writeContractAsyncRef,
   ensurePreferredWalletRef,
@@ -194,7 +170,7 @@ export function useMiningOrchestration({
     ensurePreferredWallet: () => ensurePreferredWalletRef.current?.(),
   });
 
-  const { placeBets, placeBetsSilent, placeBets7702, placeBetsPreferSilent } = useMiningBetExecution({
+  const { placeBets, placeBetsSilent, placeBetsPreferSilent } = useMiningBetExecution({
     assertNativeGasBalance,
     assertSufficientAllowance,
     ensureAllowance,
@@ -205,9 +181,6 @@ export function useMiningOrchestration({
     getActorAddress,
     readPublicClient: () => publicClientRef.current,
     readSilentSend: () => silentSendRef.current,
-    readSilentSend7702: () => silentSend7702Ref.current,
-    readSignEip7702Delegation: () => signEip7702DelegationRef.current,
-    readEip7702Capability: () => eip7702Ref.current,
     readWriteContractAsync: () => (args: unknown) => writeContractAsyncRef.current(args as never),
     ensurePreferredWallet: () => ensurePreferredWalletRef.current?.(),
   });
@@ -228,16 +201,16 @@ export function useMiningOrchestration({
     refetchUserBets: () => refetchUserBetsRef.current(),
   });
 
-  const checkBetAlreadyConfirmed = useMiningBetStatus({ publicClientRef });
+  const prepareBetConfirmation = useMiningBetStatus({ publicClientRef });
 
   const { handleDirectMine, handleManualMine } = useMiningManualActions({
     autoMineActive: () => autoMineRef.current,
-    checkBetAlreadyConfirmed,
     ensureAllowance,
     finalizeMineSuccess,
     getActorAddress,
     getBumpedFees,
     placeBetsPreferSilent,
+    prepareBetConfirmation,
     selectedTiles,
     setIsPending,
     setSelectedTiles,
@@ -284,7 +257,6 @@ export function useMiningOrchestration({
     pendingBetRef,
     placeBets,
     placeBetsSilent,
-    placeBets7702,
     publicClientRef,
     refetchAllowanceRef,
     refetchEpochRef,

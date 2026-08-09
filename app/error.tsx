@@ -9,6 +9,7 @@ import {
   shouldAttemptChunkReloadOnce,
   stripChunkReloadCacheParam,
 } from "./lib/chunkReloadRecovery";
+import { sanitizeSupportLogPayload } from "./lib/sentrySanitize";
 
 export default function ErrorPage({
   error,
@@ -26,12 +27,13 @@ export default function ErrorPage({
       },
     });
 
-    log.error("ErrorBoundary", "route render error", {
+    const safeError = sanitizeSupportLogPayload({
       name: error.name,
       message: error.message,
       digest: error.digest,
       stack: error.stack?.slice(0, 400),
     });
+    log.error("ErrorBoundary", "route render error", safeError);
 
     if (!isChunkLoadLikeErrorMessage(error.message)) {
       return;
@@ -42,8 +44,9 @@ export default function ErrorPage({
     if (!canReload) {
       return;
     }
+    const safeChunkError = sanitizeSupportLogPayload({ message: error.message.slice(0, 180) });
     log.warn("ErrorBoundary", "chunk route error detected, reloading page once", {
-      message: error.message.slice(0, 180),
+      message: safeChunkError.message,
     });
     reloadWithCacheBust(window.location);
   }, [error]);
@@ -66,14 +69,14 @@ export default function ErrorPage({
           <button
             type="button"
             onClick={reset}
-            className="w-full rounded-md border border-violet-500/40 bg-violet-500/10 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-violet-200 hover:bg-violet-500/20 transition-colors"
+            className="min-h-11 w-full rounded-md border border-violet-500/40 bg-violet-500/10 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-violet-200 hover:bg-violet-500/20 transition-colors"
           >
             Try again
           </button>
           <button
             type="button"
             onClick={handleHardReload}
-            className="w-full rounded-md border border-white/10 bg-white/3 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-gray-300 hover:bg-white/6 transition-colors"
+            className="min-h-11 w-full rounded-md border border-white/10 bg-white/3 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-gray-300 hover:bg-white/6 transition-colors"
           >
             Hard reload
           </button>

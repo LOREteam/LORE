@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getAddress } from "viem";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import { createRouteCache } from "../_lib/routeCache";
 import {
@@ -13,6 +14,7 @@ import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { RewardRow, loadRewardMapsForUserEpochs } from "../_lib/rewardSummary";
 import { readBoundedJsonBody } from "../_lib/boundedJsonBody";
+import { parsePositiveIntegerValue } from "../_lib/queryParams";
 
 type RewardsRequest = {
   user?: unknown;
@@ -29,6 +31,9 @@ type RewardsPayload = {
   rewards: Record<string, RewardRow>;
   error?: string;
 };
+type EpochsParseResult =
+  | { ok: true; epochs: number[] }
+  | { ok: false; error: string };
 
 const rewardsRouteCache = createRouteCache<RewardsPayload>(MAX_REWARDS_CACHE_ENTRIES);
 
@@ -36,12 +41,20 @@ function jsonNoStore(payload: RewardsPayload | { error: string }, status = 200) 
   return applyNoStoreHeaders(NextResponse.json(payload, { status }));
 }
 
-function normalizeEpochs(epochsRaw: unknown) {
-  return [...new Set(
-    (Array.isArray(epochsRaw) ? epochsRaw : [])
-      .map((value) => Number(value))
-      .filter((value) => Number.isSafeInteger(value) && value > 0),
-  )].slice(0, MAX_EPOCHS_PER_REQUEST);
+function normalizeEpochs(epochsRaw: unknown): EpochsParseResult {
+  if (!Array.isArray(epochsRaw)) return { ok: true, epochs: [] };
+  if (epochsRaw.length > MAX_EPOCHS_PER_REQUEST) {
+    return { ok: false, error: "Too many epochs" };
+  }
+  const epochs = new Set<number>();
+  for (const value of epochsRaw) {
+    const parsed = parsePositiveIntegerValue(value);
+    if (parsed === null || parsed > 1_000_000) {
+      return { ok: false, error: "Invalid epochs" };
+    }
+    epochs.add(parsed);
+  }
+  return { ok: true, epochs: [...epochs] };
 }
 
 async function buildRewardsPayload(user: string, epochs: number[]): Promise<RewardsPayload> {
@@ -70,19 +83,30 @@ export async function POST(request: Request) {
       failRouteMetric(metric, 413);
       return jsonNoStore({ error: "Rewards payload too large" }, 413);
     }
+    if (!parsedBody.ok && parsedBody.reason === "unsupported-content-type") {
+      failRouteMetric(metric, 415);
+      return jsonNoStore({ error: "Rewards payload must be JSON" }, 415);
+    }
     const body = parsedBody.ok ? parsedBody.value : null;
     if (!body || typeof body !== "object") {
       failRouteMetric(metric, 400);
       return jsonNoStore({ error: "Invalid rewards payload" }, 400);
     }
 
-    const user = typeof body.user === "string" ? body.user.toLowerCase() : "";
-    if (!/^0x[0-9a-f]{40}$/.test(user)) {
+    let user: `0x${string}`;
+    try {
+      user = getAddress(typeof body.user === "string" ? body.user : "").toLowerCase() as `0x${string}`;
+    } catch {
       failRouteMetric(metric, 400);
       return jsonNoStore({ error: "Missing or invalid user" }, 400);
     }
 
-    const epochs = normalizeEpochs(body.epochs);
+    const parsedEpochs = normalizeEpochs(body.epochs);
+    if (!parsedEpochs.ok) {
+      failRouteMetric(metric, 400);
+      return jsonNoStore({ error: parsedEpochs.error }, 400);
+    }
+    const epochs = parsedEpochs.epochs;
     const cacheKey = `${user}:${epochs.join(",")}`;
     const now = Date.now();
     const cached = rewardsRouteCache.getFresh(cacheKey, now);

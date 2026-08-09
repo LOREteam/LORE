@@ -167,6 +167,7 @@ export const CrystalParticles = React.memo(function CrystalParticles() {
   return (
     <canvas
       ref={canvasRef}
+      aria-hidden="true"
       className="fixed inset-0 pointer-events-none z-0"
       style={{ opacity: 0.6 }}
     />

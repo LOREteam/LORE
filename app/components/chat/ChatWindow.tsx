@@ -7,6 +7,10 @@ import { ChatMessageRow } from "./ChatMessage";
 import { ChatProfileModal } from "./ChatProfileModal";
 import { emptyStates } from "../../lib/loreTexts";
 import { LoreText } from "../LoreText";
+import { normalizeChatAuthAddress } from "../../lib/chatAuth";
+
+const CHAT_VERIFY_ERROR = "Verification error. Try again or refresh the page.";
+const CHAT_PANEL_ID = "lore-chat-panel";
 
 interface Props {
   messages: ChatMessage[];
@@ -205,7 +209,7 @@ export const ChatWindow = React.memo(function ChatWindow({
     [handleSend],
   );
 
-  const myAddr = walletAddress?.toLowerCase() ?? "";
+  const myAddr = normalizeChatAuthAddress(walletAddress);
   const sendLocked = sendCooldownRemainingMs > 0;
   const sendCooldownSeconds = Math.max(1, Math.ceil(sendCooldownRemainingMs / 1000));
   const sendButtonTitle = sendLocked
@@ -221,6 +225,7 @@ export const ChatWindow = React.memo(function ChatWindow({
 
   return (
     <div
+      id={CHAT_PANEL_ID}
       ref={rootRef}
       className={`flex flex-col overflow-hidden rounded-xl border border-violet-500/22 bg-[#090914]/97 ${containerShadowClass} backdrop-blur-xl animate-slide-up ${
         variant === "embedded"
@@ -256,9 +261,13 @@ export const ChatWindow = React.memo(function ChatWindow({
           <div className="flex items-center gap-2">
             <span className="text-[1rem] font-semibold tracking-[-0.02em] text-slate-100">Chat</span>
             <span
+              aria-hidden="true"
               className={`h-2.5 w-2.5 rounded-full ${connected ? "bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.7)]" : "bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.55)]"}`}
               title={connected ? "Connected" : "Connecting..."}
             />
+            <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+              {connected ? "Chat connected" : "Chat connecting"}
+            </span>
           </div>
         </div>
 
@@ -269,7 +278,7 @@ export const ChatWindow = React.memo(function ChatWindow({
             onClick={handleOpenProfile}
             aria-label="Profile"
             title="Profile"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/4 hover:text-violet-300"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/4 hover:text-violet-300"
           >
             <svg aria-hidden="true" width="17" height="17" viewBox="0 0 17 17" fill="none">
               <circle cx="8.5" cy="5.5" r="2.9" fill="currentColor" opacity="0.85" />
@@ -287,7 +296,7 @@ export const ChatWindow = React.memo(function ChatWindow({
             onClick={onClose}
             aria-label="Close chat panel"
             title="Close chat"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/4 hover:text-slate-200"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-transparent text-slate-500 transition-all duration-200 hover:border-violet-500/20 hover:bg-white/4 hover:text-slate-200"
           >
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none">
               <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
@@ -307,7 +316,7 @@ export const ChatWindow = React.memo(function ChatWindow({
             </div>
           ) : (
             messages.map((msg) => (
-              <ChatMessageRow key={msg.id} message={msg} isOwn={msg.sender.toLowerCase() === myAddr} />
+              <ChatMessageRow key={msg.id} message={msg} isOwn={normalizeChatAuthAddress(msg.sender) === myAddr} />
             ))
           )}
         </div>
@@ -324,6 +333,7 @@ export const ChatWindow = React.memo(function ChatWindow({
                     onKeyDown={handleKeyDown}
                     maxLength={280}
                     placeholder={`Message as ${displayName}`}
+                    aria-label="Chat message"
                     className="h-11 min-w-0 flex-1 rounded-xl border border-violet-500/14 bg-[#1a1a30] px-4 text-[15px] text-slate-100 placeholder:text-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] focus:outline-none focus:border-violet-500/38"
                   />
                   <button
@@ -389,8 +399,8 @@ export const ChatWindow = React.memo(function ChatWindow({
                     setVerifyError(null);
                     onEnsureAuth().then(ok => {
                       if (!ok) setVerifyError("Verification failed. Try again or refresh the page.");
-                    }).catch((err: unknown) => {
-                      setVerifyError(err instanceof Error ? err.message : "Verification error. Try again.");
+                    }).catch(() => {
+                      setVerifyError(CHAT_VERIFY_ERROR);
                     });
                   }}
                   className="h-11 w-full rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-violet-500"

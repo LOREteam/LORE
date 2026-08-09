@@ -3,8 +3,8 @@
 import { log } from "../lib/logger";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePublicClient } from "wagmi";
-import { parseAbi, decodeEventLog, formatUnits, encodeEventTopics, pad, type Log, type Hex } from "viem";
-import { formatLineaAmountFixed } from "../lib/tokenAmountMath";
+import { parseAbi, decodeEventLog, encodeEventTopics, getAddress, pad, type Log, type Hex } from "viem";
+import { formatLineaAmountFixed, formatLineaWeiDisplayNumber } from "../lib/tokenAmountMath";
 import {
   CONTRACT_DEPLOY_BLOCK,
   CONTRACT_ADDRESS,
@@ -22,8 +22,11 @@ const FALLBACK_MAX_BLOCKS = 250_000n;
 const CACHE_MS = 120_000;
 
 function toDisplayNumberWei(value: bigint) {
-  const amount = Number(formatUnits(value, 18));
-  return Number.isFinite(amount) ? amount : 0;
+  return formatLineaWeiDisplayNumber(value);
+}
+
+function toDisplayAmountWei(value: bigint) {
+  return formatLineaAmountFixed(value, 2);
 }
 
 export function getWalletTransferScanFromBlock(headBlock: bigint, deployBlock = CONTRACT_DEPLOY_BLOCK): bigint | null {
@@ -41,6 +44,28 @@ export function getWalletTransferFallbackFromBlock(
   return windowStart > fromBlock ? windowStart : fromBlock;
 }
 
+export function getWalletTransferLogKey(log: Pick<Log, "transactionHash" | "blockNumber" | "transactionIndex" | "logIndex">): string {
+  const txHash = log.transactionHash ?? "missing-tx";
+  const block = log.blockNumber?.toString() ?? "missing-block";
+  const transactionIndex = log.transactionIndex ?? -1;
+  const logIndex = log.logIndex ?? -1;
+  return `${txHash}:${block}:${transactionIndex}:${logIndex}`;
+}
+
+export function normalizeWalletTransferTxHash(value: unknown): `0x${string}` | "" {
+  const normalized = String(value ?? "").toLowerCase().trim();
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? (normalized as `0x${string}`) : "";
+}
+
+export function normalizeWalletTransferAddress(value: string | null | undefined): `0x${string}` | null {
+  if (!value) return null;
+  try {
+    return getAddress(value).toLowerCase() as `0x${string}`;
+  } catch {
+    return null;
+  }
+}
+
 export interface WalletTransfer {
   direction: "in" | "out";
   counterparty: string;
@@ -56,6 +81,18 @@ export interface WalletTransfersSummary {
   transfers: WalletTransfer[];
   totalIn: number;
   totalOut: number;
+  totalInDisplay: string;
+  totalOutDisplay: string;
+}
+
+function createEmptyWalletTransfersSummary(): WalletTransfersSummary {
+  return {
+    transfers: [],
+    totalIn: 0,
+    totalOut: 0,
+    totalInDisplay: "0.00",
+    totalOutDisplay: "0.00",
+  };
 }
 
 export function useWalletTransfers(embeddedAddress?: string, externalWalletAddress?: string | null) {
@@ -86,10 +123,18 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
   }, [embeddedAddress, externalWalletAddress]);
 
   const fetch = useCallback(async () => {
-    if (!publicClient || !embeddedAddress) return;
+    if (!publicClient) return;
 
-    const addr = embeddedAddress.toLowerCase();
-    const externalAddr = externalWalletAddress?.toLowerCase() ?? null;
+    const addr = normalizeWalletTransferAddress(embeddedAddress);
+    const externalAddr = externalWalletAddress ? normalizeWalletTransferAddress(externalWalletAddress) : null;
+    if (!addr || (externalWalletAddress && !externalAddr)) {
+      const emptySummary = createEmptyWalletTransfersSummary();
+      dataRef.current = emptySummary;
+      if (mountedRef.current) {
+        setData(emptySummary);
+      }
+      return;
+    }
     const cacheKey = `${addr}:${externalAddr ?? "any"}`;
     if (loading && runningForRef.current === cacheKey) {
       return;
@@ -111,7 +156,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       const toBlock = await publicClient.getBlockNumber();
       const fromBlock = getWalletTransferScanFromBlock(toBlock);
       if (fromBlock === null) {
-        const emptySummary = { transfers: [], totalIn: 0, totalOut: 0 };
+        const emptySummary = createEmptyWalletTransfersSummary();
         cachedAtRef.current = Date.now();
         cachedForRef.current = cacheKey;
         dataRef.current = emptySummary;
@@ -124,11 +169,11 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       const transferSig = encodeEventTopics({ abi: TRANSFER_ABI, eventName: "Transfer" })[0];
       if (!transferSig) {
         if (mountedRef.current && requestId === requestIdRef.current) {
-          setData({ transfers: [], totalIn: 0, totalOut: 0 });
+          setData(createEmptyWalletTransfersSummary());
         }
         return;
       }
-      const paddedAddr = pad(embeddedAddress as Hex, { size: 32 }).toLowerCase() as Hex;
+      const paddedAddr = pad(addr as Hex, { size: 32 }).toLowerCase() as Hex;
 
       const fetchChunked = async (topics: (Hex | Hex[] | null)[]) => {
         const result: Log[] = [];
@@ -198,7 +243,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       const transfers: WalletTransfer[] = [];
       let totalInWei = 0n;
       let totalOutWei = 0n;
-      const seenTx = new Set<string>();
+      const seenLogs = new Set<string>();
 
       // Deposits and withdrawals only: between embedded and external wallets (game rewards remain claimable separately)
       const isDepositOrWithdrawal = (dir: "in" | "out", counterparty: string) => {
@@ -218,8 +263,8 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
           if (!isDepositOrWithdrawal("out", args.to)) continue;
           const amountNum = toDisplayNumberWei(args.value);
           totalOutWei += args.value;
-          const txHash = log.transactionHash ?? "";
-          seenTx.add(txHash);
+          const txHash = normalizeWalletTransferTxHash(log.transactionHash);
+          seenLogs.add(getWalletTransferLogKey(log));
           transfers.push({
             direction: "out",
             counterparty: args.to,
@@ -240,8 +285,8 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
           if (args.to.toLowerCase() !== addr) continue;
           if (args.from.toLowerCase() === contractAddr) continue;
           if (!isDepositOrWithdrawal("in", args.from)) continue;
-          const txHash = log.transactionHash ?? "";
-          if (seenTx.has(txHash)) continue;
+          const txHash = normalizeWalletTransferTxHash(log.transactionHash);
+          if (seenLogs.has(getWalletTransferLogKey(log))) continue;
           const amountNum = toDisplayNumberWei(args.value);
           totalInWei += args.value;
           transfers.push({
@@ -272,6 +317,8 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
         transfers,
         totalIn: toDisplayNumberWei(totalInWei),
         totalOut: toDisplayNumberWei(totalOutWei),
+        totalInDisplay: toDisplayAmountWei(totalInWei),
+        totalOutDisplay: toDisplayAmountWei(totalOutWei),
       };
       cachedAtRef.current = Date.now();
       cachedForRef.current = cacheKey;
@@ -282,7 +329,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
     } catch {
       if (mountedRef.current && requestId === requestIdRef.current) {
         if (dataRef.current === null) {
-          setData({ transfers: [], totalIn: 0, totalOut: 0 });
+          setData(createEmptyWalletTransfersSummary());
         }
       }
     } finally {

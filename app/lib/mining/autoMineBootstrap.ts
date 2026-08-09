@@ -12,6 +12,65 @@ const APPROVE_ALLOWANCE_POLL_MS = 1_000;
 const APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS = 8_000;
 const APPROVE_PENDING_TIMEOUT_MS = 30_000;
 
+function computeBootstrapAllowancePollDeadline(now: number, timeoutMs: number): number | null {
+  if (
+    !Number.isSafeInteger(now) ||
+    !Number.isSafeInteger(timeoutMs) ||
+    now < 0 ||
+    timeoutMs <= 0 ||
+    timeoutMs > Number.MAX_SAFE_INTEGER - now
+  ) {
+    return null;
+  }
+  return now + timeoutMs;
+}
+
+function normalizeBootstrapApprovalNonce(value: unknown): number | null {
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    return Number(value);
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
+
+function getPendingApproveAgeMs(pendingApprove: PendingApproveState, now: number): number | null {
+  if (
+    !Number.isSafeInteger(now) ||
+    now < 0 ||
+    !Number.isSafeInteger(pendingApprove.submittedAt) ||
+    pendingApprove.submittedAt < 0 ||
+    pendingApprove.submittedAt > now + 5_000
+  ) {
+    return null;
+  }
+  return now - pendingApprove.submittedAt;
+}
+
+function assertPendingApproveReplacementReady(pendingApprove: PendingApproveState, waitMessage: string): void {
+  const pendingAgeMs = getPendingApproveAgeMs(pendingApprove, Date.now());
+  if (pendingAgeMs === null) {
+    throw new Error("Approval pending state is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
+  }
+  if (pendingAgeMs <= APPROVE_PENDING_TIMEOUT_MS) {
+    throw new Error(waitMessage);
+  }
+}
+
+function formatLineaWeiOneDecimal(rawValue: bigint): string {
+  const value = rawValue < 0n ? 0n : rawValue;
+  const weiPerLinea = 10n ** 18n;
+  const whole = value / weiPerLinea;
+  const remainder = value % weiPerLinea;
+  const roundedTenths = (remainder * 10n + weiPerLinea / 2n) / weiPerLinea;
+  if (roundedTenths >= 10n) {
+    return `${whole + 1n}.0`;
+  }
+  return `${whole}.${roundedTenths}`;
+}
+
 interface PrepareAutoMineBootstrapOptions {
   absoluteTotal: bigint;
   actorAddress: `0x${string}`;
@@ -77,9 +136,9 @@ export async function prepareAutoMineBootstrap({
   });
 
   if (initBalance < roundCost) {
-    const have = Number(initBalance) / 1e18;
-    const need = Number(roundCost) / 1e18;
-    await onCannotStart(`Cannot start: need ${need.toFixed(1)} LINEA per round, have ${have.toFixed(1)} LINEA`);
+    const have = formatLineaWeiOneDecimal(initBalance);
+    const need = formatLineaWeiOneDecimal(roundCost);
+    await onCannotStart(`Cannot start: need ${need} LINEA per round, have ${have} LINEA`);
     return false;
   }
 
@@ -114,8 +173,9 @@ export async function prepareAutoMineBootstrap({
     }), "bootstrap.allowance.refresh")) as bigint;
 
   const pollAllowanceUntil = async (timeoutMs: number) => {
-    const startedAt = Date.now();
-    while (autoMineActive() && Date.now() - startedAt < timeoutMs) {
+    const deadline = computeBootstrapAllowancePollDeadline(Date.now(), timeoutMs);
+    if (deadline === null) return false;
+    while (autoMineActive() && Date.now() < deadline) {
       try {
         if ((await readAllowance()) >= absoluteTotal) {
           clearPendingApprove();
@@ -141,12 +201,23 @@ export async function prepareAutoMineBootstrap({
     let approvalNonce: number | null = null;
     let enteredApprovalSendPhase = false;
     try {
-      approvalNonce = pendingApproveRef.current?.nonce ?? Number(
-        await withMiningRpcTimeout(publicClient.getTransactionCount({
+      if (pendingApproveRef.current) {
+        assertPendingApproveReplacementReady(
+          pendingApproveRef.current,
+          "Approval transaction is still pending. Wait for confirmation before auto-mine continues.",
+        );
+      }
+      const approvalNonceRaw = pendingApproveRef.current?.nonce ?? await withMiningRpcTimeout(
+        publicClient.getTransactionCount({
           address: actorAddress,
           blockTag: "latest",
-        }), "bootstrap.getTransactionCount"),
+        }),
+        "bootstrap.getTransactionCount",
       );
+      approvalNonce = normalizeBootstrapApprovalNonce(approvalNonceRaw);
+      if (approvalNonce === null) {
+        throw new Error("Approval nonce is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
+      }
       const silentSend = readSilentSend();
       const approveOverrides = await getUrgentFees();
       const writeApproveOverrides =
@@ -224,7 +295,10 @@ export async function prepareAutoMineBootstrap({
     if (pendingApproveRef.current) {
       const allowanceUpdated = await pollAllowanceUntil(APPROVE_PENDING_TIMEOUT_MS);
       if (allowanceUpdated) return true;
-      const pendingAgeMs = Date.now() - pendingApproveRef.current.submittedAt;
+      const pendingAgeMs = getPendingApproveAgeMs(pendingApproveRef.current, Date.now());
+      if (pendingAgeMs === null) {
+        throw new Error("Approval pending state is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
+      }
       throw new Error(
         pendingAgeMs > APPROVE_PENDING_TIMEOUT_MS
           ? "Approval transaction is still pending or underpriced. Retry once more to replace it."

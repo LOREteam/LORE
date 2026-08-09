@@ -102,7 +102,7 @@ export function buildHeaderProps({
   reducedMotion,
   isPageVisible,
   epochDurationChange,
-}: BuildHeaderPropsOptions): Omit<HeaderProps, "initialNowMs" | "realTotalStaked" | "linePath" | "chartHasData"> {
+}: BuildHeaderPropsOptions): Omit<HeaderProps, "initialNowMs" | "realTotalStaked" | "linePath"> {
   return {
     visualEpoch,
     isRevealing,
@@ -149,9 +149,6 @@ type BuildWalletShellPropsOptions = {
   isWithdrawingEth: WalletSettingsProps["isWithdrawingEth"];
   isDepositingEth: WalletSettingsProps["isDepositingEth"];
   isDepositingToken: WalletSettingsProps["isDepositingToken"];
-  isClearingEip7702Delegation: WalletSettingsProps["isClearingEip7702Delegation"];
-  embeddedWallet7702DelegateAddress: WalletSettingsProps["embeddedWallet7702DelegateAddress"];
-  embeddedWalletCodeChecking: WalletSettingsProps["embeddedWalletCodeChecking"];
   setWithdrawAmount: WalletSettingsProps["onWithdrawAmountChange"];
   setWithdrawEthAmount: WalletSettingsProps["onWithdrawEthAmountChange"];
   setDepositEthAmount: WalletSettingsProps["onDepositEthAmountChange"];
@@ -163,7 +160,6 @@ type BuildWalletShellPropsOptions = {
   handleWithdrawEthToExternal: WalletSettingsProps["onWithdrawEthToExternal"];
   handleDepositEthToEmbedded: WalletSettingsProps["onDepositEthToEmbedded"];
   handleDepositTokenToEmbedded: WalletSettingsProps["onDepositTokenToEmbedded"];
-  handleClearEip7702Delegation: WalletSettingsProps["onClearEip7702Delegation"];
   walletTransfers: WalletSettingsProps["walletTransfers"];
   walletTransfersLoading: WalletSettingsProps["walletTransfersLoading"];
   fetchWalletTransfers: WalletSettingsProps["onLoadWalletTransfers"];
@@ -192,9 +188,6 @@ type BuildWalletShellPropsOptions = {
   isCancellingPendingTx: WalletSettingsProps["isCancellingPendingTx"];
   refreshPendingTransactionStatus: WalletSettingsProps["onRefreshPendingTx"];
   cancelPendingTransaction: WalletSettingsProps["onCancelPendingTx"];
-  eip7702Diagnostic: WalletSettingsProps["eip7702Diagnostic"];
-  runEip7702Diagnostic: WalletSettingsProps["onRunEip7702Diagnostic"];
-  runEip7702SendDiagnostic: WalletSettingsProps["onRunEip7702SendDiagnostic"];
 };
 
 export function buildWalletShellProps({
@@ -216,9 +209,6 @@ export function buildWalletShellProps({
   isWithdrawingEth,
   isDepositingEth,
   isDepositingToken,
-  isClearingEip7702Delegation,
-  embeddedWallet7702DelegateAddress,
-  embeddedWalletCodeChecking,
   setWithdrawAmount,
   setWithdrawEthAmount,
   setDepositEthAmount,
@@ -230,7 +220,6 @@ export function buildWalletShellProps({
   handleWithdrawEthToExternal,
   handleDepositEthToEmbedded,
   handleDepositTokenToEmbedded,
-  handleClearEip7702Delegation,
   walletTransfers,
   walletTransfersLoading,
   fetchWalletTransfers,
@@ -259,9 +248,6 @@ export function buildWalletShellProps({
   isCancellingPendingTx,
   refreshPendingTransactionStatus,
   cancelPendingTransaction,
-  eip7702Diagnostic,
-  runEip7702Diagnostic,
-  runEip7702SendDiagnostic,
 }: BuildWalletShellPropsOptions): WalletShellProps {
   return {
     backupGateVersion,
@@ -288,9 +274,6 @@ export function buildWalletShellProps({
       isWithdrawingEth,
       isDepositingEth,
       isDepositingToken,
-      isClearingEip7702Delegation,
-      embeddedWallet7702DelegateAddress,
-      embeddedWalletCodeChecking,
       onWithdrawAmountChange: setWithdrawAmount,
       onWithdrawEthAmountChange: setWithdrawEthAmount,
       onDepositEthAmountChange: setDepositEthAmount,
@@ -303,7 +286,6 @@ export function buildWalletShellProps({
       onWithdrawEthToExternal: handleWithdrawEthToExternal,
       onDepositEthToEmbedded: handleDepositEthToEmbedded,
       onDepositTokenToEmbedded: handleDepositTokenToEmbedded,
-      onClearEip7702Delegation: handleClearEip7702Delegation,
       walletTransfers,
       walletTransfersLoading,
       onLoadWalletTransfers: fetchWalletTransfers,
@@ -332,9 +314,6 @@ export function buildWalletShellProps({
       isCancellingPendingTx,
       onRefreshPendingTx: refreshPendingTransactionStatus,
       onCancelPendingTx: cancelPendingTransaction,
-      eip7702Diagnostic,
-      onRunEip7702Diagnostic: runEip7702Diagnostic,
-      onRunEip7702SendDiagnostic: runEip7702SendDiagnostic,
     },
   };
 }

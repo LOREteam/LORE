@@ -1,12 +1,25 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useState } from "react";
 import type { TabId } from "../lib/types";
 import { useDialogFocusTrap } from "../hooks/useDialogFocusTrap";
 import { UiButton } from "./ui/UiButton";
 import { UiPanel } from "./ui/UiPanel";
 
 const FIRST_VISIT_TUTORIAL_KEY = "lore:first-visit-tutorial:v1";
+
+function readTutorialDismissed(): boolean {
+  if (typeof window === "undefined") return false;
+  const dismissed = window.localStorage.getItem(FIRST_VISIT_TUTORIAL_KEY);
+  if (dismissed === null) return false;
+  if (dismissed === "1") return true;
+  if (dismissed === "true") {
+    window.localStorage.setItem(FIRST_VISIT_TUTORIAL_KEY, "1");
+    return true;
+  }
+  window.localStorage.removeItem(FIRST_VISIT_TUTORIAL_KEY);
+  return false;
+}
 
 type TutorialStep = {
   eyebrow: string;
@@ -78,7 +91,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
     body: "Beyond direct wins, the app tracks consolation payouts for missed rounds and on-chain rankings.",
     bullets: [
       "Safety Pool shows claimable LINEA from epochs where you played but missed the winning tile.",
-      "Leaderboards rank biggest wins, ROI, most wins, whales, and the most successful tile.",
+      "Leaderboards rank biggest wins, luck ratio, most wins, whales, and the most successful tile.",
       "These tabs are most useful once you have played enough rounds to build history.",
     ],
     tab: "rebate",
@@ -104,6 +117,9 @@ interface FirstVisitTutorialProps {
 export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutorialProps) {
   const [visible, setVisible] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
+  const titleId = useId();
+  const stepTitleId = useId();
+  const descriptionId = useId();
 
   useEffect(() => {
     try {
@@ -115,8 +131,7 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
         setVisible(false);
         return;
       }
-      const dismissed = window.localStorage.getItem(FIRST_VISIT_TUTORIAL_KEY);
-      if (!dismissed) {
+      if (!readTutorialDismissed()) {
         setVisible(true);
       }
     } catch {
@@ -172,15 +187,17 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
         role="dialog"
         tabIndex={-1}
         aria-modal="true"
-        aria-label="First visit tutorial"
+        aria-labelledby={titleId}
+        aria-describedby={`${stepTitleId} ${descriptionId}`}
       >
+        <h2 id={titleId} className="sr-only">First visit tutorial</h2>
         <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.24em] text-violet-300/80">
               {currentStep.eyebrow}
             </div>
-            <h2 className="text-xl font-black text-white md:text-2xl">{currentStep.title}</h2>
-            <p className="mt-2 max-w-xl text-sm leading-relaxed text-slate-300 md:text-[15px]">
+            <h3 id={stepTitleId} className="text-xl font-black text-white md:text-2xl">{currentStep.title}</h3>
+            <p id={descriptionId} className="mt-2 max-w-xl text-sm leading-relaxed text-slate-300 md:text-[15px]">
               {currentStep.body}
             </p>
           </div>
@@ -195,7 +212,14 @@ export function FirstVisitTutorial({ activeTab, onTabChange }: FirstVisitTutoria
             <span>Step {stepIndex + 1} / {TUTORIAL_STEPS.length}</span>
             <span>{activeTab}</span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-white/6">
+          <div
+            role="progressbar"
+            aria-label="Tutorial progress"
+            aria-valuemin={1}
+            aria-valuemax={TUTORIAL_STEPS.length}
+            aria-valuenow={stepIndex + 1}
+            className="h-2 overflow-hidden rounded-full bg-white/6"
+          >
             <div
               className="h-full rounded-full bg-linear-to-r from-violet-500 via-fuchsia-500 to-sky-400 transition-[width] duration-300"
               style={{ width: `${progressPct}%` }}

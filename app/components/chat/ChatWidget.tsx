@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import { useChatWidgetRuntime } from "../../hooks/useChatWidgetRuntime";
 import { ChatWindow } from "./ChatWindow";
 
+const CHAT_PANEL_ID = "lore-chat-panel";
+
 interface Props {
   walletAddress: string | null;
   onOpenChange?: (open: boolean) => void;
@@ -54,9 +56,12 @@ export const ChatWidget = React.memo(function ChatWidget({ walletAddress, onOpen
 
       {/* Chat toggle button (positioned by parent floating container) */}
       <button
+        type="button"
         onClick={handleToggle}
         className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-violet-300/18 bg-violet-600 shadow-lg shadow-violet-500/20 transition-all duration-200 hover:-translate-y-0.5 hover:bg-violet-500 hover:shadow-violet-500/28 active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
         aria-label={open ? "Close chat" : "Open chat"}
+        aria-controls={CHAT_PANEL_ID}
+        aria-expanded={open}
         title={open ? "Close chat" : "Open chat"}
       >
         {open ? (

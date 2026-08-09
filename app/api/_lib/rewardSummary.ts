@@ -1,8 +1,9 @@
-import { formatUnits, parseAbi } from "viem";
+import { formatUnits, getAddress, parseAbi } from "viem";
 import { CONTRACT_ADDRESS, isSafePositiveInteger, publicClient } from "./dataBridge";
 import { parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import { getEpochMapByIds, upsertEpochMap } from "../../../server/storage";
 import { createRouteCache } from "./routeCache";
+import { parseStoredPositiveIntegerOrZero } from "./storedNumberParsing";
 
 const READ_ABI = parseAbi([
   "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
@@ -14,6 +15,7 @@ const MULTICALL_CHUNK = 100;
 const MAX_EPOCHS_PER_REQUEST = 400;
 const REWARD_SUMMARY_CACHE_TTL_MS = 30_000;
 const REWARD_SUMMARY_CACHE_MAX_KEYS = 200;
+const MAX_TILE_ID = 25;
 
 export type RewardEpochRow = {
   winningTile: number;
@@ -48,7 +50,23 @@ type RewardEpochRuntimeRow = {
 const rewardSummaryCache = createRouteCache<RewardMapsForUserEpochs>(REWARD_SUMMARY_CACHE_MAX_KEYS);
 
 function getRewardSummaryCacheKey(user: string, epochs: number[]) {
-  return `${user.toLowerCase()}:${epochs.join(",")}`;
+  return `${getAddress(user).toLowerCase()}:${epochs.join(",")}`;
+}
+
+function parseRewardTileNumber(value: bigint | number): number | null {
+  let parsed: number;
+  if (typeof value === "bigint") {
+    if (value <= 0n || value > BigInt(MAX_TILE_ID)) return null;
+    parsed = Number(value);
+  } else {
+    parsed = value;
+  }
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_TILE_ID ? parsed : null;
+}
+
+function parseRewardEpochKey(value: string): number | null {
+  const parsed = parseStoredPositiveIntegerOrZero(value);
+  return parsed > 0 ? parsed : null;
 }
 
 async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpochRuntimeRow>> {
@@ -62,9 +80,10 @@ async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpo
 
   for (const epoch of normalizedEpochs) {
     const stored = storedRows[String(epoch)];
-    if (stored && stored.winningTile > 0) {
+    const storedWinningTile = stored ? parseRewardTileNumber(stored.winningTile) : null;
+    if (stored && storedWinningTile !== null) {
       epochRows[String(epoch)] = {
-        winningTile: stored.winningTile,
+        winningTile: storedWinningTile,
         totalPool: stored.totalPool,
         rewardPool: stored.rewardPool,
         rewardPoolWei: parseLineaAmountWei(stored.rewardPool),
@@ -101,10 +120,10 @@ async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpo
       const isResolved = Boolean(row[3]);
       const totalPool = row[0];
       const rewardPool = row[1];
-      const winningTile = row[2];
-      if (!isResolved || rewardPool <= 0n || winningTile <= 0n) return;
+      const winningTile = parseRewardTileNumber(row[2]);
+      if (!isResolved || rewardPool <= 0n || winningTile === null) return;
       const recovered = {
-        winningTile: Number(winningTile),
+        winningTile,
         totalPool: formatUnits(totalPool, 18),
         rewardPool: formatUnits(rewardPool, 18),
         rewardPoolWei: rewardPool,
@@ -133,7 +152,7 @@ export async function loadRewardMapsForUserEpochs(
   user: string,
   epochs: number[],
 ): Promise<RewardMapsForUserEpochs> {
-  const normalizedUser = user.toLowerCase() as `0x${string}`;
+  const normalizedUser = getAddress(user).toLowerCase() as `0x${string}`;
   const normalizedEpochs = [...new Set(
     epochs.filter(isSafePositiveInteger),
   )].slice(0, MAX_EPOCHS_PER_REQUEST);
@@ -155,12 +174,16 @@ export async function loadRewardMapsForUserEpochs(
   const task: Promise<RewardMapsForUserEpochs> = (async (): Promise<RewardMapsForUserEpochs> => {
     const epochMap = await loadEpochRows(normalizedEpochs);
     const winningEpochs = Object.entries(epochMap)
-      .map(([epoch, row]) => ({
-        epoch: Number(epoch),
-        winningTile: BigInt(row.winningTile),
-        rewardPool: row.rewardPool,
-      }))
-      .filter((row) => isSafePositiveInteger(row.epoch));
+      .flatMap(([epoch, row]) => {
+        const parsedEpoch = parseRewardEpochKey(epoch);
+        return parsedEpoch !== null && isSafePositiveInteger(parsedEpoch)
+          ? [{
+              epoch: parsedEpoch,
+              winningTile: BigInt(row.winningTile),
+              rewardPool: row.rewardPool,
+            }]
+          : [];
+      });
 
     const rewards: Record<string, RewardRow> = {};
     const serializedEpochs: Record<string, RewardEpochRow> = Object.fromEntries(
@@ -210,7 +233,7 @@ export async function loadRewardMapsForUserEpochs(
         const reward = (sourceEpoch.rewardPoolWei * userWinningAmount) / winningTilePool;
         rewards[String(entry.epoch)] = {
           reward: formatUnits(reward, 18),
-          winningTile: Number(entry.winningTile),
+          winningTile: sourceEpoch.winningTile,
           rewardPool: entry.rewardPool,
           winningTilePool: formatUnits(winningTilePool, 18),
           userWinningAmount: formatUnits(userWinningAmount, 18),

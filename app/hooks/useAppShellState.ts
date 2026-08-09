@@ -3,19 +3,44 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { TabId } from "../lib/types";
 import type { NoticeItem, NoticeTone } from "../components/NoticeStack";
+import { GRID_SIZE } from "../lib/constants";
 import { log } from "../lib/logger";
 
 const VALID_TABS: TabId[] = ["hub", "analytics", "rebate", "leaderboards", "whitepaper", "faq"];
 const HOT_TILES_STORAGE_KEY = "lore:hot-tiles:v1";
 const ACTIVE_TAB_STORAGE_KEY = "lore:active-tab:v1";
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 type HotTile = { tileId: number; wins: number };
+
+function parsePositiveSafeInteger(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+  }
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return null;
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(parsed);
+}
+
+export function normalizeCachedHotTile(item: unknown): HotTile | null {
+  if (!item || typeof item !== "object") return null;
+  const value = item as Record<string, unknown>;
+  const tileId = parsePositiveSafeInteger(value.tileId);
+  const wins = parsePositiveSafeInteger(value.wins);
+  if (tileId === null || tileId > GRID_SIZE) return null;
+  if (wins === null) return null;
+  return { tileId, wins };
+}
 
 function loadSavedTab(): TabId | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
-    return VALID_TABS.includes(raw as TabId) ? (raw as TabId) : null;
+    if (raw === null) return null;
+    if (VALID_TABS.includes(raw as TabId)) return raw as TabId;
+    window.localStorage.removeItem(ACTIVE_TAB_STORAGE_KEY);
+    return null;
   } catch {
     return null;
   }
@@ -45,19 +70,20 @@ function loadCachedHotTiles(): HotTile[] {
     const raw = window.localStorage.getItem(HOT_TILES_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown[];
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) {
+      window.localStorage.removeItem(HOT_TILES_STORAGE_KEY);
+      return [];
+    }
     return parsed
-      .map((item) => {
-        const value = (item ?? {}) as Record<string, unknown>;
-        const tileId = Number(value.tileId);
-        const wins = Number(value.wins);
-        if (!Number.isInteger(tileId) || tileId <= 0) return null;
-        if (!Number.isInteger(wins) || wins <= 0) return null;
-        return { tileId, wins };
-      })
+      .map(normalizeCachedHotTile)
       .filter((item): item is HotTile => item !== null)
       .slice(0, 5);
   } catch {
+    try {
+      window.localStorage.removeItem(HOT_TILES_STORAGE_KEY);
+    } catch {
+      // ignore storage failures
+    }
     return [];
   }
 }
@@ -74,7 +100,7 @@ export function useAppShellState() {
   const noticeTimeoutsRef = useRef<Map<number, number>>(new Map());
 
   useEffect(() => {
-    log.info("App", "mounted", { url: window.location.href, time: new Date().toISOString() });
+    log.info("App", "mounted", { path: window.location.pathname, tab: readHashTab(), time: new Date().toISOString() });
     const syncFromHash = () => {
       setActiveTab((current) => {
         const next = readHashTab();
@@ -124,7 +150,15 @@ export function useAppShellState() {
   }, []);
 
   const syncHotTiles = useCallback((hotTiles: HotTile[]) => {
-    if (hotTiles.length === 0) return;
+    if (hotTiles.length === 0) {
+      setVisibleHotTiles((current) => (current.length === 0 ? current : []));
+      try {
+        window.localStorage.removeItem(HOT_TILES_STORAGE_KEY);
+      } catch {
+        // ignore storage write failures
+      }
+      return;
+    }
     setVisibleHotTiles((current) => {
       const unchanged =
         current.length === hotTiles.length &&

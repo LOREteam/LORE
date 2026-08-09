@@ -115,6 +115,7 @@ export function MobileTabNav({ activeTab, onTabChange }: MobileTabNavProps) {
             const active = activeTab === tab;
             return (
               <button
+                type="button"
                 key={tab}
                 onClick={() => onTabChange(tab)}
                 aria-label={title}

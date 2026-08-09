@@ -7,7 +7,6 @@ import { UiButton } from "../ui/UiButton";
 const EMPTY_POOL_LINE_PATH = "M 1,57 C 14,57 14,56 27,56 C 40,56 40,57 53,57 C 66,57 66,55 79,55 C 90,55 90,56 99,56";
 
 interface HeaderPoolChartProps {
-  chartHasData: boolean;
   coldBootDefaults?: boolean;
   hydrated?: boolean;
   linePath: string;
@@ -123,7 +122,13 @@ export function HeaderPoolChart({
         <line x1="16%" y1="0" x2="16%" y2="100%" stroke="rgba(148,163,184,0.08)" strokeWidth="1" />
       </svg>
 
-      <div className="absolute inset-y-0 left-[7.55rem] right-0 sm:left-[9.7rem] min-[900px]:left-[16%]">
+      <div
+        className="absolute inset-y-0 left-[7.55rem] right-0 sm:left-[9.7rem] min-[900px]:left-[16%]"
+        data-testid="header-pool-chart-visual"
+        data-empty-pool={realTotalStaked <= 0 ? "true" : "false"}
+        role="img"
+        aria-label={realTotalStaked <= 0 ? "Pool chart empty state" : "Pool activity chart"}
+      >
         {showChartVisual && (
           <>
             <Image

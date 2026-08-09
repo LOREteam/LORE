@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { GRID_SIZE } from "../lib/constants";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS, GRID_SIZE } from "../lib/constants";
 import { safeParseFloat, validateBetAmount } from "../lib/utils";
+import { MAX_AUTO_MINER_CYCLES } from "./useMining.shared";
 
-const AUTOMINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
-export const MAX_AUTO_MINER_CYCLES = 5000;
+const LEGACY_AUTOMINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
+const AUTOMINER_INPUTS_KEY = `lineaore:auto-miner-inputs:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 const DEFAULT_AUTO_MINER_INPUTS = {
   betSize: "1.0",
   targets: 3,
@@ -53,8 +54,6 @@ export function useAutoMinerForm({
   isAutoMining,
   isPending,
   isRevealing,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  isAnalyzing: _isAnalyzing = false,
   liveStateReady = true,
   readOnlyReason = null,
   formattedBalance,
@@ -69,18 +68,34 @@ export function useAutoMinerForm({
   useEffect(() => {
     try {
       const raw = typeof window !== "undefined" ? window.localStorage.getItem(AUTOMINER_INPUTS_KEY) : null;
-      if (raw != null) {
-        const data = sanitizeAutoMinerInputs(JSON.parse(raw));
+      const legacyRaw = raw == null && typeof window !== "undefined"
+        ? window.localStorage.getItem(LEGACY_AUTOMINER_INPUTS_KEY)
+        : null;
+      const selectedRaw = raw ?? legacyRaw;
+      if (selectedRaw != null) {
+        const data = sanitizeAutoMinerInputs(JSON.parse(selectedRaw));
         setBetSize(data.betSize);
         setTargets(data.targets);
         setCycles(data.cycles);
+        if (raw == null && legacyRaw != null) window.localStorage.removeItem(LEGACY_AUTOMINER_INPUTS_KEY);
       }
-    } catch {}
+    } catch {
+      try {
+        window.localStorage.removeItem(AUTOMINER_INPUTS_KEY);
+        window.localStorage.removeItem(LEGACY_AUTOMINER_INPUTS_KEY);
+      } catch {
+        // ignore storage failures
+      }
+    }
   }, []);
 
   useEffect(() => {
     try {
       if (typeof window !== "undefined") {
+        if (validateBetAmount(betSize) !== null) {
+          window.localStorage.removeItem(AUTOMINER_INPUTS_KEY);
+          return;
+        }
         window.localStorage.setItem(AUTOMINER_INPUTS_KEY, JSON.stringify({ betSize, targets, cycles }));
       }
     } catch {}

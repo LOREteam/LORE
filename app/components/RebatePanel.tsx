@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { formatDecimalTextFixed } from "../lib/balanceFormatting";
 import { UiButton } from "./ui/UiButton";
 import { UiPanel } from "./ui/UiPanel";
 import { uiTokens } from "./ui/tokens";
@@ -36,8 +37,7 @@ interface RebatePanelProps {
 }
 
 function formatRebateAmount(value: string | null | undefined): string {
-  const parsed = Number.parseFloat(String(value ?? ""));
-  return Number.isFinite(parsed) ? parsed.toFixed(4) : "0.0000";
+  return formatDecimalTextFixed(String(value ?? "").trim(), 4) ?? "0.0000";
 }
 
 export const RebatePanel = React.memo(function RebatePanel({
@@ -59,6 +59,17 @@ export const RebatePanel = React.memo(function RebatePanel({
   const isLoadingOlder = rebateInfo?.isLoadingOlder ?? false;
   const hasMoreOlder = rebateInfo?.hasMoreOlder ?? false;
   const showInitialSkeleton = isLoading && !hasLoaded;
+  const claimDisabledReason = !isSupported
+    ? "Safety Pool claims are disabled for this contract profile."
+    : !hasClaimable
+      ? "No claimable Safety Pool epochs are available yet."
+      : null;
+  const claimActionLabel = claimDisabledReason
+    ?? (isClaiming
+      ? "Safety Pool claim is already pending"
+      : isBelowClaimMinimum && smallClaimConfirmed
+        ? "Claim Safety Pool rebates anyway"
+        : "Claim Safety Pool rebates");
   const freshnessMessage =
     rebateInfo?.dataFreshness === "offline"
       ? "Showing last loaded Safety Pool data. Refresh failed and will retry automatically."
@@ -114,7 +125,12 @@ export const RebatePanel = React.memo(function RebatePanel({
                   <div className="h-8 w-14 rounded-full bg-sky-500/10" />
                 </div>
               </div>
-              <div className="rounded-xl border border-white/6 bg-white/3 px-4 py-3 text-center text-sm text-gray-500">
+              <div
+                role="status"
+                aria-live="polite"
+                aria-busy="true"
+                className="rounded-xl border border-white/6 bg-white/3 px-4 py-3 text-center text-sm text-gray-500"
+              >
                 Loading Safety Pool ledger...
               </div>
             </div>
@@ -139,6 +155,9 @@ export const RebatePanel = React.memo(function RebatePanel({
                 </div>
               </div>
               <UiButton
+                aria-label={claimActionLabel}
+                aria-describedby={claimDisabledReason ? "rebate-claim-disabled-reason" : undefined}
+                title={claimActionLabel}
                 onClick={handleClaim}
                 loading={isClaiming}
                 disabled={!hasClaimable || !isSupported}
@@ -152,10 +171,15 @@ export const RebatePanel = React.memo(function RebatePanel({
                   ? "Claiming..."
                   : isBelowClaimMinimum && smallClaimConfirmed
                     ? "Claim anyway"
-                    : hasClaimable
+                  : hasClaimable
                       ? "Claim Safety Pool"
                       : "Nothing to claim"}
               </UiButton>
+              {claimDisabledReason ? (
+                <p id="rebate-claim-disabled-reason" className="mt-3 text-xs leading-relaxed text-gray-500">
+                  {claimDisabledReason}
+                </p>
+              ) : null}
               {hasClaimable && isBelowClaimMinimum ? (
                 <p className="mt-3 text-xs leading-relaxed text-gray-500" aria-live="polite">
                   {smallClaimConfirmed
@@ -169,7 +193,7 @@ export const RebatePanel = React.memo(function RebatePanel({
                 </p>
               ) : null}
               {isLoading && hasLoaded ? (
-                <p className="mt-3 text-xs leading-relaxed text-gray-500">
+                <p className="mt-3 text-xs leading-relaxed text-gray-500" role="status" aria-live="polite">
                   Refreshing Safety Pool ledger in background...
                 </p>
               ) : null}

@@ -31,16 +31,31 @@ export function isChunkLoadLikeErrorMessage(message: string): boolean {
   );
 }
 
+function normalizeChunkReloadNow(now: number): number | null {
+  return Number.isSafeInteger(now) && now >= 0 ? now : null;
+}
+
+function parseStoredChunkReloadAt(value: string | null, now: number): number | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (!/^(?:0|[1-9]\d{0,15})$/.test(trimmed)) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed) || parsed > now) return null;
+  return parsed;
+}
+
 export function shouldAttemptChunkReloadOnce(
   storage: StorageLike | null | undefined,
   now: number = Date.now(),
 ): boolean {
   if (!storage) return true;
+  const currentNow = normalizeChunkReloadNow(now);
+  if (currentNow === null) return false;
   const raw = storage.getItem(CHUNK_RELOAD_KEY);
-  const lastAt = raw === null ? Number.NaN : Number(raw);
-  const alreadyRetried = Number.isFinite(lastAt) && now - lastAt < CHUNK_RELOAD_WINDOW_MS;
+  const lastAt = parseStoredChunkReloadAt(raw, currentNow);
+  const alreadyRetried = lastAt !== null && currentNow - lastAt < CHUNK_RELOAD_WINDOW_MS;
   if (alreadyRetried) return false;
-  storage.setItem(CHUNK_RELOAD_KEY, String(now));
+  storage.setItem(CHUNK_RELOAD_KEY, String(currentNow));
   return true;
 }
 
@@ -49,9 +64,14 @@ export function clearExpiredChunkReloadAttempt(
   now: number = Date.now(),
 ) {
   if (!storage) return;
+  const currentNow = normalizeChunkReloadNow(now);
+  if (currentNow === null) {
+    storage.removeItem(CHUNK_RELOAD_KEY);
+    return;
+  }
   const raw = storage.getItem(CHUNK_RELOAD_KEY);
-  const lastAt = raw === null ? Number.NaN : Number(raw);
-  if (!Number.isFinite(lastAt) || now - lastAt >= CHUNK_RELOAD_WINDOW_MS) {
+  const lastAt = parseStoredChunkReloadAt(raw, currentNow);
+  if (lastAt === null || currentNow - lastAt >= CHUNK_RELOAD_WINDOW_MS) {
     storage.removeItem(CHUNK_RELOAD_KEY);
   }
 }
@@ -59,8 +79,9 @@ export function clearExpiredChunkReloadAttempt(
 export function reloadWithCacheBust(locationLike: LocationLike, now: number = Date.now()) {
   try {
     const url = new URL(locationLike.href);
+    const currentNow = normalizeChunkReloadNow(now) ?? normalizeChunkReloadNow(Date.now()) ?? 0;
     url.searchParams.delete(LEGACY_CHUNK_RELOAD_PARAM);
-    url.searchParams.set(CHUNK_RELOAD_PARAM, String(now));
+    url.searchParams.set(CHUNK_RELOAD_PARAM, String(currentNow));
     locationLike.replace(url.toString());
   } catch {
     locationLike.reload();

@@ -26,16 +26,27 @@ const DEFAULT_SOUND_SETTINGS: Record<SoundName, boolean> = {
 };
 
 function loadSoundSettings(): Record<SoundName, boolean> {
+  if (typeof localStorage === "undefined") return { ...DEFAULT_SOUND_SETTINGS };
   try {
-    const raw = typeof window !== "undefined" ? localStorage.getItem(SOUND_SETTINGS_KEY) : null;
+    const raw = localStorage.getItem(SOUND_SETTINGS_KEY);
     if (!raw) return { ...DEFAULT_SOUND_SETTINGS };
-    const obj = JSON.parse(raw);
+    const obj = JSON.parse(raw) as unknown;
+    if (!obj || typeof obj !== "object") {
+      localStorage.removeItem(SOUND_SETTINGS_KEY);
+      return { ...DEFAULT_SOUND_SETTINGS };
+    }
     const out = { ...DEFAULT_SOUND_SETTINGS };
+    const settings = obj as Partial<Record<SoundName, unknown>>;
     for (const k of Object.keys(out) as SoundName[]) {
-      if (typeof obj[k] === "boolean") out[k] = obj[k];
+      if (typeof settings[k] === "boolean") out[k] = settings[k];
     }
     return out;
   } catch {
+    try {
+      localStorage.removeItem(SOUND_SETTINGS_KEY);
+    } catch {
+      // ignore storage cleanup failures
+    }
     return { ...DEFAULT_SOUND_SETTINGS };
   }
 }
@@ -64,6 +75,7 @@ export function useSound() {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored === "false") setMuted(false);
+      else if (stored !== null && stored !== "true") localStorage.removeItem(STORAGE_KEY);
     } catch {}
   }, []);
 

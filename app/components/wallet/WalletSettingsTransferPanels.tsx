@@ -43,6 +43,8 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
   onWithdrawEthToExternal,
   onLoadWalletTransfers,
 }: WalletSettingsTransferPanelsProps) {
+  const transferHistoryLoadLabel = walletTransfersLoading ? "Loading LINEA transfer history" : "Load LINEA transfer history";
+
   return (
     <>
       <UiPanel tone="default" className="animate-slide-up" style={{ animationDelay: "0.15s" }}>
@@ -92,41 +94,50 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
           )}
 
           {walletTransfers === null ? (
-            <UiButton
-              onClick={onLoadWalletTransfers}
-              disabled={walletTransfersLoading}
-              variant="secondary"
-              size="md"
-              uppercase
-              fullWidth
-              loading={walletTransfersLoading}
-              className="text-[10px]"
-            >
-              {walletTransfersLoading ? "Loading..." : "Load History"}
-            </UiButton>
+            <>
+              {walletTransfersLoading && (
+                <span className="sr-only" role="status" aria-live="polite">
+                  {transferHistoryLoadLabel}
+                </span>
+              )}
+              <UiButton
+                onClick={onLoadWalletTransfers}
+                disabled={walletTransfersLoading}
+                variant="secondary"
+                size="md"
+                uppercase
+                fullWidth
+                loading={walletTransfersLoading}
+                className="text-[10px]"
+                aria-label={transferHistoryLoadLabel}
+                title={transferHistoryLoadLabel}
+              >
+                {walletTransfersLoading ? "Loading..." : "Load History"}
+              </UiButton>
+            </>
           ) : (
             <>
               <div className="flex gap-3 mb-3">
                 <div className="flex-1 rounded-lg bg-emerald-500/6 border border-emerald-500/20 p-2.5 text-center">
                   <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Deposited</div>
-                  <div className="lore-nums text-sm font-bold text-emerald-400">{walletTransfers.totalIn.toFixed(2)}</div>
+                  <div className="lore-nums text-sm font-bold text-emerald-400">{walletTransfers.totalInDisplay}</div>
                   <div className="text-[9px] text-gray-400">LINEA</div>
                 </div>
                 <div className="flex-1 rounded-lg bg-red-500/6 border border-red-500/20 p-2.5 text-center">
                   <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Withdrawn</div>
-                  <div className="lore-nums text-sm font-bold text-red-400">{walletTransfers.totalOut.toFixed(2)}</div>
+                  <div className="lore-nums text-sm font-bold text-red-400">{walletTransfers.totalOutDisplay}</div>
                   <div className="text-[9px] text-gray-400">LINEA</div>
                 </div>
               </div>
 
               {walletTransfers.transfers.length > 0 ? (
-                <div className="max-h-[180px] overflow-y-auto rounded-lg border border-white/4 divide-y divide-white/4">
+                <div role="list" aria-label="LINEA transfer history" className="max-h-[180px] overflow-y-auto rounded-lg border border-white/4 divide-y divide-white/4">
                   {walletTransfers.transfers.map((transfer, index) => (
                     <WalletTransferHistoryRow key={`${transfer.txHash}-${index}`} transfer={transfer} />
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-3 text-[10px] text-gray-400 italic">No ore has moved through these tunnels.</div>
+                <div role="status" aria-live="polite" className="text-center py-3 text-[10px] text-gray-400 italic">No ore has moved through these tunnels.</div>
               )}
             </>
           )}
@@ -143,9 +154,10 @@ const WalletTransferHistoryRow = React.memo(function WalletTransferHistoryRow({
 }) {
   const isInbound = transfer.direction === "in";
   const txUrl = getExplorerTxUrl(transfer.txHash);
+  const explorerLabel = `Open ${isInbound ? "inbound" : "outbound"} LINEA transfer on Lineascan`;
 
   return (
-    <div className="flex items-center justify-between px-3 py-2 hover:bg-white/2">
+    <div role="listitem" className="flex items-center justify-between px-3 py-2 hover:bg-white/2">
       <div className="flex items-center gap-2">
         <span className={`text-[10px] font-bold uppercase tracking-wider ${isInbound ? "text-emerald-400" : "text-red-400"}`}>
           {isInbound ? "IN" : "OUT"}
@@ -155,6 +167,8 @@ const WalletTransferHistoryRow = React.memo(function WalletTransferHistoryRow({
             href={txUrl}
             target="_blank"
             rel="noopener noreferrer"
+            aria-label={explorerLabel}
+            title={explorerLabel}
             className="text-[9px] font-mono text-violet-400/50 hover:text-violet-400 transition-colors"
           >
             {transfer.txHash.slice(0, 8)}...{transfer.txHash.slice(-4)}

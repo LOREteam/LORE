@@ -3,16 +3,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { APP_CHAIN_ID } from "../../../lib/constants";
 import {
   CHAT_AUTH_PROOF_TTL_MS,
+  getChatAuthProofTtlMs,
   isChatAuthIssuedAtValid,
+  normalizeChatAuthAddress,
   parseChatAuthMessage,
 } from "../../../lib/chatAuth";
 import { publicClient } from "../../_lib/dataBridge";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { logRouteError } from "../../_lib/routeError";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
+import { acquireExternalExpiringLock, requiresExternalSharedLock } from "../../_lib/externalRateLimit";
 import { clearChatSession, issueChatSession, readChatSession } from "../../_lib/chatSession";
 import { acquireExpiringLock } from "../../../../server/storage";
 import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
+import { getTrustedAuthOrigin, isTrustedAuthUri } from "../../_lib/trustedAuthOrigin";
 
 const MAX_REQUEST_BODY_BYTES = 8_192;
 
@@ -21,10 +25,6 @@ type ChatAuthPayload = {
   authMessage?: unknown;
   authSignature?: unknown;
 };
-
-function isAddress(value: unknown): value is `0x${string}` {
-  return typeof value === "string" && /^0x[a-fA-F0-9]{40}$/.test(value);
-}
 
 function buildProofKey(address: string, nonce: string, uri: string) {
   return createHash("sha256")
@@ -46,6 +46,23 @@ async function verifyChatSignature(address: `0x${string}`, message: string, sign
   });
 }
 
+async function consumeChatProof(
+  address: string,
+  nonce: string,
+  uri: string,
+  signature: string,
+  ttlMs: number,
+) {
+  const proofKey = buildProofKey(address, nonce, uri);
+  if (requiresExternalSharedLock()) {
+    return acquireExternalExpiringLock(`chat-auth:${proofKey}`, ttlMs);
+  }
+  return [
+    buildLegacyProofKey(address, nonce, signature),
+    proofKey,
+  ].every((key) => acquireExpiringLock(`chat-auth:${key}`, nonce, ttlMs));
+}
+
 export async function POST(request: NextRequest) {
   const rateLimited = await enforceSharedRateLimit(request, {
     bucket: "api-chat-auth",
@@ -59,16 +76,19 @@ export async function POST(request: NextRequest) {
     if (!parsedBody.ok && parsedBody.reason === "too-large") {
       return applyNoStoreHeaders(NextResponse.json({ error: "Auth payload too large" }, { status: 413 }), { varyCookie: true });
     }
+    if (!parsedBody.ok && parsedBody.reason === "unsupported-content-type") {
+      return applyNoStoreHeaders(NextResponse.json({ error: "Auth payload must be JSON" }, { status: 415 }), { varyCookie: true });
+    }
     const body = parsedBody.ok ? parsedBody.value : null;
     if (!body || typeof body !== "object") {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth payload" }, { status: 400 }), { varyCookie: true });
     }
 
-    const authAddress = typeof body.authAddress === "string" ? body.authAddress.toLowerCase() : "";
+    const authAddress = normalizeChatAuthAddress(body.authAddress);
     const authMessage = typeof body.authMessage === "string" ? body.authMessage : "";
     const authSignature = typeof body.authSignature === "string" ? body.authSignature : "";
 
-    if (!isAddress(authAddress)) {
+    if (!authAddress) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth address" }, { status: 400 }), { varyCookie: true });
     }
     if (!/^0x[a-fA-F0-9]{128,130}$/.test(authSignature)) {
@@ -83,14 +103,8 @@ export async function POST(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth chain" }, { status: 400 }), { varyCookie: true });
     }
 
-    const requestOrigin = new URL(request.url).origin;
-    let messageOrigin = "";
-    try {
-      messageOrigin = new URL(fields.uri).origin;
-    } catch {
-      return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth origin" }, { status: 400 }), { varyCookie: true });
-    }
-    if (messageOrigin !== requestOrigin) {
+    const trustedOrigin = getTrustedAuthOrigin(request.url);
+    if (!trustedOrigin || !isTrustedAuthUri(fields.uri, trustedOrigin, "/chat")) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth origin" }, { status: 400 }), { varyCookie: true });
     }
     if (!isChatAuthIssuedAtValid(fields.issuedAt, Date.now(), CHAT_AUTH_PROOF_TTL_MS)) {
@@ -102,13 +116,11 @@ export async function POST(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Signature verification failed" }, { status: 401 }), { varyCookie: true });
     }
 
-    const proofKeys = [
-      buildLegacyProofKey(authAddress, fields.nonce, authSignature),
-      buildProofKey(authAddress, fields.nonce, fields.uri),
-    ];
-    const issuedAtMs = Date.parse(fields.issuedAt);
-    const ttlMs = Math.max(1, CHAT_AUTH_PROOF_TTL_MS - (Date.now() - issuedAtMs));
-    const consumed = proofKeys.every((proofKey) => acquireExpiringLock(`chat-auth:${proofKey}`, fields.nonce, ttlMs));
+    const ttlMs = getChatAuthProofTtlMs(fields.issuedAt);
+    if (ttlMs === null) {
+      return applyNoStoreHeaders(NextResponse.json({ error: "Expired auth proof" }, { status: 401 }), { varyCookie: true });
+    }
+    const consumed = await consumeChatProof(authAddress, fields.nonce, fields.uri, authSignature, ttlMs);
     if (!consumed) {
       const response = applyNoStoreHeaders(NextResponse.json({ error: "Auth proof already used" }, { status: 409 }), { varyCookie: true });
       clearChatSession(response);

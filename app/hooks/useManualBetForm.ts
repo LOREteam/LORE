@@ -2,10 +2,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
+import { formatDecimalTextFixed } from "../lib/balanceFormatting";
 import { safeParseFloat, validateBetAmount } from "../lib/utils";
 
 const LEGACY_MANUAL_BET_AMOUNT_KEY = "lineaore:manual-bet-amount:v1";
 const MANUAL_BET_AMOUNT_KEY = `lineaore:manual-bet-amount:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+
+function formatManualNumberDisplay(value: number | null | undefined, fractionDigits = 2) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fractionDigits > 0 ? `0.${"0".repeat(fractionDigits)}` : "0";
+  return formatDecimalTextFixed(String(value), fractionDigits) ?? (fractionDigits > 0 ? `0.${"0".repeat(fractionDigits)}` : "0");
+}
 
 interface UseManualBetFormOptions {
   formattedBalance: string | null;
@@ -39,18 +45,33 @@ export function useManualBetForm({
       if (raw != null) {
         const value = String(raw).trim();
         if (validateBetAmount(value) === null) setBetAmount(value);
+        else window.localStorage.removeItem(MANUAL_BET_AMOUNT_KEY);
         return;
       }
       if (legacyRaw != null) {
         const value = String(legacyRaw).trim();
         if (validateBetAmount(value) === null) setBetAmount(value);
+        window.localStorage.removeItem(LEGACY_MANUAL_BET_AMOUNT_KEY);
       }
-    } catch {}
+    } catch {
+      try {
+        window.localStorage.removeItem(MANUAL_BET_AMOUNT_KEY);
+        window.localStorage.removeItem(LEGACY_MANUAL_BET_AMOUNT_KEY);
+      } catch {
+        // ignore storage failures
+      }
+    }
   }, []);
 
   useEffect(() => {
     try {
-      if (typeof window !== "undefined") window.localStorage.setItem(MANUAL_BET_AMOUNT_KEY, betAmount);
+      if (typeof window !== "undefined") {
+        if (validateBetAmount(betAmount) !== null) {
+          window.localStorage.removeItem(MANUAL_BET_AMOUNT_KEY);
+          return;
+        }
+        window.localStorage.setItem(MANUAL_BET_AMOUNT_KEY, betAmount);
+      }
     } catch {}
   }, [betAmount]);
 
@@ -59,6 +80,9 @@ export function useManualBetForm({
   const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
   const manualInsufficient = balance !== null && totalBet > 0 && totalBet > balance;
   const lineaDeficit = manualInsufficient && balance !== null ? totalBet - balance : 0;
+  const totalBetDisplay = formatManualNumberDisplay(totalBet, 2);
+  const balanceDisplay = formatManualNumberDisplay(balance, 2);
+  const lineaDeficitDisplay = formatManualNumberDisplay(lineaDeficit, 2);
   const disabledReason =
     readOnlyReason
       ? readOnlyReason
@@ -90,9 +114,12 @@ export function useManualBetForm({
     betAmount,
     setBetAmount,
     totalBet,
+    totalBetDisplay,
     betAmountError,
     balance,
+    balanceDisplay,
     lineaDeficit,
+    lineaDeficitDisplay,
     manualInsufficient,
     disabledReason,
     isDisabled,

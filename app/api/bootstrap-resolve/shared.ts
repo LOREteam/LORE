@@ -4,26 +4,28 @@ import type { PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { RESOLVE_ABI } from "../../../config/abi";
 import { acquireExpiringLock } from "../../../server/storage";
+import { acquireExternalExpiringLock, requiresExternalSharedLock } from "../_lib/externalRateLimit";
 import { APP_CHAIN, CONTRACT_ADDRESS, SERVER_RPC_URLS } from "../_lib/dataBridge";
 import { logRouteError } from "../_lib/routeError";
 
 export const BOOTSTRAP_RESOLVE_ABI = RESOLVE_ABI;
 
-// V9 atomic resolve: one keeper tx per stuck epoch. A modest throttle is
-// enough - the keeper is only needed when no player bet triggers
-// _autoResolveIfNeeded in the following round.
+// Empty epochs advance on demand through the contract bet paths, so the keeper
+// is reserved for funded epochs that remain stuck after their deadline.
 export const RESOLVE_THROTTLE_MS = 5_000;
 export const BOOTSTRAP_RPC_UNAVAILABLE_RETRY_MS = 12_000;
 const RESOLVE_LOCK_PATH = "_internal/bootstrapResolveLock";
+const MIN_BOOTSTRAP_RESOLVE_SECRET_LENGTH = 32;
+const MAX_BOOTSTRAP_RESOLVE_SECRET_LENGTH = 256;
+const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
 
 let lastResolveAttemptAt = 0;
 
-export function isLocalDevBootstrapRequest(request: Request) {
-  const requestUrl = new URL(request.url);
-  return (
-    process.env.NODE_ENV !== "production" &&
-    (requestUrl.hostname === "localhost" || requestUrl.hostname === "127.0.0.1")
-  );
+export function isLocalDevBootstrapRequest(_request: Request) {
+  // Request URL/Host values are not an authentication boundary. A keeper key
+  // therefore always requires BOOTSTRAP_RESOLVE_SECRET, including local dev.
+  void _request;
+  return false;
 }
 
 function isBootstrapKeeperKeyConfigured() {
@@ -31,6 +33,19 @@ function isBootstrapKeeperKeyConfigured() {
     process.env.BOOTSTRAP_KEEPER_PRIVATE_KEY?.trim() ||
     process.env.KEEPER_PRIVATE_KEY?.trim(),
   );
+}
+
+function normalizeBootstrapResolveSecret(value: string | null | undefined) {
+  const secret = value?.trim();
+  if (!secret) return null;
+  if (
+    secret.length < MIN_BOOTSTRAP_RESOLVE_SECRET_LENGTH ||
+    secret.length > MAX_BOOTSTRAP_RESOLVE_SECRET_LENGTH ||
+    CONTROL_CHAR_RE.test(secret)
+  ) {
+    return null;
+  }
+  return secret;
 }
 
 export function getResolveNoopReason(message: string): string | null {
@@ -74,6 +89,18 @@ export function createRpcClient(url: string) {
 }
 
 export async function acquireResolveLock(epoch: bigint) {
+  if (requiresExternalSharedLock()) {
+    try {
+      return await acquireExternalExpiringLock(`${RESOLVE_LOCK_PATH}:${epoch}`, RESOLVE_THROTTLE_MS);
+    } catch (err) {
+      logRouteError("api/bootstrap-resolve", err, {
+        phase: "external-lock",
+        fallback: "deny",
+      });
+      return false;
+    }
+  }
+
   try {
     return acquireExpiringLock(RESOLVE_LOCK_PATH, epoch.toString(), RESOLVE_THROTTLE_MS);
   } catch (err) {
@@ -125,15 +152,13 @@ export function getBootstrapKeeperAccount() {
 }
 
 export function isAuthorizedBootstrapRequest(request: Request) {
-  const secret = process.env.BOOTSTRAP_RESOLVE_SECRET?.trim();
-  const provided = request.headers.get("x-bootstrap-resolve-secret")?.trim() ?? "";
+  const secret = normalizeBootstrapResolveSecret(process.env.BOOTSTRAP_RESOLVE_SECRET);
+  const provided = normalizeBootstrapResolveSecret(request.headers.get("x-bootstrap-resolve-secret"));
   if (!secret) {
     if (!isBootstrapKeeperKeyConfigured()) return true;
-    return (
-      process.env.BOOTSTRAP_RESOLVE_ALLOW_LOCAL_DEV_WITHOUT_SECRET === "1" &&
-      isLocalDevBootstrapRequest(request)
-    );
+    return false;
   }
+  if (!provided) return false;
   const secretBuf = Buffer.from(secret, "utf8");
   const providedBuf = Buffer.from(provided, "utf8");
   return (

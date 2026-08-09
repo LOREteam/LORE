@@ -8,15 +8,19 @@ export type CanaryHealthSample = {
 };
 
 function readNonNegativeMetric(value: unknown, field: string) {
-  const metric = Number(value);
-  if (!Number.isFinite(metric) || metric < 0) throw new Error(`Health metric ${field} is missing or invalid`);
-  return metric;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Health metric ${field} is missing or invalid`);
+  }
+  return value;
 }
 
 export function parseCanaryHealthBaseUrl(raw: string | undefined) {
   const value = raw?.trim();
   if (!value) return null;
   const url = new URL(value);
+  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("LIVE_TEST_HEALTH_BASE_URL must be an origin without credentials, path, query, or hash");
+  }
   const isLocalHttp = url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
   if (url.protocol !== "https:" && !isLocalHttp) {
     throw new Error("LIVE_TEST_HEALTH_BASE_URL must use HTTPS, except for localhost");

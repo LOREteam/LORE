@@ -2,7 +2,8 @@
 
 import { log } from "../lib/logger";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS, GRID_SIZE } from "../lib/constants";
+import { readJsonResponse } from "../lib/readJsonResponse";
 import { EpochTuple } from "./useGameData.helpers";
 
 export interface LiveStateApiResponse {
@@ -41,32 +42,56 @@ export function getLiveStateSnapshotKey() {
   return `lore:live-state-snapshot:v1:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 }
 
+function normalizeLiveStateSnapshotTimestamp(value: unknown, now = Date.now()) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) return null;
+  if (typeof now !== "number" || !Number.isSafeInteger(now) || now < 0) return null;
+  if (value - now > LIVE_STATE_SNAPSHOT_MAX_FUTURE_SKEW_MS) return null;
+  return value;
+}
+
 export function isLiveStateSnapshotFresh(fetchedAt: unknown, now = Date.now()): boolean {
-  if (typeof fetchedAt !== "number" || !Number.isFinite(fetchedAt) || fetchedAt <= 0) return false;
-  if (fetchedAt - now > LIVE_STATE_SNAPSHOT_MAX_FUTURE_SKEW_MS) return false;
-  return now - fetchedAt <= LIVE_STATE_SNAPSHOT_MAX_AGE_MS;
+  const normalizedFetchedAt = normalizeLiveStateSnapshotTimestamp(fetchedAt, now);
+  if (normalizedFetchedAt === null) return false;
+  if (now - normalizedFetchedAt < 0) return true;
+  return now - normalizedFetchedAt <= LIVE_STATE_SNAPSHOT_MAX_AGE_MS;
 }
 
 export function getLiveStateFailurePollIntervalCount(consecutiveFailures: number): number {
-  return 1 + Math.min(Math.max(Math.trunc(consecutiveFailures) - 2, 0), 3);
+  const failures = Number.isSafeInteger(consecutiveFailures) && consecutiveFailures > 0
+    ? consecutiveFailures
+    : 0;
+  return 1 + Math.min(Math.max(failures - 2, 0), 3);
 }
 
 export function shouldDisableLiveContractReadsAfterRecovery(
   forceLiveContractReads: boolean,
   consecutiveSuccesses: number,
 ): boolean {
-  return !forceLiveContractReads && consecutiveSuccesses >= 2;
+  return (
+    !forceLiveContractReads &&
+    Number.isSafeInteger(consecutiveSuccesses) &&
+    consecutiveSuccesses >= 2
+  );
 }
 
 export function loadLiveStateSnapshot(): LiveStateApiResponse | null {
   if (typeof window === "undefined") return null;
+  const storageKey = getLiveStateSnapshotKey();
   try {
-    const raw = window.localStorage.getItem(getLiveStateSnapshotKey());
+    const raw = window.localStorage.getItem(storageKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as LiveStateApiResponse;
-    if (!parsed || !isLiveStateSnapshotFresh(parsed.fetchedAt)) return null;
+    if (!parsed || !isLiveStateSnapshotFresh(parsed.fetchedAt)) {
+      window.localStorage.removeItem(storageKey);
+      return null;
+    }
     return parsed;
   } catch {
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch {
+      // ignore snapshot cleanup failures
+    }
     return null;
   }
 }
@@ -102,6 +127,10 @@ function toBigIntArray(values?: string[] | null) {
     }
   }
   return parsed;
+}
+
+function hasGridLength<T>(values: T[] | null | undefined): values is T[] {
+  return Array.isArray(values) && values.length === GRID_SIZE;
 }
 
 export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOptions) {
@@ -206,8 +235,9 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
           return;
         }
         consecutiveFailures = 0;
-        const payload = (await response.json()) as LiveStateApiResponse;
+        const payload = await readJsonResponse<LiveStateApiResponse>(response);
         if (controller.signal.aborted || requestController.signal.aborted) return;
+        if (!payload) return;
         consecutiveSuccesses += 1;
         const disableLiveReads = shouldDisableLiveContractReadsAfterRecovery(
           forceLiveContractReads,
@@ -320,23 +350,25 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
   const fallbackTileData = useMemo(() => {
     const tileData = serverLiveState?.tileData;
     if (!tileData) return null;
+    if (!hasGridLength(tileData.pools ?? null) || !hasGridLength(tileData.users ?? null)) return null;
     const pools = toBigIntArray(tileData.pools ?? null);
     const users = toBigIntArray(tileData.users ?? null);
     if (!pools || !users) return null;
     return [pools, users] as [bigint[], bigint[]];
   }, [serverLiveState?.tileData]);
   const fallbackTileUserCounts = useMemo(() => {
-    const counts = serverLiveState?.tileUserCounts;
-    if (!counts || counts.length === 0) return null;
+    const counts = serverLiveState?.tileUserCounts ?? null;
+    if (!hasGridLength(counts)) return null;
     return counts.slice(0, 25).map((value) => {
       const count = Number(value);
       return Number.isFinite(count) && count >= 0 ? count : 0;
     });
   }, [serverLiveState?.tileUserCounts]);
-  const fallbackIndexedTilePools = useMemo(
-    () => toBigIntArray(serverLiveState?.indexedTilePools ?? null),
-    [serverLiveState?.indexedTilePools],
-  );
+  const fallbackIndexedTilePools = useMemo(() => {
+    const indexedTilePools = serverLiveState?.indexedTilePools ?? null;
+    if (!hasGridLength(indexedTilePools)) return null;
+    return toBigIntArray(indexedTilePools);
+  }, [serverLiveState?.indexedTilePools]);
   const fallbackEpochDuration = useMemo(
     () => toBigIntOrNull(serverLiveState?.epochDuration ?? null),
     [serverLiveState?.epochDuration],

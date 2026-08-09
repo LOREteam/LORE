@@ -6,11 +6,15 @@ import { useAccount } from "wagmi";
 import { toHex } from "viem";
 import { APP_CHAIN_ID } from "../lib/constants";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
+import { readJsonResponse } from "../lib/readJsonResponse";
+import { sanitizeSupportLogPayload } from "../lib/sentrySanitize";
+import { safeToFixed } from "../lib/utils";
 import {
   ADMIN_AUTH_WALLET,
   ADMIN_AUTH_WALLET_CONFIGURED,
   buildAdminAuthMessage,
   createAdminAuthNonce,
+  normalizeAdminAuthAddress,
 } from "../lib/adminAuth";
 
 type DataSyncHealth = {
@@ -106,8 +110,6 @@ type RuntimeHealth = {
     chainName?: string;
     privyAppIdConfigured?: boolean;
     privyFallbackActive?: boolean;
-    eip7702Enabled?: boolean;
-    eip7702MiningEnabled?: boolean;
     readOnlyMode?: boolean;
   };
   metrics?: Record<string, RuntimeMetric>;
@@ -234,6 +236,11 @@ function getOpsPayloadError(payload: unknown) {
   return typeof error === "string" && error.trim() ? error : null;
 }
 
+function describeAdminClientError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return String(sanitizeSupportLogPayload(message)).replace(/\s+/g, " ").trim().slice(0, 220) || "Admin operation failed";
+}
+
 function shortenAddress(value: string) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
@@ -249,18 +256,23 @@ function fmtNumber(value?: number | null) {
 
 function fmtPercent(value?: number | null) {
   if (value == null || !Number.isFinite(value)) return "...";
-  return `${value.toFixed(2)}%`;
+  return `${safeToFixed(value, 2, "...")}%`;
 }
 
 function fmtAge(value?: number | null) {
   if (value == null || !Number.isFinite(value)) return "...";
   if (value < 1000) return `${Math.round(value)} ms`;
   const seconds = value / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)} s`;
+  if (seconds < 60) return `${safeToFixed(seconds, 1, "...")} s`;
   const minutes = seconds / 60;
-  if (minutes < 60) return `${minutes.toFixed(1)} min`;
+  if (minutes < 60) return `${safeToFixed(minutes, 1, "...")} min`;
   const hours = minutes / 60;
-  return `${hours.toFixed(1)} h`;
+  return `${safeToFixed(hours, 1, "...")} h`;
+}
+
+function fmtGib(value?: number | null) {
+  if (value == null || !Number.isFinite(value) || value < 0) return "...";
+  return `${safeToFixed(value / 1_073_741_824, 2, "...")} GiB`;
 }
 
 function fmtMode(value?: string | null) {
@@ -317,7 +329,7 @@ function routePerfToneClass(metric: RuntimeMetric) {
 
 function fmtPct(value: number | null) {
   if (value == null || !Number.isFinite(value)) return "...";
-  return `${value.toFixed(0)}%`;
+  return `${safeToFixed(value, 0, "...")}%`;
 }
 
 export default function AdminOpsClient() {
@@ -351,9 +363,11 @@ export default function AdminOpsClient() {
 
   const connectedAddresses = useMemo(() => {
     const values = new Set<string>();
-    if (address) values.add(address.toLowerCase());
+    const connectedAddress = normalizeAdminAuthAddress(address);
+    if (connectedAddress) values.add(connectedAddress);
     for (const wallet of wallets) {
-      if (wallet?.address) values.add(wallet.address.toLowerCase());
+      const walletAddress = normalizeAdminAuthAddress(wallet?.address);
+      if (walletAddress) values.add(walletAddress);
     }
     return [...values];
   }, [address, wallets]);
@@ -364,7 +378,7 @@ export default function AdminOpsClient() {
     ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
   const adminWallet = useMemo(
     () => ADMIN_AUTH_WALLET_CONFIGURED
-      ? wallets.find((wallet) => wallet.address?.toLowerCase() === ADMIN_AUTH_WALLET) ?? null
+      ? wallets.find((wallet) => normalizeAdminAuthAddress(wallet.address) === ADMIN_AUTH_WALLET) ?? null
       : null,
     [wallets],
   );
@@ -381,14 +395,14 @@ export default function AdminOpsClient() {
       ]);
 
       const [dataSyncJson, runtimeJson] = await Promise.all([
-        dataSyncRes.json().catch(() => null),
-        runtimeRes.json().catch(() => null),
+        readJsonResponse<DataSyncHealth>(dataSyncRes).catch(() => null),
+        readJsonResponse<RuntimeHealth>(runtimeRes).catch(() => null),
       ]);
 
       setDataSyncHealth((dataSyncJson ?? null) as DataSyncHealth | null);
       setRuntimeHealth((runtimeJson ?? null) as RuntimeHealth | null);
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : String(error));
+      setErrorText(describeAdminClientError(error));
     } finally {
       setLoading(false);
     }
@@ -403,14 +417,14 @@ export default function AdminOpsClient() {
     setOpsLoading(true);
     try {
       const response = await fetchWithTimeout("/api/admin/ops", { cache: "no-store" });
-      const payload = (await response.json().catch(() => null)) as OpsData | OpsErrorPayload | null;
+      const payload = await readJsonResponse<OpsData | OpsErrorPayload>(response).catch(() => null);
       const payloadError = getOpsPayloadError(payload);
       if (!response.ok || !payload || payloadError) {
         throw new Error(payloadError || `Admin ops HTTP ${response.status}`);
       }
       setOpsData(payload as OpsData);
     } catch (error) {
-      setErrorText((prev) => prev ?? (error instanceof Error ? error.message : String(error)));
+      setErrorText((prev) => prev ?? describeAdminClientError(error));
     } finally {
       setOpsLoading(false);
     }
@@ -424,17 +438,14 @@ export default function AdminOpsClient() {
 
     try {
       const response = await fetchWithTimeout("/api/admin/processes", { cache: "no-store" });
-      const payload = (await response.json().catch(() => null)) as
-        | AdminProcessesPayload
-        | OpsErrorPayload
-        | null;
+      const payload = await readJsonResponse<AdminProcessesPayload | OpsErrorPayload>(response).catch(() => null);
       const payloadError = getOpsPayloadError(payload);
       if (!response.ok || !payload || payloadError || !("processes" in payload)) {
         throw new Error(payloadError || `Admin processes HTTP ${response.status}`);
       }
       setProcessStates(payload.processes);
     } catch (error) {
-      setErrorText((prev) => prev ?? (error instanceof Error ? error.message : String(error)));
+      setErrorText((prev) => prev ?? describeAdminClientError(error));
     }
   }, [canSeePrivateDiagnostics, isLocalHost]);
 
@@ -832,9 +843,12 @@ export default function AdminOpsClient() {
             params: [normalizedWallet, messageHex],
           }),
         );
+        const safePersonalSignError = sanitizeSupportLogPayload(
+          personalSignError instanceof Error ? personalSignError.message : String(personalSignError),
+        );
         console.warn(
           "[admin-auth] personal_sign fallbacked to eth_sign:",
-          personalSignError instanceof Error ? personalSignError.message : String(personalSignError),
+          safePersonalSignError,
         );
       }
 
@@ -848,7 +862,7 @@ export default function AdminOpsClient() {
           authSignature: signature,
         }),
       });
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = await readJsonResponse<{ error?: string }>(response).catch(() => null);
       if (!response.ok || payload?.error) {
         throw new Error(payload?.error || `Admin auth HTTP ${response.status}`);
       }
@@ -860,7 +874,7 @@ export default function AdminOpsClient() {
       await fetchOps();
     } catch (error) {
       setAdminAuthReady(false);
-      setAdminAuthError(error instanceof Error ? error.message : "Admin verification failed.");
+      setAdminAuthError(describeAdminClientError(error));
     } finally {
       setAdminAuthBusy(false);
     }
@@ -911,7 +925,7 @@ export default function AdminOpsClient() {
         cache: "no-store",
         body: JSON.stringify({ target }),
       });
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = await readJsonResponse<{ error?: string }>(response).catch(() => null);
       if (!response.ok || payload?.error) {
         throw new Error(payload?.error || `Process start HTTP ${response.status}`);
       }
@@ -927,7 +941,7 @@ export default function AdminOpsClient() {
         void fetchHealth();
       }, 1500);
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : String(error));
+      setErrorText(describeAdminClientError(error));
     } finally {
       setProcessActionBusy(null);
     }
@@ -947,7 +961,7 @@ export default function AdminOpsClient() {
                 <a
                   href="/api/health/runtime"
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="inline-flex items-center rounded-full border border-white/10 bg-white/4 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/8"
                 >
                   Runtime JSON
@@ -955,7 +969,7 @@ export default function AdminOpsClient() {
                 <a
                   href="/api/health/data-sync"
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="inline-flex items-center rounded-full border border-white/10 bg-white/4 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/8"
                 >
                   Data Sync JSON
@@ -963,6 +977,7 @@ export default function AdminOpsClient() {
               </>
             ) : null}
             <button
+              type="button"
               disabled={loading}
               onClick={() => {
                 void fetchHealth();
@@ -974,6 +989,7 @@ export default function AdminOpsClient() {
             </button>
             {!authenticated ? (
               <button
+                type="button"
                 onClick={login}
                 className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200 hover:bg-emerald-500/20"
               >
@@ -981,6 +997,7 @@ export default function AdminOpsClient() {
               </button>
             ) : isAdminWallet && !adminAuthReady ? (
               <button
+                type="button"
                 disabled={adminAuthBusy}
                 onClick={() => void handleVerifyAdminWallet()}
                 className="inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-sky-100 hover:bg-sky-500/20 disabled:opacity-50"
@@ -989,6 +1006,7 @@ export default function AdminOpsClient() {
               </button>
             ) : (
               <button
+                type="button"
                 onClick={() => void handleLogout()}
                 className="inline-flex items-center rounded-full border border-white/10 bg-white/4 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/8"
               >
@@ -1127,7 +1145,7 @@ export default function AdminOpsClient() {
               <div>Finality blocks: <b>{opsData?.storage.finalityBlocks ?? dataSyncHealth?.env?.indexerFinalityBlocks ?? "..."}</b></div>
               <div>Finality target: <b>{opsData?.storage.targetBlock ?? dataSyncHealth?.storage?.finalityTargetBlock ?? "..."}</b></div>
               <div>Lag to finality target: <b>{fmtNumber(dataSyncHealth?.storage?.lagToFinalityTargetBlocks)}</b></div>
-              <div>Disk free: <b>{dataSyncHealth?.storage?.diskFreeBytes == null ? "..." : `${(dataSyncHealth.storage.diskFreeBytes / 1_073_741_824).toFixed(2)} GiB`}</b></div>
+              <div>Disk free: <b>{fmtGib(dataSyncHealth?.storage?.diskFreeBytes)}</b></div>
               <div>Last processed run: <b>{opsData?.storage.lastProcessedBlock ?? "..."}</b></div>
               <div>Stored epochs: <b>{fmtNumber(dataSyncHealth?.epochs?.storedCount)}</b></div>
               <div>Missing epochs: <b>{fmtNumber(dataSyncHealth?.epochs?.missingCount)}</b></div>
@@ -1365,6 +1383,7 @@ export default function AdminOpsClient() {
               </div>
               {isLocalHost && processKey ? (
                 <button
+                  type="button"
                   disabled={processActionBusy !== null || Boolean(processState?.running)}
                   onClick={() => void handleStartProcess(processKey)}
                   className="inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100 hover:bg-sky-500/20 disabled:opacity-50"
@@ -1506,6 +1525,7 @@ export default function AdminOpsClient() {
               </div>
             </div>
             <button
+              type="button"
               onClick={() => void handleCopySnapshot()}
               className="inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-sky-100 hover:bg-sky-500/20"
             >

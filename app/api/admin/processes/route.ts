@@ -1,13 +1,16 @@
 import { closeSync, existsSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthorizedAdminRouteRequest } from "../../_lib/adminRouteAuth";
+import { readAdminSession } from "../../_lib/adminSession";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
 
 const MAX_REQUEST_BODY_BYTES = 1_024;
+const TRACKED_PID_RE = /^[1-9]\d{0,9}$/;
+const MAX_TRACKED_PID = 2_147_483_647;
+const MAX_TRACKED_PID_BIGINT = BigInt(MAX_TRACKED_PID);
 
 const PROCESS_CONFIG = {
   indexer: {
@@ -37,17 +40,25 @@ function disabledResponse() {
   );
 }
 
+function pathIsRegularFile(file: string) {
+  try {
+    return existsSync(file) && statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function getProcessStatus(target: ProcessKey) {
   const config = PROCESS_CONFIG[target];
   const pid = readTrackedPid(target);
   const running = pid != null && isProcessAlive(pid);
-  if (!existsSync(config.logFile)) {
+  if (!pathIsRegularFile(config.logFile)) {
     return {
       target,
       label: config.label,
       status: "missing" as const,
       ageMs: null,
-      logFile: config.logFile,
+      logFile: basename(config.logFile),
       pid,
       running,
     };
@@ -59,7 +70,7 @@ function getProcessStatus(target: ProcessKey) {
     label: config.label,
     status: ageMs <= 90_000 ? "fresh" as const : "stale" as const,
     ageMs,
-    logFile: config.logFile,
+    logFile: basename(config.logFile),
     pid,
     running,
   };
@@ -86,10 +97,11 @@ function startLocalProcess(target: ProcessKey) {
 
 function readTrackedPid(target: ProcessKey) {
   const config = PROCESS_CONFIG[target];
-  if (!existsSync(config.pidFile)) return null;
+  if (!pathIsRegularFile(config.pidFile)) return null;
   const raw = readFileSync(config.pidFile, "utf8").trim();
-  const pid = Number(raw);
-  return Number.isInteger(pid) && pid > 0 ? pid : null;
+  if (!TRACKED_PID_RE.test(raw)) return null;
+  const pid = BigInt(raw);
+  return pid <= MAX_TRACKED_PID_BIGINT ? Number(pid) : null;
 }
 
 function isProcessAlive(pid: number) {
@@ -111,7 +123,7 @@ export async function GET(request: NextRequest) {
   });
   if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
-  if (!isAuthorizedAdminRouteRequest(request)) {
+  if (!readAdminSession(request)) {
     return applyNoStoreHeaders(
       NextResponse.json({ error: "Admin auth required" }, { status: 401 }),
       { varyCookie: true },
@@ -140,7 +152,7 @@ export async function POST(request: NextRequest) {
   });
   if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
-  if (!isAuthorizedAdminRouteRequest(request)) {
+  if (!readAdminSession(request)) {
     return applyNoStoreHeaders(
       NextResponse.json({ error: "Admin auth required" }, { status: 401 }),
       { varyCookie: true },
@@ -151,6 +163,12 @@ export async function POST(request: NextRequest) {
   if (!parsedBody.ok && parsedBody.reason === "too-large") {
     return applyNoStoreHeaders(
       NextResponse.json({ error: "Process payload too large" }, { status: 413 }),
+      { varyCookie: true },
+    );
+  }
+  if (!parsedBody.ok && parsedBody.reason === "unsupported-content-type") {
+    return applyNoStoreHeaders(
+      NextResponse.json({ error: "Process payload must be JSON" }, { status: 415 }),
       { varyCookie: true },
     );
   }

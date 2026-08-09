@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useBalance } from "wagmi";
-import { getFormattedBalance, type WagmiBalanceLike } from "../lib/balanceFormatting";
+import { getAddress } from "viem";
+import { formatBalanceFixed, formatDecimalTextFixed, type WagmiBalanceLike } from "../lib/balanceFormatting";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 
 type CachedPrivyBalances = {
@@ -19,9 +20,7 @@ function normalizeCachedBalance(value: unknown, fallback: string, fractionDigits
   if (typeof value !== "string" && typeof value !== "number") return fallback;
   const text = String(value).trim();
   if (!text || text.length > 40) return fallback;
-  const numeric = Number(text);
-  if (!Number.isFinite(numeric) || numeric < 0) return fallback;
-  return numeric.toFixed(fractionDigits);
+  return formatDecimalTextFixed(text, fractionDigits) ?? fallback;
 }
 
 export function normalizeCachedPrivyBalances(value: unknown): CachedPrivyBalances {
@@ -32,9 +31,19 @@ export function normalizeCachedPrivyBalances(value: unknown): CachedPrivyBalance
   };
 }
 
-function getPrivyBalanceCacheKey(address?: `0x${string}`) {
-  return address
-    ? `lore:privy-balances:v1:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${address.toLowerCase()}`
+export function normalizePageWalletAddress(value: string | null | undefined): `0x${string}` | null {
+  if (!value) return null;
+  try {
+    return getAddress(value).toLowerCase() as `0x${string}`;
+  } catch {
+    return null;
+  }
+}
+
+export function getPrivyBalanceCacheKey(address?: `0x${string}`) {
+  const normalizedAddress = normalizePageWalletAddress(address);
+  return normalizedAddress
+    ? `lore:privy-balances:v1:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${normalizedAddress}`
     : null;
 }
 
@@ -75,8 +84,19 @@ export function usePageWalletOverview({
         setCachedBalances(EMPTY_CACHED_BALANCES);
         return;
       }
-      setCachedBalances(normalizeCachedPrivyBalances(JSON.parse(raw)));
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object") {
+        window.localStorage.removeItem(balanceCacheKey);
+        setCachedBalances(EMPTY_CACHED_BALANCES);
+        return;
+      }
+      setCachedBalances(normalizeCachedPrivyBalances(parsed));
     } catch {
+      try {
+        window.localStorage.removeItem(balanceCacheKey);
+      } catch {
+        // Ignore storage cleanup failures.
+      }
       setCachedBalances(EMPTY_CACHED_BALANCES);
     }
   }, [balanceCacheKey]);
@@ -100,12 +120,8 @@ export function usePageWalletOverview({
   useEffect(() => {
     if (!balanceCacheKey) return;
 
-    const nextToken = embeddedTokenBalance
-      ? Number(getFormattedBalance(embeddedTokenBalance)).toFixed(2)
-      : cachedBalances.token;
-    const nextEth = embeddedEthBalance
-      ? Number(getFormattedBalance(embeddedEthBalance)).toFixed(4)
-      : cachedBalances.eth;
+    const nextToken = formatBalanceFixed(embeddedTokenBalance, 2) ?? cachedBalances.token;
+    const nextEth = formatBalanceFixed(embeddedEthBalance, 4) ?? cachedBalances.eth;
 
     if (nextToken === cachedBalances.token && nextEth === cachedBalances.eth) return;
 
@@ -122,17 +138,21 @@ export function usePageWalletOverview({
   }, [balanceCacheKey, cachedBalances.eth, cachedBalances.token, embeddedEthBalance, embeddedTokenBalance]);
 
   const formattedPrivyBalance = useMemo(
-    () => (embeddedTokenBalance ? Number(getFormattedBalance(embeddedTokenBalance)).toFixed(2) : cachedBalances.token),
+    () => formatBalanceFixed(embeddedTokenBalance, 2) ?? cachedBalances.token,
     [cachedBalances.token, embeddedTokenBalance],
   );
 
   const formattedPrivyEthBalance = useMemo(
-    () => (embeddedEthBalance ? Number(getFormattedBalance(embeddedEthBalance)).toFixed(4) : cachedBalances.eth),
+    () => formatBalanceFixed(embeddedEthBalance, 4) ?? cachedBalances.eth,
     [cachedBalances.eth, embeddedEthBalance],
   );
 
+  const normalizedActiveAddress = normalizePageWalletAddress(address);
+  const normalizedEmbeddedWalletAddress = normalizePageWalletAddress(normalizedEmbeddedAddress);
   const isEmbeddedActive = Boolean(
-    address && normalizedEmbeddedAddress && address.toLowerCase() === normalizedEmbeddedAddress.toLowerCase(),
+    normalizedActiveAddress &&
+    normalizedEmbeddedWalletAddress &&
+    normalizedActiveAddress === normalizedEmbeddedWalletAddress,
   );
 
   const headerLineaBalance =

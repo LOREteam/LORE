@@ -4,6 +4,7 @@ import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { CONTRACT_ADDRESS, publicClient } from "../_lib/dataBridge";
 import { logRouteError } from "../_lib/routeError";
+import { parseBoundedPositiveIntegerParam, parsePositiveIntegerParam } from "../_lib/queryParams";
 import { CONTRACT_HAS_REBATE_API, GAME_ABI } from "../../lib/constants";
 import { getUserParticipatingEpochPage } from "../../../server/storage";
 
@@ -14,12 +15,6 @@ type RebateInfoResult = [bigint, bigint, bigint, boolean, boolean];
 
 function jsonNoStore(payload: Record<string, unknown>, status = 200) {
   return applyNoStoreHeaders(NextResponse.json(payload, { status }));
-}
-
-function parsePositiveInteger(value: string | null) {
-  if (value === null || value === "") return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 export async function GET(request: NextRequest) {
@@ -42,11 +37,11 @@ export async function GET(request: NextRequest) {
 
   const cursorParam = request.nextUrl.searchParams.get("cursor");
   const limitParam = request.nextUrl.searchParams.get("limit");
-  const beforeEpoch = parsePositiveInteger(cursorParam);
+  const beforeEpoch = parsePositiveIntegerParam(cursorParam);
   if (cursorParam !== null && beforeEpoch === null) {
     return jsonNoStore({ error: "Invalid cursor" }, 400);
   }
-  const requestedLimit = limitParam === null ? DEFAULT_PAGE_SIZE : parsePositiveInteger(limitParam);
+  const requestedLimit = limitParam === null ? DEFAULT_PAGE_SIZE : parseBoundedPositiveIntegerParam(limitParam, MAX_PAGE_SIZE);
   if (requestedLimit === null) return jsonNoStore({ error: "Invalid limit" }, 400);
 
   if (!CONTRACT_HAS_REBATE_API) {
@@ -55,7 +50,7 @@ export async function GET(request: NextRequest) {
 
   const page = getUserParticipatingEpochPage(user, {
     beforeEpoch,
-    limit: Math.min(requestedLimit, MAX_PAGE_SIZE),
+    limit: requestedLimit,
   });
   if (page.epochs.length === 0) {
     return jsonNoStore({ isSupported: true, rows: [], hasMore: false, nextCursor: null });

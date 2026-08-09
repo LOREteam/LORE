@@ -31,7 +31,7 @@ const faqData: FAQItem[] = [
     a: [
       APP_NETWORK === "mainnet"
         ? `LINEA tokens: get them from a bridge, exchange, or DEX that supports ${APP_CHAIN_NAME}.`
-        : `During Sepolia testing, use the project's test token source or faucet. On mainnet, get LINEA from a bridge, exchange, or DEX that supports ${APP_CHAIN_NAME}.`,
+        : `During Linea Sepolia testing, use the project's test token source or faucet. On mainnet, get LINEA from a bridge, exchange, or DEX that supports ${APP_CHAIN_NAME}.`,
       `ETH for gas: fund your wallet on ${APP_CHAIN_NAME}. You only need a small amount for transaction fees.`,
     ],
   },
@@ -53,7 +53,7 @@ const faqData: FAQItem[] = [
     q: "How fast are transactions on Linea?",
     a: [
       "Very fast. Linea blocks are produced every 2 seconds with 100+ mGas/s sequencer throughput (up to 306 TPS for token transfers).",
-      "Your bet typically confirms in the next block - under 2 seconds. Gas costs are extremely low thanks to proof aggregation and data compression on the L2.",
+      "Your bet often confirms in the next block, but wallet, RPC, and network conditions can add delay. Gas is usually far lower than L1-style play, but the exact fee is shown by your wallet before signing.",
     ],
   },
 
@@ -63,8 +63,8 @@ const faqData: FAQItem[] = [
     q: "How do the Daily and Weekly Jackpots work?",
     a: [
       "Every round, 2% of the pool accrues into the Daily Jackpot and 3% into the Weekly Jackpot. These pools grow with every single round.",
-      "Once per calendar day (UTC), one random resolved round triggers the daily jackpot - the ENTIRE accumulated daily pool is added to that round's winners on top of the normal 92% reward.",
-      "Once per calendar week (Monday-Sunday UTC), one random round triggers the weekly jackpot - same logic, but the weekly pool is typically much larger.",
+      "After each UTC day window opens, eligible resolved rounds can trigger the daily jackpot. When the on-chain check hits, the ENTIRE accumulated daily pool is added to that round's winners on top of the normal 92% reward.",
+      "After each Monday-Sunday UTC week window opens, eligible resolved rounds can trigger the weekly jackpot - same logic, but the weekly pool is typically much larger.",
     ],
   },
   {
@@ -72,7 +72,7 @@ const faqData: FAQItem[] = [
     q: "When exactly does a jackpot trigger?",
     a: [
       "The contract checks jackpots only when an epoch is resolved and there is at least one winner on the tile.",
-      "Each resolved epoch gets a deterministic on-chain daily/weekly check derived from public on-chain inputs. In the hardened V9 source, the winning tile no longer depends on the resolver address; jackpot timing still depends on resolve-time block inputs.",
+      "Each resolved epoch gets a deterministic on-chain daily/weekly check derived from public on-chain inputs. In the current V10 release, the winning tile uses the same reviewed entropy formula but no longer depends on the resolver address; jackpot timing still depends on resolve-time block inputs.",
       "If a jackpot is not awarded yet, the pool simply carries forward and keeps growing until an eligible epoch wins it.",
     ],
   },
@@ -90,7 +90,7 @@ const faqData: FAQItem[] = [
     category: "Jackpots",
     q: "How should I think about randomness risk?",
     a: [
-      "The hardened V9 source derives the winning tile from block.prevrandao, the previous blockhash, epoch number, and current pool state. Bets are rejected in the final 2 seconds of the epoch so a normal bet and resolve cannot land in the same epoch-ending window.",
+      "The current V10 release derives the winning tile from block.prevrandao, the previous blockhash, epoch number, and current pool state. Bets are rejected in the final 2 seconds of the epoch so a normal bet and resolve cannot land in the same epoch-ending window.",
       "This is auditable pseudo-randomness, not VRF or commit-reveal randomness. Removing the resolver address closes caller-address grinding, but a sequencer still has stronger influence over block inputs and transaction inclusion.",
     ],
   },
@@ -146,6 +146,14 @@ const faqData: FAQItem[] = [
       "3% - accrues to the Weekly Jackpot pool",
       "2% - protocol fee: 0.05% resolver reward, then the remaining 1.95% is split approximately equally between treasury and the Safety Pool",
       "1% - permanently burned (sent to 0x...dEaD)",
+    ],
+  },
+  {
+    category: "Betting & Strategy",
+    q: "Is LORE an investment?",
+    a: [
+      "No. LORE is an on-chain entertainment game, not an investment product or a promise of profit.",
+      "The rules, pools, rewards, Safety Pool, and one-year unclaimed-funds path are visible on-chain, but outcomes are probabilistic and transaction fees still apply. Play only with funds you are comfortable risking.",
     ],
   },
 
@@ -218,7 +226,7 @@ const faqData: FAQItem[] = [
     q: "Are the jackpot pools safe? Can they be drained?",
     a: [
       "The jackpot pools are stored as state variables inside the smart contract. There is no function to withdraw them manually - they can only be awarded to winners when a jackpot triggers on-chain.",
-      "The contract uses ReentrancyGuard and SafeERC20 for all transfers. No one - not even the owner - can drain the jackpot pools.",
+      "The contract uses reentrancy protection and SafeERC20 for all transfers. No one - not even the owner - can drain the jackpot pools.",
     ],
   },
 
@@ -320,6 +328,7 @@ export const FAQ = React.memo(function FAQ() {
                 }`)}
               >
                 <button
+                  type="button"
                   onClick={() => toggle(i)}
                   aria-expanded={isOpen}
                   aria-controls={panelId}

@@ -48,7 +48,7 @@ export default async function Image() {
               fontSize: 96,
               fontWeight: 900,
               color: 'white',
-              letterSpacing: '-2px',
+              letterSpacing: '0px',
               textShadow: '0 0 40px rgba(139, 92, 246, 0.5)',
             }}
           >
@@ -71,7 +71,7 @@ export default async function Image() {
               marginTop: 8,
             }}
           >
-            Mine / Bet / Earn
+            Mine / Play / Claim
           </div>
         </div>
       </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { shortenAddress } from "../lib/utils";
+import { safeToFixed, shortenAddress } from "../lib/utils";
 import type { LeaderboardEntry, LuckyTileEntry } from "../lib/types";
 import { loadingQuotes, emptyStates, leaderboardLore } from "../lib/loreTexts";
 import { LoreText } from "./LoreText";
@@ -96,6 +96,7 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400" 
       </div>
       <ul className="divide-y divide-white/5">
         {entries.map((e, i) => {
+          const addressLabel = shortenAddress(e.address);
           return (
             <li
               key={`${e.address}-${e.rank}-${i}`}
@@ -104,17 +105,17 @@ function LeaderboardTable({ entries, valueLabel, valueClass = "text-violet-400" 
               <span className="text-xs font-black text-gray-500 tabular-nums">
                 {e.rank === 1 ? "🥇" : e.rank === 2 ? "🥈" : e.rank === 3 ? "🥉" : e.rank}
               </span>
-              <div className="flex min-w-0 items-center gap-1.5 text-sm text-gray-300" title={e.address}>
+              <div className="flex min-w-0 items-center gap-1.5 text-sm text-gray-300" title={addressLabel}>
                 {e.name ? (
                   <>
                     <span className="shrink-0 font-sans font-semibold leading-none text-violet-300">{e.name}</span>
                     <UiBadge tone="default" size="xs" className="shrink-0 text-[9px] leading-none text-gray-400 border-white/15 bg-white/3">
                       site
                     </UiBadge>
-                    <span className="min-w-0 truncate font-mono text-gray-400">{shortenAddress(e.address)}</span>
+                    <span className="min-w-0 truncate font-mono text-gray-400">{addressLabel}</span>
                   </>
                 ) : (
-                  <span className="min-w-0 truncate font-mono">{shortenAddress(e.address)}</span>
+                  <span className="min-w-0 truncate font-mono">{addressLabel}</span>
                 )}
               </div>
               <span className={`text-sm font-bold text-right tabular-nums ${valueClass}`}>
@@ -158,7 +159,7 @@ function LuckyTileGrid({ entries }: { entries: LuckyTileEntry[] }) {
                 style={{ width: `${(e.wins / maxWins) * 100}%` }}
               />
             </div>
-            <div className="text-[9px] text-gray-500 mt-0.5">{e.pct.toFixed(1)}%</div>
+            <div className="text-[9px] text-gray-500 mt-0.5">{safeToFixed(e.pct, 1, "0.0")}%</div>
           </div>
         ))}
       </div>
@@ -250,8 +251,13 @@ export function Leaderboards({
               Who won the most, who got luckiest, and which tile loves to win. All data from the chain.
             </p>
             {loading && (
-              <div className="mt-4 flex items-center justify-center gap-2 text-sm text-amber-400/80 sm:mt-5">
-                <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <div
+                role="status"
+                aria-live="polite"
+                aria-busy="true"
+                className="mt-4 flex items-center justify-center gap-2 text-sm text-amber-400/80 sm:mt-5"
+              >
+                <svg aria-hidden="true" className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
@@ -259,7 +265,7 @@ export function Leaderboards({
               </div>
             )}
             {error && (
-              <UiPanel tone="danger" padding="md" className="mt-4 text-sm text-red-300 sm:mt-5">
+              <UiPanel role="alert" tone="danger" padding="md" className="mt-4 text-sm text-red-300 sm:mt-5">
                 {error}
                 <UiButton
                   onClick={() => refetch()}
@@ -306,14 +312,14 @@ export function Leaderboards({
             <Section
               id="luckiest"
               badge="02"
-              title="Luckiest (ROI)"
-              desc="Best return on investment: who turned the smallest total wagered into the biggest winnings. One bet, one win – or many small bets, many wins."
+              title="Luckiest ratio"
+              desc="Best win-to-wager ratio: who turned the smallest total wagered into the biggest winnings. One bet, one win - or many small bets, many wins."
               icon={SparklesIcon}
               delay={0.05}
               loreTitle={leaderboardLore.luckiest.title}
               loreQuote={leaderboardLore.luckiest.quote}
             >
-              <LeaderboardTable entries={data.luckiest} valueLabel="ROI" valueClass="text-emerald-400" />
+              <LeaderboardTable entries={data.luckiest} valueLabel="Ratio" valueClass="text-emerald-400" />
             </Section>
 
             <div className="h-px bg-linear-to-r from-transparent via-violet-500/15 to-transparent my-8" />

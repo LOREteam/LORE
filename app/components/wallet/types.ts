@@ -5,7 +5,6 @@ import type { UnclaimedWin } from "../../lib/types";
 import type { SoundName } from "../../hooks/useSound";
 import type { UiButton } from "../ui/UiButton";
 import type { PendingTransactionStatus } from "../../hooks/useWalletActions";
-import type { Eip7702DiagnosticState } from "../../hooks/usePrivy7702Diagnostics";
 
 export interface WalletSettingsModalProps {
   isOpen: boolean;
@@ -23,9 +22,6 @@ export interface WalletSettingsModalProps {
   isWithdrawingEth: boolean;
   isDepositingEth: boolean;
   isDepositingToken: boolean;
-  isClearingEip7702Delegation: boolean;
-  embeddedWallet7702DelegateAddress: string | null;
-  embeddedWalletCodeChecking: boolean;
   onWithdrawAmountChange: (value: string) => void;
   onWithdrawEthAmountChange: (value: string) => void;
   onDepositEthAmountChange: (value: string) => void;
@@ -38,7 +34,6 @@ export interface WalletSettingsModalProps {
   onWithdrawEthToExternal: () => void;
   onDepositEthToEmbedded: () => void;
   onDepositTokenToEmbedded: () => void;
-  onClearEip7702Delegation: () => void;
   walletTransfers: WalletTransfersSummary | null;
   walletTransfersLoading: boolean;
   onLoadWalletTransfers: () => void;
@@ -67,9 +62,6 @@ export interface WalletSettingsModalProps {
   isCancellingPendingTx: boolean;
   onRefreshPendingTx: () => void;
   onCancelPendingTx: () => void;
-  eip7702Diagnostic: Eip7702DiagnosticState;
-  onRunEip7702Diagnostic: () => Promise<void>;
-  onRunEip7702SendDiagnostic: () => Promise<void>;
 }
 
 export interface TransferRowProps {

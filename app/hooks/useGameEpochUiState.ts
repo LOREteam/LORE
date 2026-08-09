@@ -10,16 +10,12 @@ interface UseGameEpochUiStateOptions {
 export function useGameEpochUiState({ seededVisualEpoch }: UseGameEpochUiStateOptions) {
   const [visualEpoch, setVisualEpoch] = useState<string | null>(seededVisualEpoch);
 
-  // Sync with seeded value when it becomes available after initial render
-  // (e.g. live-state bootstrap resolves after the component mounted).
+  // Sync with seeded value when live-state bootstrap resolves after mount.
   useEffect(() => {
-    if (seededVisualEpoch && seededVisualEpoch !== visualEpoch) {
-      setVisualEpoch(seededVisualEpoch);
-    }
-    // Only react to seededVisualEpoch changes — visualEpoch is intentionally excluded
-    // to avoid overwriting user-driven updates.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!seededVisualEpoch) return;
+    setVisualEpoch((current) => (current === seededVisualEpoch ? current : seededVisualEpoch));
   }, [seededVisualEpoch]);
+
   const [isRevealing, setIsRevealing] = useState(false);
   const [lockedGridEpoch, setLockedGridEpoch] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState(0);

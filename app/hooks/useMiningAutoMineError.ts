@@ -7,7 +7,9 @@ import {
   isNetworkError,
   isSessionExpiredError,
   isWalletUnavailableError,
+  isWrongNetworkError,
 } from "./useMining.shared";
+import { APP_CHAIN_NAME } from "../lib/constants";
 import type { AutoMineDiagnosticsErrorKind } from "../lib/mining/autoMineDiagnostics";
 
 function isPendingNonceBlockedError(message: string) {
@@ -26,6 +28,7 @@ export function getAutoMineUserMessage(error: unknown) {
   const sessionExpired = isSessionExpiredError(error);
   const networkDown = isNetworkError(error);
   const walletUnavailable = isWalletUnavailableError(error);
+  const wrongNetwork = isWrongNetworkError(error);
   const pendingNonceBlocked = isPendingNonceBlockedError(rawMessage);
 
   let userMessage: string;
@@ -42,6 +45,9 @@ export function getAutoMineUserMessage(error: unknown) {
   } else if (networkDown) {
     diagnosticsErrorKind = "network";
     userMessage = "Auto-miner paused: RPC offline for too long. Retrying automatically...";
+  } else if (wrongNetwork) {
+    diagnosticsErrorKind = "wrong-network";
+    userMessage = `Auto-miner stopped: wallet is on the wrong network. Switch to ${APP_CHAIN_NAME} and start again.`;
   } else if (rawMessage.includes("replacement transaction underpriced")) {
     diagnosticsErrorKind = "unknown";
     userMessage = "Stopped: replacement tx underpriced. Press START BOT again to continue.";
@@ -51,6 +57,9 @@ export function getAutoMineUserMessage(error: unknown) {
   } else if (rawMessage.includes("contract token mismatch")) {
     diagnosticsErrorKind = "unknown";
     userMessage = "Auto-miner stopped: configured token does not match the game contract.";
+  } else if (rawMessage.includes("missing required epoch-bound betting support")) {
+    diagnosticsErrorKind = "unknown";
+    userMessage = "Auto-miner stopped: configured contract does not support protected V10 bets.";
   } else if (rawMessage.includes("epoch ended") || rawMessage.includes("epochclosing")) {
     diagnosticsErrorKind = "unknown";
     userMessage = "Round skipped (epoch ended). Press START BOT to continue.";

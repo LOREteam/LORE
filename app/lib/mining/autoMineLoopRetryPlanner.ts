@@ -11,6 +11,14 @@ export type AutoMineLoopNetworkRetryDecision =
       retryCount: number;
     };
 
+function normalizeNonNegativeSafeInteger(value: number): number | null {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function normalizePositiveSafeInteger(value: number): number | null {
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
 export function planAutoMineLoopNetworkRetry(params: {
   currentRetryCount: number;
   initialMs: number;
@@ -18,8 +26,30 @@ export function planAutoMineLoopNetworkRetry(params: {
   maxMs: number;
   retryMax: number;
 }): AutoMineLoopNetworkRetryDecision {
-  const nextRetryCount = params.currentRetryCount + 1;
-  if (nextRetryCount > params.retryMax) {
+  const currentRetryCount = normalizeNonNegativeSafeInteger(params.currentRetryCount);
+  const retryMax = normalizeNonNegativeSafeInteger(params.retryMax);
+  const initialMs = normalizePositiveSafeInteger(params.initialMs);
+  const maxMs = normalizePositiveSafeInteger(params.maxMs);
+  const maxExponent = params.maxExponent === undefined
+    ? undefined
+    : normalizeNonNegativeSafeInteger(params.maxExponent);
+
+  if (
+    currentRetryCount === null ||
+    retryMax === null ||
+    initialMs === null ||
+    maxMs === null ||
+    maxMs < initialMs ||
+    maxExponent === null
+  ) {
+    return {
+      kind: "give-up",
+      retryCount: currentRetryCount ?? 0,
+    };
+  }
+
+  const nextRetryCount = currentRetryCount + 1;
+  if (nextRetryCount > retryMax) {
     return {
       kind: "give-up",
       retryCount: nextRetryCount,
@@ -31,9 +61,9 @@ export function planAutoMineLoopNetworkRetry(params: {
     retryCount: nextRetryCount,
     waitMs: getNetworkRetryDelayMs(
       nextRetryCount - 1,
-      params.initialMs,
-      params.maxMs,
-      params.maxExponent,
+      initialMs,
+      maxMs,
+      maxExponent,
     ),
   };
 }

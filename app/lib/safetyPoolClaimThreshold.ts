@@ -5,7 +5,8 @@ const DEFAULT_MIN_SAFETY_POOL_CLAIM_LINEA = "100";
 export function parseMinSafetyPoolClaimWei(raw?: string | null): bigint {
   const value = raw?.trim() || DEFAULT_MIN_SAFETY_POOL_CLAIM_LINEA;
   try {
-    return parseUnits(value, 18);
+    const parsed = parseUnits(value, 18);
+    return parsed > 0n ? parsed : parseUnits(DEFAULT_MIN_SAFETY_POOL_CLAIM_LINEA, 18);
   } catch {
     return parseUnits(DEFAULT_MIN_SAFETY_POOL_CLAIM_LINEA, 18);
   }

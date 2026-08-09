@@ -1,5 +1,6 @@
 import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi, toHex } from "viem";
 import { parseOptionalNonNegativeBigIntEnv } from "../../../config/envParsing";
+import { formatLineaWeiDisplayNumber } from "../../lib/tokenAmountMath";
 import { getMetaBigInt, getRecentJackpots } from "../../../server/storage";
 import {
   CONTRACT_ADDRESS,
@@ -137,6 +138,28 @@ function parseStoredEpochNumber(value: string | null | undefined): number {
   return parseStoredPositiveIntegerOrZero(value);
 }
 
+function parseChainUintEpochNumber(value: unknown): number | null {
+  if (typeof value !== "bigint" || value <= 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  const parsed = Number(value);
+  return isSafePositiveInteger(parsed) ? parsed : null;
+}
+
+function toSafeBlockTimestampMs(value: bigint): number | null {
+  if (value < 0n) return null;
+  const maxSafeSeconds = BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1000));
+  if (value > maxSafeSeconds) return null;
+  return Number(value) * 1000;
+}
+
+function normalizeJackpotTxHash(txHash: string | null | undefined): `0x${string}` | "" {
+  const normalized = String(txHash ?? "").toLowerCase().trim();
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? (normalized as `0x${string}`) : "";
+}
+
+function toDisplayNumberWei(value: bigint): number {
+  return formatLineaWeiDisplayNumber(value);
+}
+
 function mapJackpotLog(log: JackpotLog): JackpotRow | null {
   const topic0 = log.topics[0];
   if (!topic0) return null;
@@ -149,8 +172,8 @@ function mapJackpotLog(log: JackpotLog): JackpotRow | null {
         epoch: args.epoch.toString(),
         kind: "daily",
         amount: formatUnits(args.amount, 18),
-        amountNum: parseFloat(formatUnits(args.amount, 18)),
-        txHash: log.transactionHash ?? "",
+        amountNum: toDisplayNumberWei(args.amount),
+        txHash: normalizeJackpotTxHash(log.transactionHash),
         blockNumber: (log.blockNumber ?? 0n).toString(),
       };
     }
@@ -161,8 +184,8 @@ function mapJackpotLog(log: JackpotLog): JackpotRow | null {
         epoch: args.epoch.toString(),
         kind: "weekly",
         amount: formatUnits(args.amount, 18),
-        amountNum: parseFloat(formatUnits(args.amount, 18)),
-        txHash: log.transactionHash ?? "",
+        amountNum: toDisplayNumberWei(args.amount),
+        txHash: normalizeJackpotTxHash(log.transactionHash),
         blockNumber: (log.blockNumber ?? 0n).toString(),
       };
     }
@@ -194,7 +217,7 @@ async function getBlockTimestampMs(blockNumber: bigint): Promise<number | null> 
   }
 
   const block = await publicClient.getBlock({ blockNumber });
-  const value = Number(block.timestamp) * 1000;
+  const value = toSafeBlockTimestampMs(block.timestamp);
   jackpotBlockTimestampCache.set(cacheKey, {
     value,
     expiresAt: now + JACKPOT_EVENT_CACHE_MS,
@@ -306,7 +329,7 @@ async function fetchJackpotEventByEpoch(kind: "daily" | "weekly", epoch: number)
   const value = !log
     ? null
     : {
-        txHash: log.transactionHash ?? "",
+        txHash: normalizeJackpotTxHash(log.transactionHash),
         blockNumber: (log.blockNumber ?? 0n).toString(),
         timestamp:
           log.blockNumber && log.blockNumber > 0n
@@ -349,9 +372,9 @@ async function attachRecentBlockTimestamps(rows: JackpotRow[]): Promise<JackpotR
 }
 
 function normalizeStoredJackpots(): JackpotRow[] {
-  const jackpots = (getRecentJackpots(JACKPOT_HISTORY_LIMIT) as JackpotRow[]).filter(
-    (row) => parseStoredBlockNumber(row.blockNumber) >= CONTRACT_DEPLOY_BLOCK,
-  );
+  const jackpots = (getRecentJackpots(JACKPOT_HISTORY_LIMIT) as JackpotRow[])
+    .filter((row) => parseStoredBlockNumber(row.blockNumber) >= CONTRACT_DEPLOY_BLOCK)
+    .map((row) => ({ ...row, txHash: normalizeJackpotTxHash(row.txHash) }));
   return sortJackpotsDesc(jackpots).slice(0, JACKPOT_HISTORY_LIMIT);
 }
 
@@ -371,11 +394,11 @@ async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<
     functionName: "getJackpotInfo",
   }) as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
 
-  const lastDailyEpoch = Number(info[4]);
-  const lastWeeklyEpoch = Number(info[5]);
+  const lastDailyEpoch = parseChainUintEpochNumber(info[4]);
+  const lastWeeklyEpoch = parseChainUintEpochNumber(info[5]);
   const formatAmount = (wei: bigint) => ({
     amount: formatUnits(wei, 18),
-    amountNum: parseFloat(formatUnits(wei, 18)),
+    amountNum: toDisplayNumberWei(wei),
   });
 
   const byKey = new Map<string, JackpotRow>();
@@ -384,7 +407,7 @@ async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<
     byKey.set(`${row.kind}_${row.epoch}`, row);
   }
 
-  if (isSafePositiveInteger(lastDailyEpoch)) {
+  if (lastDailyEpoch !== null) {
     const key = `daily_${lastDailyEpoch}`;
     if (!byKey.has(key)) {
       const dailyFormatted = formatAmount(info[6]);
@@ -394,7 +417,7 @@ async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<
         kind: "daily",
         amount: dailyFormatted.amount,
         amountNum: dailyFormatted.amountNum,
-        txHash: onchain?.txHash ?? "",
+        txHash: normalizeJackpotTxHash(onchain?.txHash),
         blockNumber: onchain?.blockNumber ?? "0",
         timestamp: onchain?.timestamp ?? null,
       };
@@ -403,7 +426,7 @@ async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<
     }
   }
 
-  if (isSafePositiveInteger(lastWeeklyEpoch)) {
+  if (lastWeeklyEpoch !== null) {
     const key = `weekly_${lastWeeklyEpoch}`;
     if (!byKey.has(key)) {
       const weeklyFormatted = formatAmount(info[7]);
@@ -413,7 +436,7 @@ async function reconcileLatestJackpots(existingJackpots: JackpotRow[]): Promise<
         kind: "weekly",
         amount: weeklyFormatted.amount,
         amountNum: weeklyFormatted.amountNum,
-        txHash: onchain?.txHash ?? "",
+        txHash: normalizeJackpotTxHash(onchain?.txHash),
         blockNumber: onchain?.blockNumber ?? "0",
         timestamp: onchain?.timestamp ?? null,
       };

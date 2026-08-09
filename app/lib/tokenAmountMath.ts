@@ -40,19 +40,27 @@ export function parseNonNegativeLineaWei(value: string | bigint | null | undefin
   return BigInt(trimmed);
 }
 
+function addDecimalGroupSeparators(value: string) {
+  const [whole, fraction] = value.split(".");
+  const groupedWhole = (whole || "0").replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return fraction === undefined ? groupedWhole : `${groupedWhole}.${fraction}`;
+}
+
 export function formatLineaWeiAmountDisplay(value: string | bigint | null | undefined, fractionDigits = 2) {
   const safeFractionDigits = Math.max(0, Math.min(18, Math.trunc(fractionDigits)));
-  const zero = safeFractionDigits > 0 ? `0.${"0".repeat(safeFractionDigits)}` : "0";
   try {
-    const amount = Number(formatUnits(parseNonNegativeLineaWei(value), 18));
-    if (!Number.isFinite(amount)) return zero;
-    return amount.toLocaleString("en-US", {
-      minimumFractionDigits: safeFractionDigits,
-      maximumFractionDigits: safeFractionDigits,
-    });
+    return addDecimalGroupSeparators(formatLineaAmountFixed(parseNonNegativeLineaWei(value), safeFractionDigits));
   } catch {
-    return zero;
+    return safeFractionDigits > 0 ? `0.${"0".repeat(safeFractionDigits)}` : "0";
   }
+}
+
+export function formatLineaWeiDisplayNumber(value: bigint): number {
+  if (value <= 0n) return 0;
+  const scale = 1_000_000_000_000n;
+  const scaled = (value + (scale / 2n)) / scale;
+  if (scaled > BigInt(Number.MAX_SAFE_INTEGER)) return Number.MAX_SAFE_INTEGER;
+  return Number(scaled) / 1_000_000;
 }
 
 export function normalizeTileAmounts(

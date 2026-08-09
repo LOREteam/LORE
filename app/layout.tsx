@@ -34,26 +34,30 @@ const loreHud = localFont({
   variable: '--font-lore-hud',
 });
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://playlore.xyz';
+const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://playlore.xyz').trim().replace(/\/+$/, '');
 
 export const metadata: Metadata = {
   title: 'LORE - Linea Mining Game',
-  description: 'Mine, bet, and earn on Linea. LORE = Linea + ORE.',
+  description: 'Play on-chain mining rounds, jackpots, and rewards on Linea. LORE = Linea + ORE.',
   metadataBase: new URL(siteUrl),
+  alternates: {
+    canonical: '/',
+  },
   icons: {
     icon: { url: '/icon-64.png', type: 'image/png', sizes: '64x64' },
     apple: '/icon.png',
   },
   openGraph: {
     title: 'LORE - Linea Mining Game',
-    description: 'Mine, bet, and earn on Linea. LORE = Linea + ORE.',
+    description: 'Play on-chain mining rounds, jackpots, and rewards on Linea. LORE = Linea + ORE.',
     type: 'website',
+    url: '/',
     images: ['/opengraph-image'],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'LORE - Linea Mining Game',
-    description: 'Mine, bet, and earn on Linea. LORE = Linea + ORE.',
+    description: 'Play on-chain mining rounds, jackpots, and rewards on Linea. LORE = Linea + ORE.',
     images: ['/opengraph-image'],
   },
 };
@@ -69,7 +73,7 @@ export default async function RootLayout({
     <html lang="en">
       <head>
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
-        <script nonce={nonce} src="/early-runtime.js" />
+        <script nonce={nonce} src="/early-runtime.js" suppressHydrationWarning />
       </head>
       <body className={`${interDigits.variable} ${loreTitle.variable} ${loreHud.variable} antialiased`}>
         <ErrorCatcher />

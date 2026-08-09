@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { PublicClient } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
-import type { Eip7702CapabilityState } from "../lib/eip7702";
 import { writeAutoMineDiagnostics } from "../lib/mining/autoMineDiagnostics";
 import {
   clearPendingMiningTxState,
@@ -17,9 +16,7 @@ import type {
   MiningNotifyFn,
   RefreshSessionFn,
   RunningParams,
-  Sign7702DelegationFn,
   SilentSendFn,
-  SilentSend7702Fn,
 } from "./useMining.types";
 import type { PendingApproveState, PendingBetState } from "./useMining.stateTypes";
 
@@ -30,9 +27,6 @@ interface UseMiningRuntimeStateOptions {
   preferredAddress?: `0x${string}` | string | null;
   ensurePreferredWallet?: () => Promise<void> | void;
   sendTransactionSilent?: SilentSendFn;
-  sendTransaction7702?: SilentSend7702Fn;
-  signEip7702Delegation?: Sign7702DelegationFn;
-  eip7702?: Eip7702CapabilityState;
   refreshSession?: RefreshSessionFn;
   onAutoMineBetConfirmed?: () => void;
   onNotify?: MiningNotifyFn;
@@ -75,9 +69,6 @@ interface UseMiningRuntimeStateResult {
   pendingBetRef: MutableRefObject<PendingBetState | null>;
   publicClientRef: MutableRefObject<PublicClient | undefined>;
   silentSendRef: MutableRefObject<SilentSendFn | undefined>;
-  silentSend7702Ref: MutableRefObject<SilentSend7702Fn | undefined>;
-  signEip7702DelegationRef: MutableRefObject<Sign7702DelegationFn | undefined>;
-  eip7702Ref: MutableRefObject<Eip7702CapabilityState | undefined>;
   refreshSessionRef: MutableRefObject<RefreshSessionFn | undefined>;
   writeContractAsyncRef: MutableRefObject<(args: unknown) => Promise<`0x${string}`>>;
   preferredAddressRef: MutableRefObject<string | null>;
@@ -104,9 +95,6 @@ export function useMiningRuntimeState({
   preferredAddress,
   ensurePreferredWallet,
   sendTransactionSilent,
-  sendTransaction7702,
-  signEip7702Delegation,
-  eip7702,
   refreshSession,
   onAutoMineBetConfirmed,
   onNotify,
@@ -223,9 +211,6 @@ export function useMiningRuntimeState({
 
   const publicClientRef = useRef(publicClient);
   const silentSendRef = useRef(sendTransactionSilent);
-  const silentSend7702Ref = useRef(sendTransaction7702);
-  const signEip7702DelegationRef = useRef(signEip7702Delegation);
-  const eip7702Ref = useRef(eip7702);
   const refreshSessionRef = useRef(refreshSession);
   const writeContractAsyncRef = useRef(writeContractAsync);
   const preferredAddressRef = useRef<string | null>(preferredAddress ?? null);
@@ -241,10 +226,6 @@ export function useMiningRuntimeState({
 
   publicClientRef.current = publicClient ?? (preserveTransientRuntime ? publicClientRef.current : undefined);
   silentSendRef.current = sendTransactionSilent ?? (preserveTransientRuntime ? silentSendRef.current : undefined);
-  silentSend7702Ref.current = sendTransaction7702 ?? (preserveTransientRuntime ? silentSend7702Ref.current : undefined);
-  signEip7702DelegationRef.current =
-    signEip7702Delegation ?? (preserveTransientRuntime ? signEip7702DelegationRef.current : undefined);
-  eip7702Ref.current = eip7702 ?? (preserveTransientRuntime ? eip7702Ref.current : undefined);
   refreshSessionRef.current = refreshSession ?? (preserveTransientRuntime ? refreshSessionRef.current : undefined);
   writeContractAsyncRef.current = writeContractAsync;
   preferredAddressRef.current = preferredAddress ?? (preserveTransientRuntime ? preferredAddressRef.current : null);
@@ -333,9 +314,6 @@ export function useMiningRuntimeState({
       pendingBetRef,
       publicClientRef,
       silentSendRef,
-      silentSend7702Ref,
-      signEip7702DelegationRef,
-      eip7702Ref,
       refreshSessionRef,
       writeContractAsyncRef,
       preferredAddressRef,
@@ -373,9 +351,6 @@ export function useMiningRuntimeState({
       pendingBetRef,
       publicClientRef,
       silentSendRef,
-      silentSend7702Ref,
-      signEip7702DelegationRef,
-      eip7702Ref,
       refreshSessionRef,
       writeContractAsyncRef,
       preferredAddressRef,

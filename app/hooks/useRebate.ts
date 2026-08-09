@@ -20,7 +20,7 @@ import {
   MIN_SAFETY_POOL_CLAIM_WEI,
 } from "../lib/safetyPoolClaimThreshold";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
-import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 type SilentSendFn = (tx: {
@@ -97,6 +97,7 @@ const CLAIM_PLAN_CACHE_TTL_MS = 60_000;
 const REBATE_CONFIRM_POLL_INTERVAL_MS = 2_000;
 const REBATE_CONFIRM_ATTEMPTS = Math.max(1, Math.floor(TX_RECEIPT_TIMEOUT_MS / REBATE_CONFIRM_POLL_INTERVAL_MS));
 const REBATE_HISTORY_PAGE_SIZE = 32;
+const REBATE_RECENT_DISPLAY_LIMIT = 64;
 
 function createClaimConfirmationPendingError(message: string) {
   const error = new Error(message);
@@ -105,18 +106,37 @@ function createClaimConfirmationPendingError(message: string) {
 }
 
 function getRebateCacheKey(address: string) {
-  return `lore:rebate:v1:${address.toLowerCase()}`;
+  return `lore:rebate:v1:${getAddress(address).toLowerCase()}`;
 }
 
 function getClaimPlanCacheKey(address: string, epochs: number[]) {
-  return `lore:rebate-claim-plan:v1:${address.toLowerCase()}:${epochs.join(",")}`;
+  return `lore:rebate-claim-plan:v1:${getAddress(address).toLowerCase()}:${epochs.join(",")}`;
+}
+
+function normalizeNonNegativeSafeInteger(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!/^(?:0|[1-9]\d*)$/.test(text)) return null;
+  const parsed = BigInt(text);
+  return parsed <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(parsed) : null;
+}
+
+function parseClaimableEpoch(value: bigint | undefined): number | null {
+  if (typeof value !== "bigint" || value <= 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function normalizeNumberArray(value: unknown): number[] {
   if (!Array.isArray(value)) return [];
   return value
-    .map((item) => Number(item))
-    .filter((item) => Number.isSafeInteger(item) && item >= 0);
+    .map(normalizeNonNegativeSafeInteger)
+    .filter((item): item is number => item !== null);
 }
 
 function normalizeWeiString(value: unknown): string {
@@ -127,8 +147,8 @@ function normalizeWeiString(value: unknown): string {
 function normalizeRecentEpoch(row: unknown): ApiRebateEpochInfo | null {
   if (!row || typeof row !== "object") return null;
   const data = row as Record<string, unknown>;
-  const epoch = Number(data.epoch);
-  if (!Number.isSafeInteger(epoch) || epoch < 0) return null;
+  const epoch = normalizeNonNegativeSafeInteger(data.epoch);
+  if (epoch === null) return null;
   return {
     epoch,
     pendingWei: normalizeWeiString(data.pendingWei),
@@ -145,12 +165,13 @@ export function normalizeRebatePayload(value: unknown): ApiRebatePayload {
   return {
     isSupported: data.isSupported !== false,
     pendingRebateWei: normalizeWeiString(data.pendingRebateWei),
-    claimableEpochCount: Math.max(0, Number(data.claimableEpochCount) || 0),
+    claimableEpochCount: normalizeNonNegativeSafeInteger(data.claimableEpochCount) ?? 0,
     claimableEpochList: normalizeNumberArray(data.claimableEpochList),
-    totalEpochs: Math.max(0, Number(data.totalEpochs) || 0),
+    totalEpochs: normalizeNonNegativeSafeInteger(data.totalEpochs) ?? 0,
     participatingEpochs: normalizeNumberArray(data.participatingEpochs),
     recentEpochs: Array.isArray(data.recentEpochs)
       ? data.recentEpochs
+          .slice(0, REBATE_RECENT_DISPLAY_LIMIT)
           .map(normalizeRecentEpoch)
           .filter((row): row is ApiRebateEpochInfo => row !== null)
       : [],
@@ -159,14 +180,17 @@ export function normalizeRebatePayload(value: unknown): ApiRebatePayload {
 
 export function normalizeRebateHistoryPayload(value: unknown): ApiRebateHistoryPayload {
   const data = (value ?? {}) as Record<string, unknown>;
-  const nextCursor = Number(data.nextCursor);
+  const nextCursor = normalizeNonNegativeSafeInteger(data.nextCursor);
   return {
     isSupported: data.isSupported !== false,
     rows: Array.isArray(data.rows)
-      ? data.rows.map(normalizeRecentEpoch).filter((row): row is ApiRebateEpochInfo => row !== null)
+      ? data.rows
+          .slice(0, REBATE_HISTORY_PAGE_SIZE)
+          .map(normalizeRecentEpoch)
+          .filter((row): row is ApiRebateEpochInfo => row !== null)
       : [],
     hasMore: data.hasMore === true,
-    nextCursor: Number.isSafeInteger(nextCursor) && nextCursor > 0 ? nextCursor : null,
+    nextCursor: nextCursor !== null && nextCursor > 0 ? nextCursor : null,
     error: typeof data.error === "string" ? data.error : undefined,
   };
 }
@@ -179,17 +203,26 @@ export function mergeRebateEpochDetails(base: RebateEpochInfo[], older: RebateEp
 
 function loadCachedRebatePayload(address: string): CachedRebateInfo | null {
   if (typeof localStorage === "undefined") return null;
+  const cacheKey = getRebateCacheKey(address);
   try {
-    const raw = localStorage.getItem(getRebateCacheKey(address));
+    const raw = localStorage.getItem(cacheKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CachedRebateInfo;
     const cachedAt = normalizeCacheTimestamp(parsed?.cachedAt);
-    if (!parsed || cachedAt === null) return null;
+    if (!parsed || cachedAt === null) {
+      localStorage.removeItem(cacheKey);
+      return null;
+    }
     return {
       ...normalizeRebatePayload(parsed),
       cachedAt,
     };
   } catch {
+    try {
+      localStorage.removeItem(cacheKey);
+    } catch {
+      // ignore storage failures
+    }
     return null;
   }
 }
@@ -211,8 +244,9 @@ function saveCachedRebatePayload(address: string, payload: ApiRebatePayload) {
 
 function loadCachedClaimPlan(address: string, epochs: number[]): { kind: ClaimPlanKind; savedAt: number } | null {
   if (typeof localStorage === "undefined" || epochs.length === 0) return null;
+  const cacheKey = getClaimPlanCacheKey(address, epochs);
   try {
-    const raw = localStorage.getItem(getClaimPlanCacheKey(address, epochs));
+    const raw = localStorage.getItem(cacheKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { kind?: ClaimPlanKind; savedAt?: number };
     const savedAt = normalizeCacheTimestamp(parsed.savedAt);
@@ -222,8 +256,14 @@ function loadCachedClaimPlan(address: string, epochs: number[]): { kind: ClaimPl
     ) {
       return { kind: parsed.kind, savedAt };
     }
+    localStorage.removeItem(cacheKey);
     return null;
   } catch {
+    try {
+      localStorage.removeItem(cacheKey);
+    } catch {
+      // ignore storage failures
+    }
     return null;
   }
 }
@@ -285,7 +325,10 @@ async function loadClaimableEpochsExact(
           boolean,
         ];
         if (pendingWei > 0n && !claimed && resolved) {
-          claimable.add(Number(chunk[index]));
+          const epochNumber = parseClaimableEpoch(chunk[index]);
+          if (epochNumber !== null) {
+            claimable.add(epochNumber);
+          }
         }
       });
     } catch (err) {
@@ -300,10 +343,16 @@ async function loadClaimableEpochsExact(
           })) as [bigint, bigint, bigint, boolean, boolean];
           const [, , pendingWei, claimed, resolved] = result;
           if (pendingWei > 0n && !claimed && resolved) {
-            claimable.add(Number(epoch));
+            const epochNumber = parseClaimableEpoch(epoch);
+            if (epochNumber !== null) {
+              claimable.add(epochNumber);
+            }
           }
         } catch (readErr) {
-          log.warn("Rebate", "exact claimable epoch read failed", { epoch: Number(epoch), err: readErr });
+          log.warn("Rebate", "exact claimable epoch read failed", {
+            epoch: parseClaimableEpoch(epoch) ?? "invalid",
+            err: readErr,
+          });
         }
       }
     }
@@ -402,6 +451,7 @@ export function useRebate(options?: UseRebateOptions) {
   const cacheSavedAtRef = useRef<number | null>(null);
   const rebateUnavailableWarningRef = useRef(false);
   const mountedRef = useRef(false);
+  const claimInFlightRef = useRef(false);
   const lastPayloadRef = useRef<ApiRebatePayload | null>(null);
   const cachedPayloadRef = useRef<Record<string, CachedRebateInfo | null>>({});
   const claimPlanCacheRef = useRef<Record<string, { kind: ClaimPlanKind; savedAt: number } | null>>({});
@@ -421,6 +471,8 @@ export function useRebate(options?: UseRebateOptions) {
       return null;
     }
   }, [address, options?.preferredAddress]);
+  const latestRebateAddressRef = useRef<string | null>(rebateAddress?.toLowerCase() ?? null);
+  latestRebateAddressRef.current = rebateAddress?.toLowerCase() ?? null;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -536,7 +588,19 @@ export function useRebate(options?: UseRebateOptions) {
       return "No Safety Pool payout is currently claimable for the selected epochs.";
     }
     if (low.includes("emptyarray")) return "No Safety Pool epochs were selected for claim.";
-    return msg;
+    if (low.includes("timeout") || low.includes("timed out")) {
+      return "claim status is unknown after a wallet timeout. Check wallet activity before retrying.";
+    }
+    if (low.includes("revert") || low.includes("execution reverted")) {
+      return "claim reverted on-chain. No Safety Pool payout was moved by this transaction.";
+    }
+    if (low.includes("rpc") || low.includes("provider") || low.includes("infura") || low.includes("alchemy") || low.includes("json-rpc")) {
+      return "claim could not be submitted through the wallet provider. Check wallet activity before retrying.";
+    }
+    if (low.includes("insufficient funds") || low.includes("not enough eth")) {
+      return "claim failed because the wallet does not have enough ETH for gas.";
+    }
+    return "claim failed. Refresh the Safety Pool tab and try again.";
   }, []);
 
   const confirmClaimBatch = useCallback(
@@ -773,10 +837,7 @@ export function useRebate(options?: UseRebateOptions) {
       ? (isPageVisible ? REBATE_REFRESH_MS : REBATE_HIDDEN_REFRESH_MS)
       : REBATE_WARM_REFRESH_MS;
     const savedAt = cacheSavedAtRef.current;
-    const cachedDelay =
-      savedAt && Date.now() - savedAt < REBATE_CLIENT_CACHE_TTL_MS
-        ? REBATE_CLIENT_CACHE_TTL_MS - (Date.now() - savedAt)
-        : 0;
+    const cachedDelay = getFreshCacheDelayMs(savedAt, REBATE_CLIENT_CACHE_TTL_MS) ?? 0;
     const initialDelay = active ? cachedDelay : Math.max(cachedDelay, REBATE_WARM_REFRESH_MS);
     let cancelled = false;
 
@@ -894,7 +955,7 @@ export function useRebate(options?: UseRebateOptions) {
     let cancelled = false;
     const epochArgs = allClaimableEpochs.map((epoch) => BigInt(epoch));
     const cachedPlan = readClaimPlanCache(rebateAddress, allClaimableEpochs);
-    if (cachedPlan && Date.now() - cachedPlan.savedAt < CLAIM_PLAN_CACHE_TTL_MS) {
+    if (cachedPlan && getFreshCacheDelayMs(cachedPlan.savedAt, CLAIM_PLAN_CACHE_TTL_MS) !== null) {
       if (mountedRef.current) {
         setClaimPlanKind(cachedPlan.kind);
         setIsEstimatingClaimPlan(false);
@@ -942,6 +1003,13 @@ export function useRebate(options?: UseRebateOptions) {
 
   const claimRebates = useCallback(async () => {
     if (!CONTRACT_HAS_REBATE_API || !rebateAddress || !publicClient || allRebateEpochs.length === 0) return;
+    if (claimInFlightRef.current) return;
+    claimInFlightRef.current = true;
+    const claimActor = rebateAddress.toLowerCase();
+    const claimActorChangedError = new Error("Safety Pool claim actor changed");
+    const assertClaimActorActive = () => {
+      if (latestRebateAddressRef.current !== claimActor) throw claimActorChangedError;
+    };
     if (mountedRef.current) {
       setIsClaiming(true);
     }
@@ -964,6 +1032,7 @@ export function useRebate(options?: UseRebateOptions) {
           `Safety Pool sender mismatch. Safety Pool is loaded for ${rebateAddress}, but your connected wallet is ${sender}. Switch wallets or use the embedded wallet and try again.`,
         );
       }
+      assertClaimActorActive();
 
       const candidateEpochs = allClaimableEpochs.length > 0 ? allClaimableEpochs : allRebateEpochs;
       const verifiedClaimableEpochs = await loadClaimableEpochsExact(
@@ -971,6 +1040,7 @@ export function useRebate(options?: UseRebateOptions) {
         sender,
         candidateEpochs.map((epoch) => BigInt(epoch)),
       );
+      assertClaimActorActive();
 
       if (verifiedClaimableEpochs.length === 0) {
         clearOlderRebateHistory();
@@ -1011,7 +1081,17 @@ export function useRebate(options?: UseRebateOptions) {
       };
 
       const submitClaimBatch = async (epochArgs: bigint[]) => {
+        assertClaimActorActive();
+        await publicClient.simulateContract({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "claimEpochsRebate",
+          args: [epochArgs],
+          account: sender,
+        });
+        assertClaimActorActive();
         const gas = await estimateClaimGas(epochArgs);
+        assertClaimActorActive();
 
         if (silentSend) {
           const data = encodeFunctionData({
@@ -1022,7 +1102,9 @@ export function useRebate(options?: UseRebateOptions) {
           const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
           lastClaimTxHash = hash;
           claimTxCount += 1;
+          assertClaimActorActive();
           await confirmClaimBatch(hash, sender, epochArgs);
+          assertClaimActorActive();
           return;
         }
 
@@ -1036,11 +1118,23 @@ export function useRebate(options?: UseRebateOptions) {
         });
         lastClaimTxHash = hash;
         claimTxCount += 1;
+        assertClaimActorActive();
         await confirmClaimBatch(hash, sender, epochArgs);
+        assertClaimActorActive();
       };
 
       const submitSingleClaim = async (epoch: bigint) => {
+        assertClaimActorActive();
+        await publicClient.simulateContract({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "claimEpochRebate",
+          args: [epoch],
+          account: sender,
+        });
+        assertClaimActorActive();
         const gas = await estimateSingleClaimGas(epoch);
+        assertClaimActorActive();
 
         if (silentSend) {
           const data = encodeFunctionData({
@@ -1051,7 +1145,9 @@ export function useRebate(options?: UseRebateOptions) {
           const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
           lastClaimTxHash = hash;
           claimTxCount += 1;
+          assertClaimActorActive();
           await confirmClaimBatch(hash, sender, [epoch]);
+          assertClaimActorActive();
           return;
         }
 
@@ -1065,11 +1161,13 @@ export function useRebate(options?: UseRebateOptions) {
         });
         lastClaimTxHash = hash;
         claimTxCount += 1;
+        assertClaimActorActive();
         await confirmClaimBatch(hash, sender, [epoch]);
+        assertClaimActorActive();
       };
 
-      const claimBatches = async (epochArgs: bigint[]): Promise<number> => {
-        if (epochArgs.length === 0) return 0;
+      const claimBatches = async (epochArgs: bigint[]): Promise<void> => {
+        if (epochArgs.length === 0) return;
 
         const queue: bigint[][] =
           claimPlanKind === "split" && epochArgs.length > 1
@@ -1084,15 +1182,18 @@ export function useRebate(options?: UseRebateOptions) {
           notify?.("Safety Pool claim is being sent in multiple transactions. Please wait until all parts finish.", "info");
         }
 
-        let localClaimedCount = 0;
         while (queue.length > 0) {
+          assertClaimActorActive();
           const batch = queue.shift();
           if (!batch || batch.length === 0) continue;
 
           try {
             await submitClaimBatch(batch);
-            localClaimedCount += batch.length;
+            claimedEpochCount += batch.length;
           } catch (err) {
+            if (err === claimActorChangedError || latestRebateAddressRef.current !== claimActor) {
+              throw claimActorChangedError;
+            }
             if (isAmbiguousPendingTxError(err) || isUserRejection(err)) throw err;
             if (batch.length === 1) {
               usedSplitFallback = true;
@@ -1101,7 +1202,7 @@ export function useRebate(options?: UseRebateOptions) {
                 err,
               });
               await submitSingleClaim(batch[0]);
-              localClaimedCount += 1;
+              claimedEpochCount += 1;
               continue;
             }
 
@@ -1111,13 +1212,12 @@ export function useRebate(options?: UseRebateOptions) {
             queue.unshift(batch.slice(0, middle));
           }
         }
-
-        return localClaimedCount;
       };
 
-      claimedEpochCount = await claimBatches(
+      await claimBatches(
         verifiedClaimableEpochs.map((epoch) => BigInt(epoch)),
       );
+      assertClaimActorActive();
 
       log.info("Rebate", "claimed", {
         epochs: claimedEpochCount,
@@ -1140,13 +1240,19 @@ export function useRebate(options?: UseRebateOptions) {
       clearOlderRebateHistory();
       await refetchRebateInfo({ forceFresh: true });
     } catch (err) {
+      if (err === claimActorChangedError || latestRebateAddressRef.current !== claimActor) return;
       clearOlderRebateHistory();
       await refetchRebateInfo({ forceFresh: true });
 
       if (isAmbiguousPendingTxError(err)) {
         log.warn("Rebate", "claim submission status is ambiguous; fallback suppressed", err);
         notify?.(
-          "Safety Pool claim may already be pending. Check wallet activity and refresh Safety Pool before retrying.",
+          formatRebateTxMessage(
+            claimedEpochCount > 0
+              ? `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"} before the remaining claim became pending. Check wallet activity and refresh Safety Pool before retrying.`
+              : "Safety Pool claim may already be pending. Check wallet activity and refresh Safety Pool before retrying.",
+            lastClaimTxHash,
+          ),
           "warning",
         );
       } else if (isUserRejection(err)) {
@@ -1178,6 +1284,7 @@ export function useRebate(options?: UseRebateOptions) {
         }
       }
     } finally {
+      claimInFlightRef.current = false;
       if (mountedRef.current) {
         setIsClaiming(false);
       }

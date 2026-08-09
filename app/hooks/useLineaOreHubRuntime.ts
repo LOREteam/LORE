@@ -2,8 +2,7 @@
 
 import { useMemo } from "react";
 import type { PublicClient } from "viem";
-import { getFormattedBalance, type WagmiBalanceLike } from "../lib/balanceFormatting";
-import type { Eip7702CapabilityState, Signed7702AuthorizationLike } from "../lib/eip7702";
+import type { WagmiBalanceLike } from "../lib/balanceFormatting";
 import type { SoundName } from "./useSound";
 import { useMining } from "./useMining";
 import { useAutoMineDebugOverride } from "./useAutoMineDebugOverride";
@@ -19,19 +18,6 @@ type SilentSendFn = (
   tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number; feeMode?: "normal" | "keeper" },
   gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint },
 ) => Promise<`0x${string}`>;
-type SilentSend7702Fn = (
-  tx: {
-    data?: `0x${string}`;
-    value?: bigint;
-    gas?: bigint;
-    nonce?: number;
-    authorizationList: readonly Signed7702AuthorizationLike[];
-    sponsor?: boolean;
-    feeMode?: "normal" | "keeper";
-  },
-  gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint },
-) => Promise<`0x${string}`>;
-type Sign7702DelegationFn = (executor?: "self" | `0x${string}`) => Promise<Signed7702AuthorizationLike>;
 
 interface UseLineaOreHubRuntimeOptions {
   activeTab: string;
@@ -48,9 +34,6 @@ interface UseLineaOreHubRuntimeOptions {
   refetchTileData: () => void;
   refetchUserBets: () => void;
   sendTransactionSilent?: SilentSendFn;
-  sendTransaction7702?: SilentSend7702Fn;
-  signEip7702Delegation?: Sign7702DelegationFn;
-  eip7702?: Eip7702CapabilityState;
   actualCurrentEpoch: bigint | null | undefined;
   gridDisplayEpoch: string | null;
   isRevealing: boolean;
@@ -86,9 +69,6 @@ export function useLineaOreHubRuntime({
   refetchTileData,
   refetchUserBets,
   sendTransactionSilent,
-  sendTransaction7702,
-  signEip7702Delegation,
-  eip7702,
   actualCurrentEpoch,
   gridDisplayEpoch,
   isRevealing,
@@ -110,8 +90,6 @@ export function useLineaOreHubRuntime({
 }: UseLineaOreHubRuntimeOptions) {
   const miningEmbeddedWalletAddress = embeddedWalletReady ? embeddedWalletAddress : null;
   const miningSendTransactionSilent = embeddedWalletReady ? sendTransactionSilent : undefined;
-  const miningSendTransaction7702 = embeddedWalletReady ? sendTransaction7702 : undefined;
-  const miningSignEip7702Delegation = embeddedWalletReady ? signEip7702Delegation : undefined;
   const miningOptions = usePageMiningOptions({
     embeddedWalletAddress: miningEmbeddedWalletAddress,
     ensureEmbeddedWallet: embeddedWalletReady ? ensureEmbeddedWallet : undefined,
@@ -124,9 +102,6 @@ export function useLineaOreHubRuntime({
     refetchTileData,
     refetchUserBets,
     sendTransactionSilent: miningSendTransactionSilent,
-    sendTransaction7702: miningSendTransaction7702,
-    signEip7702Delegation: miningSignEip7702Delegation,
-    eip7702: embeddedWalletReady ? eip7702 : undefined,
   });
 
   const mining = useMining(miningOptions);
@@ -150,8 +125,9 @@ export function useLineaOreHubRuntime({
   });
 
   const rewardScanner = useRewardScanner(actualCurrentEpoch ?? undefined, {
-    enabled: activeTab === "hub",
+    enabled: activeTab === "hub" && Boolean(embeddedWalletAddress),
     isPageVisible,
+    preferredAddress: embeddedWalletAddress,
     sendTransactionSilent: miningSendTransactionSilent,
     onNotify: notify,
   });
@@ -168,8 +144,8 @@ export function useLineaOreHubRuntime({
     readOnlyReason,
     selectedTiles: mining.selectedTiles,
     minEthForGas,
-    onManualMine: mining.handleManualMine,
-    onDirectMine: mining.handleDirectMine,
+    onManualMine: (amount) => mining.handleManualMine(amount, actualCurrentEpoch),
+    onDirectMine: (tiles, amount) => mining.handleDirectMine(tiles, amount, actualCurrentEpoch),
     onAutoMineToggle: mining.handleAutoMineToggle,
     notify,
     onOpenWalletSettings: openWalletSettings,
@@ -179,8 +155,6 @@ export function useLineaOreHubRuntime({
   const runtimeEffects = usePageRuntimeEffects({
     actualCurrentEpoch,
     currentEpochResolved,
-    embeddedEthBalanceFormatted: getFormattedBalance(embeddedEthBalance),
-    embeddedWalletAddress,
     handleTileClick: mining.handleTileClick,
     historyViewData,
     isAnalyzing: epochPresentation.isAnalyzing,
@@ -192,7 +166,6 @@ export function useLineaOreHubRuntime({
     refetchGridEpochData,
     refetchTileData,
     refetchUserBets,
-    sendTransactionSilent: miningSendTransactionSilent,
     syncHotTiles,
     timeLeft,
     winningTileId,

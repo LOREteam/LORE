@@ -1,4 +1,5 @@
 const DEFAULT_FETCH_TIMEOUT_MS = 12_000;
+const MAX_FETCH_TIMEOUT_MS = 120_000;
 
 function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("The request was aborted", "AbortError");
@@ -9,8 +10,8 @@ export async function fetchWithTimeout(
   init: RequestInit = {},
   timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new RangeError("fetch timeout must be a positive finite number");
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_FETCH_TIMEOUT_MS) {
+    throw new RangeError("fetch timeout must be between 1 and 120000 milliseconds");
   }
 
   const controller = new AbortController();

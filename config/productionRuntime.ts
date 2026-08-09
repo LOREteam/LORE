@@ -1,23 +1,77 @@
-import { isAbsolute } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
+import { getAddress, isAddress, zeroAddress } from "viem";
 import {
-  getConfiguredEip7702Enabled,
-  getConfiguredEip7702MiningEnabled,
   getConfiguredLineaNetwork,
+  getContractRequiresEpochBoundBets,
 } from "./publicConfig";
 import { hasMainnetIndexerFinality } from "../app/lib/indexerFinality";
 
 type ProductionRuntimeScope = "web" | "bot" | "indexer" | "server";
 
-const validatedScopes = new Set<ProductionRuntimeScope>();
+const validatedScopes = new Set<string>();
 const DEFAULT_DB_PATH = "data/lore.sqlite";
+const REPO_ROOT = process.cwd();
+const KNOWN_DEVELOPMENT_PRIVY_APP_IDS = new Set(["cmlqkgtmg00og0cjueu4mxmn9"]);
 
 function getEnv(name: string) {
   return process.env[name]?.trim() ?? "";
 }
 
-function isHttpsUrl(value: string) {
+function isDisallowedMainnetHost(host: string) {
+  return (
+    host === "localhost" ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    host === "::1" ||
+    host === "127.0.0.1" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".example") ||
+    host.endsWith(".test") ||
+    host.endsWith(".invalid") ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+    /^192\.0\.2\./.test(host) ||
+    /^198\.(1[89])\./.test(host) ||
+    /^198\.51\.100\./.test(host) ||
+    /^203\.0\.113\./.test(host) ||
+    /^f[cd][0-9a-f]*:/i.test(host) ||
+    /^fe80:/i.test(host)
+  );
+}
+
+function isPublicHttpsEndpoint(value: string) {
   try {
-    return new URL(value).protocol === "https:";
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:") return false;
+    if (parsed.username || parsed.password) return false;
+    const host = parsed.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+    if (!host.includes(".") && !host.includes(":")) return false;
+    return !isDisallowedMainnetHost(host);
+  } catch {
+    return false;
+  }
+}
+
+function parseEndpointList(value: string) {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function isPublicMainnetSiteUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+    if (parsed.pathname !== "/" || parsed.search || parsed.hash) return false;
+    if (!host.includes(".") && !host.includes(":")) return false;
+    return !isDisallowedMainnetHost(host);
   } catch {
     return false;
   }
@@ -25,6 +79,90 @@ function isHttpsUrl(value: string) {
 
 function isTruthyEnv(value: string) {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function isPrivateKeyHex(value: string) {
+  return /^(?:0x)?[a-fA-F0-9]{64}$/.test(value.trim());
+}
+
+function isPositiveSafeInteger(value: string) {
+  if (!/^\d+$/.test(value)) return false;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0;
+}
+
+function extractEmailAddress(value: string) {
+  const trimmed = value.trim();
+  const angleMatch = trimmed.match(/<([^<>\s@]+@[^<>\s@]+)>$/);
+  return angleMatch ? angleMatch[1] : trimmed;
+}
+
+function isEmailAddress(value: string) {
+  const email = extractEmailAddress(value);
+  return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email);
+}
+
+function parseEmailRecipients(value: string) {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function isLikelyResendApiKey(value: string) {
+  return /^re_[a-zA-Z0-9_-]{8,}$/.test(value) && !isPlaceholderPublicValue(value);
+}
+
+function isConfiguredSecretToken(value: string) {
+  const trimmed = value.trim();
+  return trimmed.length >= 16 && !isPlaceholderPublicValue(trimmed);
+}
+
+function isPlaceholderPublicValue(value: string) {
+  return /^(?:your-[a-z0-9-]+|[a-z0-9-]*placeholder[a-z0-9-]*|[a-z0-9-]*changeme[a-z0-9-]*|example|demo|test|privy-app)$/i
+    .test(value.trim());
+}
+
+function parseRuntimeBlockNumber(name: string, value: string, label: string, issues: string[]) {
+  if (!value) return null;
+  if (!/^\d+$/.test(value)) {
+    issues.push(`${name} must be a positive integer block number on ${label}.`);
+    return null;
+  }
+  const parsed = BigInt(value);
+  if (parsed <= 0n) {
+    issues.push(`${name} must be a positive integer block number on ${label}.`);
+    return null;
+  }
+  return parsed;
+}
+
+function parseMainnetBlockNumber(name: string, value: string, issues: string[]) {
+  return parseRuntimeBlockNumber(name, value, "mainnet", issues);
+}
+
+function validateRuntimeAddress(name: string, value: string, label: string, issues: string[]) {
+  if (!value) return null;
+  if (!isAddress(value)) {
+    issues.push(`${name} must be a valid EVM address on ${label}.`);
+    return null;
+  }
+  const normalized = getAddress(value);
+  if (normalized === zeroAddress) {
+    issues.push(`${name} must not be the zero address on ${label}.`);
+    return null;
+  }
+  return normalized;
+}
+
+function validateMainnetAddress(name: string, value: string, issues: string[]) {
+  return validateRuntimeAddress(name, value, "mainnet", issues);
+}
+
+function isPathInsideRepo(filePath: string) {
+  const absolute = resolve(filePath);
+  const rel = relative(REPO_ROOT, absolute);
+  return rel === "" || (rel && !rel.startsWith("..") && !rel.includes(":"));
 }
 
 function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
@@ -42,63 +180,114 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
   if (publicLineaNetwork && normalizedPublicLineaNetwork !== "mainnet") {
     issues.push(`NEXT_PUBLIC_LINEA_NETWORK must resolve to mainnet, got "${publicLineaNetwork}".`);
   }
-
-  if (
-    getConfiguredEip7702Enabled() ||
-    isTruthyEnv(getEnv("NEXT_PUBLIC_EIP7702_ENABLED")) ||
-    isTruthyEnv(getEnv("EIP7702_ENABLED"))
-  ) {
-    issues.push("EIP-7702 must stay disabled for mainnet production unless a separate repair/diagnostic rollout is explicitly approved.");
+  const chainId = getEnv("LINEA_CHAIN_ID");
+  const publicChainId = getEnv("NEXT_PUBLIC_LINEA_CHAIN_ID");
+  if (!chainId) issues.push("LINEA_CHAIN_ID must be set explicitly to 59144 for mainnet.");
+  if (!publicChainId) issues.push("NEXT_PUBLIC_LINEA_CHAIN_ID must be set explicitly to 59144 for mainnet.");
+  if (chainId && chainId !== "59144") {
+    issues.push(`LINEA_CHAIN_ID must be 59144 on mainnet, got "${chainId}".`);
   }
-  if (
-    getConfiguredEip7702MiningEnabled() ||
-    isTruthyEnv(getEnv("NEXT_PUBLIC_EIP7702_MINING_ENABLED")) ||
-    isTruthyEnv(getEnv("EIP7702_MINING_ENABLED"))
-  ) {
-    issues.push("EIP-7702 mining must stay disabled for mainnet production.");
+  if (publicChainId && publicChainId !== "59144") {
+    issues.push(`NEXT_PUBLIC_LINEA_CHAIN_ID must be 59144 on mainnet, got "${publicChainId}".`);
+  }
+  if (chainId && publicChainId && chainId !== publicChainId) {
+    issues.push("LINEA_CHAIN_ID and NEXT_PUBLIC_LINEA_CHAIN_ID must match on mainnet.");
   }
 
   const keeperContractAddress = getEnv("KEEPER_CONTRACT_ADDRESS");
   const publicContractAddress = getEnv("NEXT_PUBLIC_CONTRACT_ADDRESS");
   if (!keeperContractAddress) issues.push("KEEPER_CONTRACT_ADDRESS is required for mainnet.");
   if (!publicContractAddress) issues.push("NEXT_PUBLIC_CONTRACT_ADDRESS is required for mainnet.");
+  const normalizedKeeperContractAddress = validateMainnetAddress(
+    "KEEPER_CONTRACT_ADDRESS",
+    keeperContractAddress,
+    issues,
+  );
+  const normalizedPublicContractAddress = validateMainnetAddress(
+    "NEXT_PUBLIC_CONTRACT_ADDRESS",
+    publicContractAddress,
+    issues,
+  );
   if (
-    keeperContractAddress &&
-    publicContractAddress &&
-    keeperContractAddress.toLowerCase() !== publicContractAddress.toLowerCase()
+    normalizedKeeperContractAddress &&
+    normalizedPublicContractAddress &&
+    normalizedKeeperContractAddress !== normalizedPublicContractAddress
   ) {
     issues.push("KEEPER_CONTRACT_ADDRESS and NEXT_PUBLIC_CONTRACT_ADDRESS must match on mainnet.");
   }
 
-  if (!getEnv("NEXT_PUBLIC_LINEA_TOKEN_ADDRESS")) {
+  const lineaTokenAddress = getEnv("NEXT_PUBLIC_LINEA_TOKEN_ADDRESS");
+  if (!lineaTokenAddress) {
     issues.push("NEXT_PUBLIC_LINEA_TOKEN_ADDRESS is required for mainnet.");
+  }
+  validateMainnetAddress("NEXT_PUBLIC_LINEA_TOKEN_ADDRESS", lineaTokenAddress, issues);
+  if (!getContractRequiresEpochBoundBets(getEnv("NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS"))) {
+    issues.push("NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1 is required for the V10 mainnet launch.");
   }
 
   const indexerStartBlock = getEnv("INDEXER_START_BLOCK");
   const deployBlock = getEnv("NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK");
-  if (!indexerStartBlock && !deployBlock) {
-    issues.push("INDEXER_START_BLOCK or NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK is required for mainnet.");
-  }
-  if (indexerStartBlock && deployBlock && indexerStartBlock !== deployBlock) {
+  if (!indexerStartBlock) issues.push("INDEXER_START_BLOCK is required for mainnet.");
+  if (!deployBlock) issues.push("NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK is required for mainnet.");
+  const normalizedIndexerStartBlock = parseMainnetBlockNumber("INDEXER_START_BLOCK", indexerStartBlock, issues);
+  const normalizedDeployBlock = parseMainnetBlockNumber("NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK", deployBlock, issues);
+  if (
+    normalizedIndexerStartBlock !== null &&
+    normalizedDeployBlock !== null &&
+    normalizedIndexerStartBlock !== normalizedDeployBlock
+  ) {
     issues.push("INDEXER_START_BLOCK and NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK must match on mainnet.");
   }
 
   const keeperRpcUrl = getEnv("KEEPER_RPC_URL");
   if (!keeperRpcUrl) {
     issues.push("KEEPER_RPC_URL is required for mainnet.");
-  } else if (!keeperRpcUrl.startsWith("https://")) {
-    issues.push("KEEPER_RPC_URL must use https:// on mainnet.");
+  } else if (!isPublicHttpsEndpoint(keeperRpcUrl)) {
+    issues.push("KEEPER_RPC_URL must be a public https:// URL on mainnet.");
+  }
+
+  const publicRpcUrls = parseEndpointList(getEnv("NEXT_PUBLIC_LINEA_RPCS"));
+  if (publicRpcUrls.some((url) => !isPublicHttpsEndpoint(url))) {
+    issues.push("NEXT_PUBLIC_LINEA_RPCS must contain only public https:// URLs on mainnet.");
+  }
+  if (getEnv("NEXT_PUBLIC_LINEA_SEPOLIA_RPCS")) {
+    issues.push("NEXT_PUBLIC_LINEA_SEPOLIA_RPCS must not be configured on mainnet; use NEXT_PUBLIC_LINEA_RPCS.");
   }
 
   const siteUrl = getEnv("NEXT_PUBLIC_SITE_URL");
   if (!siteUrl) {
     issues.push("NEXT_PUBLIC_SITE_URL is required for mainnet.");
-  } else if (!isHttpsUrl(siteUrl)) {
-    issues.push("NEXT_PUBLIC_SITE_URL must be a valid https:// URL on mainnet.");
+  } else if (!isPublicMainnetSiteUrl(siteUrl)) {
+    issues.push("NEXT_PUBLIC_SITE_URL must be a public https:// URL on mainnet.");
   }
 
   if (getEnv("HEALTH_DIAGNOSTICS_SECRET").length < 32) {
     issues.push("HEALTH_DIAGNOSTICS_SECRET must contain at least 32 characters on mainnet.");
+  }
+  if (isTruthyEnv(getEnv("RUNTIME_MONITOR_ALLOW_NO_ALERTS"))) {
+    issues.push("RUNTIME_MONITOR_ALLOW_NO_ALERTS must not be enabled on mainnet.");
+  }
+  const resendApiKey = getEnv("RESEND_API_KEY");
+  const resendFrom = getEnv("RUNTIME_MONITOR_EMAIL_FROM");
+  const resendTo = parseEmailRecipients(getEnv("RUNTIME_MONITOR_EMAIL_TO"));
+  const resendPartiallyConfigured = Boolean(resendApiKey || resendFrom || resendTo.length > 0);
+  const resendRequired = scope === "server";
+  if (resendPartiallyConfigured || resendRequired) {
+    if (!resendApiKey) {
+      issues.push(
+        resendRequired
+          ? "RESEND_API_KEY is required for mainnet server email alerts."
+          : "RESEND_API_KEY is required when Resend email alerts are configured on mainnet.",
+      );
+    } else if (!isLikelyResendApiKey(resendApiKey)) {
+      issues.push("RESEND_API_KEY must look like a Resend API key on mainnet.");
+    }
+    if (!isEmailAddress(resendFrom)) {
+      issues.push("RUNTIME_MONITOR_EMAIL_FROM must be a valid Resend-verified email sender on mainnet.");
+    }
+    if (resendTo.length === 0 || resendTo.some((recipient) => !isEmailAddress(recipient))) {
+      issues.push("RUNTIME_MONITOR_EMAIL_TO must contain valid email recipient addresses on mainnet.");
+    }
   }
 
   if (scope === "web" || scope === "server") {
@@ -115,15 +304,23 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     if (!Number.isSafeInteger(replicaCount) || replicaCount < 1) {
       issues.push("WEB_REPLICA_COUNT must be a positive integer when set.");
     } else if (replicaCount > 1) {
-      if (!isHttpsUrl(getEnv("UPSTASH_REDIS_REST_URL")) || !getEnv("UPSTASH_REDIS_REST_TOKEN")) {
-        issues.push("Multiple mainnet web replicas require UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for shared rate limiting.");
+      if (
+        !isPublicHttpsEndpoint(getEnv("UPSTASH_REDIS_REST_URL")) ||
+        !isConfiguredSecretToken(getEnv("UPSTASH_REDIS_REST_TOKEN"))
+      ) {
+        issues.push("Multiple mainnet web replicas require UPSTASH_REDIS_REST_URL and a non-placeholder UPSTASH_REDIS_REST_TOKEN for shared rate limiting.");
       }
       if (getEnv("RATE_LIMIT_EXTERNAL_FAIL_CLOSED") !== "1") {
         issues.push("RATE_LIMIT_EXTERNAL_FAIL_CLOSED=1 is required with multiple mainnet web replicas.");
       }
     }
-    if (!getEnv("NEXT_PUBLIC_PRIVY_APP_ID")) {
+    const privyAppId = getEnv("NEXT_PUBLIC_PRIVY_APP_ID");
+    if (!privyAppId) {
       issues.push("NEXT_PUBLIC_PRIVY_APP_ID is required for mainnet web runtime.");
+    } else if (isPlaceholderPublicValue(privyAppId)) {
+      issues.push("NEXT_PUBLIC_PRIVY_APP_ID must not use an example or placeholder value on mainnet.");
+    } else if (KNOWN_DEVELOPMENT_PRIVY_APP_IDS.has(privyAppId)) {
+      issues.push("NEXT_PUBLIC_PRIVY_APP_ID must not use the development Privy app id on mainnet.");
     }
     const chatAuthSecret = getEnv("CHAT_AUTH_SECRET") || getEnv("NEXTAUTH_SECRET");
     if (chatAuthSecret.length < 32) {
@@ -133,20 +330,31 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     if (adminAuthSecret.length < 32) {
       issues.push("The effective ADMIN_AUTH_SECRET must contain at least 32 characters for mainnet admin sessions.");
     }
-    if (!getEnv("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS")) {
+    const adminWalletAddress = getEnv("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS");
+    if (!adminWalletAddress) {
       issues.push("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS is required for mainnet admin auth.");
     }
+    validateMainnetAddress("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS", adminWalletAddress, issues);
     if (getEnv("BOOTSTRAP_RESOLVE_SECRET").length < 32) {
       issues.push("BOOTSTRAP_RESOLVE_SECRET must contain at least 32 characters for mainnet bootstrap resolve.");
     }
     if (!getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") && !getEnv("KEEPER_PRIVATE_KEY")) {
       issues.push("BOOTSTRAP_KEEPER_PRIVATE_KEY or KEEPER_PRIVATE_KEY is required for mainnet bootstrap resolve.");
+    } else if (
+      getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") &&
+      !isPrivateKeyHex(getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY"))
+    ) {
+      issues.push("BOOTSTRAP_KEEPER_PRIVATE_KEY must be a 64-hex private key on mainnet.");
+    } else if (!getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") && !isPrivateKeyHex(getEnv("KEEPER_PRIVATE_KEY"))) {
+      issues.push("KEEPER_PRIVATE_KEY must be a 64-hex private key on mainnet.");
     }
   }
 
   if (scope === "bot") {
     if (!getEnv("KEEPER_PRIVATE_KEY")) {
       issues.push("KEEPER_PRIVATE_KEY is required for mainnet keeper runtime.");
+    } else if (!isPrivateKeyHex(getEnv("KEEPER_PRIVATE_KEY"))) {
+      issues.push("KEEPER_PRIVATE_KEY must be a 64-hex private key on mainnet.");
     }
   }
 
@@ -162,8 +370,263 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
       if (!isAbsolute(dbPath)) {
         issues.push("LORE_DB_PATH must be absolute on mainnet.");
       }
-      if (dbPath === DEFAULT_DB_PATH) {
+      if (dbPath === DEFAULT_DB_PATH || /[/\\]data[/\\]lore\.sqlite$/i.test(resolve(dbPath))) {
         issues.push("LORE_DB_PATH must not use the repo-local default data/lore.sqlite on mainnet.");
+      }
+      if (isAbsolute(dbPath) && isPathInsideRepo(dbPath)) {
+        issues.push("LORE_DB_PATH must be outside the repo checkout on mainnet.");
+      }
+    }
+  }
+
+  if (scope === "server") {
+    const backupDirNames = ["LORE_BACKUP_DIR", "RUNTIME_MONITOR_BACKUP_DIR"] as const;
+    if (!backupDirNames.some((name) => getEnv(name))) {
+      issues.push("LORE_BACKUP_DIR or RUNTIME_MONITOR_BACKUP_DIR is required for mainnet server backup monitoring.");
+    }
+    if (!isPositiveSafeInteger(getEnv("RUNTIME_MONITOR_BACKUP_MAX_AGE_MS"))) {
+      issues.push("RUNTIME_MONITOR_BACKUP_MAX_AGE_MS must be a positive safe integer for mainnet server backup monitoring.");
+    }
+    for (const name of backupDirNames) {
+      const backupDir = getEnv(name);
+      if (!backupDir) continue;
+      if (!isAbsolute(backupDir)) {
+        issues.push(`${name} must be absolute on mainnet when configured.`);
+      } else if (isPathInsideRepo(backupDir)) {
+        issues.push(`${name} must be outside the repo checkout on mainnet.`);
+      }
+    }
+  }
+
+  return issues;
+}
+
+function validatePremainnetTestnetProductionEnv(scope: ProductionRuntimeScope) {
+  const issues: string[] = [];
+  const label = "pre-mainnet testnet";
+  const lineaNetwork = getEnv("LINEA_NETWORK");
+  const publicLineaNetwork = getEnv("NEXT_PUBLIC_LINEA_NETWORK");
+  const normalizedLineaNetwork = getConfiguredLineaNetwork(lineaNetwork || null);
+  const normalizedPublicLineaNetwork = getConfiguredLineaNetwork(publicLineaNetwork || null);
+
+  if (!lineaNetwork) issues.push("LINEA_NETWORK must be set explicitly for pre-mainnet testnet.");
+  if (!publicLineaNetwork) issues.push("NEXT_PUBLIC_LINEA_NETWORK must be set explicitly for pre-mainnet testnet.");
+  if (lineaNetwork && normalizedLineaNetwork !== "sepolia") {
+    issues.push(`LINEA_NETWORK must resolve to sepolia for pre-mainnet testnet, got "${lineaNetwork}".`);
+  }
+  if (publicLineaNetwork && normalizedPublicLineaNetwork !== "sepolia") {
+    issues.push(`NEXT_PUBLIC_LINEA_NETWORK must resolve to sepolia for pre-mainnet testnet, got "${publicLineaNetwork}".`);
+  }
+
+  const chainId = getEnv("LINEA_CHAIN_ID");
+  const publicChainId = getEnv("NEXT_PUBLIC_LINEA_CHAIN_ID");
+  if (!chainId) issues.push("LINEA_CHAIN_ID must be set explicitly to 59141 for pre-mainnet testnet.");
+  if (!publicChainId) issues.push("NEXT_PUBLIC_LINEA_CHAIN_ID must be set explicitly to 59141 for pre-mainnet testnet.");
+  if (chainId && chainId !== "59141") {
+    issues.push(`LINEA_CHAIN_ID must be 59141 on pre-mainnet testnet, got "${chainId}".`);
+  }
+  if (publicChainId && publicChainId !== "59141") {
+    issues.push(`NEXT_PUBLIC_LINEA_CHAIN_ID must be 59141 on pre-mainnet testnet, got "${publicChainId}".`);
+  }
+  if (chainId && publicChainId && chainId !== publicChainId) {
+    issues.push("LINEA_CHAIN_ID and NEXT_PUBLIC_LINEA_CHAIN_ID must match on pre-mainnet testnet.");
+  }
+
+  const keeperContractAddress = getEnv("KEEPER_CONTRACT_ADDRESS");
+  const publicContractAddress = getEnv("NEXT_PUBLIC_CONTRACT_ADDRESS");
+  if (!keeperContractAddress) issues.push("KEEPER_CONTRACT_ADDRESS is required for pre-mainnet testnet.");
+  if (!publicContractAddress) issues.push("NEXT_PUBLIC_CONTRACT_ADDRESS is required for pre-mainnet testnet.");
+  const normalizedKeeperContractAddress = validateRuntimeAddress(
+    "KEEPER_CONTRACT_ADDRESS",
+    keeperContractAddress,
+    label,
+    issues,
+  );
+  const normalizedPublicContractAddress = validateRuntimeAddress(
+    "NEXT_PUBLIC_CONTRACT_ADDRESS",
+    publicContractAddress,
+    label,
+    issues,
+  );
+  if (
+    normalizedKeeperContractAddress &&
+    normalizedPublicContractAddress &&
+    normalizedKeeperContractAddress !== normalizedPublicContractAddress
+  ) {
+    issues.push("KEEPER_CONTRACT_ADDRESS and NEXT_PUBLIC_CONTRACT_ADDRESS must match on pre-mainnet testnet.");
+  }
+
+  const lineaTokenAddress = getEnv("NEXT_PUBLIC_LINEA_TOKEN_ADDRESS");
+  if (!lineaTokenAddress) {
+    issues.push("NEXT_PUBLIC_LINEA_TOKEN_ADDRESS is required for pre-mainnet testnet.");
+  }
+  validateRuntimeAddress("NEXT_PUBLIC_LINEA_TOKEN_ADDRESS", lineaTokenAddress, label, issues);
+  if (!getContractRequiresEpochBoundBets(getEnv("NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS"))) {
+    issues.push("NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1 is required for the V10 pre-mainnet testnet runtime.");
+  }
+
+  const indexerStartBlock = getEnv("INDEXER_START_BLOCK");
+  const deployBlock = getEnv("NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK");
+  if (!indexerStartBlock) issues.push("INDEXER_START_BLOCK is required for pre-mainnet testnet.");
+  if (!deployBlock) issues.push("NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK is required for pre-mainnet testnet.");
+  const normalizedIndexerStartBlock = parseRuntimeBlockNumber("INDEXER_START_BLOCK", indexerStartBlock, label, issues);
+  const normalizedDeployBlock = parseRuntimeBlockNumber("NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK", deployBlock, label, issues);
+  if (
+    normalizedIndexerStartBlock !== null &&
+    normalizedDeployBlock !== null &&
+    normalizedIndexerStartBlock !== normalizedDeployBlock
+  ) {
+    issues.push("INDEXER_START_BLOCK and NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK must match on pre-mainnet testnet.");
+  }
+
+  const keeperRpcUrl = getEnv("KEEPER_RPC_URL");
+  if (!keeperRpcUrl) {
+    issues.push("KEEPER_RPC_URL is required for pre-mainnet testnet.");
+  } else if (!isPublicHttpsEndpoint(keeperRpcUrl)) {
+    issues.push("KEEPER_RPC_URL must be a public https:// URL on pre-mainnet testnet.");
+  }
+
+  const publicSepoliaRpcUrls = parseEndpointList(getEnv("NEXT_PUBLIC_LINEA_SEPOLIA_RPCS"));
+  if (publicSepoliaRpcUrls.some((url) => !isPublicHttpsEndpoint(url))) {
+    issues.push("NEXT_PUBLIC_LINEA_SEPOLIA_RPCS must contain only public https:// URLs on pre-mainnet testnet.");
+  }
+  if (getEnv("NEXT_PUBLIC_LINEA_RPCS")) {
+    issues.push("NEXT_PUBLIC_LINEA_RPCS must not be configured for pre-mainnet testnet; use NEXT_PUBLIC_LINEA_SEPOLIA_RPCS.");
+  }
+
+  const siteUrl = getEnv("NEXT_PUBLIC_SITE_URL");
+  if (!siteUrl) {
+    issues.push("NEXT_PUBLIC_SITE_URL is required for pre-mainnet testnet.");
+  } else if (!isPublicMainnetSiteUrl(siteUrl)) {
+    issues.push("NEXT_PUBLIC_SITE_URL must be a public https:// URL on pre-mainnet testnet.");
+  }
+
+  if (getEnv("HEALTH_DIAGNOSTICS_SECRET").length < 32) {
+    issues.push("HEALTH_DIAGNOSTICS_SECRET must contain at least 32 characters on pre-mainnet testnet.");
+  }
+  if (isTruthyEnv(getEnv("RUNTIME_MONITOR_ALLOW_NO_ALERTS"))) {
+    issues.push("RUNTIME_MONITOR_ALLOW_NO_ALERTS must not be enabled on pre-mainnet testnet.");
+  }
+  const resendApiKey = getEnv("RESEND_API_KEY");
+  const resendFrom = getEnv("RUNTIME_MONITOR_EMAIL_FROM");
+  const resendTo = parseEmailRecipients(getEnv("RUNTIME_MONITOR_EMAIL_TO"));
+  if (!resendApiKey) issues.push("RESEND_API_KEY is required for pre-mainnet testnet email alerts.");
+  else if (!isLikelyResendApiKey(resendApiKey)) {
+    issues.push("RESEND_API_KEY must look like a Resend API key on pre-mainnet testnet.");
+  }
+  if (!isEmailAddress(resendFrom)) {
+    issues.push("RUNTIME_MONITOR_EMAIL_FROM must be a valid Resend-verified email sender on pre-mainnet testnet.");
+  }
+  if (resendTo.length === 0 || resendTo.some((recipient) => !isEmailAddress(recipient))) {
+    issues.push("RUNTIME_MONITOR_EMAIL_TO must contain valid email recipient addresses on pre-mainnet testnet.");
+  }
+
+  if (scope === "web" || scope === "server") {
+    if (isTruthyEnv(getEnv("ALLOW_WEAK_RATE_LIMIT_IDENTITY"))) {
+      issues.push("ALLOW_WEAK_RATE_LIMIT_IDENTITY must not be enabled on pre-mainnet testnet.");
+    }
+    if (getEnv("TRUST_PROXY_HEADERS") !== "1") {
+      issues.push("TRUST_PROXY_HEADERS=1 is required for pre-mainnet testnet web runtime behind a trusted proxy.");
+    }
+    if (getEnv("TRUST_PROXY_SECRET").length < 32) {
+      issues.push("TRUST_PROXY_SECRET must contain at least 32 characters on pre-mainnet testnet.");
+    }
+    const replicaCount = Number(getEnv("WEB_REPLICA_COUNT") || "1");
+    if (!Number.isSafeInteger(replicaCount) || replicaCount < 1) {
+      issues.push("WEB_REPLICA_COUNT must be a positive integer when set.");
+    } else if (replicaCount < 2) {
+      issues.push("WEB_REPLICA_COUNT must be at least 2 for pre-mainnet testnet production-like rate-limit validation.");
+    } else if (replicaCount > 1) {
+      if (
+        !isPublicHttpsEndpoint(getEnv("UPSTASH_REDIS_REST_URL")) ||
+        !isConfiguredSecretToken(getEnv("UPSTASH_REDIS_REST_TOKEN"))
+      ) {
+        issues.push("Multiple pre-mainnet testnet web replicas require UPSTASH_REDIS_REST_URL and a non-placeholder UPSTASH_REDIS_REST_TOKEN for shared rate limiting.");
+      }
+      if (getEnv("RATE_LIMIT_EXTERNAL_FAIL_CLOSED") !== "1") {
+        issues.push("RATE_LIMIT_EXTERNAL_FAIL_CLOSED=1 is required with multiple pre-mainnet testnet web replicas.");
+      }
+    }
+    const privyAppId = getEnv("NEXT_PUBLIC_PRIVY_APP_ID");
+    if (!privyAppId) {
+      issues.push("NEXT_PUBLIC_PRIVY_APP_ID is required for pre-mainnet testnet web runtime.");
+    } else if (isPlaceholderPublicValue(privyAppId)) {
+      issues.push("NEXT_PUBLIC_PRIVY_APP_ID must not use an example or placeholder value on pre-mainnet testnet.");
+    } else if (KNOWN_DEVELOPMENT_PRIVY_APP_IDS.has(privyAppId)) {
+      issues.push("NEXT_PUBLIC_PRIVY_APP_ID must not use the development Privy app id on pre-mainnet testnet.");
+    }
+    const chatAuthSecret = getEnv("CHAT_AUTH_SECRET") || getEnv("NEXTAUTH_SECRET");
+    if (chatAuthSecret.length < 32) {
+      issues.push("CHAT_AUTH_SECRET or NEXTAUTH_SECRET must contain at least 32 characters for pre-mainnet testnet web runtime.");
+    }
+    const adminAuthSecret = getEnv("ADMIN_AUTH_SECRET") || chatAuthSecret;
+    if (adminAuthSecret.length < 32) {
+      issues.push("The effective ADMIN_AUTH_SECRET must contain at least 32 characters for pre-mainnet testnet admin sessions.");
+    }
+    const adminWalletAddress = getEnv("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS");
+    if (!adminWalletAddress) {
+      issues.push("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS is required for pre-mainnet testnet admin auth.");
+    }
+    validateRuntimeAddress("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS", adminWalletAddress, label, issues);
+    if (getEnv("BOOTSTRAP_RESOLVE_SECRET").length < 32) {
+      issues.push("BOOTSTRAP_RESOLVE_SECRET must contain at least 32 characters for pre-mainnet testnet bootstrap resolve.");
+    }
+    if (!getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") && !getEnv("KEEPER_PRIVATE_KEY")) {
+      issues.push("BOOTSTRAP_KEEPER_PRIVATE_KEY or KEEPER_PRIVATE_KEY is required for pre-mainnet testnet bootstrap resolve.");
+    } else if (
+      getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") &&
+      !isPrivateKeyHex(getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY"))
+    ) {
+      issues.push("BOOTSTRAP_KEEPER_PRIVATE_KEY must be a 64-hex private key on pre-mainnet testnet.");
+    } else if (!getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") && !isPrivateKeyHex(getEnv("KEEPER_PRIVATE_KEY"))) {
+      issues.push("KEEPER_PRIVATE_KEY must be a 64-hex private key on pre-mainnet testnet.");
+    }
+  }
+
+  if (scope === "bot") {
+    if (!getEnv("KEEPER_PRIVATE_KEY")) {
+      issues.push("KEEPER_PRIVATE_KEY is required for pre-mainnet testnet keeper runtime.");
+    } else if (!isPrivateKeyHex(getEnv("KEEPER_PRIVATE_KEY"))) {
+      issues.push("KEEPER_PRIVATE_KEY must be a 64-hex private key on pre-mainnet testnet.");
+    }
+  }
+
+  if (scope === "indexer" && !hasMainnetIndexerFinality(getEnv("INDEXER_FINALITY_BLOCKS"))) {
+    issues.push("INDEXER_FINALITY_BLOCKS must be set to a positive block count for pre-mainnet testnet indexer runtime.");
+  }
+
+  if (scope === "web" || scope === "indexer" || scope === "server") {
+    const dbPath = getEnv("LORE_DB_PATH");
+    if (!dbPath) {
+      issues.push("LORE_DB_PATH must point to a persistent absolute path on pre-mainnet testnet.");
+    } else {
+      if (!isAbsolute(dbPath)) {
+        issues.push("LORE_DB_PATH must be absolute on pre-mainnet testnet.");
+      }
+      if (dbPath === DEFAULT_DB_PATH || /[/\\]data[/\\]lore\.sqlite$/i.test(resolve(dbPath))) {
+        issues.push("LORE_DB_PATH must not use the repo-local default data/lore.sqlite on pre-mainnet testnet.");
+      }
+      if (isAbsolute(dbPath) && isPathInsideRepo(dbPath)) {
+        issues.push("LORE_DB_PATH must be outside the repo checkout on pre-mainnet testnet.");
+      }
+    }
+  }
+
+  if (scope === "server") {
+    const backupDirNames = ["LORE_BACKUP_DIR", "RUNTIME_MONITOR_BACKUP_DIR"] as const;
+    if (!backupDirNames.some((name) => getEnv(name))) {
+      issues.push("LORE_BACKUP_DIR or RUNTIME_MONITOR_BACKUP_DIR is required for pre-mainnet testnet server backup monitoring.");
+    }
+    if (!isPositiveSafeInteger(getEnv("RUNTIME_MONITOR_BACKUP_MAX_AGE_MS"))) {
+      issues.push("RUNTIME_MONITOR_BACKUP_MAX_AGE_MS must be a positive safe integer for pre-mainnet testnet server backup monitoring.");
+    }
+    for (const name of backupDirNames) {
+      const backupDir = getEnv(name);
+      if (!backupDir) continue;
+      if (!isAbsolute(backupDir)) {
+        issues.push(`${name} must be absolute on pre-mainnet testnet when configured.`);
+      } else if (isPathInsideRepo(backupDir)) {
+        issues.push(`${name} must be outside the repo checkout on pre-mainnet testnet.`);
       }
     }
   }
@@ -172,18 +635,26 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
 }
 
 export function assertProductionRuntimeConfig(scope: ProductionRuntimeScope) {
-  if (validatedScopes.has(scope)) return;
-  if (getConfiguredLineaNetwork() !== "mainnet") return;
+  const configuredNetwork = getConfiguredLineaNetwork();
+  const strictPremainnetTestnet =
+    configuredNetwork === "sepolia" && isTruthyEnv(getEnv("LORE_PREMAINNET_RUNTIME_STRICT"));
+  if (configuredNetwork !== "mainnet" && !strictPremainnetTestnet) return;
 
-  const issues = validateMainnetProductionEnv(scope);
+  const cacheKey = `${strictPremainnetTestnet ? "pre-mainnet-testnet" : "mainnet"}:${scope}`;
+  if (validatedScopes.has(cacheKey)) return;
+
+  const issues = strictPremainnetTestnet
+    ? validatePremainnetTestnetProductionEnv(scope)
+    : validateMainnetProductionEnv(scope);
   if (issues.length > 0) {
+    const label = strictPremainnetTestnet ? "pre-mainnet testnet" : "mainnet";
     throw new Error(
       [
-        `[prod-config] invalid mainnet runtime configuration for ${scope}:`,
+        `[prod-config] invalid ${label} runtime configuration for ${scope}:`,
         ...issues.map((issue) => `- ${issue}`),
       ].join("\n"),
     );
   }
 
-  validatedScopes.add(scope);
+  validatedScopes.add(cacheKey);
 }

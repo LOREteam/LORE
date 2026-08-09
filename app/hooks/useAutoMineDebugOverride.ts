@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   AUTO_MINE_DEBUG_OVERRIDE_EVENT,
   AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY,
   canUseAutoMineDebugOverride,
+  clearAutoMineDebugOverride,
   sanitizeAutoMineDebugOverride,
   type AutoMineDebugOverride,
 } from "../lib/mining/autoMineDebugOverride";
@@ -42,7 +43,7 @@ export function useAutoMineDebugOverride() {
     () => null,
   );
 
-  return useMemo<AutoMineDebugOverride | null>(() => {
+  const override = useMemo<AutoMineDebugOverride | null>(() => {
     if (!rawOverride) return null;
     try {
       return sanitizeAutoMineDebugOverride(JSON.parse(rawOverride));
@@ -50,4 +51,10 @@ export function useAutoMineDebugOverride() {
       return null;
     }
   }, [rawOverride]);
+
+  useEffect(() => {
+    if (rawOverride && !override) clearAutoMineDebugOverride();
+  }, [override, rawOverride]);
+
+  return override;
 }

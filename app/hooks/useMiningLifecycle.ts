@@ -78,7 +78,7 @@ export function useMiningLifecycle({
 
   const restoreSavedSession = useCallback(
     async (progressMessage: string) => {
-      const restoreResult = runtimeController.readRestorableRun();
+      const restoreResult = runtimeController.readRestorableRun(getPreferredActorAddress());
       const saved = restoreResult.kind === "resume" ? restoreResult.session : null;
       log.info("AutoMine", "restore check", {
         hasSaved: !!saved,
@@ -137,7 +137,7 @@ export function useMiningLifecycle({
         lastPlacedEpoch: restoreResult.params.lastPlacedEpoch,
       });
     },
-    [activateAutoMineUi, autoResumeRequestedRef, clearRestoreMarker, deactivateAutoMineUi, runtimeController],
+    [activateAutoMineUi, autoResumeRequestedRef, clearRestoreMarker, deactivateAutoMineUi, getPreferredActorAddress, runtimeController],
   );
 
   const handleAutoMineToggle = useCallback(
@@ -153,7 +153,8 @@ export function useMiningLifecycle({
         return;
       }
 
-      if (!getPreferredActorAddress()) {
+      const actor = getPreferredActorAddress();
+      if (!actor) {
         deactivateAutoMineUi({
           phase: "idle",
           progress: "Create an embedded wallet first, then start the bot.",
@@ -168,7 +169,6 @@ export function useMiningLifecycle({
         phase: "starting",
         params: { betStr, blocks, rounds },
       });
-      runtimeController.persistStart({ betStr, blocks, rounds });
 
       await runAutoMiningRef.current({ betStr, blocks, rounds });
     },

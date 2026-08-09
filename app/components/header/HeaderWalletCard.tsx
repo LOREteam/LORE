@@ -69,11 +69,22 @@ export function HeaderWalletCard({
   privyTokenBalanceLoading,
 }: HeaderWalletCardProps) {
   const explorerAddressUrl = getExplorerAddressUrl(embeddedWalletAddress);
+  const loginStatusAnnouncement = loginError
+    ? loginError
+    : loginPending
+      ? "Wallet login is opening."
+      : privyReady
+        ? "Wallet login is ready."
+        : "Wallet login is loading.";
+  const showLoginReload = Boolean(loginError && (loginError.includes("still loading") || loginError.includes("timed out")));
 
   return (
     <div id="header-wallet-card" className="min-[900px]:col-span-3 min-[900px]:h-22.5 min-w-0 flex flex-col rounded-xl border border-violet-500/10 bg-surface-raised shadow-[0_0_16px_rgba(139,92,246,0.05)] overflow-hidden">
       {!authenticated ? (
         <div className="flex h-full min-h-14 flex-col justify-center gap-1 p-1">
+          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {loginStatusAnnouncement}
+          </span>
           <UiButton
             onClick={onLogin}
             aria-busy={!privyReady || loginPending}
@@ -94,15 +105,21 @@ export function HeaderWalletCard({
             {loginPending ? "Connecting..." : privyReady ? "Login / Connect" : "Wallet Loading..."}
           </UiButton>
           {loginError && (
-            <div className="flex max-h-9 items-center justify-center gap-2 overflow-hidden px-1">
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex max-h-9 items-center justify-center gap-2 overflow-hidden px-1"
+            >
               <p className="min-w-0 truncate text-center text-[10px] font-semibold leading-tight text-red-300/90">
                 {loginError}
               </p>
-              {loginError.includes("still loading") && (
+              {showLoginReload && (
                 <button
                   type="button"
                   onClick={() => window.location.reload()}
-                  className="shrink-0 rounded border border-red-300/20 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-red-200/90 hover:border-red-300/35 hover:bg-red-400/10"
+                  aria-label="Reload page to retry wallet login"
+                  title="Reload page to retry wallet login"
+                  className="shrink-0 rounded border border-red-300/20 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] text-red-200/90 outline-none transition-colors hover:border-red-300/35 hover:bg-red-400/10 focus-visible:ring-2 focus-visible:ring-red-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090914]"
                 >
                   Reload
                 </button>
@@ -123,7 +140,9 @@ export function HeaderWalletCard({
             </div>
             <div className="flex items-center gap-1">
               <button
+                type="button"
                 onClick={onCopyEmbeddedAddress}
+                aria-label={embeddedAddressCopied ? "Privy wallet address copied" : "Copy Privy wallet address"}
                 className={embeddedAddressCopied ? "text-[11px] font-mono font-bold text-emerald-300 drop-shadow-[0_0_10px_rgba(52,211,153,0.3)] leading-tight transition-colors duration-200 flex items-center gap-1 group" : "text-[11px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] leading-tight hover:text-emerald-300 transition-colors flex items-center gap-1 group"}
                 title={embeddedAddressCopied ? "Copied" : "Copy address"}
               >
@@ -143,8 +162,9 @@ export function HeaderWalletCard({
                 <a
                   href={explorerAddressUrl}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="inline-flex items-center justify-center text-emerald-400/40 transition-colors hover:text-emerald-300 shrink-0"
+                  aria-label="Open Privy wallet address in explorer"
                   title="Open wallet in explorer"
                 >
                   <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>

@@ -14,6 +14,7 @@ import {
 } from "../../_lib/runtimeMetrics";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { sanitizeChatAvatarValue } from "../../../lib/chatAvatar";
+import { normalizeChatAuthAddress } from "../../../lib/chatAuth";
 import { logRouteError } from "../../_lib/routeError";
 import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
 
@@ -43,10 +44,6 @@ type ChatMessageWritePayload = {
 };
 
 const chatMessagesRouteCache = createRouteCache<ChatMessagesPayload>(MAX_CHAT_CACHE_ENTRIES);
-
-function isAddress(value: unknown): value is `0x${string}` {
-  return typeof value === "string" && /^0x[a-fA-F0-9]{40}$/.test(value);
-}
 
 function invalidateCachedChatMessages(cacheKey: string) {
   chatMessagesRouteCache.invalidate(cacheKey);
@@ -79,20 +76,28 @@ export async function POST(request: NextRequest) {
       failRouteMetric(metric, 413);
       return applyNoStoreHeaders(NextResponse.json({ error: "Message payload too large" }, { status: 413 }), { varyCookie: true });
     }
+    if (!parsedBody.ok && parsedBody.reason === "unsupported-content-type") {
+      failRouteMetric(metric, 415);
+      return applyNoStoreHeaders(NextResponse.json({ error: "Message payload must be JSON" }, { status: 415 }), { varyCookie: true });
+    }
     const body = parsedBody.ok ? parsedBody.value : null;
     if (!body || typeof body !== "object") {
       failRouteMetric(metric, 400);
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid message payload" }, { status: 400 }), { varyCookie: true });
     }
 
-    const text = typeof body.text === "string" ? body.text.trim().slice(0, MAX_TEXT_LENGTH) : "";
-    const sender = typeof body.sender === "string" ? body.sender.toLowerCase() : "";
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const sender = normalizeChatAuthAddress(body.sender);
 
     if (!text) {
       failRouteMetric(metric, 400);
       return applyNoStoreHeaders(NextResponse.json({ error: "Message text is required" }, { status: 400 }), { varyCookie: true });
     }
-    if (!isAddress(sender)) {
+    if (text.length > MAX_TEXT_LENGTH) {
+      failRouteMetric(metric, 400);
+      return applyNoStoreHeaders(NextResponse.json({ error: "Message text is too long" }, { status: 400 }), { varyCookie: true });
+    }
+    if (!sender) {
       failRouteMetric(metric, 400);
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid sender" }, { status: 400 }), { varyCookie: true });
     }
@@ -105,8 +110,11 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
-    const senderName =
-      typeof body.senderName === "string" ? body.senderName.trim().slice(0, MAX_NAME_LENGTH) : null;
+    const senderName = typeof body.senderName === "string" ? body.senderName.trim() : null;
+    if (senderName !== null && senderName.length > MAX_NAME_LENGTH) {
+      failRouteMetric(metric, 400);
+      return applyNoStoreHeaders(NextResponse.json({ error: "Sender name is too long" }, { status: 400 }), { varyCookie: true });
+    }
     const senderAvatar = sanitizeChatAvatarValue(body.senderAvatar, MAX_AVATAR_LENGTH);
 
     const message = insertChatMessage({

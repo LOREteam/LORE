@@ -23,6 +23,8 @@ import {
 import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { createRouteCache } from "../_lib/routeCache";
+import { parsePositiveIntegerParam } from "../_lib/queryParams";
+import { parseStoredPositiveIntegerOrZero } from "../_lib/storedNumberParsing";
 const MAX_CHAIN_RECONCILE_EPOCHS = parseOptionalPositiveIntegerEnv(
   process.env.API_EPOCHS_RECONCILE_MAX,
   DEFAULT_API_EPOCHS_RECONCILE_MAX,
@@ -31,8 +33,11 @@ const EPOCHS_ROUTE_CACHE_MS = 15_000;
 const EPOCHS_STALE_REFRESH_MS = 60_000;
 const EPOCHS_CHAIN_MULTICALL_CHUNK = 96;
 const EPOCHS_ROUTE_CACHE_MAX_KEYS = 256;
+const MAX_REQUESTED_EPOCHS = 100;
 const CURRENT_EPOCH_CACHE_MS = 5_000;
 const ROUTE_METRIC_KEY = "api/epochs";
+const MAX_TILE_ID = 25;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 const READ_ABI = parseAbi([
   "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
@@ -59,6 +64,9 @@ type EpochBuildResult = {
   payload: EpochPayload;
   refreshNeeded: boolean;
 };
+type RequestedEpochsParseResult =
+  | { ok: true; epochs: number[] }
+  | { ok: false; error: string };
 const epochsRouteCache = createRouteCache<EpochPayload>(EPOCHS_ROUTE_CACHE_MAX_KEYS);
 let currentEpochCache: { value: number | null; expiresAt: number } | null = null;
 let currentEpochInflight: Promise<number | null> | null = null;
@@ -74,20 +82,37 @@ function compactEpochRows(rows: Record<string, EpochRow | null>): Record<string,
   ) as Record<string, EpochRow>;
 }
 
-function parseRequestedEpochs(request: Request): number[] {
+function parseRequestedEpochs(request: Request): RequestedEpochsParseResult {
   const search = new URL(request.url).searchParams.get("epochs");
-  if (!search) return [];
-  return [...new Set(
-    search
-      .split(",")
-      .map((value) => Number(value.trim()))
-      .filter((value) => isSafePositiveInteger(value) && value <= 1_000_000),
-  )];
+  if (!search) return { ok: true, epochs: [] };
+  const rawEpochs = search
+    .split(",", MAX_REQUESTED_EPOCHS + 1)
+    .map((value) => value.trim());
+  if (rawEpochs.length > MAX_REQUESTED_EPOCHS) {
+    return { ok: false, error: "Too many epochs" };
+  }
+  const parsedEpochs = rawEpochs.map((value) => parsePositiveIntegerParam(value));
+  if (parsedEpochs.some((value) => value === null || value > 1_000_000)) {
+    return { ok: false, error: "Invalid epochs" };
+  }
+  return { ok: true, epochs: [...new Set(parsedEpochs as number[])] };
 }
 
 function getCacheKey(requestedEpochs: number[]) {
   if (requestedEpochs.length === 0) return "*";
   return requestedEpochs.slice().sort((a, b) => a - b).join(",");
+}
+
+function parseChainEpochNumber(value: bigint): number | null {
+  if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
+  const parsed = Number(value);
+  return isSafePositiveInteger(parsed) ? parsed : null;
+}
+
+function parseEpochWinningTile(value: bigint): number | null {
+  if (value <= 0n || value > BigInt(MAX_TILE_ID)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_TILE_ID ? parsed : null;
 }
 
 async function resolveCachedCurrentEpoch(): Promise<number | null> {
@@ -112,9 +137,9 @@ async function resolveCachedCurrentEpoch(): Promise<number | null> {
             abi: READ_ABI,
             functionName: "currentEpoch",
           });
-          const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
+          const onChainCurrentEpochNum = parseChainEpochNumber(onChainCurrentEpoch);
           if (
-            isSafePositiveInteger(onChainCurrentEpochNum) &&
+            onChainCurrentEpochNum !== null &&
             onChainCurrentEpochNum >= storedCurrentEpochNumber
           ) {
             currentEpochCache = {
@@ -144,8 +169,8 @@ async function resolveCachedCurrentEpoch(): Promise<number | null> {
         abi: READ_ABI,
         functionName: "currentEpoch",
       });
-      const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
-      if (isSafePositiveInteger(onChainCurrentEpochNum)) {
+      const onChainCurrentEpochNum = parseChainEpochNumber(onChainCurrentEpoch);
+      if (onChainCurrentEpochNum !== null) {
         currentEpochCache = {
           value: onChainCurrentEpochNum,
           expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
@@ -179,7 +204,7 @@ function filterEpochRowsByCurrentEpoch(
 
   return Object.fromEntries(
     Object.entries(rows).filter(([key, value]) => {
-      const epoch = Number(key);
+      const epoch = parseStoredPositiveIntegerOrZero(key);
       if (!isSafePositiveInteger(epoch) || epoch > currentEpochNumber) return false;
       const resolvedBlock = value.resolvedBlock ?? "0";
       if (/^\d+$/.test(resolvedBlock) && BigInt(resolvedBlock) > 0n && BigInt(resolvedBlock) < CONTRACT_DEPLOY_BLOCK) return false;
@@ -210,14 +235,15 @@ async function readEpochRowsFromChain(epochIds: number[]): Promise<{
         const result = epochResults[index];
         if (result?.status !== "success") return;
         const row = result.result as [bigint, bigint, bigint, boolean, boolean, boolean];
+        const winningTile = parseEpochWinningTile(row[2]);
+        if (!row[3] || winningTile === null) return;
         const epochRow: EpochRow = {
-          winningTile: Number(row[2]),
+          winningTile,
           totalPool: formatUnits(row[0], 18),
           rewardPool: formatUnits(row[1], 18),
           isDailyJackpot: row[4],
           isWeeklyJackpot: row[5],
         };
-        if (!row[3]) return;
         responseRows[String(epoch)] = epochRow;
         resolvedPatch[String(epoch)] = epochRow;
       });
@@ -230,14 +256,15 @@ async function readEpochRowsFromChain(epochIds: number[]): Promise<{
             functionName: "epochs",
             args: [BigInt(epoch)],
           }) as [bigint, bigint, bigint, boolean, boolean, boolean];
+          const winningTile = parseEpochWinningTile(row[2]);
+          if (!row[3] || winningTile === null) continue;
           const epochRow: EpochRow = {
-            winningTile: Number(row[2]),
+            winningTile,
             totalPool: formatUnits(row[0], 18),
             rewardPool: formatUnits(row[1], 18),
             isDailyJackpot: row[4],
             isWeeklyJackpot: row[5],
           };
-          if (!row[3]) continue;
           responseRows[String(epoch)] = epochRow;
           resolvedPatch[String(epoch)] = epochRow;
         } catch {
@@ -274,7 +301,7 @@ async function buildEpochsPayload(
 
   const present = new Set<number>(
     Object.keys(epochs)
-      .map((key) => Number(key))
+      .map((key) => parseStoredPositiveIntegerOrZero(key))
       .filter(isSafePositiveInteger),
   );
   const missing: number[] = [];
@@ -355,10 +382,15 @@ export async function GET(request: Request) {
     limit: 30,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
-  const requestedEpochs = parseRequestedEpochs(request);
+  const parsedRequestedEpochs = parseRequestedEpochs(request);
+  if (!parsedRequestedEpochs.ok) {
+    failRouteMetric(metric, 400);
+    return jsonNoStore({ epochs: {}, error: parsedRequestedEpochs.error }, 400);
+  }
+  const requestedEpochs = parsedRequestedEpochs.epochs;
   const cacheKey = getCacheKey(requestedEpochs);
   const now = Date.now();
   const cached = epochsRouteCache.getFresh(cacheKey, now);

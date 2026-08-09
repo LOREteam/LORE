@@ -3,15 +3,15 @@
 import React, { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { cn } from "../lib/cn";
+import { CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS } from "../lib/constants";
+import { shortenAddress } from "../lib/utils";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 import { UiPanel } from "./ui/UiPanel";
 import { uiTokens } from "./ui/tokens";
 
 /* ═══════════════════════════════════════════
    LORE White Paper – fully animated, single-page
    ═══════════════════════════════════════════ */
-
-const CONTRACT = "0xa230...7d36";
-const TOKEN = "0x6F17...F180";
 
 export const WhitePaper = React.memo(function WhitePaper() {
   return (
@@ -80,10 +80,10 @@ export const WhitePaper = React.memo(function WhitePaper() {
           </P>
           <P>
             Every bet, every payout, every jackpot trigger, and every winner selection is verifiable on-chain.
-            The repository is currently tested on Sepolia while the UI and docs are prepared for a mainnet deployment.
+            The repository is currently tested on Linea Sepolia while the UI and docs are prepared for a mainnet deployment.
           </P>
           <InfoBox emoji="🎲" title="How Randomness Is Generated">
-            V9 winner entropy is computed on-chain from:
+            The current winner entropy formula is computed on-chain from:
             <Code>keccak256(block.prevrandao, blockhash(block.number - 1), epoch, totalPoolWithRollover, dailyJackpotPool, weeklyJackpotPool) % 25 + 1</Code>.
             <br /><br />
             Each epoch is resolved atomically in a single transaction once its timer ends. Bets are rejected in the final 2 seconds of the epoch, so a normal bet and resolve cannot land in the same epoch-ending window. The hardened source removes <Code>msg.sender</Code> from winner entropy to prevent caller-address grinding, but this is still not VRF-grade randomness.
@@ -101,7 +101,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
             { step: "1", title: "Epoch Starts", desc: "A new round begins with a fresh 5×5 grid. The countdown timer starts." },
             { step: "2", title: "Place Bets", desc: "Select one or more tiles and stake LINEA tokens. Each tile accumulates its own pool from all players." },
             { step: "3", title: "Epoch Ends", desc: "When the timer reaches zero, no more bets are accepted. The smart contract resolves the epoch." },
-            { step: "4", title: "Winner Revealed", desc: "The contract resolves the epoch in one transaction and maps the V9 on-chain entropy hash to tile 1–25." },
+            { step: "4", title: "Winner Revealed", desc: "The contract resolves the epoch in one transaction and maps the on-chain entropy hash to tile 1–25." },
             { step: "5", title: "Fees Split", desc: "Fresh stake is split: 92% to winners, 2% to daily jackpot, 3% to weekly jackpot, 2% protocol fee, and 1% burn. A 0.05% resolver reward comes from the protocol fee; the remainder is split between treasury and Safety Pool." },
             { step: "6", title: "Jackpot Check", desc: "If there is at least one winner, the contract runs daily/weekly checks at resolve time. On trigger, the full jackpot pool is added to this epoch." },
             { step: "7", title: "Claim Rewards", desc: "Winners claim their share from the Rewards panel. If no one hit the winning tile, the base reward rolls into the next round and the jackpot pools keep growing." },
@@ -126,17 +126,17 @@ export const WhitePaper = React.memo(function WhitePaper() {
             Every round, 2% feeds the <Accent>Daily Jackpot</Accent> pool and 3% feeds the <Accent>Weekly Jackpot</Accent> pool.
             These pools accumulate across all rounds until a jackpot triggers.
             <br /><br />
-            <B>Daily Jackpot</B> - once per calendar day (UTC), one pseudo-random eligible resolved round with a winner triggers the daily jackpot.
+            <B>Daily Jackpot</B> - after each calendar day window opens (UTC), eligible resolved rounds with winners can trigger the daily jackpot.
             The <B>entire accumulated daily pool</B> is added to that round&apos;s reward, on top of the normal 92%.
             <br /><br />
-            <B>Weekly Jackpot</B> - once per calendar week (Monday 00:00 UTC to Sunday 23:59 UTC), one pseudo-random eligible round triggers the weekly jackpot.
+            <B>Weekly Jackpot</B> - after each Monday-based week window opens, eligible resolved rounds can trigger the weekly jackpot.
             Same logic: the entire weekly pool goes to that round&apos;s winning-tile holders.
             <br /><br />
             If nobody bet on the winning tile in a round, the base reward (92%) goes back into the <Accent>rollover pool</Accent>, and jackpot pools keep growing - no jackpot can trigger without a real winner.
             This means jackpots can only get <B>bigger</B> over time.
           </InfoBox>
           <InfoBox emoji="🔥" title="Burn & Safety Pool Fee">
-            1% of every round is permanently burned (sent to <Code>0x...dEaD</Code>), reducing supply forever.
+            1% of every round is sent permanently to <Code>0x...dEaD</Code>, removing those tokens from circulation without changing the token contract&apos;s reported total supply.
             2% goes to protocol accounting: 0.05% rewards the resolver, then the remaining 1.95% is split approximately equally between treasury and the Safety Pool.
           </InfoBox>
           <P>
@@ -173,7 +173,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
           <Grid2>
             <FeatureCard icon="⚡" title="Bet Size" desc="Set LINEA tokens per tile per round" />
             <FeatureCard icon="🎯" title="Targets" desc="Number of random tiles per round (1–25)" />
-            <FeatureCard icon="🔄" title="Cycles" desc="Total rounds to auto-bet (1–∞)" />
+            <FeatureCard icon="🔄" title="Cycles" desc="Total rounds to auto-bet (1-5000)" />
             <FeatureCard icon="💾" title="Persistence" desc="Saves the run locally and restores it after reload when the wallet session is still valid" />
           </Grid2>
           <InfoBox emoji="🤖" title="How the Bot Works">
@@ -239,17 +239,17 @@ export const WhitePaper = React.memo(function WhitePaper() {
 
         <Section id="contract" badge="08" title="Smart Contracts" icon={ContractIcon} delay={0.35}>
           <P>
-            LORE is shown using the currently configured V9 deployment. During testing this is Linea Sepolia; for launch the same UI is intended to point at the final <Accent>Linea mainnet</Accent> contracts:
+            LORE uses the deployment configured for the selected network. During testing this is Linea Sepolia; for launch the same UI is intended to point at the final <Accent>Linea mainnet</Accent> contracts:
           </P>
           <div className="space-y-3 mb-6">
             <ContractCard
-              name="Game Contract (LineaOreV9 live)"
-              address={CONTRACT}
-              functions={["placeBet()", "placeBatchBets()", "placeBatchBetsSameAmount()", "placeBatchBetsBitmap()", "claimReward()", "resolveEpoch()", "claimEpochRebate()", "claimEpochsRebate()", "getJackpotInfo()", "getRebateSummary()"]}
+              name="Game Contract (configured deployment)"
+              address={shortenAddress(CONTRACT_ADDRESS)}
+              functions={["placeBet()", "placeBatchBets()", "placeBatchBetsSameAmount()", "placeBatchBetsBitmap()", "placeBatchBetsBitmapForEpoch()", "claimReward()", "resolveEpoch()", "claimEpochRebate()", "claimEpochsRebate()", "flushProtocolFees()", "getJackpotInfo()", "getRebateSummary()"]}
             />
             <ContractCard
               name="LINEA Token"
-              address={TOKEN}
+              address={shortenAddress(LINEA_TOKEN_ADDRESS)}
               functions={["approve()", "transfer()", "balanceOf()", "allowance()"]}
             />
           </div>
@@ -257,22 +257,22 @@ export const WhitePaper = React.memo(function WhitePaper() {
             Key contract features:
           </P>
           <ul className="space-y-2 mb-6 ml-1">
-            <Li emoji="🎲">Transparent V9 winner entropy: <Code>keccak256(block.prevrandao, blockhash(block.number - 1), epoch, totalPoolWithRollover, dailyJackpotPool, weeklyJackpotPool) % 25 + 1</Code></Li>
+            <Li emoji="🎲">Transparent on-chain winner entropy: <Code>keccak256(block.prevrandao, blockhash(block.number - 1), epoch, totalPoolWithRollover, dailyJackpotPool, weeklyJackpotPool) % 25 + 1</Code></Li>
             <Li emoji="🔒">
               No arbitrary owner withdrawal of active player rewards or jackpot balances. Funds move only through explicit
               reward, Safety Pool, resolver reward, protocol-fee, and one-year dust-settlement paths.
             </Li>
-            <Li emoji="📊"><Code>getTileData()</Code> returns all 25 tiles&apos; stake totals and on-chain unique-player counts in one call</Li>
+            <Li emoji="📊"><Code>getTileData()</Code> returns all 25 stake totals; canonical bet events provide exact unique-player counts</Li>
             <Li emoji="⏰">Epoch end times enforced on-chain - no bets after the deadline</Li>
             <Li emoji="🎰">Daily/weekly jackpot checks are on-chain and based on elapsed UTC day/week windows at resolve time</Li>
             <Li emoji="♻️">Rollover: if nobody hit the winning tile, the 92% base reward flows into the <Code>rolloverPool</Code>, inflating the next round</Li>
-            <Li emoji="🛡">ReentrancyGuard on all state-changing functions; SafeERC20 for all token transfers</Li>
+            <Li emoji="🛡">Reentrancy protection on all state-changing functions; SafeERC20 for all token transfers</Li>
             <Li emoji="📅">Weekly jackpot uses Monday-based weeks (Monday 00:00 UTC start) via <Code>MONDAY_OFFSET</Code></Li>
           </ul>
           <InfoBox emoji="🔍" title="Transparent On-Chain Entropy">
             The winner tile and jackpot trigger checks are computed inside the smart contract using public on-chain data.
             This is auditable pseudo-randomness, not VRF or commit-reveal randomness. Removing the resolver address closes caller-address grinding, but a sequencer still has stronger influence over block inputs and transaction inclusion.
-            For mainnet, monitoring and any future hardening such as VRF or commit-reveal should be treated as explicit launch-review items.
+            Mainnet launch should include explicit operator acceptance of this model; future hardening such as VRF or commit-reveal remains a separate protocol upgrade decision.
           </InfoBox>
         </Section>
 
@@ -297,7 +297,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
             Strategic players can analyze tile distribution (via Analytics) and concentrate
             bets on underpopulated tiles for better odds and higher payouts.
             The jackpot adds an extra layer: every winning round has a chance to also trigger the jackpot.
-            Play consistently – the more rounds you win, the higher your chance of being in a jackpot round.
+            More eligible winning rounds create more chances to be present when a jackpot triggers, but no result is guaranteed.
           </InfoBox>
         </Section>
 
@@ -336,14 +336,14 @@ export const WhitePaper = React.memo(function WhitePaper() {
             What this means for LORE players:
           </P>
           <ul className="space-y-2 mb-6 ml-1">
-            <Li emoji="⚡">Bets land in the next block – typically under 2 seconds</Li>
-            <Li emoji="🛡">Batch bets (<Code>placeBatchBets</Code>) settle reliably even under network load</Li>
-            <Li emoji="💸">Gas costs remain low thanks to proof aggregation and data compression (up to 90% cheaper finalization vs. earlier versions)</Li>
-            <Li emoji="🔒">Phylax Credible Layer integration (Jan 2026) adds proactive exploit prevention at the sequencer level</Li>
+            <Li emoji="⚡">Bets often land in the next block, while wallet, RPC, and network conditions can still add delay</Li>
+            <Li emoji="🛡">Batch bet entrypoints reduce repeated clicks and keep multi-tile play in one transaction when supported by the deployed contract</Li>
+            <Li emoji="💸">Linea fees are usually far lower than L1-style play, but the wallet quote is the final source for the exact transaction cost</Li>
+            <Li emoji="🔒">LORE keeps the player-facing rules narrow: no arbitrary owner withdrawal of active rewards, explicit claim paths, and on-chain accounting</Li>
           </ul>
           <InfoBox emoji="🏗" title="Fusaka Alignment">
-            Since December 2025, Linea runs the Fusaka upgrade – full parity with Ethereum&apos;s latest EVM, including <Code>PUSH0</Code> and <Code>MCOPY</Code> opcodes.
-            Combined with PeerDAS (EIP-7594) for higher blob throughput, L2 transaction costs will continue to decrease throughout 2026.
+            LORE is written for the current Linea EVM environment and avoids depending on speculative future fee reductions.
+            Network upgrades can improve capacity over time, but gameplay and launch readiness are validated against the deployed chain configuration.
           </InfoBox>
         </Section>
 
@@ -407,9 +407,11 @@ export const WhitePaper = React.memo(function WhitePaper() {
 /* ════════════════ Sub-components ════════════════ */
 
 function Hero() {
+  const { reducedMotion, motionReady } = useReducedMotion();
+
   return (
     <div className="relative overflow-hidden pt-3 pb-2 text-center sm:pt-4 sm:pb-3">
-      <FloatingParticles />
+      {motionReady && !reducedMotion && <FloatingParticles />}
       <div className="relative z-10">
         <div className={`mb-4 inline-flex items-center gap-2 rounded-full border border-violet-500/25 bg-violet-500/10 px-3 py-1 animate-slide-up sm:mb-5 ${uiTokens.focusRing}`}>
           <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
@@ -424,7 +426,7 @@ function Hero() {
 
         <p className="mx-auto max-w-lg animate-slide-up text-sm leading-relaxed text-gray-400" style={{ animationDelay: "0.15s" }}>
           A fully on-chain prediction mining game on Linea.
-          Mine tiles, win pools, earn rewards – all transparent, all verifiable.
+          Mine tiles, compete for pools, and track rewards - all transparent, all verifiable.
         </p>
 
         <div className="mt-4 flex items-center justify-center gap-6 animate-slide-up sm:mt-5" style={{ animationDelay: "0.2s" }}>
@@ -441,7 +443,7 @@ function Hero() {
 
 function FloatingParticles() {
   return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+    <div aria-hidden="true" className="absolute inset-0 overflow-hidden pointer-events-none">
       {Array.from({ length: 12 }).map((_, i) => (
         <div
           key={i}
@@ -761,6 +763,8 @@ function Footer() {
       </p>
       <p className="text-[9px] text-gray-400 mt-2">
         <a href="/privacy" className="text-violet-400/80 hover:text-violet-400 underline">Privacy Policy</a>
+        <span className="mx-2 text-gray-600">/</span>
+        <a href="/terms" className="text-violet-400/80 hover:text-violet-400 underline">Terms of Play</a>
       </p>
     </div>
   );

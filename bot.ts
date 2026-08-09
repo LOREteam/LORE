@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { createPublicClient, createWalletClient, getAddress, http, fallback, formatUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { sanitizeSentryPayload } from "./app/lib/sentrySanitize";
 import {
   clampKeeperFeeOverridesToBalance,
   getAffordableKeeperGasLimit,
@@ -33,6 +34,9 @@ const ALERT_CHAT_ID = process.env.ALERT_TELEGRAM_CHAT_ID ?? "";
 const ALERT_THREAD_ID = process.env.ALERT_TELEGRAM_THREAD_ID ?? "";
 const ALERT_PREFIX = process.env.ALERT_PREFIX ?? "LORE Keeper";
 const ALERT_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_ALERT_RESPONSE_BYTES = 64 * 1024;
+const ALERT_CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const PENDING_RESOLVE_STALE_MS = (() => {
   const raw = Number(process.env.PENDING_RESOLVE_STALE_MS ?? "45000");
   if (Number.isFinite(raw) && raw > 0) return raw;
@@ -46,6 +50,13 @@ const FORCE_REPLACE_PENDING_NONCE_GAP = (() => {
   if (process.env.FORCE_REPLACE_PENDING_NONCE_GAP !== undefined)
     console.warn(`[keeper] Invalid FORCE_REPLACE_PENDING_NONCE_GAP="${process.env.FORCE_REPLACE_PENDING_NONCE_GAP}", defaulting to 6`);
   return 6;
+})();
+const PENDING_RESOLVE_REVERT_RETRY_MS = (() => {
+  const raw = Number(process.env.PENDING_RESOLVE_REVERT_RETRY_MS ?? "300000");
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  if (process.env.PENDING_RESOLVE_REVERT_RETRY_MS !== undefined)
+    console.warn(`[keeper] Invalid PENDING_RESOLVE_REVERT_RETRY_MS="${process.env.PENDING_RESOLVE_REVERT_RETRY_MS}", defaulting to 300000`);
+  return 300_000;
 })();
 const REPLACE_PENDING_MAX_FEE_BUMP_PERCENT = 220n;
 const REPLACE_PENDING_PRIORITY_BUMP_PERCENT = 200n;
@@ -86,17 +97,56 @@ const ABI = RESOLVE_ABI;
 type PendingResolve = {
   epoch: bigint;
   hash: `0x${string}`;
+  nonce: number;
   submittedAt: number;
+  retryAt?: number;
 };
 
 const alertCooldowns = new Map<string, number>();
 const PENDING_RESOLVE_META_KEY = "bot:pendingResolve";
 
+function describeKeeperError(error: unknown, maxLength = 220) {
+  const message = error instanceof Error ? error.message : String(error ?? "unknown error");
+  return String(sanitizeSentryPayload(message)).slice(0, maxLength);
+}
+
+async function readBoundedAlertResponseText(response: Response) {
+  const contentLength = parseAlertContentLengthHeader(response.headers.get("content-length"));
+  if (contentLength !== null && contentLength > MAX_ALERT_RESPONSE_BYTES) {
+    throw new Error("alert response body too large");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let totalBytes = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_ALERT_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("alert response body too large");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();
+  return text;
+}
+
+function parseAlertContentLengthHeader(value: string | null) {
+  if (value == null || value === "") return null;
+  if (!ALERT_CONTENT_LENGTH_RE.test(value)) throw new Error("alert response has invalid content-length");
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) throw new Error("alert response has invalid content-length");
+  return Number(parsed);
+}
+
 function savePendingResolve(value: PendingResolve | null): PendingResolve | null {
   try {
     setMetaJson(PENDING_RESOLVE_META_KEY, value ? { ...value, epoch: value.epoch.toString() } : null);
   } catch (err) {
-    console.warn("[keeper] Failed to persist pendingResolve:", err instanceof Error ? err.message : err);
+    console.warn("[keeper] Failed to persist pendingResolve:", describeKeeperError(err));
   }
   return value;
 }
@@ -140,12 +190,12 @@ async function sendTelegramAlert(text: string, key: string, cooldownMs = ALERT_C
         signal: AbortSignal.timeout(ALERT_REQUEST_TIMEOUT_MS),
       });
       if (res.ok) return;
-      const msg = await res.text();
-      console.error(`[alert] Telegram send failed (attempt ${attempt + 1}): HTTP ${res.status} ${msg}`);
+      const msg = await readBoundedAlertResponseText(res).catch((err) => describeKeeperError(err));
+      console.error(`[alert] Telegram send failed (attempt ${attempt + 1}): HTTP ${res.status} ${describeKeeperError(msg)}`);
       // Don't retry permanent client errors (4xx except 429)
       if (res.status !== 429 && res.status < 500) return;
     } catch (err) {
-      console.error(`[alert] Telegram send error (attempt ${attempt + 1}):`, err);
+      console.error(`[alert] Telegram send error (attempt ${attempt + 1}):`, describeKeeperError(err));
     }
     if (attempt === 0) await delay(2000);
   }
@@ -163,6 +213,18 @@ function isNetworkLikeError(msg: string) {
     low.includes("econnrefused") ||
     low.includes("429") ||
     low.includes("rate limit")
+  );
+}
+
+function isReceiptNotFoundLikeError(error: unknown) {
+  const name = error instanceof Error ? error.name.toLowerCase() : "";
+  const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
+  return (
+    name.includes("transactionreceiptnotfound") ||
+    message.includes("transaction receipt not found") ||
+    message.includes("receipt not found") ||
+    message.includes("transaction not found") ||
+    message.includes("not found")
   );
 }
 
@@ -194,6 +256,7 @@ async function tryResolveEpochAction(options: {
   contractAddress: `0x${string}`;
   epoch: bigint;
   gasLimitMarginPercent: bigint;
+  replacePendingResolve?: PendingResolve;
   publicClient: ReturnType<typeof createPublicClient>;
   walletClient: ReturnType<typeof createWalletClient>;
 }) {
@@ -202,6 +265,7 @@ async function tryResolveEpochAction(options: {
     contractAddress,
     epoch,
     gasLimitMarginPercent,
+    replacePendingResolve,
     publicClient,
     walletClient,
   } = options;
@@ -222,7 +286,14 @@ async function tryResolveEpochAction(options: {
     address: accountAddress,
     blockTag: "pending",
   });
-  const replacingPendingTx = pendingNonce > latestNonce;
+  const hasPendingTransaction = pendingNonce > latestNonce;
+  const replacingPendingTx =
+    hasPendingTransaction && replacePendingResolve?.nonce === latestNonce;
+  if (hasPendingTransaction && !replacingPendingTx) {
+    throw new Error(
+      `keeper_pending_nonce_unbound latest=${latestNonce.toString()} pending=${pendingNonce.toString()}`,
+    );
+  }
   const estimatedFeeOverrides = getKeeperFeeOverrides(
     fees,
     APP_CHAIN.id,
@@ -256,18 +327,28 @@ async function tryResolveEpochAction(options: {
     functionName: "resolveEpoch",
     args: [epoch],
     gas,
-    ...(replacingPendingTx ? { nonce: latestNonce } : {}),
+    nonce: latestNonce,
     ...txFeeOverrides,
   });
   try {
-    await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status !== "success") {
+      console.warn(`Resolve tx reverted. Deferring retry. Tx: ${hash}`);
+      return {
+        epoch,
+        hash,
+        nonce: latestNonce,
+        submittedAt: Date.now(),
+        retryAt: Date.now() + PENDING_RESOLVE_REVERT_RETRY_MS,
+      } satisfies PendingResolve;
+    }
     console.log(`Resolved epoch ${epoch.toString()} (gas: ${gas}). Tx: ${hash}`);
     return null;
   } catch (receiptErr) {
     const receiptMsg = receiptErr instanceof Error ? (receiptErr.message?.toLowerCase() ?? "") : String(receiptErr).toLowerCase();
     if (receiptMsg.includes("timed out") || receiptMsg.includes("timeout")) {
       console.log(`Resolve tx sent but receipt timed out. Will verify next cycles. Tx: ${hash}`);
-      return { epoch, hash, submittedAt: Date.now() } satisfies PendingResolve;
+      return { epoch, hash, nonce: latestNonce, submittedAt: Date.now() } satisfies PendingResolve;
     }
     throw receiptErr;
   }
@@ -309,13 +390,32 @@ async function startKeeperBot() {
   let consecutiveNetworkErrors = 0;
   let pendingResolve: PendingResolve | null = null;
   try {
-    const stored = getMetaJson<{ epoch: string; hash: `0x${string}`; submittedAt: number }>(PENDING_RESOLVE_META_KEY);
-    if (stored?.epoch && stored?.hash && stored?.submittedAt) {
-      pendingResolve = { epoch: BigInt(stored.epoch), hash: stored.hash, submittedAt: stored.submittedAt };
-      console.log(`[keeper] Restored pending resolve for epoch ${pendingResolve.epoch.toString()} from storage. Tx: ${pendingResolve.hash}`);
+    const stored = getMetaJson<{ epoch: string; hash: `0x${string}`; nonce?: number; submittedAt: number; retryAt?: number }>(PENDING_RESOLVE_META_KEY);
+    const storedNonce = stored?.nonce;
+    const storedRetryAt = stored?.retryAt;
+    if (
+      stored?.epoch &&
+      stored?.hash &&
+      typeof storedNonce === "number" &&
+      Number.isSafeInteger(storedNonce) &&
+      storedNonce >= 0 &&
+      stored.submittedAt
+    ) {
+      const restoredPendingResolve: PendingResolve = {
+        epoch: BigInt(stored.epoch),
+        hash: stored.hash,
+        nonce: storedNonce,
+        submittedAt: stored.submittedAt,
+        ...(typeof storedRetryAt === "number" && Number.isSafeInteger(storedRetryAt) ? { retryAt: storedRetryAt } : {}),
+      };
+      pendingResolve = restoredPendingResolve;
+      console.log(`[keeper] Restored pending resolve for epoch ${restoredPendingResolve.epoch.toString()} from storage. Tx: ${restoredPendingResolve.hash}`);
+    } else if (stored) {
+      console.warn("[keeper] Ignoring legacy or invalid pendingResolve without a bound nonce.");
+      savePendingResolve(null);
     }
   } catch (err) {
-    console.warn("[keeper] Failed to restore pendingResolve from storage:", err instanceof Error ? err.message : err);
+    console.warn("[keeper] Failed to restore pendingResolve from storage:", describeKeeperError(err));
   }
 
   while (true) {
@@ -344,6 +444,7 @@ async function startKeeperBot() {
       const totalPool = epochData[0] as bigint;
       const overdue = -secondsLeft;
 
+      let replacePendingResolve: PendingResolve | undefined;
       if (pendingResolve) {
         const pending = pendingResolve;
         const pendingResolved = epoch > pending.epoch;
@@ -354,12 +455,32 @@ async function startKeeperBot() {
           try {
             const receipt = await publicClient.getTransactionReceipt({ hash: pending.hash });
             console.log(`\nPending resolve receipt found for epoch ${pending.epoch.toString()} (${receipt.status}). Tx: ${pending.hash}`);
-            pendingResolve = savePendingResolve(null);
+            if (receipt.status === "success") {
+              pendingResolve = savePendingResolve(null);
+            } else if (pending.retryAt && Date.now() < pending.retryAt) {
+              process.stdout.write(`\rEpoch #${epoch.toString()} | resolve reverted | retry deferred   `);
+              await delay(1500);
+              continue;
+            } else if (pending.retryAt) {
+              console.warn(`\nResolve retry window reached for epoch ${pending.epoch.toString()}.`);
+              pendingResolve = savePendingResolve(null);
+            } else {
+              const retryAt = Date.now() + PENDING_RESOLVE_REVERT_RETRY_MS;
+              console.warn(`\nResolve tx reverted for epoch ${pending.epoch.toString()}; retry deferred until ${new Date(retryAt).toISOString()}.`);
+              pendingResolve = savePendingResolve({ ...pending, retryAt });
+              await delay(1500);
+              continue;
+            }
           } catch (receiptCheckErr) {
             const receiptCheckMsg = receiptCheckErr instanceof Error ? (receiptCheckErr.message ?? "") : String(receiptCheckErr);
             if (isNetworkLikeError(receiptCheckMsg)) {
               // Network error - don't assume tx is stale, just wait and retry
-              console.warn(`\nPending resolve receipt check failed (network): ${receiptCheckMsg.slice(0, 100)}`);
+              console.warn(`\nPending resolve receipt check failed (network): ${describeKeeperError(receiptCheckMsg, 100)}`);
+              await delay(3000);
+              continue;
+            }
+            if (!isReceiptNotFoundLikeError(receiptCheckErr)) {
+              console.warn(`\nPending resolve receipt check failed (unknown): ${describeKeeperError(receiptCheckErr, 100)}`);
               await delay(3000);
               continue;
             }
@@ -382,8 +503,9 @@ async function startKeeperBot() {
               continue;
             }
             console.log(
-              `\nPending resolve tx marked stale for epoch ${pending.epoch.toString()} (age=${Math.floor(pendingAgeMs / 1000)}s, nonceGap=${nonceGap}), retrying with latest nonce.`,
+              `\nPending resolve tx marked stale for epoch ${pending.epoch.toString()} (age=${Math.floor(pendingAgeMs / 1000)}s, nonceGap=${nonceGap}), replacing only its bound nonce.`,
             );
+            replacePendingResolve = pending;
             pendingResolve = savePendingResolve(null);
           }
         }
@@ -400,19 +522,22 @@ async function startKeeperBot() {
             contractAddress,
             epoch,
             gasLimitMarginPercent: GAS_LIMIT_MARGIN_PERCENT,
+            replacePendingResolve,
             publicClient,
             walletClient,
           }));
           consecutiveErrors = 0;
           consecutiveNetworkErrors = 0;
         } catch (txErr) {
-          const errStr = txErr instanceof Error ? txErr.message.toLowerCase() : String(txErr).toLowerCase();
+          const errMessage = txErr instanceof Error ? txErr.message : String(txErr);
+          const errStr = errMessage.toLowerCase();
+          const safeErr = describeKeeperError(errMessage);
           if (isSkippableResolveError(errStr)) {
-            console.log(`Epoch ${epoch.toString()} skipped (${errStr.slice(0, 80)})`);
+            console.log(`Epoch ${epoch.toString()} skipped (${safeErr})`);
             await delay(1500);
           } else {
             await sendTelegramAlert(
-              `resolve tx error on epoch \`${epoch.toString()}\`\n\`${errStr.slice(0, 220)}\``,
+              `resolve tx error on epoch \`${epoch.toString()}\`\n\`${safeErr}\``,
               "resolve-tx-error",
             );
             throw txErr;
@@ -434,27 +559,28 @@ async function startKeeperBot() {
       consecutiveErrors += 1;
       const msg = error instanceof Error ? error.message : String(error);
       const low = msg.toLowerCase();
+      const safeMessage = describeKeeperError(msg);
       if (isNetworkLikeError(low)) {
         consecutiveNetworkErrors += 1;
       } else {
         consecutiveNetworkErrors = 0;
       }
       if (isSkippableResolveError(low) || low.includes("0x22daea9a")) {
-        console.log(`\n[skip] ${low.slice(0, 80)}`);
+        console.log(`\n[skip] ${safeMessage}`);
       } else {
-        console.log(`\nKeeper error: ${msg}`);
+        console.log(`\nKeeper error: ${safeMessage}`);
       }
 
       if (consecutiveNetworkErrors >= 3) {
         await sendTelegramAlert(
-          `network/rpc instability x${consecutiveNetworkErrors}\n\`${low.slice(0, 220)}\``,
+          `network/rpc instability x${consecutiveNetworkErrors}\n\`${safeMessage}\``,
           "rpc-instability",
           10 * 60_000,
         );
       }
       if (consecutiveErrors >= 5) {
         await sendTelegramAlert(
-          `consecutive errors x${consecutiveErrors}\n\`${low.slice(0, 220)}\``,
+          `consecutive errors x${consecutiveErrors}\n\`${safeMessage}\``,
           "consecutive-errors",
           10 * 60_000,
         );
@@ -467,6 +593,6 @@ async function startKeeperBot() {
 }
 
 startKeeperBot().catch((err) => {
-  console.error("[keeper] Fatal startup error:", err);
+  console.error("[keeper] Fatal startup error:", describeKeeperError(err));
   process.exit(1);
 });

@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://playlore.xyz";
+const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://playlore.xyz").trim().replace(/\/+$/, "");
 
 export default function robots(): MetadataRoute.Robots {
   const isProduction =
@@ -18,7 +18,7 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       {
         userAgent: "*",
-        allow: ["/", "/jackpot-win", "/api/jackpots/og"],
+        allow: ["/", "/jackpot-win", "/privacy", "/terms", "/api/jackpots/og"],
         disallow: ["/api/", "/admin", "/dev"],
       },
     ],

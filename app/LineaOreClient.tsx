@@ -50,7 +50,6 @@ export default function LineaOreClient({
     handleTabChange,
     realTotalStaked,
     linePath,
-    chartHasData,
     sidebarProps,
     headerProps,
     walletShellProps,
@@ -98,7 +97,6 @@ export default function LineaOreClient({
           initialNowMs={initialNowMs}
           realTotalStaked={realTotalStaked}
           linePath={linePath}
-          chartHasData={chartHasData}
           {...headerProps}
         />
 

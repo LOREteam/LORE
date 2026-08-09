@@ -6,6 +6,7 @@ import {
   getConfiguredLineaTokenAddress,
   getContractHasRebateApi,
   getContractHasTokenGetter,
+  getContractRequiresEpochBoundBets,
   getLineaChain,
   getLineaChainName,
   getLineaExplorerTxBaseUrl,
@@ -30,6 +31,9 @@ export const CONTRACT_HAS_TOKEN_GETTER = getContractHasTokenGetter(
 export const CONTRACT_HAS_REBATE_API = getContractHasRebateApi(
   CONTRACT_ADDRESS,
   process.env.NEXT_PUBLIC_CONTRACT_HAS_REBATE_API,
+);
+export const CONTRACT_REQUIRES_EPOCH_BOUND_BETS = getContractRequiresEpochBoundBets(
+  process.env.NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
 );
 
 // --- Contract Deploy Block ---
@@ -67,6 +71,7 @@ export const TOKEN_ABI = parseAbi([
   "function approve(address spender, uint256 amount) external returns (bool)",
   "function allowance(address owner, address spender) external view returns (uint256)",
   "function balanceOf(address account) external view returns (uint256)",
+  "function decimals() external view returns (uint8)",
   "function transfer(address to, uint256 amount) external returns (bool)",
   "error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)",
   "error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed)",
@@ -77,6 +82,7 @@ export const GAME_ABI = parseAbi([
   "function placeBatchBets(uint256[] calldata _tileIds, uint256[] calldata _amounts) external",
   "function placeBatchBetsSameAmount(uint256[] calldata _tileIds, uint256 _amount) external",
   "function placeBatchBetsBitmap(uint32 _tileMask, uint256 _amount) external",
+  "function placeBatchBetsBitmapForEpoch(uint256 _expectedEpoch, uint32 _tileMask, uint256 _amount) external",
   "function claimReward(uint256 _epoch) external",
   "function claimRewards(uint256[] calldata _epochs) external",
   "function claimEpochRebate(uint256 epoch) external",
@@ -110,6 +116,7 @@ export const GAME_ABI = parseAbi([
   "function pendingResolverRewards(address user) public view returns (uint256)",
   "function epochRebatePool(uint256 epoch) public view returns (uint256)",
   "function epochRebateClaimed(uint256 epoch) public view returns (uint256)",
+  "function epochRewardClaimed(uint256 epoch) public view returns (uint256)",
   "function rebateClaimed(uint256 epoch, address user) public view returns (bool)",
   "function epochDustSettled(uint256 epoch) public view returns (bool)",
   "function epochResolvedAt(uint256 epoch) public view returns (uint256)",
@@ -154,6 +161,15 @@ export const GAME_ABI = parseAbi([
   "error DustAlreadySettled()",
   "error DustSettlementDelayNotReached()",
   "error RewardClaimWindowExpired()",
+  "error EpochClockOverflow()",
+  "error ResolutionDataOverflow()",
+  "error UserEpochVolumeOverflow()",
+  "error SafeERC20FailedOperation(address token)",
+  "error ReentrancyGuardReentrantCall()",
+  "error OwnableInvalidOwner(address owner)",
+  "error OwnableUnauthorizedAccount(address account)",
+  // V10: prevents a delayed transaction from silently betting in the next epoch.
+  "error UnexpectedEpoch()",
   // V9 atomic contract: reject bets in the last LAST_BET_GRACE_SECONDS window.
   "error EpochEnded()",
   "error EpochClosing()",

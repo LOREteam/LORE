@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 const LazyChatWidget = dynamic(() => import("./chat/ChatWidget").then((mod) => mod.ChatWidget), {
   loading: () => (
     <button
+      type="button"
       className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-600/80 shadow-lg shadow-violet-500/20"
       aria-label="Open chat"
       title="Open chat"

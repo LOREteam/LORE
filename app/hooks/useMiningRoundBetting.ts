@@ -1,6 +1,7 @@
 "use client";
 
 import { log } from "../lib/logger";
+import { formatRetryWaitSeconds } from "../lib/mining/networkRetry";
 import { delay } from "../lib/utils";
 import type { PublicClient } from "viem";
 import { CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
@@ -17,8 +18,27 @@ import {
 import type { GasOverrides } from "./useMining.types";
 import type { PendingBetState, ReceiptState } from "./useMining.stateTypes";
 import { verifyRoundAlreadyPlaced } from "./useMiningRoundVerification";
-import { EIP7702_MINING_ENABLED } from "../lib/eip7702";
-import { canAttemptEip7702 } from "../lib/eip7702Runtime";
+
+function normalizeAutoMineNonce(value: unknown): number | null {
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    return Number(value);
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
+
+function normalizePendingBetState(value: PendingBetState, now: number): PendingBetState | null {
+  if (!Number.isSafeInteger(now) || now < 0) return null;
+  const nonce = normalizeAutoMineNonce(value.nonce);
+  if (nonce === null) return null;
+  if (!Number.isSafeInteger(value.submittedAt) || value.submittedAt < 0 || value.submittedAt > now + 5_000) {
+    return null;
+  }
+  return { submittedAt: value.submittedAt, nonce };
+}
 
 interface ExecuteAutoMineBetLoopOptions {
   actorAddress: `0x${string}`;
@@ -42,18 +62,14 @@ interface ExecuteAutoMineBetLoopOptions {
     singleAmountRaw: bigint,
     gasOverrides?: GasOverrides,
     txNonce?: number,
+    expectedEpoch?: bigint,
   ) => Promise<ReceiptState>;
   placeBetsSilent: (
     tiles: number[],
     singleAmountRaw: bigint,
     gasOverrides?: GasOverrides,
     txNonce?: number,
-  ) => Promise<ReceiptState>;
-  placeBets7702?: (
-    tiles: number[],
-    singleAmountRaw: bigint,
-    gasOverrides?: GasOverrides,
-    txNonce?: number,
+    expectedEpoch?: bigint,
   ) => Promise<ReceiptState>;
   publicClient: PublicClient;
   readSilentSend: () => unknown;
@@ -90,7 +106,6 @@ export async function executeAutoMineBetLoop({
   pendingBetRef,
   placeBets,
   placeBetsSilent,
-  placeBets7702,
   publicClient,
   readSilentSend,
   rounds,
@@ -128,28 +143,36 @@ export async function executeAutoMineBetLoop({
       }), "bet.getTransactionCount.pending"),
     ]);
 
-    const latestNonce = Number(latestNonceRaw);
-    const pendingNonce = Number(pendingNonceRaw);
+    const latestNonce = normalizeAutoMineNonce(latestNonceRaw);
+    const pendingNonce = normalizeAutoMineNonce(pendingNonceRaw);
+    if (latestNonce === null || pendingNonce === null || pendingNonce < latestNonce) {
+      throw new Error("Pending nonce status is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
+    }
     let txNonce: number | undefined;
     const submittedNonce = () => txNonce ?? pendingNonce;
     const pendingBet = pendingBetRef.current;
     let clearedTrackedPendingBet = false;
 
     if (pendingBet) {
+      const now = Date.now();
+      const trackedPendingBet = normalizePendingBetState(pendingBet, now);
+      if (trackedPendingBet === null) {
+        throw new Error("Tracked pending bet state is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
+      }
       const nonceGap = pendingNonce - latestNonce;
-      const pendingAgeMs = Date.now() - pendingBet.submittedAt;
-      const nodeStillTracksPendingNonce = pendingNonce > pendingBet.nonce;
+      const pendingAgeMs = now - trackedPendingBet.submittedAt;
+      const nodeStillTracksPendingNonce = pendingNonce > trackedPendingBet.nonce;
 
-      if (latestNonce > pendingBet.nonce) {
+      if (latestNonce > trackedPendingBet.nonce) {
         pendingBetRef.current = null;
         clearedTrackedPendingBet = true;
       } else if (nodeStillTracksPendingNonce) {
-        return waitForTrackedPendingBet(pendingBet, latestNonce, pendingNonce, pendingAgeMs);
+        return waitForTrackedPendingBet(trackedPendingBet, latestNonce, pendingNonce, pendingAgeMs);
       } else if (
         pendingAgeMs < betPendingStaleMs &&
         (pendingAgeMs < betPendingGraceMs || nonceGap < forceReplacePendingNonceGap)
       ) {
-        log.info("AutoMine", `round ${currentRoundIndex + 1}: pending bet nonce ${pendingBet.nonce} still in flight, waiting`, {
+        log.info("AutoMine", `round ${currentRoundIndex + 1}: pending bet nonce ${trackedPendingBet.nonce} still in flight, waiting`, {
           latestNonce,
           pendingNonce,
           pendingAgeMs,
@@ -159,7 +182,7 @@ export async function executeAutoMineBetLoop({
         return "pending";
       }
 
-      txNonce = pendingBet.nonce;
+      txNonce = trackedPendingBet.nonce;
       log.warn("AutoMine", `round ${currentRoundIndex + 1}: replacing stale pending bet with nonce ${txNonce}`, {
         latestNonce,
         pendingNonce,
@@ -177,34 +200,11 @@ export async function executeAutoMineBetLoop({
       throw blockedError;
     }
 
-    // --- EIP-7702 delegated path (highest priority when enabled) ---
-    if (EIP7702_MINING_ENABLED && placeBets7702 && canAttemptEip7702()) {
-      try {
-        const state = await placeBets7702(tilesToBet, singleAmountRaw, overrides, txNonce);
-        pendingBetRef.current = state === "pending" ? { submittedAt: Date.now(), nonce: submittedNonce() } : null;
-        return state;
-      } catch (error) {
-        if (isAmbiguousPendingTxError(error)) {
-          pendingBetRef.current = { submittedAt: Date.now(), nonce: submittedNonce() };
-          log.warn("AutoMine", "7702 send may already be pending, avoiding duplicate silent/wallet fallback", error);
-          return "pending";
-        }
-        if (isDeterministicBetExecutionError(error)) {
-          throw error;
-        }
-        if (isWalletUnavailableError(error)) {
-          throw error;
-        }
-        log.warn("AutoMine", "7702 delegated send failed, falling back to silent/wallet-write", error);
-        // fall through to standard paths
-      }
-    }
-
     // --- Standard silent path ---
     const silentSend = readSilentSend();
     if (silentSend) {
       try {
-        const state = await placeBetsSilent(tilesToBet, singleAmountRaw, overrides, txNonce);
+        const state = await placeBetsSilent(tilesToBet, singleAmountRaw, overrides, txNonce, currentEpoch);
         pendingBetRef.current = state === "pending" ? { submittedAt: Date.now(), nonce: submittedNonce() } : null;
         return state;
       } catch (error) {
@@ -220,14 +220,14 @@ export async function executeAutoMineBetLoop({
           throw error;
         }
         log.warn("AutoMine", "silent send failed, falling back to wallet write", error);
-        const state = await placeBets(tilesToBet, singleAmountRaw, overrides, txNonce);
+        const state = await placeBets(tilesToBet, singleAmountRaw, overrides, txNonce, currentEpoch);
         pendingBetRef.current = state === "pending" ? { submittedAt: Date.now(), nonce: submittedNonce() } : null;
         return state;
       }
     }
 
     // --- Wallet write fallback ---
-    const state = await placeBets(tilesToBet, singleAmountRaw, overrides, txNonce);
+    const state = await placeBets(tilesToBet, singleAmountRaw, overrides, txNonce, currentEpoch);
     pendingBetRef.current = state === "pending" ? { submittedAt: Date.now(), nonce: submittedNonce() } : null;
     return state;
   };
@@ -328,8 +328,9 @@ export async function executeAutoMineBetLoop({
           networkBackoffInitialMs,
           networkBackoffMaxMs,
         );
-        log.warn("AutoMine", `bet network error (attempt ${betAttempts}/${maxBetAttempts}), waiting ${(wait / 1000).toFixed(0)}s...`, error);
-        onProgress(`${currentRoundIndex + 1} / ${rounds} - RPC offline, retry in ${(wait / 1000).toFixed(0)}s...`);
+        const waitSeconds = formatRetryWaitSeconds(wait);
+        log.warn("AutoMine", `bet network error (attempt ${betAttempts}/${maxBetAttempts}), waiting ${waitSeconds}s...`, error);
+        onProgress(`${currentRoundIndex + 1} / ${rounds} - RPC offline, retry in ${waitSeconds}s...`);
         await delay(wait);
         onProgress(`${currentRoundIndex + 1} / ${rounds} - reconnecting RPC...`);
         continue;

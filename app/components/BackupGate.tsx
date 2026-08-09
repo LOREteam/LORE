@@ -1,22 +1,40 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { getAddress } from "viem";
 import { useDialogFocusTrap } from "../hooks/useDialogFocusTrap";
+import { uiTokens } from "./ui/tokens";
 
 const STORAGE_KEY = "lineaore:privy-backup-confirmed";
+
+function normalizeBackupAddress(address: string | null | undefined): `0x${string}` | null {
+  if (!address) return null;
+  try {
+    return getAddress(address).toLowerCase() as `0x${string}`;
+  } catch {
+    return null;
+  }
+}
 
 export function getBackupConfirmedAddress(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw === null) return null;
+    const normalizedAddress = normalizeBackupAddress(raw);
+    if (normalizedAddress) return normalizedAddress;
+    window.localStorage.removeItem(STORAGE_KEY);
+    return null;
   } catch {
     return null;
   }
 }
 
 export function setBackupConfirmed(address: string): void {
+  const normalizedAddress = normalizeBackupAddress(address);
+  if (!normalizedAddress) return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, address.toLowerCase());
+    window.localStorage.setItem(STORAGE_KEY, normalizedAddress);
   } catch {
     /* ignore */
   }
@@ -24,8 +42,10 @@ export function setBackupConfirmed(address: string): void {
 
 export function isBackupConfirmedFor(embeddedWalletAddress: string | null): boolean {
   if (!embeddedWalletAddress) return true;
+  const normalizedAddress = normalizeBackupAddress(embeddedWalletAddress);
+  if (!normalizedAddress) return false;
   const confirmed = getBackupConfirmedAddress();
-  return confirmed === embeddedWalletAddress.toLowerCase();
+  return confirmed === normalizedAddress;
 }
 
 interface BackupGateProps {
@@ -80,6 +100,7 @@ export function BackupGate({
         role="dialog"
         aria-modal="true"
         aria-labelledby="backup-gate-title"
+        aria-describedby="backup-gate-description"
         tabIndex={-1}
         className="relative w-full max-w-md rounded-2xl border-2 border-amber-500/40 bg-surface-raised shadow-2xl shadow-amber-500/10 overflow-hidden animate-slide-up"
       >
@@ -93,7 +114,7 @@ export function BackupGate({
             </h2>
           </div>
 
-          <p className="text-sm text-gray-300 leading-relaxed text-center">
+          <p id="backup-gate-description" className="text-sm text-gray-300 leading-relaxed text-center">
             Your Privy wallet holds your funds. If you lose access (clear data, new device), <span className="text-amber-300 font-semibold">only a backup of your private key</span> will restore it. We cannot recover it for you.
           </p>
 
@@ -106,7 +127,7 @@ export function BackupGate({
               type="button"
               onClick={handleExport}
               disabled={isExporting}
-              className="w-full px-4 py-3 rounded-xl border-2 border-amber-500/50 bg-amber-500/10 text-amber-300 font-bold uppercase tracking-widest text-sm hover:bg-amber-500/20 hover:border-amber-400/60 transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2"
+              className={`w-full px-4 py-3 rounded-xl border-2 border-amber-500/50 bg-amber-500/10 text-amber-300 font-bold uppercase tracking-widest text-sm hover:bg-amber-500/20 hover:border-amber-400/60 transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2 ${uiTokens.focusRing}`}
             >
               {isExporting ? (
                 <>
@@ -114,7 +135,7 @@ export function BackupGate({
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Opening…
+                  Opening...
                 </>
               ) : (
                 <>Export private key</>
@@ -137,7 +158,7 @@ export function BackupGate({
               type="button"
               onClick={handleContinue}
               disabled={!checked}
-              className="w-full px-4 py-3 rounded-xl bg-emerald-500/20 border-2 border-emerald-500/50 text-emerald-300 font-bold uppercase tracking-widest text-sm hover:bg-emerald-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
+              className={`w-full px-4 py-3 rounded-xl bg-emerald-500/20 border-2 border-emerald-500/50 text-emerald-300 font-bold uppercase tracking-widest text-sm hover:bg-emerald-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 ${uiTokens.focusRing}`}
             >
               I&apos;ve saved it, continue
             </button>

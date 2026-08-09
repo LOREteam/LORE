@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { formatUnits } from "viem";
+import { formatUnits, getAddress } from "viem";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import {
   beginRouteMetric,
@@ -12,7 +12,12 @@ import {
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { LEADERBOARD_TOP_N } from "../../lib/constants";
 import type { LeaderboardEntry, LuckyTileEntry } from "../../lib/types";
-import { computeWinningAmountWei, formatLineaAmountFixed, parseLineaAmountWei } from "../../lib/tokenAmountMath";
+import {
+  computeWinningAmountWei,
+  formatLineaAmountFixed,
+  formatLineaWeiDisplayNumber,
+  parseLineaAmountWei,
+} from "../../lib/tokenAmountMath";
 import {
   getAllBetRows,
   getAllRewardClaims,
@@ -51,6 +56,8 @@ const ROUTE_METRIC_KEY = "api/leaderboards";
 const LEADERBOARDS_SNAPSHOT_META_KEY = "snapshot:leaderboards:v1";
 const LEADERBOARDS_CACHE_KEY = "latest";
 const LEADERBOARDS_ROUTE_CACHE_MAX_KEYS = 2;
+const LEADERBOARDS_ROI_BASIS_POINTS_SCALE = 10_000n;
+const LEADERBOARDS_ROI_VALUE_NUM_MAX_BASIS_POINTS = BigInt(Number.MAX_SAFE_INTEGER);
 const leaderboardsRouteCache = createRouteCache<LeaderboardsPayload>(LEADERBOARDS_ROUTE_CACHE_MAX_KEYS);
 let leaderboardsCacheWatermark: string | null = null;
 
@@ -60,6 +67,14 @@ type UserAgg = {
   maxSingleWin: bigint;
   winCount: number;
 };
+
+function normalizeStoredUserAddress(user: string): `0x${string}` | null {
+  try {
+    return getAddress(user).toLowerCase() as `0x${string}`;
+  } catch {
+    return null;
+  }
+}
 
 function getLatestRewardClaimMarker() {
   const latest = getRecentRewardClaims(1)[0];
@@ -78,6 +93,29 @@ function jsonNoStore(payload: LeaderboardsPayload, status = 200) {
 
 function fmt(wei: bigint) {
   return formatLineaAmountFixed(wei, 2);
+}
+
+function toDisplayNumberWei(value: bigint): number {
+  return formatLineaWeiDisplayNumber(value);
+}
+
+function computeLeaderboardRoiBasisPoints(totalWon: bigint, totalWagered: bigint): bigint {
+  if (totalWon <= 0n || totalWagered <= 0n) return 0n;
+  return (totalWon * LEADERBOARDS_ROI_BASIS_POINTS_SCALE) / totalWagered;
+}
+
+function formatLeaderboardRoiPercent(roiBasisPoints: bigint): string {
+  const safeBasisPoints = roiBasisPoints > 0n ? roiBasisPoints : 0n;
+  const roundedTenths = (safeBasisPoints + 5n) / 10n;
+  return `${roundedTenths / 10n}.${roundedTenths % 10n}%`;
+}
+
+function toLeaderboardRoiValueNum(roiBasisPoints: bigint): number {
+  if (roiBasisPoints <= 0n) return 0;
+  const bounded = roiBasisPoints > LEADERBOARDS_ROI_VALUE_NUM_MAX_BASIS_POINTS
+    ? LEADERBOARDS_ROI_VALUE_NUM_MAX_BASIS_POINTS
+    : roiBasisPoints;
+  return Number(bounded) / 100;
 }
 
 function buildRankedEntries(
@@ -117,7 +155,8 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
   let resolvedCount = 0;
 
   for (const bet of bets) {
-    const address = bet.user.toLowerCase();
+    const address = normalizeStoredUserAddress(bet.user);
+    if (!address) continue;
     const prev = users.get(address) ?? {
       totalWagered: 0n,
       totalWon: 0n,
@@ -144,7 +183,8 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
   const underdogCandidates: Array<{ address: string; rewardWei: bigint; tile: number; tilePoolWei: bigint }> = [];
 
   for (const claim of claims) {
-    const address = claim.user.toLowerCase();
+    const address = normalizeStoredUserAddress(claim.user);
+    if (!address) continue;
     const rewardWei = parseLineaAmountWei(claim.reward);
     const rewardKey = `${claim.epoch}:${address}`;
     rewardByEpochUser.set(rewardKey, (rewardByEpochUser.get(rewardKey) ?? 0n) + rewardWei);
@@ -181,7 +221,8 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
     const epochRow = epochs[bet.epoch];
     if (!epochRow || !epochRow.winningTile || epochRow.winningTile <= 0) continue;
 
-    const address = bet.user.toLowerCase();
+    const address = normalizeStoredUserAddress(bet.user);
+    if (!address) continue;
     const key = `${bet.epoch}:${address}`;
     const userWinningWei = userWinningAmounts.get(key) ?? 0n;
     const rewardWei = rewardByEpochUser.get(key) ?? 0n;
@@ -215,7 +256,7 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
       .map((row) => ({
         address: row.address,
         value: fmt(row.maxSingleWin),
-        valueNum: Number(formatUnits(row.maxSingleWin, 18)),
+        valueNum: toDisplayNumberWei(row.maxSingleWin),
       })),
   );
 
@@ -223,16 +264,17 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
     [...userRows]
       .filter((row) => row.totalWagered > 0n && row.totalWon > 0n)
       .map((row) => {
-        const roi = Number((row.totalWon * 10_000n) / row.totalWagered) / 100;
+        const roiBasisPoints = computeLeaderboardRoiBasisPoints(row.totalWon, row.totalWagered);
         return {
           address: row.address,
-          value: `${roi.toFixed(1)}%`,
-          valueNum: roi,
+          value: formatLeaderboardRoiPercent(roiBasisPoints),
+          valueNum: toLeaderboardRoiValueNum(roiBasisPoints),
+          roiBasisPoints,
           extra: `won ${formatUnits(row.totalWon, 18)} / wagered ${formatUnits(row.totalWagered, 18)}`,
         };
       })
       .sort((a, b) => {
-        const delta = b.valueNum - a.valueNum;
+        const delta = compareBigIntDesc(a.roiBasisPoints, b.roiBasisPoints);
         if (delta !== 0) return delta;
         return a.address.localeCompare(b.address);
       })
@@ -267,7 +309,7 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
       .map((row) => ({
         address: row.address,
         value: fmt(row.totalWagered),
-        valueNum: Number(formatUnits(row.totalWagered, 18)),
+        valueNum: toDisplayNumberWei(row.totalWagered),
       })),
   );
 
@@ -282,7 +324,7 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
       .map((row) => ({
         address: row.address,
         value: fmt(row.rewardWei),
-        valueNum: Number(formatUnits(row.rewardWei, 18)),
+        valueNum: toDisplayNumberWei(row.rewardWei),
         extra: `pool on tile ${row.tile} was ${fmt(row.tilePoolWei)} LINEA`,
       })),
   );
@@ -298,7 +340,7 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
       .map(([address, rewardWei]) => ({
         address,
         value: fmt(rewardWei),
-        valueNum: Number(formatUnits(rewardWei, 18)),
+        valueNum: toDisplayNumberWei(rewardWei),
       })),
   );
 
@@ -348,7 +390,7 @@ function loadLeaderboardsSnapshot(expectedWatermark: string | null): Leaderboard
     return null;
   }
 
-  if (typeof snapshot.savedAt !== "number" || Date.now() - snapshot.savedAt > LEADERBOARDS_SNAPSHOT_MAX_AGE_MS) {
+  if (!isFreshLeaderboardsSnapshotSavedAt(snapshot.savedAt)) {
     return null;
   }
 
@@ -357,6 +399,18 @@ function loadLeaderboardsSnapshot(expectedWatermark: string | null): Leaderboard
   }
 
   return snapshot.payload;
+}
+
+function isFreshLeaderboardsSnapshotSavedAt(savedAt: unknown, now = Date.now()) {
+  return (
+    typeof savedAt === "number" &&
+    Number.isSafeInteger(savedAt) &&
+    savedAt >= 0 &&
+    Number.isSafeInteger(now) &&
+    now >= 0 &&
+    savedAt <= now &&
+    now - savedAt <= LEADERBOARDS_SNAPSHOT_MAX_AGE_MS
+  );
 }
 
 function saveLeaderboardsSnapshot(payload: LeaderboardsPayload, watermark: string | null) {
@@ -400,7 +454,7 @@ export async function GET(request: Request) {
     limit: 20,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
   const now = Date.now();

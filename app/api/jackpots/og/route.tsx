@@ -1,5 +1,6 @@
 import { ImageResponse } from "next/og";
 import { type NextRequest } from "next/server";
+import { parseBoundedPositiveIntegerParam } from "../../_lib/queryParams";
 import { getJackpotVisualTheme, type JackpotVisualKind } from "../../../lib/jackpotVisualTheme";
 
 /* eslint-disable @next/next/no-img-element -- next/og ImageResponse renders raw img assets. */
@@ -23,10 +24,8 @@ function sanitizeAmount(raw: string | null) {
 }
 
 function sanitizePositiveInt(raw: string | null, max: number) {
-  const value = raw?.trim();
-  if (!value || !/^[0-9]{1,10}$/.test(value)) return null;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > max) return null;
+  const parsed = parseBoundedPositiveIntegerParam(raw, max);
+  if (parsed === null) return null;
   return String(parsed);
 }
 
@@ -151,7 +150,7 @@ export async function GET(request: NextRequest) {
                 color: theme.colors.amount,
                 fontSize: amount ? "128px" : "84px",
                 fontWeight: 950,
-                letterSpacing: "-3px",
+                letterSpacing: "0px",
                 lineHeight: "0.82",
                 textShadow: `0 0 18px ${theme.colors.shadow}, 0 0 42px ${theme.colors.shadow}, 0 10px 36px rgba(0,0,0,0.95), 3px 3px 0 rgba(0,0,0,0.42), -3px 3px 0 rgba(0,0,0,0.42), 3px -3px 0 rgba(0,0,0,0.42), -3px -3px 0 rgba(0,0,0,0.42)`,
               }}

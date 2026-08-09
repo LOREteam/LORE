@@ -29,8 +29,15 @@ export const WalletTransferRow = React.memo(function WalletTransferRow({
   loading,
   buttonVariant,
 }: TransferRowProps) {
+  const transferActionLabel = loading ? `${buttonLabel} in progress` : disabled ? `${buttonLabel} unavailable` : buttonLabel;
+
   return (
     <div className="grid grid-cols-[4rem_minmax(0,1fr)_7.5rem] items-center gap-1.5">
+      {loading && (
+        <span className="sr-only" role="status" aria-live="polite">
+          {transferActionLabel}
+        </span>
+      )}
       <div
         className={`flex h-8 items-center justify-center rounded-lg border px-2 text-[10px] font-semibold uppercase tracking-widest shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${transferBadgeVariantClasses[assetVariant]}`}
       >
@@ -44,6 +51,7 @@ export const WalletTransferRow = React.memo(function WalletTransferRow({
         maxLength={20}
         className="lore-nums h-8 min-w-0 px-4 py-1.5 text-sm"
         placeholder={placeholder}
+        aria-label={`${assetLabel} transfer amount`}
       />
       <UiButton
         onClick={onSubmit}
@@ -53,6 +61,8 @@ export const WalletTransferRow = React.memo(function WalletTransferRow({
         uppercase
         loading={loading}
         className="h-8 w-full px-3 text-[10px]"
+        aria-label={transferActionLabel}
+        title={transferActionLabel}
       >
         {loading ? "Sending..." : buttonLabel}
       </UiButton>

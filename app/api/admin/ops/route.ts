@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthorizedAdminRouteRequest } from "../../_lib/adminRouteAuth";
+import { readAdminSession } from "../../_lib/adminSession";
 import { getEpochMap, getMetaBigInt, getMetaJson, getMetaNumber, getRecentJackpots, getRecentRewardClaims } from "../../../../server/storage";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
@@ -9,7 +9,6 @@ import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 type LogSourceSummary = {
   key: string;
   label: string;
-  file: string;
   fileName: string;
   exists: boolean;
   status: "fresh" | "stale" | "missing";
@@ -91,6 +90,8 @@ const EVENT_PATTERNS = [
 ] as const;
 
 const OPS_LOG_CACHE_MS = 5_000;
+const MAX_OPS_LOG_TAIL_BYTES = 256 * 1024;
+const ISO_LOG_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{3}))?Z$/;
 
 let loadedLogSourcesCache:
   | {
@@ -107,10 +108,36 @@ function splitLogLines(raw: string) {
     .filter(Boolean);
 }
 
+function pathIsRegularFile(file: string) {
+  try {
+    return existsSync(file) && statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function readBoundedLogTail(file: string) {
+  const stat = statSync(file);
+  if (stat.size <= 0) return "";
+  const length = Math.min(stat.size, MAX_OPS_LOG_TAIL_BYTES);
+  const buffer = Buffer.alloc(length);
+  const fd = openSync(file, "r");
+  try {
+    readSync(fd, buffer, 0, length, stat.size - length);
+  } finally {
+    closeSync(fd);
+  }
+  return buffer.toString("utf8");
+}
+
 function sanitizeLogText(line: string) {
   return line
     .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
     .replace(/\u0000/g, "")
+    .replace(/\b([A-Z0-9_]*(?:SECRET|TOKEN|KEY|PRIVATE|PASSWORD|RPC|DSN|WEBHOOK)[A-Z0-9_]*)=([^\s]+)/gi, "$1=<redacted>")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "<redacted-url>")
+    .replace(/\b0x[a-fA-F0-9]{80,}\b/g, "<redacted-calldata>")
+    .replace(/\b0x[a-fA-F0-9]{40}\b/g, "<redacted-address>")
     .replace(/\u0442\u0426\u2593|\u0442\u042c\u0423|\u0442\u0410\u0424|\u0442\u0416\u0422|\u0432\u0402\u045A|\u0432\u0402\u045C|\u0432\u0402"/g, " ")
     .replace(/[^\x20-\x7E\u0400-\u04FF]/g, " ")
     .replace(/\s+/g, " ")
@@ -118,8 +145,19 @@ function sanitizeLogText(line: string) {
 }
 
 function extractTimestamp(line: string) {
-  const match = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)/);
+  const match = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)/);
   return match?.[1] ?? null;
+}
+
+function parseLogTimestampMs(value: string | null) {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const match = value.match(ISO_LOG_TIMESTAMP_RE);
+  if (!match) return Number.NEGATIVE_INFINITY;
+  const canonical = `${match[1]}.${match[2] ?? "000"}Z`;
+  const timestampMs = Date.parse(canonical);
+  return Number.isSafeInteger(timestampMs) && new Date(timestampMs).toISOString() === canonical
+    ? timestampMs
+    : Number.NEGATIVE_INFINITY;
 }
 
 function detectLevel(line: string): "error" | "warn" | "info" {
@@ -140,18 +178,34 @@ function matchesAny(line: string, patterns: readonly RegExp[]) {
   return patterns.some((pattern) => pattern.test(line));
 }
 
+const SAFE_DECIMAL_INTEGER_RE = /^[1-9]\d{0,15}$/;
+const SAFE_ZERO_DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+function parseSafeDecimalInteger(value: string | null | undefined, options: { allowZero?: boolean } = {}) {
+  if (!value) return null;
+  const allowZero = options.allowZero === true;
+  const pattern = allowZero ? SAFE_ZERO_DECIMAL_INTEGER_RE : SAFE_DECIMAL_INTEGER_RE;
+  if (!pattern.test(value)) return null;
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  if (!allowZero && parsed <= 0n) return null;
+  return Number(parsed);
+}
+
 function parseStoredEpochNumber(value: string | null | undefined) {
-  if (!value || !/^\d+$/.test(value)) return 0;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+  return parseSafeDecimalInteger(value) ?? 0;
+}
+
+function parseLogCounter(value: string | null | undefined, options: { allowZero?: boolean } = {}) {
+  return parseSafeDecimalInteger(value, options);
 }
 
 function summarizeLogSource(file: string, key: string, label: string): LogSourceSummary {
-  if (!existsSync(file)) {
+  if (!pathIsRegularFile(file)) {
     return {
       key,
       label,
-      file,
       fileName: basename(file),
       exists: false,
       status: "missing",
@@ -163,12 +217,11 @@ function summarizeLogSource(file: string, key: string, label: string): LogSource
 
   const stat = statSync(file);
   const ageMs = Date.now() - stat.mtimeMs;
-  const raw = readFileSync(file, "utf8");
+  const raw = readBoundedLogTail(file);
   const lines = splitLogLines(raw);
   return {
     key,
     label,
-    file,
     fileName: basename(file),
     exists: true,
     status: key === "site" ? "fresh" : ageMs <= 90_000 ? "fresh" : "stale",
@@ -180,12 +233,11 @@ function summarizeLogSource(file: string, key: string, label: string): LogSource
 void summarizeLogSource;
 
 function loadLogSource(file: string, key: string, label: string): LoadedLogSource {
-  if (!existsSync(file)) {
+  if (!pathIsRegularFile(file)) {
     return {
       source: {
         key,
         label,
-        file,
         fileName: basename(file),
         exists: false,
         status: "missing",
@@ -199,12 +251,11 @@ function loadLogSource(file: string, key: string, label: string): LoadedLogSourc
 
   const stat = statSync(file);
   const ageMs = Date.now() - stat.mtimeMs;
-  const lines = splitLogLines(readFileSync(file, "utf8"));
+  const lines = splitLogLines(readBoundedLogTail(file));
   return {
     source: {
       key,
       label,
-      file,
       fileName: basename(file),
       exists: true,
       status: key === "site" ? "fresh" : ageMs <= 90_000 ? "fresh" : "stale",
@@ -218,7 +269,7 @@ function loadLogSource(file: string, key: string, label: string): LoadedLogSourc
 
 function getLoadedLogSources(): LoadedLogSource[] {
   const signature = LOG_SOURCES.map((source) => {
-    if (!existsSync(source.file)) return `${source.key}:missing`;
+    if (!pathIsRegularFile(source.file)) return `${source.key}:missing`;
     const stat = statSync(source.file);
     return `${source.key}:${stat.mtimeMs}:${stat.size}`;
   }).join("|");
@@ -265,8 +316,8 @@ function collectRecentLogEntries(
 
   return rows
     .sort((left, right) => {
-      const leftTs = left.ts ? Date.parse(left.ts) : Number.NEGATIVE_INFINITY;
-      const rightTs = right.ts ? Date.parse(right.ts) : Number.NEGATIVE_INFINITY;
+      const leftTs = parseLogTimestampMs(left.ts);
+      const rightTs = parseLogTimestampMs(right.ts);
       return rightTs - leftTs;
     })
     .slice(0, limit);
@@ -312,7 +363,7 @@ function parseLiveIndexerProgress(lines: string[]): LiveIndexerProgress | null {
     if (scanMatch) {
       scanFromBlock = scanMatch[1] ?? null;
       scanToBlock = scanMatch[2] ?? null;
-      scanBlockCount = Number(scanMatch[3] ?? 0) || null;
+      scanBlockCount = parseLogCounter(scanMatch[3], { allowZero: false });
       chunkIndex = null;
       chunkTotal = null;
       chunkFromBlock = null;
@@ -328,8 +379,8 @@ function parseLiveIndexerProgress(lines: string[]): LiveIndexerProgress | null {
 
     const chunkMatch = line.match(/\[indexer\]\s+Chunk\s+(\d+)\/(\d+):\s+(\d+)\s+->\s+(\d+)/i);
     if (chunkMatch) {
-      chunkIndex = Number(chunkMatch[1] ?? 0) || null;
-      chunkTotal = Number(chunkMatch[2] ?? 0) || null;
+      chunkIndex = parseLogCounter(chunkMatch[1], { allowZero: false });
+      chunkTotal = parseLogCounter(chunkMatch[2], { allowZero: false });
       chunkFromBlock = chunkMatch[3] ?? null;
       chunkToBlock = chunkMatch[4] ?? null;
       fetchedLogs = null;
@@ -343,7 +394,7 @@ function parseLiveIndexerProgress(lines: string[]): LiveIndexerProgress | null {
 
     const fetchedMatch = line.match(/\[indexer\]\s+Chunk\s+(\d+)\/(\d+)\s+fetched\s+(\d+)\s+logs/i);
     if (fetchedMatch) {
-      fetchedLogs = Number(fetchedMatch[3] ?? 0) || 0;
+      fetchedLogs = parseLogCounter(fetchedMatch[3], { allowZero: true }) ?? 0;
       continue;
     }
 
@@ -351,10 +402,10 @@ function parseLiveIndexerProgress(lines: string[]): LiveIndexerProgress | null {
       /\[indexer\]\s+Chunk\s+(\d+)\/(\d+)\s+parsed:\s+(\d+)\s+bets,\s+(\d+)\s+epochs,\s+(\d+)\s+jackpots,\s+(\d+)\s+claims/i,
     );
     if (parsedMatch) {
-      parsedBets = Number(parsedMatch[3] ?? 0) || 0;
-      parsedEpochs = Number(parsedMatch[4] ?? 0) || 0;
-      parsedJackpots = Number(parsedMatch[5] ?? 0) || 0;
-      parsedClaims = Number(parsedMatch[6] ?? 0) || 0;
+      parsedBets = parseLogCounter(parsedMatch[3], { allowZero: true }) ?? 0;
+      parsedEpochs = parseLogCounter(parsedMatch[4], { allowZero: true }) ?? 0;
+      parsedJackpots = parseLogCounter(parsedMatch[5], { allowZero: true }) ?? 0;
+      parsedClaims = parseLogCounter(parsedMatch[6], { allowZero: true }) ?? 0;
       continue;
     }
 
@@ -397,7 +448,7 @@ export async function GET(request: NextRequest) {
   });
   if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
-  if (!isAuthorizedAdminRouteRequest(request)) {
+  if (!readAdminSession(request)) {
     return applyNoStoreHeaders(
       NextResponse.json({ error: "Admin auth required" }, { status: 401 }),
       { varyCookie: true },

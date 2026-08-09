@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
-import { formatTime, formatUnknownError } from "../lib/utils";
+import { formatTime } from "../lib/utils";
 import { WinsTicker } from "./WinsTicker";
 import type { JackpotHistoryEntry } from "../hooks/useJackpotHistory";
 import type { RecentWin } from "../hooks/useRecentWins";
@@ -12,6 +12,18 @@ import { HeaderWalletCard } from "./header/HeaderWalletCard";
 import type { JackpotDisplayInfo } from "./header/types";
 
 const LOGIN_PENDING_TIMEOUT_MS = 20_000;
+const LOGIN_FAILURE_MESSAGE = "Wallet login failed. Try again or reload the page.";
+
+function formatLoginFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  if (message.includes("timeout") || message.includes("timed out")) {
+    return "Wallet login timed out. Try again or reload the page.";
+  }
+  if (message.includes("rejected") || message.includes("denied") || message.includes("closed")) {
+    return "Wallet login was cancelled.";
+  }
+  return LOGIN_FAILURE_MESSAGE;
+}
 
 interface HeaderProps {
   initialNowMs?: number;
@@ -25,7 +37,6 @@ interface HeaderProps {
   rolloverAmount: number;
   jackpotInfo: JackpotDisplayInfo | null;
   linePath: string;
-  chartHasData: boolean;
   embeddedWalletAddress: string | null;
   embeddedWalletSyncing?: boolean;
   privyEthBalance: string;
@@ -60,7 +71,6 @@ export const Header = React.memo(function Header({
   rolloverAmount,
   jackpotInfo,
   linePath,
-  chartHasData,
   embeddedWalletAddress,
   embeddedWalletSyncing = false,
   privyEthBalance,
@@ -141,7 +151,7 @@ export const Header = React.memo(function Header({
         void (loginResult as Promise<void>)
           .catch((error: unknown) => {
             if (mountedRef.current) {
-              setLoginError(formatUnknownError(error));
+              setLoginError(formatLoginFailure(error));
             }
           })
           .finally(() => {
@@ -158,7 +168,7 @@ export const Header = React.memo(function Header({
       }, 800);
     } catch (error) {
       if (mountedRef.current) {
-        setLoginError(formatUnknownError(error));
+        setLoginError(formatLoginFailure(error));
         setLoginPending(false);
       }
     }
@@ -306,7 +316,6 @@ export const Header = React.memo(function Header({
       </div>
 
       <HeaderPoolChart
-        chartHasData={chartHasData}
         coldBootDefaults={coldBootDefaults}
         hydrated={hydrated}
         linePath={linePath}

@@ -34,6 +34,10 @@ type StartInflightBuildOptions<TBuildResult, TPayload> = {
   onCommit?: (result: TBuildResult, payload: TPayload) => void;
 };
 
+function isUsableWriteVersion(value: number) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
 export function startVersionedBackgroundRefresh<TBuildResult, TPayload>(
   options: StartBackgroundRefreshOptions<TBuildResult, TPayload>,
 ) {
@@ -42,8 +46,10 @@ export function startVersionedBackgroundRefresh<TBuildResult, TPayload>(
     return;
   }
 
-  markRouteBackgroundRefresh(routeMetricKey);
   const writeVersion = cache.beginWrite(cacheKey);
+  if (!isUsableWriteVersion(writeVersion)) return;
+
+  markRouteBackgroundRefresh(routeMetricKey);
   const refreshPromise: Promise<void> = build()
     .then((result) => {
       const payload = toPayload(result);
@@ -68,6 +74,10 @@ export function startVersionedInflightBuild<TBuildResult, TPayload>(
   const { cache, cacheKey, ttlMs, build, toPayload, onCommit } = options;
   const writeVersion = cache.beginWrite(cacheKey);
   const buildPromise = build();
+  if (!isUsableWriteVersion(writeVersion)) {
+    return { buildPromise, requestPromise: buildPromise.then((result) => toPayload(result)) };
+  }
+
   const requestPromise: Promise<TPayload> = buildPromise
     .then((result) => {
       const payload = toPayload(result);

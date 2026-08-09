@@ -2,6 +2,7 @@
 
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import Image from "next/image";
+import { formatDecimalTextFixed } from "../lib/balanceFormatting";
 import { GRID_SIZE } from "../lib/constants";
 import { pickRandom, yourWinQuotes, roundWinQuotes } from "../lib/loreTexts";
 import { Confetti } from "./Confetti";
@@ -11,10 +12,21 @@ const TILE_INDICES = Array.from({ length: GRID_SIZE }, (_, i) => i);
 // Animation classes defined in globals.css — avoids inline style objects for SSR/cacheability
 const CLASS_BADGE_SLIDE = "animate-winner-badge-slide";
 
+function trimFixedDecimalText(value: string): string {
+  return value.replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+function formatTileAmountFixed(value: string): string | null {
+  return formatDecimalTextFixed(value.trim(), 2);
+}
+
+function isPositiveFixedDecimalText(value: string | null): boolean {
+  return value !== null && !/^0(?:\.0+)?$/.test(value);
+}
+
 function compactTileAmount(value: string): string {
-  const amount = Number.parseFloat(value);
-  if (!Number.isFinite(amount)) return value;
-  return amount.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+  const fixed = formatTileAmountFixed(value);
+  return fixed === null ? value : trimFixedDecimalText(fixed);
 }
 
 function buildTileAriaLabel({
@@ -165,7 +177,7 @@ function MiningGridView({
       if (!tileButton || !gridElement.contains(tileButton) || tileButton.disabled) return;
 
       const tileId = Number(tileButton.dataset.tileId);
-      if (!Number.isInteger(tileId) || tileId <= 0) return;
+      if (!Number.isSafeInteger(tileId) || tileId < 1 || tileId > GRID_SIZE) return;
       onTileClick(tileId);
     };
 
@@ -264,8 +276,7 @@ const Tile = React.memo(function Tile({
   const isMyWin = isWinner && hasMyBet;
   const isNeutralWinner = isWinner && !hasMyBet;
   const compactAmount = liveStateReady || coldBootDefaults ? compactTileAmount(displayAmount) : "...";
-  const displayAmountNumber = Number.parseFloat(displayAmount);
-  const hasDisplayedStake = Number.isFinite(displayAmountNumber) && displayAmountNumber > 0;
+  const hasDisplayedStake = isPositiveFixedDecimalText(formatTileAmountFixed(displayAmount));
   const isLiveDisplayReady = liveStateReady || coldBootDefaults;
   const showUserBadge = !isLiveDisplayReady || hasDisplayedStake;
   const displayedUsers =

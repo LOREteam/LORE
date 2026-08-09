@@ -1,8 +1,8 @@
 "use client";
 
-import { EIP7702_MINING_ENABLED } from "./eip7702";
+import { getAddress } from "viem";
 
-export type MiningTxPathMode = "7702-delegated" | "standard-silent" | "wallet-write";
+export type MiningTxPathMode = "standard-silent" | "wallet-write";
 
 export interface MiningTxPathState {
   mode: MiningTxPathMode;
@@ -27,39 +27,66 @@ type PendingMiningTxClient = {
   getTransactionCount?: (args: { address: `0x${string}`; blockTag: "latest" | "pending" }) => Promise<number>;
 };
 
-interface SanitizeMiningTxPathOptions {
-  allowDelegated7702?: boolean;
-}
-
 const STORAGE_KEY = "lineaore:mining-tx-path:v1";
 const PENDING_TX_STORAGE_PREFIX = "lineaore:pending-mining-tx:v2";
 export const MINING_TX_PATH_EVENT = "lineaore:mining-tx-path";
 const MINING_TX_PATH_MAX_FUTURE_SKEW_MS = 5_000;
 const PENDING_TX_NOT_FOUND_GRACE_MS = 15 * 60_000;
 const HEX_32_RE = /^0x[0-9a-fA-F]{64}$/;
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+function isSafeCurrentTime(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function normalizeMiningTimestamp(value: unknown, now = Date.now()) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) return null;
+  if (!isSafeCurrentTime(now)) return null;
+  if (value - now > MINING_TX_PATH_MAX_FUTURE_SKEW_MS) return null;
+  return value;
+}
+
+function hasPendingTxNotFoundGraceElapsed(ts: number, now = Date.now()) {
+  if (!isSafeCurrentTime(now) || !Number.isSafeInteger(ts) || ts <= 0 || ts > now) return false;
+  return now - ts >= PENDING_TX_NOT_FOUND_GRACE_MS;
+}
+
+function normalizePendingTxNonce(value: unknown): number | null {
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    return Number(value);
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return null;
+  return value;
+}
 
 function pendingTxStorageKey(chainId: number, contract: string, actor: string) {
-  return `${PENDING_TX_STORAGE_PREFIX}:${chainId}:${contract.toLowerCase()}:${actor.toLowerCase()}`;
+  return `${PENDING_TX_STORAGE_PREFIX}:${chainId}:${getAddress(contract).toLowerCase()}:${getAddress(actor).toLowerCase()}`;
+}
+
+function tryPendingTxStorageKey(chainId: number, contract: string, actor: string) {
+  try {
+    return pendingTxStorageKey(chainId, contract, actor);
+  } catch {
+    return null;
+  }
 }
 
 export function sanitizeMiningTxPathState(
   value: unknown,
-  options: SanitizeMiningTxPathOptions = {},
+  now = Date.now(),
 ): MiningTxPathState | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
   const mode = raw.mode;
   const ts = raw.ts;
   const reason = raw.reason;
-  if (mode !== "standard-silent" && mode !== "wallet-write" && mode !== "7702-delegated") return null;
-  if (mode === "7702-delegated" && !options.allowDelegated7702) return null;
-  if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) return null;
-  if (ts - Date.now() > MINING_TX_PATH_MAX_FUTURE_SKEW_MS) return null;
+  if (mode !== "standard-silent" && mode !== "wallet-write") return null;
+  const normalizedTs = normalizeMiningTimestamp(ts, now);
+  if (normalizedTs === null) return null;
   return {
     mode,
     ...(typeof reason === "string" && reason ? { reason } : {}),
-    ts,
+    ts: normalizedTs,
   };
 }
 
@@ -68,8 +95,15 @@ export function readMiningTxPathState(): MiningTxPathState | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return sanitizeMiningTxPathState(JSON.parse(raw), { allowDelegated7702: EIP7702_MINING_ENABLED });
+    const state = sanitizeMiningTxPathState(JSON.parse(raw));
+    if (!state) window.localStorage.removeItem(STORAGE_KEY);
+    return state;
   } catch {
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore storage failures
+    }
     return null;
   }
 }
@@ -99,24 +133,38 @@ export function clearMiningTxPathState() {
   window.dispatchEvent(new CustomEvent(MINING_TX_PATH_EVENT));
 }
 
-export function sanitizePendingMiningTxState(value: unknown): PendingMiningTxState | null {
+export function sanitizePendingMiningTxState(value: unknown, now = Date.now()): PendingMiningTxState | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
   if (!Number.isSafeInteger(raw.chainId) || Number(raw.chainId) <= 0) return null;
-  if (typeof raw.contract !== "string" || !ADDRESS_RE.test(raw.contract)) return null;
-  if (typeof raw.actor !== "string" || !ADDRESS_RE.test(raw.actor)) return null;
-  const hash = typeof raw.hash === "string" && HEX_32_RE.test(raw.hash) ? raw.hash.toLowerCase() as `0x${string}` : undefined;
-  const nonce = Number.isSafeInteger(raw.nonce) && Number(raw.nonce) >= 0 ? Number(raw.nonce) : undefined;
+  let contract: `0x${string}`;
+  let actor: `0x${string}`;
+  try {
+    contract = getAddress(typeof raw.contract === "string" ? raw.contract : "").toLowerCase() as `0x${string}`;
+    actor = getAddress(typeof raw.actor === "string" ? raw.actor : "").toLowerCase() as `0x${string}`;
+  } catch {
+    return null;
+  }
+  const rawHash = raw.hash;
+  if (rawHash !== undefined && rawHash !== null && (typeof rawHash !== "string" || !HEX_32_RE.test(rawHash))) {
+    return null;
+  }
+  const rawNonce = raw.nonce;
+  if (rawNonce !== undefined && rawNonce !== null && (!Number.isSafeInteger(rawNonce) || Number(rawNonce) < 0)) {
+    return null;
+  }
+  const hash = typeof rawHash === "string" ? rawHash.toLowerCase() as `0x${string}` : undefined;
+  const nonce = rawNonce !== undefined && rawNonce !== null ? Number(rawNonce) : undefined;
   if (!hash && nonce === undefined) return null;
-  if (typeof raw.ts !== "number" || !Number.isFinite(raw.ts) || raw.ts <= 0) return null;
-  if (raw.ts - Date.now() > MINING_TX_PATH_MAX_FUTURE_SKEW_MS) return null;
+  const normalizedTs = normalizeMiningTimestamp(raw.ts, now);
+  if (normalizedTs === null) return null;
   return {
     chainId: Number(raw.chainId),
-    contract: raw.contract.toLowerCase() as `0x${string}`,
-    actor: raw.actor.toLowerCase() as `0x${string}`,
+    contract,
+    actor,
     ...(hash ? { hash } : {}),
     ...(nonce !== undefined ? { nonce } : {}),
-    ts: raw.ts,
+    ts: normalizedTs,
   };
 }
 
@@ -126,18 +174,24 @@ export function readPendingMiningTxState(
   actor: string,
 ): PendingMiningTxState | null {
   if (typeof window === "undefined") return null;
+  const key = tryPendingTxStorageKey(chainId, contract, actor);
+  if (!key) return null;
   try {
-    const raw = window.localStorage.getItem(pendingTxStorageKey(chainId, contract, actor));
+    const raw = window.localStorage.getItem(key);
     if (!raw) return null;
     const state = sanitizePendingMiningTxState(JSON.parse(raw));
     if (
       !state ||
       state.chainId !== chainId ||
-      state.contract !== contract.toLowerCase() ||
-      state.actor !== actor.toLowerCase()
-    ) return null;
+      state.contract !== getAddress(contract).toLowerCase() ||
+      state.actor !== getAddress(actor).toLowerCase()
+    ) {
+      clearPendingMiningTxState(chainId, contract, actor);
+      return null;
+    }
     return state;
   } catch {
+    clearPendingMiningTxState(chainId, contract, actor);
     return null;
   }
 }
@@ -146,11 +200,10 @@ export function writePendingMiningTxState(state: Omit<PendingMiningTxState, "ts"
   if (typeof window === "undefined") return;
   const payload = sanitizePendingMiningTxState({ ...state, ts: Date.now() });
   if (!payload) return;
+  const key = tryPendingTxStorageKey(payload.chainId, payload.contract, payload.actor);
+  if (!key) return;
   try {
-    window.localStorage.setItem(
-      pendingTxStorageKey(payload.chainId, payload.contract, payload.actor),
-      JSON.stringify(payload),
-    );
+    window.localStorage.setItem(key, JSON.stringify(payload));
   } catch {
     // A failed persistence write only removes reload recovery; the submitted tx remains valid.
   }
@@ -158,8 +211,10 @@ export function writePendingMiningTxState(state: Omit<PendingMiningTxState, "ts"
 
 export function clearPendingMiningTxState(chainId: number, contract: string, actor: string) {
   if (typeof window === "undefined") return;
+  const key = tryPendingTxStorageKey(chainId, contract, actor);
+  if (!key) return;
   try {
-    window.localStorage.removeItem(pendingTxStorageKey(chainId, contract, actor));
+    window.localStorage.removeItem(key);
   } catch {
     // ignore storage failures
   }
@@ -183,9 +238,14 @@ export async function recoverPendingMiningTx(
         client.getTransactionCount({ address: state.actor, blockTag: "latest" }),
         client.getTransactionCount({ address: state.actor, blockTag: "pending" }),
       ]);
-      if (latestNonce > state.nonce) return "confirmed";
-      if (pendingNonce > state.nonce) return "pending";
-      return now - state.ts >= PENDING_TX_NOT_FOUND_GRACE_MS ? "clear" : "pending";
+      const normalizedLatestNonce = normalizePendingTxNonce(latestNonce);
+      const normalizedPendingNonce = normalizePendingTxNonce(pendingNonce);
+      if (normalizedLatestNonce === null || normalizedPendingNonce === null || normalizedPendingNonce < normalizedLatestNonce) {
+        return "pending";
+      }
+      if (normalizedLatestNonce > state.nonce) return "confirmed";
+      if (normalizedPendingNonce > state.nonce) return "pending";
+      return hasPendingTxNotFoundGraceElapsed(state.ts, now) ? "clear" : "pending";
     } catch {
       return "pending";
     }
@@ -207,5 +267,5 @@ export async function recoverPendingMiningTx(
   }
 
   // A dropped tx has no portable provider signal. Clear only after a long not-found grace window.
-  return now - state.ts >= PENDING_TX_NOT_FOUND_GRACE_MS ? "clear" : "pending";
+  return hasPendingTxNotFoundGraceElapsed(state.ts, now) ? "clear" : "pending";
 }

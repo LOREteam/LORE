@@ -2,12 +2,19 @@
 
 import React from "react";
 import Image from "next/image";
-import { formatEther, parseUnits } from "viem";
+import { parseUnits } from "viem";
 import { usePublicClient } from "wagmi";
 import type { AutoMinePhase } from "../hooks/useMining.types";
 import { useManualBetForm } from "../hooks/useManualBetForm";
+import { formatBalanceFixed } from "../lib/balanceFormatting";
 import { cn } from "../lib/cn";
-import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
+import {
+  APP_CHAIN_ID,
+  CONTRACT_ADDRESS,
+  CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
+  GRID_SIZE,
+  GAME_ABI,
+} from "../lib/constants";
 import { HubGameBoard } from "./HubGameBoard";
 import { HubSidePanel } from "./HubSidePanel";
 import { UiButton } from "./ui/UiButton";
@@ -129,9 +136,24 @@ export const HubContent = React.memo(function HubContent({
   const [feeEstimate, setFeeEstimate] = React.useState<string | null>(null);
   const [feeEstimateUnavailable, setFeeEstimateUnavailable] = React.useState(false);
   const selectedTilesKey = gridSelectedTiles.join(",");
+  const selectedTilesForEstimate = React.useMemo(
+    () => selectedTilesKey
+      ? [...new Set(selectedTilesKey.split(",").map((tile) => Number(tile)).filter((tile) => (
+          Number.isSafeInteger(tile) &&
+          tile >= 1 &&
+          tile <= GRID_SIZE
+        )))]
+          .sort((a, b) => a - b)
+      : [],
+    [selectedTilesKey],
+  );
+  const selectedTileMaskForEstimate = React.useMemo(
+    () => selectedTilesForEstimate.reduce((mask, tile) => mask | (1 << (tile - 1)), 0),
+    [selectedTilesForEstimate],
+  );
 
   React.useEffect(() => {
-    if (!publicClient || !walletAddress || !walletConnected || !liveStateReady || gridSelectedTiles.length === 0) {
+    if (!publicClient || !walletAddress || !walletConnected || !liveStateReady || selectedTilesForEstimate.length === 0) {
       setFeeEstimate(null);
       setFeeEstimateUnavailable(false);
       return;
@@ -143,26 +165,40 @@ export const HubContent = React.memo(function HubContent({
         try {
           const amount = parseUnits(manualBetForm.betAmount || "0", 18);
           if (amount <= 0n) throw new Error("Invalid bet amount");
-          const tiles = [...new Set(gridSelectedTiles)].sort((a, b) => a - b);
-          const request = tiles.length === 1
-            ? { functionName: "placeBet" as const, args: [BigInt(tiles[0]), amount] as const }
-            : {
-                functionName: "placeBatchBetsBitmap" as const,
-                args: [tiles.reduce((mask, tile) => mask | (1n << BigInt(tile - 1)), 0n), amount] as const,
-              };
+          if (CONTRACT_REQUIRES_EPOCH_BOUND_BETS && (!gridDisplayEpoch || !/^\d+$/.test(gridDisplayEpoch))) {
+            throw new Error("Current epoch unavailable for protected bet estimate");
+          }
+          const gasPromise = CONTRACT_REQUIRES_EPOCH_BOUND_BETS
+            ? publicClient.estimateContractGas({
+                account: walletAddress as `0x${string}`,
+                address: CONTRACT_ADDRESS,
+                abi: GAME_ABI,
+                functionName: "placeBatchBetsBitmapForEpoch" as const,
+                args: [BigInt(gridDisplayEpoch!), selectedTileMaskForEstimate, amount] as const,
+              })
+            : selectedTilesForEstimate.length === 1
+              ? publicClient.estimateContractGas({
+                  account: walletAddress as `0x${string}`,
+                  address: CONTRACT_ADDRESS,
+                  abi: GAME_ABI,
+                  functionName: "placeBet",
+                  args: [BigInt(selectedTilesForEstimate[0]), amount],
+                })
+              : publicClient.estimateContractGas({
+                  account: walletAddress as `0x${string}`,
+                  address: CONTRACT_ADDRESS,
+                  abi: GAME_ABI,
+                  functionName: "placeBatchBetsBitmap" as const,
+                  args: [selectedTileMaskForEstimate, amount] as const,
+                });
           const [gas, fees] = await Promise.all([
-            publicClient.estimateContractGas({
-              account: walletAddress as `0x${string}`,
-              address: CONTRACT_ADDRESS,
-              abi: GAME_ABI,
-              ...request,
-            }),
+            gasPromise,
             publicClient.estimateFeesPerGas(),
           ]);
           const feePerGas = fees.maxFeePerGas ?? fees.gasPrice;
           if (!feePerGas) throw new Error("No fee quote");
           if (!cancelled) {
-            setFeeEstimate(Number(formatEther(gas * feePerGas)).toFixed(6));
+            setFeeEstimate(formatBalanceFixed({ value: gas * feePerGas, decimals: 18 }, 6) ?? "0.000000");
             setFeeEstimateUnavailable(false);
           }
         } catch {
@@ -178,9 +214,16 @@ export const HubContent = React.memo(function HubContent({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  // The content key intentionally represents the tile array so identity-only rerenders do not repeat fee RPC calls.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStateReady, manualBetForm.betAmount, publicClient, selectedTilesKey, walletAddress, walletConnected]);
+  }, [
+    gridDisplayEpoch,
+    liveStateReady,
+    manualBetForm.betAmount,
+    publicClient,
+    selectedTileMaskForEstimate,
+    selectedTilesForEstimate,
+    walletAddress,
+    walletConnected,
+  ]);
 
   return (
     <>
@@ -343,7 +386,7 @@ function MobileManualActionBar({
             disabled={Boolean(readOnlyReason) || isPending}
             maxLength={20}
           className={cn(
-            "h-8 w-full rounded-lg border bg-black/34 px-2 text-sm font-black text-white outline-none transition focus:border-emerald-300/45 focus:ring-2 focus:ring-emerald-300/16 sm:h-9",
+            "lore-nums h-8 w-full rounded-lg border bg-black/34 px-2 text-sm font-black tabular-nums text-white outline-none transition focus:border-emerald-300/45 focus:ring-2 focus:ring-emerald-300/16 sm:h-9",
             manualBetForm.betAmountError ? "border-red-400/35" : "border-white/8",
           )}
           />
@@ -352,10 +395,10 @@ function MobileManualActionBar({
         <div className="min-w-0 rounded-lg border border-violet-300/10 bg-violet-400/6 px-1.5 py-0.75 text-right sm:px-2">
           <div className="text-[7px] font-black uppercase leading-none tracking-[0.12em] text-slate-500">Total</div>
           <div className={cn(
-            "lore-hud-number mt-0.5 truncate text-sm font-black leading-none",
+            "lore-nums mt-0.5 truncate text-sm font-black leading-none tabular-nums",
             manualBetForm.manualInsufficient ? "text-red-300" : "text-violet-200",
           )}>
-            {manualBetForm.totalBet.toFixed(2)}
+            {manualBetForm.totalBetDisplay}
           </div>
         </div>
 

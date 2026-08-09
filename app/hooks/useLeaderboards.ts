@@ -1,15 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS, GRID_SIZE } from "../lib/constants";
 import type { LeaderboardEntry, LuckyTileEntry } from "../lib/types";
 import { readJsonResponse } from "../lib/readJsonResponse";
-import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 
 const STORAGE_KEY = `lore:leaderboard:v3:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 const LEADERBOARD_CACHE_TTL_MS = 60_000;
 const LEADERBOARD_CACHE_WRITE_MIN_MS = 5 * 60_000;
+const LEADERBOARD_LOAD_ERROR = "Leaderboards are temporarily unavailable. Refresh this tab to retry.";
 
 export interface LeaderboardsData {
   biggestSingleWin: LeaderboardEntry[];
@@ -65,7 +66,7 @@ function normalizeLuckyTileEntries(value: unknown): LuckyTileEntry[] {
       const tileId = finiteNumber(row.tileId, Number.NaN);
       const wins = finiteNumber(row.wins, Number.NaN);
       const pct = finiteNumber(row.pct, 0);
-      if (!Number.isSafeInteger(tileId) || tileId <= 0) return null;
+      if (!Number.isSafeInteger(tileId) || tileId < 1 || tileId > GRID_SIZE) return null;
       if (!Number.isSafeInteger(wins) || wins < 0) return null;
       return {
         tileId,
@@ -131,6 +132,10 @@ function loadCache(): { data: LeaderboardsData | null; savedAt: number | null } 
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { data: null, savedAt: null };
     const parsed = JSON.parse(raw) as LeaderboardsCacheEnvelope | LeaderboardsData;
+    if (!parsed || typeof parsed !== "object") {
+      localStorage.removeItem(STORAGE_KEY);
+      return { data: null, savedAt: null };
+    }
     if (
       parsed &&
       typeof parsed === "object" &&
@@ -145,6 +150,11 @@ function loadCache(): { data: LeaderboardsData | null; savedAt: number | null } 
     }
     return { data: normalizeLeaderboardsData(parsed), savedAt: null };
   } catch {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore storage failures
+    }
     return { data: null, savedAt: null };
   }
 }
@@ -239,9 +249,9 @@ export function useLeaderboards(enabled: boolean) {
       } else {
         initialCacheRef.current = { data: nextData, savedAt: cacheSavedAtRef.current };
       }
-    } catch (err) {
+    } catch {
       if (mountedRef.current) {
-        setError(err instanceof Error ? err.message : String(err));
+        setError(LEADERBOARD_LOAD_ERROR);
       }
     } finally {
       if (mountedRef.current) {
@@ -254,10 +264,7 @@ export function useLeaderboards(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     const savedAt = cacheSavedAtRef.current;
-    const initialDelay =
-      savedAt && Date.now() - savedAt < LEADERBOARD_CACHE_TTL_MS
-        ? LEADERBOARD_CACHE_TTL_MS - (Date.now() - savedAt)
-        : 0;
+    const initialDelay = getFreshCacheDelayMs(savedAt, LEADERBOARD_CACHE_TTL_MS) ?? 0;
     let cancelled = false;
     let timeoutId: number | null = null;
 

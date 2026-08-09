@@ -4,6 +4,7 @@ import React from "react";
 import { UiBadge } from "../ui/UiBadge";
 import { UiPanel } from "../ui/UiPanel";
 import { UiTable, UiTableBody, UiTableHead, UiTableRow } from "../ui/UiTable";
+import { GRID_SIZE } from "../../lib/constants";
 
 interface HistoryViewRow {
   roundId: string;
@@ -20,6 +21,12 @@ interface AnalyticsBlockchainHistoryPanelProps {
   historyLoading: boolean;
   historyRefreshing: boolean;
   newHistoryIds: Set<string>;
+}
+
+function parseHistoryWinningTile(value: string) {
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const tile = Number(value);
+  return Number.isSafeInteger(tile) && tile >= 1 && tile <= GRID_SIZE ? tile : null;
 }
 
 export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBlockchainHistoryPanel({
@@ -40,17 +47,22 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
           Blockchain History
         </h2>
         {(historyLoading || historyViewData.length > 0) && (
-          <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${historyRefreshing || historyLoading ? "text-violet-300" : "text-gray-300"}`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${historyRefreshing || historyLoading ? "bg-violet-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
+          <span
+            role="status"
+            aria-live="polite"
+            aria-busy={historyRefreshing || historyLoading}
+            className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${historyRefreshing || historyLoading ? "text-violet-300" : "text-gray-300"}`}
+          >
+            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${historyRefreshing || historyLoading ? "bg-violet-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
             {historyRefreshing || historyLoading ? "Refreshing" : "Ready"}
           </span>
         )}
       </div>
 
       {historyLoading && historyViewData.length === 0 ? (
-        <div className="space-y-1.5 py-2">
+        <div role="status" aria-live="polite" aria-busy="true" className="space-y-1.5 py-2">
           <div className="flex items-center gap-2 mb-3">
-            <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-synced-pulse" />
+            <div aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-synced-pulse" />
             <span className="text-[11px] font-bold uppercase tracking-wider text-gray-300">Loading rounds...</span>
           </div>
           {Array.from({ length: 5 }, (_, i) => (
@@ -83,7 +95,7 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
             </UiTableHead>
             <UiTableBody>
               {historyViewData.map((row, index) => {
-                const winBlockNum = Number(row.winningTile);
+                const winningTile = parseHistoryWinningTile(row.winningTile);
                 const isNew = newHistoryIds.has(row.roundId);
                 const userWonDailyJackpot = row.userWon && row.isDailyJackpot;
                 const userWonWeeklyJackpot = row.userWon && row.isWeeklyJackpot;
@@ -103,9 +115,9 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      {row.isResolved && winBlockNum > 0 ? (
+                      {row.isResolved && winningTile !== null ? (
                         <span className="flex items-center gap-2 flex-wrap">
-                          <span className="font-bold text-white">Block #{row.winningTile}</span>
+                          <span className="font-bold text-white">Block #{winningTile}</span>
                           {row.userWon && (
                             <UiBadge tone="amber" size="xs" uppercase>
                               <span className="text-amber-300">*</span> You won

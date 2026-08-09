@@ -9,7 +9,12 @@ import type { RebatePanel } from "./RebatePanel";
 import { isChunkLoadLikeErrorMessage } from "../lib/chunkReloadRecovery";
 
 const TabPanelFallback = () => (
-  <div className="rounded-2xl border border-white/8 bg-[#0a0b18]/80 p-6 text-sm text-slate-400">
+  <div
+    role="status"
+    aria-live="polite"
+    aria-busy="true"
+    className="rounded-2xl border border-white/8 bg-[#0a0b18]/80 p-6 text-sm text-slate-400"
+  >
     Loading panel...
   </div>
 );

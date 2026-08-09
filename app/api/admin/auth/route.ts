@@ -1,19 +1,24 @@
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { APP_CHAIN_ID } from "../../../../app/lib/constants";
 import {
   ADMIN_AUTH_PROOF_TTL_MS,
   ADMIN_AUTH_WALLET,
   ADMIN_AUTH_WALLET_CONFIGURED,
+  getAdminAuthProofTtlMs,
   isAdminAuthIssuedAtValid,
+  normalizeAdminAuthAddress,
   parseAdminAuthMessage,
 } from "../../../lib/adminAuth";
 import { publicClient } from "../../_lib/dataBridge";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { logRouteError } from "../../_lib/routeError";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
+import { acquireExternalExpiringLock, requiresExternalSharedLock } from "../../_lib/externalRateLimit";
 import { clearAdminSession, issueAdminSession, readAdminSession } from "../../_lib/adminSession";
 import { acquireExpiringLock } from "../../../../server/storage";
 import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
+import { getTrustedAuthOrigin, isTrustedAuthUri } from "../../_lib/trustedAuthOrigin";
 
 const MAX_REQUEST_BODY_BYTES = 8_192;
 
@@ -23,12 +28,18 @@ type AdminAuthPayload = {
   authSignature?: unknown;
 };
 
-function isAddress(value: unknown): value is `0x${string}` {
-  return typeof value === "string" && /^0x[a-fA-F0-9]{40}$/.test(value);
+function buildProofKey(address: string, nonce: string, uri: string) {
+  return createHash("sha256")
+    .update(`${address.toLowerCase()}:${nonce}:${uri}`)
+    .digest("hex");
 }
 
-function buildProofKey(address: string, nonce: string, uri: string) {
-  return `${address.toLowerCase()}:${nonce}:${uri}`;
+async function consumeAdminProof(address: string, nonce: string, uri: string, ttlMs: number) {
+  const proofKey = buildProofKey(address, nonce, uri);
+  if (requiresExternalSharedLock()) {
+    return acquireExternalExpiringLock(`admin-auth:${proofKey}`, ttlMs);
+  }
+  return acquireExpiringLock(`admin-auth:${proofKey}`, nonce, ttlMs);
 }
 
 export async function POST(request: NextRequest) {
@@ -51,16 +62,19 @@ export async function POST(request: NextRequest) {
     if (!parsedBody.ok && parsedBody.reason === "too-large") {
       return applyNoStoreHeaders(NextResponse.json({ error: "Auth payload too large" }, { status: 413 }), { varyCookie: true });
     }
+    if (!parsedBody.ok && parsedBody.reason === "unsupported-content-type") {
+      return applyNoStoreHeaders(NextResponse.json({ error: "Auth payload must be JSON" }, { status: 415 }), { varyCookie: true });
+    }
     const body = parsedBody.ok ? parsedBody.value : null;
     if (!body || typeof body !== "object") {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth payload" }, { status: 400 }), { varyCookie: true });
     }
 
-    const authAddress = typeof body.authAddress === "string" ? body.authAddress.toLowerCase() : "";
+    const authAddress = normalizeAdminAuthAddress(body.authAddress);
     const authMessage = typeof body.authMessage === "string" ? body.authMessage : "";
     const authSignature = typeof body.authSignature === "string" ? body.authSignature : "";
 
-    if (!isAddress(authAddress)) {
+    if (!authAddress) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth address" }, { status: 400 }), { varyCookie: true });
     }
     if (authAddress !== ADMIN_AUTH_WALLET) {
@@ -78,14 +92,8 @@ export async function POST(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth chain" }, { status: 400 }), { varyCookie: true });
     }
 
-    const requestOrigin = new URL(request.url).origin;
-    let messageOrigin = "";
-    try {
-      messageOrigin = new URL(fields.uri).origin;
-    } catch {
-      return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth origin" }, { status: 400 }), { varyCookie: true });
-    }
-    if (messageOrigin !== requestOrigin) {
+    const trustedOrigin = getTrustedAuthOrigin(request.url);
+    if (!trustedOrigin || !isTrustedAuthUri(fields.uri, trustedOrigin, "/admin")) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Invalid auth origin" }, { status: 400 }), { varyCookie: true });
     }
     if (!isAdminAuthIssuedAtValid(fields.issuedAt, Date.now(), ADMIN_AUTH_PROOF_TTL_MS)) {
@@ -101,10 +109,11 @@ export async function POST(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Signature verification failed" }, { status: 401 }), { varyCookie: true });
     }
 
-    const proofKey = buildProofKey(authAddress, fields.nonce, fields.uri);
-    const issuedAtMs = Date.parse(fields.issuedAt);
-    const ttlMs = Math.max(1, ADMIN_AUTH_PROOF_TTL_MS - (Date.now() - issuedAtMs));
-    const consumed = acquireExpiringLock(`admin-auth:${proofKey}`, fields.nonce, ttlMs);
+    const ttlMs = getAdminAuthProofTtlMs(fields.issuedAt);
+    if (ttlMs === null) {
+      return applyNoStoreHeaders(NextResponse.json({ error: "Expired auth proof" }, { status: 401 }), { varyCookie: true });
+    }
+    const consumed = await consumeAdminProof(authAddress, fields.nonce, fields.uri, ttlMs);
     if (!consumed) {
       const response = applyNoStoreHeaders(NextResponse.json({ error: "Auth proof already used" }, { status: 409 }), { varyCookie: true });
       clearAdminSession(response);
@@ -129,7 +138,7 @@ export async function GET(request: NextRequest) {
     limit: 60,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
   const session = readAdminSession(request);
   if (!session) {

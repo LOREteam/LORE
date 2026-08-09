@@ -8,11 +8,36 @@ interface Props {
 
 const PUBLIC_SITE_URL = "https://playlore.xyz";
 
+function isPublicHttpsOrigin(raw: string) {
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+    if (url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash) return false;
+    if (!host.includes(".") && !host.includes(":")) return false;
+    return !(
+      host === "localhost" ||
+      host === "0.0.0.0" ||
+      host === "::" ||
+      host === "::1" ||
+      host === "127.0.0.1" ||
+      host.endsWith(".localhost") ||
+      host.endsWith(".local") ||
+      host.endsWith(".example") ||
+      host.endsWith(".test") ||
+      host.endsWith(".invalid") ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function getPublicSiteUrl() {
-  const configured = (process.env.NEXT_PUBLIC_SITE_URL ?? PUBLIC_SITE_URL).trim();
-  if (!configured.startsWith("http")) return PUBLIC_SITE_URL;
-  const normalized = configured.replace(/\/+$/, "");
-  return /localhost|127\.0\.0\.1/i.test(normalized) ? PUBLIC_SITE_URL : normalized;
+  const configured = (process.env.NEXT_PUBLIC_SITE_URL ?? PUBLIC_SITE_URL).trim().replace(/\/+$/, "");
+  return isPublicHttpsOrigin(configured) ? configured : PUBLIC_SITE_URL;
 }
 
 function param(raw: string | string[] | undefined): string | null {

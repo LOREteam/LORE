@@ -64,6 +64,7 @@ export const Sidebar = React.memo(function Sidebar({
     [hotTiles],
   );
   const hotTilesReady = Boolean(hotTiles && hotTiles.length > 0);
+  const claimAllLabel = isClaiming ? "Reward claim is already pending" : `Claim all ${unclaimedWins.length} rewards`;
 
   const handleMobileTabChange = useCallback(
     (tab: TabId) => {
@@ -86,7 +87,10 @@ export const Sidebar = React.memo(function Sidebar({
 
   const handleBackdropKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Escape") onMobileClose?.();
+      if (e.key === "Escape" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onMobileClose?.();
+      }
     },
     [onMobileClose],
   );
@@ -99,15 +103,20 @@ export const Sidebar = React.memo(function Sidebar({
           role="button"
           tabIndex={0}
           aria-label="Close sidebar"
+          aria-controls="lore-sidebar"
           className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden animate-fade-in"
           onClick={onMobileClose}
           onKeyDown={handleBackdropKeyDown}
         />
       )}
-    <aside className={cn(
-      "fixed inset-y-0 left-0 z-50 h-screen w-[calc(14rem+1cm)] flex-col overflow-hidden border-r border-violet-500/15 bg-[#0a0a18]/95 backdrop-blur-md transition-transform duration-300 lg:relative lg:z-auto lg:translate-x-0 lg:flex animate-slide-in-left",
-      mobileOpen ? "flex translate-x-0" : "hidden lg:flex -translate-x-full lg:translate-x-0",
-    )}>
+      <aside
+        id="lore-sidebar"
+        aria-label="LORE navigation"
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 h-screen w-[calc(14rem+1cm)] flex-col overflow-hidden border-r border-violet-500/15 bg-[#0a0a18]/95 backdrop-blur-md transition-transform duration-300 lg:relative lg:z-auto lg:translate-x-0 lg:flex animate-slide-in-left",
+          mobileOpen ? "flex translate-x-0" : "hidden lg:flex -translate-x-full lg:translate-x-0",
+        )}
+      >
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
         <div className="absolute left-[-22%] top-[-10%] h-52 w-52 rounded-full bg-violet-600/10 blur-3xl" />
         <div className="absolute bottom-[-12%] right-[-18%] h-48 w-48 rounded-full bg-sky-500/8 blur-3xl" />
@@ -154,7 +163,7 @@ export const Sidebar = React.memo(function Sidebar({
 
         <div className="mx-3.5 h-px bg-linear-to-r from-transparent via-white/8 to-transparent" />
 
-        <nav className="mt-1 space-y-1 px-3 pb-2 pt-1.5">
+        <nav aria-label="Main navigation" className="mt-1 space-y-1 px-3 pb-2 pt-1.5">
           <NavItem
             active={activeTab === "hub"}
             onClick={goHub}
@@ -266,7 +275,7 @@ export const Sidebar = React.memo(function Sidebar({
           <UiPanel
             tone="warning"
             padding="sm"
-            className="mb-[6mm] flex min-h-0 flex-1 overflow-y-auto border-amber-500/10 bg-linear-to-br from-amber-500/4 to-violet-500/4 p-0"
+            className="flex min-h-0 flex-1 overflow-y-auto border-amber-500/10 bg-linear-to-br from-amber-500/4 to-violet-500/4 p-0"
           >
             <div className="px-1 py-0.5">
               <div className="mb-2.5 flex items-center justify-between gap-1">
@@ -276,6 +285,8 @@ export const Sidebar = React.memo(function Sidebar({
                 </p>
                 {unclaimedWins.length > 1 && (
                   <UiButton
+                    aria-label={claimAllLabel}
+                    title={claimAllLabel}
                     onClick={onClaimAll}
                     loading={isClaiming}
                     variant="warning"
@@ -321,6 +332,20 @@ export const Sidebar = React.memo(function Sidebar({
               )}
             </div>
           </UiPanel>
+          <div className="mb-[6mm] flex justify-center gap-1">
+            <a
+              href="/privacy"
+              className="inline-flex min-h-11 items-center rounded-full px-3 py-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-600 transition-colors hover:text-violet-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70"
+            >
+              Privacy
+            </a>
+            <a
+              href="/terms"
+              className="inline-flex min-h-11 items-center rounded-full px-3 py-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-600 transition-colors hover:text-violet-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/70"
+            >
+              Terms
+            </a>
+          </div>
         </div>
       </div>
     </aside>
@@ -344,6 +369,7 @@ const RewardClaimRow = React.memo(function RewardClaimRow({
   const handleClaim = useCallback(() => {
     onClaim(epoch);
   }, [epoch, onClaim]);
+  const claimLabel = isClaiming ? "Reward claim is already pending" : `Claim reward for epoch ${epoch}`;
 
   return (
     <div
@@ -359,6 +385,8 @@ const RewardClaimRow = React.memo(function RewardClaimRow({
         </span>
       </div>
       <UiButton
+        aria-label={claimLabel}
+        title={claimLabel}
         onClick={handleClaim}
         disabled={isClaiming}
         variant="warning"
@@ -425,6 +453,7 @@ const NavItem = React.memo(function NavItem({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(

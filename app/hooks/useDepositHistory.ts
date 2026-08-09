@@ -2,16 +2,18 @@
 
 import { log } from "../lib/logger";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { formatUnits } from "viem";
-import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
+import { getAddress } from "viem";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS, GRID_SIZE } from "../lib/constants";
 import {
   computeWinningAmountWei,
   formatLineaAmountFixed,
+  formatLineaWeiDisplayNumber,
   normalizeTileAmounts,
   parseLineaAmountWei,
 } from "../lib/tokenAmountMath";
-import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
+import { readJsonResponse } from "../lib/readJsonResponse";
 
 export interface DepositEntry {
   epoch: string;
@@ -60,14 +62,16 @@ interface DepositCacheEnvelope {
 
 const DEPOSIT_CACHE_TTL_MS = 30_000;
 const DEPOSIT_CACHE_WRITE_MIN_MS = 120_000;
+const DEPOSIT_CACHE_ENTRY_LIMIT = 500;
 const SYNC_EPOCH_PREFETCH_LIMIT = 64;
 const EPOCHS_FETCH_CHUNK = 100;
 const REWARDS_FETCH_CHUNK = 200;
+const DEPOSIT_HISTORY_LOAD_ERROR = "Deposit history is temporarily unavailable. Refresh the Analytics tab to retry.";
 
 function parseSafeNonNegativeIntegerNumber(value: string | null | undefined): number {
-  if (!value || !/^\d+$/.test(value)) return 0;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+  if (!value || !/^(?:0|[1-9]\d*)$/.test(value)) return 0;
+  const parsed = BigInt(value);
+  return parsed <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(parsed) : 0;
 }
 
 function parseSafePositiveIntegerNumber(value: string | null | undefined): number {
@@ -75,24 +79,135 @@ function parseSafePositiveIntegerNumber(value: string | null | undefined): numbe
   return parsed > 0 ? parsed : 0;
 }
 
+function toDisplayNumberWei(value: bigint): number {
+  return formatLineaWeiDisplayNumber(value);
+}
+
 function getDepositCacheKey(userAddress: string) {
-  return `lore:deposits:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${userAddress.toLowerCase()}`;
+  return `lore:deposits:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${getAddress(userAddress).toLowerCase()}`;
+}
+
+function normalizeDepositUserAddress(userAddress: string | null | undefined): `0x${string}` | null {
+  if (!userAddress) return null;
+  try {
+    return getAddress(userAddress).toLowerCase() as `0x${string}`;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDepositTxHash(value: unknown): `0x${string}` | "" {
+  const normalized = String(value ?? "").toLowerCase().trim();
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? (normalized as `0x${string}`) : "";
+}
+
+function normalizeCachedNumberArray(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(normalizeCachedDisplayNumber)
+    .filter((item): item is number => item !== null);
+}
+
+function normalizeCachedTileIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(normalizeCachedIntegerNumber)
+    .filter((item): item is number => item !== null && item >= 1 && item <= GRID_SIZE);
+}
+
+function normalizeCachedIntegerNumber(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!/^(?:0|[1-9]\d*)$/.test(text)) return null;
+  const parsed = BigInt(text);
+  return parsed <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(parsed) : null;
+}
+
+function normalizeCachedDisplayNumber(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text)) return null;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function normalizeCachedDepositEntry(value: unknown): DepositEntry | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<DepositEntry>;
+  const epoch = typeof item.epoch === "string" && parseSafePositiveIntegerNumber(item.epoch) > 0 ? item.epoch : null;
+  const blockNumber = typeof item.blockNumber === "string" && parseSafePositiveIntegerNumber(item.blockNumber) > 0 ? item.blockNumber : null;
+  const txHash = normalizeDepositTxHash(item.txHash);
+  const amount = typeof item.amount === "string" && item.amount.length <= 80 ? item.amount : null;
+  if (!epoch || !blockNumber || !txHash || !amount) return null;
+
+  const tileIds = normalizeCachedTileIds(item.tileIds);
+  const winningTile = normalizeCachedIntegerNumber(item.winningTile);
+  return {
+    epoch,
+    tileIds,
+    amounts: normalizeCachedNumberArray(item.amounts).slice(0, tileIds.length),
+    amount,
+    amountNum: normalizeCachedDisplayNumber(item.amountNum) ?? 0,
+    txHash,
+    blockNumber,
+    blockNumberNum: parseSafeNonNegativeIntegerNumber(blockNumber),
+    winningTile: winningTile !== null && winningTile >= 1 && winningTile <= GRID_SIZE
+      ? winningTile
+      : null,
+    isDailyJackpot: item.isDailyJackpot === true,
+    isWeeklyJackpot: item.isWeeklyJackpot === true,
+    reward: normalizeCachedDisplayNumber(item.reward),
+  };
+}
+
+export function normalizeCachedDepositEntries(value: unknown): DepositEntry[] | null {
+  if (!Array.isArray(value)) return null;
+  return value
+    .slice(0, DEPOSIT_CACHE_ENTRY_LIMIT)
+    .map(normalizeCachedDepositEntry)
+    .filter((item): item is DepositEntry => item !== null);
 }
 
 function loadCachedDeposits(userAddress: string): { data: DepositEntry[] | null; savedAt: number | null } {
   if (typeof localStorage === "undefined") return { data: null, savedAt: null };
+  const cacheKey = getDepositCacheKey(userAddress);
   try {
-    const raw = localStorage.getItem(getDepositCacheKey(userAddress));
+    const raw = localStorage.getItem(cacheKey);
     if (!raw) return { data: null, savedAt: null };
     const parsed = JSON.parse(raw) as DepositCacheEnvelope | DepositEntry[];
     if (Array.isArray(parsed)) {
-      return { data: parsed, savedAt: null };
+      const data = normalizeCachedDepositEntries(parsed);
+      if (parsed.length > 0 && data?.length === 0) {
+        localStorage.removeItem(cacheKey);
+        return { data: null, savedAt: null };
+      }
+      return { data, savedAt: null };
+    }
+    if (!parsed || typeof parsed !== "object") {
+      localStorage.removeItem(cacheKey);
+      return { data: null, savedAt: null };
+    }
+    const data = normalizeCachedDepositEntries(parsed.data);
+    if (!data) {
+      localStorage.removeItem(cacheKey);
+      return { data: null, savedAt: null };
     }
     return {
-      data: Array.isArray(parsed.data) ? parsed.data : null,
+      data,
       savedAt: normalizeCacheTimestamp(parsed.savedAt),
     };
   } catch {
+    try {
+      localStorage.removeItem(cacheKey);
+    } catch {
+      // ignore storage failures
+    }
     return { data: null, savedAt: null };
   }
 }
@@ -122,7 +237,7 @@ async function fetchEpochMap(epochIds: string[]) {
     const response = await fetchWithTimeout(`/api/epochs?epochs=${epochsQuery}`);
     if (!response.ok) continue;
     try {
-      const json = (await response.json()) as { epochs?: Record<string, ApiEpoch> };
+      const json = await readJsonResponse<{ epochs?: Record<string, ApiEpoch> }>(response) ?? {};
       Object.assign(merged, json.epochs ?? {});
     } catch {
       // ignore chunk parse failures
@@ -148,7 +263,7 @@ async function fetchRewardsMap(userAddress: string, epochIds: string[]) {
     });
     if (!response.ok) continue;
     try {
-      const json = (await response.json()) as { rewards?: Record<string, ApiRewardInfo> };
+      const json = await readJsonResponse<{ rewards?: Record<string, ApiRewardInfo> }>(response) ?? {};
       Object.assign(merged, json.rewards ?? {});
     } catch {
       // ignore chunk parse failures
@@ -180,8 +295,7 @@ export function mapDepositEntries(
     const winningTile = epochData?.winningTile ?? rewardData?.winningTile ?? null;
     const totalAmountWei = parseLineaAmountWei(d.totalAmount);
     const normalizedAmounts = normalized.amounts.map((value) => {
-      const amount = Number(formatUnits(parseLineaAmountWei(value), 18));
-      return Number.isFinite(amount) && amount >= 0 ? amount : 0;
+      return toDisplayNumberWei(parseLineaAmountWei(value));
     });
     let reward: number | null = null;
 
@@ -191,7 +305,7 @@ export function mapDepositEntries(
       const rowWinningAmountWei = computeWinningAmountWei(d.tileIds, d.amounts, winningTile, d.totalAmount);
       if (userWinningAmountWei > 0n && totalRewardWei > 0n && rowWinningAmountWei > 0n) {
         const rewardWei = (totalRewardWei * rowWinningAmountWei) / userWinningAmountWei;
-        reward = Number(formatUnits(rewardWei, 18));
+        reward = toDisplayNumberWei(rewardWei);
       }
     }
 
@@ -200,8 +314,8 @@ export function mapDepositEntries(
       tileIds: normalizedTileIds,
       amounts: normalizedAmounts,
       amount: formatLineaAmountFixed(totalAmountWei, 2),
-      amountNum: Number(formatUnits(totalAmountWei, 18)),
-      txHash: d.txHash,
+      amountNum: toDisplayNumberWei(totalAmountWei),
+      txHash: normalizeDepositTxHash(d.txHash),
       blockNumber: d.blockNumber,
       blockNumberNum: parseSafeNonNegativeIntegerNumber(d.blockNumber),
       winningTile,
@@ -278,8 +392,8 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
   }, []);
 
   const fetchFromApi = useCallback(async () => {
-    if (!userAddress) return;
-    const normalizedUser = userAddress.toLowerCase();
+    const normalizedUser = normalizeDepositUserAddress(userAddress);
+    if (!normalizedUser) return;
     if (runningRef.current && runningForRef.current === normalizedUser) return;
     const requestId = ++requestIdRef.current;
     const shouldShowLoading = dataRef.current === null;
@@ -306,14 +420,14 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
         error?: string;
       } = {};
       try {
-        depositsJson = await depositsRes.json();
+        depositsJson = await readJsonResponse<typeof depositsJson>(depositsRes) ?? {};
       } catch {
         depositsJson = {};
       }
 
       if (!depositsRes.ok || depositsJson.error) {
         if (mountedRef.current) {
-          setError(depositsJson.error || `HTTP ${depositsRes.status}`);
+          setError(DEPOSIT_HISTORY_LOAD_ERROR);
           if (dataRef.current === null) {
             setData([]);
           }
@@ -404,7 +518,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
     } catch (err) {
       log.warn("DepositHistory", "API fetch failed", { message: err instanceof Error ? err.message : String(err) });
       if (mountedRef.current && requestId === requestIdRef.current) {
-        setError((err as Error).message || "Network error");
+        setError(DEPOSIT_HISTORY_LOAD_ERROR);
         if (dataRef.current === null) {
           setData([]);
         }
@@ -422,7 +536,8 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
   }, [userAddress]);
 
   useEffect(() => {
-    if (!userAddress) {
+    const normalizedUser = normalizeDepositUserAddress(userAddress);
+    if (!normalizedUser) {
       requestIdRef.current += 1;
       runningRef.current = false;
       runningForRef.current = null;
@@ -449,18 +564,19 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       return;
     }
 
-    const cached = loadCachedDeposits(userAddress);
-    cacheSavedAtRef.current[userAddress.toLowerCase()] = cached.savedAt;
+    const cached = loadCachedDeposits(normalizedUser);
+    cacheSavedAtRef.current[normalizedUser] = cached.savedAt;
     if (mountedRef.current) {
       setData(cached.data);
       setLastLoadedAt(cached.data ? cached.savedAt : null);
       setError(null);
     }
     const savedAt = cached.savedAt;
-    if (savedAt && Date.now() - savedAt < DEPOSIT_CACHE_TTL_MS) {
+    const refreshDelayMs = getFreshCacheDelayMs(savedAt, DEPOSIT_CACHE_TTL_MS);
+    if (refreshDelayMs !== null) {
       const timeoutId = window.setTimeout(() => {
         void fetchFromApi();
-      }, DEPOSIT_CACHE_TTL_MS - (Date.now() - savedAt));
+      }, refreshDelayMs);
       return () => window.clearTimeout(timeoutId);
     }
 

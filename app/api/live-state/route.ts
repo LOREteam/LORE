@@ -25,6 +25,7 @@ const LIVE_STATE_STALE_FAST_PATH_MS = 60_000;
 const LIVE_STATE_CACHE_MAX_KEYS = 2;
 const ROUTE_METRIC_KEY = "api/live-state";
 const CACHE_KEY = "latest";
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const liveStateRouteCache = createRouteCache<LiveStatePayload>(LIVE_STATE_CACHE_MAX_KEYS);
 
 function jsonNoStore(payload: LiveStatePayload, status = 200) {
@@ -32,6 +33,11 @@ function jsonNoStore(payload: LiveStatePayload, status = 200) {
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
+    promise.catch(() => {});
+    throw new RangeError(`${label} timeout must be between 1 and 2147483647 milliseconds`);
+  }
+
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
@@ -61,12 +67,34 @@ function startLiveStateRefresh() {
   });
 }
 
+function isFreshLiveStatePayloadFetchedAt(fetchedAt: unknown, now: number) {
+  return (
+    typeof fetchedAt === "number" &&
+    Number.isSafeInteger(fetchedAt) &&
+    fetchedAt >= 0 &&
+    Number.isSafeInteger(now) &&
+    now >= 0 &&
+    fetchedAt <= now &&
+    now - fetchedAt <= LIVE_STATE_STALE_FAST_PATH_MS
+  );
+}
+
 function canServeStaleImmediately(payload: LiveStatePayload, now: number) {
-  return Number.isFinite(payload.fetchedAt) && now - payload.fetchedAt <= LIVE_STATE_STALE_FAST_PATH_MS;
+  return isFreshLiveStatePayloadFetchedAt(payload.fetchedAt, now);
 }
 
 export async function GET(request: Request) {
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
+  const rateLimited = await enforceSharedRateLimit(request, {
+    bucket: "api-live-state",
+    limit: 120,
+    windowMs: 60_000,
+  });
+  if (rateLimited) {
+    failRouteMetric(metric, 429);
+    return applyNoStoreHeaders(rateLimited);
+  }
+
   const now = Date.now();
   const cached = liveStateRouteCache.getFresh(CACHE_KEY, now);
   if (cached) {
@@ -92,16 +120,6 @@ export async function GET(request: Request) {
     startLiveStateRefresh();
     finishRouteMetric(metric, 200);
     return jsonNoStore(storedBootstrap);
-  }
-
-  const rateLimited = await enforceSharedRateLimit(request, {
-    bucket: "api-live-state",
-    limit: 120,
-    windowMs: 60_000,
-  });
-  if (rateLimited) {
-    failRouteMetric(metric, 429);
-    return rateLimited;
   }
 
   try {

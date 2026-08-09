@@ -5,8 +5,10 @@ import {
   getAffordableKeeperGasLimit,
   getKeeperFeeOverrides,
 } from "../../lib/lineaFees";
+import { recordLineaEstimateGasShadow } from "../../lib/lineaEstimateGasShadow";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { logRouteError } from "../_lib/routeError";
+import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import {
   acquireResolveLock,
   APP_CHAIN,
@@ -22,19 +24,21 @@ import {
   RESOLVE_THROTTLE_MS,
 } from "./shared";
 
-const REPLACE_PENDING_FEE_BUMP_STEPS = [
-  { maxFeeBumpPercent: 220n, priorityBumpPercent: 200n },
-  { maxFeeBumpPercent: 400n, priorityBumpPercent: 380n },
-  { maxFeeBumpPercent: 800n, priorityBumpPercent: 780n },
-  { maxFeeBumpPercent: 1600n, priorityBumpPercent: 1580n },
-  { maxFeeBumpPercent: 3500n, priorityBumpPercent: 3480n },
-] as const;
-
-const CANCEL_TX_GAS_LIMIT = 21_000n;
-const CANCEL_TX_BALANCE_HEADROOM_PERCENT = 98n;
-const CANCEL_TX_MAX_COST_WEI = 1_000_000_000_000_000n; // 0.001 ETH hard loss ceiling.
 const INSUFFICIENT_FUNDS_RETRY_MS = 300_000;
 const RESOLVE_RECEIPT_TIMEOUT_MS = 25_000;
+const ZERO_CONTENT_LENGTH_RE = /^0$/;
+
+function hasUnexpectedRequestBody(request: Request) {
+  const contentLength = request.headers.get("content-length")?.trim();
+  if (contentLength) {
+    if (!ZERO_CONTENT_LENGTH_RE.test(contentLength)) return true;
+  }
+  return request.body !== null;
+}
+
+function json(payload: Record<string, unknown>, init?: ResponseInit) {
+  return applyNoStoreHeaders(NextResponse.json(payload, init));
+}
 
 function isKeeperInsufficientFundsError(message: string) {
   const lower = message.toLowerCase();
@@ -44,15 +48,12 @@ function isKeeperInsufficientFundsError(message: string) {
   );
 }
 
-function getMaxAffordableCancelFeePerGas(balanceWei: bigint) {
-  const affordableCost = (balanceWei * CANCEL_TX_BALANCE_HEADROOM_PERCENT) / 100n;
-  const boundedCost = affordableCost < CANCEL_TX_MAX_COST_WEI ? affordableCost : CANCEL_TX_MAX_COST_WEI;
-  return boundedCost / CANCEL_TX_GAS_LIMIT;
-}
-
 export async function POST(request: Request) {
   if (!isAuthorizedBootstrapRequest(request)) {
-    return NextResponse.json({ ok: false, reason: "bootstrap_unauthorized" }, { status: 403 });
+    return json({ ok: false, reason: "bootstrap_unauthorized" }, { status: 403 });
+  }
+  if (hasUnexpectedRequestBody(request)) {
+    return json({ ok: false, reason: "bootstrap_body_not_supported" }, { status: 413 });
   }
 
   const rateLimited = await enforceSharedRateLimit(request, {
@@ -60,7 +61,7 @@ export async function POST(request: Request) {
     limit: isLocalDevBootstrapRequest(request) ? 60 : 12,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   const keeperKeyConfigured = !!(
     process.env.BOOTSTRAP_KEEPER_PRIVATE_KEY?.trim() ||
@@ -69,10 +70,12 @@ export async function POST(request: Request) {
   const account = getBootstrapKeeperAccount();
   if (!account) {
     if (keeperKeyConfigured) {
-      console.error("[bootstrap-resolve] Keeper private key is configured but invalid - bootstrap resolver is non-functional. Check BOOTSTRAP_KEEPER_PRIVATE_KEY / KEEPER_PRIVATE_KEY format (must be 64 hex chars).");
-      return NextResponse.json({ ok: false, reason: "bootstrap_keeper_misconfigured" }, { status: 500 });
+      logRouteError("api/bootstrap-resolve", new Error("bootstrap keeper key is configured but invalid"), {
+        phase: "keeper-config",
+      });
+      return json({ ok: false, reason: "bootstrap_keeper_misconfigured" }, { status: 500 });
     }
-    return NextResponse.json({ ok: true, action: "noop", reason: "bootstrap_keeper_disabled" });
+    return json({ ok: true, action: "noop", reason: "bootstrap_keeper_disabled" });
   }
 
   try {
@@ -83,7 +86,7 @@ export async function POST(request: Request) {
     });
 
     if (!(await acquireResolveLock(currentEpoch))) {
-      return NextResponse.json({
+      return json({
         ok: true,
         action: "noop",
         reason: "bootstrap_resolve_throttled",
@@ -119,7 +122,7 @@ export async function POST(request: Request) {
     const isExpired = nowSec >= epochEndTime;
 
     if (isResolved || !isExpired) {
-      return NextResponse.json({
+      return json({
         ok: true,
         action: "noop",
         currentEpoch: currentEpoch.toString(),
@@ -128,11 +131,10 @@ export async function POST(request: Request) {
       });
     }
 
-    // V9 atomic resolve: skip empty epochs - burning gas to resolve a
-    // round with zero bets is wasteful. It will sit frozen until a player
-    // bet triggers the contract's built-in _autoResolveIfNeeded().
+    // Skip empty epochs: V9 legacy bets and V10 observed-epoch bets advance
+    // one empty expired epoch on demand, without spending keeper gas while idle.
     if (totalPool === 0n) {
-      return NextResponse.json({
+      return json({
         ok: true,
         action: "noop",
         reason: "epoch_empty",
@@ -150,7 +152,17 @@ export async function POST(request: Request) {
       address: account.address,
       blockTag: "pending",
     });
-    const replacingPendingTx = pendingNonce > latestNonce;
+    if (pendingNonce > latestNonce) {
+      // This API has no durable hash-to-nonce ownership record. Replacing or
+      // cancelling this nonce could affect an unrelated keeper transaction.
+      return json({
+        ok: true,
+        action: "noop",
+        reason: "bootstrap_pending_nonce_unbound",
+        currentEpoch: currentEpoch.toString(),
+        retryAfter: Math.max(1, Math.ceil(RESOLVE_THROTTLE_MS / 1000)),
+      });
+    }
 
     const gasEstimate = await publicClient.estimateContractGas({
       account: account.address,
@@ -159,14 +171,19 @@ export async function POST(request: Request) {
       functionName: "resolveEpoch",
       args: [currentEpoch],
     });
+    await recordLineaEstimateGasShadow({
+      publicClient,
+      account: account.address,
+      to: CONTRACT_ADDRESS,
+      abi: BOOTSTRAP_RESOLVE_ABI,
+      functionName: "resolveEpoch",
+      args: [currentEpoch],
+      baselineGas: gasEstimate,
+      tag: "bootstrap-resolve",
+    });
     const keeperBalance = await publicClient.getBalance({ address: account.address });
-    const feeBumpSteps = replacingPendingTx
-      ? REPLACE_PENDING_FEE_BUMP_STEPS
-      : [{ maxFeeBumpPercent: 130n, priorityBumpPercent: 125n }] as const;
-
-    let lastWriteError: unknown = null;
-    let lastFeeBumpRejection = false;
-    for (const [attemptIndex, bumpStep] of feeBumpSteps.entries()) {
+    const feeBumpSteps = [{ maxFeeBumpPercent: 130n, priorityBumpPercent: 125n }] as const;
+    for (const bumpStep of feeBumpSteps) {
       const fees = await publicClient.estimateFeesPerGas();
       const estimatedFeeOverrides = getKeeperFeeOverrides(
         fees,
@@ -182,7 +199,7 @@ export async function POST(request: Request) {
       const gas = getAffordableKeeperGasLimit(gasEstimate, keeperBalance, feeOverrides, 150n);
 
       if (gas === null) {
-        return NextResponse.json({
+        return json({
           ok: true,
           action: "noop",
           reason: "keeper_insufficient_funds",
@@ -197,7 +214,7 @@ export async function POST(request: Request) {
           functionName: "resolveEpoch",
           args: [currentEpoch],
           gas,
-          ...(replacingPendingTx ? { nonce: latestNonce } : {}),
+          nonce: latestNonce,
           ...(feeOverrides?.gasPrice !== undefined
             ? { gasPrice: feeOverrides.gasPrice }
             : {
@@ -211,6 +228,17 @@ export async function POST(request: Request) {
           timeout: RESOLVE_RECEIPT_TIMEOUT_MS,
         }).catch(() => null);
 
+        if (!receipt) {
+          return json({
+            ok: true,
+            action: "pending",
+            reason: "resolve_receipt_timeout",
+            currentEpoch: currentEpoch.toString(),
+            hash,
+            retryAfter: Math.max(1, Math.ceil(RESOLVE_THROTTLE_MS / 1000)),
+          });
+        }
+
         if (receipt?.status === "reverted") {
           const latestEpoch = await publicClient.readContract({
             address: CONTRACT_ADDRESS,
@@ -218,7 +246,7 @@ export async function POST(request: Request) {
             functionName: "currentEpoch",
           }) as bigint;
           if (latestEpoch > currentEpoch) {
-            return NextResponse.json({
+            return json({
               ok: true,
               action: "noop",
               reason: "epoch_no_longer_current",
@@ -235,7 +263,7 @@ export async function POST(request: Request) {
             args: [currentEpoch],
           }) as [bigint, bigint, bigint, boolean, boolean, boolean];
           if (Boolean(latestEpochData[3])) {
-            return NextResponse.json({
+            return json({
               ok: true,
               action: "noop",
               reason: "epoch_already_resolved",
@@ -244,7 +272,7 @@ export async function POST(request: Request) {
             });
           }
 
-          return NextResponse.json({
+          return json({
             ok: true,
             action: "noop",
             reason: "resolve_tx_reverted",
@@ -254,7 +282,7 @@ export async function POST(request: Request) {
           });
         }
 
-        return NextResponse.json({
+        return json({
           ok: true,
           action: "sent",
           currentEpoch: currentEpoch.toString(),
@@ -262,82 +290,16 @@ export async function POST(request: Request) {
           txStatus: receipt?.status,
         });
       } catch (err) {
-        lastWriteError = err;
-        const message = err instanceof Error ? err.message : String(err);
-        const noopReason = getResolveNoopReason(message);
-        lastFeeBumpRejection = noopReason === "resolve_fee_bump_needed";
-        if (
-          lastFeeBumpRejection &&
-          replacingPendingTx &&
-          attemptIndex < feeBumpSteps.length - 1
-        ) {
-          continue;
-        }
-        if (lastFeeBumpRejection && replacingPendingTx) {
-          break;
-        }
         throw err;
       }
     }
 
-    // Escape hatch for a nonce stuck behind an older tx whose fees are so
-    // high that normal bump attempts can't replace it. Send a 0-value
-    // self-transfer at the same nonce with dramatically higher fees - this
-    // costs ~21k gas and, once mined, frees the nonce so the next resolve
-    // call can proceed with a fresh nonce.
-    if (replacingPendingTx && lastFeeBumpRejection) {
-      try {
-        const cancelFeePerGas = getMaxAffordableCancelFeePerGas(keeperBalance);
-        if (cancelFeePerGas <= 0n) {
-          return NextResponse.json({
-            ok: true,
-            action: "noop",
-            reason: "keeper_insufficient_funds",
-            retryAfter: Math.max(1, Math.ceil(INSUFFICIENT_FUNDS_RETRY_MS / 1000)),
-          });
-        }
-        const cancelHash = await walletClient.sendTransaction({
-          to: account.address,
-          value: 0n,
-          nonce: latestNonce,
-          gas: CANCEL_TX_GAS_LIMIT,
-          maxFeePerGas: cancelFeePerGas,
-          maxPriorityFeePerGas: cancelFeePerGas,
-        });
-        return NextResponse.json({
-          ok: true,
-          action: "cancelled",
-          reason: "pending_tx_cancelled",
-          cancelledNonce: latestNonce,
-          hash: cancelHash,
-          retryAfter: Math.max(1, Math.ceil(RESOLVE_THROTTLE_MS / 1000)),
-        });
-      } catch (cancelErr) {
-        const message = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
-        logRouteError("api/bootstrap-resolve", cancelErr, { phase: "cancel-stuck-transaction" });
-        if (isKeeperInsufficientFundsError(message)) {
-          return NextResponse.json({
-            ok: true,
-            action: "noop",
-            reason: "keeper_insufficient_funds",
-            retryAfter: Math.max(1, Math.ceil(INSUFFICIENT_FUNDS_RETRY_MS / 1000)),
-          });
-        }
-        return NextResponse.json({
-          ok: true,
-          action: "noop",
-          reason: "cancel_stuck_tx_failed",
-          retryAfter: Math.max(1, Math.ceil(RESOLVE_THROTTLE_MS / 1000)),
-        });
-      }
-    }
-
-    throw lastWriteError ?? new Error("resolve_failed");
+    throw new Error("resolve_failed");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const noopReason = getResolveNoopReason(message);
     if (noopReason) {
-      return NextResponse.json({
+      return json({
         ok: true,
         action: "noop",
         reason: noopReason,
@@ -347,7 +309,7 @@ export async function POST(request: Request) {
       });
     }
     if (isKeeperInsufficientFundsError(message)) {
-      return NextResponse.json({
+      return json({
         ok: true,
         action: "noop",
         reason: "keeper_insufficient_funds",
@@ -355,7 +317,7 @@ export async function POST(request: Request) {
       });
     }
     if (isRpcReadRetryableError(message)) {
-      return NextResponse.json({
+      return json({
         ok: true,
         action: "noop",
         reason: "bootstrap_rpc_unavailable",
@@ -363,6 +325,6 @@ export async function POST(request: Request) {
       });
     }
     logRouteError("api/bootstrap-resolve", err, { phase: "resolve" });
-    return NextResponse.json({ ok: false, reason: "resolve_failed" }, { status: 500 });
+    return json({ ok: false, reason: "resolve_failed" }, { status: 500 });
   }
 }

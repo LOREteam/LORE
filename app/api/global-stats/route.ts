@@ -9,7 +9,7 @@ export async function GET(request: Request) {
     limit: 60,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   return applyNoStoreHeaders(NextResponse.json(getGlobalStatsAggregate()));
 }

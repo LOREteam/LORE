@@ -109,6 +109,19 @@ const INDEXER_EVENT_PATHS: Record<string, IndexerEventCategory> = {
   "gamedata/resolverRewards": "resolver_reward",
   "gamedata/dustSettlements": "dust_settlement",
 };
+const MAX_INDEXER_EVENT_ID_LENGTH = 160;
+const MAX_INDEXER_EVENT_PAYLOAD_BYTES = 16 * 1024;
+
+function stringifyBoundedIndexerEventPayload(payload: JsonMap) {
+  try {
+    const payloadJson = JSON.stringify(payload);
+    return Buffer.byteLength(payloadJson, "utf8") <= MAX_INDEXER_EVENT_PAYLOAD_BYTES
+      ? payloadJson
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 function parseJsonArray<T>(value: unknown): T[] {
   if (typeof value !== "string") return [];
@@ -141,6 +154,12 @@ function parseSafePositiveIntegerString(value: string | null | undefined) {
   if (!value || !/^\d+$/.test(value)) return null;
   const parsed = Number(value);
   return isSafePositiveInteger(parsed) ? parsed : null;
+}
+
+function normalizePageLimit(value: number | null | undefined, defaultValue: number, maxValue: number) {
+  if (value === null || value === undefined) return defaultValue;
+  if (!Number.isSafeInteger(value) || value <= 0) return defaultValue;
+  return Math.min(maxValue, value);
 }
 
 function parseAmountWei(value: unknown) {
@@ -489,6 +508,8 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
       is_daily_jackpot = excluded.is_daily_jackpot,
       is_weekly_jackpot = excluded.is_weekly_jackpot,
       resolved_block = COALESCE(excluded.resolved_block, ${SCOPED_EPOCHS_TABLE}.resolved_block)
+    WHERE ${SCOPED_EPOCHS_TABLE}.resolved_block IS NULL
+       OR (excluded.resolved_block IS NOT NULL AND excluded.resolved_block >= ${SCOPED_EPOCHS_TABLE}.resolved_block)
   `);
 
   runInTransaction(() => {
@@ -516,7 +537,7 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
 
 function buildDepositKey(epoch: string, txHash: string, blockNumber: string) {
   const normalizedHash = txHash.toLowerCase().trim();
-  if (/^0x[0-9a-f]+$/.test(normalizedHash)) {
+  if (/^0x[0-9a-f]{64}$/.test(normalizedHash)) {
     return `${epoch}_${normalizedHash}`;
   }
   return `${epoch}_nohash_${blockNumber}`;
@@ -582,8 +603,8 @@ export function getUserParticipatingEpochs(user: string, limit?: number) {
   ) as Array<Record<string, unknown>>;
 
   return rows
-    .map((row) => Number(row.epoch ?? 0))
-    .filter(isSafePositiveInteger);
+    .map((row) => parseSafePositiveIntegerString(String(row.epoch ?? "")))
+    .filter((epoch): epoch is number => epoch !== null);
 }
 
 export function getUserParticipatingEpochPage(
@@ -592,7 +613,7 @@ export function getUserParticipatingEpochPage(
 ) {
   const normalized = normalizeWallet(user);
   const beforeEpoch = options?.beforeEpoch;
-  const limit = Math.min(400, Math.max(1, Math.trunc(options?.limit ?? 200)));
+  const limit = normalizePageLimit(options?.limit, 200, 400);
   const rows = (
     isSafePositiveInteger(beforeEpoch ?? 0)
       ? db.prepare(`
@@ -613,8 +634,8 @@ export function getUserParticipatingEpochPage(
 
   const epochs = rows
     .slice(0, limit)
-    .map((row) => Number(row.epoch ?? 0))
-    .filter(isSafePositiveInteger);
+    .map((row) => parseSafePositiveIntegerString(String(row.epoch ?? "")))
+    .filter((epoch): epoch is number => epoch !== null);
   const hasMore = rows.length > limit;
 
   return {
@@ -818,6 +839,7 @@ export function upsertBets(rows: BetStorageRow[]) {
       total_amount_num = excluded.total_amount_num,
       tx_hash = excluded.tx_hash,
       block_number = excluded.block_number
+    WHERE excluded.block_number >= ${SCOPED_BETS_TABLE}.block_number
   `);
 
   runInTransaction(() => {
@@ -907,6 +929,7 @@ export function upsertJackpots(rows: JackpotStorageRow[]) {
       amount_num = excluded.amount_num,
       tx_hash = excluded.tx_hash,
       block_number = excluded.block_number
+    WHERE excluded.block_number >= ${SCOPED_JACKPOTS_TABLE}.block_number
   `);
 
   runInTransaction(() => {
@@ -941,6 +964,7 @@ export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
       reward_num = excluded.reward_num,
       tx_hash = excluded.tx_hash,
       block_number = excluded.block_number
+    WHERE excluded.block_number >= ${SCOPED_REWARD_CLAIMS_TABLE}.block_number
   `);
 
   runInTransaction(() => {
@@ -1010,6 +1034,7 @@ export function upsertProtocolFeeFlushes(rows: FeeFlushStorageRow[]) {
       burn_amount = excluded.burn_amount,
       tx_hash = excluded.tx_hash,
       block_number = excluded.block_number
+    WHERE excluded.block_number >= ${SCOPED_PROTOCOL_FEE_FLUSHES_TABLE}.block_number
   `);
 
   runInTransaction(() => {
@@ -1028,13 +1053,28 @@ export function upsertProtocolFeeFlushes(rows: FeeFlushStorageRow[]) {
   }, "protocol_fee_flushes");
 }
 
-function getIndexerEventMap(category: IndexerEventCategory) {
-  const rows = db.prepare(`
-    SELECT id, payload_json
-    FROM ${SCOPED_INDEXER_EVENTS_TABLE}
-    WHERE scope = ? AND category = ?
-    ORDER BY block_number ASC, id ASC
-  `).all(CURRENT_STORAGE_SCOPE, category) as Array<Record<string, unknown>>;
+function normalizeOptionalIndexerEventLimit(value: number | null | undefined) {
+  if (value === null || value === undefined) return null;
+  if (!Number.isSafeInteger(value) || value <= 0) return null;
+  return Math.min(value, 5_000);
+}
+
+function getIndexerEventMap(category: IndexerEventCategory, limitToLast?: number) {
+  const limit = normalizeOptionalIndexerEventLimit(limitToLast);
+  const rows = (limit === null
+    ? db.prepare(`
+        SELECT id, payload_json
+        FROM ${SCOPED_INDEXER_EVENTS_TABLE}
+        WHERE scope = ? AND category = ?
+        ORDER BY block_number ASC, id ASC
+      `).all(CURRENT_STORAGE_SCOPE, category)
+    : db.prepare(`
+        SELECT id, payload_json
+        FROM ${SCOPED_INDEXER_EVENTS_TABLE}
+        WHERE scope = ? AND category = ?
+        ORDER BY block_number DESC, id DESC
+        LIMIT ?
+      `).all(CURRENT_STORAGE_SCOPE, category, limit).reverse()) as Array<Record<string, unknown>>;
   const result: JsonMap = {};
   for (const row of rows) {
     const id = String(row.id ?? "");
@@ -1055,13 +1095,17 @@ function upsertIndexerEvents(category: IndexerEventCategory, records: JsonMap) {
     ON CONFLICT(scope, category, id) DO UPDATE SET
       payload_json = excluded.payload_json,
       block_number = excluded.block_number
+    WHERE excluded.block_number >= ${SCOPED_INDEXER_EVENTS_TABLE}.block_number
   `);
   runInTransaction(() => {
     for (const [id, payload] of Object.entries(records)) {
+      if (!id || id.length > MAX_INDEXER_EVENT_ID_LENGTH) continue;
       if (!payload || typeof payload !== "object") continue;
       const blockNumber = parseSafePositiveIntegerString(String((payload as JsonMap).blockNumber ?? ""));
       if (blockNumber === null) continue;
-      statement.run(CURRENT_STORAGE_SCOPE, category, id, JSON.stringify(payload), blockNumber);
+      const payloadJson = stringifyBoundedIndexerEventPayload(payload as JsonMap);
+      if (payloadJson === null) continue;
+      statement.run(CURRENT_STORAGE_SCOPE, category, id, payloadJson, blockNumber);
     }
   }, "indexer_events");
 }
@@ -1331,7 +1375,7 @@ export function readJsonPath<T>(path: string, limitToLast?: number): T | null {
   const indexerEventCategory = INDEXER_EVENT_PATHS[path];
   if (indexerEventCategory) {
     const legacy = getMetaJsonMap<JsonMap>(path.replace("/", ":"));
-    return { ...legacy, ...getIndexerEventMap(indexerEventCategory) } as T;
+    return { ...legacy, ...getIndexerEventMap(indexerEventCategory, limitToLast) } as T;
   }
 
   return null;

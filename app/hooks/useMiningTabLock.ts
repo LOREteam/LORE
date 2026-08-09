@@ -6,7 +6,6 @@ import {
   TAB_LOCK_PING_TIMEOUT_MS,
   TAB_LOCK_TTL_MS,
   createTabId,
-  getSecureRandomNumber,
   getStableTabId,
   sanitizeTabLock,
 } from "./useMining.shared";
@@ -19,38 +18,59 @@ const lockChannel =
     : null;
 
 const pendingLockPingResolvers = new Map<string, (ownerAlive: boolean) => void>();
+let releaseNativeTabLock: (() => void) | null = null;
+
+function clearInvalidStoredTabLock() {
+  try {
+    localStorage.removeItem(TAB_LOCK_KEY);
+  } catch {
+    // ignore storage failures
+  }
+}
+
+async function acquireNativeTabLock(): Promise<boolean> {
+  if (releaseNativeTabLock) return true;
+  if (typeof navigator === "undefined" || !navigator.locks) return false;
+
+  return new Promise((resolve) => {
+    let release!: () => void;
+    const hold = new Promise<void>((releaseHold) => {
+      release = releaseHold;
+    });
+
+    void navigator.locks
+      .request(TAB_LOCK_KEY, { ifAvailable: true, mode: "exclusive" }, async (lock) => {
+        if (!lock) {
+          resolve(false);
+          return;
+        }
+        releaseNativeTabLock = release;
+        resolve(true);
+        await hold;
+        if (releaseNativeTabLock === release) releaseNativeTabLock = null;
+      })
+      .catch(() => resolve(false));
+  });
+}
 
 function readTabLock() {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(TAB_LOCK_KEY);
     if (!raw) return null;
-    return sanitizeTabLock(JSON.parse(raw));
+    const lock = sanitizeTabLock(JSON.parse(raw));
+    if (!lock) clearInvalidStoredTabLock();
+    return lock;
   } catch {
+    clearInvalidStoredTabLock();
     return null;
   }
 }
 
-export function acquireTabLock(): boolean {
-  try {
-    const raw = localStorage.getItem(TAB_LOCK_KEY);
-    if (raw) {
-      const lock = sanitizeTabLock(JSON.parse(raw));
-      if (lock && lock.id !== TAB_ID && Date.now() - lock.ts < TAB_LOCK_TTL_MS) {
-        return false;
-      }
-    }
-
-    const newLock = { id: TAB_ID, ts: Date.now(), tx: getSecureRandomNumber(1_000_000).toString() };
-    localStorage.setItem(TAB_LOCK_KEY, JSON.stringify(newLock));
-
-    const verifyRaw = localStorage.getItem(TAB_LOCK_KEY);
-    if (!verifyRaw) return false;
-    const verifyLock = sanitizeTabLock(JSON.parse(verifyRaw));
-    return verifyLock?.id === TAB_ID;
-  } catch {
-    return false;
-  }
+export async function acquireTabLock(): Promise<boolean> {
+  // localStorage read/write verification is not atomic across tabs. Starting an
+  // Auto-Miner without the browser lock can duplicate wallet sends.
+  return acquireNativeTabLock();
 }
 
 function clearTabLock(lockId?: string | null): boolean {
@@ -79,13 +99,21 @@ export async function recoverOrphanedTabLock(): Promise<boolean> {
 
   const requestId = createTabId();
   const ownerAlive = await new Promise<boolean>((resolve) => {
-    pendingLockPingResolvers.set(requestId, resolve);
+    let timeoutId: number | null = null;
+    const resolvePing = (alive: boolean) => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      pendingLockPingResolvers.delete(requestId);
+      resolve(alive);
+    };
+    pendingLockPingResolvers.set(requestId, resolvePing);
     lockChannel.postMessage({ type: "lock-ping", from: TAB_ID, target: lock.id, requestId });
-    window.setTimeout(() => {
+    timeoutId = window.setTimeout(() => {
       const pending = pendingLockPingResolvers.get(requestId);
       if (!pending) return;
-      pendingLockPingResolvers.delete(requestId);
-      resolve(false);
+      pending(false);
     }, TAB_LOCK_PING_TIMEOUT_MS);
   });
 
@@ -101,27 +129,36 @@ export function renewTabLock() {
     const raw = localStorage.getItem(TAB_LOCK_KEY);
     if (!raw) return;
     const lock = sanitizeTabLock(JSON.parse(raw));
-    if (!lock) return;
+    if (!lock) {
+      clearInvalidStoredTabLock();
+      return;
+    }
     if (lock.id === TAB_ID) {
       localStorage.setItem(TAB_LOCK_KEY, JSON.stringify({ id: TAB_ID, ts: Date.now(), tx: lock.tx }));
     }
   } catch {
-    // ignore storage failures
+    clearInvalidStoredTabLock();
   }
 }
 
 export function releaseTabLock() {
+  const release = releaseNativeTabLock;
+  releaseNativeTabLock = null;
+  release?.();
   try {
     const raw = localStorage.getItem(TAB_LOCK_KEY);
     if (!raw) return;
     const lock = sanitizeTabLock(JSON.parse(raw));
-    if (!lock) return;
+    if (!lock) {
+      clearInvalidStoredTabLock();
+      return;
+    }
     if (lock.id === TAB_ID) {
       localStorage.removeItem(TAB_LOCK_KEY);
       lockChannel?.postMessage({ type: "lock-released", from: TAB_ID });
     }
   } catch {
-    // ignore storage failures
+    clearInvalidStoredTabLock();
   }
 }
 

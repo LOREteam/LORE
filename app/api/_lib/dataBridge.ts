@@ -7,6 +7,7 @@ import {
   getStableLineaReadRpcs,
 } from "../../../config/publicConfig";
 import { patchJsonPath, readJsonPath } from "../../../server/storage";
+import { parsePositiveIntegerValue } from "./queryParams";
 import { logRouteError } from "./routeError";
 
 export const APP_NETWORK = getConfiguredLineaNetwork();
@@ -33,9 +34,9 @@ export const publicClient = createPublicClient({
   ),
 });
 
-export async function fetchStorageJson<T>(path: string) {
+export async function fetchStorageJson<T>(path: string, limitToLast?: number) {
   try {
-    const data = readJsonPath<T>(path);
+    const data = readJsonPath<T>(path, limitToLast);
     return { ok: true as const, status: 200, data };
   } catch (err) {
     logRouteError("api/storage-read", err);
@@ -43,11 +44,25 @@ export async function fetchStorageJson<T>(path: string) {
   }
 }
 
+function isSupportedApiStoragePatchPath(path: string) {
+  return (
+    path === "gamedata/epochs" ||
+    path === "gamedata/jackpots" ||
+    /^gamedata\/bets\/0x[a-f0-9]{40}$/.test(path)
+  );
+}
+
 export async function patchStorage(path: string, payload: Record<string, unknown>) {
+  if (!isSupportedApiStoragePatchPath(path)) {
+    logRouteError("api/storage-write", new Error("Unsupported API storage patch path"));
+    return false;
+  }
   try {
     patchJsonPath(path, payload);
+    return true;
   } catch (error) {
     logRouteError("api/storage-write", error);
+    return false;
   }
 }
 
@@ -56,15 +71,13 @@ export function isSafePositiveInteger(value: number): boolean {
 }
 
 export function parseCurrentEpoch(value: unknown): number | null {
-  const n = Number(value);
-  if (!isSafePositiveInteger(n)) return null;
-  return n;
+  return parsePositiveIntegerValue(value);
 }
 
 export function filterByCurrentEpoch<T extends { epoch: string }>(rows: T[], currentEpoch: number | null) {
   if (!currentEpoch) return rows;
   return rows.filter((row) => {
-    const n = Number(row.epoch);
-    return isSafePositiveInteger(n) && n <= currentEpoch;
+    const n = parsePositiveIntegerValue(row.epoch);
+    return n !== null && n <= currentEpoch;
   });
 }

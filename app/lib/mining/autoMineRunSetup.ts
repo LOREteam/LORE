@@ -7,7 +7,7 @@ import type { PendingApproveState, ReceiptState } from "../../hooks/useMining.st
 import { prepareAutoMineBootstrap } from "./autoMineBootstrap";
 
 interface PrepareAutoMineRunSetupOptions {
-  acquireTabLock: () => boolean;
+  acquireTabLock: () => Promise<boolean>;
   actorAddress: string | null;
   approveRetryMax: number;
   assertNativeGasBalance: (gas: bigint, gasOverrides?: GasOverrides) => Promise<void>;
@@ -85,9 +85,9 @@ export async function prepareAutoMineRunSetup({
     return null;
   }
 
-  if (!(acquireTabLock() || ((await recoverOrphanedTabLock()) && acquireTabLock()))) {
-    log.warn("AutoMine", "another tab is already mining - aborting start");
-    onProgress("Another tab is mining. Close it first.");
+  if (!(await acquireTabLock()) && !((await recoverOrphanedTabLock()) && (await acquireTabLock()))) {
+    log.warn("AutoMine", "exclusive tab lock unavailable - aborting start");
+    onProgress("Auto-Miner needs an exclusive tab lock. Close other mining tabs or use a current browser.");
     await delay(5000);
     setIsAutoMining(false);
     setRunningParams(null);

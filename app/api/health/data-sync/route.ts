@@ -13,13 +13,13 @@ import {
 } from "../../../../config/envParsing";
 import {
   fetchStorageJson,
-  isSafePositiveInteger,
   parseCurrentEpoch,
   publicClient,
   CONTRACT_ADDRESS,
 } from "../../_lib/dataBridge";
 import { createRouteCache } from "../../_lib/routeCache";
 import { describeSafeRouteError, logRouteError } from "../../_lib/routeError";
+import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { isAuthorizedHealthDiagnosticsRequest } from "../_lib/diagnosticsAuth";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { dbPath } from "../../../../server/db";
@@ -53,6 +53,7 @@ const DEPLOY_BLOCK = getConfiguredDeployBlock(
   process.env.INDEXER_START_BLOCK ?? process.env.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK,
   APP_NETWORK,
 );
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const dataSyncHealthCache = createRouteCache<DataSyncHealthResponse>(1);
 
 type EpochRow = {
@@ -225,8 +226,7 @@ type DataSyncHealthResponse = {
 };
 
 function toNum(v: unknown): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null;
 }
 
 function clampPercent(value: number) {
@@ -234,13 +234,62 @@ function clampPercent(value: number) {
 }
 
 function ageMs(timestamp: number | null, now: number) {
-  if (!Number.isFinite(timestamp ?? NaN)) return null;
-  return Math.max(0, now - Number(timestamp));
+  if (timestamp === null || !Number.isFinite(timestamp)) return null;
+  return Math.max(0, now - timestamp);
+}
+
+function parseStatusTimestamp(value: unknown): number | null {
+  if (typeof value !== "number") return null;
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function parseChainUintNumber(value: unknown): number | null {
+  if (typeof value !== "bigint" || value < 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(value);
+}
+
+function bigintToNonNegativeSafeNumber(value: bigint): number {
+  if (value <= 0n) return 0;
+  return value > MAX_SAFE_INTEGER_BIGINT ? Number.MAX_SAFE_INTEGER : Number(value);
+}
+
+function safeNonNegativeBigintDelta(upper: bigint, lower: bigint): number | null {
+  if (upper < lower) return null;
+  return bigintToNonNegativeSafeNumber(upper - lower);
+}
+
+function parseStatusCounter(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function parseStatusPositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function parseStatusBlockString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return parseStoredBlockNumber(value)?.toString() ?? null;
+}
+
+function parseStatusEpochList(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const epochs = value
+    .map((entry) => (typeof entry === "number" ? String(entry) : typeof entry === "string" ? entry : null))
+    .map((entry) => parseStoredEpochNumber(entry))
+    .filter((entry): entry is number => entry !== null);
+  return epochs.length > 0 ? [...new Set(epochs)] : [];
 }
 
 function parseStoredBlockNumber(value: string | null | undefined): bigint | null {
   if (!value || !/^\d+$/.test(value)) return null;
   return BigInt(value);
+}
+
+function parseStoredEpochNumber(value: string | null | undefined): number | null {
+  if (!value || !/^[1-9]\d{0,15}$/.test(value)) return null;
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(parsed);
 }
 
 function deriveServingMode(options: {
@@ -379,7 +428,7 @@ function safeDiskFreeBytes(filePath: string) {
   try {
     const stats = statfsSync(dirname(filePath), { bigint: true });
     const bytes = stats.bavail * stats.bsize;
-    return Number(bytes > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : bytes);
+    return Number(bytes > MAX_SAFE_INTEGER_BIGINT ? MAX_SAFE_INTEGER_BIGINT : bytes);
   } catch {
     return null;
   }
@@ -411,20 +460,21 @@ async function buildDataSyncHealthPayload() {
   const indexerReconcileStatus = getMetaJson<IndexerReconcileStatus>("indexerReconcileStatus");
   const recentRewardClaims = getRecentRewardClaims(100);
 
-  const chainCurrentEpoch = Number(chainEpochRaw);
+  const chainCurrentEpoch = parseChainUintNumber(chainEpochRaw);
   const dbCurrentEpoch = parseCurrentEpoch(dbEpochMeta.data);
   const dbLastIndexedBlock = dbLastIndexed.ok ? parseStoredBlockNumber(dbLastIndexed.data) : null;
   const dbRepairCursorBlock = dbRepairCursor.ok ? parseStoredBlockNumber(dbRepairCursor.data) : null;
   const finalityTargetBlock = getIndexerFinalityTargetBlock(head, INDEXER_FINALITY_BLOCKS);
-  const lagBlocks = dbLastIndexedBlock !== null ? Number(head - dbLastIndexedBlock) : null;
+  const dbLastIndexedAheadOfHead = dbLastIndexedBlock !== null && dbLastIndexedBlock > head;
+  const lagBlocks = dbLastIndexedBlock !== null ? safeNonNegativeBigintDelta(head, dbLastIndexedBlock) : null;
   const lagToFinalityTargetBlocks = getIndexerTargetLagBlocks(dbLastIndexedBlock, finalityTargetBlock);
 
   const dbEpochs = dbEpochsRaw.ok && dbEpochsRaw.data ? dbEpochsRaw.data : {};
-  const maxEpochToCheck = Math.max(0, chainCurrentEpoch - 1);
+  const maxEpochToCheck = chainCurrentEpoch !== null ? Math.max(0, chainCurrentEpoch - 1) : 0;
   const presentEpochs = new Set<number>(
     Object.keys(dbEpochs)
-      .map((k) => Number(k))
-      .filter((n) => isSafePositiveInteger(n) && n <= maxEpochToCheck),
+      .map((key) => parseStoredEpochNumber(key))
+      .filter((epoch): epoch is number => epoch !== null && epoch <= maxEpochToCheck),
   );
 
   const missingEpochs: number[] = [];
@@ -438,8 +488,8 @@ async function buildDataSyncHealthPayload() {
       : maxEpochToCheck;
 
   const jackpotsInfo = jackpotInfoRaw as [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
-  const lastDailyEpoch = Number(jackpotsInfo[4]);
-  const lastWeeklyEpoch = Number(jackpotsInfo[5]);
+  const lastDailyEpoch = parseChainUintNumber(jackpotsInfo[4]);
+  const lastWeeklyEpoch = parseChainUintNumber(jackpotsInfo[5]);
   const lastDailyAmount = formatUnits(jackpotsInfo[6], 18);
   const lastWeeklyAmount = formatUnits(jackpotsInfo[7], 18);
 
@@ -456,8 +506,8 @@ async function buildDataSyncHealthPayload() {
     ? jackpotBlocks.reduce((max, value) => (value > max ? value : max), 0n)
     : null;
 
-  const hasLatestDailyInDb = lastDailyEpoch > 0 ? dbJackpotKeys.has(`daily_${lastDailyEpoch}`) : true;
-  const hasLatestWeeklyInDb = lastWeeklyEpoch > 0 ? dbJackpotKeys.has(`weekly_${lastWeeklyEpoch}`) : true;
+  const hasLatestDailyInDb = lastDailyEpoch === null ? false : lastDailyEpoch > 0 ? dbJackpotKeys.has(`daily_${lastDailyEpoch}`) : true;
+  const hasLatestWeeklyInDb = lastWeeklyEpoch === null ? false : lastWeeklyEpoch > 0 ? dbJackpotKeys.has(`weekly_${lastWeeklyEpoch}`) : true;
   const rewardClaimBlocks = recentRewardClaims
     .map((row) => parseStoredBlockNumber(row.blockNumber))
     .filter((value): value is bigint => value !== null && value > 0n);
@@ -466,20 +516,20 @@ async function buildDataSyncHealthPayload() {
     : null;
   const rewardClaimsLagToHead =
     latestRewardClaimBlock !== null
-      ? Number(head - latestRewardClaimBlock)
+      ? safeNonNegativeBigintDelta(head, latestRewardClaimBlock)
       : null;
   const rewardClaimsLagToIndexer =
     dbLastIndexedBlock !== null && latestRewardClaimBlock !== null
-      ? Math.max(0, Number(dbLastIndexedBlock - latestRewardClaimBlock))
+      ? safeNonNegativeBigintDelta(dbLastIndexedBlock, latestRewardClaimBlock)
       : null;
 
   const totalBlocksToIndex =
     head >= DEPLOY_BLOCK
-      ? Number(head - DEPLOY_BLOCK + 1n)
+      ? bigintToNonNegativeSafeNumber(head - DEPLOY_BLOCK + 1n)
       : 0;
   const indexedBlocksToCurrentHead =
     dbLastIndexedBlock !== null && dbLastIndexedBlock >= DEPLOY_BLOCK
-      ? Number((dbLastIndexedBlock > head ? head : dbLastIndexedBlock) - DEPLOY_BLOCK + 1n)
+      ? bigintToNonNegativeSafeNumber((dbLastIndexedBlock > head ? head : dbLastIndexedBlock) - DEPLOY_BLOCK + 1n)
       : 0;
   const blockProgressPct =
     totalBlocksToIndex > 0
@@ -502,9 +552,9 @@ async function buildDataSyncHealthPayload() {
 
   if (previousSample && previousSample.lastIndexedBlock !== null && dbLastIndexedBlock !== null) {
     const elapsedMs = now - previousSample.ts;
-    const deltaBlocks = Number(dbLastIndexedBlock - previousSample.lastIndexedBlock);
+    const deltaBlocks = safeNonNegativeBigintDelta(dbLastIndexedBlock, previousSample.lastIndexedBlock);
     const deltaEpochs = presentEpochs.size - previousSample.storedEpochCount;
-    if (elapsedMs >= 5_000 && deltaBlocks > 0) {
+    if (elapsedMs >= 5_000 && deltaBlocks !== null && deltaBlocks > 0) {
       blockRatePerMinute = Number(((deltaBlocks * 60_000) / elapsedMs).toFixed(2));
       epochRatePerMinute = Number(((deltaEpochs * 60_000) / elapsedMs).toFixed(2));
       const effectiveLag = lagToFinalityTargetBlocks ?? lagBlocks;
@@ -550,15 +600,22 @@ async function buildDataSyncHealthPayload() {
     recoveryThreshold: RECENT_WINS_RECOVERY_BLOCK_LAG,
     storedCount: recentRewardClaims.length,
   });
-  const runCompletedAgeMs = ageMs(indexerRunStatus?.completedAt ?? null, now);
-  const runHeartbeatAgeMs = ageMs(indexerRunStatus?.lastHeartbeatAt ?? null, now);
-  const repairAgeMs = ageMs(indexerRepairStatus?.at ?? null, now);
-  const reconcileAgeMs = ageMs(indexerReconcileStatus?.at ?? null, now);
+  const runCompletedAt = parseStatusTimestamp(indexerRunStatus?.completedAt);
+  const runHeartbeatAt = parseStatusTimestamp(indexerRunStatus?.lastHeartbeatAt);
+  const runStartedAt = parseStatusTimestamp(indexerRunStatus?.startedAt);
+  const repairAt = parseStatusTimestamp(indexerRepairStatus?.at);
+  const reconcileAt = parseStatusTimestamp(indexerReconcileStatus?.at);
+  const runCompletedAgeMs = ageMs(runCompletedAt, now);
+  const runHeartbeatAgeMs = ageMs(runHeartbeatAt, now);
+  const repairAgeMs = ageMs(repairAt, now);
+  const reconcileAgeMs = ageMs(reconcileAt, now);
   const effectiveIndexerLagForStaleness = lagToFinalityTargetBlocks ?? lagBlocks;
   const runIsActive =
     runHeartbeatAgeMs !== null &&
     runHeartbeatAgeMs <= INDEXER_HEARTBEAT_STALE_MS &&
-    Number(indexerRunStatus?.lastHeartbeatAt ?? 0) > Number(indexerRunStatus?.completedAt ?? 0);
+    runHeartbeatAt !== null &&
+    runCompletedAt !== null &&
+    runHeartbeatAt > runCompletedAt;
   const runIsStale =
     !runIsActive &&
     (
@@ -585,6 +642,8 @@ async function buildDataSyncHealthPayload() {
     !hasLatestDailyInDb ||
     !hasLatestWeeklyInDb ||
     runIsStale ||
+    chainCurrentEpoch === null ||
+    dbLastIndexedAheadOfHead ||
     (dbCurrentEpoch !== null && Math.abs(dbCurrentEpoch - chainCurrentEpoch) > 1);
 
   return {
@@ -657,14 +716,25 @@ async function buildDataSyncHealthPayload() {
       },
       indexer: {
         run: {
-          ...(indexerRunStatus ?? {}),
+          startedAt: runStartedAt ?? undefined,
+          completedAt: runCompletedAt ?? undefined,
+          lastHeartbeatAt: runHeartbeatAt ?? undefined,
+          fromBlock: parseStatusBlockString(indexerRunStatus?.fromBlock) ?? undefined,
+          toBlock: parseStatusBlockString(indexerRunStatus?.toBlock) ?? undefined,
+          totalLogs: parseStatusCounter(indexerRunStatus?.totalLogs) ?? 0,
+          currentChunk: parseStatusPositiveInteger(indexerRunStatus?.currentChunk),
+          totalChunks: parseStatusPositiveInteger(indexerRunStatus?.totalChunks),
+          lastProcessedBlock: parseStatusBlockString(indexerRunStatus?.lastProcessedBlock) ?? undefined,
           runCompletedAgeMs,
           runHeartbeatAgeMs,
           active: runIsActive,
           stale: runIsStale,
         },
         repair: {
-          ...(indexerRepairStatus ?? {}),
+          at: repairAt ?? undefined,
+          fromBlock: parseStatusBlockString(indexerRepairStatus?.fromBlock) ?? undefined,
+          toBlock: parseStatusBlockString(indexerRepairStatus?.toBlock) ?? undefined,
+          repairedLogs: parseStatusCounter(indexerRepairStatus?.repairedLogs),
           ageMs: repairAgeMs,
           stale:
             repairAgeMs !== null &&
@@ -673,7 +743,11 @@ async function buildDataSyncHealthPayload() {
             repairAgeMs > INDEXER_HEARTBEAT_STALE_MS,
         },
         reconcile: {
-          ...(indexerReconcileStatus ?? {}),
+          at: reconcileAt ?? undefined,
+          currentEpoch: parseStatusPositiveInteger(indexerReconcileStatus?.currentEpoch),
+          missingEpochs: parseStatusCounter(indexerReconcileStatus?.missingEpochs),
+          repairedEpochs: parseStatusCounter(indexerReconcileStatus?.repairedEpochs),
+          targetEpochs: parseStatusEpochList(indexerReconcileStatus?.targetEpochs),
           ageMs: reconcileAgeMs,
           stale:
             !nearHeadGapIsTolerable &&
@@ -685,6 +759,7 @@ async function buildDataSyncHealthPayload() {
       hints: [
         missingEpochs.length > 0 && !nearHeadGapIsTolerable ? "Indexer repair/reconcile is still catching up missing epochs." : null,
         lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks > LAG_WARN_BLOCKS ? "Indexer is lagging behind the finality target; check bot/indexer supervisor." : null,
+        dbLastIndexedAheadOfHead ? "Indexer DB cursor is ahead of the current chain head; verify chain and DB scope." : null,
         !hasLatestDailyInDb || !hasLatestWeeklyInDb ? "Latest jackpot event not in DB yet; API fallback should still show it." : null,
         jackpotServingMode !== "indexer_fast_path" ? "Jackpots API is in recovery-capable mode and may pull a fresh tail from chain." : null,
         recentWinsServingMode !== "indexer_fast_path" ? "Recent wins API is in recovery-capable mode and may pull RewardClaimed logs from chain." : null,
@@ -706,35 +781,23 @@ async function buildDataSyncHealthPayload() {
 }
 
 function toHealthResponse(request: NextRequest, payload: DataSyncHealthResponse) {
-  return NextResponse.json(
+  return applyNoStoreHeaders(NextResponse.json(
     isAuthorizedHealthDiagnosticsRequest(request) ? payload : redactHealthResponse(payload),
-    {
-      headers: {
-        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-        Pragma: "no-cache",
-        Expires: "0",
-      },
-    },
-  );
+  ));
 }
 
 function toHealthErrorResponse(request: NextRequest, err: unknown) {
   const authorized = isAuthorizedHealthDiagnosticsRequest(request);
   const privateError = describeSafeRouteError(err).message;
-  return NextResponse.json(
+  return applyNoStoreHeaders(NextResponse.json(
     {
       status: "error",
       error: authorized ? privateError : "Internal error",
     },
     {
       status: 500,
-      headers: {
-        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-        Pragma: "no-cache",
-        Expires: "0",
-      },
     },
-  );
+  ));
 }
 
 function scheduleDataSyncRefresh() {
@@ -764,7 +827,7 @@ export async function GET(request: NextRequest) {
     limit: 10,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   const fresh = dataSyncHealthCache.getFresh(DATA_SYNC_CACHE_KEY);
   if (fresh) {

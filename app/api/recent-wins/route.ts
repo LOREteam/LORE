@@ -39,6 +39,23 @@ function jsonNoStore(payload: RecentWinsPayload, status = 200) {
   return applyNoStoreHeaders(NextResponse.json(payload, { status }));
 }
 
+function computeRecentWinsExpiresAt(ttlMs: number, now = Date.now()) {
+  if (!Number.isSafeInteger(now) || now < 0) return 0;
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) return 0;
+  if (ttlMs > Number.MAX_SAFE_INTEGER - now) return Number.MAX_SAFE_INTEGER;
+  return now + ttlMs;
+}
+
+function isFreshRecentWinsCache(entry: RecentWinsCacheEntry | null, now = Date.now()): entry is RecentWinsCacheEntry {
+  return Boolean(
+    entry &&
+      Number.isSafeInteger(now) &&
+      now >= 0 &&
+      Number.isSafeInteger(entry.expiresAt) &&
+      entry.expiresAt > now,
+  );
+}
+
 function commitRecentWinsCache(payload: RecentWinsPayload, ttlMs: number, seq: number, watermark: string | null) {
   if (seq < recentWinsAppliedSeq) {
     return recentWinsCache?.payload ?? payload;
@@ -47,7 +64,7 @@ function commitRecentWinsCache(payload: RecentWinsPayload, ttlMs: number, seq: n
   recentWinsCacheWatermark = watermark;
   recentWinsCache = {
     payload,
-    expiresAt: Date.now() + ttlMs,
+    expiresAt: computeRecentWinsExpiresAt(ttlMs),
   };
   saveRecentWinsSnapshot(payload, watermark);
   return payload;
@@ -59,7 +76,7 @@ function hydrateRecentWinsSnapshot(watermark: string | null) {
   recentWinsCacheWatermark = watermark;
   recentWinsCache = {
     payload: snapshot,
-    expiresAt: Date.now() + RECENT_WINS_ROUTE_CACHE_MS,
+    expiresAt: computeRecentWinsExpiresAt(RECENT_WINS_ROUTE_CACHE_MS),
   };
   return snapshot;
 }
@@ -86,10 +103,11 @@ function startRecentWinsRefresh(watermark: string | null) {
 export async function GET(request: Request) {
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
   const now = Date.now();
-  if (recentWinsCache && recentWinsCache.expiresAt > now) {
+  const freshCache = recentWinsCache;
+  if (isFreshRecentWinsCache(freshCache, now)) {
     markRouteCacheHit(ROUTE_METRIC_KEY);
     finishRouteMetric(metric, 200);
-    return jsonNoStore(recentWinsCache.payload);
+    return jsonNoStore(freshCache.payload);
   }
 
   const currentWatermark = getRecentWinsDataWatermark();
@@ -117,7 +135,7 @@ export async function GET(request: Request) {
   });
   if (rateLimited) {
     failRouteMetric(metric, 429);
-    return rateLimited;
+    return applyNoStoreHeaders(rateLimited);
   }
 
   try {

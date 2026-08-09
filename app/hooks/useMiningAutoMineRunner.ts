@@ -90,16 +90,15 @@ interface UseMiningAutoMineRunnerOptions {
     tileIds: number[],
     amountRawPerTile: bigint,
     gasOverrides?: GasOverrides,
+    txNonce?: number,
+    expectedEpoch?: bigint,
   ) => Promise<ReceiptState>;
   placeBetsSilent: (
     tileIds: number[],
     amountRawPerTile: bigint,
     gasOverrides?: GasOverrides,
-  ) => Promise<ReceiptState>;
-  placeBets7702?: (
-    tileIds: number[],
-    amountRawPerTile: bigint,
-    gasOverrides?: GasOverrides,
+    txNonce?: number,
+    expectedEpoch?: bigint,
   ) => Promise<ReceiptState>;
   publicClientRef: MutableRefObject<PublicClient | undefined>;
   refetchAllowanceRef: MutableRefObject<() => void>;
@@ -153,7 +152,6 @@ export function useMiningAutoMineRunner({
   pendingBetRef,
   placeBets,
   placeBetsSilent,
-  placeBets7702,
   publicClientRef,
   refetchAllowanceRef,
   refetchEpochRef,
@@ -200,9 +198,10 @@ export function useMiningAutoMineRunner({
           params: { betStr, blocks, rounds },
         });
 
+        const preferredActorAddress = getPreferredActorAddress();
         const preparedRun = await prepareAutoMineRunSetup({
           acquireTabLock,
-          actorAddress: getPreferredActorAddress(),
+          actorAddress: preferredActorAddress,
           approveRetryMax,
           assertNativeGasBalance,
           autoMineActive: () => autoMineRef.current,
@@ -216,6 +215,14 @@ export function useMiningAutoMineRunner({
           markRunStarted: () => {
             startedRun = true;
             autoMineRef.current = true;
+            if (startRoundIndex === 0 && preferredActorAddress) {
+              runtimeController.persistStart({
+                actor: preferredActorAddress as `0x${string}`,
+                betStr,
+                blocks,
+                rounds,
+              });
+            }
           },
           maxNetworkAttempts,
           maxNetworkMs,
@@ -244,6 +251,8 @@ export function useMiningAutoMineRunner({
         });
 
         if (!preparedRun) {
+          if (startedRun) runtimeController.clearPersistedRun();
+          deactivateAutoMineUi();
           return;
         }
         const { actorAddress, singleAmountRaw } = preparedRun;
@@ -285,7 +294,6 @@ export function useMiningAutoMineRunner({
           pendingBetRef,
           placeBets,
           placeBetsSilent,
-          placeBets7702,
           readClient: () => publicClientRef.current,
           readSilentSend: () => silentSendRef.current,
           renewLock: renewTabLock,
@@ -316,6 +324,7 @@ export function useMiningAutoMineRunner({
         const insufficientFunds = isInsufficientFundsError(err);
         stopReason = getAutoMineRunnerCatchStopReason({
           insufficientFunds,
+          pendingNonceBlocked,
           sessionExpired,
           shouldAutoResume,
         });
@@ -351,7 +360,7 @@ export function useMiningAutoMineRunner({
           lastStopReason: stopReason as AutoMineDiagnosticsStopReason,
         });
         autoMineRef.current = false;
-        if (!sessionExpired && !networkDown && !walletUnavailable) {
+        if (!sessionExpired && !networkDown && !walletUnavailable && !pendingNonceBlocked) {
           runtimeController.clearPersistedRun();
         }
         if (sessionExpired) {
@@ -409,7 +418,6 @@ export function useMiningAutoMineRunner({
       pendingBetRef,
       placeBets,
       placeBetsSilent,
-      placeBets7702,
       publicClientRef,
       refetchAllowanceRef,
       refetchEpochRef,

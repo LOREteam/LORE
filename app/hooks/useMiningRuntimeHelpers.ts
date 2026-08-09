@@ -11,12 +11,26 @@ import {
   LINEA_TOKEN_ADDRESS,
 } from "../lib/constants";
 import { getFallbackFeeOverrides, getKeeperFeeOverrides, getLineaFeeOverrides } from "../lib/lineaFees";
+import { recordLineaEstimateGasShadow } from "../lib/lineaEstimateGasShadow";
 import { log } from "../lib/logger";
 import type { GasOverrides } from "./useMining.types";
 import { isEstimateGasOutOfGasError, isMissingTokenGetterError, isNetworkError, withMiningRpcTimeout } from "./useMining.shared";
 
 type FeeEstimate = Awaited<ReturnType<PublicClient["estimateFeesPerGas"]>>;
 const FEE_ESTIMATE_CACHE_TTL_MS = 3_000;
+
+function formatNativeWeiSixDecimals(rawValue: bigint): string {
+  const value = rawValue < 0n ? 0n : rawValue;
+  const weiPerEth = 10n ** 18n;
+  const scale = 1_000_000n;
+  const whole = value / weiPerEth;
+  const remainder = value % weiPerEth;
+  const roundedFraction = (remainder * scale + weiPerEth / 2n) / weiPerEth;
+  if (roundedFraction >= scale) {
+    return `${whole + 1n}.000000`;
+  }
+  return `${whole}.${roundedFraction.toString().padStart(6, "0")}`;
+}
 
 interface UseMiningRuntimeHelpersOptions {
   getActorAddress: () => string | null;
@@ -185,9 +199,9 @@ export function useMiningRuntimeHelpers({
       ]);
 
       if (balance < requiredCost) {
-        const have = Number(balance) / 1e18;
-        const need = Number(requiredCost) / 1e18;
-        throw new Error(`Not enough ETH for gas: need ~${need.toFixed(6)} ETH, have ${have.toFixed(6)} ETH.`);
+        const have = formatNativeWeiSixDecimals(balance);
+        const need = formatNativeWeiSixDecimals(requiredCost);
+        throw new Error(`Not enough ETH for gas: need ~${need} ETH, have ${have} ETH.`);
       }
     },
     [getActorAddress, getRequiredNativeCost, publicClientRef],
@@ -198,7 +212,8 @@ export function useMiningRuntimeHelpers({
       const minGas =
         functionName === "placeBatchBets" ||
         functionName === "placeBatchBetsSameAmount" ||
-        functionName === "placeBatchBetsBitmap"
+        functionName === "placeBatchBetsBitmap" ||
+        functionName === "placeBatchBetsBitmapForEpoch"
           ? minGasPlaceBatch
           : minGasPlaceBet;
       const pc = publicClientRef.current;
@@ -212,6 +227,16 @@ export function useMiningRuntimeHelpers({
           functionName: functionName as "placeBet",
           args: args as [bigint, bigint],
         }), `estimateContractGas:${functionName}`);
+        recordLineaEstimateGasShadow({
+          publicClient: pc,
+          account: actorAddress as `0x${string}`,
+          to: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName,
+          args,
+          baselineGas: est,
+          tag: "wallet-mining",
+        });
         const withBuffer = (est * 180n) / 100n + bufferExtra;
         return withBuffer > minGas ? withBuffer : minGas;
       } catch (err) {

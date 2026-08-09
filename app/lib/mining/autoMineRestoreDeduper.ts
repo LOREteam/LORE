@@ -30,8 +30,18 @@ export function shouldSuppressDuplicateAutoMineRestore(params: {
   if (!previousFingerprint || previousFingerprint !== nextFingerprint) {
     return false;
   }
-  if (!Number.isFinite(previousAt)) {
+  const previousRestoreAt = previousAt;
+  if (
+    typeof previousRestoreAt !== "number" ||
+    !Number.isSafeInteger(previousRestoreAt) ||
+    !Number.isSafeInteger(now) ||
+    !Number.isSafeInteger(cooldownMs) ||
+    previousRestoreAt < 0 ||
+    now < 0 ||
+    cooldownMs <= 0 ||
+    previousRestoreAt > now
+  ) {
     return false;
   }
-  return now - Number(previousAt) < cooldownMs;
+  return now - previousRestoreAt < cooldownMs;
 }

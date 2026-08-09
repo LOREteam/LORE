@@ -11,6 +11,7 @@ function readPreferredReducedMotion() {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored === "true") return { explicit: true, reduced: true };
     if (stored === "false") return { explicit: true, reduced: false };
+    if (stored !== null) localStorage.removeItem(STORAGE_KEY);
   } catch {
     // Ignore storage errors.
   }

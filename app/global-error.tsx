@@ -89,6 +89,7 @@ export default function GlobalError({
               onClick={() => reset()}
               style={{
                 display: "inline-block",
+                minHeight: "44px",
                 padding: "10px 16px",
                 borderRadius: "6px",
                 border: "1px solid rgba(139, 92, 246, 0.4)",
@@ -108,6 +109,7 @@ export default function GlobalError({
               onClick={handleHardReload}
               style={{
                 display: "inline-block",
+                minHeight: "44px",
                 padding: "10px 16px",
                 borderRadius: "6px",
                 border: "1px solid rgba(255, 255, 255, 0.12)",

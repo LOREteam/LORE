@@ -13,8 +13,6 @@ import {
   stripChunkReloadCacheParam,
 } from "../lib/chunkReloadRecovery";
 
-const RESOLVE_STORAGE_KEY = "lore_resolve_epoch";
-
 export function ErrorCatcher() {
   useEffect(() => {
     stripChunkReloadCacheParam(window.location, window.history);
@@ -166,20 +164,6 @@ export function ErrorCatcher() {
         e.preventDefault();
         return;
       }
-      const isResolveRevert =
-        reason instanceof Error &&
-        (reason.name === "EstimateGasExecutionError" || reason.message?.includes("execution reverted")) &&
-        (reason.message?.includes("9c407b6e") || reason.message?.includes("resolveEpoch") ||
-         reason.message?.includes("TimerNotEnded") || reason.message?.includes("CanOnlyResolveCurrent"));
-      if (isResolveRevert && typeof localStorage !== "undefined") {
-        try {
-          localStorage.removeItem(RESOLVE_STORAGE_KEY);
-        } catch { /* ignore */ }
-        e.preventDefault();
-        log.warn("Global", "resolve estimate reverted (cleared lock)", { message: reason.message?.slice(0, 120) });
-        return;
-      }
-
       const payload = sanitizeConsoleArg(reason);
       log.error("Global", "unhandled promise rejection", payload);
     };

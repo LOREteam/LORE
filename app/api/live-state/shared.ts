@@ -27,6 +27,8 @@ const LIVE_STATE_LOG_SCAN_MIN_CHUNK = 2_000n;
 const LIVE_STATE_SNAPSHOT_META_KEY = "snapshot:live-state:v1";
 const LIVE_STATE_SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const LIVE_STATE_SNAPSHOT_CACHE_MS = 2_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 export const LIVE_STATE_ABI = parseAbi([
   "function currentEpoch() view returns (uint256)",
@@ -98,6 +100,42 @@ let storedBootstrapCache: CachedStoredBootstrap | null = null;
 let lastLiveStateSnapshotSignature: string | null = null;
 let liveStateSnapshotCache: CachedLiveStateSnapshot | null = null;
 
+function normalizeLiveStateSnapshotMaxAge(maxAgeMs: number) {
+  if (!Number.isFinite(maxAgeMs)) return null;
+  if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 0) return 0;
+  return maxAgeMs;
+}
+
+function normalizeLiveStateSnapshotSavedAt(savedAt: unknown) {
+  return typeof savedAt === "number" && Number.isSafeInteger(savedAt) && savedAt >= 0
+    ? savedAt
+    : null;
+}
+
+function isFreshLiveStateSnapshotSavedAt(savedAt: unknown, maxAgeMs: number | null, now = Date.now()) {
+  const normalizedSavedAt = normalizeLiveStateSnapshotSavedAt(savedAt);
+  if (normalizedSavedAt === null || !Number.isSafeInteger(now) || now < 0) return false;
+  if (normalizedSavedAt > now) return false;
+  return maxAgeMs === null || now - normalizedSavedAt <= maxAgeMs;
+}
+
+function isFreshLiveStateSnapshotMemoryEntry(
+  entry: CachedLiveStateSnapshot | null,
+  maxAgeMs: number | null,
+  now = Date.now(),
+): entry is CachedLiveStateSnapshot {
+  return Boolean(
+    entry &&
+      Number.isSafeInteger(now) &&
+      now >= 0 &&
+      Number.isSafeInteger(entry.loadedAt) &&
+      entry.loadedAt >= 0 &&
+      entry.loadedAt <= now &&
+      now - entry.loadedAt <= LIVE_STATE_SNAPSHOT_CACHE_MS &&
+      (entry.savedAt === null || isFreshLiveStateSnapshotSavedAt(entry.savedAt, maxAgeMs, now)),
+  );
+}
+
 function isTooManyResultsError(err: unknown): boolean {
   const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
   return (
@@ -155,9 +193,21 @@ function hasAnyPositiveCount(counts: number[] | null) {
   return Boolean(counts?.some((value) => Number.isFinite(value) && value > 0));
 }
 
+function parseChainUintPositiveNumber(value: bigint): number | null {
+  if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
+  const parsed = Number(value);
+  return isSafePositiveInteger(parsed) ? parsed : null;
+}
+
 function parseStoredBlockNumber(value: string | null | undefined): bigint {
   if (!value || !/^\d+$/.test(value)) return 0n;
   return BigInt(value);
+}
+
+function parseChainTileId(value: bigint, gridSize: number) {
+  if (value <= 0n || value > BigInt(gridSize)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= gridSize ? parsed : null;
 }
 
 async function fetchEpochTileUserCountsFromChain(
@@ -199,17 +249,24 @@ async function fetchEpochTileUserCountsFromChain(
     });
     if (decoded.eventName === "BetPlaced") {
       const args = decoded.args as { user: string; tileId: bigint };
-      appendUsers([args.user], [Number(args.tileId)]);
+      const tileId = parseChainTileId(args.tileId, gridSize);
+      if (tileId !== null) appendUsers([args.user], [tileId]);
       return;
     }
     if (decoded.eventName === "BatchBetsPlaced") {
       const args = decoded.args as { user: string; tileIds: readonly bigint[] };
-      appendUsers([args.user], args.tileIds.map((tileId) => Number(tileId)));
+      appendUsers([args.user], args.tileIds.flatMap((tileId) => {
+        const parsed = parseChainTileId(tileId, gridSize);
+        return parsed === null ? [] : [parsed];
+      }));
       return;
     }
     if (decoded.eventName === "BatchBetsSameAmountPlaced") {
       const args = decoded.args as { user: string; tileIds: readonly bigint[] };
-      appendUsers([args.user], args.tileIds.map((tileId) => Number(tileId)));
+      appendUsers([args.user], args.tileIds.flatMap((tileId) => {
+        const parsed = parseChainTileId(tileId, gridSize);
+        return parsed === null ? [] : [parsed];
+      }));
       return;
     }
     if (decoded.eventName === "BatchBetsBitmapPlaced") {
@@ -241,11 +298,20 @@ function createTimeoutError(label: string, timeoutMs: number) {
   return new Error(`live-state ${label} timed out after ${timeoutMs}ms`);
 }
 
+function isValidTimerDelayMs(timeoutMs: number) {
+  return Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= MAX_TIMER_DELAY_MS;
+}
+
 async function withTimeout<T>(
   promise: Promise<T>,
   label: string,
   timeoutMs = LIVE_STATE_RPC_TIMEOUT_MS,
 ): Promise<T> {
+  if (!isValidTimerDelayMs(timeoutMs)) {
+    promise.catch(() => {});
+    throw new RangeError(`live-state ${label} timeout must be between 1 and 2147483647 milliseconds`);
+  }
+
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
@@ -267,15 +333,10 @@ async function readLiveStateContract<T>(label: string, promise: Promise<T>) {
 
 export function loadLiveStateSnapshot(maxAgeMs = LIVE_STATE_SNAPSHOT_MAX_AGE_MS): LiveStatePayload | null {
   const now = Date.now();
-  if (liveStateSnapshotCache && now - liveStateSnapshotCache.loadedAt <= LIVE_STATE_SNAPSHOT_CACHE_MS) {
-    if (
-      Number.isFinite(maxAgeMs) &&
-      liveStateSnapshotCache.savedAt != null &&
-      now - liveStateSnapshotCache.savedAt > maxAgeMs
-    ) {
-      return null;
-    }
-    return liveStateSnapshotCache.payload;
+  const normalizedMaxAgeMs = normalizeLiveStateSnapshotMaxAge(maxAgeMs);
+  const memorySnapshot = liveStateSnapshotCache;
+  if (isFreshLiveStateSnapshotMemoryEntry(memorySnapshot, normalizedMaxAgeMs, now)) {
+    return memorySnapshot.payload;
   }
 
   const snapshot = getMetaJson<LiveStateSnapshotEnvelope | LiveStatePayload>(LIVE_STATE_SNAPSHOT_META_KEY);
@@ -288,13 +349,11 @@ export function loadLiveStateSnapshot(maxAgeMs = LIVE_STATE_SNAPSHOT_MAX_AGE_MS)
     return null;
   }
   if ("payload" in snapshot) {
-    if (
-      Number.isFinite(maxAgeMs) &&
-      (typeof snapshot.savedAt !== "number" || now - snapshot.savedAt > maxAgeMs)
-    ) {
+    const savedAt = normalizeLiveStateSnapshotSavedAt(snapshot.savedAt);
+    if (!isFreshLiveStateSnapshotSavedAt(snapshot.savedAt, normalizedMaxAgeMs, now)) {
       liveStateSnapshotCache = {
         payload: null,
-        savedAt: typeof snapshot.savedAt === "number" ? snapshot.savedAt : null,
+        savedAt,
         loadedAt: now,
       };
       return null;
@@ -302,7 +361,7 @@ export function loadLiveStateSnapshot(maxAgeMs = LIVE_STATE_SNAPSHOT_MAX_AGE_MS)
     lastLiveStateSnapshotSignature = getLiveStateSnapshotSignature(snapshot.payload);
     liveStateSnapshotCache = {
       payload: snapshot.payload,
-      savedAt: typeof snapshot.savedAt === "number" ? snapshot.savedAt : null,
+      savedAt,
       loadedAt: now,
     };
     return snapshot.payload;
@@ -544,19 +603,19 @@ export async function buildLiveStatePayload(): Promise<LiveStatePayload> {
   const pendingEpochDurationEffectiveFromEpoch = snapshotResults[8];
   const currentEpochString = currentEpoch.toString();
   const sameEpochSnapshot = snapshot?.currentEpoch === currentEpochString ? snapshot : null;
-  const currentEpochNumber = Number(currentEpoch);
+  const currentEpochNumber = parseChainUintPositiveNumber(currentEpoch);
   const indexedTileUserCounts =
-    isSafePositiveInteger(currentEpochNumber)
+    currentEpochNumber !== null
       ? getEpochTileUserCounts(currentEpochNumber)
       : null;
   const indexedTilePools =
-    isSafePositiveInteger(currentEpochNumber)
+    currentEpochNumber !== null
       ? getEpochTilePoolsWei(currentEpochNumber).map((value) => value.toString())
       : sameEpochSnapshot?.indexedTilePools ?? null;
   const liveTileTuple =
     tileData.status === "success" ? (tileData.result as LiveStateTileTuple) : null;
   const shouldRefreshCurrentEpochTileUserCounts =
-    isSafePositiveInteger(currentEpochNumber) &&
+    currentEpochNumber !== null &&
     hasAnyPositivePool(liveTileTuple);
   let tileUserCounts = indexedTileUserCounts ?? sameEpochSnapshot?.tileUserCounts ?? null;
   if (shouldRefreshCurrentEpochTileUserCounts) {
@@ -642,12 +701,7 @@ export async function getLiveStatePayloadWithSnapshotFallback(): Promise<LiveSta
     return await buildLiveStatePayload();
   } catch (error) {
     const snapshot = loadLiveStateSnapshot(Number.POSITIVE_INFINITY) ?? buildStoredLiveStateBootstrap();
-    if (snapshot) {
-      return {
-        ...snapshot,
-        fetchedAt: Date.now(),
-      };
-    }
+    if (snapshot) return snapshot;
     throw error;
   }
 }

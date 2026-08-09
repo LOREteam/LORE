@@ -7,7 +7,18 @@ export function parseIndexerWatchFailureLimit(value?: string | null) {
     : DEFAULT_INDEXER_WATCH_FAILURE_LIMIT;
 }
 
+function normalizeIndexerWatchFailureCount(value: number) {
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function normalizeIndexerWatchFailureLimit(value: number) {
+  return Number.isSafeInteger(value) && value > 0 && value <= 100
+    ? value
+    : DEFAULT_INDEXER_WATCH_FAILURE_LIMIT;
+}
+
 export function recordIndexerWatchFailure(consecutiveFailures: number, failureLimit: number) {
-  const failures = Math.max(0, Math.trunc(consecutiveFailures)) + 1;
-  return { failures, shouldRestart: failures >= failureLimit };
+  const failures = normalizeIndexerWatchFailureCount(consecutiveFailures) + 1;
+  const limit = normalizeIndexerWatchFailureLimit(failureLimit);
+  return { failures, shouldRestart: failures >= limit };
 }

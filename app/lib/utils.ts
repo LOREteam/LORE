@@ -1,3 +1,5 @@
+import { sanitizeSupportLogPayload } from "./sentrySanitize";
+
 /** Sleep for a given number of milliseconds */
 export const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -37,7 +39,9 @@ export const shortenAddress = (address: string): string =>
 
 /** Parse a numeric string safely, returning 0 on failure or non-finite result (NaN, Infinity) */
 export const safeParseFloat = (value: string): number => {
-  const n = parseFloat(normalizeDecimalInput(value));
+  const normalized = normalizeDecimalInput(value.trim());
+  if (!/^(?:\d+\.?\d*|\.\d+)$/.test(normalized)) return 0;
+  const n = Number(normalized);
   return Number.isFinite(n) ? n : 0;
 };
 
@@ -47,11 +51,29 @@ export const safeParseFloat = (value: string): number => {
  */
 export const safeToFixed = (value: number, decimals: number, fallback = "0.00"): string => {
   if (!Number.isFinite(value)) return fallback;
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 100) return fallback;
   return value.toFixed(decimals);
 };
 
+const MAX_FORMATTED_ERROR_LENGTH = 600;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+function formatSafeErrorText(value: string): string {
+  const safe = String(sanitizeSupportLogPayload(value))
+    .replace(/[A-Za-z0-9_=-]{80,}/g, "<redacted>")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (safe.length <= MAX_FORMATTED_ERROR_LENGTH) return safe;
+  return `${safe.slice(0, MAX_FORMATTED_ERROR_LENGTH - 15)}...<truncated>`;
+}
+
 /** Race a promise against a timeout. Rejects with a named error on timeout. */
 export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
+    promise.catch(() => {});
+    return Promise.reject(new RangeError(`${label} timeout must be between 1 and 2147483647 milliseconds`));
+  }
+
   let timerId: ReturnType<typeof setTimeout> | null = null;
   let raceSettled = false;
   const timeoutPromise = new Promise<T>((_, reject) => {
@@ -74,21 +96,21 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: st
 /** Format an unknown caught error into a single-line diagnostic string. */
 export function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
-    const parts = [error.message];
+    const parts: string[] = [];
     const named = error.name && error.name !== "Error" ? error.name : null;
-    if (named && !parts.some((part) => part.includes(named))) {
-      parts.unshift(named);
-    }
+    const maybeCode = (error as Error & { code?: unknown }).code;
     const maybeStatus = (error as Error & { status?: unknown }).status;
-    if (
-      (typeof maybeStatus === "number" || typeof maybeStatus === "string") &&
-      !parts.some((part) => part.includes(`Status:`))
-    ) {
+    if (named) {
+      parts.push(named);
+    }
+    if (typeof maybeCode === "number" || typeof maybeCode === "string") {
+      parts.push(`Code: ${String(maybeCode)}`);
+    }
+    if (typeof maybeStatus === "number" || typeof maybeStatus === "string") {
       parts.push(`Status: ${String(maybeStatus)}`);
     }
-    const maybeCode = (error as Error & { code?: unknown }).code;
-    if ((typeof maybeCode === "number" || typeof maybeCode === "string") && !parts.some((part) => part.includes(`Code:`))) {
-      parts.push(`Code: ${String(maybeCode)}`);
+    if (error.message && !parts.includes(error.message)) {
+      parts.push(error.message);
     }
     const maybeDetails = (error as Error & { details?: unknown }).details;
     if (typeof maybeDetails === "string" && maybeDetails && !parts.includes(maybeDetails)) {
@@ -97,7 +119,7 @@ export function formatUnknownError(error: unknown): string {
     const maybeData = (error as Error & { data?: unknown }).data;
     if (maybeData !== undefined) {
       try {
-        const serializedData = JSON.stringify(maybeData);
+        const serializedData = JSON.stringify(sanitizeSupportLogPayload(maybeData));
         if (serializedData && serializedData !== "{}" && !parts.includes(serializedData)) {
           parts.push(`Data: ${serializedData}`);
         }
@@ -109,18 +131,18 @@ export function formatUnknownError(error: unknown): string {
     } else if (typeof cause === "string" && cause && !parts.includes(cause)) {
       parts.push(`Cause: ${cause}`);
     }
-    return parts.join(" | ");
+    return formatSafeErrorText(parts.join(" | "));
   }
   if (typeof error === "object" && error !== null) {
     try {
       const serialized = JSON.stringify(error);
-      if (serialized && serialized !== "{}") return serialized;
+      if (serialized && serialized !== "{}") return formatSafeErrorText(serialized);
     } catch {
       // Fall through to the generic object message below.
     }
     return "Unknown object error";
   }
-  return String(error);
+  return formatSafeErrorText(String(error));
 }
 
 /** Check if an error was a user rejection (MetaMask, WalletConnect, Coinbase, etc.) */
@@ -157,6 +179,8 @@ export const isUserRejection = (err: unknown): boolean => {
     msg.includes("rejected by user") ||
     msg.includes("user cancelled") ||
     msg.includes("user canceled") ||
+    msg.includes("user closed") ||
+    msg.includes("modal closed") ||
     msg.includes("action_rejected") ||
     msg.includes("userrejectedrequesterror") ||
     msg.includes("request rejected")

@@ -73,16 +73,15 @@ interface CreateAutoMineLoopAdapterOptions {
     tileIds: number[],
     amountRawPerTile: bigint,
     gasOverrides?: GasOverrides,
+    txNonce?: number,
+    expectedEpoch?: bigint,
   ) => Promise<"confirmed" | "pending">;
   placeBetsSilent: (
     tileIds: number[],
     amountRawPerTile: bigint,
     gasOverrides?: GasOverrides,
-  ) => Promise<"confirmed" | "pending">;
-  placeBets7702?: (
-    tileIds: number[],
-    amountRawPerTile: bigint,
-    gasOverrides?: GasOverrides,
+    txNonce?: number,
+    expectedEpoch?: bigint,
   ) => Promise<"confirmed" | "pending">;
   readClient: () => PublicClient | undefined;
   readSilentSend: () => unknown;
@@ -144,7 +143,6 @@ export function createAutoMineLoopAdapter({
   pendingBetRef,
   placeBets,
   placeBetsSilent,
-  placeBets7702,
   readClient,
   readSilentSend,
   renewLock,
@@ -242,7 +240,6 @@ export function createAutoMineLoopAdapter({
         pendingBetRef,
         placeBets,
         placeBetsSilent,
-        placeBets7702,
         publicClient: command.client,
         readSilentSend,
         rounds,

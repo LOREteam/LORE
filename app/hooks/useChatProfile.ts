@@ -6,6 +6,7 @@ import { sanitizeCustomChatAvatar, sanitizePresetChatAvatar } from "../lib/chatA
 import { loadChatAuthSession } from "../lib/chatSessionClient";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
+import { normalizeChatAuthAddress } from "../lib/chatAuth";
 import { type ChatAuthControls, useChatAuth } from "./useChatAuth";
 
 const LEGACY_STORAGE_KEY = "lore:chat-profile";
@@ -20,7 +21,20 @@ export interface ChatProfile {
 }
 
 function storageKey(walletAddress: string | null): string {
-  return walletAddress ? `${STORAGE_KEY_PREFIX}${walletAddress.toLowerCase()}` : LEGACY_STORAGE_KEY;
+  const normalizedWallet = normalizeChatAuthAddress(walletAddress);
+  return normalizedWallet ? `${STORAGE_KEY_PREFIX}${normalizedWallet}` : LEGACY_STORAGE_KEY;
+}
+
+function emptyProfile(): ChatProfile {
+  return { name: null, avatar: null, customAvatar: null, updatedAt: 0 };
+}
+
+function clearProfileKey(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // ignore storage failures
+  }
 }
 
 function isChatAuthError(err: unknown): boolean {
@@ -48,22 +62,41 @@ function sameProfileContent(a: ChatProfile | null, b: ChatProfile | null): boole
 }
 
 function loadProfile(walletAddress: string | null): ChatProfile {
-  if (typeof localStorage === "undefined") return { name: null, avatar: null, customAvatar: null };
+  if (typeof localStorage === "undefined") return emptyProfile();
+  const key = storageKey(walletAddress);
   try {
-    const key = storageKey(walletAddress);
     const raw = localStorage.getItem(key);
-    if (raw) return normalizeProfile(JSON.parse(raw) as Partial<ChatProfile>);
+    if (raw) {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object") {
+        clearProfileKey(key);
+        return emptyProfile();
+      }
+      return normalizeProfile(parsed as Partial<ChatProfile>);
+    }
 
     // Backward compatibility: migrate old single-key profile to per-wallet key.
     const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!legacy) return { name: null, avatar: null, customAvatar: null, updatedAt: 0 };
-    const parsedLegacy = normalizeProfile(JSON.parse(legacy) as Partial<ChatProfile>);
+    if (!legacy) return emptyProfile();
+    let legacyRaw: unknown;
+    try {
+      legacyRaw = JSON.parse(legacy) as unknown;
+    } catch {
+      clearProfileKey(LEGACY_STORAGE_KEY);
+      return emptyProfile();
+    }
+    if (!legacyRaw || typeof legacyRaw !== "object") {
+      clearProfileKey(LEGACY_STORAGE_KEY);
+      return emptyProfile();
+    }
+    const parsedLegacy = normalizeProfile(legacyRaw as Partial<ChatProfile>);
     if (walletAddress) {
       localStorage.setItem(key, JSON.stringify(parsedLegacy));
     }
     return parsedLegacy;
   } catch {
-    return { name: null, avatar: null, customAvatar: null, updatedAt: 0 };
+    clearProfileKey(key);
+    return emptyProfile();
   }
 }
 
@@ -83,8 +116,10 @@ function newerProfile(a: ChatProfile | null, b: ChatProfile | null): ChatProfile
 }
 
 async function fetchRemoteProfile(walletAddress: string): Promise<ChatProfile | null> {
+  const normalizedWallet = normalizeChatAuthAddress(walletAddress);
+  if (!normalizedWallet) return null;
   try {
-    const res = await fetchWithTimeout(`/api/chat/profile?walletAddress=${walletAddress.toLowerCase()}`, { cache: "no-store" });
+    const res = await fetchWithTimeout(`/api/chat/profile?walletAddress=${normalizedWallet}`, { cache: "no-store" });
     if (!res.ok) return null;
     const json = await readJsonResponse<{ profile?: Partial<ChatProfile> | null }>(res);
     if (!json) return null;
@@ -97,8 +132,10 @@ async function fetchRemoteProfile(walletAddress: string): Promise<ChatProfile | 
 }
 
 async function saveRemoteProfile(walletAddress: string, profile: ChatProfile): Promise<void> {
+  const normalizedWallet = normalizeChatAuthAddress(walletAddress);
+  if (!normalizedWallet) throw new Error("Invalid chat wallet address");
   const payload = {
-    walletAddress: walletAddress.toLowerCase(),
+    walletAddress: normalizedWallet,
     name: profile.name,
     avatar: profile.avatar,
     customAvatar: profile.customAvatar,
@@ -110,13 +147,13 @@ async function saveRemoteProfile(walletAddress: string, profile: ChatProfile): P
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(body || `HTTP ${response.status}`);
+    const json = await readJsonResponse<{ error?: string }>(response).catch(() => null);
+    throw new Error(json?.error || `HTTP ${response.status}`);
   }
 }
 
 export function useChatProfile(walletAddress: string | null, auth?: ChatAuthControls) {
-  const normalizedWallet = walletAddress ? walletAddress.toLowerCase() : null;
+  const normalizedWallet = normalizeChatAuthAddress(walletAddress);
   const [profile, setProfile] = useState<ChatProfile>(() => loadProfile(normalizedWallet));
   const localAuth = useChatAuth(walletAddress, "Verify wallet for chat profile");
   const { ensureChatAuth, refreshAuth, clearAuth } = auth ?? localAuth;

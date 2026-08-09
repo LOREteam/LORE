@@ -6,6 +6,7 @@ import { isEpochWaitTimeoutError, isInsufficientFundsError, isNetworkError } fro
 import { createAutoMineLoopState, reduceAutoMineLoopEvent } from "../lib/mining/autoMineLoopModel";
 import { planAutoMineLoopPrelude } from "../lib/mining/autoMineLoopPreludePlanner";
 import { planAutoMineLoopNetworkRetry } from "../lib/mining/autoMineLoopRetryPlanner";
+import { formatRetryWaitSeconds } from "../lib/mining/networkRetry";
 import {
   toAutoMineLoopConfirmedEvent,
   type AutoMineLoopConfirmedRoundOutcome,
@@ -179,7 +180,7 @@ export async function runAutoMineLoop({
             }
             log.warn(
               "AutoMine",
-              `epoch wait failed on round ${roundIndex + 1} (retry ${retryCount}/${EPOCH_WAIT_RETRY_MAX}), waiting ${(waitMs / 1000).toFixed(0)}s...`,
+              `epoch wait failed on round ${roundIndex + 1} (retry ${retryCount}/${EPOCH_WAIT_RETRY_MAX}), waiting ${formatRetryWaitSeconds(waitMs)}s...`,
               error,
             );
             loopState = await applyTransitionAction({
@@ -351,7 +352,7 @@ export async function runAutoMineLoop({
         writeAutoMineDiagnostics({ retryCount: retryDecision.retryCount });
         log.warn(
           "AutoMine",
-          `network error on round ${roundIndex + 1} (retry ${retryDecision.retryCount}/${networkRetryMax}), waiting ${(retryDecision.waitMs / 1000).toFixed(0)}s...`,
+          `network error on round ${roundIndex + 1} (retry ${retryDecision.retryCount}/${networkRetryMax}), waiting ${formatRetryWaitSeconds(retryDecision.waitMs)}s...`,
           error,
         );
         loopState = await applyTransitionAction({

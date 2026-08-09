@@ -1,9 +1,20 @@
+import { createHash } from "node:crypto";
+
 type ExternalRateLimitResult = {
   allowed: boolean;
   retryAfter?: number;
 };
 
 type FetchLike = typeof fetch;
+
+const MAX_EXTERNAL_RATE_LIMIT_RESPONSE_BYTES = 8_192;
+const INVALID_EXTERNAL_RATE_LIMIT_CONTENT_LENGTH = -1;
+const MAX_EXTERNAL_RATE_LIMIT_BUCKET_LENGTH = 80;
+const MAX_EXTERNAL_RATE_LIMIT_KEY_LENGTH = 128;
+const EXTERNAL_RATE_LIMIT_ID_RE = /^[a-z0-9:_-]+$/i;
+const EXTERNAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
+const EXTERNAL_POSITIVE_INTEGER_RE = /^[1-9]\d{0,15}$/;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 const RATE_LIMIT_SCRIPT = `
 local count = redis.call("INCR", KEYS[1])
@@ -12,11 +23,167 @@ local ttl = redis.call("PTTL", KEYS[1])
 return {count, ttl}
 `;
 
+function parseExternalReplicaCount(value: string | undefined): number | null {
+  const normalized = value?.trim();
+  if (!normalized || !EXTERNAL_POSITIVE_INTEGER_RE.test(normalized)) return null;
+  const parsed = BigInt(normalized);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
+  return Number(parsed);
+}
+
+function requiresExternalSharedLock() {
+  if (process.env.NODE_ENV !== "production") return false;
+  if (!process.env.WEB_REPLICA_COUNT?.trim()) return false;
+  const replicaCount = parseExternalReplicaCount(process.env.WEB_REPLICA_COUNT);
+  if (replicaCount === null) return true;
+  return replicaCount > 1;
+}
+
 export function hasExternalRateLimitStore() {
   return Boolean(
     process.env.UPSTASH_REDIS_REST_URL?.trim() &&
     process.env.UPSTASH_REDIS_REST_TOKEN?.trim(),
   );
+}
+
+export function hasPublicExternalRateLimitStore() {
+  const baseUrl = process.env.UPSTASH_REDIS_REST_URL?.trim();
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
+  return Boolean(baseUrl && token && parsePublicRateLimitEndpoint(baseUrl));
+}
+
+function isDisallowedIpv4Host(host: string) {
+  return (
+    /^0\./.test(host) ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+    /^192\.0\.2\./.test(host) ||
+    /^198\.(1[89])\./.test(host) ||
+    /^198\.51\.100\./.test(host) ||
+    /^203\.0\.113\./.test(host)
+  );
+}
+
+function isDisallowedIpv4MappedIpv6Host(host: string) {
+  const match = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!match) return false;
+  const high = Number.parseInt(match[1], 16);
+  const low = Number.parseInt(match[2], 16);
+  const mappedIpv4 = `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+  return isDisallowedIpv4Host(mappedIpv4);
+}
+
+function isDisallowedRateLimitHost(host: string) {
+  return (
+    host === "localhost" ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    host === "::1" ||
+    host === "127.0.0.1" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".example") ||
+    host.endsWith(".test") ||
+    host.endsWith(".invalid") ||
+    isDisallowedIpv4Host(host) ||
+    isDisallowedIpv4MappedIpv6Host(host) ||
+    /^f[cd][0-9a-f]*:/i.test(host) ||
+    /^fe[89ab][0-9a-f]*:/i.test(host) ||
+    /^2001:db8:/i.test(host)
+  );
+}
+
+function parsePublicRateLimitEndpoint(value: string) {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:") return null;
+    if (parsed.username || parsed.password) return null;
+    const host = parsed.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+    if (!host.includes(".") && !host.includes(":")) return null;
+    if (isDisallowedRateLimitHost(host)) return null;
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function parseExternalRateLimitInteger(value: unknown, min: number): number | null {
+  if (!Number.isSafeInteger(min)) return null;
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= min ? value : null;
+  }
+  if (typeof value === "string" && EXTERNAL_NON_NEGATIVE_INTEGER_RE.test(value)) {
+    const parsed = BigInt(value);
+    if (parsed > MAX_SAFE_INTEGER_BIGINT || parsed < BigInt(min)) return null;
+    return Number(parsed);
+  }
+  return null;
+}
+
+function hasValidExternalRateLimitRequest(bucket: string, key: string, limit: number, windowMs: number, now: number) {
+  return (
+    typeof bucket === "string" &&
+    bucket.length > 0 &&
+    bucket.length <= MAX_EXTERNAL_RATE_LIMIT_BUCKET_LENGTH &&
+    EXTERNAL_RATE_LIMIT_ID_RE.test(bucket) &&
+    typeof key === "string" &&
+    key.length > 0 &&
+    key.length <= MAX_EXTERNAL_RATE_LIMIT_KEY_LENGTH &&
+    EXTERNAL_RATE_LIMIT_ID_RE.test(key) &&
+    Number.isSafeInteger(limit) &&
+    limit > 0 &&
+    Number.isSafeInteger(windowMs) &&
+    windowMs > 0 &&
+    Number.isSafeInteger(now) &&
+    now >= 0
+  );
+}
+
+function parseExternalRateLimitContentLength(value: string | null): number | null {
+  if (value === null) return null;
+  if (!EXTERNAL_NON_NEGATIVE_INTEGER_RE.test(value)) return INVALID_EXTERNAL_RATE_LIMIT_CONTENT_LENGTH;
+  const parsed = BigInt(value);
+  if (parsed > MAX_SAFE_INTEGER_BIGINT) return INVALID_EXTERNAL_RATE_LIMIT_CONTENT_LENGTH;
+  return Number(parsed);
+}
+
+async function readExternalRateLimitJson(response: Response): Promise<{ result?: unknown; error?: unknown } | null> {
+  const contentLength = parseExternalRateLimitContentLength(response.headers.get("content-length"));
+  if (
+    contentLength === INVALID_EXTERNAL_RATE_LIMIT_CONTENT_LENGTH ||
+    (contentLength !== null && contentLength > MAX_EXTERNAL_RATE_LIMIT_RESPONSE_BYTES)
+  ) {
+    return null;
+  }
+  if (!response.body) return null;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      bytes += value.byteLength;
+      if (bytes > MAX_EXTERNAL_RATE_LIMIT_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+    const payload = JSON.parse(text) as unknown;
+    if (!payload || typeof payload !== "object") return null;
+    return payload as { result?: unknown; error?: unknown };
+  } catch {
+    return null;
+  }
 }
 
 export async function consumeExternalRateLimit(
@@ -30,11 +197,15 @@ export async function consumeExternalRateLimit(
   const baseUrl = process.env.UPSTASH_REDIS_REST_URL?.trim().replace(/\/$/, "");
   const token = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
   if (!baseUrl || !token) throw new Error("external rate-limit store is not configured");
-  if (!baseUrl.startsWith("https://")) throw new Error("external rate-limit store must use HTTPS");
+  const endpoint = parsePublicRateLimitEndpoint(baseUrl);
+  if (!endpoint) throw new Error("external rate-limit store must use a public HTTPS endpoint");
+  if (!hasValidExternalRateLimitRequest(bucket, key, limit, windowMs, now)) {
+    throw new Error("external rate-limit request parameters are invalid");
+  }
 
   const windowStartedAt = now - (now % windowMs);
   const redisKey = `lore:rate-limit:${bucket}:${key}:${windowStartedAt}`;
-  const response = await fetchImpl(baseUrl, {
+  const response = await fetchImpl(endpoint, {
     method: "POST",
     headers: {
       authorization: `Bearer ${token}`,
@@ -43,7 +214,7 @@ export async function consumeExternalRateLimit(
     body: JSON.stringify(["EVAL", RATE_LIMIT_SCRIPT, "1", redisKey, String(windowMs)]),
     signal: AbortSignal.timeout(3_000),
   });
-  const payload = await response.json().catch(() => null) as { result?: unknown; error?: unknown } | null;
+  const payload = await readExternalRateLimitJson(response);
   if (!response.ok || payload?.error) {
     throw new Error(`external rate-limit store rejected request (${response.status})`);
   }
@@ -51,12 +222,45 @@ export async function consumeExternalRateLimit(
     throw new Error("external rate-limit store returned an invalid response");
   }
 
-  const count = Number(payload.result[0]);
-  const ttlMs = Number(payload.result[1]);
-  if (!Number.isSafeInteger(count) || count < 1 || !Number.isFinite(ttlMs)) {
+  const count = parseExternalRateLimitInteger(payload.result[0], 1);
+  const ttlMs = parseExternalRateLimitInteger(payload.result[1], 0);
+  if (count === null || ttlMs === null) {
     throw new Error("external rate-limit store returned invalid counters");
   }
   return count <= limit
     ? { allowed: true }
     : { allowed: false, retryAfter: Math.max(1, Math.ceil(Math.max(0, ttlMs) / 1000)) };
 }
+
+export async function acquireExternalExpiringLock(
+  lockName: string,
+  ttlMs: number,
+  fetchImpl: FetchLike = fetch,
+): Promise<boolean> {
+  const baseUrl = process.env.UPSTASH_REDIS_REST_URL?.trim().replace(/\/$/, "");
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
+  if (!baseUrl || !token) throw new Error("external rate-limit store is not configured");
+  const endpoint = parsePublicRateLimitEndpoint(baseUrl);
+  if (!endpoint) throw new Error("external rate-limit store must use a public HTTPS endpoint");
+  if (!Number.isSafeInteger(ttlMs) || ttlMs < 1) throw new Error("shared lock TTL must be positive");
+
+  const key = createHash("sha256").update(lockName).digest("hex");
+  const response = await fetchImpl(endpoint, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(["SET", `lore:proof-lock:${key}`, "1", "NX", "PX", String(ttlMs)]),
+    signal: AbortSignal.timeout(3_000),
+  });
+  const payload = await readExternalRateLimitJson(response);
+  if (!response.ok || payload?.error) {
+    throw new Error(`external rate-limit store rejected request (${response.status})`);
+  }
+  if (payload?.result === "OK") return true;
+  if (payload?.result === null) return false;
+  throw new Error("external rate-limit store returned an invalid shared lock response");
+}
+
+export { requiresExternalSharedLock };

@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef } from "react";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 
 interface ConfettiProps {
   active: boolean;
@@ -15,9 +16,10 @@ const COLORS_MY_WIN = ["#0ea5e9", "#38bdf8", "#06b6d4", "#22d3ee", "#67e8f9", "#
 export const Confetti = memo(function Confetti({ active, isMyWin }: ConfettiProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
+  const { reducedMotion } = useReducedMotion();
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || reducedMotion) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d", { alpha: true });
@@ -81,13 +83,14 @@ export const Confetti = memo(function Confetti({ active, isMyWin }: ConfettiProp
 
     animRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animRef.current);
-  }, [active, isMyWin]);
+  }, [active, isMyWin, reducedMotion]);
 
-  if (!active) return null;
+  if (!active || reducedMotion) return null;
 
   return (
     <canvas
       ref={canvasRef}
+      aria-hidden="true"
       className="absolute inset-0 w-full h-full pointer-events-none z-50"
     />
   );

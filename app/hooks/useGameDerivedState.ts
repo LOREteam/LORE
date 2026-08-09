@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { useReadContract } from "wagmi";
+import { formatDecimalTextFixed } from "../lib/balanceFormatting";
 import { CONTRACT_ADDRESS, GAME_ABI } from "../lib/constants";
 import {
   buildCurrentEpochJackpotInfo,
@@ -58,7 +59,7 @@ export function useGameDerivedState({
     [effectiveTileData, effectiveRolloverPoolRaw],
   );
   const formattedLineaBalance = useMemo(
-    () => (tokenBalanceFormatted ? Number(tokenBalanceFormatted).toFixed(2) : null),
+    () => (tokenBalanceFormatted ? formatDecimalTextFixed(tokenBalanceFormatted, 2) : null),
     [tokenBalanceFormatted],
   );
   const winningTileId = useMemo(

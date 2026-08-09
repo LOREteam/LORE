@@ -20,7 +20,10 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const address = searchParams.get("address");
 
-    if (!address || !/^0x[0-9a-f]{40}$/i.test(address)) {
+    let normalizedAddress: `0x${string}`;
+    try {
+      normalizedAddress = getAddress(address ?? "").toLowerCase() as `0x${string}`;
+    } catch {
       return applyNoStoreHeaders(NextResponse.json({ isOwner: false, error: "Invalid address" }, { status: 400 }));
     }
 
@@ -31,7 +34,7 @@ export async function GET(request: NextRequest) {
     });
 
     const normalizedOwner = getAddress(ownerAddress);
-    const isOwner = normalizedOwner.toLowerCase() === address.toLowerCase();
+    const isOwner = normalizedOwner.toLowerCase() === normalizedAddress;
 
     return applyNoStoreHeaders(NextResponse.json({ isOwner, owner: normalizedOwner }));
   } catch (err) {

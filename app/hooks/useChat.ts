@@ -9,7 +9,9 @@ import {
 } from "../lib/chatMessages";
 import { getChatPollDelayMs } from "../lib/chatPollDelay";
 import { CHAT_RATE_LIMIT_MS, parseChatRetryAfterMs } from "../lib/chatRateLimit";
+import { normalizeChatAuthAddress } from "../lib/chatAuth";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
+import { log } from "../lib/logger";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { type ChatAuthControls, useChatAuth } from "./useChatAuth";
 
@@ -72,8 +74,21 @@ function warnNetworkOnce(tag: string, ref: { current: number }, err: unknown) {
   const now = Date.now();
   if (now - ref.current < NETWORK_WARN_THROTTLE_MS) return;
   ref.current = now;
-  const message = err instanceof Error ? err.message : String(err);
-  console.warn(`${tag} ${message}`);
+  log.warn("Chat", tag, err);
+}
+
+function createOptimisticMessageId(now: number): string {
+  if (typeof crypto !== "undefined") {
+    if (typeof crypto.randomUUID === "function") {
+      return `local:${now}:${crypto.randomUUID()}`;
+    }
+    if (typeof crypto.getRandomValues === "function") {
+      const bytes = new Uint8Array(12);
+      crypto.getRandomValues(bytes);
+      return `local:${now}:${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    }
+  }
+  return `local:${now}:${Math.random().toString(36).slice(2)}`;
 }
 
 function loadCachedMessages(): ChatMessage[] {
@@ -82,8 +97,17 @@ function loadCachedMessages(): ChatMessage[] {
     const raw = localStorage.getItem(CHAT_CACHE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown[];
+    if (!Array.isArray(parsed)) {
+      localStorage.removeItem(CHAT_CACHE_KEY);
+      return [];
+    }
     return normalizeChatMessages(parsed);
   } catch {
+    try {
+      localStorage.removeItem(CHAT_CACHE_KEY);
+    } catch {
+      // ignore cache cleanup failures
+    }
     return [];
   }
 }
@@ -262,7 +286,8 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
 
   const sendMessage = useCallback(
     async (text: string, senderName: string | null, senderAvatar: string | null) => {
-      if (!walletAddress) return false;
+      const normalizedWallet = normalizeChatAuthAddress(walletAddress);
+      if (!normalizedWallet) return false;
       const trimmed = text.trim().slice(0, MAX_TEXT_LENGTH);
       if (!trimmed) return false;
 
@@ -283,16 +308,16 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
 
       const payload: Record<string, unknown> = {
         text: trimmed,
-        sender: walletAddress.toLowerCase(),
+        sender: normalizedWallet,
         timestamp: { ".sv": "timestamp" },
       };
       if (senderName) payload.senderName = senderName;
       const normalizedAvatar = normalizeChatMessageAvatar(senderAvatar);
       if (normalizedAvatar) payload.senderAvatar = normalizedAvatar;
       const optimisticMessage: ChatMessage = {
-        id: `local:${now}:${Math.random().toString(36).slice(2)}`,
+        id: createOptimisticMessageId(now),
         text: trimmed,
-        sender: walletAddress.toLowerCase(),
+        sender: normalizedWallet,
         senderName: senderName || null,
         senderAvatar: normalizedAvatar || null,
         timestamp: now,

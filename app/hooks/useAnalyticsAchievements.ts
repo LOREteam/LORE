@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
+import { getAddress } from "viem";
 import type { DepositEntry } from "./useDepositHistory";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 
@@ -101,7 +102,11 @@ export function compareAchievementEpochs(left: string, right: string): number {
 
 function getAchievementStorageKey(walletAddress: string | undefined) {
   if (!walletAddress) return null;
-  return `lore:achievements:${ACHIEVEMENTS_VERSION}:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${walletAddress.toLowerCase()}`;
+  try {
+    return `lore:achievements:${ACHIEVEMENTS_VERSION}:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${getAddress(walletAddress).toLowerCase()}`;
+  } catch {
+    return null;
+  }
 }
 
 function loadPersistedAchievements(walletAddress: string | undefined): PersistedAchievements {
@@ -113,10 +118,17 @@ function loadPersistedAchievements(walletAddress: string | undefined): Persisted
     if (!raw) return { unlockedAt: {} };
     const parsed = JSON.parse(raw) as PersistedAchievements;
     if (!parsed || typeof parsed !== "object" || !parsed.unlockedAt || typeof parsed.unlockedAt !== "object") {
+      localStorage.removeItem(storageKey);
       return { unlockedAt: {} };
     }
     return parsed;
   } catch {
+    try {
+      const storageKey = getAchievementStorageKey(walletAddress);
+      if (storageKey) localStorage.removeItem(storageKey);
+    } catch {
+      // ignore storage failures
+    }
     return { unlockedAt: {} };
   }
 }

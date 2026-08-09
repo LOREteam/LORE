@@ -74,7 +74,7 @@ export const AnalyticsJackpotHistoryPanel = React.memo(function AnalyticsJackpot
       ) : jackpotHistory.length === 0 ? (
         <div className="text-center py-4 flex flex-col items-center gap-2">
           {jackpotHistoryLoading ? (
-            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider"><LoreText items={loadingQuotes} /></span>
+            <span role="status" aria-live="polite" aria-busy="true" className="text-[11px] font-bold text-gray-400 uppercase tracking-wider"><LoreText items={loadingQuotes} /></span>
           ) : (
             <>
               <span className="text-[11px] text-gray-400 italic">No jackpot awards yet.</span>
@@ -128,6 +128,8 @@ export const AnalyticsJackpotHistoryPanel = React.memo(function AnalyticsJackpot
                         href={entry.txUrl}
                         target="_blank"
                         rel="noopener noreferrer"
+                        aria-label={`Open jackpot transaction ${entry.txHash.slice(0, 6)}...${entry.txHash.slice(-4)} on Lineascan`}
+                        title="Open jackpot transaction on Lineascan"
                         className="text-xs font-mono text-violet-400/60 hover:text-violet-400 transition-colors"
                       >
                         {entry.txHash.slice(0, 6)}...{entry.txHash.slice(-4)}

@@ -14,6 +14,7 @@ import {
 const PAGE_LIVE_STATE_CACHE_MS = 4_000;
 const PAGE_LIVE_STATE_RENDER_WAIT_MS = 1_200;
 const PAGE_RECENT_WINS_RENDER_WAIT_MS = 1_200;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 type CachedInitialLiveState = {
   payload: LiveStatePayload | null;
@@ -31,6 +32,11 @@ function sanitizeInitialLiveState(payload: LiveStatePayload | null): LiveStatePa
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
+    promise.catch(() => {});
+    return Promise.resolve(null);
+  }
+
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   return Promise.race<T | null>([
     promise,

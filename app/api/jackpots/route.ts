@@ -24,7 +24,7 @@ export async function GET(request: Request) {
     limit: 30,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
 

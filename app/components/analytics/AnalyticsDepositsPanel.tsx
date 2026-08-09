@@ -88,8 +88,13 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
         <div className="flex items-center gap-3">
           {deposits !== null && (
             <div className="flex flex-col items-end gap-0.5">
-              <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${statusActive ? "text-sky-300" : "text-gray-400"}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${statusActive ? "bg-sky-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
+              <span
+                role="status"
+                aria-live="polite"
+                aria-busy={statusActive}
+                className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${statusActive ? "text-sky-300" : "text-gray-400"}`}
+              >
+                <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${statusActive ? "bg-sky-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
                 {statusLabel}
               </span>
               {freshnessLabel && (
@@ -144,9 +149,9 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
           </UiButton>
         </div>
       ) : deposits === null && depositsLoading ? (
-        <div className="space-y-1.5 py-2">
+        <div role="status" aria-live="polite" aria-busy="true" className="space-y-1.5 py-2">
           <div className="flex items-center gap-2 mb-3">
-            <div className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-synced-pulse" />
+            <div aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-synced-pulse" />
             <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider"><LoreText items={loadingQuotes} /></span>
           </div>
           {Array.from({ length: 4 }, (_, i) => (
@@ -248,6 +253,8 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
                             href={row.txUrl}
                             target="_blank"
                             rel="noopener noreferrer"
+                            aria-label={`Open deposit transaction ${row.txHash.slice(0, 6)}...${row.txHash.slice(-4)} on Lineascan`}
+                            title="Open deposit transaction on Lineascan"
                             className="text-xs font-mono text-violet-400/60 hover:text-violet-400 transition-colors"
                           >
                             {row.txHash.slice(0, 6)}...{row.txHash.slice(-4)}

@@ -1,13 +1,15 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { formatUnits, parseAbiItem, type PublicClient } from "viem";
+import { parseAbiItem, type PublicClient } from "viem";
 import { usePublicClient } from "wagmi";
+import { formatBalanceFixed, formatDecimalTextFixed, formatScaledUnitsFixed } from "../lib/balanceFormatting";
 import { cn } from "../lib/cn";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, CONTRACT_DEPLOY_BLOCK } from "../lib/constants";
 import { getJackpotVisualTheme, resolveJackpotVisualKind, type JackpotVisualKind } from "../lib/jackpotVisualTheme";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
+import { useDialogFocusTrap } from "../hooks/useDialogFocusTrap";
 import { UiButton } from "./ui/UiButton";
 
 interface JackpotApiPayload {
@@ -24,15 +26,20 @@ const WEEKLY_JACKPOT_EVENT = parseAbiItem("event WeeklyJackpotAwarded(uint256 in
 const EPOCH_RESOLVED_EVENT = parseAbiItem(
   "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
 );
-const FOCUSABLE_SELECTOR = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  "[tabindex]:not([tabindex='-1'])",
-].join(", ");
-
+const JACKPOT_SPARKLES = [
+  { id: 0, left: "14%", top: "18%", size: 18, delay: "0s", duration: "2.8s", rotate: 12, opacity: 0.92 },
+  { id: 1, left: "28%", top: "68%", size: 12, delay: "0.35s", duration: "2.35s", rotate: 32, opacity: 0.68 },
+  { id: 2, left: "42%", top: "24%", size: 8, delay: "0.7s", duration: "3.05s", rotate: 12, opacity: 0.68 },
+  { id: 3, left: "58%", top: "76%", size: 18, delay: "1.05s", duration: "2.55s", rotate: 32, opacity: 0.92 },
+  { id: 4, left: "72%", top: "22%", size: 12, delay: "0.2s", duration: "3.2s", rotate: 12, opacity: 0.68 },
+  { id: 5, left: "86%", top: "62%", size: 8, delay: "0.9s", duration: "2.65s", rotate: 32, opacity: 0.68 },
+];
+const JACKPOT_COINS = [
+  { id: 0, left: "12%", top: "38%", delay: "0.15s", size: 20, rotate: -18, opacity: 0.92 },
+  { id: 1, left: "34%", top: "14%", delay: "0.55s", size: 14, rotate: 18, opacity: 0.72 },
+  { id: 2, left: "66%", top: "18%", delay: "0.85s", size: 20, rotate: -18, opacity: 0.92 },
+  { id: 3, left: "82%", top: "54%", delay: "0.35s", size: 14, rotate: 18, opacity: 0.72 },
+];
 interface JackpotBannerProps {
   winningTileId: number | null;
   isRevealing: boolean;
@@ -55,15 +62,49 @@ interface JackpotBannerProps {
 interface ActiveJackpotWin {
   key: string;
   kind: JackpotVisualKind;
-  amount: number;
+  amountText: string;
   epoch: string | null;
   tileId: number | null;
 }
 
-function parseJackpotAmount(value: unknown, fallback = 0) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  const parsed = Number.parseFloat(String(value ?? ""));
-  return Number.isFinite(parsed) ? parsed : fallback;
+const JACKPOT_AMOUNT_FRACTION_DIGITS = 6;
+const JACKPOT_DISPLAY_FRACTION_DIGITS = 4;
+
+function fixedAmountToScaled(text: string): bigint | null {
+  if (!/^\d+\.\d{6}$/.test(text)) return null;
+  return BigInt(text.replace(".", ""));
+}
+
+function formatJackpotAmountText(value: unknown): string | null {
+  if (typeof value === "number" && !Number.isFinite(value)) return null;
+  const fixed = formatDecimalTextFixed(String(value ?? "").trim(), JACKPOT_AMOUNT_FRACTION_DIGITS);
+  return fixed && fixedAmountToScaled(fixed) !== 0n ? fixed : null;
+}
+
+function formatJackpotAmountWei(value: bigint | null | undefined): string | null {
+  const fixed = formatBalanceFixed(
+    { value: value ?? 0n, decimals: 18 },
+    JACKPOT_AMOUNT_FRACTION_DIGITS,
+  );
+  return fixed && fixedAmountToScaled(fixed) !== 0n ? fixed : null;
+}
+
+function addJackpotAmountText(totalText: string | null, amountText: string | null): string | null {
+  const total = totalText ? fixedAmountToScaled(totalText) : 0n;
+  const amount = amountText ? fixedAmountToScaled(amountText) : 0n;
+  if (total === null || amount === null) return totalText;
+  const next = total + amount;
+  return next > 0n ? formatScaledUnitsFixed(next, JACKPOT_AMOUNT_FRACTION_DIGITS) : null;
+}
+
+function formatJackpotDisplayAmount(text: string | null): string | null {
+  if (!text) return null;
+  const fixed = formatDecimalTextFixed(text, JACKPOT_DISPLAY_FRACTION_DIGITS);
+  if (!fixed) return null;
+  const [whole, fractional = ""] = fixed.split(".");
+  const groupedWhole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const trimmedFractional = fractional.replace(/0+$/, "");
+  return trimmedFractional ? `${groupedWhole}.${trimmedFractional}` : groupedWhole;
 }
 
 function getPreviousEpoch(epoch: string | null) {
@@ -74,14 +115,6 @@ function getPreviousEpoch(epoch: string | null) {
 
 function getCandidateEpochs(epoch: string | null) {
   return [epoch, getPreviousEpoch(epoch)].filter((item): item is string => Boolean(item));
-}
-
-function getFocusableElements(container: HTMLElement): HTMLElement[] {
-  return [...container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter((element) => {
-    if (element.hasAttribute("disabled")) return false;
-    if (element.getAttribute("aria-hidden") === "true") return false;
-    return element.offsetParent !== null || document.activeElement === element;
-  });
 }
 
 function getElementsOutsideDialog(dialogRoot: HTMLElement): HTMLElement[] {
@@ -112,19 +145,19 @@ function findIndexedJackpotAmount(
   isDailyJackpot: boolean,
   isWeeklyJackpot: boolean,
 ) {
-  if (!rows?.length || !epoch) return 0;
+  if (!rows?.length || !epoch) return null;
   const candidateEpochs = new Set([epoch, getPreviousEpoch(epoch)].filter((item): item is string => Boolean(item)));
   const kinds = [
     isDailyJackpot ? "daily" : null,
     isWeeklyJackpot ? "weekly" : null,
   ].filter((item): item is "daily" | "weekly" => item !== null);
 
-  return kinds.reduce((total, kind) => {
+  return kinds.reduce<string | null>((total, kind) => {
     const row = rows.find((item) => String(item.epoch ?? "") === epoch && item.kind === kind)
       ?? rows.find((item) => candidateEpochs.has(String(item.epoch ?? "")) && item.kind === kind);
-    const amount = parseJackpotAmount(row?.amountNum, parseJackpotAmount(row?.amount));
-    return amount > 0 ? total + amount : total;
-  }, 0);
+    const amount = formatJackpotAmountText(row?.amountNum) ?? formatJackpotAmountText(row?.amount);
+    return addJackpotAmountText(total, amount);
+  }, null);
 }
 
 async function fetchOnChainJackpotAmount({
@@ -138,13 +171,13 @@ async function fetchOnChainJackpotAmount({
   isDailyJackpot: boolean;
   isWeeklyJackpot: boolean;
 }) {
-  if (!publicClient || !epoch) return 0;
+  if (!publicClient || !epoch) return null;
   const candidateEpochs = getCandidateEpochs(epoch);
   if (candidateEpochs.length === 0) return 0;
 
   const headBlock = await publicClient.getBlockNumber();
   const fromBlock = headBlock > 5000n ? headBlock - 5000n : CONTRACT_DEPLOY_BLOCK;
-  let total = 0;
+  let total: string | null = null;
 
   for (const candidateEpoch of candidateEpochs) {
     const epochArg = BigInt(candidateEpoch);
@@ -156,7 +189,10 @@ async function fetchOnChainJackpotAmount({
         fromBlock,
         toBlock: headBlock,
       });
-      total += logs.reduce((sum, log) => sum + parseJackpotAmount(formatUnits(log.args.amount ?? 0n, 18)), 0);
+      total = logs.reduce<string | null>(
+        (sum, log) => addJackpotAmountText(sum, formatJackpotAmountWei(log.args.amount)),
+        total,
+      );
     }
     if (isWeeklyJackpot) {
       const logs = await publicClient.getLogs({
@@ -166,9 +202,12 @@ async function fetchOnChainJackpotAmount({
         fromBlock,
         toBlock: headBlock,
       });
-      total += logs.reduce((sum, log) => sum + parseJackpotAmount(formatUnits(log.args.amount ?? 0n, 18)), 0);
+      total = logs.reduce<string | null>(
+        (sum, log) => addJackpotAmountText(sum, formatJackpotAmountWei(log.args.amount)),
+        total,
+      );
     }
-    if (total > 0) return total;
+    if (total) return total;
 
     const resolvedLogs = await publicClient.getLogs({
       address: CONTRACT_ADDRESS,
@@ -178,10 +217,10 @@ async function fetchOnChainJackpotAmount({
       toBlock: headBlock,
     });
     const resolvedAmount = resolvedLogs.reduce(
-      (sum, log) => sum + parseJackpotAmount(formatUnits(log.args.jackpotBonus ?? 0n, 18)),
-      0,
+      (sum, log) => addJackpotAmountText(sum, formatJackpotAmountWei(log.args.jackpotBonus)),
+      null as string | null,
     );
-    if (resolvedAmount > 0) return resolvedAmount;
+    if (resolvedAmount) return resolvedAmount;
   }
 
   return total;
@@ -206,14 +245,13 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   const [showContent, setShowContent] = useState(false);
   const [isDismissed, setIsDismissed] = useState(false);
   const [activeWin, setActiveWin] = useState<ActiveJackpotWin | null>(null);
-  const [indexedJackpotAmount, setIndexedJackpotAmount] = useState(0);
+  const [indexedJackpotAmount, setIndexedJackpotAmount] = useState<string | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dismissedWinKeyRef = useRef<string | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const restoreFocusRef = useRef<HTMLElement | null>(null);
   const titleId = React.useId();
+  const descriptionId = React.useId();
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
 
   const isMyWin = useMemo(() => {
@@ -224,21 +262,20 @@ export const JackpotBanner = React.memo(function JackpotBanner({
 
   const isJackpotWin = isMyWin && (isDailyJackpot || isWeeklyJackpot);
   const candidateKind = isJackpotWin ? resolveJackpotVisualKind(isDailyJackpot, isWeeklyJackpot) : null;
-  const kindFallbackAmount =
+  const dailyFallbackText = formatJackpotAmountText(dailyJackpotFallbackAmount);
+  const weeklyFallbackText = formatJackpotAmountText(weeklyJackpotFallbackAmount);
+  const kindFallbackAmountText =
     candidateKind === "dual"
-      ? dailyJackpotFallbackAmount + weeklyJackpotFallbackAmount
+      ? addJackpotAmountText(dailyFallbackText, weeklyFallbackText)
       : candidateKind === "daily"
-        ? dailyJackpotFallbackAmount
+        ? dailyFallbackText
         : candidateKind === "weekly"
-          ? weeklyJackpotFallbackAmount
-          : 0;
-  const displayJackpotAmount = jackpotAmount > 0
-    ? jackpotAmount
-    : kindFallbackAmount > 0
-      ? kindFallbackAmount
-      : jackpotFallbackAmount > 0 && candidateKind === "dual"
-      ? jackpotFallbackAmount
-      : indexedJackpotAmount;
+          ? weeklyFallbackText
+          : null;
+  const displayJackpotAmountText = formatJackpotAmountText(jackpotAmount)
+    ?? kindFallbackAmountText
+    ?? (candidateKind === "dual" ? formatJackpotAmountText(jackpotFallbackAmount) : null)
+    ?? indexedJackpotAmount;
   const candidateWinKey = useMemo(() => {
     if (!candidateKind) return null;
     return [
@@ -248,51 +285,22 @@ export const JackpotBanner = React.memo(function JackpotBanner({
     ].join(":");
   }, [candidateKind, epoch, winningTileId]);
   const readyWin = useMemo<ActiveJackpotWin | null>(() => {
-    if (!candidateKind || !candidateWinKey || displayJackpotAmount <= 0) return null;
+    if (!candidateKind || !candidateWinKey || !displayJackpotAmountText) return null;
     return {
       key: candidateWinKey,
       kind: candidateKind,
-      amount: displayJackpotAmount,
+      amountText: displayJackpotAmountText,
       epoch,
       tileId: winningTileId,
     };
-  }, [candidateKind, candidateWinKey, displayJackpotAmount, epoch, winningTileId]);
-
-  const sparkles = useMemo(
-    () =>
-      Array.from({ length: 6 }, (_, index) => ({
-        id: index,
-        left: `${10 + Math.random() * 80}%`,
-        top: `${10 + Math.random() * 78}%`,
-        size: index % 3 === 0 ? 18 : index % 3 === 1 ? 12 : 8,
-        delay: `${Math.random() * 1.4}s`,
-        duration: `${2.2 + Math.random() * 1.1}s`,
-        rotate: index % 2 === 0 ? 12 : 32,
-        opacity: index % 3 === 0 ? 0.92 : 0.68,
-      })),
-    [],
-  );
-
-  const coins = useMemo(
-    () =>
-      Array.from({ length: 4 }, (_, index) => ({
-        id: index,
-        left: `${8 + Math.random() * 84}%`,
-        top: `${8 + Math.random() * 84}%`,
-        delay: `${Math.random() * 1.1}s`,
-        size: index % 2 === 0 ? 20 : 14,
-        rotate: index % 2 === 0 ? -18 : 18,
-        opacity: index % 2 === 0 ? 0.92 : 0.72,
-      })),
-    [],
-  );
+  }, [candidateKind, candidateWinKey, displayJackpotAmountText, epoch, winningTileId]);
 
   useEffect(() => {
-    setIndexedJackpotAmount(0);
+    setIndexedJackpotAmount(null);
   }, [candidateWinKey]);
 
   useEffect(() => {
-    if (!candidateWinKey || displayJackpotAmount > 0 || !epoch) return;
+    if (!candidateWinKey || displayJackpotAmountText || !epoch) return;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const controller = new AbortController();
@@ -307,7 +315,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
         const payload = await readJsonResponse<JackpotApiPayload>(response);
         if (!response.ok || !payload) throw new Error(`HTTP ${response.status}`);
         const amount = findIndexedJackpotAmount(payload.jackpots, epoch, isDailyJackpot, isWeeklyJackpot);
-        if (!cancelled && amount > 0) {
+        if (!cancelled && amount) {
           setIndexedJackpotAmount(amount);
           return;
         }
@@ -322,7 +330,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
           isDailyJackpot,
           isWeeklyJackpot,
         });
-        if (!cancelled && amount > 0) {
+        if (!cancelled && amount) {
           setIndexedJackpotAmount(amount);
           return;
         }
@@ -342,7 +350,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
       controller.abort();
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [candidateWinKey, displayJackpotAmount, epoch, isDailyJackpot, isWeeklyJackpot, publicClient]);
+  }, [candidateWinKey, displayJackpotAmountText, epoch, isDailyJackpot, isWeeklyJackpot, publicClient]);
 
   useEffect(() => {
     if (!readyWin) {
@@ -353,7 +361,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
       return;
     }
     if (activeWin?.key === readyWin.key) {
-      if (activeWin.amount !== readyWin.amount) setActiveWin(readyWin);
+      if (activeWin.amountText !== readyWin.amountText) setActiveWin(readyWin);
       return;
     }
     if (activeWin && activeWin.epoch === readyWin.epoch && activeWin.tileId === readyWin.tileId) {
@@ -418,14 +426,17 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   const theme = getJackpotVisualTheme(activeWin?.kind ?? "daily");
   const palette = theme.banner;
   const jackpotLabel = theme.label;
-  const activeAmount = activeWin?.amount ?? 0;
+  const activeAmountText = activeWin?.amountText ?? null;
   const activeEpoch = activeWin?.epoch ?? null;
   const activeTileId = activeWin?.tileId ?? null;
-  const amountText = activeAmount > 0
-    ? activeAmount.toLocaleString("en-US", { maximumFractionDigits: 4 })
-    : null;
+  const amountText = formatJackpotDisplayAmount(activeAmountText);
   const amountShareText = amountText ? `${amountText} LINEA` : "";
   const isModalOpen = showBanner && !isDismissed && Boolean(activeWin) && Boolean(amountText);
+  const jackpotDescription = [
+    amountText ? `Won ${amountText} LINEA.` : null,
+    activeEpoch ? `Epoch ${activeEpoch}.` : null,
+    activeTileId !== null ? `Tile ${activeTileId}.` : null,
+  ].filter(Boolean).join(" ");
 
   const share = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -448,13 +459,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   useEffect(() => {
     if (!isModalOpen) return;
     const overlay = overlayRef.current;
-    const dialog = dialogRef.current;
-    if (!overlay || !dialog) return;
-
-    restoreFocusRef.current =
-      typeof document !== "undefined" && document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
+    if (!overlay) return;
 
     const disabledElements = getElementsOutsideDialog(overlay).map((element) => ({
       element,
@@ -466,48 +471,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
       element.setAttribute("aria-hidden", "true");
     }
 
-    const focusInitial = window.requestAnimationFrame(() => {
-      const focusable = getFocusableElements(dialog);
-      (focusable[0] ?? dialog).focus();
-    });
-
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        handleClose();
-        return;
-      }
-
-      if (event.key !== "Tab") return;
-      const focusable = getFocusableElements(dialog);
-      if (focusable.length === 0) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
-      if (event.shiftKey) {
-        if (!active || active === first || !dialog.contains(active)) {
-          event.preventDefault();
-          last.focus();
-        }
-        return;
-      }
-
-      if (!active || active === last || !dialog.contains(active)) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", onKey);
     return () => {
-      window.cancelAnimationFrame(focusInitial);
-      document.removeEventListener("keydown", onKey);
       for (const { element, ariaHidden, inert } of disabledElements) {
         element.inert = inert;
         if (ariaHidden === null) {
@@ -516,10 +480,10 @@ export const JackpotBanner = React.memo(function JackpotBanner({
           element.setAttribute("aria-hidden", ariaHidden);
         }
       }
-      restoreFocusRef.current?.focus();
-      restoreFocusRef.current = null;
     };
-  }, [handleClose, isModalOpen]);
+  }, [isModalOpen]);
+
+  useDialogFocusTrap(isModalOpen, handleClose, undefined, overlayRef);
 
   if (!isModalOpen) return null;
 
@@ -552,10 +516,10 @@ export const JackpotBanner = React.memo(function JackpotBanner({
       )}
 
       <div
-        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-describedby={descriptionId}
         tabIndex={-1}
         className={cn(
           "pointer-events-auto relative z-10 w-full max-w-[58rem] overflow-hidden rounded-[1.15rem] border bg-[#07040d] text-center",
@@ -585,7 +549,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
             type="button"
             aria-label="Close jackpot banner"
             onClick={handleClose}
-            className="absolute right-3 top-3 z-20 inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/12 bg-black/42 text-lg text-white/72 transition hover:bg-black/58 hover:text-white active:scale-95 focus-visible:ring-2 focus-visible:ring-white/50 sm:right-5 sm:top-5"
+            className="absolute right-3 top-3 z-20 inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/12 bg-black/42 text-lg text-white/72 transition hover:bg-black/58 hover:text-white active:scale-95 focus-visible:ring-2 focus-visible:ring-white/50 sm:right-5 sm:top-5"
           >
             <span aria-hidden="true">&times;</span>
           </button>
@@ -610,6 +574,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
               >
                 {theme.winTitle}
               </h2>
+              <p id={descriptionId} className="sr-only">{jackpotDescription}</p>
             </div>
 
             <div className="flex w-full min-h-0 flex-1 flex-col items-center justify-center">
@@ -702,7 +667,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
 
           {!reducedMotion && (
             <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            {sparkles.map((sparkle) => (
+            {JACKPOT_SPARKLES.map((sparkle) => (
               <div
                 key={sparkle.id}
                 className="absolute"
@@ -726,7 +691,7 @@ export const JackpotBanner = React.memo(function JackpotBanner({
               </div>
             ))}
 
-            {coins.map((coin) => (
+            {JACKPOT_COINS.map((coin) => (
               <div
                 key={coin.id}
                 className="absolute rounded-full border"

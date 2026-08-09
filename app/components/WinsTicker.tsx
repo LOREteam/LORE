@@ -2,6 +2,7 @@
 
 import { memo } from "react";
 import type { RecentWin } from "../hooks/useRecentWins";
+import { formatDecimalTextFixed, formatScaledUnitsFixed } from "../lib/balanceFormatting";
 
 const MAX_VISIBLE_FEED_WINS = 10;
 
@@ -16,16 +17,50 @@ function jackpotLabel(kind: RecentWin["jackpotKind"]) {
   return null;
 }
 
+function trimFixedDecimalText(value: string): string {
+  return value.replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+function normalizeDecimalText(value: string): string | null {
+  const trimmed = value.trim();
+  return /^\d+(?:\.\d+)?$/.test(trimmed) ? trimmed : null;
+}
+
+function isDecimalAtLeast(value: string, threshold: number): boolean {
+  const whole = value.split(".")[0]?.replace(/^0+(?=\d)/, "") || "0";
+  const thresholdText = String(threshold);
+  if (whole.length !== thresholdText.length) return whole.length > thresholdText.length;
+  return whole >= thresholdText;
+}
+
+function divideDecimalTextFixed(value: string, divisor: number, fractionDigits: number): string {
+  const [wholeRaw, fractionalRaw = ""] = value.split(".");
+  const whole = wholeRaw.replace(/^0+(?=\d)/, "") || "0";
+  const sourceScale = 10n ** BigInt(fractionalRaw.length);
+  const scaledValue = BigInt(`${whole}${fractionalRaw}` || "0");
+  const outputScale = 10n ** BigInt(fractionDigits);
+  const denominator = sourceScale * BigInt(divisor);
+  let scaledOutput = (scaledValue * outputScale) / denominator;
+  const remainder = (scaledValue * outputScale) % denominator;
+  if (remainder * 2n >= denominator) scaledOutput += 1n;
+  return formatScaledUnitsFixed(scaledOutput, fractionDigits);
+}
+
 function compactAmount(amount: string) {
-  const value = Number.parseFloat(amount);
-  if (!Number.isFinite(value)) return amount;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 100_000 ? 0 : 1)}K`;
-  return value.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+  const normalized = normalizeDecimalText(amount);
+  if (normalized === null) return amount;
+  if (isDecimalAtLeast(normalized, 1_000_000)) {
+    return `${divideDecimalTextFixed(normalized, 1_000_000, isDecimalAtLeast(normalized, 10_000_000) ? 0 : 1)}M`;
+  }
+  if (isDecimalAtLeast(normalized, 1_000)) {
+    return `${divideDecimalTextFixed(normalized, 1_000, isDecimalAtLeast(normalized, 100_000) ? 0 : 1)}K`;
+  }
+  return trimFixedDecimalText(formatDecimalTextFixed(normalized, 2) ?? amount);
 }
 
 function WinItem({ w }: { w: RecentWin }) {
   const jackpot = jackpotLabel(w.jackpotKind);
+  const userLabel = shortenAddr(w.user);
   const chipClass = jackpot
     ? "border-amber-300/24 bg-amber-300/8 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_0_16px_rgba(251,191,36,0.08)]"
     : "";
@@ -33,7 +68,7 @@ function WinItem({ w }: { w: RecentWin }) {
   return (
     <span
       className={`chain-feed-chip flex h-[1.45rem] w-[14.75rem] shrink-0 items-center gap-1.5 overflow-hidden rounded-full border px-2 font-sans leading-none ${chipClass}`}
-      title={`Epoch #${w.epoch}, +${w.amount} LINEA, ${w.user}`}
+      title={`Epoch #${w.epoch}, +${w.amount} LINEA, ${userLabel}`}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${jackpot ? "bg-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.65)]" : "bg-emerald-400/85 shadow-[0_0_7px_rgba(52,211,153,0.45)]"}`} />
       <span className="lore-hud max-w-[5.25rem] shrink truncate rounded-full border border-violet-300/10 bg-violet-300/6 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.08em] text-violet-200/80">
@@ -48,7 +83,7 @@ function WinItem({ w }: { w: RecentWin }) {
         +{compactAmount(w.amount)}
       </span>
       <span className="shrink-0 text-[8px] font-black uppercase tracking-[0.08em] text-slate-500">LINEA</span>
-      <span className="hidden w-[4.2rem] shrink-0 font-mono text-[9px] font-semibold text-slate-400 sm:inline">{shortenAddr(w.user)}</span>
+      <span className="hidden w-[4.2rem] shrink-0 font-mono text-[9px] font-semibold text-slate-400 sm:inline">{userLabel}</span>
       {jackpot && (
         <span className="shrink-0 rounded-full border border-amber-300/24 bg-amber-300/12 px-1 py-0.5 text-[7px] font-black uppercase tracking-[0.09em] text-amber-200">
           {jackpot === "Daily + Weekly" ? "D+W" : jackpot}

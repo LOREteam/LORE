@@ -16,7 +16,10 @@ export function getChatPollDelayMs({
     ? (isPageVisible ? CHAT_POLL_INTERVAL_MS : CHAT_HIDDEN_POLL_INTERVAL_MS)
     : (isPageVisible ? CHAT_CLOSED_POLL_INTERVAL_MS : CHAT_HIDDEN_CLOSED_POLL_INTERVAL_MS);
 
-  if (failureCount <= 0) return baseDelay;
-  const multiplier = Math.min(4, 2 ** failureCount);
+  const failures = Number.isSafeInteger(failureCount) && failureCount > 0
+    ? failureCount
+    : 0;
+  if (failures <= 0) return baseDelay;
+  const multiplier = Math.min(4, 2 ** failures);
   return baseDelay * multiplier;
 }

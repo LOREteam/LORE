@@ -5,6 +5,7 @@ import {
   CONTRACT_ADDRESS,
   APP_CHAIN_ID,
 } from "../lib/constants";
+import { readJsonResponse } from "../lib/readJsonResponse";
 import { formatLineaAmountFixed } from "../lib/tokenAmountMath";
 
 const STORAGE_KEY = `lore:global-stats-cache:v4:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
@@ -52,17 +53,25 @@ function parseNonNegativeBigInt(value: unknown): bigint | null {
   }
 }
 
+function parseNonNegativeSafeInteger(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
 export function normalizeGlobalStatsAccumulator(value: unknown): Accumulator | null {
   if (!value || typeof value !== "object") return null;
   const obj = value as Record<string, unknown>;
   const volumeRaw = parseNonNegativeBigInt(obj.volumeRaw);
   const burnRaw = parseNonNegativeBigInt(obj.burnRaw ?? 0);
-  const resolvedEpochs = Number(obj.resolvedEpochs);
-  const lastScannedEpoch = Number(obj.lastScannedEpoch);
+  const resolvedEpochs = parseNonNegativeSafeInteger(obj.resolvedEpochs);
+  const lastScannedEpoch = parseNonNegativeSafeInteger(obj.lastScannedEpoch);
   const lastScannedBlock = String(obj.lastScannedBlock ?? "");
   if (volumeRaw === null || burnRaw === null) return null;
-  if (!Number.isSafeInteger(resolvedEpochs) || resolvedEpochs < 0) return null;
-  if (!Number.isSafeInteger(lastScannedEpoch) || lastScannedEpoch < 0) return null;
+  if (resolvedEpochs === null || lastScannedEpoch === null) return null;
   if (!/^\d+$/.test(lastScannedBlock)) return null;
   return {
     volumeRaw,
@@ -78,15 +87,33 @@ export function getUsableGlobalStatsAccumulator(acc: Accumulator | null, current
   return acc.lastScannedEpoch <= currentEpoch ? acc : null;
 }
 
+function safeCurrentEpochNumber(currentEpoch?: bigint | null): number | null {
+  if (currentEpoch == null) return null;
+  if (currentEpoch < 0n) return null;
+  if (currentEpoch > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(currentEpoch);
+}
+
 function loadCache(): Accumulator | null {
+  if (typeof localStorage === "undefined") return null;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return normalizeGlobalStatsAccumulator(JSON.parse(raw));
-  } catch { return null; }
+    const acc = normalizeGlobalStatsAccumulator(JSON.parse(raw));
+    if (!acc) localStorage.removeItem(STORAGE_KEY);
+    return acc;
+  } catch {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore storage failures
+    }
+    return null;
+  }
 }
 
 function saveCache(acc: Accumulator) {
+  if (typeof localStorage === "undefined") return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       volumeRaw: acc.volumeRaw.toString(),
@@ -118,19 +145,36 @@ export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
     if (initializedRef.current) return;
     initializedRef.current = true;
     const cached = loadCache();
-    if (cached) {
-      accRef.current = cached;
+    const currentEpochNumber = safeCurrentEpochNumber(currentEpoch);
+    const usable = currentEpochNumber === null ? cached : getUsableGlobalStatsAccumulator(cached, currentEpochNumber);
+    if (usable) {
+      accRef.current = usable;
       if (mountedRef.current) {
-        setStats(toStats(cached));
+        setStats(toStats(usable));
       }
     }
-  }, []);
+  }, [currentEpoch]);
+
+  useEffect(() => {
+    const currentEpochNumber = safeCurrentEpochNumber(currentEpoch);
+    if (currentEpochNumber === null) return;
+    if (!accRef.current) return;
+    if (getUsableGlobalStatsAccumulator(accRef.current, currentEpochNumber)) return;
+    accRef.current = null;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore storage failures
+    }
+    if (mountedRef.current) setStats(null);
+  }, [currentEpoch]);
 
   useEffect(() => {
     if (!enabled) return;
     if (currentEpoch == null) return;
     if (lastFetchedEpochRef.current === currentEpoch) return;
-    if (currentEpoch > BigInt(Number.MAX_SAFE_INTEGER)) return;
+    const currentEpochNumber = safeCurrentEpochNumber(currentEpoch);
+    if (currentEpochNumber === null) return;
 
     const controller = new AbortController();
     let timedOut = false;
@@ -142,16 +186,16 @@ export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
     void fetch("/api/global-stats", { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`global stats request failed: ${response.status}`);
-        const payload = await response.json() as Record<string, unknown>;
+        const payload = await readJsonResponse<Record<string, unknown>>(response);
+        if (!payload) throw new Error("global stats response is empty");
         const volumeRaw = parseNonNegativeBigInt(payload.totalVolumeWei);
         const burnRaw = parseNonNegativeBigInt(payload.totalBurnWei);
-        const resolvedEpochs = Number(payload.resolvedEpochs);
+        const resolvedEpochs = parseNonNegativeSafeInteger(payload.resolvedEpochs);
         const lastScannedBlock = String(payload.lastIndexedBlock ?? "");
         if (
           volumeRaw === null ||
           burnRaw === null ||
-          !Number.isSafeInteger(resolvedEpochs) ||
-          resolvedEpochs < 0 ||
+          resolvedEpochs === null ||
           !/^\d+$/.test(lastScannedBlock)
         ) {
           throw new Error("global stats response is invalid");
@@ -161,7 +205,7 @@ export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
           volumeRaw,
           burnRaw,
           resolvedEpochs,
-          lastScannedEpoch: Number(currentEpoch),
+          lastScannedEpoch: currentEpochNumber,
           lastScannedBlock,
         } satisfies Accumulator;
         accRef.current = next;

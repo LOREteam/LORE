@@ -2,6 +2,7 @@
 
 import { formatUnits } from "viem";
 import { GRID_SIZE } from "../lib/constants";
+import { formatLineaAmountFixed, formatLineaWeiDisplayNumber } from "../lib/tokenAmountMath";
 
 export type EpochTuple = readonly [bigint, bigint, bigint, boolean, boolean, boolean];
 type JackpotInfoTuple = readonly [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
@@ -21,8 +22,33 @@ function isBigIntValue(value: unknown): value is bigint {
 
 function formatWeiToNumber(value: unknown): number {
   if (!isBigIntValue(value)) return 0;
-  const parsed = Number(formatUnits(value, 18));
-  return Number.isFinite(parsed) ? parsed : 0;
+  return formatLineaWeiDisplayNumber(value);
+}
+
+function formatWeiToDisplay(value: bigint, fractionDigits = 2) {
+  return formatLineaAmountFixed(value, fractionDigits);
+}
+
+function isPositiveDisplayAmount(value: string) {
+  return !/^0(?:\.0+)?$/.test(value);
+}
+
+function parseGridTileId(value: unknown): number | null {
+  if (!isBigIntValue(value) || value < 1n || value > BigInt(GRID_SIZE)) {
+    return null;
+  }
+  return Number(value);
+}
+
+function parseChainSafeInteger(value: unknown): number | null {
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    return Number(value);
+  }
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  return null;
 }
 
 export function buildJackpotInfo(jackpotInfoRaw: unknown) {
@@ -60,10 +86,7 @@ export function buildRealTotalStaked(tileData: unknown, rolloverPoolRaw: unknown
 export function buildWinningTileId(isRevealing: boolean, gridEpochData: unknown) {
   if (!isRevealing || !gridEpochData) return null;
   const tuple = gridEpochData as EpochTuple;
-  if (tuple[3] && Number(tuple[2]) > 0) {
-    return Number(tuple[2]);
-  }
-  return null;
+  return tuple[3] ? parseGridTileId(tuple[2]) : null;
 }
 
 export function buildCurrentEpochJackpotInfo(gridEpochData: unknown) {
@@ -98,15 +121,14 @@ export function buildTileViewData(tileData: unknown, tileUserCounts: number[], u
     const myBetRaw = userBetsAll?.[i];
     const hasMyBet = myBetRaw !== undefined && myBetRaw > 0n;
     const poolWei = isBigIntValue(poolsArr?.[i]) ? poolsArr[i] : 0n;
-    const poolAmount = formatWeiToNumber(poolWei);
-    const poolDisplay = poolAmount.toFixed(2);
-    const hasDisplayedPool = Number(poolDisplay) > 0;
+    const poolDisplay = formatWeiToDisplay(poolWei, 2);
+    const hasDisplayedPool = isPositiveDisplayAmount(poolDisplay);
     const indexedUsers = tileUserCounts[i] ?? 0;
-    const liveUsers = Number(liveUsersArr?.[i] ?? 0n);
+    const liveUsers = parseChainSafeInteger(liveUsersArr?.[i]) ?? 0;
     const users = hasDisplayedPool
       ? Math.max(
           indexedUsers,
-          Number.isFinite(liveUsers) ? liveUsers : 0,
+          liveUsers,
           hasMyBet ? 1 : 0,
           1,
         )
@@ -177,12 +199,12 @@ export function buildEpochDurationChange(
   pendingEpochDurationEta: unknown,
   pendingEpochDurationEffectiveFromEpoch: unknown,
 ) {
-  const next = pendingEpochDuration ? Number(pendingEpochDuration) : 0;
-  if (!next) return null;
+  const next = parseChainSafeInteger(pendingEpochDuration);
+  if (next === null || next <= 0) return null;
   return {
-    current: epochDurationSec ? Number(epochDurationSec) : null,
+    current: parseChainSafeInteger(epochDurationSec),
     next,
-    eta: pendingEpochDurationEta ? Number(pendingEpochDurationEta) : null,
+    eta: parseChainSafeInteger(pendingEpochDurationEta),
     effectiveFromEpoch: pendingEpochDurationEffectiveFromEpoch
       ? (pendingEpochDurationEffectiveFromEpoch as bigint).toString()
       : null,

@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { getAddress } from "viem";
 import type { SoundName } from "../../hooks/useSound";
 import { SOUND_LABELS } from "../../hooks/useSound";
 import { shortenAddress } from "../../lib/utils";
@@ -40,19 +41,42 @@ export function WalletSettingsOverviewPanel({
   reducedMotion,
   onReducedMotionChange,
 }: WalletSettingsOverviewPanelProps) {
-  const normalizedConnectedWallet = connectedWalletAddress?.toLowerCase() ?? null;
-  const normalizedEmbeddedWallet = embeddedWalletAddress?.toLowerCase() ?? null;
+  const normalizeWalletAddress = (address: string | null | undefined) => {
+    if (!address) return null;
+    try {
+      return getAddress(address).toLowerCase();
+    } catch {
+      return null;
+    }
+  };
+  const normalizedConnectedWallet = normalizeWalletAddress(connectedWalletAddress);
+  const normalizedEmbeddedWallet = normalizeWalletAddress(embeddedWalletAddress);
   const animationEnabled = !reducedMotion;
   const showConnectedResolverRow = Boolean(connectedWalletAddress);
   const showEmbeddedResolverRow =
     Boolean(embeddedWalletAddress) &&
     normalizedEmbeddedWallet !== null &&
     normalizedEmbeddedWallet !== normalizedConnectedWallet;
+  const connectedResolverClaimLabel = isClaimingConnectedResolverRewards
+    ? "Claiming connected wallet resolver rewards"
+    : connectedResolverRewardsWei <= 0n
+      ? "No connected wallet resolver rewards to claim"
+      : `Claim ${connectedResolverRewards} LINEA resolver rewards from connected wallet`;
+  const embeddedResolverClaimLabel = isClaimingEmbeddedResolverRewards
+    ? "Claiming Privy wallet resolver rewards"
+    : embeddedResolverRewardsWei <= 0n
+      ? "No Privy wallet resolver rewards to claim"
+      : `Claim ${embeddedResolverRewards} LINEA resolver rewards from Privy wallet`;
 
   return (
     <>
       {(showConnectedResolverRow || showEmbeddedResolverRow) && (
         <UiPanel tone="subtle" padding="sm" className="animate-slide-up" style={{ animationDelay: "0.01s" }}>
+          {(isClaimingConnectedResolverRewards || isClaimingEmbeddedResolverRewards) && (
+            <span className="sr-only" role="status" aria-live="polite">
+              {isClaimingConnectedResolverRewards ? connectedResolverClaimLabel : embeddedResolverClaimLabel}
+            </span>
+          )}
           <div className="flex items-baseline justify-between gap-2 mb-1.5">
             <span className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider">Resolver Rewards</span>
             <span className="text-[8px] text-gray-400">claimable LINEA</span>
@@ -77,6 +101,8 @@ export function WalletSettingsOverviewPanel({
                     uppercase
                     loading={isClaimingConnectedResolverRewards}
                     disabled={connectedResolverRewardsWei <= 0n}
+                    aria-label={connectedResolverClaimLabel}
+                    title={connectedResolverClaimLabel}
                     onClick={onClaimConnectedResolverRewards}
                   >
                     Claim Connected
@@ -104,6 +130,8 @@ export function WalletSettingsOverviewPanel({
                     uppercase
                     loading={isClaimingEmbeddedResolverRewards}
                     disabled={embeddedResolverRewardsWei <= 0n}
+                    aria-label={embeddedResolverClaimLabel}
+                    title={embeddedResolverClaimLabel}
                     onClick={onClaimEmbeddedResolverRewards}
                   >
                     Claim Privy
@@ -153,6 +181,7 @@ export function WalletSettingsOverviewPanel({
               type="button"
               role="switch"
               aria-checked={animationEnabled}
+              aria-label={animationEnabled ? "Disable animation effects" : "Enable animation effects"}
               onClick={() => onReducedMotionChange(animationEnabled)}
               className={`mt-0.5 flex h-6 w-11 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
                 animationEnabled

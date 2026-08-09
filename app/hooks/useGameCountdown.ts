@@ -17,6 +17,14 @@ interface UseGameCountdownOptions {
   setPollPhase: (value: PollPhase) => void;
 }
 
+const MAX_SAFE_EPOCH_END_SECONDS = BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1000));
+
+export function normalizeEpochEndMs(epochEndTime?: bigint): number | null {
+  if (!epochEndTime || epochEndTime < 0n || epochEndTime > MAX_SAFE_EPOCH_END_SECONDS) return null;
+  const endMs = Number(epochEndTime) * 1000;
+  return Number.isSafeInteger(endMs) ? endMs : null;
+}
+
 export function useGameCountdown({
   effectiveEpochEndTime,
   liveStateReady,
@@ -62,7 +70,13 @@ export function useGameCountdown({
     }
 
     const updateTimeLeft = () => {
-      const endMs = Number(effectiveEpochEndTime) * 1000;
+      const endMs = normalizeEpochEndMs(effectiveEpochEndTime);
+      if (endMs === null) {
+        timeLeftRef.current = 0;
+        setTimeLeft(0);
+        setPollPhase("slow");
+        return;
+      }
       const now = Date.now();
       const nextTimeLeft = endMs > now ? Math.floor((endMs - now) / 1000) : 0;
       const previousTimeLeft = timeLeftRef.current;

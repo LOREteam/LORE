@@ -6,6 +6,7 @@ import { GRID_SIZE } from "../lib/constants";
 import { processingQuotes } from "../lib/loreTexts";
 import { useAutoMinerForm } from "../hooks/useAutoMinerForm";
 import type { ManualBetFormState } from "../hooks/useManualBetForm";
+import { formatDecimalTextFixed } from "../lib/balanceFormatting";
 import { LoreText } from "./LoreText";
 import { cn } from "../lib/cn";
 import { UiButton } from "./ui/UiButton";
@@ -15,10 +16,15 @@ import { uiTokens } from "./ui/tokens";
 
 const PANEL_TITLE_BAR = "bet-panel-titlebar mb-2 flex items-center gap-2 border-b border-white/6 pb-2";
 const PANEL_TITLE = "text-[11px] font-black uppercase tracking-[0.08em] text-white";
-const FIELD_LABEL = "mb-1 block px-0.5 text-[8px] font-black uppercase tracking-[0.08em] text-slate-500";
+const FIELD_LABEL = "mb-1 block px-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-slate-500";
 const ACTION_BUTTON_CLASS = "h-11 text-[11px] font-black";
 const QUICK_BUTTON_CLASS =
   "console-chip h-11 rounded-lg border px-2 text-[9px] font-black uppercase tracking-[0.08em] transition-all duration-200 hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-40";
+
+function formatPanelNumber(value: number | null | undefined, fractionDigits: number, fallback: string) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return formatDecimalTextFixed(String(value), fractionDigits) ?? fallback;
+}
 
 function getAutoMinePhaseMeta(phase: AutoMinePhase) {
   switch (phase) {
@@ -103,10 +109,10 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   const {
     betAmount,
     setBetAmount,
-    totalBet,
+    totalBetDisplay,
     betAmountError,
-    balance,
-    lineaDeficit,
+    balanceDisplay,
+    lineaDeficitDisplay,
     manualInsufficient,
     disabledReason,
     isDisabled,
@@ -125,6 +131,17 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     : readOnlyReason || isDisabled
       ? "locked"
       : "primary";
+  const manualButtonDescriptionId = readOnlyReason
+    ? "manual-bet-readonly-reason"
+    : manualInsufficient
+      ? "manual-bet-insufficient-reason"
+      : betAmountError
+        ? "bet-amount-per-tile-error"
+        : manualStatusText
+          ? "manual-bet-status"
+          : disabledReason && !isPending
+            ? "manual-bet-disabled-reason"
+            : undefined;
   const handleQuickPick = React.useCallback(
     (count: number) => {
       const tiles = Array.from({ length: GRID_SIZE }, (_, index) => index + 1);
@@ -197,22 +214,22 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
           manualInsufficient ? "border-red-500/30 bg-red-500/8" : "border-emerald-300/12"
         }`}
       >
-        <span className="text-[8px] font-black uppercase tracking-[0.08em] text-slate-500">{selectedTilesCount} selected</span>
+        <span className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500">{selectedTilesCount} selected</span>
         <span className={`lore-nums text-xs font-black ${manualInsufficient ? "text-red-400" : "text-violet-300"}`}>
-          {totalBet.toFixed(2)} LINEA
+          {totalBetDisplay} LINEA
         </span>
       </div>
 
       {manualStatusText && (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-violet-500/8 border border-violet-500/20 mb-1.5">
-          <span className="text-[8px] font-bold text-violet-300/80 uppercase tracking-wide">
+        <div id="manual-bet-status" className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-violet-500/8 border border-violet-500/20 mb-1.5">
+          <span className="text-[10px] font-bold text-violet-300/80 uppercase tracking-wide">
             {manualStatusText}
           </span>
         </div>
       )}
 
       {selectedTilesCount > 0 && walletConnected && (
-        <div className="mb-1.5 flex min-h-6 items-center justify-between px-1 text-[8px] font-bold uppercase tracking-[0.08em] text-slate-500">
+        <div className="mb-1.5 flex min-h-6 items-center justify-between px-1 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
           <span>Bet network fee</span>
           <span className="lore-nums text-sky-200">
             {feeEstimate ? `~${feeEstimate} ETH` : feeEstimateUnavailable ? "Unavailable" : "Calculating..."}
@@ -221,22 +238,22 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
       )}
 
       {readOnlyReason && (
-        <div className="mb-1.5 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2 py-1.5">
-          <span className="text-[8px] font-bold uppercase tracking-wide text-amber-300">
+        <div id="manual-bet-readonly-reason" className="mb-1.5 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2 py-1.5">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-amber-300">
             {readOnlyReason}
           </span>
         </div>
       )}
 
       {manualInsufficient && (
-        <div className="flex items-start gap-1.5 px-2 py-1.5 rounded-lg bg-red-500/10 border border-red-500/25 mb-1.5">
+        <div id="manual-bet-insufficient-reason" className="flex items-start gap-1.5 px-2 py-1.5 rounded-lg bg-red-500/10 border border-red-500/25 mb-1.5">
           <svg className="w-3 h-3 text-red-400 shrink-0 mt-px" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
           </svg>
           <div className="min-w-0">
-            <span className="block text-[9px] font-bold text-red-300">Insufficient LINEA</span>
-            <span className="lore-nums mt-0.5 block text-[8px] leading-tight text-red-300/80">
-              Need {totalBet.toFixed(2)}, have {(balance ?? 0).toFixed(2)}; top up {lineaDeficit.toFixed(2)} LINEA
+            <span className="block text-[10px] font-bold text-red-300">Insufficient LINEA</span>
+            <span className="lore-nums mt-0.5 block text-[10px] leading-tight text-red-300/80">
+              Need {totalBetDisplay}, have {balanceDisplay}; top up {lineaDeficitDisplay} LINEA
             </span>
           </div>
         </div>
@@ -271,7 +288,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
 
       <UiButton
         data-testid="manual-bet-action"
-        aria-describedby={disabledReason && !isPending ? "manual-bet-disabled-reason" : undefined}
+        aria-describedby={manualButtonDescriptionId}
         onClick={() => onMine(betAmount)}
         disabled={Boolean(readOnlyReason) || isDisabled}
         variant={actionVariant}
@@ -302,13 +319,13 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
       </UiButton>
 
       {disabledReason && !isPending && !readOnlyReason && !manualInsufficient && !betAmountError && !manualStatusText && (
-        <p id="manual-bet-disabled-reason" className="mt-1.5 text-center text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+        <p id="manual-bet-disabled-reason" className="mt-1.5 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500">
           {disabledReason}
         </p>
       )}
 
       {!isPending && !isRevealing && (
-        <p className="mt-2 text-center text-[8px] leading-relaxed text-slate-500">
+        <p className="mt-2 text-center text-[10px] leading-relaxed text-slate-500">
           {feeEstimate ? "Estimate covers the bet; a first approval may cost extra" : "Keep ETH for gas and LINEA for the stake in the Privy wallet"}
         </p>
       )}
@@ -392,6 +409,13 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   const compactProgressTotal = compactProgressMatch ? Number(compactProgressMatch[2]) : null;
   const compactProgressDetail = compactProgressMatch ? compactProgressMatch[3] : phaseProgressText;
   const buttonDisabled = requiresLogin || isDisabled || autoMinePhase === "retry-wait" || autoMinePhase === "session-expired";
+  const lineaDeficit = insufficientBalance && balance !== null ? Math.max(0, totalCost - balance) : 0;
+  const displayCycleCount = Math.max(1, Number(displayCycles) || 1);
+  const totalCostDisplay = formatPanelNumber(totalCost, 2, "0.00");
+  const totalCostWholeDisplay = formatPanelNumber(totalCost, 0, "0");
+  const costPerRoundDisplay = formatPanelNumber(totalCost / displayCycleCount, 2, "0.00");
+  const balanceDisplay = formatPanelNumber(balance, 2, "0.00");
+  const lineaDeficitDisplay = formatPanelNumber(lineaDeficit, 2, "0.00");
   const buttonLabel = isAutoMining
     ? "STOP BOT"
     : readOnlyReason
@@ -449,7 +473,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
                 </span>
               </div>
               <span className="lore-nums inline-flex h-6 shrink-0 items-center text-xs font-black tabular-nums leading-none text-sky-300">
-                {totalCost.toFixed(0)} <span className="ml-1 text-slate-500">LINEA</span>
+                {totalCostWholeDisplay} <span className="ml-1 text-slate-500">LINEA</span>
               </span>
             </div>
           </div>
@@ -508,13 +532,13 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
             }`}
           >
             <div>
-              <div className="text-[8px] font-black uppercase tracking-[0.08em] text-slate-500">Total reserved</div>
-              <div className="lore-nums text-[8px] text-slate-500">
-                {(totalCost / Math.max(1, Number(displayCycles) || 1)).toFixed(2)} LINEA / round
+              <div className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500">Total reserved</div>
+              <div className="lore-nums text-[10px] text-slate-500">
+                {costPerRoundDisplay} LINEA / round
               </div>
             </div>
             <span className={`lore-nums text-xs font-black ${insufficientBalance ? "text-red-400" : "text-sky-300"}`}>
-              {totalCost.toFixed(2)} LINEA
+              {totalCostDisplay} LINEA
             </span>
           </div>
 
@@ -527,8 +551,8 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
                   clipRule="evenodd"
                 />
               </svg>
-              <span className="lore-nums text-[8px] font-bold text-red-400 leading-tight">
-                Need {totalCost.toFixed(2)}, have {balance?.toFixed(2)} LINEA
+              <span className="lore-nums text-[10px] font-bold text-red-400 leading-tight">
+                Need {totalCostDisplay}, have {balanceDisplay}; top up {lineaDeficitDisplay} LINEA
               </span>
             </div>
           )}
@@ -576,7 +600,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
           className={`mb-2 border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 ${uiTokens.radius.sm}`}
         >
           <div className="min-w-0">
-            <span className="text-[9px] font-bold uppercase tracking-wider text-amber-400">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400">
               {autoMinerStatusText}
             </span>
           </div>
@@ -585,6 +609,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
 
       <UiButton
         data-testid="auto-miner-action"
+        aria-describedby={buttonDisabled && disabledReason && !isAutoMining ? "auto-miner-disabled-reason" : undefined}
         onClick={() => onToggle(betSize, targets, cycles)}
         disabled={buttonDisabled}
         variant={autoButtonVariant}
@@ -597,7 +622,7 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
       </UiButton>
 
       {buttonDisabled && disabledReason && !isAutoMining && (
-        <p className="mt-1.5 text-center text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+        <p id="auto-miner-disabled-reason" className="mt-1.5 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500">
           {disabledReason}
         </p>
       )}

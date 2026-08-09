@@ -1,3 +1,5 @@
+import { formatRetryWaitSeconds } from "./networkRetry";
+
 export type AutoMineLoopStopReason =
   | "unknown"
   | "user-stopped"
@@ -40,7 +42,7 @@ export type AutoMineLoopEvent =
   | { type: "network-error"; retryCount: number; waitMs: number }
   | { type: "stop-user" }
   | { type: "stop-no-client" }
-  | { type: "stop-insufficient-balance"; neededAmount: number; currentAmount: number }
+  | { type: "stop-insufficient-balance"; neededAmount: string; currentAmount: string }
   | { type: "loop-completed" };
 
 export function createAutoMineLoopState(params: {
@@ -145,7 +147,7 @@ export function reduceAutoMineLoopEvent(
       return {
         ...state,
         networkRetries: event.retryCount,
-        progressMessage: `RPC offline - retry ${event.retryCount} in ${(event.waitMs / 1000).toFixed(0)}s...`,
+        progressMessage: `RPC offline - retry ${event.retryCount} in ${formatRetryWaitSeconds(event.waitMs)}s...`,
         sessionCheckpoint: null,
       };
 
@@ -167,7 +169,7 @@ export function reduceAutoMineLoopEvent(
       return {
         ...state,
         stopReason: "insufficient-balance",
-        progressMessage: `Stopped: need ${event.neededAmount.toFixed(1)} LINEA, have ${event.currentAmount.toFixed(1)} LINEA`,
+        progressMessage: `Stopped: need ${event.neededAmount} LINEA, have ${event.currentAmount} LINEA`,
         sessionCheckpoint: null,
       };
 

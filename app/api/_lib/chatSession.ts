@@ -1,9 +1,13 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { CHAT_AUTH_SESSION_TTL_MS } from "../../lib/chatAuth";
+import { CHAT_AUTH_SESSION_TTL_MS, normalizeChatAuthAddress } from "../../lib/chatAuth";
 
 const COOKIE_NAME = "lore_chat_session";
+const SESSION_COOKIE_MAX_LENGTH = 1024;
+const SESSION_COOKIE_PART_RE = /^[A-Za-z0-9_-]+$/;
+const SESSION_MAX_FUTURE_SKEW_MS = 60_000;
 let missingSecretWarningShown = false;
+let developmentSessionSecret: string | null = null;
 
 function getSessionSecret() {
   const configured =
@@ -17,12 +21,11 @@ function getSessionSecret() {
 
   if (!missingSecretWarningShown) {
     missingSecretWarningShown = true;
-    console.warn("[chat-session] Using a deterministic development fallback secret. Set CHAT_AUTH_SECRET to match production behavior.");
+    console.warn("[chat-session] Using an ephemeral development fallback secret. Set CHAT_AUTH_SECRET to match production behavior.");
   }
 
-  return createHash("sha256")
-    .update(`dev-chat-session:${process.cwd()}`)
-    .digest("hex");
+  developmentSessionSecret ??= randomBytes(32).toString("hex");
+  return developmentSessionSecret;
 }
 
 type SessionPayload = {
@@ -54,19 +57,41 @@ function serialize(payload: SessionPayload) {
   return `${encoded}.${sign(encoded)}`;
 }
 
+function parseSessionCookie(raw: string): [encoded: string, signature: string] | null {
+  if (raw.length > SESSION_COOKIE_MAX_LENGTH) return null;
+  const dotIndex = raw.indexOf(".");
+  if (dotIndex <= 0 || raw.indexOf(".", dotIndex + 1) !== -1) return null;
+  const encoded = raw.slice(0, dotIndex);
+  const signature = raw.slice(dotIndex + 1);
+  if (!SESSION_COOKIE_PART_RE.test(encoded) || !SESSION_COOKIE_PART_RE.test(signature)) return null;
+  return [encoded, signature];
+}
+
+export function normalizeChatSessionExpiresAt(value: unknown, now = Date.now()) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) return null;
+  if (typeof now !== "number" || !Number.isSafeInteger(now) || now < 0) return null;
+  if (value <= now) return null;
+  if (value - now > CHAT_AUTH_SESSION_TTL_MS + SESSION_MAX_FUTURE_SKEW_MS) return null;
+  return value;
+}
+
 function parse(raw: string): SessionPayload | null {
-  const [encoded, signature] = raw.split(".", 2);
-  if (!encoded || !signature) return null;
+  const cookie = parseSessionCookie(raw);
+  if (!cookie) return null;
+  const [encoded, signature] = cookie;
   const expected = sign(encoded);
   if (!safeEqual(signature, expected)) return null;
 
   try {
     const parsed = JSON.parse(fromBase64Url(encoded)) as Partial<SessionPayload>;
     if (!parsed.address || typeof parsed.address !== "string") return null;
-    if (!parsed.expiresAt || typeof parsed.expiresAt !== "number") return null;
+    const expiresAt = normalizeChatSessionExpiresAt(parsed.expiresAt);
+    if (expiresAt === null) return null;
+    const address = normalizeChatAuthAddress(parsed.address);
+    if (!address) return null;
     return {
-      address: parsed.address.toLowerCase(),
-      expiresAt: parsed.expiresAt,
+      address,
+      expiresAt,
     };
   } catch {
     return null;
@@ -75,7 +100,9 @@ function parse(raw: string): SessionPayload | null {
 
 export function issueChatSession(response: NextResponse, address: string) {
   const expiresAt = Date.now() + CHAT_AUTH_SESSION_TTL_MS;
-  const token = serialize({ address: address.toLowerCase(), expiresAt });
+  const normalizedAddress = normalizeChatAuthAddress(address);
+  if (!normalizedAddress) throw new Error("Cannot issue chat session for an invalid wallet address.");
+  const token = serialize({ address: normalizedAddress, expiresAt });
   response.cookies.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",

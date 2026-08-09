@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useAutoResolve } from "./useAutoResolve";
 import type { PublicClient } from "viem";
 import type { SoundName } from "./useSound";
+import { GRID_SIZE } from "../lib/constants";
 
 type HotTile = { tileId: number; wins: number };
 
@@ -15,8 +16,6 @@ interface HistoryRow {
 interface UsePageRuntimeEffectsOptions {
   actualCurrentEpoch: bigint | null | undefined;
   currentEpochResolved: boolean | undefined;
-  embeddedEthBalanceFormatted: string | null | undefined;
-  embeddedWalletAddress?: string | null;
   handleTileClick: (id: number, isRevealing: boolean) => void;
   historyViewData: HistoryRow[];
   isAnalyzing: boolean;
@@ -28,28 +27,21 @@ interface UsePageRuntimeEffectsOptions {
   refetchGridEpochData?: () => void;
   refetchTileData: () => void;
   refetchUserBets: () => void;
-  sendTransactionSilent?: (
-    tx: {
-      to: `0x${string}`;
-      data?: `0x${string}`;
-      value?: bigint;
-      gas?: bigint;
-      nonce?: number;
-      feeMode?: "normal" | "keeper";
-    },
-    gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint },
-  ) => Promise<`0x${string}`>;
   syncHotTiles: (tiles: HotTile[]) => void;
   timeLeft: number;
   winningTileId: number | null;
   hasMyWinningBet: boolean;
 }
 
+function parseHistoryWinningTile(value: string) {
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const tile = Number(value);
+  return Number.isSafeInteger(tile) && tile >= 1 && tile <= GRID_SIZE ? tile : null;
+}
+
 export function usePageRuntimeEffects({
   actualCurrentEpoch,
   currentEpochResolved,
-  embeddedEthBalanceFormatted,
-  embeddedWalletAddress,
   handleTileClick,
   historyViewData,
   isRevealing,
@@ -60,7 +52,6 @@ export function usePageRuntimeEffects({
   refetchGridEpochData,
   refetchTileData,
   refetchUserBets,
-  sendTransactionSilent,
   syncHotTiles,
   timeLeft,
   winningTileId,
@@ -70,8 +61,8 @@ export function usePageRuntimeEffects({
     const counts: Record<number, number> = {};
     for (const round of historyViewData) {
       if (!round.isResolved) continue;
-      const tile = Number(round.winningTile);
-      if (tile > 0) counts[tile] = (counts[tile] || 0) + 1;
+      const tile = parseHistoryWinningTile(round.winningTile);
+      if (tile !== null) counts[tile] = (counts[tile] || 0) + 1;
     }
     return Object.entries(counts)
       .map(([tileId, wins]) => ({ tileId: Number(tileId), wins }))
@@ -85,12 +76,9 @@ export function usePageRuntimeEffects({
 
   useAutoResolve({
     publicClient,
-    sendTransactionSilent,
-    embeddedWalletAddress: embeddedWalletAddress ?? null,
     actualCurrentEpoch: liveStateReady ? actualCurrentEpoch : undefined,
     currentEpochResolved: liveStateReady ? currentEpochResolved : undefined,
     timeLeft: liveStateReady ? timeLeft : 1,
-    embeddedEthBalanceFormatted: embeddedEthBalanceFormatted ?? null,
     refetchEpoch: refetchEpoch ?? (() => {}),
     refetchGridEpochData: refetchGridEpochData ?? (() => {}),
     refetchTileData,

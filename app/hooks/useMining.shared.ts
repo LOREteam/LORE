@@ -1,7 +1,8 @@
 "use client";
 
-import type { PublicClient } from "viem";
+import { getAddress, type PublicClient } from "viem";
 import {
+  APP_CHAIN_NAME,
   APP_CHAIN_ID,
   CONTRACT_ADDRESS,
   GAME_ABI,
@@ -11,6 +12,8 @@ import { validateBetAmount } from "../lib/utils";
 
 export interface PersistedAutoMinerSession {
   active: boolean;
+  runId: string | null;
+  actor: `0x${string}`;
   betStr: string;
   blocks: number;
   rounds: number;
@@ -24,13 +27,17 @@ export interface PersistedTabLock {
   tx?: string;
 }
 
-export const AUTO_MINER_STORAGE_KEY = `lineaore:auto-miner-session:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+export const AUTO_MINER_STORAGE_KEY = `lineaore:auto-miner-session:v3:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 export const AUTO_MINER_SESSION_EVENT = `lineaore:auto-mine-session-change:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 export const TAB_LOCK_KEY = `lore:auto-mine-tab-lock:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+export const MAX_AUTO_MINER_CYCLES = 5000;
 export const TAB_LOCK_TTL_MS = 90_000;
 export const TAB_LOCK_PING_TIMEOUT_MS = 700;
 const TAB_LOCK_MAX_FUTURE_SKEW_MS = 5_000;
+const TAB_LOCK_TX_TOKEN_RE = /^[a-zA-Z0-9:._-]{1,96}$/;
 export const SESSION_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
+const AUTO_MINER_RUN_ID_RE = /^[a-zA-Z0-9:_-]{1,120}$/;
+const AUTO_MINER_EPOCH_RE = /^(?:0|[1-9]\d{0,77})$/;
 
 function dispatchAutoMinerSessionEvent() {
   if (typeof window === "undefined") return;
@@ -105,7 +112,12 @@ export function isEpochEndedError(err: unknown): boolean {
   const msg = flattenErrorMessage(err);
   // V9: also treat the last-2-second EpochClosing() reject as "epoch ended"
   // for UX purposes — the bet missed the window and the next epoch is imminent.
-  return msg.includes("epoch ended") || msg.includes("epochended") || msg.includes("epochclosing");
+  return (
+    msg.includes("epoch ended") ||
+    msg.includes("epochended") ||
+    msg.includes("epochclosing") ||
+    msg.includes("unexpectedepoch")
+  );
 }
 
 export function flattenErrorMessage(err: unknown): string {
@@ -268,12 +280,18 @@ export function firstErrorLine(err: unknown): string {
 }
 
 const MINING_RPC_TIMEOUT_MS = 25_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export function withMiningRpcTimeout<T>(
   promise: Promise<T>,
   label: string,
   timeoutMs: number = MINING_RPC_TIMEOUT_MS,
 ): Promise<T> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
+    promise.catch(() => {});
+    return Promise.reject(new RangeError(`${label} timeout must be between 1 and 2147483647 milliseconds`));
+  }
+
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let raceSettled = false;
   const timeoutPromise = new Promise<T>((_, reject) => {
@@ -312,8 +330,10 @@ export function isAmbiguousPendingTxError(err: unknown): boolean {
   const msg = flattenErrorMessage(err);
   const name = err instanceof Error ? err.name : "";
   return (
+    name === "WalletSendTimeoutError" ||
     name === "TransactionReceiptTimeoutError" ||
     name === "TransactionReceiptNotFoundError" ||
+    msg.includes("privy sendtransaction timed out") ||
     msg.includes("transaction receipt could not be found") ||
     msg.includes("receipt could not be found") ||
     msg.includes("replacement transaction underpriced") ||
@@ -337,6 +357,18 @@ export function isAllowanceError(err: unknown): boolean {
   );
 }
 
+export function isWrongNetworkError(err: unknown): boolean {
+  const msg = flattenErrorMessage(err);
+  return (
+    msg.includes("wrong network") ||
+    msg.includes("unsupported chain") ||
+    msg.includes("chain mismatch") ||
+    msg.includes("chain id mismatch") ||
+    msg.includes("connector chain") ||
+    msg.includes("switch chain")
+  );
+}
+
 export function getBetErrorMessage(err: unknown): string {
   if (isInsufficientFundsError(err)) {
     return "Bet failed: not enough ETH for gas on Privy wallet.";
@@ -349,6 +381,9 @@ export function getBetErrorMessage(err: unknown): string {
   }
   if (isWalletUnavailableError(err)) {
     return "Bet failed: Privy wallet is not ready. Reconnect and retry.";
+  }
+  if (isWrongNetworkError(err)) {
+    return `Bet failed: wallet is on the wrong network. Switch to ${APP_CHAIN_NAME} and retry.`;
   }
   if (isNetworkError(err)) {
     return "Bet failed: RPC unavailable. Check your connection and try again.";
@@ -363,6 +398,9 @@ export function getBetErrorMessage(err: unknown): string {
   if (lower.includes("token() getter is required")) {
     return "Betting is unavailable: the game contract token could not be verified.";
   }
+  if (lower.includes("missing required epoch-bound betting support")) {
+    return "Betting is unavailable: configured contract does not support protected V10 bets.";
+  }
   if (lower.includes("erc20insufficientallowance") || lower.includes("0xfb8f41b2")) {
     return "Bet failed: token approve is still pending or too low. Wait for approve confirmation, then retry.";
   }
@@ -372,7 +410,7 @@ export function getBetErrorMessage(err: unknown): string {
   if (lower.includes("transfer amount exceeds balance") || lower.includes("amount exceeds balance")) {
     return "Bet failed: not enough LINEA token balance.";
   }
-  if (lower.includes("epoch ended") || lower.includes("epochclosing")) {
+  if (lower.includes("epoch ended") || lower.includes("epochclosing") || lower.includes("unexpectedepoch")) {
     return "Bet failed: epoch already ended. Try again.";
   }
   if (lower.includes("reverted")) {
@@ -399,6 +437,8 @@ export function isDeterministicBetExecutionError(err: unknown): boolean {
     msg.includes("the contract function") ||
     msg.includes("epochclosing") ||
     msg.includes("epochended") ||
+    msg.includes("unexpectedepoch") ||
+    msg.includes("missing required epoch-bound betting support") ||
     msg.includes("erc20insufficientallowance") ||
     msg.includes("insufficient allowance") ||
     msg.includes("emptyarray") ||
@@ -413,6 +453,8 @@ export function sanitizePersistedAutoMinerSession(value: unknown): PersistedAuto
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
   const active = raw.active;
+  const runId = raw.runId;
+  const actor = typeof raw.actor === "string" ? raw.actor : null;
   const betStr = raw.betStr;
   const blocks = raw.blocks;
   const rounds = raw.rounds;
@@ -420,23 +462,35 @@ export function sanitizePersistedAutoMinerSession(value: unknown): PersistedAuto
   const lastPlacedEpoch = raw.lastPlacedEpoch;
 
   if (typeof active !== "boolean") return null;
+  if (runId !== undefined && runId !== null && (typeof runId !== "string" || !AUTO_MINER_RUN_ID_RE.test(runId))) {
+    return null;
+  }
+  if (!actor) return null;
+  let normalizedActor: `0x${string}`;
+  try {
+    normalizedActor = getAddress(actor);
+  } catch {
+    return null;
+  }
   if (typeof betStr !== "string" || validateBetAmount(betStr) !== null) return null;
-  if (typeof blocks !== "number" || !Number.isInteger(blocks) || blocks < 1 || blocks > GRID_SIZE) return null;
-  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) return null;
+  if (typeof blocks !== "number" || !Number.isSafeInteger(blocks) || blocks < 1 || blocks > GRID_SIZE) return null;
+  if (typeof rounds !== "number" || !Number.isSafeInteger(rounds) || rounds < 1 || rounds > MAX_AUTO_MINER_CYCLES) return null;
   if (
     typeof nextRoundIndex !== "number" ||
-    !Number.isInteger(nextRoundIndex) ||
+    !Number.isSafeInteger(nextRoundIndex) ||
     nextRoundIndex < 0 ||
     nextRoundIndex > rounds
   ) {
     return null;
   }
   if (lastPlacedEpoch !== null && lastPlacedEpoch !== undefined) {
-    if (typeof lastPlacedEpoch !== "string" || !/^\d+$/.test(lastPlacedEpoch)) return null;
+    if (typeof lastPlacedEpoch !== "string" || !AUTO_MINER_EPOCH_RE.test(lastPlacedEpoch)) return null;
   }
 
   return {
     active,
+    runId: runId ?? null,
+    actor: normalizedActor,
     betStr,
     blocks,
     rounds,
@@ -450,8 +504,11 @@ export function readSession(): PersistedAutoMinerSession | null {
   try {
     const raw = window.localStorage.getItem(AUTO_MINER_STORAGE_KEY);
     if (!raw) return null;
-    return sanitizePersistedAutoMinerSession(JSON.parse(raw));
+    const session = sanitizePersistedAutoMinerSession(JSON.parse(raw));
+    if (!session) clearSession();
+    return session;
   } catch {
+    clearSession();
     return null;
   }
 }
@@ -463,12 +520,21 @@ export function sanitizeTabLock(value: unknown, now = Date.now()): PersistedTabL
   const ts = raw.ts;
   const tx = raw.tx;
   if (!id) return null;
-  if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) return null;
+  if (
+    typeof ts !== "number" ||
+    !Number.isSafeInteger(ts) ||
+    ts <= 0 ||
+    !Number.isSafeInteger(now) ||
+    now < 0
+  ) {
+    return null;
+  }
   if (ts - now > TAB_LOCK_MAX_FUTURE_SKEW_MS) return null;
+  const cleanTx = typeof tx === "string" ? tx.trim() : "";
   return {
     id,
     ts,
-    ...(typeof tx === "string" && tx ? { tx } : {}),
+    ...(TAB_LOCK_TX_TOKEN_RE.test(cleanTx) ? { tx: cleanTx } : {}),
   };
 }
 
@@ -511,6 +577,13 @@ export function createTabId(): string {
   return `tab-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function isValidStableTabId(value: string | null): value is string {
+  return typeof value === "string" && (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) ||
+    /^tab-\d{10,16}-[0-9a-f]{4,32}$/i.test(value)
+  );
+}
+
 export function getStableTabId(): string {
   if (typeof window === "undefined") {
     return createTabId();
@@ -519,7 +592,8 @@ export function getStableTabId(): string {
   try {
     const storageKey = `lore:auto-mine-tab-id:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
     const existing = window.sessionStorage.getItem(storageKey);
-    if (existing) return existing;
+    if (isValidStableTabId(existing)) return existing;
+    if (existing !== null) window.sessionStorage.removeItem(storageKey);
 
     const created = createTabId();
     window.sessionStorage.setItem(storageKey, created);
@@ -530,11 +604,18 @@ export function getStableTabId(): string {
 }
 
 export function getSecureRandomNumber(max: number): number {
-  if (max <= 0) return 0;
+  const bound = Math.floor(max);
+  if (!Number.isFinite(bound) || bound <= 0) return 0;
   if (typeof crypto === "undefined" || typeof crypto.getRandomValues !== "function") {
-    return Math.floor(Math.random() * max);
+    return Math.floor(Math.random() * bound);
   }
+  if (bound > 0x1_0000_0000) {
+    return Math.floor(Math.random() * bound);
+  }
+  const limit = Math.floor(0x1_0000_0000 / bound) * bound;
   const array = new Uint32Array(1);
-  crypto.getRandomValues(array);
-  return array[0] % max;
+  do {
+    crypto.getRandomValues(array);
+  } while (array[0] >= limit);
+  return array[0] % bound;
 }

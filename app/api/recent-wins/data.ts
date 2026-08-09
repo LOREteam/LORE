@@ -1,6 +1,11 @@
-import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi } from "viem";
+import { decodeEventLog, encodeEventTopics, formatUnits, getAddress, parseAbi } from "viem";
 import { parseOptionalNonNegativeBigIntEnv } from "../../../config/envParsing";
-import { computeWinningAmountWei, parseLineaAmountWei } from "../../lib/tokenAmountMath";
+import {
+  computeWinningAmountWei,
+  formatLineaAmountFixed,
+  formatLineaWeiDisplayNumber,
+  parseLineaAmountWei,
+} from "../../lib/tokenAmountMath";
 import {
   getMetaBigInt,
   getMetaJson,
@@ -28,6 +33,7 @@ const RECENT_WINS_LOG_SCAN_CHUNK = 10_000n;
 const RECENT_WINS_LOG_SCAN_MIN_CHUNK = 2_000n;
 const RECENT_WINS_BOOTSTRAP_SCAN_CHUNK = 10_000n;
 const RECENT_WINS_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeBigIntEnv(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG, 256n);
+const MAX_TILE_ID = 25;
 
 const EVENTS_ABI = parseAbi([
   "event RewardClaimed(uint256 indexed epoch, address indexed user, uint256 reward)",
@@ -60,6 +66,25 @@ type RecentWinsSnapshotEnvelope = {
 
 type StoredClaimRow = ReturnType<typeof getRecentRewardClaims>[number];
 type RewardClaimLog = Awaited<ReturnType<typeof publicClient.getLogs>>[number];
+
+function normalizeStoredUserAddress(user: string): `0x${string}` | null {
+  try {
+    return getAddress(user).toLowerCase() as `0x${string}`;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeClaimTxIdentity(txHash: string | null | undefined): `0x${string}` | null {
+  const normalized = typeof txHash === "string" ? txHash.trim().toLowerCase() : "";
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? (normalized as `0x${string}`) : null;
+}
+
+function buildRewardClaimStorageIdentity(row: Pick<StoredClaimRow, "txHash" | "user" | "epoch" | "blockNumber">) {
+  const txHash = normalizeClaimTxIdentity(row.txHash);
+  if (txHash) return `${txHash}_${row.user}_${row.epoch}`;
+  return `nohash_${parseStoredBlockNumber(row.blockNumber).toString()}_${row.user}_${row.epoch}`;
+}
 type StoredBetRow = ReturnType<typeof getBetRowsByEpochs>[number];
 
 function getJackpotKind(row: { isDailyJackpot?: boolean; isWeeklyJackpot?: boolean } | undefined): RecentWinJackpotKind | undefined {
@@ -73,7 +98,7 @@ function getJackpotKind(row: { isDailyJackpot?: boolean; isWeeklyJackpot?: boole
 function getLatestRewardClaimMarker() {
   const latest = getRecentRewardClaims(1)[0];
   if (!latest) return "none";
-  return `${latest.blockNumber}:${latest.txHash ?? ""}:${latest.epoch}`;
+  return `${parseStoredBlockNumber(latest.blockNumber).toString()}:${normalizeClaimTxIdentity(latest.txHash) ?? ""}:${latest.epoch}`;
 }
 
 export function getRecentWinsDataWatermark() {
@@ -93,14 +118,32 @@ function parseStoredEpochNumber(value: string | null | undefined): number {
   return parseStoredPositiveIntegerOrZero(value);
 }
 
+function parseRecentWinTileId(value: number | null | undefined): number | null {
+  if (typeof value !== "number") return null;
+  return Number.isSafeInteger(value) && value >= 1 && value <= MAX_TILE_ID ? value : null;
+}
+
 function getWinningAmountWeiForBet(row: StoredBetRow, winningTile: number) {
   return computeWinningAmountWei(row.tileIds, row.amounts, winningTile, row.totalAmount);
+}
+
+function compareBigIntDesc(left: bigint, right: bigint) {
+  if (left === right) return 0;
+  return left > right ? -1 : 1;
+}
+
+function toDisplayNumberWei(value: bigint): number {
+  return formatLineaWeiDisplayNumber(value);
+}
+
+function formatRecentClaimAmount(value: string | undefined): string {
+  return formatLineaAmountFixed(parseAmountWei(value), 2);
 }
 
 function buildRecentResolvedWins(limit = RECENT_WINS_LIMIT): RecentWinRow[] {
   const epochs = getEpochMap();
   const recentResolvedEpochs = Object.entries(epochs)
-    .filter(([, row]) => row.winningTile > 0 && parseAmountWei(row.rewardPool) > 0n)
+    .filter(([, row]) => parseRecentWinTileId(row.winningTile) !== null && parseAmountWei(row.rewardPool) > 0n)
     .sort((a, b) => {
       const aBlock = parseStoredBlockNumber(a[1].resolvedBlock);
       const bBlock = parseStoredBlockNumber(b[1].resolvedBlock);
@@ -127,7 +170,7 @@ function buildRecentResolvedWins(limit = RECENT_WINS_LIMIT): RecentWinRow[] {
     recentResolvedEpochs.map(([epoch, row]) => [
       epoch,
       {
-        winningTile: row.winningTile,
+        winningTile: parseRecentWinTileId(row.winningTile) ?? 0,
         rewardPoolWei: parseAmountWei(row.rewardPool),
         resolvedBlock: row.resolvedBlock ?? "0",
         jackpotKind: getJackpotKind(row),
@@ -145,7 +188,8 @@ function buildRecentResolvedWins(limit = RECENT_WINS_LIMIT): RecentWinRow[] {
     if (!epochInfo) continue;
     const winningAmountWei = getWinningAmountWeiForBet(bet, epochInfo.winningTile);
     if (winningAmountWei <= 0n) continue;
-    const user = bet.user.toLowerCase();
+    const user = normalizeStoredUserAddress(bet.user);
+    if (!user) continue;
     const perUser = byEpochUser.get(bet.epoch) ?? new Map<string, bigint>();
     perUser.set(user, (perUser.get(user) ?? 0n) + winningAmountWei);
     byEpochUser.set(bet.epoch, perUser);
@@ -163,22 +207,25 @@ function buildRecentResolvedWins(limit = RECENT_WINS_LIMIT): RecentWinRow[] {
       .map(([user, winningAmountWei]) => {
         const rewardWei = (epochInfo.rewardPoolWei * winningAmountWei) / totalWinningWei;
         const reward = formatUnits(rewardWei, 18);
-        const rewardNum = Number.parseFloat(reward);
         return {
-          epoch,
-          user,
-          amount: Number.isFinite(rewardNum) ? rewardNum.toFixed(2) : "0.00",
-          amountRaw: reward,
-          tileId: epochInfo.winningTile,
-          ...(epochInfo.jackpotKind ? { jackpotKind: epochInfo.jackpotKind } : {}),
-          blockNumber: epochInfo.resolvedBlock,
-        } satisfies RecentWinRow;
+          row: {
+            epoch,
+            user,
+            amount: formatLineaAmountFixed(rewardWei, 2),
+            amountRaw: reward,
+            tileId: epochInfo.winningTile,
+            ...(epochInfo.jackpotKind ? { jackpotKind: epochInfo.jackpotKind } : {}),
+            blockNumber: epochInfo.resolvedBlock,
+          } satisfies RecentWinRow,
+          rewardWei,
+        };
       })
       .sort((a, b) => {
-        const amountDelta = Number.parseFloat(b.amount) - Number.parseFloat(a.amount);
+        const amountDelta = compareBigIntDesc(a.rewardWei, b.rewardWei);
         if (amountDelta !== 0) return amountDelta;
-        return a.user.localeCompare(b.user);
-      });
+        return a.row.user.localeCompare(b.row.user);
+      })
+      .map(({ row }) => row);
 
     rows.push(...winners);
     if (rows.length >= limit) break;
@@ -249,12 +296,14 @@ function mapClaimLog(log: RewardClaimLog): StoredClaimRow | null {
     const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
     if (decoded.eventName !== "RewardClaimed") return null;
     const args = decoded.args as { epoch: bigint; user: string; reward: bigint };
+    const user = normalizeStoredUserAddress(args.user);
+    if (!user) return null;
     return {
       epoch: args.epoch.toString(),
-      user: args.user.toLowerCase(),
+      user,
       reward: formatUnits(args.reward, 18),
-      rewardNum: parseFloat(formatUnits(args.reward, 18)),
-      txHash: log.transactionHash ?? "",
+      rewardNum: toDisplayNumberWei(args.reward),
+      txHash: normalizeClaimTxIdentity(log.transactionHash) ?? "",
       blockNumber: (log.blockNumber ?? 0n).toString(),
     };
   } catch {
@@ -301,8 +350,8 @@ async function fetchRecentRewardClaimLogsFromChain(limit = RECENT_WINS_LIMIT) {
 
 function mergeClaims(existing: StoredClaimRow[], incoming: StoredClaimRow[]) {
   const byKey = new Map<string, StoredClaimRow>();
-  for (const row of existing) byKey.set(`${row.txHash}_${row.user}_${row.epoch}`, row);
-  for (const row of incoming) byKey.set(`${row.txHash}_${row.user}_${row.epoch}`, row);
+  for (const row of existing) byKey.set(buildRewardClaimStorageIdentity(row), row);
+  for (const row of incoming) byKey.set(buildRewardClaimStorageIdentity(row), row);
   return sortClaimsDesc(Array.from(byKey.values())).slice(0, RECENT_WINS_LIMIT);
 }
 
@@ -335,12 +384,12 @@ async function fetchOnchainClaims(existingClaims: StoredClaimRow[]) {
   if (claimRows.length > 0) {
     upsertRewardClaims(
       claimRows.map((row) => ({
-        id: `${row.txHash || "nohash"}_${row.user}_${row.epoch}`,
+        id: buildRewardClaimStorageIdentity(row),
         epoch: row.epoch,
         user: row.user,
         reward: row.reward,
         rewardNum: row.rewardNum,
-        txHash: row.txHash,
+        txHash: normalizeClaimTxIdentity(row.txHash) ?? "",
         blockNumber: row.blockNumber,
       })),
     );
@@ -355,14 +404,15 @@ function buildPayloadFromClaims(claims: StoredClaimRow[]): RecentWinsPayload {
     wins: claims.map((row) => {
       const epoch = epochs[row.epoch];
       const jackpotKind = getJackpotKind(epoch);
+      const tileId = parseRecentWinTileId(epoch?.winningTile);
       return {
         epoch: row.epoch,
         user: row.user,
-        amount: row.rewardNum.toFixed(2),
+        amount: formatRecentClaimAmount(row.reward),
         amountRaw: row.reward,
-        ...(epoch?.winningTile && epoch.winningTile > 0 ? { tileId: epoch.winningTile } : {}),
+        ...(tileId !== null ? { tileId } : {}),
         ...(jackpotKind ? { jackpotKind } : {}),
-        txHash: row.txHash,
+        txHash: normalizeClaimTxIdentity(row.txHash) ?? "",
         blockNumber: row.blockNumber,
       };
     }),
@@ -394,10 +444,22 @@ export async function getRecentWinsPayloadForRender(): Promise<RecentWinsPayload
   return payload;
 }
 
+function isFreshRecentWinsSnapshotSavedAt(savedAt: unknown, now = Date.now()) {
+  return (
+    typeof savedAt === "number" &&
+    Number.isSafeInteger(savedAt) &&
+    savedAt >= 0 &&
+    Number.isSafeInteger(now) &&
+    now >= 0 &&
+    savedAt <= now &&
+    now - savedAt <= RECENT_WINS_SNAPSHOT_MAX_AGE_MS
+  );
+}
+
 export function loadRecentWinsSnapshot(expectedWatermark: string | null = getRecentWinsDataWatermark()): RecentWinsPayload | null {
   const snapshot = getMetaJson<RecentWinsSnapshotEnvelope | RecentWinsPayload>(RECENT_WINS_SNAPSHOT_META_KEY);
   if (!snapshot || !("savedAt" in snapshot)) return null;
-  if (typeof snapshot.savedAt !== "number" || Date.now() - snapshot.savedAt > RECENT_WINS_SNAPSHOT_MAX_AGE_MS) {
+  if (!isFreshRecentWinsSnapshotSavedAt(snapshot.savedAt)) {
     return null;
   }
   if (!("watermark" in snapshot) || snapshot.watermark !== expectedWatermark) {

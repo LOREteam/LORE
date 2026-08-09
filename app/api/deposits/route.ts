@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { decodeEventLog, encodeEventTopics, formatUnits, parseAbi } from "viem";
+import { decodeEventLog, encodeEventTopics, formatUnits, getAddress, parseAbi } from "viem";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import { tileMaskToTileIds } from "../../lib/tileMask";
-import { normalizeTileAmounts, parseLineaAmountWei } from "../../lib/tokenAmountMath";
+import { formatLineaWeiDisplayNumber, normalizeTileAmounts, parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import {
   beginRouteMetric,
   failRouteMetric,
@@ -37,8 +37,11 @@ const DEPOSITS_ROUTE_CACHE_MAX_KEYS = 512;
 const ROUTE_METRIC_KEY = "api/deposits";
 const DEPOSIT_RECOVERY_EPOCH_LAG = 8;
 const RECENT_RECOVERY_BLOCK_WINDOW = 100_000n;
+const DEPOSITS_BACKGROUND_RECOVERY_COOLDOWN_MS = 15_000;
 const CURRENT_EPOCH_CACHE_MS = 60_000;
 const INLINE_REWARD_EPOCH_LIMIT = 64;
+const MAX_TILE_ID = 25;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const depositsBuildInflight = new Map<string, Promise<DepositsBuildResult>>();
 const CURRENT_EPOCH_ABI = parseAbi([
   "function currentEpoch() view returns (uint256)",
@@ -99,6 +102,8 @@ const depositsCacheWatermarks = createRouteCache<string>(DEPOSITS_ROUTE_CACHE_MA
 let currentEpochCache: { value: number | null; expiresAt: number; source: "indexed" | "chain" } | null = null;
 let currentEpochInflight: Promise<number | null> | null = null;
 let currentEpochBackgroundRefresh: Promise<void> | null = null;
+let depositsRecoveryInflight: Promise<DepositRow[]> | null = null;
+let depositsRecoveryStartedAt = 0;
 
 function getDepositsDataWatermark() {
   const currentEpoch = getMetaNumber("currentEpoch");
@@ -108,10 +113,15 @@ function getDepositsDataWatermark() {
 
 function buildDepositKey(epoch: string, txHash: string, blockNumber: string): string {
   const normalizedHash = txHash.toLowerCase().trim();
-  if (/^0x[0-9a-f]+$/.test(normalizedHash)) {
+  if (/^0x[0-9a-f]{64}$/.test(normalizedHash)) {
     return `${epoch}_${normalizedHash}`;
   }
   return `${epoch}_nohash_${blockNumber}`;
+}
+
+function normalizeDepositTxHash(txHash: string | null | undefined): `0x${string}` | "" {
+  const normalized = String(txHash ?? "").toLowerCase().trim();
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? (normalized as `0x${string}`) : "";
 }
 
 function parseStoredBlockNumber(value: string | null | undefined): bigint {
@@ -120,6 +130,33 @@ function parseStoredBlockNumber(value: string | null | undefined): bigint {
 
 function parseStoredEpochNumber(value: string | null | undefined): number {
   return parseStoredPositiveIntegerOrZero(value);
+}
+
+function parseChainEpochNumber(value: bigint): number | null {
+  if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
+  const parsed = Number(value);
+  return isSafePositiveInteger(parsed) ? parsed : null;
+}
+
+function parseDepositTileId(value: bigint): number | null {
+  if (value <= 0n || value > BigInt(MAX_TILE_ID)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_TILE_ID ? parsed : null;
+}
+
+function parseDepositTileIds(values: readonly bigint[]): number[] | null {
+  if (values.length === 0) return null;
+  const tileIds: number[] = [];
+  for (const value of values) {
+    const tileId = parseDepositTileId(value);
+    if (tileId === null) return null;
+    tileIds.push(tileId);
+  }
+  return tileIds;
+}
+
+function toDisplayNumberWei(value: bigint): number {
+  return formatLineaWeiDisplayNumber(value);
 }
 
 function dedupeDeposits(rows: DepositRow[]): DepositRow[] {
@@ -141,13 +178,14 @@ function dedupeDeposits(rows: DepositRow[]): DepositRow[] {
 }
 
 function addressToTopic(address: string): `0x${string}` {
-  return `0x${address.toLowerCase().slice(2).padStart(64, "0")}` as `0x${string}`;
+  return `0x${getAddress(address).toLowerCase().slice(2).padStart(64, "0")}` as `0x${string}`;
 }
 
 function normalizeDepositRow(row: DepositRow): DepositRow {
   const tileIds = Array.isArray(row.tileIds) ? row.tileIds : [];
+  const txHash = normalizeDepositTxHash(row.txHash);
   if (tileIds.length === 0) {
-    return { ...row, tileIds: [], amounts: [] };
+    return { ...row, txHash, tileIds: [], amounts: [] };
   }
 
   const normalized = normalizeTileAmounts(tileIds, row.amounts, row.totalAmount);
@@ -155,15 +193,21 @@ function normalizeDepositRow(row: DepositRow): DepositRow {
   if (mergedTileIds.length === tileIds.length) {
     return {
       ...row,
+      txHash,
       amounts: normalized.amounts,
     };
   }
 
   return {
     ...row,
+    txHash,
     tileIds: mergedTileIds,
     amounts: normalized.amounts,
   };
+}
+
+function hasDepositTiles(row: DepositRow): boolean {
+  return row.tileIds.length > 0;
 }
 
 function sortDepositsDesc<T extends { epoch: string; blockNumber: string; txHash: string }>(rows: T[]) {
@@ -227,29 +271,32 @@ async function fetchDepositsFromChain(
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "BetPlaced") continue;
         const args = decoded.args as { epoch: bigint; tileId: bigint; amount: bigint };
-        const ep = Number(args.epoch);
-        if (!isSafePositiveInteger(ep) || (currentEpoch && ep > currentEpoch)) continue;
+        const ep = parseChainEpochNumber(args.epoch);
+        if (ep === null || (currentEpoch && ep > currentEpoch)) continue;
+        const tileId = parseDepositTileId(args.tileId);
+        if (tileId === null) continue;
+        const txHash = normalizeDepositTxHash(log.transactionHash);
         const key = buildDepositKey(
           args.epoch.toString(),
-          log.transactionHash ?? "",
+          txHash,
           (log.blockNumber ?? 0n).toString(),
         );
         const amount = formatUnits(args.amount, 18);
         const prev = byKey.get(key);
         if (prev) {
-          prev.tileIds.push(Number(args.tileId));
+          prev.tileIds.push(tileId);
           const totalWei = parseLineaAmountWei(prev.totalAmount) + args.amount;
           prev.totalAmount = formatUnits(totalWei, 18);
-          prev.totalAmountNum = Number.parseFloat(prev.totalAmount);
+          prev.totalAmountNum = toDisplayNumberWei(totalWei);
           prev.amounts = [...(prev.amounts ?? []), amount];
         } else {
           byKey.set(key, {
             epoch: args.epoch.toString(),
-            tileIds: [Number(args.tileId)],
+            tileIds: [tileId],
             amounts: [amount],
             totalAmount: amount,
-            totalAmountNum: parseFloat(amount),
-            txHash: log.transactionHash ?? "",
+            totalAmountNum: toDisplayNumberWei(args.amount),
+            txHash,
             blockNumber: (log.blockNumber ?? 0n).toString(),
           });
         }
@@ -257,54 +304,38 @@ async function fetchDepositsFromChain(
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "BatchBetsPlaced") continue;
         const args = decoded.args as { epoch: bigint; tileIds: readonly bigint[]; amounts: readonly bigint[]; totalAmount: bigint };
-        const ep = Number(args.epoch);
-        if (!isSafePositiveInteger(ep) || (currentEpoch && ep > currentEpoch)) continue;
+        const ep = parseChainEpochNumber(args.epoch);
+        if (ep === null || (currentEpoch && ep > currentEpoch)) continue;
+        const tileIds = parseDepositTileIds(args.tileIds);
+        if (tileIds === null || args.amounts.length !== tileIds.length) continue;
+        const txHash = normalizeDepositTxHash(log.transactionHash);
         const key = buildDepositKey(
           args.epoch.toString(),
-          log.transactionHash ?? "",
+          txHash,
           (log.blockNumber ?? 0n).toString(),
         );
         byKey.set(key, {
           epoch: args.epoch.toString(),
-          tileIds: args.tileIds.map(Number),
+          tileIds,
           amounts: args.amounts.map((a) => formatUnits(a, 18)),
           totalAmount: formatUnits(args.totalAmount, 18),
-          totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
-          txHash: log.transactionHash ?? "",
+          totalAmountNum: toDisplayNumberWei(args.totalAmount),
+          txHash,
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
       } else if (topic0 === batchSameAmountSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "BatchBetsSameAmountPlaced") continue;
         const args = decoded.args as { epoch: bigint; tileIds: readonly bigint[]; amount: bigint; totalAmount: bigint };
-        const ep = Number(args.epoch);
-        if (!isSafePositiveInteger(ep) || (currentEpoch && ep > currentEpoch)) continue;
+        const ep = parseChainEpochNumber(args.epoch);
+        if (ep === null || (currentEpoch && ep > currentEpoch)) continue;
+        const tileIds = parseDepositTileIds(args.tileIds);
+        if (tileIds === null) continue;
         const amount = formatUnits(args.amount, 18);
+        const txHash = normalizeDepositTxHash(log.transactionHash);
         const key = buildDepositKey(
           args.epoch.toString(),
-          log.transactionHash ?? "",
-          (log.blockNumber ?? 0n).toString(),
-        );
-        byKey.set(key, {
-          epoch: args.epoch.toString(),
-          tileIds: args.tileIds.map(Number),
-          amounts: args.tileIds.map(() => amount),
-          totalAmount: formatUnits(args.totalAmount, 18),
-          totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
-          txHash: log.transactionHash ?? "",
-          blockNumber: (log.blockNumber ?? 0n).toString(),
-        });
-      } else if (topic0 === batchBitmapSig) {
-        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
-        if (decoded.eventName !== "BatchBetsBitmapPlaced") continue;
-        const args = decoded.args as { epoch: bigint; tileMask: number; amount: bigint; totalAmount: bigint };
-        const ep = Number(args.epoch);
-        if (!isSafePositiveInteger(ep) || (currentEpoch && ep > currentEpoch)) continue;
-        const tileIds = tileMaskToTileIds(args.tileMask);
-        const amount = formatUnits(args.amount, 18);
-        const key = buildDepositKey(
-          args.epoch.toString(),
-          log.transactionHash ?? "",
+          txHash,
           (log.blockNumber ?? 0n).toString(),
         );
         byKey.set(key, {
@@ -312,8 +343,31 @@ async function fetchDepositsFromChain(
           tileIds,
           amounts: tileIds.map(() => amount),
           totalAmount: formatUnits(args.totalAmount, 18),
-          totalAmountNum: parseFloat(formatUnits(args.totalAmount, 18)),
-          txHash: log.transactionHash ?? "",
+          totalAmountNum: toDisplayNumberWei(args.totalAmount),
+          txHash,
+          blockNumber: (log.blockNumber ?? 0n).toString(),
+        });
+      } else if (topic0 === batchBitmapSig) {
+        const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "BatchBetsBitmapPlaced") continue;
+        const args = decoded.args as { epoch: bigint; tileMask: number; amount: bigint; totalAmount: bigint };
+        const ep = parseChainEpochNumber(args.epoch);
+        if (ep === null || (currentEpoch && ep > currentEpoch)) continue;
+        const tileIds = tileMaskToTileIds(args.tileMask);
+        const amount = formatUnits(args.amount, 18);
+        const txHash = normalizeDepositTxHash(log.transactionHash);
+        const key = buildDepositKey(
+          args.epoch.toString(),
+          txHash,
+          (log.blockNumber ?? 0n).toString(),
+        );
+        byKey.set(key, {
+          epoch: args.epoch.toString(),
+          tileIds,
+          amounts: tileIds.map(() => amount),
+          totalAmount: formatUnits(args.totalAmount, 18),
+          totalAmountNum: toDisplayNumberWei(args.totalAmount),
+          txHash,
           blockNumber: (log.blockNumber ?? 0n).toString(),
         });
       }
@@ -341,8 +395,8 @@ async function readCurrentEpochFromChain(fallback: number | null) {
         abi: CURRENT_EPOCH_ABI,
         functionName: "currentEpoch",
       });
-      const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
-      if (isValidEpochNumber(onChainCurrentEpochNum)) {
+      const onChainCurrentEpochNum = parseChainEpochNumber(onChainCurrentEpoch);
+      if (onChainCurrentEpochNum !== null) {
         currentEpochCache = {
           value: onChainCurrentEpochNum,
           expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
@@ -377,8 +431,8 @@ function refreshCurrentEpochFromChainInBackground(storedCurrentEpoch: number) {
         abi: CURRENT_EPOCH_ABI,
         functionName: "currentEpoch",
       });
-      const onChainCurrentEpochNum = Number(onChainCurrentEpoch);
-      if (isValidEpochNumber(onChainCurrentEpochNum) && onChainCurrentEpochNum >= storedCurrentEpoch) {
+      const onChainCurrentEpochNum = parseChainEpochNumber(onChainCurrentEpoch);
+      if (onChainCurrentEpochNum !== null && onChainCurrentEpochNum >= storedCurrentEpoch) {
         currentEpochCache = {
           value: onChainCurrentEpochNum,
           expiresAt: Date.now() + CURRENT_EPOCH_CACHE_MS,
@@ -440,7 +494,7 @@ function readIndexedDeposits(user: string, currentEpochNum: number | null) {
     if (blockNumber > 0n && blockNumber < CONTRACT_DEPLOY_BLOCK) return false;
     return true;
   });
-  return dedupeDeposits(deposits).map(normalizeDepositRow);
+  return dedupeDeposits(deposits).map(normalizeDepositRow).filter(hasDepositTiles);
 }
 
 async function recoverDepositsAndPersist(user: string, currentEpochNum: number | null) {
@@ -464,6 +518,27 @@ async function recoverDepositsAndPersist(user: string, currentEpochNum: number |
   return recovered;
 }
 
+async function recoverDepositsWithGlobalBound(user: string, currentEpochNum: number | null) {
+  const now = Date.now();
+  if (
+    depositsRecoveryInflight ||
+    now - depositsRecoveryStartedAt < DEPOSITS_BACKGROUND_RECOVERY_COOLDOWN_MS
+  ) {
+    return null;
+  }
+
+  depositsRecoveryStartedAt = now;
+  const task = recoverDepositsAndPersist(user, currentEpochNum);
+  depositsRecoveryInflight = task;
+  try {
+    return await task;
+  } finally {
+    if (depositsRecoveryInflight === task) {
+      depositsRecoveryInflight = null;
+    }
+  }
+}
+
 async function buildDepositsPayload(
   user: string,
   includeRewards = false,
@@ -483,9 +558,9 @@ async function buildDepositsPayload(
     indexedEpochLag >= DEPOSIT_RECOVERY_EPOCH_LAG;
 
   if (shouldAttemptRecovery && options.allowSlowRecovery) {
-    const recovered = await recoverDepositsAndPersist(user, currentEpochNum);
-    if (recovered.length > 0) {
-      deposits = dedupeDeposits([...deposits, ...recovered]).map(normalizeDepositRow);
+    const recovered = await recoverDepositsWithGlobalBound(user, currentEpochNum);
+    if (recovered && recovered.length > 0) {
+      deposits = dedupeDeposits([...deposits, ...recovered]).map(normalizeDepositRow).filter(hasDepositTiles);
     }
   }
 
@@ -525,7 +600,11 @@ function startDepositsRefresh(cacheKey: string, user: string, includeRewards: bo
       depositsBuildInflight.has(cacheKey) || depositsCacheWatermarks.getStale(cacheKey) === watermark,
     build: () => buildDepositsPayload(user, includeRewards, { allowSlowRecovery: true }),
     toPayload: (result) => result.payload,
-    onCommit: () => {
+    onCommit: (result) => {
+      if (result.recoveryNeeded) {
+        depositsCacheWatermarks.delete(cacheKey);
+        return;
+      }
       depositsCacheWatermarks.set(cacheKey, watermark, DEPOSITS_ROUTE_CACHE_MS);
     },
     onError: (error) => {
@@ -540,11 +619,14 @@ export async function GET(request: NextRequest) {
     limit: 20,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
-  const user = request.nextUrl.searchParams.get("user")?.toLowerCase();
+  const userParam = request.nextUrl.searchParams.get("user");
   const includeRewards = request.nextUrl.searchParams.get("includeRewards") === "1";
-  if (!user || !/^0x[0-9a-f]{40}$/.test(user)) {
+  let user: `0x${string}`;
+  try {
+    user = getAddress(userParam ?? "").toLowerCase() as `0x${string}`;
+  } catch {
     return jsonNoStore({ deposits: [], error: "Missing or invalid ?user=0x..." }, 400);
   }
 

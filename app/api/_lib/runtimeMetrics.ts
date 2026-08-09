@@ -1,3 +1,5 @@
+import { sanitizeSentryPayload } from "../../lib/sentrySanitize";
+
 type RouteMetricState = {
   requests: number;
   successes: number;
@@ -25,13 +27,70 @@ type RuntimeMetricsGlobal = typeof globalThis & {
   __loreRuntimeMetrics__?: Map<string, RouteMetricState>;
 };
 
+const MAX_ROUTE_METRIC_ENTRIES = 128;
+const MAX_ROUTE_METRIC_KEY_LENGTH = 120;
+const MAX_ROUTE_METRIC_COUNT = Number.MAX_SAFE_INTEGER;
+const MAX_RUNTIME_PROCESS_METRIC = Number.MAX_SAFE_INTEGER;
+const ROUTE_METRIC_LATENCY_MAX_MS = 24 * 60 * 60 * 1000;
+const OVERFLOW_ROUTE_METRIC_KEY = "__overflow__";
+const UNKNOWN_ROUTE_METRIC_KEY = "unknown";
+const ROUTE_METRIC_KEY_ALLOWED = /[^a-z0-9/_:-]+/gi;
+
 const runtimeMetricsGlobal = globalThis as RuntimeMetricsGlobal;
 const routeMetrics =
   runtimeMetricsGlobal.__loreRuntimeMetrics__ ??
   (runtimeMetricsGlobal.__loreRuntimeMetrics__ = new Map<string, RouteMetricState>());
 
+function normalizeRouteMetricLatencyMs(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(value, ROUTE_METRIC_LATENCY_MAX_MS);
+}
+
+function formatRouteMetricAverageLatencyMs(value: number): number {
+  return Number(normalizeRouteMetricLatencyMs(value).toFixed(2));
+}
+
+function incrementRouteMetricCount(value: number): number {
+  return Number.isSafeInteger(value) && value >= 0
+    ? Math.min(value + 1, MAX_ROUTE_METRIC_COUNT)
+    : 1;
+}
+
+function normalizeRouteMetricStatus(value: number, fallback: number): number {
+  return Number.isSafeInteger(value) && value >= 100 && value <= 599 ? value : fallback;
+}
+
+function normalizeRuntimeProcessMetric(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  if (value > MAX_RUNTIME_PROCESS_METRIC) return MAX_RUNTIME_PROCESS_METRIC;
+  return Number.isSafeInteger(value) ? value : 0;
+}
+
+function normalizeRuntimeProcessUptimeSeconds(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  if (value > MAX_RUNTIME_PROCESS_METRIC) return MAX_RUNTIME_PROCESS_METRIC;
+  return Math.floor(value);
+}
+
+function normalizeRouteMetricKey(route: string) {
+  const safeRoute = sanitizeSentryPayload(route);
+  const routeLabel = typeof safeRoute === "string" ? safeRoute : UNKNOWN_ROUTE_METRIC_KEY;
+  const normalized = routeLabel
+    .replace(ROUTE_METRIC_KEY_ALLOWED, "-")
+    .slice(0, MAX_ROUTE_METRIC_KEY_LENGTH)
+    .replace(/^-+|-+$/g, "");
+  return normalized || UNKNOWN_ROUTE_METRIC_KEY;
+}
+
+function selectRouteMetricKey(route: string) {
+  const key = normalizeRouteMetricKey(route);
+  if (routeMetrics.has(key) || routeMetrics.size < MAX_ROUTE_METRIC_ENTRIES) return key;
+  return OVERFLOW_ROUTE_METRIC_KEY;
+}
+
 function getMetric(route: string) {
-  let metric = routeMetrics.get(route);
+  const routeKey = selectRouteMetricKey(route);
+  let metric = routeMetrics.get(routeKey);
   if (!metric) {
     metric = {
       requests: 0,
@@ -49,7 +108,7 @@ function getMetric(route: string) {
       lastErrorAt: null,
       inflight: 0,
     };
-    routeMetrics.set(route, metric);
+    routeMetrics.set(routeKey, metric);
   }
   return metric;
 }
@@ -59,48 +118,53 @@ function completeToken(token: RouteMetricToken, status: number, ok: boolean) {
   token.completed = true;
 
   const metric = getMetric(token.route);
-  const latencyMs = Date.now() - token.startedAt;
+  const latencyMs = normalizeRouteMetricLatencyMs(Date.now() - token.startedAt);
   metric.inflight = Math.max(0, metric.inflight - 1);
   metric.lastLatencyMs = latencyMs;
   metric.maxLatencyMs = Math.max(metric.maxLatencyMs, latencyMs);
-  const completedCount = metric.successes + metric.errors + 1;
+  const completedCount = Math.min(metric.successes + metric.errors + 1, MAX_ROUTE_METRIC_COUNT);
   metric.avgLatencyMs = ((metric.avgLatencyMs * (completedCount - 1)) + latencyMs) / completedCount;
-  metric.lastStatus = status;
+  metric.lastStatus = normalizeRouteMetricStatus(status, ok ? 200 : 500);
 
   if (ok) {
-    metric.successes += 1;
+    metric.successes = incrementRouteMetricCount(metric.successes);
   } else {
-    metric.errors += 1;
+    metric.errors = incrementRouteMetricCount(metric.errors);
     metric.lastErrorAt = Date.now();
   }
 }
 
 export function beginRouteMetric(route: string): RouteMetricToken {
-  const metric = getMetric(route);
-  metric.requests += 1;
-  metric.inflight += 1;
+  const routeKey = selectRouteMetricKey(route);
+  const metric = getMetric(routeKey);
+  metric.requests = incrementRouteMetricCount(metric.requests);
+  metric.inflight = incrementRouteMetricCount(metric.inflight);
   metric.lastRequestAt = Date.now();
   return {
-    route,
+    route: routeKey,
     startedAt: Date.now(),
     completed: false,
   };
 }
 
 export function markRouteCacheHit(route: string) {
-  getMetric(route).cacheHits += 1;
+  const metric = getMetric(route);
+  metric.cacheHits = incrementRouteMetricCount(metric.cacheHits);
 }
 
 export function markRouteStaleServed(route: string) {
-  getMetric(route).staleServed += 1;
+  const metric = getMetric(route);
+  metric.staleServed = incrementRouteMetricCount(metric.staleServed);
 }
 
 export function markRouteInflightJoin(route: string) {
-  getMetric(route).inflightJoined += 1;
+  const metric = getMetric(route);
+  metric.inflightJoined = incrementRouteMetricCount(metric.inflightJoined);
 }
 
 export function markRouteBackgroundRefresh(route: string) {
-  getMetric(route).backgroundRefreshes += 1;
+  const metric = getMetric(route);
+  metric.backgroundRefreshes = incrementRouteMetricCount(metric.backgroundRefreshes);
 }
 
 export function finishRouteMetric(token: RouteMetricToken, status = 200) {
@@ -117,7 +181,7 @@ export function getRuntimeMetricsSnapshot() {
       route,
       {
         ...metric,
-        avgLatencyMs: Number(metric.avgLatencyMs.toFixed(2)),
+        avgLatencyMs: formatRouteMetricAverageLatencyMs(metric.avgLatencyMs),
       },
     ]),
   );
@@ -126,10 +190,10 @@ export function getRuntimeMetricsSnapshot() {
 export function getRuntimeProcessSnapshot() {
   const memory = process.memoryUsage();
   return {
-    uptimeSeconds: Math.floor(process.uptime()),
-    rssBytes: memory.rss,
-    heapUsedBytes: memory.heapUsed,
-    heapTotalBytes: memory.heapTotal,
-    externalBytes: memory.external,
+    uptimeSeconds: normalizeRuntimeProcessUptimeSeconds(process.uptime()),
+    rssBytes: normalizeRuntimeProcessMetric(memory.rss),
+    heapUsedBytes: normalizeRuntimeProcessMetric(memory.heapUsed),
+    heapTotalBytes: normalizeRuntimeProcessMetric(memory.heapTotal),
+    externalBytes: normalizeRuntimeProcessMetric(memory.external),
   };
 }

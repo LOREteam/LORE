@@ -7,6 +7,9 @@ export type ClientIdentity = {
 };
 
 const PROXY_SECRET_HEADER = "x-lore-proxy-secret";
+const MIN_PROXY_SECRET_LENGTH = 32;
+const MAX_PROXY_SECRET_LENGTH = 256;
+const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
 
 function validIp(value: string | null | undefined) {
   const candidate = value?.trim();
@@ -19,10 +22,16 @@ function secretsMatch(provided: string, expected: string) {
   return timingSafeEqual(providedHash, expectedHash);
 }
 
+function normalizeProxySecret(value: string | null | undefined) {
+  const secret = value?.trim();
+  if (!secret || secret.length < MIN_PROXY_SECRET_LENGTH || secret.length > MAX_PROXY_SECRET_LENGTH) return null;
+  return CONTROL_CHAR_RE.test(secret) ? null : secret;
+}
+
 function canTrustProxyHeaders(request: Request) {
   if (process.env.TRUST_PROXY_HEADERS !== "1") return false;
-  const expected = process.env.TRUST_PROXY_SECRET?.trim();
-  const provided = request.headers.get(PROXY_SECRET_HEADER)?.trim();
+  const expected = normalizeProxySecret(process.env.TRUST_PROXY_SECRET);
+  const provided = normalizeProxySecret(request.headers.get(PROXY_SECRET_HEADER));
   return Boolean(expected && provided && secretsMatch(provided, expected));
 }
 

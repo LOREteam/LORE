@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { formatUnits } from "viem";
+import { formatDecimalTextFixed } from "../lib/balanceFormatting";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { log } from "../lib/logger";
-import { formatLineaAmountFixed, parseLineaAmountWei } from "../lib/tokenAmountMath";
-import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { formatLineaAmountFixed, formatLineaWeiDisplayNumber, parseLineaAmountWei } from "../lib/tokenAmountMath";
+import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
+import { readJsonResponse } from "../lib/readJsonResponse";
 
 export interface JackpotHistoryEntry {
   epoch: string;
@@ -33,6 +34,7 @@ const CACHE_WRITE_MIN_MS = 120_000;
 const WARN_THROTTLE_MS = 15_000;
 const JACKPOT_LIMIT = 200;
 const STORAGE_KEY = `lore:jackpots-cache:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+const JACKPOT_HISTORY_LOAD_ERROR = "Jackpot history is temporarily unavailable. Refresh the Analytics tab to retry.";
 
 function isNetworkFetchError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -52,7 +54,8 @@ function parseBigIntSafe(value: unknown): bigint {
 
 function normalizeAmount(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  const parsed = Number.parseFloat(String(value ?? ""));
+  const fixed = formatDecimalTextFixed(String(value ?? "").trim(), 6);
+  const parsed = fixed === null ? Number.NaN : Number(fixed);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
@@ -62,10 +65,28 @@ function parseSafePositiveIntegerNumber(value: string | null | undefined): numbe
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
+function normalizeTxHash(value: unknown): `0x${string}` | "" {
+  const normalized = String(value ?? "").toLowerCase().trim();
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? (normalized as `0x${string}`) : "";
+}
+
 function normalizeAmountWei(row: Record<string, unknown>) {
   const fromAmount = parseLineaAmountWei(typeof row.amount === "string" ? row.amount : undefined);
   if (fromAmount > 0n) return fromAmount;
   return parseLineaAmountWei(String(row.amountNum ?? ""));
+}
+
+function toDisplayNumberWei(value: bigint): number {
+  return formatLineaWeiDisplayNumber(value);
+}
+
+function formatLegacyAmountDisplay(row: Record<string, unknown>) {
+  const amountText =
+    typeof row.amount === "string" && row.amount.trim()
+      ? row.amount
+      : String(row.amountNum ?? "");
+  const amountWei = parseLineaAmountWei(amountText);
+  return amountWei > 0n ? formatLineaAmountFixed(amountWei, 2) : "0.00";
 }
 
 function toEntry(row: Record<string, unknown>): JackpotHistoryEntry | null {
@@ -76,16 +97,16 @@ function toEntry(row: Record<string, unknown>): JackpotHistoryEntry | null {
   const amountWei = normalizeAmountWei(row);
   const amountNum =
     amountWei > 0n
-      ? normalizeAmount(formatUnits(amountWei, 18))
+      ? toDisplayNumberWei(amountWei)
       : normalizeAmount(row.amountNum, normalizeAmount(row.amount));
-  const amount = amountWei > 0n ? formatLineaAmountFixed(amountWei, 2) : amountNum.toFixed(2);
+  const amount = amountWei > 0n ? formatLineaAmountFixed(amountWei, 2) : formatLegacyAmountDisplay(row);
 
   return {
     epoch,
     amount,
     amountNum,
     kind,
-    txHash: String(row.txHash ?? ""),
+    txHash: normalizeTxHash(row.txHash),
     blockNumber: parseBigIntSafe(row.blockNumber),
     timestamp:
       typeof row.timestamp === "number" && Number.isFinite(row.timestamp)
@@ -142,11 +163,20 @@ function loadCachedEntries(): { entries: JackpotHistoryEntry[]; savedAt: number 
     if (Array.isArray(parsed)) {
       return { entries: normalizeEntries(parsed), savedAt: null };
     }
+    if (!parsed || typeof parsed !== "object") {
+      localStorage.removeItem(STORAGE_KEY);
+      return { entries: [], savedAt: null };
+    }
     return {
       entries: normalizeEntries(Array.isArray(parsed.jackpots) ? parsed.jackpots : []),
       savedAt: normalizeCacheTimestamp(parsed.savedAt),
     };
   } catch {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore storage failures
+    }
     return { entries: [], savedAt: null };
   }
 }
@@ -172,7 +202,8 @@ function saveCachedEntries(entries: JackpotHistoryEntry[]) {
 
 async function fetchFromApi(): Promise<JackpotHistoryEntry[]> {
   const res = await fetchWithTimeout("/api/jackpots", { cache: "no-store" });
-  const json = (await res.json()) as JackpotApiResponse;
+  const json = await readJsonResponse<JackpotApiResponse>(res);
+  if (!json) throw new Error(`HTTP ${res.status}`);
   if (!res.ok || json.error) {
     throw new Error(json.error || `HTTP ${res.status}`);
   }
@@ -254,7 +285,7 @@ export function useJackpotHistory(enabled = true) {
 
       // Keep stale data on screen if available to avoid blank analytics panel.
       if (mountedRef.current) {
-        setError(msg);
+        setError(JACKPOT_HISTORY_LOAD_ERROR);
       }
     } finally {
       if (mountedRef.current) {
@@ -267,10 +298,7 @@ export function useJackpotHistory(enabled = true) {
   useEffect(() => {
     if (!enabled) return;
     const savedAt = cacheSavedAtRef.current;
-    const initialDelay =
-      savedAt && Date.now() - savedAt < REFRESH_MS
-        ? REFRESH_MS - (Date.now() - savedAt)
-        : 0;
+    const initialDelay = getFreshCacheDelayMs(savedAt, REFRESH_MS) ?? 0;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 

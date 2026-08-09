@@ -27,6 +27,8 @@ const REBATE_EXACT_CONCURRENCY = 6;
 const ROUTE_METRIC_KEY = "api/rebates";
 const REBATE_INDEXED_EPOCHS_CACHE_MS = 30_000;
 const REBATE_UNCHANGED_WATERMARK_REFRESH_MS = 5 * 60_000;
+const REBATE_TIMING_MAX_MS = 24 * 60 * 60 * 1000;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 type RebateEpochInfo = {
   epoch: number;
@@ -67,6 +69,19 @@ const rebateCacheWatermarks = createRouteCache<{ refreshedAt: number; watermark:
   REBATE_ROUTE_CACHE_MAX_KEYS,
 );
 
+function normalizeRebateTimingMs(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(value, REBATE_TIMING_MAX_MS);
+}
+
+function formatRebateTimingMs(value: number): string {
+  return normalizeRebateTimingMs(value).toFixed(1);
+}
+
+function formatRebateTimingLogValue(value: number): number {
+  return Number(formatRebateTimingMs(value));
+}
+
 function formatServerTiming(params: {
   cacheStatus: "fresh" | "stale" | "miss" | "inflight";
   timings?: RebateBuildTimings | null;
@@ -74,11 +89,11 @@ function formatServerTiming(params: {
   const { cacheStatus, timings } = params;
   const metrics = [`cache;desc="${cacheStatus}"`];
   if (timings) {
-    metrics.push(`indexed;dur=${timings.indexedMs.toFixed(1)}`);
-    metrics.push(`summary;dur=${timings.summaryMs.toFixed(1)}`);
-    metrics.push(`exact;dur=${timings.exactMs.toFixed(1)}`);
-    metrics.push(`recent;dur=${timings.recentMs.toFixed(1)}`);
-    metrics.push(`total;dur=${timings.totalMs.toFixed(1)}`);
+    metrics.push(`indexed;dur=${formatRebateTimingMs(timings.indexedMs)}`);
+    metrics.push(`summary;dur=${formatRebateTimingMs(timings.summaryMs)}`);
+    metrics.push(`exact;dur=${formatRebateTimingMs(timings.exactMs)}`);
+    metrics.push(`recent;dur=${formatRebateTimingMs(timings.recentMs)}`);
+    metrics.push(`total;dur=${formatRebateTimingMs(timings.totalMs)}`);
   }
   return metrics.join(", ");
 }
@@ -145,6 +160,18 @@ function isMissingContractMethodError(err: unknown, methodName: string) {
     msg.includes(`does not have the function "${methodName.toLowerCase()}"`) ||
     msg.includes('returned no data ("0x")')
   );
+}
+
+function bigintToNonNegativeSafeNumber(value: bigint): number {
+  if (value <= 0n) return 0;
+  if (value > MAX_SAFE_INTEGER_BIGINT) return Number.MAX_SAFE_INTEGER;
+  return Number(value);
+}
+
+function parseRebateEpochNumber(value: bigint): number | null {
+  if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
+  const parsed = Number(value);
+  return isSafePositiveInteger(parsed) ? parsed : null;
 }
 
 async function mapWithConcurrency<T, R>(
@@ -223,9 +250,9 @@ async function loadClaimableEpochsExact(
         if (result.status !== "success") return;
         const [, , pendingWei, claimed, resolved] = result.result as [bigint, bigint, bigint, boolean, boolean];
         if (pendingWei > 0n && !claimed && resolved) {
-          const epoch = Number(chunk[index]);
-          if (isSafePositiveInteger(epoch)) {
-            claimable.add(epoch);
+          const epochNumber = parseRebateEpochNumber(chunk[index]);
+          if (epochNumber !== null) {
+            claimable.add(epochNumber);
           }
         }
       });
@@ -240,8 +267,8 @@ async function loadClaimableEpochsExact(
           }) as [bigint, bigint, bigint, boolean, boolean];
           const [, , pendingWei, claimed, resolved] = result;
           if (pendingWei > 0n && !claimed && resolved) {
-            const epochNumber = Number(epoch);
-            if (isSafePositiveInteger(epochNumber)) {
+            const epochNumber = parseRebateEpochNumber(epoch);
+            if (epochNumber !== null) {
               claimable.add(epochNumber);
             }
           }
@@ -348,7 +375,7 @@ async function buildRebatePayload(
   let summaryClaimableCount = 0;
   summaryResults.forEach(([pendingWei, claimableCount]) => {
     totalPendingWei += pendingWei;
-    summaryClaimableCount += Number(claimableCount);
+    summaryClaimableCount += bigintToNonNegativeSafeNumber(claimableCount);
   });
 
   const claimableEpochList =
@@ -366,8 +393,8 @@ async function buildRebatePayload(
 
   recentResults.forEach((result, index) => {
     if (result.status !== "success") return;
-    const epoch = Number(recentEpochBigInts[index]);
-    if (!isSafePositiveInteger(epoch)) return;
+    const epoch = parseRebateEpochNumber(recentEpochBigInts[index]);
+    if (epoch === null) return;
     const [rebatePoolWei, userVolumeWei, pendingWei, claimed, resolved] = result.result;
     recentEpochs.push({
       epoch,
@@ -397,11 +424,11 @@ async function buildRebatePayload(
       epochCount: timings.epochCount,
       summaryChunks: timings.summaryChunks,
       exactChunks: timings.exactChunks,
-      indexedMs: Number(timings.indexedMs.toFixed(1)),
-      summaryMs: Number(timings.summaryMs.toFixed(1)),
-      exactMs: Number(timings.exactMs.toFixed(1)),
-      recentMs: Number(timings.recentMs.toFixed(1)),
-      totalMs: Number(timings.totalMs.toFixed(1)),
+      indexedMs: formatRebateTimingLogValue(timings.indexedMs),
+      summaryMs: formatRebateTimingLogValue(timings.summaryMs),
+      exactMs: formatRebateTimingLogValue(timings.exactMs),
+      recentMs: formatRebateTimingLogValue(timings.recentMs),
+      totalMs: formatRebateTimingLogValue(timings.totalMs),
     });
   }
 
@@ -425,7 +452,7 @@ export async function GET(request: NextRequest) {
     limit: 20,
     windowMs: 60_000,
   });
-  if (rateLimited) return rateLimited;
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   const includeExact = request.nextUrl.searchParams.get("exact") === "1";
   if (includeExact) {
@@ -434,7 +461,7 @@ export async function GET(request: NextRequest) {
       limit: 6,
       windowMs: 60_000,
     });
-    if (exactRateLimited) return exactRateLimited;
+    if (exactRateLimited) return applyNoStoreHeaders(exactRateLimited);
   }
 
   const userParam = request.nextUrl.searchParams.get("user");

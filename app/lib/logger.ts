@@ -2,6 +2,10 @@ import { sanitizeSupportLogPayload } from "./sentrySanitize";
 import { getAutoMineSupportDiagnostics, readAutoMineDiagnostics } from "./mining/autoMineDiagnostics";
 
 const MAX_ENTRIES = 500;
+const MAX_LOG_STRING_LENGTH = 2_000;
+const MAX_LOG_ARRAY_ITEMS = 50;
+const MAX_LOG_OBJECT_KEYS = 50;
+const MAX_LOG_DEPTH = 6;
 const STORAGE_KEY = "lineaore:logs";
 
 export type LogLevel = "info" | "warn" | "error" | "debug";
@@ -31,7 +35,28 @@ function jsonReplacer(_key: string, value: unknown) {
 }
 
 function safeJsonStringify(value: unknown, space?: number) {
-  return JSON.stringify(value, jsonReplacer, space);
+  return JSON.stringify(value, jsonReplacer, space) ?? "null";
+}
+
+function clampLogString(value: string): string {
+  if (value.length <= MAX_LOG_STRING_LENGTH) return value;
+  return `${value.slice(0, MAX_LOG_STRING_LENGTH)}...<truncated>`;
+}
+
+function clampSupportLogValue(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return clampLogString(value);
+  if (value === null || typeof value !== "object") return value;
+  if (depth >= MAX_LOG_DEPTH) return "<truncated>";
+  if (Array.isArray(value)) {
+    const next = value.slice(0, MAX_LOG_ARRAY_ITEMS).map((item) => clampSupportLogValue(item, depth + 1));
+    if (value.length > MAX_LOG_ARRAY_ITEMS) next.push("<truncated>");
+    return next;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .slice(0, MAX_LOG_OBJECT_KEYS)
+      .map(([key, entryValue]) => [key, clampSupportLogValue(entryValue, depth + 1)]),
+  );
 }
 
 function formatUnknownForLog(value: unknown): string {
@@ -65,8 +90,20 @@ function loadBuffer(): LogEntry[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? sanitizeSupportLogPayload(JSON.parse(raw) as LogEntry[]) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      localStorage.removeItem(STORAGE_KEY);
+      return [];
+    }
+    const sanitized = clampSupportLogValue(sanitizeSupportLogPayload(parsed));
+    return Array.isArray(sanitized) ? sanitized as LogEntry[] : [];
   } catch {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore storage cleanup failures
+    }
     return [];
   }
 }
@@ -113,12 +150,12 @@ function scheduleFlush() {
 
 function push(lvl: LogLevel, tag: string, msg: string, data?: unknown) {
   if (buffer.length === 0) buffer = loadBuffer();
-  const safeData = data !== undefined ? sanitizeSupportLogPayload(sanitize(data)) : undefined;
+  const safeData = data !== undefined ? clampSupportLogValue(sanitizeSupportLogPayload(sanitize(data))) : undefined;
   const entry: LogEntry = {
     ts: new Date().toISOString(),
     lvl,
     tag,
-    msg: sanitizeSupportLogPayload(msg),
+    msg: clampLogString(sanitizeSupportLogPayload(msg)),
     ...(safeData !== undefined && { data: safeData }),
   };
   buffer.push(entry);
@@ -166,8 +203,8 @@ export function exportLogs(): string {
     entries: buffer.length,
     autoMiner: getAutoMineSupportDiagnostics(readAutoMineDiagnostics()),
   };
-  const safeMeta = sanitizeSupportLogPayload(meta);
-  const lines = sanitizeSupportLogPayload(buffer).map((e) => {
+  const safeMeta = clampSupportLogValue(sanitizeSupportLogPayload(meta));
+  const lines = (clampSupportLogValue(sanitizeSupportLogPayload(buffer)) as LogEntry[]).map((e) => {
     const d = e.data !== undefined ? ` | ${safeJsonStringify(e.data)}` : "";
     return `${e.ts} [${e.lvl.toUpperCase().padEnd(5)}] <${e.tag}> ${e.msg}${d}`;
   });

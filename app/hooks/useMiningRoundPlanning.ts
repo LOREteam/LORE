@@ -15,8 +15,8 @@ export type AutoMineRoundPlan =
   | {
       kind: "stop-insufficient-balance";
       liveEpoch: bigint;
-      neededAmount: number;
-      currentAmount: number;
+      neededAmount: string;
+      currentAmount: string;
     }
   | {
       kind: "ready";
@@ -36,6 +36,18 @@ interface PlanAutoMineRoundOptions {
   lastPlacedEpoch: bigint | null;
   secureRandom: (max: number) => number;
   singleAmountRaw: bigint;
+}
+
+function formatLineaWeiOneDecimal(rawValue: bigint): string {
+  const value = rawValue < 0n ? 0n : rawValue;
+  const weiPerLinea = 10n ** 18n;
+  const whole = value / weiPerLinea;
+  const remainder = value % weiPerLinea;
+  const roundedTenths = (remainder * 10n + weiPerLinea / 2n) / weiPerLinea;
+  if (roundedTenths >= 10n) {
+    return `${whole + 1n}.0`;
+  }
+  return `${whole}.${roundedTenths}`;
 }
 
 export async function planAutoMineRound({
@@ -93,8 +105,8 @@ export async function planAutoMineRound({
     return {
       kind: "stop-insufficient-balance",
       liveEpoch,
-      neededAmount: Number(roundCostActual) / 1e18,
-      currentAmount: Number(tokenBalance) / 1e18,
+      neededAmount: formatLineaWeiOneDecimal(roundCostActual),
+      currentAmount: formatLineaWeiOneDecimal(tokenBalance),
     };
   }
 

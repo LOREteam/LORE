@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { encodeFunctionData, formatUnits, getAddress } from "viem";
+import { encodeFunctionData, getAddress } from "viem";
 import type { PublicClient } from "viem";
 import { useReadContract } from "wagmi";
 import type { useWriteContract } from "wagmi";
+import { formatBalanceFixed } from "../lib/balanceFormatting";
 import {
   APP_CHAIN_ID,
+  APP_CHAIN_NAME,
   CONTRACT_ADDRESS,
   GAME_ABI,
   LINEA_TOKEN_ADDRESS,
@@ -18,7 +20,13 @@ import { log } from "../lib/logger";
 import { isUserRejection, normalizeDecimalInput } from "../lib/utils";
 import { parsePositiveLineaAmountWei } from "../lib/tokenAmountMath";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
-import { isAmbiguousPendingTxError, withMiningRpcTimeout } from "./useMining.shared";
+import {
+  isAmbiguousPendingTxError,
+  isSessionExpiredError,
+  isWalletUnavailableError,
+  isWrongNetworkError,
+  withMiningRpcTimeout,
+} from "./useMining.shared";
 
 type NotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 type SilentSendFn = (
@@ -26,15 +34,28 @@ type SilentSendFn = (
   gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint },
 ) => Promise<`0x${string}`>;
 type ExternalSendFn = (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => Promise<`0x${string}`>;
-type ClearEip7702DelegationFn = () => Promise<`0x${string}`>;
 type WriteContractAsyncFn = ReturnType<typeof useWriteContract>["writeContractAsync"];
 type BalanceData = { value: bigint } | null | undefined;
 type ReceiptState = "confirmed" | "pending";
+
+const RESOLVER_REWARD_LARGE_DISPLAY_WEI = 100n * 10n ** 18n;
 
 function formatWalletTransferFailure(error: unknown, asset: "ETH" | "LINEA") {
   const message = error instanceof Error ? error.message : "";
   if (/\btimed out\b|\btimeout\b/i.test(message)) {
     return `${asset} transfer status is unknown after a wallet timeout. Check wallet activity before retrying.`;
+  }
+  if (isAmbiguousPendingTxError(error)) {
+    return `${asset} transfer may already be pending. Check wallet activity before retrying.`;
+  }
+  if (isWrongNetworkError(error)) {
+    return `${asset} transfer failed: wallet is on the wrong network. Switch to ${APP_CHAIN_NAME} and retry.`;
+  }
+  if (isSessionExpiredError(error)) {
+    return `${asset} transfer failed: wallet session expired. Log in again and retry.`;
+  }
+  if (isWalletUnavailableError(error)) {
+    return `${asset} transfer failed: wallet is not ready. Reconnect the wallet and retry.`;
   }
   if (/\brevert(?:ed)?\b|execution reverted/i.test(message)) {
     return `${asset} transfer reverted on-chain. Funds were not moved.`;
@@ -42,10 +63,55 @@ function formatWalletTransferFailure(error: unknown, asset: "ETH" | "LINEA") {
   if (/transaction gas limit cap exceeded/i.test(message)) {
     return `${asset} transfer was rejected before submission. Check the amount and try again.`;
   }
-  return message
-    ? `${asset} transfer failed: ${message}`
-    : `${asset} transfer failed. Check wallet balance and try again.`;
+  if (/insufficient funds|not enough (?:eth|funds)|exceeds balance/i.test(message)) {
+    return `${asset} transfer failed: not enough balance or ETH for gas.`;
+  }
+  if (/rpc|provider|infura|alchemy|sendrawtransaction|sendtransaction|json-rpc/i.test(message)) {
+    return `${asset} transfer could not be submitted through the wallet provider. Check wallet activity before retrying.`;
+  }
+  return `${asset} transfer failed. Check wallet balance and try again.`;
 }
+
+function formatWalletActionFailure(error: unknown, action: string, fallback: string) {
+  const message = error instanceof Error ? error.message : "";
+  if (/\btimed out\b|\btimeout\b/i.test(message)) {
+    return `${action} status is unknown after a wallet timeout. Check wallet activity before retrying.`;
+  }
+  if (isAmbiguousPendingTxError(error)) {
+    return `${action} may already be pending. Check wallet activity before retrying.`;
+  }
+  if (isWrongNetworkError(error)) {
+    return `${action} failed: wallet is on the wrong network. Switch to ${APP_CHAIN_NAME} and retry.`;
+  }
+  if (isSessionExpiredError(error)) {
+    return `${action} failed: wallet session expired. Log in again and retry.`;
+  }
+  if (isWalletUnavailableError(error)) {
+    return `${action} failed: wallet is not ready. Reconnect the wallet and retry.`;
+  }
+  if (/\brevert(?:ed)?\b|execution reverted/i.test(message)) {
+    return `${action} reverted on-chain. No funds were moved by this action.`;
+  }
+  if (/insufficient funds|not enough (?:eth|funds)|exceeds balance/i.test(message)) {
+    return `${action} failed: not enough balance or ETH for gas.`;
+  }
+  if (/rpc|provider|infura|alchemy|sendrawtransaction|sendtransaction|json-rpc/i.test(message)) {
+    return `${action} could not be submitted through the wallet provider. Check wallet activity before retrying.`;
+  }
+  return fallback;
+}
+
+function normalizePendingTransactionNonce(value: unknown): number | null {
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    return Number(value);
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
+
 export interface PendingTransactionStatus {
   latestNonce: number;
   pendingNonce: number;
@@ -63,8 +129,6 @@ interface UseWalletActionsOptions {
   writeContractAsync: WriteContractAsyncFn;
   sendTransactionSilent?: SilentSendFn;
   sendTransactionFromExternal: ExternalSendFn;
-  clearEip7702DelegationFromExternal?: ClearEip7702DelegationFn;
-  refreshEmbeddedWalletCode?: () => Promise<string | null> | string | null;
   publicClient?: PublicClient;
   refetchEmbeddedEthBalance: () => Promise<unknown> | unknown;
   refetchEmbeddedTokenBalance: () => Promise<unknown> | unknown;
@@ -86,8 +150,6 @@ export function useWalletActions({
   writeContractAsync,
   sendTransactionSilent,
   sendTransactionFromExternal,
-  clearEip7702DelegationFromExternal,
-  refreshEmbeddedWalletCode,
   publicClient,
   refetchEmbeddedEthBalance,
   refetchEmbeddedTokenBalance,
@@ -108,12 +170,13 @@ export function useWalletActions({
   const [isDepositingEth, setIsDepositingEth] = useState(false);
   const [isDepositingToken, setIsDepositingToken] = useState(false);
   const walletTransferInFlightRef = useRef(false);
+  const pendingTxRepairInFlightRef = useRef(false);
+  const resolverClaimInFlightRef = useRef(false);
   const [pendingTransactionStatus, setPendingTransactionStatus] = useState<PendingTransactionStatus | null>(null);
   const [isRefreshingPendingTx, setIsRefreshingPendingTx] = useState(false);
   const [isCancellingPendingTx, setIsCancellingPendingTx] = useState(false);
   const [isClaimingConnectedResolverRewards, setIsClaimingConnectedResolverRewards] = useState(false);
   const [isClaimingEmbeddedResolverRewards, setIsClaimingEmbeddedResolverRewards] = useState(false);
-  const [isClearingEip7702Delegation, setIsClearingEip7702Delegation] = useState(false);
 
   const normalizedConnectedWalletAddress = useMemo(() => {
     if (!connectedWalletAddress) return null;
@@ -132,6 +195,18 @@ export function useWalletActions({
       return null;
     }
   }, [embeddedWalletAddress]);
+  const activeConnectedResolverAddressRef = useRef<string | null>(
+    normalizedConnectedWalletAddress?.toLowerCase() ?? null,
+  );
+  activeConnectedResolverAddressRef.current = normalizedConnectedWalletAddress?.toLowerCase() ?? null;
+  const activeEmbeddedResolverAddressRef = useRef<string | null>(
+    normalizedEmbeddedWalletAddress?.toLowerCase() ?? null,
+  );
+  activeEmbeddedResolverAddressRef.current = normalizedEmbeddedWalletAddress?.toLowerCase() ?? null;
+  const activePendingRepairAddressRef = useRef<string | null>(
+    normalizedEmbeddedWalletAddress?.toLowerCase() ?? null,
+  );
+  activePendingRepairAddressRef.current = normalizedEmbeddedWalletAddress?.toLowerCase() ?? null;
 
   const {
     data: connectedResolverRewardsRaw,
@@ -167,10 +242,8 @@ export function useWalletActions({
   const embeddedResolverRewardsWei = embeddedResolverRewardsRaw ?? 0n;
 
   const formatResolverRewards = useCallback((value: bigint) => {
-    const amount = Number(formatUnits(value, 18));
-    if (!Number.isFinite(amount)) return "0.0000";
-    if (amount >= 100) return amount.toFixed(2);
-    return amount.toFixed(4);
+    if (value < 0n) return "0.0000";
+    return formatBalanceFixed({ value, decimals: 18 }, value >= RESOLVER_REWARD_LARGE_DISPLAY_WEI ? 2 : 4) ?? "0.0000";
   }, []);
 
   const connectedResolverRewards = useMemo(
@@ -268,8 +341,13 @@ export function useWalletActions({
           "settings.getTransactionCount.pending",
         ),
       ]);
-      const latestNonce = Number(latestNonceRaw);
-      const pendingNonce = Number(pendingNonceRaw);
+      const latestNonce = normalizePendingTransactionNonce(latestNonceRaw);
+      const pendingNonce = normalizePendingTransactionNonce(pendingNonceRaw);
+      if (latestNonce === null || pendingNonce === null || pendingNonce < latestNonce) {
+        setPendingTransactionStatus(null);
+        notify("Pending transaction nonce evidence is unavailable or unsafe. Wait for wallet/RPC recovery, then retry.", "warning");
+        return null;
+      }
       const nonceGap = Math.max(0, pendingNonce - latestNonce);
       const nextStatus: PendingTransactionStatus = {
         latestNonce,
@@ -287,7 +365,11 @@ export function useWalletActions({
       return nextStatus;
     } catch (err) {
       log.error("PendingTx", "status refresh failed", err);
-      notify("Could not inspect pending transactions right now.", "danger");
+      if (isWrongNetworkError(err)) {
+        notify(`Could not inspect pending transactions: wallet is on the wrong network. Switch to ${APP_CHAIN_NAME} and retry.`, "warning");
+      } else {
+        notify("Could not inspect pending transactions right now.", "danger");
+      }
       return null;
     } finally {
       setIsRefreshingPendingTx(false);
@@ -304,15 +386,30 @@ export function useWalletActions({
       notify("Privy wallet is not ready yet.", "warning");
       return;
     }
-
-    const status = await refreshPendingTransactionStatus();
-    if (!status || status.nonceGap <= 0 || status.blockedNonce === null) {
-      notify("No stuck pending transaction was found to cancel.", "info");
+    if (pendingTxRepairInFlightRef.current) {
+      notify("Pending transaction repair is already in progress.", "info");
       return;
     }
+    const repairActor = getAddress(embeddedWalletAddress).toLowerCase();
+    const assertPendingRepairActorActive = () => {
+      if (activePendingRepairAddressRef.current !== repairActor) {
+        notify("Pending transaction repair stopped because the Privy wallet changed.", "warning");
+        return false;
+      }
+      return true;
+    };
 
+    pendingTxRepairInFlightRef.current = true;
     setIsCancellingPendingTx(true);
+    let repairTxHash: `0x${string}` | null = null;
     try {
+      const status = await refreshPendingTransactionStatus();
+      if (!assertPendingRepairActorActive()) return;
+      if (!status || status.nonceGap <= 0 || status.blockedNonce === null) {
+        notify("No stuck pending transaction was found to cancel.", "info");
+        return;
+      }
+
       const sendCancel = async (nonce: number) => {
         let feeOverrides:
           | { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint }
@@ -340,10 +437,12 @@ export function useWalletActions({
       let hash: `0x${string}`;
       try {
         hash = await sendCancel(targetNonce);
+        repairTxHash = hash;
       } catch (err) {
         const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
         if (message.includes("nonce too low")) {
           const refreshed = await refreshPendingTransactionStatus();
+          if (!assertPendingRepairActorActive()) return;
           if (!refreshed || refreshed.nonceGap <= 0 || refreshed.blockedNonce === null) {
             notify("The blocked nonce already advanced. No stuck pending transaction remains to clear.", "success");
             return;
@@ -353,30 +452,52 @@ export function useWalletActions({
           }
           targetNonce = refreshed.blockedNonce;
           hash = await sendCancel(targetNonce);
+          repairTxHash = hash;
         } else {
           throw err;
         }
       }
 
-      try {
-        await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
-      } catch {
-        // Follow-up nonce refresh below is enough if receipt polling lags.
+      const receiptState = await waitForReceipt(hash);
+      if (!assertPendingRepairActorActive()) return;
+      if (receiptState === "pending") {
+        void refreshPendingTransactionStatus();
+        notify(
+          formatTxStatusMessage(
+            `Pending transaction repair submitted for nonce ${targetNonce} and is still pending confirmation.`,
+            hash,
+          ),
+          "warning",
+        );
+        return;
       }
 
       const refreshed = await refreshPendingTransactionStatus();
+      if (!assertPendingRepairActorActive()) return;
       if (refreshed && refreshed.nonceGap > 0) {
-        notify(`Replaced blocked nonce ${targetNonce}. If more are queued, run clear again.`, "warning");
+        notify(formatTxStatusMessage(`Replaced blocked nonce ${targetNonce}. If more are queued, run clear again.`, hash), "warning");
       } else {
-        notify(`Stuck pending transaction cleared at nonce ${targetNonce}.`, "success");
+        notify(formatTxStatusMessage(`Stuck pending transaction cleared at nonce ${targetNonce}.`, hash), "success");
       }
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("PendingTx", "cancel failed", err);
-        const message = err instanceof Error ? err.message : "";
-        notify(message ? `Could not clear pending tx: ${message}` : "Could not clear pending transaction.", "danger");
+        if (isAmbiguousPendingTxError(err) && repairTxHash) {
+          notify(
+            formatTxStatusMessage(
+              "Pending transaction repair submitted and is still pending confirmation.",
+              repairTxHash,
+            ),
+            "warning",
+          );
+        } else {
+          notify(formatWalletActionFailure(err, "Pending transaction repair", "Could not clear pending transaction."), "danger");
+        }
+      } else {
+        notify("Pending transaction repair rejected in wallet.", "info");
       }
     } finally {
+      pendingTxRepairInFlightRef.current = false;
       setIsCancellingPendingTx(false);
     }
   }, [
@@ -384,8 +505,10 @@ export function useWalletActions({
     notify,
     onOpenWalletSettings,
     publicClient,
+    formatTxStatusMessage,
     refreshPendingTransactionStatus,
     sendTransactionSilent,
+    waitForReceipt,
   ]);
 
   const refreshResolverRewardReads = useCallback(() => {
@@ -395,7 +518,13 @@ export function useWalletActions({
 
   const estimateResolverRewardClaimGas = useCallback(
     async (account: `0x${string}`) => {
-      if (!publicClient) return 160_000n;
+      if (!publicClient) throw new Error("Resolver reward claim simulation is unavailable.");
+      await publicClient.simulateContract({
+        address: CONTRACT_ADDRESS,
+        abi: GAME_ABI,
+        functionName: "claimResolverRewards",
+        account,
+      });
       const data = encodeFunctionData({
         abi: GAME_ABI,
         functionName: "claimResolverRewards",
@@ -423,11 +552,16 @@ export function useWalletActions({
       notify("No resolver rewards are pending for the connected wallet.", "info");
       return;
     }
+    if (resolverClaimInFlightRef.current) return;
+    resolverClaimInFlightRef.current = true;
+    const claimActor = normalizedConnectedWalletAddress.toLowerCase();
+    let claimTxHash: `0x${string}` | null = null;
 
     setIsClaimingConnectedResolverRewards(true);
     try {
       notify("Preparing resolver reward claim. Confirm the wallet prompt if it appears.", "info");
       const gas = await estimateResolverRewardClaimGas(normalizedConnectedWalletAddress);
+      if (activeConnectedResolverAddressRef.current !== claimActor) return;
       const hash = await writeContractAsync({
         address: CONTRACT_ADDRESS,
         abi: GAME_ABI,
@@ -435,7 +569,9 @@ export function useWalletActions({
         chainId: APP_CHAIN_ID,
         gas,
       });
+      claimTxHash = hash;
       const receiptState = await waitForReceipt(hash);
+      if (activeConnectedResolverAddressRef.current !== claimActor) return;
       if (receiptState === "pending") {
         notify(formatTxStatusMessage("Resolver reward claim submitted and is still pending confirmation.", hash), "info");
         refreshResolverRewardReads();
@@ -444,19 +580,25 @@ export function useWalletActions({
       refreshResolverRewardReads();
       notify(formatTxStatusMessage("Resolver rewards claimed to the connected wallet.", hash), "success");
     } catch (err) {
+      if (activeConnectedResolverAddressRef.current !== claimActor) return;
       if (isAmbiguousPendingTxError(err)) {
-        notify("Resolver reward claim may already be pending. Check wallet activity before retrying.", "warning");
+        notify(
+          claimTxHash
+            ? formatTxStatusMessage("Resolver reward claim submitted and is still pending confirmation.", claimTxHash)
+            : "Resolver reward claim may already be pending. Check wallet activity before retrying.",
+          "warning",
+        );
       } else if (!isUserRejection(err)) {
         log.error("ResolverRewards", "connected claim failed", err);
-        const message = err instanceof Error ? err.message : "";
         notify(
-          message ? `Resolver reward claim failed: ${message}` : "Resolver reward claim failed.",
+          formatWalletActionFailure(err, "Resolver reward claim", "Resolver reward claim failed."),
           "danger",
         );
       } else {
         notify("Resolver reward claim rejected in wallet.", "info");
       }
     } finally {
+      resolverClaimInFlightRef.current = false;
       setIsClaimingConnectedResolverRewards(false);
     }
   }, [
@@ -484,21 +626,28 @@ export function useWalletActions({
       notify("No resolver rewards are pending for the Privy wallet.", "info");
       return;
     }
+    if (resolverClaimInFlightRef.current) return;
+    resolverClaimInFlightRef.current = true;
+    const claimActor = normalizedEmbeddedWalletAddress.toLowerCase();
+    let claimTxHash: `0x${string}` | null = null;
 
     setIsClaimingEmbeddedResolverRewards(true);
     try {
-      notify("Preparing resolver reward claim from the Privy wallet.", "info");
+      notify("Preparing resolver reward claim.", "info");
       const data = encodeFunctionData({
         abi: GAME_ABI,
         functionName: "claimResolverRewards",
       });
       const gas = await estimateResolverRewardClaimGas(normalizedEmbeddedWalletAddress);
+      if (activeEmbeddedResolverAddressRef.current !== claimActor) return;
       const hash = await sendTransactionSilent({
         to: CONTRACT_ADDRESS,
         data,
         gas,
       });
+      claimTxHash = hash;
       const receiptState = await waitForReceipt(hash);
+      if (activeEmbeddedResolverAddressRef.current !== claimActor) return;
       if (receiptState === "pending") {
         notify(formatTxStatusMessage("Resolver reward claim submitted and is still pending confirmation.", hash), "info");
         refreshResolverRewardReads();
@@ -507,19 +656,25 @@ export function useWalletActions({
       refreshResolverRewardReads();
       notify(formatTxStatusMessage("Resolver rewards claimed to the Privy wallet.", hash), "success");
     } catch (err) {
+      if (activeEmbeddedResolverAddressRef.current !== claimActor) return;
       if (isAmbiguousPendingTxError(err)) {
-        notify("Resolver reward claim may already be pending. Check wallet activity before retrying.", "warning");
+        notify(
+          claimTxHash
+            ? formatTxStatusMessage("Resolver reward claim submitted and is still pending confirmation.", claimTxHash)
+            : "Resolver reward claim may already be pending. Check wallet activity before retrying.",
+          "warning",
+        );
       } else if (!isUserRejection(err)) {
         log.error("ResolverRewards", "embedded claim failed", err);
-        const message = err instanceof Error ? err.message : "";
         notify(
-          message ? `Resolver reward claim failed: ${message}` : "Resolver reward claim failed.",
+          formatWalletActionFailure(err, "Resolver reward claim", "Resolver reward claim failed."),
           "danger",
         );
       } else {
         notify("Resolver reward claim rejected in wallet.", "info");
       }
     } finally {
+      resolverClaimInFlightRef.current = false;
       setIsClaimingEmbeddedResolverRewards(false);
     }
   }, [
@@ -551,6 +706,7 @@ export function useWalletActions({
     }
     if (walletTransferInFlightRef.current) return;
     walletTransferInFlightRef.current = true;
+    let transferTxHash: `0x${string}` | null = null;
 
     setIsWithdrawing(true);
     try {
@@ -562,6 +718,7 @@ export function useWalletActions({
         args: [getAddress(externalWalletAddress), amountWei],
         chainId: APP_CHAIN_ID,
       });
+      transferTxHash = hash;
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
         notify(formatTxStatusMessage("LINEA withdraw submitted and is still pending confirmation.", hash), "info");
@@ -573,7 +730,11 @@ export function useWalletActions({
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Withdraw", "failed", err);
-        notify("Withdraw failed. Check your balance and try again.", "danger");
+        if (isAmbiguousPendingTxError(err) && transferTxHash) {
+          notify(formatTxStatusMessage("LINEA withdraw submitted and is still pending confirmation.", transferTxHash), "warning");
+        } else {
+          notify(formatWalletTransferFailure(err, "LINEA"), "danger");
+        }
       } else {
         notify("LINEA withdraw rejected in wallet.", "info");
       }
@@ -619,14 +780,16 @@ export function useWalletActions({
     }
     if (walletTransferInFlightRef.current) return;
     walletTransferInFlightRef.current = true;
+    let transferTxHash: `0x${string}` | null = null;
 
     setIsWithdrawingEth(true);
     try {
-      notify("Preparing ETH withdraw from the Privy wallet.", "info");
+      notify("Preparing ETH withdraw.", "info");
       const hash = await sendTransactionSilent({
         to: getAddress(externalWalletAddress),
         value: amountWei,
       });
+      transferTxHash = hash;
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
         notify(formatTxStatusMessage("ETH withdraw submitted and is still pending confirmation.", hash), "info");
@@ -638,7 +801,11 @@ export function useWalletActions({
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Withdraw", "ETH withdraw failed", err);
-        notify(formatWalletTransferFailure(err, "ETH"), "danger");
+        if (isAmbiguousPendingTxError(err) && transferTxHash) {
+          notify(formatTxStatusMessage("ETH withdraw submitted and is still pending confirmation.", transferTxHash), "warning");
+        } else {
+          notify(formatWalletTransferFailure(err, "ETH"), "danger");
+        }
       } else {
         notify("ETH withdraw rejected in wallet.", "info");
       }
@@ -679,6 +846,7 @@ export function useWalletActions({
     }
     if (walletTransferInFlightRef.current) return;
     walletTransferInFlightRef.current = true;
+    let transferTxHash: `0x${string}` | null = null;
 
     try {
       setIsDepositingEth(true);
@@ -687,6 +855,7 @@ export function useWalletActions({
         to: getAddress(embeddedWalletAddress),
         value,
       });
+      transferTxHash = hash;
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
         notify(formatTxStatusMessage("ETH transfer submitted and is still pending confirmation.", hash), "info");
@@ -697,7 +866,11 @@ export function useWalletActions({
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Deposit", "ETH transfer to Privy failed", err);
-        notify(formatWalletTransferFailure(err, "ETH"), "danger");
+        if (isAmbiguousPendingTxError(err) && transferTxHash) {
+          notify(formatTxStatusMessage("ETH transfer submitted and is still pending confirmation.", transferTxHash), "warning");
+        } else {
+          notify(formatWalletTransferFailure(err, "ETH"), "danger");
+        }
       } else {
         notify("ETH top-up rejected in wallet.", "info");
       }
@@ -735,6 +908,7 @@ export function useWalletActions({
     }
     if (walletTransferInFlightRef.current) return;
     walletTransferInFlightRef.current = true;
+    let transferTxHash: `0x${string}` | null = null;
 
     try {
       if (publicClient) {
@@ -760,6 +934,7 @@ export function useWalletActions({
         to: LINEA_TOKEN_ADDRESS,
         data,
       });
+      transferTxHash = hash;
       const receiptState = await waitForReceipt(hash);
       if (receiptState === "pending") {
         notify(formatTxStatusMessage("LINEA transfer submitted and is still pending confirmation.", hash), "info");
@@ -773,7 +948,11 @@ export function useWalletActions({
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("Deposit", "LINEA transfer to Privy failed", err);
-        notify(formatWalletTransferFailure(err, "LINEA"), "danger");
+        if (isAmbiguousPendingTxError(err) && transferTxHash) {
+          notify(formatTxStatusMessage("LINEA transfer submitted and is still pending confirmation.", transferTxHash), "warning");
+        } else {
+          notify(formatWalletTransferFailure(err, "LINEA"), "danger");
+        }
       } else {
         notify("LINEA deposit rejected in wallet.", "info");
       }
@@ -796,52 +975,6 @@ export function useWalletActions({
     walletTransfersEnabled,
   ]);
 
-  const handleClearEip7702Delegation = useCallback(async () => {
-    if (!embeddedWalletAddress) {
-      notify("Create a Privy wallet first.", "warning");
-      onOpenWalletSettings();
-      return;
-    }
-    if (!clearEip7702DelegationFromExternal) {
-      notify("Wallet repair is not ready yet. Reload the page and try again.", "warning");
-      return;
-    }
-
-    setIsClearingEip7702Delegation(true);
-    try {
-      const hash = await clearEip7702DelegationFromExternal();
-      const receiptState = await waitForReceipt(hash);
-      if (receiptState === "pending") {
-        notify(formatTxStatusMessage("Privy wallet repair submitted and is still pending confirmation.", hash), "info");
-        return;
-      }
-      const remainingDelegateAddress = await refreshEmbeddedWalletCode?.();
-      if (remainingDelegateAddress) {
-        notify("Repair transaction confirmed, but old EIP-7702 delegation is still active. Send the repair tx hash from logs.", "danger");
-        return;
-      }
-      void refetchEmbeddedEthBalance();
-      notify(formatTxStatusMessage("Privy wallet repaired. ETH top-up should now use normal transfers.", hash), "success");
-    } catch (err) {
-      if (!isUserRejection(err)) {
-        log.error("Wallet", "clear 7702 delegation failed", err);
-        const message = err instanceof Error ? err.message : "";
-        notify(message ? `Privy wallet repair failed: ${message}` : "Privy wallet repair failed. Try again from the external wallet.", "danger");
-      }
-    } finally {
-      setIsClearingEip7702Delegation(false);
-    }
-  }, [
-    clearEip7702DelegationFromExternal,
-    embeddedWalletAddress,
-    formatTxStatusMessage,
-    notify,
-    onOpenWalletSettings,
-    refetchEmbeddedEthBalance,
-    refreshEmbeddedWalletCode,
-    waitForReceipt,
-  ]);
-
   return useMemo(
     () => ({
       withdrawAmount,
@@ -856,7 +989,6 @@ export function useWalletActions({
       isWithdrawingEth,
       isDepositingEth,
       isDepositingToken,
-      isClearingEip7702Delegation,
       pendingTransactionStatus,
       isRefreshingPendingTx,
       isCancellingPendingTx,
@@ -870,7 +1002,6 @@ export function useWalletActions({
       handleWithdrawEthToExternal,
       handleDepositEthToEmbedded,
       handleDepositTokenToEmbedded,
-      handleClearEip7702Delegation,
       refreshPendingTransactionStatus,
       cancelPendingTransaction,
       handleClaimConnectedResolverRewards,
@@ -885,7 +1016,6 @@ export function useWalletActions({
       isWithdrawingEth,
       isDepositingEth,
       isDepositingToken,
-      isClearingEip7702Delegation,
       pendingTransactionStatus,
       isRefreshingPendingTx,
       isCancellingPendingTx,
@@ -899,7 +1029,6 @@ export function useWalletActions({
       handleWithdrawEthToExternal,
       handleDepositEthToEmbedded,
       handleDepositTokenToEmbedded,
-      handleClearEip7702Delegation,
       refreshPendingTransactionStatus,
       cancelPendingTransaction,
       handleClaimConnectedResolverRewards,

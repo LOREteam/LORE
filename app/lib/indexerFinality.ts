@@ -14,10 +14,15 @@ export function getIndexerFinalityTargetBlock(headBlock: bigint, finalityBlocks:
   return headBlock - finalityBlocks;
 }
 
+function bigintToNonNegativeSafeNumber(value: bigint) {
+  if (value <= 0n) return 0;
+  return value > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(value);
+}
+
 export function getIndexerTargetLagBlocks(lastIndexedBlock: bigint | null, targetBlock: bigint | null) {
   if (lastIndexedBlock === null || targetBlock === null) return null;
   if (lastIndexedBlock >= targetBlock) return 0;
-  return Number(targetBlock - lastIndexedBlock);
+  return bigintToNonNegativeSafeNumber(targetBlock - lastIndexedBlock);
 }
 
 export function hasMainnetIndexerFinality(value?: string | null) {

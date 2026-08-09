@@ -23,6 +23,53 @@ const APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS = 12_000;
 const APPROVE_PENDING_TIMEOUT_MS = 30_000;
 const MIN_GAS_APPROVE = 90_000n;
 
+function computeAllowancePollDeadline(now: number, timeoutMs: number): number | null {
+  if (
+    !Number.isSafeInteger(now) ||
+    !Number.isSafeInteger(timeoutMs) ||
+    now < 0 ||
+    timeoutMs <= 0 ||
+    timeoutMs > Number.MAX_SAFE_INTEGER - now
+  ) {
+    return null;
+  }
+  return now + timeoutMs;
+}
+
+function normalizeApprovalNonce(value: unknown): number | null {
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    return Number(value);
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
+
+function getPendingApproveAgeMs(pendingApprove: PendingApproveState, now: number): number | null {
+  if (
+    !Number.isSafeInteger(now) ||
+    now < 0 ||
+    !Number.isSafeInteger(pendingApprove.submittedAt) ||
+    pendingApprove.submittedAt < 0 ||
+    pendingApprove.submittedAt > now + 5_000
+  ) {
+    return null;
+  }
+  return now - pendingApprove.submittedAt;
+}
+
+function assertPendingApproveReplacementReady(pendingApprove: PendingApproveState, waitMessage: string): void {
+  const pendingAgeMs = getPendingApproveAgeMs(pendingApprove, Date.now());
+  if (pendingAgeMs === null) {
+    throw new Error("Approval pending state is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
+  }
+  if (pendingAgeMs <= APPROVE_PENDING_TIMEOUT_MS) {
+    throw new Error(waitMessage);
+  }
+}
+
 interface UseMiningAllowanceOptions {
   assertNativeGasBalance: (gas: bigint, gasOverrides?: GasOverrides) => Promise<void>;
   ensureContractPreflight: () => Promise<void>;
@@ -71,7 +118,8 @@ export function useMiningAllowance({
 
   const pollAllowanceUntil = useCallback(
     async (actorAddress: `0x${string}`, requiredAmount: bigint, timeoutMs: number) => {
-      const deadline = Date.now() + timeoutMs;
+      const deadline = computeAllowancePollDeadline(Date.now(), timeoutMs);
+      if (deadline === null) return false;
       while (Date.now() < deadline) {
         try {
           const allowance = await readAllowance(actorAddress);
@@ -132,6 +180,12 @@ export function useMiningAllowance({
           refetchAllowance();
           return;
         }
+        if (pendingApproveRef.current) {
+          assertPendingApproveReplacementReady(
+            pendingApproveRef.current,
+            "Approval transaction is still pending. Wait for confirmation before placing a bet.",
+          );
+        }
 
         const approveOverrides = await getApproveFees(attempt) ?? await getUrgentFees();
         const writeApproveOverrides =
@@ -142,12 +196,17 @@ export function useMiningAllowance({
               }
             : {};
         await assertNativeGasBalance(MIN_GAS_APPROVE, approveOverrides);
-        const approvalNonce = pendingApproveRef.current?.nonce ?? Number(
-          await withMiningRpcTimeout(pc.getTransactionCount({
+        const approvalNonceRaw = pendingApproveRef.current?.nonce ?? await withMiningRpcTimeout(
+          pc.getTransactionCount({
             address: actor,
             blockTag: "latest",
-          }), "approve.getTransactionCount"),
+          }),
+          "approve.getTransactionCount",
         );
+        const approvalNonce = normalizeApprovalNonce(approvalNonceRaw);
+        if (approvalNonce === null) {
+          throw new Error("Approval nonce is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
+        }
         const silentSend = readSilentSend();
         let approveHash: `0x${string}` | undefined;
         let approveState: ReceiptState = "confirmed";
@@ -203,7 +262,12 @@ export function useMiningAllowance({
           continue;
         }
 
-        const pendingAgeMs = pendingApproveRef.current ? Date.now() - pendingApproveRef.current.submittedAt : 0;
+        const pendingAgeMs = pendingApproveRef.current
+          ? getPendingApproveAgeMs(pendingApproveRef.current, Date.now())
+          : 0;
+        if (pendingAgeMs === null) {
+          throw new Error("Approval pending state is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
+        }
         throw new Error(
           pendingAgeMs > APPROVE_PENDING_TIMEOUT_MS
             ? "Approval transaction is still pending or underpriced. Retry once more to replace it."

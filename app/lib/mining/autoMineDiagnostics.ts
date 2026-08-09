@@ -1,4 +1,5 @@
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../constants";
+import { sanitizeSupportLogPayload } from "../sentrySanitize";
 import type { AutoMineLoopStopReason } from "./autoMineLoopModel";
 import type { AutoMinePhase, RunningParams } from "../../hooks/useMining.types";
 
@@ -6,6 +7,7 @@ export type AutoMineDiagnosticsErrorKind =
   | "session-expired"
   | "network"
   | "wallet-unavailable"
+  | "wrong-network"
   | "pending-nonce-blocked"
   | "insufficient-funds"
   | "timeout"
@@ -14,6 +16,7 @@ export type AutoMineDiagnosticsErrorKind =
 export type AutoMineDiagnosticsStopReason =
   | AutoMineLoopStopReason
   | "error"
+  | "pending-nonce-blocked"
   | "retry-wait"
   | "session-expired";
 
@@ -55,6 +58,7 @@ const DIAGNOSTIC_ERROR_KINDS: AutoMineDiagnosticsErrorKind[] = [
   "session-expired",
   "network",
   "wallet-unavailable",
+  "wrong-network",
   "pending-nonce-blocked",
   "insufficient-funds",
   "timeout",
@@ -68,9 +72,19 @@ const DIAGNOSTIC_STOP_REASONS: AutoMineDiagnosticsStopReason[] = [
   "insufficient-balance",
   "no-client",
   "error",
+  "pending-nonce-blocked",
   "retry-wait",
   "session-expired",
 ];
+const MAX_DIAGNOSTIC_RAW_MESSAGE_CHARS = 500;
+
+function sanitizeDiagnosticRawMessage(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = String(sanitizeSupportLogPayload(value)).replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  if (text.length <= MAX_DIAGNOSTIC_RAW_MESSAGE_CHARS) return text;
+  return `${text.slice(0, MAX_DIAGNOSTIC_RAW_MESSAGE_CHARS - 15)}...<truncated>`;
+}
 
 function getStorage(storage?: AutoMineDiagnosticsStorage | null) {
   if (storage) return storage;
@@ -105,6 +119,14 @@ function isStopReason(value: unknown): value is AutoMineDiagnosticsStopReason {
   return DIAGNOSTIC_STOP_REASONS.includes(value as AutoMineDiagnosticsStopReason);
 }
 
+function normalizeAutoMineDiagnosticsCounter(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function normalizeAutoMineDiagnosticsUpdatedAt(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
 export function createDefaultAutoMineDiagnosticsSnapshot(): AutoMineDiagnosticsSnapshot {
   return {
     phase: "idle",
@@ -137,13 +159,11 @@ export function sanitizeAutoMineDiagnosticsSnapshot(value: unknown): AutoMineDia
     sessionExpired: candidate.sessionExpired === true,
     lastErrorKind: isErrorKind(candidate.lastErrorKind) ? candidate.lastErrorKind : null,
     lastErrorMessage: typeof candidate.lastErrorMessage === "string" ? candidate.lastErrorMessage : null,
-    lastErrorRawMessage: typeof candidate.lastErrorRawMessage === "string" ? candidate.lastErrorRawMessage : null,
+    lastErrorRawMessage: sanitizeDiagnosticRawMessage(candidate.lastErrorRawMessage),
     lastStopReason: isStopReason(candidate.lastStopReason) ? candidate.lastStopReason : null,
     lastEpoch: typeof candidate.lastEpoch === "string" && /^\d+$/.test(candidate.lastEpoch) ? candidate.lastEpoch : null,
-    retryCount: Number.isInteger(candidate.retryCount) && Number(candidate.retryCount) >= 0
-      ? Number(candidate.retryCount)
-      : 0,
-    updatedAt: Number.isFinite(candidate.updatedAt) ? Number(candidate.updatedAt) : 0,
+    retryCount: normalizeAutoMineDiagnosticsCounter(candidate.retryCount),
+    updatedAt: normalizeAutoMineDiagnosticsUpdatedAt(candidate.updatedAt),
   };
 }
 
@@ -172,11 +192,11 @@ export function mergeAutoMineDiagnosticsSnapshot(
   patch: Partial<AutoMineDiagnosticsSnapshot>,
   now: number = Date.now(),
 ): AutoMineDiagnosticsSnapshot {
-  return {
+  return sanitizeAutoMineDiagnosticsSnapshot({
     ...(current ?? createDefaultAutoMineDiagnosticsSnapshot()),
     ...patch,
     updatedAt: now,
-  };
+  });
 }
 
 export function readAutoMineDiagnostics(storage?: AutoMineDiagnosticsStorage | null): AutoMineDiagnosticsSnapshot | null {
@@ -187,6 +207,11 @@ export function readAutoMineDiagnostics(storage?: AutoMineDiagnosticsStorage | n
     if (!raw) return null;
     return sanitizeAutoMineDiagnosticsSnapshot(JSON.parse(raw));
   } catch {
+    try {
+      targetStorage.removeItem(AUTO_MINE_DIAGNOSTICS_STORAGE_KEY);
+    } catch {
+      // ignore storage cleanup failures
+    }
     return null;
   }
 }

@@ -1,8 +1,8 @@
 import { parseAbi } from "viem";
 
 /**
- * Shared V9 contract ABI fragments used by both the keeper bot and
- * the bootstrap-resolve API route.
+ * Shared V9-compatible resolve ABI fragments used by the keeper bot and
+ * bootstrap-resolve API route. V10 intentionally preserves these selectors.
  */
 export const RESOLVE_ABI = parseAbi([
   "function resolveEpoch(uint256 epoch) external",

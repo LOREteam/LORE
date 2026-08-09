@@ -3,7 +3,7 @@
 import { log } from "../lib/logger";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { usePublicClient, useAccount } from "wagmi";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, getAddress } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, REWARD_SCAN_CHUNK_SIZE, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
 import type { UnclaimedWin } from "../lib/types";
 import { isUserRejection, delay } from "../lib/utils";
@@ -14,6 +14,7 @@ import { isAmbiguousPendingTxError } from "./useMining.shared";
 interface UseRewardScannerOptions {
   enabled?: boolean;
   isPageVisible?: boolean;
+  preferredAddress?: `0x${string}` | string | null;
   sendTransactionSilent?: (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => Promise<`0x${string}`>;
   onNotify?: (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 }
@@ -23,13 +24,13 @@ type ReceiptState = "confirmed" | "pending";
 
 const MAX_SCAN_DEPTH = BigInt(5000); // keep automatic scans bounded; use Deep Scan for older late claims
 const FAST_SCAN_DEPTH = BigInt(1500); // quick first pass for responsive UI
-const MAX_CONSECUTIVE_EMPTY = 5;
 const MAX_BATCH_CLAIM_EPOCHS = 128;
 const CLAIM_GAS_FALLBACK = 200_000n;
 const CLAIM_GAS_BUFFER = 20_000n;
 const CLAIM_GAS_HEADROOM_BPS = 12_000n;
 const BPS_DENOMINATOR = 10_000n;
 const REWARD_CLAIM_WINDOW_SECONDS = 365n * 24n * 60n * 60n;
+const REWARD_SCAN_CHUNK_SIZE_NUMBER = Number(REWARD_SCAN_CHUNK_SIZE);
 /** How long before a background re-scan is triggered after using cached data. */
 const REWARD_SCAN_CACHE_RESCAN_MS = 15 * 60_000; // 15 minutes
 
@@ -45,7 +46,7 @@ type RewardScanCacheEnvelope = {
 };
 
 function getRewardScanCacheKey(address: string) {
-  return `lore:reward-scan:v2:${address.toLowerCase()}`;
+  return `lore:reward-scan:v2:${getAddress(address).toLowerCase()}`;
 }
 
 export function normalizeRewardScanEpochString(value: unknown): string | null {
@@ -95,14 +96,17 @@ function loadCachedRewardScan(address: string): {
   deepestScannedEpoch: string | null;
 } {
   if (typeof localStorage === "undefined") return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
+  const cacheKey = getRewardScanCacheKey(address);
+  let sourceKey = cacheKey;
   try {
     // Try v2 first, then migrate v1 if present
-    let raw = localStorage.getItem(getRewardScanCacheKey(address));
+    let raw = localStorage.getItem(cacheKey);
     if (!raw) {
       // Attempt to read legacy v1 cache for seamless migration
-      const v1Key = `lore:reward-scan:v1:${address.toLowerCase()}`;
+      const v1Key = `lore:reward-scan:v1:${getAddress(address).toLowerCase()}`;
       raw = localStorage.getItem(v1Key);
       if (raw) {
+        sourceKey = v1Key;
         // Remove legacy key after reading
         try { localStorage.removeItem(v1Key); } catch { /* ignore */ }
       }
@@ -110,6 +114,7 @@ function loadCachedRewardScan(address: string): {
     if (!raw) return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
     const parsed = JSON.parse(raw) as RewardScanCacheEnvelope;
     if (!parsed || !Array.isArray(parsed.wins)) {
+      try { localStorage.removeItem(sourceKey); } catch { /* ignore */ }
       return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
     }
     const wins = normalizeRewardScanWins(parsed.wins);
@@ -125,6 +130,7 @@ function loadCachedRewardScan(address: string): {
         normalizeRewardScanEpochString(parsed.deepestScannedEpoch),
     };
   } catch {
+    try { localStorage.removeItem(sourceKey); } catch { /* ignore */ }
     return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
   }
 }
@@ -161,6 +167,15 @@ export function getRewardScanRescanDelayMs(savedAt: number | null, now = Date.no
 export function formatRewardClaimError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   const lower = message.toLowerCase();
+  if (lower.includes("timeout") || lower.includes("timed out")) {
+    return "Reward claim status is unknown after a wallet timeout. Check wallet activity before retrying.";
+  }
+  if (isAmbiguousPendingTxError(err)) {
+    return "Reward claim may already be pending. Check wallet activity before retrying.";
+  }
+  if (lower.includes("revert") || lower.includes("execution reverted")) {
+    return "Reward claim reverted on-chain. No reward was moved by this transaction.";
+  }
   if (lower.includes("rewardclaimwindowexpired") || lower.includes("claim window expired")) {
     return "This reward claim window has expired.";
   }
@@ -170,6 +185,12 @@ export function formatRewardClaimError(err: unknown): string {
   }
   if (lower.includes("nothingtoclaim") || lower.includes("no reward")) {
     return "No reward is available for this epoch.";
+  }
+  if (lower.includes("insufficient funds") || lower.includes("not enough eth") || lower.includes("not enough funds")) {
+    return "Reward claim failed: not enough balance or ETH for gas.";
+  }
+  if (lower.includes("rpc") || lower.includes("provider") || lower.includes("sendrawtransaction") || lower.includes("sendtransaction") || lower.includes("json-rpc")) {
+    return "Reward claim hit a wallet or RPC issue. Check wallet activity before retrying.";
   }
   return "Claim failed. Please try again.";
 }
@@ -191,8 +212,17 @@ export function useRewardScanner(
   actualCurrentEpoch: bigint | undefined,
   options?: UseRewardScannerOptions,
 ) {
-  const { address } = useAccount();
+  const { address: connectedAddress } = useAccount();
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
+  const address = useMemo(() => {
+    const candidate = options?.preferredAddress ?? connectedAddress;
+    if (!candidate) return undefined;
+    try {
+      return getAddress(candidate);
+    } catch {
+      return undefined;
+    }
+  }, [connectedAddress, options?.preferredAddress]);
   const enabled = options?.enabled ?? true;
   const isPageVisible = options?.isPageVisible ?? true;
   const notify = options?.onNotify;
@@ -210,6 +240,9 @@ export function useRewardScanner(
   const lastScannedAddressRef = useRef<string | null>(null);
   const cacheSavedAtRef = useRef<number | null>(null);
   const mountedRef = useRef(false);
+  const claimInFlightRef = useRef(false);
+  const activeClaimAddressRef = useRef<string | undefined>(address?.toLowerCase());
+  activeClaimAddressRef.current = address?.toLowerCase();
   const previousAddressRef = useRef<string | undefined>(undefined);
   const unclaimedWinsRef = useRef(unclaimedWins);
   unclaimedWinsRef.current = unclaimedWins;
@@ -459,7 +492,6 @@ export function useRewardScanner(
       const scanRange = async (rangeStart: bigint, rangeMin: bigint) => {
         if (rangeStart < rangeMin) return;
         let cursor = rangeStart;
-        let consecutiveEmpty = 0;
         while (cursor >= rangeMin && !scanAbortRef.current) {
           if (requestId !== requestIdRef.current) return;
           let end = cursor - REWARD_SCAN_CHUNK_SIZE + BigInt(1);
@@ -489,20 +521,17 @@ export function useRewardScanner(
           if (requestId !== requestIdRef.current) return;
 
           const potentialWins: { id: bigint; winTile: bigint; rewardPool: bigint }[] = [];
-          let chunkHadResolved = false;
           epochIds.forEach((id, index) => {
             const epRes = epochResults[index]?.result as unknown as EpochTuple | undefined;
             const claimed = claimResults[index]?.result as unknown as boolean | undefined;
             const dustSettled = dustSettledResults[index]?.result as unknown as boolean | undefined;
             if (!epRes) return;
-            if (epRes[3]) chunkHadResolved = true;
             if (claimed === false && dustSettled !== true && epRes[3]) {
               potentialWins.push({ id, rewardPool: epRes[1], winTile: epRes[2] });
             }
           });
 
           if (potentialWins.length > 0) {
-            consecutiveEmpty = 0;
             const [betResults, tilePoolResults, resolvedAtResults] = await Promise.all([
               publicClient.multicall({
                 contracts: potentialWins.map((w) => ({
@@ -538,9 +567,6 @@ export function useRewardScanner(
                 });
               }
             });
-          } else if (chunkHadResolved) {
-            consecutiveEmpty++;
-            if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) break;
           }
 
           cursor = end - BigInt(1);
@@ -558,37 +584,41 @@ export function useRewardScanner(
 
         // Re-validate cached wins: check if any were claimed or dust-settled since last scan
         if (cached.wins.length > 0) {
-          const cachedEpochIds = cached.wins.map((w) => w.epoch);
-          const [claimChecks, dustChecks, resolvedAtChecks] = await Promise.all([
-            publicClient.multicall({
-              contracts: cachedEpochIds.map((epochId) => ({
-                address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "hasClaimed" as const, args: [address, BigInt(epochId)],
-              })),
-            }),
-            publicClient.multicall({
-              contracts: cachedEpochIds.map((epochId) => ({
-                address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochDustSettled" as const, args: [BigInt(epochId)],
-              })),
-            }),
-            publicClient.multicall({
-              contracts: cachedEpochIds.map((epochId) => ({
-                address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochResolvedAt" as const, args: [BigInt(epochId)],
-              })),
-            }),
-          ]);
-          if (requestId !== requestIdRef.current) return;
+          for (let offset = 0; offset < cached.wins.length; offset += REWARD_SCAN_CHUNK_SIZE_NUMBER) {
+            if (scanAbortRef.current || requestId !== requestIdRef.current) return;
+            const cachedWinChunk = cached.wins.slice(offset, offset + REWARD_SCAN_CHUNK_SIZE_NUMBER);
+            const cachedEpochIds = cachedWinChunk.map((w) => w.epoch);
+            const [claimChecks, dustChecks, resolvedAtChecks] = await Promise.all([
+              publicClient.multicall({
+                contracts: cachedEpochIds.map((epochId) => ({
+                  address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "hasClaimed" as const, args: [address, BigInt(epochId)],
+                })),
+              }),
+              publicClient.multicall({
+                contracts: cachedEpochIds.map((epochId) => ({
+                  address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochDustSettled" as const, args: [BigInt(epochId)],
+                })),
+              }),
+              publicClient.multicall({
+                contracts: cachedEpochIds.map((epochId) => ({
+                  address: CONTRACT_ADDRESS, abi: GAME_ABI, functionName: "epochResolvedAt" as const, args: [BigInt(epochId)],
+                })),
+              }),
+            ]);
+            if (scanAbortRef.current || requestId !== requestIdRef.current) return;
 
-          cached.wins.forEach((w, index) => {
-            const claimed = claimChecks[index]?.result as unknown as boolean | undefined;
-            const dustSettled = dustChecks[index]?.result as unknown as boolean | undefined;
-            const resolvedAt = resolvedAtChecks[index]?.result as unknown as bigint | undefined;
-            if (
-              claimed !== true && dustSettled !== true && resolvedAt !== undefined
-              && isRewardClaimWindowOpen(resolvedAt, chainTimestamp)
-            ) {
-              wins.push(w);
-            }
-          });
+            cachedWinChunk.forEach((w, index) => {
+              const claimed = claimChecks[index]?.result as unknown as boolean | undefined;
+              const dustSettled = dustChecks[index]?.result as unknown as boolean | undefined;
+              const resolvedAt = resolvedAtChecks[index]?.result as unknown as bigint | undefined;
+              if (
+                claimed !== true && dustSettled !== true && resolvedAt !== undefined
+                && isRewardClaimWindowOpen(resolvedAt, chainTimestamp)
+              ) {
+                wins.push(w);
+              }
+            });
+          }
         }
 
         // Update UI with merged results after incremental scan
@@ -700,19 +730,24 @@ export function useRewardScanner(
 
   const claimReward = useCallback(
     async (epochId: string) => {
-      if (!silentSend) {
+      if (!silentSend || !address) {
         notify?.("Wallet is not ready to claim yet. Please try again in a moment.", "warning");
         return;
       }
+      if (claimInFlightRef.current) return;
+      claimInFlightRef.current = true;
+      const claimActor = address.toLowerCase();
 
       if (mountedRef.current) {
         setIsClaiming(true);
       }
       try {
-        notify?.("Preparing reward claim from the Privy wallet.", "info");
+        notify?.("Preparing reward claim.", "info");
         const { data, gas } = await prepareClaimTx(epochId);
+        if (activeClaimAddressRef.current !== claimActor) return;
         const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
         const receiptState = await waitReceipt(hash);
+        if (activeClaimAddressRef.current !== claimActor) return;
         if (receiptState === "pending") {
           notify?.(
             formatClaimTxMessage("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", hash),
@@ -723,10 +758,11 @@ export function useRewardScanner(
         }
         if (mountedRef.current) {
           setUnclaimedWins((prev) => {
+            if (activeClaimAddressRef.current !== claimActor) return prev;
             const next = prev.filter((w) => w.epoch !== epochId);
-            if (address && actualCurrentEpoch) {
+            if (actualCurrentEpoch) {
               const minEpoch = actualCurrentEpoch > MAX_SCAN_DEPTH ? actualCurrentEpoch - MAX_SCAN_DEPTH : BigInt(1);
-              saveCachedRewardScan(address.toLowerCase(), next, actualCurrentEpoch.toString(), minEpoch.toString());
+              saveCachedRewardScan(claimActor, next, actualCurrentEpoch.toString(), minEpoch.toString());
               cacheSavedAtRef.current = Date.now();
             }
             return next;
@@ -734,6 +770,7 @@ export function useRewardScanner(
         }
         notify?.(formatClaimTxMessage("Reward claimed successfully.", hash), "success");
       } catch (err) {
+        if (activeClaimAddressRef.current !== claimActor) return;
         if (isAmbiguousPendingTxError(err)) {
           notify?.("Reward claim may already be pending. Check wallet activity and refresh rewards before retrying.", "warning");
           void scanRewards();
@@ -745,6 +782,7 @@ export function useRewardScanner(
           notify?.("Reward claim rejected in wallet.", "info");
         }
       } finally {
+        claimInFlightRef.current = false;
         if (mountedRef.current) {
           setIsClaiming(false);
         }
@@ -754,147 +792,177 @@ export function useRewardScanner(
   );
 
   const claimAll = useCallback(async () => {
-    if (unclaimedWins.length === 0) return;
+    if (unclaimedWins.length === 0 || !silentSend || !address || claimInFlightRef.current) return;
+    claimInFlightRef.current = true;
+    const claimActor = address.toLowerCase();
     if (mountedRef.current) {
       setIsClaiming(true);
     }
 
-    if (!silentSend) {
+    try {
+      const all = [...unclaimedWins];
+      const claimedEpochs = new Set<string>();
+      let skippedEpochs = 0;
+      let claimTxCount = 0;
+      let claimRejected = false;
+      let claimActorChanged = false;
+      let lastRewardClaimTxHash: `0x${string}` | null = null;
+      notify?.("Preparing reward claims.", "info");
+
+      const submitSingleClaim = async (epochId: string) => {
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
+        const { data, gas } = await prepareClaimTx(epochId);
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
+        const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+        lastRewardClaimTxHash = hash;
+        claimTxCount += 1;
+        const receiptState = await waitReceipt(hash);
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
+        if (receiptState === "pending") return receiptState;
+        claimedEpochs.add(epochId);
+        return receiptState;
+      };
+
+      const submitBatchClaim = async (epochIds: string[]) => {
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
+        const { data, gas } = await prepareBatchClaimTx(epochIds);
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
+        const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+        lastRewardClaimTxHash = hash;
+        claimTxCount += 1;
+        const receiptState = await waitReceipt(hash);
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
+        if (receiptState === "pending") return receiptState;
+        const confirmedClaimed = await confirmClaimedEpochs(epochIds);
+        confirmedClaimed.forEach((epochId) => claimedEpochs.add(epochId));
+        if (confirmedClaimed.size === 0) {
+          throw new Error("Batch claim confirmed without claimed epochs");
+        }
+        return receiptState;
+      };
+
+      const queue: string[][] = chunkEpochIds(
+        all.map((win) => win.epoch),
+        MAX_BATCH_CLAIM_EPOCHS,
+      );
+      let pendingClaimTx = false;
+
+      while (queue.length > 0) {
+        const batch = queue.shift();
+        if (!batch || batch.length === 0) continue;
+
+        try {
+          let receiptState: ReceiptState | null;
+          if (batch.length === 1) {
+            receiptState = await submitSingleClaim(batch[0]);
+          } else {
+            receiptState = await submitBatchClaim(batch);
+          }
+          if (receiptState === null) break;
+          if (receiptState === "pending") {
+            pendingClaimTx = true;
+            break;
+          }
+        } catch (err) {
+          if (activeClaimAddressRef.current !== claimActor) {
+            claimActorChanged = true;
+            break;
+          }
+          if (isAmbiguousPendingTxError(err)) {
+            pendingClaimTx = true;
+            break;
+          }
+          if (isUserRejection(err)) {
+            claimRejected = true;
+            break;
+          }
+          if (batch.length === 1) {
+            skippedEpochs += 1;
+            continue;
+          }
+          const middle = Math.ceil(batch.length / 2);
+          queue.unshift(batch.slice(middle));
+          queue.unshift(batch.slice(0, middle));
+        }
+      }
+
+      if (claimActorChanged || activeClaimAddressRef.current !== claimActor) return;
+      if (claimedEpochs.size > 0) {
+        if (mountedRef.current) {
+          setUnclaimedWins((prev) => {
+            if (activeClaimAddressRef.current !== claimActor) return prev;
+            const next = prev.filter((w) => !claimedEpochs.has(w.epoch));
+            if (actualCurrentEpoch) {
+              const minEpoch = actualCurrentEpoch > MAX_SCAN_DEPTH ? actualCurrentEpoch - MAX_SCAN_DEPTH : BigInt(1);
+              saveCachedRewardScan(claimActor, next, actualCurrentEpoch.toString(), minEpoch.toString());
+              cacheSavedAtRef.current = Date.now();
+            }
+            return next;
+          });
+        }
+        notify?.(
+          lastRewardClaimTxHash
+            ? formatClaimTxMessage(
+                claimedEpochs.size === 1
+                  ? claimTxCount <= 1
+                    ? "1 reward claimed successfully."
+                    : `1 reward claimed successfully in ${claimTxCount} transactions.`
+                  : claimTxCount <= 1
+                    ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
+                    : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
+                lastRewardClaimTxHash,
+              )
+            : claimedEpochs.size === 1
+              ? claimTxCount <= 1
+                ? "1 reward claimed successfully."
+                : `1 reward claimed successfully in ${claimTxCount} transactions.`
+              : claimTxCount <= 1
+                ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
+                : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
+          "success",
+        );
+      }
+      if (skippedEpochs > 0) {
+        void scanRewards();
+        if (claimedEpochs.size === 0) {
+          notify?.("Some rewards are no longer claimable. Reward state has been refreshed.", "info");
+        }
+      }
+      if (pendingClaimTx) {
+        notify?.(
+          lastRewardClaimTxHash
+            ? formatClaimTxMessage("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", lastRewardClaimTxHash)
+            : "Claim transaction submitted and is still pending. Rewards will refresh after confirmation.",
+          "info",
+        );
+        void scanRewards();
+      }
+      if (claimRejected && claimedEpochs.size === 0 && !pendingClaimTx) {
+        notify?.("Reward claim rejected in wallet.", "info");
+      }
+    } finally {
+      claimInFlightRef.current = false;
       if (mountedRef.current) {
         setIsClaiming(false);
       }
-      return;
-    }
-
-    const all = [...unclaimedWins];
-    const claimedEpochs = new Set<string>();
-    let skippedEpochs = 0;
-    let claimTxCount = 0;
-    let claimRejected = false;
-    let lastRewardClaimTxHash: `0x${string}` | null = null;
-    notify?.("Preparing reward claims from the Privy wallet.", "info");
-
-    const submitSingleClaim = async (epochId: string) => {
-      const { data, gas } = await prepareClaimTx(epochId);
-      const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
-      lastRewardClaimTxHash = hash;
-      claimTxCount += 1;
-      const receiptState = await waitReceipt(hash);
-      if (receiptState === "pending") return receiptState;
-      claimedEpochs.add(epochId);
-      return receiptState;
-    };
-
-    const submitBatchClaim = async (epochIds: string[]) => {
-      const { data, gas } = await prepareBatchClaimTx(epochIds);
-      const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
-      lastRewardClaimTxHash = hash;
-      claimTxCount += 1;
-      const receiptState = await waitReceipt(hash);
-      if (receiptState === "pending") return receiptState;
-      const confirmedClaimed = await confirmClaimedEpochs(epochIds);
-      confirmedClaimed.forEach((epochId) => claimedEpochs.add(epochId));
-      if (confirmedClaimed.size === 0) {
-        throw new Error("Batch claim confirmed without claimed epochs");
-      }
-      return receiptState;
-    };
-
-    const queue: string[][] = chunkEpochIds(
-      all.map((win) => win.epoch),
-      MAX_BATCH_CLAIM_EPOCHS,
-    );
-    let pendingClaimTx = false;
-
-    while (queue.length > 0) {
-      const batch = queue.shift();
-      if (!batch || batch.length === 0) continue;
-
-      try {
-        let receiptState: ReceiptState;
-        if (batch.length === 1) {
-          receiptState = await submitSingleClaim(batch[0]);
-        } else {
-          receiptState = await submitBatchClaim(batch);
-        }
-        if (receiptState === "pending") {
-          pendingClaimTx = true;
-          break;
-        }
-      } catch (err) {
-        if (isAmbiguousPendingTxError(err)) {
-          pendingClaimTx = true;
-          break;
-        }
-        if (isUserRejection(err)) {
-          claimRejected = true;
-          break;
-        }
-        if (batch.length === 1) {
-          skippedEpochs += 1;
-          continue;
-        }
-        const middle = Math.ceil(batch.length / 2);
-        queue.unshift(batch.slice(middle));
-        queue.unshift(batch.slice(0, middle));
-      }
-    }
-
-    if (claimedEpochs.size > 0) {
-      if (mountedRef.current) {
-        setUnclaimedWins((prev) => {
-          const next = prev.filter((w) => !claimedEpochs.has(w.epoch));
-          if (address && actualCurrentEpoch) {
-            const minEpoch = actualCurrentEpoch > MAX_SCAN_DEPTH ? actualCurrentEpoch - MAX_SCAN_DEPTH : BigInt(1);
-            saveCachedRewardScan(address.toLowerCase(), next, actualCurrentEpoch.toString(), minEpoch.toString());
-            cacheSavedAtRef.current = Date.now();
-          }
-          return next;
-        });
-      }
-      notify?.(
-        lastRewardClaimTxHash
-          ? formatClaimTxMessage(
-              claimedEpochs.size === 1
-                ? claimTxCount <= 1
-                  ? "1 reward claimed successfully."
-                  : `1 reward claimed successfully in ${claimTxCount} transactions.`
-                : claimTxCount <= 1
-                  ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
-                  : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
-              lastRewardClaimTxHash,
-            )
-          : claimedEpochs.size === 1
-            ? claimTxCount <= 1
-              ? "1 reward claimed successfully."
-              : `1 reward claimed successfully in ${claimTxCount} transactions.`
-            : claimTxCount <= 1
-              ? `${claimedEpochs.size} rewards claimed successfully in 1 transaction.`
-              : `${claimedEpochs.size} rewards claimed successfully in ${claimTxCount} transactions.`,
-        "success",
-      );
-    }
-    if (skippedEpochs > 0) {
-      void scanRewards();
-      if (claimedEpochs.size === 0) {
-        notify?.("Some rewards are no longer claimable. Reward state has been refreshed.", "info");
-      }
-    }
-    if (pendingClaimTx) {
-      notify?.(
-        lastRewardClaimTxHash
-          ? formatClaimTxMessage("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", lastRewardClaimTxHash)
-          : "Claim transaction submitted and is still pending. Rewards will refresh after confirmation.",
-        "info",
-      );
-      void scanRewards();
-    }
-    if (claimRejected && claimedEpochs.size === 0 && !pendingClaimTx) {
-      notify?.("Reward claim rejected in wallet.", "info");
-    }
-
-    if (mountedRef.current) {
-      setIsClaiming(false);
     }
   }, [
     actualCurrentEpoch,

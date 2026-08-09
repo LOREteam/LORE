@@ -9,6 +9,8 @@ import type { UnclaimedWin } from "../lib/types";
 import { formatRewardClaimError, isRewardClaimWindowOpen } from "./useRewardScanner";
 import { isUserRejection, delay } from "../lib/utils";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
+import { readJsonResponse } from "../lib/readJsonResponse";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 type EpochTuple = readonly [bigint, bigint, bigint, boolean];
@@ -28,6 +30,11 @@ type ClaimCandidatePage = {
   error?: string;
 };
 
+type PostSendClaimVerificationError = Error & {
+  claimTxHash?: `0x${string}`;
+  claimTxSubmitted?: true;
+};
+
 function formatClaimTxMessage(message: string, hash: `0x${string}`) {
   const txUrl = getExplorerTxUrl(hash);
   return txUrl ? `${message} ${txUrl}` : message;
@@ -39,6 +46,24 @@ function chunkEpochIds(epochIds: string[], size: number) {
     chunks.push(epochIds.slice(index, index + size));
   }
   return chunks;
+}
+
+function isDefinitiveClaimRevertError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().startsWith("transaction reverted:");
+}
+
+function markPostSendClaimVerificationError(error: unknown, hash: `0x${string}`): PostSendClaimVerificationError {
+  const nextError = error instanceof Error ? error as PostSendClaimVerificationError : new Error(String(error)) as PostSendClaimVerificationError;
+  nextError.claimTxSubmitted = true;
+  nextError.claimTxHash = hash;
+  return nextError;
+}
+
+function getPostSendClaimVerificationHash(error: unknown): `0x${string}` | null {
+  if (!error || typeof error !== "object") return null;
+  const candidate = error as PostSendClaimVerificationError;
+  return candidate.claimTxSubmitted === true && candidate.claimTxHash ? candidate.claimTxHash : null;
 }
 
 export function useDeepRewardScan(
@@ -64,6 +89,9 @@ export function useDeepRewardScan(
   const [progress, setProgress] = useState("");
   const abortRef = useRef(false);
   const scanRunningRef = useRef(false);
+  const claimInFlightRef = useRef(false);
+  const activeClaimAddressRef = useRef<string | null>(address?.toLowerCase() ?? null);
+  activeClaimAddressRef.current = address?.toLowerCase() ?? null;
   const scanAddressRef = useRef<string | null>(null);
   const mountedRef = useRef(false);
 
@@ -290,8 +318,9 @@ export function useDeepRewardScan(
           limit: String(CANDIDATE_PAGE_SIZE),
         });
         if (cursor !== null) query.set("cursor", String(cursor));
-        const response = await fetch(`/api/claim-candidates?${query.toString()}`, { cache: "no-store" });
-        const page = await response.json() as ClaimCandidatePage;
+        const response = await fetchWithTimeout(`/api/claim-candidates?${query.toString()}`, { cache: "no-store" });
+        const page = await readJsonResponse<ClaimCandidatePage>(response);
+        if (!page) throw new Error(`Claim candidate lookup failed (HTTP ${response.status})`);
         if (!response.ok || page.error) {
           throw new Error(page.error || `Claim candidate lookup failed (HTTP ${response.status})`);
         }
@@ -418,14 +447,24 @@ export function useDeepRewardScan(
   const stop = useCallback(() => { abortRef.current = true; }, []);
 
   const claimOne = useCallback(async (epochId: string) => {
-    if (!sendTransactionSilent) return;
+    if (!sendTransactionSilent || !address || claimInFlightRef.current) return;
+    claimInFlightRef.current = true;
+    const claimActor = address.toLowerCase();
     if (mountedRef.current) {
       setClaiming(true);
     }
     try {
       const { data, gas } = await prepareClaimTx(epochId);
+      if (activeClaimAddressRef.current !== claimActor) return;
       const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
-      const receiptState = await waitReceipt(hash);
+      let receiptState: ReceiptState;
+      try {
+        receiptState = await waitReceipt(hash);
+      } catch (err) {
+        if (isDefinitiveClaimRevertError(err)) throw err;
+        throw markPostSendClaimVerificationError(err, hash);
+      }
+      if (activeClaimAddressRef.current !== claimActor) return;
       if (receiptState === "pending") {
         onNotify?.(
           formatClaimTxMessage("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", hash),
@@ -434,24 +473,38 @@ export function useDeepRewardScan(
         return;
       }
       if (mountedRef.current) {
-        setWins((prev) => prev ? prev.filter((w) => w.epoch !== epochId) : prev);
+        setWins((prev) => activeClaimAddressRef.current === claimActor && prev
+          ? prev.filter((w) => w.epoch !== epochId)
+          : prev);
       }
       onNotify?.(formatClaimTxMessage("Reward claimed successfully.", hash), "success");
     } catch (err) {
-      if (isAmbiguousPendingTxError(err)) {
+      if (activeClaimAddressRef.current !== claimActor) return;
+      const postSendHash = getPostSendClaimVerificationHash(err);
+      if (postSendHash) {
+        onNotify?.(
+          formatClaimTxMessage("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", postSendHash),
+          "info",
+        );
+      } else if (isAmbiguousPendingTxError(err)) {
         onNotify?.("Reward claim may already be pending. Check wallet activity before retrying.", "warning");
       } else if (!isUserRejection(err)) {
         onNotify?.(formatRewardClaimError(err), "danger");
+      } else {
+        onNotify?.("Reward claim rejected in wallet.", "info");
       }
     } finally {
+      claimInFlightRef.current = false;
       if (mountedRef.current) {
         setClaiming(false);
       }
     }
-  }, [onNotify, prepareClaimTx, sendTransactionSilent, waitReceipt]);
+  }, [address, onNotify, prepareClaimTx, sendTransactionSilent, waitReceipt]);
 
   const claimAllDeep = useCallback(async () => {
-    if (!wins || wins.length === 0 || !sendTransactionSilent) return;
+    if (!wins || wins.length === 0 || !sendTransactionSilent || !address || claimInFlightRef.current) return;
+    claimInFlightRef.current = true;
+    const claimActor = address.toLowerCase();
     if (mountedRef.current) {
       setClaiming(true);
     }
@@ -460,25 +513,63 @@ export function useDeepRewardScan(
       const claimedEpochs = new Set<string>();
       let skippedEpochs = 0;
       let claimTxCount = 0;
+      let claimActorChanged = false;
+      let claimRejected = false;
       let lastRewardClaimTxHash: `0x${string}` | null = null;
 
       const submitSingleClaim = async (epochId: string) => {
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
         const { data, gas } = await prepareClaimTx(epochId);
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
         const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
         lastRewardClaimTxHash = hash;
         claimTxCount += 1;
-        const receiptState = await waitReceipt(hash);
+        let receiptState: ReceiptState;
+        try {
+          receiptState = await waitReceipt(hash);
+        } catch (err) {
+          if (isDefinitiveClaimRevertError(err)) throw err;
+          throw markPostSendClaimVerificationError(err, hash);
+        }
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
         if (receiptState === "pending") return receiptState;
         claimedEpochs.add(epochId);
         return receiptState;
       };
 
       const submitBatchClaim = async (epochIds: string[]) => {
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
         const { data, gas } = await prepareBatchClaimTx(epochIds);
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
         const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
         lastRewardClaimTxHash = hash;
         claimTxCount += 1;
-        const receiptState = await waitReceipt(hash);
+        let receiptState: ReceiptState;
+        try {
+          receiptState = await waitReceipt(hash);
+        } catch (err) {
+          if (isDefinitiveClaimRevertError(err)) throw err;
+          throw markPostSendClaimVerificationError(err, hash);
+        }
+        if (activeClaimAddressRef.current !== claimActor) {
+          claimActorChanged = true;
+          return null;
+        }
         if (receiptState === "pending") return receiptState;
         const confirmedClaimed = await confirmClaimedEpochs(epochIds);
         confirmedClaimed.forEach((epochId) => claimedEpochs.add(epochId));
@@ -499,22 +590,36 @@ export function useDeepRewardScan(
         if (!batch || batch.length === 0) continue;
 
         try {
-          let receiptState: ReceiptState;
+          let receiptState: ReceiptState | null;
           if (batch.length === 1) {
             receiptState = await submitSingleClaim(batch[0]);
           } else {
             receiptState = await submitBatchClaim(batch);
           }
+          if (receiptState === null) break;
           if (receiptState === "pending") {
             pendingClaimTx = true;
             break;
           }
         } catch (err) {
+          if (activeClaimAddressRef.current !== claimActor) {
+            claimActorChanged = true;
+            break;
+          }
           if (isAmbiguousPendingTxError(err)) {
             pendingClaimTx = true;
             break;
           }
-          if (isUserRejection(err)) break;
+          const postSendHash = getPostSendClaimVerificationHash(err);
+          if (postSendHash) {
+            lastRewardClaimTxHash = postSendHash;
+            pendingClaimTx = true;
+            break;
+          }
+          if (isUserRejection(err)) {
+            claimRejected = true;
+            break;
+          }
           if (batch.length === 1) {
             skippedEpochs += 1;
             continue;
@@ -525,9 +630,12 @@ export function useDeepRewardScan(
         }
       }
 
+      if (claimActorChanged || activeClaimAddressRef.current !== claimActor) return;
       if (claimedEpochs.size > 0) {
         if (mountedRef.current) {
-          setWins((prev) => prev ? prev.filter((w) => !claimedEpochs.has(w.epoch)) : prev);
+          setWins((prev) => activeClaimAddressRef.current === claimActor && prev
+            ? prev.filter((w) => !claimedEpochs.has(w.epoch))
+            : prev);
         }
         onNotify?.(
           lastRewardClaimTxHash
@@ -562,12 +670,17 @@ export function useDeepRewardScan(
           "info",
         );
       }
+      if (claimRejected && claimedEpochs.size === 0 && !pendingClaimTx) {
+        onNotify?.("Reward claim rejected in wallet.", "info");
+      }
     } finally {
+      claimInFlightRef.current = false;
       if (mountedRef.current) {
         setClaiming(false);
       }
     }
   }, [
+    address,
     confirmClaimedEpochs,
     onNotify,
     prepareBatchClaimTx,

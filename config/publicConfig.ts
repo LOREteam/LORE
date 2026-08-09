@@ -9,21 +9,26 @@ export type LineaNetwork = "mainnet" | "sepolia";
 export const DEFAULT_LINEA_NETWORK: LineaNetwork = "sepolia";
 
 export const DEFAULT_SEPOLIA_CONTRACT_ADDRESS =
-  "0x98eef041b012668529fb66ac3133900fdffc7282" as const;
+  "0x5e40c6e31642ebe8670658fe84c660bd2a0f820f" as const;
 
 export const DEFAULT_SEPOLIA_LINEA_TOKEN_ADDRESS =
   "0xad986c50d411055484d38bf779ba2450a42afd60" as const;
 
-export const DEFAULT_INDEXER_START_BLOCK = 28_869_863;
+export const DEFAULT_SEPOLIA_EXPECTED_CURRENT_OWNER_ADDRESS =
+  "0xc1E3819A1842338b55EA038f6D92555E084E040a" as const;
+
+export const DEFAULT_SEPOLIA_EXPECTED_CURRENT_FEE_RECIPIENT_ADDRESS =
+  "0x1Ea3AA15B7A4D8b82D9eB94CF58bDC007e4B6cDF" as const;
+
+export const DEFAULT_SEPOLIA_EXPECTED_CURRENT_EPOCH_DURATION = 60;
+
+export const DEFAULT_INDEXER_START_BLOCK = 31_035_418;
 
 export const DEFAULT_INDEXER_RECONCILE_INTERVAL_MS = 120_000;
 export const DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS = 8;
 export const DEFAULT_API_EPOCHS_RECONCILE_MAX = 25;
 export const DEFAULT_DATA_SYNC_LAG_WARN_BLOCKS = 800;
-export const DEFAULT_EIP7702_ENABLED = false;
-export const DEFAULT_EIP7702_MINING_ENABLED = false;
 export const DEFAULT_CLIENT_AUTO_RESOLVE_ENABLED = false;
-export const DEFAULT_AUTO_RESOLVE_SWEEP_ENABLED = false;
 export const DEFAULT_READ_ONLY_MODE = false;
 
 const LINEA_MAINNET_CHAIN = {
@@ -34,7 +39,7 @@ const LINEA_MAINNET_CHAIN = {
     default: { http: ["https://rpc.linea.build"], webSocket: ["wss://rpc.linea.build"] },
   },
   blockExplorers: {
-    default: { name: "Etherscan", url: "https://lineascan.build", apiUrl: "https://api.lineascan.build/api" },
+    default: { name: "Lineascan", url: "https://lineascan.build", apiUrl: "https://api.lineascan.build/api" },
   },
   contracts: {
     multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11", blockCreated: 42 },
@@ -54,7 +59,7 @@ const LINEA_SEPOLIA_CHAIN = {
   },
   blockExplorers: {
     default: {
-      name: "Etherscan",
+      name: "Lineascan",
       url: "https://sepolia.lineascan.build",
       apiUrl: "https://api-sepolia.lineascan.build/api",
     },
@@ -181,11 +186,18 @@ export function getDefaultLineaRpcs(network: LineaNetwork = getConfiguredLineaNe
     : [...DEFAULT_LINEA_SEPOLIA_RPCS];
 }
 
+function parseLineaRpcInput(value?: string | null) {
+  return value
+    ?.split(",")
+    .map((url) => url.trim())
+    .filter(Boolean) ?? [];
+}
+
 export function getPreferredLineaRpcs(
   primaryRpc?: string | null,
   network: LineaNetwork = getConfiguredLineaNetwork(),
 ) {
-  const urls = [primaryRpc?.trim(), ...getDefaultLineaRpcs(network)]
+  const urls = [...parseLineaRpcInput(primaryRpc), ...getDefaultLineaRpcs(network)]
     .filter((url): url is string => Boolean(url))
     .filter((url) => !isDeprecatedLineaRpc(url));
 
@@ -209,42 +221,11 @@ function parseBooleanEnv(value?: string | null) {
   return null;
 }
 
-export function getConfiguredEip7702Enabled(explicitFlag?: string | null) {
-  const envValue = parseBooleanEnv(
-    explicitFlag ??
-      process.env.NEXT_PUBLIC_EIP7702_ENABLED ??
-      process.env.EIP7702_ENABLED,
-  );
-  return envValue ?? DEFAULT_EIP7702_ENABLED;
-}
-
-export function getConfiguredEip7702MiningEnabled(
-  explicitFlag?: string | null,
-  explicitEnabledFlag?: string | null,
-) {
-  if (!getConfiguredEip7702Enabled(explicitEnabledFlag)) return false;
-  const envValue = parseBooleanEnv(
-    explicitFlag ??
-      process.env.NEXT_PUBLIC_EIP7702_MINING_ENABLED ??
-      process.env.EIP7702_MINING_ENABLED,
-  );
-  return envValue ?? DEFAULT_EIP7702_MINING_ENABLED;
-}
-
 export function getConfiguredClientAutoResolveEnabled(explicitFlag?: string | null) {
-  const envValue = parseBooleanEnv(
-    explicitFlag ??
-      process.env.NEXT_PUBLIC_ENABLE_CLIENT_AUTO_RESOLVE,
-  );
-  return envValue ?? DEFAULT_CLIENT_AUTO_RESOLVE_ENABLED;
-}
-
-export function getConfiguredAutoResolveSweepEnabled(explicitFlag?: string | null) {
-  const envValue = parseBooleanEnv(
-    explicitFlag ??
-      process.env.NEXT_PUBLIC_ENABLE_AUTO_RESOLVE_SWEEP,
-  );
-  return envValue ?? DEFAULT_AUTO_RESOLVE_SWEEP_ENABLED;
+  // Browser-triggered keeper resolve is intentionally isolated. The protected
+  // server route remains available for explicitly authorized operator flows.
+  void explicitFlag;
+  return DEFAULT_CLIENT_AUTO_RESOLVE_ENABLED;
 }
 
 export function getConfiguredReadOnlyMode(explicitFlag?: string | null) {
@@ -252,21 +233,6 @@ export function getConfiguredReadOnlyMode(explicitFlag?: string | null) {
     explicitFlag ?? process.env.NEXT_PUBLIC_LORE_READ_ONLY_MODE,
   );
   return envValue ?? DEFAULT_READ_ONLY_MODE;
-}
-
-export function getConfiguredEip7702DelegateAddress(
-  explicitValue?: string | null,
-) {
-  const configured =
-    explicitValue?.trim() ??
-    process.env.NEXT_PUBLIC_EIP7702_DELEGATE_ADDRESS?.trim() ??
-    process.env.EIP7702_DELEGATE_ADDRESS?.trim() ??
-    "";
-
-  if (configured) return configured;
-  // Do not silently fall back to a baked-in delegate address.
-  // 7702 deployments are network- and revision-specific, so the address must be explicit.
-  return "";
 }
 
 export function getContractHasTokenGetter(
@@ -287,4 +253,8 @@ export function getContractHasRebateApi(
   if (envValue !== null) return envValue;
 
   return true;
+}
+
+export function getContractRequiresEpochBoundBets(explicitFlag?: string | null) {
+  return parseBooleanEnv(explicitFlag) ?? false;
 }

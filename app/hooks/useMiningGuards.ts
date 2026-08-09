@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getFormattedBalance, type WagmiBalanceLike } from "../lib/balanceFormatting";
+import type { WagmiBalanceLike } from "../lib/balanceFormatting";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { validateBetAmount } from "../lib/utils";
 import { normalizeTiles } from "./useMining.shared";
@@ -40,6 +40,41 @@ interface UseMiningGuardsOptions {
 const LEGACY_LAST_BET_KEY = "lore:last-bet";
 const LAST_BET_KEY = `lore:last-bet:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 
+function normalizeBalanceDecimals(balance: BalanceData, fallbackDecimals = 18): number | null {
+  if (!balance) return null;
+  const decimals = balance.decimals ?? fallbackDecimals;
+  return Number.isInteger(decimals) && decimals >= 0 && decimals <= 255 ? decimals : null;
+}
+
+function parseDecimalNumberToUnits(value: number, decimals: number): bigint | null {
+  if (!Number.isFinite(value) || value < 0) return null;
+  const text = String(value);
+  if (!/^\d+(?:\.\d+)?$/.test(text)) return null;
+  const [wholeRaw, fractionalRaw = ""] = text.split(".");
+  if (fractionalRaw.length > decimals) return null;
+  const whole = BigInt(wholeRaw);
+  const fractional = fractionalRaw.length > 0 ? BigInt(fractionalRaw.padEnd(decimals, "0")) : 0n;
+  return whole * 10n ** BigInt(decimals) + fractional;
+}
+
+function isBalanceBelowDecimalThreshold(balance: BalanceData, threshold: number, fallbackDecimals = 18): boolean {
+  if (!balance) return false;
+  if (typeof balance.value !== "bigint") return true;
+  const decimals = normalizeBalanceDecimals(balance, fallbackDecimals);
+  if (decimals === null) return true;
+  const thresholdUnits = parseDecimalNumberToUnits(threshold, decimals);
+  if (thresholdUnits === null) return true;
+  return balance.value < thresholdUnits;
+}
+
+function isBalanceBelowWholeToken(balance: BalanceData, wholeTokens = 1n, fallbackDecimals = 18): boolean {
+  if (!balance) return false;
+  if (typeof balance.value !== "bigint") return true;
+  const decimals = normalizeBalanceDecimals(balance, fallbackDecimals);
+  if (decimals === null) return true;
+  return balance.value < wholeTokens * 10n ** BigInt(decimals);
+}
+
 function sanitizeLastBet(value: unknown): LastBet | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Partial<LastBet>;
@@ -56,10 +91,6 @@ export function useMiningGuards({
   embeddedEthBalance,
   embeddedTokenBalance,
   isAutoMining,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  isAnalyzing: _isAnalyzing,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  isRevealing: _isRevealing,
   liveStateReady,
   readOnlyReason = null,
   selectedTiles,
@@ -87,17 +118,25 @@ export function useMiningGuards({
       const parsed = raw ?? legacyRaw;
       if (!parsed) return;
       const sanitized = sanitizeLastBet(JSON.parse(parsed));
+      if (!sanitized) {
+        localStorage.removeItem(raw ? LAST_BET_KEY : LEGACY_LAST_BET_KEY);
+        return;
+      }
       setLastBet(sanitized);
       if (!raw && sanitized) {
         localStorage.setItem(LAST_BET_KEY, JSON.stringify(sanitized));
       }
     } catch {
-      // ignore bad local storage state
+      try {
+        localStorage.removeItem(LAST_BET_KEY);
+      } catch {
+        // ignore storage failures
+      }
     }
   }, []);
 
-  const lowEthBalance = embeddedEthBalance ? Number(getFormattedBalance(embeddedEthBalance)) < minEthForGas : false;
-  const lowTokenBalance = embeddedTokenBalance ? Number(getFormattedBalance(embeddedTokenBalance)) < 1 : false;
+  const lowEthBalance = isBalanceBelowDecimalThreshold(embeddedEthBalance, minEthForGas);
+  const lowTokenBalance = isBalanceBelowWholeToken(embeddedTokenBalance);
 
   useEffect(() => {
     if (!lowEthBalance && !lowTokenBalance) {

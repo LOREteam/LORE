@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS, GRID_SIZE } from "../lib/constants";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { log } from "../lib/logger";
-import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 
 export interface RecentWin {
@@ -55,7 +55,14 @@ export function normalizeWins(rows: unknown): RecentWin[] {
         user: String(row.user),
         amount: String(row.amount ?? "0.00"),
         amountRaw: String(row.amountRaw),
-        ...(typeof tileId === "number" && Number.isInteger(tileId) && tileId > 0 ? { tileId } : {}),
+        ...(
+          typeof tileId === "number" &&
+          Number.isSafeInteger(tileId) &&
+          tileId >= 1 &&
+          tileId <= GRID_SIZE
+            ? { tileId }
+            : {}
+        ),
         ...(jackpotKind ? { jackpotKind } : {}),
       };
     })
@@ -83,6 +90,7 @@ function recentWinsEqual(left: RecentWin[], right: RecentWin[]) {
 }
 
 function loadCache(): { wins: RecentWin[]; savedAt: number | null } {
+  if (typeof localStorage === "undefined") return { wins: [], savedAt: null };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { wins: [], savedAt: null };
@@ -97,11 +105,20 @@ function loadCache(): { wins: RecentWin[]; savedAt: number | null } {
     if (Array.isArray(parsed)) {
       return { wins: normalizeWins(parsed), savedAt: null };
     }
+    if (!parsed || typeof parsed !== "object") {
+      localStorage.removeItem(STORAGE_KEY);
+      return { wins: [], savedAt: null };
+    }
     return {
       wins: normalizeWins(Array.isArray(parsed.wins) ? parsed.wins : []),
       savedAt: normalizeCacheTimestamp(parsed.savedAt),
     };
   } catch {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore localStorage failures
+    }
     return { wins: [], savedAt: null };
   }
 }
@@ -239,10 +256,8 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
     }
     const savedAt = cacheSavedAtRef.current;
     const initialDelay =
-      savedAt &&
-      cachedWinsCountRef.current > 0 &&
-      Date.now() - savedAt < REFRESH_MS
-        ? REFRESH_MS - (Date.now() - savedAt)
+      cachedWinsCountRef.current > 0
+        ? getFreshCacheDelayMs(savedAt, REFRESH_MS) ?? 0
         : 0;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;

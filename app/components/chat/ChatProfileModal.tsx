@@ -29,6 +29,7 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
   const restoreFrameARef = useRef<number | null>(null);
   const restoreFrameBRef = useRef<number | null>(null);
   const titleId = React.useId();
+  const descriptionId = React.useId();
 
   const restoreScrollPosition = useCallback((scrollTop: number) => {
     lastScrollTopRef.current = scrollTop;
@@ -125,9 +126,13 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
+      aria-describedby={descriptionId}
       tabIndex={-1}
       className={`absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden bg-surface-raised/98 backdrop-blur-lg ${uiTokens.radius.lg}`}
     >
+      <p id={descriptionId} className="sr-only">
+        Update your public chat name and avatar.
+      </p>
       <div className="flex items-center justify-between border-b border-violet-500/15 px-4 py-3">
         <div className="flex items-center gap-2">
           <div className="h-4 w-1.5 rounded-full bg-violet-500/60" />
@@ -137,7 +142,8 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="flex h-11 w-11 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white/6 hover:text-slate-300"
+          title="Close"
+          className={`flex h-11 w-11 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white/6 hover:text-slate-300 ${uiTokens.focusRing}`}
         >
           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none">
             <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
@@ -249,6 +255,8 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
               type="button"
               onClick={() => selectPreset(null)}
               title="Wallet identity"
+              aria-label="Use wallet identity avatar"
+              aria-pressed={!avatar && !customAvatar}
               className={`flex h-[4.2rem] items-center justify-center border transition-all duration-150 ${uiTokens.radius.md} ${uiTokens.focusRing} ${
                 !avatar && !customAvatar
                   ? "border-violet-400/80 bg-violet-500/15 shadow-[0_0_20px_rgba(124,58,237,0.25)]"
@@ -264,6 +272,8 @@ export function ChatProfileModal({ profile, walletAddress, onSave, onClose }: Pr
                 type="button"
                 onClick={() => selectPreset(id)}
                 title={id}
+                aria-label={`Select ${id} avatar`}
+                aria-pressed={avatar === id && !customAvatar}
                 className={`flex h-[4.2rem] items-center justify-center border transition-all duration-150 ${uiTokens.radius.md} ${uiTokens.focusRing} ${
                   avatar === id && !customAvatar
                     ? "border-violet-400/80 bg-violet-500/15 shadow-[0_0_20px_rgba(124,58,237,0.25)]"
