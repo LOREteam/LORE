@@ -95,8 +95,8 @@ wallet-signing, transaction, mainnet, canary, soak, or final-launch evidence.
 
 ## Safety boundaries
 
-- EIP-7702 remains disabled/removed from the normal runtime. Do not restore or
-  enable it without separate explicit approval.
+- The removed wallet-delegation experiment remains absent from the normal
+  runtime. Do not restore or enable it without separate explicit approval.
 - Preserve intentional user-visible refresh behavior until measured evidence
   supports a change.
 - Do not read or print secrets, private RPC URLs, signing material, wallet

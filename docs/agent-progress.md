@@ -21,8 +21,9 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   and tooling/proof/CI commit `caaeb9fe`.
 - Archived the oversized state/progress files and four overlapping Sepolia
   worklists without discarding their contents.
-- Kept EIP-7702 disabled/removed and performed no wallet signing, chain write,
-  deployment, nonce replacement, approval, bet, claim, or soak action.
+- Kept the removed wallet-delegation experiment absent and performed no wallet
+  signing, chain write, deployment, nonce replacement, approval, bet, claim,
+  or soak action.
 
 ## Active handoff
 
