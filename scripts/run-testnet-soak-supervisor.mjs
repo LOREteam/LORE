@@ -17,12 +17,18 @@ import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { redactProofText } from "./redact-proof-output.mjs";
+import {
+  parseProcessStartToken,
+  readProcessStartIdentity,
+  verifyProcessStartIdentity,
+} from "./process-start-identity.mjs";
 
 const ROOT = process.cwd();
 const OUT_DIR = resolve(process.env.SOAK_OUT_DIR || join(".tmp", "testnet-soak"));
 const STATUS_PATH = join(OUT_DIR, "status.json");
 const STATUS_TMP_PATH = `${STATUS_PATH}.tmp`;
 const LOCK_PATH = join(OUT_DIR, "supervisor.lock");
+const STOP_PATH = join(OUT_DIR, "supervisor.stop");
 const SERVER_LOG_PATH = join(OUT_DIR, "server.log");
 const CANARY_LOG_PATH = join(OUT_DIR, "canary.log");
 const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
@@ -46,6 +52,7 @@ const LIVE_LOG_MARKER_SCAN_BYTES = 64 * 1024;
 const MAX_SOAK_SUPERVISOR_ERROR_CHARS = 500;
 const MAX_SOAK_STATUS_JSON_BYTES = 128 * 1024;
 const MAX_SOAK_LOCK_JSON_BYTES = 4 * 1024;
+const MAX_SOAK_STOP_JSON_BYTES = 4 * 1024;
 const TRACKED_PID_RE = /^[1-9]\d{0,9}$/;
 const MAX_TRACKED_PID = 2_147_483_647;
 const MAX_TRACKED_PID_BIGINT = BigInt(MAX_TRACKED_PID);
@@ -76,6 +83,7 @@ let server = null;
 let canary = null;
 let stopping = false;
 let managedRunStarted = false;
+let supervisorStartToken = null;
 
 function describeSupervisorError(error) {
   const text = redactProofText(error instanceof Error ? error.message : String(error))
@@ -105,29 +113,22 @@ function parseTrackedPid(value) {
   return pid <= MAX_TRACKED_PID_BIGINT ? Number(pid) : null;
 }
 
-function matchingSupervisorPid(status, lock) {
+function matchingSupervisorIdentity(status, lock) {
   const supervisorPid = parseTrackedPid(status?.supervisorPid);
   const lockPid = parseTrackedPid(lock?.pid);
   const statusStartedAt = typeof status?.startedAt === "string" ? status.startedAt : null;
   const lockStartedAt = typeof lock?.startedAt === "string" ? lock.startedAt : null;
+  const statusStartToken = parseProcessStartToken(status?.supervisorStartToken);
+  const lockStartToken = parseProcessStartToken(lock?.supervisorStartToken);
   if (supervisorPid === null || lockPid === null || supervisorPid !== lockPid) return null;
   if (!statusStartedAt || !lockStartedAt || statusStartedAt !== lockStartedAt) return null;
-  return supervisorPid;
+  if (!statusStartToken || !lockStartToken || statusStartToken !== lockStartToken) return null;
+  return { pid: supervisorPid, startToken: statusStartToken };
 }
 
 function bigIntToNonNegativeSafeInteger(value) {
   if (typeof value !== "bigint" || value <= 0n) return 0;
   return value > MAX_SAFE_INTEGER_BIGINT ? Number.MAX_SAFE_INTEGER : Number(value);
-}
-
-function processIsAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function findDiskCapacityPath() {
@@ -191,6 +192,38 @@ function fileExists(path) {
 
 function removeLockFile() {
   if (fileExists(LOCK_PATH)) rmSync(LOCK_PATH, { force: true });
+}
+
+function removeStopFile() {
+  if (fileExists(STOP_PATH)) rmSync(STOP_PATH, { force: true });
+}
+
+function writeStopRequest(identity) {
+  if (existsSync(STOP_PATH)) {
+    if (!fileExists(STOP_PATH)) {
+      throw new Error("testnet soak stop request path exists but is not a file");
+    }
+    const existing = readJson(STOP_PATH, MAX_SOAK_STOP_JSON_BYTES);
+    if (
+      parseTrackedPid(existing?.pid) === identity.pid &&
+      parseProcessStartToken(existing?.supervisorStartToken) === identity.startToken
+    ) return;
+    throw new Error("testnet soak stop request is ambiguous; refusing to replace it");
+  }
+  writeFileSync(STOP_PATH, `${JSON.stringify({
+    pid: identity.pid,
+    supervisorStartToken: identity.startToken,
+    requestedAt: new Date().toISOString(),
+  })}\n`, { encoding: "utf8", flag: "wx" });
+}
+
+function managedStopRequested() {
+  if (!supervisorStartToken) return false;
+  const request = readJson(STOP_PATH, MAX_SOAK_STOP_JSON_BYTES);
+  return (
+    parseTrackedPid(request?.pid) === process.pid &&
+    parseProcessStartToken(request?.supervisorStartToken) === supervisorStartToken
+  );
 }
 
 function numericSummary(values) {
@@ -500,8 +533,10 @@ async function summarizeLiveLog(path) {
 async function printSafeStatus() {
   const status = readJson(STATUS_PATH);
   const lock = readJson(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES);
-  const supervisorPid = matchingSupervisorPid(status, lock);
-  const lockMatches = supervisorPid !== null;
+  const supervisorIdentity = matchingSupervisorIdentity(status, lock);
+  const identityState = supervisorIdentity
+    ? verifyProcessStartIdentity(supervisorIdentity.pid, supervisorIdentity.startToken)
+    : "unavailable";
   const liveLogPath = status?.artifacts?.liveLog || readLiveLogPath();
   const liveLogReady = Boolean(liveLogPath && fileExists(liveLogPath));
   const progress = await summarizeLiveLog(liveLogPath);
@@ -514,7 +549,7 @@ async function printSafeStatus() {
     finishedAt: status?.finishedAt || null,
     exitCode: status?.exitCode ?? null,
     stopReason: status?.stopReason || null,
-    supervisorAlive: lockMatches && processIsAlive(supervisorPid),
+    supervisorAlive: identityState === "match",
     hasLiveLog: liveLogReady,
     secondsSinceLastEvent: Number.isFinite(lastEventMs)
       ? Math.max(0, Math.floor((Date.now() - lastEventMs) / 1000))
@@ -559,45 +594,81 @@ function finalizeStoppedStatus(status) {
 async function stopManagedSupervisor() {
   const status = readJson(STATUS_PATH);
   const lock = readJson(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES);
-  const supervisorPid = matchingSupervisorPid(status, lock);
-  const lockMatches = supervisorPid !== null;
-  if (!lockMatches) {
+  if (!status && !lock) {
     console.log("[testnet-soak] no managed supervisor is running");
     return;
   }
-  if (!processIsAlive(supervisorPid)) {
+  const supervisorIdentity = matchingSupervisorIdentity(status, lock);
+  if (!supervisorIdentity) {
+    throw new Error("managed supervisor identity artifacts are incomplete or ambiguous; refusing to stop a PID");
+  }
+  let identityState = verifyProcessStartIdentity(
+    supervisorIdentity.pid,
+    supervisorIdentity.startToken,
+  );
+  if (identityState === "not-running" || identityState === "mismatch") {
     finalizeStoppedStatus(status);
     console.log("[testnet-soak] stale stopped status repaired");
     return;
   }
-  process.kill(supervisorPid, "SIGTERM");
-  const deadline = Date.now() + 5_000;
-  while (processIsAlive(supervisorPid) && Date.now() < deadline) {
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  if (identityState !== "match") {
+    throw new Error("managed supervisor process identity is unavailable; refusing to stop a PID");
   }
-  if (processIsAlive(supervisorPid)) throw new Error("managed supervisor did not stop within 5000ms");
+  writeStopRequest(supervisorIdentity);
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    identityState = verifyProcessStartIdentity(
+      supervisorIdentity.pid,
+      supervisorIdentity.startToken,
+    );
+    if (identityState === "not-running" || identityState === "mismatch") break;
+    if (identityState !== "match") {
+      throw new Error("managed supervisor process identity became unavailable while awaiting cooperative stop");
+    }
+  }
+  if (identityState === "match") throw new Error("managed supervisor did not stop cooperatively within 5000ms");
   finalizeStoppedStatus(status);
   console.log("[testnet-soak] stop requested");
 }
 
 function acquireLock() {
   mkdirSync(OUT_DIR, { recursive: true });
+  if (existsSync(STOP_PATH) && !fileExists(STOP_PATH)) {
+    throw new Error("testnet soak stop request path exists but is not a file");
+  }
   if (existsSync(LOCK_PATH)) {
     if (!fileExists(LOCK_PATH)) throw new Error("testnet soak supervisor lock path exists but is not a file");
     if (statSync(LOCK_PATH).size > MAX_SOAK_LOCK_JSON_BYTES) {
       throw new Error("testnet soak supervisor lock file is too large to validate safely");
     }
-    let previousPid = 0;
-    try {
-      previousPid = parseTrackedPid(readJson(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES)?.pid) ?? 0;
-    } catch {
-      previousPid = 0;
+    const previousLock = readJson(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES);
+    const previousPid = parseTrackedPid(previousLock?.pid);
+    const previousStartToken = parseProcessStartToken(previousLock?.supervisorStartToken);
+    if (previousPid === null || !previousStartToken) {
+      throw new Error("testnet soak supervisor lock identity is incomplete or ambiguous");
     }
-    if (processIsAlive(previousPid)) throw new Error(`testnet soak supervisor is already running (pid ${previousPid})`);
+    const previousIdentityState = verifyProcessStartIdentity(previousPid, previousStartToken);
+    if (previousIdentityState === "match") {
+      throw new Error(`testnet soak supervisor is already running (pid ${previousPid})`);
+    }
+    if (previousIdentityState === "unavailable") {
+      throw new Error("testnet soak supervisor lock identity cannot be verified safely");
+    }
     removeLockFile();
   }
+  removeStopFile();
+  const currentIdentity = readProcessStartIdentity(process.pid);
+  if (currentIdentity.state !== "ok") {
+    throw new Error("testnet soak supervisor cannot establish its process start identity");
+  }
+  supervisorStartToken = currentIdentity.startToken;
   const handle = openSync(LOCK_PATH, "wx");
-  writeFileSync(handle, JSON.stringify({ pid: process.pid, startedAt: STARTED_AT }));
+  writeFileSync(handle, JSON.stringify({
+    pid: process.pid,
+    startedAt: STARTED_AT,
+    supervisorStartToken,
+  }));
   closeSync(handle);
   writeFileSync(SERVER_LOG_PATH, "", "utf8");
   writeFileSync(CANARY_LOG_PATH, "", "utf8");
@@ -623,6 +694,7 @@ function writeStatus(status, extra = {}) {
     dryRun: DRY_RUN,
     startedAt: STARTED_AT,
     supervisorPid: process.pid,
+    supervisorStartToken,
     serverPid: server?.pid ?? null,
     canaryPid: canary?.pid ?? null,
     artifacts: {
@@ -660,9 +732,15 @@ async function waitForExit(child) {
       });
       stopChild(child);
     }, DISK_CAPACITY_CHECK_INTERVAL_MS);
+    const stopMonitor = setInterval(() => {
+      if (!managedStopRequested()) return;
+      settle(resolveExit, { code: null, signal: "operator-stop" });
+      stopChild(child);
+    }, 100);
 
     function cleanup() {
       clearInterval(diskMonitor);
+      clearInterval(stopMonitor);
       child.off("error", onError);
       child.off("exit", onExit);
     }
@@ -693,6 +771,7 @@ async function waitForExit(child) {
 async function waitForServer() {
   const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    if (managedStopRequested()) throw new Error("operator stop requested");
     if (server?.exitCode != null) throw new Error(`production server exited before health readiness (${server.exitCode})`);
     try {
       const response = await fetch(`${BASE_URL}/api/health/runtime`, {
@@ -724,6 +803,7 @@ async function shutdown(stopReason, exitCode) {
     stopReason,
   });
   removeLockFile();
+  removeStopFile();
 }
 
 async function main() {

@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -7,36 +8,15 @@ import {
   decodeEventLog,
   fallback,
   http,
-  parseAbi,
   parseUnits,
 } from "viem";
 import { compareAccountingSnapshot, replayV9Accounting } from "./lib/chain-accounting-model.mjs";
 
-const EVENTS_ABI = parseAbi([
-  "event BetPlaced(uint256 indexed epoch, address indexed user, uint256 indexed tileId, uint256 amount)",
-  "event BatchBetsPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256[] amounts, uint256 totalAmount)",
-  "event BatchBetsSameAmountPlaced(uint256 indexed epoch, address indexed user, uint256[] tileIds, uint256 amount, uint256 totalAmount)",
-  "event BatchBetsBitmapPlaced(uint256 indexed epoch, address indexed user, uint32 tileMask, uint256 amount, uint256 totalAmount)",
-  "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
-  "event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
-  "event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)",
-  "event RewardClaimed(uint256 indexed epoch, address indexed user, uint256 reward)",
-  "event RewardBatchClaimed(address indexed user, uint256 totalAmount, uint256 epochsClaimed)",
-  "event RebateClaimed(address indexed user, uint256 indexed epoch, uint256 amount)",
-  "event RebateBatchClaimed(address indexed user, uint256 amount, uint256 epochsClaimed)",
-  "event RewardDustSettled(uint256 indexed epoch, uint256 amount)",
-  "event RebateDustSettled(uint256 indexed epoch, uint256 amount)",
-  "event ResolverRewardAccrued(address indexed resolver, uint256 indexed epoch, uint256 amount)",
-  "event ResolverRewardClaimed(address indexed resolver, uint256 amount)",
-  "event ProtocolFeesFlushed(uint256 ownerAmount, uint256 burnAmount)",
-]);
-const ACCOUNTING_ABI = parseAbi([
-  "function rolloverPool() view returns (uint256)",
-  "function dailyJackpotPool() view returns (uint256)",
-  "function weeklyJackpotPool() view returns (uint256)",
-  "function accruedOwnerFees() view returns (uint256)",
-  "function accruedBurnFees() view returns (uint256)",
-]);
+const require = createRequire(import.meta.url);
+const {
+  GAME_ABI: ACCOUNTING_ABI,
+  GAME_EVENTS_ABI: EVENTS_ABI,
+} = require("../config/generated/lineaOreV10Abi.ts");
 
 const network = (process.env.LINEA_NETWORK || process.env.NEXT_PUBLIC_LINEA_NETWORK || "sepolia").toLowerCase() === "mainnet"
   ? "mainnet"

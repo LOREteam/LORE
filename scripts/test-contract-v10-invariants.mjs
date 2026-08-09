@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import solc from "solc";
-import { parseAbi, toFunctionSelector } from "viem";
+import ts from "typescript";
+import { toFunctionSelector } from "viem";
 
 const EIP_170_RUNTIME_LIMIT = 24_576;
 const EIP_3860_INITCODE_LIMIT = 49_152;
@@ -14,10 +16,11 @@ const V9_NAME = "LineaOreV9";
 const V10_NAME = "LineaOreV10";
 const V10_COMPILER_CONFIG_PATH = "contracts/LineaOreV10.compiler-config.json";
 const V10_COMPILATION_MANIFEST_PATH = "contracts/LineaOreV10.compilation.json";
+const V10_ABI_SNAPSHOT_PATH = "config/generated/lineaOreV10Abi.ts";
+const COMPILATION_PROVENANCE_PATH = "scripts/check-contract-compilation-provenance.mjs";
 const v9Source = fs.readFileSync(V9_PATH, "utf8").replace(/\r\n?/g, "\n");
 const v10Source = fs.readFileSync(V10_PATH, "utf8").replace(/\r\n?/g, "\n");
 const frontendConstantsSource = fs.readFileSync("app/lib/constants.ts", "utf8").replace(/\r\n?/g, "\n");
-const resolveAbiSource = fs.readFileSync("config/abi.ts", "utf8").replace(/\r\n?/g, "\n");
 const indexerSource = fs.readFileSync("scripts/indexer.ts", "utf8").replace(/\r\n?/g, "\n");
 const liveStateSharedSource = fs.readFileSync("app/api/live-state/shared.ts", "utf8").replace(/\r\n?/g, "\n");
 const standardBetPathSource = fs.readFileSync("app/hooks/useMiningStandardBetPath.ts", "utf8").replace(/\r\n?/g, "\n");
@@ -28,6 +31,61 @@ const v10DesignSource = fs.readFileSync("docs/v10-contract-design.md", "utf8").r
 const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const v10CompilerConfig = JSON.parse(fs.readFileSync(V10_COMPILER_CONFIG_PATH, "utf8"));
 const v10CompilationManifest = JSON.parse(fs.readFileSync(V10_COMPILATION_MANIFEST_PATH, "utf8"));
+const v10AbiSnapshotSource = fs.readFileSync(V10_ABI_SNAPSHOT_PATH, "utf8").replace(/\r\n?/g, "\n");
+const importBoundarySelfTest = JSON.parse(execFileSync(
+  process.execPath,
+  [COMPILATION_PROVENANCE_PATH, "--self-test-import-boundary"],
+  { cwd: process.cwd(), encoding: "utf8", windowsHide: true },
+));
+assert.deepEqual(importBoundarySelfTest, {
+  status: "pass",
+  legitimateImportAccepted: true,
+  absoluteEscapeRejected: true,
+  traversalEscapeRejected: true,
+  symlinkEscapeRejected: true,
+});
+assert.equal(
+  createHash("sha256").update(v10AbiSnapshotSource).digest("hex"),
+  v10CompilationManifest.abiSnapshotSha256,
+  "generated V10 ABI snapshot must match the compilation manifest digest",
+);
+assert.match(
+  v10AbiSnapshotSource,
+  new RegExp(`LINEA_ORE_V10_ABI_SHA256 = "${v10CompilationManifest.abiSha256}"`),
+  "generated V10 ABI snapshot must identify the canonical compiler ABI digest",
+);
+const transpiledAbiSnapshot = ts.transpileModule(v10AbiSnapshotSource, {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+  fileName: V10_ABI_SNAPSHOT_PATH,
+  reportDiagnostics: true,
+});
+assert.deepEqual(
+  (transpiledAbiSnapshot.diagnostics ?? [])
+    .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
+    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
+  [],
+  "generated V10 ABI snapshot must transpile as an executable module",
+);
+const generatedAbiModule = await import(
+  `data:text/javascript;base64,${Buffer.from(transpiledAbiSnapshot.outputText).toString("base64")}`
+);
+const {
+  GAME_ABI: frontendGameAbi,
+  GAME_EVENTS_ABI: frontendGameEventsAbi,
+  LINEA_ORE_V10_ABI: generatedV10Abi,
+  LINEA_ORE_V10_ABI_FRAGMENTS_SHA256: generatedAbiFragmentsSha256,
+  RESOLVE_ABI: sharedResolveAbi,
+} = generatedAbiModule;
+const sharedTokenAbi = await loadExecutableConstArray(
+  frontendConstantsSource,
+  "app/lib/constants.ts",
+  "TOKEN_ABI",
+);
+assert.equal(
+  generatedAbiFragmentsSha256,
+  v10CompilationManifest.abiFragmentsSha256,
+  "generated ABI fragments must identify the reviewed semantic digest",
+);
 assert.deepEqual(
   {
     language: v10CompilerConfig.language,
@@ -170,10 +228,35 @@ assert.match(
   /configuredTokenAddress\s*!==\s*expectedToken/,
   "fresh V10 verification must compare expected and configured token addresses",
 );
-assert.match(
-  deployedVerifierSource,
-  /function decimals\(\) view returns \(uint8\)/,
-  "deployed V10 verification must read token decimals",
+assert.deepEqual(
+  namedImportBindings(
+    deployedVerifierSource,
+    "scripts/verify-v10-deployed.ts",
+    "../app/lib/constants",
+  ),
+  { TOKEN_ABI: "TOKEN_ABI" },
+  "deployed V10 verification must import the shared token ABI",
+);
+assert.equal(
+  abiMap(sharedTokenAbi).get("function:decimals()"),
+  canonicalAbiValue({
+    type: "function",
+    name: "decimals",
+    inputs: [],
+    outputs: [{ type: "uint8" }],
+    stateMutability: "view",
+  }),
+  "shared token ABI must expose canonical ERC20 decimals semantics",
+);
+assert.deepEqual(
+  literalAbiUsageNames(
+    deployedVerifierSource,
+    "scripts/verify-v10-deployed.ts",
+    "TOKEN_ABI",
+    "functionName",
+  ),
+  ["balanceOf", "decimals"],
+  "deployed V10 verification must execute its reviewed token reads through the shared ABI",
 );
 assert.match(
   deployedVerifierSource,
@@ -321,6 +404,7 @@ assert.deepEqual(
   [
     "npm run proof:contract-compile:v10",
     "npm run test:contract:v10",
+    "npm run test:contract:v10:evm:fuzz",
     "npm run bench:contract:v10:compiler-matrix:summary",
     "npm run bench:contract:v10:diagnostics",
     "npm run proof:contract-deployed:v10:offline",
@@ -524,14 +608,79 @@ function canonicalAbiValue(item) {
   });
 }
 
-function extractParseAbiItems(source, constantName) {
-  const marker = new RegExp(`(?:export\\s+)?const\\s+${constantName}\\s*=\\s*parseAbi\\(\\[`);
-  const match = marker.exec(source);
-  assert.ok(match, `missing ${constantName} parseAbi block`);
-  const start = match.index;
-  const end = source.indexOf("]);", start);
-  assert.notEqual(end, -1, `unterminated ${constantName} parseAbi block`);
-  return [...source.slice(start, end).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+function namedImportBindings(source, fileName, moduleSpecifier) {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const bindings = {};
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== moduleSpecifier ||
+      !statement.importClause?.namedBindings ||
+      !ts.isNamedImports(statement.importClause.namedBindings)
+    ) {
+      continue;
+    }
+    for (const element of statement.importClause.namedBindings.elements) {
+      bindings[element.name.text] = element.propertyName?.text ?? element.name.text;
+    }
+  }
+  return bindings;
+}
+
+function literalAbiUsageNames(source, fileName, abiBinding, propertyName) {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const names = new Set();
+  const visit = (node) => {
+    if (ts.isObjectLiteralExpression(node)) {
+      let usesAbi = false;
+      let literalName = null;
+      for (const property of node.properties) {
+        if (!ts.isPropertyAssignment(property)) continue;
+        const name = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
+          ? property.name.text
+          : null;
+        if (name === "abi" && ts.isIdentifier(property.initializer)) {
+          usesAbi = property.initializer.text === abiBinding;
+        } else if (name === propertyName && ts.isStringLiteral(property.initializer)) {
+          literalName = property.initializer.text;
+        }
+      }
+      if (usesAbi && literalName !== null) names.add(literalName);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return [...names].sort();
+}
+
+async function loadExecutableConstArray(source, fileName, constantName) {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const declaration = sourceFile.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => [...statement.declarationList.declarations])
+    .find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === constantName);
+  assert.ok(declaration?.initializer, `missing executable ${constantName} initializer in ${fileName}`);
+  const transpiled = ts.transpileModule(
+    `export default (${declaration.initializer.getText(sourceFile)});`,
+    {
+      compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+      fileName,
+      reportDiagnostics: true,
+    },
+  );
+  assert.deepEqual(
+    (transpiled.diagnostics ?? [])
+      .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
+      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
+    [],
+    `${constantName} must transpile as an executable ABI fragment`,
+  );
+  const loaded = await import(
+    `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`
+  );
+  assert.ok(Array.isArray(loaded.default), `${constantName} must execute to an ABI array`);
+  return loaded.default;
 }
 
 function abiMap(abi) {
@@ -568,20 +717,77 @@ const v9 = compile(V9_PATH, V9_NAME);
 const v10 = compile(V10_PATH, V10_NAME);
 const v9Abi = abiMap(v9.abi);
 const v10Abi = abiMap(v10.abi);
-const benchmarkFrontendViewAbi = parseAbi(extractParseAbiItems(gasBenchmarkSource, "FRONTEND_VIEW_ABI"));
-for (const functionItem of benchmarkFrontendViewAbi) {
-  const key = canonicalAbiKey(functionItem);
-  const value = canonicalAbiValue(functionItem);
+const frontendGameAbiMap = abiMap(frontendGameAbi);
+const sharedTokenAbiMap = abiMap(sharedTokenAbi);
+assert.deepEqual(
+  namedImportBindings(
+    gasBenchmarkSource,
+    "scripts/benchmark-v10-linea-gas.ts",
+    "../config/generated/lineaOreV10Abi",
+  ),
+  { GAME_ABI: "GAME_ABI" },
+  "V10 benchmark must import the canonical generated game ABI",
+);
+assert.deepEqual(
+  namedImportBindings(
+    gasBenchmarkSource,
+    "scripts/benchmark-v10-linea-gas.ts",
+    "../app/lib/constants",
+  ),
+  { TOKEN_ABI: "TOKEN_ABI" },
+  "V10 benchmark must import the shared token ABI",
+);
+assert.doesNotMatch(
+  gasBenchmarkSource,
+  /\b(?:parseAbi|FRONTEND_VIEW_ABI|ERC20_ABI)\b/,
+  "V10 benchmark must not retain local or dead ABI definitions",
+);
+const benchmarkFrontendViewKeys = [
+  "function:getEpochEndTime(uint256)",
+  "function:getJackpotInfo()",
+  "function:previewRebate(uint256,address)",
+  "function:getRebateInfo(uint256,address)",
+  "function:getRebateSummary(address,uint256[])",
+];
+for (const key of benchmarkFrontendViewKeys) {
+  const value = frontendGameAbiMap.get(key);
+  assert.ok(value, `canonical GAME_ABI is missing benchmark view ${key}`);
   assert.equal(v9Abi.get(key), value, `benchmark frontend-view ABI drifted from V9: ${key}`);
   assert.equal(v10Abi.get(key), value, `benchmark frontend-view ABI drifted from V10: ${key}`);
 }
-const frontendGameAbi = parseAbi(extractParseAbiItems(frontendConstantsSource, "GAME_ABI"));
-const frontendGameEventsAbi = parseAbi(extractParseAbiItems(frontendConstantsSource, "GAME_EVENTS_ABI"));
-const sharedResolveAbi = parseAbi(extractParseAbiItems(resolveAbiSource, "RESOLVE_ABI"));
-const indexerEventsAbi = parseAbi(extractParseAbiItems(indexerSource, "EVENTS_ABI"));
-const liveStateReadAbi = parseAbi(extractParseAbiItems(liveStateSharedSource, "LIVE_STATE_ABI"));
-const liveStateEventsAbi = parseAbi(extractParseAbiItems(liveStateSharedSource, "LIVE_STATE_EVENTS_ABI"));
+for (const key of ["function:balanceOf(address)", "function:allowance(address,address)"]) {
+  assert.ok(sharedTokenAbiMap.has(key), `shared TOKEN_ABI is missing benchmark read ${key}`);
+}
+assert.deepEqual(
+  literalAbiUsageNames(
+    gasBenchmarkSource,
+    "scripts/benchmark-v10-linea-gas.ts",
+    "TOKEN_ABI",
+    "functionName",
+  ),
+  ["allowance", "balanceOf"],
+  "V10 benchmark must execute only its reviewed token reads through TOKEN_ABI",
+);
+assert.deepEqual(
+  namedImportBindings(indexerSource, "scripts/indexer.ts", "../config/generated/lineaOreV10Abi"),
+  { READ_ABI: "GAME_ABI", EVENTS_ABI: "GAME_EVENTS_ABI" },
+  "indexer must bind reads and events to generated canonical fragments",
+);
+assert.deepEqual(
+  namedImportBindings(
+    liveStateSharedSource,
+    "app/api/live-state/shared.ts",
+    "../../../config/generated/lineaOreV10Abi",
+  ),
+  { GENERATED_LIVE_STATE_ABI: "GAME_ABI", LIVE_STATE_EVENTS_ABI: "GAME_EVENTS_ABI" },
+  "live-state must bind reads and events to generated canonical fragments",
+);
 const frontendGameAbiKeys = new Set(frontendGameAbi.map(canonicalAbiKey));
+assert.deepEqual(
+  [...abiMap(generatedV10Abi)],
+  [...v10Abi],
+  "generated full ABI snapshot must match the executable V10 compiler ABI semantically",
+);
 for (const functionItem of frontendGameAbi.filter((item) => item.type === "function")) {
   const key = canonicalAbiKey(functionItem);
   assert.equal(v10Abi.get(key), canonicalAbiValue(functionItem), `frontend GAME_ABI function drifted from V10: ${key}`);
@@ -611,23 +817,68 @@ assert.ok(
   frontendGameAbiKeys.has("function:placeBatchBetsBitmapForEpoch(uint256,uint32,uint256)"),
   "frontend GAME_ABI must expose the V10 epoch-bound bitmap entrypoint",
 );
+assert.deepEqual(
+  [...frontendGameAbiKeys].filter((key) => !v10Abi.has(key)).sort(),
+  [
+    "error:ERC20InsufficientAllowance(address,uint256,uint256)",
+    "error:ERC20InsufficientBalance(address,uint256,uint256)",
+  ],
+  "frontend GAME_ABI may extend V10 only with the reviewed ERC-6093 decoding fallback",
+);
 for (const [sourceName, abi] of [
-  ["frontend GAME_EVENTS_ABI", frontendGameEventsAbi],
+  ["canonical GAME_EVENTS_ABI", frontendGameEventsAbi],
   ["shared RESOLVE_ABI", sharedResolveAbi],
-  ["indexer EVENTS_ABI", indexerEventsAbi],
-  ["live-state LIVE_STATE_ABI", liveStateReadAbi],
-  ["live-state LIVE_STATE_EVENTS_ABI", liveStateEventsAbi],
 ]) {
   for (const item of abi) {
     const key = canonicalAbiKey(item);
     assert.equal(v10Abi.get(key), canonicalAbiValue(item), `${sourceName} drifted from V10: ${key}`);
   }
 }
+const liveStateReadFunctionNames = literalAbiUsageNames(
+  liveStateSharedSource,
+  "app/api/live-state/shared.ts",
+  "LIVE_STATE_ABI",
+  "functionName",
+);
 assert.deepEqual(
-  liveStateEventsAbi.map((item) => item.name).sort(),
+  liveStateReadFunctionNames,
+  [
+    "currentEpoch",
+    "epochDuration",
+    "epochs",
+    "getEpochEndTime",
+    "getJackpotInfo",
+    "getTileData",
+    "pendingEpochDuration",
+    "pendingEpochDurationEffectiveFromEpoch",
+    "pendingEpochDurationEta",
+    "rolloverPool",
+  ],
+  "live-state reads must stay on the reviewed canonical game fragment",
+);
+for (const functionName of liveStateReadFunctionNames) {
+  const functionItem = frontendGameAbi.find((item) => item.type === "function" && item.name === functionName);
+  assert.ok(functionItem, `canonical GAME_ABI is missing live-state read ${functionName}`);
+  const key = canonicalAbiKey(functionItem);
+  assert.equal(v10Abi.get(key), canonicalAbiValue(functionItem), `live-state read drifted from V10: ${key}`);
+}
+const liveStateEventNames = literalAbiUsageNames(
+  liveStateSharedSource,
+  "app/api/live-state/shared.ts",
+  "LIVE_STATE_EVENTS_ABI",
+  "eventName",
+);
+assert.deepEqual(
+  liveStateEventNames,
   ["BatchBetsBitmapPlaced", "BatchBetsPlaced", "BatchBetsSameAmountPlaced", "BetPlaced"],
   "live-state recovery must stay limited to bet-placement events used for tile-user reconstruction",
 );
+for (const eventName of liveStateEventNames) {
+  const eventItem = frontendGameEventsAbi.find((item) => item.type === "event" && item.name === eventName);
+  assert.ok(eventItem, `canonical GAME_EVENTS_ABI is missing live-state event ${eventName}`);
+  const key = canonicalAbiKey(eventItem);
+  assert.equal(v10Abi.get(key), canonicalAbiValue(eventItem), `live-state event drifted from V10: ${key}`);
+}
 const locallyDeclaredV10EventNames = new Set(
   [...v10Source.matchAll(/^\s*event\s+([A-Za-z_]\w*)\s*\(/gm)].map((match) => match[1]),
 );
@@ -643,7 +894,29 @@ assert.deepEqual(
 for (const eventName of locallyDeclaredV10EventNames) {
   assert.match(v10Source, new RegExp(`\\bemit\\s+${eventName}\\s*\\(`), `${eventName} must be emitted`);
 }
-const indexerEventNames = indexerEventsAbi.map((item) => item.name).sort();
+const indexerReadFunctionNames = literalAbiUsageNames(
+  indexerSource,
+  "scripts/indexer.ts",
+  "READ_ABI",
+  "functionName",
+);
+assert.deepEqual(
+  indexerReadFunctionNames,
+  ["currentEpoch", "epochs"],
+  "indexer reads must stay on the reviewed canonical game fragment",
+);
+for (const functionName of indexerReadFunctionNames) {
+  const functionItem = frontendGameAbi.find((item) => item.type === "function" && item.name === functionName);
+  assert.ok(functionItem, `canonical GAME_ABI is missing indexer read ${functionName}`);
+  const key = canonicalAbiKey(functionItem);
+  assert.equal(v10Abi.get(key), canonicalAbiValue(functionItem), `indexer read drifted from V10: ${key}`);
+}
+const indexerEventNames = literalAbiUsageNames(
+  indexerSource,
+  "scripts/indexer.ts",
+  "EVENTS_ABI",
+  "eventName",
+);
 const indexerEventNameSet = new Set(indexerEventNames);
 const frontendEventNames = frontendGameEventsAbi.map((item) => item.name).sort();
 const frontendEventNameSet = new Set(frontendEventNames);
@@ -658,9 +931,6 @@ const expectedFrontendOnlyEventNames = [
   "RebateDustBatchSettled",
   "RewardDustBatchSettled",
 ].sort();
-const encodedIndexerTopicEvents = [
-  ...indexerSource.matchAll(/encodeEventTopics\(\{\s*abi:\s*EVENTS_ABI,\s*eventName:\s*"([^"]+)"/g),
-].map((match) => match[1]).sort();
 const decodedIndexerHandlerEvents = [
   ...new Set([...indexerSource.matchAll(/decoded\.eventName\s*!==\s*"([^"]+)"/g)].map((match) => match[1])),
 ].sort();
@@ -687,16 +957,11 @@ assert.deepEqual(
   "indexer EVENTS_ABI must retain the reviewed accounting event surface",
 );
 assert.deepEqual(
-  encodedIndexerTopicEvents,
-  indexerEventNames,
-  "indexer must keep one topic signature for every EVENTS_ABI event and no topic outside EVENTS_ABI",
-);
-assert.deepEqual(
   decodedIndexerHandlerEvents,
   indexerEventNames,
   "indexer must keep one decode/handler guard for every EVENTS_ABI event and no handler outside EVENTS_ABI",
 );
-for (const topicEventName of encodedIndexerTopicEvents) {
+for (const topicEventName of indexerEventNames) {
   assert.ok(indexerEventNameSet.has(topicEventName), `indexer topic event is missing from EVENTS_ABI: ${topicEventName}`);
 }
 assert.ok(

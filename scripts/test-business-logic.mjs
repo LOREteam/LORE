@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
+import { runWalletModelTests } from "./test-business-wallet-models.mjs";
+import { runReadModelTests } from "./test-business-read-models.mjs";
+import { runRuntimeRecoveryTests } from "./test-business-runtime-recovery.mjs";
+import { runCacheAndPlannerTests } from "./test-business-cache-planners.mjs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as envParsingModule from "../config/envParsing.ts";
@@ -23,17 +27,7 @@ import * as manualMineAttemptModule from "../app/lib/mining/manualMineAttempt.ts
 import * as miningBetStatusModule from "../app/hooks/useMiningBetStatus.ts";
 import * as autoMineLoopModule from "../app/hooks/useMiningAutoMineLoop.ts";
 import * as miningRoundBettingModule from "../app/hooks/useMiningRoundBetting.ts";
-import * as autoMineLoopModelModule from "../app/lib/mining/autoMineLoopModel.ts";
-import * as autoMineLoopPreludePlannerModule from "../app/lib/mining/autoMineLoopPreludePlanner.ts";
-import * as autoMineLoopRoundOutcomeModule from "../app/lib/mining/autoMineLoopRoundOutcome.ts";
-import * as autoMineLoopRetryPlannerModule from "../app/lib/mining/autoMineLoopRetryPlanner.ts";
-import * as autoMineLoopTransitionPlannerModule from "../app/lib/mining/autoMineLoopTransitionPlanner.ts";
-import * as autoMineDiagnosticsModule from "../app/lib/mining/autoMineDiagnostics.ts";
-import * as autoMineDebugOverrideModule from "../app/lib/mining/autoMineDebugOverride.ts";
-import * as autoMineRunnerStopReasonModule from "../app/lib/mining/autoMineRunnerStopReason.ts";
 import * as autoMineRunSetupModule from "../app/lib/mining/autoMineRunSetup.ts";
-import * as routeCacheModule from "../app/api/_lib/routeCache.ts";
-import * as versionedRouteCacheModule from "../app/api/_lib/versionedRouteCache.ts";
 import * as routeErrorModule from "../app/api/_lib/routeError.ts";
 import * as clientIdentityModule from "../app/api/_lib/clientIdentity.ts";
 import * as externalRateLimitModule from "../app/api/_lib/externalRateLimit.ts";
@@ -41,34 +35,19 @@ import * as sharedRateLimitModule from "../app/api/_lib/sharedRateLimit.ts";
 import * as runtimeMetricsModule from "../app/api/_lib/runtimeMetrics.ts";
 import * as autoMineRuntimeControllerModule from "../app/lib/mining/autoMineRuntimeController.ts";
 import * as autoMineErrorModule from "../app/hooks/useMiningAutoMineError.ts";
-import * as autoMineRestoreDeduperModule from "../app/lib/mining/autoMineRestoreDeduper.ts";
-import * as chunkReloadRecoveryModule from "../app/lib/chunkReloadRecovery.ts";
 import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
 import * as safetyPoolClaimThresholdModule from "../app/lib/safetyPoolClaimThreshold.ts";
 import * as analyticsDepositsStatusModule from "../app/lib/analyticsDepositsStatus.ts";
-import * as tokenAmountMathModule from "../app/lib/tokenAmountMath.ts";
 import * as miningTxPathModule from "../app/lib/miningTxPath.ts";
 import * as rewardScannerModule from "../app/hooks/useRewardScanner.ts";
-import * as rebateModule from "../app/hooks/useRebate.ts";
-import * as walletTransfersModule from "../app/hooks/useWalletTransfers.ts";
-import * as autoMinerFormModule from "../app/hooks/useAutoMinerForm.ts";
-import * as analyticsAchievementsModule from "../app/hooks/useAnalyticsAchievements.ts";
 import * as autoResolveModule from "../app/hooks/useAutoResolve.ts";
-import * as autoResolveStorageModule from "../app/hooks/autoResolveStorage.ts";
 import * as appShellStateModule from "../app/hooks/useAppShellState.ts";
 import * as liveStateSnapshotModule from "../app/hooks/useGameLiveStateSnapshot.ts";
 import * as gameDataHelpersModule from "../app/hooks/useGameData.helpers.ts";
-import * as gameCountdownModule from "../app/hooks/useGameCountdown.ts";
 import * as gamePollingConfigModule from "../app/hooks/useGamePollingConfig.ts";
-import * as depositHistoryModule from "../app/hooks/useDepositHistory.ts";
-import * as globalStatsModule from "../app/hooks/useGlobalStats.ts";
-import * as pageWalletOverviewModule from "../app/hooks/usePageWalletOverview.ts";
-import * as leaderboardsModule from "../app/hooks/useLeaderboards.ts";
-import * as jackpotHistoryModule from "../app/hooks/useJackpotHistory.ts";
-import * as recentWinsModule from "../app/hooks/useRecentWins.ts";
 import * as explorerLinksModule from "../app/lib/explorerLinks.ts";
-import * as cacheTimestampModule from "../app/lib/cacheTimestamp.ts";
 import * as lineaOreClientViewPropsModule from "../app/lib/lineaOreClientViewProps.ts";
+import * as gameConstantsModule from "../app/lib/constants.ts";
 import * as productionRuntimeModule from "../config/productionRuntime.ts";
 import * as lineaFeesModule from "../app/lib/lineaFees.ts";
 import * as chatSessionClientModule from "../app/lib/chatSessionClient.ts";
@@ -83,7 +62,6 @@ import * as trustedAuthOriginModule from "../app/api/_lib/trustedAuthOrigin.ts";
 import * as chatAuthModule from "../app/lib/chatAuth.ts";
 import * as adminAuthModule from "../app/lib/adminAuth.ts";
 import * as chatSessionModule from "../app/api/_lib/chatSession.ts";
-import * as adminSessionModule from "../app/api/_lib/adminSession.ts";
 import * as estimateGasRetryModule from "./lib/estimate-gas-retry.ts";
 import * as canaryContractErrorModule from "./lib/canary-contract-error.ts";
 
@@ -454,17 +432,7 @@ async function main() {
   const miningBetStatus = miningBetStatusModule.default ?? miningBetStatusModule;
   const autoMineLoop = autoMineLoopModule.default ?? autoMineLoopModule;
   const miningRoundBetting = miningRoundBettingModule.default ?? miningRoundBettingModule;
-  const autoMineLoopModel = autoMineLoopModelModule.default ?? autoMineLoopModelModule;
-  const autoMineLoopPreludePlanner = autoMineLoopPreludePlannerModule.default ?? autoMineLoopPreludePlannerModule;
-  const autoMineLoopRoundOutcome = autoMineLoopRoundOutcomeModule.default ?? autoMineLoopRoundOutcomeModule;
-  const autoMineLoopRetryPlanner = autoMineLoopRetryPlannerModule.default ?? autoMineLoopRetryPlannerModule;
-  const autoMineLoopTransitionPlanner = autoMineLoopTransitionPlannerModule.default ?? autoMineLoopTransitionPlannerModule;
-  const autoMineDiagnostics = autoMineDiagnosticsModule.default ?? autoMineDiagnosticsModule;
-  const autoMineDebugOverride = autoMineDebugOverrideModule.default ?? autoMineDebugOverrideModule;
-  const autoMineRunnerStopReason = autoMineRunnerStopReasonModule.default ?? autoMineRunnerStopReasonModule;
   const autoMineRunSetup = autoMineRunSetupModule.default ?? autoMineRunSetupModule;
-  const routeCache = routeCacheModule.default ?? routeCacheModule;
-  const versionedRouteCache = versionedRouteCacheModule.default ?? versionedRouteCacheModule;
   const routeError = routeErrorModule.default ?? routeErrorModule;
   const clientIdentity = clientIdentityModule.default ?? clientIdentityModule;
   const externalRateLimit = externalRateLimitModule.default ?? externalRateLimitModule;
@@ -472,38 +440,23 @@ async function main() {
   const runtimeMetrics = runtimeMetricsModule.default ?? runtimeMetricsModule;
   const autoMineRuntimeController = autoMineRuntimeControllerModule.default ?? autoMineRuntimeControllerModule;
   const autoMineError = autoMineErrorModule.default ?? autoMineErrorModule;
-  const autoMineRestoreDeduper = autoMineRestoreDeduperModule.default ?? autoMineRestoreDeduperModule;
-  const chunkReloadRecovery = chunkReloadRecoveryModule.default ?? chunkReloadRecoveryModule;
   const miningShared = miningSharedModule.default ?? miningSharedModule;
   const safetyPoolClaimThreshold = safetyPoolClaimThresholdModule.default ?? safetyPoolClaimThresholdModule;
   const analyticsDepositsStatus = analyticsDepositsStatusModule.default ?? analyticsDepositsStatusModule;
-  const tokenAmountMath = tokenAmountMathModule.default ?? tokenAmountMathModule;
   const miningTxPath = miningTxPathModule.default ?? miningTxPathModule;
   const rewardScanner = rewardScannerModule.default ?? rewardScannerModule;
-  const rebate = rebateModule.default ?? rebateModule;
-  const walletTransfers = walletTransfersModule.default ?? walletTransfersModule;
-  const autoMinerForm = autoMinerFormModule.default ?? autoMinerFormModule;
-  const analyticsAchievements = analyticsAchievementsModule.default ?? analyticsAchievementsModule;
   const autoResolve = autoResolveModule.default ?? autoResolveModule;
-  const autoResolveStorage = autoResolveStorageModule.default ?? autoResolveStorageModule;
   const liveStateSnapshot = liveStateSnapshotModule.default ?? liveStateSnapshotModule;
   const gameDataHelpers = gameDataHelpersModule.default ?? gameDataHelpersModule;
   const gamePollingConfig = gamePollingConfigModule.default ?? gamePollingConfigModule;
-  const depositHistory = depositHistoryModule.default ?? depositHistoryModule;
-  const globalStats = globalStatsModule.default ?? globalStatsModule;
-  const pageWalletOverview = pageWalletOverviewModule.default ?? pageWalletOverviewModule;
-  const leaderboards = leaderboardsModule.default ?? leaderboardsModule;
-  const jackpotHistory = jackpotHistoryModule.default ?? jackpotHistoryModule;
-  const recentWins = recentWinsModule.default ?? recentWinsModule;
   const explorerLinks = explorerLinksModule.default ?? explorerLinksModule;
-  const cacheTimestamp = cacheTimestampModule.default ?? cacheTimestampModule;
   const publicConfig = publicConfigModule.default ?? publicConfigModule;
   const productionRuntime = productionRuntimeModule.default ?? productionRuntimeModule;
+  const gameConstants = gameConstantsModule.default ?? gameConstantsModule;
   const lineaFees = lineaFeesModule.default ?? lineaFeesModule;
   const sentrySanitize = sentrySanitizeModule.default ?? sentrySanitizeModule;
   const chatSessionClient = chatSessionClientModule.default ?? chatSessionClientModule;
   const chatSession = chatSessionModule.default ?? chatSessionModule;
-  const adminSession = adminSessionModule.default ?? adminSessionModule;
   const runtimeMonitor = runtimeMonitorModule.default ?? runtimeMonitorModule;
   const boundedJsonBody = boundedJsonBodyModule.default ?? boundedJsonBodyModule;
   const queryParams = queryParamsModule.default ?? queryParamsModule;
@@ -1025,7 +978,7 @@ async function main() {
   );
   assert.match(
     miningAllowanceSource,
-    /function normalizeApprovalNonce\(value: unknown\)[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*typeof value !== "number" \|\| !Number\.isSafeInteger\(value\)[\s\S]*function getPendingApproveAgeMs[\s\S]*pendingApprove\.submittedAt > now \+ 5_000[\s\S]*const approvalNonceRaw = pendingApproveRef\.current\?\.nonce \?\? await withMiningRpcTimeout[\s\S]*const approvalNonce = normalizeApprovalNonce\(approvalNonceRaw\)[\s\S]*Approval nonce is unavailable or unsafe[\s\S]*const pendingAgeMs = pendingApproveRef\.current[\s\S]*getPendingApproveAgeMs\(pendingApproveRef\.current, Date\.now\(\)\)[\s\S]*Approval pending state is unavailable or unsafe/,
+    /function normalizeApprovalNonce\(value: unknown\)[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*typeof value !== "number" \|\| !Number\.isSafeInteger\(value\)[\s\S]*function selectApprovalSubmissionNonce[\s\S]*function getPendingApproveAgeMs[\s\S]*pendingApprove\.submittedAt > now \+ 5_000[\s\S]*const trackedApprovalNonce = pendingApproveRef\.current\?\.nonce[\s\S]*const approvalNonceRaw = trackedApprovalNonce \?\? await withMiningRpcTimeout[\s\S]*blockTag: "pending"[\s\S]*const approvalNonce = selectApprovalSubmissionNonce\(trackedApprovalNonce, approvalNonceRaw\)[\s\S]*Approval nonce is unavailable or unsafe[\s\S]*const pendingAgeMs = pendingApproveRef\.current[\s\S]*getPendingApproveAgeMs\(pendingApproveRef\.current, Date\.now\(\)\)[\s\S]*Approval pending state is unavailable or unsafe/,
     "approve nonce selection must reject unsafe RPC or pending nonce evidence before wallet submission",
   );
   assert.match(
@@ -1041,7 +994,7 @@ async function main() {
   const autoMineBootstrapAllowanceSource = readFileSync("app/lib/mining/autoMineBootstrap.ts", "utf8");
   assert.match(
     autoMineBootstrapAllowanceSource,
-    /function computeBootstrapAllowancePollDeadline[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*Number\.isSafeInteger\(timeoutMs\)[\s\S]*timeoutMs > Number\.MAX_SAFE_INTEGER - now[\s\S]*function normalizeBootstrapApprovalNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*function getPendingApproveAgeMs[\s\S]*pendingApprove\.submittedAt > now \+ 5_000[\s\S]*function formatLineaWeiOneDecimal[\s\S]*10n \*\* 18n[\s\S]*roundedTenths[\s\S]*const have = formatLineaWeiOneDecimal\(initBalance\)[\s\S]*const need = formatLineaWeiOneDecimal\(roundCost\)[\s\S]*const deadline = computeBootstrapAllowancePollDeadline\(Date\.now\(\), timeoutMs\)[\s\S]*while \(autoMineActive\(\) && Date\.now\(\) < deadline\)[\s\S]*const approvalNonceRaw = pendingApproveRef\.current\?\.nonce \?\? await withMiningRpcTimeout[\s\S]*approvalNonce = normalizeBootstrapApprovalNonce\(approvalNonceRaw\)[\s\S]*Approval nonce is unavailable or unsafe[\s\S]*const pendingAgeMs = getPendingApproveAgeMs\(pendingApproveRef\.current, Date\.now\(\)\)[\s\S]*Approval pending state is unavailable or unsafe/,
+    /function computeBootstrapAllowancePollDeadline[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*Number\.isSafeInteger\(timeoutMs\)[\s\S]*timeoutMs > Number\.MAX_SAFE_INTEGER - now[\s\S]*function normalizeBootstrapApprovalNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*function selectBootstrapApprovalSubmissionNonce[\s\S]*function getPendingApproveAgeMs[\s\S]*pendingApprove\.submittedAt > now \+ 5_000[\s\S]*function formatLineaWeiOneDecimal[\s\S]*10n \*\* 18n[\s\S]*roundedTenths[\s\S]*const have = formatLineaWeiOneDecimal\(initBalance\)[\s\S]*const need = formatLineaWeiOneDecimal\(roundCost\)[\s\S]*const deadline = computeBootstrapAllowancePollDeadline\(Date\.now\(\), timeoutMs\)[\s\S]*while \(autoMineActive\(\) && Date\.now\(\) < deadline\)[\s\S]*const trackedApprovalNonce = pendingApproveRef\.current\?\.nonce[\s\S]*const approvalNonceRaw = trackedApprovalNonce \?\? await withMiningRpcTimeout[\s\S]*blockTag: "pending"[\s\S]*approvalNonce = selectBootstrapApprovalSubmissionNonce\(trackedApprovalNonce, approvalNonceRaw\)[\s\S]*Approval nonce is unavailable or unsafe[\s\S]*const pendingAgeMs = getPendingApproveAgeMs\(pendingApproveRef\.current, Date\.now\(\)\)[\s\S]*Approval pending state is unavailable or unsafe/,
     "Auto-Miner bootstrap approval must reject unsafe nonce and pending-age evidence before approval retry or replacement decisions",
   );
   assert.match(
@@ -1282,8 +1235,6 @@ async function main() {
     "Auto-miner stopped. Try again or export logs if the problem continues.",
   );
 
-  assert.equal(lineaFees.getAffordableKeeperGasLimit(180000n, 100000n, { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }), null);
-  assert.equal(lineaFees.getAffordableKeeperGasLimit(180000n, 270000n, { maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }), 270000n);
   assert.equal(lineaFees.getLineaFeeOverrides({ maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n }, 59141)?.maxPriorityFeePerGas, 80_000_000n);
   assert.equal(publicConfig.getContractRequiresEpochBoundBets("1"), true);
   assert.equal(publicConfig.getContractRequiresEpochBoundBets("true"), true);
@@ -6227,8 +6178,8 @@ async function main() {
   );
   assert.match(
     gasShadowBootstrapResolveRouteSource,
-    /const gasEstimate = await publicClient\.estimateContractGas\(\{[\s\S]*functionName: "resolveEpoch"[\s\S]*await recordLineaEstimateGasShadow\(\{[\s\S]*tag: "bootstrap-resolve"[\s\S]*const feeOverrides = clampKeeperFeeOverridesToBalance\([\s\S]*gasEstimate/,
-    "bootstrap keeper resolve shadow must run after baseline estimation and before fee clamping without replacing gasEstimate",
+    /const gasEstimate = await publicClient\.estimateContractGas\(\{[\s\S]*functionName: "resolveEpoch"[\s\S]*await recordLineaEstimateGasShadow\(\{[\s\S]*tag: "bootstrap-resolve"[\s\S]*const estimatedFeeOverrides = getKeeperFeeOverrides\([\s\S]*const gas = \([\s\S]*gasEstimate \* RESOLVE_GAS_BUFFER_PERCENT[\s\S]*assertKeeperFeeBudget\([\s\S]*"keeper"/,
+    "bootstrap keeper resolve shadow must run after baseline estimation and before fixed fee-budget validation without replacing gasEstimate",
   );
   assert.match(
     gasShadowLiveRoundCanarySource,
@@ -8511,17 +8462,6 @@ async function main() {
     /coinbaseWallet[\s\S]*preference[\s\S]*options:\s*['"]eoaOnly['"]/,
     "Privy Coinbase connector must avoid unsupported smart-wallet mode on Linea networks",
   );
-  const headerWalletCardSource = readFileSync("app/components/header/HeaderWalletCard.tsx", "utf8");
-  assert.match(
-    headerWalletCardSource,
-    /disabled=\{!privyReady \|\| loginPending\}/,
-    "connect wallet button must be disabled until Privy is ready to avoid a silent no-op",
-  );
-  assert.match(
-    headerWalletCardSource,
-    /Wallet login is still loading/,
-    "connect wallet button must explain the loading state",
-  );
   const walletSettingsModalSource = readFileSync("app/components/WalletSettingsModal.tsx", "utf8");
   assert.match(
     walletSettingsModalSource,
@@ -8563,22 +8503,6 @@ async function main() {
     backupGateSource,
     /onClick=\{handleExport\}[\s\S]*uiTokens\.focusRing[\s\S]*Export private key[\s\S]*onClick=\{handleContinue\}[\s\S]*uiTokens\.focusRing[\s\S]*I&apos;ve saved it, continue/,
     "backup gate primary actions must keep visible keyboard focus rings",
-  );
-  const sidebarA11ySource = readFileSync("app/components/Sidebar.tsx", "utf8");
-  assert.match(
-    sidebarA11ySource,
-    /aria-label="Close sidebar"[\s\S]*aria-controls="lore-sidebar"[\s\S]*<aside[\s\S]*id="lore-sidebar"[\s\S]*aria-label="LORE navigation"[\s\S]*<nav aria-label="Main navigation"/,
-    "mobile sidebar drawer must expose stable navigation labels and backdrop-to-drawer control wiring",
-  );
-  assert.match(
-    sidebarA11ySource,
-    /const NavItem[\s\S]*<button[\s\S]{0,120}type="button"[\s\S]*aria-current=\{active \? "page" : undefined\}/,
-    "sidebar navigation buttons must remain non-submit controls",
-  );
-  assert.match(
-    sidebarA11ySource,
-    /e\.key === "Escape" \|\| e\.key === "Enter" \|\| e\.key === " "[\s\S]*e\.preventDefault\(\)[\s\S]*onMobileClose\?\.\(\)/,
-    "mobile sidebar backdrop must close from Escape, Enter, and Space keyboard activation",
   );
   assert.match(
     readFileSync("app/components/MobileTabNav.tsx", "utf8"),
@@ -8885,11 +8809,19 @@ async function main() {
     "security follow-up proof must expose a compact summary command",
   );
   const ciSecurityProofSource = readFileSync("scripts/check-ci-security.mjs", "utf8");
-  assert.match(
-    ciSecurityProofSource,
-    /permissionsReadOnly[\s\S]*pullRequestTarget[\s\S]*usesPinned[\s\S]*checkoutPersistCredentialsFalse[\s\S]*persist-credentials:\\s\*false/,
-    "CI security proof must summarize least privilege, pull_request_target exclusion, SHA pins, and checkout credential persistence",
-  );
+  for (const requiredCiSecurityProof of [
+    /permissionsReadOnly/,
+    /pullRequestTarget/,
+    /usesPinned/,
+    /checkoutPersistCredentialsFalse/,
+    /persist-credentials:\\s\*false/,
+  ]) {
+    assert.match(
+      ciSecurityProofSource,
+      requiredCiSecurityProof,
+      "CI security proof must summarize least privilege, pull_request_target exclusion, SHA pins, and checkout credential persistence",
+    );
+  }
   assert.match(
     ciSecurityProofSource,
     /MAX_CI_WORKFLOW_BYTES = 256 \* 1024[\s\S]*function readWorkflow\(\)[\s\S]*const stats = statSync\(workflowPath\)[\s\S]*!stats\.isFile\(\)[\s\S]*stats\.size > MAX_CI_WORKFLOW_BYTES[\s\S]*too large to validate safely[\s\S]*readFileSync\(workflowPath, "utf8"\)/,
@@ -9249,26 +9181,11 @@ async function main() {
     /if \(stored !== null\) localStorage\.removeItem\(STORAGE_KEY\)/,
     "reduced-motion preference restore must clear invalid localStorage values",
   );
-  assert.match(
-    readFileSync("app/components/CrystalParticles.tsx", "utf8"),
-    /<canvas[\s\S]*aria-hidden="true"[\s\S]*pointer-events-none/,
-    "decorative background particle canvas must stay hidden from assistive technology",
-  );
   const pageBackdropSource = readFileSync("app/components/PageBackdrop.tsx", "utf8");
   assert.match(
     pageBackdropSource,
     /\{motionReady && !reducedMotion && <CrystalParticles \/>}/,
     "decorative background particle animation must not render until motion preference is known and reduced motion is off",
-  );
-  assert.match(
-    readFileSync("app/components/Confetti.tsx", "utf8"),
-    /<canvas[\s\S]*aria-hidden="true"[\s\S]*pointer-events-none/,
-    "decorative confetti canvas must stay hidden from assistive technology",
-  );
-  assert.match(
-    readFileSync("app/components/Confetti.tsx", "utf8"),
-    /useReducedMotion[\s\S]*if \(!active \|\| reducedMotion\) return;[\s\S]*if \(!active \|\| reducedMotion\) return null;/,
-    "decorative confetti canvas animation must not run or render when reduced motion is enabled",
   );
   assert.match(
     maintenanceOverlaySource,
@@ -9306,31 +9223,6 @@ async function main() {
     smokeBrowserSource,
     /SKIP auto-miner persistence step in read-only smoke/,
     "browser smoke must skip input-mutating auto-miner checks in read-only mode",
-  );
-  assert.match(
-    headerWalletCardSource,
-    /Wallet Loading\.\.\./,
-    "wallet header must label Privy initialization as loading instead of a clickable connect action",
-  );
-  assert.match(
-    headerWalletCardSource,
-    /window\.location\.reload\(\)/,
-    "wallet header must offer a reload recovery action when Privy stays loading",
-  );
-  assert.match(
-    headerWalletCardSource,
-    /aria-label="Reload page to retry wallet login"[\s\S]*title="Reload page to retry wallet login"[\s\S]*focus-visible:ring/,
-    "wallet header reload recovery action must be accessible and keyboard-visible",
-  );
-  assert.match(
-    headerWalletCardSource,
-    /role="status"[\s\S]*aria-live="polite"/,
-    "wallet header loading and recovery errors must be announced as a live status",
-  );
-  assert.doesNotMatch(
-    headerWalletCardSource,
-    /privyReady\s*\?\s*"Login \/ Connect"\s*:\s*"Connect Wallet"/,
-    "wallet header must not show Connect Wallet while Privy is not ready",
   );
   const lineaOreClientRuntimeSource = readFileSync("app/hooks/useLineaOreClientRuntime.ts", "utf8");
   assert.match(
@@ -9422,8 +9314,8 @@ async function main() {
     "seeded visual epoch sync must use a functional update instead of suppressing hook deps",
   );
   assert.match(
-    hubContentSource,
-    /Bet fee:[\s\S]*feeEstimateUnavailable[\s\S]*Unavailable/,
+    readFileSync("app/components/HubSidePanel.tsx", "utf8"),
+    /Fee \{feeEstimate \?[^\n]*feeEstimateUnavailable \? "unavailable"/,
     "mobile manual bet must show an explicit unavailable fee state",
   );
   assert.match(
@@ -10635,7 +10527,7 @@ async function main() {
   const storageSource = readFileSync("server/storage.ts", "utf8");
   assert.match(
     storageSource,
-    /function buildDepositKey\(epoch: string, txHash: string, blockNumber: string\)[\s\S]*\/\^0x\[0-9a-f\]\{64\}\$\/\.test\(normalizedHash\)[\s\S]*return `\$\{epoch\}_nohash_\$\{blockNumber\}`/,
+    /export function buildIndexerBetIdentity\([\s\S]*\/\^0x\[0-9a-f\]\{64\}\$\/\.test\(normalizedHash\)[\s\S]*`\$\{epoch\}_nohash_\$\{blockNumber\}`/,
     "central scoped bet storage keys must only treat full 32-byte transaction hashes as tx identity",
   );
   assert.doesNotMatch(
@@ -10802,15 +10694,15 @@ async function main() {
     /className="console-input lore-nums h-11 px-3 text-base font-black"/,
     "manual bet amount input must use the shared numeric font class and 44px touch height",
   );
-  const hubContentSourceForTypography = readFileSync("app/components/HubContent.tsx", "utf8");
+  const hubSidePanelSourceForTypography = readFileSync("app/components/HubSidePanel.tsx", "utf8");
   assert.match(
-    hubContentSourceForTypography,
-    /lore-nums h-8 w-full[\s\S]*tabular-nums[\s\S]*manualBetForm\.betAmount/,
+    hubSidePanelSourceForTypography,
+    /value=\{manualBetForm\.betAmount\}[\s\S]*lore-nums h-11 w-full[\s\S]*tabular-nums/,
     "mobile compact manual bet amount input must use the shared numeric font class",
   );
   assert.match(
-    hubContentSourceForTypography,
-    /lore-nums mt-0\.5 truncate text-sm font-black leading-none tabular-nums[\s\S]*manualBetForm\.totalBetDisplay/,
+    hubSidePanelSourceForTypography,
+    /aria-label="Exact total stake"[\s\S]*lore-nums[\s\S]*tabular-nums[\s\S]*\{exactTotal \?\? "Unavailable"\} LINEA/,
     "mobile compact manual bet total must use the shared numeric font class",
   );
   assert.match(
@@ -10845,7 +10737,7 @@ async function main() {
   );
   assert.match(
     betPanelSource,
-    /aria-describedby=\{buttonDisabled && disabledReason && !isAutoMining \? "auto-miner-disabled-reason" : undefined\}/,
+    /aria-describedby=\{autoAction\.disabled && disabledReason && !isAutoMining \? "auto-miner-disabled-reason" : undefined\}/,
     "auto-miner disabled reason must be associated with the disabled primary action",
   );
   assert.match(
@@ -11342,47 +11234,6 @@ async function main() {
     /document\.addEventListener\("keydown"/,
     "chat profile must not maintain a second dialog keyboard trap",
   );
-  const headerSource = readFileSync("app/components/Header.tsx", "utf8");
-  assert.match(
-    headerSource,
-    /function formatLoginFailure[\s\S]*Wallet login was cancelled[\s\S]*LOGIN_FAILURE_MESSAGE/,
-    "header login failures must classify wallet errors into stable user-safe copy",
-  );
-  assert.doesNotMatch(
-    headerSource,
-    /setLoginError\(formatUnknownError\(error\)\)/,
-    "header login failures must not surface diagnostic unknown-error details to users",
-  );
-  assert.match(
-    headerSource,
-    /loginPending/,
-    "wallet connect header must expose an in-flight login state after the user clicks connect",
-  );
-  assert.match(
-    headerWalletCardSource,
-    /loginStatusAnnouncement/,
-    "wallet connect header must derive a stable screen-reader login status",
-  );
-  assert.match(
-    headerWalletCardSource,
-    /role="status"[\s\S]*aria-live="polite"[\s\S]*loginStatusAnnouncement/,
-    "wallet connect header must announce loading, connecting, ready, and error states",
-  );
-  assert.match(
-    headerWalletCardSource,
-    /showLoginReload[\s\S]*still loading[\s\S]*timed out[\s\S]*onClick=\{\(\) => window\.location\.reload\(\)\}/,
-    "wallet connect header must offer the same reload recovery for slow and timed-out Privy login states",
-  );
-  assert.match(
-    headerSource,
-    /realTotalStaked > 0 \? "Waiting resolver" : "No bets"/,
-    "expired epochs must distinguish resolver wait from an empty idle epoch",
-  );
-  assert.match(
-    headerSource,
-    /isRevealing \? "Analyzing" : stalledStatusLabel/,
-    "the header must reserve Analyzing for the reveal state",
-  );
   const fundingManualFormSource = readFileSync("app/hooks/useManualBetForm.ts", "utf8");
   const autoMinerFormSource = readFileSync("app/hooks/useAutoMinerForm.ts", "utf8");
   const fundingBetPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
@@ -11465,12 +11316,6 @@ async function main() {
     miningGuardsSource,
     /Preparing bet in your Privy wallet/,
     "manual betting must not show the removed wallet-preparing copy",
-  );
-  const headerWalletConnectSource = readFileSync("app/components/header/HeaderWalletCard.tsx", "utf8");
-  assert.match(
-    headerWalletConnectSource,
-    /loginError/,
-    "wallet connect card must show login failures instead of silently swallowing them",
   );
   assert.equal(utils.normalizeDecimalInput("1,25"), "1.25");
   assert.equal(utils.validateBetAmount(""), "Enter an amount");
@@ -12088,1552 +11933,8 @@ async function main() {
     assert.equal(prepared.singleAmountRaw, enoughLinea);
   }
 
-  const normalizedDuplicateTiles = tokenAmountMath.normalizeTileAmounts(
-    [2, 2, 5],
-    ["1000000000000000.123456789123456789", "0.876543210876543211", "1"],
-    "1000000000000002",
-  );
-  assert.deepEqual(normalizedDuplicateTiles, {
-    tileIds: [2, 5],
-    amounts: ["1000000000000001", "1"],
-  });
-  assert.equal(
-    tokenAmountMath.computeWinningAmountWei(
-      [1, 2, 3],
-      undefined,
-      2,
-      "3000000000000000.000000000000000003",
-    ),
-    1_000_000_000_000_000_000_000_000_000_000_000n + 1n,
-  );
-  assert.equal(
-    tokenAmountMath.computeWinningAmountWei([1, 2, 2], ["1", "2", "3"], 2, "999"),
-    5_000_000_000_000_000_000n,
-  );
-  assert.equal(tokenAmountMath.parseLineaAmountWei("not-a-number"), 0n);
-  assert.equal(tokenAmountMath.parsePositiveLineaAmountWei("0"), null);
-  assert.equal(tokenAmountMath.parsePositiveLineaAmountWei("0.0000000000000000001"), null);
-  assert.equal(tokenAmountMath.parsePositiveLineaAmountWei("1.25"), 1_250_000_000_000_000_000n);
-  assert.equal(tokenAmountMath.parsePositiveLineaAmountWeiOrFallback("bad", "1"), 1_000_000_000_000_000_000n);
-  assert.equal(tokenAmountMath.parsePositiveLineaAmountWeiOrFallback("0", "1"), 1_000_000_000_000_000_000n);
-  assert.equal(tokenAmountMath.parsePositiveLineaAmountWeiOrFallback("2.5", "1"), 2_500_000_000_000_000_000n);
-  assert.equal(tokenAmountMath.formatLineaWeiAmountDisplay("bad", 4), "0.0000");
-  assert.equal(tokenAmountMath.formatLineaWeiAmountDisplay("1000000000000000000", 2), "1.00");
-  assert.equal(tokenAmountMath.formatLineaWeiAmountDisplay("2500000000000000000", 1), "2.5");
-  assert.equal(tokenAmountMath.formatLineaWeiAmountDisplay("1234567890000000000000", 2), "1,234.57");
-  assert.equal(tokenAmountMath.formatLineaWeiAmountDisplay("1234567890123456789012345678900000000000000000", 0), "1,234,567,890,123,456,789,012,345,679");
-  assert.equal(tokenAmountMath.formatLineaWeiDisplayNumber(1_234_567_899_000_000_000n), 1.234568);
-  assert.equal(tokenAmountMath.formatLineaWeiDisplayNumber(1_234_567_499_000_000_000n), 1.234567);
-  assert.equal(tokenAmountMath.formatLineaWeiDisplayNumber(-1n), 0);
-  assert.equal(
-    tokenAmountMath.formatLineaWeiDisplayNumber((BigInt(Number.MAX_SAFE_INTEGER) + 1n) * 1_000_000_000_000n),
-    Number.MAX_SAFE_INTEGER,
-  );
-  const tokenAmountMathSource = readFileSync("app/lib/tokenAmountMath.ts", "utf8");
-  assert.match(
-    tokenAmountMathSource,
-    /function addDecimalGroupSeparators\(value: string\)[\s\S]*formatLineaAmountFixed\(parseNonNegativeLineaWei\(value\), safeFractionDigits\)/,
-    "shared LINEA wei display formatter must format bigint decimal text directly",
-  );
-  assert.doesNotMatch(
-    tokenAmountMathSource,
-    /formatLineaWeiAmountDisplay[\s\S]*Number\(formatUnits\(/,
-    "shared LINEA wei display formatter must not coerce formatted wei values through Number(formatUnits())",
-  );
-  assert.match(
-    tokenAmountMathSource,
-    /function formatLineaWeiDisplayNumber\(value: bigint\)[\s\S]*value <= 0n[\s\S]*1_000_000_000_000n[\s\S]*scaled > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*return Number\(scaled\) \/ 1_000_000/,
-    "shared LINEA numeric compatibility formatter must use bounded bigint math",
-  );
-  assert.doesNotMatch(
-    tokenAmountMathSource,
-    /formatLineaWeiDisplayNumber[\s\S]*Number\(formatLineaAmountFixed|formatLineaWeiDisplayNumber[\s\S]*parseFloat/,
-    "shared LINEA numeric compatibility formatter must not parse formatted decimal strings",
-  );
-  assert.equal(tokenAmountMath.formatLineaAmountFixed(1_234_567_899_000_000_000n, 2), "1.23");
-  assert.equal(tokenAmountMath.formatLineaAmountFixed(1_235_000_000_000_000_000n, 2), "1.24");
-  assert.equal(tokenAmountMath.formatLineaAmountFixed(999_999_999_999_999_999n, 0), "1");
-  assert.deepEqual(
-    miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", reason: "ok", ts: 123 }, 1_000),
-    { mode: "standard-silent", reason: "ok", ts: 123 },
-  );
-  assert.deepEqual(
-    miningTxPath.sanitizeMiningTxPathState({ mode: "wallet-write", reason: 999, ts: 123 }, 1_000),
-    { mode: "wallet-write", ts: 123 },
-  );
-  assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "bad", ts: 123 }, 1_000), null);
-  assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: Number.NaN }, 1_000), null);
-  assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: 123.5 }, 1_000), null);
-  assert.equal(
-    miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: Number.MAX_SAFE_INTEGER + 1 }, 1_000),
-    null,
-  );
-  assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: 1_000 }, 1_000.5), null);
-  assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: 7_001 }, 1_000), null);
-  const pendingMiningState = miningTxPath.sanitizePendingMiningTxState({
-    chainId: 59141,
-    contract: "0x1111111111111111111111111111111111111111",
-    actor: "0x2222222222222222222222222222222222222222",
-    hash: `0x${"a".repeat(64)}`,
-    ts: 1_000,
-  }, 2_000);
-  assert.ok(pendingMiningState);
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => ({ status: "success" }),
-      getTransaction: async () => {
-        throw new Error("should not read transaction after receipt");
-      },
-    }, pendingMiningState),
-    "confirmed",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => ({ status: "reverted" }),
-      getTransaction: async () => {
-        throw new Error("should not read transaction after receipt");
-      },
-    }, pendingMiningState),
-    "clear",
-  );
-  const receiptNotFound = () => Object.assign(new Error("transaction receipt not found"), { name: "TransactionReceiptNotFoundError" });
-  const transactionNotFound = () => Object.assign(new Error("transaction not found"), { name: "TransactionNotFoundError" });
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw receiptNotFound(); },
-      getTransaction: async () => ({ blockNumber: null }),
-    }, pendingMiningState),
-    "pending",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw receiptNotFound(); },
-      getTransaction: async () => { throw transactionNotFound(); },
-    }, pendingMiningState, pendingMiningState.ts + 15 * 60_000),
-    "clear",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw receiptNotFound(); },
-      getTransaction: async () => { throw transactionNotFound(); },
-    }, pendingMiningState, pendingMiningState.ts - 1),
-    "pending",
-    "future-dated pending tx state must not be cleared by not-found recovery",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw receiptNotFound(); },
-      getTransaction: async () => { throw transactionNotFound(); },
-    }, pendingMiningState, Number.NaN),
-    "pending",
-    "malformed recovery timestamps must keep pending tx recovery fail-closed",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw new Error("RPC offline"); },
-      getTransaction: async () => { throw new Error("should fail closed before transaction lookup"); },
-    }, pendingMiningState),
-    "pending",
-  );
-  const ambiguousPendingMiningState = miningTxPath.sanitizePendingMiningTxState({
-    chainId: 59141,
-    contract: "0x1111111111111111111111111111111111111111",
-    actor: "0x2222222222222222222222222222222222222222",
-    nonce: 7,
-    ts: 1_000,
-  }, 2_000);
-  assert.ok(ambiguousPendingMiningState);
-  assert.equal(
-    miningShared.isAmbiguousPendingTxError(new Error("External wallet eth_sendTransaction timed out after 45000ms")),
-    true,
-  );
-  const silentWalletTimeout = new Error("Privy sendTransaction timed out after 45000ms");
-  silentWalletTimeout.name = "WalletSendTimeoutError";
-  assert.equal(
-    miningShared.isAmbiguousPendingTxError(silentWalletTimeout),
-    true,
-    "a hashless Privy send timeout must stay pending instead of falling back to a duplicate wallet send",
-  );
-  assert.equal(
-    miningShared.isAmbiguousPendingTxError(new Error("RPC read timed out after 45000ms")),
-    false,
-  );
-  const miningBetExecutionSource = readFileSync("app/hooks/useMiningBetExecution.ts", "utf8");
-  assert.match(
-    miningBetExecutionSource,
-    /catch \(error\) \{\s*if \(isAmbiguousPendingTxError\(error\)\) \{\s*throw error;/,
-    "manual silent receipt timeouts must not fall back to a duplicate wallet send",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
-      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
-      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 8 : 8,
-    }, ambiguousPendingMiningState),
-    "confirmed",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
-      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
-      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 7 : 8,
-    }, ambiguousPendingMiningState),
-    "pending",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
-      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
-      getTransactionCount: async () => 7,
-    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
-    "clear",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
-      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
-      getTransactionCount: async () => 7,
-    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts - 1),
-    "pending",
-    "future-dated hashless pending tx state must not clear before caller time catches up",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw new Error("malformed hashless nonce recovery must not request a receipt"); },
-      getTransaction: async () => { throw new Error("malformed hashless nonce recovery must not request a transaction"); },
-      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? "7" : 7,
-    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
-    "pending",
-    "malformed hashless nonce evidence must keep pending tx recovery fail-closed",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw new Error("inverted hashless nonce recovery must not request a receipt"); },
-      getTransaction: async () => { throw new Error("inverted hashless nonce recovery must not request a transaction"); },
-      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 9 : 8,
-    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
-    "pending",
-    "hashless nonce recovery must fail closed when pending nonce evidence is behind latest",
-  );
-  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, chainId: 0 }), null);
-  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, actor: "0x1234" }), null);
-  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, hash: "0x1234" }), null);
-  assert.equal(
-    miningTxPath.sanitizePendingMiningTxState({ ...ambiguousPendingMiningState, hash: "0x1234" }),
-    null,
-    "pending tx recovery must reject malformed hashes even when a nonce fallback is present",
-  );
-  assert.equal(
-    miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, nonce: -1 }),
-    null,
-    "pending tx recovery must reject malformed nonces even when a hash is present",
-  );
-  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: 1_000.5 }, 2_000), null);
-  assert.equal(
-    miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: Number.MAX_SAFE_INTEGER + 1 }, 2_000),
-    null,
-  );
-  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: 1_000 }, 2_000.5), null);
-  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: 8_001 }, 2_000), null);
-  const miningTxPathSource = readFileSync("app/lib/miningTxPath.ts", "utf8");
-  assert.match(
-    miningTxPathSource,
-    /const receipt = await client\.getTransactionReceipt\(\{ hash: state\.hash \}\);[\s\S]*if \(receipt\.status === "reverted"\) return "clear";[\s\S]*return "confirmed";/,
-    "pending mining tx recovery must clear reverted receipts instead of treating them as confirmed or unresolved",
-  );
-  assert.match(
-    miningTxPathSource,
-    /function normalizeMiningTimestamp[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*isSafeCurrentTime\(now\)[\s\S]*value - now > MINING_TX_PATH_MAX_FUTURE_SKEW_MS/,
-    "mining tx path timestamps must use a shared safe-integer non-future normalizer",
-  );
-  assert.match(
-    miningTxPathSource,
-    /function hasPendingTxNotFoundGraceElapsed[\s\S]*Number\.isSafeInteger\(ts\)[\s\S]*ts > now[\s\S]*now - ts >= PENDING_TX_NOT_FOUND_GRACE_MS/,
-    "pending tx not-found recovery must fail closed on malformed or future timestamps",
-  );
-  assert.match(
-    miningTxPathSource,
-    /function normalizePendingTxNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*const normalizedLatestNonce = normalizePendingTxNonce\(latestNonce\)[\s\S]*const normalizedPendingNonce = normalizePendingTxNonce\(pendingNonce\)[\s\S]*normalizedPendingNonce < normalizedLatestNonce[\s\S]*return "pending"/,
-    "hashless pending tx recovery must normalize latest and pending nonce evidence before clear or confirmed decisions",
-  );
-  assert.doesNotMatch(
-    miningTxPathSource,
-    /typeof (?:raw\.)?ts !== "number" \|\| !Number\.isFinite\((?:raw\.)?ts\) \|\| (?:raw\.)?ts <= 0|now - state\.ts >= PENDING_TX_NOT_FOUND_GRACE_MS|latestNonce > state\.nonce|pendingNonce > state\.nonce/,
-    "mining tx recovery must not return to broad finite timestamp checks, direct age arithmetic, or raw nonce comparisons",
-  );
-  assert.match(
-    miningTxPathSource,
-    /pendingTxStorageKey[\s\S]*getAddress\(contract\)[\s\S]*getAddress\(actor\)/,
-    "pending mining tx storage keys must normalize contract and actor addresses with the EVM address parser",
-  );
-  assert.match(
-    miningTxPathSource,
-    /function tryPendingTxStorageKey\(chainId: number, contract: string, actor: string\)[\s\S]*return pendingTxStorageKey\(chainId, contract, actor\);[\s\S]*catch \{[\s\S]*return null;[\s\S]*export function clearPendingMiningTxState[\s\S]*const key = tryPendingTxStorageKey\(chainId, contract, actor\);[\s\S]*if \(!key\) return;/,
-    "pending mining tx scoped storage cleanup must fail closed when contract or actor scope is malformed",
-  );
-  assert.match(
-    readFileSync("app/hooks/usePrivyWallet.ts", "utf8"),
-    /function normalizeWalletAddress[\s\S]*getAddress\(value\)[\s\S]*normalizeWalletAddress\(embeddedWallet\.address\)/,
-    "Privy wallet selection must normalize embedded and external wallet addresses before comparison",
-  );
-  assert.match(
-    readFileSync("app/components/wallet/WalletSettingsOverviewPanel.tsx", "utf8"),
-    /getAddress\(address\)\.toLowerCase\(\)/,
-    "wallet settings resolver rows must normalize connected and embedded wallet addresses before comparison",
-  );
-  const priorWindow = globalThis.window;
-  const pendingStorage = new Map();
-  try {
-    globalThis.window = {
-      dispatchEvent: () => true,
-      localStorage: {
-        getItem: (key) => pendingStorage.get(key) ?? null,
-        removeItem: (key) => pendingStorage.delete(key),
-        setItem: (key, value) => pendingStorage.set(key, value),
-      },
-    };
-    miningTxPath.writeMiningTxPathState("wallet-write", "test");
-    assert.ok(miningTxPath.readMiningTxPathState());
-    pendingStorage.set("lineaore:mining-tx-path:v1", "{bad json");
-    assert.equal(miningTxPath.readMiningTxPathState(), null);
-    assert.equal(pendingStorage.has("lineaore:mining-tx-path:v1"), false, "corrupt mining tx path state must be cleared");
-    assert.equal(
-      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, "0x1234"),
-      null,
-      "pending tx recovery reads with malformed actors must fail closed without throwing",
-    );
-    assert.equal(
-      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, "0x1234", pendingMiningState.actor),
-      null,
-      "pending tx recovery reads with malformed contracts must fail closed without throwing",
-    );
-    assert.doesNotThrow(
-      () => miningTxPath.clearPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, "0x1234"),
-      "pending tx recovery cleanup with a malformed actor must not throw",
-    );
-    miningTxPath.writePendingMiningTxState({
-      chainId: pendingMiningState.chainId,
-      contract: pendingMiningState.contract,
-      actor: pendingMiningState.actor,
-      hash: pendingMiningState.hash,
-    });
-    const firstPendingKey = [...pendingStorage.keys()].find((key) => key.startsWith("lineaore:pending-mining-tx:v2:"));
-    assert.ok(firstPendingKey);
-    assert.deepEqual(
-      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor),
-      { ...pendingMiningState, ts: [...pendingStorage.values()].map((raw) => JSON.parse(raw).ts)[0] },
-    );
-    pendingStorage.set(firstPendingKey, "{bad json");
-    assert.equal(miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor), null);
-    assert.equal(pendingStorage.has(firstPendingKey), false, "corrupt pending mining tx state must be cleared");
-    miningTxPath.writePendingMiningTxState({
-      chainId: pendingMiningState.chainId,
-      contract: pendingMiningState.contract,
-      actor: pendingMiningState.actor,
-      hash: pendingMiningState.hash,
-    });
-    assert.equal(miningTxPath.readPendingMiningTxState(59144, pendingMiningState.contract, pendingMiningState.actor), null);
-    assert.equal(
-      miningTxPath.readPendingMiningTxState(
-        pendingMiningState.chainId,
-        pendingMiningState.contract,
-        "0x3333333333333333333333333333333333333333",
-      ),
-      null,
-    );
-    miningTxPath.writePendingMiningTxState({
-      chainId: pendingMiningState.chainId,
-      contract: pendingMiningState.contract,
-      actor: "0x3333333333333333333333333333333333333333",
-      hash: `0x${"b".repeat(64)}`,
-    });
-    assert.equal(pendingStorage.size, 2, "different actors must keep independent pending recovery records");
-    miningTxPath.clearPendingMiningTxState(
-      pendingMiningState.chainId,
-      pendingMiningState.contract,
-      pendingMiningState.actor,
-    );
-    assert.equal(
-      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor),
-      null,
-    );
-    assert.ok(
-      miningTxPath.readPendingMiningTxState(
-        pendingMiningState.chainId,
-        pendingMiningState.contract,
-        "0x3333333333333333333333333333333333333333",
-      ),
-      "clearing one actor must preserve another actor's pending record",
-    );
-  } finally {
-    if (priorWindow === undefined) delete globalThis.window;
-    else globalThis.window = priorWindow;
-  }
-  assert.equal(walletTransfers.getWalletTransferScanFromBlock(10n, 1n), 1n);
-  assert.equal(walletTransfers.getWalletTransferScanFromBlock(10n, 7n), 7n);
-  assert.equal(walletTransfers.getWalletTransferScanFromBlock(10n, 11n), null);
-  assert.equal(walletTransfers.getWalletTransferFallbackFromBlock(1n, 100n, 250n), 1n);
-  assert.equal(walletTransfers.getWalletTransferFallbackFromBlock(1n, 1000n, 250n), 751n);
-  assert.equal(
-    walletTransfers.getWalletTransferLogKey({
-      transactionHash: "0xabc",
-      blockNumber: 10n,
-      transactionIndex: 1,
-      logIndex: 2,
-    }),
-    walletTransfers.getWalletTransferLogKey({
-      transactionHash: "0xabc",
-      blockNumber: 10n,
-      transactionIndex: 1,
-      logIndex: 2,
-    }),
-    "wallet transfer dedupe keys must be stable for the same event log",
-  );
-  assert.notEqual(
-    walletTransfers.getWalletTransferLogKey({
-      transactionHash: "0xabc",
-      blockNumber: 10n,
-      transactionIndex: 1,
-      logIndex: 2,
-    }),
-    walletTransfers.getWalletTransferLogKey({
-      transactionHash: "0xabc",
-      blockNumber: 10n,
-      transactionIndex: 1,
-      logIndex: 3,
-    }),
-    "wallet transfer history must not collapse distinct logs from the same transaction",
-  );
-  assert.equal(walletTransfers.normalizeWalletTransferTxHash("0xabc"), "");
-  assert.equal(
-    walletTransfers.normalizeWalletTransferTxHash(`  0x${"Ab".repeat(32)}  `),
-    `0x${"ab".repeat(32)}`,
-    "wallet transfer history must only preserve full transaction hashes in lowercase",
-  );
-  assert.equal(walletTransfers.normalizeWalletTransferAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"), "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
-  assert.equal(walletTransfers.normalizeWalletTransferAddress("0xabc"), null);
-  assert.equal(walletTransfers.normalizeWalletTransferAddress(null), null);
-  const walletTransfersSource = readFileSync("app/hooks/useWalletTransfers.ts", "utf8");
-  assert.match(
-    walletTransfersSource,
-    /const seenLogs = new Set<string>\(\)[\s\S]*seenLogs\.add\(getWalletTransferLogKey\(log\)\)[\s\S]*seenLogs\.has\(getWalletTransferLogKey\(log\)\)/,
-    "wallet transfer fallback dedupe must compare event logs, not whole transactions",
-  );
-  assert.match(
-    walletTransfersSource,
-    /export function normalizeWalletTransferTxHash\(value: unknown\)[\s\S]*\/\^0x\[0-9a-f\]\{64\}\$\/\.test\(normalized\)[\s\S]*const txHash = normalizeWalletTransferTxHash\(log\.transactionHash\)/,
-    "wallet transfer history rows must only publish full transaction hashes",
-  );
-  assert.match(
-    walletTransfersSource,
-    /export function normalizeWalletTransferAddress\(value: string \| null \| undefined\)[\s\S]*getAddress\(value\)\.toLowerCase\(\)[\s\S]*const addr = normalizeWalletTransferAddress\(embeddedAddress\)[\s\S]*externalWalletAddress && !externalAddr[\s\S]*pad\(addr as Hex/,
-    "wallet transfer history must validate scan and filter addresses before log queries",
-  );
-  assert.doesNotMatch(
-    walletTransfersSource,
-    /const txHash = log\.transactionHash \?\? ""|txHash:\s*log\.transactionHash/,
-    "wallet transfer history rows must not publish raw chain txHash values",
-  );
-  assert.doesNotMatch(
-    walletTransfersSource,
-    /const addr = embeddedAddress\.toLowerCase\(\)|externalWalletAddress\?\.toLowerCase\(\)|pad\(embeddedAddress as Hex/,
-    "wallet transfer history must not lower-case or pad raw wallet addresses",
-  );
-  assert.match(
-    walletTransfersSource,
-    /totalInDisplay: toDisplayAmountWei\(totalInWei\)[\s\S]*totalOutDisplay: toDisplayAmountWei\(totalOutWei\)/,
-    "wallet transfer summary must keep bigint-safe total display strings",
-  );
-  assert.match(
-    walletTransfersSource,
-    /formatLineaWeiDisplayNumber[\s\S]*function toDisplayNumberWei\(value: bigint\)[\s\S]*return formatLineaWeiDisplayNumber\(value\)/,
-    "wallet transfer numeric compatibility totals must derive from bounded raw-wei formatting",
-  );
-  assert.doesNotMatch(
-    walletTransfersSource,
-    /Number\(formatUnits\(value, 18\)\)|Number\(formatLineaAmountFixed\(value, 6\)\)/,
-    "wallet transfer summary must not coerce formatted wei values through Number(formatUnits()) or formatted decimal strings",
-  );
-  assert.deepEqual(
-    pageWalletOverview.normalizeCachedPrivyBalances({ token: "12.3", eth: "0.0925" }),
-    { token: "12.30", eth: "0.0925" },
-  );
-  assert.deepEqual(
-    pageWalletOverview.normalizeCachedPrivyBalances({ token: "9007199254740993.555", eth: "0.00005" }),
-    { token: "9007199254740993.56", eth: "0.0001" },
-    "wallet overview cached balances must round decimal text without Number precision loss",
-  );
-  assert.deepEqual(
-    pageWalletOverview.normalizeCachedPrivyBalances({ token: "bad", eth: "-1" }),
-    { token: "0.00", eth: "0.0000" },
-  );
-  assert.equal(pageWalletOverview.normalizePageWalletAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"), "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
-  assert.equal(pageWalletOverview.normalizePageWalletAddress("0xabc"), null);
-  assert.equal(pageWalletOverview.normalizePageWalletAddress(null), null);
-  assert.equal(
-    pageWalletOverview.getPrivyBalanceCacheKey("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"),
-    `lore:privy-balances:v1:59141:0x5e40c6e31642ebe8670658fe84c660bd2a0f820f:0xd8da6bf26964af9d7eed9e03e53415d37aa96045`,
-  );
-  assert.equal(pageWalletOverview.getPrivyBalanceCacheKey("0xabc"), null);
-  const balanceFormattingSource = readFileSync("app/lib/balanceFormatting.ts", "utf8");
-  assert.match(
-    balanceFormattingSource,
-    /export function formatDecimalTextFixed[\s\S]*BigInt\(scaledText\)[\s\S]*formatScaledUnitsFixed/,
-    "shared decimal balance formatter must round without Number precision loss",
-  );
-  assert.match(
-    balanceFormattingSource,
-    /export function formatBalanceFixed[\s\S]*typeof balance\.value !== "bigint"[\s\S]*balance\.value \/ divisor[\s\S]*formatScaledUnitsFixed/,
-    "shared live balance formatter must round bigint units without Number precision loss",
-  );
-  const pageWalletOverviewSource = readFileSync("app/hooks/usePageWalletOverview.ts", "utf8");
-  assert.match(
-    pageWalletOverviewSource,
-    /const raw = window\.localStorage\.getItem\(balanceCacheKey\)[\s\S]*window\.localStorage\.removeItem\(balanceCacheKey\)/,
-    "wallet overview balance cache reads must clear corrupt or invalid localStorage entries",
-  );
-  assert.match(
-    pageWalletOverviewSource,
-    /formatBalanceFixed\(embeddedTokenBalance, 2\)[\s\S]*formatBalanceFixed\(embeddedEthBalance, 4\)/,
-    "wallet overview live balances must use shared raw bigint balance formatting",
-  );
-  assert.match(
-    pageWalletOverviewSource,
-    /export function normalizePageWalletAddress\(value: string \| null \| undefined\)[\s\S]*getAddress\(value\)\.toLowerCase\(\)[\s\S]*function getPrivyBalanceCacheKey[\s\S]*normalizePageWalletAddress\(address\)[\s\S]*const normalizedActiveAddress = normalizePageWalletAddress\(address\)[\s\S]*normalizedActiveAddress === normalizedEmbeddedWalletAddress/,
-    "wallet overview must validate cache and active-wallet addresses before comparing or keying balances",
-  );
-  assert.doesNotMatch(
-    pageWalletOverviewSource,
-    /Number\(getFormattedBalance\(embedded(?:Token|Eth)Balance\)\)/,
-    "wallet overview live balances must not coerce formatted balances through Number()",
-  );
-  assert.doesNotMatch(
-    pageWalletOverviewSource,
-    /address\.toLowerCase\(\)|normalizedEmbeddedAddress\.toLowerCase\(\)/,
-    "wallet overview must not compare or cache raw wallet address strings",
-  );
-  const gameDerivedStateSource = readFileSync("app/hooks/useGameDerivedState.ts", "utf8");
-  assert.match(
-    gameDerivedStateSource,
-    /formatDecimalTextFixed\(tokenBalanceFormatted, 2\)/,
-    "active wallet LINEA display must use shared decimal text formatting",
-  );
-  assert.doesNotMatch(
-    gameDerivedStateSource,
-    /Number\(tokenBalanceFormatted\)\.toFixed\(2\)/,
-    "active wallet LINEA display must not coerce formatted balance text through Number()",
-  );
-  assert.deepEqual(
-    autoMinerForm.sanitizeAutoMinerInputs({ betSize: "2.5", targets: 7, cycles: 12 }),
-    { betSize: "2.5", targets: 7, cycles: 12 },
-  );
-  assert.deepEqual(
-    autoMinerForm.sanitizeAutoMinerInputs({ betSize: "bad", targets: 99, cycles: 1_000_000 }),
-    { betSize: "1.0", targets: 25, cycles: 5000 },
-  );
-  assert.deepEqual(
-    autoMinerForm.sanitizeAutoMinerInputs({ targets: 2.9, cycles: 0 }),
-    { betSize: "1.0", targets: 2, cycles: 1 },
-  );
-  const autoMinerFormStorageSource = readFileSync("app/hooks/useAutoMinerForm.ts", "utf8");
-  assert.match(
-    autoMinerFormStorageSource,
-    /JSON\.parse\(selectedRaw\)[\s\S]*window\.localStorage\.removeItem\(LEGACY_AUTOMINER_INPUTS_KEY\)[\s\S]*catch \{[\s\S]*window\.localStorage\.removeItem\(AUTOMINER_INPUTS_KEY\)[\s\S]*window\.localStorage\.removeItem\(LEGACY_AUTOMINER_INPUTS_KEY\)/,
-    "auto-miner form restore must clear corrupt current and legacy localStorage entries",
-  );
-  assert.match(
-    readFileSync("app/hooks/useMiningGuards.ts", "utf8"),
-    /const sanitized = sanitizeLastBet\(JSON\.parse\(parsed\)\)[\s\S]*localStorage\.removeItem\(raw \? LAST_BET_KEY : LEGACY_LAST_BET_KEY\)[\s\S]*catch \{[\s\S]*localStorage\.removeItem\(LAST_BET_KEY\)/,
-    "last-bet restore must clear corrupt or invalid localStorage entries",
-  );
-  assert.deepEqual(
-    ["10", "2", "bad"].sort(analyticsAchievements.compareAchievementEpochs),
-    ["bad", "2", "10"],
-  );
-  assert.doesNotThrow(() => analyticsAchievements.compareAchievementEpochs("bad", "2"));
-  const analyticsAchievementsSource = readFileSync("app/hooks/useAnalyticsAchievements.ts", "utf8");
-  assert.match(
-    analyticsAchievementsSource,
-    /function parseAchievementEpochNumber/,
-    "analytics achievements must parse deposit epoch strings safely for first-bet ordering",
-  );
-  assert.doesNotMatch(
-    analyticsAchievementsSource,
-    /(^|[^A-Za-z])Number\(left\.epoch\)|(^|[^A-Za-z])Number\(right\.epoch\)/,
-    "analytics achievements must not use unchecked Number(epoch) in first-bet ordering",
-  );
-  assert.match(
-    analyticsAchievementsSource,
-    /const parsed = JSON\.parse\(raw\) as PersistedAchievements[\s\S]*localStorage\.removeItem\(storageKey\)[\s\S]*catch \{[\s\S]*const storageKey = getAchievementStorageKey\(walletAddress\)[\s\S]*localStorage\.removeItem\(storageKey\)/,
-    "analytics achievements must clear corrupt or invalid localStorage entries",
-  );
-  assert.deepEqual(
-    autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: 123 }, 1_000),
-    { epoch: "42", ts: 123 },
-  );
-  assert.deepEqual(
-    autoResolveStorage.normalizeResolveGuardEntry({ epoch: "9007199254740991", ts: 123 }, 1_000),
-    { epoch: "9007199254740991", ts: 123 },
-  );
-  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: Number.NaN }, 1_000), null);
-  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: 123.5 }, 1_000), null);
-  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: Number.MAX_SAFE_INTEGER + 1 }, 1_000), null);
-  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: 1_000 }, 1_000.5), null);
-  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: 7_001 }, 1_000), null);
-  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "bad", ts: 123 }, 1_000), null);
-  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "0042", ts: 123 }, 1_000), null);
-  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "9007199254740992", ts: 123 }, 1_000), null);
-  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "9999999999999999", ts: 123 }, 1_000), null);
-  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "1".repeat(21), ts: 123 }, 1_000), null);
-  {
-    const previousLocalStorage = globalThis.localStorage;
-    try {
-      const storage = new Map([["lore_resolve_epoch", "42"]]);
-      Object.defineProperty(globalThis, "localStorage", {
-        configurable: true,
-        value: {
-          getItem: (key) => storage.get(key) ?? null,
-          setItem: (key, value) => storage.set(key, String(value)),
-          removeItem: (key) => storage.delete(key),
-        },
-      });
-      const beforeMigration = Date.now();
-      const migrated = autoResolveStorage.readResolveGuard();
-      assert.equal(migrated?.epoch, "42");
-      assert.ok((migrated?.ts ?? 0) >= beforeMigration, "legacy auto-resolve guard must gain a fresh timestamp");
-      assert.deepEqual(
-        autoResolveStorage.normalizeResolveGuardEntry(JSON.parse(storage.get("lore_resolve_epoch"))),
-        migrated,
-        "legacy auto-resolve guard must migrate to the current JSON envelope",
-      );
-      autoResolveStorage.writeResolveGuard("0042");
-      assert.equal(
-        autoResolveStorage.normalizeResolveGuardEntry(JSON.parse(storage.get("lore_resolve_epoch")))?.epoch,
-        "42",
-        "non-canonical auto-resolve guard writes must not overwrite a valid canonical guard",
-      );
-      autoResolveStorage.writeResolveGuard("43");
-      assert.equal(
-        autoResolveStorage.normalizeResolveGuardEntry(JSON.parse(storage.get("lore_resolve_epoch")))?.epoch,
-        "43",
-        "canonical auto-resolve guard writes must persist the canonical epoch string",
-      );
-    } finally {
-      if (previousLocalStorage === undefined) {
-        delete globalThis.localStorage;
-      } else {
-        Object.defineProperty(globalThis, "localStorage", {
-          configurable: true,
-          value: previousLocalStorage,
-        });
-      }
-    }
-  }
-  {
-    const previousLocalStorage = globalThis.localStorage;
-    try {
-      const storage = new Map([["lore_resolve_epoch", JSON.stringify({ epoch: "42", ts: Number.NaN })]]);
-      Object.defineProperty(globalThis, "localStorage", {
-        configurable: true,
-        value: {
-          getItem: (key) => storage.get(key) ?? null,
-          setItem: (key, value) => storage.set(key, String(value)),
-          removeItem: (key) => storage.delete(key),
-        },
-      });
-      assert.equal(autoResolveStorage.readResolveGuard(), null);
-      assert.equal(storage.has("lore_resolve_epoch"), false, "invalid timestamp auto-resolve guards must be cleared");
-    } finally {
-      if (previousLocalStorage === undefined) {
-        delete globalThis.localStorage;
-      } else {
-        Object.defineProperty(globalThis, "localStorage", {
-          configurable: true,
-          value: previousLocalStorage,
-        });
-      }
-    }
-  }
-  {
-    const previousLocalStorage = globalThis.localStorage;
-    try {
-      const storage = new Map([["lore_resolve_epoch", "0042"]]);
-      Object.defineProperty(globalThis, "localStorage", {
-        configurable: true,
-        value: {
-          getItem: (key) => storage.get(key) ?? null,
-          setItem: (key, value) => storage.set(key, String(value)),
-          removeItem: (key) => storage.delete(key),
-        },
-      });
-      assert.equal(autoResolveStorage.readResolveGuard(), null);
-      assert.equal(storage.has("lore_resolve_epoch"), false, "legacy non-canonical auto-resolve epochs must be cleared");
-    } finally {
-      if (previousLocalStorage === undefined) {
-        delete globalThis.localStorage;
-      } else {
-        Object.defineProperty(globalThis, "localStorage", {
-          configurable: true,
-          value: previousLocalStorage,
-        });
-      }
-    }
-  }
-  assert.match(
-    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function normalizeResolveGuardEpoch[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\*\)\$\/[\s\S]*RESOLVE_GUARD_MAX_EPOCH_DIGITS[\s\S]*BigInt\(epoch\) > MAX_SAFE_INTEGER_BIGINT[\s\S]*const epoch = normalizeResolveGuardEpoch\(raw\.epoch\)[\s\S]*const epoch = normalizeResolveGuardEpoch\(raw\)[\s\S]*const normalizedEpoch = normalizeResolveGuardEpoch\(epoch\)[\s\S]*epoch: normalizedEpoch/,
-    "auto-resolve guard epochs must be canonicalized for JSON, legacy storage, and write paths",
-  );
-  assert.match(
-    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
-    /function normalizeResolveGuardTimestamp[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*value - now > RESOLVE_GUARD_MAX_FUTURE_SKEW_MS[\s\S]*const ts = normalizeResolveGuardTimestamp\(raw\.ts, now\)/,
-    "auto-resolve guard timestamps must use safe-integer non-future normalization",
-  );
-  assert.match(
-    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
-    /const entry = normalizeResolveGuardEntry\(JSON\.parse\(raw\)\)[\s\S]*if \(!entry\) clearResolveGuard\(\)[\s\S]*catch \{[\s\S]*clearResolveGuard\(\)/,
-    "auto-resolve guard reads must clear corrupt or invalid localStorage entries",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
-    /Number\.isFinite\(raw\.ts\)|typeof raw\.ts === "number" && Number\.isFinite|\/\^\\d\+\$\/\.test\(epoch\)/,
-    "auto-resolve guard reads must not return to broad finite timestamp or regex-only/unbounded epoch acceptance",
-  );
-  assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(1_000, 2_000), true);
-  assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(2_000 + 6_000, 2_000), false);
-  assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(2_000 + 5_000, 2_000), true);
-  assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(2_000 - 13 * 60 * 60 * 1000, 2_000), false);
-  assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(1_000.5, 2_000), false);
-  assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(Number.MAX_SAFE_INTEGER + 1, 2_000), false);
-  assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(1_000, 2_000.5), false);
-  assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(1_000, Number.NaN), false);
-  const liveStateSnapshotSource = readFileSync("app/hooks/useGameLiveStateSnapshot.ts", "utf8");
-  assert.match(
-    liveStateSnapshotSource,
-    /function normalizeLiveStateSnapshotTimestamp[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*value - now > LIVE_STATE_SNAPSHOT_MAX_FUTURE_SKEW_MS[\s\S]*const normalizedFetchedAt = normalizeLiveStateSnapshotTimestamp\(fetchedAt, now\)/,
-    "live-state snapshot freshness must use safe-integer non-future timestamp normalization",
-  );
-  assert.doesNotMatch(
-    liveStateSnapshotSource,
-    /typeof fetchedAt !== "number" \|\| !Number\.isFinite\(fetchedAt\)|now - fetchedAt <= LIVE_STATE_SNAPSHOT_MAX_AGE_MS/,
-    "live-state snapshot freshness must not return to broad finite timestamp arithmetic",
-  );
-  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(0), 1);
-  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(2), 1);
-  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(3), 2);
-  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(5), 4);
-  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(100), 4);
-  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(-1), 1);
-  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(1.5), 1);
-  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(Number.NaN), 1);
-  assert.equal(liveStateSnapshot.getLiveStateFailurePollIntervalCount(Number.MAX_SAFE_INTEGER + 1), 1);
-  assert.match(
-    liveStateSnapshotSource,
-    /function getLiveStateFailurePollIntervalCount\(consecutiveFailures: number\)[\s\S]*Number\.isSafeInteger\(consecutiveFailures\)[\s\S]*consecutiveFailures > 0[\s\S]*failures - 2/,
-    "live-state failure polling backoff must reject malformed counters instead of returning NaN",
-  );
-  assert.doesNotMatch(
-    liveStateSnapshotSource,
-    /Math\.trunc\(consecutiveFailures\)/,
-    "live-state failure polling backoff must not coerce malformed counters with Math.trunc",
-  );
-  assert.equal(liveStateSnapshot.shouldDisableLiveContractReadsAfterRecovery(false, 1), false);
-  assert.equal(liveStateSnapshot.shouldDisableLiveContractReadsAfterRecovery(false, 2), true);
-  assert.equal(liveStateSnapshot.shouldDisableLiveContractReadsAfterRecovery(true, 2), false);
-  assert.equal(liveStateSnapshot.shouldDisableLiveContractReadsAfterRecovery(false, 2.5), false);
-  assert.equal(liveStateSnapshot.shouldDisableLiveContractReadsAfterRecovery(false, Number.NaN), false);
-  assert.equal(
-    liveStateSnapshot.shouldDisableLiveContractReadsAfterRecovery(false, Number.MAX_SAFE_INTEGER + 1),
-    false,
-  );
-  assert.match(
-    liveStateSnapshotSource,
-    /function shouldDisableLiveContractReadsAfterRecovery[\s\S]*Number\.isSafeInteger\(consecutiveSuccesses\)[\s\S]*consecutiveSuccesses >= 2/,
-    "live-state recovery must only disable live contract reads after a safe integer success count",
-  );
-  assert.match(
-    liveStateSnapshotSource,
-    /readJsonResponse<LiveStateApiResponse>/,
-    "live-state snapshot fetch must use the bounded JSON response helper",
-  );
-  assert.doesNotMatch(
-    liveStateSnapshotSource,
-    /response\.json\(\)/,
-    "live-state snapshot fetch must not use unbounded response.json",
-  );
-  assert.match(
-    liveStateSnapshotSource,
-    /import \{ APP_CHAIN_ID, CONTRACT_ADDRESS, GRID_SIZE \}[\s\S]*function hasGridLength[\s\S]*values\.length === GRID_SIZE[\s\S]*!hasGridLength\(tileData\.pools[\s\S]*!hasGridLength\(tileData\.users[\s\S]*!hasGridLength\(counts[\s\S]*!hasGridLength\(indexedTilePools\)/,
-    "live-state snapshot fallbacks must reject malformed non-grid tile arrays before rendering cached data",
-  );
-  assert.equal(cacheTimestamp.normalizeCacheTimestamp(1_000, 2_000), 1_000);
-  assert.equal(cacheTimestamp.normalizeCacheTimestamp(Number.NaN, 2_000), null);
-  assert.equal(cacheTimestamp.normalizeCacheTimestamp(1_000.5, 2_000), null);
-  assert.equal(cacheTimestamp.normalizeCacheTimestamp(Number.MAX_SAFE_INTEGER + 1, 2_000), null);
-  assert.equal(cacheTimestamp.normalizeCacheTimestamp(2_000 + 6_000, 2_000), null);
-  assert.equal(cacheTimestamp.getFreshCacheDelayMs(1_000, 30_000, 2_000), 29_000);
-  assert.equal(cacheTimestamp.getFreshCacheDelayMs(2_100, 30_000, 2_000), 30_000);
-  assert.equal(cacheTimestamp.getFreshCacheDelayMs(1_000, 30_000, 31_000), null);
-  assert.equal(cacheTimestamp.getFreshCacheDelayMs(1_000.5, 30_000, 2_000), null);
-  const cacheTimestampSource = readFileSync("app/lib/cacheTimestamp.ts", "utf8");
-  assert.match(
-    cacheTimestampSource,
-    /function normalizeCacheTimestamp[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*Number\.isSafeInteger\(maxFutureSkewMs\)/,
-    "client cache timestamps must reject unsafe, fractional, or malformed times",
-  );
-  assert.match(
-    cacheTimestampSource,
-    /function getFreshCacheDelayMs\(savedAt: unknown, ttlMs: number, now = Date\.now\(\)\)[\s\S]*normalizeCacheTimestamp\(savedAt, now\)[\s\S]*Number\.isSafeInteger\(ttlMs\)[\s\S]*Math\.max\(0, now - normalizedSavedAt\)[\s\S]*return ttlMs - ageMs/,
-    "client cache refresh delays must use the strict timestamp helper",
-  );
-  const gameCountdown = gameCountdownModule.default ?? gameCountdownModule;
-  assert.equal(gameCountdown.normalizeEpochEndMs(1_000n), 1_000_000);
-  assert.equal(gameCountdown.normalizeEpochEndMs(0n), null);
-  assert.equal(gameCountdown.normalizeEpochEndMs(-1n), null);
-  assert.equal(gameCountdown.normalizeEpochEndMs(BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1000))), 9_007_199_254_740_000);
-  assert.equal(gameCountdown.normalizeEpochEndMs(BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1000)) + 1n), null);
-  const gameCountdownSource = readFileSync("app/hooks/useGameCountdown.ts", "utf8");
-  assert.match(
-    gameCountdownSource,
-    /export function normalizeEpochEndMs\(epochEndTime\?: bigint\): number \| null[\s\S]*epochEndTime < 0n[\s\S]*epochEndTime > MAX_SAFE_EPOCH_END_SECONDS[\s\S]*Number\.isSafeInteger\(endMs\)/,
-    "game countdown must safely narrow chain epoch-end timestamps before millisecond math",
-  );
-  assert.match(
-    gameCountdownSource,
-    /const endMs = normalizeEpochEndMs\(effectiveEpochEndTime\)[\s\S]*if \(endMs === null\)[\s\S]*setTimeLeft\(0\)[\s\S]*setPollPhase\("slow"\)[\s\S]*return;/,
-    "game countdown must fail closed on unsafe epoch-end timestamps without entering zero-refetch handling",
-  );
-  assert.doesNotMatch(
-    gameCountdownSource,
-    /Number\(effectiveEpochEndTime\) \* 1000/,
-    "game countdown must not broadly coerce chain epoch-end timestamps before millisecond math",
-  );
-  const normalizedGlobalStats = globalStats.normalizeGlobalStatsAccumulator({
-    volumeRaw: "100",
-    burnRaw: "2",
-    resolvedEpochs: 3,
-    lastScannedEpoch: 4,
-    lastScannedBlock: "5",
-  });
-  assert.deepEqual(normalizedGlobalStats, {
-    volumeRaw: 100n,
-    burnRaw: 2n,
-    resolvedEpochs: 3,
-    lastScannedEpoch: 4,
-    lastScannedBlock: "5",
-  });
-  assert.equal(globalStats.normalizeGlobalStatsAccumulator({ volumeRaw: "-1", resolvedEpochs: 0, lastScannedEpoch: 0, lastScannedBlock: "1" }), null);
-  assert.equal(
-    globalStats.normalizeGlobalStatsAccumulator({
-      volumeRaw: "1",
-      resolvedEpochs: "1.5",
-      lastScannedEpoch: 1,
-      lastScannedBlock: "1",
-    }),
-    null,
-  );
-  assert.equal(
-    globalStats.normalizeGlobalStatsAccumulator({
-      volumeRaw: "1",
-      resolvedEpochs: "1e3",
-      lastScannedEpoch: 1,
-      lastScannedBlock: "1",
-    }),
-    null,
-  );
-  assert.equal(
-    globalStats.normalizeGlobalStatsAccumulator({
-      volumeRaw: "1",
-      resolvedEpochs: 1,
-      lastScannedEpoch: " 1",
-      lastScannedBlock: "1",
-    }),
-    null,
-  );
-  assert.equal(
-    globalStats.normalizeGlobalStatsAccumulator({
-      volumeRaw: "1",
-      resolvedEpochs: Number.MAX_SAFE_INTEGER + 1,
-      lastScannedEpoch: 1,
-      lastScannedBlock: "1",
-    }),
-    null,
-  );
-  assert.equal(globalStats.getUsableGlobalStatsAccumulator(normalizedGlobalStats, 3), null);
-  assert.deepEqual(globalStats.getUsableGlobalStatsAccumulator(normalizedGlobalStats, 4), normalizedGlobalStats);
-  const globalStatsSource = readFileSync("app/hooks/useGlobalStats.ts", "utf8");
-  assert.match(
-    globalStatsSource,
-    /fetch\("\/api\/global-stats", \{ cache: "no-store", signal: controller\.signal \}\)/,
-    "global stats must use the indexer-backed aggregate API instead of rescanning chain logs in every browser",
-  );
-  assert.match(
-    globalStatsSource,
-    /getUsableGlobalStatsAccumulator\(cached,\s*currentEpochNumber\)/,
-    "global stats cache restore must reject values from epochs newer than the current chain epoch",
-  );
-  assert.match(
-    globalStatsSource,
-    /getUsableGlobalStatsAccumulator\(accRef\.current,\s*currentEpochNumber\)[\s\S]*localStorage\.removeItem\(STORAGE_KEY\)[\s\S]*setStats\(null\)/,
-    "global stats hook must clear stale future cache storage after current epoch recovery",
-  );
-  assert.match(
-    globalStatsSource,
-    /const raw = localStorage\.getItem\(STORAGE_KEY\)[\s\S]*const acc = normalizeGlobalStatsAccumulator\(JSON\.parse\(raw\)\)[\s\S]*localStorage\.removeItem\(STORAGE_KEY\)/,
-    "global stats cache reads must clear corrupt or invalid localStorage entries",
-  );
-  assert.match(
-    globalStatsSource,
-    /readJsonResponse<Record<string, unknown>>/,
-    "global stats API reads must use the bounded JSON response helper",
-  );
-  assert.doesNotMatch(
-    globalStatsSource,
-    /response\.json\(\)/,
-    "global stats API reads must not use unbounded response.json",
-  );
-  assert.match(
-    globalStatsSource,
-    /function parseNonNegativeSafeInteger[\s\S]*typeof value === "number"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*\/\^\\d\+\$\/\.test\(value\)[\s\S]*Number\.isSafeInteger\(parsed\)/,
-    "global stats cache and API counters must use canonical non-negative safe-integer parsing",
-  );
-  assert.doesNotMatch(
-    globalStatsSource,
-    /Number\((?:obj|payload)\.(?:resolvedEpochs|lastScannedEpoch)\)/,
-    "global stats must not broadly coerce cache or API epoch counters with Number(...)",
-  );
-  assert.doesNotMatch(
-    globalStatsSource,
-    /\.getLogs\(/,
-    "global stats must not perform historical eth_getLogs scans in the browser",
-  );
-  const mappedDeposits = depositHistory.mapDepositEntries(
-    [
-      {
-        epoch: "42",
-        tileIds: [2, 2, 5],
-        amounts: ["1000000000000000.123456789123456789", "0.876543210876543211", "1"],
-        totalAmount: "1000000000000002",
-        totalAmountNum: 1000000000000002,
-        txHash: "0xabc",
-        blockNumber: "7",
-      },
-    ],
-    {
-      "42": {
-        winningTile: 2,
-        rewardPool: "500",
-        isDailyJackpot: false,
-        isWeeklyJackpot: false,
-      },
-    },
-    {
-      "42": {
-        reward: "100",
-        winningTile: 2,
-        rewardPool: "500",
-        winningTilePool: "1000000000000001",
-        userWinningAmount: "1000000000000001",
-      },
-    },
-  );
-  assert.deepEqual(mappedDeposits[0].tileIds, [2, 5]);
-  assert.equal(mappedDeposits[0].amount, "1000000000000002.00");
-  assert.equal(mappedDeposits[0].reward, 100);
-  assert.equal(
-    depositHistory.mapDepositEntries(
-      [
-        {
-          epoch: "bad",
-          tileIds: [1],
-          amounts: ["1"],
-          totalAmount: "1",
-          totalAmountNum: 1,
-          txHash: "0xbad",
-          blockNumber: "bad",
-        },
-      ],
-      {},
-      {},
-    )[0].blockNumberNum,
-    0,
-  );
-  assert.equal(
-    depositHistory.mapDepositEntries(
-      [
-        {
-          epoch: "bad",
-          tileIds: [1],
-          amounts: ["1"],
-          totalAmount: "1",
-          totalAmountNum: 1,
-          txHash: "0xbad",
-          blockNumber: "bad",
-        },
-      ],
-      {},
-      {},
-    )[0].txHash,
-    "",
-    "deposit history API mapping must suppress malformed transaction hashes",
-  );
-  assert.deepEqual(depositHistory.normalizeApiDeposits("bad-shape"), []);
-  assert.deepEqual(
-    depositHistory.normalizeApiDeposits([
-      {
-        epoch: "1",
-        tileIds: [1],
-        totalAmount: "10",
-        totalAmountNum: 10,
-        txHash: "0xabc",
-        blockNumber: "2",
-      },
-      null,
-    ]),
-    [
-      {
-        epoch: "1",
-        tileIds: [1],
-        totalAmount: "10",
-        totalAmountNum: 10,
-        txHash: "0xabc",
-        blockNumber: "2",
-      },
-    ],
-  );
-  const cachedDepositEntry = {
-    epoch: "9",
-    tileIds: [1, 999, "2", "02", "1e3", 2.5],
-    amounts: [1, -1, "2", "02", "1e3"],
-    amount: "3.00",
-    amountNum: 3,
-    txHash: `0x${"Aa".repeat(32)}`,
-    blockNumber: "11",
-    blockNumberNum: 11,
-    winningTile: 999,
-    isDailyJackpot: true,
-    isWeeklyJackpot: false,
-    reward: -1,
-  };
-  assert.deepEqual(depositHistory.normalizeCachedDepositEntries("bad-shape"), null);
-  assert.deepEqual(
-    depositHistory.normalizeCachedDepositEntries([
-      cachedDepositEntry,
-      { ...cachedDepositEntry, txHash: "bad" },
-      { ...cachedDepositEntry, epoch: "09" },
-      { ...cachedDepositEntry, blockNumber: "011" },
-      null,
-    ]),
-    [
-      {
-        epoch: "9",
-        tileIds: [1, 2],
-        amounts: [1, 2],
-        amount: "3.00",
-        amountNum: 3,
-        txHash: `0x${"aa".repeat(32)}`,
-        blockNumber: "11",
-        blockNumberNum: 11,
-        winningTile: null,
-        isDailyJackpot: true,
-        isWeeklyJackpot: false,
-        reward: null,
-      },
-    ],
-  );
-  assert.deepEqual(
-    depositHistory.normalizeCachedDepositEntries([
-      {
-        ...cachedDepositEntry,
-        amountNum: "1e3",
-        reward: "02",
-        winningTile: "2.5",
-      },
-    ]),
-    [
-      {
-        epoch: "9",
-        tileIds: [1, 2],
-        amounts: [1, 2],
-        amount: "3.00",
-        amountNum: 0,
-        txHash: `0x${"aa".repeat(32)}`,
-        blockNumber: "11",
-        blockNumberNum: 11,
-        winningTile: null,
-        isDailyJackpot: true,
-        isWeeklyJackpot: false,
-        reward: null,
-      },
-    ],
-    "deposit history cache normalization must reject malformed numeric cache evidence",
-  );
-  assert.equal(
-    depositHistory.normalizeCachedDepositEntries(Array.from({ length: 501 }, () => cachedDepositEntry))?.length,
-    500,
-  );
-  assert.deepEqual(jackpotHistory.normalizeEntries("bad-shape"), []);
-  assert.deepEqual(
-    jackpotHistory.normalizeEntries([
-      {
-        epoch: "42",
-        amount: "1234.567899",
-        amountNum: 0,
-        kind: "daily",
-        txHash: "0xabc",
-        blockNumber: 7n,
-        timestamp: 123,
-      },
-    ])[0],
-    {
-      epoch: "42",
-      amount: "1234.57",
-      amountNum: 1234.567899,
-      kind: "daily",
-      txHash: "",
-      blockNumber: 7n,
-      timestamp: 123,
-    },
-    "jackpot history entries must derive display numbers safely and suppress malformed tx hashes",
-  );
-  assert.deepEqual(
-    jackpotHistory.normalizeEntries([
-      {
-        epoch: "43",
-        amount: "bad",
-        amountNum: "1e6",
-        kind: "weekly",
-        txHash: "0xdef",
-        blockNumber: 8n,
-        timestamp: 124,
-      },
-    ])[0],
-    {
-      epoch: "43",
-      amount: "0.00",
-      amountNum: 0,
-      kind: "weekly",
-      txHash: "",
-      blockNumber: 8n,
-      timestamp: 124,
-    },
-    "jackpot history malformed legacy numeric text must fail closed instead of passing through parseFloat",
-  );
-  assert.equal(
-    jackpotHistory.normalizeEntries([
-      {
-        epoch: "44",
-        amount: "1",
-        kind: "daily",
-        txHash: `0x${"Ab".repeat(32)}`,
-        blockNumber: 9n,
-      },
-    ])[0]?.txHash,
-    `0x${"ab".repeat(32)}`,
-    "jackpot history entries must preserve valid full transaction hashes in lowercase",
-  );
-  const depositHistorySource = readFileSync("app/hooks/useDepositHistory.ts", "utf8");
-  assert.doesNotMatch(
-    depositHistorySource,
-    /Number\(b\.epoch\)\s*-\s*Number\(a\.epoch\)/,
-    "deposit history must not sort with unchecked epoch numbers",
-  );
-  assert.match(
-    depositHistorySource,
-    /formatLineaWeiDisplayNumber[\s\S]*function toDisplayNumberWei\(value: bigint\)[\s\S]*return formatLineaWeiDisplayNumber\(value\)/,
-    "deposit history numeric compatibility values must derive from bounded raw-wei formatting",
-  );
-  assert.doesNotMatch(
-    depositHistorySource,
-    /Number\(formatLineaAmountFixed\(value, 6\)\)/,
-    "deposit history numeric compatibility values must not parse formatted decimal strings",
-  );
-  assert.match(
-    depositHistorySource,
-    /function normalizeDepositTxHash\(value: unknown\)[\s\S]*\/\^0x\[0-9a-f\]\{64\}\$\/\.test\(normalized\)[\s\S]*const txHash = normalizeDepositTxHash\(item\.txHash\)[\s\S]*txHash: normalizeDepositTxHash\(d\.txHash\)/,
-    "deposit history cache/API mapping must only preserve full transaction hashes",
-  );
-  assert.doesNotMatch(
-    depositHistorySource,
-    /txHash:\s*d\.txHash|\/\^0x\[0-9a-fA-F\]\{64\}\$\/\.test\(item\.txHash\)/,
-    "deposit history cache/API mapping must not publish raw or case-preserving txHash strings",
-  );
-  assert.doesNotMatch(
-    depositHistorySource,
-    /Number\(formatUnits\((?:parseLineaAmountWei\(value\)|rewardWei|totalAmountWei), 18\)\)/,
-    "deposit history mapping must not coerce raw wei through Number(formatUnits())",
-  );
-  assert.match(
-    depositHistorySource,
-    /function parseSafeNonNegativeIntegerNumber[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\*\)\$\/\.test\(value\)[\s\S]*BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function normalizeCachedNumberArray[\s\S]*\.map\(normalizeCachedDisplayNumber\)[\s\S]*function normalizeCachedTileIds[\s\S]*\.map\(normalizeCachedIntegerNumber\)[\s\S]*function normalizeCachedIntegerNumber[\s\S]*function normalizeCachedDisplayNumber[\s\S]*amountNum: normalizeCachedDisplayNumber\(item\.amountNum\) \?\? 0[\s\S]*reward: normalizeCachedDisplayNumber\(item\.reward\)/,
-    "deposit history cache normalization must canonical-parse cached numeric evidence before publishing UI data",
-  );
-  assert.doesNotMatch(
-    depositHistorySource,
-    /\.map\(\(item\) => Number\(item\)\)|amountNum: Number\.isFinite\(item\.amountNum\)|reward: Number\.isFinite\(item\.reward\)|Number\.isInteger\(item\.winningTile\)/,
-    "deposit history cache normalization must not use broad Number coercion for cached amounts, tiles, or rewards",
-  );
-  assert.match(
-    depositHistorySource,
-    /DEPOSIT_HISTORY_LOAD_ERROR[\s\S]*setError\(DEPOSIT_HISTORY_LOAD_ERROR\)/,
-    "deposit history UI must use stable safe error copy instead of raw provider/API messages",
-  );
-  assert.match(
-    depositHistorySource,
-    /readJsonResponse<\{ epochs\?: Record<string, ApiEpoch> \}>[\s\S]*readJsonResponse<\{ rewards\?: Record<string, ApiRewardInfo> \}>[\s\S]*readJsonResponse<typeof depositsJson>/,
-    "deposit history API reads must use the bounded JSON response helper",
-  );
-  assert.doesNotMatch(
-    depositHistorySource,
-    /response\.json\(\)|depositsRes\.json\(\)/,
-    "deposit history API reads must not use unbounded response.json",
-  );
-  assert.doesNotMatch(
-    depositHistorySource,
-    /setError\(depositsJson\.error \|\| `HTTP \$\{depositsRes\.status\}`\)/,
-    "deposit history HTTP/API failures must not surface raw backend error text",
-  );
-  assert.match(
-    depositHistorySource,
-    /function loadCachedDeposits[\s\S]*const data = normalizeCachedDepositEntries\(parsed\)[\s\S]*localStorage\.removeItem\(cacheKey\)[\s\S]*const data = normalizeCachedDepositEntries\(parsed\.data\)[\s\S]*if \(!data\)[\s\S]*localStorage\.removeItem\(cacheKey\)/,
-    "deposit history cache restore must normalize and clear invalid legacy/envelope entries before publishing cached UI data",
-  );
-  assert.match(
-    depositHistorySource,
-    /const refreshDelayMs = getFreshCacheDelayMs\(savedAt, DEPOSIT_CACHE_TTL_MS\)[\s\S]*if \(refreshDelayMs !== null\)[\s\S]*window\.setTimeout\([\s\S]*refreshDelayMs/,
-    "deposit history cache refresh delay must use the shared strict timestamp helper",
-  );
-  assert.doesNotMatch(
-    depositHistorySource,
-    /Date\.now\(\) - savedAt < DEPOSIT_CACHE_TTL_MS|DEPOSIT_CACHE_TTL_MS - \(Date\.now\(\) - savedAt\)/,
-    "deposit history cache refresh must not use broad savedAt age arithmetic",
-  );
-  const jackpotHistorySource = readFileSync("app/hooks/useJackpotHistory.ts", "utf8");
-  assert.match(
-    jackpotHistorySource,
-    /formatLineaWeiDisplayNumber[\s\S]*function toDisplayNumberWei\(value: bigint\)[\s\S]*return formatLineaWeiDisplayNumber\(value\)/,
-    "jackpot history numeric compatibility fields must derive from bounded raw-wei formatting",
-  );
-  assert.doesNotMatch(
-    jackpotHistorySource,
-    /Number\(formatLineaAmountFixed\(value, 6\)\)/,
-    "jackpot history numeric compatibility fields must not parse formatted decimal strings",
-  );
-  assert.match(
-    jackpotHistorySource,
-    /function normalizeAmount\(value: unknown, fallback = 0\): number[\s\S]*formatDecimalTextFixed\(String\(value \?\? ""\)\.trim\(\), 6\)/,
-    "jackpot history legacy numeric fallback must use canonical decimal-text formatting",
-  );
-  assert.match(
-    jackpotHistorySource,
-    /function normalizeTxHash\(value: unknown\)[\s\S]*\/\^0x\[0-9a-f\]\{64\}\$\/\.test\(normalized\)[\s\S]*txHash: normalizeTxHash\(row\.txHash\)/,
-    "jackpot history cache/API normalization must only preserve full transaction hashes",
-  );
-  assert.doesNotMatch(
-    jackpotHistorySource,
-    /txHash:\s*String\(row\.txHash \?\? ""\)/,
-    "jackpot history cache/API normalization must not publish raw txHash strings",
-  );
-  assert.doesNotMatch(
-    jackpotHistorySource,
-    /formatUnits|amountNum\.toFixed\(2\)|Number\.parseFloat/,
-    "jackpot history must not derive amount display or compatibility numbers from formatUnits(), amountNum.toFixed(2), or parseFloat",
-  );
-  assert.doesNotMatch(
-    jackpotHistorySource,
-    /Number\(b\.epoch\)\s*-\s*Number\(a\.epoch\)/,
-    "jackpot history must not sort with unchecked epoch numbers",
-  );
-  assert.match(
-    jackpotHistorySource,
-    /JACKPOT_HISTORY_LOAD_ERROR[\s\S]*setError\(JACKPOT_HISTORY_LOAD_ERROR\)/,
-    "jackpot history UI must use stable safe error copy instead of raw provider/API messages",
-  );
-  assert.match(
-    jackpotHistorySource,
-    /readJsonResponse<JackpotApiResponse>/,
-    "jackpot history API reads must use the bounded JSON response helper",
-  );
-  assert.match(
-    jackpotHistorySource,
-    /const raw = localStorage\.getItem\(STORAGE_KEY\)[\s\S]*localStorage\.removeItem\(STORAGE_KEY\)/,
-    "jackpot history cache reads must clear corrupt or invalid localStorage entries",
-  );
-  assert.match(
-    jackpotHistorySource,
-    /const initialDelay = getFreshCacheDelayMs\(savedAt, REFRESH_MS\) \?\? 0/,
-    "jackpot history cache refresh delay must use the shared strict timestamp helper",
-  );
-  assert.doesNotMatch(
-    jackpotHistorySource,
-    /Date\.now\(\) - savedAt < REFRESH_MS|REFRESH_MS - \(Date\.now\(\) - savedAt\)/,
-    "jackpot history cache refresh must not use broad savedAt age arithmetic",
-  );
-  assert.doesNotMatch(
-    jackpotHistorySource,
-    /res\.json\(\)|response\.json\(\)/,
-    "jackpot history API reads must not use unbounded response.json",
-  );
-  const analyticsDepositsPanelSource = readFileSync("app/components/analytics/AnalyticsDepositsPanel.tsx", "utf8");
-  assert.match(
-    analyticsDepositsPanelSource,
-    /role="status"[\s\S]*aria-live="polite"[\s\S]*aria-busy=\{statusActive\}[\s\S]*\{statusLabel\}/,
-    "deposit history refresh/sync status chip must be announced without changing refresh behavior",
-  );
-  assert.match(
-    analyticsDepositsPanelSource,
-    /role="status"[\s\S]*aria-live="polite"[\s\S]*aria-busy="true"[\s\S]*<LoreText items=\{loadingQuotes\}/,
-    "deposit history initial loading state must be announced as a polite busy status",
-  );
-  assert.match(
-    analyticsDepositsPanelSource,
-    /aria-label=\{`Open deposit transaction \$\{row\.txHash\.slice\(0, 6\)\}\.\.\.\$\{row\.txHash\.slice\(-4\)\} on Lineascan`\}[\s\S]*title="Open deposit transaction on Lineascan"/,
-    "deposit history Lineascan links must expose a transaction-specific accessible label",
-  );
-  const analyticsJackpotHistoryPanelSource = readFileSync("app/components/analytics/AnalyticsJackpotHistoryPanel.tsx", "utf8");
-  assert.match(
-    analyticsJackpotHistoryPanelSource,
-    /jackpotHistoryLoading \?[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*aria-busy="true"[\s\S]*<LoreText items=\{loadingQuotes\}/,
-    "jackpot history loading state must be announced as a polite busy status",
-  );
-  assert.match(
-    analyticsJackpotHistoryPanelSource,
-    /aria-label=\{`Open jackpot transaction \$\{entry\.txHash\.slice\(0, 6\)\}\.\.\.\$\{entry\.txHash\.slice\(-4\)\} on Lineascan`\}[\s\S]*title="Open jackpot transaction on Lineascan"/,
-    "jackpot history Lineascan links must expose a transaction-specific accessible label",
-  );
-  const analyticsAncillarySource = readFileSync("app/hooks/useAnalyticsAncillaryData.ts", "utf8");
-  assert.match(
-    analyticsAncillarySource,
-    /useDepositHistory\(embeddedWalletAddress \?\? undefined, analyticsActive && isPageVisible\)/,
-    "hidden analytics tabs must pause deposit-history work",
-  );
-  assert.match(
-    analyticsAncillarySource,
-    /useJackpotHistory\(analyticsActive && isPageVisible\)/,
-    "hidden analytics tabs must pause jackpot-history work",
-  );
-  assert.doesNotMatch(
-    analyticsAncillarySource,
-    /120_000/,
-    "analytics ancillary polling must stop while hidden instead of keeping a background interval",
-  );
-  assert.deepEqual(recentWins.normalizeWins("bad-shape"), []);
-  const recentWinsSource = readFileSync("app/hooks/useRecentWins.ts", "utf8");
-  assert.match(
-    recentWinsSource,
-    /const raw = localStorage\.getItem\(STORAGE_KEY\)[\s\S]*localStorage\.removeItem\(STORAGE_KEY\)/,
-    "recent wins cache reads must clear corrupt or invalid localStorage entries",
-  );
-  assert.match(
-    recentWinsSource,
-    /if \(!isPageVisible\) \{[\s\S]*abortRef\.current\?\.abort\(\);[\s\S]*return;/,
-    "recent wins must stop its native polling loop and abort an in-flight request while hidden",
-  );
-  assert.match(
-    recentWinsSource,
-    /cachedWinsCountRef\.current > 0[\s\S]*getFreshCacheDelayMs\(savedAt, REFRESH_MS\) \?\? 0/,
-    "recent wins cache refresh delay must use the shared strict timestamp helper",
-  );
-  assert.match(
-    recentWinsSource,
-    /GRID_SIZE[\s\S]*Number\.isSafeInteger\(tileId\)[\s\S]*tileId >= 1[\s\S]*tileId <= GRID_SIZE/,
-    "recent wins client normalizer must reject non-canonical tile IDs",
-  );
-  assert.doesNotMatch(
-    recentWinsSource,
-    /Number\.isInteger\(tileId\) && tileId > 0/,
-    "recent wins client normalizer must not accept positive-only tile IDs",
-  );
-  assert.doesNotMatch(
-    recentWinsSource,
-    /Date\.now\(\) - savedAt < REFRESH_MS|REFRESH_MS - \(Date\.now\(\) - savedAt\)/,
-    "recent wins cache refresh must not use broad savedAt age arithmetic",
-  );
-  assert.doesNotMatch(
-    recentWinsSource,
-    /HIDDEN_REFRESH_MS/,
-    "recent wins must resume cache-aware visible polling instead of keeping a hidden timer",
-  );
-  assert.deepEqual(
-    recentWins.normalizeWins([
-      { epoch: "11", user: "0x1", amount: "2.00", amountRaw: "2000000000000000000", tileId: 3 },
-      { epoch: "12", user: "", amountRaw: "1" },
-    ]),
-    [{ epoch: "11", user: "0x1", amount: "2.00", amountRaw: "2000000000000000000", tileId: 3 }],
-  );
-  assert.deepEqual(
-    leaderboards.normalizeLeaderboardsData({
-      biggestSingleWin: [{ rank: 1, address: "0x1", value: "10", valueNum: 10 }],
-      luckiest: "stale-bad-shape",
-      oneTileWonder: [],
-      whales: [],
-      luckyTile: [{ tileId: 7, wins: 2, pct: 20 }],
-    }),
-    {
-      biggestSingleWin: [{ rank: 1, address: "0x1", value: "10", valueNum: 10 }],
-      luckiest: [],
-      oneTileWonder: [],
-      mostWins: [],
-      whales: [],
-      underdog: [],
-      luckyTile: [{ tileId: 7, wins: 2, pct: 20 }],
-    },
-  );
-  assert.deepEqual(
-    leaderboards.normalizeLeaderboardsData({
-      biggestSingleWin: [
-        { rank: "1", address: "0x1", value: 10, valueNum: "bad", extra: 7 },
-        { rank: 2, address: "", value: "skip", valueNum: 1 },
-      ],
-      luckyTile: [
-        { tileId: 3, wins: "bad", pct: "bad" },
-        { tileId: 4, wins: 2, pct: 20 },
-      ],
-    }).biggestSingleWin,
-    [{ rank: 1, address: "0x1", value: "10", valueNum: 0, extra: "7" }],
-  );
-  assert.deepEqual(
-    leaderboards.normalizeLeaderboardsData({
-      luckyTile: [
-        { tileId: 3, wins: "bad", pct: "bad" },
-        { tileId: 4, wins: 2, pct: 20 },
-        { tileId: Number.MAX_SAFE_INTEGER + 1, wins: 1, pct: 1 },
-      ],
-    }).luckyTile,
-    [{ tileId: 4, wins: 2, pct: 20 }],
-  );
-  const leaderboardsSource = readFileSync("app/hooks/useLeaderboards.ts", "utf8");
-  assert.match(
-    leaderboardsSource,
-    /GRID_SIZE[\s\S]*Number\.isSafeInteger\(tileId\)[\s\S]*tileId < 1 \|\| tileId > GRID_SIZE/,
-    "leaderboards lucky tile normalizer must reject unsafe or out-of-range tile ids",
-  );
-  assert.match(
-    leaderboardsSource,
-    /LEADERBOARD_LOAD_ERROR[\s\S]*setError\(LEADERBOARD_LOAD_ERROR\)/,
-    "leaderboards UI must use stable safe error copy instead of raw provider/API messages",
-  );
-  assert.match(
-    leaderboardsSource,
-    /const raw = localStorage\.getItem\(STORAGE_KEY\)[\s\S]*localStorage\.removeItem\(STORAGE_KEY\)/,
-    "leaderboard cache reads must clear corrupt or invalid localStorage entries",
-  );
-  assert.match(
-    leaderboardsSource,
-    /const initialDelay = getFreshCacheDelayMs\(savedAt, LEADERBOARD_CACHE_TTL_MS\) \?\? 0/,
-    "leaderboard cache refresh delay must use the shared strict timestamp helper",
-  );
-  assert.doesNotMatch(
-    leaderboardsSource,
-    /Date\.now\(\) - savedAt < LEADERBOARD_CACHE_TTL_MS|LEADERBOARD_CACHE_TTL_MS - \(Date\.now\(\) - savedAt\)/,
-    "leaderboard cache refresh must not use broad savedAt age arithmetic",
-  );
-  const pageAncillarySource = readFileSync("app/hooks/usePageAncillaryData.ts", "utf8");
-  assert.match(
-    pageAncillarySource,
-    /useLeaderboards\(activeTab === "leaderboards" && isPageVisible\)/,
-    "hidden leaderboard tabs must pause their native cache refresh timer",
-  );
-  assert.deepEqual(
-    rebate.normalizeRebatePayload({
-      isSupported: true,
-      pendingRebateWei: "1000",
-      claimableEpochCount: 2,
-      claimableEpochList: "bad-shape",
-      totalEpochs: 3,
-      participatingEpochs: [9, "bad", 10],
-      recentEpochs: null,
-    }),
-    {
-      isSupported: true,
-      pendingRebateWei: "1000",
-      claimableEpochCount: 2,
-      claimableEpochList: [],
-      totalEpochs: 3,
-      participatingEpochs: [9, 10],
-      recentEpochs: [],
-    },
-  );
-  assert.deepEqual(
-    rebate.normalizeRebatePayload({
-      pendingRebateWei: "1000",
-      claimableEpochCount: "02",
-      claimableEpochList: [1, "2", "02", "1e3", 1.5, -1, Number.MAX_SAFE_INTEGER + 1],
-      totalEpochs: "1e3",
-      participatingEpochs: ["3", "003", 4],
-      recentEpochs: [
-        { epoch: "5", pendingWei: "7" },
-        { epoch: "05", pendingWei: "9" },
-        { epoch: 6.5, pendingWei: "11" },
-      ],
-    }),
-    {
-      isSupported: true,
-      pendingRebateWei: "1000",
-      claimableEpochCount: 0,
-      claimableEpochList: [1, 2],
-      totalEpochs: 0,
-      participatingEpochs: [3, 4],
-      recentEpochs: [{ epoch: 5, pendingWei: "7", pending: "0", claimed: false, resolved: false, userVolumeWei: "0", rebatePoolWei: "0" }],
-    },
-    "rebate API normalization must reject non-canonical epoch and count evidence",
-  );
-  assert.deepEqual(
-    rebate.normalizeRebatePayload({
-      pendingRebateWei: "bad",
-      recentEpochs: [{ epoch: 5, pendingWei: "bad", userVolumeWei: "also-bad", rebatePoolWei: "7" }],
-    }).recentEpochs,
-    [{ epoch: 5, pendingWei: "0", pending: "0", claimed: false, resolved: false, userVolumeWei: "0", rebatePoolWei: "7" }],
-  );
-  assert.equal(
-    rebate.normalizeRebatePayload({ pendingRebateWei: "bad" }).pendingRebateWei,
-    "0",
-  );
-  assert.equal(
-    rebate.normalizeRebatePayload({
-      recentEpochs: Array.from({ length: 100 }, (_, index) => ({ epoch: index + 1, pendingWei: "1" })),
-    }).recentEpochs.length,
-    64,
-    "rebate recent display rows must be capped before publishing stale cache payloads to UI",
-  );
-  assert.deepEqual(
-    rebate.normalizeRebateHistoryPayload({
-      rows: [
-        { epoch: 12, pendingWei: "7", pending: "0.0000", resolved: true },
-        { epoch: "bad", pendingWei: "9" },
-      ],
-      hasMore: true,
-      nextCursor: 12,
-    }),
-    {
-      isSupported: true,
-      rows: [{ epoch: 12, pendingWei: "7", pending: "0.0000", claimed: false, resolved: true, userVolumeWei: "0", rebatePoolWei: "0" }],
-      hasMore: true,
-      nextCursor: 12,
-      error: undefined,
-    },
-  );
-  assert.equal(rebate.normalizeRebateHistoryPayload({ hasMore: true, nextCursor: "bad" }).nextCursor, null);
-  assert.equal(rebate.normalizeRebateHistoryPayload({ hasMore: true, nextCursor: "12" }).nextCursor, 12);
-  assert.equal(rebate.normalizeRebateHistoryPayload({ hasMore: true, nextCursor: "0012" }).nextCursor, null);
-  assert.equal(rebate.normalizeRebateHistoryPayload({ hasMore: true, nextCursor: "1e3" }).nextCursor, null);
-  assert.equal(
-    rebate.normalizeRebateHistoryPayload({
-      rows: Array.from({ length: 100 }, (_, index) => ({ epoch: index + 1, pendingWei: "1" })),
-    }).rows.length,
-    32,
-    "rebate history pages must stay bounded before rendering older rows",
-  );
-  assert.deepEqual(
-    rebate.mergeRebateEpochDetails(
-      [{ epoch: 8, pendingWei: 2n, pending: "2", claimed: false, resolved: true, userVolumeWei: 1n, rebatePoolWei: 2n }],
-      [
-        { epoch: 8, pendingWei: 1n, pending: "1", claimed: false, resolved: true, userVolumeWei: 1n, rebatePoolWei: 1n },
-        { epoch: 7, pendingWei: 3n, pending: "3", claimed: false, resolved: true, userVolumeWei: 1n, rebatePoolWei: 3n },
-      ],
-    ).map((row) => [row.epoch, row.pendingWei]),
-    [[8, 2n], [7, 3n]],
-  );
+  await runWalletModelTests();
+  runReadModelTests();
 
   const rewardScanNow = 1_000_000;
   assert.equal(rewardScanner.normalizeRewardScanEpochString("42"), "42");
@@ -13962,7 +12263,7 @@ async function main() {
   );
   assert.match(
     indexerErrorSource,
-    /const MAX_TILE_ID = 25[\s\S]*function parseChainTileId\(value: bigint\)[\s\S]*value <= 0n \|\| value > BigInt\(MAX_TILE_ID\)[\s\S]*function parseChainTileIds\(values: readonly bigint\[\]\)[\s\S]*if \(tileId === null\) return null[\s\S]*const tileId = parseChainTileId\(args\.tileId\)[\s\S]*const tileIds = parseChainTileIds\(args\.tileIds\)[\s\S]*tileIds === null \|\| tileIds\.length !== args\.amounts\.length[\s\S]*const winningTile = parseChainTileId\(args\.winningTile\)/,
+    /const MAX_TILE_ID = 25[\s\S]*function parseChainTileId\(value: bigint\)[\s\S]*value <= 0n \|\| value > BigInt\(MAX_TILE_ID\)[\s\S]*function parseChainTileIds\(values: readonly bigint\[\]\)[\s\S]*if \(tileId === null\) return null[\s\S]*const tileId = parseChainTileId\(args\.tileId\)[\s\S]*const tileIds = parseChainTileIds\(args\.tileIds\)[\s\S]*tileIds === null[\s\S]*tileIds\.length !== args\.amounts\.length[\s\S]*const winningTile = parseChainTileId\(args\.winningTile\)/,
     "indexer must safely narrow chain tile IDs and winningTile evidence before normalized storage writes",
   );
   assert.match(
@@ -14059,18 +12360,8 @@ async function main() {
   );
   assert.match(
     jackpotsServiceSource,
-    /JACKPOT_FORCE_FRESH_WAIT_MS = 2_000[\s\S]*Promise\.race\(\[promise, timeout\]\)/,
-    "forced jackpot refresh must have a bounded server-side wait",
-  );
-  assert.match(
-    jackpotsServiceSource,
     /jackpotBlockTimestampCache\.size > MAX_JACKPOT_EVENT_CACHE_ENTRIES/,
     "jackpot block timestamp cache must stay bounded",
-  );
-  assert.match(
-    jackpotsServiceSource,
-    /if \(!freshPayload\)[\s\S]*jackpotResponseCache\?\.payload[\s\S]*source: "stale-cache"/,
-    "a slow forced jackpot refresh must return stored or cached data while recovery continues",
   );
   const walletDeepScanPanelSource = readFileSync("app/components/wallet/WalletSettingsDeepScanPanel.tsx", "utf8");
   assert.match(
@@ -14360,7 +12651,6 @@ async function main() {
   const botSupervisorSource = readFileSync("scripts/run-bot-forever.mjs", "utf8");
   const soakSupervisorSource = readFileSync("scripts/run-testnet-soak-supervisor.mjs", "utf8");
   const clearPendingNonceSource = readFileSync("scripts/clear-live-test-pending-nonce.ts", "utf8");
-  const adminSessionSource = readFileSync("app/api/_lib/adminSession.ts", "utf8");
   const chatSessionSource = readFileSync("app/api/_lib/chatSession.ts", "utf8");
   const cleanupNextCandidatesSource = readFileSync("scripts/cleanup-next-candidates.mjs", "utf8");
   const collectIndexerEvidenceSource = readFileSync("scripts/collect-indexer-evidence.mjs", "utf8");
@@ -14527,12 +12817,6 @@ async function main() {
   assert.equal(chatSession.normalizeChatSessionExpiresAt(Number.MAX_SAFE_INTEGER + 1, 100_000), null);
   assert.equal(chatSession.normalizeChatSessionExpiresAt(99_999, 100_000), null);
   assert.equal(chatSession.normalizeChatSessionExpiresAt(100_000 + chatAuth.CHAT_AUTH_SESSION_TTL_MS + 60_001, 100_000), null);
-  assert.equal(adminSession.normalizeAdminSessionExpiresAt(120_000, 100_000), 120_000);
-  assert.equal(adminSession.normalizeAdminSessionExpiresAt("120000", 100_000), null);
-  assert.equal(adminSession.normalizeAdminSessionExpiresAt(120_000.5, 100_000), null);
-  assert.equal(adminSession.normalizeAdminSessionExpiresAt(Number.MAX_SAFE_INTEGER + 1, 100_000), null);
-  assert.equal(adminSession.normalizeAdminSessionExpiresAt(99_999, 100_000), null);
-  assert.equal(adminSession.normalizeAdminSessionExpiresAt(100_000 + adminAuth.ADMIN_AUTH_SESSION_TTL_MS + 60_001, 100_000), null);
   for (const malformedChatCookie of [
     `${"a".repeat(1025)}.sig`,
     "encoded.sig.extra",
@@ -14546,7 +12830,7 @@ async function main() {
       "malformed chat session cookies must fail before production secret/HMAC lookup",
     );
   }
-  for (const [name, source] of [["admin", adminSessionSource], ["chat", chatSessionSource]]) {
+  for (const [name, source] of [["chat", chatSessionSource]]) {
     assert.match(source, /randomBytes\(32\)\.toString\("hex"\)/, `${name} development sessions must use an ephemeral secret`);
     assert.doesNotMatch(source, /createHash\(|dev-(admin|chat)-session:/, `${name} development sessions must not derive a predictable secret`);
     assert.match(
@@ -15508,21 +13792,6 @@ async function main() {
     /stopChild\(canary\)[\s\S]*stopChild\(server\)/,
     "testnet soak supervisor must stop both managed children on completion or failure",
   );
-  assert.match(
-    soakSupervisorSource,
-    /lockMatches[\s\S]*process\.kill\(supervisorPid, "SIGTERM"\)[\s\S]*finalizeStoppedStatus/,
-    "testnet soak stop command must only signal the supervisor recorded by the matching lock",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /TRACKED_PID_RE = \/\^\[1-9\]\\d\{0,9\}\$\/[\s\S]*MAX_TRACKED_PID = 2_147_483_647[\s\S]*MAX_TRACKED_PID_BIGINT = BigInt\(MAX_TRACKED_PID\)[\s\S]*function parseTrackedPid\(value\)[\s\S]*const pid = BigInt\(raw\)[\s\S]*pid <= MAX_TRACKED_PID_BIGINT \? Number\(pid\) : null[\s\S]*function matchingSupervisorPid\(status, lock\)[\s\S]*parseTrackedPid\(status\?\.supervisorPid\)[\s\S]*parseTrackedPid\(lock\?\.pid\)/,
-    "testnet soak supervisor must strictly parse status and lock PIDs before liveness or stop checks",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /const supervisorPid = matchingSupervisorPid\(status, lock\)[\s\S]*const lockMatches = supervisorPid !== null[\s\S]*supervisorAlive: lockMatches && processIsAlive\(supervisorPid\)[\s\S]*const supervisorPid = matchingSupervisorPid\(status, lock\)[\s\S]*const lockMatches = supervisorPid !== null[\s\S]*process\.kill\(supervisorPid, "SIGTERM"\)/,
-    "testnet soak status and stop commands must use the matching parsed supervisor PID",
-  );
   assert.doesNotMatch(
     soakSupervisorSource,
     /Number\(status\?\.supervisorPid\)|Number\(lock\?\.pid\)|Number\(JSON\.parse\(readFileSync\(LOCK_PATH, "utf8"\)\)\.pid\)/,
@@ -15535,7 +13804,7 @@ async function main() {
   );
   assert.match(
     soakSupervisorSource,
-    /existsSync\(LOCK_PATH\)[\s\S]*statSync\(LOCK_PATH\)\.size > MAX_SOAK_LOCK_JSON_BYTES[\s\S]*lock file is too large to validate safely[\s\S]*readJson\(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES\)\?\.pid/,
+    /existsSync\(LOCK_PATH\)[\s\S]*statSync\(LOCK_PATH\)\.size > MAX_SOAK_LOCK_JSON_BYTES[\s\S]*lock file is too large to validate safely[\s\S]*const previousLock = readJson\(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES\)[\s\S]*parseTrackedPid\(previousLock\?\.pid\)[\s\S]*parseProcessStartToken\(previousLock\?\.supervisorStartToken\)/,
     "testnet soak startup must fail closed on oversized lock files before stale-lock cleanup",
   );
   assert.match(
@@ -16071,7 +14340,7 @@ async function main() {
   );
   assert.match(
     indexerSource,
-    /await runEpochReconcile\(target\);[\s\S]*consecutiveFailures = 0;/,
+    /await runIndexedMaintenance\(target\);[\s\S]*consecutiveFailures = 0;/,
     "a successful indexer watch cycle must reset the failure threshold",
   );
   assert.match(
@@ -16106,8 +14375,8 @@ async function main() {
   );
   assert.match(
     indexerSource,
-    /function buildBetKey\(epoch: string, txHash: string, blockNumber: string\): string[\s\S]*\/\^0x\[0-9a-f\]\{64\}\$\/\.test\(normalizedHash\)[\s\S]*return `\$\{epoch\}_nohash_\$\{blockNumber\}`/,
-    "indexer bet storage keys must only treat full 32-byte transaction hashes as tx identity",
+    /buildIndexerBetIdentity,[\s\S]*const identity = buildIndexerBetIdentity\([\s\S]*normalizedBet\.logIndex[\s\S]*if \(identity === null\) continue;[\s\S]*patch\[identity\.id\]/,
+    "indexer bet writes must use the shared transaction-hash and log-index identity boundary",
   );
   assert.doesNotMatch(
     indexerSource,
@@ -16379,16 +14648,30 @@ async function main() {
     /response\.json\(\)/,
     "V10 Linea gas benchmark RPC reads must not use unbounded response.json",
   );
-  const gameConstantsSource = readFileSync("app/lib/constants.ts", "utf8");
   const v10PostdeployPlanSource = readFileSync("scripts/plan-v10-postdeploy-canary.ts", "utf8");
-  assert.match(
-    gameConstantsSource,
-    /function epochRewardClaimed\(uint256 epoch\) public view returns \(uint256\)/,
+  const sharedGameFunctions = new Set(
+    gameConstants.GAME_ABI
+      .filter((item) => item.type === "function")
+      .map((item) => item.name),
+  );
+  const sharedGameEvents = new Set(
+    gameConstants.GAME_EVENTS_ABI
+      .filter((item) => item.type === "event")
+      .map((item) => item.name),
+  );
+  const sharedTokenFunctions = new Set(
+    gameConstants.TOKEN_ABI
+      .filter((item) => item.type === "function")
+      .map((item) => item.name),
+  );
+  assert.equal(
+    sharedGameFunctions.has("epochRewardClaimed"),
+    true,
     "the shared game ABI must expose aggregate reward claims for solvency planning",
   );
-  assert.match(
-    gameConstantsSource,
-    /function decimals\(\) external view returns \(uint8\)/,
+  assert.equal(
+    sharedTokenFunctions.has("decimals"),
+    true,
     "the shared token ABI must expose the 18-decimal runtime boundary",
   );
   const indexedFinancialEvents = [
@@ -16411,9 +14694,9 @@ async function main() {
   ];
   const indexerAbiSource = readFileSync("scripts/indexer.ts", "utf8");
   for (const eventName of indexedFinancialEvents) {
-    assert.match(
-      gameConstantsSource,
-      new RegExp(`event ${eventName}\\(`),
+    assert.equal(
+      sharedGameEvents.has(eventName),
+      true,
       `shared GAME_EVENTS_ABI must preserve ${eventName} for frontend/indexer compatibility`,
     );
     assert.match(
@@ -16423,9 +14706,9 @@ async function main() {
     );
   }
   for (const aggregateDustEvent of ["RewardDustBatchSettled", "RebateDustBatchSettled"]) {
-    assert.match(
-      gameConstantsSource,
-      new RegExp(`event ${aggregateDustEvent}\\(`),
+    assert.equal(
+      sharedGameEvents.has(aggregateDustEvent),
+      true,
       `shared GAME_EVENTS_ABI must preserve ${aggregateDustEvent} for frontend compatibility`,
     );
     assert.doesNotMatch(
@@ -18002,1209 +16285,8 @@ async function main() {
     "tile selection must not silently no-op while a quiet expired epoch is awaiting atomic resolution",
   );
 
-  assert.equal(networkRetry.getNetworkRetryDelayMs(0, 500, 10_000), 500);
-  assert.equal(networkRetry.getNetworkRetryDelayMs(3, 500, 10_000), 4_000);
-  assert.equal(networkRetry.getNetworkRetryDelayMs(4, 500, 10_000, 2), 2_000);
-  assert.equal(networkRetry.formatRetryWaitSeconds(499), "0");
-  assert.equal(networkRetry.formatRetryWaitSeconds(500), "1");
-  assert.equal(networkRetry.formatRetryWaitSeconds(1_500), "2");
-  assert.equal(networkRetry.formatRetryWaitSeconds(Number.NaN), "0");
-  assert.equal(networkRetry.formatRetryWaitSeconds(Number.POSITIVE_INFINITY), "0");
-  assert.equal(networkRetry.formatRetryWaitSeconds(Number.MAX_SAFE_INTEGER + 1), "0");
-  for (const args of [
-    [Number.NaN, 500, 10_000],
-    [-1, 500, 10_000],
-    [1.5, 500, 10_000],
-    [0, Number.NaN, 10_000],
-    [0, 0, 10_000],
-    [0, 500.5, 10_000],
-    [0, 500, Number.POSITIVE_INFINITY],
-    [0, 500, 400],
-    [0, 500, 10_000, 1.5],
-  ]) {
-    assert.equal(
-      networkRetry.getNetworkRetryDelayMs(...args),
-      0,
-      `invalid network retry delay args ${JSON.stringify(args)} must fail closed to zero wait`,
-    );
-  }
-  const networkRetrySource = readFileSync("app/lib/mining/networkRetry.ts", "utf8");
-  assert.match(
-    networkRetrySource,
-    /function normalizeNonNegativeSafeInteger[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*function normalizePositiveSafeInteger[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*export function formatRetryWaitSeconds\(waitMs: number\)[\s\S]*Number\.MAX_SAFE_INTEGER[\s\S]*Math\.round\(waitMs \/ 1000\)[\s\S]*normalizedAttempt === null[\s\S]*normalizedMaxMs < normalizedInitialMs[\s\S]*return 0[\s\S]*const maxAttemptLimit = normalizeNonNegativeSafeInteger\(params\.maxAttempts\) \?\? 0/,
-    "shared network retry helper must validate retry timing and attempt counts before waiting",
-  );
-  assert.doesNotMatch(
-    networkRetrySource,
-    /const exponent = maxExponent == null \? attempt|initialMs \* 2 \*\* exponent|for \(let attempt = 0; attempt < maxAttempts;|\(wait \/ 1000\)\.toFixed\(0\)/,
-    "shared network retry helper must not use raw retry timing, attempt limits, or raw wait toFixed display",
-  );
-
-  const diagnosticsStorage = (() => {
-    const map = new Map();
-    return {
-      getItem: (key) => map.get(key) ?? null,
-      removeItem: (key) => {
-        map.delete(key);
-      },
-      setItem: (key, value) => {
-        map.set(key, value);
-      },
-      hasItem: (key) => map.has(key),
-    };
-  })();
-  assert.deepEqual(autoMineDiagnostics.createDefaultAutoMineDiagnosticsSnapshot(), {
-    phase: "idle",
-    progress: null,
-    runningParams: null,
-    isAutoMining: false,
-    autoResumeRequested: false,
-    sessionExpired: false,
-    lastErrorKind: null,
-    lastErrorMessage: null,
-    lastErrorRawMessage: null,
-    lastStopReason: null,
-    lastEpoch: null,
-    retryCount: 0,
-    updatedAt: 0,
-  });
-  diagnosticsStorage.setItem(autoMineDiagnostics.AUTO_MINE_DIAGNOSTICS_STORAGE_KEY, "{bad json");
-  assert.equal(autoMineDiagnostics.readAutoMineDiagnostics(diagnosticsStorage), null);
-  assert.equal(
-    diagnosticsStorage.hasItem(autoMineDiagnostics.AUTO_MINE_DIAGNOSTICS_STORAGE_KEY),
-    false,
-    "corrupt Auto-Miner diagnostics must be cleared from localStorage",
-  );
-  autoMineDiagnostics.writeAutoMineDiagnostics({
-    phase: "retry-wait",
-    progress: "Saved session is paused and will retry automatically.",
-    autoResumeRequested: true,
-    lastErrorKind: "network",
-    lastStopReason: "retry-wait",
-  }, { storage: diagnosticsStorage, now: 1234 });
-  assert.deepEqual(autoMineDiagnostics.readAutoMineDiagnostics(diagnosticsStorage), {
-    phase: "retry-wait",
-    progress: "Saved session is paused and will retry automatically.",
-    runningParams: null,
-    isAutoMining: false,
-    autoResumeRequested: true,
-    sessionExpired: false,
-    lastErrorKind: "network",
-    lastErrorMessage: null,
-    lastErrorRawMessage: null,
-    lastStopReason: "retry-wait",
-    lastEpoch: null,
-    retryCount: 0,
-    updatedAt: 1234,
-  });
-  autoMineDiagnostics.writeAutoMineDiagnostics({
-    lastErrorRawMessage: `rpc_url=https://rpc.example/secret account=0x1111111111111111111111111111111111111111 ${"f".repeat(64)} ${"x".repeat(640)}`,
-  }, { storage: diagnosticsStorage, now: 1235 });
-  const sanitizedAutoMineDiagnostics = autoMineDiagnostics.readAutoMineDiagnostics(diagnosticsStorage);
-  assert.ok(sanitizedAutoMineDiagnostics?.lastErrorRawMessage?.includes("<redacted>"));
-  assert.ok((sanitizedAutoMineDiagnostics?.lastErrorRawMessage?.length ?? 0) <= 500);
-  assert.doesNotMatch(
-    sanitizedAutoMineDiagnostics?.lastErrorRawMessage ?? "",
-    /rpc\.example|1111111111111111111111111111111111111111|f{64}/,
-    "Auto-Miner diagnostics raw messages must redact provider URLs, wallet addresses, and hex secrets before storage",
-  );
-  assert.equal(
-    autoMineDiagnostics.sanitizeAutoMineDiagnosticsSnapshot({
-      lastErrorRawMessage: "x".repeat(640),
-    }).lastErrorRawMessage?.endsWith("...<truncated>"),
-    true,
-    "Auto-Miner diagnostics raw messages must be clamped when reading legacy localStorage entries",
-  );
-  const supportDiagnostics = autoMineDiagnostics.getAutoMineSupportDiagnostics({
-    ...autoMineDiagnostics.createDefaultAutoMineDiagnosticsSnapshot(),
-    lastErrorKind: "network",
-    lastErrorMessage: "RPC unavailable",
-    lastErrorRawMessage: "sensitive raw provider detail",
-    lastStopReason: "retry-wait",
-    lastEpoch: "2414",
-    retryCount: 3,
-    updatedAt: 123,
-  });
-  assert.equal(supportDiagnostics.lastStopReason, "retry-wait");
-  assert.equal(supportDiagnostics.lastErrorKind, "network");
-  assert.equal(supportDiagnostics.lastEpoch, "2414");
-  assert.equal(supportDiagnostics.retryCount, 3);
-  assert.equal("lastErrorRawMessage" in supportDiagnostics, false);
-  assert.equal(
-    autoMineDiagnostics.sanitizeAutoMineDiagnosticsSnapshot({
-      phase: "bogus",
-      lastErrorKind: "broken",
-      lastStopReason: "wrong",
-      updatedAt: "bad",
-    }).phase,
-    "idle",
-  );
-  assert.equal(
-    autoMineDiagnostics.sanitizeAutoMineDiagnosticsSnapshot({ lastErrorKind: "wrong-network" }).lastErrorKind,
-    "wrong-network",
-    "Auto-Miner diagnostics must preserve wrong-network errors for support export",
-  );
-  for (const retryCount of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY]) {
-    assert.equal(
-      autoMineDiagnostics.sanitizeAutoMineDiagnosticsSnapshot({ retryCount }).retryCount,
-      0,
-      `invalid Auto-Miner diagnostics retryCount ${String(retryCount)} must be discarded`,
-    );
-  }
-  for (const updatedAt of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY]) {
-    assert.equal(
-      autoMineDiagnostics.sanitizeAutoMineDiagnosticsSnapshot({ updatedAt }).updatedAt,
-      0,
-      `invalid Auto-Miner diagnostics updatedAt ${String(updatedAt)} must be discarded`,
-    );
-  }
-  const autoMineDiagnosticsSource = readFileSync("app/lib/mining/autoMineDiagnostics.ts", "utf8");
-  assert.match(
-    autoMineDiagnosticsSource,
-    /function normalizeAutoMineDiagnosticsCounter[\s\S]*typeof value === "number"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*value >= 0[\s\S]*retryCount: normalizeAutoMineDiagnosticsCounter\(candidate\.retryCount\)/,
-    "Auto-Miner diagnostics retry counters must use safe non-negative integer normalization",
-  );
-  assert.match(
-    autoMineDiagnosticsSource,
-    /function normalizeAutoMineDiagnosticsUpdatedAt[\s\S]*typeof value === "number"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*value >= 0[\s\S]*updatedAt: normalizeAutoMineDiagnosticsUpdatedAt\(candidate\.updatedAt\)/,
-    "Auto-Miner diagnostics timestamps must use safe non-negative integer normalization",
-  );
-  assert.doesNotMatch(
-    autoMineDiagnosticsSource,
-    /Number\.isInteger\(candidate\.retryCount\)|Number\(candidate\.retryCount\)|Number\.isFinite\(candidate\.updatedAt\)|Number\(candidate\.updatedAt\)/,
-    "Auto-Miner diagnostics must not return to broad retry/timestamp coercion",
-  );
-  autoMineDiagnostics.clearAutoMineDiagnostics(diagnosticsStorage);
-  assert.equal(autoMineDiagnostics.readAutoMineDiagnostics(diagnosticsStorage), null);
-
-  autoMineDebugOverride.writeAutoMineDebugOverride({
-    phase: "retry-wait",
-    progress: "Auto-miner paused: RPC offline for too long. Retrying automatically...",
-    runningParams: { betStr: "1.25", blocks: 4, rounds: 12 },
-  }, { storage: diagnosticsStorage, now: 2222 });
-  assert.deepEqual(autoMineDebugOverride.readAutoMineDebugOverride(diagnosticsStorage), {
-    phase: "retry-wait",
-    progress: "Auto-miner paused: RPC offline for too long. Retrying automatically...",
-    runningParams: { betStr: "1.25", blocks: 4, rounds: 12 },
-    updatedAt: 2222,
-  });
-  autoMineDebugOverride.writeAutoMineDebugOverride({
-    phase: "running",
-    progress: "Synthetic debug override with invalid clock.",
-    runningParams: null,
-  }, { storage: diagnosticsStorage, now: Number.POSITIVE_INFINITY });
-  assert.deepEqual(autoMineDebugOverride.readAutoMineDebugOverride(diagnosticsStorage), {
-    phase: "running",
-    progress: "Synthetic debug override with invalid clock.",
-    runningParams: null,
-    updatedAt: 0,
-  });
-  assert.equal(
-    autoMineDebugOverride.sanitizeAutoMineDebugOverride({
-      phase: "wrong",
-      runningParams: { betStr: "1", blocks: 2, rounds: 3 },
-    }),
-    null,
-  );
-  for (const updatedAt of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY]) {
-    assert.equal(
-      autoMineDebugOverride.sanitizeAutoMineDebugOverride({
-        phase: "running",
-        runningParams: null,
-        updatedAt,
-      })?.updatedAt,
-      0,
-      `invalid Auto-Miner debug override updatedAt ${String(updatedAt)} must be discarded`,
-    );
-  }
-  const autoMineDebugOverrideSource = readFileSync("app/lib/mining/autoMineDebugOverride.ts", "utf8");
-  assert.match(
-    autoMineDebugOverrideSource,
-    /function normalizeAutoMineDebugUpdatedAt[\s\S]*typeof value === "number"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*value >= 0[\s\S]*updatedAt: normalizeAutoMineDebugUpdatedAt\(candidate\.updatedAt\)[\s\S]*updatedAt: normalizeAutoMineDebugUpdatedAt\(options\?\.now \?\? Date\.now\(\)\)/,
-    "Auto-Miner debug overrides must normalize stored and newly written timestamps",
-  );
-  assert.doesNotMatch(
-    autoMineDebugOverrideSource,
-    /Number\.isFinite\(candidate\.updatedAt\)|Number\(candidate\.updatedAt\)|updatedAt:\s*options\?\.now \?\? Date\.now\(\)/,
-    "Auto-Miner debug overrides must not return to broad timestamp coercion",
-  );
-  diagnosticsStorage.setItem(autoMineDebugOverride.AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY, "{bad json");
-  assert.equal(autoMineDebugOverride.readAutoMineDebugOverride(diagnosticsStorage), null);
-  assert.equal(
-    diagnosticsStorage.hasItem(autoMineDebugOverride.AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY),
-    false,
-    "corrupt Auto-Miner debug override must be cleared from localStorage",
-  );
-  diagnosticsStorage.setItem(
-    autoMineDebugOverride.AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY,
-    JSON.stringify({ phase: "wrong", runningParams: { betStr: "1", blocks: 2, rounds: 3 } }),
-  );
-  assert.equal(autoMineDebugOverride.readAutoMineDebugOverride(diagnosticsStorage), null);
-  assert.equal(
-    diagnosticsStorage.hasItem(autoMineDebugOverride.AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY),
-    false,
-    "invalid Auto-Miner debug override must be cleared from localStorage",
-  );
-  const autoMineDebugOverrideHookSource = readFileSync("app/hooks/useAutoMineDebugOverride.ts", "utf8");
-  assert.match(
-    autoMineDebugOverrideHookSource,
-    /import \{ useEffect, useMemo, useSyncExternalStore \} from "react";[\s\S]*clearAutoMineDebugOverride[\s\S]*useEffect\(\(\) => \{[\s\S]*if \(rawOverride && !override\) clearAutoMineDebugOverride\(\)/,
-    "Auto-Miner debug override hook must clear corrupt or invalid localStorage entries after render",
-  );
-  autoMineDebugOverride.clearAutoMineDebugOverride(diagnosticsStorage);
-  assert.equal(autoMineDebugOverride.readAutoMineDebugOverride(diagnosticsStorage), null);
-
-  assert.equal(
-    autoMineRunnerStopReason.getAutoMineRunnerCatchStopReason({
-      insufficientFunds: false,
-      pendingNonceBlocked: false,
-      sessionExpired: false,
-      shouldAutoResume: true,
-    }),
-    "retry-wait",
-  );
-  assert.equal(
-    autoMineRunnerStopReason.getAutoMineRunnerCatchStopReason({
-      insufficientFunds: false,
-      pendingNonceBlocked: false,
-      sessionExpired: true,
-      shouldAutoResume: true,
-    }),
-    "session-expired",
-  );
-  assert.equal(
-    autoMineRunnerStopReason.getAutoMineRunnerCatchStopReason({
-      insufficientFunds: true,
-      pendingNonceBlocked: true,
-      sessionExpired: false,
-      shouldAutoResume: true,
-    }),
-    "insufficient-balance",
-  );
-  assert.equal(
-    autoMineRunnerStopReason.getAutoMineRunnerCatchStopReason({
-      insufficientFunds: false,
-      pendingNonceBlocked: true,
-      sessionExpired: false,
-      shouldAutoResume: false,
-    }),
-    "pending-nonce-blocked",
-  );
-  assert.equal(
-    autoMineRunnerStopReason.getAutoMineRunnerCatchStopReason({
-      insufficientFunds: false,
-      pendingNonceBlocked: false,
-      sessionExpired: false,
-      shouldAutoResume: false,
-    }),
-    "error",
-  );
-
-  const restoreFingerprint = autoMineRestoreDeduper.getAutoMineRestoreFingerprint({
-    active: true,
-    betStr: "1.0",
-    blocks: 3,
-    rounds: 500,
-    nextRoundIndex: 81,
-    lastPlacedEpoch: "2413",
-  });
-  assert.equal(restoreFingerprint, "1.0|3|500|81|2413");
-  assert.equal(
-    autoMineRestoreDeduper.shouldSuppressDuplicateAutoMineRestore({
-      previousAt: 10_000,
-      previousFingerprint: restoreFingerprint,
-      nextFingerprint: restoreFingerprint,
-      now: 12_500,
-      cooldownMs: 4_000,
-    }),
-    true,
-  );
-  assert.equal(
-    autoMineRestoreDeduper.shouldSuppressDuplicateAutoMineRestore({
-      previousAt: 10_000,
-      previousFingerprint: restoreFingerprint,
-      nextFingerprint: "1.0|3|500|82|2414",
-      now: 12_500,
-      cooldownMs: 4_000,
-    }),
-    false,
-  );
-  for (const previousAt of [Number.NaN, -1, 10_000.5, Number.MAX_SAFE_INTEGER + 1, 13_000]) {
-    assert.equal(
-      autoMineRestoreDeduper.shouldSuppressDuplicateAutoMineRestore({
-        previousAt,
-        previousFingerprint: restoreFingerprint,
-        nextFingerprint: restoreFingerprint,
-        now: 12_500,
-        cooldownMs: 4_000,
-      }),
-      false,
-      `invalid Auto-Miner restore previousAt ${String(previousAt)} must not suppress recovery`,
-    );
-  }
-  for (const now of [Number.NaN, -1, 12_500.5, Number.POSITIVE_INFINITY]) {
-    assert.equal(
-      autoMineRestoreDeduper.shouldSuppressDuplicateAutoMineRestore({
-        previousAt: 10_000,
-        previousFingerprint: restoreFingerprint,
-        nextFingerprint: restoreFingerprint,
-        now,
-        cooldownMs: 4_000,
-      }),
-      false,
-      `invalid Auto-Miner restore now ${String(now)} must not suppress recovery`,
-    );
-  }
-  for (const cooldownMs of [Number.NaN, 0, -1, 4_000.5, Number.POSITIVE_INFINITY]) {
-    assert.equal(
-      autoMineRestoreDeduper.shouldSuppressDuplicateAutoMineRestore({
-        previousAt: 10_000,
-        previousFingerprint: restoreFingerprint,
-        nextFingerprint: restoreFingerprint,
-        now: 12_500,
-        cooldownMs,
-      }),
-      false,
-      `invalid Auto-Miner restore cooldown ${String(cooldownMs)} must not suppress recovery`,
-    );
-  }
-  const autoMineRestoreDeduperSource = readFileSync("app/lib/mining/autoMineRestoreDeduper.ts", "utf8");
-  assert.match(
-    autoMineRestoreDeduperSource,
-    /const previousRestoreAt = previousAt[\s\S]*typeof previousRestoreAt !== "number"[\s\S]*Number\.isSafeInteger\(previousRestoreAt\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*Number\.isSafeInteger\(cooldownMs\)[\s\S]*previousRestoreAt > now[\s\S]*return now - previousRestoreAt < cooldownMs/,
-    "Auto-Miner restore dedupe must suppress only for safe non-future timestamps inside a valid cooldown",
-  );
-  assert.doesNotMatch(
-    autoMineRestoreDeduperSource,
-    /Number\(previousAt\)|Number\.isFinite\(previousAt\)/,
-    "Auto-Miner restore dedupe must not rely on broad timestamp coercion",
-  );
-
-  const chunkStorage = (() => {
-    const map = new Map();
-    return {
-      getItem: (key) => map.get(key) ?? null,
-      removeItem: (key) => {
-        map.delete(key);
-      },
-      setItem: (key, value) => {
-        map.set(key, value);
-      },
-    };
-  })();
-  assert.equal(
-    chunkReloadRecovery.isChunkLoadLikeErrorMessage(
-      "Loading chunk _app-pages-browser_app_components_WhitePaper_tsx failed. (timeout: /_next/static/chunks/foo.js)",
-    ),
-    true,
-  );
-  assert.equal(
-    chunkReloadRecovery.isChunkLoadLikeErrorMessage(
-      "Failed to fetch dynamically imported module: https://example.com/_next/static/chunks/app/page.js",
-    ),
-    true,
-  );
-  assert.equal(
-    chunkReloadRecovery.isChunkLoadLikeErrorMessage(
-      "Importing a module script failed. https://example.com/_next/static/chunks/app/layout.js",
-    ),
-    true,
-  );
-  assert.equal(chunkReloadRecovery.shouldAttemptChunkReloadOnce(chunkStorage, 1_000), true);
-  assert.equal(chunkReloadRecovery.shouldAttemptChunkReloadOnce(chunkStorage, 2_000), false);
-  chunkReloadRecovery.clearExpiredChunkReloadAttempt(
-    chunkStorage,
-    1_000 + chunkReloadRecovery.CHUNK_RELOAD_WINDOW_MS + 1,
-  );
-  assert.equal(chunkReloadRecovery.shouldAttemptChunkReloadOnce(chunkStorage, 20_000), true);
-  const malformedChunkStorage = (() => {
-    const map = new Map();
-    return {
-      getItem: (key) => map.get(key) ?? null,
-      removeItem: (key) => {
-        map.delete(key);
-      },
-      setItem: (key, value) => {
-        map.set(key, value);
-      },
-    };
-  })();
-  malformedChunkStorage.setItem(chunkReloadRecovery.CHUNK_RELOAD_KEY, "1e3");
-  assert.equal(chunkReloadRecovery.shouldAttemptChunkReloadOnce(malformedChunkStorage, 3_000), true);
-  assert.equal(malformedChunkStorage.getItem(chunkReloadRecovery.CHUNK_RELOAD_KEY), "3000");
-  malformedChunkStorage.setItem(chunkReloadRecovery.CHUNK_RELOAD_KEY, "03000");
-  chunkReloadRecovery.clearExpiredChunkReloadAttempt(malformedChunkStorage, 4_000);
-  assert.equal(malformedChunkStorage.getItem(chunkReloadRecovery.CHUNK_RELOAD_KEY), null);
-  malformedChunkStorage.setItem(chunkReloadRecovery.CHUNK_RELOAD_KEY, "9999");
-  assert.equal(chunkReloadRecovery.shouldAttemptChunkReloadOnce(malformedChunkStorage, 4_000), true);
-  assert.equal(malformedChunkStorage.getItem(chunkReloadRecovery.CHUNK_RELOAD_KEY), "4000");
-  assert.equal(chunkReloadRecovery.shouldAttemptChunkReloadOnce(malformedChunkStorage, Number.NaN), false);
-  assert.equal(malformedChunkStorage.getItem(chunkReloadRecovery.CHUNK_RELOAD_KEY), "4000");
-  chunkReloadRecovery.clearExpiredChunkReloadAttempt(malformedChunkStorage, Number.POSITIVE_INFINITY);
-  assert.equal(malformedChunkStorage.getItem(chunkReloadRecovery.CHUNK_RELOAD_KEY), null);
-  let replacedUrl = null;
-  chunkReloadRecovery.reloadWithCacheBust({
-    href: "http://localhost:3000/?_r=legacy&tab=hub",
-    reload: () => {
-      throw new Error("should use replace");
-    },
-    replace: (url) => {
-      replacedUrl = url;
-    },
-  }, 21_000);
-  assert.equal(replacedUrl, "http://localhost:3000/?tab=hub&__lore_reload=21000");
-  chunkReloadRecovery.reloadWithCacheBust({
-    href: "http://localhost:3000/?tab=hub",
-    reload: () => {
-      throw new Error("should use replace after invalid now fallback");
-    },
-    replace: (url) => {
-      replacedUrl = url;
-    },
-  }, Number.NaN);
-  assert.match(replacedUrl, /^http:\/\/localhost:3000\/\?tab=hub&__lore_reload=\d+$/);
-  const chunkReloadRecoverySource = readFileSync("app/lib/chunkReloadRecovery.ts", "utf8");
-  assert.match(
-    chunkReloadRecoverySource,
-    /function parseStoredChunkReloadAt[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\{0,15\}\)\$\/[\s\S]*Number\.parseInt\(trimmed, 10\)[\s\S]*parsed > now[\s\S]*const lastAt = parseStoredChunkReloadAt\(raw, currentNow\)/,
-    "chunk reload recovery must canonical-parse stored retry timestamps and reject future evidence",
-  );
-  assert.doesNotMatch(
-    chunkReloadRecoverySource,
-    /Number\(raw\)|Number\.isFinite\(lastAt\)/,
-    "chunk reload recovery must not rely on broad localStorage timestamp coercion",
-  );
-  const historyCalls = [];
-  assert.equal(
-    chunkReloadRecovery.stripChunkReloadCacheParam(
-      { href: "http://localhost:3000/?tab=hub&_r=legacy&__lore_reload=21000#board" },
-      {
-        state: { ok: true },
-        replaceState: (...args) => historyCalls.push(args),
-      },
-    ),
-    true,
-  );
-  assert.deepEqual(historyCalls, [[{ ok: true }, "", "/?tab=hub#board"]]);
-
-  await assert.rejects(
-    () =>
-      miningShared.findConfirmedEpochForTiles(
-        {
-          readContract: async () => {
-            throw new Error("rpc timeout");
-          },
-        },
-        "0x0000000000000000000000000000000000000001",
-        [11n, 12n],
-        [1, 2],
-      ),
-    /rpc timeout/,
-  );
-
-  assert.deepEqual(
-    autoMineError.getAutoMineUserMessage(new Error("must have valid access token")),
-    {
-      diagnosticsErrorKind: "session-expired",
-      rawMessage: "must have valid access token",
-      sessionExpired: true,
-      networkDown: false,
-      walletUnavailable: false,
-      pendingNonceBlocked: false,
-      userMessage: "Session expired. Log out, log in again, then reload this page - the bot will auto-resume.",
-    },
-  );
-  assert.equal(
-    autoMineError.getAutoMineUserMessage(new Error("public client unavailable")).diagnosticsErrorKind,
-    "wallet-unavailable",
-  );
-  assert.equal(
-    autoMineError.getAutoMineUserMessage(new Error("public client unavailable")).userMessage,
-    "Auto-miner paused: Privy wallet not ready. Retrying automatically...",
-  );
-  assert.deepEqual(
-    autoMineError.getAutoMineUserMessage(new Error("pending transaction blocked by nonce")),
-    {
-      diagnosticsErrorKind: "pending-nonce-blocked",
-      rawMessage: "pending transaction blocked by nonce",
-      sessionExpired: false,
-      networkDown: false,
-      walletUnavailable: false,
-      pendingNonceBlocked: true,
-      userMessage:
-        "Auto-miner paused: wallet has a stuck pending transaction. Open Settings and clear or replace it, then start the bot again.",
-    },
-  );
-  assert.equal(
-    autoMineError.getAutoMineUserMessage(new Error("pending transaction blocked by nonce")).diagnosticsErrorKind,
-    "pending-nonce-blocked",
-  );
-  assert.deepEqual(
-    autoMineError.getAutoMineUserMessage(new Error("Connector chain mismatch: wallet is on the wrong network")),
-    {
-      diagnosticsErrorKind: "wrong-network",
-      rawMessage: "connector chain mismatch: wallet is on the wrong network",
-      sessionExpired: false,
-      networkDown: false,
-      walletUnavailable: false,
-      pendingNonceBlocked: false,
-      userMessage: "Auto-miner stopped: wallet is on the wrong network. Switch to Linea Sepolia and start again.",
-    },
-  );
-  assert.equal(
-    autoMineError.getAutoMineUserMessage(new Error("insufficient funds for gas * price + value")).userMessage,
-    "Auto-miner stopped: not enough ETH for gas in the Privy wallet.",
-  );
-  assert.equal(
-    autoMineError.getAutoMineUserMessage(new Error("execution reverted: EpochClosing()")).userMessage,
-    "Round skipped (epoch ended). Press START BOT to continue.",
-  );
-  assert.equal(
-    autoMineError.getAutoMineUserMessage(new Error("execution reverted: ERC20InsufficientAllowance")).userMessage,
-    "Auto-miner stopped: transaction reverted on-chain. No bet was placed.",
-  );
-  assert.equal(
-    autoMineError.getAutoMineUserMessage(new Error("contract token mismatch")).userMessage,
-    "Auto-miner stopped: configured token does not match the game contract.",
-  );
-  assert.equal(
-    autoMineError.getAutoMineUserMessage(new Error("network request failed: provider secret details")).userMessage,
-    "Auto-miner paused: RPC offline for too long. Retrying automatically...",
-  );
-
-  const cache = routeCache.createRouteCache(2);
-  const cacheKey = "messages";
-  const inflightVersion = cache.beginWrite(cacheKey);
-  cache.invalidate(cacheKey);
-  cache.setIfLatest(cacheKey, { stale: true }, 1000, inflightVersion);
-  assert.equal(cache.getStale(cacheKey), null);
-
-  const freshVersion = cache.beginWrite(cacheKey);
-  cache.setIfLatest(cacheKey, { fresh: true }, 1000, freshVersion);
-  assert.deepEqual(cache.getStale(cacheKey), { fresh: true });
-
-  const boundedCache = routeCache.createRouteCache(1);
-  const evictedVersion = boundedCache.beginWrite("evicted");
-  boundedCache.setIfLatest("evicted", { value: 1 }, 1000, evictedVersion);
-  boundedCache.set("retained", { value: 2 }, 1000);
-  assert.equal(boundedCache.beginWrite("evicted"), 1, "LRU eviction must prune orphaned write metadata");
-
-  const emptyKeyCache = routeCache.createRouteCache(1);
-  emptyKeyCache.set("", { empty: true }, 1000);
-  emptyKeyCache.set("retained", { retained: true }, 1000);
-  assert.equal(emptyKeyCache.getStale(""), null, "LRU eviction must delete an empty string cache key");
-  assert.deepEqual(emptyKeyCache.getStale("retained"), { retained: true });
-
-  const oversizeKeyCache = routeCache.createRouteCache(2);
-  const oversizeCacheKey = "k".repeat(4097);
-  const oversizePayload = { value: "oversize" };
-  assert.deepEqual(oversizeKeyCache.set(oversizeCacheKey, oversizePayload, 1000), oversizePayload);
-  assert.equal(oversizeKeyCache.getFresh(oversizeCacheKey), null, "oversized route cache keys must not be fresh");
-  assert.equal(oversizeKeyCache.getStale(oversizeCacheKey), null, "oversized route cache keys must not be retained");
-  assert.equal(oversizeKeyCache.size(), 0, "oversized route cache keys must not occupy cache capacity");
-  const oversizeVersion = oversizeKeyCache.beginWrite(oversizeCacheKey);
-  assert.equal(Number.isNaN(oversizeVersion), true, "oversized route cache writes must use an invalid version");
-  assert.equal(oversizeKeyCache.getWriteVersion(oversizeCacheKey), 0, "oversized route cache writes must not keep metadata");
-  const oversizeInflight = Promise.resolve(oversizePayload);
-  assert.equal(oversizeKeyCache.setInflight(oversizeCacheKey, oversizeInflight), oversizeInflight);
-  assert.equal(oversizeKeyCache.getInflight(oversizeCacheKey), null, "oversized inflight cache keys must not be retained");
-  const oversizeRefresh = Promise.resolve();
-  assert.equal(oversizeKeyCache.setRefresh(oversizeCacheKey, oversizeRefresh), oversizeRefresh);
-  assert.equal(oversizeKeyCache.getRefresh(oversizeCacheKey), null, "oversized refresh cache keys must not be retained");
-  assert.deepEqual(
-    oversizeKeyCache.setIfLatest(oversizeCacheKey, oversizePayload, 1000, 1),
-    oversizePayload,
-    "oversized latest cache writes must return payload without caching",
-  );
-  assert.equal(oversizeKeyCache.size(), 0, "oversized latest cache writes must not occupy cache capacity");
-
-  const controlKeyCache = routeCache.createRouteCache(2);
-  const controlCacheKey = "bad\nkey";
-  const controlPayload = { value: "control" };
-  assert.deepEqual(controlKeyCache.set(controlCacheKey, controlPayload, 1000), controlPayload);
-  assert.equal(controlKeyCache.getFresh(controlCacheKey), null, "control-character route cache keys must not be fresh");
-  assert.equal(controlKeyCache.getStale(controlCacheKey), null, "control-character route cache keys must not be retained");
-  assert.equal(controlKeyCache.size(), 0, "control-character route cache keys must not occupy cache capacity");
-  const controlVersion = controlKeyCache.beginWrite(controlCacheKey);
-  assert.equal(Number.isNaN(controlVersion), true, "control-character route cache writes must use an invalid version");
-  assert.equal(controlKeyCache.getWriteVersion(controlCacheKey), 0, "control-character route cache writes must not keep metadata");
-  const controlInflight = Promise.resolve(controlPayload);
-  assert.equal(controlKeyCache.setInflight(controlCacheKey, controlInflight), controlInflight);
-  assert.equal(controlKeyCache.getInflight(controlCacheKey), null, "control-character inflight cache keys must not be retained");
-  const controlRefresh = Promise.resolve();
-  assert.equal(controlKeyCache.setRefresh(controlCacheKey, controlRefresh), controlRefresh);
-  assert.equal(controlKeyCache.getRefresh(controlCacheKey), null, "control-character refresh cache keys must not be retained");
-  assert.deepEqual(
-    controlKeyCache.setIfLatest(controlCacheKey, controlPayload, 1000, 1),
-    controlPayload,
-    "control-character latest cache writes must return payload without caching",
-  );
-  assert.equal(controlKeyCache.size(), 0, "control-character latest cache writes must not occupy cache capacity");
-
-  for (const maxEntries of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {
-    const invalidCapacityCache = routeCache.createRouteCache(maxEntries);
-    invalidCapacityCache.set("entry", { value: String(maxEntries) }, 1000);
-    assert.equal(
-      invalidCapacityCache.size(),
-      0,
-      `invalid route cache capacity ${String(maxEntries)} must not keep entries`,
-    );
-    assert.equal(
-      invalidCapacityCache.getStale("entry"),
-      null,
-      `invalid route cache capacity ${String(maxEntries)} must fail closed`,
-    );
-  }
-
-  const pendingCache = routeCache.createRouteCache(1);
-  const pendingVersion = pendingCache.beginWrite("pending");
-  pendingCache.setInflight("pending", Promise.resolve({ value: 1 }));
-  pendingCache.setIfLatest("pending", { value: 1 }, 1000, pendingVersion);
-  pendingCache.set("other", { value: 2 }, 1000);
-  assert.equal(pendingCache.getWriteVersion("pending"), pendingVersion, "active writes must retain their version after eviction");
-  pendingCache.clearInflight("pending");
-  assert.equal(pendingCache.getWriteVersion("pending"), 0, "completed evicted writes must release version metadata");
-
-  const invalidatedCache = routeCache.createRouteCache(1);
-  const staleVersion = invalidatedCache.beginWrite("invalidated");
-  invalidatedCache.setInflight("invalidated", Promise.resolve({ stale: true }));
-  invalidatedCache.invalidate("invalidated");
-  invalidatedCache.setIfLatest("invalidated", { stale: true }, 1000, staleVersion);
-  invalidatedCache.clearInflight("invalidated");
-  assert.equal(invalidatedCache.getStale("invalidated"), null, "invalidated async writes must not repopulate cache");
-  assert.equal(invalidatedCache.getWriteVersion("invalidated"), 0, "settled invalidation tombstones must be pruned");
-
-  const directWriteCache = routeCache.createRouteCache(2);
-  const supersededVersion = directWriteCache.beginWrite("shared");
-  directWriteCache.set("shared", { fresh: true }, 1000);
-  directWriteCache.setIfLatest("shared", { stale: true }, 1000, supersededVersion);
-  assert.deepEqual(
-    directWriteCache.getStale("shared"),
-    { fresh: true },
-    "direct writes must supersede older async builds",
-  );
-
-  const invalidTtlCache = routeCache.createRouteCache(8);
-  for (const ttlMs of [Number.NaN, -1, 0, 1.5, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER]) {
-    const key = `ttl:${String(ttlMs)}`;
-    const payload = { ttl: String(ttlMs) };
-    invalidTtlCache.set(key, payload, ttlMs);
-    assert.equal(
-      invalidTtlCache.getFresh(key),
-      null,
-      `invalid route cache ttl ${String(ttlMs)} must not remain fresh`,
-    );
-    assert.deepEqual(
-      invalidTtlCache.getStale(key),
-      payload,
-      `invalid route cache ttl ${String(ttlMs)} may only be available as stale fallback`,
-    );
-  }
-
-  const invalidLatestTtlCache = routeCache.createRouteCache(1);
-  const invalidLatestVersion = invalidLatestTtlCache.beginWrite("latest");
-  invalidLatestTtlCache.setIfLatest("latest", { value: "latest" }, Number.NaN, invalidLatestVersion);
-  assert.equal(
-    invalidLatestTtlCache.getFresh("latest"),
-    null,
-    "setIfLatest must not keep invalid route cache ttl fresh",
-  );
-  assert.deepEqual(invalidLatestTtlCache.getStale("latest"), { value: "latest" });
-
-  const invalidNowCache = routeCache.createRouteCache(1);
-  invalidNowCache.set("clock", { value: "clock" }, 1000);
-  assert.deepEqual(invalidNowCache.getFresh("clock", Date.now()), { value: "clock" });
-  for (const now of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {
-    assert.equal(
-      invalidNowCache.getFresh("clock", now),
-      null,
-      `invalid route cache now ${String(now)} must not read fresh entries`,
-    );
-    assert.deepEqual(
-      invalidNowCache.getStale("clock"),
-      { value: "clock" },
-      `invalid route cache now ${String(now)} must leave stale fallback available`,
-    );
-  }
-
-  const routeCacheTtlSource = readFileSync("app/api/_lib/routeCache.ts", "utf8");
-  assert.match(
-    routeCacheTtlSource,
-    /function computeExpiresAt[\s\S]*Number\.isSafeInteger\(ttlMs\)[\s\S]*Number\.MAX_SAFE_INTEGER - now[\s\S]*expiresAt: computeExpiresAt\(ttlMs\)/,
-    "route cache writes must compute TTL expiry through the fail-closed helper",
-  );
-  assert.match(
-    routeCacheTtlSource,
-    /function isFreshEntry[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*entry\.expiresAt > now[\s\S]*!isFreshEntry\(entry, now\)/,
-    "route cache fresh reads must reject malformed caller-supplied times",
-  );
-  assert.match(
-    routeCacheTtlSource,
-    /function normalizeMaxEntries[\s\S]*Number\.isSafeInteger\(maxEntries\)[\s\S]*const capacity = normalizeMaxEntries\(maxEntries\)[\s\S]*pruneOldest\(cache, capacity\)/,
-    "route cache capacity must be normalized before pruning",
-  );
-  assert.match(
-    routeCacheTtlSource,
-    /MAX_ROUTE_CACHE_KEY_LENGTH[\s\S]*ROUTE_CACHE_KEY_CONTROL_RE[\s\S]*function isUsableCacheKey[\s\S]*key\.length <= MAX_ROUTE_CACHE_KEY_LENGTH && !ROUTE_CACHE_KEY_CONTROL_RE\.test\(key\)[\s\S]*!isUsableCacheKey\(key\)/,
-    "route cache operations must fail closed for oversized or control-character keys before map access",
-  );
-  assert.match(
-    routeCacheTtlSource,
-    /const oldestKey = cache\.keys\(\)\.next\(\);[\s\S]*if \(oldestKey\.done\) break;[\s\S]*const key = oldestKey\.value/,
-    "route cache LRU pruning must not treat an empty string key as missing",
-  );
-  assert.doesNotMatch(
-    routeCacheTtlSource,
-    /expiresAt:\s*Date\.now\(\)\s*\+\s*ttlMs/,
-    "route cache writes must not use broad Date.now() + ttlMs expiry",
-  );
-  const versionedRouteCacheSource = readFileSync("app/api/_lib/versionedRouteCache.ts", "utf8");
-  assert.match(
-    versionedRouteCacheSource,
-    /function isUsableWriteVersion\(value: number\)[\s\S]*Number\.isSafeInteger\(value\) && value > 0[\s\S]*const writeVersion = cache\.beginWrite\(cacheKey\)[\s\S]*if \(!isUsableWriteVersion\(writeVersion\)\) return;[\s\S]*markRouteBackgroundRefresh\(routeMetricKey\)/,
-    "background route refreshes must reject invalid cache write versions before metric and build work",
-  );
-  assert.match(
-    versionedRouteCacheSource,
-    /const writeVersion = cache\.beginWrite\(cacheKey\)[\s\S]*const buildPromise = build\(\);[\s\S]*if \(!isUsableWriteVersion\(writeVersion\)\) \{[\s\S]*requestPromise: buildPromise\.then\(\(result\) => toPayload\(result\)\)/,
-    "foreground route builds with invalid cache keys must bypass cache metadata while still returning a payload",
-  );
-
-  const invalidBackgroundCache = routeCache.createRouteCache(2);
-  let invalidBackgroundBuildCount = 0;
-  let invalidBackgroundErrorCount = 0;
-  let invalidBackgroundCommitCount = 0;
-  versionedRouteCache.startVersionedBackgroundRefresh({
-    cache: invalidBackgroundCache,
-    cacheKey: "bad\nkey",
-    ttlMs: 1000,
-    routeMetricKey: "invalid-background",
-    build: async () => {
-      invalidBackgroundBuildCount += 1;
-      return { invalid: true };
-    },
-    toPayload: (payload) => payload,
-    onError: () => { invalidBackgroundErrorCount += 1; },
-    onCommit: () => { invalidBackgroundCommitCount += 1; },
-  });
-  assert.equal(invalidBackgroundBuildCount, 0, "invalid cache-key background refresh must not run build work");
-  assert.equal(invalidBackgroundErrorCount, 0, "invalid cache-key background refresh must not report skipped work as an error");
-  assert.equal(invalidBackgroundCommitCount, 0, "invalid cache-key background refresh must not commit payloads");
-  assert.equal(invalidBackgroundCache.getRefresh("bad\nkey"), null, "invalid cache-key background refresh must not retain refresh metadata");
-
-  const invalidInflightCache = routeCache.createRouteCache(2);
-  let invalidInflightCommitCount = 0;
-  const invalidInflight = versionedRouteCache.startVersionedInflightBuild({
-    cache: invalidInflightCache,
-    cacheKey: "bad\nkey",
-    ttlMs: 1000,
-    build: async () => ({ raw: true }),
-    toPayload: (payload) => ({ payload }),
-    onCommit: () => { invalidInflightCommitCount += 1; },
-  });
-  assert.deepEqual(await invalidInflight.requestPromise, { payload: { raw: true } });
-  assert.equal(invalidInflightCommitCount, 0, "invalid cache-key foreground builds must not run cache commit hooks");
-  assert.equal(invalidInflightCache.getInflight("bad\nkey"), null, "invalid cache-key foreground builds must not retain inflight metadata");
-  assert.equal(invalidInflightCache.size(), 0, "invalid cache-key foreground builds must not occupy cache capacity");
-
-  const helperCache = routeCache.createRouteCache(2);
-  let resolveStaleBuild;
-  let staleCommitCount = 0;
-  const { requestPromise: staleRequest } = versionedRouteCache.startVersionedInflightBuild({
-    cache: helperCache,
-    cacheKey: "shared",
-    ttlMs: 1000,
-    build: () => new Promise((resolve) => { resolveStaleBuild = resolve; }),
-    toPayload: (payload) => payload,
-    onCommit: () => { staleCommitCount += 1; },
-  });
-  helperCache.set("shared", { fresh: true }, 1000);
-  resolveStaleBuild({ stale: true });
-  assert.deepEqual(await staleRequest, { fresh: true });
-  assert.equal(staleCommitCount, 0, "superseded async builds must not commit stale metadata");
-
-  const inflightRaceCache = routeCache.createRouteCache(2);
-  let resolveOldInflight;
-  let resolveNewInflight;
-  const { requestPromise: oldInflight } = versionedRouteCache.startVersionedInflightBuild({
-    cache: inflightRaceCache,
-    cacheKey: "race",
-    ttlMs: 1000,
-    build: () => new Promise((resolve) => { resolveOldInflight = resolve; }),
-    toPayload: (payload) => payload,
-  });
-  inflightRaceCache.invalidate("race");
-  const { requestPromise: newInflight } = versionedRouteCache.startVersionedInflightBuild({
-    cache: inflightRaceCache,
-    cacheKey: "race",
-    ttlMs: 1000,
-    build: () => new Promise((resolve) => { resolveNewInflight = resolve; }),
-    toPayload: (payload) => payload,
-  });
-  resolveOldInflight({ stale: true });
-  await oldInflight;
-  assert.equal(
-    inflightRaceCache.getInflight("race"),
-    newInflight,
-    "an invalidated stale build must not clear the replacement inflight owner",
-  );
-  resolveNewInflight({ fresh: true });
-  await newInflight;
-
-  const refreshRaceCache = routeCache.createRouteCache(2);
-  let resolveOldRefresh;
-  let resolveNewRefresh;
-  versionedRouteCache.startVersionedBackgroundRefresh({
-    cache: refreshRaceCache,
-    cacheKey: "race",
-    ttlMs: 1000,
-    routeMetricKey: "test-refresh-race",
-    build: () => new Promise((resolve) => { resolveOldRefresh = resolve; }),
-    toPayload: (payload) => payload,
-    onError: (error) => { throw error; },
-  });
-  const oldRefresh = refreshRaceCache.getRefresh("race");
-  refreshRaceCache.invalidate("race");
-  versionedRouteCache.startVersionedBackgroundRefresh({
-    cache: refreshRaceCache,
-    cacheKey: "race",
-    ttlMs: 1000,
-    routeMetricKey: "test-refresh-race",
-    build: () => new Promise((resolve) => { resolveNewRefresh = resolve; }),
-    toPayload: (payload) => payload,
-    onError: (error) => { throw error; },
-  });
-  const newRefresh = refreshRaceCache.getRefresh("race");
-  resolveOldRefresh({ stale: true });
-  await oldRefresh;
-  assert.equal(
-    refreshRaceCache.getRefresh("race"),
-    newRefresh,
-    "an invalidated stale refresh must not clear the replacement refresh owner",
-  );
-  resolveNewRefresh({ fresh: true });
-  await newRefresh;
-
-  const backgroundCache = routeCache.createRouteCache(2);
-  let resolveBackgroundBuild;
-  let backgroundCommitCount = 0;
-  versionedRouteCache.startVersionedBackgroundRefresh({
-    cache: backgroundCache,
-    cacheKey: "background",
-    ttlMs: 1000,
-    routeMetricKey: "test-background-cache",
-    build: () => new Promise((resolve) => { resolveBackgroundBuild = resolve; }),
-    toPayload: (payload) => payload,
-    onCommit: () => { backgroundCommitCount += 1; },
-    onError: (error) => { throw error; },
-  });
-  const backgroundRefresh = backgroundCache.getRefresh("background");
-  backgroundCache.set("background", { fresh: true }, 1000);
-  resolveBackgroundBuild({ stale: true });
-  await backgroundRefresh;
-  assert.deepEqual(backgroundCache.getStale("background"), { fresh: true });
-  assert.equal(backgroundCommitCount, 0, "superseded background refreshes must not commit stale metadata");
-
-  let loopState = autoMineLoopModel.createAutoMineLoopState({
-    rounds: 3,
-    startRoundIndex: 0,
-    restoredLastEpoch: null,
-  });
-  loopState = autoMineLoopModel.reduceAutoMineLoopEvent(loopState, {
-    type: "round-betting-started",
-    liveEpoch: 21n,
-    tiles: [4, 8],
-    selectionEpoch: "21",
-  });
-  assert.deepEqual(loopState.selection, { tiles: [4, 8], epoch: "21" });
-  assert.equal(loopState.progressMessage, "1 / 3 - epoch #21: placing bet (2 tiles)...");
-  assert.deepEqual(loopState.sessionCheckpoint, {
-    nextRoundIndex: 0,
-    lastPlacedEpoch: "21",
-  });
-
-  loopState = autoMineLoopModel.reduceAutoMineLoopEvent(loopState, {
-    type: "network-error",
-    retryCount: 1,
-    waitMs: 500,
-  });
-  assert.equal(loopState.roundIndex, 0);
-  assert.equal(loopState.networkRetries, 1);
-  assert.equal(loopState.progressMessage, "RPC offline - retry 1 in 1s...");
-  assert.equal(loopState.sessionCheckpoint, null);
-
-  loopState = autoMineLoopModel.reduceAutoMineLoopEvent(loopState, {
-    type: "round-recovered-after-network-error",
-    placedEpoch: 21n,
-    tiles: [4, 8],
-  });
-  assert.equal(loopState.roundIndex, 1);
-  assert.equal(loopState.networkRetries, 0);
-  assert.equal(loopState.lastPlacedEpoch, 21n);
-  assert.deepEqual(loopState.selection, { tiles: [4, 8], epoch: "21" });
-  assert.equal(loopState.progressMessage, "1 / 3 - epoch #21 confirmed after RPC recovery; 2 cycles left");
-
-  loopState = autoMineLoopModel.reduceAutoMineLoopEvent(loopState, {
-    type: "round-epoch-ended",
-    liveEpoch: 22n,
-  });
-  assert.equal(loopState.roundIndex, 2);
-  assert.equal(loopState.progressMessage, "2 / 3 - epoch #22 skipped (ended); 1 cycle left");
-  assert.equal(loopState.lastPlacedEpoch, 22n);
-  assert.deepEqual(loopState.sessionCheckpoint, {
-    nextRoundIndex: 2,
-    lastPlacedEpoch: "22",
-  });
-
-  loopState = autoMineLoopModel.reduceAutoMineLoopEvent(loopState, {
-    type: "round-confirmed",
-    placedEpoch: 23n,
-    tiles: [6],
-  });
-  assert.equal(loopState.roundIndex, 3);
-  assert.equal(loopState.lastPlacedEpoch, 23n);
-  assert.equal(loopState.progressMessage, "3 / 3 - epoch #23 confirmed; 0 cycles left");
-  assert.deepEqual(loopState.selection, { tiles: [6], epoch: "23" });
-  assert.equal(loopState.sessionCheckpoint, null);
-
-  loopState = autoMineLoopModel.createAutoMineLoopState({
-    rounds: 3,
-    startRoundIndex: 2,
-    restoredLastEpoch: 22n,
-  });
-  loopState = autoMineLoopModel.reduceAutoMineLoopEvent(loopState, {
-    type: "round-detected-on-chain",
-    placedEpoch: 23n,
-    tiles: [6],
-  });
-  assert.equal(loopState.roundIndex, 3);
-  assert.equal(loopState.lastPlacedEpoch, 23n);
-  assert.equal(loopState.progressMessage, "3 / 3 - epoch #23 confirmed on-chain; 0 cycles left");
-  assert.deepEqual(loopState.selection, { tiles: [6], epoch: "23" });
-  assert.equal(loopState.sessionCheckpoint, null);
-
-  loopState = autoMineLoopModel.reduceAutoMineLoopEvent(loopState, { type: "loop-completed" });
-  assert.equal(loopState.stopReason, "completed");
-  assert.equal(loopState.progressMessage, "Completed 3/3 rounds");
-
-  assert.deepEqual(
-    autoMineLoopPreludePlanner.planAutoMineLoopPrelude({
-      hasRefreshSession: false,
-      lastPlacedEpoch: null,
-      lastSessionRefresh: 1_000,
-      now: 2_000,
-      sessionRefreshIntervalMs: 5_000,
-    }),
-    {
-      operations: [],
-    },
-  );
-  assert.deepEqual(
-    autoMineLoopPreludePlanner.planAutoMineLoopPrelude({
-      hasRefreshSession: true,
-      lastPlacedEpoch: 42n,
-      lastSessionRefresh: 1_000,
-      now: 7_001,
-      sessionRefreshIntervalMs: 5_000,
-    }),
-    {
-      operations: ["refresh-session", "await-epoch-ready"],
-    },
-  );
-  assert.deepEqual(
-    autoMineLoopRoundOutcome.toAutoMineLoopConfirmedEvent({
-      outcome: {
-        kind: "confirmed",
-        source: "recovered-after-network-error",
-        placedEpoch: 42n,
-      },
-      tiles: [3, 7],
-    }),
-    {
-      type: "round-recovered-after-network-error",
-      placedEpoch: 42n,
-      tiles: [3, 7],
-    },
-  );
-  assert.deepEqual(
-    autoMineLoopTransitionPlanner.planAutoMinePreparedRoundTransition({
-      kind: "skip-existing",
-      liveEpoch: 77n,
-      alreadyBetTiles: [1, 2],
-      effectiveBlocks: 2,
-    }),
-    {
-      kind: "continue",
-      action: {
-        event: { type: "round-skipped-existing", liveEpoch: 77n },
-        syncEffects: { session: true, selection: true, progress: false },
-      },
-    },
-  );
-  assert.deepEqual(
-    autoMineLoopTransitionPlanner.planAutoMineAttemptTransition({
-      epochNeedsResolve: true,
-      outcome: { kind: "submitted" },
-      roundIndex: 1,
-      rounds: 3,
-    }),
-    {
-      kind: "finalize",
-      commandsBefore: [
-        { type: "clear-pending-bet" },
-        {
-          type: "confirmation-start",
-          clearSelection: true,
-          progressMessage: "2 / 3 - confirmed",
-          refetchEpoch: true,
-        },
-      ],
-    },
-  );
-  assert.deepEqual(
-    autoMineLoopTransitionPlanner.planAutoMineRecoveryTransition({
-      kind: "confirmed",
-      source: "recovered-after-network-error",
-      placedEpoch: 88n,
-    }),
-    {
-      kind: "confirmed",
-      commandsBefore: [{ type: "clear-pending-bet" }],
-      outcome: {
-        kind: "confirmed",
-        source: "recovered-after-network-error",
-        placedEpoch: 88n,
-      },
-    },
-  );
-  assert.deepEqual(
-    autoMineLoopTransitionPlanner.planAutoMineNetworkErrorTransition({
-      retryCount: 2,
-      waitMs: 1200,
-    }),
-    {
-      kind: "continue",
-      action: {
-        commandsAfter: [{ type: "sleep", ms: 1200 }],
-        event: { type: "network-error", retryCount: 2, waitMs: 1200 },
-        syncEffects: { progress: true, selection: false, session: false },
-      },
-    },
-  );
-  assert.deepEqual(
-    autoMineLoopTransitionPlanner.planAutoMineLoopCompletionTransition(),
-    {
-      action: {
-        commandsAfter: [{ type: "sleep", ms: 1500 }],
-        event: { type: "loop-completed" },
-        syncEffects: { progress: true, selection: false, session: false },
-      },
-    },
-  );
-
-  assert.deepEqual(
-    autoMineLoopRetryPlanner.planAutoMineLoopNetworkRetry({
-      currentRetryCount: 0,
-      initialMs: 500,
-      maxMs: 10_000,
-      retryMax: 4,
-    }),
-    {
-      kind: "retry",
-      retryCount: 1,
-      waitMs: 500,
-    },
-  );
-  assert.deepEqual(
-    autoMineLoopRetryPlanner.planAutoMineLoopNetworkRetry({
-      currentRetryCount: 3,
-      initialMs: 500,
-      maxExponent: 2,
-      maxMs: 10_000,
-      retryMax: 4,
-    }),
-    {
-      kind: "retry",
-      retryCount: 4,
-      waitMs: 2_000,
-    },
-  );
-  assert.deepEqual(
-    autoMineLoopRetryPlanner.planAutoMineLoopNetworkRetry({
-      currentRetryCount: 4,
-      initialMs: 500,
-      maxMs: 10_000,
-      retryMax: 4,
-    }),
-    {
-      kind: "give-up",
-      retryCount: 5,
-    },
-  );
-  for (const currentRetryCount of [Number.NaN, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-    assert.deepEqual(
-      autoMineLoopRetryPlanner.planAutoMineLoopNetworkRetry({
-        currentRetryCount,
-        initialMs: 500,
-        maxMs: 10_000,
-        retryMax: 4,
-      }),
-      {
-        kind: "give-up",
-        retryCount: 0,
-      },
-      `invalid Auto-Miner retry count ${String(currentRetryCount)} must fail closed`,
-    );
-  }
-  for (const retryMax of [Number.NaN, -1, 4.5, Number.POSITIVE_INFINITY]) {
-    assert.deepEqual(
-      autoMineLoopRetryPlanner.planAutoMineLoopNetworkRetry({
-        currentRetryCount: 1,
-        initialMs: 500,
-        maxMs: 10_000,
-        retryMax,
-      }),
-      {
-        kind: "give-up",
-        retryCount: 1,
-      },
-      `invalid Auto-Miner retry max ${String(retryMax)} must fail closed`,
-    );
-  }
-  for (const timing of [
-    { initialMs: Number.NaN, maxMs: 10_000, maxExponent: undefined },
-    { initialMs: 0, maxMs: 10_000, maxExponent: undefined },
-    { initialMs: 500.5, maxMs: 10_000, maxExponent: undefined },
-    { initialMs: 500, maxMs: 400, maxExponent: undefined },
-    { initialMs: 500, maxMs: Number.POSITIVE_INFINITY, maxExponent: undefined },
-    { initialMs: 500, maxMs: 10_000, maxExponent: 1.5 },
-  ]) {
-    assert.deepEqual(
-      autoMineLoopRetryPlanner.planAutoMineLoopNetworkRetry({
-        currentRetryCount: 1,
-        initialMs: timing.initialMs,
-        maxExponent: timing.maxExponent,
-        maxMs: timing.maxMs,
-        retryMax: 4,
-      }),
-      {
-        kind: "give-up",
-        retryCount: 1,
-      },
-      `invalid Auto-Miner retry timing ${JSON.stringify(timing)} must fail closed`,
-    );
-  }
-  const autoMineLoopRetryPlannerSource = readFileSync("app/lib/mining/autoMineLoopRetryPlanner.ts", "utf8");
-  assert.match(
-    autoMineLoopRetryPlannerSource,
-    /function normalizeNonNegativeSafeInteger[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*function normalizePositiveSafeInteger[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*currentRetryCount === null[\s\S]*maxMs < initialMs[\s\S]*return \{[\s\S]*kind: "give-up"[\s\S]*getNetworkRetryDelayMs\(/,
-    "Auto-Miner retry planner must validate retry counts and timing before scheduling retries",
-  );
-  assert.doesNotMatch(
-    autoMineLoopRetryPlannerSource,
-    /const nextRetryCount = params\.currentRetryCount \+ 1|nextRetryCount > params\.retryMax|getNetworkRetryDelayMs\([\s\S]*params\.initialMs[\s\S]*params\.maxMs/,
-    "Auto-Miner retry planner must not use raw retry parameters after validation",
-  );
+  await runRuntimeRecoveryTests();
+  await runCacheAndPlannerTests();
 
   const loopProgress = [];
   const loopSelections = [];

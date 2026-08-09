@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { argValue, baseCollectorMeta, hasFlag, isAddress, parsePositiveInteger, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
+import { redactProofText } from "./redact-proof-output.mjs";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const ZERO_TX = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -91,7 +92,11 @@ function firstMatchingLine(text, pattern) {
 }
 
 function summarizeLog(text, fallback, artifactPath = "") {
-  return firstMatchingLine(text, /^Summary:/i) || (text && artifactPath ? `artifact: ${artifactPath}` : fallback);
+  const summary = firstMatchingLine(text, /^Summary:/i) || (text && artifactPath ? `artifact: ${artifactPath}` : fallback);
+  if (summary && redactProofText(summary) !== summary) {
+    throw new Error("Signoff Summary evidence contains sensitive or non-summary-safe material; regenerate a redacted input artifact");
+  }
+  return summary;
 }
 
 function requireSuccessfulMainnetEnvLog(name, text) {

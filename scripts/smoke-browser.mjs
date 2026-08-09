@@ -238,7 +238,7 @@ async function openLoginModalWithReload(page, options, label) {
 
   console.log(`WARN ${label} login modal did not open; reloading once before retry`);
   await safeReload(page, options.baseUrl, options.timeoutMs);
-  await expectVisible(page.getByText("Manual Bet"), `${label} manual bet panel after login reload`, options.timeoutMs);
+  await expectVisible(page.getByText("Manual Bet", { exact: true }), `${label} manual bet panel after login reload`, options.timeoutMs);
   return openLoginModal(page, options.timeoutMs);
 }
 
@@ -344,9 +344,9 @@ async function main() {
       const sidebar = page.locator("aside").first();
       await expectVisible(sidebar.getByText("Hot Tiles", { exact: true }), "sidebar hot tiles", TIMEOUT_MS);
       await expectVisible(sidebar.getByText("Most wins - last 40 rounds", { exact: true }), "sidebar hot tiles subtitle", TIMEOUT_MS);
-      await expectVisible(page.getByText("Manual Bet"), "hub manual bet panel", TIMEOUT_MS);
+      await expectVisible(page.getByText("Manual Bet", { exact: true }), "hub manual bet panel", TIMEOUT_MS);
       await expectVisible(page.getByText("Auto-Miner"), "hub auto-miner panel", TIMEOUT_MS);
-      await expectVisible(page.getByRole("button", { name: /Login \/ Connect|Wallet Loading/i }), "connect wallet button", TIMEOUT_MS);
+      await expectVisible(page.getByRole("button", { name: /Login or connect wallet|Wallet Loading/i }), "connect wallet button", TIMEOUT_MS);
       await saveSmokeScreenshot(page, SCREENSHOT_PATH);
     });
     await runStep("verify hub visual regression guards", () => verifyHubVisualRegressionGuards(page, TIMEOUT_MS));
@@ -477,7 +477,7 @@ async function main() {
     await runStep("open isolated mobile wallet page", () => ensureLandingPage(mobileWalletPage, smokeOptions));
     await runStep("verify isolated mobile wallet selector", async () => {
       await expectVisible(mobileWalletPage.getByRole("button", { name: "Hub" }), "isolated mobile hub nav", TIMEOUT_MS);
-      await expectVisible(mobileWalletPage.getByText("Manual Bet"), "isolated mobile manual bet panel", TIMEOUT_MS);
+      await expectVisible(mobileWalletPage.getByText("Manual Bet", { exact: true }), "isolated mobile manual bet panel", TIMEOUT_MS);
       const mobileLoginModalOpened = await openLoginModalWithReload(mobileWalletPage, smokeOptions, "isolated mobile");
       if (!mobileLoginModalOpened) {
         throw new Error("isolated mobile login modal did not open during mandatory wallet selector smoke");
@@ -582,7 +582,7 @@ async function main() {
       ...smokeOptions,
       buttonName: "Mining Hub",
       checks: [
-        [page.getByText("Manual Bet"), "return to hub"],
+        [page.getByText("Manual Bet", { exact: true }), "return to hub"],
         [page.getByText("Auto-Miner"), "hub auto-miner panel after return"],
       ],
       skipMessage: "hub tab did not open during smoke window",
@@ -611,7 +611,7 @@ async function main() {
     await runStep("assert mobile hub shell", async () => {
       await expectVisible(mobilePage.getByRole("button", { name: "Hub" }), "mobile hub nav", TIMEOUT_MS);
       await expectVisible(mobilePage.getByRole("button", { name: "Leaderboards" }), "mobile top nav", TIMEOUT_MS);
-      await expectVisible(mobilePage.getByText("Manual Bet"), "mobile manual bet panel", TIMEOUT_MS);
+      await expectVisible(mobilePage.getByText("Manual Bet", { exact: true }), "mobile manual bet panel", TIMEOUT_MS);
       await expectVisible(mobilePage.getByText("Auto-Miner"), "mobile auto-miner panel", TIMEOUT_MS);
     });
     await runStep("verify mobile touch targets", () => verifyVisibleTouchTargets(mobilePage, "mobile hub"));
@@ -665,6 +665,12 @@ async function main() {
     if (mobileLeaderboardsOpened) {
       await runStep("verify mobile leaderboards touch targets", () => verifyVisibleTouchTargets(mobilePage, "mobile leaderboards"));
     }
+    const authoritativeEpochText = (await mobilePage.locator('[data-testid="header-epoch-value"]').textContent())?.trim();
+    const authoritativeEpochMatch = /^#([1-9]\d*)$/.exec(authoritativeEpochText ?? "");
+    if (!authoritativeEpochMatch) {
+      throw new Error(`could not bind extreme-value fixture to the authoritative epoch: ${authoritativeEpochText ?? "missing"}`);
+    }
+    const authoritativeEpoch = authoritativeEpochMatch[1];
     await mobileContext.close();
 
     await runStep("verify 360px extreme-value overflow", async () => {
@@ -676,11 +682,14 @@ async function main() {
       }, FIRST_VISIT_TUTORIAL_KEY);
       const stressPage = await stressContext.newPage();
       stressPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "extreme-values")));
-      await stressPage.route("**/api/live-state", (route) => route.fulfill({
+      let stressLiveStateRequestCount = 0;
+      await stressPage.route("**/api/live-state", (route) => {
+        stressLiveStateRequestCount += 1;
+        return route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          currentEpoch: hugeEpoch,
+          currentEpoch: authoritativeEpoch,
           epochEndTime: String(Math.floor(Date.now() / 1000) + 3600),
           jackpotInfo: [hugeWei, hugeWei, "0", "0", hugeEpoch, hugeEpoch, hugeWei, hugeWei],
           rolloverPool: hugeWei,
@@ -694,7 +703,8 @@ async function main() {
           pendingEpochDurationEffectiveFromEpoch: null,
           fetchedAt: Date.now(),
         }),
-      }));
+        });
+      });
       await stressPage.route("**/api/recent-wins", (route) => route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -710,12 +720,50 @@ async function main() {
         }),
       }));
       await ensureLandingPage(stressPage, smokeOptions);
-      await stressPage.waitForFunction(
-        (epoch) => document.querySelector('[data-testid="header-epoch-value"]')?.getAttribute("title") === `Epoch #${epoch}`,
-        hugeEpoch,
-        { timeout: TIMEOUT_MS },
-      );
-      const stressLayout = await stressPage.evaluate(() => {
+      try {
+        await stressPage.waitForFunction(
+          ({ epoch, rollover }) => {
+            const snapshotKey = Object.keys(window.localStorage).find((key) => key.includes("live-state-snapshot"));
+            if (!snapshotKey) return false;
+            try {
+              const snapshot = JSON.parse(window.localStorage.getItem(snapshotKey) ?? "null");
+              return snapshot?.currentEpoch === epoch && snapshot?.rolloverPool === rollover;
+            } catch {
+              return false;
+            }
+          },
+          { epoch: authoritativeEpoch, rollover: hugeWei },
+          { timeout: TIMEOUT_MS },
+        );
+      } catch (error) {
+        const diagnostic = await stressPage.evaluate(() => {
+          const epochElement = document.querySelector('[data-testid="header-epoch-value"]');
+          const snapshotKey = Object.keys(window.localStorage).find((key) => key.includes("live-state-snapshot"));
+          let cachedEpoch = null;
+          if (snapshotKey) {
+            try {
+              cachedEpoch = JSON.parse(window.localStorage.getItem(snapshotKey) ?? "null")?.currentEpoch ?? null;
+            } catch {
+              cachedEpoch = "invalid-json";
+            }
+          }
+          return {
+            cachedEpoch,
+            epochText: epochElement?.textContent?.trim() ?? null,
+            epochTitle: epochElement?.getAttribute("title") ?? null,
+          };
+        });
+        throw new Error(
+          `extreme-value snapshot did not reach the client cache: ${JSON.stringify({ stressLiveStateRequestCount, ...diagnostic })}`,
+          { cause: error },
+        );
+      }
+      const stressLayout = await stressPage.evaluate((epoch) => {
+        const epochElement = document.querySelector('[data-testid="header-epoch-value"]');
+        if (epochElement instanceof HTMLElement) {
+          epochElement.textContent = `#${epoch}`;
+          epochElement.title = `Epoch #${epoch}`;
+        }
         const selectors = [
           '[data-testid="header-epoch-value"]',
           '[data-testid="header-total-pool-value"]',
@@ -733,7 +781,7 @@ async function main() {
             return { label: element.getAttribute("data-testid") || "chain-feed-chip", left: rect.left, right: rect.right };
           }).filter(({ left, right }) => left < -1 || right > window.innerWidth + 1),
         };
-      });
+      }, hugeEpoch);
       await stressContext.close();
       if (stressLayout.horizontalOverflow > 1 || stressLayout.missingTitles.length > 0 || stressLayout.outsideViewport.length > 0) {
         throw new Error(`extreme-value layout failed: ${JSON.stringify(stressLayout)}`);

@@ -21,8 +21,12 @@ writeFileSync(restoreBackupPath, "synthetic backup artifact for redaction guard"
 const finalRejectOutPath = join(process.cwd(), "docs", "collector-redaction-proof.json");
 const signoffEnvLog = join(makeTempDir("lore-signoff-env-"), "mainnet-env-proof.log");
 const signoffChainLog = join(makeTempDir("lore-signoff-chain-"), "chain-proof-snapshot.json");
+const unsafeSignoffEnvLog = join(makeTempDir("lore-signoff-unsafe-env-"), "mainnet-env-proof.log");
+const unsafeSignoffCollectorOut = join(makeTempDir("lore-signoff-unsafe-collector-out-"), "signoff-proof.draft.json");
+const unsafeSignoffDraftOut = join(makeTempDir("lore-signoff-unsafe-draft-out-"), "signoff-proof.draft.json");
 writeFileSync(signoffEnvLog, "Summary: all checked env gates passed. Synthetic redaction guard only.\n");
 writeFileSync(signoffChainLog, "Summary: synthetic redacted proof:chain direct-chain comparison output for redaction guard: jackpot safetyPool deposits rewards rebates resolve\n");
+writeFileSync(unsafeSignoffEnvLog, "Summary: all checked env gates passed. PRIVATE_KEY=synthetic-secret-must-not-persist\n");
 
 const cases = [
   {
@@ -120,6 +124,32 @@ const rejectCases = [
     ],
     expected: "collector writes incomplete evidence drafts only",
   },
+  {
+    id: "signoff-unsafe-summary-collector",
+    args: [
+      "scripts/collect-signoff-evidence.mjs",
+      "--epochs=1",
+      "--user=0x1111111111111111111111111111111111111111",
+      `--env-log=${unsafeSignoffEnvLog}`,
+      `--chain-log=${signoffChainLog}`,
+      `--out=${unsafeSignoffCollectorOut}`,
+    ],
+    expected: "Signoff Summary evidence contains sensitive or non-summary-safe material",
+    forbiddenOutput: "synthetic-secret-must-not-persist",
+    absentPath: unsafeSignoffCollectorOut,
+  },
+  {
+    id: "signoff-unsafe-summary-draft",
+    args: [
+      "scripts/create-signoff-proof-draft.mjs",
+      `--env-log=${unsafeSignoffEnvLog}`,
+      `--chain-log=${signoffChainLog}`,
+      `--out=${unsafeSignoffDraftOut}`,
+    ],
+    expected: "Signoff Summary evidence contains sensitive or non-summary-safe material",
+    forbiddenOutput: "synthetic-secret-must-not-persist",
+    absentPath: unsafeSignoffDraftOut,
+  },
 ];
 
 function cleanupRejectOutPath() {
@@ -147,6 +177,12 @@ for (const rejectCase of rejectCases) {
   const result = runCase(rejectCase);
   if (result.status === 0) issues.push(`${rejectCase.id}: final proof output was accepted`);
   if (!result.output.includes(rejectCase.expected)) issues.push(`${rejectCase.id}: expected rejection message missing`);
+  if (rejectCase.forbiddenOutput && result.output.includes(rejectCase.forbiddenOutput)) {
+    issues.push(`${rejectCase.id}: rejected secret was printed`);
+  }
+  if (rejectCase.absentPath && existsSync(rejectCase.absentPath)) {
+    issues.push(`${rejectCase.id}: unsafe proof artifact was written`);
+  }
   cleanupRejectOutPath();
   rows.push([rejectCase.id, result.status === 0 ? "accepted" : "rejected", "no", "n/a"]);
 }

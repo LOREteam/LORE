@@ -11,11 +11,12 @@ import {
   getAddress,
   http,
   keccak256,
-  parseAbi,
   type Address,
   type Hash,
   type Hex,
 } from "viem";
+import { TOKEN_ABI } from "../app/lib/constants";
+import { LINEA_ORE_V10_ABI as READ_ABI } from "../config/generated/lineaOreV10Abi";
 import {
   getConfiguredContractAddress,
   getConfiguredLineaNetwork,
@@ -43,32 +44,6 @@ const MAX_V10_COMPILER_CONFIG_BYTES = 512 * 1024;
 const MAX_V10_COMPILATION_MANIFEST_BYTES = 512 * 1024;
 const EXPECTED_COMPILER = "0.8.36+commit.8a079791";
 const EIP_3860_INITCODE_LIMIT = 49_152;
-const READ_ABI = parseAbi([
-  "function token() view returns (address)",
-  "function balanceOf(address) view returns (uint256)",
-  "function decimals() view returns (uint8)",
-  "function owner() view returns (address)",
-  "function pendingOwner() view returns (address)",
-  "function feeRecipient() view returns (address)",
-  "function currentEpoch() view returns (uint256)",
-  "function epochDuration() view returns (uint256)",
-  "function epochStartTime() view returns (uint256)",
-  "function pendingEpochDuration() view returns (uint256)",
-  "function pendingEpochDurationEta() view returns (uint256)",
-  "function pendingEpochDurationEffectiveFromEpoch() view returns (uint256)",
-  "function pendingFeeRecipient() view returns (address)",
-  "function pendingFeeRecipientEta() view returns (uint256)",
-  "function rolloverPool() view returns (uint256)",
-  "function dailyJackpotPool() view returns (uint256)",
-  "function weeklyJackpotPool() view returns (uint256)",
-  "function accruedOwnerFees() view returns (uint256)",
-  "function accruedBurnFees() view returns (uint256)",
-  "function epochs(uint256) view returns (uint256,uint256,uint256,bool,bool,bool)",
-  "function epochRebatePool(uint256) view returns (uint256)",
-  "function epochRebateClaimed(uint256) view returns (uint256)",
-  "function epochRewardClaimed(uint256) view returns (uint256)",
-]);
-
 function canonicalizeSource(value: string) {
   return value.replace(/\r\n?/g, "\n");
 }
@@ -637,7 +612,7 @@ async function main() {
       client.getChainId(),
       client.getBytecode({ address: contractAddress }),
       client.getBytecode({ address: tokenAddress }),
-      client.readContract({ address: tokenAddress, abi: READ_ABI, functionName: "decimals" }),
+      client.readContract({ address: tokenAddress, abi: TOKEN_ABI, functionName: "decimals" }),
       client.getBlock({ blockTag: "latest" }),
       fresh ? client.getBlock({ blockNumber: expectedDeployBlock! }) : Promise.resolve(null),
       fresh ? client.getBytecode({ address: contractAddress, blockNumber: expectedDeployBlock! - 1n }) : Promise.resolve(undefined),
@@ -760,7 +735,7 @@ async function main() {
       }),
       client.readContract({
         address: tokenAddress,
-        abi: READ_ABI,
+        abi: TOKEN_ABI,
         functionName: "balanceOf",
         args: [contractAddress],
         ...(fresh ? { blockNumber: expectedDeployBlock! } : {}),

@@ -367,7 +367,7 @@ export async function openWalletSelectorFromLoginModal(page, timeoutMs) {
       }
       console.log("WARN wallet selector options did not load on first attempt; retrying auth widget");
       await page.keyboard.press("Escape");
-      await expectVisible(page.getByRole("button", { name: /Login \/ Connect|Wallet Loading/i }), "login modal closes before wallet retry", modalTimeoutMs);
+      await expectVisible(page.getByRole("button", { name: /Login or connect wallet|Wallet Loading/i }), "login modal closes before wallet retry", modalTimeoutMs);
       const reopened = await openLoginModal(page, timeoutMs);
       if (!reopened) throw new Error("login modal did not reopen before wallet selector retry");
     }
@@ -467,7 +467,7 @@ export async function closeLoginModal(page, timeoutMs) {
     await page.keyboard.press("Escape");
   }
 
-  await expectVisible(page.getByRole("button", { name: /Login \/ Connect|Wallet Loading/i }), "login modal closes", modalTimeoutMs);
+  await expectVisible(page.getByRole("button", { name: /Login or connect wallet|Wallet Loading/i }), "login modal closes", modalTimeoutMs);
 }
 
 export async function openChatDrawer(page, options) {

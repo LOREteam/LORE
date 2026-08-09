@@ -8,6 +8,11 @@
   },
   "sourceSha256": "41d07b684cfeb1fd6cd97ec8a93b57096bcf391482b1b15dee2e468c61a6e3df",
   "abiSha256": "96bddbce113f0c1ef7903434a1262492302a8baa0c756ca7a896240084f7aed8",
+  "abiFragmentsSha256": "69218b3a06dbe7faf71f17a33e6a4b21b2e033c6fdfa5f4ca2008dc7a2f1900c",
+  "abiFragmentCompilerSourceUnitsSha256": {
+    "@openzeppelin/contracts/interfaces/draft-IERC6093.sol": "fa7068f56bc180571a6095be6eaef06d51dbe81e30cb128397d993c9599ecc30"
+  },
+  "abiSnapshotSha256": "76ad9f52a0d232d4a87d1ada790b0a3cbd28be58f8bb420447bfd32c7125ccbc",
   "bytecodeSha256": "10ac4550a3712e55ffcf71619025ee14001785526e3b415e8694546c36c1d8c4",
   "bytecodeBytes": 17278,
   "openzeppelinContractsVersion": "5.6.1",

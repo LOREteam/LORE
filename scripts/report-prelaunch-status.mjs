@@ -14,6 +14,8 @@ const checks = [
   { label: "ABI/indexer storage", script: "test:indexer-storage:summary", requiredLocal: true },
   { label: "fetch timeout", script: "test:fetch-timeout:summary", requiredLocal: true },
   { label: "stored number parsing", script: "test:stored-number-parsing:summary", requiredLocal: true },
+  { label: "P1 hardening (including EVM)", script: "test:p1-hardening:all:summary", requiredLocal: true },
+  { label: "P1 performance harness self-test", script: "perf:p1:self-test", requiredLocal: true },
   { label: "TypeScript typecheck", script: "typecheck:summary", requiredLocal: true },
   { label: "ESLint", script: "lint:summary", requiredLocal: true },
   { label: "production build", script: "build:summary", requiredLocal: true },

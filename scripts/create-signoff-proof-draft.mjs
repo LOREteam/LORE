@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { redactProofText } from "./redact-proof-output.mjs";
 
 function refuseFinalProofOutput(outPath) {
   const normalized = path.relative(process.cwd(), outPath).replace(/\\/g, "/");
@@ -103,7 +104,11 @@ function firstMatchingLine(text, pattern) {
 }
 
 function summarizeLog(text, fallback) {
-  return firstMatchingLine(text, /^Summary:/i) || fallback;
+  const summary = firstMatchingLine(text, /^Summary:/i) || fallback;
+  if (summary && redactProofText(summary) !== summary) {
+    throw new Error("Signoff Summary evidence contains sensitive or non-summary-safe material; regenerate a redacted input artifact");
+  }
+  return summary;
 }
 
 function requireSuccessfulMainnetEnvLog(name, text) {

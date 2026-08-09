@@ -15,13 +15,14 @@ import {
   getContractAddress,
   http,
   keccak256,
-  parseAbi,
   parseUnits,
   toHex,
   type Address,
   type Abi,
   type Hex,
 } from "viem";
+import { TOKEN_ABI } from "../app/lib/constants";
+import { GAME_ABI } from "../config/generated/lineaOreV10Abi";
 import {
   getConfiguredContractAddress,
   getConfiguredLineaNetwork,
@@ -154,35 +155,6 @@ const V10_WITH_AUTO_FLUSH = process.argv.includes("--v10-with-auto-flush");
 if (!Number.isSafeInteger(V10_OPTIMIZER_RUNS) || V10_OPTIMIZER_RUNS < 1 || V10_OPTIMIZER_RUNS > 1_000_000) {
   throw new Error("--v10-runs must be an integer from 1 to 1000000");
 }
-const GAME_ABI = parseAbi([
-  "function placeBet(uint256 tileId, uint256 amount)",
-  "function placeBatchBets(uint256[] tileIds, uint256[] amounts)",
-  "function placeBatchBetsSameAmount(uint256[] tileIds, uint256 amount)",
-  "function placeBatchBetsBitmap(uint32 tileMask, uint256 amount)",
-  "function placeBatchBetsBitmapForEpoch(uint256 expectedEpoch, uint32 tileMask, uint256 amount)",
-  "function resolveEpoch(uint256 epoch)",
-  "function claimReward(uint256 epoch)",
-  "function claimRewards(uint256[] claimEpochs)",
-  "function claimEpochRebate(uint256 epoch)",
-  "function claimEpochsRebate(uint256[] claimEpochs)",
-  "function settleEpochDust(uint256 epoch)",
-  "function settleEpochsDust(uint256[] rewardEpochs)",
-  "function settleEpochRebateDust(uint256 epoch)",
-  "function settleEpochsRebateDust(uint256[] rebateEpochs)",
-  "function claimResolverRewards()",
-  "function flushProtocolFees()",
-]);
-const FRONTEND_VIEW_ABI = parseAbi([
-  "function getEpochEndTime(uint256 epoch) view returns (uint256)",
-  "function getJackpotInfo() view returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256)",
-  "function previewRebate(uint256 epoch, address user) view returns (uint256)",
-  "function getRebateInfo(uint256 epoch, address user) view returns (uint256, uint256, uint256, bool, bool)",
-  "function getRebateSummary(address user, uint256[] epochs) view returns (uint256, uint256)",
-]);
-const ERC20_ABI = parseAbi([
-  "function balanceOf(address account) view returns (uint256)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-]);
 const DIAGNOSTIC_SOURCE = `
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
@@ -1868,19 +1840,19 @@ async function runBehaviorChecks({
     state: Record<string, Hex>,
   ) => {
     const currentEndTime = decodeFunctionResult({
-      abi: FRONTEND_VIEW_ABI,
+      abi: GAME_ABI,
       functionName: "getEpochEndTime",
       data: await callFrontendView(game, encodeFunctionData({
-        abi: FRONTEND_VIEW_ABI,
+        abi: GAME_ABI,
         functionName: "getEpochEndTime",
         args: [SYNTHETIC_EPOCH],
       }), state),
     });
     const nonCurrentEndTime = decodeFunctionResult({
-      abi: FRONTEND_VIEW_ABI,
+      abi: GAME_ABI,
       functionName: "getEpochEndTime",
       data: await callFrontendView(game, encodeFunctionData({
-        abi: FRONTEND_VIEW_ABI,
+        abi: GAME_ABI,
         functionName: "getEpochEndTime",
         args: [SYNTHETIC_EPOCH + 1n],
       }), state),
@@ -1895,10 +1867,10 @@ async function runBehaviorChecks({
       lastDailyAmount,
       lastWeeklyAmount,
     ] = decodeFunctionResult({
-      abi: FRONTEND_VIEW_ABI,
+      abi: GAME_ABI,
       functionName: "getJackpotInfo",
       data: await callFrontendView(game, encodeFunctionData({
-        abi: FRONTEND_VIEW_ABI,
+        abi: GAME_ABI,
         functionName: "getJackpotInfo",
       }), state),
     });
@@ -1920,10 +1892,10 @@ async function runBehaviorChecks({
     state: Record<string, Hex>,
   ) => {
     const previewRebate = decodeFunctionResult({
-      abi: FRONTEND_VIEW_ABI,
+      abi: GAME_ABI,
       functionName: "previewRebate",
       data: await callFrontendView(game, encodeFunctionData({
-        abi: FRONTEND_VIEW_ABI,
+        abi: GAME_ABI,
         functionName: "previewRebate",
         args: [SYNTHETIC_EPOCH, HARNESS_SIMULATION_ADDRESS],
       }), state),
@@ -1935,28 +1907,28 @@ async function runBehaviorChecks({
       rebateClaimed,
       epochResolved,
     ] = decodeFunctionResult({
-      abi: FRONTEND_VIEW_ABI,
+      abi: GAME_ABI,
       functionName: "getRebateInfo",
       data: await callFrontendView(game, encodeFunctionData({
-        abi: FRONTEND_VIEW_ABI,
+        abi: GAME_ABI,
         functionName: "getRebateInfo",
         args: [SYNTHETIC_EPOCH, HARNESS_SIMULATION_ADDRESS],
       }), state),
     });
     const [summaryPending, summaryClaimableEpochs] = decodeFunctionResult({
-      abi: FRONTEND_VIEW_ABI,
+      abi: GAME_ABI,
       functionName: "getRebateSummary",
       data: await callFrontendView(game, encodeFunctionData({
-        abi: FRONTEND_VIEW_ABI,
+        abi: GAME_ABI,
         functionName: "getRebateSummary",
         args: [HARNESS_SIMULATION_ADDRESS, [SYNTHETIC_EPOCH]],
       }), state),
     });
     const [duplicateSummaryPending, duplicateSummaryClaimableEpochs] = decodeFunctionResult({
-      abi: FRONTEND_VIEW_ABI,
+      abi: GAME_ABI,
       functionName: "getRebateSummary",
       data: await callFrontendView(game, encodeFunctionData({
-        abi: FRONTEND_VIEW_ABI,
+        abi: GAME_ABI,
         functionName: "getRebateSummary",
         args: [HARNESS_SIMULATION_ADDRESS, [SYNTHETIC_EPOCH, SYNTHETIC_EPOCH]],
       }), state),
@@ -3022,8 +2994,8 @@ async function main() {
     const accountReadiness: AccountReadiness[] = [];
     for (const { role, address } of accountAddresses) {
       const [balance, allowance] = await Promise.all([
-        publicClient.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: "balanceOf", args: [address] }),
-        publicClient.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: "allowance", args: [address, contractAddress] }),
+        publicClient.readContract({ address: tokenAddress, abi: TOKEN_ABI, functionName: "balanceOf", args: [address] }),
+        publicClient.readContract({ address: tokenAddress, abi: TOKEN_ABI, functionName: "allowance", args: [address, contractAddress] }),
       ]);
       const balanceReady = balance >= requiredAmount;
       const allowanceReady = allowance >= requiredAmount;

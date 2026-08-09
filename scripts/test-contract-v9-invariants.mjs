@@ -1,16 +1,50 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import ts from "typescript";
 import { compareAccountingSnapshot, replayV9Accounting } from "./lib/chain-accounting-model.mjs";
 
 const contractPath = "contracts/LineaOreV9.sol";
-const constantsPath = "app/lib/constants.ts";
 const indexerPath = "scripts/indexer.ts";
 const chainIndexerAuditPath = "scripts/audit-chain-indexer-window.mjs";
+const v10AbiSnapshotPath = "config/generated/lineaOreV10Abi.ts";
+const v10CompilationManifestPath = "contracts/LineaOreV10.compilation.json";
 
 const source = readFileSync(contractPath, "utf8");
-const constants = readFileSync(constantsPath, "utf8");
 const indexerSource = readFileSync(indexerPath, "utf8");
 const chainIndexerAuditSource = readFileSync(chainIndexerAuditPath, "utf8");
+const v10AbiSnapshotSource = readFileSync(v10AbiSnapshotPath, "utf8").replace(/\r\n?/g, "\n");
+const v10CompilationManifest = JSON.parse(readFileSync(v10CompilationManifestPath, "utf8"));
+assert.equal(
+  createHash("sha256").update(v10AbiSnapshotSource).digest("hex"),
+  v10CompilationManifest.abiSnapshotSha256,
+  "generated V10 ABI snapshot must match the compilation manifest before execution",
+);
+const transpiledAbiSnapshot = ts.transpileModule(v10AbiSnapshotSource, {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+  fileName: v10AbiSnapshotPath,
+  reportDiagnostics: true,
+});
+assert.deepEqual(
+  (transpiledAbiSnapshot.diagnostics ?? [])
+    .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
+    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
+  [],
+  "generated V10 ABI snapshot must transpile as an executable module",
+);
+const generatedAbiModule = await import(
+  `data:text/javascript;base64,${Buffer.from(transpiledAbiSnapshot.outputText).toString("base64")}`
+);
+const {
+  GAME_ABI: generatedGameAbi,
+  GAME_EVENTS_ABI: generatedGameEventsAbi,
+  LINEA_ORE_V10_ABI_FRAGMENTS_SHA256: generatedAbiFragmentsSha256,
+} = generatedAbiModule;
+assert.equal(
+  generatedAbiFragmentsSha256,
+  v10CompilationManifest.abiFragmentsSha256,
+  "generated ABI fragments must identify the reviewed semantic digest",
+);
 
 const accountingReplay = replayV9Accounting({
   initial: {
@@ -129,15 +163,6 @@ function extractDeclarations(text, kind) {
   return out;
 }
 
-function extractParseAbiBlock(name, text) {
-  const marker = `export const ${name} = parseAbi([`;
-  const start = text.indexOf(marker);
-  assert.notEqual(start, -1, `missing ${name}`);
-  const end = text.indexOf("]);", start);
-  assert.notEqual(end, -1, `unterminated ${name}`);
-  return text.slice(start, end);
-}
-
 function assertSubset({ expected, actual, label }) {
   const missing = [...expected].filter((item) => !actual.has(item));
   assert.deepEqual(missing, [], `${label} missing from client ABI`);
@@ -145,6 +170,61 @@ function assertSubset({ expected, actual, label }) {
 
 function filterDeclarationsByName(declarations, names) {
   return new Set([...declarations].filter((item) => names.has(item.match(/^\w+\s+(\w+)\(/)?.[1])));
+}
+
+function canonicalAbiParameterType(parameter) {
+  if (!parameter.type.startsWith("tuple")) return parameter.type;
+  return `(${(parameter.components ?? []).map(canonicalAbiParameterType).join(",")})${parameter.type.slice(5)}`;
+}
+
+function abiDeclarations(abi, kind) {
+  return new Set(
+    abi
+      .filter((item) => item.type === kind)
+      .map((item) => `${kind} ${item.name}(${(item.inputs ?? []).map(canonicalAbiParameterType).join(",")})`),
+  );
+}
+
+function importedName(sourceText, fileName, moduleSpecifier, localName) {
+  const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== moduleSpecifier ||
+      !statement.importClause?.namedBindings ||
+      !ts.isNamedImports(statement.importClause.namedBindings)
+    ) {
+      continue;
+    }
+    const binding = statement.importClause.namedBindings.elements
+      .find((element) => element.name.text === localName);
+    if (binding) return binding.propertyName?.text ?? binding.name.text;
+  }
+  return null;
+}
+
+function requiredName(sourceText, fileName, moduleSpecifier, localName) {
+  const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        !ts.isObjectBindingPattern(declaration.name) ||
+        !declaration.initializer ||
+        !ts.isCallExpression(declaration.initializer) ||
+        !ts.isIdentifier(declaration.initializer.expression) ||
+        declaration.initializer.expression.text !== "require" ||
+        !ts.isStringLiteral(declaration.initializer.arguments[0]) ||
+        declaration.initializer.arguments[0].text !== moduleSpecifier
+      ) {
+        continue;
+      }
+      const binding = declaration.name.elements.find((element) => element.name.getText(sourceFile) === localName);
+      if (binding) return binding.propertyName?.getText(sourceFile) ?? binding.name.getText(sourceFile);
+    }
+  }
+  return null;
 }
 
 
@@ -583,17 +663,23 @@ assert.equal(
 );
 
 const contractEvents = extractDeclarations(source, "event");
-const clientEvents = extractDeclarations(constants, "event");
+const clientEvents = abiDeclarations(generatedGameEventsAbi, "event");
 const contractErrors = extractDeclarations(source, "error");
-const clientErrors = extractDeclarations(constants, "error");
-const gameAbiBlock = extractParseAbiBlock("GAME_ABI", constants);
-const gameEventsAbiBlock = extractParseAbiBlock("GAME_EVENTS_ABI", constants);
+const clientErrors = abiDeclarations(generatedGameAbi, "error");
 const contractFunctions = extractDeclarations(source, "function");
-const clientGameFunctions = extractDeclarations(gameAbiBlock, "function");
-const clientGameEvents = extractDeclarations(gameEventsAbiBlock, "event");
+const clientGameFunctions = abiDeclarations(generatedGameAbi, "function");
+const clientGameEvents = abiDeclarations(generatedGameEventsAbi, "event");
 
 assertSubset({ expected: contractEvents, actual: clientEvents, label: "events" });
 assertSubset({ expected: contractErrors, actual: clientErrors, label: "errors" });
+assertSubset({
+  expected: new Set([
+    "error ERC20InsufficientAllowance(address,uint256,uint256)",
+    "error ERC20InsufficientBalance(address,uint256,uint256)",
+  ]),
+  actual: clientErrors,
+  label: "ERC-6093 decoding fallback errors",
+});
 assertSubset({
   expected: filterDeclarationsByName(contractFunctions, new Set([
     "placeBet",
@@ -651,7 +737,12 @@ assertSubset({
   label: "critical game events",
 });
 
-const indexerEvents = extractDeclarations(indexerSource, "event");
+assert.equal(
+  importedName(indexerSource, indexerPath, "../config/generated/lineaOreV10Abi", "EVENTS_ABI"),
+  "GAME_EVENTS_ABI",
+  "indexer EVENTS_ABI must bind to the executable generated event fragment",
+);
+const indexerEvents = abiDeclarations(generatedGameEventsAbi, "event");
 assertSubset({
   expected: filterDeclarationsByName(contractEvents, new Set([
     "BetPlaced",
@@ -694,10 +785,25 @@ assert.match(
   /dailyJackpotEpochs\.has\(args\.epoch\.toString\(\)\)[\s\S]*weeklyJackpotEpochs\.has\(args\.epoch\.toString\(\)\)/,
   "resolved epoch rows must preserve jackpot flags when award events precede EpochResolved",
 );
+assert.equal(
+  requiredName(
+    chainIndexerAuditSource,
+    chainIndexerAuditPath,
+    "../config/generated/lineaOreV10Abi.ts",
+    "EVENTS_ABI",
+  ),
+  "GAME_EVENTS_ABI",
+  "chain-to-indexer audit EVENTS_ABI must bind to the executable generated event fragment",
+);
+assertSubset({
+  expected: filterDeclarationsByName(contractEvents, new Set(["RewardDustSettled", "RebateDustSettled"])),
+  actual: clientGameEvents,
+  label: "chain-to-indexer dust settlement events",
+});
 assert.match(
   chainIndexerAuditSource,
-  /RewardDustSettled[\s\S]*RebateDustSettled[\s\S]*gamedata:dustSettlements[\s\S]*dust-settlement/,
-  "chain-to-indexer audit must verify reward and rebate dust settlement evidence",
+  /storedIndexerEvents\("dust_settlement", "gamedata:dustSettlements"\)[\s\S]*\["RewardDustSettled", "RebateDustSettled"\]\.includes\(decoded\.eventName\)[\s\S]*addMismatch\("dust-settlement"/,
+  "chain-to-indexer audit must compare canonical reward and rebate dust events with stored evidence",
 );
 assert.match(
   chainIndexerAuditSource,

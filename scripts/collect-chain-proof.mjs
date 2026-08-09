@@ -1,6 +1,10 @@
 import "dotenv/config";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+
+const require = createRequire(import.meta.url);
+const { LINEA_ORE_V10_ABI: READ_ABI } = require("../config/generated/lineaOreV10Abi.ts");
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
 const summaryOnly = process.argv.includes("--summary-only");
@@ -24,30 +28,6 @@ function launchGateSummary(issueCount) {
   const label = issueCount > 0 ? "blocked" : "covered";
   return `${label} gates: ${chainLaunchGates.join(", ")}; groups: ${chainLaunchGateGroups}`;
 }
-
-const READ_ABI_SOURCE = [
-  "function owner() view returns (address)",
-  "function token() view returns (address)",
-  "function currentEpoch() view returns (uint256)",
-  "function epochDuration() view returns (uint256)",
-  "function epochStartTime() view returns (uint256)",
-  "function feeRecipient() view returns (address)",
-  "function rolloverPool() view returns (uint256)",
-  "function dailyJackpotPool() view returns (uint256)",
-  "function weeklyJackpotPool() view returns (uint256)",
-  "function accruedOwnerFees() view returns (uint256)",
-  "function accruedBurnFees() view returns (uint256)",
-  "function getJackpotInfo() view returns (uint256 dailyPool, uint256 weeklyPool, uint256 lastDailyDay, uint256 lastWeeklyWeek, uint256 lastDailyEpoch, uint256 lastWeeklyEpoch, uint256 lastDailyAmount, uint256 lastWeeklyAmount)",
-  "function epochs(uint256) view returns (uint256 totalPool, uint256 rewardPool, uint256 winningTile, bool isResolved, bool isDailyJackpot, bool isWeeklyJackpot)",
-  "function getTileData(uint256) view returns (uint256[] pools, uint256[] users)",
-  "function epochRebatePool(uint256) view returns (uint256)",
-  "function epochRewardClaimed(uint256) view returns (uint256)",
-  "function epochResolvedAt(uint256) view returns (uint256)",
-  "function getRebateInfo(uint256,address) view returns (uint256 rebatePool, uint256 userVolume, uint256 pending, bool claimed, bool resolved)",
-  "function getUserBetsAll(uint256,address) view returns (uint256[] bets)",
-  "function hasClaimed(address,uint256) view returns (bool)",
-  "function pendingResolverRewards(address) view returns (uint256)",
-];
 
 const CHAINS = {
   mainnet: {
@@ -195,8 +175,6 @@ function printTable(headers, rows) {
   }
 }
 
-let READ_ABI;
-
 async function read(client, address, functionName, args = []) {
   return client.readContract({ address, abi: READ_ABI, functionName, args });
 }
@@ -298,10 +276,8 @@ if (summaryOnly) {
   let createPublicClient;
   let fallback;
   let http;
-  let parseAbi;
   try {
-    ({ createPublicClient, fallback, http, parseAbi } = await import("viem"));
-    READ_ABI = parseAbi(READ_ABI_SOURCE);
+    ({ createPublicClient, fallback, http } = await import("viem"));
   } catch (error) {
     issues.push(`viem dependency is unavailable: ${error instanceof Error ? error.code || error.message : String(error)}`);
     console.log(`Summary: ${issues.length} issue(s): ${issues.join("; ")}; ${launchGateSummary(issues.length)}.`);

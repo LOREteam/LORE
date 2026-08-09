@@ -22,10 +22,12 @@ import {
 } from "../app/lib/constants";
 import { parsePositiveLineaAmountWeiOrFallback } from "../app/lib/tokenAmountMath";
 import {
-  clampKeeperFeeOverridesToBalance,
-  getAffordableKeeperGasLimit,
+  assertKeeperFeeBudget,
   getFallbackFeeOverrides,
   getKeeperFeeOverrides,
+  isLineaFeePolicyError,
+  type FeeOverrides,
+  type KeeperFeeBudgetKind,
 } from "../app/lib/lineaFees";
 import { tileIdsToMask } from "../app/lib/tileMask";
 import { parseOptionalPositiveIntegerEnv, parseOptionalPositiveIntegerInRangeEnv } from "../config/envParsing";
@@ -48,6 +50,7 @@ const BATCH_TILE_COUNT = parseOptionalPositiveIntegerInRangeEnv(process.env.TEST
 const APPROVE_GAS_FALLBACK = 80_000n;
 const SINGLE_GAS_FALLBACK = 140_000n;
 const BATCH_GAS_FALLBACK = 240_000n;
+const PLAYTEST_GAS_BUFFER_PERCENT = 150n;
 const MAX_PLAYTEST_JSON_RESPONSE_BYTES = 512 * 1024;
 const MAX_PLAYTEST_ERROR_CHARS = 500;
 const CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
@@ -152,9 +155,32 @@ async function getFeeOverrides(publicClient: PublicClient) {
   try {
     const fees = await publicClient.estimateFeesPerGas();
     return getKeeperFeeOverrides(fees, APP_CHAIN.id) ?? getFallbackFeeOverrides(APP_CHAIN.id, "keeper");
-  } catch {
+  } catch (error) {
+    if (isLineaFeePolicyError(error)) throw error;
     return getFallbackFeeOverrides(APP_CHAIN.id, "keeper");
   }
+}
+
+class PlaytestFeeBudgetError extends Error {
+  override name = "PlaytestFeeBudgetError";
+}
+
+function getBudgetedPlaytestGasLimit(
+  estimatedGas: bigint,
+  nativeBalance: bigint,
+  feeOverrides: FeeOverrides,
+  kind: KeeperFeeBudgetKind,
+) {
+  const gas = (estimatedGas * PLAYTEST_GAS_BUFFER_PERCENT + 99n) / 100n;
+  const requiredMaxCost = assertKeeperFeeBudget(feeOverrides, gas, APP_CHAIN.id, kind);
+  if (nativeBalance < requiredMaxCost) {
+    throw new PlaytestFeeBudgetError("playtest wallet has insufficient native balance for the fixed fee budget");
+  }
+  return gas;
+}
+
+function isPlaytestFeeBudgetError(error: unknown) {
+  return error instanceof PlaytestFeeBudgetError || isLineaFeePolicyError(error);
 }
 
 async function supportsEpochBoundBets(publicClient: PublicClient) {
@@ -185,7 +211,7 @@ async function ensureAllowance(
   }
 
   const nativeBalance = await publicClient.getBalance({ address: account.address });
-  let feeOverrides = await getFeeOverrides(publicClient);
+  const feeOverrides = await getFeeOverrides(publicClient);
   let estimatedGas: bigint;
   try {
     estimatedGas = await publicClient.estimateContractGas({
@@ -199,8 +225,12 @@ async function ensureAllowance(
   } catch {
     estimatedGas = APPROVE_GAS_FALLBACK;
   }
-  feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
-  const gas = getAffordableKeeperGasLimit(estimatedGas, nativeBalance, feeOverrides) ?? estimatedGas;
+  const gas = getBudgetedPlaytestGasLimit(
+    estimatedGas,
+    nativeBalance,
+    feeOverrides,
+    "approval",
+  );
 
   console.log(`[playtest] approving token spend, allowance=${formatUnits(allowance, 18)} needed=${formatUnits(neededAmount, 18)}`);
   const hash = await walletClient.writeContract({
@@ -228,7 +258,7 @@ async function placeSingleBet(
   amount: bigint,
 ) {
   const nativeBalance = await publicClient.getBalance({ address: account.address });
-  let feeOverrides = await getFeeOverrides(publicClient);
+  const feeOverrides = await getFeeOverrides(publicClient);
   let estimatedGas: bigint;
   try {
     estimatedGas = await publicClient.estimateContractGas({
@@ -242,8 +272,12 @@ async function placeSingleBet(
   } catch {
     estimatedGas = SINGLE_GAS_FALLBACK;
   }
-  feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
-  const gas = getAffordableKeeperGasLimit(estimatedGas, nativeBalance, feeOverrides) ?? estimatedGas;
+  const gas = getBudgetedPlaytestGasLimit(
+    estimatedGas,
+    nativeBalance,
+    feeOverrides,
+    "keeper",
+  );
 
   const hash = await walletClient.writeContract({
     account,
@@ -272,7 +306,7 @@ async function placeBatchBet(
   const nativeBalance = await publicClient.getBalance({ address: account.address });
   const tileArgs = tiles.map((tile) => BigInt(tile));
   const tileMask = tileIdsToMask(tiles);
-  let feeOverrides = await getFeeOverrides(publicClient);
+  const feeOverrides = await getFeeOverrides(publicClient);
   let estimatedGas: bigint;
   let hash: `0x${string}`;
 
@@ -285,8 +319,12 @@ async function placeBatchBet(
       args: [tileMask, amount],
       ...feeOverrides,
     } as never);
-    feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
-    const gas = getAffordableKeeperGasLimit(estimatedGas, nativeBalance, feeOverrides) ?? estimatedGas;
+    const gas = getBudgetedPlaytestGasLimit(
+      estimatedGas,
+      nativeBalance,
+      feeOverrides,
+      "keeper",
+    );
     hash = await walletClient.writeContract({
       account,
       chain: APP_CHAIN,
@@ -298,6 +336,7 @@ async function placeBatchBet(
       ...feeOverrides,
     } as never);
   } catch (bitmapError) {
+    if (isPlaytestFeeBudgetError(bitmapError)) throw bitmapError;
     const bitmapMessage = describePlaytestError(bitmapError);
     console.log(`[playtest] placeBatchBetsBitmap unavailable or failed, falling back: ${bitmapMessage}`);
     try {
@@ -309,8 +348,12 @@ async function placeBatchBet(
         args: [tileArgs, amount],
         ...feeOverrides,
       } as never);
-      feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
-      const gas = getAffordableKeeperGasLimit(estimatedGas, nativeBalance, feeOverrides) ?? estimatedGas;
+      const gas = getBudgetedPlaytestGasLimit(
+        estimatedGas,
+        nativeBalance,
+        feeOverrides,
+        "keeper",
+      );
       hash = await walletClient.writeContract({
         account,
         chain: APP_CHAIN,
@@ -322,6 +365,7 @@ async function placeBatchBet(
         ...feeOverrides,
       } as never);
     } catch (error) {
+      if (isPlaytestFeeBudgetError(error)) throw error;
       const message = describePlaytestError(error);
       console.log(`[playtest] placeBatchBetsSameAmount unavailable or failed, falling back: ${message}`);
       const amountArgs = tiles.map(() => amount);
@@ -337,8 +381,12 @@ async function placeBatchBet(
       } catch {
         estimatedGas = BATCH_GAS_FALLBACK;
       }
-      feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
-      const gas = getAffordableKeeperGasLimit(estimatedGas, nativeBalance, feeOverrides) ?? estimatedGas;
+      const gas = getBudgetedPlaytestGasLimit(
+        estimatedGas,
+        nativeBalance,
+        feeOverrides,
+        "keeper",
+      );
       hash = await walletClient.writeContract({
         account,
         chain: APP_CHAIN,
@@ -368,7 +416,7 @@ async function placeEpochBoundBitmapBet(
   amount: bigint,
 ) {
   const nativeBalance = await publicClient.getBalance({ address: account.address });
-  let feeOverrides = await getFeeOverrides(publicClient);
+  const feeOverrides = await getFeeOverrides(publicClient);
   const estimatedGas = await publicClient.estimateContractGas({
     account: account.address,
     address: CONTRACT_ADDRESS,
@@ -377,8 +425,12 @@ async function placeEpochBoundBitmapBet(
     args: [epoch, tileIdsToMask(tiles), amount],
     ...feeOverrides,
   } as never);
-  feeOverrides = clampKeeperFeeOverridesToBalance(feeOverrides, estimatedGas, nativeBalance) ?? feeOverrides;
-  const gas = getAffordableKeeperGasLimit(estimatedGas, nativeBalance, feeOverrides) ?? estimatedGas;
+  const gas = getBudgetedPlaytestGasLimit(
+    estimatedGas,
+    nativeBalance,
+    feeOverrides,
+    "keeper",
+  );
   const hash = await walletClient.writeContract({
     account,
     chain: APP_CHAIN,

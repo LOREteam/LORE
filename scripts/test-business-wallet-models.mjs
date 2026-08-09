@@ -1,0 +1,732 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
+import * as tokenAmountMathModule from "../app/lib/tokenAmountMath.ts";
+import * as miningTxPathModule from "../app/lib/miningTxPath.ts";
+import * as walletTransfersModule from "../app/hooks/useWalletTransfers.ts";
+import * as pageWalletOverviewModule from "../app/hooks/usePageWalletOverview.ts";
+import * as autoMinerFormModule from "../app/hooks/useAutoMinerForm.ts";
+import * as analyticsAchievementsModule from "../app/hooks/useAnalyticsAchievements.ts";
+import * as autoResolveStorageModule from "../app/hooks/autoResolveStorage.ts";
+
+export async function runWalletModelTests() {
+  const miningShared = miningSharedModule.default ?? miningSharedModule;
+  const tokenAmountMath = tokenAmountMathModule.default ?? tokenAmountMathModule;
+  const miningTxPath = miningTxPathModule.default ?? miningTxPathModule;
+  const walletTransfers = walletTransfersModule.default ?? walletTransfersModule;
+  const pageWalletOverview = pageWalletOverviewModule.default ?? pageWalletOverviewModule;
+  const autoMinerForm = autoMinerFormModule.default ?? autoMinerFormModule;
+  const analyticsAchievements = analyticsAchievementsModule.default ?? analyticsAchievementsModule;
+  const autoResolveStorage = autoResolveStorageModule.default ?? autoResolveStorageModule;
+  const normalizedDuplicateTiles = tokenAmountMath.normalizeTileAmounts(
+    [2, 2, 5],
+    ["1000000000000000.123456789123456789", "0.876543210876543211", "1"],
+    "1000000000000002",
+  );
+  assert.deepEqual(normalizedDuplicateTiles, {
+    tileIds: [2, 5],
+    amounts: ["1000000000000001", "1"],
+  });
+  assert.equal(
+    tokenAmountMath.computeWinningAmountWei(
+      [1, 2, 3],
+      undefined,
+      2,
+      "3000000000000000.000000000000000003",
+    ),
+    1_000_000_000_000_000_000_000_000_000_000_000n + 1n,
+  );
+  assert.equal(
+    tokenAmountMath.computeWinningAmountWei([1, 2, 2], ["1", "2", "3"], 2, "999"),
+    5_000_000_000_000_000_000n,
+  );
+  assert.equal(tokenAmountMath.parseLineaAmountWei("not-a-number"), 0n);
+  assert.equal(tokenAmountMath.parsePositiveLineaAmountWei("0"), null);
+  assert.equal(tokenAmountMath.parsePositiveLineaAmountWei("0.0000000000000000001"), null);
+  assert.equal(tokenAmountMath.parsePositiveLineaAmountWei("1.25"), 1_250_000_000_000_000_000n);
+  assert.equal(tokenAmountMath.parsePositiveLineaAmountWeiOrFallback("bad", "1"), 1_000_000_000_000_000_000n);
+  assert.equal(tokenAmountMath.parsePositiveLineaAmountWeiOrFallback("0", "1"), 1_000_000_000_000_000_000n);
+  assert.equal(tokenAmountMath.parsePositiveLineaAmountWeiOrFallback("2.5", "1"), 2_500_000_000_000_000_000n);
+  assert.equal(tokenAmountMath.formatLineaWeiAmountDisplay("bad", 4), "0.0000");
+  assert.equal(tokenAmountMath.formatLineaWeiAmountDisplay("1000000000000000000", 2), "1.00");
+  assert.equal(tokenAmountMath.formatLineaWeiAmountDisplay("2500000000000000000", 1), "2.5");
+  assert.equal(tokenAmountMath.formatLineaWeiAmountDisplay("1234567890000000000000", 2), "1,234.57");
+  assert.equal(tokenAmountMath.formatLineaWeiAmountDisplay("1234567890123456789012345678900000000000000000", 0), "1,234,567,890,123,456,789,012,345,679");
+  assert.equal(tokenAmountMath.formatLineaWeiDisplayNumber(1_234_567_899_000_000_000n), 1.234568);
+  assert.equal(tokenAmountMath.formatLineaWeiDisplayNumber(1_234_567_499_000_000_000n), 1.234567);
+  assert.equal(tokenAmountMath.formatLineaWeiDisplayNumber(-1n), 0);
+  assert.equal(
+    tokenAmountMath.formatLineaWeiDisplayNumber((BigInt(Number.MAX_SAFE_INTEGER) + 1n) * 1_000_000_000_000n),
+    Number.MAX_SAFE_INTEGER,
+  );
+  const tokenAmountMathSource = readFileSync("app/lib/tokenAmountMath.ts", "utf8");
+  assert.match(
+    tokenAmountMathSource,
+    /function addDecimalGroupSeparators\(value: string\)[\s\S]*formatLineaAmountFixed\(parseNonNegativeLineaWei\(value\), safeFractionDigits\)/,
+    "shared LINEA wei display formatter must format bigint decimal text directly",
+  );
+  assert.doesNotMatch(
+    tokenAmountMathSource,
+    /formatLineaWeiAmountDisplay[\s\S]*Number\(formatUnits\(/,
+    "shared LINEA wei display formatter must not coerce formatted wei values through Number(formatUnits())",
+  );
+  assert.match(
+    tokenAmountMathSource,
+    /function formatLineaWeiDisplayNumber\(value: bigint\)[\s\S]*value <= 0n[\s\S]*1_000_000_000_000n[\s\S]*scaled > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*return Number\(scaled\) \/ 1_000_000/,
+    "shared LINEA numeric compatibility formatter must use bounded bigint math",
+  );
+  assert.doesNotMatch(
+    tokenAmountMathSource,
+    /formatLineaWeiDisplayNumber[\s\S]*Number\(formatLineaAmountFixed|formatLineaWeiDisplayNumber[\s\S]*parseFloat/,
+    "shared LINEA numeric compatibility formatter must not parse formatted decimal strings",
+  );
+  assert.equal(tokenAmountMath.formatLineaAmountFixed(1_234_567_899_000_000_000n, 2), "1.23");
+  assert.equal(tokenAmountMath.formatLineaAmountFixed(1_235_000_000_000_000_000n, 2), "1.24");
+  assert.equal(tokenAmountMath.formatLineaAmountFixed(999_999_999_999_999_999n, 0), "1");
+  assert.deepEqual(
+    miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", reason: "ok", ts: 123 }, 1_000),
+    { mode: "standard-silent", reason: "ok", ts: 123 },
+  );
+  assert.deepEqual(
+    miningTxPath.sanitizeMiningTxPathState({ mode: "wallet-write", reason: 999, ts: 123 }, 1_000),
+    { mode: "wallet-write", ts: 123 },
+  );
+  assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "bad", ts: 123 }, 1_000), null);
+  assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: Number.NaN }, 1_000), null);
+  assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: 123.5 }, 1_000), null);
+  assert.equal(
+    miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: Number.MAX_SAFE_INTEGER + 1 }, 1_000),
+    null,
+  );
+  assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: 1_000 }, 1_000.5), null);
+  assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: 7_001 }, 1_000), null);
+  const pendingMiningState = miningTxPath.sanitizePendingMiningTxState({
+    chainId: 59141,
+    contract: "0x1111111111111111111111111111111111111111",
+    actor: "0x2222222222222222222222222222222222222222",
+    hash: `0x${"a".repeat(64)}`,
+    ts: 1_000,
+  }, 2_000);
+  assert.ok(pendingMiningState);
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => ({ status: "success" }),
+      getTransaction: async () => {
+        throw new Error("should not read transaction after receipt");
+      },
+    }, pendingMiningState),
+    "confirmed",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => ({ status: "reverted" }),
+      getTransaction: async () => {
+        throw new Error("should not read transaction after receipt");
+      },
+    }, pendingMiningState),
+    "clear",
+  );
+  const receiptNotFound = () => Object.assign(new Error("transaction receipt not found"), { name: "TransactionReceiptNotFoundError" });
+  const transactionNotFound = () => Object.assign(new Error("transaction not found"), { name: "TransactionNotFoundError" });
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw receiptNotFound(); },
+      getTransaction: async () => ({ blockNumber: null }),
+    }, pendingMiningState),
+    "pending",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw receiptNotFound(); },
+      getTransaction: async () => { throw transactionNotFound(); },
+    }, pendingMiningState, pendingMiningState.ts + 15 * 60_000),
+    "clear",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw receiptNotFound(); },
+      getTransaction: async () => { throw transactionNotFound(); },
+    }, pendingMiningState, pendingMiningState.ts - 1),
+    "pending",
+    "future-dated pending tx state must not be cleared by not-found recovery",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw receiptNotFound(); },
+      getTransaction: async () => { throw transactionNotFound(); },
+    }, pendingMiningState, Number.NaN),
+    "pending",
+    "malformed recovery timestamps must keep pending tx recovery fail-closed",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("RPC offline"); },
+      getTransaction: async () => { throw new Error("should fail closed before transaction lookup"); },
+    }, pendingMiningState),
+    "pending",
+  );
+  const ambiguousPendingMiningState = miningTxPath.sanitizePendingMiningTxState({
+    chainId: 59141,
+    contract: "0x1111111111111111111111111111111111111111",
+    actor: "0x2222222222222222222222222222222222222222",
+    nonce: 7,
+    ts: 1_000,
+  }, 2_000);
+  assert.ok(ambiguousPendingMiningState);
+  assert.equal(
+    miningShared.isAmbiguousPendingTxError(new Error("External wallet eth_sendTransaction timed out after 45000ms")),
+    true,
+  );
+  const silentWalletTimeout = new Error("Privy sendTransaction timed out after 45000ms");
+  silentWalletTimeout.name = "WalletSendTimeoutError";
+  assert.equal(
+    miningShared.isAmbiguousPendingTxError(silentWalletTimeout),
+    true,
+    "a hashless Privy send timeout must stay pending instead of falling back to a duplicate wallet send",
+  );
+  assert.equal(
+    miningShared.isAmbiguousPendingTxError(new Error("RPC read timed out after 45000ms")),
+    false,
+  );
+  const miningBetExecutionSource = readFileSync("app/hooks/useMiningBetExecution.ts", "utf8");
+  assert.match(
+    miningBetExecutionSource,
+    /catch \(error\) \{\s*if \(isAmbiguousPendingTxError\(error\)\) \{\s*throw error;/,
+    "manual silent receipt timeouts must not fall back to a duplicate wallet send",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 8 : 8,
+    }, ambiguousPendingMiningState),
+    "confirmed",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 7 : 8,
+    }, ambiguousPendingMiningState),
+    "pending",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async () => 7,
+    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
+    "clear",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async () => 7,
+    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts - 1),
+    "pending",
+    "future-dated hashless pending tx state must not clear before caller time catches up",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("malformed hashless nonce recovery must not request a receipt"); },
+      getTransaction: async () => { throw new Error("malformed hashless nonce recovery must not request a transaction"); },
+      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? "7" : 7,
+    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
+    "pending",
+    "malformed hashless nonce evidence must keep pending tx recovery fail-closed",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx({
+      getTransactionReceipt: async () => { throw new Error("inverted hashless nonce recovery must not request a receipt"); },
+      getTransaction: async () => { throw new Error("inverted hashless nonce recovery must not request a transaction"); },
+      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 9 : 8,
+    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
+    "pending",
+    "hashless nonce recovery must fail closed when pending nonce evidence is behind latest",
+  );
+  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, chainId: 0 }), null);
+  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, actor: "0x1234" }), null);
+  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, hash: "0x1234" }), null);
+  assert.equal(
+    miningTxPath.sanitizePendingMiningTxState({ ...ambiguousPendingMiningState, hash: "0x1234" }),
+    null,
+    "pending tx recovery must reject malformed hashes even when a nonce fallback is present",
+  );
+  assert.equal(
+    miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, nonce: -1 }),
+    null,
+    "pending tx recovery must reject malformed nonces even when a hash is present",
+  );
+  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: 1_000.5 }, 2_000), null);
+  assert.equal(
+    miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: Number.MAX_SAFE_INTEGER + 1 }, 2_000),
+    null,
+  );
+  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: 1_000 }, 2_000.5), null);
+  assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: 8_001 }, 2_000), null);
+  const miningTxPathSource = readFileSync("app/lib/miningTxPath.ts", "utf8");
+  assert.match(
+    miningTxPathSource,
+    /const receipt = await client\.getTransactionReceipt\(\{ hash: state\.hash \}\);[\s\S]*if \(receipt\.status === "reverted"\) return "clear";[\s\S]*return "confirmed";/,
+    "pending mining tx recovery must clear reverted receipts instead of treating them as confirmed or unresolved",
+  );
+  assert.match(
+    miningTxPathSource,
+    /function normalizeMiningTimestamp[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*isSafeCurrentTime\(now\)[\s\S]*value - now > MINING_TX_PATH_MAX_FUTURE_SKEW_MS/,
+    "mining tx path timestamps must use a shared safe-integer non-future normalizer",
+  );
+  assert.match(
+    miningTxPathSource,
+    /function hasPendingTxNotFoundGraceElapsed[\s\S]*Number\.isSafeInteger\(ts\)[\s\S]*ts > now[\s\S]*now - ts >= PENDING_TX_NOT_FOUND_GRACE_MS/,
+    "pending tx not-found recovery must fail closed on malformed or future timestamps",
+  );
+  assert.match(
+    miningTxPathSource,
+    /function normalizePendingTxNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*const normalizedLatestNonce = normalizePendingTxNonce\(latestNonce\)[\s\S]*const normalizedPendingNonce = normalizePendingTxNonce\(pendingNonce\)[\s\S]*normalizedPendingNonce < normalizedLatestNonce[\s\S]*return "pending"/,
+    "hashless pending tx recovery must normalize latest and pending nonce evidence before clear or confirmed decisions",
+  );
+  assert.doesNotMatch(
+    miningTxPathSource,
+    /typeof (?:raw\.)?ts !== "number" \|\| !Number\.isFinite\((?:raw\.)?ts\) \|\| (?:raw\.)?ts <= 0|now - state\.ts >= PENDING_TX_NOT_FOUND_GRACE_MS|latestNonce > state\.nonce|pendingNonce > state\.nonce/,
+    "mining tx recovery must not return to broad finite timestamp checks, direct age arithmetic, or raw nonce comparisons",
+  );
+  assert.match(
+    miningTxPathSource,
+    /pendingTxStorageKey[\s\S]*getAddress\(contract\)[\s\S]*getAddress\(actor\)/,
+    "pending mining tx storage keys must normalize contract and actor addresses with the EVM address parser",
+  );
+  assert.match(
+    miningTxPathSource,
+    /function tryPendingTxStorageKey\(chainId: number, contract: string, actor: string\)[\s\S]*return pendingTxStorageKey\(chainId, contract, actor\);[\s\S]*catch \{[\s\S]*return null;[\s\S]*export function clearPendingMiningTxState[\s\S]*const key = tryPendingTxStorageKey\(chainId, contract, actor\);[\s\S]*if \(!key\) return;/,
+    "pending mining tx scoped storage cleanup must fail closed when contract or actor scope is malformed",
+  );
+  assert.match(
+    readFileSync("app/hooks/usePrivyWallet.ts", "utf8"),
+    /function normalizeWalletAddress[\s\S]*getAddress\(value\)[\s\S]*normalizeWalletAddress\(embeddedWallet\.address\)/,
+    "Privy wallet selection must normalize embedded and external wallet addresses before comparison",
+  );
+  assert.match(
+    readFileSync("app/components/wallet/WalletSettingsOverviewPanel.tsx", "utf8"),
+    /getAddress\(address\)\.toLowerCase\(\)/,
+    "wallet settings resolver rows must normalize connected and embedded wallet addresses before comparison",
+  );
+  const priorWindow = globalThis.window;
+  const pendingStorage = new Map();
+  try {
+    globalThis.window = {
+      dispatchEvent: () => true,
+      localStorage: {
+        getItem: (key) => pendingStorage.get(key) ?? null,
+        removeItem: (key) => pendingStorage.delete(key),
+        setItem: (key, value) => pendingStorage.set(key, value),
+      },
+    };
+    miningTxPath.writeMiningTxPathState("wallet-write", "test");
+    assert.ok(miningTxPath.readMiningTxPathState());
+    pendingStorage.set("lineaore:mining-tx-path:v1", "{bad json");
+    assert.equal(miningTxPath.readMiningTxPathState(), null);
+    assert.equal(pendingStorage.has("lineaore:mining-tx-path:v1"), false, "corrupt mining tx path state must be cleared");
+    assert.equal(
+      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, "0x1234"),
+      null,
+      "pending tx recovery reads with malformed actors must fail closed without throwing",
+    );
+    assert.equal(
+      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, "0x1234", pendingMiningState.actor),
+      null,
+      "pending tx recovery reads with malformed contracts must fail closed without throwing",
+    );
+    assert.doesNotThrow(
+      () => miningTxPath.clearPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, "0x1234"),
+      "pending tx recovery cleanup with a malformed actor must not throw",
+    );
+    miningTxPath.writePendingMiningTxState({
+      chainId: pendingMiningState.chainId,
+      contract: pendingMiningState.contract,
+      actor: pendingMiningState.actor,
+      hash: pendingMiningState.hash,
+    });
+    const firstPendingKey = [...pendingStorage.keys()].find((key) => key.startsWith("lineaore:pending-mining-tx:v2:"));
+    assert.ok(firstPendingKey);
+    assert.deepEqual(
+      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor),
+      { ...pendingMiningState, ts: [...pendingStorage.values()].map((raw) => JSON.parse(raw).ts)[0] },
+    );
+    pendingStorage.set(firstPendingKey, "{bad json");
+    assert.equal(miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor), null);
+    assert.equal(pendingStorage.has(firstPendingKey), false, "corrupt pending mining tx state must be cleared");
+    miningTxPath.writePendingMiningTxState({
+      chainId: pendingMiningState.chainId,
+      contract: pendingMiningState.contract,
+      actor: pendingMiningState.actor,
+      hash: pendingMiningState.hash,
+    });
+    assert.equal(miningTxPath.readPendingMiningTxState(59144, pendingMiningState.contract, pendingMiningState.actor), null);
+    assert.equal(
+      miningTxPath.readPendingMiningTxState(
+        pendingMiningState.chainId,
+        pendingMiningState.contract,
+        "0x3333333333333333333333333333333333333333",
+      ),
+      null,
+    );
+    miningTxPath.writePendingMiningTxState({
+      chainId: pendingMiningState.chainId,
+      contract: pendingMiningState.contract,
+      actor: "0x3333333333333333333333333333333333333333",
+      hash: `0x${"b".repeat(64)}`,
+    });
+    assert.equal(pendingStorage.size, 2, "different actors must keep independent pending recovery records");
+    miningTxPath.clearPendingMiningTxState(
+      pendingMiningState.chainId,
+      pendingMiningState.contract,
+      pendingMiningState.actor,
+    );
+    assert.equal(
+      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor),
+      null,
+    );
+    assert.ok(
+      miningTxPath.readPendingMiningTxState(
+        pendingMiningState.chainId,
+        pendingMiningState.contract,
+        "0x3333333333333333333333333333333333333333",
+      ),
+      "clearing one actor must preserve another actor's pending record",
+    );
+  } finally {
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
+  assert.equal(walletTransfers.getWalletTransferScanFromBlock(10n, 1n), 1n);
+  assert.equal(walletTransfers.getWalletTransferScanFromBlock(10n, 7n), 7n);
+  assert.equal(walletTransfers.getWalletTransferScanFromBlock(10n, 11n), null);
+  assert.equal(walletTransfers.getWalletTransferFallbackFromBlock(1n, 100n, 250n), 1n);
+  assert.equal(walletTransfers.getWalletTransferFallbackFromBlock(1n, 1000n, 250n), 751n);
+  assert.equal(
+    walletTransfers.getWalletTransferLogKey({
+      transactionHash: "0xabc",
+      blockNumber: 10n,
+      transactionIndex: 1,
+      logIndex: 2,
+    }),
+    walletTransfers.getWalletTransferLogKey({
+      transactionHash: "0xabc",
+      blockNumber: 10n,
+      transactionIndex: 1,
+      logIndex: 2,
+    }),
+    "wallet transfer dedupe keys must be stable for the same event log",
+  );
+  assert.notEqual(
+    walletTransfers.getWalletTransferLogKey({
+      transactionHash: "0xabc",
+      blockNumber: 10n,
+      transactionIndex: 1,
+      logIndex: 2,
+    }),
+    walletTransfers.getWalletTransferLogKey({
+      transactionHash: "0xabc",
+      blockNumber: 10n,
+      transactionIndex: 1,
+      logIndex: 3,
+    }),
+    "wallet transfer history must not collapse distinct logs from the same transaction",
+  );
+  assert.equal(walletTransfers.normalizeWalletTransferTxHash("0xabc"), "");
+  assert.equal(
+    walletTransfers.normalizeWalletTransferTxHash(`  0x${"Ab".repeat(32)}  `),
+    `0x${"ab".repeat(32)}`,
+    "wallet transfer history must only preserve full transaction hashes in lowercase",
+  );
+  assert.equal(walletTransfers.normalizeWalletTransferAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"), "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
+  assert.equal(walletTransfers.normalizeWalletTransferAddress("0xabc"), null);
+  assert.equal(walletTransfers.normalizeWalletTransferAddress(null), null);
+  const walletTransfersSource = readFileSync("app/hooks/useWalletTransfers.ts", "utf8");
+  assert.match(
+    walletTransfersSource,
+    /const seenLogs = new Set<string>\(\)[\s\S]*seenLogs\.add\(getWalletTransferLogKey\(log\)\)[\s\S]*seenLogs\.has\(getWalletTransferLogKey\(log\)\)/,
+    "wallet transfer fallback dedupe must compare event logs, not whole transactions",
+  );
+  assert.match(
+    walletTransfersSource,
+    /export function normalizeWalletTransferTxHash\(value: unknown\)[\s\S]*\/\^0x\[0-9a-f\]\{64\}\$\/\.test\(normalized\)[\s\S]*const txHash = normalizeWalletTransferTxHash\(log\.transactionHash\)/,
+    "wallet transfer history rows must only publish full transaction hashes",
+  );
+  assert.match(
+    walletTransfersSource,
+    /export function normalizeWalletTransferAddress\(value: string \| null \| undefined\)[\s\S]*getAddress\(value\)\.toLowerCase\(\)[\s\S]*const addr = normalizeWalletTransferAddress\(embeddedAddress\)[\s\S]*externalWalletAddress && !externalAddr[\s\S]*pad\(addr as Hex/,
+    "wallet transfer history must validate scan and filter addresses before log queries",
+  );
+  assert.doesNotMatch(
+    walletTransfersSource,
+    /const txHash = log\.transactionHash \?\? ""|txHash:\s*log\.transactionHash/,
+    "wallet transfer history rows must not publish raw chain txHash values",
+  );
+  assert.doesNotMatch(
+    walletTransfersSource,
+    /const addr = embeddedAddress\.toLowerCase\(\)|externalWalletAddress\?\.toLowerCase\(\)|pad\(embeddedAddress as Hex/,
+    "wallet transfer history must not lower-case or pad raw wallet addresses",
+  );
+  assert.match(
+    walletTransfersSource,
+    /totalInDisplay: toDisplayAmountWei\(totalInWei\)[\s\S]*totalOutDisplay: toDisplayAmountWei\(totalOutWei\)/,
+    "wallet transfer summary must keep bigint-safe total display strings",
+  );
+  assert.match(
+    walletTransfersSource,
+    /formatLineaWeiDisplayNumber[\s\S]*function toDisplayNumberWei\(value: bigint\)[\s\S]*return formatLineaWeiDisplayNumber\(value\)/,
+    "wallet transfer numeric compatibility totals must derive from bounded raw-wei formatting",
+  );
+  assert.doesNotMatch(
+    walletTransfersSource,
+    /Number\(formatUnits\(value, 18\)\)|Number\(formatLineaAmountFixed\(value, 6\)\)/,
+    "wallet transfer summary must not coerce formatted wei values through Number(formatUnits()) or formatted decimal strings",
+  );
+  assert.deepEqual(
+    pageWalletOverview.normalizeCachedPrivyBalances({ token: "12.3", eth: "0.0925" }),
+    { token: "12.30", eth: "0.0925" },
+  );
+  assert.deepEqual(
+    pageWalletOverview.normalizeCachedPrivyBalances({ token: "9007199254740993.555", eth: "0.00005" }),
+    { token: "9007199254740993.56", eth: "0.0001" },
+    "wallet overview cached balances must round decimal text without Number precision loss",
+  );
+  assert.deepEqual(
+    pageWalletOverview.normalizeCachedPrivyBalances({ token: "bad", eth: "-1" }),
+    { token: "0.00", eth: "0.0000" },
+  );
+  assert.equal(pageWalletOverview.normalizePageWalletAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"), "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
+  assert.equal(pageWalletOverview.normalizePageWalletAddress("0xabc"), null);
+  assert.equal(pageWalletOverview.normalizePageWalletAddress(null), null);
+  assert.equal(
+    pageWalletOverview.getPrivyBalanceCacheKey("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"),
+    `lore:privy-balances:v1:59141:0x5e40c6e31642ebe8670658fe84c660bd2a0f820f:0xd8da6bf26964af9d7eed9e03e53415d37aa96045`,
+  );
+  assert.equal(pageWalletOverview.getPrivyBalanceCacheKey("0xabc"), null);
+  const balanceFormattingSource = readFileSync("app/lib/balanceFormatting.ts", "utf8");
+  assert.match(
+    balanceFormattingSource,
+    /export function formatDecimalTextFixed[\s\S]*BigInt\(scaledText\)[\s\S]*formatScaledUnitsFixed/,
+    "shared decimal balance formatter must round without Number precision loss",
+  );
+  assert.match(
+    balanceFormattingSource,
+    /export function formatBalanceFixed[\s\S]*typeof balance\.value !== "bigint"[\s\S]*balance\.value \/ divisor[\s\S]*formatScaledUnitsFixed/,
+    "shared live balance formatter must round bigint units without Number precision loss",
+  );
+  const pageWalletOverviewSource = readFileSync("app/hooks/usePageWalletOverview.ts", "utf8");
+  assert.match(
+    pageWalletOverviewSource,
+    /const raw = window\.localStorage\.getItem\(balanceCacheKey\)[\s\S]*window\.localStorage\.removeItem\(balanceCacheKey\)/,
+    "wallet overview balance cache reads must clear corrupt or invalid localStorage entries",
+  );
+  assert.match(
+    pageWalletOverviewSource,
+    /formatBalanceFixed\(embeddedTokenBalance, 2\)[\s\S]*formatBalanceFixed\(embeddedEthBalance, 4\)/,
+    "wallet overview live balances must use shared raw bigint balance formatting",
+  );
+  assert.match(
+    pageWalletOverviewSource,
+    /export function normalizePageWalletAddress\(value: string \| null \| undefined\)[\s\S]*getAddress\(value\)\.toLowerCase\(\)[\s\S]*function getPrivyBalanceCacheKey[\s\S]*normalizePageWalletAddress\(address\)[\s\S]*const normalizedActiveAddress = normalizePageWalletAddress\(address\)[\s\S]*normalizedActiveAddress === normalizedEmbeddedWalletAddress/,
+    "wallet overview must validate cache and active-wallet addresses before comparing or keying balances",
+  );
+  assert.doesNotMatch(
+    pageWalletOverviewSource,
+    /Number\(getFormattedBalance\(embedded(?:Token|Eth)Balance\)\)/,
+    "wallet overview live balances must not coerce formatted balances through Number()",
+  );
+  assert.doesNotMatch(
+    pageWalletOverviewSource,
+    /address\.toLowerCase\(\)|normalizedEmbeddedAddress\.toLowerCase\(\)/,
+    "wallet overview must not compare or cache raw wallet address strings",
+  );
+  const gameDerivedStateSource = readFileSync("app/hooks/useGameDerivedState.ts", "utf8");
+  assert.match(
+    gameDerivedStateSource,
+    /formatDecimalTextFixed\(tokenBalanceFormatted, 2\)/,
+    "active wallet LINEA display must use shared decimal text formatting",
+  );
+  assert.doesNotMatch(
+    gameDerivedStateSource,
+    /Number\(tokenBalanceFormatted\)\.toFixed\(2\)/,
+    "active wallet LINEA display must not coerce formatted balance text through Number()",
+  );
+  assert.deepEqual(
+    autoMinerForm.sanitizeAutoMinerInputs({ betSize: "2.5", targets: 7, cycles: 12 }),
+    { betSize: "2.5", targets: 7, cycles: 12 },
+  );
+  assert.deepEqual(
+    autoMinerForm.sanitizeAutoMinerInputs({ betSize: "bad", targets: 99, cycles: 1_000_000 }),
+    { betSize: "1.0", targets: 25, cycles: 5000 },
+  );
+  assert.deepEqual(
+    autoMinerForm.sanitizeAutoMinerInputs({ targets: 2.9, cycles: 0 }),
+    { betSize: "1.0", targets: 2, cycles: 1 },
+  );
+  const autoMinerFormStorageSource = readFileSync("app/hooks/useAutoMinerForm.ts", "utf8");
+  assert.match(
+    autoMinerFormStorageSource,
+    /JSON\.parse\(selectedRaw\)[\s\S]*window\.localStorage\.removeItem\(LEGACY_AUTOMINER_INPUTS_KEY\)[\s\S]*catch \{[\s\S]*window\.localStorage\.removeItem\(AUTOMINER_INPUTS_KEY\)[\s\S]*window\.localStorage\.removeItem\(LEGACY_AUTOMINER_INPUTS_KEY\)/,
+    "auto-miner form restore must clear corrupt current and legacy localStorage entries",
+  );
+  assert.match(
+    readFileSync("app/hooks/useMiningGuards.ts", "utf8"),
+    /const sanitized = sanitizeLastBet\(JSON\.parse\(parsed\)\)[\s\S]*localStorage\.removeItem\(raw \? LAST_BET_KEY : LEGACY_LAST_BET_KEY\)[\s\S]*catch \{[\s\S]*localStorage\.removeItem\(LAST_BET_KEY\)/,
+    "last-bet restore must clear corrupt or invalid localStorage entries",
+  );
+  assert.deepEqual(
+    ["10", "2", "bad"].sort(analyticsAchievements.compareAchievementEpochs),
+    ["bad", "2", "10"],
+  );
+  assert.doesNotThrow(() => analyticsAchievements.compareAchievementEpochs("bad", "2"));
+  const analyticsAchievementsSource = readFileSync("app/hooks/useAnalyticsAchievements.ts", "utf8");
+  assert.match(
+    analyticsAchievementsSource,
+    /function parseAchievementEpochNumber/,
+    "analytics achievements must parse deposit epoch strings safely for first-bet ordering",
+  );
+  assert.doesNotMatch(
+    analyticsAchievementsSource,
+    /(^|[^A-Za-z])Number\(left\.epoch\)|(^|[^A-Za-z])Number\(right\.epoch\)/,
+    "analytics achievements must not use unchecked Number(epoch) in first-bet ordering",
+  );
+  assert.match(
+    analyticsAchievementsSource,
+    /const parsed = JSON\.parse\(raw\) as PersistedAchievements[\s\S]*localStorage\.removeItem\(storageKey\)[\s\S]*catch \{[\s\S]*const storageKey = getAchievementStorageKey\(walletAddress\)[\s\S]*localStorage\.removeItem\(storageKey\)/,
+    "analytics achievements must clear corrupt or invalid localStorage entries",
+  );
+  assert.deepEqual(
+    autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: 123 }, 1_000),
+    { epoch: "42", ts: 123 },
+  );
+  assert.deepEqual(
+    autoResolveStorage.normalizeResolveGuardEntry({ epoch: "9007199254740991", ts: 123 }, 1_000),
+    { epoch: "9007199254740991", ts: 123 },
+  );
+  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: Number.NaN }, 1_000), null);
+  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: 123.5 }, 1_000), null);
+  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: Number.MAX_SAFE_INTEGER + 1 }, 1_000), null);
+  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: 1_000 }, 1_000.5), null);
+  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "42", ts: 7_001 }, 1_000), null);
+  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "bad", ts: 123 }, 1_000), null);
+  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "0042", ts: 123 }, 1_000), null);
+  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "9007199254740992", ts: 123 }, 1_000), null);
+  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "9999999999999999", ts: 123 }, 1_000), null);
+  assert.equal(autoResolveStorage.normalizeResolveGuardEntry({ epoch: "1".repeat(21), ts: 123 }, 1_000), null);
+  {
+    const previousLocalStorage = globalThis.localStorage;
+    try {
+      const storage = new Map([["lore_resolve_epoch", "42"]]);
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: {
+          getItem: (key) => storage.get(key) ?? null,
+          setItem: (key, value) => storage.set(key, String(value)),
+          removeItem: (key) => storage.delete(key),
+        },
+      });
+      const beforeMigration = Date.now();
+      const migrated = autoResolveStorage.readResolveGuard();
+      assert.equal(migrated?.epoch, "42");
+      assert.ok((migrated?.ts ?? 0) >= beforeMigration, "legacy auto-resolve guard must gain a fresh timestamp");
+      assert.deepEqual(
+        autoResolveStorage.normalizeResolveGuardEntry(JSON.parse(storage.get("lore_resolve_epoch"))),
+        migrated,
+        "legacy auto-resolve guard must migrate to the current JSON envelope",
+      );
+      autoResolveStorage.writeResolveGuard("0042");
+      assert.equal(
+        autoResolveStorage.normalizeResolveGuardEntry(JSON.parse(storage.get("lore_resolve_epoch")))?.epoch,
+        "42",
+        "non-canonical auto-resolve guard writes must not overwrite a valid canonical guard",
+      );
+      autoResolveStorage.writeResolveGuard("43");
+      assert.equal(
+        autoResolveStorage.normalizeResolveGuardEntry(JSON.parse(storage.get("lore_resolve_epoch")))?.epoch,
+        "43",
+        "canonical auto-resolve guard writes must persist the canonical epoch string",
+      );
+    } finally {
+      if (previousLocalStorage === undefined) {
+        delete globalThis.localStorage;
+      } else {
+        Object.defineProperty(globalThis, "localStorage", {
+          configurable: true,
+          value: previousLocalStorage,
+        });
+      }
+    }
+  }
+  {
+    const previousLocalStorage = globalThis.localStorage;
+    try {
+      const storage = new Map([["lore_resolve_epoch", JSON.stringify({ epoch: "42", ts: Number.NaN })]]);
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: {
+          getItem: (key) => storage.get(key) ?? null,
+          setItem: (key, value) => storage.set(key, String(value)),
+          removeItem: (key) => storage.delete(key),
+        },
+      });
+      assert.equal(autoResolveStorage.readResolveGuard(), null);
+      assert.equal(storage.has("lore_resolve_epoch"), false, "invalid timestamp auto-resolve guards must be cleared");
+    } finally {
+      if (previousLocalStorage === undefined) {
+        delete globalThis.localStorage;
+      } else {
+        Object.defineProperty(globalThis, "localStorage", {
+          configurable: true,
+          value: previousLocalStorage,
+        });
+      }
+    }
+  }
+  {
+    const previousLocalStorage = globalThis.localStorage;
+    try {
+      const storage = new Map([["lore_resolve_epoch", "0042"]]);
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: {
+          getItem: (key) => storage.get(key) ?? null,
+          setItem: (key, value) => storage.set(key, String(value)),
+          removeItem: (key) => storage.delete(key),
+        },
+      });
+      assert.equal(autoResolveStorage.readResolveGuard(), null);
+      assert.equal(storage.has("lore_resolve_epoch"), false, "legacy non-canonical auto-resolve epochs must be cleared");
+    } finally {
+      if (previousLocalStorage === undefined) {
+        delete globalThis.localStorage;
+      } else {
+        Object.defineProperty(globalThis, "localStorage", {
+          configurable: true,
+          value: previousLocalStorage,
+        });
+      }
+    }
+  }
+  assert.match(
+    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
+    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function normalizeResolveGuardEpoch[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\*\)\$\/[\s\S]*RESOLVE_GUARD_MAX_EPOCH_DIGITS[\s\S]*BigInt\(epoch\) > MAX_SAFE_INTEGER_BIGINT[\s\S]*const epoch = normalizeResolveGuardEpoch\(raw\.epoch\)[\s\S]*const epoch = normalizeResolveGuardEpoch\(raw\)[\s\S]*const normalizedEpoch = normalizeResolveGuardEpoch\(epoch\)[\s\S]*epoch: normalizedEpoch/,
+    "auto-resolve guard epochs must be canonicalized for JSON, legacy storage, and write paths",
+  );
+  assert.match(
+    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
+    /function normalizeResolveGuardTimestamp[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*value - now > RESOLVE_GUARD_MAX_FUTURE_SKEW_MS[\s\S]*const ts = normalizeResolveGuardTimestamp\(raw\.ts, now\)/,
+    "auto-resolve guard timestamps must use safe-integer non-future normalization",
+  );
+  assert.match(
+    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
+    /const entry = normalizeResolveGuardEntry\(JSON\.parse\(raw\)\)[\s\S]*if \(!entry\) clearResolveGuard\(\)[\s\S]*catch \{[\s\S]*clearResolveGuard\(\)/,
+    "auto-resolve guard reads must clear corrupt or invalid localStorage entries",
+  );
+  assert.doesNotMatch(
+    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
+    /Number\.isFinite\(raw\.ts\)|typeof raw\.ts === "number" && Number\.isFinite|\/\^\\d\+\$\/\.test\(epoch\)/,
+    "auto-resolve guard reads must not return to broad finite timestamp or regex-only/unbounded epoch acceptance",
+  );
+}

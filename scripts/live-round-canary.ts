@@ -30,11 +30,13 @@ import {
 } from "../app/lib/constants";
 import { parseCanaryHealthBaseUrl, parseCanaryHealthPayloads } from "../app/lib/canaryHealthTelemetry";
 import {
-  clampKeeperFeeOverridesToBalance,
-  getAffordableKeeperGasLimit,
+  assertKeeperFeeBudget,
   getFallbackFeeOverrides,
   getKeeperFeeOverrides,
   getLineaFeeOverrides,
+  isLineaFeePolicyError,
+  type FeeOverrides,
+  type KeeperFeeBudgetKind,
 } from "../app/lib/lineaFees";
 import { tileIdsToMask } from "../app/lib/tileMask";
 import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs, getStableLineaReadRpcs } from "../config/publicConfig";
@@ -80,6 +82,7 @@ const SAFE_WINDOW_HEARTBEAT_MS = parseIntegerEnv("LIVE_TEST_SAFE_WINDOW_HEARTBEA
 const RESOLVE_RETRY_COOLDOWN_MS = parseIntegerEnv("LIVE_TEST_RESOLVE_RETRY_COOLDOWN_MS", 15_000, 5_000, 600_000);
 // Randomness can make the mined resolve take a costlier winner branch than eth_estimateGas simulated.
 const RESOLVE_GAS_FLOOR = BigInt(parseIntegerEnv("LIVE_TEST_RESOLVE_GAS_FLOOR", 500_000, 100_000, 1_000_000));
+const LIVE_GAS_BUFFER_PERCENT = 150n;
 const LOOP_PAUSE_MS = parseIntegerEnv("LIVE_TEST_LOOP_PAUSE_MS", 1_500, 0, 120_000);
 const MAX_FAILURES = parseIntegerEnv("LIVE_TEST_MAX_FAILURES", 20, 1, 10_000);
 const FORCE_ALLOWANCE_APPROVE = process.env.LIVE_TEST_FORCE_ALLOWANCE_APPROVE === "1";
@@ -563,7 +566,8 @@ async function getFeeOverrides(publicClient: PublicClient) {
   try {
     const fees = await publicClient.estimateFeesPerGas();
     return getKeeperFeeOverrides(fees, APP_CHAIN.id) ?? getFallbackFeeOverrides(APP_CHAIN.id, "keeper");
-  } catch {
+  } catch (error) {
+    if (isLineaFeePolicyError(error)) throw error;
     return getFallbackFeeOverrides(APP_CHAIN.id, "keeper");
   }
 }
@@ -656,8 +660,8 @@ async function resolveIfNeeded(params: {
       let gas = gasEstimate > RESOLVE_GAS_FLOOR ? gasEstimate : RESOLVE_GAS_FLOOR;
       const fees = await getFeeOverrides(publicClient);
       const nativeBalance = await publicClient.getBalance({ address: resolver.account.address });
-      const affordableGasLimit = getAffordableKeeperGasLimit(gas, nativeBalance, fees);
-      if (affordableGasLimit == null) {
+      const budgetedGasLimit = getBudgetedLiveGasLimit(gas, nativeBalance, fees, "keeper");
+      if (budgetedGasLimit == null) {
         writeEvent(logPath, {
           amount: "0",
           epoch: epoch.toString(),
@@ -672,7 +676,7 @@ async function resolveIfNeeded(params: {
         });
         continue;
       }
-      gas = affordableGasLimit;
+      gas = budgetedGasLimit;
       if (
         MAX_RESOLVE_TRANSACTIONS !== null &&
         submittedResolveTransactions >= MAX_RESOLVE_TRANSACTIONS
@@ -732,6 +736,17 @@ async function resolveIfNeeded(params: {
       return;
     }
   }
+}
+
+function getBudgetedLiveGasLimit(
+  estimatedGas: bigint,
+  nativeBalance: bigint,
+  feeOverrides: FeeOverrides,
+  kind: KeeperFeeBudgetKind,
+): bigint | null {
+  const gas = (estimatedGas * LIVE_GAS_BUFFER_PERCENT + 99n) / 100n;
+  const requiredMaxCost = assertKeeperFeeBudget(feeOverrides, gas, APP_CHAIN.id, kind);
+  return nativeBalance >= requiredMaxCost ? gas : null;
 }
 
 async function waitForSafeWindow(params: {
@@ -813,7 +828,7 @@ async function ensureAllowance(params: {
   const startedAt = Date.now();
   const approveAmount = APPROVE_AMOUNT > requiredAllowance ? APPROVE_AMOUNT : requiredAllowance;
   const nativeBalance = await publicClient.getBalance({ address: wallet.account.address });
-  let fees = await getFeeOverrides(publicClient);
+  const fees = await getFeeOverrides(publicClient);
   const gasEstimate = await estimateGasWithMethodRetry(() => publicClient.estimateContractGas({
     account: wallet.account.address,
     address: LINEA_TOKEN_ADDRESS,
@@ -822,9 +837,10 @@ async function ensureAllowance(params: {
     args: [CONTRACT_ADDRESS, approveAmount],
     ...fees,
   } as never));
-  let gas = gasEstimate.value;
-  fees = clampKeeperFeeOverridesToBalance(fees, gas, nativeBalance) ?? fees;
-  gas = getAffordableKeeperGasLimit(gas, nativeBalance, fees) ?? gas;
+  const gas = getBudgetedLiveGasLimit(gasEstimate.value, nativeBalance, fees, "approval");
+  if (gas == null) {
+    throw new Error("approval has insufficient native balance for the fixed fee budget");
+  }
   const walletClient = createWalletClient({ account: wallet.account, chain: APP_CHAIN, transport });
   const hash = await walletClient.writeContract({
     account: wallet.account,
@@ -870,7 +886,7 @@ async function placeRound(params: {
   const startedAt = Date.now();
   const walletClient = createWalletClient({ account: wallet.account, chain: APP_CHAIN, transport });
   const nativeBalance = await publicClient.getBalance({ address: wallet.account.address });
-  let fees = await getBetFeeOverrides(publicClient);
+  const fees = await getBetFeeOverrides(publicClient);
   const preparedAt = Date.now();
   const functionName = CONTRACT_REQUIRES_EPOCH_BOUND_BETS
     ? "placeBatchBetsBitmapForEpoch"
@@ -920,8 +936,11 @@ async function placeRound(params: {
     gasEstimateFallback = true;
   }
   const gasEstimatedAt = Date.now();
-  fees = clampKeeperFeeOverridesToBalance(fees, gas, nativeBalance) ?? fees;
-  gas = getAffordableKeeperGasLimit(gas, nativeBalance, fees) ?? gas;
+  const budgetedGasLimit = getBudgetedLiveGasLimit(gas, nativeBalance, fees, "keeper");
+  if (budgetedGasLimit == null) {
+    throw new Error("bet has insufficient native balance for the fixed fee budget");
+  }
+  gas = budgetedGasLimit;
   const [nonceLatest, noncePending] = await Promise.all([
     publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "latest" }),
     publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "pending" }),

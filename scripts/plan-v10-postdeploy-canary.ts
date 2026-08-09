@@ -8,13 +8,13 @@ import {
   formatUnits,
   getAddress,
   http,
-  parseAbi,
   parseUnits,
   BaseError,
   ContractFunctionRevertedError,
   toFunctionSelector,
   type Address,
 } from "viem";
+import { LINEA_ORE_V10_ABI as POSTDEPLOY_AUDIT_ABI } from "../config/generated/lineaOreV10Abi";
 
 import {
   CONTRACT_ADDRESS,
@@ -56,11 +56,6 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const EPOCH_BOUND_BITMAP_SELECTOR = toFunctionSelector(
   "placeBatchBetsBitmapForEpoch(uint256,uint32,uint256)",
 );
-const POSTDEPLOY_AUDIT_ABI = [
-  ...GAME_ABI,
-  ...parseAbi(["function renounceOwnership() external"]),
-] as const;
-
 type RoleName = (typeof ROLE_NAMES)[number];
 type RoleAddress = { role: RoleName; address: Address };
 type ResolvedEpoch = {
