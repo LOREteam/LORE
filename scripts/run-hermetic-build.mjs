@@ -30,6 +30,7 @@ const PROTECTED_DATABASE_RELATIVE_PATHS = [
 const BUILD_OUTPUT_LOCK_ROOT_NAME = "lore-build-output-locks";
 const BUILD_OUTPUT_LOCK_WAIT_MS = 15 * 60 * 1000;
 const BUILD_OUTPUT_LOCK_POLL_MS = 100;
+const BUILD_CHILD_TIMEOUT_MS = 20 * 60 * 1000;
 const BUILD_LOCK_SLEEP_ARRAY = new Int32Array(new SharedArrayBuffer(4));
 
 function isPathInsideOrSame(rootPath, candidatePath) {
@@ -200,6 +201,26 @@ function childOutcomeFailure(result) {
   return error;
 }
 
+function terminateTimedOutBuildTree(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return;
+
+  if (process.platform === "win32") {
+    // `spawnSync` only terminates its direct child on Windows. A timed-out
+    // Next build may otherwise leave compiler descendants writing `.next`.
+    spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    return;
+  }
+
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+}
+
 export function runHermeticBuild({
   projectRoot = process.cwd(),
   command,
@@ -208,9 +229,13 @@ export function runHermeticBuild({
   stdio = "inherit",
   encoding,
   temporaryRoot = tmpdir(),
+  timeoutMs = BUILD_CHILD_TIMEOUT_MS,
 } = {}) {
   if (typeof command !== "string" || command.length === 0) {
     throw new Error("Hermetic build command is required");
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new Error("Hermetic build timeout must be a positive safe integer");
   }
 
   const resolvedProjectRoot = realpathSync(projectRoot);
@@ -244,8 +269,13 @@ export function runHermeticBuild({
       cwd: resolvedProjectRoot,
       env: childEnv,
       stdio,
+      timeout: timeoutMs,
+      detached: process.platform !== "win32",
       ...(encoding ? { encoding } : {}),
     });
+    if (result.error?.code === "ETIMEDOUT") {
+      terminateTimedOutBuildTree(result.pid);
+    }
     childFailure = result.error ?? null;
   } catch (error) {
     childFailure = error;

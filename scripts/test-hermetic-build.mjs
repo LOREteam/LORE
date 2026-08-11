@@ -39,7 +39,7 @@ function removeFixture(root) {
   rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }
 
-function runFixtureChild(root, source, markerName, extraEnv = {}) {
+function runFixtureChild(root, source, markerName, extraEnv = {}, timeoutMs) {
   const markerPath = join(root, markerName);
   const outcome = runHermeticBuild({
     projectRoot: root,
@@ -57,8 +57,39 @@ function runFixtureChild(root, source, markerName, extraEnv = {}) {
     },
     stdio: "pipe",
     encoding: "utf8",
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
   });
   return { ...outcome, markerPath };
+}
+
+{
+  const root = createFixture();
+  const descendantMarkerPath = join(root, "timed-out-descendant.txt");
+  try {
+    const source = `
+      const { spawn } = require("node:child_process");
+      const markerPath = ${JSON.stringify(descendantMarkerPath)};
+      spawn(process.execPath, ["-e", ${JSON.stringify(`
+        const { writeFileSync } = require("node:fs");
+        setTimeout(() => writeFileSync(${JSON.stringify(descendantMarkerPath)}, "late"), 1_000);
+        setTimeout(() => {}, 10_000);
+      `)}], { stdio: "ignore" });
+      setTimeout(() => {}, 10_000);
+    `;
+    assert.throws(
+      () => runFixtureChild(root, source, "timeout.json", {}, 100),
+      (error) => error?.code === "ETIMEDOUT",
+      "a timed-out hermetic build must expose the timeout result",
+    );
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_200);
+    assert.throws(
+      () => lstatSync(descendantMarkerPath),
+      (error) => error?.code === "ENOENT",
+      "a timed-out hermetic build must terminate descendant processes before they can write later",
+    );
+  } finally {
+    removeFixture(root);
+  }
 }
 
 function readMarker(markerPath) {

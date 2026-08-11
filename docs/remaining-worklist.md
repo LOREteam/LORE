@@ -67,10 +67,11 @@ Last updated: 2026-08-11. This is the single active local work queue.
       records deterministic digest `ca253f0c...dd09bb02` and no local
       High/Medium. The Workbench range-completion metadata omission is
       documented; it does not erase the sealed local contract evidence.
-- [ ] Address residual P2 build-runner work: outer timeout/process-tree
-      ownership and abandoned-lock recovery. Same-output-directory concurrency
-      is now serialized by the hermetic build lock; a surviving/replaced lock
-      fails closed rather than allowing overlapping `.next` writes.
+- [ ] Address residual P2 build-runner abandoned-lock recovery. Hermetic builds
+      now have a bounded outer timeout and terminate their owned process tree;
+      same-output-directory concurrency is serialized by the hermetic build
+      lock, while a surviving/replaced lock still fails closed rather than
+      allowing overlapping `.next` writes.
 
 ## P1 code hardening
 
