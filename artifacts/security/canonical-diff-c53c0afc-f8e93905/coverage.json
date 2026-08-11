@@ -1,0 +1,66 @@
+{
+  "completeness": "complete",
+  "deferred": [],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [],
+  "explicitExclusions": [],
+  "includePaths": [
+    "."
+  ],
+  "inventoryStrategy": "diff",
+  "mode": "branch_diff",
+  "scanId": "fa83b0ff-3fc0-4338-817d-a78fb42bdd8a",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_historical_scan_artifacts",
+      "label": "9 canonical security artifact JSON files",
+      "notes": "All manifest-listed artifact digests matched and each findings document was empty.",
+      "receiptRefs": [
+        "artifacts/02_discovery/deep_review_input.jsonl"
+      ],
+      "riskArea": "Historical scan evidence integrity"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_business_test_coordinator",
+      "label": "scripts/test-business-logic.mjs",
+      "notes": "Fixed explicit imports preserve ordered coordinator execution; the sole asynchronous suite remains awaited.",
+      "receiptRefs": [
+        "artifacts/02_discovery/deep_review_input.jsonl"
+      ],
+      "riskArea": "Imported test-module execution"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_api_test_extractions",
+      "label": "API, public-read-model, jackpot, and rebate test modules",
+      "notes": "Modules expose only local assertions/inert in-process requests and no external write or production request-handler path.",
+      "receiptRefs": [
+        "artifacts/02_discovery/deep_review_input.jsonl"
+      ],
+      "riskArea": "Test-only route and rate-limit coverage"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_ui_runtime_test_extractions",
+      "label": "chat, UI, polling, wallet presentation, and production-runtime test modules",
+      "notes": "Fixtures restore environment state and add no production network, secret, or mutation sink.",
+      "receiptRefs": [
+        "artifacts/02_discovery/deep_review_input.jsonl"
+      ],
+      "riskArea": "Test fixture environment and coordinator calls"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_hermetic_build",
+      "label": "scripts/run-hermetic-build.mjs and test-hermetic-build.mjs",
+      "notes": "Writes/removals remain owned-temp-root confined with reparse/replacement checks and protected-file hash/mtime invariants.",
+      "receiptRefs": [
+        "artifacts/02_discovery/deep_review_input.jsonl"
+      ],
+      "riskArea": "Temporary filesystem confinement and protected DB integrity"
+    }
+  ]
+}

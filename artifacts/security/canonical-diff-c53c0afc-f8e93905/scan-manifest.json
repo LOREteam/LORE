@@ -1,0 +1,81 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "2df982a0bf3d8493ad39d693c9143e413c4b627e63980a335bdd35cc30308fd2"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "20579601327d0ac26c59486d776481d33a9c97f72c8483fedfd3e30b9e67dd9f"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/deep_review_input.jsonl",
+        "sha256": "31a8c351b8f86d0e95d29aed1be4d0bb7d35180fb8bf6b2e0cc207a1d5952b46"
+      }
+    ],
+    "completedAt": "2026-08-11T18:22:11.641519Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "fa83b0ff-3fc0-4338-817d-a78fb42bdd8a",
+    "producer": {
+      "name": "codex-security-plugin",
+      "version": "0.1.18"
+    },
+    "scope": {
+      "excludePaths": [],
+      "includePaths": [
+        "."
+      ],
+      "limitations": [
+        "This narrow scan does not close the separately documented protocol-randomness finding or external G1-G14 evidence gates."
+      ],
+      "runtimeStatus": "No production runtime behavior changed; review was source and local-test oriented.",
+      "summary": "Exact local test/proof/documentation follow-up range.",
+      "validationMode": "Read-only deep review plus clean worktree and diff-check evidence."
+    },
+    "sealedAt": "2026-08-11T18:22:11.641519Z",
+    "startedAt": "2026-08-11T18:11:50Z",
+    "status": "completed",
+    "target": {
+      "baseRevision": "c53c0afcddae1f77b62ebebf5a041e5b9f27ec91",
+      "displayName": "linea-miner-main",
+      "headRevision": "f8e93905d705b921334d2c5cea54eb680fece63d",
+      "kind": "git_diff",
+      "snapshotDigest": "codex-security-snapshot/v1:sha256:1d74df0bc5da366ec7aad16a4841552de3d91d1cb5319d4e849096130ccb54eb",
+      "targetId": "target_sha256_908a147dd7e2bb281539a19d93c3def48ccab7950d49770aa8969ce57745331f"
+    },
+    "threatModel": {
+      "assets": [
+        "test-runner integrity",
+        "local protected SQLite identity",
+        "security scan artifact integrity",
+        "accurate release-readiness documentation"
+      ],
+      "assumptions": [
+        "The reviewed range is exact.",
+        "Test fixture code is not deployed as a public request handler."
+      ],
+      "attackerCapabilities": [
+        "An external user may exercise production runtime surfaces but cannot alter repository source or test fixtures.",
+        "A local filesystem adversary may attempt symlink/replacement races within temporary roots."
+      ],
+      "securityObjectives": [
+        "No test extraction may create an attacker-reachable production sink or weaken a required local security gate.",
+        "Hermetic build cleanup must remain confined to owned temporary paths.",
+        "Security artifacts must retain exact provenance and integrity."
+      ],
+      "summary": "The exact diff is local test-domain extraction, hermetic local test/build orchestration, historical scan evidence, and state/progress documentation. No live wallet, RPC, or chain actions are permitted.",
+      "trustBoundaries": [
+        "repository source and test fixtures",
+        "system temporary filesystem used by hermetic tests",
+        "non-executable scan evidence"
+      ]
+    }
+  },
+  "schemaVersion": "1.0"
+}
