@@ -120,7 +120,9 @@ Last updated: 2026-08-11. This is the single active local work queue.
 - [x] Add local CI definitions for Linux/Windows, scheduled dependency audits,
       explicit indexer/P1 rows, concurrency, timeouts, and compact artifacts.
 - [ ] Continue replacing source-string guards with imported behavior and reduce
-      the remaining 9,081-line business-test coordinator. The API-recovery/storage,
+      the remaining 8,571-line business-test coordinator. The client-identity/
+      external-rate-limit behavior now runs from its own imported module; the
+      API-recovery/storage,
       wallet-presentation, and public API read-model
       (rewards/recent-wins/leaderboards) assertions now run
       from imported modules, and the pending-nonce
