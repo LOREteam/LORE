@@ -1,16 +1,22 @@
+# Keep the release candidate text-identical across Windows and CI checkouts.
 * text=auto eol=lf
 
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+# Release/runtime assets and database evidence are never newline-normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
 *.gif binary
 *.ico binary
-*.jpeg binary
-*.jpg binary
 *.pdf binary
-*.png binary
 *.ttf binary
 *.webp binary
 *.woff binary
 *.woff2 binary
 *.zip binary
+*.wasm binary
+*.sqlite binary
+*.sqlite-wal binary
+*.sqlite-shm binary
