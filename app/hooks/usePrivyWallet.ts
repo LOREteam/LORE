@@ -11,15 +11,64 @@ import {
 } from "@privy-io/react-auth";
 import { useSetActiveWallet } from "@privy-io/wagmi";
 import { useAccount, usePublicClient } from "wagmi";
-import { toHex, getAddress } from "viem";
-import { APP_CHAIN_ID, APP_CHAIN_NAME } from "../lib/constants";
-import { getFallbackFeeOverrides, getKeeperFeeOverrides, getLineaFeeOverrides, type FeeOverrides } from "../lib/lineaFees";
+import { createPublicClient, http, toHex, getAddress } from "viem";
+import { getStableLineaReadRpcs } from "../../config/publicConfig";
+import { APP_CHAIN, APP_CHAIN_ID, APP_CHAIN_NAME, APP_NETWORK } from "../lib/constants";
+import {
+  assertKeeperFeeBudget,
+  assertNormalFeeBudget,
+  getFallbackFeeOverrides,
+  getKeeperFeeOverrides,
+  getLineaFeeOverrides,
+  hasCompleteFeeOverrides,
+  mergeFeeOverrides,
+  type FeeOverrides,
+} from "../lib/lineaFees";
 import { log } from "../lib/logger";
 import { withTimeout, isUserRejection } from "../lib/utils";
+import {
+  assertWalletTransferIntentMatchesTransaction,
+  createWalletTransferIntent,
+  selectWalletTransferAgreementRpcUrls,
+  withWalletTransferIntentLease,
+  WalletTransferIntentError,
+  type WalletTransferIntentDetails,
+  type WalletTransferIntentLease,
+  type WalletTransferNonceClients,
+} from "../lib/walletTransferIntent";
 
 const SILENT_SEND_TIMEOUT_MS = 45_000;
 const ACTIVE_WALLET_TIMEOUT_MS = 12_000;
 const EXTERNAL_WALLET_NETWORK_TIMEOUT_MS = 15_000;
+const NORMAL_VALUE_TRANSFER_GAS_LIMIT = 21_000n;
+
+function createWalletTransferNonceClients(): WalletTransferNonceClients | null {
+  const configuredRpcs = APP_NETWORK === "mainnet"
+    ? process.env.NEXT_PUBLIC_LINEA_RPCS
+    : process.env.NEXT_PUBLIC_LINEA_SEPOLIA_RPCS;
+  try {
+    const urls = selectWalletTransferAgreementRpcUrls(
+      getStableLineaReadRpcs(configuredRpcs, APP_NETWORK),
+    );
+    return [
+      createPublicClient({ chain: APP_CHAIN, transport: http(urls[0]) }),
+      createPublicClient({ chain: APP_CHAIN, transport: http(urls[1]) }),
+    ];
+  } catch {
+    return null;
+  }
+}
+
+const WALLET_TRANSFER_NONCE_CLIENTS = createWalletTransferNonceClients();
+
+type TransferAwareTransaction = {
+  to: `0x${string}`;
+  data?: `0x${string}`;
+  value?: bigint;
+  gas?: bigint;
+  expectedActor?: `0x${string}`;
+  transferIntent?: WalletTransferIntentDetails;
+};
 
 type Eip1193Provider = {
   request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
@@ -169,15 +218,11 @@ export function usePrivyWallet() {
 
   const sendTransactionSilent = useCallback(
     async (
-      tx: {
-        to: `0x${string}`;
-        data?: `0x${string}`;
-        value?: bigint;
-        gas?: bigint;
+      tx: TransferAwareTransaction & {
         nonce?: number;
         feeMode?: "normal" | "keeper";
       },
-      gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint },
+      gasOverrides?: FeeOverrides,
     ) => {
       if (!embeddedWallet || !embeddedWalletAddress) throw new Error("Privy embedded wallet not found.");
       // Some flows can switch active signer to external wallet; force embedded signer for silent tx.
@@ -190,42 +235,100 @@ export function usePrivyWallet() {
         throw error;
       }
       const feeMode = tx.feeMode ?? "normal";
+      const effectiveGas = tx.gas ?? (
+        feeMode === "normal" && tx.data === undefined ? NORMAL_VALUE_TRANSFER_GAS_LIMIT : undefined
+      );
       const baseRequest: Parameters<typeof sendTransaction>[0] = {
         to: tx.to,
         data: tx.data,
         value: tx.value !== undefined && tx.value !== BigInt(0) ? tx.value : undefined,
         chainId: APP_CHAIN_ID,
-        ...(tx.gas ? { gas: tx.gas } : {}),
+        ...(effectiveGas !== undefined ? { gas: effectiveGas } : {}),
         ...(tx.nonce !== undefined ? { nonce: BigInt(tx.nonce) } : {}),
       };
       // Resolve fee overrides once, apply to the request.
-      const effectiveFees: FeeOverrides | undefined =
-        gasOverrides && ("maxFeePerGas" in gasOverrides || "gasPrice" in gasOverrides)
-          ? (gasOverrides as FeeOverrides)
-          : ((await resolveFeeOverrides(publicClient, feeMode, APP_CHAIN_ID)) ?? getFallbackFeeOverrides(APP_CHAIN_ID, feeMode));
-      applyFeeOverrides(baseRequest, effectiveFees, false);
-      let receipt: Awaited<ReturnType<typeof sendTransaction>>;
-      try {
-        receipt = await withTimeout(
-          sendTransaction(baseRequest, {
-            uiOptions: { showWalletUIs: false },
-          }),
-          SILENT_SEND_TIMEOUT_MS,
-          "Privy sendTransaction",
-        );
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("Privy sendTransaction timed out")) {
-          error.name = "WalletSendTimeoutError";
-        }
-        throw error;
+      const resolvedFees = hasCompleteFeeOverrides(gasOverrides)
+        ? undefined
+        : ((await resolveFeeOverrides(publicClient, feeMode, APP_CHAIN_ID)) ?? getFallbackFeeOverrides(APP_CHAIN_ID, feeMode));
+      const effectiveFees = mergeFeeOverrides(resolvedFees, gasOverrides);
+      if (feeMode === "normal") {
+        assertNormalFeeBudget(effectiveFees, effectiveGas, APP_CHAIN_ID);
+      } else {
+        assertKeeperFeeBudget(effectiveFees, effectiveGas ?? 0n, APP_CHAIN_ID, "keeper");
       }
-      return receipt.hash as `0x${string}`;
+      applyFeeOverrides(baseRequest, effectiveFees, false);
+      const transferDetails = tx.transferIntent ?? (
+        feeMode === "normal" &&
+        tx.data === undefined &&
+        tx.value !== undefined &&
+        tx.value > 0n &&
+        tx.nonce === undefined
+          ? { asset: "native" as const, destination: tx.to, amountWei: tx.value }
+          : null
+      );
+      const transferIntent = transferDetails
+        ? createWalletTransferIntent({
+            actor: embeddedWalletAddress,
+            chainId: APP_CHAIN_ID,
+            ...transferDetails,
+          })
+        : null;
+      if (transferIntent) {
+        if (feeMode !== "normal" || tx.nonce !== undefined) {
+          throw new WalletTransferIntentError("wallet_transfer_intent_unsafe_mode");
+        }
+        assertWalletTransferIntentMatchesTransaction(transferIntent, tx);
+      }
+      if (transferIntent && !WALLET_TRANSFER_NONCE_CLIENTS) {
+        throw new WalletTransferIntentError("wallet_transfer_intent_nonce_reconciliation_unavailable");
+      }
+      type SendReceipt = Awaited<ReturnType<typeof sendTransaction>>;
+      const submitSilentTransaction = async (
+        lease?: WalletTransferIntentLease,
+        retainResult?: (promise: Promise<SendReceipt>, lease: WalletTransferIntentLease) => Promise<SendReceipt>,
+      ) => {
+        if (lease) baseRequest.nonce = BigInt(lease.nonce);
+        const sendPromise = sendTransaction(baseRequest, {
+          address: embeddedWalletAddress,
+          uiOptions: { showWalletUIs: false },
+        });
+        const retainedSendPromise = lease && retainResult
+          ? retainResult(sendPromise, lease)
+          : sendPromise;
+        let receipt: SendReceipt;
+        try {
+          receipt = await withTimeout(
+            retainedSendPromise,
+            SILENT_SEND_TIMEOUT_MS,
+            "Privy sendTransaction",
+          );
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("Privy sendTransaction timed out")) {
+            error.name = "WalletSendTimeoutError";
+          }
+          throw error;
+        }
+        return receipt.hash as `0x${string}`;
+      };
+
+      if (transferIntent && WALLET_TRANSFER_NONCE_CLIENTS) {
+        return withWalletTransferIntentLease(
+          transferIntent,
+          WALLET_TRANSFER_NONCE_CLIENTS,
+          async (acquisition, retainResult) => {
+            if (acquisition.status === "known-hash") return acquisition.hash;
+            return submitSilentTransaction(acquisition.lease, retainResult);
+          },
+          { abandonOnError: isUserRejection },
+        );
+      }
+      return submitSilentTransaction();
     },
     [sendTransaction, embeddedWallet, embeddedWalletAddress, publicClient, setActiveWallet],
   );
 
   const sendTransactionFromExternal = useCallback(
-    async (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => {
+    async (tx: TransferAwareTransaction) => {
       if (!externalWallet) throw new Error("External wallet not connected.");
       // External-wallet flow: trigger the wallet's own send tx prompt directly.
       // This is more reliable than routing through embedded sendTransaction flow.
@@ -263,12 +366,19 @@ export function usePrivyWallet() {
       const providerAccount = getProviderSelectedAddress(await provider.request({ method: "eth_accounts" }));
       if (!providerAccount) throw new Error("Select an account in your external wallet and try again.");
       setProviderExternalWalletAddress(providerAccount);
+      if (
+        tx.expectedActor &&
+        getAddress(tx.expectedActor).toLowerCase() !== providerAccount.toLowerCase()
+      ) {
+        throw new WalletTransferIntentError("wallet_transfer_intent_actor_changed");
+      }
       const requestTx: {
         from: `0x${string}`;
         to: `0x${string}`;
         data?: `0x${string}`;
         value?: `0x${string}`;
         gas?: `0x${string}`;
+        nonce?: `0x${string}`;
       } = {
         from: providerAccount,
         to: tx.to,
@@ -277,15 +387,63 @@ export function usePrivyWallet() {
       if (tx.value !== undefined && tx.value !== BigInt(0)) requestTx.value = toHex(tx.value) as `0x${string}`;
       if (tx.gas) requestTx.gas = toHex(tx.gas) as `0x${string}`;
 
-      const hash = await withTimeout(
-        provider.request({
+      const transferDetails = tx.transferIntent ?? (
+        tx.data === undefined && tx.value !== undefined && tx.value > 0n
+          ? { asset: "native" as const, destination: tx.to, amountWei: tx.value }
+          : null
+      );
+      const transferIntent = transferDetails
+        ? createWalletTransferIntent({
+            actor: providerAccount,
+            chainId: APP_CHAIN_ID,
+            ...transferDetails,
+          })
+        : null;
+      if (transferIntent) {
+        assertWalletTransferIntentMatchesTransaction(transferIntent, tx);
+        if (!WALLET_TRANSFER_NONCE_CLIENTS) {
+          throw new WalletTransferIntentError("wallet_transfer_intent_nonce_reconciliation_unavailable");
+        }
+      }
+
+      const submitExternalTransaction = async (
+        lease?: WalletTransferIntentLease,
+        retainResult?: (
+          promise: Promise<{ hash: unknown }>,
+          lease: WalletTransferIntentLease,
+        ) => Promise<{ hash: unknown }>,
+      ) => {
+        if (lease) requestTx.nonce = toHex(lease.nonce) as `0x${string}`;
+        const sendPromise = (provider.request({
           method: "eth_sendTransaction",
           params: [requestTx],
-        }) as Promise<string>,
-        SILENT_SEND_TIMEOUT_MS,
-        "External wallet eth_sendTransaction",
-      );
-      return hash as `0x${string}`;
+        }) as Promise<unknown>).then((hash) => ({ hash }));
+        const retainedSendPromise = lease && retainResult
+          ? retainResult(sendPromise, lease)
+          : sendPromise;
+        const result = await withTimeout(
+          retainedSendPromise,
+          SILENT_SEND_TIMEOUT_MS,
+          "External wallet eth_sendTransaction",
+        );
+        if (typeof result.hash !== "string") {
+          throw new WalletTransferIntentError("wallet_transfer_intent_invalid_hash");
+        }
+        return result.hash as `0x${string}`;
+      };
+
+      if (transferIntent && WALLET_TRANSFER_NONCE_CLIENTS) {
+        return withWalletTransferIntentLease(
+          transferIntent,
+          WALLET_TRANSFER_NONCE_CLIENTS,
+          async (acquisition, retainResult) => {
+            if (acquisition.status === "known-hash") return acquisition.hash;
+            return submitExternalTransaction(acquisition.lease, retainResult);
+          },
+          { abandonOnError: isUserRejection },
+        );
+      }
+      return submitExternalTransaction();
     },
     [externalWallet],
   );

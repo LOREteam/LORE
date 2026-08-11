@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { recoverMessageAddress } from "viem";
 import { APP_CHAIN_ID } from "../../../../app/lib/constants";
 import {
   ADMIN_AUTH_PROOF_TTL_MS,
@@ -10,7 +11,6 @@ import {
   normalizeAdminAuthAddress,
   parseAdminAuthMessage,
 } from "../../../lib/adminAuth";
-import { publicClient } from "../../_lib/dataBridge";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { logRouteError } from "../../_lib/routeError";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
@@ -46,6 +46,17 @@ async function consumeAdminProof(address: string, nonce: string, uri: string, tt
     return acquireExternalExpiringLock(`admin-auth:${proofKey}`, ttlMs);
   }
   return acquireExpiringLock(`admin-auth:${proofKey}`, nonce, ttlMs);
+}
+
+async function verifyAdminEoaMessage(message: string, signature: `0x${string}`) {
+  try {
+    // Admin authentication is intentionally EOA-only. Never delegate this
+    // authorization decision to an RPC or enable contract-wallet fallbacks.
+    const recoveredAddress = await recoverMessageAddress({ message, signature });
+    return normalizeAdminAuthAddress(recoveredAddress) === ADMIN_AUTH_WALLET;
+  } catch {
+    return false;
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -106,11 +117,7 @@ export async function POST(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Expired auth proof" }, { status: 401 }), { varyCookie: true });
     }
 
-    const verified = await publicClient.verifyMessage({
-      address: authAddress,
-      message: authMessage,
-      signature: authSignature as `0x${string}`,
-    });
+    const verified = await verifyAdminEoaMessage(authMessage, authSignature as `0x${string}`);
     if (!verified) {
       return applyNoStoreHeaders(NextResponse.json({ error: "Signature verification failed" }, { status: 401 }), { varyCookie: true });
     }

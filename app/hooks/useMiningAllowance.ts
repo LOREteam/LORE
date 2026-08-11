@@ -11,6 +11,7 @@ import {
 } from "../lib/constants";
 import { delay } from "../lib/utils";
 import { log } from "../lib/logger";
+import { assertKeeperFeeBudget } from "../lib/lineaFees";
 import type { GasOverrides, SilentSendFn } from "./useMining.types";
 import type { PendingApproveState, ReceiptState } from "./useMining.stateTypes";
 import { withMiningRpcTimeout } from "./useMining.shared";
@@ -49,6 +50,23 @@ function normalizeApprovalNonce(value: unknown): number | null {
 
 export function selectApprovalSubmissionNonce(trackedNonce: unknown, freshPendingNonce: unknown): number | null {
   return normalizeApprovalNonce(trackedNonce ?? freshPendingNonce);
+}
+
+export function buildDirectApprovalWriteRequest(
+  approvalNonce: number,
+  approveOverrides: GasOverrides | undefined,
+) {
+  assertKeeperFeeBudget(approveOverrides, MIN_GAS_APPROVE, APP_CHAIN_ID, "approval");
+  return {
+    ...approveOverrides,
+    address: LINEA_TOKEN_ADDRESS,
+    abi: TOKEN_ABI,
+    functionName: "approve" as const,
+    args: [CONTRACT_ADDRESS, maxUint256] as const,
+    chainId: APP_CHAIN_ID,
+    nonce: approvalNonce,
+    gas: MIN_GAS_APPROVE,
+  };
 }
 
 function getPendingApproveAgeMs(pendingApprove: PendingApproveState, now: number): number | null {
@@ -158,7 +176,7 @@ export function useMiningAllowance({
   );
 
   const ensureAllowance = useCallback(
-    async (requiredAmount: bigint) => {
+    async (requiredAmount: bigint, assertBeforeSend?: () => void) => {
       const actorAddress = getActorAddress();
       const pc = readPublicClient();
       if (!actorAddress || !pc) return;
@@ -192,13 +210,6 @@ export function useMiningAllowance({
         }
 
         const approveOverrides = await getApproveFees(attempt) ?? await getUrgentFees();
-        const writeApproveOverrides =
-          approveOverrides && "maxFeePerGas" in approveOverrides
-            ? {
-                maxFeePerGas: approveOverrides.maxFeePerGas,
-                maxPriorityFeePerGas: approveOverrides.maxPriorityFeePerGas,
-              }
-            : {};
         await assertNativeGasBalance(MIN_GAS_APPROVE, approveOverrides);
         const trackedApprovalNonce = pendingApproveRef.current?.nonce;
         const approvalNonceRaw = trackedApprovalNonce ?? await withMiningRpcTimeout(
@@ -222,20 +233,16 @@ export function useMiningAllowance({
               functionName: "approve",
               args: [CONTRACT_ADDRESS, maxUint256],
             });
+            assertBeforeSend?.();
             approveHash = await silentSend(
               { to: LINEA_TOKEN_ADDRESS, data, gas: MIN_GAS_APPROVE, nonce: approvalNonce },
               approveOverrides,
             );
           } else {
-            approveHash = await readWriteContractAsync()({
-              address: LINEA_TOKEN_ADDRESS,
-              abi: TOKEN_ABI,
-              functionName: "approve",
-              args: [CONTRACT_ADDRESS, maxUint256],
-              chainId: APP_CHAIN_ID,
-              nonce: approvalNonce,
-              ...writeApproveOverrides,
-            }) as `0x${string}`;
+            assertBeforeSend?.();
+            approveHash = await readWriteContractAsync()(
+              buildDirectApprovalWriteRequest(approvalNonce, approveOverrides),
+            ) as `0x${string}`;
           }
           pendingApproveRef.current = { hash: approveHash, submittedAt: Date.now(), nonce: approvalNonce };
           approveState = await waitReceipt(approveHash);

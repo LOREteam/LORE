@@ -53,7 +53,7 @@ const canUploadSentrySourcemaps = Boolean(
   process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT,
 );
 
-export default withSentryConfig(nextConfig, {
+const sentryConfig = {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,
@@ -63,4 +63,18 @@ export default withSentryConfig(nextConfig, {
     disable: !canUploadSentrySourcemaps,
     deleteSourcemapsAfterUpload: true,
   },
-});
+};
+
+export default function configureNext(phase) {
+  const isBuildCommand = process.argv.slice(1).includes("build");
+  if (
+    phase === "phase-production-build"
+    && isBuildCommand
+    && process.env.LORE_HERMETIC_BUILD !== "1"
+  ) {
+    throw new Error(
+      "Production builds must run through `npm run build` so LORE_DB_PATH is isolated.",
+    );
+  }
+  return withSentryConfig(nextConfig, sentryConfig);
+}

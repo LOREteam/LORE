@@ -1,6 +1,6 @@
 "use client";
 
-import { getAddress, type PublicClient } from "viem";
+import { getAddress, parseUnits, type PublicClient } from "viem";
 import {
   APP_CHAIN_NAME,
   APP_CHAIN_ID,
@@ -8,7 +8,8 @@ import {
   GAME_ABI,
   GRID_SIZE,
 } from "../lib/constants";
-import { validateBetAmount } from "../lib/utils";
+import { isLineaFeePolicyError } from "../lib/lineaFees";
+import { normalizeDecimalInput, validateBetAmount } from "../lib/utils";
 
 export interface PersistedAutoMinerSession {
   active: boolean;
@@ -19,6 +20,11 @@ export interface PersistedAutoMinerSession {
   rounds: number;
   nextRoundIndex: number;
   lastPlacedEpoch: string | null;
+  issuedAt: number;
+  expiresAt: number;
+  maxSpendPerBetRaw: string;
+  totalSpendRaw: string;
+  remainingSpendRaw: string;
 }
 
 export interface PersistedTabLock {
@@ -31,6 +37,7 @@ export const AUTO_MINER_STORAGE_KEY = `lineaore:auto-miner-session:v3:${APP_CHAI
 export const AUTO_MINER_SESSION_EVENT = `lineaore:auto-mine-session-change:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 export const TAB_LOCK_KEY = `lore:auto-mine-tab-lock:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 export const MAX_AUTO_MINER_CYCLES = 5000;
+export const AUTO_MINER_AUTHORIZATION_TTL_MS = 24 * 60 * 60 * 1000;
 export const TAB_LOCK_TTL_MS = 90_000;
 export const TAB_LOCK_PING_TIMEOUT_MS = 700;
 const TAB_LOCK_MAX_FUTURE_SKEW_MS = 5_000;
@@ -38,6 +45,30 @@ const TAB_LOCK_TX_TOKEN_RE = /^[a-zA-Z0-9:._-]{1,96}$/;
 export const SESSION_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
 const AUTO_MINER_RUN_ID_RE = /^[a-zA-Z0-9:_-]{1,120}$/;
 const AUTO_MINER_EPOCH_RE = /^(?:0|[1-9]\d{0,77})$/;
+const AUTO_MINER_RAW_AMOUNT_RE = /^(?:0|[1-9]\d*)$/;
+const AUTO_MINER_MAX_FUTURE_SKEW_MS = 5_000;
+
+export function getAutoMinerSpendEnvelope(params: {
+  betStr: string;
+  blocks: number;
+  rounds: number;
+  nextRoundIndex?: number;
+}) {
+  const { betStr, blocks, rounds, nextRoundIndex = 0 } = params;
+  if (validateBetAmount(betStr) !== null) return null;
+  if (!Number.isSafeInteger(blocks) || blocks < 1 || blocks > GRID_SIZE) return null;
+  if (!Number.isSafeInteger(rounds) || rounds < 1 || rounds > MAX_AUTO_MINER_CYCLES) return null;
+  if (!Number.isSafeInteger(nextRoundIndex) || nextRoundIndex < 0 || nextRoundIndex > rounds) return null;
+  try {
+    const singleAmountRaw = parseUnits(normalizeDecimalInput(betStr.trim()), 18);
+    const maxSpendPerBetRaw = singleAmountRaw * BigInt(blocks);
+    const totalSpendRaw = maxSpendPerBetRaw * BigInt(rounds);
+    const remainingSpendRaw = maxSpendPerBetRaw * BigInt(rounds - nextRoundIndex);
+    return { maxSpendPerBetRaw, totalSpendRaw, remainingSpendRaw };
+  } catch {
+    return null;
+  }
+}
 
 function dispatchAutoMinerSessionEvent() {
   if (typeof window === "undefined") return;
@@ -370,6 +401,9 @@ export function isWrongNetworkError(err: unknown): boolean {
 }
 
 export function getBetErrorMessage(err: unknown): string {
+  if (isLineaFeePolicyError(err)) {
+    return "Bet failed: the fee safety limit was exceeded. Wait for network fees to fall and try again.";
+  }
   if (isInsufficientFundsError(err)) {
     return "Bet failed: not enough ETH for gas on Privy wallet.";
   }
@@ -432,6 +466,7 @@ export function isMissingTokenGetterError(err: unknown): boolean {
 export function isDeterministicBetExecutionError(err: unknown): boolean {
   const msg = flattenErrorMessage(err);
   return (
+    isLineaFeePolicyError(err) ||
     msg.includes("contractfunctionexecutionerror") ||
     msg.includes("execution reverted") ||
     msg.includes("the contract function") ||
@@ -460,6 +495,11 @@ export function sanitizePersistedAutoMinerSession(value: unknown): PersistedAuto
   const rounds = raw.rounds;
   const nextRoundIndex = raw.nextRoundIndex;
   const lastPlacedEpoch = raw.lastPlacedEpoch;
+  const issuedAt = raw.issuedAt;
+  const expiresAt = raw.expiresAt;
+  const maxSpendPerBetRaw = raw.maxSpendPerBetRaw;
+  const totalSpendRaw = raw.totalSpendRaw;
+  const remainingSpendRaw = raw.remainingSpendRaw;
 
   if (typeof active !== "boolean") return null;
   if (runId !== undefined && runId !== null && (typeof runId !== "string" || !AUTO_MINER_RUN_ID_RE.test(runId))) {
@@ -487,8 +527,55 @@ export function sanitizePersistedAutoMinerSession(value: unknown): PersistedAuto
     if (typeof lastPlacedEpoch !== "string" || !AUTO_MINER_EPOCH_RE.test(lastPlacedEpoch)) return null;
   }
 
+  const envelope = getAutoMinerSpendEnvelope({ betStr, blocks, rounds, nextRoundIndex });
+  if (!envelope) return null;
+  const isLegacySession =
+    issuedAt === undefined &&
+    expiresAt === undefined &&
+    maxSpendPerBetRaw === undefined &&
+    totalSpendRaw === undefined &&
+    remainingSpendRaw === undefined;
+
+  let normalizedIssuedAt = 0;
+  let normalizedExpiresAt = 0;
+  let normalizedRemainingSpendRaw = envelope.remainingSpendRaw;
+  if (!isLegacySession) {
+    const now = Date.now();
+    const isMigratedPausedSession = active === false && issuedAt === 0 && expiresAt === 0;
+    if (
+      !isMigratedPausedSession &&
+      (
+        typeof issuedAt !== "number" ||
+        !Number.isSafeInteger(issuedAt) ||
+        issuedAt <= 0 ||
+        issuedAt > now + AUTO_MINER_MAX_FUTURE_SKEW_MS ||
+        typeof expiresAt !== "number" ||
+        !Number.isSafeInteger(expiresAt) ||
+        expiresAt !== issuedAt + AUTO_MINER_AUTHORIZATION_TTL_MS
+      )
+    ) {
+      return null;
+    }
+    if (
+      typeof maxSpendPerBetRaw !== "string" ||
+      !AUTO_MINER_RAW_AMOUNT_RE.test(maxSpendPerBetRaw) ||
+      BigInt(maxSpendPerBetRaw) !== envelope.maxSpendPerBetRaw ||
+      typeof totalSpendRaw !== "string" ||
+      !AUTO_MINER_RAW_AMOUNT_RE.test(totalSpendRaw) ||
+      BigInt(totalSpendRaw) !== envelope.totalSpendRaw ||
+      typeof remainingSpendRaw !== "string" ||
+      !AUTO_MINER_RAW_AMOUNT_RE.test(remainingSpendRaw) ||
+      BigInt(remainingSpendRaw) > envelope.remainingSpendRaw
+    ) {
+      return null;
+    }
+    normalizedIssuedAt = issuedAt as number;
+    normalizedExpiresAt = expiresAt as number;
+    normalizedRemainingSpendRaw = BigInt(remainingSpendRaw);
+  }
+
   return {
-    active,
+    active: isLegacySession ? false : active && normalizedExpiresAt > Date.now(),
     runId: runId ?? null,
     actor: normalizedActor,
     betStr,
@@ -496,6 +583,11 @@ export function sanitizePersistedAutoMinerSession(value: unknown): PersistedAuto
     rounds,
     nextRoundIndex,
     lastPlacedEpoch: lastPlacedEpoch ?? null,
+    issuedAt: normalizedIssuedAt,
+    expiresAt: normalizedExpiresAt,
+    maxSpendPerBetRaw: envelope.maxSpendPerBetRaw.toString(),
+    totalSpendRaw: envelope.totalSpendRaw.toString(),
+    remainingSpendRaw: normalizedRemainingSpendRaw.toString(),
   };
 }
 

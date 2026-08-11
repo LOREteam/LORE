@@ -19,7 +19,7 @@ export interface PendingMiningTxState {
   ts: number;
 }
 
-export type PendingMiningTxRecovery = "clear" | "confirmed" | "pending";
+export type PendingMiningTxRecovery = "clear" | "confirmed" | "pending" | "manual-reconciliation-required";
 
 type PendingMiningTxClient = {
   getTransaction: (args: { hash: `0x${string}` }) => Promise<{ blockNumber?: bigint | null }>;
@@ -243,9 +243,12 @@ export async function recoverPendingMiningTx(
       if (normalizedLatestNonce === null || normalizedPendingNonce === null || normalizedPendingNonce < normalizedLatestNonce) {
         return "pending";
       }
-      if (normalizedLatestNonce > state.nonce) return "confirmed";
+      // A consumed nonce proves only that this slot is no longer pending. Without the
+      // submitted hash, it cannot identify the mined transaction or prove its receipt,
+      // so do not unlock a potentially successful bet for a duplicate submission.
+      if (normalizedLatestNonce > state.nonce) return "manual-reconciliation-required";
       if (normalizedPendingNonce > state.nonce) return "pending";
-      return hasPendingTxNotFoundGraceElapsed(state.ts, now) ? "clear" : "pending";
+      return hasPendingTxNotFoundGraceElapsed(state.ts, now) ? "manual-reconciliation-required" : "pending";
     } catch {
       return "pending";
     }

@@ -3,10 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { MutableRefObject } from "react";
 import { log } from "../lib/logger";
-import {
-  getAutoMineRestoreFingerprint,
-  shouldSuppressDuplicateAutoMineRestore,
-} from "../lib/mining/autoMineRestoreDeduper";
 import type { AutoMinePhase } from "./useMining.types";
 import type { createAutoMineRuntimeController } from "../lib/mining/autoMineRuntimeController";
 
@@ -23,6 +19,10 @@ export interface RunAutoMiningParams {
   rounds: number;
   startRoundIndex?: number;
   lastPlacedEpoch?: bigint | null;
+}
+
+export function shouldSkipAutoMineRestore(explicitStartsInFlight: number, runtimeActive: boolean): boolean {
+  return explicitStartsInFlight > 0 || runtimeActive;
 }
 
 interface UseMiningLifecycleOptions {
@@ -66,6 +66,7 @@ export function useMiningLifecycle({
   deactivateAutoMineUi,
 }: UseMiningLifecycleOptions) {
   const runAutoMiningRef = useRef(runAutoMining);
+  const explicitStartsInFlightRef = useRef(0);
   const clearRestoreMarker = useCallback(() => {
     if (typeof window === "undefined") return;
     window.__loreAutoMineRestoreFingerprint = undefined;
@@ -77,67 +78,33 @@ export function useMiningLifecycle({
   }, [runAutoMining]);
 
   const restoreSavedSession = useCallback(
-    async (progressMessage: string) => {
+    async () => {
+      if (shouldSkipAutoMineRestore(explicitStartsInFlightRef.current, autoMineRef.current)) {
+        log.info("AutoMine", "restore skipped - explicit run is already starting or active");
+        return;
+      }
       const restoreResult = runtimeController.readRestorableRun(getPreferredActorAddress());
-      const saved = restoreResult.kind === "resume" ? restoreResult.session : null;
+      const saved = restoreResult.kind === "paused" ? restoreResult.session : null;
       log.info("AutoMine", "restore check", {
         hasSaved: !!saved,
         nextRound: saved?.nextRoundIndex,
         totalRounds: saved?.rounds,
       });
 
-      if (restoreResult.kind !== "resume") {
+      if (restoreResult.kind !== "paused") {
         autoResumeRequestedRef.current = false;
         clearRestoreMarker();
         deactivateAutoMineUi();
         return;
       }
-
-      const now = Date.now();
-      const fingerprint = getAutoMineRestoreFingerprint(restoreResult.session);
-      if (
-        typeof window !== "undefined" &&
-        shouldSuppressDuplicateAutoMineRestore({
-          previousAt: window.__loreAutoMineRestoreAt,
-          previousFingerprint: window.__loreAutoMineRestoreFingerprint,
-          nextFingerprint: fingerprint,
-          now,
-        })
-      ) {
-        log.info("AutoMine", "restore skipped - duplicate remount restore suppressed", {
-          nextRound: restoreResult.session.nextRoundIndex,
-          totalRounds: restoreResult.session.rounds,
-        });
-        deactivateAutoMineUi({
-          phase: "retry-wait",
-          progress: "Waiting for the previous auto-miner run to settle before resuming.",
-        });
-        return;
-      }
-
-      if (typeof window !== "undefined") {
-        window.__loreAutoMineRestoreFingerprint = fingerprint;
-        window.__loreAutoMineRestoreAt = now;
-      }
-
-      activateAutoMineUi({
-        phase: "restoring",
-        params: {
-          betStr: restoreResult.params.betStr,
-          blocks: restoreResult.params.blocks,
-          rounds: restoreResult.params.rounds,
-        },
-        progress: progressMessage,
-      });
-      await runAutoMiningRef.current({
-        betStr: restoreResult.params.betStr,
-        blocks: restoreResult.params.blocks,
-        rounds: restoreResult.params.rounds,
-        startRoundIndex: restoreResult.params.startRoundIndex,
-        lastPlacedEpoch: restoreResult.params.lastPlacedEpoch,
+      autoResumeRequestedRef.current = false;
+      clearRestoreMarker();
+      deactivateAutoMineUi({
+        phase: "idle",
+        progress: "Saved Auto-Miner run is paused. Start Auto-Miner to authorize a fresh run.",
       });
     },
-    [activateAutoMineUi, autoResumeRequestedRef, clearRestoreMarker, deactivateAutoMineUi, getPreferredActorAddress, runtimeController],
+    [autoMineRef, autoResumeRequestedRef, clearRestoreMarker, deactivateAutoMineUi, getPreferredActorAddress, runtimeController],
   );
 
   const handleAutoMineToggle = useCallback(
@@ -170,7 +137,12 @@ export function useMiningLifecycle({
         params: { betStr, blocks, rounds },
       });
 
-      await runAutoMiningRef.current({ betStr, blocks, rounds });
+      explicitStartsInFlightRef.current += 1;
+      try {
+        await runAutoMiningRef.current({ betStr, blocks, rounds });
+      } finally {
+        explicitStartsInFlightRef.current = Math.max(0, explicitStartsInFlightRef.current - 1);
+      }
     },
     [
       autoMineRef,
@@ -193,7 +165,7 @@ export function useMiningLifecycle({
     restoreAttemptedRef.current = true;
 
     const timeoutId = setTimeout(() => {
-      void restoreSavedSession("Restoring...");
+      void restoreSavedSession();
     }, 1000);
 
     return () => clearTimeout(timeoutId);
@@ -210,7 +182,7 @@ export function useMiningLifecycle({
     if (!hasPreferredActor || !publicClientReady) return;
 
     const timeoutId = setTimeout(() => {
-      void restoreSavedSession("Retrying saved session...");
+      void restoreSavedSession();
     }, 5000);
 
     return () => clearTimeout(timeoutId);

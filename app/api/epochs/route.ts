@@ -18,7 +18,6 @@ import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
   isSafePositiveInteger,
-  patchStorage,
   publicClient,
 } from "../_lib/dataBridge";
 import { logRouteError } from "../_lib/routeError";
@@ -26,6 +25,11 @@ import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { createRouteCache } from "../_lib/routeCache";
 import { parsePositiveIntegerParam } from "../_lib/queryParams";
 import { parseStoredPositiveIntegerOrZero } from "../_lib/storedNumberParsing";
+import {
+  isRecoveryContextCurrent,
+  loadFinalizedRecoveryContext,
+  type FinalizedRecoveryContext,
+} from "../_lib/jackpotsService";
 const MAX_CHAIN_RECONCILE_EPOCHS = parseOptionalPositiveIntegerEnv(
   process.env.API_EPOCHS_RECONCILE_MAX,
   DEFAULT_API_EPOCHS_RECONCILE_MAX,
@@ -209,13 +213,12 @@ function filterEpochRowsByCurrentEpoch(
   );
 }
 
-async function readEpochRowsFromChain(epochIds: number[]): Promise<{
-  responseRows: Record<string, EpochRow>;
-  resolvedPatch: Record<string, EpochRow>;
-}> {
+async function readEpochRowsFromChain(
+  epochIds: number[],
+  context: FinalizedRecoveryContext,
+): Promise<Record<string, EpochRow>> {
   const normalizedIds = [...new Set(epochIds.filter(isSafePositiveInteger))];
   const responseRows: Record<string, EpochRow> = {};
-  const resolvedPatch: Record<string, EpochRow> = {};
 
   for (let i = 0; i < normalizedIds.length; i += EPOCHS_CHAIN_MULTICALL_CHUNK) {
     const chunk = normalizedIds.slice(i, i + EPOCHS_CHAIN_MULTICALL_CHUNK);
@@ -226,7 +229,10 @@ async function readEpochRowsFromChain(epochIds: number[]): Promise<{
       args: [BigInt(epoch)] as const,
     }));
     try {
-      const epochResults = await publicClient.multicall({ contracts: epochContracts });
+      const epochResults = await publicClient.multicall({
+        contracts: epochContracts,
+        blockNumber: context.blockNumber,
+      });
       chunk.forEach((epoch, index) => {
         const result = epochResults[index];
         if (result?.status !== "success") return;
@@ -239,9 +245,9 @@ async function readEpochRowsFromChain(epochIds: number[]): Promise<{
           rewardPool: formatUnits(row[1], 18),
           isDailyJackpot: row[4],
           isWeeklyJackpot: row[5],
+          resolvedBlock: context.blockNumber.toString(),
         };
         responseRows[String(epoch)] = epochRow;
-        resolvedPatch[String(epoch)] = epochRow;
       });
     } catch {
       for (const epoch of chunk) {
@@ -251,6 +257,7 @@ async function readEpochRowsFromChain(epochIds: number[]): Promise<{
             abi: READ_ABI,
             functionName: "epochs",
             args: [BigInt(epoch)],
+            blockNumber: context.blockNumber,
           }) as [bigint, bigint, bigint, boolean, boolean, boolean];
           const winningTile = parseEpochWinningTile(row[2]);
           if (!row[3] || winningTile === null) continue;
@@ -260,9 +267,9 @@ async function readEpochRowsFromChain(epochIds: number[]): Promise<{
             rewardPool: formatUnits(row[1], 18),
             isDailyJackpot: row[4],
             isWeeklyJackpot: row[5],
+            resolvedBlock: context.blockNumber.toString(),
           };
           responseRows[String(epoch)] = epochRow;
-          resolvedPatch[String(epoch)] = epochRow;
         } catch {
           // ignore one failed epoch
         }
@@ -270,7 +277,7 @@ async function readEpochRowsFromChain(epochIds: number[]): Promise<{
     }
   }
 
-  return { responseRows, resolvedPatch };
+  return responseRows;
 }
 
 async function buildEpochsPayload(
@@ -330,15 +337,42 @@ async function buildEpochsPayload(
     };
   }
 
-  const target = missing.slice(-Math.max(1, MAX_CHAIN_RECONCILE_EPOCHS));
-  const { responseRows, resolvedPatch } = await readEpochRowsFromChain(target);
-  if (Object.keys(resolvedPatch).length > 0) {
-    await patchStorage("gamedata/epochs", resolvedPatch);
-    epochs = {
-      ...epochs,
-      ...filterEpochRowsByCurrentEpoch(responseRows, currentEpoch),
+  const recoveryContext = await loadFinalizedRecoveryContext();
+  if (recoveryContext === null) {
+    return {
+      payload: { epochs },
+      refreshNeeded: true,
     };
-  } else if (Object.keys(responseRows).length > 0) {
+  }
+  const finalizedCurrentEpoch = parseChainEpochNumber(await publicClient.readContract({
+    address: CONTRACT_ADDRESS,
+    abi: READ_ABI,
+    functionName: "currentEpoch",
+    blockNumber: recoveryContext.blockNumber,
+  }));
+  if (finalizedCurrentEpoch === null) {
+    return {
+      payload: { epochs },
+      refreshNeeded: true,
+    };
+  }
+  const target = missing
+    .filter((epoch) => epoch < finalizedCurrentEpoch)
+    .slice(-Math.max(1, MAX_CHAIN_RECONCILE_EPOCHS));
+  if (target.length === 0) {
+    return {
+      payload: { epochs },
+      refreshNeeded: true,
+    };
+  }
+  const responseRows = await readEpochRowsFromChain(target, recoveryContext);
+  if (!(await isRecoveryContextCurrent(recoveryContext))) {
+    return {
+      payload: { epochs },
+      refreshNeeded: true,
+    };
+  }
+  if (Object.keys(responseRows).length > 0) {
     epochs = {
       ...epochs,
       ...filterEpochRowsByCurrentEpoch(responseRows, currentEpoch),

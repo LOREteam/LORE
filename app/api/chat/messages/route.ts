@@ -139,16 +139,6 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
-  const cacheKey = "latest";
-  const now = Date.now();
-  const cached = chatMessagesRouteCache.getFresh(cacheKey, now);
-  if (cached) {
-    markRouteCacheHit(ROUTE_METRIC_KEY);
-    finishRouteMetric(metric, 200);
-    return jsonNoStore(cached);
-  }
-  const staleCache = chatMessagesRouteCache.getStale(cacheKey);
-
   const rateLimited = await enforceSharedRateLimit(request, {
     bucket: "api-chat-messages-read",
     limit: 60,
@@ -158,6 +148,16 @@ export async function GET(request: NextRequest) {
     failRouteMetric(metric, 429);
     return applyNoStoreHeaders(rateLimited);
   }
+
+  const cacheKey = "latest";
+  const now = Date.now();
+  const cached = chatMessagesRouteCache.getFresh(cacheKey, now);
+  if (cached) {
+    markRouteCacheHit(ROUTE_METRIC_KEY);
+    finishRouteMetric(metric, 200);
+    return jsonNoStore(cached);
+  }
+  const staleCache = chatMessagesRouteCache.getStale(cacheKey);
 
   try {
     const inflight = chatMessagesRouteCache.getInflight(cacheKey);

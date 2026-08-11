@@ -12,14 +12,42 @@ export type FeeOverrides = {
   gasPrice?: bigint;
 };
 
+export function hasCompleteFeeOverrides(overrides: FeeOverrides | undefined) {
+  if (!overrides) return false;
+  return overrides.gasPrice !== undefined || (
+    overrides.maxFeePerGas !== undefined && overrides.maxPriorityFeePerGas !== undefined
+  );
+}
+
+export function mergeFeeOverrides(
+  base: FeeOverrides | undefined,
+  overrides: FeeOverrides | undefined,
+): FeeOverrides | undefined {
+  if (!overrides) return base;
+  if (hasCompleteFeeOverrides(overrides)) return { ...overrides };
+  return { ...base, ...overrides };
+}
+
 export type KeeperFeeBudgetKind = "approval" | "keeper";
 
-type KeeperFeePolicy = {
+export type KeeperDailyBudgetPolicy = {
+  maxSignatures: number;
+  maxReservedCostWei: bigint;
+};
+
+type FeeFieldPolicy = {
   maxFeePerGas: bigint;
   maxPriorityFeePerGas: bigint;
   maxGasPrice: bigint;
+};
+
+type KeeperFeePolicy = FeeFieldPolicy & {
   maxApprovalCostWei: bigint;
   maxKeeperCostWei: bigint;
+};
+
+type NormalFeePolicy = FeeFieldPolicy & {
+  maxCostWei: bigint;
 };
 
 const ONE_HUNDRED = 100n;
@@ -42,6 +70,11 @@ const LINEA_SEPOLIA_CHAIN_ID = 59141;
 const LINEA_SEPOLIA_KEEPER_PRIORITY_FLOOR = parseGwei("0.001");
 const LINEA_MAINNET_KEEPER_GAS_PRICE_FLOOR = parseGwei("0.05");
 const LINEA_SEPOLIA_KEEPER_GAS_PRICE_FLOOR = parseGwei("0.001");
+// The keeper is a fallback for stranded funded rounds, not the primary epoch
+// advancement path. One signature per hour on average is a deliberately
+// conservative hard ceiling; the cumulative ceiling below is stricter and is
+// sourced from the existing per-transaction keeper maximum for each chain.
+export const DEFAULT_KEEPER_DAILY_MAX_SIGNATURES = 24;
 // These are absolute safety ceilings, not target fees. They deliberately leave
 // ample headroom over the normal Linea floors while bounding a compromised RPC.
 const LINEA_MAINNET_KEEPER_FEE_POLICY: KeeperFeePolicy = {
@@ -57,6 +90,18 @@ const LINEA_SEPOLIA_KEEPER_FEE_POLICY: KeeperFeePolicy = {
   maxGasPrice: parseGwei("2"),
   maxApprovalCostWei: parseEther("0.0002"),
   maxKeeperCostWei: parseEther("0.002"),
+};
+const LINEA_MAINNET_NORMAL_FEE_POLICY: NormalFeePolicy = {
+  maxFeePerGas: parseGwei("1"),
+  maxPriorityFeePerGas: LINEA_MAINNET_PRIORITY_CAP,
+  maxGasPrice: parseGwei("1"),
+  maxCostWei: parseEther("0.002"),
+};
+const LINEA_SEPOLIA_NORMAL_FEE_POLICY: NormalFeePolicy = {
+  maxFeePerGas: parseGwei("2"),
+  maxPriorityFeePerGas: LINEA_SEPOLIA_PRIORITY_CAP,
+  maxGasPrice: parseGwei("2"),
+  maxCostWei: parseEther("0.004"),
 };
 
 function feePolicyError(message: string) {
@@ -102,11 +147,76 @@ function getKeeperFeePolicy(chainId?: number): KeeperFeePolicy {
   throw feePolicyError(`linea_fee_policy_unsupported_chain chainId=${String(chainId ?? "missing")}`);
 }
 
-function assertKeeperFeeFieldsWithinPolicy(
+function parseTightenedPositiveInteger(
+  field: string,
+  raw: string | undefined,
+  maximum: number,
+) {
+  if (raw === undefined) return maximum;
+  if (!/^[1-9]\d*$/.test(raw)) {
+    throw feePolicyError(
+      `linea_fee_policy_invalid_daily_limit field=${field} expected=positive canonical integer`,
+    );
+  }
+  const value = BigInt(raw);
+  if (value > BigInt(maximum)) {
+    throw feePolicyError(
+      `linea_fee_policy_daily_limit_cannot_exceed_default field=${field}; limit cannot exceed repository default`,
+    );
+  }
+  return Number(value);
+}
+
+function parseTightenedPositiveBigInt(
+  field: string,
+  raw: string | undefined,
+  maximum: bigint,
+) {
+  if (raw === undefined) return maximum;
+  if (!/^[1-9]\d*$/.test(raw)) {
+    throw feePolicyError(
+      `linea_fee_policy_invalid_daily_limit field=${field} expected=positive canonical integer`,
+    );
+  }
+  const value = BigInt(raw);
+  if (value > maximum) {
+    throw feePolicyError(
+      `linea_fee_policy_daily_limit_cannot_exceed_default field=${field}; limit cannot exceed repository default`,
+    );
+  }
+  return value;
+}
+
+export function getKeeperDailyBudgetPolicy(
+  chainId: number | undefined,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): KeeperDailyBudgetPolicy {
+  const perTransactionPolicy = getKeeperFeePolicy(chainId);
+  return {
+    maxSignatures: parseTightenedPositiveInteger(
+      "KEEPER_DAILY_MAX_SIGNATURES",
+      environment.KEEPER_DAILY_MAX_SIGNATURES,
+      DEFAULT_KEEPER_DAILY_MAX_SIGNATURES,
+    ),
+    maxReservedCostWei: parseTightenedPositiveBigInt(
+      "KEEPER_DAILY_MAX_RESERVED_COST_WEI",
+      environment.KEEPER_DAILY_MAX_RESERVED_COST_WEI,
+      perTransactionPolicy.maxKeeperCostWei,
+    ),
+  };
+}
+
+function getNormalFeePolicy(chainId?: number): NormalFeePolicy {
+  if (chainId === LINEA_MAINNET_CHAIN_ID) return LINEA_MAINNET_NORMAL_FEE_POLICY;
+  if (chainId === LINEA_SEPOLIA_CHAIN_ID) return LINEA_SEPOLIA_NORMAL_FEE_POLICY;
+  throw feePolicyError(`linea_fee_policy_unsupported_chain chainId=${String(chainId ?? "missing")}`);
+}
+
+function assertFeeFieldsWithinPolicy(
   feeOverrides: FeeOverrides | undefined,
-  chainId?: number,
+  chainId: number | undefined,
+  policy: FeeFieldPolicy,
 ): asserts feeOverrides is FeeOverrides {
-  const policy = getKeeperFeePolicy(chainId);
   if (!feeOverrides) {
     throw feePolicyError("linea_fee_policy_missing_overrides");
   }
@@ -142,6 +252,38 @@ function assertKeeperFeeFieldsWithinPolicy(
   if (maxPriorityFeePerGas > maxFeePerGas) {
     throw feePolicyError("linea_fee_policy_priority_exceeds_max_fee");
   }
+}
+
+function assertKeeperFeeFieldsWithinPolicy(
+  feeOverrides: FeeOverrides | undefined,
+  chainId?: number,
+): asserts feeOverrides is FeeOverrides {
+  assertFeeFieldsWithinPolicy(feeOverrides, chainId, getKeeperFeePolicy(chainId));
+}
+
+export function assertNormalFeeBudget(
+  feeOverrides: FeeOverrides | undefined,
+  gasLimit: bigint | undefined,
+  chainId?: number,
+): bigint {
+  const policy = getNormalFeePolicy(chainId);
+  assertFeeFieldsWithinPolicy(feeOverrides, chainId, policy);
+  if (gasLimit === undefined) {
+    throw feePolicyError("linea_fee_policy_missing_gas_limit");
+  }
+  if (gasLimit <= 0n) {
+    throw feePolicyError("linea_fee_policy_invalid_gas_limit");
+  }
+
+  const feePerGas = feeOverrides.gasPrice ?? feeOverrides.maxFeePerGas;
+  if (feePerGas === undefined) {
+    throw feePolicyError("linea_fee_policy_missing_effective_fee");
+  }
+  const maximumCostWei = gasLimit * feePerGas;
+  if (maximumCostWei > policy.maxCostWei) {
+    throw feePolicyError(`linea_fee_total_cap_exceeded kind=normal chainId=${String(chainId)}`);
+  }
+  return maximumCostWei;
 }
 
 export function assertKeeperFeeBudget(

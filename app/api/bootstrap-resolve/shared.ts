@@ -1,8 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import { createPublicClient, http } from "viem";
-import type { PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { RESOLVE_ABI } from "../../../config/abi";
+import { selectKeeperAgreementRpcUrls } from "../../../server/keeperSigningSafety";
 import { acquireExpiringLock } from "../../../server/storage";
 import { acquireExternalExpiringLock, requiresExternalSharedLock } from "../_lib/externalRateLimit";
 import { APP_CHAIN, CONTRACT_ADDRESS, SERVER_RPC_URLS } from "../_lib/dataBridge";
@@ -21,6 +21,13 @@ const RESOLVE_LOCK_PATH = "_internal/bootstrapResolveLock";
 const MIN_BOOTSTRAP_RESOLVE_SECRET_LENGTH = 32;
 const MAX_BOOTSTRAP_RESOLVE_SECRET_LENGTH = 256;
 const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
+const BOOTSTRAP_SECRET_PEER_ENV_NAMES = [
+  "HEALTH_DIAGNOSTICS_SECRET",
+  "TRUST_PROXY_SECRET",
+  "CHAT_AUTH_SECRET",
+  "NEXTAUTH_SECRET",
+  "ADMIN_AUTH_SECRET",
+] as const;
 
 let lastResolveAttemptAt = 0;
 
@@ -32,10 +39,7 @@ export function isLocalDevBootstrapRequest(_request: Request) {
 }
 
 function isBootstrapKeeperKeyConfigured() {
-  return Boolean(
-    process.env.BOOTSTRAP_KEEPER_PRIVATE_KEY?.trim() ||
-    process.env.KEEPER_PRIVATE_KEY?.trim(),
-  );
+  return Boolean(process.env.BOOTSTRAP_KEEPER_PRIVATE_KEY?.trim());
 }
 
 function normalizeBootstrapResolveSecret(value: string | null | undefined) {
@@ -49,6 +53,13 @@ function normalizeBootstrapResolveSecret(value: string | null | undefined) {
     return null;
   }
   return secret;
+}
+
+function isBootstrapResolveSecretPurposeSeparated(secret: string) {
+  return BOOTSTRAP_SECRET_PEER_ENV_NAMES.every((name) => {
+    const peerSecret = process.env[name]?.trim();
+    return !peerSecret || peerSecret !== secret;
+  });
 }
 
 export function getResolveNoopReason(message: string): string | null {
@@ -80,7 +91,9 @@ export function isRpcReadRetryableError(message: string) {
     lower.includes("timeout") ||
     lower.includes("etimedout") ||
     lower.includes("econnreset") ||
-    lower.includes("econnrefused")
+    lower.includes("econnrefused") ||
+    lower.includes("keeper_rpc_disagreement") ||
+    lower.includes("keeper_independent_rpc_required")
   );
 }
 
@@ -89,6 +102,14 @@ export function createRpcClient(url: string) {
     chain: APP_CHAIN,
     transport: http(url, { timeout: 15_000, retryCount: 1 }),
   });
+}
+
+export function getBootstrapAgreementClients() {
+  const rpcUrls = selectKeeperAgreementRpcUrls(SERVER_RPC_URLS);
+  return {
+    rpcUrls,
+    clients: [createRpcClient(rpcUrls[0]), createRpcClient(rpcUrls[1])] as const,
+  };
 }
 
 export async function acquireResolveLock(epoch: bigint) {
@@ -130,31 +151,8 @@ export async function acquireResolveLock(epoch: bigint) {
   }
 }
 
-export async function readContractResilient<T>(
-  request: Parameters<PublicClient["readContract"]>[0],
-): Promise<{ result: T; rpcUrl: string; client: PublicClient }> {
-  let lastError: unknown = null;
-
-  for (const rpcUrl of SERVER_RPC_URLS) {
-    const client = createRpcClient(rpcUrl);
-    try {
-      const result = await client.readContract(request);
-      return { result: result as T, rpcUrl, client };
-    } catch (err) {
-      lastError = err;
-      const message = err instanceof Error ? err.message : String(err);
-      if (isRpcReadRetryableError(message)) continue;
-      throw err;
-    }
-  }
-
-  throw lastError ?? new Error("All RPC contract reads failed");
-}
-
 export function getBootstrapKeeperAccount() {
-  const privateKey =
-    process.env.BOOTSTRAP_KEEPER_PRIVATE_KEY?.trim() ||
-    process.env.KEEPER_PRIVATE_KEY?.trim();
+  const privateKey = process.env.BOOTSTRAP_KEEPER_PRIVATE_KEY?.trim();
   if (!privateKey) return null;
   const normalized = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
   if (!/^0x[a-fA-F0-9]{64}$/.test(normalized)) {
@@ -171,6 +169,7 @@ export function isAuthorizedBootstrapRequest(request: Request) {
     if (!isBootstrapKeeperKeyConfigured()) return true;
     return false;
   }
+  if (!isBootstrapResolveSecretPurposeSeparated(secret)) return false;
   if (!provided) return false;
   const secretBuf = Buffer.from(secret, "utf8");
   const providedBuf = Buffer.from(provided, "utf8");

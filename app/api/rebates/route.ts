@@ -16,6 +16,14 @@ import { createRouteCache } from "../_lib/routeCache";
 import { logRouteError } from "../_lib/routeError";
 import { getMetaBigInt, getMetaNumber, getUserParticipatingEpochs } from "../../../server/storage";
 import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
+import {
+  appendRebateRefreshTotals,
+  createEmptyRebateRefreshTotals,
+  createRebateRefreshBudget,
+  isRebateRefreshBudgetExceededError,
+  selectRebateRefreshWindow,
+  type RebateRefreshTotals,
+} from "./rebateRefreshBudget";
 
 const REBATE_ROUTE_CACHE_MS = 120_000;
 const REBATE_SUMMARY_CHUNK_SIZE = 96;
@@ -24,6 +32,12 @@ const REBATE_DETAILS_LIMIT = 8;
 const REBATE_ROUTE_CACHE_MAX_KEYS = 512;
 const REBATE_SUMMARY_CONCURRENCY = 6;
 const REBATE_EXACT_CONCURRENCY = 6;
+const REBATE_SUMMARY_SCAN_EPOCH_LIMIT = 384;
+const REBATE_EXACT_SCAN_EPOCH_LIMIT = REBATE_EXACT_CHUNK_SIZE;
+const REBATE_REFRESH_MAX_RPC_CALLS = 64;
+const REBATE_REFRESH_MAX_FALLBACK_RPC_CALLS = REBATE_EXACT_CHUNK_SIZE;
+const REBATE_REFRESH_MAX_DURATION_MS = 8_000;
+const REBATE_SCAN_CONTINUATION_CACHE_MS = 30 * 60_000;
 const ROUTE_METRIC_KEY = "api/rebates";
 const REBATE_INDEXED_EPOCHS_CACHE_MS = 30_000;
 const REBATE_UNCHANGED_WATERMARK_REFRESH_MS = 5 * 60_000;
@@ -48,6 +62,14 @@ type RebatePayload = {
   totalEpochs: number;
   participatingEpochs: number[];
   recentEpochs: RebateEpochInfo[];
+  scan: {
+    mode: "summary" | "exact";
+    complete: boolean;
+    processedEpochs: number;
+    totalEpochs: number;
+    nextOffset: number | null;
+    servingCommitted: boolean;
+  };
 };
 
 type RebateBuildTimings = {
@@ -62,12 +84,25 @@ type RebateBuildTimings = {
 };
 
 type RebateInfoResult = [bigint, bigint, bigint, boolean, boolean];
+type RebateRefreshBudget = ReturnType<typeof createRebateRefreshBudget>;
+type RebateScanCycle = {
+  watermark: string;
+  epochs: number[];
+  nextOffset: number;
+  totals: RebateRefreshTotals;
+  recentEpochs: RebateEpochInfo[];
+};
+type RebateScanState = {
+  working: RebateScanCycle | null;
+  committed: RebateScanCycle | null;
+};
 
 const rebateRouteCache = createRouteCache<RebatePayload>(REBATE_ROUTE_CACHE_MAX_KEYS);
 const rebateIndexedEpochsCache = createRouteCache<number[]>(REBATE_ROUTE_CACHE_MAX_KEYS);
 const rebateCacheWatermarks = createRouteCache<{ refreshedAt: number; watermark: string }>(
   REBATE_ROUTE_CACHE_MAX_KEYS,
 );
+const rebateScanStateCache = createRouteCache<RebateScanState>(REBATE_ROUTE_CACHE_MAX_KEYS);
 
 function normalizeRebateTimingMs(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
@@ -129,6 +164,10 @@ function startRebateBackgroundRefresh(
     ttlMs: REBATE_ROUTE_CACHE_MS,
     routeMetricKey: ROUTE_METRIC_KEY,
     shouldSkip: () => {
+      const scanState = rebateScanStateCache.getStale(
+        `${user.toLowerCase()}:${includeExact ? "exact" : "summary"}`,
+      );
+      if (scanState?.working) return false;
       const cachedWatermark = rebateCacheWatermarks.getStale(cacheKey);
       return Boolean(
         cachedWatermark &&
@@ -197,8 +236,8 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-async function getIndexedEpochs(user: `0x${string}`): Promise<number[]> {
-  const cacheKey = `${user.toLowerCase()}:${getRebateDataWatermark()}`;
+async function getIndexedEpochs(user: `0x${string}`, watermark: string): Promise<number[]> {
+  const cacheKey = `${user.toLowerCase()}:${watermark}`;
   const cached = rebateIndexedEpochsCache.getFresh(cacheKey);
   if (cached) {
     return cached;
@@ -228,6 +267,7 @@ function getRebateDataWatermark() {
 async function loadClaimableEpochsExact(
   address: `0x${string}`,
   epochs: bigint[],
+  budget: RebateRefreshBudget,
 ): Promise<number[]> {
   const claimable = new Set<number>();
   const chunks: bigint[][] = [];
@@ -245,7 +285,7 @@ async function loadClaimableEpochsExact(
     }));
 
     try {
-      const results = await publicClient.multicall({ contracts });
+      const results = await budget.runRpc("exact", () => publicClient.multicall({ contracts }));
       results.forEach((result, index) => {
         if (result.status !== "success") return;
         const [, , pendingWei, claimed, resolved] = result.result as [bigint, bigint, bigint, boolean, boolean];
@@ -256,15 +296,18 @@ async function loadClaimableEpochsExact(
           }
         }
       });
-    } catch {
+    } catch (error) {
+      if (isRebateRefreshBudgetExceededError(error)) throw error;
       for (const epoch of chunk) {
         try {
-          const result = await publicClient.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: GAME_ABI,
-            functionName: "getRebateInfo",
-            args: [epoch, address],
-          }) as [bigint, bigint, bigint, boolean, boolean];
+          const result = await budget.runRpc("fallback", () =>
+            publicClient.readContract({
+              address: CONTRACT_ADDRESS,
+              abi: GAME_ABI,
+              functionName: "getRebateInfo",
+              args: [epoch, address],
+            }),
+          ) as [bigint, bigint, bigint, boolean, boolean];
           const [, , pendingWei, claimed, resolved] = result;
           if (pendingWei > 0n && !claimed && resolved) {
             const epochNumber = parseRebateEpochNumber(epoch);
@@ -272,8 +315,9 @@ async function loadClaimableEpochsExact(
               claimable.add(epochNumber);
             }
           }
-        } catch {
-          // ignore per-epoch read failures here
+        } catch (fallbackError) {
+          if (isRebateRefreshBudgetExceededError(fallbackError)) throw fallbackError;
+          throw fallbackError;
         }
       }
     }
@@ -288,6 +332,16 @@ async function buildRebatePayload(
 ): Promise<{ payload: RebatePayload; timings: RebateBuildTimings }> {
   const totalStartedAt = performance.now();
   const includeExact = options?.includeExact ?? false;
+  const scanMode = includeExact ? "exact" : "summary";
+  const scanEpochLimit = includeExact
+    ? REBATE_EXACT_SCAN_EPOCH_LIMIT
+    : REBATE_SUMMARY_SCAN_EPOCH_LIMIT;
+  const budget = createRebateRefreshBudget({
+    maxEpochs: scanEpochLimit + REBATE_DETAILS_LIMIT,
+    maxRpcCalls: REBATE_REFRESH_MAX_RPC_CALLS,
+    maxFallbackRpcCalls: includeExact ? REBATE_REFRESH_MAX_FALLBACK_RPC_CALLS : 0,
+    maxDurationMs: REBATE_REFRESH_MAX_DURATION_MS,
+  });
   if (!CONTRACT_HAS_REBATE_API) {
     return {
       payload: {
@@ -298,6 +352,14 @@ async function buildRebatePayload(
         totalEpochs: 0,
         participatingEpochs: [],
         recentEpochs: [],
+        scan: {
+          mode: includeExact ? "exact" : "summary",
+          complete: true,
+          processedEpochs: 0,
+          totalEpochs: 0,
+          nextOffset: null,
+          servingCommitted: false,
+        },
       },
       timings: {
         indexedMs: 0,
@@ -312,39 +374,67 @@ async function buildRebatePayload(
     };
   }
 
-  const indexedStartedAt = performance.now();
-  const epochs = (await getIndexedEpochs(user)).filter(isSafePositiveInteger);
-  const indexedMs = performance.now() - indexedStartedAt;
-  if (epochs.length === 0) {
-    return {
-      payload: {
-        isSupported: true,
-        pendingRebateWei: "0",
-        claimableEpochCount: 0,
-        claimableEpochList: [],
-        totalEpochs: 0,
-        participatingEpochs: [],
-        recentEpochs: [],
-      },
-      timings: {
-        indexedMs,
-        summaryMs: 0,
-        exactMs: 0,
-        recentMs: 0,
-        totalMs: performance.now() - totalStartedAt,
-        epochCount: 0,
-        summaryChunks: 0,
-        exactChunks: 0,
-      },
+  const scanStateKey = `${user.toLowerCase()}:${scanMode}`;
+  const currentWatermark = getRebateDataWatermark();
+  const priorState = rebateScanStateCache.getStale(scanStateKey);
+  let committedCycle = priorState?.committed ?? null;
+  let workingCycle = priorState?.working ?? null;
+  let indexedMs = 0;
+
+  if (!workingCycle) {
+    const indexedStartedAt = performance.now();
+    const epochs = [...new Set((await getIndexedEpochs(user, currentWatermark)).filter(isSafePositiveInteger))]
+      .sort((a, b) => b - a);
+    indexedMs = performance.now() - indexedStartedAt;
+    if (epochs.length === 0) {
+      return {
+        payload: {
+          isSupported: true,
+          pendingRebateWei: "0",
+          claimableEpochCount: 0,
+          claimableEpochList: [],
+          totalEpochs: 0,
+          participatingEpochs: [],
+          recentEpochs: [],
+          scan: {
+            mode: scanMode,
+            complete: true,
+            processedEpochs: 0,
+            totalEpochs: 0,
+            nextOffset: null,
+            servingCommitted: false,
+          },
+        },
+        timings: {
+          indexedMs,
+          summaryMs: 0,
+          exactMs: 0,
+          recentMs: 0,
+          totalMs: performance.now() - totalStartedAt,
+          epochCount: 0,
+          summaryChunks: 0,
+          exactChunks: 0,
+        },
+      };
+    }
+    workingCycle = {
+      watermark: currentWatermark,
+      epochs,
+      nextOffset: 0,
+      totals: createEmptyRebateRefreshTotals(),
+      recentEpochs: [],
     };
   }
 
-  const epochBigInts = epochs.map((epoch) => BigInt(epoch));
-  const summaryChunks: bigint[][] = [];
-  for (let i = 0; i < epochBigInts.length; i += REBATE_SUMMARY_CHUNK_SIZE) {
-    summaryChunks.push(epochBigInts.slice(i, i + REBATE_SUMMARY_CHUNK_SIZE));
-  }
+  const epochBigInts = workingCycle.epochs.map((epoch) => BigInt(epoch));
+  const scanWindow = selectRebateRefreshWindow(epochBigInts, workingCycle.nextOffset, scanEpochLimit);
+  const scanEpochBigInts = scanWindow.items;
   const recentEpochBigInts = epochBigInts.slice(0, REBATE_DETAILS_LIMIT);
+  budget.reserveEpochs(new Set([...scanEpochBigInts, ...recentEpochBigInts]).size);
+  const summaryChunks: bigint[][] = [];
+  for (let i = 0; i < scanEpochBigInts.length; i += REBATE_SUMMARY_CHUNK_SIZE) {
+    summaryChunks.push(scanEpochBigInts.slice(i, i + REBATE_SUMMARY_CHUNK_SIZE));
+  }
   const recentContracts = recentEpochBigInts.map((epoch) => ({
     address: CONTRACT_ADDRESS,
     abi: GAME_ABI,
@@ -356,15 +446,19 @@ async function buildRebatePayload(
   const recentStartedAt = performance.now();
   const [summaryResults, recentResults] = await Promise.all([
     mapWithConcurrency(summaryChunks, REBATE_SUMMARY_CONCURRENCY, async (chunk) => {
-      return await publicClient.readContract({
-        address: CONTRACT_ADDRESS,
-        abi: GAME_ABI,
-        functionName: "getRebateSummary",
-        args: [user, chunk],
-      }) as [bigint, bigint];
+      return await budget.runRpc("summary", () =>
+        publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: GAME_ABI,
+          functionName: "getRebateSummary",
+          args: [user, chunk],
+        }),
+      ) as [bigint, bigint];
     }),
     recentContracts.length > 0
-      ? publicClient.multicall({ contracts: recentContracts }) as Promise<
+      ? budget.runRpc("recent", () =>
+          publicClient.multicall({ contracts: recentContracts }),
+        ) as Promise<
           Array<{ status: "success"; result: RebateInfoResult } | { status: "failure"; error: unknown; result?: undefined }>
         >
       : Promise.resolve([] as Array<{ status: "success"; result: RebateInfoResult } | { status: "failure"; error: unknown; result?: undefined }>),
@@ -382,7 +476,7 @@ async function buildRebatePayload(
     includeExact && summaryClaimableCount > 0
       ? await (() => {
           const exactStartedAt = performance.now();
-          return loadClaimableEpochsExact(user, epochBigInts).then((result) => {
+          return loadClaimableEpochsExact(user, scanEpochBigInts, budget).then((result) => {
             const exactMs = performance.now() - exactStartedAt;
             return { result, exactMs };
           });
@@ -407,6 +501,29 @@ async function buildRebatePayload(
     });
   });
   const recentMs = performance.now() - recentStartedAt;
+  const updatedCycle: RebateScanCycle = {
+    ...workingCycle,
+    nextOffset: scanWindow.nextOffset ?? 0,
+    totals: appendRebateRefreshTotals(workingCycle.totals, {
+      pendingRebateWei: totalPendingWei,
+      summaryClaimableCount,
+      claimableEpochs: claimableEpochList.result,
+      processedEpochs: scanEpochBigInts.length,
+    }),
+    recentEpochs,
+  };
+  const cycleComplete = scanWindow.complete;
+  if (cycleComplete) committedCycle = updatedCycle;
+  rebateScanStateCache.set(
+    scanStateKey,
+    {
+      working: cycleComplete ? null : updatedCycle,
+      committed: committedCycle,
+    },
+    REBATE_SCAN_CONTINUATION_CACHE_MS,
+  );
+  const publishedCycle = cycleComplete ? updatedCycle : (committedCycle ?? updatedCycle);
+  const servingCommitted = !cycleComplete && committedCycle !== null;
 
   const timings: RebateBuildTimings = {
     indexedMs,
@@ -414,9 +531,9 @@ async function buildRebatePayload(
     exactMs: claimableEpochList.exactMs,
     recentMs,
     totalMs: performance.now() - totalStartedAt,
-    epochCount: epochs.length,
+    epochCount: scanEpochBigInts.length,
     summaryChunks: summaryChunks.length,
-    exactChunks: Math.ceil(epochBigInts.length / REBATE_EXACT_CHUNK_SIZE),
+    exactChunks: includeExact ? Math.ceil(scanEpochBigInts.length / REBATE_EXACT_CHUNK_SIZE) : 0,
   };
 
   if (timings.totalMs >= 800) {
@@ -435,12 +552,22 @@ async function buildRebatePayload(
   return {
     payload: {
       isSupported: true,
-      pendingRebateWei: totalPendingWei.toString(),
-      claimableEpochCount: includeExact ? claimableEpochList.result.length : summaryClaimableCount,
-      claimableEpochList: claimableEpochList.result,
-      totalEpochs: epochs.length,
-      participatingEpochs: epochs,
-      recentEpochs,
+      pendingRebateWei: publishedCycle.totals.pendingRebateWei.toString(),
+      claimableEpochCount: includeExact
+        ? publishedCycle.totals.claimableEpochs.length
+        : publishedCycle.totals.summaryClaimableCount,
+      claimableEpochList: publishedCycle.totals.claimableEpochs,
+      totalEpochs: publishedCycle.epochs.length,
+      participatingEpochs: publishedCycle.epochs,
+      recentEpochs: updatedCycle.recentEpochs,
+      scan: {
+        mode: scanMode,
+        complete: cycleComplete,
+        processedEpochs: updatedCycle.totals.processedEpochs,
+        totalEpochs: updatedCycle.epochs.length,
+        nextOffset: scanWindow.nextOffset,
+        servingCommitted,
+      },
     },
     timings,
   };
@@ -545,6 +672,14 @@ export async function GET(request: NextRequest) {
         totalEpochs: 0,
         participatingEpochs: [],
         recentEpochs: [],
+        scan: {
+          mode: includeExact ? "exact" : "summary",
+          complete: true,
+          processedEpochs: 0,
+          totalEpochs: 0,
+          nextOffset: null,
+          servingCommitted: false,
+        },
       }, 200, { cacheStatus: "miss" });
     }
 

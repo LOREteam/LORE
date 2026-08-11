@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { PublicClient } from "viem";
 import { log } from "../lib/logger";
@@ -92,6 +92,7 @@ interface UseMiningAutoMineRunnerOptions {
     gasOverrides?: GasOverrides,
     txNonce?: number,
     expectedEpoch?: bigint,
+    assertBeforeSend?: () => void,
   ) => Promise<ReceiptState>;
   placeBetsSilent: (
     tileIds: number[],
@@ -99,6 +100,7 @@ interface UseMiningAutoMineRunnerOptions {
     gasOverrides?: GasOverrides,
     txNonce?: number,
     expectedEpoch?: bigint,
+    assertBeforeSend?: () => void,
   ) => Promise<ReceiptState>;
   publicClientRef: MutableRefObject<PublicClient | undefined>;
   refetchAllowanceRef: MutableRefObject<() => void>;
@@ -170,6 +172,14 @@ export function useMiningAutoMineRunner({
   readWriteContractAsync,
   ensurePreferredWalletRef,
 }: UseMiningAutoMineRunnerOptions) {
+  useEffect(
+    () => () => {
+      autoMineRef.current = false;
+      runtimeController.pauseAndRelease();
+    },
+    [autoMineRef, runtimeController],
+  );
+
   return useCallback(
     async (params: {
       betStr: string;
@@ -232,12 +242,19 @@ export function useMiningAutoMineRunner({
           onProgress: setAutoMineProgress,
           pendingApproveRef,
           publicClient: publicClientRef.current,
-          readSilentSend: () => silentSendRef.current as
-            | ((
+          readSilentSend: () => {
+            const silentSend = silentSendRef.current as
+              | ((
                 tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number },
                 gasOverrides?: GasOverrides,
               ) => Promise<`0x${string}`>)
-            | undefined,
+              | undefined;
+            if (!silentSend) return undefined;
+            return async (tx, gasOverrides) => {
+              runtimeController.assertCurrentAuthorizationForActor(getPreferredActorAddress());
+              return silentSend(tx, gasOverrides);
+            };
+          },
           recoverOrphanedTabLock,
           refetchAllowance: () => refetchAllowanceRef.current(),
           rounds,
@@ -247,7 +264,10 @@ export function useMiningAutoMineRunner({
           setSelectedTilesEpoch,
           startRoundIndex,
           waitReceipt,
-          writeApprove: (args: unknown) => readWriteContractAsync()(args as never),
+          writeApprove: (args: unknown) => {
+            runtimeController.assertCurrentAuthorizationForActor(getPreferredActorAddress());
+            return readWriteContractAsync()(args as never);
+          },
         });
 
         if (!preparedRun) {
@@ -292,8 +312,40 @@ export function useMiningAutoMineRunner({
           networkBackoffMaxMs: maxNetworkMs,
           onProgress: setAutoMineProgress,
           pendingBetRef,
-          placeBets,
-          placeBetsSilent,
+          placeBets: (tileIds, amountRawPerTile, gasOverrides, txNonce, expectedEpoch) => {
+            const authorizationLease = runtimeController.reserveSpend({
+              expectedEpoch,
+              amountRaw: amountRawPerTile * BigInt(tileIds.length),
+            });
+            return placeBets(
+              tileIds,
+              amountRawPerTile,
+              gasOverrides,
+              txNonce,
+              expectedEpoch,
+              () => {
+                runtimeController.assertCurrentAuthorizationForActor(getPreferredActorAddress());
+                authorizationLease.assertCurrent();
+              },
+            );
+          },
+          placeBetsSilent: (tileIds, amountRawPerTile, gasOverrides, txNonce, expectedEpoch) => {
+            const authorizationLease = runtimeController.reserveSpend({
+              expectedEpoch,
+              amountRaw: amountRawPerTile * BigInt(tileIds.length),
+            });
+            return placeBetsSilent(
+              tileIds,
+              amountRawPerTile,
+              gasOverrides,
+              txNonce,
+              expectedEpoch,
+              () => {
+                runtimeController.assertCurrentAuthorizationForActor(getPreferredActorAddress());
+                authorizationLease.assertCurrent();
+              },
+            );
+          },
           readClient: () => publicClientRef.current,
           readSilentSend: () => silentSendRef.current,
           renewLock: renewTabLock,

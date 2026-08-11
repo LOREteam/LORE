@@ -290,6 +290,15 @@ export function useMiningRuntimeState({
         return;
       }
 
+      if (recovery === "manual-reconciliation-required") {
+        setIsPending(false);
+        notifyRef.current?.(
+          "A previous bet cannot be verified automatically. Do not retry it until you reconcile the wallet transaction.",
+          "warning",
+        );
+        return;
+      }
+
       clearPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
       setIsPending(false);
       if (recovery === "confirmed") {

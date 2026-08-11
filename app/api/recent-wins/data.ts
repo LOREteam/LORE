@@ -14,7 +14,6 @@ import {
   getEpochMap,
   getRecentRewardClaims,
   setMetaJson,
-  upsertRewardClaims,
 } from "../../../server/storage";
 import {
   CONTRACT_ADDRESS,
@@ -26,13 +25,22 @@ import {
   parseStoredBlockNumberOrZero,
   parseStoredPositiveIntegerOrZero,
 } from "../_lib/storedNumberParsing";
+import {
+  getCanonicalRecoveryLogIdentity,
+  isRecoveryContextCurrent,
+  loadFinalizedRecoveryContext,
+  type FinalizedRecoveryContext,
+} from "../_lib/jackpotsService";
 
 const RECENT_WINS_LIMIT = 100;
 const RECENT_WINS_SNAPSHOT_MAX_AGE_MS = 60 * 60 * 1000;
-const RECENT_WINS_SNAPSHOT_META_KEY = "snapshot:recent-wins:v1";
+const RECENT_WINS_SNAPSHOT_META_KEY = "snapshot:recent-wins:v2";
 const RECENT_WINS_LOG_SCAN_CHUNK = 10_000n;
 const RECENT_WINS_LOG_SCAN_MIN_CHUNK = 2_000n;
-const RECENT_WINS_BOOTSTRAP_SCAN_CHUNK = 10_000n;
+const RECENT_WINS_RECOVERY_MAX_BLOCKS = 100_000n;
+const RECENT_WINS_RECOVERY_MAX_RPC_CALLS = 12;
+const RECENT_WINS_RECOVERY_MAX_LOGS = 250;
+const RECENT_WINS_RECOVERY_MAX_TIME_MS = 5_000;
 const RECENT_WINS_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeBigIntEnv(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG, 256n);
 const MAX_TILE_ID = 25;
 
@@ -54,6 +62,11 @@ export type RecentWinRow = {
 export type RecentWinsPayload = {
   wins: RecentWinRow[];
   error?: string;
+  recovery?: {
+    status: "partial";
+    direction: "backward" | "forward";
+    continuationBlock: string;
+  };
 };
 
 type RecentWinsSnapshotEnvelope = {
@@ -64,6 +77,20 @@ type RecentWinsSnapshotEnvelope = {
 
 type StoredClaimRow = ReturnType<typeof getRecentRewardClaims>[number];
 type RewardClaimLog = Awaited<ReturnType<typeof publicClient.getLogs>>[number];
+type RecentWinsRecoveryDirection = "backward" | "forward";
+type RecentWinsRecoveryCursor = {
+  direction: RecentWinsRecoveryDirection;
+  nextBlock: bigint;
+  context: FinalizedRecoveryContext;
+};
+type BoundedClaimScan = {
+  logs: RewardClaimLog[];
+  complete: boolean;
+  direction: RecentWinsRecoveryDirection;
+  continuationBlock: bigint | null;
+};
+
+let recentWinsRecoveryCursor: RecentWinsRecoveryCursor | null = null;
 
 function normalizeStoredUserAddress(user: string): `0x${string}` | null {
   try {
@@ -257,25 +284,109 @@ function sortClaimsDesc<T extends { blockNumber: string; txHash?: string; user: 
   });
 }
 
-async function getLogsChunked(
-  request: Omit<Parameters<typeof publicClient.getLogs>[0], "fromBlock" | "toBlock"> & {
-    fromBlock: bigint;
-    toBlock: bigint;
-  },
+function hasSameRecoveryContext(
+  left: FinalizedRecoveryContext,
+  right: FinalizedRecoveryContext,
 ) {
-  const all: Awaited<ReturnType<typeof publicClient.getLogs>> = [];
-  let cursor = request.fromBlock;
-  let chunkSize = RECENT_WINS_LOG_SCAN_CHUNK;
+  return (
+    left.blockNumber === right.blockNumber &&
+    left.blockHash === right.blockHash &&
+    left.finalityBlocks === right.finalityBlocks &&
+    left.durableThroughBlock === right.durableThroughBlock &&
+    left.durableCheckpointHash === right.durableCheckpointHash
+  );
+}
 
-  while (cursor <= request.toBlock) {
-    const chunkTo = cursor + chunkSize - 1n > request.toBlock ? request.toBlock : cursor + chunkSize - 1n;
+function getRecentWinsRecoveryCursor(): RecentWinsRecoveryCursor | null {
+  const cursor = recentWinsRecoveryCursor;
+  if (!cursor || (cursor.direction !== "backward" && cursor.direction !== "forward")) return null;
+  if (
+    typeof cursor.nextBlock !== "bigint" ||
+    cursor.nextBlock < CONTRACT_DEPLOY_BLOCK ||
+    cursor.context.blockNumber < CONTRACT_DEPLOY_BLOCK ||
+    !/^0x[0-9a-f]{64}$/.test(cursor.context.blockHash)
+  ) {
+    recentWinsRecoveryCursor = null;
+    return null;
+  }
+  return cursor;
+}
+
+function readRecentWinsRecoveryCursor(
+  context: FinalizedRecoveryContext,
+): RecentWinsRecoveryCursor | null {
+  const cursor = getRecentWinsRecoveryCursor();
+  return cursor && hasSameRecoveryContext(cursor.context, context) ? cursor : null;
+}
+
+async function loadRecentWinsRecoveryContext() {
+  const cursor = getRecentWinsRecoveryCursor();
+  if (cursor) {
+    if (await isRecoveryContextCurrent(cursor.context)) {
+      return cursor.context;
+    }
+    recentWinsRecoveryCursor = null;
+  }
+  return loadFinalizedRecoveryContext();
+}
+
+function saveRecentWinsRecoveryCursor(
+  scan: BoundedClaimScan,
+  context: FinalizedRecoveryContext,
+) {
+  if (scan.complete || scan.continuationBlock === null) {
+    recentWinsRecoveryCursor = null;
+    return;
+  }
+  recentWinsRecoveryCursor = {
+    direction: scan.direction,
+    nextBlock: scan.continuationBlock,
+    context: { ...context },
+  };
+}
+
+function recoveryDeadlineAt(now = Date.now()) {
+  return now > Number.MAX_SAFE_INTEGER - RECENT_WINS_RECOVERY_MAX_TIME_MS
+    ? Number.MAX_SAFE_INTEGER
+    : now + RECENT_WINS_RECOVERY_MAX_TIME_MS;
+}
+
+async function scanRewardClaimLogsForward(fromBlock: bigint, toBlock: bigint): Promise<BoundedClaimScan> {
+  if (toBlock < fromBlock) {
+    return { logs: [], complete: true, direction: "forward", continuationBlock: null };
+  }
+
+  const logs: RewardClaimLog[] = [];
+  const deadlineAt = recoveryDeadlineAt();
+  let cursor = fromBlock;
+  let chunkSize = RECENT_WINS_LOG_SCAN_CHUNK;
+  let queriedBlocks = 0n;
+  let rpcCalls = 0;
+
+  while (cursor <= toBlock && logs.length < RECENT_WINS_RECOVERY_MAX_LOGS) {
+    if (
+      rpcCalls >= RECENT_WINS_RECOVERY_MAX_RPC_CALLS ||
+      queriedBlocks >= RECENT_WINS_RECOVERY_MAX_BLOCKS ||
+      Date.now() >= deadlineAt
+    ) break;
+
+    const remainingBlockBudget = RECENT_WINS_RECOVERY_MAX_BLOCKS - queriedBlocks;
+    const requestedBlocks = [chunkSize, toBlock - cursor + 1n, remainingBlockBudget]
+      .reduce((smallest, value) => value < smallest ? value : smallest);
+    if (requestedBlocks <= 0n) break;
+    const chunkTo = cursor + requestedBlocks - 1n;
+    rpcCalls += 1;
+    queriedBlocks += requestedBlocks;
+
     try {
-      const logs = await publicClient.getLogs({
-        ...request,
+      const chunkLogs = await publicClient.getLogs({
+        address: CONTRACT_ADDRESS,
+        topics: [rewardClaimedSig],
         fromBlock: cursor,
         toBlock: chunkTo,
       } as Parameters<typeof publicClient.getLogs>[0]);
-      all.push(...logs);
+      const remainingLogBudget = RECENT_WINS_RECOVERY_MAX_LOGS - logs.length;
+      logs.push(...chunkLogs.slice(-remainingLogBudget));
       cursor = chunkTo + 1n;
       if (chunkSize < RECENT_WINS_LOG_SCAN_CHUNK) {
         chunkSize = chunkSize * 2n > RECENT_WINS_LOG_SCAN_CHUNK ? RECENT_WINS_LOG_SCAN_CHUNK : chunkSize * 2n;
@@ -286,10 +397,74 @@ async function getLogsChunked(
     }
   }
 
-  return all;
+  const complete = cursor > toBlock;
+  return {
+    logs,
+    complete,
+    direction: "forward",
+    continuationBlock: complete ? null : cursor,
+  };
+}
+
+async function scanRewardClaimLogsBackward(
+  startToBlock: bigint,
+  limit = RECENT_WINS_LIMIT,
+): Promise<BoundedClaimScan> {
+  if (startToBlock < CONTRACT_DEPLOY_BLOCK) {
+    return { logs: [], complete: true, direction: "backward", continuationBlock: null };
+  }
+
+  const logs: RewardClaimLog[] = [];
+  const deadlineAt = recoveryDeadlineAt();
+  let toBlock = startToBlock;
+  let chunkSize = RECENT_WINS_LOG_SCAN_CHUNK;
+  let queriedBlocks = 0n;
+  let rpcCalls = 0;
+
+  while (toBlock >= CONTRACT_DEPLOY_BLOCK && logs.length < limit) {
+    if (
+      rpcCalls >= RECENT_WINS_RECOVERY_MAX_RPC_CALLS ||
+      queriedBlocks >= RECENT_WINS_RECOVERY_MAX_BLOCKS ||
+      Date.now() >= deadlineAt
+    ) break;
+
+    const remainingBlockBudget = RECENT_WINS_RECOVERY_MAX_BLOCKS - queriedBlocks;
+    const requestedBlocks = [chunkSize, toBlock - CONTRACT_DEPLOY_BLOCK + 1n, remainingBlockBudget]
+      .reduce((smallest, value) => value < smallest ? value : smallest);
+    if (requestedBlocks <= 0n) break;
+    const fromBlock = toBlock - requestedBlocks + 1n;
+    rpcCalls += 1;
+    queriedBlocks += requestedBlocks;
+
+    try {
+      const chunkLogs = await publicClient.getLogs({
+        address: CONTRACT_ADDRESS,
+        topics: [rewardClaimedSig],
+        fromBlock,
+        toBlock,
+      } as Parameters<typeof publicClient.getLogs>[0]);
+      const remainingLogBudget = RECENT_WINS_RECOVERY_MAX_LOGS - logs.length;
+      logs.push(...chunkLogs.slice(-remainingLogBudget));
+      toBlock = fromBlock - 1n;
+    } catch (err) {
+      if (!isTooManyResultsError(err) || chunkSize <= RECENT_WINS_LOG_SCAN_MIN_CHUNK) throw err;
+      chunkSize = chunkSize / 2n;
+    }
+  }
+
+  const complete = toBlock < CONTRACT_DEPLOY_BLOCK || logs.length >= limit;
+  return {
+    logs,
+    complete,
+    direction: "backward",
+    continuationBlock: complete ? null : toBlock,
+  };
 }
 
 function mapClaimLog(log: RewardClaimLog): StoredClaimRow | null {
+  const identity = getCanonicalRecoveryLogIdentity(log);
+  if (!identity) return null;
+
   try {
     const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
     if (decoded.eventName !== "RewardClaimed") return null;
@@ -301,50 +476,14 @@ function mapClaimLog(log: RewardClaimLog): StoredClaimRow | null {
       user,
       reward: formatUnits(args.reward, 18),
       rewardNum: toDisplayNumberWei(args.reward),
-      txHash: normalizeClaimTxIdentity(log.transactionHash) ?? "",
-      blockNumber: (log.blockNumber ?? 0n).toString(),
+      txHash: identity.txHash,
+      blockNumber: identity.blockNumber.toString(),
     };
   } catch {
     return null;
   }
 }
 
-async function fetchRewardClaimLogsInRange(fromBlock: bigint, toBlock: bigint) {
-  if (toBlock < fromBlock) return [] as RewardClaimLog[];
-  return getLogsChunked({
-    address: CONTRACT_ADDRESS,
-    topics: [rewardClaimedSig],
-    fromBlock,
-    toBlock,
-  } as Parameters<typeof publicClient.getLogs>[0] & { fromBlock: bigint; toBlock: bigint });
-}
-
-async function fetchRecentRewardClaimLogsFromChain(limit = RECENT_WINS_LIMIT) {
-  const currentBlock = await publicClient.getBlockNumber();
-  const collected: RewardClaimLog[] = [];
-  let toBlock = currentBlock;
-  let chunkSize = RECENT_WINS_BOOTSTRAP_SCAN_CHUNK;
-
-  while (toBlock >= CONTRACT_DEPLOY_BLOCK && collected.length < limit) {
-    const fromBlock = toBlock - chunkSize + 1n > CONTRACT_DEPLOY_BLOCK ? toBlock - chunkSize + 1n : CONTRACT_DEPLOY_BLOCK;
-    try {
-      const logs = await publicClient.getLogs({
-        address: CONTRACT_ADDRESS,
-        topics: [rewardClaimedSig],
-        fromBlock,
-        toBlock,
-      } as Parameters<typeof publicClient.getLogs>[0]);
-      collected.push(...logs);
-      if (fromBlock === CONTRACT_DEPLOY_BLOCK) break;
-      toBlock = fromBlock - 1n;
-    } catch (err) {
-      if (!isTooManyResultsError(err) || chunkSize <= RECENT_WINS_LOG_SCAN_MIN_CHUNK) throw err;
-      chunkSize = chunkSize / 2n;
-    }
-  }
-
-  return collected;
-}
 
 function mergeClaims(existing: StoredClaimRow[], incoming: StoredClaimRow[]) {
   const byKey = new Map<string, StoredClaimRow>();
@@ -353,47 +492,70 @@ function mergeClaims(existing: StoredClaimRow[], incoming: StoredClaimRow[]) {
   return sortClaimsDesc(Array.from(byKey.values())).slice(0, RECENT_WINS_LIMIT);
 }
 
-async function shouldRecoverRecentWins(storedClaims: StoredClaimRow[]) {
+function shouldRecoverRecentWins(
+  storedClaims: StoredClaimRow[],
+  context: FinalizedRecoveryContext,
+) {
+  if (readRecentWinsRecoveryCursor(context)) return true;
   if (storedClaims.length === 0) return true;
   const lastIndexedBlock = getMetaBigInt("lastIndexedBlock");
   if (!lastIndexedBlock || lastIndexedBlock < CONTRACT_DEPLOY_BLOCK) return true;
-  const headBlock = await publicClient.getBlockNumber();
-  return headBlock > lastIndexedBlock && headBlock - lastIndexedBlock >= RECENT_WINS_RECOVERY_BLOCK_LAG;
+  return (
+    context.blockNumber > lastIndexedBlock &&
+    context.blockNumber - lastIndexedBlock >= RECENT_WINS_RECOVERY_BLOCK_LAG
+  );
 }
 
-async function fetchOnchainClaims(existingClaims: StoredClaimRow[]) {
+async function fetchOnchainClaims(
+  existingClaims: StoredClaimRow[],
+  context: FinalizedRecoveryContext,
+) {
+  const currentBlock = context.blockNumber;
   const highestStoredBlock = existingClaims.reduce<bigint>((max, row) => {
     const value = parseStoredBlockNumber(row.blockNumber);
     return value > max ? value : max;
   }, 0n);
+  const savedCursor = readRecentWinsRecoveryCursor(context);
+  let scan: BoundedClaimScan;
 
-  const claimRows =
-    existingClaims.length > 0
-      ? (await fetchRewardClaimLogsInRange(
-          highestStoredBlock > 0n && highestStoredBlock + 1n > CONTRACT_DEPLOY_BLOCK ? highestStoredBlock + 1n : CONTRACT_DEPLOY_BLOCK,
-          await publicClient.getBlockNumber(),
-        ))
-          .map((log) => mapClaimLog(log))
-          .filter((row): row is StoredClaimRow => row !== null)
-      : (await fetchRecentRewardClaimLogsFromChain(RECENT_WINS_LIMIT))
-          .map((log) => mapClaimLog(log))
-          .filter((row): row is StoredClaimRow => row !== null);
-
-  if (claimRows.length > 0) {
-    upsertRewardClaims(
-      claimRows.map((row) => ({
-        id: buildRewardClaimStorageIdentity(row),
-        epoch: row.epoch,
-        user: row.user,
-        reward: row.reward,
-        rewardNum: row.rewardNum,
-        txHash: normalizeClaimTxIdentity(row.txHash) ?? "",
-        blockNumber: row.blockNumber,
-      })),
+  if (savedCursor?.direction === "backward" && existingClaims.length < RECENT_WINS_LIMIT) {
+    const savedToBlock = savedCursor.nextBlock;
+    scan = await scanRewardClaimLogsBackward(
+      savedToBlock < currentBlock ? savedToBlock : currentBlock,
+      RECENT_WINS_LIMIT - existingClaims.length,
     );
+  } else if (existingClaims.length === 0) {
+    scan = await scanRewardClaimLogsBackward(currentBlock);
+  } else {
+    const storedNextBlock = highestStoredBlock > 0n ? highestStoredBlock + 1n : CONTRACT_DEPLOY_BLOCK;
+    const savedNextBlock = savedCursor?.direction === "forward"
+      ? savedCursor.nextBlock
+      : CONTRACT_DEPLOY_BLOCK;
+    const fromBlock = [CONTRACT_DEPLOY_BLOCK, storedNextBlock, savedNextBlock]
+      .reduce((largest, value) => value > largest ? value : largest);
+    scan = await scanRewardClaimLogsForward(fromBlock, currentBlock);
   }
 
-  return mergeClaims(existingClaims, claimRows);
+  const claimRows = scan.logs
+    .map((log) => mapClaimLog(log))
+    .filter((row): row is StoredClaimRow => row !== null);
+
+  if (!(await isRecoveryContextCurrent(context))) {
+    recentWinsRecoveryCursor = null;
+    return { claims: existingClaims, recovery: undefined };
+  }
+  saveRecentWinsRecoveryCursor(scan, context);
+
+  return {
+    claims: mergeClaims(existingClaims, claimRows),
+    recovery: scan.complete || scan.continuationBlock === null
+      ? undefined
+      : {
+          status: "partial" as const,
+          direction: scan.direction,
+          continuationBlock: scan.continuationBlock.toString(),
+        },
+  };
 }
 
 function buildPayloadFromClaims(claims: StoredClaimRow[]): RecentWinsPayload {
@@ -419,21 +581,44 @@ function buildPayloadFromClaims(claims: StoredClaimRow[]): RecentWinsPayload {
 
 export async function buildRecentWinsPayload(
   options: { allowSlowRecovery?: boolean } = {},
-): Promise<{ payload: RecentWinsPayload; recoveryNeeded: boolean }> {
+): Promise<{
+  payload: RecentWinsPayload;
+  recoveryNeeded: boolean;
+  durableSnapshotEligible: boolean;
+}> {
   const recentResolvedWins = buildRecentResolvedWins(RECENT_WINS_LIMIT);
   if (recentResolvedWins.length > 0) {
+    recentWinsRecoveryCursor = null;
     return {
       payload: { wins: recentResolvedWins },
       recoveryNeeded: false,
+      durableSnapshotEligible: true,
     };
   }
 
   const storedClaims = sortClaimsDesc(getRecentRewardClaims(RECENT_WINS_LIMIT));
-  const recoveryNeeded = await shouldRecoverRecentWins(storedClaims);
-  const claims = recoveryNeeded && options.allowSlowRecovery ? await fetchOnchainClaims(storedClaims) : storedClaims;
+  const recoveryContext = await loadRecentWinsRecoveryContext();
+  const recoveryNeeded = recoveryContext !== null
+    ? shouldRecoverRecentWins(storedClaims, recoveryContext)
+    : false;
+  const performedSlowRecovery = Boolean(
+    recoveryNeeded && options.allowSlowRecovery && recoveryContext !== null,
+  );
+  const recovered = performedSlowRecovery && recoveryContext !== null
+    ? await fetchOnchainClaims(storedClaims, recoveryContext)
+    : { claims: storedClaims, recovery: undefined };
+  if (!recoveryNeeded) {
+    recentWinsRecoveryCursor = null;
+  }
   return {
-    payload: buildPayloadFromClaims(claims),
+    payload: {
+      ...buildPayloadFromClaims(recovered.claims),
+      ...(recovered.recovery ? { recovery: recovered.recovery } : {}),
+    },
     recoveryNeeded,
+    // Slow chain recovery remains process-cache-only. Only indexed storage may
+    // later produce a durable render snapshot.
+    durableSnapshotEligible: !performedSlowRecovery,
   };
 }
 

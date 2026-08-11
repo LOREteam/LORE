@@ -8,7 +8,12 @@ import {
   normalizeChatAuthAddress,
   parseChatAuthMessage,
 } from "../../../lib/chatAuth";
-import { publicClient } from "../../_lib/dataBridge";
+import { getStableLineaReadRpcs } from "../../../../config/publicConfig";
+import { APP_CHAIN, APP_NETWORK } from "../../_lib/dataBridge";
+import {
+  createChatSignatureRpcWitnesses,
+  verifyChatWalletMessage,
+} from "../../_lib/chatSignatureVerification";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { logRouteError } from "../../_lib/routeError";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
@@ -19,6 +24,17 @@ import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
 import { getTrustedAuthOrigin, isTrustedAuthUri } from "../../_lib/trustedAuthOrigin";
 
 const MAX_REQUEST_BODY_BYTES = 8_192;
+
+const CHAT_AUTH_RPC_INPUT = [
+  process.env.KEEPER_RPC_URL,
+  APP_NETWORK === "mainnet"
+    ? process.env.NEXT_PUBLIC_LINEA_RPCS
+    : process.env.NEXT_PUBLIC_LINEA_SEPOLIA_RPCS,
+].filter((value): value is string => Boolean(value)).join(",");
+const CHAT_AUTH_RPC_WITNESSES = createChatSignatureRpcWitnesses({
+  rpcUrls: getStableLineaReadRpcs(CHAT_AUTH_RPC_INPUT, APP_NETWORK),
+  chain: APP_CHAIN,
+});
 
 type ChatAuthPayload = {
   authAddress?: unknown;
@@ -39,10 +55,11 @@ function buildLegacyProofKey(address: string, nonce: string, signature: string) 
 }
 
 async function verifyChatSignature(address: `0x${string}`, message: string, signature: `0x${string}`) {
-  return publicClient.verifyMessage({
+  return verifyChatWalletMessage({
     address,
     message,
     signature,
+    rpcWitnesses: CHAT_AUTH_RPC_WITNESSES,
   });
 }
 

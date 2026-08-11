@@ -1,9 +1,20 @@
 import "dotenv/config";
-import { createPublicClient, createWalletClient, getAddress, http, fallback, formatUnits } from "viem";
+import {
+  createPublicClient,
+  createWalletClient,
+  encodeFunctionData,
+  fallback,
+  formatUnits,
+  getAddress,
+  http,
+  keccak256,
+  toHex,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sanitizeSentryPayload } from "./app/lib/sentrySanitize";
 import {
   assertKeeperFeeBudget,
+  getKeeperDailyBudgetPolicy,
   getKeeperFeeOverrides,
 } from "./app/lib/lineaFees";
 import {
@@ -15,7 +26,21 @@ import {
 } from "./config/publicConfig";
 import { RESOLVE_ABI } from "./config/abi";
 import { assertProductionRuntimeConfig } from "./config/productionRuntime";
-import { getMetaJson, setMetaJson } from "./server/storage";
+import {
+  getMetaJson,
+  reserveKeeperDailyBudget,
+  setMetaJson,
+} from "./server/storage";
+import {
+  fingerprintKeeperEligibility,
+  fingerprintKeeperNonce,
+  fingerprintKeeperReceipt,
+  readWithExactKeeperRpcAgreement,
+  selectKeeperAgreementRpcUrls,
+  type KeeperEligibilityObservation,
+  type KeeperNonceObservation,
+  type KeeperReceiptObservation,
+} from "./server/keeperSigningSafety";
 
 assertProductionRuntimeConfig("bot");
 
@@ -36,20 +61,6 @@ const ALERT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_ALERT_RESPONSE_BYTES = 64 * 1024;
 const ALERT_CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-const PENDING_RESOLVE_STALE_MS = (() => {
-  const raw = Number(process.env.PENDING_RESOLVE_STALE_MS ?? "45000");
-  if (Number.isFinite(raw) && raw > 0) return raw;
-  if (process.env.PENDING_RESOLVE_STALE_MS !== undefined)
-    console.warn(`[keeper] Invalid PENDING_RESOLVE_STALE_MS="${process.env.PENDING_RESOLVE_STALE_MS}", defaulting to 45000`);
-  return 45_000;
-})();
-const FORCE_REPLACE_PENDING_NONCE_GAP = (() => {
-  const raw = Number(process.env.FORCE_REPLACE_PENDING_NONCE_GAP ?? "6");
-  if (Number.isFinite(raw) && raw > 0) return raw;
-  if (process.env.FORCE_REPLACE_PENDING_NONCE_GAP !== undefined)
-    console.warn(`[keeper] Invalid FORCE_REPLACE_PENDING_NONCE_GAP="${process.env.FORCE_REPLACE_PENDING_NONCE_GAP}", defaulting to 6`);
-  return 6;
-})();
 const PENDING_RESOLVE_REVERT_RETRY_MS = (() => {
   const raw = Number(process.env.PENDING_RESOLVE_REVERT_RETRY_MS ?? "300000");
   if (Number.isFinite(raw) && raw > 0) return raw;
@@ -57,11 +68,10 @@ const PENDING_RESOLVE_REVERT_RETRY_MS = (() => {
     console.warn(`[keeper] Invalid PENDING_RESOLVE_REVERT_RETRY_MS="${process.env.PENDING_RESOLVE_REVERT_RETRY_MS}", defaulting to 300000`);
   return 300_000;
 })();
-const REPLACE_PENDING_MAX_FEE_BUMP_PERCENT = 220n;
-const REPLACE_PENDING_PRIORITY_BUMP_PERCENT = 200n;
 const NORMAL_MAX_FEE_BUMP_PERCENT = 130n;
 const NORMAL_PRIORITY_BUMP_PERCENT = 125n;
 const GAS_LIMIT_MARGIN_PERCENT = 150n;
+const KEEPER_DAILY_BUDGET_POLICY = getKeeperDailyBudgetPolicy(APP_CHAIN.id);
 
 // V9 atomic resolve: a single tx finalizes the epoch. Players normally
 // trigger _autoResolveIfNeeded() via their next bet - the keeper is just a
@@ -100,6 +110,9 @@ type PendingResolve = {
   submittedAt: number;
   retryAt?: number;
 };
+
+type KeeperPublicClient = ReturnType<typeof createPublicClient>;
+type KeeperAgreementClients = readonly [KeeperPublicClient, KeeperPublicClient];
 
 const alertCooldowns = new Map<string, number>();
 const PENDING_RESOLVE_META_KEY = "bot:pendingResolve";
@@ -142,12 +155,113 @@ function parseAlertContentLengthHeader(value: string | null) {
 }
 
 function savePendingResolve(value: PendingResolve | null): PendingResolve | null {
-  try {
-    setMetaJson(PENDING_RESOLVE_META_KEY, value ? { ...value, epoch: value.epoch.toString() } : null);
-  } catch (err) {
-    console.warn("[keeper] Failed to persist pendingResolve:", describeKeeperError(err));
-  }
+  setMetaJson(PENDING_RESOLVE_META_KEY, value ? { ...value, epoch: value.epoch.toString() } : null);
   return value;
+}
+
+async function readKeeperEligibility(
+  publicClient: KeeperPublicClient,
+  contractAddress: `0x${string}`,
+): Promise<KeeperEligibilityObservation> {
+  const epoch = await publicClient.readContract({
+    address: contractAddress,
+    abi: ABI,
+    functionName: "currentEpoch",
+  });
+  const endTime = await publicClient.readContract({
+    address: contractAddress,
+    abi: ABI,
+    functionName: "getEpochEndTime",
+    args: [epoch],
+  });
+  const epochData = await publicClient.readContract({
+    address: contractAddress,
+    abi: ABI,
+    functionName: "epochs",
+    args: [epoch],
+  });
+  return {
+    epoch,
+    endTime,
+    totalPool: epochData[0] as bigint,
+    isResolved: Boolean(epochData[3]),
+  };
+}
+
+async function readAgreedKeeperEligibility(
+  publicClients: KeeperAgreementClients,
+  contractAddress: `0x${string}`,
+) {
+  return readWithExactKeeperRpcAgreement(
+    "eligibility",
+    [
+      () => readKeeperEligibility(publicClients[0], contractAddress),
+      () => readKeeperEligibility(publicClients[1], contractAddress),
+    ],
+    fingerprintKeeperEligibility,
+  );
+}
+
+async function readKeeperNonce(
+  publicClient: KeeperPublicClient,
+  accountAddress: `0x${string}`,
+): Promise<KeeperNonceObservation> {
+  const latestNonce = await publicClient.getTransactionCount({
+    address: accountAddress,
+    blockTag: "latest",
+  });
+  const pendingNonce = await publicClient.getTransactionCount({
+    address: accountAddress,
+    blockTag: "pending",
+  });
+  return { latestNonce, pendingNonce };
+}
+
+async function readAgreedKeeperNonce(
+  publicClients: KeeperAgreementClients,
+  accountAddress: `0x${string}`,
+) {
+  return readWithExactKeeperRpcAgreement(
+    "nonce",
+    [
+      () => readKeeperNonce(publicClients[0], accountAddress),
+      () => readKeeperNonce(publicClients[1], accountAddress),
+    ],
+    fingerprintKeeperNonce,
+  );
+}
+
+async function readKeeperReceipt(
+  publicClient: KeeperPublicClient,
+  hash: `0x${string}`,
+): Promise<KeeperReceiptObservation | null> {
+  try {
+    const receipt = await publicClient.getTransactionReceipt({ hash });
+    return {
+      status: receipt.status,
+      transactionHash: receipt.transactionHash,
+      blockHash: receipt.blockHash,
+      blockNumber: receipt.blockNumber,
+      transactionIndex: receipt.transactionIndex,
+    };
+  } catch (error) {
+    if (isReceiptNotFoundLikeError(error)) return null;
+    throw error;
+  }
+}
+
+async function readAgreedKeeperReceipt(
+  publicClients: KeeperAgreementClients,
+  hash: `0x${string}`,
+) {
+  return readWithExactKeeperRpcAgreement(
+    "receipt",
+    [
+      () => readKeeperReceipt(publicClients[0], hash),
+      () => readKeeperReceipt(publicClients[1], hash),
+    ],
+    fingerprintKeeperReceipt,
+  );
 }
 
 function isAlertingEnabled() {
@@ -252,20 +366,22 @@ function isSkippableResolveError(message: string) {
 
 async function tryResolveEpochAction(options: {
   accountAddress: `0x${string}`;
+  account: ReturnType<typeof privateKeyToAccount>;
   contractAddress: `0x${string}`;
   epoch: bigint;
   gasLimitMarginPercent: bigint;
-  replacePendingResolve?: PendingResolve;
   publicClient: ReturnType<typeof createPublicClient>;
+  agreementClients: KeeperAgreementClients;
   walletClient: ReturnType<typeof createWalletClient>;
 }) {
   const {
     accountAddress,
+    account,
     contractAddress,
     epoch,
     gasLimitMarginPercent,
-    replacePendingResolve,
     publicClient,
+    agreementClients,
     walletClient,
   } = options;
 
@@ -277,18 +393,12 @@ async function tryResolveEpochAction(options: {
     args: [epoch],
   });
   const fees = await publicClient.estimateFeesPerGas();
-  const latestNonce = await publicClient.getTransactionCount({
-    address: accountAddress,
-    blockTag: "latest",
-  });
-  const pendingNonce = await publicClient.getTransactionCount({
-    address: accountAddress,
-    blockTag: "pending",
-  });
+  const { latestNonce, pendingNonce } = await readAgreedKeeperNonce(
+    agreementClients,
+    accountAddress,
+  );
   const hasPendingTransaction = pendingNonce > latestNonce;
-  const replacingPendingTx =
-    hasPendingTransaction && replacePendingResolve?.nonce === latestNonce;
-  if (hasPendingTransaction && !replacingPendingTx) {
+  if (hasPendingTransaction) {
     throw new Error(
       `keeper_pending_nonce_unbound latest=${latestNonce.toString()} pending=${pendingNonce.toString()}`,
     );
@@ -296,8 +406,8 @@ async function tryResolveEpochAction(options: {
   const estimatedFeeOverrides = getKeeperFeeOverrides(
     fees,
     APP_CHAIN.id,
-    replacingPendingTx ? REPLACE_PENDING_MAX_FEE_BUMP_PERCENT : NORMAL_MAX_FEE_BUMP_PERCENT,
-    replacingPendingTx ? REPLACE_PENDING_PRIORITY_BUMP_PERCENT : NORMAL_PRIORITY_BUMP_PERCENT,
+    NORMAL_MAX_FEE_BUMP_PERCENT,
+    NORMAL_PRIORITY_BUMP_PERCENT,
   );
   const rawFeeOverrides = extractFeeOverrideFields(estimatedFeeOverrides);
   const txFeeOverrides = extractFeeOverrideFields(rawFeeOverrides);
@@ -314,44 +424,84 @@ async function tryResolveEpochAction(options: {
       `keeper_insufficient_funds balance=${keeperBalance.toString()} requiredMaxCost=${requiredMaxCost.toString()} estimatedGas=${est.toString()}`,
     );
   }
-  if (replacingPendingTx) {
-    console.log(
-      `Replacing pending keeper tx with nonce ${latestNonce.toString()} (pending=${pendingNonce.toString()}, latest=${latestNonce.toString()})`,
-    );
-  }
-  const hash = await walletClient.writeContract({
-    account: walletClient.account ?? accountAddress,
-    chain: APP_CHAIN,
-    address: contractAddress,
+  const data = encodeFunctionData({
     abi: ABI,
     functionName: "resolveEpoch",
     args: [epoch],
+  });
+  const transactionBase = {
+    chainId: APP_CHAIN.id,
+    data,
     gas,
     nonce: latestNonce,
-    ...txFeeOverrides,
+    to: contractAddress,
+    value: 0n,
+  } as const;
+  const signingIntentHash = keccak256(toHex([
+    "resolveEpoch:v1",
+    APP_CHAIN.id.toString(),
+    accountAddress.toLowerCase(),
+    contractAddress.toLowerCase(),
+    epoch.toString(),
+    data.toLowerCase(),
+    gas.toString(),
+    latestNonce.toString(),
+    txFeeOverrides.gasPrice?.toString() ?? "",
+    txFeeOverrides.maxFeePerGas?.toString() ?? "",
+    txFeeOverrides.maxPriorityFeePerGas?.toString() ?? "",
+  ].join("|")));
+  const dailyBudgetReservation = reserveKeeperDailyBudget({
+    chainId: APP_CHAIN.id,
+    contractAddress,
+    signerAddress: accountAddress,
+    nonce: latestNonce,
+    epoch,
+    signingIntentHash,
+    reservedMaxCostWei: requiredMaxCost,
+    policy: KEEPER_DAILY_BUDGET_POLICY,
   });
-  try {
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    if (receipt.status !== "success") {
-      console.warn(`Resolve tx reverted. Deferring retry. Tx: ${hash}`);
-      return {
-        epoch,
-        hash,
-        nonce: latestNonce,
-        submittedAt: Date.now(),
-        retryAt: Date.now() + PENDING_RESOLVE_REVERT_RETRY_MS,
-      } satisfies PendingResolve;
-    }
-    console.log(`Resolved epoch ${epoch.toString()} (gas: ${gas}). Tx: ${hash}`);
-    return null;
-  } catch (receiptErr) {
-    const receiptMsg = receiptErr instanceof Error ? (receiptErr.message?.toLowerCase() ?? "") : String(receiptErr).toLowerCase();
-    if (receiptMsg.includes("timed out") || receiptMsg.includes("timeout")) {
-      console.log(`Resolve tx sent but receipt timed out. Will verify next cycles. Tx: ${hash}`);
-      return { epoch, hash, nonce: latestNonce, submittedAt: Date.now() } satisfies PendingResolve;
-    }
-    throw receiptErr;
+  if (dailyBudgetReservation.status === "reserved") {
+    console.log(
+      `[keeper] Daily circuit breaker reserved signature ${dailyBudgetReservation.reservedSignatureCount}/${KEEPER_DAILY_BUDGET_POLICY.maxSignatures}; ` +
+      `maximum cost ${dailyBudgetReservation.reservedMaxCostWei.toString()}/${KEEPER_DAILY_BUDGET_POLICY.maxReservedCostWei.toString()} wei.`,
+    );
   }
+  const serializedTransaction = txFeeOverrides.gasPrice !== undefined
+    ? await account.signTransaction({
+        ...transactionBase,
+        gasPrice: txFeeOverrides.gasPrice,
+        type: "legacy",
+      })
+    : await account.signTransaction({
+        ...transactionBase,
+        maxFeePerGas: txFeeOverrides.maxFeePerGas,
+        maxPriorityFeePerGas: txFeeOverrides.maxPriorityFeePerGas,
+        type: "eip1559",
+      });
+  const hash = keccak256(serializedTransaction);
+  const pending = savePendingResolve({
+    epoch,
+    hash,
+    nonce: latestNonce,
+    submittedAt: Date.now(),
+  });
+  if (!pending) {
+    throw new Error("keeper_pending_resolve_persistence_failed");
+  }
+  try {
+    const broadcastHash = await walletClient.sendRawTransaction({ serializedTransaction });
+    if (broadcastHash.toLowerCase() !== hash.toLowerCase()) {
+      console.warn("[keeper] Broadcast returned a mismatched hash; signed resolve remains locked pending independent confirmation.");
+      return pending;
+    }
+  } catch (broadcastError) {
+    console.warn(
+      `[keeper] Broadcast outcome is unknown; signed resolve remains locked pending independent confirmation: ${describeKeeperError(broadcastError, 100)}`,
+    );
+    return pending;
+  }
+  console.log(`Resolve epoch ${epoch.toString()} submitted (gas: ${gas}). Tx: ${hash}`);
+  return pending;
 }
 
 async function startKeeperBot() {
@@ -360,6 +510,7 @@ async function startKeeperBot() {
   const rpcUrl = process.env.KEEPER_RPC_URL ?? DEFAULT_RPC_URL;
   const account = privateKeyToAccount(`0x${privateKeyRaw}`);
   const rpcUrls = getPreferredLineaRpcs(rpcUrl, APP_NETWORK);
+  const agreementRpcUrls = selectKeeperAgreementRpcUrls(rpcUrls);
 
   const transport = fallback(rpcUrls.map((url) => http(url)));
   const publicClient = createPublicClient({
@@ -371,12 +522,20 @@ async function startKeeperBot() {
     chain: APP_CHAIN,
     transport,
   });
+  const agreementClients: KeeperAgreementClients = [
+    createPublicClient({ chain: APP_CHAIN, transport: http(agreementRpcUrls[0]) }),
+    createPublicClient({ chain: APP_CHAIN, transport: http(agreementRpcUrls[1]) }),
+  ];
 
   console.log("===============================================");
   console.log("LineaOre Keeper Bot (fallback mode)");
   console.log(`Keeper:       ${account.address}`);
   console.log(`Contract:     ${contractAddress}`);
   console.log(`Grace period: ${GRACE_SECONDS}s`);
+  console.log(
+    `Daily budget: ${KEEPER_DAILY_BUDGET_POLICY.maxSignatures} signatures / ` +
+    `${KEEPER_DAILY_BUDGET_POLICY.maxReservedCostWei.toString()} wei maximum reserved cost`,
+  );
   console.log("===============================================");
   if (isAlertingEnabled()) {
     await sendTelegramAlert(
@@ -389,74 +548,53 @@ async function startKeeperBot() {
   let consecutiveErrors = 0;
   let consecutiveNetworkErrors = 0;
   let pendingResolve: PendingResolve | null = null;
-  try {
-    const stored = getMetaJson<{ epoch: string; hash: `0x${string}`; nonce?: number; submittedAt: number; retryAt?: number }>(PENDING_RESOLVE_META_KEY);
-    const storedNonce = stored?.nonce;
-    const storedRetryAt = stored?.retryAt;
-    if (
-      stored?.epoch &&
-      stored?.hash &&
-      typeof storedNonce === "number" &&
-      Number.isSafeInteger(storedNonce) &&
-      storedNonce >= 0 &&
-      stored.submittedAt
-    ) {
-      const restoredPendingResolve: PendingResolve = {
-        epoch: BigInt(stored.epoch),
-        hash: stored.hash,
-        nonce: storedNonce,
-        submittedAt: stored.submittedAt,
-        ...(typeof storedRetryAt === "number" && Number.isSafeInteger(storedRetryAt) ? { retryAt: storedRetryAt } : {}),
-      };
-      pendingResolve = restoredPendingResolve;
-      console.log(`[keeper] Restored pending resolve for epoch ${restoredPendingResolve.epoch.toString()} from storage. Tx: ${restoredPendingResolve.hash}`);
-    } else if (stored) {
-      console.warn("[keeper] Ignoring legacy or invalid pendingResolve without a bound nonce.");
-      savePendingResolve(null);
-    }
-  } catch (err) {
-    console.warn("[keeper] Failed to restore pendingResolve from storage:", describeKeeperError(err));
+  const stored = getMetaJson<{ epoch: string; hash: `0x${string}`; nonce?: number; submittedAt: number; retryAt?: number }>(PENDING_RESOLVE_META_KEY);
+  const storedNonce = stored?.nonce;
+  const storedRetryAt = stored?.retryAt;
+  if (
+    stored?.epoch &&
+    /^0x[0-9a-fA-F]{64}$/.test(stored.hash) &&
+    typeof storedNonce === "number" &&
+    Number.isSafeInteger(storedNonce) &&
+    storedNonce >= 0 &&
+    Number.isSafeInteger(stored.submittedAt) &&
+    stored.submittedAt > 0
+  ) {
+    const restoredPendingResolve: PendingResolve = {
+      epoch: BigInt(stored.epoch),
+      hash: stored.hash,
+      nonce: storedNonce,
+      submittedAt: stored.submittedAt,
+      ...(typeof storedRetryAt === "number" && Number.isSafeInteger(storedRetryAt) ? { retryAt: storedRetryAt } : {}),
+    };
+    pendingResolve = restoredPendingResolve;
+    console.log(`[keeper] Restored pending resolve for epoch ${restoredPendingResolve.epoch.toString()} from storage. Tx: ${restoredPendingResolve.hash}`);
+  } else if (stored) {
+    throw new Error("keeper_pending_resolve_state_invalid_manual_reconciliation_required");
   }
 
   while (true) {
     try {
-      const epoch = await publicClient.readContract({
-        address: contractAddress,
-        abi: ABI,
-        functionName: "currentEpoch",
-      });
-      const endTime = await publicClient.readContract({
-        address: contractAddress,
-        abi: ABI,
-        functionName: "getEpochEndTime",
-        args: [epoch],
-      });
-      const epochData = await publicClient.readContract({
-        address: contractAddress,
-        abi: ABI,
-        functionName: "epochs",
-        args: [epoch],
-      });
+      const eligibility = await readAgreedKeeperEligibility(
+        agreementClients,
+        contractAddress,
+      );
+      const { epoch, endTime, isResolved, totalPool } = eligibility;
 
       const now = Math.floor(Date.now() / 1000);
       const secondsLeft = Number(endTime) - now;
-      const isResolved = Boolean(epochData[3]);
-      const totalPool = epochData[0] as bigint;
       const overdue = -secondsLeft;
 
-      let replacePendingResolve: PendingResolve | undefined;
       if (pendingResolve) {
         const pending = pendingResolve;
-        const pendingResolved = epoch > pending.epoch;
-        if (pendingResolved) {
-          console.log(`\nPending resolve confirmed for epoch ${pending.epoch.toString()} via chain state. Tx: ${pending.hash}`);
-          pendingResolve = savePendingResolve(null);
-        } else {
-          try {
-            const receipt = await publicClient.getTransactionReceipt({ hash: pending.hash });
+        try {
+          const receipt = await readAgreedKeeperReceipt(agreementClients, pending.hash);
+          if (receipt) {
             console.log(`\nPending resolve receipt found for epoch ${pending.epoch.toString()} (${receipt.status}). Tx: ${pending.hash}`);
             if (receipt.status === "success") {
               pendingResolve = savePendingResolve(null);
+              await delay(1500);
+              continue;
             } else if (pending.retryAt && Date.now() < pending.retryAt) {
               process.stdout.write(`\rEpoch #${epoch.toString()} | resolve reverted | retry deferred   `);
               await delay(1500);
@@ -471,43 +609,35 @@ async function startKeeperBot() {
               await delay(1500);
               continue;
             }
-          } catch (receiptCheckErr) {
-            const receiptCheckMsg = receiptCheckErr instanceof Error ? (receiptCheckErr.message ?? "") : String(receiptCheckErr);
-            if (isNetworkLikeError(receiptCheckMsg)) {
-              // Network error - don't assume tx is stale, just wait and retry
-              console.warn(`\nPending resolve receipt check failed (network): ${describeKeeperError(receiptCheckMsg, 100)}`);
-              await delay(3000);
+          } else {
+            const { latestNonce } = await readAgreedKeeperNonce(
+              agreementClients,
+              account.address,
+            );
+            if (latestNonce > pending.nonce) {
+              console.log(
+                `\nPending resolve nonce ${pending.nonce.toString()} independently confirmed consumed. Tx: ${pending.hash}`,
+              );
+              pendingResolve = savePendingResolve(null);
+              await delay(1500);
               continue;
-            }
-            if (!isReceiptNotFoundLikeError(receiptCheckErr)) {
-              console.warn(`\nPending resolve receipt check failed (unknown): ${describeKeeperError(receiptCheckErr, 100)}`);
-              await delay(3000);
-              continue;
-            }
-            const latestNonce = await publicClient.getTransactionCount({
-              address: account.address,
-              blockTag: "latest",
-            });
-            const pendingNonce = await publicClient.getTransactionCount({
-              address: account.address,
-              blockTag: "pending",
-            });
-            const nonceGap = Number(pendingNonce - latestNonce);
-            const pendingAgeMs = Date.now() - pending.submittedAt;
-            if (
-              pendingAgeMs < PENDING_RESOLVE_STALE_MS &&
-              nonceGap < FORCE_REPLACE_PENDING_NONCE_GAP
-            ) {
-              process.stdout.write(`\rEpoch #${epoch.toString()} | resolve tx pending | ${pending.hash.slice(0, 10)}...   `);
+            } else {
+              process.stdout.write(`\rEpoch #${epoch.toString()} | resolve tx unresolved | ${pending.hash.slice(0, 10)}...   `);
               await delay(1500);
               continue;
             }
-            console.log(
-              `\nPending resolve tx marked stale for epoch ${pending.epoch.toString()} (age=${Math.floor(pendingAgeMs / 1000)}s, nonceGap=${nonceGap}), replacing only its bound nonce.`,
-            );
-            replacePendingResolve = pending;
-            pendingResolve = savePendingResolve(null);
           }
+        } catch (receiptCheckErr) {
+          const receiptCheckMsg = receiptCheckErr instanceof Error ? (receiptCheckErr.message ?? "") : String(receiptCheckErr);
+          if (isNetworkLikeError(receiptCheckMsg)) {
+            console.warn(`\nPending resolve confirmation failed (network): ${describeKeeperError(receiptCheckMsg, 100)}`);
+          } else {
+            console.log(
+              `\nPending resolve confirmation failed closed: ${describeKeeperError(receiptCheckMsg, 100)}`,
+            );
+          }
+          await delay(3000);
+          continue;
         }
       }
 
@@ -517,15 +647,16 @@ async function startKeeperBot() {
         const poolStr = formatUnits(totalPool, 18);
         console.log(`\nResolving epoch ${epoch.toString()} (pool: ${poolStr} LINEA, overdue ${overdue}s)...`);
         try {
-          pendingResolve = savePendingResolve(await tryResolveEpochAction({
+          pendingResolve = await tryResolveEpochAction({
             accountAddress: account.address,
+            account,
             contractAddress,
             epoch,
             gasLimitMarginPercent: GAS_LIMIT_MARGIN_PERCENT,
-            replacePendingResolve,
             publicClient,
+            agreementClients,
             walletClient,
-          }));
+          });
           consecutiveErrors = 0;
           consecutiveNetworkErrors = 0;
         } catch (txErr) {

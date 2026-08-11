@@ -455,8 +455,304 @@ export function getMetaJson<T>(key: string): T | null {
   }
 }
 
+export function readMetaJsonStrict<T>(key: string):
+  | { found: false }
+  | { found: true; value: T } {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(scopeMetaKey(key));
+  if (!row) return { found: false };
+  if (typeof row.value !== "string") {
+    throw new Error("stored metadata value is not text");
+  }
+  try {
+    return { found: true, value: JSON.parse(row.value) as T };
+  } catch {
+    throw new Error("stored metadata JSON is invalid");
+  }
+}
+
+export function getMetaJsonStrict<T>(key: string): T | null {
+  const result = readMetaJsonStrict<T>(key);
+  return result.found ? result.value : null;
+}
+
 export function setMetaJson(key: string, value: unknown) {
   setMetaValue(key, JSON.stringify(value));
+}
+
+const KEEPER_DAILY_BUDGET_META_PREFIX = "keeper:daily-budget:v1";
+const UTC_DAY_MS = 86_400_000;
+
+type KeeperDailyBudgetReservation = {
+  epoch: string;
+  signingIntentHash: string;
+  reservedMaxCostWei: string;
+  reservedAt: number;
+};
+
+type KeeperDailyBudgetState = {
+  version: 1;
+  chainId: number;
+  contractAddress: string;
+  utcDay: number;
+  reservedSignatureCount: number;
+  reservedMaxCostWei: string;
+  reservations: Record<string, KeeperDailyBudgetReservation>;
+};
+
+export type KeeperDailyBudgetReservationInput = {
+  chainId: number;
+  contractAddress: string;
+  signerAddress: string;
+  nonce: number;
+  epoch: bigint;
+  signingIntentHash: string;
+  reservedMaxCostWei: bigint;
+  nowMs?: number;
+  policy: {
+    maxSignatures: number;
+    maxReservedCostWei: bigint;
+  };
+};
+
+export type KeeperDailyBudgetReservationResult = {
+  status: "reserved" | "already_reserved";
+  utcDay: number;
+  reservedSignatureCount: number;
+  reservedMaxCostWei: bigint;
+};
+
+function keeperDailyBudgetError(message: string) {
+  const error = new Error(`keeper daily budget ${message}`);
+  error.name = "KeeperDailyBudgetError";
+  return error;
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeKeeperBudgetAddress(value: string, label: string) {
+  const normalized = value.toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(normalized)) {
+    throw keeperDailyBudgetError(`input invalid field=${label}`);
+  }
+  return normalized;
+}
+
+function parseCanonicalStoredBigInt(
+  value: unknown,
+  options: { positive: boolean },
+) {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/.test(value)) return null;
+  const parsed = BigInt(value);
+  if (options.positive && parsed <= 0n) return null;
+  return parsed;
+}
+
+function parseKeeperDailyBudgetState(
+  raw: string,
+  expected: { chainId: number; contractAddress: string; utcDay: number },
+): KeeperDailyBudgetState {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw keeperDailyBudgetError("state invalid; manual reconciliation required");
+  }
+  if (!isJsonRecord(parsed) || !isJsonRecord(parsed.reservations)) {
+    throw keeperDailyBudgetError("state invalid; manual reconciliation required");
+  }
+  if (
+    parsed.version !== 1 ||
+    parsed.chainId !== expected.chainId ||
+    parsed.contractAddress !== expected.contractAddress ||
+    parsed.utcDay !== expected.utcDay ||
+    !Number.isSafeInteger(parsed.reservedSignatureCount) ||
+    Number(parsed.reservedSignatureCount) < 0
+  ) {
+    throw keeperDailyBudgetError("state invalid; manual reconciliation required");
+  }
+
+  const storedTotal = parseCanonicalStoredBigInt(parsed.reservedMaxCostWei, {
+    positive: false,
+  });
+  if (storedTotal === null) {
+    throw keeperDailyBudgetError("state invalid; manual reconciliation required");
+  }
+
+  const reservations: Record<string, KeeperDailyBudgetReservation> = {};
+  let computedTotal = 0n;
+  for (const [reservationKey, rawReservation] of Object.entries(parsed.reservations)) {
+    const keyMatch = /^(0x[0-9a-f]{40}):(0|[1-9]\d*)$/.exec(reservationKey);
+    if (!keyMatch || !isJsonRecord(rawReservation)) {
+      throw keeperDailyBudgetError("state invalid; manual reconciliation required");
+    }
+    const nonce = Number(keyMatch[2]);
+    const cost = parseCanonicalStoredBigInt(rawReservation.reservedMaxCostWei, {
+      positive: true,
+    });
+    if (
+      !Number.isSafeInteger(nonce) ||
+      nonce < 0 ||
+      typeof rawReservation.epoch !== "string" ||
+      !/^(?:0|[1-9]\d*)$/.test(rawReservation.epoch) ||
+      typeof rawReservation.signingIntentHash !== "string" ||
+      !/^0x[0-9a-f]{64}$/.test(rawReservation.signingIntentHash) ||
+      cost === null ||
+      !Number.isSafeInteger(rawReservation.reservedAt) ||
+      Number(rawReservation.reservedAt) < 0 ||
+      Math.floor(Number(rawReservation.reservedAt) / UTC_DAY_MS) !== expected.utcDay
+    ) {
+      throw keeperDailyBudgetError("state invalid; manual reconciliation required");
+    }
+    reservations[reservationKey] = {
+      epoch: rawReservation.epoch,
+      signingIntentHash: rawReservation.signingIntentHash,
+      reservedMaxCostWei: cost.toString(),
+      reservedAt: Number(rawReservation.reservedAt),
+    };
+    computedTotal += cost;
+  }
+
+  const reservationCount = Object.keys(reservations).length;
+  if (
+    reservationCount !== Number(parsed.reservedSignatureCount) ||
+    computedTotal !== storedTotal
+  ) {
+    throw keeperDailyBudgetError("state invalid; manual reconciliation required");
+  }
+
+  return {
+    version: 1,
+    chainId: expected.chainId,
+    contractAddress: expected.contractAddress,
+    utcDay: expected.utcDay,
+    reservedSignatureCount: reservationCount,
+    reservedMaxCostWei: storedTotal.toString(),
+    reservations,
+  };
+}
+
+/**
+ * Atomically reserves one keeper signing intent in the current contract scope.
+ * Reservations are never released within their UTC window: a signed,
+ * broadcast-unknown, reverted, or confirmed transaction all consumed keeper
+ * authority and retain their maximum possible cost conservatively.
+ */
+export function reserveKeeperDailyBudget(
+  input: KeeperDailyBudgetReservationInput,
+): KeeperDailyBudgetReservationResult {
+  const contractAddress = normalizeKeeperBudgetAddress(
+    input.contractAddress,
+    "contractAddress",
+  );
+  const signerAddress = normalizeKeeperBudgetAddress(
+    input.signerAddress,
+    "signerAddress",
+  );
+  const nowMs = input.nowMs ?? Date.now();
+  if (
+    !Number.isSafeInteger(input.chainId) ||
+    input.chainId <= 0 ||
+    !Number.isSafeInteger(input.nonce) ||
+    input.nonce < 0 ||
+    input.epoch < 0n ||
+    typeof input.signingIntentHash !== "string" ||
+    !/^0x[0-9a-f]{64}$/.test(input.signingIntentHash) ||
+    input.reservedMaxCostWei <= 0n ||
+    !Number.isSafeInteger(nowMs) ||
+    nowMs < 0 ||
+    !Number.isSafeInteger(input.policy.maxSignatures) ||
+    input.policy.maxSignatures <= 0 ||
+    input.policy.maxReservedCostWei <= 0n ||
+    input.reservedMaxCostWei > input.policy.maxReservedCostWei
+  ) {
+    throw keeperDailyBudgetError("input invalid");
+  }
+
+  const utcDay = Math.floor(nowMs / UTC_DAY_MS);
+  const metaKey = [
+    KEEPER_DAILY_BUDGET_META_PREFIX,
+    input.chainId,
+    contractAddress,
+    utcDay,
+  ].join(":");
+  const reservationKey = `${signerAddress}:${input.nonce}`;
+  const expectedState = { chainId: input.chainId, contractAddress, utcDay };
+
+  return runInTransaction(() => {
+    const rawState = getMetaValue(metaKey);
+    const state = rawState === null
+      ? {
+          version: 1 as const,
+          ...expectedState,
+          reservedSignatureCount: 0,
+          reservedMaxCostWei: "0",
+          reservations: {},
+        }
+      : parseKeeperDailyBudgetState(rawState, expectedState);
+    const storedCost = BigInt(state.reservedMaxCostWei);
+    if (
+      state.reservedSignatureCount > input.policy.maxSignatures ||
+      storedCost > input.policy.maxReservedCostWei
+    ) {
+      throw keeperDailyBudgetError("stored usage exceeds active policy");
+    }
+
+    const existing = state.reservations[reservationKey];
+    if (existing) {
+      if (
+        existing.epoch !== input.epoch.toString() ||
+        existing.signingIntentHash !== input.signingIntentHash ||
+        existing.reservedMaxCostWei !== input.reservedMaxCostWei.toString()
+      ) {
+        throw keeperDailyBudgetError("reservation conflict");
+      }
+      return {
+        status: "already_reserved",
+        utcDay,
+        reservedSignatureCount: state.reservedSignatureCount,
+        reservedMaxCostWei: storedCost,
+      };
+    }
+
+    const nextSignatureCount = state.reservedSignatureCount + 1;
+    if (nextSignatureCount > input.policy.maxSignatures) {
+      throw keeperDailyBudgetError("signature count exhausted");
+    }
+    const nextReservedCost = storedCost + input.reservedMaxCostWei;
+    if (nextReservedCost > input.policy.maxReservedCostWei) {
+      throw keeperDailyBudgetError("reserved cost exhausted");
+    }
+
+    const nextState: KeeperDailyBudgetState = {
+      ...state,
+      reservedSignatureCount: nextSignatureCount,
+      reservedMaxCostWei: nextReservedCost.toString(),
+      reservations: {
+        ...state.reservations,
+        [reservationKey]: {
+          epoch: input.epoch.toString(),
+          signingIntentHash: input.signingIntentHash,
+          reservedMaxCostWei: input.reservedMaxCostWei.toString(),
+          reservedAt: nowMs,
+        },
+      },
+    };
+    setMetaValue(metaKey, JSON.stringify(nextState));
+    return {
+      status: "reserved",
+      utcDay,
+      reservedSignatureCount: nextSignatureCount,
+      reservedMaxCostWei: nextReservedCost,
+    };
+  }, "keeper_daily_budget_reserve");
+}
+
+export function deleteMetaJson(key: string) {
+  runWrite(() => {
+    db.prepare("DELETE FROM meta WHERE key = ?").run(scopeMetaKey(key));
+  }, "delete_meta_json");
 }
 
 function getMetaJsonMap<T extends JsonMap>(key: string): T {
@@ -750,6 +1046,8 @@ export function rollbackIndexerToBlock(
     }
 
     setMetaValue("lastIndexedBlock", String(blockNumber));
+    db.prepare("DELETE FROM meta WHERE key = ?")
+      .run(scopeMetaKey("indexerReconcileBlockCursor"));
     const repairCursor = getMetaBigInt("repairCursorBlock");
     const nextRepairBlock = rollbackBlock + 1n;
     if (repairCursor === null || repairCursor > nextRepairBlock) {
@@ -899,11 +1197,29 @@ export function buildIndexerBetIdentity(
   };
 }
 
+function readCanonicalBetLogIndex(row: Record<string, unknown>) {
+  const id = String(row.id ?? "");
+  const identity = buildIndexerBetIdentity(
+    String(row.epoch ?? "0"),
+    String(row.tx_hash ?? ""),
+    String(row.block_number ?? "0"),
+  );
+  if (identity === null) return null;
+  const prefix = `${identity.legacyId}_`;
+  if (!id.startsWith(prefix)) return null;
+  const normalizedLogIndex = normalizeIndexerLogIndex(id.slice(prefix.length));
+  if (normalizedLogIndex === null || id !== `${identity.legacyId}_${normalizedLogIndex}`) {
+    return null;
+  }
+  return normalizedLogIndex;
+}
+
 function mapBetRows(rows: Array<Record<string, unknown>>) {
   const map: Record<string, Omit<BetStorageRow, "user">> = {};
   for (const row of rows) {
     const id = String(row.id ?? "");
     if (!id) continue;
+    const logIndex = readCanonicalBetLogIndex(row);
     map[id] = {
       epoch: String(row.epoch ?? "0"),
       tileIds: parseJsonArray<number>(row.tile_ids_json),
@@ -912,6 +1228,7 @@ function mapBetRows(rows: Array<Record<string, unknown>>) {
       totalAmountNum: Number(row.total_amount_num ?? 0),
       txHash: String(row.tx_hash ?? ""),
       blockNumber: String(row.block_number ?? "0"),
+      ...(logIndex === null ? {} : { logIndex }),
     };
   }
   return map;
@@ -1638,6 +1955,8 @@ export function acquireExpiringLock(name: string, epoch: string, ttlMs: number) 
   const expiresAt = now + ttlMs;
 
   return runInTransaction(() => {
+    db.prepare("DELETE FROM ephemeral_locks WHERE expires_at <= ?").run(now);
+
     const current = db.prepare(`
       SELECT epoch, expires_at
       FROM ephemeral_locks

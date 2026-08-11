@@ -9,6 +9,11 @@ import {
   CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
   GAME_ABI,
 } from "../lib/constants";
+import {
+  assertNormalFeeBudget,
+  hasCompleteFeeOverrides,
+  mergeFeeOverrides,
+} from "../lib/lineaFees";
 import { log } from "../lib/logger";
 import {
   clearPendingMiningTxState,
@@ -50,7 +55,7 @@ export function shouldRecoverSilentSendAsPending(error: unknown): boolean {
 interface UseMiningStandardBetPathOptions {
   assertNativeGasBalance: (gas: bigint, gasOverrides?: GasOverrides) => Promise<void>;
   assertSufficientAllowance: (requiredRaw: bigint) => Promise<void>;
-  ensureAllowance: (requiredRaw: bigint) => Promise<void>;
+  ensureAllowance: (requiredRaw: bigint, assertBeforeSend?: () => void) => Promise<void>;
   ensureContractPreflight: () => Promise<void>;
   estimateGas: (
     functionName:
@@ -139,7 +144,7 @@ export function useMiningStandardBetPath({
       const client = readPublicClient();
       if (!client) return "pending";
       const recovery = await recoverPendingMiningTx(client, state);
-      if (recovery === "pending") return "pending";
+      if (recovery === "pending" || recovery === "manual-reconciliation-required") return "pending";
       clearPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
       return null;
     },
@@ -182,6 +187,7 @@ export function useMiningStandardBetPath({
       gasOverrides?: GasOverrides,
       txNonce?: number,
       expectedEpoch?: bigint,
+      assertBeforeSend?: () => void,
     ): Promise<ReceiptState> => {
       const normalizedTiles = normalizeTiles(tiles);
       if (normalizedTiles.length === 0) throw new Error("No valid tiles selected");
@@ -190,10 +196,18 @@ export function useMiningStandardBetPath({
       const recoveredPending = await recoverTrackedPending();
       if (recoveredPending) return recoveredPending;
       const totalAmountRaw = singleAmountRaw * BigInt(normalizedTiles.length);
-      await ensureAllowance(totalAmountRaw);
+      await ensureAllowance(totalAmountRaw, assertBeforeSend);
       await assertSufficientAllowance(totalAmountRaw);
-      const overrides = gasOverrides ?? (await getBumpedFees());
+      const resolvedFees = hasCompleteFeeOverrides(gasOverrides)
+        ? undefined
+        : await getBumpedFees();
+      const overrides = mergeFeeOverrides(resolvedFees, gasOverrides);
       const writeContractAsync = readWriteContractAsync();
+      const writeAuthorizedContract = (args: unknown, gas: bigint) => {
+        assertNormalFeeBudget(overrides, gas, APP_CHAIN_ID);
+        assertBeforeSend?.();
+        return writeContractAsync(args);
+      };
       const tileMask = tileIdsToMask(normalizedTiles);
 
       if (await supportsEpochBoundBitmap()) {
@@ -204,7 +218,7 @@ export function useMiningStandardBetPath({
           BigInt(80_000),
         );
         await assertNativeGasBalance(gas, overrides);
-        const txHash = await writeContractAsync({
+        const txHash = await writeAuthorizedContract({
           address: CONTRACT_ADDRESS,
           abi: GAME_ABI,
           functionName: "placeBatchBetsBitmapForEpoch",
@@ -213,7 +227,7 @@ export function useMiningStandardBetPath({
           gas,
           ...(txNonce !== undefined ? { nonce: txNonce } : {}),
           ...(overrides ?? {}),
-        });
+        }, gas);
         writeMiningTxPathState("wallet-write", "direct-wallet");
         return waitTrackedReceipt(txHash, undefined, txNonce);
       }
@@ -221,7 +235,7 @@ export function useMiningStandardBetPath({
       if (normalizedTiles.length === 1) {
         const gas = await estimateGas("placeBet", [BigInt(normalizedTiles[0]), singleAmountRaw], BigInt(60000));
         await assertNativeGasBalance(gas, overrides);
-        const txHash = await writeContractAsync({
+        const txHash = await writeAuthorizedContract({
           address: CONTRACT_ADDRESS,
           abi: GAME_ABI,
           functionName: "placeBet",
@@ -230,7 +244,7 @@ export function useMiningStandardBetPath({
           gas,
           ...(txNonce !== undefined ? { nonce: txNonce } : {}),
           ...(overrides ?? {}),
-        });
+        }, gas);
         writeMiningTxPathState("wallet-write", "direct-wallet");
         return waitTrackedReceipt(txHash, undefined, txNonce);
       }
@@ -241,7 +255,7 @@ export function useMiningStandardBetPath({
         try {
           const gas = await estimateGas("placeBatchBetsBitmap", [tileMask, singleAmountRaw], BigInt(80_000));
           await assertNativeGasBalance(gas, overrides);
-          const txHash = await writeContractAsync({
+          const txHash = await writeAuthorizedContract({
             address: CONTRACT_ADDRESS,
             abi: GAME_ABI,
             functionName: "placeBatchBetsBitmap",
@@ -250,7 +264,7 @@ export function useMiningStandardBetPath({
             gas,
             ...(txNonce !== undefined ? { nonce: txNonce } : {}),
             ...(overrides ?? {}),
-          });
+          }, gas);
           batchBitmapSupportedRef.current = true;
           writeMiningTxPathState("wallet-write", "direct-wallet");
           return waitTrackedReceipt(txHash, undefined, txNonce);
@@ -271,7 +285,7 @@ export function useMiningStandardBetPath({
         try {
           const gas = await estimateGas("placeBatchBetsSameAmount", [tileArgs, singleAmountRaw], BigInt(90_000));
           await assertNativeGasBalance(gas, overrides);
-          const txHash = await writeContractAsync({
+          const txHash = await writeAuthorizedContract({
             address: CONTRACT_ADDRESS,
             abi: GAME_ABI,
             functionName: "placeBatchBetsSameAmount",
@@ -280,7 +294,7 @@ export function useMiningStandardBetPath({
             gas,
             ...(txNonce !== undefined ? { nonce: txNonce } : {}),
             ...(overrides ?? {}),
-          });
+          }, gas);
           batchSameAmountSupportedRef.current = true;
           writeMiningTxPathState("wallet-write", "direct-wallet");
           return waitTrackedReceipt(txHash, undefined, txNonce);
@@ -300,7 +314,7 @@ export function useMiningStandardBetPath({
       const amountArgs = normalizedTiles.map(() => singleAmountRaw);
       const gas = await estimateGas("placeBatchBets", [tileArgs, amountArgs], BigInt(120_000));
       await assertNativeGasBalance(gas, overrides);
-      const txHash = await writeContractAsync({
+      const txHash = await writeAuthorizedContract({
         address: CONTRACT_ADDRESS,
         abi: GAME_ABI,
         functionName: "placeBatchBets",
@@ -309,7 +323,7 @@ export function useMiningStandardBetPath({
         gas,
         ...(txNonce !== undefined ? { nonce: txNonce } : {}),
         ...(overrides ?? {}),
-      });
+      }, gas);
       writeMiningTxPathState("wallet-write", "direct-wallet");
       return waitTrackedReceipt(txHash, undefined, txNonce);
     },
@@ -336,6 +350,7 @@ export function useMiningStandardBetPath({
       gasOverrides?: GasOverrides,
       txNonce?: number,
       expectedEpoch?: bigint,
+      assertBeforeSend?: () => void,
     ): Promise<ReceiptState> => {
       const normalizedTiles = normalizeTiles(tiles);
       if (normalizedTiles.length === 0) throw new Error("No valid tiles selected");
@@ -349,7 +364,7 @@ export function useMiningStandardBetPath({
       if (recoveredPending) return recoveredPending;
 
       const totalAmountRaw = singleAmountRaw * BigInt(normalizedTiles.length);
-      await ensureAllowance(totalAmountRaw);
+      await ensureAllowance(totalAmountRaw, assertBeforeSend);
       await assertSufficientAllowance(totalAmountRaw);
 
       let data: `0x${string}` | undefined;
@@ -445,6 +460,7 @@ export function useMiningStandardBetPath({
         ? Number(await client.getTransactionCount({ address: actor as `0x${string}`, blockTag: "pending" }))
         : undefined);
       try {
+        assertBeforeSend?.();
         hash = await silentSend(
           {
             to: CONTRACT_ADDRESS,

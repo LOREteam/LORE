@@ -23,7 +23,6 @@ import {
   CONTRACT_DEPLOY_BLOCK,
   filterByCurrentEpoch,
   isSafePositiveInteger,
-  patchStorage,
   publicClient,
 } from "../_lib/dataBridge";
 import {
@@ -34,6 +33,10 @@ import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { createRouteCache } from "../_lib/routeCache";
 import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
+import {
+  buildRecoveredDepositIdentity,
+  dedupeDepositRowsByIdentity,
+} from "./recoveryIdentity";
 
 const LOG_CHUNK_BLOCKS = 10_000n;
 const ENABLE_CHAIN_RECOVERY = process.env.API_DEPOSITS_CHAIN_RECOVERY === "1";
@@ -62,6 +65,7 @@ type DepositRow = {
   totalAmountNum: number;
   txHash: string;
   blockNumber: string;
+  logIndex?: string;
   amounts?: string[];
 };
 
@@ -157,21 +161,10 @@ function toDisplayNumberWei(value: bigint): number {
 }
 
 function dedupeDeposits(rows: DepositRow[]): DepositRow[] {
-  const byKey = new Map<string, DepositRow>();
-  for (const row of rows) {
-    const key = buildDepositKey(row.epoch, row.txHash ?? "", row.blockNumber ?? "0");
-    const prev = byKey.get(key);
-    if (!prev) {
-      byKey.set(key, row);
-      continue;
-    }
-    const prevBlock = parseStoredBlockNumber(prev.blockNumber);
-    const nextBlock = parseStoredBlockNumber(row.blockNumber);
-    if (nextBlock >= prevBlock) {
-      byKey.set(key, row);
-    }
-  }
-  return Array.from(byKey.values());
+  return dedupeDepositRowsByIdentity(rows, {
+    buildLegacyKey: buildDepositKey,
+    parseBlockNumber: parseStoredBlockNumber,
+  });
 }
 
 function addressToTopic(address: string): `0x${string}` {
@@ -279,11 +272,14 @@ async function fetchDepositsFromChain(
         const tileId = parseDepositTileId(args.tileId);
         if (tileId === null) continue;
         const txHash = normalizeDepositTxHash(log.transactionHash);
-        const key = buildDepositKey(
+        const identity = buildRecoveredDepositIdentity(
           args.epoch.toString(),
           txHash,
           (log.blockNumber ?? 0n).toString(),
+          log.logIndex,
         );
+        if (identity === null) continue;
+        const key = identity.id;
         const amount = formatUnits(args.amount, 18);
         const prev = byKey.get(key);
         if (prev) {
@@ -301,6 +297,7 @@ async function fetchDepositsFromChain(
             totalAmountNum: toDisplayNumberWei(args.amount),
             txHash,
             blockNumber: (log.blockNumber ?? 0n).toString(),
+            logIndex: identity.logIndex,
           });
         }
       } else if (topic0 === batchSig) {
@@ -312,11 +309,14 @@ async function fetchDepositsFromChain(
         const tileIds = parseDepositTileIds(args.tileIds);
         if (tileIds === null || args.amounts.length !== tileIds.length) continue;
         const txHash = normalizeDepositTxHash(log.transactionHash);
-        const key = buildDepositKey(
+        const identity = buildRecoveredDepositIdentity(
           args.epoch.toString(),
           txHash,
           (log.blockNumber ?? 0n).toString(),
+          log.logIndex,
         );
+        if (identity === null) continue;
+        const key = identity.id;
         byKey.set(key, {
           epoch: args.epoch.toString(),
           tileIds,
@@ -325,6 +325,7 @@ async function fetchDepositsFromChain(
           totalAmountNum: toDisplayNumberWei(args.totalAmount),
           txHash,
           blockNumber: (log.blockNumber ?? 0n).toString(),
+          logIndex: identity.logIndex,
         });
       } else if (topic0 === batchSameAmountSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
@@ -336,11 +337,14 @@ async function fetchDepositsFromChain(
         if (tileIds === null) continue;
         const amount = formatUnits(args.amount, 18);
         const txHash = normalizeDepositTxHash(log.transactionHash);
-        const key = buildDepositKey(
+        const identity = buildRecoveredDepositIdentity(
           args.epoch.toString(),
           txHash,
           (log.blockNumber ?? 0n).toString(),
+          log.logIndex,
         );
+        if (identity === null) continue;
+        const key = identity.id;
         byKey.set(key, {
           epoch: args.epoch.toString(),
           tileIds,
@@ -349,6 +353,7 @@ async function fetchDepositsFromChain(
           totalAmountNum: toDisplayNumberWei(args.totalAmount),
           txHash,
           blockNumber: (log.blockNumber ?? 0n).toString(),
+          logIndex: identity.logIndex,
         });
       } else if (topic0 === batchBitmapSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
@@ -359,11 +364,14 @@ async function fetchDepositsFromChain(
         const tileIds = tileMaskToTileIds(args.tileMask);
         const amount = formatUnits(args.amount, 18);
         const txHash = normalizeDepositTxHash(log.transactionHash);
-        const key = buildDepositKey(
+        const identity = buildRecoveredDepositIdentity(
           args.epoch.toString(),
           txHash,
           (log.blockNumber ?? 0n).toString(),
+          log.logIndex,
         );
+        if (identity === null) continue;
+        const key = identity.id;
         byKey.set(key, {
           epoch: args.epoch.toString(),
           tileIds,
@@ -372,6 +380,7 @@ async function fetchDepositsFromChain(
           totalAmountNum: toDisplayNumberWei(args.totalAmount),
           txHash,
           blockNumber: (log.blockNumber ?? 0n).toString(),
+          logIndex: identity.logIndex,
         });
       }
     } catch {
@@ -500,7 +509,7 @@ function readIndexedDeposits(user: string, currentEpochNum: number | null) {
   return dedupeDeposits(deposits).map(normalizeDepositRow).filter(hasDepositTiles);
 }
 
-async function recoverDepositsAndPersist(user: string, currentEpochNum: number | null) {
+async function recoverDepositsFromChain(user: string, currentEpochNum: number | null) {
   if (!ENABLE_FINALIZED_CHAIN_RECOVERY) return [];
 
   const latestIndexedBlock = getMetaBigInt("lastIndexedBlock");
@@ -521,21 +530,12 @@ async function recoverDepositsAndPersist(user: string, currentEpochNum: number |
   const recoveryFromBlock = indexedStart > boundedWindowStart ? indexedStart : boundedWindowStart;
   if (recoveryFromBlock > finalityTargetBlock) return [];
 
-  const recovered = await fetchDepositsFromChain(
+  return await fetchDepositsFromChain(
     user,
     currentEpochNum,
     recoveryFromBlock,
     finalityTargetBlock,
   );
-  if (recovered.length > 0) {
-    const patch: Record<string, unknown> = {};
-    for (const d of recovered) {
-      const key = buildDepositKey(d.epoch, d.txHash, d.blockNumber);
-      patch[key] = d;
-    }
-    await patchStorage(`gamedata/bets/${user}`, patch);
-  }
-  return recovered;
 }
 
 async function recoverDepositsWithGlobalBound(user: string, currentEpochNum: number | null) {
@@ -548,7 +548,7 @@ async function recoverDepositsWithGlobalBound(user: string, currentEpochNum: num
   }
 
   depositsRecoveryStartedAt = now;
-  const task = recoverDepositsAndPersist(user, currentEpochNum);
+  const task = recoverDepositsFromChain(user, currentEpochNum);
   depositsRecoveryInflight = task;
   try {
     return await task;

@@ -238,6 +238,8 @@ function bootstrapSchema() {
       acquired_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS idx_ephemeral_locks_expires
+      ON ephemeral_locks(expires_at);
 
     CREATE TABLE IF NOT EXISTS admin_sessions (
       scope TEXT NOT NULL,

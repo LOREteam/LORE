@@ -18,6 +18,15 @@ const SIZE = { width: 1200, height: 630 };
 const CANONICAL_SITE_ORIGIN = "https://playlore.xyz";
 const OG_RENDER_BUDGET_KEY = "api-jackpots-og-render";
 const MAX_CONCURRENT_OG_RENDERS = 2;
+const OG_IMAGE_CACHE_CONTROL = "public, max-age=0, must-revalidate";
+
+async function enforceOgRateLimit(request: NextRequest) {
+  return await enforceSharedRateLimit(request, {
+    bucket: "api-jackpots-og",
+    limit: 20,
+    windowMs: 60_000,
+  });
+}
 
 function renderBudgetExceededResponse() {
   return applyNoStoreHeaders(NextResponse.json(
@@ -47,11 +56,7 @@ function sanitizePositiveInt(raw: string | null, max: number) {
 }
 
 export async function GET(request: NextRequest) {
-  const rateLimited = await enforceSharedRateLimit(request, {
-    bucket: "api-jackpots-og",
-    limit: 20,
-    windowMs: 60_000,
-  });
+  const rateLimited = await enforceOgRateLimit(request);
   if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   const { searchParams } = request.nextUrl;
@@ -313,4 +318,17 @@ export async function GET(request: NextRequest) {
     releaseRenderSlot();
     throw error;
   }
+}
+
+export async function HEAD(request: NextRequest) {
+  const rateLimited = await enforceOgRateLimit(request);
+  if (rateLimited) return applyNoStoreHeaders(rateLimited);
+
+  return new Response(null, {
+    status: 200,
+    headers: {
+      "Cache-Control": OG_IMAGE_CACHE_CONTROL,
+      "Content-Type": "image/png",
+    },
+  });
 }

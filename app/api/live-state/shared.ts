@@ -28,6 +28,9 @@ const LIVE_STATE_RPC_TIMEOUT_MS = 15_000;
 const LIVE_STATE_TILE_USER_COUNTS_TIMEOUT_MS = 3_000;
 const LIVE_STATE_LOG_SCAN_CHUNK = 10_000n;
 const LIVE_STATE_LOG_SCAN_MIN_CHUNK = 2_000n;
+const LIVE_STATE_TILE_USER_SCAN_MAX_BLOCK_QUERIES = 80_000n;
+const LIVE_STATE_TILE_USER_SCAN_MAX_RPC_CALLS = 8;
+const LIVE_STATE_TILE_USER_SCAN_MAX_LOGS = 10_000;
 const LIVE_STATE_SNAPSHOT_META_KEY = "snapshot:live-state:v1";
 const LIVE_STATE_SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const LIVE_STATE_SNAPSHOT_CACHE_MS = 2_000;
@@ -65,6 +68,7 @@ export type LiveStatePayload = {
 type LiveStateSnapshotEnvelope = {
   payload: LiveStatePayload;
   savedAt: number;
+  source: "indexed";
 };
 
 type CachedStoredBootstrap = {
@@ -78,6 +82,11 @@ type CachedLiveStateSnapshot = {
   loadedAt: number;
 };
 
+type LiveStateTileUserScan = {
+  key: string;
+  promise: Promise<number[] | null>;
+};
+
 type LiveStateEpochTuple = [bigint, bigint, bigint, boolean, boolean, boolean];
 type LiveStateTileTuple = [bigint[], bigint[]];
 type LiveStateJackpotTuple = [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
@@ -85,6 +94,7 @@ type LiveStateJackpotTuple = [bigint, bigint, bigint, bigint, bigint, bigint, bi
 let storedBootstrapCache: CachedStoredBootstrap | null = null;
 let lastLiveStateSnapshotSignature: string | null = null;
 let liveStateSnapshotCache: CachedLiveStateSnapshot | null = null;
+let liveStateTileUserScan: LiveStateTileUserScan | null = null;
 
 function normalizeLiveStateSnapshotMaxAge(maxAgeMs: number) {
   if (!Number.isFinite(maxAgeMs)) return null;
@@ -132,45 +142,6 @@ function isTooManyResultsError(err: unknown): boolean {
   );
 }
 
-async function getLogsChunked(
-  request: Omit<Parameters<typeof publicClient.getLogs>[0], "fromBlock" | "toBlock"> & {
-    fromBlock: bigint;
-    toBlock: bigint;
-  },
-) {
-  const all: Awaited<ReturnType<typeof publicClient.getLogs>> = [];
-  let cursor = request.fromBlock;
-  let chunkSize = LIVE_STATE_LOG_SCAN_CHUNK;
-
-  while (cursor <= request.toBlock) {
-    const chunkTo =
-      cursor + chunkSize - 1n > request.toBlock
-        ? request.toBlock
-        : cursor + chunkSize - 1n;
-
-    try {
-      const logs = await publicClient.getLogs({
-        ...request,
-        fromBlock: cursor,
-        toBlock: chunkTo,
-      } as Parameters<typeof publicClient.getLogs>[0]);
-      all.push(...logs);
-      cursor = chunkTo + 1n;
-      if (chunkSize < LIVE_STATE_LOG_SCAN_CHUNK) {
-        chunkSize =
-          chunkSize * 2n > LIVE_STATE_LOG_SCAN_CHUNK ? LIVE_STATE_LOG_SCAN_CHUNK : chunkSize * 2n;
-      }
-    } catch (err) {
-      if (!isTooManyResultsError(err) || chunkSize <= LIVE_STATE_LOG_SCAN_MIN_CHUNK) {
-        throw err;
-      }
-      chunkSize = chunkSize / 2n;
-    }
-  }
-
-  return all;
-}
-
 function hasAnyPositivePool(tileData: LiveStateTileTuple | null) {
   return Boolean(tileData?.[0]?.some((value) => value > 0n));
 }
@@ -196,7 +167,7 @@ function parseChainTileId(value: bigint, gridSize: number) {
   return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= gridSize ? parsed : null;
 }
 
-async function fetchEpochTileUserCountsFromChain(
+async function scanEpochTileUserCountsFromChain(
   epoch: bigint,
   fromBlock: bigint,
   toBlock: bigint,
@@ -204,10 +175,17 @@ async function fetchEpochTileUserCountsFromChain(
   gridSize = 25,
 ) {
   const epochTopic = toHex(epoch, { size: 32 });
+  const scanStartedAt = Date.now();
+  const deadlineAt = scanStartedAt > Number.MAX_SAFE_INTEGER - LIVE_STATE_TILE_USER_COUNTS_TIMEOUT_MS
+    ? Number.MAX_SAFE_INTEGER
+    : scanStartedAt + LIVE_STATE_TILE_USER_COUNTS_TIMEOUT_MS;
   const perTile = Array.from(
     { length: gridSize },
     (_, index) => new Set(seedTileUsers?.[index] ?? []),
   );
+  let queriedBlockWindows = 0n;
+  let rpcCalls = 0;
+  let observedLogs = 0;
 
   const appendUsers = (
     users: string[],
@@ -262,22 +240,88 @@ async function fetchEpochTileUserCountsFromChain(
   };
 
   for (const topic0 of [betPlacedSig, batchPlacedSig, batchSameAmountPlacedSig, batchBitmapPlacedSig]) {
-    const logs = await getLogsChunked({
-      address: CONTRACT_ADDRESS,
-      topics: [topic0, epochTopic],
-      fromBlock,
-      toBlock,
-    } as Parameters<typeof publicClient.getLogs>[0] & { fromBlock: bigint; toBlock: bigint });
-    for (const log of logs) {
+    let cursor = fromBlock;
+    let chunkSize = LIVE_STATE_LOG_SCAN_CHUNK;
+    while (cursor <= toBlock) {
+      if (
+        rpcCalls >= LIVE_STATE_TILE_USER_SCAN_MAX_RPC_CALLS ||
+        queriedBlockWindows >= LIVE_STATE_TILE_USER_SCAN_MAX_BLOCK_QUERIES ||
+        observedLogs >= LIVE_STATE_TILE_USER_SCAN_MAX_LOGS ||
+        Date.now() >= deadlineAt
+      ) return null;
+
+      const remainingBlockBudget = LIVE_STATE_TILE_USER_SCAN_MAX_BLOCK_QUERIES - queriedBlockWindows;
+      const requestedBlocks = [chunkSize, toBlock - cursor + 1n, remainingBlockBudget]
+        .reduce((smallest, value) => value < smallest ? value : smallest);
+      if (requestedBlocks <= 0n) return null;
+      const chunkTo = cursor + requestedBlocks - 1n;
+      rpcCalls += 1;
+      queriedBlockWindows += requestedBlocks;
+
       try {
-        decodeTileLog(log);
-      } catch {
-        // Ignore malformed logs and keep best-effort tile counts.
+        const logs = await publicClient.getLogs({
+          address: CONTRACT_ADDRESS,
+          topics: [topic0, epochTopic],
+          fromBlock: cursor,
+          toBlock: chunkTo,
+        } as Parameters<typeof publicClient.getLogs>[0]);
+        if (
+          Date.now() >= deadlineAt ||
+          logs.length > LIVE_STATE_TILE_USER_SCAN_MAX_LOGS - observedLogs
+        ) return null;
+        observedLogs += logs.length;
+        for (const log of logs) {
+          try {
+            decodeTileLog(log);
+          } catch {
+            // Ignore malformed logs and keep best-effort tile counts.
+          }
+        }
+        cursor = chunkTo + 1n;
+        if (chunkSize < LIVE_STATE_LOG_SCAN_CHUNK) {
+          chunkSize =
+            chunkSize * 2n > LIVE_STATE_LOG_SCAN_CHUNK ? LIVE_STATE_LOG_SCAN_CHUNK : chunkSize * 2n;
+        }
+      } catch (err) {
+        if (!isTooManyResultsError(err) || chunkSize <= LIVE_STATE_LOG_SCAN_MIN_CHUNK) {
+          throw err;
+        }
+        chunkSize = chunkSize / 2n;
       }
     }
   }
 
   return perTile.map((set) => set.size);
+}
+
+export function fetchEpochTileUserCountsFromChain(
+  epoch: bigint,
+  fromBlock: bigint,
+  toBlock: bigint,
+  seedTileUsers?: Set<string>[],
+  gridSize = 25,
+) {
+  const seedSignature = seedTileUsers?.map((set) => set.size).join(",") ?? "none";
+  const key = `${epoch}:${fromBlock}:${toBlock}:${gridSize}:${seedSignature}`;
+  if (liveStateTileUserScan) {
+    return liveStateTileUserScan.key === key
+      ? liveStateTileUserScan.promise
+      : Promise.resolve(null);
+  }
+
+  const task: Promise<number[] | null> = scanEpochTileUserCountsFromChain(
+    epoch,
+    fromBlock,
+    toBlock,
+    seedTileUsers,
+    gridSize,
+  ).finally(() => {
+    if (liveStateTileUserScan?.promise === task) {
+      liveStateTileUserScan = null;
+    }
+  });
+  liveStateTileUserScan = { key, promise: task };
+  return task;
 }
 
 function createTimeoutError(label: string, timeoutMs: number) {
@@ -335,6 +379,14 @@ export function loadLiveStateSnapshot(maxAgeMs = LIVE_STATE_SNAPSHOT_MAX_AGE_MS)
     return null;
   }
   if ("payload" in snapshot) {
+    if (snapshot.source !== "indexed") {
+      liveStateSnapshotCache = {
+        payload: null,
+        savedAt: null,
+        loadedAt: now,
+      };
+      return null;
+    }
     const savedAt = normalizeLiveStateSnapshotSavedAt(snapshot.savedAt);
     if (!isFreshLiveStateSnapshotSavedAt(snapshot.savedAt, normalizedMaxAgeMs, now)) {
       liveStateSnapshotCache = {
@@ -352,13 +404,12 @@ export function loadLiveStateSnapshot(maxAgeMs = LIVE_STATE_SNAPSHOT_MAX_AGE_MS)
     };
     return snapshot.payload;
   }
-  lastLiveStateSnapshotSignature = getLiveStateSnapshotSignature(snapshot);
   liveStateSnapshotCache = {
-    payload: snapshot,
+    payload: null,
     savedAt: null,
     loadedAt: now,
   };
-  return snapshot;
+  return null;
 }
 
 function getLiveStateSnapshotSignature(payload: LiveStatePayload | null) {
@@ -368,7 +419,7 @@ function getLiveStateSnapshotSignature(payload: LiveStatePayload | null) {
   return JSON.stringify(stablePayload);
 }
 
-export function saveLiveStateSnapshot(payload: LiveStatePayload) {
+export function saveLiveStateSnapshot(payload: LiveStatePayload, source: "indexed") {
   const signature = getLiveStateSnapshotSignature(payload);
   const savedAt = Date.now();
   if (lastLiveStateSnapshotSignature === signature) {
@@ -380,6 +431,7 @@ export function saveLiveStateSnapshot(payload: LiveStatePayload) {
     setMetaJson(LIVE_STATE_SNAPSHOT_META_KEY, {
       payload,
       savedAt,
+      source,
     });
     return;
   }
@@ -392,6 +444,7 @@ export function saveLiveStateSnapshot(payload: LiveStatePayload) {
   setMetaJson(LIVE_STATE_SNAPSHOT_META_KEY, {
     payload,
     savedAt,
+    source,
   });
 }
 
@@ -606,24 +659,23 @@ export async function buildLiveStatePayload(): Promise<LiveStatePayload> {
   let tileUserCounts = indexedTileUserCounts ?? sameEpochSnapshot?.tileUserCounts ?? null;
   if (shouldRefreshCurrentEpochTileUserCounts) {
     try {
-      tileUserCounts = await withTimeout(
-        fetchEpochTileUserCountsFromChain(
-          currentEpoch,
-          (() => {
-            const lastIndexedBlock = getMetaBigInt("lastIndexedBlock");
-            if (!lastIndexedBlock || lastIndexedBlock < CONTRACT_DEPLOY_BLOCK) {
-              return CONTRACT_DEPLOY_BLOCK;
-            }
-            return lastIndexedBlock + 1n;
-          })(),
-          await publicClient.getBlockNumber(),
-          hasAnyPositiveCount(indexedTileUserCounts)
-            ? getEpochTileUserSets(currentEpochNumber)
-            : undefined,
-        ),
-        "tile user counts",
-        LIVE_STATE_TILE_USER_COUNTS_TIMEOUT_MS,
+      const recoveredTileUserCounts = await fetchEpochTileUserCountsFromChain(
+        currentEpoch,
+        (() => {
+          const lastIndexedBlock = getMetaBigInt("lastIndexedBlock");
+          if (!lastIndexedBlock || lastIndexedBlock < CONTRACT_DEPLOY_BLOCK) {
+            return CONTRACT_DEPLOY_BLOCK;
+          }
+          return lastIndexedBlock + 1n;
+        })(),
+        await publicClient.getBlockNumber(),
+        hasAnyPositiveCount(indexedTileUserCounts)
+          ? getEpochTileUserSets(currentEpochNumber)
+          : undefined,
       );
+      if (recoveredTileUserCounts) {
+        tileUserCounts = recoveredTileUserCounts;
+      }
     } catch {
       tileUserCounts = indexedTileUserCounts ?? sameEpochSnapshot?.tileUserCounts ?? null;
     }
@@ -678,7 +730,10 @@ export async function buildLiveStatePayload(): Promise<LiveStatePayload> {
     fetchedAt: Date.now(),
   };
 
-  saveLiveStateSnapshot(payload);
+  const indexedSnapshot = buildStoredLiveStateBootstrap();
+  if (indexedSnapshot) {
+    saveLiveStateSnapshot(indexedSnapshot, "indexed");
+  }
   return payload;
 }
 

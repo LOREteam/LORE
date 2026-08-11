@@ -56,7 +56,13 @@ function isFreshRecentWinsCache(entry: RecentWinsCacheEntry | null, now = Date.n
   );
 }
 
-function commitRecentWinsCache(payload: RecentWinsPayload, ttlMs: number, seq: number, watermark: string | null) {
+function commitRecentWinsCache(
+  payload: RecentWinsPayload,
+  ttlMs: number,
+  seq: number,
+  watermark: string | null,
+  durableSnapshotEligible: boolean,
+) {
   if (seq < recentWinsAppliedSeq) {
     return recentWinsCache?.payload ?? payload;
   }
@@ -66,7 +72,9 @@ function commitRecentWinsCache(payload: RecentWinsPayload, ttlMs: number, seq: n
     payload,
     expiresAt: computeRecentWinsExpiresAt(ttlMs),
   };
-  saveRecentWinsSnapshot(payload, watermark);
+  if (durableSnapshotEligible && !hasPendingRecentWinsRecovery(payload)) {
+    saveRecentWinsSnapshot(payload, watermark);
+  }
   return payload;
 }
 
@@ -81,16 +89,30 @@ function hydrateRecentWinsSnapshot(watermark: string | null) {
   return snapshot;
 }
 
+function hasPendingRecentWinsRecovery(payload: RecentWinsPayload | null) {
+  return payload?.recovery?.status === "partial";
+}
+
 function startRecentWinsRefresh(watermark: string | null) {
-  if (recentWinsRefreshPromise || recentWinsInflight || recentWinsCacheWatermark === watermark) {
+  if (
+    recentWinsRefreshPromise ||
+    recentWinsInflight ||
+    (recentWinsCacheWatermark === watermark && !hasPendingRecentWinsRecovery(recentWinsCache?.payload ?? null))
+  ) {
     return;
   }
 
   markRouteBackgroundRefresh(ROUTE_METRIC_KEY);
   const seq = ++recentWinsBuildSeq;
   recentWinsRefreshPromise = buildRecentWinsPayload({ allowSlowRecovery: true })
-    .then(({ payload }) => {
-      commitRecentWinsCache(payload, RECENT_WINS_STALE_REFRESH_MS, seq, watermark);
+    .then(({ payload, durableSnapshotEligible }) => {
+      commitRecentWinsCache(
+        payload,
+        RECENT_WINS_STALE_REFRESH_MS,
+        seq,
+        watermark,
+        durableSnapshotEligible,
+      );
     })
     .catch((error) => {
       logRouteError(ROUTE_METRIC_KEY, error, { phase: "background-refresh" });
@@ -100,8 +122,42 @@ function startRecentWinsRefresh(watermark: string | null) {
     });
 }
 
+function startRecentWinsRequestBuild(watermark: string | null) {
+  const seq = ++recentWinsBuildSeq;
+  const task: Promise<RecentWinsPayload> = (async () => {
+    const fastResult = await buildRecentWinsPayload({ allowSlowRecovery: false });
+    const result =
+      fastResult.recoveryNeeded && fastResult.payload.wins.length === 0
+        ? await buildRecentWinsPayload({ allowSlowRecovery: true })
+        : fastResult;
+    return commitRecentWinsCache(
+      result.payload,
+      RECENT_WINS_ROUTE_CACHE_MS,
+      seq,
+      watermark,
+      result.durableSnapshotEligible,
+    );
+  })().finally(() => {
+    if (recentWinsInflight === task) {
+      recentWinsInflight = null;
+    }
+  });
+  recentWinsInflight = task;
+  return task;
+}
+
 export async function GET(request: Request) {
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
+  const rateLimited = await enforceSharedRateLimit(request, {
+    bucket: "api-recent-wins",
+    limit: 30,
+    windowMs: 60_000,
+  });
+  if (rateLimited) {
+    failRouteMetric(metric, 429);
+    return applyNoStoreHeaders(rateLimited);
+  }
+
   const now = Date.now();
   const freshCache = recentWinsCache;
   if (isFreshRecentWinsCache(freshCache, now)) {
@@ -121,21 +177,11 @@ export async function GET(request: Request) {
   const staleCache = recentWinsCache?.payload ?? null;
   if (staleCache) {
     markRouteStaleServed(ROUTE_METRIC_KEY);
-    if (recentWinsCacheWatermark !== currentWatermark) {
+    if (recentWinsCacheWatermark !== currentWatermark || hasPendingRecentWinsRecovery(staleCache)) {
       startRecentWinsRefresh(currentWatermark);
     }
     finishRouteMetric(metric, 200);
     return jsonNoStore(staleCache);
-  }
-
-  const rateLimited = await enforceSharedRateLimit(request, {
-    bucket: "api-recent-wins",
-    limit: 30,
-    windowMs: 60_000,
-  });
-  if (rateLimited) {
-    failRouteMetric(metric, 429);
-    return applyNoStoreHeaders(rateLimited);
   }
 
   try {
@@ -146,19 +192,7 @@ export async function GET(request: Request) {
       return jsonNoStore(payload);
     }
 
-    const fastResult = await buildRecentWinsPayload({ allowSlowRecovery: false });
-    const seq = ++recentWinsBuildSeq;
-    const buildPromise =
-      fastResult.recoveryNeeded && fastResult.payload.wins.length === 0
-        ? buildRecentWinsPayload({ allowSlowRecovery: true })
-        : Promise.resolve(fastResult);
-    recentWinsInflight = buildPromise
-      .then(({ payload: result }) => commitRecentWinsCache(result, RECENT_WINS_ROUTE_CACHE_MS, seq, currentWatermark))
-      .finally(() => {
-        recentWinsInflight = null;
-      });
-
-    const payload = await recentWinsInflight;
+    const payload = await startRecentWinsRequestBuild(currentWatermark);
 
     finishRouteMetric(metric, 200);
     return jsonNoStore(payload);

@@ -70,6 +70,14 @@ interface ApiRebatePayload {
   totalEpochs: number;
   participatingEpochs: number[];
   recentEpochs: ApiRebateEpochInfo[];
+  scan: {
+    mode: "summary" | "exact";
+    complete: boolean;
+    processedEpochs: number;
+    totalEpochs: number;
+    nextOffset: number | null;
+    servingCommitted: boolean;
+  };
   error?: string;
 }
 
@@ -162,6 +170,10 @@ function normalizeRecentEpoch(row: unknown): ApiRebateEpochInfo | null {
 
 export function normalizeRebatePayload(value: unknown): ApiRebatePayload {
   const data = (value ?? {}) as Record<string, unknown>;
+  const rawScan = data.scan && typeof data.scan === "object"
+    ? data.scan as Record<string, unknown>
+    : null;
+  const normalizedNextOffset = normalizeNonNegativeSafeInteger(rawScan?.nextOffset);
   return {
     isSupported: data.isSupported !== false,
     pendingRebateWei: normalizeWeiString(data.pendingRebateWei),
@@ -175,6 +187,14 @@ export function normalizeRebatePayload(value: unknown): ApiRebatePayload {
           .map(normalizeRecentEpoch)
           .filter((row): row is ApiRebateEpochInfo => row !== null)
       : [],
+    scan: {
+      mode: rawScan?.mode === "exact" ? "exact" : "summary",
+      complete: rawScan?.complete !== false,
+      processedEpochs: normalizeNonNegativeSafeInteger(rawScan?.processedEpochs) ?? 0,
+      totalEpochs: normalizeNonNegativeSafeInteger(rawScan?.totalEpochs) ?? 0,
+      nextOffset: rawScan?.nextOffset === null ? null : normalizedNextOffset,
+      servingCommitted: rawScan?.servingCommitted === true,
+    },
   };
 }
 
@@ -400,6 +420,12 @@ function rebatePayloadEqual(left: ApiRebatePayload | null, right: ApiRebatePaylo
     left.pendingRebateWei !== right.pendingRebateWei ||
     left.claimableEpochCount !== right.claimableEpochCount ||
     left.totalEpochs !== right.totalEpochs ||
+    left.scan.mode !== right.scan.mode ||
+    left.scan.complete !== right.scan.complete ||
+    left.scan.processedEpochs !== right.scan.processedEpochs ||
+    left.scan.totalEpochs !== right.scan.totalEpochs ||
+    left.scan.nextOffset !== right.scan.nextOffset ||
+    left.scan.servingCommitted !== right.scan.servingCommitted ||
     left.claimableEpochList.length !== right.claimableEpochList.length ||
     left.participatingEpochs.length !== right.participatingEpochs.length
   ) {
@@ -718,7 +744,11 @@ export function useRebate(options?: UseRebateOptions) {
       hasLoadedRef.current = true;
       if (mountedRef.current) {
         setHasLoaded(true);
-        setDataFreshness(getRebateDataFreshness(cacheStatus));
+        setDataFreshness(
+          normalizedPayload.scan.complete
+            ? getRebateDataFreshness(cacheStatus)
+            : "background-refresh",
+        );
       }
       const cachedPayload = {
         ...normalizedPayload,

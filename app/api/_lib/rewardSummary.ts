@@ -2,9 +2,14 @@ import { formatUnits, getAddress, type Abi } from "viem";
 import { GAME_ABI } from "../../../config/generated/lineaOreV10Abi";
 import { CONTRACT_ADDRESS, isSafePositiveInteger, publicClient } from "./dataBridge";
 import { parseLineaAmountWei } from "../../lib/tokenAmountMath";
-import { getEpochMapByIds, upsertEpochMap } from "../../../server/storage";
+import { getEpochMapByIds } from "../../../server/storage";
 import { createRouteCache } from "./routeCache";
 import { parseStoredPositiveIntegerOrZero } from "./storedNumberParsing";
+import {
+  isRecoveryContextCurrent,
+  loadFinalizedRecoveryContext,
+  type FinalizedRecoveryContext,
+} from "./jackpotsService";
 
 const READ_ABI: Abi = GAME_ABI;
 const MULTICALL_CHUNK = 100;
@@ -65,7 +70,10 @@ function parseRewardEpochKey(value: string): number | null {
   return parsed > 0 ? parsed : null;
 }
 
-async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpochRuntimeRow>> {
+async function loadEpochRows(epochs: number[]): Promise<{
+  epochRows: Record<string, RewardEpochRuntimeRow>;
+  recoveryContext: FinalizedRecoveryContext | null;
+}> {
   const normalizedEpochs = [...new Set(
     epochs.filter(isSafePositiveInteger),
   )].slice(0, MAX_EPOCHS_PER_REQUEST);
@@ -91,13 +99,13 @@ async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpo
     }
   }
 
-  const recoveredRows: Record<string, {
-    winningTile: number;
-    totalPool: string;
-    rewardPool: string;
-    isDailyJackpot: boolean;
-    isWeeklyJackpot: boolean;
-  }> = {};
+  if (missingEpochs.length === 0) {
+    return { epochRows, recoveryContext: null };
+  }
+  const recoveryContext = await loadFinalizedRecoveryContext();
+  if (recoveryContext === null) {
+    return { epochRows, recoveryContext: null };
+  }
 
   for (let offset = 0; offset < missingEpochs.length; offset += MULTICALL_CHUNK) {
     const chunk = missingEpochs.slice(offset, offset + MULTICALL_CHUNK);
@@ -108,6 +116,7 @@ async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpo
         functionName: "epochs",
         args: [BigInt(epoch)],
       })),
+      blockNumber: recoveryContext.blockNumber,
     });
 
     chunk.forEach((epoch, index) => {
@@ -127,21 +136,14 @@ async function loadEpochRows(epochs: number[]): Promise<Record<string, RewardEpo
         isWeeklyJackpot: Boolean(row[5]),
       };
       epochRows[String(epoch)] = recovered;
-      recoveredRows[String(epoch)] = {
-        winningTile: recovered.winningTile,
-        totalPool: recovered.totalPool,
-        rewardPool: recovered.rewardPool,
-        isDailyJackpot: recovered.isDailyJackpot,
-        isWeeklyJackpot: recovered.isWeeklyJackpot,
-      };
     });
   }
 
-  if (Object.keys(recoveredRows).length > 0) {
-    upsertEpochMap(recoveredRows);
+  if (!(await isRecoveryContextCurrent(recoveryContext))) {
+    for (const epoch of missingEpochs) delete epochRows[String(epoch)];
+    return { epochRows, recoveryContext: null };
   }
-
-  return epochRows;
+  return { epochRows, recoveryContext };
 }
 
 export async function loadRewardMapsForUserEpochs(
@@ -168,7 +170,7 @@ export async function loadRewardMapsForUserEpochs(
   }
 
   const task: Promise<RewardMapsForUserEpochs> = (async (): Promise<RewardMapsForUserEpochs> => {
-    const epochMap = await loadEpochRows(normalizedEpochs);
+    const { epochRows: epochMap, recoveryContext } = await loadEpochRows(normalizedEpochs);
     const winningEpochs = Object.entries(epochMap)
       .flatMap(([epoch, row]) => {
         const parsedEpoch = parseRewardEpochKey(epoch);
@@ -208,6 +210,7 @@ export async function loadRewardMapsForUserEpochs(
             functionName: "userBets",
             args: [BigInt(entry.epoch), entry.winningTile, normalizedUser],
           })),
+          ...(recoveryContext ? { blockNumber: recoveryContext.blockNumber } : {}),
         }),
         publicClient.multicall({
           contracts: chunk.map((entry) => ({
@@ -216,6 +219,7 @@ export async function loadRewardMapsForUserEpochs(
             functionName: "tilePools",
             args: [BigInt(entry.epoch), entry.winningTile],
           })),
+          ...(recoveryContext ? { blockNumber: recoveryContext.blockNumber } : {}),
         }),
       ]);
 

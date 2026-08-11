@@ -12,9 +12,61 @@ const validatedScopes = new Set<string>();
 const DEFAULT_DB_PATH = "data/lore.sqlite";
 const REPO_ROOT = process.cwd();
 const KNOWN_DEVELOPMENT_PRIVY_APP_IDS = new Set(["cmlqkgtmg00og0cjueu4mxmn9"]);
+const BOOTSTRAP_LOWER_PURPOSE_SECRET_NAMES = [
+  "HEALTH_DIAGNOSTICS_SECRET",
+  "TRUST_PROXY_SECRET",
+  "CHAT_AUTH_SECRET",
+  "NEXTAUTH_SECRET",
+  "ADMIN_AUTH_SECRET",
+] as const;
 
 function getEnv(name: string) {
   return process.env[name]?.trim() ?? "";
+}
+
+type RuntimePurposeSecrets = {
+  healthDiagnosticsSecret: string;
+  trustProxySecret: string;
+  chatAuthSecret: string;
+  nextAuthSecret: string;
+};
+
+export function getRuntimePurposeSecretCollisions(
+  secrets: RuntimePurposeSecrets,
+): string[] {
+  const entries = [
+    ["HEALTH_DIAGNOSTICS_SECRET", secrets.healthDiagnosticsSecret.trim()],
+    ["TRUST_PROXY_SECRET", secrets.trustProxySecret.trim()],
+    [
+      "effective chat authentication secret",
+      secrets.chatAuthSecret.trim() || secrets.nextAuthSecret.trim(),
+    ],
+  ] as const;
+  const collisions: string[] = [];
+
+  for (let leftIndex = 0; leftIndex < entries.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
+      const [leftName, leftValue] = entries[leftIndex];
+      const [rightName, rightValue] = entries[rightIndex];
+      if (leftValue && leftValue === rightValue) {
+        collisions.push(`${leftName} and ${rightName}`);
+      }
+    }
+  }
+
+  return collisions;
+}
+
+function validateRuntimePurposeSecretSeparation(label: string, issues: string[]) {
+  const collisions = getRuntimePurposeSecretCollisions({
+    healthDiagnosticsSecret: getEnv("HEALTH_DIAGNOSTICS_SECRET"),
+    trustProxySecret: getEnv("TRUST_PROXY_SECRET"),
+    chatAuthSecret: getEnv("CHAT_AUTH_SECRET"),
+    nextAuthSecret: getEnv("NEXTAUTH_SECRET"),
+  });
+  for (const collision of collisions) {
+    issues.push(`${collision} must be distinct on ${label}.`);
+  }
 }
 
 function isDisallowedMainnetHost(host: string) {
@@ -64,6 +116,38 @@ function parseEndpointList(value: string) {
     .filter(Boolean);
 }
 
+export function getCanonicalRpcHostname(
+  value: string,
+  options: { httpsOnly?: boolean } = {},
+): string | null {
+  try {
+    const parsed = new URL(value.trim());
+    if (
+      (options.httpsOnly ? parsed.protocol !== "https:" : !/^https?:$/.test(parsed.protocol)) ||
+      parsed.username ||
+      parsed.password
+    ) {
+      return null;
+    }
+    const hostname = parsed.hostname
+      .toLowerCase()
+      .replace(/^\[(.*)\]$/, "$1")
+      .replace(/\.+$/, "");
+    return hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+export function hasTwoIndependentPublicRpcOrigins(urls: readonly string[]) {
+  const hostnames = new Set<string>();
+  for (const value of urls) {
+    const hostname = getCanonicalRpcHostname(value, { httpsOnly: true });
+    if (hostname !== null) hostnames.add(hostname);
+  }
+  return hostnames.size >= 2;
+}
+
 function isPublicMainnetSiteUrl(value: string) {
   try {
     const parsed = new URL(value);
@@ -83,6 +167,42 @@ function isTruthyEnv(value: string) {
 
 function isPrivateKeyHex(value: string) {
   return /^(?:0x)?[a-fA-F0-9]{64}$/.test(value.trim());
+}
+
+function normalizePrivateKeyForComparison(value: string) {
+  return value.trim().replace(/^0x/i, "").toLowerCase();
+}
+
+function validateBootstrapResolveCredentials(label: string, issues: string[]) {
+  const bootstrapSecret = getEnv("BOOTSTRAP_RESOLVE_SECRET");
+  if (
+    bootstrapSecret &&
+    BOOTSTRAP_LOWER_PURPOSE_SECRET_NAMES.some(
+      (name) => getEnv(name) === bootstrapSecret,
+    )
+  ) {
+    issues.push(
+      `BOOTSTRAP_RESOLVE_SECRET must be distinct from lower-purpose authentication and diagnostics secrets on ${label}.`,
+    );
+  }
+
+  const bootstrapKeeperKey = getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY");
+  const keeperKey = getEnv("KEEPER_PRIVATE_KEY");
+  if (!bootstrapKeeperKey) {
+    issues.push(`BOOTSTRAP_KEEPER_PRIVATE_KEY is required for ${label} bootstrap resolve.`);
+  } else if (!isPrivateKeyHex(bootstrapKeeperKey)) {
+    issues.push(`BOOTSTRAP_KEEPER_PRIVATE_KEY must be a 64-hex private key on ${label}.`);
+  }
+  if (
+    bootstrapKeeperKey &&
+    keeperKey &&
+    normalizePrivateKeyForComparison(bootstrapKeeperKey) ===
+      normalizePrivateKeyForComparison(keeperKey)
+  ) {
+    issues.push(
+      `BOOTSTRAP_KEEPER_PRIVATE_KEY must be distinct from KEEPER_PRIVATE_KEY on ${label}.`,
+    );
+  }
 }
 
 function isPositiveSafeInteger(value: string) {
@@ -250,6 +370,11 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
   if (publicRpcUrls.some((url) => !isPublicHttpsEndpoint(url))) {
     issues.push("NEXT_PUBLIC_LINEA_RPCS must contain only public https:// URLs on mainnet.");
   }
+  if (scope === "web" && !hasTwoIndependentPublicRpcOrigins(publicRpcUrls)) {
+    issues.push(
+      "NEXT_PUBLIC_LINEA_RPCS must contain at least two distinct canonical public https:// origins for wallet transfer quorum on mainnet web builds.",
+    );
+  }
   if (getEnv("NEXT_PUBLIC_LINEA_SEPOLIA_RPCS")) {
     issues.push("NEXT_PUBLIC_LINEA_SEPOLIA_RPCS must not be configured on mainnet; use NEXT_PUBLIC_LINEA_RPCS.");
   }
@@ -326,6 +451,7 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     if (chatAuthSecret.length < 32) {
       issues.push("CHAT_AUTH_SECRET or NEXTAUTH_SECRET must contain at least 32 characters for mainnet web runtime.");
     }
+    validateRuntimePurposeSecretSeparation("mainnet", issues);
     const adminAuthSecret = getEnv("ADMIN_AUTH_SECRET");
     if (adminAuthSecret.length < 32) {
       issues.push("The effective ADMIN_AUTH_SECRET must contain at least 32 characters for mainnet admin sessions.");
@@ -340,16 +466,7 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     if (getEnv("BOOTSTRAP_RESOLVE_SECRET").length < 32) {
       issues.push("BOOTSTRAP_RESOLVE_SECRET must contain at least 32 characters for mainnet bootstrap resolve.");
     }
-    if (!getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") && !getEnv("KEEPER_PRIVATE_KEY")) {
-      issues.push("BOOTSTRAP_KEEPER_PRIVATE_KEY or KEEPER_PRIVATE_KEY is required for mainnet bootstrap resolve.");
-    } else if (
-      getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") &&
-      !isPrivateKeyHex(getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY"))
-    ) {
-      issues.push("BOOTSTRAP_KEEPER_PRIVATE_KEY must be a 64-hex private key on mainnet.");
-    } else if (!getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") && !isPrivateKeyHex(getEnv("KEEPER_PRIVATE_KEY"))) {
-      issues.push("KEEPER_PRIVATE_KEY must be a 64-hex private key on mainnet.");
-    }
+    validateBootstrapResolveCredentials("mainnet", issues);
   }
 
   if (scope === "bot") {
@@ -492,6 +609,11 @@ function validatePremainnetTestnetProductionEnv(scope: ProductionRuntimeScope) {
   if (publicSepoliaRpcUrls.some((url) => !isPublicHttpsEndpoint(url))) {
     issues.push("NEXT_PUBLIC_LINEA_SEPOLIA_RPCS must contain only public https:// URLs on pre-mainnet testnet.");
   }
+  if (scope === "web" && !hasTwoIndependentPublicRpcOrigins(publicSepoliaRpcUrls)) {
+    issues.push(
+      "NEXT_PUBLIC_LINEA_SEPOLIA_RPCS must contain at least two distinct canonical public https:// origins for wallet transfer quorum on pre-mainnet testnet web builds.",
+    );
+  }
   if (getEnv("NEXT_PUBLIC_LINEA_RPCS")) {
     issues.push("NEXT_PUBLIC_LINEA_RPCS must not be configured for pre-mainnet testnet; use NEXT_PUBLIC_LINEA_SEPOLIA_RPCS.");
   }
@@ -561,6 +683,7 @@ function validatePremainnetTestnetProductionEnv(scope: ProductionRuntimeScope) {
     if (chatAuthSecret.length < 32) {
       issues.push("CHAT_AUTH_SECRET or NEXTAUTH_SECRET must contain at least 32 characters for pre-mainnet testnet web runtime.");
     }
+    validateRuntimePurposeSecretSeparation(label, issues);
     const adminAuthSecret = getEnv("ADMIN_AUTH_SECRET");
     if (adminAuthSecret.length < 32) {
       issues.push("The effective ADMIN_AUTH_SECRET must contain at least 32 characters for pre-mainnet testnet admin sessions.");
@@ -575,16 +698,7 @@ function validatePremainnetTestnetProductionEnv(scope: ProductionRuntimeScope) {
     if (getEnv("BOOTSTRAP_RESOLVE_SECRET").length < 32) {
       issues.push("BOOTSTRAP_RESOLVE_SECRET must contain at least 32 characters for pre-mainnet testnet bootstrap resolve.");
     }
-    if (!getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") && !getEnv("KEEPER_PRIVATE_KEY")) {
-      issues.push("BOOTSTRAP_KEEPER_PRIVATE_KEY or KEEPER_PRIVATE_KEY is required for pre-mainnet testnet bootstrap resolve.");
-    } else if (
-      getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") &&
-      !isPrivateKeyHex(getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY"))
-    ) {
-      issues.push("BOOTSTRAP_KEEPER_PRIVATE_KEY must be a 64-hex private key on pre-mainnet testnet.");
-    } else if (!getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY") && !isPrivateKeyHex(getEnv("KEEPER_PRIVATE_KEY"))) {
-      issues.push("KEEPER_PRIVATE_KEY must be a 64-hex private key on pre-mainnet testnet.");
-    }
+    validateBootstrapResolveCredentials(label, issues);
   }
 
   if (scope === "bot") {

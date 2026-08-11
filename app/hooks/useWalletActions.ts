@@ -1,14 +1,17 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { encodeFunctionData, getAddress } from "viem";
+import { createPublicClient, encodeFunctionData, getAddress, http } from "viem";
 import type { PublicClient } from "viem";
 import { useReadContract } from "wagmi";
 import type { useWriteContract } from "wagmi";
+import { getStableLineaReadRpcs } from "../../config/publicConfig";
 import { formatBalanceFixed } from "../lib/balanceFormatting";
 import {
+  APP_CHAIN,
   APP_CHAIN_ID,
   APP_CHAIN_NAME,
+  APP_NETWORK,
   CONTRACT_ADDRESS,
   GAME_ABI,
   LINEA_TOKEN_ADDRESS,
@@ -21,6 +24,19 @@ import { isUserRejection, normalizeDecimalInput } from "../lib/utils";
 import { parsePositiveLineaAmountWei } from "../lib/tokenAmountMath";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import {
+  createWalletTransferIntent,
+  getWalletTransferIntentErrorHash,
+  isWalletTransferIntentError,
+  resolveWalletTransferIntent,
+  selectWalletTransferAgreementRpcUrls,
+  waitForStableWalletTransferReceipt,
+  WalletTransferIntentError,
+  WalletTransactionRevertedError,
+  type WalletTransferIntent,
+  type WalletTransferIntentDetails,
+  type WalletTransferReceiptClients,
+} from "../lib/walletTransferIntent";
+import {
   isAmbiguousPendingTxError,
   isSessionExpiredError,
   isWalletUnavailableError,
@@ -30,18 +46,50 @@ import {
 
 type NotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 type SilentSendFn = (
-  tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number; feeMode?: "normal" | "keeper" },
+  tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number; feeMode?: "normal" | "keeper"; transferIntent?: WalletTransferIntentDetails },
   gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint },
 ) => Promise<`0x${string}`>;
-type ExternalSendFn = (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => Promise<`0x${string}`>;
+type ExternalSendFn = (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; expectedActor?: `0x${string}`; transferIntent?: WalletTransferIntentDetails }) => Promise<`0x${string}`>;
 type WriteContractAsyncFn = ReturnType<typeof useWriteContract>["writeContractAsync"];
 type BalanceData = { value: bigint } | null | undefined;
 type ReceiptState = "confirmed" | "pending";
 
 const RESOLVER_REWARD_LARGE_DISPLAY_WEI = 100n * 10n ** 18n;
+const TOKEN_TRANSFER_GAS_LIMIT = 120_000n;
+
+function createWalletTransferReceiptClients(): WalletTransferReceiptClients | null {
+  const configuredRpcs = APP_NETWORK === "mainnet"
+    ? process.env.NEXT_PUBLIC_LINEA_RPCS
+    : process.env.NEXT_PUBLIC_LINEA_SEPOLIA_RPCS;
+  try {
+    const urls = selectWalletTransferAgreementRpcUrls(
+      getStableLineaReadRpcs(configuredRpcs, APP_NETWORK),
+    );
+    return [
+      createPublicClient({ chain: APP_CHAIN, transport: http(urls[0]) }),
+      createPublicClient({ chain: APP_CHAIN, transport: http(urls[1]) }),
+    ];
+  } catch {
+    return null;
+  }
+}
+
+const WALLET_TRANSFER_RECEIPT_CLIENTS = createWalletTransferReceiptClients();
 
 function formatWalletTransferFailure(error: unknown, asset: "ETH" | "LINEA") {
   const message = error instanceof Error ? error.message : "";
+  if (message.includes("wallet_transfer_intent_actor_changed")) {
+    return `${asset} transfer was not submitted because the selected external account changed. Review the account and retry.`;
+  }
+  if (message.includes("wallet_transfer_transaction_missing_manual_reconciliation")) {
+    return `${asset} transfer hash is missing from both RPCs. Do not retry automatically; manual nonce reconciliation is required.`;
+  }
+  if (message.includes("wallet_transfer_intent_resolution_mismatch")) {
+    return `${asset} transfer receipt was verified, but its local safety intent could not be cleared. Do not retry until storage reconciliation succeeds.`;
+  }
+  if (isWalletTransferIntentError(error)) {
+    return `${asset} transfer is still unresolved. Check wallet activity and the latest/pending nonce status before retrying.`;
+  }
   if (/\btimed out\b|\btimeout\b/i.test(message)) {
     return `${asset} transfer status is unknown after a wallet timeout. Check wallet activity before retrying.`;
   }
@@ -264,61 +312,30 @@ export function useWalletActions({
   const waitForReceipt = useCallback(
     async (hash: `0x${string}`): Promise<ReceiptState> => {
       if (!publicClient) throw new Error("Transaction receipt verification is unavailable.");
-      try {
-        const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
-        if (receipt.status !== "success") {
-          throw new Error(`Transaction reverted: ${hash}`);
-        }
-        return "confirmed";
-      } catch (error) {
-        const isReceiptTimeoutLike = () => {
-          const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-          const name = error instanceof Error ? error.name : "";
-          return (
-            name === "TimeoutError" ||
-            name === "TransactionReceiptNotFoundError" ||
-            name === "TransactionReceiptTimeoutError" ||
-            message.includes("timed out") ||
-            message.includes("timeout") ||
-            message.includes("receipt could not be found")
-          );
-        };
-        const isTxLookupMissing = (value: unknown) => {
-          const message = value instanceof Error ? value.message.toLowerCase() : String(value).toLowerCase();
-          const name = value instanceof Error ? value.name : "";
-          return (
-            name === "TransactionNotFoundError" ||
-            message.includes("transaction not found") ||
-            message.includes("transaction could not be found")
-          );
-        };
-
-        try {
-          const lateReceipt = await publicClient.getTransactionReceipt({ hash });
-          if (lateReceipt.status !== "success") {
-            throw new Error(`Transaction reverted: ${hash}`);
-          }
-          return "confirmed";
-        } catch (lateReceiptError) {
-          if (isReceiptTimeoutLike()) {
-            try {
-              await publicClient.getTransaction({ hash });
-              return "pending";
-            } catch (txLookupError) {
-              if (!isTxLookupMissing(txLookupError)) {
-                throw txLookupError;
-              }
-              throw error;
-            }
-          }
-          if (!isTxLookupMissing(lateReceiptError)) {
-            throw lateReceiptError;
-          }
-          throw error;
-        }
-      }
+      return waitForStableWalletTransferReceipt(
+        [publicClient, publicClient],
+        hash,
+        TX_RECEIPT_TIMEOUT_MS,
+      );
     },
     [publicClient],
+  );
+
+  const waitForTransferReceipt = useCallback(
+    async (hash: `0x${string}`): Promise<ReceiptState> => {
+      if (!WALLET_TRANSFER_RECEIPT_CLIENTS) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_receipt_independent_rpc_required",
+          hash,
+        );
+      }
+      return waitForStableWalletTransferReceipt(
+        WALLET_TRANSFER_RECEIPT_CLIENTS,
+        hash,
+        TX_RECEIPT_TIMEOUT_MS,
+      );
+    },
+    [],
   );
 
   const refreshPendingTransactionStatus = useCallback(async () => {
@@ -690,8 +707,17 @@ export function useWalletActions({
   ]);
 
   const handleWithdrawToExternal = useCallback(async () => {
+    if (!embeddedWalletAddress) {
+      notify("Create the Privy wallet first.", "warning");
+      onOpenWalletSettings();
+      return;
+    }
     if (!externalWalletAddress) {
       notify("External wallet is not connected.", "warning");
+      return;
+    }
+    if (!sendTransactionSilent) {
+      notify("Privy wallet is not ready yet.", "warning");
       return;
     }
     const normalized = normalizeDecimalInput(withdrawAmount);
@@ -707,33 +733,77 @@ export function useWalletActions({
     if (walletTransferInFlightRef.current) return;
     walletTransferInFlightRef.current = true;
     let transferTxHash: `0x${string}` | null = null;
+    let transferIntent: WalletTransferIntent | null = null;
 
     setIsWithdrawing(true);
     try {
-      notify("Preparing LINEA withdraw. Confirm the wallet prompt if it appears.", "info");
-      const hash = await writeContractAsync({
-        address: LINEA_TOKEN_ADDRESS,
+      transferIntent = createWalletTransferIntent({
+        actor: embeddedWalletAddress,
+        chainId: APP_CHAIN_ID,
+        asset: LINEA_TOKEN_ADDRESS,
+        destination: externalWalletAddress,
+        amountWei,
+      });
+      const data = encodeFunctionData({
         abi: TOKEN_ABI,
         functionName: "transfer",
         args: [getAddress(externalWalletAddress), amountWei],
-        chainId: APP_CHAIN_ID,
+      });
+      notify("Preparing LINEA withdraw.", "info");
+      const hash = await sendTransactionSilent({
+        to: LINEA_TOKEN_ADDRESS,
+        data,
+        gas: TOKEN_TRANSFER_GAS_LIMIT,
+        transferIntent: {
+          asset: LINEA_TOKEN_ADDRESS,
+          destination: getAddress(externalWalletAddress),
+          amountWei,
+        },
       });
       transferTxHash = hash;
-      const receiptState = await waitForReceipt(hash);
+      const receiptState = await waitForTransferReceipt(hash);
       if (receiptState === "pending") {
         notify(formatTxStatusMessage("LINEA withdraw submitted and is still pending confirmation.", hash), "info");
         return;
+      }
+      if (!await resolveWalletTransferIntent(transferIntent, hash, "confirmed")) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_intent_resolution_mismatch",
+          hash,
+        );
       }
       setWithdrawAmount("0.0");
       void refetchEmbeddedTokenBalance();
       notify(formatTxStatusMessage("LINEA sent to your external wallet.", hash), "success");
     } catch (err) {
+      const knownHash = transferTxHash ?? getWalletTransferIntentErrorHash(err);
+      if (
+        transferIntent &&
+        knownHash &&
+        err instanceof WalletTransactionRevertedError &&
+        err.transactionHash === knownHash
+      ) {
+        try {
+          if (!await resolveWalletTransferIntent(transferIntent, knownHash, "reverted")) {
+            throw new WalletTransferIntentError(
+              "wallet_transfer_intent_resolution_mismatch",
+              knownHash,
+            );
+          }
+        } catch (resolutionError) {
+          log.warn("Withdraw", "reverted LINEA transfer intent remains conservatively blocked", resolutionError);
+          notify(formatWalletTransferFailure(resolutionError, "LINEA"), "warning");
+          return;
+        }
+      }
       if (!isUserRejection(err)) {
         log.error("Withdraw", "failed", err);
-        if (isAmbiguousPendingTxError(err) && transferTxHash) {
-          notify(formatTxStatusMessage("LINEA withdraw submitted and is still pending confirmation.", transferTxHash), "warning");
+        if (knownHash && isWalletTransferIntentError(err)) {
+          notify(formatTxStatusMessage(formatWalletTransferFailure(err, "LINEA"), knownHash), "warning");
+        } else if (knownHash && isAmbiguousPendingTxError(err)) {
+          notify(formatTxStatusMessage("LINEA withdraw submitted and is still pending confirmation.", knownHash), "warning");
         } else {
-          notify(formatWalletTransferFailure(err, "LINEA"), "danger");
+          notify(formatWalletTransferFailure(err, "LINEA"), isWalletTransferIntentError(err) ? "warning" : "danger");
         }
       } else {
         notify("LINEA withdraw rejected in wallet.", "info");
@@ -742,7 +812,7 @@ export function useWalletActions({
       walletTransferInFlightRef.current = false;
       setIsWithdrawing(false);
     }
-  }, [embeddedTokenBalance, externalWalletAddress, formatTxStatusMessage, notify, refetchEmbeddedTokenBalance, waitForReceipt, withdrawAmount, writeContractAsync]);
+  }, [embeddedTokenBalance, embeddedWalletAddress, externalWalletAddress, formatTxStatusMessage, notify, onOpenWalletSettings, refetchEmbeddedTokenBalance, sendTransactionSilent, waitForTransferReceipt, withdrawAmount]);
 
   const handleWithdrawEthToExternal = useCallback(async () => {
     if (!embeddedWalletAddress) {
@@ -781,30 +851,66 @@ export function useWalletActions({
     if (walletTransferInFlightRef.current) return;
     walletTransferInFlightRef.current = true;
     let transferTxHash: `0x${string}` | null = null;
+    let transferIntent: WalletTransferIntent | null = null;
 
     setIsWithdrawingEth(true);
     try {
+      transferIntent = createWalletTransferIntent({
+        actor: embeddedWalletAddress,
+        chainId: APP_CHAIN_ID,
+        asset: "native",
+        destination: externalWalletAddress,
+        amountWei,
+      });
       notify("Preparing ETH withdraw.", "info");
       const hash = await sendTransactionSilent({
         to: getAddress(externalWalletAddress),
         value: amountWei,
       });
       transferTxHash = hash;
-      const receiptState = await waitForReceipt(hash);
+      const receiptState = await waitForTransferReceipt(hash);
       if (receiptState === "pending") {
         notify(formatTxStatusMessage("ETH withdraw submitted and is still pending confirmation.", hash), "info");
         return;
+      }
+      if (!await resolveWalletTransferIntent(transferIntent, hash, "confirmed")) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_intent_resolution_mismatch",
+          hash,
+        );
       }
       setWithdrawEthAmount("0.0");
       void refetchEmbeddedEthBalance();
       notify(formatTxStatusMessage("ETH sent to your external wallet.", hash), "success");
     } catch (err) {
+      const knownHash = transferTxHash ?? getWalletTransferIntentErrorHash(err);
+      if (
+        transferIntent &&
+        knownHash &&
+        err instanceof WalletTransactionRevertedError &&
+        err.transactionHash === knownHash
+      ) {
+        try {
+          if (!await resolveWalletTransferIntent(transferIntent, knownHash, "reverted")) {
+            throw new WalletTransferIntentError(
+              "wallet_transfer_intent_resolution_mismatch",
+              knownHash,
+            );
+          }
+        } catch (resolutionError) {
+          log.warn("Withdraw", "reverted ETH transfer intent remains conservatively blocked", resolutionError);
+          notify(formatWalletTransferFailure(resolutionError, "ETH"), "warning");
+          return;
+        }
+      }
       if (!isUserRejection(err)) {
         log.error("Withdraw", "ETH withdraw failed", err);
-        if (isAmbiguousPendingTxError(err) && transferTxHash) {
-          notify(formatTxStatusMessage("ETH withdraw submitted and is still pending confirmation.", transferTxHash), "warning");
+        if (knownHash && isWalletTransferIntentError(err)) {
+          notify(formatTxStatusMessage(formatWalletTransferFailure(err, "ETH"), knownHash), "warning");
+        } else if (knownHash && isAmbiguousPendingTxError(err)) {
+          notify(formatTxStatusMessage("ETH withdraw submitted and is still pending confirmation.", knownHash), "warning");
         } else {
-          notify(formatWalletTransferFailure(err, "ETH"), "danger");
+          notify(formatWalletTransferFailure(err, "ETH"), isWalletTransferIntentError(err) ? "warning" : "danger");
         }
       } else {
         notify("ETH withdraw rejected in wallet.", "info");
@@ -824,7 +930,7 @@ export function useWalletActions({
     onOpenWalletSettings,
     refetchEmbeddedEthBalance,
     sendTransactionSilent,
-    waitForReceipt,
+    waitForTransferReceipt,
     withdrawEthAmount,
   ]);
 
@@ -847,29 +953,66 @@ export function useWalletActions({
     if (walletTransferInFlightRef.current) return;
     walletTransferInFlightRef.current = true;
     let transferTxHash: `0x${string}` | null = null;
+    let transferIntent: WalletTransferIntent | null = null;
 
     try {
+      transferIntent = createWalletTransferIntent({
+        actor: externalWalletAddress,
+        chainId: APP_CHAIN_ID,
+        asset: "native",
+        destination: embeddedWalletAddress,
+        amountWei: value,
+      });
       setIsDepositingEth(true);
       notify("Preparing ETH top-up. Confirm the wallet prompt if it appears.", "info");
       const hash = await sendTransactionFromExternal({
         to: getAddress(embeddedWalletAddress),
         value,
+        expectedActor: getAddress(externalWalletAddress),
       });
       transferTxHash = hash;
-      const receiptState = await waitForReceipt(hash);
+      const receiptState = await waitForTransferReceipt(hash);
       if (receiptState === "pending") {
         notify(formatTxStatusMessage("ETH transfer submitted and is still pending confirmation.", hash), "info");
         return;
       }
+      if (!await resolveWalletTransferIntent(transferIntent, hash, "confirmed")) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_intent_resolution_mismatch",
+          hash,
+        );
+      }
       void refetchEmbeddedEthBalance();
       notify(formatTxStatusMessage("ETH transfer to the Privy wallet was sent.", hash), "success");
     } catch (err) {
+      const knownHash = transferTxHash ?? getWalletTransferIntentErrorHash(err);
+      if (
+        transferIntent &&
+        knownHash &&
+        err instanceof WalletTransactionRevertedError &&
+        err.transactionHash === knownHash
+      ) {
+        try {
+          if (!await resolveWalletTransferIntent(transferIntent, knownHash, "reverted")) {
+            throw new WalletTransferIntentError(
+              "wallet_transfer_intent_resolution_mismatch",
+              knownHash,
+            );
+          }
+        } catch (resolutionError) {
+          log.warn("Deposit", "reverted ETH transfer intent remains conservatively blocked", resolutionError);
+          notify(formatWalletTransferFailure(resolutionError, "ETH"), "warning");
+          return;
+        }
+      }
       if (!isUserRejection(err)) {
         log.error("Deposit", "ETH transfer to Privy failed", err);
-        if (isAmbiguousPendingTxError(err) && transferTxHash) {
-          notify(formatTxStatusMessage("ETH transfer submitted and is still pending confirmation.", transferTxHash), "warning");
+        if (knownHash && isWalletTransferIntentError(err)) {
+          notify(formatTxStatusMessage(formatWalletTransferFailure(err, "ETH"), knownHash), "warning");
+        } else if (knownHash && isAmbiguousPendingTxError(err)) {
+          notify(formatTxStatusMessage("ETH transfer submitted and is still pending confirmation.", knownHash), "warning");
         } else {
-          notify(formatWalletTransferFailure(err, "ETH"), "danger");
+          notify(formatWalletTransferFailure(err, "ETH"), isWalletTransferIntentError(err) ? "warning" : "danger");
         }
       } else {
         notify("ETH top-up rejected in wallet.", "info");
@@ -887,7 +1030,7 @@ export function useWalletActions({
     onOpenWalletSettings,
     refetchEmbeddedEthBalance,
     sendTransactionFromExternal,
-    waitForReceipt,
+    waitForTransferReceipt,
   ]);
 
   const handleDepositTokenToEmbedded = useCallback(async () => {
@@ -909,6 +1052,7 @@ export function useWalletActions({
     if (walletTransferInFlightRef.current) return;
     walletTransferInFlightRef.current = true;
     let transferTxHash: `0x${string}` | null = null;
+    let transferIntent: WalletTransferIntent | null = null;
 
     try {
       if (publicClient) {
@@ -928,17 +1072,36 @@ export function useWalletActions({
         functionName: "transfer",
         args: [getAddress(embeddedWalletAddress), amountWei],
       });
+      transferIntent = createWalletTransferIntent({
+        actor: externalWalletAddress,
+        chainId: APP_CHAIN_ID,
+        asset: LINEA_TOKEN_ADDRESS,
+        destination: embeddedWalletAddress,
+        amountWei,
+      });
       setIsDepositingToken(true);
       notify("Preparing LINEA deposit. Confirm the wallet prompt if it appears.", "info");
       const hash = await sendTransactionFromExternal({
         to: LINEA_TOKEN_ADDRESS,
         data,
+        expectedActor: getAddress(externalWalletAddress),
+        transferIntent: {
+          asset: LINEA_TOKEN_ADDRESS,
+          destination: getAddress(embeddedWalletAddress),
+          amountWei,
+        },
       });
       transferTxHash = hash;
-      const receiptState = await waitForReceipt(hash);
+      const receiptState = await waitForTransferReceipt(hash);
       if (receiptState === "pending") {
         notify(formatTxStatusMessage("LINEA transfer submitted and is still pending confirmation.", hash), "info");
         return;
+      }
+      if (!await resolveWalletTransferIntent(transferIntent, hash, "confirmed")) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_intent_resolution_mismatch",
+          hash,
+        );
       }
       void refetchEmbeddedTokenBalance();
       if (walletTransfersEnabled && fetchWalletTransfers) {
@@ -946,12 +1109,34 @@ export function useWalletActions({
       }
       notify(formatTxStatusMessage("LINEA transfer to the Privy wallet was sent.", hash), "success");
     } catch (err) {
+      const knownHash = transferTxHash ?? getWalletTransferIntentErrorHash(err);
+      if (
+        transferIntent &&
+        knownHash &&
+        err instanceof WalletTransactionRevertedError &&
+        err.transactionHash === knownHash
+      ) {
+        try {
+          if (!await resolveWalletTransferIntent(transferIntent, knownHash, "reverted")) {
+            throw new WalletTransferIntentError(
+              "wallet_transfer_intent_resolution_mismatch",
+              knownHash,
+            );
+          }
+        } catch (resolutionError) {
+          log.warn("Deposit", "reverted LINEA transfer intent remains conservatively blocked", resolutionError);
+          notify(formatWalletTransferFailure(resolutionError, "LINEA"), "warning");
+          return;
+        }
+      }
       if (!isUserRejection(err)) {
         log.error("Deposit", "LINEA transfer to Privy failed", err);
-        if (isAmbiguousPendingTxError(err) && transferTxHash) {
-          notify(formatTxStatusMessage("LINEA transfer submitted and is still pending confirmation.", transferTxHash), "warning");
+        if (knownHash && isWalletTransferIntentError(err)) {
+          notify(formatTxStatusMessage(formatWalletTransferFailure(err, "LINEA"), knownHash), "warning");
+        } else if (knownHash && isAmbiguousPendingTxError(err)) {
+          notify(formatTxStatusMessage("LINEA transfer submitted and is still pending confirmation.", knownHash), "warning");
         } else {
-          notify(formatWalletTransferFailure(err, "LINEA"), "danger");
+          notify(formatWalletTransferFailure(err, "LINEA"), isWalletTransferIntentError(err) ? "warning" : "danger");
         }
       } else {
         notify("LINEA deposit rejected in wallet.", "info");
@@ -971,7 +1156,7 @@ export function useWalletActions({
     publicClient,
     refetchEmbeddedTokenBalance,
     sendTransactionFromExternal,
-    waitForReceipt,
+    waitForTransferReceipt,
     walletTransfersEnabled,
   ]);
 
