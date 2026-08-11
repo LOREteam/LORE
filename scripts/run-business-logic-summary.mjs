@@ -64,6 +64,7 @@ const BUSINESS_TEST_MODULES = [
     "scripts/test-business-error-boundaries.mjs",
     "scripts/test-business-wallet-route-safety.mjs",
     "scripts/test-business-sentry-sanitization.mjs",
+    "scripts/test-business-auth-canary-boundaries.mjs",
 ];
 const businessTestSources = BUSINESS_TEST_MODULES.map((path) => readFileSync(path, "utf8"));
 
