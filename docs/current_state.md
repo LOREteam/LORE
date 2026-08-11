@@ -32,16 +32,20 @@ Open archived evidence only when a task needs it. The single active queue is
   `Local check completed successfully`. After each, protected SQLite identity
   was unchanged, `.tmp/check-local-*` and system `lore-build-*` residues were
   `0`, and port `3101` had no listener.
-- A fresh current-tree `npm.cmd ci` completed with `1195` packages from the
-  lockfile. The direct `accounts` dependency is required by Wagmi's tempo
-  connector and was retained after a build regression proved that dependency.
-  Typecheck, hermetic production build, and the EVM-inclusive P1 runner pass
-  against this lockfile.
-- `npm ls --omit=dev --package-lock-only` is clean and the exact `nanoid`
-  (`3.3.17`) and `js-yaml` (`4.3.1`) overrides resolve. Full
-  `npm ls --all --package-lock-only` still reports six peer/resolution issues
-  in the Privy/Wagmi/Sentry/toolchain graph; resolving those would require
-  wallet/SDK dependency changes and remains explicit P0 work.
+- A fresh current-tree `npm.cmd ci` completed after the final lockfile refresh.
+  The unused root `accounts` package was removed so Wagmi can resolve its own
+  compatible nested versions; `webpack@5.109.2` satisfies Sentry's declared
+  build peer; the only `x402` override updates its nested
+  `use-sync-external-store` to the React-19-compatible `1.6.0`. Typecheck,
+  hermetic production build, and the EVM-inclusive P1 runner pass against this
+  lockfile.
+- `npm ls --omit=dev --package-lock-only` is clean and both dependency audit
+  gates pass: production has no blocking High/Critical; all-deps has only the
+  nine explicitly allowed dev-toolchain High advisories. The exact `nanoid`
+  (`3.3.17`) and `js-yaml` (`4.3.1`) overrides resolve. npm 11's full
+  `npm ls --all --package-lock-only` still reports internal invalid markers
+  after a clean install, so it is evidence to investigate, not a false claim
+  that the peer graph is fully clean.
 - The protected base DB remains byte-identical at SHA-256 `D2CF3A...C0061ABC`,
   length `221184`, and its original mtime. A prior direct non-hermetic build
   changed WAL/SHM only. Forensic analysis on preserved copies found no new
@@ -152,11 +156,14 @@ Open archived evidence only when a task needs it. The single active queue is
 - Current-tree bundle proof passes across `229` files: `8469574` total bytes,
   `7075415` JavaScript bytes, largest file `1002767`, below the `1250000`
   limit; CSS is `216635` and WASM is `1056860` bytes.
-- A completed two-hour local performance run exists only for the old exact
-  `46d3bc50` baseline: duration `7200035ms`, API writes `0`, external browser
-  requests blocked, heap delta `-1099488`, peak `+10091819`, and DOM slope `0`.
-  Native hidden-state throttling was not observed. It is useful baseline
-  evidence, not evidence for the final committed candidate.
+- The old exact `46d3bc50` baseline completed its two-hour local profile with
+  API writes `0`, external browser requests blocked, heap delta `-1099488`,
+  peak `+10091819`, and DOM slope `0`. The later exact `d626a0f` profile also
+  completed its requested `7200036ms`: API writes `0`, blocked external
+  requests `134`, heap delta `-702527`, peak `+2637951`, DOM delta `3`, and
+  long-task maximum `95ms`. Native hidden-state throttling was not observed;
+  only synthetic visibility was measured, so it remains open final-candidate
+  browser evidence.
 - The 2026-08-11 09:00Z prelaunch passes every required-local row: V9/V10
   compile/invariants, P1/EVM `36/36`, typecheck, 457-file lint, hermetic build,
   bundle baseline, SQLite operations, logic, security-followup, and dependency

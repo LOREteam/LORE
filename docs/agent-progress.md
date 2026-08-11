@@ -45,10 +45,11 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
 - Fresh isolated core P1 runner - pass, `35/35`, EVM intentionally skipped;
   includes the executable SQLite scope/backup/restore/WAL drill and cleans its
   unique temporary database directory.
-- Fresh `npm.cmd ci` completed from the lockfile (`1195` packages); its
-  subsequent typecheck, hermetic production build, and EVM-inclusive P1 run
-  passed. The direct `accounts` dependency remains required by the Wagmi tempo
-  connector.
+- Fresh `npm.cmd ci` completed from the refreshed lockfile; its subsequent
+  typecheck, hermetic production build, and EVM-inclusive P1 run passed. The
+  unused root `accounts` package was removed, `webpack@5.109.2` satisfies the
+  Sentry peer, and nested `x402` now uses React-19-compatible
+  `use-sync-external-store@1.6.0`.
 - V10 compilation provenance - pass; manifest and ABI snapshot match; fragment
   digest `69218b3a...1900c`; runtime size `16488` bytes.
 - Two final current-tree `check:summary` runs pass and end
@@ -80,9 +81,11 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   security-followup `8/8`, production dependency proof, both full checks, and
   prelaunch required-local rows pass. The all-deps proof retains `9` known
   development-toolchain High advisories.
-- The old exact `46d3bc50` baseline has a completed two-hour local performance
-  run with zero API writes and negative net heap delta. The current working
-  tree still lacks exact-SHA long-run and native-hidden evidence.
+- Both `46d3bc50` and `d626a0f` now have completed two-hour local performance
+  profiles with zero API writes and negative net heap delta. `d626a0f` records
+  `134` blocked external browser requests and a `95ms` maximum long task. The
+  final dependency commit still needs a fresh exact-SHA profile; native-hidden
+  browser throttling remains unproven.
 - The attempted standard scan `c7662d53-c089-436a-93fd-f9506f2279f0` is
   unsealed because its artifact directory disappeared and the scan service is
   account-limited. It is not a substitute for an exact-SHA scan.

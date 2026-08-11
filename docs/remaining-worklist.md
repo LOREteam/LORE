@@ -4,12 +4,14 @@ Last updated: 2026-08-11. This is the single active local work queue.
 
 ## P0 release candidate and security
 
-- [x] Pin fixed `nanoid`/`js-yaml` versions, Node 24, and npm 11.5.1; a fresh
-      current-tree `npm ci` completed from the lockfile before repeated gates.
-- [ ] Resolve the six remaining full `npm ls --all --package-lock-only`
-      peer/resolution issues. Production-only `npm ls --omit=dev` is clean;
-      do not force wallet/Privy/Sentry upgrades without a scoped compatibility
-      decision and regression evidence.
+- [x] Pin fixed `nanoid`/`js-yaml` versions, Node 24, and npm 11.5.1; refresh
+      the lockfile and complete a clean current-tree `npm ci`. The production
+      and all-dependency audit gates pass under their documented policy.
+- [ ] Record or resolve npm 11's remaining `npm ls --all --package-lock-only`
+      invalid markers after clean install. The minimal compatibility work has
+      removed the unused root `accounts`, satisfied the Sentry webpack peer,
+      and made the nested x402 React peer compatible; do not force a wider
+      Privy/Wagmi upgrade merely to silence tooling output.
 - [x] Make `check-local` hermetic and prove protected SQLite hash/mtime
       invariance across two full gates.
 - [x] Track V10 source, compiler config, manifest, `.gitattributes` line-ending
@@ -130,7 +132,10 @@ Last updated: 2026-08-11. This is the single active local work queue.
       baseline: API writes `0`, external browser requests blocked, net heap
       delta `-1099488`, peak `+10091819`, and DOM slope `0`.
 - [ ] Repeat route compression/chunk/polling/rerender/long-task evidence on the
-      final exact candidate and prove native hidden-state behavior.
+      final exact candidate and prove native hidden-state behavior. Exact
+      `d626a0f` already has a complete two-hour profile: zero API writes, 134
+      blocked external requests, `-702527` heap delta, `+2637951` peak, 3 DOM
+      nodes, and 95ms max long task.
 - [ ] Repeat and evaluate the two-hour idle/simulated Auto-Miner profile on the
       final exact SHA without changing intentional refresh cadence.
 
