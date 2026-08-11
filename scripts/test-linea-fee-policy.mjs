@@ -1,8 +1,146 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as lineaFeesModule from "../app/lib/lineaFees.ts";
+import * as miningAllowanceModule from "../app/hooks/useMiningAllowance.ts";
+import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
 
 const lineaFees = lineaFeesModule.default ?? lineaFeesModule;
+const miningAllowance = miningAllowanceModule.default ?? miningAllowanceModule;
+const miningShared = miningSharedModule.default ?? miningSharedModule;
+
+assert.equal(
+  lineaFees.assertNormalFeeBudget(
+    { maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 60_000_000n },
+    2_000_000n,
+    59144,
+  ),
+  2_000_000_000_000_000n,
+  "a normal mainnet EIP-1559 send exactly at the absolute budget must remain valid",
+);
+assert.equal(
+  lineaFees.assertNormalFeeBudget(
+    { gasPrice: 100_000_000n },
+    700_000n,
+    59144,
+  ),
+  70_000_000_000_000n,
+  "a bounded normal mainnet legacy send must remain valid",
+);
+assert.equal(
+  lineaFees.assertNormalFeeBudget(
+    { maxFeePerGas: 2_000_000_000n, maxPriorityFeePerGas: 80_000_000n },
+    2_000_000n,
+    59141,
+  ),
+  4_000_000_000_000_000n,
+  "a normal Sepolia send exactly at its chain-specific budget must remain valid",
+);
+assert.equal(
+  lineaFees.assertNormalFeeBudget(
+    lineaFees.getFallbackFeeOverrides(59144, "normal"),
+    25_600_000n,
+    59144,
+  ),
+  1_536_000_000_000_000n,
+  "the largest existing reward-batch fallback must remain within the normal mainnet budget",
+);
+assert.deepEqual(
+  lineaFees.mergeFeeOverrides(
+    { maxFeePerGas: 100_000_000n, maxPriorityFeePerGas: 10_000_000n },
+    { maxPriorityFeePerGas: 60_000_000n },
+  ),
+  { maxFeePerGas: 100_000_000n, maxPriorityFeePerGas: 60_000_000n },
+  "a bounded partial EIP-1559 override must merge with resolved fees",
+);
+assert.deepEqual(
+  lineaFees.mergeFeeOverrides(
+    { maxFeePerGas: 100_000_000n, maxPriorityFeePerGas: 10_000_000n },
+    { gasPrice: 100_000_000n },
+  ),
+  { gasPrice: 100_000_000n },
+  "a complete bounded legacy override must replace resolved EIP-1559 fields",
+);
+const oversizedMergedPriority = lineaFees.mergeFeeOverrides(
+  { maxFeePerGas: 100_000_000n, maxPriorityFeePerGas: 10_000_000n },
+  { maxPriorityFeePerGas: 60_000_001n },
+);
+assert.throws(
+  () => lineaFees.assertNormalFeeBudget(oversizedMergedPriority, 21_000n, 59144),
+  /linea_fee_field_cap_exceeded field=maxPriorityFeePerGas/,
+  "an oversized partial caller override must be rejected after merging",
+);
+
+for (const [overrides, expectedError] of [
+  [{ gasPrice: 1_000_000_001n }, /linea_fee_field_cap_exceeded field=gasPrice/],
+  [{ maxFeePerGas: 1_000_000_001n, maxPriorityFeePerGas: 60_000_000n }, /linea_fee_field_cap_exceeded field=maxFeePerGas/],
+  [{ maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 60_000_001n }, /linea_fee_field_cap_exceeded field=maxPriorityFeePerGas/],
+  [{ gasPrice: 100_000_000n, maxFeePerGas: 100_000_000n, maxPriorityFeePerGas: 10_000_000n }, /linea_fee_policy_mixed_fee_fields/],
+]) {
+  assert.throws(
+    () => lineaFees.assertNormalFeeBudget(overrides, 21_000n, 59144),
+    expectedError,
+  );
+}
+assert.throws(
+  () => lineaFees.assertNormalFeeBudget(
+    { maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 60_000_000n },
+    2_000_001n,
+    59144,
+  ),
+  /linea_fee_total_cap_exceeded kind=normal/,
+  "normal fees within their field caps must still fail when total maximum gas cost is over budget",
+);
+assert.throws(
+  () => lineaFees.assertNormalFeeBudget(
+    { maxFeePerGas: 100_000_000n, maxPriorityFeePerGas: 10_000_000n },
+    undefined,
+    59144,
+  ),
+  /linea_fee_policy_missing_gas_limit/,
+  "normal contract sends without a gas limit must fail closed",
+);
+assert.throws(
+  () => lineaFees.assertNormalFeeBudget(
+    lineaFees.getLineaFeeOverrides({ gasPrice: 100_000_000_000n }, 59144),
+    21_000n,
+    59144,
+  ),
+  /linea_fee_field_cap_exceeded field=gasPrice/,
+  "an adversarial RPC legacy estimate must remain rejected after the normal bump transform",
+);
+assert.throws(
+  () => lineaFees.assertNormalFeeBudget(
+    lineaFees.getLineaFeeOverrides(
+      { maxFeePerGas: 100_000_000_000n, maxPriorityFeePerGas: 10_000_000n },
+      59144,
+    ),
+    21_000n,
+    59144,
+  ),
+  /linea_fee_field_cap_exceeded field=maxFeePerGas/,
+  "an adversarial RPC EIP-1559 estimate must remain rejected after the normal bump transform",
+);
+let terminalMiningFeeError;
+try {
+  lineaFees.assertNormalFeeBudget(
+    { gasPrice: 1_000_000_001n },
+    21_000n,
+    59144,
+  );
+} catch (error) {
+  terminalMiningFeeError = error;
+}
+assert.ok(terminalMiningFeeError instanceof Error, "the malicious legacy fee must produce a policy error");
+assert.equal(
+  miningShared.isDeterministicBetExecutionError(terminalMiningFeeError),
+  true,
+  "a fee-policy rejection must be terminal before manual or Auto-Miner wallet fallback",
+);
+assert.match(
+  miningShared.getBetErrorMessage(terminalMiningFeeError),
+  /fee safety limit was exceeded/,
+  "a terminal fee-policy rejection must keep a clear user-facing failure state",
+);
 
 assert.deepEqual(
   lineaFees.getKeeperFeeOverrides(
@@ -107,10 +245,114 @@ assert.match(
   "browser approval fees must fail closed on policy violations before silent submission",
 );
 
+const miningAllowanceSource = readFileSync("app/hooks/useMiningAllowance.ts", "utf8");
+assert.match(
+  miningAllowanceSource,
+  /buildDirectApprovalWriteRequest[\s\S]*assertKeeperFeeBudget\(approveOverrides, MIN_GAS_APPROVE, APP_CHAIN_ID, "approval"\)[\s\S]*\.\.\.approveOverrides[\s\S]*gas: MIN_GAS_APPROVE/,
+  "the direct approval wallet sink must enforce the bounded gas and fee policy without dropping legacy gasPrice",
+);
+assert.match(
+  miningAllowanceSource,
+  /\} else \{\s*assertBeforeSend\?\.\(\);\s*approveHash = await readWriteContractAsync\(\)\(\s*buildDirectApprovalWriteRequest\(approvalNonce, approveOverrides\)/,
+  "the guarded approval request must be built immediately at the direct wallet sink",
+);
+
+const directLegacyApproval = miningAllowance.buildDirectApprovalWriteRequest(
+  7,
+  { gasPrice: 100_000_000n },
+);
+assert.equal(directLegacyApproval.gas, 90_000n, "direct approval must carry the fixed gas limit");
+assert.equal(directLegacyApproval.gasPrice, 100_000_000n, "direct approval must preserve bounded legacy gasPrice");
+assert.equal(
+  "maxFeePerGas" in directLegacyApproval,
+  false,
+  "legacy approval must not be reinterpreted as an incomplete EIP-1559 request",
+);
+const attemptedGasOverride = miningAllowance.buildDirectApprovalWriteRequest(
+  7,
+  { gasPrice: 100_000_000n, gas: 9_000_000n },
+);
+assert.equal(
+  attemptedGasOverride.gas,
+  90_000n,
+  "runtime-only extra fields must not override the fixed direct approval gas limit",
+);
+
+const directEip1559Approval = miningAllowance.buildDirectApprovalWriteRequest(
+  8,
+  { maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 20_000_000n },
+);
+assert.equal(directEip1559Approval.gas, 90_000n, "EIP-1559 approval must carry the same fixed gas limit");
+assert.equal(directEip1559Approval.maxFeePerGas, 1_000_000_000n);
+assert.equal(directEip1559Approval.maxPriorityFeePerGas, 20_000_000n);
+assert.throws(
+  () => miningAllowance.buildDirectApprovalWriteRequest(9, { gasPrice: 2_000_000_001n }),
+  /linea_fee_field_cap_exceeded field=gasPrice/,
+  "an adversarial legacy approval fee must fail before the wallet prompt",
+);
+assert.throws(
+  () => miningAllowance.buildDirectApprovalWriteRequest(10, undefined),
+  /linea_fee_policy_missing_overrides/,
+  "direct approval must fail closed rather than let the wallet choose unbounded fees",
+);
+
+const privyWalletSource = readFileSync("app/hooks/usePrivyWallet.ts", "utf8");
+assert.match(
+  privyWalletSource,
+  /const effectiveFees = mergeFeeOverrides\(resolvedFees, gasOverrides\);[\s\S]*assertNormalFeeBudget\(effectiveFees, effectiveGas, APP_CHAIN_ID\);[\s\S]*assertKeeperFeeBudget\(effectiveFees, effectiveGas \?\? 0n, APP_CHAIN_ID, "keeper"\);[\s\S]*applyFeeOverrides\(baseRequest, effectiveFees, false\);[\s\S]*sendTransaction\(baseRequest/,
+  "the final silent-send boundary must reject over-budget merged normal and keeper fees before Privy submission",
+);
+assert.match(
+  privyWalletSource,
+  /const effectiveGas = tx\.gas \?\? \([\s\S]*tx\.data === undefined \? NORMAL_VALUE_TRANSFER_GAS_LIMIT : undefined[\s\S]*assertNormalFeeBudget\(effectiveFees, effectiveGas, APP_CHAIN_ID\)/,
+  "plain value transfers must use an explicit gas limit and data-bearing sends must provide one for total-cost validation",
+);
+
+const standardBetPathSource = readFileSync("app/hooks/useMiningStandardBetPath.ts", "utf8");
+assert.match(
+  standardBetPathSource,
+  /const resolvedFees = hasCompleteFeeOverrides\(gasOverrides\)[\s\S]*const overrides = mergeFeeOverrides\(resolvedFees, gasOverrides\)/,
+  "the external-wallet mining path must merge partial caller fees with bounded resolved fees",
+);
+assert.match(
+  standardBetPathSource,
+  /const writeAuthorizedContract = \(args: unknown, gas: bigint\) => \{[\s\S]*assertNormalFeeBudget\(overrides, gas, APP_CHAIN_ID\);[\s\S]*assertBeforeSend\?\.\(\);[\s\S]*return writeContractAsync\(args\)/,
+  "the final external-wallet mining sink must enforce the same field and total fee budget immediately before signing",
+);
+assert.equal(
+  (standardBetPathSource.match(/writeAuthorizedContract\(\{/g) ?? []).length,
+  5,
+  "all five external-wallet mining selectors must share the guarded signing sink",
+);
+assert.equal(
+  (standardBetPathSource.match(/\}\, gas\);/g) ?? []).length,
+  5,
+  "every external-wallet mining selector must pass its exact gas limit to the guarded signing sink",
+);
+
+const miningSharedSource = readFileSync("app/hooks/useMining.shared.ts", "utf8");
+assert.match(
+  miningSharedSource,
+  /isDeterministicBetExecutionError\(err: unknown\)[\s\S]*isLineaFeePolicyError\(err\)/,
+  "fee-policy errors must be terminal deterministic mining errors",
+);
+
+for (const [label, file] of [
+  ["manual mining", "app/hooks/useMiningBetExecution.ts"],
+  ["Auto-Miner", "app/hooks/useMiningRoundBetting.ts"],
+]) {
+  const source = readFileSync(file, "utf8");
+  assert.match(
+    source,
+    /isDeterministicBetExecutionError\(error\)[\s\S]*throw error;[\s\S]*fallback to wallet write|isDeterministicBetExecutionError\(error\)[\s\S]*throw error;[\s\S]*falling back to wallet write/,
+    `${label} must reject fee-policy errors before wallet-write fallback`,
+  );
+}
+
 const keeperBotSource = readFileSync("bot.ts", "utf8");
 assert.match(
   keeperBotSource,
-  /const gas = \(est \* gasLimitMarginPercent \+ 99n\) \/ 100n;[\s\S]*assertKeeperFeeBudget\([\s\S]*"keeper"[\s\S]*keeperBalance < requiredMaxCost[\s\S]*walletClient\.writeContract/,
+  /const gas = \(est \* gasLimitMarginPercent \+ 99n\) \/ 100n;[\s\S]*assertKeeperFeeBudget\([\s\S]*"keeper"[\s\S]*keeperBalance < requiredMaxCost[\s\S]*account\.signTransaction/,
   "keeper must reject an over-budget resolve before wallet submission",
 );
 assert.doesNotMatch(
@@ -122,8 +364,8 @@ assert.doesNotMatch(
 const bootstrapResolveSource = readFileSync("app/api/bootstrap-resolve/route.ts", "utf8");
 assert.match(
   bootstrapResolveSource,
-  /const gas = \([\s\S]*gasEstimate \* RESOLVE_GAS_BUFFER_PERCENT \+ 99n[\s\S]*assertKeeperFeeBudget\([\s\S]*"keeper"[\s\S]*keeperBalance < requiredMaxCost[\s\S]*walletClient\.writeContract/,
-  "bootstrap resolve must enforce the absolute keeper budget before signing",
+  /const gas = \([\s\S]*gasEstimate \* RESOLVE_GAS_BUFFER_PERCENT \+ 99n[\s\S]*assertKeeperFeeBudget\([\s\S]*"keeper"[\s\S]*keeperBalance < requiredMaxCost[\s\S]*account\.signTransaction[\s\S]*savePendingResolveRecord\([\s\S]*broadcastSignedResolve\(/,
+  "bootstrap resolve must enforce the absolute keeper budget before local signing and persist the signed transaction before broadcast",
 );
 
 const liveRoundCanarySource = readFileSync("scripts/live-round-canary.ts", "utf8");

@@ -51,6 +51,7 @@ function check(id, description, fn) {
 const bootstrapShared = readSource("app/api/bootstrap-resolve/shared.ts");
 const bootstrapRoute = readSource("app/api/bootstrap-resolve/route.ts");
 const keeperBot = readSource("bot.ts");
+const keeperSigningSafety = readSource("server/keeperSigningSafety.ts");
 const tabLock = readSource("app/hooks/useMiningTabLock.ts");
 const depositsRoute = readSource("app/api/deposits/route.ts");
 const autoResolve = readSource("app/hooks/useAutoResolve.ts");
@@ -82,22 +83,25 @@ const checks = [
     /export async function acquireTabLock\(\): Promise<boolean> \{[\s\S]*return acquireNativeTabLock\(\);[\s\S]*\}/.test(tabLock)),
   check("keeper-nonce", "bootstrap keeper refuses unbound pending nonce and preserves receipt timeout as pending", () =>
     /if \(pendingNonce > latestNonce\) \{[\s\S]*bootstrap_pending_nonce_unbound[\s\S]*return json/.test(bootstrapRoute) &&
-    /waitForTransactionReceipt[\s\S]*catch\(\(\) => null\)[\s\S]*action: "pending"[\s\S]*reason: "resolve_receipt_timeout"/.test(bootstrapRoute)),
-  check("keeper-bot-receipts", "legacy keeper bot binds pending nonce and defers reverted receipts", () =>
+    /async function readBootstrapReceipt[\s\S]*waitForTransactionReceipt[\s\S]*if \(isReceiptPendingError\(message\)\) return null[\s\S]*function readAgreedBootstrapReceipt[\s\S]*"bootstrap_receipt"[\s\S]*function pendingResolveResponse[\s\S]*action: "pending"[\s\S]*reason: "resolve_receipt_timeout"/.test(bootstrapRoute)),
+  check("keeper-bot-receipts", "keeper requires independent agreement and locks one signed resolve until confirmation", () =>
     /type PendingResolve = \{[\s\S]*hash: `0x\$\{string\}`;[\s\S]*nonce: number;[\s\S]*retryAt\?: number;[\s\S]*\}/.test(keeperBot) &&
-    /hasPendingTransaction && replacePendingResolve\?\.nonce === latestNonce/.test(keeperBot) &&
+    /selectKeeperAgreementRpcUrls\(rpcUrls\)/.test(keeperBot) &&
+    /readAgreedKeeperEligibility\([\s\S]*agreementClients/.test(keeperBot) &&
+    /readAgreedKeeperNonce\([\s\S]*agreementClients/.test(keeperBot) &&
     /keeper_pending_nonce_unbound latest=\$\{latestNonce\.toString\(\)\} pending=\$\{pendingNonce\.toString\(\)\}/.test(keeperBot) &&
-    /const receipt = await publicClient\.waitForTransactionReceipt\(\{ hash \}\);[\s\S]*if \(receipt\.status !== "success"\)[\s\S]*retryAt: Date\.now\(\) \+ PENDING_RESOLVE_REVERT_RETRY_MS/.test(keeperBot) &&
-    /typeof storedNonce === "number"[\s\S]*Ignoring legacy or invalid pendingResolve without a bound nonce/.test(keeperBot) &&
-    /receipt\.status === "success"[\s\S]*pending\.retryAt && Date\.now\(\) < pending\.retryAt[\s\S]*Resolve tx reverted for epoch/.test(keeperBot) &&
-    /replacing only its bound nonce[\s\S]*replacePendingResolve = pending;/.test(keeperBot)),
+    /account\.signTransaction[\s\S]*keccak256\(serializedTransaction\)[\s\S]*savePendingResolve\([\s\S]*sendRawTransaction/.test(keeperBot) &&
+    /readAgreedKeeperReceipt[\s\S]*latestNonce > pending\.nonce[\s\S]*resolve tx unresolved/.test(keeperBot) &&
+    !/replacePendingResolve|Replacing pending keeper tx|replacing only its bound nonce/.test(keeperBot) &&
+    /independentHosts\.size < 2[\s\S]*keeper_independent_rpc_required/.test(keeperSigningSafety) &&
+    /Promise\.all[\s\S]*fingerprint\(first\) !== fingerprint\(second\)[\s\S]*KeeperRpcAgreementError/.test(keeperSigningSafety)),
   check("deposit-limiter", "deposits recovery has one global in-flight limiter and cooldown", () =>
     /let depositsRecoveryInflight: Promise<DepositRow\[]> \| null = null/.test(depositsRoute) &&
     /depositsRecoveryInflight \|\|[\s\S]*DEPOSITS_BACKGROUND_RECOVERY_COOLDOWN_MS[\s\S]*return null/.test(depositsRoute) &&
     !/return\s+depositsRecoveryInflight/.test(depositsRoute)),
   check("dry-run-defaults", "live recovery/canary/preview default to dry-run and defer signing material", () =>
     /const EXECUTE = process\.argv\.includes\("--execute"\)/.test(clearPendingNonce) &&
-    /const address = getDryRunAddress\(\)[\s\S]*if \(state\.gap === 0\) return;[\s\S]*if \(!EXECUTE\) return;[\s\S]*const account = getAccount\(\)/.test(clearPendingNonce) &&
+    /const address = getDryRunAddress\(publicAddressEnv\)[\s\S]*if \(state\.gap === 0\) return;[\s\S]*if \(!EXECUTE\) return;[\s\S]*const account = getAccount\(\)/.test(clearPendingNonce) &&
     /const DRY_RUN = !LIVE_EXECUTION_CONFIRMED[\s\S]*if \(DRY_RUN\) return;[\s\S]*LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY/.test(liveCanary) &&
     /LIVE_TEST_DRY_RUN: "1"[\s\S]*LIVE_TEST_EXECUTE: "0"[\s\S]*SOAK_EXECUTE_LIVE: "0"[\s\S]*TEST_WALLET_EXECUTE: "0"/.test(previewDryRun)),
   check("ci-security", "CI uses read permissions, SHA pins, no pull_request_target, and no persisted checkout credentials", () =>

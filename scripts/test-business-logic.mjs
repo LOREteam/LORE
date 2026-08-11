@@ -8,6 +8,9 @@ import { runWalletModelTests } from "./test-business-wallet-models.mjs";
 import { runReadModelTests } from "./test-business-read-models.mjs";
 import { runRuntimeRecoveryTests } from "./test-business-runtime-recovery.mjs";
 import { runCacheAndPlannerTests } from "./test-business-cache-planners.mjs";
+import { runRewardScannerTests } from "./test-business-reward-scanner.mjs";
+import { runLiveStateApiTests } from "./test-business-live-state-api.mjs";
+import { runIndexerNormalizationTests } from "./test-business-indexer-normalization.mjs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as envParsingModule from "../config/envParsing.ts";
@@ -39,7 +42,6 @@ import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
 import * as safetyPoolClaimThresholdModule from "../app/lib/safetyPoolClaimThreshold.ts";
 import * as analyticsDepositsStatusModule from "../app/lib/analyticsDepositsStatus.ts";
 import * as miningTxPathModule from "../app/lib/miningTxPath.ts";
-import * as rewardScannerModule from "../app/hooks/useRewardScanner.ts";
 import * as autoResolveModule from "../app/hooks/useAutoResolve.ts";
 import * as appShellStateModule from "../app/hooks/useAppShellState.ts";
 import * as liveStateSnapshotModule from "../app/hooks/useGameLiveStateSnapshot.ts";
@@ -444,7 +446,6 @@ async function main() {
   const safetyPoolClaimThreshold = safetyPoolClaimThresholdModule.default ?? safetyPoolClaimThresholdModule;
   const analyticsDepositsStatus = analyticsDepositsStatusModule.default ?? analyticsDepositsStatusModule;
   const miningTxPath = miningTxPathModule.default ?? miningTxPathModule;
-  const rewardScanner = rewardScannerModule.default ?? rewardScannerModule;
   const autoResolve = autoResolveModule.default ?? autoResolveModule;
   const liveStateSnapshot = liveStateSnapshotModule.default ?? liveStateSnapshotModule;
   const gameDataHelpers = gameDataHelpersModule.default ?? gameDataHelpersModule;
@@ -962,7 +963,7 @@ async function main() {
   );
   assert.match(
     standardBetPathSource,
-    /if \(recovery === "pending"\) return "pending";[\s\S]*clearPendingMiningTxState\(APP_CHAIN_ID, CONTRACT_ADDRESS, actor\);[\s\S]*return null;/,
+    /if \(recovery === "pending" \|\| recovery === "manual-reconciliation-required"\) return "pending";[\s\S]*clearPendingMiningTxState\(APP_CHAIN_ID, CONTRACT_ADDRESS, actor\);[\s\S]*return null;/,
     "mining wallet recovery must block duplicate sends while a tracked pending transaction remains unresolved",
   );
   assert.match(
@@ -1732,6 +1733,32 @@ async function main() {
         /NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1 is required/,
       );
     },
+  );
+  assert.equal(
+    productionRuntime.hasTwoIndependentPublicRpcOrigins([]),
+    false,
+    "an empty public RPC list must not satisfy wallet transfer quorum",
+  );
+  assert.equal(
+    productionRuntime.hasTwoIndependentPublicRpcOrigins(["https://rpc-one.playlore.xyz"]),
+    false,
+    "one public RPC origin must not satisfy wallet transfer quorum",
+  );
+  assert.equal(
+    productionRuntime.hasTwoIndependentPublicRpcOrigins([
+      "HTTPS://RPC-ONE.PLAYLORE.XYZ:443/path?key=one",
+      "https://rpc-one.playlore.xyz./other-path?key=two#fragment",
+    ]),
+    false,
+    "case, default-port, trailing-dot, path, query, and fragment aliases must collapse to one origin",
+  );
+  assert.equal(
+    productionRuntime.hasTwoIndependentPublicRpcOrigins([
+      "https://rpc-one.playlore.xyz/path",
+      "https://rpc-two.playlore.xyz/other-path",
+    ]),
+    true,
+    "two canonical public RPC origins must satisfy wallet transfer quorum",
   );
   withTemporaryEnv(
     {
@@ -2656,7 +2683,7 @@ async function main() {
       NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "1",
       KEEPER_RPC_URL: "https://rpc.playlore.xyz",
       NEXT_PUBLIC_LINEA_RPCS: undefined,
-      NEXT_PUBLIC_LINEA_SEPOLIA_RPCS: "https://rpc.sepolia.linea.build",
+      NEXT_PUBLIC_LINEA_SEPOLIA_RPCS: "https://linea-sepolia.drpc.org,https://rpc.sepolia.linea.build",
       NEXT_PUBLIC_SITE_URL: "https://playlore.xyz",
       HEALTH_DIAGNOSTICS_SECRET: "h".repeat(32),
       TRUST_PROXY_HEADERS: "1",
@@ -2758,6 +2785,11 @@ async function main() {
     },
   );
   const productionRuntimeSource = readFileSync("config/productionRuntime.ts", "utf8");
+  assert.match(
+    productionRuntimeSource,
+    /scope === "web" && !hasTwoIndependentPublicRpcOrigins\(publicRpcUrls\)[\s\S]*scope === "web" && !hasTwoIndependentPublicRpcOrigins\(publicSepoliaRpcUrls\)/,
+    "production web runtime must reject builds without two canonical wallet transfer RPC origins",
+  );
   assert.match(
     productionRuntimeSource,
     /NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1 is required for the V10 mainnet launch/,
@@ -5279,6 +5311,7 @@ async function main() {
     "trusted proxy secret length",
     "health diagnostics secret length",
     "chat auth secret length",
+    "purpose-separated runtime secrets",
     "admin auth secret length",
     "admin wallet address shape",
     "bootstrap resolve secret length",
@@ -8697,7 +8730,7 @@ async function main() {
   );
   assert.match(
     bootstrapResolveRouteSource,
-    /if \(!receipt\) \{[\s\S]*action: "pending"[\s\S]*reason: "resolve_receipt_timeout"[\s\S]*retryAfter: Math\.max\(1, Math\.ceil\(RESOLVE_THROTTLE_MS \/ 1000\)\)/,
+    /function pendingResolveResponse\([\s\S]*action: "pending"[\s\S]*reason: "resolve_receipt_timeout"[\s\S]*retryAfter: Math\.max\(1, Math\.ceil\(RESOLVE_THROTTLE_MS \/ 1000\)\)[\s\S]*if \(!confirmation\.receipt\) return pendingResolveResponse\(/,
     "bootstrap resolver must classify submitted-but-unconfirmed resolve txs as pending with bounded retry guidance",
   );
   assert.match(
@@ -8722,13 +8755,16 @@ async function main() {
   );
   const bootstrapEmptyEpochGuardIndex = bootstrapResolveRouteSource.indexOf("if (totalPool === 0n)");
   const bootstrapGasEstimateIndex = bootstrapResolveRouteSource.indexOf("estimateContractGas");
-  const bootstrapResolveWriteIndex = bootstrapResolveRouteSource.indexOf("walletClient.writeContract");
+  const bootstrapResolveSignIndex = bootstrapResolveRouteSource.indexOf(
+    "account.signTransaction",
+    bootstrapEmptyEpochGuardIndex,
+  );
   assert.ok(
     bootstrapEmptyEpochGuardIndex > -1 &&
       bootstrapGasEstimateIndex > -1 &&
-      bootstrapResolveWriteIndex > -1 &&
+      bootstrapResolveSignIndex > -1 &&
       bootstrapEmptyEpochGuardIndex < bootstrapGasEstimateIndex &&
-      bootstrapEmptyEpochGuardIndex < bootstrapResolveWriteIndex,
+      bootstrapEmptyEpochGuardIndex < bootstrapResolveSignIndex,
     "bootstrap resolver must skip empty epochs before gas estimation or keeper writes",
   );
   assert.match(
@@ -10185,8 +10221,8 @@ async function main() {
   const recentWinsApiSource = readFileSync("app/api/recent-wins/data.ts", "utf8");
   assert.match(
     recentWinsApiSource,
-    /RECENT_WINS_LOG_SCAN_CHUNK = 10_000n[\s\S]*RECENT_WINS_BOOTSTRAP_SCAN_CHUNK = 10_000n/,
-    "recent-wins RPC scans must stay within the Linea public RPC 10k-block range limit",
+    /RECENT_WINS_LOG_SCAN_CHUNK = 10_000n[\s\S]*RECENT_WINS_RECOVERY_MAX_BLOCKS = 100_000n[\s\S]*RECENT_WINS_RECOVERY_MAX_RPC_CALLS = 12[\s\S]*RECENT_WINS_RECOVERY_MAX_LOGS = 250[\s\S]*RECENT_WINS_RECOVERY_MAX_TIME_MS = 5_000/,
+    "recent-wins RPC recovery must preserve the 10k request range and total block, call, log, and time budgets",
   );
   assert.match(
     recentWinsApiSource,
@@ -10306,8 +10342,13 @@ async function main() {
   );
   assert.match(
     recentWinsApiSource,
-    /for \(const row of existing\) byKey\.set\(buildRewardClaimStorageIdentity\(row\), row\);[\s\S]*for \(const row of incoming\) byKey\.set\(buildRewardClaimStorageIdentity\(row\), row\);[\s\S]*id: buildRewardClaimStorageIdentity\(row\)/,
-    "recent wins reward-claim merge and upsert must share the same normalized identity helper",
+    /for \(const row of existing\) byKey\.set\(buildRewardClaimStorageIdentity\(row\), row\);[\s\S]*for \(const row of incoming\) byKey\.set\(buildRewardClaimStorageIdentity\(row\), row\);/,
+    "recent wins transient recovery merge must use the normalized reward-claim identity helper",
+  );
+  assert.doesNotMatch(
+    recentWinsApiSource,
+    /upsertRewardClaims|storagePut\("gamedata\/rewardClaims\//,
+    "single-RPC recent-wins recovery must remain cache-only and never write normalized durable rows",
   );
   assert.doesNotMatch(
     recentWinsApiSource,
@@ -10495,7 +10536,7 @@ async function main() {
   );
   assert.match(
     depositsRouteSource,
-    /depositsRecoveryStartedAt = now[\s\S]*const task = recoverDepositsAndPersist\(user, currentEpochNum\)[\s\S]*depositsRecoveryInflight = task[\s\S]*finally \{[\s\S]*if \(depositsRecoveryInflight === task\)[\s\S]*depositsRecoveryInflight = null/,
+    /depositsRecoveryStartedAt = now[\s\S]*const task = recoverDepositsFromChain\(user, currentEpochNum\)[\s\S]*depositsRecoveryInflight = task[\s\S]*finally \{[\s\S]*if \(depositsRecoveryInflight === task\)[\s\S]*depositsRecoveryInflight = null/,
     "deposits recovery limiter must set cooldown before chain scan and clear only its own in-flight task",
   );
   assert.match(
@@ -10507,22 +10548,6 @@ async function main() {
     depositsRouteSource,
     /bucket: "api-deposits"[\s\S]*if \(rateLimited\) return applyNoStoreHeaders\(rateLimited\)/,
     "deposits API rate-limit responses must remain no-store before cache lookup or recovery",
-  );
-  const keeperRecoverySource = readFileSync("bot.ts", "utf8");
-  assert.match(
-    keeperRecoverySource,
-    /hasPendingTransaction && !replacingPendingTx[\s\S]*keeper_pending_nonce_unbound[\s\S]*nonce: latestNonce/,
-    "keeper must refuse to replace an unbound pending nonce and persist the nonce it sends",
-  );
-  assert.match(
-    keeperRecoverySource,
-    /PENDING_RESOLVE_REVERT_RETRY_MS[\s\S]*receipt\.status !== "success"[\s\S]*retryAt: Date\.now\(\) \+ PENDING_RESOLVE_REVERT_RETRY_MS[\s\S]*resolve reverted \| retry deferred/,
-    "keeper reverted resolves must defer retries instead of treating a reverted receipt as success",
-  );
-  assert.match(
-    keeperRecoverySource,
-    /function isReceiptNotFoundLikeError[\s\S]*transaction receipt not found[\s\S]*receiptCheckErr[\s\S]*isNetworkLikeError\(receiptCheckMsg\)[\s\S]*!isReceiptNotFoundLikeError\(receiptCheckErr\)[\s\S]*continue;[\s\S]*getTransactionCount\(\{[\s\S]*blockTag: "latest"/,
-    "keeper must only consider bound-nonce replacement after receipt-not-found evidence, not unknown provider errors",
   );
   const storageSource = readFileSync("server/storage.ts", "utf8");
   assert.match(
@@ -10887,6 +10912,7 @@ async function main() {
   );
   assert.equal(explorerLinks.getExplorerAddressUrl("bad-address"), null);
   const walletActionsSource = readFileSync("app/hooks/useWalletActions.ts", "utf8");
+  const walletTransferIntentSource = readFileSync("app/lib/walletTransferIntent.ts", "utf8");
   assert.match(
     walletActionsSource,
     /getExplorerTxUrl/,
@@ -10899,8 +10925,13 @@ async function main() {
   );
   assert.match(
     walletActionsSource,
-    /const waitForReceipt = useCallback[\s\S]*waitForTransactionReceipt\(\{ hash, timeout: TX_RECEIPT_TIMEOUT_MS \}\)[\s\S]*if \(receipt\.status !== "success"\) \{[\s\S]*throw new Error\(`Transaction reverted: \$\{hash\}`\);[\s\S]*getTransactionReceipt\(\{ hash \}\)[\s\S]*if \(lateReceipt\.status !== "success"\) \{[\s\S]*throw new Error\(`Transaction reverted: \$\{hash\}`\);/,
-    "wallet resolver, repair, withdraw, and transfer receipt helper must reject primary and late reverted receipts",
+    /const waitForTransferReceipt[\s\S]*WALLET_TRANSFER_RECEIPT_CLIENTS[\s\S]*waitForStableWalletTransferReceipt\([\s\S]*WALLET_TRANSFER_RECEIPT_CLIENTS,[\s\S]*hash,[\s\S]*TX_RECEIPT_TIMEOUT_MS/,
+    "wallet transfer receipt decisions must use the shared independent-client verifier",
+  );
+  assert.match(
+    walletTransferIntentSource,
+    /async function readWalletTransferReceiptQuorum[\s\S]*Promise\.allSettled[\s\S]*receiptFingerprint\(first, hash\) !== receiptFingerprint\(second, hash\)[\s\S]*async function assertStableWalletTransferReceipt[\s\S]*const second = await readWalletTransferReceiptQuorum\(clients, hash\)[\s\S]*receiptFingerprint\(second, hash\) !== firstFingerprint[\s\S]*second\.status === "reverted"[\s\S]*throw new WalletTransactionRevertedError\(hash\)[\s\S]*return "confirmed"/,
+    "wallet intents must require exact two-client receipt agreement plus a stable quorum reread before success or revert can clear an intent",
   );
   assert.doesNotMatch(
     walletActionsSource,
@@ -11034,8 +11065,8 @@ async function main() {
   );
   assert.match(
     walletActionsSource,
-    /let transferTxHash: `0x\$\{string\}` \| null = null;[\s\S]*transferTxHash = hash;[\s\S]*isAmbiguousPendingTxError\(err\) && transferTxHash[\s\S]*formatTxStatusMessage\("LINEA withdraw submitted and is still pending confirmation\.", transferTxHash\)[\s\S]*formatTxStatusMessage\("ETH withdraw submitted and is still pending confirmation\.", transferTxHash\)[\s\S]*formatTxStatusMessage\("ETH transfer submitted and is still pending confirmation\.", transferTxHash\)[\s\S]*formatTxStatusMessage\("LINEA transfer submitted and is still pending confirmation\.", transferTxHash\)/,
-    "wallet transfers must preserve explorer links for hash-known ambiguous receipt states",
+    /const knownHash = transferTxHash \?\? getWalletTransferIntentErrorHash\(err\)[\s\S]*knownHash && isWalletTransferIntentError\(err\)[\s\S]*formatTxStatusMessage\(formatWalletTransferFailure\(err, "LINEA"\), knownHash\)[\s\S]*knownHash && isAmbiguousPendingTxError\(err\)[\s\S]*LINEA withdraw submitted and is still pending confirmation[\s\S]*ETH withdraw submitted and is still pending confirmation[\s\S]*ETH transfer submitted and is still pending confirmation[\s\S]*LINEA transfer submitted and is still pending confirmation/,
+    "wallet transfers must preserve explorer links for hash-known ambiguous or manually blocked receipt states",
   );
   assert.match(
     walletActionsSource,
@@ -11058,7 +11089,7 @@ async function main() {
     "wallet transfer revert must explain that the transfer did not settle",
   );
   assert.equal(
-    [...walletActionsSource.matchAll(/notify\(formatWalletTransferFailure\(err, "(?:ETH|LINEA)"\), "danger"\)/g)].length,
+    [...walletActionsSource.matchAll(/notify\(formatWalletTransferFailure\(err, "(?:ETH|LINEA)"\)/g)].length,
     4,
     "all ETH and LINEA transfer failures must use the shared actionable classifier",
   );
@@ -11407,7 +11438,7 @@ async function main() {
       lastPlacedEpoch: "10",
     }),
     {
-      active: true,
+      active: false,
       runId: "run:test-session",
       actor: "0x0000000000000000000000000000000000000001",
       betStr: "1.5",
@@ -11415,7 +11446,13 @@ async function main() {
       rounds: 5,
       nextRoundIndex: 2,
       lastPlacedEpoch: "10",
+      issuedAt: 0,
+      expiresAt: 0,
+      maxSpendPerBetRaw: "4500000000000000000",
+      totalSpendRaw: "22500000000000000000",
+      remainingSpendRaw: "13500000000000000000",
     },
+    "legacy Auto-Miner sessions must migrate to a paused, exact-spend envelope",
   );
   const validAutoMinerSession = {
     active: true,
@@ -11724,12 +11761,12 @@ async function main() {
   );
   assert.match(
     autoMineRuntimeControllerSource,
-    /if \(!activeActor \|\| !activeRunId\) \{\s*activeActor = null;\s*activeRunId = null;\s*return;\s*\}\s*if \(!currentSessionMatchesActiveRun\(\)\) return;/,
+    /if \(!activeActor \|\| !activeRunId \|\| !activeAuthorization\) \{\s*resetActiveAuthorization\(\);\s*return;\s*\}\s*if \(!currentSessionMatchesActiveRun\(\)\) return;/,
     "inactive Auto-Miner controllers must not clear a persisted session they cannot prove they own",
   );
   assert.match(
     autoMineRuntimeControllerSource,
-    /if \(!actorAddress \|\| saved\.actor\.toLowerCase\(\) !== actorAddress\.toLowerCase\(\)\) \{\s*activeActor = null;\s*activeRunId = null;\s*return \{ kind: "actor-mismatch" \};\s*\}/,
+    /if \(!actorAddress \|\| saved\.actor\.toLowerCase\(\) !== actorAddress\.toLowerCase\(\)\) \{\s*resetActiveAuthorization\(\);\s*return \{ kind: "actor-mismatch" \};\s*\}/,
     "Auto-Miner restore checks for a different actor must not clear another actor's saved run",
   );
   const autoMineRunSetupSource = readFileSync("app/lib/mining/autoMineRunSetup.ts", "utf8");
@@ -11936,351 +11973,9 @@ async function main() {
   await runWalletModelTests();
   runReadModelTests();
 
-  const rewardScanNow = 1_000_000;
-  assert.equal(rewardScanner.normalizeRewardScanEpochString("42"), "42");
-  assert.equal(rewardScanner.normalizeRewardScanEpochString("bad"), null);
-  assert.deepEqual(
-    rewardScanner.normalizeRewardScanWins([
-      { epoch: "12", amountWei: "1000" },
-      { epoch: "bad", amountWei: "1000" },
-      { epoch: "13", amountWei: "bad" },
-    ]),
-    [{ epoch: "12", amountWei: "1000" }],
-  );
-  assert.deepEqual(
-    [
-      { epoch: "10", amountWei: "1" },
-      { epoch: "bad", amountWei: "1" },
-      { epoch: "2", amountWei: "1" },
-    ].sort(rewardScanner.compareRewardScanWinsDesc),
-    [
-      { epoch: "10", amountWei: "1" },
-      { epoch: "2", amountWei: "1" },
-      { epoch: "bad", amountWei: "1" },
-    ],
-  );
-  assert.equal(rewardScanner.getRewardScanRescanDelayMs(null, rewardScanNow), 0);
-  assert.equal(rewardScanner.getRewardScanRescanDelayMs(rewardScanNow - 14 * 60_000, rewardScanNow), 60_000);
-  assert.equal(rewardScanner.getRewardScanRescanDelayMs(rewardScanNow - 15 * 60_000, rewardScanNow), 0);
-  assert.equal(rewardScanner.getRewardScanRescanDelayMs(rewardScanNow + 1, rewardScanNow), 0);
-  const claimWindow = 365n * 24n * 60n * 60n;
-  assert.equal(rewardScanner.isRewardClaimWindowOpen(0n, claimWindow * 2n), true);
-  assert.equal(rewardScanner.isRewardClaimWindowOpen(10n, 10n + claimWindow - 1n), true);
-  assert.equal(rewardScanner.isRewardClaimWindowOpen(10n, 10n + claimWindow), false);
-  assert.equal(
-    rewardScanner.formatRewardClaimError(new Error("RewardClaimWindowExpired()")),
-    "This reward claim window has expired.",
-  );
-  assert.equal(
-    rewardScanner.formatRewardClaimError(new Error("Transaction receipt timeout")),
-    "Reward claim status is unknown after a wallet timeout. Check wallet activity before retrying.",
-  );
-  assert.equal(
-    rewardScanner.formatRewardClaimError(new Error("execution reverted")),
-    "Reward claim reverted on-chain. No reward was moved by this transaction.",
-  );
-  assert.equal(
-    rewardScanner.formatRewardClaimError(new Error("insufficient funds for gas")),
-    "Reward claim failed: not enough balance or ETH for gas.",
-  );
-  assert.equal(
-    rewardScanner.formatRewardClaimError(new Error("JSON-RPC provider unavailable")),
-    "Reward claim hit a wallet or RPC issue. Check wallet activity before retrying.",
-  );
-  const rewardScannerSource = readFileSync("app/hooks/useRewardScanner.ts", "utf8");
-  const rewardScannerComponentSource = readFileSync("app/components/RewardScanner.tsx", "utf8");
-  assert.match(
-    rewardScannerSource,
-    /MAX_SCAN_DEPTH\s*=\s*BigInt\(5000\)/,
-    "automatic reward scan depth must remain at 5000 epochs",
-  );
-  assert.doesNotMatch(
-    rewardScannerSource,
-    /MAX_CONSECUTIVE_EMPTY|consecutiveEmpty\s*>?=/,
-    "automatic reward scans must not silently truncate the configured 5000-epoch search after empty chunks",
-  );
-  assert.match(
-    rewardScannerSource,
-    /getExplorerTxUrl/,
-    "single reward claim notifications must include explorer links when a tx hash is available",
-  );
-  assert.match(
-    rewardScannerSource,
-    /const waitReceipt = useCallback[\s\S]*waitForTransactionReceipt\(\{ hash \}\)[\s\S]*if \(receipt\.status !== "success"\) \{[\s\S]*throw new Error\(`Transaction reverted: \$\{hash\}`\);[\s\S]*getTransactionReceipt\(\{ hash \}\)[\s\S]*if \(lateReceipt\.status !== "success"\) \{[\s\S]*throw new Error\(`Transaction reverted: \$\{hash\}`\);/,
-    "reward claim receipt helper must reject primary and late reverted receipts",
-  );
-  assert.doesNotMatch(
-    rewardScannerSource,
-    /Preparing reward claims? from the Privy wallet/,
-    "reward claim preparation toasts must stay short and avoid redundant Privy-wallet wording",
-  );
-  assert.match(
-    rewardScannerSource,
-    /preferredAddress[\s\S]*const \{ address: connectedAddress \} = useAccount\(\)[\s\S]*getAddress\(candidate\)/,
-    "reward scanning and claiming must prefer the canonical embedded wallet actor over the connected wallet",
-  );
-  assert.match(
-    rewardScannerSource,
-    /for \(let offset = 0; offset < cached\.wins\.length; offset \+= REWARD_SCAN_CHUNK_SIZE_NUMBER\)[\s\S]*cachedWinChunk = cached\.wins\.slice\(offset, offset \+ REWARD_SCAN_CHUNK_SIZE_NUMBER\)[\s\S]*scanAbortRef\.current/,
-    "reward scanner must revalidate cached wins in bounded abort-aware chunks",
-  );
-  const lineaOreHubRuntimeSource = readFileSync("app/hooks/useLineaOreHubRuntime.ts", "utf8");
-  assert.match(
-    lineaOreHubRuntimeSource,
-    /useRewardScanner[\s\S]*enabled: activeTab === "hub" && Boolean\(embeddedWalletAddress\)[\s\S]*preferredAddress: embeddedWalletAddress[\s\S]*sendTransactionSilent: miningSendTransactionSilent/,
-    "hub rewards must scan the same embedded wallet that submits claims",
-  );
-  assert.match(
-    rewardScannerSource,
-    /functionName:\s*"epochResolvedAt"[\s\S]*isRewardClaimWindowOpen/,
-    "automatic reward scans must remove expired candidates without adding reads for every scanned epoch",
-  );
-  const deepRewardScannerSource = readFileSync("app/hooks/useDeepRewardScan.ts", "utf8");
-  assert.match(
-    deepRewardScannerSource,
-    /functionName:\s*"epochResolvedAt"[\s\S]*isRewardClaimWindowOpen/,
-    "deep reward scans must apply the same on-chain claim deadline",
-  );
-  assert.match(
-    rewardScannerSource,
-    /lastRewardClaimTxHash/,
-    "batch reward claim notifications must keep the latest tx hash for explorer links",
-  );
-  assert.match(
-    rewardScannerComponentSource,
-    /aria-label=\{claimAllLabel\}[\s\S]*title=\{claimAllLabel\}[\s\S]*aria-label=\{scanLabel\}[\s\S]*title=\{scanLabel\}[\s\S]*aria-label=\{claimOneLabel\}[\s\S]*title=\{claimOneLabel\}/,
-    "reward scan and claim controls must expose accessible labels and disabled-state titles",
-  );
-  assert.match(
-    rewardScannerComponentSource,
-    /type="button"[\s\S]*aria-label=\{claimAllLabel\}[\s\S]*type="button"[\s\S]*aria-label=\{scanLabel\}[\s\S]*type="button"[\s\S]*aria-label=\{claimOneLabel\}/,
-    "reward scan and claim controls must remain non-submit buttons",
-  );
-  assert.match(
-    rewardScannerComponentSource,
-    /role="status"[\s\S]*aria-live="polite"[\s\S]*Full reward history is still loading in background/,
-    "deep reward scan progress must be announced without changing recovery scan behavior",
-  );
-  assert.match(
-    rewardScannerComponentSource,
-    /role="status"[\s\S]*aria-live="polite"[\s\S]*aria-busy="true"[\s\S]*aria-hidden="true"[\s\S]*<LoreText items=\{searchingQuotes\}/,
-    "reward scan empty-results loading must be announced as a polite busy status with decorative spinner hidden",
-  );
-  assert.match(
-    rewardScannerSource,
-    /const claimInFlightRef = useRef\(false\)[\s\S]*const claimReward[\s\S]*if \(claimInFlightRef\.current\) return;[\s\S]*claimInFlightRef\.current = true;[\s\S]*const claimAll[\s\S]*claimInFlightRef\.current\) return;[\s\S]*claimInFlightRef\.current = true;/,
-    "reward claims must synchronously prevent overlapping single and batch submissions",
-  );
-  assert.match(
-    rewardScannerSource,
-    /activeClaimAddressRef\.current = address\?\.toLowerCase\(\)[\s\S]*const claimActor = address\.toLowerCase\(\)[\s\S]*activeClaimAddressRef\.current !== claimActor[\s\S]*claimActorChanged/,
-    "reward claims must stop sends and stale state updates when the active wallet changes",
-  );
-  const deepRewardScanSource = readFileSync("app/hooks/useDeepRewardScan.ts", "utf8");
-  assert.match(
-    deepRewardScanSource,
-    /getExplorerTxUrl/,
-    "deep reward claim notifications must include explorer links when a tx hash is available",
-  );
-  assert.match(
-    deepRewardScanSource,
-    /readJsonResponse<ClaimCandidatePage>/,
-    "deep reward candidate scans must use the bounded JSON response helper",
-  );
-  assert.match(
-    deepRewardScanSource,
-    /import \{ fetchWithTimeout \} from "\.\.\/lib\/fetchWithTimeout";[\s\S]*fetchWithTimeout\(`\/api\/claim-candidates\?\$\{query\.toString\(\)\}`,\s*\{ cache: "no-store" \}\)/,
-    "deep reward candidate scans must use the shared fetch timeout helper",
-  );
-  assert.doesNotMatch(
-    deepRewardScanSource,
-    /response\.json\(\)/,
-    "deep reward candidate scans must not use unbounded response.json",
-  );
-  assert.match(
-    deepRewardScanSource,
-    /const claimInFlightRef = useRef\(false\)[\s\S]*claimOne[\s\S]*claimInFlightRef\.current\) return;[\s\S]*claimInFlightRef\.current = true;[\s\S]*claimAllDeep[\s\S]*claimInFlightRef\.current\) return;[\s\S]*claimInFlightRef\.current = true;/,
-    "deep reward claims must share a synchronous submission lock",
-  );
-  assert.match(
-    deepRewardScanSource,
-    /claimOne[\s\S]*isAmbiguousPendingTxError\(err\)[\s\S]*!isUserRejection\(err\)[\s\S]*Reward claim rejected in wallet\./,
-    "deep single reward claim must surface wallet rejection instead of silently clearing the claim state",
-  );
-  assert.match(
-    deepRewardScanSource,
-    /claimOne[\s\S]*const hash = await sendTransactionSilent\(\{ to: CONTRACT_ADDRESS, data, gas \}\);[\s\S]*try \{[\s\S]*receiptState = await waitReceipt\(hash\);[\s\S]*isDefinitiveClaimRevertError\(err\)[\s\S]*markPostSendClaimVerificationError\(err, hash\)[\s\S]*const postSendHash = getPostSendClaimVerificationHash\(err\);[\s\S]*Claim transaction submitted and is still pending\. Rewards will refresh after confirmation\.[\s\S]*formatRewardClaimError\(err\)/,
-    "deep single reward claim must treat unknown post-send receipt verification as pending before generic errors",
-  );
-  assert.match(
-    deepRewardScanSource,
-    /let claimRejected = false[\s\S]*if \(isUserRejection\(err\)\) \{[\s\S]*claimRejected = true[\s\S]*if \(claimRejected && claimedEpochs\.size === 0 && !pendingClaimTx\)[\s\S]*Reward claim rejected in wallet\./,
-    "deep batch reward claim must surface wallet rejection when no prior claim transaction succeeded or remains pending",
-  );
-  assert.match(
-    deepRewardScanSource,
-    /function isDefinitiveClaimRevertError\(error: unknown\)[\s\S]*startsWith\("transaction reverted:"\)[\s\S]*function markPostSendClaimVerificationError\(error: unknown, hash: `0x\$\{string\}`\)[\s\S]*claimTxSubmitted = true[\s\S]*function getPostSendClaimVerificationHash\(error: unknown\)[\s\S]*claimTxSubmitted === true/,
-    "deep reward post-send receipt verification errors must carry tx hashes unless the receipt is a definitive revert",
-  );
-  assert.match(
-    deepRewardScanSource,
-    /const hash = await sendTransactionSilent\(\{ to: CONTRACT_ADDRESS, data, gas \}\);[\s\S]*try \{[\s\S]*receiptState = await waitReceipt\(hash\);[\s\S]*isDefinitiveClaimRevertError\(err\)[\s\S]*markPostSendClaimVerificationError\(err, hash\)[\s\S]*const postSendHash = getPostSendClaimVerificationHash\(err\);[\s\S]*pendingClaimTx = true;[\s\S]*break;/,
-    "deep reward claim-all must stop further sends after an unknown post-send receipt verification state",
-  );
-  assert.match(
-    deepRewardScanSource,
-    /activeClaimAddressRef\.current = address\?\.toLowerCase\(\) \?\? null[\s\S]*const claimActor = address\.toLowerCase\(\)[\s\S]*activeClaimAddressRef\.current !== claimActor[\s\S]*claimActorChanged/,
-    "deep reward claims must stop batches and stale state updates when the active wallet changes",
-  );
-  const liveStateSharedSource = readFileSync("app/api/live-state/shared.ts", "utf8");
-  const liveStateRouteSource = readFileSync("app/api/live-state/route.ts", "utf8");
-  assert.match(
-    liveStateRouteSource,
-    /const rateLimited = await enforceSharedRateLimit\(request,[\s\S]*?if \(rateLimited\)[\s\S]*?const cached = liveStateRouteCache\.getFresh/,
-    "live-state must enforce its shared rate limit before serving fresh cache entries",
-  );
-  assert.match(
-    liveStateRouteSource,
-    /function isFreshLiveStatePayloadFetchedAt\(fetchedAt: unknown, now: number\)[\s\S]*Number\.isSafeInteger\(fetchedAt\)[\s\S]*fetchedAt <= now[\s\S]*now - fetchedAt <= LIVE_STATE_STALE_FAST_PATH_MS[\s\S]*return isFreshLiveStatePayloadFetchedAt\(payload\.fetchedAt, now\)/,
-    "live-state stale fast path must reject malformed or future fetchedAt timestamps",
-  );
-  assert.doesNotMatch(
-    liveStateRouteSource,
-    /Number\.isFinite\(payload\.fetchedAt\) && now - payload\.fetchedAt <= LIVE_STATE_STALE_FAST_PATH_MS/,
-    "live-state stale fast path must not use broad fetchedAt age arithmetic",
-  );
-  assert.match(
-    liveStateRouteSource,
-    /MAX_TIMER_DELAY_MS = 2_147_483_647[\s\S]*async function withTimeout<T>\(promise: Promise<T>, timeoutMs: number, label: string\)[\s\S]*Number\.isSafeInteger\(timeoutMs\)[\s\S]*timeoutMs <= 0[\s\S]*timeoutMs > MAX_TIMER_DELAY_MS[\s\S]*timeout must be between 1 and 2147483647 milliseconds/,
-    "live-state route timeout helper must reject fractional, unsafe, or oversized timer delays before cache joins",
-  );
-  assert.doesNotMatch(
-    liveStateRouteSource,
-    /Number\.isFinite\(timeoutMs\)/,
-    "live-state route timeout helper must not broadly accept finite fractional timeout values",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /catch \(error\) \{[\s\S]*?const snapshot = loadLiveStateSnapshot\(Number\.POSITIVE_INFINITY\) \?\? buildStoredLiveStateBootstrap\(\);[\s\S]*?if \(snapshot\) return snapshot;/,
-    "live-state RPC fallback must preserve the snapshot timestamp instead of presenting old chain data as fresh",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /function normalizeLiveStateSnapshotMaxAge\(maxAgeMs: number\)[\s\S]*!Number\.isFinite\(maxAgeMs\)[\s\S]*return null[\s\S]*Number\.isSafeInteger\(maxAgeMs\)[\s\S]*return maxAgeMs/,
-    "live-state snapshot max-age checks must keep intentional unbounded fallback explicit",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /MAX_TIMER_DELAY_MS = 2_147_483_647[\s\S]*function isValidTimerDelayMs\(timeoutMs: number\)[\s\S]*Number\.isSafeInteger\(timeoutMs\)[\s\S]*timeoutMs > 0[\s\S]*timeoutMs <= MAX_TIMER_DELAY_MS[\s\S]*async function withTimeout<T>[\s\S]*isValidTimerDelayMs\(timeoutMs\)[\s\S]*timeout must be between 1 and 2147483647 milliseconds/,
-    "live-state shared RPC timeout helper must reject fractional, unsafe, or oversized timer delays",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /function isFreshLiveStateSnapshotSavedAt\(savedAt: unknown, maxAgeMs: number \| null, now = Date\.now\(\)\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*normalizedSavedAt > now[\s\S]*maxAgeMs === null \|\| now - normalizedSavedAt <= maxAgeMs/,
-    "live-state persisted snapshots must reject malformed or future savedAt timestamps",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /function isFreshLiveStateSnapshotMemoryEntry\([\s\S]*Number\.isSafeInteger\(entry\.loadedAt\)[\s\S]*entry\.loadedAt <= now[\s\S]*now - entry\.loadedAt <= LIVE_STATE_SNAPSHOT_CACHE_MS[\s\S]*isFreshLiveStateSnapshotSavedAt\(entry\.savedAt, maxAgeMs, now\)/,
-    "live-state in-memory snapshots must reject malformed or future cache timestamps",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /const normalizedMaxAgeMs = normalizeLiveStateSnapshotMaxAge\(maxAgeMs\)[\s\S]*isFreshLiveStateSnapshotMemoryEntry\(memorySnapshot, normalizedMaxAgeMs, now\)[\s\S]*!isFreshLiveStateSnapshotSavedAt\(snapshot\.savedAt, normalizedMaxAgeMs, now\)/,
-    "live-state snapshot loading must route both memory and persisted snapshots through strict freshness helpers",
-  );
-  assert.doesNotMatch(
-    liveStateSharedSource,
-    /now - liveStateSnapshotCache\.loadedAt <= LIVE_STATE_SNAPSHOT_CACHE_MS|typeof snapshot\.savedAt !== "number" \|\| now - snapshot\.savedAt > maxAgeMs/,
-    "live-state snapshots must not use broad cache or savedAt age arithmetic",
-  );
-  const epochsLimitRouteSource = readFileSync("app/api/epochs/route.ts", "utf8");
-  assert.match(
-    epochsLimitRouteSource,
-    /const MAX_REQUESTED_EPOCHS = 100;[\s\S]*?split\(",", MAX_REQUESTED_EPOCHS \+ 1\)[\s\S]*?rawEpochs\.length > MAX_REQUESTED_EPOCHS[\s\S]*?Too many epochs[\s\S]*?Invalid epochs/,
-    "epochs requests must reject over-limit or invalid parsed IDs before cache-key and storage work",
-  );
-  assert.doesNotMatch(
-    epochsLimitRouteSource,
-    /slice\(0, MAX_REQUESTED_EPOCHS\)/,
-    "epochs requests must not silently truncate over-limit requested epoch IDs",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /LIVE_STATE_LOG_SCAN_CHUNK = 10_000n/,
-    "live-state RPC scans must stay within the Linea public RPC 10k-block range limit",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /isSafePositiveInteger/,
-    "live-state bootstrap must use safe current epoch validation",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseChainUintPositiveNumber\(value: bigint\)[\s\S]*value > MAX_SAFE_INTEGER_BIGINT[\s\S]*const currentEpochNumber = parseChainUintPositiveNumber\(currentEpoch\)[\s\S]*currentEpochNumber !== null[\s\S]*getEpochTileUserCounts\(currentEpochNumber\)[\s\S]*currentEpochNumber !== null[\s\S]*getEpochTilePoolsWei\(currentEpochNumber\)/,
-    "live-state chain currentEpoch must be safely narrowed before indexed storage lookups",
-  );
-  assert.doesNotMatch(
-    liveStateSharedSource,
-    /(^|[^A-Za-z0-9_])Number\(currentEpoch\)/,
-    "live-state must not broadly coerce chain currentEpoch before indexed storage lookups",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /function parseStoredBlockNumber/,
-    "live-state jackpot fallback must parse stored block numbers safely",
-  );
-  assert.match(
-    liveStateSharedSource,
-    /function parseChainTileId\(value: bigint, gridSize: number\)[\s\S]*value <= 0n \|\| value > BigInt\(gridSize\)[\s\S]*Number\.isSafeInteger\(parsed\)[\s\S]*const tileId = parseChainTileId\(args\.tileId, gridSize\)[\s\S]*args\.tileIds\.flatMap\(\(tileId\) => \{[\s\S]*parseChainTileId\(tileId, gridSize\)/,
-    "live-state chain tile user recovery must safely narrow event tile IDs before counting users",
-  );
-  assert.doesNotMatch(
-    liveStateSharedSource,
-    /Number\(args\.tileId\)|args\.tileIds\.map\(\(tileId\) => Number\(tileId\)\)/,
-    "live-state chain tile user recovery must not broadly coerce event tile IDs",
-  );
-  assert.doesNotMatch(
-    liveStateSharedSource,
-    /BigInt\([^)]*blockNumber\s*\|\|\s*"0"[^)]*\)/,
-    "live-state must not BigInt-parse unchecked stored block numbers",
-  );
-  assert.doesNotMatch(
-    liveStateSharedSource,
-    /Number\.isInteger\(storedCurrentEpoch\)/,
-    "live-state stored current epoch check must reject unsafe integers",
-  );
-  const indexerErrorSource = readFileSync("scripts/indexer.ts", "utf8");
-  assert.match(
-    indexerErrorSource,
-    /function describeIndexerError\(error: unknown\)[\s\S]*?sanitizeSentryPayload\(message\)\.slice\(0, 160\)/,
-    "indexer must sanitize provider error text before logging it",
-  );
-  assert.doesNotMatch(
-    indexerErrorSource,
-    /console\.(?:warn|error)\([^)]*(?:err as Error|,\s*err\b)/,
-    "indexer logs must not emit raw provider error objects or messages",
-  );
-  assert.match(
-    indexerErrorSource,
-    /const MAX_TILE_ID = 25[\s\S]*function parseChainTileId\(value: bigint\)[\s\S]*value <= 0n \|\| value > BigInt\(MAX_TILE_ID\)[\s\S]*function parseChainTileIds\(values: readonly bigint\[\]\)[\s\S]*if \(tileId === null\) return null[\s\S]*const tileId = parseChainTileId\(args\.tileId\)[\s\S]*const tileIds = parseChainTileIds\(args\.tileIds\)[\s\S]*tileIds === null[\s\S]*tileIds\.length !== args\.amounts\.length[\s\S]*const winningTile = parseChainTileId\(args\.winningTile\)/,
-    "indexer must safely narrow chain tile IDs and winningTile evidence before normalized storage writes",
-  );
-  assert.match(
-    indexerErrorSource,
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseChainPositiveSafeInteger\(value: bigint\)[\s\S]*value <= 0n \|\| value > MAX_SAFE_INTEGER_BIGINT[\s\S]*const epochsClaimed = parseChainPositiveSafeInteger\(args\.epochsClaimed\)[\s\S]*epochsClaimed === null[\s\S]*epochsClaimed,/,
-    "indexer must safely narrow batch claim epochsClaimed before normalized storage writes",
-  );
-  assert.match(
-    indexerErrorSource,
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function toDisplayNumberWei\(value: bigint\)[\s\S]*value <= 0n[\s\S]*1_000_000_000_000n[\s\S]*scaled > MAX_SAFE_INTEGER_BIGINT[\s\S]*totalAmountNum: toDisplayNumberWei\(args\.(?:amount|totalAmount)\)[\s\S]*amountNum: toDisplayNumberWei\(args\.amount\)[\s\S]*rewardNum: toDisplayNumberWei\(args\.reward\)/,
-    "indexer must derive display numeric amount fields through bounded bigint math",
-  );
-  assert.doesNotMatch(
-    indexerErrorSource,
-    /tileIds: \[Number\(args\.tileId\)\]|tileIds: args\.tileIds\.map\(Number\)|winningTile: Number\(args\.winningTile\)|epochsClaimed: Number\(args\.epochsClaimed\)|parseFloat\(formatUnits\(args\.(?:amount|totalAmount|reward), 18\)\)/,
-    "indexer must not broadly coerce event tile IDs, winningTile values, batch claim counts, or display amount fields",
-  );
+  runRewardScannerTests();
+  runLiveStateApiTests();
+  runIndexerNormalizationTests();
   const jackpotsServiceSource = readFileSync("app/api/_lib/jackpotsService.ts", "utf8");
   const jackpotsRouteSource = readFileSync("app/api/jackpots/route.ts", "utf8");
   assert.match(
@@ -12315,7 +12010,7 @@ async function main() {
   );
   assert.match(
     jackpotsServiceSource,
-    /function parseChainUintEpochNumber\(value: unknown\)[\s\S]*typeof value !== "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*const lastDailyEpoch = parseChainUintEpochNumber\(info\[4\]\)[\s\S]*const lastWeeklyEpoch = parseChainUintEpochNumber\(info\[5\]\)[\s\S]*lastDailyEpoch !== null[\s\S]*fetchJackpotEventByEpoch\("daily", lastDailyEpoch\)[\s\S]*lastWeeklyEpoch !== null[\s\S]*fetchJackpotEventByEpoch\("weekly", lastWeeklyEpoch\)/,
+    /function parseChainUintEpochNumber\(value: unknown\)[\s\S]*typeof value !== "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*const lastDailyEpoch = parseChainUintEpochNumber\(info\[4\]\)[\s\S]*const lastWeeklyEpoch = parseChainUintEpochNumber\(info\[5\]\)[\s\S]*lastDailyEpoch !== null[\s\S]*fetchJackpotEventByEpoch\("daily", lastDailyEpoch, context, budget\)[\s\S]*lastWeeklyEpoch !== null[\s\S]*fetchJackpotEventByEpoch\("weekly", lastWeeklyEpoch, context, budget\)/,
     "jackpot service must safely narrow chain uint256 jackpot epochs before recovery lookups",
   );
   assert.doesNotMatch(
@@ -12666,21 +12361,6 @@ async function main() {
   assert.throws(() => sqliteScopeAudit.normalizeSqliteCount("1e3"));
   assert.throws(() => sqliteScopeAudit.normalizeSqliteCount("01"));
   assert.throws(() => sqliteScopeAudit.normalizeSqliteCount(BigInt(Number.MAX_SAFE_INTEGER) + 1n));
-  assert.match(
-    sqliteScopeAuditSource,
-    /export function normalizeSqliteCount[\s\S]*typeof value === "bigint"[\s\S]*BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*typeof value === "number"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\*\)\$\/\.test\(value\)/,
-    "SQLite scope audit must canonicalize COUNT(*) values before publishing proof counters",
-  );
-  assert.match(
-    sqliteScopeAuditSource,
-    /foreignRowsByTable\[table\] \+= normalizeSqliteCount[\s\S]*legacyRowsByTable\[table\] = normalizeSqliteCount[\s\S]*staleMetaKeys = normalizeSqliteCount/,
-    "SQLite scope audit must route foreign, legacy, and stale meta counters through the strict count helper",
-  );
-  assert.doesNotMatch(
-    sqliteScopeAuditSource,
-    /Number\((?:row\.count|db\.prepare\(`SELECT COUNT\(\*\)|db\.prepare\(`[\s\S]{0,180}COUNT\(\*\))/,
-    "SQLite scope audit must not broadly coerce COUNT(*) values with Number(...)",
-  );
   for (const [label, source] of [
     ["collect-indexer-evidence", collectIndexerEvidenceSource],
     ["create-indexer-proof-draft", createIndexerDraftSource],
@@ -12708,7 +12388,7 @@ async function main() {
   );
   assert.match(
     liveRoundCanarySource,
-    /function loadEnvFileIfPresent\(path: string, description: string\)[\s\S]*existsSync\(path\)[\s\S]*statSync\(path\)\.isFile\(\)[\s\S]*loadDotenv\(\{ path, override: false, quiet: true \}\)[\s\S]*function loadWallets\(\)[\s\S]*loadEnvFileIfPresent\(LIVE_WALLET_ENV_PATH/,
+    /function assertOptionalEnvFile\(path: string, description: string\)[\s\S]*existsSync\(path\) && !statSync\(path\)\.isFile\(\)[\s\S]*function loadSigningEnvFileIfPresent\(\)[\s\S]*assertOptionalEnvFile\(LIVE_WALLET_ENV_PATH[\s\S]*loadDotenv\(\{ path: LIVE_WALLET_ENV_PATH, override: false, quiet: true \}\)[\s\S]*function loadWallets\(\)[\s\S]*loadSigningEnvFileIfPresent\(\)/,
     "live canary must reject a non-file secret wallet env path before deferred dotenv loading",
   );
   assert.doesNotMatch(
@@ -12778,8 +12458,8 @@ async function main() {
   );
   assert.match(
     clearPendingNonceSource,
-    /PUBLIC_ADDRESS_ENV_PATH = "\.env\.live-test-addresses"[\s\S]*LIVE_WALLET_ENV_PATH = "\.env\.live-test-wallets"[\s\S]*function loadEnvFileIfPresent\(path: string, description: string\)[\s\S]*statSync\(path\)\.isFile\(\)[\s\S]*loadDotenv\(\{ path, override: false, quiet: true \}\)/,
-    "pending nonce recovery must reject non-file public/secret env paths and keep dotenv output quiet",
+    /PUBLIC_ADDRESS_ENV_NAME_RE[\s\S]*function loadPublicAddressEnvFileIfPresent\(\)[\s\S]*processEnv: isolatedEnv[\s\S]*!PUBLIC_ADDRESS_ENV_NAME_RE\.test\(name\)[\s\S]*function loadSigningEnvFileIfPresent\(\)[\s\S]*loadDotenv\(\{ path: LIVE_WALLET_ENV_PATH, override: false, quiet: true \}\)/,
+    "pending nonce recovery must isolate and allowlist public addresses before any optional signing env load",
   );
   assert.match(
     clearPendingNonceSource,
@@ -12793,7 +12473,7 @@ async function main() {
   );
   assert.match(
     clearPendingNonceSource,
-    /const address = getDryRunAddress\(\)[\s\S]*readNonceState\(publicClient, address\)[\s\S]*if \(state\.gap === 0\) return;[\s\S]*const account = getAccount\(\)/,
+    /const publicAddressEnv = loadPublicAddressEnvFileIfPresent\(\)[\s\S]*const signingMaterialLoaded = hasSigningMaterialInEnvironment\(\)[\s\S]*const address = getDryRunAddress\(publicAddressEnv\)[\s\S]*readNonceState\(publicClient, address\)[\s\S]*if \(state\.gap === 0\) return;[\s\S]*const account = getAccount\(\)/,
     "pending nonce recovery must verify the public nonce gap before loading signing material",
   );
   assert.match(
@@ -12803,7 +12483,7 @@ async function main() {
   );
   assert.match(
     clearPendingNonceSource,
-    /wouldSendReplacement:\s*EXECUTE && state\.gap > 0[\s\S]*operationalBoundary: \{[\s\S]*dryRunDefault: !EXECUTE[\s\S]*signingMaterialLoaded: false[\s\S]*walletClientCreated: false[\s\S]*contractWriteSubmitted: false[\s\S]*transactionSent: false[\s\S]*value: 0n,[\s\S]*nonce: state\.latest,[\s\S]*gas: 21_000n/,
+    /!EXECUTE && signingMaterialLoaded[\s\S]*wouldSendReplacement:\s*EXECUTE && state\.gap > 0[\s\S]*operationalBoundary: \{[\s\S]*dryRunDefault: !EXECUTE[\s\S]*signingMaterialLoaded,[\s\S]*walletClientCreated: false[\s\S]*contractWriteSubmitted: false[\s\S]*transactionSent: false[\s\S]*value: 0n,[\s\S]*nonce: state\.latest,[\s\S]*gas: 21_000n/,
     "pending nonce recovery must remain a bounded zero-value replacement of the lowest pending nonce",
   );
   assert.doesNotMatch(
@@ -13919,12 +13599,12 @@ async function main() {
   );
   assert.match(
     clearPendingNonceSource,
-    /loadEnvFileIfPresent\(PUBLIC_ADDRESS_ENV_PATH, "an address env file"\)/,
-    "pending-nonce recovery summary must keep stdout clean for compact status aggregation",
+    /processEnv: isolatedEnv[\s\S]*may contain only public live-test role addresses[\s\S]*INSPECT_PUBLIC_ADDRESS_ENV_ARG[\s\S]*signingMaterialLoaded/,
+    "pending-nonce recovery must expose a safe inspection boundary without merging the address file into process.env",
   );
   assert.match(
     clearPendingNonceSource,
-    /const address = getDryRunAddress\(\)[\s\S]*readNonceState\(publicClient, address\)[\s\S]*if \(state\.gap === 0\) return;[\s\S]*if \(!EXECUTE\) return;[\s\S]*const account = getAccount\(\)[\s\S]*createWalletClient/,
+    /const address = getDryRunAddress\(publicAddressEnv\)[\s\S]*readNonceState\(publicClient, address\)[\s\S]*if \(state\.gap === 0\) return;[\s\S]*if \(!EXECUTE\) return;[\s\S]*const account = getAccount\(\)[\s\S]*createWalletClient/,
     "pending-nonce recovery dry-run must use the public role address and load signing material only after a confirmed nonzero gap",
   );
   assert.match(
@@ -14320,8 +14000,8 @@ async function main() {
   );
   assert.match(
     indexerSource,
-    /fetchAllLogs[\s\S]*fetchLogsRequestAdaptiveSplit\(\[\], "ContractEvents"/,
-    "indexer must fetch each contract chunk once instead of duplicating raw topic queries",
+    /fetchAllLogs[\s\S]*fetchLogsByTopicsAdaptive\(\[\], "ContractEvents"/,
+    "indexer must fetch each contract chunk once per independent RPC, then classify topics locally",
   );
   assert.match(
     indexerSource,
@@ -14340,12 +14020,12 @@ async function main() {
   );
   assert.match(
     indexerSource,
-    /await runIndexedMaintenance\(target\);[\s\S]*consecutiveFailures = 0;/,
+    /watchTimer = setInterval[\s\S]*await runIndexerPass\(\);[\s\S]*consecutiveFailures = 0;/,
     "a successful indexer watch cycle must reset the failure threshold",
   );
   assert.match(
     indexerSource,
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseChainCurrentEpochNumber\(value: bigint\)[\s\S]*value > MAX_SAFE_INTEGER_BIGINT[\s\S]*const currentEpochNumber = parseChainCurrentEpochNumber\(currentEpoch\)[\s\S]*storagePut\("gamedata\/_meta\/currentEpoch", currentEpochNumber\)[\s\S]*currentEpoch: currentEpochNumber[\s\S]*for \(let ep = 1; ep < currentEpochNumber; ep\+\+\)/,
+    /function parseChainCurrentEpochNumber\(value: bigint, observedBlock: bigint\)[\s\S]*parsePlausibleCurrentEpoch\(value, INDEXER_START_BLOCK, observedBlock\)[\s\S]*const currentEpochNumber = parseChainCurrentEpochNumber\(currentEpoch, currentBlock\)[\s\S]*storagePut\("gamedata\/_meta\/currentEpoch", currentEpochNumber\)[\s\S]*createReconcileEpochPlan\(\{[\s\S]*currentEpoch: currentEpochNumber/,
     "indexer must safely narrow chain currentEpoch before metadata writes and reconcile range construction",
   );
   assert.match(
@@ -14446,7 +14126,7 @@ async function main() {
   );
   assert.match(
     liveRoundCanarySource,
-    /const DRY_RUN = !LIVE_EXECUTION_CONFIRMED[\s\S]*PUBLIC_ADDRESS_ENV_PATH = "\.env\.live-test-addresses"[\s\S]*loadEnvFileIfPresent\(PUBLIC_ADDRESS_ENV_PATH[\s\S]*function loadWallets\(\)[\s\S]*loadEnvFileIfPresent\(LIVE_WALLET_ENV_PATH[\s\S]*function loadDryRunWallets\(\)[\s\S]*LORE_LIVE_TEST_\$\{role\}_ADDRESS[\s\S]*const wallets = DRY_RUN \? loadDryRunWallets\(\) : loadWallets\(\)/,
+    /const DRY_RUN = !LIVE_EXECUTION_CONFIRMED[\s\S]*PUBLIC_ADDRESS_ENV_PATH = "\.env\.live-test-addresses"[\s\S]*loadPublicAddressEnvFileIfPresent\(\);[\s\S]*DRY_RUN && hasSigningMaterialInEnvironment\(\)[\s\S]*function loadWallets\(\)[\s\S]*loadSigningEnvFileIfPresent\(\)[\s\S]*function loadDryRunWallets\(\)[\s\S]*LORE_LIVE_TEST_\$\{role\}_ADDRESS[\s\S]*const wallets = DRY_RUN \? loadDryRunWallets\(\) : loadWallets\(\)/,
     "live canary dry-run must read only public role addresses and defer wallet-key loading to explicit execution",
   );
   assert.match(
@@ -15143,11 +14823,6 @@ async function main() {
   );
   assert.match(
     sqliteOperationsSource,
-    /LORE_BACKUP_REQUIRE_EXTERNAL: "1"[\s\S]*LORE_BACKUP_RETENTION_DAYS: "14"[\s\S]*Production backup source path must be absolute and outside the repo checkout/,
-    "SQLite production backup path guard regression must set test retention so it still verifies external-path rejection",
-  );
-  assert.match(
-    sqliteOperationsSource,
     /futureBackupRoot[\s\S]*utimesSync\(futureBackupSource, futureMtime, futureMtime\)[\s\S]*Backup source modified time must not be in the future[\s\S]*futureSourceBackupSummaryRejected: true/,
     "SQLite operations regression must prove strict backup summary rejects future-dated source DB timestamps",
   );
@@ -15504,8 +15179,8 @@ async function main() {
   const chatAuthRouteSource = readFileSync("app/api/chat/auth/route.ts", "utf8");
   assert.match(
     chatAuthRouteSource,
-    /return publicClient\.verifyMessage\(/,
-    "chat auth must verify the intended personal-sign message",
+    /async function verifyChatSignature\([\s\S]*return verifyChatWalletMessage\(\{[\s\S]*address,[\s\S]*message,[\s\S]*signature,[\s\S]*rpcWitnesses:/,
+    "chat auth must delegate the intended personal-sign message to the quorum verifier",
   );
   assert.doesNotMatch(
     chatAuthRouteSource,
@@ -16537,6 +16212,7 @@ async function main() {
 
   let session = null;
   let lockReleased = 0;
+  const autoMineControllerNow = 1_780_000_000_000;
   const controller = autoMineRuntimeController.createAutoMineRuntimeController({
     clearSession: () => {
       session = null;
@@ -16548,6 +16224,7 @@ async function main() {
     saveSession: (nextSession) => {
       session = nextSession;
     },
+    now: () => autoMineControllerNow,
   });
 
   controller.persistStart({ actor: "0x0000000000000000000000000000000000000001", betStr: "1.5", blocks: 3, rounds: 7 });
@@ -16562,6 +16239,11 @@ async function main() {
     rounds: 7,
     nextRoundIndex: 0,
     lastPlacedEpoch: null,
+    issuedAt: autoMineControllerNow,
+    expiresAt: autoMineControllerNow + miningShared.AUTO_MINER_AUTHORIZATION_TTL_MS,
+    maxSpendPerBetRaw: "4500000000000000000",
+    totalSpendRaw: "31500000000000000000",
+    remainingSpendRaw: "31500000000000000000",
   });
 
   session = { ...session, nextRoundIndex: 7 };
@@ -16580,27 +16262,6 @@ async function main() {
   });
   assert.equal(session.actor, "0x0000000000000000000000000000000000000001", "checkpoints must retain the run owner");
   assert.equal(session.runId, secondRunId, "checkpoints must retain the active Auto-Miner run id");
-  assert.deepEqual(controller.readRestorableRun("0x0000000000000000000000000000000000000001"), {
-    kind: "resume",
-    session: {
-      active: true,
-      runId: secondRunId,
-      actor: "0x0000000000000000000000000000000000000001",
-      betStr: "2.0",
-      blocks: 4,
-      rounds: 9,
-      nextRoundIndex: 2,
-      lastPlacedEpoch: "15",
-    },
-    params: {
-      actor: "0x0000000000000000000000000000000000000001",
-      betStr: "2.0",
-      blocks: 4,
-      rounds: 9,
-      startRoundIndex: 2,
-      lastPlacedEpoch: 15n,
-    },
-  });
   const validCheckpointSession = session;
   controller.persistCheckpoint({
     betStr: "2.0",
@@ -16619,20 +16280,6 @@ async function main() {
   });
   assert.equal(session, validCheckpointSession, "Auto-Miner checkpoints must not persist negative epoch values");
 
-  session = {
-    active: true,
-    runId: "run:invalid-epoch",
-    actor: "0x0000000000000000000000000000000000000001",
-    betStr: "2.0",
-    blocks: 4,
-    rounds: 9,
-    nextRoundIndex: 2,
-    lastPlacedEpoch: "1e3",
-  };
-  assert.deepEqual(controller.readRestorableRun("0x0000000000000000000000000000000000000001"), { kind: "cleared-invalid" });
-  assert.equal(session, null, "Auto-Miner restore must clear invalid persisted epoch checkpoints instead of throwing");
-
-  session = validCheckpointSession;
   session = { ...session, actor: "0x0000000000000000000000000000000000000002" };
   controller.persistCheckpoint({
     betStr: "2.0",
@@ -16645,7 +16292,19 @@ async function main() {
   assert.equal(session.nextRoundIndex, 2, "stale actor checkpoints must not advance a different actor's persisted session");
   const actorMismatchSession = session;
   assert.deepEqual(controller.readRestorableRun("0x0000000000000000000000000000000000000001"), { kind: "actor-mismatch" });
-  assert.equal(session, actorMismatchSession, "actor-mismatched restore checks must not clear another actor's saved run");
+  assert.deepEqual(
+    session,
+    { ...actorMismatchSession, active: false },
+    "actor-mismatched restore checks must pause, but not clear or reassign, another actor's saved run",
+  );
+
+  session = validCheckpointSession;
+  const pausedCheckpointSession = { ...validCheckpointSession, active: false };
+  assert.deepEqual(controller.readRestorableRun("0x0000000000000000000000000000000000000001"), {
+    kind: "paused",
+    session: pausedCheckpointSession,
+  });
+  assert.deepEqual(session, pausedCheckpointSession, "same-actor restore must remain paused until a fresh explicit start");
 
   controller.persistStart({ actor: "0x0000000000000000000000000000000000000001", betStr: "3.0", blocks: 2, rounds: 8 });
   const staleRunId = session.runId;
@@ -16784,20 +16443,24 @@ async function main() {
   );
   assert.equal(hashlessStillPending, "pending", "hashless nonce recovery must block duplicate sends while pending nonce is ahead");
   assert.deepEqual(nonceRecoveryCalls, ["latest", "pending"], "hashless nonce recovery must compare latest and pending nonce scopes");
-  const hashlessConfirmed = await miningTxPath.recoverPendingMiningTx(
+  const hashlessConsumedNonce = await miningTxPath.recoverPendingMiningTx(
     {
       getTransaction: async () => {
-        throw new Error("confirmed hashless recovery must not fetch a transaction");
+        throw new Error("consumed hashless recovery must not fetch a transaction");
       },
       getTransactionReceipt: async () => {
-        throw new Error("confirmed hashless recovery must not fetch a receipt");
+        throw new Error("consumed hashless recovery must not fetch a receipt");
       },
       getTransactionCount: async ({ blockTag }) => blockTag === "pending" ? 9 : 8,
     },
     pendingNonceState,
     200_000,
   );
-  assert.equal(hashlessConfirmed, "confirmed", "hashless nonce recovery must confirm once latest nonce advances past the tracked nonce");
+  assert.equal(
+    hashlessConsumedNonce,
+    "manual-reconciliation-required",
+    "a consumed nonce without a transaction hash must retain the duplicate-send block for manual reconciliation",
+  );
   const hashlessWithinGrace = await miningTxPath.recoverPendingMiningTx(
     {
       getTransaction: async () => {
@@ -16825,7 +16488,7 @@ async function main() {
     pendingNonceState,
     1_000_001,
   );
-  assert.equal(hashlessAfterGrace, "clear", "hashless nonce recovery may clear only after the grace window with no latest or pending nonce movement");
+  assert.equal(hashlessAfterGrace, "manual-reconciliation-required", "hashless nonce recovery must retain the duplicate-send block after the grace window");
 
   let finalizedAttempts = 0;
   const pendingAttempt = await manualMineAttempt.runManualMineAttempt({

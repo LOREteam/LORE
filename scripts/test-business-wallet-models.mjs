@@ -200,7 +200,8 @@ export async function runWalletModelTests() {
       getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
       getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 8 : 8,
     }, ambiguousPendingMiningState),
-    "confirmed",
+    "manual-reconciliation-required",
+    "a consumed nonce without a transaction hash must retain the duplicate-send block for manual reconciliation",
   );
   assert.equal(
     await miningTxPath.recoverPendingMiningTx({
@@ -216,7 +217,7 @@ export async function runWalletModelTests() {
       getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
       getTransactionCount: async () => 7,
     }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
-    "clear",
+    "manual-reconciliation-required",
   );
   assert.equal(
     await miningTxPath.recoverPendingMiningTx({

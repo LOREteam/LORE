@@ -249,6 +249,10 @@ async function runOgScenario() {
   const headers = requestHeaders({ host: "attacker.invalid" });
 
   const captured = await captureRouteLogs(async () => {
+    const headFirst = await dispatch(route, "HEAD", `${baseUrl}?kind=daily`, { headers });
+    const headSecond = await dispatch(route, "HEAD", `${baseUrl}?kind=daily`, { headers });
+    const afterHeads = await snapshotResponse(await dispatch(route, "GET", `${baseUrl}?kind=daily`, { headers }));
+
     const heldFirst = await dispatch(route, "GET", `${baseUrl}?kind=daily`, { headers });
     const heldSecond = await dispatch(route, "GET", `${baseUrl}?kind=daily`, { headers });
     const busy = await snapshotResponse(await dispatch(route, "GET", `${baseUrl}?kind=daily`, { headers }));
@@ -264,6 +268,9 @@ async function runOgScenario() {
     ));
 
     return {
+      headStatuses: [headFirst.status, headSecond.status],
+      headBodies: [headFirst.body !== null, headSecond.body !== null],
+      afterHeads,
       heldStatuses: [heldFirst.status, heldSecond.status],
       busy,
       baseline,

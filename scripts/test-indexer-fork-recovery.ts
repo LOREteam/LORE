@@ -20,11 +20,13 @@ async function main() {
     acquireIndexerLease,
     commitIndexerChunk,
     getIndexerBlockCheckpoints,
+    getMetaJsonStrict,
     patchJsonPath,
     putJsonPath,
     readJsonPath,
     releaseIndexerLease,
     rollbackIndexerToBlock,
+    runIndexerStorageTransaction,
     setMetaJson,
     upsertBets,
     upsertEpochMap,
@@ -274,7 +276,24 @@ async function main() {
       },
     });
     putJsonPath("gamedata/_meta/repairCursorBlock", "999");
+    setMetaJson("indexerReconcileBlockCursor", {
+      epoch: 902,
+      nextToBlock: "109",
+    });
+    runIndexerStorageTransaction(leaseOwnerToken, () => {
+      setMetaJson("indexerCatchupChunkBlocks", "2500");
+    });
     rollbackIndexerToBlock(100n, HASH_A, leaseOwnerToken);
+    assert.equal(
+      getMetaJsonStrict("indexerReconcileBlockCursor"),
+      null,
+      "fork rollback must atomically discard negative-progress reconcile state",
+    );
+    assert.equal(
+      getMetaJsonStrict("indexerCatchupChunkBlocks"),
+      "2500",
+      "fork rollback must preserve a conservative lease-guarded catch-up span",
+    );
 
     const scopedRollbackPredicates = [
       ["scoped_epochs", "resolved_block"],
@@ -331,7 +350,13 @@ async function main() {
           canonical: true,
         },
       });
+      setMetaJson("indexerCatchupChunkBlocks", null);
     });
+    assert.equal(
+      getMetaJsonStrict("indexerCatchupChunkBlocks"),
+      null,
+      "the final canonical chunk may clear catch-up state in the same transaction",
+    );
     assert.equal(
       (readJsonPath<Record<string, unknown>>("gamedata/batchClaims")?.["batch-canonical-replacement"] as Record<string, unknown>)?.canonical,
       true,
@@ -341,6 +366,29 @@ async function main() {
       undefined,
       "canonical replay must not resurrect an orphan event",
     );
+
+    runIndexerStorageTransaction(leaseOwnerToken, () => {
+      setMetaJson("indexerCatchupChunkBlocks", "2500");
+    });
+    assert.throws(
+      () => commitIndexerChunk({
+        leaseOwnerToken,
+        expectedPreviousBlock: 110n,
+        expectedPreviousBlockHash: HASH_C,
+        blockNumber: 120n,
+        blockHash: HASH_B,
+      }, () => {
+        setMetaJson("indexerCatchupChunkBlocks", null);
+        throw new Error("forced final chunk failure");
+      }),
+      /forced final chunk failure/,
+      "failed final chunk writes must roll back the catch-up-state clear",
+    );
+    assert.equal(getMetaJsonStrict("indexerCatchupChunkBlocks"), "2500");
+    assert.equal(readJsonPath<string>("gamedata/_meta/lastIndexedBlock"), "110");
+    runIndexerStorageTransaction(leaseOwnerToken, () => {
+      setMetaJson("indexerCatchupChunkBlocks", null);
+    });
 
     let checkpointReads = 0;
     const common = await findLatestCanonicalCheckpoint(
@@ -397,6 +445,7 @@ async function main() {
       lostLeaseCommitRejected: true,
       staleWriterRejected: true,
       canonicalLogValidation: true,
+      durableCatchupBackoff: true,
     }));
   } finally {
     releaseIndexerLease(leaseOwnerToken);

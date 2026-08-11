@@ -104,6 +104,19 @@ function testOgAdmissionSource() {
   );
   assert.match(
     routeSource,
+    /export async function HEAD\(request: NextRequest\)[\s\S]*enforceOgRateLimit\(request\)[\s\S]*new Response\(null,[\s\S]*"Content-Type": "image\/png"/,
+    "OG HEAD must be an explicit bodyless response with the same image media type",
+  );
+  const headStart = routeSource.indexOf("export async function HEAD");
+  assert.ok(headStart >= 0);
+  const headSource = routeSource.slice(headStart);
+  assert.doesNotMatch(
+    headSource,
+    /acquireResponseConcurrencySlot|new ImageResponse/,
+    "HEAD must never acquire or render against the process-global OG budget",
+  );
+  assert.match(
+    routeSource,
     /acquireResponseConcurrencySlot\([\s\S]*MAX_CONCURRENT_OG_RENDERS[\s\S]*if \(!releaseRenderSlot\) return renderBudgetExceededResponse\(\)/,
     "OG rendering must reject work when its process-global concurrency budget is full",
   );

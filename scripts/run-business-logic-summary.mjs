@@ -34,9 +34,23 @@ function countAssertionFailures(text) {
   return count;
 }
 
+const BUSINESS_TEST_MODULES = [
+  "scripts/test-business-logic.mjs",
+  "scripts/test-business-wallet-models.mjs",
+  "scripts/test-business-read-models.mjs",
+  "scripts/test-business-reward-scanner.mjs",
+  "scripts/test-business-live-state-api.mjs",
+  "scripts/test-business-indexer-normalization.mjs",
+  "scripts/test-business-runtime-recovery.mjs",
+  "scripts/test-business-cache-planners.mjs",
+];
+const businessTestSources = BUSINESS_TEST_MODULES.map((path) => readFileSync(path, "utf8"));
+
 function hasSourceGuard(pattern) {
-  const source = readFileSync("scripts/test-business-logic.mjs", "utf8");
-  return pattern.test(source);
+  return businessTestSources.some((source) => {
+    pattern.lastIndex = 0;
+    return pattern.test(source);
+  });
 }
 
 const result = spawnSync(process.execPath, testArgs, {
@@ -121,7 +135,8 @@ const safetyPoolClaimStateSafe =
   hasSourceGuard(/Safety Pool claims must surface ambiguous pending with tx links, partial-success rejection, and plain wallet rejection explicitly/) &&
   hasSourceGuard(/Safety Pool split claims must preserve partial success counts when later epochs fail/);
 const resolverClaimStateSafe =
-  hasSourceGuard(/wallet resolver, repair, withdraw, and transfer receipt helper must reject primary and late reverted receipts/) &&
+  hasSourceGuard(/wallet transfer receipt decisions must use the shared independent-client verifier/) &&
+  hasSourceGuard(/wallet intents must require exact two-client receipt agreement plus a stable quorum reread before success or revert can clear an intent/) &&
   hasSourceGuard(/resolver reward claims must simulate before gas fallback or wallet submission/) &&
   hasSourceGuard(/connected and embedded resolver claims must share a synchronous submission lock/) &&
   hasSourceGuard(/connected resolver claims must re-check actor ownership before send, after receipt, and in failure handling/) &&

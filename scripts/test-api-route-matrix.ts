@@ -118,6 +118,12 @@ function assertLogsRedacted(result: WorkerResult, label: string, forbidden: stri
 
 function validateOg(result: WorkerResult) {
   assert.equal(result.scenario, "og");
+  assert.deepEqual(result.headStatuses, [200, 200]);
+  assert.deepEqual(result.headBodies, [false, false], "explicit OG HEAD responses must be bodyless");
+  const afterHeads = asSnapshot(result.afterHeads, "OG after HEAD requests");
+  assert.equal(afterHeads.status, 200, "HEAD requests must not consume OG render capacity");
+  assert.equal(afterHeads.headers["content-type"], "image/png");
+  assert.equal(afterHeads.prefixHex, "89504e470d0a1a0a");
   assert.deepEqual(result.heldStatuses, [200, 200]);
   const busy = asSnapshot(result.busy, "OG busy");
   assertJsonStatus(busy, 503, "OG busy");

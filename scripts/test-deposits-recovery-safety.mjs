@@ -6,7 +6,7 @@ const depositsRouteSource = readFileSync("app/api/deposits/route.ts", "utf8");
 assert.match(
   depositsRouteSource,
   /getIndexerFinalityTargetBlock, parseIndexerFinalityBlocks[\s\S]*const INDEXER_FINALITY_BLOCKS = parseIndexerFinalityBlocks\(process\.env\.INDEXER_FINALITY_BLOCKS\)[\s\S]*const ENABLE_FINALIZED_CHAIN_RECOVERY = ENABLE_CHAIN_RECOVERY && INDEXER_FINALITY_BLOCKS > 0n[\s\S]*const finalityTargetBlock = getIndexerFinalityTargetBlock\(headBlock, INDEXER_FINALITY_BLOCKS\)/,
-  "deposits durable recovery must use the indexer's configured positive finality target",
+  "deposits response recovery must use the indexer's configured positive finality target",
 );
 
 assert.match(
@@ -24,13 +24,19 @@ assert.doesNotMatch(
 assert.match(
   depositsRouteSource,
   /const recoveryWindowStart =[\s\S]*finalityTargetBlock - RECENT_RECOVERY_BLOCK_WINDOW \+ 1n[\s\S]*const recoveryFromBlock =[\s\S]*if \(recoveryFromBlock > finalityTargetBlock\) return \[\][\s\S]*fetchDepositsFromChain\([\s\S]*recoveryFromBlock,[\s\S]*finalityTargetBlock/,
-  "deposits recovery must stay inside the finalized recent window before persisting",
+  "deposits recovery must stay inside the finalized recent response window",
 );
 
 assert.match(
   depositsRouteSource,
-  /const ENABLE_FINALIZED_CHAIN_RECOVERY = ENABLE_CHAIN_RECOVERY && INDEXER_FINALITY_BLOCKS > 0n[\s\S]*async function recoverDepositsAndPersist\([\s\S]*if \(!ENABLE_FINALIZED_CHAIN_RECOVERY\) return \[\][\s\S]*const headBlock = await publicClient\.getBlockNumber\(\)/,
-  "deposits recovery flag and positive finality must fail closed before any recovery RPC or durable write",
+  /const ENABLE_FINALIZED_CHAIN_RECOVERY = ENABLE_CHAIN_RECOVERY && INDEXER_FINALITY_BLOCKS > 0n[\s\S]*async function recoverDepositsFromChain\([\s\S]*if \(!ENABLE_FINALIZED_CHAIN_RECOVERY\) return \[\][\s\S]*const headBlock = await publicClient\.getBlockNumber\(\)/,
+  "deposits recovery flag and positive finality must fail closed before any recovery RPC",
+);
+
+assert.doesNotMatch(
+  depositsRouteSource,
+  /patchStorage|gamedata\/bets/,
+  "single-RPC public deposits recovery must remain response/cache-only and never write canonical bets",
 );
 
 assert.match(

@@ -772,6 +772,14 @@ export function runReadModelTests() {
       totalEpochs: 3,
       participatingEpochs: [9, 10],
       recentEpochs: [],
+      scan: {
+        mode: "summary",
+        complete: true,
+        processedEpochs: 0,
+        totalEpochs: 0,
+        nextOffset: null,
+        servingCommitted: false,
+      },
     },
   );
   assert.deepEqual(
@@ -795,6 +803,14 @@ export function runReadModelTests() {
       totalEpochs: 0,
       participatingEpochs: [3, 4],
       recentEpochs: [{ epoch: 5, pendingWei: "7", pending: "0", claimed: false, resolved: false, userVolumeWei: "0", rebatePoolWei: "0" }],
+      scan: {
+        mode: "summary",
+        complete: true,
+        processedEpochs: 0,
+        totalEpochs: 0,
+        nextOffset: null,
+        servingCommitted: false,
+      },
     },
     "rebate API normalization must reject non-canonical epoch and count evidence",
   );

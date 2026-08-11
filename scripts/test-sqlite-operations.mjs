@@ -109,8 +109,10 @@ assert.equal(backupRows, sourceRows);
 assert.throws(() => backup.exec("INSERT INTO drill_rows(payload) VALUES (zeroblob(1))"));
 backup.close();
 
-const guardedBackupPath = resolve(drillDir, "guarded-production-backup.sqlite");
-rmSync(guardedBackupPath, { force: true });
+const guardedBackupPath = resolve(
+  ".tmp",
+  `p1-guarded-production-backup-${process.pid}-${Date.now()}.sqlite`,
+);
 const guardedBackup = spawnSync(
   process.execPath,
   ["scripts/backup-sqlite.mjs", `--source=${sourcePath}`, `--out=${guardedBackupPath}`, "--summary-only"],
@@ -123,7 +125,7 @@ const guardedBackup = spawnSync(
 assert.notEqual(guardedBackup.status, 0, "production backup guard must reject repo-local backup paths");
 assert.match(
   `${guardedBackup.stderr}\n${guardedBackup.stdout}`,
-  /Production backup source path must be absolute and outside the repo checkout/,
+  /Production backup (?:source|output) path must be absolute and outside the repo checkout/,
 );
 assert.equal(existsSync(guardedBackupPath), false, "rejected production backup must not leave an output file");
 
