@@ -1,26 +1,58 @@
 # Remaining Worklist
 
-Last updated: 2026-08-09. This is the single active local work queue.
+Last updated: 2026-08-11. This is the single active local work queue.
 
 ## P0 release candidate and security
 
-- [x] Pin fixed `nanoid`/`js-yaml` versions, Node 24, and npm 11.5.1.
+- [x] Pin fixed `nanoid`/`js-yaml` versions, Node 24, and npm 11.5.1; a fresh
+      current-tree `npm ci` completed from the lockfile before repeated gates.
+- [ ] Resolve the six remaining full `npm ls --all --package-lock-only`
+      peer/resolution issues. Production-only `npm ls --omit=dev` is clean;
+      do not force wallet/Privy/Sentry upgrades without a scoped compatibility
+      decision and regression evidence.
 - [x] Make `check-local` hermetic and prove protected SQLite hash/mtime
       invariance across two full gates.
-- [x] Track V10 source, compiler config, manifest, line-ending policy, and
-      compact documentation.
-- [x] Reproduce and scan exact clean candidate
-      `06d0fe710f5991bbd4348eeb226cacb97d5a995c`.
-- [x] Implement targeted local fixes/tests for its 11 Medium and 7 Low findings.
+- [x] Track V10 source, compiler config, manifest, `.gitattributes` line-ending
+      policy, and compact documentation.
+- [ ] Normalize the remaining 219 CRLF/mixed tracked worktree files through a
+      separate reviewed Git commit; do not make an unreviewed broad rewrite of
+      the working tree.
+- [x] Reproduce and scan exact clean baseline
+      `46d3bc5072f07b4246ad1f7e516253aef5c8054b`; scan
+      `829f043d-0200-451f-b769-cd746800eb2a` reported `4 High`, `13 Medium`,
+      and `6 Low`.
+- [x] Implement targeted local fixes/tests for every permitted finding and the
+      bypasses found during final combined review.
 - [ ] Resolve the protocol-randomness High scope conflict. Do not claim closure
       while randomness/deployed-contract changes remain forbidden.
 - [x] Pass two consecutive integrated `check:summary` runs with protected
       DB/WAL/SHM identity preserved, zero temp check directories, and no port
       `3101` listener.
-- [x] Partition the new candidate into functional, tests/proof, CI, and compact
-      documentation commits.
-- [ ] Reproduce the resulting exact HEAD from a clean detached checkout and
-      freshly rescan it. No unscanned working-tree fix is scan closure by itself.
+- [x] Refresh the publication plan for all current `96` changed paths in
+      [`release-candidate-partition.md`](release-candidate-partition.md), with
+      no secrets, DB files, or generated artifacts.
+- [x] Commit the runtime/data, hermetic tooling, behavioral proof, and
+      toolchain partitions locally. Commit the compact documentation partition
+      next, then scan its exact SHA.
+- [x] Record the later direct-build DB correction: unchanged main DB bytes,
+      bootstrap-only WAL schema/index/meta changes, no user/runtime row
+      insert/delete; subsequent checks use temp DBs and preserve the new state.
+- [x] Record `c7662d53-c089-436a-93fd-f9506f2279f0` as unsealed and unusable;
+  do not retry it as a substitute for a fresh exact-commit scan.
+- [x] Run sealed working-tree scan
+  `ad1649f6-e2e4-448a-b199-687e77fa4c6d` for the 56-path
+  `89060390...2e8eacba1f58` snapshot; it found a Medium hashless-pending
+  duplicate-stake path and a Low Auto-Miner actor-switch path, both fixed
+  afterward with focused tests.
+- [ ] Re-scan the updated working tree, then the final committed SHA; the
+  sealed scan above predates the two follow-up security fixes and cannot prove
+  the exact release candidate has zero local High/Medium findings.
+- [x] Re-run the EVM-inclusive P1 runner after the post-scan wallet fixes:
+  `36/36` passes with the final SQLite backup assertion and EVM included.
+- [x] Route all build entry points through the adversarially tested hermetic
+      wrapper and reject raw production builds without its marker.
+- [ ] Address residual P2 build-runner work: outer timeout/process-tree
+      ownership and same-output-directory concurrency locking.
 
 ## P1 code hardening
 
@@ -51,16 +83,18 @@ Last updated: 2026-08-09. This is the single active local work queue.
 ### Test architecture and CI
 
 - [x] Keep `test:logic`/`test:logic:summary` stable while extracting wallet,
-      read-model, runtime-recovery, and cache/planner domains.
+      read-model, reward-scanner, live-state API, indexer-normalization,
+      runtime-recovery, and cache/planner domains.
 - [x] Add the bounded `test:p1-hardening` runner; current all-mode result is
-      `18/18` with the V10 EVM suite included.
+      `36/36` with the V10 EVM suite included; the core runner also executes
+      the isolated SQLite scope/backup/restore/WAL drill.
 - [x] Pass focused smoke with canonical `Login` aria-label and exact
       `Manual Bet` selectors; bind the extreme fixture to the authoritative
       chain epoch and keep huge-bigint coverage in a separate unit test.
 - [x] Add local CI definitions for Linux/Windows, scheduled dependency audits,
       explicit indexer/P1 rows, concurrency, timeouts, and compact artifacts.
 - [ ] Continue replacing source-string guards with imported behavior and reduce
-      the remaining approximately 17.2k-line business-test coordinator.
+      the remaining approximately 16.8k-line business-test coordinator.
 - [ ] Obtain green hosted CI evidence for the final exact commit.
 
 ## UX, accessibility, and performance
@@ -82,20 +116,23 @@ Last updated: 2026-08-09. This is the single active local work queue.
       wallet, and recovery evidence after the upstream blocker is resolved.
 - [x] Add a loopback-only bounded performance collector; self-test passes
       `10/10` and accepts up to two hours.
-- [x] Capture bounded `30.021s` evidence for build `JhHgSzv-ZUdb4JBBsIwV7`:
-      five routes `200`, missing assets/API writes/experiment long tasks `0`,
-      and external requests blocked. First-load gzip bytes are `/` `992897`,
-      `/admin` `862572`, `/jackpot` `848473`, `/privacy` `848475`, and `/terms`
-      `848473`.
+- [x] Capture current-tree bundle baseline: `229` files, `8469574` total bytes,
+      `7075415` JS bytes, largest `1002767` under limit `1250000`.
+- [x] Complete the two-hour local profile for the old exact `46d3bc50`
+      baseline: API writes `0`, external browser requests blocked, net heap
+      delta `-1099488`, peak `+10091819`, and DOM slope `0`.
 - [ ] Repeat route compression/chunk/polling/rerender/long-task evidence on the
       final exact candidate and prove native hidden-state behavior.
-- [ ] Run the separate two-hour idle/simulated Auto-Miner heap-growth profile
-      without changing intentional refresh cadence.
+- [ ] Repeat and evaluate the two-hour idle/simulated Auto-Miner profile on the
+      final exact SHA without changing intentional refresh cadence.
 
 ## Linea Sepolia live boundary
 
-- [ ] Generate a new read-only dry-run Preview binding exact roles/wallets,
-      calls, value/gas caps, maximum transactions, and stop conditions.
+- [x] Generate a fresh read-only V10 dry-run Preview binding roles/wallets,
+      calls, value/gas caps, maximum transactions, and stop conditions. The
+      2026-08-11 result has planner/pending/matrix exits `0`, 6 rounds, 12
+      planned bet transactions, no signing material, no wallet client, no
+      contract write, and explicitly blocks G10/G11.
 - [ ] Stop and request separate fresh exact bounded consent immediately after
       that Preview. Without it, do not load signing material or submit a write.
 - [ ] Only after consent, run the authorized minimal tranche and reconcile
@@ -110,3 +147,8 @@ production evidence exists: domain/HTTPS, Privy origins, ownership/randomness
 sign-off, supervised hosts, two replicas, fresh finality/indexer DB, real
 backup/restore, monitoring/Resend/Sentry, wallet/mobile QA, live
 canary/recovery, and final security/QA sign-off.
+
+Latest prelaunch evidence passes every required-local row but still reports
+`24` external/status blockers and `41` mainnet environment failures. A fresh
+Sepolia Preview exists but confers no authorization; the testnet soak has not
+started.

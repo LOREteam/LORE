@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-09.
+Last updated: 2026-08-11.
 
 Detailed history is preserved in:
 
@@ -12,42 +12,76 @@ Open archived evidence only when a task needs it. The single active queue is
 
 ## Candidate and provenance
 
-- The prior exact clean, reproduced, and scanned release candidate is
-  `06d0fe710f5991bbd4348eeb226cacb97d5a995c`.
-- The new hardening candidate is partitioned into functional commit
-  `d97f4f80`, tests/proof commit `c40ca50d`, CI commit `e3f37589`, and this
-  compact documentation update. Clean detached reproduction and a fresh scan
-  of the resulting immutable HEAD are still pending.
-- The prior candidate includes functional commit `b36b37ac`, reproducibility commit
-  `caaeb9fe`, the compact documentation archive, and isolated line-ending
-  normalization.
-- Its clean-checkout proof used Node 24/npm 11.5.1, clean `npm ci`, both
-  dependency gates, V10 provenance, two hermetic local gates, local proof, and
-  prelaunch; the checkout remained clean and the protected SQLite files did not
-  drift.
+- The last exact clean baseline is
+  `46d3bc5072f07b4246ad1f7e516253aef5c8054b`. Its detached reproduction used
+  Node 24/npm 11.5.1 and clean `npm ci`; V10 provenance, two full
+  `check:summary` passes, and prelaunch required-local rows passed.
+- The verified hardening candidate is partitioned into local commits
+  `69237438` (runtime/data boundaries), `569e87f0` (hermetic tooling),
+  `6137dcde` (behavioral security/P1 gates), and `80ce70b7` (toolchain and
+  line endings). This documentation commit is the final local partition before
+  an exact-revision security scan.
 - Live V10 provenance on the current tree passes with solc `0.8.36`, optimizer
   runs `200`, EVM `osaka`, runtime size `16488` bytes, manifest match, ABI
   snapshot match, and reviewed-fragment digest
   `69218b3a06dbe7faf71f17a33e6a4b21b2e033c6fdfa5f4ca2008dc7a2f1900c`.
-- After smoke-compatibility fixes, two consecutive full
-  `npm.cmd run check:summary` runs exited `0`; each ended with
-  `Local check completed successfully`. Before, between, and after the runs,
-  protected `data/lore-v10.sqlite`, `-wal`, and `-shm` were identical by
-  length, UTC mtime, and SHA-256 (`D2CF3A...`, `9E5CA5...`, `E9C61E...`).
-  Residual `.tmp/check-local-*` count was `0` and port `3101` had no listener.
+- The final current-tree verification includes two consecutive
+  `npm.cmd run check:summary` exits `0`, each ending with
+  `Local check completed successfully`. After each, protected SQLite identity
+  was unchanged, `.tmp/check-local-*` and system `lore-build-*` residues were
+  `0`, and port `3101` had no listener.
+- A fresh current-tree `npm.cmd ci` completed with `1195` packages from the
+  lockfile. The direct `accounts` dependency is required by Wagmi's tempo
+  connector and was retained after a build regression proved that dependency.
+  Typecheck, hermetic production build, and the EVM-inclusive P1 runner pass
+  against this lockfile.
+- `npm ls --omit=dev --package-lock-only` is clean and the exact `nanoid`
+  (`3.3.17`) and `js-yaml` (`4.3.1`) overrides resolve. Full
+  `npm ls --all --package-lock-only` still reports six peer/resolution issues
+  in the Privy/Wagmi/Sentry/toolchain graph; resolving those would require
+  wallet/SDK dependency changes and remains explicit P0 work.
+- The protected base DB remains byte-identical at SHA-256 `D2CF3A...C0061ABC`,
+  length `221184`, and its original mtime. A prior direct non-hermetic build
+  changed WAL/SHM only. Forensic analysis on preserved copies found no new
+  business, event, or user rows: the delta was two snapshot meta values and one
+  empty index. Current WAL/SHM are `B6E249...A8DFB53` and
+  `4A0365...7E73C5`. They must not be restored, checkpointed, or deleted as a
+  cleanup shortcut.
+- All build entry points now use a unique system-temp SQLite path, snapshot the
+  canonical DB/WAL/SHM, reject protected reparse paths, verify identity after
+  the child exits, and clean only the unchanged lexical temp directory. Raw
+  `next build` fails closed without the wrapper marker.
+- `.gitattributes` now declares LF text checkout plus binary database/WASM
+  exclusions while preserving the existing `.bat`/`.cmd` CRLF rules. The
+  current checkout still has 219 CRLF/mixed tracked worktree files; mass
+  normalization remains a separate reviewed commit, not a broad unreviewed
+  rewrite.
 
 ## Security scan and remediation
 
-- Standard scan `1e481951-231e-4901-bdba-59eb14942070` ran against exact commit
-  `06d0fe710f5991bbd4348eeb226cacb97d5a995c` and reported `1 High`,
-  `11 Medium`, and `7 Low` findings.
-- The new hardening candidate contains targeted local remediations and executable
-  regression coverage for all 11 Medium and 7 Low findings, including admin
-  sessions, wallet transaction ambiguity/nonces, fee caps, deposits/finality,
-  jackpot admission, indexer rollback/lease/identity, bootstrap locking, bounded
-  health work, proof redaction, process identity, trusted origins, and import
-  containment. These are not closed until the new exact commit is reproduced
-  and freshly rescanned.
+- Standard scan `829f043d-0200-451f-b769-cd746800eb2a` ran against exact
+  baseline `46d3bc5072f07b4246ad1f7e516253aef5c8054b` and reported `4 High`,
+  `13 Medium`, and `6 Low` findings.
+- The current tree contains targeted fixes and executable regressions for every
+  permitted finding plus the bypasses found during the final combined diff
+  review. The resulting controls cover admin/auth, keeper/bootstrap signing,
+  wallet nonce/receipt ambiguity and fee limits, Auto-Miner authorization,
+  deposits and API recovery provenance, indexer quorum/budgets/leases/rollback,
+  Preview credential isolation, health origins, and hermetic builds.
+- The attempted standard working-tree scan
+  `c7662d53-c089-436a-93fd-f9506f2279f0` is unsealed: its artifact directory
+  disappeared before record and the scan service is account-limited. It is not
+  exact-SHA closure; after Git publication, the unchanged final SHA still needs
+  a fresh exact-revision scan.
+- A later sealed working-tree scan
+  `ad1649f6-e2e4-448a-b199-687e77fa4c6d` reviewed the 56-path snapshot
+  `89060390...2e8eacba1f58`. It found one Medium hashless-pending duplicate
+  stake path and one Low Auto-Miner actor-switch authorization path. Both have
+  now been fixed with focused tests, but the scan predates those edits and is
+  not final-SHA closure. Re-scan the eventual committed candidate.
+- The post-scan wallet follow-up is covered by the current integrated P1
+  runner: all `36/36` bounded suites, including EVM fuzz, now pass under the
+  same npm invocation used by prelaunch.
 - The High protocol finding remains open: permissionless conditional-revert
   grinding can bias block-derived randomness during epoch resolution. A real
   fix requires changing the randomness design and deploying replacement
@@ -56,17 +90,23 @@ Open archived evidence only when a task needs it. The single active queue is
 
 ## P1 local engineering state
 
-- `test:p1-hardening:all:summary` currently passes `18/18` bounded suites with
+- `test:p1-hardening:all:summary` currently passes `36/36` bounded suites with
   the EVM runner included. The EVM suite exercises eight seeded epochs,
   84 runtime transactions, 33 conservation checks, 39 expected reverts,
   duplicate/replay/late paths, large values, gas bounds, reentrancy, and hostile
   ERC-20 behavior. This is local VM evidence, not Linea sequencer evidence.
+- A fresh isolated core P1 run also passed `35/35` with the EVM step skipped;
+  it now includes the real SQLite scope/backup/restore/WAL drill rather than
+  relying on three duplicate source-shape assertions. Its temporary DB and
+  drill directory were removed by the runner.
 - The compiler-derived V10 ABI snapshot, reviewed fragments, and semantic digest
   are wired into shared frontend, route, indexer, canary, and keeper paths with
   provenance drift checks. Repository non-test and test `parseAbi(` recounts
   are both zero.
-- Wallet hardening now covers hashless ambiguous broadcasts, tracked pending
-  approval nonces, actor/signer changes, retries, reload/reconnect, wrong
+- Wallet hardening now blocks hashless ambiguous broadcasts until manual
+  reconciliation and binds Auto-Miner send-time authorization to the live
+  preferred actor. It also covers tracked pending approval nonces, actor/signer
+  changes, retries, reload/reconnect, wrong
   network, two-tab duplication, and terminal transaction states in executable
   local tests. Real Privy/wallet signing proof remains external.
 - Indexer storage now couples events/checkpoints/cursor atomically, supports
@@ -76,8 +116,9 @@ Open archived evidence only when a task needs it. The single active queue is
   proof for jackpots/OG, deposits, and health behavior. Production two-replica
   evidence remains a G1-G14 requirement.
 - Business tests have begun domain extraction into wallet, read-model,
-  runtime-recovery, and cache/planner modules; the main file is now about 17.2k
-  lines. Further source-string reduction remains open.
+  reward-scanner, live-state API, indexer-normalization, runtime-recovery, and
+  cache/planner modules. Further
+  source-string reduction remains open.
 - CI is committed with Linux and Windows rows, scheduled dependency
   audits, explicit indexer-storage/P1 gates, concurrency, timeouts, and bounded
   artifacts. No hosted run for the new candidate has completed yet.
@@ -95,13 +136,19 @@ Open archived evidence only when a task needs it. The single active queue is
   the email control's accessible name becomes `Submit` and the close target is
   `24x24`; no supported config/API fixes either issue. No DOM/CSS or
   `node_modules` hack was used, so full real-modal closure remains open.
-- Latest bounded performance evidence for build
-  `JhHgSzv-ZUdb4JBBsIwV7` ran `30.021s`: all five routes returned `200`, zero
-  assets were missing, API writes were zero, external requests were blocked,
-  and experiment long tasks were zero. First-load gzip bytes were `/` `992897`,
-  `/admin` `862572`, `/jackpot` `848473`, `/privacy` `848475`, and `/terms`
-  `848473`. This is not final-candidate or two-hour proof; native hidden-state
-  behavior and the two-hour heap/long-task soak remain open.
+- Current-tree bundle proof passes across `229` files: `8469574` total bytes,
+  `7075415` JavaScript bytes, largest file `1002767`, below the `1250000`
+  limit; CSS is `216635` and WASM is `1056860` bytes.
+- A completed two-hour local performance run exists only for the old exact
+  `46d3bc50` baseline: duration `7200035ms`, API writes `0`, external browser
+  requests blocked, heap delta `-1099488`, peak `+10091819`, and DOM slope `0`.
+  Native hidden-state throttling was not observed. It is useful baseline
+  evidence, not evidence for the final committed candidate.
+- The 2026-08-11 09:00Z prelaunch passes every required-local row: V9/V10
+  compile/invariants, P1/EVM `36/36`, typecheck, 457-file lint, hermetic build,
+  bundle baseline, SQLite operations, logic, security-followup, and dependency
+  proofs. The all-deps proof retains `9` known development-toolchain High
+  advisories.
 
 ## External and live blockers
 
@@ -110,14 +157,20 @@ Open archived evidence only when a task needs it. The single active queue is
   [`docs/mainnet-proof-record.md`](mainnet-proof-record.md).
 - No wallet signing, chain write, deployment, approval, bet, claim, nonce
   replacement, canary, or soak was performed during this work.
-- The existing Sepolia Preview is stale and authorizes nothing. Before any
-  write, generate a fresh exact bounded dry-run Preview, then obtain separate
-  fresh exact consent.
+- A fresh Sepolia V10 Preview completed on 2026-08-11 with a read-only planner,
+  pending-nonce dry run, and a six-round/12-planned-bet matrix; it recorded
+  `transactionSent=false`, no signing material, no wallet client, and no
+  contract write. It deliberately blocks G10/G11 and authorizes nothing.
+  Before any write, obtain separate fresh exact consent.
 - Current policy requires G10/G11 evidence on Linea mainnet and says Sepolia
   closes no G1-G14 gate. The requested Sepolia soak therefore remains testnet
   evidence unless that conflict is explicitly resolved.
 - Deployed Sepolia V10 remains executable but has an exact metadata-only
   bytecode mismatch. Do not bypass or silently relabel it.
+- The latest prelaunch report has `24` external/status command blockers across
+  backup, canary, chain, contract, environment, host, indexer, launch,
+  monitoring, QA, restore, and sign-off groups. Mainnet environment validation
+  has `41` failures; the testnet soak has not started.
 
 ## Safety boundaries
 
@@ -128,3 +181,5 @@ Open archived evidence only when a task needs it. The single active queue is
   files, or private environment values.
 - Do not claim production, mainnet, G1-G14, browser, or long-soak readiness from
   local checks alone.
+- Residual local P2 engineering work remains for hermetic-wrapper timeout/
+  process-tree ownership and same-output-directory concurrency locking.

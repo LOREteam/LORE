@@ -1,6 +1,6 @@
 # V10 Canary Dry-Run Preview
 
-Last updated: 2026-08-04T19:41:53.702Z.
+Last updated: 2026-08-11T07:25:38.174Z.
 
 Scope: Linea Sepolia V10 read-only and dry-run readiness only. This document is
 not an authorization to send transactions, start a soak, deploy, or change
@@ -18,6 +18,7 @@ npm.cmd run preview:canary:v10:dry-run
 - rpcLabel: linea-sepolia-public-fallback
 - transactionSent: false
 - signingMaterialLoaded: false
+- operationalBoundaryVerified: true
 - walletClientCreated: false
 - contractWriteSubmitted: false
 - dryRunProofBlocksG10G11: true
@@ -49,7 +50,7 @@ Redacted excerpt:
 > npm run proof:contract-compile:v10:summary && tsx scripts/plan-v10-postdeploy-canary.ts --summary-only
 > linea-miner@0.1.0 proof:contract-compile:v10:summary
 > node scripts/check-contract-compilation-provenance.mjs --target=v10 --summary-only
-{"status":"pass","target":"v10","compilerVersion":"0.8.36+commit.8a079791.Emscripten.clang","settings":{"optimizer":true,"runs":200,"viaIR":false,"evmVersion":"osaka"},"bytecodeBytes":17278,"runtimeBytecodeBytes":16488,"executableRuntimeBytes":16435,"manifestMatches":true,"wouldWrite":false}
+{"status":"pass","target":"v10","compilerVersion":"0.8.36+commit.8a079791.Emscripten.clang","settings":{"optimizer":true,"runs":200,"viaIR":false,"evmVersion":"osaka"},"bytecodeBytes":17278,"runtimeBytecodeBytes":16488,"executableRuntimeBytes":16435,"abiFragmentsSha256":"<redacted>","manifestMatches":true,"abiSnapshotMatches":true,"wouldWrite":false}
 {
 "mode": "read-only",
 "network": "sepolia",
@@ -63,8 +64,8 @@ Redacted excerpt:
 "outputAddressFree": true
 },
 "snapshot": {
-"blockNumber": "31326827",
-"timestamp": "1785872479"
+"blockNumber": "31471868",
+"timestamp": "1786433103"
 },
 "scan": {
 "fromEpoch": "1",
@@ -114,7 +115,8 @@ npm.cmd run live:canary:v10:matrix
 - plannedBetTx: 12
 - plannedStake: 0.84
 - walletPreflightReady: 3/3
-- log: data\live-test-runs\live-canary-2026-08-04T19-41-51-949Z.jsonl
+- signingMaterialLoaded: false
+- log: data\live-test-runs\live-canary-2026-08-11T07-25-36-747Z.jsonl
 
 Redacted excerpt:
 
@@ -127,11 +129,12 @@ Redacted excerpt:
 [live-canary] rpcLabel=linea-sepolia-public-fallback readRpcCount=2 broadcastRpcCount=3
 [live-canary] rpcFailoverInjection=disabled
 [live-canary] v10Matrix=bounded execution=dry-run
+[live-canary] operationalBoundary signingMaterialLoaded=false
 [live-canary] rounds=6 plannedBetTx=12 plannedStake=0.84 LINEA randomize=no configuredTotal=0.01..0.03 tiles=1..25
 [live-canary] emptyResolveBootstrap=disabled
 [live-canary] resolveTxLimit=5
 [live-canary] feeMeasurement repeatSameBet=enabled forceAllowanceApprove=disabled
-[live-canary] log=data\live-test-runs\live-canary-2026-08-04T19-41-51-949Z.jsonl
+[live-canary] log=data\live-test-runs\live-canary-2026-08-11T07-25-36-747Z.jsonl
 [live-canary] walletPreflight ready=3/3 approvalsRequired=2 roles=MANUAL,AUTOMINER_A,AUTOMINER_B
 ```
 
@@ -140,7 +143,7 @@ Redacted excerpt:
 Command:
 
 ```powershell
-node scripts/analyze-live-canary-proof.mjs data\live-test-runs\live-canary-2026-08-04T19-41-51-949Z.jsonl --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix
+node scripts/analyze-live-canary-proof.mjs data\live-test-runs\live-canary-2026-08-11T07-25-36-747Z.jsonl --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix
 ```
 
 - exit: 1
@@ -152,8 +155,8 @@ Redacted excerpt:
 
 ```text
 # Live Canary Proof Summary
-Log: live-canary-2026-08-04T19-41-51-949Z.jsonl
-Timestamp: 2026-08-04T19:41:53.691Z
+Log: live-canary-2026-08-11T07-25-36-747Z.jsonl
+Timestamp: 2026-08-11T07:25:38.165Z
 Strict: yes
 Require epoch-bound bets: yes
 Require V10 gas matrix: yes
