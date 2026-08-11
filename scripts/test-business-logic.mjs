@@ -27,6 +27,7 @@ import { runProductionRuntimeStrictTests } from "./test-business-production-runt
 import { runJackpotAndRebateSecurityTests } from "./test-business-jackpot-rebate-security.mjs";
 import { runChatAndClientSafetyTests } from "./test-business-chat-client-safety.mjs";
 import { runReleaseOperationsTests } from "./test-business-release-operations.mjs";
+import { runRuntimeMetricsTests } from "./test-business-runtime-metrics.mjs";
 import * as envParsingModule from "../config/envParsing.ts";
 import * as scriptEnvParsingModule from "./env-parsing.mjs";
 import * as publicConfigModule from "../config/publicConfig.ts";
@@ -36,7 +37,6 @@ import * as routeErrorModule from "../app/api/_lib/routeError.ts";
 import * as clientIdentityModule from "../app/api/_lib/clientIdentity.ts";
 import * as externalRateLimitModule from "../app/api/_lib/externalRateLimit.ts";
 import * as sharedRateLimitModule from "../app/api/_lib/sharedRateLimit.ts";
-import * as runtimeMetricsModule from "../app/api/_lib/runtimeMetrics.ts";
 import * as autoMineErrorModule from "../app/hooks/useMiningAutoMineError.ts";
 import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
 import * as safetyPoolClaimThresholdModule from "../app/lib/safetyPoolClaimThreshold.ts";
@@ -412,7 +412,6 @@ async function main() {
   const clientIdentity = clientIdentityModule.default ?? clientIdentityModule;
   const externalRateLimit = externalRateLimitModule.default ?? externalRateLimitModule;
   const sharedRateLimit = sharedRateLimitModule.default ?? sharedRateLimitModule;
-  const runtimeMetrics = runtimeMetricsModule.default ?? runtimeMetricsModule;
   const autoMineError = autoMineErrorModule.default ?? autoMineErrorModule;
   const miningShared = miningSharedModule.default ?? miningSharedModule;
   const safetyPoolClaimThreshold = safetyPoolClaimThresholdModule.default ?? safetyPoolClaimThresholdModule;
@@ -424,95 +423,7 @@ async function main() {
   const sentrySanitize = sentrySanitizeModule.default ?? sentrySanitizeModule;
   const runtimeMonitor = runtimeMonitorModule.default ?? runtimeMonitorModule;
   const boundedJsonBody = boundedJsonBodyModule.default ?? boundedJsonBodyModule;
-  const processSnapshot = runtimeMetrics.getRuntimeProcessSnapshot();
-  for (const field of ["uptimeSeconds", "rssBytes", "heapUsedBytes", "heapTotalBytes", "externalBytes"]) {
-    assert.ok(Number.isFinite(processSnapshot[field]) && processSnapshot[field] >= 0, `${field} must be bounded runtime evidence`);
-  }
-  const originalProcessUptime = process.uptime;
-  const originalProcessMemoryUsage = process.memoryUsage;
-  try {
-    process.uptime = () => Number.NaN;
-    process.memoryUsage = () => ({
-      rss: Number.MAX_SAFE_INTEGER + 1,
-      heapUsed: -1,
-      heapTotal: 123.5,
-      external: 1024,
-      arrayBuffers: 0,
-    });
-    const malformedProcessSnapshot = runtimeMetrics.getRuntimeProcessSnapshot();
-    assert.equal(malformedProcessSnapshot.uptimeSeconds, 0, "runtime process uptime must fail closed on malformed values");
-    assert.equal(
-      malformedProcessSnapshot.rssBytes,
-      Number.MAX_SAFE_INTEGER,
-      "runtime process memory metrics must saturate oversized values",
-    );
-    assert.equal(malformedProcessSnapshot.heapUsedBytes, 0, "runtime process memory metrics must reject negative values");
-    assert.equal(malformedProcessSnapshot.heapTotalBytes, 0, "runtime process memory metrics must reject fractional values");
-    assert.equal(malformedProcessSnapshot.externalBytes, 1024, "runtime process memory metrics must preserve valid values");
-  } finally {
-    process.uptime = originalProcessUptime;
-    process.memoryUsage = originalProcessMemoryUsage;
-  }
-  const runtimeMetricsSource = readFileSync("app/api/_lib/runtimeMetrics.ts", "utf8");
-  assert.match(
-    runtimeMetricsSource,
-    /function normalizeRouteMetricLatencyMs\(value: number\)[\s\S]*Number\.isFinite\(value\)[\s\S]*ROUTE_METRIC_LATENCY_MAX_MS[\s\S]*function formatRouteMetricAverageLatencyMs\(value: number\)[\s\S]*normalizeRouteMetricLatencyMs\(value\)\.toFixed\(2\)/,
-    "runtime metrics must bound latency values before snapshot formatting",
-  );
-  assert.match(
-    runtimeMetricsSource,
-    /const latencyMs = normalizeRouteMetricLatencyMs\(Date\.now\(\) - token\.startedAt\)[\s\S]*avgLatencyMs: formatRouteMetricAverageLatencyMs\(metric\.avgLatencyMs\)/,
-    "runtime metrics must normalize both measured latency and published average latency",
-  );
-  assert.match(
-    runtimeMetricsSource,
-    /MAX_ROUTE_METRIC_ENTRIES[\s\S]*MAX_ROUTE_METRIC_KEY_LENGTH[\s\S]*function normalizeRouteMetricKey\(route: string\)[\s\S]*sanitizeSentryPayload\(route\)[\s\S]*slice\(0, MAX_ROUTE_METRIC_KEY_LENGTH\)[\s\S]*function selectRouteMetricKey\(route: string\)[\s\S]*OVERFLOW_ROUTE_METRIC_KEY/,
-    "runtime metrics must redact, clamp, and cap route metric labels before map writes",
-  );
-  assert.match(
-    runtimeMetricsSource,
-    /MAX_ROUTE_METRIC_COUNT = Number\.MAX_SAFE_INTEGER[\s\S]*function incrementRouteMetricCount\(value: number\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*Math\.min\(value \+ 1, MAX_ROUTE_METRIC_COUNT\)[\s\S]*function normalizeRouteMetricStatus\(value: number, fallback: number\)[\s\S]*value >= 100 && value <= 599/,
-    "runtime metrics must bound counters and HTTP status values before publishing monitoring snapshots",
-  );
-  assert.match(
-    runtimeMetricsSource,
-    /MAX_RUNTIME_PROCESS_METRIC = Number\.MAX_SAFE_INTEGER[\s\S]*function normalizeRuntimeProcessMetric\(value: number\)[\s\S]*Number\.isFinite\(value\)[\s\S]*MAX_RUNTIME_PROCESS_METRIC[\s\S]*function normalizeRuntimeProcessUptimeSeconds\(value: number\)[\s\S]*Math\.floor\(value\)[\s\S]*getRuntimeProcessSnapshot\(\)[\s\S]*normalizeRuntimeProcessUptimeSeconds\(process\.uptime\(\)\)[\s\S]*normalizeRuntimeProcessMetric\(memory\.rss\)/,
-    "runtime process snapshots must normalize process evidence before publishing monitoring health",
-  );
-  assert.doesNotMatch(
-    runtimeMetricsSource,
-    /metric\.avgLatencyMs\.toFixed\(2\)|const latencyMs = Date\.now\(\) - token\.startedAt|metric\.(?:requests|successes|errors|cacheHits|staleServed|inflightJoined|backgroundRefreshes|inflight) \+= 1|metric\.lastStatus = status|uptimeSeconds: Math\.floor\(process\.uptime\(\)\)|rssBytes: memory\.rss|heapUsedBytes: memory\.heapUsed|heapTotalBytes: memory\.heapTotal|externalBytes: memory\.external/,
-    "runtime metrics must not publish raw latency arithmetic directly",
-  );
-  const unsafeRouteMetricToken = runtimeMetrics.beginRouteMetric(
-    `api/runtime/probe https://rpc.example.test/private privateKey=${"a".repeat(64)}`,
-  );
-  runtimeMetrics.finishRouteMetric(unsafeRouteMetricToken, 200);
-  const unsafeRouteMetricKeys = Object.keys(runtimeMetrics.getRuntimeMetricsSnapshot())
-    .filter((key) => key.includes("api/runtime/probe"));
-  assert.equal(unsafeRouteMetricKeys.length, 1, "runtime metrics must keep a normalized route label for probe routes");
-  assert.doesNotMatch(
-    unsafeRouteMetricKeys[0],
-    /rpc\.example|private|a{64}|https?:/i,
-    "runtime metrics route labels must not publish provider URLs or secret-looking material",
-  );
-  assert.ok(unsafeRouteMetricKeys[0].length <= 120, "runtime metrics route labels must be length-bounded");
-  const invalidSuccessStatusToken = runtimeMetrics.beginRouteMetric("api/runtime/status-invalid-success");
-  runtimeMetrics.finishRouteMetric(invalidSuccessStatusToken, Number.NaN);
-  const invalidFailureStatusToken = runtimeMetrics.beginRouteMetric("api/runtime/status-invalid-failure");
-  runtimeMetrics.failRouteMetric(invalidFailureStatusToken, 999);
-  const runtimeMetricStatusSnapshot = runtimeMetrics.getRuntimeMetricsSnapshot();
-  assert.equal(
-    runtimeMetricStatusSnapshot["api/runtime/status-invalid-success"]?.lastStatus,
-    200,
-    "successful runtime metrics must normalize malformed statuses to a safe success status",
-  );
-  assert.equal(
-    runtimeMetricStatusSnapshot["api/runtime/status-invalid-failure"]?.lastStatus,
-    500,
-    "failed runtime metrics must normalize malformed statuses to a safe failure status",
-  );
-
+  runRuntimeMetricsTests();
   const sanitizedSentryPayload = sentrySanitize.sanitizeSentryPayload({
     exception: {
       values: [{
