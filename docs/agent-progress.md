@@ -20,10 +20,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   property runner, wallet lifecycle hardening, atomic fork-aware indexer storage
   with a single-writer lease, black-box API/shared-admission tests, and bounded
   P1 orchestration.
-- Split eleven business-test domains out of the monolith, including the isolated
-  game-data/presentation assertions. Its pure game-data bounds now use direct
-  behavioral inputs instead of duplicated source-shape regexes; canary-health
-  and runtime-polling transitions now do the same. CI was updated locally.
+- Split twelve business-test domains out of the monolith, including the isolated
+  game-data/presentation and chat-polling assertions. Pure game-data, canary-health,
+  game-polling, and chat retry/polling bounds now use direct behavioral inputs
+  instead of duplicated source-shape regexes. CI was updated locally.
   for Windows, scheduled audits, indexer/P1 coverage, timeouts, concurrency, and
   compact artifacts.
 - Follow-up `f01aa22` extracts wallet-runtime state-machine coverage; direct

@@ -141,10 +141,10 @@ Open archived evidence only when a task needs it. The single active queue is
 - Business tests have begun domain extraction into wallet, read-model,
   reward-scanner, live-state API, indexer-normalization, runtime-recovery,
   cache/planner, wallet-runtime, history-presentation, game-data/presentation,
-  and runtime-polling modules. The coordinator is now 15,660 lines; the pending-nonce Preview network/credential
+  runtime-polling, and chat-polling modules. The coordinator is now 15,612 lines; the pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than
-  duplicate source-shape checks, as do canary-health origin/metric and polling
+  duplicate source-shape checks, as do canary-health, game and chat polling
   interval state transitions.
   Further
   source-string reduction remains open.
