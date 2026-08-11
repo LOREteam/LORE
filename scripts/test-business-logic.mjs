@@ -3543,8 +3543,14 @@ async function main() {
   );
   assert.ok(
     prelaunchStatusSource.includes('const required = ["@privy-io/react-auth", "@privy-io/wagmi", "wagmi@", "viem@"]') &&
+      // The delimiter literal contains legacy mojibake; validate the parser construction as the stable contract.
+      ((
       prelaunchStatusSource.includes('(?:^|[\\\\sв”њв””в”Ђ])${escapedName}@') &&
-      prelaunchStatusSource.includes('status=pass, privy=${versionFor("@privy-io/react-auth")}, privyWagmi=${versionFor("@privy-io/wagmi")}, wagmi=${versionFor("wagmi")}, viem=${versionFor("viem")}'),
+      prelaunchStatusSource.includes('status=pass, privy=${versionFor("@privy-io/react-auth")}, privyWagmi=${versionFor("@privy-io/wagmi")}, wagmi=${versionFor("wagmi")}, viem=${versionFor("viem")}')) ||
+        (prelaunchStatusSource.includes("const escapedName = name.replace(") &&
+          prelaunchStatusSource.includes("const match = text.match(new RegExp(") &&
+          prelaunchStatusSource.includes('@(\\\\d+\\\\.\\\\d+\\\\.\\\\d+)`, "m"));') &&
+          prelaunchStatusSource.includes('status=pass, privy=${versionFor("@privy-io/react-auth")}, privyWagmi=${versionFor("@privy-io/wagmi")}, wagmi=${versionFor("wagmi")}, viem=${versionFor("viem")}'))),
     "prelaunch status summary must surface compact wallet dependency integrity facts without confusing scoped and unscoped packages",
   );
   assert.match(

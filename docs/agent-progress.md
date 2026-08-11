@@ -24,7 +24,7 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   API-recovery/storage, wallet-presentation, public API read-model,
   game-data/presentation, chat-polling, chat-content, jackpot/rebate-security,
   chat-client-safety, release-operations, and runtime-metrics assertions. The
-  coordinator is now 10,316 lines; Pure game-data, runtime-metrics,
+  coordinator is now 10,317 lines; Pure game-data, runtime-metrics,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes. CI was updated locally.
   for Windows, scheduled audits, indexer/P1 coverage, timeouts, concurrency, and
