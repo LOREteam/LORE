@@ -13,6 +13,7 @@ import { runLiveStateApiTests } from "./test-business-live-state-api.mjs";
 import { runIndexerNormalizationTests } from "./test-business-indexer-normalization.mjs";
 import { runHistoryPresentationTests } from "./test-business-history-presentation.mjs";
 import { runGameDataPresentationTests } from "./test-business-game-data-presentation.mjs";
+import { runRuntimePollingTests } from "./test-business-runtime-polling.mjs";
 import * as envParsingModule from "../config/envParsing.ts";
 import * as scriptEnvParsingModule from "./env-parsing.mjs";
 import * as publicConfigModule from "../config/publicConfig.ts";
@@ -24,7 +25,6 @@ import * as chatMessagesModule from "../app/lib/chatMessages.ts";
 import * as chatRateLimitModule from "../app/lib/chatRateLimit.ts";
 import * as indexerFinalityModule from "../app/lib/indexerFinality.ts";
 import * as indexerWatchPolicyModule from "../app/lib/indexerWatchPolicy.ts";
-import * as canaryHealthTelemetryModule from "../app/lib/canaryHealthTelemetry.ts";
 import * as autoMineRunSetupModule from "../app/lib/mining/autoMineRunSetup.ts";
 import * as routeErrorModule from "../app/api/_lib/routeError.ts";
 import * as clientIdentityModule from "../app/api/_lib/clientIdentity.ts";
@@ -38,7 +38,6 @@ import * as analyticsDepositsStatusModule from "../app/lib/analyticsDepositsStat
 import * as autoResolveModule from "../app/hooks/useAutoResolve.ts";
 import * as appShellStateModule from "../app/hooks/useAppShellState.ts";
 import * as liveStateSnapshotModule from "../app/hooks/useGameLiveStateSnapshot.ts";
-import * as gamePollingConfigModule from "../app/hooks/useGamePollingConfig.ts";
 import * as explorerLinksModule from "../app/lib/explorerLinks.ts";
 import * as lineaOreClientViewPropsModule from "../app/lib/lineaOreClientViewProps.ts";
 import * as gameConstantsModule from "../app/lib/constants.ts";
@@ -419,7 +418,6 @@ async function main() {
   const chatRateLimit = chatRateLimitModule.default ?? chatRateLimitModule;
   const indexerFinality = indexerFinalityModule.default ?? indexerFinalityModule;
   const indexerWatchPolicy = indexerWatchPolicyModule.default ?? indexerWatchPolicyModule;
-  const canaryHealthTelemetry = canaryHealthTelemetryModule.default ?? canaryHealthTelemetryModule;
   const autoMineRunSetup = autoMineRunSetupModule.default ?? autoMineRunSetupModule;
   const routeError = routeErrorModule.default ?? routeErrorModule;
   const clientIdentity = clientIdentityModule.default ?? clientIdentityModule;
@@ -432,7 +430,6 @@ async function main() {
   const analyticsDepositsStatus = analyticsDepositsStatusModule.default ?? analyticsDepositsStatusModule;
   const autoResolve = autoResolveModule.default ?? autoResolveModule;
   const liveStateSnapshot = liveStateSnapshotModule.default ?? liveStateSnapshotModule;
-  const gamePollingConfig = gamePollingConfigModule.default ?? gamePollingConfigModule;
   const explorerLinks = explorerLinksModule.default ?? explorerLinksModule;
   const publicConfig = publicConfigModule.default ?? publicConfigModule;
   const productionRuntime = productionRuntimeModule.default ?? productionRuntimeModule;
@@ -15645,93 +15642,7 @@ async function main() {
     /Math\.trunc\(consecutiveFailures\)/,
     "indexer watch restart policy must not coerce malformed counters with Math.trunc",
   );
-  assert.equal(canaryHealthTelemetry.parseCanaryHealthBaseUrl(undefined), null);
-  assert.equal(canaryHealthTelemetry.parseCanaryHealthBaseUrl("http://localhost:3000").origin, "http://localhost:3000");
-  assert.equal(canaryHealthTelemetry.parseCanaryHealthBaseUrl("https://ops.example.com").origin, "https://ops.example.com");
-  assert.throws(() => canaryHealthTelemetry.parseCanaryHealthBaseUrl("http://example.com"), /must use HTTPS/);
-  assert.throws(() => canaryHealthTelemetry.parseCanaryHealthBaseUrl("https://user:pass@example.com"), /without credentials/);
-  assert.throws(() => canaryHealthTelemetry.parseCanaryHealthBaseUrl("https://example.com/health"), /without credentials/);
-  assert.throws(() => canaryHealthTelemetry.parseCanaryHealthBaseUrl("https://example.com?token=secret"), /without credentials/);
-  assert.throws(() => canaryHealthTelemetry.parseCanaryHealthBaseUrl("https://example.com#secret"), /without credentials/);
-  assert.deepEqual(
-    canaryHealthTelemetry.parseCanaryHealthPayloads(
-      { redacted: false, process: { uptimeSeconds: 10, rssBytes: 20, heapUsedBytes: 15 } },
-      { redacted: false, storage: { dbBytes: 30, walBytes: 5, diskFreeBytes: 100 } },
-    ),
-    { dbBytes: 30, diskFreeBytes: 100, heapUsedBytes: 15, rssBytes: 20, runtimeUptimeSeconds: 10, walBytes: 5 },
-  );
-  assert.throws(
-    () => canaryHealthTelemetry.parseCanaryHealthPayloads({ redacted: true }, { redacted: false }),
-    /redacted/,
-  );
-  for (const malformedMetric of [null, "", "10", 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1, -1]) {
-    assert.throws(
-      () => canaryHealthTelemetry.parseCanaryHealthPayloads(
-        { redacted: false, process: { uptimeSeconds: malformedMetric, rssBytes: 20, heapUsedBytes: 15 } },
-        { redacted: false, storage: { dbBytes: 30, walBytes: 5, diskFreeBytes: 100 } },
-      ),
-      /process\.uptimeSeconds/,
-      `canary health metrics must reject ${String(malformedMetric)}`,
-    );
-  }
-  const canaryHealthTelemetrySource = readFileSync("app/lib/canaryHealthTelemetry.ts", "utf8");
-  assert.match(
-    canaryHealthTelemetrySource,
-    /function readNonNegativeMetric\(value: unknown, field: string\)[\s\S]*typeof value !== "number"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*value < 0/,
-    "canary health metrics must require non-negative safe integer numbers",
-  );
-  assert.match(
-    canaryHealthTelemetrySource,
-    /url\.username \|\| url\.password \|\| url\.pathname !== "\/" \|\| url\.search \|\| url\.hash[\s\S]*must be an origin without credentials/,
-    "canary health base URL must be an origin-only URL without hidden credentials or path material",
-  );
-  assert.doesNotMatch(
-    canaryHealthTelemetrySource,
-    /const metric = Number\(value\)|Number\.isFinite\(metric\)/,
-    "canary health metrics must not broadly coerce null, string, or fractional payload values",
-  );
-  assert.deepEqual(
-    gamePollingConfig.getGamePollingIntervals({
-      isPageVisible: true,
-      pollPhase: "slow",
-      liveGrid: true,
-      autoMineSessionActive: false,
-      isRevealing: false,
-    }),
-    {
-      epochInterval: 5000,
-      epochEndInterval: 6000,
-      liveGridInterval: 3000,
-      liveUserBetsInterval: 3000,
-      gridEpochInterval: 5000,
-    },
-  );
-  assert.deepEqual(
-    gamePollingConfig.getGamePollingIntervals({
-      isPageVisible: false,
-      pollPhase: "slow",
-      liveGrid: true,
-      autoMineSessionActive: false,
-      isRevealing: false,
-    }),
-    {
-      epochInterval: 20_000,
-      epochEndInterval: 20_000,
-      liveGridInterval: 20_000,
-      liveUserBetsInterval: 20_000,
-      gridEpochInterval: 20_000,
-    },
-  );
-  assert.equal(
-    gamePollingConfig.getGamePollingIntervals({
-      isPageVisible: false,
-      pollPhase: "slow",
-      liveGrid: true,
-      autoMineSessionActive: true,
-      isRevealing: false,
-    }).liveGridInterval,
-    1000,
-  );
+  runRuntimePollingTests();
   runGameDataPresentationTests();
 
   await runRuntimeRecoveryTests();
