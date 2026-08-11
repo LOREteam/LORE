@@ -23,11 +23,13 @@ Open archived evidence only when a task needs it. The single active queue is
   domain and makes the soak-status fixture independent of host disk capacity.
   Its exact committed diff scan is sealed as
   `810da212-4774-48ae-a48f-9a5b702e8933`.
-- The current local release-candidate head is
+- The functional release-candidate head is
   `c53c0afcddae1f77b62ebebf5a041e5b9f27ec91`. It restores package-local
   Webpack resolution for nested `viem` dependencies and keeps Wagmi's unused
   optional Tempo `accounts` peer unavailable. Exact diff scan
-  `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings.
+  `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings. The current
+  local head is `acfafee69d8ac2c392a02d783917f66efa71214c`, containing only
+  subsequent test-domain extractions.
 - Live V10 provenance on the current tree passes with solc `0.8.36`, optimizer
   runs `200`, EVM `osaka`, runtime size `16488` bytes, manifest match, ABI
   snapshot match, and reviewed-fragment digest
@@ -149,7 +151,9 @@ Open archived evidence only when a task needs it. The single active queue is
 - Business tests have begun domain extraction into wallet, read-model,
   reward-scanner, live-state API, indexer-normalization, runtime-recovery,
   cache/planner, wallet-runtime, history-presentation, game-data/presentation,
-  runtime-polling, chat-polling, and chat-content modules. The coordinator is now 15,572 lines; the pending-nonce Preview network/credential
+  runtime-polling, chat-polling, chat-content, jackpot/rebate-security, and
+  chat-client-safety modules. The coordinator is now 12,963 lines; the
+  pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than
   duplicate source-shape checks, as do canary-health, game and chat polling,

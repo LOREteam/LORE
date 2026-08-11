@@ -22,8 +22,8 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   P1 orchestration.
 - Split sixteen business-test domains out of the monolith, including the isolated
   API-recovery/storage, wallet-presentation, public API read-model,
-  game-data/presentation, chat-polling, and chat-content assertions. The coordinator
-  is now 14,915 lines; Pure game-data,
+  game-data/presentation, chat-polling, chat-content, jackpot/rebate-security,
+  and chat-client-safety assertions. The coordinator is now 12,963 lines; Pure game-data,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes. CI was updated locally.
   for Windows, scheduled audits, indexer/P1 coverage, timeouts, concurrency, and
@@ -55,11 +55,14 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   unused root `accounts` package was removed, `webpack@5.109.2` satisfies the
   Sentry peer, and nested `x402` now uses React-19-compatible
   `use-sync-external-store@1.6.0`.
-- Current head `c53c0afc` restores package-local Webpack resolution for nested
+- Functional release-candidate head `c53c0afc` restores package-local Webpack resolution for nested
   `viem` dependencies and aliases Wagmi's unused optional Tempo `accounts`
   peer to unavailable. Its exact diff scan
   `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings; a clean
   install followed by production build and bundle baseline passed.
+- Current local head `acfafee6` contains only the later jackpot/rebate and
+  chat/client test-domain extractions; their exact local scan bundles are
+  sealed with the official finalizer after the Workbench range-digest omission.
 - V10 compilation provenance - pass; manifest and ABI snapshot match; fragment
   digest `69218b3a...1900c`; runtime size `16488` bytes.
 - Two final current-tree `check:summary` runs pass and end
