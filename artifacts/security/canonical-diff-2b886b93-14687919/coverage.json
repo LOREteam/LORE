@@ -1,0 +1,57 @@
+{
+  "completeness": "complete",
+  "deferred": [],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [],
+  "explicitExclusions": [
+    {
+      "pattern": "docs/agent-progress.md",
+      "reason": "Non-executable progress text; reviewed for scope consistency only."
+    },
+    {
+      "pattern": "docs/remaining-worklist.md",
+      "reason": "Non-executable worklist text; reviewed for scope consistency only."
+    }
+  ],
+  "includePaths": [
+    "."
+  ],
+  "inventoryStrategy": "diff",
+  "mode": "commit",
+  "scanId": "af62e9ef-ef9e-4a78-8ded-22ece3ebd1f6",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "not_applicable",
+      "id": "surface_business-logic-summary-module-inventory",
+      "label": "Business-logic summary module inventory",
+      "notes": "Added value is a fixed developer-controlled relative path consumed by local readFileSync; no request, network, wallet, chain, DB, or privileged sink is reached.",
+      "receiptRefs": [],
+      "riskArea": "Local test runner path handling and summary gate integrity"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_api-recovery/storage-extracted-test-module",
+      "label": "API recovery/storage extracted test module",
+      "notes": "Module only reads six fixed repository files and evaluates assertions; no production import or runtime input path was added.",
+      "receiptRefs": [],
+      "riskArea": "Test extraction and static API/storage assertions"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_business-logic-coordinator-extraction",
+      "label": "Business-logic coordinator extraction",
+      "notes": "Byte-equivalent assertion block is called through a fixed import before the existing wallet test section; no production control changed.",
+      "receiptRefs": [],
+      "riskArea": "Test orchestration and regression coverage continuity"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_progress-and-remaining-worklist-documentation",
+      "label": "Progress and remaining-worklist documentation",
+      "notes": "Documentation updates contain no credentials, executable commands, or security control changes.",
+      "receiptRefs": [],
+      "riskArea": "Release evidence communication"
+    }
+  ]
+}

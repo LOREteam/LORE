@@ -1,0 +1,95 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "b1c115cd20e818e04918e4bda02dc9f3322d879d68a11fa53f41a96094ad91e4"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "b0cfba11659516ec72994d42597d296f1cacd5cfde5deaadf1d895645f3188f2"
+      }
+    ],
+    "completedAt": "2026-08-11T15:34:14.273535Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "af62e9ef-ef9e-4a78-8ded-22ece3ebd1f6",
+    "producer": {
+      "name": "codex-security-plugin",
+      "version": "0.1.18"
+    },
+    "scope": {
+      "artifactsReviewed": [
+        "artifacts/01_context/security_guidance.md",
+        "artifacts/01_context/threat_model.md",
+        "artifacts/02_discovery/rank_input.jsonl",
+        "artifacts/02_discovery/deep_review_input.jsonl",
+        "artifacts/02_discovery/work_ledger.jsonl",
+        "artifacts/02_discovery/finding_discovery_report.md"
+      ],
+      "context": "Threat model generated from repository SECURITY.md and V10 design guidance during this scan.",
+      "excludePaths": [],
+      "includePaths": [
+        "."
+      ],
+      "limitations": [
+        "Only the exact commit diff was reviewed; prior and later commits are outside this scan.",
+        "Documentation changes were reviewed as non-executable metadata and do not substitute for release-candidate or external launch evidence."
+      ],
+      "runtimeStatus": "No wallet, chain, or network writes were performed. Module direct execution and syntax checks were observed locally before the scan; these are not production evidence.",
+      "summary": "Exact commit diff 2b886b933c649816a20a284c88752f94725208a2..14687919e0306df69d1a7b58b3ab182e3542c9a6. The commit extracts fixed-path API recovery/storage assertions from the local business-logic coordinator, registers the module in its bounded summary runner, and updates progress/worklist documentation.",
+      "validationMode": "Diff-scoped full-file review of every generated executable worklist row, with direct supporting-file inspection."
+    },
+    "sealedAt": "2026-08-11T15:34:14.273535Z",
+    "startedAt": "2026-08-11T15:19:17.138459Z",
+    "status": "completed",
+    "target": {
+      "baseRevision": "2b886b933c649816a20a284c88752f94725208a2",
+      "displayName": "linea-miner-main",
+      "headRevision": "14687919e0306df69d1a7b58b3ab182e3542c9a6",
+      "kind": "git_diff",
+      "snapshotDigest": "codex-security-snapshot/v1:sha256:1d74df0bc5da366ec7aad16a4841552de3d91d1cb5319d4e849096130ccb54eb",
+      "targetId": "target_sha256_908a147dd7e2bb281539a19d93c3def48ccab7950d49770aa8969ce57745331f"
+    },
+    "threatModel": {
+      "assets": [
+        "User token stakes and reward balances",
+        "V10 accounting, ABI, compiler, and deployment provenance",
+        "Wallet/session and operator signer authority",
+        "Indexer/SQLite normalized state and recovery artifacts",
+        "Production configuration, secrets, and operational availability"
+      ],
+      "assumptions": [
+        "The documented V9 randomness/resolver timing tradeoff remains open and is outside this test-only diff.",
+        "Distinct RPC origins do not prove independent operators.",
+        "Mainnet readiness requires separate external evidence and independent audit."
+      ],
+      "attackerCapabilities": [
+        "Submit malformed public API input and wallet interactions",
+        "Control or degrade an untrusted RPC response when configured as a provider",
+        "Trigger normal public application requests",
+        "Exploit uncertain wallet submission, reload, or multi-tab timing"
+      ],
+      "securityObjectives": [
+        "Preserve on-chain accounting, epoch intent, and nonce/receipt safety",
+        "Fail closed on malformed, stale, or non-quorum external evidence",
+        "Keep secrets and signing capability out of read-only tooling",
+        "Preserve lease-scoped atomic persistence and bounded recovery",
+        "Do not treat local verification as external launch approval"
+      ],
+      "summary": "The repository is a Linea Sepolia V10 game application. Critical assets are user stakes and balances, contract accounting/provenance, wallet and operator authority, signer secrets, indexer/SQLite integrity, and API/indexer/resolver availability. The reviewed commit changes only local test orchestration.",
+      "trustBoundaries": [
+        "Browser users and wallet/Privy providers",
+        "Linea RPC providers, sequencer, and block producers",
+        "ERC-20 token behavior",
+        "Public HTTP/API consumers",
+        "Operator environment, process configuration, and SQLite/backup media",
+        "Third-party auth and monitoring services"
+      ]
+    }
+  },
+  "schemaVersion": "1.0"
+}
