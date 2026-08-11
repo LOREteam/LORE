@@ -14,15 +14,14 @@ import { runIndexerNormalizationTests } from "./test-business-indexer-normalizat
 import { runHistoryPresentationTests } from "./test-business-history-presentation.mjs";
 import { runGameDataPresentationTests } from "./test-business-game-data-presentation.mjs";
 import { runRuntimePollingTests } from "./test-business-runtime-polling.mjs";
+import { runChatPollingTests } from "./test-business-chat-polling.mjs";
 import * as envParsingModule from "../config/envParsing.ts";
 import * as scriptEnvParsingModule from "./env-parsing.mjs";
 import * as publicConfigModule from "../config/publicConfig.ts";
 import * as utilsModule from "../app/lib/utils.ts";
 import * as chatAvatarUploadModule from "../app/lib/chatAvatarUpload.ts";
 import * as chatAvatarModule from "../app/lib/chatAvatar.ts";
-import * as chatPollDelayModule from "../app/lib/chatPollDelay.ts";
 import * as chatMessagesModule from "../app/lib/chatMessages.ts";
-import * as chatRateLimitModule from "../app/lib/chatRateLimit.ts";
 import * as indexerFinalityModule from "../app/lib/indexerFinality.ts";
 import * as indexerWatchPolicyModule from "../app/lib/indexerWatchPolicy.ts";
 import * as autoMineRunSetupModule from "../app/lib/mining/autoMineRunSetup.ts";
@@ -413,9 +412,7 @@ async function main() {
   const utils = utilsModule.default ?? utilsModule;
   const chatAvatarUpload = chatAvatarUploadModule.default ?? chatAvatarUploadModule;
   const chatAvatar = chatAvatarModule.default ?? chatAvatarModule;
-  const chatPollDelay = chatPollDelayModule.default ?? chatPollDelayModule;
   const chatMessages = chatMessagesModule.default ?? chatMessagesModule;
-  const chatRateLimit = chatRateLimitModule.default ?? chatRateLimitModule;
   const indexerFinality = indexerFinalityModule.default ?? indexerFinalityModule;
   const indexerWatchPolicy = indexerWatchPolicyModule.default ?? indexerWatchPolicyModule;
   const autoMineRunSetup = autoMineRunSetupModule.default ?? autoMineRunSetupModule;
@@ -14914,52 +14911,6 @@ async function main() {
       { id: "b", text: "second", sender: "0x2", senderName: null, senderAvatar: null, timestamp: 2 },
     ],
   );
-  assert.equal(chatPollDelay.getChatPollDelayMs({ open: true, isPageVisible: true, failureCount: 0 }), 3_000);
-  assert.equal(chatPollDelay.getChatPollDelayMs({ open: true, isPageVisible: false, failureCount: 1 }), 60_000);
-  assert.equal(chatPollDelay.getChatPollDelayMs({ open: false, isPageVisible: true, failureCount: 2 }), 80_000);
-  assert.equal(chatPollDelay.getChatPollDelayMs({ open: false, isPageVisible: false, failureCount: 99 }), 240_000);
-  assert.equal(chatPollDelay.getChatPollDelayMs({ open: true, isPageVisible: true, failureCount: -1 }), 3_000);
-  assert.equal(chatPollDelay.getChatPollDelayMs({ open: true, isPageVisible: true, failureCount: 1.5 }), 3_000);
-  assert.equal(chatPollDelay.getChatPollDelayMs({ open: true, isPageVisible: true, failureCount: Number.NaN }), 3_000);
-  assert.equal(
-    chatPollDelay.getChatPollDelayMs({ open: true, isPageVisible: true, failureCount: Number.MAX_SAFE_INTEGER + 1 }),
-    3_000,
-  );
-  const chatPollDelaySource = readFileSync("app/lib/chatPollDelay.ts", "utf8");
-  assert.match(
-    chatPollDelaySource,
-    /Number\.isSafeInteger\(failureCount\)[\s\S]*failureCount > 0[\s\S]*2 \*\* failures/,
-    "chat poll delay backoff must reject malformed counters before exponential delay calculation",
-  );
-  assert.doesNotMatch(
-    chatPollDelaySource,
-    /2 \*\* failureCount/,
-    "chat poll delay backoff must not exponentiate malformed failure counters directly",
-  );
-  assert.equal(chatRateLimit.parseChatRetryAfterMs(2), 2_000);
-  assert.equal(chatRateLimit.parseChatRetryAfterMs("2"), 2_000);
-  assert.equal(chatRateLimit.parseChatRetryAfterMs("bad"), 1_500);
-  assert.equal(chatRateLimit.parseChatRetryAfterMs("02"), 1_500);
-  assert.equal(chatRateLimit.parseChatRetryAfterMs("1e3"), 1_500);
-  assert.equal(chatRateLimit.parseChatRetryAfterMs(1.5), 1_500);
-  assert.equal(chatRateLimit.parseChatRetryAfterMs(Number.MAX_SAFE_INTEGER + 1), 1_500);
-  assert.equal(chatRateLimit.parseChatRetryAfterMs(999), 120_000);
-  assert.equal(chatRateLimit.parseChatRetryAfterMs("999"), 120_000);
-  assert.equal(chatRateLimit.parseChatRetryAfterMs("2", Number.NaN), 2_000);
-  assert.equal(chatRateLimit.parseChatRetryAfterMs("1", 2_000.5), 1_500);
-
-  const chatRateLimitSource = readFileSync("app/lib/chatRateLimit.ts", "utf8");
-  assert.match(
-    chatRateLimitSource,
-    /function parsePositiveIntegerSeconds[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\{0,5\}\)\$\/[\s\S]*Number\.parseInt\(trimmed, 10\)[\s\S]*const seconds = parsePositiveIntegerSeconds\(value\)/,
-    "chat retryAfter cooldowns must use canonical bounded seconds parsing before clamping",
-  );
-  assert.doesNotMatch(
-    chatRateLimitSource,
-    /const seconds = [\s\S]*Number\(value\)|Number\.isFinite\(seconds\)/,
-    "chat retryAfter cooldowns must not rely on broad Number coercion",
-  );
-
   const useChatSource = readFileSync("app/hooks/useChat.ts", "utf8");
   assert.match(
     useChatSource,
@@ -15643,6 +15594,7 @@ async function main() {
     "indexer watch restart policy must not coerce malformed counters with Math.trunc",
   );
   runRuntimePollingTests();
+  runChatPollingTests();
   runGameDataPresentationTests();
 
   await runRuntimeRecoveryTests();
