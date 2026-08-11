@@ -110,9 +110,9 @@ Last updated: 2026-08-11. This is the single active local work queue.
 - [x] Add local CI definitions for Linux/Windows, scheduled dependency audits,
       explicit indexer/P1 rows, concurrency, timeouts, and compact artifacts.
 - [ ] Continue replacing source-string guards with imported behavior and reduce
-      the remaining 15,429-line business-test coordinator. The public API
-      read-model (rewards/recent-wins/leaderboards) assertions now run from an
-      imported module, and the pending-nonce
+      the remaining 15,251-line business-test coordinator. The wallet-presentation
+      and public API read-model (rewards/recent-wins/leaderboards) assertions now run
+      from imported modules, and the pending-nonce
       Preview network/credential boundary has executable CLI coverage instead
       of duplicate coordinator regex, and analytics history and game-data/
       presentation, runtime-polling, chat-polling, and chat-content tests now run from
