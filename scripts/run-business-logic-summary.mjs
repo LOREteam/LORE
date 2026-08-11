@@ -61,6 +61,7 @@ const BUSINESS_TEST_MODULES = [
   "scripts/test-business-chat-client-safety.mjs",
   "scripts/test-business-release-operations.mjs",
   "scripts/test-business-runtime-metrics.mjs",
+  "scripts/test-business-error-boundaries.mjs",
 ];
 const businessTestSources = BUSINESS_TEST_MODULES.map((path) => readFileSync(path, "utf8"));
 
