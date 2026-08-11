@@ -202,6 +202,33 @@ function waitForFile(filePath, timeoutMs = 5_000) {
 
 {
   const root = createFixture();
+  const markerPath = join(root, "abandoned-lock.txt");
+  const moduleUrl = pathToFileURL(resolve("scripts", "run-hermetic-build.mjs")).href;
+  try {
+    const abandonedOwner = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import { writeFileSync } from "node:fs";
+      import { acquireBuildOutputLock } from ${JSON.stringify(moduleUrl)};
+      acquireBuildOutputLock(${JSON.stringify(root)});
+      writeFileSync(${JSON.stringify(markerPath)}, "owner-exited-without-release");
+    `], { cwd: resolve("."), encoding: "utf8" });
+    assert.equal(abandonedOwner.status, 0, abandonedOwner.stderr);
+    assert.equal(readFileSync(markerPath, "utf8"), "owner-exited-without-release");
+
+    const startedAt = Date.now();
+    const recoveredLock = acquireBuildOutputLock(root);
+    const elapsedMs = Date.now() - startedAt;
+    try {
+      assert.ok(elapsedMs < 5_000, `dead build owner must be reclaimed promptly, elapsed=${elapsedMs}`);
+    } finally {
+      recoveredLock.release();
+    }
+  } finally {
+    removeFixture(root);
+  }
+}
+
+{
+  const root = createFixture();
   const target = mkdtempSync(join(systemTempRoot, "lore-hermetic-junction-target-"));
   const sentinelPath = join(target, "sentinel.txt");
   const markerPath = join(root, "junction.json");

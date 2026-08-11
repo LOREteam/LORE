@@ -112,6 +112,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   still required.
 - The two post-scan wallet fixes are included in a subsequent clean
   `test:p1-hardening:all:summary` pass: `36/36` with EVM included.
+- Closed the residual hermetic build-runner P2: output locks now carry an
+  owner PID/start-time identity and reclaim only a proven dead or PID-reused
+  owner. Malformed, uninspectable, live, and replaced locks remain fail-closed;
+  focused adversarial tests and a real `build:summary` pass are green.
 - Exact committed diff scan `810da212-4774-48ae-a48f-9a5b702e8933` seals the
   `fbec521..f01aa22` test-only follow-up with canonical artifacts and no
   findings. It is a narrow supplement to the earlier candidate scan, not a

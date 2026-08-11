@@ -73,11 +73,12 @@ Last updated: 2026-08-11. This is the single active local work queue.
       [`artifacts/security/canonical-diff-c53c0afc-f8e93905`](../artifacts/security/canonical-diff-c53c0afc-f8e93905/)
       and no local findings across all 27 changed rows. It does not close the
       separate protocol-randomness High or external G1-G14.
-- [ ] Address residual P2 build-runner abandoned-lock recovery. Hermetic builds
-      now have a bounded outer timeout and terminate their owned process tree;
-      same-output-directory concurrency is serialized by the hermetic build
-      lock, while a surviving/replaced lock still fails closed rather than
-      allowing overlapping `.next` writes.
+- [x] Close P2 build-runner abandoned-lock recovery. Hermetic builds retain the
+      bounded outer timeout and owned process-tree termination; the
+      same-output-directory lock now records a PID/start-time identity and
+      reclaims only a proven dead or PID-reused owner. Malformed, uninspectable,
+      live, or replaced locks remain fail-closed. Focused adversarial lock tests
+      and one real `build:summary` pass confirm the behavior.
 
 ## P1 code hardening
 

@@ -117,6 +117,119 @@ function sleepForBuildLock(milliseconds) {
   Atomics.wait(BUILD_LOCK_SLEEP_ARRAY, 0, 0, milliseconds);
 }
 
+function readProcessStartIdentity(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
+
+  if (process.platform === "win32") {
+    const powershellPath = process.env.SystemRoot
+      ? join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+      : "powershell.exe";
+    const result = spawnSync(
+      powershellPath,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$owner = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $owner) { exit 3 }; [Console]::Out.Write($owner.StartTime.ToUniversalTime().Ticks)`,
+      ],
+      { encoding: "utf8", stdio: "pipe", windowsHide: true },
+    );
+    if (result.status === 3) return null;
+    if (result.status !== 0) return undefined;
+    const ticks = result.stdout.trim();
+    return /^\d+$/.test(ticks) ? `win32:${ticks}` : undefined;
+  }
+
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const closingParen = stat.lastIndexOf(")");
+      const fields = stat.slice(closingParen + 2).trim().split(/\s+/);
+      const startTicks = fields[19];
+      return /^\d+$/.test(startTicks) ? `linux:${startTicks}` : undefined;
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+function parseBuildLockOwner(ownerContents) {
+  try {
+    const owner = JSON.parse(ownerContents);
+    if (
+      !owner
+      || owner.version !== 1
+      || !Number.isSafeInteger(owner.pid)
+      || owner.pid <= 0
+      || typeof owner.processStartIdentity !== "string"
+      || owner.processStartIdentity.length === 0
+      || typeof owner.token !== "string"
+      || owner.token.length === 0
+    ) {
+      return null;
+    }
+    return owner;
+  } catch {
+    return null;
+  }
+}
+
+function sameDirectoryIdentity(left, right) {
+  return left.device === right.device
+    && left.inode === right.inode
+    && left.birthtimeNs === right.birthtimeNs;
+}
+
+function tryReclaimAbandonedBuildOutputLock(lockPath, ownerPath) {
+  let lockIdentity;
+  try {
+    lockIdentity = captureOwnedDirectoryIdentity(lockPath);
+  } catch (error) {
+    if (error?.code === "ENOENT" || !lstatIfPresent(lockPath)) return false;
+    throw error;
+  }
+  let ownerContents;
+  try {
+    ownerContents = readFileSync(ownerPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  const owner = parseBuildLockOwner(ownerContents);
+  if (!owner) return false;
+
+  const currentProcessStartIdentity = readProcessStartIdentity(owner.pid);
+  if (
+    currentProcessStartIdentity === undefined
+    || currentProcessStartIdentity === owner.processStartIdentity
+  ) {
+    return false;
+  }
+
+  // The original owner is gone (or its PID has been reused). Revalidate every
+  // mutable entry before unlinking so a surviving/replaced lock is never taken.
+  let currentIdentity;
+  try {
+    currentIdentity = captureOwnedDirectoryIdentity(lockPath);
+  } catch (error) {
+    if (error?.code === "ENOENT" || !lstatIfPresent(lockPath)) return false;
+    throw error;
+  }
+  if (!sameDirectoryIdentity(lockIdentity, currentIdentity)) return false;
+  try {
+    if (readFileSync(ownerPath, "utf8") !== ownerContents) return false;
+    unlinkSync(ownerPath);
+    rmdirSync(lockPath);
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTEMPTY") return false;
+    throw error;
+  }
+  return true;
+}
+
 function requireRegularDirectory(directoryPath, label) {
   const stats = lstatIfPresent(directoryPath);
   if (!stats || stats.isSymbolicLink() || !stats.isDirectory()) {
@@ -138,24 +251,24 @@ export function acquireBuildOutputLock(projectRoot = process.cwd(), temporaryRoo
   const lockPath = join(lockRoot, `${lockName}.lock`);
   const ownerPath = join(lockPath, "owner");
   const ownerToken = `${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  const processStartIdentity = readProcessStartIdentity(process.pid);
+  const ownerContents = processStartIdentity
+    ? JSON.stringify({ version: 1, pid: process.pid, processStartIdentity, token: ownerToken })
+    : ownerToken;
   const deadline = Date.now() + BUILD_OUTPUT_LOCK_WAIT_MS;
 
   while (true) {
     try {
       mkdirSync(lockPath);
       const identity = captureOwnedDirectoryIdentity(lockPath);
-      writeFileSync(ownerPath, ownerToken, { encoding: "utf8", flag: "wx" });
+      writeFileSync(ownerPath, ownerContents, { encoding: "utf8", flag: "wx" });
       return {
         release() {
           const currentIdentity = captureOwnedDirectoryIdentity(lockPath);
-          if (
-            currentIdentity.device !== identity.device
-            || currentIdentity.inode !== identity.inode
-            || currentIdentity.birthtimeNs !== identity.birthtimeNs
-          ) {
+          if (!sameDirectoryIdentity(currentIdentity, identity)) {
             throw new Error(`Refusing to release a replaced hermetic build lock: ${lockPath}`);
           }
-          if (readFileSync(ownerPath, "utf8") !== ownerToken) {
+          if (readFileSync(ownerPath, "utf8") !== ownerContents) {
             throw new Error(`Refusing to release a hermetic build lock owned by another process: ${lockPath}`);
           }
           unlinkSync(ownerPath);
@@ -164,6 +277,7 @@ export function acquireBuildOutputLock(projectRoot = process.cwd(), temporaryRoo
       };
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
+      if (tryReclaimAbandonedBuildOutputLock(lockPath, ownerPath)) continue;
       if (Date.now() >= deadline) {
         throw new Error(`Timed out waiting for the hermetic build output lock: ${lockPath}`);
       }

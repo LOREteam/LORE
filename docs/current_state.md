@@ -235,5 +235,8 @@ Open archived evidence only when a task needs it. The single active queue is
   files, or private environment values.
 - Do not claim production, mainnet, G1-G14, browser, or long-soak readiness from
   local checks alone.
-- Residual local P2 engineering work remains for hermetic-wrapper timeout/
-  process-tree ownership and same-output-directory concurrency locking.
+- Hermetic builds use a bounded timeout, owned process-tree termination, and a
+  same-output lock that reclaims only a lock whose PID/start-time owner is
+  proven gone or PID-reused. Any malformed, uninspectable, live, or replaced
+  lock stays fail-closed; the focused adversarial suite and a real
+  `build:summary` pass cover this local boundary.
