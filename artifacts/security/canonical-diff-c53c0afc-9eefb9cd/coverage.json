@@ -1,0 +1,74 @@
+{
+  "completeness": "complete",
+  "deferred": [],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [
+    "docs/**/*.md"
+  ],
+  "explicitExclusions": [
+    {
+      "pattern": "docs/**/*.md",
+      "reason": "The four changed Markdown records are documentation-only and introduce no executable security boundary."
+    }
+  ],
+  "includePaths": [
+    "."
+  ],
+  "inventoryStrategy": "diff",
+  "mode": "diff",
+  "openQuestions": [],
+  "scanId": "fda49613-9367-46f1-84c7-6f82dc8ce611",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_test_business_logic_coordinator",
+      "label": "scripts/test-business-logic.mjs",
+      "notes": "Full diff review confirmed the coordinator continues to invoke the extracted modules and cannot alter production sinks.",
+      "receiptRefs": [
+        "artifacts/02_discovery/review-results.md"
+      ],
+      "riskArea": "Test coordinator execution and imported module reachability"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_chat_content_test",
+      "label": "scripts/test-business-chat-content.mjs",
+      "notes": "Focused assertions exercise pure/UI-facing helpers without adding production network, credential, or persistence behavior.",
+      "receiptRefs": [
+        "artifacts/02_discovery/review-results.md"
+      ],
+      "riskArea": "Chat content test-only coverage"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_chat_polling_test",
+      "label": "scripts/test-business-chat-polling.mjs",
+      "notes": "The module imports existing helper logic only and does not create an externally reachable sink.",
+      "receiptRefs": [
+        "artifacts/02_discovery/review-results.md"
+      ],
+      "riskArea": "Polling and rate-limit test-only coverage"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_game_data_test",
+      "label": "scripts/test-business-game-data-presentation.mjs",
+      "notes": "The extraction preserves behavioral coverage without modifying authoritative game or persistence paths.",
+      "receiptRefs": [
+        "artifacts/02_discovery/review-results.md"
+      ],
+      "riskArea": "Game-data presentation test-only coverage"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_runtime_polling_test",
+      "label": "scripts/test-business-runtime-polling.mjs",
+      "notes": "The module has no production code change and no wallet, chain, or credential sink.",
+      "receiptRefs": [
+        "artifacts/02_discovery/review-results.md"
+      ],
+      "riskArea": "Runtime telemetry and polling test-only coverage"
+    }
+  ]
+}

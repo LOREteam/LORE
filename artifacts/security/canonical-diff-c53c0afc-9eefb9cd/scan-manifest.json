@@ -1,0 +1,82 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "80206e49f90ef4a2cc3d323eb3afcf4bbd2990b1022e60d47bef7f59bb67aa42"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "4a7cc4007ee872430e09d7567ed9cd16a4b09e8de42819fc47436b40fe12c378"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/review-results.md",
+        "sha256": "6fa3df793769667e219f49fbb5f3b72c7edf15bdcaf9e7b285ca149d4ca5c3f0"
+      }
+    ],
+    "completedAt": "2026-08-11T14:50:12.144522Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "fda49613-9367-46f1-84c7-6f82dc8ce611",
+    "producer": {
+      "name": "codex-security-plugin",
+      "version": "0.1.18"
+    },
+    "scope": {
+      "artifactsReviewed": [
+        "artifacts/01_context/review-scope.md",
+        "artifacts/02_discovery/review-results.md"
+      ],
+      "context": "Source-only review; no wallet, signing, chain, or network write action was performed.",
+      "excludePaths": [
+        "docs/**/*.md"
+      ],
+      "includePaths": [
+        "."
+      ],
+      "limitations": [
+        "This exact diff scan does not replace the broader release-candidate security scan."
+      ],
+      "runtimeStatus": "No runtime action was needed or performed for this test-only diff.",
+      "summary": "Exact security review of the committed follow-up test extraction range.",
+      "validationMode": "Full-file review plus direct imported-helper reachability checks."
+    },
+    "sealedAt": "2026-08-11T14:50:12.144522Z",
+    "startedAt": "2026-08-11T14:45:08.754930Z",
+    "status": "completed",
+    "target": {
+      "baseRevision": "c53c0afcddae1f77b62ebebf5a041e5b9f27ec91",
+      "displayName": "linea-miner-main",
+      "headRevision": "9eefb9cd87f011434b673719519d5f0d78bf5467",
+      "kind": "git_diff",
+      "snapshotDigest": "codex-security-snapshot/v1:sha256:ca253f0ccfdbcaaf185adb77310b530d4ab8147220ec91bcdc6b35a7dd09bb02",
+      "targetId": "target_sha256_908a147dd7e2bb281539a19d93c3def48ccab7950d49770aa8969ce57745331f"
+    },
+    "threatModel": {
+      "assets": [
+        "Wallet funds and signing authority",
+        "Operator credentials",
+        "Canonical game and indexer state"
+      ],
+      "assumptions": [
+        "The committed range is checked out exactly at the recorded head revision"
+      ],
+      "attackerCapabilities": [
+        "Can exercise normal public product inputs but cannot modify committed test code"
+      ],
+      "securityObjectives": [
+        "Preserve behavioral test coverage without adding production reachability or weakening safety controls"
+      ],
+      "summary": "Test refactors must not mask production authorization, persistence, RPC, credential, wallet, or chain behavior.",
+      "trustBoundaries": [
+        "Test-harness imports",
+        "Production helper boundaries"
+      ]
+    }
+  },
+  "schemaVersion": "1.0"
+}

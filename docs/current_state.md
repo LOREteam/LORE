@@ -102,6 +102,14 @@ Open archived evidence only when a task needs it. The single active queue is
   `44765951..c53c0afc`, sealed canonical JSON/SARIF/Markdown artifacts, and
   found no issue in the one build-resolution surface. It is local evidence
   only and does not close the protocol-randomness or external launch gates.
+- Exact committed follow-up scan `fda49613-9367-46f1-84c7-6f82dc8ce611`
+  covers `c53c0afc..9eefb9cd`. Its sealed canonical bundle is tracked at
+  [`artifacts/security/canonical-diff-c53c0afc-9eefb9cd`](../artifacts/security/canonical-diff-c53c0afc-9eefb9cd/);
+  it has deterministic snapshot digest `ca253f0c...dd09bb02` and no local
+  High/Medium finding in the five test-extraction surfaces. The desktop
+  Workbench completion endpoint omitted that required range digest, so this
+  bundle was validated and sealed by the same local contract finalizer rather
+  than treating the endpoint failure as a green scan.
 - The post-scan wallet follow-up is covered by the current integrated P1
   runner: all `36/36` bounded suites, including EVM fuzz, now pass under the
   same npm invocation used by prelaunch.

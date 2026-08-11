@@ -124,9 +124,14 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
 
 1. Preserve the zero-`parseAbi` ABI result, the two green hermetic full checks,
    and stable logic interfaces while continuing only scoped extraction.
-2. Repeat the two-hour performance run on the final exact SHA and prove native
+2. The exact `c53c0afc..9eefb9cd` test-extraction range now has a sealed
+   canonical local scan bundle at
+   [`artifacts/security/canonical-diff-c53c0afc-9eefb9cd`](../artifacts/security/canonical-diff-c53c0afc-9eefb9cd/).
+   It records no local High/Medium; keep the Workbench range-digest omission
+   explicit instead of substituting an unsealed endpoint response.
+3. Repeat the two-hour performance run on the final exact SHA and prove native
    hidden-state behavior; retain the upstream Privy modal blocker honestly.
-3. Keep all live Sepolia and external G1-G14 work behind the Preview/consent and
+4. Keep all live Sepolia and external G1-G14 work behind the Preview/consent and
    canonical-evidence boundaries in
    [`docs/remaining-worklist.md`](remaining-worklist.md).
 

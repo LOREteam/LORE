@@ -61,6 +61,12 @@ Last updated: 2026-08-11. This is the single active local work queue.
 - [x] Rebuild and re-baseline after clean `npm ci` on `c53c0afc`; production
       build and bundle baseline pass, and exact diff scan
       `b39bde24-6ba0-4e18-9c39-38b91766187e` reports no findings.
+- [x] Seal the exact test-extraction follow-up range `c53c0afc..9eefb9cd`.
+      The canonical bundle at
+      [`artifacts/security/canonical-diff-c53c0afc-9eefb9cd`](../artifacts/security/canonical-diff-c53c0afc-9eefb9cd/)
+      records deterministic digest `ca253f0c...dd09bb02` and no local
+      High/Medium. The Workbench range-completion metadata omission is
+      documented; it does not erase the sealed local contract evidence.
 - [ ] Address residual P2 build-runner work: outer timeout/process-tree
       ownership and same-output-directory concurrency locking.
 
