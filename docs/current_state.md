@@ -139,9 +139,9 @@ Open archived evidence only when a task needs it. The single active queue is
   proof for jackpots/OG, deposits, and health behavior. Production two-replica
   evidence remains a G1-G14 requirement.
 - Business tests have begun domain extraction into wallet, read-model,
-  reward-scanner, live-state API, indexer-normalization, runtime-recovery, and
-  cache/planner, wallet-runtime, and history-presentation modules. The
-  coordinator is now 15,947 lines; the pending-nonce Preview network/credential
+  reward-scanner, live-state API, indexer-normalization, runtime-recovery,
+  cache/planner, wallet-runtime, history-presentation, and game-data/
+  presentation modules. The coordinator is now 15,749 lines; the pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex.
   Further
   source-string reduction remains open.
