@@ -50,6 +50,11 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   unused root `accounts` package was removed, `webpack@5.109.2` satisfies the
   Sentry peer, and nested `x402` now uses React-19-compatible
   `use-sync-external-store@1.6.0`.
+- Current head `c53c0afc` restores package-local Webpack resolution for nested
+  `viem` dependencies and aliases Wagmi's unused optional Tempo `accounts`
+  peer to unavailable. Its exact diff scan
+  `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings; a clean
+  install followed by production build and bundle baseline passed.
 - V10 compilation provenance - pass; manifest and ABI snapshot match; fragment
   digest `69218b3a...1900c`; runtime size `16488` bytes.
 - Two final current-tree `check:summary` runs pass and end
@@ -75,12 +80,12 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
 - Focused suites cover admin sessions, fee policy, deposits, jackpot admission,
   API routes, health/round evidence, bootstrap locking, wallet state, indexer
   fork/lease/identity, round/mobile/Privy/motion, process identity, and V10 EVM.
-- Current-tree bundle baseline - `229` files, `8469574` total bytes, `7075415`
-  JS bytes, largest `1002767`, under the `1250000` limit.
+- Current-tree bundle baseline after clean install - `226` files, `7500007`
+  total bytes, `7162708` JS bytes, largest `1043297`, under the `1250000` limit.
 - Typecheck, `457`-file lint (`0` issues), logic, logic summary,
   security-followup `8/8`, production dependency proof, both full checks, and
-  prelaunch required-local rows pass. The fresh all-deps proof retains one
-  known development-toolchain High advisory.
+  prelaunch required-local rows pass. The clean all-deps proof retains `9`
+  known development-toolchain High advisories under the documented policy.
 - Both `46d3bc50` and `d626a0f` now have completed two-hour local performance
   profiles with zero API writes and negative net heap delta. `d626a0f` records
   `134` blocked external browser requests and a `95ms` maximum long task. The
@@ -101,6 +106,8 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   `fbec521..f01aa22` test-only follow-up with canonical artifacts and no
   findings. It is a narrow supplement to the earlier candidate scan, not a
   closure for the protocol-randomness High.
+- Exact committed diff scan `b39bde24-6ba0-4e18-9c39-38b91766187e` seals the
+  one-file `44765951..c53c0afc` build-resolution follow-up with no findings.
 - Production `npm ls --omit=dev --package-lock-only` is clean and the direct
   security pins resolve; full `npm ls --all --package-lock-only` still has six
   upstream Privy/Wagmi/Sentry/toolchain peer/resolution issues.

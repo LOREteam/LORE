@@ -58,6 +58,9 @@ Last updated: 2026-08-11. This is the single active local work queue.
   `36/36` passes with the final SQLite backup assertion and EVM included.
 - [x] Route all build entry points through the adversarially tested hermetic
       wrapper and reject raw production builds without its marker.
+- [x] Rebuild and re-baseline after clean `npm ci` on `c53c0afc`; production
+      build and bundle baseline pass, and exact diff scan
+      `b39bde24-6ba0-4e18-9c39-38b91766187e` reports no findings.
 - [ ] Address residual P2 build-runner work: outer timeout/process-tree
       ownership and same-output-directory concurrency locking.
 
@@ -126,8 +129,9 @@ Last updated: 2026-08-11. This is the single active local work queue.
       wallet, and recovery evidence after the upstream blocker is resolved.
 - [x] Add a loopback-only bounded performance collector; self-test passes
       `10/10` and accepts up to two hours.
-- [x] Capture current-tree bundle baseline: `229` files, `8469574` total bytes,
-      `7075415` JS bytes, largest `1002767` under limit `1250000`.
+- [x] Capture current-tree bundle baseline after clean install: `226` files,
+      `7500007` total bytes, `7162708` JS bytes, largest `1043297` under limit
+      `1250000`.
 - [x] Complete the two-hour local profile for the old exact `46d3bc50`
       baseline: API writes `0`, external browser requests blocked, net heap
       delta `-1099488`, peak `+10091819`, and DOM slope `0`.

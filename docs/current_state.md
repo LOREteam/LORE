@@ -23,6 +23,11 @@ Open archived evidence only when a task needs it. The single active queue is
   domain and makes the soak-status fixture independent of host disk capacity.
   Its exact committed diff scan is sealed as
   `810da212-4774-48ae-a48f-9a5b702e8933`.
+- The current local release-candidate head is
+  `c53c0afcddae1f77b62ebebf5a041e5b9f27ec91`. It restores package-local
+  Webpack resolution for nested `viem` dependencies and keeps Wagmi's unused
+  optional Tempo `accounts` peer unavailable. Exact diff scan
+  `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings.
 - Live V10 provenance on the current tree passes with solc `0.8.36`, optimizer
   runs `200`, EVM `osaka`, runtime size `16488` bytes, manifest match, ABI
   snapshot match, and reviewed-fragment digest
@@ -40,8 +45,8 @@ Open archived evidence only when a task needs it. The single active queue is
   hermetic production build, and the EVM-inclusive P1 runner pass against this
   lockfile.
 - `npm ls --omit=dev --package-lock-only` is clean and both dependency audit
-  gates pass: production has no blocking High/Critical; the fresh all-deps
-  result has one explicitly allowed dev-toolchain High advisory. The exact `nanoid`
+  gates pass: production has no blocking High/Critical; the clean all-deps
+  result has `9` explicitly allowed dev-toolchain High advisories. The exact `nanoid`
   (`3.3.17`) and `js-yaml` (`4.3.1`) overrides resolve. npm 11's full
   `npm ls --all --package-lock-only` still reports internal invalid markers
   after a clean install, so it is evidence to investigate, not a false claim
@@ -93,6 +98,10 @@ Open archived evidence only when a task needs it. The single active queue is
   and found no issue in its three test-orchestration surfaces. This narrow
   scan supplements the preceding candidate coverage; it does not close the
   protocol-randomness High.
+- Exact committed diff scan `b39bde24-6ba0-4e18-9c39-38b91766187e` covers
+  `44765951..c53c0afc`, sealed canonical JSON/SARIF/Markdown artifacts, and
+  found no issue in the one build-resolution surface. It is local evidence
+  only and does not close the protocol-randomness or external launch gates.
 - The post-scan wallet follow-up is covered by the current integrated P1
   runner: all `36/36` bounded suites, including EVM fuzz, now pass under the
   same npm invocation used by prelaunch.
@@ -153,8 +162,8 @@ Open archived evidence only when a task needs it. The single active queue is
   the email control's accessible name becomes `Submit` and the close target is
   `24x24`; no supported config/API fixes either issue. No DOM/CSS or
   `node_modules` hack was used, so full real-modal closure remains open.
-- Current-tree bundle proof passes across `229` files: `8469574` total bytes,
-  `7075415` JavaScript bytes, largest file `1002767`, below the `1250000`
+- After clean `npm ci`, current-tree bundle proof passes across `226` files:
+  `7500007` total bytes, `7162708` JavaScript bytes, largest file `1043297`, below the `1250000`
   limit; CSS is `216635` and WASM is `1056860` bytes.
 - The old exact `46d3bc50` baseline completed its two-hour local profile with
   API writes `0`, external browser requests blocked, heap delta `-1099488`,
@@ -164,11 +173,12 @@ Open archived evidence only when a task needs it. The single active queue is
   long-task maximum `95ms`. Native hidden-state throttling was not observed;
   only synthetic visibility was measured, so it remains open final-candidate
   browser evidence.
-- The 2026-08-11 09:00Z prelaunch passes every required-local row: V9/V10
+- The current-candidate prelaunch passes every required-local row: V9/V10
   compile/invariants, P1/EVM `36/36`, typecheck, 457-file lint, hermetic build,
   bundle baseline, SQLite operations, logic, security-followup, and dependency
-  proofs. The fresh all-deps proof retains one known development-toolchain High
-  advisory.
+  proofs. A subsequent clean `npm ci`, hermetic build, and bundle baseline
+  reproduced the local build result. The all-deps proof retains `9` known
+  development-toolchain High advisories under the documented policy.
 
 ## External and live blockers
 
