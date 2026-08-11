@@ -21,7 +21,8 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   with a single-writer lease, black-box API/shared-admission tests, and bounded
   P1 orchestration.
 - Split ten business-test domains out of the monolith, including the isolated
-  game-data/presentation assertions, and updated CI locally
+  game-data/presentation assertions. Its pure game-data bounds now use direct
+  behavioral inputs instead of duplicated source-shape regexes; CI was updated locally.
   for Windows, scheduled audits, indexer/P1 coverage, timeouts, concurrency, and
   compact artifacts.
 - Follow-up `f01aa22` extracts wallet-runtime state-machine coverage; direct
