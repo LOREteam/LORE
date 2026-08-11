@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { getCanonicalRpcHostname } from "../config/productionRuntime";
+import { sanitizeSentryPayload } from "../app/lib/sentrySanitize";
 
 const ADDRESS_RE = /^0x[0-9a-f]{40}$/i;
 const HASH_RE = /^0x[0-9a-f]{64}$/i;
@@ -10,6 +11,11 @@ export const INDEXER_RPC_MAX_JSON_DEPTH = 64;
 export const INDEXER_RPC_MAX_LOG_TOPICS = 4;
 export const INDEXER_RPC_MAX_LOG_DATA_BYTES = 1024 * 1024;
 const INDEXER_RPC_MAX_AGREEMENT_FINGERPRINT_BYTES = 4 * 1024;
+
+export function describeIndexerError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "unknown");
+  return sanitizeSentryPayload(message).slice(0, 160);
+}
 
 export type IndexerRpcLog = {
   address: string;

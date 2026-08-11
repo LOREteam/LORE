@@ -41,7 +41,6 @@ import { tileMaskToTileIds } from "../app/lib/tileMask";
 import { normalizeTileAmounts } from "../app/lib/tokenAmountMath";
 import { getIndexerFinalityTargetBlock, parseIndexerFinalityBlocks } from "../app/lib/indexerFinality";
 import { parseIndexerWatchFailureLimit, recordIndexerWatchFailure } from "../app/lib/indexerWatchPolicy";
-import { sanitizeSentryPayload } from "../app/lib/sentrySanitize";
 import {
   acquireIndexerLease,
   buildIndexerBetIdentity,
@@ -75,6 +74,7 @@ import {
   createBoundedIndexerRunPlan,
   createIndexerRpcWorkBudget,
   createReconcileEpochPlan,
+  describeIndexerError,
   isIndexerRpcResponseLimitError,
   isIndexerRpcWorkBudgetError,
   parseIndexerCatchupChunkBlocks,
@@ -84,6 +84,12 @@ import {
   type IndexerRpcWorkBudget,
   validateRpcLogSet,
 } from "./indexerSafety";
+import {
+  parseChainPositiveSafeInteger,
+  parseChainTileId,
+  parseChainTileIds,
+  toDisplayNumberWei,
+} from "./indexerNormalization.mjs";
 
 assertProductionRuntimeConfig("indexer");
 
@@ -124,14 +130,8 @@ const INDEXER_LEASE_TTL_MS = 60_000;
 const INDEXER_LEASE_HEARTBEAT_INTERVAL_MS = 15_000;
 const RETRY_COUNT = 5;
 const RETRY_DELAY_MS = 5_000;
-const MAX_TILE_ID = 25;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const CANONICAL_INDEXED_EPOCH_RE = /^[1-9]\d{0,15}$/;
-
-function describeIndexerError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error ?? "unknown");
-  return sanitizeSentryPayload(message).slice(0, 160);
-}
 const INTER_CHUNK_DELAY_MS = 400;
 const RPC_CALL_TIMEOUT_MS = parseOptionalPositiveIntegerEnv(process.env.INDEXER_RPC_TIMEOUT_MS, 45_000);
 const MIN_ADAPTIVE_LOG_RANGE_BLOCKS = parseOptionalNonNegativeBigIntEnv(process.env.INDEXER_MIN_ADAPTIVE_LOG_RANGE_BLOCKS, 250n);
@@ -169,40 +169,10 @@ function parseChainCurrentEpochNumber(value: bigint, observedBlock: bigint): num
   return parsePlausibleCurrentEpoch(value, INDEXER_START_BLOCK, observedBlock);
 }
 
-function parseChainPositiveSafeInteger(value: bigint): number | null {
-  if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
 function parseIndexedEpochKey(value: string): number | null {
   if (!CANONICAL_INDEXED_EPOCH_RE.test(value)) return null;
   const parsed = BigInt(value);
   return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
-}
-
-function parseChainTileId(value: bigint): number | null {
-  if (value <= 0n || value > BigInt(MAX_TILE_ID)) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_TILE_ID ? parsed : null;
-}
-
-function parseChainTileIds(values: readonly bigint[]): number[] | null {
-  const tileIds: number[] = [];
-  for (const value of values) {
-    const tileId = parseChainTileId(value);
-    if (tileId === null) return null;
-    tileIds.push(tileId);
-  }
-  return tileIds;
-}
-
-function toDisplayNumberWei(value: bigint): number {
-  if (value <= 0n) return 0;
-  const scale = 1_000_000_000_000n;
-  const scaled = (value + (scale / 2n)) / scale;
-  if (scaled > MAX_SAFE_INTEGER_BIGINT) return Number.MAX_SAFE_INTEGER;
-  return Number(scaled) / 1_000_000;
 }
 
 type IndexerRunStatus = {
