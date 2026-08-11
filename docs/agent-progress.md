@@ -79,8 +79,8 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   JS bytes, largest `1002767`, under the `1250000` limit.
 - Typecheck, `457`-file lint (`0` issues), logic, logic summary,
   security-followup `8/8`, production dependency proof, both full checks, and
-  prelaunch required-local rows pass. The all-deps proof retains `9` known
-  development-toolchain High advisories.
+  prelaunch required-local rows pass. The fresh all-deps proof retains one
+  known development-toolchain High advisory.
 - Both `46d3bc50` and `d626a0f` now have completed two-hour local performance
   profiles with zero API writes and negative net heap delta. `d626a0f` records
   `134` blocked external browser requests and a `95ms` maximum long task. The

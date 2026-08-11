@@ -40,8 +40,8 @@ Open archived evidence only when a task needs it. The single active queue is
   hermetic production build, and the EVM-inclusive P1 runner pass against this
   lockfile.
 - `npm ls --omit=dev --package-lock-only` is clean and both dependency audit
-  gates pass: production has no blocking High/Critical; all-deps has only the
-  nine explicitly allowed dev-toolchain High advisories. The exact `nanoid`
+  gates pass: production has no blocking High/Critical; the fresh all-deps
+  result has one explicitly allowed dev-toolchain High advisory. The exact `nanoid`
   (`3.3.17`) and `js-yaml` (`4.3.1`) overrides resolve. npm 11's full
   `npm ls --all --package-lock-only` still reports internal invalid markers
   after a clean install, so it is evidence to investigate, not a false claim
@@ -167,8 +167,8 @@ Open archived evidence only when a task needs it. The single active queue is
 - The 2026-08-11 09:00Z prelaunch passes every required-local row: V9/V10
   compile/invariants, P1/EVM `36/36`, typecheck, 457-file lint, hermetic build,
   bundle baseline, SQLite operations, logic, security-followup, and dependency
-  proofs. The all-deps proof retains `9` known development-toolchain High
-  advisories.
+  proofs. The fresh all-deps proof retains one known development-toolchain High
+  advisory.
 
 ## External and live blockers
 
