@@ -30,15 +30,14 @@ const nextConfig = {
       ignored: devWatchIgnored,
     };
     config.resolve = config.resolve ?? {};
-    config.resolve.modules = [
-      path.resolve(projectRoot, "node_modules"),
-      "node_modules",
-      ...(config.resolve.modules ?? []),
-    ];
     config.resolve.alias = {
       ...(config.resolve.alias ?? {}),
       "@react-native-async-storage/async-storage": false,
       "@farcaster/mini-app-solana": false,
+      // `accounts` is an optional peer used only by Wagmi's Tempo connectors.
+      // Keep absent peers absent rather than making the client bundle resolve an
+      // unused dynamic connector module at build time.
+      accounts: false,
       tailwindcss: path.resolve(projectRoot, "node_modules", "tailwindcss"),
       "viem$": path.resolve(projectRoot, "node_modules", "viem", "_esm", "index.js"),
       "porto/internal": path.resolve(projectRoot, "node_modules", "porto", "dist", "internal", "index.js"),
