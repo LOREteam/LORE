@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { getPreviewAgeMs } from "./preview-freshness.mjs";
 
 const PREVIEW_PATH = path.join("docs", "v10-canary-dry-run-preview.md");
 const MAX_PREVIEW_BYTES = 512 * 1024;
@@ -97,8 +98,7 @@ function validatePreview() {
   const markdown = readBoundedText(PREVIEW_PATH, MAX_PREVIEW_BYTES, "V10 dry-run Preview markdown");
   const updatedAt = markdown.match(/^Last updated:\s*([0-9TZ:.-]+)\.$/m)?.[1] ?? "";
   const updatedMs = Date.parse(updatedAt);
-  if (!Number.isFinite(updatedMs)) throw new Error("V10 dry-run Preview timestamp is missing or invalid");
-  const ageMs = Math.max(0, Date.now() - updatedMs);
+  const ageMs = getPreviewAgeMs(updatedMs);
   const maxPreviewAgeMs = requireFreshAuthorization
     ? AUTHORIZATION_EFFECTIVE_MAX_PREVIEW_AGE_MS
     : MAX_PREVIEW_AGE_MS;

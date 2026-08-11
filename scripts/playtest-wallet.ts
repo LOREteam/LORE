@@ -1,5 +1,4 @@
-import "dotenv/config";
-
+import { config as loadDotenv } from "dotenv";
 import {
   createPublicClient,
   createWalletClient,
@@ -59,6 +58,7 @@ const MAX_UINT256 = (1n << 256n) - 1n;
 const EPOCH_BOUND_BITMAP_SELECTOR = toFunctionSelector(
   "placeBatchBetsBitmapForEpoch(uint256,uint32,uint256)",
 );
+const SIGNING_ENV_NAME_RE = /(?:^|_)(?:PRIVATE_KEY|MNEMONIC|SEED(?:_PHRASE)?|SIGNING_KEY)(?:_|$)/i;
 
 type PlaytestSummary = {
   address: Address;
@@ -129,6 +129,12 @@ async function waitForSafeEpochWindow(publicClient: PublicClient) {
     console.log(`[playtest] epoch ${epoch.toString()} too close to end (${secondsLeft}s left), waiting ${Math.ceil(waitMs / 1000)}s`);
     await delay(waitMs);
   }
+}
+
+function hasSigningMaterialInEnvironment() {
+  return Object.entries(process.env).some(
+    ([name, value]) => Boolean(value?.trim()) && SIGNING_ENV_NAME_RE.test(name),
+  );
 }
 
 async function readEpochWindow(publicClient: PublicClient) {
@@ -497,6 +503,12 @@ function parseContentLengthHeader(value: string | null) {
 async function main() {
   if (EXECUTE_REQUESTED && process.env.TEST_WALLET_EXECUTE !== "1") {
     throw new Error("Refusing wallet playtest execution without TEST_WALLET_EXECUTE=1");
+  }
+  if (DRY_RUN && hasSigningMaterialInEnvironment()) {
+    throw new Error("Dry-run wallet playtest refuses inherited signing material");
+  }
+  if (LIVE_EXECUTION_CONFIRMED) {
+    loadDotenv({ override: false, quiet: true });
   }
   const account = LIVE_EXECUTION_CONFIRMED && process.env.TEST_WALLET_PRIVATE_KEY?.trim()
     ? privateKeyToAccount(normalizePrivateKey(getRequiredEnv("TEST_WALLET_PRIVATE_KEY")))

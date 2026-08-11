@@ -16,6 +16,7 @@ import {
   readLatestBackupSnapshot,
   saveRuntimeIssueState,
 } from "./runtime-monitor-lib.mjs";
+import { assertTrustedHealthCredentialOrigin } from "./health-credential-origin.mjs";
 import { redactProofText } from "./redact-proof-output.mjs";
 
 const MAX_RUNTIME_MONITOR_RESPONSE_BYTES = 256 * 1024;
@@ -190,15 +191,28 @@ function backupDirectoryIsExternalSafe() {
 
 function getRuntimeMonitorMissingConfig() {
   const missing = [];
+  const baseIsOriginOnly = Boolean(baseUrl) && isRuntimeMonitorOrigin(baseUrl);
+  const baseHasAllowedNetworkLocation = baseIsOriginOnly && (allowLocal || isFinalHttpsOrigin(baseUrl));
   if (configErrors.length > 0) missing.push("invalid-config");
   if (!baseUrl) {
     missing.push("base-url");
-  } else if (!isRuntimeMonitorOrigin(baseUrl)) {
+  } else if (!baseIsOriginOnly) {
     missing.push("origin-only-base-url");
-  } else if (!allowLocal && !isFinalHttpsOrigin(baseUrl)) {
+  } else if (!baseHasAllowedNetworkLocation) {
     missing.push("public-https-base-url");
   }
   if (!diagnosticsSecret) missing.push("health-diagnostics-secret");
+  if (baseHasAllowedNetworkLocation && diagnosticsSecret) {
+    try {
+      assertTrustedHealthCredentialOrigin({
+        target: baseUrl,
+        canonicalOrigin: process.env.NEXT_PUBLIC_SITE_URL,
+        targetName: "RUNTIME_MONITOR_BASE_URL",
+      });
+    } catch {
+      missing.push("trusted-health-origin");
+    }
+  }
   if (!alertsConfigured && !allowNoAlerts) missing.push("alert-channel");
   if (strictProductionLikeMonitor && !allowLocal && !resendConfigured) missing.push("resend-email");
   if (strictProductionLikeMonitor && !allowLocal && !backupDirectory) missing.push("backup-directory");
@@ -270,7 +284,11 @@ function validateConfig() {
       throw new Error("RUNTIME_MONITOR_BACKUP_DIR or LORE_BACKUP_DIR must be outside the repo checkout");
     }
   }
-  return url;
+  return assertTrustedHealthCredentialOrigin({
+    target: url,
+    canonicalOrigin: process.env.NEXT_PUBLIC_SITE_URL,
+    targetName: "RUNTIME_MONITOR_BASE_URL",
+  });
 }
 
 async function fetchJson(origin, pathname) {
@@ -279,6 +297,7 @@ async function fetchJson(origin, pathname) {
       "cache-control": "no-cache",
       "x-health-diagnostics-secret": diagnosticsSecret,
     },
+    redirect: "error",
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);

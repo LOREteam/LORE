@@ -10,7 +10,6 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import {
   createPublicClient,
-  fallback,
   http,
   decodeEventLog,
   formatUnits,
@@ -36,6 +35,7 @@ import { assertProductionRuntimeConfig } from "../config/productionRuntime";
 import {
   parseOptionalNonNegativeBigIntEnv,
   parseOptionalPositiveIntegerEnv,
+  parseOptionalPositiveIntegerInRangeEnv,
 } from "../config/envParsing";
 import { tileMaskToTileIds } from "../app/lib/tileMask";
 import { normalizeTileAmounts } from "../app/lib/tokenAmountMath";
@@ -47,6 +47,7 @@ import {
   buildIndexerBetIdentity,
   commitIndexerChunk,
   getIndexerBlockCheckpoints,
+  getMetaJsonStrict,
   heartbeatIndexerLease,
   normalizeIndexerLogIndex,
   patchJsonPath,
@@ -67,6 +68,22 @@ import {
   normalizeBlockHash,
   verifyCanonicalLogBlockHashes,
 } from "./indexerForkRecovery";
+import {
+  awaitExactRpcAgreement,
+  createBoundedBackwardBlockScanPlan,
+  createBoundedIndexerRpcFetch,
+  createBoundedIndexerRunPlan,
+  createIndexerRpcWorkBudget,
+  createReconcileEpochPlan,
+  isIndexerRpcResponseLimitError,
+  isIndexerRpcWorkBudgetError,
+  parseIndexerCatchupChunkBlocks,
+  parsePlausibleCurrentEpoch,
+  reduceIndexerCatchupChunkBlocks,
+  requireIndependentRpcUrls,
+  type IndexerRpcWorkBudget,
+  validateRpcLogSet,
+} from "./indexerSafety";
 
 assertProductionRuntimeConfig("indexer");
 
@@ -85,11 +102,23 @@ const DEPLOY_BLOCK = getConfiguredDeployBlock(
 const INDEXER_START_BLOCK = DEPLOY_BLOCK;
 const CHUNK_BLOCKS = 2_000n;
 const RUN_CHUNK_BLOCKS = 5_000n;
+const MAX_RUN_HEAD_GAP_BLOCKS = 100_000n;
+const MAX_RUN_CHUNKS = 20;
 // Sepolia public RPC rejects 20k eth_getLogs ranges; 10k avoids retry splitting.
 const REPAIR_CHUNK_BLOCKS = 10_000n;
 // Reconcile adds indexed topic filters, so keep it within the proven regular fetch limit.
 const RECONCILE_SCAN_CHUNK_BLOCKS = CHUNK_BLOCKS;
 const RECONCILE_RECENT_LOOKBACK_BLOCKS = 150_000n;
+const RECONCILE_RECENT_EPOCH_WINDOW = 32;
+const RECONCILE_MAX_EPOCHS_HARD_CAP = 32;
+const RECONCILE_FULL_SCAN_MAX_CHUNKS_PER_PASS = 8;
+const INDEXER_RUN_MAX_RPC_CALLS = 512;
+const INDEXER_RUN_MAX_LOGS = 16_384;
+const INDEXER_RPC_MAX_LOGS_PER_RESPONSE = Math.floor(INDEXER_RUN_MAX_LOGS / 3);
+const INDEXER_RUN_MAX_SPLIT_NODES = 64;
+const INDEXER_RUN_MAX_ELAPSED_MS = 60_000;
+const INDEXER_CATCHUP_CHUNK_BLOCKS_META_KEY = "indexerCatchupChunkBlocks";
+const RECONCILE_BLOCK_CURSOR_META_KEY = "indexerReconcileBlockCursor";
 const POLL_INTERVAL_MS = 15_000;
 const INDEXER_LEASE_TTL_MS = 60_000;
 const INDEXER_LEASE_HEARTBEAT_INTERVAL_MS = 15_000;
@@ -112,9 +141,11 @@ const RECONCILE_INTERVAL_MS = parseOptionalPositiveIntegerEnv(
   process.env.INDEXER_RECONCILE_INTERVAL_MS,
   DEFAULT_INDEXER_RECONCILE_INTERVAL_MS,
 );
-const RECONCILE_MAX_EPOCHS_PER_PASS = parseOptionalPositiveIntegerEnv(
+const RECONCILE_MAX_EPOCHS_PER_PASS = parseOptionalPositiveIntegerInRangeEnv(
   process.env.INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS,
   DEFAULT_INDEXER_RECONCILE_MAX_EPOCHS_PER_PASS,
+  1,
+  RECONCILE_MAX_EPOCHS_HARD_CAP,
 );
 
 let lastReconcileAtMs = 0;
@@ -134,10 +165,8 @@ function getActiveIndexerLeaseOwnerToken() {
   return activeIndexerLeaseOwnerToken;
 }
 
-function parseChainCurrentEpochNumber(value: bigint): number | null {
-  if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+function parseChainCurrentEpochNumber(value: bigint, observedBlock: bigint): number | null {
+  return parsePlausibleCurrentEpoch(value, INDEXER_START_BLOCK, observedBlock);
 }
 
 function parseChainPositiveSafeInteger(value: bigint): number | null {
@@ -206,19 +235,22 @@ type IndexerReconcileStatus = {
   targetEpochs: number[];
 };
 
-const client = createPublicClient({
+const INDEXER_RPC_URLS = requireIndependentRpcUrls(getStableLineaReadRpcs(
+  process.env.KEEPER_RPC_URL ?? getDefaultLineaRpcs(APP_NETWORK)[0],
+  APP_NETWORK,
+));
+const boundedIndexerRpcFetch = createBoundedIndexerRpcFetch();
+
+const independentRpcClients = INDEXER_RPC_URLS.map((url) => createPublicClient({
   chain: APP_CHAIN,
-  transport: fallback(
-    getStableLineaReadRpcs(
-      process.env.KEEPER_RPC_URL ?? getDefaultLineaRpcs(APP_NETWORK)[0],
-      APP_NETWORK,
-    ).map((url) => http(url, {
-      timeout: 30_000,
-      retryCount: 0,
-    })),
-    { rank: true },
-  ),
-});
+  transport: http(url, {
+    fetchFn: boundedIndexerRpcFetch,
+    timeout: 30_000,
+    retryCount: 0,
+  }),
+}));
+
+type IndependentRpcClient = (typeof independentRpcClients)[number];
 
 // Storage helpers
 function storagePatch(path: string, data: Record<string, unknown>) {
@@ -259,15 +291,19 @@ const [feesFlushedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "Protoc
 // Chunked log fetcher
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function withRpcTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+async function withRpcTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs = RPC_CALL_TIMEOUT_MS,
+): Promise<T> {
   let timeoutHandle: NodeJS.Timeout | null = null;
   try {
     return await Promise.race<T>([
       promise,
       new Promise<T>((_, reject) => {
         timeoutHandle = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${RPC_CALL_TIMEOUT_MS}ms`));
-        }, RPC_CALL_TIMEOUT_MS);
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -276,10 +312,12 @@ async function withRpcTimeout<T>(promise: Promise<T>, label: string): Promise<T>
 }
 
 async function fetchLogsRequestWithRetry(
+  rpcClient: IndependentRpcClient,
   topics: Array<`0x${string}`>,
   from: bigint,
   to: bigint,
   kind: "log fetch" | "indexed log fetch",
+  budget: IndexerRpcWorkBudget,
 ): Promise<Log[]> {
   for (let attempt = 0; attempt < RETRY_COUNT; attempt++) {
     try {
@@ -288,14 +326,23 @@ async function fetchLogsRequestWithRetry(
         topics,
         fromBlock: from,
         toBlock: to,
-      } as unknown as Parameters<typeof client.getLogs>[0];
-      return await withRpcTimeout(client.getLogs(request), `getLogs(${from}-${to})`);
+      } as unknown as Parameters<typeof rpcClient.getLogs>[0];
+      const timeoutMs = Math.min(RPC_CALL_TIMEOUT_MS, budget.consumeRpcCall());
+      const logs = await withRpcTimeout(
+        rpcClient.getLogs(request),
+        `getLogs(${from}-${to})`,
+        timeoutMs,
+      );
+      budget.recordLogs(logs.length);
+      return logs;
     } catch (err) {
+      if (isIndexerRpcWorkBudgetError(err)) throw err;
+      if (isIndexerRpcResponseLimitError(err)) throw err;
       const msg = describeIndexerError(err).slice(0, 80);
       if (attempt < RETRY_COUNT - 1) {
         const wait = RETRY_DELAY_MS * (attempt + 1);
         console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} - wait ${wait}ms`);
-        await delay(wait);
+        await delay(Math.min(wait, budget.remainingTimeMs()));
       } else {
         throw new Error(`${kind} failed for ${from}-${to} after ${RETRY_COUNT} retries: ${msg}`);
       }
@@ -304,62 +351,51 @@ async function fetchLogsRequestWithRetry(
   throw new Error(`${kind} failed for ${from}-${to}: exhausted retries`);
 }
 
-async function fetchLogsRequestAdaptive(
-  topics: Array<`0x${string}`>,
-  label: string,
-  from: bigint,
-  to: bigint,
-): Promise<Log[]> {
-  for (let attempt = 0; attempt < RETRY_COUNT; attempt++) {
-    try {
-      const request = {
-        address: CONTRACT,
-        topics,
-        fromBlock: from,
-        toBlock: to,
-      } as unknown as Parameters<typeof client.getLogs>[0];
-      return await withRpcTimeout(client.getLogs(request), `getLogs(${from}-${to})`);
-    } catch (err) {
-      const msg = describeIndexerError(err).slice(0, 80);
-      if (attempt < RETRY_COUNT - 1) {
-        const wait = RETRY_DELAY_MS * (attempt + 1);
-        console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} - wait ${wait}ms`);
-        await delay(wait);
-      } else {
-        throw new Error(`indexed log fetch failed for ${from}-${to} after ${RETRY_COUNT} retries: ${msg}`);
-      }
-    }
-  }
-  throw new Error(`indexed log fetch failed for ${from}-${to}: exhausted retries`);
-}
-void fetchLogsRequestAdaptive;
-
 async function fetchLogsRequestAdaptiveSplit(
+  rpcClient: IndependentRpcClient,
   topics: Array<`0x${string}`>,
   label: string,
   from: bigint,
   to: bigint,
+  budget: IndexerRpcWorkBudget,
 ): Promise<Log[]> {
   const kind = topics.length === 1 ? "log fetch" : "indexed log fetch";
   try {
-    return await fetchLogsRequestWithRetry(topics, from, to, kind);
+    return await fetchLogsRequestWithRetry(rpcClient, topics, from, to, kind, budget);
   } catch (err) {
+    if (isIndexerRpcWorkBudgetError(err)) throw err;
+    if (isIndexerRpcResponseLimitError(err)) throw err;
     const span = to - from + 1n;
     if (span <= MIN_ADAPTIVE_LOG_RANGE_BLOCKS) {
       throw err;
     }
+    budget.consumeSplitNode();
     const leftTo = from + (span / 2n) - 1n;
     const rightFrom = leftTo + 1n;
     console.warn(
       `  [split] ${label} ${from}-${to}: ${describeIndexerError(err)}. splitting into ${from}-${leftTo} and ${rightFrom}-${to}`,
     );
-    const left = await fetchLogsRequestAdaptiveSplit(topics, `${label}:L`, from, leftTo);
+    const left = await fetchLogsRequestAdaptiveSplit(
+      rpcClient,
+      topics,
+      `${label}:L`,
+      from,
+      leftTo,
+      budget,
+    );
     if (rightFrom <= to) {
-      await delay(INTER_CHUNK_DELAY_MS);
+      await delay(Math.min(INTER_CHUNK_DELAY_MS, budget.remainingTimeMs()));
     }
     const right =
       rightFrom <= to
-        ? await fetchLogsRequestAdaptiveSplit(topics, `${label}:R`, rightFrom, to)
+        ? await fetchLogsRequestAdaptiveSplit(
+            rpcClient,
+            topics,
+            `${label}:R`,
+            rightFrom,
+            to,
+            budget,
+          )
         : [];
     return [...left, ...right];
   }
@@ -370,8 +406,84 @@ async function fetchLogsByTopicsAdaptive(
   label: string,
   from: bigint,
   to: bigint,
+  budget: IndexerRpcWorkBudget,
 ): Promise<Log[]> {
-  return fetchLogsRequestAdaptiveSplit(topics, label, from, to);
+  const minimumResponses = 2;
+  try {
+    const agreed = await awaitExactRpcAgreement(
+      independentRpcClients.map((rpcClient, index) => async () => {
+        const logs = await fetchLogsRequestAdaptiveSplit(
+          rpcClient,
+          topics,
+          `${label}:provider-${index + 1}`,
+          from,
+          to,
+          budget,
+        );
+        return validateRpcLogSet(logs, {
+          contractAddress: CONTRACT,
+          fromBlock: from,
+          toBlock: to,
+          requestedTopics: topics,
+        });
+      }),
+      minimumResponses,
+      (value) => value.agreementFingerprint,
+      budget,
+    );
+    return [...agreed.logs];
+  } catch (error) {
+    if (!isIndexerRpcResponseLimitError(error)) throw error;
+    const span = to - from + 1n;
+    if (span <= MIN_ADAPTIVE_LOG_RANGE_BLOCKS) throw error;
+    budget.consumeSplitNode();
+    const leftTo = from + (span / 2n) - 1n;
+    const rightFrom = leftTo + 1n;
+    console.warn(
+      `  [quorum split] ${label} ${from}-${to}: ${describeIndexerError(error)}. ` +
+        `splitting all providers into ${from}-${leftTo} and ${rightFrom}-${to}`,
+    );
+    const left = await fetchLogsByTopicsAdaptive(
+      topics,
+      `${label}:L`,
+      from,
+      leftTo,
+      budget,
+    );
+    if (rightFrom <= to) {
+      await delay(Math.min(INTER_CHUNK_DELAY_MS, budget.remainingTimeMs()));
+    }
+    const right = rightFrom <= to
+      ? await fetchLogsByTopicsAdaptive(topics, `${label}:R`, rightFrom, to, budget)
+      : [];
+    return [...left, ...right];
+  }
+}
+
+async function readWithExactIndexerRpcAgreement<T>(
+  label: string,
+  reader: (rpcClient: IndependentRpcClient) => Promise<T>,
+  fingerprint: (value: T) => string,
+  budget: IndexerRpcWorkBudget,
+): Promise<T> {
+  return awaitExactRpcAgreement(
+    independentRpcClients.map((rpcClient, index) => async () => {
+      const timeoutMs = Math.min(RPC_CALL_TIMEOUT_MS, budget.consumeRpcCall());
+      return withRpcTimeout(reader(rpcClient), `${label}:provider-${index + 1}`, timeoutMs);
+    }),
+    2,
+    fingerprint,
+    budget,
+  );
+}
+
+async function readAgreedHeadBlockNumber(budget: IndexerRpcWorkBudget) {
+  return readWithExactIndexerRpcAgreement(
+    "getBlockNumber",
+    (rpcClient) => rpcClient.getBlockNumber(),
+    (blockNumber) => blockNumber.toString(),
+    budget,
+  );
 }
 
 async function fetchLogsByTopicsChunked(
@@ -379,7 +491,8 @@ async function fetchLogsByTopicsChunked(
   label: string,
   from: bigint,
   to: bigint,
-  chunkSize = RECONCILE_SCAN_CHUNK_BLOCKS,
+  chunkSize: bigint,
+  budget: IndexerRpcWorkBudget,
 ): Promise<Log[]> {
   const all: Log[] = [];
   const ranges: Array<{ from: bigint; to: bigint }> = [];
@@ -395,9 +508,12 @@ async function fetchLogsByTopicsChunked(
       `${label}:${i + 1}/${ranges.length}`,
       range.from,
       range.to,
+      budget,
     );
     all.push(...logs);
-    if (i < ranges.length - 1) await delay(INTER_CHUNK_DELAY_MS);
+    if (i < ranges.length - 1) {
+      await delay(Math.min(INTER_CHUNK_DELAY_MS, budget.remainingTimeMs()));
+    }
     if ((i + 1) % 10 === 0 || i === ranges.length - 1) {
       console.log(`  [${label}] ${i + 1}/${ranges.length} chunks, ${all.length} logs`);
     }
@@ -410,9 +526,13 @@ function filterLogsByTopics(logs: Log[], topics: Array<`0x${string}`>) {
   return logs.filter((log) => topics.every((topic, index) => log.topics[index] === topic));
 }
 
-async function fetchAllLogs(from: bigint, to: bigint): Promise<Log[]> {
+async function fetchAllLogs(
+  from: bigint,
+  to: bigint,
+  budget: IndexerRpcWorkBudget,
+): Promise<Log[]> {
   // viem ignores raw `topics` in this client form, so fetch once and classify locally.
-  return fetchLogsRequestAdaptiveSplit([], "ContractEvents", from, to);
+  return fetchLogsByTopicsAdaptive([], "ContractEvents", from, to, budget);
 }
 
 // Process a single log
@@ -920,21 +1040,31 @@ function writeFeeFlushes(feeFlushes: FeeFlushRecord[]) {
   upsertProtocolFeeFlushes(rows);
 }
 
-async function readCanonicalBlockHash(blockNumber: bigint) {
-  const block = await withRpcTimeout(
-    client.getBlock({ blockNumber }),
+async function readCanonicalBlockHash(
+  blockNumber: bigint,
+  budget: IndexerRpcWorkBudget,
+) {
+  return readWithExactIndexerRpcAgreement(
     `getBlock(${blockNumber})`,
+    async (rpcClient) => {
+      const block = await rpcClient.getBlock({ blockNumber });
+      const blockHash = normalizeBlockHash(block.hash);
+      if (blockHash === null) {
+        throw new Error(`RPC returned an invalid block hash at block ${blockNumber}`);
+      }
+      return blockHash;
+    },
+    (blockHash) => blockHash,
+    budget,
   );
-  const blockHash = normalizeBlockHash(block.hash);
-  if (blockHash === null) {
-    throw new Error(`RPC returned an invalid block hash at block ${blockNumber}`);
-  }
-  return blockHash;
 }
 
-async function readStableCanonicalBlockHash(blockNumber: bigint) {
-  const firstHash = await readCanonicalBlockHash(blockNumber);
-  const secondHash = await readCanonicalBlockHash(blockNumber);
+async function readStableCanonicalBlockHash(
+  blockNumber: bigint,
+  budget: IndexerRpcWorkBudget,
+) {
+  const firstHash = await readCanonicalBlockHash(blockNumber, budget);
+  const secondHash = await readCanonicalBlockHash(blockNumber, budget);
   if (firstHash !== secondHash) {
     throw new Error(`RPC block hash changed during fork recovery at block ${blockNumber}`);
   }
@@ -945,6 +1075,7 @@ async function fetchCanonicalChunk(
   fromBlock: bigint,
   toBlock: bigint,
   previousCheckpoint: IndexerBlockCheckpoint | null,
+  budget: IndexerRpcWorkBudget,
 ) {
   if (
     previousCheckpoint !== null &&
@@ -954,20 +1085,23 @@ async function fetchCanonicalChunk(
   }
 
   if (previousCheckpoint !== null) {
-    const previousHashBefore = await readCanonicalBlockHash(fromBlock - 1n);
+    const previousHashBefore = await readCanonicalBlockHash(fromBlock - 1n, budget);
     if (previousHashBefore !== previousCheckpoint.blockHash) {
       throw new Error(`indexer predecessor checkpoint changed at block ${fromBlock - 1n}`);
     }
   }
-  const endHashBefore = await readCanonicalBlockHash(toBlock);
-  const logs = await fetchAllLogs(fromBlock, toBlock);
-  await verifyCanonicalLogBlockHashes(logs, readCanonicalBlockHash);
-  const endHashAfter = await readCanonicalBlockHash(toBlock);
+  const endHashBefore = await readCanonicalBlockHash(toBlock, budget);
+  const logs = await fetchAllLogs(fromBlock, toBlock, budget);
+  await verifyCanonicalLogBlockHashes(
+    logs,
+    (blockNumber) => readCanonicalBlockHash(blockNumber, budget),
+  );
+  const endHashAfter = await readCanonicalBlockHash(toBlock, budget);
   if (endHashAfter !== endHashBefore) {
     throw new Error(`canonical chain changed while indexing blocks ${fromBlock}-${toBlock}`);
   }
   if (previousCheckpoint !== null) {
-    const previousHashAfter = await readCanonicalBlockHash(fromBlock - 1n);
+    const previousHashAfter = await readCanonicalBlockHash(fromBlock - 1n, budget);
     if (previousHashAfter !== previousCheckpoint.blockHash) {
       throw new Error(`indexer predecessor checkpoint changed at block ${fromBlock - 1n}`);
     }
@@ -976,12 +1110,18 @@ async function fetchCanonicalChunk(
   return { logs, blockHash: endHashAfter };
 }
 
-async function recoverCanonicalIndexerState(lastBlock: bigint) {
+async function recoverCanonicalIndexerState(
+  lastBlock: bigint,
+  budget: IndexerRpcWorkBudget,
+) {
   const checkpoints = getIndexerBlockCheckpoints().filter(
     (checkpoint) => BigInt(checkpoint.blockNumber) <= lastBlock,
   );
   const commonCheckpoint = checkpoints.length > 0
-    ? await findLatestCanonicalCheckpoint(checkpoints, readStableCanonicalBlockHash)
+    ? await findLatestCanonicalCheckpoint(
+        checkpoints,
+        (blockNumber) => readStableCanonicalBlockHash(blockNumber, budget),
+      )
     : null;
   const usableCommonCheckpoint =
     commonCheckpoint !== null && BigInt(commonCheckpoint.blockNumber) >= INDEXER_START_BLOCK
@@ -1011,32 +1151,41 @@ async function recoverCanonicalIndexerState(lastBlock: bigint) {
   return { lastBlock: rollbackBlock, checkpoint: usableCommonCheckpoint };
 }
 
-async function updateCurrentEpochMeta() {
+async function updateCurrentEpochMeta(
+  blockNumber: bigint,
+  budget: IndexerRpcWorkBudget,
+) {
   try {
-    const currentEpoch = await withRpcTimeout(client.readContract({
-      address: CONTRACT,
-      abi: READ_ABI,
-      functionName: "currentEpoch",
-    }), "read currentEpoch");
-    const currentEpochNumber = parseChainCurrentEpochNumber(currentEpoch);
+    const currentEpoch = await getCurrentEpochFromChain(blockNumber, budget);
+    const currentEpochNumber = parseChainCurrentEpochNumber(currentEpoch, blockNumber);
     if (currentEpochNumber === null) {
-      console.warn("[indexer] Ignoring unsafe currentEpoch value from contract.");
+      console.warn("[indexer] Ignoring implausible currentEpoch value from contract.");
       return;
     }
     assertActiveIndexerLease();
     storagePut("gamedata/_meta/currentEpoch", currentEpochNumber);
   } catch (err) {
     if (err instanceof IndexerLeaseError) throw err;
+    if (isIndexerRpcWorkBudgetError(err)) throw err;
     console.warn("[indexer] Could not read currentEpoch from contract:", describeIndexerError(err));
   }
 }
 
-async function getCurrentEpochFromChain() {
-  return await withRpcTimeout(client.readContract({
-    address: CONTRACT,
-    abi: READ_ABI,
-    functionName: "currentEpoch",
-  }), "read currentEpoch");
+async function getCurrentEpochFromChain(
+  blockNumber: bigint,
+  budget: IndexerRpcWorkBudget,
+) {
+  return readWithExactIndexerRpcAgreement(
+    `read currentEpoch(${blockNumber})`,
+    (rpcClient) => rpcClient.readContract({
+      address: CONTRACT,
+      abi: READ_ABI,
+      functionName: "currentEpoch",
+      blockNumber,
+    }),
+    (currentEpoch) => currentEpoch.toString(),
+    budget,
+  );
 }
 
 async function getLastBlock(): Promise<bigint> {
@@ -1071,7 +1220,77 @@ function setRepairCursorBlock(block: bigint) {
   storagePut("gamedata/_meta/repairCursorBlock", block.toString());
 }
 
-async function runRepairPass(currentBlock: bigint) {
+function getIndexerCatchupChunkBlocks() {
+  return parseIndexerCatchupChunkBlocks(
+    getMetaJsonStrict<unknown>(INDEXER_CATCHUP_CHUNK_BLOCKS_META_KEY),
+    RUN_CHUNK_BLOCKS,
+  );
+}
+
+function getReconcileEpochCursor() {
+  const value = getMetaJsonStrict<unknown>("reconcileEpochCursor");
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value === "string") return parseIndexedEpochKey(value) ?? 1;
+  if (value !== null) throw new Error("stored reconcile epoch cursor is invalid");
+  return 1;
+}
+
+function setReconcileEpochCursorInsideLease(epoch: number) {
+  setMetaJson("reconcileEpochCursor", epoch);
+}
+
+function setReconcileEpochCursor(epoch: number) {
+  runIndexerStorageTransaction(
+    getActiveIndexerLeaseOwnerToken(),
+    () => setReconcileEpochCursorInsideLease(epoch),
+  );
+}
+
+type ReconcileBlockCursor = {
+  epoch: number;
+  nextToBlock: bigint;
+};
+
+function getReconcileBlockCursor(): ReconcileBlockCursor | null {
+  const value = getMetaJsonStrict<unknown>(RECONCILE_BLOCK_CURSOR_META_KEY);
+  if (value === null) return null;
+  if (!value || typeof value !== "object") {
+    throw new Error("stored reconcile block cursor is invalid");
+  }
+  const epoch = (value as { epoch?: unknown }).epoch;
+  const nextToBlock = (value as { nextToBlock?: unknown }).nextToBlock;
+  if (
+    typeof epoch !== "number" ||
+    !Number.isSafeInteger(epoch) ||
+    epoch <= 0 ||
+    typeof nextToBlock !== "string" ||
+    !/^\d+$/.test(nextToBlock)
+  ) {
+    throw new Error("stored reconcile block cursor is invalid");
+  }
+  const parsedBlock = BigInt(nextToBlock);
+  if (parsedBlock < INDEXER_START_BLOCK) {
+    throw new Error("stored reconcile block cursor precedes the deploy block");
+  }
+  return { epoch, nextToBlock: parsedBlock };
+}
+
+function setReconcileBlockCursor(cursor: ReconcileBlockCursor | null) {
+  runIndexerStorageTransaction(
+    getActiveIndexerLeaseOwnerToken(),
+    () => setMetaJson(
+      RECONCILE_BLOCK_CURSOR_META_KEY,
+      cursor === null
+        ? null
+        : { epoch: cursor.epoch, nextToBlock: cursor.nextToBlock.toString() },
+    ),
+  );
+}
+
+async function runRepairPass(
+  currentBlock: bigint,
+  budget: IndexerRpcWorkBudget,
+) {
   let from = await getRepairCursorBlock();
   if (from < INDEXER_START_BLOCK) from = INDEXER_START_BLOCK;
 
@@ -1083,7 +1302,7 @@ async function runRepairPass(currentBlock: bigint) {
       repairedLogs: 0,
     };
     setIndexerStatus("indexerRepairStatus", status);
-    await updateCurrentEpochMeta();
+    await updateCurrentEpochMeta(currentBlock, budget);
     return 0;
   }
 
@@ -1093,7 +1312,7 @@ async function runRepairPass(currentBlock: bigint) {
 
   console.log(`[indexer][repair] Scanning ${from} -> ${to} (${to - from + 1n} blocks)`);
 
-  const { logs } = await fetchCanonicalChunk(from, to, null);
+  const { logs } = await fetchCanonicalChunk(from, to, null, budget);
   const parsed = processLogs(logs);
   runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
     writeBets(parsed.bets);
@@ -1112,7 +1331,7 @@ async function runRepairPass(currentBlock: bigint) {
     console.log("[indexer][repair] No logs in this range");
   }
 
-  await updateCurrentEpochMeta();
+  await updateCurrentEpochMeta(currentBlock, budget);
   const status: IndexerRepairStatus = {
     at: Date.now(),
     fromBlock: from.toString(),
@@ -1123,16 +1342,19 @@ async function runRepairPass(currentBlock: bigint) {
   return logs.length;
 }
 
-async function runEpochReconcile(currentBlock: bigint) {
+async function runEpochReconcile(
+  currentBlock: bigint,
+  budget: IndexerRpcWorkBudget,
+) {
   assertActiveIndexerLease();
   const now = Date.now();
   if (now - lastReconcileAtMs < RECONCILE_INTERVAL_MS) return 0;
   lastReconcileAtMs = now;
 
-  const currentEpoch = await getCurrentEpochFromChain();
-  const currentEpochNumber = parseChainCurrentEpochNumber(currentEpoch);
+  const currentEpoch = await getCurrentEpochFromChain(currentBlock, budget);
+  const currentEpochNumber = parseChainCurrentEpochNumber(currentEpoch, currentBlock);
   if (currentEpochNumber === null) {
-    console.warn("[indexer][reconcile] Skipping reconcile for unsafe currentEpoch value from contract.");
+    console.warn("[indexer][reconcile] Skipping reconcile for implausible currentEpoch value from contract.");
     setIndexerStatus("indexerReconcileStatus", {
       at: now,
       currentEpoch: 0,
@@ -1164,12 +1386,29 @@ async function runEpochReconcile(currentBlock: bigint) {
     if (n !== null) have.add(n);
   }
 
-  const missing: number[] = [];
-  for (let ep = 1; ep < currentEpochNumber; ep++) {
-    if (!have.has(ep)) missing.push(ep);
+  const reconcilePlan = createReconcileEpochPlan({
+    currentEpoch: currentEpochNumber,
+    cursor: getReconcileEpochCursor(),
+    indexedEpochs: have,
+    maxTargets: RECONCILE_MAX_EPOCHS_PER_PASS,
+    recentWindow: RECONCILE_RECENT_EPOCH_WINDOW,
+  });
+  let reconcileBlockCursor = getReconcileBlockCursor();
+  if (
+    reconcileBlockCursor &&
+    (reconcileBlockCursor.epoch >= currentEpochNumber || have.has(reconcileBlockCursor.epoch))
+  ) {
+    setReconcileBlockCursor(null);
+    reconcileBlockCursor = null;
   }
-  if (missing.length === 0) {
-    console.log("[indexer][reconcile] No missing epochs");
+  let targets = [...reconcilePlan.targetEpochs];
+  if (reconcileBlockCursor && !targets.includes(reconcileBlockCursor.epoch)) {
+    targets = [reconcileBlockCursor.epoch, ...targets]
+      .slice(0, RECONCILE_MAX_EPOCHS_PER_PASS);
+  }
+  if (targets.length === 0) {
+    setReconcileEpochCursor(reconcilePlan.nextCursor);
+    console.log("[indexer][reconcile] No missing epochs in the bounded candidate window");
     const status: IndexerReconcileStatus = {
       at: now,
       currentEpoch: currentEpochNumber,
@@ -1181,68 +1420,117 @@ async function runEpochReconcile(currentBlock: bigint) {
     return 0;
   }
 
-  const reconcileBatchSize =
-    missing.length <= 32
-      ? missing.length
-      : missing.length <= 128
-        ? Math.max(RECONCILE_MAX_EPOCHS_PER_PASS, 16)
-        : Math.max(1, RECONCILE_MAX_EPOCHS_PER_PASS);
-  const targets = missing.slice(-reconcileBatchSize);
-  console.log(`[indexer][reconcile] Missing epochs: ${missing.length}, repairing now: ${targets.join(", ")}`);
+  console.log(
+    `[indexer][reconcile] Missing bounded candidates: ${targets.length}, repairing now: ${targets.join(", ")}`,
+  );
   setIndexerStatus("indexerReconcileStatus", {
     at: Date.now(),
     currentEpoch: currentEpochNumber,
-    missingEpochs: missing.length,
+    missingEpochs: targets.length,
     repairedEpochs: 0,
     targetEpochs: targets,
   } satisfies IndexerReconcileStatus);
 
   const epochsPatch = new Map<string, EpochRecord>();
+  let fullScanChunksRemaining = RECONCILE_FULL_SCAN_MAX_CHUNKS_PER_PASS;
+  const nextReconcileEpochCursor = reconcilePlan.nextCursor;
   for (const epNum of targets) {
+    try {
     const epTopic = toHex(BigInt(epNum), { size: 32 });
     const recentCandidate =
       currentBlock > RECONCILE_RECENT_LOOKBACK_BLOCKS
         ? currentBlock - RECONCILE_RECENT_LOOKBACK_BLOCKS
         : INDEXER_START_BLOCK;
     const recentFrom = recentCandidate > INDEXER_START_BLOCK ? recentCandidate : INDEXER_START_BLOCK;
-    let logs = await fetchLogsByTopicsChunked(
-      [resolvedSig, epTopic],
-      `EpochResolved:${epNum}:recent`,
-      recentFrom,
-      currentBlock,
-    );
+    const resumingFullScan = reconcileBlockCursor?.epoch === epNum;
+    let logs = resumingFullScan
+      ? []
+      : await fetchLogsByTopicsChunked(
+          [resolvedSig, epTopic],
+          `EpochResolved:${epNum}:recent`,
+          recentFrom,
+          currentBlock,
+          RECONCILE_SCAN_CHUNK_BLOCKS,
+          budget,
+        );
     logs = filterLogsByTopics(logs, [resolvedSig, epTopic]);
-    if (logs.length === 0 && recentFrom > INDEXER_START_BLOCK) {
-      console.log(`[indexer][reconcile] Epoch ${epNum} not found in recent tail, falling back to full scan`);
-      logs = await fetchLogsByTopicsChunked(
-        [resolvedSig, epTopic],
-        `EpochResolved:${epNum}:full`,
+    if (
+      logs.length === 0 &&
+      recentFrom > INDEXER_START_BLOCK &&
+      fullScanChunksRemaining > 0 &&
+      (!reconcileBlockCursor || resumingFullScan)
+    ) {
+      const fullScanCeiling = recentFrom - 1n;
+      const cursorToBlock = reconcileBlockCursor?.epoch === epNum &&
+          reconcileBlockCursor.nextToBlock < fullScanCeiling
+        ? reconcileBlockCursor.nextToBlock
+        : fullScanCeiling;
+      const fullScanPlan = createBoundedBackwardBlockScanPlan(
         INDEXER_START_BLOCK,
-        recentFrom - 1n,
+        cursorToBlock,
+        RECONCILE_SCAN_CHUNK_BLOCKS,
+        fullScanChunksRemaining,
       );
+      fullScanChunksRemaining -= fullScanPlan.chunkCount;
+      console.log(
+        `[indexer][reconcile] Epoch ${epNum} not found in recent tail; scanning bounded history ` +
+          `${fullScanPlan.fromBlock}-${fullScanPlan.toBlock} (${fullScanPlan.chunkCount} chunks)`,
+      );
+      logs = fullScanPlan.chunkCount > 0
+        ? await fetchLogsByTopicsChunked(
+            [resolvedSig, epTopic],
+            `EpochResolved:${epNum}:history`,
+            fullScanPlan.fromBlock,
+            fullScanPlan.toBlock,
+            RECONCILE_SCAN_CHUNK_BLOCKS,
+            budget,
+          )
+        : [];
       logs = filterLogsByTopics(logs, [resolvedSig, epTopic]);
+      if (logs.length > 0 || fullScanPlan.complete) {
+        setReconcileBlockCursor(null);
+        reconcileBlockCursor = null;
+      } else if (fullScanPlan.nextToBlock !== null) {
+        reconcileBlockCursor = {
+          epoch: epNum,
+          nextToBlock: fullScanPlan.nextToBlock,
+        };
+        setReconcileBlockCursor(reconcileBlockCursor);
+      }
     }
     if (logs.length === 0) continue;
 
     let isDailyJackpot = false;
     let isWeeklyJackpot = false;
     try {
-      const epochState = await withRpcTimeout(client.readContract({
-        address: CONTRACT,
-        abi: READ_ABI,
-        functionName: "epochs",
-        args: [BigInt(epNum)],
-      }), `read epochs(${epNum})`) as [bigint, bigint, bigint, boolean, boolean, boolean];
+      type EpochState = readonly [bigint, bigint, bigint, boolean, boolean, boolean];
+      const epochState = await readWithExactIndexerRpcAgreement<EpochState>(
+        `read epochs(${epNum},${currentBlock})`,
+        (rpcClient) => rpcClient.readContract({
+          address: CONTRACT,
+          abi: READ_ABI,
+          functionName: "epochs",
+          args: [BigInt(epNum)],
+          blockNumber: currentBlock,
+        }) as Promise<EpochState>,
+        (value) => value.map((item) => String(item)).join(":"),
+        budget,
+      );
       isDailyJackpot = Boolean(epochState[4]);
       isWeeklyJackpot = Boolean(epochState[5]);
     } catch (err) {
+      if (isIndexerRpcWorkBudgetError(err)) throw err;
       console.warn(`[indexer][reconcile] Could not read jackpot flags for epoch ${epNum}: ${describeIndexerError(err)}`);
+      continue;
     }
 
     // Keep last resolved log for epoch (safety)
     const log = logs[logs.length - 1];
     try {
-      await verifyCanonicalLogBlockHashes([log], readCanonicalBlockHash);
+      await verifyCanonicalLogBlockHashes(
+        [log],
+        (blockNumber) => readCanonicalBlockHash(blockNumber, budget),
+      );
       const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
       if (decoded.eventName !== "EpochResolved") continue;
       const args = decoded.args as {
@@ -1261,32 +1549,44 @@ async function runEpochReconcile(currentBlock: bigint) {
         resolvedBlock: (log.blockNumber ?? 0n).toString(),
       });
     } catch (err) {
+      if (isIndexerRpcWorkBudgetError(err)) throw err;
       console.warn("[indexer][reconcile] Failed to decode epoch log:", describeIndexerError(err));
     }
-    await delay(targets.length <= 8 ? 50 : 150);
+    await delay(Math.min(targets.length <= 8 ? 50 : 150, budget.remainingTimeMs()));
+    } catch (err) {
+      if (!isIndexerRpcWorkBudgetError(err)) throw err;
+      console.warn(
+        `[indexer][reconcile] RPC budget exhausted at epoch ${epNum}; unwinding the pass.`,
+      );
+      throw err;
+    }
   }
 
   if (epochsPatch.size > 0) {
     runIndexerStorageTransaction(
       getActiveIndexerLeaseOwnerToken(),
-      () => writeEpochs(epochsPatch),
+      () => {
+        writeEpochs(epochsPatch);
+        setReconcileEpochCursorInsideLease(nextReconcileEpochCursor);
+      },
     );
     console.log(`[indexer][reconcile] Repaired ${epochsPatch.size} epochs`);
     const status: IndexerReconcileStatus = {
       at: Date.now(),
       currentEpoch: currentEpochNumber,
-      missingEpochs: missing.length,
+      missingEpochs: targets.length,
       repairedEpochs: epochsPatch.size,
       targetEpochs: targets,
     };
     setIndexerStatus("indexerReconcileStatus", status);
     return epochsPatch.size;
   }
+  setReconcileEpochCursor(nextReconcileEpochCursor);
   console.log("[indexer][reconcile] No resolvable missing epochs in this pass");
   const status: IndexerReconcileStatus = {
     at: Date.now(),
     currentEpoch: currentEpochNumber,
-    missingEpochs: missing.length,
+    missingEpochs: targets.length,
     repairedEpochs: 0,
     targetEpochs: targets,
   };
@@ -1294,24 +1594,27 @@ async function runEpochReconcile(currentBlock: bigint) {
   return 0;
 }
 
-async function runIndexedMaintenance(chainTargetBlock: bigint) {
+async function runIndexedMaintenance(
+  chainTargetBlock: bigint,
+  budget: IndexerRpcWorkBudget,
+) {
   assertActiveIndexerLease();
   const indexedBlock = await getLastBlock();
   const maintenanceTarget = indexedBlock < chainTargetBlock ? indexedBlock : chainTargetBlock;
-  await runRepairPass(maintenanceTarget);
-  await runEpochReconcile(maintenanceTarget);
+  await runRepairPass(maintenanceTarget, budget);
+  await runEpochReconcile(maintenanceTarget, budget);
 }
 
 // Main loop
-async function runOnce() {
+async function runOnce(budget: IndexerRpcWorkBudget) {
   assertActiveIndexerLease();
   let lastBlock = await getLastBlock();
-  const headBlock = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
+  const headBlock = await readAgreedHeadBlockNumber(budget);
   const currentBlock = getIndexerFinalityTargetBlock(headBlock, INDEXER_FINALITY_BLOCKS);
 
   let previousCheckpoint: IndexerBlockCheckpoint | null = null;
   if (currentBlock !== null) {
-    const recovered = await recoverCanonicalIndexerState(lastBlock);
+    const recovered = await recoverCanonicalIndexerState(lastBlock, budget);
     lastBlock = recovered.lastBlock;
     previousCheckpoint = recovered.checkpoint;
   }
@@ -1334,11 +1637,25 @@ async function runOnce() {
       lastProcessedBlock: lastBlock.toString(),
     };
     setIndexerStatus("indexerRunStatus", status);
-    await updateCurrentEpochMeta();
+    await updateCurrentEpochMeta(headBlock, budget);
     return 0;
   }
 
-  if (fromBlock > currentBlock) {
+  const catchupChunkBlocks = getIndexerCatchupChunkBlocks();
+  const runPlan = createBoundedIndexerRunPlan(
+    lastBlock,
+    currentBlock,
+    catchupChunkBlocks,
+    MAX_RUN_HEAD_GAP_BLOCKS,
+    MAX_RUN_CHUNKS,
+  );
+  const runTargetBlock = runPlan.toBlock;
+  if (runPlan.chunkCount === 0) {
+    if (catchupChunkBlocks !== RUN_CHUNK_BLOCKS) {
+      runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+        setMetaJson(INDEXER_CATCHUP_CHUNK_BLOCKS_META_KEY, null);
+      });
+    }
     const status: IndexerRunStatus = {
       startedAt,
       lastHeartbeatAt: startedAt,
@@ -1357,22 +1674,25 @@ async function runOnce() {
     return 0;
   }
 
+  if (runPlan.capped) {
+    console.warn(
+      `[indexer] Capping this run at ${runTargetBlock}; finalized target ${currentBlock} remains ahead.`,
+    );
+  }
   console.log(
-    `[indexer] Scanning blocks ${fromBlock} -> ${currentBlock} (${currentBlock - fromBlock + 1n} blocks, head ${headBlock}, finality ${INDEXER_FINALITY_BLOCKS})`,
+    `[indexer] Scanning blocks ${fromBlock} -> ${runTargetBlock} (${runTargetBlock - fromBlock + 1n} blocks, head ${headBlock}, finality ${INDEXER_FINALITY_BLOCKS})`,
   );
 
   let totalLogs = 0;
-  let chunkCount = 0;
-  for (let start = fromBlock; start <= currentBlock; start += RUN_CHUNK_BLOCKS) {
-    chunkCount += 1;
-  }
+  const chunkCount = runPlan.chunkCount;
+  let committedChunksThisPass = 0;
 
   let chunkIndex = 0;
   setIndexerStatus("indexerRunStatus", {
     startedAt,
     lastHeartbeatAt: startedAt,
     fromBlock: fromBlock.toString(),
-    toBlock: currentBlock.toString(),
+    toBlock: runTargetBlock.toString(),
     headBlock: headBlock.toString(),
     finalityBlocks: INDEXER_FINALITY_BLOCKS.toString(),
     targetBlock: currentBlock.toString(),
@@ -1381,14 +1701,36 @@ async function runOnce() {
     totalChunks: chunkCount,
     lastProcessedBlock: lastBlock.toString(),
   } satisfies IndexerRunStatus);
-  for (let start = fromBlock; start <= currentBlock; start += RUN_CHUNK_BLOCKS) {
-    const end = start + RUN_CHUNK_BLOCKS - 1n > currentBlock
-      ? currentBlock
-      : start + RUN_CHUNK_BLOCKS - 1n;
+  for (let start = fromBlock; start <= runTargetBlock; start += catchupChunkBlocks) {
+    const end = start + catchupChunkBlocks - 1n > runTargetBlock
+      ? runTargetBlock
+      : start + catchupChunkBlocks - 1n;
     chunkIndex += 1;
 
     console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount}: ${start} -> ${end}`);
-    const canonicalChunk = await fetchCanonicalChunk(start, end, previousCheckpoint);
+    let canonicalChunk: Awaited<ReturnType<typeof fetchCanonicalChunk>>;
+    try {
+      canonicalChunk = await fetchCanonicalChunk(start, end, previousCheckpoint, budget);
+    } catch (error) {
+      if (
+        isIndexerRpcWorkBudgetError(error) &&
+        committedChunksThisPass === 0 &&
+        end > start
+      ) {
+        const reducedChunkBlocks = reduceIndexerCatchupChunkBlocks(end - start + 1n);
+        runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+          setMetaJson(
+            INDEXER_CATCHUP_CHUNK_BLOCKS_META_KEY,
+            reducedChunkBlocks.toString(),
+          );
+        });
+        console.warn(
+          `[indexer] Persisted a reduced catch-up chunk span of ${reducedChunkBlocks} blocks ` +
+            "after pre-commit RPC budget exhaustion.",
+        );
+      }
+      throw error;
+    }
     const logs = canonicalChunk.logs;
     totalLogs += logs.length;
     console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} fetched ${logs.length} logs`);
@@ -1413,18 +1755,22 @@ async function runOnce() {
       writeBatchClaims(parsed.batchClaims);
       writeResolverRewards(parsed.resolverRewards);
       writeDustSettlements(parsed.dustSettlements);
+      if (end === currentBlock) {
+        setMetaJson(INDEXER_CATCHUP_CHUNK_BLOCKS_META_KEY, null);
+      }
     });
+    committedChunksThisPass += 1;
     previousCheckpoint = {
       blockNumber: end.toString(),
       blockHash: canonicalChunk.blockHash,
     };
     console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} committed to local SQLite`);
-    await updateCurrentEpochMeta();
+    await updateCurrentEpochMeta(end, budget);
     setIndexerStatus("indexerRunStatus", {
       startedAt,
       lastHeartbeatAt: Date.now(),
       fromBlock: fromBlock.toString(),
-      toBlock: currentBlock.toString(),
+      toBlock: runTargetBlock.toString(),
       headBlock: headBlock.toString(),
       finalityBlocks: INDEXER_FINALITY_BLOCKS.toString(),
       targetBlock: currentBlock.toString(),
@@ -1436,23 +1782,41 @@ async function runOnce() {
   }
 
   console.log(`[indexer] Finished runOnce with ${totalLogs} logs`);
-  await updateCurrentEpochMeta();
+  await updateCurrentEpochMeta(runTargetBlock, budget);
   const status: IndexerRunStatus = {
     startedAt,
     lastHeartbeatAt: Date.now(),
     completedAt: Date.now(),
     fromBlock: fromBlock.toString(),
-    toBlock: currentBlock.toString(),
+    toBlock: runTargetBlock.toString(),
     headBlock: headBlock.toString(),
     finalityBlocks: INDEXER_FINALITY_BLOCKS.toString(),
     targetBlock: currentBlock.toString(),
     totalLogs,
     currentChunk: chunkCount,
     totalChunks: chunkCount,
-    lastProcessedBlock: currentBlock.toString(),
+    lastProcessedBlock: runTargetBlock.toString(),
   };
   setIndexerStatus("indexerRunStatus", status);
   return totalLogs;
+}
+
+async function runIndexerPass() {
+  const budget = createIndexerRpcWorkBudget({
+    maxRpcCalls: INDEXER_RUN_MAX_RPC_CALLS,
+    maxLogs: INDEXER_RUN_MAX_LOGS,
+    maxLogsPerResponse: INDEXER_RPC_MAX_LOGS_PER_RESPONSE,
+    maxSplitNodes: INDEXER_RUN_MAX_SPLIT_NODES,
+    maxElapsedMs: INDEXER_RUN_MAX_ELAPSED_MS,
+  });
+  await runOnce(budget);
+  const head = await readAgreedHeadBlockNumber(budget);
+  const target = getIndexerFinalityTargetBlock(head, INDEXER_FINALITY_BLOCKS);
+  if (target === null) {
+    await updateCurrentEpochMeta(head, budget);
+  } else {
+    await runIndexedMaintenance(target, budget);
+  }
 }
 
 async function main() {
@@ -1535,16 +1899,7 @@ async function main() {
     console.log(`[indexer] Finality blocks: ${INDEXER_FINALITY_BLOCKS}`);
     console.log(`[indexer] Mode: ${isWatch ? "watch (continuous)" : "one-shot"}`);
 
-    await runOnce();
-    {
-      const head = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
-      const target = getIndexerFinalityTargetBlock(head, INDEXER_FINALITY_BLOCKS);
-      if (target === null) {
-        await updateCurrentEpochMeta();
-      } else {
-        await runIndexedMaintenance(target);
-      }
-    }
+    await runIndexerPass();
 
     if (!isWatch) {
       stopAndReleaseLease(true);
@@ -1559,19 +1914,20 @@ async function main() {
       running = true;
       try {
         assertActiveIndexerLease();
-        await runOnce();
-        const head = await withRpcTimeout(client.getBlockNumber(), "getBlockNumber");
-        const target = getIndexerFinalityTargetBlock(head, INDEXER_FINALITY_BLOCKS);
-        if (target === null) {
-          await updateCurrentEpochMeta();
-        } else {
-          await runIndexedMaintenance(target);
-        }
+        await runIndexerPass();
         consecutiveFailures = 0;
       } catch (err) {
         if (leaseLost) {
           process.exitCode = 1;
           return;
+        }
+        if (isIndexerRpcWorkBudgetError(err)) {
+          console.error(
+            "[indexer] RPC work budget exhausted; releasing the lease for supervisor recovery:",
+            describeIndexerError(err),
+          );
+          stopAndReleaseLease(false);
+          process.exit(1);
         }
         const failure = recordIndexerWatchFailure(consecutiveFailures, WATCH_FAILURE_LIMIT);
         consecutiveFailures = failure.failures;

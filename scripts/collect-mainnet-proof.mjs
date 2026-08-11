@@ -63,6 +63,11 @@ function yesNo(value) {
   return value ? "yes" : "no";
 }
 
+function areNonEmptyValuesPairwiseDistinct(values) {
+  const presentValues = values.map((value) => String(value ?? "").trim()).filter(Boolean);
+  return new Set(presentValues).size === presentValues.length;
+}
+
 function parsePositiveInteger(value) {
   const normalized = String(value ?? "").trim();
   if (!/^[1-9]\d{0,15}$/.test(normalized)) return null;
@@ -248,6 +253,11 @@ const trustProxySecret = env("TRUST_PROXY_SECRET");
 const contractRequiresEpochBoundBets = env("NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS");
 const healthDiagnosticsSecret = env("HEALTH_DIAGNOSTICS_SECRET");
 const chatAuthSecret = env("CHAT_AUTH_SECRET") || env("NEXTAUTH_SECRET");
+const runtimePurposeSecretsDistinct = areNonEmptyValuesPairwiseDistinct([
+  healthDiagnosticsSecret,
+  trustProxySecret,
+  chatAuthSecret,
+]);
 const adminAuthSecret = env("ADMIN_AUTH_SECRET") || chatAuthSecret;
 const adminWalletAddress = env("NEXT_PUBLIC_ADMIN_WALLET_ADDRESS");
 const bootstrapResolveSecret = env("BOOTSTRAP_RESOLVE_SECRET");
@@ -357,6 +367,12 @@ checks.push(
     status: chatAuthSecret.length >= 32 ? "pass" : "fail",
     value: yesNo(chatAuthSecret),
     ok: chatAuthSecret.length >= 32,
+  },
+  {
+    gate: "purpose-separated runtime secrets",
+    status: runtimePurposeSecretsDistinct ? "pass" : "fail",
+    value: runtimePurposeSecretsDistinct ? "distinct" : "reused",
+    ok: runtimePurposeSecretsDistinct,
   },
   {
     gate: "admin auth secret length",

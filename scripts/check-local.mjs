@@ -1,13 +1,18 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { resolveCheckLocalDistDir } from "./check-local-dist-dir.mjs";
 import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
 import { redactProofText } from "./redact-proof-output.mjs";
 
 const CHECK_LOCAL_PORT = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_PORT, 3101);
-const CHECK_LOCAL_DIST_DIR = process.env.CHECK_LOCAL_DIST_DIR || ".next-check";
+const CHECK_LOCAL_REPO_ROOT = resolve(".");
+const {
+  relativePath: CHECK_LOCAL_DIST_DIR,
+  resolvedPath: CHECK_LOCAL_DIST_PATH,
+} = resolveCheckLocalDistDir(process.env.CHECK_LOCAL_DIST_DIR ?? ".next-check", CHECK_LOCAL_REPO_ROOT);
 const DEFAULT_LOCAL_SMOKE_BASE_URL = `http://127.0.0.1:${CHECK_LOCAL_PORT}`;
 const SMOKE_BASE_URL = process.env.SMOKE_BASE_URL || DEFAULT_LOCAL_SMOKE_BASE_URL;
 const SHOULD_START_LOCAL_SERVER = !process.env.SMOKE_BASE_URL;
@@ -74,9 +79,12 @@ function describeCheckLocalError(error) {
 
 const npmCommand = process.env.npm_execpath && process.execPath ? process.execPath : null;
 const nextBin = resolve("node_modules", "next", "dist", "bin", "next");
+const hermeticBuildScript = resolve("scripts", "run-hermetic-build.mjs");
+const hermeticBuildTestScript = resolve("scripts", "test-hermetic-build.mjs");
 const steps = npmCommand
   ? [
       { command: npmCommand, args: ["run", "lint"] },
+      { command: npmCommand, args: ["run", "test:build-hermetic"] },
       { command: npmCommand, args: ["run", "test:logic"] },
       { command: npmCommand, args: ["run", "proof:security-followup"] },
       { command: npmCommand, args: ["run", "test:fetch-timeout"] },
@@ -93,6 +101,7 @@ const steps = npmCommand
     ]
   : [
       { command: process.execPath, args: [resolve("node_modules", "eslint", "bin", "eslint.js"), "."] },
+      { command: process.execPath, args: [hermeticBuildTestScript] },
       { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-business-logic.mjs")] },
       { command: process.execPath, args: [resolve("scripts", "check-security-followup.mjs")] },
       { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-fetch-with-timeout.ts")] },
@@ -104,7 +113,7 @@ const steps = npmCommand
       { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-indexer-event-storage.ts")] },
       { command: process.execPath, args: [resolve("scripts", "test-sqlite-operations.mjs")] },
       { command: process.execPath, args: [resolve("scripts", "test-runtime-monitor-drill.mjs")] },
-      { command: process.execPath, args: [nextBin, "build", "--webpack"], kind: "build" },
+      { command: process.execPath, args: [hermeticBuildScript], kind: "build" },
       { command: process.execPath, args: [nextBin, "typegen"], retryOnce: true },
       { command: process.execPath, args: [resolve("node_modules", "typescript", "bin", "tsc"), "--noEmit", "--incremental", "false"], retryOnce: true },
     ];
@@ -226,7 +235,7 @@ function flushStepOutput(result, { compact = false } = {}) {
 }
 
 function prepareStep(step) {
-  if (!Array.isArray(step.args) || step.args.length < 2) {
+  if (!Array.isArray(step.args)) {
     return;
   }
 
@@ -234,9 +243,12 @@ function prepareStep(step) {
     return;
   }
 
-  const nextDir = resolve(CHECK_LOCAL_DIST_DIR);
-  if (existsSync(nextDir)) {
-    rmSync(nextDir, { recursive: true, force: true });
+  if (existsSync(CHECK_LOCAL_DIST_PATH)) {
+    const stats = lstatSync(CHECK_LOCAL_DIST_PATH);
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      throw new Error("CHECK_LOCAL_DIST_DIR must reference a real tool-owned directory");
+    }
+    rmSync(CHECK_LOCAL_DIST_PATH, { recursive: true, force: true });
   }
 }
 

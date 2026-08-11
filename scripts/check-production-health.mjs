@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
+import { assertTrustedHealthCredentialOrigin } from "./health-credential-origin.mjs";
 import { redactProofText } from "./redact-proof-output.mjs";
 
 const BASE_URL =
@@ -209,7 +210,7 @@ async function readBoundedResponseText(response) {
   return text + decoder.decode();
 }
 
-async function fetchJson(pathname) {
+async function fetchJson(origin, pathname) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const headers = {
@@ -220,7 +221,7 @@ async function fetchJson(pathname) {
   }
 
   try {
-    const response = await fetch(new URL(pathname, BASE_URL), {
+    const response = await fetch(new URL(pathname, origin), {
       signal: controller.signal,
       headers,
       redirect: "error",
@@ -363,8 +364,21 @@ async function main() {
     return;
   }
 
-  const runtime = await fetchJson("/api/health/runtime");
-  const dataSync = await fetchJson("/api/health/data-sync");
+  let trustedBaseUrl;
+  try {
+    trustedBaseUrl = assertTrustedHealthCredentialOrigin({
+      target: BASE_URL,
+      canonicalOrigin: process.env.NEXT_PUBLIC_SITE_URL,
+      targetName: "PROD_HEALTH_BASE_URL",
+    });
+  } catch (error) {
+    emitFailure([describeProdHealthError(error)]);
+    process.exitCode = 1;
+    return;
+  }
+
+  const runtime = await fetchJson(trustedBaseUrl, "/api/health/runtime");
+  const dataSync = await fetchJson(trustedBaseUrl, "/api/health/data-sync");
   const runtimeProblems = [];
 
   if (runtime?.status !== "ok") {

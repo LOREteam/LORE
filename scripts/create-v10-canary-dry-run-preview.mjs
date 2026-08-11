@@ -9,6 +9,90 @@ const PREVIEW_PATH = path.join("docs", "v10-canary-dry-run-preview.md");
 const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
 const MAX_PREVIEW_FIELD_CHARS = 180;
 const CHILD_TIMEOUT_MS = parseSummaryTimeoutEnv("V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS", 240_000);
+const CHILD_ENV_INSPECTION_ARG = "--inspect-read-only-child-env";
+const PROCESS_RUNTIME_ENV_KEYS = [
+  "PATH",
+  "Path",
+  "PATHEXT",
+  "SystemRoot",
+  "SYSTEMROOT",
+  "WINDIR",
+  "ComSpec",
+  "COMSPEC",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "CI",
+  "NO_COLOR",
+  "FORCE_COLOR",
+];
+const PUBLIC_READ_ONLY_ENV_KEYS = [
+  "NODE_ENV",
+  "LINEA_NETWORK",
+  "NEXT_PUBLIC_LINEA_NETWORK",
+  "NEXT_PUBLIC_CONTRACT_ADDRESS",
+  "NEXT_PUBLIC_LINEA_TOKEN_ADDRESS",
+  "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER",
+  "NEXT_PUBLIC_CONTRACT_HAS_REBATE_API",
+  "NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS",
+  "NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK",
+  "INDEXER_START_BLOCK",
+  "NEXT_PUBLIC_LORE_READ_ONLY_MODE",
+  "V10_POSTDEPLOY_SCAN_EPOCHS",
+  "V10_EXPECTED_CURRENT_OWNER",
+  "V10_EXPECTED_CURRENT_FEE_RECIPIENT",
+  "V10_EXPECTED_CURRENT_EPOCH_DURATION",
+  "LIVE_CANARY_RPC_LABEL",
+  "LINEA_RPC_LABEL",
+  "LIVE_TEST_TARGET_ROUNDS",
+  "LIVE_TEST_TILES_PER_ROUND",
+  "LIVE_TEST_SAFE_SECONDS_LEFT",
+  "LIVE_TEST_SAFE_WINDOW_TIMEOUT_MS",
+  "LIVE_TEST_SAFE_WINDOW_HEARTBEAT_MS",
+  "LIVE_TEST_RESOLVE_RETRY_COOLDOWN_MS",
+  "LIVE_TEST_RESOLVE_GAS_FLOOR",
+  "LIVE_TEST_LOOP_PAUSE_MS",
+  "LIVE_TEST_MAX_FAILURES",
+  "LIVE_TEST_FORCE_ALLOWANCE_APPROVE",
+  "LIVE_TEST_REPEAT_SAME_BET",
+  "LIVE_TEST_ALLOW_EMPTY_RESOLVE",
+  "LIVE_TEST_VERBOSE_TARGETS",
+  "LIVE_TEST_VERBOSE_WALLETS",
+  "LIVE_TEST_BET_AMOUNT",
+  "LIVE_TEST_APPROVE_AMOUNT",
+  "LIVE_TEST_MIN_ETH_PER_WALLET",
+  "LIVE_TEST_RANDOMIZE_ROUNDS",
+  "LIVE_TEST_INJECT_RPC_FAILOVER",
+  "LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS",
+  "LIVE_TEST_HEALTH_TIMEOUT_MS",
+  "LIVE_TEST_MIN_BET_AMOUNT",
+  "LIVE_TEST_MAX_BET_AMOUNT",
+  "LIVE_TEST_MIN_TILES_PER_ROUND",
+  "LIVE_TEST_MAX_TILES_PER_ROUND",
+  "LIVE_TEST_STRESS_SEED",
+  "LIVE_TEST_ROLES",
+  "LORE_LIVE_TEST_MANUAL_ADDRESS",
+  "LORE_LIVE_TEST_AUTOMINER_A_ADDRESS",
+  "LORE_LIVE_TEST_AUTOMINER_B_ADDRESS",
+  "LORE_LIVE_TEST_AUTOMINER_C_ADDRESS",
+  "LORE_LIVE_TEST_RESOLVER_ADDRESS",
+];
+const INSPECTED_PUBLIC_ENV_KEYS = [
+  "LINEA_NETWORK",
+  "NEXT_PUBLIC_CONTRACT_ADDRESS",
+  "NEXT_PUBLIC_LINEA_TOKEN_ADDRESS",
+  "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER",
+  "V10_POSTDEPLOY_SCAN_EPOCHS",
+  "V10_EXPECTED_CURRENT_OWNER",
+  "LIVE_CANARY_RPC_LABEL",
+];
+const SIGNING_ENV_NAME_RE = /(?:^|_)(?:PRIVATE_KEY|MNEMONIC|SEED(?:_PHRASE)?|SIGNING_KEY)(?:_|$)/i;
+const CREDENTIAL_ENV_NAME_RE =
+  /(?:^|_)(?:PRIVATE_KEY|MNEMONIC|SEED(?:_PHRASE)?|SIGNING_KEY|PASSWORD|PASSPHRASE|AUTH(?:ORIZATION)?|BEARER|TOKEN|API_KEY|ACCESS_KEY|SECRET|COOKIE|SESSION|DSN|WEBHOOK|RPC_(?:URL|ENDPOINT)|DATABASE_URL)(?:_|$)/i;
+const SAFE_NON_CREDENTIAL_ENV_NAMES = new Set([
+  "NEXT_PUBLIC_LINEA_TOKEN_ADDRESS",
+  "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER",
+]);
 
 function npmRun(script) {
   if (process.env.npm_execpath) {
@@ -33,9 +117,12 @@ function nodeCommand(args) {
   };
 }
 
-function safeChildEnv(extra = {}) {
-  return {
-    ...process.env,
+function createReadOnlyChildBoundary(sourceEnv) {
+  const env = {};
+  for (const key of [...PROCESS_RUNTIME_ENV_KEYS, ...PUBLIC_READ_ONLY_ENV_KEYS]) {
+    if (typeof sourceEnv[key] === "string") env[key] = sourceEnv[key];
+  }
+  Object.assign(env, {
     NO_UPDATE_NOTIFIER: "1",
     npm_config_update_notifier: "false",
     npm_config_fund: "false",
@@ -43,18 +130,59 @@ function safeChildEnv(extra = {}) {
     LIVE_TEST_EXECUTE: "0",
     SOAK_EXECUTE_LIVE: "0",
     TEST_WALLET_EXECUTE: "0",
-    LIVE_CANARY_RPC_LABEL: process.env.LIVE_CANARY_RPC_LABEL || DEFAULT_RPC_LABEL,
-    ...extra,
+    LIVE_CANARY_RPC_LABEL: sourceEnv.LIVE_CANARY_RPC_LABEL || DEFAULT_RPC_LABEL,
+  });
+  const sensitiveCredentialKeys = Object.entries(env)
+    .filter(([name, value]) =>
+      String(value).trim() &&
+      !SAFE_NON_CREDENTIAL_ENV_NAMES.has(name) &&
+      CREDENTIAL_ENV_NAME_RE.test(name),
+    )
+    .map(([name]) => name);
+  const signingMaterialLoaded = Object.entries(env).some(
+    ([name, value]) => String(value).trim() && SIGNING_ENV_NAME_RE.test(name),
+  );
+  if (sensitiveCredentialKeys.length > 0 || signingMaterialLoaded) {
+    throw new Error("Refusing to construct a read-only child environment with credential material");
+  }
+  for (const gate of ["LIVE_TEST_EXECUTE", "SOAK_EXECUTE_LIVE", "TEST_WALLET_EXECUTE"]) {
+    if (env[gate] !== "0") throw new Error(`Read-only child execution gate ${gate} must be disabled`);
+  }
+  return {
+    env: Object.freeze(env),
+    signingMaterialLoaded,
+    sensitiveCredentialKeys,
   };
 }
 
-function runStep(name, spec, options = {}) {
+const READ_ONLY_CHILD_BOUNDARY = createReadOnlyChildBoundary(process.env);
+
+if (process.argv.includes(CHILD_ENV_INSPECTION_ARG)) {
+  console.log(JSON.stringify({
+    signingMaterialLoaded: READ_ONLY_CHILD_BOUNDARY.signingMaterialLoaded,
+    sensitiveCredentialKeysPresent: READ_ONLY_CHILD_BOUNDARY.sensitiveCredentialKeys.length > 0,
+    childEnvKeys: Object.keys(READ_ONLY_CHILD_BOUNDARY.env).sort(),
+    publicConfig: Object.fromEntries(
+      INSPECTED_PUBLIC_ENV_KEYS
+        .filter((key) => READ_ONLY_CHILD_BOUNDARY.env[key] !== undefined)
+        .map((key) => [key, READ_ONLY_CHILD_BOUNDARY.env[key]]),
+    ),
+    executionGates: {
+      LIVE_TEST_EXECUTE: READ_ONLY_CHILD_BOUNDARY.env.LIVE_TEST_EXECUTE,
+      SOAK_EXECUTE_LIVE: READ_ONLY_CHILD_BOUNDARY.env.SOAK_EXECUTE_LIVE,
+      TEST_WALLET_EXECUTE: READ_ONLY_CHILD_BOUNDARY.env.TEST_WALLET_EXECUTE,
+    },
+  }));
+  process.exit(0);
+}
+
+function runStep(name, spec) {
   const result = spawnSync(spec.command, spec.args, {
     cwd: process.cwd(),
     encoding: "utf8",
     maxBuffer: MAX_CAPTURE_BYTES,
     timeout: CHILD_TIMEOUT_MS,
-    env: safeChildEnv(options.env),
+    env: READ_ONLY_CHILD_BOUNDARY.env,
   });
   const rawOutput = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   const output = redactProofText(rawOutput).trim();
@@ -168,6 +296,7 @@ function summarizeMatrix(step) {
     plannedBetTx: extractValue(step.output, /\bplannedBetTx=([0-9]+)/),
     plannedStake: extractValue(step.output, /\bplannedStake=([0-9.]+)/),
     walletReady: extractValue(step.output, /\bready=([0-9]+\/[0-9]+)/),
+    signingMaterialLoaded: extractBooleanFlag(step.output, "signingMaterialLoaded"),
     log: extractCanaryLog(step.output),
   };
 }
@@ -233,7 +362,21 @@ const analyzerSummary = analyzer ? summarizeAnalyzer(analyzer) : null;
 const hardFailures = [planner, pendingNonce, matrix].filter((step) => !step.ok);
 const dryRunAnalyzerBlockedAsExpected =
   analyzer && analyzer.status !== 0 && analyzerSummary?.dryRunProofBlocksG10G11 === true;
-const status = hardFailures.length === 0 && (analyzer?.ok || dryRunAnalyzerBlockedAsExpected) ? "pass" : "fail";
+const operationBoundaryReports = [
+  plannerSummary.signingMaterialLoaded,
+  pendingSummary.signingMaterialLoaded,
+  matrixSummary.signingMaterialLoaded,
+];
+const signingMaterialLoaded =
+  READ_ONLY_CHILD_BOUNDARY.signingMaterialLoaded || operationBoundaryReports.some((reported) => reported === true);
+const operationBoundaryVerified = operationBoundaryReports.every((reported) => reported === false);
+const status =
+  hardFailures.length === 0 &&
+  operationBoundaryVerified &&
+  !signingMaterialLoaded &&
+  (analyzer?.ok || dryRunAnalyzerBlockedAsExpected)
+    ? "pass"
+    : "fail";
 
 const markdown = `# V10 Canary Dry-Run Preview
 
@@ -255,7 +398,8 @@ ${renderBullets([
   bullet("status", status),
   bullet("rpcLabel", process.env.LIVE_CANARY_RPC_LABEL || DEFAULT_RPC_LABEL),
   bullet("transactionSent", false),
-  bullet("signingMaterialLoaded", false),
+  bullet("signingMaterialLoaded", signingMaterialLoaded),
+  bullet("operationalBoundaryVerified", operationBoundaryVerified),
   bullet("walletClientCreated", false),
   bullet("contractWriteSubmitted", false),
   bullet("dryRunProofBlocksG10G11", Boolean(dryRunAnalyzerBlockedAsExpected)),
@@ -332,6 +476,7 @@ ${renderBullets([
   bullet("plannedBetTx", matrixSummary.plannedBetTx),
   bullet("plannedStake", matrixSummary.plannedStake),
   bullet("walletPreflightReady", matrixSummary.walletReady),
+  bullet("signingMaterialLoaded", matrixSummary.signingMaterialLoaded),
   bullet("log", matrixSummary.log),
 ])}
 
@@ -395,7 +540,8 @@ console.log(JSON.stringify({
   canaryLog: matrixSummary.log ?? null,
   dryRunProofBlocksG10G11: Boolean(dryRunAnalyzerBlockedAsExpected),
   transactionSent: false,
-  signingMaterialLoaded: false,
+  signingMaterialLoaded,
+  operationalBoundaryVerified: operationBoundaryVerified,
   walletClientCreated: false,
   contractWriteSubmitted: false,
 }));

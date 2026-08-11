@@ -1,4 +1,3 @@
-import "dotenv/config";
 import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { config as loadDotenv } from "dotenv";
@@ -42,6 +41,7 @@ import { tileIdsToMask } from "../app/lib/tileMask";
 import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs, getStableLineaReadRpcs } from "../config/publicConfig";
 import { estimateGasWithMethodRetry, isEstimateGasMethodUnsupported } from "./lib/estimate-gas-retry";
 import { classifyCanaryContractError } from "./lib/canary-contract-error";
+import { assertTrustedHealthCredentialOrigin } from "./health-credential-origin.mjs";
 import { sanitizeSupportLogPayload } from "../app/lib/sentrySanitize";
 import { recordLineaEstimateGasShadow } from "../app/lib/lineaEstimateGasShadow";
 
@@ -64,15 +64,51 @@ const DRY_RUN = !LIVE_EXECUTION_CONFIRMED || (V10_MATRIX_ONLY && !V10_MATRIX_EXE
 const PUBLIC_ADDRESS_ENV_PATH = ".env.live-test-addresses";
 const LIVE_WALLET_ENV_PATH = ".env.live-test-wallets";
 const CANONICAL_INTEGER_ENV_RE = /^(?:0|[1-9]\d{0,15})$/;
+const PUBLIC_ADDRESS_ENV_NAME_RE =
+  /^LORE_LIVE_TEST_(?:MANUAL|AUTOMINER_A|AUTOMINER_B|AUTOMINER_C|RESOLVER)_ADDRESS$/;
+const SIGNING_ENV_NAME_RE = /(?:^|_)(?:PRIVATE_KEY|MNEMONIC|SEED(?:_PHRASE)?|SIGNING_KEY)(?:_|$)/i;
 
-function loadEnvFileIfPresent(path: string, description: string) {
+function assertOptionalEnvFile(path: string, description: string) {
   if (existsSync(path) && !statSync(path).isFile()) {
     throw new Error(`${path} must be ${description}, not a directory`);
   }
-  loadDotenv({ path, override: false, quiet: true });
 }
 
-loadEnvFileIfPresent(PUBLIC_ADDRESS_ENV_PATH, "an address env file");
+function loadPublicAddressEnvFileIfPresent() {
+  assertOptionalEnvFile(PUBLIC_ADDRESS_ENV_PATH, "an address env file");
+  if (!existsSync(PUBLIC_ADDRESS_ENV_PATH)) return;
+  const isolatedEnv: Record<string, string> = {};
+  const result = loadDotenv({
+    path: PUBLIC_ADDRESS_ENV_PATH,
+    override: false,
+    quiet: true,
+    processEnv: isolatedEnv,
+  });
+  if (result.error) throw new Error(`${PUBLIC_ADDRESS_ENV_PATH} could not be parsed safely`);
+  if (Object.keys(result.parsed ?? {}).some((name) => !PUBLIC_ADDRESS_ENV_NAME_RE.test(name))) {
+    throw new Error(`${PUBLIC_ADDRESS_ENV_PATH} may contain only public live-test role addresses`);
+  }
+  for (const [name, value] of Object.entries(result.parsed ?? {})) {
+    if (process.env[name] === undefined) process.env[name] = value;
+  }
+}
+
+function loadSigningEnvFileIfPresent() {
+  assertOptionalEnvFile(LIVE_WALLET_ENV_PATH, "a wallet env file");
+  if (!existsSync(LIVE_WALLET_ENV_PATH)) return;
+  loadDotenv({ path: LIVE_WALLET_ENV_PATH, override: false, quiet: true });
+}
+
+function hasSigningMaterialInEnvironment() {
+  return Object.entries(process.env).some(
+    ([name, value]) => Boolean(value?.trim()) && SIGNING_ENV_NAME_RE.test(name),
+  );
+}
+
+loadPublicAddressEnvFileIfPresent();
+if (DRY_RUN && hasSigningMaterialInEnvironment()) {
+  throw new Error("Dry-run canary refuses inherited signing material");
+}
 const TARGET_ROUNDS = V10_MATRIX_ONLY ? 6 : parseIntegerEnv("LIVE_TEST_TARGET_ROUNDS", 300, 1, 10_000);
 const MAX_RESOLVE_TRANSACTIONS = V10_MATRIX_ONLY ? TARGET_ROUNDS - 1 : null;
 const TILES_PER_ROUND = parseIntegerEnv("LIVE_TEST_TILES_PER_ROUND", 3, 1, 25);
@@ -96,7 +132,14 @@ const MIN_TOKEN_PER_WALLET = parseTokenAmountEnv("LIVE_TEST_MIN_TOKEN_PER_WALLET
 const MIN_ETH_PER_WALLET = parseTokenAmountEnv("LIVE_TEST_MIN_ETH_PER_WALLET", "0.005");
 const RANDOMIZE_ROUNDS = process.env.LIVE_TEST_RANDOMIZE_ROUNDS === "1";
 const INJECT_RPC_FAILOVER = process.env.LIVE_TEST_INJECT_RPC_FAILOVER === "1";
-const HEALTH_BASE_URL = parseCanaryHealthBaseUrl(process.env.LIVE_TEST_HEALTH_BASE_URL);
+const parsedHealthBaseUrl = parseCanaryHealthBaseUrl(process.env.LIVE_TEST_HEALTH_BASE_URL);
+const HEALTH_BASE_URL = parsedHealthBaseUrl
+  ? assertTrustedHealthCredentialOrigin({
+      target: parsedHealthBaseUrl,
+      canonicalOrigin: process.env.NEXT_PUBLIC_SITE_URL,
+      targetName: "LIVE_TEST_HEALTH_BASE_URL",
+    })
+  : null;
 const HEALTH_SAMPLE_EVERY_ROUNDS = parseIntegerEnv("LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS", 10, 1, 10_000);
 const HEALTH_TIMEOUT_MS = parseIntegerEnv("LIVE_TEST_HEALTH_TIMEOUT_MS", 10_000, 1_000, 60_000);
 const MAX_HEALTH_SAMPLE_RESPONSE_BYTES = 256 * 1024;
@@ -295,8 +338,8 @@ async function sampleHealth(logPath: string, round: number) {
     try {
       const headers = { "cache-control": "no-cache", "x-health-diagnostics-secret": secret };
       const [runtimeResponse, dataSyncResponse] = await Promise.all([
-        fetch(new URL("/api/health/runtime", HEALTH_BASE_URL), { headers, signal: controller.signal }),
-        fetch(new URL("/api/health/data-sync", HEALTH_BASE_URL), { headers, signal: controller.signal }),
+        fetch(new URL("/api/health/runtime", HEALTH_BASE_URL), { headers, redirect: "error", signal: controller.signal }),
+        fetch(new URL("/api/health/data-sync", HEALTH_BASE_URL), { headers, redirect: "error", signal: controller.signal }),
       ]);
       if (!runtimeResponse.ok || !dataSyncResponse.ok) {
         throw new Error(`Health endpoints returned runtime=${runtimeResponse.status} dataSync=${dataSyncResponse.status}`);
@@ -380,7 +423,7 @@ function normalizePrivateKey(raw: string): `0x${string}` {
 }
 
 function loadWallets(): LiveWallet[] {
-  loadEnvFileIfPresent(LIVE_WALLET_ENV_PATH, "a wallet env file");
+  loadSigningEnvFileIfPresent();
   const wallets = ROLES.map((role) => {
     const key = process.env[`LORE_LIVE_TEST_${role}_PRIVATE_KEY`]?.trim();
     if (!key) throw new Error(`Missing LORE_LIVE_TEST_${role}_PRIVATE_KEY in .env.live-test-wallets`);
@@ -1105,6 +1148,10 @@ async function runPreflight(
 
 async function main() {
   const wallets = DRY_RUN ? loadDryRunWallets() : loadWallets();
+  const signingMaterialLoaded = hasSigningMaterialInEnvironment();
+  if (DRY_RUN && signingMaterialLoaded) {
+    throw new Error("Dry-run canary refuses signing material");
+  }
   const readRpcUrls = getStableLineaReadRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const broadcastRpcUrls = getPreferredLineaRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const readTransport = createCanaryTransport(readRpcUrls);
@@ -1122,6 +1169,7 @@ async function main() {
   console.log(`[live-canary] rpcLabel=${RPC_LABEL} readRpcCount=${readRpcUrls.length} broadcastRpcCount=${broadcastRpcUrls.length}`);
   console.log(`[live-canary] rpcFailoverInjection=${INJECT_RPC_FAILOVER ? "enabled" : "disabled"}`);
   console.log(`[live-canary] v10Matrix=${V10_MATRIX_ONLY ? "bounded" : "disabled"} execution=${DRY_RUN ? "dry-run" : "enabled"}`);
+  console.log(`[live-canary] operationalBoundary signingMaterialLoaded=${signingMaterialLoaded}`);
   console.log(
     `[live-canary] rounds=${TARGET_ROUNDS} plannedBetTx=${plannedBetTransactions} ` +
       `plannedStake=${formatUnits(plannedStake, 18)} LINEA randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +

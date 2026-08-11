@@ -25,7 +25,4 @@ function runNodeScript(scriptPath, args = []) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-runNodeScript(path.join(projectRoot, "node_modules", "next", "dist", "bin", "next"), [
-  "build",
-  "--webpack",
-]);
+runNodeScript(path.join(projectRoot, "scripts", "run-hermetic-build.mjs"));
