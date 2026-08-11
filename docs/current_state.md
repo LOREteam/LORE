@@ -140,11 +140,12 @@ Open archived evidence only when a task needs it. The single active queue is
   evidence remains a G1-G14 requirement.
 - Business tests have begun domain extraction into wallet, read-model,
   reward-scanner, live-state API, indexer-normalization, runtime-recovery,
-  cache/planner, wallet-runtime, history-presentation, and game-data/
-  presentation modules. The coordinator is now 15,749 lines; the pending-nonce Preview network/credential
+  cache/planner, wallet-runtime, history-presentation, game-data/presentation,
+  and runtime-polling modules. The coordinator is now 15,660 lines; the pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than
-  duplicate source-shape checks.
+  duplicate source-shape checks, as do canary-health origin/metric and polling
+  interval state transitions.
   Further
   source-string reduction remains open.
 - CI is committed with Linux and Windows rows, scheduled dependency
