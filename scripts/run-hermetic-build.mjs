@@ -2,10 +2,14 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  rmdirSync,
+  unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import {
@@ -23,6 +27,10 @@ const PROTECTED_DATABASE_RELATIVE_PATHS = [
   join("data", "lore-v10.sqlite-wal"),
   join("data", "lore-v10.sqlite-shm"),
 ];
+const BUILD_OUTPUT_LOCK_ROOT_NAME = "lore-build-output-locks";
+const BUILD_OUTPUT_LOCK_WAIT_MS = 15 * 60 * 1000;
+const BUILD_OUTPUT_LOCK_POLL_MS = 100;
+const BUILD_LOCK_SLEEP_ARRAY = new Int32Array(new SharedArrayBuffer(4));
 
 function isPathInsideOrSame(rootPath, candidatePath) {
   const relativePath = relative(rootPath, candidatePath);
@@ -104,6 +112,65 @@ function captureOwnedDirectoryIdentity(directoryPath) {
   };
 }
 
+function sleepForBuildLock(milliseconds) {
+  Atomics.wait(BUILD_LOCK_SLEEP_ARRAY, 0, 0, milliseconds);
+}
+
+function requireRegularDirectory(directoryPath, label) {
+  const stats = lstatIfPresent(directoryPath);
+  if (!stats || stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error(`${label} must be a non-reparse directory: ${directoryPath}`);
+  }
+}
+
+export function acquireBuildOutputLock(projectRoot = process.cwd(), temporaryRoot = tmpdir()) {
+  const resolvedProjectRoot = realpathSync(projectRoot);
+  const resolvedTemporaryRoot = realpathSync(temporaryRoot);
+  if (isPathInsideOrSame(resolvedProjectRoot, resolvedTemporaryRoot)) {
+    throw new Error("Hermetic build temporary root must be outside the repository checkout");
+  }
+
+  const lockRoot = join(resolvedTemporaryRoot, BUILD_OUTPUT_LOCK_ROOT_NAME);
+  mkdirSync(lockRoot, { recursive: true });
+  requireRegularDirectory(lockRoot, "Hermetic build lock root");
+  const lockName = createHash("sha256").update(resolvedProjectRoot).digest("hex");
+  const lockPath = join(lockRoot, `${lockName}.lock`);
+  const ownerPath = join(lockPath, "owner");
+  const ownerToken = `${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  const deadline = Date.now() + BUILD_OUTPUT_LOCK_WAIT_MS;
+
+  while (true) {
+    try {
+      mkdirSync(lockPath);
+      const identity = captureOwnedDirectoryIdentity(lockPath);
+      writeFileSync(ownerPath, ownerToken, { encoding: "utf8", flag: "wx" });
+      return {
+        release() {
+          const currentIdentity = captureOwnedDirectoryIdentity(lockPath);
+          if (
+            currentIdentity.device !== identity.device
+            || currentIdentity.inode !== identity.inode
+            || currentIdentity.birthtimeNs !== identity.birthtimeNs
+          ) {
+            throw new Error(`Refusing to release a replaced hermetic build lock: ${lockPath}`);
+          }
+          if (readFileSync(ownerPath, "utf8") !== ownerToken) {
+            throw new Error(`Refusing to release a hermetic build lock owned by another process: ${lockPath}`);
+          }
+          unlinkSync(ownerPath);
+          rmdirSync(lockPath);
+        },
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for the hermetic build output lock: ${lockPath}`);
+      }
+      sleepForBuildLock(Math.min(BUILD_OUTPUT_LOCK_POLL_MS, deadline - Date.now()));
+    }
+  }
+}
+
 function removeOwnedTemporaryDirectory(directoryPath, expectedIdentity) {
   const currentIdentity = captureOwnedDirectoryIdentity(directoryPath);
   if (
@@ -170,7 +237,9 @@ export function runHermeticBuild({
 
   let result = null;
   let childFailure = null;
+  let buildOutputLock = null;
   try {
+    buildOutputLock = acquireBuildOutputLock(resolvedProjectRoot, resolvedTemporaryRoot);
     result = spawnSync(command, args, {
       cwd: resolvedProjectRoot,
       env: childEnv,
@@ -201,6 +270,12 @@ export function runHermeticBuild({
     if (changed.length > 0) {
       throw new Error(`Hermetic build changed protected database state: ${changed.join(", ")}`);
     }
+  } catch (error) {
+    postconditionFailures.push(error);
+  }
+
+  try {
+    buildOutputLock?.release();
   } catch (error) {
     postconditionFailures.push(error);
   }

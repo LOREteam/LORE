@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   lstatSync,
   mkdirSync,
@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  acquireBuildOutputLock,
   runHermeticBuild,
   snapshotProtectedDatabaseFiles,
 } from "./run-hermetic-build.mjs";
@@ -93,6 +94,20 @@ function removeTestEntry(entryPath) {
   });
 }
 
+function waitForFile(filePath, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      lstatSync(filePath);
+      return;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  throw new Error(`Timed out waiting for fixture marker: ${filePath}`);
+}
+
 {
   const root = createFixture();
   try {
@@ -126,6 +141,30 @@ function removeTestEntry(entryPath) {
     assertTemporaryDbWasRemoved(secondMarker.dbPath);
     assert.deepEqual(snapshotProtectedDatabaseFiles(root), protectedBefore);
   } finally {
+    removeFixture(root);
+  }
+}
+
+{
+  const root = createFixture();
+  const markerPath = join(root, "lock-held.txt");
+  const moduleUrl = pathToFileURL(resolve("scripts", "run-hermetic-build.mjs")).href;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `
+    import { writeFileSync } from "node:fs";
+    import { acquireBuildOutputLock } from ${JSON.stringify(moduleUrl)};
+    const lock = acquireBuildOutputLock(${JSON.stringify(root)});
+    writeFileSync(${JSON.stringify(markerPath)}, "held");
+    setTimeout(() => { lock.release(); }, 350);
+  `], { cwd: resolve("."), stdio: "pipe" });
+  try {
+    waitForFile(markerPath);
+    const startedAt = Date.now();
+    const lock = acquireBuildOutputLock(root);
+    const elapsedMs = Date.now() - startedAt;
+    lock.release();
+    assert.ok(elapsedMs >= 200, `second build must wait for the output lock, elapsed=${elapsedMs}`);
+  } finally {
+    child.kill();
     removeFixture(root);
   }
 }
