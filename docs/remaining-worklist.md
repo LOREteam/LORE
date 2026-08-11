@@ -99,7 +99,9 @@ Last updated: 2026-08-11. This is the single active local work queue.
 - [x] Add local CI definitions for Linux/Windows, scheduled dependency audits,
       explicit indexer/P1 rows, concurrency, timeouts, and compact artifacts.
 - [ ] Continue replacing source-string guards with imported behavior and reduce
-      the remaining 16,026-line business-test coordinator.
+      the remaining 16,006-line business-test coordinator. The pending-nonce
+      Preview network/credential boundary now has executable CLI coverage in
+      `test-v10-preview-env-boundary.mjs` instead of duplicate coordinator regex.
 - [ ] Obtain green hosted CI evidence for the final exact commit.
 
 ## UX, accessibility, and performance

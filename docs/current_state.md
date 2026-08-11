@@ -127,8 +127,9 @@ Open archived evidence only when a task needs it. The single active queue is
   evidence remains a G1-G14 requirement.
 - Business tests have begun domain extraction into wallet, read-model,
   reward-scanner, live-state API, indexer-normalization, runtime-recovery, and
-  cache/planner, and wallet-runtime modules. The coordinator is now 16,026
-  lines; further
+  cache/planner, and wallet-runtime modules. The coordinator is now 16,006
+  lines; the pending-nonce Preview network/credential boundary has an
+  executable CLI regression instead of duplicate source regex. Further
   source-string reduction remains open.
 - CI is committed with Linux and Windows rows, scheduled dependency
   audits, explicit indexer-storage/P1 gates, concurrency, timeouts, and bounded

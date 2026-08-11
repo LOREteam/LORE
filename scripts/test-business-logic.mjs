@@ -13580,21 +13580,6 @@ async function main() {
   );
   assert.match(
     clearPendingNonceSource,
-    /const ROLE = "AUTOMINER_A"[\s\S]*const EXECUTE = process\.argv\.includes\("--execute"\)[\s\S]*CHAIN\.id !== 59141[\s\S]*publicClient\.getChainId\(\)[\s\S]*rpcChainId !== CHAIN\.id/,
-    "pending-nonce recovery must stay explicit, testnet-only, and scoped to AUTOMINER_A",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /processEnv: isolatedEnv[\s\S]*may contain only public live-test role addresses[\s\S]*INSPECT_PUBLIC_ADDRESS_ENV_ARG[\s\S]*signingMaterialLoaded/,
-    "pending-nonce recovery must expose a safe inspection boundary without merging the address file into process.env",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /const address = getDryRunAddress\(publicAddressEnv\)[\s\S]*readNonceState\(publicClient, address\)[\s\S]*if \(state\.gap === 0\) return;[\s\S]*if \(!EXECUTE\) return;[\s\S]*const account = getAccount\(\)[\s\S]*createWalletClient/,
-    "pending-nonce recovery dry-run must use the public role address and load signing material only after a confirmed nonzero gap",
-  );
-  assert.match(
-    clearPendingNonceSource,
     /function nonNegativeSafeInteger\(value: unknown\): number[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*pendingNonceGap: nonNegativeSafeInteger\(state\.gap\)[\s\S]*replacementCount: nonNegativeSafeInteger\(replacementCount \+ 1\)/,
     "pending-nonce recovery summary must normalize nonce-gap and replacement counters before publishing JSON",
   );
@@ -13602,11 +13587,6 @@ async function main() {
     clearPendingNonceSource,
     /pendingNonceGap:\s*Number\(state\.gap\)|replacementCount:\s*replacementCount \+ 1,\s*pendingNonceGap:\s*Number\(state\.gap\)/,
     "pending-nonce recovery summary must not broad-coerce nonce gaps with Number(state.gap)",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /if \(!EXECUTE\) return;[\s\S]*const account = getAccount\(\)/,
-    "pending nonce recovery must not load the secret wallet env file for dry-run or zero-gap checks",
   );
   assert.match(
     clearPendingNonceSource,

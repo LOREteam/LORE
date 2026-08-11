@@ -163,6 +163,19 @@ test("pending-nonce Preview child parses only exact public role address keys", (
   assert.equal(inspection.transactionSent, false);
 });
 
+test("pending-nonce Preview child rejects a non-Sepolia network before RPC work", () => {
+  const result = inspectClearPendingAddressFile(
+    "LORE_LIVE_TEST_AUTOMINER_A_ADDRESS=0x2222222222222222222222222222222222222222\n",
+    {
+      LINEA_NETWORK: "mainnet",
+      NEXT_PUBLIC_LINEA_NETWORK: "mainnet",
+    },
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /limited to Linea Sepolia live-test wallets/);
+  assert.equal(result.stdout.trim(), "");
+});
+
 test("pending-nonce Preview child rejects signing material in the public address file", () => {
   const sentinel = "malicious-preview-private-key-sentinel";
   const result = inspectClearPendingAddressFile([
