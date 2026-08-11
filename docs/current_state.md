@@ -53,11 +53,12 @@ Open archived evidence only when a task needs it. The single active queue is
   canonical DB/WAL/SHM, reject protected reparse paths, verify identity after
   the child exits, and clean only the unchanged lexical temp directory. Raw
   `next build` fails closed without the wrapper marker.
-- `.gitattributes` now declares LF text checkout plus binary database/WASM
-  exclusions while preserving the existing `.bat`/`.cmd` CRLF rules. The
-  current checkout still has 219 CRLF/mixed tracked worktree files; mass
-  normalization remains a separate reviewed commit, not a broad unreviewed
-  rewrite.
+- `.gitattributes` declares LF text checkout plus binary database/WASM
+  exclusions while preserving `.bat`/`.cmd` CRLF rules. The `80ce70b7`
+  line-ending commit supplies the reviewed policy; a controlled checkout pass
+  subsequently normalized the current tracked working tree to zero mixed or
+  non-batch CRLF files with no semantic Git diff. No synthetic EOL-only commit
+  was needed because the index was already canonical.
 
 ## Security scan and remediation
 

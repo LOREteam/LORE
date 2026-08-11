@@ -61,9 +61,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   are `B6E249...A8DFB53` and `4A0365...7E73C5`.
 - All build entry points now use the adversarially tested hermetic wrapper; raw
   `next build` without its marker fails closed.
-- `.gitattributes` now protects LF text and binary DB/WASM assets while keeping
-  `.bat`/`.cmd` CRLF. Actual normalization of 219 CRLF/mixed tracked files
-  remains a separate reviewed commit.
+- `.gitattributes` protects LF text and binary DB/WASM assets while keeping
+  `.bat`/`.cmd` CRLF. The reviewed `80ce70b7` policy plus a controlled checkout
+  pass leaves zero mixed/non-batch-CRLF tracked files and no semantic Git diff;
+  the index was already canonical, so no synthetic EOL-only commit was needed.
 - Focused smoke - pass after canonical `Login` aria-label and exact
   `Manual Bet` selector updates. The extreme fixture now respects the
   authoritative chain epoch, with huge-bigint behavior isolated in its own

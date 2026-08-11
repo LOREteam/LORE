@@ -14,9 +14,11 @@ Last updated: 2026-08-11. This is the single active local work queue.
       invariance across two full gates.
 - [x] Track V10 source, compiler config, manifest, `.gitattributes` line-ending
       policy, and compact documentation.
-- [ ] Normalize the remaining 219 CRLF/mixed tracked worktree files through a
-      separate reviewed Git commit; do not make an unreviewed broad rewrite of
-      the working tree.
+- [x] Normalize tracked checkout line endings under the separate reviewed
+      `80ce70b7` line-ending policy. The Git index was already canonical, so no
+      synthetic content commit was created: a controlled CRLF-to-LF checkout
+      pass followed by `git add` leaves zero mixed/non-batch-CRLF tracked files
+      and a clean semantic diff; `.bat`/`.cmd` retain their CRLF policy.
 - [x] Reproduce and scan exact clean baseline
       `46d3bc5072f07b4246ad1f7e516253aef5c8054b`; scan
       `829f043d-0200-451f-b769-cd746800eb2a` reported `4 High`, `13 Medium`,
