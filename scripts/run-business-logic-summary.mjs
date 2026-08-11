@@ -42,6 +42,7 @@ const BUSINESS_TEST_MODULES = [
   "scripts/test-business-live-state-api.mjs",
   "scripts/test-business-indexer-normalization.mjs",
   "scripts/test-business-runtime-recovery.mjs",
+  "scripts/test-business-wallet-runtime.mjs",
   "scripts/test-business-cache-planners.mjs",
 ];
 const businessTestSources = BUSINESS_TEST_MODULES.map((path) => readFileSync(path, "utf8"));
