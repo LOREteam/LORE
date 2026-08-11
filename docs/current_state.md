@@ -28,8 +28,8 @@ Open archived evidence only when a task needs it. The single active queue is
   Webpack resolution for nested `viem` dependencies and keeps Wagmi's unused
   optional Tempo `accounts` peer unavailable. Exact diff scan
   `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings. The current
-  local head is `acfafee69d8ac2c392a02d783917f66efa71214c`, containing only
-  subsequent test-domain extractions.
+  functional candidate is `f8e93905d705b921334d2c5cea54eb680fece63d`, containing
+  only later test-domain extractions and documentation.
 - Live V10 provenance on the current tree passes with solc `0.8.36`, optimizer
   runs `200`, EVM `osaka`, runtime size `16488` bytes, manifest match, ABI
   snapshot match, and reviewed-fragment digest
@@ -112,6 +112,12 @@ Open archived evidence only when a task needs it. The single active queue is
   Workbench completion endpoint omitted that required range digest, so this
   bundle was validated and sealed by the same local contract finalizer rather
   than treating the endpoint failure as a green scan.
+- Exact committed follow-up scan `fa83b0ff-3fc0-4338-817d-a78fb42bdd8a`
+  covers `c53c0afc..f8e93905`. Its canonical bundle is tracked at
+  [`artifacts/security/canonical-diff-c53c0afc-f8e93905`](../artifacts/security/canonical-diff-c53c0afc-f8e93905/);
+  all 27 changed test/proof/documentation rows were deep-reviewed and it has
+  no local findings. Its scope does not close the protocol-randomness High or
+  external G1-G14 evidence gates.
 - The post-scan wallet follow-up is covered by the current integrated P1
   runner: all `36/36` bounded suites, including EVM fuzz, now pass under the
   same npm invocation used by prelaunch.

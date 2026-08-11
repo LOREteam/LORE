@@ -60,9 +60,9 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   peer to unavailable. Its exact diff scan
   `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings; a clean
   install followed by production build and bundle baseline passed.
-- Current local head `acfafee6` contains only the later jackpot/rebate and
-  chat/client test-domain extractions; their exact local scan bundles are
-  sealed with the official finalizer after the Workbench range-digest omission.
+- Functional candidate `f8e93905` contains the later test-domain extractions
+  and compact documentation. Its exact local scan `fa83b0ff-3fc0-4338-817d-a78fb42bdd8a`
+  covers `c53c0afc..f8e93905`, is canonically sealed, and has no local findings.
 - V10 compilation provenance - pass; manifest and ABI snapshot match; fragment
   digest `69218b3a...1900c`; runtime size `16488` bytes.
 - Two final current-tree `check:summary` runs pass and end
@@ -134,9 +134,12 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
    [`artifacts/security/canonical-diff-c53c0afc-9eefb9cd`](../artifacts/security/canonical-diff-c53c0afc-9eefb9cd/).
    It records no local High/Medium; keep the Workbench range-digest omission
    explicit instead of substituting an unsealed endpoint response.
-3. Repeat the two-hour performance run on the final exact SHA and prove native
+3. The succeeding `c53c0afc..f8e93905` follow-up also has a sealed canonical
+   bundle at
+   [`artifacts/security/canonical-diff-c53c0afc-f8e93905`](../artifacts/security/canonical-diff-c53c0afc-f8e93905/).
+4. Repeat the two-hour performance run on the final exact SHA and prove native
    hidden-state behavior; retain the upstream Privy modal blocker honestly.
-4. Keep all live Sepolia and external G1-G14 work behind the Preview/consent and
+5. Keep all live Sepolia and external G1-G14 work behind the Preview/consent and
    canonical-evidence boundaries in
    [`docs/remaining-worklist.md`](remaining-worklist.md).
 

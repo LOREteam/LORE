@@ -67,6 +67,12 @@ Last updated: 2026-08-11. This is the single active local work queue.
       records deterministic digest `ca253f0c...dd09bb02` and no local
       High/Medium. The Workbench range-completion metadata omission is
       documented; it does not erase the sealed local contract evidence.
+- [x] Seal the succeeding exact test/proof/documentation range
+      `c53c0afc..f8e93905`. Scan `fa83b0ff-3fc0-4338-817d-a78fb42bdd8a` has a
+      canonical bundle at
+      [`artifacts/security/canonical-diff-c53c0afc-f8e93905`](../artifacts/security/canonical-diff-c53c0afc-f8e93905/)
+      and no local findings across all 27 changed rows. It does not close the
+      separate protocol-randomness High or external G1-G14.
 - [ ] Address residual P2 build-runner abandoned-lock recovery. Hermetic builds
       now have a bounded outer timeout and terminate their owned process tree;
       same-output-directory concurrency is serialized by the hermetic build
