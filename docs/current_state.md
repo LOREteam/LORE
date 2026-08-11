@@ -190,11 +190,12 @@ Open archived evidence only when a task needs it. The single active queue is
   [`docs/mainnet-proof-record.md`](mainnet-proof-record.md).
 - No wallet signing, chain write, deployment, approval, bet, claim, nonce
   replacement, canary, or soak was performed during this work.
-- A fresh Sepolia V10 Preview completed on 2026-08-11 with a read-only planner,
-  pending-nonce dry run, and a six-round/12-planned-bet matrix; it recorded
-  `transactionSent=false`, no signing material, no wallet client, and no
-  contract write. It deliberately blocks G10/G11 and authorizes nothing.
-  Before any write, obtain separate fresh exact consent.
+- The latest Sepolia V10 Preview attempt on 2026-08-11 remained fully read-only
+  (`transactionSent=false`, no signing material, no wallet client, no contract
+  write), but planner and matrix stopped because the current runtime omits
+  `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1`. Do not inject that flag
+  ad hoc: validate the actual deployed V10 runtime configuration first, then
+  regenerate a passing Preview. It blocks G10/G11 and authorizes nothing.
 - Current policy requires G10/G11 evidence on Linea mainnet and says Sepolia
   closes no G1-G14 gate. The requested Sepolia soak therefore remains testnet
   evidence unless that conflict is explicitly resolved.

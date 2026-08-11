@@ -147,13 +147,14 @@ Last updated: 2026-08-11. This is the single active local work queue.
 
 ## Linea Sepolia live boundary
 
-- [x] Generate a fresh read-only V10 dry-run Preview binding roles/wallets,
-      calls, value/gas caps, maximum transactions, and stop conditions. The
-      2026-08-11 result has planner/pending/matrix exits `0`, 6 rounds, 12
-      planned bet transactions, no signing material, no wallet client, no
-      contract write, and explicitly blocks G10/G11.
-- [ ] Stop and request separate fresh exact bounded consent immediately after
-      that Preview. Without it, do not load signing material or submit a write.
+- [ ] Validate the real Sepolia V10 runtime configuration, including
+      `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1`, then regenerate a
+      passing fresh read-only Preview binding roles/wallets, calls, value/gas
+      caps, maximum transactions, and stop conditions. The 2026-08-11 attempt
+      had no signing material, wallet client, contract write, or sent
+      transaction, but planner/matrix fail closed until that flag is present.
+- [ ] Only after a passing fresh Preview, stop and request separate fresh exact
+      bounded consent. Without it, do not load signing material or submit a write.
 - [ ] Only after consent, run the authorized minimal tranche and reconcile
       receipt, chain, indexer, DB, and UI accounting.
 - [ ] Treat a 50-epoch/24-48h Sepolia soak as testnet evidence. Resolve the
