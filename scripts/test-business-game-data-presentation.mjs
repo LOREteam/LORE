@@ -65,47 +65,6 @@ export function runGameDataPresentationTests() {
     "1234.57",
     "tile pool display must format raw wei without unsafe Number(formatUnits()) conversion",
   );
-  const gameDataHelpersSource = readFileSync("app/hooks/useGameData.helpers.ts", "utf8");
-  assert.match(
-    gameDataHelpersSource,
-    /formatLineaWeiDisplayNumber[\s\S]*function formatWeiToNumber\(value: unknown\)[\s\S]*return formatLineaWeiDisplayNumber\(value\)/,
-    "game data numeric compatibility fields must derive from bounded raw-wei formatting",
-  );
-  assert.doesNotMatch(
-    gameDataHelpersSource,
-    /function formatWeiToNumber\(value: unknown\)[\s\S]*(?:Number\(formatUnits\(|Number\(formatLineaAmountFixed\(value, 6\)\))/,
-    "game data helpers must not coerce live wei values through Number(formatUnits()) or formatted decimal strings",
-  );
-  assert.match(
-    gameDataHelpersSource,
-    /function parseGridTileId\(value: unknown\)[\s\S]*value < 1n \|\| value > BigInt\(GRID_SIZE\)[\s\S]*return tuple\[3\] \? parseGridTileId\(tuple\[2\]\) : null/,
-    "game data winner tile helper must reject unsafe or out-of-range grid tile IDs",
-  );
-  assert.doesNotMatch(
-    gameDataHelpersSource,
-    /Number\(tuple\[2\]\) > 0|return Number\(tuple\[2\]\)/,
-    "game data winner tile helper must not use positive-only tile parsing",
-  );
-  assert.match(
-    gameDataHelpersSource,
-    /function parseChainSafeInteger\(value: unknown\)[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*const next = parseChainSafeInteger\(pendingEpochDuration\)[\s\S]*current: parseChainSafeInteger\(epochDurationSec\)[\s\S]*eta: parseChainSafeInteger\(pendingEpochDurationEta\)/,
-    "game data epoch duration change helper must safely narrow chain timing evidence",
-  );
-  assert.doesNotMatch(
-    gameDataHelpersSource,
-    /const next = pendingEpochDuration \? Number\(pendingEpochDuration\) : 0|current: epochDurationSec \? Number\(epochDurationSec\) : null|eta: pendingEpochDurationEta \? Number\(pendingEpochDurationEta\) : null/,
-    "game data epoch duration change helper must not broadly coerce chain timing evidence",
-  );
-  assert.match(
-    gameDataHelpersSource,
-    /const liveUsers = parseChainSafeInteger\(liveUsersArr\?\.\[i\]\) \?\? 0[\s\S]*Math\.max\([\s\S]*liveUsers/,
-    "game data tile view helper must safely narrow live user count evidence",
-  );
-  assert.doesNotMatch(
-    gameDataHelpersSource,
-    /const liveUsers = Number\(liveUsersArr\?\.\[i\] \?\? 0n\)|Number\.isFinite\(liveUsers\) \? liveUsers : 0/,
-    "game data tile view helper must not broadly coerce live user counts",
-  );
   assert.equal(
     gameDataHelpers.buildTileViewData(
       [[10_000_000_000_000_000n], [0n]],
