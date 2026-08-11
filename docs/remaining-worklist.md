@@ -68,7 +68,9 @@ Last updated: 2026-08-11. This is the single active local work queue.
       High/Medium. The Workbench range-completion metadata omission is
       documented; it does not erase the sealed local contract evidence.
 - [ ] Address residual P2 build-runner work: outer timeout/process-tree
-      ownership and same-output-directory concurrency locking.
+      ownership and abandoned-lock recovery. Same-output-directory concurrency
+      is now serialized by the hermetic build lock; a surviving/replaced lock
+      fails closed rather than allowing overlapping `.next` writes.
 
 ## P1 code hardening
 
