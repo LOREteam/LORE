@@ -23,6 +23,8 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
 - Split seven business-test domains out of the monolith and updated CI locally
   for Windows, scheduled audits, indexer/P1 coverage, timeouts, concurrency, and
   compact artifacts.
+- Follow-up `f01aa22` extracts wallet-runtime state-machine coverage; direct
+  logic, summary, typecheck, and lint pass for that test-only change.
 - The refreshed 97-path partition is now committed locally in four logical
   commits: `69237438` runtime/data, `569e87f0` tooling, `6137dcde` tests/proof,
   and `80ce70b7` toolchain/line endings. This documentation commit completes
@@ -91,6 +93,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   still required.
 - The two post-scan wallet fixes are included in a subsequent clean
   `test:p1-hardening:all:summary` pass: `36/36` with EVM included.
+- Exact committed diff scan `810da212-4774-48ae-a48f-9a5b702e8933` seals the
+  `fbec521..f01aa22` test-only follow-up with canonical artifacts and no
+  findings. It is a narrow supplement to the earlier candidate scan, not a
+  closure for the protocol-randomness High.
 - Production `npm ls --omit=dev --package-lock-only` is clean and the direct
   security pins resolve; full `npm ls --all --package-lock-only` still has six
   upstream Privy/Wagmi/Sentry/toolchain peer/resolution issues.
@@ -100,15 +106,11 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
 
 ## Active handoff
 
-1. Commit this documentation partition, then run an exact-SHA security scan of
-   the unchanged candidate.
-2. Re-run only the evidence invalidated by any scan remediation, then scan the
-   resulting exact SHA again.
-3. Preserve the zero-`parseAbi` ABI result, the two green hermetic full checks,
+1. Preserve the zero-`parseAbi` ABI result, the two green hermetic full checks,
    and stable logic interfaces while continuing only scoped extraction.
-4. Repeat the two-hour performance run on the final exact SHA and prove native
+2. Repeat the two-hour performance run on the final exact SHA and prove native
    hidden-state behavior; retain the upstream Privy modal blocker honestly.
-5. Keep all live Sepolia and external G1-G14 work behind the Preview/consent and
+3. Keep all live Sepolia and external G1-G14 work behind the Preview/consent and
    canonical-evidence boundaries in
    [`docs/remaining-worklist.md`](remaining-worklist.md).
 

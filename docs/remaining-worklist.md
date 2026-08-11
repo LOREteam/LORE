@@ -44,9 +44,12 @@ Last updated: 2026-08-11. This is the single active local work queue.
   `89060390...2e8eacba1f58` snapshot; it found a Medium hashless-pending
   duplicate-stake path and a Low Auto-Miner actor-switch path, both fixed
   afterward with focused tests.
-- [ ] Re-scan the updated working tree, then the final committed SHA; the
-  sealed scan above predates the two follow-up security fixes and cannot prove
-  the exact release candidate has zero local High/Medium findings.
+- [x] Seal the exact committed follow-up diff scan. Scan
+  `810da212-4774-48ae-a48f-9a5b702e8933` covers
+  `fbec521..f01aa22`, has canonical artifacts and clean-worktree digest
+  `1d74df0b...ccb54eb`, and reported no findings in the three changed
+  test-orchestration files. It supplements, rather than replaces, the earlier
+  full candidate scan; the protocol-randomness High remains open.
 - [x] Re-run the EVM-inclusive P1 runner after the post-scan wallet fixes:
   `36/36` passes with the final SQLite backup assertion and EVM included.
 - [x] Route all build entry points through the adversarially tested hermetic
@@ -84,7 +87,7 @@ Last updated: 2026-08-11. This is the single active local work queue.
 
 - [x] Keep `test:logic`/`test:logic:summary` stable while extracting wallet,
       read-model, reward-scanner, live-state API, indexer-normalization,
-      runtime-recovery, and cache/planner domains.
+      runtime-recovery, cache/planner, and wallet-runtime domains.
 - [x] Add the bounded `test:p1-hardening` runner; current all-mode result is
       `36/36` with the V10 EVM suite included; the core runner also executes
       the isolated SQLite scope/backup/restore/WAL drill.
@@ -94,7 +97,7 @@ Last updated: 2026-08-11. This is the single active local work queue.
 - [x] Add local CI definitions for Linux/Windows, scheduled dependency audits,
       explicit indexer/P1 rows, concurrency, timeouts, and compact artifacts.
 - [ ] Continue replacing source-string guards with imported behavior and reduce
-      the remaining approximately 16.8k-line business-test coordinator.
+      the remaining 16,026-line business-test coordinator.
 - [ ] Obtain green hosted CI evidence for the final exact commit.
 
 ## UX, accessibility, and performance

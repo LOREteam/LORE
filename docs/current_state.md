@@ -19,8 +19,10 @@ Open archived evidence only when a task needs it. The single active queue is
 - The verified hardening candidate is partitioned into local commits
   `69237438` (runtime/data boundaries), `569e87f0` (hermetic tooling),
   `6137dcde` (behavioral security/P1 gates), and `80ce70b7` (toolchain and
-  line endings). This documentation commit is the final local partition before
-  an exact-revision security scan.
+  line endings). Follow-up commit `f01aa22` extracts the wallet-runtime test
+  domain and makes the soak-status fixture independent of host disk capacity.
+  Its exact committed diff scan is sealed as
+  `810da212-4774-48ae-a48f-9a5b702e8933`.
 - Live V10 provenance on the current tree passes with solc `0.8.36`, optimizer
   runs `200`, EVM `osaka`, runtime size `16488` bytes, manifest match, ABI
   snapshot match, and reviewed-fragment digest
@@ -79,6 +81,13 @@ Open archived evidence only when a task needs it. The single active queue is
   stake path and one Low Auto-Miner actor-switch authorization path. Both have
   now been fixed with focused tests, but the scan predates those edits and is
   not final-SHA closure. Re-scan the eventual committed candidate.
+- Exact committed diff scan `810da212-4774-48ae-a48f-9a5b702e8933` covers
+  `fbec5216440bd8411e7df8ca50b1f7af624e63de..f01aa22e9c40cbfda3967f21ea63f1507419e1a3`.
+  It sealed canonical JSON/SARIF/Markdown artifacts with clean-worktree digest
+  `codex-security-snapshot/v1:sha256:1d74df0bc5da366ec7aad16a4841552de3d91d1cb5319d4e849096130ccb54eb`
+  and found no issue in its three test-orchestration surfaces. This narrow
+  scan supplements the preceding candidate coverage; it does not close the
+  protocol-randomness High.
 - The post-scan wallet follow-up is covered by the current integrated P1
   runner: all `36/36` bounded suites, including EVM fuzz, now pass under the
   same npm invocation used by prelaunch.
@@ -117,7 +126,8 @@ Open archived evidence only when a task needs it. The single active queue is
   evidence remains a G1-G14 requirement.
 - Business tests have begun domain extraction into wallet, read-model,
   reward-scanner, live-state API, indexer-normalization, runtime-recovery, and
-  cache/planner modules. Further
+  cache/planner, and wallet-runtime modules. The coordinator is now 16,026
+  lines; further
   source-string reduction remains open.
 - CI is committed with Linux and Windows rows, scheduled dependency
   audits, explicit indexer-storage/P1 gates, concurrency, timeouts, and bounded
