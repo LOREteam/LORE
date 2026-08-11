@@ -20,9 +20,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   property runner, wallet lifecycle hardening, atomic fork-aware indexer storage
   with a single-writer lease, black-box API/shared-admission tests, and bounded
   P1 orchestration.
-- Split fifteen business-test domains out of the monolith, including the isolated
-  wallet-presentation, public API read-model, game-data/presentation, chat-polling,
-  and chat-content assertions. The coordinator is now 15,251 lines; Pure game-data,
+- Split sixteen business-test domains out of the monolith, including the isolated
+  API-recovery/storage, wallet-presentation, public API read-model,
+  game-data/presentation, chat-polling, and chat-content assertions. The coordinator
+  is now 14,915 lines; Pure game-data,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes. CI was updated locally.
   for Windows, scheduled audits, indexer/P1 coverage, timeouts, concurrency, and
