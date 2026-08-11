@@ -20,13 +20,14 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   property runner, wallet lifecycle hardening, atomic fork-aware indexer storage
   with a single-writer lease, black-box API/shared-admission tests, and bounded
   P1 orchestration.
-- Split seventeen business-test domains out of the monolith, including the isolated
+- Split eighteen business-test domains out of the monolith, including the isolated
   API-recovery/storage, wallet-presentation, public API read-model,
   game-data/presentation, chat-polling, chat-content, jackpot/rebate-security,
-  chat-client-safety, release-operations, runtime-metrics, and error-boundary assertions. The
-  coordinator is now 10,008 lines; Pure game-data, runtime-metrics,
+  chat-client-safety, release-operations, runtime-metrics, error-boundary, and
+  wallet/route-safety assertions. The coordinator is now 9,419 lines; Pure game-data, runtime-metrics,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
-  instead of duplicated source-shape regexes. CI was updated locally.
+  instead of duplicated source-shape regexes; the wallet/route module keeps
+  focused executable parsing, fee, monitor, and bounded-request inputs. CI was updated locally.
   for Windows, scheduled audits, indexer/P1 coverage, timeouts, concurrency, and
   compact artifacts.
 - Follow-up `f01aa22` extracts wallet-runtime state-machine coverage; direct

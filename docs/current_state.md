@@ -158,13 +158,14 @@ Open archived evidence only when a task needs it. The single active queue is
   reward-scanner, live-state API, indexer-normalization, runtime-recovery,
   cache/planner, wallet-runtime, history-presentation, game-data/presentation,
   runtime-polling, chat-polling, chat-content, jackpot/rebate-security, and
-  chat-client-safety, release-operations, runtime-metrics, and error-boundary
-  modules. The coordinator is now 10,008 lines; the
+  chat-client-safety, release-operations, runtime-metrics, error-boundary, and
+  wallet/route-safety modules. The coordinator is now 9,419 lines; the
   pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than
   duplicate source-shape checks, as do runtime-metrics, canary-health, game
-  and chat polling, and chat-content validation state transitions.
+  and chat polling, chat-content validation state transitions, and bounded
+  wallet/route safety inputs.
   Further
   source-string reduction remains open.
 - CI is committed with Linux and Windows rows, scheduled dependency
