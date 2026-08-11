@@ -25,8 +25,8 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   game-data/presentation, chat-polling, chat-content, jackpot/rebate-security,
   chat-client-safety, release-operations, runtime-metrics, error-boundary,
   wallet/route-safety, Sentry-sanitization, auth/canary-boundary, and
-  client-identity/external-rate-limit assertions. The coordinator is now 8,571
-  lines; Pure game-data, runtime-metrics,
+  client-identity/external-rate-limit and wallet-shell/mining-action assertions.
+  The coordinator is now 8,360 lines; Pure game-data, runtime-metrics,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes; the wallet/route module keeps
   focused executable parsing, fee, monitor, and bounded-request inputs. CI was updated locally.
