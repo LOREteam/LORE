@@ -1,0 +1,88 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "43646db6f26a3450d6cb3ec053a3f5488ae437ed55b665c98541de3247ff9609"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "5d46b9bc5d3f53bf7301cad1c58ede8adec5f1acb50896d817fd3ab5a3b2848d"
+      }
+    ],
+    "completedAt": "2026-08-11T15:58:09.669292Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "80d8abf2-2b03-4fae-82fb-14fcca9f0400",
+    "producer": {
+      "name": "codex-security-plugin",
+      "version": "0.1.18"
+    },
+    "scope": {
+      "artifactsReviewed": [
+        "artifacts/01_context/security_guidance.md",
+        "artifacts/01_context/threat_model.md",
+        "artifacts/02_discovery/deep_review_input.jsonl"
+      ],
+      "context": "Generated repository-wide threat model and diff-scoped review. Prior local findings are represented by their current remediations; external production gates and the separately scoped protocol-randomness concern are not claimed closed.",
+      "excludePaths": [],
+      "includePaths": [
+        "."
+      ],
+      "summary": "Exact release-candidate diff review from baseline 46d3bc5 to current committed RC 85840b5. Repository source was reviewed read-only; no wallet, chain, or live network execution.",
+      "validationMode": "source and focused local-test evidence"
+    },
+    "sealedAt": "2026-08-11T15:58:09.669292Z",
+    "startedAt": "2026-08-11T15:45:32.065393Z",
+    "status": "completed",
+    "target": {
+      "baseRevision": "46d3bc5072f07b4246ad1f7e516253aef5c8054b",
+      "displayName": "linea-miner-main",
+      "headRevision": "85840b5b5f8de62e8c4abb5c8693f2910da722ce",
+      "kind": "git_diff",
+      "snapshotDigest": "codex-security-snapshot/v1:sha256:1d74df0bc5da366ec7aad16a4841552de3d91d1cb5319d4e849096130ccb54eb",
+      "targetId": "target_sha256_908a147dd7e2bb281539a19d93c3def48ccab7950d49770aa8969ce57745331f"
+    },
+    "threatModel": {
+      "assets": [
+        "user stakes and rewards",
+        "wallet and keeper authority",
+        "admin/bootstrap authorization",
+        "contract and ABI integrity",
+        "indexed durable state",
+        "operator secrets"
+      ],
+      "assumptions": [
+        "Live transactions require separate explicit consent.",
+        "Configured RPC origins are external and untrusted; host diversity is not proof of independent operators.",
+        "Local/testnet evidence does not close production sign-off."
+      ],
+      "attackerCapabilities": [
+        "public contract/API caller",
+        "malicious or failing configured RPC",
+        "malicious token callback",
+        "stale or inconsistent wallet provider result",
+        "malformed durable record"
+      ],
+      "securityObjectives": [
+        "prevent unauthorized or duplicate funds movement",
+        "preserve canonical accounting and durable-state integrity",
+        "protect privileged signing and secrets",
+        "bound public/RPC-driven work"
+      ],
+      "summary": "Linea V10 application combining contracts, wallet orchestration, public APIs, privileged keeper/bootstrap operations, RPC-fed indexing, SQLite persistence, and operator tooling.",
+      "trustBoundaries": [
+        "on-chain contract and token callbacks",
+        "browser and wallet providers",
+        "configured RPC providers",
+        "public HTTP/API requests",
+        "SQLite/WAL recovery",
+        "operator configuration and scripts"
+      ]
+    }
+  },
+  "schemaVersion": "1.0"
+}

@@ -1,0 +1,74 @@
+{
+  "completeness": "complete",
+  "deferred": [],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [],
+  "explicitExclusions": [
+    {
+      "pattern": "live operations",
+      "reason": "No live wallet, chain, production secret, or third-party operation was authorized or performed."
+    }
+  ],
+  "includePaths": [
+    "."
+  ],
+  "inventoryStrategy": "diff",
+  "mode": "branch_diff",
+  "openQuestions": [
+    {
+      "question": "Protocol randomness/deployed-contract scope conflict remains an explicit release-goal follow-up and is not a no-findings conclusion for this diff scan."
+    }
+  ],
+  "scanId": "80d8abf2-2b03-4fae-82fb-14fcca9f0400",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "not_applicable",
+      "id": "surface_public-api-and-recovery-paths",
+      "label": "Public API and recovery paths",
+      "notes": "Reviewed changed API/recovery files; finalized/checkpoint and cache-only controls preserved.",
+      "receiptRefs": [],
+      "riskArea": "auth, untrusted RPC recovery, cache/persistence"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_wallet-and-auto-miner-paths",
+      "label": "Wallet and Auto-Miner paths",
+      "notes": "Reviewed changed wallet/runtime files; lease, reconciliation, fee and actor controls fail closed.",
+      "receiptRefs": [],
+      "riskArea": "fee, nonce, pending/reload, authorization"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_privileged-keeper/build/runtime-tooling",
+      "label": "Privileged keeper/build/runtime tooling",
+      "notes": "Reviewed bot/config/build and operator scripts; changes strengthen guards.",
+      "receiptRefs": [],
+      "riskArea": "signing, secrets, filesystem isolation, RPC quorum"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_indexer-and-operational-scripts",
+      "label": "Indexer and operational scripts",
+      "notes": "Reviewed bounded quorum, finality, response-work and lease controls.",
+      "receiptRefs": [],
+      "riskArea": "RPC bounds, canonicality, lease persistence"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_test/proof-and-scan-artifacts",
+      "label": "Test/proof and scan artifacts",
+      "notes": "Reviewed extracted and new test modules; fixtures use mock transports and owned temporary storage.",
+      "receiptRefs": [],
+      "riskArea": "test isolation and regression coverage"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_server-persistence-and-transaction-safety",
+      "label": "Server persistence and transaction safety",
+      "notes": "Reviewed db/storage/keeper safety changes and direct callers.",
+      "receiptRefs": [],
+      "riskArea": "SQLite strict parsing, keeper budget, signed-envelope safety"
+    }
+  ]
+}
