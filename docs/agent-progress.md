@@ -29,8 +29,8 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   explorer-link, utility-safety, wallet external-boundary, error-shell,
   dialog-accessibility, wallet-funding, jackpot-banner, wins-presentation,
   runtime-health-diagnostics, runtime-monitor alerts, public-metadata, Sidebar
-  legal-navigation, tutorial/public-copy, and HTTP/browser smoke-boundary
-  assertions. The coordinator is now 6,901 lines;
+  legal-navigation, tutorial/public-copy, HTTP/browser smoke-boundary, and
+  wallet-action boundary assertions. The coordinator is now 6,726 lines;
   Pure game-data, runtime-metrics,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes; the wallet/route module keeps
@@ -48,7 +48,9 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   the duplicated coordinator regex guards were removed. Follow-up `0e60f265`
   moves the fixed-path HTTP smoke/load/browser-core assertions into their own
   imported executable module; direct module, syntax, lint, and diff checks pass.
-  Their compact-summary rerun is pending a clean Node process tree. Exact-diff
+  Follow-up `4c3b4558` moves wallet claim/receipt/repair/transfer boundary
+  assertions into a dedicated imported module; direct, syntax, lint, full
+  `test:logic`, and compact `test:logic:summary` pass. Exact-diff
   security scan `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its canonical
   draft but completion still rejects a scanner-owned missing `snapshotDigest`;
   no canonical artifact is claimed.
