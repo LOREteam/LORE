@@ -35,7 +35,7 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   runtime-health-diagnostics, runtime-monitor alerts/config-artifact boundaries,
   public-metadata, Sidebar legal-navigation, tutorial/public-copy, HTTP/browser
   smoke-boundary, wallet-action, UI-motion/read-only, Hub read-only controls,
-  and public-presentation assertions. The coordinator is now 6,216 lines;
+  and public-presentation assertions. The coordinator is now 6,210 lines;
   Pure game-data, runtime-metrics,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes; the wallet/route module keeps
@@ -44,9 +44,9 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   compact artifacts.
 - Follow-ups `e370e1ac`, `e1cff3ed`, `c7615a37`, `2ae84e04`, and `e36e9a2a`
   further extract UI/read-only, Hub, public-presentation, and strict-parser
-  checks. Stored-number and summary-timeout guards now execute adversarial
-  inputs directly; an isolated `test:logic:summary` passed in 104,971 ms with
-  zero assertion failures and no timeout.
+  checks. Stored-number, summary-timeout, and admin-proof guards now execute
+  adversarial inputs directly; an isolated `test:logic:summary` passed in
+  99,201 ms with zero assertion failures and no timeout.
 - Follow-up `f01aa22` extracts wallet-runtime state-machine coverage; direct
   logic, summary, typecheck, and lint pass for that test-only change.
 - Follow-up `b8c7f669..51840d8b` adds eleven more executable domains. The first

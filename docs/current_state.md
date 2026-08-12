@@ -207,10 +207,10 @@ Open archived evidence only when a task needs it. The single active queue is
   alerts/config-artifact boundaries, public-metadata, Sidebar legal-navigation,
   tutorial/public-copy, HTTP/browser smoke-boundary, wallet-action, UI-motion/
   read-only, Hub read-only, and public-presentation domains now execute from
-  dedicated imported modules. The coordinator is now 6,216 lines; stored-number
-  and summary-timeout parsing have direct adversarial behavioral inputs, and an
-  isolated compact logic run passed in 104,971 ms with zero assertion failures
-  and no timeout. The
+  dedicated imported modules. The coordinator is now 6,210 lines; stored-number,
+  summary-timeout, and admin-proof parsing have direct adversarial behavioral
+  inputs, and an isolated compact logic run passed in 99,201 ms with zero
+  assertion failures and no timeout. The
   pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than
