@@ -20,6 +20,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   property runner, wallet lifecycle hardening, atomic fork-aware indexer storage
   with a single-writer lease, black-box API/shared-admission tests, and bounded
   P1 orchestration.
+- Replaced the remaining production `parseAbiItem` event fragments in
+  `JackpotBanner` with named lookups in the compiler-derived `GAME_EVENTS_ABI`;
+  its focused presentation test, typecheck, business logic, and V10 invariant
+  summary all pass locally.
 - Split thirty-four business-test domains out of the monolith, including the isolated
   API-recovery/storage, wallet-presentation, public API read-model,
   game-data/presentation, chat-polling, chat-content, jackpot/rebate-security,
@@ -180,8 +184,9 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
 
 ## Active handoff
 
-1. Preserve the zero-`parseAbi` ABI result, the two green hermetic full checks,
-   and stable logic interfaces while continuing only scoped extraction.
+1. Preserve the zero-manual-`parseAbi`/`parseAbiItem` production ABI result,
+   the two green hermetic full checks, and stable logic interfaces while
+   continuing only scoped extraction.
 2. The exact `c53c0afc..9eefb9cd` test-extraction range now has a sealed
    canonical local scan bundle at
    [`artifacts/security/canonical-diff-c53c0afc-9eefb9cd`](../artifacts/security/canonical-diff-c53c0afc-9eefb9cd/).

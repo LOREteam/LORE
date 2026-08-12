@@ -95,8 +95,9 @@ Last updated: 2026-08-12. This is the single active local work queue.
       contract behavior.
 - [x] Generate a compiler-derived V10 ABI snapshot, reviewed fragments, and
       semantic digest; wire shared production consumers and drift checks.
-- [x] Remove residual direct `parseAbi(` sites; repository non-test and test
-      recounts are both zero.
+- [x] Remove residual production manual `parseAbi`/`parseAbiItem` sites,
+      including `JackpotBanner`; generated ABI event lookups and drift checks
+      are now the shared source of truth.
 
 ### Wallet, indexer, and API
 

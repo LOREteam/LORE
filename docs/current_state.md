@@ -174,8 +174,9 @@ Open archived evidence only when a task needs it. The single active queue is
   drill directory were removed by the runner.
 - The compiler-derived V10 ABI snapshot, reviewed fragments, and semantic digest
   are wired into shared frontend, route, indexer, canary, and keeper paths with
-  provenance drift checks. Repository non-test and test `parseAbi(` recounts
-  are both zero.
+  provenance drift checks. `JackpotBanner` now also resolves its three event
+  definitions from `GAME_EVENTS_ABI`; no production manual `parseAbi` or
+  `parseAbiItem` call remains. Tests retain only negative source assertions.
 - Wallet hardening now blocks hashless ambiguous broadcasts until manual
   reconciliation and binds Auto-Miner send-time authorization to the live
   preferred actor. It also covers tracked pending approval nonces, actor/signer
