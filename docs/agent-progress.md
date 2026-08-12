@@ -133,11 +133,12 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
 - Production `npm ls --omit=dev --package-lock-only` is clean and the direct
   security pins resolve; full `npm ls --all --package-lock-only` still has six
   upstream Privy/Wagmi/Sentry/toolchain peer/resolution issues.
-- Latest 2026-08-11 Sepolia V10 Preview stays inside the read-only boundary:
+- Latest 2026-08-12 Sepolia V10 Preview stays inside the read-only boundary:
   no signing material, wallet client, or contract write. Planner/matrix now
   fail closed until actual runtime configuration proves
   `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1`; it does not authorize
-  any action or change G10/G11.
+  any action or change G10/G11. The rerun stopped before a matrix log was
+  created, so it supplies no canary/soak evidence.
 
 ## Active handoff
 

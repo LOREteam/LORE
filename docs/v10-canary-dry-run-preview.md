@@ -1,6 +1,6 @@
 # V10 Canary Dry-Run Preview
 
-Last updated: 2026-08-11T16:34:07.308Z.
+Last updated: 2026-08-12T06:35:23.920Z.
 
 Scope: Linea Sepolia V10 read-only and dry-run readiness only. This document is
 not an authorization to send transactions, start a soak, deploy, or change

@@ -182,9 +182,10 @@ Last updated: 2026-08-12. This is the single active local work queue.
 - [ ] Validate the real Sepolia V10 runtime configuration, including
       `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1`, then regenerate a
       passing fresh read-only Preview binding roles/wallets, calls, value/gas
-      caps, maximum transactions, and stop conditions. The 2026-08-11 attempt
+      caps, maximum transactions, and stop conditions. The 2026-08-12 attempt
       had no signing material, wallet client, contract write, or sent
-      transaction, but planner/matrix fail closed until that flag is present.
+      transaction; planner/matrix fail closed before a matrix log until that
+      flag is present.
 - [ ] Only after a passing fresh Preview, stop and request separate fresh exact
       bounded consent. Without it, do not load signing material or submit a write.
 - [ ] Only after consent, run the authorized minimal tranche and reconcile
