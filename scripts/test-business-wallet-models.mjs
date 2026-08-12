@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
 import * as tokenAmountMathModule from "../app/lib/tokenAmountMath.ts";
+import * as balanceFormattingModule from "../app/lib/balanceFormatting.ts";
 import * as miningTxPathModule from "../app/lib/miningTxPath.ts";
 import * as walletTransfersModule from "../app/hooks/useWalletTransfers.ts";
 import * as pageWalletOverviewModule from "../app/hooks/usePageWalletOverview.ts";
@@ -12,6 +13,7 @@ import * as autoResolveStorageModule from "../app/hooks/autoResolveStorage.ts";
 export async function runWalletModelTests() {
   const miningShared = miningSharedModule.default ?? miningSharedModule;
   const tokenAmountMath = tokenAmountMathModule.default ?? tokenAmountMathModule;
+  const balanceFormatting = balanceFormattingModule.default ?? balanceFormattingModule;
   const miningTxPath = miningTxPathModule.default ?? miningTxPathModule;
   const walletTransfers = walletTransfersModule.default ?? walletTransfersModule;
   const pageWalletOverview = pageWalletOverviewModule.default ?? pageWalletOverviewModule;
@@ -506,17 +508,28 @@ export async function runWalletModelTests() {
     `lore:privy-balances:v1:59141:0x5e40c6e31642ebe8670658fe84c660bd2a0f820f:0xd8da6bf26964af9d7eed9e03e53415d37aa96045`,
   );
   assert.equal(pageWalletOverview.getPrivyBalanceCacheKey("0xabc"), null);
-  const balanceFormattingSource = readFileSync("app/lib/balanceFormatting.ts", "utf8");
-  assert.match(
-    balanceFormattingSource,
-    /export function formatDecimalTextFixed[\s\S]*BigInt\(scaledText\)[\s\S]*formatScaledUnitsFixed/,
-    "shared decimal balance formatter must round without Number precision loss",
+  assert.equal(
+    balanceFormatting.formatDecimalTextFixed("9007199254740993.555", 2),
+    "9007199254740993.56",
+    "decimal balance formatting must round above Number.MAX_SAFE_INTEGER without Number precision loss",
   );
-  assert.match(
-    balanceFormattingSource,
-    /export function formatBalanceFixed[\s\S]*typeof balance\.value !== "bigint"[\s\S]*balance\.value \/ divisor[\s\S]*formatScaledUnitsFixed/,
-    "shared live balance formatter must round bigint units without Number precision loss",
+  assert.equal(balanceFormatting.formatDecimalTextFixed("0.00005", 4), "0.0001");
+  assert.equal(balanceFormatting.formatDecimalTextFixed("12", 2), "12.00");
+  for (const invalidDecimalText of ["", "-1", "1e3", "1.", ".1", "1.2.3"]) {
+    assert.equal(
+      balanceFormatting.formatDecimalTextFixed(invalidDecimalText, 2),
+      null,
+      `decimal balance formatting must reject ${invalidDecimalText || "empty input"}`,
+    );
+  }
+  assert.equal(
+    balanceFormatting.formatBalanceFixed({ value: 9_007_199_254_740_993_555n, decimals: 3 }, 2),
+    "9007199254740993.56",
+    "live bigint balance formatting must round raw units without Number precision loss",
   );
+  assert.equal(balanceFormatting.formatBalanceFixed({ value: 5n, decimals: 6 }, 4), "0.0000");
+  assert.equal(balanceFormatting.formatBalanceFixed({ value: -1n, decimals: 18 }, 2), null);
+  assert.equal(balanceFormatting.formatBalanceFixed({ value: 1n, decimals: 256 }, 2), null);
   const pageWalletOverviewSource = readFileSync("app/hooks/usePageWalletOverview.ts", "utf8");
   assert.match(
     pageWalletOverviewSource,
