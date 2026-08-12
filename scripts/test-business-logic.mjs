@@ -19,6 +19,7 @@ import { runChatContentTests } from "./test-business-chat-content.mjs";
 import { runPublicApiReadModelTests } from "./test-business-public-api-read-models.mjs";
 import { runWalletPresentationTests } from "./test-business-wallet-presentation.mjs";
 import { runWalletExternalBoundaryTests } from "./test-business-wallet-external-boundaries.mjs";
+import { runErrorShellBoundaryTests } from "./test-business-error-shell-boundaries.mjs";
 import { runWalletShellAndMiningActionTests } from "./test-business-wallet-shell-actions.mjs";
 import { runApiRecoveryStorageTests } from "./test-business-api-recovery-storage.mjs";
 import { runApiIntegerQueryTests } from "./test-business-api-integer-queries.mjs";
@@ -7434,39 +7435,7 @@ async function main() {
     "all ETH and LINEA transfer failures must use the shared actionable classifier",
   );
   runWalletExternalBoundaryTests();
-  const globalErrorSource = readFileSync("app/global-error.tsx", "utf8");
-  assert.match(
-    globalErrorSource,
-    /Hard reload/,
-    "global error boundary must expose a hard reload fallback when app shell reset is not enough",
-  );
-  const errorCatcherSource = readFileSync("app/components/ErrorCatcher.tsx", "utf8");
-  assert.match(
-    errorCatcherSource,
-    /isPrivyAuthSessionTimeout/,
-    "global error catcher must classify transient Privy session timeouts",
-  );
-  assert.match(
-    errorCatcherSource,
-    /auth\.privy\.io\/api\/v1\/sessions/,
-    "global error catcher must specifically target Privy session creation timeouts",
-  );
-  assert.match(
-    errorCatcherSource,
-    /stopImmediatePropagation/,
-    "global error catcher must stop Next dev overlay for handled Privy auth timeouts",
-  );
-  const lineaOreClientSource = readFileSync("app/LineaOreClient.tsx", "utf8");
-  assert.match(
-    lineaOreClientSource,
-    /dynamic\(\s*\(\)\s*=>\s*import\("\.\/components\/FirstVisitTutorial"\)/,
-    "first-visit tutorial must stay lazy-loaded out of the main app client chunk",
-  );
-  assert.doesNotMatch(
-    lineaOreClientSource,
-    /import\s+\{\s*FirstVisitTutorial\s*\}\s+from\s+"\.\/components\/FirstVisitTutorial"/,
-    "first-visit tutorial must not be statically imported by LineaOreClient",
-  );
+  runErrorShellBoundaryTests();
   const dialogFocusTrapSource = readFileSync("app/hooks/useDialogFocusTrap.ts", "utf8");
   assert.match(
     dialogFocusTrapSource,
