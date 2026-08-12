@@ -30,11 +30,11 @@ Open archived evidence only when a task needs it. The single active queue is
   `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings. The current
   functional candidate is `f8e93905d705b921334d2c5cea54eb680fece63d`, containing
   only later test-domain extractions and documentation.
-- The current local test-architecture follow-up is `f02222e0`, following eight
+- The current local test-architecture follow-up is `44bb8584`, following nine
   further isolated commits. It extracts wallet external boundaries, error-shell
   boundaries, dialog accessibility, wallet funding presentation, jackpot-banner
-  presentation, wins presentation, runtime-health diagnostics, and public
-  metadata from the
+  presentation, wins presentation, runtime-health diagnostics, public metadata,
+  and Sidebar legal navigation from the
   coordinator. The first five direct modules and their compact
   `test:logic:summary` integrations pass. The last two direct modules pass their
   focused checks, syntax, and diff gates; their shared compact-summary rerun is
@@ -187,9 +187,9 @@ Open archived evidence only when a task needs it. The single active queue is
   module. Utility-safety now executes decimal, rejection, timeout, and redact/
   bounded-error behavior directly rather than inspecting source shape. Wallet
   external-boundary, error-shell, dialog-accessibility, wallet-funding, and
-  jackpot-banner, wins-presentation, runtime-health-diagnostics, and public-metadata
-  domains now execute from dedicated imported modules. The coordinator is now
-  7,166 lines; the
+  jackpot-banner, wins-presentation, runtime-health-diagnostics, public-metadata,
+  and Sidebar legal-navigation domains now execute from dedicated imported
+  modules. The coordinator is now 7,137 lines; the
   pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than

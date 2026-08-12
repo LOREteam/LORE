@@ -20,7 +20,7 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   property runner, wallet lifecycle hardening, atomic fork-aware indexer storage
   with a single-writer lease, black-box API/shared-admission tests, and bounded
   P1 orchestration.
-- Split thirty-one business-test domains out of the monolith, including the isolated
+- Split thirty-two business-test domains out of the monolith, including the isolated
   API-recovery/storage, wallet-presentation, public API read-model,
   game-data/presentation, chat-polling, chat-content, jackpot/rebate-security,
   chat-client-safety, release-operations, runtime-metrics, error-boundary,
@@ -28,8 +28,8 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   client-identity/external-rate-limit, wallet-shell/mining-action, mining-runtime safety,
   explorer-link, utility-safety, wallet external-boundary, error-shell,
   dialog-accessibility, wallet-funding, jackpot-banner, wins-presentation,
-  runtime-health-diagnostics, and public-metadata assertions. The coordinator is
-  now 7,166 lines;
+  runtime-health-diagnostics, public-metadata, and Sidebar legal-navigation
+  assertions. The coordinator is now 7,137 lines;
   Pure game-data, runtime-metrics,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes; the wallet/route module keeps
@@ -38,7 +38,7 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   compact artifacts.
 - Follow-up `f01aa22` extracts wallet-runtime state-machine coverage; direct
   logic, summary, typecheck, and lint pass for that test-only change.
-- Follow-up `b8c7f669..f02222e0` adds eight more executable domains. The first
+- Follow-up `b8c7f669..44bb8584` adds nine more executable domains. The first
   five direct modules and compact `test:logic:summary` integrations passed with
   unique temporary SQLite paths. Wins-presentation and runtime-health-diagnostics
   pass direct/syntax/diff checks; their compact-summary rerun is pending a clean
