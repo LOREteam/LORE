@@ -60,6 +60,7 @@ const BUSINESS_TEST_MODULES = [
   "scripts/test-business-runtime-health-diagnostics.mjs",
   "scripts/test-business-runtime-monitor-alerts.mjs",
   "scripts/test-business-http-smoke-boundaries.mjs",
+  "scripts/test-business-wallet-action-boundaries.mjs",
   "scripts/test-business-public-metadata.mjs",
   "scripts/test-business-sidebar-legal-navigation.mjs",
   "scripts/test-business-tutorial-public-copy.mjs",
