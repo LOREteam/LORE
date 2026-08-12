@@ -1,0 +1,36 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+export function runRuntimeHealthDiagnosticsTests() {
+  const runtimeHealthSource = readFileSync("app/api/health/runtime/route.ts", "utf8");
+  const diagnosticsAuthSource = readFileSync("app/api/health/_lib/diagnosticsAuth.ts", "utf8");
+  const smokeHttpSource = readFileSync("scripts/smoke-http.mjs", "utf8");
+  const adminOpsClientSource = readFileSync("app/admin/AdminOpsClient.tsx", "utf8");
+  assert.match(runtimeHealthSource, /publicConfig/, "runtime health must expose a safe public config diagnostic object");
+  assert.match(runtimeHealthSource, /applyNoStoreHeaders\(NextResponse\.json/, "runtime health responses must use the shared no-store response helper");
+  assert.match(runtimeHealthSource, /privyAppIdConfigured/, "runtime health must expose whether the public Privy app id is configured without leaking it");
+  assert.match(runtimeHealthSource, /getConfiguredReadOnlyMode/, "runtime health must expose whether read-only betting mode is enabled");
+  assert.match(runtimeHealthSource, /CONTRACT_REQUIRES_EPOCH_BOUND_BETS/, "runtime health must expose the compiled protected-bet requirement");
+  assert.match(runtimeHealthSource, /productionLikeMonitoring[\s\S]*backupMonitorConfigured[\s\S]*backupMonitorMaxAgeConfigured/, "runtime health must expose safe backup monitoring and freshness diagnostics without leaking paths");
+  assert.match(runtimeHealthSource, /function isEmailAddress[\s\S]*emailAlertConfigured/, "runtime health must expose safe email alert diagnostics without leaking recipients or keys");
+  assert.match(runtimeHealthSource, /MAX_EMAIL_RECIPIENTS\s*=\s*10[\s\S]*MAX_EMAIL_ENTRY_LENGTH\s*=\s*254[\s\S]*if \(raw\.length === 0 \|\| raw\.length > MAX_EMAIL_RECIPIENTS\) return null[\s\S]*raw\.some\(\(entry\) => entry\.length === 0 \|\| entry\.length > MAX_EMAIL_ENTRY_LENGTH\)[\s\S]*emailAlertRecipients !== null[\s\S]*emailAlertRecipients\.every\(isEmailAddress\)/, "runtime health email alert diagnostics must fail closed on empty, over-limit, or overlong recipient lists before publishing boolean readiness");
+  assert.doesNotMatch(runtimeHealthSource, /parseEmailRecipients[\s\S]{0,400}\.filter\(/, "runtime health email alert diagnostics must not silently drop malformed recipient entries");
+  assert.doesNotMatch(runtimeHealthSource, /publicConfig[\s\S]{0,500}(?:emailAlertRecipients|RUNTIME_MONITOR_EMAIL_TO|RUNTIME_MONITOR_EMAIL_FROM|RESEND_API_KEY)/, "runtime health public diagnostics must not publish alert recipients, sender, or Resend key presence fields");
+  assert.match(runtimeHealthSource, /hasPublicExternalRateLimitStore[\s\S]*multiReplicaWeb[\s\S]*externalRateLimitConfigured/, "runtime health must expose validated external rate-limit diagnostics without leaking provider credentials");
+  assert.match(runtimeHealthSource, /POSITIVE_SAFE_INTEGER_TEXT_RE\s*=\s*\/\^\[1-9\]\\d\{0,15\}\$\/[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parsePositiveSafeIntegerText\(value: string \| undefined, fallback: number \| null\)[\s\S]*POSITIVE_SAFE_INTEGER_TEXT_RE\.test\(trimmed\)[\s\S]*const parsed = BigInt\(trimmed\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*webReplicaCount = parsePositiveSafeIntegerText\(process\.env\.WEB_REPLICA_COUNT, 1\)[\s\S]*webReplicaCount !== null && webReplicaCount > 1/, "runtime health web replica diagnostics must reject malformed WEB_REPLICA_COUNT before multi-replica status is exposed");
+  assert.doesNotMatch(runtimeHealthSource, /Number\(process\.env\.WEB_REPLICA_COUNT|const parsed = Number\(trimmed\)|Number\.isSafeInteger\(parsed\)/, "runtime health web replica diagnostics must not broadly coerce WEB_REPLICA_COUNT");
+  assert.match(runtimeHealthSource, /MIN_TRUST_PROXY_SECRET_LENGTH\s*=\s*32[\s\S]*MAX_TRUST_PROXY_SECRET_LENGTH\s*=\s*256[\s\S]*ASCII_CONTROL_CHAR_RE[\s\S]*function hasUsableTrustedProxySecret\(value: string \| undefined\)[\s\S]*trimmed\.length >= MIN_TRUST_PROXY_SECRET_LENGTH[\s\S]*trimmed\.length <= MAX_TRUST_PROXY_SECRET_LENGTH[\s\S]*!ASCII_CONTROL_CHAR_RE\.test\(trimmed\)[\s\S]*trustedProxyConfigured[\s\S]*hasUsableTrustedProxySecret\(process\.env\.TRUST_PROXY_SECRET\)[\s\S]*weakRateLimitIdentityAllowed/, "runtime health must expose safe trusted-proxy diagnostics without leaking or accepting malformed proxy secrets");
+  assert.doesNotMatch(runtimeHealthSource, /TRUST_PROXY_SECRET\?\.[\s\S]{0,80}\.length[\s\S]{0,80}>=\s*32/, "runtime health trusted-proxy readiness must not use a length-only secret check");
+  assert.match(diagnosticsAuthSource, /MIN_HEALTH_DIAGNOSTICS_SECRET_LENGTH\s*=\s*32[\s\S]*MAX_HEALTH_DIAGNOSTICS_SECRET_LENGTH\s*=\s*256[\s\S]*CONTROL_CHAR_RE[\s\S]*function normalizeHealthDiagnosticsSecret\(value: string \| null \| undefined\)[\s\S]*secret\.length < MIN_HEALTH_DIAGNOSTICS_SECRET_LENGTH[\s\S]*secret\.length > MAX_HEALTH_DIAGNOSTICS_SECRET_LENGTH[\s\S]*CONTROL_CHAR_RE\.test\(secret\)[\s\S]*const secret = normalizeHealthDiagnosticsSecret\(process\.env\.HEALTH_DIAGNOSTICS_SECRET\)[\s\S]*const provided = normalizeHealthDiagnosticsSecret\(request\.headers\.get\(headerName\)\)[\s\S]*if \(!provided\) return false[\s\S]*Buffer\.from\(secret, "utf8"\)/, "health diagnostics auth must normalize configured and provided secrets before Buffer allocation or timing-safe comparison");
+  assert.doesNotMatch(diagnosticsAuthSource, /request\.headers\.get\(headerName\)\?\.trim\(\)[\s\S]*Buffer\.from\(provided/, "health diagnostics auth must not allocate unbounded provided secrets directly");
+  assert.match(smokeHttpSource, /readOnlyMode/, "HTTP smoke must verify runtime health read-only mode diagnostics");
+  assert.match(smokeHttpSource, /backup monitoring diagnostics[\s\S]*backup freshness diagnostics/, "HTTP smoke must verify runtime health backup monitoring and freshness diagnostics");
+  assert.match(smokeHttpSource, /email alert diagnostics/, "HTTP smoke must verify runtime health email alert diagnostics");
+  assert.match(smokeHttpSource, /external rate-limit diagnostics/, "HTTP smoke must verify runtime health external rate-limit diagnostics");
+  assert.match(smokeHttpSource, /trusted proxy diagnostics[\s\S]*weak identity diagnostics/, "HTTP smoke must verify runtime health trusted-proxy diagnostics");
+  assert.match(smokeHttpSource, /stale build without required protected V10 bets/, "HTTP smoke must reject a stale frontend build when V10 protected bets are required");
+  assert.match(adminOpsClientSource, /readOnlyMode/, "admin ops runtime card must surface read-only betting mode");
+  assert.match(adminOpsClientSource, /safePersonalSignError\s*=\s*sanitizeSupportLogPayload\([\s\S]*personalSignError[\s\S]*console\.warn\([\s\S]*safePersonalSignError/, "admin auth wallet fallback warnings must sanitize provider error text before console output");
+  assert.match(adminOpsClientSource, /readJsonResponse<DataSyncHealth>[\s\S]*readJsonResponse<RuntimeHealth>[\s\S]*readJsonResponse<OpsData \| OpsErrorPayload>[\s\S]*readJsonResponse<AdminProcessesPayload \| OpsErrorPayload>[\s\S]*readJsonResponse<\{ error\?: string \}>/, "admin ops UI API reads must use the bounded JSON response helper");
+  assert.doesNotMatch(adminOpsClientSource, /\.\s*json\(\)/, "admin ops UI API reads must not use unbounded response.json");
+}
