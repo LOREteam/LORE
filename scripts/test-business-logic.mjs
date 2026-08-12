@@ -53,6 +53,7 @@ import { runClientIdentityAndRateLimitTests } from "./test-business-client-ident
 import { runUiMotionAndReadOnlyTests } from "./test-business-ui-motion-readonly.mjs";
 import { runHubReadOnlyControlTests } from "./test-business-hub-readonly-controls.mjs";
 import { runPublicPresentationTests } from "./test-business-public-presentation.mjs";
+import { runSummaryTimeoutTests } from "./test-business-summary-timeout.mjs";
 import * as sharedRateLimitModule from "../app/api/_lib/sharedRateLimit.ts";
 import * as productionRuntimeModule from "../config/productionRuntime.ts";
 
@@ -1485,12 +1486,7 @@ async function main() {
   const monitoringDrillSummarySource = readFileSync("scripts/run-monitoring-drill-summary.mjs", "utf8");
   const fetchTimeoutSummarySource = readFileSync("scripts/run-fetch-timeout-summary.mjs", "utf8");
   const storedNumberParsingSummarySource = readFileSync("scripts/run-stored-number-parsing-summary.mjs", "utf8");
-  const summaryTimeoutSource = readFileSync("scripts/summary-timeout.mjs", "utf8");
-  assert.match(
-    summaryTimeoutSource,
-    /DECIMAL_INTEGER_RE\s*=\s*\/\^\(\?:0\|\[1-9\]\\d\{0,15\}\)\$\/[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseSummaryTimeoutEnv\(name, fallback[\s\S]*Number\.isSafeInteger\(fallback\)[\s\S]*const parsed = BigInt\(raw\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*const numeric = Number\(parsed\)/,
-    "summary timeout helper must canonicalize decimal env values and reject unsafe fallback or parsed timeouts",
-  );
+  runSummaryTimeoutTests();
   for (const [label, source, envName] of [
     ["build", buildSummarySource, "BUILD_SUMMARY_TIMEOUT_MS"],
     ["business logic", businessLogicSummarySource, "BUSINESS_LOGIC_SUMMARY_TIMEOUT_MS"],
