@@ -1,0 +1,90 @@
+{
+  "completeness": "complete",
+  "deferred": [],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [],
+  "explicitExclusions": [
+    {
+      "pattern": "protocol-randomness",
+      "reason": "Pre-existing High requires randomness/deployment scope beyond this test/docs/build diff."
+    },
+    {
+      "pattern": "G1-G14",
+      "reason": "External deployment, ownership, browser-wallet, monitoring, backup, and soak evidence is not supplied by this local diff review."
+    }
+  ],
+  "includePaths": [
+    "."
+  ],
+  "inventoryStrategy": "diff",
+  "mode": "diff",
+  "openQuestions": [],
+  "scanId": "dd26cfc2-595f-432d-b6c7-58b12f206cdf",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "not_applicable",
+      "id": "surface_prior-canonical-scan-artifacts",
+      "label": "Prior canonical scan artifacts",
+      "notes": "Three inert historical JSON artifacts were added with matching declared hashes and bounded relative paths; no runtime consumer.",
+      "receiptRefs": [],
+      "riskArea": "artifact integrity and scope claims"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_compact-business-proof-summary-and-coordinator",
+      "label": "Compact business-proof summary and coordinator",
+      "notes": "Fixed no-shell child execution and static module paths; the changed auth/rate-limit modules are included and all local proof flags pass.",
+      "receiptRefs": [],
+      "riskArea": "test masking and proof false-green"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_hermetic-build-lock-recovery",
+      "label": "Hermetic build lock recovery",
+      "notes": "Strict owner identity, reparse rejection, bounded cleanup, and protected DB snapshot checks remain fail closed; focused build test passes.",
+      "receiptRefs": [],
+      "riskArea": "filesystem/process isolation and protected DB state"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_auth-and-external-rate-limit-test-extractions",
+      "label": "Auth and external rate-limit test extractions",
+      "notes": "Test-only injected stubs and restored environment state; coordinator awaits both executable suites.",
+      "receiptRefs": [],
+      "riskArea": "origin, replay, two-replica and response-boundary coverage"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_runtime-error-metrics-and-sentry-test-extractions",
+      "label": "Runtime error, metrics, and Sentry test extractions",
+      "notes": "Synthetic inputs and scoped global restoration only; no production transport or privileged sink changed.",
+      "receiptRefs": [],
+      "riskArea": "error redaction and test harness isolation"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_explorer-and-utility-behavior-test-extractions",
+      "label": "Explorer and utility behavior test extractions",
+      "notes": "Direct pure helper assertions with fixed imports and no external sink.",
+      "receiptRefs": [],
+      "riskArea": "untrusted identifiers, formatting, timeout, and redaction regression coverage"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_mining-runtime-and-wallet-shell-test-extractions",
+      "label": "Mining runtime and wallet-shell test extractions",
+      "notes": "Mandatory coordinator execution traces unchanged guarded runtime paths; local logic gate passes.",
+      "receiptRefs": [],
+      "riskArea": "authorization, duplicate-send, tab lock, persisted-session boundaries"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_release-operations-and-wallet-route-safety-test-extractions",
+      "label": "Release operations and wallet-route safety test extractions",
+      "notes": "Owned temporary fixtures and hard-coded child args only; no live wallet or transaction action.",
+      "receiptRefs": [],
+      "riskArea": "operator-script and wallet-route regression coverage"
+    }
+  ]
+}

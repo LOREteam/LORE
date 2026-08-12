@@ -1,0 +1,91 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "142f33c9cff288206900887cb2ef5c7984e040248e35d7f50041cf646f2baa40"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "a8ce1f0b29f08d1be284251e2f1986658294a9b8b7b765dfa2e1ec7fdddd758a"
+      }
+    ],
+    "completedAt": "2026-08-12T06:09:03.406345Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "dd26cfc2-595f-432d-b6c7-58b12f206cdf",
+    "producer": {
+      "name": "codex-security-plugin",
+      "version": "0.1.18"
+    },
+    "scope": {
+      "artifactsReviewed": [
+        "artifacts/01_context/security_guidance.md",
+        "artifacts/01_context/threat_model.md",
+        "artifacts/02_discovery/deep_review_input.jsonl",
+        "artifacts/02_discovery/work_ledger.jsonl",
+        "artifacts/02_discovery/finding_discovery_report.md"
+      ],
+      "context": "The scan covers test-domain extractions, compact proof-summary wiring, hermetic-build lock recovery/tests, performance evidence documentation, and inert prior scan artifacts. No changed application wallet, contract, API, indexer, or production runtime behavior was introduced by this range.",
+      "excludePaths": [],
+      "includePaths": [
+        "."
+      ],
+      "limitations": [
+        "The review is precise to the resolved committed range and does not close pre-existing protocol-randomness risk or external G1-G14 launch gates."
+      ],
+      "runtimeStatus": "local-only; no external launch evidence claimed",
+      "summary": "Exact committed diff review of f8e93905..9ab501e6. All 18 deterministic changed-file rows were deep-reviewed with full-file receipts in the scan work ledger; no live wallet, chain, or network actions were performed.",
+      "validationMode": "full-file diff review with direct supporting-path inspection and focused local checks reported in receipts"
+    },
+    "sealedAt": "2026-08-12T06:09:03.406345Z",
+    "startedAt": "2026-08-12T05:54:28.288021Z",
+    "status": "completed",
+    "target": {
+      "baseRevision": "f8e93905d705b921334d2c5cea54eb680fece63d",
+      "displayName": "linea-miner-main",
+      "headRevision": "9ab501e65ee1cddd815a1647ec01d205384fdd1b",
+      "kind": "git_diff",
+      "snapshotDigest": "codex-security-snapshot/v1:sha256:1d74df0bc5da366ec7aad16a4841552de3d91d1cb5319d4e849096130ccb54eb",
+      "targetId": "target_sha256_908a147dd7e2bb281539a19d93c3def48ccab7950d49770aa8969ce57745331f"
+    },
+    "threatModel": {
+      "assets": [
+        "wallet funds and signer authority",
+        "contract accounting and epoch integrity",
+        "API/indexer persistence and availability",
+        "admin/operator credentials and production configuration",
+        "user/session and monitoring data"
+      ],
+      "assumptions": [
+        "no live wallet, chain, or network action is authorized for this scan",
+        "existing protocol-randomness High and external G1-G14 evidence remain open and out of scope"
+      ],
+      "attackerCapabilities": [
+        "malformed public requests and hostile URLs/identifiers",
+        "wallet/provider ambiguity and reload/reconnect timing",
+        "malicious or unavailable configured external services",
+        "local repository modification only where explicitly trusted"
+      ],
+      "securityObjectives": [
+        "fail closed at privileged, wallet, and production boundaries",
+        "prevent duplicate or unintended transaction submission",
+        "bound untrusted input and external response work",
+        "preserve canonical chain/indexer/persistence integrity",
+        "do not treat local evidence as external launch approval"
+      ],
+      "summary": "The repository's Linea Sepolia V10 candidate protects wallet and signing authority, contract/accounting integrity, indexed/API state, privileged admin and operator controls, production configuration, and user/session data. Primary boundaries include untrusted browser/API input, wallet/provider and configured RPC behavior, SQLite/indexer persistence, external rate-limit and monitoring providers, and operator-only scripts. Local test evidence is not production launch approval.",
+      "trustBoundaries": [
+        "browser and public API requests",
+        "wallet/Privy/provider interactions",
+        "configured RPC and external rate-limit providers",
+        "SQLite/indexer storage and process leases",
+        "operator script/runtime environment"
+      ]
+    }
+  },
+  "schemaVersion": "1.0"
+}
