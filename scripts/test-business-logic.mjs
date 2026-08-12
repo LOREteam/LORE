@@ -31,13 +31,13 @@ import { runReleaseOperationsTests } from "./test-business-release-operations.mj
 import { runRuntimeMetricsTests } from "./test-business-runtime-metrics.mjs";
 import { runErrorBoundaryAndJsonTests } from "./test-business-error-boundaries.mjs";
 import { runWalletAndRouteSafetyTests } from "./test-business-wallet-route-safety.mjs";
+import { runExplorerLinkTests } from "./test-business-explorer-links.mjs";
 import { runSentrySanitizationTests } from "./test-business-sentry-sanitization.mjs";
 import { runAuthAndCanaryBoundaryTests } from "./test-business-auth-canary-boundaries.mjs";
 import { runMiningRuntimeSafetyTests } from "./test-business-mining-runtime-safety.mjs";
 import * as utilsModule from "../app/lib/utils.ts";
 import { runClientIdentityAndRateLimitTests } from "./test-business-client-identity-rate-limit.mjs";
 import * as sharedRateLimitModule from "../app/api/_lib/sharedRateLimit.ts";
-import * as explorerLinksModule from "../app/lib/explorerLinks.ts";
 import * as productionRuntimeModule from "../config/productionRuntime.ts";
 import * as runtimeMonitorModule from "./runtime-monitor-lib.mjs";
 
@@ -100,7 +100,6 @@ async function main() {
   const validPrivateKey = "1".repeat(64);
   const utils = utilsModule.default ?? utilsModule;
   const sharedRateLimit = sharedRateLimitModule.default ?? sharedRateLimitModule;
-  const explorerLinks = explorerLinksModule.default ?? explorerLinksModule;
   const productionRuntime = productionRuntimeModule.default ?? productionRuntimeModule;
   const runtimeMonitor = runtimeMonitorModule.default ?? runtimeMonitorModule;
   runRuntimeMetricsTests();
@@ -7245,23 +7244,7 @@ async function main() {
   runApiRecoveryStorageTests();
   runWalletPresentationTests();
 
-  assert.equal(
-    explorerLinks.getExplorerTxUrl(`0x${"a".repeat(64)}`),
-    `https://sepolia.lineascan.build/tx/0x${"a".repeat(64)}`,
-  );
-  assert.equal(
-    explorerLinks.getExplorerTxUrl(`  0x${"b".repeat(64)}  `),
-    `https://sepolia.lineascan.build/tx/0x${"b".repeat(64)}`,
-    "explorer transaction links may trim wallet/provider whitespace around a valid tx hash",
-  );
-  assert.equal(explorerLinks.getExplorerTxUrl("0x1234"), null);
-  assert.equal(explorerLinks.getExplorerTxUrl(`0x${"c".repeat(64)}?wallet=0x${"d".repeat(40)}`), null);
-  assert.equal(explorerLinks.getExplorerTxUrl(`0x${"e".repeat(64)}\nhttps://attacker.invalid`), null);
-  assert.equal(
-    explorerLinks.getExplorerAddressUrl("0x0000000000000000000000000000000000000001"),
-    "https://sepolia.lineascan.build/address/0x0000000000000000000000000000000000000001",
-  );
-  assert.equal(explorerLinks.getExplorerAddressUrl("bad-address"), null);
+  runExplorerLinkTests();
 
   const walletActionsSource = readFileSync("app/hooks/useWalletActions.ts", "utf8");
   const walletTransferIntentSource = readFileSync("app/lib/walletTransferIntent.ts", "utf8");

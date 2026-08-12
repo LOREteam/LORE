@@ -120,9 +120,9 @@ Last updated: 2026-08-11. This is the single active local work queue.
 - [x] Add local CI definitions for Linux/Windows, scheduled dependency audits,
       explicit indexer/P1 rows, concurrency, timeouts, and compact artifacts.
 - [ ] Continue replacing source-string guards with imported behavior and reduce
-      the remaining 7,809-line business-test coordinator. The client-identity/
+      the remaining 7,792-line business-test coordinator. The client-identity/
       external-rate-limit behavior, wallet-shell/mining-action checks, and mining-runtime
-      safety checks now run
+      safety and explorer-link checks now run
       from their own imported modules; the
       API-recovery/storage,
       wallet-presentation, and public API read-model
