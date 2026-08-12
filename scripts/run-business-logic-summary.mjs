@@ -82,6 +82,7 @@ const BUSINESS_TEST_MODULES = [
     "scripts/test-business-client-identity-rate-limit.mjs",
     "scripts/test-business-ui-motion-readonly.mjs",
     "scripts/test-business-hub-readonly-controls.mjs",
+    "scripts/test-business-public-presentation.mjs",
 ];
 const businessTestSources = BUSINESS_TEST_MODULES.map((path) => readFileSync(path, "utf8"));
 
