@@ -26,6 +26,7 @@ import { runJackpotBannerPresentationTests } from "./test-business-jackpot-banne
 import { runWinsPresentationTests } from "./test-business-wins-presentation.mjs";
 import { runRuntimeHealthDiagnosticsTests } from "./test-business-runtime-health-diagnostics.mjs";
 import { runPublicMetadataTests } from "./test-business-public-metadata.mjs";
+import { runSidebarLegalNavigationTests } from "./test-business-sidebar-legal-navigation.mjs";
 import { runWalletShellAndMiningActionTests } from "./test-business-wallet-shell-actions.mjs";
 import { runApiRecoveryStorageTests } from "./test-business-api-recovery-storage.mjs";
 import { runApiIntegerQueryTests } from "./test-business-api-integer-queries.mjs";
@@ -6799,37 +6800,7 @@ async function main() {
     /Phylax|90% cheaper|extremely low|proof aggregation/i,
     "player-facing FAQ and White Paper must avoid unverified security or gas-cost promises",
   );
-  const sidebarSource = readFileSync("app/components/Sidebar.tsx", "utf8");
-  assert.match(
-    sidebarSource,
-    /href="\/privacy"[\s\S]*Privacy/,
-    "privacy policy must stay discoverable from the main application shell",
-  );
-  assert.match(
-    sidebarSource,
-    /href="\/terms"[\s\S]*Terms/,
-    "terms of play must stay discoverable from the main application shell",
-  );
-  assert.match(
-    whitePaperSource,
-    /href="\/privacy"[\s\S]*Privacy Policy[\s\S]*href="\/terms"[\s\S]*Terms of Play/,
-    "White Paper footer must link both Privacy Policy and Terms of Play",
-  );
-  assert.match(
-    sidebarSource,
-    /href="\/privacy"[\s\S]*min-h-11[\s\S]*Privacy[\s\S]*href="\/terms"[\s\S]*min-h-11[\s\S]*Terms/,
-    "sidebar legal links must keep mobile touch targets",
-  );
-  assert.match(
-    sidebarSource,
-    /claimAllLabel = isClaiming \? "Reward claim is already pending"[\s\S]*aria-label=\{claimAllLabel\}[\s\S]*title=\{claimAllLabel\}/,
-    "sidebar reward claim-all action must keep an accessible pending/ready label",
-  );
-  assert.match(
-    sidebarSource,
-    /claimLabel = isClaiming \? "Reward claim is already pending"[\s\S]*aria-label=\{claimLabel\}[\s\S]*title=\{claimLabel\}/,
-    "sidebar reward claim action must keep an accessible pending/ready label",
-  );
+  runSidebarLegalNavigationTests();
   const smokeHttpSource = readFileSync("scripts/smoke-http.mjs", "utf8");
   assert.match(
     smokeHttpSource,
