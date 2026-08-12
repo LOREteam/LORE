@@ -125,7 +125,7 @@ Last updated: 2026-08-12. This is the single active local work queue.
 - [x] Add local CI definitions for Linux/Windows, scheduled dependency audits,
       explicit indexer/P1 rows, concurrency, timeouts, and compact artifacts.
 - [ ] Continue replacing source-string guards with imported behavior and reduce
-      the remaining 7,047-line business-test coordinator. The client-identity/
+      the remaining 7,007-line business-test coordinator. The client-identity/
       external-rate-limit behavior, wallet-shell/mining-action checks, and mining-runtime
       safety, explorer-link, and utility-safety checks now run
       from their own imported modules; the
@@ -143,7 +143,7 @@ Last updated: 2026-08-12. This is the single active local work queue.
       Sidebar legal-navigation, and tutorial/public-copy assertions now also
       execute from isolated imported modules.
 - [ ] Seal an exact-diff security bundle for the current test-only follow-up
-      `b8c7f669..500432e3` before treating it as part of the final candidate.
+      `b8c7f669..51840d8b` before treating it as part of the final candidate.
       Scan `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its semantic draft,
       but scanner completion still rejects its own missing `snapshotDigest`, so
       it produced no canonical artifact.

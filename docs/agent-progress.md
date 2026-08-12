@@ -30,7 +30,7 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   dialog-accessibility, wallet-funding, jackpot-banner, wins-presentation,
   runtime-health-diagnostics, runtime-monitor alerts, public-metadata, Sidebar
   legal-navigation, and tutorial/public-copy assertions. The coordinator is now
-  7,047 lines;
+  7,007 lines;
   Pure game-data, runtime-metrics,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes; the wallet/route module keeps
@@ -39,11 +39,14 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   compact artifacts.
 - Follow-up `f01aa22` extracts wallet-runtime state-machine coverage; direct
   logic, summary, typecheck, and lint pass for that test-only change.
-- Follow-up `b8c7f669..500432e3` adds eleven more executable domains. The first
+- Follow-up `b8c7f669..51840d8b` adds eleven more executable domains. The first
   five direct modules and compact `test:logic:summary` integrations passed with
   unique temporary SQLite paths. Wins-presentation and runtime-health-diagnostics
-  and the extracted runtime-monitor alert test pass direct/syntax/diff checks;
-  their compact-summary rerun is pending a clean Node process tree. Exact-diff
+  and the extracted runtime-monitor alert test pass direct/syntax/diff checks.
+  The alert module now directly covers malformed/future audit metadata, backup
+  metadata, canary revert/summary paths, and stale/overdue runtime snapshots;
+  the duplicated coordinator regex guards were removed.
+  Their compact-summary rerun is pending a clean Node process tree. Exact-diff
   security scan `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its canonical
   draft but completion still rejects a scanner-owned missing `snapshotDigest`;
   no canonical artifact is claimed.
