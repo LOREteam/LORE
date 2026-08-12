@@ -30,7 +30,7 @@ Open archived evidence only when a task needs it. The single active queue is
   `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings. The current
   functional candidate is `f8e93905d705b921334d2c5cea54eb680fece63d`, containing
   only later test-domain extractions and documentation.
-- The current local test-architecture follow-up is `0e60f265`, following the
+- The current local test-architecture follow-up is `b625581e`, following the
   prior eleven further isolated commits. It extracts wallet external boundaries,
   error-shell
   boundaries, dialog accessibility, wallet funding presentation, jackpot-banner
@@ -65,10 +65,11 @@ Open archived evidence only when a task needs it. The single active queue is
   `use-sync-external-store` to the React-19-compatible `1.6.0`. Typecheck,
   hermetic production build, and the EVM-inclusive P1 runner pass against this
   lockfile.
-- `npm ls --omit=dev --package-lock-only` is clean and both dependency audit
-  gates pass: production has no blocking High/Critical; the current clean
-  all-deps result has `1` explicitly allowed dev-toolchain High advisory. The exact `nanoid`
-  (`3.3.17`) and `js-yaml` (`4.3.1`) overrides resolve. npm 11's full
+- Exact Corepack npm `11.5.1` clean install resolves lockfile v3's
+  `nanoid@3.3.17` and `js-yaml@4.3.1`. Both dependency audit gates pass:
+  production has no blocking High/Critical; the current clean all-deps result
+  has `5` explicitly allowed non-production ESLint/minimatch High advisories.
+  npm 11's full
   `npm ls --all --package-lock-only` still reports internal invalid markers
   after a clean install, so it is evidence to investigate, not a false claim
   that the peer graph is fully clean.
@@ -241,14 +242,14 @@ Open archived evidence only when a task needs it. The single active queue is
   partial—not a leak finding—because garbage collection is noisy and native
   hidden-state throttling again could not be observed; it predates the current
   test-only commit and cannot serve as final exact-SHA evidence.
-- On test/documentation head `eb139994`, the current-candidate prelaunch passes
+- On exact package-manager audit head `b625581e`, the current-candidate prelaunch passes
   every required-local row: V9/V10
   compile/invariants, P1/EVM `36/36`, typecheck, 457-file lint, hermetic build,
   bundle baseline, SQLite operations, logic, security-followup, and dependency
   proofs. A subsequent clean `npm ci`, hermetic build, and bundle baseline
-  reproduced the local build result. The current all-deps proof retains `1`
-  known development-toolchain High advisory under the documented policy.
-  It also reports 25 external/status commands missing or blocking evidence;
+  reproduced the local build result. The current all-deps proof retains `5`
+  named non-production dev-toolchain High advisories under the documented policy.
+  It also reports 26 external/status commands missing or blocking evidence;
   these remain outside local completion.
 
 ## External and live blockers

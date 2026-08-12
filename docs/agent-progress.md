@@ -75,11 +75,13 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   The gate's isolated `.tmp/check-local-*` paths were cleaned; its one
   persistent empty `lore-build-output-locks` coordination root is not an owned
   per-build temp directory.
-- The same head's production dependency audit has no blocking High/Critical;
-  all-deps has one explicitly allowed dev-toolchain High. This supersedes the
-  older count of nine. Prelaunch passes every required-local row, while 25
-  external/status commands remain blocked or incomplete; none authorizes a
-  wallet or chain action.
+- Exact Corepack npm `11.5.1` clean install and the follow-up head's production
+  dependency audit have no blocking High/Critical. All-deps has five explicitly
+  allowed non-production ESLint/minimatch High advisories
+  (`@eslint/config-array`, `@eslint/eslintrc`, `brace-expansion`, `eslint`, and
+  `minimatch`); this supersedes the older count of nine. Prelaunch passes every
+  required-local row, while 26 external/status commands remain blocked or
+  incomplete; none authorizes a wallet or chain action.
 - `npm.cmd run test:p1-hardening:all:summary` - pass, `36/36`, EVM included.
 - Fresh isolated core P1 runner - pass, `35/35`, EVM intentionally skipped;
   includes the executable SQLite scope/backup/restore/WAL drill and cleans its
