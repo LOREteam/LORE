@@ -228,6 +228,8 @@ Open archived evidence only when a task needs it. The single active queue is
 - Round-state/current-source evidence, a 44px mobile mining dock, safe-area and
   visual-viewport handling, Privy login state/accessibility, dialog focus
   semantics, and reduced-motion behavior have dedicated passing local suites.
+  The round model executes direct `00:00`, active-empty, settling,
+  keeper-delayed, stale-RPC, and stale-indexer cases locally.
   Browser runtime now passes the mobile dock at `390x844` and `320x800` after
   the `HubContent` backdrop fix, plus sidebar Escape/focus return. The app Privy
   trigger also passes Escape/focus return.

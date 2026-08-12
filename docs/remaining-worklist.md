@@ -167,7 +167,8 @@ Last updated: 2026-08-12. This is the single active local work queue.
 ## UX, accessibility, and performance
 
 - [x] Add one round/current-source presentation model for exact zero, resolving,
-      keeper-delayed, stale RPC/indexer, active-empty, and resolved-next states.
+      keeper-delayed, stale RPC/indexer, active-empty, and resolved-next states;
+      direct local tests cover the first six presentation branches.
 - [x] Add the guarded 44px mobile mining dock with selected amount/total,
       Manual Bet/Auto-Miner actions, chat exclusion, safe-area, and visual
       viewport handling.

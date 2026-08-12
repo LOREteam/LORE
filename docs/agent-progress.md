@@ -74,7 +74,9 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   the local partition before the exact-SHA scan.
 - Added round/current-source presentation, mobile dock/viewport handling, Privy
   login state/accessibility, dialog/motion coverage, and a bounded performance
-  evidence collector.
+  evidence collector. The round presentation model now has direct local cases
+  for `00:00`, active-empty, settling, keeper-delayed, stale RPC, and stale
+  indexer states.
 - Captured browser runtime passes for the mobile dock at `390x844` and
   `320x800`, sidebar Escape/focus return, and app-controlled Privy trigger
   Escape/focus return. The Privy `3.27.2` embedded modal itself remains blocked
