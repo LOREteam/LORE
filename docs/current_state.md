@@ -205,17 +205,19 @@ Open archived evidence only when a task needs it. The single active queue is
   external-boundary, error-shell, dialog-accessibility, wallet-funding, and
   jackpot-banner, wins-presentation, runtime-health-diagnostics, runtime-monitor
   alerts/config-artifact boundaries, public-metadata, Sidebar legal-navigation,
-  tutorial/public-copy, HTTP/browser smoke-boundary, and wallet-action boundary
-  domains now execute from dedicated imported modules. The coordinator is now
-  6,599 lines; the
+  tutorial/public-copy, HTTP/browser smoke-boundary, wallet-action, UI-motion/
+  read-only, Hub read-only, and public-presentation domains now execute from
+  dedicated imported modules. The coordinator is now 6,216 lines; stored-number
+  and summary-timeout parsing have direct adversarial behavioral inputs, and an
+  isolated compact logic run passed in 104,971 ms with zero assertion failures
+  and no timeout. The
   pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than
   duplicate source-shape checks, as do runtime-metrics, canary-health, game
   and chat polling, chat-content validation state transitions, and bounded
   wallet/route safety inputs.
-  Further
-  source-string reduction remains open.
+  Further source-string reduction remains open.
 - CI is committed with Linux and Windows rows, scheduled dependency
   audits, explicit indexer-storage/P1 gates, concurrency, timeouts, and bounded
   artifacts. No hosted run for the new candidate has completed yet.
