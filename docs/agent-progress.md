@@ -20,13 +20,15 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   property runner, wallet lifecycle hardening, atomic fork-aware indexer storage
   with a single-writer lease, black-box API/shared-admission tests, and bounded
   P1 orchestration.
-- Split twenty-three business-test domains out of the monolith, including the isolated
+- Split twenty-eight business-test domains out of the monolith, including the isolated
   API-recovery/storage, wallet-presentation, public API read-model,
   game-data/presentation, chat-polling, chat-content, jackpot/rebate-security,
   chat-client-safety, release-operations, runtime-metrics, error-boundary,
   wallet/route-safety, Sentry-sanitization, auth/canary-boundary, and
   client-identity/external-rate-limit, wallet-shell/mining-action, mining-runtime safety,
-  explorer-link, and utility-safety assertions. The coordinator is now 7,717 lines; Pure game-data, runtime-metrics,
+  explorer-link, utility-safety, wallet external-boundary, error-shell,
+  dialog-accessibility, wallet-funding, and jackpot-banner presentation assertions.
+  The coordinator is now 7,420 lines; Pure game-data, runtime-metrics,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes; the wallet/route module keeps
   focused executable parsing, fee, monitor, and bounded-request inputs. CI was updated locally.
@@ -34,6 +36,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   compact artifacts.
 - Follow-up `f01aa22` extracts wallet-runtime state-machine coverage; direct
   logic, summary, typecheck, and lint pass for that test-only change.
+- Follow-up `b8c7f669..6bcd7d5f` adds five more executable domains. Each direct
+  module and its compact `test:logic:summary` integration passed with a unique
+  temporary SQLite path; this narrow test-only range still needs an exact-diff
+  security bundle before it can be treated as a scanned release-candidate step.
 - The refreshed 97-path partition is now committed locally in four logical
   commits: `69237438` runtime/data, `569e87f0` tooling, `6137dcde` tests/proof,
   and `80ce70b7` toolchain/line endings. This documentation commit completes

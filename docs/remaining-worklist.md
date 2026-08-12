@@ -125,7 +125,7 @@ Last updated: 2026-08-12. This is the single active local work queue.
 - [x] Add local CI definitions for Linux/Windows, scheduled dependency audits,
       explicit indexer/P1 rows, concurrency, timeouts, and compact artifacts.
 - [ ] Continue replacing source-string guards with imported behavior and reduce
-      the remaining 7,717-line business-test coordinator. The client-identity/
+      the remaining 7,420-line business-test coordinator. The client-identity/
       external-rate-limit behavior, wallet-shell/mining-action checks, and mining-runtime
       safety, explorer-link, and utility-safety checks now run
       from their own imported modules; the
@@ -137,7 +137,11 @@ Last updated: 2026-08-12. This is the single active local work queue.
       of duplicate coordinator regex, and analytics history and game-data/
       presentation, runtime-metrics, error-boundary, runtime-polling, chat-polling, chat-content, release-operations, wallet/route-safety, Sentry-sanitization, and auth/canary-boundary tests now run from
       their own imported modules; pure game-data, runtime-metrics, canary-health, and chat retry bounds use
-      direct behavioral inputs.
+      direct behavioral inputs. Wallet external-boundary, error-shell,
+      dialog-accessibility, wallet-funding, and jackpot-banner presentation
+      assertions now also execute from isolated imported modules.
+- [ ] Seal an exact-diff security bundle for the current test-only follow-up
+      `b8c7f669..6bcd7d5f` before treating it as part of the final candidate.
 - [ ] Obtain green hosted CI evidence for the final exact commit.
 
 ## UX, accessibility, and performance
