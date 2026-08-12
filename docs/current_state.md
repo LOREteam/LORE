@@ -30,11 +30,11 @@ Open archived evidence only when a task needs it. The single active queue is
   `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings. The current
   functional candidate is `f8e93905d705b921334d2c5cea54eb680fece63d`, containing
   only later test-domain extractions and documentation.
-- The current local test-architecture follow-up is `44bb8584`, following nine
+- The current local test-architecture follow-up is `abe80b61`, following ten
   further isolated commits. It extracts wallet external boundaries, error-shell
   boundaries, dialog accessibility, wallet funding presentation, jackpot-banner
   presentation, wins presentation, runtime-health diagnostics, public metadata,
-  and Sidebar legal navigation from the
+  Sidebar legal navigation, and tutorial/public copy from the
   coordinator. The first five direct modules and their compact
   `test:logic:summary` integrations pass. The last two direct modules pass their
   focused checks, syntax, and diff gates; their shared compact-summary rerun is
@@ -188,8 +188,8 @@ Open archived evidence only when a task needs it. The single active queue is
   bounded-error behavior directly rather than inspecting source shape. Wallet
   external-boundary, error-shell, dialog-accessibility, wallet-funding, and
   jackpot-banner, wins-presentation, runtime-health-diagnostics, public-metadata,
-  and Sidebar legal-navigation domains now execute from dedicated imported
-  modules. The coordinator is now 7,137 lines; the
+  Sidebar legal-navigation, and tutorial/public-copy domains now execute from
+  dedicated imported modules. The coordinator is now 7,073 lines; the
   pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than
