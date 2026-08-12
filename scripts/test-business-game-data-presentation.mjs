@@ -1,9 +1,60 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as gameDataHelpersModule from "../app/hooks/useGameData.helpers.ts";
+import * as roundPresentationModule from "../app/lib/roundPresentation.ts";
 
 export function runGameDataPresentationTests() {
   const gameDataHelpers = gameDataHelpersModule.default ?? gameDataHelpersModule;
+  const roundPresentation = roundPresentationModule.default ?? roundPresentationModule;
+  const roundInput = {
+    actualCurrentEpoch: 17n,
+    gridDisplayEpoch: "17",
+    visualEpoch: "17",
+    isRevealing: false,
+    liveStateReady: true,
+    timerReady: true,
+    timeLeft: 30,
+    currentRoundEvidence: {
+      currentEpoch: 17n,
+      currentEpochTotalPoolWei: 1n,
+      effectiveEpochEndTime: 2n,
+    },
+    nowMs: 1_000,
+  };
+  assert.equal(roundPresentation.normalizeRoundEpochEndMs(2n), 2_000);
+  assert.equal(roundPresentation.normalizeRoundEpochEndMs(0n), null);
+  assert.equal(roundPresentation.normalizeRoundEpochEndMs("2"), null);
+  assert.equal(roundPresentation.normalizeRoundEpochEndMs(BigInt(Number.MAX_SAFE_INTEGER)), null);
+  assert.equal(
+    roundPresentation.deriveRoundPresentation({ ...roundInput, timeLeft: 0, nowMs: 1_500 }).kind,
+    "countdown-zero",
+    "a live epoch with a local 00:00 countdown must show its imminent end state",
+  );
+  assert.equal(
+    roundPresentation.deriveRoundPresentation({ ...roundInput, currentRoundEvidence: { ...roundInput.currentRoundEvidence, currentEpochTotalPoolWei: 0n } }).kind,
+    "active-empty",
+    "an active empty epoch must remain distinct from resolution states",
+  );
+  assert.equal(
+    roundPresentation.deriveRoundPresentation({ ...roundInput, nowMs: 2_001 }).kind,
+    "settlement-pending",
+    "a funded expired epoch must show settlement pending before the keeper-delay threshold",
+  );
+  assert.equal(
+    roundPresentation.deriveRoundPresentation({ ...roundInput, nowMs: 122_001 }).kind,
+    "keeper-delayed",
+    "a funded epoch beyond the keeper-delay threshold must expose a distinct delay state",
+  );
+  assert.equal(
+    roundPresentation.deriveRoundPresentation({ ...roundInput, health: { rpc: "stale" } }).kind,
+    "stale-rpc",
+    "stale chain evidence must override normal live presentation",
+  );
+  assert.equal(
+    roundPresentation.deriveRoundPresentation({ ...roundInput, health: { indexer: "stale" } }).kind,
+    "stale-indexer",
+    "stale indexed evidence must be visible after a valid chain presentation is derived",
+  );
   assert.equal(gameDataHelpers.buildJackpotInfo({}), null);
   assert.equal(gameDataHelpers.buildRolloverAmount("bad-shape"), 0);
   assert.equal(gameDataHelpers.buildRealTotalStaked([[1_000_000_000_000_000_000n, "bad"], []], 2_000_000_000_000_000_000n), 3);
