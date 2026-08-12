@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { parseAbiItem, type PublicClient } from "viem";
+import { type PublicClient } from "viem";
 import { usePublicClient } from "wagmi";
+import { GAME_EVENTS_ABI } from "../../config/generated/lineaOreV10Abi";
 import { formatBalanceFixed, formatDecimalTextFixed, formatScaledUnitsFixed } from "../lib/balanceFormatting";
 import { cn } from "../lib/cn";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, CONTRACT_DEPLOY_BLOCK } from "../lib/constants";
@@ -21,11 +22,15 @@ interface JackpotApiPayload {
   }>;
 }
 
-const DAILY_JACKPOT_EVENT = parseAbiItem("event DailyJackpotAwarded(uint256 indexed epoch, uint256 amount)");
-const WEEKLY_JACKPOT_EVENT = parseAbiItem("event WeeklyJackpotAwarded(uint256 indexed epoch, uint256 amount)");
-const EPOCH_RESOLVED_EVENT = parseAbiItem(
-  "event EpochResolved(uint256 indexed epoch, uint256 winningTile, uint256 totalPool, uint256 fee, uint256 rewardPool, uint256 jackpotBonus)",
-);
+function getGameEvent<Name extends (typeof GAME_EVENTS_ABI)[number]["name"]>(name: Name) {
+  const event = GAME_EVENTS_ABI.find((candidate) => candidate.name === name);
+  if (!event) throw new Error(`Missing generated game event: ${name}`);
+  return event as Extract<(typeof GAME_EVENTS_ABI)[number], { name: Name }>;
+}
+
+const DAILY_JACKPOT_EVENT = getGameEvent("DailyJackpotAwarded");
+const WEEKLY_JACKPOT_EVENT = getGameEvent("WeeklyJackpotAwarded");
+const EPOCH_RESOLVED_EVENT = getGameEvent("EpochResolved");
 const JACKPOT_SPARKLES = [
   { id: 0, left: "14%", top: "18%", size: 18, delay: "0s", duration: "2.8s", rotate: 12, opacity: 0.92 },
   { id: 1, left: "28%", top: "68%", size: 12, delay: "0.35s", duration: "2.35s", rotate: 32, opacity: 0.68 },

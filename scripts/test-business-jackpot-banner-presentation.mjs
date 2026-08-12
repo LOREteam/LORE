@@ -5,6 +5,16 @@ export function runJackpotBannerPresentationTests() {
   const jackpotBannerSource = readFileSync("app/components/JackpotBanner.tsx", "utf8");
   assert.match(
     jackpotBannerSource,
+    /import \{ GAME_EVENTS_ABI \} from "\.\.\/\.\.\/config\/generated\/lineaOreV10Abi"[\s\S]*function getGameEvent<Name extends \(typeof GAME_EVENTS_ABI\)\[number\]\["name"\]>[\s\S]*GAME_EVENTS_ABI\.find[\s\S]*Missing generated game event[\s\S]*getGameEvent\("DailyJackpotAwarded"\)[\s\S]*getGameEvent\("WeeklyJackpotAwarded"\)[\s\S]*getGameEvent\("EpochResolved"\)/,
+    "jackpot on-chain log fallback must source every event fragment from the generated V10 ABI snapshot",
+  );
+  assert.doesNotMatch(
+    jackpotBannerSource,
+    /parseAbiItem|event (?:DailyJackpotAwarded|WeeklyJackpotAwarded|EpochResolved)\(/,
+    "jackpot on-chain log fallback must not define local ABI event strings",
+  );
+  assert.match(
+    jackpotBannerSource,
     /"playlore\.xyz"/,
     "jackpot Share on X text must point users to playlore.xyz",
   );
