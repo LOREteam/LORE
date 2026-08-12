@@ -16,7 +16,12 @@ function describeAuditError(error) {
 
 const allowKnownDevToolchainHigh = includeDev && process.argv.includes("--allow-known-dev-toolchain-high");
 const auditArgs = ["audit", ...(includeDev ? [] : ["--omit=dev"]), "--json"];
-const auditCommand = process.platform === "win32"
+const npmExecPath = typeof process.env.npm_execpath === "string" && process.env.npm_execpath.trim()
+  ? process.env.npm_execpath.trim()
+  : null;
+const auditCommand = npmExecPath
+  ? { command: process.execPath, args: [npmExecPath, ...auditArgs] }
+  : process.platform === "win32"
   ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `npm.cmd ${auditArgs.join(" ")}`] }
   : { command: "npm", args: auditArgs };
 const result = spawnSync(auditCommand.command, auditCommand.args, {

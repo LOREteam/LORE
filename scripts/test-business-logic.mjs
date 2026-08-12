@@ -3784,6 +3784,11 @@ async function main() {
     /knownDevToolchainHighNames[\s\S]*eslint-config-next[\s\S]*function isKnownDevToolchainHigh[\s\S]*blockingHighCritical/,
     "dependency audit must limit high-advisory exceptions to the known dev ESLint toolchain list",
   );
+  assert.match(
+    dependencyAuditSource,
+    /const npmExecPath = typeof process\.env\.npm_execpath[\s\S]*auditCommand = npmExecPath[\s\S]*command: process\.execPath[\s\S]*args: \[npmExecPath, \.\.\.auditArgs\][\s\S]*process\.platform === "win32"/,
+    "dependency audit must preserve the invoking npm/Corepack CLI before falling back to platform npm resolution",
+  );
   assert.doesNotMatch(
     dependencyAuditSource,
     /item\.severity === "critical"[\s\S]*isKnownDevToolchainHigh/,
