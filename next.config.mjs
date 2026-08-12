@@ -1,15 +1,17 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withSentryConfig } from "@sentry/nextjs";
+import { resolveNextDistDir } from "./scripts/next-dist-dir.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname);
+const { relativePath: nextDistDir } = resolveNextDistDir(process.env.NEXT_DIST_DIR, projectRoot);
 const devWatchIgnored =
   /[\\/](?:\.playwright-mcp|\.npm-cache|\.tmp-npm-cache)[\\/]|[\\/]artifacts[\\/]smoke-browser[\\/]|^[^\\/]+\.(?:png|jpe?g|webp|txt|md)$/i;
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  distDir: process.env.NEXT_DIST_DIR?.trim() || ".next",
+  distDir: nextDistDir,
   images: {
     qualities: [75, 85],
   },

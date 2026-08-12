@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -18,6 +19,7 @@ import {
   runHermeticBuild,
   snapshotProtectedDatabaseFiles,
 } from "./run-hermetic-build.mjs";
+import { resolveNextDistDir } from "./next-dist-dir.mjs";
 
 const systemTempRoot = realpathSync(tmpdir());
 
@@ -137,6 +139,46 @@ function waitForFile(filePath, timeoutMs = 5_000) {
     }
   }
   throw new Error(`Timed out waiting for fixture marker: ${filePath}`);
+}
+
+{
+  const root = createFixture();
+  const target = mkdtempSync(join(systemTempRoot, "lore-next-dist-target-"));
+  const sentinelPath = join(target, "sentinel.txt");
+  const ordinaryDir = join(root, ".next-build-check");
+  const filePath = join(root, ".next-file");
+  const reparsePath = join(root, ".next-link");
+  try {
+    mkdirSync(ordinaryDir);
+    writeFileSync(filePath, "must-not-be-removed", "utf8");
+    writeFileSync(sentinelPath, "must-survive", "utf8");
+    symlinkSync(target, reparsePath, process.platform === "win32" ? "junction" : "dir");
+
+    assert.deepEqual(resolveNextDistDir(undefined, root), {
+      relativePath: ".next",
+      resolvedPath: join(root, ".next"),
+    });
+    assert.deepEqual(resolveNextDistDir(".next-build-check", root), {
+      relativePath: ".next-build-check",
+      resolvedPath: ordinaryDir,
+    });
+    for (const value of [
+      "../outside",
+      ".next/child",
+      ".next-../outside",
+      resolve(root, ".next-absolute"),
+    ]) {
+      assert.throws(() => resolveNextDistDir(value, root), /NEXT_DIST_DIR/);
+    }
+    assert.throws(() => resolveNextDistDir(".next-file", root), /reparse point or non-directory/);
+    assert.throws(() => resolveNextDistDir(".next-link", root), /reparse point|symlink|junction/);
+    assert.equal(readFileSync(filePath, "utf8"), "must-not-be-removed");
+    assert.equal(readFileSync(sentinelPath, "utf8"), "must-survive");
+  } finally {
+    removeTestEntry(reparsePath);
+    removeFixture(root);
+    removeFixture(target);
+  }
 }
 
 {
@@ -417,12 +459,13 @@ assert.doesNotMatch(ciSource, /run:\s+(?:npx\s+)?next build/);
 assert.match(ciSource, /run:\s+npm run build\s*$/m);
 assert.match(ciSource, /run:\s+npm run build:summary\s*$/m);
 
-function configProbe(phase, marker, command = "build") {
+function configProbe(phase, marker, command = "build", extraEnv = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (key.toLowerCase() === "lore_hermetic_build") delete env[key];
   }
   if (marker !== undefined) env.LORE_HERMETIC_BUILD = marker;
+  Object.assign(env, extraEnv);
   env.HERMETIC_CONFIG_TEST_PHASE = phase;
   const configUrl = pathToFileURL(resolve("next.config.mjs")).href;
   const source = `
@@ -444,6 +487,15 @@ assert.match(
   /Production builds must run through `npm run build`/,
 );
 assert.equal(configProbe("phase-production-build", "1").status, 0);
+const escapingDistConfig = configProbe("phase-production-build", "1", "build", {
+  NEXT_DIST_DIR: "../outside",
+});
+assert.notEqual(escapingDistConfig.status, 0);
+assert.match(`${escapingDistConfig.stdout}${escapingDistConfig.stderr}`, /NEXT_DIST_DIR/);
+assert.equal(
+  configProbe("phase-production-build", "1", "build", { NEXT_DIST_DIR: ".next-build-check" }).status,
+  0,
+);
 assert.equal(configProbe("phase-production-build", undefined, "typegen").status, 0);
 assert.equal(configProbe("phase-development-server", undefined, "dev").status, 0);
 

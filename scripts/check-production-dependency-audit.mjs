@@ -1,10 +1,17 @@
 import { spawnSync } from "node:child_process";
 import { redactProofText } from "./redact-proof-output.mjs";
+import {
+  resolveTrustedNpmCli,
+  trustedNpmCommand,
+  trustedNpmEnvironment,
+} from "./trusted-npm-cli.mjs";
 
 const includeDev = process.argv.includes("--include-dev");
 const summaryOnly = process.argv.includes("--summary-only");
 const MAX_AUDIT_ERROR_CHARS = 500;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const CANONICAL_AUDIT_COUNTERS = ["info", "low", "moderate", "high", "critical", "total"];
+const CANONICAL_AUDIT_SEVERITIES = new Set(CANONICAL_AUDIT_COUNTERS.filter((name) => name !== "total"));
 
 function describeAuditError(error) {
   const text = redactProofText(error instanceof Error ? error.message : String(error))
@@ -16,16 +23,12 @@ function describeAuditError(error) {
 
 const allowKnownDevToolchainHigh = includeDev && process.argv.includes("--allow-known-dev-toolchain-high");
 const auditArgs = ["audit", ...(includeDev ? [] : ["--omit=dev"]), "--json"];
-const npmExecPath = typeof process.env.npm_execpath === "string" && process.env.npm_execpath.trim()
-  ? process.env.npm_execpath.trim()
-  : null;
-const auditCommand = npmExecPath
-  ? { command: process.execPath, args: [npmExecPath, ...auditArgs] }
-  : process.platform === "win32"
-  ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `npm.cmd ${auditArgs.join(" ")}`] }
-  : { command: "npm", args: auditArgs };
+const trustedNpmLauncher = resolveTrustedNpmCli();
+const auditCommand = trustedNpmCommand(auditArgs, trustedNpmLauncher);
+const auditEnv = trustedNpmEnvironment(process.env, trustedNpmLauncher);
 const result = spawnSync(auditCommand.command, auditCommand.args, {
-  cwd: process.cwd(),
+  cwd: trustedNpmLauncher.repoRoot,
+  env: auditEnv,
   encoding: "utf8",
   maxBuffer: 1024 * 1024 * 8,
 });
@@ -71,10 +74,45 @@ try {
   process.exit();
 }
 
-const counts = audit.metadata?.vulnerabilities ?? {};
-const vulnerabilities = Object.values(audit.vulnerabilities ?? {});
+function isPlainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function failMalformedAuditReport(detail) {
+  if (summaryOnly) {
+    console.log(JSON.stringify({
+      status: "fail",
+      scope: includeDev ? "all" : "production",
+      issue: "audit-report",
+      detail,
+    }));
+    process.exitCode = 1;
+    process.exit();
+  }
+  console.error(`# ${includeDev ? "All Dependency" : "Production Dependency"} Audit`);
+  console.error("");
+  console.error(`Summary: npm audit returned an incomplete or malformed report (${detail}).`);
+  process.exitCode = 1;
+  process.exit();
+}
+
+if (!isPlainObject(audit)) failMalformedAuditReport("top-level-object");
+if (Object.hasOwn(audit, "error")) failMalformedAuditReport("top-level-error");
+if (audit.auditReportVersion !== 2) failMalformedAuditReport("audit-report-version");
+if (!isPlainObject(audit.metadata)) failMalformedAuditReport("metadata-object");
+if (!isPlainObject(audit.metadata.vulnerabilities)) {
+  failMalformedAuditReport("metadata-vulnerabilities-object");
+}
+if (!isPlainObject(audit.vulnerabilities)) failMalformedAuditReport("vulnerabilities-object");
+
+const counts = audit.metadata.vulnerabilities;
+const vulnerabilityEntries = Object.entries(audit.vulnerabilities);
+const vulnerabilities = vulnerabilityEntries
+  .map(([, item]) => item)
+  .filter(isPlainObject);
 const severityRank = new Map([["critical", 4], ["high", 3], ["moderate", 2], ["low", 1], ["info", 0]]);
-const breakingFixes = vulnerabilities.filter((item) => item.fixAvailable && typeof item.fixAvailable === "object" && item.fixAvailable.isSemVerMajor);
 const knownDevToolchainHighNames = new Set([
   "@eslint/config-array",
   "@eslint/eslintrc",
@@ -89,23 +127,24 @@ const knownDevToolchainHighNames = new Set([
 const countIssues = new Set();
 const countCache = new Map();
 
+for (const name of Object.keys(counts)) {
+  if (!CANONICAL_AUDIT_COUNTERS.includes(name)) countIssues.add(`metadata-${name}-unexpected`);
+}
+
 function nonNegativeSafeInteger(value) {
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value >= 0 ? value : null;
-  }
-  const text = String(value ?? "").trim();
-  if (!/^(?:0|[1-9]\d{0,15})$/.test(text)) return null;
-  const parsed = BigInt(text);
-  return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
+  if (typeof value !== "number") return null;
+  if (!Number.isSafeInteger(value) || value < 0) return null;
+  return BigInt(value) <= MAX_SAFE_INTEGER_BIGINT ? value : null;
 }
 
 function countOf(name) {
   if (countCache.has(name)) return countCache.get(name);
-  const value = counts[name];
-  if (value === undefined) {
+  if (!Object.hasOwn(counts, name)) {
+    countIssues.add(`metadata-${name}-missing`);
     countCache.set(name, 0);
     return 0;
   }
+  const value = counts[name];
   const parsed = nonNegativeSafeInteger(value);
   if (parsed !== null) {
     countCache.set(name, parsed);
@@ -115,6 +154,40 @@ function countOf(name) {
   countCache.set(name, 0);
   return 0;
 }
+
+for (const name of CANONICAL_AUDIT_COUNTERS) countOf(name);
+const severityTotal = CANONICAL_AUDIT_COUNTERS
+  .filter((name) => name !== "total")
+  .reduce((total, name) => total + countOf(name), 0);
+if (countOf("total") !== severityTotal) countIssues.add("metadata-total-mismatch");
+
+const observedSeverityCounts = new Map(
+  [...CANONICAL_AUDIT_SEVERITIES].map((severity) => [severity, 0]),
+);
+for (const [name, item] of vulnerabilityEntries) {
+  if (
+    !isPlainObject(item) ||
+    item.name !== name ||
+    typeof item.severity !== "string" ||
+    !CANONICAL_AUDIT_SEVERITIES.has(item.severity)
+  ) {
+    countIssues.add(`vulnerability-${name}`);
+    continue;
+  }
+  observedSeverityCounts.set(item.severity, observedSeverityCounts.get(item.severity) + 1);
+}
+for (const severity of CANONICAL_AUDIT_SEVERITIES) {
+  if (countOf(severity) !== observedSeverityCounts.get(severity)) {
+    countIssues.add(`metadata-${severity}-mismatch`);
+  }
+}
+if (countOf("total") !== vulnerabilityEntries.length) {
+  countIssues.add("metadata-vulnerability-total-mismatch");
+}
+
+const breakingFixes = vulnerabilities.filter(
+  (item) => isPlainObject(item) && isPlainObject(item.fixAvailable) && item.fixAvailable.isSemVerMajor === true,
+);
 
 function formatFix(value) {
   if (value === true) return "available";
@@ -130,7 +203,12 @@ function printTable(headers, rows) {
 }
 
 function isKnownDevToolchainHigh(item) {
-  return allowKnownDevToolchainHigh && item.severity === "high" && knownDevToolchainHighNames.has(item.name);
+  return (
+    isPlainObject(item) &&
+    allowKnownDevToolchainHigh &&
+    item.severity === "high" &&
+    knownDevToolchainHighNames.has(item.name)
+  );
 }
 
 const allowedKnownDevToolchainHigh = vulnerabilities

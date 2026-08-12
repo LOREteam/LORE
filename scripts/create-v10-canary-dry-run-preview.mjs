@@ -3,6 +3,11 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { redactProofText } from "./redact-proof-output.mjs";
 import { parseSummaryTimeoutEnv } from "./summary-timeout.mjs";
+import {
+  resolveTrustedNpmCli,
+  trustedNpmCommand,
+  trustedNpmEnvironment,
+} from "./trusted-npm-cli.mjs";
 
 const DEFAULT_RPC_LABEL = "linea-sepolia-public-fallback";
 const PREVIEW_PATH = path.join("docs", "v10-canary-dry-run-preview.md");
@@ -11,14 +16,9 @@ const MAX_PREVIEW_FIELD_CHARS = 180;
 const CHILD_TIMEOUT_MS = parseSummaryTimeoutEnv("V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS", 240_000);
 const CHILD_ENV_INSPECTION_ARG = "--inspect-read-only-child-env";
 const PROCESS_RUNTIME_ENV_KEYS = [
-  "PATH",
-  "Path",
-  "PATHEXT",
   "SystemRoot",
   "SYSTEMROOT",
   "WINDIR",
-  "ComSpec",
-  "COMSPEC",
   "TEMP",
   "TMP",
   "TMPDIR",
@@ -93,18 +93,12 @@ const SAFE_NON_CREDENTIAL_ENV_NAMES = new Set([
   "NEXT_PUBLIC_LINEA_TOKEN_ADDRESS",
   "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER",
 ]);
+const TRUSTED_NPM_LAUNCHER = resolveTrustedNpmCli();
 
 function npmRun(script) {
-  if (process.env.npm_execpath) {
-    return {
-      command: process.execPath,
-      args: [process.env.npm_execpath, "run", script],
-      display: `npm.cmd run ${script}`,
-    };
-  }
+  const command = trustedNpmCommand(["run", script], TRUSTED_NPM_LAUNCHER);
   return {
-    command: process.platform === "win32" ? "npm.cmd" : "npm",
-    args: ["run", script],
+    ...command,
     display: `npm.cmd run ${script}`,
   };
 }
@@ -149,7 +143,7 @@ function createReadOnlyChildBoundary(sourceEnv) {
     if (env[gate] !== "0") throw new Error(`Read-only child execution gate ${gate} must be disabled`);
   }
   return {
-    env: Object.freeze(env),
+    env: Object.freeze(trustedNpmEnvironment(env, TRUSTED_NPM_LAUNCHER)),
     signingMaterialLoaded,
     sensitiveCredentialKeys,
   };
@@ -178,7 +172,7 @@ if (process.argv.includes(CHILD_ENV_INSPECTION_ARG)) {
 
 function runStep(name, spec) {
   const result = spawnSync(spec.command, spec.args, {
-    cwd: process.cwd(),
+    cwd: TRUSTED_NPM_LAUNCHER.repoRoot,
     encoding: "utf8",
     maxBuffer: MAX_CAPTURE_BYTES,
     timeout: CHILD_TIMEOUT_MS,
