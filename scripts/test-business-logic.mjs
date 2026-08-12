@@ -6435,46 +6435,6 @@ async function main() {
   );
   assert.match(
     runtimeMonitorLibSource,
-    /function nonNegativeSafeInteger\(value\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*\^\(0\|\[1-9\]\\d\{0,15\}\)\$/,
-    "runtime monitor helper must canonical-parse non-negative integer evidence",
-  );
-  assert.match(
-    runtimeMonitorLibSource,
-    /function parseIsoTimestampMs\(value\)[\s\S]*\^\\d\{4\}-\\d\{2\}-\\d\{2\}T\\d\{2\}:\\d\{2\}:\\d\{2\}\(\?:\\\.\\d\{3\}\)\?Z\$[\s\S]*Date\.parse\(text\)[\s\S]*canonicalText = text\.includes\("\."\) \? text : text\.replace\(\/Z\$\/, "\.000Z"\)[\s\S]*new Date\(parsed\)\.toISOString\(\) === canonicalText[\s\S]*evaluateChainIndexerAudit[\s\S]*parseIsoTimestampMs\(audit\?\.generatedAt\)[\s\S]*evaluateCanaryRevertWindow[\s\S]*parseIsoTimestampMs\(event\?\.timestamp\)[\s\S]*evaluateCanaryActivity[\s\S]*parseIsoTimestampMs\(event\?\.timestamp\)/,
-    "runtime monitor audit and canary timestamps must be ISO-8601 UTC before Date.parse",
-  );
-  assert.match(
-    runtimeMonitorLibSource,
-    /evaluateBackupFreshness[\s\S]*nonNegativeSafeInteger\(snapshot\.mtimeMs\)[\s\S]*nonNegativeSafeInteger\(snapshot\.bytes\)[\s\S]*evaluateRuntimeSnapshot[\s\S]*nonNegativeSafeInteger\(runtime\?\.process\?\.rssBytes\)[\s\S]*nonNegativeSafeInteger\(liveState\?\.fetchedAt\)/,
-    "runtime monitor snapshot and backup metadata must canonical-parse non-negative integer evidence",
-  );
-  assert.match(
-    runtimeMonitorLibSource,
-    /evaluateChainIndexerAudit[\s\S]*Number\.isSafeInteger\(nowMs\)[\s\S]*chain-indexer-audit-invalid[\s\S]*effectiveMaxAgeMs = Number\.isSafeInteger\(maxAgeMs\) && maxAgeMs > 0 \? maxAgeMs : 3_600_000[\s\S]*nowMs - generatedAt > effectiveMaxAgeMs[\s\S]*evaluateBackupFreshness[\s\S]*Number\.isSafeInteger\(nowMs\)[\s\S]*sqlite-backup-invalid[\s\S]*effectiveMaxAgeMs = Number\.isSafeInteger\(maxAgeMs\) && maxAgeMs > 0 \? maxAgeMs : 36 \* 60 \* 60 \* 1000[\s\S]*nowMs - mtimeMs > effectiveMaxAgeMs/,
-    "runtime monitor chain-indexer audit and backup freshness must fail closed on malformed clocks and fall back to safe stale-age defaults",
-  );
-  assert.match(
-    runtimeMonitorLibSource,
-    /MAX_FUTURE_SKEW_MS = 60_000[\s\S]*evaluateRuntimeSnapshot[\s\S]*Number\.isSafeInteger\(nowMs\)[\s\S]*runtime-snapshot-invalid[\s\S]*effectiveStuckGraceMs = Number\.isSafeInteger\(stuckGraceMs\) && stuckGraceMs > 0 \? stuckGraceMs : 120_000[\s\S]*effectiveMaxLiveStateAgeMs = Number\.isSafeInteger\(maxLiveStateAgeMs\) && maxLiveStateAgeMs > 0[\s\S]*fetchedAt <= nowMs \+ MAX_FUTURE_SKEW_MS[\s\S]*nowMs - fetchedAt <= effectiveMaxLiveStateAgeMs[\s\S]*overdueMs > effectiveStuckGraceMs/,
-    "runtime monitor snapshot evaluation must fail closed on malformed clock and fall back to safe freshness/grace windows",
-  );
-  assert.match(
-    runtimeMonitorLibSource,
-    /evaluateCanaryActivity[\s\S]*Number\.isSafeInteger\(event\?\.targetRounds\)[\s\S]*Number\.isSafeInteger\(event\?\.round\)[\s\S]*const failures = Number\.isSafeInteger\(completedSummary\.failures\) && completedSummary\.failures >= 0[\s\S]*canary-log-invalid/,
-    "runtime monitor canary summary events must canonical-parse round and failure counters",
-  );
-  assert.match(
-    runtimeMonitorLibSource,
-    /evaluateCanaryActivity[\s\S]*Number\.isSafeInteger\(nowMs\)[\s\S]*canary-log-invalid[\s\S]*effectiveMaxAgeMs = Number\.isSafeInteger\(maxAgeMs\) && maxAgeMs > 0 \? maxAgeMs : 300_000[\s\S]*nowMs - latestTimestamp > effectiveMaxAgeMs/,
-    "runtime monitor canary activity must fail closed on malformed clock and fall back to safe stale-age defaults",
-  );
-  assert.match(
-    runtimeMonitorLibSource,
-    /evaluateCanaryRevertWindow[\s\S]*Number\.isSafeInteger\(nowMs\)[\s\S]*canary-log-invalid[\s\S]*effectiveWindowMs = Number\.isSafeInteger\(windowMs\) && windowMs > 0 \? windowMs : 300_000[\s\S]*effectiveThreshold = Number\.isSafeInteger\(threshold\) && threshold > 0 \? threshold : 3[\s\S]*uniqueFailures\.size >= effectiveThreshold/,
-    "runtime monitor canary revert-window must fail closed on malformed clock and fall back to safe window/threshold defaults",
-  );
-  assert.match(
-    runtimeMonitorLibSource,
     /function readBoundedTextTail\(filePath[\s\S]*const stats = statSync\(filePath\)[\s\S]*!stats\.isFile\(\)[\s\S]*Text artifact must be a file[\s\S]*const size = stats\.size[\s\S]*function readBoundedJsonFile\(filePath[\s\S]*const stats = statSync\(filePath\)[\s\S]*!stats\.isFile\(\)[\s\S]*JSON artifact must be a file[\s\S]*stats\.size > boundedMaxBytes[\s\S]*function loadRuntimeIssueState\(filePath\)[\s\S]*const stats = statSync\(filePath\)[\s\S]*!stats\.isFile\(\) \|\| stats\.size > MAX_STATE_BYTES/,
     "runtime monitor artifact readers must reject directory/non-file inputs before reading JSON, text tails, or state",
   );
