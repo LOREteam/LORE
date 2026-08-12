@@ -28,9 +28,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   client-identity/external-rate-limit, wallet-shell/mining-action, mining-runtime safety,
   explorer-link, utility-safety, wallet external-boundary, error-shell,
   dialog-accessibility, wallet-funding, jackpot-banner, wins-presentation,
-  runtime-health-diagnostics, runtime-monitor alerts, public-metadata, Sidebar
-  legal-navigation, tutorial/public-copy, HTTP/browser smoke-boundary, and
-  wallet-action boundary assertions. The coordinator is now 6,726 lines;
+  runtime-health-diagnostics, runtime-monitor alerts/config-artifact boundaries,
+  public-metadata, Sidebar legal-navigation, tutorial/public-copy, HTTP/browser
+  smoke-boundary, and wallet-action boundary assertions. The coordinator is now
+  6,599 lines;
   Pure game-data, runtime-metrics,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes; the wallet/route module keeps
@@ -50,8 +51,11 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   imported executable module; direct module, syntax, lint, and diff checks pass.
   Follow-up `4c3b4558` moves wallet claim/receipt/repair/transfer boundary
   assertions into a dedicated imported module; direct, syntax, lint, full
-  `test:logic`, and compact `test:logic:summary` pass. Exact-diff
-  security scan `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its canonical
+  `test:logic`, and compact `test:logic:summary` pass.
+  Follow-up `07c5211e` moves runtime-monitor config, artifact-reader, response,
+  backup, origin, redaction, and missing-config assertions beside its direct
+  alert behavior; direct, full `test:logic`, and compact summary pass.
+  The exact-diff security scan `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its canonical
   draft but completion still rejects a scanner-owned missing `snapshotDigest`;
   no canonical artifact is claimed.
 - The refreshed 97-path partition is now committed locally in four logical

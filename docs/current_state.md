@@ -30,20 +30,20 @@ Open archived evidence only when a task needs it. The single active queue is
   `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings. The current
   functional candidate is `f8e93905d705b921334d2c5cea54eb680fece63d`, containing
   only later test-domain extractions and documentation.
-- The current local test-architecture follow-up is `4c3b4558`, following the
+- The current local test-architecture follow-up is `07c5211e`, following the
   prior eleven further isolated commits. It extracts wallet external boundaries,
   error-shell
   boundaries, dialog accessibility, wallet funding presentation, jackpot-banner
   presentation, wins presentation, runtime-health diagnostics, public metadata,
-  runtime-monitor alerts, Sidebar legal navigation, tutorial/public copy, and
-  HTTP/browser smoke and wallet-action boundaries from the coordinator. The
-  first five direct modules and their compact
+  runtime-monitor alerts/config-artifact boundaries, Sidebar legal navigation,
+  tutorial/public copy, and HTTP/browser smoke and wallet-action boundaries
+  from the coordinator. The first five direct modules and their compact
   `test:logic:summary` integrations pass. Wins-presentation, runtime-health
   diagnostics, and runtime-monitor alerts pass focused checks, syntax, and diff
-  gates. The wallet-action module passes direct, syntax, lint, full coordinator,
-  and compact-summary checks. The HTTP/browser smoke module passes direct,
-  syntax, lint, and diff gates; the current shared compact-summary rerun also
-  passes.
+  gates. The wallet-action and runtime-monitor boundary modules pass direct,
+  syntax, lint, full coordinator, and compact-summary checks. The HTTP/browser
+  smoke module passes direct, syntax, lint, and diff gates; the current shared
+  compact-summary rerun also passes.
   Exact-diff scan
   `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its semantic draft, but scanner
   completion still rejects the scanner-owned missing `snapshotDigest`; this
@@ -203,9 +203,10 @@ Open archived evidence only when a task needs it. The single active queue is
   bounded-error behavior directly rather than inspecting source shape. Wallet
   external-boundary, error-shell, dialog-accessibility, wallet-funding, and
   jackpot-banner, wins-presentation, runtime-health-diagnostics, runtime-monitor
-  alerts, public-metadata, Sidebar legal-navigation, tutorial/public-copy,
-  HTTP/browser smoke-boundary, and wallet-action boundary domains now execute
-  from dedicated imported modules. The coordinator is now 6,726 lines; the
+  alerts/config-artifact boundaries, public-metadata, Sidebar legal-navigation,
+  tutorial/public-copy, HTTP/browser smoke-boundary, and wallet-action boundary
+  domains now execute from dedicated imported modules. The coordinator is now
+  6,599 lines; the
   pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than
