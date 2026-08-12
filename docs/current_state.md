@@ -73,6 +73,12 @@ Open archived evidence only when a task needs it. The single active queue is
   `npm ls --all --package-lock-only` still reports internal invalid markers
   after a clean install, so it is evidence to investigate, not a false claim
   that the peer graph is fully clean.
+- Clean-checkout reproduction for `93b58a6e` is currently blocked by local disk
+  capacity, not source failure: a detached `.tmp/p0-clean-checkout-93b58a6e`
+  worktree reached `ENOSPC` during its second `npm ci` after allocating about
+  `553 MB` of `node_modules`, when C: had `0` bytes free. The exact temporary
+  worktree was removed and only about `0.62 GiB` is now free. Do not claim a
+  fresh-clean-checkout proof until sufficient workspace capacity is available.
 - The protected base DB remains byte-identical at SHA-256 `D2CF3A...C0061ABC`,
   length `221184`, and its original mtime. A prior direct non-hermetic build
   changed WAL/SHM only. Forensic analysis on preserved copies found no new

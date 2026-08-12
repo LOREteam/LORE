@@ -152,6 +152,10 @@ Last updated: 2026-08-12. This is the single active local work queue.
       required-local rows pass. Do not treat its 26 external/status blockers
       or the optional deployed-identity
       metadata mismatch as closed; no action is authorized by these local gates.
+- [ ] Re-run clean-checkout reproducibility once C: has enough free space for a
+      second `node_modules`. The exact `93b58a6e` detached `.tmp` attempt was
+      removed after `npm ci` hit `ENOSPC` at `0` free bytes; this is an
+      infrastructure blocker, not a passing proof.
 - [ ] Obtain green hosted CI evidence for the final exact commit.
 
 ## UX, accessibility, and performance
