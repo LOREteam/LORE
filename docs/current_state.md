@@ -165,7 +165,8 @@ Open archived evidence only when a task needs it. The single active queue is
   mining-action module now owns the async auto-resolve and wallet-shell checks. The
   mining-runtime-safety module owns persisted-session/tab-lock/run-setup checks.
   Explorer-link normalization and hostile-input cases run through their own direct
-  module. The coordinator is now 7,792 lines; the
+  module. Utility-safety now executes decimal, rejection, timeout, and redact/
+  bounded-error behavior directly rather than inspecting source shape. The coordinator is now 7,717 lines; the
   pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than

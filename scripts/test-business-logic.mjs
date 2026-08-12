@@ -32,10 +32,10 @@ import { runRuntimeMetricsTests } from "./test-business-runtime-metrics.mjs";
 import { runErrorBoundaryAndJsonTests } from "./test-business-error-boundaries.mjs";
 import { runWalletAndRouteSafetyTests } from "./test-business-wallet-route-safety.mjs";
 import { runExplorerLinkTests } from "./test-business-explorer-links.mjs";
+import { runUtilitySafetyTests } from "./test-business-utils-safety.mjs";
 import { runSentrySanitizationTests } from "./test-business-sentry-sanitization.mjs";
 import { runAuthAndCanaryBoundaryTests } from "./test-business-auth-canary-boundaries.mjs";
 import { runMiningRuntimeSafetyTests } from "./test-business-mining-runtime-safety.mjs";
-import * as utilsModule from "../app/lib/utils.ts";
 import { runClientIdentityAndRateLimitTests } from "./test-business-client-identity-rate-limit.mjs";
 import * as sharedRateLimitModule from "../app/api/_lib/sharedRateLimit.ts";
 import * as productionRuntimeModule from "../config/productionRuntime.ts";
@@ -98,7 +98,6 @@ async function main() {
   const absoluteTestDbPath = join(tmpdir(), "lore-mainnet.sqlite");
   const validPrivyAppId = "cmprodprivyappid0000000000";
   const validPrivateKey = "1".repeat(64);
-  const utils = utilsModule.default ?? utilsModule;
   const sharedRateLimit = sharedRateLimitModule.default ?? sharedRateLimitModule;
   const productionRuntime = productionRuntimeModule.default ?? productionRuntimeModule;
   const runtimeMonitor = runtimeMonitorModule.default ?? runtimeMonitorModule;
@@ -7684,81 +7683,7 @@ async function main() {
     /Preparing bet in your Privy wallet/,
     "manual betting must not show the removed wallet-preparing copy",
   );
-  assert.equal(utils.normalizeDecimalInput("1,25"), "1.25");
-  assert.equal(utils.validateBetAmount(""), "Enter an amount");
-  assert.equal(utils.validateBetAmount("   "), "Enter an amount");
-  assert.equal(utils.validateBetAmount("0"), "Amount must be greater than 0");
-  assert.equal(utils.validateBetAmount("-1"), "Amount must be greater than 0");
-  assert.equal(utils.validateBetAmount("1e3"), "Invalid amount");
-  assert.equal(utils.validateBetAmount("1.2.3"), "Invalid amount");
-  assert.equal(utils.validateBetAmount("1,25"), null);
-  assert.equal(utils.validateBetAmount("0.0001"), null);
-  assert.equal(utils.validateBetAmount("0.0000000000000000001"), "Use 18 decimals or fewer");
-  assert.equal(utils.isUserRejection(new Error("User rejected the request")), true);
-  assert.equal(utils.isUserRejection({ code: 4001, message: "wallet request closed" }), true);
-  assert.equal(utils.isUserRejection({ code: "ACTION_REJECTED" }), true);
-  assert.equal(utils.isUserRejection({ cause: { code: 4001 } }), true);
-  assert.equal(utils.isUserRejection({ details: "User denied transaction signature" }), true);
-  assert.equal(utils.isUserRejection({ shortMessage: "User rejected the request." }), true);
-  assert.equal(utils.isUserRejection({ cause: { shortMessage: "Request rejected by user." } }), true);
-  assert.equal(utils.isUserRejection(Object.assign(new Error("wallet error"), { cause: { details: "User cancelled the signature prompt" } })), true);
-  assert.equal(utils.isUserRejection({ shortMessage: "User closed modal before signing." }), true);
-  assert.equal(utils.isUserRejection({ cause: { details: "Wallet modal closed by the user." } }), true);
-  assert.equal(utils.isUserRejection({ code: -32000, message: "replacement transaction underpriced" }), false);
-  assert.equal(utils.isUserRejection({ shortMessage: "replacement transaction underpriced" }), false);
-  assert.equal(utils.isUserRejection({ message: "connection closed while reading RPC response" }), false);
-
-  assert.equal(utils.safeParseFloat("1.5"), 1.5);
-  assert.equal(utils.safeParseFloat("1,5"), 1.5);
-  assert.equal(utils.safeParseFloat(".5"), 0.5);
-  assert.equal(utils.safeParseFloat("1e3"), 0);
-  assert.equal(utils.safeParseFloat("1e309"), 0);
-  assert.equal(utils.safeParseFloat("12abc"), 0);
-  assert.equal(utils.safeParseFloat("1.2.3"), 0);
-  assert.equal(utils.safeParseFloat("NaN"), 0);
-  assert.equal(utils.safeToFixed(12.345, 2), "12.35");
-  assert.equal(utils.safeToFixed(Number.NaN, 2), "0.00");
-  assert.equal(utils.safeToFixed(Number.POSITIVE_INFINITY, 2, "fallback"), "fallback");
-  assert.equal(utils.safeToFixed(12.345, 101, "fallback"), "fallback");
-  assert.equal(utils.safeToFixed(12.345, 1.5, "fallback"), "fallback");
-  const utilsSource = readFileSync("app/lib/utils.ts", "utf8");
-  assert.match(
-    utilsSource,
-    /safeParseFloat[\s\S]*normalizeDecimalInput\(value\.trim\(\)\)[\s\S]*\/\^\(\?:\\d\+\\\.\?\\d\*\|\\\.\\d\+\)\$\/[\s\S]*Number\(normalized\)/,
-    "safeParseFloat must strict-parse canonical decimal text instead of accepting exponent or prefix text",
-  );
-  assert.doesNotMatch(
-    utilsSource,
-    /parseFloat\(normalizeDecimalInput/,
-    "safeParseFloat must not use parseFloat prefix parsing for wallet form amounts",
-  );
-  assert.match(
-    utilsSource,
-    /safeToFixed[\s\S]*Number\.isInteger\(decimals\)[\s\S]*decimals > 100[\s\S]*value\.toFixed\(decimals\)/,
-    "safeToFixed must bound fraction digits before calling toFixed",
-  );
-  assert.match(
-    utilsSource,
-    /MAX_TIMER_DELAY_MS = 2_147_483_647[\s\S]*export function withTimeout[\s\S]*Number\.isSafeInteger\(timeoutMs\)[\s\S]*timeoutMs <= 0[\s\S]*timeoutMs > MAX_TIMER_DELAY_MS[\s\S]*timeout must be between 1 and 2147483647 milliseconds/,
-    "shared promise timeout helper must reject fractional, unsafe, or oversized timer delays",
-  );
-  const rawFormattedError = utils.formatUnknownError(Object.assign(
-    new Error(`provider failed https://rpc.example.test/secret Bearer synthetic-token ${"a".repeat(80)} ${"b".repeat(700)}`),
-    {
-      code: "CALL_EXCEPTION",
-      details: `wallet 0x${"c".repeat(40)} privateKey=${"d".repeat(64)}`,
-      data: { rpcUrl: "https://rpc.example.test/key", token: "inline-secret" },
-      status: 500,
-    },
-  ));
-  assert.match(rawFormattedError, /CALL_EXCEPTION/);
-  assert.match(rawFormattedError, /Status: 500/);
-  assert.ok(rawFormattedError.length <= 600, "unknown error formatting must stay bounded");
-  assert.doesNotMatch(
-    rawFormattedError,
-    /rpc\.example|synthetic-token|inline-secret|0x[c]{40}|d{64}|b{300}/i,
-    "unknown error formatting must redact provider URLs, wallet addresses, tokens, and long raw payloads",
-  );
+  await runUtilitySafetyTests();
   await runMiningRuntimeSafetyTests();
   await runWalletModelTests();
   runReadModelTests();
