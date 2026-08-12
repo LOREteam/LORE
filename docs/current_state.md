@@ -162,8 +162,9 @@ Open archived evidence only when a task needs it. The single active queue is
   wallet/route-safety, Sentry-sanitization, and auth/canary-boundary modules.
   The client-identity/external-rate-limit behavioral module now owns proxy-trust,
   shared-bucket, bounded-response, and unsafe-endpoint cases. The wallet-shell/
-  mining-action module now owns the async auto-resolve and wallet-shell checks.
-  The coordinator is now 8,360 lines; the
+  mining-action module now owns the async auto-resolve and wallet-shell checks. The
+  mining-runtime-safety module owns persisted-session/tab-lock/run-setup checks.
+  The coordinator is now 7,809 lines; the
   pending-nonce Preview network/credential
   boundary has an executable CLI regression instead of duplicate source regex;
   game-data helper bounds now run through direct behavioral inputs rather than
