@@ -67,6 +67,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
 - Functional candidate `f8e93905` contains the later test-domain extractions
   and compact documentation. Its exact local scan `fa83b0ff-3fc0-4338-817d-a78fb42bdd8a`
   covers `c53c0afc..f8e93905`, is canonically sealed, and has no local findings.
+- Follow-up candidate `9ab501e6` adds compact proof-summary alignment. Its exact
+  scan `dd26cfc2-595f-432d-b6c7-58b12f206cdf` covers `f8e93905..9ab501e6`; the
+  tracked sealed bundle has complete 18-row coverage and no local findings. This
+  remains local evidence only; protocol-randomness and external G1-G14 stay open.
 - V10 compilation provenance - pass; manifest and ABI snapshot match; fragment
   digest `69218b3a...1900c`; runtime size `16488` bytes.
 - Two final current-tree `check:summary` runs pass and end

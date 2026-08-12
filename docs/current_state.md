@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-11.
+Last updated: 2026-08-12.
 
 Detailed history is preserved in:
 
@@ -118,6 +118,13 @@ Open archived evidence only when a task needs it. The single active queue is
   all 27 changed test/proof/documentation rows were deep-reviewed and it has
   no local findings. Its scope does not close the protocol-randomness High or
   external G1-G14 evidence gates.
+- Exact committed follow-up scan `dd26cfc2-595f-432d-b6c7-58b12f206cdf`
+  covers `f8e93905..9ab501e6`. Its sealed canonical bundle is tracked at
+  [`artifacts/security/canonical-diff-f8e93905-9ab501e6`](../artifacts/security/canonical-diff-f8e93905-9ab501e6/);
+  all 18 changed rows have completion receipts and it has no local findings.
+  The desktop completion endpoint failed after discovery because it omitted the
+  range snapshot digest; the same plugin contract finalizer sealed the recorded
+  draft after that tool-generated digest and the exact range binding were restored.
 - The post-scan wallet follow-up is covered by the current integrated P1
   runner: all `36/36` bounded suites, including EVM fuzz, now pass under the
   same npm invocation used by prelaunch.
