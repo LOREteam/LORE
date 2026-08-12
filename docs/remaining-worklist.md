@@ -7,11 +7,12 @@ Last updated: 2026-08-12. This is the single active local work queue.
 - [x] Pin fixed `nanoid`/`js-yaml` versions, Node 24, and npm 11.5.1; refresh
       the lockfile and complete a clean current-tree `npm ci`. The production
       and all-dependency audit gates pass under their documented policy.
-- [ ] Record or resolve npm 11's remaining `npm ls --all --package-lock-only`
-      invalid markers after clean install. The minimal compatibility work has
-      removed the unused root `accounts`, satisfied the Sentry webpack peer,
-      and made the nested x402 React peer compatible; do not force a wider
-      Privy/Wagmi upgrade merely to silence tooling output.
+- [x] Record npm 11.5.1's remaining `npm ls --all --package-lock-only`
+      invalid markers after clean install. All 34 invalid edges across nine
+      packages satisfy their semver ranges; Arborist flags only the differing
+      nested-override context of a hoisted node. The minimal compatibility
+      work remains sufficient: do not force a wider Privy/Wagmi upgrade merely
+      to silence this npm presentation limitation.
 - [x] Make `check-local` hermetic and prove protected SQLite hash/mtime
       invariance across two full gates.
 - [x] Track V10 source, compiler config, manifest, `.gitattributes` line-ending

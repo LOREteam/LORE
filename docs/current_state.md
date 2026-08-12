@@ -74,10 +74,13 @@ Open archived evidence only when a task needs it. The single active queue is
   `nanoid@3.3.17` and `js-yaml@4.3.1`. Both dependency audit gates pass:
   production has no blocking High/Critical; the current clean all-deps result
   has `5` explicitly allowed non-production ESLint/minimatch High advisories.
-  npm 11's full
-  `npm ls --all --package-lock-only` still reports internal invalid markers
-  after a clean install, so it is evidence to investigate, not a false claim
-  that the peer graph is fully clean.
+  npm 11.5.1's `npm ls --all --package-lock-only` (including `--omit=dev`)
+  still exits `ELSPROBLEMS` for 34 edges across nine hoisted packages. Direct
+  Arborist inspection proves every edge's `satisfiedBy(node)` is true; all 34
+  failures are only mismatched nested-override contexts after hoisting. This
+  is a recorded npm presentation limitation, not an unsatisfied semver or
+  audit finding. Keep the lockfile/security pins as-is; do not force a broad
+  Privy/Wagmi upgrade merely to change that output.
 - Clean-checkout reproduction for `93b58a6e` is currently blocked by local disk
   capacity, not source failure: a detached `.tmp/p0-clean-checkout-93b58a6e`
   worktree reached `ENOSPC` during its second `npm ci` after allocating about

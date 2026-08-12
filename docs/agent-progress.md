@@ -184,9 +184,11 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   closure for the protocol-randomness High.
 - Exact committed diff scan `b39bde24-6ba0-4e18-9c39-38b91766187e` seals the
   one-file `44765951..c53c0afc` build-resolution follow-up with no findings.
-- Production `npm ls --omit=dev --package-lock-only` is clean and the direct
-  security pins resolve; full `npm ls --all --package-lock-only` still has six
-  upstream Privy/Wagmi/Sentry/toolchain peer/resolution issues.
+- Both the full and `--omit=dev` npm 11.5.1 `npm ls --package-lock-only`
+  views retain 34 invalid-edge markers across nine hoisted packages. Arborist
+  proves all 34 satisfy their declared semver range; the invalid state is only
+  a nested-override-context mismatch after hoisting, not a peer/resolution or
+  audit failure. Direct security pins resolve and remain unchanged.
 - Latest 2026-08-12 Sepolia V10 Preview stays inside the read-only boundary:
   no signing material, wallet client, or contract write. Planner/matrix now
   fail closed until actual runtime configuration proves
