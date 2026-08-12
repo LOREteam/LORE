@@ -55,6 +55,7 @@ const BUSINESS_TEST_MODULES = [
   "scripts/test-business-error-shell-boundaries.mjs",
   "scripts/test-business-dialog-accessibility.mjs",
   "scripts/test-business-wallet-funding-presentation.mjs",
+  "scripts/test-business-jackpot-banner-presentation.mjs",
   "scripts/test-business-api-recovery-storage.mjs",
   "scripts/test-business-api-integer-queries.mjs",
   "scripts/test-business-api-request-boundaries.mjs",
