@@ -145,9 +145,9 @@ Last updated: 2026-08-12. This is the single active local work queue.
       HTTP/browser smoke-boundary, wallet-action, UI-motion/read-only, Hub
       read-only controls, and public-presentation assertions now also execute
       from isolated imported modules. Shared stored-number and summary-timeout
-      parsers, and admin-proof canonicalization now run direct adversarial
-      behavioral inputs; the latest isolated compact logic summary passed in
-      99,201 ms with zero assertions/timeouts.
+      parsers, admin-proof canonicalization, and bigint balance formatting now
+      run direct adversarial behavioral inputs; the latest isolated compact
+      logic summary passed in 98,834 ms with zero assertions/timeouts.
 - [ ] Seal an exact-diff security bundle for the current test-only follow-up
       `b8c7f669..07c5211e` before treating it as part of the final candidate.
       Scan `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its semantic draft,

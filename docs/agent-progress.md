@@ -44,9 +44,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   compact artifacts.
 - Follow-ups `e370e1ac`, `e1cff3ed`, `c7615a37`, `2ae84e04`, and `e36e9a2a`
   further extract UI/read-only, Hub, public-presentation, and strict-parser
-  checks. Stored-number, summary-timeout, and admin-proof guards now execute
-  adversarial inputs directly; an isolated `test:logic:summary` passed in
-  99,201 ms with zero assertion failures and no timeout.
+  checks. Stored-number, summary-timeout, admin-proof, and bigint balance
+  formatter guards now execute adversarial inputs directly; an isolated
+  `test:logic:summary` passed in 98,834 ms with zero assertion failures and
+  no timeout.
 - Follow-up `f01aa22` extracts wallet-runtime state-machine coverage; direct
   logic, summary, typecheck, and lint pass for that test-only change.
 - Follow-up `b8c7f669..51840d8b` adds eleven more executable domains. The first
