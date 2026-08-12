@@ -51,6 +51,7 @@ const BUSINESS_TEST_MODULES = [
   "scripts/test-business-chat-content.mjs",
   "scripts/test-business-public-api-read-models.mjs",
   "scripts/test-business-wallet-presentation.mjs",
+  "scripts/test-business-wallet-external-boundaries.mjs",
   "scripts/test-business-api-recovery-storage.mjs",
   "scripts/test-business-api-integer-queries.mjs",
   "scripts/test-business-api-request-boundaries.mjs",
