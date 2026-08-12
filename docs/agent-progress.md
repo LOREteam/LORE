@@ -68,6 +68,17 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   The exact-diff security scan `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its canonical
   draft but completion still rejects a scanner-owned missing `snapshotDigest`;
   no canonical artifact is claimed.
+- Fresh detached reproduction of exact `8d42cdb3` now passes Node `24.5.0` /
+  npm `11.5.1` `npm ci`, pinned `nanoid@3.3.17` and `js-yaml@4.3.1`, the full
+  `check:summary`, and isolated-DB prelaunch. Required-local rows all pass;
+  production audit has no High/Critical and all-deps has one allowed dev High.
+  The main DB/WAL/SHM triplet is hash/length/mtime-identical afterward, with no
+  check-local temp directory or port `3101` listener.
+- Range scan `59fa2d72-fff1-4d46-bb7d-5b94d507ac80` completed `34/34` reviews
+  and reporting with no candidate but failed canonical completion on the
+  plugin's `git_diff` `snapshotDigest` schema mismatch. Do not retry or call it
+  sealed. Run a full Standard scan of the final clean immutable SHA instead;
+  that supported path binds a `git_revision` target directly to its revision.
 - The refreshed 97-path partition is now committed locally in four logical
   commits: `69237438` runtime/data, `569e87f0` tooling, `6137dcde` tests/proof,
   and `80ce70b7` toolchain/line endings. This documentation commit completes
@@ -152,17 +163,19 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   fork/lease/identity, round/mobile/Privy/motion, process identity, and V10 EVM.
 - Current-tree bundle baseline after clean install - `226` files, `7500007`
   total bytes, `7162708` JS bytes, largest `1043297`, under the `1250000` limit.
-- Typecheck, `457`-file lint (`0` issues), logic, logic summary,
+- Typecheck, `503`-file lint (`0` issues), logic, logic summary,
   security-followup `8/8`, production dependency proof, both full checks, and
-  prelaunch required-local rows pass. The clean all-deps proof retains `9`
-  known development-toolchain High advisories under the documented policy.
-- Both `46d3bc50` and `d626a0f` have completed two-hour local performance
-  profiles with zero API writes and negative net heap delta. A newer two-hour
-  run on build `_nq8Gl2JBW5nUIFdEeXBn` also completed (`7200040ms`): zero API
-  writes, `134` blocked external requests, `105ms` max initial-load long task,
-  and heap delta `+1125244` (slope `267820` bytes/hour). It is observational,
-  not an accepted leak verdict, and predates the current test-only commit; the
-  final exact-SHA profile and native-hidden browser throttling remain open.
+  prelaunch required-local rows pass. The latest clean all-deps proof retains
+  `1` allowed development-toolchain High advisory and `0` blocking findings.
+- The latest P17 artifact completed a two-hour loopback run (`7200036ms`) on
+  existing build `KtgFoXuIosh-DwRAGcr24`: no fulfilled API writes, `134`
+  blocked external requests, synthetic polling `16.32 -> 1.00 -> 16.40/min`,
+  zero experiment long tasks, and `243` memory samples (`+10609389` endpoint
+  heap delta; fitted `+262298` bytes/hour; DOM slope `0/hour`). It advances
+  first-load, chunk-owner, polling, long-task, and memory evidence, but remains
+  partial: the positive heap observation is not a leak verdict, native hidden
+  state was not produced, rerenders were not profiled, and the reused build has
+  no exact Git-SHA association.
 - The attempted standard scan `c7662d53-c089-436a-93fd-f9506f2279f0` is
   unsealed because its artifact directory disappeared and the scan service is
   account-limited. It is not a substitute for an exact-SHA scan.
@@ -209,8 +222,9 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
 3. The succeeding `c53c0afc..f8e93905` follow-up also has a sealed canonical
    bundle at
    [`artifacts/security/canonical-diff-c53c0afc-f8e93905`](../artifacts/security/canonical-diff-c53c0afc-f8e93905/).
-4. Repeat the two-hour performance run on the final exact SHA and prove native
-   hidden-state behavior; retain the upstream Privy modal blocker honestly.
+4. Rebuild at the final exact SHA, repeat or cryptographically associate the
+   two-hour profile, and add native-hidden plus React-rerender evidence; retain
+   the upstream Privy modal blocker honestly.
 5. Keep all live Sepolia and external G1-G14 work behind the Preview/consent and
    canonical-evidence boundaries in
    [`docs/remaining-worklist.md`](remaining-worklist.md).

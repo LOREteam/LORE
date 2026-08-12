@@ -16,6 +16,10 @@ Open archived evidence only when a task needs it. The single active queue is
   `46d3bc5072f07b4246ad1f7e516253aef5c8054b`. Its detached reproduction used
   Node 24/npm 11.5.1 and clean `npm ci`; V10 provenance, two full
   `check:summary` passes, and prelaunch required-local rows passed.
+- The latest clean-reproduced pre-documentation candidate is
+  `8d42cdb3ca335a2e326a29cc32e63d10f37681eb`. A fresh detached `npm ci`, full
+  `check:summary`, and isolated-DB prelaunch all pass; its final documentation
+  follow-up still requires the supported full Standard exact-revision scan.
 - The verified hardening candidate is partitioned into local commits
   `69237438` (runtime/data boundaries), `569e87f0` (hermetic tooling),
   `6137dcde` (behavioral security/P1 gates), and `80ce70b7` (toolchain and
@@ -72,8 +76,8 @@ Open archived evidence only when a task needs it. The single active queue is
   lockfile.
 - Exact Corepack npm `11.5.1` clean install resolves lockfile v3's
   `nanoid@3.3.17` and `js-yaml@4.3.1`. Both dependency audit gates pass:
-  production has no blocking High/Critical; the current clean all-deps result
-  has `5` explicitly allowed non-production ESLint/minimatch High advisories.
+  production has no blocking High/Critical; the 2026-08-12 clean all-deps
+  result has `1` explicitly allowed non-production dev-toolchain High advisory.
   npm 11.5.1's `npm ls --all --package-lock-only` (including `--omit=dev`)
   still exits `ELSPROBLEMS` for 34 edges across nine hoisted packages. Direct
   Arborist inspection proves every edge's `satisfiedBy(node)` is true; all 34
@@ -81,12 +85,15 @@ Open archived evidence only when a task needs it. The single active queue is
   is a recorded npm presentation limitation, not an unsatisfied semver or
   audit finding. Keep the lockfile/security pins as-is; do not force a broad
   Privy/Wagmi upgrade merely to change that output.
-- Clean-checkout reproduction for `93b58a6e` is currently blocked by local disk
-  capacity, not source failure: a detached `.tmp/p0-clean-checkout-93b58a6e`
-  worktree reached `ENOSPC` during its second `npm ci` after allocating about
-  `553 MB` of `node_modules`, when C: had `0` bytes free. The exact temporary
-  worktree was removed and only about `0.62 GiB` is now free. Do not claim a
-  fresh-clean-checkout proof until sufficient workspace capacity is available.
+- Clean-checkout reproduction now passes for exact `8d42cdb3`: a fresh detached
+  worktree used Node `24.5.0`, npm `11.5.1`, and `npm ci`; the lock resolved only
+  `nanoid@3.3.17` and `js-yaml@4.3.1`. Its complete `check:summary` ended
+  `Local check completed successfully` after lint, hermetic build, full logic,
+  P1/EVM, contract/indexer/DB/monitoring, production build/typecheck, and
+  HTTP/browser smoke. A separate isolated-DB prelaunch passed every required-
+  local row and retained `25` external/status blockers. The protected canonical
+  DB/WAL/SHM hashes, lengths, and mtime ticks remained exact; check-local temp
+  directories and port `3101` listeners were both zero afterward.
 - The protected base DB remains byte-identical at SHA-256 `D2CF3A...C0061ABC`,
   length `221184`, and its original mtime. A prior direct non-hermetic build
   changed WAL/SHM only. Forensic analysis on preserved copies found no new
@@ -159,6 +166,14 @@ Open archived evidence only when a task needs it. The single active queue is
   The desktop completion endpoint failed after discovery because it omitted the
   range snapshot digest; the same plugin contract finalizer sealed the recorded
   draft after that tool-generated digest and the exact range binding were restored.
+- Desktop range scan `59fa2d72-fff1-4d46-bb7d-5b94d507ac80` deep-reviewed all
+  `34/34` rows through reporting with no candidate, but canonical completion
+  failed because Codex Security `0.1.18` requires `snapshotDigest` for
+  `git_diff` while its commit/range launcher cannot persist that field. The
+  failed scan is not canonical closure. The supported next step is a full
+  Standard scan of the final clean immutable SHA, whose target is
+  `git_revision` and therefore binds directly to `revision` without this
+  range-only schema mismatch.
 - The post-scan wallet follow-up is covered by the current integrated P1
   runner: all `36/36` bounded suites, including EVM fuzz, now pass under the
   same npm invocation used by prelaunch.
@@ -255,22 +270,24 @@ Open archived evidence only when a task needs it. The single active queue is
   long-task maximum `95ms`. Native hidden-state throttling was not observed;
   only synthetic visibility was measured, so it remains open final-candidate
   browser evidence.
-- A later two-hour run against build `_nq8Gl2JBW5nUIFdEeXBn` completed its
-  requested `7200000ms` (`7200040ms` actual) with API writes `0`, external
-  browser requests blocked `134`, initial-load long-task maximum `105ms`, heap
-  delta `+1125244`, and sampled slope `267820` bytes/hour. That single run is
-  partial—not a leak finding—because garbage collection is noisy and native
-  hidden-state throttling again could not be observed; it predates the current
-  test-only commit and cannot serve as final exact-SHA evidence.
-- On exact package-manager audit head `b625581e`, the current-candidate prelaunch passes
-  every required-local row: V9/V10
-  compile/invariants, P1/EVM `36/36`, typecheck, 457-file lint, hermetic build,
-  bundle baseline, SQLite operations, logic, security-followup, and dependency
-  proofs. A subsequent clean `npm ci`, hermetic build, and bundle baseline
-  reproduced the local build result. The current all-deps proof retains `5`
-  named non-production dev-toolchain High advisories under the documented policy.
-  It also reports 26 external/status commands missing or blocking evidence;
-  these remain outside local completion.
+- The 2026-08-12 P17 run completed `7200036ms` against existing production
+  build `KtgFoXuIosh-DwRAGcr24` (`status=partial`; no rebuild). It fulfilled no
+  API writes, blocked `134` external requests, and measured polling at
+  `16.32/min` visible, `1.00/min` under synthetic hidden state, and `16.40/min`
+  after restore. Across `243` samples, heap changed
+  `15000690 -> 25610079` (`+10609389`; fitted slope `+262298` bytes/hour;
+  max `28484232`); DOM changed `473 -> 476` with slope `0/hour`. The experiment
+  had zero long tasks after two initial-load tasks (maximum `110ms`), and `/`
+  emitted `25` modern first-load assets (`1013390` gzip / `814726` Brotli).
+  This is observational evidence, not a leak finding. Native hidden state was
+  not observed, React rerenders were not profiled, and the reused build records
+  no Git SHA, so final exact-SHA evidence remains open.
+- On exact clean-checkout head `8d42cdb3`, prelaunch passes every required-local
+  row: V9/V10 compile/invariants, P1/EVM, typecheck, 503-file lint, hermetic
+  build, bundle baseline, SQLite operations, logic, security-followup, and both
+  dependency proofs. Production audit has `0` High/Critical; all-deps has `1`
+  allowed dev-toolchain High and `0` blocking. It reports `25` external/status
+  commands missing or blocking evidence; these remain outside local completion.
 
 ## External and live blockers
 

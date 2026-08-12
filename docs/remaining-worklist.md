@@ -149,24 +149,27 @@ Last updated: 2026-08-12. This is the single active local work queue.
       parsers, admin-proof canonicalization, and bigint balance formatting now
       run direct adversarial behavioral inputs; the latest isolated compact
       logic summary passed in 98,834 ms with zero assertions/timeouts.
-- [ ] Seal an exact-diff security bundle for the current test-only follow-up
-      `b8c7f669..07c5211e` before treating it as part of the final candidate.
-      Scan `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its semantic draft,
-      but scanner completion still rejects its own missing `snapshotDigest`, so
-      it produced no canonical artifact.
+- [ ] Run and seal a full Standard security scan of the final clean immutable
+      SHA. Range scan `59fa2d72-fff1-4d46-bb7d-5b94d507ac80` completed all
+      `34/34` reviews with no candidate but failed canonical completion because
+      Codex Security `0.1.18` cannot persist the `snapshotDigest` its
+      `git_diff` schema requires for commit/range targets. Do not retry or call
+      that failed scan canonical; the supported Standard path uses
+      `target.kind=git_revision` and binds the exact final `revision`.
 - [x] Re-run the full local `check:summary` at exact test-proof head `825514da`:
       lint, hermetic build, logic, P1/EVM, indexer/DB/monitoring, build/typecheck,
       and HTTP/browser smoke pass. This does not seal the running exact-diff scan
       or close any external G1-G14 gate.
-- [ ] Preserve the current local P0 evidence at `b625581e`: exact Corepack
-      `npm@11.5.1` clean install, both dependency audits, and prelaunch
-      required-local rows pass. Do not treat its 26 external/status blockers
-      or the optional deployed-identity
-      metadata mismatch as closed; no action is authorized by these local gates.
-- [ ] Re-run clean-checkout reproducibility once C: has enough free space for a
-      second `node_modules`. The exact `93b58a6e` detached `.tmp` attempt was
-      removed after `npm ci` hit `ENOSPC` at `0` free bytes; this is an
-      infrastructure blocker, not a passing proof.
+- [x] Preserve fresh local P0 evidence at exact `8d42cdb3`: Corepack/npm
+      `11.5.1` clean install, both dependency audits, and every prelaunch
+      required-local row pass. Production has `0` High/Critical and all-deps
+      has `1` allowed dev High with `0` blocking. Keep all `25` external/status
+      blockers and the optional deployed-identity metadata mismatch open; no
+      wallet or chain action is authorized by these local gates.
+- [x] Re-run clean-checkout reproducibility at exact `8d42cdb3`: fresh detached
+      checkout, Node `24.5.0`, npm `11.5.1`, `npm ci`, pinned dependency proof,
+      and full `check:summary` all pass. The canonical DB/WAL/SHM identity is
+      unchanged, owned temp directories are cleaned, and port `3101` is closed.
 - [ ] Obtain green hosted CI evidence for the final exact commit.
 
 ## UX, accessibility, and performance
@@ -195,17 +198,20 @@ Last updated: 2026-08-12. This is the single active local work queue.
 - [x] Complete the two-hour local profile for the old exact `46d3bc50`
       baseline: API writes `0`, external browser requests blocked, net heap
       delta `-1099488`, peak `+10091819`, and DOM slope `0`.
-- [ ] Repeat route compression/chunk/polling/rerender/long-task evidence on the
-      final exact candidate and prove native hidden-state behavior. Exact
-      `d626a0f` already has a complete two-hour profile: zero API writes, 134
-      blocked external requests, `-702527` heap delta, `+2637951` peak, 3 DOM
-      nodes, and 95ms max long task.
-- [ ] Reconcile the newer complete local run on build `_nq8Gl2JBW5nUIFdEeXBn`:
-      it had zero API writes and 134 blocked external requests, but a
-      `+1125244` heap delta / `267820` bytes-hour sampled slope. Treat it as
-      noisy partial evidence, not a leak conclusion or an exact-SHA profile.
-- [ ] Repeat and evaluate the two-hour idle/simulated Auto-Miner profile on the
-      final exact SHA without changing intentional refresh cadence.
+- [x] Capture a complete two-hour loopback measurement on existing build
+      `KtgFoXuIosh-DwRAGcr24`: no fulfilled API writes, `134` blocked external
+      requests, polling `16.32 -> 1.00 -> 16.40/min`, zero experiment long
+      tasks, `243` memory samples with `+10609389` endpoint delta /
+      `+262298` bytes-hour fitted slope, and DOM slope `0/hour`. Treat the
+      positive heap result as noisy observational evidence, not a leak verdict.
+- [ ] Rebuild and repeat or exact-SHA-associate route compression, chunk-owner,
+      polling, long-task, and two-hour memory evidence on the final candidate;
+      the current artifact reused a build and records no Git SHA.
+- [ ] Prove native hidden-tab behavior and browser timer throttling; the current
+      headless run exercised only the synthetic application branch.
+- [ ] Capture React rerender profiling and evaluate the idle/simulated
+      Auto-Miner path on the final exact SHA without changing intentional
+      refresh cadence.
 
 ## Linea Sepolia live boundary
 
