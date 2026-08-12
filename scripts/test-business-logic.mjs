@@ -1486,7 +1486,6 @@ async function main() {
   const fetchTimeoutSummarySource = readFileSync("scripts/run-fetch-timeout-summary.mjs", "utf8");
   const storedNumberParsingSummarySource = readFileSync("scripts/run-stored-number-parsing-summary.mjs", "utf8");
   const summaryTimeoutSource = readFileSync("scripts/summary-timeout.mjs", "utf8");
-  const storedNumberParsingSource = readFileSync("app/api/_lib/storedNumberParsing.ts", "utf8");
   assert.match(
     summaryTimeoutSource,
     /DECIMAL_INTEGER_RE\s*=\s*\/\^\(\?:0\|\[1-9\]\\d\{0,15\}\)\$\/[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseSummaryTimeoutEnv\(name, fallback[\s\S]*Number\.isSafeInteger\(fallback\)[\s\S]*const parsed = BigInt\(raw\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*const numeric = Number\(parsed\)/,
@@ -1985,11 +1984,6 @@ async function main() {
     storedNumberParsingSummarySource,
     /\[\.\.\.output\.matchAll/,
     "stored number parsing summary wrapper must not spread matchAll output into an array",
-  );
-  assert.match(
-    storedNumberParsingSource,
-    /STORED_BLOCK_NUMBER_RE\s*=\s*\/\^\(\?:0\|\[1-9\]\\d\{0,15\}\)\$\/[\s\S]*STORED_POSITIVE_INTEGER_RE\s*=\s*\/\^\[1-9\]\\d\{0,15\}\$\/[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*STORED_BLOCK_NUMBER_RE\.test\(value\)[\s\S]*STORED_POSITIVE_INTEGER_RE\.test\(value\)[\s\S]*const parsed = BigInt\(value\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)/,
-    "shared stored number parsing must reject non-canonical or oversized decimal strings before numeric conversion",
   );
   assert.equal(
     prelaunchPackageScripts?.["test:stored-number-parsing:summary"],
@@ -4894,17 +4888,6 @@ async function main() {
     dataSyncHealthSource,
     /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseStoredEpochNumber[\s\S]*\/\^\[1-9\]\\d\{0,15\}\$\/[\s\S]*const parsed = BigInt\(value\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)[\s\S]*Object\.keys\(dbEpochs\)[\s\S]*\.map\(\(key\) => parseStoredEpochNumber\(key\)\)[\s\S]*epoch !== null && epoch <= maxEpochToCheck/,
     "data-sync health must parse stored epoch keys with a BigInt-bounded canonical safe decimal parser before coverage checks",
-  );
-  const dataSyncStoredNumberParsingSource = readFileSync("app/api/_lib/storedNumberParsing.ts", "utf8");
-  assert.match(
-    dataSyncStoredNumberParsingSource,
-    /const MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseStoredPositiveIntegerOrZero[\s\S]*const parsed = BigInt\(value\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)/,
-    "shared stored positive integer parser must use a BigInt bound before returning display-safe numbers",
-  );
-  assert.doesNotMatch(
-    dataSyncStoredNumberParsingSource,
-    /const parsed = Number\(value\)|Number\.isSafeInteger\(parsed\)/,
-    "shared stored positive integer parser must not rely on broad Number(value) coercion",
   );
   assert.match(
     dataSyncHealthSource,

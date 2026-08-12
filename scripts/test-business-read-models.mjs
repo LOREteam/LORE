@@ -9,6 +9,7 @@ import * as jackpotHistoryModule from "../app/hooks/useJackpotHistory.ts";
 import * as recentWinsModule from "../app/hooks/useRecentWins.ts";
 import * as leaderboardsModule from "../app/hooks/useLeaderboards.ts";
 import * as rebateModule from "../app/hooks/useRebate.ts";
+import * as storedNumberParsingModule from "../app/api/_lib/storedNumberParsing.ts";
 
 export function runReadModelTests() {
   const liveStateSnapshot = liveStateSnapshotModule.default ?? liveStateSnapshotModule;
@@ -19,6 +20,30 @@ export function runReadModelTests() {
   const recentWins = recentWinsModule.default ?? recentWinsModule;
   const leaderboards = leaderboardsModule.default ?? leaderboardsModule;
   const rebate = rebateModule.default ?? rebateModule;
+  const storedNumberParsing = storedNumberParsingModule.default ?? storedNumberParsingModule;
+  assert.equal(storedNumberParsing.parseStoredBlockNumberOrZero("0"), 0n);
+  assert.equal(storedNumberParsing.parseStoredBlockNumberOrZero("9007199254740991"), 9007199254740991n);
+  assert.equal(
+    storedNumberParsing.parseStoredBlockNumberOrZero("9007199254740992"),
+    9007199254740992n,
+    "stored block numbers must preserve canonical bigint values beyond Number.MAX_SAFE_INTEGER",
+  );
+  for (const invalidBlockNumber of [null, undefined, "", "00", "01", "1e3", "1.5", "-1", "10000000000000000"]) {
+    assert.equal(
+      storedNumberParsing.parseStoredBlockNumberOrZero(invalidBlockNumber),
+      0n,
+      `stored block number must reject ${String(invalidBlockNumber)}`,
+    );
+  }
+  assert.equal(storedNumberParsing.parseStoredPositiveIntegerOrZero("1"), 1);
+  assert.equal(storedNumberParsing.parseStoredPositiveIntegerOrZero("9007199254740991"), Number.MAX_SAFE_INTEGER);
+  for (const invalidPositiveInteger of [null, undefined, "", "0", "01", "1e3", "1.5", "-1", "9007199254740992"]) {
+    assert.equal(
+      storedNumberParsing.parseStoredPositiveIntegerOrZero(invalidPositiveInteger),
+      0,
+      `stored positive integer must reject ${String(invalidPositiveInteger)}`,
+    );
+  }
   assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(1_000, 2_000), true);
   assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(2_000 + 6_000, 2_000), false);
   assert.equal(liveStateSnapshot.isLiveStateSnapshotFresh(2_000 + 5_000, 2_000), true);
