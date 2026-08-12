@@ -25,6 +25,7 @@ import { runWalletFundingPresentationTests } from "./test-business-wallet-fundin
 import { runJackpotBannerPresentationTests } from "./test-business-jackpot-banner-presentation.mjs";
 import { runWinsPresentationTests } from "./test-business-wins-presentation.mjs";
 import { runRuntimeHealthDiagnosticsTests } from "./test-business-runtime-health-diagnostics.mjs";
+import { runRuntimeMonitorAlertTests } from "./test-business-runtime-monitor-alerts.mjs";
 import { runPublicMetadataTests } from "./test-business-public-metadata.mjs";
 import { runSidebarLegalNavigationTests } from "./test-business-sidebar-legal-navigation.mjs";
 import { runTutorialAndPublicCopyTests } from "./test-business-tutorial-public-copy.mjs";
@@ -49,7 +50,6 @@ import { runMiningRuntimeSafetyTests } from "./test-business-mining-runtime-safe
 import { runClientIdentityAndRateLimitTests } from "./test-business-client-identity-rate-limit.mjs";
 import * as sharedRateLimitModule from "../app/api/_lib/sharedRateLimit.ts";
 import * as productionRuntimeModule from "../config/productionRuntime.ts";
-import * as runtimeMonitorModule from "./runtime-monitor-lib.mjs";
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   const entries = readdirSync(root, { withFileTypes: true });
@@ -110,7 +110,6 @@ async function main() {
   const validPrivateKey = "1".repeat(64);
   const sharedRateLimit = sharedRateLimitModule.default ?? sharedRateLimitModule;
   const productionRuntime = productionRuntimeModule.default ?? productionRuntimeModule;
-  const runtimeMonitor = runtimeMonitorModule.default ?? runtimeMonitorModule;
   runRuntimeMetricsTests();
   runSentrySanitizationTests();
   await runErrorBoundaryAndJsonTests();
@@ -6504,32 +6503,7 @@ async function main() {
     /Date\.parse\(String\((?:audit\?\.generatedAt|event\?\.timestamp|event\?\.timestamp \?\? "")\)\)/,
     "runtime monitor audit and canary timestamps must not return to broad Date.parse(String(...)) evidence parsing",
   );
-  const invalidResendSender = runtimeMonitor.createResendAlertSender({
-    env: {
-      RESEND_API_KEY: "re_synthetic",
-      RUNTIME_MONITOR_EMAIL_FROM: "LORE <alerts@playlore.xyz>",
-      RUNTIME_MONITOR_EMAIL_TO: "not-an-email",
-    },
-  });
-  assert.equal(invalidResendSender.configured, false, "runtime monitor must not treat invalid Resend email addresses as configured");
-  let resendRequestBody = null;
-  const validResendSender = runtimeMonitor.createResendAlertSender({
-    env: {
-      RESEND_API_KEY: "re_synthetic",
-      RUNTIME_MONITOR_EMAIL_FROM: "LORE <alerts@playlore.xyz>",
-      RUNTIME_MONITOR_EMAIL_TO: "playlore88@gmail.com, ops@playlore.xyz",
-      ALERT_PREFIX: "LORE Keeper",
-    },
-    fetchImpl: async (_url, init) => {
-      resendRequestBody = JSON.parse(String(init.body));
-      return { ok: true };
-    },
-    now: () => 1_000,
-  });
-  assert.equal(validResendSender.configured, true, "runtime monitor must accept verified-sender display names and comma-separated email recipients");
-  assert.equal(await validResendSender.send("ALERT: synthetic", "synthetic-alert", 0), true);
-  assert.deepEqual(resendRequestBody?.to, ["playlore88@gmail.com", "ops@playlore.xyz"]);
-  assert.equal(resendRequestBody?.from, "LORE <alerts@playlore.xyz>");
+  await runRuntimeMonitorAlertTests();
   assert.match(
     runtimeMonitorSource,
     /function isFinalHttpsOrigin[\s\S]*!url\.username[\s\S]*!url\.password[\s\S]*host\.includes\("\."\)[\s\S]*localhost[\s\S]*\.example[\s\S]*100\\\.[\s\S]*169\\\.254[\s\S]*198\\\.51\\\.100[\s\S]*2001:db8/,
