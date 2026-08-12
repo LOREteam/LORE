@@ -20,15 +20,16 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   property runner, wallet lifecycle hardening, atomic fork-aware indexer storage
   with a single-writer lease, black-box API/shared-admission tests, and bounded
   P1 orchestration.
-- Split thirty business-test domains out of the monolith, including the isolated
+- Split thirty-one business-test domains out of the monolith, including the isolated
   API-recovery/storage, wallet-presentation, public API read-model,
   game-data/presentation, chat-polling, chat-content, jackpot/rebate-security,
   chat-client-safety, release-operations, runtime-metrics, error-boundary,
   wallet/route-safety, Sentry-sanitization, auth/canary-boundary, and
   client-identity/external-rate-limit, wallet-shell/mining-action, mining-runtime safety,
   explorer-link, utility-safety, wallet external-boundary, error-shell,
-  dialog-accessibility, wallet-funding, jackpot-banner, wins-presentation, and
-  runtime-health-diagnostics assertions. The coordinator is now 7,233 lines;
+  dialog-accessibility, wallet-funding, jackpot-banner, wins-presentation,
+  runtime-health-diagnostics, and public-metadata assertions. The coordinator is
+  now 7,166 lines;
   Pure game-data, runtime-metrics,
   canary-health, game-polling, and chat retry/polling bounds now use direct behavioral inputs
   instead of duplicated source-shape regexes; the wallet/route module keeps
@@ -37,12 +38,13 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   compact artifacts.
 - Follow-up `f01aa22` extracts wallet-runtime state-machine coverage; direct
   logic, summary, typecheck, and lint pass for that test-only change.
-- Follow-up `b8c7f669..f4118807` adds seven more executable domains. The first
+- Follow-up `b8c7f669..f02222e0` adds eight more executable domains. The first
   five direct modules and compact `test:logic:summary` integrations passed with
   unique temporary SQLite paths. Wins-presentation and runtime-health-diagnostics
   pass direct/syntax/diff checks; their compact-summary rerun is pending a clean
   Node process tree. Exact-diff security finalization also remains pending after
-  the scanner rejected missing `snapshotDigest` metadata.
+  the scanner rejected missing `snapshotDigest` metadata and then required
+  exclusion `pattern` fields.
 - The refreshed 97-path partition is now committed locally in four logical
   commits: `69237438` runtime/data, `569e87f0` tooling, `6137dcde` tests/proof,
   and `80ce70b7` toolchain/line endings. This documentation commit completes

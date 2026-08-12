@@ -125,7 +125,7 @@ Last updated: 2026-08-12. This is the single active local work queue.
 - [x] Add local CI definitions for Linux/Windows, scheduled dependency audits,
       explicit indexer/P1 rows, concurrency, timeouts, and compact artifacts.
 - [ ] Continue replacing source-string guards with imported behavior and reduce
-      the remaining 7,233-line business-test coordinator. The client-identity/
+      the remaining 7,166-line business-test coordinator. The client-identity/
       external-rate-limit behavior, wallet-shell/mining-action checks, and mining-runtime
       safety, explorer-link, and utility-safety checks now run
       from their own imported modules; the
@@ -139,12 +139,13 @@ Last updated: 2026-08-12. This is the single active local work queue.
       their own imported modules; pure game-data, runtime-metrics, canary-health, and chat retry bounds use
       direct behavioral inputs. Wallet external-boundary, error-shell,
       dialog-accessibility, wallet-funding, jackpot-banner, wins-presentation,
-      and runtime-health-diagnostics assertions now also execute from isolated
-      imported modules.
+      runtime-health-diagnostics, and public-metadata assertions now also
+      execute from isolated imported modules.
 - [ ] Seal an exact-diff security bundle for the current test-only follow-up
-      `b8c7f669..f4118807` before treating it as part of the final candidate;
-      the first finalization attempt stopped on missing scanner `snapshotDigest`
-      metadata, so it produced no canonical artifact.
+      `b8c7f669..f02222e0` before treating it as part of the final candidate;
+      scanner-owned draft sealing first stopped on missing `snapshotDigest` and
+      then rejected missing exclusion `pattern` fields, so it produced no
+      canonical artifact.
 - [ ] Obtain green hosted CI evidence for the final exact commit.
 
 ## UX, accessibility, and performance
