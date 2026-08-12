@@ -58,6 +58,7 @@ const BUSINESS_TEST_MODULES = [
   "scripts/test-business-jackpot-banner-presentation.mjs",
   "scripts/test-business-wins-presentation.mjs",
   "scripts/test-business-runtime-health-diagnostics.mjs",
+  "scripts/test-business-public-metadata.mjs",
   "scripts/test-business-api-recovery-storage.mjs",
   "scripts/test-business-api-integer-queries.mjs",
   "scripts/test-business-api-request-boundaries.mjs",

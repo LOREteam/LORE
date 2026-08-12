@@ -25,6 +25,7 @@ import { runWalletFundingPresentationTests } from "./test-business-wallet-fundin
 import { runJackpotBannerPresentationTests } from "./test-business-jackpot-banner-presentation.mjs";
 import { runWinsPresentationTests } from "./test-business-wins-presentation.mjs";
 import { runRuntimeHealthDiagnosticsTests } from "./test-business-runtime-health-diagnostics.mjs";
+import { runPublicMetadataTests } from "./test-business-public-metadata.mjs";
 import { runWalletShellAndMiningActionTests } from "./test-business-wallet-shell-actions.mjs";
 import { runApiRecoveryStorageTests } from "./test-business-api-recovery-storage.mjs";
 import { runApiIntegerQueryTests } from "./test-business-api-integer-queries.mjs";
@@ -6405,75 +6406,7 @@ async function main() {
     "browser smoke flows must expose visual regression guards for known wallet-page regressions",
   );
   runJackpotBannerPresentationTests();
-  const rootLayoutSource = readFileSync("app/layout.tsx", "utf8");
-  const robotsSource = readFileSync("app/robots.ts", "utf8");
-  const sitemapSource = readFileSync("app/sitemap.ts", "utf8");
-  assert.match(
-    rootLayoutSource,
-    /NEXT_PUBLIC_SITE_URL\s*\?\?\s*['"]https:\/\/playlore\.xyz['"]/,
-    "root metadata must default to the canonical playlore.xyz origin",
-  );
-  assert.match(
-    rootLayoutSource,
-    /\.trim\(\)\.replace\(\/\\\/\+\$\/,\s*''\)/,
-    "root metadata must trim and remove trailing slashes from the canonical origin",
-  );
-  assert.match(
-    rootLayoutSource,
-    /alternates:\s*{\s*canonical:\s*['"]\/['"]/,
-    "root metadata must publish a canonical home URL",
-  );
-  assert.match(
-    rootLayoutSource,
-    /openGraph:[\s\S]*url:\s*['"]\/['"]/,
-    "root OpenGraph metadata must publish the canonical home URL",
-  );
-  assert.match(
-    robotsSource,
-    /NEXT_PUBLIC_SITE_URL\s*\?\?\s*['"]https:\/\/playlore\.xyz['"]/,
-    "robots and sitemap must default to the canonical playlore.xyz origin",
-  );
-  assert.match(
-    robotsSource,
-    /\.trim\(\)\.replace\(\/\\\/\+\$\/,\s*""\)/,
-    "robots.txt must trim and remove trailing slashes from the canonical origin",
-  );
-  assert.match(
-    sitemapSource,
-    /NEXT_PUBLIC_SITE_URL\s*\?\?\s*"https:\/\/playlore\.xyz"/,
-    "sitemap must default to the canonical playlore.xyz origin",
-  );
-  assert.match(
-    sitemapSource,
-    /\.trim\(\)\.replace\(\/\\\/\+\$\/,\s*""\)/,
-    "sitemap must trim and remove trailing slashes from the canonical origin",
-  );
-  assert.match(
-    sitemapSource,
-    /\/jackpot-win[\s\S]*\/privacy[\s\S]*\/terms/,
-    "sitemap must include public jackpot share, privacy, and terms routes",
-  );
-  assert.match(
-    robotsSource,
-    /\/privacy[\s\S]*\/terms/,
-    "robots.txt must allow public privacy and terms routes in production",
-  );
-  const jackpotWinPageSource = readFileSync("app/jackpot-win/page.tsx", "utf8");
-  assert.match(
-    jackpotWinPageSource,
-    /https:\/\/playlore\.xyz/,
-    "jackpot share preview page must default metadata to playlore.xyz",
-  );
-  assert.match(
-    jackpotWinPageSource,
-    /function isPublicHttpsOrigin[\s\S]*protocol !== "https:"[\s\S]*pathname !== "\/"[\s\S]*\.example[\s\S]*192\\.168/,
-    "jackpot share preview metadata must reject non-final, private, and placeholder origins",
-  );
-  assert.match(
-    jackpotWinPageSource,
-    /Play at playlore\.xyz/,
-    "jackpot share preview page CTA must display playlore.xyz",
-  );
+  runPublicMetadataTests();
   const whitePaperSource = readFileSync("app/components/WhitePaper.tsx", "utf8");
   const termsPageSource = readFileSync("app/terms/page.tsx", "utf8");
   const runtimeMonitorSource = readFileSync("scripts/monitor-runtime-health.mjs", "utf8");
