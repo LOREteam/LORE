@@ -98,11 +98,13 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   security-followup `8/8`, production dependency proof, both full checks, and
   prelaunch required-local rows pass. The clean all-deps proof retains `9`
   known development-toolchain High advisories under the documented policy.
-- Both `46d3bc50` and `d626a0f` now have completed two-hour local performance
-  profiles with zero API writes and negative net heap delta. `d626a0f` records
-  `134` blocked external browser requests and a `95ms` maximum long task. The
-  final dependency commit still needs a fresh exact-SHA profile; native-hidden
-  browser throttling remains unproven.
+- Both `46d3bc50` and `d626a0f` have completed two-hour local performance
+  profiles with zero API writes and negative net heap delta. A newer two-hour
+  run on build `_nq8Gl2JBW5nUIFdEeXBn` also completed (`7200040ms`): zero API
+  writes, `134` blocked external requests, `105ms` max initial-load long task,
+  and heap delta `+1125244` (slope `267820` bytes/hour). It is observational,
+  not an accepted leak verdict, and predates the current test-only commit; the
+  final exact-SHA profile and native-hidden browser throttling remain open.
 - The attempted standard scan `c7662d53-c089-436a-93fd-f9506f2279f0` is
   unsealed because its artifact directory disappeared and the scan service is
   account-limited. It is not a substitute for an exact-SHA scan.

@@ -165,6 +165,10 @@ Last updated: 2026-08-11. This is the single active local work queue.
       `d626a0f` already has a complete two-hour profile: zero API writes, 134
       blocked external requests, `-702527` heap delta, `+2637951` peak, 3 DOM
       nodes, and 95ms max long task.
+- [ ] Reconcile the newer complete local run on build `_nq8Gl2JBW5nUIFdEeXBn`:
+      it had zero API writes and 134 blocked external requests, but a
+      `+1125244` heap delta / `267820` bytes-hour sampled slope. Treat it as
+      noisy partial evidence, not a leak conclusion or an exact-SHA profile.
 - [ ] Repeat and evaluate the two-hour idle/simulated Auto-Miner profile on the
       final exact SHA without changing intentional refresh cadence.
 

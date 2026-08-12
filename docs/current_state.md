@@ -201,6 +201,13 @@ Open archived evidence only when a task needs it. The single active queue is
   long-task maximum `95ms`. Native hidden-state throttling was not observed;
   only synthetic visibility was measured, so it remains open final-candidate
   browser evidence.
+- A later two-hour run against build `_nq8Gl2JBW5nUIFdEeXBn` completed its
+  requested `7200000ms` (`7200040ms` actual) with API writes `0`, external
+  browser requests blocked `134`, initial-load long-task maximum `105ms`, heap
+  delta `+1125244`, and sampled slope `267820` bytes/hour. That single run is
+  partial—not a leak finding—because garbage collection is noisy and native
+  hidden-state throttling again could not be observed; it predates the current
+  test-only commit and cannot serve as final exact-SHA evidence.
 - The current-candidate prelaunch passes every required-local row: V9/V10
   compile/invariants, P1/EVM `36/36`, typecheck, 457-file lint, hermetic build,
   bundle baseline, SQLite operations, logic, security-followup, and dependency
