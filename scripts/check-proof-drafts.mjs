@@ -1,6 +1,7 @@
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { redactProofText } from "./redact-proof-output.mjs";
 
@@ -23,6 +24,231 @@ function readProofDraftJson(filePath) {
 
 const tmp = makeTempDir("lore-proof-drafts-");
 const proofManifestDirectory = mkdtempSync(join(tmp, "proof-manifest-dir.json-"));
+const repositoryRoot = realpathSync(process.cwd());
+
+function trustedFixtureGitExecutable() {
+  const candidates = process.platform === "win32"
+    ? [
+        "C:\\Program Files\\Git\\cmd\\git.exe",
+        "C:\\Program Files\\Git\\bin\\git.exe",
+        "C:\\Program Files\\Git\\mingw64\\bin\\git.exe",
+      ]
+    : ["/usr/bin/git"];
+  for (const candidate of candidates) {
+    try {
+      if (statSync(candidate).isFile()) return realpathSync(candidate);
+    } catch {
+      // Try the next fixed system location.
+    }
+  }
+  throw new Error("proof regression harness requires a trusted fixed Git executable");
+}
+
+const qaFixtureGit = trustedFixtureGitExecutable();
+const qaGitEnvironment = {
+  GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z",
+  GIT_AUTHOR_EMAIL: "proof-fixture@example.invalid",
+  GIT_AUTHOR_NAME: "Proof Fixture",
+  GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
+  GIT_COMMITTER_EMAIL: "proof-fixture@example.invalid",
+  GIT_COMMITTER_NAME: "Proof Fixture",
+  GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_LFS_SKIP_SMUDGE: "1",
+  GIT_NO_REPLACE_OBJECTS: "1",
+  GIT_OPTIONAL_LOCKS: "0",
+  GIT_PAGER: "cat",
+  GIT_TERMINAL_PROMPT: "0",
+  LANG: "C",
+  LC_ALL: "C",
+};
+
+function runFixtureGit(cwd, args) {
+  const result = spawnSync(qaFixtureGit, args, {
+    cwd,
+    encoding: "utf8",
+    env: qaGitEnvironment,
+    maxBuffer: 256 * 1024,
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error("proof regression harness could not create its isolated Git candidate fixture");
+  }
+  return String(result.stdout ?? "").trim();
+}
+
+function createQaCandidateRepo(name, dirty = false) {
+  const repoPath = mkdtempSync(join(tmp, `${name}-`));
+  writeFileSync(join(repoPath, "release-candidate.txt"), "canonical release candidate\n", "utf8");
+  runFixtureGit(repoPath, ["init", "--quiet"]);
+  runFixtureGit(repoPath, ["add", "--", "release-candidate.txt"]);
+  runFixtureGit(repoPath, ["commit", "--quiet", "-m", "proof fixture"]);
+  const revision = runFixtureGit(repoPath, ["rev-parse", "--verify", "HEAD^{commit}"]).toLowerCase();
+  if (!/^[a-f0-9]{40}$/.test(revision)) {
+    throw new Error("proof regression harness requires an exact immutable Git fixture revision");
+  }
+  if (dirty) {
+    writeFileSync(join(repoPath, "release-candidate.txt"), "unstaged candidate mutation\n", "utf8");
+    writeFileSync(join(repoPath, "staged-release-content.js"), "export const staged = true;\n", "utf8");
+    runFixtureGit(repoPath, ["add", "--", "staged-release-content.js"]);
+    writeFileSync(join(repoPath, "untracked-release-content.js"), "export const untracked = true;\n", "utf8");
+  }
+  return { repoPath, revision };
+}
+
+const qaCleanCandidate = createQaCandidateRepo("lore-g14-candidate-clean");
+const qaDirtyCandidate = createQaCandidateRepo("lore-g14-candidate-dirty", true);
+if (qaCleanCandidate.revision !== qaDirtyCandidate.revision) {
+  throw new Error("proof regression harness candidate fixtures must share the exact same HEAD");
+}
+const qaCandidateRevision = qaCleanCandidate.revision;
+const qaSpoofedGitConfig = join(tmp, "attacker-controlled-gitconfig");
+writeFileSync(qaSpoofedGitConfig, "[core]\n\tfsmonitor = false\n", "utf8");
+
+function sha256Text(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+const G14_ATTESTATION_DOMAIN = "lore-g14-security-attestation/v2";
+const G14_TRUSTED_KEY_ENV = "G14_TRUSTED_REVIEWER_ED25519_SPKI_BASE64";
+const G14_EXTERNAL_REQUIRED_MESSAGE = "G14 requires a protected external reviewer trust anchor; local verifier mechanics do not close G14";
+const qaNow = Date.now();
+const qaReviewerKeyPair = generateKeyPairSync("ed25519");
+const qaReviewerPublicKeyBytes = qaReviewerKeyPair.publicKey.export({ format: "der", type: "spki" });
+const qaReviewerPublicKey = qaReviewerPublicKeyBytes.toString("base64");
+const qaSelfAuthoredKeyPair = generateKeyPairSync("ed25519");
+const qaSelfAuthoredPublicKeyBytes = qaSelfAuthoredKeyPair.publicKey.export({ format: "der", type: "spki" });
+
+function securityAttestationPayload(bundle, attestation) {
+  return Buffer.from(`${G14_ATTESTATION_DOMAIN}\n${JSON.stringify({
+    candidateRevision: qaCandidateRevision,
+    scanId: bundle.scanId,
+    manifestSha256: bundle.manifestSha256,
+    findingsSha256: bundle.findingsSha256,
+    coverageSha256: bundle.coverageSha256,
+    scanCompletedAt: bundle.completedAt,
+    scanSealedAt: bundle.sealedAt,
+    signedAt: attestation.signedAt,
+    expiresAt: attestation.expiresAt,
+  })}\n`, "utf8");
+}
+
+function signSecurityAttestation(bundle, keyPair = qaReviewerKeyPair, options = {}) {
+  const publicKeyBytes = keyPair.publicKey.export({ format: "der", type: "spki" });
+  const attestation = {
+    reviewerKeyId: createHash("sha256").update(publicKeyBytes).digest("hex"),
+    signedAt: options.signedAt ?? new Date(qaNow - 30 * 1000).toISOString(),
+    expiresAt: options.expiresAt ?? new Date(qaNow + 60 * 60 * 1000).toISOString(),
+  };
+  return {
+    ...attestation,
+    signature: sign(null, securityAttestationPayload(bundle, attestation), keyPair.privateKey).toString("base64"),
+  };
+}
+
+function writeCanonicalSecurityScanBundle(name, options = {}) {
+  const bundlePath = mkdtempSync(join(tmp, `${name}-`));
+  const scanId = `scan-${name}`;
+  const findingsDocument = {
+    documentType: "codex-security.findings",
+    schemaVersion: "1.0",
+    scanId,
+    findings: options.findings ?? [],
+  };
+  const coverageDocument = {
+    completeness: "complete",
+    deferred: [],
+    documentType: "codex-security.coverage",
+    excludePaths: [],
+    explicitExclusions: [],
+    includePaths: ["."],
+    inventoryStrategy: options.inventoryStrategy ?? "repository",
+    mode: options.mode ?? "repository",
+    scanId,
+    schemaVersion: "1.0",
+    surfaces: [],
+  };
+  const findingsText = `${JSON.stringify(findingsDocument, null, 2)}\n`;
+  const coverageText = `${JSON.stringify(coverageDocument, null, 2)}\n`;
+  const findingsPath = join(bundlePath, "findings.json");
+  const coveragePath = join(bundlePath, "coverage.json");
+  writeFileSync(findingsPath, findingsText, "utf8");
+  writeFileSync(coveragePath, coverageText, "utf8");
+  const completedAt = options.completedAt ?? new Date(qaNow - 2 * 60 * 1000).toISOString();
+  const sealedAt = options.sealedAt ?? new Date(qaNow - 60 * 1000).toISOString();
+  const scanManifest = {
+    documentType: "codex-security.scan-manifest",
+    schemaVersion: "1.0",
+    scan: {
+      id: scanId,
+      producer: { name: "codex-security-plugin", version: "0.1.18" },
+      status: options.status ?? "completed",
+      startedAt: options.startedAt ?? new Date(Date.parse(completedAt) - 60 * 1000).toISOString(),
+      completedAt,
+      ...(options.sealed === false ? {} : { sealedAt }),
+      target: {
+        kind: "git_revision",
+        targetId: `target-${name}`,
+        displayName: "linea-miner-main",
+        revision: options.revision ?? qaCandidateRevision,
+      },
+      scope: { includePaths: ["."], excludePaths: [] },
+      coverageRef: "coverage.json",
+      findingsRef: "findings.json",
+      artifacts: [
+        { path: "findings.json", sha256: sha256Text(findingsText), mediaType: "application/json" },
+        { path: "coverage.json", sha256: sha256Text(coverageText), mediaType: "application/json" },
+      ],
+    },
+  };
+  const manifestText = `${JSON.stringify(scanManifest, null, 2)}\n`;
+  writeFileSync(join(bundlePath, "scan-manifest.json"), manifestText, "utf8");
+  return {
+    bundlePath,
+    scanId,
+    findingsPath,
+    manifestSha256: sha256Text(manifestText),
+    findingsSha256: sha256Text(findingsText),
+    coverageSha256: sha256Text(coverageText),
+    completedAt,
+    sealedAt: options.sealed === false ? "" : sealedAt,
+  };
+}
+
+const qaValidSecurityScan = writeCanonicalSecurityScanBundle("qa-security-valid");
+const qaDeepRepositorySecurityScan = writeCanonicalSecurityScanBundle("qa-security-deep-repository", { mode: "deep_repository" });
+const qaCommitModeSecurityScan = writeCanonicalSecurityScanBundle("qa-security-commit-mode", { mode: "commit" });
+const qaCustomInventorySecurityScan = writeCanonicalSecurityScanBundle("qa-security-custom-inventory", { inventoryStrategy: "custom" });
+const qaAlternateValidSecurityScan = writeCanonicalSecurityScanBundle("qa-security-alternate-valid");
+const qaUnsealedSecurityScan = writeCanonicalSecurityScanBundle("qa-security-unsealed", { status: "running", sealed: false });
+const qaStaleSecurityScan = writeCanonicalSecurityScanBundle("qa-security-stale", {
+  completedAt: new Date(qaNow - 26 * 60 * 60 * 1000).toISOString(),
+  sealedAt: new Date(qaNow - 25 * 60 * 60 * 1000).toISOString(),
+});
+const qaExpiringSecurityScan = writeCanonicalSecurityScanBundle("qa-security-expired-attestation", {
+  completedAt: new Date(qaNow - (23 * 60 + 56) * 60 * 1000).toISOString(),
+  sealedAt: new Date(qaNow - (23 * 60 + 55) * 60 * 1000).toISOString(),
+});
+const qaDigestMismatchSecurityScan = writeCanonicalSecurityScanBundle("qa-security-digest-mismatch");
+writeFileSync(qaDigestMismatchSecurityScan.findingsPath, '{"tampered":true}\n', "utf8");
+const qaOpenMediumSecurityScan = writeCanonicalSecurityScanBundle("qa-security-open-medium", {
+  findings: [{
+    findingId: `csf_${"1".repeat(24)}`,
+    occurrenceId: `occ_${"2".repeat(24)}`,
+    ruleId: "proof.test-medium",
+    identity: { anchor: "proof-test-medium" },
+    fingerprints: { algorithm: "codex-security/v1", primary: `codex-security/v1:sha256:${"3".repeat(64)}` },
+    title: "Synthetic medium finding",
+    summary: "Synthetic regression fixture",
+    severity: { level: "medium" },
+    confidence: { level: "high", rationale: "Synthetic fixture" },
+    taxonomy: { category: "proof", cwe: ["CWE-345"] },
+    locations: [{ path: "scripts/check-qa-proof.mjs", startLine: 1 }],
+    remediation: "Synthetic fixture",
+    provenance: { source: "test" },
+  }],
+});
 const { DatabaseSync } = await import("node:sqlite");
 const summaryOnly = process.argv.includes("--summary-only");
 const canaryLog = join(tmp, "canary.jsonl");
@@ -463,6 +689,12 @@ writeFileSync(
   JSON.stringify({
     targetNetwork: "linea-mainnet",
     targetChainId: 59144,
+    securityScan: {
+      bundlePath: qaValidSecurityScan.bundlePath,
+      manifestSha256: qaValidSecurityScan.manifestSha256,
+      candidateRevision: qaCandidateRevision,
+      attestation: signSecurityAttestation(qaValidSecurityScan),
+    },
     wallet: {
       privyAllowedOrigins: {
         ...qaCheck(qaMissingArtifact),
@@ -548,6 +780,20 @@ const qaValidStrictManifestPath = join(tmp, "qa-valid-strict.json");
 const qaSharedGroupArtifactManifest = join(tmp, "qa-shared-group-artifact.json");
 const qaFutureTimestampManifest = join(tmp, "qa-future-timestamp.json");
 const qaUnsafeTargetChainManifest = join(tmp, "qa-unsafe-target-chain-id.json");
+const qaMissingSecurityScanManifest = join(tmp, "qa-missing-security-scan.json");
+const qaWrongCandidateRevisionManifest = join(tmp, "qa-wrong-candidate-revision.json");
+const qaWrongScanManifestDigestManifest = join(tmp, "qa-wrong-scan-manifest-digest.json");
+const qaUnsealedSecurityScanManifest = join(tmp, "qa-unsealed-security-scan.json");
+const qaStaleSecurityScanManifest = join(tmp, "qa-stale-security-scan.json");
+const qaExpiredSecurityAttestationManifest = join(tmp, "qa-expired-security-attestation.json");
+const qaCommitModeSecurityScanManifest = join(tmp, "qa-commit-mode-security-scan.json");
+const qaCustomInventorySecurityScanManifest = join(tmp, "qa-custom-inventory-security-scan.json");
+const qaDeepRepositorySecurityScanManifest = join(tmp, "qa-deep-repository-security-scan.json");
+const qaArtifactDigestMismatchManifest = join(tmp, "qa-artifact-digest-mismatch.json");
+const qaOpenMediumSecurityFindingManifest = join(tmp, "qa-open-medium-security-finding.json");
+const qaUnsignedSecurityScanManifest = join(tmp, "qa-unsigned-security-scan.json");
+const qaSelfAuthoredSecurityScanManifest = join(tmp, "qa-self-authored-security-scan.json");
+const qaTamperedSecurityAttestationManifest = join(tmp, "qa-tampered-security-attestation.json");
 writeFileSync(qaIrrelevantArtifact, "pm2 process list only\n", "utf8");
 writeFileSync(qaCleanWalletNoReceiptArtifact, "clean wallet first transaction hash verified\n", "utf8");
 writeFileSync(qaMobileNoDeviceArtifact, "mobile Web3 browser wallet flow verified\n", "utf8");
@@ -555,6 +801,12 @@ writeFileSync(qaMobileTouchOnlyArtifact, "mobile Web3 browser touch targets veri
 const qaValidStrictManifest = {
   targetNetwork: "linea-mainnet",
   targetChainId: 59144,
+  securityScan: {
+    bundlePath: qaValidSecurityScan.bundlePath,
+    manifestSha256: qaValidSecurityScan.manifestSha256,
+    candidateRevision: qaCandidateRevision,
+    attestation: signSecurityAttestation(qaValidSecurityScan),
+  },
   wallet: {
     privyAllowedOrigins: {
       ...qaCheck(qaWalletArtifact),
@@ -677,6 +929,82 @@ writeFileSync(qaUnsafeTargetChainManifest, withQaArtifact(qaValidStrictManifest,
 }), "utf8");
 writeFileSync(qaDirectoryArtifactManifest, withQaArtifact(qaValidStrictManifest, qaDirectoryArtifact, (manifest, artifact) => {
   manifest.wallet.privyAllowedOrigins.evidencePath = artifact;
+  return manifest;
+}), "utf8");
+writeFileSync(qaMissingSecurityScanManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  delete manifest.securityScan;
+  return manifest;
+}), "utf8");
+writeFileSync(qaWrongCandidateRevisionManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.candidateRevision = "b".repeat(40);
+  return manifest;
+}), "utf8");
+writeFileSync(qaWrongScanManifestDigestManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.manifestSha256 = "0".repeat(64);
+  return manifest;
+}), "utf8");
+writeFileSync(qaUnsealedSecurityScanManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.bundlePath = qaUnsealedSecurityScan.bundlePath;
+  manifest.securityScan.manifestSha256 = qaUnsealedSecurityScan.manifestSha256;
+  return manifest;
+}), "utf8");
+writeFileSync(qaStaleSecurityScanManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.bundlePath = qaStaleSecurityScan.bundlePath;
+  manifest.securityScan.manifestSha256 = qaStaleSecurityScan.manifestSha256;
+  manifest.securityScan.attestation = signSecurityAttestation(qaStaleSecurityScan);
+  return manifest;
+}), "utf8");
+writeFileSync(qaExpiredSecurityAttestationManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.bundlePath = qaExpiringSecurityScan.bundlePath;
+  manifest.securityScan.manifestSha256 = qaExpiringSecurityScan.manifestSha256;
+  manifest.securityScan.attestation = signSecurityAttestation(qaExpiringSecurityScan, qaReviewerKeyPair, {
+    signedAt: new Date(qaNow - (23 * 60 + 54) * 60 * 1000).toISOString(),
+    expiresAt: new Date(qaNow - 60 * 1000).toISOString(),
+  });
+  return manifest;
+}), "utf8");
+writeFileSync(qaCommitModeSecurityScanManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.bundlePath = qaCommitModeSecurityScan.bundlePath;
+  manifest.securityScan.manifestSha256 = qaCommitModeSecurityScan.manifestSha256;
+  manifest.securityScan.attestation = signSecurityAttestation(qaCommitModeSecurityScan);
+  return manifest;
+}), "utf8");
+writeFileSync(qaCustomInventorySecurityScanManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.bundlePath = qaCustomInventorySecurityScan.bundlePath;
+  manifest.securityScan.manifestSha256 = qaCustomInventorySecurityScan.manifestSha256;
+  manifest.securityScan.attestation = signSecurityAttestation(qaCustomInventorySecurityScan);
+  return manifest;
+}), "utf8");
+writeFileSync(qaDeepRepositorySecurityScanManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.bundlePath = qaDeepRepositorySecurityScan.bundlePath;
+  manifest.securityScan.manifestSha256 = qaDeepRepositorySecurityScan.manifestSha256;
+  manifest.securityScan.attestation = signSecurityAttestation(qaDeepRepositorySecurityScan);
+  return manifest;
+}), "utf8");
+writeFileSync(qaArtifactDigestMismatchManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.bundlePath = qaDigestMismatchSecurityScan.bundlePath;
+  manifest.securityScan.manifestSha256 = qaDigestMismatchSecurityScan.manifestSha256;
+  return manifest;
+}), "utf8");
+writeFileSync(qaOpenMediumSecurityFindingManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.bundlePath = qaOpenMediumSecurityScan.bundlePath;
+  manifest.securityScan.manifestSha256 = qaOpenMediumSecurityScan.manifestSha256;
+  return manifest;
+}), "utf8");
+writeFileSync(qaUnsignedSecurityScanManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  delete manifest.securityScan.attestation;
+  return manifest;
+}), "utf8");
+writeFileSync(qaSelfAuthoredSecurityScanManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.attestation = {
+    ...signSecurityAttestation(qaValidSecurityScan, qaSelfAuthoredKeyPair),
+    publicKeySpkiBase64: qaSelfAuthoredPublicKeyBytes.toString("base64"),
+  };
+  return manifest;
+}), "utf8");
+writeFileSync(qaTamperedSecurityAttestationManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.securityScan.bundlePath = qaAlternateValidSecurityScan.bundlePath;
+  manifest.securityScan.manifestSha256 = qaAlternateValidSecurityScan.manifestSha256;
   return manifest;
 }), "utf8");
 const signoffEnvLog = join(tmp, "signoff-env.log");
@@ -2720,6 +3048,118 @@ const strictRejectCases = [
     expected: "targetChainId must be a positive integer",
   },
   {
+    id: "qa-missing-security-scan",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaMissingSecurityScanManifest}`],
+    expected: "securityScan must reference a sealed canonical scan bundle",
+  },
+  {
+    id: "qa-wrong-candidate-revision",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaWrongCandidateRevisionManifest}`],
+    expected: "securityScan.candidateRevision must match the exact immutable candidate revision",
+  },
+  {
+    id: "qa-wrong-scan-manifest-digest",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaWrongScanManifestDigestManifest}`],
+    expected: "securityScan.scan-manifest.json digest does not match manifestSha256",
+  },
+  {
+    id: "qa-unsealed-security-scan",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaUnsealedSecurityScanManifest}`],
+    expected: "security scan bundle must be completed and sealed",
+  },
+  {
+    id: "qa-dirty-candidate-checkout",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaValidStrictManifestPath}`],
+    cwd: qaDirtyCandidate.repoPath,
+    expected: "candidate checkout must have no staged, unstaged, or untracked files relative to exact HEAD",
+  },
+  {
+    id: "qa-stale-signed-security-scan",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaStaleSecurityScanManifest}`],
+    expected: "security scan completion and seal must be within the last 24 hours",
+  },
+  {
+    id: "qa-expired-security-attestation",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaExpiredSecurityAttestationManifest}`],
+    expected: "securityScan.attestation has expired",
+  },
+  {
+    id: "qa-commit-mode-security-scan",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaCommitModeSecurityScanManifest}`],
+    expected: "security scan coverage must be complete for the full repository without deferrals or exclusions",
+  },
+  {
+    id: "qa-custom-inventory-security-scan",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaCustomInventorySecurityScanManifest}`],
+    expected: "security scan coverage must be complete for the full repository without deferrals or exclusions",
+  },
+  {
+    id: "qa-security-artifact-digest-mismatch",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaArtifactDigestMismatchManifest}`],
+    expected: "security scan artifact digest mismatch: findings.json",
+  },
+  {
+    id: "qa-open-medium-security-finding",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaOpenMediumSecurityFindingManifest}`],
+    expected: "security scan must contain zero open Critical/High/Medium findings",
+  },
+  {
+    id: "qa-unsigned-security-attestation",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaUnsignedSecurityScanManifest}`],
+    expected: "securityScan.attestation must contain an independent reviewer signature",
+  },
+  {
+    id: "qa-self-authored-security-attestation",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaSelfAuthoredSecurityScanManifest}`],
+    expected: "securityScan.attestation must not supply its own reviewer authority",
+  },
+  {
+    id: "qa-tampered-security-attestation",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaTamperedSecurityAttestationManifest}`],
+    expected: "securityScan.attestation signature is invalid for the canonical scan payload",
+  },
+  {
+    id: "qa-missing-reviewer-trust-anchor",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaValidStrictManifestPath}`],
+    env: { [G14_TRUSTED_KEY_ENV]: "" },
+    expected: `${G14_TRUSTED_KEY_ENV} protected trust anchor is required`,
+  },
+  {
+    id: "qa-valid-local-verifier-remains-external-required",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaValidStrictManifestPath}`],
+    env: {
+      GIT_CONFIG_GLOBAL: qaSpoofedGitConfig,
+      GIT_DIR: join(qaDirtyCandidate.repoPath, ".git"),
+      GIT_WORK_TREE: qaDirtyCandidate.repoPath,
+      PATH: tmp,
+    },
+    expected: G14_EXTERNAL_REQUIRED_MESSAGE,
+    expectedAlso: ["G14: local-verifier=passed; launch-status=external-required"],
+  },
+  {
+    id: "qa-deep-repository-local-verifier-remains-external-required",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaDeepRepositorySecurityScanManifest}`],
+    expected: G14_EXTERNAL_REQUIRED_MESSAGE,
+    expectedAlso: ["G14: local-verifier=passed; launch-status=external-required"],
+  },
+  {
     id: "canary-irrelevant-target-artifact",
     check: ["scripts/analyze-live-canary-proof.mjs"],
     checkArgs: [canaryFullLog, "--strict", `--manifest=${canaryIrrelevantTargetManifest}`],
@@ -3380,12 +3820,6 @@ const strictPassCases = [
     },
   },
   {
-    id: "qa-valid-strict-proof",
-    check: ["scripts/check-qa-proof.mjs"],
-    checkArgs: ["--strict", `--file=${qaValidStrictManifestPath}`],
-    expected: /Summary: QA proof completed without detected issues; covered gates: G12, G13, G14; groups: qa=3\./i,
-  },
-  {
     id: "canary-testnet-profile",
     check: ["scripts/analyze-live-canary-proof.mjs"],
     checkArgs: [testnetCanaryFullLog, "--profile=testnet", "--strict", `--manifest=${testnetCanaryValidStrictManifestPath}`],
@@ -3412,10 +3846,21 @@ const strictPassCases = [
   },
 ];
 
-function runNode(args, envPatch = {}) {
-  return spawnSync(process.execPath, args, {
-    cwd: process.cwd(),
-    env: { ...process.env, ...envPatch },
+function runNode(args, envPatch = {}, cwdOverride = "") {
+  const firstArg = String(args[0] ?? "").replaceAll("\\", "/");
+  const isQaProofCheck = firstArg.endsWith("scripts/check-qa-proof.mjs");
+  const cwd = cwdOverride || (isQaProofCheck ? qaCleanCandidate.repoPath : repositoryRoot);
+  const commandArgs = cwd === repositoryRoot || isAbsolute(String(args[0] ?? ""))
+    ? args
+    : [resolve(repositoryRoot, String(args[0])), ...args.slice(1)];
+  return spawnSync(process.execPath, commandArgs, {
+    cwd,
+    env: {
+      ...process.env,
+      ...(isQaProofCheck ? { GITHUB_SHA: "", SOURCE_VERSION: "", VERCEL_GIT_COMMIT_SHA: "" } : {}),
+      [G14_TRUSTED_KEY_ENV]: qaReviewerPublicKey,
+      ...envPatch,
+    },
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
   });
@@ -3505,7 +3950,7 @@ for (const item of collectorRejectCases) {
 }
 
 for (const item of strictPassCases) {
-  const checkResult = runNode([...item.check, ...item.checkArgs], item.env);
+  const checkResult = runNode([...item.check, ...item.checkArgs], item.env, item.cwd);
   const checkOutput = `${checkResult.stdout || ""}\n${checkResult.stderr || ""}`;
   const passed = checkResult.status === 0 && item.expected.test(checkOutput);
   if (!passed) {
@@ -3515,9 +3960,11 @@ for (const item of strictPassCases) {
 }
 
 for (const item of strictRejectCases) {
-  const checkResult = runNode([...item.check, ...item.checkArgs], item.env);
+  const checkResult = runNode([...item.check, ...item.checkArgs], item.env, item.cwd);
   const checkOutput = `${checkResult.stdout || ""}\n${checkResult.stderr || ""}`;
-  const rejected = checkResult.status !== 0 && checkOutput.includes(item.expected);
+  const rejected = checkResult.status !== 0 &&
+    checkOutput.includes(item.expected) &&
+    (item.expectedAlso ?? []).every((expected) => checkOutput.includes(expected));
   if (!rejected) {
     issues.push(`${item.id}: strict validator did not reject missing local artifact evidence`);
   }

@@ -1,5 +1,7 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { createHash, createPublicKey, verify } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
 const summaryOnly = process.argv.includes("--summary-only");
@@ -7,7 +9,19 @@ const qaLaunchGates = ["G12", "G13", "G14"];
 const qaLaunchGateGroups = "qa=3";
 const MAX_QA_ARTIFACT_TEXT_BYTES = 256 * 1024;
 const MAX_QA_PROOF_MANIFEST_BYTES = 512 * 1024;
+const MAX_SECURITY_SCAN_MANIFEST_BYTES = 4 * 1024 * 1024;
+const MAX_SECURITY_SCAN_JSON_BYTES = 16 * 1024 * 1024;
+const MAX_SECURITY_SCAN_ARTIFACT_BYTES = 128 * 1024 * 1024;
+const MAX_SECURITY_SCAN_TOTAL_BYTES = 256 * 1024 * 1024;
+const MAX_GIT_OUTPUT_BYTES = 256 * 1024;
+const MAX_SECURITY_SCAN_AGE_MS = 24 * 60 * 60 * 1000;
+const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const GIT_REVISION_RE = /^[a-f0-9]{40}$/;
+const SHA256_RE = /^[a-f0-9]{64}$/;
+const G14_ATTESTATION_DOMAIN = "lore-g14-security-attestation/v2";
+const G14_TRUSTED_KEY_ENV = "G14_TRUSTED_REVIEWER_ED25519_SPKI_BASE64";
+const G14_EXTERNAL_REQUIRED_MESSAGE = "G14 requires a protected external reviewer trust anchor; local verifier mechanics do not close G14";
 const args = new Map(
   process.argv
     .slice(2)
@@ -152,7 +166,7 @@ function hasIsoTimestamp(value) {
 
 function hasNonFutureIsoTimestamp(value) {
   if (!hasIsoTimestamp(value)) return false;
-  return Date.parse(String(value).trim()) <= Date.now() + 5 * 60 * 1000;
+  return Date.parse(String(value).trim()) <= Date.now() + CLOCK_SKEW_TOLERANCE_MS;
 }
 
 function isPlainObject(value) {
@@ -220,6 +234,479 @@ function regularFileStat(filePath) {
   } catch {
     return null;
   }
+}
+
+function regularDirectoryStat(filePath) {
+  try {
+    const stats = statSync(filePath);
+    return stats.isDirectory() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function pathInsideOrSame(candidate, root) {
+  const rel = relative(root, candidate);
+  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+}
+
+function sha256Bytes(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function sha256File(filePath, maxBytes) {
+  const stats = regularFileStat(filePath);
+  if (!stats) throw new Error("not a regular file");
+  if (stats.size > maxBytes) throw new Error("artifact exceeds the bounded validation size");
+  const hash = createHash("sha256");
+  const buffer = Buffer.alloc(64 * 1024);
+  const fd = openSync(filePath, "r");
+  try {
+    let offset = 0;
+    while (offset < stats.size) {
+      const bytesRead = readSync(fd, buffer, 0, Math.min(buffer.length, stats.size - offset), offset);
+      if (bytesRead === 0) throw new Error("artifact changed while being hashed");
+      hash.update(buffer.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return { digest: hash.digest("hex"), size: stats.size };
+}
+
+function parseBoundedJson(filePath, maxBytes, label) {
+  const stats = regularFileStat(filePath);
+  if (!stats) throw new Error(`${label} must be a regular file`);
+  if (stats.size > maxBytes) throw new Error(`${label} is too large to validate safely`);
+  const bytes = readFileSync(filePath);
+  try {
+    return { bytes, value: JSON.parse(bytes.toString("utf8")) };
+  } catch {
+    throw new Error(`${label} must be valid JSON`);
+  }
+}
+
+function trustedGitExecutable() {
+  const candidates = process.platform === "win32"
+    ? [
+        "C:\\Program Files\\Git\\cmd\\git.exe",
+        "C:\\Program Files\\Git\\bin\\git.exe",
+        "C:\\Program Files\\Git\\mingw64\\bin\\git.exe",
+      ]
+    : ["/usr/bin/git"];
+  for (const candidate of candidates) {
+    if (!regularFileStat(candidate)) continue;
+    try {
+      const resolved = realpathSync(candidate);
+      if (regularFileStat(resolved)) return resolved;
+    } catch {
+      // Keep looking; absence of a fixed trusted binary fails closed below.
+    }
+  }
+  return "";
+}
+
+function sanitizedGitEnvironment() {
+  return {
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_LFS_SKIP_SMUDGE: "1",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_PAGER: "cat",
+    GIT_TERMINAL_PROMPT: "0",
+    LANG: "C",
+    LC_ALL: "C",
+  };
+}
+
+function runTrustedGit(repoRoot, commandArgs) {
+  const executable = trustedGitExecutable();
+  if (!executable) return { error: "trusted fixed Git executable is unavailable" };
+  const safeDirectory = repoRoot.replaceAll("\\", "/");
+  const result = spawnSync(
+    executable,
+    [
+      "--no-pager",
+      "-c", `safe.directory=${safeDirectory}`,
+      "-c", "core.fsmonitor=false",
+      "-c", "core.untrackedCache=false",
+      "-c", "core.preloadIndex=false",
+      "-c", "core.hooksPath=",
+      "-c", "diff.external=",
+      ...commandArgs,
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: sanitizedGitEnvironment(),
+      maxBuffer: MAX_GIT_OUTPUT_BYTES,
+      timeout: 10_000,
+      windowsHide: true,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    return { error: "trusted Git candidate inspection failed or exceeded its bounded limits" };
+  }
+  return { output: String(result.stdout ?? "") };
+}
+
+function repositoryCandidateState() {
+  let repoRoot;
+  try {
+    repoRoot = realpathSync(process.cwd());
+  } catch {
+    return { revision: "", clean: false, error: "candidate checkout cannot be resolved" };
+  }
+  const headResult = runTrustedGit(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const revision = String(headResult.output ?? "").trim().toLowerCase();
+  if (headResult.error || !GIT_REVISION_RE.test(revision)) {
+    return { revision: "", clean: false, error: headResult.error || "exact immutable candidate revision is unavailable or malformed" };
+  }
+  const statusResult = runTrustedGit(repoRoot, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+    "--ignore-submodules=none",
+  ]);
+  if (statusResult.error) return { revision, clean: false, error: statusResult.error };
+  return { revision, clean: statusResult.output.length === 0, error: "" };
+}
+
+function configuredCandidateRevision(revision) {
+  if (!GIT_REVISION_RE.test(revision)) return "";
+  const environmentRevisions = [env("VERCEL_GIT_COMMIT_SHA"), env("GITHUB_SHA"), env("SOURCE_VERSION")].filter(Boolean);
+  return environmentRevisions.every((value) => {
+    const normalized = value.toLowerCase();
+    return GIT_REVISION_RE.test(normalized) && normalized === revision;
+  }) ? revision : "";
+}
+
+function decodeCanonicalBase64(value, expectedBytes) {
+  const text = String(value ?? "").trim();
+  if (!text || !/^[A-Za-z0-9+/]+={0,2}$/.test(text) || text.length % 4 !== 0) return null;
+  try {
+    const bytes = Buffer.from(text, "base64");
+    return bytes.length === expectedBytes && bytes.toString("base64") === text ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+function securityAttestationPayload({
+  candidateRevision,
+  scanId,
+  manifestSha256,
+  findingsSha256,
+  coverageSha256,
+  scanCompletedAt,
+  scanSealedAt,
+  signedAt,
+  expiresAt,
+}) {
+  return Buffer.from(`${G14_ATTESTATION_DOMAIN}\n${JSON.stringify({
+    candidateRevision,
+    scanId,
+    manifestSha256,
+    findingsSha256,
+    coverageSha256,
+    scanCompletedAt,
+    scanSealedAt,
+    signedAt,
+    expiresAt,
+  })}\n`, "utf8");
+}
+
+function validateIndependentSecurityAttestation(attestation, payload) {
+  const findings = [];
+  if (!isPlainObject(attestation)) return ["securityScan.attestation must contain an independent reviewer signature"];
+  if ("publicKey" in attestation || "publicKeySpkiBase64" in attestation) {
+    findings.push("securityScan.attestation must not supply its own reviewer authority");
+  }
+  const signedAt = String(attestation.signedAt ?? "").trim();
+  const expiresAt = String(attestation.expiresAt ?? "").trim();
+  const signedAtMs = Date.parse(signedAt);
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!hasIsoTimestamp(signedAt) || !hasIsoTimestamp(expiresAt)) {
+    findings.push("securityScan.attestation must include canonical signedAt and expiresAt UTC timestamps");
+  } else {
+    const now = Date.now();
+    if (signedAtMs > now + CLOCK_SKEW_TOLERANCE_MS) {
+      findings.push("securityScan.attestation.signedAt must not be in the future");
+    }
+    if (now - signedAtMs > MAX_SECURITY_SCAN_AGE_MS) {
+      findings.push("securityScan.attestation must be signed within the last 24 hours");
+    }
+    if (expiresAtMs <= now) {
+      findings.push("securityScan.attestation has expired");
+    }
+    if (expiresAtMs <= signedAtMs || expiresAtMs - signedAtMs > MAX_SECURITY_SCAN_AGE_MS) {
+      findings.push("securityScan.attestation validity must be positive and no longer than 24 hours");
+    }
+    if (hasIsoTimestamp(payload.scanSealedAt) && signedAtMs < Date.parse(payload.scanSealedAt)) {
+      findings.push("securityScan.attestation must be signed after the canonical scan was sealed");
+    }
+  }
+  const trustedKeyBytesText = env(G14_TRUSTED_KEY_ENV);
+  if (!trustedKeyBytesText) {
+    findings.push(`${G14_TRUSTED_KEY_ENV} protected trust anchor is required`);
+    return findings;
+  }
+  let publicKey;
+  let trustedKeyBytes;
+  try {
+    trustedKeyBytes = Buffer.from(trustedKeyBytesText, "base64");
+    if (!trustedKeyBytes.length || trustedKeyBytes.toString("base64") !== trustedKeyBytesText) throw new Error("non-canonical base64");
+    publicKey = createPublicKey({ key: trustedKeyBytes, format: "der", type: "spki" });
+    if (publicKey.asymmetricKeyType !== "ed25519") throw new Error("wrong key type");
+  } catch {
+    findings.push(`${G14_TRUSTED_KEY_ENV} must contain one canonical Ed25519 SPKI public key`);
+    return findings;
+  }
+  const trustedKeyId = sha256Bytes(trustedKeyBytes);
+  if (String(attestation.reviewerKeyId ?? "").trim() !== trustedKeyId) {
+    findings.push("securityScan.attestation.reviewerKeyId must match the protected reviewer trust anchor");
+  }
+  const signature = decodeCanonicalBase64(attestation.signature, 64);
+  if (!signature) {
+    findings.push("securityScan.attestation.signature must be a canonical Ed25519 signature");
+  } else if (!verify(null, securityAttestationPayload({ ...payload, signedAt, expiresAt }), publicKey, signature)) {
+    findings.push("securityScan.attestation signature is invalid for the canonical scan payload");
+  }
+  return findings;
+}
+
+function safeScanArtifactPath(value) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized || normalized.includes("\\") || isAbsolute(normalized)) return "";
+  const parts = normalized.split("/");
+  return parts.some((part) => !part || part === "." || part === "..") ? "" : normalized;
+}
+
+function validateSecurityScanProof(proof, expectedCandidateRevision) {
+  const findings = [];
+  if (!isPlainObject(proof)) {
+    return ["securityScan must reference a sealed canonical scan bundle"];
+  }
+
+  const bundlePathText = String(proof.bundlePath ?? "").trim();
+  const candidateRevision = String(proof.candidateRevision ?? "").trim();
+  const manifestSha256 = String(proof.manifestSha256 ?? "").trim();
+  if (!isAbsolute(bundlePathText)) findings.push("securityScan.bundlePath must be an absolute path outside the repo checkout");
+  if (!GIT_REVISION_RE.test(candidateRevision)) {
+    findings.push("securityScan.candidateRevision must be a lowercase 40-character Git revision");
+  }
+  if (!expectedCandidateRevision) {
+    findings.push("exact immutable candidate revision is unavailable or malformed");
+  } else if (GIT_REVISION_RE.test(candidateRevision) && candidateRevision !== expectedCandidateRevision) {
+    findings.push("securityScan.candidateRevision must match the exact immutable candidate revision");
+  }
+  if (!SHA256_RE.test(manifestSha256)) {
+    findings.push("securityScan.manifestSha256 must be a lowercase SHA-256 digest");
+  }
+  if (findings.length > 0) return findings;
+
+  const resolvedBundle = resolve(bundlePathText);
+  if (!regularDirectoryStat(resolvedBundle)) {
+    return ["securityScan.bundlePath must point to an existing directory"];
+  }
+  let realBundle;
+  let realRepo;
+  try {
+    realBundle = realpathSync(resolvedBundle);
+    realRepo = realpathSync(process.cwd());
+  } catch {
+    return ["securityScan.bundlePath must resolve to a readable directory"];
+  }
+  if (pathInsideOrSame(realBundle, realRepo)) {
+    return ["securityScan.bundlePath must be outside the repo checkout"];
+  }
+
+  const scanManifestPath = resolve(realBundle, "scan-manifest.json");
+  try {
+    if (!pathInsideOrSame(realpathSync(scanManifestPath), realBundle)) {
+      return ["security scan scan-manifest.json escapes the sealed bundle"];
+    }
+  } catch {
+    return ["security scan scan-manifest.json must be a readable regular file"];
+  }
+  let parsedManifest;
+  try {
+    parsedManifest = parseBoundedJson(scanManifestPath, MAX_SECURITY_SCAN_MANIFEST_BYTES, "security scan scan-manifest.json");
+  } catch (error) {
+    return [error instanceof Error ? error.message : String(error)];
+  }
+  if (sha256Bytes(parsedManifest.bytes) !== manifestSha256) {
+    return ["securityScan.scan-manifest.json digest does not match manifestSha256"];
+  }
+
+  const document = parsedManifest.value;
+  const scan = isPlainObject(document) ? document.scan : null;
+  if (document?.documentType !== "codex-security.scan-manifest" || document?.schemaVersion !== "1.0" || !isPlainObject(scan)) {
+    return ["security scan bundle must use the canonical scan-manifest schema"];
+  }
+  if (scan.status !== "completed" || !hasIsoTimestamp(scan.completedAt) || !hasIsoTimestamp(scan.sealedAt)) {
+    findings.push("security scan bundle must be completed and sealed");
+  } else if (!hasNonFutureIsoTimestamp(scan.completedAt) || !hasNonFutureIsoTimestamp(scan.sealedAt)) {
+    findings.push("security scan completion and seal timestamps must not be in the future");
+  } else if (Date.parse(scan.sealedAt) < Date.parse(scan.completedAt)) {
+    findings.push("security scan seal timestamp must not precede completion");
+  } else if (
+    Date.now() - Date.parse(scan.completedAt) > MAX_SECURITY_SCAN_AGE_MS ||
+    Date.now() - Date.parse(scan.sealedAt) > MAX_SECURITY_SCAN_AGE_MS
+  ) {
+    findings.push("security scan completion and seal must be within the last 24 hours");
+  }
+  if (scan.producer?.name !== "codex-security-plugin" || !hasRealText(scan.producer?.version)) {
+    findings.push("security scan bundle must identify the Codex Security producer");
+  }
+  if (!hasRealText(scan.id) || !hasRealText(scan.target?.targetId) || !hasRealText(scan.target?.displayName)) {
+    findings.push("security scan bundle must include canonical scan and target identities");
+  }
+  if (scan.target?.kind !== "git_revision") {
+    findings.push("security scan target must be an immutable git_revision");
+  }
+  if (scan.target?.revision !== candidateRevision) {
+    findings.push("security scan target revision must match securityScan.candidateRevision");
+  }
+  if (
+    !Array.isArray(scan.scope?.includePaths) ||
+    scan.scope.includePaths.length !== 1 ||
+    scan.scope.includePaths[0] !== "." ||
+    !Array.isArray(scan.scope?.excludePaths) ||
+    scan.scope.excludePaths.length !== 0
+  ) {
+    findings.push("security scan scope must cover the full repository without exclusions");
+  }
+  if (scan.findingsRef !== "findings.json" || scan.coverageRef !== "coverage.json") {
+    findings.push("security scan bundle must use canonical findings.json and coverage.json references");
+  }
+
+  const artifactEntries = Array.isArray(scan.artifacts) ? scan.artifacts : [];
+  if (artifactEntries.length === 0) {
+    findings.push("security scan manifest must list digest-bound artifacts");
+    return findings;
+  }
+  const seenArtifactPaths = new Set();
+  const artifactDigests = new Map();
+  const verifiedJson = new Map();
+  let totalArtifactBytes = 0;
+  for (const entry of artifactEntries) {
+    const artifactPath = safeScanArtifactPath(entry?.path);
+    if (!artifactPath || !SHA256_RE.test(String(entry?.sha256 ?? "")) || !hasRealText(entry?.mediaType)) {
+      findings.push("security scan manifest contains an unsafe path or invalid artifact digest");
+      continue;
+    }
+    if (seenArtifactPaths.has(artifactPath)) {
+      findings.push(`security scan manifest lists ${artifactPath} more than once`);
+      continue;
+    }
+    seenArtifactPaths.add(artifactPath);
+    artifactDigests.set(artifactPath, String(entry.sha256));
+    const resolvedArtifact = resolve(realBundle, artifactPath);
+    const artifactStats = regularFileStat(resolvedArtifact);
+    if (!artifactStats) {
+      findings.push(`security scan artifact ${artifactPath} is missing or not a file`);
+      continue;
+    }
+    let realArtifact;
+    try {
+      realArtifact = realpathSync(resolvedArtifact);
+    } catch {
+      findings.push(`security scan artifact ${artifactPath} cannot be resolved`);
+      continue;
+    }
+    if (!pathInsideOrSame(realArtifact, realBundle)) {
+      findings.push(`security scan artifact ${artifactPath} escapes the sealed bundle`);
+      continue;
+    }
+    totalArtifactBytes += artifactStats.size;
+    if (artifactStats.size > MAX_SECURITY_SCAN_ARTIFACT_BYTES || totalArtifactBytes > MAX_SECURITY_SCAN_TOTAL_BYTES) {
+      findings.push("security scan artifacts exceed the bounded validation size");
+      break;
+    }
+    try {
+      if (artifactPath === "findings.json" || artifactPath === "coverage.json") {
+        const parsed = parseBoundedJson(resolvedArtifact, MAX_SECURITY_SCAN_JSON_BYTES, `security scan ${artifactPath}`);
+        if (sha256Bytes(parsed.bytes) !== entry.sha256) {
+          findings.push(`security scan artifact digest mismatch: ${artifactPath}`);
+        } else {
+          verifiedJson.set(artifactPath, parsed.value);
+        }
+      } else if (sha256File(resolvedArtifact, MAX_SECURITY_SCAN_ARTIFACT_BYTES).digest !== entry.sha256) {
+        findings.push(`security scan artifact digest mismatch: ${artifactPath}`);
+      }
+    } catch (error) {
+      findings.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (!seenArtifactPaths.has("findings.json") || !seenArtifactPaths.has("coverage.json")) {
+    findings.push("security scan manifest must digest-bind findings.json and coverage.json exactly once");
+  }
+  const findingsDocument = verifiedJson.get("findings.json");
+  if (
+    findingsDocument?.documentType !== "codex-security.findings" ||
+    findingsDocument?.schemaVersion !== "1.0" ||
+    findingsDocument?.scanId !== scan.id ||
+    !Array.isArray(findingsDocument?.findings)
+  ) {
+    findings.push("security scan findings.json must be canonical and match the sealed scan id");
+  } else {
+    const severityLevels = findingsDocument.findings.map((finding) => String(finding?.severity?.level ?? "").toLowerCase());
+    if (severityLevels.some((level) => !["critical", "high", "medium", "low", "informational"].includes(level))) {
+      findings.push("security scan findings must carry canonical severity levels");
+    }
+    if (severityLevels.some((level) => ["critical", "high", "medium"].includes(level))) {
+      findings.push("security scan must contain zero open Critical/High/Medium findings");
+    }
+  }
+  const coverageDocument = verifiedJson.get("coverage.json");
+  if (
+    coverageDocument?.documentType !== "codex-security.coverage" ||
+    coverageDocument?.schemaVersion !== "1.0" ||
+    coverageDocument?.scanId !== scan.id
+  ) {
+    findings.push("security scan coverage.json must be canonical and match the sealed scan id");
+  } else if (
+    coverageDocument.completeness !== "complete" ||
+    !["repository", "deep_repository"].includes(coverageDocument.mode) ||
+    coverageDocument.inventoryStrategy !== "repository" ||
+    !Array.isArray(coverageDocument.includePaths) ||
+    coverageDocument.includePaths.length !== 1 ||
+    coverageDocument.includePaths[0] !== "." ||
+    !Array.isArray(coverageDocument.excludePaths) ||
+    coverageDocument.excludePaths.length !== 0 ||
+    !Array.isArray(coverageDocument.deferred) ||
+    coverageDocument.deferred.length !== 0 ||
+    !Array.isArray(coverageDocument.explicitExclusions) ||
+    coverageDocument.explicitExclusions.length !== 0 ||
+    !Array.isArray(coverageDocument.surfaces) ||
+    coverageDocument.surfaces.some((surface) => surface?.disposition === "needs_follow_up") ||
+    (Array.isArray(coverageDocument.openQuestions) && coverageDocument.openQuestions.length !== 0)
+  ) {
+    findings.push("security scan coverage must be complete for the full repository without deferrals or exclusions");
+  }
+  if (
+    hasRealText(scan.id) &&
+    SHA256_RE.test(artifactDigests.get("findings.json") ?? "") &&
+    SHA256_RE.test(artifactDigests.get("coverage.json") ?? "")
+  ) {
+    findings.push(...validateIndependentSecurityAttestation(proof.attestation, {
+      candidateRevision,
+      scanId: scan.id,
+      manifestSha256,
+      findingsSha256: artifactDigests.get("findings.json"),
+      coverageSha256: artifactDigests.get("coverage.json"),
+      scanCompletedAt: scan.completedAt,
+      scanSealedAt: scan.sealedAt,
+    }));
+  } else {
+    findings.push("securityScan.attestation payload cannot be derived from canonical scan artifacts");
+  }
+  return findings;
 }
 
 function localArtifactIsFile(artifactPath) {
@@ -583,8 +1070,11 @@ function fileSummaryStatus(filePath) {
 }
 
 const manifestPath = resolve(process.cwd(), argOrEnv("file", "QA_PROOF_PATH", "docs/qa-proof.json"));
+const candidateState = repositoryCandidateState();
+const expectedCandidateRevision = configuredCandidateRevision(candidateState.revision);
 const issues = [];
 let manifest = null;
+let g14VerifierMechanicsPassed = false;
 
 console.log("# Wallet / UX / Final QA Proof Summary");
 console.log("");
@@ -592,6 +1082,12 @@ console.log(`Timestamp: ${new Date().toISOString()}`);
 console.log(`Strict: ${strict ? "yes" : "no"}`);
 console.log(`Manifest: ${summaryOnly ? fileSummaryStatus(manifestPath) : manifestPath}`);
 console.log("");
+
+if (candidateState.error) {
+  issues.push(candidateState.error);
+} else if (!candidateState.clean) {
+  issues.push("candidate checkout must have no staged, unstaged, or untracked files relative to exact HEAD");
+}
 
 if (strict && /\.draft\.json$/i.test(manifestPath)) {
   issues.push("draft proof manifests are not accepted as launch proof");
@@ -655,6 +1151,9 @@ if (manifest) {
     if (expectedChainId && targetChainId && targetChainId !== expectedChainId) {
       issues.push("targetChainId must match configured Linea chain id");
     }
+    const securityScanIssues = validateSecurityScanProof(manifest.securityScan, expectedCandidateRevision);
+    g14VerifierMechanicsPassed = !candidateState.error && candidateState.clean && securityScanIssues.length === 0;
+    issues.push(...securityScanIssues, G14_EXTERNAL_REQUIRED_MESSAGE);
 
     const rows = [];
     for (const [group, checks] of Object.entries(requiredGroups)) {
@@ -810,6 +1309,7 @@ if (manifest) {
 }
 
 console.log("");
+console.log(`G14: local-verifier=${g14VerifierMechanicsPassed ? "passed" : "failed"}; launch-status=external-required`);
 console.log(`Summary: ${issues.length === 0 ? "QA proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}; ${launchGateSummary(issues.length)}.`);
 console.log("Copy this summary into `docs/mainnet-proof-record.md` only after confirming the manifest reflects real wallet, UX, browser, and mobile QA.");
 

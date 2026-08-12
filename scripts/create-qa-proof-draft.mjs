@@ -154,6 +154,16 @@ const supportArtifact = requireExistingArtifact("support-artifact");
 const finalQaArtifact = requireExistingArtifact("finalqa-artifact");
 const smokeArtifact = requireExistingArtifact("smoke-artifact");
 const cleanWalletTx = argValue("clean-wallet-tx");
+const securityScanBundle = argValue("security-scan-bundle", "TODO: absolute external sealed scan bundle path");
+const securityScanManifestSha256 = argValue("security-scan-manifest-sha256", "TODO: scan-manifest.json SHA-256");
+const securityScanReviewerKeyId = argValue("security-scan-reviewer-key-id", "TODO: trusted reviewer public-key SHA-256");
+const securityScanAttestationSignature = argValue("security-scan-attestation-signature", "TODO: detached Ed25519 signature from independent reviewer");
+const securityScanAttestationSignedAt = argValue("security-scan-attestation-signed-at", "TODO: detached attestation signing time in ISO-8601 UTC");
+const securityScanAttestationExpiresAt = argValue("security-scan-attestation-expires-at", "TODO: detached attestation expiry within 24 hours in ISO-8601 UTC");
+const candidateRevision = argValue(
+  "candidate-revision",
+  process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || process.env.SOURCE_VERSION || "TODO: exact 40-character candidate Git revision",
+);
 
 requireDistinctArtifacts([
   ["wallet-artifact", walletArtifact],
@@ -189,6 +199,17 @@ if (!isRealTx(cleanWalletTx)) {
 const manifest = {
   targetNetwork: network,
   targetChainId: parsedChainId,
+  securityScan: {
+    bundlePath: securityScanBundle,
+    manifestSha256: securityScanManifestSha256,
+    candidateRevision,
+    attestation: {
+      reviewerKeyId: securityScanReviewerKeyId,
+      signedAt: securityScanAttestationSignedAt,
+      expiresAt: securityScanAttestationExpiresAt,
+      signature: securityScanAttestationSignature,
+    },
+  },
   wallet: {
     privyAllowedOrigins: {
       status: "TODO",
@@ -276,4 +297,4 @@ mkdirSync(path.dirname(outPath), { recursive: true });
 writeFileSync(outPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
 console.log(`QA proof draft written: ${path.relative(process.cwd(), outPath)}`);
-console.log("Review TODO fields, add real wallet/mobile/browser evidence, then save as docs/qa-proof.json.");
+console.log("Review TODO fields, add real wallet/mobile/browser evidence plus the external sealed security-scan bundle and independent detached reviewer signature, then save as docs/qa-proof.json.");
