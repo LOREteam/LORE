@@ -55,7 +55,24 @@ export async function runAuthAndCanaryBoundaryTests() {
   const adminAuth = adminAuthModule.default ?? adminAuthModule;
   const canonicalAdminProof = adminAuth.buildAdminAuthMessage(authProofFields);
   assert.deepEqual(adminAuth.parseAdminAuthMessage(canonicalAdminProof), authProofFields);
+  assert.equal(
+    adminAuth.normalizeAdminAuthAddress("0x52908400098527886E0F7030069857D2E4169EE7"),
+    "0x52908400098527886e0f7030069857d2e4169ee7",
+    "admin proof addresses must use the shared EVM address normalizer",
+  );
+  for (const invalidAddress of ["", "0x1234", "not-an-address", 1, null]) {
+    assert.equal(
+      adminAuth.normalizeAdminAuthAddress(invalidAddress),
+      "",
+      `admin proof address normalization must reject ${String(invalidAddress)}`,
+    );
+  }
   assert.equal(adminAuth.parseAdminAuthMessage(`${canonicalAdminProof}\nUnexpected: altered`), null);
+  assert.deepEqual(
+    adminAuth.parseAdminAuthMessage(canonicalAdminProof.replace(/\n/g, "\r\n")),
+    authProofFields,
+    "admin proof parsing may normalize line endings but must retain the canonical message fields",
+  );
   assert.equal(
     adminAuth.parseAdminAuthMessage(adminAuth.buildAdminAuthMessage({
       ...authProofFields,
@@ -69,9 +86,26 @@ export async function runAuthAndCanaryBoundaryTests() {
   for (const nonce of ["A".repeat(32), "a".repeat(31), "g".repeat(32)]) {
     assert.equal(adminAuth.parseAdminAuthMessage(canonicalAdminProof.replace(`Nonce: ${authProofFields.nonce}`, `Nonce: ${nonce}`)), null);
   }
+  for (const issuedAt of ["2026-07-27T12:00:00Z", "2026-07-27T12:00:00.00Z", "2026-07-27T12:00:00.000+00:00", "2026-02-30T12:00:00.000Z"]) {
+    assert.equal(
+      adminAuth.parseAdminAuthMessage(canonicalAdminProof.replace(`Issued At: ${authProofFields.issuedAt}`, `Issued At: ${issuedAt}`)),
+      null,
+      `admin proofs must reject non-canonical issuedAt ${issuedAt}`,
+    );
+  }
   assert.equal(adminAuth.isAdminAuthIssuedAtValid(authProofFields.issuedAt, Number.POSITIVE_INFINITY), false);
   assert.equal(adminAuth.getAdminAuthProofTtlMs(authProofFields.issuedAt, authProofIssuedAtMs + 120_000, 300_000), 180_000);
   assert.equal(adminAuth.getAdminAuthProofTtlMs(authProofFields.issuedAt, Number.POSITIVE_INFINITY, 300_000), null);
+  assert.equal(
+    adminAuth.getAdminAuthProofTtlMs(authProofFields.issuedAt, authProofIssuedAtMs + 300_000, 300_000),
+    null,
+    "admin proof replay TTL must not retain an already-expired proof",
+  );
+  assert.equal(
+    adminAuth.getAdminAuthProofTtlMs(authProofFields.issuedAt, authProofIssuedAtMs - 60_001, 300_000),
+    null,
+    "admin proof replay TTL must reject proofs beyond its allowed future skew",
+  );
 
   const trustedAuthOrigin = trustedAuthOriginModule.default ?? trustedAuthOriginModule;
   assert.equal(trustedAuthOrigin.getTrustedAuthOrigin("http://attacker.invalid/api/chat/auth", "production"), "https://playlore.xyz");

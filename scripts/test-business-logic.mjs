@@ -4992,46 +4992,6 @@ async function main() {
     "admin auth POST must return a clear invalid-payload error for malformed JSON",
   );
   assert.match(
-    readFileSync("app/lib/adminAuth.ts", "utf8"),
-    /normalizeAdminAuthAddress[\s\S]*getAddress/,
-    "admin auth must normalize wallet addresses with the EVM address parser",
-  );
-  assert.match(
-    readFileSync("app/lib/adminAuth.ts", "utf8"),
-    /const fields = \{ address, uri, chainId, nonce, issuedAt \};[\s\S]*normalized !== buildAdminAuthMessage\(fields\)/,
-    "admin auth must reject non-canonical signed messages before issuing a privileged session",
-  );
-  assert.match(
-    readFileSync("app/lib/adminAuth.ts", "utf8"),
-    /function parseCanonicalIssuedAtMs[\s\S]*toISOString\(\) === issuedAt[\s\S]*parseCanonicalIssuedAtMs\(issuedAt\)/,
-    "admin auth must reject non-canonical issuedAt timestamps before TTL checks",
-  );
-  assert.match(
-    readFileSync("app/lib/adminAuth.ts", "utf8"),
-    /function parseCanonicalChainId[\s\S]*\^\[1-9\]\\d\{0,15\}\$[\s\S]*Number\.isSafeInteger\(parsed\)[\s\S]*const chainId = parseCanonicalChainId\(values\.get\("chain id"\)\)[\s\S]*chainId === null/,
-    "admin auth must canonical-parse signed chain IDs before session issuance",
-  );
-  assert.match(
-    readFileSync("app/lib/adminAuth.ts", "utf8"),
-    /function parseCanonicalNonce[\s\S]*\^\[a-f0-9\]\{32,128\}\$[\s\S]*const nonce = parseCanonicalNonce\(values\.get\("nonce"\)\)[\s\S]*nonce === null/,
-    "admin auth must canonical-parse signed nonces before session issuance",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/lib/adminAuth.ts", "utf8"),
-    /Number\(values\.get\("chain id"\)|Number\.isInteger\(chainId\)/,
-    "admin auth must not use broad Number() parsing for signed chain IDs",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/lib/adminAuth.ts", "utf8"),
-    /\^\[a-f0-9\]\{32,128\}\$\/i|values\.get\("nonce"\) \?\? ""/,
-    "admin auth must not accept case-insensitive or default-empty signed nonces",
-  );
-  assert.match(
-    readFileSync("app/lib/adminAuth.ts", "utf8"),
-    /export function getAdminAuthProofTtlMs[\s\S]*parseCanonicalIssuedAtMs\(issuedAt\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*remainingMs > 0 \? remainingMs : null/,
-    "admin auth replay-lock TTL must use canonical issuedAt parsing",
-  );
-  assert.match(
     adminAuthSource,
     /getAdminAuthProofTtlMs\(fields\.issuedAt\)[\s\S]*ttlMs === null[\s\S]*Expired auth proof[\s\S]*consumeAdminProof\(authAddress, fields\.nonce, fields\.uri, ttlMs\)/,
     "admin auth route must fail closed before replay-lock consumption when issuedAt TTL is invalid",
