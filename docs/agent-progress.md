@@ -90,6 +90,10 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
   `npm.cmd run check:summary`: lint, hermetic-build test, full business logic,
   security follow-up, P1, V9/V10 invariants, indexer/storage, DB/monitoring,
   production build, typecheck, HTTP smoke, and browser smoke all exit `0`.
+- The newer exact test-proof head `825514da` repeats that complete local
+  `check:summary` successfully: hermetic build, full logic, P1/EVM,
+  indexer/DB/monitoring, production build/typecheck, and HTTP/browser smoke
+  all pass. This is local evidence only and does not seal its running diff scan.
   The gate's isolated `.tmp/check-local-*` paths were cleaned; its one
   persistent empty `lore-build-output-locks` coordination root is not an owned
   per-build temp directory.

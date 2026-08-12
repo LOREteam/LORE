@@ -153,6 +153,10 @@ Last updated: 2026-08-12. This is the single active local work queue.
       Scan `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its semantic draft,
       but scanner completion still rejects its own missing `snapshotDigest`, so
       it produced no canonical artifact.
+- [x] Re-run the full local `check:summary` at exact test-proof head `825514da`:
+      lint, hermetic build, logic, P1/EVM, indexer/DB/monitoring, build/typecheck,
+      and HTTP/browser smoke pass. This does not seal the running exact-diff scan
+      or close any external G1-G14 gate.
 - [ ] Preserve the current local P0 evidence at `b625581e`: exact Corepack
       `npm@11.5.1` clean install, both dependency audits, and prelaunch
       required-local rows pass. Do not treat its 26 external/status blockers

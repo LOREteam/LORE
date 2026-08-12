@@ -59,6 +59,10 @@ Open archived evidence only when a task needs it. The single active queue is
   residues were `0`, and port `3101` had no listener. The persistent empty
   `lore-build-output-locks` directory is the wrapper's lock-coordination root,
   not a one-shot build residue.
+- The exact test-proof head `825514da` also passes the complete local
+  `check:summary` sequence: lint, hermetic build, full logic, security follow-up,
+  P1/EVM, indexer/DB/monitoring, production build/typecheck, and HTTP/browser
+  smoke. It is local evidence only; its current diff scan is still unsealed.
 - A fresh current-tree `npm.cmd ci` completed after the final lockfile refresh.
   The unused root `accounts` package was removed so Wagmi can resolve its own
   compatible nested versions; `webpack@5.109.2` satisfies Sentry's declared
