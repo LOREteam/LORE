@@ -68,6 +68,18 @@ single active queue is [`docs/remaining-worklist.md`](remaining-worklist.md).
 
 ## Current verification
 
+- Current local P0 rerun at test/documentation head `eb139994` passes
+  `npm.cmd run check:summary`: lint, hermetic-build test, full business logic,
+  security follow-up, P1, V9/V10 invariants, indexer/storage, DB/monitoring,
+  production build, typecheck, HTTP smoke, and browser smoke all exit `0`.
+  The gate's isolated `.tmp/check-local-*` paths were cleaned; its one
+  persistent empty `lore-build-output-locks` coordination root is not an owned
+  per-build temp directory.
+- The same head's production dependency audit has no blocking High/Critical;
+  all-deps has one explicitly allowed dev-toolchain High. This supersedes the
+  older count of nine. Prelaunch passes every required-local row, while 25
+  external/status commands remain blocked or incomplete; none authorizes a
+  wallet or chain action.
 - `npm.cmd run test:p1-hardening:all:summary` - pass, `36/36`, EVM included.
 - Fresh isolated core P1 runner - pass, `35/35`, EVM intentionally skipped;
   includes the executable SQLite scope/backup/restore/WAL drill and cleans its

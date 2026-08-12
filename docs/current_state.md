@@ -51,11 +51,13 @@ Open archived evidence only when a task needs it. The single active queue is
   runs `200`, EVM `osaka`, runtime size `16488` bytes, manifest match, ABI
   snapshot match, and reviewed-fragment digest
   `69218b3a06dbe7faf71f17a33e6a4b21b2e033c6fdfa5f4ca2008dc7a2f1900c`.
-- The final current-tree verification includes two consecutive
+- The prior final current-tree verification includes two consecutive
   `npm.cmd run check:summary` exits `0`, each ending with
   `Local check completed successfully`. After each, protected SQLite identity
-  was unchanged, `.tmp/check-local-*` and system `lore-build-*` residues were
-  `0`, and port `3101` had no listener.
+  was unchanged, `.tmp/check-local-*` and owned per-build `lore-build-<random>`
+  residues were `0`, and port `3101` had no listener. The persistent empty
+  `lore-build-output-locks` directory is the wrapper's lock-coordination root,
+  not a one-shot build residue.
 - A fresh current-tree `npm.cmd ci` completed after the final lockfile refresh.
   The unused root `accounts` package was removed so Wagmi can resolve its own
   compatible nested versions; `webpack@5.109.2` satisfies Sentry's declared
@@ -64,8 +66,8 @@ Open archived evidence only when a task needs it. The single active queue is
   hermetic production build, and the EVM-inclusive P1 runner pass against this
   lockfile.
 - `npm ls --omit=dev --package-lock-only` is clean and both dependency audit
-  gates pass: production has no blocking High/Critical; the clean all-deps
-  result has `9` explicitly allowed dev-toolchain High advisories. The exact `nanoid`
+  gates pass: production has no blocking High/Critical; the current clean
+  all-deps result has `1` explicitly allowed dev-toolchain High advisory. The exact `nanoid`
   (`3.3.17`) and `js-yaml` (`4.3.1`) overrides resolve. npm 11's full
   `npm ls --all --package-lock-only` still reports internal invalid markers
   after a clean install, so it is evidence to investigate, not a false claim
@@ -239,12 +241,15 @@ Open archived evidence only when a task needs it. The single active queue is
   partial—not a leak finding—because garbage collection is noisy and native
   hidden-state throttling again could not be observed; it predates the current
   test-only commit and cannot serve as final exact-SHA evidence.
-- The current-candidate prelaunch passes every required-local row: V9/V10
+- On test/documentation head `eb139994`, the current-candidate prelaunch passes
+  every required-local row: V9/V10
   compile/invariants, P1/EVM `36/36`, typecheck, 457-file lint, hermetic build,
   bundle baseline, SQLite operations, logic, security-followup, and dependency
   proofs. A subsequent clean `npm ci`, hermetic build, and bundle baseline
-  reproduced the local build result. The all-deps proof retains `9` known
-  development-toolchain High advisories under the documented policy.
+  reproduced the local build result. The current all-deps proof retains `1`
+  known development-toolchain High advisory under the documented policy.
+  It also reports 25 external/status commands missing or blocking evidence;
+  these remain outside local completion.
 
 ## External and live blockers
 

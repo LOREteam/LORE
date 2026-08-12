@@ -147,6 +147,10 @@ Last updated: 2026-08-12. This is the single active local work queue.
       Scan `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its semantic draft,
       but scanner completion still rejects its own missing `snapshotDigest`, so
       it produced no canonical artifact.
+- [ ] Preserve the current local P0 evidence at `eb139994`: `check:summary`,
+      both dependency audits, and prelaunch required-local rows pass. Do not
+      treat its 25 external/status blockers or the optional deployed-identity
+      metadata mismatch as closed; no action is authorized by these local gates.
 - [ ] Obtain green hosted CI evidence for the final exact commit.
 
 ## UX, accessibility, and performance
