@@ -65,6 +65,7 @@ const BUSINESS_TEST_MODULES = [
     "scripts/test-business-wallet-route-safety.mjs",
     "scripts/test-business-sentry-sanitization.mjs",
     "scripts/test-business-auth-canary-boundaries.mjs",
+    "scripts/test-business-client-identity-rate-limit.mjs",
 ];
 const businessTestSources = BUSINESS_TEST_MODULES.map((path) => readFileSync(path, "utf8"));
 
@@ -104,7 +105,7 @@ const rateLimitNoStore = hasSourceGuard(/rate-limit responses must pass through 
 const routeErrorRedaction = hasSourceGuard(/safe route errors must redact provider URLs/);
 const depositsRecoveryGlobalBound = hasSourceGuard(/deposits API must globally bound distinct-address slow recovery scans/);
 const browserBaselineCompactPerformance = hasSourceGuard(/browser baseline must expose compact quality, request, runtime, and long-task performance proof fields/);
-const authTrustedOriginFailClosed = hasSourceGuard(/production auth must not derive its signed origin from an untrusted request host/);
+const authTrustedOriginFailClosed = hasSourceGuard(/getTrustedAuthOrigin\("http:\/\/attacker\.invalid\/api\/chat\/auth", "production"\), "https:\/\/playlore\.xyz"/);
 const authReplayNonceBoundary = hasSourceGuard(/auth must use a shared replay lock when production runs more than one web replica/);
 const authCanonicalNonceBoundary = hasSourceGuard(/auth must canonical-parse signed nonces before session issuance/);
 const authSessionCookieBoundary = hasSourceGuard(/session cookies must store and validate normalized wallet addresses/);
