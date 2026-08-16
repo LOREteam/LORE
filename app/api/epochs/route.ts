@@ -24,7 +24,8 @@ import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { createRouteCache } from "../_lib/routeCache";
 import { parsePositiveIntegerParam } from "../_lib/queryParams";
-import { parseStoredPositiveIntegerOrZero } from "../_lib/storedNumberParsing";
+import { parseReadModelEpochNumber, parseReadModelTileId } from "../_lib/readModelSafety";
+import { parseRequestedEpochsParam, type RequestedEpochsParseResult } from "../live-state/runtimePolicy";
 import {
   isRecoveryContextCurrent,
   loadFinalizedRecoveryContext,
@@ -41,8 +42,6 @@ const EPOCHS_ROUTE_CACHE_MAX_KEYS = 256;
 const MAX_REQUESTED_EPOCHS = 100;
 const CURRENT_EPOCH_CACHE_MS = 5_000;
 const ROUTE_METRIC_KEY = "api/epochs";
-const MAX_TILE_ID = 25;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 type EpochRow = {
   winningTile: number;
@@ -64,9 +63,6 @@ type EpochBuildResult = {
   payload: EpochPayload;
   refreshNeeded: boolean;
 };
-type RequestedEpochsParseResult =
-  | { ok: true; epochs: number[] }
-  | { ok: false; error: string };
 const epochsRouteCache = createRouteCache<EpochPayload>(EPOCHS_ROUTE_CACHE_MAX_KEYS);
 let currentEpochCache: { value: number | null; expiresAt: number } | null = null;
 let currentEpochInflight: Promise<number | null> | null = null;
@@ -84,35 +80,12 @@ function compactEpochRows(rows: Record<string, EpochRow | null>): Record<string,
 
 function parseRequestedEpochs(request: Request): RequestedEpochsParseResult {
   const search = new URL(request.url).searchParams.get("epochs");
-  if (!search) return { ok: true, epochs: [] };
-  const rawEpochs = search
-    .split(",", MAX_REQUESTED_EPOCHS + 1)
-    .map((value) => value.trim());
-  if (rawEpochs.length > MAX_REQUESTED_EPOCHS) {
-    return { ok: false, error: "Too many epochs" };
-  }
-  const parsedEpochs = rawEpochs.map((value) => parsePositiveIntegerParam(value));
-  if (parsedEpochs.some((value) => value === null || value > 1_000_000)) {
-    return { ok: false, error: "Invalid epochs" };
-  }
-  return { ok: true, epochs: [...new Set(parsedEpochs as number[])] };
+  return parseRequestedEpochsParam(search, parsePositiveIntegerParam, MAX_REQUESTED_EPOCHS);
 }
 
 function getCacheKey(requestedEpochs: number[]) {
   if (requestedEpochs.length === 0) return "*";
   return requestedEpochs.slice().sort((a, b) => a - b).join(",");
-}
-
-function parseChainEpochNumber(value: bigint): number | null {
-  if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
-  const parsed = Number(value);
-  return isSafePositiveInteger(parsed) ? parsed : null;
-}
-
-function parseEpochWinningTile(value: bigint): number | null {
-  if (value <= 0n || value > BigInt(MAX_TILE_ID)) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_TILE_ID ? parsed : null;
 }
 
 async function resolveCachedCurrentEpoch(): Promise<number | null> {
@@ -137,7 +110,7 @@ async function resolveCachedCurrentEpoch(): Promise<number | null> {
             abi: READ_ABI,
             functionName: "currentEpoch",
           });
-          const onChainCurrentEpochNum = parseChainEpochNumber(onChainCurrentEpoch);
+          const onChainCurrentEpochNum = parseReadModelEpochNumber(onChainCurrentEpoch);
           if (
             onChainCurrentEpochNum !== null &&
             onChainCurrentEpochNum >= storedCurrentEpochNumber
@@ -169,7 +142,7 @@ async function resolveCachedCurrentEpoch(): Promise<number | null> {
         abi: READ_ABI,
         functionName: "currentEpoch",
       });
-      const onChainCurrentEpochNum = parseChainEpochNumber(onChainCurrentEpoch);
+      const onChainCurrentEpochNum = parseReadModelEpochNumber(onChainCurrentEpoch);
       if (onChainCurrentEpochNum !== null) {
         currentEpochCache = {
           value: onChainCurrentEpochNum,
@@ -204,8 +177,8 @@ function filterEpochRowsByCurrentEpoch(
 
   return Object.fromEntries(
     Object.entries(rows).filter(([key, value]) => {
-      const epoch = parseStoredPositiveIntegerOrZero(key);
-      if (!isSafePositiveInteger(epoch) || epoch > currentEpochNumber) return false;
+      const epoch = parseReadModelEpochNumber(key);
+      if (epoch === null || epoch > currentEpochNumber) return false;
       const resolvedBlock = value.resolvedBlock ?? "0";
       if (/^\d+$/.test(resolvedBlock) && BigInt(resolvedBlock) > 0n && BigInt(resolvedBlock) < CONTRACT_DEPLOY_BLOCK) return false;
       return true;
@@ -237,7 +210,7 @@ async function readEpochRowsFromChain(
         const result = epochResults[index];
         if (result?.status !== "success") return;
         const row = result.result as [bigint, bigint, bigint, boolean, boolean, boolean];
-        const winningTile = parseEpochWinningTile(row[2]);
+        const winningTile = parseReadModelTileId(row[2]);
         if (!row[3] || winningTile === null) return;
         const epochRow: EpochRow = {
           winningTile,
@@ -259,7 +232,7 @@ async function readEpochRowsFromChain(
             args: [BigInt(epoch)],
             blockNumber: context.blockNumber,
           }) as [bigint, bigint, bigint, boolean, boolean, boolean];
-          const winningTile = parseEpochWinningTile(row[2]);
+          const winningTile = parseReadModelTileId(row[2]);
           if (!row[3] || winningTile === null) continue;
           const epochRow: EpochRow = {
             winningTile,
@@ -304,8 +277,10 @@ async function buildEpochsPayload(
 
   const present = new Set<number>(
     Object.keys(epochs)
-      .map((key) => parseStoredPositiveIntegerOrZero(key))
-      .filter(isSafePositiveInteger),
+      .flatMap((key) => {
+        const epoch = parseReadModelEpochNumber(key);
+        return epoch === null ? [] : [epoch];
+      }),
   );
   const missing: number[] = [];
   if (requestedEpochs.length > 0) {
@@ -344,7 +319,7 @@ async function buildEpochsPayload(
       refreshNeeded: true,
     };
   }
-  const finalizedCurrentEpoch = parseChainEpochNumber(await publicClient.readContract({
+  const finalizedCurrentEpoch = parseReadModelEpochNumber(await publicClient.readContract({
     address: CONTRACT_ADDRESS,
     abi: READ_ABI,
     functionName: "currentEpoch",

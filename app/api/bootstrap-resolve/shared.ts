@@ -3,8 +3,17 @@ import { createPublicClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { RESOLVE_ABI } from "../../../config/abi";
 import { selectKeeperAgreementRpcUrls } from "../../../server/keeperSigningSafety";
-import { acquireExpiringLock } from "../../../server/storage";
-import { acquireExternalExpiringLock, requiresExternalSharedLock } from "../_lib/externalRateLimit";
+import {
+  acquireExpiringLock,
+  reserveKeeperDailyBudget,
+  type KeeperDailyBudgetReservationInput,
+} from "../../../server/storage";
+import {
+  acquireExternalExpiringLock,
+  hasPublicExternalRateLimitStore,
+  reserveExternalKeeperDailyBudget,
+  requiresExternalSharedLock,
+} from "../_lib/externalRateLimit";
 import { APP_CHAIN, CONTRACT_ADDRESS, SERVER_RPC_URLS } from "../_lib/dataBridge";
 import { logRouteError } from "../_lib/routeError";
 
@@ -149,6 +158,21 @@ export async function acquireResolveLock(epoch: bigint) {
     lastResolveAttemptAt = now;
     return true;
   }
+}
+
+export function assertBootstrapKeeperBudgetReady() {
+  if (requiresExternalSharedLock() && !hasPublicExternalRateLimitStore()) {
+    throw new Error("bootstrap shared keeper budget store is unavailable");
+  }
+}
+
+export async function reserveBootstrapKeeperDailyBudget(
+  input: KeeperDailyBudgetReservationInput,
+) {
+  if (requiresExternalSharedLock()) {
+    return reserveExternalKeeperDailyBudget(input);
+  }
+  return reserveKeeperDailyBudget(input);
 }
 
 export function getBootstrapKeeperAccount() {

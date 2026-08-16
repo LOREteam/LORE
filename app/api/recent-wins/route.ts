@@ -12,6 +12,10 @@ import {
 import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import {
+  computeReadModelExpiresAt,
+  isFreshReadModelCache,
+} from "../_lib/readModelSafety";
+import {
   buildRecentWinsPayload,
   getRecentWinsDataWatermark,
   loadRecentWinsSnapshot,
@@ -39,23 +43,6 @@ function jsonNoStore(payload: RecentWinsPayload, status = 200) {
   return applyNoStoreHeaders(NextResponse.json(payload, { status }));
 }
 
-function computeRecentWinsExpiresAt(ttlMs: number, now = Date.now()) {
-  if (!Number.isSafeInteger(now) || now < 0) return 0;
-  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) return 0;
-  if (ttlMs > Number.MAX_SAFE_INTEGER - now) return Number.MAX_SAFE_INTEGER;
-  return now + ttlMs;
-}
-
-function isFreshRecentWinsCache(entry: RecentWinsCacheEntry | null, now = Date.now()): entry is RecentWinsCacheEntry {
-  return Boolean(
-    entry &&
-      Number.isSafeInteger(now) &&
-      now >= 0 &&
-      Number.isSafeInteger(entry.expiresAt) &&
-      entry.expiresAt > now,
-  );
-}
-
 function commitRecentWinsCache(
   payload: RecentWinsPayload,
   ttlMs: number,
@@ -70,7 +57,7 @@ function commitRecentWinsCache(
   recentWinsCacheWatermark = watermark;
   recentWinsCache = {
     payload,
-    expiresAt: computeRecentWinsExpiresAt(ttlMs),
+    expiresAt: computeReadModelExpiresAt(ttlMs),
   };
   if (durableSnapshotEligible && !hasPendingRecentWinsRecovery(payload)) {
     saveRecentWinsSnapshot(payload, watermark);
@@ -84,7 +71,7 @@ function hydrateRecentWinsSnapshot(watermark: string | null) {
   recentWinsCacheWatermark = watermark;
   recentWinsCache = {
     payload: snapshot,
-    expiresAt: computeRecentWinsExpiresAt(RECENT_WINS_ROUTE_CACHE_MS),
+    expiresAt: computeReadModelExpiresAt(RECENT_WINS_ROUTE_CACHE_MS),
   };
   return snapshot;
 }
@@ -160,7 +147,7 @@ export async function GET(request: Request) {
 
   const now = Date.now();
   const freshCache = recentWinsCache;
-  if (isFreshRecentWinsCache(freshCache, now)) {
+  if (isFreshReadModelCache(freshCache, now)) {
     markRouteCacheHit(ROUTE_METRIC_KEY);
     finishRouteMetric(metric, 200);
     return jsonNoStore(freshCache.payload);

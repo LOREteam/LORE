@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
-import { encodeFunctionData, keccak256 } from "viem";
+import { encodeFunctionData, keccak256, toHex } from "viem";
 import type { Hex } from "viem";
 import {
   assertKeeperFeeBudget,
+  getKeeperDailyBudgetPolicy,
   getKeeperFeeOverrides,
 } from "../../lib/lineaFees";
 import { recordLineaEstimateGasShadow } from "../../lib/lineaEstimateGasShadow";
 import {
+  assertKeeperReceiptFinality,
   assertKeeperSignedTransactionIntegrity,
   fingerprintKeeperEligibility,
   fingerprintKeeperNonce,
@@ -15,7 +17,9 @@ import {
   KeeperSignedTransactionIntegrityError,
   readWithExactKeeperRpcAgreement,
 } from "../../../server/keeperSigningSafety";
+import { parseRequiredRuntimeFinalityBlocks } from "../../../config/productionRuntime";
 import type {
+  KeeperCanonicalBlockObservation,
   KeeperEligibilityObservation,
   KeeperNonceObservation,
   KeeperReceiptObservation,
@@ -31,6 +35,7 @@ import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import {
   acquireResolveLock,
   APP_CHAIN,
+  assertBootstrapKeeperBudgetReady,
   BOOTSTRAP_RESOLVE_ABI,
   BOOTSTRAP_RPC_UNAVAILABLE_RETRY_MS,
   CONTRACT_ADDRESS,
@@ -40,6 +45,7 @@ import {
   isAuthorizedBootstrapRequest,
   isLocalDevBootstrapRequest,
   isRpcReadRetryableError,
+  reserveBootstrapKeeperDailyBudget,
   RESOLVE_OPERATION_LOCK_TTL_MS,
   RESOLVE_THROTTLE_MS,
 } from "./shared";
@@ -49,10 +55,17 @@ const RESOLVE_RECEIPT_TIMEOUT_MS = 25_000;
 const RESOLVE_GAS_BUFFER_PERCENT = 150n;
 const ZERO_CONTENT_LENGTH_RE = /^0$/;
 const BOOTSTRAP_PENDING_RESOLVE_META_KEY = "bootstrap:pendingResolve:v1";
+const BOOTSTRAP_KEEPER_DAILY_BUDGET_POLICY = getKeeperDailyBudgetPolicy(
+  APP_CHAIN.id,
+);
 const HASH_RE = /^0x[a-fA-F0-9]{64}$/;
 const SERIALIZED_TRANSACTION_RE = /^0x(?:[a-fA-F0-9]{2})+$/;
 const PENDING_STATES = new Set(["signed", "submitted"]);
 const FINAL_STATES = new Set(["success", "reverted"]);
+
+function getKeeperFinalityBlocks() {
+  return parseRequiredRuntimeFinalityBlocks(process.env.INDEXER_FINALITY_BLOCKS);
+}
 
 type BootstrapAgreementClients = ReturnType<
   typeof getBootstrapAgreementClients
@@ -277,6 +290,31 @@ function readAgreedBootstrapReceipt(
   );
 }
 
+async function readBootstrapCanonicalBlock(
+  client: BootstrapPublicClient,
+  receipt: KeeperReceiptObservation,
+  finalityBlocks: bigint,
+): Promise<KeeperCanonicalBlockObservation> {
+  const headBlock = await client.getBlockNumber();
+  if (headBlock < receipt.blockNumber + finalityBlocks) {
+    return { headBlock, blockHash: null };
+  }
+  const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+  return { headBlock, blockHash: block.hash };
+}
+
+async function hasAgreedBootstrapReceiptFinality(
+  clients: BootstrapAgreementClients,
+  receipt: KeeperReceiptObservation,
+) {
+  const finalityBlocks = getKeeperFinalityBlocks();
+  const observations = await Promise.all([
+    readBootstrapCanonicalBlock(clients[0], receipt, finalityBlocks),
+    readBootstrapCanonicalBlock(clients[1], receipt, finalityBlocks),
+  ]) as [KeeperCanonicalBlockObservation, KeeperCanonicalBlockObservation];
+  return assertKeeperReceiptFinality(receipt, finalityBlocks, observations);
+}
+
 async function confirmBootstrapSubmission(
   clients: BootstrapAgreementClients,
   record: BootstrapPendingResolveRecord,
@@ -295,7 +333,10 @@ async function confirmBootstrapSubmission(
   ) {
     throw new KeeperRpcAgreementError("bootstrap_receipt_nonce");
   }
-  return { receipt, nonce };
+  const finalized = receipt
+    ? await hasAgreedBootstrapReceiptFinality(clients, receipt)
+    : false;
+  return { receipt, nonce, finalized };
 }
 
 async function broadcastSignedResolve(
@@ -411,9 +452,10 @@ async function resumePendingResolve(
     expectedEpoch,
   );
   let confirmation = await confirmBootstrapSubmission(clients, record);
-  if (confirmation.receipt) {
+  if (confirmation.receipt && confirmation.finalized) {
     return confirmedResolveResponse(clients, record, confirmation.receipt);
   }
+  if (confirmation.receipt) return pendingResolveResponse(record);
   if (
     confirmation.nonce.latestNonce > record.nonce ||
     confirmation.nonce.pendingNonce > record.nonce
@@ -432,7 +474,9 @@ async function resumePendingResolve(
     state: "submitted",
   });
   confirmation = await confirmBootstrapSubmission(clients, submittedRecord);
-  if (!confirmation.receipt) return pendingResolveResponse(submittedRecord);
+  if (!confirmation.receipt || !confirmation.finalized) {
+    return pendingResolveResponse(submittedRecord);
+  }
   return confirmedResolveResponse(clients, submittedRecord, confirmation.receipt);
 }
 
@@ -466,6 +510,20 @@ export async function POST(request: Request) {
   }
 
   try {
+    // Validate the finality policy before any RPC, nonce, fee, signing, or
+    // broadcast work. A configured bootstrap keeper must never create an
+    // intent that the runtime cannot later reconcile safely.
+    getKeeperFinalityBlocks();
+    assertBootstrapKeeperBudgetReady();
+  } catch (error) {
+    logRouteError("api/bootstrap-resolve", error, { phase: "keeper-config" });
+    return json(
+      { ok: false, reason: "bootstrap_keeper_misconfigured" },
+      { status: 500 },
+    );
+  }
+
+  try {
     const pendingRecord = readPendingResolveRecord();
     if (pendingRecord) {
       // Validate persisted state before touching RPCs so corruption or a bad
@@ -491,9 +549,11 @@ export async function POST(request: Request) {
           pendingRecord,
           { waitForReceipt: false },
         );
-        if (!confirmation.receipt) {
+        if (!confirmation.receipt || !confirmation.finalized) {
           throw new BootstrapPendingResolveRecordError(
-            storedEpoch === currentEpoch
+            confirmation.receipt
+              ? "receipt_unfinalized"
+              : storedEpoch === currentEpoch
               ? "final_state_unverified"
               : "epoch_mismatch_unresolved",
           );
@@ -628,6 +688,29 @@ export async function POST(request: Request) {
         to: CONTRACT_ADDRESS,
         value: 0n,
       } as const;
+      const signingIntentHash = keccak256(toHex([
+        "bootstrap-resolveEpoch:v1",
+        APP_CHAIN.id.toString(),
+        account.address.toLowerCase(),
+        CONTRACT_ADDRESS.toLowerCase(),
+        currentEpoch.toString(),
+        data.toLowerCase(),
+        gas.toString(),
+        latestNonce.toString(),
+        estimatedFeeOverrides.gasPrice?.toString() ?? "",
+        estimatedFeeOverrides.maxFeePerGas?.toString() ?? "",
+        estimatedFeeOverrides.maxPriorityFeePerGas?.toString() ?? "",
+      ].join("|")));
+      await reserveBootstrapKeeperDailyBudget({
+        chainId: APP_CHAIN.id,
+        contractAddress: CONTRACT_ADDRESS,
+        signerAddress: account.address,
+        nonce: latestNonce,
+        epoch: currentEpoch,
+        signingIntentHash,
+        reservedMaxCostWei: requiredMaxCost,
+        policy: BOOTSTRAP_KEEPER_DAILY_BUDGET_POLICY,
+      });
       let serializedTransaction: Hex;
       if (estimatedFeeOverrides.gasPrice !== undefined) {
         serializedTransaction = await account.signTransaction({
@@ -679,7 +762,9 @@ export async function POST(request: Request) {
         clients,
         submittedRecord,
       );
-      if (!confirmation.receipt) return pendingResolveResponse(submittedRecord);
+      if (!confirmation.receipt || !confirmation.finalized) {
+        return pendingResolveResponse(submittedRecord);
+      }
       return confirmedResolveResponse(
         clients,
         submittedRecord,

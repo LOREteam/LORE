@@ -27,6 +27,15 @@ import {
 } from "./storedNumberParsing";
 import { logRouteError } from "./routeError";
 import { markRouteBackgroundRefresh } from "./runtimeMetrics";
+import {
+  JACKPOT_PUBLIC_HISTORY_LIMIT,
+  canPersistJackpotRecoveryBlock,
+  classifyJackpotResponseCache,
+  deriveDurableJackpotRecoveryCheckpoint,
+  isDurableJackpotRecoverySnapshot,
+  sanitizeJackpotPublicRows,
+  shouldStartJackpotRecovery,
+} from "./jackpotRouteRuntime";
 
 const [dailySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "DailyJackpotAwarded" });
 const [weeklySig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "WeeklyJackpotAwarded" });
@@ -36,7 +45,7 @@ const JACKPOT_ROUTE_CACHE_MS = 60_000;
 const JACKPOT_EVENT_CACHE_MS = 5 * 60 * 1000;
 const JACKPOT_BACKGROUND_RECOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const MAX_JACKPOT_EVENT_CACHE_ENTRIES = 256;
-const JACKPOT_HISTORY_LIMIT = 200;
+const JACKPOT_HISTORY_LIMIT = JACKPOT_PUBLIC_HISTORY_LIMIT;
 const JACKPOT_BOOTSTRAP_SCAN_CHUNK = 10_000n;
 const JACKPOT_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeBigIntEnv(process.env.JACKPOT_RECOVERY_BLOCK_LAG, 256n);
 const ROUTE_METRIC_KEY = "api/jackpots";
@@ -56,6 +65,13 @@ export type JackpotRow = {
   blockNumber: string;
   timestamp?: number | null;
 };
+
+function sanitizeJackpotRows(rows: readonly unknown[]) {
+  return sanitizeJackpotPublicRows(rows, {
+    contractDeployBlock: CONTRACT_DEPLOY_BLOCK,
+    limit: JACKPOT_HISTORY_LIMIT,
+  }) as JackpotRow[];
+}
 
 export type JackpotPayload = {
   jackpots: JackpotRow[];
@@ -278,38 +294,21 @@ export function deriveDurableRecoveryCheckpoint(input: {
   checkpointHash: string | null;
   observedCheckpointHash: string | null;
 }) {
-  const checkpointHash = normalizeRecoveryBlockHash(input.checkpointHash);
-  const observedCheckpointHash = normalizeRecoveryBlockHash(input.observedCheckpointHash);
-  if (
-    input.finalityBlocks <= 0n ||
-    input.lastIndexedBlock === null ||
-    input.lastIndexedBlock < CONTRACT_DEPLOY_BLOCK ||
-    input.lastIndexedBlock > input.targetBlock ||
-    input.checkpointBlock !== input.lastIndexedBlock ||
-    checkpointHash === null ||
-    observedCheckpointHash !== checkpointHash
-  ) {
-    return null;
-  }
-  return {
-    blockNumber: input.lastIndexedBlock,
-    blockHash: checkpointHash,
-  };
+  return deriveDurableJackpotRecoveryCheckpoint({
+    contractDeployBlock: CONTRACT_DEPLOY_BLOCK,
+    ...input,
+  });
 }
 
 export function canDurablyPersistRecoveredBlock(
   context: FinalizedRecoveryContext,
   blockNumber: bigint,
 ) {
-  return (
-    context.durableThroughBlock !== null &&
-    blockNumber >= CONTRACT_DEPLOY_BLOCK &&
-    blockNumber <= context.durableThroughBlock
-  );
+  return canPersistJackpotRecoveryBlock(context, blockNumber, CONTRACT_DEPLOY_BLOCK);
 }
 
 export function isRecoverySnapshotDurable(context: FinalizedRecoveryContext) {
-  return context.durableThroughBlock === context.blockNumber;
+  return isDurableJackpotRecoverySnapshot(context);
 }
 
 export async function loadFinalizedRecoveryContext(
@@ -442,11 +441,12 @@ function commitJackpotResponseCache(payload: JackpotPayload, ttlMs: number, seq:
   }
 
   jackpotAppliedSeq = seq;
+  const safePayload = { jackpots: sanitizeJackpotRows(payload.jackpots) };
   jackpotResponseCache = {
-    payload,
+    payload: safePayload,
     expiresAt: Date.now() + ttlMs,
   };
-  return payload;
+  return safePayload;
 }
 
 function isTooManyResultsError(err: unknown): boolean {
@@ -761,9 +761,8 @@ async function attachRecentBlockTimestamps(
 }
 
 function normalizeStoredJackpots(): JackpotRow[] {
-  const jackpots = (getRecentJackpots(JACKPOT_HISTORY_LIMIT) as JackpotRow[])
-    .filter((row) => parseStoredBlockNumber(row.blockNumber) >= CONTRACT_DEPLOY_BLOCK)
-    .map((row) => ({ ...row, txHash: normalizeJackpotTxHash(row.txHash) }));
+  const jackpots = sanitizeJackpotRows(getRecentJackpots(JACKPOT_HISTORY_LIMIT))
+    .filter((row) => parseStoredBlockNumber(row.blockNumber) >= CONTRACT_DEPLOY_BLOCK);
   return sortJackpotsDesc(jackpots).slice(0, JACKPOT_HISTORY_LIMIT);
 }
 
@@ -899,8 +898,12 @@ async function buildOnchainJackpots(
 
 function maybeStartJackpotRecovery(existingJackpots: JackpotRow[]) {
   const now = Date.now();
-  if (jackpotBackgroundRecoveryPromise) return;
-  if (now - jackpotBackgroundRecoveryStartedAt < JACKPOT_BACKGROUND_RECOVERY_COOLDOWN_MS) return;
+  if (!shouldStartJackpotRecovery({
+    hasInflightRecovery: jackpotBackgroundRecoveryPromise !== null,
+    lastStartedAt: jackpotBackgroundRecoveryStartedAt,
+    now,
+    cooldownMs: JACKPOT_BACKGROUND_RECOVERY_COOLDOWN_MS,
+  })) return;
 
   jackpotBackgroundRecoveryStartedAt = now;
   markRouteBackgroundRefresh(ROUTE_METRIC_KEY);
@@ -961,7 +964,12 @@ async function buildJackpotsPayload(
 
 export async function readJackpotPayload(options: JackpotReadOptions = {}): Promise<JackpotReadResult> {
   const now = Date.now();
-  if (!options.bypassResponseCache && jackpotResponseCache && jackpotResponseCache.expiresAt > now) {
+  const cacheState = classifyJackpotResponseCache({
+    hasPayload: jackpotResponseCache !== null,
+    expiresAt: jackpotResponseCache?.expiresAt,
+    now,
+  });
+  if (!options.bypassResponseCache && jackpotResponseCache && cacheState === "fresh") {
     return { payload: jackpotResponseCache.payload, source: "cache" };
   }
 

@@ -8,11 +8,11 @@ import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { sanitizeCustomChatAvatar, sanitizePresetChatAvatar } from "../../../lib/chatAvatar";
 import { normalizeChatAuthAddress } from "../../../lib/chatAuth";
 import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
+import { parseChatProfileReadScope } from "./readPolicy";
 
 const MAX_NAME_LENGTH = 20;
 const MAX_AVATAR_LENGTH = 8_000;
 const MAX_REQUEST_BODY_BYTES = 16_384;
-const MAX_REQUESTED_PROFILE_WALLETS = 100;
 const CHAT_PROFILE_CACHE_MS = 5_000;
 const CHAT_PROFILE_CACHE_MAX_ENTRIES = 48;
 const chatProfileRouteCache = createRouteCache<{ profile?: ReturnType<typeof getChatProfile>; profiles?: ReturnType<typeof getChatProfiles> }>(CHAT_PROFILE_CACHE_MAX_ENTRIES);
@@ -137,27 +137,16 @@ export async function GET(request: NextRequest) {
 
   try {
     const { searchParams } = new URL(request.url);
-    const walletAddress = searchParams.get("walletAddress");
-    const walletAddressesParam = searchParams.get("walletAddresses");
-    const rawRequestedAddresses = walletAddressesParam
-      ? walletAddressesParam
-          .split(",", MAX_REQUESTED_PROFILE_WALLETS + 1)
-          .map((value) => value.trim())
-          .filter(Boolean)
-      : [];
-    if (walletAddressesParam !== null && rawRequestedAddresses.length === 0) {
-      return applyNoStoreHeaders(NextResponse.json({ error: "Invalid walletAddresses" }, { status: 400 }));
+    const readScope = parseChatProfileReadScope(
+      searchParams.get("walletAddress"),
+      searchParams.get("walletAddresses"),
+    );
+    if (!readScope.ok) {
+      return applyNoStoreHeaders(NextResponse.json({ error: readScope.error }, { status: 400 }));
     }
-    if (rawRequestedAddresses.length > MAX_REQUESTED_PROFILE_WALLETS) {
-      return applyNoStoreHeaders(NextResponse.json({ error: "Too many walletAddresses" }, { status: 400 }));
-    }
-    const normalizedRequestedAddresses = rawRequestedAddresses.map((value) => normalizeChatAuthAddress(value));
-    const requestedAddresses = [...new Set(normalizedRequestedAddresses)];
-    if (walletAddress) {
-      const normalizedWalletAddress = normalizeChatAuthAddress(walletAddress);
-      if (!normalizedWalletAddress) {
-        return applyNoStoreHeaders(NextResponse.json({ error: "Invalid walletAddress" }, { status: 400 }));
-      }
+
+    if (readScope.kind === "single") {
+      const normalizedWalletAddress = readScope.walletAddress;
       const cacheKey = `wallet:${normalizedWalletAddress}`;
       const cached = chatProfileRouteCache.getFresh(cacheKey);
       if (cached) {
@@ -170,10 +159,8 @@ export async function GET(request: NextRequest) {
       return applyNoStoreHeaders(NextResponse.json(payload));
     }
 
-    if (requestedAddresses.length > 0) {
-      if (normalizedRequestedAddresses.some((value) => !value)) {
-        return applyNoStoreHeaders(NextResponse.json({ error: "Invalid walletAddresses" }, { status: 400 }));
-      }
+    if (readScope.kind === "batch") {
+      const requestedAddresses = readScope.walletAddresses;
       const normalizedKey = `many:${requestedAddresses.slice().sort().join(",")}`;
       const manyCached = chatProfileRouteCache.getFresh(normalizedKey);
       if (manyCached) {
@@ -186,10 +173,6 @@ export async function GET(request: NextRequest) {
       rememberProfileCacheKey(requestedAddresses, normalizedKey);
       return applyNoStoreHeaders(NextResponse.json(payload));
     }
-
-    return applyNoStoreHeaders(
-      NextResponse.json({ error: "walletAddress or walletAddresses is required" }, { status: 400 }),
-    );
   } catch (error) {
     logRouteError("api/chat/profile", error, { method: "GET" });
     return applyNoStoreHeaders(NextResponse.json({ error: "Internal error" }, { status: 500 }));

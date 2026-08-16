@@ -10,6 +10,10 @@ import {
 } from "../_lib/runtimeMetrics";
 import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
+import {
+  createJackpotPublicErrorPayload,
+  shouldBypassJackpotResponseCache,
+} from "../_lib/jackpotRouteRuntime";
 
 const ROUTE_METRIC_KEY = "api/jackpots";
 
@@ -29,7 +33,9 @@ export async function GET(request: Request) {
 
   try {
     const { searchParams } = new URL(request.url);
-    const result = await readJackpotPayload({ bypassResponseCache: searchParams.get("fresh") === "1" });
+    const result = await readJackpotPayload({
+      bypassResponseCache: shouldBypassJackpotResponseCache(searchParams.get("fresh")),
+    });
     if (result.source === "cache") markRouteCacheHit(ROUTE_METRIC_KEY);
     if (result.source === "stale-cache") markRouteStaleServed(ROUTE_METRIC_KEY);
 
@@ -39,6 +45,6 @@ export async function GET(request: Request) {
     logRouteError(ROUTE_METRIC_KEY, err);
     const status = 500;
     failRouteMetric(metric, status);
-    return jsonNoStore({ jackpots: [], error: "Unable to load jackpots" }, status);
+    return jsonNoStore(createJackpotPublicErrorPayload(), status);
   }
 }

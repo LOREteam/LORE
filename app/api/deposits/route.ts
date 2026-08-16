@@ -5,7 +5,7 @@ import {
   GAME_EVENTS_ABI as EVENTS_ABI,
 } from "../../../config/generated/lineaOreV10Abi";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
-import { getIndexerFinalityTargetBlock, parseIndexerFinalityBlocks } from "../../lib/indexerFinality";
+import { parseIndexerFinalityBlocks } from "../../lib/indexerFinality";
 import { tileMaskToTileIds } from "../../lib/tileMask";
 import { formatLineaWeiDisplayNumber, normalizeTileAmounts, parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import {
@@ -26,6 +26,10 @@ import {
   publicClient,
 } from "../_lib/dataBridge";
 import {
+  isFinalizedDepositsRecoveryEnabled,
+  planFinalizedDepositsRecoveryRange,
+} from "./recoveryPolicy";
+import {
   parseStoredBlockNumberOrZero,
   parseStoredPositiveIntegerOrZero,
 } from "../_lib/storedNumberParsing";
@@ -41,7 +45,10 @@ import {
 const LOG_CHUNK_BLOCKS = 10_000n;
 const ENABLE_CHAIN_RECOVERY = process.env.API_DEPOSITS_CHAIN_RECOVERY === "1";
 const INDEXER_FINALITY_BLOCKS = parseIndexerFinalityBlocks(process.env.INDEXER_FINALITY_BLOCKS);
-const ENABLE_FINALIZED_CHAIN_RECOVERY = ENABLE_CHAIN_RECOVERY && INDEXER_FINALITY_BLOCKS > 0n;
+const ENABLE_FINALIZED_CHAIN_RECOVERY = isFinalizedDepositsRecoveryEnabled(
+  ENABLE_CHAIN_RECOVERY,
+  INDEXER_FINALITY_BLOCKS,
+);
 const DEPOSITS_ROUTE_CACHE_MS = 15_000;
 const DEPOSITS_ROUTE_CACHE_MAX_KEYS = 512;
 const ROUTE_METRIC_KEY = "api/deposits";
@@ -514,27 +521,21 @@ async function recoverDepositsFromChain(user: string, currentEpochNum: number | 
 
   const latestIndexedBlock = getMetaBigInt("lastIndexedBlock");
   const headBlock = await publicClient.getBlockNumber();
-  const finalityTargetBlock = getIndexerFinalityTargetBlock(headBlock, INDEXER_FINALITY_BLOCKS);
-  if (finalityTargetBlock === null || finalityTargetBlock < CONTRACT_DEPLOY_BLOCK) return [];
-
-  const recoveryWindowStart =
-    finalityTargetBlock >= RECENT_RECOVERY_BLOCK_WINDOW
-      ? finalityTargetBlock - RECENT_RECOVERY_BLOCK_WINDOW + 1n
-      : 0n;
-  const boundedWindowStart =
-    recoveryWindowStart > CONTRACT_DEPLOY_BLOCK ? recoveryWindowStart : CONTRACT_DEPLOY_BLOCK;
-  const indexedStart =
-    latestIndexedBlock !== null && latestIndexedBlock >= CONTRACT_DEPLOY_BLOCK
-      ? latestIndexedBlock + 1n
-      : CONTRACT_DEPLOY_BLOCK;
-  const recoveryFromBlock = indexedStart > boundedWindowStart ? indexedStart : boundedWindowStart;
-  if (recoveryFromBlock > finalityTargetBlock) return [];
+  const recoveryRange = planFinalizedDepositsRecoveryRange({
+    enabled: ENABLE_FINALIZED_CHAIN_RECOVERY,
+    headBlock,
+    finalityBlocks: INDEXER_FINALITY_BLOCKS,
+    contractDeployBlock: CONTRACT_DEPLOY_BLOCK,
+    latestIndexedBlock,
+    recentWindowBlocks: RECENT_RECOVERY_BLOCK_WINDOW,
+  });
+  if (recoveryRange === null) return [];
 
   return await fetchDepositsFromChain(
     user,
     currentEpochNum,
-    recoveryFromBlock,
-    finalityTargetBlock,
+    recoveryRange.fromBlock,
+    recoveryRange.toBlock,
   );
 }
 

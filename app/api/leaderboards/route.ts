@@ -1,5 +1,4 @@
-import { NextResponse } from "next/server";
-import { formatUnits, getAddress } from "viem";
+import { formatUnits } from "viem";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import {
   beginRouteMetric,
@@ -15,7 +14,6 @@ import type { LeaderboardEntry, LuckyTileEntry } from "../../lib/types";
 import {
   computeWinningAmountWei,
   formatLineaAmountFixed,
-  formatLineaWeiDisplayNumber,
   parseLineaAmountWei,
 } from "../../lib/tokenAmountMath";
 import {
@@ -31,6 +29,20 @@ import {
 import { logRouteError } from "../_lib/routeError";
 import { createRouteCache } from "../_lib/routeCache";
 import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
+import {
+  comparePublicBigIntDesc,
+  buildPublicReadModelFailure,
+  collectPublicLeaderboardWinningTiles,
+  computePublicLeaderboardRoiBasisPoints,
+  createPublicReadModelJsonResponse,
+  formatPublicLeaderboardRoiPercent,
+  isFreshPublicReadModelSnapshot,
+  normalizePublicReadModelAddress,
+  sanitizePublicLeaderboardName,
+  selectPublicLeaderboardWinningTile,
+  toPublicLeaderboardRoiValueNum,
+  toPublicWeiDisplayNumber,
+} from "../_lib/publicReadModelPolicy";
 
 type LeaderboardsPayload = {
   biggestSingleWin: LeaderboardEntry[];
@@ -56,8 +68,6 @@ const ROUTE_METRIC_KEY = "api/leaderboards";
 const LEADERBOARDS_SNAPSHOT_META_KEY = "snapshot:leaderboards:v1";
 const LEADERBOARDS_CACHE_KEY = "latest";
 const LEADERBOARDS_ROUTE_CACHE_MAX_KEYS = 2;
-const LEADERBOARDS_ROI_BASIS_POINTS_SCALE = 10_000n;
-const LEADERBOARDS_ROI_VALUE_NUM_MAX_BASIS_POINTS = BigInt(Number.MAX_SAFE_INTEGER);
 const leaderboardsRouteCache = createRouteCache<LeaderboardsPayload>(LEADERBOARDS_ROUTE_CACHE_MAX_KEYS);
 let leaderboardsCacheWatermark: string | null = null;
 
@@ -69,11 +79,7 @@ type UserAgg = {
 };
 
 function normalizeStoredUserAddress(user: string): `0x${string}` | null {
-  try {
-    return getAddress(user).toLowerCase() as `0x${string}`;
-  } catch {
-    return null;
-  }
+  return normalizePublicReadModelAddress(user);
 }
 
 function getLatestRewardClaimMarker() {
@@ -88,7 +94,7 @@ function getLeaderboardsDataWatermark() {
 }
 
 function jsonNoStore(payload: LeaderboardsPayload, status = 200) {
-  return applyNoStoreHeaders(NextResponse.json(payload, { status }));
+  return createPublicReadModelJsonResponse(payload, status);
 }
 
 function fmt(wei: bigint) {
@@ -96,26 +102,19 @@ function fmt(wei: bigint) {
 }
 
 function toDisplayNumberWei(value: bigint): number {
-  return formatLineaWeiDisplayNumber(value);
+  return toPublicWeiDisplayNumber(value);
 }
 
 function computeLeaderboardRoiBasisPoints(totalWon: bigint, totalWagered: bigint): bigint {
-  if (totalWon <= 0n || totalWagered <= 0n) return 0n;
-  return (totalWon * LEADERBOARDS_ROI_BASIS_POINTS_SCALE) / totalWagered;
+  return computePublicLeaderboardRoiBasisPoints(totalWon, totalWagered);
 }
 
 function formatLeaderboardRoiPercent(roiBasisPoints: bigint): string {
-  const safeBasisPoints = roiBasisPoints > 0n ? roiBasisPoints : 0n;
-  const roundedTenths = (safeBasisPoints + 5n) / 10n;
-  return `${roundedTenths / 10n}.${roundedTenths % 10n}%`;
+  return formatPublicLeaderboardRoiPercent(roiBasisPoints);
 }
 
 function toLeaderboardRoiValueNum(roiBasisPoints: bigint): number {
-  if (roiBasisPoints <= 0n) return 0;
-  const bounded = roiBasisPoints > LEADERBOARDS_ROI_VALUE_NUM_MAX_BASIS_POINTS
-    ? LEADERBOARDS_ROI_VALUE_NUM_MAX_BASIS_POINTS
-    : roiBasisPoints;
-  return Number(bounded) / 100;
+  return toPublicLeaderboardRoiValueNum(roiBasisPoints);
 }
 
 function buildRankedEntries(
@@ -131,8 +130,7 @@ function buildRankedEntries(
 }
 
 function compareBigIntDesc(left: bigint, right: bigint) {
-  if (left === right) return 0;
-  return left > right ? -1 : 1;
+  return comparePublicBigIntDesc(left, right);
 }
 
 function attachLeaderboardNames(entries: LeaderboardEntry[], nameByAddress: Record<string, string>): LeaderboardEntry[] {
@@ -151,8 +149,10 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
   const userWinningAmounts = new Map<string, bigint>();
   const rewardByEpochUser = new Map<string, bigint>();
   const maxSingleTileWinByUser = new Map<string, bigint>();
-  const luckyTileWins = new Map<number, number>();
-  let resolvedCount = 0;
+  const {
+    counts: luckyTileWins,
+    resolvedCount,
+  } = collectPublicLeaderboardWinningTiles(Object.values(epochs));
 
   for (const bet of bets) {
     const address = normalizeStoredUserAddress(bet.user);
@@ -167,17 +167,12 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
     users.set(address, prev);
 
     const epochRow = epochs[bet.epoch];
-    if (!epochRow || !epochRow.winningTile || epochRow.winningTile <= 0) continue;
-    const winningAmountWei = computeWinningAmountWei(bet.tileIds, bet.amounts, epochRow.winningTile, bet.totalAmount);
+    const winningTile = selectPublicLeaderboardWinningTile(epochRow);
+    if (winningTile === null) continue;
+    const winningAmountWei = computeWinningAmountWei(bet.tileIds, bet.amounts, winningTile, bet.totalAmount);
     if (winningAmountWei <= 0n) continue;
     const key = `${bet.epoch}:${address}`;
     userWinningAmounts.set(key, (userWinningAmounts.get(key) ?? 0n) + winningAmountWei);
-  }
-
-  for (const row of Object.values(epochs)) {
-    if (!row.winningTile || row.winningTile <= 0) continue;
-    luckyTileWins.set(row.winningTile, (luckyTileWins.get(row.winningTile) ?? 0) + 1);
-    resolvedCount += 1;
   }
 
   const underdogCandidates: Array<{ address: string; rewardWei: bigint; tile: number; tilePoolWei: bigint }> = [];
@@ -200,7 +195,8 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
     users.set(address, prev);
 
     const epochRow = epochs[claim.epoch];
-    if (!epochRow || !epochRow.winningTile || rewardWei <= 0n) continue;
+    const winningTile = selectPublicLeaderboardWinningTile(epochRow);
+    if (winningTile === null || rewardWei <= 0n) continue;
     const userWinningWei = userWinningAmounts.get(`${claim.epoch}:${address}`) ?? 0n;
     if (userWinningWei <= 0n) continue;
 
@@ -212,14 +208,15 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
     underdogCandidates.push({
       address,
       rewardWei,
-      tile: epochRow.winningTile,
+      tile: winningTile,
       tilePoolWei,
     });
   }
 
   for (const bet of bets) {
     const epochRow = epochs[bet.epoch];
-    if (!epochRow || !epochRow.winningTile || epochRow.winningTile <= 0) continue;
+    const winningTile = selectPublicLeaderboardWinningTile(epochRow);
+    if (winningTile === null) continue;
 
     const address = normalizeStoredUserAddress(bet.user);
     if (!address) continue;
@@ -231,7 +228,7 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
     const winningAmountWei = computeWinningAmountWei(
       bet.tileIds,
       bet.amounts,
-      epochRow.winningTile,
+      winningTile,
       bet.totalAmount,
     );
     if (winningAmountWei <= 0n) continue;
@@ -368,8 +365,8 @@ async function buildLeaderboardsPayload(): Promise<LeaderboardsPayload> {
   const profiles = getChatProfiles(leaderboardAddresses);
   const nameByAddress = Object.fromEntries(
     Object.entries(profiles).flatMap(([address, profile]) => {
-      const trimmed = typeof profile.name === "string" ? profile.name.trim() : "";
-      return trimmed ? [[address.toLowerCase(), trimmed]] : [];
+      const safeName = sanitizePublicLeaderboardName(profile.name);
+      return safeName ? [[address.toLowerCase(), safeName]] : [];
     }),
   ) as Record<string, string>;
 
@@ -402,15 +399,7 @@ function loadLeaderboardsSnapshot(expectedWatermark: string | null): Leaderboard
 }
 
 function isFreshLeaderboardsSnapshotSavedAt(savedAt: unknown, now = Date.now()) {
-  return (
-    typeof savedAt === "number" &&
-    Number.isSafeInteger(savedAt) &&
-    savedAt >= 0 &&
-    Number.isSafeInteger(now) &&
-    now >= 0 &&
-    savedAt <= now &&
-    now - savedAt <= LEADERBOARDS_SNAPSHOT_MAX_AGE_MS
-  );
+  return isFreshPublicReadModelSnapshot(savedAt, LEADERBOARDS_SNAPSHOT_MAX_AGE_MS, now);
 }
 
 function saveLeaderboardsSnapshot(payload: LeaderboardsPayload, watermark: string | null) {
@@ -512,7 +501,7 @@ export async function GET(request: Request) {
       return jsonNoStore(staleCache);
     }
     failRouteMetric(metric, 500);
-    return jsonNoStore({
+    return jsonNoStore(buildPublicReadModelFailure({
       biggestSingleWin: [],
       luckiest: [],
       oneTileWonder: [],
@@ -520,7 +509,6 @@ export async function GET(request: Request) {
       whales: [],
       underdog: [],
       luckyTile: [],
-      error: "fetch failed",
-    }, 500);
+    }), 500);
   }
 }

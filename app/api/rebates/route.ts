@@ -17,6 +17,15 @@ import { logRouteError } from "../_lib/routeError";
 import { getMetaBigInt, getMetaNumber, getUserParticipatingEpochs } from "../../../server/storage";
 import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
 import {
+  REBATE_UNCHANGED_WATERMARK_REFRESH_MS,
+  formatRebateServerTiming,
+  formatRebateTimingLogValue,
+  shouldSkipUnchangedRebateRefresh,
+  type RebateBuildTimings,
+  type RebateCacheStatus,
+  type RebateCacheWatermark,
+} from "../_lib/rebateRouteRuntime";
+import {
   appendRebateRefreshTotals,
   createEmptyRebateRefreshTotals,
   createRebateRefreshBudget,
@@ -40,8 +49,6 @@ const REBATE_REFRESH_MAX_DURATION_MS = 8_000;
 const REBATE_SCAN_CONTINUATION_CACHE_MS = 30 * 60_000;
 const ROUTE_METRIC_KEY = "api/rebates";
 const REBATE_INDEXED_EPOCHS_CACHE_MS = 30_000;
-const REBATE_UNCHANGED_WATERMARK_REFRESH_MS = 5 * 60_000;
-const REBATE_TIMING_MAX_MS = 24 * 60 * 60 * 1000;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 type RebateEpochInfo = {
@@ -72,17 +79,6 @@ type RebatePayload = {
   };
 };
 
-type RebateBuildTimings = {
-  indexedMs: number;
-  summaryMs: number;
-  exactMs: number;
-  recentMs: number;
-  totalMs: number;
-  epochCount: number;
-  summaryChunks: number;
-  exactChunks: number;
-};
-
 type RebateInfoResult = [bigint, bigint, bigint, boolean, boolean];
 type RebateRefreshBudget = ReturnType<typeof createRebateRefreshBudget>;
 type RebateScanCycle = {
@@ -99,51 +95,22 @@ type RebateScanState = {
 
 const rebateRouteCache = createRouteCache<RebatePayload>(REBATE_ROUTE_CACHE_MAX_KEYS);
 const rebateIndexedEpochsCache = createRouteCache<number[]>(REBATE_ROUTE_CACHE_MAX_KEYS);
-const rebateCacheWatermarks = createRouteCache<{ refreshedAt: number; watermark: string }>(
+const rebateCacheWatermarks = createRouteCache<RebateCacheWatermark>(
   REBATE_ROUTE_CACHE_MAX_KEYS,
 );
 const rebateScanStateCache = createRouteCache<RebateScanState>(REBATE_ROUTE_CACHE_MAX_KEYS);
-
-function normalizeRebateTimingMs(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) return 0;
-  return Math.min(value, REBATE_TIMING_MAX_MS);
-}
-
-function formatRebateTimingMs(value: number): string {
-  return normalizeRebateTimingMs(value).toFixed(1);
-}
-
-function formatRebateTimingLogValue(value: number): number {
-  return Number(formatRebateTimingMs(value));
-}
-
-function formatServerTiming(params: {
-  cacheStatus: "fresh" | "stale" | "miss" | "inflight";
-  timings?: RebateBuildTimings | null;
-}) {
-  const { cacheStatus, timings } = params;
-  const metrics = [`cache;desc="${cacheStatus}"`];
-  if (timings) {
-    metrics.push(`indexed;dur=${formatRebateTimingMs(timings.indexedMs)}`);
-    metrics.push(`summary;dur=${formatRebateTimingMs(timings.summaryMs)}`);
-    metrics.push(`exact;dur=${formatRebateTimingMs(timings.exactMs)}`);
-    metrics.push(`recent;dur=${formatRebateTimingMs(timings.recentMs)}`);
-    metrics.push(`total;dur=${formatRebateTimingMs(timings.totalMs)}`);
-  }
-  return metrics.join(", ");
-}
 
 function jsonNoStore(
   payload: RebatePayload | { error: string },
   status = 200,
   options?: {
-    cacheStatus?: "fresh" | "stale" | "miss" | "inflight";
+    cacheStatus?: RebateCacheStatus;
     timings?: RebateBuildTimings | null;
   },
 ) {
   const response = applyNoStoreHeaders(NextResponse.json(payload, { status }));
   if (options?.cacheStatus) {
-    response.headers.set("Server-Timing", formatServerTiming({
+    response.headers.set("Server-Timing", formatRebateServerTiming({
       cacheStatus: options.cacheStatus,
       timings: options.timings ?? null,
     }));
@@ -167,13 +134,12 @@ function startRebateBackgroundRefresh(
       const scanState = rebateScanStateCache.getStale(
         `${user.toLowerCase()}:${includeExact ? "exact" : "summary"}`,
       );
-      if (scanState?.working) return false;
       const cachedWatermark = rebateCacheWatermarks.getStale(cacheKey);
-      return Boolean(
-        cachedWatermark &&
-          cachedWatermark.watermark === watermark &&
-          Date.now() - cachedWatermark.refreshedAt < REBATE_UNCHANGED_WATERMARK_REFRESH_MS,
-      );
+      return shouldSkipUnchangedRebateRefresh({
+        hasWorkingCycle: Boolean(scanState?.working),
+        cachedWatermark,
+        currentWatermark: watermark,
+      });
     },
     build: () => buildRebatePayload(user, { includeExact }),
     toPayload: ({ payload }) => payload,

@@ -31,6 +31,20 @@ import {
   parseIndexerFinalityBlocks,
 } from "../../../lib/indexerFinality";
 import { summarizeEpochCoverage } from "./epochCoverage";
+import {
+  ageMs,
+  bigintToNonNegativeSafeNumber,
+  parseChainUintNumber,
+  parseStatusBlockString,
+  parseStatusCounter,
+  parseStatusEpochList,
+  parseStatusPositiveInteger,
+  parseStatusTimestamp,
+  parseStoredBlockNumber,
+  parseStoredEpochNumber,
+  safeNonNegativeBigintDelta,
+  toNum,
+} from "./dataSyncHealthPolicy";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -84,6 +98,9 @@ type IndexerRunStatus = {
   currentChunk?: number;
   totalChunks?: number;
   lastProcessedBlock?: string;
+  blockedAt?: number;
+  blockedReason?: "rpc_response_limit_single_block";
+  blockedBlock?: string;
 };
 
 type IndexerRepairStatus = {
@@ -185,6 +202,10 @@ type DataSyncHealthResponse = {
       currentChunk?: number;
       totalChunks?: number;
       lastProcessedBlock?: string | null;
+      blocked: boolean;
+      blockedAt?: number;
+      blockedReason?: "rpc_response_limit_single_block" | null;
+      blockedBlock?: string | null;
       runCompletedAgeMs: number | null;
       runHeartbeatAgeMs: number | null;
       active: boolean;
@@ -222,71 +243,8 @@ type DataSyncHealthResponse = {
   };
 };
 
-function toNum(v: unknown): number | null {
-  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null;
-}
-
 function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value));
-}
-
-function ageMs(timestamp: number | null, now: number) {
-  if (timestamp === null || !Number.isFinite(timestamp)) return null;
-  return Math.max(0, now - timestamp);
-}
-
-function parseStatusTimestamp(value: unknown): number | null {
-  if (typeof value !== "number") return null;
-  return Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function parseChainUintNumber(value: unknown): number | null {
-  if (typeof value !== "bigint" || value < 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
-  return Number(value);
-}
-
-function bigintToNonNegativeSafeNumber(value: bigint): number {
-  if (value <= 0n) return 0;
-  return value > MAX_SAFE_INTEGER_BIGINT ? Number.MAX_SAFE_INTEGER : Number(value);
-}
-
-function safeNonNegativeBigintDelta(upper: bigint, lower: bigint): number | null {
-  if (upper < lower) return null;
-  return bigintToNonNegativeSafeNumber(upper - lower);
-}
-
-function parseStatusCounter(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
-}
-
-function parseStatusPositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-function parseStatusBlockString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  return parseStoredBlockNumber(value)?.toString() ?? null;
-}
-
-function parseStatusEpochList(value: unknown): number[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const epochs = value
-    .map((entry) => (typeof entry === "number" ? String(entry) : typeof entry === "string" ? entry : null))
-    .map((entry) => parseStoredEpochNumber(entry))
-    .filter((entry): entry is number => entry !== null);
-  return epochs.length > 0 ? [...new Set(epochs)] : [];
-}
-
-function parseStoredBlockNumber(value: string | null | undefined): bigint | null {
-  if (!value || !/^\d+$/.test(value)) return null;
-  return BigInt(value);
-}
-
-function parseStoredEpochNumber(value: string | null | undefined): number | null {
-  if (!value || !/^[1-9]\d{0,15}$/.test(value)) return null;
-  const parsed = BigInt(value);
-  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
-  return Number(parsed);
 }
 
 function deriveServingMode(options: {
@@ -377,6 +335,10 @@ function redactHealthResponse(payload: DataSyncHealthResponse): DataSyncHealthRe
         currentChunk: undefined,
         totalChunks: undefined,
         lastProcessedBlock: null,
+        blocked: payload.indexer.run.blocked,
+        blockedAt: undefined,
+        blockedReason: null,
+        blockedBlock: null,
       },
       repair: {
         ageMs: payload.indexer.repair.ageMs,
@@ -597,6 +559,15 @@ async function buildDataSyncHealthPayload() {
   const runCompletedAt = parseStatusTimestamp(indexerRunStatus?.completedAt);
   const runHeartbeatAt = parseStatusTimestamp(indexerRunStatus?.lastHeartbeatAt);
   const runStartedAt = parseStatusTimestamp(indexerRunStatus?.startedAt);
+  const runBlockedAt = parseStatusTimestamp(indexerRunStatus?.blockedAt);
+  const runBlockedReason = indexerRunStatus?.blockedReason === "rpc_response_limit_single_block"
+    ? indexerRunStatus.blockedReason
+    : null;
+  const runBlockedBlock = parseStatusBlockString(indexerRunStatus?.blockedBlock);
+  const runIsBlocked =
+    runBlockedAt !== null &&
+    runBlockedReason !== null &&
+    runBlockedBlock !== null;
   const repairAt = parseStatusTimestamp(indexerRepairStatus?.at);
   const reconcileAt = parseStatusTimestamp(indexerReconcileStatus?.at);
   const runCompletedAgeMs = ageMs(runCompletedAt, now);
@@ -630,6 +601,7 @@ async function buildDataSyncHealthPayload() {
     reconcileAgeMs !== null &&
     reconcileAgeMs > INDEXER_HEARTBEAT_STALE_MS;
   const degraded =
+    runIsBlocked ||
     (lagToFinalityTargetBlocks !== null && lagToFinalityTargetBlocks > LAG_WARN_BLOCKS) ||
     (syncState === "catching_up" && missingEpochCount > 0) ||
     missingEpochsAreStale ||
@@ -719,6 +691,10 @@ async function buildDataSyncHealthPayload() {
           currentChunk: parseStatusPositiveInteger(indexerRunStatus?.currentChunk),
           totalChunks: parseStatusPositiveInteger(indexerRunStatus?.totalChunks),
           lastProcessedBlock: parseStatusBlockString(indexerRunStatus?.lastProcessedBlock) ?? undefined,
+          blocked: runIsBlocked,
+          blockedAt: runBlockedAt ?? undefined,
+          blockedReason: runBlockedReason,
+          blockedBlock: runBlockedBlock,
           runCompletedAgeMs,
           runHeartbeatAgeMs,
           active: runIsActive,
@@ -759,6 +735,7 @@ async function buildDataSyncHealthPayload() {
         recentWinsServingMode !== "indexer_fast_path" ? "Recent wins API is in recovery-capable mode and may pull RewardClaimed logs from chain." : null,
         runIsActive ? "Indexer watch loop is actively catching up." : null,
         runIsStale ? "Indexer heartbeat is stale; watch loop may be stuck or down." : null,
+        runIsBlocked ? "Indexer stopped on a one-block RPC response limit; operator intervention is required before a manual restart." : null,
       ].filter((hint): hint is string => Boolean(hint)),
       ts: Date.now(),
       env: {

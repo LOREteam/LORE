@@ -12,6 +12,19 @@ import {
 import { parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import { tileMaskToTileIds } from "../../lib/tileMask";
 import {
+  LIVE_STATE_LOG_SCAN_CHUNK,
+  buildLiveStateWithSnapshotFallback,
+  isFreshLiveStateSnapshotMemoryEntry,
+  isFreshLiveStateSnapshotSavedAt,
+  normalizeLiveStateSnapshotMaxAge,
+  normalizeLiveStateSnapshotSavedAt,
+  parseLiveStateChainEpoch,
+  parseLiveStateChainTileId,
+  parseLiveStateStoredBlock,
+  planLiveStateLogScanWindow,
+  withLiveStateTimeout,
+} from "./runtimePolicy";
+import {
   getBetJackpotContributionsWeiAfterBlocks,
   getEpochMapByIds,
   getEpochTilePoolsWei,
@@ -26,16 +39,12 @@ import {
 
 const LIVE_STATE_RPC_TIMEOUT_MS = 15_000;
 const LIVE_STATE_TILE_USER_COUNTS_TIMEOUT_MS = 3_000;
-const LIVE_STATE_LOG_SCAN_CHUNK = 10_000n;
 const LIVE_STATE_LOG_SCAN_MIN_CHUNK = 2_000n;
 const LIVE_STATE_TILE_USER_SCAN_MAX_BLOCK_QUERIES = 80_000n;
 const LIVE_STATE_TILE_USER_SCAN_MAX_RPC_CALLS = 8;
 const LIVE_STATE_TILE_USER_SCAN_MAX_LOGS = 10_000;
 const LIVE_STATE_SNAPSHOT_META_KEY = "snapshot:live-state:v1";
 const LIVE_STATE_SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const LIVE_STATE_SNAPSHOT_CACHE_MS = 2_000;
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 export const LIVE_STATE_ABI = GENERATED_LIVE_STATE_ABI;
 const [betPlacedSig] = encodeEventTopics({ abi: LIVE_STATE_EVENTS_ABI, eventName: "BetPlaced" });
@@ -96,42 +105,6 @@ let lastLiveStateSnapshotSignature: string | null = null;
 let liveStateSnapshotCache: CachedLiveStateSnapshot | null = null;
 let liveStateTileUserScan: LiveStateTileUserScan | null = null;
 
-function normalizeLiveStateSnapshotMaxAge(maxAgeMs: number) {
-  if (!Number.isFinite(maxAgeMs)) return null;
-  if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 0) return 0;
-  return maxAgeMs;
-}
-
-function normalizeLiveStateSnapshotSavedAt(savedAt: unknown) {
-  return typeof savedAt === "number" && Number.isSafeInteger(savedAt) && savedAt >= 0
-    ? savedAt
-    : null;
-}
-
-function isFreshLiveStateSnapshotSavedAt(savedAt: unknown, maxAgeMs: number | null, now = Date.now()) {
-  const normalizedSavedAt = normalizeLiveStateSnapshotSavedAt(savedAt);
-  if (normalizedSavedAt === null || !Number.isSafeInteger(now) || now < 0) return false;
-  if (normalizedSavedAt > now) return false;
-  return maxAgeMs === null || now - normalizedSavedAt <= maxAgeMs;
-}
-
-function isFreshLiveStateSnapshotMemoryEntry(
-  entry: CachedLiveStateSnapshot | null,
-  maxAgeMs: number | null,
-  now = Date.now(),
-): entry is CachedLiveStateSnapshot {
-  return Boolean(
-    entry &&
-      Number.isSafeInteger(now) &&
-      now >= 0 &&
-      Number.isSafeInteger(entry.loadedAt) &&
-      entry.loadedAt >= 0 &&
-      entry.loadedAt <= now &&
-      now - entry.loadedAt <= LIVE_STATE_SNAPSHOT_CACHE_MS &&
-      (entry.savedAt === null || isFreshLiveStateSnapshotSavedAt(entry.savedAt, maxAgeMs, now)),
-  );
-}
-
 function isTooManyResultsError(err: unknown): boolean {
   const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
   return (
@@ -148,23 +121,6 @@ function hasAnyPositivePool(tileData: LiveStateTileTuple | null) {
 
 function hasAnyPositiveCount(counts: number[] | null) {
   return Boolean(counts?.some((value) => Number.isFinite(value) && value > 0));
-}
-
-function parseChainUintPositiveNumber(value: bigint): number | null {
-  if (value <= 0n || value > MAX_SAFE_INTEGER_BIGINT) return null;
-  const parsed = Number(value);
-  return isSafePositiveInteger(parsed) ? parsed : null;
-}
-
-function parseStoredBlockNumber(value: string | null | undefined): bigint {
-  if (!value || !/^\d+$/.test(value)) return 0n;
-  return BigInt(value);
-}
-
-function parseChainTileId(value: bigint, gridSize: number) {
-  if (value <= 0n || value > BigInt(gridSize)) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= gridSize ? parsed : null;
 }
 
 async function scanEpochTileUserCountsFromChain(
@@ -213,14 +169,14 @@ async function scanEpochTileUserCountsFromChain(
     });
     if (decoded.eventName === "BetPlaced") {
       const args = decoded.args as { user: string; tileId: bigint };
-      const tileId = parseChainTileId(args.tileId, gridSize);
+      const tileId = parseLiveStateChainTileId(args.tileId, gridSize);
       if (tileId !== null) appendUsers([args.user], [tileId]);
       return;
     }
     if (decoded.eventName === "BatchBetsPlaced") {
       const args = decoded.args as { user: string; tileIds: readonly bigint[] };
       appendUsers([args.user], args.tileIds.flatMap((tileId) => {
-        const parsed = parseChainTileId(tileId, gridSize);
+        const parsed = parseLiveStateChainTileId(tileId, gridSize);
         return parsed === null ? [] : [parsed];
       }));
       return;
@@ -228,7 +184,7 @@ async function scanEpochTileUserCountsFromChain(
     if (decoded.eventName === "BatchBetsSameAmountPlaced") {
       const args = decoded.args as { user: string; tileIds: readonly bigint[] };
       appendUsers([args.user], args.tileIds.flatMap((tileId) => {
-        const parsed = parseChainTileId(tileId, gridSize);
+        const parsed = parseLiveStateChainTileId(tileId, gridSize);
         return parsed === null ? [] : [parsed];
       }));
       return;
@@ -251,10 +207,14 @@ async function scanEpochTileUserCountsFromChain(
       ) return null;
 
       const remainingBlockBudget = LIVE_STATE_TILE_USER_SCAN_MAX_BLOCK_QUERIES - queriedBlockWindows;
-      const requestedBlocks = [chunkSize, toBlock - cursor + 1n, remainingBlockBudget]
-        .reduce((smallest, value) => value < smallest ? value : smallest);
-      if (requestedBlocks <= 0n) return null;
-      const chunkTo = cursor + requestedBlocks - 1n;
+      const scanWindow = planLiveStateLogScanWindow({
+        cursor,
+        toBlock,
+        chunkSize,
+        remainingBlockBudget,
+      });
+      if (!scanWindow) return null;
+      const { requestedBlocks, chunkTo } = scanWindow;
       rpcCalls += 1;
       queriedBlockWindows += requestedBlocks;
 
@@ -324,41 +284,8 @@ export function fetchEpochTileUserCountsFromChain(
   return task;
 }
 
-function createTimeoutError(label: string, timeoutMs: number) {
-  return new Error(`live-state ${label} timed out after ${timeoutMs}ms`);
-}
-
-function isValidTimerDelayMs(timeoutMs: number) {
-  return Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= MAX_TIMER_DELAY_MS;
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  label: string,
-  timeoutMs = LIVE_STATE_RPC_TIMEOUT_MS,
-): Promise<T> {
-  if (!isValidTimerDelayMs(timeoutMs)) {
-    promise.catch(() => {});
-    throw new RangeError(`live-state ${label} timeout must be between 1 and 2147483647 milliseconds`);
-  }
-
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeoutId = setTimeout(() => reject(createTimeoutError(label, timeoutMs)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
-}
-
 async function readLiveStateContract<T>(label: string, promise: Promise<T>) {
-  return withTimeout(promise, label);
+  return withLiveStateTimeout(promise, LIVE_STATE_RPC_TIMEOUT_MS, `live-state ${label}`);
 }
 
 export function loadLiveStateSnapshot(maxAgeMs = LIVE_STATE_SNAPSHOT_MAX_AGE_MS): LiveStatePayload | null {
@@ -471,8 +398,8 @@ function buildStoredJackpotInfoFallback(snapshot: LiveStatePayload | null, recen
 
   let dailyPoolWei = 0n;
   let weeklyPoolWei = 0n;
-  const lastDailyBlock = latestDaily ? parseStoredBlockNumber(latestDaily.blockNumber) : 0n;
-  const lastWeeklyBlock = latestWeekly ? parseStoredBlockNumber(latestWeekly.blockNumber) : 0n;
+  const lastDailyBlock = latestDaily ? parseLiveStateStoredBlock(latestDaily.blockNumber) : 0n;
+  const lastWeeklyBlock = latestWeekly ? parseLiveStateStoredBlock(latestWeekly.blockNumber) : 0n;
 
   const jackpotContributions = getBetJackpotContributionsWeiAfterBlocks(lastDailyBlock, lastWeeklyBlock);
   dailyPoolWei = jackpotContributions.dailyWei;
@@ -642,7 +569,7 @@ export async function buildLiveStatePayload(): Promise<LiveStatePayload> {
   const pendingEpochDurationEffectiveFromEpoch = snapshotResults[8];
   const currentEpochString = currentEpoch.toString();
   const sameEpochSnapshot = snapshot?.currentEpoch === currentEpochString ? snapshot : null;
-  const currentEpochNumber = parseChainUintPositiveNumber(currentEpoch);
+  const currentEpochNumber = parseLiveStateChainEpoch(currentEpoch);
   const indexedTileUserCounts =
     currentEpochNumber !== null
       ? getEpochTileUserCounts(currentEpochNumber)
@@ -738,11 +665,9 @@ export async function buildLiveStatePayload(): Promise<LiveStatePayload> {
 }
 
 export async function getLiveStatePayloadWithSnapshotFallback(): Promise<LiveStatePayload> {
-  try {
-    return await buildLiveStatePayload();
-  } catch (error) {
-    const snapshot = loadLiveStateSnapshot(Number.POSITIVE_INFINITY) ?? buildStoredLiveStateBootstrap();
-    if (snapshot) return snapshot;
-    throw error;
-  }
+  return buildLiveStateWithSnapshotFallback({
+    build: buildLiveStatePayload,
+    loadSnapshot: () => loadLiveStateSnapshot(Number.POSITIVE_INFINITY),
+    buildStoredBootstrap: buildStoredLiveStateBootstrap,
+  });
 }

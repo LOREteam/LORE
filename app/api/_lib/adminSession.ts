@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest, NextResponse } from "next/server";
 import {
   ADMIN_AUTH_SESSION_ABSOLUTE_TTL_MS,
   ADMIN_AUTH_SESSION_IDLE_TTL_MS,

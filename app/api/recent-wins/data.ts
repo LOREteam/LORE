@@ -1,10 +1,9 @@
-import { decodeEventLog, encodeEventTopics, formatUnits, getAddress } from "viem";
+import { decodeEventLog, encodeEventTopics, formatUnits } from "viem";
 import { GAME_EVENTS_ABI as EVENTS_ABI } from "../../../config/generated/lineaOreV10Abi";
 import { parseOptionalNonNegativeBigIntEnv } from "../../../config/envParsing";
 import {
   computeWinningAmountWei,
   formatLineaAmountFixed,
-  formatLineaWeiDisplayNumber,
   parseLineaAmountWei,
 } from "../../lib/tokenAmountMath";
 import {
@@ -26,6 +25,18 @@ import {
   parseStoredPositiveIntegerOrZero,
 } from "../_lib/storedNumberParsing";
 import {
+  RECENT_WINS_RECOVERY_POLICY,
+  comparePublicBigIntDesc,
+  formatPublicRecentClaimAmount,
+  isFreshPublicReadModelSnapshot,
+  mergePublicRewardClaims,
+  normalizePublicReadModelAddress,
+  normalizePublicTransactionHash,
+  parsePublicReadModelTileId,
+  sortPublicRewardClaimsDesc,
+  toPublicWeiDisplayNumber,
+} from "../_lib/publicReadModelPolicy";
+import {
   getCanonicalRecoveryLogIdentity,
   isRecoveryContextCurrent,
   loadFinalizedRecoveryContext,
@@ -35,14 +46,13 @@ import {
 const RECENT_WINS_LIMIT = 100;
 const RECENT_WINS_SNAPSHOT_MAX_AGE_MS = 60 * 60 * 1000;
 const RECENT_WINS_SNAPSHOT_META_KEY = "snapshot:recent-wins:v2";
-const RECENT_WINS_LOG_SCAN_CHUNK = 10_000n;
-const RECENT_WINS_LOG_SCAN_MIN_CHUNK = 2_000n;
-const RECENT_WINS_RECOVERY_MAX_BLOCKS = 100_000n;
-const RECENT_WINS_RECOVERY_MAX_RPC_CALLS = 12;
-const RECENT_WINS_RECOVERY_MAX_LOGS = 250;
-const RECENT_WINS_RECOVERY_MAX_TIME_MS = 5_000;
+const RECENT_WINS_LOG_SCAN_CHUNK = RECENT_WINS_RECOVERY_POLICY.logScanChunk;
+const RECENT_WINS_LOG_SCAN_MIN_CHUNK = RECENT_WINS_RECOVERY_POLICY.logScanMinChunk;
+const RECENT_WINS_RECOVERY_MAX_BLOCKS = RECENT_WINS_RECOVERY_POLICY.maxBlocks;
+const RECENT_WINS_RECOVERY_MAX_RPC_CALLS = RECENT_WINS_RECOVERY_POLICY.maxRpcCalls;
+const RECENT_WINS_RECOVERY_MAX_LOGS = RECENT_WINS_RECOVERY_POLICY.maxLogs;
+const RECENT_WINS_RECOVERY_MAX_TIME_MS = RECENT_WINS_RECOVERY_POLICY.maxTimeMs;
 const RECENT_WINS_RECOVERY_BLOCK_LAG = parseOptionalNonNegativeBigIntEnv(process.env.RECENT_WINS_RECOVERY_BLOCK_LAG, 256n);
-const MAX_TILE_ID = 25;
 
 const [rewardClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "RewardClaimed" });
 
@@ -93,23 +103,13 @@ type BoundedClaimScan = {
 let recentWinsRecoveryCursor: RecentWinsRecoveryCursor | null = null;
 
 function normalizeStoredUserAddress(user: string): `0x${string}` | null {
-  try {
-    return getAddress(user).toLowerCase() as `0x${string}`;
-  } catch {
-    return null;
-  }
+  return normalizePublicReadModelAddress(user);
 }
 
 function normalizeClaimTxIdentity(txHash: string | null | undefined): `0x${string}` | null {
-  const normalized = typeof txHash === "string" ? txHash.trim().toLowerCase() : "";
-  return /^0x[0-9a-f]{64}$/.test(normalized) ? (normalized as `0x${string}`) : null;
+  return normalizePublicTransactionHash(txHash);
 }
 
-function buildRewardClaimStorageIdentity(row: Pick<StoredClaimRow, "txHash" | "user" | "epoch" | "blockNumber">) {
-  const txHash = normalizeClaimTxIdentity(row.txHash);
-  if (txHash) return `${txHash}_${row.user}_${row.epoch}`;
-  return `nohash_${parseStoredBlockNumber(row.blockNumber).toString()}_${row.user}_${row.epoch}`;
-}
 type StoredBetRow = ReturnType<typeof getBetRowsByEpochs>[number];
 
 function getJackpotKind(row: { isDailyJackpot?: boolean; isWeeklyJackpot?: boolean } | undefined): RecentWinJackpotKind | undefined {
@@ -144,8 +144,7 @@ function parseStoredEpochNumber(value: string | null | undefined): number {
 }
 
 function parseRecentWinTileId(value: number | null | undefined): number | null {
-  if (typeof value !== "number") return null;
-  return Number.isSafeInteger(value) && value >= 1 && value <= MAX_TILE_ID ? value : null;
+  return parsePublicReadModelTileId(value);
 }
 
 function getWinningAmountWeiForBet(row: StoredBetRow, winningTile: number) {
@@ -153,16 +152,15 @@ function getWinningAmountWeiForBet(row: StoredBetRow, winningTile: number) {
 }
 
 function compareBigIntDesc(left: bigint, right: bigint) {
-  if (left === right) return 0;
-  return left > right ? -1 : 1;
+  return comparePublicBigIntDesc(left, right);
 }
 
 function toDisplayNumberWei(value: bigint): number {
-  return formatLineaWeiDisplayNumber(value);
+  return toPublicWeiDisplayNumber(value);
 }
 
 function formatRecentClaimAmount(value: string | undefined): string {
-  return formatLineaAmountFixed(parseAmountWei(value), 2);
+  return formatPublicRecentClaimAmount(value);
 }
 
 function buildRecentResolvedWins(limit = RECENT_WINS_LIMIT): RecentWinRow[] {
@@ -270,18 +268,7 @@ function isTooManyResultsError(err: unknown): boolean {
 }
 
 function sortClaimsDesc<T extends { blockNumber: string; txHash?: string; user: string; epoch: string }>(rows: T[]) {
-  return [...rows].sort((a, b) => {
-    const aBlock = parseStoredBlockNumber(a.blockNumber);
-    const bBlock = parseStoredBlockNumber(b.blockNumber);
-    if (aBlock === bBlock) {
-      if ((a.txHash ?? "") === (b.txHash ?? "")) {
-        if (a.epoch === b.epoch) return a.user.localeCompare(b.user);
-        return parseStoredEpochNumber(b.epoch) - parseStoredEpochNumber(a.epoch);
-      }
-      return (b.txHash ?? "").localeCompare(a.txHash ?? "");
-    }
-    return aBlock > bBlock ? -1 : 1;
-  });
+  return sortPublicRewardClaimsDesc(rows);
 }
 
 function hasSameRecoveryContext(
@@ -359,7 +346,7 @@ async function scanRewardClaimLogsForward(fromBlock: bigint, toBlock: bigint): P
   const logs: RewardClaimLog[] = [];
   const deadlineAt = recoveryDeadlineAt();
   let cursor = fromBlock;
-  let chunkSize = RECENT_WINS_LOG_SCAN_CHUNK;
+  let chunkSize: bigint = RECENT_WINS_LOG_SCAN_CHUNK;
   let queriedBlocks = 0n;
   let rpcCalls = 0;
 
@@ -417,7 +404,7 @@ async function scanRewardClaimLogsBackward(
   const logs: RewardClaimLog[] = [];
   const deadlineAt = recoveryDeadlineAt();
   let toBlock = startToBlock;
-  let chunkSize = RECENT_WINS_LOG_SCAN_CHUNK;
+  let chunkSize: bigint = RECENT_WINS_LOG_SCAN_CHUNK;
   let queriedBlocks = 0n;
   let rpcCalls = 0;
 
@@ -486,10 +473,7 @@ function mapClaimLog(log: RewardClaimLog): StoredClaimRow | null {
 
 
 function mergeClaims(existing: StoredClaimRow[], incoming: StoredClaimRow[]) {
-  const byKey = new Map<string, StoredClaimRow>();
-  for (const row of existing) byKey.set(buildRewardClaimStorageIdentity(row), row);
-  for (const row of incoming) byKey.set(buildRewardClaimStorageIdentity(row), row);
-  return sortClaimsDesc(Array.from(byKey.values())).slice(0, RECENT_WINS_LIMIT);
+  return mergePublicRewardClaims(existing, incoming, RECENT_WINS_LIMIT);
 }
 
 function shouldRecoverRecentWins(
@@ -628,15 +612,7 @@ export async function getRecentWinsPayloadForRender(): Promise<RecentWinsPayload
 }
 
 function isFreshRecentWinsSnapshotSavedAt(savedAt: unknown, now = Date.now()) {
-  return (
-    typeof savedAt === "number" &&
-    Number.isSafeInteger(savedAt) &&
-    savedAt >= 0 &&
-    Number.isSafeInteger(now) &&
-    now >= 0 &&
-    savedAt <= now &&
-    now - savedAt <= RECENT_WINS_SNAPSHOT_MAX_AGE_MS
-  );
+  return isFreshPublicReadModelSnapshot(savedAt, RECENT_WINS_SNAPSHOT_MAX_AGE_MS, now);
 }
 
 export function loadRecentWinsSnapshot(expectedWatermark: string | null = getRecentWinsDataWatermark()): RecentWinsPayload | null {

@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest, NextResponse } from "next/server";
 import { CHAT_AUTH_SESSION_TTL_MS, normalizeChatAuthAddress } from "../../lib/chatAuth";
 
 const COOKIE_NAME = "lore_chat_session";

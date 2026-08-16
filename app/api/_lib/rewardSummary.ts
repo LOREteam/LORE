@@ -4,7 +4,7 @@ import { CONTRACT_ADDRESS, isSafePositiveInteger, publicClient } from "./dataBri
 import { parseLineaAmountWei } from "../../lib/tokenAmountMath";
 import { getEpochMapByIds } from "../../../server/storage";
 import { createRouteCache } from "./routeCache";
-import { parseStoredPositiveIntegerOrZero } from "./storedNumberParsing";
+import { parseReadModelEpochNumber, parseReadModelTileId } from "./readModelSafety";
 import {
   isRecoveryContextCurrent,
   loadFinalizedRecoveryContext,
@@ -16,7 +16,6 @@ const MULTICALL_CHUNK = 100;
 const MAX_EPOCHS_PER_REQUEST = 400;
 const REWARD_SUMMARY_CACHE_TTL_MS = 30_000;
 const REWARD_SUMMARY_CACHE_MAX_KEYS = 200;
-const MAX_TILE_ID = 25;
 
 export type RewardEpochRow = {
   winningTile: number;
@@ -54,22 +53,6 @@ function getRewardSummaryCacheKey(user: string, epochs: number[]) {
   return `${getAddress(user).toLowerCase()}:${epochs.join(",")}`;
 }
 
-function parseRewardTileNumber(value: bigint | number): number | null {
-  let parsed: number;
-  if (typeof value === "bigint") {
-    if (value <= 0n || value > BigInt(MAX_TILE_ID)) return null;
-    parsed = Number(value);
-  } else {
-    parsed = value;
-  }
-  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_TILE_ID ? parsed : null;
-}
-
-function parseRewardEpochKey(value: string): number | null {
-  const parsed = parseStoredPositiveIntegerOrZero(value);
-  return parsed > 0 ? parsed : null;
-}
-
 async function loadEpochRows(epochs: number[]): Promise<{
   epochRows: Record<string, RewardEpochRuntimeRow>;
   recoveryContext: FinalizedRecoveryContext | null;
@@ -84,7 +67,7 @@ async function loadEpochRows(epochs: number[]): Promise<{
 
   for (const epoch of normalizedEpochs) {
     const stored = storedRows[String(epoch)];
-    const storedWinningTile = stored ? parseRewardTileNumber(stored.winningTile) : null;
+    const storedWinningTile = stored ? parseReadModelTileId(stored.winningTile) : null;
     if (stored && storedWinningTile !== null) {
       epochRows[String(epoch)] = {
         winningTile: storedWinningTile,
@@ -125,7 +108,7 @@ async function loadEpochRows(epochs: number[]): Promise<{
       const isResolved = Boolean(row[3]);
       const totalPool = row[0];
       const rewardPool = row[1];
-      const winningTile = parseRewardTileNumber(row[2]);
+      const winningTile = parseReadModelTileId(row[2]);
       if (!isResolved || rewardPool <= 0n || winningTile === null) return;
       const recovered = {
         winningTile,
@@ -173,7 +156,7 @@ export async function loadRewardMapsForUserEpochs(
     const { epochRows: epochMap, recoveryContext } = await loadEpochRows(normalizedEpochs);
     const winningEpochs = Object.entries(epochMap)
       .flatMap(([epoch, row]) => {
-        const parsedEpoch = parseRewardEpochKey(epoch);
+        const parsedEpoch = parseReadModelEpochNumber(epoch);
         return parsedEpoch !== null && isSafePositiveInteger(parsedEpoch)
           ? [{
               epoch: parsedEpoch,

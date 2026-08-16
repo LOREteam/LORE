@@ -18,39 +18,21 @@ import {
 } from "../_lib/runtimeMetrics";
 import { logRouteError } from "../_lib/routeError";
 import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
+import {
+  isFreshLiveStatePayloadFetchedAt,
+  resolveLiveStateAdmission,
+  withLiveStateTimeout,
+} from "./runtimePolicy";
 
 const LIVE_STATE_CACHE_MS = 4_000;
 const LIVE_STATE_REQUEST_TIMEOUT_MS = 8_000;
-const LIVE_STATE_STALE_FAST_PATH_MS = 60_000;
 const LIVE_STATE_CACHE_MAX_KEYS = 2;
 const ROUTE_METRIC_KEY = "api/live-state";
 const CACHE_KEY = "latest";
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const liveStateRouteCache = createRouteCache<LiveStatePayload>(LIVE_STATE_CACHE_MAX_KEYS);
 
 function jsonNoStore(payload: LiveStatePayload, status = 200) {
   return applyNoStoreHeaders(NextResponse.json(payload, { status }));
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
-    promise.catch(() => {});
-    throw new RangeError(`${label} timeout must be between 1 and 2147483647 milliseconds`);
-  }
-
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
 }
 
 function startLiveStateRefresh() {
@@ -67,36 +49,26 @@ function startLiveStateRefresh() {
   });
 }
 
-function isFreshLiveStatePayloadFetchedAt(fetchedAt: unknown, now: number) {
-  return (
-    typeof fetchedAt === "number" &&
-    Number.isSafeInteger(fetchedAt) &&
-    fetchedAt >= 0 &&
-    Number.isSafeInteger(now) &&
-    now >= 0 &&
-    fetchedAt <= now &&
-    now - fetchedAt <= LIVE_STATE_STALE_FAST_PATH_MS
-  );
-}
-
 function canServeStaleImmediately(payload: LiveStatePayload, now: number) {
   return isFreshLiveStatePayloadFetchedAt(payload.fetchedAt, now);
 }
 
 export async function GET(request: Request) {
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
-  const rateLimited = await enforceSharedRateLimit(request, {
-    bucket: "api-live-state",
-    limit: 120,
-    windowMs: 60_000,
+  const admission = await resolveLiveStateAdmission({
+    enforceRateLimit: () => enforceSharedRateLimit(request, {
+      bucket: "api-live-state",
+      limit: 120,
+      windowMs: 60_000,
+    }),
+    readFreshCache: (now) => liveStateRouteCache.getFresh(CACHE_KEY, now),
   });
-  if (rateLimited) {
+  if (admission.kind === "rate-limited") {
     failRouteMetric(metric, 429);
-    return applyNoStoreHeaders(rateLimited);
+    return applyNoStoreHeaders(admission.response);
   }
 
-  const now = Date.now();
-  const cached = liveStateRouteCache.getFresh(CACHE_KEY, now);
+  const { now, cached } = admission;
   if (cached) {
     markRouteCacheHit(ROUTE_METRIC_KEY);
     finishRouteMetric(metric, 200);
@@ -125,7 +97,7 @@ export async function GET(request: Request) {
   try {
     const inflight = liveStateRouteCache.getInflight(CACHE_KEY);
     const payload = inflight
-      ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await withTimeout(inflight, LIVE_STATE_REQUEST_TIMEOUT_MS, "live-state inflight"))
+      ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await withLiveStateTimeout(inflight, LIVE_STATE_REQUEST_TIMEOUT_MS, "live-state inflight"))
       : await (() => {
           const { requestPromise } = startVersionedInflightBuild({
             cache: liveStateRouteCache,
@@ -134,7 +106,7 @@ export async function GET(request: Request) {
             build: () => getLiveStatePayloadWithSnapshotFallback(),
             toPayload: (result) => result,
           });
-          return withTimeout(requestPromise, LIVE_STATE_REQUEST_TIMEOUT_MS, "live-state refresh");
+          return withLiveStateTimeout(requestPromise, LIVE_STATE_REQUEST_TIMEOUT_MS, "live-state refresh");
         })();
 
     finishRouteMetric(metric, 200);

@@ -2,21 +2,54 @@ import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { consumeRateLimit } from "../../../server/storage";
 import { getClientIdentity } from "./clientIdentity";
-import { consumeExternalRateLimit, hasExternalRateLimitStore } from "./externalRateLimit";
+import {
+  consumeExternalRateLimit,
+  hasExternalRateLimitStore,
+  requiresExternalSharedLock,
+} from "./externalRateLimit";
 import { applyNoStoreHeaders } from "./responseHeaders";
 import { describeSafeRouteError } from "./routeError";
 
-type RateLimitState = {
+export type RateLimitState = {
   count: number;
   windowStartedAt: number;
   resetAt: number;
 };
 
-type RateLimitOptions = {
+export type RateLimitOptions = {
   bucket: string;
   limit: number;
   windowMs: number;
 };
+
+export type RateLimitStateDecision =
+  | { allowed: true }
+  | { allowed: false; retryAfterSeconds: number };
+
+type BoundedRateLimitStateOptions = {
+  stateMap: Map<string, RateLimitState>;
+  key: string;
+  limit: number;
+  windowMs: number;
+  now: number;
+  maxEntries: number;
+};
+
+type WeakIdentityRateLimitStateOptions = {
+  weakBucketMap: Map<string, RateLimitState>;
+  localMap: Map<string, RateLimitState>;
+  bucket: string;
+  key: string;
+  limit: number;
+  windowMs: number;
+  now: number;
+  maxWeakEntries: number;
+  maxLocalEntries: number;
+};
+
+type BoundedRateLimitStatePlan =
+  | { allowed: true; nextState: RateLimitState }
+  | { allowed: false; retryAfterSeconds: number };
 
 const localFallbackMap = new Map<string, RateLimitState>();
 const MAX_LOCAL_FALLBACK_ENTRIES = 2_000;
@@ -37,12 +70,12 @@ function hashIdentity(identity: string) {
   return createHash("sha256").update(identity).digest("hex").slice(0, 32);
 }
 
-function formatRateLimitLogBucket(bucket: string) {
+export function formatRateLimitLogBucket(bucket: string) {
   const normalized = bucket.replace(RATE_LIMIT_LOG_LABEL_ALLOWED, "-").slice(0, MAX_RATE_LIMIT_LOG_LABEL_LENGTH);
   return normalized || "unknown";
 }
 
-function normalizeRetryAfterSeconds(value: number) {
+export function normalizeRetryAfterSeconds(value: number) {
   if (!Number.isFinite(value)) return 1;
   return Math.min(MAX_RETRY_AFTER_SECONDS, Math.max(1, Math.ceil(value)));
 }
@@ -63,7 +96,13 @@ function rateLimitConfigurationUnavailableResponse(): NextResponse {
   );
 }
 
-function hasValidRateLimitOptions({ bucket, limit, windowMs }: RateLimitOptions) {
+function rateLimitServiceUnavailableResponse(): NextResponse {
+  return applyNoStoreHeaders(
+    NextResponse.json({ error: "Rate limit service unavailable" }, { status: 503 }),
+  );
+}
+
+export function hasValidRateLimitOptions({ bucket, limit, windowMs }: RateLimitOptions) {
   return (
     typeof bucket === "string" &&
     bucket.length <= MAX_RATE_LIMIT_BUCKET_LENGTH &&
@@ -77,23 +116,23 @@ function hasValidRateLimitOptions({ bucket, limit, windowMs }: RateLimitOptions)
   );
 }
 
-function enforceLocalFallback(
-  bucket: string,
-  key: string,
-  limit: number,
-  windowMs: number,
-  now: number,
-): NextResponse | null {
-  const fallbackKey = `${bucket}:${key}`;
+function planBoundedRateLimitState({
+  stateMap,
+  key,
+  limit,
+  windowMs,
+  now,
+  maxEntries,
+}: BoundedRateLimitStateOptions): BoundedRateLimitStatePlan {
   const windowStartedAt = now - (now % windowMs);
   const resetAt = windowStartedAt + windowMs;
-  const current = localFallbackMap.get(fallbackKey);
-  if (!current && localFallbackMap.size >= MAX_LOCAL_FALLBACK_ENTRIES) {
-    for (const [storedKey, state] of localFallbackMap.entries()) {
-      if (state.resetAt <= now) localFallbackMap.delete(storedKey);
+  const current = stateMap.get(key);
+  if (!current && stateMap.size >= maxEntries) {
+    for (const [storedKey, state] of stateMap.entries()) {
+      if (state.resetAt <= now) stateMap.delete(storedKey);
     }
-    if (localFallbackMap.size >= MAX_LOCAL_FALLBACK_ENTRIES) {
-      return rateLimitExceededResponse((resetAt - now) / 1000);
+    if (stateMap.size >= maxEntries) {
+      return { allowed: false, retryAfterSeconds: (resetAt - now) / 1000 };
     }
   }
   const normalized =
@@ -102,16 +141,80 @@ function enforceLocalFallback(
       : current;
 
   if (normalized.count >= limit) {
-    return rateLimitExceededResponse((normalized.resetAt - now) / 1000);
+    return { allowed: false, retryAfterSeconds: (normalized.resetAt - now) / 1000 };
   }
 
-  localFallbackMap.set(fallbackKey, {
-    count: normalized.count + 1,
-    windowStartedAt,
-    resetAt,
-  });
+  return {
+    allowed: true,
+    nextState: {
+      count: normalized.count + 1,
+      windowStartedAt,
+      resetAt,
+    },
+  };
+}
 
-  return null;
+export function consumeBoundedRateLimitState(
+  options: BoundedRateLimitStateOptions,
+): RateLimitStateDecision {
+  const plan = planBoundedRateLimitState(options);
+  if (!plan.allowed) return plan;
+  options.stateMap.set(options.key, plan.nextState);
+  return { allowed: true };
+}
+
+export function consumeWeakIdentityRateLimitState({
+  weakBucketMap,
+  localMap,
+  bucket,
+  key,
+  limit,
+  windowMs,
+  now,
+  maxWeakEntries,
+  maxLocalEntries,
+}: WeakIdentityRateLimitStateOptions): RateLimitStateDecision {
+  const weakBucketLimit = Math.max(limit * 4, limit + 10);
+  const weakBucketPlan = planBoundedRateLimitState({
+    stateMap: weakBucketMap,
+    key: bucket,
+    limit: weakBucketLimit,
+    windowMs,
+    now,
+    maxEntries: maxWeakEntries,
+  });
+  if (!weakBucketPlan.allowed) return weakBucketPlan;
+
+  const identityDecision = consumeBoundedRateLimitState({
+    stateMap: localMap,
+    key: `${bucket}:${key}`,
+    limit,
+    windowMs,
+    now,
+    maxEntries: maxLocalEntries,
+  });
+  if (!identityDecision.allowed) return identityDecision;
+
+  weakBucketMap.set(bucket, weakBucketPlan.nextState);
+  return { allowed: true };
+}
+
+function enforceLocalFallback(
+  bucket: string,
+  key: string,
+  limit: number,
+  windowMs: number,
+  now: number,
+): NextResponse | null {
+  const decision = consumeBoundedRateLimitState({
+    stateMap: localFallbackMap,
+    key: `${bucket}:${key}`,
+    limit,
+    windowMs,
+    now,
+    maxEntries: MAX_LOCAL_FALLBACK_ENTRIES,
+  });
+  return decision.allowed ? null : rateLimitExceededResponse(decision.retryAfterSeconds);
 }
 
 function enforceWeakIdentityFallback(
@@ -121,43 +224,18 @@ function enforceWeakIdentityFallback(
   windowMs: number,
   now: number,
 ): NextResponse | null {
-  const windowStartedAt = now - (now % windowMs);
-  const resetAt = windowStartedAt + windowMs;
-  const current = weakBucketFallbackMap.get(bucket);
-  if (!current && weakBucketFallbackMap.size >= MAX_WEAK_BUCKET_FALLBACK_ENTRIES) {
-    for (const [storedBucket, state] of weakBucketFallbackMap.entries()) {
-      if (state.resetAt <= now) weakBucketFallbackMap.delete(storedBucket);
-    }
-    if (weakBucketFallbackMap.size >= MAX_WEAK_BUCKET_FALLBACK_ENTRIES) {
-      return rateLimitExceededResponse((resetAt - now) / 1000);
-    }
-  }
-  const normalized =
-    !current || current.resetAt <= now || current.windowStartedAt !== windowStartedAt
-      ? { count: 0, windowStartedAt, resetAt }
-      : current;
-
-  const weakBucketLimit = Math.max(limit * 4, limit + 10);
-  if (normalized.count >= weakBucketLimit) {
-    return rateLimitExceededResponse((normalized.resetAt - now) / 1000);
-  }
-
-  const identityLimited = enforceLocalFallback(bucket, key, limit, windowMs, now);
-  if (identityLimited) return identityLimited;
-
-  weakBucketFallbackMap.set(bucket, {
-    count: normalized.count + 1,
-    windowStartedAt,
-    resetAt,
+  const decision = consumeWeakIdentityRateLimitState({
+    weakBucketMap: weakBucketFallbackMap,
+    localMap: localFallbackMap,
+    bucket,
+    key,
+    limit,
+    windowMs,
+    now,
+    maxWeakEntries: MAX_WEAK_BUCKET_FALLBACK_ENTRIES,
+    maxLocalEntries: MAX_LOCAL_FALLBACK_ENTRIES,
   });
-
-  if (weakBucketFallbackMap.size > MAX_WEAK_BUCKET_FALLBACK_ENTRIES) {
-    for (const [storedBucket, state] of weakBucketFallbackMap.entries()) {
-      if (state.resetAt <= now) weakBucketFallbackMap.delete(storedBucket);
-    }
-  }
-
-  return null;
+  return decision.allowed ? null : rateLimitExceededResponse(decision.retryAfterSeconds);
 }
 
 export async function enforceSharedRateLimit(
@@ -194,7 +272,20 @@ export async function enforceSharedRateLimit(
     return enforceLocalFallback(bucket, key, limit, windowMs, now);
   }
 
-  if (hasExternalRateLimitStore()) {
+  const externalStoreConfigured = hasExternalRateLimitStore();
+  const externalStoreConfigurationPresent = Boolean(
+    process.env.UPSTASH_REDIS_REST_URL?.trim() ||
+    process.env.UPSTASH_REDIS_REST_TOKEN?.trim(),
+  );
+  const externalStoreRequired =
+    externalStoreConfigurationPresent ||
+    process.env.RATE_LIMIT_EXTERNAL_FAIL_CLOSED === "1" ||
+    requiresExternalSharedLock();
+  if (!externalStoreConfigured && externalStoreRequired) {
+    return rateLimitServiceUnavailableResponse();
+  }
+
+  if (externalStoreConfigured) {
     try {
       const result = await consumeExternalRateLimit(bucket, key, limit, windowMs, now);
       if (result.allowed) return null;
@@ -204,12 +295,10 @@ export async function enforceSharedRateLimit(
       if (!externalLimiterWarnedBuckets.has(warnKey)) {
         externalLimiterWarnedBuckets.add(warnKey);
         const details = describeSafeRouteError(error);
-        console.warn(`[rate-limit:${formatRateLimitLogBucket(bucket)}] external store fallback: ${details.name}: ${details.message}`);
+        console.warn(`[rate-limit:${formatRateLimitLogBucket(bucket)}] external store fallback: ${details.name}`);
       }
-      if (process.env.RATE_LIMIT_EXTERNAL_FAIL_CLOSED === "1") {
-        return applyNoStoreHeaders(
-          NextResponse.json({ error: "Rate limit service unavailable" }, { status: 503 }),
-        );
+      if (externalStoreRequired) {
+        return rateLimitServiceUnavailableResponse();
       }
     }
   }

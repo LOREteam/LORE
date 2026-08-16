@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getAddress } from "viem";
 import { applyNoStoreHeaders } from "../_lib/responseHeaders";
 import { createRouteCache } from "../_lib/routeCache";
@@ -14,14 +13,17 @@ import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
 import { RewardRow, loadRewardMapsForUserEpochs } from "../_lib/rewardSummary";
 import { readBoundedJsonBody } from "../_lib/boundedJsonBody";
-import { parsePositiveIntegerValue } from "../_lib/queryParams";
+import {
+  buildPublicReadModelFailure,
+  createPublicReadModelJsonResponse,
+  parsePublicRewardsEpochs,
+} from "../_lib/publicReadModelPolicy";
 
 type RewardsRequest = {
   user?: unknown;
   epochs?: unknown;
 };
 
-const MAX_EPOCHS_PER_REQUEST = 400;
 const MAX_REQUEST_BODY_BYTES = 16_384;
 const REWARDS_ROUTE_CACHE_MS = 15_000;
 const MAX_REWARDS_CACHE_ENTRIES = 200;
@@ -31,30 +33,10 @@ type RewardsPayload = {
   rewards: Record<string, RewardRow>;
   error?: string;
 };
-type EpochsParseResult =
-  | { ok: true; epochs: number[] }
-  | { ok: false; error: string };
-
 const rewardsRouteCache = createRouteCache<RewardsPayload>(MAX_REWARDS_CACHE_ENTRIES);
 
 function jsonNoStore(payload: RewardsPayload | { error: string }, status = 200) {
-  return applyNoStoreHeaders(NextResponse.json(payload, { status }));
-}
-
-function normalizeEpochs(epochsRaw: unknown): EpochsParseResult {
-  if (!Array.isArray(epochsRaw)) return { ok: true, epochs: [] };
-  if (epochsRaw.length > MAX_EPOCHS_PER_REQUEST) {
-    return { ok: false, error: "Too many epochs" };
-  }
-  const epochs = new Set<number>();
-  for (const value of epochsRaw) {
-    const parsed = parsePositiveIntegerValue(value);
-    if (parsed === null || parsed > 1_000_000) {
-      return { ok: false, error: "Invalid epochs" };
-    }
-    epochs.add(parsed);
-  }
-  return { ok: true, epochs: [...epochs] };
+  return createPublicReadModelJsonResponse(payload, status);
 }
 
 async function buildRewardsPayload(user: string, epochs: number[]): Promise<RewardsPayload> {
@@ -101,7 +83,7 @@ export async function POST(request: Request) {
       return jsonNoStore({ error: "Missing or invalid user" }, 400);
     }
 
-    const parsedEpochs = normalizeEpochs(body.epochs);
+    const parsedEpochs = parsePublicRewardsEpochs(body.epochs);
     if (!parsedEpochs.ok) {
       failRouteMetric(metric, 400);
       return jsonNoStore({ error: parsedEpochs.error }, 400);
@@ -143,6 +125,6 @@ export async function POST(request: Request) {
       return jsonNoStore(staleCache);
     }
     failRouteMetric(metric, 500);
-    return jsonNoStore({ rewards: {}, error: "fetch failed" }, 500);
+    return jsonNoStore(buildPublicReadModelFailure({ rewards: {} }), 500);
   }
 }

@@ -5,6 +5,12 @@ import { readAdminSession } from "../../_lib/adminSession";
 import { getEpochMap, getMetaBigInt, getMetaJson, getMetaNumber, getRecentJackpots, getRecentRewardClaims } from "../../../../server/storage";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
+import {
+  extractOpsLogTimestamp,
+  parseLiveIndexerProgress,
+  parseOpsLogTimestampMs,
+  parseStoredEpochNumber,
+} from "./runtimePolicy";
 
 type LogSourceSummary = {
   key: string;
@@ -32,23 +38,6 @@ type RecentResolvedEpoch = {
   resolvedBlock: string | null;
   isDailyJackpot: boolean;
   isWeeklyJackpot: boolean;
-};
-
-type LiveIndexerProgress = {
-  scanFromBlock: string | null;
-  scanToBlock: string | null;
-  scanBlockCount: number | null;
-  chunkIndex: number | null;
-  chunkTotal: number | null;
-  chunkFromBlock: string | null;
-  chunkToBlock: string | null;
-  fetchedLogs: number | null;
-  parsedBets: number | null;
-  parsedEpochs: number | null;
-  parsedJackpots: number | null;
-  parsedClaims: number | null;
-  wroteChunk: boolean;
-  progressPct: number | null;
 };
 
 type IndexerRunStatus = {
@@ -91,8 +80,6 @@ const EVENT_PATTERNS = [
 
 const OPS_LOG_CACHE_MS = 5_000;
 const MAX_OPS_LOG_TAIL_BYTES = 256 * 1024;
-const ISO_LOG_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{3}))?Z$/;
-
 let loadedLogSourcesCache:
   | {
       key: string;
@@ -144,22 +131,6 @@ function sanitizeLogText(line: string) {
     .trim();
 }
 
-function extractTimestamp(line: string) {
-  const match = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)/);
-  return match?.[1] ?? null;
-}
-
-function parseLogTimestampMs(value: string | null) {
-  if (!value) return Number.NEGATIVE_INFINITY;
-  const match = value.match(ISO_LOG_TIMESTAMP_RE);
-  if (!match) return Number.NEGATIVE_INFINITY;
-  const canonical = `${match[1]}.${match[2] ?? "000"}Z`;
-  const timestampMs = Date.parse(canonical);
-  return Number.isSafeInteger(timestampMs) && new Date(timestampMs).toISOString() === canonical
-    ? timestampMs
-    : Number.NEGATIVE_INFINITY;
-}
-
 function detectLevel(line: string): "error" | "warn" | "info" {
   if (/\[ERROR\]/i.test(line) || /\berror\b/i.test(line) || /\bfailed\b/i.test(line)) return "error";
   if (/\[WARN\]/i.test(line) || /\bwarn(?:ing)?\b/i.test(line)) return "warn";
@@ -176,29 +147,6 @@ function trimLogPrefix(line: string) {
 
 function matchesAny(line: string, patterns: readonly RegExp[]) {
   return patterns.some((pattern) => pattern.test(line));
-}
-
-const SAFE_DECIMAL_INTEGER_RE = /^[1-9]\d{0,15}$/;
-const SAFE_ZERO_DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-
-function parseSafeDecimalInteger(value: string | null | undefined, options: { allowZero?: boolean } = {}) {
-  if (!value) return null;
-  const allowZero = options.allowZero === true;
-  const pattern = allowZero ? SAFE_ZERO_DECIMAL_INTEGER_RE : SAFE_DECIMAL_INTEGER_RE;
-  if (!pattern.test(value)) return null;
-  const parsed = BigInt(value);
-  if (parsed > MAX_SAFE_INTEGER_BIGINT) return null;
-  if (!allowZero && parsed <= 0n) return null;
-  return Number(parsed);
-}
-
-function parseStoredEpochNumber(value: string | null | undefined) {
-  return parseSafeDecimalInteger(value) ?? 0;
-}
-
-function parseLogCounter(value: string | null | undefined, options: { allowZero?: boolean } = {}) {
-  return parseSafeDecimalInteger(value, options);
 }
 
 function summarizeLogSource(file: string, key: string, label: string): LogSourceSummary {
@@ -306,7 +254,7 @@ function collectRecentLogEntries(
 
     for (const line of matched) {
       rows.push({
-        ts: extractTimestamp(line),
+        ts: extractOpsLogTimestamp(line),
         level: detectLevel(line),
         source: loaded.source.label,
         message: trimLogPrefix(line),
@@ -316,8 +264,8 @@ function collectRecentLogEntries(
 
   return rows
     .sort((left, right) => {
-      const leftTs = parseLogTimestampMs(left.ts);
-      const rightTs = parseLogTimestampMs(right.ts);
+      const leftTs = parseOpsLogTimestampMs(left.ts);
+      const rightTs = parseOpsLogTimestampMs(right.ts);
       return rightTs - leftTs;
     })
     .slice(0, limit);
@@ -341,103 +289,6 @@ function getRecentResolvedEpochs(limit = 8): RecentResolvedEpoch[] {
     .filter((row) => row.epoch > 0)
     .sort((left, right) => right.epoch - left.epoch)
     .slice(0, limit);
-}
-
-function parseLiveIndexerProgress(lines: string[]): LiveIndexerProgress | null {
-  let scanFromBlock: string | null = null;
-  let scanToBlock: string | null = null;
-  let scanBlockCount: number | null = null;
-  let chunkIndex: number | null = null;
-  let chunkTotal: number | null = null;
-  let chunkFromBlock: string | null = null;
-  let chunkToBlock: string | null = null;
-  let fetchedLogs: number | null = null;
-  let parsedBets: number | null = null;
-  let parsedEpochs: number | null = null;
-  let parsedJackpots: number | null = null;
-  let parsedClaims: number | null = null;
-  let wroteChunk = false;
-
-  for (const line of lines) {
-    const scanMatch = line.match(/\[indexer\]\s+Scanning blocks\s+(\d+)\D+(\d+)\s+\((\d+)\s+blocks\)/i);
-    if (scanMatch) {
-      scanFromBlock = scanMatch[1] ?? null;
-      scanToBlock = scanMatch[2] ?? null;
-      scanBlockCount = parseLogCounter(scanMatch[3], { allowZero: false });
-      chunkIndex = null;
-      chunkTotal = null;
-      chunkFromBlock = null;
-      chunkToBlock = null;
-      fetchedLogs = null;
-      parsedBets = null;
-      parsedEpochs = null;
-      parsedJackpots = null;
-      parsedClaims = null;
-      wroteChunk = false;
-      continue;
-    }
-
-    const chunkMatch = line.match(/\[indexer\]\s+Chunk\s+(\d+)\/(\d+):\s+(\d+)\s+->\s+(\d+)/i);
-    if (chunkMatch) {
-      chunkIndex = parseLogCounter(chunkMatch[1], { allowZero: false });
-      chunkTotal = parseLogCounter(chunkMatch[2], { allowZero: false });
-      chunkFromBlock = chunkMatch[3] ?? null;
-      chunkToBlock = chunkMatch[4] ?? null;
-      fetchedLogs = null;
-      parsedBets = null;
-      parsedEpochs = null;
-      parsedJackpots = null;
-      parsedClaims = null;
-      wroteChunk = false;
-      continue;
-    }
-
-    const fetchedMatch = line.match(/\[indexer\]\s+Chunk\s+(\d+)\/(\d+)\s+fetched\s+(\d+)\s+logs/i);
-    if (fetchedMatch) {
-      fetchedLogs = parseLogCounter(fetchedMatch[3], { allowZero: true }) ?? 0;
-      continue;
-    }
-
-    const parsedMatch = line.match(
-      /\[indexer\]\s+Chunk\s+(\d+)\/(\d+)\s+parsed:\s+(\d+)\s+bets,\s+(\d+)\s+epochs,\s+(\d+)\s+jackpots,\s+(\d+)\s+claims/i,
-    );
-    if (parsedMatch) {
-      parsedBets = parseLogCounter(parsedMatch[3], { allowZero: true }) ?? 0;
-      parsedEpochs = parseLogCounter(parsedMatch[4], { allowZero: true }) ?? 0;
-      parsedJackpots = parseLogCounter(parsedMatch[5], { allowZero: true }) ?? 0;
-      parsedClaims = parseLogCounter(parsedMatch[6], { allowZero: true }) ?? 0;
-      continue;
-    }
-
-    const wroteMatch = line.match(/\[indexer\]\s+Chunk\s+(\d+)\/(\d+)\s+written to local SQLite/i);
-    if (wroteMatch) {
-      wroteChunk = true;
-    }
-  }
-
-  if (!scanFromBlock && !chunkFromBlock) return null;
-
-  const progressPct =
-    chunkIndex != null && chunkTotal != null && chunkTotal > 0
-      ? Math.max(0, Math.min(100, (chunkIndex / chunkTotal) * 100))
-      : null;
-
-  return {
-    scanFromBlock,
-    scanToBlock,
-    scanBlockCount,
-    chunkIndex,
-    chunkTotal,
-    chunkFromBlock,
-    chunkToBlock,
-    fetchedLogs,
-    parsedBets,
-    parsedEpochs,
-    parsedJackpots,
-    parsedClaims,
-    wroteChunk,
-    progressPct,
-  };
 }
 
 export async function GET(request: NextRequest) {
