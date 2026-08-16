@@ -11,7 +11,10 @@ import { useMiningStandardBetPath } from "./useMiningStandardBetPath";
 interface UseMiningBetExecutionOptions {
   assertNativeGasBalance: (gas: bigint, gasOverrides?: GasOverrides) => Promise<void>;
   assertSufficientAllowance: (requiredRaw: bigint) => Promise<void>;
-  ensureAllowance: (requiredRaw: bigint) => Promise<void>;
+  ensureAllowance: (
+    requiredRaw: bigint,
+    assertBeforeSend?: () => Promise<void> | void,
+  ) => Promise<void>;
   ensureContractPreflight: () => Promise<void>;
   estimateGas: (
     functionName:

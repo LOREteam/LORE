@@ -1,16 +1,71 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { CHAT_RATE_LIMIT_MS, type ChatMessage } from "../../hooks/useChat";
 import type { ChatProfile } from "../../hooks/useChatProfile";
+import type { ChatMessage } from "../../lib/chatMessages";
+import { CHAT_RATE_LIMIT_MS } from "../../lib/chatRateLimit";
 import { ChatMessageRow } from "./ChatMessage";
 import { ChatProfileModal } from "./ChatProfileModal";
 import { emptyStates } from "../../lib/loreTexts";
 import { LoreText } from "../LoreText";
-import { normalizeChatAuthAddress } from "../../lib/chatAuth";
+import { isOwnChatMessageSender } from "../../lib/chatWalletRuntime";
 
+const CHAT_VERIFY_FAILED = "Verification failed. Try again or refresh the page.";
 const CHAT_VERIFY_ERROR = "Verification error. Try again or refresh the page.";
-const CHAT_PANEL_ID = "lore-chat-panel";
+export const CHAT_PANEL_ID = "lore-chat-panel";
+
+export async function resolveChatVerificationError(
+  onEnsureAuth: () => Promise<boolean>,
+): Promise<string | null> {
+  try {
+    return await onEnsureAuth() ? null : CHAT_VERIFY_FAILED;
+  } catch {
+    return CHAT_VERIFY_ERROR;
+  }
+}
+
+interface ChatToggleButtonProps {
+  open: boolean;
+  unread: number;
+  onToggle: () => void;
+}
+
+export function ChatToggleButton({ open, unread, onToggle }: ChatToggleButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-violet-300/18 bg-violet-600 shadow-lg shadow-violet-500/20 transition-all duration-200 hover:-translate-y-0.5 hover:bg-violet-500 hover:shadow-violet-500/28 active:translate-y-0 active:scale-95 focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070712]"
+      aria-label={open ? "Close chat" : "Open chat"}
+      aria-controls={CHAT_PANEL_ID}
+      aria-expanded={open}
+      title={open ? "Close chat" : "Open chat"}
+    >
+      {open ? (
+        <svg aria-hidden="true" className="h-3.5 w-3.5 sm:h-4 sm:w-4" viewBox="0 0 16 16" fill="none">
+          <path d="M4 4l8 8M12 4l-8 8" stroke="white" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        <svg aria-hidden="true" className="h-3.5 w-3.5 sm:h-4 sm:w-4" viewBox="0 0 19 18" fill="none">
+          <path
+            d="M1.5 2.75C1.5 1.784 2.284 1 3.25 1h12.5C16.716 1 17.5 1.784 17.5 2.75v8.5c0 .966-.784 1.75-1.75 1.75H11l-1.5 2.5L8 13H3.25C2.284 13 1.5 12.216 1.5 11.25v-8.5z"
+            fill="white"
+            opacity="0.95"
+          />
+          <circle cx="6.25" cy="7" r="1.15" fill="#0a0a1c" />
+          <circle cx="9.5" cy="7" r="1.15" fill="#0a0a1c" />
+          <circle cx="12.75" cy="7" r="1.15" fill="#0a0a1c" />
+        </svg>
+      )}
+
+      {!open && unread > 0 && (
+        <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-1 text-[8px] font-bold text-white sm:h-4.5 sm:min-w-4.5 sm:text-[10px]">
+          {unread > 99 ? "99+" : unread}
+        </span>
+      )}
+    </button>
+  );
+}
 
 interface Props {
   messages: ChatMessage[];
@@ -209,7 +264,6 @@ export const ChatWindow = React.memo(function ChatWindow({
     [handleSend],
   );
 
-  const myAddr = normalizeChatAuthAddress(walletAddress);
   const sendLocked = sendCooldownRemainingMs > 0;
   const sendCooldownSeconds = Math.max(1, Math.ceil(sendCooldownRemainingMs / 1000));
   const sendButtonTitle = sendLocked
@@ -316,7 +370,7 @@ export const ChatWindow = React.memo(function ChatWindow({
             </div>
           ) : (
             messages.map((msg) => (
-              <ChatMessageRow key={msg.id} message={msg} isOwn={normalizeChatAuthAddress(msg.sender) === myAddr} />
+              <ChatMessageRow key={msg.id} message={msg} isOwn={isOwnChatMessageSender(msg.sender, walletAddress)} />
             ))
           )}
         </div>
@@ -397,11 +451,7 @@ export const ChatWindow = React.memo(function ChatWindow({
                   type="button"
                   onClick={() => {
                     setVerifyError(null);
-                    onEnsureAuth().then(ok => {
-                      if (!ok) setVerifyError("Verification failed. Try again or refresh the page.");
-                    }).catch(() => {
-                      setVerifyError(CHAT_VERIFY_ERROR);
-                    });
+                    void resolveChatVerificationError(onEnsureAuth).then(setVerifyError);
                   }}
                   className="h-11 w-full rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-violet-500"
                 >

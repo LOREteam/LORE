@@ -2,7 +2,18 @@ import { encodeFunctionData, maxUint256 } from "viem";
 import type { PublicClient } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS, TOKEN_ABI } from "../constants";
 import { log } from "../logger";
-import { delay } from "../utils";
+import {
+  clearVerifiedPendingMiningApprovalState,
+  createPendingMiningAgreementClients,
+  executeReservedMiningApprovalWalletSink,
+  readAgreedPendingMiningAllowance,
+  readAgreedPendingMiningApprovalNonce,
+  readPendingMiningApprovalState,
+  recoverPendingMiningApproval,
+  withPendingMiningApprovalLock,
+  writePendingMiningApprovalState,
+} from "../miningTxPath";
+import { delay, isUserRejection } from "../utils";
 import type { GasOverrides, SilentSendFn } from "../../hooks/useMining.types";
 import type { PendingApproveState, ReceiptState } from "../../hooks/useMining.stateTypes";
 import { isNetworkError, isRetryableError, withMiningRpcTimeout } from "../../hooks/useMining.shared";
@@ -10,7 +21,6 @@ import { readWithNetworkRetry } from "./networkRetry";
 
 const APPROVE_ALLOWANCE_POLL_MS = 1_000;
 const APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS = 8_000;
-const APPROVE_PENDING_TIMEOUT_MS = 30_000;
 
 function computeBootstrapAllowancePollDeadline(now: number, timeoutMs: number): number | null {
   if (
@@ -40,30 +50,8 @@ export function selectBootstrapApprovalSubmissionNonce(
   trackedNonce: unknown,
   freshPendingNonce: unknown,
 ): number | null {
-  return normalizeBootstrapApprovalNonce(trackedNonce ?? freshPendingNonce);
-}
-
-function getPendingApproveAgeMs(pendingApprove: PendingApproveState, now: number): number | null {
-  if (
-    !Number.isSafeInteger(now) ||
-    now < 0 ||
-    !Number.isSafeInteger(pendingApprove.submittedAt) ||
-    pendingApprove.submittedAt < 0 ||
-    pendingApprove.submittedAt > now + 5_000
-  ) {
-    return null;
-  }
-  return now - pendingApprove.submittedAt;
-}
-
-function assertPendingApproveReplacementReady(pendingApprove: PendingApproveState, waitMessage: string): void {
-  const pendingAgeMs = getPendingApproveAgeMs(pendingApprove, Date.now());
-  if (pendingAgeMs === null) {
-    throw new Error("Approval pending state is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
-  }
-  if (pendingAgeMs <= APPROVE_PENDING_TIMEOUT_MS) {
-    throw new Error(waitMessage);
-  }
+  if (trackedNonce !== undefined && trackedNonce !== null) return null;
+  return normalizeBootstrapApprovalNonce(freshPendingNonce);
 }
 
 function formatLineaWeiOneDecimal(rawValue: bigint): string {
@@ -149,35 +137,25 @@ export async function prepareAutoMineBootstrap({
     return false;
   }
 
-  const liveAllowance = await readWithNetworkRetry({
-    actionLabel: "reading allowance",
-    initialMs: networkInitialMs,
-    isActive: autoMineActive,
-    maxAttempts: maxNetworkAttempts,
-    maxMs: maxNetworkMs,
-    onProgress,
-    read: async () =>
-      (await withMiningRpcTimeout(publicClient.readContract({
-        address: LINEA_TOKEN_ADDRESS,
-        abi: TOKEN_ABI,
-        functionName: "allowance",
-        args: [actorAddress, CONTRACT_ADDRESS],
-      }), "bootstrap.allowance")) as bigint,
-    shouldRetry: isNetworkError,
-  });
+  const approvalAgreementClients = createPendingMiningAgreementClients();
 
-  if (liveAllowance >= absoluteTotal) {
-    clearPendingApprove();
-    return true;
-  }
-
-  const readAllowance = async () =>
-    (await withMiningRpcTimeout(publicClient.readContract({
-      address: LINEA_TOKEN_ADDRESS,
-      abi: TOKEN_ABI,
-      functionName: "allowance",
-      args: [actorAddress, CONTRACT_ADDRESS],
-    }), "bootstrap.allowance.refresh")) as bigint;
+  return withPendingMiningApprovalLock({
+    chainId: APP_CHAIN_ID,
+    token: LINEA_TOKEN_ADDRESS,
+    spender: CONTRACT_ADDRESS,
+    actor: actorAddress,
+  }, async () => {
+  const readAllowance = async () => {
+    if (!approvalAgreementClients) {
+      throw new Error("Two independent RPC origins are required for approval allowance verification.");
+    }
+    return readAgreedPendingMiningAllowance(
+      approvalAgreementClients,
+      LINEA_TOKEN_ADDRESS,
+      CONTRACT_ADDRESS,
+      actorAddress,
+    );
+  };
 
   const pollAllowanceUntil = async (timeoutMs: number) => {
     const deadline = computeBootstrapAllowancePollDeadline(Date.now(), timeoutMs);
@@ -185,7 +163,7 @@ export async function prepareAutoMineBootstrap({
     while (autoMineActive() && Date.now() < deadline) {
       try {
         if ((await readAllowance()) >= absoluteTotal) {
-          clearPendingApprove();
+          clearApprovalState();
           refetchAllowance();
           return true;
         }
@@ -197,32 +175,85 @@ export async function prepareAutoMineBootstrap({
     return false;
   };
 
-  if (pendingApproveRef.current) {
-    const allowanceUpdated = await pollAllowanceUntil(APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS);
-    if (allowanceUpdated) return true;
+  const clearApprovalState = () => {
+    const current = readPendingMiningApprovalState(
+      APP_CHAIN_ID,
+      LINEA_TOKEN_ADDRESS,
+      CONTRACT_ADDRESS,
+      actorAddress,
+    );
+    if (current && !clearVerifiedPendingMiningApprovalState(current)) {
+      throw new Error("Approval safety state could not be cleared. Restore browser storage before retrying.");
+    }
+    clearPendingApprove();
+  };
+
+  let pendingApprovalState = readPendingMiningApprovalState(
+    APP_CHAIN_ID,
+    LINEA_TOKEN_ADDRESS,
+    CONTRACT_ADDRESS,
+    actorAddress,
+  );
+  if (pendingApprovalState) {
+    pendingApproveRef.current = {
+      ...(pendingApprovalState.hash ? { hash: pendingApprovalState.hash } : {}),
+      submittedAt: pendingApprovalState.ts,
+      nonce: pendingApprovalState.nonce,
+    };
+  } else if (pendingApproveRef.current) {
+    const migrated = writePendingMiningApprovalState({
+      chainId: APP_CHAIN_ID,
+      token: LINEA_TOKEN_ADDRESS,
+      spender: CONTRACT_ADDRESS,
+      actor: actorAddress,
+      nonce: pendingApproveRef.current.nonce,
+      ...(pendingApproveRef.current.hash ? { hash: pendingApproveRef.current.hash } : {}),
+    });
+    if (!migrated) {
+      throw new Error("Approval pending state could not be persisted; Auto-Miner approval is blocked.");
+    }
+    pendingApprovalState = migrated;
   }
 
-  let approvalConfirmed = false;
+  if (await readAllowance() >= absoluteTotal) {
+    clearApprovalState();
+    refetchAllowance();
+    return true;
+  }
+
+  if (pendingApprovalState) {
+    if (!approvalAgreementClients) {
+      throw new Error("Two independent RPC origins are required to reconcile the pending approval.");
+    }
+    const recovery = await recoverPendingMiningApproval(approvalAgreementClients, pendingApprovalState);
+    if (recovery === "confirmed") {
+      const allowanceUpdated = await pollAllowanceUntil(APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS);
+      if (allowanceUpdated) return true;
+      throw new Error("Finalized approval is not reflected in live allowance; manual reconciliation is required.");
+    }
+    if (recovery === "reverted") {
+      clearApprovalState();
+      pendingApprovalState = null;
+    } else if (recovery === "pending") {
+      throw new Error("Approval transaction is still pending. Wait for finalized two-RPC confirmation.");
+    } else {
+      throw new Error("Pending approval identity cannot be proven; manual reconciliation is required.");
+    }
+  }
+
+  if (!approvalAgreementClients) {
+    throw new Error("Two independent RPC origins are required before approval submission.");
+  }
+
   for (let attempt = 0; attempt < approveRetryMax; attempt += 1) {
-    let approvalState: ReceiptState = "confirmed";
     let approvalNonce: number | null = null;
-    let enteredApprovalSendPhase = false;
+    let approveHash: `0x${string}` | null = null;
     try {
-      if (pendingApproveRef.current) {
-        assertPendingApproveReplacementReady(
-          pendingApproveRef.current,
-          "Approval transaction is still pending. Wait for confirmation before auto-mine continues.",
-        );
-      }
-      const trackedApprovalNonce = pendingApproveRef.current?.nonce;
-      const approvalNonceRaw = trackedApprovalNonce ?? await withMiningRpcTimeout(
-        publicClient.getTransactionCount({
-          address: actorAddress,
-          blockTag: "pending",
-        }),
-        "bootstrap.getTransactionCount",
+      const approvalNonceRaw = await readAgreedPendingMiningApprovalNonce(
+        approvalAgreementClients,
+        actorAddress,
       );
-      approvalNonce = selectBootstrapApprovalSubmissionNonce(trackedApprovalNonce, approvalNonceRaw);
+      approvalNonce = selectBootstrapApprovalSubmissionNonce(undefined, approvalNonceRaw);
       if (approvalNonce === null) {
         throw new Error("Approval nonce is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
       }
@@ -243,78 +274,121 @@ export async function prepareAutoMineBootstrap({
           args: [CONTRACT_ADDRESS, maxUint256],
         });
         await assertNativeGasBalance(minGasApprove, approveOverrides);
-        enteredApprovalSendPhase = true;
-        const approveHash = await silentSend(
-          { to: LINEA_TOKEN_ADDRESS, data, gas: minGasApprove, nonce: approvalNonce },
-          approveOverrides,
+        const approvalReservation = writePendingMiningApprovalState({
+          chainId: APP_CHAIN_ID,
+          token: LINEA_TOKEN_ADDRESS,
+          spender: CONTRACT_ADDRESS,
+          actor: actorAddress,
+          nonce: approvalNonce,
+        });
+        if (!approvalReservation) {
+          throw new Error("Approval intent could not be persisted and verified; Auto-Miner approval is blocked.");
+        }
+        pendingApproveRef.current = { submittedAt: approvalReservation.ts, nonce: approvalNonce };
+        approveHash = await executeReservedMiningApprovalWalletSink(
+          approvalReservation,
+          () => undefined,
+          () => silentSend(
+            { to: LINEA_TOKEN_ADDRESS, data, gas: minGasApprove, nonce: approvalNonce! },
+            approveOverrides,
+          ),
         );
-        pendingApproveRef.current = { hash: approveHash, submittedAt: Date.now(), nonce: approvalNonce };
-        approvalState = await waitReceipt(approveHash, publicClient);
+        const submitted = writePendingMiningApprovalState({ ...approvalReservation, hash: approveHash });
+        if (!submitted) {
+          throw new Error("Submitted approval could not be persisted; manual reconciliation is required.");
+        }
+        pendingApproveRef.current = { hash: approveHash, submittedAt: submitted.ts, nonce: approvalNonce };
+        await waitReceipt(approveHash, publicClient);
       } else {
         await ensurePreferredWallet();
         await assertNativeGasBalance(minGasApprove, approveOverrides);
-        enteredApprovalSendPhase = true;
-        const approveHash = await writeApprove({
-          address: LINEA_TOKEN_ADDRESS,
-          abi: TOKEN_ABI,
-          functionName: "approve",
-          args: [CONTRACT_ADDRESS, maxUint256],
+        const approvalReservation = writePendingMiningApprovalState({
           chainId: APP_CHAIN_ID,
+          token: LINEA_TOKEN_ADDRESS,
+          spender: CONTRACT_ADDRESS,
+          actor: actorAddress,
           nonce: approvalNonce,
-          ...writeApproveOverrides,
         });
-        pendingApproveRef.current = { hash: approveHash, submittedAt: Date.now(), nonce: approvalNonce };
-        approvalState = await waitReceipt(approveHash, publicClient);
+        if (!approvalReservation) {
+          throw new Error("Approval intent could not be persisted and verified; Auto-Miner approval is blocked.");
+        }
+        pendingApproveRef.current = { submittedAt: approvalReservation.ts, nonce: approvalNonce };
+        approveHash = await executeReservedMiningApprovalWalletSink(
+          approvalReservation,
+          () => undefined,
+          () => writeApprove({
+            address: LINEA_TOKEN_ADDRESS,
+            abi: TOKEN_ABI,
+            functionName: "approve",
+            args: [CONTRACT_ADDRESS, maxUint256],
+            chainId: APP_CHAIN_ID,
+            nonce: approvalNonce,
+            ...writeApproveOverrides,
+          }),
+        );
+        const submitted = writePendingMiningApprovalState({ ...approvalReservation, hash: approveHash });
+        if (!submitted) {
+          throw new Error("Submitted approval could not be persisted; manual reconciliation is required.");
+        }
+        pendingApproveRef.current = { hash: approveHash, submittedAt: submitted.ts, nonce: approvalNonce };
+        await waitReceipt(approveHash, publicClient);
       }
 
-      if (approvalState === "pending") {
-        log.warn("AutoMine", "approve tx pending; waiting before another approve");
-        await delay(4_000);
+      if (!approveHash) {
+        throw new Error("Submitted approval hash is unavailable; manual reconciliation is required.");
       }
-    } catch (error) {
-      if (enteredApprovalSendPhase && approvalNonce !== null && !pendingApproveRef.current) {
-        pendingApproveRef.current = {
-          submittedAt: Date.now(),
-          nonce: approvalNonce,
-        };
-      }
-      if (!isRetryableError(error) && !isNetworkError(error)) throw error;
-      log.warn("AutoMine", `approve confirmation retry ${attempt + 1}/${approveRetryMax}`, error);
-    }
-
-    refetchAllowance();
-    await delay(1_500);
-    const allowanceUpdated = await pollAllowanceUntil(
-      approvalState === "pending"
-        ? APPROVE_PENDING_TIMEOUT_MS
-        : APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS,
-    );
-    if (allowanceUpdated) {
-      approvalConfirmed = true;
-      break;
-    }
-
-    if (attempt < approveRetryMax - 1) {
-      await delay(Math.min(2_000 * (attempt + 1), 5_000));
-    }
-  }
-
-  if (!approvalConfirmed) {
-    if (pendingApproveRef.current) {
-      const allowanceUpdated = await pollAllowanceUntil(APPROVE_PENDING_TIMEOUT_MS);
-      if (allowanceUpdated) return true;
-      const pendingAgeMs = getPendingApproveAgeMs(pendingApproveRef.current, Date.now());
-      if (pendingAgeMs === null) {
-        throw new Error("Approval pending state is unavailable or unsafe. Wait for wallet nonce recovery, then retry.");
-      }
-      throw new Error(
-        pendingAgeMs > APPROVE_PENDING_TIMEOUT_MS
-          ? "Approval transaction is still pending or underpriced. Retry once more to replace it."
-          : "Approval transaction is still pending. Wait for confirmation before auto-mine continues.",
+      const submittedState = readPendingMiningApprovalState(
+        APP_CHAIN_ID,
+        LINEA_TOKEN_ADDRESS,
+        CONTRACT_ADDRESS,
+        actorAddress,
       );
+      if (!submittedState?.hash || submittedState.hash !== approveHash) {
+        throw new Error("Submitted approval state is unavailable; manual reconciliation is required.");
+      }
+      const recovery = await recoverPendingMiningApproval(approvalAgreementClients, submittedState);
+      if (recovery === "confirmed") {
+        const allowanceUpdated = await pollAllowanceUntil(APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS);
+        if (!allowanceUpdated) {
+          throw new Error("Finalized approval is not reflected in live allowance; manual reconciliation is required.");
+        }
+        return true;
+      }
+      if (recovery === "reverted") {
+        clearApprovalState();
+        if (attempt < approveRetryMax - 1) continue;
+        throw new Error("Approval transaction reverted after finality.");
+      }
+      if (recovery === "pending") {
+        throw new Error("Approval transaction is still pending. Wait for finalized two-RPC confirmation.");
+      }
+      throw new Error("Submitted approval identity cannot be proven; manual reconciliation is required.");
+    } catch (error) {
+      const pendingAfterError = readPendingMiningApprovalState(
+        APP_CHAIN_ID,
+        LINEA_TOKEN_ADDRESS,
+        CONTRACT_ADDRESS,
+        actorAddress,
+      );
+      if (pendingAfterError) {
+        throw error;
+      }
+      clearApprovalState();
+      if (isUserRejection(error)) {
+        throw error;
+      }
+      if (!isRetryableError(error) && !isNetworkError(error)) {
+        throw error;
+      }
+      log.warn("AutoMine", `pre-submit approval retry ${attempt + 1}/${approveRetryMax}`, error);
+      if (attempt < approveRetryMax - 1) {
+        await delay(Math.min(2_000 * (attempt + 1), 5_000));
+      } else {
+        throw error;
+      }
     }
-    throw new Error("Approval not confirmed after retries");
   }
 
-  return true;
+  throw new Error("Approval not confirmed after safe pre-submit retries");
+  });
 }

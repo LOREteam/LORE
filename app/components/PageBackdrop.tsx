@@ -3,6 +3,7 @@
 import React from "react";
 import Image from "next/image";
 import { CrystalParticles } from "./CrystalParticles";
+import { shouldRenderMotionDecorations } from "../lib/reducedMotionRuntime";
 
 interface PageBackdropProps {
   motionReady: boolean;
@@ -12,7 +13,7 @@ interface PageBackdropProps {
 export function PageBackdrop({ motionReady, reducedMotion }: PageBackdropProps) {
   return (
     <>
-      {motionReady && !reducedMotion && <CrystalParticles />}
+      {shouldRenderMotionDecorations(motionReady, reducedMotion) && <CrystalParticles />}
 
       <div
         className="pointer-events-none fixed inset-0 bg-[#05040b]"

@@ -46,7 +46,7 @@ function normalizeBalanceDecimals(balance: BalanceData, fallbackDecimals = 18): 
   return Number.isInteger(decimals) && decimals >= 0 && decimals <= 255 ? decimals : null;
 }
 
-function parseDecimalNumberToUnits(value: number, decimals: number): bigint | null {
+export function parseDecimalNumberToUnits(value: number, decimals: number): bigint | null {
   if (!Number.isFinite(value) || value < 0) return null;
   const text = String(value);
   if (!/^\d+(?:\.\d+)?$/.test(text)) return null;
@@ -57,7 +57,7 @@ function parseDecimalNumberToUnits(value: number, decimals: number): bigint | nu
   return whole * 10n ** BigInt(decimals) + fractional;
 }
 
-function isBalanceBelowDecimalThreshold(balance: BalanceData, threshold: number, fallbackDecimals = 18): boolean {
+export function isBalanceBelowDecimalThreshold(balance: BalanceData, threshold: number, fallbackDecimals = 18): boolean {
   if (!balance) return false;
   if (typeof balance.value !== "bigint") return true;
   const decimals = normalizeBalanceDecimals(balance, fallbackDecimals);
@@ -67,12 +67,16 @@ function isBalanceBelowDecimalThreshold(balance: BalanceData, threshold: number,
   return balance.value < thresholdUnits;
 }
 
-function isBalanceBelowWholeToken(balance: BalanceData, wholeTokens = 1n, fallbackDecimals = 18): boolean {
+export function isBalanceBelowWholeToken(balance: BalanceData, wholeTokens = 1n, fallbackDecimals = 18): boolean {
   if (!balance) return false;
   if (typeof balance.value !== "bigint") return true;
   const decimals = normalizeBalanceDecimals(balance, fallbackDecimals);
   if (decimals === null) return true;
   return balance.value < wholeTokens * 10n ** BigInt(decimals);
+}
+
+export function getMiningReadOnlyBlockReason(readOnlyReason: string | null | undefined, isAutoMining = false) {
+  return !isAutoMining && readOnlyReason ? readOnlyReason : null;
 }
 
 function sanitizeLastBet(value: unknown): LastBet | null {
@@ -151,8 +155,9 @@ export function useMiningGuards({
         onOpenWalletSettings();
         return;
       }
-      if (readOnlyReason) {
-        notify(readOnlyReason, "warning");
+      const readOnlyBlockReason = getMiningReadOnlyBlockReason(readOnlyReason);
+      if (readOnlyBlockReason) {
+        notify(readOnlyBlockReason, "warning");
         return;
       }
       if (bettingLocked) {
@@ -192,8 +197,9 @@ export function useMiningGuards({
       onOpenWalletSettings();
       return;
     }
-    if (readOnlyReason) {
-      notify(readOnlyReason, "warning");
+    const readOnlyBlockReason = getMiningReadOnlyBlockReason(readOnlyReason);
+    if (readOnlyBlockReason) {
+      notify(readOnlyBlockReason, "warning");
       return;
     }
     if (bettingLocked) {
@@ -226,8 +232,9 @@ export function useMiningGuards({
         onOpenWalletSettings();
         return;
       }
-      if (!isAutoMining && readOnlyReason) {
-        notify(readOnlyReason, "warning");
+      const readOnlyBlockReason = getMiningReadOnlyBlockReason(readOnlyReason, isAutoMining);
+      if (readOnlyBlockReason) {
+        notify(readOnlyBlockReason, "warning");
         return;
       }
       if (!isAutoMining && bettingLocked) {

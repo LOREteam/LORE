@@ -13,7 +13,16 @@ import { APP_CHAIN_ID } from "../lib/constants";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { sanitizeSupportLogPayload } from "../lib/sentrySanitize";
-import { safeToFixed } from "../lib/utils";
+import {
+  AdminOpsButton,
+  AdminOpsExternalLink,
+  describeAdminClientError,
+  formatAdminAge as fmtAge,
+  formatAdminGib as fmtGib,
+  formatAdminPercent as fmtPercent,
+  formatAdminWholePercent as fmtPct,
+  normalizeConnectedAdminAddresses,
+} from "./adminOpsPresentation";
 import {
   ADMIN_AUTH_WALLET,
   ADMIN_AUTH_WALLET_CONFIGURED,
@@ -243,11 +252,6 @@ function getOpsPayloadError(payload: unknown) {
   return typeof error === "string" && error.trim() ? error : null;
 }
 
-function describeAdminClientError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return String(sanitizeSupportLogPayload(message)).replace(/\s+/g, " ").trim().slice(0, 220) || "Admin operation failed";
-}
-
 function shortenAddress(value: string) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
@@ -259,27 +263,6 @@ function formatAdminWalletLabel() {
 function fmtNumber(value?: number | null) {
   if (value == null || !Number.isFinite(value)) return "...";
   return value.toLocaleString();
-}
-
-function fmtPercent(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return "...";
-  return `${safeToFixed(value, 2, "...")}%`;
-}
-
-function fmtAge(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return "...";
-  if (value < 1000) return `${Math.round(value)} ms`;
-  const seconds = value / 1000;
-  if (seconds < 60) return `${safeToFixed(seconds, 1, "...")} s`;
-  const minutes = seconds / 60;
-  if (minutes < 60) return `${safeToFixed(minutes, 1, "...")} min`;
-  const hours = minutes / 60;
-  return `${safeToFixed(hours, 1, "...")} h`;
-}
-
-function fmtGib(value?: number | null) {
-  if (value == null || !Number.isFinite(value) || value < 0) return "...";
-  return `${safeToFixed(value / 1_073_741_824, 2, "...")} GiB`;
 }
 
 function fmtMode(value?: string | null) {
@@ -334,11 +317,6 @@ function routePerfToneClass(metric: RuntimeMetric) {
   return "border-emerald-500/30 bg-emerald-500/10";
 }
 
-function fmtPct(value: number | null) {
-  if (value == null || !Number.isFinite(value)) return "...";
-  return `${safeToFixed(value, 0, "...")}%`;
-}
-
 export default function AdminOpsClient() {
   const { ready, authenticated, login, logout } = usePrivy();
   const [privyModalStatus, setPrivyModalStatus] = useState({ isOpen: false, ready: false });
@@ -385,14 +363,7 @@ export default function AdminOpsClient() {
   }, []);
 
   const connectedAddresses = useMemo(() => {
-    const values = new Set<string>();
-    const connectedAddress = normalizeAdminAuthAddress(address);
-    if (connectedAddress) values.add(connectedAddress);
-    for (const wallet of wallets) {
-      const walletAddress = normalizeAdminAuthAddress(wallet?.address);
-      if (walletAddress) values.add(walletAddress);
-    }
-    return [...values];
+    return normalizeConnectedAdminAddresses([address, ...wallets.map((wallet) => wallet?.address)]);
   }, [address, wallets]);
 
   const isAdminWallet = ADMIN_AUTH_WALLET_CONFIGURED && connectedAddresses.includes(ADMIN_AUTH_WALLET);
@@ -991,26 +962,21 @@ export default function AdminOpsClient() {
             </span>
             {canSeePrivateDiagnostics ? (
               <>
-                <a
+                <AdminOpsExternalLink
                   href="/api/health/runtime"
-                  target="_blank"
-                  rel="noopener noreferrer"
                   className="inline-flex items-center rounded-full border border-white/10 bg-white/4 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/8"
                 >
                   Runtime JSON
-                </a>
-                <a
+                </AdminOpsExternalLink>
+                <AdminOpsExternalLink
                   href="/api/health/data-sync"
-                  target="_blank"
-                  rel="noopener noreferrer"
                   className="inline-flex items-center rounded-full border border-white/10 bg-white/4 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/8"
                 >
                   Data Sync JSON
-                </a>
+                </AdminOpsExternalLink>
               </>
             ) : null}
-            <button
-              type="button"
+            <AdminOpsButton
               disabled={loading}
               onClick={() => {
                 void fetchHealth();
@@ -1019,10 +985,9 @@ export default function AdminOpsClient() {
               className="inline-flex items-center rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
             >
               {loading ? "Refreshing" : "Refresh"}
-            </button>
+            </AdminOpsButton>
             {!authenticated ? (
-              <button
-                type="button"
+              <AdminOpsButton
                 onClick={(event) => privyLogin.requestLogin(
                   event.currentTarget,
                   event.currentTarget.closest<HTMLElement>("[data-privy-login-focus-root]"),
@@ -1036,24 +1001,22 @@ export default function AdminOpsClient() {
                 className="inline-flex min-h-11 items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200 outline-none hover:bg-emerald-500/20 focus-visible:ring-2 focus-visible:ring-emerald-300/80 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {privyLogin.uiState.buttonText}
-              </button>
+              </AdminOpsButton>
             ) : isAdminWallet && !adminAuthReady ? (
-              <button
-                type="button"
+              <AdminOpsButton
                 disabled={adminAuthBusy}
                 onClick={() => void handleVerifyAdminWallet()}
                 className="inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-sky-100 hover:bg-sky-500/20 disabled:opacity-50"
               >
                 {adminAuthBusy ? "Verifying" : "Verify Admin Wallet"}
-              </button>
+              </AdminOpsButton>
             ) : (
-              <button
-                type="button"
+              <AdminOpsButton
                 onClick={() => void handleLogout()}
                 className="inline-flex items-center rounded-full border border-white/10 bg-white/4 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300 hover:bg-white/8"
               >
                 Logout
-              </button>
+              </AdminOpsButton>
             )}
           </div>
         </div>
@@ -1078,13 +1041,12 @@ export default function AdminOpsClient() {
           >
             <span>{privyLogin.uiState.error}</span>
             {showLoginReload ? (
-              <button
-                type="button"
+              <AdminOpsButton
                 onClick={() => window.location.reload()}
                 className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded border border-red-300/30 px-3 text-xs font-bold uppercase tracking-wider outline-none hover:bg-red-300/10 focus-visible:ring-2 focus-visible:ring-red-200/80 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 Reload
-              </button>
+              </AdminOpsButton>
             ) : null}
           </div>
         ) : null}
@@ -1443,8 +1405,7 @@ export default function AdminOpsClient() {
                 <div className="text-xs text-gray-500">{source.fileName}</div>
               </div>
               {isLocalHost && processKey ? (
-                <button
-                  type="button"
+                <AdminOpsButton
                   disabled={processActionBusy !== null || Boolean(processState?.running)}
                   onClick={() => void handleStartProcess(processKey)}
                   className="inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-100 hover:bg-sky-500/20 disabled:opacity-50"
@@ -1454,7 +1415,7 @@ export default function AdminOpsClient() {
                     : processKey === "bot"
                       ? "Start keeper"
                       : "Start indexer"}
-                </button>
+                </AdminOpsButton>
               ) : null}
               <div className="rounded border border-white/10 bg-black/20 p-3 text-xs text-gray-300">
                 {source.lastLine ? source.lastLine : "No log lines yet."}
@@ -1585,13 +1546,12 @@ export default function AdminOpsClient() {
                 One copy-paste payload for debugging incidents quickly.
               </div>
             </div>
-            <button
-              type="button"
+            <AdminOpsButton
               onClick={() => void handleCopySnapshot()}
               className="inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-sky-100 hover:bg-sky-500/20"
             >
               {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy snapshot"}
-            </button>
+            </AdminOpsButton>
           </div>
           <textarea
             readOnly

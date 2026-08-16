@@ -5,9 +5,10 @@ import { formatDecimalTextFixed } from "../lib/balanceFormatting";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { log } from "../lib/logger";
 import { formatLineaAmountFixed, formatLineaWeiDisplayNumber, parseLineaAmountWei } from "../lib/tokenAmountMath";
-import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { getFreshCacheDelayMs } from "../lib/cacheTimestamp";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { readJsonResponse } from "../lib/readJsonResponse";
+import { loadReadModelCache, type ReadModelCacheStorage } from "../lib/readModelCache";
 
 export interface JackpotHistoryEntry {
   epoch: string;
@@ -22,11 +23,6 @@ export interface JackpotHistoryEntry {
 interface JackpotApiResponse {
   jackpots?: unknown[];
   error?: string;
-}
-
-interface JackpotHistoryCacheEnvelope {
-  savedAt?: number;
-  jackpots?: unknown[];
 }
 
 const REFRESH_MS = 45_000;
@@ -115,7 +111,7 @@ function toEntry(row: Record<string, unknown>): JackpotHistoryEntry | null {
   };
 }
 
-function sortByBlockDesc(entries: JackpotHistoryEntry[]) {
+export function sortJackpotHistoryEntries(entries: JackpotHistoryEntry[]) {
   return [...entries].sort((a, b) => {
     if (a.blockNumber === b.blockNumber) {
       const epochDelta = parseSafePositiveIntegerNumber(b.epoch) - parseSafePositiveIntegerNumber(a.epoch);
@@ -154,31 +150,27 @@ function jackpotEntriesEqual(left: JackpotHistoryEntry[], right: JackpotHistoryE
   return true;
 }
 
-function loadCachedEntries(): { entries: JackpotHistoryEntry[]; savedAt: number | null } {
-  if (typeof localStorage === "undefined") return { entries: [], savedAt: null };
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { entries: [], savedAt: null };
-    const parsed = JSON.parse(raw) as JackpotHistoryCacheEnvelope | unknown[];
-    if (Array.isArray(parsed)) {
-      return { entries: normalizeEntries(parsed), savedAt: null };
-    }
-    if (!parsed || typeof parsed !== "object") {
-      localStorage.removeItem(STORAGE_KEY);
-      return { entries: [], savedAt: null };
-    }
-    return {
-      entries: normalizeEntries(Array.isArray(parsed.jackpots) ? parsed.jackpots : []),
-      savedAt: normalizeCacheTimestamp(parsed.savedAt),
-    };
-  } catch {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // ignore storage failures
-    }
-    return { entries: [], savedAt: null };
-  }
+export function loadJackpotHistoryCache(
+  storage: ReadModelCacheStorage | null = typeof localStorage === "undefined" ? null : localStorage,
+  now = Date.now(),
+): { entries: JackpotHistoryEntry[]; savedAt: number | null } {
+  const restored = loadReadModelCache<JackpotHistoryEntry[]>({
+    storage,
+    cacheKey: STORAGE_KEY,
+    payloadKey: "jackpots",
+    emptyValue: [],
+    normalizePayload: normalizeEntries,
+    now,
+  });
+  return { entries: restored.value, savedAt: restored.savedAt };
+}
+
+export function getJackpotHistoryRefreshDelay(savedAt: unknown, now = Date.now()) {
+  return getFreshCacheDelayMs(savedAt, REFRESH_MS, now) ?? 0;
+}
+
+export function getJackpotHistoryLoadError() {
+  return JACKPOT_HISTORY_LOAD_ERROR;
 }
 
 function saveCachedEntries(entries: JackpotHistoryEntry[]) {
@@ -200,21 +192,23 @@ function saveCachedEntries(entries: JackpotHistoryEntry[]) {
   }
 }
 
-async function fetchFromApi(): Promise<JackpotHistoryEntry[]> {
-  const res = await fetchWithTimeout("/api/jackpots", { cache: "no-store" });
+export async function fetchJackpotHistoryEntries(
+  fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> = fetchWithTimeout,
+): Promise<JackpotHistoryEntry[]> {
+  const res = await fetchImpl("/api/jackpots", { cache: "no-store" });
   const json = await readJsonResponse<JackpotApiResponse>(res);
   if (!json) throw new Error(`HTTP ${res.status}`);
   if (!res.ok || json.error) {
     throw new Error(json.error || `HTTP ${res.status}`);
   }
 
-  return normalizeEntries(json.jackpots).slice(0, JACKPOT_LIMIT);
+  return sortJackpotHistoryEntries(normalizeEntries(json.jackpots).slice(0, JACKPOT_LIMIT));
 }
 
 export function useJackpotHistory(enabled = true) {
   const initialCacheRef = useRef<{ entries: JackpotHistoryEntry[]; savedAt: number | null } | null>(null);
   if (initialCacheRef.current === null) {
-    initialCacheRef.current = loadCachedEntries();
+    initialCacheRef.current = loadJackpotHistoryCache();
   }
 
   const [items, setItems] = useState<JackpotHistoryEntry[]>(() => initialCacheRef.current?.entries ?? []);
@@ -249,8 +243,7 @@ export function useJackpotHistory(enabled = true) {
     }
 
     try {
-      const entries = await fetchFromApi();
-      const sorted = sortByBlockDesc(entries);
+      const sorted = await fetchJackpotHistoryEntries();
       const changed = !jackpotEntriesEqual(itemsRef.current, sorted);
       if (mountedRef.current) {
         if (changed) {
@@ -285,7 +278,7 @@ export function useJackpotHistory(enabled = true) {
 
       // Keep stale data on screen if available to avoid blank analytics panel.
       if (mountedRef.current) {
-        setError(JACKPOT_HISTORY_LOAD_ERROR);
+        setError(getJackpotHistoryLoadError());
       }
     } finally {
       if (mountedRef.current) {
@@ -298,7 +291,7 @@ export function useJackpotHistory(enabled = true) {
   useEffect(() => {
     if (!enabled) return;
     const savedAt = cacheSavedAtRef.current;
-    const initialDelay = getFreshCacheDelayMs(savedAt, REFRESH_MS) ?? 0;
+    const initialDelay = getJackpotHistoryRefreshDelay(savedAt);
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 

@@ -59,6 +59,35 @@ function clampSupportLogValue(value: unknown, depth = 0): unknown {
   );
 }
 
+function normalizeSupportLogEntry(value: unknown): LogEntry | null {
+  const sanitized = clampSupportLogValue(sanitizeSupportLogPayload(value));
+  if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) return null;
+  const candidate = sanitized as Partial<LogEntry>;
+  if (
+    typeof candidate.ts !== "string" ||
+    !["info", "warn", "error", "debug"].includes(candidate.lvl ?? "") ||
+    typeof candidate.tag !== "string" ||
+    typeof candidate.msg !== "string"
+  ) {
+    return null;
+  }
+  return {
+    ts: candidate.ts,
+    lvl: candidate.lvl as LogLevel,
+    tag: candidate.tag,
+    msg: candidate.msg,
+    ...(candidate.data !== undefined && { data: candidate.data }),
+  };
+}
+
+function normalizeSupportLogEntries(value: unknown): LogEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(-MAX_ENTRIES)
+    .map(normalizeSupportLogEntry)
+    .filter((entry): entry is LogEntry => entry !== null);
+}
+
 function formatUnknownForLog(value: unknown): string {
   if (value instanceof Error) {
     const parts = [value.message];
@@ -96,8 +125,7 @@ function loadBuffer(): LogEntry[] {
       localStorage.removeItem(STORAGE_KEY);
       return [];
     }
-    const sanitized = clampSupportLogValue(sanitizeSupportLogPayload(parsed));
-    return Array.isArray(sanitized) ? sanitized as LogEntry[] : [];
+    return normalizeSupportLogEntries(parsed);
   } catch {
     try {
       localStorage.removeItem(STORAGE_KEY);
@@ -204,7 +232,7 @@ export function exportLogs(): string {
     autoMiner: getAutoMineSupportDiagnostics(readAutoMineDiagnostics()),
   };
   const safeMeta = clampSupportLogValue(sanitizeSupportLogPayload(meta));
-  const lines = (clampSupportLogValue(sanitizeSupportLogPayload(buffer)) as LogEntry[]).map((e) => {
+  const lines = normalizeSupportLogEntries(buffer).slice(-MAX_LOG_ARRAY_ITEMS).map((e) => {
     const d = e.data !== undefined ? ` | ${safeJsonStringify(e.data)}` : "";
     return `${e.ts} [${e.lvl.toUpperCase().padEnd(5)}] <${e.tag}> ${e.msg}${d}`;
   });

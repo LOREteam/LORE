@@ -13,6 +13,102 @@ import type { GasOverrides } from "./useMining.types";
 
 type MineAttemptSource = "ManualMine" | "DirectMine";
 type NotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
+type MineAttemptResult = "confirmed" | "pending";
+
+interface MiningManualActionRef {
+  current: boolean;
+}
+
+interface ExecuteMiningManualActionOptions {
+  source: MineAttemptSource;
+  tiles: number[];
+  betAmountStr: string;
+  expectedEpoch: bigint | null | undefined;
+  inFlightRef: MiningManualActionRef;
+  autoMineActive: () => boolean;
+  getActorAddress: () => string | null;
+  notify?: NotifyFn;
+  setIsPending: (value: boolean) => void;
+  setSelectedTiles: (tiles: number[]) => void;
+  setSelectedTilesEpoch: (epoch: string | null) => void;
+  submitMineAttempt: (
+    source: MineAttemptSource,
+    normalizedTiles: number[],
+    betAmountStr: string,
+    actorAddress: string,
+    expectedEpoch: bigint,
+  ) => Promise<MineAttemptResult>;
+  clearPendingState?: () => void;
+  getFailureMessage?: (error: unknown) => string;
+  logFailure?: (source: MineAttemptSource, error: unknown) => void;
+}
+
+export async function executeMiningManualAction({
+  source,
+  tiles,
+  betAmountStr,
+  expectedEpoch,
+  inFlightRef,
+  autoMineActive,
+  getActorAddress,
+  notify,
+  setIsPending,
+  setSelectedTiles,
+  setSelectedTilesEpoch,
+  submitMineAttempt,
+  clearPendingState = clearMiningTxPathState,
+  getFailureMessage = getBetErrorMessage,
+  logFailure = (failedSource, error) => log.warn(failedSource, "bet failed", error),
+}: ExecuteMiningManualActionOptions): Promise<MineAttemptResult | false> {
+  const normalizedTiles = normalizeTiles(tiles);
+  if (normalizedTiles.length === 0) return false;
+  if (expectedEpoch == null) {
+    notify?.("Live epoch is still syncing.", "warning");
+    return false;
+  }
+  const actorAddress = getActorAddress();
+  if (!actorAddress) {
+    notify?.("Wallet not ready. Reconnect wallet and try again.", "danger");
+    return false;
+  }
+  if (autoMineActive() || inFlightRef.current) return false;
+  if (source === "DirectMine") {
+    setSelectedTiles(normalizedTiles);
+    setSelectedTilesEpoch(null);
+  }
+  inFlightRef.current = true;
+  setIsPending(true);
+  try {
+    const state = await submitMineAttempt(source, normalizedTiles, betAmountStr, actorAddress, expectedEpoch);
+    if (state === "pending") {
+      notify?.(
+        source === "DirectMine"
+          ? "Repeat bet transaction is still pending. Check wallet activity before retrying."
+          : "Bet transaction is still pending. Check wallet activity before retrying.",
+        "warning",
+      );
+    }
+    return state;
+  } catch (error) {
+    if (!isUserRejection(error)) {
+      clearPendingState();
+      const reason = getFailureMessage(error);
+      logFailure(source, error);
+      notify?.(reason, "danger");
+    } else {
+      notify?.(
+        source === "DirectMine"
+          ? "Repeat bet transaction rejected in wallet."
+          : "Bet transaction rejected in wallet.",
+        "info",
+      );
+    }
+    return false;
+  } finally {
+    inFlightRef.current = false;
+    setIsPending(false);
+  }
+}
 
 interface UseMiningManualActionsOptions {
   autoMineActive: () => boolean;
@@ -86,84 +182,48 @@ export function useMiningManualActions({
   );
 
   const handleManualMine = useCallback(
-    async (betAmountStr: string, expectedEpoch: bigint | null | undefined) => {
-      const normalizedTiles = normalizeTiles(selectedTiles);
-      if (normalizedTiles.length === 0) return false;
-      if (expectedEpoch == null) {
-        notify?.("Live epoch is still syncing.", "warning");
-        return false;
-      }
-      const actorAddress = getActorAddress();
-      if (!actorAddress) {
-        notify?.("Wallet not ready. Reconnect wallet and try again.", "danger");
-        return false;
-      }
-      if (autoMineActive() || manualMineInFlightRef.current) return false;
-      manualMineInFlightRef.current = true;
-      setIsPending(true);
-      try {
-        const state = await submitMineAttempt("ManualMine", normalizedTiles, betAmountStr, actorAddress, expectedEpoch);
-        if (state === "pending") {
-          notify?.("Bet transaction is still pending. Check wallet activity before retrying.", "warning");
-        }
-        return state;
-      } catch (error) {
-        if (!isUserRejection(error)) {
-          clearMiningTxPathState();
-          const reason = getBetErrorMessage(error);
-          log.warn("ManualMine", "bet failed", error);
-          notify?.(reason, "danger");
-        } else {
-          notify?.("Bet transaction rejected in wallet.", "info");
-        }
-        return false;
-      } finally {
-        manualMineInFlightRef.current = false;
-        setIsPending(false);
-      }
-    },
-    [autoMineActive, selectedTiles, getActorAddress, notify, setIsPending, submitMineAttempt],
+    (betAmountStr: string, expectedEpoch: bigint | null | undefined) => executeMiningManualAction({
+      source: "ManualMine",
+      tiles: selectedTiles,
+      betAmountStr,
+      expectedEpoch,
+      inFlightRef: manualMineInFlightRef,
+      autoMineActive,
+      getActorAddress,
+      notify,
+      setIsPending,
+      setSelectedTiles,
+      setSelectedTilesEpoch,
+      submitMineAttempt,
+    }),
+    [
+      autoMineActive,
+      selectedTiles,
+      getActorAddress,
+      notify,
+      setIsPending,
+      setSelectedTiles,
+      setSelectedTilesEpoch,
+      submitMineAttempt,
+    ],
   );
 
   const handleDirectMine = useCallback(
-    async (tiles: number[], betAmountStr: string, expectedEpoch: bigint | null | undefined) => {
-      const normalizedTiles = normalizeTiles(tiles);
-      if (normalizedTiles.length === 0) return false;
-      if (expectedEpoch == null) {
-        notify?.("Live epoch is still syncing.", "warning");
-        return false;
-      }
-      const actorAddress = getActorAddress();
-      if (!actorAddress) {
-        notify?.("Wallet not ready. Reconnect wallet and try again.", "danger");
-        return false;
-      }
-      if (autoMineActive() || manualMineInFlightRef.current) return false;
-      setSelectedTiles(normalizedTiles);
-      setSelectedTilesEpoch(null);
-      manualMineInFlightRef.current = true;
-      setIsPending(true);
-      try {
-        const state = await submitMineAttempt("DirectMine", normalizedTiles, betAmountStr, actorAddress, expectedEpoch);
-        if (state === "pending") {
-          notify?.("Repeat bet transaction is still pending. Check wallet activity before retrying.", "warning");
-        }
-        return state;
-      } catch (error) {
-        if (!isUserRejection(error)) {
-          clearMiningTxPathState();
-          const reason = getBetErrorMessage(error);
-          log.warn("DirectMine", "bet failed", error);
-          notify?.(reason, "danger");
-        } else {
-          notify?.("Repeat bet transaction rejected in wallet.", "info");
-        }
-        return false;
-      } finally {
-        manualMineInFlightRef.current = false;
-        setIsPending(false);
-      }
-    },
+    (tiles: number[], betAmountStr: string, expectedEpoch: bigint | null | undefined) =>
+      executeMiningManualAction({
+        source: "DirectMine",
+        tiles,
+        betAmountStr,
+        expectedEpoch,
+        inFlightRef: manualMineInFlightRef,
+        autoMineActive,
+        getActorAddress,
+        notify,
+        setIsPending,
+        setSelectedTiles,
+        setSelectedTilesEpoch,
+        submitMineAttempt,
+      }),
     [
       autoMineActive,
       getActorAddress,

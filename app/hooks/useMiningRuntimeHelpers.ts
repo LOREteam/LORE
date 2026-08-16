@@ -19,25 +19,13 @@ import {
 } from "../lib/lineaFees";
 import { recordLineaEstimateGasShadow } from "../lib/lineaEstimateGasShadow";
 import { log } from "../lib/logger";
+import { assertSufficientNativeGasBalance, getBufferedMiningGasLimit } from "../lib/miningGasPolicy";
 import type { GasOverrides } from "./useMining.types";
 import { isEstimateGasOutOfGasError, isMissingTokenGetterError, isNetworkError, withMiningRpcTimeout } from "./useMining.shared";
 
 type FeeEstimate = Awaited<ReturnType<PublicClient["estimateFeesPerGas"]>>;
 const FEE_ESTIMATE_CACHE_TTL_MS = 3_000;
 const APPROVAL_GAS_LIMIT = 90_000n;
-
-function formatNativeWeiSixDecimals(rawValue: bigint): string {
-  const value = rawValue < 0n ? 0n : rawValue;
-  const weiPerEth = 10n ** 18n;
-  const scale = 1_000_000n;
-  const whole = value / weiPerEth;
-  const remainder = value % weiPerEth;
-  const roundedFraction = (remainder * scale + weiPerEth / 2n) / weiPerEth;
-  if (roundedFraction >= scale) {
-    return `${whole + 1n}.000000`;
-  }
-  return `${whole}.${roundedFraction.toString().padStart(6, "0")}`;
-}
 
 interface UseMiningRuntimeHelpersOptions {
   getActorAddress: () => string | null;
@@ -48,6 +36,7 @@ interface UseMiningRuntimeHelpersOptions {
   minGasPlaceBatch: bigint;
   gasCostBufferBps: bigint;
   bpsDenominator: bigint;
+  recordEstimateGasShadow?: typeof recordLineaEstimateGasShadow;
 }
 
 export function useMiningRuntimeHelpers({
@@ -59,6 +48,7 @@ export function useMiningRuntimeHelpers({
   minGasPlaceBatch,
   gasCostBufferBps,
   bpsDenominator,
+  recordEstimateGasShadow = recordLineaEstimateGasShadow,
 }: UseMiningRuntimeHelpersOptions) {
   const feeEstimateCacheRef = useRef<{
     expiresAt: number;
@@ -208,11 +198,7 @@ export function useMiningRuntimeHelpers({
         getRequiredNativeCost(gas, gasOverrides),
       ]);
 
-      if (balance < requiredCost) {
-        const have = formatNativeWeiSixDecimals(balance);
-        const need = formatNativeWeiSixDecimals(requiredCost);
-        throw new Error(`Not enough ETH for gas: need ~${need} ETH, have ${have} ETH.`);
-      }
+      assertSufficientNativeGasBalance(balance, requiredCost);
     },
     [getActorAddress, getRequiredNativeCost, publicClientRef],
   );
@@ -237,7 +223,7 @@ export function useMiningRuntimeHelpers({
           functionName: functionName as "placeBet",
           args: args as [bigint, bigint],
         }), `estimateContractGas:${functionName}`);
-        recordLineaEstimateGasShadow({
+        recordEstimateGasShadow({
           publicClient: pc,
           account: actorAddress as `0x${string}`,
           to: CONTRACT_ADDRESS,
@@ -247,14 +233,13 @@ export function useMiningRuntimeHelpers({
           baselineGas: est,
           tag: "wallet-mining",
         });
-        const withBuffer = (est * 180n) / 100n + bufferExtra;
-        return withBuffer > minGas ? withBuffer : minGas;
+        return getBufferedMiningGasLimit(est, minGas, bufferExtra);
       } catch (err) {
         if (isNetworkError(err) || isEstimateGasOutOfGasError(err)) return minGas;
         throw err;
       }
     },
-    [getActorAddress, minGasPlaceBatch, minGasPlaceBet, publicClientRef],
+    [getActorAddress, minGasPlaceBatch, minGasPlaceBet, publicClientRef, recordEstimateGasShadow],
   );
 
   const ensureContractPreflight = useCallback(async () => {

@@ -6,9 +6,9 @@ import type { PublicClient } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { writeAutoMineDiagnostics } from "../lib/mining/autoMineDiagnostics";
 import {
-  clearPendingMiningTxState,
+  createPendingMiningAgreementClients,
   readPendingMiningTxState,
-  recoverPendingMiningTx,
+  recoverAndClearPendingMiningTx,
 } from "../lib/miningTxPath";
 import type {
   AutoMinePhase,
@@ -125,6 +125,7 @@ export function useMiningRuntimeState({
   const tokenGetterWarningShownRef = useRef(false);
   const pendingApproveRef = useRef<{ hash: `0x${string}`; submittedAt: number; nonce: number } | null>(null);
   const pendingBetRef = useRef<{ submittedAt: number; nonce: number } | null>(null);
+  const pendingMiningAgreementClients = useMemo(() => createPendingMiningAgreementClients(), []);
 
   const autoMinePhase = autoMineUiState.phase;
   const isAutoMining = ACTIVE_AUTO_MINE_PHASES.has(autoMinePhase);
@@ -269,9 +270,27 @@ export function useMiningRuntimeState({
       setIsPending(false);
       return;
     }
-    const pending = readPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
+    let pending;
+    try {
+      pending = readPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
+    } catch {
+      setIsPending(true);
+      notifyRef.current?.(
+        "Pending bet storage is unavailable. Do not retry until browser storage is restored and the wallet transaction is reconciled.",
+        "warning",
+      );
+      return;
+    }
     if (!pending) {
       setIsPending(false);
+      return;
+    }
+    if (!pendingMiningAgreementClients) {
+      setIsPending(true);
+      notifyRef.current?.(
+        "Two independent RPC origins are required to reconcile the pending bet. Do not retry it manually.",
+        "warning",
+      );
       return;
     }
 
@@ -280,8 +299,8 @@ export function useMiningRuntimeState({
     setIsPending(true);
 
     const checkReceipt = async () => {
-      const recovery = await recoverPendingMiningTx(
-        publicClient,
+      const recovery = await recoverAndClearPendingMiningTx(
+        pendingMiningAgreementClients,
         pending,
       );
       if (cancelled) return;
@@ -299,7 +318,6 @@ export function useMiningRuntimeState({
         return;
       }
 
-      clearPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
       setIsPending(false);
       if (recovery === "confirmed") {
         refetchTileDataRef.current();
@@ -316,7 +334,7 @@ export function useMiningRuntimeState({
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [address, preferredAddress, publicClient]);
+  }, [address, pendingMiningAgreementClients, preferredAddress, publicClient]);
 
   const hasPreferredActor = Boolean(preferredAddress ?? (preserveTransientRuntime ? preferredAddressRef.current : null));
   const getActorAddress = useCallback(() => preferredAddressRef.current ?? address ?? null, [address]);

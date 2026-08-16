@@ -7,7 +7,7 @@ import { UiButton } from "./ui/UiButton";
 import { UiPanel } from "./ui/UiPanel";
 import { uiTokens } from "./ui/tokens";
 
-interface FAQItem {
+export interface FAQItem {
   q: string;
   a: string | string[];
   category: string;
@@ -259,15 +259,39 @@ const categoryIcons: Record<string, string> = {
   "Chat & Social": "M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155",
 };
 
-export const FAQ = React.memo(function FAQ() {
-  const [openIdx, setOpenIdx] = useState<number | null>(null);
-  const [activeCategory, setActiveCategory] = useState<string>(categories[0]);
+export function getFaqPresentationModel(requestedCategory?: string, requestedOpenIndex?: number | null) {
+  const activeCategory = requestedCategory && categories.includes(requestedCategory)
+    ? requestedCategory
+    : categories[0];
+  const items = faqData.filter((item) => item.category === activeCategory);
+  const openIndex = Number.isSafeInteger(requestedOpenIndex)
+    && Number(requestedOpenIndex) >= 0
+    && Number(requestedOpenIndex) < items.length
+    ? Number(requestedOpenIndex)
+    : null;
+  return {
+    activeCategory,
+    categories: [...categories],
+    items,
+    openIndex,
+  };
+}
+
+interface FAQProps {
+  initialCategory?: string;
+  initialOpenIndex?: number | null;
+}
+
+export const FAQ = React.memo(function FAQ({ initialCategory, initialOpenIndex }: FAQProps = {}) {
+  const initialModel = getFaqPresentationModel(initialCategory, initialOpenIndex);
+  const [openIdx, setOpenIdx] = useState<number | null>(initialModel.openIndex);
+  const [activeCategory, setActiveCategory] = useState<string>(initialModel.activeCategory);
 
   const toggle = useCallback((i: number) => {
     setOpenIdx((prev) => (prev === i ? null : i));
   }, []);
 
-  const filteredFaq = faqData.filter((f) => f.category === activeCategory);
+  const filteredFaq = getFaqPresentationModel(activeCategory).items;
 
   return (
     <div className="flex-1 overflow-y-auto pb-24 animate-fade-in">

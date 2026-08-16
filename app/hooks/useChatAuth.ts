@@ -2,53 +2,19 @@
 
 import { useSignMessage, useWallets } from "@privy-io/react-auth";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { toHex } from "viem";
-import { APP_CHAIN_ID } from "../lib/constants";
-import { buildChatAuthMessage, createChatAuthNonce, normalizeChatAuthAddress } from "../lib/chatAuth";
-import { fetchWithTimeout } from "../lib/fetchWithTimeout";
-import { readJsonResponse } from "../lib/readJsonResponse";
+import { normalizeChatAuthAddress } from "../lib/chatAuth";
+import { createChatAuthProof, requestChatAuthSession } from "../lib/chatAuthRuntime";
 import {
   buildFallbackChatAuthSession,
   CHAT_AUTH_SESSION_EVENT,
   clearChatAuthSession,
   loadChatAuthSession,
-  normalizeChatAuthSessionExpiresAt,
   saveChatAuthSession,
   type ChatAuthSession,
 } from "../lib/chatSessionClient";
 
 const CHAT_AUTH_REFRESH_LEAD_MS = 24 * 60 * 60 * 1000;
 const CHAT_AUTH_REFRESH_MIN_DELAY_MS = 60_000;
-
-type Eip1193Provider = {
-  request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
-};
-
-async function createChatSession(payload: Record<string, unknown>): Promise<number | null> {
-  const response = await fetchWithTimeout("/api/chat/auth", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    cache: "no-store",
-    body: JSON.stringify(payload),
-  });
-  const json = await readJsonResponse<{ error?: string }>(response).catch(() => null);
-  if (!response.ok || json?.error) {
-    throw new Error(json?.error || `Chat auth HTTP ${response.status}`);
-  }
-  return normalizeChatAuthSessionExpiresAt(response.headers.get("x-chat-session-expires-at"));
-}
-
-async function refreshChatSession(): Promise<number | null> {
-  const response = await fetchWithTimeout("/api/chat/auth", {
-    method: "GET",
-    cache: "no-store",
-  });
-  const json = await readJsonResponse<{ error?: string }>(response).catch(() => null);
-  if (!response.ok || json?.error) {
-    throw new Error(json?.error || `Chat auth HTTP ${response.status}`);
-  }
-  return normalizeChatAuthSessionExpiresAt(response.headers.get("x-chat-session-expires-at"));
-}
 
 export function useChatAuth(walletAddress: string | null, uiTitle = "Verify wallet for chat") {
   const [authReady, setAuthReady] = useState(false);
@@ -119,37 +85,21 @@ export function useChatAuth(walletAddress: string | null, uiTitle = "Verify wall
 
     const task = (async () => {
       try {
-        const issuedAt = new Date().toISOString();
-        const message = buildChatAuthMessage({
-          address: normalizedWallet,
-          uri: `${window.location.origin}/chat`,
-          chainId: APP_CHAIN_ID,
-          nonce: createChatAuthNonce(),
-          issuedAt,
+        const proof = await createChatAuthProof({
+          walletAddress: normalizedWallet,
+          origin: window.location.origin,
+          wallets,
+          signMessage: async (message, title) => {
+            const result = await signMessage(
+              { message },
+              { uiOptions: { title } },
+            );
+            return result.signature;
+          },
+          uiTitle,
         });
-        const targetWallet = wallets.find((wallet) => normalizeChatAuthAddress(wallet.address) === normalizedWallet);
-        let signature = "";
-        if (targetWallet) {
-          const provider = (await targetWallet.getEthereumProvider()) as Eip1193Provider;
-          const messageHex = toHex(message);
-          signature = String(
-            await provider.request({
-              method: "personal_sign",
-              params: [messageHex, normalizedWallet],
-            }),
-          );
-        } else {
-          const result = await signMessage(
-            { message },
-            { uiOptions: { title: uiTitle } },
-          );
-          signature = result.signature;
-        }
-        const expiresAt = await createChatSession({
-          authAddress: normalizedWallet,
-          authMessage: message,
-          authSignature: signature,
-        });
+        if (!proof) return false;
+        const expiresAt = await requestChatAuthSession("POST", proof);
         const fallbackSession = buildFallbackChatAuthSession(normalizedWallet);
         const nextSession: ChatAuthSession = {
           address: normalizedWallet,
@@ -191,7 +141,7 @@ export function useChatAuth(walletAddress: string | null, uiTitle = "Verify wall
     if (!normalizedWallet) return false;
     const task = (async () => {
       try {
-        const expiresAt = await refreshChatSession();
+        const expiresAt = await requestChatAuthSession("GET");
         const nextSession: ChatAuthSession = {
           address: normalizedWallet,
           expiresAt: expiresAt ?? buildFallbackChatAuthSession(normalizedWallet).expiresAt,

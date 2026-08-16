@@ -6,7 +6,10 @@ import { usePublicClient, useAccount } from "wagmi";
 import { encodeFunctionData, getAddress } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
 import type { UnclaimedWin } from "../lib/types";
-import { formatRewardClaimError, isRewardClaimWindowOpen } from "./useRewardScanner";
+import {
+  collectOpenRewardScanWins,
+} from "../lib/rewardScanPolicy";
+import { formatRewardClaimError } from "./useRewardScanner";
 import { isUserRejection, delay } from "../lib/utils";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { readJsonResponse } from "../lib/readJsonResponse";
@@ -385,22 +388,13 @@ export function useDeepRewardScan(
           ]);
           if (scanAddressRef.current !== normalizedAddress) return;
 
-          potentialWins.forEach((w, index) => {
-            const betAmt = betResults[index]?.result as unknown as bigint | undefined;
-            const tileTotal = tilePoolResults[index]?.result as unknown as bigint | undefined;
-            const resolvedAt = resolvedAtResults[index]?.result as unknown as bigint | undefined;
-            if (
-              betAmt && betAmt > 0n && tileTotal && tileTotal > 0n && resolvedAt !== undefined
-              && isRewardClaimWindowOpen(resolvedAt, chainTimestamp)
-            ) {
-              const amountWei = (w.rewardPool * betAmt) / tileTotal;
-              if (amountWei === 0n) return;
-              found.push({
-                epoch: w.id.toString(),
-                amountWei: amountWei.toString(),
-              });
-            }
-          });
+          found.push(...collectOpenRewardScanWins({
+            potentialWins,
+            betResults,
+            tilePoolResults,
+            resolvedAtResults,
+            chainTimestamp,
+          }));
         }
 
         scanned += epochIds.length;

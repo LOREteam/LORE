@@ -11,9 +11,10 @@ import {
   normalizeTileAmounts,
   parseLineaAmountWei,
 } from "../lib/tokenAmountMath";
-import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { getFreshCacheDelayMs } from "../lib/cacheTimestamp";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { readJsonResponse } from "../lib/readJsonResponse";
+import { loadReadModelCache, type ReadModelCacheStorage } from "../lib/readModelCache";
 
 export interface DepositEntry {
   epoch: string;
@@ -67,6 +68,8 @@ const SYNC_EPOCH_PREFETCH_LIMIT = 64;
 const EPOCHS_FETCH_CHUNK = 100;
 const REWARDS_FETCH_CHUNK = 200;
 const DEPOSIT_HISTORY_LOAD_ERROR = "Deposit history is temporarily unavailable. Refresh the Analytics tab to retry.";
+
+type DepositHistoryFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 function parseSafeNonNegativeIntegerNumber(value: string | null | undefined): number {
   if (!value || !/^(?:0|[1-9]\d*)$/.test(value)) return 0;
@@ -174,42 +177,32 @@ export function normalizeCachedDepositEntries(value: unknown): DepositEntry[] | 
     .filter((item): item is DepositEntry => item !== null);
 }
 
-function loadCachedDeposits(userAddress: string): { data: DepositEntry[] | null; savedAt: number | null } {
-  if (typeof localStorage === "undefined") return { data: null, savedAt: null };
+export function loadDepositHistoryCache(
+  userAddress: string,
+  storage: ReadModelCacheStorage | null = typeof localStorage === "undefined" ? null : localStorage,
+  now = Date.now(),
+): { data: DepositEntry[] | null; savedAt: number | null } {
   const cacheKey = getDepositCacheKey(userAddress);
-  try {
-    const raw = localStorage.getItem(cacheKey);
-    if (!raw) return { data: null, savedAt: null };
-    const parsed = JSON.parse(raw) as DepositCacheEnvelope | DepositEntry[];
-    if (Array.isArray(parsed)) {
-      const data = normalizeCachedDepositEntries(parsed);
-      if (parsed.length > 0 && data?.length === 0) {
-        localStorage.removeItem(cacheKey);
-        return { data: null, savedAt: null };
-      }
-      return { data, savedAt: null };
-    }
-    if (!parsed || typeof parsed !== "object") {
-      localStorage.removeItem(cacheKey);
-      return { data: null, savedAt: null };
-    }
-    const data = normalizeCachedDepositEntries(parsed.data);
-    if (!data) {
-      localStorage.removeItem(cacheKey);
-      return { data: null, savedAt: null };
-    }
-    return {
-      data,
-      savedAt: normalizeCacheTimestamp(parsed.savedAt),
-    };
-  } catch {
-    try {
-      localStorage.removeItem(cacheKey);
-    } catch {
-      // ignore storage failures
-    }
-    return { data: null, savedAt: null };
-  }
+  const restored = loadReadModelCache<DepositEntry[] | null>({
+    storage,
+    cacheKey,
+    payloadKey: "data",
+    emptyValue: null,
+    normalizePayload: normalizeCachedDepositEntries,
+    acceptPayload: ({ rawPayload, value, legacy }) =>
+      value !== null &&
+      (!legacy || !Array.isArray(rawPayload) || rawPayload.length === 0 || value.length > 0),
+    now,
+  });
+  return { data: restored.value, savedAt: restored.savedAt };
+}
+
+export function getDepositHistoryRefreshDelay(savedAt: unknown, now = Date.now()) {
+  return getFreshCacheDelayMs(savedAt, DEPOSIT_CACHE_TTL_MS, now);
+}
+
+export function getDepositHistoryLoadError() {
+  return DEPOSIT_HISTORY_LOAD_ERROR;
 }
 
 function saveCachedDeposits(userAddress: string, entries: DepositEntry[]) {
@@ -227,14 +220,35 @@ function saveCachedDeposits(userAddress: string, entries: DepositEntry[]) {
   }
 }
 
-async function fetchEpochMap(epochIds: string[]) {
+export async function fetchDepositHistoryPayload(
+  userAddress: string,
+  fetchImpl: DepositHistoryFetch = fetchWithTimeout,
+) {
+  const response = await fetchImpl(`/api/deposits?user=${userAddress}`, { cache: "no-store" });
+  const payload = await readJsonResponse<{
+    deposits?: ApiDeposit[];
+    epochs?: Record<string, ApiEpoch>;
+    rewards?: Record<string, ApiRewardInfo>;
+    error?: string;
+  }>(response);
+  if (!payload) throw new Error(`Deposit history returned empty JSON (HTTP ${response.status})`);
+  if (!response.ok || payload.error) {
+    throw new Error(`Deposit history request failed (HTTP ${response.status})`);
+  }
+  return payload;
+}
+
+export async function fetchEpochMap(
+  epochIds: string[],
+  fetchImpl: DepositHistoryFetch = fetchWithTimeout,
+) {
   if (epochIds.length === 0) return {} as Record<string, ApiEpoch>;
 
   const merged: Record<string, ApiEpoch> = {};
   for (let index = 0; index < epochIds.length; index += EPOCHS_FETCH_CHUNK) {
     const chunk = epochIds.slice(index, index + EPOCHS_FETCH_CHUNK);
     const epochsQuery = encodeURIComponent(chunk.join(","));
-    const response = await fetchWithTimeout(`/api/epochs?epochs=${epochsQuery}`);
+    const response = await fetchImpl(`/api/epochs?epochs=${epochsQuery}`, { cache: "no-store" });
     if (!response.ok) continue;
     try {
       const json = await readJsonResponse<{ epochs?: Record<string, ApiEpoch> }>(response) ?? {};
@@ -247,14 +261,19 @@ async function fetchEpochMap(epochIds: string[]) {
   return merged;
 }
 
-async function fetchRewardsMap(userAddress: string, epochIds: string[]) {
+export async function fetchRewardsMap(
+  userAddress: string,
+  epochIds: string[],
+  fetchImpl: DepositHistoryFetch = fetchWithTimeout,
+) {
   if (epochIds.length === 0) return {} as Record<string, ApiRewardInfo>;
 
   const merged: Record<string, ApiRewardInfo> = {};
   for (let index = 0; index < epochIds.length; index += REWARDS_FETCH_CHUNK) {
     const chunk = epochIds.slice(index, index + REWARDS_FETCH_CHUNK);
-    const response = await fetchWithTimeout("/api/rewards", {
+    const response = await fetchImpl("/api/rewards", {
       method: "POST",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         user: userAddress,
@@ -407,33 +426,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
     }
 
     try {
-      const depositsResult = await fetchWithTimeout(
-        `/api/deposits?user=${normalizedUser}`,
-        { cache: "no-store" },
-      );
-
-      const depositsRes = depositsResult;
-      let depositsJson: {
-        deposits?: ApiDeposit[];
-        epochs?: Record<string, ApiEpoch>;
-        rewards?: Record<string, ApiRewardInfo>;
-        error?: string;
-      } = {};
-      try {
-        depositsJson = await readJsonResponse<typeof depositsJson>(depositsRes) ?? {};
-      } catch {
-        depositsJson = {};
-      }
-
-      if (!depositsRes.ok || depositsJson.error) {
-        if (mountedRef.current) {
-          setError(DEPOSIT_HISTORY_LOAD_ERROR);
-          if (dataRef.current === null) {
-            setData([]);
-          }
-        }
-        return;
-      }
+      const depositsJson = await fetchDepositHistoryPayload(normalizedUser);
 
       const deposits = normalizeApiDeposits(depositsJson.deposits);
       const uniqueEpochs = [...new Set(deposits.map((d) => d.epoch))];
@@ -518,7 +511,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
     } catch (err) {
       log.warn("DepositHistory", "API fetch failed", { message: err instanceof Error ? err.message : String(err) });
       if (mountedRef.current && requestId === requestIdRef.current) {
-        setError(DEPOSIT_HISTORY_LOAD_ERROR);
+        setError(getDepositHistoryLoadError());
         if (dataRef.current === null) {
           setData([]);
         }
@@ -564,7 +557,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       return;
     }
 
-    const cached = loadCachedDeposits(normalizedUser);
+    const cached = loadDepositHistoryCache(normalizedUser);
     cacheSavedAtRef.current[normalizedUser] = cached.savedAt;
     if (mountedRef.current) {
       setData(cached.data);
@@ -572,7 +565,7 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       setError(null);
     }
     const savedAt = cached.savedAt;
-    const refreshDelayMs = getFreshCacheDelayMs(savedAt, DEPOSIT_CACHE_TTL_MS);
+    const refreshDelayMs = getDepositHistoryRefreshDelay(savedAt);
     if (refreshDelayMs !== null) {
       const timeoutId = window.setTimeout(() => {
         void fetchFromApi();

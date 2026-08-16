@@ -181,13 +181,9 @@ export async function executeAutoMineBetLoop({
         await delay(3_000);
         return "pending";
       }
-
-      txNonce = trackedPendingBet.nonce;
-      log.warn("AutoMine", `round ${currentRoundIndex + 1}: replacing stale pending bet with nonce ${txNonce}`, {
-        latestNonce,
-        pendingNonce,
-        pendingAgeMs,
-      });
+      throw new Error(
+        "Tracked pending bet cannot be replaced from local age and single-RPC nonce evidence; manual reconciliation is required.",
+      );
     }
 
     if ((!pendingBetRef.current || clearedTrackedPendingBet) && pendingNonce > latestNonce) {

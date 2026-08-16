@@ -2,8 +2,6 @@ import type { Abi, Address, Hex, PublicClient } from "viem";
 import { encodeFunctionData } from "viem";
 import { log } from "./logger";
 
-const shadowedKeys = new Set<string>();
-
 function isEnabled() {
   return process.env.NEXT_PUBLIC_LINEA_ESTIMATE_GAS_SHADOW === "1" || process.env.LINEA_ESTIMATE_GAS_SHADOW === "1";
 }
@@ -29,7 +27,7 @@ function classifyShadowUnavailableReason(error: unknown) {
   return "unknown";
 }
 
-export function recordLineaEstimateGasShadow(options: {
+export interface LineaEstimateGasShadowOptions {
   publicClient: PublicClient;
   account: Address;
   to: Address;
@@ -38,41 +36,58 @@ export function recordLineaEstimateGasShadow(options: {
   args: readonly unknown[];
   baselineGas: bigint;
   tag: string;
-}) {
-  if (!isEnabled()) return;
-  const key = `${options.tag}:${options.functionName}`;
-  if (shadowedKeys.has(key)) return;
-  shadowedKeys.add(key);
-
-  return (async () => {
-    try {
-      const data = encodeFunctionData({
-        abi: options.abi,
-        functionName: options.functionName,
-        args: options.args,
-      });
-      const request = options.publicClient.request as unknown as (args: {
-        method: string;
-        params: [{ from: Address; to: Address; data: Hex }];
-      }) => Promise<bigint | Hex | number | string>;
-      const raw = await request({
-        method: "linea_estimateGas",
-        params: [{ from: options.account, to: options.to, data }],
-      });
-      const lineaGas = typeof raw === "bigint" ? raw : BigInt(raw);
-      log.info("GasShadow", "linea_estimateGas shadow", {
-        tag: options.tag,
-        functionName: options.functionName,
-        baselineGas: options.baselineGas,
-        lineaGas,
-        ratioBps: ratioBps(lineaGas, options.baselineGas),
-      });
-    } catch (error) {
-      log.info("GasShadow", "linea_estimateGas shadow unavailable", {
-        tag: options.tag,
-        functionName: options.functionName,
-        reason: classifyShadowUnavailableReason(error),
-      });
-    }
-  })();
 }
+
+interface LineaEstimateGasShadowDependencies {
+  enabled?: () => boolean;
+  logInfo?: (tag: string, message: string, data?: unknown) => void;
+}
+
+export function createLineaEstimateGasShadowRecorder(
+  dependencies: LineaEstimateGasShadowDependencies = {},
+) {
+  const shadowedKeys = new Set<string>();
+  const enabled = dependencies.enabled ?? isEnabled;
+  const logInfo = dependencies.logInfo ?? ((tag, message, data) => log.info(tag, message, data));
+
+  return function record(options: LineaEstimateGasShadowOptions) {
+    if (!enabled()) return;
+    const key = `${options.tag}:${options.functionName}`;
+    if (shadowedKeys.has(key)) return;
+    shadowedKeys.add(key);
+
+    return (async () => {
+      try {
+        const data = encodeFunctionData({
+          abi: options.abi,
+          functionName: options.functionName,
+          args: options.args,
+        });
+        const request = options.publicClient.request as unknown as (args: {
+          method: string;
+          params: [{ from: Address; to: Address; data: Hex }];
+        }) => Promise<bigint | Hex | number | string>;
+        const raw = await request({
+          method: "linea_estimateGas",
+          params: [{ from: options.account, to: options.to, data }],
+        });
+        const lineaGas = typeof raw === "bigint" ? raw : BigInt(raw);
+        logInfo("GasShadow", "linea_estimateGas shadow", {
+          tag: options.tag,
+          functionName: options.functionName,
+          baselineGas: options.baselineGas,
+          lineaGas,
+          ratioBps: ratioBps(lineaGas, options.baselineGas),
+        });
+      } catch (error) {
+        logInfo("GasShadow", "linea_estimateGas shadow unavailable", {
+          tag: options.tag,
+          functionName: options.functionName,
+          reason: classifyShadowUnavailableReason(error),
+        });
+      }
+    })();
+  };
+}
+
+export const recordLineaEstimateGasShadow = createLineaEstimateGasShadowRecorder();

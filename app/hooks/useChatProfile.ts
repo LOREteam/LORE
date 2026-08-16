@@ -2,40 +2,23 @@
 
 import { log } from "../lib/logger";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { sanitizeCustomChatAvatar, sanitizePresetChatAvatar } from "../lib/chatAvatar";
 import { loadChatAuthSession } from "../lib/chatSessionClient";
-import { readJsonResponse } from "../lib/readJsonResponse";
-import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { normalizeChatAuthAddress } from "../lib/chatAuth";
+import {
+  emptyChatProfile,
+  fetchRemoteChatProfile,
+  hasMeaningfulChatProfile,
+  normalizeChatProfile,
+  persistChatProfileCache,
+  readChatProfileCache,
+  sameChatProfileContent,
+  saveRemoteChatProfile,
+  selectNewerChatProfile,
+  type ChatProfile,
+} from "../lib/chatProfileRuntime";
 import { type ChatAuthControls, useChatAuth } from "./useChatAuth";
 
-const LEGACY_STORAGE_KEY = "lore:chat-profile";
-const STORAGE_KEY_PREFIX = "lore:chat-profile:";
-const PROFILE_NAME_MAX = 20;
-const MAX_AVATAR_LEN = 8_000;
-export interface ChatProfile {
-  name: string | null;
-  avatar: string | null;
-  customAvatar: string | null;
-  updatedAt?: number;
-}
-
-function storageKey(walletAddress: string | null): string {
-  const normalizedWallet = normalizeChatAuthAddress(walletAddress);
-  return normalizedWallet ? `${STORAGE_KEY_PREFIX}${normalizedWallet}` : LEGACY_STORAGE_KEY;
-}
-
-function emptyProfile(): ChatProfile {
-  return { name: null, avatar: null, customAvatar: null, updatedAt: 0 };
-}
-
-function clearProfileKey(key: string) {
-  try {
-    localStorage.removeItem(key);
-  } catch {
-    // ignore storage failures
-  }
-}
+export type { ChatProfile } from "../lib/chatProfileRuntime";
 
 function isChatAuthError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -43,113 +26,14 @@ function isChatAuthError(err: unknown): boolean {
   return msg.includes("http 401") || msg.includes("chat auth required");
 }
 
-function normalizeProfile(input: Partial<ChatProfile>): ChatProfile {
-  const nameRaw = typeof input.name === "string" ? input.name.trim() : "";
-  const name = nameRaw ? nameRaw.slice(0, PROFILE_NAME_MAX) : null;
-  const avatar = sanitizePresetChatAvatar(input.avatar);
-  const customAvatar = sanitizeCustomChatAvatar(input.customAvatar, MAX_AVATAR_LEN);
-  const updatedAt = typeof input.updatedAt === "number" ? input.updatedAt : 0;
-  return { name, avatar, customAvatar, updatedAt };
-}
-
-function hasMeaningfulProfile(profile: ChatProfile): boolean {
-  return !!(profile.name || profile.avatar || profile.customAvatar);
-}
-
-function sameProfileContent(a: ChatProfile | null, b: ChatProfile | null): boolean {
-  if (!a || !b) return false;
-  return a.name === b.name && a.avatar === b.avatar && a.customAvatar === b.customAvatar;
-}
-
 function loadProfile(walletAddress: string | null): ChatProfile {
-  if (typeof localStorage === "undefined") return emptyProfile();
-  const key = storageKey(walletAddress);
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== "object") {
-        clearProfileKey(key);
-        return emptyProfile();
-      }
-      return normalizeProfile(parsed as Partial<ChatProfile>);
-    }
-
-    // Backward compatibility: migrate old single-key profile to per-wallet key.
-    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!legacy) return emptyProfile();
-    let legacyRaw: unknown;
-    try {
-      legacyRaw = JSON.parse(legacy) as unknown;
-    } catch {
-      clearProfileKey(LEGACY_STORAGE_KEY);
-      return emptyProfile();
-    }
-    if (!legacyRaw || typeof legacyRaw !== "object") {
-      clearProfileKey(LEGACY_STORAGE_KEY);
-      return emptyProfile();
-    }
-    const parsedLegacy = normalizeProfile(legacyRaw as Partial<ChatProfile>);
-    if (walletAddress) {
-      localStorage.setItem(key, JSON.stringify(parsedLegacy));
-    }
-    return parsedLegacy;
-  } catch {
-    clearProfileKey(key);
-    return emptyProfile();
-  }
+  if (typeof localStorage === "undefined") return emptyChatProfile();
+  return readChatProfileCache(localStorage, walletAddress);
 }
 
 function saveProfile(walletAddress: string | null, profile: ChatProfile) {
   if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(storageKey(walletAddress), JSON.stringify(profile));
-  } catch {
-    // ignore quota / private mode
-  }
-}
-
-function newerProfile(a: ChatProfile | null, b: ChatProfile | null): ChatProfile | null {
-  if (!a) return b;
-  if (!b) return a;
-  return (a.updatedAt ?? 0) >= (b.updatedAt ?? 0) ? a : b;
-}
-
-async function fetchRemoteProfile(walletAddress: string): Promise<ChatProfile | null> {
-  const normalizedWallet = normalizeChatAuthAddress(walletAddress);
-  if (!normalizedWallet) return null;
-  try {
-    const res = await fetchWithTimeout(`/api/chat/profile?walletAddress=${normalizedWallet}`, { cache: "no-store" });
-    if (!res.ok) return null;
-    const json = await readJsonResponse<{ profile?: Partial<ChatProfile> | null }>(res);
-    if (!json) return null;
-    if (!json.profile || typeof json.profile !== "object") return null;
-    const profile = normalizeProfile(json.profile);
-    return hasMeaningfulProfile(profile) ? profile : null;
-  } catch {
-    return null;
-  }
-}
-
-async function saveRemoteProfile(walletAddress: string, profile: ChatProfile): Promise<void> {
-  const normalizedWallet = normalizeChatAuthAddress(walletAddress);
-  if (!normalizedWallet) throw new Error("Invalid chat wallet address");
-  const payload = {
-    walletAddress: normalizedWallet,
-    name: profile.name,
-    avatar: profile.avatar,
-    customAvatar: profile.customAvatar,
-    updatedAt: profile.updatedAt ?? Date.now(),
-  };
-  const response = await fetchWithTimeout("/api/chat/profile", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const json = await readJsonResponse<{ error?: string }>(response).catch(() => null);
-    throw new Error(json?.error || `HTTP ${response.status}`);
-  }
+  persistChatProfileCache(localStorage, walletAddress, profile);
 }
 
 export function useChatProfile(walletAddress: string | null, auth?: ChatAuthControls) {
@@ -174,7 +58,7 @@ export function useChatProfile(walletAddress: string | null, auth?: ChatAuthCont
     if (lastSyncedProfileRef.current === syncKey) return;
 
     const attemptSave = async () => {
-      await saveRemoteProfile(normalizedWallet, nextProfile);
+      await saveRemoteChatProfile(normalizedWallet, nextProfile);
     };
 
     try {
@@ -202,10 +86,10 @@ export function useChatProfile(walletAddress: string | null, auth?: ChatAuthCont
 
     const syncProfile = async () => {
       const local = loadProfile(normalizedWallet);
-      const remote = await fetchRemoteProfile(normalizedWallet);
+      const remote = await fetchRemoteChatProfile(normalizedWallet);
 
-      const best = newerProfile(local, remote);
-      if (!best || !hasMeaningfulProfile(best)) return;
+      const best = selectNewerChatProfile(local, remote);
+      if (!best || !hasMeaningfulChatProfile(best)) return;
 
       if (!cancelled) setProfile(best);
       saveProfile(normalizedWallet, best);
@@ -214,7 +98,7 @@ export function useChatProfile(walletAddress: string | null, auth?: ChatAuthCont
       if (!remote || (best.updatedAt ?? 0) > (remote.updatedAt ?? 0)) {
         const existing = loadChatAuthSession(normalizedWallet);
         if (existing?.address === normalizedWallet) {
-          void saveRemoteProfile(normalizedWallet, best).catch((err) => {
+          void saveRemoteChatProfile(normalizedWallet, best).catch((err) => {
             if (!isChatAuthError(err)) {
               log.warn("ChatProfile", "background profile sync failed", { message: err instanceof Error ? err.message : String(err) });
             }
@@ -234,18 +118,18 @@ export function useChatProfile(walletAddress: string | null, auth?: ChatAuthCont
   const effectiveAvatar = profile.customAvatar ?? profile.avatar;
 
   const updateProfile = useCallback((updates: Partial<ChatProfile>) => {
-    const next = normalizeProfile({ ...profile, ...updates, updatedAt: Date.now() });
+    const next = normalizeChatProfile({ ...profile, ...updates, updatedAt: Date.now() });
     if (updates.customAvatar) {
       next.avatar = null;
     } else if (updates.avatar) {
       next.customAvatar = null;
     }
-    if (sameProfileContent(profile, next)) {
+    if (sameChatProfileContent(profile, next)) {
       return;
     }
     setProfile(next);
     saveProfile(normalizedWallet, next);
-    if (normalizedWallet && hasMeaningfulProfile(next)) {
+    if (normalizedWallet && hasMeaningfulChatProfile(next)) {
       void (async () => {
         if (await ensureChatAuth()) {
           await persistRemoteProfile(next);

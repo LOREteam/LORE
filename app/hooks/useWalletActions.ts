@@ -23,19 +23,24 @@ import { log } from "../lib/logger";
 import { isUserRejection, normalizeDecimalInput } from "../lib/utils";
 import { parsePositiveLineaAmountWei } from "../lib/tokenAmountMath";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
+import { withEoaNonceLock } from "../lib/eoaNonceLock";
 import {
   createWalletTransferIntent,
   getWalletTransferIntentErrorHash,
   isWalletTransferIntentError,
+  reconcileWalletTransferReplacementCandidate,
   resolveWalletTransferIntent,
   selectWalletTransferAgreementRpcUrls,
   waitForStableWalletTransferReceipt,
+  waitForWalletTransferIntentReceipt,
   WalletTransferIntentError,
   WalletTransactionRevertedError,
   type WalletTransferIntent,
   type WalletTransferIntentDetails,
   type WalletTransferReceiptClients,
+  hasTrackedWalletTransferNonce,
 } from "../lib/walletTransferIntent";
+import { hasTrackedMiningNonce } from "../lib/miningTxPath";
 import {
   isAmbiguousPendingTxError,
   isSessionExpiredError,
@@ -84,6 +89,12 @@ function formatWalletTransferFailure(error: unknown, asset: "ETH" | "LINEA") {
   if (message.includes("wallet_transfer_transaction_missing_manual_reconciliation")) {
     return `${asset} transfer hash is missing from both RPCs. Do not retry automatically; manual nonce reconciliation is required.`;
   }
+  if (message.includes("wallet_transfer_transaction_")) {
+    return `${asset} transfer transaction details do not match the approved request across both RPCs. Do not retry automatically; manual transaction reconciliation is required.`;
+  }
+  if (message.includes("wallet_transfer_replacement_")) {
+    return `${asset} transfer was replaced, but both RPCs did not prove an exact gas-only reprice. Do not retry automatically; manual transaction reconciliation is required.`;
+  }
   if (message.includes("wallet_transfer_intent_resolution_mismatch")) {
     return `${asset} transfer receipt was verified, but its local safety intent could not be cleared. Do not retry until storage reconciliation succeeds.`;
   }
@@ -122,6 +133,9 @@ function formatWalletTransferFailure(error: unknown, asset: "ETH" | "LINEA") {
 
 function formatWalletActionFailure(error: unknown, action: string, fallback: string) {
   const message = error instanceof Error ? error.message : "";
+  if (message.includes("pending_tx_repair_tracked_nonce")) {
+    return "This nonce belongs to a tracked transfer, bet, or approval. Reconcile that transaction instead of replacing it.";
+  }
   if (/\btimed out\b|\btimeout\b/i.test(message)) {
     return `${action} status is unknown after a wallet timeout. Check wallet activity before retrying.`;
   }
@@ -160,6 +174,19 @@ function normalizePendingTransactionNonce(value: unknown): number | null {
   return value;
 }
 
+export function assertPendingTxRepairNonceIsUntracked(
+  chainId: number,
+  actor: string,
+  nonce: number,
+) {
+  if (
+    hasTrackedWalletTransferNonce(chainId, actor, nonce) ||
+    hasTrackedMiningNonce(chainId, actor, nonce)
+  ) {
+    throw new Error("pending_tx_repair_tracked_nonce");
+  }
+}
+
 export interface PendingTransactionStatus {
   latestNonce: number;
   pendingNonce: number;
@@ -187,6 +214,7 @@ interface UseWalletActionsOptions {
   isPageVisible?: boolean;
   minEthForGas: number;
   minEthWithdrawReserveWei: bigint;
+  walletTransferReceiptClients?: WalletTransferReceiptClients;
 }
 
 export function useWalletActions({
@@ -208,6 +236,7 @@ export function useWalletActions({
   isPageVisible = true,
   minEthForGas,
   minEthWithdrawReserveWei,
+  walletTransferReceiptClients = WALLET_TRANSFER_RECEIPT_CLIENTS ?? undefined,
 }: UseWalletActionsOptions) {
   const [withdrawAmount, setWithdrawAmount] = useState("0.0");
   const [withdrawEthAmount, setWithdrawEthAmount] = useState("0.0");
@@ -322,23 +351,93 @@ export function useWalletActions({
   );
 
   const waitForTransferReceipt = useCallback(
-    async (hash: `0x${string}`): Promise<ReceiptState> => {
-      if (!WALLET_TRANSFER_RECEIPT_CLIENTS) {
+    async (intent: WalletTransferIntent, hash: `0x${string}`) => {
+      if (!walletTransferReceiptClients) {
         throw new WalletTransferIntentError(
           "wallet_transfer_receipt_independent_rpc_required",
           hash,
         );
       }
-      return waitForStableWalletTransferReceipt(
-        WALLET_TRANSFER_RECEIPT_CLIENTS,
+      return waitForWalletTransferIntentReceipt(
+        walletTransferReceiptClients,
+        intent,
         hash,
         TX_RECEIPT_TIMEOUT_MS,
       );
     },
-    [],
+    [walletTransferReceiptClients],
   );
 
-  const refreshPendingTransactionStatus = useCallback(async () => {
+  const resolveTransferIntent = useCallback(
+    async (
+      intent: WalletTransferIntent,
+      hash: `0x${string}`,
+      resolution: "confirmed" | "reverted",
+    ) => {
+      if (!walletTransferReceiptClients) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_receipt_independent_rpc_required",
+          hash,
+        );
+      }
+      return resolveWalletTransferIntent(
+        intent,
+        hash,
+        resolution,
+        walletTransferReceiptClients,
+      );
+    },
+    [walletTransferReceiptClients],
+  );
+
+  const refreshPendingTransactionStatus = useCallback(async (replacementHash?: string) => {
+    const candidateHash = replacementHash?.trim();
+    if (candidateHash) {
+      const allowedActors = [embeddedWalletAddress, externalWalletAddress]
+        .filter((value): value is string => Boolean(value));
+      if (!walletTransferReceiptClients || allowedActors.length === 0) {
+        notify("Replacement verification requires the current wallet and two independent RPCs.", "warning");
+        return null;
+      }
+      setIsRefreshingPendingTx(true);
+      try {
+        const recovery = await reconcileWalletTransferReplacementCandidate(
+          walletTransferReceiptClients,
+          allowedActors,
+          candidateHash,
+          TX_RECEIPT_TIMEOUT_MS,
+        );
+        if (recovery.status === "pending") {
+          notify(
+            formatTxStatusMessage(
+              "The exact gas-only replacement was verified across both RPCs and remains pending finality.",
+              recovery.hash,
+            ),
+            "warning",
+          );
+        } else {
+          notify(
+            formatTxStatusMessage(
+              recovery.status === "confirmed"
+                ? "The exact gas-only replacement was finalized and the blocked transfer was reconciled."
+                : "The exact gas-only replacement reverted with finality; the blocked transfer was released for retry.",
+              recovery.hash,
+            ),
+            recovery.status === "confirmed" ? "success" : "warning",
+          );
+        }
+        return null;
+      } catch (err) {
+        log.warn("PendingTx", "replacement candidate reconciliation failed closed", err);
+        notify(
+          "Replacement hash was not accepted by both RPCs as the exact saved transfer. The original transfer remains blocked for manual review.",
+          "warning",
+        );
+        return null;
+      } finally {
+        setIsRefreshingPendingTx(false);
+      }
+    }
     if (!embeddedWalletAddress || !publicClient) {
       setPendingTransactionStatus(null);
       notify("Pending transaction status is unavailable until the Privy wallet is ready.", "warning");
@@ -391,7 +490,7 @@ export function useWalletActions({
     } finally {
       setIsRefreshingPendingTx(false);
     }
-  }, [embeddedWalletAddress, notify, publicClient]);
+  }, [embeddedWalletAddress, externalWalletAddress, formatTxStatusMessage, notify, publicClient, walletTransferReceiptClients]);
 
   const cancelPendingTransaction = useCallback(async () => {
     if (!embeddedWalletAddress) {
@@ -420,82 +519,94 @@ export function useWalletActions({
     setIsCancellingPendingTx(true);
     let repairTxHash: `0x${string}` | null = null;
     try {
-      const status = await refreshPendingTransactionStatus();
-      if (!assertPendingRepairActorActive()) return;
-      if (!status || status.nonceGap <= 0 || status.blockedNonce === null) {
-        notify("No stuck pending transaction was found to cancel.", "info");
-        return;
-      }
-
-      const sendCancel = async (nonce: number) => {
-        let feeOverrides:
-          | { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint }
-          | undefined;
-        try {
-          const fees = await withMiningRpcTimeout(publicClient.estimateFeesPerGas(), "settings.estimateFeesPerGas");
-          feeOverrides = getKeeperFeeOverrides(fees, APP_CHAIN_ID, 145n, 145n);
-        } catch {
-          feeOverrides = getFallbackFeeOverrides(APP_CHAIN_ID, "keeper");
-        }
-
-        return sendTransactionSilent(
-          {
-            to: getAddress(embeddedWalletAddress),
-            value: 0n,
-            gas: 21_000n,
-            nonce,
-            feeMode: "keeper",
-          },
-          feeOverrides,
-        );
-      };
-
-      let targetNonce = status.blockedNonce;
-      let hash: `0x${string}`;
-      try {
-        hash = await sendCancel(targetNonce);
-        repairTxHash = hash;
-      } catch (err) {
-        const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-        if (message.includes("nonce too low")) {
-          const refreshed = await refreshPendingTransactionStatus();
+      await withEoaNonceLock(
+        { chainId: APP_CHAIN_ID, actor: repairActor },
+        { ifAvailable: true },
+        async () => {
+          const status = await refreshPendingTransactionStatus();
           if (!assertPendingRepairActorActive()) return;
-          if (!refreshed || refreshed.nonceGap <= 0 || refreshed.blockedNonce === null) {
-            notify("The blocked nonce already advanced. No stuck pending transaction remains to clear.", "success");
+          if (!status || status.nonceGap <= 0 || status.blockedNonce === null) {
+            notify("No stuck pending transaction was found to cancel.", "info");
             return;
           }
-          if (refreshed.blockedNonce === targetNonce) {
-            throw err;
+
+          try {
+            assertPendingTxRepairNonceIsUntracked(APP_CHAIN_ID, repairActor, status.blockedNonce);
+          } catch {
+            notify(
+              "This nonce belongs to a tracked transfer, bet, or approval. Reconcile that transaction instead of replacing it.",
+              "warning",
+            );
+            return;
           }
-          targetNonce = refreshed.blockedNonce;
-          hash = await sendCancel(targetNonce);
-          repairTxHash = hash;
-        } else {
-          throw err;
-        }
-      }
 
-      const receiptState = await waitForReceipt(hash);
-      if (!assertPendingRepairActorActive()) return;
-      if (receiptState === "pending") {
-        void refreshPendingTransactionStatus();
-        notify(
-          formatTxStatusMessage(
-            `Pending transaction repair submitted for nonce ${targetNonce} and is still pending confirmation.`,
-            hash,
-          ),
-          "warning",
-        );
-        return;
-      }
+          const sendCancel = async (nonce: number) => {
+            assertPendingTxRepairNonceIsUntracked(APP_CHAIN_ID, repairActor, nonce);
+            let feeOverrides:
+              | { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint }
+              | undefined;
+            try {
+              const fees = await withMiningRpcTimeout(publicClient.estimateFeesPerGas(), "settings.estimateFeesPerGas");
+              feeOverrides = getKeeperFeeOverrides(fees, APP_CHAIN_ID, 145n, 145n);
+            } catch {
+              feeOverrides = getFallbackFeeOverrides(APP_CHAIN_ID, "keeper");
+            }
 
-      const refreshed = await refreshPendingTransactionStatus();
-      if (!assertPendingRepairActorActive()) return;
-      if (refreshed && refreshed.nonceGap > 0) {
-        notify(formatTxStatusMessage(`Replaced blocked nonce ${targetNonce}. If more are queued, run clear again.`, hash), "warning");
-      } else {
-        notify(formatTxStatusMessage(`Stuck pending transaction cleared at nonce ${targetNonce}.`, hash), "success");
-      }
+            return sendTransactionSilent(
+              {
+                to: getAddress(embeddedWalletAddress),
+                value: 0n,
+                gas: 21_000n,
+                nonce,
+                feeMode: "keeper",
+              },
+              feeOverrides,
+            );
+          };
+
+          let targetNonce = status.blockedNonce;
+          let hash: `0x${string}`;
+          try {
+            hash = await sendCancel(targetNonce);
+            repairTxHash = hash;
+          } catch (err) {
+            const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+            if (!message.includes("nonce too low")) throw err;
+            const refreshed = await refreshPendingTransactionStatus();
+            if (!assertPendingRepairActorActive()) return;
+            if (!refreshed || refreshed.nonceGap <= 0 || refreshed.blockedNonce === null) {
+              notify("The blocked nonce already advanced. No stuck pending transaction remains to clear.", "success");
+              return;
+            }
+            if (refreshed.blockedNonce === targetNonce) throw err;
+            targetNonce = refreshed.blockedNonce;
+            hash = await sendCancel(targetNonce);
+            repairTxHash = hash;
+          }
+
+          const receiptState = await waitForReceipt(hash);
+          if (!assertPendingRepairActorActive()) return;
+          if (receiptState === "pending") {
+            void refreshPendingTransactionStatus();
+            notify(
+              formatTxStatusMessage(
+                `Pending transaction repair submitted for nonce ${targetNonce} and is still pending confirmation.`,
+                hash,
+              ),
+              "warning",
+            );
+            return;
+          }
+
+          const refreshed = await refreshPendingTransactionStatus();
+          if (!assertPendingRepairActorActive()) return;
+          if (refreshed && refreshed.nonceGap > 0) {
+            notify(formatTxStatusMessage(`Replaced blocked nonce ${targetNonce}. If more are queued, run clear again.`, hash), "warning");
+          } else {
+            notify(formatTxStatusMessage(`Stuck pending transaction cleared at nonce ${targetNonce}.`, hash), "success");
+          }
+        },
+      );
     } catch (err) {
       if (!isUserRejection(err)) {
         log.error("PendingTx", "cancel failed", err);
@@ -761,22 +872,25 @@ export function useWalletActions({
         },
       });
       transferTxHash = hash;
-      const receiptState = await waitForTransferReceipt(hash);
-      if (receiptState === "pending") {
-        notify(formatTxStatusMessage("LINEA withdraw submitted and is still pending confirmation.", hash), "info");
+      const receiptState = await waitForTransferReceipt(transferIntent, hash);
+      transferTxHash = receiptState.hash;
+      if (receiptState.status === "pending") {
+        notify(formatTxStatusMessage("LINEA withdraw submitted and is still pending confirmation.", receiptState.hash), "info");
         return;
       }
-      if (!await resolveWalletTransferIntent(transferIntent, hash, "confirmed")) {
+      if (!await resolveTransferIntent(transferIntent, receiptState.hash, "confirmed")) {
         throw new WalletTransferIntentError(
           "wallet_transfer_intent_resolution_mismatch",
-          hash,
+          receiptState.hash,
         );
       }
       setWithdrawAmount("0.0");
       void refetchEmbeddedTokenBalance();
-      notify(formatTxStatusMessage("LINEA sent to your external wallet.", hash), "success");
+      notify(formatTxStatusMessage("LINEA sent to your external wallet.", receiptState.hash), "success");
     } catch (err) {
-      const knownHash = transferTxHash ?? getWalletTransferIntentErrorHash(err);
+      const knownHash = err instanceof WalletTransactionRevertedError
+        ? err.transactionHash
+        : transferTxHash ?? getWalletTransferIntentErrorHash(err);
       if (
         transferIntent &&
         knownHash &&
@@ -784,7 +898,7 @@ export function useWalletActions({
         err.transactionHash === knownHash
       ) {
         try {
-          if (!await resolveWalletTransferIntent(transferIntent, knownHash, "reverted")) {
+          if (!await resolveTransferIntent(transferIntent, knownHash, "reverted")) {
             throw new WalletTransferIntentError(
               "wallet_transfer_intent_resolution_mismatch",
               knownHash,
@@ -812,7 +926,7 @@ export function useWalletActions({
       walletTransferInFlightRef.current = false;
       setIsWithdrawing(false);
     }
-  }, [embeddedTokenBalance, embeddedWalletAddress, externalWalletAddress, formatTxStatusMessage, notify, onOpenWalletSettings, refetchEmbeddedTokenBalance, sendTransactionSilent, waitForTransferReceipt, withdrawAmount]);
+  }, [embeddedTokenBalance, embeddedWalletAddress, externalWalletAddress, formatTxStatusMessage, notify, onOpenWalletSettings, refetchEmbeddedTokenBalance, resolveTransferIntent, sendTransactionSilent, waitForTransferReceipt, withdrawAmount]);
 
   const handleWithdrawEthToExternal = useCallback(async () => {
     if (!embeddedWalletAddress) {
@@ -868,22 +982,25 @@ export function useWalletActions({
         value: amountWei,
       });
       transferTxHash = hash;
-      const receiptState = await waitForTransferReceipt(hash);
-      if (receiptState === "pending") {
-        notify(formatTxStatusMessage("ETH withdraw submitted and is still pending confirmation.", hash), "info");
+      const receiptState = await waitForTransferReceipt(transferIntent, hash);
+      transferTxHash = receiptState.hash;
+      if (receiptState.status === "pending") {
+        notify(formatTxStatusMessage("ETH withdraw submitted and is still pending confirmation.", receiptState.hash), "info");
         return;
       }
-      if (!await resolveWalletTransferIntent(transferIntent, hash, "confirmed")) {
+      if (!await resolveTransferIntent(transferIntent, receiptState.hash, "confirmed")) {
         throw new WalletTransferIntentError(
           "wallet_transfer_intent_resolution_mismatch",
-          hash,
+          receiptState.hash,
         );
       }
       setWithdrawEthAmount("0.0");
       void refetchEmbeddedEthBalance();
-      notify(formatTxStatusMessage("ETH sent to your external wallet.", hash), "success");
+      notify(formatTxStatusMessage("ETH sent to your external wallet.", receiptState.hash), "success");
     } catch (err) {
-      const knownHash = transferTxHash ?? getWalletTransferIntentErrorHash(err);
+      const knownHash = err instanceof WalletTransactionRevertedError
+        ? err.transactionHash
+        : transferTxHash ?? getWalletTransferIntentErrorHash(err);
       if (
         transferIntent &&
         knownHash &&
@@ -891,7 +1008,7 @@ export function useWalletActions({
         err.transactionHash === knownHash
       ) {
         try {
-          if (!await resolveWalletTransferIntent(transferIntent, knownHash, "reverted")) {
+          if (!await resolveTransferIntent(transferIntent, knownHash, "reverted")) {
             throw new WalletTransferIntentError(
               "wallet_transfer_intent_resolution_mismatch",
               knownHash,
@@ -929,6 +1046,7 @@ export function useWalletActions({
     notify,
     onOpenWalletSettings,
     refetchEmbeddedEthBalance,
+    resolveTransferIntent,
     sendTransactionSilent,
     waitForTransferReceipt,
     withdrawEthAmount,
@@ -971,21 +1089,24 @@ export function useWalletActions({
         expectedActor: getAddress(externalWalletAddress),
       });
       transferTxHash = hash;
-      const receiptState = await waitForTransferReceipt(hash);
-      if (receiptState === "pending") {
-        notify(formatTxStatusMessage("ETH transfer submitted and is still pending confirmation.", hash), "info");
+      const receiptState = await waitForTransferReceipt(transferIntent, hash);
+      transferTxHash = receiptState.hash;
+      if (receiptState.status === "pending") {
+        notify(formatTxStatusMessage("ETH transfer submitted and is still pending confirmation.", receiptState.hash), "info");
         return;
       }
-      if (!await resolveWalletTransferIntent(transferIntent, hash, "confirmed")) {
+      if (!await resolveTransferIntent(transferIntent, receiptState.hash, "confirmed")) {
         throw new WalletTransferIntentError(
           "wallet_transfer_intent_resolution_mismatch",
-          hash,
+          receiptState.hash,
         );
       }
       void refetchEmbeddedEthBalance();
-      notify(formatTxStatusMessage("ETH transfer to the Privy wallet was sent.", hash), "success");
+      notify(formatTxStatusMessage("ETH transfer to the Privy wallet was sent.", receiptState.hash), "success");
     } catch (err) {
-      const knownHash = transferTxHash ?? getWalletTransferIntentErrorHash(err);
+      const knownHash = err instanceof WalletTransactionRevertedError
+        ? err.transactionHash
+        : transferTxHash ?? getWalletTransferIntentErrorHash(err);
       if (
         transferIntent &&
         knownHash &&
@@ -993,7 +1114,7 @@ export function useWalletActions({
         err.transactionHash === knownHash
       ) {
         try {
-          if (!await resolveWalletTransferIntent(transferIntent, knownHash, "reverted")) {
+          if (!await resolveTransferIntent(transferIntent, knownHash, "reverted")) {
             throw new WalletTransferIntentError(
               "wallet_transfer_intent_resolution_mismatch",
               knownHash,
@@ -1029,6 +1150,7 @@ export function useWalletActions({
     notify,
     onOpenWalletSettings,
     refetchEmbeddedEthBalance,
+    resolveTransferIntent,
     sendTransactionFromExternal,
     waitForTransferReceipt,
   ]);
@@ -1092,24 +1214,27 @@ export function useWalletActions({
         },
       });
       transferTxHash = hash;
-      const receiptState = await waitForTransferReceipt(hash);
-      if (receiptState === "pending") {
-        notify(formatTxStatusMessage("LINEA transfer submitted and is still pending confirmation.", hash), "info");
+      const receiptState = await waitForTransferReceipt(transferIntent, hash);
+      transferTxHash = receiptState.hash;
+      if (receiptState.status === "pending") {
+        notify(formatTxStatusMessage("LINEA transfer submitted and is still pending confirmation.", receiptState.hash), "info");
         return;
       }
-      if (!await resolveWalletTransferIntent(transferIntent, hash, "confirmed")) {
+      if (!await resolveTransferIntent(transferIntent, receiptState.hash, "confirmed")) {
         throw new WalletTransferIntentError(
           "wallet_transfer_intent_resolution_mismatch",
-          hash,
+          receiptState.hash,
         );
       }
       void refetchEmbeddedTokenBalance();
       if (walletTransfersEnabled && fetchWalletTransfers) {
         void fetchWalletTransfers();
       }
-      notify(formatTxStatusMessage("LINEA transfer to the Privy wallet was sent.", hash), "success");
+      notify(formatTxStatusMessage("LINEA transfer to the Privy wallet was sent.", receiptState.hash), "success");
     } catch (err) {
-      const knownHash = transferTxHash ?? getWalletTransferIntentErrorHash(err);
+      const knownHash = err instanceof WalletTransactionRevertedError
+        ? err.transactionHash
+        : transferTxHash ?? getWalletTransferIntentErrorHash(err);
       if (
         transferIntent &&
         knownHash &&
@@ -1117,7 +1242,7 @@ export function useWalletActions({
         err.transactionHash === knownHash
       ) {
         try {
-          if (!await resolveWalletTransferIntent(transferIntent, knownHash, "reverted")) {
+          if (!await resolveTransferIntent(transferIntent, knownHash, "reverted")) {
             throw new WalletTransferIntentError(
               "wallet_transfer_intent_resolution_mismatch",
               knownHash,
@@ -1155,6 +1280,7 @@ export function useWalletActions({
     onOpenWalletSettings,
     publicClient,
     refetchEmbeddedTokenBalance,
+    resolveTransferIntent,
     sendTransactionFromExternal,
     waitForTransferReceipt,
     walletTransfersEnabled,

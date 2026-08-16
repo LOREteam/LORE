@@ -74,6 +74,17 @@ export function shouldDisableLiveContractReadsAfterRecovery(
   );
 }
 
+export async function fetchLiveStateSnapshotResponse(
+  signal: AbortSignal,
+  fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> = fetch,
+) {
+  const response = await fetchImpl("/api/live-state", { cache: "no-store", signal });
+  if (!response.ok) throw new Error(`Live state request failed (HTTP ${response.status})`);
+  const payload = await readJsonResponse<LiveStateApiResponse>(response);
+  if (!payload) throw new Error(`Live state returned empty JSON (HTTP ${response.status})`);
+  return payload;
+}
+
 export function loadLiveStateSnapshot(): LiveStateApiResponse | null {
   if (typeof window === "undefined") return null;
   const storageKey = getLiveStateSnapshotKey();
@@ -129,7 +140,7 @@ function toBigIntArray(values?: string[] | null) {
   return parsed;
 }
 
-function hasGridLength<T>(values: T[] | null | undefined): values is T[] {
+export function hasLiveStateGridLength<T>(values: T[] | null | undefined): values is T[] {
   return Array.isArray(values) && values.length === GRID_SIZE;
 }
 
@@ -226,18 +237,9 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
       };
 
       try {
-        const response = await fetch("/api/live-state", { cache: "no-store", signal: requestController.signal });
+        const payload = await fetchLiveStateSnapshotResponse(requestController.signal);
         if (controller.signal.aborted || requestController.signal.aborted) return;
-        if (!response.ok) {
-          consecutiveFailures++;
-          consecutiveSuccesses = 0;
-          enableLiveReadsAfterFailure();
-          return;
-        }
         consecutiveFailures = 0;
-        const payload = await readJsonResponse<LiveStateApiResponse>(response);
-        if (controller.signal.aborted || requestController.signal.aborted) return;
-        if (!payload) return;
         consecutiveSuccesses += 1;
         const disableLiveReads = shouldDisableLiveContractReadsAfterRecovery(
           forceLiveContractReads,
@@ -350,7 +352,7 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
   const fallbackTileData = useMemo(() => {
     const tileData = serverLiveState?.tileData;
     if (!tileData) return null;
-    if (!hasGridLength(tileData.pools ?? null) || !hasGridLength(tileData.users ?? null)) return null;
+    if (!hasLiveStateGridLength(tileData.pools ?? null) || !hasLiveStateGridLength(tileData.users ?? null)) return null;
     const pools = toBigIntArray(tileData.pools ?? null);
     const users = toBigIntArray(tileData.users ?? null);
     if (!pools || !users) return null;
@@ -358,7 +360,7 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
   }, [serverLiveState?.tileData]);
   const fallbackTileUserCounts = useMemo(() => {
     const counts = serverLiveState?.tileUserCounts ?? null;
-    if (!hasGridLength(counts)) return null;
+    if (!hasLiveStateGridLength(counts)) return null;
     return counts.slice(0, 25).map((value) => {
       const count = Number(value);
       return Number.isFinite(count) && count >= 0 ? count : 0;
@@ -366,7 +368,7 @@ export function useGameLiveStateSnapshot(options: UseGameLiveStateSnapshotOption
   }, [serverLiveState?.tileUserCounts]);
   const fallbackIndexedTilePools = useMemo(() => {
     const indexedTilePools = serverLiveState?.indexedTilePools ?? null;
-    if (!hasGridLength(indexedTilePools)) return null;
+    if (!hasLiveStateGridLength(indexedTilePools)) return null;
     return toBigIntArray(indexedTilePools);
   }, [serverLiveState?.indexedTilePools]);
   const fallbackEpochDuration = useMemo(

@@ -13,12 +13,70 @@ import {
 const TAB_ID = getStableTabId();
 
 const lockChannel =
-  typeof BroadcastChannel !== "undefined"
+  typeof window !== "undefined" && typeof BroadcastChannel !== "undefined"
     ? new BroadcastChannel(`lore-tab-lock:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`)
     : null;
 
 const pendingLockPingResolvers = new Map<string, (ownerAlive: boolean) => void>();
-let releaseNativeTabLock: (() => void) | null = null;
+
+interface NativeTabLockManager {
+  request: (
+    name: string,
+    options: { ifAvailable: true; mode: "exclusive" },
+    callback: (lock: { name?: string; mode?: string } | null) => Promise<void> | void,
+  ) => Promise<unknown>;
+}
+
+function readBrowserLockManager(): NativeTabLockManager | null {
+  if (typeof navigator === "undefined" || !navigator.locks) return null;
+  return navigator.locks as unknown as NativeTabLockManager;
+}
+
+export function createNativeTabLockController(
+  getLockManager: () => NativeTabLockManager | null = readBrowserLockManager,
+) {
+  let releaseNativeTabLock: (() => void) | null = null;
+
+  return {
+    async acquire(): Promise<boolean> {
+      if (releaseNativeTabLock) return true;
+      const lockManager = getLockManager();
+      if (!lockManager) return false;
+
+      return new Promise((resolve) => {
+        let release!: () => void;
+        const hold = new Promise<void>((releaseHold) => {
+          release = releaseHold;
+        });
+
+        try {
+          void lockManager
+            .request(TAB_LOCK_KEY, { ifAvailable: true, mode: "exclusive" }, async (lock) => {
+              if (!lock) {
+                resolve(false);
+                return;
+              }
+              releaseNativeTabLock = release;
+              resolve(true);
+              await hold;
+              if (releaseNativeTabLock === release) releaseNativeTabLock = null;
+            })
+            .catch(() => resolve(false));
+        } catch {
+          resolve(false);
+        }
+      });
+    },
+
+    release() {
+      const release = releaseNativeTabLock;
+      releaseNativeTabLock = null;
+      release?.();
+    },
+  };
+}
+
+const nativeTabLockController = createNativeTabLockController();
 
 function clearInvalidStoredTabLock() {
   try {
@@ -26,31 +84,6 @@ function clearInvalidStoredTabLock() {
   } catch {
     // ignore storage failures
   }
-}
-
-async function acquireNativeTabLock(): Promise<boolean> {
-  if (releaseNativeTabLock) return true;
-  if (typeof navigator === "undefined" || !navigator.locks) return false;
-
-  return new Promise((resolve) => {
-    let release!: () => void;
-    const hold = new Promise<void>((releaseHold) => {
-      release = releaseHold;
-    });
-
-    void navigator.locks
-      .request(TAB_LOCK_KEY, { ifAvailable: true, mode: "exclusive" }, async (lock) => {
-        if (!lock) {
-          resolve(false);
-          return;
-        }
-        releaseNativeTabLock = release;
-        resolve(true);
-        await hold;
-        if (releaseNativeTabLock === release) releaseNativeTabLock = null;
-      })
-      .catch(() => resolve(false));
-  });
 }
 
 function readTabLock() {
@@ -70,7 +103,7 @@ function readTabLock() {
 export async function acquireTabLock(): Promise<boolean> {
   // localStorage read/write verification is not atomic across tabs. Starting an
   // Auto-Miner without the browser lock can duplicate wallet sends.
-  return acquireNativeTabLock();
+  return nativeTabLockController.acquire();
 }
 
 function clearTabLock(lockId?: string | null): boolean {
@@ -142,9 +175,7 @@ export function renewTabLock() {
 }
 
 export function releaseTabLock() {
-  const release = releaseNativeTabLock;
-  releaseNativeTabLock = null;
-  release?.();
+  nativeTabLockController.release();
   try {
     const raw = localStorage.getItem(TAB_LOCK_KEY);
     if (!raw) return;

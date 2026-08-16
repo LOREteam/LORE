@@ -6,7 +6,6 @@ import { parseUnits } from "viem";
 import { usePublicClient } from "wagmi";
 import type { AutoMinePhase } from "../hooks/useMining.types";
 import { useManualBetForm } from "../hooks/useManualBetForm";
-import { formatBalanceFixed } from "../lib/balanceFormatting";
 import {
   APP_CHAIN_ID,
   CONTRACT_ADDRESS,
@@ -14,6 +13,13 @@ import {
   GRID_SIZE,
   GAME_ABI,
 } from "../lib/constants";
+import {
+  buildHubFeeEstimatePlan,
+  collectHubFeeEstimate,
+  getHubReadOnlyPresentation,
+  HUB_FEE_ESTIMATE_DEBOUNCE_MS,
+  normalizeHubFeeEstimateTiles,
+} from "../lib/hubFeeEstimate";
 import { HubGameBoard } from "./HubGameBoard";
 import { HubSidePanel } from "./HubSidePanel";
 
@@ -121,11 +127,12 @@ export const HubContent = React.memo(function HubContent({
   hasMyWinningBet,
 }: HubContentProps) {
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
+  const readOnlyPresentation = getHubReadOnlyPresentation(readOnlyReason);
   const manualBetForm = useManualBetForm({
     formattedBalance,
     walletConnected,
     liveStateReady,
-    readOnlyReason,
+    readOnlyReason: readOnlyPresentation?.text ?? null,
     selectedTilesCount,
     isPending,
     isRevealing,
@@ -135,19 +142,8 @@ export const HubContent = React.memo(function HubContent({
   const [feeEstimateUnavailable, setFeeEstimateUnavailable] = React.useState(false);
   const selectedTilesKey = gridSelectedTiles.join(",");
   const selectedTilesForEstimate = React.useMemo(
-    () => selectedTilesKey
-      ? [...new Set(selectedTilesKey.split(",").map((tile) => Number(tile)).filter((tile) => (
-          Number.isSafeInteger(tile) &&
-          tile >= 1 &&
-          tile <= GRID_SIZE
-        )))]
-          .sort((a, b) => a - b)
-      : [],
+    () => normalizeHubFeeEstimateTiles(selectedTilesKey, GRID_SIZE),
     [selectedTilesKey],
-  );
-  const selectedTileMaskForEstimate = React.useMemo(
-    () => selectedTilesForEstimate.reduce((mask, tile) => mask | (1 << (tile - 1)), 0),
-    [selectedTilesForEstimate],
   );
 
   React.useEffect(() => {
@@ -162,41 +158,24 @@ export const HubContent = React.memo(function HubContent({
       void (async () => {
         try {
           const amount = parseUnits(manualBetForm.betAmount || "0", 18);
-          if (amount <= 0n) throw new Error("Invalid bet amount");
-          if (CONTRACT_REQUIRES_EPOCH_BOUND_BETS && (!gridDisplayEpoch || !/^\d+$/.test(gridDisplayEpoch))) {
-            throw new Error("Current epoch unavailable for protected bet estimate");
-          }
-          const gasPromise = CONTRACT_REQUIRES_EPOCH_BOUND_BETS
-            ? publicClient.estimateContractGas({
-                account: walletAddress as `0x${string}`,
-                address: CONTRACT_ADDRESS,
-                abi: GAME_ABI,
-                functionName: "placeBatchBetsBitmapForEpoch" as const,
-                args: [BigInt(gridDisplayEpoch!), selectedTileMaskForEstimate, amount] as const,
-              })
-            : selectedTilesForEstimate.length === 1
-              ? publicClient.estimateContractGas({
-                  account: walletAddress as `0x${string}`,
-                  address: CONTRACT_ADDRESS,
-                  abi: GAME_ABI,
-                  functionName: "placeBet",
-                  args: [BigInt(selectedTilesForEstimate[0]), amount],
-                })
-              : publicClient.estimateContractGas({
-                  account: walletAddress as `0x${string}`,
-                  address: CONTRACT_ADDRESS,
-                  abi: GAME_ABI,
-                  functionName: "placeBatchBetsBitmap" as const,
-                  args: [selectedTileMaskForEstimate, amount] as const,
-                });
-          const [gas, fees] = await Promise.all([
-            gasPromise,
-            publicClient.estimateFeesPerGas(),
-          ]);
-          const feePerGas = fees.maxFeePerGas ?? fees.gasPrice;
-          if (!feePerGas) throw new Error("No fee quote");
+          const estimatePlan = buildHubFeeEstimatePlan({
+            requiresEpochBoundBets: CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
+            gridDisplayEpoch,
+            selectedTiles: selectedTilesForEstimate,
+            amount,
+          });
+          const nextFeeEstimate = await collectHubFeeEstimate({
+            estimateGas: () => publicClient.estimateContractGas({
+              account: walletAddress as `0x${string}`,
+              address: CONTRACT_ADDRESS,
+              abi: GAME_ABI,
+              functionName: estimatePlan.functionName,
+              args: estimatePlan.args,
+            } as never),
+            estimateFeesPerGas: () => publicClient.estimateFeesPerGas(),
+          });
           if (!cancelled) {
-            setFeeEstimate(formatBalanceFixed({ value: gas * feePerGas, decimals: 18 }, 6) ?? "0.000000");
+            setFeeEstimate(nextFeeEstimate);
             setFeeEstimateUnavailable(false);
           }
         } catch {
@@ -206,7 +185,7 @@ export const HubContent = React.memo(function HubContent({
           }
         }
       })();
-    }, 600);
+    }, HUB_FEE_ESTIMATE_DEBOUNCE_MS);
 
     return () => {
       cancelled = true;
@@ -217,7 +196,6 @@ export const HubContent = React.memo(function HubContent({
     liveStateReady,
     manualBetForm.betAmount,
     publicClient,
-    selectedTileMaskForEstimate,
     selectedTilesForEstimate,
     walletAddress,
     walletConnected,
@@ -241,12 +219,12 @@ export const HubContent = React.memo(function HubContent({
           aria-hidden="true"
         />
         <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(5,4,11,0.74),rgba(5,4,11,0.86))]" />
-        {readOnlyReason && (
+        {readOnlyPresentation && (
           <div
-            data-testid="hub-read-only-banner"
+            data-testid={readOnlyPresentation.testId}
             className="relative z-10 mb-1.5 rounded-xl border border-amber-300/24 bg-amber-400/10 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.08em] text-amber-100"
           >
-            {readOnlyReason}
+            {readOnlyPresentation.text}
           </div>
         )}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_44%_22%,rgba(167,139,250,0.12),transparent_38%),radial-gradient(circle_at_82%_78%,rgba(34,211,238,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.04),transparent_32%)]" />
@@ -286,7 +264,7 @@ export const HubContent = React.memo(function HubContent({
             formattedBalance={formattedBalance}
             walletConnected={walletConnected}
             liveStateReady={liveStateReady}
-            readOnlyReason={readOnlyReason}
+            readOnlyReason={readOnlyPresentation?.text ?? null}
             gridSelectedTiles={gridSelectedTiles}
             selectedTilesCount={selectedTilesCount}
             feeEstimate={feeEstimate}

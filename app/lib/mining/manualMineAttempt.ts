@@ -37,23 +37,22 @@ interface RunManualMineAttemptOptions {
   source: MineAttemptSource;
 }
 
-export async function runManualMineAttempt({
-  actorAddress,
-  betAmountStr,
-  ensureAllowance,
-  expectedEpoch,
-  finalizeMineSuccess,
-  getBumpedFees,
-  normalizedTiles,
-  placeBetsPreferSilent,
-  prepareBetConfirmation,
-  source,
-}: RunManualMineAttemptOptions): Promise<ReceiptState> {
+export async function runManualMineAttempt(options: RunManualMineAttemptOptions): Promise<ReceiptState> {
+  const {
+    actorAddress,
+    betAmountStr,
+    expectedEpoch,
+    finalizeMineSuccess,
+    getBumpedFees,
+    normalizedTiles,
+    placeBetsPreferSilent,
+    prepareBetConfirmation,
+    source,
+  } = options;
   const validationError = validateBetAmount(betAmountStr);
   if (validationError) throw new Error(validationError);
   const normalized = normalizeDecimalInput(betAmountStr.trim());
   const singleAmountRaw = parseUnits(normalized, 18);
-  const totalAmountRaw = singleAmountRaw * BigInt(normalizedTiles.length);
   let confirmBetAfterError: (() => Promise<boolean>) | null = null;
   try {
     confirmBetAfterError = await prepareBetConfirmation(
@@ -98,9 +97,6 @@ export async function runManualMineAttempt({
       throw error;
     }
     if (!isRetryableError(error)) throw error;
-    if (isAllowanceError(error)) {
-      await ensureAllowance(totalAmountRaw);
-    }
     if (isReceiptTimeoutError(error) || isAmbiguousPendingTxError(error)) {
       log.warn(source, "bet submission is ambiguous, avoid duplicate resend");
       return "pending";

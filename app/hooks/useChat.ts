@@ -9,7 +9,17 @@ import {
 } from "../lib/chatMessages";
 import { getChatPollDelayMs } from "../lib/chatPollDelay";
 import { CHAT_RATE_LIMIT_MS, parseChatRetryAfterMs } from "../lib/chatRateLimit";
+import {
+  CHAT_MESSAGES_LIMIT as MESSAGES_LIMIT,
+  createChatSendCooldown,
+  createOptimisticMessageId,
+  getChatSendCooldownRemaining,
+  persistChatMessageCache,
+  readChatMessageCache,
+  warnChatNetworkOnce as applyChatNetworkWarning,
+} from "../lib/chatRuntimePolicy";
 import { normalizeChatAuthAddress } from "../lib/chatAuth";
+import { reconcileChatSendAttempt } from "../lib/chatSendState";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { log } from "../lib/logger";
 import { readJsonResponse } from "../lib/readJsonResponse";
@@ -19,10 +29,7 @@ export type { ChatMessage } from "../lib/chatMessages";
 
 export { CHAT_RATE_LIMIT_MS } from "../lib/chatRateLimit";
 
-const MESSAGES_LIMIT = 100;
 const MAX_TEXT_LENGTH = 280;
-const CHAT_CACHE_KEY = "lore:chat-cache:v1";
-const NETWORK_WARN_THROTTLE_MS = 15_000;
 
 class ChatRateLimitError extends Error {
   readonly retryAfterMs: number;
@@ -70,58 +77,20 @@ function isChatRateLimitError(err: unknown): err is ChatRateLimitError {
   return err instanceof ChatRateLimitError;
 }
 
-function warnNetworkOnce(tag: string, ref: { current: number }, err: unknown) {
-  const now = Date.now();
-  if (now - ref.current < NETWORK_WARN_THROTTLE_MS) return;
-  ref.current = now;
-  log.warn("Chat", tag, err);
-}
-
-function createOptimisticMessageId(now: number): string {
-  if (typeof crypto !== "undefined") {
-    if (typeof crypto.randomUUID === "function") {
-      return `local:${now}:${crypto.randomUUID()}`;
-    }
-    if (typeof crypto.getRandomValues === "function") {
-      const bytes = new Uint8Array(12);
-      crypto.getRandomValues(bytes);
-      return `local:${now}:${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-    }
-  }
-  return `local:${now}:${Math.random().toString(36).slice(2)}`;
+function warnChatNetworkOnce(tag: string, ref: { current: number }, err: unknown): boolean {
+  return applyChatNetworkWarning(tag, ref, err, Date.now(), (scope, warningTag, error) => {
+    log.warn(scope, warningTag, error);
+  });
 }
 
 function loadCachedMessages(): ChatMessage[] {
   if (typeof localStorage === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(CHAT_CACHE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown[];
-    if (!Array.isArray(parsed)) {
-      localStorage.removeItem(CHAT_CACHE_KEY);
-      return [];
-    }
-    return normalizeChatMessages(parsed);
-  } catch {
-    try {
-      localStorage.removeItem(CHAT_CACHE_KEY);
-    } catch {
-      // ignore cache cleanup failures
-    }
-    return [];
-  }
+  return readChatMessageCache(localStorage);
 }
 
 function saveCachedMessages(messages: ChatMessage[]) {
   if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(
-      CHAT_CACHE_KEY,
-      JSON.stringify(sortChatMessagesAsc(messages).slice(-MESSAGES_LIMIT)),
-    );
-  } catch {
-    // ignore cache write failures
-  }
+  persistChatMessageCache(localStorage, messages);
 }
 
 async function fetchMessages(signal?: AbortSignal): Promise<ChatMessage[]> {
@@ -205,13 +174,13 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
 
   useEffect(() => {
     if (sendCooldownRemainingMs <= 0) return;
-    const remaining = Math.max(0, sendCooldownUntilRef.current - Date.now());
+    const remaining = getChatSendCooldownRemaining(sendCooldownUntilRef.current, Date.now());
     if (remaining <= 0) {
       setSendCooldownRemainingMs(0);
       return;
     }
     const timer = window.setTimeout(() => {
-      setSendCooldownRemainingMs(Math.max(0, sendCooldownUntilRef.current - Date.now()));
+      setSendCooldownRemainingMs(getChatSendCooldownRemaining(sendCooldownUntilRef.current, Date.now()));
     }, Math.min(remaining, 1000));
     return () => {
       window.clearTimeout(timer);
@@ -220,10 +189,10 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
 
   const startSendCooldown = useCallback((durationMs: number) => {
     const now = Date.now();
-    const cooldownMs = parseChatRetryAfterMs(durationMs / 1000);
-    lastSentRef.current = now;
-    sendCooldownUntilRef.current = now + cooldownMs;
-    setSendCooldownRemainingMs(cooldownMs);
+    const cooldown = createChatSendCooldown(durationMs, now);
+    lastSentRef.current = cooldown.startedAt;
+    sendCooldownUntilRef.current = cooldown.cooldownUntil;
+    setSendCooldownRemainingMs(cooldown.remainingMs);
   }, []);
 
   useEffect(() => {
@@ -254,9 +223,9 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         setConnected(false);
         failureCount = Math.min(3, failureCount + 1);
         if (isNetworkFetchError(err)) {
-          warnNetworkOnce("[Chat] Poll network unavailable:", pollWarnAtRef, err);
+          warnChatNetworkOnce("[Chat] Poll network unavailable:", pollWarnAtRef, err);
         } else {
-          warnNetworkOnce("[Chat] Poll failed:", pollWarnAtRef, err);
+          warnChatNetworkOnce("[Chat] Poll failed:", pollWarnAtRef, err);
         }
       } finally {
         pollRunning = false;
@@ -292,7 +261,7 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
       if (!trimmed) return false;
 
       const now = Date.now();
-      const cooldownRemainingMs = Math.max(0, sendCooldownUntilRef.current - now);
+      const cooldownRemainingMs = getChatSendCooldownRemaining(sendCooldownUntilRef.current, now);
       if (cooldownRemainingMs > 0) {
         setSendCooldownRemainingMs(cooldownRemainingMs);
         return false;
@@ -326,18 +295,9 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         if (messagesRef.current.some((message) => message.id === optimisticMessage.id)) return;
         commitMessages([...messagesRef.current, optimisticMessage]);
       };
-      const removeOptimisticMessage = () => {
-        if (!messagesRef.current.some((message) => message.id === optimisticMessage.id)) return;
-        commitMessages(messagesRef.current.filter((message) => message.id !== optimisticMessage.id));
-      };
       const replaceOptimisticMessage = (message: ChatMessage | null) => {
         if (!message) return;
-        const withoutOptimistic = messagesRef.current.filter((item) => item.id !== optimisticMessage.id);
-        if (withoutOptimistic.some((item) => item.id === message.id)) {
-          commitMessages(withoutOptimistic);
-          return;
-        }
-        commitMessages([...withoutOptimistic, message]);
+        commitMessages(reconcileChatSendAttempt(messagesRef.current, optimisticMessage, { ok: true, message }));
       };
 
       try {
@@ -365,15 +325,15 @@ export function useChat(walletAddress: string | null, options?: { open?: boolean
         setIsSending(false);
         return true;
       } catch (err) {
-        removeOptimisticMessage();
+        commitMessages(reconcileChatSendAttempt(messagesRef.current, optimisticMessage, { ok: false, error: err }));
         setConnected(false);
         if (isChatRateLimitError(err)) {
           startSendCooldown(err.retryAfterMs);
-          warnNetworkOnce("[Chat] Send rate limited:", sendWarnAtRef, err);
+          warnChatNetworkOnce("[Chat] Send rate limited:", sendWarnAtRef, err);
         } else if (isNetworkFetchError(err)) {
-          warnNetworkOnce("[Chat] Send network unavailable:", sendWarnAtRef, err);
+          warnChatNetworkOnce("[Chat] Send network unavailable:", sendWarnAtRef, err);
         } else {
-          warnNetworkOnce("[Chat] Send failed:", sendWarnAtRef, err);
+          warnChatNetworkOnce("[Chat] Send failed:", sendWarnAtRef, err);
         }
         setIsSending(false);
         return false;

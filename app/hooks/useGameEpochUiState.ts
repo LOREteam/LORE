@@ -7,13 +7,21 @@ interface UseGameEpochUiStateOptions {
   seededVisualEpoch: string | null;
 }
 
+export function selectSeededVisualEpoch(
+  currentVisualEpoch: string | null,
+  seededVisualEpoch: string | null,
+) {
+  if (!seededVisualEpoch || currentVisualEpoch === seededVisualEpoch) return currentVisualEpoch;
+  return seededVisualEpoch;
+}
+
 export function useGameEpochUiState({ seededVisualEpoch }: UseGameEpochUiStateOptions) {
   const [visualEpoch, setVisualEpoch] = useState<string | null>(seededVisualEpoch);
 
   // Sync with seeded value when live-state bootstrap resolves after mount.
   useEffect(() => {
     if (!seededVisualEpoch) return;
-    setVisualEpoch((current) => (current === seededVisualEpoch ? current : seededVisualEpoch));
+    setVisualEpoch((current) => selectSeededVisualEpoch(current, seededVisualEpoch));
   }, [seededVisualEpoch]);
 
   const [isRevealing, setIsRevealing] = useState(false);

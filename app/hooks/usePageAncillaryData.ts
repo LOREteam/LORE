@@ -24,6 +24,10 @@ interface UsePageAncillaryDataOptions {
   sendTransactionSilent?: SilentSendFn;
 }
 
+export function shouldEnableLeaderboards(activeTab: string, isPageVisible: boolean) {
+  return activeTab === "leaderboards" && isPageVisible;
+}
+
 export function usePageAncillaryData({
   activeTab,
   isPageVisible,
@@ -51,7 +55,7 @@ export function usePageAncillaryData({
     loading: leaderboardsLoading,
     error: leaderboardsError,
     refetch: leaderboardsRefetch,
-  } = useLeaderboards(activeTab === "leaderboards" && isPageVisible);
+  } = useLeaderboards(shouldEnableLeaderboards(activeTab, isPageVisible));
 
   const recentWins = useRecentWins(initialRecentWins);
 

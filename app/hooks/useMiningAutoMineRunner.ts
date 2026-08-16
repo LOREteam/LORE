@@ -52,6 +52,25 @@ type StringSetter = Dispatch<SetStateAction<string | null>>;
 type NumberArraySetter = Dispatch<SetStateAction<number[]>>;
 type NullableStringSetter = Dispatch<SetStateAction<string | null>>;
 
+export function getAutoMineRunnerFailureDisposition(params: {
+  epochWaitTimeout: boolean;
+  networkDown: boolean;
+  pendingNonceBlocked: boolean;
+  sessionExpired: boolean;
+  walletUnavailable: boolean;
+}) {
+  const shouldAutoResume =
+    !params.sessionExpired && (params.networkDown || params.walletUnavailable || params.epochWaitTimeout);
+  const shouldClearPersistedRun =
+    !params.sessionExpired && !params.networkDown && !params.walletUnavailable && !params.pendingNonceBlocked;
+  const phase: Extract<AutoMinePhase, "idle" | "retry-wait" | "session-expired"> = params.sessionExpired
+    ? "session-expired"
+    : shouldAutoResume
+      ? "retry-wait"
+      : "idle";
+  return { phase, shouldAutoResume, shouldClearPersistedRun };
+}
+
 interface UseMiningAutoMineRunnerOptions {
   approveRetryMax: number;
   assertNativeGasBalance: (gas: bigint, gasOverrides?: GasOverrides) => Promise<void>;
@@ -372,7 +391,13 @@ export function useMiningAutoMineRunner({
         const { diagnosticsErrorKind, rawMessage, sessionExpired, networkDown, walletUnavailable, pendingNonceBlocked, userMessage } =
           getAutoMineUserMessage(err);
         const epochWaitTimeout = isEpochWaitTimeoutError(err);
-        const shouldAutoResume = !sessionExpired && (networkDown || walletUnavailable || epochWaitTimeout);
+        const { phase, shouldAutoResume, shouldClearPersistedRun } = getAutoMineRunnerFailureDisposition({
+          epochWaitTimeout,
+          networkDown,
+          pendingNonceBlocked,
+          sessionExpired,
+          walletUnavailable,
+        });
         const insufficientFunds = isInsufficientFundsError(err);
         stopReason = getAutoMineRunnerCatchStopReason({
           insufficientFunds,
@@ -412,16 +437,10 @@ export function useMiningAutoMineRunner({
           lastStopReason: stopReason as AutoMineDiagnosticsStopReason,
         });
         autoMineRef.current = false;
-        if (!sessionExpired && !networkDown && !walletUnavailable && !pendingNonceBlocked) {
+        if (shouldClearPersistedRun) {
           runtimeController.clearPersistedRun();
         }
-        if (sessionExpired) {
-          deactivateAutoMineUi({ phase: "session-expired", progress: userMessage });
-        } else if (shouldAutoResume) {
-          deactivateAutoMineUi({ phase: "retry-wait", progress: userMessage });
-        } else {
-          deactivateAutoMineUi({ phase: "idle", progress: userMessage });
-        }
+        deactivateAutoMineUi({ phase, progress: userMessage });
         await delay(isInsufficientFundsError(err) ? 2000 : 8000);
       } finally {
         releaseInTabAutoMineRuntime();

@@ -4,8 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GRID_SIZE } from "../lib/constants";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { log } from "../lib/logger";
-import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import { getFreshCacheDelayMs } from "../lib/cacheTimestamp";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
+import { loadReadModelCache, type ReadModelCacheStorage } from "../lib/readModelCache";
 
 export interface RecentWin {
   epoch: string;
@@ -19,11 +20,6 @@ export interface RecentWin {
 interface RecentWinsApiResponse {
   wins?: Array<{ epoch?: string; user?: string; amount?: string; amountRaw?: string; tileId?: number; jackpotKind?: string }>;
   error?: string;
-}
-
-interface RecentWinsCacheEnvelope {
-  savedAt?: number;
-  wins?: Array<{ epoch?: string; user?: string; amount?: string; amountRaw?: string; tileId?: number; jackpotKind?: string }>;
 }
 
 const REFRESH_MS = 45_000;
@@ -89,38 +85,37 @@ function recentWinsEqual(left: RecentWin[], right: RecentWin[]) {
   return true;
 }
 
-function loadCache(): { wins: RecentWin[]; savedAt: number | null } {
-  if (typeof localStorage === "undefined") return { wins: [], savedAt: null };
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { wins: [], savedAt: null };
-    const parsed = JSON.parse(raw) as RecentWinsCacheEnvelope | Array<{
-      epoch?: string;
-      user?: string;
-      amount?: string;
-      amountRaw?: string;
-      tileId?: number;
-      jackpotKind?: string;
-    }>;
-    if (Array.isArray(parsed)) {
-      return { wins: normalizeWins(parsed), savedAt: null };
-    }
-    if (!parsed || typeof parsed !== "object") {
-      localStorage.removeItem(STORAGE_KEY);
-      return { wins: [], savedAt: null };
-    }
-    return {
-      wins: normalizeWins(Array.isArray(parsed.wins) ? parsed.wins : []),
-      savedAt: normalizeCacheTimestamp(parsed.savedAt),
-    };
-  } catch {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // ignore localStorage failures
-    }
-    return { wins: [], savedAt: null };
-  }
+export function loadRecentWinsCache(
+  storage: ReadModelCacheStorage | null = typeof localStorage === "undefined" ? null : localStorage,
+  now = Date.now(),
+): { wins: RecentWin[]; savedAt: number | null } {
+  const restored = loadReadModelCache<RecentWin[]>({
+    storage,
+    cacheKey: STORAGE_KEY,
+    payloadKey: "wins",
+    emptyValue: [],
+    normalizePayload: normalizeWins,
+    now,
+  });
+  return { wins: restored.value, savedAt: restored.savedAt };
+}
+
+export function getRecentWinsRefreshDelay(
+  savedAt: unknown,
+  cachedWinsCount: number,
+  now = Date.now(),
+) {
+  if (!Number.isSafeInteger(cachedWinsCount) || cachedWinsCount <= 0) return 0;
+  return getFreshCacheDelayMs(savedAt, REFRESH_MS, now) ?? 0;
+}
+
+export function shouldPollRecentWins(
+  isPageVisible: boolean,
+  abortCurrent: () => void,
+) {
+  if (isPageVisible) return true;
+  abortCurrent();
+  return false;
 }
 
 function saveCache(wins: RecentWin[]) {
@@ -145,7 +140,7 @@ function saveCache(wins: RecentWin[]) {
 export function useRecentWins(initialWins: RecentWin[] = []) {
   const initialCacheRef = useRef<{ wins: RecentWin[]; savedAt: number | null } | null>(null);
   if (initialCacheRef.current === null) {
-    initialCacheRef.current = loadCache();
+    initialCacheRef.current = loadRecentWinsCache();
   }
 
   const [wins, setWins] = useState<RecentWin[]>(() => initialWins);
@@ -250,15 +245,9 @@ export function useRecentWins(initialWins: RecentWin[] = []) {
   }, []);
 
   useEffect(() => {
-    if (!isPageVisible) {
-      abortRef.current?.abort();
-      return;
-    }
+    if (!shouldPollRecentWins(isPageVisible, () => abortRef.current?.abort())) return;
     const savedAt = cacheSavedAtRef.current;
-    const initialDelay =
-      cachedWinsCountRef.current > 0
-        ? getFreshCacheDelayMs(savedAt, REFRESH_MS) ?? 0
-        : 0;
+    const initialDelay = getRecentWinsRefreshDelay(savedAt, cachedWinsCountRef.current);
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 

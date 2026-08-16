@@ -17,6 +17,42 @@ const transferBadgeVariantClasses: Record<NonNullable<TransferRowProps["assetVar
   pending: "border-amber-500/30 bg-amber-500/10 text-amber-300",
 };
 
+export interface WalletTransferRowPresentation {
+  state: "ready" | "unavailable" | "pending";
+  actionLabel: string;
+  buttonText: string;
+  announce: boolean;
+}
+
+export function getWalletTransferRowPresentation(
+  buttonLabel: string,
+  disabled: boolean,
+  loading: boolean,
+): WalletTransferRowPresentation {
+  if (loading) {
+    return {
+      state: "pending",
+      actionLabel: `${buttonLabel} in progress`,
+      buttonText: "Sending...",
+      announce: true,
+    };
+  }
+  if (disabled) {
+    return {
+      state: "unavailable",
+      actionLabel: `${buttonLabel} unavailable`,
+      buttonText: buttonLabel,
+      announce: false,
+    };
+  }
+  return {
+    state: "ready",
+    actionLabel: buttonLabel,
+    buttonText: buttonLabel,
+    announce: false,
+  };
+}
+
 export const WalletTransferRow = React.memo(function WalletTransferRow({
   assetLabel,
   assetVariant,
@@ -29,13 +65,16 @@ export const WalletTransferRow = React.memo(function WalletTransferRow({
   loading,
   buttonVariant,
 }: TransferRowProps) {
-  const transferActionLabel = loading ? `${buttonLabel} in progress` : disabled ? `${buttonLabel} unavailable` : buttonLabel;
+  const presentation = getWalletTransferRowPresentation(buttonLabel, disabled, loading);
 
   return (
-    <div className="grid grid-cols-[4rem_minmax(0,1fr)_7.5rem] items-center gap-1.5">
-      {loading && (
+    <div
+      className="grid grid-cols-[4rem_minmax(0,1fr)_7.5rem] items-center gap-1.5"
+      data-transfer-action-state={presentation.state}
+    >
+      {presentation.announce && (
         <span className="sr-only" role="status" aria-live="polite">
-          {transferActionLabel}
+          {presentation.actionLabel}
         </span>
       )}
       <div
@@ -61,10 +100,10 @@ export const WalletTransferRow = React.memo(function WalletTransferRow({
         uppercase
         loading={loading}
         className="h-8 w-full px-3 text-[10px]"
-        aria-label={transferActionLabel}
-        title={transferActionLabel}
+        aria-label={presentation.actionLabel}
+        title={presentation.actionLabel}
       >
-        {loading ? "Sending..." : buttonLabel}
+        {presentation.buttonText}
       </UiButton>
     </div>
   );

@@ -7,8 +7,8 @@ import { GRID_SIZE } from "../lib/constants";
 import { log } from "../lib/logger";
 
 const VALID_TABS: TabId[] = ["hub", "analytics", "rebate", "leaderboards", "whitepaper", "faq"];
-const HOT_TILES_STORAGE_KEY = "lore:hot-tiles:v1";
-const ACTIVE_TAB_STORAGE_KEY = "lore:active-tab:v1";
+export const HOT_TILES_STORAGE_KEY = "lore:hot-tiles:v1";
+export const ACTIVE_TAB_STORAGE_KEY = "lore:active-tab:v1";
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 type HotTile = { tileId: number; wins: number };
@@ -33,17 +33,23 @@ export function normalizeCachedHotTile(item: unknown): HotTile | null {
   return { tileId, wins };
 }
 
-function loadSavedTab(): TabId | null {
-  if (typeof window === "undefined") return null;
+export function readSavedAppShellTab(
+  storage: Pick<Storage, "getItem" | "removeItem">,
+): TabId | null {
   try {
-    const raw = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+    const raw = storage.getItem(ACTIVE_TAB_STORAGE_KEY);
     if (raw === null) return null;
     if (VALID_TABS.includes(raw as TabId)) return raw as TabId;
-    window.localStorage.removeItem(ACTIVE_TAB_STORAGE_KEY);
+    storage.removeItem(ACTIVE_TAB_STORAGE_KEY);
     return null;
   } catch {
     return null;
   }
+}
+
+function loadSavedTab(): TabId | null {
+  if (typeof window === "undefined") return null;
+  return readSavedAppShellTab(window.localStorage);
 }
 
 function readHashTab(): TabId {
@@ -64,14 +70,15 @@ function saveActiveTab(tab: TabId) {
   }
 }
 
-function loadCachedHotTiles(): HotTile[] {
-  if (typeof window === "undefined") return [];
+export function readCachedAppShellHotTiles(
+  storage: Pick<Storage, "getItem" | "removeItem">,
+): HotTile[] {
   try {
-    const raw = window.localStorage.getItem(HOT_TILES_STORAGE_KEY);
+    const raw = storage.getItem(HOT_TILES_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown[];
     if (!Array.isArray(parsed)) {
-      window.localStorage.removeItem(HOT_TILES_STORAGE_KEY);
+      storage.removeItem(HOT_TILES_STORAGE_KEY);
       return [];
     }
     return parsed
@@ -80,12 +87,40 @@ function loadCachedHotTiles(): HotTile[] {
       .slice(0, 5);
   } catch {
     try {
-      window.localStorage.removeItem(HOT_TILES_STORAGE_KEY);
+      storage.removeItem(HOT_TILES_STORAGE_KEY);
     } catch {
       // ignore storage failures
     }
     return [];
   }
+}
+
+function loadCachedHotTiles(): HotTile[] {
+  if (typeof window === "undefined") return [];
+  return readCachedAppShellHotTiles(window.localStorage);
+}
+
+export function persistAppShellHotTiles(
+  storage: Pick<Storage, "removeItem" | "setItem">,
+  hotTiles: HotTile[],
+): void {
+  try {
+    if (hotTiles.length === 0) {
+      storage.removeItem(HOT_TILES_STORAGE_KEY);
+      return;
+    }
+    storage.setItem(HOT_TILES_STORAGE_KEY, JSON.stringify(hotTiles));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function createAppMountDiagnostic(
+  location: Pick<Location, "pathname">,
+  tab: TabId,
+  now = new Date(),
+) {
+  return { path: location.pathname, tab, time: now.toISOString() };
 }
 
 export function useAppShellState() {
@@ -100,7 +135,7 @@ export function useAppShellState() {
   const noticeTimeoutsRef = useRef<Map<number, number>>(new Map());
 
   useEffect(() => {
-    log.info("App", "mounted", { path: window.location.pathname, tab: readHashTab(), time: new Date().toISOString() });
+    log.info("App", "mounted", createAppMountDiagnostic(window.location, readHashTab()));
     const syncFromHash = () => {
       setActiveTab((current) => {
         const next = readHashTab();
@@ -152,11 +187,7 @@ export function useAppShellState() {
   const syncHotTiles = useCallback((hotTiles: HotTile[]) => {
     if (hotTiles.length === 0) {
       setVisibleHotTiles((current) => (current.length === 0 ? current : []));
-      try {
-        window.localStorage.removeItem(HOT_TILES_STORAGE_KEY);
-      } catch {
-        // ignore storage write failures
-      }
+      persistAppShellHotTiles(window.localStorage, hotTiles);
       return;
     }
     setVisibleHotTiles((current) => {
@@ -167,11 +198,7 @@ export function useAppShellState() {
         );
       return unchanged ? current : hotTiles;
     });
-    try {
-      window.localStorage.setItem(HOT_TILES_STORAGE_KEY, JSON.stringify(hotTiles));
-    } catch {
-      // ignore storage write failures
-    }
+    persistAppShellHotTiles(window.localStorage, hotTiles);
   }, []);
 
   const dismissNotice = useCallback((id: number) => {

@@ -60,7 +60,7 @@ export interface WalletSettingsModalProps {
   pendingTransactionStatus: PendingTransactionStatus | null;
   isRefreshingPendingTx: boolean;
   isCancellingPendingTx: boolean;
-  onRefreshPendingTx: () => void;
+  onRefreshPendingTx: (replacementHash?: string) => void | Promise<unknown>;
   onCancelPendingTx: () => void;
 }
 

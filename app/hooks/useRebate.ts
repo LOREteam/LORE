@@ -49,7 +49,7 @@ interface RebateEpochInfo {
   rebatePoolWei: bigint;
 }
 
-type ClaimPlanKind = "none" | "single" | "split" | "unknown";
+export type ClaimPlanKind = "none" | "single" | "split" | "unknown";
 type RebateDataFreshness = "fresh" | "background-refresh" | "stale-cache" | "offline";
 
 interface ApiRebateEpochInfo {
@@ -106,6 +106,245 @@ const REBATE_CONFIRM_POLL_INTERVAL_MS = 2_000;
 const REBATE_CONFIRM_ATTEMPTS = Math.max(1, Math.floor(TX_RECEIPT_TIMEOUT_MS / REBATE_CONFIRM_POLL_INTERVAL_MS));
 const REBATE_HISTORY_PAGE_SIZE = 32;
 const REBATE_RECENT_DISPLAY_LIMIT = 64;
+
+type SafetyPoolClaimHash = `0x${string}`;
+
+export interface SafetyPoolClaimProgress {
+  claimedEpochCount: number;
+  claimTxCount: number;
+  usedSplitFallback: boolean;
+  lastClaimTxHash: SafetyPoolClaimHash | null;
+}
+
+export interface SafetyPoolClaimBatchOptions {
+  epochs: bigint[];
+  claimPlanKind: ClaimPlanKind;
+  progress: SafetyPoolClaimProgress;
+  assertActorActive: () => void;
+  isActorChangedError: (error: unknown) => boolean;
+  simulateBatch: (epochs: bigint[]) => Promise<void>;
+  estimateBatchGas: (epochs: bigint[]) => Promise<bigint>;
+  sendBatch: (epochs: bigint[], gas: bigint) => Promise<SafetyPoolClaimHash>;
+  simulateSingle: (epoch: bigint) => Promise<void>;
+  estimateSingleGas: (epoch: bigint) => Promise<bigint>;
+  sendSingle: (epoch: bigint, gas: bigint) => Promise<SafetyPoolClaimHash>;
+  confirm: (hash: SafetyPoolClaimHash, epochs: bigint[]) => Promise<void>;
+  onInitialSplit: () => void;
+  onSingleFallback: (epoch: number, error: unknown) => void;
+}
+
+export function createSafetyPoolClaimProgress(): SafetyPoolClaimProgress {
+  return {
+    claimedEpochCount: 0,
+    claimTxCount: 0,
+    usedSplitFallback: false,
+    lastClaimTxHash: null,
+  };
+}
+
+export function tryAcquireSafetyPoolClaimLock(lock: { current: boolean }) {
+  if (lock.current) return false;
+  lock.current = true;
+  return true;
+}
+
+export function releaseSafetyPoolClaimLock(lock: { current: boolean }) {
+  lock.current = false;
+}
+
+export function createSafetyPoolClaimActorGuard(
+  latestActor: { current: string | null },
+  claimActor: string,
+) {
+  const actorChangedError = new Error("Safety Pool claim actor changed");
+  const isActorChangedError = (error: unknown) => (
+    error === actorChangedError || latestActor.current !== claimActor
+  );
+  const assertActorActive = () => {
+    if (latestActor.current !== claimActor) throw actorChangedError;
+  };
+  return { actorChangedError, assertActorActive, isActorChangedError };
+}
+
+export function formatSafetyPoolClaimError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const low = msg.toLowerCase();
+  if (low.includes("notresolved")) return "Safety Pool is not claimable yet because the epoch is not resolved.";
+  if (low.includes("rebatealreadyclaimed")) return "One of the selected Safety Pool epochs was already claimed.";
+  if (low.includes("norebateavailable") || low.includes("nothing to claim")) {
+    return "No Safety Pool payout is currently claimable for the selected epochs.";
+  }
+  if (low.includes("emptyarray")) return "No Safety Pool epochs were selected for claim.";
+  if (low.includes("timeout") || low.includes("timed out")) {
+    return "claim status is unknown after a wallet timeout. Check wallet activity before retrying.";
+  }
+  if (low.includes("revert") || low.includes("execution reverted")) {
+    return "claim reverted on-chain. No Safety Pool payout was moved by this transaction.";
+  }
+  if (low.includes("rpc") || low.includes("provider") || low.includes("infura") || low.includes("alchemy") || low.includes("json-rpc")) {
+    return "claim could not be submitted through the wallet provider. Check wallet activity before retrying.";
+  }
+  if (low.includes("insufficient funds") || low.includes("not enough eth")) {
+    return "claim failed because the wallet does not have enough ETH for gas.";
+  }
+  return "claim failed. Refresh the Safety Pool tab and try again.";
+}
+
+export function classifySafetyPoolClaimError(err: unknown): "ambiguous" | "rejected" | "reverted" | "failed" {
+  if (isAmbiguousPendingTxError(err)) return "ambiguous";
+  if (isUserRejection(err)) return "rejected";
+  return formatSafetyPoolClaimError(err).startsWith("claim reverted on-chain") ? "reverted" : "failed";
+}
+
+type SafetyPoolClaimOutcome = {
+  kind: "success" | "ambiguous" | "rejected" | "reverted" | "failed";
+  message: string;
+  tone: "info" | "success" | "warning" | "danger";
+};
+
+export function getSafetyPoolClaimSuccessOutcome(progress: SafetyPoolClaimProgress): SafetyPoolClaimOutcome {
+  const message = progress.claimedEpochCount === 1
+    ? progress.claimTxCount <= 1
+      ? "Safety Pool claimed successfully in 1 transaction."
+      : `Safety Pool claimed successfully in ${progress.claimTxCount} transactions.`
+    : progress.claimTxCount <= 1
+      ? `Claimed Safety Pool payouts for ${progress.claimedEpochCount} epochs in 1 transaction.`
+      : `Claimed Safety Pool payouts for ${progress.claimedEpochCount} epochs in ${progress.claimTxCount} transactions.`;
+  return {
+    kind: "success",
+    message: formatRebateTxMessage(message, progress.lastClaimTxHash),
+    tone: "success",
+  };
+}
+
+export function getSafetyPoolClaimFailureOutcome(
+  progress: SafetyPoolClaimProgress,
+  err: unknown,
+): SafetyPoolClaimOutcome {
+  const kind = classifySafetyPoolClaimError(err);
+  if (kind === "ambiguous") {
+    const message = progress.claimedEpochCount > 0
+      ? `Claimed Safety Pool payouts for ${progress.claimedEpochCount} epochs in ${progress.claimTxCount} transaction${progress.claimTxCount === 1 ? "" : "s"} before the remaining claim became pending. Check wallet activity and refresh Safety Pool before retrying.`
+      : "Safety Pool claim may already be pending. Check wallet activity and refresh Safety Pool before retrying.";
+    return {
+      kind,
+      message: formatRebateTxMessage(message, progress.lastClaimTxHash),
+      tone: "warning",
+    };
+  }
+  if (kind === "rejected") {
+    if (progress.claimedEpochCount > 0) {
+      return {
+        kind,
+        message: formatRebateTxMessage(
+          `Claimed Safety Pool payouts for ${progress.claimedEpochCount} epochs in ${progress.claimTxCount} transaction${progress.claimTxCount === 1 ? "" : "s"} before the remaining claim flow was cancelled.`,
+          progress.lastClaimTxHash,
+        ),
+        tone: "warning",
+      };
+    }
+    return { kind, message: "Safety Pool claim rejected in wallet.", tone: "info" };
+  }
+
+  const formattedError = formatSafetyPoolClaimError(err);
+  if (progress.claimedEpochCount > 0) {
+    return {
+      kind,
+      message: formatRebateTxMessage(
+        `Claimed Safety Pool payouts for ${progress.claimedEpochCount} epochs in ${progress.claimTxCount} transaction${progress.claimTxCount === 1 ? "" : "s"}, but some epochs still failed: ${formattedError}`,
+        progress.lastClaimTxHash,
+      ),
+      tone: "warning",
+    };
+  }
+  return { kind, message: `Safety Pool claim failed: ${formattedError}`, tone: "danger" };
+}
+
+export async function executeSafetyPoolClaimBatches(options: SafetyPoolClaimBatchOptions): Promise<void> {
+  const {
+    epochs,
+    claimPlanKind,
+    progress,
+    assertActorActive,
+    isActorChangedError,
+    simulateBatch,
+    estimateBatchGas,
+    sendBatch,
+    simulateSingle,
+    estimateSingleGas,
+    sendSingle,
+    confirm,
+    onInitialSplit,
+    onSingleFallback,
+  } = options;
+
+  const submitBatch = async (batch: bigint[]) => {
+    assertActorActive();
+    await simulateBatch(batch);
+    assertActorActive();
+    const gas = await estimateBatchGas(batch);
+    assertActorActive();
+    const hash = await sendBatch(batch, gas);
+    progress.lastClaimTxHash = hash;
+    progress.claimTxCount += 1;
+    assertActorActive();
+    await confirm(hash, batch);
+    assertActorActive();
+  };
+
+  const submitSingle = async (epoch: bigint) => {
+    assertActorActive();
+    await simulateSingle(epoch);
+    assertActorActive();
+    const gas = await estimateSingleGas(epoch);
+    assertActorActive();
+    const hash = await sendSingle(epoch, gas);
+    progress.lastClaimTxHash = hash;
+    progress.claimTxCount += 1;
+    assertActorActive();
+    await confirm(hash, [epoch]);
+    assertActorActive();
+  };
+
+  const queue: bigint[][] =
+    claimPlanKind === "split" && epochs.length > 1
+      ? [
+          epochs.slice(0, Math.ceil(epochs.length / 2)),
+          epochs.slice(Math.ceil(epochs.length / 2)),
+        ]
+      : [epochs];
+
+  if (queue.length > 1) {
+    progress.usedSplitFallback = true;
+    onInitialSplit();
+  }
+
+  while (queue.length > 0) {
+    assertActorActive();
+    const batch = queue.shift();
+    if (!batch || batch.length === 0) continue;
+
+    try {
+      await submitBatch(batch);
+      progress.claimedEpochCount += batch.length;
+    } catch (err) {
+      if (isActorChangedError(err)) throw err;
+      if (isAmbiguousPendingTxError(err) || isUserRejection(err)) throw err;
+      if (batch.length === 1) {
+        progress.usedSplitFallback = true;
+        onSingleFallback(Number(batch[0]), err);
+        await submitSingle(batch[0]);
+        progress.claimedEpochCount += 1;
+        continue;
+      }
+
+      progress.usedSplitFallback = true;
+      const middle = Math.ceil(batch.length / 2);
+      queue.unshift(batch.slice(middle));
+      queue.unshift(batch.slice(0, middle));
+    }
+  }
+}
 
 function createClaimConfirmationPendingError(message: string) {
   const error = new Error(message);
@@ -311,7 +550,7 @@ function isMissingContractMethodError(err: unknown, methodName: string) {
   );
 }
 
-function formatRebateTxMessage(message: string, hash: `0x${string}` | null) {
+export function formatRebateTxMessage(message: string, hash: `0x${string}` | null) {
   if (!hash) return message;
   const txUrl = getExplorerTxUrl(hash);
   return txUrl ? `${message} ${txUrl}` : message;
@@ -603,30 +842,6 @@ export function useRebate(options?: UseRebateOptions) {
     const cached = { kind, savedAt: Date.now() };
     claimPlanCacheRef.current[getClaimPlanCacheKey(targetAddress, epochs)] = cached;
     saveCachedClaimPlan(targetAddress, epochs, kind);
-  }, []);
-
-  const formatRebateError = useCallback((err: unknown): string => {
-    const msg = err instanceof Error ? err.message : String(err);
-    const low = msg.toLowerCase();
-    if (low.includes("notresolved")) return "Safety Pool is not claimable yet because the epoch is not resolved.";
-    if (low.includes("rebatealreadyclaimed")) return "One of the selected Safety Pool epochs was already claimed.";
-    if (low.includes("norebateavailable") || low.includes("nothing to claim")) {
-      return "No Safety Pool payout is currently claimable for the selected epochs.";
-    }
-    if (low.includes("emptyarray")) return "No Safety Pool epochs were selected for claim.";
-    if (low.includes("timeout") || low.includes("timed out")) {
-      return "claim status is unknown after a wallet timeout. Check wallet activity before retrying.";
-    }
-    if (low.includes("revert") || low.includes("execution reverted")) {
-      return "claim reverted on-chain. No Safety Pool payout was moved by this transaction.";
-    }
-    if (low.includes("rpc") || low.includes("provider") || low.includes("infura") || low.includes("alchemy") || low.includes("json-rpc")) {
-      return "claim could not be submitted through the wallet provider. Check wallet activity before retrying.";
-    }
-    if (low.includes("insufficient funds") || low.includes("not enough eth")) {
-      return "claim failed because the wallet does not have enough ETH for gas.";
-    }
-    return "claim failed. Refresh the Safety Pool tab and try again.";
   }, []);
 
   const confirmClaimBatch = useCallback(
@@ -1033,21 +1248,15 @@ export function useRebate(options?: UseRebateOptions) {
 
   const claimRebates = useCallback(async () => {
     if (!CONTRACT_HAS_REBATE_API || !rebateAddress || !publicClient || allRebateEpochs.length === 0) return;
-    if (claimInFlightRef.current) return;
-    claimInFlightRef.current = true;
+    if (!tryAcquireSafetyPoolClaimLock(claimInFlightRef)) return;
     const claimActor = rebateAddress.toLowerCase();
-    const claimActorChangedError = new Error("Safety Pool claim actor changed");
-    const assertClaimActorActive = () => {
-      if (latestRebateAddressRef.current !== claimActor) throw claimActorChangedError;
-    };
+    const { assertActorActive: assertClaimActorActive, isActorChangedError } =
+      createSafetyPoolClaimActorGuard(latestRebateAddressRef, claimActor);
     if (mountedRef.current) {
       setIsClaiming(true);
     }
 
-    let claimedEpochCount = 0;
-    let claimTxCount = 0;
-    let usedSplitFallback = false;
-    let lastClaimTxHash: `0x${string}` | null = null;
+    const claimProgress = createSafetyPoolClaimProgress();
 
     try {
       const connected = address ? getAddress(address) : null;
@@ -1110,211 +1319,106 @@ export function useRebate(options?: UseRebateOptions) {
         }
       };
 
-      const submitClaimBatch = async (epochArgs: bigint[]) => {
-        assertClaimActorActive();
-        await publicClient.simulateContract({
-          address: CONTRACT_ADDRESS,
-          abi: GAME_ABI,
-          functionName: "claimEpochsRebate",
-          args: [epochArgs],
-          account: sender,
-        });
-        assertClaimActorActive();
-        const gas = await estimateClaimGas(epochArgs);
-        assertClaimActorActive();
-
-        if (silentSend) {
-          const data = encodeFunctionData({
+      await executeSafetyPoolClaimBatches({
+        epochs: verifiedClaimableEpochs.map((epoch) => BigInt(epoch)),
+        claimPlanKind,
+        progress: claimProgress,
+        assertActorActive: assertClaimActorActive,
+        isActorChangedError,
+        simulateBatch: async (epochArgs) => {
+          await publicClient.simulateContract({
+            address: CONTRACT_ADDRESS,
             abi: GAME_ABI,
             functionName: "claimEpochsRebate",
             args: [epochArgs],
+            account: sender,
           });
-          const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
-          lastClaimTxHash = hash;
-          claimTxCount += 1;
-          assertClaimActorActive();
-          await confirmClaimBatch(hash, sender, epochArgs);
-          assertClaimActorActive();
-          return;
-        }
-
-        const hash = await writeContractAsync({
-          address: CONTRACT_ADDRESS,
-          abi: GAME_ABI,
-          functionName: "claimEpochsRebate",
-          args: [epochArgs],
-          chainId: APP_CHAIN_ID,
-          gas,
-        });
-        lastClaimTxHash = hash;
-        claimTxCount += 1;
-        assertClaimActorActive();
-        await confirmClaimBatch(hash, sender, epochArgs);
-        assertClaimActorActive();
-      };
-
-      const submitSingleClaim = async (epoch: bigint) => {
-        assertClaimActorActive();
-        await publicClient.simulateContract({
-          address: CONTRACT_ADDRESS,
-          abi: GAME_ABI,
-          functionName: "claimEpochRebate",
-          args: [epoch],
-          account: sender,
-        });
-        assertClaimActorActive();
-        const gas = await estimateSingleClaimGas(epoch);
-        assertClaimActorActive();
-
-        if (silentSend) {
-          const data = encodeFunctionData({
+        },
+        estimateBatchGas: estimateClaimGas,
+        sendBatch: async (epochArgs, gas) => {
+          if (silentSend) {
+            const data = encodeFunctionData({
+              abi: GAME_ABI,
+              functionName: "claimEpochsRebate",
+              args: [epochArgs],
+            });
+            return silentSend({ to: CONTRACT_ADDRESS, data, gas });
+          }
+          return writeContractAsync({
+            address: CONTRACT_ADDRESS,
+            abi: GAME_ABI,
+            functionName: "claimEpochsRebate",
+            args: [epochArgs],
+            chainId: APP_CHAIN_ID,
+            gas,
+          });
+        },
+        simulateSingle: async (epoch) => {
+          await publicClient.simulateContract({
+            address: CONTRACT_ADDRESS,
             abi: GAME_ABI,
             functionName: "claimEpochRebate",
             args: [epoch],
+            account: sender,
           });
-          const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
-          lastClaimTxHash = hash;
-          claimTxCount += 1;
-          assertClaimActorActive();
-          await confirmClaimBatch(hash, sender, [epoch]);
-          assertClaimActorActive();
-          return;
-        }
-
-        const hash = await writeContractAsync({
-          address: CONTRACT_ADDRESS,
-          abi: GAME_ABI,
-          functionName: "claimEpochRebate",
-          args: [epoch],
-          chainId: APP_CHAIN_ID,
-          gas,
-        });
-        lastClaimTxHash = hash;
-        claimTxCount += 1;
-        assertClaimActorActive();
-        await confirmClaimBatch(hash, sender, [epoch]);
-        assertClaimActorActive();
-      };
-
-      const claimBatches = async (epochArgs: bigint[]): Promise<void> => {
-        if (epochArgs.length === 0) return;
-
-        const queue: bigint[][] =
-          claimPlanKind === "split" && epochArgs.length > 1
-            ? [
-                epochArgs.slice(0, Math.ceil(epochArgs.length / 2)),
-                epochArgs.slice(Math.ceil(epochArgs.length / 2)),
-              ]
-            : [epochArgs];
-
-        if (queue.length > 1) {
-          usedSplitFallback = true;
-          notify?.("Safety Pool claim is being sent in multiple transactions. Please wait until all parts finish.", "info");
-        }
-
-        while (queue.length > 0) {
-          assertClaimActorActive();
-          const batch = queue.shift();
-          if (!batch || batch.length === 0) continue;
-
-          try {
-            await submitClaimBatch(batch);
-            claimedEpochCount += batch.length;
-          } catch (err) {
-            if (err === claimActorChangedError || latestRebateAddressRef.current !== claimActor) {
-              throw claimActorChangedError;
-            }
-            if (isAmbiguousPendingTxError(err) || isUserRejection(err)) throw err;
-            if (batch.length === 1) {
-              usedSplitFallback = true;
-              log.warn("Rebate", "batch claim failed for single epoch, trying claimEpochRebate fallback", {
-                epoch: Number(batch[0]),
-                err,
-              });
-              await submitSingleClaim(batch[0]);
-              claimedEpochCount += 1;
-              continue;
-            }
-
-            usedSplitFallback = true;
-            const middle = Math.ceil(batch.length / 2);
-            queue.unshift(batch.slice(middle));
-            queue.unshift(batch.slice(0, middle));
+        },
+        estimateSingleGas: estimateSingleClaimGas,
+        sendSingle: async (epoch, gas) => {
+          if (silentSend) {
+            const data = encodeFunctionData({
+              abi: GAME_ABI,
+              functionName: "claimEpochRebate",
+              args: [epoch],
+            });
+            return silentSend({ to: CONTRACT_ADDRESS, data, gas });
           }
-        }
-      };
-
-      await claimBatches(
-        verifiedClaimableEpochs.map((epoch) => BigInt(epoch)),
-      );
+          return writeContractAsync({
+            address: CONTRACT_ADDRESS,
+            abi: GAME_ABI,
+            functionName: "claimEpochRebate",
+            args: [epoch],
+            chainId: APP_CHAIN_ID,
+            gas,
+          });
+        },
+        confirm: (hash, epochArgs) => confirmClaimBatch(hash, sender, epochArgs),
+        onInitialSplit: () => {
+          notify?.("Safety Pool claim is being sent in multiple transactions. Please wait until all parts finish.", "info");
+        },
+        onSingleFallback: (epoch, err) => {
+          log.warn("Rebate", "batch claim failed for single epoch, trying claimEpochRebate fallback", {
+            epoch,
+            err,
+          });
+        },
+      });
       assertClaimActorActive();
 
       log.info("Rebate", "claimed", {
-        epochs: claimedEpochCount,
-        txCount: claimTxCount,
-        split: usedSplitFallback,
+        epochs: claimProgress.claimedEpochCount,
+        txCount: claimProgress.claimTxCount,
+        split: claimProgress.usedSplitFallback,
       });
-      notify?.(
-        formatRebateTxMessage(
-          claimedEpochCount === 1
-            ? claimTxCount <= 1
-              ? "Safety Pool claimed successfully in 1 transaction."
-              : `Safety Pool claimed successfully in ${claimTxCount} transactions.`
-            : claimTxCount <= 1
-              ? `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in 1 transaction.`
-              : `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transactions.`,
-          lastClaimTxHash,
-        ),
-        "success",
-      );
+      const outcome = getSafetyPoolClaimSuccessOutcome(claimProgress);
+      notify?.(outcome.message, outcome.tone);
       clearOlderRebateHistory();
       await refetchRebateInfo({ forceFresh: true });
     } catch (err) {
-      if (err === claimActorChangedError || latestRebateAddressRef.current !== claimActor) return;
+      if (isActorChangedError(err)) return;
       clearOlderRebateHistory();
       await refetchRebateInfo({ forceFresh: true });
+      const outcome = getSafetyPoolClaimFailureOutcome(claimProgress, err);
 
-      if (isAmbiguousPendingTxError(err)) {
+      if (outcome.kind === "ambiguous") {
         log.warn("Rebate", "claim submission status is ambiguous; fallback suppressed", err);
-        notify?.(
-          formatRebateTxMessage(
-            claimedEpochCount > 0
-              ? `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"} before the remaining claim became pending. Check wallet activity and refresh Safety Pool before retrying.`
-              : "Safety Pool claim may already be pending. Check wallet activity and refresh Safety Pool before retrying.",
-            lastClaimTxHash,
-          ),
-          "warning",
-        );
-      } else if (isUserRejection(err)) {
+      } else if (outcome.kind === "rejected") {
         log.warn("Rebate", "claim cancelled", err);
-        if (claimedEpochCount > 0) {
-          notify?.(
-            formatRebateTxMessage(
-              `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"} before the remaining claim flow was cancelled.`,
-              lastClaimTxHash,
-            ),
-            "warning",
-          );
-        } else {
-          notify?.("Safety Pool claim rejected in wallet.", "info");
-        }
       } else {
         log.error("Rebate", "claim failed", err);
-        const message = formatRebateError(err);
-        if (claimedEpochCount > 0) {
-          notify?.(
-            formatRebateTxMessage(
-              `Claimed Safety Pool payouts for ${claimedEpochCount} epochs in ${claimTxCount} transaction${claimTxCount === 1 ? "" : "s"}, but some epochs still failed: ${message}`,
-              lastClaimTxHash,
-            ),
-            "warning",
-          );
-        } else {
-          notify?.(`Safety Pool claim failed: ${message}`, "danger");
-        }
       }
+      notify?.(outcome.message, outcome.tone);
     } finally {
-      claimInFlightRef.current = false;
+      releaseSafetyPoolClaimLock(claimInFlightRef);
       if (mountedRef.current) {
         setIsClaiming(false);
       }
@@ -1325,7 +1429,6 @@ export function useRebate(options?: UseRebateOptions) {
     allRebateEpochs,
     claimPlanKind,
     clearOlderRebateHistory,
-    formatRebateError,
     notify,
     publicClient,
     rebateAddress,

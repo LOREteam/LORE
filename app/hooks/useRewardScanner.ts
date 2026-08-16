@@ -9,7 +9,16 @@ import type { UnclaimedWin } from "../lib/types";
 import { isUserRejection, delay } from "../lib/utils";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import {
+  chunkRewardScanItems,
+  collectOpenRewardScanWins,
+  getAutomaticRewardScanBounds,
+  isRewardClaimWindowOpen,
+  iterateDescendingRewardScanEpochChunks,
+} from "../lib/rewardScanPolicy";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
+
+export { isRewardClaimWindowOpen } from "../lib/rewardScanPolicy";
 
 interface UseRewardScannerOptions {
   enabled?: boolean;
@@ -22,14 +31,11 @@ interface UseRewardScannerOptions {
 type EpochTuple = readonly [bigint, bigint, bigint, boolean];
 type ReceiptState = "confirmed" | "pending";
 
-const MAX_SCAN_DEPTH = BigInt(5000); // keep automatic scans bounded; use Deep Scan for older late claims
-const FAST_SCAN_DEPTH = BigInt(1500); // quick first pass for responsive UI
 const MAX_BATCH_CLAIM_EPOCHS = 128;
 const CLAIM_GAS_FALLBACK = 200_000n;
 const CLAIM_GAS_BUFFER = 20_000n;
 const CLAIM_GAS_HEADROOM_BPS = 12_000n;
 const BPS_DENOMINATOR = 10_000n;
-const REWARD_CLAIM_WINDOW_SECONDS = 365n * 24n * 60n * 60n;
 const REWARD_SCAN_CHUNK_SIZE_NUMBER = Number(REWARD_SCAN_CHUNK_SIZE);
 /** How long before a background re-scan is triggered after using cached data. */
 const REWARD_SCAN_CACHE_RESCAN_MS = 15 * 60_000; // 15 minutes
@@ -83,10 +89,6 @@ export function compareRewardScanWinsDesc(left: UnclaimedWin, right: UnclaimedWi
   const a = BigInt(leftEpoch);
   const b = BigInt(rightEpoch);
   return a === b ? 0 : b > a ? 1 : -1;
-}
-
-export function isRewardClaimWindowOpen(resolvedAt: bigint, chainTimestamp: bigint): boolean {
-  return resolvedAt === 0n || chainTimestamp < resolvedAt + REWARD_CLAIM_WINDOW_SECONDS;
 }
 
 function loadCachedRewardScan(address: string): {
@@ -479,10 +481,7 @@ export function useRewardScanner(
       const chainTimestamp = (await publicClient.getBlock({ blockTag: "latest" })).timestamp;
       // Start with any cached wins (they'll be re-validated for claimed status)
       const wins: UnclaimedWin[] = [];
-      const startEpoch = actualCurrentEpoch > BigInt(1) ? actualCurrentEpoch - BigInt(1) : BigInt(0);
-      const minEpoch = actualCurrentEpoch > MAX_SCAN_DEPTH
-        ? actualCurrentEpoch - MAX_SCAN_DEPTH
-        : BigInt(1);
+      const { startEpoch, minEpoch, quickMinEpoch } = getAutomaticRewardScanBounds(actualCurrentEpoch);
       const mergeWins = (list: UnclaimedWin[]) => {
         const byEpoch = new Map<string, UnclaimedWin>();
         for (const w of list) byEpoch.set(w.epoch, w);
@@ -491,15 +490,13 @@ export function useRewardScanner(
 
       const scanRange = async (rangeStart: bigint, rangeMin: bigint) => {
         if (rangeStart < rangeMin) return;
-        let cursor = rangeStart;
-        while (cursor >= rangeMin && !scanAbortRef.current) {
+        for (const epochIds of iterateDescendingRewardScanEpochChunks(
+          rangeStart,
+          rangeMin,
+          REWARD_SCAN_CHUNK_SIZE,
+        )) {
+          if (scanAbortRef.current) return;
           if (requestId !== requestIdRef.current) return;
-          let end = cursor - REWARD_SCAN_CHUNK_SIZE + BigInt(1);
-          if (end < rangeMin) end = rangeMin;
-
-          const epochIds: bigint[] = [];
-          for (let i = cursor; i >= end; i--) epochIds.push(i);
-          if (epochIds.length === 0) break;
 
           const [epochResults, claimResults, dustSettledResults] = await Promise.all([
             publicClient.multicall({
@@ -551,25 +548,14 @@ export function useRewardScanner(
             ]);
             if (requestId !== requestIdRef.current) return;
 
-            potentialWins.forEach((w, index) => {
-              const betAmt = betResults[index]?.result as unknown as bigint | undefined;
-              const tileTotal = tilePoolResults[index]?.result as unknown as bigint | undefined;
-              const resolvedAt = resolvedAtResults[index]?.result as unknown as bigint | undefined;
-              if (
-                betAmt && betAmt > 0n && tileTotal && tileTotal > 0n && resolvedAt !== undefined
-                && isRewardClaimWindowOpen(resolvedAt, chainTimestamp)
-              ) {
-                const amountWei = (w.rewardPool * betAmt) / tileTotal;
-                if (amountWei === 0n) return;
-                wins.push({
-                  epoch: w.id.toString(),
-                  amountWei: amountWei.toString(),
-                });
-              }
-            });
+            wins.push(...collectOpenRewardScanWins({
+              potentialWins,
+              betResults,
+              tilePoolResults,
+              resolvedAtResults,
+              chainTimestamp,
+            }));
           }
-
-          cursor = end - BigInt(1);
         }
       };
 
@@ -584,9 +570,8 @@ export function useRewardScanner(
 
         // Re-validate cached wins: check if any were claimed or dust-settled since last scan
         if (cached.wins.length > 0) {
-          for (let offset = 0; offset < cached.wins.length; offset += REWARD_SCAN_CHUNK_SIZE_NUMBER) {
+          for (const cachedWinChunk of chunkRewardScanItems(cached.wins, REWARD_SCAN_CHUNK_SIZE_NUMBER)) {
             if (scanAbortRef.current || requestId !== requestIdRef.current) return;
-            const cachedWinChunk = cached.wins.slice(offset, offset + REWARD_SCAN_CHUNK_SIZE_NUMBER);
             const cachedEpochIds = cachedWinChunk.map((w) => w.epoch);
             const [claimChecks, dustChecks, resolvedAtChecks] = await Promise.all([
               publicClient.multicall({
@@ -637,13 +622,6 @@ export function useRewardScanner(
         }
       } else {
         // Full scan: no usable cache, scan everything in two phases (fast + deep)
-        const quickMinEpoch = (() => {
-          const fastFloor = actualCurrentEpoch > FAST_SCAN_DEPTH
-            ? actualCurrentEpoch - FAST_SCAN_DEPTH
-            : BigInt(1);
-          return fastFloor > minEpoch ? fastFloor : minEpoch;
-        })();
-
         await scanRange(startEpoch, quickMinEpoch);
         if (scanAbortRef.current || requestId !== requestIdRef.current) return;
         if (mountedRef.current) {
@@ -761,7 +739,7 @@ export function useRewardScanner(
             if (activeClaimAddressRef.current !== claimActor) return prev;
             const next = prev.filter((w) => w.epoch !== epochId);
             if (actualCurrentEpoch) {
-              const minEpoch = actualCurrentEpoch > MAX_SCAN_DEPTH ? actualCurrentEpoch - MAX_SCAN_DEPTH : BigInt(1);
+              const { minEpoch } = getAutomaticRewardScanBounds(actualCurrentEpoch);
               saveCachedRewardScan(claimActor, next, actualCurrentEpoch.toString(), minEpoch.toString());
               cacheSavedAtRef.current = Date.now();
             }
@@ -911,7 +889,7 @@ export function useRewardScanner(
             if (activeClaimAddressRef.current !== claimActor) return prev;
             const next = prev.filter((w) => !claimedEpochs.has(w.epoch));
             if (actualCurrentEpoch) {
-              const minEpoch = actualCurrentEpoch > MAX_SCAN_DEPTH ? actualCurrentEpoch - MAX_SCAN_DEPTH : BigInt(1);
+              const { minEpoch } = getAutomaticRewardScanBounds(actualCurrentEpoch);
               saveCachedRewardScan(claimActor, next, actualCurrentEpoch.toString(), minEpoch.toString());
               cacheSavedAtRef.current = Date.now();
             }

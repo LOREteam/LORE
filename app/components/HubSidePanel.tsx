@@ -6,6 +6,7 @@ import type { AutoMinePhase } from "../hooks/useMining.types";
 import type { ManualBetFormState } from "../hooks/useManualBetForm";
 import { useAutoMinerForm } from "../hooks/useAutoMinerForm";
 import { GRID_SIZE } from "../lib/constants";
+import { getHubFeeEstimateLabel } from "../lib/hubFeeEstimate";
 import { normalizeDecimalInput, validateBetAmount } from "../lib/utils";
 import { cn } from "../lib/cn";
 import {
@@ -424,7 +425,7 @@ function MobileMiningActionBar({
           </span>
           {walletConnected && selectedTilesCount > 0 && (
             <span className="lore-nums shrink-0 text-sky-200">
-              Fee {feeEstimate ? `~${feeEstimate} ETH` : feeEstimateUnavailable ? "unavailable" : "calculating"}
+              Fee {getHubFeeEstimateLabel(feeEstimate, feeEstimateUnavailable)}
             </span>
           )}
         </div>

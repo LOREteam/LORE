@@ -7,13 +7,21 @@ import { uiTokens } from "./ui/tokens";
 
 const STORAGE_KEY = "lineaore:privy-backup-confirmed";
 
-function normalizeBackupAddress(address: string | null | undefined): `0x${string}` | null {
+export function normalizeBackupAddress(address: string | null | undefined): `0x${string}` | null {
   if (!address) return null;
   try {
     return getAddress(address).toLowerCase() as `0x${string}`;
   } catch {
     return null;
   }
+}
+
+export function getBackupGateActionState(checked: boolean, isExporting: boolean) {
+  return {
+    exportDisabled: isExporting,
+    exportLabel: isExporting ? "Opening..." : "Export private key",
+    continueDisabled: !checked,
+  } as const;
 }
 
 export function getBackupConfirmedAddress(): string | null {
@@ -63,6 +71,7 @@ export function BackupGate({
   const [isExporting, setIsExporting] = useState(false);
   const mountedRef = useRef(false);
   const isVisible = Boolean(embeddedWalletAddress && !isBackupConfirmedFor(embeddedWalletAddress));
+  const actionState = getBackupGateActionState(checked, isExporting);
   const dialogRef = useDialogFocusTrap<HTMLDivElement>(isVisible);
 
   useEffect(() => {
@@ -126,19 +135,19 @@ export function BackupGate({
             <button
               type="button"
               onClick={handleExport}
-              disabled={isExporting}
+              disabled={actionState.exportDisabled}
               className={`w-full px-4 py-3 rounded-xl border-2 border-amber-500/50 bg-amber-500/10 text-amber-300 font-bold uppercase tracking-widest text-sm hover:bg-amber-500/20 hover:border-amber-400/60 transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2 ${uiTokens.focusRing}`}
             >
-              {isExporting ? (
+              {actionState.exportDisabled ? (
                 <>
                   <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Opening...
+                  {actionState.exportLabel}
                 </>
               ) : (
-                <>Export private key</>
+                <>{actionState.exportLabel}</>
               )}
             </button>
 
@@ -157,7 +166,7 @@ export function BackupGate({
             <button
               type="button"
               onClick={handleContinue}
-              disabled={!checked}
+              disabled={actionState.continueDisabled}
               className={`w-full px-4 py-3 rounded-xl bg-emerald-500/20 border-2 border-emerald-500/50 text-emerald-300 font-bold uppercase tracking-widest text-sm hover:bg-emerald-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 ${uiTokens.focusRing}`}
             >
               I&apos;ve saved it, continue

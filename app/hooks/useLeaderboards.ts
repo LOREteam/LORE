@@ -31,6 +31,8 @@ interface LeaderboardsCacheEnvelope {
   data?: LeaderboardsData;
 }
 
+export type LeaderboardsCacheStorage = Pick<Storage, "getItem" | "removeItem">;
+
 function finiteNumber(value: unknown, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -126,37 +128,46 @@ function leaderboardsEqual(left: LeaderboardsData | null, right: LeaderboardsDat
   );
 }
 
-function loadCache(): { data: LeaderboardsData | null; savedAt: number | null } {
-  if (typeof localStorage === "undefined") return { data: null, savedAt: null };
+export function loadLeaderboardsCache(
+  storage: LeaderboardsCacheStorage | null = typeof localStorage === "undefined" ? null : localStorage,
+  now = Date.now(),
+): { data: LeaderboardsData | null; savedAt: number | null } {
+  if (!storage) return { data: null, savedAt: null };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = storage.getItem(STORAGE_KEY);
     if (!raw) return { data: null, savedAt: null };
     const parsed = JSON.parse(raw) as LeaderboardsCacheEnvelope | LeaderboardsData;
-    if (!parsed || typeof parsed !== "object") {
-      localStorage.removeItem(STORAGE_KEY);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      storage.removeItem(STORAGE_KEY);
       return { data: null, savedAt: null };
     }
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      "data" in parsed &&
-      parsed.data &&
-      typeof parsed.data === "object"
-    ) {
+    if ("data" in parsed) {
+      if (!parsed.data || typeof parsed.data !== "object" || Array.isArray(parsed.data)) {
+        storage.removeItem(STORAGE_KEY);
+        return { data: null, savedAt: null };
+      }
       return {
         data: normalizeLeaderboardsData(parsed.data),
-        savedAt: normalizeCacheTimestamp(parsed.savedAt),
+        savedAt: normalizeCacheTimestamp(parsed.savedAt, now),
       };
     }
     return { data: normalizeLeaderboardsData(parsed), savedAt: null };
   } catch {
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      storage.removeItem(STORAGE_KEY);
     } catch {
       // ignore storage failures
     }
     return { data: null, savedAt: null };
   }
+}
+
+export function getLeaderboardsRefreshDelay(savedAt: unknown, now = Date.now()) {
+  return getFreshCacheDelayMs(savedAt, LEADERBOARD_CACHE_TTL_MS, now) ?? 0;
+}
+
+export function getLeaderboardsLoadError() {
+  return LEADERBOARD_LOAD_ERROR;
 }
 
 function saveCache(data: LeaderboardsData) {
@@ -177,7 +188,7 @@ function saveCache(data: LeaderboardsData) {
 export function useLeaderboards(enabled: boolean) {
   const initialCacheRef = useRef<{ data: LeaderboardsData | null; savedAt: number | null } | null>(null);
   if (initialCacheRef.current === null) {
-    initialCacheRef.current = loadCache();
+    initialCacheRef.current = loadLeaderboardsCache();
   }
   const initialCache = initialCacheRef.current;
   const [loading, setLoading] = useState(false);
@@ -212,7 +223,7 @@ export function useLeaderboards(enabled: boolean) {
 
     try {
       if (!force && !dataRef.current) {
-        const cached = initialCacheRef.current ?? loadCache();
+        const cached = initialCacheRef.current ?? loadLeaderboardsCache();
         cacheSavedAtRef.current = cached.savedAt;
         if (cached.data && !dataRef.current && mountedRef.current) {
           setData(cached.data);
@@ -251,7 +262,7 @@ export function useLeaderboards(enabled: boolean) {
       }
     } catch {
       if (mountedRef.current) {
-        setError(LEADERBOARD_LOAD_ERROR);
+        setError(getLeaderboardsLoadError());
       }
     } finally {
       if (mountedRef.current) {
@@ -264,7 +275,7 @@ export function useLeaderboards(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     const savedAt = cacheSavedAtRef.current;
-    const initialDelay = getFreshCacheDelayMs(savedAt, LEADERBOARD_CACHE_TTL_MS) ?? 0;
+    const initialDelay = getLeaderboardsRefreshDelay(savedAt);
     let cancelled = false;
     let timeoutId: number | null = null;
 

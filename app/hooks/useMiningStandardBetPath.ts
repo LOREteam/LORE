@@ -16,17 +16,24 @@ import {
 } from "../lib/lineaFees";
 import { log } from "../lib/logger";
 import {
-  clearPendingMiningTxState,
+  attachPendingMiningTxHash,
+  clearVerifiedPendingMiningTxState,
+  createPendingMiningAgreementClients,
+  PendingMiningTxSafetyError,
   readPendingMiningTxState,
-  recoverPendingMiningTx,
+  recoverAndClearPendingMiningTx,
+  reservePendingMiningTxIntent,
   writeMiningTxPathState,
-  writePendingMiningTxState,
+  type PendingMiningTxRecovery,
+  type PendingMiningTxState,
 } from "../lib/miningTxPath";
 import { tileIdsToMask } from "../lib/tileMask";
+import { isUserRejection } from "../lib/utils";
 import type { GasOverrides, SilentSendFn } from "./useMining.types";
 import type { ReceiptState } from "./useMining.stateTypes";
 import {
   isAmbiguousPendingTxError,
+  isDeterministicBetExecutionError,
   isNetworkError,
   normalizeTiles,
   withMiningRpcTimeout,
@@ -52,10 +59,117 @@ export function shouldRecoverSilentSendAsPending(error: unknown): boolean {
   return isAmbiguousPendingTxError(error) || isNetworkError(error);
 }
 
+export function shouldClearDefinitelyUnsentMiningReservation(error: unknown): boolean {
+  if (shouldRecoverSilentSendAsPending(error)) return false;
+  return isUserRejection(error) || isDeterministicBetExecutionError(error);
+}
+
+type ReservedMiningWalletSinkResult =
+  | `0x${string}`
+  | { hash: `0x${string}` | null };
+
+function getReservedMiningWalletSinkHash(result: ReservedMiningWalletSinkResult) {
+  return typeof result === "string" ? result : result.hash;
+}
+
+export async function executeReservedMiningWalletSink<T extends ReservedMiningWalletSinkResult>(
+  pendingState: PendingMiningTxState,
+  assertBeforeWalletSink: () => Promise<void> | void,
+  invokeWalletSink: () => Promise<T>,
+): Promise<T> {
+  let walletSinkInvoked = false;
+  let walletSinkReturned = false;
+  try {
+    await assertBeforeWalletSink();
+    walletSinkInvoked = true;
+    const result = await invokeWalletSink();
+    walletSinkReturned = true;
+    const hash = getReservedMiningWalletSinkHash(result);
+    if (hash) {
+      const attached = attachPendingMiningTxHash(pendingState, hash);
+      const submittedState = attached
+        ? readPendingMiningTxState(pendingState.chainId, pendingState.contract, pendingState.actor)
+        : null;
+      if (!submittedState?.hash || submittedState.hash !== hash.toLowerCase()) {
+        throw new PendingMiningTxSafetyError(
+          "Submitted mining transaction hash could not be persisted and verified; manual reconciliation is required.",
+        );
+      }
+    }
+    return result;
+  } catch (error) {
+    const definitelyUnsent = !walletSinkInvoked || (
+      !walletSinkReturned && shouldClearDefinitelyUnsentMiningReservation(error)
+    );
+    if (definitelyUnsent && !clearVerifiedPendingMiningTxState(pendingState)) {
+      throw new PendingMiningTxSafetyError(
+        "Unsubmitted mining reservation could not be cleared; manual reconciliation is required.",
+      );
+    }
+    throw error;
+  }
+}
+
+export function settleRecoveredMiningAttempt(
+  recovery: PendingMiningTxRecovery,
+  clear: () => void,
+): ReceiptState | null {
+  if (recovery === "pending" || recovery === "manual-reconciliation-required") return "pending";
+  clear();
+  return recovery === "confirmed" ? "confirmed" : null;
+}
+
+interface CreateMiningEpochWriteGuardOptions {
+  expectedEpoch?: bigint;
+  readCurrentEpoch: () => Promise<unknown>;
+  assertBeforeSend?: () => Promise<void> | void;
+}
+
+export function createMiningEpochWriteGuard({
+  expectedEpoch,
+  readCurrentEpoch,
+  assertBeforeSend,
+}: CreateMiningEpochWriteGuardOptions) {
+  let targetEpoch: bigint | null = null;
+
+  const readAndAssertCurrent = async (expected: bigint | undefined) => {
+    if (typeof expected !== "bigint" || expected < 1n) {
+      throw new Error("Expected epoch is unavailable or unsafe. Refresh chain state before retrying.");
+    }
+    const currentEpoch = await readCurrentEpoch();
+    if (typeof currentEpoch !== "bigint" || currentEpoch < 1n) {
+      throw new Error("Live epoch is unavailable or unsafe. Refresh chain state before retrying.");
+    }
+    if (currentEpoch !== expected) {
+      throw new Error(
+        `Epoch changed before wallet write: expected ${expected.toString()}, current ${currentEpoch.toString()}. Refresh and retry.`,
+      );
+    }
+    return expected;
+  };
+
+  return {
+    establish: async () => {
+      targetEpoch = await readAndAssertCurrent(expectedEpoch);
+      return targetEpoch;
+    },
+    assertBeforeWalletWrite: async () => {
+      if (targetEpoch === null) {
+        throw new Error("Epoch write guard was not established before wallet submission.");
+      }
+      await readAndAssertCurrent(targetEpoch);
+      await assertBeforeSend?.();
+    },
+  };
+}
+
 interface UseMiningStandardBetPathOptions {
   assertNativeGasBalance: (gas: bigint, gasOverrides?: GasOverrides) => Promise<void>;
   assertSufficientAllowance: (requiredRaw: bigint) => Promise<void>;
-  ensureAllowance: (requiredRaw: bigint, assertBeforeSend?: () => void) => Promise<void>;
+  ensureAllowance: (
+    requiredRaw: bigint,
+    assertBeforeSend?: () => Promise<void> | void,
+  ) => Promise<void>;
   ensureContractPreflight: () => Promise<void>;
   estimateGas: (
     functionName:
@@ -68,7 +182,11 @@ interface UseMiningStandardBetPathOptions {
     extraBuffer: bigint,
   ) => Promise<bigint>;
   getBumpedFees: (bumpBps?: bigint) => Promise<GasOverrides | undefined>;
-  waitReceipt: (hash: `0x${string}`, client?: PublicClient) => Promise<ReceiptState>;
+  waitReceipt: (
+    hash: `0x${string}`,
+    client?: PublicClient,
+    pendingState?: PendingMiningTxState,
+  ) => Promise<ReceiptState>;
   readPublicClient: () => PublicClient | undefined;
   readSilentSend: () => SilentSendFn | undefined;
   readWriteContractAsync: () => (args: unknown) => Promise<`0x${string}`>;
@@ -93,13 +211,13 @@ export function useMiningStandardBetPath({
   const epochBoundBitmapSupportedRef = useRef<boolean | null>(null);
   const batchBitmapSupportedRef = useRef<boolean | null>(null);
   const batchSameAmountSupportedRef = useRef<boolean | null>(null);
+  const agreementClients = useMemo(() => createPendingMiningAgreementClients(), []);
 
-  const resolveExpectedEpoch = useCallback(
-    async (expectedEpoch?: bigint) => {
-      if (expectedEpoch !== undefined) return expectedEpoch;
+  const readCurrentEpoch = useCallback(
+    async () => {
       const client = readPublicClient();
       if (!client) throw new Error("Public client not ready for epoch-bound bet.");
-      return (await withMiningRpcTimeout(
+      return withMiningRpcTimeout(
         client.readContract({
           address: CONTRACT_ADDRESS,
           abi: GAME_ABI,
@@ -107,7 +225,7 @@ export function useMiningStandardBetPath({
         }),
         "bet.currentEpochBeforeSend",
         8_000,
-      )) as bigint;
+      );
     },
     [readPublicClient],
   );
@@ -141,43 +259,77 @@ export function useMiningStandardBetPath({
       if (!actor) return null;
       const state = readPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
       if (!state) return null;
-      const client = readPublicClient();
-      if (!client) return "pending";
-      const recovery = await recoverPendingMiningTx(client, state);
-      if (recovery === "pending" || recovery === "manual-reconciliation-required") return "pending";
-      clearPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
-      return null;
+      if (!agreementClients) return "pending";
+      const recovery = await recoverAndClearPendingMiningTx(agreementClients, state);
+      return settleRecoveredMiningAttempt(recovery, () => undefined);
     },
-    [getActorAddress, readPublicClient],
+    [agreementClients, getActorAddress],
   );
 
   const waitTrackedReceipt = useCallback(
     async (
       hash: `0x${string}`,
       client?: PublicClient,
-      nonce?: number,
+      pendingState?: PendingMiningTxState,
     ): Promise<ReceiptState> => {
       log.info("Mine", "bet transaction submitted", {
         hash,
-        nonce: nonce ?? null,
+        nonce: pendingState?.nonce ?? null,
       });
-      const actor = getActorAddress();
-      if (actor) {
-        writePendingMiningTxState({
-          chainId: APP_CHAIN_ID,
-          contract: CONTRACT_ADDRESS,
-          actor: actor as `0x${string}`,
-          hash,
-          ...(nonce !== undefined ? { nonce } : {}),
-        });
+      if (!pendingState) {
+        log.warn("Mine", "submitted mining transaction requires manual reconciliation", { hash });
+        return "pending";
       }
-      const state = await waitReceipt(hash, client);
-      if (state === "confirmed" && actor) {
-        clearPendingMiningTxState(APP_CHAIN_ID, CONTRACT_ADDRESS, actor);
+      const submittedState = readPendingMiningTxState(
+        pendingState.chainId,
+        pendingState.contract,
+        pendingState.actor,
+      );
+      if (!submittedState?.hash || submittedState.hash !== hash.toLowerCase()) {
+        log.warn("Mine", "submitted mining transaction state changed before receipt verification", { hash });
+        return "pending";
+      }
+      const state = await waitReceipt(hash, client, submittedState);
+      if (state === "confirmed") {
+        if (!agreementClients) return "pending";
+        const recovery = await recoverAndClearPendingMiningTx(agreementClients, submittedState);
+        if (recovery !== "confirmed") return "pending";
       }
       return state;
     },
-    [getActorAddress, waitReceipt],
+    [agreementClients, waitReceipt],
+  );
+
+  const reserveSubmission = useCallback(
+    async (
+      actor: `0x${string}`,
+      calldata: `0x${string}`,
+      targetEpoch: bigint,
+      normalizedTiles: number[],
+      singleAmountRaw: bigint,
+      requestedNonce?: number,
+    ) => {
+      if (!agreementClients) {
+        throw new Error("Two independent public clients are required before mining submission.");
+      }
+      const pendingState = await reservePendingMiningTxIntent(agreementClients, {
+        chainId: APP_CHAIN_ID,
+        contract: CONTRACT_ADDRESS,
+        actor,
+        calldata,
+        expectedEpoch: targetEpoch,
+        tileIds: normalizedTiles,
+        amountRawPerTile: singleAmountRaw,
+      });
+      if (pendingState.nonce === undefined || (requestedNonce !== undefined && requestedNonce !== pendingState.nonce)) {
+        if (!clearVerifiedPendingMiningTxState(pendingState)) {
+          throw new Error("Mismatched mining nonce reservation requires manual reconciliation.");
+        }
+        throw new Error("Requested mining nonce does not match verified pending nonce evidence.");
+      }
+      return pendingState;
+    },
+    [agreementClients],
   );
 
   const placeBets = useCallback(
@@ -187,7 +339,7 @@ export function useMiningStandardBetPath({
       gasOverrides?: GasOverrides,
       txNonce?: number,
       expectedEpoch?: bigint,
-      assertBeforeSend?: () => void,
+      assertBeforeSend?: () => Promise<void> | void,
     ): Promise<ReceiptState> => {
       const normalizedTiles = normalizeTiles(tiles);
       if (normalizedTiles.length === 0) throw new Error("No valid tiles selected");
@@ -195,58 +347,94 @@ export function useMiningStandardBetPath({
       await ensureContractPreflight();
       const recoveredPending = await recoverTrackedPending();
       if (recoveredPending) return recoveredPending;
+      const epochWriteGuard = createMiningEpochWriteGuard({
+        expectedEpoch,
+        readCurrentEpoch,
+        assertBeforeSend,
+      });
+      const epochBoundBitmapSupported = await supportsEpochBoundBitmap();
+      const targetEpoch = await epochWriteGuard.establish();
       const totalAmountRaw = singleAmountRaw * BigInt(normalizedTiles.length);
-      await ensureAllowance(totalAmountRaw, assertBeforeSend);
+      await ensureAllowance(totalAmountRaw, epochWriteGuard.assertBeforeWalletWrite);
       await assertSufficientAllowance(totalAmountRaw);
       const resolvedFees = hasCompleteFeeOverrides(gasOverrides)
         ? undefined
         : await getBumpedFees();
       const overrides = mergeFeeOverrides(resolvedFees, gasOverrides);
       const writeContractAsync = readWriteContractAsync();
-      const writeAuthorizedContract = (args: unknown, gas: bigint) => {
+      const writeAuthorizedContract = async (
+        args: Record<string, unknown>,
+        calldata: `0x${string}`,
+        gas: bigint,
+      ) => {
         assertNormalFeeBudget(overrides, gas, APP_CHAIN_ID);
-        assertBeforeSend?.();
-        return writeContractAsync(args);
+        await epochWriteGuard.assertBeforeWalletWrite();
+        const actor = getActorAddress();
+        if (!actor) throw new Error("Wallet actor is unavailable before mining submission.");
+        const pendingState = await reserveSubmission(
+          actor as `0x${string}`,
+          calldata,
+          targetEpoch,
+          normalizedTiles,
+          singleAmountRaw,
+          txNonce,
+        );
+        const hash = await executeReservedMiningWalletSink(
+          pendingState,
+          epochWriteGuard.assertBeforeWalletWrite,
+          () => writeContractAsync({
+            ...args,
+            nonce: pendingState.nonce,
+          }),
+        );
+        return { hash, pendingState };
       };
       const tileMask = tileIdsToMask(normalizedTiles);
 
-      if (await supportsEpochBoundBitmap()) {
-        const targetEpoch = await resolveExpectedEpoch(expectedEpoch);
+      if (epochBoundBitmapSupported) {
         const gas = await estimateGas(
           "placeBatchBetsBitmapForEpoch",
           [targetEpoch, tileMask, singleAmountRaw],
           BigInt(80_000),
         );
         await assertNativeGasBalance(gas, overrides);
-        const txHash = await writeAuthorizedContract({
+        const calldata = encodeFunctionData({
+          abi: GAME_ABI,
+          functionName: "placeBatchBetsBitmapForEpoch",
+          args: [targetEpoch, tileMask, singleAmountRaw],
+        });
+        const submission = await writeAuthorizedContract({
           address: CONTRACT_ADDRESS,
           abi: GAME_ABI,
           functionName: "placeBatchBetsBitmapForEpoch",
           args: [targetEpoch, tileMask, singleAmountRaw],
           chainId: APP_CHAIN_ID,
           gas,
-          ...(txNonce !== undefined ? { nonce: txNonce } : {}),
           ...(overrides ?? {}),
-        }, gas);
+        }, calldata, gas);
         writeMiningTxPathState("wallet-write", "direct-wallet");
-        return waitTrackedReceipt(txHash, undefined, txNonce);
+        return waitTrackedReceipt(submission.hash, undefined, submission.pendingState);
       }
 
       if (normalizedTiles.length === 1) {
         const gas = await estimateGas("placeBet", [BigInt(normalizedTiles[0]), singleAmountRaw], BigInt(60000));
         await assertNativeGasBalance(gas, overrides);
-        const txHash = await writeAuthorizedContract({
+        const calldata = encodeFunctionData({
+          abi: GAME_ABI,
+          functionName: "placeBet",
+          args: [BigInt(normalizedTiles[0]), singleAmountRaw],
+        });
+        const submission = await writeAuthorizedContract({
           address: CONTRACT_ADDRESS,
           abi: GAME_ABI,
           functionName: "placeBet",
           args: [BigInt(normalizedTiles[0]), singleAmountRaw],
           chainId: APP_CHAIN_ID,
           gas,
-          ...(txNonce !== undefined ? { nonce: txNonce } : {}),
           ...(overrides ?? {}),
-        }, gas);
+        }, calldata, gas);
         writeMiningTxPathState("wallet-write", "direct-wallet");
-        return waitTrackedReceipt(txHash, undefined, txNonce);
+        return waitTrackedReceipt(submission.hash, undefined, submission.pendingState);
       }
 
       const tileArgs = normalizedTiles.map((id) => BigInt(id));
@@ -255,19 +443,23 @@ export function useMiningStandardBetPath({
         try {
           const gas = await estimateGas("placeBatchBetsBitmap", [tileMask, singleAmountRaw], BigInt(80_000));
           await assertNativeGasBalance(gas, overrides);
-          const txHash = await writeAuthorizedContract({
+          const calldata = encodeFunctionData({
+            abi: GAME_ABI,
+            functionName: "placeBatchBetsBitmap",
+            args: [tileMask, singleAmountRaw],
+          });
+          const submission = await writeAuthorizedContract({
             address: CONTRACT_ADDRESS,
             abi: GAME_ABI,
             functionName: "placeBatchBetsBitmap",
             args: [tileMask, singleAmountRaw],
             chainId: APP_CHAIN_ID,
             gas,
-            ...(txNonce !== undefined ? { nonce: txNonce } : {}),
             ...(overrides ?? {}),
-          }, gas);
+          }, calldata, gas);
           batchBitmapSupportedRef.current = true;
           writeMiningTxPathState("wallet-write", "direct-wallet");
-          return waitTrackedReceipt(txHash, undefined, txNonce);
+          return waitTrackedReceipt(submission.hash, undefined, submission.pendingState);
         } catch (error) {
           if (!isMissingMethodError(error, "placeBatchBetsBitmap")) {
             throw error;
@@ -285,19 +477,23 @@ export function useMiningStandardBetPath({
         try {
           const gas = await estimateGas("placeBatchBetsSameAmount", [tileArgs, singleAmountRaw], BigInt(90_000));
           await assertNativeGasBalance(gas, overrides);
-          const txHash = await writeAuthorizedContract({
+          const calldata = encodeFunctionData({
+            abi: GAME_ABI,
+            functionName: "placeBatchBetsSameAmount",
+            args: [tileArgs, singleAmountRaw],
+          });
+          const submission = await writeAuthorizedContract({
             address: CONTRACT_ADDRESS,
             abi: GAME_ABI,
             functionName: "placeBatchBetsSameAmount",
             args: [tileArgs, singleAmountRaw],
             chainId: APP_CHAIN_ID,
             gas,
-            ...(txNonce !== undefined ? { nonce: txNonce } : {}),
             ...(overrides ?? {}),
-          }, gas);
+          }, calldata, gas);
           batchSameAmountSupportedRef.current = true;
           writeMiningTxPathState("wallet-write", "direct-wallet");
-          return waitTrackedReceipt(txHash, undefined, txNonce);
+          return waitTrackedReceipt(submission.hash, undefined, submission.pendingState);
         } catch (error) {
           if (!isMissingMethodError(error, "placeBatchBetsSameAmount")) {
             throw error;
@@ -314,18 +510,22 @@ export function useMiningStandardBetPath({
       const amountArgs = normalizedTiles.map(() => singleAmountRaw);
       const gas = await estimateGas("placeBatchBets", [tileArgs, amountArgs], BigInt(120_000));
       await assertNativeGasBalance(gas, overrides);
-      const txHash = await writeAuthorizedContract({
+      const calldata = encodeFunctionData({
+        abi: GAME_ABI,
+        functionName: "placeBatchBets",
+        args: [tileArgs, amountArgs],
+      });
+      const submission = await writeAuthorizedContract({
         address: CONTRACT_ADDRESS,
         abi: GAME_ABI,
         functionName: "placeBatchBets",
         args: [tileArgs, amountArgs],
         chainId: APP_CHAIN_ID,
         gas,
-        ...(txNonce !== undefined ? { nonce: txNonce } : {}),
         ...(overrides ?? {}),
-      }, gas);
+      }, calldata, gas);
       writeMiningTxPathState("wallet-write", "direct-wallet");
-      return waitTrackedReceipt(txHash, undefined, txNonce);
+      return waitTrackedReceipt(submission.hash, undefined, submission.pendingState);
     },
     [
       assertNativeGasBalance,
@@ -334,10 +534,12 @@ export function useMiningStandardBetPath({
       ensureContractPreflight,
       ensurePreferredWallet,
       estimateGas,
+      getActorAddress,
       getBumpedFees,
       recoverTrackedPending,
       readWriteContractAsync,
-      resolveExpectedEpoch,
+      readCurrentEpoch,
+      reserveSubmission,
       supportsEpochBoundBitmap,
       waitTrackedReceipt,
     ],
@@ -350,7 +552,7 @@ export function useMiningStandardBetPath({
       gasOverrides?: GasOverrides,
       txNonce?: number,
       expectedEpoch?: bigint,
-      assertBeforeSend?: () => void,
+      assertBeforeSend?: () => Promise<void> | void,
     ): Promise<ReceiptState> => {
       const normalizedTiles = normalizeTiles(tiles);
       if (normalizedTiles.length === 0) throw new Error("No valid tiles selected");
@@ -363,16 +565,22 @@ export function useMiningStandardBetPath({
       const recoveredPending = await recoverTrackedPending();
       if (recoveredPending) return recoveredPending;
 
+      const epochWriteGuard = createMiningEpochWriteGuard({
+        expectedEpoch,
+        readCurrentEpoch,
+        assertBeforeSend,
+      });
+      const epochBoundBitmapSupported = await supportsEpochBoundBitmap();
+      const targetEpoch = await epochWriteGuard.establish();
       const totalAmountRaw = singleAmountRaw * BigInt(normalizedTiles.length);
-      await ensureAllowance(totalAmountRaw, assertBeforeSend);
+      await ensureAllowance(totalAmountRaw, epochWriteGuard.assertBeforeWalletWrite);
       await assertSufficientAllowance(totalAmountRaw);
 
       let data: `0x${string}` | undefined;
       let gas: bigint | undefined;
       const tileMask = tileIdsToMask(normalizedTiles);
 
-      if (await supportsEpochBoundBitmap()) {
-        const targetEpoch = await resolveExpectedEpoch(expectedEpoch);
+      if (epochBoundBitmapSupported) {
         gas = await estimateGas(
           "placeBatchBetsBitmapForEpoch",
           [targetEpoch, tileMask, singleAmountRaw],
@@ -454,22 +662,45 @@ export function useMiningStandardBetPath({
         await assertNativeGasBalance(gas, gasOverrides);
       }
 
-      let hash: `0x${string}`;
       const actor = getActorAddress();
-      const effectiveNonce = txNonce ?? (actor
-        ? Number(await client.getTransactionCount({ address: actor as `0x${string}`, blockTag: "pending" }))
-        : undefined);
+      if (!actor) throw new Error("Wallet actor is unavailable before mining submission.");
+      if (!data) throw new Error("Mining calldata is unavailable before submission.");
+      const pendingState = await reserveSubmission(
+        actor as `0x${string}`,
+        data,
+        targetEpoch,
+        normalizedTiles,
+        singleAmountRaw,
+        txNonce,
+      );
+      const submission = await executeReservedMiningWalletSink(
+        pendingState,
+        epochWriteGuard.assertBeforeWalletWrite,
+        async () => {
+          try {
+            return {
+              hash: await silentSend(
+                {
+                  to: CONTRACT_ADDRESS,
+                  data,
+                  gas,
+                  nonce: pendingState.nonce,
+                },
+                gasOverrides,
+              ),
+            };
+          } catch (error) {
+            if (shouldRecoverSilentSendAsPending(error)) {
+              log.warn("Mine", "silent send may already be pending, avoiding duplicate wallet fallback", error);
+              return { hash: null };
+            }
+            throw error;
+          }
+        },
+      );
+      if (!submission.hash) return "pending";
+      const hash = submission.hash;
       try {
-        assertBeforeSend?.();
-        hash = await silentSend(
-          {
-            to: CONTRACT_ADDRESS,
-            data,
-            gas,
-            ...(effectiveNonce !== undefined ? { nonce: effectiveNonce } : {}),
-          },
-          gasOverrides,
-        );
         writeMiningTxPathState("standard-silent", "legacy-silent");
         log.info("Mine", "using standard silent bet path", {
           tileCount: normalizedTiles.length,
@@ -477,22 +708,10 @@ export function useMiningStandardBetPath({
           hash,
         });
       } catch (error) {
-        if (shouldRecoverSilentSendAsPending(error)) {
-          if (actor && effectiveNonce !== undefined) {
-            writePendingMiningTxState({
-              chainId: APP_CHAIN_ID,
-              contract: CONTRACT_ADDRESS,
-              actor: actor as `0x${string}`,
-              nonce: effectiveNonce,
-            });
-          }
-          log.warn("Mine", "silent send may already be pending, avoiding duplicate wallet fallback", error);
-          return "pending";
-        }
-        throw error;
+        log.warn("Mine", "submitted silent mining transaction could not update local path diagnostics", error);
       }
 
-      return waitTrackedReceipt(hash, client, effectiveNonce);
+      return waitTrackedReceipt(hash, client, pendingState);
     },
     [
       assertNativeGasBalance,
@@ -503,9 +722,10 @@ export function useMiningStandardBetPath({
       estimateGas,
       getActorAddress,
       readPublicClient,
+      readCurrentEpoch,
       readSilentSend,
       recoverTrackedPending,
-      resolveExpectedEpoch,
+      reserveSubmission,
       supportsEpochBoundBitmap,
       waitTrackedReceipt,
     ],
