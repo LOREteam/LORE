@@ -25,6 +25,11 @@ export type KeeperReceiptObservation = {
   transactionIndex: number;
 };
 
+export type KeeperCanonicalBlockObservation = {
+  headBlock: bigint;
+  blockHash: Hex | null;
+};
+
 type AgreementReaders<T> = readonly [() => Promise<T>, () => Promise<T>];
 
 export class KeeperRpcAgreementError extends Error {
@@ -46,6 +51,31 @@ export class KeeperSignedTransactionIntegrityError extends Error {
     super(`keeper_signed_transaction_integrity_failed field=${field}`);
     this.name = "KeeperSignedTransactionIntegrityError";
   }
+}
+
+const MAX_KEEPER_FINALITY_BLOCKS = 1_000_000n;
+
+export function assertKeeperReceiptFinality(
+  receipt: KeeperReceiptObservation,
+  finalityBlocks: bigint,
+  observations: readonly [KeeperCanonicalBlockObservation, KeeperCanonicalBlockObservation],
+) {
+  if (finalityBlocks <= 0n || finalityBlocks > MAX_KEEPER_FINALITY_BLOCKS) {
+    throw new Error("keeper_finality_blocks_invalid");
+  }
+  const finalityTarget = receipt.blockNumber + finalityBlocks;
+  if (observations.some((observation) => observation.headBlock < finalityTarget)) {
+    return false;
+  }
+  for (const observation of observations) {
+    if (
+      !observation.blockHash ||
+      observation.blockHash.toLowerCase() !== receipt.blockHash.toLowerCase()
+    ) {
+      throw new KeeperRpcAgreementError("receipt_canonical_block");
+    }
+  }
+  return true;
 }
 
 function signedTransactionIntegrityFailure(field: string): never {

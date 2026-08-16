@@ -1,5 +1,6 @@
 import "dotenv/config";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   createResendAlertSender,
   createTelegramAlertSender,
@@ -31,7 +32,7 @@ const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
 const summaryOnly = process.argv.includes("--summary-only");
 const configErrors = [];
 
-function describeRuntimeMonitorError(error) {
+export function describeRuntimeMonitorError(error) {
   const text = redactProofText(error instanceof Error ? error.message : "configuration error")
     .replace(/\s+/g, " ")
     .trim();
@@ -49,38 +50,46 @@ function parseOptionalUint256Env(name) {
   return BigInt(value);
 }
 
-function parseRuntimeMonitorIntegerEnv(name, fallback, { min, max }) {
-  const raw = process.env[name];
+export function parseRuntimeMonitorIntegerValue(name, raw, fallback, { min, max }, errors = []) {
   if (raw === undefined || raw === "") return fallback;
   if (!DECIMAL_INTEGER_RE.test(raw)) {
-    configErrors.push(`${name} must be a canonical decimal integer`);
+    errors.push(`${name} must be a canonical decimal integer`);
     return fallback;
   }
   const parsed = BigInt(raw);
   const minBigInt = BigInt(min);
   const maxBigInt = BigInt(max);
   if (parsed > MAX_SAFE_INTEGER_BIGINT || parsed < minBigInt || parsed > maxBigInt) {
-    configErrors.push(`${name} must be between ${min} and ${max}`);
+    errors.push(`${name} must be between ${min} and ${max}`);
     return fallback;
   }
   return Number(parsed);
 }
 
-function parseHealthDiagnosticsSecretEnv(name) {
-  const secret = process.env[name]?.trim();
+function parseRuntimeMonitorIntegerEnv(name, fallback, bounds) {
+  return parseRuntimeMonitorIntegerValue(name, process.env[name], fallback, bounds, configErrors);
+}
+
+export function parseHealthDiagnosticsSecretValue(name, value, errors = []) {
+  const raw = typeof value === "string" ? value : "";
+  const secret = raw.trim();
   if (!secret) return "";
   if (
     secret.length < MIN_HEALTH_DIAGNOSTICS_SECRET_LENGTH ||
     secret.length > MAX_HEALTH_DIAGNOSTICS_SECRET_LENGTH ||
-    CONTROL_CHAR_RE.test(secret)
+    CONTROL_CHAR_RE.test(raw)
   ) {
-    configErrors.push(`${name} must be 32..256 non-control characters`);
+    errors.push(`${name} must be 32..256 non-control characters`);
     return "";
   }
   return secret;
 }
 
-function isFinalHttpsOrigin(value) {
+function parseHealthDiagnosticsSecretEnv(name) {
+  return parseHealthDiagnosticsSecretValue(name, process.env[name], configErrors);
+}
+
+export function isFinalHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
     const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
@@ -123,7 +132,7 @@ function isFinalHttpsOrigin(value) {
   }
 }
 
-function isRuntimeMonitorOrigin(value) {
+export function isRuntimeMonitorOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
     return !url.username &&
@@ -136,12 +145,12 @@ function isRuntimeMonitorOrigin(value) {
   }
 }
 
-function normalizeMonitorNetwork(value) {
+export function normalizeMonitorNetwork(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
   return ["mainnet", "main", "linea", "prod", "production"].includes(normalized) ? "mainnet" : "sepolia";
 }
 
-function isPositiveSafeIntegerText(value) {
+export function isPositiveSafeIntegerText(value) {
   const trimmed = String(value ?? "").trim();
   if (!POSITIVE_SAFE_INTEGER_TEXT_RE.test(trimmed)) return false;
   return BigInt(trimmed) <= MAX_SAFE_INTEGER_BIGINT;
@@ -178,49 +187,91 @@ const configuredNetwork = normalizeMonitorNetwork(process.env.LINEA_NETWORK || p
 const strictProductionLikeMonitor = process.env.NODE_ENV === "production" ||
   configuredNetwork === "mainnet" ||
   (configuredNetwork === "sepolia" && process.env.LORE_PREMAINNET_RUNTIME_STRICT === "1");
-const activeIssues = loadRuntimeIssueState(statePath);
+let activeIssues = new Map();
 let stopping = false;
 const REPO_ROOT = process.cwd();
 
-function backupDirectoryIsExternalSafe() {
-  if (!backupDirectory || allowLocal) return true;
-  if (!isAbsolute(backupDirectory)) return false;
-  const rel = relative(REPO_ROOT, resolve(backupDirectory));
-  return rel !== "" && (rel.startsWith("..") || rel.includes(":"));
+export function isBackupDirectoryExternalSafe({
+  backupDirectory: directory,
+  allowLocal: localMode = false,
+  repoRoot = process.cwd(),
+}) {
+  if (!directory || localMode) return true;
+  if (!isAbsolute(directory)) return false;
+  const rel = relative(resolve(repoRoot), resolve(directory));
+  return isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`);
 }
 
-function getRuntimeMonitorMissingConfig() {
+function backupDirectoryIsExternalSafe() {
+  return isBackupDirectoryExternalSafe({ backupDirectory, allowLocal, repoRoot: REPO_ROOT });
+}
+
+export function getRuntimeMonitorMissingConfigFor({
+  configErrors: errors = [],
+  baseUrl: monitorBaseUrl = "",
+  diagnosticsSecret: healthSecret = "",
+  allowLocal: localMode = false,
+  alertsConfigured: anyAlertsConfigured = false,
+  allowNoAlerts: noAlertsAllowed = false,
+  strictProductionLikeMonitor: strictMonitor = false,
+  resendConfigured: emailConfigured = false,
+  backupDirectory: monitorBackupDirectory = "",
+  backupMaxAgeMsRaw: monitorBackupMaxAgeMsRaw = "",
+  repoRoot = process.cwd(),
+  canonicalOrigin,
+} = {}) {
   const missing = [];
-  const baseIsOriginOnly = Boolean(baseUrl) && isRuntimeMonitorOrigin(baseUrl);
-  const baseHasAllowedNetworkLocation = baseIsOriginOnly && (allowLocal || isFinalHttpsOrigin(baseUrl));
-  if (configErrors.length > 0) missing.push("invalid-config");
-  if (!baseUrl) {
+  const baseIsOriginOnly = Boolean(monitorBaseUrl) && isRuntimeMonitorOrigin(monitorBaseUrl);
+  const baseHasAllowedNetworkLocation = baseIsOriginOnly && (localMode || isFinalHttpsOrigin(monitorBaseUrl));
+  if (errors.length > 0) missing.push("invalid-config");
+  if (!monitorBaseUrl) {
     missing.push("base-url");
   } else if (!baseIsOriginOnly) {
     missing.push("origin-only-base-url");
   } else if (!baseHasAllowedNetworkLocation) {
     missing.push("public-https-base-url");
   }
-  if (!diagnosticsSecret) missing.push("health-diagnostics-secret");
-  if (baseHasAllowedNetworkLocation && diagnosticsSecret) {
+  if (!healthSecret) missing.push("health-diagnostics-secret");
+  if (baseHasAllowedNetworkLocation && healthSecret) {
     try {
       assertTrustedHealthCredentialOrigin({
-        target: baseUrl,
-        canonicalOrigin: process.env.NEXT_PUBLIC_SITE_URL,
+        target: monitorBaseUrl,
+        canonicalOrigin,
         targetName: "RUNTIME_MONITOR_BASE_URL",
       });
     } catch {
       missing.push("trusted-health-origin");
     }
   }
-  if (!alertsConfigured && !allowNoAlerts) missing.push("alert-channel");
-  if (strictProductionLikeMonitor && !allowLocal && !resendConfigured) missing.push("resend-email");
-  if (strictProductionLikeMonitor && !allowLocal && !backupDirectory) missing.push("backup-directory");
-  if (strictProductionLikeMonitor && !allowLocal && !isPositiveSafeIntegerText(backupMaxAgeMsRaw)) {
+  if (!anyAlertsConfigured && !noAlertsAllowed) missing.push("alert-channel");
+  if (strictMonitor && !localMode && !emailConfigured) missing.push("resend-email");
+  if (strictMonitor && !localMode && !monitorBackupDirectory) missing.push("backup-directory");
+  if (strictMonitor && !localMode && !isPositiveSafeIntegerText(monitorBackupMaxAgeMsRaw)) {
     missing.push("backup-max-age");
   }
-  if (!backupDirectoryIsExternalSafe()) missing.push("external-backup-directory");
+  if (!isBackupDirectoryExternalSafe({
+    backupDirectory: monitorBackupDirectory,
+    allowLocal: localMode,
+    repoRoot,
+  })) missing.push("external-backup-directory");
   return missing;
+}
+
+function getRuntimeMonitorMissingConfig() {
+  return getRuntimeMonitorMissingConfigFor({
+    configErrors,
+    baseUrl,
+    diagnosticsSecret,
+    allowLocal,
+    alertsConfigured,
+    allowNoAlerts,
+    strictProductionLikeMonitor,
+    resendConfigured,
+    backupDirectory,
+    backupMaxAgeMsRaw,
+    repoRoot: REPO_ROOT,
+    canonicalOrigin: process.env.NEXT_PUBLIC_SITE_URL,
+  });
 }
 
 function getRuntimeMonitorConfigSummary(status, error) {
@@ -248,11 +299,15 @@ function getRuntimeMonitorConfigSummary(status, error) {
   return output;
 }
 
-async function sendAlert(message, key, cooldownMs) {
+export async function deliverRuntimeAlert(senders, message, key, cooldownMs) {
   const deliveries = await Promise.allSettled(
-    alertSenders.map((sender) => sender.send(message, key, cooldownMs)),
+    senders.map((sender) => sender.send(message, key, cooldownMs)),
   );
   return deliveries.some((delivery) => delivery.status === "fulfilled" && delivery.value);
+}
+
+async function sendAlert(message, key, cooldownMs) {
+  return deliverRuntimeAlert(alertSenders, message, key, cooldownMs);
 }
 
 function validateConfig() {
@@ -291,20 +346,35 @@ function validateConfig() {
   });
 }
 
-async function fetchJson(origin, pathname) {
-  const response = await fetch(new URL(pathname, origin), {
+export async function fetchRuntimeMonitorJson({
+  origin,
+  pathname,
+  diagnosticsSecret: secret,
+  timeoutMs: requestTimeoutMs,
+  fetchImpl = fetch,
+}) {
+  const response = await fetchImpl(new URL(pathname, origin), {
     headers: {
       "cache-control": "no-cache",
-      "x-health-diagnostics-secret": diagnosticsSecret,
+      "x-health-diagnostics-secret": secret,
     },
     redirect: "error",
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: AbortSignal.timeout(requestTimeoutMs),
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return readBoundedJsonResponse(response);
 }
 
-function parseContentLengthHeader(value) {
+async function fetchJson(origin, pathname) {
+  return fetchRuntimeMonitorJson({
+    origin,
+    pathname,
+    diagnosticsSecret,
+    timeoutMs,
+  });
+}
+
+export function parseContentLengthHeader(value) {
   if (value == null || value === "") return null;
   if (!CONTENT_LENGTH_RE.test(value)) throw new Error("invalid runtime monitor response content-length");
   const parsed = BigInt(value);
@@ -312,7 +382,7 @@ function parseContentLengthHeader(value) {
   return Number(parsed);
 }
 
-async function readBoundedJsonResponse(response) {
+export async function readBoundedJsonResponse(response) {
   const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
   if (contentLength !== null && contentLength > MAX_RUNTIME_MONITOR_RESPONSE_BYTES) {
     throw new Error("runtime monitor response body too large");
@@ -420,28 +490,50 @@ async function poll(origin) {
   if (issues.length === 0) console.log(`[runtime-monitor] OK ${new Date().toISOString()}`);
 }
 
-async function main() {
-  const origin = validateConfig();
-  if (summaryOnly) {
-    console.log(JSON.stringify(getRuntimeMonitorConfigSummary("pass")));
+export async function runRuntimeMonitorLoop({
+  summaryOnlyMode,
+  validate = validateConfig,
+  configSummary = () => getRuntimeMonitorConfigSummary("pass"),
+  pollOnce = poll,
+  onStart = () => undefined,
+  shouldStop = () => stopping,
+  sleep = (delayMs) => new Promise((resolveSleep) => setTimeout(resolveSleep, delayMs)),
+  logger = console,
+  pollIntervalMs = intervalMs,
+} = {}) {
+  const origin = validate();
+  if (summaryOnlyMode) {
+    logger.log(JSON.stringify(configSummary()));
     return;
   }
-  console.log(`[runtime-monitor] started intervalMs=${intervalMs} stuckGraceMs=${stuckGraceMs}`);
-  while (!stopping) {
-    await poll(origin);
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  onStart();
+  logger.log(`[runtime-monitor] started intervalMs=${pollIntervalMs} stuckGraceMs=${stuckGraceMs}`);
+  while (!shouldStop()) {
+    await pollOnce(origin);
+    await sleep(pollIntervalMs);
   }
 }
 
-process.once("SIGINT", () => { stopping = true; });
-process.once("SIGTERM", () => { stopping = true; });
+async function main() {
+  return runRuntimeMonitorLoop({
+    summaryOnlyMode: summaryOnly,
+    onStart: () => {
+      activeIssues = loadRuntimeIssueState(statePath);
+    },
+  });
+}
 
-main().catch((error) => {
-  if (summaryOnly) {
-    console.log(JSON.stringify(getRuntimeMonitorConfigSummary("fail", error)));
+const directExecution = Boolean(process.argv[1]) && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+if (directExecution) {
+  process.once("SIGINT", () => { stopping = true; });
+  process.once("SIGTERM", () => { stopping = true; });
+  main().catch((error) => {
+    if (summaryOnly) {
+      console.log(JSON.stringify(getRuntimeMonitorConfigSummary("fail", error)));
+      process.exitCode = 1;
+      return;
+    }
+    console.error(`[runtime-monitor] fatal: ${describeRuntimeMonitorError(error)}`);
     process.exitCode = 1;
-    return;
-  }
-  console.error(`[runtime-monitor] fatal: ${describeRuntimeMonitorError(error)}`);
-  process.exitCode = 1;
-});
+  });
+}

@@ -42,6 +42,7 @@ import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs, getSta
 import { estimateGasWithMethodRetry, isEstimateGasMethodUnsupported } from "./lib/estimate-gas-retry";
 import { classifyCanaryContractError } from "./lib/canary-contract-error";
 import { assertTrustedHealthCredentialOrigin } from "./health-credential-origin.mjs";
+import { fetchCanaryHealthPayloadPair } from "./live-canary-health-policy.mjs";
 import { sanitizeSupportLogPayload } from "../app/lib/sentrySanitize";
 import { recordLineaEstimateGasShadow } from "../app/lib/lineaEstimateGasShadow";
 
@@ -142,9 +143,6 @@ const HEALTH_BASE_URL = parsedHealthBaseUrl
   : null;
 const HEALTH_SAMPLE_EVERY_ROUNDS = parseIntegerEnv("LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS", 10, 1, 10_000);
 const HEALTH_TIMEOUT_MS = parseIntegerEnv("LIVE_TEST_HEALTH_TIMEOUT_MS", 10_000, 1_000, 60_000);
-const MAX_HEALTH_SAMPLE_RESPONSE_BYTES = 256 * 1024;
-const CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const MIN_TOTAL_BET_AMOUNT = parseTokenAmountEnv(
   "LIVE_TEST_MIN_TOTAL_BET_AMOUNT",
   process.env.LIVE_TEST_MIN_BET_AMOUNT ?? formatUnits(BET_AMOUNT, 18),
@@ -333,20 +331,15 @@ async function sampleHealth(logPath: string, round: number) {
   if (!secret) throw new Error("HEALTH_DIAGNOSTICS_SECRET is required when LIVE_TEST_HEALTH_BASE_URL is configured");
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
     try {
-      const headers = { "cache-control": "no-cache", "x-health-diagnostics-secret": secret };
-      const [runtimeResponse, dataSyncResponse] = await Promise.all([
-        fetch(new URL("/api/health/runtime", HEALTH_BASE_URL), { headers, redirect: "error", signal: controller.signal }),
-        fetch(new URL("/api/health/data-sync", HEALTH_BASE_URL), { headers, redirect: "error", signal: controller.signal }),
-      ]);
-      if (!runtimeResponse.ok || !dataSyncResponse.ok) {
-        throw new Error(`Health endpoints returned runtime=${runtimeResponse.status} dataSync=${dataSyncResponse.status}`);
-      }
+      const { runtimePayload, dataSyncPayload } = await fetchCanaryHealthPayloadPair({
+        baseUrl: HEALTH_BASE_URL,
+        secret,
+        timeoutMs: HEALTH_TIMEOUT_MS,
+      });
       const sample = parseCanaryHealthPayloads(
-        await readBoundedHealthJson(runtimeResponse),
-        await readBoundedHealthJson(dataSyncResponse),
+        runtimePayload,
+        dataSyncPayload,
       );
       writeEvent(logPath, {
         amount: "0",
@@ -366,8 +359,6 @@ async function sampleHealth(logPath: string, round: number) {
       return;
     } catch (error) {
       lastError = error;
-    } finally {
-      clearTimeout(timeout);
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
   }
@@ -383,38 +374,6 @@ async function sampleHealth(logPath: string, round: number) {
     sampleKind: "health",
     timestamp: new Date().toISOString(),
   });
-}
-
-async function readBoundedHealthJson(response: Response): Promise<unknown> {
-  const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
-  if (contentLength !== null && contentLength > MAX_HEALTH_SAMPLE_RESPONSE_BYTES) {
-    throw new Error("health sample response body too large");
-  }
-  if (!response.body) throw new Error("health sample response body is empty");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let totalBytes = 0;
-  let text = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > MAX_HEALTH_SAMPLE_RESPONSE_BYTES) {
-      await reader.cancel().catch(() => undefined);
-      throw new Error("health sample response body too large");
-    }
-    text += decoder.decode(value, { stream: true });
-  }
-  text += decoder.decode();
-  return JSON.parse(text);
-}
-
-function parseContentLengthHeader(value: string | null) {
-  if (value == null || value === "") return null;
-  if (!CONTENT_LENGTH_RE.test(value)) throw new Error("health sample response has invalid content-length");
-  const parsed = BigInt(value);
-  if (parsed > MAX_SAFE_INTEGER_BIGINT) throw new Error("health sample response has invalid content-length");
-  return Number(parsed);
 }
 
 function normalizePrivateKey(raw: string): `0x${string}` {
@@ -1169,7 +1128,10 @@ async function main() {
   console.log(`[live-canary] rpcLabel=${RPC_LABEL} readRpcCount=${readRpcUrls.length} broadcastRpcCount=${broadcastRpcUrls.length}`);
   console.log(`[live-canary] rpcFailoverInjection=${INJECT_RPC_FAILOVER ? "enabled" : "disabled"}`);
   console.log(`[live-canary] v10Matrix=${V10_MATRIX_ONLY ? "bounded" : "disabled"} execution=${DRY_RUN ? "dry-run" : "enabled"}`);
-  console.log(`[live-canary] operationalBoundary signingMaterialLoaded=${signingMaterialLoaded}`);
+  console.log(
+    `[live-canary] operationalBoundary signingMaterialLoaded=${signingMaterialLoaded} ` +
+      `transactionSent=false walletClientCreated=false contractWriteSubmitted=false`,
+  );
   console.log(
     `[live-canary] rounds=${TARGET_ROUNDS} plannedBetTx=${plannedBetTransactions} ` +
       `plannedStake=${formatUnits(plannedStake, 18)} LINEA randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +

@@ -8,6 +8,8 @@ const MAX_ISSUE_MESSAGE_LENGTH = 500;
 const MAX_CANARY_TAIL_BYTES = 256 * 1024;
 const MAX_AUDIT_BYTES = 128 * 1024;
 const MAX_BACKUP_DIRECTORY_ENTRIES = 10_000;
+const MAX_EMAIL_RECIPIENTS = 10;
+const MAX_EMAIL_ENTRY_LENGTH = 254;
 const MAX_UINT256 = (1n << 256n) - 1n;
 const MAX_FUTURE_SKEW_MS = 60_000;
 const BACKUP_FILE_PATTERN = /^lore-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.sqlite$/;
@@ -419,7 +421,7 @@ export function createTelegramAlertSender({ env = process.env, fetchImpl = fetch
 
 function extractEmailAddress(value) {
   const trimmed = String(value ?? "").trim();
-  if (!trimmed) return "";
+  if (!trimmed || trimmed.length > MAX_EMAIL_ENTRY_LENGTH) return "";
   const angleMatch = trimmed.match(/<([^<>\s@]+@[^<>\s@]+)>$/);
   return angleMatch ? angleMatch[1] : trimmed;
 }
@@ -430,17 +432,22 @@ function isEmailAddress(value) {
 }
 
 function parseEmailRecipients(value) {
-  return String(value ?? "")
+  const entries = String(value ?? "")
     .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+    .map((entry) => entry.trim());
+  if (
+    entries.length === 0 ||
+    entries.length > MAX_EMAIL_RECIPIENTS ||
+    entries.some((entry) => entry.length === 0 || entry.length > MAX_EMAIL_ENTRY_LENGTH)
+  ) return null;
+  return entries;
 }
 
-function normalizeAlertTimestampMs(value) {
+export function normalizeAlertTimestampMs(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
-function normalizeAlertCooldownMs(value) {
+export function normalizeAlertCooldownMs(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : 300_000;
 }
 
@@ -449,7 +456,7 @@ export function createResendAlertSender({ env = process.env, fetchImpl = fetch, 
   const to = parseEmailRecipients(env.RUNTIME_MONITOR_EMAIL_TO);
   const from = env.RUNTIME_MONITOR_EMAIL_FROM?.trim() || "";
   const prefix = env.ALERT_PREFIX?.trim() || "LORE Runtime Monitor";
-  const configured = Boolean(apiKey && isEmailAddress(from) && to.length > 0 && to.every(isEmailAddress));
+  const configured = Boolean(apiKey && isEmailAddress(from) && to !== null && to.every(isEmailAddress));
   const cooldowns = new Map();
 
   return {
@@ -469,7 +476,7 @@ export function createResendAlertSender({ env = process.env, fetchImpl = fetch, 
           },
           body: JSON.stringify({
             from,
-            to,
+            to: to ?? [],
             subject: `${prefix}: ${message.startsWith("RECOVERED:") ? "Recovered" : "Alert"}`,
             text: `${prefix}\n${message}`,
           }),

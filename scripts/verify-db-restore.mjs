@@ -1,5 +1,12 @@
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import {
+  hasPublicProofHttpsUrl as hasPublicHttpsUrl,
+  isFinalHttpsOrigin as isNonLocalHttpsUrl,
+  normalizeProofOrigin,
+} from "./collect-proof-common.mjs";
+import { hasKnownLaunchSqliteRows, readCanonicalSqliteCount } from "./sqlite-scope-audit-lib.mjs";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
 const summaryOnly = process.argv.includes("--summary-only");
@@ -85,24 +92,16 @@ function copyIfExists(source, target) {
   return true;
 }
 
-function readCount(db, table) {
-  try {
-    const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get();
-    return parseCanonicalNonNegativeInteger(row?.count);
-  } catch {
-    return null;
-  }
-}
-
-function knownLaunchRowTotal(snapshot) {
-  return Object.values(snapshot?.counts ?? {})
-    .filter((value) => Number.isSafeInteger(value) && value >= 0)
-    .reduce((total, value) => total + value, 0);
-}
-
-async function openRestoredDb(dbPath) {
+async function openRestoredDb(dbPath, options = {}) {
   const { DatabaseSync } = await import("node:sqlite");
-  const db = new DatabaseSync(dbPath);
+  const sqliteLocation = options.immutable === true
+    ? (() => {
+        const url = pathToFileURL(dbPath);
+        url.searchParams.set("immutable", "1");
+        return url;
+      })()
+    : dbPath;
+  const db = new DatabaseSync(sqliteLocation, { readOnly: true });
   try {
     const integrityRows = db.prepare("PRAGMA integrity_check").all();
     const integrity = integrityRows.map((row) => String(row.integrity_check ?? Object.values(row)[0] ?? "")).join(", ");
@@ -114,7 +113,7 @@ async function openRestoredDb(dbPath) {
       "reward_claims", "scoped_reward_claims", "protocol_fee_flushes", "scoped_protocol_fee_flushes",
       "scoped_indexer_events",
     ]) {
-      counts[table] = readCount(db, table);
+      counts[table] = readCanonicalSqliteCount(db, table);
     }
     return { integrity, tableNames, counts };
   } finally {
@@ -221,93 +220,6 @@ function hasScheduledCadence(value) {
     return false;
   }
   return /\b(every|each|cron|hourly|daily|weekly|monthly)\b|\*\/|\b\d+\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b/.test(text);
-}
-
-function isNonLocalHttpsUrl(value) {
-  if (!hasRealText(value)) return false;
-  try {
-    const url = new URL(String(value).trim());
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.pathname === "/" &&
-      url.search === "" &&
-      url.hash === "" &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^0\./.test(host) ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
-        /^169\.254\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
-        /^192\.0\.2\./.test(host) ||
-        /^198\.(1[89])\./.test(host) ||
-        /^198\.51\.100\./.test(host) ||
-        /^203\.0\.113\./.test(host) ||
-        /^::ffff:/i.test(host) ||
-        /^f[cd][0-9a-f]*:/i.test(host) ||
-        /^fe[89ab][0-9a-f]*:/i.test(host) ||
-        /^2001:db8:/i.test(host)
-      );
-  } catch {
-    return false;
-  }
-}
-
-function hasPublicHttpsUrl(value) {
-  const text = String(value ?? "").trim();
-  const match = text.match(/https?:\/\/[^\s),.;]+/i);
-  if (!match) return false;
-  try {
-    const url = new URL(match[0]);
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^0\./.test(host) ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
-        /^169\.254\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
-        /^192\.0\.2\./.test(host) ||
-        /^198\.(1[89])\./.test(host) ||
-        /^198\.51\.100\./.test(host) ||
-        /^203\.0\.113\./.test(host) ||
-        /^::ffff:/i.test(host) ||
-        /^f[cd][0-9a-f]*:/i.test(host) ||
-        /^fe[89ab][0-9a-f]*:/i.test(host) ||
-        /^2001:db8:/i.test(host)
-      );
-  } catch {
-    return false;
-  }
 }
 
 function hasEvidence(value) {
@@ -499,19 +411,8 @@ function hasIndexerPreservationProof(value) {
     /(?:latestIndexedEpoch|latest\s+indexed\s+epoch|lastIndexedEpoch|indexed\s+epoch)/i.test(text) &&
     /(?:Before|After|\bbefore\b|\bafter\b|pre[-\s]?restore|post[-\s]?restore)/i.test(text);
 }
-function normalizedOrigin(value) {
-  if (!hasRealText(value)) return "";
-  try {
-    const url = new URL(String(value).trim());
-    if (url.username || url.password) return "";
-    return url.origin.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
 function healthEvidenceBaseMatches(value, expectedOrigin) {
-  const expected = normalizedOrigin(expectedOrigin);
+  const expected = normalizeProofOrigin(expectedOrigin);
   if (!expected) return false;
   const text = evidenceText(value);
   const pattern = /\bbase=([^\s|]+)/gi;
@@ -520,7 +421,7 @@ function healthEvidenceBaseMatches(value, expectedOrigin) {
   while (match) {
     inspected += 1;
     if (inspected > MAX_HEALTH_BASE_MARKERS) return false;
-    if (normalizedOrigin(match[1]) === expected) return true;
+    if (normalizeProofOrigin(match[1]) === expected) return true;
     match = pattern.exec(text);
   }
   return false;
@@ -849,12 +750,10 @@ if (existsSync(resolvedManifestPath)) {
   }
 }
 
-if (summaryOnly) printSummaryAndExit();
-
 let backupArtifactSnapshot = null;
-if (backupRaw && issues.length === 0) {
+if (backupRaw && fileExists(backup.absolute)) {
   try {
-    backupArtifactSnapshot = await openRestoredDb(backup.absolute);
+    backupArtifactSnapshot = await openRestoredDb(backup.absolute, { immutable: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     issues.push(`backup artifact could not be opened or checked: ${message}`);
@@ -862,10 +761,12 @@ if (backupRaw && issues.length === 0) {
   if (backupArtifactSnapshot && backupArtifactSnapshot.integrity !== "ok") {
     issues.push(`backup artifact integrity_check returned ${backupArtifactSnapshot.integrity}`);
   }
-  if (strict && backupArtifactSnapshot && knownLaunchRowTotal(backupArtifactSnapshot) === 0) {
+  if (strict && backupArtifactSnapshot && !hasKnownLaunchSqliteRows(backupArtifactSnapshot)) {
     issues.push("backup artifact has zero rows in known launch tables");
   }
 }
+
+if (summaryOnly) printSummaryAndExit();
 
 if (!summaryOnly) {
   printTable(["Field", "Value"], [
@@ -933,8 +834,7 @@ if (issues.length === 0) {
   if (restored && restored.integrity !== "ok") issues.push(`restored DB integrity_check returned ${restored.integrity}`);
   if (restored && restored.tableNames.length === 0) issues.push("restored DB has no tables");
 
-  const knownRowTotal = knownLaunchRowTotal(restored);
-  if (strict && restored && knownRowTotal === 0) {
+  if (strict && restored && !hasKnownLaunchSqliteRows(restored)) {
     issues.push("restored DB has zero rows in known launch tables");
   }
 

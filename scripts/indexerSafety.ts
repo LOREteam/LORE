@@ -35,8 +35,60 @@ export type ValidatedRpcLogSet<T extends IndexerRpcLog> = {
   agreementFingerprint: string;
 };
 
+type IndexerRpcResponseLimitReason =
+  | "bytes"
+  | "content_length"
+  | "json_depth"
+  | "logs"
+  | "upstream_response"
+  | "upstream_range";
+
+const INDEXER_UPSTREAM_ERROR_TEXT_LIMIT = 1_024;
+const INDEXER_UPSTREAM_RESPONSE_LIMIT_PATTERNS = [
+  /\bquery returned more than 10,?000 results\b/,
+  /\b(?:log )?response size exceeded\b/,
+] as const;
+const INDEXER_UPSTREAM_RANGE_LIMIT_PATTERNS = [
+  /\bblock range (?:is )?too wide\b/,
+] as const;
+
+function normalizeIndexerUpstreamErrorText(value: unknown) {
+  if (typeof value !== "string") return null;
+  return sanitizeSentryPayload(value.slice(0, INDEXER_UPSTREAM_ERROR_TEXT_LIMIT))
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function classifyIndexerUpstreamResponseLimit(
+  error: unknown,
+): "upstream_response" | "upstream_range" | null {
+  const candidateValues: unknown[] = typeof error === "string"
+    ? [error]
+    : error && typeof error === "object"
+      ? [
+          "message" in error ? (error as { message?: unknown }).message : undefined,
+          "shortMessage" in error
+            ? (error as { shortMessage?: unknown }).shortMessage
+            : undefined,
+          "details" in error ? (error as { details?: unknown }).details : undefined,
+        ]
+      : [];
+  for (const value of candidateValues) {
+    const text = normalizeIndexerUpstreamErrorText(value);
+    if (!text) continue;
+    if (INDEXER_UPSTREAM_RESPONSE_LIMIT_PATTERNS.some((pattern) => pattern.test(text))) {
+      return "upstream_response";
+    }
+    if (INDEXER_UPSTREAM_RANGE_LIMIT_PATTERNS.some((pattern) => pattern.test(text))) {
+      return "upstream_range";
+    }
+  }
+  return null;
+}
+
 export class IndexerRpcResponseLimitError extends Error {
-  constructor(reason: "bytes" | "content_length" | "json_depth" | "logs") {
+  constructor(reason: IndexerRpcResponseLimitReason) {
     super(`indexer RPC response limit exceeded: ${reason}`);
     this.name = "IndexerRpcResponseLimitError";
   }
@@ -49,6 +101,10 @@ export function getIndexerRpcResponseLimitError(
   const seen = new Set<unknown>();
   for (let depth = 0; depth < 8; depth += 1) {
     if (current instanceof IndexerRpcResponseLimitError) return current;
+    const upstreamReason = classifyIndexerUpstreamResponseLimit(current);
+    if (upstreamReason !== null) {
+      return new IndexerRpcResponseLimitError(upstreamReason);
+    }
     if (!current || typeof current !== "object" || seen.has(current)) return null;
     seen.add(current);
     current = "cause" in current ? (current as { cause?: unknown }).cause : undefined;
@@ -322,7 +378,7 @@ type RpcSettlement<T> =
   | { kind: "rejected"; index: number; reason: unknown };
 
 export async function awaitExactRpcAgreement<T>(
-  responseFactories: ReadonlyArray<() => Promise<T>>,
+  responseFactories: ReadonlyArray<(signal: AbortSignal) => Promise<T>>,
   minimumResponses: number,
   fingerprint: (value: T) => string,
   budget: IndexerRpcWorkBudget,
@@ -338,14 +394,19 @@ export async function awaitExactRpcAgreement<T>(
   const groups = new Map<string, { count: number; value: T }>();
   let fulfilled = 0;
   let responseLimitError: IndexerRpcResponseLimitError | null = null;
+  let responseLimitRejections = 0;
   let nextFactoryIndex = 0;
+  const factoryAbortController = new AbortController();
 
   const startNext = () => {
     if (nextFactoryIndex >= responseFactories.length) return false;
     const index = nextFactoryIndex;
     nextFactoryIndex += 1;
     const settlement = Promise.resolve()
-      .then(responseFactories[index])
+      .then(() => {
+        factoryAbortController.signal.throwIfAborted();
+        return responseFactories[index](factoryAbortController.signal);
+      })
       .then(
         (value): RpcSettlement<T> => ({ kind: "fulfilled", index, value }),
         (reason): RpcSettlement<T> => ({ kind: "rejected", index, reason }),
@@ -372,7 +433,12 @@ export async function awaitExactRpcAgreement<T>(
 
       if (settlement.kind === "rejected") {
         if (isIndexerRpcWorkBudgetError(settlement.reason)) throw settlement.reason;
-        responseLimitError = getIndexerRpcResponseLimitError(settlement.reason) ?? responseLimitError;
+        const limitError = getIndexerRpcResponseLimitError(settlement.reason);
+        if (limitError !== null) {
+          responseLimitError ??= limitError;
+          responseLimitRejections += 1;
+          if (responseLimitRejections >= minimumResponses) throw responseLimitError;
+        }
         startNext();
         continue;
       }
@@ -396,13 +462,16 @@ export async function awaitExactRpcAgreement<T>(
       if (groups.size > 1) startNext();
     }
   } finally {
+    factoryAbortController.abort();
     if (deadlineTimer !== null) clearTimeout(deadlineTimer);
   }
 
   if (fulfilled >= minimumResponses) {
     throw new Error("independent RPC providers disagreed on normalized value");
   }
-  if (responseLimitError !== null) throw responseLimitError;
+  if (responseLimitError !== null && responseLimitRejections >= minimumResponses) {
+    throw responseLimitError;
+  }
   throw new Error("insufficient independent RPC responses for exact agreement");
 }
 
@@ -603,6 +672,122 @@ export function reduceIndexerCatchupChunkBlocks(attemptSpan: bigint) {
   return attemptSpan === 1n ? 1n : (attemptSpan + 1n) / 2n;
 }
 
+export function planIndexerResponseLimitRecovery(attemptSpan: bigint):
+  | { kind: "retry"; nextChunkBlocks: bigint }
+  | { kind: "blocked" } {
+  if (attemptSpan <= 0n) {
+    throw new Error("invalid indexer catch-up chunk attempt span");
+  }
+  if (attemptSpan === 1n) return { kind: "blocked" };
+  return {
+    kind: "retry",
+    nextChunkBlocks: reduceIndexerCatchupChunkBlocks(attemptSpan),
+  };
+}
+
+export const INDEXER_OPERATOR_BLOCKED_EXIT_CODE = 78;
+
+export function planIndexerMaintenanceResponseLimitRecovery(
+  cursorBlock: bigint,
+  attemptSpan: bigint,
+):
+  | { kind: "retry"; cursorBlock: bigint; nextChunkBlocks: bigint }
+  | { kind: "blocked"; cursorBlock: bigint; exitCode: number } {
+  if (cursorBlock < 0n) {
+    throw new Error("invalid indexer maintenance response-limit cursor");
+  }
+  const recovery = planIndexerResponseLimitRecovery(attemptSpan);
+  return recovery.kind === "retry"
+    ? { ...recovery, cursorBlock }
+    : {
+        kind: "blocked",
+        cursorBlock,
+        exitCode: INDEXER_OPERATOR_BLOCKED_EXIT_CODE,
+      };
+}
+
+export type IndexerMaintenanceRangeDirection = "forward" | "backward";
+
+export type IndexerMaintenanceRangeAttempt = {
+  fromBlock: bigint;
+  toBlock: bigint;
+  span: bigint;
+};
+
+export function createIndexerMaintenanceRangeAttempt(options: {
+  cursorBlock: bigint;
+  boundaryBlock: bigint;
+  chunkBlocks: bigint;
+  direction: IndexerMaintenanceRangeDirection;
+}): IndexerMaintenanceRangeAttempt | null {
+  const { cursorBlock, boundaryBlock, chunkBlocks, direction } = options;
+  if (cursorBlock < 0n || boundaryBlock < 0n || chunkBlocks <= 0n) {
+    throw new Error("invalid indexer maintenance range limits");
+  }
+  if (direction === "forward") {
+    if (cursorBlock > boundaryBlock) return null;
+    const candidateTo = cursorBlock + chunkBlocks - 1n;
+    const toBlock = candidateTo < boundaryBlock ? candidateTo : boundaryBlock;
+    return { fromBlock: cursorBlock, toBlock, span: toBlock - cursorBlock + 1n };
+  }
+  if (direction === "backward") {
+    if (cursorBlock < boundaryBlock) return null;
+    const candidateFrom = cursorBlock >= chunkBlocks - 1n
+      ? cursorBlock - chunkBlocks + 1n
+      : 0n;
+    const fromBlock = candidateFrom > boundaryBlock ? candidateFrom : boundaryBlock;
+    return { fromBlock, toBlock: cursorBlock, span: cursorBlock - fromBlock + 1n };
+  }
+  throw new Error("invalid indexer maintenance range direction");
+}
+
+export function advanceIndexerMaintenanceRangeCursor(
+  attempt: IndexerMaintenanceRangeAttempt,
+  boundaryBlock: bigint,
+  direction: IndexerMaintenanceRangeDirection,
+): bigint | null {
+  if (
+    attempt.fromBlock < 0n ||
+    attempt.toBlock < attempt.fromBlock ||
+    attempt.span !== attempt.toBlock - attempt.fromBlock + 1n ||
+    boundaryBlock < 0n
+  ) {
+    throw new Error("invalid completed indexer maintenance range");
+  }
+  if (direction === "forward") {
+    return attempt.toBlock >= boundaryBlock ? null : attempt.toBlock + 1n;
+  }
+  if (direction === "backward") {
+    return attempt.fromBlock <= boundaryBlock ? null : attempt.fromBlock - 1n;
+  }
+  throw new Error("invalid indexer maintenance range direction");
+}
+
+export function applyIndexerMaintenanceRangeOutcome(options: {
+  cursorBlock: bigint;
+  boundaryBlock: bigint;
+  chunkBlocks: bigint;
+  direction: IndexerMaintenanceRangeDirection;
+  outcome: "success" | "response_limit";
+}) {
+  const attempt = createIndexerMaintenanceRangeAttempt(options);
+  if (attempt === null) {
+    return { kind: "complete" as const, cursorBlock: null, nextChunkBlocks: null };
+  }
+  if (options.outcome === "response_limit") {
+    return planIndexerMaintenanceResponseLimitRecovery(options.cursorBlock, attempt.span);
+  }
+  return {
+    kind: "advanced" as const,
+    cursorBlock: advanceIndexerMaintenanceRangeCursor(
+      attempt,
+      options.boundaryBlock,
+      options.direction,
+    ),
+    nextChunkBlocks: options.chunkBlocks,
+  };
+}
+
 export function createBoundedIndexerRunPlan(
   lastIndexedBlock: bigint,
   chainTargetBlock: bigint,
@@ -724,7 +909,12 @@ export function createReconcileEpochPlan(options: {
 
   const lastResolvedEpoch = currentEpoch - 1;
   if (lastResolvedEpoch < 1) {
-    return { candidateEpochs: [] as number[], targetEpochs: [] as number[], nextCursor: 1 };
+    return {
+      candidateEpochs: [] as number[],
+      targetEpochs: [] as number[],
+      sequentialTargetEpochs: [] as number[],
+      nextCursor: 1,
+    };
   }
   const cursor = Number.isSafeInteger(options.cursor) && options.cursor >= 1 && options.cursor <= lastResolvedEpoch
     ? options.cursor
@@ -752,6 +942,7 @@ export function createReconcileEpochPlan(options: {
   }
 
   const targetEpochs = sequentialCandidates.filter((epoch) => !indexedEpochs.has(epoch));
+  const sequentialTargetEpochs = [...targetEpochs];
   if (targetEpochs.length < maxTargets) {
     for (const epoch of recentCandidates) {
       if (
@@ -764,5 +955,25 @@ export function createReconcileEpochPlan(options: {
       targetEpochs.push(epoch);
     }
   }
-  return { candidateEpochs, targetEpochs, nextCursor };
+  return { candidateEpochs, targetEpochs, sequentialTargetEpochs, nextCursor };
+}
+
+export function selectReconcileResumeEpochCursor(options: {
+  plannedNextCursor: number;
+  sequentialTargetEpochs: readonly number[];
+  completedTargetEpochs: ReadonlySet<number>;
+}) {
+  const { plannedNextCursor, sequentialTargetEpochs, completedTargetEpochs } = options;
+  if (!Number.isSafeInteger(plannedNextCursor) || plannedNextCursor <= 0) {
+    throw new Error("invalid planned reconcile epoch cursor");
+  }
+  const seen = new Set<number>();
+  for (const epoch of sequentialTargetEpochs) {
+    if (!Number.isSafeInteger(epoch) || epoch <= 0 || seen.has(epoch)) {
+      throw new Error("invalid sequential reconcile target epochs");
+    }
+    seen.add(epoch);
+    if (!completedTargetEpochs.has(epoch)) return epoch;
+  }
+  return plannedNextCursor;
 }

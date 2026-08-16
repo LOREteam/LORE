@@ -208,8 +208,13 @@ function extractScalar(output, name) {
 }
 
 function extractBooleanFlag(output, name) {
-  const value = extractScalar(output, name);
-  return value === "true" ? true : value === "false" ? false : null;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const reports = [...output.matchAll(new RegExp(
+    `(?:"${escaped}"\\s*:\\s*|\\b${escaped}=)(?:"([^"\\r\\n]*)"|([^,}\\s\\r\\n]+))`,
+    "g",
+  ))].map((match) => (match[1] ?? match[2] ?? "").trim());
+  if (reports.some((value) => value === "true")) return true;
+  return reports.length > 0 && reports.every((value) => value === "false") ? false : null;
 }
 
 function extractCanaryLog(output) {
@@ -290,7 +295,10 @@ function summarizeMatrix(step) {
     plannedBetTx: extractValue(step.output, /\bplannedBetTx=([0-9]+)/),
     plannedStake: extractValue(step.output, /\bplannedStake=([0-9.]+)/),
     walletReady: extractValue(step.output, /\bready=([0-9]+\/[0-9]+)/),
+    transactionSent: extractBooleanFlag(step.output, "transactionSent"),
     signingMaterialLoaded: extractBooleanFlag(step.output, "signingMaterialLoaded"),
+    walletClientCreated: extractBooleanFlag(step.output, "walletClientCreated"),
+    contractWriteSubmitted: extractBooleanFlag(step.output, "contractWriteSubmitted"),
     log: extractCanaryLog(step.output),
   };
 }
@@ -356,14 +364,48 @@ const analyzerSummary = analyzer ? summarizeAnalyzer(analyzer) : null;
 const hardFailures = [planner, pendingNonce, matrix].filter((step) => !step.ok);
 const dryRunAnalyzerBlockedAsExpected =
   analyzer && analyzer.status !== 0 && analyzerSummary?.dryRunProofBlocksG10G11 === true;
-const operationBoundaryReports = [
+const signingMaterialReports = [
   plannerSummary.signingMaterialLoaded,
   pendingSummary.signingMaterialLoaded,
   matrixSummary.signingMaterialLoaded,
 ];
 const signingMaterialLoaded =
-  READ_ONLY_CHILD_BOUNDARY.signingMaterialLoaded || operationBoundaryReports.some((reported) => reported === true);
-const operationBoundaryVerified = operationBoundaryReports.every((reported) => reported === false);
+  READ_ONLY_CHILD_BOUNDARY.signingMaterialLoaded || signingMaterialReports.some((reported) => reported === true);
+const transactionSent = [
+  plannerSummary.transactionSent,
+  pendingSummary.transactionSent,
+  matrixSummary.transactionSent,
+].some((reported) => reported === true);
+const walletClientCreated = [
+  plannerSummary.walletClientCreated,
+  pendingSummary.walletClientCreated,
+  matrixSummary.walletClientCreated,
+].some((reported) => reported === true);
+const contractWriteSubmitted = [
+  plannerSummary.contractWriteSubmitted,
+  pendingSummary.contractWriteSubmitted,
+  matrixSummary.contractWriteSubmitted,
+].some((reported) => reported === true);
+const operationBoundaryVerified =
+  plannerSummary.mode === "read-only" &&
+  plannerSummary.transactionSent === false &&
+  plannerSummary.signingMaterialLoaded === false &&
+  plannerSummary.walletClientCreated === false &&
+  plannerSummary.contractWriteSubmitted === false &&
+  pendingSummary.mode === "dry-run" &&
+  pendingSummary.wouldSend === "false" &&
+  pendingSummary.transactionSent === false &&
+  pendingSummary.signingMaterialLoaded === false &&
+  pendingSummary.walletClientCreated === false &&
+  pendingSummary.contractWriteSubmitted === false &&
+  matrixSummary.execution === "dry-run" &&
+  matrixSummary.signingMaterialLoaded === false &&
+  matrixSummary.transactionSent === false &&
+  matrixSummary.walletClientCreated === false &&
+  matrixSummary.contractWriteSubmitted === false &&
+  !transactionSent &&
+  !walletClientCreated &&
+  !contractWriteSubmitted;
 const status =
   hardFailures.length === 0 &&
   operationBoundaryVerified &&
@@ -391,11 +433,11 @@ npm.cmd run preview:canary:v10:dry-run
 ${renderBullets([
   bullet("status", status),
   bullet("rpcLabel", process.env.LIVE_CANARY_RPC_LABEL || DEFAULT_RPC_LABEL),
-  bullet("transactionSent", false),
+  bullet("transactionSent", transactionSent),
   bullet("signingMaterialLoaded", signingMaterialLoaded),
   bullet("operationalBoundaryVerified", operationBoundaryVerified),
-  bullet("walletClientCreated", false),
-  bullet("contractWriteSubmitted", false),
+  bullet("walletClientCreated", walletClientCreated),
+  bullet("contractWriteSubmitted", contractWriteSubmitted),
   bullet("dryRunProofBlocksG10G11", Boolean(dryRunAnalyzerBlockedAsExpected)),
 ])}
 
@@ -470,7 +512,10 @@ ${renderBullets([
   bullet("plannedBetTx", matrixSummary.plannedBetTx),
   bullet("plannedStake", matrixSummary.plannedStake),
   bullet("walletPreflightReady", matrixSummary.walletReady),
+  bullet("transactionSent", matrixSummary.transactionSent),
   bullet("signingMaterialLoaded", matrixSummary.signingMaterialLoaded),
+  bullet("walletClientCreated", matrixSummary.walletClientCreated),
+  bullet("contractWriteSubmitted", matrixSummary.contractWriteSubmitted),
   bullet("log", matrixSummary.log),
 ])}
 
@@ -533,11 +578,11 @@ console.log(JSON.stringify({
   analyzerExit: analyzer?.status ?? null,
   canaryLog: matrixSummary.log ?? null,
   dryRunProofBlocksG10G11: Boolean(dryRunAnalyzerBlockedAsExpected),
-  transactionSent: false,
+  transactionSent,
   signingMaterialLoaded,
   operationalBoundaryVerified: operationBoundaryVerified,
-  walletClientCreated: false,
-  contractWriteSubmitted: false,
+  walletClientCreated,
+  contractWriteSubmitted,
 }));
 
 if (status !== "pass") {

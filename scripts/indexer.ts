@@ -31,7 +31,10 @@ import {
   getLineaChain,
   getStableLineaReadRpcs,
 } from "../config/publicConfig";
-import { assertProductionRuntimeConfig } from "../config/productionRuntime";
+import {
+  assertProductionRuntimeConfig,
+  parseRequiredRuntimeFinalityBlocks,
+} from "../config/productionRuntime";
 import {
   parseOptionalNonNegativeBigIntEnv,
   parseOptionalPositiveIntegerEnv,
@@ -39,7 +42,7 @@ import {
 } from "../config/envParsing";
 import { tileMaskToTileIds } from "../app/lib/tileMask";
 import { normalizeTileAmounts } from "../app/lib/tokenAmountMath";
-import { getIndexerFinalityTargetBlock, parseIndexerFinalityBlocks } from "../app/lib/indexerFinality";
+import { getIndexerFinalityTargetBlock } from "../app/lib/indexerFinality";
 import { parseIndexerWatchFailureLimit, recordIndexerWatchFailure } from "../app/lib/indexerWatchPolicy";
 import {
   acquireIndexerLease,
@@ -68,26 +71,33 @@ import {
   verifyCanonicalLogBlockHashes,
 } from "./indexerForkRecovery";
 import {
+  advanceIndexerMaintenanceRangeCursor,
   awaitExactRpcAgreement,
-  createBoundedBackwardBlockScanPlan,
   createBoundedIndexerRpcFetch,
   createBoundedIndexerRunPlan,
   createIndexerRpcWorkBudget,
+  createIndexerMaintenanceRangeAttempt,
   createReconcileEpochPlan,
   describeIndexerError,
   isIndexerRpcResponseLimitError,
   isIndexerRpcWorkBudgetError,
+  INDEXER_OPERATOR_BLOCKED_EXIT_CODE,
   parseIndexerCatchupChunkBlocks,
   parsePlausibleCurrentEpoch,
+  planIndexerMaintenanceResponseLimitRecovery,
+  planIndexerResponseLimitRecovery,
   reduceIndexerCatchupChunkBlocks,
   requireIndependentRpcUrls,
+  selectReconcileResumeEpochCursor,
   type IndexerRpcWorkBudget,
   validateRpcLogSet,
 } from "./indexerSafety";
 import {
+  buildNormalizedEventIdForLog,
   parseChainPositiveSafeInteger,
   parseChainTileId,
   parseChainTileIds,
+  parseIndexedEpochKey,
   toDisplayNumberWei,
 } from "./indexerNormalization.mjs";
 
@@ -124,18 +134,20 @@ const INDEXER_RPC_MAX_LOGS_PER_RESPONSE = Math.floor(INDEXER_RUN_MAX_LOGS / 3);
 const INDEXER_RUN_MAX_SPLIT_NODES = 64;
 const INDEXER_RUN_MAX_ELAPSED_MS = 60_000;
 const INDEXER_CATCHUP_CHUNK_BLOCKS_META_KEY = "indexerCatchupChunkBlocks";
+const INDEXER_REPAIR_CHUNK_BLOCKS_META_KEY = "indexerRepairChunkBlocks";
+const INDEXER_RECONCILE_CHUNK_BLOCKS_META_KEY = "indexerReconcileChunkBlocks";
 const RECONCILE_BLOCK_CURSOR_META_KEY = "indexerReconcileBlockCursor";
 const POLL_INTERVAL_MS = 15_000;
 const INDEXER_LEASE_TTL_MS = 60_000;
 const INDEXER_LEASE_HEARTBEAT_INTERVAL_MS = 15_000;
 const RETRY_COUNT = 5;
 const RETRY_DELAY_MS = 5_000;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-const CANONICAL_INDEXED_EPOCH_RE = /^[1-9]\d{0,15}$/;
 const INTER_CHUNK_DELAY_MS = 400;
 const RPC_CALL_TIMEOUT_MS = parseOptionalPositiveIntegerEnv(process.env.INDEXER_RPC_TIMEOUT_MS, 45_000);
 const MIN_ADAPTIVE_LOG_RANGE_BLOCKS = parseOptionalNonNegativeBigIntEnv(process.env.INDEXER_MIN_ADAPTIVE_LOG_RANGE_BLOCKS, 250n);
-const INDEXER_FINALITY_BLOCKS = parseIndexerFinalityBlocks(process.env.INDEXER_FINALITY_BLOCKS);
+const INDEXER_FINALITY_BLOCKS = parseRequiredRuntimeFinalityBlocks(
+  process.env.INDEXER_FINALITY_BLOCKS,
+);
 const WATCH_FAILURE_LIMIT = parseIndexerWatchFailureLimit(process.env.INDEXER_WATCH_FAILURE_LIMIT);
 const RECONCILE_INTERVAL_MS = parseOptionalPositiveIntegerEnv(
   process.env.INDEXER_RECONCILE_INTERVAL_MS,
@@ -151,6 +163,14 @@ const RECONCILE_MAX_EPOCHS_PER_PASS = parseOptionalPositiveIntegerInRangeEnv(
 let lastReconcileAtMs = 0;
 class IndexerLeaseError extends Error {
   override name = "IndexerLeaseError";
+}
+
+class IndexerOperatorBlockedError extends Error {
+  override name = "IndexerOperatorBlockedError";
+}
+
+function isIndexerOperatorBlockedError(error: unknown): error is IndexerOperatorBlockedError {
+  return error instanceof IndexerOperatorBlockedError;
 }
 
 let activeIndexerLeaseOwnerToken: string | null = null;
@@ -169,12 +189,6 @@ function parseChainCurrentEpochNumber(value: bigint, observedBlock: bigint): num
   return parsePlausibleCurrentEpoch(value, INDEXER_START_BLOCK, observedBlock);
 }
 
-function parseIndexedEpochKey(value: string): number | null {
-  if (!CANONICAL_INDEXED_EPOCH_RE.test(value)) return null;
-  const parsed = BigInt(value);
-  return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
-}
-
 type IndexerRunStatus = {
   startedAt: number;
   completedAt?: number;
@@ -188,6 +202,11 @@ type IndexerRunStatus = {
   currentChunk?: number;
   totalChunks?: number;
   lastProcessedBlock?: string;
+  blockedAt?: number;
+  blockedReason?: "rpc_response_limit_single_block";
+  blockedBlock?: string;
+  blockedSurface?: IndexerMaintenanceSurface | "catchup";
+  operatorAction?: string;
 };
 
 type IndexerRepairStatus = {
@@ -204,6 +223,8 @@ type IndexerReconcileStatus = {
   repairedEpochs: number;
   targetEpochs: number[];
 };
+
+type IndexerMaintenanceSurface = "repair" | "reconcile";
 
 const INDEXER_RPC_URLS = requireIndependentRpcUrls(getStableLineaReadRpcs(
   process.env.KEEPER_RPC_URL ?? getDefaultLineaRpcs(APP_NETWORK)[0],
@@ -259,14 +280,39 @@ const [resolverRewardClaimedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventNam
 const [feesFlushedSig] = encodeEventTopics({ abi: EVENTS_ABI, eventName: "ProtocolFeesFlushed" });
 
 // Chunked log fetcher
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+function getIndexerRpcAbortReason(signal: AbortSignal) {
+  return signal.reason ?? new DOMException("indexer RPC agreement aborted", "AbortError");
+}
+
+const delay = (ms: number, signal?: AbortSignal): Promise<void> => {
+  if (signal === undefined) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    const onAbort = () => {
+      if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+      signal.removeEventListener("abort", onAbort);
+      reject(getIndexerRpcAbortReason(signal));
+    };
+    timeoutHandle = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+};
 
 async function withRpcTimeout<T>(
   promise: Promise<T>,
   label: string,
-  timeoutMs = RPC_CALL_TIMEOUT_MS,
+  timeoutMs: number,
+  signal: AbortSignal,
 ): Promise<T> {
+  signal.throwIfAborted();
   let timeoutHandle: NodeJS.Timeout | null = null;
+  let onAbort: (() => void) | null = null;
   try {
     return await Promise.race<T>([
       promise,
@@ -275,9 +321,14 @@ async function withRpcTimeout<T>(
           reject(new Error(`${label} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }),
+      new Promise<T>((_, reject) => {
+        onAbort = () => reject(getIndexerRpcAbortReason(signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
     ]);
   } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+    if (onAbort !== null) signal.removeEventListener("abort", onAbort);
   }
 }
 
@@ -288,31 +339,40 @@ async function fetchLogsRequestWithRetry(
   to: bigint,
   kind: "log fetch" | "indexed log fetch",
   budget: IndexerRpcWorkBudget,
+  signal: AbortSignal,
 ): Promise<Log[]> {
   for (let attempt = 0; attempt < RETRY_COUNT; attempt++) {
     try {
+      signal.throwIfAborted();
       const request = {
         address: CONTRACT,
         topics,
         fromBlock: from,
         toBlock: to,
       } as unknown as Parameters<typeof rpcClient.getLogs>[0];
+      signal.throwIfAborted();
       const timeoutMs = Math.min(RPC_CALL_TIMEOUT_MS, budget.consumeRpcCall());
+      signal.throwIfAborted();
       const logs = await withRpcTimeout(
         rpcClient.getLogs(request),
         `getLogs(${from}-${to})`,
         timeoutMs,
+        signal,
       );
+      signal.throwIfAborted();
       budget.recordLogs(logs.length);
       return logs;
     } catch (err) {
+      signal.throwIfAborted();
       if (isIndexerRpcWorkBudgetError(err)) throw err;
       if (isIndexerRpcResponseLimitError(err)) throw err;
       const msg = describeIndexerError(err).slice(0, 80);
       if (attempt < RETRY_COUNT - 1) {
         const wait = RETRY_DELAY_MS * (attempt + 1);
         console.warn(`  [retry ${attempt + 1}/${RETRY_COUNT}] ${from}-${to}: ${msg} - wait ${wait}ms`);
-        await delay(Math.min(wait, budget.remainingTimeMs()));
+        signal.throwIfAborted();
+        await delay(Math.min(wait, budget.remainingTimeMs()), signal);
+        signal.throwIfAborted();
       } else {
         throw new Error(`${kind} failed for ${from}-${to} after ${RETRY_COUNT} retries: ${msg}`);
       }
@@ -328,17 +388,31 @@ async function fetchLogsRequestAdaptiveSplit(
   from: bigint,
   to: bigint,
   budget: IndexerRpcWorkBudget,
+  signal: AbortSignal,
 ): Promise<Log[]> {
   const kind = topics.length === 1 ? "log fetch" : "indexed log fetch";
   try {
-    return await fetchLogsRequestWithRetry(rpcClient, topics, from, to, kind, budget);
+    signal.throwIfAborted();
+    const logs = await fetchLogsRequestWithRetry(
+      rpcClient,
+      topics,
+      from,
+      to,
+      kind,
+      budget,
+      signal,
+    );
+    signal.throwIfAborted();
+    return logs;
   } catch (err) {
+    signal.throwIfAborted();
     if (isIndexerRpcWorkBudgetError(err)) throw err;
     if (isIndexerRpcResponseLimitError(err)) throw err;
     const span = to - from + 1n;
     if (span <= MIN_ADAPTIVE_LOG_RANGE_BLOCKS) {
       throw err;
     }
+    signal.throwIfAborted();
     budget.consumeSplitNode();
     const leftTo = from + (span / 2n) - 1n;
     const rightFrom = leftTo + 1n;
@@ -352,9 +426,12 @@ async function fetchLogsRequestAdaptiveSplit(
       from,
       leftTo,
       budget,
+      signal,
     );
+    signal.throwIfAborted();
     if (rightFrom <= to) {
-      await delay(Math.min(INTER_CHUNK_DELAY_MS, budget.remainingTimeMs()));
+      await delay(Math.min(INTER_CHUNK_DELAY_MS, budget.remainingTimeMs()), signal);
+      signal.throwIfAborted();
     }
     const right =
       rightFrom <= to
@@ -365,8 +442,10 @@ async function fetchLogsRequestAdaptiveSplit(
             rightFrom,
             to,
             budget,
+            signal,
           )
         : [];
+    signal.throwIfAborted();
     return [...left, ...right];
   }
 }
@@ -381,7 +460,8 @@ async function fetchLogsByTopicsAdaptive(
   const minimumResponses = 2;
   try {
     const agreed = await awaitExactRpcAgreement(
-      independentRpcClients.map((rpcClient, index) => async () => {
+      independentRpcClients.map((rpcClient, index) => async (signal) => {
+        signal.throwIfAborted();
         const logs = await fetchLogsRequestAdaptiveSplit(
           rpcClient,
           topics,
@@ -389,7 +469,9 @@ async function fetchLogsByTopicsAdaptive(
           from,
           to,
           budget,
+          signal,
         );
+        signal.throwIfAborted();
         return validateRpcLogSet(logs, {
           contractAddress: CONTRACT,
           fromBlock: from,
@@ -437,9 +519,18 @@ async function readWithExactIndexerRpcAgreement<T>(
   budget: IndexerRpcWorkBudget,
 ): Promise<T> {
   return awaitExactRpcAgreement(
-    independentRpcClients.map((rpcClient, index) => async () => {
+    independentRpcClients.map((rpcClient, index) => async (signal) => {
+      signal.throwIfAborted();
       const timeoutMs = Math.min(RPC_CALL_TIMEOUT_MS, budget.consumeRpcCall());
-      return withRpcTimeout(reader(rpcClient), `${label}:provider-${index + 1}`, timeoutMs);
+      signal.throwIfAborted();
+      const value = await withRpcTimeout(
+        reader(rpcClient),
+        `${label}:provider-${index + 1}`,
+        timeoutMs,
+        signal,
+      );
+      signal.throwIfAborted();
+      return value;
     }),
     2,
     fingerprint,
@@ -454,42 +545,6 @@ async function readAgreedHeadBlockNumber(budget: IndexerRpcWorkBudget) {
     (blockNumber) => blockNumber.toString(),
     budget,
   );
-}
-
-async function fetchLogsByTopicsChunked(
-  topics: Array<`0x${string}`>,
-  label: string,
-  from: bigint,
-  to: bigint,
-  chunkSize: bigint,
-  budget: IndexerRpcWorkBudget,
-): Promise<Log[]> {
-  const all: Log[] = [];
-  const ranges: Array<{ from: bigint; to: bigint }> = [];
-  for (let f = from; f <= to; f += chunkSize) {
-    const t = f + chunkSize - 1n > to ? to : f + chunkSize - 1n;
-    ranges.push({ from: f, to: t });
-  }
-
-  for (let i = 0; i < ranges.length; i += 1) {
-    const range = ranges[i];
-    const logs = await fetchLogsByTopicsAdaptive(
-      topics,
-      `${label}:${i + 1}/${ranges.length}`,
-      range.from,
-      range.to,
-      budget,
-    );
-    all.push(...logs);
-    if (i < ranges.length - 1) {
-      await delay(Math.min(INTER_CHUNK_DELAY_MS, budget.remainingTimeMs()));
-    }
-    if ((i + 1) % 10 === 0 || i === ranges.length - 1) {
-      console.log(`  [${label}] ${i + 1}/${ranges.length} chunks, ${all.length} logs`);
-    }
-  }
-
-  return all;
 }
 
 function filterLogsByTopics(logs: Log[], topics: Array<`0x${string}`>) {
@@ -574,15 +629,6 @@ interface ResolverRewardRecord {
   amount: string;
   txHash: string;
   blockNumber: string;
-}
-
-function buildNormalizedEventId(log: Log): string | null {
-  if (!log.transactionHash || log.logIndex === null || log.logIndex === undefined) {
-    return null;
-  }
-  const normalizedHash = log.transactionHash.toLowerCase().trim();
-  if (!/^0x[0-9a-f]{64}$/.test(normalizedHash)) return null;
-  return `${normalizedHash}_${log.logIndex.toString()}`;
 }
 
 function normalizeBetRecord(bet: BetRecord): BetRecord {
@@ -768,7 +814,7 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === rewardClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RewardClaimed") continue;
-        const id = buildNormalizedEventId(log);
+        const id = buildNormalizedEventIdForLog(log);
         if (!id) continue;
         const args = decoded.args as { epoch: bigint; user: string; reward: bigint };
         rewardClaims.push({
@@ -783,7 +829,7 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === rewardBatchClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RewardBatchClaimed") continue;
-        const id = buildNormalizedEventId(log);
+        const id = buildNormalizedEventIdForLog(log);
         if (!id) continue;
         const args = decoded.args as { user: string; totalAmount: bigint; epochsClaimed: bigint };
         const epochsClaimed = parseChainPositiveSafeInteger(args.epochsClaimed);
@@ -801,7 +847,7 @@ function processLogs(logs: Log[]) {
         if (log.transactionHash && rebateBatchClaimTxs.has(log.transactionHash.toLowerCase())) continue;
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RebateClaimed") continue;
-        const id = buildNormalizedEventId(log);
+        const id = buildNormalizedEventIdForLog(log);
         if (!id) continue;
         const args = decoded.args as { user: string; epoch: bigint; amount: bigint };
         batchClaims.push({
@@ -816,7 +862,7 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === rebateBatchClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RebateBatchClaimed") continue;
-        const id = buildNormalizedEventId(log);
+        const id = buildNormalizedEventIdForLog(log);
         if (!id) continue;
         const args = decoded.args as { user: string; amount: bigint; epochsClaimed: bigint };
         const epochsClaimed = parseChainPositiveSafeInteger(args.epochsClaimed);
@@ -833,7 +879,7 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === rewardDustSettledSig || topic0 === rebateDustSettledSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RewardDustSettled" && decoded.eventName !== "RebateDustSettled") continue;
-        const id = buildNormalizedEventId(log);
+        const id = buildNormalizedEventIdForLog(log);
         if (!id) continue;
         const args = decoded.args as { epoch: bigint; amount: bigint };
         dustSettlements.push({
@@ -847,7 +893,7 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === resolverRewardAccruedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "ResolverRewardAccrued") continue;
-        const id = buildNormalizedEventId(log);
+        const id = buildNormalizedEventIdForLog(log);
         if (!id) continue;
         const args = decoded.args as { resolver: string; epoch: bigint; amount: bigint };
         resolverRewards.push({
@@ -862,7 +908,7 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === resolverRewardClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "ResolverRewardClaimed") continue;
-        const id = buildNormalizedEventId(log);
+        const id = buildNormalizedEventIdForLog(log);
         if (!id) continue;
         const args = decoded.args as { resolver: string; amount: bigint };
         resolverRewards.push({
@@ -876,7 +922,7 @@ function processLogs(logs: Log[]) {
       } else if (topic0 === feesFlushedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "ProtocolFeesFlushed") continue;
-        const id = buildNormalizedEventId(log);
+        const id = buildNormalizedEventIdForLog(log);
         if (!id) continue;
         const args = decoded.args as { ownerAmount: bigint; burnAmount: bigint };
         feeFlushes.push({
@@ -1197,6 +1243,83 @@ function getIndexerCatchupChunkBlocks() {
   );
 }
 
+function getIndexerMaintenanceChunkBlocks(
+  surface: IndexerMaintenanceSurface,
+  maximumChunkBlocks: bigint,
+) {
+  const key = surface === "repair"
+    ? INDEXER_REPAIR_CHUNK_BLOCKS_META_KEY
+    : INDEXER_RECONCILE_CHUNK_BLOCKS_META_KEY;
+  return parseIndexerCatchupChunkBlocks(
+    getMetaJsonStrict<unknown>(key),
+    maximumChunkBlocks,
+  );
+}
+
+function persistIndexerMaintenanceResponseLimit(
+  surface: IndexerMaintenanceSurface,
+  attempt: { fromBlock: bigint; toBlock: bigint; span: bigint },
+) {
+  const key = surface === "repair"
+    ? INDEXER_REPAIR_CHUNK_BLOCKS_META_KEY
+    : INDEXER_RECONCILE_CHUNK_BLOCKS_META_KEY;
+  const cursorBlock = surface === "repair" ? attempt.fromBlock : attempt.toBlock;
+  const recovery = planIndexerMaintenanceResponseLimitRecovery(
+    cursorBlock,
+    attempt.span,
+  );
+  assertActiveIndexerLease();
+  if (recovery.kind === "retry") {
+    runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+      setMetaJson(key, recovery.nextChunkBlocks.toString());
+    });
+    console.warn(
+      `[indexer][${surface}] Persisted a reduced ${surface} span of ` +
+        `${recovery.nextChunkBlocks} blocks after an RPC response limit.`,
+    );
+    return;
+  }
+
+  const blockedAt = Date.now();
+  const previousStatus = getMetaJsonStrict<IndexerRunStatus>("indexerRunStatus");
+  const blockedStatus: IndexerRunStatus = {
+    ...(previousStatus ?? {
+      startedAt: blockedAt,
+      fromBlock: attempt.fromBlock.toString(),
+      toBlock: attempt.toBlock.toString(),
+      totalLogs: 0,
+    }),
+    completedAt: blockedAt,
+    lastHeartbeatAt: blockedAt,
+    blockedAt,
+    blockedReason: "rpc_response_limit_single_block",
+    blockedBlock: recovery.cursorBlock.toString(),
+    blockedSurface: surface,
+    operatorAction:
+      `Inspect independent RPC response limits for the ${surface} surface and block ` +
+      `${recovery.cursorBlock}, then restart the indexer manually.`,
+  };
+  runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+    setMetaJson(key, "1");
+    setMetaJson("indexerRunStatus", blockedStatus);
+  });
+  throw new IndexerOperatorBlockedError(
+    `one-block ${surface} RPC response limit at block ${recovery.cursorBlock}; ` +
+      "operator intervention is required",
+  );
+}
+
+function resetIndexerMaintenanceChunkBlocksInsideLease(
+  surface: IndexerMaintenanceSurface,
+) {
+  setMetaJson(
+    surface === "repair"
+      ? INDEXER_REPAIR_CHUNK_BLOCKS_META_KEY
+      : INDEXER_RECONCILE_CHUNK_BLOCKS_META_KEY,
+    null,
+  );
+}
+
 function getReconcileEpochCursor() {
   const value = getMetaJsonStrict<unknown>("reconcileEpochCursor");
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
@@ -1218,6 +1341,7 @@ function setReconcileEpochCursor(epoch: number) {
 
 type ReconcileBlockCursor = {
   epoch: number;
+  phase: "recent" | "history";
   nextToBlock: bigint;
 };
 
@@ -1228,6 +1352,7 @@ function getReconcileBlockCursor(): ReconcileBlockCursor | null {
     throw new Error("stored reconcile block cursor is invalid");
   }
   const epoch = (value as { epoch?: unknown }).epoch;
+  const rawPhase = (value as { phase?: unknown }).phase;
   const nextToBlock = (value as { nextToBlock?: unknown }).nextToBlock;
   if (
     typeof epoch !== "number" ||
@@ -1242,18 +1367,30 @@ function getReconcileBlockCursor(): ReconcileBlockCursor | null {
   if (parsedBlock < INDEXER_START_BLOCK) {
     throw new Error("stored reconcile block cursor precedes the deploy block");
   }
-  return { epoch, nextToBlock: parsedBlock };
+  const phase = rawPhase === undefined ? "history" : rawPhase;
+  if (phase !== "recent" && phase !== "history") {
+    throw new Error("stored reconcile block cursor has an invalid phase");
+  }
+  return { epoch, phase, nextToBlock: parsedBlock };
+}
+
+function setReconcileBlockCursorInsideLease(cursor: ReconcileBlockCursor | null) {
+  setMetaJson(
+    RECONCILE_BLOCK_CURSOR_META_KEY,
+    cursor === null
+      ? null
+      : {
+          epoch: cursor.epoch,
+          phase: cursor.phase,
+          nextToBlock: cursor.nextToBlock.toString(),
+        },
+  );
 }
 
 function setReconcileBlockCursor(cursor: ReconcileBlockCursor | null) {
   runIndexerStorageTransaction(
     getActiveIndexerLeaseOwnerToken(),
-    () => setMetaJson(
-      RECONCILE_BLOCK_CURSOR_META_KEY,
-      cursor === null
-        ? null
-        : { epoch: cursor.epoch, nextToBlock: cursor.nextToBlock.toString() },
-    ),
+    () => setReconcileBlockCursorInsideLease(cursor),
   );
 }
 
@@ -1276,14 +1413,36 @@ async function runRepairPass(
     return 0;
   }
 
-  const to = from + REPAIR_CHUNK_BLOCKS - 1n > currentBlock
-    ? currentBlock
-    : from + REPAIR_CHUNK_BLOCKS - 1n;
+  const repairChunkBlocks = getIndexerMaintenanceChunkBlocks(
+    "repair",
+    REPAIR_CHUNK_BLOCKS,
+  );
+  const attempt = createIndexerMaintenanceRangeAttempt({
+    cursorBlock: from,
+    boundaryBlock: currentBlock,
+    chunkBlocks: repairChunkBlocks,
+    direction: "forward",
+  });
+  if (attempt === null) return 0;
+  const { toBlock: to } = attempt;
 
   console.log(`[indexer][repair] Scanning ${from} -> ${to} (${to - from + 1n} blocks)`);
 
-  const { logs } = await fetchCanonicalChunk(from, to, null, budget);
+  let logs: Log[];
+  try {
+    ({ logs } = await fetchCanonicalChunk(from, to, null, budget));
+  } catch (error) {
+    if (isIndexerRpcResponseLimitError(error)) {
+      persistIndexerMaintenanceResponseLimit("repair", attempt);
+    }
+    throw error;
+  }
   const parsed = processLogs(logs);
+  const nextRepairCursor = advanceIndexerMaintenanceRangeCursor(
+    attempt,
+    currentBlock,
+    "forward",
+  );
   runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
     writeBets(parsed.bets);
     writeEpochs(parsed.epochs);
@@ -1293,7 +1452,10 @@ async function runRepairPass(
     writeBatchClaims(parsed.batchClaims);
     writeResolverRewards(parsed.resolverRewards);
     writeDustSettlements(parsed.dustSettlements);
-    setRepairCursorBlock(to + 1n);
+    setRepairCursorBlock(nextRepairCursor ?? currentBlock + 1n);
+    if (nextRepairCursor === null) {
+      resetIndexerMaintenanceChunkBlocksInsideLease("repair");
+    }
   });
   if (logs.length > 0) {
     console.log(`[indexer][repair] Repaired ${logs.length} logs (${parsed.bets.length} bets, ${parsed.epochs.size} epochs, ${parsed.jackpots.length} jackpots, ${parsed.rewardClaims.length} claims)`);
@@ -1310,6 +1472,124 @@ async function runRepairPass(
   };
   setIndexerStatus("indexerRepairStatus", status);
   return logs.length;
+}
+
+type ReconcileEpochRangeScan = {
+  logs: Log[];
+  rangesUsed: number;
+  pending: boolean;
+};
+
+async function scanReconcileEpochRanges(options: {
+  epoch: number;
+  currentBlock: bigint;
+  recentFromBlock: bigint;
+  maximumRanges: number;
+  budget: IndexerRpcWorkBudget;
+}): Promise<ReconcileEpochRangeScan> {
+  const { epoch, currentBlock, recentFromBlock, maximumRanges, budget } = options;
+  const epTopic = toHex(BigInt(epoch), { size: 32 });
+  let cursor = getReconcileBlockCursor();
+  if (cursor !== null && cursor.epoch !== epoch) {
+    throw new Error("reconcile range cursor does not match the active epoch");
+  }
+  if (cursor === null) {
+    cursor = { epoch, phase: "recent", nextToBlock: currentBlock };
+    setReconcileBlockCursor(cursor);
+  }
+
+  let rangesUsed = 0;
+  while (rangesUsed < maximumRanges) {
+    const boundaryBlock = cursor.phase === "recent"
+      ? recentFromBlock
+      : INDEXER_START_BLOCK;
+    if (cursor.nextToBlock < boundaryBlock) {
+      if (cursor.phase === "recent" && recentFromBlock > INDEXER_START_BLOCK) {
+        cursor = {
+          epoch,
+          phase: "history",
+          nextToBlock: recentFromBlock - 1n,
+        };
+        setReconcileBlockCursor(cursor);
+        continue;
+      }
+      runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+        setReconcileBlockCursorInsideLease(null);
+        resetIndexerMaintenanceChunkBlocksInsideLease("reconcile");
+      });
+      return { logs: [], rangesUsed, pending: false };
+    }
+
+    const chunkBlocks = getIndexerMaintenanceChunkBlocks(
+      "reconcile",
+      RECONCILE_SCAN_CHUNK_BLOCKS,
+    );
+    const attempt = createIndexerMaintenanceRangeAttempt({
+      cursorBlock: cursor.nextToBlock,
+      boundaryBlock,
+      chunkBlocks,
+      direction: "backward",
+    });
+    if (attempt === null) {
+      throw new Error("reconcile range cursor produced no bounded attempt");
+    }
+    console.log(
+      `[indexer][reconcile] Epoch ${epoch} ${cursor.phase} range ` +
+        `${attempt.fromBlock}-${attempt.toBlock}`,
+    );
+
+    let logs: Log[];
+    try {
+      logs = await fetchLogsByTopicsAdaptive(
+        [resolvedSig, epTopic],
+        `EpochResolved:${epoch}:${cursor.phase}`,
+        attempt.fromBlock,
+        attempt.toBlock,
+        budget,
+      );
+    } catch (error) {
+      if (isIndexerRpcResponseLimitError(error)) {
+        persistIndexerMaintenanceResponseLimit("reconcile", attempt);
+      }
+      throw error;
+    }
+    rangesUsed += 1;
+    logs = filterLogsByTopics(logs, [resolvedSig, epTopic]);
+    if (logs.length > 0) {
+      runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+        setReconcileBlockCursorInsideLease(null);
+        resetIndexerMaintenanceChunkBlocksInsideLease("reconcile");
+      });
+      return { logs, rangesUsed, pending: false };
+    }
+
+    const nextCursorBlock = advanceIndexerMaintenanceRangeCursor(
+      attempt,
+      boundaryBlock,
+      "backward",
+    );
+    if (nextCursorBlock !== null) {
+      cursor = { ...cursor, nextToBlock: nextCursorBlock };
+      setReconcileBlockCursor(cursor);
+      continue;
+    }
+    if (cursor.phase === "recent" && recentFromBlock > INDEXER_START_BLOCK) {
+      cursor = {
+        epoch,
+        phase: "history",
+        nextToBlock: recentFromBlock - 1n,
+      };
+      setReconcileBlockCursor(cursor);
+      continue;
+    }
+    runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+      setReconcileBlockCursorInsideLease(null);
+      resetIndexerMaintenanceChunkBlocksInsideLease("reconcile");
+    });
+    return { logs: [], rangesUsed, pending: false };
+  }
+
+  return { logs: [], rangesUsed, pending: true };
 }
 
 async function runEpochReconcile(
@@ -1368,7 +1648,10 @@ async function runEpochReconcile(
     reconcileBlockCursor &&
     (reconcileBlockCursor.epoch >= currentEpochNumber || have.has(reconcileBlockCursor.epoch))
   ) {
-    setReconcileBlockCursor(null);
+    runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+      setReconcileBlockCursorInsideLease(null);
+      resetIndexerMaintenanceChunkBlocksInsideLease("reconcile");
+    });
     reconcileBlockCursor = null;
   }
   let targets = [...reconcilePlan.targetEpochs];
@@ -1402,73 +1685,33 @@ async function runEpochReconcile(
   } satisfies IndexerReconcileStatus);
 
   const epochsPatch = new Map<string, EpochRecord>();
-  let fullScanChunksRemaining = RECONCILE_FULL_SCAN_MAX_CHUNKS_PER_PASS;
-  const nextReconcileEpochCursor = reconcilePlan.nextCursor;
+  const completedTargetEpochs = new Set<number>();
+  let reconcileRangesRemaining = RECONCILE_FULL_SCAN_MAX_CHUNKS_PER_PASS;
   for (const epNum of targets) {
     try {
-    const epTopic = toHex(BigInt(epNum), { size: 32 });
+    if (reconcileRangesRemaining <= 0) {
+      break;
+    }
     const recentCandidate =
       currentBlock > RECONCILE_RECENT_LOOKBACK_BLOCKS
         ? currentBlock - RECONCILE_RECENT_LOOKBACK_BLOCKS
         : INDEXER_START_BLOCK;
     const recentFrom = recentCandidate > INDEXER_START_BLOCK ? recentCandidate : INDEXER_START_BLOCK;
-    const resumingFullScan = reconcileBlockCursor?.epoch === epNum;
-    let logs = resumingFullScan
-      ? []
-      : await fetchLogsByTopicsChunked(
-          [resolvedSig, epTopic],
-          `EpochResolved:${epNum}:recent`,
-          recentFrom,
-          currentBlock,
-          RECONCILE_SCAN_CHUNK_BLOCKS,
-          budget,
-        );
-    logs = filterLogsByTopics(logs, [resolvedSig, epTopic]);
-    if (
-      logs.length === 0 &&
-      recentFrom > INDEXER_START_BLOCK &&
-      fullScanChunksRemaining > 0 &&
-      (!reconcileBlockCursor || resumingFullScan)
-    ) {
-      const fullScanCeiling = recentFrom - 1n;
-      const cursorToBlock = reconcileBlockCursor?.epoch === epNum &&
-          reconcileBlockCursor.nextToBlock < fullScanCeiling
-        ? reconcileBlockCursor.nextToBlock
-        : fullScanCeiling;
-      const fullScanPlan = createBoundedBackwardBlockScanPlan(
-        INDEXER_START_BLOCK,
-        cursorToBlock,
-        RECONCILE_SCAN_CHUNK_BLOCKS,
-        fullScanChunksRemaining,
-      );
-      fullScanChunksRemaining -= fullScanPlan.chunkCount;
-      console.log(
-        `[indexer][reconcile] Epoch ${epNum} not found in recent tail; scanning bounded history ` +
-          `${fullScanPlan.fromBlock}-${fullScanPlan.toBlock} (${fullScanPlan.chunkCount} chunks)`,
-      );
-      logs = fullScanPlan.chunkCount > 0
-        ? await fetchLogsByTopicsChunked(
-            [resolvedSig, epTopic],
-            `EpochResolved:${epNum}:history`,
-            fullScanPlan.fromBlock,
-            fullScanPlan.toBlock,
-            RECONCILE_SCAN_CHUNK_BLOCKS,
-            budget,
-          )
-        : [];
-      logs = filterLogsByTopics(logs, [resolvedSig, epTopic]);
-      if (logs.length > 0 || fullScanPlan.complete) {
-        setReconcileBlockCursor(null);
-        reconcileBlockCursor = null;
-      } else if (fullScanPlan.nextToBlock !== null) {
-        reconcileBlockCursor = {
-          epoch: epNum,
-          nextToBlock: fullScanPlan.nextToBlock,
-        };
-        setReconcileBlockCursor(reconcileBlockCursor);
-      }
+    const rangeScan = await scanReconcileEpochRanges({
+      epoch: epNum,
+      currentBlock,
+      recentFromBlock: recentFrom,
+      maximumRanges: reconcileRangesRemaining,
+      budget,
+    });
+    reconcileRangesRemaining -= rangeScan.rangesUsed;
+    reconcileBlockCursor = getReconcileBlockCursor();
+    const logs = rangeScan.logs;
+    if (rangeScan.pending) break;
+    if (logs.length === 0) {
+      completedTargetEpochs.add(epNum);
+      continue;
     }
-    if (logs.length === 0) continue;
 
     let isDailyJackpot = false;
     let isWeeklyJackpot = false;
@@ -1518,6 +1761,7 @@ async function runEpochReconcile(
         isWeeklyJackpot,
         resolvedBlock: (log.blockNumber ?? 0n).toString(),
       });
+      completedTargetEpochs.add(epNum);
     } catch (err) {
       if (isIndexerRpcWorkBudgetError(err)) throw err;
       console.warn("[indexer][reconcile] Failed to decode epoch log:", describeIndexerError(err));
@@ -1531,6 +1775,12 @@ async function runEpochReconcile(
       throw err;
     }
   }
+
+  const nextReconcileEpochCursor = selectReconcileResumeEpochCursor({
+    plannedNextCursor: reconcilePlan.nextCursor,
+    sequentialTargetEpochs: reconcilePlan.sequentialTargetEpochs,
+    completedTargetEpochs,
+  });
 
   if (epochsPatch.size > 0) {
     runIndexerStorageTransaction(
@@ -1682,6 +1932,48 @@ async function runOnce(budget: IndexerRpcWorkBudget) {
     try {
       canonicalChunk = await fetchCanonicalChunk(start, end, previousCheckpoint, budget);
     } catch (error) {
+      if (isIndexerRpcResponseLimitError(error)) {
+        const recovery = planIndexerResponseLimitRecovery(end - start + 1n);
+        if (recovery.kind === "retry") {
+          runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+            setMetaJson(
+              INDEXER_CATCHUP_CHUNK_BLOCKS_META_KEY,
+              recovery.nextChunkBlocks.toString(),
+            );
+          });
+          console.warn(
+            `[indexer] Persisted a reduced catch-up chunk span of ${recovery.nextChunkBlocks} blocks ` +
+              "after an RPC response limit.",
+          );
+        } else {
+          const blockedAt = Date.now();
+          const blockedStatus: IndexerRunStatus = {
+            startedAt,
+            completedAt: blockedAt,
+            lastHeartbeatAt: blockedAt,
+            fromBlock: fromBlock.toString(),
+            toBlock: runTargetBlock.toString(),
+            headBlock: headBlock.toString(),
+            finalityBlocks: INDEXER_FINALITY_BLOCKS.toString(),
+            targetBlock: currentBlock.toString(),
+            totalLogs,
+            currentChunk: chunkIndex,
+            totalChunks: chunkCount,
+            lastProcessedBlock: (start - 1n).toString(),
+            blockedAt,
+            blockedReason: "rpc_response_limit_single_block",
+            blockedBlock: start.toString(),
+            operatorAction: "Inspect independent RPC response limits and one-block log density, then restart the indexer manually.",
+          };
+          runIndexerStorageTransaction(getActiveIndexerLeaseOwnerToken(), () => {
+            setMetaJson(INDEXER_CATCHUP_CHUNK_BLOCKS_META_KEY, "1");
+            setMetaJson("indexerRunStatus", blockedStatus);
+          });
+          throw new IndexerOperatorBlockedError(
+            `one-block RPC response limit at block ${start}; operator intervention is required`,
+          );
+        }
+      }
       if (
         isIndexerRpcWorkBudgetError(error) &&
         committedChunksThisPass === 0 &&
@@ -1891,6 +2183,14 @@ async function main() {
           process.exitCode = 1;
           return;
         }
+        if (isIndexerOperatorBlockedError(err)) {
+          console.error(
+            "[indexer] Operator intervention is required; stopping without automatic restart:",
+            describeIndexerError(err),
+          );
+          stopAndReleaseLease(false);
+          process.exit(INDEXER_OPERATOR_BLOCKED_EXIT_CODE);
+        }
         if (isIndexerRpcWorkBudgetError(err)) {
           console.error(
             "[indexer] RPC work budget exhausted; releasing the lease for supervisor recovery:",
@@ -1928,5 +2228,7 @@ main()
   })
   .catch((err) => {
     console.error("[indexer] Fatal:", describeIndexerError(err));
-    process.exit(1);
+    process.exit(
+      isIndexerOperatorBlockedError(err) ? INDEXER_OPERATOR_BLOCKED_EXIT_CODE : 1,
+    );
   });

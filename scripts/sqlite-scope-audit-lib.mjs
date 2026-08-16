@@ -40,6 +40,19 @@ export function normalizeSqliteCount(value, label = "SQLite count") {
   throw new Error(`${label} must be a non-negative safe integer`);
 }
 
+export function readCanonicalSqliteCount(db, table) {
+  try {
+    const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get();
+    return normalizeSqliteCount(row?.count, `${table} row count`);
+  } catch {
+    return null;
+  }
+}
+
+export function hasKnownLaunchSqliteRows(snapshot) {
+  return Object.values(snapshot?.counts ?? {}).some((value) => Number.isSafeInteger(value) && value > 0);
+}
+
 export function auditSqliteScopes(sourceInput, activeScope) {
   const sourcePath = resolve(sourceInput);
   if (!regularFileStat(sourcePath)) {

@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
 import { redactProofText } from "./redact-proof-output.mjs";
 import {
@@ -34,13 +35,14 @@ const CANARY_LOG_PATH = join(OUT_DIR, "canary.log");
 const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const PORT = parseInteger("SOAK_PORT", 3011, 1024, 65_535);
-const LIVE_EXECUTION_CONFIRMED =
-  process.env.SOAK_EXECUTE_LIVE === "1" && process.argv.includes("--execute-live");
+const LIVE_EXECUTION_CONFIRMED = liveExecutionConfirmed(process.env, process.argv);
 const DRY_RUN = !LIVE_EXECUTION_CONFIRMED;
 const STATUS_ONLY = process.argv.includes("--status");
 const STATUS_SUMMARY_ONLY = process.argv.includes("--summary-only");
 const STATUS_COMPACT_ONLY = process.argv.includes("--compact");
 const STOP_ONLY = process.argv.includes("--stop");
+const BEHAVIOR_SELF_TEST = process.argv.includes("--behavior-self-test");
+const BEHAVIOR_SELF_TEST_SECRET_FAULT = process.argv.includes("--self-test-secret-fault");
 const STARTED_AT = new Date().toISOString();
 const HEALTH_SECRET = randomBytes(32).toString("hex");
 const BASE_URL = `http://127.0.0.1:${PORT}`;
@@ -84,6 +86,10 @@ let canary = null;
 let stopping = false;
 let managedRunStarted = false;
 let supervisorStartToken = null;
+
+function liveExecutionConfirmed(env, argv) {
+  return env.SOAK_EXECUTE_LIVE === "1" && argv.includes("--execute-live");
+}
 
 function describeSupervisorError(error) {
   const text = redactProofText(error instanceof Error ? error.message : String(error))
@@ -591,34 +597,39 @@ function finalizeStoppedStatus(status) {
   removeLockFile();
 }
 
-async function stopManagedSupervisor() {
+async function stopManagedSupervisor({
+  verifyProcessStartIdentityFn = verifyProcessStartIdentity,
+  logFn = console.log,
+  nowFn = Date.now,
+  delayFn = (delayMs) => new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs)),
+} = {}) {
   const status = readJson(STATUS_PATH);
   const lock = readJson(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES);
   if (!status && !lock) {
-    console.log("[testnet-soak] no managed supervisor is running");
+    logFn("[testnet-soak] no managed supervisor is running");
     return;
   }
   const supervisorIdentity = matchingSupervisorIdentity(status, lock);
   if (!supervisorIdentity) {
     throw new Error("managed supervisor identity artifacts are incomplete or ambiguous; refusing to stop a PID");
   }
-  let identityState = verifyProcessStartIdentity(
+  let identityState = verifyProcessStartIdentityFn(
     supervisorIdentity.pid,
     supervisorIdentity.startToken,
   );
   if (identityState === "not-running" || identityState === "mismatch") {
     finalizeStoppedStatus(status);
-    console.log("[testnet-soak] stale stopped status repaired");
+    logFn("[testnet-soak] stale stopped status repaired");
     return;
   }
   if (identityState !== "match") {
     throw new Error("managed supervisor process identity is unavailable; refusing to stop a PID");
   }
   writeStopRequest(supervisorIdentity);
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-    identityState = verifyProcessStartIdentity(
+  const deadline = nowFn() + 5_000;
+  while (nowFn() < deadline) {
+    await delayFn(100);
+    identityState = verifyProcessStartIdentityFn(
       supervisorIdentity.pid,
       supervisorIdentity.startToken,
     );
@@ -629,7 +640,7 @@ async function stopManagedSupervisor() {
   }
   if (identityState === "match") throw new Error("managed supervisor did not stop cooperatively within 5000ms");
   finalizeStoppedStatus(status);
-  console.log("[testnet-soak] stop requested");
+  logFn("[testnet-soak] stop requested");
 }
 
 function acquireLock() {
@@ -720,23 +731,29 @@ function spawnLogged(command, args, env, logPath) {
   return child;
 }
 
-async function waitForExit(child) {
+async function waitForExit(child, {
+  readDiskCapacitySummaryFn = readDiskCapacitySummary,
+  managedStopRequestedFn = managedStopRequested,
+  stopChildFn = stopChild,
+  diskCheckIntervalMs = DISK_CAPACITY_CHECK_INTERVAL_MS,
+  stopCheckIntervalMs = 100,
+} = {}) {
   return new Promise((resolveExit, rejectExit) => {
     let settled = false;
     const diskMonitor = setInterval(() => {
-      const capacity = readDiskCapacitySummary();
+      const capacity = readDiskCapacitySummaryFn();
       if (capacity.diskCapacityAvailable && !capacity.diskFreeBelowMinimum) return;
       settle(resolveExit, {
         code: null,
         signal: capacity.diskCapacityAvailable ? "disk-capacity-below-minimum" : "disk-capacity-unavailable",
       });
-      stopChild(child);
-    }, DISK_CAPACITY_CHECK_INTERVAL_MS);
+      stopChildFn(child);
+    }, diskCheckIntervalMs);
     const stopMonitor = setInterval(() => {
-      if (!managedStopRequested()) return;
+      if (!managedStopRequestedFn()) return;
       settle(resolveExit, { code: null, signal: "operator-stop" });
-      stopChild(child);
-    }, 100);
+      stopChildFn(child);
+    }, stopCheckIntervalMs);
 
     function cleanup() {
       clearInterval(diskMonitor);
@@ -806,17 +823,253 @@ async function shutdown(stopReason, exitCode) {
   removeStopFile();
 }
 
+function buildSharedEnvironment(env = process.env, healthSecret = HEALTH_SECRET) {
+  return {
+    ...env,
+    ALLOW_WEAK_RATE_LIMIT_IDENTITY: "1",
+    HEALTH_DIAGNOSTICS_SECRET: healthSecret,
+  };
+}
+
+function buildCanaryEnvironment(
+  sharedEnv,
+  env = process.env,
+  { dryRun = DRY_RUN, executionConfirmed = LIVE_EXECUTION_CONFIRMED } = {},
+) {
+  return {
+    ...sharedEnv,
+    LIVE_CANARY_RPC_LABEL: env.LIVE_CANARY_RPC_LABEL || "local-production-like-sepolia",
+    LIVE_TEST_DRY_RUN: dryRun ? "1" : "0",
+    LIVE_TEST_EXECUTE: executionConfirmed ? "1" : "0",
+    LIVE_TEST_HEALTH_BASE_URL: BASE_URL,
+    LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS: env.LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS || "5",
+    LIVE_TEST_INJECT_RPC_FAILOVER: "1",
+    LIVE_TEST_MAX_TILES_PER_ROUND: env.LIVE_TEST_MAX_TILES_PER_ROUND || "25",
+    LIVE_TEST_MAX_TOTAL_BET_AMOUNT: env.LIVE_TEST_MAX_TOTAL_BET_AMOUNT || "0.05",
+    LIVE_TEST_MIN_TILES_PER_ROUND: env.LIVE_TEST_MIN_TILES_PER_ROUND || "1",
+    LIVE_TEST_MIN_TOTAL_BET_AMOUNT: env.LIVE_TEST_MIN_TOTAL_BET_AMOUNT || "0.01",
+    LIVE_TEST_RANDOMIZE_ROUNDS: "1",
+    LIVE_TEST_ROLES: env.LIVE_TEST_ROLES || "MANUAL,AUTOMINER_A,AUTOMINER_B",
+    LIVE_TEST_TARGET_ROUNDS: dryRun ? "1" : (env.LIVE_TEST_TARGET_ROUNDS || "1440"),
+  };
+}
+
+function selfTestCondition(condition, label) {
+  if (!condition) throw new Error(`behavior self-test failed: ${label}`);
+}
+
+function withTemporaryEnvironmentValue(name, value, fn) {
+  const previous = process.env[name];
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+}
+
+function createSelfTestChild() {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.killed = false;
+  child.signals = [];
+  child.kill = (signal) => {
+    child.signals.push(signal);
+    child.killed = true;
+    return true;
+  };
+  return child;
+}
+
+async function runBehaviorSelfTest() {
+  const explicitSelfTestDir = process.env.SOAK_BEHAVIOR_SELF_TEST_DIR?.trim();
+  selfTestCondition(
+    explicitSelfTestDir && resolve(explicitSelfTestDir) === OUT_DIR,
+    "SOAK_BEHAVIOR_SELF_TEST_DIR must explicitly match SOAK_OUT_DIR",
+  );
+  selfTestCondition(
+    ![STATUS_PATH, STATUS_TMP_PATH, LOCK_PATH, STOP_PATH, SERVER_LOG_PATH, CANARY_LOG_PATH].some(existsSync),
+    "self-test directory must not contain managed soak artifacts",
+  );
+  if (BEHAVIOR_SELF_TEST_SECRET_FAULT) {
+    throw new Error("rpc=https://operator:wallet-secret@rpc.invalid/private?token=private-token");
+  }
+
+  let faultMutantsRejected = 0;
+  const invalidIntegers = ["00", "+1", "1e3", "1.0", "-1", "9007199254740992", "1_0", "0x10"];
+  for (const raw of invalidIntegers) {
+    const rejected = withTemporaryEnvironmentValue("SOAK_BEHAVIOR_INTEGER", raw, () => {
+      try {
+        parseInteger("SOAK_BEHAVIOR_INTEGER", 7, 0, Number.MAX_SAFE_INTEGER);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    selfTestCondition(rejected, "non-canonical integer mutant was accepted");
+    faultMutantsRejected += 1;
+  }
+  for (const [raw, expected] of [["0", 0], ["42", 42], [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER]]) {
+    const parsed = withTemporaryEnvironmentValue(
+      "SOAK_BEHAVIOR_INTEGER",
+      raw,
+      () => parseInteger("SOAK_BEHAVIOR_INTEGER", 7, 0, Number.MAX_SAFE_INTEGER),
+    );
+    selfTestCondition(parsed === expected, "canonical integer was not preserved");
+  }
+
+  for (const invalidPid of [0, -1, "1e3", "1.0", 2_147_483_648, {}, null]) {
+    selfTestCondition(parseTrackedPid(invalidPid) === null, "malformed PID mutant was accepted");
+    faultMutantsRejected += 1;
+  }
+  selfTestCondition(parseTrackedPid("2147483647") === 2_147_483_647, "maximum tracked PID was rejected");
+
+  for (const invalidCount of [0, -1, "00", "1e3", MAX_SAFE_INTEGER_BIGINT + 1n, {}, null]) {
+    selfTestCondition(safePositiveStatusCount(invalidCount) === null, "malformed status count mutant was accepted");
+    faultMutantsRejected += 1;
+  }
+  selfTestCondition(safePositiveStatusCount("42") === 42, "canonical status count was rejected");
+  selfTestCondition(bigIntToNonNegativeSafeInteger(-1n) === 0, "negative disk capacity was published");
+  selfTestCondition(
+    bigIntToNonNegativeSafeInteger(MAX_SAFE_INTEGER_BIGINT + 1n) === Number.MAX_SAFE_INTEGER,
+    "oversized disk capacity was not capped",
+  );
+  faultMutantsRejected += 1;
+
+  selfTestCondition(!liveExecutionConfirmed({ SOAK_EXECUTE_LIVE: "1" }, ["node", "script"]), "env-only live admission was accepted");
+  faultMutantsRejected += 1;
+  selfTestCondition(!liveExecutionConfirmed({}, ["node", "script", "--execute-live"]), "flag-only live admission was accepted");
+  faultMutantsRejected += 1;
+  selfTestCondition(
+    liveExecutionConfirmed({ SOAK_EXECUTE_LIVE: "1" }, ["node", "script", "--execute-live"]),
+    "explicit two-factor live admission was rejected",
+  );
+
+  const sharedEnv = buildSharedEnvironment({}, HEALTH_SECRET);
+  const canaryEnv = buildCanaryEnvironment(sharedEnv, {}, {
+    dryRun: DRY_RUN,
+    executionConfirmed: LIVE_EXECUTION_CONFIRMED,
+  });
+  selfTestCondition(/^[a-f0-9]{64}$/.test(HEALTH_SECRET), "ephemeral diagnostics secret shape is invalid");
+  selfTestCondition(sharedEnv.HEALTH_DIAGNOSTICS_SECRET === HEALTH_SECRET, "diagnostics secret was not passed to the server environment");
+  selfTestCondition(canaryEnv.HEALTH_DIAGNOSTICS_SECRET === HEALTH_SECRET, "diagnostics secret was not passed to the canary environment");
+  selfTestCondition(canaryEnv.LIVE_TEST_DRY_RUN === (DRY_RUN ? "1" : "0"), "canary dry-run flag diverged from admission mode");
+  selfTestCondition(canaryEnv.LIVE_TEST_EXECUTE === (LIVE_EXECUTION_CONFIRMED ? "1" : "0"), "canary execute flag diverged from admission mode");
+  selfTestCondition(canaryEnv.LIVE_TEST_ROLES === "MANUAL,AUTOMINER_A,AUTOMINER_B", "default canary roles changed");
+
+  const redactedError = describeSupervisorError(
+    new Error("rpc=https://operator:wallet-secret@rpc.invalid/private?token=private-token"),
+  );
+  selfTestCondition(!/wallet-secret|private-token|https?:\/\//i.test(redactedError), "terminal error redaction leaked sensitive input");
+  faultMutantsRejected += 1;
+
+  mkdirSync(OUT_DIR, { recursive: true });
+  supervisorStartToken = "win32:1";
+  writeStatus("behavior-self-test", { marker: "atomic-status" });
+  selfTestCondition(readJson(STATUS_PATH)?.marker === "atomic-status", "atomic status replacement lost its payload");
+  selfTestCondition(!existsSync(STATUS_TMP_PATH), "atomic status replacement left a temporary file");
+
+  const staleStartedAt = "2026-01-01T00:00:00.000Z";
+  writeFileSync(STATUS_PATH, `${JSON.stringify({
+    status: "running",
+    supervisorPid: 123,
+    supervisorStartToken: "win32:1",
+    startedAt: staleStartedAt,
+  })}\n`, "utf8");
+  writeFileSync(LOCK_PATH, `${JSON.stringify({
+    pid: 123,
+    supervisorStartToken: "win32:1",
+    startedAt: staleStartedAt,
+  })}\n`, "utf8");
+  await stopManagedSupervisor({ verifyProcessStartIdentityFn: () => "not-running", logFn: () => {} });
+  selfTestCondition(readJson(STATUS_PATH)?.stopReason === "operator-stop", "stale stop did not repair status");
+  selfTestCondition(!existsSync(LOCK_PATH), "stale stop did not remove its matching lock");
+  faultMutantsRejected += 1;
+
+  mkdirSync(LOCK_PATH);
+  removeLockFile();
+  selfTestCondition(existsSync(LOCK_PATH), "lock cleanup removed a non-file path");
+  let directoryLockRejected = false;
+  try {
+    acquireLock();
+  } catch (error) {
+    directoryLockRejected = /lock path exists but is not a file/.test(String(error?.message));
+  }
+  selfTestCondition(directoryLockRejected, "directory lock mutant was accepted");
+  faultMutantsRejected += 1;
+  rmSync(LOCK_PATH, { recursive: true, force: true });
+
+  writeFileSync(LOCK_PATH, "x".repeat(MAX_SOAK_LOCK_JSON_BYTES + 1), "utf8");
+  let oversizedLockRejected = false;
+  try {
+    acquireLock();
+  } catch (error) {
+    oversizedLockRejected = /lock file is too large/.test(String(error?.message));
+  }
+  selfTestCondition(oversizedLockRejected, "oversized lock mutant was accepted");
+  faultMutantsRejected += 1;
+  rmSync(LOCK_PATH, { force: true });
+
+  for (const [capacity, expectedSignal] of [
+    [{ diskCapacityAvailable: true, diskFreeBelowMinimum: true }, "disk-capacity-below-minimum"],
+    [{ diskCapacityAvailable: false, diskFreeBelowMinimum: null }, "disk-capacity-unavailable"],
+  ]) {
+    const child = createSelfTestChild();
+    const result = await waitForExit(child, {
+      readDiskCapacitySummaryFn: () => capacity,
+      managedStopRequestedFn: () => false,
+      diskCheckIntervalMs: 1,
+      stopCheckIntervalMs: 10,
+    });
+    selfTestCondition(result.signal === expectedSignal, "disk monitor returned the wrong stop reason");
+    selfTestCondition(child.killed && child.signals[0] === "SIGTERM", "disk monitor did not stop its child");
+    faultMutantsRejected += 1;
+  }
+  const operatorStopChild = createSelfTestChild();
+  const operatorStopResult = await waitForExit(operatorStopChild, {
+    readDiskCapacitySummaryFn: () => ({ diskCapacityAvailable: true, diskFreeBelowMinimum: false }),
+    managedStopRequestedFn: () => true,
+    diskCheckIntervalMs: 10,
+    stopCheckIntervalMs: 1,
+  });
+  selfTestCondition(operatorStopResult.signal === "operator-stop", "operator stop request was ignored");
+  selfTestCondition(operatorStopChild.killed, "operator stop did not stop its child");
+  faultMutantsRejected += 1;
+
+  server = createSelfTestChild();
+  canary = createSelfTestChild();
+  stopping = false;
+  writeFileSync(LOCK_PATH, "self-test-lock", "utf8");
+  writeFileSync(STOP_PATH, "self-test-stop", "utf8");
+  await shutdown("behavior-self-test", 1);
+  selfTestCondition(server.killed && canary.killed, "shutdown did not stop both managed children");
+  selfTestCondition(readJson(STATUS_PATH)?.stopReason === "behavior-self-test", "shutdown did not publish its stop reason");
+  selfTestCondition(!existsSync(LOCK_PATH) && !existsSync(STOP_PATH), "shutdown left managed control artifacts behind");
+
+  console.log(JSON.stringify({
+    status: "pass",
+    dryRun: DRY_RUN,
+    liveExecutionConfirmed: LIVE_EXECUTION_CONFIRMED,
+    canaryDryRun: canaryEnv.LIVE_TEST_DRY_RUN === "1",
+    canaryExecute: canaryEnv.LIVE_TEST_EXECUTE === "1",
+    defaultRoles: canaryEnv.LIVE_TEST_ROLES,
+    ephemeralDiagnosticsSecret: true,
+    atomicStatus: true,
+    managedChildrenStarted: 0,
+    networkRequests: 0,
+    faultMutantsRejected,
+  }));
+}
+
 async function main() {
   assertDiskCapacity();
   acquireLock();
   managedRunStarted = true;
   writeStatus("starting");
 
-  const sharedEnv = {
-    ...process.env,
-    ALLOW_WEAK_RATE_LIMIT_IDENTITY: "1",
-    HEALTH_DIAGNOSTICS_SECRET: HEALTH_SECRET,
-  };
+  const sharedEnv = buildSharedEnvironment();
   server = spawnLogged(
     process.execPath,
     [join(ROOT, "node_modules", "next", "dist", "bin", "next"), "start", "--port", String(PORT)],
@@ -826,22 +1079,7 @@ async function main() {
   writeStatus("server-starting");
   await waitForServer();
 
-  const canaryEnv = {
-    ...sharedEnv,
-    LIVE_CANARY_RPC_LABEL: process.env.LIVE_CANARY_RPC_LABEL || "local-production-like-sepolia",
-    LIVE_TEST_DRY_RUN: DRY_RUN ? "1" : "0",
-    LIVE_TEST_EXECUTE: LIVE_EXECUTION_CONFIRMED ? "1" : "0",
-    LIVE_TEST_HEALTH_BASE_URL: BASE_URL,
-    LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS: process.env.LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS || "5",
-    LIVE_TEST_INJECT_RPC_FAILOVER: "1",
-    LIVE_TEST_MAX_TILES_PER_ROUND: process.env.LIVE_TEST_MAX_TILES_PER_ROUND || "25",
-    LIVE_TEST_MAX_TOTAL_BET_AMOUNT: process.env.LIVE_TEST_MAX_TOTAL_BET_AMOUNT || "0.05",
-    LIVE_TEST_MIN_TILES_PER_ROUND: process.env.LIVE_TEST_MIN_TILES_PER_ROUND || "1",
-    LIVE_TEST_MIN_TOTAL_BET_AMOUNT: process.env.LIVE_TEST_MIN_TOTAL_BET_AMOUNT || "0.01",
-    LIVE_TEST_RANDOMIZE_ROUNDS: "1",
-    LIVE_TEST_ROLES: process.env.LIVE_TEST_ROLES || "MANUAL,AUTOMINER_A,AUTOMINER_B",
-    LIVE_TEST_TARGET_ROUNDS: DRY_RUN ? "1" : (process.env.LIVE_TEST_TARGET_ROUNDS || "1440"),
-  };
+  const canaryEnv = buildCanaryEnvironment(sharedEnv);
   canary = spawnLogged(
     process.execPath,
     [
@@ -859,27 +1097,36 @@ async function main() {
   process.exitCode = success ? 0 : 1;
 }
 
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => {
-    void shutdown(`supervisor-${signal.toLowerCase()}`, 1).finally(() => {
-      process.exitCode = 1;
+function installManagedSignalHandlers() {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      void shutdown(`supervisor-${signal.toLowerCase()}`, 1).finally(() => {
+        process.exitCode = 1;
+      });
     });
-  });
+  }
 }
 
-if (STATUS_ONLY) {
-  printSafeStatus().catch((error) => {
-    console.error(`[testnet-soak] status failed: ${describeSupervisorError(error)}`);
-    process.exitCode = 1;
-  });
-} else if (STOP_ONLY) {
-  stopManagedSupervisor().catch((error) => {
-    console.error(`[testnet-soak] stop failed: ${describeSupervisorError(error)}`);
-    process.exitCode = 1;
-  });
-} else main().catch(async (error) => {
+async function runCli() {
+  if (BEHAVIOR_SELF_TEST) return runBehaviorSelfTest();
+  if (STATUS_ONLY) return printSafeStatus();
+  if (STOP_ONLY) return stopManagedSupervisor();
+  installManagedSignalHandlers();
+  return main();
+}
+
+runCli().catch(async (error) => {
   const message = describeSupervisorError(error);
-  if (managedRunStarted) await shutdown(message, 1);
-  console.error(`[testnet-soak] ${message}`);
+  if (!BEHAVIOR_SELF_TEST && !STATUS_ONLY && !STOP_ONLY && managedRunStarted) {
+    await shutdown(message, 1);
+  }
+  const prefix = BEHAVIOR_SELF_TEST
+    ? "behavior self-test failed: "
+    : STATUS_ONLY
+      ? "status failed: "
+      : STOP_ONLY
+        ? "stop failed: "
+        : "";
+  console.error(`[testnet-soak] ${prefix}${message}`);
   process.exitCode = 1;
 });

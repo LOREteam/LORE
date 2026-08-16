@@ -10,6 +10,7 @@ import {
   keccak256,
   toHex,
 } from "viem";
+import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sanitizeSentryPayload } from "./app/lib/sentrySanitize";
 import {
@@ -25,24 +26,29 @@ import {
   getPreferredLineaRpcs,
 } from "./config/publicConfig";
 import { RESOLVE_ABI } from "./config/abi";
-import { assertProductionRuntimeConfig } from "./config/productionRuntime";
 import {
-  getMetaJson,
+  assertProductionRuntimeConfig,
+  parseRequiredRuntimeFinalityBlocks,
+} from "./config/productionRuntime";
+import {
+  getMetaJsonStrict,
   reserveKeeperDailyBudget,
   setMetaJson,
 } from "./server/storage";
 import {
+  assertKeeperReceiptFinality,
+  assertKeeperSignedTransactionIntegrity,
   fingerprintKeeperEligibility,
   fingerprintKeeperNonce,
   fingerprintKeeperReceipt,
+  KeeperRpcAgreementError,
   readWithExactKeeperRpcAgreement,
   selectKeeperAgreementRpcUrls,
+  type KeeperCanonicalBlockObservation,
   type KeeperEligibilityObservation,
   type KeeperNonceObservation,
   type KeeperReceiptObservation,
 } from "./server/keeperSigningSafety";
-
-assertProductionRuntimeConfig("bot");
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const APP_NETWORK = getConfiguredLineaNetwork();
@@ -72,6 +78,11 @@ const NORMAL_MAX_FEE_BUMP_PERCENT = 130n;
 const NORMAL_PRIORITY_BUMP_PERCENT = 125n;
 const GAS_LIMIT_MARGIN_PERCENT = 150n;
 const KEEPER_DAILY_BUDGET_POLICY = getKeeperDailyBudgetPolicy(APP_CHAIN.id);
+const PENDING_RESOLVE_REBROADCAST_INTERVAL_MS = 15_000;
+const HASH_RE = /^0x[a-fA-F0-9]{64}$/;
+const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+const SERIALIZED_TRANSACTION_RE = /^0x(?:[a-fA-F0-9]{2})+$/;
+const MAX_SERIALIZED_TRANSACTION_LENGTH = 256 * 1024;
 
 // V9 atomic resolve: a single tx finalizes the epoch. Players normally
 // trigger _autoResolveIfNeeded() via their next bet - the keeper is just a
@@ -105,17 +116,49 @@ const ABI = RESOLVE_ABI;
 
 type PendingResolve = {
   epoch: bigint;
+  signer: `0x${string}`;
   hash: `0x${string}`;
   nonce: number;
+  serializedTransaction: Hex;
   submittedAt: number;
+  lastBroadcastAt?: number;
   retryAt?: number;
 };
+
+type StoredPendingResolve = Omit<PendingResolve, "epoch"> & { epoch: string };
 
 type KeeperPublicClient = ReturnType<typeof createPublicClient>;
 type KeeperAgreementClients = readonly [KeeperPublicClient, KeeperPublicClient];
 
 const alertCooldowns = new Map<string, number>();
 const PENDING_RESOLVE_META_KEY = "bot:pendingResolve";
+
+function isStoredPendingResolve(value: unknown): value is StoredPendingResolve {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<StoredPendingResolve>;
+  const optionalTimes = [record.lastBroadcastAt, record.retryAt];
+  return (
+    typeof record.epoch === "string" &&
+    /^(?:0|[1-9]\d*)$/.test(record.epoch) &&
+    typeof record.signer === "string" &&
+    ADDRESS_RE.test(record.signer) &&
+    typeof record.hash === "string" &&
+    HASH_RE.test(record.hash) &&
+    typeof record.serializedTransaction === "string" &&
+    record.serializedTransaction.length <= MAX_SERIALIZED_TRANSACTION_LENGTH &&
+    SERIALIZED_TRANSACTION_RE.test(record.serializedTransaction) &&
+    typeof record.nonce === "number" &&
+    Number.isSafeInteger(record.nonce) &&
+    record.nonce >= 0 &&
+    typeof record.submittedAt === "number" &&
+    Number.isSafeInteger(record.submittedAt) &&
+    record.submittedAt > 0 &&
+    optionalTimes.every((time) =>
+      time === undefined ||
+      (typeof time === "number" && Number.isSafeInteger(time) && time > 0)
+    )
+  );
+}
 
 function describeKeeperError(error: unknown, maxLength = 220) {
   const message = error instanceof Error ? error.message : String(error ?? "unknown error");
@@ -157,6 +200,27 @@ function parseAlertContentLengthHeader(value: string | null) {
 function savePendingResolve(value: PendingResolve | null): PendingResolve | null {
   setMetaJson(PENDING_RESOLVE_META_KEY, value ? { ...value, epoch: value.epoch.toString() } : null);
   return value;
+}
+
+function expectedResolveData(epoch: bigint) {
+  return encodeFunctionData({
+    abi: ABI,
+    functionName: "resolveEpoch",
+    args: [epoch],
+  });
+}
+
+function assertPendingResolveIntegrity(
+  pending: PendingResolve,
+  expectedSigner: `0x${string}`,
+  contractAddress: `0x${string}`,
+) {
+  return assertKeeperSignedTransactionIntegrity(pending, {
+    chainId: APP_CHAIN.id,
+    signer: expectedSigner,
+    to: contractAddress,
+    data: expectedResolveData(pending.epoch),
+  });
 }
 
 async function readKeeperEligibility(
@@ -254,13 +318,49 @@ async function readAgreedKeeperReceipt(
   publicClients: KeeperAgreementClients,
   hash: `0x${string}`,
 ) {
-  return readWithExactKeeperRpcAgreement(
+  const receipt = await readWithExactKeeperRpcAgreement(
     "receipt",
     [
       () => readKeeperReceipt(publicClients[0], hash),
       () => readKeeperReceipt(publicClients[1], hash),
     ],
     fingerprintKeeperReceipt,
+  );
+  if (
+    receipt &&
+    receipt.transactionHash.toLowerCase() !== hash.toLowerCase()
+  ) {
+    throw new KeeperRpcAgreementError("receipt_transaction_hash");
+  }
+  return receipt;
+}
+
+async function readKeeperCanonicalBlock(
+  publicClient: KeeperPublicClient,
+  receipt: KeeperReceiptObservation,
+  finalityBlocks: bigint,
+): Promise<KeeperCanonicalBlockObservation> {
+  const headBlock = await publicClient.getBlockNumber();
+  if (headBlock < receipt.blockNumber + finalityBlocks) {
+    return { headBlock, blockHash: null };
+  }
+  const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
+  return { headBlock, blockHash: block.hash };
+}
+
+async function hasAgreedKeeperReceiptFinality(
+  publicClients: KeeperAgreementClients,
+  receipt: KeeperReceiptObservation,
+  finalityBlocks: bigint,
+) {
+  const observations = await Promise.all([
+    readKeeperCanonicalBlock(publicClients[0], receipt, finalityBlocks),
+    readKeeperCanonicalBlock(publicClients[1], receipt, finalityBlocks),
+  ]) as [KeeperCanonicalBlockObservation, KeeperCanonicalBlockObservation];
+  return assertKeeperReceiptFinality(
+    receipt,
+    finalityBlocks,
+    observations,
   );
 }
 
@@ -362,6 +462,38 @@ function isSkippableResolveError(message: string) {
     message.includes("timernotended") ||
     message.includes("canonlyresolvecurrent")
   );
+}
+
+async function broadcastPendingResolve(options: {
+  pending: PendingResolve;
+  expectedSigner: `0x${string}`;
+  contractAddress: `0x${string}`;
+  walletClient: ReturnType<typeof createWalletClient>;
+}) {
+  const { pending, expectedSigner, contractAddress, walletClient } = options;
+  await assertPendingResolveIntegrity(
+    pending,
+    expectedSigner,
+    contractAddress,
+  );
+  const persisted = savePendingResolve({
+    ...pending,
+    lastBroadcastAt: Date.now(),
+  });
+  if (!persisted) throw new Error("keeper_pending_resolve_persistence_failed");
+  try {
+    const broadcastHash = await walletClient.sendRawTransaction({
+      serializedTransaction: persisted.serializedTransaction,
+    });
+    if (broadcastHash.toLowerCase() !== persisted.hash.toLowerCase()) {
+      throw new Error("keeper_broadcast_hash_mismatch");
+    }
+  } catch (broadcastError) {
+    console.warn(
+      `[keeper] Broadcast outcome is unknown; the exact signed resolve remains locked for idempotent recovery: ${describeKeeperError(broadcastError, 100)}`,
+    );
+  }
+  return persisted;
 }
 
 async function tryResolveEpochAction(options: {
@@ -479,32 +611,40 @@ async function tryResolveEpochAction(options: {
         type: "eip1559",
       });
   const hash = keccak256(serializedTransaction);
-  const pending = savePendingResolve({
+  const pendingCandidate: PendingResolve = {
     epoch,
+    signer: accountAddress,
     hash,
     nonce: latestNonce,
+    serializedTransaction,
     submittedAt: Date.now(),
+  };
+  await assertPendingResolveIntegrity(
+    pendingCandidate,
+    accountAddress,
+    contractAddress,
+  );
+  const pending = savePendingResolve({
+    ...pendingCandidate,
   });
   if (!pending) {
     throw new Error("keeper_pending_resolve_persistence_failed");
   }
-  try {
-    const broadcastHash = await walletClient.sendRawTransaction({ serializedTransaction });
-    if (broadcastHash.toLowerCase() !== hash.toLowerCase()) {
-      console.warn("[keeper] Broadcast returned a mismatched hash; signed resolve remains locked pending independent confirmation.");
-      return pending;
-    }
-  } catch (broadcastError) {
-    console.warn(
-      `[keeper] Broadcast outcome is unknown; signed resolve remains locked pending independent confirmation: ${describeKeeperError(broadcastError, 100)}`,
-    );
-    return pending;
-  }
+  const submitted = await broadcastPendingResolve({
+    pending,
+    expectedSigner: accountAddress,
+    contractAddress,
+    walletClient,
+  });
   console.log(`Resolve epoch ${epoch.toString()} submitted (gas: ${gas}). Tx: ${hash}`);
-  return pending;
+  return submitted;
 }
 
 async function startKeeperBot() {
+  assertProductionRuntimeConfig("bot");
+  const keeperFinalityBlocks = parseRequiredRuntimeFinalityBlocks(
+    process.env.INDEXER_FINALITY_BLOCKS,
+  );
   const privateKeyRaw = getRequiredEnv("KEEPER_PRIVATE_KEY").replace(/^0x/, "");
   const contractAddress = getAddress(process.env.KEEPER_CONTRACT_ADDRESS ?? DEFAULT_CONTRACT);
   const rpcUrl = process.env.KEEPER_RPC_URL ?? DEFAULT_RPC_URL;
@@ -548,28 +688,31 @@ async function startKeeperBot() {
   let consecutiveErrors = 0;
   let consecutiveNetworkErrors = 0;
   let pendingResolve: PendingResolve | null = null;
-  const stored = getMetaJson<{ epoch: string; hash: `0x${string}`; nonce?: number; submittedAt: number; retryAt?: number }>(PENDING_RESOLVE_META_KEY);
-  const storedNonce = stored?.nonce;
-  const storedRetryAt = stored?.retryAt;
-  if (
-    stored?.epoch &&
-    /^0x[0-9a-fA-F]{64}$/.test(stored.hash) &&
-    typeof storedNonce === "number" &&
-    Number.isSafeInteger(storedNonce) &&
-    storedNonce >= 0 &&
-    Number.isSafeInteger(stored.submittedAt) &&
-    stored.submittedAt > 0
-  ) {
+  let stored: unknown;
+  try {
+    stored = getMetaJsonStrict<unknown>(PENDING_RESOLVE_META_KEY);
+  } catch {
+    throw new Error("keeper_pending_resolve_state_invalid_manual_reconciliation_required");
+  }
+  if (isStoredPendingResolve(stored)) {
     const restoredPendingResolve: PendingResolve = {
       epoch: BigInt(stored.epoch),
+      signer: stored.signer,
       hash: stored.hash,
-      nonce: storedNonce,
+      nonce: stored.nonce,
+      serializedTransaction: stored.serializedTransaction,
       submittedAt: stored.submittedAt,
-      ...(typeof storedRetryAt === "number" && Number.isSafeInteger(storedRetryAt) ? { retryAt: storedRetryAt } : {}),
+      ...(stored.lastBroadcastAt === undefined ? {} : { lastBroadcastAt: stored.lastBroadcastAt }),
+      ...(stored.retryAt === undefined ? {} : { retryAt: stored.retryAt }),
     };
+    await assertPendingResolveIntegrity(
+      restoredPendingResolve,
+      account.address,
+      contractAddress,
+    );
     pendingResolve = restoredPendingResolve;
     console.log(`[keeper] Restored pending resolve for epoch ${restoredPendingResolve.epoch.toString()} from storage. Tx: ${restoredPendingResolve.hash}`);
-  } else if (stored) {
+  } else if (stored !== null) {
     throw new Error("keeper_pending_resolve_state_invalid_manual_reconciliation_required");
   }
 
@@ -591,6 +734,18 @@ async function startKeeperBot() {
           const receipt = await readAgreedKeeperReceipt(agreementClients, pending.hash);
           if (receipt) {
             console.log(`\nPending resolve receipt found for epoch ${pending.epoch.toString()} (${receipt.status}). Tx: ${pending.hash}`);
+            const finalized = await hasAgreedKeeperReceiptFinality(
+              agreementClients,
+              receipt,
+              keeperFinalityBlocks,
+            );
+            if (!finalized) {
+              process.stdout.write(
+                `\rEpoch #${epoch.toString()} | resolve receipt awaiting ${keeperFinalityBlocks.toString()}-block finality   `,
+              );
+              await delay(1500);
+              continue;
+            }
             if (receipt.status === "success") {
               pendingResolve = savePendingResolve(null);
               await delay(1500);
@@ -610,22 +765,29 @@ async function startKeeperBot() {
               continue;
             }
           } else {
-            const { latestNonce } = await readAgreedKeeperNonce(
+            const { latestNonce, pendingNonce } = await readAgreedKeeperNonce(
               agreementClients,
               account.address,
             );
-            if (latestNonce > pending.nonce) {
-              console.log(
-                `\nPending resolve nonce ${pending.nonce.toString()} independently confirmed consumed. Tx: ${pending.hash}`,
+            if (latestNonce > pending.nonce || pendingNonce > pending.nonce) {
+              process.stdout.write(
+                `\rEpoch #${epoch.toString()} | resolve nonce observed without canonical receipt | ${pending.hash.slice(0, 10)}...   `,
               );
-              pendingResolve = savePendingResolve(null);
-              await delay(1500);
-              continue;
-            } else {
-              process.stdout.write(`\rEpoch #${epoch.toString()} | resolve tx unresolved | ${pending.hash.slice(0, 10)}...   `);
               await delay(1500);
               continue;
             }
+            const lastBroadcastAt = pending.lastBroadcastAt ?? 0;
+            if (Date.now() - lastBroadcastAt >= PENDING_RESOLVE_REBROADCAST_INTERVAL_MS) {
+              pendingResolve = await broadcastPendingResolve({
+                pending,
+                expectedSigner: account.address,
+                contractAddress,
+                walletClient,
+              });
+            }
+            process.stdout.write(`\rEpoch #${epoch.toString()} | resolve tx unresolved | ${pending.hash.slice(0, 10)}...   `);
+            await delay(1500);
+            continue;
           }
         } catch (receiptCheckErr) {
           const receiptCheckMsg = receiptCheckErr instanceof Error ? (receiptCheckErr.message ?? "") : String(receiptCheckErr);

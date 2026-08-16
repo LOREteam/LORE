@@ -31,14 +31,18 @@ import {
 import { tileIdsToMask } from "../app/lib/tileMask";
 import { parseOptionalPositiveIntegerEnv, parseOptionalPositiveIntegerInRangeEnv } from "../config/envParsing";
 import { getConfiguredLineaNetwork, getLineaChain, getStableLineaReadRpcs } from "../config/publicConfig";
-import { redactProofText } from "./redact-proof-output.mjs";
+import {
+  describeWalletPlaytestError,
+  fetchPlaytestJson,
+  fetchPlaytestStatus,
+  hasWalletSigningMaterial,
+  resolveWalletPlaytestAdmission,
+} from "./playtest-wallet-policy.mjs";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
 const BASE_URL = process.env.TEST_WALLET_BASE_URL?.trim() || "http://localhost:3000";
 const EXECUTE_REQUESTED = process.argv.includes("--execute");
-const LIVE_EXECUTION_CONFIRMED = process.env.TEST_WALLET_EXECUTE === "1" && EXECUTE_REQUESTED;
-const DRY_RUN = !LIVE_EXECUTION_CONFIRMED;
 const SAFE_SECONDS_LEFT = parseOptionalPositiveIntegerEnv(process.env.TEST_WALLET_SAFE_SECONDS_LEFT, 35);
 const MAX_EPOCH_READY_WAIT_MS = parseOptionalPositiveIntegerEnv(process.env.TEST_WALLET_MAX_EPOCH_READY_WAIT_MS, 180_000);
 const POST_TX_API_WAIT_MS = parseOptionalPositiveIntegerEnv(process.env.TEST_WALLET_POST_TX_API_WAIT_MS, 5_000);
@@ -50,15 +54,10 @@ const APPROVE_GAS_FALLBACK = 80_000n;
 const SINGLE_GAS_FALLBACK = 140_000n;
 const BATCH_GAS_FALLBACK = 240_000n;
 const PLAYTEST_GAS_BUFFER_PERCENT = 150n;
-const MAX_PLAYTEST_JSON_RESPONSE_BYTES = 512 * 1024;
-const MAX_PLAYTEST_ERROR_CHARS = 500;
-const CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const MAX_UINT256 = (1n << 256n) - 1n;
 const EPOCH_BOUND_BITMAP_SELECTOR = toFunctionSelector(
   "placeBatchBetsBitmapForEpoch(uint256,uint32,uint256)",
 );
-const SIGNING_ENV_NAME_RE = /(?:^|_)(?:PRIVATE_KEY|MNEMONIC|SEED(?:_PHRASE)?|SIGNING_KEY)(?:_|$)/i;
 
 type PlaytestSummary = {
   address: Address;
@@ -77,14 +76,6 @@ type TestAccount = ReturnType<typeof privateKeyToAccount>;
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function describePlaytestError(error: unknown) {
-  const text = redactProofText(error instanceof Error ? error.message : String(error))
-    .replace(/\s+/g, " ")
-    .trim();
-  if (text.length <= MAX_PLAYTEST_ERROR_CHARS) return text;
-  return `${text.slice(0, MAX_PLAYTEST_ERROR_CHARS - 15)}...<truncated>`;
 }
 
 function getRequiredEnv(name: string) {
@@ -129,12 +120,6 @@ async function waitForSafeEpochWindow(publicClient: PublicClient) {
     console.log(`[playtest] epoch ${epoch.toString()} too close to end (${secondsLeft}s left), waiting ${Math.ceil(waitMs / 1000)}s`);
     await delay(waitMs);
   }
-}
-
-function hasSigningMaterialInEnvironment() {
-  return Object.entries(process.env).some(
-    ([name, value]) => Boolean(value?.trim()) && SIGNING_ENV_NAME_RE.test(name),
-  );
 }
 
 async function readEpochWindow(publicClient: PublicClient) {
@@ -343,7 +328,7 @@ async function placeBatchBet(
     } as never);
   } catch (bitmapError) {
     if (isPlaytestFeeBudgetError(bitmapError)) throw bitmapError;
-    const bitmapMessage = describePlaytestError(bitmapError);
+      const bitmapMessage = describeWalletPlaytestError(bitmapError);
     console.log(`[playtest] placeBatchBetsBitmap unavailable or failed, falling back: ${bitmapMessage}`);
     try {
       estimatedGas = await publicClient.estimateContractGas({
@@ -372,7 +357,7 @@ async function placeBatchBet(
       } as never);
     } catch (error) {
       if (isPlaytestFeeBudgetError(error)) throw error;
-      const message = describePlaytestError(error);
+    const message = describeWalletPlaytestError(error);
       console.log(`[playtest] placeBatchBetsSameAmount unavailable or failed, falling back: ${message}`);
       const amountArgs = tiles.map(() => amount);
       try {
@@ -455,68 +440,28 @@ async function placeEpochBoundBitmapBet(
 }
 
 async function fetchJson(url: string) {
-  const response = await fetch(url, {
-    headers: { accept: "application/json" },
-    signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS),
+  return fetchPlaytestJson({
+    url,
+    timeoutMs: API_FETCH_TIMEOUT_MS,
   });
-  const text = await readBoundedResponseText(response);
-  let json: unknown = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = text;
-  }
-  return { status: response.status, ok: response.ok, json };
-}
-
-async function readBoundedResponseText(response: Response) {
-  const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
-  if (contentLength !== null && contentLength > MAX_PLAYTEST_JSON_RESPONSE_BYTES) {
-    throw new Error("playtest JSON response body too large");
-  }
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let totalBytes = 0;
-  let text = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > MAX_PLAYTEST_JSON_RESPONSE_BYTES) {
-      await reader.cancel().catch(() => undefined);
-      throw new Error("playtest JSON response body too large");
-    }
-    text += decoder.decode(value, { stream: true });
-  }
-  return text + decoder.decode();
-}
-
-function parseContentLengthHeader(value: string | null) {
-  if (value == null || value === "") return null;
-  if (!CONTENT_LENGTH_RE.test(value)) throw new Error("playtest JSON response has invalid content-length");
-  const parsed = BigInt(value);
-  if (parsed > MAX_SAFE_INTEGER_BIGINT) throw new Error("playtest JSON response has invalid content-length");
-  return Number(parsed);
 }
 
 async function main() {
-  if (EXECUTE_REQUESTED && process.env.TEST_WALLET_EXECUTE !== "1") {
-    throw new Error("Refusing wallet playtest execution without TEST_WALLET_EXECUTE=1");
-  }
-  if (DRY_RUN && hasSigningMaterialInEnvironment()) {
-    throw new Error("Dry-run wallet playtest refuses inherited signing material");
-  }
-  if (LIVE_EXECUTION_CONFIRMED) {
+  const { dryRun, liveExecutionConfirmed } = resolveWalletPlaytestAdmission({
+    executeRequested: EXECUTE_REQUESTED,
+    executeEnvironmentValue: process.env.TEST_WALLET_EXECUTE,
+    signingMaterialPresent: hasWalletSigningMaterial(process.env),
+  });
+  if (liveExecutionConfirmed) {
     loadDotenv({ override: false, quiet: true });
   }
-  const account = LIVE_EXECUTION_CONFIRMED && process.env.TEST_WALLET_PRIVATE_KEY?.trim()
+  const account = liveExecutionConfirmed && process.env.TEST_WALLET_PRIVATE_KEY?.trim()
     ? privateKeyToAccount(normalizePrivateKey(getRequiredEnv("TEST_WALLET_PRIVATE_KEY")))
     : null;
   const dryRunAddress = process.env.TEST_WALLET_ADDRESS?.trim()
     ? getAddress(process.env.TEST_WALLET_ADDRESS)
     : null;
-  if (!DRY_RUN && !account) {
+  if (!dryRun && !account) {
     throw new Error("Missing required env var: TEST_WALLET_PRIVATE_KEY");
   }
 
@@ -535,14 +480,14 @@ async function main() {
   }
   const useEpochBoundBets = await supportsEpochBoundBets(publicClient);
 
-  const epochWindow = DRY_RUN
+  const epochWindow = dryRun
     ? await readEpochWindow(publicClient)
     : await waitForSafeEpochWindow(publicClient);
   const { epoch, secondsLeft } = epochWindow;
   const { singleTile, batchTiles } = buildTilePlan(epoch);
   const neededAmount = SINGLE_AMOUNT + BATCH_AMOUNT * BigInt(batchTiles.length);
 
-  console.log(`[playtest] dryRun=${DRY_RUN ? "yes" : "no"}`);
+  console.log(`[playtest] dryRun=${dryRun ? "yes" : "no"}`);
   console.log(`[playtest] wallet=${dryRunAddress ? "configured" : "not-set"}`);
   console.log(`[playtest] network=${APP_NETWORK} chainId=${APP_CHAIN.id}`);
   console.log(`[playtest] rpcCount=${rpcUrls.length}`);
@@ -553,7 +498,7 @@ async function main() {
   console.log(`[playtest] single=${singleTile} x ${formatUnits(SINGLE_AMOUNT, 18)} LINEA`);
   console.log(`[playtest] batch=${batchTiles.join(",")} x ${formatUnits(BATCH_AMOUNT, 18)} LINEA`);
 
-  if (DRY_RUN) {
+  if (dryRun) {
     let tokenBalance: bigint | null = null;
     let nativeBalance: bigint | null = null;
     let allowance: bigint | null = null;
@@ -581,10 +526,11 @@ async function main() {
     }
 
     const [home, deposits, rebates] = await Promise.all([
-      fetch(`${BASE_URL}/`, {
-        headers: { accept: "text/html" },
-        signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS),
-      }).then((response) => ({ ok: response.ok, status: response.status })),
+      fetchPlaytestStatus({
+        url: `${BASE_URL}/`,
+        accept: "text/html",
+        timeoutMs: API_FETCH_TIMEOUT_MS,
+      }),
       dryRunAddress
         ? fetchJson(`${BASE_URL}/api/deposits?user=${dryRunAddress.toLowerCase()}&includeRewards=1`)
         : Promise.resolve({ ok: false, status: 0, json: "skipped: TEST_WALLET_ADDRESS not set" }),
@@ -684,6 +630,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`[playtest] failed: ${describePlaytestError(error)}`);
+  console.error(`[playtest] failed: ${describeWalletPlaytestError(error)}`);
   process.exitCode = 1;
 });

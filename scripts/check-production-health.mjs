@@ -13,6 +13,7 @@ const ALLOW_DEGRADED = process.env.PROD_HEALTH_ALLOW_DEGRADED === "1";
 const ALLOW_LOCAL = process.env.PROD_HEALTH_ALLOW_LOCAL === "1";
 const summaryOnly = process.argv.includes("--summary-only");
 const selfTest = process.argv.includes("--self-test");
+const behaviorSelfTest = process.argv.includes("--behavior-self-test");
 const MAX_HEALTH_RESPONSE_BYTES = 256 * 1024;
 const MAX_PROD_HEALTH_ERROR_CHARS = 500;
 const CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
@@ -38,6 +39,8 @@ function isNonLocalHttpsOrigin(value) {
     const url = new URL(String(value ?? "").trim());
     const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
     return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
       url.pathname === "/" &&
       url.search === "" &&
       url.hash === "" &&
@@ -104,8 +107,8 @@ function parseOptionalPositiveIntegerEnv(name) {
   return parseOptionalPositiveIntegerValue(name, process.env[name]);
 }
 
-function parseHealthDiagnosticsSecretEnv(name) {
-  const secret = process.env[name]?.trim();
+function parseHealthDiagnosticsSecretValue(name, rawValue) {
+  const secret = rawValue?.trim();
   if (!secret) return { value: "", issue: null };
   if (
     secret.length < MIN_HEALTH_DIAGNOSTICS_SECRET_LENGTH ||
@@ -115,6 +118,10 @@ function parseHealthDiagnosticsSecretEnv(name) {
     return { value: "", issue: `${name} must be 32..256 non-control characters` };
   }
   return { value: secret, issue: null };
+}
+
+function parseHealthDiagnosticsSecretEnv(name) {
+  return parseHealthDiagnosticsSecretValue(name, process.env[name]);
 }
 
 const EXPLICIT_MAX_LAG_BLOCKS_ENV = parseOptionalNonNegativeIntegerEnv("PROD_HEALTH_MAX_LAG_BLOCKS");
@@ -255,7 +262,8 @@ function summarizeDataSync(payload) {
   const maxIndexerStaleMs = isFiniteNumber(EXPLICIT_MAX_INDEXER_STALE_MS)
     ? EXPLICIT_MAX_INDEXER_STALE_MS
     : parsePayloadNonNegativeNumber(payload?.env?.indexerHeartbeatStaleMs);
-  const missingCount = parsePayloadNonNegativeNumber(payload?.epochs?.missingCount) ?? 0;
+  const parsedMissingCount = parsePayloadNonNegativeNumber(payload?.epochs?.missingCount);
+  const missingCount = parsedMissingCount ?? 0;
   const catchUpPhase = String(payload?.catchUp?.phase ?? "");
   const reconcileIsStale = Boolean(payload?.indexer?.reconcile?.stale);
   const problems = [];
@@ -277,6 +285,10 @@ function summarizeDataSync(payload) {
     problems.push("data-sync finality-target lag is missing");
   }
 
+  if (!isFiniteNumber(maxLagBlocks)) {
+    problems.push("data-sync lag warning threshold is missing");
+  }
+
   if (isFiniteNumber(effectiveLagBlocks) && isFiniteNumber(maxLagBlocks) && effectiveLagBlocks > maxLagBlocks) {
     problems.push(`indexer ${effectiveLagLabel} is ${effectiveLagBlocks} blocks, above limit ${maxLagBlocks}`);
   }
@@ -291,8 +303,20 @@ function summarizeDataSync(payload) {
     );
   }
 
+  if (!isFiniteNumber(runCompletedAgeMs)) {
+    problems.push("indexer completed-run age is missing");
+  }
+
+  if (!isFiniteNumber(maxIndexerStaleMs)) {
+    problems.push("indexer stale threshold is missing");
+  }
+
   if (payload?.indexer?.run?.stale) {
     problems.push("indexer run status is marked stale");
+  }
+
+  if (!isFiniteNumber(parsedMissingCount)) {
+    problems.push("indexed epoch missing-count is missing");
   }
 
   if (missingCount > 0 && (catchUpPhase === "catching_up" || reconcileIsStale)) {
@@ -306,11 +330,97 @@ function summarizeDataSync(payload) {
   return { problems, finalityLagBlocks, effectiveLagBlocks, lagBlocks, runCompletedAgeMs };
 }
 
+function summarizeRuntime(payload, {
+  allowLocal = ALLOW_LOCAL,
+  configuredChainId = CONFIGURED_CHAIN_ID,
+  diagnosticsSecret = DIAGNOSTICS_SECRET,
+  expectEpochBoundBets = EXPECT_EPOCH_BOUND_BETS,
+} = {}) {
+  const problems = [];
+  if (payload?.status !== "ok") problems.push(`runtime status is ${String(payload?.status)}`);
+  if (payload?.redacted && diagnosticsSecret) {
+    problems.push("runtime payload is still redacted; diagnostics secret was not accepted");
+  }
+  for (const field of ["uptimeSeconds", "rssBytes", "heapUsedBytes", "heapTotalBytes", "externalBytes"]) {
+    if (parsePayloadNonNegativeNumber(payload?.process?.[field]) === null) {
+      problems.push(`runtime process.${field} is missing`);
+    }
+  }
+  if (!payload?.publicConfig || typeof payload.publicConfig !== "object") {
+    problems.push("runtime publicConfig diagnostics are missing");
+    return problems;
+  }
+
+  const publicConfig = payload.publicConfig;
+  if (!Number.isSafeInteger(publicConfig.chainId) || publicConfig.chainId <= 0) {
+    problems.push("runtime publicConfig.chainId is missing");
+  } else if (configuredChainId !== null && publicConfig.chainId !== configuredChainId) {
+    problems.push("runtime publicConfig.chainId must match configured Linea chain id");
+  }
+  for (const field of [
+    "privyAppIdConfigured",
+    "privyFallbackActive",
+    "readOnlyMode",
+    "contractRequiresEpochBoundBets",
+    "productionLikeMonitoring",
+    "backupMonitorConfigured",
+    "backupMonitorMaxAgeConfigured",
+    "emailAlertConfigured",
+    "multiReplicaWeb",
+    "externalRateLimitConfigured",
+    "trustedProxyConfigured",
+    "weakRateLimitIdentityAllowed",
+  ]) {
+    if (typeof publicConfig[field] !== "boolean") {
+      problems.push(`runtime publicConfig.${field} is missing`);
+    }
+  }
+  if (expectEpochBoundBets && publicConfig.contractRequiresEpochBoundBets !== true) {
+    problems.push("runtime build does not require protected V10 bets");
+  }
+  if (publicConfig.productionLikeMonitoring && publicConfig.backupMonitorConfigured !== true) {
+    problems.push("production-like runtime is missing backup monitoring directory configuration");
+  }
+  if (publicConfig.productionLikeMonitoring && publicConfig.backupMonitorMaxAgeConfigured !== true) {
+    problems.push("production-like runtime is missing backup freshness window configuration");
+  }
+  if (publicConfig.productionLikeMonitoring && publicConfig.emailAlertConfigured !== true) {
+    problems.push("production-like runtime is missing Resend email alert configuration");
+  }
+  if (publicConfig.multiReplicaWeb && publicConfig.externalRateLimitConfigured !== true) {
+    problems.push("multi-replica runtime is missing external shared rate-limit configuration");
+  }
+  if (!allowLocal && publicConfig.productionLikeMonitoring && publicConfig.trustedProxyConfigured !== true) {
+    problems.push("production-like runtime is missing trusted proxy identity configuration");
+  }
+  if (!allowLocal && publicConfig.productionLikeMonitoring && publicConfig.weakRateLimitIdentityAllowed) {
+    problems.push("production-like runtime allows weak rate-limit identity");
+  }
+  if (publicConfig.chainId === 59144) {
+    if (publicConfig.privyAppIdConfigured !== true) {
+      problems.push("mainnet runtime is missing NEXT_PUBLIC_PRIVY_APP_ID");
+    }
+    if (publicConfig.privyFallbackActive) {
+      problems.push("mainnet runtime is using the development Privy fallback");
+    }
+  }
+  return problems;
+}
+
 function assertSelfTest(condition, message) {
   if (!condition) throw new Error(message);
 }
 
 function runSelfTest() {
+  runParserSelfTest();
+  if (summaryOnly) {
+    console.log(JSON.stringify({ status: "pass", payloadIntegerParser: true }));
+  } else {
+    console.log("[prod-health:self-test] OK payloadIntegerParser=true");
+  }
+}
+
+function runParserSelfTest() {
   for (const value of ["1", "59141", "59144"]) {
     assertSelfTest(parseOptionalPositiveIntegerValue("SELF_TEST_CHAIN_ID", value).value !== null, `expected valid chain id ${value}`);
   }
@@ -336,10 +446,161 @@ function runSelfTest() {
     malformedSummary.problems.includes("data-sync finality-target lag is missing"),
     "malformed finality lag payload must fail closed before launch health acceptance",
   );
+}
+
+async function runBehaviorSelfTest() {
+  runParserSelfTest();
+  const allowedOrigins = ["https://playlore.xyz", "https://health.playlore.xyz"];
+  const rejectedOrigins = [
+    "http://playlore.xyz",
+    "https://localhost",
+    "https://singlelabel",
+    "https://192.168.1.1",
+    "https://198.51.100.1",
+    "https://health.example",
+    "https://user:pass@playlore.xyz",
+    "https://playlore.xyz/path",
+  ];
+  for (const origin of allowedOrigins) {
+    assertSelfTest(isNonLocalHttpsOrigin(origin), `expected public production origin ${origin}`);
+  }
+  for (const origin of rejectedOrigins) {
+    assertSelfTest(!isNonLocalHttpsOrigin(origin), `expected rejected production origin ${origin}`);
+  }
+  for (const secret of ["s".repeat(32), "s".repeat(256)]) {
+    assertSelfTest(parseHealthDiagnosticsSecretValue("SELF_TEST_SECRET", secret).value === secret, "expected valid diagnostics secret");
+  }
+  for (const secret of ["short", "s".repeat(257), `s${String.fromCharCode(10)}t`.repeat(16)]) {
+    assertSelfTest(parseHealthDiagnosticsSecretValue("SELF_TEST_SECRET", secret).issue !== null, "expected rejected diagnostics secret");
+  }
+  assertSelfTest(parseContentLengthHeader("0") === 0, "zero Content-Length must be accepted");
+  assertSelfTest(parseContentLengthHeader("42") === 42, "canonical Content-Length must be accepted");
+  for (const length of ["01", "1e3", "9007199254740992"]) {
+    let rejected = false;
+    try { parseContentLengthHeader(length); } catch { rejected = true; }
+    assertSelfTest(rejected, `expected rejected Content-Length ${length}`);
+  }
+  assertSelfTest(
+    await readBoundedResponseText(new Response("healthy", { headers: { "content-length": "7" } })) === "healthy",
+    "bounded UTF-8 response must be read completely",
+  );
+  for (const response of [
+    new Response("{}", { headers: { "content-length": String(MAX_HEALTH_RESPONSE_BYTES + 1) } }),
+    new Response(new Uint8Array([0xff])),
+  ]) {
+    let rejected = false;
+    try { await readBoundedResponseText(response); } catch { rejected = true; }
+    assertSelfTest(rejected, "oversized or invalid UTF-8 response must fail closed");
+  }
+
+  const healthyRuntime = {
+    status: "ok",
+    redacted: false,
+    process: { uptimeSeconds: 1, rssBytes: 2, heapUsedBytes: 3, heapTotalBytes: 4, externalBytes: 5 },
+    publicConfig: {
+      chainId: 59144,
+      privyAppIdConfigured: true,
+      privyFallbackActive: false,
+      readOnlyMode: false,
+      contractRequiresEpochBoundBets: true,
+      productionLikeMonitoring: true,
+      backupMonitorConfigured: true,
+      backupMonitorMaxAgeConfigured: true,
+      emailAlertConfigured: true,
+      multiReplicaWeb: true,
+      externalRateLimitConfigured: true,
+      trustedProxyConfigured: true,
+      weakRateLimitIdentityAllowed: false,
+    },
+  };
+  assertSelfTest(
+    summarizeRuntime(healthyRuntime, { configuredChainId: 59144, diagnosticsSecret: "s".repeat(32), expectEpochBoundBets: true }).length === 0,
+    "canonical healthy runtime evidence must be accepted",
+  );
+  const runtimeMutants = [
+    (payload) => { payload.status = "degraded"; },
+    (payload) => { payload.process.rssBytes = "1.0"; },
+    (payload) => { payload.publicConfig.chainId = 59141; },
+    (payload) => { payload.publicConfig.contractRequiresEpochBoundBets = false; },
+    (payload) => { payload.publicConfig.backupMonitorConfigured = false; },
+    (payload) => { payload.publicConfig.backupMonitorMaxAgeConfigured = false; },
+    (payload) => { payload.publicConfig.emailAlertConfigured = false; },
+    (payload) => { payload.publicConfig.externalRateLimitConfigured = false; },
+    (payload) => { payload.publicConfig.trustedProxyConfigured = false; },
+    (payload) => { payload.publicConfig.weakRateLimitIdentityAllowed = true; },
+    (payload) => { payload.publicConfig.privyAppIdConfigured = false; },
+    (payload) => { payload.publicConfig.privyFallbackActive = true; },
+  ];
+  let runtimeMutantsRejected = 0;
+  for (const mutate of runtimeMutants) {
+    const payload = structuredClone(healthyRuntime);
+    mutate(payload);
+    if (summarizeRuntime(payload, { configuredChainId: 59144, diagnosticsSecret: "s".repeat(32), expectEpochBoundBets: true }).length > 0) {
+      runtimeMutantsRejected += 1;
+    }
+  }
+  assertSelfTest(runtimeMutantsRejected === runtimeMutants.length, "runtime readiness must reject every configuration mutant");
+  const healthyPayload = {
+    status: "healthy",
+    storage: { lagBlocks: "1", lagToFinalityTargetBlocks: "1" },
+    env: { lagWarnBlocks: "10", indexerHeartbeatStaleMs: "60000" },
+    indexer: {
+      run: { runCompletedAgeMs: "1000", stale: false },
+      reconcile: { stale: false },
+    },
+    epochs: { missingCount: "0" },
+    catchUp: { phase: "steady" },
+    jackpots: { hasLatestDailyInDb: true, hasLatestWeeklyInDb: true },
+  };
+  assertSelfTest(
+    summarizeDataSync(healthyPayload).problems.length === 0,
+    "canonical healthy data-sync evidence must be accepted",
+  );
+  const mutants = [
+    (payload) => { delete payload.storage.lagToFinalityTargetBlocks; },
+    (payload) => { payload.env.lagWarnBlocks = "1e3"; },
+    (payload) => { payload.indexer.run.runCompletedAgeMs = "1000.0"; },
+    (payload) => { payload.env.indexerHeartbeatStaleMs = "60000.0"; },
+    (payload) => { payload.epochs.missingCount = "0.0"; },
+    (payload) => { payload.jackpots.hasLatestWeeklyInDb = false; },
+    (payload) => { payload.indexer.run.stale = true; },
+  ];
+  let faultMutantsRejected = 0;
+  for (const mutate of mutants) {
+    const payload = structuredClone(healthyPayload);
+    mutate(payload);
+    if (summarizeDataSync(payload).problems.length > 0) faultMutantsRejected += 1;
+  }
+  assertSelfTest(
+    faultMutantsRejected === mutants.length,
+    "production health acceptance must reject every malformed or stale evidence mutant",
+  );
+  const originalFetch = globalThis.fetch;
+  let fakeFetches = 0;
+  try {
+    globalThis.fetch = async (_url, options) => {
+      fakeFetches += 1;
+      assertSelfTest(options?.redirect === "error", "health fetch must reject redirects");
+      assertSelfTest(options?.headers?.["x-health-diagnostics-secret"] === DIAGNOSTICS_SECRET, "health fetch must attach only the validated diagnostics secret");
+      return new Response("{}", { status: 200, headers: { "content-length": "2" } });
+    };
+    await fetchJson("https://playlore.xyz", "/api/health/runtime");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assertSelfTest(fakeFetches === 1, "fake health fetch boundary must execute exactly once");
   if (summaryOnly) {
-    console.log(JSON.stringify({ status: "pass", payloadIntegerParser: true }));
+    console.log(JSON.stringify({
+      status: "pass",
+      healthyPayloadAccepted: true,
+      faultMutantsRejected,
+      runtimeMutantsRejected,
+      originCases: allowedOrigins.length + rejectedOrigins.length,
+      fakeFetches,
+      externalNetworkRequests: 0,
+    }));
   } else {
-    console.log("[prod-health:self-test] OK payloadIntegerParser=true");
+    console.log(`[prod-health:behavior-self-test] OK faultMutantsRejected=${faultMutantsRejected} runtimeMutantsRejected=${runtimeMutantsRejected} fakeFetches=${fakeFetches} externalNetworkRequests=0`);
   }
 }
 
@@ -379,95 +640,7 @@ async function main() {
 
   const runtime = await fetchJson(trustedBaseUrl, "/api/health/runtime");
   const dataSync = await fetchJson(trustedBaseUrl, "/api/health/data-sync");
-  const runtimeProblems = [];
-
-  if (runtime?.status !== "ok") {
-    runtimeProblems.push(`runtime status is ${String(runtime?.status)}`);
-  }
-
-  if (runtime?.redacted && DIAGNOSTICS_SECRET) {
-    runtimeProblems.push("runtime payload is still redacted; diagnostics secret was not accepted");
-  }
-  for (const field of ["uptimeSeconds", "rssBytes", "heapUsedBytes", "heapTotalBytes", "externalBytes"]) {
-    if (parsePayloadNonNegativeNumber(runtime?.process?.[field]) === null) {
-      runtimeProblems.push(`runtime process.${field} is missing`);
-    }
-  }
-  if (runtime?.publicConfig && typeof runtime.publicConfig === "object") {
-    const publicConfig = runtime.publicConfig;
-    if (!Number.isSafeInteger(publicConfig.chainId) || publicConfig.chainId <= 0) {
-      runtimeProblems.push("runtime publicConfig.chainId is missing");
-    } else if (CONFIGURED_CHAIN_ID !== null && publicConfig.chainId !== CONFIGURED_CHAIN_ID) {
-      runtimeProblems.push("runtime publicConfig.chainId must match configured Linea chain id");
-    }
-    if (typeof publicConfig.privyAppIdConfigured !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.privyAppIdConfigured is missing");
-    }
-    if (typeof publicConfig.privyFallbackActive !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.privyFallbackActive is missing");
-    }
-    if (typeof publicConfig.readOnlyMode !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.readOnlyMode is missing");
-    }
-    if (typeof publicConfig.contractRequiresEpochBoundBets !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.contractRequiresEpochBoundBets is missing");
-    }
-    if (typeof publicConfig.productionLikeMonitoring !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.productionLikeMonitoring is missing");
-    }
-    if (typeof publicConfig.backupMonitorConfigured !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.backupMonitorConfigured is missing");
-    }
-    if (typeof publicConfig.backupMonitorMaxAgeConfigured !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.backupMonitorMaxAgeConfigured is missing");
-    }
-    if (typeof publicConfig.emailAlertConfigured !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.emailAlertConfigured is missing");
-    }
-    if (typeof publicConfig.multiReplicaWeb !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.multiReplicaWeb is missing");
-    }
-    if (typeof publicConfig.externalRateLimitConfigured !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.externalRateLimitConfigured is missing");
-    }
-    if (typeof publicConfig.trustedProxyConfigured !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.trustedProxyConfigured is missing");
-    }
-    if (typeof publicConfig.weakRateLimitIdentityAllowed !== "boolean") {
-      runtimeProblems.push("runtime publicConfig.weakRateLimitIdentityAllowed is missing");
-    }
-    if (EXPECT_EPOCH_BOUND_BETS && publicConfig.contractRequiresEpochBoundBets !== true) {
-      runtimeProblems.push("runtime build does not require protected V10 bets");
-    }
-    if (publicConfig.productionLikeMonitoring && publicConfig.backupMonitorConfigured !== true) {
-      runtimeProblems.push("production-like runtime is missing backup monitoring directory configuration");
-    }
-    if (publicConfig.productionLikeMonitoring && publicConfig.backupMonitorMaxAgeConfigured !== true) {
-      runtimeProblems.push("production-like runtime is missing backup freshness window configuration");
-    }
-    if (publicConfig.productionLikeMonitoring && publicConfig.emailAlertConfigured !== true) {
-      runtimeProblems.push("production-like runtime is missing Resend email alert configuration");
-    }
-    if (publicConfig.multiReplicaWeb && publicConfig.externalRateLimitConfigured !== true) {
-      runtimeProblems.push("multi-replica runtime is missing external shared rate-limit configuration");
-    }
-    if (!ALLOW_LOCAL && publicConfig.productionLikeMonitoring && publicConfig.trustedProxyConfigured !== true) {
-      runtimeProblems.push("production-like runtime is missing trusted proxy identity configuration");
-    }
-    if (!ALLOW_LOCAL && publicConfig.productionLikeMonitoring && publicConfig.weakRateLimitIdentityAllowed) {
-      runtimeProblems.push("production-like runtime allows weak rate-limit identity");
-    }
-    if (publicConfig.chainId === 59144) {
-      if (publicConfig.privyAppIdConfigured !== true) {
-        runtimeProblems.push("mainnet runtime is missing NEXT_PUBLIC_PRIVY_APP_ID");
-      }
-      if (publicConfig.privyFallbackActive) {
-        runtimeProblems.push("mainnet runtime is using the development Privy fallback");
-      }
-    }
-  } else {
-    runtimeProblems.push("runtime publicConfig diagnostics are missing");
-  }
+  const runtimeProblems = summarizeRuntime(runtime);
 
   const dataSyncSummary = summarizeDataSync(dataSync);
   const problems = [...runtimeProblems, ...dataSyncSummary.problems];
@@ -520,7 +693,12 @@ async function main() {
   console.log([`base=${BASE_URL}`, ...summaryParts].join(" "));
 }
 
-if (selfTest) {
+if (behaviorSelfTest) {
+  runBehaviorSelfTest().catch((error) => {
+    emitFailure([describeProdHealthError(error)]);
+    process.exitCode = 1;
+  });
+} else if (selfTest) {
   try {
     runSelfTest();
   } catch (error) {

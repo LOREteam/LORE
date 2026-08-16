@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, renameSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, linkSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 
@@ -19,9 +19,27 @@ function regularFileStat(filePath) {
   }
 }
 
-export async function createSqliteBackup(sourceInput, outputInput) {
+export function inspectSqliteSource(sourceInput) {
+  const sourcePath = resolve(sourceInput);
+  if (!regularFileStat(sourcePath)) {
+    throw new Error("Backup source must be an existing regular file");
+  }
+  const source = new DatabaseSync(sourcePath, { readOnly: true });
+  try {
+    const integrity = String(source.prepare("PRAGMA integrity_check").get()?.integrity_check ?? "");
+    if (integrity !== "ok") throw new Error(`Source integrity check failed: ${integrity || "unknown"}`);
+    return { sourcePath, integrity };
+  } finally {
+    source.close();
+  }
+}
+
+export async function createSqliteBackup(sourceInput, outputInput, options = {}) {
   const sourcePath = resolve(sourceInput);
   const outputPath = resolve(outputInput);
+  if (options.beforePublish !== undefined && typeof options.beforePublish !== "function") {
+    throw new Error("Backup beforePublish hook must be a function");
+  }
   if (sourcePath === outputPath) throw new Error("Backup output must differ from source DB");
   if (!regularFileStat(sourcePath)) {
     throw new Error("Backup source must be an existing regular file");
@@ -48,7 +66,15 @@ export async function createSqliteBackup(sourceInput, outputInput) {
       copied.close();
     }
     if (integrity !== "ok") throw new Error(`Backup integrity check failed: ${integrity || "unknown"}`);
-    renameSync(temporaryOutputPath, outputPath);
+    options.beforePublish?.({ outputPath, temporaryOutputPath });
+    try {
+      linkSync(temporaryOutputPath, outputPath);
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "EEXIST") {
+        throw new Error("Backup output already exists during atomic publication");
+      }
+      throw error;
+    }
     removeTemporaryBackupArtifacts(temporaryOutputPath);
   } catch (error) {
     removeTemporaryBackupArtifacts(temporaryOutputPath);
@@ -76,6 +102,7 @@ export function pruneSqliteBackups(directoryInput, retentionDays, excludePaths =
     if (!entry.isFile() || !BACKUP_FILE_PATTERN.test(entry.name)) continue;
     const candidate = resolve(directory, entry.name);
     if (dirname(candidate) !== directory || excluded.has(candidate)) continue;
+    if (existsSync(`${candidate}-wal`) || existsSync(`${candidate}-shm`)) continue;
     if (statSync(candidate).mtimeMs >= cutoff) continue;
     unlinkSync(candidate);
     removed += 1;

@@ -3,17 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { redactProofText } from "./redact-proof-output.mjs";
-
-const MAX_DB_STARTUP_ERROR_CHARS = 500;
-
-function describeStartupError(error) {
-  const text = redactProofText(error instanceof Error ? error.message : String(error))
-    .replace(/\s+/g, " ")
-    .trim();
-  if (text.length <= MAX_DB_STARTUP_ERROR_CHARS) return text;
-  return `${text.slice(0, MAX_DB_STARTUP_ERROR_CHARS - 15)}...<truncated>`;
-}
+import { formatRuntimeSmokeError } from "./runtime-smoke-error-policy.mjs";
 
 export function verifySqliteStartup(sourceInput) {
   if (sourceInput === ":memory:") return { status: "pass", state: "memory" };
@@ -37,13 +27,23 @@ export function verifySqliteStartup(sourceInput) {
   return { status: "pass", state: "existing", bytes: stat.size };
 }
 
+export function runSqliteStartupCli({
+  sourceInput = process.env.LORE_DB_PATH || "data/lore.sqlite",
+  verify = verifySqliteStartup,
+  log = console.log,
+  errorLog = console.error,
+} = {}) {
+  try {
+    const result = verify(sourceInput);
+    log(JSON.stringify({ status: result.status, state: result.state, bytes: result.bytes ?? 0 }));
+    return 0;
+  } catch (error) {
+    errorLog(`[db-startup] FAIL ${formatRuntimeSmokeError(error)}`);
+    return 1;
+  }
+}
+
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMain) {
-  try {
-    const result = verifySqliteStartup(process.env.LORE_DB_PATH || "data/lore.sqlite");
-    console.log(JSON.stringify({ status: result.status, state: result.state, bytes: result.bytes ?? 0 }));
-  } catch (error) {
-    console.error(`[db-startup] FAIL ${describeStartupError(error)}`);
-    process.exitCode = 1;
-  }
+  process.exitCode = runSqliteStartupCli();
 }

@@ -46,6 +46,7 @@ module.exports = {
       autorestart: true,
       max_restarts: 50,
       restart_delay: 3000,
+      stop_exit_codes: [78],
       out_file: `${PM2_LOG_DIR}/lore-indexer-out.log`,
       error_file: `${PM2_LOG_DIR}/lore-indexer-error.log`,
       merge_logs: true,

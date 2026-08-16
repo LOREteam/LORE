@@ -4,13 +4,13 @@ import {
   getConfiguredLineaNetwork,
   getContractRequiresEpochBoundBets,
 } from "./publicConfig";
-import { hasMainnetIndexerFinality } from "../app/lib/indexerFinality";
 
 type ProductionRuntimeScope = "web" | "bot" | "indexer" | "server";
 
 const validatedScopes = new Set<string>();
 const DEFAULT_DB_PATH = "data/lore.sqlite";
 const REPO_ROOT = process.cwd();
+const MAX_RUNTIME_FINALITY_BLOCKS = 1_000_000n;
 const KNOWN_DEVELOPMENT_PRIVY_APP_IDS = new Set(["cmlqkgtmg00og0cjueu4mxmn9"]);
 const BOOTSTRAP_LOWER_PURPOSE_SECRET_NAMES = [
   "HEALTH_DIAGNOSTICS_SECRET",
@@ -22,6 +22,45 @@ const BOOTSTRAP_LOWER_PURPOSE_SECRET_NAMES = [
 
 function getEnv(name: string) {
   return process.env[name]?.trim() ?? "";
+}
+
+export function parseRequiredRuntimeFinalityBlocks(value?: string | null) {
+  const raw = value ?? "";
+  if (!/^[1-9]\d{0,6}$/.test(raw)) {
+    throw new Error(
+      "INDEXER_FINALITY_BLOCKS must be a canonical positive decimal integer.",
+    );
+  }
+  const parsed = BigInt(raw);
+  if (parsed > MAX_RUNTIME_FINALITY_BLOCKS) {
+    throw new Error(
+      `INDEXER_FINALITY_BLOCKS must not exceed ${MAX_RUNTIME_FINALITY_BLOCKS.toString()}.`,
+    );
+  }
+  return parsed;
+}
+
+function validateRequiredRuntimeFinalityBlocks(
+  scope: ProductionRuntimeScope,
+  label: string,
+  issues: string[],
+) {
+  const bootstrapKeeperEnabled = Boolean(getEnv("BOOTSTRAP_KEEPER_PRIVATE_KEY"));
+  const required =
+    scope === "indexer" ||
+    scope === "bot" ||
+    (scope === "web" && bootstrapKeeperEnabled);
+  if (!required) return;
+  const runtimeLabel = label === "pre-mainnet testnet" && scope === "indexer"
+    ? "pre-mainnet testnet indexer runtime"
+    : `${label} ${scope} runtime`;
+  try {
+    parseRequiredRuntimeFinalityBlocks(process.env.INDEXER_FINALITY_BLOCKS);
+  } catch {
+    issues.push(
+      `INDEXER_FINALITY_BLOCKS must be set to a positive block count for ${runtimeLabel} and must be a canonical decimal integer from 1 through ${MAX_RUNTIME_FINALITY_BLOCKS.toString()}.`,
+    );
+  }
 }
 
 type RuntimePurposeSecrets = {
@@ -211,6 +250,9 @@ function isPositiveSafeInteger(value: string) {
   return Number.isSafeInteger(parsed) && parsed > 0;
 }
 
+const MAX_EMAIL_RECIPIENTS = 10;
+const MAX_EMAIL_ENTRY_LENGTH = 254;
+
 function extractEmailAddress(value: string) {
   const trimmed = value.trim();
   const angleMatch = trimmed.match(/<([^<>\s@]+@[^<>\s@]+)>$/);
@@ -223,10 +265,19 @@ function isEmailAddress(value: string) {
 }
 
 function parseEmailRecipients(value: string) {
-  return value
+  const recipients = value
     .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+    .map((entry) => entry.trim());
+  if (
+    recipients.length === 0 ||
+    recipients.length > MAX_EMAIL_RECIPIENTS ||
+    recipients.some((recipient) => (
+      recipient.length === 0 ||
+      recipient.length > MAX_EMAIL_ENTRY_LENGTH ||
+      !isEmailAddress(recipient)
+    ))
+  ) return null;
+  return recipients;
 }
 
 function isLikelyResendApiKey(value: string) {
@@ -394,8 +445,9 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
   }
   const resendApiKey = getEnv("RESEND_API_KEY");
   const resendFrom = getEnv("RUNTIME_MONITOR_EMAIL_FROM");
-  const resendTo = parseEmailRecipients(getEnv("RUNTIME_MONITOR_EMAIL_TO"));
-  const resendPartiallyConfigured = Boolean(resendApiKey || resendFrom || resendTo.length > 0);
+  const resendToRaw = getEnv("RUNTIME_MONITOR_EMAIL_TO");
+  const resendTo = parseEmailRecipients(resendToRaw);
+  const resendPartiallyConfigured = Boolean(resendApiKey || resendFrom || resendToRaw);
   const resendRequired = scope === "server";
   if (resendPartiallyConfigured || resendRequired) {
     if (!resendApiKey) {
@@ -410,7 +462,7 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     if (!isEmailAddress(resendFrom)) {
       issues.push("RUNTIME_MONITOR_EMAIL_FROM must be a valid Resend-verified email sender on mainnet.");
     }
-    if (resendTo.length === 0 || resendTo.some((recipient) => !isEmailAddress(recipient))) {
+    if (resendTo === null) {
       issues.push("RUNTIME_MONITOR_EMAIL_TO must contain valid email recipient addresses on mainnet.");
     }
   }
@@ -477,9 +529,7 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     }
   }
 
-  if (scope === "indexer" && !hasMainnetIndexerFinality(getEnv("INDEXER_FINALITY_BLOCKS"))) {
-    issues.push("INDEXER_FINALITY_BLOCKS must be set to a positive block count for mainnet indexer runtime.");
-  }
+  validateRequiredRuntimeFinalityBlocks(scope, "mainnet", issues);
 
   if (scope === "web" || scope === "indexer" || scope === "server") {
     const dbPath = getEnv("LORE_DB_PATH");
@@ -641,7 +691,7 @@ function validatePremainnetTestnetProductionEnv(scope: ProductionRuntimeScope) {
   if (!isEmailAddress(resendFrom)) {
     issues.push("RUNTIME_MONITOR_EMAIL_FROM must be a valid Resend-verified email sender on pre-mainnet testnet.");
   }
-  if (resendTo.length === 0 || resendTo.some((recipient) => !isEmailAddress(recipient))) {
+  if (resendTo === null) {
     issues.push("RUNTIME_MONITOR_EMAIL_TO must contain valid email recipient addresses on pre-mainnet testnet.");
   }
 
@@ -709,9 +759,7 @@ function validatePremainnetTestnetProductionEnv(scope: ProductionRuntimeScope) {
     }
   }
 
-  if (scope === "indexer" && !hasMainnetIndexerFinality(getEnv("INDEXER_FINALITY_BLOCKS"))) {
-    issues.push("INDEXER_FINALITY_BLOCKS must be set to a positive block count for pre-mainnet testnet indexer runtime.");
-  }
+  validateRequiredRuntimeFinalityBlocks(scope, label, issues);
 
   if (scope === "web" || scope === "indexer" || scope === "server") {
     const dbPath = getEnv("LORE_DB_PATH");

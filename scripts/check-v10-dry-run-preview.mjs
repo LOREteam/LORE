@@ -55,7 +55,9 @@ function section(source, title) {
 
 function bullet(source, label) {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return source.match(new RegExp(`^- ${escaped}:\\s*(.+?)\\s*$`, "m"))?.[1]?.trim() ?? "";
+  const matches = [...source.matchAll(new RegExp(`^- ${escaped}:\\s*(.+?)\\s*$`, "gm"))];
+  if (matches.length > 1) throw new Error(`${label} must appear exactly once`);
+  return matches[0]?.[1]?.trim() ?? "";
 }
 
 function safeCanaryLogPath(value) {
@@ -120,6 +122,7 @@ function validatePreview() {
   requireBullet(overall, "status", "pass");
   requireBullet(overall, "transactionSent", "false");
   requireBullet(overall, "signingMaterialLoaded", "false");
+  requireBullet(overall, "operationalBoundaryVerified", "true");
   requireBullet(overall, "walletClientCreated", "false");
   requireBullet(overall, "contractWriteSubmitted", "false");
   requireBullet(overall, "dryRunProofBlocksG10G11", "true");
@@ -150,6 +153,10 @@ function validatePreview() {
   requireBullet(matrix, "network", "sepolia");
   requireBullet(matrix, "chainId", "59141");
   requireBullet(matrix, "execution", "dry-run");
+  requireBullet(matrix, "transactionSent", "false");
+  requireBullet(matrix, "signingMaterialLoaded", "false");
+  requireBullet(matrix, "walletClientCreated", "false");
+  requireBullet(matrix, "contractWriteSubmitted", "false");
   const plannedBetTx = parseDecimalText(bullet(matrix, "plannedBetTx"), "plannedBetTx");
   const logPath = safeCanaryLogPath(bullet(matrix, "log"));
   if (!logPath) throw new Error("V10 dry-run Preview must reference only a safe relative live-test-run log");

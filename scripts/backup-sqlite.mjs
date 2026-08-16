@@ -105,6 +105,12 @@ if (strict && hasFutureModifiedTime(sourceStat)) {
   fail("Backup source modified time must not be in the future");
 }
 if (summaryOnly) {
+  try {
+    const { inspectSqliteSource } = await import("./sqlite-backup-lib.mjs");
+    inspectSqliteSource(source);
+  } catch (error) {
+    failRuntime(error);
+  }
   console.log(JSON.stringify({
     status: "ready",
     groups: backupSummaryGroups,
