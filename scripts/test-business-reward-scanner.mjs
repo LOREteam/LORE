@@ -195,6 +195,11 @@ export function runRewardScannerTests() {
   );
   assert.match(rewardScannerSource, /lastRewardClaimTxHash/, "batch reward claim notifications must keep the latest tx hash for explorer links");
   assert.match(
+    rewardScannerSource,
+    /const claimReward[\s\S]*let submittedHash: `0x\$\{string\}` \| null = null;[\s\S]*const hash = await silentSend\(\{ to: CONTRACT_ADDRESS, data, gas \}\);[\s\S]*submittedHash = hash;[\s\S]*submittedHash && err instanceof ClaimTransactionIntentError[\s\S]*Claim transaction submitted and is still pending\. Rewards will refresh after confirmation\.[\s\S]*submittedHash/,
+    "single reward claims must preserve the submitted hash as pending when post-send intent verification cannot be confirmed",
+  );
+  assert.match(
     rewardScannerComponentSource,
     /aria-label=\{claimAllLabel\}[\s\S]*title=\{claimAllLabel\}[\s\S]*aria-label=\{scanLabel\}[\s\S]*title=\{scanLabel\}[\s\S]*aria-label=\{claimOneLabel\}[\s\S]*title=\{claimOneLabel\}/,
     "reward scan and claim controls must expose accessible labels and disabled-state titles",

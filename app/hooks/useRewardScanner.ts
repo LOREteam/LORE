@@ -726,11 +726,13 @@ export function useRewardScanner(
       if (mountedRef.current) {
         setIsClaiming(true);
       }
+      let submittedHash: `0x${string}` | null = null;
       try {
         notify?.("Preparing reward claim.", "info");
         const { data, gas } = await prepareClaimTx(epochId);
         if (activeClaimAddressRef.current !== claimActor) return;
         const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+        submittedHash = hash;
         const receiptState = await waitReceipt(hash, {
           actor: claimActor,
           chainId: APP_CHAIN_ID,
@@ -761,7 +763,13 @@ export function useRewardScanner(
         notify?.(formatClaimTxMessage("Reward claimed successfully.", hash), "success");
       } catch (err) {
         if (activeClaimAddressRef.current !== claimActor) return;
-        if (isAmbiguousPendingTxError(err)) {
+        if (submittedHash && err instanceof ClaimTransactionIntentError) {
+          notify?.(
+            formatClaimTxMessage("Claim transaction submitted and is still pending. Rewards will refresh after confirmation.", submittedHash),
+            "info",
+          );
+          void scanRewards();
+        } else if (isAmbiguousPendingTxError(err)) {
           notify?.("Reward claim may already be pending. Check wallet activity and refresh rewards before retrying.", "warning");
           void scanRewards();
         } else if (!isUserRejection(err)) {
