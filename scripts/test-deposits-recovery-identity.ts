@@ -11,6 +11,89 @@ const USER = "0x0000000000000000000000000000000000000001";
 const TX_HASH = `0x${"ab".repeat(32)}`;
 const depositsRouteSource = readFileSync("app/api/deposits/route.ts", "utf8");
 
+type RecoveryPlanner = (input: {
+  enabled: boolean;
+  headBlock: bigint;
+  finalityBlocks: bigint;
+  contractDeployBlock: bigint;
+  latestIndexedBlock: bigint | null;
+  recentWindowBlocks: bigint;
+}) => { fromBlock: bigint; toBlock: bigint } | null;
+
+function recoveryInput(overrides: Partial<Parameters<RecoveryPlanner>[0]> = {}) {
+  return {
+    enabled: true,
+    headBlock: 130n,
+    finalityBlocks: 10n,
+    contractDeployBlock: 1n,
+    latestIndexedBlock: 100n,
+    recentWindowBlocks: 100_000n,
+    ...overrides,
+  };
+}
+
+function assertRecoveryPlanningPolicy(candidate: RecoveryPlanner) {
+  assert.equal(
+    candidate(recoveryInput({ enabled: false })),
+    null,
+    "disabled recovery must not create an RPC range",
+  );
+  assert.equal(
+    candidate(recoveryInput({ finalityBlocks: 0n })),
+    null,
+    "zero finality must fail closed",
+  );
+  assert.equal(
+    candidate(recoveryInput({ headBlock: 10n, finalityBlocks: 10n })),
+    null,
+    "a head without a finalized target must not create a range",
+  );
+  assert.deepEqual(
+    candidate(recoveryInput()),
+    { fromBlock: 101n, toBlock: 120n },
+    "recovery must end at the finalized target and start after the indexed cursor",
+  );
+  assert.deepEqual(
+    candidate(recoveryInput({
+      headBlock: 1_010n,
+      latestIndexedBlock: null,
+      recentWindowBlocks: 100n,
+    })),
+    { fromBlock: 901n, toBlock: 1_000n },
+    "the inclusive recent window must contain exactly the configured number of blocks",
+  );
+  assert.deepEqual(
+    candidate(recoveryInput({
+      headBlock: 130n,
+      contractDeployBlock: 50n,
+      latestIndexedBlock: -1n,
+      recentWindowBlocks: 100n,
+    })),
+    { fromBlock: 50n, toBlock: 120n },
+    "negative indexed metadata must fall back to the bounded deploy floor",
+  );
+  assert.equal(
+    candidate(recoveryInput({ latestIndexedBlock: 120n })),
+    null,
+    "a cursor at the finalized target must not rescan",
+  );
+  assert.equal(
+    candidate(recoveryInput({ latestIndexedBlock: 121n })),
+    null,
+    "future indexed metadata must not create a reversed recovery range",
+  );
+  assert.equal(
+    candidate(recoveryInput({ contractDeployBlock: -1n })),
+    null,
+    "an invalid deploy floor must fail closed",
+  );
+  assert.equal(
+    candidate(recoveryInput({ recentWindowBlocks: 0n })),
+    null,
+    "an invalid recovery window must fail closed",
+  );
+}
+
 async function main() {
   const { buildRecoveredDepositIdentity } = await import(
     "../app/api/deposits/recoveryIdentity"
@@ -21,6 +104,10 @@ async function main() {
   const { parseStoredBlockNumberOrZero } = await import(
     "../app/api/_lib/storedNumberParsing"
   );
+  const {
+    isFinalizedDepositsRecoveryEnabled,
+    planFinalizedDepositsRecoveryRange,
+  } = await import("../app/api/deposits/recoveryPolicy");
   const { getCurrentStorageScope, getUserBetsMap, upsertBets } = await import("../server/storage");
   const { db } = await import("../server/db");
   const scope = getCurrentStorageScope();
@@ -61,6 +148,42 @@ async function main() {
       depositsRouteSource,
       /patchStorage|gamedata\/bets/,
       "public recovery must not persist even canonically shaped single-RPC rows",
+    );
+
+    assert.equal(isFinalizedDepositsRecoveryEnabled(false, 10n), false);
+    assert.equal(isFinalizedDepositsRecoveryEnabled(true, 0n), false);
+    assert.equal(isFinalizedDepositsRecoveryEnabled(true, -1n), false);
+    assert.equal(isFinalizedDepositsRecoveryEnabled(true, 10n), true);
+    assertRecoveryPlanningPolicy(planFinalizedDepositsRecoveryRange);
+
+    const rawHeadMutant: RecoveryPlanner = (input) => {
+      const planned = planFinalizedDepositsRecoveryRange(input);
+      return planned ? { ...planned, toBlock: input.headBlock } : null;
+    };
+    assert.throws(
+      () => assertRecoveryPlanningPolicy(rawHeadMutant),
+      /finalized target/,
+      "a raw-head recovery mutant must be killed",
+    );
+
+    const offByOneWindowMutant: RecoveryPlanner = (input) => {
+      const planned = planFinalizedDepositsRecoveryRange(input);
+      if (!planned || input.latestIndexedBlock !== null) return planned;
+      const fromBlock = planned.toBlock - input.recentWindowBlocks;
+      return { ...planned, fromBlock };
+    };
+    assert.throws(
+      () => assertRecoveryPlanningPolicy(offByOneWindowMutant),
+      /inclusive recent window/,
+      "an off-by-one recent-window mutant must be killed",
+    );
+
+    const missingEnableGateMutant: RecoveryPlanner = (input) =>
+      planFinalizedDepositsRecoveryRange({ ...input, enabled: true });
+    assert.throws(
+      () => assertRecoveryPlanningPolicy(missingEnableGateMutant),
+      /disabled recovery/,
+      "a missing feature/finality gate mutant must be killed",
     );
 
     assert.equal(
@@ -174,6 +297,8 @@ async function main() {
       missingLogIndexRejected: true,
       apiMergeIdentityPreserved: true,
       legacyFallbackPreserved: true,
+      finalizedRecoveryPlanning: true,
+      recoveryPlanMutantsKilled: 3,
     }));
   } finally {
     (db as unknown as { close(): void }).close();

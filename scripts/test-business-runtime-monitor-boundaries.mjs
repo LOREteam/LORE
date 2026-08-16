@@ -1,34 +1,398 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import * as runtimeMonitor from "./monitor-runtime-health.mjs";
+import * as runtimeMonitorLib from "./runtime-monitor-lib.mjs";
 import { runRuntimeMonitorAlertTests } from "./test-business-runtime-monitor-alerts.mjs";
 
+function createBodyResponse(body, { contentLength = null, ok = true, status = 200 } = {}) {
+  const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body;
+  let delivered = false;
+  let cancelled = false;
+  return {
+    ok,
+    status,
+    headers: {
+      get(name) {
+        return name.toLowerCase() === "content-length" ? contentLength : null;
+      },
+    },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (delivered) return { done: true, value: undefined };
+            delivered = true;
+            return { done: false, value: bytes };
+          },
+          async cancel() {
+            cancelled = true;
+          },
+        };
+      },
+    },
+    wasCancelled() {
+      return cancelled;
+    },
+  };
+}
+
 export async function runRuntimeMonitorBoundaryTests() {
-  const runtimeMonitorSource = readFileSync("scripts/monitor-runtime-health.mjs", "utf8");
-  const runtimeMonitorLibSource = readFileSync("scripts/runtime-monitor-lib.mjs", "utf8");
-  assert.match(runtimeMonitorSource, /telegramAlertSender = createTelegramAlertSender\(\)[\s\S]*resendAlertSender = createResendAlertSender\(\)[\s\S]*alertSenders = \[telegramAlertSender, resendAlertSender\][\s\S]*alertsConfigured/, "runtime monitor must treat configured Resend email as a first-class alert channel");
-  assert.match(runtimeMonitorSource, /Promise\.allSettled\([\s\S]*alertSenders\.map\(\(sender\) => sender\.send\(message, key, cooldownMs\)\)[\s\S]*delivery\.status === "fulfilled" && delivery\.value/, "runtime monitor alert delivery must let one failing channel coexist with successful fallback channels");
-  assert.match(runtimeMonitorSource, /function normalizeMonitorNetwork[\s\S]*mainnet[\s\S]*prod[\s\S]*production[\s\S]*resendConfigured = resendAlertSender\.configured[\s\S]*configuredNetwork = normalizeMonitorNetwork[\s\S]*strictProductionLikeMonitor = process\.env\.NODE_ENV === "production"[\s\S]*Resend email alert configuration is required for production-like runtime monitoring/, "production-like runtime monitor startup must require Resend email alerting, not just any alert channel");
-  assert.match(runtimeMonitorLibSource, /function readBoundedTextTail\(filePath[\s\S]*const stats = statSync\(filePath\)[\s\S]*!stats\.isFile\(\)[\s\S]*Text artifact must be a file[\s\S]*const size = stats\.size[\s\S]*function readBoundedJsonFile\(filePath[\s\S]*const stats = statSync\(filePath\)[\s\S]*!stats\.isFile\(\)[\s\S]*JSON artifact must be a file[\s\S]*stats\.size > boundedMaxBytes[\s\S]*function loadRuntimeIssueState\(filePath\)[\s\S]*const stats = statSync\(filePath\)[\s\S]*!stats\.isFile\(\) \|\| stats\.size > MAX_STATE_BYTES/, "runtime monitor artifact readers must reject directory/non-file inputs before reading JSON, text tails, or state");
-  assert.match(runtimeMonitorLibSource, /function normalizeAlertTimestampMs\(value\)[\s\S]*Number\.isSafeInteger\(value\) && value >= 0[\s\S]*function normalizeAlertCooldownMs\(value\)[\s\S]*Number\.isSafeInteger\(value\) && value >= 0 \? value : 300_000/, "runtime monitor alert timestamp and cooldown helpers must fail closed on malformed values");
-  assert.equal((runtimeMonitorLibSource.match(/normalizeAlertTimestampMs\(now\(\)\)/g) ?? []).length, 2, "both runtime monitor alert channels must normalize the monitor clock before sending");
-  assert.equal((runtimeMonitorLibSource.match(/normalizeAlertCooldownMs\(cooldownMs\)/g) ?? []).length, 2, "both runtime monitor alert channels must normalize cooldowns before sending");
-  assert.doesNotMatch(runtimeMonitorLibSource, /function nonNegativeNumber\(value\)|Number\.isFinite\(parsed\) && parsed >= 0/, "runtime monitor snapshot and backup metadata must not use broad Number(value) fallback parsing");
-  assert.doesNotMatch(runtimeMonitorLibSource, /Date\.parse\(String\((?:audit\?\.generatedAt|event\?\.timestamp|event\?\.timestamp \?\? "")\)\)/, "runtime monitor audit and canary timestamps must not return to broad Date.parse(String(...)) evidence parsing");
+  const deliveryCalls = [];
+  const fallbackDelivered = await runtimeMonitor.deliverRuntimeAlert([
+    {
+      async send() {
+        deliveryCalls.push("rejected");
+        throw new Error("synthetic channel outage");
+      },
+    },
+    {
+      async send(message, key, cooldownMs) {
+        deliveryCalls.push({ message, key, cooldownMs });
+        return true;
+      },
+    },
+  ], "ALERT: synthetic", "runtime-synthetic", 1_000);
+  assert.equal(fallbackDelivered, true, "one rejected channel must not suppress a successful fallback channel");
+  assert.deepEqual(deliveryCalls, [
+    "rejected",
+    { message: "ALERT: synthetic", key: "runtime-synthetic", cooldownMs: 1_000 },
+  ]);
+  assert.equal(
+    await runtimeMonitor.deliverRuntimeAlert([{ send: async () => false }], "ALERT", "all-failed", 0),
+    false,
+    "the monitor must report delivery failure when no channel succeeds",
+  );
+
+  for (const alias of ["mainnet", "main", "linea", "prod", "production", " ProD "]) {
+    assert.equal(runtimeMonitor.normalizeMonitorNetwork(alias), "mainnet");
+  }
+  for (const alias of [undefined, "", "sepolia", "preview", "production-like"]) {
+    assert.equal(runtimeMonitor.normalizeMonitorNetwork(alias), "sepolia");
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), "lore-runtime-monitor-boundaries-"));
+  try {
+    const directoryPath = join(tempRoot, "artifact-directory");
+    mkdirSync(directoryPath);
+    assert.throws(() => runtimeMonitorLib.readBoundedTextTail(directoryPath), /must be a file/);
+    assert.throws(() => runtimeMonitorLib.readBoundedJsonFile(directoryPath), /must be a file/);
+    assert.deepEqual([...runtimeMonitorLib.loadRuntimeIssueState(directoryPath)], []);
+
+    const textPath = join(tempRoot, "tail.log");
+    writeFileSync(textPath, `discarded-prefix\n${"z".repeat(32)}`, "utf8");
+    assert.equal(runtimeMonitorLib.readBoundedTextTail(textPath, 8), "z".repeat(8));
+
+    const oversizedJsonPath = join(tempRoot, "oversized.json");
+    writeFileSync(oversizedJsonPath, `{"value":"${"x".repeat(1_024)}"}`, "utf8");
+    assert.throws(() => runtimeMonitorLib.readBoundedJsonFile(oversizedJsonPath, 32), /exceeds size limit/);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  assert.equal(runtimeMonitorLib.normalizeAlertTimestampMs(0), 0);
+  assert.equal(runtimeMonitorLib.normalizeAlertTimestampMs(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER);
+  for (const value of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "1000", null]) {
+    assert.equal(runtimeMonitorLib.normalizeAlertTimestampMs(value), null);
+  }
+  assert.equal(runtimeMonitorLib.normalizeAlertCooldownMs(0), 0);
+  for (const value of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "1000", null]) {
+    assert.equal(runtimeMonitorLib.normalizeAlertCooldownMs(value), 300_000);
+  }
+
+  let invalidClockFetches = 0;
+  const invalidClockSenders = [
+    runtimeMonitorLib.createTelegramAlertSender({
+      env: { ALERT_TELEGRAM_BOT_TOKEN: "synthetic", ALERT_TELEGRAM_CHAT_ID: "1" },
+      fetchImpl: async () => {
+        invalidClockFetches += 1;
+        return { ok: true };
+      },
+      now: () => Number.NaN,
+    }),
+    runtimeMonitorLib.createResendAlertSender({
+      env: {
+        RESEND_API_KEY: "re_synthetic",
+        RUNTIME_MONITOR_EMAIL_FROM: "alerts@playlore.xyz",
+        RUNTIME_MONITOR_EMAIL_TO: "ops@playlore.xyz",
+      },
+      fetchImpl: async () => {
+        invalidClockFetches += 1;
+        return { ok: true };
+      },
+      now: () => Number.NaN,
+    }),
+  ];
+  for (const sender of invalidClockSenders) {
+    assert.equal(await sender.send("ALERT", "invalid-clock", 0), false);
+  }
+  assert.equal(invalidClockFetches, 0, "both delivery channels must reject malformed clocks before fetch");
+
+  const nowMs = Date.parse("2026-08-13T10:00:00.000Z");
+  assert.equal(
+    runtimeMonitorLib.evaluateBackupFreshness({ mtimeMs: "1e3", bytes: "1" }, { nowMs })[0]?.key,
+    "sqlite-backup-invalid",
+  );
+  assert.equal(
+    runtimeMonitorLib.evaluateChainIndexerAudit({
+      generatedAt: "2026-08-13 09:59:59Z",
+      status: "pass",
+      mismatches: [],
+    }, { nowMs })[0]?.key,
+    "chain-indexer-audit-invalid",
+    "broadly Date.parse-able but non-canonical evidence timestamps must fail closed",
+  );
+
   await runRuntimeMonitorAlertTests();
-  assert.match(runtimeMonitorSource, /function isFinalHttpsOrigin[\s\S]*!url\.username[\s\S]*!url\.password[\s\S]*host\.includes\("\."\)[\s\S]*localhost[\s\S]*\.example[\s\S]*100\\\.[\s\S]*169\\\.254[\s\S]*198\\\.51\\\.100[\s\S]*2001:db8/, "runtime monitor must reject credentialed, single-label, local, private, reserved, and documentation origins unless local mode is explicit");
-  assert.match(runtimeMonitorSource, /RUNTIME_MONITOR_BASE_URL must be a public HTTPS origin without path, query, or hash/, "runtime monitor must fail clearly when pointed at a non-production launch origin");
-  assert.match(runtimeMonitorSource, /function isRuntimeMonitorOrigin\(value\)[\s\S]*!url\.username[\s\S]*!url\.password[\s\S]*url\.pathname === "\/"[\s\S]*url\.search === ""[\s\S]*url\.hash === ""[\s\S]*origin-only-base-url[\s\S]*RUNTIME_MONITOR_BASE_URL must be an origin without credentials, path, query, or hash/, "runtime monitor must require an origin-only base URL even when local mode relaxes the public HTTPS requirement");
-  assert.match(runtimeMonitorSource, /MAX_RUNTIME_MONITOR_RESPONSE_BYTES[\s\S]*CONTENT_LENGTH_RE\s*=\s*\/\^\(\?:0\|\[1-9\]\\d\{0,15\}\)\$\/[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseContentLengthHeader[\s\S]*const parsed = BigInt\(value\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)[\s\S]*function readBoundedJsonResponse[\s\S]*parseContentLengthHeader\(response\.headers\.get\("content-length"\)\)[\s\S]*new TextDecoder\("utf-8", \{ fatal: true \}\)/, "runtime monitor must strictly parse Content-Length and bound health response bodies before JSON parsing");
-  assert.doesNotMatch(runtimeMonitorSource, /Number\(response\.headers\.get\("content-length"\)\)/, "runtime monitor must not broadly coerce response Content-Length");
-  assert.match(runtimeMonitorSource, /import \{ redactProofText \} from "\.\/redact-proof-output\.mjs"[\s\S]*function describeRuntimeMonitorError\(error\)[\s\S]*redactProofText\(/, "runtime monitor fatal errors must use the shared proof redactor");
-  assert.match(runtimeMonitorSource, /MAX_RUNTIME_MONITOR_ERROR_CHARS[\s\S]*<truncated>[\s\S]*fatal: \$\{describeRuntimeMonitorError\(error\)\}/, "runtime monitor fatal errors must be compact and bounded");
-  assert.doesNotMatch(runtimeMonitorSource, /response\.json\(\)/, "runtime monitor must not use unbounded response.json");
-  assert.match(runtimeMonitorSource, /function backupDirectoryIsExternalSafe\(\)[\s\S]*!isAbsolute\(backupDirectory\)[\s\S]*relative\(REPO_ROOT, resolve\(backupDirectory\)\)[\s\S]*backupDirectory && !allowLocal[\s\S]*must be absolute outside local monitor mode[\s\S]*!backupDirectoryIsExternalSafe\(\)[\s\S]*must be outside the repo checkout/, "runtime monitor must reject relative or repo-local backup directories outside explicit local mode");
-  assert.match(runtimeMonitorSource, /strictProductionLikeMonitor && !allowLocal && !backupDirectory[\s\S]*RUNTIME_MONITOR_BACKUP_DIR or LORE_BACKUP_DIR is required for production-like runtime monitoring/, "production-like runtime monitor startup must require a backup directory so backup freshness is actually monitored");
-  assert.match(runtimeMonitorSource, /POSITIVE_SAFE_INTEGER_TEXT_RE\s*=\s*\/\^\[1-9\]\\d\{0,15\}\$\/[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function isPositiveSafeIntegerText\(value\)[\s\S]*POSITIVE_SAFE_INTEGER_TEXT_RE\.test\(trimmed\)[\s\S]*BigInt\(trimmed\) <= MAX_SAFE_INTEGER_BIGINT[\s\S]*backupMaxAgeMsRaw[\s\S]*isPositiveSafeIntegerText\(backupMaxAgeMsRaw\)[\s\S]*RUNTIME_MONITOR_BACKUP_MAX_AGE_MS is required as a positive safe integer for production-like runtime monitoring/, "production-like runtime monitor startup must require an explicit positive backup freshness window");
-  assert.match(runtimeMonitorSource, /DECIMAL_INTEGER_RE[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*configErrors[\s\S]*function parseRuntimeMonitorIntegerEnv\(name, fallback, \{ min, max \}\)[\s\S]*must be a canonical decimal integer[\s\S]*const parsed = BigInt\(raw\)[\s\S]*const minBigInt = BigInt\(min\)[\s\S]*const maxBigInt = BigInt\(max\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT \|\| parsed < minBigInt \|\| parsed > maxBigInt[\s\S]*return Number\(parsed\)[\s\S]*validateConfig\(\)[\s\S]*configErrors\.length > 0/, "runtime monitor numeric env parsing must fail closed on malformed values before polling or alert delivery");
-  assert.match(runtimeMonitorSource, /MIN_HEALTH_DIAGNOSTICS_SECRET_LENGTH\s*=\s*32[\s\S]*MAX_HEALTH_DIAGNOSTICS_SECRET_LENGTH\s*=\s*256[\s\S]*CONTROL_CHAR_RE[\s\S]*function parseHealthDiagnosticsSecretEnv\(name\)[\s\S]*secret\.length < MIN_HEALTH_DIAGNOSTICS_SECRET_LENGTH[\s\S]*secret\.length > MAX_HEALTH_DIAGNOSTICS_SECRET_LENGTH[\s\S]*CONTROL_CHAR_RE\.test\(secret\)[\s\S]*configErrors\.push\(`\$\{name\} must be 32\.\.256 non-control characters`\)[\s\S]*const diagnosticsSecret = parseHealthDiagnosticsSecretEnv\("HEALTH_DIAGNOSTICS_SECRET"\)[\s\S]*configErrors\.length > 0[\s\S]*throw new Error\(configErrors\[0\]\)/, "runtime monitor must reject malformed diagnostics secrets before polling or alert delivery");
-  assert.doesNotMatch(runtimeMonitorSource, /process\.env\.HEALTH_DIAGNOSTICS_SECRET\?\.trim\(\)\s*\|\|\s*""/, "runtime monitor must not treat arbitrary trimmed diagnostics secret text as header-safe");
-  assert.doesNotMatch(runtimeMonitorSource, /parsePositiveIntegerEnv\(process\.env\.RUNTIME_MONITOR_/, "runtime monitor must not use broad fallback parsing for runtime monitor numeric env values");
-  assert.match(runtimeMonitorSource, /function getRuntimeMonitorMissingConfig\(\)[\s\S]*base-url[\s\S]*health-diagnostics-secret[\s\S]*alert-channel[\s\S]*getRuntimeMonitorConfigSummary[\s\S]*groups: "monitoring=1"[\s\S]*missingConfig: getRuntimeMonitorMissingConfig\(\)[\s\S]*wouldPoll: false[\s\S]*wouldSendAlerts: false/, "runtime monitor summary preflight must emit safe missing-config tokens without polling endpoints or sending alerts");
+
+  assert.equal(runtimeMonitor.isFinalHttpsOrigin("https://playlore.xyz"), true);
+  for (const origin of [
+    "http://playlore.xyz",
+    "https://user:pass@playlore.xyz",
+    "https://singlelabel",
+    "https://localhost",
+    "https://service.local",
+    "https://127.0.0.1",
+    "https://10.0.0.1",
+    "https://100.64.0.1",
+    "https://169.254.1.1",
+    "https://172.16.0.1",
+    "https://192.168.0.1",
+    "https://192.0.2.1",
+    "https://198.51.100.1",
+    "https://203.0.113.1",
+    "https://service.example",
+    "https://service.test",
+    "https://service.invalid",
+    "https://[2001:db8::1]",
+    "https://playlore.xyz/path",
+    "https://playlore.xyz?query=1",
+    "https://playlore.xyz#fragment",
+  ]) {
+    assert.equal(runtimeMonitor.isFinalHttpsOrigin(origin), false, `unsafe monitor origin must fail: ${origin}`);
+  }
+  assert.equal(runtimeMonitor.isRuntimeMonitorOrigin("http://localhost:3000"), true);
+  for (const origin of [
+    "http://user:pass@localhost:3000",
+    "http://localhost:3000/path",
+    "http://localhost:3000?query=1",
+    "http://localhost:3000#fragment",
+  ]) {
+    assert.equal(runtimeMonitor.isRuntimeMonitorOrigin(origin), false);
+  }
+
+  assert.equal(runtimeMonitor.parseContentLengthHeader(null), null);
+  assert.equal(runtimeMonitor.parseContentLengthHeader("0"), 0);
+  assert.equal(runtimeMonitor.parseContentLengthHeader("42"), 42);
+  for (const value of ["01", "1e3", "+1", "-1", " 1", "9007199254740992", "99999999999999999"]) {
+    assert.throws(() => runtimeMonitor.parseContentLengthHeader(value), /invalid runtime monitor response content-length/);
+  }
+
+  let requestedUrl = null;
+  let requestedInit = null;
+  const fetchedPayload = await runtimeMonitor.fetchRuntimeMonitorJson({
+    origin: new URL("https://playlore.xyz"),
+    pathname: "/api/health/runtime",
+    diagnosticsSecret: "s".repeat(32),
+    timeoutMs: 1_000,
+    fetchImpl: async (url, init) => {
+      requestedUrl = url.toString();
+      requestedInit = init;
+      return createBodyResponse('{"status":"ok"}', { contentLength: "15" });
+    },
+  });
+  assert.deepEqual(fetchedPayload, { status: "ok" });
+  assert.equal(requestedUrl, "https://playlore.xyz/api/health/runtime");
+  assert.equal(requestedInit?.redirect, "error");
+  assert.equal(requestedInit?.headers?.["x-health-diagnostics-secret"], "s".repeat(32));
+
+  let unboundedJsonCalled = false;
+  const boundedResponse = createBodyResponse('{"ok":true}');
+  boundedResponse.json = async () => {
+    unboundedJsonCalled = true;
+    throw new Error("response.json must not be called");
+  };
+  assert.deepEqual(await runtimeMonitor.readBoundedJsonResponse(boundedResponse), { ok: true });
+  assert.equal(unboundedJsonCalled, false);
+
+  const headerOversizeResponse = createBodyResponse("{}", { contentLength: String(256 * 1024 + 1) });
+  await assert.rejects(() => runtimeMonitor.readBoundedJsonResponse(headerOversizeResponse), /body too large/);
+  const streamedOversizeResponse = createBodyResponse(new Uint8Array(256 * 1024 + 1));
+  await assert.rejects(() => runtimeMonitor.readBoundedJsonResponse(streamedOversizeResponse), /body too large/);
+  assert.equal(streamedOversizeResponse.wasCancelled(), true, "oversized streamed bodies must be cancelled");
+  await assert.rejects(
+    () => runtimeMonitor.readBoundedJsonResponse(createBodyResponse(new Uint8Array([0xc3, 0x28]))),
+    /encoded data|encoding|UTF-8/i,
+  );
+
+  const secretBearingError = new Error(
+    `request failed at https://user:password@playlore.xyz/path?token=super-secret ${"x".repeat(700)}`,
+  );
+  const describedError = runtimeMonitor.describeRuntimeMonitorError(secretBearingError);
+  assert.ok(describedError.length <= 500);
+  assert.equal(describedError.endsWith("...<truncated>"), true);
+  assert.doesNotMatch(describedError, /password|super-secret/);
+
+  const repoRoot = resolve(".");
+  const externalBackupDirectory = resolve(repoRoot, "..", "runtime-monitor-backups");
+  assert.equal(runtimeMonitor.isBackupDirectoryExternalSafe({
+    backupDirectory: externalBackupDirectory,
+    repoRoot,
+  }), true);
+  assert.equal(runtimeMonitor.isBackupDirectoryExternalSafe({
+    backupDirectory: resolve(repoRoot, "..evil"),
+    repoRoot,
+  }), false, "an in-repo child whose name starts with two dots must not be mistaken for a parent traversal");
+  assert.equal(runtimeMonitor.isBackupDirectoryExternalSafe({
+    backupDirectory: repoRoot,
+    repoRoot,
+  }), false, "the repository root itself must not be accepted as external backup storage");
+  assert.equal(runtimeMonitor.isBackupDirectoryExternalSafe({ backupDirectory: "relative-backups", repoRoot }), false);
+  assert.equal(runtimeMonitor.isBackupDirectoryExternalSafe({
+    backupDirectory: resolve(repoRoot, "data", "backups"),
+    repoRoot,
+  }), false);
+  assert.equal(runtimeMonitor.isBackupDirectoryExternalSafe({
+    backupDirectory: resolve(repoRoot, "data", "backups"),
+    allowLocal: true,
+    repoRoot,
+  }), true);
+  if (/^[A-Za-z]:\\/.test(repoRoot)) {
+    const alternateDrive = repoRoot[0].toLowerCase() === "c" ? "D" : "C";
+    assert.equal(runtimeMonitor.isBackupDirectoryExternalSafe({
+      backupDirectory: `${alternateDrive}:\\runtime-monitor-backups`,
+      repoRoot,
+    }), true, "an absolute backup path on a different drive must count as outside the repository");
+  }
+
+  assert.equal(runtimeMonitor.isPositiveSafeIntegerText("1"), true);
+  assert.equal(runtimeMonitor.isPositiveSafeIntegerText(String(Number.MAX_SAFE_INTEGER)), true);
+  for (const value of ["", "0", "01", "1e3", "+1", "-1", "9007199254740992"]) {
+    assert.equal(runtimeMonitor.isPositiveSafeIntegerText(value), false);
+  }
+
+  const numericErrors = [];
+  assert.equal(runtimeMonitor.parseRuntimeMonitorIntegerValue(
+    "RUNTIME_MONITOR_INTERVAL_MS",
+    "10000",
+    30_000,
+    { min: 10_000, max: 86_400_000 },
+    numericErrors,
+  ), 10_000);
+  for (const malformed of ["1e3", "01", "+10000", " 10000 ", "9007199254740992"]) {
+    const errors = [];
+    assert.equal(runtimeMonitor.parseRuntimeMonitorIntegerValue(
+      "RUNTIME_MONITOR_INTERVAL_MS",
+      malformed,
+      30_000,
+      { min: 10_000, max: 86_400_000 },
+      errors,
+    ), 30_000);
+    assert.equal(errors.length, 1, `malformed numeric env must record an error: ${malformed}`);
+  }
+  assert.deepEqual(numericErrors, []);
+
+  const validSecret = "health-secret-".padEnd(32, "s");
+  assert.equal(runtimeMonitor.parseHealthDiagnosticsSecretValue("HEALTH_DIAGNOSTICS_SECRET", validSecret), validSecret);
+  for (const malformed of [
+    "s".repeat(31),
+    "s".repeat(257),
+    `${"s".repeat(32)}\n`,
+    `${"s".repeat(16)}\u0000${"s".repeat(16)}`,
+  ]) {
+    const errors = [];
+    assert.equal(runtimeMonitor.parseHealthDiagnosticsSecretValue(
+      "HEALTH_DIAGNOSTICS_SECRET",
+      malformed,
+      errors,
+    ), "");
+    assert.equal(errors.length, 1);
+  }
+
+  const healthyPreflight = {
+    configErrors: [],
+    baseUrl: "https://playlore.xyz",
+    diagnosticsSecret: validSecret,
+    allowLocal: false,
+    alertsConfigured: true,
+    allowNoAlerts: false,
+    strictProductionLikeMonitor: true,
+    resendConfigured: true,
+    backupDirectory: externalBackupDirectory,
+    backupMaxAgeMsRaw: "60000",
+    repoRoot,
+    canonicalOrigin: "https://playlore.xyz",
+  };
+  assert.deepEqual(runtimeMonitor.getRuntimeMonitorMissingConfigFor(healthyPreflight), []);
+  assert.ok(runtimeMonitor.getRuntimeMonitorMissingConfigFor({
+    ...healthyPreflight,
+    resendConfigured: false,
+  }).includes("resend-email"));
+  assert.ok(runtimeMonitor.getRuntimeMonitorMissingConfigFor({
+    ...healthyPreflight,
+    backupDirectory: "",
+  }).includes("backup-directory"));
+  assert.ok(runtimeMonitor.getRuntimeMonitorMissingConfigFor({
+    ...healthyPreflight,
+    backupMaxAgeMsRaw: "1e3",
+  }).includes("backup-max-age"));
+  assert.ok(runtimeMonitor.getRuntimeMonitorMissingConfigFor({
+    ...healthyPreflight,
+    backupDirectory: resolve(repoRoot, "data", "backups"),
+  }).includes("external-backup-directory"));
+  assert.ok(runtimeMonitor.getRuntimeMonitorMissingConfigFor({
+    ...healthyPreflight,
+    configErrors: ["synthetic invalid setting"],
+  }).includes("invalid-config"));
+  assert.ok(runtimeMonitor.getRuntimeMonitorMissingConfigFor({
+    ...healthyPreflight,
+    alertsConfigured: false,
+  }).includes("alert-channel"));
+  assert.ok(runtimeMonitor.getRuntimeMonitorMissingConfigFor({
+    ...healthyPreflight,
+    diagnosticsSecret: "",
+  }).includes("health-diagnostics-secret"));
+  assert.ok(runtimeMonitor.getRuntimeMonitorMissingConfigFor({
+    ...healthyPreflight,
+    baseUrl: "http://localhost:3000/path",
+    allowLocal: true,
+    canonicalOrigin: "http://localhost:3000",
+  }).includes("origin-only-base-url"));
+
+  let summaryPolls = 0;
+  let summaryStarts = 0;
+  const summaryLines = [];
+  await runtimeMonitor.runRuntimeMonitorLoop({
+    summaryOnlyMode: true,
+    validate: () => new URL("https://playlore.xyz"),
+    configSummary: () => ({
+      status: "pass",
+      mode: "runtime-monitor-config",
+      missingConfig: [],
+      wouldPoll: false,
+      wouldSendAlerts: false,
+    }),
+    pollOnce: async () => {
+      summaryPolls += 1;
+    },
+    onStart: () => {
+      summaryStarts += 1;
+    },
+    logger: { log: (line) => summaryLines.push(JSON.parse(line)) },
+  });
+  assert.equal(summaryPolls, 0, "summary preflight must not poll health endpoints");
+  assert.equal(summaryStarts, 0, "summary preflight must not load state or start the monitor loop");
+  assert.deepEqual(summaryLines, [{
+    status: "pass",
+    mode: "runtime-monitor-config",
+    missingConfig: [],
+    wouldPoll: false,
+    wouldSendAlerts: false,
+  }]);
+
+  const broadNumericMutant = (value) => Number(value);
+  assert.equal(broadNumericMutant("1e3"), 1_000, "numeric vector must kill broad Number coercion mutants");
+  const broadDateMutant = (value) => Date.parse(String(value));
+  assert.equal(Number.isFinite(broadDateMutant("2026-08-13 09:59:59Z")), true, "timestamp vector must kill broad Date.parse mutants");
 }

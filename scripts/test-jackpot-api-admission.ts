@@ -7,6 +7,25 @@ import {
   releaseResponseConcurrencySlotOnSettled,
 } from "../app/api/_lib/responseConcurrencyBudget";
 import { getTrustedAuthOrigin } from "../app/api/_lib/trustedAuthOrigin";
+import {
+  JACKPOT_PUBLIC_HISTORY_LIMIT,
+  canPersistJackpotRecoveryBlock,
+  classifyJackpotResponseCache,
+  createJackpotPublicErrorPayload,
+  deriveDurableJackpotRecoveryCheckpoint,
+  isDurableJackpotRecoverySnapshot,
+  sanitizeJackpotPublicRows,
+  shouldBypassJackpotResponseCache,
+  shouldStartJackpotRecovery,
+  type JackpotPublicRow,
+  type JackpotRecoveryContextPolicy,
+} from "../app/api/_lib/jackpotRouteRuntime";
+
+const DEPLOY_BLOCK = 10_000n;
+const TARGET_BLOCK = 20_000n;
+const CHECKPOINT_BLOCK = 19_900n;
+const CHECKPOINT_HASH = `0x${"11".repeat(32)}` as `0x${string}`;
+const TX_HASH = `0x${"aa".repeat(32)}` as `0x${string}`;
 
 function uniqueBudgetKey(label: string) {
   return `test:${label}:${process.pid}:${Date.now()}:${Math.random()}`;
@@ -163,7 +182,7 @@ function testJackpotRefreshSource() {
   const serviceSource = readFileSync("app/api/_lib/jackpotsService.ts", "utf8");
   assert.match(
     routeSource,
-    /readJackpotPayload\(\{ bypassResponseCache: searchParams\.get\("fresh"\) === "1" \}\)/,
+    /bypassResponseCache: shouldBypassJackpotResponseCache\(searchParams\.get\("fresh"\)\)/,
     "the existing refresh request must be preserved as a cache-only bypass",
   );
   assert.doesNotMatch(routeSource, /forceFresh/);
@@ -193,12 +212,167 @@ function testJackpotRefreshSource() {
   );
 }
 
+function validPublicRow(overrides: Partial<JackpotPublicRow> = {}): JackpotPublicRow {
+  return {
+    epoch: "42",
+    kind: "daily",
+    amount: "12.5",
+    amountNum: 12.5,
+    txHash: TX_HASH,
+    blockNumber: TARGET_BLOCK.toString(),
+    timestamp: 1_700_000_000_000,
+    ...overrides,
+  };
+}
+
+function testJackpotRuntimeBehavior() {
+  assert.equal(shouldBypassJackpotResponseCache("1"), true);
+  for (const value of [null, "", "0", "true", "01", "1 "]) {
+    assert.equal(shouldBypassJackpotResponseCache(value), false);
+  }
+
+  assert.equal(classifyJackpotResponseCache({ hasPayload: false, expiresAt: 2_000, now: 1_000 }), "missing");
+  assert.equal(classifyJackpotResponseCache({ hasPayload: true, expiresAt: 2_000, now: 1_999 }), "fresh");
+  assert.equal(classifyJackpotResponseCache({ hasPayload: true, expiresAt: 2_000, now: 2_000 }), "stale");
+  assert.equal(classifyJackpotResponseCache({ hasPayload: true, expiresAt: Number.NaN, now: 1_000 }), "stale");
+  assert.equal(classifyJackpotResponseCache({ hasPayload: true, expiresAt: 2_000, now: 1_000.5 }), "stale");
+
+  const recoveryBaseline = {
+    hasInflightRecovery: false,
+    lastStartedAt: 1_000,
+    now: 2_000,
+    cooldownMs: 1_000,
+  };
+  assert.equal(shouldStartJackpotRecovery(recoveryBaseline), true);
+  assert.equal(shouldStartJackpotRecovery({ ...recoveryBaseline, hasInflightRecovery: true }), false);
+  assert.equal(shouldStartJackpotRecovery({ ...recoveryBaseline, now: 1_999 }), false);
+  assert.equal(shouldStartJackpotRecovery({ ...recoveryBaseline, now: 999 }), false);
+  assert.equal(shouldStartJackpotRecovery({ ...recoveryBaseline, now: Number.NaN }), false);
+  assert.equal(shouldStartJackpotRecovery({ ...recoveryBaseline, cooldownMs: 0 }), false);
+
+  const normalized = sanitizeJackpotPublicRows([
+    validPublicRow({ txHash: TX_HASH.toUpperCase() }),
+    validPublicRow({ epoch: "01" }),
+    validPublicRow({ amount: "1e9" }),
+    validPublicRow({ amountNum: Number.POSITIVE_INFINITY }),
+    validPublicRow({ blockNumber: (DEPLOY_BLOCK - 1n).toString() }),
+    validPublicRow({ timestamp: Number.MAX_VALUE }),
+    validPublicRow({ txHash: "rpc-error-private-key" }),
+  ], { contractDeployBlock: DEPLOY_BLOCK });
+  assert.deepEqual(normalized, [
+    validPublicRow(),
+    validPublicRow({ timestamp: null }),
+    validPublicRow({ txHash: "" }),
+  ]);
+  assert.equal(
+    sanitizeJackpotPublicRows(
+      Array.from({ length: JACKPOT_PUBLIC_HISTORY_LIMIT + 10 }, (_, index) => validPublicRow({ epoch: String(index + 1) })),
+      { contractDeployBlock: DEPLOY_BLOCK, limit: Number.MAX_SAFE_INTEGER },
+    ).length,
+    JACKPOT_PUBLIC_HISTORY_LIMIT,
+  );
+
+  const checkpoint = deriveDurableJackpotRecoveryCheckpoint({
+    contractDeployBlock: DEPLOY_BLOCK,
+    finalityBlocks: 12n,
+    targetBlock: TARGET_BLOCK,
+    lastIndexedBlock: CHECKPOINT_BLOCK,
+    checkpointBlock: CHECKPOINT_BLOCK,
+    checkpointHash: CHECKPOINT_HASH,
+    observedCheckpointHash: CHECKPOINT_HASH.toUpperCase(),
+  });
+  assert.deepEqual(checkpoint, { blockNumber: CHECKPOINT_BLOCK, blockHash: CHECKPOINT_HASH });
+  assert.equal(deriveDurableJackpotRecoveryCheckpoint({
+    contractDeployBlock: DEPLOY_BLOCK,
+    finalityBlocks: 0n,
+    targetBlock: TARGET_BLOCK,
+    lastIndexedBlock: CHECKPOINT_BLOCK,
+    checkpointBlock: CHECKPOINT_BLOCK,
+    checkpointHash: CHECKPOINT_HASH,
+    observedCheckpointHash: CHECKPOINT_HASH,
+  }), null);
+  assert.equal(deriveDurableJackpotRecoveryCheckpoint({
+    contractDeployBlock: DEPLOY_BLOCK,
+    finalityBlocks: 12n,
+    targetBlock: TARGET_BLOCK,
+    lastIndexedBlock: CHECKPOINT_BLOCK,
+    checkpointBlock: CHECKPOINT_BLOCK,
+    checkpointHash: CHECKPOINT_HASH,
+    observedCheckpointHash: `0x${"22".repeat(32)}`,
+  }), null);
+
+  const lagging: JackpotRecoveryContextPolicy = {
+    blockNumber: TARGET_BLOCK,
+    blockHash: `0x${"33".repeat(32)}`,
+    finalityBlocks: 12n,
+    durableThroughBlock: CHECKPOINT_BLOCK,
+    durableCheckpointHash: CHECKPOINT_HASH,
+  };
+  assert.equal(canPersistJackpotRecoveryBlock(lagging, CHECKPOINT_BLOCK, DEPLOY_BLOCK), true);
+  assert.equal(canPersistJackpotRecoveryBlock(lagging, CHECKPOINT_BLOCK + 1n, DEPLOY_BLOCK), false);
+  assert.equal(isDurableJackpotRecoverySnapshot(lagging), false);
+  assert.equal(isDurableJackpotRecoverySnapshot({ ...lagging, durableThroughBlock: TARGET_BLOCK }), true);
+  assert.equal(
+    isDurableJackpotRecoverySnapshot({ ...lagging, durableThroughBlock: TARGET_BLOCK, finalityBlocks: 0n }),
+    false,
+  );
+  assert.deepEqual(createJackpotPublicErrorPayload(), {
+    jackpots: [],
+    error: "Unable to load jackpots",
+  });
+}
+
+function testJackpotRuntimeFaultMutants() {
+  const unsafeFreshAtBoundary = (hasPayload: boolean, expiresAt: number, now: number) =>
+    hasPayload && expiresAt >= now ? "fresh" : "stale";
+  assert.notEqual(unsafeFreshAtBoundary(true, 2_000, 2_000), classifyJackpotResponseCache({
+    hasPayload: true,
+    expiresAt: 2_000,
+    now: 2_000,
+  }));
+
+  const ignoresClockRollback = (lastStartedAt: number, now: number, cooldownMs: number) =>
+    now - lastStartedAt < cooldownMs;
+  assert.equal(ignoresClockRollback(1_000, 999, 1_000), true);
+  assert.equal(shouldStartJackpotRecovery({
+    hasInflightRecovery: false,
+    lastStartedAt: 1_000,
+    now: 999,
+    cooldownMs: 1_000,
+  }), false);
+
+  const unboundedRows = Array.from(
+    { length: JACKPOT_PUBLIC_HISTORY_LIMIT + 1 },
+    (_, index) => validPublicRow({ epoch: String(index + 1) }),
+  );
+  assert.notEqual(
+    unboundedRows.length,
+    sanitizeJackpotPublicRows(unboundedRows, { contractDeployBlock: DEPLOY_BLOCK }).length,
+  );
+
+  const acceptsUnfinalized = { blockNumber: TARGET_BLOCK, blockHash: CHECKPOINT_HASH };
+  assert.notDeepEqual(
+    deriveDurableJackpotRecoveryCheckpoint({
+      contractDeployBlock: DEPLOY_BLOCK,
+      finalityBlocks: 0n,
+      targetBlock: TARGET_BLOCK,
+      lastIndexedBlock: TARGET_BLOCK,
+      checkpointBlock: TARGET_BLOCK,
+      checkpointHash: CHECKPOINT_HASH,
+      observedCheckpointHash: CHECKPOINT_HASH,
+    }),
+    acceptsUnfinalized,
+  );
+}
+
 async function main() {
   await testConcurrencyBudget();
   await testNodeImageResponseBudget();
   testOgAdmissionSource();
   testJackpotRefreshSource();
-  console.log("jackpot API admission tests passed");
+  testJackpotRuntimeBehavior();
+  testJackpotRuntimeFaultMutants();
+  console.log("jackpot API admission tests passed (runtime 5 groups, 4 mutants killed)");
 }
 
 main().catch((error) => {

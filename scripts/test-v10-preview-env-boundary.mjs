@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -15,6 +23,7 @@ import {
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const PREVIEW_SCRIPT = path.join(SCRIPT_DIR, "create-v10-canary-dry-run-preview.mjs");
+const PREVIEW_CHECK_SCRIPT = path.join(SCRIPT_DIR, "check-v10-dry-run-preview.mjs");
 const DEPENDENCY_AUDIT_SCRIPT = path.join(SCRIPT_DIR, "check-production-dependency-audit.mjs");
 const CLEAR_PENDING_SCRIPT = path.join(SCRIPT_DIR, "clear-live-test-pending-nonce.ts");
 const TSX_CLI = createRequire(import.meta.url).resolve("tsx/cli");
@@ -46,6 +55,135 @@ function inspectChildEnv(extraEnv) {
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
   return JSON.parse(lines.at(-1));
+}
+
+function previewStepOutputs({ planner = {}, pending = {}, matrix = {} } = {}) {
+  const plannerSummary = {
+    mode: "read-only",
+    network: "sepolia",
+    chainId: 59141,
+    transactionSent: false,
+    signingMaterialLoaded: false,
+    walletClientCreated: false,
+    contractWriteSubmitted: false,
+    transactionLimit: 4,
+    estimatedGas: 21000,
+    plannedTransfersLinea: "0",
+    ...planner,
+  };
+  const pendingSummary = {
+    role: "AUTOMINER_A",
+    mode: "dry-run",
+    pendingNonceGap: 0,
+    wouldSendReplacement: false,
+    txSent: false,
+    signing: false,
+    walletClient: false,
+    contractWrite: false,
+    ...pending,
+  };
+  const matrixSummary = {
+    network: "sepolia",
+    chainId: "59141",
+    execution: "dry-run",
+    rounds: "2",
+    plannedBetTx: "4",
+    plannedStake: "0",
+    ready: "4/4",
+    transactionSent: "false",
+    signingMaterialLoaded: "false",
+    walletClientCreated: "false",
+    contractWriteSubmitted: "false",
+    ...matrix,
+  };
+  const matrixLine = Object.entries(matrixSummary)
+    .map(([name, value]) => `${name}=${value}`)
+    .join(" ");
+  return [
+    { status: 0, stdout: `${JSON.stringify(plannerSummary)}\n`, stderr: "" },
+    { status: 0, stdout: `${JSON.stringify(pendingSummary)}\n`, stderr: "" },
+    {
+      status: 0,
+      stdout: `[live-canary] ${matrixLine}\n[live-canary] log=data/live-test-runs/live-canary-20260813T000000Z.jsonl\n`,
+      stderr: "",
+    },
+    {
+      status: 1,
+      stdout: "blocked gates: G10, G11\nsuccessful bet tx: 0\nunique bet epochs: 0\nmissing V10 gas cases: all\n",
+      stderr: "",
+    },
+  ];
+}
+
+function runMockedPreview(overrides) {
+  const cwd = mkdtempSync(path.join(tmpdir(), "lore-preview-boundary-"));
+  mkdirSync(path.join(cwd, "docs"));
+  const outputs = previewStepOutputs(overrides);
+  const preloadSource = `
+    import childProcess from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    const outputs = ${JSON.stringify(outputs)};
+    let callIndex = 0;
+    childProcess.spawnSync = () => {
+      const output = outputs[callIndex++] ?? {
+        status: 1,
+        stdout: "",
+        stderr: "unexpected mocked Preview child invocation",
+      };
+      return { signal: null, ...output };
+    };
+    syncBuiltinESMExports();
+  `;
+  const preloadUrl = `data:text/javascript;base64,${Buffer.from(preloadSource).toString("base64")}`;
+  try {
+    const result = spawnSync(process.execPath, ["--import", preloadUrl, PREVIEW_SCRIPT], {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, LIVE_CANARY_RPC_LABEL: "test-public-sepolia" },
+    });
+    const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+    return {
+      result,
+      summary: lines.length > 0 ? JSON.parse(lines.at(-1)) : null,
+      markdown: readFileSync(path.join(cwd, "docs", "v10-canary-dry-run-preview.md"), "utf8"),
+    };
+  } finally {
+    rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+}
+
+function checkPreviewMarkdown(markdown) {
+  const cwd = mkdtempSync(path.join(tmpdir(), "lore-preview-check-"));
+  const docsDir = path.join(cwd, "docs");
+  const logDir = path.join(cwd, "data", "live-test-runs");
+  mkdirSync(docsDir);
+  mkdirSync(logDir, { recursive: true });
+  writeFileSync(path.join(docsDir, "v10-canary-dry-run-preview.md"), markdown, "utf8");
+  writeFileSync(path.join(logDir, "live-canary-20260813T000000Z.jsonl"), "{}\n", "utf8");
+  try {
+    const result = spawnSync(process.execPath, [PREVIEW_CHECK_SCRIPT], {
+      cwd,
+      encoding: "utf8",
+      env: process.env,
+    });
+    const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+    return { result, summary: lines.length > 0 ? JSON.parse(lines.at(-1)) : null };
+  } finally {
+    rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+}
+
+function replaceSectionBullet(markdown, title, label, value) {
+  const start = markdown.indexOf(`## ${title}`);
+  assert.notEqual(start, -1, `missing ${title} section`);
+  const next = markdown.indexOf("\n## ", start + 3);
+  const end = next === -1 ? markdown.length : next;
+  const section = markdown.slice(start, end);
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^- ${escaped}:.*(?:\\r?\\n)?`, "m");
+  assert.match(section, pattern, `missing ${label} bullet in ${title}`);
+  const replacement = value === null ? "" : `- ${label}: ${value}\n`;
+  return `${markdown.slice(0, start)}${section.replace(pattern, replacement)}${markdown.slice(end)}`;
 }
 
 function clearPendingEnv(extraEnv = {}) {
@@ -344,18 +482,11 @@ test("Preview and proof commands ignore poisoned package-manager, PATH, and shel
   }
 
   const previewSource = readFileSync(PREVIEW_SCRIPT, "utf8");
-  const dependencyAuditSource = readFileSync(
-    path.join(SCRIPT_DIR, "check-production-dependency-audit.mjs"),
-    "utf8",
-  );
-  for (const source of [previewSource, dependencyAuditSource]) {
-    assert.match(source, /resolveTrustedNpmCli/);
-    assert.match(source, /trustedNpmCommand/);
-    assert.match(source, /trustedNpmEnvironment/);
-    assert.doesNotMatch(source, /process\.env\.npm_execpath|process\.env\.ComSpec|command:\s*["']npm(?:\.cmd)?["']/);
-  }
+  assert.match(previewSource, /resolveTrustedNpmCli/);
+  assert.match(previewSource, /trustedNpmCommand/);
+  assert.match(previewSource, /trustedNpmEnvironment/);
+  assert.doesNotMatch(previewSource, /process\.env\.npm_execpath|process\.env\.ComSpec|command:\s*["']npm(?:\.cmd)?["']/);
   assert.match(previewSource, /cwd: TRUSTED_NPM_LAUNCHER\.repoRoot/);
-  assert.match(dependencyAuditSource, /cwd: trustedNpmLauncher\.repoRoot/);
 });
 
 test("dependency audit accepts a complete canonical report despite npm's advisory exit status", () => {
@@ -461,28 +592,71 @@ test("read-only planner, matrix, and playtest paths do not preload combined dote
   assert.match(liveSource, /may contain only public live-test role addresses/);
   assert.match(liveSource, /const wallets = DRY_RUN \? loadDryRunWallets\(\) : loadWallets\(\)/);
   assert.match(
+    liveSource,
+    /operationalBoundary signingMaterialLoaded=\$\{signingMaterialLoaded\}[\s\S]*transactionSent=false walletClientCreated=false contractWriteSubmitted=false/,
+  );
+  assert.match(
     playtestSource,
-    /if \(EXECUTE_REQUESTED[\s\S]*if \(LIVE_EXECUTION_CONFIRMED\) \{[\s\S]*loadDotenv\([\s\S]*const account = LIVE_EXECUTION_CONFIRMED/,
+    /resolveWalletPlaytestAdmission\(\{[\s\S]*executeRequested: EXECUTE_REQUESTED,[\s\S]*signingMaterialPresent: hasWalletSigningMaterial\(process\.env\)[\s\S]*if \(liveExecutionConfirmed\) \{[\s\S]*loadDotenv\([\s\S]*const account = liveExecutionConfirmed/,
   );
 });
 
-test("Preview distinguishes an unreported child boundary from detected signing material", () => {
-  const previewSource = readFileSync(PREVIEW_SCRIPT, "utf8");
-  assert.match(
-    previewSource,
-    /const operationBoundaryReports = \[[\s\S]*plannerSummary\.signingMaterialLoaded,[\s\S]*pendingSummary\.signingMaterialLoaded,[\s\S]*matrixSummary\.signingMaterialLoaded,[\s\S]*\];[\s\S]*operationBoundaryReports\.some\(\(reported\) => reported === true\)[\s\S]*operationBoundaryReports\.every\(\(reported\) => reported === false\)/,
-    "a child that exits before reporting its boundary must remain unverified, not be reported as signing material",
-  );
-  assert.match(
-    previewSource,
-    /hardFailures\.length === 0 &&[\s\S]*operationBoundaryVerified &&[\s\S]*!signingMaterialLoaded/,
-    "Preview success must still fail closed until every child reports no signing material",
-  );
-  assert.match(
-    previewSource,
-    /operationalBoundaryVerified: operationBoundaryVerified/,
-    "the compact Preview summary must publish the verified-boundary field without a misspelled shorthand",
-  );
+test("Preview generator behavior fails closed on contradictory or unreported child boundaries", () => {
+  const control = runMockedPreview();
+  assert.equal(control.result.status, 0, control.result.stderr || control.result.stdout);
+  assert.equal(control.summary.status, "pass");
+  assert.equal(control.summary.operationalBoundaryVerified, true);
+  assert.equal(control.summary.transactionSent, false);
+  assert.equal(control.summary.walletClientCreated, false);
+  assert.equal(control.summary.contractWriteSubmitted, false);
+  assert.match(control.markdown, /^- operationalBoundaryVerified: true$/m);
+
+  const mutants = [
+    ["planner sent a transaction", { planner: { transactionSent: true } }, "transactionSent", true],
+    ["pending path created a wallet client", { pending: { walletClient: true } }, "walletClientCreated", true],
+    ["pending path submitted a write", { pending: { contractWrite: true } }, "contractWriteSubmitted", true],
+    ["planner omitted its transaction report", { planner: { transactionSent: null } }, "transactionSent", false],
+    ["planner reported a write-enabled mode", { planner: { mode: "execute" } }, "transactionSent", false],
+    ["matrix reported live execution", { matrix: { execution: "enabled" } }, "transactionSent", false],
+    ["matrix contradicted dry-run with a sent transaction", { matrix: { transactionSent: "true" } }, "transactionSent", true],
+    ["matrix omitted its sent-transaction report", { matrix: { transactionSent: null } }, "transactionSent", false],
+    ["matrix contradicted a negative transaction report", { matrix: { transactionSent: "false transactionSent=true" } }, "transactionSent", true],
+    ["matrix emitted an invalid wallet-client report", { matrix: { walletClientCreated: "unknown" } }, "walletClientCreated", false],
+    ["matrix reported a submitted write", { matrix: { contractWriteSubmitted: "true" } }, "contractWriteSubmitted", true],
+  ];
+  for (const [label, overrides, field, expectedField] of mutants) {
+    const mutation = runMockedPreview(overrides);
+    assert.notEqual(mutation.result.status, 0, `${label} must fail the Preview command`);
+    assert.equal(mutation.summary.status, "fail", label);
+    assert.equal(mutation.summary.operationalBoundaryVerified, false, label);
+    assert.equal(mutation.summary[field], expectedField, label);
+    assert.match(mutation.markdown, /^- status: fail$/m, label);
+  }
+});
+
+test("Preview checker behavior requires the generated operational boundary evidence", () => {
+  const generated = runMockedPreview();
+  assert.equal(generated.result.status, 0, generated.result.stderr || generated.result.stdout);
+
+  const control = checkPreviewMarkdown(generated.markdown);
+  assert.equal(control.result.status, 0, control.result.stderr || control.result.stdout);
+  assert.equal(control.summary.status, "pass");
+  assert.equal(control.summary.authorizationFreshnessRequired, false);
+
+  const mutations = [
+    generated.markdown.replace("- operationalBoundaryVerified: true", "- operationalBoundaryVerified: false"),
+    replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "signingMaterialLoaded", "true"),
+    replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "transactionSent", "true"),
+    replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "walletClientCreated", "unknown"),
+    replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "contractWriteSubmitted", "true"),
+    replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "transactionSent", null),
+    replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "transactionSent", "false\n- transactionSent: true"),
+  ];
+  for (const markdown of mutations) {
+    const mutation = checkPreviewMarkdown(markdown);
+    assert.notEqual(mutation.result.status, 0);
+    assert.equal(mutation.summary.status, "fail");
+  }
 });
 
 test("pending-nonce Preview child parses only exact public role address keys", () => {

@@ -10,6 +10,27 @@ const utils = utilsModule.default ?? utilsModule;
 
 class MemoryStorage {
   #values = new Map();
+  #fault = null;
+
+  failNext({ operation, key, phase = "before", errorName = "Error" }) {
+    this.#fault = { operation, key, phase, errorName };
+  }
+
+  #maybeFail(operation, key, phase) {
+    if (
+      !this.#fault ||
+      this.#fault.operation !== operation ||
+      this.#fault.key !== key ||
+      this.#fault.phase !== phase
+    ) {
+      return;
+    }
+    const { errorName } = this.#fault;
+    this.#fault = null;
+    const error = new Error(`injected ${operation} ${phase} failure for ${key}`);
+    error.name = errorName;
+    throw error;
+  }
 
   get length() {
     return this.#values.size;
@@ -17,10 +38,15 @@ class MemoryStorage {
 
   clear() {
     this.#values.clear();
+    this.#fault = null;
   }
 
   getItem(key) {
-    return this.#values.has(key) ? this.#values.get(key) : null;
+    const normalizedKey = String(key);
+    this.#maybeFail("getItem", normalizedKey, "before");
+    const value = this.#values.has(normalizedKey) ? this.#values.get(normalizedKey) : null;
+    this.#maybeFail("getItem", normalizedKey, "after");
+    return value;
   }
 
   key(index) {
@@ -28,11 +54,17 @@ class MemoryStorage {
   }
 
   removeItem(key) {
-    this.#values.delete(key);
+    const normalizedKey = String(key);
+    this.#maybeFail("removeItem", normalizedKey, "before");
+    this.#values.delete(normalizedKey);
+    this.#maybeFail("removeItem", normalizedKey, "after");
   }
 
   setItem(key, value) {
-    this.#values.set(String(key), String(value));
+    const normalizedKey = String(key);
+    this.#maybeFail("setItem", normalizedKey, "before");
+    this.#values.set(normalizedKey, String(value));
+    this.#maybeFail("setItem", normalizedKey, "after");
   }
 }
 
@@ -83,6 +115,63 @@ const stableNonceClient = {
   getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 7 : 7,
 };
 const stableNonceClients = [stableNonceClient, stableNonceClient];
+
+const walletTransferStorageKey = (intent) => [
+  "lineaore:wallet-transfer-intent:v1",
+  intent.chainId,
+  intent.actor,
+  intent.asset,
+  intent.destination,
+  intent.amountWei.toString(),
+].join(":");
+
+const replacementObservationStorageKey = (intent, rpcIndex) =>
+  `${walletTransferStorageKey(intent)}:replacement-observation:${rpcIndex}`;
+
+const transactionClients = (first, second = first, receiptStatus = "success") => [
+  ...[first, second].map((transaction) => {
+    const receipt = {
+      status: receiptStatus,
+      transactionHash: transaction.hash,
+      blockHash: `0x${"b1".repeat(32)}`,
+      blockNumber: 100n,
+      transactionIndex: 0,
+    };
+    return {
+      getTransaction: async () => transaction,
+      getTransactionReceipt: async () => receipt,
+      getBlockNumber: async () => 101n,
+      waitForTransactionReceipt: async () => receipt,
+    };
+  }),
+];
+
+function transactionForIntent(intent, hash, nonce, overrides = {}) {
+  const tokenInput = intent.asset === "native"
+    ? "0x"
+    : encodeFunctionData({
+        abi: [{
+          type: "function",
+          name: "transfer",
+          stateMutability: "nonpayable",
+          inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }],
+          outputs: [{ name: "", type: "bool" }],
+        }],
+        functionName: "transfer",
+        args: [intent.destination, intent.amountWei],
+      });
+  return {
+    hash,
+    chainId: intent.chainId,
+    from: intent.actor,
+    nonce,
+    to: intent.asset === "native" ? intent.destination : intent.asset,
+    value: intent.asset === "native" ? intent.amountWei : 0n,
+    input: tokenInput,
+    type: "eip1559",
+    ...overrides,
+  };
+}
 
 const initialNow = Date.now();
 const first = await transferIntent.acquireWalletTransferIntentLease(
@@ -166,7 +255,12 @@ assert.deepEqual(
 );
 
 assert.equal(
-  await transferIntent.resolveWalletTransferIntent(baseIntent, lateHash, "confirmed"),
+  await transferIntent.resolveWalletTransferIntent(
+    baseIntent,
+    lateHash,
+    "confirmed",
+    transactionClients(transactionForIntent(baseIntent, lateHash, recoveredKnownHash.lease?.nonce ?? 7)),
+  ),
   true,
   "a confirmed known hash must explicitly resolve its transfer intent",
 );
@@ -360,6 +454,7 @@ assert.equal(
     baseIntent,
     propagationLagHash,
     "confirmed",
+    transactionClients(transactionForIntent(baseIntent, propagationLagHash, propagationLagLease.lease.nonce)),
     propagationLagNow + 3,
   ),
   true,
@@ -471,6 +566,208 @@ assert.throws(
   "token intent metadata must be cryptographically bound to destination and amount calldata",
 );
 
+async function recordResolutionIntent(intent, hash) {
+  storage.clear();
+  const now = Date.now();
+  const acquisition = await transferIntent.acquireWalletTransferIntentLease(
+    intent,
+    stableNonceClients,
+    now,
+  );
+  assert.equal(acquisition.status, "acquired");
+  await transferIntent.recordWalletTransferIntentHash(
+    intent,
+    acquisition.lease.id,
+    hash,
+    now + 1,
+  );
+  return { lease: acquisition.lease, now };
+}
+
+const resolutionHash = `0x${"c1".repeat(32)}`;
+const otherResolutionHash = `0x${"c2".repeat(32)}`;
+const alternateAddress = "0x4444444444444444444444444444444444444444";
+const unsafeResolutionTransactions = [
+  {
+    name: "an unrelated wallet-returned hash",
+    mutate: (transaction) => ({ ...transaction, hash: otherResolutionHash }),
+    error: /wallet_transfer_transaction_intent_mismatch/,
+  },
+  {
+    name: "the wrong chain",
+    mutate: (transaction) => ({ ...transaction, chainId: baseIntent.chainId + 1 }),
+    error: /wallet_transfer_transaction_intent_mismatch/,
+  },
+  {
+    name: "the wrong sender",
+    mutate: (transaction) => ({ ...transaction, from: alternateAddress }),
+    error: /wallet_transfer_transaction_intent_mismatch/,
+  },
+  {
+    name: "the wrong leased nonce",
+    mutate: (transaction) => ({ ...transaction, nonce: transaction.nonce + 1 }),
+    error: /wallet_transfer_transaction_intent_mismatch/,
+  },
+  {
+    name: "the wrong destination",
+    mutate: (transaction) => ({ ...transaction, to: alternateAddress }),
+    error: /wallet_transfer_transaction_intent_mismatch/,
+  },
+  {
+    name: "the wrong native value",
+    mutate: (transaction) => ({ ...transaction, value: transaction.value + 1n }),
+    error: /wallet_transfer_transaction_intent_mismatch/,
+  },
+  {
+    name: "unexpected calldata",
+    mutate: (transaction) => ({ ...transaction, input: "0x00" }),
+    error: /wallet_transfer_transaction_intent_mismatch/,
+  },
+  {
+    name: "a missing critical transaction field",
+    mutate: (transaction) => {
+      const missingType = { ...transaction };
+      delete missingType.type;
+      return missingType;
+    },
+    error: /wallet_transfer_transaction_identity_invalid/,
+  },
+  {
+    name: "an unsupported transaction type",
+    mutate: (transaction) => ({ ...transaction, type: ["eip", "7702"].join("") }),
+    error: /wallet_transfer_transaction_identity_invalid/,
+  },
+];
+
+for (const vector of unsafeResolutionTransactions) {
+  const { lease, now } = await recordResolutionIntent(baseIntent, resolutionHash);
+  const transaction = vector.mutate(
+    transactionForIntent(baseIntent, resolutionHash, lease.nonce),
+  );
+  await assert.rejects(
+    transferIntent.resolveWalletTransferIntent(
+      baseIntent,
+      resolutionHash,
+      "confirmed",
+      transactionClients(transaction),
+      now + 2,
+    ),
+    vector.error,
+    `${vector.name} must not clear the exact durable intent`,
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(
+      baseIntent,
+      stableNonceClients,
+      now + 3,
+    ),
+    { status: "known-hash", hash: resolutionHash },
+    `${vector.name} must remain manually blocked after failed resolution`,
+  );
+}
+
+const rpcDivergenceTransactions = [
+  ...unsafeResolutionTransactions.slice(0, 7),
+  {
+    name: "a different supported transaction type",
+    mutate: (transaction) => ({ ...transaction, type: "legacy" }),
+  },
+];
+for (const vector of rpcDivergenceTransactions) {
+  const { lease, now } = await recordResolutionIntent(baseIntent, resolutionHash);
+  const transaction = transactionForIntent(baseIntent, resolutionHash, lease.nonce);
+  await assert.rejects(
+    transferIntent.resolveWalletTransferIntent(
+      baseIntent,
+      resolutionHash,
+      "confirmed",
+      transactionClients(transaction, vector.mutate(transaction)),
+      now + 2,
+    ),
+    /wallet_transfer_transaction_diverged/,
+    `the two canonical RPCs must agree exactly when observing ${vector.name}`,
+  );
+}
+
+const missingResolutionTransaction = Object.assign(new Error("transaction not found"), {
+  name: "TransactionNotFoundError",
+});
+const missingResolutionClient = {
+  getTransaction: async () => { throw missingResolutionTransaction; },
+};
+{
+  const { now } = await recordResolutionIntent(baseIntent, resolutionHash);
+  await assert.rejects(
+    transferIntent.resolveWalletTransferIntent(
+      baseIntent,
+      resolutionHash,
+      "confirmed",
+      [missingResolutionClient, missingResolutionClient],
+      now + 2,
+    ),
+    /wallet_transfer_transaction_missing_manual_reconciliation/,
+    "a hash missing from both canonical RPCs must require manual reconciliation",
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 3),
+    { status: "known-hash", hash: resolutionHash },
+    "a transaction missing from both RPCs must leave its durable intent blocked",
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, resolutionHash);
+  const transaction = transactionForIntent(baseIntent, resolutionHash, lease.nonce);
+  await assert.rejects(
+    transferIntent.resolveWalletTransferIntent(
+      baseIntent,
+      resolutionHash,
+      "confirmed",
+      [transactionClients(transaction)[0], missingResolutionClient],
+      now + 2,
+    ),
+    /wallet_transfer_transaction_diverged/,
+    "one missing RPC observation must not be treated as quorum",
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 3),
+    { status: "known-hash", hash: resolutionHash },
+    "one missing RPC observation must leave its durable intent blocked",
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, resolutionHash);
+  const transaction = transactionForIntent(baseIntent, resolutionHash, lease.nonce);
+  assert.equal(
+    await transferIntent.resolveWalletTransferIntent(
+      baseIntent,
+      resolutionHash,
+      "confirmed",
+      transactionClients(transaction),
+      now + 2,
+    ),
+    true,
+    "an exact native transfer observed identically by both RPCs must resolve",
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(tokenIntent, resolutionHash);
+  const transaction = transactionForIntent(tokenIntent, resolutionHash, lease.nonce);
+  assert.equal(
+    await transferIntent.resolveWalletTransferIntent(
+      tokenIntent,
+      resolutionHash,
+      "reverted",
+      transactionClients(transaction, transaction, "reverted"),
+      now + 2,
+    ),
+    true,
+    "an exact ERC-20 transfer observed identically by both RPCs must preserve reverted retry recovery",
+  );
+}
+
 const receiptHash = `0x${"cd".repeat(32)}`;
 const revertedReceipt = {
   status: "reverted",
@@ -491,11 +788,869 @@ const makeReceiptClient = ({
   wait = async () => revertedReceipt,
   read = async () => revertedReceipt,
   transaction = async () => ({ hash: receiptHash }),
+  head = async () => 124n,
 } = {}) => ({
   waitForTransactionReceipt: wait,
   getTransactionReceipt: read,
   getTransaction: transaction,
+  getBlockNumber: head,
 });
+
+const finalityReceiptFor = (hash, status = "success", overrides = {}) => ({
+  status,
+  transactionHash: hash,
+  blockHash: `0x${"d1".repeat(32)}`,
+  blockNumber: 123n,
+  transactionIndex: 1,
+  ...overrides,
+});
+
+const makeFinalityClient = ({ transaction, receipts, head = 124n }) => {
+  let receiptRead = 0;
+  return {
+    getTransaction: async () => transaction,
+    getBlockNumber: async () => head,
+    getTransactionReceipt: async () => {
+      const value = receipts[Math.min(receiptRead, receipts.length - 1)];
+      receiptRead += 1;
+      if (value instanceof Error) throw value;
+      return value;
+    },
+    waitForTransactionReceipt: async () => receipts[0],
+  };
+};
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, resolutionHash);
+  const transaction = transactionForIntent(baseIntent, resolutionHash, lease.nonce);
+  const receipt = finalityReceiptFor(resolutionHash);
+  const clients = [
+    makeFinalityClient({ transaction, receipts: [receipt] }),
+    makeFinalityClient({ transaction, receipts: [receipt] }),
+  ];
+  assert.deepEqual(
+    await transferIntent.waitForWalletTransferIntentReceipt(
+      clients,
+      baseIntent,
+      resolutionHash,
+      1_000,
+      now + 2,
+    ),
+    { status: "confirmed", hash: resolutionHash },
+    "an unchanged exact transaction must preserve the normal confirmed path",
+  );
+  assert.equal(
+    await transferIntent.resolveWalletTransferIntent(
+      baseIntent,
+      resolutionHash,
+      "confirmed",
+      clients,
+      now + 3,
+    ),
+    true,
+    "the unchanged exact transaction must still clear after finality revalidation",
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, resolutionHash);
+  const transaction = transactionForIntent(baseIntent, resolutionHash, lease.nonce);
+  const clients = [
+    makeReceiptClient({
+      wait: async () => { throw timeoutError; },
+      read: async () => { throw receiptNotFound; },
+      transaction: async () => transaction,
+    }),
+    makeReceiptClient({
+      wait: async () => { throw timeoutError; },
+      read: async () => { throw receiptNotFound; },
+      transaction: async () => transaction,
+    }),
+  ];
+  assert.deepEqual(
+    await transferIntent.waitForWalletTransferIntentReceipt(
+      clients,
+      baseIntent,
+      resolutionHash,
+      1_000,
+      now + 2,
+    ),
+    { status: "pending", hash: resolutionHash },
+    "an exact transaction without a receipt must preserve the pending path",
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 3),
+    { status: "known-hash", hash: resolutionHash },
+    "pending behavior must retain the exact durable intent",
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, resolutionHash);
+  const transaction = transactionForIntent(baseIntent, resolutionHash, lease.nonce);
+  const receipt = finalityReceiptFor(resolutionHash);
+  const clients = [
+    makeFinalityClient({ transaction, receipts: [receipt], head: receipt.blockNumber }),
+    makeFinalityClient({ transaction, receipts: [receipt], head: receipt.blockNumber }),
+  ];
+  await assert.rejects(
+    transferIntent.resolveWalletTransferIntent(
+      baseIntent,
+      resolutionHash,
+      "confirmed",
+      clients,
+      now + 2,
+    ),
+    /wallet_transfer_receipt_finality_insufficient/,
+    "a one-block observation must not clear a durable transfer intent",
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 3),
+    { status: "known-hash", hash: resolutionHash },
+    "insufficient finality must preserve the known hash",
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, resolutionHash);
+  const transaction = transactionForIntent(baseIntent, resolutionHash, lease.nonce);
+  const receipt = finalityReceiptFor(resolutionHash);
+  const reorgedReceipt = {
+    ...receipt,
+    blockHash: `0x${"d2".repeat(32)}`,
+  };
+  const clients = [
+    makeFinalityClient({ transaction, receipts: [receipt, reorgedReceipt] }),
+    makeFinalityClient({ transaction, receipts: [receipt, reorgedReceipt] }),
+  ];
+  await assert.rejects(
+    transferIntent.resolveWalletTransferIntent(
+      baseIntent,
+      resolutionHash,
+      "confirmed",
+      clients,
+      now + 2,
+    ),
+    /wallet_transfer_receipt_diverged/,
+    "a post-finality-read reorg must not clear a durable transfer intent",
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 3),
+    { status: "known-hash", hash: resolutionHash },
+    "a post-read reorg must preserve the known hash",
+  );
+}
+
+const originalReplacementHash = `0x${"e1".repeat(32)}`;
+const repricedReplacementHash = `0x${"e2".repeat(32)}`;
+
+const makeReplacementClient = ({
+  reason = "repriced",
+  replacedTransaction,
+  transaction,
+  canonicalTransaction = transaction,
+  emitReplacement = true,
+  receipt = finalityReceiptFor(transaction.hash),
+  head = receipt.blockNumber + 1n,
+}) => ({
+  waitForTransactionReceipt: async ({ confirmations, onReplaced }) => {
+    assert.equal(
+      confirmations,
+      transferIntent.WALLET_TRANSFER_FINALITY_CONFIRMATIONS,
+      "wallet transfer waits must request the bounded finality depth",
+    );
+    if (emitReplacement) {
+      onReplaced?.({ reason, replacedTransaction, transaction, transactionReceipt: receipt });
+    }
+    return receipt;
+  },
+  getTransactionReceipt: async () => receipt,
+  getBlockNumber: async () => head,
+  getTransaction: async ({ hash }) => {
+    if (hash === transaction.hash) return canonicalTransaction;
+    if (hash === replacedTransaction.hash) return replacedTransaction;
+    throw transactionNotFound;
+  },
+});
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, originalReplacementHash);
+  const replacedTransaction = transactionForIntent(
+    baseIntent,
+    originalReplacementHash,
+    lease.nonce,
+  );
+  const replacementTransaction = transactionForIntent(
+    baseIntent,
+    repricedReplacementHash,
+    lease.nonce,
+  );
+  const clients = [
+    makeReplacementClient({ replacedTransaction, transaction: replacementTransaction }),
+    makeReplacementClient({ replacedTransaction, transaction: replacementTransaction }),
+  ];
+  assert.deepEqual(
+    await transferIntent.waitForWalletTransferIntentReceipt(
+      clients,
+      baseIntent,
+      originalReplacementHash,
+      1_000,
+      now + 2,
+    ),
+    { status: "confirmed", hash: repricedReplacementHash },
+    "two exact repriced observations must migrate the durable known hash",
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 3),
+    { status: "known-hash", hash: repricedReplacementHash },
+    "replacement migration must be durable before terminal resolution",
+  );
+  assert.equal(
+    await transferIntent.resolveWalletTransferIntent(
+      baseIntent,
+      repricedReplacementHash,
+      "confirmed",
+      clients,
+      now + 4,
+    ),
+    true,
+    "the exact repriced hash must resolve after bounded finality and canonical recheck",
+  );
+}
+
+async function persistOriginalTransactionType(lease, now) {
+  const originalTransaction = transactionForIntent(
+    baseIntent,
+    originalReplacementHash,
+    lease.nonce,
+  );
+  const pendingClients = [0, 1].map(() => ({
+    waitForTransactionReceipt: async () => { throw timeoutError; },
+    getTransactionReceipt: async () => { throw receiptNotFound; },
+    getBlockNumber: async () => 124n,
+    getTransaction: async ({ hash }) => {
+      if (hash === originalReplacementHash) return originalTransaction;
+      throw transactionNotFound;
+    },
+  }));
+  assert.deepEqual(
+    await transferIntent.waitForWalletTransferIntentReceipt(
+      pendingClients,
+      baseIntent,
+      originalReplacementHash,
+      1_000,
+      now + 2,
+    ),
+    { status: "pending", hash: originalReplacementHash },
+  );
+}
+
+const replacementMigrationFaults = [
+  ...[0, 1].flatMap((rpcIndex) => ["before", "after"].map((phase) => ({
+    name: `quota ${phase} RPC ${rpcIndex} observation commit`,
+    operation: "setItem",
+    key: replacementObservationStorageKey(baseIntent, rpcIndex),
+    phase,
+    errorName: "QuotaExceededError",
+    error: /wallet_transfer_replacement_storage_write_failed/,
+    emitOnReload: phase === "before",
+  }))),
+  ...["before", "after"].map((phase) => ({
+    name: `quota ${phase} candidate state commit`,
+    operation: "setItem",
+    key: walletTransferStorageKey(baseIntent),
+    phase,
+    errorName: "QuotaExceededError",
+    error: /wallet_transfer_intent_storage_write_failed/,
+    prepareType: true,
+  })),
+  ...[0, 1].flatMap((rpcIndex) => ["before", "after"].map((phase) => ({
+    name: `remove failure ${phase} RPC ${rpcIndex} observation cleanup`,
+    operation: "removeItem",
+    key: replacementObservationStorageKey(baseIntent, rpcIndex),
+    phase,
+    error: /wallet_transfer_replacement_storage_clear_failed/,
+  }))),
+];
+
+for (const [faultIndex, fault] of replacementMigrationFaults.entries()) {
+  const { lease, now } = await recordResolutionIntent(baseIntent, originalReplacementHash);
+  if (fault.prepareType) await persistOriginalTransactionType(lease, now);
+  const replacedTransaction = transactionForIntent(
+    baseIntent,
+    originalReplacementHash,
+    lease.nonce,
+  );
+  const replacementTransaction = transactionForIntent(
+    baseIntent,
+    repricedReplacementHash,
+    lease.nonce,
+  );
+  const clients = [
+    makeReplacementClient({ replacedTransaction, transaction: replacementTransaction }),
+    makeReplacementClient({ replacedTransaction, transaction: replacementTransaction }),
+  ];
+  storage.failNext(fault);
+  await assert.rejects(
+    transferIntent.waitForWalletTransferIntentReceipt(
+      clients,
+      baseIntent,
+      originalReplacementHash,
+      1_000,
+      now + 3,
+    ),
+    fault.error,
+    `${fault.name} must surface without unlocking the actor`,
+  );
+  const crashReloadModule = await import(
+    new URL(
+      `../app/lib/walletTransferIntent.ts?crash-reload=${Date.now()}-${faultIndex}`,
+      import.meta.url,
+    ).href
+  );
+  const crashReloadIntent = crashReloadModule.default ?? crashReloadModule;
+  const resumedClients = [0, 1].map(() => makeReplacementClient({
+    replacedTransaction,
+    transaction: replacementTransaction,
+    emitReplacement: fault.emitOnReload === true,
+  }));
+  const reloadedKnownHash = (
+    await crashReloadIntent.acquireWalletTransferIntentLease(
+      baseIntent,
+      stableNonceClients,
+      now + 4,
+    )
+  ).hash;
+  assert.ok(
+    reloadedKnownHash === originalReplacementHash ||
+      reloadedKnownHash === repricedReplacementHash,
+    `${fault.name} must retain either the original or exact candidate hash`,
+  );
+  assert.deepEqual(
+    await crashReloadIntent.waitForWalletTransferIntentReceipt(
+      resumedClients,
+      baseIntent,
+      originalReplacementHash,
+      1_000,
+      now + 5,
+    ),
+    { status: "confirmed", hash: repricedReplacementHash },
+    `${fault.name} must recover the exact candidate after reload`,
+  );
+  assert.deepEqual(
+    await crashReloadIntent.acquireWalletTransferIntentLease(
+      baseIntent,
+      stableNonceClients,
+      now + 6,
+    ),
+    { status: "known-hash", hash: repricedReplacementHash },
+    `${fault.name} must never unlock the actor during recovery`,
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, originalReplacementHash);
+  const replacedTransaction = transactionForIntent(
+    baseIntent,
+    originalReplacementHash,
+    lease.nonce,
+  );
+  const replacementTransaction = transactionForIntent(
+    baseIntent,
+    repricedReplacementHash,
+    lease.nonce,
+  );
+  const clients = [
+    makeReplacementClient({ replacedTransaction, transaction: replacementTransaction }),
+    makeReplacementClient({ replacedTransaction, transaction: replacementTransaction }),
+  ];
+  storage.failNext({
+    operation: "removeItem",
+    key: replacementObservationStorageKey(baseIntent, 0),
+  });
+  await assert.rejects(
+    transferIntent.waitForWalletTransferIntentReceipt(
+      clients,
+      baseIntent,
+      originalReplacementHash,
+      1_000,
+      now + 2,
+    ),
+    /wallet_transfer_replacement_storage_clear_failed/,
+  );
+  const observationKey = replacementObservationStorageKey(baseIntent, 0);
+  const mismatchedObservation = JSON.parse(storage.getItem(observationKey));
+  mismatchedObservation.candidateHash = otherResolutionHash;
+  storage.setItem(observationKey, JSON.stringify(mismatchedObservation));
+  const mismatchReloadModule = await import(
+    new URL(`../app/lib/walletTransferIntent.ts?mismatch-reload=${Date.now()}`, import.meta.url).href
+  );
+  const mismatchReloadIntent = mismatchReloadModule.default ?? mismatchReloadModule;
+  const resumedClients = [0, 1].map(() => makeReplacementClient({
+    replacedTransaction,
+    transaction: replacementTransaction,
+    emitReplacement: false,
+  }));
+  await assert.rejects(
+    mismatchReloadIntent.waitForWalletTransferIntentReceipt(
+      resumedClients,
+      baseIntent,
+      repricedReplacementHash,
+      1_000,
+      now + 3,
+    ),
+    /wallet_transfer_replacement_rpc_disagreement/,
+    "stale evidence for a different candidate must remain quarantined after reload",
+  );
+  assert.deepEqual(
+    await mismatchReloadIntent.acquireWalletTransferIntentLease(
+      baseIntent,
+      stableNonceClients,
+      now + 4,
+    ),
+    { status: "known-hash", hash: repricedReplacementHash },
+    "mismatched stale evidence must not unlock the actor or overwrite the exact current candidate",
+  );
+}
+
+for (const [faultIndex, fault] of [
+  {
+    name: "manual quota before candidate commit",
+    operation: "setItem",
+    key: walletTransferStorageKey(baseIntent),
+    phase: "before",
+    errorName: "QuotaExceededError",
+    error: /wallet_transfer_intent_storage_write_failed/,
+  },
+  {
+    name: "manual quota after candidate commit",
+    operation: "setItem",
+    key: walletTransferStorageKey(baseIntent),
+    phase: "after",
+    errorName: "QuotaExceededError",
+    error: /wallet_transfer_intent_storage_write_failed/,
+  },
+  ...["before", "after"].map((phase) => ({
+    name: `manual cleanup failure ${phase} remove`,
+    operation: "removeItem",
+    key: replacementObservationStorageKey(baseIntent, 0),
+    phase,
+    error: /wallet_transfer_replacement_storage_clear_failed/,
+  })),
+].entries()) {
+  const { lease, now } = await recordResolutionIntent(baseIntent, originalReplacementHash);
+  await persistOriginalTransactionType(lease, now);
+  const replacedTransaction = transactionForIntent(
+    baseIntent,
+    originalReplacementHash,
+    lease.nonce,
+  );
+  const replacementTransaction = transactionForIntent(
+    baseIntent,
+    repricedReplacementHash,
+    lease.nonce,
+  );
+  const clients = [0, 1].map(() => makeReplacementClient({
+    replacedTransaction,
+    transaction: replacementTransaction,
+    emitReplacement: false,
+  }));
+  storage.failNext(fault);
+  await assert.rejects(
+    transferIntent.reconcileWalletTransferReplacementCandidate(
+      clients,
+      [actor],
+      repricedReplacementHash,
+      1_000,
+      now + 3,
+    ),
+    fault.error,
+    `${fault.name} must surface without clearing the pending actor`,
+  );
+  const manualCrashReloadModule = await import(
+    new URL(
+      `../app/lib/walletTransferIntent.ts?manual-crash-reload=${Date.now()}-${faultIndex}`,
+      import.meta.url,
+    ).href
+  );
+  const manualCrashReloadIntent = manualCrashReloadModule.default ?? manualCrashReloadModule;
+  assert.deepEqual(
+    await manualCrashReloadIntent.reconcileWalletTransferReplacementCandidate(
+      clients,
+      [actor],
+      repricedReplacementHash,
+      1_000,
+      now + 4,
+    ),
+    { status: "confirmed", hash: repricedReplacementHash },
+    `${fault.name} must resume idempotently after reload`,
+  );
+  assert.equal(
+    (
+      await manualCrashReloadIntent.acquireWalletTransferIntentLease(
+        baseIntent,
+        stableNonceClients,
+        now + 5,
+      )
+    ).status,
+    "acquired",
+    `${fault.name} may unlock only after exact finality and terminal resolution`,
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, originalReplacementHash);
+  const replacedTransaction = transactionForIntent(
+    baseIntent,
+    originalReplacementHash,
+    lease.nonce,
+  );
+  const replacementTransaction = transactionForIntent(
+    baseIntent,
+    repricedReplacementHash,
+    lease.nonce,
+  );
+  const replacementReceipt = finalityReceiptFor(repricedReplacementHash);
+  let signalFirstObservation;
+  let releaseInterruptedWait;
+  const firstObservation = new Promise((resolve) => {
+    signalFirstObservation = resolve;
+  });
+  const interruptedWait = new Promise((resolve) => {
+    releaseInterruptedWait = resolve;
+  });
+  const interruptedClients = [0, 1].map((rpcIndex) => ({
+    waitForTransactionReceipt: async ({ onReplaced }) => {
+      if (rpcIndex === 0) {
+        onReplaced?.({
+          reason: "repriced",
+          replacedTransaction,
+          transaction: replacementTransaction,
+          transactionReceipt: replacementReceipt,
+        });
+        signalFirstObservation();
+      }
+      await interruptedWait;
+      throw timeoutError;
+    },
+    getTransactionReceipt: async () => { throw receiptNotFound; },
+    getBlockNumber: async () => replacementReceipt.blockNumber + 1n,
+    getTransaction: async ({ hash }) => {
+      if (hash === originalReplacementHash) return replacedTransaction;
+      if (hash === repricedReplacementHash) return replacementTransaction;
+      throw transactionNotFound;
+    },
+  }));
+  const interruptedAttempt = transferIntent.waitForWalletTransferIntentReceipt(
+    interruptedClients,
+    baseIntent,
+    originalReplacementHash,
+    1_000,
+    now + 2,
+  );
+  await firstObservation;
+
+  const reloadedModule = await import(
+    new URL(`../app/lib/walletTransferIntent.ts?replacement-reload=${Date.now()}`, import.meta.url).href
+  );
+  const reloadedIntent = reloadedModule.default ?? reloadedModule;
+  const resumedClients = [0, 1].map((rpcIndex) => ({
+    waitForTransactionReceipt: async ({ onReplaced }) => {
+      if (rpcIndex === 1) {
+        onReplaced?.({
+          reason: "repriced",
+          replacedTransaction,
+          transaction: replacementTransaction,
+          transactionReceipt: replacementReceipt,
+        });
+      }
+      return replacementReceipt;
+    },
+    getTransactionReceipt: async ({ hash }) => {
+      if (hash === repricedReplacementHash) return replacementReceipt;
+      throw receiptNotFound;
+    },
+    getBlockNumber: async () => replacementReceipt.blockNumber + 1n,
+    getTransaction: async ({ hash }) => {
+      if (hash === repricedReplacementHash) return replacementTransaction;
+      throw transactionNotFound;
+    },
+  }));
+  assert.deepEqual(
+    await reloadedIntent.waitForWalletTransferIntentReceipt(
+      resumedClients,
+      baseIntent,
+      originalReplacementHash,
+      1_000,
+      now + 3,
+    ),
+    { status: "confirmed", hash: repricedReplacementHash },
+    "a reload between independent callbacks must combine their separately persisted exact observations",
+  );
+  assert.deepEqual(
+    await reloadedIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 4),
+    { status: "known-hash", hash: repricedReplacementHash },
+    "restart recovery must migrate the durable hash before any actor unlock",
+  );
+  releaseInterruptedWait();
+  await assert.rejects(
+    interruptedAttempt,
+    /wallet_transfer_replacement_manual_reconciliation|wallet_transfer_receipt_finality_unavailable/,
+    "the interrupted watcher must not overwrite the hash recovered by the reloaded watcher",
+  );
+  assert.equal(
+    await reloadedIntent.resolveWalletTransferIntent(
+      baseIntent,
+      repricedReplacementHash,
+      "confirmed",
+      resumedClients,
+      now + 5,
+    ),
+    true,
+  );
+}
+
+{
+  storage.clear();
+  const now = Date.now();
+  const originalTransaction = transactionForIntent(
+    baseIntent,
+    originalReplacementHash,
+    7,
+  );
+  const replacementTransaction = transactionForIntent(
+    baseIntent,
+    repricedReplacementHash,
+    7,
+  );
+  const identityNonceClients = [0, 1].map(() => ({
+    ...stableNonceClient,
+    getTransaction: async ({ hash }) => {
+      if (hash === originalReplacementHash) return originalTransaction;
+      throw transactionNotFound;
+    },
+  }));
+  assert.equal(
+    await transferIntent.withWalletTransferIntentLease(
+      baseIntent,
+      identityNonceClients,
+      async (acquisition, retainResult) => {
+        assert.equal(acquisition.status, "acquired");
+        return (await retainResult(
+          Promise.resolve({ hash: originalReplacementHash }),
+          acquisition.lease,
+        )).hash;
+      },
+      undefined,
+      now,
+    ),
+    originalReplacementHash,
+    "the final submit boundary must durably bind the original transaction type before returning its hash",
+  );
+
+  const replacementReceipt = finalityReceiptFor(repricedReplacementHash);
+  const candidateClients = [0, 1].map(() => ({
+    waitForTransactionReceipt: async () => replacementReceipt,
+    getTransactionReceipt: async ({ hash }) => {
+      if (hash === repricedReplacementHash) return replacementReceipt;
+      throw receiptNotFound;
+    },
+    getBlockNumber: async () => replacementReceipt.blockNumber + 1n,
+    getTransaction: async ({ hash }) => {
+      if (hash === repricedReplacementHash) return replacementTransaction;
+      throw transactionNotFound;
+    },
+  }));
+  const manualReloadModule = await import(
+    new URL(`../app/lib/walletTransferIntent.ts?manual-reload=${Date.now()}`, import.meta.url).href
+  );
+  const manualReloadIntent = manualReloadModule.default ?? manualReloadModule;
+  assert.deepEqual(
+    await manualReloadIntent.reconcileWalletTransferReplacementCandidate(
+      candidateClients,
+      [actor],
+      repricedReplacementHash,
+      1_000,
+      now + 3,
+    ),
+    { status: "confirmed", hash: repricedReplacementHash },
+    "a wired manual candidate must recover after reload when the original hash vanished before callbacks",
+  );
+  assert.equal(
+    (await manualReloadIntent.acquireWalletTransferIntentLease(
+      baseIntent,
+      stableNonceClients,
+      now + 4,
+    )).status,
+    "acquired",
+    "only exact two-RPC identity plus finality may release the actor after manual recovery",
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, originalReplacementHash);
+  const originalTransaction = transactionForIntent(
+    baseIntent,
+    originalReplacementHash,
+    lease.nonce,
+  );
+  const pendingOriginalClients = [0, 1].map(() => ({
+    waitForTransactionReceipt: async () => { throw timeoutError; },
+    getTransactionReceipt: async () => { throw receiptNotFound; },
+    getBlockNumber: async () => 124n,
+    getTransaction: async () => originalTransaction,
+  }));
+  await transferIntent.waitForWalletTransferIntentReceipt(
+    pendingOriginalClients,
+    baseIntent,
+    originalReplacementHash,
+    1_000,
+    now + 2,
+  );
+  const attackerTransaction = transactionForIntent(
+    baseIntent,
+    repricedReplacementHash,
+    lease.nonce,
+    { value: baseIntent.amountWei + 1n },
+  );
+  const attackerClients = transactionClients(attackerTransaction);
+  await assert.rejects(
+    transferIntent.reconcileWalletTransferReplacementCandidate(
+      attackerClients,
+      [actor],
+      repricedReplacementHash,
+      1_000,
+      now + 3,
+    ),
+    /wallet_transfer_transaction_intent_mismatch/,
+    "an attacker-selected candidate with a different payload must fail before hash migration",
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 4),
+    { status: "known-hash", hash: originalReplacementHash },
+    "a mismatched manual candidate must never unlock the actor",
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, originalReplacementHash);
+  const replacedTransaction = transactionForIntent(
+    baseIntent,
+    originalReplacementHash,
+    lease.nonce,
+  );
+  const replacementTransaction = transactionForIntent(
+    baseIntent,
+    repricedReplacementHash,
+    lease.nonce,
+  );
+  const clients = [
+    makeReplacementClient({ replacedTransaction, transaction: replacementTransaction }),
+    makeReplacementClient({
+      replacedTransaction,
+      transaction: replacementTransaction,
+      canonicalTransaction: { ...replacementTransaction, value: replacementTransaction.value + 1n },
+    }),
+  ];
+  await assert.rejects(
+    transferIntent.waitForWalletTransferIntentReceipt(
+      clients,
+      baseIntent,
+      originalReplacementHash,
+      1_000,
+      now + 2,
+    ),
+    /wallet_transfer_transaction_diverged/,
+    "replacement migration must fail before persistence when canonical RPC transaction views differ",
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 3),
+    { status: "known-hash", hash: originalReplacementHash },
+    "a failed canonical replacement check must atomically preserve the original known hash",
+  );
+}
+
+{
+  const { lease, now } = await recordResolutionIntent(baseIntent, originalReplacementHash);
+  const replacedTransaction = transactionForIntent(baseIntent, originalReplacementHash, lease.nonce);
+  const replacementTransaction = transactionForIntent(baseIntent, repricedReplacementHash, lease.nonce);
+  const clients = [
+    makeReplacementClient({ replacedTransaction, transaction: replacementTransaction }),
+    makeReplacementClient({
+      replacedTransaction,
+      transaction: replacementTransaction,
+      emitReplacement: false,
+    }),
+  ];
+  await assert.rejects(
+    transferIntent.waitForWalletTransferIntentReceipt(
+      clients,
+      baseIntent,
+      originalReplacementHash,
+      1_000,
+      now + 2,
+    ),
+    /wallet_transfer_replacement_manual_reconciliation/,
+    "a replacement reported by only one RPC must remain manual",
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 3),
+    { status: "known-hash", hash: originalReplacementHash },
+    "a one-sided replacement report must preserve the original hash",
+  );
+}
+
+for (const vector of [
+  { name: "cancelled", reason: "cancelled", mutate: (transaction) => ({ ...transaction, to: transaction.from, value: 0n }) },
+  { name: "different replacement", reason: "replaced", mutate: (transaction) => ({ ...transaction, value: transaction.value + 1n }) },
+  { name: "wrong chain", reason: "repriced", mutate: (transaction) => ({ ...transaction, chainId: transaction.chainId + 1 }) },
+  { name: "wrong sender", reason: "repriced", mutate: (transaction) => ({ ...transaction, from: alternateAddress }) },
+  { name: "wrong leased nonce", reason: "repriced", mutate: (transaction) => ({ ...transaction, nonce: transaction.nonce + 1 }) },
+  { name: "wrong destination", reason: "repriced", mutate: (transaction) => ({ ...transaction, to: alternateAddress }) },
+  { name: "wrong value", reason: "repriced", mutate: (transaction) => ({ ...transaction, value: transaction.value + 1n }) },
+  { name: "wrong input", reason: "repriced", mutate: (transaction) => ({ ...transaction, input: "0x00" }) },
+  { name: "wrong type", reason: "repriced", mutate: (transaction) => ({ ...transaction, type: "legacy" }) },
+]) {
+  const { lease, now } = await recordResolutionIntent(baseIntent, originalReplacementHash);
+  const replacedTransaction = transactionForIntent(
+    baseIntent,
+    originalReplacementHash,
+    lease.nonce,
+  );
+  const replacementTransaction = vector.mutate(transactionForIntent(
+    baseIntent,
+    repricedReplacementHash,
+    lease.nonce,
+  ));
+  const clients = [
+    makeReplacementClient({
+      reason: vector.reason,
+      replacedTransaction,
+      transaction: replacementTransaction,
+    }),
+    makeReplacementClient({
+      reason: vector.reason,
+      replacedTransaction,
+      transaction: replacementTransaction,
+    }),
+  ];
+  await assert.rejects(
+    transferIntent.waitForWalletTransferIntentReceipt(
+      clients,
+      baseIntent,
+      originalReplacementHash,
+      1_000,
+      now + 2,
+    ),
+    /wallet_transfer_replacement_manual_reconciliation|wallet_transfer_transaction_intent_mismatch/,
+    `${vector.name} must not migrate the durable hash automatically`,
+  );
+  assert.deepEqual(
+    await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, now + 3),
+    { status: "known-hash", hash: originalReplacementHash },
+    `${vector.name} must preserve the original known hash for manual reconciliation`,
+  );
+}
 
 assert.equal(
   await transferIntent.waitForStableWalletTransferReceipt([
@@ -614,19 +1769,45 @@ assert.match(
 );
 
 const walletActionsSource = readFileSync("app/hooks/useWalletActions.ts", "utf8");
+const walletTransferIntentSource = readFileSync("app/lib/walletTransferIntent.ts", "utf8");
 assert.match(
-  walletActionsSource,
-  /selectWalletTransferAgreementRpcUrls\([\s\S]*WALLET_TRANSFER_RECEIPT_CLIENTS[\s\S]*const waitForTransferReceipt[\s\S]*waitForStableWalletTransferReceipt\([\s\S]*WALLET_TRANSFER_RECEIPT_CLIENTS/,
-  "transfer receipt decisions must use two distinct per-URL clients rather than one fallback client",
+  walletTransferIntentSource,
+  /async function readWalletTransferTransactionQuorum[\s\S]*Promise\.allSettled\([\s\S]*getTransaction\(\{ hash \}\)[\s\S]*walletTransferTransactionFingerprint\(first\)[\s\S]*walletTransferTransactionFingerprint\(second\)[\s\S]*async function assertWalletTransferTransactionQuorum[\s\S]*assertWalletTransferTransactionMatchesIntent\(transaction, intent, hash, nonce\)[\s\S]*resolveWalletTransferIntent[\s\S]*const transaction = await assertWalletTransferTransactionQuorum[\s\S]*current\.transactionType[\s\S]*removeState\(intent\)/,
+  "every terminal intent resolution must bind two exact transaction observations to the stored intent and leased nonce before clearing",
+);
+assert.match(
+  walletTransferIntentSource,
+  /replacementObservationKey[\s\S]*recordReplacementObservation[\s\S]*writeReplacementObservation[\s\S]*recoverPersistedReplacement[\s\S]*observations\[0\]\.candidateHash !== observations\[1\]\.candidateHash[\s\S]*clearReplacementObservations/,
+  "each RPC replacement callback must persist independently and only matching durable observations may migrate the hash",
+);
+assert.match(
+  walletTransferIntentSource,
+  /retainWalletTransferSendResult\(promise, lease, async[\s\S]*getWalletTransferTransactionClients\(clients\)[\s\S]*recordWalletTransferIntentHashLocked[\s\S]*persistCanonicalWalletTransferTypeLocked/,
+  "the real send-result boundary must bind the original transaction type through both configured RPC clients before returning when it is observable",
+);
+assert.match(
+  walletTransferIntentSource,
+  /reconcileWalletTransferReplacementCandidate[\s\S]*readWalletTransferTransactionQuorum\(clients, candidateHash\)[\s\S]*candidate\.type !== current\.transactionType[\s\S]*waitForWalletTransferIntentReceipt[\s\S]*resolveWalletTransferIntent/,
+  "the manual restart path must bind the candidate to the stored original type and finality before actor release",
 );
 assert.match(
   walletActionsSource,
-  /handleWithdrawEthToExternal[\s\S]*createWalletTransferIntent\([\s\S]*sendTransactionSilent\([\s\S]*if \(receiptState === "pending"\)[\s\S]*return;[\s\S]*resolveWalletTransferIntent\(transferIntent, hash, "confirmed"\)/,
+  /selectWalletTransferAgreementRpcUrls\([\s\S]*const WALLET_TRANSFER_RECEIPT_CLIENTS = createWalletTransferReceiptClients\(\)[\s\S]*walletTransferReceiptClients = WALLET_TRANSFER_RECEIPT_CLIENTS \?\? undefined[\s\S]*const waitForTransferReceipt[\s\S]*waitForWalletTransferIntentReceipt\([\s\S]*walletTransferReceiptClients/,
+  "transfer receipt decisions must default to two distinct per-URL clients while allowing the same strict client pair to be injected for behavioral tests",
+);
+assert.match(
+  walletActionsSource,
+  /refreshPendingTransactionStatus = useCallback\(async \(replacementHash\?: string\)[\s\S]*reconcileWalletTransferReplacementCandidate\([\s\S]*walletTransferReceiptClients[\s\S]*allowedActors[\s\S]*candidateHash/,
+  "wallet settings must wire the user-supplied replacement hash into the strict two-RPC reconciliation path",
+);
+assert.match(
+  walletActionsSource,
+  /handleWithdrawEthToExternal[\s\S]*createWalletTransferIntent\([\s\S]*sendTransactionSilent\([\s\S]*waitForTransferReceipt\(transferIntent, hash\)[\s\S]*if \(receiptState\.status === "pending"\)[\s\S]*return;[\s\S]*resolveTransferIntent\(transferIntent, receiptState\.hash, "confirmed"\)/,
   "known-hash pending behavior must retain the lease and confirmed receipts must resolve it",
 );
 assert.match(
   walletActionsSource,
-  /waitForStableWalletTransferReceipt\([\s\S]*err instanceof WalletTransactionRevertedError[\s\S]*resolveWalletTransferIntent\(transferIntent, knownHash, "reverted"\)/,
+  /waitForStableWalletTransferReceipt\([\s\S]*err instanceof WalletTransactionRevertedError[\s\S]*resolveTransferIntent\(transferIntent, knownHash, "reverted"\)/,
   "only a stably re-read typed reverted receipt for the same hash may release the transfer intent for retry",
 );
 assert.match(
@@ -645,9 +1826,9 @@ for (const handlerName of [
   const end = walletActionsSource.indexOf("const handle", start + 10);
   const source = walletActionsSource.slice(start, end >= 0 ? end : undefined);
   assert.match(source, /createWalletTransferIntent\(/, `${handlerName} must create a durable exact intent`);
-  assert.match(source, /waitForTransferReceipt\(hash\)/, `${handlerName} must require independent receipt agreement`);
-  assert.match(source, /if \(!await resolveWalletTransferIntent\(transferIntent, hash, "confirmed"\)\)/, `${handlerName} must fail closed when confirmed intent resolution returns false`);
-  assert.match(source, /WalletTransactionRevertedError[\s\S]*resolveWalletTransferIntent\(transferIntent, knownHash, "reverted"\)/, `${handlerName} must require stable typed revert evidence`);
+  assert.match(source, /waitForTransferReceipt\(transferIntent, hash\)/, `${handlerName} must require independent receipt agreement`);
+  assert.match(source, /if \(!await resolveTransferIntent\(transferIntent, receiptState\.hash, "confirmed"\)\)/, `${handlerName} must fail closed when confirmed intent resolution returns false`);
+  assert.match(source, /WalletTransactionRevertedError[\s\S]*resolveTransferIntent\(transferIntent, knownHash, "reverted"\)/, `${handlerName} must require stable typed revert evidence`);
 }
 for (const handlerName of ["handleDepositEthToEmbedded", "handleDepositTokenToEmbedded"]) {
   const start = walletActionsSource.indexOf(`const ${handlerName}`);

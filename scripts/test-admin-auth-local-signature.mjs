@@ -28,6 +28,7 @@ delete process.env.UPSTASH_REDIS_REST_TOKEN;
 let dbModule;
 let publicClient;
 let originalRpcVerifyMessage;
+const originalDateNow = Date.now;
 
 try {
   const { NextRequest } = await import("next/server");
@@ -48,21 +49,21 @@ try {
     return true;
   };
 
-  function buildMessage(nonce) {
+  function buildMessage(nonce, { uri = "http://localhost:3000/admin", issuedAt = new Date(Date.now()).toISOString() } = {}) {
     return adminAuth.buildAdminAuthMessage({
       address: adminAccount.address,
-      uri: "http://localhost:3000/admin",
+      uri,
       chainId: 59141,
       nonce,
-      issuedAt: new Date().toISOString(),
+      issuedAt,
     });
   }
 
-  function createRequest(message, signature) {
+  function createRequest(message, signature, bodyOverride) {
     return new NextRequest("http://localhost:3000/api/admin/auth", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+      body: bodyOverride ?? JSON.stringify({
         authAddress: adminAccount.address,
         authMessage: message,
         authSignature: signature,
@@ -75,6 +76,11 @@ try {
     return Number(row.count);
   }
 
+  function assertAuthResponseHeaders(response, label) {
+    assert.match(response.headers.get("cache-control") ?? "", /(?:^|,)\s*no-store(?:,|$)/, `${label} must be no-store`);
+    assert.match(response.headers.get("vary") ?? "", /(?:^|,)\s*Cookie(?:,|$)/i, `${label} must vary on Cookie`);
+  }
+
   const attackerMessage = buildMessage("1".repeat(32));
   const attackerSignature = await attackerAccount.signMessage({ message: attackerMessage });
   const rejected = await route.POST(createRequest(attackerMessage, attackerSignature));
@@ -84,18 +90,38 @@ try {
   assert.equal(rejected.headers.get("set-cookie"), null, "a rejected signature must not issue an admin cookie");
   assert.equal(countAdminSessions(), 0, "a rejected signature must not create a server-side admin session");
   assert.equal(rpcVerifyCalls, 0, "admin EOA verification must never consult the RPC verifier");
+  assertAuthResponseHeaders(rejected, "rejected signature response");
 
-  const malformedMessage = buildMessage("3".repeat(32));
-  const malformed = await route.POST(createRequest(malformedMessage, `0x${"0".repeat(130)}`));
-  assert.equal(malformed.status, 401, "a non-recoverable signature must preserve the authentication failure response");
-  assert.deepEqual(await malformed.json(), { error: "Signature verification failed" });
-  assert.equal(malformed.headers.get("set-cookie"), null);
+  const malformed = await route.POST(createRequest("", "", "{"));
+  assert.equal(malformed.status, 400, "malformed JSON must be rejected by the real admin route");
+  assert.deepEqual(await malformed.json(), { error: "Invalid auth payload" });
+  assertAuthResponseHeaders(malformed, "malformed JSON response");
   assert.equal(countAdminSessions(), 0);
-  assert.equal(rpcVerifyCalls, 0);
 
-  const adminMessage = buildMessage("2".repeat(32));
-  const adminSignature = await adminAccount.signMessage({ message: adminMessage });
-  const accepted = await route.POST(createRequest(adminMessage, adminSignature));
+  const oversized = await route.POST(createRequest("", "", JSON.stringify({ padding: "x".repeat(8_193) })));
+  assert.equal(oversized.status, 413, "oversized JSON must be rejected by the real admin route");
+  assert.deepEqual(await oversized.json(), { error: "Auth payload too large" });
+  assertAuthResponseHeaders(oversized, "oversized JSON response");
+  assert.equal(countAdminSessions(), 0);
+
+  const wrongPathMessage = buildMessage("4".repeat(32), { uri: "http://localhost:3000/admin/child" });
+  const wrongPathSignature = await adminAccount.signMessage({ message: wrongPathMessage });
+  const wrongPath = await route.POST(createRequest(wrongPathMessage, wrongPathSignature));
+  assert.equal(wrongPath.status, 400, "a signed child path must not satisfy the exact admin origin boundary");
+  assert.deepEqual(await wrongPath.json(), { error: "Invalid auth origin" });
+  assert.equal(countAdminSessions(), 0);
+
+  const issuedAtMs = originalDateNow() - 1_000;
+  const reusableMessage = buildMessage("5".repeat(32), { issuedAt: new Date(issuedAtMs).toISOString() });
+  const reusableSignature = await adminAccount.signMessage({ message: reusableMessage });
+  Date.now = () => issuedAtMs + adminAuth.ADMIN_AUTH_PROOF_TTL_MS + 1;
+  const expired = await route.POST(createRequest(reusableMessage, reusableSignature));
+  assert.equal(expired.status, 401, "an expired signed proof must fail before replay consumption");
+  assert.deepEqual(await expired.json(), { error: "Expired auth proof" });
+  assert.equal(countAdminSessions(), 0);
+
+  Date.now = () => issuedAtMs + 60_000;
+  const accepted = await route.POST(createRequest(reusableMessage, reusableSignature));
   const acceptedJson = await accepted.json();
   assert.equal(
     accepted.status,
@@ -104,9 +130,16 @@ try {
   );
   assert.deepEqual(acceptedJson, { ok: true });
   assert.match(accepted.headers.get("set-cookie") ?? "", /lore_admin_session=/);
+  assertAuthResponseHeaders(accepted, "accepted admin response");
   assert.equal(countAdminSessions(), 1, "a valid admin EOA signature must create one server-side session");
   assert.equal(rpcVerifyCalls, 0, "the legitimate EOA path must also remain RPC-independent");
+
+  const replayed = await route.POST(createRequest(reusableMessage, reusableSignature));
+  assert.equal(replayed.status, 409, "the exact valid proof must be consumed only once");
+  assert.deepEqual(await replayed.json(), { error: "Auth proof already used" });
+  assert.equal(countAdminSessions(), 1, "a replay must not issue another admin session");
 } finally {
+  Date.now = originalDateNow;
   if (publicClient && originalRpcVerifyMessage) {
     publicClient.verifyMessage = originalRpcVerifyMessage;
   }

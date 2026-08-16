@@ -251,11 +251,11 @@ assert.match(
   /buildDirectApprovalWriteRequest[\s\S]*assertKeeperFeeBudget\(approveOverrides, MIN_GAS_APPROVE, APP_CHAIN_ID, "approval"\)[\s\S]*\.\.\.approveOverrides[\s\S]*gas: MIN_GAS_APPROVE/,
   "the direct approval wallet sink must enforce the bounded gas and fee policy without dropping legacy gasPrice",
 );
-assert.match(
-  miningAllowanceSource,
-  /\} else \{\s*assertBeforeSend\?\.\(\);\s*approveHash = await readWriteContractAsync\(\)\(\s*buildDirectApprovalWriteRequest\(approvalNonce, approveOverrides\)/,
-  "the guarded approval request must be built immediately at the direct wallet sink",
-);
+  assert.match(
+    miningAllowanceSource,
+    /\} else \{\s*approveHash = await executeReservedMiningApprovalWalletSink\(\s*reservation,\s*async \(\) => assertBeforeSend\?\.\(\),\s*async \(\) => readWriteContractAsync\(\)\(\s*buildDirectApprovalWriteRequest\(approvalNonce, approveOverrides\)/,
+    "the guarded approval request must be built inside the reserved direct wallet sink",
+  );
 
 const directLegacyApproval = miningAllowance.buildDirectApprovalWriteRequest(
   7,
@@ -316,8 +316,8 @@ assert.match(
 );
 assert.match(
   standardBetPathSource,
-  /const writeAuthorizedContract = \(args: unknown, gas: bigint\) => \{[\s\S]*assertNormalFeeBudget\(overrides, gas, APP_CHAIN_ID\);[\s\S]*assertBeforeSend\?\.\(\);[\s\S]*return writeContractAsync\(args\)/,
-  "the final external-wallet mining sink must enforce the same field and total fee budget immediately before signing",
+  /const writeAuthorizedContract = async \([\s\S]*args: Record<string, unknown>,[\s\S]*calldata: `0x\$\{string\}`,[\s\S]*gas: bigint,[\s\S]*assertNormalFeeBudget\(overrides, gas, APP_CHAIN_ID\);[\s\S]*await epochWriteGuard\.assertBeforeWalletWrite\(\);[\s\S]*reserveSubmission\([\s\S]*executeReservedMiningWalletSink\([\s\S]*epochWriteGuard\.assertBeforeWalletWrite,[\s\S]*writeContractAsync\(/,
+  "the final external-wallet mining sink must enforce fee and epoch policy, reserve exact calldata, and submit only through the guarded durable sink",
 );
 assert.equal(
   (standardBetPathSource.match(/writeAuthorizedContract\(\{/g) ?? []).length,
@@ -325,9 +325,9 @@ assert.equal(
   "all five external-wallet mining selectors must share the guarded signing sink",
 );
 assert.equal(
-  (standardBetPathSource.match(/\}\, gas\);/g) ?? []).length,
+  (standardBetPathSource.match(/\}, calldata, gas\);/g) ?? []).length,
   5,
-  "every external-wallet mining selector must pass its exact gas limit to the guarded signing sink",
+  "every external-wallet mining selector must pass exact calldata and gas to the guarded signing sink",
 );
 
 const miningSharedSource = readFileSync("app/hooks/useMining.shared.ts", "utf8");

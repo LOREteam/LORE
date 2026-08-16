@@ -8,6 +8,45 @@ import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
 import * as lineaFeesModule from "../app/lib/lineaFees.ts";
 import * as runtimeMonitorModule from "./runtime-monitor-lib.mjs";
 import * as boundedJsonBodyModule from "../app/api/_lib/boundedJsonBody.ts";
+import * as miningAllowanceModule from "../app/hooks/useMiningAllowance.ts";
+import * as miningRoundBettingModule from "../app/hooks/useMiningRoundBetting.ts";
+import * as autoMineBootstrapModule from "../app/lib/mining/autoMineBootstrap.ts";
+import * as miningTxPathModule from "../app/lib/miningTxPath.ts";
+
+function createMemoryStorage() {
+  const values = new Map();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key) {
+      return values.has(String(key)) ? values.get(String(key)) : null;
+    },
+    key(index) {
+      return [...values.keys()][index] ?? null;
+    },
+    removeItem(key) {
+      values.delete(String(key));
+    },
+    setItem(key, value) {
+      values.set(String(key), String(value));
+    },
+  };
+}
+
+async function withSyntheticWindow(windowValue, action) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: windowValue });
+  try {
+    return await action();
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "window", descriptor);
+    else delete globalThis.window;
+  }
+}
 
 function assertNoRemovedWalletExperimentInStandardFlow(file) {
   const source = readFileSync(file, "utf8");
@@ -37,6 +76,10 @@ export async function runWalletAndRouteSafetyTests() {
   const lineaFees = lineaFeesModule.default ?? lineaFeesModule;
   const runtimeMonitor = runtimeMonitorModule.default ?? runtimeMonitorModule;
   const boundedJsonBody = boundedJsonBodyModule.default ?? boundedJsonBodyModule;
+  const miningAllowance = miningAllowanceModule.default ?? miningAllowanceModule;
+  const miningRoundBetting = miningRoundBettingModule.default ?? miningRoundBettingModule;
+  const autoMineBootstrap = autoMineBootstrapModule.default ?? autoMineBootstrapModule;
+  const miningTxPath = miningTxPathModule.default ?? miningTxPathModule;
   const standardBetPathSource = readFileSync("app/hooks/useMiningStandardBetPath.ts", "utf8");
   const miningReceiptSource = readFileSync("app/hooks/useMiningReceipt.ts", "utf8");
   [
@@ -59,92 +102,211 @@ export async function runWalletAndRouteSafetyTests() {
   ].forEach(assertNoRemovedWalletExperimentInStandardFlow);
   assert.match(
     standardBetPathSource,
-    /bet transaction submitted[\s\S]*hash,[\s\S]*nonce: nonce \?\? null/,
+    /bet transaction submitted[\s\S]*hash,[\s\S]*nonce: pendingState\?\.nonce \?\? null/,
     "support logs must capture the submitted bet hash and known nonce without wallet identity",
   );
   assert.match(
     standardBetPathSource,
-    /writePendingMiningTxState\(\{[\s\S]*chainId: APP_CHAIN_ID,[\s\S]*contract: CONTRACT_ADDRESS,[\s\S]*actor: actor as `0x\$\{string\}`,[\s\S]*hash,[\s\S]*nonce/,
-    "mining wallet writes must persist chain, contract, actor, hash, and nonce before waiting for receipt recovery",
+    /reservePendingMiningTxIntent\(agreementClients, \{[\s\S]*chainId: APP_CHAIN_ID,[\s\S]*contract: CONTRACT_ADDRESS,[\s\S]*actor,[\s\S]*calldata,[\s\S]*expectedEpoch: targetEpoch,[\s\S]*tileIds: normalizedTiles,[\s\S]*amountRawPerTile: singleAmountRaw/,
+    "mining wallet writes must durably reserve the exact actor, nonce, calldata, epoch, tiles, and amount before submission",
   );
   assert.match(
     standardBetPathSource,
-    /const state = await waitReceipt\(hash, client\);[\s\S]*if \(state === "confirmed" && actor\) \{[\s\S]*clearPendingMiningTxState\(APP_CHAIN_ID, CONTRACT_ADDRESS, actor\)/,
-    "mining wallet writes must clear pending recovery state only after a confirmed receipt",
+    /attachPendingMiningTxHash\(pendingState, hash\)[\s\S]*const submittedState = readPendingMiningTxState[\s\S]*const state = await waitReceipt\(hash, client, submittedState\);[\s\S]*if \(state === "confirmed"\)[\s\S]*recoverAndClearPendingMiningTx\(agreementClients, submittedState\)[\s\S]*recovery !== "confirmed"/,
+    "mining wallet writes must clear only the exact submitted state after two-RPC confirmed recovery",
   );
   assert.match(
     standardBetPathSource,
-    /if \(recovery === "pending" \|\| recovery === "manual-reconciliation-required"\) return "pending";[\s\S]*clearPendingMiningTxState\(APP_CHAIN_ID, CONTRACT_ADDRESS, actor\);[\s\S]*return null;/,
-    "mining wallet recovery must block duplicate sends while a tracked pending transaction remains unresolved",
+    /const recovery = await recoverAndClearPendingMiningTx\(agreementClients, state\);[\s\S]*return settleRecoveredMiningAttempt\(recovery, \(\) => undefined\)/,
+    "mining wallet recovery must serialize exact-state cleanup and keep unresolved attempts blocked",
   );
   assert.match(
     miningReceiptSource,
-    /waitForTransactionReceipt\(\{ hash, timeout: TX_RECEIPT_TIMEOUT_MS \}\)[\s\S]*receipt\.status === "reverted"[\s\S]*Transaction reverted \(hash: \$\{hash\}\)[\s\S]*const lateReceipt = await client\.getTransactionReceipt\(\{ hash \}\);[\s\S]*lateReceipt\.status === "reverted"[\s\S]*Transaction reverted \(hash: \$\{hash\}\)/,
-    "manual and Auto-Miner receipt waits must throw explicit reverted errors from both primary and late receipt checks",
+    /const receiptState = await waitForPendingMiningReceiptAgreement\([\s\S]*agreementClients,[\s\S]*hash,[\s\S]*TX_RECEIPT_TIMEOUT_MS,[\s\S]*if \(receiptState === "pending" \|\| !pendingState\) return receiptState;[\s\S]*const recovery = await recoverPendingMiningTx\(agreementClients, pendingState\);[\s\S]*if \(recovery === "confirmed"\) return "confirmed";[\s\S]*if \(recovery === "clear"\)[\s\S]*Transaction reverted[\s\S]*return "pending";/,
+    "manual and Auto-Miner receipt waits must require two-RPC stable receipt identity and retain unresolved state for reconciliation",
   );
-  const miningAllowanceSource = readFileSync("app/hooks/useMiningAllowance.ts", "utf8");
-  assert.match(
-    miningAllowanceSource,
-    /function computeAllowancePollDeadline[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*Number\.isSafeInteger\(timeoutMs\)[\s\S]*timeoutMs > Number\.MAX_SAFE_INTEGER - now[\s\S]*const deadline = computeAllowancePollDeadline\(Date\.now\(\), timeoutMs\)/,
-    "approve allowance polling must compute deadlines through safe integer timeout normalization",
+  for (const selectNonce of [
+    miningAllowance.selectApprovalSubmissionNonce,
+    autoMineBootstrap.selectBootstrapApprovalSubmissionNonce,
+  ]) {
+    assert.equal(selectNonce(undefined, 17), 17);
+    assert.equal(selectNonce(undefined, 18n), 18);
+    assert.equal(selectNonce(16, 17), null, "a tracked approval nonce must never authorize replacement");
+    for (const unsafeNonce of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, BigInt(Number.MAX_SAFE_INTEGER) + 1n]) {
+      assert.equal(selectNonce(undefined, unsafeNonce), null, `unsafe approval nonce ${String(unsafeNonce)} must fail closed`);
+    }
+  }
+
+  const approvalActor = "0x1111111111111111111111111111111111111111";
+  const approvalToken = "0x2222222222222222222222222222222222222222";
+  const approvalSpender = "0x3333333333333333333333333333333333333333";
+  const approvalHash = `0x${"ab".repeat(32)}`;
+  const approvalClient = ({ allowance = 500n, chainId = 59144, latest = 22, pending = 22 } = {}) => ({
+    getChainId: async () => chainId,
+    getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? latest : pending,
+    readContract: async () => allowance,
+    getTransaction: async () => { throw new Error("transaction not found"); },
+    getTransactionReceipt: async () => { throw new Error("receipt not found"); },
+  });
+  const agreedApprovalClients = [approvalClient(), approvalClient()];
+  assert.equal(
+    await miningTxPath.readAgreedPendingMiningApprovalNonce(agreedApprovalClients, approvalActor),
+    22,
   );
-  assert.match(
-    miningAllowanceSource,
-    /function normalizeApprovalNonce\(value: unknown\)[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*typeof value !== "number" \|\| !Number\.isSafeInteger\(value\)[\s\S]*function selectApprovalSubmissionNonce[\s\S]*function getPendingApproveAgeMs[\s\S]*pendingApprove\.submittedAt > now \+ 5_000[\s\S]*const trackedApprovalNonce = pendingApproveRef\.current\?\.nonce[\s\S]*const approvalNonceRaw = trackedApprovalNonce \?\? await withMiningRpcTimeout[\s\S]*blockTag: "pending"[\s\S]*const approvalNonce = selectApprovalSubmissionNonce\(trackedApprovalNonce, approvalNonceRaw\)[\s\S]*Approval nonce is unavailable or unsafe[\s\S]*const pendingAgeMs = pendingApproveRef\.current[\s\S]*getPendingApproveAgeMs\(pendingApproveRef\.current, Date\.now\(\)\)[\s\S]*Approval pending state is unavailable or unsafe/,
-    "approve nonce selection must reject unsafe RPC or pending nonce evidence before wallet submission",
+  assert.equal(
+    await miningTxPath.readAgreedPendingMiningAllowance(
+      agreedApprovalClients,
+      approvalToken,
+      approvalSpender,
+      approvalActor,
+    ),
+    500n,
   );
-  assert.match(
-    miningAllowanceSource,
-    /function assertPendingApproveReplacementReady\(pendingApprove: PendingApproveState, waitMessage: string\)[\s\S]*getPendingApproveAgeMs\(pendingApprove, Date\.now\(\)\)[\s\S]*pendingAgeMs <= APPROVE_PENDING_TIMEOUT_MS[\s\S]*throw new Error\(waitMessage\)[\s\S]*if \(pendingApproveRef\.current\) \{[\s\S]*assertPendingApproveReplacementReady\([\s\S]*Approval transaction is still pending\. Wait for confirmation before placing a bet\./,
-    "approval duplicate-send guard must stop manual approve replacement until pending timeout",
+  await assert.rejects(
+    () => miningTxPath.readAgreedPendingMiningApprovalNonce(
+      [approvalClient(), approvalClient({ pending: 23 })],
+      approvalActor,
+    ),
+    /Approval nonce evidence does not agree across RPC origins/,
   );
-  assert.doesNotMatch(
-    miningAllowanceSource,
-    /Date\.now\(\) \+ timeoutMs|pendingApproveRef\.current\?\.nonce \?\? Number\(|Date\.now\(\) - pendingApproveRef\.current\.submittedAt/,
-    "approve allowance flow must not return to broad deadline, nonce, or pending-age coercion",
+  await assert.rejects(
+    () => miningTxPath.readAgreedPendingMiningAllowance(
+      [approvalClient(), approvalClient({ allowance: 501n })],
+      approvalToken,
+      approvalSpender,
+      approvalActor,
+    ),
+    /Approval allowance evidence does not agree across RPC origins/,
   );
-  const autoMineBootstrapAllowanceSource = readFileSync("app/lib/mining/autoMineBootstrap.ts", "utf8");
-  assert.match(
-    autoMineBootstrapAllowanceSource,
-    /function computeBootstrapAllowancePollDeadline[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*Number\.isSafeInteger\(timeoutMs\)[\s\S]*timeoutMs > Number\.MAX_SAFE_INTEGER - now[\s\S]*function normalizeBootstrapApprovalNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*function selectBootstrapApprovalSubmissionNonce[\s\S]*function getPendingApproveAgeMs[\s\S]*pendingApprove\.submittedAt > now \+ 5_000[\s\S]*function formatLineaWeiOneDecimal[\s\S]*10n \*\* 18n[\s\S]*roundedTenths[\s\S]*const have = formatLineaWeiOneDecimal\(initBalance\)[\s\S]*const need = formatLineaWeiOneDecimal\(roundCost\)[\s\S]*const deadline = computeBootstrapAllowancePollDeadline\(Date\.now\(\), timeoutMs\)[\s\S]*while \(autoMineActive\(\) && Date\.now\(\) < deadline\)[\s\S]*const trackedApprovalNonce = pendingApproveRef\.current\?\.nonce[\s\S]*const approvalNonceRaw = trackedApprovalNonce \?\? await withMiningRpcTimeout[\s\S]*blockTag: "pending"[\s\S]*approvalNonce = selectBootstrapApprovalSubmissionNonce\(trackedApprovalNonce, approvalNonceRaw\)[\s\S]*Approval nonce is unavailable or unsafe[\s\S]*const pendingAgeMs = getPendingApproveAgeMs\(pendingApproveRef\.current, Date\.now\(\)\)[\s\S]*Approval pending state is unavailable or unsafe/,
-    "Auto-Miner bootstrap approval must reject unsafe nonce and pending-age evidence before approval retry or replacement decisions",
+
+  await withSyntheticWindow({ localStorage: createMemoryStorage() }, async () => {
+    const reservation = miningTxPath.writePendingMiningApprovalState({
+      actor: approvalActor,
+      chainId: 59144,
+      nonce: 22,
+      spender: approvalSpender,
+      token: approvalToken,
+    });
+    assert.ok(reservation, "approval reservation must persist before a wallet sink is reachable");
+    assert.equal(
+      miningTxPath.clearVerifiedPendingMiningApprovalState({ ...reservation, nonce: 23 }),
+      false,
+      "cleanup must reject a state with a different nonce",
+    );
+    assert.deepEqual(
+      miningTxPath.readPendingMiningApprovalState(59144, approvalToken, approvalSpender, approvalActor),
+      reservation,
+      "mismatched cleanup must retain the exact reservation",
+    );
+
+    let walletSinkEntries = 0;
+    await assert.rejects(
+      () => miningTxPath.executeReservedMiningApprovalWalletSink(
+        reservation,
+        () => { throw new Error("synthetic preflight rejection"); },
+        async () => {
+          walletSinkEntries += 1;
+          return approvalHash;
+        },
+      ),
+      /synthetic preflight rejection/,
+    );
+    assert.equal(walletSinkEntries, 0, "a failed final preflight must not enter the wallet sink");
+    assert.equal(
+      miningTxPath.readPendingMiningApprovalState(59144, approvalToken, approvalSpender, approvalActor),
+      null,
+      "a definitely-unsent exact reservation must be cleared",
+    );
+
+    const ambiguousReservation = miningTxPath.writePendingMiningApprovalState({
+      actor: approvalActor,
+      chainId: 59144,
+      nonce: 22,
+      spender: approvalSpender,
+      token: approvalToken,
+    });
+    assert.ok(ambiguousReservation);
+    await assert.rejects(
+      () => miningTxPath.executeReservedMiningApprovalWalletSink(
+        ambiguousReservation,
+        () => undefined,
+        async () => {
+          walletSinkEntries += 1;
+          throw new Error("synthetic ambiguous wallet transport");
+        },
+      ),
+      /synthetic ambiguous wallet transport/,
+    );
+    assert.deepEqual(
+      miningTxPath.readPendingMiningApprovalState(59144, approvalToken, approvalSpender, approvalActor),
+      ambiguousReservation,
+      "an ambiguous post-sink failure must retain the reservation",
+    );
+
+    const submittedState = miningTxPath.writePendingMiningApprovalState({
+      ...ambiguousReservation,
+      hash: approvalHash,
+    });
+    assert.ok(submittedState);
+    assert.equal(
+      await miningTxPath.recoverPendingMiningApproval(
+        [approvalClient(), approvalClient({ chainId: 59145 })],
+        submittedState,
+        2n,
+      ),
+      "manual-reconciliation-required",
+      "two-RPC chain disagreement must never clear or confirm an approval",
+    );
+    assert.deepEqual(
+      miningTxPath.readPendingMiningApprovalState(59144, approvalToken, approvalSpender, approvalActor),
+      submittedState,
+      "unsafe recovery evidence must retain the exact submitted state",
+    );
+    assert.equal(miningTxPath.clearVerifiedPendingMiningApprovalState(submittedState), true);
+  });
+
+  let unsafeReplacementSinkEntries = 0;
+  await assert.rejects(
+    () => miningRoundBetting.executeAutoMineBetLoop({
+      actorAddress: approvalActor,
+      autoMineActive: () => true,
+      betPendingGraceMs: 1,
+      betPendingStaleMs: 2,
+      currentEpoch: 91n,
+      currentRoundIndex: 0,
+      effectiveBlocks: 1,
+      forceReplacePendingNonceGap: 1,
+      gasBumpBase: 0n,
+      gasBumpReplacementStep: 0n,
+      getBumpedFees: async () => undefined,
+      getRetryDelayMs: () => 1,
+      maxBetAttempts: 1,
+      networkBackoffInitialMs: 1,
+      networkBackoffMaxMs: 1,
+      onProgress: () => {},
+      pendingBetRef: { current: { nonce: 22, submittedAt: Date.now() - 60_000 } },
+      placeBets: async () => {
+        unsafeReplacementSinkEntries += 1;
+        return "confirmed";
+      },
+      placeBetsSilent: async () => {
+        unsafeReplacementSinkEntries += 1;
+        return "confirmed";
+      },
+      publicClient: {
+        getTransactionCount: async () => 22,
+        readContract: async () => Array.from({ length: 25 }, () => 0n),
+      },
+      readSilentSend: () => null,
+      roundCandidateEpochs: [91n],
+      rounds: 1,
+      singleAmountRaw: 1n,
+      tilesToBet: [1],
+    }),
+    /manual reconciliation/i,
+    "stale local pending state without durable two-RPC identity must not authorize nonce replacement",
   );
-  assert.match(
-    autoMineBootstrapAllowanceSource,
-    /function assertPendingApproveReplacementReady\(pendingApprove: PendingApproveState, waitMessage: string\)[\s\S]*getPendingApproveAgeMs\(pendingApprove, Date\.now\(\)\)[\s\S]*pendingAgeMs <= APPROVE_PENDING_TIMEOUT_MS[\s\S]*throw new Error\(waitMessage\)[\s\S]*if \(pendingApproveRef\.current\) \{[\s\S]*assertPendingApproveReplacementReady\([\s\S]*Approval transaction is still pending\. Wait for confirmation before auto-mine continues\./,
-    "approval duplicate-send guard must stop Auto-Miner approve replacement until pending timeout",
-  );
-  assert.ok(
-    miningAllowanceSource.includes("Approval transaction is still pending. Wait for confirmation before placing a bet.") &&
-      autoMineBootstrapAllowanceSource.includes("Approval transaction is still pending. Wait for confirmation before auto-mine continues."),
-    "approval duplicate-send guard must stop manual and Auto-Miner approve replacement until pending timeout",
-  );
-  assert.doesNotMatch(
-    autoMineBootstrapAllowanceSource,
-    /pendingApproveRef\.current\?\.nonce \?\? Number\(|Date\.now\(\) - pendingApproveRef\.current\.submittedAt|Date\.now\(\) - startedAt < timeoutMs|Number\(initBalance\)|Number\(roundCost\)/,
-    "Auto-Miner bootstrap approval must not use broad nonce coercion, raw pending-age arithmetic, raw poll timeout arithmetic, or broad balance formatting",
-  );
-  const roundBettingNonceSource = readFileSync("app/hooks/useMiningRoundBetting.ts", "utf8");
-  assert.match(
-    roundBettingNonceSource,
-    /function normalizeAutoMineNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*function normalizePendingBetState[\s\S]*normalizeAutoMineNonce\(value\.nonce\)[\s\S]*value\.submittedAt > now \+ 5_000[\s\S]*const latestNonce = normalizeAutoMineNonce\(latestNonceRaw\)[\s\S]*const pendingNonce = normalizeAutoMineNonce\(pendingNonceRaw\)[\s\S]*Pending nonce status is unavailable or unsafe[\s\S]*const trackedPendingBet = normalizePendingBetState\(pendingBet, now\)[\s\S]*Tracked pending bet state is unavailable or unsafe/,
-    "Auto-Miner bet loop must reject unsafe latest/pending nonce evidence before replacement or duplicate-send decisions",
-  );
-  assert.match(
-    roundBettingNonceSource,
-    /const waitSeconds = formatRetryWaitSeconds\(wait\)[\s\S]*retry in \$\{waitSeconds\}s/,
-    "Auto-Miner bet loop retry progress must format wait seconds through the shared bounded helper",
-  );
-  assert.doesNotMatch(
-    roundBettingNonceSource,
-    /\(wait \/ 1000\)\.toFixed\(0\)/,
-    "Auto-Miner bet loop retry progress must not use raw wait toFixed display",
-  );
-  assert.doesNotMatch(
-    roundBettingNonceSource,
-    /const latestNonce = Number\(latestNonceRaw\)|const pendingNonce = Number\(pendingNonceRaw\)|Date\.now\(\) - pendingBet\.submittedAt|pendingNonce > pendingBet\.nonce|txNonce = pendingBet\.nonce/,
-    "Auto-Miner bet loop must not use broad nonce coercion or raw tracked pending-bet state",
-  );
+  assert.equal(unsafeReplacementSinkEntries, 0, "unsafe pending-state recovery must stop before every wallet sink");
   const walletActionsNonceRecoverySource = readFileSync("app/hooks/useWalletActions.ts", "utf8");
   assert.match(
     walletActionsNonceRecoverySource,

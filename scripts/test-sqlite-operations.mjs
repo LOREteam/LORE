@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, utimesSync, writeFileSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -18,6 +32,48 @@ const retentionDir = resolve(drillDir, "retention");
 const restoreBackupDir = resolve(drillDir, "restore-backups");
 const restoreOutputDir = resolve(drillDir, "restore-output");
 const corruptRestoreOutputDir = resolve(drillDir, "corrupt-restore-output");
+
+function snapshotFile(filePath) {
+  if (!existsSync(filePath)) return null;
+  const stats = statSync(filePath);
+  return {
+    bytes: readFileSync(filePath),
+    mtimeMs: stats.mtimeMs,
+    size: stats.size,
+  };
+}
+
+function snapshotSqliteArtifacts(dbPath) {
+  return new Map(
+    [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
+      .map((filePath) => [filePath, snapshotFile(filePath)]),
+  );
+}
+
+function assertSqliteArtifactsUnchanged(before, message, options = {}) {
+  for (const [filePath, expected] of before) {
+    const actual = snapshotFile(filePath);
+    assert.equal(Boolean(actual), Boolean(expected), `${message}: ${filePath} existence changed`);
+    if (!expected || !actual) continue;
+    assert.equal(actual.size, expected.size, `${message}: ${filePath} size changed`);
+    if (options.allowShmLockChanges && filePath.endsWith("-shm")) continue;
+    assert.equal(actual.mtimeMs, expected.mtimeMs, `${message}: ${filePath} modified time changed`);
+    assert.deepEqual(actual.bytes, expected.bytes, `${message}: ${filePath} contents changed`);
+  }
+}
+
+function operatorTestEnvironment(overrides = {}) {
+  return {
+    ...process.env,
+    LINEA_NETWORK: "sepolia",
+    LORE_BACKUP_REQUIRE_EXTERNAL: "0",
+    LORE_BACKUP_RETENTION_DAYS: "",
+    NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
+    NODE_ENV: "test",
+    PROOF_STRICT: "0",
+    ...overrides,
+  };
+}
 
 mkdirSync(drillDir, { recursive: true });
 rmSync(retentionDir, { force: true, recursive: true });
@@ -75,12 +131,50 @@ source.exec(`
 const walBefore = Number(source.prepare("PRAGMA wal_checkpoint(PASSIVE)").get()?.log ?? 0);
 const checkpoint = source.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
 assert.equal(Number(checkpoint?.busy ?? 1), 0, "WAL checkpoint must not remain busy");
+source.exec("INSERT INTO drill_rows(payload) VALUES ('active-wal-row')");
+assert.equal(existsSync(`${sourcePath}-wal`), true, "active source WAL must exist for protection coverage");
+assert.equal(existsSync(`${sourcePath}-shm`), true, "active source SHM must exist for protection coverage");
+const activeSourceBeforeBackup = snapshotSqliteArtifacts(sourcePath);
 
 await createSqliteBackup(sourcePath, backupPath);
+assertSqliteArtifactsUnchanged(
+  activeSourceBeforeBackup,
+  "backup must not modify the active source DB/WAL/SHM artifacts",
+  { allowShmLockChanges: true },
+);
 assert.equal(
   readdirSync(drillDir).some((entry) => entry.startsWith(`${backupPath.split(/[\\/]/).pop()}.partial-`)),
   false,
   "backup must publish only the validated final artifact and leave no partial output",
+);
+const summaryOnlyBackupPath = resolve(drillDir, "summary-only-backup.sqlite");
+rmSync(summaryOnlyBackupPath, { force: true });
+const sourceBeforeBackupSummary = snapshotSqliteArtifacts(sourcePath);
+const validBackupSummary = spawnSync(
+  process.execPath,
+  ["scripts/backup-sqlite.mjs", `--source=${sourcePath}`, `--out=${summaryOnlyBackupPath}`, "--summary-only"],
+  {
+    cwd: process.cwd(),
+    env: operatorTestEnvironment(),
+    encoding: "utf8",
+  },
+);
+assert.equal(validBackupSummary.status, 0, `valid backup summary must pass: ${validBackupSummary.stderr}`);
+assert.deepEqual(JSON.parse(validBackupSummary.stdout.trim()), {
+  status: "ready",
+  groups: "backup=1",
+  strict: false,
+  source: "present",
+  sourceMtime: "unchecked",
+  output: "file",
+  retentionDays: 0,
+  wouldWrite: false,
+});
+assert.equal(existsSync(summaryOnlyBackupPath), false, "backup summary must not create its requested output file");
+assertSqliteArtifactsUnchanged(
+  sourceBeforeBackupSummary,
+  "backup summary must not modify the source DB/WAL artifacts",
+  { allowShmLockChanges: true },
 );
 await assert.rejects(
   () => createSqliteBackup(sourcePath, sourcePath),
@@ -91,6 +185,26 @@ await assert.rejects(
   () => createSqliteBackup(sourcePath, backupPath),
   /Backup output already exists/,
   "backup must never overwrite an existing artifact",
+);
+const lateCollisionPath = resolve(drillDir, "late-collision.sqlite");
+const lateCollisionSentinel = "competing publisher must remain intact";
+rmSync(lateCollisionPath, { force: true });
+await assert.rejects(
+  () => createSqliteBackup(sourcePath, lateCollisionPath, {
+    beforePublish: () => writeFileSync(lateCollisionPath, lateCollisionSentinel, "utf8"),
+  }),
+  /Backup output already exists during atomic publication/,
+  "backup publication must fail closed when another writer wins the final-path race",
+);
+assert.equal(
+  readFileSync(lateCollisionPath, "utf8"),
+  lateCollisionSentinel,
+  "failed atomic publication must not overwrite a competing final artifact",
+);
+assert.equal(
+  readdirSync(drillDir).some((entry) => entry.startsWith("late-collision.sqlite.partial-")),
+  false,
+  "failed atomic publication must clean its validated temporary artifact",
 );
 const sourceRows = Number(source.prepare("SELECT COUNT(*) AS count FROM drill_rows").get()?.count ?? -1);
 const scopeAudit = auditSqliteScopes(sourcePath, "sepolia:0x0000000000000000000000000000000000000001");
@@ -118,7 +232,7 @@ const guardedBackup = spawnSync(
   ["scripts/backup-sqlite.mjs", `--source=${sourcePath}`, `--out=${guardedBackupPath}`, "--summary-only"],
   {
     cwd: process.cwd(),
-    env: { ...process.env, LORE_BACKUP_REQUIRE_EXTERNAL: "1", LORE_BACKUP_RETENTION_DAYS: "14" },
+    env: operatorTestEnvironment({ LORE_BACKUP_REQUIRE_EXTERNAL: "1", LORE_BACKUP_RETENTION_DAYS: "14" }),
     encoding: "utf8",
   },
 );
@@ -141,7 +255,7 @@ try {
     ["scripts/backup-sqlite.mjs", "--strict", `--source=${futureBackupSource}`, `--out=${futureBackupOutput}`, "--summary-only"],
     {
       cwd: process.cwd(),
-      env: { ...process.env, LORE_BACKUP_RETENTION_DAYS: "14" },
+      env: operatorTestEnvironment({ LORE_BACKUP_RETENTION_DAYS: "14" }),
       encoding: "utf8",
     },
   );
@@ -162,7 +276,7 @@ const missingSourceBackup = spawnSync(
   ["scripts/backup-sqlite.mjs", `--source=${resolve(drillDir, "missing-source.sqlite")}`, `--out=${missingBackupPath}`, "--summary-only"],
   {
     cwd: process.cwd(),
-    env: process.env,
+    env: operatorTestEnvironment(),
     encoding: "utf8",
   },
 );
@@ -178,7 +292,7 @@ const malformedRetentionBackup = spawnSync(
   ["scripts/backup-sqlite.mjs", `--source=${sourcePath}`, `--out=${malformedRetentionBackupPath}`, "--summary-only"],
   {
     cwd: process.cwd(),
-    env: { ...process.env, LORE_BACKUP_RETENTION_DAYS: "14.0" },
+    env: operatorTestEnvironment({ LORE_BACKUP_RETENTION_DAYS: "14.0" }),
     encoding: "utf8",
   },
 );
@@ -193,7 +307,7 @@ const unsafeRetentionBackup = spawnSync(
   ["scripts/backup-sqlite.mjs", `--source=${sourcePath}`, `--out=${unsafeRetentionBackupPath}`, "--summary-only"],
   {
     cwd: process.cwd(),
-    env: { ...process.env, LORE_BACKUP_RETENTION_DAYS: "9999999999999999" },
+    env: operatorTestEnvironment({ LORE_BACKUP_RETENTION_DAYS: "9999999999999999" }),
     encoding: "utf8",
   },
 );
@@ -201,24 +315,68 @@ assert.notEqual(unsafeRetentionBackup.status, 0, "backup summary must reject uns
 assert.match(unsafeRetentionBackup.stdout.trim(), /^\{"status":"fail","groups":"backup=1","issue":"LORE_BACKUP_RETENTION_DAYS must be an integer between 1 and 3650"\}$/);
 assert.equal(existsSync(unsafeRetentionBackupPath), false, "unsafe-retention summary failure must not leave an output file");
 
+const malformedSqliteBackupPath = resolve(drillDir, "malformed-sqlite-source.txt");
+const malformedSqliteOutputPath = resolve(drillDir, "malformed-sqlite-backup.sqlite");
+writeFileSync(malformedSqliteBackupPath, "not a sqlite database", "utf8");
+const malformedSqliteBackup = spawnSync(
+  process.execPath,
+  ["scripts/backup-sqlite.mjs", `--source=${malformedSqliteBackupPath}`, `--out=${malformedSqliteOutputPath}`, "--summary-only"],
+  {
+    cwd: process.cwd(),
+    env: operatorTestEnvironment(),
+    encoding: "utf8",
+  },
+);
+assert.notEqual(malformedSqliteBackup.status, 0, "backup summary must reject a malformed SQLite source");
+const malformedSqliteSummary = JSON.parse(malformedSqliteBackup.stdout.trim());
+assert.equal(malformedSqliteSummary.status, "fail");
+assert.equal(malformedSqliteSummary.groups, "backup=1");
+assert.match(malformedSqliteSummary.issue, /file is not a database|integrity check failed/i);
+assert.equal(existsSync(malformedSqliteOutputPath), false, "malformed SQLite summary failure must not leave output");
+assert.doesNotMatch(`${malformedSqliteBackup.stderr}\n${malformedSqliteBackup.stdout}`, /sqlite-backup-lib|at createSqliteBackup|Node\.js v/i);
+
 mkdirSync(retentionDir, { recursive: true });
 const oldBackup = resolve(retentionDir, "lore-backup-2026-01-01T00-00-00-000Z.sqlite");
 const recentBackup = resolve(retentionDir, "lore-backup-2026-07-17T00-00-00-000Z.sqlite");
 const unrelatedFile = resolve(retentionDir, "operator-note.txt");
 for (const file of [oldBackup, recentBackup, unrelatedFile]) writeFileSync(file, "test", "utf8");
+const activeRetentionPath = resolve(retentionDir, "lore-backup-2026-01-02T00-00-00-000Z.sqlite");
+const activeRetentionDb = new DatabaseSync(activeRetentionPath);
+activeRetentionDb.exec(`
+  PRAGMA journal_mode = WAL;
+  CREATE TABLE active_rows (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+  INSERT INTO active_rows(value) VALUES ('must survive retention');
+`);
+assert.equal(existsSync(`${activeRetentionPath}-wal`), true, "active retention candidate WAL must exist");
+assert.equal(existsSync(`${activeRetentionPath}-shm`), true, "active retention candidate SHM must exist");
 const now = Date.UTC(2026, 6, 17, 12);
 utimesSync(oldBackup, new Date(now - 30 * 86_400_000), new Date(now - 30 * 86_400_000));
 utimesSync(recentBackup, new Date(now - 1 * 86_400_000), new Date(now - 1 * 86_400_000));
 utimesSync(unrelatedFile, new Date(now - 30 * 86_400_000), new Date(now - 30 * 86_400_000));
-assert.equal(pruneSqliteBackups(retentionDir, 14, [recentBackup], now), 1);
-assert.equal(existsSync(oldBackup), false, "expired generated backup must be pruned");
-assert.equal(existsSync(recentBackup), true, "fresh or excluded backup must remain");
-assert.equal(existsSync(unrelatedFile), true, "retention must not remove unrelated files");
-assert.throws(
-  () => pruneSqliteBackups(retentionDir, 14, [], Number.NaN),
-  /Backup retention clock must be a safe non-negative integer/,
-  "retention pruning must reject malformed clocks before deleting files",
-);
+utimesSync(activeRetentionPath, new Date(now - 30 * 86_400_000), new Date(now - 30 * 86_400_000));
+const activeRetentionBeforePrune = snapshotSqliteArtifacts(activeRetentionPath);
+try {
+  assert.equal(pruneSqliteBackups(retentionDir, 14, [recentBackup], now), 1);
+  assert.equal(existsSync(oldBackup), false, "expired generated backup must be pruned");
+  assert.equal(existsSync(recentBackup), true, "fresh or excluded backup must remain");
+  assert.equal(existsSync(unrelatedFile), true, "retention must not remove unrelated files");
+  assertSqliteArtifactsUnchanged(
+    activeRetentionBeforePrune,
+    "retention must preserve an active timestamp-named DB and its WAL/SHM",
+  );
+  assert.equal(
+    activeRetentionDb.prepare("SELECT value FROM active_rows").get()?.value,
+    "must survive retention",
+    "active retention candidate must remain queryable",
+  );
+  assert.throws(
+    () => pruneSqliteBackups(retentionDir, 14, [], Number.NaN),
+    /Backup retention clock must be a safe non-negative integer/,
+    "retention pruning must reject malformed clocks before deleting files",
+  );
+} finally {
+  activeRetentionDb.close();
+}
 
 copyFileSync(backupPath, corruptPath);
 const corruptHandle = openSync(corruptPath, "r+");
@@ -252,6 +410,60 @@ copyFileSync(backupPath, suppliedRestoreBackupPath);
 const suppliedRestoreBackup = new DatabaseSync(suppliedRestoreBackupPath);
 suppliedRestoreBackup.exec("INSERT INTO drill_rows(payload) VALUES ('from-supplied-backup')");
 suppliedRestoreBackup.close();
+const summaryRestoreOutputDir = resolve(drillDir, "summary-restore-output");
+rmSync(summaryRestoreOutputDir, { force: true, recursive: true });
+const sourceBeforeRestoreSummary = snapshotSqliteArtifacts(sourcePath);
+const suppliedBackupBeforeRestoreSummary = snapshotSqliteArtifacts(suppliedRestoreBackupPath);
+const restoreSummaryRun = spawnSync(
+  process.execPath,
+  [
+    "scripts/verify-db-restore.mjs",
+    "--summary-only",
+    `--source=${sourcePath}`,
+    `--backup-dir=${restoreBackupDir}`,
+    `--restore-dir=${summaryRestoreOutputDir}`,
+    `--backup=${suppliedRestoreBackupPath}`,
+    `--manifest=${resolve(drillDir, "missing-restore-proof.json")}`,
+  ],
+  {
+    cwd: process.cwd(),
+    env: operatorTestEnvironment(),
+    encoding: "utf8",
+  },
+);
+assert.equal(restoreSummaryRun.status, 0, `restore summary must pass valid local inputs: ${restoreSummaryRun.stderr}`);
+assert.match(restoreSummaryRun.stdout, /Would write: false/);
+assert.match(restoreSummaryRun.stdout, /summary mode did not copy files/);
+assert.doesNotMatch(restoreSummaryRun.stdout, /## Copied Files|## Row Counts/);
+assert.doesNotMatch(restoreSummaryRun.stdout, new RegExp(drillDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+assert.equal(existsSync(summaryRestoreOutputDir), false, "restore summary must not create its output directory");
+assertSqliteArtifactsUnchanged(sourceBeforeRestoreSummary, "restore summary must not modify source DB/WAL/SHM");
+assertSqliteArtifactsUnchanged(suppliedBackupBeforeRestoreSummary, "restore summary must not modify supplied backup artifacts");
+
+const malformedRestoreOutputDir = resolve(drillDir, "malformed-restore-output");
+rmSync(malformedRestoreOutputDir, { force: true, recursive: true });
+const malformedRestoreSummary = spawnSync(
+  process.execPath,
+  [
+    "scripts/verify-db-restore.mjs",
+    "--strict",
+    "--summary-only",
+    `--source=${drillDir}`,
+    `--backup-dir=${restoreBackupDir}`,
+    `--restore-dir=${malformedRestoreOutputDir}`,
+    `--backup=${suppliedRestoreBackupPath}`,
+    `--manifest=${resolve(drillDir, "missing-restore-proof.json")}`,
+  ],
+  {
+    cwd: process.cwd(),
+    env: operatorTestEnvironment(),
+    encoding: "utf8",
+  },
+);
+assert.notEqual(malformedRestoreSummary.status, 0, "strict restore summary must fail closed on a directory source");
+assert.match(malformedRestoreSummary.stdout, /source DB must be a file/);
+assert.match(malformedRestoreSummary.stdout, /Would write: false/);
+assert.equal(existsSync(malformedRestoreOutputDir), false, "rejected restore summary must not create its output directory");
 const restoreRun = spawnSync(
   process.execPath,
   [
@@ -264,7 +476,7 @@ const restoreRun = spawnSync(
   ],
   {
     cwd: process.cwd(),
-    env: process.env,
+    env: operatorTestEnvironment(),
     encoding: "utf8",
   },
 );
@@ -290,6 +502,37 @@ copyFileSync(backupPath, corruptRestoreBackupPath);
 const corruptRestoreHandle = openSync(corruptRestoreBackupPath, "r+");
 writeSync(corruptRestoreHandle, Buffer.from("not-a-sqlite-db!"), 0, 16, 0);
 closeSync(corruptRestoreHandle);
+const corruptRestoreSummaryOutputDir = resolve(drillDir, "corrupt-restore-summary-output");
+rmSync(corruptRestoreSummaryOutputDir, { force: true, recursive: true });
+const corruptRestoreSummaryRun = spawnSync(
+  process.execPath,
+  [
+    "scripts/verify-db-restore.mjs",
+    "--strict",
+    "--summary-only",
+    `--source=${sourcePath}`,
+    `--backup-dir=${restoreBackupDir}`,
+    `--restore-dir=${corruptRestoreSummaryOutputDir}`,
+    `--backup=${corruptRestoreBackupPath}`,
+    `--manifest=${resolve(drillDir, "missing-restore-proof.json")}`,
+  ],
+  {
+    cwd: process.cwd(),
+    env: operatorTestEnvironment(),
+    encoding: "utf8",
+  },
+);
+assert.notEqual(corruptRestoreSummaryRun.status, 0, "strict restore summary must fail closed on a corrupt backup");
+assert.match(
+  corruptRestoreSummaryRun.stdout,
+  /backup artifact could not be opened or checked|backup artifact integrity_check/i,
+  "restore summary must perform read-only SQLite integrity validation before reporting readiness",
+);
+assert.equal(
+  existsSync(corruptRestoreSummaryOutputDir),
+  false,
+  "corrupt backup restore summary must not create an output directory",
+);
 const corruptRestoreRun = spawnSync(
   process.execPath,
   [
@@ -302,7 +545,7 @@ const corruptRestoreRun = spawnSync(
   ],
   {
     cwd: process.cwd(),
-    env: process.env,
+    env: operatorTestEnvironment(),
     encoding: "utf8",
   },
 );
@@ -339,12 +582,19 @@ const summary = {
   },
   faults: {
     readOnlyWriteRejected: true,
+    backupSummaryReadOnly: true,
     repoLocalProductionBackupRejected: true,
     futureSourceBackupSummaryRejected: true,
     missingSourceBackupSummaryRejected: true,
     malformedRetentionBackupSummaryRejected: true,
     unsafeRetentionBackupSummaryRejected: true,
+    malformedSqliteBackupSummaryRejected: true,
+    atomicLatePublicationCollisionRejected: true,
+    activeDbWalShmProtected: true,
     corruptSourceBackupCleanup: true,
+    restoreSummaryReadOnly: true,
+    malformedRestoreSummaryRejected: true,
+    corruptBackupRestoreSummaryRejected: true,
     restoreUsesSuppliedBackupArtifact: true,
     corruptBackupRestoreRejected: true,
     corruptCopyRejected: true,

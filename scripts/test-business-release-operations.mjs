@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -10,6 +10,17 @@ import * as gameConstantsModule from "../app/lib/constants.ts";
 import * as sqliteScopeAuditModule from "./sqlite-scope-audit-lib.mjs";
 import * as chatAuthModule from "../app/lib/chatAuth.ts";
 import * as chatSessionModule from "../app/api/_lib/chatSession.ts";
+import * as indexerNormalizationModule from "./indexerNormalization.mjs";
+import {
+  createLaunchGatePolicyMaps,
+  findLiveCanaryLogPaths,
+  MAX_LIVE_CANARY_LOG_PATHS,
+} from "./launch-gate-policy.mjs";
+import {
+  resolveTrustedNpmCli,
+  trustedNpmCommand,
+  trustedNpmEnvironment,
+} from "./trusted-npm-cli.mjs";
 
 const safetyPoolClaimThreshold = safetyPoolClaimThresholdModule.default ?? safetyPoolClaimThresholdModule;
 const analyticsDepositsStatus = analyticsDepositsStatusModule.default ?? analyticsDepositsStatusModule;
@@ -17,7 +28,17 @@ const liveStateSnapshot = liveStateSnapshotModule.default ?? liveStateSnapshotMo
 const gameConstants = gameConstantsModule.default ?? gameConstantsModule;
 const chatAuth = chatAuthModule.default ?? chatAuthModule;
 const chatSession = chatSessionModule.default ?? chatSessionModule;
+const indexerNormalization = indexerNormalizationModule.default ?? indexerNormalizationModule;
 const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+
+function workflowJobBlock(source, jobName) {
+  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  const startIndex = lines.findIndex((line) => line === `  ${jobName}:`);
+  assert.notEqual(startIndex, -1, `CI workflow must include the ${jobName} job`);
+  const endOffset = lines.slice(startIndex + 1).findIndex((line) => /^  [a-z0-9_-]+:\s*$/i.test(line));
+  const endIndex = endOffset === -1 ? lines.length : startIndex + 1 + endOffset;
+  return lines.slice(startIndex, endIndex).join("\n");
+}
 
 function withTemporaryEnv(values, fn) {
   const previous = new Map();
@@ -37,12 +58,87 @@ function withTemporaryEnv(values, fn) {
 }
 
 export function runReleaseOperationsTests() {
+  const launchPolicy = createLaunchGatePolicyMaps();
+  const verifierLaunchPolicy = createLaunchGatePolicyMaps({ verifier: true });
+  assert.deepEqual(launchPolicy.expected, Array.from({ length: 14 }, (_, index) => `G${index + 1}`));
+  assert.deepEqual(
+    Object.fromEntries(launchPolicy.launchGateGroups),
+    {
+      G1: "env", G2: "signoff", G3: "signoff", G4: "chain", G5: "host", G6: "host", G7: "indexer",
+      G8: "restore", G9: "monitoring", G10: "canary", G11: "canary", G12: "qa", G13: "qa", G14: "qa",
+    },
+  );
+  assert.deepEqual([...launchPolicy.gatesRequiringCanaryLog], ["G10", "G11", "G14"]);
+  assert.deepEqual(launchPolicy.requiredProofFilesByGate.get("G1"), ["docs/signoff-proof.json"]);
+  assert.deepEqual(launchPolicy.requiredProofFilesByGate.get("G6"), ["docs/host-proof.json"]);
+  assert.deepEqual(launchPolicy.requiredProofFilesByGate.get("G7"), ["docs/indexer-proof.json"]);
+  assert.deepEqual(launchPolicy.requiredProofFilesByGate.get("G14"), ["docs/qa-proof.json"]);
+  assert.deepEqual(
+    launchPolicy.statusBoardFirstCheckExpectations.get("G12"),
+    ["proof:qa:plan", "--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", "--out=docs/qa-canary-test-plan.draft.md"],
+  );
+  assert.equal(launchPolicy.compactStatusCheckByGate.get("G1"), "npm.cmd run proof:mainnet:strict:compact");
+  assert.equal(launchPolicy.compactStatusCheckByGate.get("G14"), "npm.cmd run proof:files:summary");
+  for (const [gate, markers] of Object.entries({
+    G1: ["contractEnv", "V10 protected bets"],
+    G2: ["ownership.directOwnerReadEvidence", "proof tx"],
+    G3: ["randomness.decision", "operator/signer sign-off"],
+    G6: ["externalRateLimit", "webReplicaCount", "sharedBucketVerified", "failClosed"],
+    G7: ["fresh external DB", "INDEXER_FINALITY_BLOCKS", "chainSnapshot", "rpcChainId", "contractAddress", "finalityLagBlocks", "chainComparison"],
+    G8: ["backupSchedule", "retentionDays", "lastSuccessfulBackupAt"],
+    G9: ["verified email alert target", "error event"],
+    G10: ["MANUAL", "AUTOMINER_A", "AUTOMINER_B", "50 successful auto-miner unique epochs"],
+    G12: ["Privy allowed origins", "redacted production App ID configured proof", "wrong network"],
+    G14: ["final security scan", "no open High/Medium local findings"],
+  })) {
+    const actualMarkers = launchPolicy.requiredProofMarkerExpectations.get(gate);
+    for (const marker of markers) assert.ok(actualMarkers.includes(marker), `${gate} must retain ${marker}`);
+  }
+  assert.deepEqual(
+    verifierLaunchPolicy.requiredProofMarkerExpectations.get("G1"),
+    ["contractEnv", "chain ID", "deploy block", "token", "finality", "V10 protected bets flag", "existing saved artifacts"],
+  );
+  assert.ok(verifierLaunchPolicy.requiredProofMarkerExpectations.get("G8").includes("existing saved artifacts"));
+  assert.ok(!launchPolicy.requiredProofMarkerExpectations.get("G8").includes("existing saved artifacts"));
+  launchPolicy.requiredProofMarkerExpectations.get("G14").push("mutant");
+  assert.ok(!createLaunchGatePolicyMaps().requiredProofMarkerExpectations.get("G14").includes("mutant"));
+  const liveCanaryPathFixtures = Array.from(
+    { length: MAX_LIVE_CANARY_LOG_PATHS + 4 },
+    (_, index) => `data/live-test-runs/canary-${index}.jsonl`,
+  );
+  assert.deepEqual(
+    findLiveCanaryLogPaths(liveCanaryPathFixtures.join(" ")),
+    liveCanaryPathFixtures.slice(0, MAX_LIVE_CANARY_LOG_PATHS),
+  );
+  assert.deepEqual(
+    findLiveCanaryLogPaths("artifact: data\\live-test-runs\\windows-canary.jsonl"),
+    ["data/live-test-runs/windows-canary.jsonl"],
+  );
+  assert.deepEqual(findLiveCanaryLogPaths("data/live-test-runs/not-jsonl.log"), []);
+  const unboundedCanaryPathMutant = (value) => [
+    ...String(value).matchAll(/\bdata\/live-test-runs\/[^|\s`]+\.jsonl\b/gi),
+  ].map((match) => match[0]);
+  assert.equal(
+    unboundedCanaryPathMutant(liveCanaryPathFixtures.join(" ")).length,
+    MAX_LIVE_CANARY_LOG_PATHS + 4,
+    "overflow fixture must kill unbounded matchAll extraction",
+  );
+
+  const launchGateStructure = spawnSync(process.execPath, ["scripts/check-launch-gates.mjs", "--structure-only"], {
+    cwd: process.cwd(), encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024,
+  });
+  assert.equal(launchGateStructure.status, 0, `${launchGateStructure.stdout}\n${launchGateStructure.stderr}`);
+  assert.match(launchGateStructure.stdout, /Summary: launch gate table structure is consistent\./);
+  const remainingLaunch = spawnSync(process.execPath, ["scripts/report-launch-remaining.mjs", "--summary-only"], {
+    cwd: process.cwd(), encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024,
+  });
+  assert.equal(remainingLaunch.status, 0, `${remainingLaunch.stdout}\n${remainingLaunch.stderr}`);
+  assert.match(remainingLaunch.stdout, /Complete gates: 0\/14[\s\S]*Remaining gates: G1, G2, G3, G4, G5, G6, G7, G8, G9, G10, G11, G12, G13, G14/);
+  assert.match(remainingLaunch.stdout, /Next marker tokens: contractenv, chain-id, deploy-block, token, finality, v10-protected-bets/);
+
   const liveRoundCanarySource = readFileSync("scripts/live-round-canary.ts", "utf8");
   const keeperBotSource = readFileSync("bot.ts", "utf8");
   const botSupervisorSource = readFileSync("scripts/run-bot-forever.mjs", "utf8");
-  const soakSupervisorSource = readFileSync("scripts/run-testnet-soak-supervisor.mjs", "utf8");
-    const clearPendingNonceSource = readFileSync("scripts/clear-live-test-pending-nonce.ts", "utf8");
-    const prelaunchStatusSource = readFileSync("scripts/report-prelaunch-status.mjs", "utf8");
     const chatSessionSource = readFileSync("app/api/_lib/chatSession.ts", "utf8");
   const cleanupNextCandidatesSource = readFileSync("scripts/cleanup-next-candidates.mjs", "utf8");
   const collectIndexerEvidenceSource = readFileSync("scripts/collect-indexer-evidence.mjs", "utf8");
@@ -50,6 +146,263 @@ export function runReleaseOperationsTests() {
     const checkIndexerDryRunSource = readFileSync("scripts/check-indexer-dry-run.mjs", "utf8");
     const chainIndexerAuditSource = readFileSync("scripts/audit-chain-indexer-window.mjs", "utf8");
     const sqliteScopeAuditSource = readFileSync("scripts/sqlite-scope-audit-lib.mjs", "utf8");
+  const ciWorkflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
+  for (const jobName of ["checks", "checks-windows", "dependency-audit"]) {
+    const jobSource = workflowJobBlock(ciWorkflowSource, jobName);
+    const setupIndex = jobSource.indexOf("- name: Setup Node.js");
+    const pinIndex = jobSource.indexOf("- name: Pin exact npm 11.5.1");
+    const installIndex = jobSource.indexOf("- name: Install dependencies");
+    assert.ok(setupIndex >= 0 && setupIndex < pinIndex && pinIndex < installIndex,
+      `${jobName} must pin npm after Node setup and before dependency installation or npm-based gates`);
+    const expectedPinStep = [
+      "      - name: Pin exact npm 11.5.1",
+      ...(jobName === "checks-windows" ? ["        shell: bash"] : []),
+      "        run: |",
+      "          npm install --global --ignore-scripts npm@11.5.1",
+      "          actual_npm_version=\"$(npm --version)\"",
+      "          if [ \"$actual_npm_version\" != \"11.5.1\" ]; then",
+      "            echo \"::error::Expected npm 11.5.1 but found ${actual_npm_version}\"",
+      "            exit 1",
+      "          fi",
+    ].join("\n");
+    assert.ok(
+      jobSource.includes(expectedPinStep),
+      `${jobName} must install and fail closed unless the executable npm version is exactly 11.5.1`,
+    );
+  }
+  const prelaunchLauncher = resolveTrustedNpmCli();
+  if (process.platform === "win32") {
+    const trustedWindowsEnv = trustedNpmEnvironment(process.env, prelaunchLauncher);
+    const nestedNodeProbe = spawnSync(
+      trustedWindowsEnv.ComSpec,
+      ["/d", "/s", "/c", "node -p process.execPath"],
+      {
+        cwd: prelaunchLauncher.repoRoot,
+        env: trustedWindowsEnv,
+        encoding: "utf8",
+        timeout: 10_000,
+      },
+    );
+    assert.equal(
+      nestedNodeProbe.status,
+      0,
+      `trusted Windows environment must resolve nested Node successfully: ${nestedNodeProbe.error?.message ?? nestedNodeProbe.stderr}`,
+    );
+    assert.equal(
+      String(nestedNodeProbe.stdout).trim().toLowerCase(),
+      prelaunchLauncher.command.toLowerCase(),
+      "trusted Windows environment must not resolve a workspace node.exe shadow",
+    );
+  }
+  const prelaunchProbeCommand = trustedNpmCommand([
+    "--silent",
+    "run",
+    "proof:prelaunch:summary",
+    "--",
+    "--launcher-diagnostic",
+  ], prelaunchLauncher);
+  const prelaunchLauncherProbe = spawnSync(prelaunchProbeCommand.command, prelaunchProbeCommand.args, {
+    cwd: prelaunchLauncher.repoRoot,
+    env: trustedNpmEnvironment({
+      ...process.env,
+      npm_execpath: join(tmpdir(), "untrusted-npm-cli.js"),
+      npm_node_execpath: join(tmpdir(), "untrusted-node.exe"),
+      PRELAUNCH_CHECK_TIMEOUT_MS: "1000",
+    }, prelaunchLauncher),
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(
+    prelaunchLauncherProbe.status,
+    78,
+    `prelaunch package alias must reach the non-passing canonical launcher diagnostic: ${prelaunchLauncherProbe.error?.message ?? prelaunchLauncherProbe.stderr}`,
+  );
+  assert.deepEqual(
+    JSON.parse(String(prelaunchLauncherProbe.stdout).trim()),
+    { status: "diagnostic-only", nodeMajor: "24", npmVersion: "11.5.1" },
+    "prelaunch package alias must bypass workspace node shadows and bind the declared Node/npm runtime",
+  );
+  const prelaunchManifestProbe = spawnSync(process.execPath, [
+    "scripts/report-prelaunch-status.mjs",
+    "--manifest-self-test",
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PRELAUNCH_CHECK_TIMEOUT_MS: "",
+      REQUIRE_P1_PERFORMANCE_RC: "",
+    },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(
+    prelaunchManifestProbe.status,
+    0,
+    `prelaunch manifest behavior probe must pass: ${prelaunchManifestProbe.error?.message ?? prelaunchManifestProbe.stderr}`,
+  );
+  const prelaunchManifestSummary = JSON.parse(String(prelaunchManifestProbe.stdout).trim());
+  assert.equal(prelaunchManifestSummary.status, "pass");
+  assert.ok(prelaunchManifestSummary.checks >= 60, "prelaunch manifest probe must inspect the complete check set");
+  assert.deepEqual(prelaunchManifestSummary.externalSequence, [
+    "proof:testnet:canary:strict:summary",
+    "proof:testnet:canary:v10:summary",
+    "db:backup:summary",
+  ]);
+  assert.equal(
+    prelaunchManifestSummary.faultMutantsRejected,
+    4,
+    "prelaunch manifest must reject missing, reordered, falsely required-local, and write-capable checks",
+  );
+  const productionHealthBehaviorProbe = spawnSync(process.execPath, [
+    "scripts/check-production-health.mjs",
+    "--behavior-self-test",
+    "--summary-only",
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      HEALTH_DIAGNOSTICS_SECRET: "h".repeat(32),
+      LINEA_CHAIN_ID: "",
+      NEXT_PUBLIC_LINEA_CHAIN_ID: "",
+      PROD_HEALTH_ALLOW_DEGRADED: "0",
+      PROD_HEALTH_MAX_INDEXER_STALE_MS: "",
+      PROD_HEALTH_MAX_LAG_BLOCKS: "",
+    },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(
+    productionHealthBehaviorProbe.status,
+    0,
+    `production health behavior probe must pass: ${productionHealthBehaviorProbe.error?.message ?? productionHealthBehaviorProbe.stderr}`,
+  );
+  assert.deepEqual(
+    JSON.parse(String(productionHealthBehaviorProbe.stdout).trim()),
+    {
+      status: "pass",
+      healthyPayloadAccepted: true,
+      faultMutantsRejected: 7,
+      runtimeMutantsRejected: 12,
+      originCases: 10,
+      fakeFetches: 1,
+      externalNetworkRequests: 0,
+    },
+    "production health behavior probe must reject incomplete, malformed, stale, and missing-jackpot evidence without polling an endpoint",
+  );
+  const productionHealthThresholdFaultProbe = spawnSync(process.execPath, [
+    "scripts/check-production-health.mjs",
+    "--summary-only",
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      HEALTH_DIAGNOSTICS_SECRET: "",
+      LINEA_CHAIN_ID: "",
+      NEXT_PUBLIC_LINEA_CHAIN_ID: "",
+      PROD_HEALTH_BASE_URL: "https://health-proof.invalid",
+      PROD_HEALTH_MAX_INDEXER_STALE_MS: "",
+      PROD_HEALTH_MAX_LAG_BLOCKS: "01",
+    },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(productionHealthThresholdFaultProbe.status, 1);
+  assert.equal(String(productionHealthThresholdFaultProbe.stderr).trim(), "");
+  assert.deepEqual(
+    JSON.parse(String(productionHealthThresholdFaultProbe.stdout).trim()),
+    {
+      status: "fail",
+      issues: 1,
+      hints: 0,
+      firstIssue: "PROD_HEALTH_MAX_LAG_BLOCKS must be a canonical non-negative decimal integer",
+    },
+    "production health threshold faults must fail before endpoint polling with compact status evidence",
+  );
+  assert.doesNotMatch(
+    productionHealthThresholdFaultProbe.stdout,
+    /health-proof|https?:\/\/|\b01\b/i,
+    "production health threshold failures must not expose the target origin or raw malformed value",
+  );
+  const invalidParentProbe = spawnSync(process.execPath, [
+    "scripts/report-prelaunch-status.mjs",
+    "--launcher-diagnostic",
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      npm_node_execpath: join(tmpdir(), "missing-parent-node.exe"),
+    },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(invalidParentProbe.status, 1);
+  assert.equal(String(invalidParentProbe.stdout).trim(), "");
+  assert.deepEqual(
+    JSON.parse(String(invalidParentProbe.stderr).trim()),
+    { status: "fail", issue: "trusted-npm-launcher-unavailable" },
+    "prelaunch launcher initialization failures must be compact and must not expose raw paths or stacks",
+  );
+  const invalidTimeoutProbe = spawnSync(process.execPath, [
+    "scripts/report-prelaunch-status.mjs",
+    "--launcher-diagnostic",
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PRELAUNCH_CHECK_TIMEOUT_MS: "..\\private\\wallet.key",
+    },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(invalidTimeoutProbe.status, 1);
+  assert.equal(String(invalidTimeoutProbe.stdout).trim(), "");
+  assert.deepEqual(
+    JSON.parse(String(invalidTimeoutProbe.stderr).trim()),
+    { status: "fail", issue: "invalid-prelaunch-check-timeout" },
+    "malformed prelaunch timeouts must fail with compact machine-readable output and no raw value, path, or stack",
+  );
+  const unauthenticatedPerformanceRcProbe = spawnSync(process.execPath, [
+    "scripts/report-prelaunch-status.mjs",
+    "--launcher-diagnostic",
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      REQUIRE_P1_PERFORMANCE_RC: "1",
+    },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(unauthenticatedPerformanceRcProbe.status, 1);
+  assert.equal(String(unauthenticatedPerformanceRcProbe.stdout).trim(), "");
+  assert.deepEqual(
+    JSON.parse(String(unauthenticatedPerformanceRcProbe.stderr).trim()),
+    { status: "fail", issue: "p1-performance-rc-external-attestation-required" },
+    "an unsigned local performance artifact must never become required release evidence",
+  );
+  const mismatchedRuntimeRoot = mkdtempSync(join(tmpdir(), "lore-prelaunch-runtime-"));
+  try {
+    writeFileSync(join(mismatchedRuntimeRoot, "package.json"), JSON.stringify({
+      packageManager: "npm@0.0.0",
+      engines: { node: "24.x" },
+    }), "utf8");
+    assert.throws(
+      () => resolveTrustedNpmCli({ repoRoot: mismatchedRuntimeRoot }),
+      /Resolved npm version does not match repository packageManager/,
+      "trusted npm resolution must reject an installed npm version that differs from packageManager",
+    );
+    writeFileSync(join(mismatchedRuntimeRoot, "package.json"), JSON.stringify({
+      packageManager: "npm@11.5.1",
+      engines: { node: "23.x" },
+    }), "utf8");
+    assert.throws(
+      () => resolveTrustedNpmCli({ repoRoot: mismatchedRuntimeRoot }),
+      /Node runtime does not match the repository engine/,
+      "trusted npm resolution must reject a Node runtime outside the declared major",
+    );
+  } finally {
+    rmSync(mismatchedRuntimeRoot, { recursive: true, force: true });
+  }
   const sqliteScopeAudit = sqliteScopeAuditModule.default ?? sqliteScopeAuditModule;
   assert.equal(sqliteScopeAudit.normalizeSqliteCount(3), 3);
   assert.equal(sqliteScopeAudit.normalizeSqliteCount(3n), 3);
@@ -95,21 +448,6 @@ export function runReleaseOperationsTests() {
     "live canary fatal handler must not print raw errors",
   );
   assert.match(
-    liveRoundCanarySource,
-    /MAX_HEALTH_SAMPLE_RESPONSE_BYTES[\s\S]*CONTENT_LENGTH_RE[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function readBoundedHealthJson[\s\S]*parseContentLengthHeader\(response\.headers\.get\("content-length"\)\)[\s\S]*new TextDecoder\("utf-8", \{ fatal: true \}\)[\s\S]*const parsed = BigInt\(value\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)/,
-    "live canary health sampling must strictly parse and bound health response bodies before JSON parsing",
-  );
-  assert.doesNotMatch(
-    liveRoundCanarySource,
-    /Number\(response\.headers\.get\("content-length"\)\)/,
-    "live canary health sampling must not broadly coerce content-length headers",
-  );
-  assert.doesNotMatch(
-    liveRoundCanarySource,
-    /response\.json\(\)|runtimeResponse\.json\(\)|dataSyncResponse\.json\(\)/,
-    "live canary health sampling must not use unbounded response.json",
-  );
-  assert.match(
     keeperBotSource,
     /function describeKeeperError[\s\S]*sanitizeSentryPayload[\s\S]*console\.error\("\[keeper\] Fatal startup error:", describeKeeperError\(err\)\)/,
     "keeper logs must sanitize provider and alert transport errors before output",
@@ -138,56 +476,6 @@ export function runReleaseOperationsTests() {
     botSupervisorSource,
     /process error: \$\{describeSupervisorError\(error\)\}/,
     "bot supervisor process errors must be redacted before terminal output",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /import \{ redactProofText \} from "\.\/redact-proof-output\.mjs"[\s\S]*function describeSupervisorError\(error\)[\s\S]*redactProofText\(/,
-    "testnet soak supervisor terminal errors must use the shared proof redactor",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /status failed: \$\{describeSupervisorError\(error\)\}[\s\S]*stop failed: \$\{describeSupervisorError\(error\)\}[\s\S]*const message = describeSupervisorError\(error\)/,
-    "testnet soak supervisor status, stop, and fatal errors must be compact and redacted",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /sanitizeSupportLogPayload\(\{ message \}\)/,
-    "pending nonce recovery must sanitize fatal error text",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /PUBLIC_ADDRESS_ENV_NAME_RE[\s\S]*function loadPublicAddressEnvFileIfPresent\(\)[\s\S]*processEnv: isolatedEnv[\s\S]*!PUBLIC_ADDRESS_ENV_NAME_RE\.test\(name\)[\s\S]*function loadSigningEnvFileIfPresent\(\)[\s\S]*loadDotenv\(\{ path: LIVE_WALLET_ENV_PATH, override: false, quiet: true \}\)/,
-    "pending nonce recovery must isolate and allowlist public addresses before any optional signing env load",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /Missing LORE_LIVE_TEST_\$\{ROLE\}_ADDRESS in \$\{PUBLIC_ADDRESS_ENV_PATH\}/,
-    "pending nonce recovery dry-run must point missing-address operators at the public address env file",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /EXECUTION_CONFIRMATION = "--confirm-lowest-pending-nonce-replacement"[\s\S]*EXECUTE && !EXECUTION_CONFIRMED/,
-    "pending nonce recovery must require a separate explicit confirmation before loading a signing account",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /const publicAddressEnv = loadPublicAddressEnvFileIfPresent\(\)[\s\S]*const signingMaterialLoaded = hasSigningMaterialInEnvironment\(\)[\s\S]*const address = getDryRunAddress\(publicAddressEnv\)[\s\S]*readNonceState\(publicClient, address\)[\s\S]*if \(state\.gap === 0\) return;[\s\S]*const account = getAccount\(\)/,
-    "pending nonce recovery must verify the public nonce gap before loading signing material",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /account\.address !== address[\s\S]*Configured recovery signer does not match the public role address/,
-    "pending nonce recovery must refuse mismatched signer and public role address",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /!EXECUTE && signingMaterialLoaded[\s\S]*wouldSendReplacement:\s*EXECUTE && state\.gap > 0[\s\S]*operationalBoundary: \{[\s\S]*dryRunDefault: !EXECUTE[\s\S]*signingMaterialLoaded,[\s\S]*walletClientCreated: false[\s\S]*contractWriteSubmitted: false[\s\S]*transactionSent: false[\s\S]*value: 0n,[\s\S]*nonce: state\.latest,[\s\S]*gas: 21_000n/,
-    "pending nonce recovery must remain a bounded zero-value replacement of the lowest pending nonce",
-  );
-  assert.doesNotMatch(
-    clearPendingNonceSource,
-    /console\.log\(JSON\.stringify\(\{[\s\S]{0,180}\b(?:address|hash|rpc|url)\b/i,
-    "pending nonce recovery status output must remain role-level and avoid addresses, tx hashes, and RPC endpoints",
   );
   assert.equal(chatSession.normalizeChatSessionExpiresAt(120_000, 100_000), 120_000);
   assert.equal(chatSession.normalizeChatSessionExpiresAt("120000", 100_000), null);
@@ -412,11 +700,6 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     analyzeCanarySource,
-    /const summaryOnly = process\.argv\.includes\("--summary-only"\)/,
-    "canary proof analyzer must support compact output without changing validation",
-  );
-  assert.match(
-    analyzeCanarySource,
     /function hasNonFutureIsoTimestamp[\s\S]*Date\.now\(\) \+ 5 \* 60 \* 1000[\s\S]*targetNetwork\.checkedAt must not be in the future[\s\S]*recovery\.\$\{check\}\.checkedAt must not be in the future[\s\S]*autoMinerSession\.checkedAt must not be in the future[\s\S]*transactionHealth\.checkedAt must not be in the future/,
     "canary proof analyzer must reject future-dated target, recovery, auto-miner session, and transaction health timestamps",
   );
@@ -574,16 +857,6 @@ export function runReleaseOperationsTests() {
     "proof draft regression suite must reject canary logs with extra successful roles",
   );
   assert.match(
-    analyzeCanarySource,
-    /malformedSuccessfulRoleEvidence = okBets\.filter\(\(event\) => !normalizeRole\(event\.role\)\)[\s\S]*malformed successful role evidence/,
-    "canary proof analyzer must fail closed on malformed successful role evidence",
-  );
-  assert.match(
-    readFileSync("scripts/check-proof-drafts.mjs", "utf8"),
-    /canaryMalformedRoleLog[\s\S]*role: "AUTOMINER A"[\s\S]*canary-live-log-malformed-role[\s\S]*malformed successful role evidence 1/,
-    "proof draft regression suite must reject malformed canary successful role evidence",
-  );
-  assert.match(
     readFileSync("scripts/check-proof-drafts.mjs", "utf8"),
     /canary-future-timestamp[\s\S]*targetNetwork\.checkedAt must not be in the future/,
     "proof draft regression suite must reject strict canary proof with future-dated manifest timestamps",
@@ -597,16 +870,6 @@ export function runReleaseOperationsTests() {
     analyzeCanarySource,
     /Number\(targetNetwork\.chainId\)|Number\(expectedChainId\)|Number\(event\.chainId\)/,
     "canary proof analyzer must not use broad numeric fallback for target or live-log chain IDs",
-  );
-  assert.match(
-    analyzeCanarySource,
-    /CANONICAL_NON_NEGATIVE_INTEGER_RE[\s\S]*malformedNonceEvidence[\s\S]*malformed nonce evidence \$\{malformedNonceEvidence\.length\}[\s\S]*function hasCanonicalNonceEvidence/,
-    "canary proof analyzer must fail closed on malformed successful bet nonce evidence",
-  );
-  assert.doesNotMatch(
-    analyzeCanarySource,
-    /Number\(event\.noncePending\)\s*>\s*Number\(event\.nonceLatest\)/,
-    "canary proof analyzer must not use broad numeric fallback for nonce gap evidence",
   );
   assert.match(
     createCanaryDraftSource,
@@ -624,11 +887,6 @@ export function runReleaseOperationsTests() {
     "proof draft regression suite must reject malformed canary chain IDs in strict manifest, live-log, and draft paths",
   );
   assert.match(
-    readFileSync("scripts/check-proof-drafts.mjs", "utf8"),
-    /canaryMalformedNonceLog[\s\S]*noncePending: "2e1"[\s\S]*canary-live-log-malformed-nonce[\s\S]*malformed nonce evidence 1/,
-    "proof draft regression suite must reject malformed canary nonce evidence in successful live-log bets",
-  );
-  assert.match(
     analyzeCanarySource,
     /malformedBetTileEvidence[\s\S]*malformed bet tile evidence \$\{malformedBetTileEvidence\.length\}[\s\S]*function parseBetTiles/,
     "canary proof analyzer must fail closed on malformed successful bet tile evidence",
@@ -642,11 +900,6 @@ export function runReleaseOperationsTests() {
     readFileSync("scripts/check-proof-drafts.mjs", "utf8"),
     /canaryMalformedTileLog[\s\S]*tiles: \["1\.0"\][\s\S]*canary-live-log-malformed-tile[\s\S]*malformed bet tile evidence 1/,
     "proof draft regression suite must reject malformed canary tile evidence in successful live-log bets",
-  );
-  assert.match(
-    analyzeCanarySource,
-    /malformedBetEpochEvidence[\s\S]*malformed bet epoch evidence \$\{malformedBetEpochEvidence\.length\}[\s\S]*function findDuplicateBetKeys[\s\S]*positiveIntegerString\(event\.epoch\)/,
-    "canary proof analyzer must fail closed on malformed successful bet epoch evidence before duplicate proof",
   );
   assert.match(
     analyzeCanarySource,
@@ -672,31 +925,6 @@ export function runReleaseOperationsTests() {
     analyzeCanarySource,
     /targetNetworkOk:[\s\S]*normalizeNetwork\(targetNetwork\.network\) === profile\.network[\s\S]*normalizeNetwork\(targetNetwork\.network\) === normalizeNetwork\(expectedNetwork\)[\s\S]*targetChainIdString === String\(profile\.chainId\)[\s\S]*targetChainIdString === expectedChainIdString[\s\S]*normalizeAddress\(targetNetwork\.contractAddress\) === normalizeAddress\(expectedContract\)/,
     "canary manifest summary must mark targetNetwork as issue when configured network, chain id, or contract address mismatches strict validation",
-  );
-  assert.match(
-    readFileSync("scripts/check-proof-drafts.mjs", "utf8"),
-    /canaryMalformedEpochLog[\s\S]*epoch: "4\.0"[\s\S]*canary-live-log-malformed-epoch[\s\S]*malformed bet epoch evidence 1/,
-    "proof draft regression suite must reject malformed canary epoch evidence in successful live-log bets",
-  );
-  assert.match(
-    analyzeCanarySource,
-    /malformedBetTimestampEvidence = okBets\.filter\(\(event\) => !hasIsoTimestamp\(event\.timestamp\)\)[\s\S]*malformed bet timestamp evidence/,
-    "canary proof analyzer must fail closed on malformed timestamps in successful live-log bets",
-  );
-  assert.match(
-    analyzeCanarySource,
-    /function elapsedRunMs\(events\)[\s\S]*\.map\(\(event\) => isoTimestampMs\(event\.timestamp\)\)/,
-    "canary elapsed-time proof must use canonical ISO timestamp parsing",
-  );
-  assert.doesNotMatch(
-    analyzeCanarySource,
-    /Date\.parse\(event\.timestamp\)/,
-    "canary elapsed-time proof must not use broad Date.parse parsing",
-  );
-  assert.match(
-    readFileSync("scripts/check-proof-drafts.mjs", "utf8"),
-    /canaryMalformedTimestampLog[\s\S]*timestamp: "2026-07-09 00:03:00"[\s\S]*canary-live-log-malformed-timestamp[\s\S]*malformed bet timestamp evidence 1/,
-    "proof draft regression suite must reject malformed canary timestamp evidence in successful live-log bets",
   );
   assert.match(
     readFileSync("scripts/check-proof-drafts.mjs", "utf8"),
@@ -753,18 +981,6 @@ export function runReleaseOperationsTests() {
     /requiredRoles = normalizeRoleList\(profile\.requiredRoles\)[\s\S]*requiredRoles,[\s\S]*successfulRoles: summary\.successfulRoles/,
     "canary proof draft must preserve required and observed successful roles",
   );
-  for (const canaryGateScript of ["scripts/check-launch-gates.mjs", "scripts/report-launch-remaining.mjs"]) {
-    assert.match(
-      readFileSync(canaryGateScript, "utf8"),
-      /"G10"[\s\S]*MANUAL[\s\S]*AUTOMINER_A[\s\S]*AUTOMINER_B[\s\S]*50 successful auto-miner unique epochs/,
-      `${canaryGateScript} must keep launch canary role coverage visible`,
-    );
-    assert.match(
-      readFileSync(canaryGateScript, "utf8"),
-      /"G12"[\s\S]*Privy allowed origins[\s\S]*redacted production App ID configured proof[\s\S]*wrong network/,
-      `${canaryGateScript} must keep production Privy App ID proof visible in the wallet QA gate`,
-    );
-  }
   assert.match(
     readFileSync("docs/mainnet-status-board.md", "utf8"),
     /Latest aggregate verification:[\s\S]*V10 dry-run Preview[\s\S]*transactionSent=false[\s\S]*preview:canary:v10:authorization-ready:summary[\s\S]*npm\.cmd run proof:prelaunch:summary[\s\S]*all required local rows passed[\s\S]*24 external\/status blockers[\s\S]*0\/14 Complete[\s\S]*residual security follow-up 8\/8[\s\S]*appResolveEpochFiles=0[\s\S]*ABI\/indexer storage[\s\S]*sameBlockEventOrdering=true/,
@@ -921,11 +1137,6 @@ export function runReleaseOperationsTests() {
     "V10 matrix mode must cap submitted resolve transactions before wallet writes",
   );
   assert.match(
-    analyzeCanarySource,
-    /--require-epoch-bound[\s\S]*successful epoch-unbound bets/,
-    "V10 canary proof must reject successful legacy bets when epoch-bound evidence is required",
-  );
-  assert.match(
     liveRoundCanarySource,
     /V10_CANARY_MATRIX = \[[\s\S]*tileCount: 1, sparse: false[\s\S]*tileCount: 3, sparse: false[\s\S]*tileCount: 3, sparse: true[\s\S]*tileCount: 5, sparse: false[\s\S]*tileCount: 5, sparse: true[\s\S]*tileCount: 25, sparse: false/,
     "V10 live canary must schedule single, contiguous, sparse, and full-grid gas cases before randomized rounds",
@@ -940,40 +1151,10 @@ export function runReleaseOperationsTests() {
     "tsx scripts/live-round-canary.ts --v10-matrix-only",
     "the bounded V10 matrix command must default to the script's fail-closed dry-run mode",
   );
-  assert.match(
-    analyzeCanarySource,
-    /--require-v10-gas-matrix[\s\S]*missing V10 gas cases[\s\S]*V10 Mined Gas Matrix/,
-    "V10 canary proof must fail closed on missing mined-gas matrix cases and report per-case gas",
-  );
-  assert.match(
-    analyzeCanarySource,
-    /malformedV10GasMatrixEvidence[\s\S]*malformed V10 gas matrix evidence \$\{malformedV10GasMatrixEvidence\.length\}[\s\S]*function parseBetTiles[\s\S]*function tileCountValue[\s\S]*function gasValue/,
-    "V10 canary proof must fail closed on malformed mined-gas matrix evidence",
-  );
-  assert.match(
-    analyzeCanarySource,
-    /function formatCounts\(counts\)[\s\S]*safeCountKey\(key\)[\s\S]*function safeCountKey\(value\)[\s\S]*\^\[A-Za-z0-9_-\]\{1,48\}\$[\s\S]*return "unsafe-token"/,
-    "V10 canary proof summary must sanitize raw role/mode/error count keys before printing them",
-  );
-  assert.doesNotMatch(
-    analyzeCanarySource.match(/function formatCounts\(counts\)[\s\S]*?function summarizeV10GasMatrix/)?.[0] ?? "",
-    /\$\{key\}:\$\{value\}/,
-    "V10 canary proof summary must not print raw count keys from canary logs",
-  );
-  assert.doesNotMatch(
-    analyzeCanarySource.match(/function v10GasCase\(event\)[\s\S]*?function parseBetTiles/)?.[0] ?? "",
-    /tiles\.map\(Number\)|Number\(event\.tileCount\)/,
-    "V10 canary proof must not use broad numeric fallback for gas matrix tiles or tileCount",
-  );
   assert.equal(
     packageScripts["proof:testnet:canary:v10"],
     "node scripts/analyze-live-canary-proof.mjs --profile=v10-matrix --strict --require-epoch-bound --require-v10-gas-matrix",
     "V10 testnet proof command must fail closed on epoch-bound and mined-gas matrix evidence",
-  );
-  assert.match(
-    prelaunchStatusSource,
-    /proof:testnet:canary:strict:summary[\s\S]*proof:testnet:canary:v10:summary[\s\S]*db:backup:summary/,
-    "prelaunch status summary must keep missing V10 mined-gas matrix evidence visible before backup gates",
   );
   const v10CanaryProofDir = mkdtempSync(join(tmpdir(), "lore-v10-canary-proof-"));
   try {
@@ -996,7 +1177,7 @@ export function runReleaseOperationsTests() {
       tiles: [1],
       timestamp: "2026-07-22T00:00:00.000Z",
     };
-    const runV10CanaryProof = (name, events) => {
+    const runV10CanaryProof = (name, events, extraArgs = []) => {
       const logPath = join(v10CanaryProofDir, `${name}.jsonl`);
       writeFileSync(logPath, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
       return spawnSync(process.execPath, [
@@ -1006,6 +1187,7 @@ export function runReleaseOperationsTests() {
         "--strict",
         "--require-epoch-bound",
         "--require-v10-gas-matrix",
+        ...extraArgs,
       ], {
         cwd: process.cwd(),
         env: {
@@ -1083,6 +1265,61 @@ export function runReleaseOperationsTests() {
     assert.doesNotMatch(matrixProof.stdout, /missing V10 gas cases/);
     assert.doesNotMatch(matrixProof.stdout, /duplicate role\/epoch\/tile keys [1-9]/);
     assert.match(matrixProof.stdout, /\| 3-sparse \| 2 \| 100002 \| 100002 \| 200002 \|/);
+    const compactCanaryOutput = (result) => `${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`;
+    const assertCompactCanaryOutputSafe = (name, result) => {
+      const output = compactCanaryOutput(result);
+      const normalizedOutput = output.replaceAll("\\\\", "\\").replaceAll("\\/", "/");
+      const tempPathVariants = new Set([
+        v10CanaryProofDir,
+        v10CanaryProofDir.replaceAll("\\", "\\\\"),
+        v10CanaryProofDir.replaceAll("\\", "/"),
+        v10CanaryProofDir.replaceAll("/", "\\/"),
+      ]);
+      for (const tempPath of tempPathVariants) {
+        assert.equal(
+          output.toLowerCase().includes(tempPath.toLowerCase()),
+          false,
+          `${name} compact output must not expose its raw or escaped temporary evidence directory`,
+        );
+      }
+      assert.doesNotMatch(output, /0x[a-fA-F0-9]{64}/, `${name} compact output must not expose tx hashes`);
+      assert.doesNotMatch(
+        normalizedOutput,
+        /(?:[A-Za-z]:[\\/][^\s|`"']+)|(?:(?:^|[\s|`"'])\/(?:[^/\s|`"']+\/)+[^/\s|`"']+)/im,
+        `${name} compact output must not expose absolute filesystem paths`,
+      );
+      return output;
+    };
+    const compactMatrixProof = runV10CanaryProof("matrix-summary", matrixEvents, ["--summary-only"]);
+    assert.equal(compactMatrixProof.status, 0, "the compact operator path must preserve strict matrix validation");
+    assert.equal(String(compactMatrixProof.stderr).trim(), "", "the passing compact operator path must keep stderr empty");
+    const compactMatrixOutput = assertCompactCanaryOutputSafe("valid matrix", compactMatrixProof);
+    assert.match(compactMatrixOutput, /Summary: live canary proof checks passed; covered gates: G10, G11/);
+    assert.doesNotMatch(compactMatrixOutput, /## V10 Mined Gas Matrix/);
+    const runMatrixMutant = (name, mutate, expected) => {
+      const events = matrixEvents.map((event) => ({ ...event, tiles: [...event.tiles] }));
+      mutate(events);
+      const result = runV10CanaryProof(name, events, ["--summary-only"]);
+      assert.equal(result.status, 1, `${name} must fail strict canary validation`);
+      const output = assertCompactCanaryOutputSafe(name, result);
+      assert.match(output, expected, `${name} must report its fail-closed reason`);
+      assert.match(output, /blocked gates: G10, G11/);
+    };
+    runMatrixMutant("malformed-nonce", (events) => {
+      events[0].noncePending = "2e1";
+    }, /malformed nonce evidence 1/);
+    runMatrixMutant("malformed-epoch", (events) => {
+      events[0].epoch = "1.0";
+    }, /malformed bet epoch evidence 1/);
+    runMatrixMutant("malformed-timestamp", (events) => {
+      events[0].timestamp = "2026-07-22 00:00:00";
+    }, /malformed bet timestamp evidence 1/);
+    runMatrixMutant("target-chain-mismatch", (events) => {
+      events[0].chainId = "59141.0";
+    }, /target metadata mismatches 1/);
+    runMatrixMutant("duplicate-tx-hash", (events) => {
+      events[1].hash = events[0].hash;
+    }, /duplicate successful tx hashes 1/);
     const orphanRepeatProof = runV10CanaryProof("orphan-repeat", [{ ...baseBetEvent, epochBound: true, repeat: true }]);
     assert.match(orphanRepeatProof.stdout, /duplicate role\/epoch\/tile keys 1/);
     const duplicateProof = runV10CanaryProof("duplicate", [
@@ -1102,8 +1339,8 @@ export function runReleaseOperationsTests() {
   }
   assert.match(
     liveRoundCanarySource,
-    /LIVE_TEST_HEALTH_BASE_URL[\s\S]*x-health-diagnostics-secret[\s\S]*mode: "diagnostic"/,
-    "live canary must support redacted runtime and storage telemetry during long soak runs",
+    /LIVE_TEST_HEALTH_BASE_URL[\s\S]*fetchCanaryHealthPayloadPair\(\{[\s\S]*baseUrl: HEALTH_BASE_URL[\s\S]*secret,[\s\S]*timeoutMs: HEALTH_TIMEOUT_MS[\s\S]*mode: "diagnostic"/,
+    "live canary must bind the behavior-tested health client into redacted long-soak telemetry",
   );
   assert.match(
     liveRoundCanarySource,
@@ -1141,174 +1378,9 @@ export function runReleaseOperationsTests() {
     "live canary must record successful resolver fallback without classifying pre-send skips as failed resolves",
   );
   assert.match(
-    soakSupervisorSource,
-    /randomBytes\(32\)[\s\S]*HEALTH_DIAGNOSTICS_SECRET: HEALTH_SECRET/,
-    "testnet soak supervisor must generate and pass an ephemeral diagnostics secret without persisting it",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /SOAK_EXECUTE_LIVE === "1"[\s\S]*process\.argv\.includes\("--execute-live"\)[\s\S]*LIVE_TEST_DRY_RUN: DRY_RUN[\s\S]*LIVE_TEST_EXECUTE: LIVE_EXECUTION_CONFIRMED/,
-    "testnet soak supervisor must default to a transaction-free run and require explicit live execution confirmation",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /DECIMAL_INTEGER_RE = \/\^\(\?:0\|\[1-9\]\\d\{0,15\}\)\$\/[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseInteger\(name, fallbackValue, min, max\)[\s\S]*process\.env\[name\]\?\.trim\(\)[\s\S]*!DECIMAL_INTEGER_RE\.test\(raw\)[\s\S]*const parsed = BigInt\(raw\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)/,
-    "testnet soak supervisor env integer parsing must require canonical decimal text and BigInt bounds before Number narrowing",
-  );
-  assert.doesNotMatch(
-    soakSupervisorSource,
-    /const raw = process\.env\[name\];[\s\S]*const parsed = Number\(raw\);/,
-    "testnet soak supervisor env integer parsing must not accept broad Number(raw) coercion",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /writeFileSync\(STATUS_TMP_PATH[\s\S]*renameSync\(STATUS_TMP_PATH, STATUS_PATH\)/,
-    "testnet soak status must be atomically replaced",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /stopChild\(canary\)[\s\S]*stopChild\(server\)/,
-    "testnet soak supervisor must stop both managed children on completion or failure",
-  );
-  assert.doesNotMatch(
-    soakSupervisorSource,
-    /Number\(status\?\.supervisorPid\)|Number\(lock\?\.pid\)|Number\(JSON\.parse\(readFileSync\(LOCK_PATH, "utf8"\)\)\.pid\)/,
-    "testnet soak supervisor must not broad-coerce status or lock PIDs",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /MAX_SOAK_STATUS_JSON_BYTES = 128 \* 1024[\s\S]*MAX_SOAK_LOCK_JSON_BYTES = 4 \* 1024[\s\S]*function readJson\(path, maxBytes = MAX_SOAK_STATUS_JSON_BYTES\)[\s\S]*const stats = statSync\(path\)[\s\S]*!stats\.isFile\(\) \|\| stats\.size > maxBytes[\s\S]*JSON\.parse\(readFileSync\(path, "utf8"\)\)[\s\S]*readJson\(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES\)/,
-    "testnet soak supervisor status and lock JSON reads must be size-gated before parsing",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /existsSync\(LOCK_PATH\)[\s\S]*statSync\(LOCK_PATH\)\.size > MAX_SOAK_LOCK_JSON_BYTES[\s\S]*lock file is too large to validate safely[\s\S]*const previousLock = readJson\(LOCK_PATH, MAX_SOAK_LOCK_JSON_BYTES\)[\s\S]*parseTrackedPid\(previousLock\?\.pid\)[\s\S]*parseProcessStartToken\(previousLock\?\.supervisorStartToken\)/,
-    "testnet soak startup must fail closed on oversized lock files before stale-lock cleanup",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /status: "stopped"[\s\S]*stopReason: "operator-stop"[\s\S]*removeLockFile/,
-    "testnet soak stop command must repair Windows stale status and remove its matching lock",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /function removeLockFile\(\)[\s\S]*fileExists\(LOCK_PATH\)[\s\S]*rmSync\(LOCK_PATH/,
-    "managed soak lock cleanup must only remove regular lock files",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /existsSync\(LOCK_PATH\)[\s\S]*!fileExists\(LOCK_PATH\)[\s\S]*lock path exists but is not a file/,
-    "managed soak startup must fail closed when the lock path is not a file",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /createReadStream[\s\S]*summarizeLiveLog[\s\S]*uniqueTxHashes[\s\S]*duplicateNonces/,
-    "testnet soak status command must stream compact transaction progress without loading raw artifacts into memory",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /printSafeStatus[\s\S]*liveLogReady[\s\S]*hasLiveLog: liveLogReady[\s\S]*progress/,
-    "testnet soak status command must emit compact state and progress without raw artifact contents and without treating non-files as live logs",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /function fileExists\(path\)[\s\S]*statSync\(path\)\.isFile\(\)[\s\S]*if \(!path \|\| !fileExists\(path\)\) return summary/,
-    "testnet soak status command must reject directory live-log inputs before streaming",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /STATUS_SUMMARY_ONLY[\s\S]*diskCapacity[\s\S]*failedBetErrorKinds[\s\S]*failedBetFamilies[\s\S]*failedBetModes[\s\S]*failedBetStages[\s\S]*maxConsecutiveFailedBetsByRole[\s\S]*uniqueTxHashes[\s\S]*duplicateNonces[\s\S]*healthGrowth/,
-    "testnet soak summary mode must retain sanitized operational and failure counters without raw event payloads",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /function formatStatusCounts\(counts\)[\s\S]*safePositiveStatusCount\(count\)[\s\S]*function safePositiveStatusCount\(value\)[\s\S]*const parsed = BigInt\(raw\)[\s\S]*parsed > 0n && parsed <= MAX_SAFE_INTEGER_BIGINT \? Number\(parsed\) : null/,
-    "testnet soak compact status counters must be BigInt-bound before Number narrowing",
-  );
-  assert.doesNotMatch(
-    soakSupervisorSource,
-    /Number\(count\) > 0/,
-    "testnet soak compact status counters must not use broad Number(count) coercion",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /status\?\.artifacts\?\.liveLog \|\| readLiveLogPath\(\)/,
-    "running soak status must recover the JSONL marker written after the initial status snapshot",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /LIVE_LOG_MARKER_SCAN_BYTES[\s\S]*function readLiveLogPath[\s\S]*readSync/,
-    "running soak status must scan only a bounded wrapper-log prefix to recover the JSONL marker",
-  );
-  assert.doesNotMatch(
-    soakSupervisorSource,
-    /readFileSync\(CANARY_LOG_PATH,\s*"utf8"\)\.match/,
-    "running soak status must not load the full wrapper log when recovering the JSONL marker",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /numericSummary[\s\S]*p95[\s\S]*growthSummary[\s\S]*estimateGasRetries[\s\S]*rpcFailoverInjectionEvents[\s\S]*healthGrowth/,
-    "running soak status must summarize latency, failover, and bounded health growth without raw telemetry",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /SLOW_SEND_THRESHOLD_MS = 20_000[\s\S]*slowSendCount/,
-    "running soak status must count send delays that cross the RPC timeout threshold",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /SOAK_MIN_DISK_FREE_BYTES[\s\S]*while \(!existsSync\(capacityPath\)\)[\s\S]*assertDiskCapacity\(\)[\s\S]*acquireLock\(\)[\s\S]*managedRunStarted = true[\s\S]*writeStatus\("starting"\)/,
-    "testnet soak must reject low disk capacity before starting runtime processes or transactions",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /function bigIntToNonNegativeSafeInteger\(value\)[\s\S]*typeof value !== "bigint"[\s\S]*MAX_SAFE_INTEGER_BIGINT[\s\S]*diskFreeBytesNow: bigIntToNonNegativeSafeInteger\(freeBytes\)/,
-    "testnet soak disk capacity summary must cap BigInt free-space evidence before publishing JSON numbers",
-  );
-  assert.doesNotMatch(
-    soakSupervisorSource,
-    /diskFreeBytesNow:\s*Number\(freeBytes\)/,
-    "testnet soak disk capacity summary must not publish raw Number(freeBytes)",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /SOAK_DISK_CHECK_INTERVAL_MS[\s\S]*function waitForExit\(child\)[\s\S]*setInterval[\s\S]*readDiskCapacitySummary\(\)[\s\S]*disk-capacity-below-minimum[\s\S]*disk-capacity-unavailable[\s\S]*stopChild\(child\)/,
-    "running testnet soak must stop its managed canary when disk capacity becomes unsafe",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /if \(managedRunStarted\) await shutdown\(message, 1\)/,
-    "preflight failures must preserve the previous completed soak status and evidence pointers",
-  );
-  assert.match(
     cleanupNextCandidatesSource,
     /candidatePattern = \/\^\\\.next-candidate[\s\S]*dirname\(candidate\.path\) !== root[\s\S]*if \(apply\) rmSync/,
     "generated Next cleanup must default to dry-run and constrain recursive deletion to root candidate directories",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /lastEventAt[\s\S]*secondsSinceLastEvent/,
-    "running soak status must expose a compact event-age signal for stall diagnosis",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /function nonNegativeSafeInteger\(value: unknown\): number[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*pendingNonceGap: nonNegativeSafeInteger\(state\.gap\)[\s\S]*replacementCount: nonNegativeSafeInteger\(replacementCount \+ 1\)/,
-    "pending-nonce recovery summary must normalize nonce-gap and replacement counters before publishing JSON",
-  );
-  assert.doesNotMatch(
-    clearPendingNonceSource,
-    /pendingNonceGap:\s*Number\(state\.gap\)|replacementCount:\s*replacementCount \+ 1,\s*pendingNonceGap:\s*Number\(state\.gap\)/,
-    "pending-nonce recovery summary must not broad-coerce nonce gaps with Number(state.gap)",
-  );
-  assert.match(
-    clearPendingNonceSource,
-    /const MAX_REPLACEMENTS = 1[\s\S]*to: address,[\s\S]*value: 0n,[\s\S]*nonce: state\.latest,[\s\S]*gas: 21_000n[\s\S]*return;/,
-    "pending-nonce recovery must replace only one blocked nonce with a bounded zero-value self-transfer",
-  );
-  assert.doesNotMatch(
-    clearPendingNonceSource,
-    /GAME_ABI|TOKEN_ABI|writeContract/,
-    "pending-nonce recovery must not call the game contract or token contract",
   );
   const v10PreviewRunbookSource = readFileSync("docs/production-runbook.md", "utf8");
   assert.match(
@@ -1316,6 +1388,182 @@ export function runReleaseOperationsTests() {
     /soak:testnet:clear-pending:summary[\s\S]*pendingGap=0[\s\S]*wouldSend=false[\s\S]*do not execute anything[\s\S]*--execute --confirm-lowest-pending-nonce-replacement[\s\S]*never calls the game or token contracts[\s\S]*post-execution dry-run reports a zero gap/,
     "production runbook must document the bounded pending-nonce recovery procedure before soak restart",
   );
+  function runPendingNonceProbe(args, {
+    publicAddressFile,
+    signingFile,
+    inheritedSigningMaterial,
+  } = {}) {
+    const cwd = mkdtempSync(join(tmpdir(), "lore-pending-nonce-behavior-"));
+    try {
+      if (publicAddressFile !== undefined) {
+        writeFileSync(join(cwd, ".env.live-test-addresses"), publicAddressFile, "utf8");
+      }
+      if (signingFile !== undefined) {
+        writeFileSync(join(cwd, ".env.live-test-wallets"), signingFile, "utf8");
+      }
+      const env = { ...process.env };
+      for (const name of Object.keys(env)) {
+        if (
+          /(?:^|_)(?:PRIVATE_KEY|MNEMONIC|SEED(?:_PHRASE)?|SIGNING_KEY)(?:_|$)/i.test(name) ||
+          /^LORE_LIVE_TEST_(?:MANUAL|AUTOMINER_A|AUTOMINER_B|AUTOMINER_C|RESOLVER)_ADDRESS$/.test(name)
+        ) delete env[name];
+      }
+      if (inheritedSigningMaterial !== undefined) {
+        env.LORE_LIVE_TEST_AUTOMINER_A_PRIVATE_KEY = inheritedSigningMaterial;
+      }
+      return spawnSync(process.execPath, [
+        join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"),
+        join(process.cwd(), "scripts", "clear-live-test-pending-nonce.ts"),
+        ...args,
+      ], {
+        cwd,
+        env: {
+          ...env,
+          LINEA_NETWORK: "sepolia",
+          NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
+          LIVE_TEST_EXECUTE: "0",
+        },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }
+
+  for (const [name, args, expected] of [
+    ["default", ["--behavior-self-test"], { cliExecute: false, cliConfirmed: false, cliAdmitted: true }],
+    ["execute-only", ["--behavior-self-test", "--execute"], { cliExecute: true, cliConfirmed: false, cliAdmitted: false }],
+    ["confirmation-only", ["--behavior-self-test", "--confirm-lowest-pending-nonce-replacement"], { cliExecute: false, cliConfirmed: true, cliAdmitted: true }],
+    ["two-factor", ["--behavior-self-test", "--execute", "--confirm-lowest-pending-nonce-replacement"], { cliExecute: true, cliConfirmed: true, cliAdmitted: true }],
+  ]) {
+    const result = runPendingNonceProbe(args);
+    assert.equal(result.status, 0, `${name} pending-nonce behavior probe failed: ${result.stderr}`);
+    assert.equal(String(result.stderr).trim(), "");
+    assert.deepEqual(JSON.parse(String(result.stdout).trim()), {
+      status: "pass",
+      ...expected,
+      dryRunDefault: true,
+      publicAddressIsolation: true,
+      signingMaterialDetection: true,
+      wrongChainRejected: true,
+      mismatchedSignerRejected: true,
+      singleSelfTransfer: true,
+      summaryRedacted: true,
+      walletClientsCreated: 0,
+      networkRequests: 0,
+      contractWrites: 0,
+      faultMutantsRejected: 23,
+    });
+    assert.doesNotMatch(result.stdout, /0x[a-fA-F0-9]{40}|0x[a-fA-F0-9]{64}|https?:\/\//i);
+  }
+
+  const publicAddress = "0x2222222222222222222222222222222222222222";
+  const isolatedAddressProbe = runPendingNonceProbe(["--inspect-public-address-env"], {
+    publicAddressFile: `LORE_LIVE_TEST_AUTOMINER_A_ADDRESS=${publicAddress}\n`,
+    signingFile: "LORE_LIVE_TEST_AUTOMINER_A_PRIVATE_KEY=wallet-file-must-not-load\n",
+  });
+  assert.equal(isolatedAddressProbe.status, 0, isolatedAddressProbe.stderr);
+  assert.deepEqual(JSON.parse(String(isolatedAddressProbe.stdout).trim()), {
+    mode: "dry-run",
+    publicAddressKeys: ["LORE_LIVE_TEST_AUTOMINER_A_ADDRESS"],
+    signingMaterialLoaded: false,
+    walletClientCreated: false,
+    contractWriteSubmitted: false,
+    transactionSent: false,
+  });
+  assert.doesNotMatch(`${isolatedAddressProbe.stdout}\n${isolatedAddressProbe.stderr}`, /wallet-file-must-not-load/);
+
+  const contaminatedAddressProbe = runPendingNonceProbe(["--inspect-public-address-env"], {
+    publicAddressFile: `LORE_LIVE_TEST_AUTOMINER_A_ADDRESS=${publicAddress}\nLORE_LIVE_TEST_AUTOMINER_A_PRIVATE_KEY=public-file-secret\n`,
+  });
+  assert.equal(contaminatedAddressProbe.status, 1);
+  assert.match(contaminatedAddressProbe.stderr, /may contain only public live-test role addresses/);
+  assert.doesNotMatch(`${contaminatedAddressProbe.stdout}\n${contaminatedAddressProbe.stderr}`, /public-file-secret/);
+
+  const inheritedSigningProbe = runPendingNonceProbe(["--inspect-public-address-env"], {
+    publicAddressFile: `LORE_LIVE_TEST_AUTOMINER_A_ADDRESS=${publicAddress}\n`,
+    inheritedSigningMaterial: "inherited-signing-secret",
+  });
+  assert.equal(inheritedSigningProbe.status, 1);
+  assert.match(inheritedSigningProbe.stderr, /inspection refuses inherited signing material/);
+  assert.doesNotMatch(`${inheritedSigningProbe.stdout}\n${inheritedSigningProbe.stderr}`, /inherited-signing-secret/);
+
+  const pendingNonceRedactionFault = runPendingNonceProbe(["--behavior-self-test", "--self-test-secret-fault"]);
+  assert.equal(pendingNonceRedactionFault.status, 1);
+  assert.equal(String(pendingNonceRedactionFault.stdout).trim(), "");
+  assert.doesNotMatch(
+    pendingNonceRedactionFault.stderr,
+    /wallet-secret|private-token|rpc\.invalid|https?:\/\//i,
+    "pending-nonce CLI failures must redact credentialed RPC input",
+  );
+
+  function runSoakBehaviorProbe({ envConfirmation = false, cliConfirmation = false, secretFault = false } = {}) {
+    const behaviorDir = mkdtempSync(join(tmpdir(), "lore-soak-behavior-"));
+    try {
+      const result = spawnSync(process.execPath, [
+        "scripts/run-testnet-soak-supervisor.mjs",
+        "--behavior-self-test",
+        ...(cliConfirmation ? ["--execute-live"] : []),
+        ...(secretFault ? ["--self-test-secret-fault"] : []),
+      ], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          SOAK_BEHAVIOR_SELF_TEST_DIR: behaviorDir,
+          SOAK_OUT_DIR: behaviorDir,
+          SOAK_EXECUTE_LIVE: envConfirmation ? "1" : "",
+          SOAK_PORT: "",
+          SOAK_SERVER_READY_TIMEOUT_MS: "",
+          SOAK_DISK_CHECK_INTERVAL_MS: "",
+          SOAK_MIN_DISK_FREE_BYTES: "1",
+        },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      return { ...result, behaviorDir };
+    } finally {
+      rmSync(behaviorDir, { recursive: true, force: true });
+    }
+  }
+
+  for (const [name, options, expected] of [
+    ["default", {}, { dryRun: true, liveExecutionConfirmed: false, canaryDryRun: true, canaryExecute: false }],
+    ["env-only", { envConfirmation: true }, { dryRun: true, liveExecutionConfirmed: false, canaryDryRun: true, canaryExecute: false }],
+    ["flag-only", { cliConfirmation: true }, { dryRun: true, liveExecutionConfirmed: false, canaryDryRun: true, canaryExecute: false }],
+    ["two-factor", { envConfirmation: true, cliConfirmation: true }, { dryRun: false, liveExecutionConfirmed: true, canaryDryRun: false, canaryExecute: true }],
+  ]) {
+    const result = runSoakBehaviorProbe(options);
+    assert.equal(result.status, 0, `${name} soak behavior probe failed: ${result.stderr}`);
+    assert.equal(String(result.stderr).trim(), "", `${name} soak behavior probe must keep stderr empty`);
+    const summary = JSON.parse(String(result.stdout).trim());
+    assert.deepEqual(
+      summary,
+      {
+        status: "pass",
+        ...expected,
+        defaultRoles: "MANUAL,AUTOMINER_A,AUTOMINER_B",
+        ephemeralDiagnosticsSecret: true,
+        atomicStatus: true,
+        managedChildrenStarted: 0,
+        networkRequests: 0,
+        faultMutantsRejected: 32,
+      },
+      `${name} soak admission behavior must remain transaction-free unless both live confirmations are present`,
+    );
+    assert.doesNotMatch(result.stdout, /https?:\/\/|wallet-secret|private-token|0x[a-fA-F0-9]{40}/i);
+  }
+
+  const redactionFaultProbe = runSoakBehaviorProbe({ secretFault: true });
+  assert.equal(redactionFaultProbe.status, 1, "soak behavior redaction fault must fail closed");
+  assert.equal(String(redactionFaultProbe.stdout).trim(), "");
+  assert.match(redactionFaultProbe.stderr, /behavior self-test failed:/);
+  assert.doesNotMatch(
+    redactionFaultProbe.stderr,
+    /wallet-secret|private-token|rpc\.invalid|https?:\/\//i,
+    "soak CLI failures must redact credentialed RPC input",
+  );
+
   const soakStatusDir = mkdtempSync(join(tmpdir(), "lore-soak-status-"));
   try {
     const soakStatusFixtureMinimumDiskBytes = 1;
@@ -1344,6 +1592,33 @@ export function runReleaseOperationsTests() {
       errorKind: "pending-nonce-blocked",
       timestamp: "2026-07-18T00:00:01.000Z",
     })}\n${JSON.stringify({
+      mode: "diagnostic",
+      sampleKind: "health",
+      ok: true,
+      rssBytes: 100,
+      heapUsedBytes: 40,
+      dbBytes: 20,
+      walBytes: 4,
+      diskFreeBytes: 1_000,
+      gasEstimateRetryCount: 2,
+      rpcFailoverInjected: true,
+      timestamp: "2026-07-18T00:00:01.100Z",
+    })}\n${JSON.stringify({
+      mode: "diagnostic",
+      sampleKind: "health",
+      ok: true,
+      rssBytes: 125,
+      heapUsedBytes: 45,
+      dbBytes: 24,
+      walBytes: 5,
+      diskFreeBytes: 900,
+      timestamp: "2026-07-18T00:00:01.200Z",
+    })}\n${JSON.stringify({
+      mode: "resolve",
+      ok: true,
+      resolverFallbackUsed: true,
+      timestamp: "2026-07-18T00:00:01.300Z",
+    })}\n${JSON.stringify({
       mode: "bitmap",
       ok: true,
       round: 0,
@@ -1353,6 +1628,12 @@ export function runReleaseOperationsTests() {
       epoch: "1",
       hash: `0x${"2".repeat(64)}`,
       noncePending: 0,
+      durationMs: 400,
+      prepareMs: 10,
+      estimateGasMs: 20,
+      nonceReadMs: 30,
+      sendMs: 20_000,
+      receiptMs: 340,
       timestamp: "2026-07-18T00:00:01.500Z",
     })}\n${JSON.stringify({
       mode: "single",
@@ -1422,6 +1703,28 @@ export function runReleaseOperationsTests() {
     assert.deepEqual(safeSoakStatus.progress.consecutiveFailedBetsByRole, { MANUAL: 1, AUTOMINER_A: 2, AUTOMINER_B: 1 });
     assert.deepEqual(safeSoakStatus.progress.maxConsecutiveFailedBetsByRole, { MANUAL: 1, AUTOMINER_A: 2, AUTOMINER_B: 1 });
     assert.deepEqual(safeSoakStatus.progress.failedBetStages, { "pre-send": 3, "post-send-unconfirmed": 1 });
+    assert.equal(safeSoakStatus.progress.healthSamples, 2);
+    assert.equal(safeSoakStatus.progress.estimateGasRetries, 2);
+    assert.equal(safeSoakStatus.progress.rpcFailoverInjectionEvents, 1);
+    assert.equal(safeSoakStatus.progress.resolverFallbacks, 1);
+    assert.equal(safeSoakStatus.progress.slowSendCount, 1);
+    assert.deepEqual(safeSoakStatus.progress.latencyMs, { samples: 1, p50: 400, p95: 400, p99: 400, max: 400 });
+    assert.deepEqual(safeSoakStatus.progress.phaseLatencyMs.sendMs, {
+      samples: 1,
+      p50: 20_000,
+      p95: 20_000,
+      p99: 20_000,
+      max: 20_000,
+    });
+    assert.deepEqual(safeSoakStatus.progress.healthGrowth.rssBytes, {
+      samples: 2,
+      first: 100,
+      min: 100,
+      max: 125,
+      delta: 25,
+    });
+    assert.equal(Number.isSafeInteger(safeSoakStatus.secondsSinceLastEvent), true);
+    assert.equal(safeSoakStatus.secondsSinceLastEvent >= 0, true);
     assert.equal(safeSoakStatus.diskCapacity.diskCapacityAvailable, true);
     assert.equal(Number.isSafeInteger(safeSoakStatus.diskCapacity.diskFreeBytesNow), true);
     assert.equal(safeSoakStatus.diskCapacity.diskFreeMinimumBytes, soakStatusFixtureMinimumDiskBytes);
@@ -1454,6 +1757,12 @@ export function runReleaseOperationsTests() {
       AUTOMINER_B: 1,
     });
     assert.equal(safeSoakSummary.progress.duplicateNonces, 0);
+    assert.equal(safeSoakSummary.progress.estimateGasRetries, 2);
+    assert.equal(safeSoakSummary.progress.rpcFailoverInjectionEvents, 1);
+    assert.equal(safeSoakSummary.progress.resolverFallbacks, 1);
+    assert.equal(safeSoakSummary.progress.slowSendCount, 1);
+    assert.equal(safeSoakSummary.progress.latencyMs.p95, 400);
+    assert.equal(safeSoakSummary.progress.healthGrowth.rssBytes.delta, 25);
     assert.equal(safeSoakSummary.diskCapacity.diskCapacityAvailable, true);
     assert.equal(Number.isSafeInteger(safeSoakSummary.diskCapacity.diskFreeBytesNow), true);
     assert.equal(safeSoakSummary.diskCapacity.diskFreeMinimumBytes, soakStatusFixtureMinimumDiskBytes);
@@ -1466,7 +1775,7 @@ export function runReleaseOperationsTests() {
     assert.equal(soakCompactResult.status, 0, soakCompactResult.stderr);
     assert.match(
       soakCompactResult.stdout,
-      /status=failed dry=true alive=false stop=canary-1 ok=1 bound=1 unbound=0 fail=4 roles=MANUAL=1\/AUTOMINER_A=2,AUTOMINER_B=1,MANUAL=1 epochs=1 tx=1 nonces=1 dupTx=0 dupNonce=0 rev=0 health=0\/0 rpc=0 gas=0 resolver=0 slow=0 p95=n\/a diskLow=false diskFree=\d+ preflight=AUTOMINER_C:insufficient-native-gas,AUTOMINER_A:pending-nonce-blocked fk=network=1,pending-nonce-blocked=1,receipt-timeout=1,unknown=1 ff=missing-error=1,network=2,nonce-state=1/,
+      /status=failed dry=true alive=false stop=canary-1 ok=1 bound=1 unbound=0 fail=4 roles=MANUAL=1\/AUTOMINER_A=2,AUTOMINER_B=1,MANUAL=1 epochs=1 tx=1 nonces=1 dupTx=0 dupNonce=0 rev=0 health=0\/0 rpc=1 gas=2 resolver=1 slow=1 p95=400 diskLow=false diskFree=\d+ preflight=AUTOMINER_C:insufficient-native-gas,AUTOMINER_A:pending-nonce-blocked fk=network=1,pending-nonce-blocked=1,receipt-timeout=1,unknown=1 ff=missing-error=1,network=2,nonce-state=1/,
       "managed soak compact status must surface safe one-line aggregates without raw logs or addresses",
     );
     assert.doesNotMatch(soakCompactResult.stdout, /0x[a-fA-F0-9]{40}|untrusted raw error text|\{|\}/);
@@ -1480,6 +1789,39 @@ export function runReleaseOperationsTests() {
     assert.equal(lowDiskSoakSummary.diskCapacity.diskCapacityAvailable, true);
     assert.equal(lowDiskSoakSummary.diskCapacity.diskFreeBelowMinimum, true);
     assert.equal(lowDiskSoakSummary.diskCapacity.diskFreeMinimumBytes, Number.MAX_SAFE_INTEGER);
+
+    writeFileSync(join(soakStatusDir, "status.json"), `${JSON.stringify({
+      status: "running",
+      dryRun: true,
+      startedAt: "2026-07-18T00:00:00.000Z",
+      supervisorPid: -1,
+      artifacts: {},
+    })}\n`, "utf8");
+    writeFileSync(join(soakStatusDir, "canary.log"), `[live-canary] log=${soakLiveLogPath}\n`, "utf8");
+    const recoveredMarkerResult = spawnSync(process.execPath, ["scripts/run-testnet-soak-supervisor.mjs", "--status", "--summary-only"], {
+      cwd: process.cwd(),
+      env: soakStatusEnv,
+      encoding: "utf8",
+    });
+    assert.equal(recoveredMarkerResult.status, 0, recoveredMarkerResult.stderr);
+    const recoveredMarkerSummary = JSON.parse(recoveredMarkerResult.stdout);
+    assert.equal(recoveredMarkerSummary.hasLiveLog, true, "bounded wrapper-log marker must recover the JSONL artifact");
+    assert.equal(recoveredMarkerSummary.progress.successfulBets, 1);
+
+    writeFileSync(
+      join(soakStatusDir, "canary.log"),
+      `${"x".repeat(64 * 1024)}\n[live-canary] log=${soakLiveLogPath}\n`,
+      "utf8",
+    );
+    const lateMarkerResult = spawnSync(process.execPath, ["scripts/run-testnet-soak-supervisor.mjs", "--status", "--summary-only"], {
+      cwd: process.cwd(),
+      env: soakStatusEnv,
+      encoding: "utf8",
+    });
+    assert.equal(lateMarkerResult.status, 0, lateMarkerResult.stderr);
+    const lateMarkerSummary = JSON.parse(lateMarkerResult.stdout);
+    assert.equal(lateMarkerSummary.hasLiveLog, false, "markers beyond the bounded wrapper-log prefix must not be scanned");
+    assert.equal(lateMarkerSummary.progress.successfulBets, 0);
 
     writeFileSync(join(soakStatusDir, "status.json"), `${JSON.stringify({
       status: "failed",
@@ -1562,6 +1904,39 @@ export function runReleaseOperationsTests() {
   } finally {
     rmSync(soakStatusDir, { recursive: true, force: true });
   }
+  const soakPreflightDir = mkdtempSync(join(tmpdir(), "lore-soak-preflight-"));
+  try {
+    const previousStatusText = `${JSON.stringify({
+      status: "completed",
+      dryRun: true,
+      startedAt: "2026-07-18T00:00:00.000Z",
+      finishedAt: "2026-07-18T00:01:00.000Z",
+      exitCode: 0,
+      stopReason: "dry-run-complete",
+      artifacts: { liveLog: "preserved-redacted-evidence-pointer" },
+    }, null, 2)}\n`;
+    writeFileSync(join(soakPreflightDir, "status.json"), previousStatusText, "utf8");
+    const diskPreflightResult = spawnSync(process.execPath, ["scripts/run-testnet-soak-supervisor.mjs"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        SOAK_OUT_DIR: soakPreflightDir,
+        SOAK_EXECUTE_LIVE: "",
+        SOAK_MIN_DISK_FREE_BYTES: String(Number.MAX_SAFE_INTEGER),
+      },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    assert.equal(diskPreflightResult.status, 1, "unsafe disk capacity must stop before managed runtime startup");
+    assert.equal(readFileSync(join(soakPreflightDir, "status.json"), "utf8"), previousStatusText);
+    assert.equal(existsSync(join(soakPreflightDir, "supervisor.lock")), false);
+    assert.equal(existsSync(join(soakPreflightDir, "server.log")), false);
+    assert.equal(existsSync(join(soakPreflightDir, "canary.log")), false);
+    assert.match(diskPreflightResult.stderr, /requires at least 9007199254740991 free bytes/);
+    assert.equal(diskPreflightResult.stderr.toLowerCase().includes(soakPreflightDir.toLowerCase()), false);
+  } finally {
+    rmSync(soakPreflightDir, { recursive: true, force: true });
+  }
   assert.match(
     analyzeCanarySource,
     /successful health samples[\s\S]*failed health samples/,
@@ -1581,11 +1956,6 @@ export function runReleaseOperationsTests() {
     liveRoundCanarySource,
     /ROLES\.length === 0[\s\S]*LIVE_TEST_ROLES must include at least one supported role[\s\S]*new Set\(ROLES\)\.size !== ROLES\.length[\s\S]*LIVE_TEST_ROLES contains duplicate roles/,
     "live canary must reject empty and duplicate role overrides before wallet lookup",
-  );
-  assert.match(
-    soakSupervisorSource,
-    /LIVE_TEST_ROLES: process\.env\.LIVE_TEST_ROLES \|\| "MANUAL,AUTOMINER_A,AUTOMINER_B"/,
-    "managed soak supervisor must pass the same three-role default to the live canary",
   );
   assert.match(
     liveRoundCanarySource,
@@ -1714,30 +2084,52 @@ export function runReleaseOperationsTests() {
     /function parseChainCurrentEpochNumber\(value: bigint, observedBlock: bigint\)[\s\S]*parsePlausibleCurrentEpoch\(value, INDEXER_START_BLOCK, observedBlock\)[\s\S]*const currentEpochNumber = parseChainCurrentEpochNumber\(currentEpoch, currentBlock\)[\s\S]*storagePut\("gamedata\/_meta\/currentEpoch", currentEpochNumber\)[\s\S]*createReconcileEpochPlan\(\{[\s\S]*currentEpoch: currentEpochNumber/,
     "indexer must safely narrow chain currentEpoch before metadata writes and reconcile range construction",
   );
-  assert.match(
+  const validTxHash = `0x${"ab".repeat(32)}`;
+  assert.equal(indexerNormalization.parseIndexedEpochKey("1"), 1);
+  assert.equal(indexerNormalization.parseIndexedEpochKey(String(Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER);
+  for (const invalidEpochKey of ["0", "01", "1e3", "+1", "1 ", "9007199254740992", 1, null]) {
+    assert.equal(indexerNormalization.parseIndexedEpochKey(invalidEpochKey), null);
+  }
+  assert.equal(indexerNormalization.buildNormalizedEventId(` ${validTxHash.toUpperCase()} `, 7), `${validTxHash}_7`);
+  assert.equal(indexerNormalization.buildNormalizedEventId(validTxHash, 0n), `${validTxHash}_0`);
+  assert.equal(indexerNormalization.buildNormalizedEventIdForLog({ transactionHash: validTxHash, logIndex: 7 }), `${validTxHash}_7`);
+  assert.equal(indexerNormalization.buildNormalizedEventIdForLog({ transactionHash: ` ${validTxHash.toUpperCase()} `, logIndex: 0n }), `${validTxHash}_0`);
+  for (const [hash, logIndex] of [[undefined, 0], ["0xab", 0], [`0x${"gg".repeat(32)}`, 0], [validTxHash, null], [validTxHash, -1], [validTxHash, 1.5], [validTxHash, Number.MAX_SAFE_INTEGER + 1], [validTxHash, BigInt(Number.MAX_SAFE_INTEGER) + 1n], [validTxHash, "0"]]) {
+    assert.equal(indexerNormalization.buildNormalizedEventId(hash, logIndex), null);
+    assert.equal(indexerNormalization.buildNormalizedEventIdForLog({ transactionHash: hash, logIndex }), null);
+  }
+  assert.equal(indexerNormalization.buildNormalizedEventIdForLog(null), null);
+  const broadEpochMutant = (value) => Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
+  const shortHashMutant = (hash, logIndex) => /^0x[0-9a-f]+$/i.test(String(hash)) ? `${String(hash).toLowerCase()}_${logIndex ?? 0}` : null;
+  const unboundedBigintIndexMutant = (hash, logIndex) => typeof logIndex === "bigint" && logIndex >= 0n ? `${hash}_${logIndex}` : null;
+  assert.notEqual(broadEpochMutant("01"), indexerNormalization.parseIndexedEpochKey("01"));
+  assert.notEqual(broadEpochMutant("1e3"), indexerNormalization.parseIndexedEpochKey("1e3"));
+  assert.notEqual(shortHashMutant("0xab", null), indexerNormalization.buildNormalizedEventId("0xab", null));
+  assert.notEqual(unboundedBigintIndexMutant(validTxHash, BigInt(Number.MAX_SAFE_INTEGER) + 1n), indexerNormalization.buildNormalizedEventId(validTxHash, BigInt(Number.MAX_SAFE_INTEGER) + 1n));
+  assert.equal(
+    indexerSource.match(/parseIndexedEpochKey\((?:key|value)\)/g)?.length,
+    2,
+    "both stored-epoch production paths must use the shared canonical epoch-key parser",
+  );
+  assert.doesNotMatch(
     indexerSource,
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*CANONICAL_INDEXED_EPOCH_RE = \/\^\[1-9\]\\d\{0,15\}\$\/[\s\S]*function parseIndexedEpochKey\(value: string\)[\s\S]*CANONICAL_INDEXED_EPOCH_RE\.test\(value\)[\s\S]*const parsed = BigInt\(value\)[\s\S]*parsed <= MAX_SAFE_INTEGER_BIGINT \? Number\(parsed\) : null[\s\S]*const n = parseIndexedEpochKey\(key\)/,
-    "indexer reconcile must BigInt-bound stored epoch keys before missing-epoch checks",
+    /function parseIndexedEpochKey\(|const n = Number\(key\)|Number\.isInteger\(Number\(key\)\)/,
+    "indexer must not locally reimplement or broadly coerce stored epoch keys",
+  );
+  assert.equal(
+    indexerSource.match(/buildNormalizedEventIdForLog\(log\)/g)?.length,
+    8,
+    "all eight normalized indexer event branches must use the shared log adapter",
+  );
+  assert.doesNotMatch(
+    indexerSource,
+    /function (?:buildNormalizedEventIdForLog|normalizedEventIdForLog)\(/,
+    "indexer must not locally reimplement the shared log adapter",
   );
   assert.doesNotMatch(
     indexerSource,
     /(^|[^A-Za-z0-9_])Number\(currentEpoch\)/,
     "indexer must not broadly coerce chain currentEpoch evidence",
-  );
-  assert.doesNotMatch(
-    indexerSource,
-    /function parseIndexedEpochKey\(value: string\)\s*{\s*if \(!CANONICAL_INDEXED_EPOCH_RE\.test\(value\)\) return null;\s*const parsed = Number\(value\)|const n = Number\(key\)[\s\S]*Number\.isInteger\(n\)/,
-    "indexer reconcile must not broadly coerce stored epoch keys",
-  );
-  assert.match(
-    indexerSource,
-    /function buildNormalizedEventId\(log: Log\)[\s\S]*!log\.transactionHash \|\| log\.logIndex === null \|\| log\.logIndex === undefined[\s\S]*const normalizedHash = log\.transactionHash\.toLowerCase\(\)\.trim\(\)[\s\S]*\/\^0x\[0-9a-f\]\{64\}\$\/\.test\(normalizedHash\)[\s\S]*return `\$\{normalizedHash\}_\$\{log\.logIndex\.toString\(\)\}`/,
-    "indexer normalized transaction events must require a full 32-byte tx hash and log index before building storage ids",
-  );
-  assert.doesNotMatch(
-    indexerSource,
-    /return `\$\{log\.transactionHash\.toLowerCase\(\)\}_\$\{log\.logIndex\.toString\(\)\}`/,
-    "indexer normalized transaction events must not use raw transactionHash strings as storage ids",
   );
   assert.match(
     indexerSource,
@@ -1772,23 +2164,8 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     walletPlaytestSource,
-    /MAX_PLAYTEST_JSON_RESPONSE_BYTES[\s\S]*CONTENT_LENGTH_RE[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function readBoundedResponseText[\s\S]*parseContentLengthHeader\(response\.headers\.get\("content-length"\)\)[\s\S]*new TextDecoder\("utf-8", \{ fatal: true \}\)[\s\S]*function parseContentLengthHeader\(value: string \| null\)[\s\S]*const parsed = BigInt\(value\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)/,
-    "wallet playtest API reads must strictly parse and bound response bodies",
-  );
-  assert.doesNotMatch(
-    walletPlaytestSource,
-    /Number\(response\.headers\.get\("content-length"\)\)/,
-    "wallet playtest API reads must not broadly coerce content-length headers",
-  );
-  assert.match(
-    walletPlaytestSource,
-    /API_FETCH_TIMEOUT_MS[\s\S]*fetchJson[\s\S]*AbortSignal\.timeout\(API_FETCH_TIMEOUT_MS\)[\s\S]*accept: "text\/html"[\s\S]*AbortSignal\.timeout\(API_FETCH_TIMEOUT_MS\)/,
-    "wallet playtest API and home probes must use bounded request timeouts",
-  );
-  assert.doesNotMatch(
-    walletPlaytestSource,
-    /response\.text\(\)/,
-    "wallet playtest must not read unbounded API response text",
+    /^(?=[\s\S]*from "\.\/playtest-wallet-policy\.mjs")(?=[\s\S]*resolveWalletPlaytestAdmission\(\{)(?=[\s\S]*hasWalletSigningMaterial\(process\.env\))(?=[\s\S]*fetchPlaytestJson\(\{)(?=[\s\S]*fetchPlaytestStatus\(\{)(?=[\s\S]*describeWalletPlaytestError)/,
+    "wallet playtest must bind the behavior-tested admission, HTTP deadline, and diagnostic policies",
   );
   assert.match(
     walletPlaytestSource,
@@ -1799,16 +2176,6 @@ export function runReleaseOperationsTests() {
     walletPlaytestSource,
     /const singleTx = useEpochBoundBets[\s\S]*const batchTx = useEpochBoundBets/,
     "wallet playtest must keep both V10 sends on the protected path",
-  );
-  assert.match(
-    walletPlaytestSource,
-    /EXECUTE_REQUESTED = process\.argv\.includes\("--execute"\)[\s\S]*LIVE_EXECUTION_CONFIRMED = process\.env\.TEST_WALLET_EXECUTE === "1" && EXECUTE_REQUESTED[\s\S]*DRY_RUN = !LIVE_EXECUTION_CONFIRMED/,
-    "wallet playtest must default to dry-run and require both an env flag and execute flag for live execution",
-  );
-  assert.match(
-    walletPlaytestSource,
-    /EXECUTE_REQUESTED && process\.env\.TEST_WALLET_EXECUTE !== "1"[\s\S]*Refusing wallet playtest execution without TEST_WALLET_EXECUTE=1[\s\S]*account = LIVE_EXECUTION_CONFIRMED && process\.env\.TEST_WALLET_PRIVATE_KEY/,
-    "wallet playtest must fail closed on --execute alone before loading signing material",
   );
   assert.match(
     liveRoundCanarySource,
@@ -1911,21 +2278,6 @@ export function runReleaseOperationsTests() {
     v10DryRunPreviewCheckSource,
     /preview:canary:v10:dry-run|live:canary:v10:matrix|--execute-live|LIVE_TEST_EXECUTE: "1"|SOAK_EXECUTE_LIVE: "1"/,
     "V10 dry-run Preview validator must not rerun Preview commands or contain live execution flags",
-  );
-  assert.match(
-    walletPlaytestSource,
-    /import \{ redactProofText \} from "\.\/redact-proof-output\.mjs"[\s\S]*function describePlaytestError\(error: unknown\)[\s\S]*redactProofText\(/,
-    "wallet playtest terminal diagnostics must use the shared proof redactor",
-  );
-  assert.match(
-    walletPlaytestSource,
-    /MAX_PLAYTEST_ERROR_CHARS[\s\S]*<truncated>[\s\S]*const bitmapMessage = describePlaytestError\(bitmapError\)[\s\S]*const message = describePlaytestError\(error\)[\s\S]*\[playtest\] failed: \$\{describePlaytestError\(error\)\}/,
-    "wallet playtest fallback and fatal errors must be compact and bounded",
-  );
-  assert.doesNotMatch(
-    walletPlaytestSource,
-    /console\.error\("\[playtest\] failed", error\)/,
-    "wallet playtest must not print raw fatal Error objects",
   );
   const v10CompilerMatrixSource = readFileSync("scripts/benchmark-contract-v10.mjs", "utf8");
   const v10BenchmarkSource = readFileSync("scripts/benchmark-v10-linea-gas.ts", "utf8");
@@ -2404,8 +2756,6 @@ export function runReleaseOperationsTests() {
     /Safety Pool now exposes an explicit bounded load-older flow/,
     "testnet deep-audit docs must record the bounded Safety Pool older-history flow",
   );
-  const restoreProofSource = readFileSync("scripts/verify-db-restore.mjs", "utf8");
-  const backupSqliteSource = readFileSync("scripts/backup-sqlite.mjs", "utf8");
   assert.equal(
     packageScripts["proof:restore:summary"],
     "node scripts/verify-db-restore.mjs --summary-only",
@@ -2422,151 +2772,67 @@ export function runReleaseOperationsTests() {
     "SQLite backup must expose a compact strict summary command for launch checks",
   );
   assert.match(
-    backupSqliteSource,
-    /const summaryOnly = process\.argv\.includes\("--summary-only"\)/,
-    "SQLite backup must support compact output without changing backup validation",
-  );
-  assert.match(
-    backupSqliteSource,
-    /if \(summaryOnly\) \{[\s\S]*status: "ready"[\s\S]*wouldWrite: false[\s\S]*process\.exit\(0\)[\s\S]*mkdirSync\(path\.dirname\(path\.resolve\(output\)\)/,
-    "SQLite backup summary must be read-only and exit before creating backup directories or files",
-  );
-  assert.match(
-    backupSqliteSource,
-    /futureTimestampSkewMs = 5 \* 60 \* 1000[\s\S]*function hasFutureModifiedTime[\s\S]*fileStat\.mtimeMs > Date\.now\(\) \+ futureTimestampSkewMs[\s\S]*Backup source modified time must not be in the future/,
-    "strict SQLite backup proof must reject future-dated source DB modified timestamps",
-  );
-  assert.match(
-    backupSqliteSource,
-    /function failRuntime[\s\S]*!summaryOnly\) throw error[\s\S]*JSON\.stringify\(\{ status: "fail", groups: backupSummaryGroups, issue: compactIssue\(error\) \}\)/,
-    "SQLite backup summary runtime failures must remain compact JSON without stack traces",
-  );
-  assert.ok(
-    backupSqliteSource.includes('import { redactProofText } from "./redact-proof-output.mjs";') &&
-      backupSqliteSource.includes("function compactIssue(error)") &&
-      backupSqliteSource.includes("redactProofText(message)") &&
-      backupSqliteSource.includes("(?:https?|wss?)") &&
-      backupSqliteSource.includes("[A-Za-z]:\\\\") &&
-      backupSqliteSource.includes("(^|[\\s\"'])\\/"),
-    "SQLite backup summary runtime failures must redact shared proof secrets, URLs, Windows paths, and POSIX paths",
-  );
-  assert.match(
-    backupSqliteSource,
-    /requiresExternalBackupPaths[\s\S]*strict[\s\S]*LORE_BACKUP_REQUIRE_EXTERNAL[\s\S]*NODE_ENV === "production"[\s\S]*LINEA_NETWORK === "mainnet"[\s\S]*Production backup \$\{label\} path must be absolute and outside the repo checkout/,
-    "production and strict SQLite backups must require absolute external source and output paths",
-  );
-  assert.match(
-    backupSqliteSource,
-    /if \(requiresExternalBackupPaths\(\)\) \{[\s\S]*retentionDays < 1[\s\S]*Production backup retention days must be configured[\s\S]*Production backup \$\{label\} path must be absolute and outside the repo checkout/,
-    "production and strict SQLite backups must require an explicit retention policy before launch",
-  );
-  assert.match(
-    backupSqliteSource,
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*const retentionDays = retentionText \? parseRetentionDays\(retentionText\) : 0[\s\S]*function parseRetentionDays\(value\)[\s\S]*\^\[1-9\]\\d\{0,15\}\$[\s\S]*const parsed = BigInt\(normalized\)[\s\S]*parsed <= MAX_SAFE_INTEGER_BIGINT && parsed >= 1n && parsed <= 3650n \? Number\(parsed\) : null[\s\S]*retentionText && retentionDays === null/,
-    "SQLite backup retention env must be canonical positive decimal days before strict backup readiness",
-  );
-  assert.doesNotMatch(
-    backupSqliteSource,
-    /const retentionDays = retentionText \? Number\(retentionText\) : 0|function parseRetentionDays\(value\)[\s\S]*\^\[1-9\]\\d\*\$|const parsed = Number\(normalized\)/,
-    "SQLite backup retention env must not use broad Number coercion",
-  );
-  const sqliteOperationsSource = readFileSync("scripts/test-sqlite-operations.mjs", "utf8");
-  const sqliteBackupLibrarySource = readFileSync("scripts/sqlite-backup-lib.mjs", "utf8");
-  assert.match(
-    sqliteBackupLibrarySource,
-    /function removeTemporaryBackupArtifacts[\s\S]*"-shm"[\s\S]*"-wal"[\s\S]*temporaryOutputPath[\s\S]*backup\(source, temporaryOutputPath\)[\s\S]*PRAGMA integrity_check[\s\S]*renameSync\(temporaryOutputPath, outputPath\)[\s\S]*removeTemporaryBackupArtifacts\(temporaryOutputPath\)/,
-    "SQLite backups must verify a same-directory temporary artifact before atomically publishing it and clean it on failure",
-  );
-  assert.match(
-    sqliteBackupLibrarySource,
-    /function regularFileStat\(filePath\)[\s\S]*statSync\(filePath\)[\s\S]*stats\.isFile\(\) \? stats : null[\s\S]*createSqliteBackup\(sourceInput, outputInput\)[\s\S]*!regularFileStat\(sourcePath\)[\s\S]*Backup source must be an existing regular file/,
-    "SQLite backup library must reject missing or directory source DB paths through a shared regular-file stat boundary",
-  );
-  assert.match(
-    sqliteBackupLibrarySource,
-    /function pruneSqliteBackups\(directoryInput, retentionDays, excludePaths = \[\], now = Date\.now\(\)\)[\s\S]*Number\.isSafeInteger\(retentionDays\)[\s\S]*Number\.isSafeInteger\(now\) \|\| now < 0[\s\S]*Backup retention clock must be a safe non-negative integer/,
-    "SQLite backup retention pruning must fail closed on malformed clocks before deleting generated backups",
-  );
-  assert.match(
     sqliteScopeAuditSource,
     /function regularFileStat\(filePath\)[\s\S]*statSync\(filePath\)[\s\S]*stats\.isFile\(\) \? stats : null[\s\S]*auditSqliteScopes\(sourceInput, activeScope\)[\s\S]*!regularFileStat\(sourcePath\)[\s\S]*Scope audit source must be an existing regular file/,
     "SQLite scope audit must reject missing or directory DB paths through a shared regular-file stat boundary",
   );
-  assert.match(
-    sqliteOperationsSource,
-    /createSqliteBackup\(sourcePath, sourcePath\)[\s\S]*Backup output must differ from source DB[\s\S]*createSqliteBackup\(sourcePath, backupPath\)[\s\S]*Backup output already exists/,
-    "SQLite backup operation tests must reject source collisions and existing-output overwrites",
-  );
-  assert.match(
-    sqliteOperationsSource,
-    /readdirSync\(drillDir\)[\s\S]*partial-[\s\S]*backup must publish only the validated final artifact/,
-    "SQLite backup operation tests must reject leftover partial artifacts after publication",
-  );
-  assert.match(
-    sqliteOperationsSource,
-    /pruneSqliteBackups\(retentionDir, 14, \[\], Number\.NaN\)[\s\S]*Backup retention clock must be a safe non-negative integer[\s\S]*retention pruning must reject malformed clocks before deleting files/,
-    "SQLite backup operation tests must cover malformed retention clock rejection",
-  );
-  assert.match(
-    sqliteOperationsSource,
-    /futureBackupRoot[\s\S]*utimesSync\(futureBackupSource, futureMtime, futureMtime\)[\s\S]*Backup source modified time must not be in the future[\s\S]*futureSourceBackupSummaryRejected: true/,
-    "SQLite operations regression must prove strict backup summary rejects future-dated source DB timestamps",
-  );
-  assert.match(
-    sqliteOperationsSource,
-    /LORE_BACKUP_RETENTION_DAYS: "14\.0"[\s\S]*LORE_BACKUP_RETENTION_DAYS must be an integer between 1 and 3650[\s\S]*malformedRetentionBackupSummaryRejected: true/,
-    "SQLite operations regression must prove backup summary rejects non-canonical retention days",
-  );
-  assert.match(
-    sqliteOperationsSource,
-    /LORE_BACKUP_RETENTION_DAYS: "9999999999999999"[\s\S]*LORE_BACKUP_RETENTION_DAYS must be an integer between 1 and 3650[\s\S]*unsafeRetentionBackupSummaryRejected: true/,
-    "SQLite operations regression must prove backup summary rejects unsafe retention days",
-  );
-  assert.match(
-    restoreProofSource,
-    /mkdirSync\(dirname\(restoreMain\), \{ recursive: true \}\);\s*copyFileSync\(backupMain, restoreMain\)/,
-    "restore drill must create its target directory before copying the backup",
-  );
-  assert.match(
-    restoreProofSource,
-    /const summaryOnly = process\.argv\.includes\("--summary-only"\)/,
-    "restore drill must support compact output without changing validation",
-  );
-  assert.match(
-    restoreProofSource,
-    /const restoreLaunchGates = \["G8"\][\s\S]*const restoreLaunchGateGroups = "restore=1"[\s\S]*function launchGateSummary\(issueCount\)[\s\S]*blocked[\s\S]*covered[\s\S]*launchGateSummary\(issues\.length\)/,
-    "restore proof summary must identify the blocked or covered launch gate without printing local restore paths",
-  );
-  assert.match(
-    restoreProofSource,
-    /function printSummaryAndExit\(\)[\s\S]*Would write: false[\s\S]*process\.exit\(\)[\s\S]*if \(summaryOnly\) printSummaryAndExit\(\);[\s\S]*copyFileSync\(backupMain, restoreMain\)/,
-    "restore proof summary must exit before copying backup or restore files",
-  );
-  assert.match(
-    restoreProofSource,
-    /if \(!summaryOnly\) \{[\s\S]*## Copied Files[\s\S]*## Row Counts/,
-    "restore drill must keep detailed file and row-count tables out of summary-only output",
-  );
-  assert.match(
-    restoreProofSource,
-    /function regularFileStat\(filePath\)[\s\S]*const stats = statSync\(filePath\)[\s\S]*stats\.isFile\(\) \? stats : null[\s\S]*function fmtSize\(filePath\)[\s\S]*const stats = regularFileStat\(filePath\)[\s\S]*function fileExists\(filePath\)[\s\S]*regularFileStat\(filePath\) !== null[\s\S]*Manifest: \$\{fileExists\(resolve\(repoRoot, manifestPath\)\) \? "present" : "missing"\}[\s\S]*source DB must be a file[\s\S]*backup artifact must be a file/,
-    "restore proof summary and restore inputs must only treat regular files as present",
-  );
-  assert.match(
-    restoreProofSource,
-    /function hasRestoreDrillIntegrityProof\(value\)[\s\S]*restore\|restored\|copy\|copied\|backup[\s\S]*integrity_check[\s\S]*restoreDrill evidence must include restored SQLite integrity_check proof/,
-    "restore proof must require restored SQLite integrity evidence, not only a generic successful restore summary",
-  );
-  assert.match(
-    restoreProofSource,
-    /const MAX_HEALTH_BASE_MARKERS = 64[\s\S]*function healthEvidenceBaseMatches\(value, expectedOrigin\)[\s\S]*pattern\.exec\(text\)[\s\S]*inspected > MAX_HEALTH_BASE_MARKERS[\s\S]*normalizedOrigin\(match\[1\]\) === expected/,
-    "restore proof must cap restored health base evidence scans before accepting restored origin proof",
-  );
-  assert.doesNotMatch(
-    restoreProofSource,
-    /\[\.\.\.text\.matchAll/,
-    "restore proof must not spread restored health base evidence matchAll output into arrays",
-  );
+  const sqliteBehaviorRoot = mkdtempSync(join(tmpdir(), "lore-sqlite-operator-behavior-"));
+  try {
+    const sqliteBehaviorRun = spawnSync(process.execPath, ["scripts/test-sqlite-operations.mjs"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        DB_DRILL_DIR: sqliteBehaviorRoot,
+        LINEA_NETWORK: "sepolia",
+        LORE_BACKUP_REQUIRE_EXTERNAL: "0",
+        LORE_BACKUP_RETENTION_DAYS: "",
+        NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
+        NODE_ENV: "test",
+        PROOF_STRICT: "0",
+      },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    assert.equal(
+      sqliteBehaviorRun.status,
+      0,
+      `SQLite operator behavior probe must pass: ${sqliteBehaviorRun.error?.message ?? sqliteBehaviorRun.stderr}`,
+    );
+    const sqliteBehaviorLines = String(sqliteBehaviorRun.stdout).trim().split(/\r?\n/).filter(Boolean);
+    const sqliteBehaviorSummary = JSON.parse(sqliteBehaviorLines.at(-1) ?? "{}");
+    assert.equal(sqliteBehaviorSummary.status, "pass");
+    assert.deepEqual(
+      sqliteBehaviorSummary.retention,
+      { expiredRemoved: 1, recentPreserved: true, unrelatedPreserved: true },
+    );
+    for (const fault of [
+      "activeDbWalShmProtected",
+      "atomicLatePublicationCollisionRejected",
+      "backupSummaryReadOnly",
+      "corruptBackupRestoreRejected",
+      "corruptBackupRestoreSummaryRejected",
+      "corruptSourceBackupCleanup",
+      "futureSourceBackupSummaryRejected",
+      "malformedRestoreSummaryRejected",
+      "malformedRetentionBackupSummaryRejected",
+      "malformedSqliteBackupSummaryRejected",
+      "missingSourceBackupSummaryRejected",
+      "readOnlyWriteRejected",
+      "repoLocalProductionBackupRejected",
+      "restoreSummaryReadOnly",
+      "restoreUsesSuppliedBackupArtifact",
+      "unsafeRetentionBackupSummaryRejected",
+    ]) {
+      assert.equal(sqliteBehaviorSummary.faults?.[fault], true, `SQLite operator behavior probe must cover ${fault}`);
+    }
+    assert.doesNotMatch(
+      `${sqliteBehaviorRun.stdout}\n${sqliteBehaviorRun.stderr}`,
+      new RegExp(sqliteBehaviorRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),
+      "SQLite operator behavior output must not expose its temporary source, backup, or restore paths",
+    );
+  } finally {
+    rmSync(sqliteBehaviorRoot, { recursive: true, force: true });
+  }
   const previousWindow = globalThis.window;
   try {
     const storage = new Map();

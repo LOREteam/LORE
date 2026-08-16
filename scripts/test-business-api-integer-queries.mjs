@@ -1,19 +1,51 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import * as boundedJsonBodyModule from "../app/api/_lib/boundedJsonBody.ts";
 import * as queryParamsModule from "../app/api/_lib/queryParams.ts";
 
-export function runApiIntegerQueryTests() {
+export async function runApiIntegerQueryTests() {
+  const boundedJsonBody = boundedJsonBodyModule.default ?? boundedJsonBodyModule;
   const queryParams = queryParamsModule.default ?? queryParamsModule;
-  const boundedJsonBodySource = readFileSync("app/api/_lib/boundedJsonBody.ts", "utf8");
-  assert.ok(
-    boundedJsonBodySource.includes("const JSON_CONTENT_TYPE_RE = /^application\\/(?:json|[a-z0-9!#$&^_.+-]+\\+json)$/;")
-      && /function isJsonContentType[\s\S]*JSON_CONTENT_TYPE_RE\.test\(contentType\)[\s\S]*if \(!isJsonContentType\(request\.headers\.get\("content-type"\)\)\)/.test(boundedJsonBodySource),
-    "bounded JSON body parser must require an explicit application JSON Content-Type",
+  const request = (body, contentType = "application/json", extraHeaders = {}) => new Request("https://play.example/api/test", {
+    method: "POST",
+    headers: { "content-type": contentType, ...extraHeaders },
+    body,
+  });
+
+  assert.deepEqual(
+    await boundedJsonBody.readBoundedJsonBody(request('{"ok":true}', "application/problem+json; charset=utf-8"), 64),
+    { ok: true, value: { ok: true } },
+    "bounded JSON body parser must accept explicit application vendor JSON content types",
   );
-  assert.match(
-    boundedJsonBodySource,
-    /new TextDecoder\("utf-8", \{ fatal: true \}\)/,
-    "bounded JSON body parser must use fatal UTF-8 decoding",
+  for (const contentType of ["", "text/json", "text/plain", "application/jsonp"]) {
+    assert.deepEqual(
+      await boundedJsonBody.readBoundedJsonBody(request("{}", contentType), 64),
+      { ok: false, reason: "unsupported-content-type" },
+      `bounded JSON body parser must reject unsupported content type ${contentType || "<empty>"}`,
+    );
+  }
+  assert.deepEqual(
+    await boundedJsonBody.readBoundedJsonBody(
+      request("{}", "application/json", { "content-length": "65" }),
+      64,
+    ),
+    { ok: false, reason: "too-large" },
+    "bounded JSON body parser must reject an oversized declared body before parsing",
+  );
+  assert.deepEqual(
+    await boundedJsonBody.readBoundedJsonBody(request("x".repeat(65)), 64),
+    { ok: false, reason: "too-large" },
+    "bounded JSON body parser must enforce the byte limit while streaming an undeclared body",
+  );
+  assert.deepEqual(
+    await boundedJsonBody.readBoundedJsonBody(request(new Uint8Array([0xc3, 0x28])), 64),
+    { ok: false, reason: "invalid" },
+    "bounded JSON body parser must fail closed on malformed UTF-8",
+  );
+  assert.deepEqual(
+    await boundedJsonBody.readBoundedJsonBody(request("{"), 64),
+    { ok: false, reason: "invalid" },
+    "bounded JSON body parser must fail closed on malformed JSON",
   );
   assert.equal(queryParams.parsePositiveIntegerParam("1"), 1);
   assert.equal(queryParams.parsePositiveIntegerParam("400"), 400);
@@ -46,16 +78,6 @@ export function runApiIntegerQueryTests() {
       `strict API integer value parsing must reject numeric ${String(value)}`,
     );
   }
-  assert.match(
-    readFileSync("app/api/_lib/queryParams.ts", "utf8"),
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*const parsed = BigInt\(value\)[\s\S]*parsed <= 0n \|\| parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)/,
-    "shared API query parsing must bound decimal strings as BigInt before narrowing to JS numbers",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/api/_lib/queryParams.ts", "utf8"),
-    /const parsed = Number\(value\)[\s\S]*Number\.isSafeInteger\(parsed\)/,
-    "shared API query parsing must not narrow attacker-controlled decimal strings before range checks",
-  );
   assert.match(
     readFileSync("app/api/claim-candidates/route.ts", "utf8"),
     /parsePositiveIntegerParam\(cursorParam\)[\s\S]*parseBoundedPositiveIntegerParam\(limitParam, MAX_PAGE_SIZE\)[\s\S]*limit: requestedLimit/,

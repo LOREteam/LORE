@@ -110,63 +110,23 @@ export async function runWalletModelTests() {
     ts: 1_000,
   }, 2_000);
   assert.ok(pendingMiningState);
+  let legacyRecoveryRpcCalls = 0;
+  const legacyRecoveryClient = {
+    getTransactionReceipt: async () => {
+      legacyRecoveryRpcCalls += 1;
+      throw new Error("legacy state must not reach receipt recovery");
+    },
+    getTransaction: async () => {
+      legacyRecoveryRpcCalls += 1;
+      throw new Error("legacy state must not reach transaction recovery");
+    },
+  };
   assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => ({ status: "success" }),
-      getTransaction: async () => {
-        throw new Error("should not read transaction after receipt");
-      },
-    }, pendingMiningState),
-    "confirmed",
+    await miningTxPath.recoverPendingMiningTx([legacyRecoveryClient, legacyRecoveryClient], pendingMiningState),
+    "manual-reconciliation-required",
+    "legacy hash-only mining state must never be treated as proof of the submitted intent",
   );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => ({ status: "reverted" }),
-      getTransaction: async () => {
-        throw new Error("should not read transaction after receipt");
-      },
-    }, pendingMiningState),
-    "clear",
-  );
-  const receiptNotFound = () => Object.assign(new Error("transaction receipt not found"), { name: "TransactionReceiptNotFoundError" });
-  const transactionNotFound = () => Object.assign(new Error("transaction not found"), { name: "TransactionNotFoundError" });
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw receiptNotFound(); },
-      getTransaction: async () => ({ blockNumber: null }),
-    }, pendingMiningState),
-    "pending",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw receiptNotFound(); },
-      getTransaction: async () => { throw transactionNotFound(); },
-    }, pendingMiningState, pendingMiningState.ts + 15 * 60_000),
-    "clear",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw receiptNotFound(); },
-      getTransaction: async () => { throw transactionNotFound(); },
-    }, pendingMiningState, pendingMiningState.ts - 1),
-    "pending",
-    "future-dated pending tx state must not be cleared by not-found recovery",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw receiptNotFound(); },
-      getTransaction: async () => { throw transactionNotFound(); },
-    }, pendingMiningState, Number.NaN),
-    "pending",
-    "malformed recovery timestamps must keep pending tx recovery fail-closed",
-  );
-  assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
-      getTransactionReceipt: async () => { throw new Error("RPC offline"); },
-      getTransaction: async () => { throw new Error("should fail closed before transaction lookup"); },
-    }, pendingMiningState),
-    "pending",
-  );
+  assert.equal(legacyRecoveryRpcCalls, 0, "legacy mining state must fail closed before any RPC read");
   const ambiguousPendingMiningState = miningTxPath.sanitizePendingMiningTxState({
     chainId: 59141,
     contract: "0x1111111111111111111111111111111111111111",
@@ -196,55 +156,56 @@ export async function runWalletModelTests() {
     /catch \(error\) \{\s*if \(isAmbiguousPendingTxError\(error\)\) \{\s*throw error;/,
     "manual silent receipt timeouts must not fall back to a duplicate wallet send",
   );
+  const hashlessRecoveryClients = (client) => [client, client];
   assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
+    await miningTxPath.recoverPendingMiningTx(hashlessRecoveryClients({
       getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
       getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
       getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 8 : 8,
-    }, ambiguousPendingMiningState),
+    }), ambiguousPendingMiningState),
     "manual-reconciliation-required",
     "a consumed nonce without a transaction hash must retain the duplicate-send block for manual reconciliation",
   );
   assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
+    await miningTxPath.recoverPendingMiningTx(hashlessRecoveryClients({
       getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
       getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
       getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 7 : 8,
-    }, ambiguousPendingMiningState),
+    }), ambiguousPendingMiningState),
     "pending",
   );
   assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
+    await miningTxPath.recoverPendingMiningTx(hashlessRecoveryClients({
       getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
       getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
       getTransactionCount: async () => 7,
-    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
+    }), ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
     "manual-reconciliation-required",
   );
   assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
+    await miningTxPath.recoverPendingMiningTx(hashlessRecoveryClients({
       getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
       getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
       getTransactionCount: async () => 7,
-    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts - 1),
+    }), ambiguousPendingMiningState, ambiguousPendingMiningState.ts - 1),
     "pending",
     "future-dated hashless pending tx state must not clear before caller time catches up",
   );
   assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
+    await miningTxPath.recoverPendingMiningTx(hashlessRecoveryClients({
       getTransactionReceipt: async () => { throw new Error("malformed hashless nonce recovery must not request a receipt"); },
       getTransaction: async () => { throw new Error("malformed hashless nonce recovery must not request a transaction"); },
       getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? "7" : 7,
-    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
+    }), ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
     "pending",
     "malformed hashless nonce evidence must keep pending tx recovery fail-closed",
   );
   assert.equal(
-    await miningTxPath.recoverPendingMiningTx({
+    await miningTxPath.recoverPendingMiningTx(hashlessRecoveryClients({
       getTransactionReceipt: async () => { throw new Error("inverted hashless nonce recovery must not request a receipt"); },
       getTransaction: async () => { throw new Error("inverted hashless nonce recovery must not request a transaction"); },
       getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 9 : 8,
-    }, ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
+    }), ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
     "pending",
     "hashless nonce recovery must fail closed when pending nonce evidence is behind latest",
   );
@@ -271,8 +232,8 @@ export async function runWalletModelTests() {
   const miningTxPathSource = readFileSync("app/lib/miningTxPath.ts", "utf8");
   assert.match(
     miningTxPathSource,
-    /const receipt = await client\.getTransactionReceipt\(\{ hash: state\.hash \}\);[\s\S]*if \(receipt\.status === "reverted"\) return "clear";[\s\S]*return "confirmed";/,
-    "pending mining tx recovery must clear reverted receipts instead of treating them as confirmed or unresolved",
+    /if \(!hasCompletePendingIntent\(state\)\) return "manual-reconciliation-required";[\s\S]*Promise\.all\(clients\.map\(\(client\) => readOptionalReceipt\(client, state\.hash!\)\)\)[\s\S]*hasAgreedPendingMiningReceiptFinality[\s\S]*if \(receipts\[0\]\.status === "reverted"\) return "clear";[\s\S]*return deltaMatches \? "confirmed" : "manual-reconciliation-required";/,
+    "pending mining recovery must require a complete intent, two-RPC receipt identity, canonical finality, and the expected bet delta",
   );
   assert.match(
     miningTxPathSource,
@@ -286,8 +247,8 @@ export async function runWalletModelTests() {
   );
   assert.match(
     miningTxPathSource,
-    /function normalizePendingTxNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*const normalizedLatestNonce = normalizePendingTxNonce\(latestNonce\)[\s\S]*const normalizedPendingNonce = normalizePendingTxNonce\(pendingNonce\)[\s\S]*normalizedPendingNonce < normalizedLatestNonce[\s\S]*return "pending"/,
-    "hashless pending tx recovery must normalize latest and pending nonce evidence before clear or confirmed decisions",
+    /function normalizePendingTxNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*readNonceObservation[\s\S]*normalizedPending < normalizedLatest[\s\S]*observationsAgree\(nonceObservations\[0\], nonceObservations\[1\]\)[\s\S]*normalizedLatestNonce > state\.nonce[\s\S]*return "manual-reconciliation-required"/,
+    "hashless pending recovery must normalize two-RPC nonce evidence and never clear a consumed unknown nonce",
   );
   assert.doesNotMatch(
     miningTxPathSource,
@@ -301,7 +262,7 @@ export async function runWalletModelTests() {
   );
   assert.match(
     miningTxPathSource,
-    /function tryPendingTxStorageKey\(chainId: number, contract: string, actor: string\)[\s\S]*return pendingTxStorageKey\(chainId, contract, actor\);[\s\S]*catch \{[\s\S]*return null;[\s\S]*export function clearPendingMiningTxState[\s\S]*const key = tryPendingTxStorageKey\(chainId, contract, actor\);[\s\S]*if \(!key\) return;/,
+    /function tryPendingTxStorageKey\(chainId: number, contract: string, actor: string\)[\s\S]*return pendingTxStorageKey\(chainId, contract, actor\);[\s\S]*catch \{[\s\S]*return null;[\s\S]*export function clearPendingMiningTxState[\s\S]*const key = tryPendingTxStorageKey\(chainId, contract, actor\);[\s\S]*if \(!key\) return false;/,
     "pending mining tx scoped storage cleanup must fail closed when contract or actor scope is malformed",
   );
   assert.match(
@@ -352,13 +313,21 @@ export async function runWalletModelTests() {
     });
     const firstPendingKey = [...pendingStorage.keys()].find((key) => key.startsWith("lineaore:pending-mining-tx:v2:"));
     assert.ok(firstPendingKey);
+    const recoveredLegacyState = miningTxPath.readPendingMiningTxState(
+      pendingMiningState.chainId,
+      pendingMiningState.contract,
+      pendingMiningState.actor,
+    );
     assert.deepEqual(
-      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor),
+      JSON.parse(JSON.stringify(recoveredLegacyState)),
       { ...pendingMiningState, ts: [...pendingStorage.values()].map((raw) => JSON.parse(raw).ts)[0] },
     );
     pendingStorage.set(firstPendingKey, "{bad json");
-    assert.equal(miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor), null);
-    assert.equal(pendingStorage.has(firstPendingKey), false, "corrupt pending mining tx state must be cleared");
+    assert.ok(
+      miningTxPath.readPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, pendingMiningState.actor),
+      "an in-flight actor latch must remain fail-closed when its backing storage is corrupted",
+    );
+    assert.equal(pendingStorage.has(firstPendingKey), true, "corrupt backing state must not silently unlock an active submission");
     miningTxPath.writePendingMiningTxState({
       chainId: pendingMiningState.chainId,
       contract: pendingMiningState.contract,

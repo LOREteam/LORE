@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import * as walletTransferRowModule from "../app/components/wallet/WalletTransferRow.tsx";
+
+const walletTransferRow = walletTransferRowModule.default ?? walletTransferRowModule;
 
 export function runWalletFundingPresentationTests() {
   const fundingManualFormSource = readFileSync("app/hooks/useManualBetForm.ts", "utf8");
@@ -60,11 +65,46 @@ export function runWalletFundingPresentationTests() {
     "Privy wallet copy action must expose a contextual accessible name and hover label",
   );
 
-  const walletTransferRowSource = readFileSync("app/components/wallet/WalletTransferRow.tsx", "utf8");
+  const pendingTransferPresentation = walletTransferRow.getWalletTransferRowPresentation(
+    "Send ETH",
+    true,
+    true,
+  );
+  assert.deepEqual(pendingTransferPresentation, {
+    state: "pending",
+    actionLabel: "Send ETH in progress",
+    buttonText: "Sending...",
+    announce: true,
+  });
+  const pendingTransferHtml = renderToStaticMarkup(React.createElement(
+    walletTransferRow.WalletTransferRow,
+    {
+      assetLabel: "ETH",
+      assetVariant: "secondary",
+      value: "1.25",
+      onChange: () => undefined,
+      placeholder: "ETH amount",
+      buttonLabel: "Send ETH",
+      onSubmit: () => undefined,
+      disabled: true,
+      loading: true,
+      buttonVariant: "secondary",
+    },
+  ));
   assert.match(
-    walletTransferRowSource,
-    /transferActionLabel[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*aria-label=\{`\$\{assetLabel\} transfer amount`\}[\s\S]*aria-label=\{transferActionLabel\}[\s\S]*title=\{transferActionLabel\}/,
-    "wallet top-up transfer rows must expose amount labels, action labels, and polite sending status",
+    pendingTransferHtml,
+    /data-transfer-action-state="pending"[\s\S]*role="status" aria-live="polite">Send ETH in progress/,
+    "wallet top-up transfer rows must announce the current pending presentation",
+  );
+  assert.match(
+    pendingTransferHtml,
+    /<input[^>]*aria-label="ETH transfer amount"/,
+    "wallet top-up amount input must expose its asset label",
+  );
+  assert.match(
+    pendingTransferHtml,
+    /<button[^>]*aria-label="Send ETH in progress"[^>]*title="Send ETH in progress"/,
+    "wallet top-up action must expose the model-derived action label and title",
   );
   const uiButtonSource = readFileSync("app/components/ui/UiButton.tsx", "utf8");
   assert.match(

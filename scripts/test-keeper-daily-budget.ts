@@ -10,6 +10,7 @@ import {
   DEFAULT_KEEPER_DAILY_MAX_SIGNATURES,
   getKeeperDailyBudgetPolicy,
 } from "../app/lib/lineaFees";
+import { reserveExternalKeeperDailyBudget } from "../app/api/_lib/externalRateLimit";
 
 type ReserveCommand = {
   id: string;
@@ -308,9 +309,234 @@ function assertBotReservationOrdering() {
   assert.doesNotMatch(action, /releaseKeeperDailyBudget/, "pending maximum cost must remain conservatively charged");
 }
 
+function assertBootstrapReservationOrdering() {
+  const source = readFileSync(
+    join(REPO_ROOT, "app/api/bootstrap-resolve/route.ts"),
+    "utf8",
+  );
+  const actionStart = source.indexOf("const publicClient = clients[0]");
+  const actionEnd = source.indexOf('throw new Error("resolve_failed")', actionStart);
+  assert.ok(
+    actionStart >= 0 && actionEnd > actionStart,
+    "bootstrap keeper signing action must remain inspectable",
+  );
+  const action = source.slice(actionStart, actionEnd);
+  const feeBudget = action.indexOf("assertKeeperFeeBudget(");
+  const reservation = action.indexOf("reserveBootstrapKeeperDailyBudget(");
+  const signing = action.indexOf("account.signTransaction(");
+  const pendingPersistence = action.indexOf("savePendingResolveRecord(signedRecord)");
+  assert.ok(
+    feeBudget >= 0 && reservation > feeBudget,
+    "bootstrap daily reservation must use the validated per-transaction maximum cost",
+  );
+  assert.ok(signing > reservation, "bootstrap daily reservation must be durable before local signing");
+  assert.ok(
+    pendingPersistence > signing,
+    "bootstrap signed resolves must retain the existing durable pending record",
+  );
+  assert.match(
+    action,
+    /await reserveBootstrapKeeperDailyBudget\(\{[\s\S]*signerAddress: account\.address,[\s\S]*nonce: latestNonce,[\s\S]*epoch: currentEpoch,[\s\S]*signingIntentHash,[\s\S]*reservedMaxCostWei: requiredMaxCost,[\s\S]*policy: BOOTSTRAP_KEEPER_DAILY_BUDGET_POLICY/,
+    "bootstrap reservation must bind the signer, nonce, epoch, intent, and maximum cost to the clamped policy",
+  );
+  assert.doesNotMatch(
+    action,
+    /releaseKeeperDailyBudget/,
+    "bootstrap pending maximum cost must remain conservatively charged",
+  );
+
+  const routePrefix = source.slice(0, source.indexOf("getBootstrapAgreementClients()"));
+  assert.match(
+    routePrefix,
+    /assertBootstrapKeeperBudgetReady\(\)/,
+    "multi-replica shared budget configuration must fail closed before chain RPC",
+  );
+  const sharedSource = readFileSync(
+    join(REPO_ROOT, "app/api/bootstrap-resolve/shared.ts"),
+    "utf8",
+  );
+  assert.match(
+    sharedSource,
+    /requiresExternalSharedLock\(\)[\s\S]*reserveExternalKeeperDailyBudget\(input\)[\s\S]*reserveKeeperDailyBudget\(input\)/,
+    "multi-replica bootstrap signing must use the shared external budget without changing the single-replica SQLite path",
+  );
+  const externalSource = readFileSync(
+    join(REPO_ROOT, "app/api/_lib/externalRateLimit.ts"),
+    "utf8",
+  );
+  assert.match(
+    externalSource,
+    /KEEPER_DAILY_BUDGET_SCRIPT[\s\S]*redis\.call\("TIME"\)[\s\S]*signature_exhausted[\s\S]*cost_exhausted[\s\S]*redis\.call\("HSET"[\s\S]*redis\.call\("PEXPIRE"/,
+    "the shared count, cost, idempotency, and UTC-day mutation must remain one Redis EVAL",
+  );
+}
+
+type FakeSharedBudgetState = {
+  count: number;
+  cost: bigint;
+  reservations: Map<string, string>;
+};
+
+function createAtomicKeeperBudgetStore() {
+  const states = new Map<string, FakeSharedBudgetState>();
+  const seenKeys = new Set<string>();
+  const fixedUtcDay = 20_675;
+  const request = async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const command = JSON.parse(String(init?.body)) as string[];
+    assert.equal(command[0], "EVAL");
+    assert.equal(command[2], "1");
+    assert.match(command[1], /redis\.call\("TIME"\)/);
+    assert.match(command[1], /redis\.call\("HSET"/);
+    const [, , , redisKey, reservationField, fingerprint, maxCountRaw, costRaw, maxCostRaw] = command;
+    seenKeys.add(redisKey);
+    const state = states.get(redisKey) ?? {
+      count: 0,
+      cost: 0n,
+      reservations: new Map<string, string>(),
+    };
+    const maxCount = Number(maxCountRaw);
+    const cost = BigInt(costRaw);
+    const maxCost = BigInt(maxCostRaw);
+    let result: string[];
+    const existing = state.reservations.get(reservationField);
+    if (state.count > maxCount || state.cost > maxCost) {
+      result = ["stored_usage_exceeds"];
+    } else if (existing !== undefined) {
+      result = existing === fingerprint
+        ? ["already_reserved", String(fixedUtcDay), String(state.count), state.cost.toString()]
+        : ["reservation_conflict"];
+    } else if (state.count >= maxCount) {
+      result = ["signature_exhausted"];
+    } else if (state.cost + cost > maxCost) {
+      result = ["cost_exhausted"];
+    } else {
+      state.count += 1;
+      state.cost += cost;
+      state.reservations.set(reservationField, fingerprint);
+      states.set(redisKey, state);
+      result = ["reserved", String(fixedUtcDay), String(state.count), state.cost.toString()];
+    }
+    return new Response(JSON.stringify({ result }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  return {
+    replicaA: request as typeof fetch,
+    replicaB: request as typeof fetch,
+    seenKeys,
+  };
+}
+
+async function assertExternalReplicaAtomicity() {
+  const previousUrl = process.env.UPSTASH_REDIS_REST_URL;
+  const previousToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+  process.env.UPSTASH_REDIS_REST_URL = "https://upstash.playlore.xyz";
+  process.env.UPSTASH_REDIS_REST_TOKEN = "synthetic-test-token";
+  try {
+    const store = createAtomicKeeperBudgetStore();
+    const reserve = (nonce: number, hashSequence: number, fetchImpl: typeof fetch) =>
+      reserveExternalKeeperDailyBudget({
+        chainId: CHAIN_ID,
+        contractAddress: CONTRACT,
+        signerAddress: SIGNER,
+        nonce,
+        epoch: BigInt(1_000 + nonce),
+        signingIntentHash: intentHash(hashSequence),
+        reservedMaxCostWei: 30n,
+        policy: { maxSignatures: 10, maxReservedCostWei: 100n },
+      }, fetchImpl);
+
+    const seeded = await reserve(1, 1, store.replicaA);
+    assert.equal(seeded.status, "reserved");
+    const seededTwice = await reserveExternalKeeperDailyBudget({
+      chainId: CHAIN_ID,
+      contractAddress: CONTRACT,
+      signerAddress: SIGNER,
+      nonce: 2,
+      epoch: 1_002n,
+      signingIntentHash: intentHash(2),
+      reservedMaxCostWei: 40n,
+      policy: { maxSignatures: 10, maxReservedCostWei: 100n },
+    }, store.replicaB);
+    assert.equal(seededTwice.reservedMaxCostWei, 70n);
+
+    const race = await Promise.allSettled([
+      reserve(3, 3, store.replicaA),
+      reserve(4, 4, store.replicaB),
+    ]);
+    assert.equal(
+      race.filter((result) => result.status === "fulfilled").length,
+      1,
+      "only one web replica may consume the final shared daily cost slot",
+    );
+    assert.equal(race.filter((result) => result.status === "rejected").length, 1);
+    assert.match(
+      String((race.find((result) => result.status === "rejected") as PromiseRejectedResult).reason),
+      /reserved cost exhausted/i,
+    );
+    assert.equal(store.seenKeys.size, 1, "all replicas must derive one shared chain/contract budget key");
+
+    const winnerNonce = race[0].status === "fulfilled" ? 3 : 4;
+    const winnerHash = race[0].status === "fulfilled" ? 3 : 4;
+    const idempotent = await reserve(winnerNonce, winnerHash, store.replicaB);
+    assert.equal(idempotent.status, "already_reserved");
+    await assert.rejects(
+      reserve(winnerNonce, 99, store.replicaA),
+      /reservation conflict/i,
+      "a nonce reused for a different intent must fail closed across replicas",
+    );
+
+    const reserveSignature = (nonce: number, fetchImpl: typeof fetch) =>
+      reserveExternalKeeperDailyBudget({
+        chainId: CHAIN_ID,
+        contractAddress: OTHER_CONTRACT,
+        signerAddress: SIGNER,
+        nonce,
+        epoch: BigInt(2_000 + nonce),
+        signingIntentHash: intentHash(nonce),
+        reservedMaxCostWei: 1n,
+        policy: { maxSignatures: 1, maxReservedCostWei: 100n },
+      }, fetchImpl);
+    const signatureRace = await Promise.allSettled([
+      reserveSignature(20, store.replicaA),
+      reserveSignature(21, store.replicaB),
+    ]);
+    assert.equal(signatureRace.filter((result) => result.status === "fulfilled").length, 1);
+    assert.match(
+      String((signatureRace.find((result) => result.status === "rejected") as PromiseRejectedResult).reason),
+      /signature count exhausted/i,
+      "replica routing must not multiply the shared signature ceiling",
+    );
+
+    const forgedSuccessFetch = (async () => new Response(JSON.stringify({
+      result: ["reserved", "20675", "11", "101"],
+    }), { status: 200 })) as typeof fetch;
+    await assert.rejects(
+      reserve(30, 30, forgedSuccessFetch),
+      /invalid reservation counters/i,
+      "out-of-policy external counters must fail closed even when labeled reserved",
+    );
+
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    await assert.rejects(
+      reserve(9, 9, store.replicaA),
+      /store is not configured/i,
+      "multi-replica budget must not fall back when the shared store is unavailable",
+    );
+  } finally {
+    if (previousUrl === undefined) delete process.env.UPSTASH_REDIS_REST_URL;
+    else process.env.UPSTASH_REDIS_REST_URL = previousUrl;
+    if (previousToken === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    else process.env.UPSTASH_REDIS_REST_TOKEN = previousToken;
+  }
+}
+
 async function runTest() {
   assertPolicyClamp();
   assertBotReservationOrdering();
+  assertBootstrapReservationOrdering();
+  await assertExternalReplicaAtomicity();
 
   const testDir = mkdtempSync(join(tmpdir(), "lore-keeper-daily-budget-"));
   const dbPath = join(testDir, "budget.sqlite");
@@ -441,6 +667,8 @@ async function runTest() {
       status: "pass",
       safeDefaultsClamped: true,
       reservationBeforeSigning: true,
+      bootstrapReservationBeforeSigning: true,
+      externalReplicaAtomicity: true,
       restartPersistence: true,
       replicaAtomicity: true,
       costBudgetBounded: true,

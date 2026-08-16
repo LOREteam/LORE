@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as responseHeadersModule from "../app/api/_lib/responseHeaders.ts";
 import * as sharedRateLimitModule from "../app/api/_lib/sharedRateLimit.ts";
+import * as liveStateRuntimePolicyModule from "../app/api/live-state/runtimePolicy.ts";
+import * as publicReadModelPolicyModule from "../app/api/_lib/publicReadModelPolicy.ts";
 
 export async function runApiRequestBoundaryTests() {
   const responseHeaders = responseHeadersModule.default ?? responseHeadersModule;
   const sharedRateLimit = sharedRateLimitModule.default ?? sharedRateLimitModule;
+  const liveStateRuntimePolicy = liveStateRuntimePolicyModule.default ?? liveStateRuntimePolicyModule;
+  const publicReadModelPolicy = publicReadModelPolicyModule.default ?? publicReadModelPolicyModule;
   assert.match(
     readFileSync("app/api/rebate-history/route.ts", "utf8"),
     /parsePositiveIntegerParam\(cursorParam\)[\s\S]*parseBoundedPositiveIntegerParam\(limitParam, MAX_PAGE_SIZE\)[\s\S]*limit: requestedLimit/,
@@ -16,61 +20,47 @@ export async function runApiRequestBoundaryTests() {
     /Math\.min\(requestedLimit, MAX_PAGE_SIZE\)/,
     "rebate-history pagination must keep max-limit rejection explicit instead of reintroducing silent clamping",
   );
-  assert.match(
-    readFileSync("app/api/epochs/route.ts", "utf8"),
-    /parsePositiveIntegerParam\(value\)[\s\S]*value === null \|\| value > 1_000_000[\s\S]*Invalid epochs/,
+  const parsePositiveInteger = (value) => {
+    if (!/^[1-9]\d*$/.test(value)) return null;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  };
+  assert.deepEqual(
+    liveStateRuntimePolicy.parseRequestedEpochsParam("1e2", parsePositiveInteger, 100),
+    { ok: false, error: "Invalid epochs" },
     "epochs query parsing must reject non-decimal epoch IDs before cache-key and storage work",
   );
-  assert.match(
-    readFileSync("app/api/rewards/route.ts", "utf8"),
-    /parsePositiveIntegerValue\(value\)[\s\S]*parsed === null \|\| parsed > 1_000_000[\s\S]*Invalid epochs/,
+  assert.deepEqual(
+    liveStateRuntimePolicy.parseRequestedEpochsParam("1000001", parsePositiveInteger, 100),
+    { ok: false, error: "Invalid epochs" },
+    "epochs query parsing must reject out-of-range epoch IDs before cache-key and storage work",
+  );
+  assert.deepEqual(
+    publicReadModelPolicy.parsePublicRewardsEpochs(["1e2"]),
+    { ok: false, error: "Invalid epochs" },
     "rewards body epoch parsing must reject non-decimal string IDs before cache-key and storage work",
   );
-  assert.match(
-    readFileSync("app/api/rewards/route.ts", "utf8"),
-    /epochsRaw\.length > MAX_EPOCHS_PER_REQUEST[\s\S]*Too many epochs[\s\S]*const epochs = new Set<number>\(\);[\s\S]*for \(const value of epochsRaw\)[\s\S]*parsePositiveIntegerValue\(value\)/,
-    "rewards body epoch parsing must reject over-limit epoch arrays before cache-key and storage work",
+  assert.deepEqual(
+    publicReadModelPolicy.parsePublicRewardsEpochs(["1000001"]),
+    { ok: false, error: "Invalid epochs" },
+    "rewards body epoch parsing must reject out-of-range IDs before cache-key and storage work",
   );
-  assert.doesNotMatch(
-    readFileSync("app/api/rewards/route.ts", "utf8"),
-    /epochs\.size >= MAX_EPOCHS_PER_REQUEST|Array\.isArray\(epochsRaw\)[\s\S]*\.map\(\(value\) => parsePositiveIntegerValue\(value\)\)[\s\S]*\.slice\(0, MAX_EPOCHS_PER_REQUEST\)/,
-    "rewards body epoch parsing must not silently truncate or map an entire submitted array before rejecting over-limit requests",
+  let overLimitElementReads = 0;
+  const overLimitEpochs = new Proxy(
+    Array.from({ length: publicReadModelPolicy.PUBLIC_REWARDS_MAX_EPOCHS + 1 }, (_, index) => index + 1),
+    {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^\d+$/.test(property)) overLimitElementReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    },
   );
-  assert.match(
-    readFileSync("app/api/rewards/route.ts", "utf8"),
-    /reason === "unsupported-content-type"[\s\S]*Rewards payload must be JSON[\s\S]*415/,
-    "rewards API must fail closed with no-store 415 on non-JSON payloads",
+  assert.deepEqual(
+    publicReadModelPolicy.parsePublicRewardsEpochs(overLimitEpochs),
+    { ok: false, error: "Too many epochs" },
+    "rewards body epoch parsing must reject over-limit arrays before cache-key and storage work",
   );
-  assert.match(
-    readFileSync("app/api/chat/messages/route.ts", "utf8"),
-    /reason === "unsupported-content-type"[\s\S]*Message payload must be JSON[\s\S]*status: 415[\s\S]*varyCookie: true/,
-    "chat message sends must fail closed with no-store/Vary 415 on non-JSON payloads",
-  );
-  assert.match(
-    readFileSync("app/api/chat/messages/route.ts", "utf8"),
-    /const text = typeof body\.text === "string" \? body\.text\.trim\(\) : ""[\s\S]*text\.length > MAX_TEXT_LENGTH[\s\S]*Message text is too long[\s\S]*const senderName = typeof body\.senderName === "string" \? body\.senderName\.trim\(\) : null[\s\S]*senderName\.length > MAX_NAME_LENGTH[\s\S]*Sender name is too long/,
-    "chat message sends must reject over-limit text and sender names instead of silently truncating authenticated payloads",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/api/chat/messages/route.ts", "utf8"),
-    /body\.(?:text|senderName)\.trim\(\)\.slice\(0, MAX_(?:TEXT|NAME)_LENGTH\)/,
-    "chat message sends must not silently truncate authenticated text or sender names before storage",
-  );
-  assert.match(
-    readFileSync("app/api/chat/profile/route.ts", "utf8"),
-    /reason === "unsupported-content-type"[\s\S]*Profile payload must be JSON[\s\S]*status: 415[\s\S]*varyCookie: true/,
-    "chat profile writes must fail closed with no-store/Vary 415 on non-JSON payloads",
-  );
-  assert.match(
-    readFileSync("app/api/chat/profile/route.ts", "utf8"),
-    /const name = typeof body\.name === "string" \? body\.name\.trim\(\) : null[\s\S]*name\.length > MAX_NAME_LENGTH[\s\S]*Profile name is too long/,
-    "chat profile writes must reject over-limit names instead of silently truncating authenticated payloads",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/api/chat/profile/route.ts", "utf8"),
-    /body\.name\.trim\(\)\.slice\(0, MAX_NAME_LENGTH\)/,
-    "chat profile writes must not silently truncate authenticated names before storage",
-  );
+  assert.equal(overLimitElementReads, 0, "over-limit rewards arrays must be rejected before parsing any submitted element");
   assert.match(
     readFileSync("app/api/admin/processes/route.ts", "utf8"),
     /reason === "unsupported-content-type"[\s\S]*Process payload must be JSON[\s\S]*status: 415[\s\S]*varyCookie: true/,

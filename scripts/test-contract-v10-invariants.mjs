@@ -195,18 +195,28 @@ assert.equal(
 );
 assert.match(
   ciWorkflowSource,
-  /Contract invariants \(V9 and V10\)[\s\S]*npm run test:contract\n\s+npm run test:contract:v10/,
-  "CI must gate both V9 compatibility and the active V10 invariants",
+  /Contract invariants \(V10\)[\s\S]*npm run test:contract:v10/,
+  "CI must gate the active V10 invariants",
+);
+assert.doesNotMatch(
+  ciWorkflowSource,
+  /npm run test:contract(?:\r?\n|$)/m,
+  "routine CI must not spend a second invariant pass on the obsolete V9 suite",
 );
 assert.match(
   ciWorkflowSource,
-  /Contract compilation provenance \(V9 and V10\)[\s\S]*npm run proof:contract-compile\n\s+npm run proof:contract-compile:v10/,
-  "CI must verify both canonical contract manifests",
+  /Contract compilation provenance \(V10\)[\s\S]*npm run proof:contract-compile:v10/,
+  "CI must verify the canonical V10 contract manifest",
 );
 assert.match(
   ciWorkflowSource,
-  /\.tmp\/contract-compilation-provenance\.json[\s\S]*\.tmp\/contract-compilation-provenance-v10\.json/,
-  "CI must retain both compilation provenance artifacts",
+  /\.tmp\/contract-compilation-provenance-v10\.json/,
+  "CI must retain the V10 compilation provenance artifact",
+);
+assert.doesNotMatch(
+  ciWorkflowSource,
+  /^\s*\.tmp\/contract-compilation-provenance\.json\s*$/m,
+  "routine CI must not publish an obsolete V9 compilation artifact",
 );
 assert.match(
   standardBetPathSource,
@@ -376,8 +386,8 @@ assert.match(
 );
 assert.match(
   deployedVerifierSource,
-  /function writeCanonicalRemixWorkspace[\s\S]*Unsafe source-unit path[\s\S]*Source unit escapes workspace[\s\S]*Remix workspace creation bytecode drifted[\s\S]*Remix workspace runtime bytecode drifted[\s\S]*sources: \{ \[CONTRACT_PATH\]: workspaceSources\[CONTRACT_PATH\] \}[\s\S]*Workspace import not found[\s\S]*Root-only Remix workspace creation bytecode drifted[\s\S]*Root-only Remix workspace runtime bytecode drifted/,
-  "canonical Remix workspace preparation must reject path traversal and reproduce exact canonical bytecode through full-source and root-import compilation",
+  /function writeCanonicalRemixWorkspace[\s\S]*resolveContainedV10SourcePath\(outputPath, sourceUnit\)[\s\S]*Remix workspace creation bytecode drifted[\s\S]*Remix workspace runtime bytecode drifted[\s\S]*sources: \{ \[CONTRACT_PATH\]: workspaceSources\[CONTRACT_PATH\] \}[\s\S]*Workspace import not found[\s\S]*Root-only Remix workspace creation bytecode drifted[\s\S]*Root-only Remix workspace runtime bytecode drifted/,
+  "canonical Remix workspace must bind the executable path-containment policy and reproduce exact canonical bytecode through full-source and root-import compilation",
 );
 assert.match(
   deployedVerifierSource,
@@ -2753,6 +2763,15 @@ for (const modelCase of duplicateBatchModelCases) {
   );
   assert.equal(result.perEpochEvents.length, events, `${modelCase.name} must emit only once per newly closed eligible entry`);
 }
+const duplicateBatchModelDigest = createHash("sha256")
+  .update(JSON.stringify(duplicateBatchModelCases.map(({ name, expected }) => ({
+    name,
+    expected: Object.fromEntries(Object.entries(expected).map(([key, value]) => [
+      key,
+      typeof value === "bigint" ? value.toString() : value,
+    ])),
+  }))))
+  .digest("hex");
 const resolverClaimReplay = simulateClaimBatch({
   epochs: [0, 0],
   amounts: new Map([[0, 19n]]),
@@ -3008,6 +3027,7 @@ console.log(JSON.stringify({
   protocolFeeFlushModelCases: protocolFeeFlushModelCases.length,
   protocolFeeFlushEntrypointCases: protocolFeeFlushEntrypointCases.length,
   duplicateBatchModelCases: duplicateBatchModelCases.length,
+  duplicateBatchModelDigest,
   tokenTransferRollbackCases: tokenTransferRollbackCases.length,
   batchTransferRollbackCases: batchTransferRollbackCases.length,
   dustTransferRollbackCases: dustTransferRollbackCases.length,

@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import * as autoResolveModule from "../app/hooks/useAutoResolve.ts";
+import * as backupGateModule from "../app/components/BackupGate.tsx";
+import * as miningManualActionsModule from "../app/hooks/useMiningManualActions.ts";
 
 const autoResolve = autoResolveModule.default ?? autoResolveModule;
+const backupGate = backupGateModule.default ?? backupGateModule;
+const miningManualActions = miningManualActionsModule.default ?? miningManualActionsModule;
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   const entries = readdirSync(root, { withFileTypes: true });
@@ -38,32 +44,73 @@ export async function runWalletShellAndMiningActionTests() {
     /role="dialog"[\s\S]*aria-modal="true"[\s\S]*aria-labelledby="wallet-settings-title"[\s\S]*aria-describedby="wallet-settings-description"[\s\S]*tabIndex=\{-1\}/,
     "Wallet Settings dialog root must remain programmatically focusable for focus-trap fallback",
   );
-  const backupGateSource = readFileSync("app/components/BackupGate.tsx", "utf8");
-  assert.match(
-    backupGateSource,
-    /role="dialog"[\s\S]*aria-modal="true"[\s\S]*aria-labelledby="backup-gate-title"[\s\S]*aria-describedby="backup-gate-description"[\s\S]*tabIndex=\{-1\}/,
-    "backup gate dialog root must remain labeled, described, modal, and programmatically focusable",
+  const backupAddress = "0x0000000000000000000000000000000000000001";
+  assert.equal(backupGate.normalizeBackupAddress(backupAddress.toUpperCase().replace("0X", "0x")), backupAddress);
+  assert.equal(backupGate.normalizeBackupAddress("not-an-address"), null);
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const storedValues = new Map([["lineaore:privy-backup-confirmed", "invalid-address"]]);
+  const removedStorageKeys = [];
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: (key) => storedValues.get(key) ?? null,
+        removeItem: (key) => {
+          removedStorageKeys.push(key);
+          storedValues.delete(key);
+        },
+        setItem: (key, value) => storedValues.set(key, value),
+      },
+    },
+  });
+  try {
+    assert.equal(backupGate.getBackupConfirmedAddress(), null);
+    assert.deepEqual(removedStorageKeys, ["lineaore:privy-backup-confirmed"]);
+    backupGate.setBackupConfirmed(backupAddress.toUpperCase().replace("0X", "0x"));
+    assert.equal(storedValues.get("lineaore:privy-backup-confirmed"), backupAddress);
+    assert.equal(backupGate.isBackupConfirmedFor(backupAddress), true);
+    assert.equal(backupGate.isBackupConfirmedFor("invalid-address"), false);
+  } finally {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
+  }
+  assert.deepEqual(backupGate.getBackupGateActionState(false, false), {
+    exportDisabled: false,
+    exportLabel: "Export private key",
+    continueDisabled: true,
+  });
+  assert.deepEqual(backupGate.getBackupGateActionState(true, true), {
+    exportDisabled: true,
+    exportLabel: "Opening...",
+    continueDisabled: false,
+  });
+  const backupGateMarkup = renderToStaticMarkup(React.createElement(backupGate.BackupGate, {
+    embeddedWalletAddress: backupAddress,
+    onExportPrivateKey: () => {},
+    onConfirm: () => {},
+  }));
+  assert.match(backupGateMarkup, /role="dialog"/);
+  assert.match(backupGateMarkup, /aria-modal="true"/);
+  assert.match(backupGateMarkup, /aria-labelledby="backup-gate-title"/);
+  assert.match(backupGateMarkup, /aria-describedby="backup-gate-description"/);
+  assert.match(backupGateMarkup, /tabindex="-1"/);
+  assert.match(backupGateMarkup, /id="backup-gate-description"/);
+  assert.match(backupGateMarkup, /Export private key/);
+  assert.match(backupGateMarkup, /I&#x27;ve saved it, continue/);
+  const backupGateButtons = [...backupGateMarkup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)]
+    .map((match) => match[0]);
+  const exportButton = backupGateButtons.find((button) => button.includes("Export private key"));
+  const continueButton = backupGateButtons.find((button) => button.includes("I&#x27;ve saved it, continue"));
+  assert.ok(exportButton);
+  assert.ok(continueButton);
+  assert.doesNotMatch(exportButton, /\bdisabled=/);
+  assert.match(continueButton, /\bdisabled=/);
+  assert.equal(
+    backupGateButtons.filter((button) => button.includes("focus-visible:ring-violet-400")).length,
+    2,
+    "both backup actions must expose the shared keyboard focus ring",
   );
-  assert.match(
-    backupGateSource,
-    /aria-describedby="backup-gate-description"[\s\S]*id="backup-gate-description"/,
-    "backup gate dialog must expose its recovery-risk description to assistive technology",
-  );
-  assert.match(
-    backupGateSource,
-    /normalizeBackupAddress[\s\S]*getAddress/,
-    "backup gate confirmation must normalize wallet addresses with the EVM address parser",
-  );
-  assert.match(
-    backupGateSource,
-    /const raw = window\.localStorage\.getItem\(STORAGE_KEY\)[\s\S]*normalizeBackupAddress\(raw\)[\s\S]*window\.localStorage\.removeItem\(STORAGE_KEY\)/,
-    "backup gate confirmation must clear invalid stored wallet addresses before re-checking backup state",
-  );
-  assert.match(
-    backupGateSource,
-    /onClick=\{handleExport\}[\s\S]*uiTokens\.focusRing[\s\S]*Export private key[\s\S]*onClick=\{handleContinue\}[\s\S]*uiTokens\.focusRing[\s\S]*I&apos;ve saved it, continue/,
-    "backup gate primary actions must keep visible keyboard focus rings",
-  );
+  assert.doesNotMatch(backupGateMarkup, /Opening(?:\u2026|\.\.\.)/);
   assert.match(
     readFileSync("app/components/MobileTabNav.tsx", "utf8"),
     /MOBILE_TABS\.map[\s\S]*<button[\s\S]{0,160}type="button"[\s\S]*aria-current=\{active \? "page" : undefined\}/,
@@ -86,41 +133,106 @@ export async function runWalletShellAndMiningActionTests() {
     /const TabPanelFallback[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*aria-busy="true"[\s\S]*Loading panel/,
     "lazy tab panel fallback must announce loading state without changing tab behavior",
   );
-  assert.doesNotMatch(
-    backupGateSource,
-    /Opening\u2026/,
-    "backup gate pending text must stay ASCII-safe for terminal and log rendering",
-  );
-  const miningManualActionsSource = readFileSync("app/hooks/useMiningManualActions.ts", "utf8");
-  assert.match(
-    miningManualActionsSource,
-    /setIsPending\(true\)/,
-    "manual bet must expose its pending state while the Privy transaction is sent",
-  );
-  assert.match(
-    miningManualActionsSource,
-    /const manualMineInFlightRef = useRef\(false\)[\s\S]*const handleManualMine[\s\S]*if \(autoMineActive\(\) \|\| manualMineInFlightRef\.current\) return false;[\s\S]*manualMineInFlightRef\.current = true;[\s\S]*finally \{\s*manualMineInFlightRef\.current = false;[\s\S]*const handleDirectMine[\s\S]*if \(autoMineActive\(\) \|\| manualMineInFlightRef\.current\) return false;[\s\S]*manualMineInFlightRef\.current = true;[\s\S]*finally \{\s*manualMineInFlightRef\.current = false;/,
-    "manual and repeat bets must share an in-flight guard so rapid clicks cannot create duplicate sends",
-  );
-  assert.match(
-    miningManualActionsSource,
-    /submitMineAttempt\("ManualMine"[\s\S]*state === "pending"[\s\S]*Bet transaction is still pending\. Check wallet activity before retrying\.[\s\S]*submitMineAttempt\("DirectMine"[\s\S]*state === "pending"[\s\S]*Repeat bet transaction is still pending\. Check wallet activity before retrying\./,
-    "manual and repeat ambiguous pending bets must surface a user-facing warning instead of only clearing the pending spinner",
-  );
-  assert.match(
-    miningManualActionsSource,
-    /catch \(error\) \{\s*if \(!isUserRejection\(error\)\) \{\s*clearMiningTxPathState\(\);[\s\S]*notify\?\.\(reason, "danger"\);\s*\} else \{\s*notify\?\.\("Bet transaction rejected in wallet\.", "info"\);/,
-    "manual wallet rejection must keep pending tx recovery state and use explicit info copy",
-  );
-  assert.match(
-    miningManualActionsSource,
-    /catch \(error\) \{\s*if \(!isUserRejection\(error\)\) \{\s*clearMiningTxPathState\(\);[\s\S]*notify\?\.\(reason, "danger"\);\s*\} else \{\s*notify\?\.\("Repeat bet transaction rejected in wallet\.", "info"\);/,
-    "repeat bet wallet rejection must keep pending tx recovery state and use explicit info copy",
-  );
-  assert.doesNotMatch(
-    miningManualActionsSource,
-    /Preparing (?:repeat )?bet(?: transaction)?/,
-    "manual and repeat bets must not show a redundant preparation toast",
+  const notifications = [];
+  const pendingStates = [];
+  const selections = [];
+  const selectionEpochs = [];
+  const inFlightRef = { current: false };
+  let submitCalls = 0;
+  const actionBase = {
+    tiles: [3, 3, 7],
+    betAmountStr: "1",
+    expectedEpoch: 42n,
+    inFlightRef,
+    autoMineActive: () => false,
+    getActorAddress: () => backupAddress,
+    notify: (message, tone) => notifications.push([message, tone]),
+    setIsPending: (value) => pendingStates.push(value),
+    setSelectedTiles: (tiles) => selections.push(tiles),
+    setSelectedTilesEpoch: (epoch) => selectionEpochs.push(epoch),
+    submitMineAttempt: async () => {
+      submitCalls += 1;
+      return "pending";
+    },
+  };
+  assert.equal(await miningManualActions.executeMiningManualAction({
+    ...actionBase,
+    source: "ManualMine",
+    getActorAddress: () => null,
+  }), false);
+  assert.deepEqual(notifications.pop(), ["Wallet not ready. Reconnect wallet and try again.", "danger"]);
+  assert.equal(submitCalls, 0);
+  assert.deepEqual(pendingStates, []);
+  assert.equal(await miningManualActions.executeMiningManualAction({ ...actionBase, source: "ManualMine" }), "pending");
+  assert.equal(submitCalls, 1);
+  assert.deepEqual(pendingStates, [true, false]);
+  assert.deepEqual(notifications.pop(), [
+    "Bet transaction is still pending. Check wallet activity before retrying.",
+    "warning",
+  ]);
+  assert.equal(inFlightRef.current, false);
+  assert.equal(await miningManualActions.executeMiningManualAction({ ...actionBase, source: "DirectMine" }), "pending");
+  assert.deepEqual(notifications.pop(), [
+    "Repeat bet transaction is still pending. Check wallet activity before retrying.",
+    "warning",
+  ]);
+  assert.deepEqual(selections.at(-1), [3, 7]);
+  assert.equal(selectionEpochs.at(-1), null);
+  const submitCallsBeforeAutoMineGuard = submitCalls;
+  assert.equal(await miningManualActions.executeMiningManualAction({
+    ...actionBase,
+    source: "ManualMine",
+    autoMineActive: () => true,
+  }), false);
+  assert.equal(submitCalls, submitCallsBeforeAutoMineGuard);
+
+  let releaseFirstAttempt;
+  const firstAttempt = miningManualActions.executeMiningManualAction({
+    ...actionBase,
+    source: "DirectMine",
+    submitMineAttempt: () => new Promise((resolve) => { releaseFirstAttempt = resolve; }),
+  });
+  assert.equal(inFlightRef.current, true);
+  assert.equal(await miningManualActions.executeMiningManualAction({ ...actionBase, source: "DirectMine" }), false);
+  releaseFirstAttempt("confirmed");
+  assert.equal(await firstAttempt, "confirmed");
+  assert.deepEqual(selections.at(-1), [3, 7]);
+  assert.equal(selectionEpochs.at(-1), null);
+  assert.equal(inFlightRef.current, false);
+
+  let clearedPendingState = 0;
+  let loggedFailures = 0;
+  assert.equal(await miningManualActions.executeMiningManualAction({
+    ...actionBase,
+    source: "DirectMine",
+    submitMineAttempt: async () => { throw { code: 4001 }; },
+    clearPendingState: () => { clearedPendingState += 1; },
+  }), false);
+  assert.equal(clearedPendingState, 0, "wallet rejection must preserve recoverable pending state");
+  assert.deepEqual(notifications.pop(), ["Repeat bet transaction rejected in wallet.", "info"]);
+  assert.equal(await miningManualActions.executeMiningManualAction({
+    ...actionBase,
+    source: "ManualMine",
+    submitMineAttempt: async () => { throw { code: 4001 }; },
+    clearPendingState: () => { clearedPendingState += 1; },
+  }), false);
+  assert.equal(clearedPendingState, 0, "manual wallet rejection must preserve recoverable pending state");
+  assert.deepEqual(notifications.pop(), ["Bet transaction rejected in wallet.", "info"]);
+  assert.equal(await miningManualActions.executeMiningManualAction({
+    ...actionBase,
+    source: "ManualMine",
+    submitMineAttempt: async () => { throw new Error("raw provider failure"); },
+    clearPendingState: () => { clearedPendingState += 1; },
+    getFailureMessage: () => "Sanitized bet failure",
+    logFailure: () => { loggedFailures += 1; },
+  }), false);
+  assert.equal(clearedPendingState, 1);
+  assert.equal(loggedFailures, 1);
+  assert.deepEqual(notifications.pop(), ["Sanitized bet failure", "danger"]);
+  assert.equal(
+    notifications.some(([message]) => /Preparing (?:repeat )?bet(?: transaction)?/.test(message)),
+    false,
+    "manual and repeat actions must not emit redundant preparation notices",
   );
   const autoResolveSource = readFileSync("app/hooks/useAutoResolve.ts", "utf8");
   assert.match(

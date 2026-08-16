@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import * as reducedMotionModule from "../app/lib/reducedMotionRuntime.ts";
+
+const reducedMotionRuntime = reducedMotionModule.default ?? reducedMotionModule;
 
 export function runUiMotionAndReadOnlyTests() {
   const proxySource = readFileSync("proxy.ts", "utf8");
@@ -13,36 +16,85 @@ export function runUiMotionAndReadOnlyTests() {
   const layoutSource = readFileSync("app/layout.tsx", "utf8");
   assert.match(layoutSource, /<script nonce=\{nonce\} src="\/early-runtime\.js" suppressHydrationWarning \/>/, "early runtime script nonce must suppress browser-hidden nonce hydration noise");
 
-  const reducedMotionSource = readFileSync("app/hooks/useReducedMotion.ts", "utf8");
-  assert.match(
-    reducedMotionSource,
-    /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/,
-    "reduced-motion state must fall back to the operating-system preference",
+  const storage = new Map();
+  const removed = [];
+  const media = {
+    matches: true,
+    listeners: new Set(),
+    addEventListener(type, listener) {
+      assert.equal(type, "change");
+      this.listeners.add(listener);
+    },
+    removeEventListener(type, listener) {
+      assert.equal(type, "change");
+      this.listeners.delete(listener);
+    },
+  };
+  const storageAdapter = {
+    getItem: (key) => storage.get(key) ?? null,
+    removeItem: (key) => {
+      removed.push(key);
+      storage.delete(key);
+    },
+  };
+  assert.deepEqual(
+    reducedMotionRuntime.readReducedMotionPreference({ storage: storageAdapter, media }),
+    { explicit: false, reduced: true },
+    "the operating-system preference must apply when storage has no override",
   );
-  assert.match(
-    reducedMotionSource,
-    /media\.addEventListener\("change", handleChange\)/,
-    "reduced-motion state must follow operating-system preference changes until the user overrides it",
+  storage.set(reducedMotionRuntime.REDUCED_MOTION_STORAGE_KEY, "true");
+  assert.deepEqual(reducedMotionRuntime.readReducedMotionPreference({ storage: storageAdapter, media }), { explicit: true, reduced: true });
+  storage.set(reducedMotionRuntime.REDUCED_MOTION_STORAGE_KEY, "false");
+  assert.deepEqual(reducedMotionRuntime.readReducedMotionPreference({ storage: storageAdapter, media }), { explicit: true, reduced: false });
+  storage.set(reducedMotionRuntime.REDUCED_MOTION_STORAGE_KEY, "invalid");
+  assert.deepEqual(reducedMotionRuntime.readReducedMotionPreference({ storage: storageAdapter, media }), { explicit: false, reduced: true });
+  assert.deepEqual(removed, [reducedMotionRuntime.REDUCED_MOTION_STORAGE_KEY], "invalid override values must be removed exactly");
+  assert.deepEqual(
+    reducedMotionRuntime.readReducedMotionPreference({
+      storage: { getItem: () => { throw new Error("storage unavailable"); }, removeItem: () => { throw new Error("unreachable"); } },
+      media: { matches: false },
+    }),
+    { explicit: false, reduced: false },
+    "storage errors must fail closed to the available system preference",
   );
-  assert.match(
-    reducedMotionSource,
-    /if \(stored !== null\) localStorage\.removeItem\(STORAGE_KEY\)/,
-    "reduced-motion preference restore must clear invalid localStorage values",
-  );
+  let explicit = false;
+  const observed = [];
+  const unsubscribe = reducedMotionRuntime.subscribeToSystemReducedMotion(media, () => explicit, (value) => observed.push(value));
+  for (const listener of media.listeners) listener({ matches: false });
+  explicit = true;
+  for (const listener of media.listeners) listener({ matches: true });
+  assert.deepEqual(observed, [false], "system changes must stop affecting the state after an explicit override");
+  unsubscribe();
+  assert.equal(media.listeners.size, 0, "media-query listeners must be removed on cleanup");
 
-  const pageBackdropSource = readFileSync("app/components/PageBackdrop.tsx", "utf8");
-  assert.match(
-    pageBackdropSource,
-    /\{motionReady && !reducedMotion && <CrystalParticles \/>}/,
-    "decorative background particle animation must not render until motion preference is known and reduced motion is off",
+  const preferenceListeners = new Set();
+  const preferenceTarget = {
+    addEventListener(type, listener) {
+      assert.equal(type, reducedMotionRuntime.REDUCED_MOTION_CHANGE_EVENT);
+      preferenceListeners.add(listener);
+    },
+    removeEventListener(type, listener) {
+      assert.equal(type, reducedMotionRuntime.REDUCED_MOTION_CHANGE_EVENT);
+      preferenceListeners.delete(listener);
+    },
+  };
+  const synchronizedPreferences = [];
+  const unsubscribePreference = reducedMotionRuntime.subscribeToReducedMotionPreference(
+    preferenceTarget,
+    (reduced) => synchronizedPreferences.push(reduced),
   );
+  for (const listener of preferenceListeners) listener({ detail: true });
+  for (const listener of preferenceListeners) listener({ detail: "true" });
+  assert.deepEqual(synchronizedPreferences, [true], "same-tab preference changes must accept only boolean values");
+  unsubscribePreference();
+  for (const listener of preferenceListeners) listener({ detail: false });
+  assert.deepEqual(synchronizedPreferences, [true], "preference listeners must be removed on cleanup");
 
-  const maintenanceOverlaySource = readFileSync("app/components/MaintenanceOverlay.tsx", "utf8");
-  assert.match(
-    maintenanceOverlaySource,
-    /useReducedMotion[\s\S]*const \{ reducedMotion \} = useReducedMotion\(\)[\s\S]*reducedMotion \? "" : "animate-\[orb-drift-1_12s_ease-in-out_infinite\]"[\s\S]*reducedMotion \? "" : "animate-float"[\s\S]*reducedMotion \? "" : "animate-ping"/,
-    "maintenance overlay decorative animations must respect reduced-motion preference",
-  );
+  assert.equal(reducedMotionRuntime.shouldRenderMotionDecorations(false, false), false);
+  assert.equal(reducedMotionRuntime.shouldRenderMotionDecorations(true, true), false);
+  assert.equal(reducedMotionRuntime.shouldRenderMotionDecorations(true, false), true);
+  assert.equal(reducedMotionRuntime.motionClass(true, "animate-ping"), "");
+  assert.equal(reducedMotionRuntime.motionClass(false, "animate-ping"), "animate-ping");
 
   const whitePaperMotionSource = readFileSync("app/components/WhitePaper.tsx", "utf8");
   assert.match(

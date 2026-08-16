@@ -191,8 +191,8 @@ function testRouteIntegration() {
   );
   assert.match(
     routeSource,
-    /shouldSkip: \(\) => \{[\s\S]*scanState\?\.working[\s\S]*return false[\s\S]*REBATE_UNCHANGED_WATERMARK_REFRESH_MS/,
-    "an incomplete cycle must not be stalled by the unchanged-watermark background cooldown",
+    /shouldSkip: \(\) => \{[\s\S]*return shouldSkipUnchangedRebateRefresh\(\{[\s\S]*hasWorkingCycle: Boolean\(scanState\?\.working\)[\s\S]*cachedWatermark[\s\S]*currentWatermark: watermark/,
+    "the route must delegate incomplete-cycle and unchanged-watermark decisions to the behavior-tested runtime policy",
   );
   assert.match(
     routeSource,

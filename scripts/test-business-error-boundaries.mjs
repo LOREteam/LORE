@@ -1,51 +1,251 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import * as routeErrorModule from "../app/api/_lib/routeError.ts";
 
 const routeError = routeErrorModule.default ?? routeErrorModule;
+const LOGGER_STORAGE_KEY = "lineaore:logs";
+const LOGGER_SANITIZER_FAULT_PROBE = process.env.ERROR_BOUNDARY_TEST_MODE === "logger-sanitizer-fault-probe";
+
+function createMemoryStorage() {
+  const values = new Map();
+  const removals = [];
+  return {
+    values,
+    removals,
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    setItem(key, value) {
+      values.set(key, String(value));
+    },
+    removeItem(key) {
+      removals.push(key);
+      values.delete(key);
+    },
+  };
+}
+
+function installTemporaryGlobal(name, value) {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, name);
+  Object.defineProperty(globalThis, name, {
+    configurable: true,
+    enumerable: previous?.enumerable ?? false,
+    writable: true,
+    value,
+  });
+  return () => {
+    if (previous) Object.defineProperty(globalThis, name, previous);
+    else delete globalThis[name];
+  };
+}
+
+async function runLoggerSanitizerFaultProbe() {
+  const { mock } = await import("node:test");
+  mock.module(new URL("../app/lib/sentrySanitize.ts", import.meta.url).href, {
+    namedExports: {
+      sanitizeSentryPayload: (value) => value,
+      sanitizeSupportLogPayload: (value) => value,
+    },
+  });
+  const storage = createMemoryStorage();
+  const queuedFlushes = [];
+  const restoreWindow = installTemporaryGlobal("window", {
+    location: { origin: "https://logger-probe.invalid", href: "https://logger-probe.invalid/" },
+    localStorage: storage,
+    dispatchEvent() {},
+  });
+  const restoreStorage = installTemporaryGlobal("localStorage", storage);
+  const restoreSetTimeout = installTemporaryGlobal("setTimeout", (callback) => {
+    queuedFlushes.push(callback);
+    return queuedFlushes.length;
+  });
+  const originalConsoleWarn = console.warn;
+  const logged = [];
+  console.warn = (...args) => logged.push(args);
+  try {
+    const loggerModule = await import("../app/lib/logger.ts?logger-sanitizer-fault-probe");
+    loggerModule.log.error("FaultProbe", "Bearer logger-sanitizer-mutant-secret");
+    assert.doesNotMatch(
+      JSON.stringify(logged),
+      /logger-sanitizer-mutant-secret/,
+      "logger sanitizer fault probe must reject an identity-sanitizer mutant",
+    );
+  } finally {
+    console.warn = originalConsoleWarn;
+    restoreSetTimeout();
+    restoreStorage();
+    restoreWindow();
+  }
+}
+
+if (LOGGER_SANITIZER_FAULT_PROBE) {
+  await runLoggerSanitizerFaultProbe();
+  process.exit(0);
+}
+
+function assertLoggerSanitizerFaultIsCaught() {
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-test-module-mocks", "--import", "tsx", fileURLToPath(import.meta.url)],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, ERROR_BOUNDARY_TEST_MODE: "logger-sanitizer-fault-probe" },
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true,
+    },
+  );
+  assert.equal(result.signal, null, "logger sanitizer fault probe must not be killed");
+  assert.equal(result.status, 1, "identity-sanitizer mutant must fail the logger redaction assertion");
+  assert.match(
+    `${result.stdout}\n${result.stderr}`,
+    /logger sanitizer fault probe must reject an identity-sanitizer mutant/,
+  );
+}
+
+async function runSupportLoggerBehaviorTests() {
+  const storage = createMemoryStorage();
+  const queuedFlushes = [];
+  const location = {
+    origin: "https://safe-logger-origin.invalid",
+    href: "https://safe-logger-origin.invalid/admin?token=href-secret-must-not-export",
+  };
+  const restoreWindow = installTemporaryGlobal("window", {
+    location,
+    localStorage: storage,
+    dispatchEvent() {},
+  });
+  const restoreStorage = installTemporaryGlobal("localStorage", storage);
+  const restoreSetTimeout = installTemporaryGlobal("setTimeout", (callback) => {
+    queuedFlushes.push(callback);
+    return queuedFlushes.length;
+  });
+  const originalConsoleWarn = console.warn;
+  const consoleWarnings = [];
+  console.warn = (...args) => consoleWarnings.push(args);
+  let loggerModule;
+  try {
+    const diagnosticsModule = await import("../app/lib/mining/autoMineDiagnostics.ts");
+    storage.setItem(diagnosticsModule.AUTO_MINE_DIAGNOSTICS_STORAGE_KEY, JSON.stringify({
+      phase: "retry-wait",
+      progress: "waiting safely",
+      runningParams: null,
+      isAutoMining: false,
+      autoResumeRequested: true,
+      sessionExpired: false,
+      lastErrorKind: "network",
+      lastErrorMessage: "temporary retry",
+      lastErrorRawMessage: "Bearer auto-miner-raw-secret https://auto-miner-secret.invalid/private",
+      lastStopReason: "retry-wait",
+      lastEpoch: "42",
+      retryCount: 2,
+      updatedAt: 1_700_000_000_000,
+    }));
+
+    loggerModule = await import("../app/lib/logger.ts?business-error-boundaries");
+    storage.setItem(LOGGER_STORAGE_KEY, "{not-json");
+    assert.equal(loggerModule.getLogCount(), 0);
+    assert.equal(storage.values.has(LOGGER_STORAGE_KEY), false);
+    assert.ok(storage.removals.includes(LOGGER_STORAGE_KEY), "corrupt support logs must be removed");
+
+    storage.setItem(LOGGER_STORAGE_KEY, JSON.stringify({ not: "an array" }));
+    assert.equal(loggerModule.getLogCount(), 0);
+    assert.equal(storage.values.has(LOGGER_STORAGE_KEY), false, "non-array support logs must be removed");
+
+    const legacyUrl = "https://legacy-logger-secret.invalid/private";
+    const legacyToken = "legacy-logger-token-must-not-export";
+    const legacyWallet = `0x${"12".repeat(20)}`;
+    storage.setItem(LOGGER_STORAGE_KEY, JSON.stringify([null, { lvl: "error" }, {
+      ts: "2026-08-13T00:00:00.000Z",
+      lvl: "error",
+      tag: "Legacy",
+      msg: `Bearer ${legacyToken} ${legacyUrl} ${"m".repeat(2_400)}`,
+      data: {
+        walletAddress: legacyWallet,
+        longText: "z".repeat(2_400),
+        many: Array.from({ length: 80 }, (_, index) => index),
+        manyKeys: Object.fromEntries(Array.from({ length: 80 }, (_, index) => [`key${index}`, index])),
+        deep: { a: { b: { c: { d: { e: { f: { hidden: legacyToken } } } } } } },
+      },
+    }]));
+    const legacyExport = loggerModule.exportLogs();
+    assert.doesNotMatch(legacyExport, new RegExp(`${legacyToken}|legacy-logger-secret|${legacyWallet}`, "i"));
+    assert.match(legacyExport, /<redacted>/);
+    assert.match(legacyExport, /<truncated>/);
+    assert.match(legacyExport, /"autoMiner"/);
+    assert.match(legacyExport, /"phase": "retry-wait"/);
+    assert.doesNotMatch(legacyExport, /auto-miner-raw-secret|auto-miner-secret/);
+    assert.match(legacyExport, /"origin": "<redacted>"/);
+    assert.doesNotMatch(legacyExport, /safe-logger-origin|href-secret-must-not-export|\/admin\?token=/);
+
+    loggerModule.clearLogs();
+    const liveToken = "live-logger-token-must-not-leak";
+    const liveUrl = "https://live-logger-secret.invalid/private";
+    const livePrivateKey = `0x${"ab".repeat(32)}`;
+    const liveWallet = `0x${"34".repeat(20)}`;
+    for (let index = 0; index < 505; index += 1) {
+      loggerModule.log.info("Capacity", `entry-${index}`);
+    }
+    loggerModule.log.error(
+      "Runtime",
+      `Bearer ${liveToken} ${liveUrl} ${livePrivateKey} ${"x".repeat(2_400)}`,
+      {
+        walletAddress: liveWallet,
+        bigint: 42n,
+        longText: "q".repeat(2_400),
+        many: Array.from({ length: 80 }, (_, index) => index),
+        manyKeys: Object.fromEntries(Array.from({ length: 80 }, (_, index) => [`key${index}`, index])),
+        deep: { a: { b: { c: { d: { e: { f: { hidden: liveToken } } } } } } },
+      },
+    );
+    assert.equal(queuedFlushes.length, 1, "support logger must coalesce persistence into one scheduled flush");
+    queuedFlushes.shift()();
+
+    assert.equal(consoleWarnings.length, 1, "runtime error logging must emit one sanitized console record");
+    const serializedConsole = JSON.stringify(consoleWarnings[0]);
+    assert.doesNotMatch(serializedConsole, new RegExp(`${liveToken}|live-logger-secret|${livePrivateKey}|${liveWallet}`, "i"));
+    const persisted = JSON.parse(storage.getItem(LOGGER_STORAGE_KEY));
+    assert.equal(persisted.length, 500, "persisted support logs must retain only the newest bounded window");
+    const persistedError = persisted.at(-1);
+    assert.equal(persistedError.tag, "Runtime");
+    assert.ok(persistedError.msg.length <= 2_014, "persisted logger messages must remain bounded");
+    assert.equal(persistedError.data.bigint, "42");
+    assert.equal(persistedError.data.longText.length <= 2_014, true);
+    assert.equal(persistedError.data.many.length, 51);
+    assert.equal(persistedError.data.many.at(-1), "<truncated>");
+    assert.equal(Object.keys(persistedError.data.manyKeys).length, 50);
+    assert.match(JSON.stringify(persistedError.data.deep), /<truncated>/);
+    assert.doesNotMatch(
+      JSON.stringify(persistedError),
+      new RegExp(`${liveToken}|live-logger-secret|${livePrivateKey}|${liveWallet}`, "i"),
+    );
+    assert.equal(loggerModule.getLogCount(), 500, "in-memory support log count must match the persisted cap after flush");
+    const liveExport = loggerModule.exportLogs();
+    assert.match(liveExport, /<Runtime>/);
+    assert.doesNotMatch(liveExport, /<Capacity> entry-(?:[0-9]|[1-3][0-9])\b/);
+    assert.doesNotMatch(
+      liveExport,
+      new RegExp(`${liveToken}|live-logger-secret|${livePrivateKey}|${liveWallet}|href-secret-must-not-export`, "i"),
+    );
+  } finally {
+    try {
+      loggerModule?.clearLogs();
+    } catch {
+      // Cleanup remains best-effort in the hermetic storage fixture.
+    }
+    console.warn = originalConsoleWarn;
+    restoreSetTimeout();
+    restoreStorage();
+    restoreWindow();
+  }
+}
 
 export async function runErrorBoundaryAndJsonTests() {
-  const loggerSource = readFileSync("app/lib/logger.ts", "utf8");
-  assert.match(loggerSource, /JSON\.stringify\(value, jsonReplacer, space\) \?\? "null"/);
-  assert.match(loggerSource, /sanitizeSupportLogPayload\(sanitize\(data\)\)/);
-  assert.match(
-    loggerSource,
-    /MAX_LOG_STRING_LENGTH[\s\S]*MAX_LOG_ARRAY_ITEMS[\s\S]*MAX_LOG_OBJECT_KEYS[\s\S]*MAX_LOG_DEPTH[\s\S]*function clampSupportLogValue/,
-    "support logger must bound string, array, object, and depth growth before persistence/export",
-  );
-  assert.match(
-    loggerSource,
-    /safeData = data !== undefined \? clampSupportLogValue\(sanitizeSupportLogPayload\(sanitize\(data\)\)\)/,
-    "support logger must redact and clamp structured log data before storing or printing it",
-  );
-  assert.match(
-    loggerSource,
-    /msg: clampLogString\(sanitizeSupportLogPayload\(msg\)\)/,
-    "support logger must redact and clamp log messages before storing or printing them",
-  );
-  assert.match(
-    loggerSource,
-    /clampSupportLogValue\(sanitizeSupportLogPayload\(parsed\)\)/,
-    "support log loader must clamp legacy oversized entries before returning the buffer",
-  );
-  assert.match(
-    loggerSource,
-    /clampSupportLogValue\(sanitizeSupportLogPayload\(buffer\)\)/,
-    "support log export must clamp persisted entries before rendering the text artifact",
-  );
-  assert.match(loggerSource, /writeError\(`\[\$\{tag\}\]`, entry\.msg, safeData/);
-  assert.doesNotMatch(loggerSource, /window\.location\.href/);
-  assert.match(
-    loggerSource,
-    /autoMiner:\s*getAutoMineSupportDiagnostics\(readAutoMineDiagnostics\(\)\)/,
-    "support log export must include the safe persisted Auto-Miner snapshot",
-  );
-  assert.match(
-    loggerSource,
-    /const parsed = JSON\.parse\(raw\) as unknown[\s\S]*if \(!Array\.isArray\(parsed\)\)[\s\S]*localStorage\.removeItem\(STORAGE_KEY\)/,
-    "support log loader must clear corrupt or invalid localStorage instead of returning a non-array buffer",
-  );
-  assert.match(loggerSource, /safeMeta\s*=\s*clampSupportLogValue\(sanitizeSupportLogPayload\(meta\)\)/);
+  assertLoggerSanitizerFaultIsCaught();
+  await runSupportLoggerBehaviorTests();
   assert.match(
     readFileSync("app/hooks/useSound.ts", "utf8"),
     /const raw = localStorage\.getItem\(SOUND_SETTINGS_KEY\)[\s\S]*localStorage\.removeItem\(SOUND_SETTINGS_KEY\)/,
@@ -56,11 +256,6 @@ export async function runErrorBoundaryAndJsonTests() {
     /const stored = localStorage\.getItem\(STORAGE_KEY\)[\s\S]*stored !== null && stored !== "true"[\s\S]*localStorage\.removeItem\(STORAGE_KEY\)/,
     "sound muted restore must clear invalid localStorage values",
   );
-  const routeErrorSource = readFileSync("app/api/_lib/routeError.ts", "utf8");
-  assert.match(routeErrorSource, /describeSafeRouteError\(error\)/);
-  assert.match(routeErrorSource, /describeSafeRouteLabel\(route\)/);
-  assert.match(routeErrorSource, /sanitizeSentryPayload\(describeRouteError\(error\)\)/);
-  assert.match(routeErrorSource, /sanitizeSentryPayload\(extra\)/);
   const safePublicRouteError = routeError.describeSafeRouteError(
     new Error(`rpc_url=https://rpc.example.test/private Bearer synthetic-token privateKey=${"a".repeat(64)} wallet=0x1111111111111111111111111111111111111111`),
   );

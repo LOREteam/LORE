@@ -97,6 +97,29 @@ export async function runRuntimeMonitorAlertTests() {
     false,
     "runtime monitor must not treat invalid Resend email addresses as configured",
   );
+  for (const recipients of [
+    "",
+    "ops@playlore.xyz,,security@playlore.xyz",
+    Array.from({ length: 11 }, (_, index) => `ops${index}@playlore.xyz`).join(","),
+    `ops@playlore.xyz,${"x".repeat(255)}@playlore.xyz`,
+  ]) {
+    let fetchCalls = 0;
+    const sender = runtimeMonitor.createResendAlertSender({
+      env: {
+        RESEND_API_KEY: "re_synthetic",
+        RUNTIME_MONITOR_EMAIL_FROM: "LORE <alerts@playlore.xyz>",
+        RUNTIME_MONITOR_EMAIL_TO: recipients,
+      },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true };
+      },
+      now: () => 1_000,
+    });
+    assert.equal(sender.configured, false, "malformed or over-limit recipient lists must fail closed");
+    assert.equal(await sender.send("ALERT: synthetic", "invalid-recipients", 0), false);
+    assert.equal(fetchCalls, 0, "invalid recipient lists must never reach the delivery adapter");
+  }
 
   let resendRequestBody = null;
   const validResendSender = runtimeMonitor.createResendAlertSender({
@@ -120,4 +143,26 @@ export async function runRuntimeMonitorAlertTests() {
   assert.equal(await validResendSender.send("ALERT: synthetic", "synthetic-alert", 0), true);
   assert.deepEqual(resendRequestBody?.to, ["playlore88@gmail.com", "ops@playlore.xyz"]);
   assert.equal(resendRequestBody?.from, "LORE <alerts@playlore.xyz>");
+  assert.equal(
+    await validResendSender.send("ALERT: duplicate", "synthetic-alert", 300_000),
+    false,
+    "successful runtime alerts must enter cooldown",
+  );
+
+  let failedDeliveryCalls = 0;
+  const retryableResendSender = runtimeMonitor.createResendAlertSender({
+    env: {
+      RESEND_API_KEY: "re_synthetic",
+      RUNTIME_MONITOR_EMAIL_FROM: "alerts@playlore.xyz",
+      RUNTIME_MONITOR_EMAIL_TO: "ops@playlore.xyz",
+    },
+    fetchImpl: async () => {
+      failedDeliveryCalls += 1;
+      return { ok: failedDeliveryCalls > 1 };
+    },
+    now: () => 1_000_000,
+  });
+  assert.equal(await retryableResendSender.send("ALERT: retryable", "delivery-retry", 300_000), false);
+  assert.equal(await retryableResendSender.send("ALERT: retryable", "delivery-retry", 300_000), true);
+  assert.equal(failedDeliveryCalls, 2, "failed delivery must not poison cooldown and suppress the retry");
 }

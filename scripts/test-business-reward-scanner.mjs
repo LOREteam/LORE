@@ -1,6 +1,50 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as rewardScannerModule from "../app/hooks/useRewardScanner.ts";
+import * as rewardScanPolicyModule from "../app/lib/rewardScanPolicy.ts";
+
+const rewardScanPolicy = rewardScanPolicyModule.default ?? rewardScanPolicyModule;
+
+function assertAutomaticRewardScanBounds(candidate) {
+  assert.deepEqual(candidate(0n), { startEpoch: 0n, minEpoch: 1n, quickMinEpoch: 1n });
+  assert.deepEqual(candidate(1n), { startEpoch: 0n, minEpoch: 1n, quickMinEpoch: 1n });
+  assert.deepEqual(candidate(2n), { startEpoch: 1n, minEpoch: 1n, quickMinEpoch: 1n });
+  assert.deepEqual(candidate(1_501n), { startEpoch: 1_500n, minEpoch: 1n, quickMinEpoch: 1n });
+  assert.deepEqual(candidate(1_502n), { startEpoch: 1_501n, minEpoch: 1n, quickMinEpoch: 2n });
+  assert.deepEqual(candidate(5_001n), { startEpoch: 5_000n, minEpoch: 1n, quickMinEpoch: 3_501n });
+  assert.deepEqual(candidate(5_002n), { startEpoch: 5_001n, minEpoch: 2n, quickMinEpoch: 3_502n });
+}
+
+function assertRewardSelectionPolicy(candidate) {
+  const result = candidate({
+    potentialWins: [
+      { id: 9n, rewardPool: 100n },
+      { id: 8n, rewardPool: 100n },
+      { id: 7n, rewardPool: 1n },
+      { id: 6n, rewardPool: 100n },
+      { id: 5n, rewardPool: 100n },
+    ],
+    betResults: [{ result: 5n }, { result: 5n }, { result: 1n }, { result: 0n }, {}],
+    tilePoolResults: [{ result: 10n }, { result: 10n }, { result: 10n }, { result: 10n }, { result: 10n }],
+    resolvedAtResults: [
+      { result: 10n },
+      { result: 9n },
+      { result: 0n },
+      { result: 10n },
+      { result: 10n },
+    ],
+    chainTimestamp: 10n + rewardScanPolicy.REWARD_CLAIM_WINDOW_SECONDS - 1n,
+  });
+  assert.deepEqual(result, [{ epoch: "9", amountWei: "50" }]);
+
+  assert.deepEqual(candidate({
+    potentialWins: [{ id: 9n, rewardPool: 100n }],
+    betResults: [{ result: 5n }],
+    tilePoolResults: [{ result: 10n }],
+    resolvedAtResults: [{ result: 10n }],
+    chainTimestamp: 10n + rewardScanPolicy.REWARD_CLAIM_WINDOW_SECONDS,
+  }), []);
+}
 
 export function runRewardScannerTests() {
   const rewardScanner = rewardScannerModule.default ?? rewardScannerModule;
@@ -53,13 +97,52 @@ export function runRewardScannerTests() {
     "Reward claim hit a wallet or RPC issue. Check wallet activity before retrying.",
   );
 
+  assert.equal(rewardScanPolicy.AUTOMATIC_REWARD_SCAN_DEPTH, 5_000n);
+  assertAutomaticRewardScanBounds(rewardScanPolicy.getAutomaticRewardScanBounds);
+  const chunks = [...rewardScanPolicy.iterateDescendingRewardScanEpochChunks(10n, 3n, 3n)];
+  assert.deepEqual(chunks, [[10n, 9n, 8n], [7n, 6n, 5n], [4n, 3n]]);
+  assert.deepEqual(chunks.flat(), [10n, 9n, 8n, 7n, 6n, 5n, 4n, 3n]);
+  assert.deepEqual([...rewardScanPolicy.iterateDescendingRewardScanEpochChunks(2n, 3n, 3n)], []);
+  assert.throws(
+    () => [...rewardScanPolicy.iterateDescendingRewardScanEpochChunks(10n, 3n, 0n)],
+    /positive/,
+  );
+  assert.deepEqual(rewardScanPolicy.chunkRewardScanItems([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
+  assert.throws(() => rewardScanPolicy.chunkRewardScanItems([1], 0), /positive safe integer/);
+  assertRewardSelectionPolicy(rewardScanPolicy.collectOpenRewardScanWins);
+
+  assert.throws(
+    () => assertAutomaticRewardScanBounds((epoch) => ({
+      startEpoch: epoch > 1n ? epoch - 1n : 0n,
+      minEpoch: epoch > 4_999n ? epoch - 4_999n : 1n,
+      quickMinEpoch: epoch > 1_500n ? epoch - 1_500n : 1n,
+    })),
+    /Expected values to be strictly deep-equal/,
+    "off-by-one scan-depth mutant must be killed",
+  );
+  assert.throws(
+    () => assert.deepEqual(
+      [...rewardScanPolicy.iterateDescendingRewardScanEpochChunks(10n, 3n, 3n)].slice(0, 1).flat(),
+      [10n, 9n, 8n, 7n, 6n, 5n, 4n, 3n],
+    ),
+    /Expected values to be strictly deep-equal/,
+    "empty-first-chunk early-stop mutant must be killed",
+  );
+  assert.throws(
+    () => assertRewardSelectionPolicy((input) => rewardScanPolicy.collectOpenRewardScanWins({
+      ...input,
+      resolvedAtResults: input.resolvedAtResults.map(() => ({ result: 0n })),
+    })),
+    /Expected values to be strictly deep-equal/,
+    "missing claim-finality timestamp binding mutant must be killed",
+  );
+
   const rewardScannerSource = readFileSync("app/hooks/useRewardScanner.ts", "utf8");
   const rewardScannerComponentSource = readFileSync("app/components/RewardScanner.tsx", "utf8");
-  assert.match(rewardScannerSource, /MAX_SCAN_DEPTH\s*=\s*BigInt\(5000\)/, "automatic reward scan depth must remain at 5000 epochs");
-  assert.doesNotMatch(
+  assert.match(
     rewardScannerSource,
-    /MAX_CONSECUTIVE_EMPTY|consecutiveEmpty\s*>?=/,
-    "automatic reward scans must not silently truncate the configured 5000-epoch search after empty chunks",
+    /wins\.push\(\.\.\.collectOpenRewardScanWins\(\{[\s\S]*potentialWins,[\s\S]*betResults,[\s\S]*tilePoolResults,[\s\S]*resolvedAtResults,[\s\S]*chainTimestamp,[\s\S]*\}\)\)/,
+    "automatic reward scan must bind aligned multicall results to the tested claim-window policy",
   );
   assert.match(rewardScannerSource, /getExplorerTxUrl/, "single reward claim notifications must include explorer links when a tx hash is available");
   assert.match(
@@ -73,20 +156,12 @@ export function runRewardScannerTests() {
     /preferredAddress[\s\S]*const \{ address: connectedAddress \} = useAccount\(\)[\s\S]*getAddress\(candidate\)/,
     "reward scanning and claiming must prefer the canonical embedded wallet actor over the connected wallet",
   );
-  assert.match(
-    rewardScannerSource,
-    /for \(let offset = 0; offset < cached\.wins\.length; offset \+= REWARD_SCAN_CHUNK_SIZE_NUMBER\)[\s\S]*cachedWinChunk = cached\.wins\.slice\(offset, offset \+ REWARD_SCAN_CHUNK_SIZE_NUMBER\)[\s\S]*scanAbortRef\.current/,
-    "reward scanner must revalidate cached wins in bounded abort-aware chunks",
-  );
   const lineaOreHubRuntimeSource = readFileSync("app/hooks/useLineaOreHubRuntime.ts", "utf8");
   assert.match(
     lineaOreHubRuntimeSource,
     /useRewardScanner[\s\S]*enabled: activeTab === "hub" && Boolean\(embeddedWalletAddress\)[\s\S]*preferredAddress: embeddedWalletAddress[\s\S]*sendTransactionSilent: miningSendTransactionSilent/,
     "hub rewards must scan the same embedded wallet that submits claims",
   );
-  assert.match(rewardScannerSource, /functionName:\s*"epochResolvedAt"[\s\S]*isRewardClaimWindowOpen/, "automatic reward scans must remove expired candidates without adding reads for every scanned epoch");
-  const deepRewardScannerSource = readFileSync("app/hooks/useDeepRewardScan.ts", "utf8");
-  assert.match(deepRewardScannerSource, /functionName:\s*"epochResolvedAt"[\s\S]*isRewardClaimWindowOpen/, "deep reward scans must apply the same on-chain claim deadline");
   assert.match(rewardScannerSource, /lastRewardClaimTxHash/, "batch reward claim notifications must keep the latest tx hash for explorer links");
   assert.match(
     rewardScannerComponentSource,
@@ -104,6 +179,11 @@ export function runRewardScannerTests() {
   assert.match(rewardScannerSource, /activeClaimAddressRef\.current = address\?\.toLowerCase\(\)[\s\S]*const claimActor = address\.toLowerCase\(\)[\s\S]*activeClaimAddressRef\.current !== claimActor[\s\S]*claimActorChanged/, "reward claims must stop sends and stale state updates when the active wallet changes");
 
   const deepRewardScanSource = readFileSync("app/hooks/useDeepRewardScan.ts", "utf8");
+  assert.match(
+    deepRewardScanSource,
+    /found\.push\(\.\.\.collectOpenRewardScanWins\(\{[\s\S]*potentialWins,[\s\S]*betResults,[\s\S]*tilePoolResults,[\s\S]*resolvedAtResults,[\s\S]*chainTimestamp,[\s\S]*\}\)\)/,
+    "deep reward scan must bind aligned multicall results to the tested claim-window policy",
+  );
   assert.match(deepRewardScanSource, /getExplorerTxUrl/, "deep reward claim notifications must include explorer links when a tx hash is available");
   assert.match(deepRewardScanSource, /readJsonResponse<ClaimCandidatePage>/, "deep reward candidate scans must use the bounded JSON response helper");
   assert.match(deepRewardScanSource, /import \{ fetchWithTimeout \} from "\.\.\/lib\/fetchWithTimeout";[\s\S]*fetchWithTimeout\(`\/api\/claim-candidates\?\$\{query\.toString\(\)\}`,\s*\{ cache: "no-store" \}\)/, "deep reward candidate scans must use the shared fetch timeout helper");

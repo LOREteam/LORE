@@ -1,12 +1,24 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import * as appShellStateModule from "../app/hooks/useAppShellState.ts";
 import * as lineaOreClientViewPropsModule from "../app/lib/lineaOreClientViewProps.ts";
 import * as indexerFinalityModule from "../app/lib/indexerFinality.ts";
 import * as indexerWatchPolicyModule from "../app/lib/indexerWatchPolicy.ts";
 import * as chatSessionClientModule from "../app/lib/chatSessionClient.ts";
 import * as chatAuthModule from "../app/lib/chatAuth.ts";
+import * as chatAuthRuntimeModule from "../app/lib/chatAuthRuntime.ts";
+import * as chatSessionModule from "../app/api/_lib/chatSession.ts";
+import * as chatSendStateModule from "../app/lib/chatSendState.ts";
+import * as chatRuntimePolicyModule from "../app/lib/chatRuntimePolicy.ts";
+import * as chatProfileRuntimeModule from "../app/lib/chatProfileRuntime.ts";
+import * as chatWalletRuntimeModule from "../app/lib/chatWalletRuntime.ts";
+import * as chatProfileReadPolicyModule from "../app/api/chat/profile/readPolicy.ts";
+import * as chatProfileModalModule from "../app/components/chat/ChatProfileModal.tsx";
+import * as chatWindowModule from "../app/components/chat/ChatWindow.tsx";
+import * as headerWalletCardModule from "../app/components/header/HeaderWalletCard.tsx";
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   const entries = readdirSync(root, { withFileTypes: true });
@@ -21,28 +33,816 @@ const indexerFinality = indexerFinalityModule.default ?? indexerFinalityModule;
 const indexerWatchPolicy = indexerWatchPolicyModule.default ?? indexerWatchPolicyModule;
 const chatSessionClient = chatSessionClientModule.default ?? chatSessionClientModule;
 const chatAuth = chatAuthModule.default ?? chatAuthModule;
+const chatAuthRuntime = chatAuthRuntimeModule.default ?? chatAuthRuntimeModule;
+const chatSession = chatSessionModule.default ?? chatSessionModule;
+const chatSendState = chatSendStateModule.default ?? chatSendStateModule;
+const chatRuntimePolicy = chatRuntimePolicyModule.default ?? chatRuntimePolicyModule;
+const chatProfileRuntime = chatProfileRuntimeModule.default ?? chatProfileRuntimeModule;
+const chatWalletRuntime = chatWalletRuntimeModule.default ?? chatWalletRuntimeModule;
+const chatProfileReadPolicy = chatProfileReadPolicyModule.default ?? chatProfileReadPolicyModule;
+const chatProfileModal = chatProfileModalModule.default ?? chatProfileModalModule;
+const chatWindow = chatWindowModule.default ?? chatWindowModule;
+const headerWalletCard = headerWalletCardModule.default ?? headerWalletCardModule;
 
-export function runChatAndClientSafetyTests() {
+const CHAT_PROFILE_ADDRESS_A = "0x1111111111111111111111111111111111111111";
+const CHAT_PROFILE_ADDRESS_B = "0x2222222222222222222222222222222222222222";
+const CHAT_PROFILE_ADDRESS_C = "0x3333333333333333333333333333333333333333";
+
+function uppercaseHexAddress(address) {
+  return `0x${address.slice(2).toUpperCase()}`;
+}
+
+function assertChatProfileReadScopePolicy(candidate) {
+  assert.deepEqual(candidate(null, null), {
+    ok: false,
+    error: "walletAddress or walletAddresses is required",
+  });
+  assert.deepEqual(candidate(" 0x1111111111111111111111111111111111111111 ", null), {
+    ok: true,
+    kind: "single",
+    walletAddress: CHAT_PROFILE_ADDRESS_A,
+  });
+  assert.deepEqual(candidate("0x1234", null), {
+    ok: false,
+    error: "Invalid walletAddress",
+  });
+  assert.deepEqual(
+    candidate(null, `${CHAT_PROFILE_ADDRESS_A}, ${CHAT_PROFILE_ADDRESS_A},${CHAT_PROFILE_ADDRESS_B}`),
+    {
+      ok: true,
+      kind: "batch",
+      walletAddresses: [CHAT_PROFILE_ADDRESS_A, CHAT_PROFILE_ADDRESS_B],
+    },
+  );
+  assert.deepEqual(candidate(null, ""), {
+    ok: false,
+    error: "Invalid walletAddresses",
+  });
+  assert.deepEqual(candidate(null, " , , "), {
+    ok: false,
+    error: "Invalid walletAddresses",
+  });
+  assert.deepEqual(candidate(null, `${CHAT_PROFILE_ADDRESS_A},0x1234`), {
+    ok: false,
+    error: "Invalid walletAddresses",
+  });
+
+  const oneHundredAddresses = Array.from(
+    { length: chatProfileReadPolicy.MAX_REQUESTED_CHAT_PROFILE_WALLETS },
+    () => CHAT_PROFILE_ADDRESS_A,
+  ).join(",");
+  assert.deepEqual(candidate(null, oneHundredAddresses), {
+    ok: true,
+    kind: "batch",
+    walletAddresses: [CHAT_PROFILE_ADDRESS_A],
+  });
+  assert.deepEqual(candidate(null, `${oneHundredAddresses},${CHAT_PROFILE_ADDRESS_B}`), {
+    ok: false,
+    error: "Too many walletAddresses",
+  });
+
+  assert.deepEqual(candidate(CHAT_PROFILE_ADDRESS_A, "0x1234"), {
+    ok: true,
+    kind: "single",
+    walletAddress: CHAT_PROFILE_ADDRESS_A,
+  });
+  assert.deepEqual(candidate(CHAT_PROFILE_ADDRESS_A, ""), {
+    ok: false,
+    error: "Invalid walletAddresses",
+  });
+}
+
+export function runChatProfileReadScopeTests() {
+  assertChatProfileReadScopePolicy(chatProfileReadPolicy.parseChatProfileReadScope);
+  const overLimitBatch = Array.from(
+    { length: chatProfileReadPolicy.MAX_REQUESTED_CHAT_PROFILE_WALLETS + 1 },
+    () => CHAT_PROFILE_ADDRESS_A,
+  ).join(",");
+  let overLimitNormalizerCalls = 0;
+  assert.deepEqual(
+    chatProfileReadPolicy.parseChatProfileReadScope(null, overLimitBatch, () => {
+      overLimitNormalizerCalls += 1;
+      return CHAT_PROFILE_ADDRESS_A;
+    }),
+    { ok: false, error: "Too many walletAddresses" },
+  );
+  assert.equal(
+    overLimitNormalizerCalls,
+    0,
+    "over-limit profile batches must fail before attacker-controlled normalization work",
+  );
+
+  assert.throws(
+    () => assertChatProfileReadScopePolicy((walletAddress, walletAddressesParam) => {
+      if (walletAddressesParam?.split(",").filter(Boolean).length === 101) {
+        return chatProfileReadPolicy.parseChatProfileReadScope(
+          walletAddress,
+          walletAddressesParam.split(",").slice(0, 100).join(","),
+        );
+      }
+      return chatProfileReadPolicy.parseChatProfileReadScope(walletAddress, walletAddressesParam);
+    }),
+    /Expected values to be strictly deep-equal/,
+    "silent batch truncation mutant must be killed",
+  );
+  assert.throws(
+    () => assertChatProfileReadScopePolicy((walletAddress, walletAddressesParam) => {
+      const result = chatProfileReadPolicy.parseChatProfileReadScope(walletAddress, walletAddressesParam);
+      return result.ok || result.error !== "Invalid walletAddresses" || !walletAddressesParam
+        ? result
+        : { ok: true, kind: "batch", walletAddresses: [String(walletAddressesParam).toLowerCase()] };
+    }),
+    /Expected values to be strictly deep-equal/,
+    "unchecked batch-address normalization mutant must be killed",
+  );
+  assert.throws(
+    () => assertChatProfileReadScopePolicy((walletAddress, walletAddressesParam) => {
+      const result = chatProfileReadPolicy.parseChatProfileReadScope(walletAddress, walletAddressesParam);
+      return !result.ok && result.error === "walletAddress or walletAddresses is required"
+        ? { ok: true, kind: "batch", walletAddresses: [] }
+        : result;
+    }),
+    /Expected values to be strictly deep-equal/,
+    "implicit list-all fallback mutant must be killed",
+  );
+  assert.throws(
+    () => assertChatProfileReadScopePolicy((walletAddress, walletAddressesParam) => {
+      const result = chatProfileReadPolicy.parseChatProfileReadScope(walletAddress, walletAddressesParam);
+      if (result.ok && result.kind === "batch" && walletAddressesParam?.includes(",")) {
+        return {
+          ...result,
+          walletAddresses: walletAddressesParam.split(",").map((value) => value.trim()),
+        };
+      }
+      return result;
+    }),
+    /Expected values to be strictly deep-equal/,
+    "missing batch de-duplication mutant must be killed",
+  );
+}
+
+function createChatProfileStorage(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  const writes = [];
+  const removals = [];
+  return {
+    values,
+    writes,
+    removals,
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    setItem(key, value) {
+      writes.push({ key, value });
+      values.set(key, value);
+    },
+    removeItem(key) {
+      removals.push(key);
+      values.delete(key);
+    },
+  };
+}
+
+async function assertChatProfileRuntimeBehavior(runtime) {
+  const keyA = `${runtime.CHAT_PROFILE_STORAGE_KEY_PREFIX}${CHAT_PROFILE_ADDRESS_A}`;
+  const keyB = `${runtime.CHAT_PROFILE_STORAGE_KEY_PREFIX}${CHAT_PROFILE_ADDRESS_B}`;
+  assert.equal(
+    runtime.getChatProfileStorageKey(` ${uppercaseHexAddress(CHAT_PROFILE_ADDRESS_A)} `),
+    keyA,
+    "chat profile cache keys must use the canonical wallet address",
+  );
+  assert.equal(
+    runtime.getChatProfileStorageKey("0x1234"),
+    runtime.CHAT_PROFILE_LEGACY_STORAGE_KEY,
+    "invalid wallet addresses must not create a wallet-scoped cache key",
+  );
+
+  const currentStorage = createChatProfileStorage({
+    [keyA]: JSON.stringify({
+      name: "  Twenty-character-naME-overflow ",
+      avatar: "miner-helmet",
+      customAvatar: "not-an-image",
+      updatedAt: Number.NaN,
+    }),
+    unrelated: "preserve",
+  });
+  assert.deepEqual(runtime.readChatProfileCache(currentStorage, CHAT_PROFILE_ADDRESS_A), {
+    name: "Twenty-character-naME".slice(0, runtime.CHAT_PROFILE_NAME_MAX),
+    avatar: "miner-helmet",
+    customAvatar: null,
+    updatedAt: 0,
+  });
+  assert.equal(currentStorage.values.get("unrelated"), "preserve");
+
+  const corruptCurrentStorage = createChatProfileStorage({
+    [keyA]: "{",
+    [runtime.CHAT_PROFILE_LEGACY_STORAGE_KEY]: JSON.stringify({ name: "Legacy" }),
+    unrelated: "preserve",
+  });
+  assert.deepEqual(
+    runtime.readChatProfileCache(corruptCurrentStorage, CHAT_PROFILE_ADDRESS_A),
+    runtime.emptyChatProfile(),
+    "a corrupt wallet-scoped profile must fail closed instead of falling back across scopes",
+  );
+  assert.deepEqual(corruptCurrentStorage.removals, [keyA]);
+  assert.equal(corruptCurrentStorage.values.has(runtime.CHAT_PROFILE_LEGACY_STORAGE_KEY), true);
+  assert.equal(corruptCurrentStorage.values.get("unrelated"), "preserve");
+
+  const legacyStorage = createChatProfileStorage({
+    [runtime.CHAT_PROFILE_LEGACY_STORAGE_KEY]: JSON.stringify({
+      name: " Legacy Miner ",
+      avatar: "crossed-picks",
+      customAvatar: null,
+      updatedAt: 42,
+    }),
+    unrelated: "preserve",
+  });
+  const migrated = runtime.readChatProfileCache(legacyStorage, CHAT_PROFILE_ADDRESS_A);
+  assert.deepEqual(migrated, {
+    name: "Legacy Miner",
+    avatar: "crossed-picks",
+    customAvatar: null,
+    updatedAt: 42,
+  });
+  assert.deepEqual(JSON.parse(legacyStorage.values.get(keyA)), migrated);
+  assert.equal(
+    legacyStorage.values.has(runtime.CHAT_PROFILE_LEGACY_STORAGE_KEY),
+    false,
+    "successful legacy migration must consume the global key exactly once",
+  );
+  assert.deepEqual(
+    runtime.readChatProfileCache(legacyStorage, CHAT_PROFILE_ADDRESS_B),
+    runtime.emptyChatProfile(),
+    "one wallet's migrated legacy profile must not restore into another wallet",
+  );
+  assert.equal(legacyStorage.values.has(keyB), false);
+  assert.equal(legacyStorage.values.get("unrelated"), "preserve");
+
+  const failedMigrationStorage = createChatProfileStorage({
+    [runtime.CHAT_PROFILE_LEGACY_STORAGE_KEY]: JSON.stringify({ name: "Legacy" }),
+  });
+  failedMigrationStorage.setItem = () => {
+    throw new Error("quota");
+  };
+  assert.deepEqual(
+    runtime.readChatProfileCache(failedMigrationStorage, CHAT_PROFILE_ADDRESS_A),
+    runtime.emptyChatProfile(),
+    "failed wallet-scoped publication must fail closed",
+  );
+  assert.equal(
+    failedMigrationStorage.values.has(runtime.CHAT_PROFILE_LEGACY_STORAGE_KEY),
+    false,
+    "failed publication must not leave a globally reusable legacy profile",
+  );
+  assert.equal(failedMigrationStorage.values.has(keyA), false);
+
+  const corruptLegacyStorage = createChatProfileStorage({
+    [runtime.CHAT_PROFILE_LEGACY_STORAGE_KEY]: "[]",
+    unrelated: "preserve",
+  });
+  assert.deepEqual(
+    runtime.readChatProfileCache(corruptLegacyStorage, CHAT_PROFILE_ADDRESS_A),
+    runtime.emptyChatProfile(),
+  );
+  assert.deepEqual(corruptLegacyStorage.removals, [runtime.CHAT_PROFILE_LEGACY_STORAGE_KEY]);
+  assert.equal(corruptLegacyStorage.values.get("unrelated"), "preserve");
+
+  const persistedStorage = createChatProfileStorage();
+  runtime.persistChatProfileCache(persistedStorage, uppercaseHexAddress(CHAT_PROFILE_ADDRESS_B), migrated);
+  assert.deepEqual(persistedStorage.writes, [{ key: keyB, value: JSON.stringify(migrated) }]);
+
+  let invalidFetchCalls = 0;
+  assert.equal(
+    await runtime.fetchRemoteChatProfile("0x1234", async () => {
+      invalidFetchCalls += 1;
+      throw new Error("must not run");
+    }),
+    null,
+  );
+  assert.equal(invalidFetchCalls, 0);
+
+  const fetchCalls = [];
+  const fetched = await runtime.fetchRemoteChatProfile(
+    ` ${uppercaseHexAddress(CHAT_PROFILE_ADDRESS_A)} `,
+    async (input, init) => {
+      fetchCalls.push({ input: String(input), init });
+      return new Response(JSON.stringify({ profile: { name: " Remote ", avatar: "miner-helmet", updatedAt: 7 } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  );
+  assert.deepEqual(fetchCalls, [{
+    input: `/api/chat/profile?walletAddress=${CHAT_PROFILE_ADDRESS_A}`,
+    init: { cache: "no-store" },
+  }]);
+  assert.deepEqual(fetched, {
+    name: "Remote",
+    avatar: "miner-helmet",
+    customAvatar: null,
+    updatedAt: 7,
+  });
+
+  const saveCalls = [];
+  await runtime.saveRemoteChatProfile(
+    ` ${uppercaseHexAddress(CHAT_PROFILE_ADDRESS_B)} `,
+    { name: "Miner", avatar: null, customAvatar: null },
+    {
+      now: () => 123,
+      fetcher: async (input, init) => {
+        saveCalls.push({ input: String(input), init });
+        return new Response(null, { status: 204 });
+      },
+    },
+  );
+  assert.equal(saveCalls.length, 1);
+  assert.equal(saveCalls[0].input, "/api/chat/profile");
+  assert.equal(saveCalls[0].init.method, "PUT");
+  assert.deepEqual(saveCalls[0].init.headers, { "Content-Type": "application/json" });
+  assert.deepEqual(JSON.parse(saveCalls[0].init.body), {
+    walletAddress: CHAT_PROFILE_ADDRESS_B,
+    name: "Miner",
+    avatar: null,
+    customAvatar: null,
+    updatedAt: 123,
+  });
+
+  let oversizedBodyReads = 0;
+  await assert.rejects(
+    runtime.saveRemoteChatProfile(CHAT_PROFILE_ADDRESS_A, migrated, {
+      fetcher: async () => ({
+        ok: false,
+        status: 500,
+        headers: new Headers({
+          "Content-Type": "application/json",
+          "Content-Length": String(2 * 1024 * 1024 + 1),
+        }),
+        body: {
+          getReader() {
+            oversizedBodyReads += 1;
+            throw new Error("oversized body must not be read");
+          },
+        },
+      }),
+    }),
+    (error) => error instanceof Error && error.message === "HTTP 500",
+    "profile save failures must remain bounded and must not expose server response text",
+  );
+  assert.equal(oversizedBodyReads, 0, "oversized profile errors must reject before body consumption");
+}
+
+export async function runChatProfileRuntimeTests() {
+  await assertChatProfileRuntimeBehavior(chatProfileRuntime);
+  await assert.rejects(
+    assertChatProfileRuntimeBehavior({
+      ...chatProfileRuntime,
+      readChatProfileCache(storage, walletAddress) {
+        const value = chatProfileRuntime.readChatProfileCache(storage, walletAddress);
+        if (walletAddress && value.name) {
+          storage.setItem(chatProfileRuntime.CHAT_PROFILE_LEGACY_STORAGE_KEY, JSON.stringify(value));
+        }
+        return value;
+      },
+    }),
+    /successful legacy migration must consume the global key exactly once/,
+    "non-consuming legacy migration mutant must be killed",
+  );
+  await assert.rejects(
+    assertChatProfileRuntimeBehavior({
+      ...chatProfileRuntime,
+      getChatProfileStorageKey(walletAddress) {
+        return `${chatProfileRuntime.CHAT_PROFILE_STORAGE_KEY_PREFIX}${String(walletAddress).trim().toLowerCase()}`;
+      },
+    }),
+    /invalid wallet addresses must not create a wallet-scoped cache key/,
+    "unchecked wallet-key normalization mutant must be killed",
+  );
+}
+
+function assertChatWalletRuntimeBehavior(runtime) {
+  assert.equal(runtime.normalizeChatWalletCandidate("0x1234"), null);
+  assert.equal(
+    runtime.normalizeChatWalletCandidate(` ${uppercaseHexAddress(CHAT_PROFILE_ADDRESS_A)} `),
+    CHAT_PROFILE_ADDRESS_A,
+  );
+  assert.deepEqual(
+    runtime.normalizeChatWalletCandidates([
+      null,
+      "0x1234",
+      CHAT_PROFILE_ADDRESS_A,
+      uppercaseHexAddress(CHAT_PROFILE_ADDRESS_A),
+      CHAT_PROFILE_ADDRESS_B,
+    ]),
+    [CHAT_PROFILE_ADDRESS_A, CHAT_PROFILE_ADDRESS_B],
+    "chat wallet candidates must be canonical, valid, ordered, and de-duplicated",
+  );
+
+  const storedCandidate = createChatProfileStorage({
+    [runtime.CHAT_WALLET_STORAGE_KEY]: uppercaseHexAddress(CHAT_PROFILE_ADDRESS_B),
+  });
+  assert.equal(
+    runtime.selectStableChatWalletAddress(
+      storedCandidate,
+      [CHAT_PROFILE_ADDRESS_A, CHAT_PROFILE_ADDRESS_B],
+    ),
+    CHAT_PROFILE_ADDRESS_B,
+  );
+  assert.deepEqual(storedCandidate.removals, []);
+  assert.equal(
+    runtime.selectStableChatWalletAddress(
+      storedCandidate,
+      [CHAT_PROFILE_ADDRESS_A, CHAT_PROFILE_ADDRESS_B],
+      CHAT_PROFILE_ADDRESS_A,
+    ),
+    CHAT_PROFILE_ADDRESS_A,
+    "an active allowed address must remain stable without a storage override",
+  );
+
+  const staleCandidate = createChatProfileStorage({
+    [runtime.CHAT_WALLET_STORAGE_KEY]: CHAT_PROFILE_ADDRESS_C,
+    unrelated: "preserve",
+  });
+  assert.equal(
+    runtime.selectStableChatWalletAddress(
+      staleCandidate,
+      [CHAT_PROFILE_ADDRESS_A, CHAT_PROFILE_ADDRESS_B],
+    ),
+    CHAT_PROFILE_ADDRESS_A,
+  );
+  assert.deepEqual(staleCandidate.removals, [runtime.CHAT_WALLET_STORAGE_KEY]);
+  assert.equal(staleCandidate.values.get("unrelated"), "preserve");
+
+  const failingRead = createChatProfileStorage();
+  failingRead.getItem = () => {
+    throw new Error("private mode");
+  };
+  assert.equal(
+    runtime.selectStableChatWalletAddress(failingRead, [CHAT_PROFILE_ADDRESS_A]),
+    CHAT_PROFILE_ADDRESS_A,
+    "storage read failures must fall back to the first valid runtime candidate",
+  );
+  assert.deepEqual(failingRead.removals, [runtime.CHAT_WALLET_STORAGE_KEY]);
+  assert.equal(runtime.selectStableChatWalletAddress(null, []), null);
+
+  const persisted = createChatProfileStorage({ unrelated: "preserve" });
+  runtime.persistStableChatWalletAddress(persisted, uppercaseHexAddress(CHAT_PROFILE_ADDRESS_B));
+  assert.deepEqual(persisted.writes, [{
+    key: runtime.CHAT_WALLET_STORAGE_KEY,
+    value: CHAT_PROFILE_ADDRESS_B,
+  }]);
+  runtime.persistStableChatWalletAddress(persisted, null);
+  assert.deepEqual(persisted.removals, [runtime.CHAT_WALLET_STORAGE_KEY]);
+  assert.equal(persisted.values.get("unrelated"), "preserve");
+
+  assert.equal(
+    runtime.isOwnChatMessageSender(
+      uppercaseHexAddress(CHAT_PROFILE_ADDRESS_A),
+      CHAT_PROFILE_ADDRESS_A,
+    ),
+    true,
+  );
+  assert.equal(runtime.isOwnChatMessageSender(CHAT_PROFILE_ADDRESS_B, CHAT_PROFILE_ADDRESS_A), false);
+  assert.equal(runtime.isOwnChatMessageSender("0x1234", null), false);
+  assert.equal(runtime.isOwnChatMessageSender(null, null), false);
+  assert.equal(
+    runtime.countOtherChatMessages(
+      [
+        { sender: CHAT_PROFILE_ADDRESS_A },
+        { sender: uppercaseHexAddress(CHAT_PROFILE_ADDRESS_A) },
+        { sender: CHAT_PROFILE_ADDRESS_B },
+        { sender: "0x1234" },
+      ],
+      CHAT_PROFILE_ADDRESS_A,
+    ),
+    2,
+    "unread identity must count different and malformed senders but not canonical own messages",
+  );
+}
+
+export function runChatWalletRuntimeTests() {
+  assertChatWalletRuntimeBehavior(chatWalletRuntime);
+  assert.throws(
+    () => assertChatWalletRuntimeBehavior({
+      ...chatWalletRuntime,
+      normalizeChatWalletCandidate(address) {
+        return typeof address === "string" && address.trim()
+          ? address.trim().toLowerCase()
+          : null;
+      },
+    }),
+    /Expected values to be strictly equal/,
+    "unchecked wallet candidate mutant must be killed",
+  );
+  assert.throws(
+    () => assertChatWalletRuntimeBehavior({
+      ...chatWalletRuntime,
+      isOwnChatMessageSender(sender, walletAddress) {
+        return String(sender ?? "").toLowerCase() === String(walletAddress ?? "").toLowerCase();
+      },
+    }),
+    /Expected values to be strictly equal/,
+    "empty or malformed sender ownership mutant must be killed",
+  );
+  assert.throws(
+    () => assertChatWalletRuntimeBehavior({
+      ...chatWalletRuntime,
+      selectStableChatWalletAddress(_storage, candidates, currentAddress = null) {
+        return chatWalletRuntime.normalizeChatWalletCandidate(currentAddress) ?? candidates[0] ?? null;
+      },
+    }),
+    /Expected values to be strictly equal|Expected values to be strictly deep-equal/,
+    "stale stored wallet cleanup mutant must be killed",
+  );
+}
+
+function createCookieJar() {
+  const values = new Map();
+  const writes = [];
+  return {
+    values,
+    writes,
+    request: {
+      cookies: {
+        get: (name) => values.has(name) ? { value: values.get(name) } : undefined,
+      },
+    },
+    response: {
+      cookies: {
+        set: (name, value, options) => {
+          writes.push({ name, value, options });
+          values.set(name, value);
+        },
+      },
+    },
+  };
+}
+
+function decodeChatSessionToken(token) {
+  const encoded = token.split(".", 1)[0];
+  return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+}
+
+function mutateChatSessionToken(token, mutation) {
+  const [encoded, signature] = token.split(".");
+  const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  return `${Buffer.from(JSON.stringify(mutation(payload)), "utf8").toString("base64url")}.${signature}`;
+}
+
+function createChatMessage(id, timestamp, text = id) {
+  return {
+    id,
+    text,
+    sender: "0x1111111111111111111111111111111111111111",
+    senderName: null,
+    senderAvatar: null,
+    timestamp,
+  };
+}
+
+function createMemoryStorage(initialEntries = {}) {
+  const values = new Map(Object.entries(initialEntries));
+  const removed = [];
+  const written = [];
+  return {
+    values,
+    removed,
+    written,
+    getItem: (key) => values.get(key) ?? null,
+    removeItem: (key) => {
+      removed.push(key);
+      values.delete(key);
+    },
+    setItem: (key, value) => {
+      written.push([key, value]);
+      values.set(key, value);
+    },
+  };
+}
+
+function findButtonTag(markup, attribute) {
+  const tag = [...markup.matchAll(/<button\b[^>]*>/g)]
+    .map(([value]) => value)
+    .find((value) => value.includes(attribute));
+  assert.ok(tag, `rendered chat profile must contain button ${attribute}`);
+  return tag;
+}
+
+function findTag(markup, tagName, attribute) {
+  const pattern = new RegExp(`<${tagName}\\b[^>]*>`, "g");
+  const tag = [...markup.matchAll(pattern)]
+    .map(([value]) => value)
+    .find((value) => value.includes(attribute));
+  assert.ok(tag, `rendered chat UI must contain ${tagName} ${attribute}`);
+  return tag;
+}
+
+function renderChatProfileModal(avatar) {
+  return renderToStaticMarkup(React.createElement(chatProfileModal.ChatProfileModal, {
+    profile: { name: "Miner", avatar, customAvatar: null },
+    walletAddress: CHAT_PROFILE_ADDRESS_A,
+    onSave: () => undefined,
+    onClose: () => undefined,
+  }));
+}
+
+function renderChatWindow(connected) {
+  return renderToStaticMarkup(React.createElement(chatWindow.ChatWindow, {
+    messages: [],
+    walletAddress: CHAT_PROFILE_ADDRESS_A,
+    profile: { name: "Miner", avatar: null, customAvatar: null },
+    displayName: "Miner",
+    connected,
+    authReady: true,
+    onEnsureAuth: async () => true,
+    sendCooldownRemainingMs: 0,
+    isSending: false,
+    onSend: async () => true,
+    onUpdateProfile: () => undefined,
+    onClose: () => undefined,
+    variant: "embedded",
+  }));
+}
+
+function renderHeaderWalletCard(overrides = {}) {
+  return renderToStaticMarkup(React.createElement(headerWalletCard.HeaderWalletCard, {
+    authenticated: true,
+    loginState: {
+      busy: false,
+      buttonText: "Login / Connect",
+      disabled: true,
+      error: null,
+      modalOpen: false,
+      statusAnnouncement: "Wallet connected.",
+    },
+    embeddedWalletAddress: CHAT_PROFILE_ADDRESS_A,
+    embeddedWalletSyncing: false,
+    embeddedAddressCopied: false,
+    onCopyEmbeddedAddress: () => undefined,
+    onLogin: () => undefined,
+    onLogout: () => undefined,
+    onOpenWalletSettings: () => undefined,
+    privyEthBalance: "1.25",
+    privyEthBalanceLoading: false,
+    privyTokenBalance: "42",
+    privyTokenBalanceLoading: false,
+    ...overrides,
+  }));
+}
+
+function assertConnectedHeaderWalletMarkup(markup) {
+  assert.match(markup, /role="group"[^>]*aria-label="Wallet account"/);
+  assert.match(
+    findButtonTag(markup, 'aria-label="Copy Privy wallet address"'),
+    /type="button"[^>]*title="Copy address"|title="Copy address"[^>]*type="button"/,
+  );
+  const explorerLink = markup
+    .match(/<a\b[^>]*aria-label="Open Privy wallet address in explorer"[^>]*>/)?.[0];
+  assert.ok(explorerLink, "connected wallet must render its explorer action");
+  assert.match(explorerLink, /href="https:\/\/sepolia\.lineascan\.build\/address\/0x1111/);
+  assert.match(explorerLink, /target="_blank"/);
+  assert.match(explorerLink, /rel="noopener noreferrer"/);
+  assert.match(markup, />1\.25<span[^>]*> ETH<\/span>/);
+  assert.match(markup, />42<span[^>]*> LINEA<\/span>/);
+}
+
+export function runHeaderWalletCardBehaviorTests() {
+  const connected = renderHeaderWalletCard();
+  assertConnectedHeaderWalletMarkup(connected);
+
+  const copied = renderHeaderWalletCard({ embeddedAddressCopied: true });
+  assert.match(
+    findButtonTag(copied, 'aria-label="Privy wallet address copied"'),
+    /type="button"[^>]*title="Copied"|title="Copied"[^>]*type="button"/,
+  );
+  assert.doesNotMatch(copied, /aria-label="Copy Privy wallet address"/);
+
+  const invalidAddress = renderHeaderWalletCard({ embeddedWalletAddress: "private-rpc-token" });
+  assert.doesNotMatch(invalidAddress, /Open Privy wallet address in explorer|target="_blank"/);
+
+  const login = renderHeaderWalletCard({
+    authenticated: false,
+    embeddedWalletAddress: null,
+    loginState: {
+      busy: true,
+      buttonText: "Connecting...",
+      disabled: true,
+      error: null,
+      modalOpen: true,
+      statusAnnouncement: "Wallet login dialog is open.",
+    },
+  });
+  assert.match(login, /role="group"[^>]*aria-label="Wallet login"/);
+  const loginButton = findButtonTag(login, 'aria-label="Login or connect wallet"');
+  assert.match(loginButton, /type="button"/);
+  assert.match(loginButton, /aria-describedby="header-privy-login-status"/);
+  assert.match(loginButton, /aria-haspopup="dialog"/);
+  assert.match(loginButton, /aria-expanded="true"/);
+  assert.match(loginButton, /aria-busy="true"/);
+  assert.match(loginButton, /disabled=""/);
+  assert.match(login, /role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/);
+
+  const syncing = renderHeaderWalletCard({ embeddedWalletAddress: null, embeddedWalletSyncing: true });
+  assert.match(syncing, />Syncing</);
+  assert.match(syncing, /Restoring embedded wallet session\.\.\./);
+  const notCreated = renderHeaderWalletCard({ embeddedWalletAddress: null });
+  assert.match(notCreated, />Not created</);
+  assert.match(notCreated, /Create embedded wallet in Settings to play and receive rewards\./);
+
+  assert.throws(
+    () => assertConnectedHeaderWalletMarkup(connected.replace(' rel="noopener noreferrer"', "")),
+    /noopener noreferrer/,
+    "missing new-tab isolation mutant must be killed",
+  );
+  assert.throws(
+    () => assertConnectedHeaderWalletMarkup(
+      connected.replace('aria-label="Copy Privy wallet address"', 'aria-label="Wallet"'),
+    ),
+    /must contain button aria-label="Copy Privy wallet address"/,
+    "generic copy-label mutant must be killed",
+  );
+}
+
+export async function runChatAndClientSafetyTests() {
   const useChatSource = readFileSync("app/hooks/useChat.ts", "utf8");
-  assert.match(
-    useChatSource,
-    /sendCooldownUntilRef/,
-    "chat send cooldown must track an absolute deadline so server retryAfter survives rerenders",
+  assert.deepEqual(chatRuntimePolicy.createChatSendCooldown(1_500, 10_000), {
+    startedAt: 10_000,
+    cooldownUntil: 11_500,
+    remainingMs: 1_500,
+  });
+  assert.equal(chatRuntimePolicy.getChatSendCooldownRemaining(11_500, 10_250), 1_250);
+  assert.equal(chatRuntimePolicy.getChatSendCooldownRemaining(11_500, 12_000), 0);
+
+  const warningRef = { current: 0 };
+  const warnings = [];
+  const warningSink = (...args) => warnings.push(args);
+  const hostileWarning = new Error("secret rpc diagnostic 0xdeadbeef");
+  assert.equal(
+    chatRuntimePolicy.warnChatNetworkOnce("poll_failed", warningRef, hostileWarning, 15_000, warningSink),
+    true,
   );
-  assert.match(
-    useChatSource,
-    /parseChatRetryAfterMs/,
-    "chat send must honor server retryAfter from 429 responses",
+  assert.deepEqual(warnings, [["Chat", "poll_failed", hostileWarning]]);
+  assert.equal(
+    chatRuntimePolicy.warnChatNetworkOnce("poll_failed", warningRef, hostileWarning, 29_999, warningSink),
+    false,
   );
-  assert.match(
-    useChatSource,
-    /import \{ log \} from "\.\.\/lib\/logger";[\s\S]*log\.warn\("Chat", tag, err\)/,
-    "chat network warnings must use the shared redacted support logger",
+  assert.equal(warnings.length, 1);
+  assert.equal(
+    chatRuntimePolicy.warnChatNetworkOnce("poll_failed", warningRef, hostileWarning, 30_000, warningSink),
+    true,
   );
-  assert.doesNotMatch(
-    useChatSource,
-    /console\.warn\(\`\$\{tag\} \$\{message\}`\)/,
-    "chat network warnings must not bypass support-log redaction through direct console.warn",
+  assert.equal(warnings.length, 2);
+
+  assert.equal(
+    chatRuntimePolicy.createOptimisticMessageId(
+      42,
+      {
+        randomUUID: () => "uuid-priority",
+        getRandomValues: () => { throw new Error("getRandomValues must not run"); },
+      },
+      () => { throw new Error("Math.random fallback must not run"); },
+    ),
+    "local:42:uuid-priority",
+  );
+  assert.equal(
+    chatRuntimePolicy.createOptimisticMessageId(
+      43,
+      { getRandomValues: (bytes) => { bytes.fill(0xab); return bytes; } },
+      () => { throw new Error("Math.random fallback must not run"); },
+    ),
+    `local:43:${"ab".repeat(12)}`,
+  );
+  assert.equal(
+    chatRuntimePolicy.createOptimisticMessageId(44, {}, () => 0.5),
+    `local:44:${(0.5).toString(36).slice(2)}`,
+  );
+
+  const malformedChatCache = createMemoryStorage({
+    [chatRuntimePolicy.CHAT_CACHE_KEY]: "{malformed",
+    unrelated: "preserve",
+  });
+  assert.deepEqual(chatRuntimePolicy.readChatMessageCache(malformedChatCache), []);
+  assert.deepEqual(malformedChatCache.removed, [chatRuntimePolicy.CHAT_CACHE_KEY]);
+  assert.equal(malformedChatCache.values.get("unrelated"), "preserve");
+  const persistedChatCache = createMemoryStorage();
+  chatRuntimePolicy.persistChatMessageCache(
+    persistedChatCache,
+    Array.from({ length: 105 }, (_, index) => createChatMessage(`server:${index}`, index)),
+  );
+  const persistedMessages = JSON.parse(persistedChatCache.values.get(chatRuntimePolicy.CHAT_CACHE_KEY));
+  assert.equal(persistedMessages.length, 100);
+  assert.equal(persistedMessages[0].timestamp, 5);
+  assert.equal(persistedMessages.at(-1).timestamp, 104);
+  assert.deepEqual(
+    [
+      /createChatSendCooldown\(durationMs, now\)/.test(useChatSource),
+      [...useChatSource.matchAll(/getChatSendCooldownRemaining\(sendCooldownUntilRef\.current,/g)].length,
+      /applyChatNetworkWarning[\s\S]*log\.warn\(scope, warningTag, error\)/.test(useChatSource),
+      /return readChatMessageCache\(localStorage\)/.test(useChatSource),
+      /persistChatMessageCache\(localStorage, messages\)/.test(useChatSource),
+      /id: createOptimisticMessageId\(now\)/.test(useChatSource),
+    ],
+    [true, 3, true, true, true, true],
+    "useChat must remain bound to the behavior-tested cooldown, warning, cache, and entropy policies",
   );
   const appShellState = appShellStateModule.default ?? appShellStateModule;
   assert.deepEqual(appShellState.normalizeCachedHotTile({ tileId: 7, wins: "3" }), { tileId: 7, wins: 3 });
@@ -59,35 +859,78 @@ export function runChatAndClientSafetyTests() {
   assert.equal(appShellState.normalizeCachedHotTile({ tileId: 1, wins: "9999999999999999" }), null);
   assert.equal(appShellState.normalizeCachedHotTile({ tileId: 1, wins: Number.MAX_SAFE_INTEGER + 1 }), null);
   const appShellStateSource = readFileSync("app/hooks/useAppShellState.ts", "utf8");
-  assert.match(
-    appShellStateSource,
-    /log\.info\("App", "mounted", \{ path: window\.location\.pathname, tab: readHashTab\(\), time:/,
-    "App mount diagnostics must keep route evidence without query-string payloads",
+  const validTabStorage = createMemoryStorage({
+    [appShellState.ACTIVE_TAB_STORAGE_KEY]: "faq",
+  });
+  assert.equal(appShellState.readSavedAppShellTab(validTabStorage), "faq");
+  assert.deepEqual(validTabStorage.removed, []);
+
+  const invalidTabStorage = createMemoryStorage({
+    [appShellState.ACTIVE_TAB_STORAGE_KEY]: "admin",
+    unrelated: "preserve",
+  });
+  assert.equal(appShellState.readSavedAppShellTab(invalidTabStorage), null);
+  assert.deepEqual(invalidTabStorage.removed, [appShellState.ACTIVE_TAB_STORAGE_KEY]);
+  assert.equal(invalidTabStorage.values.get("unrelated"), "preserve");
+
+  const cachedTileStorage = createMemoryStorage({
+    [appShellState.HOT_TILES_STORAGE_KEY]: JSON.stringify([
+      { tileId: "1", wins: "2" },
+      { tileId: 0, wins: 3 },
+      { tileId: 2, wins: 4 },
+      { tileId: 3, wins: 5 },
+      { tileId: 4, wins: 6 },
+      { tileId: 5, wins: 7 },
+      { tileId: 6, wins: 8 },
+    ]),
+  });
+  assert.deepEqual(appShellState.readCachedAppShellHotTiles(cachedTileStorage), [
+    { tileId: 1, wins: 2 },
+    { tileId: 2, wins: 4 },
+    { tileId: 3, wins: 5 },
+    { tileId: 4, wins: 6 },
+    { tileId: 5, wins: 7 },
+  ]);
+  assert.deepEqual(cachedTileStorage.removed, []);
+
+  const malformedTileStorage = createMemoryStorage({
+    [appShellState.HOT_TILES_STORAGE_KEY]: "{malformed",
+    unrelated: "preserve",
+  });
+  assert.deepEqual(appShellState.readCachedAppShellHotTiles(malformedTileStorage), []);
+  assert.deepEqual(malformedTileStorage.removed, [appShellState.HOT_TILES_STORAGE_KEY]);
+  assert.equal(malformedTileStorage.values.get("unrelated"), "preserve");
+
+  const persistedTileStorage = createMemoryStorage({ unrelated: "preserve" });
+  appShellState.persistAppShellHotTiles(persistedTileStorage, [{ tileId: 7, wins: 9 }]);
+  assert.deepEqual(persistedTileStorage.written, [[
+    appShellState.HOT_TILES_STORAGE_KEY,
+    JSON.stringify([{ tileId: 7, wins: 9 }]),
+  ]]);
+  appShellState.persistAppShellHotTiles(persistedTileStorage, []);
+  assert.deepEqual(persistedTileStorage.removed, [appShellState.HOT_TILES_STORAGE_KEY]);
+  assert.equal(persistedTileStorage.values.get("unrelated"), "preserve");
+
+  const mountDiagnostic = appShellState.createAppMountDiagnostic(
+    { pathname: "/hub", href: "/hub?secret=0xdeadbeef" },
+    "analytics",
+    new Date("2026-08-14T00:00:00.000Z"),
   );
-  assert.doesNotMatch(
-    appShellStateSource,
-    /window\.location\.href/,
-    "App shell support logs must not capture full URLs",
-  );
-  assert.match(
-    appShellStateSource,
-    /const raw = window\.localStorage\.getItem\(ACTIVE_TAB_STORAGE_KEY\)[\s\S]*if \(raw === null\) return null;[\s\S]*VALID_TABS\.includes\(raw as TabId\)[\s\S]*window\.localStorage\.removeItem\(ACTIVE_TAB_STORAGE_KEY\)/,
-    "App shell active-tab restore must clear invalid localStorage values before falling back",
-  );
-  assert.match(
-    appShellStateSource,
-    /import \{ GRID_SIZE \} from "\.\.\/lib\/constants";[\s\S]*tileId > GRID_SIZE/,
-    "cached hot tiles must reject impossible tile ids before rendering stale localStorage data",
-  );
-  assert.match(
-    appShellStateSource,
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parsePositiveSafeInteger[\s\S]*typeof value === "number"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*\/\^\[1-9\]\\d\*\$\/\.test\(value\)[\s\S]*const parsed = BigInt\(value\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)/,
-    "cached hot tiles must use BigInt-bounded canonical positive safe-integer parsing before rendering stale localStorage data",
-  );
-  assert.doesNotMatch(
-    appShellStateSource,
-    /Number\(value\.(?:tileId|wins)\)|const parsed = Number\(value\)[\s\S]*Number\.isSafeInteger\(parsed\)/,
-    "cached hot tiles must not broadly coerce tile or win counters with Number(...) before bounds checks",
+  assert.deepEqual(mountDiagnostic, {
+    path: "/hub",
+    tab: "analytics",
+    time: "2026-08-14T00:00:00.000Z",
+  });
+  assert.doesNotMatch(JSON.stringify(mountDiagnostic), /secret|0xdeadbeef/);
+  assert.deepEqual(
+    [
+      /return readSavedAppShellTab\(window\.localStorage\)/.test(appShellStateSource),
+      /return readCachedAppShellHotTiles\(window\.localStorage\)/.test(appShellStateSource),
+      [...appShellStateSource.matchAll(/persistAppShellHotTiles\(window\.localStorage, hotTiles\)/g)].length,
+      /createAppMountDiagnostic\(window\.location, readHashTab\(\)\)/.test(appShellStateSource),
+    ],
+    [true, true, 2, true],
+    "App shell runtime must remain bound to the behavior-tested storage and diagnostic policies",
   );
   const lineaOreClientViewProps = lineaOreClientViewPropsModule.default ?? lineaOreClientViewPropsModule;
   assert.equal(lineaOreClientViewProps.derivePreviousGridEpoch("42"), "41");
@@ -97,115 +940,98 @@ export function runChatAndClientSafetyTests() {
   assert.equal(lineaOreClientViewProps.derivePreviousGridEpoch("1.5"), null);
   assert.equal(lineaOreClientViewProps.derivePreviousGridEpoch("1e3"), null);
   assert.equal(lineaOreClientViewProps.derivePreviousGridEpoch("9007199254740993"), "9007199254740992");
-  const lineaOreClientViewPropsSource = readFileSync("app/lib/lineaOreClientViewProps.ts", "utf8");
-  assert.match(
-    lineaOreClientViewPropsSource,
-    /export function derivePreviousGridEpoch\(gridDisplayEpoch: string \| null \| undefined\): string \| null[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\*\)\$\/\.test\(gridDisplayEpoch\)[\s\S]*BigInt\(gridDisplayEpoch\)[\s\S]*epoch - 1n/,
-    "jackpot fallback previous grid epoch must use canonical string and bigint parsing",
-  );
-  assert.match(
-    lineaOreClientViewPropsSource,
-    /const previousGridEpoch = derivePreviousGridEpoch\(gridDisplayEpoch\)/,
-    "jackpot fallback view props must route previous grid epoch through the strict helper",
-  );
-  assert.doesNotMatch(
-    lineaOreClientViewPropsSource,
-    /Number\(gridDisplayEpoch\)/,
-    "jackpot fallback previous grid epoch must not broadly coerce gridDisplayEpoch",
-  );
-  assert.match(
-    appShellStateSource,
-    /if \(hotTiles\.length === 0\) \{[\s\S]*setVisibleHotTiles\(\(current\) => \(current\.length === 0 \? current : \[\]\)\)[\s\S]*window\.localStorage\.removeItem\(HOT_TILES_STORAGE_KEY\)/,
-    "hot tile sync must clear stale cached sidebar winners when the current history has no resolved hot tiles",
-  );
-  assert.match(
-    appShellStateSource,
-    /const parsed = JSON\.parse\(raw\) as unknown\[\][\s\S]*if \(!Array\.isArray\(parsed\)\) \{[\s\S]*window\.localStorage\.removeItem\(HOT_TILES_STORAGE_KEY\)[\s\S]*catch \{[\s\S]*window\.localStorage\.removeItem\(HOT_TILES_STORAGE_KEY\)/,
-    "hot-tile cache reads must clear corrupt or invalid localStorage entries",
-  );
   const chatWindowSource = readFileSync("app/components/chat/ChatWindow.tsx", "utf8");
-  const chatWidgetSource = readFileSync("app/components/chat/ChatWidget.tsx", "utf8");
   const floatingActionsSource = readFileSync("app/components/FloatingActions.tsx", "utf8");
   assert.match(
     floatingActionsSource,
     /<button[\s\S]{0,120}type="button"[\s\S]{0,240}aria-label="Open chat"[\s\S]{0,80}disabled/,
     "lazy chat fallback button must remain a non-submit accessible control",
   );
-  assert.match(
-    chatWidgetSource,
-    /const CHAT_PANEL_ID = "lore-chat-panel"[\s\S]*<button[\s\S]*type="button"[\s\S]*aria-controls=\{CHAT_PANEL_ID\}[\s\S]*aria-expanded=\{open\}/,
-    "chat toggle must expose its expanded state and controlled panel",
+  const closedToggleMarkup = renderToStaticMarkup(React.createElement(chatWindow.ChatToggleButton, {
+    open: false,
+    unread: 120,
+    onToggle: () => undefined,
+  }));
+  const closedToggle = findButtonTag(closedToggleMarkup, 'aria-label="Open chat"');
+  assert.match(closedToggle, /type="button"/);
+  assert.match(closedToggle, /aria-controls="lore-chat-panel"/);
+  assert.match(closedToggle, /aria-expanded="false"/);
+  assert.match(closedToggle, /title="Open chat"/);
+  assert.match(closedToggle, /\bh-11\b/);
+  assert.match(closedToggle, /\bw-11\b/);
+  assert.match(closedToggle, /focus-visible:ring-2/);
+  assert.match(closedToggleMarkup, />99\+<\/span>/);
+
+  const openToggleMarkup = renderToStaticMarkup(React.createElement(chatWindow.ChatToggleButton, {
+    open: true,
+    unread: 120,
+    onToggle: () => undefined,
+  }));
+  const openToggle = findButtonTag(openToggleMarkup, 'aria-label="Close chat"');
+  assert.match(openToggle, /aria-controls="lore-chat-panel"/);
+  assert.match(openToggle, /aria-expanded="true"/);
+  assert.match(openToggle, /title="Close chat"/);
+  assert.doesNotMatch(openToggleMarkup, />99\+<\/span>/);
+  const connectedChatMarkup = renderChatWindow(true);
+  assert.match(connectedChatMarkup, /id="lore-chat-panel"/);
+  assert.match(connectedChatMarkup, /role="status" aria-live="polite" aria-atomic="true">Chat connected/);
+  assert.match(connectedChatMarkup, /aria-hidden="true"[^>]*title="Connected"/);
+  const cooldownLiveRegion = findTag(connectedChatMarkup, "div", 'aria-live="polite"');
+  assert.match(cooldownLiveRegion, /aria-live="polite"/);
+  const sendAction = findButtonTag(connectedChatMarkup, 'data-testid="chat-send-action"');
+  assert.match(sendAction, /type="button"/);
+  assert.match(sendAction, /aria-label="Send message"/);
+  const messageInput = findTag(connectedChatMarkup, "input", 'aria-label="Chat message"');
+  assert.match(messageInput, /placeholder="Message as Miner"/);
+  const profileAction = findButtonTag(connectedChatMarkup, 'data-testid="chat-profile-open"');
+  assert.match(profileAction, /aria-label="Profile"/);
+  assert.match(profileAction, /\bh-12\b/);
+  assert.match(profileAction, /\bw-12\b/);
+  const closeChatAction = findButtonTag(connectedChatMarkup, 'aria-label="Close chat panel"');
+  assert.match(closeChatAction, /type="button"/);
+  assert.match(closeChatAction, /\bh-12\b/);
+  assert.match(closeChatAction, /\bw-12\b/);
+  const connectingChatMarkup = renderChatWindow(false);
+  assert.match(connectingChatMarkup, /role="status" aria-live="polite" aria-atomic="true">Chat connecting/);
+  assert.match(connectingChatMarkup, /aria-hidden="true"[^>]*title="Connecting\.\.\."/);
+  assert.equal(await chatWindow.resolveChatVerificationError(async () => true), null);
+  assert.equal(
+    await chatWindow.resolveChatVerificationError(async () => false),
+    "Verification failed. Try again or refresh the page.",
   );
+  const hostileVerificationError = await chatWindow.resolveChatVerificationError(async () => {
+    throw new Error("secret provider diagnostic 0xdeadbeef");
+  });
+  assert.equal(hostileVerificationError, "Verification error. Try again or refresh the page.");
+  assert.doesNotMatch(hostileVerificationError, /secret|provider|0xdeadbeef/i);
   assert.match(
     chatWindowSource,
-    /const CHAT_PANEL_ID = "lore-chat-panel"[\s\S]*<div[\s\S]*id=\{CHAT_PANEL_ID\}/,
-    "chat panel root must keep the stable id controlled by the floating toggle",
+    /resolveChatVerificationError\(onEnsureAuth\)\.then\(setVerifyError\)/,
+    "chat verification control must use the behavior-tested redaction action",
+  );
+  const walletIdentityMarkup = renderChatProfileModal(null);
+  assert.match(walletIdentityMarkup, /role="dialog"/);
+  assert.match(walletIdentityMarkup, /aria-modal="true"/);
+  const saveButton = findButtonTag(walletIdentityMarkup, 'data-testid="chat-profile-save"');
+  assert.match(saveButton, /type="button"/);
+  const closeButton = findButtonTag(walletIdentityMarkup, 'aria-label="Close"');
+  assert.match(closeButton, /type="button"/);
+  assert.match(closeButton, /\bh-11\b/);
+  assert.match(closeButton, /\bw-11\b/);
+  assert.match(closeButton, /focus-visible:/);
+  const walletIdentityButton = findButtonTag(walletIdentityMarkup, 'aria-label="Use wallet identity avatar"');
+  assert.match(walletIdentityButton, /aria-pressed="true"/);
+  const unselectedPresetButton = findButtonTag(walletIdentityMarkup, 'aria-label="Select miner-helmet avatar"');
+  assert.match(unselectedPresetButton, /aria-pressed="false"/);
+
+  const presetMarkup = renderChatProfileModal("miner-helmet");
+  assert.match(
+    findButtonTag(presetMarkup, 'aria-label="Use wallet identity avatar"'),
+    /aria-pressed="false"/,
   );
   assert.match(
-    chatWindowSource,
-    /aria-live="polite"/,
-    "chat cooldown feedback must remain visible without relying on console warnings",
-  );
-  assert.match(
-    chatWindowSource,
-    /aria-hidden="true"[\s\S]*title=\{connected \? "Connected" : "Connecting\.\.\."\}[\s\S]*role="status" aria-live="polite" aria-atomic="true"[\s\S]*connected \? "Chat connected" : "Chat connecting"/,
-    "chat connection indicator must expose a non-color screen-reader status",
-  );
-  assert.match(
-    chatWindowSource,
-    /CHAT_VERIFY_ERROR[\s\S]*setVerifyError\(CHAT_VERIFY_ERROR\)/,
-    "chat verify failure UI must use stable safe copy instead of raw wallet/provider messages",
-  );
-  assert.doesNotMatch(
-    chatWindowSource,
-    /setVerifyError\(err instanceof Error \? err\.message/,
-    "chat verify failure UI must not surface raw wallet/provider errors",
-  );
-  assert.match(
-    chatWindowSource,
-    /data-testid="chat-send-action"/,
-    "chat send action must expose a stable smoke-test selector",
-  );
-  assert.match(
-    chatWindowSource,
-    /placeholder=\{`Message as \$\{displayName\}`\}[\s\S]*aria-label="Chat message"/,
-    "chat message input must not rely on placeholder text as its only accessible name",
-  );
-  assert.match(
-    chatWindowSource,
-    /data-testid="chat-profile-open"/,
-    "chat profile entrypoint must expose a stable smoke-test selector",
-  );
-  assert.match(
-    chatWindowSource,
-    /aria-label="Profile"[\s\S]{0,180}className="[^"]*\bh-12\b[^"]*\bw-12\b/,
-    "chat profile action must keep a padded touch target for mobile users",
-  );
-  assert.match(
-    chatWindowSource,
-    /aria-label="Close chat panel"[\s\S]{0,180}className="[^"]*\bh-12\b[^"]*\bw-12\b/,
-    "chat close action must keep a padded touch target for mobile users",
-  );
-  const chatProfileModalSource = readFileSync("app/components/chat/ChatProfileModal.tsx", "utf8");
-  assert.match(
-    chatProfileModalSource,
-    /data-testid="chat-profile-save"/,
-    "chat profile save action must expose a stable smoke-test selector",
-  );
-  assert.match(
-    chatProfileModalSource,
-    /aria-label="Close"[\s\S]{0,220}uiTokens\.focusRing/,
-    "chat profile close action must keep a visible keyboard focus ring",
-  );
-  assert.match(
-    chatProfileModalSource,
-    /aria-label="Use wallet identity avatar"[\s\S]*aria-pressed=\{!avatar && !customAvatar\}/,
-    "chat profile wallet identity avatar option must expose its accessible name and selected state",
-  );
-  assert.match(
-    chatProfileModalSource,
-    /aria-label=\{`Select \$\{id\} avatar`\}[\s\S]*aria-pressed=\{avatar === id && !customAvatar\}/,
-    "chat profile preset avatar options must expose accessible names and selected state",
+    findButtonTag(presetMarkup, 'aria-label="Select miner-helmet avatar"'),
+    /aria-pressed="true"/,
   );
   const chatAuthRouteSource = readFileSync("app/api/chat/auth/route.ts", "utf8");
   assert.match(
@@ -218,46 +1044,30 @@ export function runChatAndClientSafetyTests() {
     /recoverAddress|keccak256\(toBytes\(message\)\)/,
     "chat auth must not accept raw eth_sign digest recovery as a login fallback",
   );
-  assert.match(
-    readFileSync("app/lib/chatAuth.ts", "utf8"),
-    /normalizeChatAuthAddress[\s\S]*getAddress/,
-    "chat auth must normalize wallet addresses with the EVM address parser",
-  );
-  assert.match(
-    readFileSync("app/lib/chatAuth.ts", "utf8"),
-    /const fields = \{ address, uri, chainId, nonce, issuedAt \};[\s\S]*normalized !== buildChatAuthMessage\(fields\)/,
-    "chat auth must reject non-canonical signed messages instead of accepting extra or reordered fields",
-  );
-  assert.match(
-    readFileSync("app/lib/chatAuth.ts", "utf8"),
-    /function parseCanonicalIssuedAtMs[\s\S]*toISOString\(\) === issuedAt[\s\S]*parseCanonicalIssuedAtMs\(issuedAt\)/,
-    "chat auth must reject non-canonical issuedAt timestamps before TTL checks",
-  );
-  assert.match(
-    readFileSync("app/lib/chatAuth.ts", "utf8"),
-    /function parseCanonicalChainId[\s\S]*\^\[1-9\]\\d\{0,15\}\$[\s\S]*Number\.isSafeInteger\(parsed\)[\s\S]*const chainId = parseCanonicalChainId\(values\.get\("chain id"\)\)[\s\S]*chainId === null/,
-    "chat auth must canonical-parse signed chain IDs before session issuance",
-  );
-  assert.match(
-    readFileSync("app/lib/chatAuth.ts", "utf8"),
-    /function parseCanonicalNonce[\s\S]*\^\[a-f0-9\]\{32,128\}\$[\s\S]*const nonce = parseCanonicalNonce\(values\.get\("nonce"\)\)[\s\S]*nonce === null/,
-    "chat auth must canonical-parse signed nonces before session issuance",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/lib/chatAuth.ts", "utf8"),
-    /Number\(values\.get\("chain id"\)|Number\.isInteger\(chainId\)/,
-    "chat auth must not use broad Number() parsing for signed chain IDs",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/lib/chatAuth.ts", "utf8"),
-    /\^\[a-f0-9\]\{32,128\}\$\/i|values\.get\("nonce"\) \?\? ""/,
-    "chat auth must not accept case-insensitive or default-empty signed nonces",
-  );
-  assert.match(
-    readFileSync("app/lib/chatAuth.ts", "utf8"),
-    /export function getChatAuthProofTtlMs[\s\S]*parseCanonicalIssuedAtMs\(issuedAt\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*remainingMs > 0 \? remainingMs : null/,
-    "chat auth replay-lock TTL must use canonical issuedAt parsing",
-  );
+  const validChatAddress = "0x1111111111111111111111111111111111111111";
+  const authNow = Date.parse("2026-08-13T12:05:00.000Z");
+  const authFields = {
+    address: validChatAddress,
+    uri: "https://lore.example/chat",
+    chainId: 59144,
+    nonce: "ab".repeat(16),
+    issuedAt: "2026-08-13T12:04:00.000Z",
+  };
+  const canonicalAuthMessage = chatAuth.buildChatAuthMessage(authFields);
+  assert.deepEqual(chatAuth.parseChatAuthMessage(canonicalAuthMessage), authFields);
+  assert.equal(chatAuth.isChatAuthIssuedAtValid(authFields.issuedAt, authNow), true);
+  assert.equal(chatAuth.getChatAuthProofTtlMs(authFields.issuedAt, authNow), chatAuth.CHAT_AUTH_PROOF_TTL_MS - 60_000);
+  for (const mutant of [
+    canonicalAuthMessage.replace("Chain ID: 59144", "Chain ID: 059144"),
+    canonicalAuthMessage.replace(authFields.nonce, authFields.nonce.toUpperCase()),
+    canonicalAuthMessage.replace(authFields.issuedAt, "2026-08-13T12:04:00Z"),
+    `${canonicalAuthMessage}\nRole: admin`,
+    canonicalAuthMessage.replace("URI: https://lore.example/chat", "URI: javascript:alert(1)"),
+  ]) {
+    assert.equal(chatAuth.parseChatAuthMessage(mutant), null, `non-canonical auth mutant must fail closed: ${mutant.slice(-30)}`);
+  }
+  assert.equal(chatAuth.isChatAuthIssuedAtValid("2026-08-13T12:06:00.001Z", authNow), false);
+  assert.equal(chatAuth.getChatAuthProofTtlMs("2026-08-13T11:59:59.999Z", authNow), null);
   assert.match(
     chatAuthRouteSource,
     /getChatAuthProofTtlMs\(fields\.issuedAt\)[\s\S]*ttlMs === null[\s\S]*Expired auth proof[\s\S]*consumeChatProof\(authAddress, fields\.nonce, fields\.uri, authSignature, ttlMs\)/,
@@ -288,86 +1098,95 @@ export function runChatAndClientSafetyTests() {
     /requiresExternalSharedLock\(\)[\s\S]*acquireExternalExpiringLock/,
     "chat auth must use a shared replay lock when production runs more than one web replica",
   );
-  assert.match(
-    readFileSync("app/api/_lib/chatSession.ts", "utf8"),
-    /normalizeChatAuthAddress/,
-    "chat session cookies must store and validate normalized wallet addresses",
-  );
-  assert.match(
-    readFileSync("app/api/chat/messages/route.ts", "utf8"),
-    /normalizeChatAuthAddress\(body\.sender\)/,
-    "chat message sends must normalize sender addresses before session comparison",
-  );
-  assert.match(
-    readFileSync("app/api/chat/profile/route.ts", "utf8"),
-    /normalizeChatAuthAddress/,
-    "chat profile reads and writes must normalize wallet addresses before cache or session use",
-  );
-  assert.match(
-    readFileSync("app/api/chat/profile/route.ts", "utf8"),
-    /walletAddressesParam !== null && rawRequestedAddresses\.length === 0/,
-    "chat profile batch reads must reject empty walletAddresses instead of falling through to list-all",
-  );
-  assert.match(
-    readFileSync("app/api/chat/profile/route.ts", "utf8"),
-    /const MAX_REQUESTED_PROFILE_WALLETS = 100;[\s\S]*?split\(",", MAX_REQUESTED_PROFILE_WALLETS \+ 1\)[\s\S]*?rawRequestedAddresses\.length > MAX_REQUESTED_PROFILE_WALLETS[\s\S]*?Too many walletAddresses/,
-    "chat profile batch reads must reject over-limit walletAddresses before normalization instead of silently truncating",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/api/chat/profile/route.ts", "utf8"),
-    /new Set\(normalizedRequestedAddresses\)\]\.slice\(0, MAX_REQUESTED_PROFILE_WALLETS\)/,
-    "chat profile batch reads must not silently truncate over-limit normalized walletAddresses",
-  );
-  assert.match(
-    readFileSync("app/api/chat/profile/route.ts", "utf8"),
-    /walletAddress or walletAddresses is required/,
-    "chat profile reads must require an explicit wallet scope instead of returning every stored profile",
-  );
-  assert.match(
-    readFileSync("app/hooks/useChatProfile.ts", "utf8"),
-    /normalizeChatAuthAddress\(walletAddress\)/,
-    "chat profile hook must normalize wallet addresses before local cache and API use",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/hooks/useChatProfile.ts", "utf8"),
-    /response\.text\(\)/,
-    "chat profile save errors must use the bounded JSON response helper instead of raw response text",
-  );
-  assert.match(
-    readFileSync("app/hooks/useChatProfile.ts", "utf8"),
-    /const raw = localStorage\.getItem\(key\)[\s\S]*clearProfileKey\(key\)[\s\S]*const legacy = localStorage\.getItem\(LEGACY_STORAGE_KEY\)[\s\S]*JSON\.parse\(legacy\)[\s\S]*catch[\s\S]*clearProfileKey\(LEGACY_STORAGE_KEY\)[\s\S]*if \(!legacyRaw \|\| typeof legacyRaw !== "object"\)[\s\S]*clearProfileKey\(LEGACY_STORAGE_KEY\)/,
-    "chat profile cache reads must clear corrupt or invalid current and legacy localStorage entries",
+  const previousChatSecret = process.env.CHAT_AUTH_SECRET;
+  process.env.CHAT_AUTH_SECRET = "chat-client-safety-test-secret";
+  try {
+    const jar = createCookieJar();
+    const expiresAt = chatSession.issueChatSession(jar.response, ` ${validChatAddress} `);
+    const issuedCookie = jar.writes.at(-1);
+    assert.equal(issuedCookie.name, "lore_chat_session");
+    assert.equal(issuedCookie.options.httpOnly, true);
+    assert.equal(issuedCookie.options.sameSite, "lax");
+    assert.equal(issuedCookie.options.path, "/api/chat");
+    assert.equal(issuedCookie.options.expires.getTime(), expiresAt);
+    const decoded = decodeChatSessionToken(issuedCookie.value);
+    assert.equal(decoded.address, validChatAddress);
+    assert.deepEqual(chatSession.readChatSession(jar.request), decoded);
+
+    jar.values.set("lore_chat_session", `${issuedCookie.value.slice(0, -1)}${issuedCookie.value.endsWith("a") ? "b" : "a"}`);
+    assert.equal(chatSession.readChatSession(jar.request), null, "tampered chat-session signature must fail closed");
+    jar.values.set("lore_chat_session", mutateChatSessionToken(issuedCookie.value, (payload) => ({ ...payload, address: "0x2222222222222222222222222222222222222222" })));
+    assert.equal(chatSession.readChatSession(jar.request), null, "payload mutation must fail before session use");
+    jar.values.set("lore_chat_session", `${issuedCookie.value}.extra`);
+    assert.equal(chatSession.readChatSession(jar.request), null, "multi-part session cookie must fail closed");
+    jar.values.set("lore_chat_session", "a".repeat(1_025));
+    assert.equal(chatSession.readChatSession(jar.request), null, "oversized session cookie must fail closed");
+
+    chatSession.clearChatSession(jar.response);
+    const clearedCookie = jar.writes.at(-1);
+    assert.equal(clearedCookie.value, "");
+    assert.equal(clearedCookie.options.expires.getTime(), 0);
+    assert.equal(chatSession.readChatSession(jar.request), null);
+  } finally {
+    if (previousChatSecret === undefined) delete process.env.CHAT_AUTH_SECRET;
+    else process.env.CHAT_AUTH_SECRET = previousChatSecret;
+  }
+  runChatProfileReadScopeTests();
+  await runChatProfileRuntimeTests();
+  const useChatProfileSource = readFileSync("app/hooks/useChatProfile.ts", "utf8");
+  assert.deepEqual(
+    [
+      /normalizeChatAuthAddress\(walletAddress\)/.test(useChatProfileSource),
+      /readChatProfileCache\(localStorage, walletAddress\)/.test(useChatProfileSource),
+      /persistChatProfileCache\(localStorage, walletAddress, profile\)/.test(useChatProfileSource),
+      /fetchRemoteChatProfile\(normalizedWallet\)/.test(useChatProfileSource),
+      [...useChatProfileSource.matchAll(/saveRemoteChatProfile\(normalizedWallet,/g)].length,
+    ],
+    [true, true, true, true, 2],
+    "useChatProfile must remain bound to the behavior-tested wallet, cache, and bounded remote policies",
   );
   assert.match(
     readFileSync("app/hooks/useChat.ts", "utf8"),
     /normalizeChatAuthAddress\(walletAddress\)/,
     "chat send hook must normalize wallet addresses before optimistic or persisted messages",
   );
-  assert.match(
-    readFileSync("app/hooks/useChat.ts", "utf8"),
-    /const raw = localStorage\.getItem\(CHAT_CACHE_KEY\)[\s\S]*localStorage\.removeItem\(CHAT_CACHE_KEY\)/,
-    "chat message cache reads must clear corrupt or invalid localStorage entries",
+  const serverMessage = createChatMessage("server:1", 2, "sent");
+  const optimisticMessage = createChatMessage("local:1", 1, "sending");
+  const priorMessage = createChatMessage("server:0", 0, "prior");
+  assert.deepEqual(
+    chatSendState.reconcileChatSendAttempt([priorMessage, optimisticMessage], optimisticMessage, { ok: true, message: serverMessage }),
+    [priorMessage, serverMessage],
+    "successful send must atomically replace its optimistic row",
   );
-  const useChatOptimisticSource = readFileSync("app/hooks/useChat.ts", "utf8");
-  assert.match(
-    useChatOptimisticSource,
-    /function createOptimisticMessageId[\s\S]*crypto\.randomUUID[\s\S]*crypto\.getRandomValues[\s\S]*Math\.random/,
-    "chat optimistic local ids must prefer native crypto before legacy random fallback",
+  assert.deepEqual(
+    chatSendState.reconcileChatSendAttempt([priorMessage, serverMessage, optimisticMessage], optimisticMessage, { ok: true, message: serverMessage }),
+    [priorMessage, serverMessage],
+    "poll races must not duplicate an already-observed server row",
   );
-  assert.match(
-    useChatOptimisticSource,
-    /id: createOptimisticMessageId\(now\)/,
-    "chat send hook must use the centralized optimistic id helper",
+  assert.deepEqual(
+    chatSendState.reconcileChatSendAttempt([priorMessage, optimisticMessage], optimisticMessage, { ok: false, error: new Error("HTTP 500") }),
+    [priorMessage],
+    "failed send must roll back only its optimistic row",
   );
-  assert.match(
-    readFileSync("app/hooks/useChatWidgetRuntime.ts", "utf8"),
-    /normalizeChatAuthAddress\(message\.sender\)/,
-    "chat unread counters must normalize sender addresses before ownership comparison",
+  assert.deepEqual(
+    chatSendState.reconcileChatSendAttempt([optimisticMessage, createChatMessage("local:2", 3)], optimisticMessage, { ok: false, error: "offline" }),
+    [createChatMessage("local:2", 3)],
+    "one failed send must preserve unrelated optimistic rows",
   );
-  assert.match(
-    readFileSync("app/components/chat/ChatWindow.tsx", "utf8"),
-    /normalizeChatAuthAddress\(msg\.sender\)/,
-    "chat message rows must normalize sender addresses before ownership styling",
+  runChatWalletRuntimeTests();
+  const useChatWidgetRuntimeSource = readFileSync("app/hooks/useChatWidgetRuntime.ts", "utf8");
+  const chatWindowIdentitySource = readFileSync("app/components/chat/ChatWindow.tsx", "utf8");
+  const stableChatWalletAddressSource = readFileSync("app/hooks/useStableChatWalletAddress.ts", "utf8");
+  assert.deepEqual(
+    [
+      /countOtherChatMessages\(messages, walletAddress\)/.test(useChatWidgetRuntimeSource),
+      /isOwnChatMessageSender\(msg\.sender, walletAddress\)/.test(chatWindowIdentitySource),
+      /normalizeChatWalletCandidates\(addresses\)/.test(stableChatWalletAddressSource),
+      [...stableChatWalletAddressSource.matchAll(/selectStableChatWalletAddress\(/g)].length,
+      /persistStableChatWalletAddress\(window\.localStorage, next\)/.test(stableChatWalletAddressSource),
+    ],
+    [true, true, true, 2, true],
+    "chat widget, rows, and stable wallet hook must use the behavior-tested identity policy",
   );
   assert.match(
     readFileSync("app/hooks/useRebate.ts", "utf8"),
@@ -400,11 +1219,6 @@ export function runChatAndClientSafetyTests() {
     "deposit history hook must normalize user addresses before cache and API use",
   );
   assert.match(
-    readFileSync("app/hooks/useDepositHistory.ts", "utf8"),
-    /const cacheKey = getDepositCacheKey\(userAddress\)[\s\S]*localStorage\.removeItem\(cacheKey\)/,
-    "deposit history cache reads must clear corrupt or invalid localStorage entries",
-  );
-  assert.match(
     readFileSync("app/hooks/useAnalyticsAchievements.ts", "utf8"),
     /getAchievementStorageKey[\s\S]*getAddress\(walletAddress\)/,
     "achievement cache keys must normalize wallet addresses with the EVM address parser",
@@ -419,22 +1233,7 @@ export function runChatAndClientSafetyTests() {
     /const normalizedUser = getAddress\(user\)\.toLowerCase\(\)/,
     "reward summary reads must normalize user addresses before cache and chain reads",
   );
-  const headerWalletA11ySource = readFileSync("app/components/header/HeaderWalletCard.tsx", "utf8");
-  assert.match(
-    headerWalletA11ySource,
-    /aria-label=\{embeddedAddressCopied \? "Privy wallet address copied" : "Copy Privy wallet address"\}/,
-    "header wallet copy action must expose a stable accessible name",
-  );
-  assert.match(
-    headerWalletA11ySource,
-    /aria-label="Open Privy wallet address in explorer"/,
-    "header wallet explorer icon link must expose a stable accessible name",
-  );
-  assert.match(
-    headerWalletA11ySource,
-    /target="_blank"[\s\S]{0,120}rel="noopener noreferrer"/,
-    "header wallet explorer link must explicitly isolate new tabs",
-  );
+  runHeaderWalletCardBehaviorTests();
   const appNewTabIsolationIssues = [];
   const appWindowOpenIssues = [];
   for (const file of listSourceFiles("app")) {
@@ -508,57 +1307,144 @@ export function runChatAndClientSafetyTests() {
     /connectedResolverClaimLabel[\s\S]*embeddedResolverClaimLabel[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*aria-label=\{connectedResolverClaimLabel\}[\s\S]*title=\{connectedResolverClaimLabel\}[\s\S]*aria-label=\{embeddedResolverClaimLabel\}[\s\S]*title=\{embeddedResolverClaimLabel\}/,
     "wallet settings resolver reward claims must expose state-aware labels and announce claim progress",
   );
-  const stableChatWalletAddressSource = readFileSync("app/hooks/useStableChatWalletAddress.ts", "utf8");
-  assert.match(
-    stableChatWalletAddressSource,
-    /getAddress\(address\)/,
-    "stable chat wallet selection must normalize localStorage candidates with the EVM address parser",
-  );
-  assert.match(
-    stableChatWalletAddressSource,
-    /function clearStoredChatWalletAddress\(\)[\s\S]*window\.localStorage\.removeItem\(CHAT_WALLET_STORAGE_KEY\)[\s\S]*rawStored !== null[\s\S]*clearStoredChatWalletAddress\(\)/,
-    "stable chat wallet selection must clear invalid or stale localStorage candidates",
-  );
   assert.match(
     readFileSync("app/lib/chatSessionClient.ts", "utf8"),
     /normalizeChatAuthAddress/,
     "client chat session storage must normalize wallet addresses before keying localStorage",
   );
   const useChatAuthSource = readFileSync("app/hooks/useChatAuth.ts", "utf8");
-  assert.match(
-    useChatAuthSource,
-    /normalizeChatAuthAddress\(walletAddress\)/,
-    "chat auth hook must normalize wallet addresses before signing or session lookup",
+  const providerRequests = [];
+  const fallbackSignerCalls = [];
+  const runtimeCanonicalAuthMessage = chatAuth.buildChatAuthMessage({
+    ...authFields,
+    chainId: chatAuthRuntime.CHAT_AUTH_CHAIN_ID,
+  });
+  const providerProof = await chatAuthRuntime.createChatAuthProof({
+    walletAddress: ` ${validChatAddress} `,
+    origin: "https://lore.example",
+    wallets: [{
+      address: validChatAddress,
+      getEthereumProvider: async () => ({
+        request: async (request) => {
+          providerRequests.push(request);
+          return "0xprovider-signature";
+        },
+      }),
+    }],
+    signMessage: async (...args) => {
+      fallbackSignerCalls.push(args);
+      return "0xfallback-signature";
+    },
+    uiTitle: "Verify wallet for chat",
+    issuedAt: authFields.issuedAt,
+    nonce: authFields.nonce,
+  });
+  assert.deepEqual(providerProof, {
+    authAddress: validChatAddress,
+    authMessage: runtimeCanonicalAuthMessage,
+    authSignature: "0xprovider-signature",
+  });
+  assert.equal(providerRequests.length, 1);
+  assert.equal(providerRequests[0].method, "personal_sign");
+  assert.equal(providerRequests[0].params[1], validChatAddress);
+  assert.equal(Buffer.from(providerRequests[0].params[0].slice(2), "hex").toString("utf8"), runtimeCanonicalAuthMessage);
+  assert.deepEqual(fallbackSignerCalls, []);
+
+  const fallbackProof = await chatAuthRuntime.createChatAuthProof({
+    walletAddress: validChatAddress,
+    origin: "https://lore.example",
+    wallets: [],
+    signMessage: async (message, title) => {
+      fallbackSignerCalls.push([message, title]);
+      return "0xfallback-signature";
+    },
+    uiTitle: "Verify wallet for chat",
+    issuedAt: authFields.issuedAt,
+    nonce: authFields.nonce,
+  });
+  assert.equal(fallbackProof.authSignature, "0xfallback-signature");
+  assert.deepEqual(fallbackSignerCalls, [[runtimeCanonicalAuthMessage, "Verify wallet for chat"]]);
+  assert.equal(
+    await chatAuthRuntime.createChatAuthProof({
+      walletAddress: "0x1234",
+      origin: "https://lore.example",
+      wallets: [],
+      signMessage: async () => { throw new Error("must not sign invalid wallet"); },
+      uiTitle: "Verify wallet for chat",
+      issuedAt: authFields.issuedAt,
+      nonce: authFields.nonce,
+    }),
+    null,
   );
-  assert.match(
-    useChatAuthSource,
-    /const normalizedWallet = normalizeChatAuthAddress\(walletAddress\);[\s\S]*if \(!normalizedWallet\) return false;/,
-    "chat auth refresh must fail closed when wallet address normalization fails",
+
+  const sessionFetchCalls = [];
+  const sessionExpiresAt = Date.now() + 60_000;
+  const returnedExpiry = await chatAuthRuntime.requestChatAuthSession(
+    "POST",
+    providerProof,
+    async (url, init) => {
+      sessionFetchCalls.push([url, init]);
+      return new Response("{}", {
+        status: 200,
+        headers: { "x-chat-session-expires-at": String(sessionExpiresAt) },
+      });
+    },
   );
-  assert.match(
-    useChatAuthSource,
-    /readJsonResponse<\{ error\?: string \}>/,
-    "chat auth API error parsing must use the bounded JSON response helper",
+  assert.equal(returnedExpiry, sessionExpiresAt);
+  assert.equal(sessionFetchCalls[0][0], "/api/chat/auth");
+  assert.equal(sessionFetchCalls[0][1].method, "POST");
+  assert.equal(sessionFetchCalls[0][1].cache, "no-store");
+  assert.deepEqual(JSON.parse(sessionFetchCalls[0][1].body), providerProof);
+  assert.equal(
+    await chatAuthRuntime.requestChatAuthSession(
+      "GET",
+      undefined,
+      async () => new Response("{}", {
+        status: 200,
+        headers: { "x-chat-session-expires-at": "00120000" },
+      }),
+    ),
+    null,
   );
-  assert.doesNotMatch(
-    useChatAuthSource,
-    /response\.json\(\)/,
-    "chat auth API error parsing must not use unbounded response.json",
-  );
-  assert.match(
-    useChatAuthSource,
-    /method: "personal_sign"/,
-    "chat auth must request personal_sign from injected wallets",
-  );
-  assert.doesNotMatch(
-    useChatAuthSource,
-    /method: "eth_sign"/,
-    "chat auth must not ask wallets for raw eth_sign fallback signatures",
+  let oversizedAuthError = null;
+  try {
+    await chatAuthRuntime.requestChatAuthSession(
+      "GET",
+      undefined,
+      async () => new Response(JSON.stringify({
+        error: "secret provider diagnostic 0xdeadbeef",
+        padding: "x".repeat(70_000),
+      }), { status: 500 }),
+    );
+  } catch (error) {
+    oversizedAuthError = error;
+  }
+  assert.equal(oversizedAuthError?.message, "Chat auth HTTP 500");
+  assert.doesNotMatch(oversizedAuthError?.message ?? "", /secret|provider|0xdeadbeef/i);
+  assert.deepEqual(
+    [
+      /createChatAuthProof\(\{[\s\S]*walletAddress: normalizedWallet[\s\S]*origin: window\.location\.origin/.test(useChatAuthSource),
+      /requestChatAuthSession\("POST", proof\)/.test(useChatAuthSource),
+      /requestChatAuthSession\("GET"\)/.test(useChatAuthSource),
+      [...useChatAuthSource.matchAll(/normalizeChatAuthAddress\(walletAddress\)/g)].length,
+    ],
+    [true, true, true, 3],
+    "useChatAuth must remain bound to the behavior-tested proof, session, and wallet-normalization policies",
   );
 
   const previousLocalStorage = globalThis.localStorage;
+  const previousWindow = globalThis.window;
   try {
     const storage = new Map();
+    const sessionEvents = [];
+    const eventTarget = new EventTarget();
+    eventTarget.addEventListener(chatSessionClient.CHAT_AUTH_SESSION_EVENT, (event) => {
+      sessionEvents.push(event.detail);
+    });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: eventTarget,
+    });
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
       value: {
@@ -567,7 +1453,6 @@ export function runChatAndClientSafetyTests() {
         removeItem: (key) => storage.delete(key),
       },
     });
-    const validChatAddress = "0x1111111111111111111111111111111111111111";
     const chatKey = chatSessionClient.getChatAuthStorageKey(validChatAddress);
     assert.equal(chatSessionClient.normalizeChatAuthSessionExpiresAt("120000", 100_000), 120_000);
     assert.equal(chatSessionClient.normalizeChatAuthSessionExpiresAt(120_000, 100_000), 120_000);
@@ -607,6 +1492,22 @@ export function runChatAndClientSafetyTests() {
     assert.equal(storage.has(chatKey), false, "invalid chat auth session shape must be cleared from storage");
     assert.equal(chatSessionClient.getChatAuthStorageKey("0xabc"), "");
     assert.equal(chatSessionClient.loadChatAuthSession("0xabc"), null);
+    const sessionToSave = { address: ` ${validChatAddress} `, expiresAt: Date.now() + 60_000 };
+    chatSessionClient.saveChatAuthSession(sessionToSave);
+    assert.deepEqual(JSON.parse(storage.get(chatKey)), {
+      address: validChatAddress,
+      expiresAt: sessionToSave.expiresAt,
+    });
+    assert.deepEqual(sessionEvents.at(-1), {
+      address: validChatAddress,
+      expiresAt: sessionToSave.expiresAt,
+    });
+    const savedRaw = storage.get(chatKey);
+    chatSessionClient.saveChatAuthSession({ address: validChatAddress, expiresAt: Date.now() - 1 });
+    assert.equal(storage.get(chatKey), savedRaw, "invalid session saves must leave the last valid session intact");
+    chatSessionClient.clearChatAuthSession(` ${validChatAddress} `);
+    assert.equal(storage.has(chatKey), false);
+    assert.deepEqual(sessionEvents.at(-1), { address: validChatAddress, expiresAt: null });
   } finally {
     if (previousLocalStorage === undefined) {
       delete globalThis.localStorage;
@@ -616,29 +1517,9 @@ export function runChatAndClientSafetyTests() {
         value: previousLocalStorage,
       });
     }
+    if (previousWindow === undefined) delete globalThis.window;
+    else Object.defineProperty(globalThis, "window", { configurable: true, value: previousWindow });
   }
-
-  const chatSessionClientSource = readFileSync("app/lib/chatSessionClient.ts", "utf8");
-  assert.match(
-    chatSessionClientSource,
-    /function normalizeChatAuthSessionExpiresAt[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\{0,15\}\)\$\/[\s\S]*expiresAt - now > CHAT_AUTH_SESSION_TTL_MS \+ CHAT_AUTH_SESSION_MAX_FUTURE_SKEW_MS[\s\S]*const expiresAt = normalizeChatAuthSessionExpiresAt\(parsed\.expiresAt\)[\s\S]*const expiresAt = normalizeChatAuthSessionExpiresAt\(session\.expiresAt\)/,
-    "client chat sessions must normalize expiry timestamps before restore or save",
-  );
-  assert.doesNotMatch(
-    chatSessionClientSource,
-    /typeof parsed\.expiresAt !== "number"[\s\S]*parsed\.expiresAt <= Date\.now\(\)|expiresAt:\s*parsed\.expiresAt/,
-    "client chat session storage must not return to broad expiry acceptance",
-  );
-  assert.match(
-    useChatAuthSource,
-    /normalizeChatAuthSessionExpiresAt\(response\.headers\.get\("x-chat-session-expires-at"\)\)/,
-    "chat auth hook must normalize server expiry headers before storing client sessions",
-  );
-  assert.doesNotMatch(
-    useChatAuthSource,
-    /Number\(response\.headers\.get\("x-chat-session-expires-at"\)/,
-    "chat auth hook must not coerce server expiry headers with broad Number parsing",
-  );
 
   assert.equal(indexerFinality.parseIndexerFinalityBlocks("12"), 12n);
   assert.equal(indexerFinality.parseIndexerFinalityBlocks("-1"), 0n);
@@ -654,16 +1535,6 @@ export function runChatAndClientSafetyTests() {
   assert.equal(indexerFinality.getIndexerTargetLagBlocks(90n, 88n), 0);
   assert.equal(indexerFinality.getIndexerTargetLagBlocks(null, 88n), null);
   assert.equal(indexerFinality.getIndexerTargetLagBlocks(80n, null), null);
-  assert.match(
-    readFileSync("app/lib/indexerFinality.ts", "utf8"),
-    /function bigintToNonNegativeSafeNumber[\s\S]*Number\.MAX_SAFE_INTEGER[\s\S]*return bigintToNonNegativeSafeNumber\(targetBlock - lastIndexedBlock\)/,
-    "indexer finality target lag must saturate unsafe bigint deltas instead of broadly coercing them",
-  );
-  assert.match(
-    readFileSync("scripts/audit-chain-indexer-window.mjs", "utf8"),
-    /function regularFileStat\(filePath\)[\s\S]*statSync\(filePath\)[\s\S]*stats\.isFile\(\) \? stats : null[\s\S]*!dbPath \|\| !regularFileStat\(dbPath\)[\s\S]*LORE_DB_PATH must point to an existing indexer SQLite database file/,
-    "chain-indexer audit must reject missing or directory DB paths through a shared regular-file stat boundary",
-  );
   assert.equal(indexerFinality.hasMainnetIndexerFinality("12"), true);
   assert.equal(indexerFinality.hasMainnetIndexerFinality("0"), false);
   assert.equal(indexerFinality.hasMainnetIndexerFinality("bad"), false);
@@ -694,15 +1565,4 @@ export function runChatAndClientSafetyTests() {
     failures: 3,
     shouldRestart: false,
   });
-  const indexerWatchPolicySource = readFileSync("app/lib/indexerWatchPolicy.ts", "utf8");
-  assert.match(
-    indexerWatchPolicySource,
-    /function normalizeIndexerWatchFailureCount\(value: number\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*function normalizeIndexerWatchFailureLimit\(value: number\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*const limit = normalizeIndexerWatchFailureLimit\(failureLimit\)/,
-    "indexer watch restart policy must reject malformed failure counters and limits before restart decisions",
-  );
-  assert.doesNotMatch(
-    indexerWatchPolicySource,
-    /Math\.trunc\(consecutiveFailures\)/,
-    "indexer watch restart policy must not coerce malformed counters with Math.trunc",
-  );
 }

@@ -156,10 +156,16 @@ assert.throws(
 const runnerSource = readFileSync("app/hooks/useMiningAutoMineRunner.ts", "utf8");
 const standardBetPathSource = readFileSync("app/hooks/useMiningStandardBetPath.ts", "utf8");
 const allowanceSource = readFileSync("app/hooks/useMiningAllowance.ts", "utf8");
+const autoMineBootstrapSource = readFileSync("app/lib/mining/autoMineBootstrap.ts", "utf8");
 assert.match(
   runnerSource,
   /const authorizationLease = runtimeController\.reserveSpend\([\s\S]*assertCurrentAuthorizationForActor\(getPreferredActorAddress\(\)\);[\s\S]*authorizationLease\.assertCurrent/,
   "Auto-Miner must carry each reservation lease and the original-wallet check to the shared send path",
+);
+assert.match(
+  autoMineBootstrapSource,
+  /return withPendingMiningApprovalLock\(\{[\s\S]*readPendingMiningApprovalState\([\s\S]*recoverPendingMiningApproval\([\s\S]*writePendingMiningApprovalState\(\{[\s\S]*executeReservedMiningApprovalWalletSink\([\s\S]*silentSend\([\s\S]*executeReservedMiningApprovalWalletSink\([\s\S]*writeApprove\(/,
+  "Auto-Miner bootstrap approval must share the actor-token-spender lock, exact two-RPC recovery, and durable pre-sink reservation",
 );
 assert.match(
   runnerSource,
@@ -168,8 +174,8 @@ assert.match(
 );
 assert.match(
   standardBetPathSource,
-  /const writeAuthorizedContract = \(args: unknown, gas: bigint\) => \{\s*assertNormalFeeBudget\(overrides, gas, APP_CHAIN_ID\);\s*assertBeforeSend\?\.\(\);\s*return writeContractAsync\(args\);/,
-  "wallet contract writes must revalidate both the fee budget and authorization immediately at the shared sink",
+  /const writeAuthorizedContract = async \([\s\S]*assertNormalFeeBudget\(overrides, gas, APP_CHAIN_ID\);[\s\S]*await epochWriteGuard\.assertBeforeWalletWrite\(\);[\s\S]*await reserveSubmission\([\s\S]*executeReservedMiningWalletSink\([\s\S]*epochWriteGuard\.assertBeforeWalletWrite[\s\S]*writeContractAsync\(/,
+  "wallet contract writes must revalidate fee, epoch, authorization, and the durable intent immediately at the shared sink",
 );
 assert.equal(
   [...standardBetPathSource.matchAll(/await writeAuthorizedContract\(\{/g)].length,
@@ -178,13 +184,13 @@ assert.equal(
 );
 assert.match(
   standardBetPathSource,
-  /assertBeforeSend\?\.\(\);\s*hash = await silentSend\(/,
-  "silent bets must revalidate authorization immediately at the shared sink",
+  /const pendingState = await reserveSubmission\([\s\S]*executeReservedMiningWalletSink\([\s\S]*epochWriteGuard\.assertBeforeWalletWrite[\s\S]*silentSend\(/,
+  "silent bets must reserve the exact durable intent and revalidate epoch plus authorization immediately at the sink",
 );
 assert.match(
   allowanceSource,
-  /assertBeforeSend\?\.\(\);\s*approveHash = await silentSend\([\s\S]*\} else \{\s*assertBeforeSend\?\.\(\);\s*approveHash = await readWriteContractAsync\(\)\(/,
-  "allowance writes reached from Auto-Miner must revalidate authorization at both wallet sinks",
+  /withPendingMiningApprovalLock\(\{[\s\S]*recoverPendingMiningApproval\([\s\S]*writePendingMiningApprovalState\(\{[\s\S]*executeReservedMiningApprovalWalletSink\([\s\S]*silentSend\([\s\S]*executeReservedMiningApprovalWalletSink\([\s\S]*readWriteContractAsync\(\)\(/,
+  "allowance writes reached from Auto-Miner must hold the shared approval lock, reconcile exact identity, persist intent, and guard both wallet sinks",
 );
 
 let releaseDelayedRestore;

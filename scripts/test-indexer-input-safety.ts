@@ -1,20 +1,30 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import {
+  advanceIndexerMaintenanceRangeCursor,
+  applyIndexerMaintenanceRangeOutcome,
   awaitExactRpcAgreement,
   createBoundedBackwardBlockScanPlan,
   createBoundedIndexerRpcFetch,
   createBoundedIndexerRunPlan,
+  createIndexerMaintenanceRangeAttempt,
   createIndexerRpcWorkBudget,
   createReconcileEpochPlan,
+  getIndexerRpcResponseLimitError,
   getUniqueRpcUrls,
+  INDEXER_OPERATOR_BLOCKED_EXIT_CODE,
   INDEXER_RPC_MAX_LOG_DATA_BYTES,
   parsePlausibleCurrentEpoch,
   parseIndexerCatchupChunkBlocks,
+  planIndexerMaintenanceResponseLimitRecovery,
+  planIndexerResponseLimitRecovery,
   reduceIndexerCatchupChunkBlocks,
   requireIndependentRpcUrls,
   requireAgreedRpcLogSets,
   requireAgreedRpcValues,
+  isIndexerRpcResponseLimitError,
+  selectReconcileResumeEpochCursor,
   validateRpcLogSet,
   type IndexerRpcLog,
 } from "./indexerSafety";
@@ -172,6 +182,48 @@ assert.throws(
   /duplicate normalized log identities/,
 );
 
+const knownUpstreamLimitErrors = [
+  {
+    error: new Error("query returned more than 10000 results"),
+    reason: "upstream_response",
+  },
+  {
+    error: new Error("RPC request failed", {
+      cause: { code: -32005, message: "Response size exceeded" },
+    }),
+    reason: "upstream_response",
+  },
+  {
+    error: new Error("HTTP request failed", {
+      cause: new Error("block range too wide"),
+    }),
+    reason: "upstream_range",
+  },
+] as const;
+for (const { error, reason } of knownUpstreamLimitErrors) {
+  const classified = getIndexerRpcResponseLimitError(error);
+  assert.ok(classified, "known upstream provider limits must be typed for bounded recovery");
+  assert.equal(
+    classified.message,
+    `indexer RPC response limit exceeded: ${reason}`,
+    "provider text must map to a bounded internal reason without being propagated",
+  );
+  assert.equal(isIndexerRpcResponseLimitError(error), true);
+}
+
+for (const genericProviderError of [
+  new Error("HTTP 401 unauthorized"),
+  new Error("fetch failed", { cause: new Error("ECONNRESET") }),
+  { code: -32005, message: "request limit exceeded" },
+  new Error("query returned 9999 results"),
+]) {
+  assert.equal(
+    getIndexerRpcResponseLimitError(genericProviderError),
+    null,
+    "auth, network, code-only, and generic provider failures must not masquerade as density",
+  );
+}
+
 assert.equal(parseIndexerCatchupChunkBlocks(null, 5_000n), 5_000n);
 assert.equal(parseIndexerCatchupChunkBlocks("625", 5_000n), 625n);
 for (const invalidChunkState of [
@@ -201,6 +253,200 @@ assert.deepEqual(
   catchupBackoffSequence,
   [5_000n, 2_500n, 1_250n, 625n, 313n, 157n, 79n, 40n, 20n, 10n, 5n, 3n, 2n, 1n],
   "pre-commit budget failures must converge monotonically to a one-block retry",
+);
+assert.deepEqual(
+  planIndexerResponseLimitRecovery(5_000n),
+  { kind: "retry", nextChunkBlocks: 2_500n },
+  "a dense catch-up response must reduce the durable retry span",
+);
+assert.deepEqual(
+  planIndexerResponseLimitRecovery(2n),
+  { kind: "retry", nextChunkBlocks: 1n },
+  "response-limit recovery must converge to a one-block attempt",
+);
+assert.deepEqual(
+  planIndexerResponseLimitRecovery(1n),
+  { kind: "blocked" },
+  "an impossible one-block response must require operator intervention instead of retrying",
+);
+const responseRecoverySequence: Array<bigint | "blocked"> = [];
+for (let span = 5_000n; ;) {
+  responseRecoverySequence.push(span);
+  const recovery = planIndexerResponseLimitRecovery(span);
+  if (recovery.kind === "blocked") {
+    responseRecoverySequence.push("blocked");
+    break;
+  }
+  span = recovery.nextChunkBlocks;
+}
+assert.deepEqual(
+  responseRecoverySequence,
+  [5_000n, 2_500n, 1_250n, 625n, 313n, 157n, 79n, 40n, 20n, 10n, 5n, 3n, 2n, 1n, "blocked"],
+  "repeated dense responses must reach a terminal one-block block in bounded retries",
+);
+assert.throws(
+  () => planIndexerResponseLimitRecovery(0n),
+  /invalid indexer catch-up chunk attempt span/,
+  "invalid response-limit recovery spans must fail closed",
+);
+
+const repairAttempt = createIndexerMaintenanceRangeAttempt({
+  cursorBlock: 100n,
+  boundaryBlock: 10_099n,
+  chunkBlocks: 10_000n,
+  direction: "forward",
+});
+assert.deepEqual(
+  repairAttempt,
+  { fromBlock: 100n, toBlock: 10_099n, span: 10_000n },
+  "repair must derive its attempted range from the durable forward cursor",
+);
+const repairRecovery = planIndexerResponseLimitRecovery(repairAttempt!.span);
+assert.deepEqual(repairRecovery, { kind: "retry", nextChunkBlocks: 5_000n });
+assert.deepEqual(
+  planIndexerMaintenanceResponseLimitRecovery(
+    repairAttempt!.fromBlock,
+    repairAttempt!.span,
+  ),
+  { kind: "retry", cursorBlock: 100n, nextChunkBlocks: 5_000n },
+  "repair backoff must preserve its durable forward cursor",
+);
+assert.deepEqual(
+  createIndexerMaintenanceRangeAttempt({
+    cursorBlock: 100n,
+    boundaryBlock: 10_099n,
+    chunkBlocks: repairRecovery.kind === "retry" ? repairRecovery.nextChunkBlocks : 1n,
+    direction: "forward",
+  }),
+  { fromBlock: 100n, toBlock: 5_099n, span: 5_000n },
+  "repair response-limit recovery must keep the cursor fixed and consume the persisted smaller span",
+);
+assert.equal(
+  advanceIndexerMaintenanceRangeCursor(repairAttempt!, 10_099n, "forward"),
+  null,
+  "repair advances only after the exact attempted range succeeds",
+);
+
+const reconcileAttempt = createIndexerMaintenanceRangeAttempt({
+  cursorBlock: 10_099n,
+  boundaryBlock: 100n,
+  chunkBlocks: 10_000n,
+  direction: "backward",
+});
+assert.deepEqual(
+  reconcileAttempt,
+  { fromBlock: 100n, toBlock: 10_099n, span: 10_000n },
+  "reconcile must derive its attempted range from the durable backward cursor",
+);
+const reconcileRecovery = planIndexerResponseLimitRecovery(reconcileAttempt!.span);
+assert.deepEqual(reconcileRecovery, { kind: "retry", nextChunkBlocks: 5_000n });
+assert.deepEqual(
+  planIndexerMaintenanceResponseLimitRecovery(
+    reconcileAttempt!.toBlock,
+    reconcileAttempt!.span,
+  ),
+  { kind: "retry", cursorBlock: 10_099n, nextChunkBlocks: 5_000n },
+  "reconcile backoff must preserve its durable backward cursor",
+);
+assert.deepEqual(
+  createIndexerMaintenanceRangeAttempt({
+    cursorBlock: 10_099n,
+    boundaryBlock: 100n,
+    chunkBlocks: reconcileRecovery.kind === "retry" ? reconcileRecovery.nextChunkBlocks : 1n,
+    direction: "backward",
+  }),
+  { fromBlock: 5_100n, toBlock: 10_099n, span: 5_000n },
+  "reconcile response-limit recovery must keep the cursor fixed and consume the persisted smaller span",
+);
+assert.equal(
+  advanceIndexerMaintenanceRangeCursor(reconcileAttempt!, 100n, "backward"),
+  null,
+  "reconcile advances only after the exact attempted range succeeds",
+);
+assert.deepEqual(
+  planIndexerMaintenanceResponseLimitRecovery(321n, 1n),
+  { kind: "blocked", cursorBlock: 321n, exitCode: INDEXER_OPERATOR_BLOCKED_EXIT_CODE },
+  "a one-block maintenance response limit must stop with the dedicated operator exit",
+);
+
+const repairCursor = 100n;
+let repairChunkBlocks = 8n;
+for (const expectedChunk of [4n, 2n, 1n]) {
+  const outcome = applyIndexerMaintenanceRangeOutcome({
+    cursorBlock: repairCursor,
+    boundaryBlock: 107n,
+    chunkBlocks: repairChunkBlocks,
+    direction: "forward",
+    outcome: "response_limit",
+  });
+  assert.equal(outcome.kind, "retry");
+  assert.equal(outcome.cursorBlock, repairCursor, "repair failure must not advance its cursor");
+  assert.equal(outcome.nextChunkBlocks, expectedChunk);
+  repairChunkBlocks = expectedChunk;
+}
+assert.deepEqual(
+  applyIndexerMaintenanceRangeOutcome({
+    cursorBlock: repairCursor,
+    boundaryBlock: 107n,
+    chunkBlocks: repairChunkBlocks,
+    direction: "forward",
+    outcome: "response_limit",
+  }),
+  { kind: "blocked", cursorBlock: repairCursor, exitCode: INDEXER_OPERATOR_BLOCKED_EXIT_CODE },
+  "repair must terminate at one block instead of repeating the same maintenance pass",
+);
+assert.deepEqual(
+  applyIndexerMaintenanceRangeOutcome({
+    cursorBlock: 100n,
+    boundaryBlock: 107n,
+    chunkBlocks: 4n,
+    direction: "forward",
+    outcome: "success",
+  }),
+  { kind: "advanced", cursorBlock: 104n, nextChunkBlocks: 4n },
+  "repair must advance only after a successful exact subrange",
+);
+
+const reconcileCursor = 107n;
+let reconcileChunkBlocks = 8n;
+for (const expectedChunk of [4n, 2n, 1n]) {
+  const outcome = applyIndexerMaintenanceRangeOutcome({
+    cursorBlock: reconcileCursor,
+    boundaryBlock: 100n,
+    chunkBlocks: reconcileChunkBlocks,
+    direction: "backward",
+    outcome: "response_limit",
+  });
+  assert.equal(outcome.kind, "retry");
+  assert.equal(
+    outcome.cursorBlock,
+    reconcileCursor,
+    "reconcile failure must not advance its exact phase/block cursor",
+  );
+  assert.equal(outcome.nextChunkBlocks, expectedChunk);
+  reconcileChunkBlocks = expectedChunk;
+}
+assert.deepEqual(
+  applyIndexerMaintenanceRangeOutcome({
+    cursorBlock: reconcileCursor,
+    boundaryBlock: 100n,
+    chunkBlocks: reconcileChunkBlocks,
+    direction: "backward",
+    outcome: "response_limit",
+  }),
+  { kind: "blocked", cursorBlock: reconcileCursor, exitCode: INDEXER_OPERATOR_BLOCKED_EXIT_CODE },
+  "reconcile must terminate at one block instead of repeating the same maintenance pass",
+);
+assert.deepEqual(
+  applyIndexerMaintenanceRangeOutcome({
+    cursorBlock: 107n,
+    boundaryBlock: 100n,
+    chunkBlocks: 4n,
+    direction: "backward",
+    outcome: "success",
+  }),
+  { kind: "advanced", cursorBlock: 103n, nextChunkBlocks: 4n },
+  "reconcile must advance only after a successful exact subrange",
 );
 assert.throws(
   () => requireAgreedRpcLogSets([firstProvider], 2),
@@ -343,6 +589,261 @@ async function testBoundedRpcAgreement() {
     "two exact responses must complete agreement without awaiting a useless third provider",
   );
   assert.equal(thirdProviderStarted, false, "the third provider must remain idle after exact quorum");
+
+  const unilateralLimitBudget = createIndexerRpcWorkBudget({
+    maxRpcCalls: 2,
+    maxLogs: 2,
+    maxSplitNodes: 1,
+    maxElapsedMs: 100,
+  });
+  await assert.rejects(
+    awaitExactRpcAgreement(
+      [
+        async () => 100n,
+        async () => {
+          throw new Error("RPC request failed", {
+            cause: { code: -32005, message: "Response size exceeded" },
+          });
+        },
+      ],
+      2,
+      (value) => value.toString(),
+      unilateralLimitBudget,
+    ),
+    (error: unknown) => {
+      assert.equal(
+        isIndexerRpcResponseLimitError(error),
+        false,
+        "one provider must not unilaterally trigger durable response-limit recovery",
+      );
+      assert.match(
+        error instanceof Error ? error.message : String(error),
+        /insufficient independent RPC responses for exact agreement/,
+      );
+      return true;
+    },
+    "one canonical response plus one limit rejection must remain a restartable quorum failure",
+  );
+
+  let replacementWitnessStarted = false;
+  const replacementWitnessBudget = createIndexerRpcWorkBudget({
+    maxRpcCalls: 3,
+    maxLogs: 3,
+    maxSplitNodes: 1,
+    maxElapsedMs: 100,
+  });
+  assert.equal(
+    await awaitExactRpcAgreement(
+      [
+        async () => 100n,
+        async () => {
+          throw new Error("Response size exceeded");
+        },
+        async () => {
+          replacementWitnessStarted = true;
+          return 100n;
+        },
+      ],
+      2,
+      (value) => value.toString(),
+      replacementWitnessBudget,
+    ),
+    100n,
+    "a third honest origin must still form quorum after one unilateral limit rejection",
+  );
+  assert.equal(
+    replacementWitnessStarted,
+    true,
+    "a limit rejection must start the bounded replacement witness",
+  );
+
+  const corroboratedLimitBudget = createIndexerRpcWorkBudget({
+    maxRpcCalls: 2,
+    maxLogs: 2,
+    maxSplitNodes: 1,
+    maxElapsedMs: 100,
+  });
+  await assert.rejects(
+    awaitExactRpcAgreement(
+      [
+        async () => {
+          throw new Error("Response size exceeded");
+        },
+        async () => {
+          throw new Error("block range too wide");
+        },
+      ],
+      2,
+      (value) => String(value),
+      corroboratedLimitBudget,
+    ),
+    (error: unknown) => {
+      assert.equal(
+        isIndexerRpcResponseLimitError(error),
+        true,
+        "two independent limit rejections must retain typed bounded recovery",
+      );
+      return true;
+    },
+    "corroborated provider limits must still trigger quorum-level range reduction",
+  );
+
+  const stalledPeerLimitBudget = createIndexerRpcWorkBudget({
+    maxRpcCalls: 3,
+    maxLogs: 3,
+    maxSplitNodes: 1,
+    maxElapsedMs: 100,
+  });
+  const stalledPeerLimitResult = await Promise.race([
+    awaitExactRpcAgreement(
+      [
+        () => new Promise<bigint>(() => {}),
+        async () => {
+          throw new Error("Response size exceeded");
+        },
+        async () => {
+          throw new Error("block range too wide");
+        },
+      ],
+      2,
+      (value) => value.toString(),
+      stalledPeerLimitBudget,
+    ).then(
+      () => "unexpected_fulfillment" as const,
+      (error) => isIndexerRpcResponseLimitError(error)
+        ? "response_limit" as const
+        : "unexpected_error" as const,
+    ),
+    new Promise<"still_waiting">((resolve) => {
+      setTimeout(resolve, 20, "still_waiting");
+    }),
+  ]);
+  assert.equal(
+    stalledPeerLimitResult,
+    "response_limit",
+    "two corroborating limit rejections must win before an already-started stalled peer deadline",
+  );
+
+  const lateMutationBudget = createIndexerRpcWorkBudget({
+    maxRpcCalls: 3,
+    maxLogs: 3,
+    maxSplitNodes: 1,
+    maxElapsedMs: 100,
+  });
+  let releaseLateProvider = () => {};
+  const lateProviderGate = new Promise<void>((resolve) => {
+    releaseLateProvider = resolve;
+  });
+  let markLateProviderStarted = () => {};
+  const lateProviderStarted = new Promise<void>((resolve) => {
+    markLateProviderStarted = resolve;
+  });
+  let markLateProviderFinished = () => {};
+  const lateProviderFinished = new Promise<void>((resolve) => {
+    markLateProviderFinished = resolve;
+  });
+  let lateProviderAttemptedBudgetMutation = false;
+  const unhandledRejections: unknown[] = [];
+  const recordUnhandledRejection = (reason: unknown) => {
+    unhandledRejections.push(reason);
+  };
+  process.on("unhandledRejection", recordUnhandledRejection);
+  try {
+    await assert.rejects(
+      awaitExactRpcAgreement(
+        [
+          async () => {
+            throw new Error("Response size exceeded");
+          },
+          async () => {
+            await lateProviderStarted;
+            throw new Error("block range too wide");
+          },
+          async (signal?: AbortSignal) => {
+            markLateProviderStarted();
+            await lateProviderGate;
+            lateProviderAttemptedBudgetMutation = true;
+            try {
+              signal?.throwIfAborted();
+              lateMutationBudget.recordLogs(1);
+              throw new Error("late provider rejection");
+            } finally {
+              markLateProviderFinished();
+            }
+          },
+        ],
+        2,
+        (value) => String(value),
+        lateMutationBudget,
+      ),
+      (error: unknown) => {
+        assert.equal(isIndexerRpcResponseLimitError(error), true);
+        return true;
+      },
+      "two fast independent limits must complete while the delayed third provider is pending",
+    );
+    releaseLateProvider();
+    await lateProviderFinished;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      lateProviderAttemptedBudgetMutation,
+      true,
+      "the delayed provider must reach its guarded post-terminal budget mutation",
+    );
+    assert.deepEqual(
+      lateMutationBudget.snapshot(),
+      { rpcCalls: 0, logs: 0, splitNodes: 0 },
+      "an aborted late provider must not mutate the shared agreement budget",
+    );
+    assert.deepEqual(
+      unhandledRejections,
+      [],
+      "a rejected late provider settlement must remain absorbed after agreement termination",
+    );
+  } finally {
+    releaseLateProvider();
+    process.off("unhandledRejection", recordUnhandledRejection);
+  }
+
+  const unilateralLimitTimeoutBudget = createIndexerRpcWorkBudget({
+    maxRpcCalls: 3,
+    maxLogs: 3,
+    maxSplitNodes: 1,
+    maxElapsedMs: 10,
+  });
+  await assert.rejects(
+    awaitExactRpcAgreement(
+      [
+        async () => {
+          throw new Error("Response size exceeded");
+        },
+        async () => 100n,
+        () => new Promise<bigint>(() => {}),
+      ],
+      2,
+      (value) => value.toString(),
+      unilateralLimitTimeoutBudget,
+    ),
+    /budget exhausted: time/,
+    "one limit plus one honest response and one stalled witness must remain time-bounded",
+  );
+
+  const disagreementBudget = createIndexerRpcWorkBudget({
+    maxRpcCalls: 2,
+    maxLogs: 2,
+    maxSplitNodes: 1,
+    maxElapsedMs: 100,
+  });
+  await assert.rejects(
+    awaitExactRpcAgreement(
+      [async () => 100n, async () => 101n],
+      2,
+      (value) => value.toString(),
+      disagreementBudget,
+    ),
+    /independent RPC providers disagreed on normalized value/,
+    "two fulfilled but different values must retain exact-disagreement semantics",
+  );
 
   let tieBreakerStarted = false;
   const tieBreakerBudget = createIndexerRpcWorkBudget({
@@ -582,12 +1083,86 @@ assert.equal(
   1,
   "the durable cursor must wrap without enumerating the full epoch history",
 );
+const budgetLimitedReconcilePlan = createReconcileEpochPlan({
+  currentEpoch: 100,
+  cursor: 1,
+  indexedEpochs: new Set(),
+  maxTargets: 32,
+  recentWindow: 32,
+});
+assert.equal(budgetLimitedReconcilePlan.sequentialTargetEpochs.length, 32);
+assert.equal(
+  selectReconcileResumeEpochCursor({
+    plannedNextCursor: budgetLimitedReconcilePlan.nextCursor,
+    sequentialTargetEpochs: budgetLimitedReconcilePlan.sequentialTargetEpochs,
+    completedTargetEpochs: new Set(budgetLimitedReconcilePlan.targetEpochs.slice(0, 8)),
+  }),
+  9,
+  "an eight-range maintenance budget must resume at target nine instead of skipping to epoch 33",
+);
+assert.equal(
+  selectReconcileResumeEpochCursor({
+    plannedNextCursor: budgetLimitedReconcilePlan.nextCursor,
+    sequentialTargetEpochs: budgetLimitedReconcilePlan.sequentialTargetEpochs,
+    completedTargetEpochs: new Set(budgetLimitedReconcilePlan.targetEpochs),
+  }),
+  33,
+  "the planned epoch cursor may advance only after every sequential target was processed",
+);
 
 const indexerSource = readFileSync("scripts/indexer.ts", "utf8");
+const ecosystemSource = readFileSync("ecosystem.config.cjs", "utf8");
+const dataSyncHealthSource = readFileSync("app/api/health/data-sync/route.ts", "utf8");
+const ecosystemModule: { exports: unknown } = { exports: {} };
+runInNewContext(ecosystemSource, {
+  module: ecosystemModule,
+  exports: ecosystemModule.exports,
+  process: { env: {} },
+});
+const ecosystemConfig = ecosystemModule.exports as {
+  apps?: Array<{ name?: unknown; stop_exit_codes?: unknown }>;
+};
+const indexerProcess = ecosystemConfig.apps?.find((app) => app.name === "lore-indexer");
+assert.ok(indexerProcess, "PM2 config must define the lore-indexer process");
+assert.ok(
+  Array.isArray(indexerProcess.stop_exit_codes) &&
+    indexerProcess.stop_exit_codes.length === 1 &&
+    indexerProcess.stop_exit_codes[0] === INDEXER_OPERATOR_BLOCKED_EXIT_CODE,
+  "PM2 must semantically stop autorestarting the dedicated operator-blocked exit",
+);
 assert.match(
   indexerSource,
   /awaitExactRpcAgreement\([\s\S]*independentRpcClients\.map[\s\S]*validateRpcLogSet[\s\S]*agreementFingerprint/,
   "every indexed log fetch must validate and require exact independent-provider agreement",
+);
+assert.equal(
+  (
+    indexerSource.match(
+      /independentRpcClients\.map\(\(rpcClient, index\) => async \(signal\) => \{/g,
+    ) ?? []
+  ).length,
+  2,
+  "both production agreement factories must receive the terminal cancellation signal",
+);
+assert.match(
+  indexerSource,
+  /async function withRpcTimeout<T>\([\s\S]*signal: AbortSignal[\s\S]*Promise\.race<T>\(\[[\s\S]*signal\.addEventListener\("abort"[\s\S]*signal\.removeEventListener\("abort"/,
+  "RPC timeout races must absorb late provider results and unwind on agreement cancellation",
+);
+assert.match(
+  indexerSource,
+  /async function fetchLogsRequestWithRetry\([\s\S]*signal: AbortSignal[\s\S]*budget\.consumeRpcCall\(\)[\s\S]*withRpcTimeout\([\s\S]*signal,[\s\S]*signal\.throwIfAborted\(\);[\s\S]*budget\.recordLogs/,
+  "log factories must check cancellation around RPC and before shared call/log budget mutations",
+);
+assert.match(
+  indexerSource,
+  /async function fetchLogsRequestAdaptiveSplit\([\s\S]*signal: AbortSignal[\s\S]*signal\.throwIfAborted\(\);[\s\S]*budget\.consumeSplitNode\(\)[\s\S]*await delay\([\s\S]*signal\)/,
+  "adaptive provider retries and splits must remain cancellation-aware",
+);
+assert.match(
+  indexerSource,
+  /async function readWithExactIndexerRpcAgreement<T>\([\s\S]*async \(signal\)[\s\S]*signal\.throwIfAborted\(\);[\s\S]*budget\.consumeRpcCall\(\)[\s\S]*withRpcTimeout\([\s\S]*signal,[\s\S]*signal\.throwIfAborted\(\);[\s\S]*return value/,
+  "non-log RPC agreement factories must guard their shared call budget and late results",
 );
 assert.match(
   indexerSource,
@@ -626,13 +1201,48 @@ assert.match(
 );
 assert.match(
   indexerSource,
+  /isIndexerRpcResponseLimitError\(error\)[\s\S]*planIndexerResponseLimitRecovery\(end - start \+ 1n\)[\s\S]*runIndexerStorageTransaction\(getActiveIndexerLeaseOwnerToken\(\)[\s\S]*INDEXER_CATCHUP_CHUNK_BLOCKS_META_KEY[\s\S]*indexerRunStatus[\s\S]*throw new IndexerOperatorBlockedError/,
+  "response limits must durably back off under lease and block explicitly at one block",
+);
+assert.match(
+  ecosystemSource,
+  /name: "lore-indexer"[\s\S]*stop_exit_codes: \[78\]/,
+  "PM2 must not restart-loop the explicit operator-blocked exit",
+);
+assert.match(
+  dataSyncHealthSource,
+  /rpc_response_limit_single_block[\s\S]*runIsBlocked[\s\S]*degraded =[\s\S]*runIsBlocked[\s\S]*operator intervention is required/,
+  "private data-sync health must surface the durable one-block operator block",
+);
+assert.match(
+  indexerSource,
   /commitIndexerChunk\([\s\S]*writeDustSettlements[\s\S]*end === currentBlock[\s\S]*setMetaJson\(INDEXER_CATCHUP_CHUNK_BLOCKS_META_KEY, null\)/,
   "the final event/checkpoint/cursor commit must atomically clear adaptive catch-up state",
 );
 assert.match(
   indexerSource,
-  /getMetaJsonStrict<unknown>\(RECONCILE_BLOCK_CURSOR_META_KEY\)[\s\S]*createBoundedBackwardBlockScanPlan\([\s\S]*fullScanChunksRemaining -= fullScanPlan\.chunkCount[\s\S]*setReconcileBlockCursor/,
-  "full-history epoch reconcile must resume from a strict durable cursor within one fixed chunk budget",
+  /type ReconcileBlockCursor = \{[\s\S]*phase: "recent" \| "history"[\s\S]*getMetaJsonStrict<unknown>\(RECONCILE_BLOCK_CURSOR_META_KEY\)[\s\S]*scanReconcileEpochRanges[\s\S]*createIndexerMaintenanceRangeAttempt\([\s\S]*setReconcileBlockCursor/,
+  "recent and full-history epoch reconcile must resume from a strict durable range cursor",
+);
+assert.match(
+  indexerSource,
+  /persistIndexerMaintenanceResponseLimit\([\s\S]*INDEXER_REPAIR_CHUNK_BLOCKS_META_KEY[\s\S]*INDEXER_RECONCILE_CHUNK_BLOCKS_META_KEY[\s\S]*planIndexerMaintenanceResponseLimitRecovery\([\s\S]*attempt\.span[\s\S]*setMetaJson\(key, recovery\.nextChunkBlocks\.toString\(\)\)[\s\S]*throw new IndexerOperatorBlockedError/,
+  "repair and reconcile must share durable response-limit recovery under the active lease",
+);
+assert.match(
+  indexerSource,
+  /runRepairPass[\s\S]*getIndexerMaintenanceChunkBlocks\([\s\S]*"repair"[\s\S]*createIndexerMaintenanceRangeAttempt\([\s\S]*persistIndexerMaintenanceResponseLimit\("repair", attempt\)[\s\S]*setRepairCursorBlock/,
+  "repair must consume the persisted span without advancing its cursor on a failed range",
+);
+assert.match(
+  indexerSource,
+  /scanReconcileEpochRanges[\s\S]*getIndexerMaintenanceChunkBlocks\([\s\S]*"reconcile"[\s\S]*createIndexerMaintenanceRangeAttempt\([\s\S]*persistIndexerMaintenanceResponseLimit\("reconcile", attempt\)[\s\S]*advanceIndexerMaintenanceRangeCursor/,
+  "reconcile must consume the persisted span without advancing its cursor on a failed range",
+);
+assert.match(
+  indexerSource,
+  /completedTargetEpochs[\s\S]*reconcileRangesRemaining <= 0[\s\S]*selectReconcileResumeEpochCursor\([\s\S]*sequentialTargetEpochs: reconcilePlan\.sequentialTargetEpochs[\s\S]*setReconcileEpochCursor/,
+  "epoch reconciliation must persist the first unprocessed sequential target when its range budget is exhausted",
 );
 assert.match(
   indexerSource,

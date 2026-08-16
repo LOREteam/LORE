@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
@@ -138,19 +137,4 @@ test("live canary rejects malicious health origin before RPC or health fetch", (
   assert.equal(result.status, 1, output);
   assert.match(output, /must exactly match NEXT_PUBLIC_SITE_URL/);
   assert.doesNotMatch(output, /NETWORK_CALL_FORBIDDEN/);
-});
-
-test("all configurable health-secret sinks enforce the shared boundary", () => {
-  const productionHealth = readFileSync("scripts/check-production-health.mjs", "utf8");
-  const runtimeMonitor = readFileSync("scripts/monitor-runtime-health.mjs", "utf8");
-  const liveCanary = readFileSync("scripts/live-round-canary.ts", "utf8");
-  for (const [name, source] of Object.entries({ productionHealth, runtimeMonitor, liveCanary })) {
-    assert.match(source, /assertTrustedHealthCredentialOrigin/, `${name} must enforce the trusted health origin`);
-  }
-  assert.match(productionHealth, /fetchJson\(trustedBaseUrl, "\/api\/health\/runtime"\)/);
-  assert.match(productionHealth, /redirect: "error"/);
-  assert.match(runtimeMonitor, /return assertTrustedHealthCredentialOrigin\(/);
-  assert.match(runtimeMonitor, /x-health-diagnostics-secret[\s\S]*redirect: "error"/);
-  assert.match(liveCanary, /const HEALTH_BASE_URL = parsedHealthBaseUrl[\s\S]*assertTrustedHealthCredentialOrigin/);
-  assert.match(liveCanary, /x-health-diagnostics-secret[\s\S]*redirect: "error"/);
 });

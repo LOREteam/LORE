@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as clientIdentityModule from "../app/api/_lib/clientIdentity.ts";
 import * as externalRateLimitModule from "../app/api/_lib/externalRateLimit.ts";
+import * as sharedRateLimitModule from "../app/api/_lib/sharedRateLimit.ts";
 
 const clientIdentity = clientIdentityModule.default ?? clientIdentityModule;
 const externalRateLimit = externalRateLimitModule.default ?? externalRateLimitModule;
+const sharedRateLimit = sharedRateLimitModule.default ?? sharedRateLimitModule;
 
 function withTemporaryEnv(values, fn) {
   const previous = new Map();
@@ -38,6 +40,46 @@ async function withTemporaryEnvAsync(values, fn) {
       else process.env[key] = value;
     }
   }
+}
+
+async function withTemporaryFetch(fetchImpl, fn) {
+  const previous = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = previous;
+  }
+}
+
+async function withTemporaryNow(now, fn) {
+  const previous = Date.now;
+  Date.now = () => now;
+  try {
+    return await fn();
+  } finally {
+    Date.now = previous;
+  }
+}
+
+async function assertRateLimitError(response, expectedStatus, expectedBody, label) {
+  assert.ok(response, `${label} must return a response`);
+  assert.equal(response.status, expectedStatus, `${label} status`);
+  assert.equal(response.headers.get("Cache-Control"), "no-store, no-cache, must-revalidate", `${label} cache`);
+  assert.equal(response.headers.get("Pragma"), "no-cache", `${label} pragma`);
+  assert.equal(response.headers.get("Expires"), "0", `${label} expires`);
+  assert.equal(response.headers.get("Vary"), null, `${label} must not vary a non-cacheable response`);
+  assert.deepEqual(await response.json(), expectedBody, `${label} body`);
+}
+
+function trustedRateLimitRequest(ip, secret) {
+  return new Request("https://play.example/api/live-state", {
+    headers: {
+      "user-agent": "shared-rate-limit-behavior-probe",
+      "x-forwarded-for": ip,
+      "x-lore-proxy-secret": secret,
+    },
+  });
 }
 
 export async function runClientIdentityAndRateLimitTests() {
@@ -141,6 +183,389 @@ export async function runClientIdentityAndRateLimitTests() {
     clientIdentitySource,
     /const expected = normalizeProxySecret\(process\.env\.TRUST_PROXY_SECRET\)[\s\S]*const provided = normalizeProxySecret\(request\.headers\.get\(PROXY_SECRET_HEADER\)\)[\s\S]*secretsMatch\(provided, expected\)/,
     "client identity must normalize both expected and provided proxy trust secrets before HMAC comparison",
+  );
+  const sanitizedLogBucket = sharedRateLimit.formatRateLimitLogBucket("api/bucket path\r\n".repeat(20));
+  assert.ok(sanitizedLogBucket.length <= 80, "rate-limit log labels must stay bounded");
+  assert.match(sanitizedLogBucket, /^[a-z0-9:_-]+$/i, "rate-limit log labels must remove control and path syntax");
+  assert.equal(sharedRateLimit.formatRateLimitLogBucket(""), "unknown");
+  assert.equal(sharedRateLimit.normalizeRetryAfterSeconds(Number.NaN), 1);
+  assert.equal(sharedRateLimit.normalizeRetryAfterSeconds(-1), 1);
+  assert.equal(sharedRateLimit.normalizeRetryAfterSeconds(1.2), 2);
+  assert.equal(sharedRateLimit.normalizeRetryAfterSeconds(100_000), 86_400);
+
+  const activeWindowState = { count: 1, windowStartedAt: 120_000, resetAt: 180_000 };
+  const fullLocalState = new Map([
+    ["active-a", activeWindowState],
+    ["active-b", activeWindowState],
+  ]);
+  const fullLocalDecision = sharedRateLimit.consumeBoundedRateLimitState({
+    stateMap: fullLocalState,
+    key: "active-c",
+    limit: 2,
+    windowMs: 60_000,
+    now: 120_001,
+    maxEntries: 2,
+  });
+  assert.equal(fullLocalDecision.allowed, false, "an active local state map at capacity must fail closed");
+  assert.equal(fullLocalState.size, 2, "capacity rejection must not grow the local state map");
+  assert.equal(
+    sharedRateLimit.normalizeRetryAfterSeconds(fullLocalDecision.retryAfterSeconds),
+    60,
+    "capacity rejection must bind Retry-After to the current window",
+  );
+
+  const expiredLocalState = new Map([
+    ["expired-a", { count: 9, windowStartedAt: 60_000, resetAt: 120_000 }],
+    ["expired-b", { count: 9, windowStartedAt: 60_000, resetAt: 120_000 }],
+  ]);
+  assert.deepEqual(
+    sharedRateLimit.consumeBoundedRateLimitState({
+      stateMap: expiredLocalState,
+      key: "fresh-c",
+      limit: 2,
+      windowMs: 60_000,
+      now: 120_001,
+      maxEntries: 2,
+    }),
+    { allowed: true },
+    "expired entries must be reclaimed before rejecting a fresh key",
+  );
+  assert.deepEqual([...expiredLocalState.keys()], ["fresh-c"]);
+  assert.deepEqual(expiredLocalState.get("fresh-c"), {
+    count: 1,
+    windowStartedAt: 120_000,
+    resetAt: 180_000,
+  });
+
+  const weakStateBlockedByLocalCapacity = new Map();
+  const localStateAtCapacity = new Map([
+    ["active-a", activeWindowState],
+    ["active-b", activeWindowState],
+  ]);
+  const localCapacityDecision = sharedRateLimit.consumeWeakIdentityRateLimitState({
+    weakBucketMap: weakStateBlockedByLocalCapacity,
+    localMap: localStateAtCapacity,
+    bucket: "api-weak-local-cap",
+    key: "new-client",
+    limit: 1,
+    windowMs: 60_000,
+    now: 120_001,
+    maxWeakEntries: 2,
+    maxLocalEntries: 2,
+  });
+  assert.equal(localCapacityDecision.allowed, false);
+  assert.equal(
+    weakStateBlockedByLocalCapacity.size,
+    0,
+    "a rejected per-client insert must not consume the weak shared-bucket allowance",
+  );
+  assert.equal(localStateAtCapacity.size, 2);
+
+  const weakBucketState = new Map();
+  const weakClientState = new Map();
+  for (let index = 0; index < 11; index += 1) {
+    assert.deepEqual(
+      sharedRateLimit.consumeWeakIdentityRateLimitState({
+        weakBucketMap: weakBucketState,
+        localMap: weakClientState,
+        bucket: "api-weak-shared-cap",
+        key: `client-${index}`,
+        limit: 1,
+        windowMs: 60_000,
+        now: 120_001,
+        maxWeakEntries: 2,
+        maxLocalEntries: 20,
+      }),
+      { allowed: true },
+    );
+  }
+  const weakBucketLimitDecision = sharedRateLimit.consumeWeakIdentityRateLimitState({
+    weakBucketMap: weakBucketState,
+    localMap: weakClientState,
+    bucket: "api-weak-shared-cap",
+    key: "client-11",
+    limit: 1,
+    windowMs: 60_000,
+    now: 120_001,
+    maxWeakEntries: 2,
+    maxLocalEntries: 20,
+  });
+  assert.equal(weakBucketLimitDecision.allowed, false, "weak identities must share a bounded bucket cap");
+  assert.equal(
+    weakClientState.size,
+    11,
+    "the weak shared-bucket cap must run before inserting another per-client key",
+  );
+
+  const fullWeakBucketState = new Map([
+    ["active-bucket-a", activeWindowState],
+    ["active-bucket-b", activeWindowState],
+  ]);
+  const untouchedLocalState = new Map();
+  const weakCapacityDecision = sharedRateLimit.consumeWeakIdentityRateLimitState({
+    weakBucketMap: fullWeakBucketState,
+    localMap: untouchedLocalState,
+    bucket: "active-bucket-c",
+    key: "client-c",
+    limit: 1,
+    windowMs: 60_000,
+    now: 120_001,
+    maxWeakEntries: 2,
+    maxLocalEntries: 20,
+  });
+  assert.equal(weakCapacityDecision.allowed, false, "an active weak-bucket map at capacity must fail closed");
+  assert.equal(fullWeakBucketState.size, 2);
+  assert.equal(untouchedLocalState.size, 0, "weak map capacity must be checked before local state insertion");
+
+  const proxySecret = "behavior-proxy-secret-with-at-least-32-characters";
+  await withTemporaryEnvAsync(
+    {
+      NODE_ENV: "production",
+      TRUST_PROXY_HEADERS: undefined,
+      TRUST_PROXY_SECRET: undefined,
+      ALLOW_WEAK_RATE_LIMIT_IDENTITY: undefined,
+      WEB_REPLICA_COUNT: "1",
+      RATE_LIMIT_EXTERNAL_FAIL_CLOSED: undefined,
+      UPSTASH_REDIS_REST_URL: undefined,
+      UPSTASH_REDIS_REST_TOKEN: undefined,
+    },
+    async () => {
+      const response = await sharedRateLimit.enforceSharedRateLimit(
+        new Request("https://play.example/api/live-state"),
+        { bucket: "api-production-weak-reject", limit: 1, windowMs: 60_000 },
+      );
+      await assertRateLimitError(
+        response,
+        503,
+        { error: "Trusted proxy identity unavailable" },
+        "production weak identity",
+      );
+    },
+  );
+  await withTemporaryEnvAsync(
+    {
+      NODE_ENV: "production",
+      TRUST_PROXY_HEADERS: undefined,
+      TRUST_PROXY_SECRET: undefined,
+      ALLOW_WEAK_RATE_LIMIT_IDENTITY: "1",
+      WEB_REPLICA_COUNT: "1",
+      RATE_LIMIT_EXTERNAL_FAIL_CLOSED: undefined,
+      UPSTASH_REDIS_REST_URL: undefined,
+      UPSTASH_REDIS_REST_TOKEN: undefined,
+    },
+    async () => {
+      const warnings = [];
+      const originalWarn = console.warn;
+      console.warn = (...values) => warnings.push(values.map(String).join(" "));
+      try {
+        await withTemporaryNow(120_001, async () => {
+          const options = { bucket: "api-production-weak-fallback", limit: 1, windowMs: 60_000 };
+          const first = await sharedRateLimit.enforceSharedRateLimit(
+            new Request("https://play.example/api/live-state"),
+            options,
+          );
+          assert.equal(first, null);
+          const second = await sharedRateLimit.enforceSharedRateLimit(
+            new Request("https://play.example/api/live-state"),
+            options,
+          );
+          await assertRateLimitError(
+            second,
+            429,
+            { error: "Too many requests", retryAfter: 60 },
+            "explicitly allowed production weak fallback",
+          );
+        });
+      } finally {
+        console.warn = originalWarn;
+      }
+      assert.deepEqual(
+        warnings,
+        ["[rate-limit:api-production-weak-fallback] weak identity - using fallback rate limiting"],
+      );
+    },
+  );
+  for (const [label, webReplicaCount, failClosed, externalUrl, externalToken] of [
+    ["multi-replica", "2", undefined, undefined, undefined],
+    ["explicit fail-closed", "1", "1", undefined, undefined],
+    ["malformed replica count", "01", undefined, undefined, undefined],
+    ["partial URL-only configuration", "1", undefined, "https://redis.playlore.xyz", undefined],
+    ["partial token-only configuration", "1", undefined, undefined, "partial-store-token"],
+  ]) {
+    await withTemporaryEnvAsync(
+      {
+        NODE_ENV: "production",
+        TRUST_PROXY_HEADERS: "1",
+        TRUST_PROXY_SECRET: proxySecret,
+        ALLOW_WEAK_RATE_LIMIT_IDENTITY: undefined,
+        WEB_REPLICA_COUNT: webReplicaCount,
+        RATE_LIMIT_EXTERNAL_FAIL_CLOSED: failClosed,
+        UPSTASH_REDIS_REST_URL: externalUrl,
+        UPSTASH_REDIS_REST_TOKEN: externalToken,
+      },
+      async () => {
+        let fetchCalls = 0;
+        await withTemporaryFetch(async () => {
+          fetchCalls += 1;
+          throw new Error("partial external-store configuration reached fetch");
+        }, async () => {
+          const response = await sharedRateLimit.enforceSharedRateLimit(
+            trustedRateLimitRequest("203.0.113.31", proxySecret),
+            { bucket: `api-partial-store-${label.replaceAll(" ", "-")}`, limit: 1, windowMs: 60_000 },
+          );
+          await assertRateLimitError(
+            response,
+            503,
+            { error: "Rate limit service unavailable" },
+            `${label} external store with partial configuration`,
+          );
+          assert.equal(fetchCalls, 0, `${label} partial external-store configuration must fail before fetch`);
+        });
+      },
+    );
+  }
+  await withTemporaryEnvAsync(
+    {
+      NODE_ENV: "production",
+      TRUST_PROXY_HEADERS: "1",
+      TRUST_PROXY_SECRET: proxySecret,
+      ALLOW_WEAK_RATE_LIMIT_IDENTITY: undefined,
+      WEB_REPLICA_COUNT: "2",
+      RATE_LIMIT_EXTERNAL_FAIL_CLOSED: "1",
+      UPSTASH_REDIS_REST_URL: "https://redis.playlore.xyz",
+      UPSTASH_REDIS_REST_TOKEN: "behavior-store-token",
+    },
+    async () => {
+      const counts = new Map();
+      const redisKeys = [];
+      await withTemporaryFetch(async (_url, init) => {
+        const command = JSON.parse(String(init?.body));
+        const redisKey = String(command[3]);
+        redisKeys.push(redisKey);
+        const count = (counts.get(redisKey) ?? 0) + 1;
+        counts.set(redisKey, count);
+        return new Response(JSON.stringify({ result: [count, 60_000] }), { status: 200 });
+      }, async () => {
+        await withTemporaryNow(120_001, async () => {
+          const options = { bucket: "api-shared-identity-probe", limit: 1, windowMs: 60_000 };
+          const firstReplica = await sharedRateLimit.enforceSharedRateLimit(
+            trustedRateLimitRequest("203.0.113.41", proxySecret),
+            options,
+          );
+          const secondClient = await sharedRateLimit.enforceSharedRateLimit(
+            trustedRateLimitRequest("203.0.113.42", proxySecret),
+            options,
+          );
+          const secondReplica = await sharedRateLimit.enforceSharedRateLimit(
+            trustedRateLimitRequest("203.0.113.41", proxySecret),
+            options,
+          );
+          assert.equal(firstReplica, null, "the first replica must admit the first client request");
+          assert.equal(secondClient, null, "a distinct trusted client must consume a distinct shared bucket");
+          await assertRateLimitError(
+            secondReplica,
+            429,
+            { error: "Too many requests", retryAfter: 60 },
+            "same client through a second replica",
+          );
+          assert.equal(counts.size, 2, "two trusted clients must produce exactly two shared Redis keys");
+          assert.equal(redisKeys[0], redisKeys[2], "replicas must derive the same key for the same trusted client");
+          assert.notEqual(redisKeys[0], redisKeys[1], "different trusted clients must not share an identity key");
+          for (const redisKey of redisKeys) {
+            assert.match(redisKey, /^lore:rate-limit:api-shared-identity-probe:[a-f0-9]{32}:120000$/);
+            assert.doesNotMatch(redisKey, /203\.0\.113\.(?:41|42)|behavior-proxy-secret|behavior-store-token/);
+          }
+        });
+      });
+    },
+  );
+  await withTemporaryEnvAsync(
+    {
+      NODE_ENV: "production",
+      TRUST_PROXY_HEADERS: "1",
+      TRUST_PROXY_SECRET: proxySecret,
+      ALLOW_WEAK_RATE_LIMIT_IDENTITY: undefined,
+      WEB_REPLICA_COUNT: "2",
+      RATE_LIMIT_EXTERNAL_FAIL_CLOSED: "1",
+      UPSTASH_REDIS_REST_URL: "https://redis.playlore.xyz/private-path",
+      UPSTASH_REDIS_REST_TOKEN: "behavior-outage-token",
+    },
+    async () => {
+      const warnings = [];
+      const originalWarn = console.warn;
+      console.warn = (...values) => warnings.push(values.map(String).join(" "));
+      try {
+        await withTemporaryFetch(async () => {
+          throw new Error("store outage at https://redis.playlore.xyz/private-path token=behavior-outage-token");
+        }, async () => {
+          const response = await sharedRateLimit.enforceSharedRateLimit(
+            trustedRateLimitRequest("203.0.113.51", proxySecret),
+            { bucket: "api-outage-probe", limit: 1, windowMs: 60_000 },
+          );
+          await assertRateLimitError(
+            response,
+            503,
+            { error: "Rate limit service unavailable" },
+            "external store outage",
+          );
+        });
+      } finally {
+        console.warn = originalWarn;
+      }
+      assert.equal(warnings.length, 1, "external store outage must emit one bounded warning per bucket");
+      assert.equal(warnings[0], "[rate-limit:api-outage-probe] external store fallback: Error");
+      assert.doesNotMatch(
+        warnings[0],
+        /redis\.playlore\.xyz|private-path|behavior-outage-token|203\.0\.113\.51|behavior-proxy-secret/,
+        "external store outage warning must redact endpoint, token, and client identity",
+      );
+    },
+  );
+  await withTemporaryEnvAsync(
+    {
+      NODE_ENV: "production",
+      TRUST_PROXY_HEADERS: "1",
+      TRUST_PROXY_SECRET: proxySecret,
+      WEB_REPLICA_COUNT: "2",
+      RATE_LIMIT_EXTERNAL_FAIL_CLOSED: "1",
+      UPSTASH_REDIS_REST_URL: "https://redis.playlore.xyz",
+      UPSTASH_REDIS_REST_TOKEN: "behavior-store-token",
+    },
+    async () => {
+      let fetchCalls = 0;
+      await withTemporaryFetch(async () => {
+        fetchCalls += 1;
+        throw new Error("malformed limiter options reached fetch");
+      }, async () => {
+        for (const options of [
+          { bucket: "", limit: 1, windowMs: 60_000 },
+          { bucket: "api invalid bucket", limit: 1, windowMs: 60_000 },
+          { bucket: "https://rpc.example.test/private", limit: 1, windowMs: 60_000 },
+          { bucket: "a".repeat(81), limit: 1, windowMs: 60_000 },
+          { bucket: "api-malformed-limit", limit: Number.NaN, windowMs: 60_000 },
+          { bucket: "api-malformed-limit", limit: 0, windowMs: 60_000 },
+          { bucket: "api-malformed-limit", limit: 1.5, windowMs: 60_000 },
+          { bucket: "api-malformed-limit", limit: 10_001, windowMs: 60_000 },
+          { bucket: "api-malformed-window", limit: 1, windowMs: Number.NaN },
+          { bucket: "api-malformed-window", limit: 1, windowMs: Number.POSITIVE_INFINITY },
+          { bucket: "api-malformed-window", limit: 1, windowMs: 1.5 },
+          { bucket: "api-malformed-window", limit: 1, windowMs: 86_400_001 },
+          { bucket: "api/malformed-bucket", limit: 1, windowMs: 60_000 },
+        ]) {
+          const response = await sharedRateLimit.enforceSharedRateLimit(
+            trustedRateLimitRequest("203.0.113.61", proxySecret),
+            options,
+          );
+          await assertRateLimitError(
+            response,
+            503,
+            { error: "Rate limit configuration unavailable" },
+            "malformed shared limiter options",
+          );
+        }
+        assert.equal(fetchCalls, 0, "malformed shared limiter options must fail before external-store access");
+      });
+    },
   );
   await withTemporaryEnvAsync(
     {

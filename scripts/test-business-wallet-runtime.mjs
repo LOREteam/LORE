@@ -483,8 +483,9 @@ export async function runWalletRuntimeTests() {
     ts: 100_000,
   };
   const nonceRecoveryCalls = [];
+  const pairedRecoveryClients = (client) => [client, { ...client }];
   const hashlessStillPending = await miningTxPath.recoverPendingMiningTx(
-    {
+    pairedRecoveryClients({
       getTransaction: async () => {
         throw new Error("hashless nonce recovery must not fetch a transaction");
       },
@@ -495,14 +496,14 @@ export async function runWalletRuntimeTests() {
         nonceRecoveryCalls.push(blockTag);
         return blockTag === "pending" ? 8 : 7;
       },
-    },
+    }),
     pendingNonceState,
     200_000,
   );
   assert.equal(hashlessStillPending, "pending", "hashless nonce recovery must block duplicate sends while pending nonce is ahead");
-  assert.deepEqual(nonceRecoveryCalls, ["latest", "pending"], "hashless nonce recovery must compare latest and pending nonce scopes");
+  assert.deepEqual(nonceRecoveryCalls, ["latest", "pending", "latest", "pending"], "hashless nonce recovery must compare latest and pending nonce scopes across both agreement clients");
   const hashlessConsumedNonce = await miningTxPath.recoverPendingMiningTx(
-    {
+    pairedRecoveryClients({
       getTransaction: async () => {
         throw new Error("consumed hashless recovery must not fetch a transaction");
       },
@@ -510,7 +511,7 @@ export async function runWalletRuntimeTests() {
         throw new Error("consumed hashless recovery must not fetch a receipt");
       },
       getTransactionCount: async ({ blockTag }) => blockTag === "pending" ? 9 : 8,
-    },
+    }),
     pendingNonceState,
     200_000,
   );
@@ -520,7 +521,7 @@ export async function runWalletRuntimeTests() {
     "a consumed nonce without a transaction hash must retain the duplicate-send block for manual reconciliation",
   );
   const hashlessWithinGrace = await miningTxPath.recoverPendingMiningTx(
-    {
+    pairedRecoveryClients({
       getTransaction: async () => {
         throw new Error("within-grace hashless recovery must not fetch a transaction");
       },
@@ -528,13 +529,13 @@ export async function runWalletRuntimeTests() {
         throw new Error("within-grace hashless recovery must not fetch a receipt");
       },
       getTransactionCount: async () => 7,
-    },
+    }),
     pendingNonceState,
     999_999,
   );
   assert.equal(hashlessWithinGrace, "pending", "hashless nonce recovery must not clear before the not-found grace window");
   const hashlessAfterGrace = await miningTxPath.recoverPendingMiningTx(
-    {
+    pairedRecoveryClients({
       getTransaction: async () => {
         throw new Error("after-grace hashless recovery must not fetch a transaction");
       },
@@ -542,7 +543,7 @@ export async function runWalletRuntimeTests() {
         throw new Error("after-grace hashless recovery must not fetch a receipt");
       },
       getTransactionCount: async () => 7,
-    },
+    }),
     pendingNonceState,
     1_000_001,
   );

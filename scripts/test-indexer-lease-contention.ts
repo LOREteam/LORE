@@ -70,6 +70,7 @@ function buildWorkerEnv(
     LORE_ALLOW_CONTRACT_SCOPE_PURGE: "0",
     KEEPER_RPC_URL: "http://127.0.0.1:1",
     INDEXER_START_BLOCK: "1",
+    INDEXER_FINALITY_BLOCKS: "2",
   };
 }
 

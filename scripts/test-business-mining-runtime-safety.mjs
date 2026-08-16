@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import * as autoMineRunnerModule from "../app/hooks/useMiningAutoMineRunner.ts";
 import * as autoMineRunSetupModule from "../app/lib/mining/autoMineRunSetup.ts";
+import * as autoMineRuntimeControllerModule from "../app/lib/mining/autoMineRuntimeController.ts";
 import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
+import * as miningTabLockModule from "../app/hooks/useMiningTabLock.ts";
 import * as safetyPoolClaimThresholdModule from "../app/lib/safetyPoolClaimThreshold.ts";
 
 export async function runMiningRuntimeSafetyTests() {
   const autoMineRunSetup = autoMineRunSetupModule.default ?? autoMineRunSetupModule;
+  const autoMineRunner = autoMineRunnerModule.default ?? autoMineRunnerModule;
+  const autoMineRuntimeController = autoMineRuntimeControllerModule.default ?? autoMineRuntimeControllerModule;
   const miningShared = miningSharedModule.default ?? miningSharedModule;
+  const miningTabLock = miningTabLockModule.default ?? miningTabLockModule;
   const safetyPoolClaimThreshold = safetyPoolClaimThresholdModule.default ?? safetyPoolClaimThresholdModule;
 
 assert.equal(safetyPoolClaimThreshold.parseMinSafetyPoolClaimWei("100"), 100_000_000_000_000_000_000n);
@@ -67,6 +73,7 @@ for (const [field, value] of [
     `Auto-Miner persisted session must reject unsafe ${field} value ${String(value)}`,
   );
 }
+
 assert.equal(
   miningShared.sanitizePersistedAutoMinerSession({
     active: true,
@@ -291,93 +298,174 @@ assert.doesNotMatch(
   /typeof ts !== "number" \|\| !Number\.isFinite\(ts\) \|\| ts <= 0/,
   "Auto-Miner tab-lock sanitizer must not use broad finite timestamp checks",
 );
-const miningTabLockSource = readFileSync("app/hooks/useMiningTabLock.ts", "utf8");
-assert.match(
-  miningTabLockSource,
-  /const resolvePing = \(alive: boolean\)[\s\S]*window\.clearTimeout\(timeoutId\)[\s\S]*pendingLockPingResolvers\.delete\(requestId\)[\s\S]*resolve\(alive\)[\s\S]*pending\(false\)/,
-  "orphaned tab-lock ping recovery must clear its timeout when the owner responds",
-);
-assert.match(
-  miningTabLockSource,
-  /function clearInvalidStoredTabLock\(\)[\s\S]*localStorage\.removeItem\(TAB_LOCK_KEY\)[\s\S]*catch \{[\s\S]*ignore storage failures[\s\S]*export async function acquireTabLock\(\): Promise<boolean> \{[\s\S]*return acquireNativeTabLock\(\);/,
-  "Auto-Miner start must require the browser's atomic tab lock instead of a localStorage fallback",
-);
-assert.match(
-  miningTabLockSource,
-  /async function acquireNativeTabLock\(\): Promise<boolean> \{[\s\S]*typeof navigator === "undefined" \|\| !navigator\.locks\) return false;[\s\S]*navigator\.locks[\s\S]*ifAvailable: true[\s\S]*mode: "exclusive"/,
-  "Auto-Miner native tab lock must fail closed without Web Locks and request an exclusive non-waiting lock",
-);
-assert.doesNotMatch(
-  miningTabLockSource.match(/export async function acquireTabLock\(\): Promise<boolean> \{[\s\S]*?\n\}/)?.[0] ?? "",
-  /\.localStorage|\.setItem\(|readTabLock\(|clearTabLock\(|recoverOrphanedTabLock\(/,
-  "Auto-Miner lock acquisition must not recreate a localStorage ownership fallback",
-);
-assert.match(
-  miningTabLockSource,
-  /function renewTabLock\(\)[\s\S]*if \(!lock\) \{[\s\S]*clearInvalidStoredTabLock\(\)[\s\S]*catch \{[\s\S]*clearInvalidStoredTabLock\(\)[\s\S]*function releaseTabLock\(\)[\s\S]*if \(!lock\) \{[\s\S]*clearInvalidStoredTabLock\(\)[\s\S]*catch \{[\s\S]*clearInvalidStoredTabLock\(\)/,
-  "Auto-Miner tab-lock renew and release must clear corrupted localStorage instead of leaving stale locks",
-);
-const autoMineRunnerSource = readFileSync("app/hooks/useMiningAutoMineRunner.ts", "utf8");
-assert.match(
-  autoMineRunnerSource,
-  /const preferredActorAddress = getPreferredActorAddress\(\);[\s\S]*actorAddress: preferredActorAddress,[\s\S]*markRunStarted: \(\) => \{[\s\S]*startedRun = true;[\s\S]*autoMineRef\.current = true;[\s\S]*if \(startRoundIndex === 0 && preferredActorAddress\) \{[\s\S]*runtimeController\.persistStart\(\{[\s\S]*actor: preferredActorAddress as `0x\$\{string\}`,[\s\S]*betStr,[\s\S]*blocks,[\s\S]*rounds,[\s\S]*if \(!preparedRun\) \{\s*if \(startedRun\) runtimeController\.clearPersistedRun\(\);[\s\S]*deactivateAutoMineUi\(\);[\s\S]*return;/,
-  "Auto-Miner setup failures must not clear or overwrite persisted sessions before an exclusive tab lock starts a real run",
-);
-const miningLifecycleSource = readFileSync("app/hooks/useMiningLifecycle.ts", "utf8");
-assert.doesNotMatch(
-  miningLifecycleSource.match(/const handleAutoMineToggle = useCallback\([\s\S]*?await runAutoMiningRef\.current\(\{ betStr, blocks, rounds \}\);/)?.[0] ?? "",
-  /runtimeController\.persistStart/,
-  "Auto-Miner toggle must not persist a restorable run before the runner acquires the exclusive tab lock",
-);
-assert.match(
-  autoMineRunnerSource,
-  /finally \{\s*releaseInTabAutoMineRuntime\(\);\s*if \(!startedRun\) return;[\s\S]*autoMineRef\.current = false;[\s\S]*runtimeController\.finalizeRun\(stopReason\);/,
-  "Auto-Miner runner must always release its in-tab runtime guard, but only finalize persisted runs after a real start",
-);
-assert.match(
-  autoMineRunnerSource,
-  /pendingNonceBlocked[\s\S]*getAutoMineRunnerCatchStopReason\(\{[\s\S]*pendingNonceBlocked,[\s\S]*if \(!sessionExpired && !networkDown && !walletUnavailable && !pendingNonceBlocked\) \{\s*runtimeController\.clearPersistedRun\(\);/,
-  "Auto-Miner pending nonce pauses must preserve the persisted session for manual recovery instead of clearing it as a generic error",
-);
-const autoMineRuntimeControllerSource = readFileSync("app/lib/mining/autoMineRuntimeController.ts", "utf8");
-assert.match(
-  autoMineRuntimeControllerSource,
-  /let activeRunId: string \| null = null;[\s\S]*function currentSessionMatchesActiveRun\(\)[\s\S]*current\.runId !== activeRunId[\s\S]*current\.actor\.toLowerCase\(\) !== activeActor\.toLowerCase\(\)/,
-  "Auto-Miner persisted recovery must bind stale checkpoint and finalize decisions to active run id and actor",
-);
-assert.match(
-  autoMineRuntimeControllerSource,
-  /if \(!activeActor \|\| !activeRunId \|\| !activeAuthorization\) \{\s*resetActiveAuthorization\(\);\s*return;\s*\}\s*if \(!currentSessionMatchesActiveRun\(\)\) return;/,
-  "inactive Auto-Miner controllers must not clear a persisted session they cannot prove they own",
-);
-assert.match(
-  autoMineRuntimeControllerSource,
-  /if \(!actorAddress \|\| saved\.actor\.toLowerCase\(\) !== actorAddress\.toLowerCase\(\)\) \{\s*resetActiveAuthorization\(\);\s*return \{ kind: "actor-mismatch" \};\s*\}/,
-  "Auto-Miner restore checks for a different actor must not clear another actor's saved run",
-);
-const autoMineRunSetupSource = readFileSync("app/lib/mining/autoMineRunSetup.ts", "utf8");
-const tabLockGateIndex = autoMineRunSetupSource.indexOf("if (!(await acquireTabLock())");
-const tabLockRecoveryIndex = autoMineRunSetupSource.indexOf("recoverOrphanedTabLock()");
-const tabLockAbortIndex = autoMineRunSetupSource.indexOf("exclusive tab lock unavailable - aborting start");
-const runStartedIndex = autoMineRunSetupSource.indexOf("markRunStarted()");
-const activeUiIndex = autoMineRunSetupSource.indexOf("setIsAutoMining(true)");
-const walletWaitIndex = autoMineRunSetupSource.indexOf('onProgress("Waiting for wallet...")');
-const bootstrapIndex = autoMineRunSetupSource.indexOf("const bootstrapReady = await prepareAutoMineBootstrap");
-assert.notEqual(tabLockGateIndex, -1, "Auto-Miner setup must require an exclusive tab lock before starting");
-assert.notEqual(tabLockRecoveryIndex, -1, "Auto-Miner setup must attempt orphaned tab-lock recovery before failing");
-assert.notEqual(tabLockAbortIndex, -1, "Auto-Miner setup must fail closed when tab-lock acquisition is unavailable");
-assert.notEqual(runStartedIndex, -1, "Auto-Miner setup must mark a run only after lock acquisition");
-assert.notEqual(activeUiIndex, -1, "Auto-Miner setup must activate UI only after lock acquisition");
-assert.notEqual(walletWaitIndex, -1, "Auto-Miner setup must keep wallet wait visible only after lock acquisition");
-assert.notEqual(bootstrapIndex, -1, "Auto-Miner setup must keep approval/bootstrap behind lock acquisition");
-assert.ok(
-  tabLockGateIndex < tabLockAbortIndex &&
-    tabLockAbortIndex < runStartedIndex &&
-    tabLockAbortIndex < activeUiIndex &&
-    tabLockAbortIndex < walletWaitIndex &&
-    tabLockAbortIndex < bootstrapIndex,
-  "Auto-Miner must not enter running, wallet-wait, or approval/bootstrap state before the exclusive tab lock is acquired",
-);
+{
+  const requests = [];
+  let held = false;
+  const lockManager = {
+    async request(name, options, callback) {
+      requests.push({ name, options: { ...options } });
+      if (held) return callback(null);
+      held = true;
+      try {
+        return await callback({ name, mode: options.mode });
+      } finally {
+        held = false;
+      }
+    },
+  };
+  const firstTab = miningTabLock.createNativeTabLockController(() => lockManager);
+  const secondTab = miningTabLock.createNativeTabLockController(() => lockManager);
+  assert.equal(await firstTab.acquire(), true, "first tab must acquire the native browser lock");
+  assert.equal(held, true, "the browser lock must remain held while Auto-Miner owns it");
+  assert.equal(await firstTab.acquire(), true, "re-entrant acquisition in the owning tab must reuse its lock");
+  assert.equal(requests.length, 1, "re-entrant acquisition must not enqueue another browser lock request");
+  assert.equal(await secondTab.acquire(), false, "a competing tab must fail closed instead of waiting or falling back");
+  assert.deepEqual(
+    requests.map(({ name, options }) => ({ name, options })),
+    [
+      { name: miningShared.TAB_LOCK_KEY, options: { ifAvailable: true, mode: "exclusive" } },
+      { name: miningShared.TAB_LOCK_KEY, options: { ifAvailable: true, mode: "exclusive" } },
+    ],
+    "every native lock request must be exclusive and non-waiting",
+  );
+  firstTab.release();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(held, false, "release must relinquish the native browser lock");
+  assert.equal(await secondTab.acquire(), true, "another tab may acquire only after the previous owner releases");
+  secondTab.release();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(await miningTabLock.createNativeTabLockController(() => null).acquire(), false, "missing Web Locks must fail closed");
+  assert.equal(
+    await miningTabLock
+      .createNativeTabLockController(() => ({ request: async () => Promise.reject(new Error("synthetic lock failure")) }))
+      .acquire(),
+    false,
+    "Web Lock request failures must fail closed",
+  );
+}
+
+{
+  const ACTOR_A = "0x0000000000000000000000000000000000000001";
+  const ACTOR_B = "0x0000000000000000000000000000000000000002";
+  const createHarness = () => {
+    let session = null;
+    let clearCalls = 0;
+    let releaseCalls = 0;
+    const controller = autoMineRuntimeController.createAutoMineRuntimeController({
+      clearSession: () => {
+        clearCalls += 1;
+        session = null;
+      },
+      readSession: () => session,
+      releaseTabLock: () => {
+        releaseCalls += 1;
+      },
+      saveSession: (next) => {
+        session = next;
+      },
+      now: () => 1_800_000_000_000,
+    });
+    return {
+      controller,
+      read: () => session,
+      replace: (next) => {
+        session = next;
+      },
+      stats: () => ({ clearCalls, releaseCalls }),
+    };
+  };
+
+  const runOwner = createHarness();
+  runOwner.controller.persistStart({ actor: ACTOR_A, betStr: "1", blocks: 1, rounds: 3 });
+  const ownedSession = runOwner.read();
+  assert.ok(ownedSession?.runId, "an acquired Auto-Miner run must persist an ownership id");
+  const foreignRun = { ...ownedSession, runId: "run:foreign-owner", nextRoundIndex: 1 };
+  runOwner.replace(foreignRun);
+  runOwner.controller.persistCheckpoint({
+    betStr: "1",
+    blocks: 1,
+    rounds: 3,
+    nextRoundIndex: 2,
+    lastPlacedEpoch: 22n,
+  });
+  runOwner.controller.finalizeRun("completed");
+  assert.deepEqual(runOwner.read(), foreignRun, "stale run ids must not checkpoint or clear another run's persisted state");
+  assert.deepEqual(runOwner.stats(), { clearCalls: 0, releaseCalls: 1 });
+
+  const actorOwner = createHarness();
+  actorOwner.controller.persistStart({ actor: ACTOR_A, betStr: "1", blocks: 1, rounds: 3 });
+  const foreignActor = { ...actorOwner.read(), actor: ACTOR_B };
+  actorOwner.replace(foreignActor);
+  actorOwner.controller.stopByUser();
+  assert.deepEqual(actorOwner.read(), foreignActor, "a stale actor must not clear another wallet's persisted run");
+  assert.deepEqual(actorOwner.stats(), { clearCalls: 0, releaseCalls: 1 });
+
+  const restoreOwner = createHarness();
+  restoreOwner.replace({ ...ownedSession, active: true, actor: ACTOR_B });
+  assert.equal(restoreOwner.controller.readRestorableRun(ACTOR_A).kind, "actor-mismatch");
+  assert.equal(restoreOwner.read()?.active, false, "actor-mismatched recovery must pause the saved run");
+  assert.equal(restoreOwner.read()?.actor, ACTOR_B, "actor-mismatched recovery must retain the saved owner");
+  assert.equal(restoreOwner.read()?.runId, ownedSession.runId, "actor-mismatched recovery must retain the saved run id");
+  assert.equal(restoreOwner.stats().clearCalls, 0, "actor-mismatched recovery must not delete another owner's run");
+
+  const pendingNonce = createHarness();
+  pendingNonce.controller.persistStart({ actor: ACTOR_A, betStr: "1", blocks: 1, rounds: 3 });
+  const pendingRunId = pendingNonce.read()?.runId;
+  const disposition = autoMineRunner.getAutoMineRunnerFailureDisposition({
+    epochWaitTimeout: false,
+    networkDown: false,
+    pendingNonceBlocked: true,
+    sessionExpired: false,
+    walletUnavailable: false,
+  });
+  assert.deepEqual(disposition, {
+    phase: "idle",
+    shouldAutoResume: false,
+    shouldClearPersistedRun: false,
+  });
+  if (disposition.shouldClearPersistedRun) pendingNonce.controller.clearPersistedRun();
+  pendingNonce.controller.finalizeRun("pending-nonce-blocked");
+  assert.equal(pendingNonce.read()?.active, false, "pending nonce must pause rather than delete the persisted run");
+  assert.equal(pendingNonce.read()?.runId, pendingRunId, "pending nonce pause must retain the owned run id");
+  assert.equal(pendingNonce.read()?.actor, ACTOR_A, "pending nonce pause must retain the authorized actor");
+  assert.deepEqual(pendingNonce.stats(), { clearCalls: 0, releaseCalls: 1 });
+  assert.equal(
+    pendingNonce.controller.readRestorableRun(ACTOR_A).kind,
+    "paused",
+    "the owning actor must be able to discover the paused run before an explicit fresh authorization",
+  );
+  pendingNonce.controller.persistStart({ actor: ACTOR_A, betStr: "1", blocks: 1, rounds: 3 });
+  assert.equal(pendingNonce.read()?.active, true, "explicit same-actor restart must create a newly authorized active run");
+  assert.notEqual(
+    pendingNonce.read()?.runId,
+    pendingRunId,
+    "pending nonce recovery must not reuse the paused run's authorization id",
+  );
+
+  assert.deepEqual(
+    autoMineRunner.getAutoMineRunnerFailureDisposition({
+      epochWaitTimeout: false,
+      networkDown: true,
+      pendingNonceBlocked: false,
+      sessionExpired: false,
+      walletUnavailable: false,
+    }),
+    { phase: "retry-wait", shouldAutoResume: true, shouldClearPersistedRun: false },
+  );
+  assert.deepEqual(
+    autoMineRunner.getAutoMineRunnerFailureDisposition({
+      epochWaitTimeout: false,
+      networkDown: false,
+      pendingNonceBlocked: false,
+      sessionExpired: false,
+      walletUnavailable: false,
+    }),
+    { phase: "idle", shouldAutoResume: false, shouldClearPersistedRun: true },
+    "unclassified failures must still clear a potentially unsafe run",
+  );
+}
 {
   let markRunStartedCalls = 0;
   let ensureWalletCalls = 0;
@@ -476,6 +564,19 @@ assert.ok(
       return enoughLinea;
     },
   };
+  const previousFetch = globalThis.fetch;
+  let agreementFetchCalls = 0;
+  globalThis.fetch = async (_input, init) => {
+    agreementFetchCalls += 1;
+    const payload = JSON.parse(String(init?.body ?? "{}"));
+    const result = `0x${enoughLinea.toString(16).padStart(64, "0")}`;
+    const reply = (request) => ({ jsonrpc: "2.0", id: request.id, result });
+    return new Response(JSON.stringify(Array.isArray(payload) ? payload.map(reply) : reply(payload)), {
+      headers: { "content-type": "application/json" },
+      status: 200,
+    });
+  };
+  try {
   const prepared = await autoMineRunSetup.prepareAutoMineRunSetup({
     acquireTabLock: async () => {
       lockAttempts.push(lockAttempts.length + 1);
@@ -547,14 +648,22 @@ assert.ok(
   assert.deepEqual(selectedTiles, [[]]);
   assert.deepEqual(selectedEpochs, [null]);
   assert.deepEqual(progressMessages, ["1 / 1"]);
-  assert.deepEqual(readContracts, ["balanceOf", "allowance"]);
+  assert.deepEqual(readContracts, ["balanceOf"]);
+  assert.equal(agreementFetchCalls, 2, "Auto-Miner allowance admission must require both independent agreement clients");
   assert.equal(clearPendingApproveCalls, 1, "sufficient allowance after lock recovery must clear stale approval state");
   assert.equal(ensureWalletCalls, 0, "sufficient allowance after lock recovery must not request wallet approval");
   assert.equal(writeApproveCalls, 0, "sufficient allowance after lock recovery must not send an approval transaction");
   assert.equal(silentSendCalls, 0, "sufficient allowance after lock recovery must not use silent transaction send");
   assert.equal(nativeGasChecks, 0, "sufficient allowance after lock recovery must not run approval gas checks");
   assert.equal(prepared.singleAmountRaw, enoughLinea);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 }
 
 }
 
+if (process.argv.includes("--focused-mining-runtime-safety")) {
+  await runMiningRuntimeSafetyTests();
+  console.log("MINING_RUNTIME_FOCUSED_PASS");
+}

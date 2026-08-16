@@ -1,5 +1,46 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import * as walletTransferRowModule from "../app/components/wallet/WalletTransferRow.tsx";
+import * as pendingTxPanelModule from "../app/components/wallet/WalletSettingsPendingTxPanel.tsx";
+
+const walletTransferRow = walletTransferRowModule.default ?? walletTransferRowModule;
+const pendingTxPanel = pendingTxPanelModule.default ?? pendingTxPanelModule;
+
+function assertTransferPresentation(input, actual) {
+  const expectedState = input.loading ? "pending" : input.disabled ? "unavailable" : "ready";
+  assert.equal(actual.state, expectedState);
+  assert.equal(actual.actionLabel, input.loading
+    ? `${input.buttonLabel} in progress`
+    : input.disabled
+      ? `${input.buttonLabel} unavailable`
+      : input.buttonLabel);
+  assert.equal(actual.buttonText, input.loading ? "Sending..." : input.buttonLabel);
+  assert.equal(actual.announce, input.loading);
+}
+
+function assertPendingPresentation(input, actual) {
+  const hasPending = Boolean(input.pendingTransactionStatus?.nonceGap > 0);
+  const busy = input.isRefreshingPendingTx || input.isCancellingPendingTx || Boolean(input.busyAction);
+  assert.equal(actual.state, input.pendingTransactionStatus ? (hasPending ? "blocked" : "clear") : "unchecked");
+  assert.equal(actual.hasPending, hasPending);
+  assert.equal(actual.busy, busy);
+  assert.equal(actual.checkDisabled, busy);
+  assert.equal(actual.clearDisabled, busy || !hasPending);
+  assert.equal(actual.replacementDisabled, busy || !/^0x[0-9a-fA-F]{64}$/.test(input.replacementHash.trim()));
+  if (input.busyAction === "nonce-check") {
+    assert.equal(actual.checkButtonText, "Checking...");
+    assert.match(actual.checkLabel, /^Checking latest and pending nonces/);
+    assert.match(actual.busyAnnouncement, /^Checking latest and pending nonces/);
+    assert.equal(actual.replacementButtonText, "Verify Replacement");
+  } else if (input.busyAction === "replacement") {
+    assert.equal(actual.checkButtonText, "Check");
+    assert.equal(actual.replacementButtonText, "Verifying replacement...");
+    assert.match(actual.replacementLabel, /^Verifying exact wallet transfer replacement/);
+    assert.match(actual.busyAnnouncement, /^Verifying replacement transaction/);
+  }
+}
 
 export function runWalletPresentationTests() {
   const walletSettingsModalSource = readFileSync("app/components/WalletSettingsModal.tsx", "utf8");
@@ -75,22 +116,63 @@ export function runWalletPresentationTests() {
     /showAutoMineProgress && phaseProgressText/,
     "auto-miner progress card must use the shared recovery progress visibility guard",
   );
-  const walletTransferRowSource = readFileSync("app/components/wallet/WalletTransferRow.tsx", "utf8");
-  assert.match(
-    walletTransferRowSource,
-    /className="lore-nums h-8 min-w-0 px-4 py-1\.5 text-sm"/,
-    "wallet transfer amount inputs must use the shared numeric font class",
-  );
-  assert.match(
-    walletTransferRowSource,
-    /maxLength=\{20\}/,
-    "wallet transfer amount inputs must keep the same bounded length as manual bet amount input",
-  );
-  assert.match(
-    walletTransferRowSource,
-    /onChange\(e\.target\.value\.slice\(0, 20\)\)/,
-    "wallet transfer amount changes must clamp pasted values before state update",
-  );
+  const transferInputs = [
+    { buttonLabel: "Send ETH", disabled: false, loading: false },
+    { buttonLabel: "Send ETH", disabled: true, loading: false },
+    { buttonLabel: "Send ETH", disabled: true, loading: true },
+  ];
+  for (const input of transferInputs) {
+    assertTransferPresentation(
+      input,
+      walletTransferRow.getWalletTransferRowPresentation(input.buttonLabel, input.disabled, input.loading),
+    );
+  }
+  const pendingTransferHtml = renderToStaticMarkup(React.createElement(walletTransferRow.WalletTransferRow, {
+    assetLabel: "ETH",
+    assetVariant: "secondary",
+    value: "1.25",
+    onChange: () => undefined,
+    placeholder: "ETH amount",
+    buttonLabel: "Send ETH",
+    onSubmit: () => undefined,
+    disabled: true,
+    loading: true,
+    buttonVariant: "secondary",
+  }));
+  assert.match(pendingTransferHtml, /data-transfer-action-state="pending"/);
+  assert.match(pendingTransferHtml, /role="status"[^>]*aria-live="polite"[^>]*>Send ETH in progress/);
+  assert.match(pendingTransferHtml, /aria-busy="true"/);
+  assert.match(pendingTransferHtml, /<input[^>]*maxLength="20"[^>]*aria-label="ETH transfer amount"/);
+  assert.match(pendingTransferHtml, /aria-label="Send ETH in progress"[^>]*title="Send ETH in progress"/);
+  assert.match(pendingTransferHtml, />Sending\.\.\.<\/button>/);
+  const unavailableTransferHtml = renderToStaticMarkup(React.createElement(walletTransferRow.WalletTransferRow, {
+    assetLabel: "LINEA",
+    assetVariant: "sky",
+    value: "",
+    onChange: () => undefined,
+    placeholder: "LINEA amount",
+    buttonLabel: "Send LINEA",
+    onSubmit: () => undefined,
+    disabled: true,
+    loading: false,
+    buttonVariant: "sky",
+  }));
+  assert.match(unavailableTransferHtml, /data-transfer-action-state="unavailable"/);
+  assert.match(unavailableTransferHtml, /<button[^>]*disabled=""[^>]*aria-label="Send LINEA unavailable"/);
+  assert.doesNotMatch(unavailableTransferHtml, /role="status"/);
+
+  const correctTransferPending = walletTransferRow.getWalletTransferRowPresentation("Send ETH", true, true);
+  for (const mutant of [
+    { ...correctTransferPending, state: "ready" },
+    { ...correctTransferPending, actionLabel: "Send ETH" },
+    { ...correctTransferPending, announce: false },
+  ]) {
+    assert.throws(
+      () => assertTransferPresentation({ buttonLabel: "Send ETH", disabled: true, loading: true }, mutant),
+      undefined,
+      "wallet transfer presentation invariant must reject pending-state mutants",
+    );
+  }
   const walletTransferPanelsSource = readFileSync("app/components/wallet/WalletSettingsTransferPanels.tsx", "utf8");
   assert.match(
     walletTransferPanelsSource,
@@ -117,37 +199,188 @@ export function runWalletPresentationTests() {
     /role="list"[\s\S]*aria-label="LINEA transfer history"[\s\S]*explorerLabel[\s\S]*role="listitem"[\s\S]*aria-label=\{explorerLabel\}[\s\S]*title=\{explorerLabel\}/,
     "wallet transfer history rows must expose list semantics and clear Lineascan link labels",
   );
-  const pendingTxPanelSource = readFileSync("app/components/wallet/WalletSettingsPendingTxPanel.tsx", "utf8");
-  assert.match(
-    pendingTxPanelSource,
-    /Check latest and pending nonces/,
-    "pending tx check action must explain what it inspects",
+  const validReplacementHash = `0x${"a".repeat(64)}`;
+  const blockedStatus = {
+    latestNonce: 7,
+    pendingNonce: 9,
+    nonceGap: 2,
+    blockedNonce: 7,
+    updatedAt: 1_700_000_000_000,
+  };
+  const pendingInputs = [
+    {
+      pendingTransactionStatus: null,
+      isRefreshingPendingTx: false,
+      isCancellingPendingTx: false,
+      replacementHash: "",
+    },
+    {
+      pendingTransactionStatus: { ...blockedStatus, pendingNonce: 7, nonceGap: 0, blockedNonce: null },
+      isRefreshingPendingTx: false,
+      isCancellingPendingTx: false,
+      replacementHash: validReplacementHash,
+    },
+    {
+      pendingTransactionStatus: blockedStatus,
+      isRefreshingPendingTx: false,
+      isCancellingPendingTx: false,
+      replacementHash: `  ${validReplacementHash}  `,
+    },
+    {
+      pendingTransactionStatus: blockedStatus,
+      isRefreshingPendingTx: true,
+      isCancellingPendingTx: false,
+      replacementHash: validReplacementHash,
+      busyAction: "nonce-check",
+    },
+    {
+      pendingTransactionStatus: blockedStatus,
+      isRefreshingPendingTx: true,
+      isCancellingPendingTx: false,
+      replacementHash: validReplacementHash,
+      busyAction: "replacement",
+    },
+  ];
+  for (const input of pendingInputs) {
+    assertPendingPresentation(
+      input,
+      pendingTxPanel.getPendingTransactionPanelPresentation(input),
+    );
+  }
+  assert.equal(pendingTxPanel.isExactWalletTransactionHash(validReplacementHash), true);
+  assert.equal(pendingTxPanel.isExactWalletTransactionHash(` ${validReplacementHash} `), true);
+  assert.equal(pendingTxPanel.isExactWalletTransactionHash(`0x${"a".repeat(63)}`), false);
+  assert.equal(pendingTxPanel.isExactWalletTransactionHash(`0x${"g".repeat(64)}`), false);
+  assert.equal(
+    pendingTxPanel.normalizeWalletTransactionHashInput(`  ${validReplacementHash}  `),
+    validReplacementHash,
+    "pasted whitespace must be normalized before the 66-character UI clamp",
   );
-  assert.match(
-    pendingTxPanelSource,
-    /checkPendingTxLabel[\s\S]*clearPendingTxLabel[\s\S]*aria-label=\{checkPendingTxLabel\}[\s\S]*title=\{checkPendingTxLabel\}[\s\S]*aria-label=\{clearPendingTxLabel\}[\s\S]*title=\{clearPendingTxLabel\}/,
-    "pending tx check and clear actions must expose state-aware accessible labels and titles",
+  assert.equal(
+    pendingTxPanel.isExactWalletTransactionHash(
+      pendingTxPanel.normalizeWalletTransactionHashInput(`  ${validReplacementHash}  `),
+    ),
+    true,
+    "a padded exact replacement hash accepted by the model must stay reachable through the controlled input",
   );
-  assert.match(
-    pendingTxPanelSource,
-    /role="status"[\s\S]*aria-live="polite"[\s\S]*aria-atomic="true"[\s\S]*aria-busy=\{isRefreshingPendingTx \|\| isCancellingPendingTx\}/,
-    "pending tx panel must announce nonce blocker status and busy state to assistive technology",
+  assert.equal(
+    pendingTxPanel.normalizeWalletTransactionHashInput(`${validReplacementHash}ffff`),
+    validReplacementHash,
+    "replacement hash input must remain bounded to one exact transaction hash",
   );
+
+  const blockedPanelHtml = renderToStaticMarkup(React.createElement(
+    pendingTxPanel.WalletSettingsPendingTxPanel,
+    {
+      pendingTransactionStatus: blockedStatus,
+      isRefreshingPendingTx: false,
+      isCancellingPendingTx: false,
+      onRefreshPendingTx: () => undefined,
+      onCancelPendingTx: () => undefined,
+    },
+  ));
+  assert.match(blockedPanelHtml, /data-pending-transaction-state="blocked"/);
+  assert.match(blockedPanelHtml, /Stuck pending transaction detected\. Nonce gap: 2\. Oldest blocked nonce: 7\./);
   assert.match(
-    pendingTxPanelSource,
-    /const isPendingTxActionBusy = isRefreshingPendingTx \|\| isCancellingPendingTx/,
-    "pending tx check and clear actions must share one busy guard to avoid overlapping nonce operations",
+    blockedPanelHtml,
+    /Two RPCs must prove the same sender, nonce, destination, value, calldata, and transaction type before migration\. Finality is still required before the block can be released\./,
   );
-  assert.match(
-    pendingTxPanelSource,
-    /disabled=\{isPendingTxActionBusy\}[\s\S]*disabled=\{isPendingTxActionBusy \|\| !hasPending\}/,
-    "pending tx check and clear actions must both be disabled while either nonce operation is running",
+  assert.match(blockedPanelHtml, /<button[^>]*disabled=""[^>]*aria-label="Verify exact wallet transfer replacement hash"/);
+  assert.match(blockedPanelHtml, /aria-label="Replace the oldest stuck nonce with a 0 ETH self-transaction"/);
+
+  const busyPanelHtml = renderToStaticMarkup(React.createElement(
+    pendingTxPanel.WalletSettingsPendingTxPanel,
+    {
+      pendingTransactionStatus: blockedStatus,
+      isRefreshingPendingTx: true,
+      isCancellingPendingTx: false,
+      onRefreshPendingTx: () => undefined,
+      onCancelPendingTx: () => undefined,
+    },
+  ));
+  assert.match(busyPanelHtml, /data-pending-transaction-state="blocked"/);
+  assert.match(busyPanelHtml, /role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"[^>]*aria-busy="true"/);
+  assert.equal((busyPanelHtml.match(/disabled=""/g) ?? []).length, 3);
+  assert.match(busyPanelHtml, /aria-label="Checking latest and pending nonces for the Privy wallet"/);
+
+  for (const action of ["nonce-check", "replacement"]) {
+    const transitions = [];
+    let receivedHash = "not-called";
+    let releaseRefresh;
+    const refreshPromise = new Promise((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const run = pendingTxPanel.runPendingTransactionRefreshAction({
+      action,
+      replacementHash: `  ${validReplacementHash}  `,
+      onRefreshPendingTx: (hash) => {
+        receivedHash = hash;
+        return refreshPromise;
+      },
+      onBusyActionChange: (nextAction) => transitions.push(nextAction),
+    });
+    assert.deepEqual(transitions, [action], "initiating action must be retained while its callback is pending");
+    assert.equal(receivedHash, action === "replacement" ? validReplacementHash : undefined);
+    const livePresentation = pendingTxPanel.getPendingTransactionPanelPresentation({
+      ...pendingInputs[2],
+      isRefreshingPendingTx: true,
+      busyAction: transitions.at(-1),
+    });
+    assertPendingPresentation(
+      { ...pendingInputs[2], isRefreshingPendingTx: true, busyAction: action },
+      livePresentation,
+    );
+    assert.equal(livePresentation.checkDisabled, true);
+    assert.equal(livePresentation.clearDisabled, true);
+    assert.equal(livePresentation.replacementDisabled, true);
+    assert.ok(run instanceof Promise, "an async refresh callback must expose completion to the action lifecycle");
+    releaseRefresh();
+  }
+  for (const action of ["nonce-check", "replacement"]) {
+    const transitions = [];
+    pendingTxPanel.runPendingTransactionRefreshAction({
+      action,
+      replacementHash: validReplacementHash,
+      onRefreshPendingTx: () => undefined,
+      onBusyActionChange: (nextAction) => transitions.push(nextAction),
+    });
+    assert.deepEqual(
+      transitions,
+      [action, null],
+      "a synchronously completed refresh callback must clear its exact initiating action",
+    );
+  }
+
+  const correctBlocked = pendingTxPanel.getPendingTransactionPanelPresentation(pendingInputs[2]);
+  for (const mutant of [
+    { ...correctBlocked, state: "clear" },
+    { ...correctBlocked, clearDisabled: true },
+    { ...correctBlocked, replacementDisabled: true },
+  ]) {
+    assert.throws(
+      () => assertPendingPresentation(pendingInputs[2], mutant),
+      undefined,
+      "pending transaction presentation invariant must reject blocked/manual-reconcile mutants",
+    );
+  }
+  const correctBusy = pendingTxPanel.getPendingTransactionPanelPresentation(pendingInputs[3]);
+  assert.throws(
+    () => assertPendingPresentation(pendingInputs[3], { ...correctBusy, checkDisabled: false }),
+    undefined,
+    "pending transaction presentation invariant must reject overlapping-action mutants",
   );
-  assert.match(
-    pendingTxPanelSource,
-    /Run Check first; available only when a stuck nonce is detected/,
-    "pending tx clear action must explain why it is disabled",
-  );
+  const correctReplacementBusy = pendingTxPanel.getPendingTransactionPanelPresentation(pendingInputs[4]);
+  for (const mutant of [
+    { ...correctReplacementBusy, replacementButtonText: "Verify Replacement" },
+    { ...correctReplacementBusy, busyAnnouncement: "Checking latest and pending nonces." },
+    { ...correctReplacementBusy, replacementDisabled: false },
+  ]) {
+    assert.throws(
+      () => assertPendingPresentation(pendingInputs[4], mutant),
+      undefined,
+      "replacement verification presentation must reject ambiguous or enabled-action mutants",
+    );
+  }
   assert.match(
     walletSettingsModalSource,
     /aria-pressed=\{activeSection === s\.id\}/,

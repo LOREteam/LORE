@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
 import * as explorerLinksModule from "../app/lib/explorerLinks.ts";
+import * as publicConfigModule from "../config/publicConfig.ts";
 
 export function runExplorerLinkTests() {
   const explorerLinks = explorerLinksModule.default ?? explorerLinksModule;
+  const publicConfig = publicConfigModule.default ?? publicConfigModule;
+  for (const [network, expectedUrl] of [
+    ["mainnet", "https://lineascan.build"],
+    ["sepolia", "https://sepolia.lineascan.build"],
+  ]) {
+    const explorer = publicConfig.getLineaChain(network).blockExplorers.default;
+    assert.equal(explorer.name, "Lineascan");
+    assert.equal(explorer.url, expectedUrl);
+  }
   assert.equal(
     explorerLinks.getExplorerTxUrl(`0x${"a".repeat(64)}`),
     `https://sepolia.lineascan.build/tx/0x${"a".repeat(64)}`,

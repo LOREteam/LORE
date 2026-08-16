@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import * as routeCacheModule from "../app/api/_lib/routeCache.ts";
 import * as versionedRouteCacheModule from "../app/api/_lib/versionedRouteCache.ts";
 import * as autoMineLoopModelModule from "../app/lib/mining/autoMineLoopModel.ts";
+import * as miningRoundPlanningModule from "../app/hooks/useMiningRoundPlanning.ts";
 import * as autoMineLoopPreludePlannerModule from "../app/lib/mining/autoMineLoopPreludePlanner.ts";
 import * as autoMineLoopRoundOutcomeModule from "../app/lib/mining/autoMineLoopRoundOutcome.ts";
 import * as autoMineLoopRetryPlannerModule from "../app/lib/mining/autoMineLoopRetryPlanner.ts";
@@ -12,6 +12,7 @@ export async function runCacheAndPlannerTests() {
   const routeCache = routeCacheModule.default ?? routeCacheModule;
   const versionedRouteCache = versionedRouteCacheModule.default ?? versionedRouteCacheModule;
   const autoMineLoopModel = autoMineLoopModelModule.default ?? autoMineLoopModelModule;
+  const miningRoundPlanning = miningRoundPlanningModule.default ?? miningRoundPlanningModule;
   const autoMineLoopPreludePlanner = autoMineLoopPreludePlannerModule.default ?? autoMineLoopPreludePlannerModule;
   const autoMineLoopRoundOutcome = autoMineLoopRoundOutcomeModule.default ?? autoMineLoopRoundOutcomeModule;
   const autoMineLoopRetryPlanner = autoMineLoopRetryPlannerModule.default ?? autoMineLoopRetryPlannerModule;
@@ -171,49 +172,6 @@ export async function runCacheAndPlannerTests() {
     );
   }
 
-  const routeCacheTtlSource = readFileSync("app/api/_lib/routeCache.ts", "utf8");
-  assert.match(
-    routeCacheTtlSource,
-    /function computeExpiresAt[\s\S]*Number\.isSafeInteger\(ttlMs\)[\s\S]*Number\.MAX_SAFE_INTEGER - now[\s\S]*expiresAt: computeExpiresAt\(ttlMs\)/,
-    "route cache writes must compute TTL expiry through the fail-closed helper",
-  );
-  assert.match(
-    routeCacheTtlSource,
-    /function isFreshEntry[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*entry\.expiresAt > now[\s\S]*!isFreshEntry\(entry, now\)/,
-    "route cache fresh reads must reject malformed caller-supplied times",
-  );
-  assert.match(
-    routeCacheTtlSource,
-    /function normalizeMaxEntries[\s\S]*Number\.isSafeInteger\(maxEntries\)[\s\S]*const capacity = normalizeMaxEntries\(maxEntries\)[\s\S]*pruneOldest\(cache, capacity\)/,
-    "route cache capacity must be normalized before pruning",
-  );
-  assert.match(
-    routeCacheTtlSource,
-    /MAX_ROUTE_CACHE_KEY_LENGTH[\s\S]*ROUTE_CACHE_KEY_CONTROL_RE[\s\S]*function isUsableCacheKey[\s\S]*key\.length <= MAX_ROUTE_CACHE_KEY_LENGTH && !ROUTE_CACHE_KEY_CONTROL_RE\.test\(key\)[\s\S]*!isUsableCacheKey\(key\)/,
-    "route cache operations must fail closed for oversized or control-character keys before map access",
-  );
-  assert.match(
-    routeCacheTtlSource,
-    /const oldestKey = cache\.keys\(\)\.next\(\);[\s\S]*if \(oldestKey\.done\) break;[\s\S]*const key = oldestKey\.value/,
-    "route cache LRU pruning must not treat an empty string key as missing",
-  );
-  assert.doesNotMatch(
-    routeCacheTtlSource,
-    /expiresAt:\s*Date\.now\(\)\s*\+\s*ttlMs/,
-    "route cache writes must not use broad Date.now() + ttlMs expiry",
-  );
-  const versionedRouteCacheSource = readFileSync("app/api/_lib/versionedRouteCache.ts", "utf8");
-  assert.match(
-    versionedRouteCacheSource,
-    /function isUsableWriteVersion\(value: number\)[\s\S]*Number\.isSafeInteger\(value\) && value > 0[\s\S]*const writeVersion = cache\.beginWrite\(cacheKey\)[\s\S]*if \(!isUsableWriteVersion\(writeVersion\)\) return;[\s\S]*markRouteBackgroundRefresh\(routeMetricKey\)/,
-    "background route refreshes must reject invalid cache write versions before metric and build work",
-  );
-  assert.match(
-    versionedRouteCacheSource,
-    /const writeVersion = cache\.beginWrite\(cacheKey\)[\s\S]*const buildPromise = build\(\);[\s\S]*if \(!isUsableWriteVersion\(writeVersion\)\) \{[\s\S]*requestPromise: buildPromise\.then\(\(result\) => toPayload\(result\)\)/,
-    "foreground route builds with invalid cache keys must bypass cache metadata while still returning a payload",
-  );
-
   const invalidBackgroundCache = routeCache.createRouteCache(2);
   let invalidBackgroundBuildCount = 0;
   let invalidBackgroundErrorCount = 0;
@@ -348,6 +306,94 @@ export async function runCacheAndPlannerTests() {
   await backgroundRefresh;
   assert.deepEqual(backgroundCache.getStale("background"), { fresh: true });
   assert.equal(backgroundCommitCount, 0, "superseded background refreshes must not commit stale metadata");
+
+  const planningActor = "0x1111111111111111111111111111111111111111";
+  const createPlanningClient = ({ existingBets = Array(25).fill(0n), tokenBalance }) => ({
+    readContract: async ({ functionName }) => {
+      if (functionName === "currentEpoch") return 42n;
+      if (functionName === "getUserBetsAll") return existingBets;
+      if (functionName === "balanceOf") return tokenBalance;
+      throw new Error(`unexpected round-planning read: ${String(functionName)}`);
+    },
+  });
+  let nextTile = 0;
+  const readyPlan = await miningRoundPlanning.planAutoMineRound({
+    actorAddress: planningActor,
+    blocks: 2,
+    client: createPlanningClient({ tokenBalance: 2n * 10n ** 18n }),
+    lastPlacedEpoch: null,
+    secureRandom: () => nextTile++,
+    singleAmountRaw: 10n ** 18n,
+  });
+  assert.deepEqual(readyPlan, {
+    kind: "ready",
+    liveEpoch: 42n,
+    epochNeedsResolve: false,
+    effectiveBlocks: 2,
+    tilesToBet: [1, 2],
+    alreadyBetTiles: [],
+    roundCandidateEpochs: [42n, 43n, 44n],
+    selectionEpoch: "42",
+  });
+
+  const lineaWei = 10n ** 18n;
+  const hugeSingleAmount = 9_007_199_254_740_993n * lineaWei + 550_000_000_000_000_000n;
+  const exactRoundCost = hugeSingleAmount * 2n;
+  const insufficientBalance = exactRoundCost - 1_100_000_000_000_000_000n;
+  assert.equal(
+    Number(exactRoundCost),
+    Number(insufficientBalance),
+    "precision fixture must alias under Number coercion",
+  );
+  const insufficientPlan = await miningRoundPlanning.planAutoMineRound({
+    actorAddress: planningActor,
+    blocks: 2,
+    client: createPlanningClient({ tokenBalance: insufficientBalance }),
+    lastPlacedEpoch: null,
+    secureRandom: () => 0,
+    singleAmountRaw: hugeSingleAmount,
+  });
+  assert.deepEqual(insufficientPlan, {
+    kind: "stop-insufficient-balance",
+    liveEpoch: 42n,
+    neededAmount: "18014398509481987.1",
+    currentAmount: "18014398509481986.0",
+  });
+  const insufficientTransition = autoMineLoopTransitionPlanner.planAutoMinePreparedRoundTransition(insufficientPlan);
+  assert.deepEqual(insufficientTransition, {
+    kind: "stop",
+    action: {
+      commandsAfter: [{ type: "sleep", ms: 3500 }],
+      event: {
+        type: "stop-insufficient-balance",
+        neededAmount: "18014398509481987.1",
+        currentAmount: "18014398509481986.0",
+      },
+      syncEffects: { progress: true, selection: false, session: false },
+    },
+  });
+  const insufficientState = autoMineLoopModel.reduceAutoMineLoopEvent(
+    autoMineLoopModel.createAutoMineLoopState({
+      rounds: 1,
+      startRoundIndex: 0,
+      restoredLastEpoch: null,
+    }),
+    insufficientTransition.action.event,
+  );
+  assert.equal(insufficientState.stopReason, "insufficient-balance");
+  assert.equal(
+    insufficientState.progressMessage,
+    "Stopped: need 18014398509481987.1 LINEA, have 18014398509481986.0 LINEA",
+  );
+  const invalidWaitState = autoMineLoopModel.reduceAutoMineLoopEvent(
+    autoMineLoopModel.createAutoMineLoopState({
+      rounds: 1,
+      startRoundIndex: 0,
+      restoredLastEpoch: null,
+    }),
+    { type: "network-error", retryCount: 1, waitMs: Number.NaN },
+  );
+  assert.equal(invalidWaitState.progressMessage, "RPC offline - retry 1 in 0s...");
 
   let loopState = autoMineLoopModel.createAutoMineLoopState({
     rounds: 3,
@@ -638,15 +684,4 @@ export async function runCacheAndPlannerTests() {
       `invalid Auto-Miner retry timing ${JSON.stringify(timing)} must fail closed`,
     );
   }
-  const autoMineLoopRetryPlannerSource = readFileSync("app/lib/mining/autoMineLoopRetryPlanner.ts", "utf8");
-  assert.match(
-    autoMineLoopRetryPlannerSource,
-    /function normalizeNonNegativeSafeInteger[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*function normalizePositiveSafeInteger[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*currentRetryCount === null[\s\S]*maxMs < initialMs[\s\S]*return \{[\s\S]*kind: "give-up"[\s\S]*getNetworkRetryDelayMs\(/,
-    "Auto-Miner retry planner must validate retry counts and timing before scheduling retries",
-  );
-  assert.doesNotMatch(
-    autoMineLoopRetryPlannerSource,
-    /const nextRetryCount = params\.currentRetryCount \+ 1|nextRetryCount > params\.retryMax|getNetworkRetryDelayMs\([\s\S]*params\.initialMs[\s\S]*params\.maxMs/,
-    "Auto-Miner retry planner must not use raw retry parameters after validation",
-  );
 }
