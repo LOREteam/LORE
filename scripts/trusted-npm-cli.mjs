@@ -135,8 +135,14 @@ export function resolveTrustedNpmCli({
   const resolvedRepoRoot = realpathSync(resolve(repoRoot));
   const repoPackagePath = canonicalRegularFile(join(resolvedRepoRoot, "package.json"), "Repository package.json");
   const repoPackage = readJsonFile(repoPackagePath, "Repository package.json");
-  if (!/^npm@[^\s]+$/.test(String(repoPackage.packageManager ?? ""))) {
+  const packageManagerMatch = String(repoPackage.packageManager ?? "").match(/^npm@(\d+\.\d+\.\d+)$/);
+  if (!packageManagerMatch) {
     throw new Error("Repository packageManager must select npm explicitly");
+  }
+  const nodeEngineMatch = String(repoPackage.engines?.node ?? "").match(/^(\d+)\.x$/);
+  const runtimeNodeMajor = process.versions.node.split(".", 1)[0];
+  if (!nodeEngineMatch || nodeEngineMatch[1] !== runtimeNodeMajor) {
+    throw new Error("Node runtime does not match the repository engine");
   }
 
   const canonicalNode = canonicalRegularFile(nodeExecutable, "Node executable");
@@ -159,6 +165,9 @@ export function resolveTrustedNpmCli({
     const npmPackage = readJsonFile(npmPackagePath, "npm package.json");
     if (npmPackage.name !== "npm" || npmPackage.bin?.npm !== "bin/npm-cli.js") {
       throw new Error("Resolved package-manager launcher is not the canonical npm CLI");
+    }
+    if (npmPackage.version !== packageManagerMatch[1]) {
+      throw new Error("Resolved npm version does not match repository packageManager");
     }
     const declaredCliPath = canonicalRegularFile(join(npmRoot, npmPackage.bin.npm), "Declared npm CLI");
     if (declaredCliPath !== cliPath) {
@@ -210,6 +219,7 @@ export function trustedNpmEnvironment(sourceEnv = {}, launcher = resolveTrustedN
     env.WINDIR = systemRoot;
     env.ComSpec = commandShell;
     env.PATHEXT = ".COM;.EXE;.BAT;.CMD";
+    env.NoDefaultCurrentDirectoryInExePath = "1";
     env.npm_config_script_shell = commandShell;
   } else {
     env.npm_config_script_shell = canonicalRegularFile("/bin/sh", "POSIX command shell");

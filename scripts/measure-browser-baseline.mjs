@@ -1,90 +1,48 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
 import { findExecutablePath, warmBaseUrl } from "./smoke-browser-lib/core.mjs";
-import { redactProofText } from "./redact-proof-output.mjs";
+import {
+  addBoundedLatencySample,
+  classifyBaselineConsoleError,
+  classifyExpectedBaselineAbort,
+  deriveBaselineQuality,
+  describeSyntheticInteraction,
+  installBrowserBaselineObservers,
+  isBaselineLocalTarget,
+  parseBrowserBaselineConfig,
+  planBrowserBaselinePublication,
+  roundBaselineNumber,
+  sanitizeBaselineDiagnostic,
+  summarizeLatencySamples,
+  triggerSyntheticSoundToggle,
+} from "./browser-baseline-model.mjs";
 
-const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-const BASE_URL = process.env.BASELINE_BASE_URL || "http://localhost:3000";
-const SUMMARY_ONLY = process.argv.includes("--summary-only");
-const OBSERVE_MS = parsePositiveIntegerEnv("BASELINE_OBSERVE_MS", 10_000, 1_000, 900_000);
-const SAMPLE_MS = parsePositiveIntegerEnv("BASELINE_SAMPLE_MS", 30_000, 1_000, 60_000);
-const VIEWPORT_TEXT = process.env.BASELINE_VIEWPORT || "1440x900";
-const OUTPUT_PATH = path.resolve(
-  process.env.BASELINE_OUT || "artifacts/performance/browser-baseline.json",
-);
-const MAX_BASELINE_DIAGNOSTIC_CHARS = 500;
-const MAX_API_LATENCY_SAMPLES_PER_PATH = 128;
-
-function parsePositiveIntegerEnv(name, fallback, min, max) {
-  const raw = process.env[name]?.trim();
-  const value = raw && raw.length > 0 ? raw : String(fallback);
-  if (!DECIMAL_INTEGER_RE.test(value)) {
-    throw new Error(`${name} must be a decimal integer between ${min} and ${max}`);
-  }
-  const parsed = BigInt(value);
-  if (parsed > MAX_SAFE_INTEGER_BIGINT) {
-    throw new Error(`${name} must be a decimal integer between ${min} and ${max}`);
-  }
-  const numeric = Number(parsed);
-  if (!Number.isSafeInteger(numeric) || numeric < min || numeric > max) {
-    throw new Error(`${name} must be a decimal integer between ${min} and ${max}`);
-  }
-  return numeric;
-}
-
-const viewportMatch = /^(\d{3,4})x(\d{3,4})$/.exec(VIEWPORT_TEXT);
-if (!viewportMatch) {
-  throw new Error("BASELINE_VIEWPORT must use WIDTHxHEIGHT, for example 390x844");
-}
-const viewport = {
-  width: Number.parseInt(viewportMatch[1], 10),
-  height: Number.parseInt(viewportMatch[2], 10),
-};
-if (viewport.width < 320 || viewport.width > 3840 || viewport.height < 320 || viewport.height > 3840) {
-  throw new Error("BASELINE_VIEWPORT dimensions must be between 320 and 3840 pixels");
-}
-
-const browserCandidates = [
-  process.env.SMOKE_BROWSER_EXECUTABLE,
-  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-].filter(Boolean);
-
-const round = (value) => (Number.isFinite(value) ? Math.round(value * 100) / 100 : null);
-function sanitizeDiagnostic(value) {
-  const text = redactProofText(value)
-    .replace(/(?:https?|wss?):\/\/\S+/gi, "<url>")
-    .replace(/nonce-[^'\s;]+/gi, "nonce-<redacted>")
-    .replace(/sha256-[^'\s;]+/gi, "sha256-<redacted>")
-    .replace(/0x[a-f0-9]{40,64}/gi, "<hex>")
-    .replace(/\b[a-f0-9]{64}\b/gi, "<hex>")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (text.length <= MAX_BASELINE_DIAGNOSTIC_CHARS) return text;
-  return `${text.slice(0, MAX_BASELINE_DIAGNOSTIC_CHARS - 15)}...<truncated>`;
-}
-
-function summarizeLatencySamples(samples) {
-  if (samples.length === 0) return null;
-  const sorted = [...samples].sort((left, right) => left - right);
-  const percentileIndex = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1);
-  return {
-    samples: sorted.length,
-    minMs: round(sorted[0]),
-    meanMs: round(sorted.reduce((sum, value) => sum + value, 0) / sorted.length),
-    p95Ms: round(sorted[percentileIndex]),
-    maxMs: round(sorted.at(-1)),
+export async function collectBrowserBaseline({
+  env = process.env,
+  baselineConfig = parseBrowserBaselineConfig(env),
+} = {}) {
+  const BASE_URL = baselineConfig.baseUrl.href;
+  const OBSERVE_MS = baselineConfig.observeMs;
+  const SAMPLE_MS = baselineConfig.sampleMs;
+  const VIEWPORT_TEXT = baselineConfig.viewport.text;
+  const viewport = {
+    width: baselineConfig.viewport.width,
+    height: baselineConfig.viewport.height,
   };
-}
+  const browserCandidates = [
+    env.SMOKE_BROWSER_EXECUTABLE,
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  ].filter(Boolean);
 
-await warmBaseUrl(BASE_URL, 90_000);
-const executablePath = await findExecutablePath(browserCandidates);
-const browser = await chromium.launch({ executablePath, headless: true });
+  await warmBaseUrl(BASE_URL, 90_000);
+  const executablePath = await findExecutablePath(browserCandidates);
+  const browser = await chromium.launch({ executablePath, headless: true });
 
-try {
+  try {
   const context = await browser.newContext({
     viewport,
     serviceWorkers: "block",
@@ -112,78 +70,21 @@ try {
   const consoleErrorSamples = [];
   const requestFailureSamples = [];
 
-  const isLocalTarget = (url) => {
-    if (url.origin === baseOrigin) return true;
-    const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-    return loopbackHosts.has(url.hostname) && loopbackHosts.has(baseUrl.hostname) && url.port === baseUrl.port;
-  };
+  const isLocalTarget = (url) => isBaselineLocalTarget(url, baseUrl);
 
   const increment = (map, key) => map.set(key, (map.get(key) || 0) + 1);
-  const addApiLatencySample = (path, durationMs) => {
-    if (!Number.isFinite(durationMs) || durationMs < 0) return;
-    const samples = apiResponseLatencyByPath.get(path) || [];
-    if (samples.length >= MAX_API_LATENCY_SAMPLES_PER_PATH) return;
-    samples.push(durationMs);
-    apiResponseLatencyByPath.set(path, samples);
-  };
-
-  await page.addInitScript(() => {
-    window.__lorePerformanceBaseline = { cls: 0, inp: 0, inpEvent: null, lcp: 0, lcpElement: null, longTasks: [] };
-    new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        window.__lorePerformanceBaseline.lcp = entry.startTime;
-        const element = entry.element;
-        window.__lorePerformanceBaseline.lcpElement = element
-          ? {
-              tag: element.tagName.toLowerCase(),
-              id: element.id.slice(0, 80) || null,
-              className: typeof element.className === "string" ? element.className.slice(0, 160) || null : null,
-            }
-          : null;
-      }
-    }).observe({ type: "largest-contentful-paint", buffered: true });
-    new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        if (!entry.hadRecentInput) window.__lorePerformanceBaseline.cls += entry.value;
-      }
-    }).observe({ type: "layout-shift", buffered: true });
-    new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        window.__lorePerformanceBaseline.longTasks.push(entry.duration);
-      }
-    }).observe({ type: "longtask", buffered: true });
-    new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        if (!entry.interactionId || entry.duration <= window.__lorePerformanceBaseline.inp) continue;
-        window.__lorePerformanceBaseline.inp = entry.duration;
-        window.__lorePerformanceBaseline.inpEvent = entry.name;
-      }
-    }).observe({ type: "event", buffered: true, durationThreshold: 16 });
-  });
+  await page.addInitScript(installBrowserBaselineObservers);
 
   page.on("console", (message) => {
     if (message.type() !== "error") return;
-    const text = message.text();
-    let target = "unknown";
-    let locationPath;
-    try {
-      const locationUrl = new URL(message.location().url);
-      target = isLocalTarget(locationUrl) ? "local" : "external";
-      if (target === "local") locationPath = locationUrl.pathname;
-    } catch { /* Console messages may not have a source URL. */ }
-    const kind = /content security policy|violates the following/i.test(text)
-      ? "csp"
-      : /failed to load resource|net::err/i.test(text)
-        ? "resource"
-        : /react|hydration/i.test(text)
-          ? "react"
-          : /wallet|privy|wagmi|connector/i.test(text)
-            ? "wallet"
-            : "other";
-    increment(consoleErrorKinds, kind);
-    increment(consoleErrorTargets, target);
+    const diagnostic = classifyBaselineConsoleError({
+      locationUrl: message.location().url,
+      message: message.text(),
+    }, baseUrl);
+    increment(consoleErrorKinds, diagnostic.kind);
+    increment(consoleErrorTargets, diagnostic.target);
     if (consoleErrorSamples.length < 5) {
-      consoleErrorSamples.push({ kind, target, path: locationPath, message: sanitizeDiagnostic(text) });
+      consoleErrorSamples.push(diagnostic);
     }
   });
   page.on("request", (request) => {
@@ -216,7 +117,7 @@ try {
     const request = response.request();
     const requestStartedAt = apiRequestStartedAt.get(request);
     if (isLocalTarget(url) && url.pathname.startsWith("/api/") && requestStartedAt !== undefined) {
-      addApiLatencySample(url.pathname, Date.now() - requestStartedAt);
+      addBoundedLatencySample(apiResponseLatencyByPath, url.pathname, Date.now() - requestStartedAt);
       apiRequestStartedAt.delete(request);
     }
     if (response.status() < 400) return;
@@ -227,48 +128,29 @@ try {
     apiRequestStartedAt.delete(request);
     const url = new URL(request.url());
     const target = isLocalTarget(url) ? "local" : "external";
-    const error = sanitizeDiagnostic(request.failure()?.errorText || "unknown");
-    const isExpectedLocalRscAbort =
-      target === "local"
-      && request.method() === "GET"
-      && request.resourceType() === "fetch"
-      && !url.pathname.startsWith("/api/")
-      && error === "net::ERR_ABORTED"
-      && (request.headers().rsc === "1" || url.searchParams.has("_rsc"));
-    const isExpectedLocalWalletCoopAbort =
-      target === "local"
-      && request.method() === "HEAD"
-      && request.resourceType() === "fetch"
-      && url.pathname === baseUrl.pathname
-      && url.search === ""
-      && error === "net::ERR_ABORTED";
-    const isExpectedLocalChatPollAbort =
-      target === "local"
-      && request.method() === "GET"
-      && request.resourceType() === "fetch"
-      && url.pathname === "/api/chat/messages"
-      && error === "net::ERR_ABORTED";
-    const isExpectedLocalRecentWinsPollAbort =
-      target === "local"
-      && request.method() === "GET"
-      && request.resourceType() === "fetch"
-      && url.pathname === "/api/recent-wins"
-      && error === "net::ERR_ABORTED";
-    if (isExpectedLocalRscAbort) {
+    const error = sanitizeBaselineDiagnostic(request.failure()?.errorText || "unknown");
+    const expectedAbort = classifyExpectedBaselineAbort({
+      url,
+      method: request.method(),
+      resourceType: request.resourceType(),
+      headers: request.headers(),
+      error,
+    }, baseUrl);
+    if (expectedAbort === "rsc") {
       ignoredLocalRscAbortCount += 1;
       return;
     }
-    if (isExpectedLocalWalletCoopAbort) {
+    if (expectedAbort === "wallet-coop") {
       // Coinbase Wallet SDK probes the current page's COOP header with HEAD.
       ignoredLocalWalletCoopAbortCount += 1;
       return;
     }
-    if (isExpectedLocalChatPollAbort) {
+    if (expectedAbort === "chat-poll") {
       // React dev cleanup can abort the stale chat poll; keep it visible without degrading the page.
       ignoredLocalChatPollAbortCount += 1;
       return;
     }
-    if (isExpectedLocalRecentWinsPollAbort) {
+    if (expectedAbort === "recent-wins-poll") {
       // React dev cleanup can abort the stale recent-wins poll; keep it visible without degrading the page.
       ignoredLocalRecentWinsPollAbortCount += 1;
       return;
@@ -301,12 +183,7 @@ try {
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: 90_000 });
   const interactionDelayMs = Math.min(2_500, Math.max(500, Math.floor(OBSERVE_MS / 4)));
   await page.waitForTimeout(interactionDelayMs);
-  const soundToggle = page.getByRole("button", { name: /Mute sounds|Unmute sounds/ });
-  let syntheticInteraction = false;
-  if (await soundToggle.isVisible().catch(() => false)) {
-    await soundToggle.click();
-    syntheticInteraction = true;
-  }
+  const syntheticInteraction = await triggerSyntheticSoundToggle(page);
   const readRuntimeSnapshot = () => page.evaluate(() => ({
     domNodes: document.getElementsByTagName("*").length,
     jsHeapUsedBytes: performance.memory?.usedJSHeapSize ?? null,
@@ -376,35 +253,30 @@ try {
     .filter((value) => Number.isFinite(value));
   const maxJsHeapUsedBytes = heapSamples.length > 0 ? Math.max(...heapSamples) : null;
   const maxDomNodes = Math.max(...runtimeSamples.map((sample) => sample.domNodes));
-  const localConsoleErrorCount = consoleErrorTargets.get("local") || 0;
-  const qualityIssues = [];
-  if (failedLocalResponseCount > 0) qualityIssues.push(`${failedLocalResponseCount} failed local response(s)`);
-  if (localRequestFailureCount > 0) qualityIssues.push(`${localRequestFailureCount} failed local request(s)`);
-  if (localConsoleErrorCount > 0) qualityIssues.push(`${localConsoleErrorCount} local console error(s)`);
+  const quality = deriveBaselineQuality({
+    failedLocalResponseCount,
+    localRequestFailureCount,
+    consoleErrorsByTarget: Object.fromEntries(consoleErrorTargets),
+  });
   const report = {
     schemaVersion: 1,
     startedAt,
     target: { kind: "local", origin: baseOrigin, viewport: VIEWPORT_TEXT },
     observationMs: OBSERVE_MS,
-    quality: {
-      status: qualityIssues.length === 0 ? "pass" : "degraded",
-      issues: qualityIssues,
-    },
+    quality,
     vitals: {
-      fcpMs: round(metrics.fcp),
-      lcpMs: round(metrics.lcp),
+      fcpMs: roundBaselineNumber(metrics.fcp),
+      lcpMs: roundBaselineNumber(metrics.lcp),
       lcpElement: metrics.lcpElement,
-      cls: round(metrics.cls),
-      inpMs: metrics.inp > 0 ? round(metrics.inp) : null,
+      cls: roundBaselineNumber(metrics.cls),
+      inpMs: metrics.inp > 0 ? roundBaselineNumber(metrics.inp) : null,
       inpEvent: metrics.inpEvent,
-      inpNote: syntheticInteraction
-        ? "Synthetic sound-toggle interaction; local lab value, not field INP."
-        : "Not collected because the sound toggle was unavailable.",
+      inpNote: describeSyntheticInteraction(syntheticInteraction),
     },
     navigation: {
-      ttfbMs: round(metrics.navigation?.ttfb),
-      domContentLoadedMs: round(metrics.navigation?.domContentLoaded),
-      loadMs: round(metrics.navigation?.load),
+      ttfbMs: roundBaselineNumber(metrics.navigation?.ttfb),
+      domContentLoadedMs: roundBaselineNumber(metrics.navigation?.domContentLoaded),
+      loadMs: roundBaselineNumber(metrics.navigation?.load),
       transferredBytes: metrics.navigation?.transferredBytes ?? null,
     },
     layout: {
@@ -430,7 +302,7 @@ try {
     },
     requests: {
       sameOriginApiCount: [...apiCounts.values()].reduce((sum, count) => sum + count, 0),
-      sameOriginApiPerMinute: round(
+      sameOriginApiPerMinute: roundBaselineNumber(
         ([...apiCounts.values()].reduce((sum, count) => sum + count, 0) * 60_000) / OBSERVE_MS,
       ),
       sameOriginApiByPath: Object.fromEntries([...apiCounts.entries()].sort()),
@@ -473,8 +345,8 @@ try {
       sampleIntervalMs: SAMPLE_MS,
       samples: runtimeSamples,
       longTaskCount: longTasks.length,
-      longTaskTotalMs: round(longTasks.reduce((sum, duration) => sum + duration, 0)),
-      longestTaskMs: round(Math.max(0, ...longTasks)),
+      longTaskTotalMs: roundBaselineNumber(longTasks.reduce((sum, duration) => sum + duration, 0)),
+      longestTaskMs: roundBaselineNumber(Math.max(0, ...longTasks)),
       consoleErrorCount: [...consoleErrorKinds.values()].reduce((sum, count) => sum + count, 0),
       consoleErrorsByKind: Object.fromEntries([...consoleErrorKinds.entries()].sort()),
       consoleErrorsByTarget: Object.fromEntries([...consoleErrorTargets.entries()].sort()),
@@ -482,63 +354,40 @@ try {
     },
   };
 
-  const summaryReport = {
-    schemaVersion: report.schemaVersion,
-    startedAt: report.startedAt,
-    target: report.target,
-    observationMs: report.observationMs,
-    quality: report.quality,
-    vitals: report.vitals,
-    resources: {
-      count: report.resources.count,
-      transferredBytes: report.resources.transferredBytes,
-      decodedBytes: report.resources.decodedBytes,
-      byType: report.resources.byType,
-    },
-    requests: {
-      sameOriginApiCount: report.requests.sameOriginApiCount,
-      sameOriginApiPerMinute: report.requests.sameOriginApiPerMinute,
-      sameOriginApiResponseLatencyByPath: report.requests.sameOriginApiResponseLatencyByPath,
-      externalFetchCount: report.requests.externalFetchCount,
-      failedLocalResponseCount: report.requests.failedLocalResponseCount,
-      failedExternalResponseCount: report.requests.failedExternalResponseCount,
-      requestFailureCount: report.requests.requestFailureCount,
-      localRequestFailureCount: report.requests.localRequestFailureCount,
-      externalRequestFailureCount: report.requests.externalRequestFailureCount,
-      ignoredLocalRscAbortCount: report.requests.ignoredLocalRscAbortCount,
-      ignoredLocalWalletCoopAbortCount: report.requests.ignoredLocalWalletCoopAbortCount,
-      ignoredLocalChatPollAbortCount: report.requests.ignoredLocalChatPollAbortCount,
-      ignoredLocalRecentWinsPollAbortCount: report.requests.ignoredLocalRecentWinsPollAbortCount,
-    },
-    runtime: {
-      initialDomNodes: report.runtime.initialDomNodes,
-      domNodes: report.runtime.domNodes,
-      domNodeDelta: report.runtime.domNodeDelta,
-      jsHeapUsedBytes: report.runtime.jsHeapUsedBytes,
-      jsHeapUsedDeltaBytes: report.runtime.jsHeapUsedDeltaBytes,
-      maxJsHeapUsedBytes: report.runtime.maxJsHeapUsedBytes,
-      jsHeapPeakDeltaBytes: report.runtime.jsHeapPeakDeltaBytes,
-      maxDomNodes: report.runtime.maxDomNodes,
-      domNodePeakDelta: report.runtime.domNodePeakDelta,
-      sampleCount: report.runtime.samples.length,
-      longTaskCount: report.runtime.longTaskCount,
-      longTaskTotalMs: report.runtime.longTaskTotalMs,
-      longestTaskMs: report.runtime.longestTaskMs,
-      consoleErrorCount: report.runtime.consoleErrorCount,
-      consoleErrorsByKind: report.runtime.consoleErrorsByKind,
-      consoleErrorsByTarget: report.runtime.consoleErrorsByTarget,
-    },
-  };
-
-  if (SUMMARY_ONLY) {
-    console.log(JSON.stringify(summaryReport, null, 2));
-  } else {
-    await fs.mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
-    await fs.writeFile(OUTPUT_PATH, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    console.log(JSON.stringify(report, null, 2));
-    console.log(`Browser baseline written: ${path.relative(process.cwd(), OUTPUT_PATH)}`);
+    await context.close();
+    return report;
+  } finally {
+    await browser.close();
   }
-  await context.close();
-} finally {
-  await browser.close();
+}
+
+export async function runBrowserBaselineCli({
+  env = process.env,
+  argv = process.argv.slice(2),
+  cwd = process.cwd(),
+  collectBrowserBaselineFn = collectBrowserBaseline,
+  fsApi = fs,
+  log = console.log,
+} = {}) {
+  const baselineConfig = parseBrowserBaselineConfig(env);
+  const summaryOnly = argv.includes("--summary-only");
+  const outputPath = path.resolve(
+    cwd,
+    env.BASELINE_OUT || "artifacts/performance/browser-baseline.json",
+  );
+  const report = await collectBrowserBaselineFn({ baselineConfig, env });
+  const publication = planBrowserBaselinePublication(report, { summaryOnly });
+  if (publication.shouldWriteArtifact) {
+    await fsApi.mkdir(path.dirname(outputPath), { recursive: true });
+    await fsApi.writeFile(outputPath, publication.artifactText, "utf8");
+  }
+  log(publication.consoleText);
+  if (publication.shouldWriteArtifact) {
+    log(`Browser baseline written: ${path.relative(cwd, outputPath)}`);
+  }
+  return { outputPath, publication, report };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runBrowserBaselineCli();
 }

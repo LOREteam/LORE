@@ -21,6 +21,12 @@ import {
   sep,
 } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  invalidateBuildProvenanceMarker,
+  prepareBuildProvenance,
+  sealBuildProvenance,
+} from "./build-provenance.mjs";
+import { resolveNextDistDir } from "./next-dist-dir.mjs";
 
 const PROTECTED_DATABASE_RELATIVE_PATHS = [
   join("data", "lore-v10.sqlite"),
@@ -237,6 +243,18 @@ function requireRegularDirectory(directoryPath, label) {
   }
 }
 
+function ensureBuildOutputLockRoot(lockRoot, deadline) {
+  while (true) {
+    try {
+      mkdirSync(lockRoot, { recursive: true });
+      requireRegularDirectory(lockRoot, "Hermetic build lock root");
+      return captureOwnedDirectoryIdentity(lockRoot);
+    } catch (error) {
+      if (error?.code !== "ENOENT" || Date.now() >= deadline) throw error;
+    }
+  }
+}
+
 export function acquireBuildOutputLock(projectRoot = process.cwd(), temporaryRoot = tmpdir()) {
   const resolvedProjectRoot = realpathSync(projectRoot);
   const resolvedTemporaryRoot = realpathSync(temporaryRoot);
@@ -245,8 +263,6 @@ export function acquireBuildOutputLock(projectRoot = process.cwd(), temporaryRoo
   }
 
   const lockRoot = join(resolvedTemporaryRoot, BUILD_OUTPUT_LOCK_ROOT_NAME);
-  mkdirSync(lockRoot, { recursive: true });
-  requireRegularDirectory(lockRoot, "Hermetic build lock root");
   const lockName = createHash("sha256").update(resolvedProjectRoot).digest("hex");
   const lockPath = join(lockRoot, `${lockName}.lock`);
   const ownerPath = join(lockPath, "owner");
@@ -256,11 +272,20 @@ export function acquireBuildOutputLock(projectRoot = process.cwd(), temporaryRoo
     ? JSON.stringify({ version: 1, pid: process.pid, processStartIdentity, token: ownerToken })
     : ownerToken;
   const deadline = Date.now() + BUILD_OUTPUT_LOCK_WAIT_MS;
+  let lockRootIdentity = ensureBuildOutputLockRoot(lockRoot, deadline);
 
   while (true) {
     try {
+      const currentLockRootIdentity = captureOwnedDirectoryIdentity(lockRoot);
+      if (!sameDirectoryIdentity(currentLockRootIdentity, lockRootIdentity)) {
+        throw new Error(`Refusing to use a replaced hermetic build lock root: ${lockRoot}`);
+      }
       mkdirSync(lockPath);
       const identity = captureOwnedDirectoryIdentity(lockPath);
+      const lockRootIdentityAfterCreate = captureOwnedDirectoryIdentity(lockRoot);
+      if (!sameDirectoryIdentity(lockRootIdentityAfterCreate, lockRootIdentity)) {
+        throw new Error(`Refusing to use a replaced hermetic build lock root: ${lockRoot}`);
+      }
       writeFileSync(ownerPath, ownerContents, { encoding: "utf8", flag: "wx" });
       return {
         release() {
@@ -276,6 +301,13 @@ export function acquireBuildOutputLock(projectRoot = process.cwd(), temporaryRoo
         },
       };
     } catch (error) {
+      if (error?.code === "ENOENT") {
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out restoring the hermetic build output lock root: ${lockRoot}`);
+        }
+        lockRootIdentity = ensureBuildOutputLockRoot(lockRoot, deadline);
+        continue;
+      }
       if (error?.code !== "EEXIST") throw error;
       if (tryReclaimAbandonedBuildOutputLock(lockPath, ownerPath)) continue;
       if (Date.now() >= deadline) {
@@ -344,6 +376,7 @@ export function runHermeticBuild({
   encoding,
   temporaryRoot = tmpdir(),
   timeoutMs = BUILD_CHILD_TIMEOUT_MS,
+  buildProvenance = null,
 } = {}) {
   if (typeof command !== "string" || command.length === 0) {
     throw new Error("Hermetic build command is required");
@@ -377,8 +410,19 @@ export function runHermeticBuild({
   let result = null;
   let childFailure = null;
   let buildOutputLock = null;
+  let provenanceSession = null;
+  let sealedProvenance = null;
+  let finalProvenanceInvalidation = null;
   try {
     buildOutputLock = acquireBuildOutputLock(resolvedProjectRoot, resolvedTemporaryRoot);
+    if (buildProvenance) {
+      provenanceSession = prepareBuildProvenance({
+        projectRoot: resolvedProjectRoot,
+        distDir: buildProvenance.distDir,
+        seal: buildProvenance.seal === true,
+        environment: env,
+      });
+    }
     result = spawnSync(command, args, {
       cwd: resolvedProjectRoot,
       env: childEnv,
@@ -418,10 +462,49 @@ export function runHermeticBuild({
     postconditionFailures.push(error);
   }
 
+  const childExitedCleanly = result
+    && !result.error
+    && !result.signal
+    && result.status === 0;
+  if (
+    provenanceSession?.seal
+    && childExitedCleanly
+    && childFailure === null
+    && postconditionFailures.length === 0
+  ) {
+    try {
+      sealedProvenance = sealBuildProvenance(provenanceSession);
+    } catch (error) {
+      postconditionFailures.push(error);
+    }
+  }
+
+  if (buildOutputLock && buildProvenance && !sealedProvenance) {
+    try {
+      finalProvenanceInvalidation = invalidateBuildProvenanceMarker(
+        resolvedProjectRoot,
+        provenanceSession?.context.resolvedDistDir ?? buildProvenance.distDir,
+      );
+    } catch (error) {
+      postconditionFailures.push(error);
+    }
+  }
+
   try {
     buildOutputLock?.release();
   } catch (error) {
     postconditionFailures.push(error);
+    if (sealedProvenance) {
+      try {
+        invalidateBuildProvenanceMarker(
+          resolvedProjectRoot,
+          provenanceSession.context.resolvedDistDir,
+        );
+        sealedProvenance = null;
+      } catch (cleanupError) {
+        postconditionFailures.push(cleanupError);
+      }
+    }
   }
 
   const childDidNotExitCleanly = result
@@ -435,17 +518,65 @@ export function runHermeticBuild({
     throw combineFailures(failures);
   }
 
-  return { result, temporaryDbPath };
+  return {
+    result,
+    temporaryDbPath,
+    buildProvenance: sealedProvenance
+      ? {
+          status: "sealed",
+          sourceRevisionSha: sealedProvenance.marker.sourceRevisionSha,
+          buildId: sealedProvenance.outputIdentity.buildId,
+          contentDigestSha256: sealedProvenance.outputIdentity.contentDigestSha256,
+          markerFileDigestSha256: sealedProvenance.markerFileDigestSha256,
+        }
+      : buildProvenance
+        ? {
+            status: "unsealed",
+            invalidated: provenanceSession?.invalidated ?? null,
+            finalInvalidation: finalProvenanceInvalidation,
+          }
+        : null,
+  };
+}
+
+export function parseNextBuildArguments(wrapperArgs) {
+  if (!Array.isArray(wrapperArgs) || wrapperArgs.some((arg) => typeof arg !== "string")) {
+    throw new Error("Hermetic build arguments must be an array of strings");
+  }
+  const sealFlagCount = wrapperArgs.filter((arg) => arg === "--seal-provenance").length;
+  if (sealFlagCount > 1) throw new Error("--seal-provenance may be provided only once");
+  const sealProvenance = sealFlagCount === 1;
+  if (sealProvenance && wrapperArgs.length !== 1) {
+    throw new Error("Sealed build provenance does not accept Next build arguments");
+  }
+  const nextArgs = wrapperArgs.filter((arg) => arg !== "--seal-provenance");
+  return { sealProvenance, nextArgs };
 }
 
 function runNextBuild() {
   const projectRoot = process.cwd();
+  const { sealProvenance, nextArgs } = parseNextBuildArguments(process.argv.slice(2));
+  const { relativePath: nextDistDir, resolvedPath: nextDistPath } = resolveNextDistDir(
+    process.env.NEXT_DIST_DIR,
+    projectRoot,
+  );
+  if (sealProvenance && nextDistDir !== ".next") {
+    throw new Error("Sealed build provenance requires the canonical .next output directory");
+  }
   const nextBin = resolve(projectRoot, "node_modules", "next", "dist", "bin", "next");
-  const { result } = runHermeticBuild({
+  const { result, buildProvenance } = runHermeticBuild({
     projectRoot,
     command: process.execPath,
-    args: [nextBin, "build", "--webpack", ...process.argv.slice(2)],
+    args: [nextBin, "build", "--webpack", ...nextArgs],
+    buildProvenance: { distDir: nextDistPath, seal: sealProvenance },
   });
+
+  if (buildProvenance?.status === "sealed") {
+    console.log(
+      `LORE build provenance sealed: ${buildProvenance.sourceRevisionSha} `
+      + `${buildProvenance.contentDigestSha256}`,
+    );
+  }
 
   if (result?.status === null) {
     if (result.signal) {

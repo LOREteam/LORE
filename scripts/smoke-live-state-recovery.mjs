@@ -1,28 +1,24 @@
 import { chromium } from "playwright-core";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   ensureLandingPage,
   findExecutablePath,
   warmBaseUrl,
 } from "./smoke-browser-lib/core.mjs";
-import { redactProofText } from "./redact-proof-output.mjs";
+import {
+  createRuntimePageErrorCounter,
+  formatRuntimeSmokeError,
+} from "./runtime-smoke-error-policy.mjs";
 
 const BASE_URL = process.env.SMOKE_BASE_URL || "http://localhost:3004";
 const TIMEOUT_MS = 90_000;
-const MAX_RECOVERY_ERROR_CHARS = 500;
 const BROWSER_CANDIDATES = [
   process.env.SMOKE_BROWSER_EXECUTABLE,
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 ].filter(Boolean);
-
-function describeRecoveryError(error) {
-  const text = redactProofText(error instanceof Error ? error.message : String(error))
-    .replace(/\s+/g, " ")
-    .trim();
-  if (text.length <= MAX_RECOVERY_ERROR_CHARS) return text;
-  return `${text.slice(0, MAX_RECOVERY_ERROR_CHARS - 15)}...<truncated>`;
-}
 
 function liveStatePayload(attempt) {
   const zeros = Array.from({ length: 25 }, () => "0");
@@ -53,7 +49,7 @@ async function waitForAttemptCount(attempts, expected) {
   }
 }
 
-async function main() {
+export async function runLiveStateRecoverySmoke() {
   await warmBaseUrl(BASE_URL, 30_000);
   const executablePath = await findExecutablePath(BROWSER_CANDIDATES);
   const browser = await chromium.launch({
@@ -63,11 +59,9 @@ async function main() {
   });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const attempts = [];
-  let pageErrorCount = 0;
+  const pageErrors = createRuntimePageErrorCounter();
 
-  page.on("pageerror", () => {
-    pageErrorCount += 1;
-  });
+  page.on("pageerror", pageErrors.record);
   await page.route("**/api/live-state*", async (route) => {
     const attempt = attempts.length + 1;
     const offline = attempt >= 2 && attempt <= 6;
@@ -96,8 +90,8 @@ async function main() {
     if (maxRetryGapMs > 23_000) {
       throw new Error(`live-state retry gap exceeded bound: ${maxRetryGapMs}ms`);
     }
-    if (pageErrorCount > 0) {
-      throw new Error(`page errors during recovery drill: ${pageErrorCount}`);
+    if (pageErrors.count() > 0) {
+      throw new Error(`page errors during recovery drill: ${pageErrors.count()}`);
     }
 
     console.log(JSON.stringify({
@@ -107,14 +101,27 @@ async function main() {
       recoverySuccesses: lastTwo.length,
       maxRetryGapMs,
       chartStayedMounted: true,
-      pageErrors: pageErrorCount,
+      pageErrors: pageErrors.count(),
     }));
   } finally {
     await browser.close();
   }
 }
 
-main().catch((error) => {
-  console.error(describeRecoveryError(error));
-  process.exitCode = 1;
-});
+export async function runLiveStateRecoveryCli({
+  run = runLiveStateRecoverySmoke,
+  errorLog = console.error,
+} = {}) {
+  try {
+    await run();
+    return 0;
+  } catch (error) {
+    errorLog(formatRuntimeSmokeError(error));
+    return 1;
+  }
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isMain) {
+  process.exitCode = await runLiveStateRecoveryCli();
+}

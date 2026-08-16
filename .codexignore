@@ -16,6 +16,7 @@ temp/
 .next-build-check/
 .next-verify/
 .next-isolated/
+.next-p1-profile/
 .ms-playwright/
 .playwright-cli/
 .playwright-mcp/

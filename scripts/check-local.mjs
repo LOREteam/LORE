@@ -1,157 +1,69 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { resolveCheckLocalDistDir } from "./check-local-dist-dir.mjs";
+import {
+  createCheckLocalPlan,
+  createCheckLocalChildEnvironment,
+  describeCheckLocalError,
+  finalizeCheckLocalRun,
+  isCheckLocalSummaryOnly,
+  prepareCheckLocalOutput,
+  snapshotCheckLocalDatabaseFiles,
+  startCheckLocalServerAfterAdmission,
+} from "./check-local-policy.mjs";
 import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
-import { redactProofText } from "./redact-proof-output.mjs";
 
-const CHECK_LOCAL_PORT = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_PORT, 3101);
 const CHECK_LOCAL_REPO_ROOT = resolve(".");
-const {
-  relativePath: CHECK_LOCAL_DIST_DIR,
-  resolvedPath: CHECK_LOCAL_DIST_PATH,
-} = resolveCheckLocalDistDir(process.env.CHECK_LOCAL_DIST_DIR ?? ".next-check", CHECK_LOCAL_REPO_ROOT);
-const DEFAULT_LOCAL_SMOKE_BASE_URL = `http://127.0.0.1:${CHECK_LOCAL_PORT}`;
-const SMOKE_BASE_URL = process.env.SMOKE_BASE_URL || DEFAULT_LOCAL_SMOKE_BASE_URL;
-const SHOULD_START_LOCAL_SERVER = !process.env.SMOKE_BASE_URL;
-const SERVER_START_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_SERVER_START_TIMEOUT_MS, 90_000);
-const MAX_CHECK_LOCAL_ERROR_CHARS = 500;
-const MAX_CHECK_LOCAL_SUMMARY_LINES = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_SUMMARY_LINES, 40);
-const summaryOnly = process.argv.includes("--summary-only");
 const CHECK_LOCAL_TEMP_ROOT = resolve(".tmp");
-mkdirSync(CHECK_LOCAL_TEMP_ROOT, { recursive: true });
-const CHECK_LOCAL_TEMP_DIR = mkdtempSync(join(CHECK_LOCAL_TEMP_ROOT, "check-local-"));
-const CHECK_LOCAL_DB_PATH = join(CHECK_LOCAL_TEMP_DIR, "lore.sqlite");
 const CHECK_LOCAL_PROTECTED_DB_PATHS = [
   resolve("data", "lore-v10.sqlite"),
   resolve("data", "lore-v10.sqlite-wal"),
   resolve("data", "lore-v10.sqlite-shm"),
 ];
-const CHECK_LOCAL_PROTECTED_DB_SNAPSHOT = snapshotDatabaseFiles(CHECK_LOCAL_PROTECTED_DB_PATHS);
-const CHECK_LOCAL_ENV = {
-  LORE_DB_PATH: CHECK_LOCAL_DB_PATH,
-};
-const CHECK_LOCAL_NEXT_ENV = {
-  ...CHECK_LOCAL_ENV,
-  NEXT_DIST_DIR: CHECK_LOCAL_DIST_DIR,
-  ALLOW_WEAK_RATE_LIMIT_IDENTITY: "1",
-};
+let CHECK_LOCAL_PORT;
+let CHECK_LOCAL_DIST_DIR;
+let CHECK_LOCAL_DIST_PATH;
+let SMOKE_BASE_URL;
+let SHOULD_START_LOCAL_SERVER;
+let SERVER_START_TIMEOUT_MS;
+let MAX_CHECK_LOCAL_SUMMARY_LINES;
+let summaryOnly;
+let CHECK_LOCAL_TEMP_DIR;
+let CHECK_LOCAL_PROTECTED_DB_SNAPSHOT;
+let CHECK_LOCAL_ENV;
+let CHECK_LOCAL_NEXT_ENV;
+let npmCommand;
+let nextBin;
+let steps;
+let smokeSteps;
 
-function snapshotDatabaseFiles(filePaths) {
-  return filePaths.map((filePath) => {
-    if (!existsSync(filePath)) {
-      return { filePath, exists: false };
-    }
-
-    const stats = statSync(filePath, { bigint: true });
-    return {
-      filePath,
-      exists: true,
-      regularFile: stats.isFile(),
-      size: stats.size.toString(),
-      mtimeNs: stats.mtimeNs.toString(),
-      sha256: stats.isFile()
-        ? createHash("sha256").update(readFileSync(filePath)).digest("hex")
-        : null,
-    };
+function initializeCheckLocalRuntime(argv = process.argv) {
+  CHECK_LOCAL_PORT = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_PORT, 3101);
+  const dist = resolveCheckLocalDistDir(process.env.CHECK_LOCAL_DIST_DIR ?? ".next-check", CHECK_LOCAL_REPO_ROOT);
+  CHECK_LOCAL_DIST_DIR = dist.relativePath;
+  CHECK_LOCAL_DIST_PATH = dist.resolvedPath;
+  const defaultBaseUrl = `http://127.0.0.1:${CHECK_LOCAL_PORT}`;
+  SMOKE_BASE_URL = process.env.SMOKE_BASE_URL || defaultBaseUrl;
+  SHOULD_START_LOCAL_SERVER = !process.env.SMOKE_BASE_URL;
+  SERVER_START_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_SERVER_START_TIMEOUT_MS, 90_000);
+  MAX_CHECK_LOCAL_SUMMARY_LINES = parsePositiveIntegerEnv(process.env.CHECK_LOCAL_SUMMARY_LINES, 40);
+  summaryOnly = isCheckLocalSummaryOnly(argv);
+  mkdirSync(CHECK_LOCAL_TEMP_ROOT, { recursive: true });
+  CHECK_LOCAL_TEMP_DIR = mkdtempSync(join(CHECK_LOCAL_TEMP_ROOT, "check-local-"));
+  CHECK_LOCAL_PROTECTED_DB_SNAPSHOT = snapshotCheckLocalDatabaseFiles(CHECK_LOCAL_PROTECTED_DB_PATHS);
+  const childEnvironment = createCheckLocalChildEnvironment({
+    tempDir: CHECK_LOCAL_TEMP_DIR,
+    distDir: CHECK_LOCAL_DIST_DIR,
   });
+  CHECK_LOCAL_ENV = childEnvironment.env;
+  CHECK_LOCAL_NEXT_ENV = childEnvironment.nextEnv;
+  npmCommand = process.env.npm_execpath && process.execPath ? process.execPath : null;
+  nextBin = resolve("node_modules", "next", "dist", "bin", "next");
+  ({ steps, smokeSteps } = createCheckLocalPlan({ npmCommand, processExecPath: process.execPath }));
 }
-
-function assertProtectedDatabaseFilesUnchanged() {
-  const after = snapshotDatabaseFiles(CHECK_LOCAL_PROTECTED_DB_PATHS);
-  const changed = CHECK_LOCAL_PROTECTED_DB_SNAPSHOT
-    .filter((before, index) => JSON.stringify(before) !== JSON.stringify(after[index]))
-    .map(({ filePath }) => basename(filePath));
-  if (changed.length > 0) {
-    throw new Error(`Local check changed protected database state: ${changed.join(", ")}`);
-  }
-}
-
-function describeCheckLocalError(error) {
-  const text = redactProofText(error instanceof Error ? error.message : String(error))
-    .replace(/\s+/g, " ")
-    .trim();
-  if (text.length <= MAX_CHECK_LOCAL_ERROR_CHARS) return text;
-  return `${text.slice(0, MAX_CHECK_LOCAL_ERROR_CHARS - 15)}...<truncated>`;
-}
-
-const npmCommand = process.env.npm_execpath && process.execPath ? process.execPath : null;
-const nextBin = resolve("node_modules", "next", "dist", "bin", "next");
-const hermeticBuildScript = resolve("scripts", "run-hermetic-build.mjs");
-const hermeticBuildTestScript = resolve("scripts", "test-hermetic-build.mjs");
-const steps = npmCommand
-  ? [
-      { command: npmCommand, args: ["run", "lint"] },
-      { command: npmCommand, args: ["run", "test:build-hermetic"] },
-      { command: npmCommand, args: ["run", "test:logic"] },
-      { command: npmCommand, args: ["run", "proof:security-followup"] },
-      { command: npmCommand, args: ["run", "test:fetch-timeout"] },
-      { command: npmCommand, args: ["run", "test:stored-number-parsing"] },
-      { command: npmCommand, args: ["run", "test:p1-hardening"] },
-      { command: npmCommand, args: ["run", "perf:p1:self-test"] },
-      { command: npmCommand, args: ["run", "test:contract"] },
-      { command: npmCommand, args: ["run", "test:contract:v10"] },
-      { command: npmCommand, args: ["run", "test:indexer-storage"] },
-      { command: npmCommand, args: ["run", "test:db-operations"] },
-      { command: npmCommand, args: ["run", "test:monitoring"] },
-      { command: npmCommand, args: ["run", "build"] },
-      { command: npmCommand, args: ["run", "typecheck"], retryOnce: true },
-    ]
-  : [
-      { command: process.execPath, args: [resolve("node_modules", "eslint", "bin", "eslint.js"), "."] },
-      { command: process.execPath, args: [hermeticBuildTestScript] },
-      { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-business-logic.mjs")] },
-      { command: process.execPath, args: [resolve("scripts", "check-security-followup.mjs")] },
-      { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-fetch-with-timeout.ts")] },
-      { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-stored-number-parsing.ts")] },
-      { command: process.execPath, args: [resolve("scripts", "run-p1-hardening-tests.mjs")] },
-      { command: process.execPath, args: [resolve("scripts", "collect-p1-performance-evidence.mjs"), "--self-test"] },
-      { command: process.execPath, args: [resolve("scripts", "test-contract-v9-invariants.mjs")] },
-      { command: process.execPath, args: [resolve("scripts", "test-contract-v10-invariants.mjs")] },
-      { command: process.execPath, args: [resolve("node_modules", "tsx", "dist", "cli.mjs"), resolve("scripts", "test-indexer-event-storage.ts")] },
-      { command: process.execPath, args: [resolve("scripts", "test-sqlite-operations.mjs")] },
-      { command: process.execPath, args: [resolve("scripts", "test-runtime-monitor-drill.mjs")] },
-      { command: process.execPath, args: [hermeticBuildScript], kind: "build" },
-      { command: process.execPath, args: [nextBin, "typegen"], retryOnce: true },
-      { command: process.execPath, args: [resolve("node_modules", "typescript", "bin", "tsc"), "--noEmit", "--incremental", "false"], retryOnce: true },
-    ];
-const smokeSteps = npmCommand
-  ? [
-      {
-        command: npmCommand,
-        args: ["run", "smoke:http"],
-        env: { SMOKE_SKIP_WARMUP: "1" },
-      },
-      {
-        command: npmCommand,
-        args: ["run", "smoke:browser"],
-        env: { SMOKE_BROWSER_TIMEOUT_MS: "60000", SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS: "1" },
-        retryOnce: true,
-      },
-    ]
-  : [
-      {
-        command: process.execPath,
-        args: [resolve("scripts", "smoke-http.mjs")],
-        env: { SMOKE_SKIP_WARMUP: "1" },
-      },
-      {
-        command: process.execPath,
-        args: [resolve("scripts", "smoke-browser.mjs")],
-        env: { SMOKE_BROWSER_TIMEOUT_MS: "60000", SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS: "1" },
-        retryOnce: true,
-      },
-    ];
-const FILTERED_WARNING_PATTERNS = [
-  /ExperimentalWarning: SQLite is an experimental feature/i,
-  /Using edge runtime on a page currently disables static generation/i,
-  /\[MODULE_TYPELESS_PACKAGE_JSON\]/i,
-  /Reparsing as ES module because module syntax was detected/i,
-  /To eliminate this warning, add "type": "module"/i,
-  /\(Use `node --trace-warnings .*` to show where the warning was created\)/i,
-];
 
 function shouldSkipStepFailure(step, result) {
   if (!isNpmScript(step, "smoke:browser") && !step.args?.some((arg) => String(arg).endsWith("smoke-browser.mjs"))) {
@@ -197,35 +109,11 @@ function shouldUseIsolatedNextDistDir(step) {
   return step.kind === "build" || isNpmScript(step, "build");
 }
 
-function filterKnownWarnings(output) {
-  if (typeof output !== "string" || output.length === 0) {
-    return "";
-  }
-
-  const filtered = output
-    .split(/\r?\n/)
-    .filter((line) => !FILTERED_WARNING_PATTERNS.some((pattern) => pattern.test(line)))
-    .join("\n");
-  return redactProofText(filtered);
-}
-
-function tailLines(output, maxLines = MAX_CHECK_LOCAL_SUMMARY_LINES) {
-  const lines = output.split(/\r?\n/).filter(Boolean);
-  if (lines.length <= maxLines) return lines.join("\n");
-  return [
-    `...<truncated ${lines.length - maxLines} line(s)>`,
-    ...lines.slice(-maxLines),
-  ].join("\n");
-}
-
 function flushStepOutput(result, { compact = false } = {}) {
-  const stdout = filterKnownWarnings(result.stdout);
-  const stderr = filterKnownWarnings(result.stderr);
-  if (compact && result.status === 0) {
-    return;
-  }
-  const visibleStdout = compact ? tailLines(stdout) : stdout;
-  const visibleStderr = compact ? tailLines(stderr) : stderr;
+  const { stdout: visibleStdout, stderr: visibleStderr } = prepareCheckLocalOutput(result, {
+    compact,
+    maxLines: MAX_CHECK_LOCAL_SUMMARY_LINES,
+  });
   if (visibleStdout) {
     process.stdout.write(visibleStdout.endsWith("\n") ? visibleStdout : `${visibleStdout}\n`);
   }
@@ -331,16 +219,16 @@ async function stopLocalServer(serverProcess) {
 }
 
 async function startLocalServer(baseUrl) {
-  if (await canReachSmokeBaseUrl(baseUrl)) {
-    throw new Error(`Refusing to start local server because smoke base URL is already reachable: ${baseUrl}`);
-  }
-
   const serverLogs = [];
-  const serverProcess = spawn(process.execPath, [nextBin, "start", "--port", String(CHECK_LOCAL_PORT)], {
-    cwd: process.cwd(),
-    env: { ...process.env, ...CHECK_LOCAL_NEXT_ENV },
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
+  const serverProcess = await startCheckLocalServerAfterAdmission({
+    baseUrl,
+    canReach: canReachSmokeBaseUrl,
+    spawnServer: () => spawn(process.execPath, [nextBin, "start", "--port", String(CHECK_LOCAL_PORT)], {
+      cwd: process.cwd(),
+      env: { ...process.env, ...CHECK_LOCAL_NEXT_ENV },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    }),
   });
 
   const pushServerLog = (chunk, prefix) => {
@@ -418,60 +306,49 @@ async function runStepWithRetries(step, extraEnv = {}) {
   console.log(`Completed ${formatStepLabel(command, args)} in ${(elapsedMs / 1000).toFixed(1)}s`);
 }
 
-let localServer = null;
-let checkFailure = null;
-
-function captureCheckFailure(error, context = "") {
-  if (!checkFailure) {
-    checkFailure = error;
-    return;
-  }
-  const prefix = context ? `${context}: ` : "Additional local-check failure: ";
-  console.error(`${prefix}${describeCheckLocalError(error)}`);
-}
-
-try {
-  for (const step of steps) {
-    await runStepWithRetries(step);
-  }
-
-  if (SHOULD_START_LOCAL_SERVER) {
-    console.log(`\n> starting local server for smoke at ${SMOKE_BASE_URL}`);
-    localServer = await startLocalServer(SMOKE_BASE_URL);
-  } else {
-    await ensureReachableSmokeBaseUrl(SMOKE_BASE_URL);
-  }
-
-  for (const step of smokeSteps) {
-    await runStepWithRetries(step, { SMOKE_BASE_URL });
-  }
-
-} catch (error) {
-  captureCheckFailure(error);
-} finally {
-  if (localServer?.serverProcess) {
-    try {
-      await stopLocalServer(localServer.serverProcess);
-    } catch (error) {
-      captureCheckFailure(error, "Failed to stop local smoke server");
+export async function runCheckLocalCli(argv = process.argv) {
+  initializeCheckLocalRuntime(argv);
+  let localServer = null;
+  let checkFailure = null;
+  try {
+    for (const step of steps) {
+      await runStepWithRetries(step);
     }
-  }
-  try {
-    rmSync(CHECK_LOCAL_TEMP_DIR, { recursive: true, force: true });
+
+    if (SHOULD_START_LOCAL_SERVER) {
+      console.log(`\n> starting local server for smoke at ${SMOKE_BASE_URL}`);
+      localServer = await startLocalServer(SMOKE_BASE_URL);
+    } else {
+      await ensureReachableSmokeBaseUrl(SMOKE_BASE_URL);
+    }
+
+    for (const step of smokeSteps) {
+      await runStepWithRetries(step, { SMOKE_BASE_URL });
+    }
   } catch (error) {
-    captureCheckFailure(error, "Failed to clean isolated local-check directory");
+    checkFailure = error;
+  } finally {
+    checkFailure = await finalizeCheckLocalRun({
+      primaryError: checkFailure,
+      serverProcess: localServer?.serverProcess ?? null,
+      stopServer: stopLocalServer,
+      tempDir: CHECK_LOCAL_TEMP_DIR,
+      removeTempDir: (tempDir) => rmSync(tempDir, { recursive: true, force: true }),
+      protectedPaths: CHECK_LOCAL_PROTECTED_DB_PATHS,
+      protectedSnapshot: CHECK_LOCAL_PROTECTED_DB_SNAPSHOT,
+      reportSecondary: (message) => console.error(message),
+    });
   }
-  try {
-    assertProtectedDatabaseFilesUnchanged();
-  } catch (error) {
-    captureCheckFailure(error);
+
+  if (checkFailure) {
+    console.error(describeCheckLocalError(checkFailure));
+    const exitCode = Number(checkFailure.exitCode);
+    process.exitCode = Number.isSafeInteger(exitCode) && exitCode > 0 ? exitCode : 1;
+  } else {
+    console.log("\nLocal check completed successfully.");
   }
 }
 
-if (checkFailure) {
-  console.error(describeCheckLocalError(checkFailure));
-  const exitCode = Number(checkFailure.exitCode);
-  process.exitCode = Number.isSafeInteger(exitCode) && exitCode > 0 ? exitCode : 1;
-} else {
-  console.log("\nLocal check completed successfully.");
+if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) {
+  await runCheckLocalCli();
 }

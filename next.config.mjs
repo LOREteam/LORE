@@ -6,6 +6,10 @@ import { resolveNextDistDir } from "./scripts/next-dist-dir.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname);
 const { relativePath: nextDistDir } = resolveNextDistDir(process.env.NEXT_DIST_DIR, projectRoot);
+const reactProductionProfiling = process.env.LORE_P1_REACT_PROFILING === "1";
+if (reactProductionProfiling && nextDistDir === ".next") {
+  throw new Error("LORE_P1_REACT_PROFILING requires an isolated NEXT_DIST_DIR such as .next-p1-profile");
+}
 const devWatchIgnored =
   /[\\/](?:\.playwright-mcp|\.npm-cache|\.tmp-npm-cache)[\\/]|[\\/]artifacts[\\/]smoke-browser[\\/]|^[^\\/]+\.(?:png|jpe?g|webp|txt|md)$/i;
 
@@ -20,6 +24,7 @@ const nextConfig = {
   },
   allowedDevOrigins: ["localhost", "127.0.0.1"],
   reactStrictMode: true,
+  reactProductionProfiling,
   outputFileTracingRoot: projectRoot,
   webpack(config, { dev }) {
     config.context = projectRoot;

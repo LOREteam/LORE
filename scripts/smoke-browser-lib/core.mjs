@@ -82,8 +82,8 @@ export async function safeReload(page, baseUrl, timeoutMs) {
   }
 }
 
-async function readBoundedWarmupText(response) {
-  const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
+export async function readBoundedWarmupText(response) {
+  const contentLength = parseWarmupContentLengthHeader(response.headers.get("content-length"));
   if (contentLength !== null && contentLength > MAX_WARMUP_RESPONSE_BYTES) {
     throw new Error("warmup response body too large");
   }
@@ -105,7 +105,7 @@ async function readBoundedWarmupText(response) {
   return text + decoder.decode();
 }
 
-function parseContentLengthHeader(value) {
+export function parseWarmupContentLengthHeader(value) {
   if (value == null || value === "") return null;
   if (!CONTENT_LENGTH_RE.test(value)) throw new Error("warmup response has invalid content-length");
   const parsed = BigInt(value);
@@ -113,18 +113,26 @@ function parseContentLengthHeader(value) {
   return Number(parsed);
 }
 
-export async function warmBaseUrl(baseUrl, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
+export async function warmBaseUrl(baseUrl, timeoutMs, dependencies = {}) {
+  const {
+    fetchImpl = globalThis.fetch,
+    now = Date.now,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    logger = console,
+    setTimeoutImpl = setTimeout,
+    clearTimeoutImpl = clearTimeout,
+  } = dependencies;
+  const deadline = now() + timeoutMs;
   let lastError = null;
 
-  while (Date.now() < deadline) {
-    const remainingMs = deadline - Date.now();
-    const requestTimeoutMs = Math.max(15_000, remainingMs);
+  while (now() < deadline) {
+    const remainingMs = deadline - now();
+    const requestTimeoutMs = Math.max(1, Math.min(15_000, remainingMs));
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
+    const timeoutId = setTimeoutImpl(() => controller.abort(), requestTimeoutMs);
 
     try {
-      const response = await fetch(baseUrl, {
+      const response = await fetchImpl(baseUrl, {
         method: "GET",
         headers: { accept: "text/html" },
         signal: controller.signal,
@@ -133,14 +141,16 @@ export async function warmBaseUrl(baseUrl, timeoutMs) {
         throw new Error(`warmup returned ${response.status}`);
       }
       await readBoundedWarmupText(response);
-      console.log(`PASS warmup ${baseUrl}`);
+      logger.log(`PASS warmup ${baseUrl}`);
       return;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
     } finally {
-      clearTimeout(timeoutId);
+      clearTimeoutImpl(timeoutId);
     }
+
+    const retryDelayMs = Math.min(1_500, Math.max(0, deadline - now()));
+    if (retryDelayMs > 0) await sleep(retryDelayMs);
   }
 
   const detail = lastError instanceof Error ? lastError.message : String(lastError ?? "unknown error");

@@ -1,9 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import "dotenv/config";
 import { chromium } from "playwright-core";
 import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
-import { redactProofText } from "./redact-proof-output.mjs";
+import {
+  classifyBrowserConsoleEvent,
+  compactPageError,
+  assertEmptyPoolChartVisual,
+  assertNoUnattendedBootstrapResolveRequests,
+  createIsolatedBrowserSmokePage,
+  createBrowserSmokeStepRunner,
+  fetchBrowserSmokeLiveState,
+  isIgnoredHydrationNoise,
+  isIgnoredPageError,
+  openBrowserLoginModalWithSingleReload,
+  parseSmokeChainId,
+  runBrowserSmokeCli,
+} from "./smoke-browser-policy.mjs";
 import {
   ensureLandingPage,
   expectVisible,
@@ -38,11 +52,6 @@ const TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_BROWSER_TIMEOUT_MS,
 const WARMUP_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_BROWSER_WARMUP_TIMEOUT_MS, 90_000);
 const TILE_SELECTION_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_TILE_SELECTION_TIMEOUT_MS, 45_000);
 const LIVE_STATE_PROBE_TIMEOUT_MS = parsePositiveIntegerEnv(process.env.SMOKE_LIVE_STATE_PROBE_TIMEOUT_MS, 15_000);
-const MAX_BROWSER_SMOKE_JSON_BYTES = 256 * 1024;
-const MAX_BROWSER_SMOKE_DIAGNOSTIC_CHARS = 500;
-const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
-const CONTENT_LENGTH_RE = DECIMAL_INTEGER_RE;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const SMOKE_CHAIN_ID = parseSmokeChainId(process.env.NEXT_PUBLIC_LINEA_CHAIN_ID);
 const LEGACY_AUTO_MINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
 const AUTO_MINER_INPUTS_KEY = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS
@@ -52,49 +61,6 @@ const AUTO_MINE_DEBUG_OVERRIDE_KEY = "lineaore:auto-mine-debug-override:v1";
 const PENDING_MINING_TX_KEY = "lineaore:pending-mining-tx:v1";
 const FIRST_VISIT_TUTORIAL_KEY = "lore:first-visit-tutorial:v1";
 
-function parseSmokeChainId(value) {
-  if (value == null || value === "") return 59141;
-  if (!DECIMAL_INTEGER_RE.test(value)) {
-    throw new Error("NEXT_PUBLIC_LINEA_CHAIN_ID must be a canonical decimal integer");
-  }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 1_000_000_000) {
-    throw new Error("NEXT_PUBLIC_LINEA_CHAIN_ID must be between 1 and 1000000000");
-  }
-  return parsed;
-}
-
-function parseContentLengthHeader(value) {
-  if (value == null || value === "") return null;
-  if (!CONTENT_LENGTH_RE.test(value)) throw new Error("invalid browser smoke response content-length");
-  const parsed = BigInt(value);
-  if (parsed > MAX_SAFE_INTEGER_BIGINT) throw new Error("invalid browser smoke response content-length");
-  return Number(parsed);
-}
-
-async function readBoundedJsonResponse(response) {
-  const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
-  if (contentLength !== null && contentLength > MAX_BROWSER_SMOKE_JSON_BYTES) {
-    throw new Error("browser smoke JSON response body too large");
-  }
-  if (!response.body) throw new Error("browser smoke JSON response body is empty");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let totalBytes = 0;
-  let text = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > MAX_BROWSER_SMOKE_JSON_BYTES) {
-      await reader.cancel().catch(() => undefined);
-      throw new Error("browser smoke JSON response body too large");
-    }
-    text += decoder.decode(value, { stream: true });
-  }
-  text += decoder.decode();
-  return JSON.parse(text);
-}
 const INCLUDE_DEBUG_AUTOMINER_SCENARIOS = process.env.SMOKE_INCLUDE_DEBUG_AUTOMINER_SCENARIOS === "1";
 const ONLY_PENDING_RECOVERY = process.env.SMOKE_ONLY_PENDING_RECOVERY === "1";
 const EXPECT_READ_ONLY = process.env.SMOKE_EXPECT_READ_ONLY === "1";
@@ -109,68 +75,29 @@ const BROWSER_CANDIDATES = [
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 ].filter(Boolean);
 
-function isIgnoredConsoleMessage(message) {
-  return [
-    "linea-sepolia.drpc.org",
-    "source=csp-report",
-    "gc.kis.v2.scr.kaspersky-labs.com",
-    "kaspersky-labs.com",
-    "[AutoResolve] server keeper bootstrap",
-    "useActiveWallet-",
-    "Applying inline style violates the following Content Security Policy directive",
-    "Loading the script 'http://gc.kis.v2.scr.kaspersky-labs.com/",
-    "Loading the stylesheet 'http://gc.kis.v2.scr.kaspersky-labs.com/",
-    "Can't perform a React state update on a component that hasn't mounted yet.",
-    "Failed to load resource",
-    "TypeError: Failed to fetch",
-    "Do not know how to serialize a BigInt",
-    "[HMR]",
-    "[Fast Refresh]",
-  ].some((part) => message.includes(part));
-}
+const browserSmokeSteps = createBrowserSmokeStepRunner();
+const runStep = browserSmokeSteps.run;
 
-function compactBrowserDiagnostic(value) {
-  const text = redactProofText(value).replace(/\s+/g, " ").trim();
-  if (text.length <= MAX_BROWSER_SMOKE_DIAGNOSTIC_CHARS) return text;
-  return `${text.slice(0, MAX_BROWSER_SMOKE_DIAGNOSTIC_CHARS - 15)}...<truncated>`;
-}
-
-function scopedBrowserDiagnostic(scope, value) {
-  const text = compactBrowserDiagnostic(value);
-  return scope ? `[${scope}] ${text}` : text;
-}
-
-function compactPageError(error, source) {
-  return {
-    message: compactBrowserDiagnostic(error?.message || error),
-    stack: compactBrowserDiagnostic(error?.stack || ""),
-    source,
-  };
-}
-
-function isUnsupportedPrivyCoinbaseRegression(message) {
-  return message.includes("configured chains are not") && message.includes("supported");
-}
-
-function isIgnoredHydrationNoise(message) {
-  return message.includes("A tree hydrated but some attributes of the server rendered HTML didn't match the client properties.")
-    && message.includes('caret-color:"transparent"');
-}
-
-function isIgnoredPageError(message) {
-  return [
-    "Do not know how to serialize a BigInt",
-    "Loading chunk app/layout failed",
-    "ChunkLoadError",
-  ].some((part) => message.includes(part));
-}
-
-async function runStep(label, task) {
-  const startedAt = Date.now();
-  console.log(`STEP ${label}...`);
-  const result = await task();
-  console.log(`STEP ${label} done in ${Date.now() - startedAt}ms`);
-  return result;
+export function installSmokePageObservers({
+  page,
+  pageErrorSource,
+  consoleScope,
+  pageErrors,
+  consoleErrors,
+  consoleRegressions,
+  includeConsole = false,
+}) {
+  page.on("pageerror", (error) => pageErrors.push(compactPageError(error, pageErrorSource)));
+  if (!includeConsole) return;
+  page.on("console", (message) => {
+    const classified = classifyBrowserConsoleEvent({
+      type: message.type(),
+      text: message.text(),
+      scope: consoleScope,
+    });
+    if (classified.connectorRegression) consoleRegressions.push(classified.diagnostic);
+    if (classified.unexpectedError) consoleErrors.push(classified.diagnostic);
+  });
 }
 
 async function verifyNativeWebLocksAcrossTabs(context) {
@@ -233,13 +160,12 @@ async function verifyNativeWebLocksAcrossTabs(context) {
 }
 
 async function openLoginModalWithReload(page, options, label) {
-  const opened = await openLoginModal(page, options.timeoutMs);
-  if (opened) return true;
-
-  console.log(`WARN ${label} login modal did not open; reloading once before retry`);
-  await safeReload(page, options.baseUrl, options.timeoutMs);
-  await expectVisible(page.getByText("Manual Bet", { exact: true }), `${label} manual bet panel after login reload`, options.timeoutMs);
-  return openLoginModal(page, options.timeoutMs);
+  return openBrowserLoginModalWithSingleReload({
+    label,
+    openModal: () => openLoginModal(page, options.timeoutMs),
+    reload: () => safeReload(page, options.baseUrl, options.timeoutMs),
+    expectReady: () => expectVisible(page.getByText("Manual Bet", { exact: true }), `${label} manual bet panel after login reload`, options.timeoutMs),
+  });
 }
 
 async function verifyViewportShell(browser, viewport, label, smokeOptions, pageErrors) {
@@ -248,7 +174,7 @@ async function verifyViewportShell(browser, viewport, label, smokeOptions, pageE
     window.localStorage.setItem(tutorialKey, "1");
   }, FIRST_VISIT_TUTORIAL_KEY);
   const page = await context.newPage();
-  page.on("pageerror", (error) => pageErrors.push(compactPageError(error, label)));
+  installSmokePageObservers({ page, pageErrorSource: label, pageErrors });
   await ensureLandingPage(page, smokeOptions);
   const layout = await page.evaluate(() => {
     const selectors = [
@@ -315,13 +241,13 @@ async function main() {
         // ignore storage failures in smoke
       }
     }, FIRST_VISIT_TUTORIAL_KEY);
-    page.on("pageerror", (error) => pageErrors.push(compactPageError(error, "desktop")));
-    page.on("console", (message) => {
-      const text = message.text();
-      const diagnostic = compactBrowserDiagnostic(text);
-      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(diagnostic);
-      if (message.type() !== "error") return;
-      if (!isIgnoredConsoleMessage(text)) consoleErrors.push(diagnostic);
+    installSmokePageObservers({
+      page,
+      pageErrorSource: "desktop",
+      pageErrors,
+      consoleErrors,
+      consoleRegressions,
+      includeConsole: true,
     });
     page.on("request", (request) => {
       const requestUrl = new URL(request.url());
@@ -333,9 +259,7 @@ async function main() {
     console.log(`Browser smoke URL: ${BASE_URL}`);
     await runStep("open desktop landing page", () => ensureLandingPage(page, smokeOptions));
     await runStep("verify browser boot does not trigger keeper resolve", async () => {
-      if (bootstrapResolveRequests.length > 0) {
-        throw new Error("browser boot made an unattended bootstrap-resolve request");
-      }
+      assertNoUnattendedBootstrapResolveRequests(bootstrapResolveRequests);
     });
     await runStep("verify native Web Locks across two tabs", () => verifyNativeWebLocksAcrossTabs(desktopContext));
 
@@ -457,22 +381,22 @@ async function main() {
       await closeLoginModal(page, TIMEOUT_MS);
     });
 
-    const mobileWalletContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
-    await mobileWalletContext.addInitScript((tutorialKey) => {
-      try {
-        window.localStorage.setItem(tutorialKey, "1");
-      } catch {
-        // ignore storage failures in smoke
-      }
-    }, FIRST_VISIT_TUTORIAL_KEY);
-    const mobileWalletPage = await mobileWalletContext.newPage();
-    mobileWalletPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "mobile-wallet")));
-    mobileWalletPage.on("console", (message) => {
-      const text = message.text();
-      const diagnostic = scopedBrowserDiagnostic("mobile-wallet", text);
-      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(diagnostic);
-      if (message.type() !== "error") return;
-      if (!isIgnoredConsoleMessage(text)) consoleErrors.push(diagnostic);
+    const { context: mobileWalletContext, page: mobileWalletPage } = await createIsolatedBrowserSmokePage({
+      browser,
+      viewport: { width: 390, height: 844 },
+      initScript: (tutorialKey) => {
+        try {
+          window.localStorage.setItem(tutorialKey, "1");
+        } catch {
+          // ignore storage failures in smoke
+        }
+      },
+      initArgument: FIRST_VISIT_TUTORIAL_KEY,
+      pageErrorSource: "mobile-wallet",
+      consoleScope: "mobile-wallet",
+      pageErrors,
+      consoleErrors,
+      consoleRegressions,
     });
     await runStep("open isolated mobile wallet page", () => ensureLandingPage(mobileWalletPage, smokeOptions));
     await runStep("verify isolated mobile wallet selector", async () => {
@@ -494,7 +418,7 @@ async function main() {
       Object.defineProperty(navigator, "userAgent", { configurable: true, get: () => userAgent });
     });
     const tutorialPage = await tutorialContext.newPage();
-    tutorialPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "tutorial")));
+    installSmokePageObservers({ page: tutorialPage, pageErrorSource: "tutorial", pageErrors });
     await runStep("verify first-visit tutorial accessibility", async () => {
       await ensureLandingPage(tutorialPage, smokeOptions);
       const tutorialDialog = tutorialPage.getByRole("dialog", { name: "First visit tutorial" });
@@ -598,13 +522,14 @@ async function main() {
       }
     }, FIRST_VISIT_TUTORIAL_KEY);
     const mobilePage = await mobileContext.newPage();
-    mobilePage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "mobile")));
-    mobilePage.on("console", (message) => {
-      const text = message.text();
-      const diagnostic = scopedBrowserDiagnostic("mobile", text);
-      if (isUnsupportedPrivyCoinbaseRegression(text)) consoleRegressions.push(diagnostic);
-      if (message.type() !== "error") return;
-      if (!isIgnoredConsoleMessage(text)) consoleErrors.push(diagnostic);
+    installSmokePageObservers({
+      page: mobilePage,
+      pageErrorSource: "mobile",
+      consoleScope: "mobile",
+      pageErrors,
+      consoleErrors,
+      consoleRegressions,
+      includeConsole: true,
     });
 
     await runStep("open mobile landing page", () => ensureLandingPage(mobilePage, smokeOptions));
@@ -681,7 +606,7 @@ async function main() {
         window.localStorage.setItem(tutorialKey, "1");
       }, FIRST_VISIT_TUTORIAL_KEY);
       const stressPage = await stressContext.newPage();
-      stressPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "extreme-values")));
+      installSmokePageObservers({ page: stressPage, pageErrorSource: "extreme-values", pageErrors });
       let stressLiveStateRequestCount = 0;
       await stressPage.route("**/api/live-state", (route) => {
         stressLiveStateRequestCount += 1;
@@ -796,7 +721,7 @@ async function main() {
         window.localStorage.setItem(tutorialKey, "1");
       }, FIRST_VISIT_TUTORIAL_KEY);
       const emptyPage = await emptyContext.newPage();
-      emptyPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "empty-states")));
+      installSmokePageObservers({ page: emptyPage, pageErrorSource: "empty-states", pageErrors });
       await emptyPage.route("**/api/live-state", (route) => route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -836,12 +761,11 @@ async function main() {
       }));
       await ensureLandingPage(emptyPage, smokeOptions);
       await expectVisible(emptyPage.getByText("No bets", { exact: true }), "expired empty epoch state", TIMEOUT_MS);
-      const emptyPoolChartVisual = emptyPage.locator('[data-testid="header-pool-chart-visual"]');
-      await expectVisible(emptyPoolChartVisual, "empty pool chart visual", TIMEOUT_MS);
-      const emptyPoolState = await emptyPoolChartVisual.getAttribute("data-empty-pool");
-      if (emptyPoolState !== "true") {
-        throw new Error(`empty pool chart did not expose empty state: ${emptyPoolState ?? "missing"}`);
-      }
+      const emptyPoolChartVisual = await assertEmptyPoolChartVisual({
+        page: emptyPage,
+        expectVisible,
+        timeoutMs: TIMEOUT_MS,
+      });
       const emptyPoolLabel = await emptyPoolChartVisual.getAttribute("aria-label");
       if (emptyPoolLabel !== "Pool chart empty state") {
         throw new Error(`empty pool chart aria label mismatch: ${emptyPoolLabel ?? "missing"}`);
@@ -869,12 +793,10 @@ async function main() {
     });
 
     await runStep("verify pool chart freshness", async () => {
-      const currentStateResponse = await fetch(new URL("/api/live-state", BASE_URL), {
-        cache: "no-store",
-        signal: AbortSignal.timeout(LIVE_STATE_PROBE_TIMEOUT_MS),
+      const currentState = await fetchBrowserSmokeLiveState({
+        baseUrl: BASE_URL,
+        timeoutMs: LIVE_STATE_PROBE_TIMEOUT_MS,
       });
-      if (!currentStateResponse.ok) throw new Error(`live-state epoch probe returned ${currentStateResponse.status}`);
-      const currentState = await readBoundedJsonResponse(currentStateResponse);
       const chartEpoch = String(currentState?.currentEpoch ?? "");
       if (!/^\d+$/.test(chartEpoch)) throw new Error("live-state epoch probe returned an invalid epoch");
       const chartContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -883,7 +805,7 @@ async function main() {
         window.localStorage.setItem(tutorialKey, "1");
       }, FIRST_VISIT_TUTORIAL_KEY);
       const chartPage = await chartContext.newPage();
-      chartPage.on("pageerror", (error) => pageErrors.push(compactPageError(error, "pool-chart-freshness")));
+      installSmokePageObservers({ page: chartPage, pageErrorSource: "pool-chart-freshness", pageErrors });
       let updatedPool = false;
       let liveStateRequests = 0;
       await chartPage.route("**/api/live-state", (route) => {
@@ -962,13 +884,19 @@ async function main() {
       console.log(`IGNORED console errors: ${consoleErrors.slice(0, 1).join(" | ")}`);
     }
 
+    browserSmokeSteps.assertRequiredStepsComplete();
     console.log("\nBrowser smoke passed.");
   } finally {
     await browser.close();
   }
 }
 
-main().catch((error) => {
-  console.error(compactBrowserDiagnostic(error instanceof Error ? error.message : error));
-  process.exit(1);
-});
+export function runSmokeBrowserEntrypoint(options = {}) {
+  const { mainFn = main, ...cliOptions } = options;
+  return runBrowserSmokeCli({ mainFn, ...cliOptions });
+}
+
+const directEntryUrl = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
+if (import.meta.url === directEntryUrl) {
+  await runSmokeBrowserEntrypoint();
+}

@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
 import { redactProofText } from "./redact-proof-output.mjs";
 
@@ -22,7 +23,7 @@ const DECIMAL_STRING_RE = /^\d+(?:\.\d+)?$/;
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const TX_HASH_RE = /^0x[a-fA-F0-9]{64}$/;
 
-function parseOptionalPositiveIntegerText(name, value) {
+export function parseOptionalPositiveIntegerText(name, value) {
   const normalized = String(value ?? "").trim();
   if (!normalized) return { value: null, issue: null };
   if (!/^[1-9]\d{0,15}$/.test(normalized)) {
@@ -48,7 +49,7 @@ const EXPECTED_CHAIN_ID_ISSUES = [
     : null,
 ].filter(Boolean);
 
-function describeSmokeError(error) {
+export function describeSmokeError(error) {
   const text = redactProofText(error instanceof Error ? error.message : String(error))
     .replace(/\s+/g, " ")
     .trim();
@@ -68,26 +69,26 @@ function assertFiniteNumber(value, label) {
   }
 }
 
-function assertNonNegativeSafeIntegerOrNull(value, label) {
+export function assertNonNegativeSafeIntegerOrNull(value, label) {
   if (value === null) return;
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${label} must be a non-negative safe integer or null`);
   }
 }
 
-function assertNonNegativeSafeInteger(value, label) {
+export function assertNonNegativeSafeInteger(value, label) {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${label} must be a non-negative safe integer`);
   }
 }
 
-function assertPositiveSafeInteger(value, label) {
+export function assertPositiveSafeInteger(value, label) {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${label} must be a positive safe integer`);
   }
 }
 
-function assertTileId(value, label) {
+export function assertTileId(value, label) {
   if (!Number.isSafeInteger(value) || value < 1 || value > 25) {
     throw new Error(`${label} must be between 1 and 25`);
   }
@@ -117,7 +118,7 @@ function assertAddress(value, label) {
   }
 }
 
-function parseContentLengthHeader(value) {
+export function parseContentLengthHeader(value) {
   if (value == null || value === "") return null;
   if (!CONTENT_LENGTH_RE.test(value)) throw new Error("invalid response content-length");
   const parsed = BigInt(value);
@@ -125,30 +126,42 @@ function parseContentLengthHeader(value) {
   return Number(parsed);
 }
 
-async function readBoundedResponseText(response) {
+export async function readBoundedResponseText(response, { signal } = {}) {
   const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
   if (contentLength !== null && contentLength > MAX_SMOKE_RESPONSE_BYTES) {
     throw new Error("response body too large");
   }
   if (!response.body) return "";
   const reader = response.body.getReader();
+  const abortBodyRead = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+  if (signal?.aborted) {
+    abortBodyRead();
+    throw signal.reason instanceof Error ? signal.reason : new Error("request aborted");
+  }
+  signal?.addEventListener("abort", abortBodyRead, { once: true });
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let totalBytes = 0;
   let text = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > MAX_SMOKE_RESPONSE_BYTES) {
-      await reader.cancel().catch(() => undefined);
-      throw new Error("response body too large");
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_SMOKE_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("response body too large");
+      }
+      text += decoder.decode(value, { stream: true });
     }
-    text += decoder.decode(value, { stream: true });
+    return text + decoder.decode();
+  } finally {
+    signal?.removeEventListener("abort", abortBodyRead);
   }
-  return text + decoder.decode();
 }
 
-const checks = [
+export const HTTP_SMOKE_CHECKS = [
   {
     name: "home",
     path: "/",
@@ -897,29 +910,50 @@ const checks = [
   },
 ];
 
-async function fetchWithTimeout(url, options) {
-  return fetchWithCustomTimeout(url, TIMEOUT_MS, options);
-}
-
-async function fetchWithCustomTimeout(url, timeoutMs, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
+export async function withResponseTimeout(
+  url,
+  timeoutMs,
+  options = {},
+  consumeResponse = async (response) => response,
+  dependencies = {},
+) {
+  const {
+    fetchImpl = globalThis.fetch,
+    AbortControllerImpl = AbortController,
+    setTimeoutImpl = setTimeout,
+    clearTimeoutImpl = clearTimeout,
+  } = dependencies;
+  const controller = new AbortControllerImpl();
+  const timeoutError = new Error(`request timeout after ${timeoutMs} ms`);
+  timeoutError.name = "TimeoutError";
+  let rejectTimeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    rejectTimeout = reject;
+  });
+  const timeout = setTimeoutImpl(() => {
+    controller.abort(timeoutError);
+    rejectTimeout(timeoutError);
+  }, timeoutMs);
+  const operation = (async () => {
     const headers = {
       "cache-control": "no-cache",
       ...(options.headers ?? {}),
     };
-    return await fetch(url, {
+    const response = await fetchImpl(url, {
       ...options,
       signal: controller.signal,
       headers,
     });
+    return consumeResponse(response, controller.signal);
+  })();
+  try {
+    return await Promise.race([operation, timeoutPromise]);
   } finally {
-    clearTimeout(timeout);
+    clearTimeoutImpl(timeout);
   }
 }
 
-function isRetryableError(error) {
+export function isRetryableError(error) {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
   return message.includes("aborted") || message.includes("fetch failed") || message.includes("timeout");
 }
@@ -928,92 +962,139 @@ async function delay(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runCheck(check) {
-  const url = `${BASE_URL}${check.path}`;
-  let lastError = null;
+export function createHttpSmokeRuntime(options = {}) {
+  const {
+    baseUrl = BASE_URL,
+    timeoutMs = TIMEOUT_MS,
+    warmupTimeoutMs = WARMUP_TIMEOUT_MS,
+    skipWarmup = SKIP_WARMUP,
+    retryableAttempts = RETRYABLE_ATTEMPTS,
+    retryDelayMs = RETRY_DELAY_MS,
+    checks = HTTP_SMOKE_CHECKS,
+    fetchImpl = globalThis.fetch,
+    now = () => performance.now(),
+    sleep = delay,
+    logger = console,
+    AbortControllerImpl = AbortController,
+    setTimeoutImpl = setTimeout,
+    clearTimeoutImpl = clearTimeout,
+  } = options;
+  const fetchDependencies = { fetchImpl, AbortControllerImpl, setTimeoutImpl, clearTimeoutImpl };
 
-  for (let attempt = 1; attempt <= RETRYABLE_ATTEMPTS; attempt += 1) {
-    const startedAt = performance.now();
-    try {
-      const response = await fetchWithTimeout(url, {
-        method: check.method,
-        body: check.body,
-        headers: check.headers,
-      });
-      const body = await readBoundedResponseText(response);
-      const elapsedMs = Math.round(performance.now() - startedAt);
-      const expectedStatus = check.expectedStatus ?? 200;
-      const expectedStatuses = check.expectedStatuses ?? [expectedStatus];
+  async function fetchAndReadWithTimeout(url, fetchOptions, requestTimeoutMs = timeoutMs) {
+    return withResponseTimeout(
+      url,
+      requestTimeoutMs,
+      fetchOptions,
+      async (response, signal) => ({
+        response,
+        body: await readBoundedResponseText(response, { signal }),
+      }),
+      fetchDependencies,
+    );
+  }
 
-      if (!expectedStatuses.includes(response.status)) {
-        throw new Error(`status ${response.status}, expected ${expectedStatuses.join(" or ")}`);
+  async function runCheck(check) {
+    const url = `${baseUrl}${check.path}`;
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= retryableAttempts; attempt += 1) {
+      const startedAt = now();
+      try {
+        const { response, body } = await fetchAndReadWithTimeout(url, {
+          method: check.method,
+          body: check.body,
+          headers: check.headers,
+        });
+        const elapsedMs = Math.round(now() - startedAt);
+        const expectedStatus = check.expectedStatus ?? 200;
+        const expectedStatuses = check.expectedStatuses ?? [expectedStatus];
+
+        if (!expectedStatuses.includes(response.status)) {
+          throw new Error(`status ${response.status}, expected ${expectedStatuses.join(" or ")}`);
+        }
+
+        await check.assert(response, body);
+        logger.log(`PASS ${check.name.padEnd(14)} ${String(response.status).padEnd(3)} ${String(elapsedMs).padStart(5)} ms ${check.path}`);
+        return null;
+      } catch (error) {
+        const elapsedMs = Math.round(now() - startedAt);
+        const message = describeSmokeError(error);
+        lastError = { check: check.name, path: check.path, message };
+
+        if (attempt < retryableAttempts && isRetryableError(error)) {
+          logger.warn(`RETRY ${check.name.padEnd(13)} attempt ${attempt + 1}/${retryableAttempts} after ${String(elapsedMs).padStart(5)} ms :: ${message}`);
+          await sleep(retryDelayMs);
+          continue;
+        }
+
+        logger.error(`FAIL ${check.name.padEnd(14)} --- ${String(elapsedMs).padStart(5)} ms ${check.path} :: ${message}`);
+        return lastError;
       }
+    }
 
-      await check.assert(response, body);
-      console.log(`PASS ${check.name.padEnd(14)} ${String(response.status).padEnd(3)} ${String(elapsedMs).padStart(5)} ms ${check.path}`);
-      return null;
-    } catch (error) {
-      const elapsedMs = Math.round(performance.now() - startedAt);
-      const message = error instanceof Error ? error.message : String(error);
-      lastError = { check: check.name, path: check.path, message };
+    return lastError;
+  }
 
-      if (attempt < RETRYABLE_ATTEMPTS && isRetryableError(error)) {
-        console.warn(`RETRY ${check.name.padEnd(13)} attempt ${attempt + 1}/${RETRYABLE_ATTEMPTS} after ${String(elapsedMs).padStart(5)} ms :: ${message}`);
-        await delay(RETRY_DELAY_MS);
-        continue;
+  async function warmUpChecks() {
+    logger.log(`Warm-up timeout: ${warmupTimeoutMs} ms`);
+
+    for (const check of checks) {
+      const url = `${baseUrl}${check.path}`;
+      const startedAt = now();
+
+      try {
+        const { response } = await fetchAndReadWithTimeout(url, {}, warmupTimeoutMs);
+        const elapsedMs = Math.round(now() - startedAt);
+        logger.log(`WARM ${check.name.padEnd(14)} ${String(response.status).padEnd(3)} ${String(elapsedMs).padStart(5)} ms ${check.path}`);
+      } catch (error) {
+        const elapsedMs = Math.round(now() - startedAt);
+        const message = describeSmokeError(error);
+        logger.warn(`WARM ${check.name.padEnd(14)} --- ${String(elapsedMs).padStart(5)} ms ${check.path} :: ${message}`);
       }
-
-      console.error(`FAIL ${check.name.padEnd(14)} --- ${String(elapsedMs).padStart(5)} ms ${check.path} :: ${message}`);
-      return lastError;
     }
   }
 
-  return lastError;
-}
-
-async function warmUpChecks() {
-  console.log(`Warm-up timeout: ${WARMUP_TIMEOUT_MS} ms`);
-
-  for (const check of checks) {
-    const url = `${BASE_URL}${check.path}`;
-    const startedAt = performance.now();
-
-    try {
-      const response = await fetchWithCustomTimeout(url, WARMUP_TIMEOUT_MS);
-      await readBoundedResponseText(response);
-      const elapsedMs = Math.round(performance.now() - startedAt);
-      console.log(`WARM ${check.name.padEnd(14)} ${String(response.status).padEnd(3)} ${String(elapsedMs).padStart(5)} ms ${check.path}`);
-    } catch (error) {
-      const elapsedMs = Math.round(performance.now() - startedAt);
-      const message = describeSmokeError(error);
-      console.warn(`WARM ${check.name.padEnd(14)} --- ${String(elapsedMs).padStart(5)} ms ${check.path} :: ${message}`);
+  async function run() {
+    logger.log(`Smoke base URL: ${baseUrl}`);
+    if (!skipWarmup) {
+      await warmUpChecks();
     }
-  }
-}
+    const failures = [];
 
-async function run() {
-  console.log(`Smoke base URL: ${BASE_URL}`);
-  if (!SKIP_WARMUP) {
-    await warmUpChecks();
-  }
-  const failures = [];
-
-  for (const check of checks) {
-    const failure = await runCheck(check);
-    if (failure) {
-      failures.push(failure);
+    for (const check of checks) {
+      const failure = await runCheck(check);
+      if (failure) failures.push(failure);
     }
+
+    if (failures.length > 0) {
+      logger.error(`\nSmoke failures: ${failures.length}`);
+      return { ok: false, failures };
+    }
+
+    logger.log("\nSmoke HTTP checks passed.");
+    return { ok: true, failures: [] };
   }
 
-  if (failures.length > 0) {
-    console.error(`\nSmoke failures: ${failures.length}`);
-    process.exit(1);
-  }
-
-  console.log("\nSmoke HTTP checks passed.");
+  return { run, runCheck, warmUpChecks };
 }
 
-run().catch((error) => {
-  console.error(describeSmokeError(error));
-  process.exit(1);
-});
+export async function runHttpSmokeCli({
+  runtime = createHttpSmokeRuntime(),
+  processLike = process,
+  logger = console,
+} = {}) {
+  try {
+    const result = await runtime.run();
+    if (!result.ok) processLike.exitCode = 1;
+    return result;
+  } catch (error) {
+    logger.error(describeSmokeError(error));
+    processLike.exitCode = 1;
+    return { ok: false, failures: [] };
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runHttpSmokeCli();
+}

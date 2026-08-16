@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import {
   parseNonNegativeNumberInRangeEnv,
   parsePositiveIntegerEnv,
@@ -6,19 +7,11 @@ import {
 } from "./env-parsing.mjs";
 import { redactProofText } from "./redact-proof-output.mjs";
 
-const BASE_URL = process.env.LOAD_BASE_URL || process.env.SMOKE_BASE_URL || "http://localhost:3001";
-const ALLOW_LOCAL = process.env.LOAD_ALLOW_LOCAL === "1";
-const DURATION_MS = parsePositiveIntegerEnv(process.env.LOAD_DURATION_MS, 60_000);
-const CONCURRENCY = parsePositiveIntegerEnv(process.env.LOAD_CONCURRENCY, 50);
-const TIMEOUT_MS = parsePositiveIntegerEnv(process.env.LOAD_TIMEOUT_MS, 10_000);
-const MAX_ERROR_RATE = parseNonNegativeNumberInRangeEnv(process.env.LOAD_MAX_ERROR_RATE, 0.01, 0, 1);
-const MAX_P95_MS = parsePositiveIntegerEnv(process.env.LOAD_MAX_P95_MS, 1_500);
-const CLIENT_IPS = parsePositiveIntegerInRangeEnv(process.env.LOAD_CLIENT_IPS, CONCURRENCY, 1, CONCURRENCY);
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000001";
 const MAX_LOAD_ERROR_CHARS = 500;
 const HTTP_STATUS_RE = /^[1-5]\d{2}$/;
 
-const endpoints = [
+export const LOAD_HTTP_ENDPOINTS = Object.freeze([
   { name: "home", path: "/", weight: 8 },
   { name: "live-state", path: "/api/live-state", weight: 34 },
   { name: "epochs", path: "/api/epochs?epochs=1,2,3", weight: 12 },
@@ -30,13 +23,39 @@ const endpoints = [
   { name: "deposits", path: `/api/deposits?user=${ZERO_ADDRESS}`, weight: 6 },
   { name: "deposits-rewards", path: `/api/deposits?user=${ZERO_ADDRESS}&includeRewards=1`, weight: 3 },
   { name: "rebates", path: `/api/rebates?user=${ZERO_ADDRESS}`, weight: 3 },
-];
+].map((endpoint) => Object.freeze(endpoint)));
 
-const weightedEndpoints = endpoints.flatMap((endpoint) =>
+export function resolveLoadHttpConfig(env = process.env) {
+  const concurrency = parsePositiveIntegerEnv(env.LOAD_CONCURRENCY, 50);
+  return Object.freeze({
+    baseUrl: env.LOAD_BASE_URL || env.SMOKE_BASE_URL || "http://localhost:3001",
+    allowLocal: env.LOAD_ALLOW_LOCAL === "1",
+    durationMs: parsePositiveIntegerEnv(env.LOAD_DURATION_MS, 60_000),
+    concurrency,
+    timeoutMs: parsePositiveIntegerEnv(env.LOAD_TIMEOUT_MS, 10_000),
+    maxErrorRate: parseNonNegativeNumberInRangeEnv(env.LOAD_MAX_ERROR_RATE, 0.01, 0, 1),
+    maxP95Ms: parsePositiveIntegerEnv(env.LOAD_MAX_P95_MS, 1_500),
+    clientIps: parsePositiveIntegerInRangeEnv(env.LOAD_CLIENT_IPS, concurrency, 1, concurrency),
+  });
+}
+
+const LOAD_CONFIG = resolveLoadHttpConfig();
+const {
+  baseUrl: BASE_URL,
+  allowLocal: ALLOW_LOCAL,
+  durationMs: DURATION_MS,
+  concurrency: CONCURRENCY,
+  timeoutMs: TIMEOUT_MS,
+  maxErrorRate: MAX_ERROR_RATE,
+  maxP95Ms: MAX_P95_MS,
+  clientIps: CLIENT_IPS,
+} = LOAD_CONFIG;
+
+const weightedEndpoints = LOAD_HTTP_ENDPOINTS.flatMap((endpoint) =>
   Array.from({ length: endpoint.weight }, () => endpoint),
 );
 
-function describeLoadError(error) {
+export function describeLoadError(error) {
   const text = redactProofText(error instanceof Error ? error.message : String(error))
     .replace(/\s+/g, " ")
     .trim();
@@ -44,7 +63,7 @@ function describeLoadError(error) {
   return `${text.slice(0, MAX_LOAD_ERROR_CHARS - 15)}...<truncated>`;
 }
 
-function isNonLocalHttpsOrigin(value) {
+export function isNonLocalHttpsOrigin(value) {
   try {
     const url = new URL(String(value ?? "").trim());
     const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
@@ -141,7 +160,7 @@ async function fetchWithTimeout(path, workerId = 0) {
 async function warmUp() {
   const coldStats = new Map();
   const results = await Promise.all(
-    endpoints.map(async (endpoint) => {
+    LOAD_HTTP_ENDPOINTS.map(async (endpoint) => {
       const stats = emptyStats();
       coldStats.set(endpoint.name, stats);
       const startedAt = performance.now();
@@ -165,9 +184,7 @@ async function warmUp() {
     }),
   );
   const failed = results.filter((name) => name !== null);
-  if (failed.length === endpoints.length) {
-    throw new Error(`load warm-up could not reach ${BASE_URL}; all endpoints failed`);
-  }
+  assertReachableLoadWarmup(failed);
   if (failed.length > 0) {
     console.warn(`Warm-up skipped failed endpoints: ${failed.join(", ")}`);
   }
@@ -213,7 +230,7 @@ async function runWorker(workerId, deadline, globalStats, byEndpoint) {
   }
 }
 
-function formatStatuses(statuses) {
+export function formatLoadStatuses(statuses) {
   function normalizeStatus(value) {
     const text = String(value ?? "").trim();
     if (!HTTP_STATUS_RE.test(text)) return null;
@@ -234,19 +251,64 @@ function formatStatuses(statuses) {
     .join(" ");
 }
 
-function printStats(name, stats) {
+export function formatLoadStatsLine(name, stats) {
   const errorRate = stats.count > 0 ? stats.failed / stats.count : 0;
   const p50 = percentile(stats.latencies, 50);
   const p95 = percentile(stats.latencies, 95);
   const p99 = percentile(stats.latencies, 99);
-  console.log(
-    `${name.padEnd(17)} count=${String(stats.count).padStart(5)} ok=${String(stats.ok).padStart(5)} fail=${String(stats.failed).padStart(4)} ` +
+  return `${name.padEnd(17)} count=${String(stats.count).padStart(5)} ok=${String(stats.ok).padStart(5)} fail=${String(stats.failed).padStart(4)} ` +
       `err=${(errorRate * 100).toFixed(2).padStart(6)}% p50=${p50.toFixed(0).padStart(5)}ms ` +
-      `p95=${p95.toFixed(0).padStart(5)}ms p99=${p99.toFixed(0).padStart(5)}ms statuses=[${formatStatuses(stats.statuses)}]`,
-  );
+      `p95=${p95.toFixed(0).padStart(5)}ms p99=${p99.toFixed(0).padStart(5)}ms statuses=[${formatLoadStatuses(stats.statuses)}]`;
 }
 
-async function main() {
+function printStats(name, stats) {
+  console.log(formatLoadStatsLine(name, stats));
+}
+
+export function assertReachableLoadWarmup(
+  failedNames,
+  endpointCount = LOAD_HTTP_ENDPOINTS.length,
+  baseUrl = BASE_URL,
+) {
+  if (failedNames.length === endpointCount) {
+    throw new Error(`load warm-up could not reach ${baseUrl}; all endpoints failed`);
+  }
+}
+
+export function listColdLoadFailures(coldStats, endpoints = LOAD_HTTP_ENDPOINTS) {
+  return endpoints.filter((endpoint) => (coldStats.get(endpoint.name)?.failed ?? 1) > 0);
+}
+
+export function firstLoadThresholdFailure({
+  globalStats,
+  byEndpoint,
+  maxErrorRate,
+  maxP95Ms,
+  endpoints = LOAD_HTTP_ENDPOINTS,
+}) {
+  const errorRate = globalStats.count > 0 ? globalStats.failed / globalStats.count : 1;
+  const p95 = percentile(globalStats.latencies, 95);
+  if (errorRate > maxErrorRate) {
+    return `load test failed: error rate ${(errorRate * 100).toFixed(2)}% > ${(maxErrorRate * 100).toFixed(2)}%`;
+  }
+  if (p95 > maxP95Ms) {
+    return `load test failed: p95 ${p95.toFixed(0)}ms > ${maxP95Ms}ms`;
+  }
+  for (const endpoint of endpoints) {
+    const stats = byEndpoint.get(endpoint.name) ?? emptyStats();
+    const endpointErrorRate = stats.count > 0 ? stats.failed / stats.count : 1;
+    const endpointP95 = percentile(stats.latencies, 95);
+    if (endpointErrorRate > maxErrorRate) {
+      return `${endpoint.name} load failed: error rate ${(endpointErrorRate * 100).toFixed(2)}% > ${(maxErrorRate * 100).toFixed(2)}%`;
+    }
+    if (endpointP95 > maxP95Ms) {
+      return `${endpoint.name} load failed: p95 ${endpointP95.toFixed(0)}ms > ${maxP95Ms}ms`;
+    }
+  }
+  return null;
+}
+
+export async function main() {
   if (!ALLOW_LOCAL && !isNonLocalHttpsOrigin(BASE_URL)) {
     throw new Error("LOAD_BASE_URL must be a public HTTPS origin for launch load evidence; localhost/private/reserved/example/test origins are launch-proof invalid. Set LOAD_ALLOW_LOCAL=1 only for local smoke checks");
   }
@@ -262,10 +324,10 @@ async function main() {
   console.log(`Concurrency: ${CONCURRENCY}; client IPs: ${CLIENT_IPS}; duration: ${DURATION_MS}ms; timeout: ${TIMEOUT_MS}ms`);
   const coldStats = await warmUp();
   console.log("\nCold first requests:");
-  for (const endpoint of endpoints) {
+  for (const endpoint of LOAD_HTTP_ENDPOINTS) {
     printStats(`COLD ${endpoint.name}`, coldStats.get(endpoint.name) ?? emptyStats());
   }
-  const coldFailures = endpoints.filter((endpoint) => (coldStats.get(endpoint.name)?.failed ?? 1) > 0);
+  const coldFailures = listColdLoadFailures(coldStats);
   if (coldFailures.length > 0) {
     throw new Error(`cold load checks failed: ${coldFailures.map((endpoint) => endpoint.name).join(", ")}`);
   }
@@ -283,7 +345,7 @@ async function main() {
 
   console.log(`\nRequests/sec: ${(globalStats.count / elapsedSec).toFixed(1)}`);
   printStats("TOTAL", globalStats);
-  for (const endpoint of endpoints) {
+  for (const endpoint of LOAD_HTTP_ENDPOINTS) {
     printStats(endpoint.name, byEndpoint.get(endpoint.name) ?? emptyStats());
   }
 
@@ -294,28 +356,26 @@ async function main() {
     }
   }
 
-  const errorRate = globalStats.count > 0 ? globalStats.failed / globalStats.count : 1;
-  const p95 = percentile(globalStats.latencies, 95);
-  if (errorRate > MAX_ERROR_RATE) {
-    throw new Error(`load test failed: error rate ${(errorRate * 100).toFixed(2)}% > ${(MAX_ERROR_RATE * 100).toFixed(2)}%`);
-  }
-  if (p95 > MAX_P95_MS) {
-    throw new Error(`load test failed: p95 ${p95.toFixed(0)}ms > ${MAX_P95_MS}ms`);
-  }
-  for (const endpoint of endpoints) {
-    const stats = byEndpoint.get(endpoint.name) ?? emptyStats();
-    const endpointErrorRate = stats.count > 0 ? stats.failed / stats.count : 1;
-    const endpointP95 = percentile(stats.latencies, 95);
-    if (endpointErrorRate > MAX_ERROR_RATE) {
-      throw new Error(`${endpoint.name} load failed: error rate ${(endpointErrorRate * 100).toFixed(2)}% > ${(MAX_ERROR_RATE * 100).toFixed(2)}%`);
-    }
-    if (endpointP95 > MAX_P95_MS) {
-      throw new Error(`${endpoint.name} load failed: p95 ${endpointP95.toFixed(0)}ms > ${MAX_P95_MS}ms`);
-    }
+  const thresholdFailure = firstLoadThresholdFailure({
+    globalStats,
+    byEndpoint,
+    maxErrorRate: MAX_ERROR_RATE,
+    maxP95Ms: MAX_P95_MS,
+  });
+  if (thresholdFailure) throw new Error(thresholdFailure);
+}
+
+export async function runLoadHttpCli({ mainFn = main, processLike = process, logger = console } = {}) {
+  try {
+    await mainFn();
+    return { ok: true };
+  } catch (error) {
+    logger.error(describeLoadError(error));
+    processLike.exitCode = 1;
+    return { ok: false };
   }
 }
 
-main().catch((error) => {
-  console.error(describeLoadError(error));
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runLoadHttpCli();
+}

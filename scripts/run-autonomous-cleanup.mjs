@@ -1,18 +1,21 @@
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
-const root = process.cwd();
-const maxBuffer = 64 * 1024;
+export const AUTONOMOUS_CLEANUP_MAX_BUFFER = 64 * 1024;
 const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-const timeout = parsePositiveIntegerEnv("CLEANUP_AUTONOMOUS_TIMEOUT_MS", 120_000, 1_000, 900_000);
 
-function parsePositiveIntegerEnv(name, fallback, min, max) {
-  const raw = process.env[name]?.trim();
-  const value = raw && raw.length > 0 ? raw : String(fallback);
-  if (!DECIMAL_INTEGER_RE.test(value)) {
+export function parseAutonomousCleanupTimeout(value, {
+  name = "CLEANUP_AUTONOMOUS_TIMEOUT_MS",
+  fallback = 120_000,
+  min = 1_000,
+  max = 900_000,
+} = {}) {
+  const text = typeof value === "string" && value.trim().length > 0 ? value.trim() : String(fallback);
+  if (!DECIMAL_INTEGER_RE.test(text)) {
     throw new Error(`${name} must be a decimal integer between ${min} and ${max}`);
   }
-  const parsed = BigInt(value);
+  const parsed = BigInt(text);
   if (parsed > MAX_SAFE_INTEGER_BIGINT) {
     throw new Error(`${name} must be a decimal integer between ${min} and ${max}`);
   }
@@ -23,27 +26,13 @@ function parsePositiveIntegerEnv(name, fallback, min, max) {
   return numeric;
 }
 
-function npmRun(script) {
-  const npmCommand = process.env.npm_execpath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
-  const args = process.env.npm_execpath
-    ? [process.env.npm_execpath, "--silent", "run", script]
-    : ["--silent", "run", script];
-  return spawnSync(npmCommand, args, {
-    cwd: root,
-    encoding: "utf8",
-    maxBuffer,
-    timeout,
-    windowsHide: true,
-  });
-}
-
 function isNonNegativeSafeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
-function parseSummary(result) {
-  if (result.error) return { ok: false, issue: result.error.code === "ETIMEDOUT" ? "timeout" : "spawn-failed" };
-  if (result.status !== 0) return { ok: false, issue: "command-failed" };
+export function parseAutonomousCleanupSummary(result) {
+  if (result?.error) return { ok: false, issue: result.error.code === "ETIMEDOUT" ? "timeout" : "spawn-failed" };
+  if (result?.status !== 0) return { ok: false, issue: "command-failed" };
   try {
     const parsed = JSON.parse(String(result.stdout ?? "").trim());
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, issue: "invalid-json" };
@@ -60,54 +49,90 @@ function parseSummary(result) {
 function compact(summary, issue) {
   return {
     status: issue ? "blocked" : "ok",
-    issue,
+    ...(issue ? { issue } : {}),
     dryRun: summary?.dryRun ?? null,
     apply: summary?.apply ?? null,
   };
 }
 
-const dryRun = parseSummary(npmRun("cleanup:workspace:dry-run:summary"));
-if (!dryRun.ok) {
-  console.log(JSON.stringify(compact(null, dryRun.issue)));
-  process.exitCode = 1;
-} else if (dryRun.parsed.mode !== "dry-run" || dryRun.parsed.deletedTargets !== 0) {
-  console.log(JSON.stringify(compact(null, "unsafe-dry-run-summary")));
-  process.exitCode = 1;
-} else if (dryRun.parsed.wouldDeleteTargets === 0) {
-  console.log(JSON.stringify(compact({
-    dryRun: {
-      matchedTargets: dryRun.parsed.matchedTargets,
-      wouldDeleteTargets: dryRun.parsed.wouldDeleteTargets,
-      skippedTargets: dryRun.parsed.skippedTargets,
-      bytes: dryRun.parsed.bytes,
-    },
-  })));
-} else {
-  const apply = parseSummary(npmRun("cleanup:workspace:summary"));
-  if (!apply.ok || apply.parsed.mode !== "apply") {
-    console.log(JSON.stringify(compact({
-      dryRun: {
-        matchedTargets: dryRun.parsed.matchedTargets,
-        wouldDeleteTargets: dryRun.parsed.wouldDeleteTargets,
-        skippedTargets: dryRun.parsed.skippedTargets,
-        bytes: dryRun.parsed.bytes,
-      },
-    }, apply.issue ?? "unsafe-apply-summary")));
-    process.exitCode = 1;
-  } else {
-    console.log(JSON.stringify(compact({
-      dryRun: {
-        matchedTargets: dryRun.parsed.matchedTargets,
-        wouldDeleteTargets: dryRun.parsed.wouldDeleteTargets,
-        skippedTargets: dryRun.parsed.skippedTargets,
-        bytes: dryRun.parsed.bytes,
-      },
-      apply: {
-        matchedTargets: apply.parsed.matchedTargets,
-        deletedTargets: apply.parsed.deletedTargets,
-        skippedTargets: apply.parsed.skippedTargets,
-        bytes: apply.parsed.bytes,
-      },
-    })));
+function compactDryRun(parsed) {
+  return {
+    matchedTargets: parsed.matchedTargets,
+    wouldDeleteTargets: parsed.wouldDeleteTargets,
+    skippedTargets: parsed.skippedTargets,
+    bytes: parsed.bytes,
+  };
+}
+
+function compactApply(parsed) {
+  return {
+    matchedTargets: parsed.matchedTargets,
+    deletedTargets: parsed.deletedTargets,
+    skippedTargets: parsed.skippedTargets,
+    bytes: parsed.bytes,
+  };
+}
+
+export function createAutonomousCleanupNpmRunner({
+  root = process.cwd(),
+  env = process.env,
+  spawnSyncFn = spawnSync,
+  nodeExecutable = process.execPath,
+  platform = process.platform,
+  timeout = parseAutonomousCleanupTimeout(env.CLEANUP_AUTONOMOUS_TIMEOUT_MS),
+} = {}) {
+  return (script) => {
+    const npmCommand = env.npm_execpath ? nodeExecutable : platform === "win32" ? "npm.cmd" : "npm";
+    const args = env.npm_execpath
+      ? [env.npm_execpath, "--silent", "run", script]
+      : ["--silent", "run", script];
+    return spawnSyncFn(npmCommand, args, {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: AUTONOMOUS_CLEANUP_MAX_BUFFER,
+      timeout,
+      windowsHide: true,
+    });
+  };
+}
+
+export function runAutonomousCleanup({
+  runNpm = createAutonomousCleanupNpmRunner(),
+} = {}) {
+  const dryRun = parseAutonomousCleanupSummary(runNpm("cleanup:workspace:dry-run:summary"));
+  if (!dryRun.ok) return { exitCode: 1, summary: compact(null, dryRun.issue) };
+  if (dryRun.parsed.mode !== "dry-run" || dryRun.parsed.deletedTargets !== 0) {
+    return { exitCode: 1, summary: compact(null, "unsafe-dry-run-summary") };
   }
+
+  const dryRunSummary = compactDryRun(dryRun.parsed);
+  if (dryRun.parsed.wouldDeleteTargets === 0) {
+    return { exitCode: 0, summary: compact({ dryRun: dryRunSummary }) };
+  }
+
+  const apply = parseAutonomousCleanupSummary(runNpm("cleanup:workspace:summary"));
+  if (!apply.ok || apply.parsed.mode !== "apply") {
+    return {
+      exitCode: 1,
+      summary: compact({ dryRun: dryRunSummary }, apply.issue ?? "unsafe-apply-summary"),
+    };
+  }
+  return {
+    exitCode: 0,
+    summary: compact({ dryRun: dryRunSummary, apply: compactApply(apply.parsed) }),
+  };
+}
+
+export function runAutonomousCleanupCli({
+  env = process.env,
+  root = process.cwd(),
+  log = console.log,
+} = {}) {
+  const result = runAutonomousCleanup({ runNpm: createAutonomousCleanupNpmRunner({ env, root }) });
+  log(JSON.stringify(result.summary));
+  return result.exitCode;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exitCode = runAutonomousCleanupCli();
 }

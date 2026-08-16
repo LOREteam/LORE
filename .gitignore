@@ -25,6 +25,7 @@
 /.next-build-check/
 /.next-verify/
 /.next-isolated/
+/.next-p1-profile/
 /.next-ui-audit*/
 /.ms-playwright/
 /out/
