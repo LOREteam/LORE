@@ -41,6 +41,27 @@ async function runAudit(report, {
   const logs = [];
   const errors = [];
   let invocation = null;
+  const trustedLauncher = {
+    command: process.execPath,
+    cliPath: "trusted-npm-cli.mjs",
+    repoRoot: REPO_ROOT,
+    version: "11.5.1",
+  };
+  const trustedEnvironment = (sourceEnv) => {
+    const sanitized = Object.fromEntries(
+      Object.entries(sourceEnv).filter(([key]) => ![
+        "npm_execpath",
+        "comspec",
+        "node_options",
+        "npm_config_registry",
+      ].includes(key.toLowerCase())),
+    );
+    return {
+      ...sanitized,
+      npm_config_registry: "https://registry.npmjs.org/",
+      npm_config_ignore_scripts: "true",
+    };
+  };
   const result = await runDependencyAuditCli({
     argv,
     env: {
@@ -61,9 +82,15 @@ async function runAudit(report, {
         stderr: "",
       };
     },
-    ...(resolveError
-      ? { resolveTrustedNpmCliFn: () => { throw resolveError; } }
-      : {}),
+    resolveTrustedNpmCliFn: () => {
+      if (resolveError) throw resolveError;
+      return trustedLauncher;
+    },
+    trustedNpmCommandFn: (args, launcher) => ({
+      command: launcher.command,
+      args: [launcher.cliPath, ...args],
+    }),
+    trustedNpmEnvironmentFn: trustedEnvironment,
     log: (value) => logs.push(String(value)),
     errorLog: (value) => errors.push(String(value)),
     now: () => new Date("2026-08-14T10:00:00.000Z"),
