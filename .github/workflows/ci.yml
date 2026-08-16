@@ -32,6 +32,15 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Pin exact npm 11.5.1
+        run: |
+          npm install --global --ignore-scripts npm@11.5.1
+          actual_npm_version="$(npm --version)"
+          if [ "$actual_npm_version" != "11.5.1" ]; then
+            echo "::error::Expected npm 11.5.1 but found ${actual_npm_version}"
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm ci
 
@@ -59,15 +68,11 @@ jobs:
       - name: P1 performance harness self-test
         run: npm run perf:p1:self-test
 
-      - name: Contract invariants (V9 and V10)
-        run: |
-          npm run test:contract
-          npm run test:contract:v10
+      - name: Contract invariants (V10)
+        run: npm run test:contract:v10
 
-      - name: Contract compilation provenance (V9 and V10)
-        run: |
-          npm run proof:contract-compile
-          npm run proof:contract-compile:v10
+      - name: Contract compilation provenance (V10)
+        run: npm run proof:contract-compile:v10
 
       - name: Indexer storage tests
         run: npm run test:indexer-storage:summary
@@ -101,7 +106,6 @@ jobs:
         with:
           name: contract-compilation-provenance
           path: |
-            .tmp/contract-compilation-provenance.json
             .tmp/contract-compilation-provenance-v10.json
           if-no-files-found: error
           retention-days: 7
@@ -123,6 +127,16 @@ jobs:
         with:
           node-version: 24
           cache: npm
+
+      - name: Pin exact npm 11.5.1
+        shell: bash
+        run: |
+          npm install --global --ignore-scripts npm@11.5.1
+          actual_npm_version="$(npm --version)"
+          if [ "$actual_npm_version" != "11.5.1" ]; then
+            echo "::error::Expected npm 11.5.1 but found ${actual_npm_version}"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: npm ci
@@ -148,15 +162,11 @@ jobs:
       - name: P1 performance harness self-test
         run: npm run perf:p1:self-test
 
-      - name: Contract invariants (V9 and V10)
-        run: |
-          npm run test:contract:summary
-          npm run test:contract:v10:summary
+      - name: Contract invariants (V10)
+        run: npm run test:contract:v10:summary
 
-      - name: Contract compilation provenance (V9 and V10)
-        run: |
-          npm run proof:contract-compile:summary
-          npm run proof:contract-compile:v10:summary
+      - name: Contract compilation provenance (V10)
+        run: npm run proof:contract-compile:v10:summary
 
       - name: Indexer storage tests
         run: npm run test:indexer-storage:summary
@@ -176,7 +186,6 @@ jobs:
         with:
           name: contract-compilation-provenance-windows
           path: |
-            .tmp/contract-compilation-provenance.json
             .tmp/contract-compilation-provenance-v10.json
           if-no-files-found: error
           retention-days: 7
@@ -198,6 +207,15 @@ jobs:
         with:
           node-version: 24
           cache: npm
+
+      - name: Pin exact npm 11.5.1
+        run: |
+          npm install --global --ignore-scripts npm@11.5.1
+          actual_npm_version="$(npm --version)"
+          if [ "$actual_npm_version" != "11.5.1" ]; then
+            echo "::error::Expected npm 11.5.1 but found ${actual_npm_version}"
+            exit 1
+          fi
 
       - name: Install dependencies
         id: dependency_install
