@@ -2,8 +2,38 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as rewardScannerModule from "../app/hooks/useRewardScanner.ts";
 import * as rewardScanPolicyModule from "../app/lib/rewardScanPolicy.ts";
+import * as claimTransactionIntentModule from "../app/lib/claimTransactionIntent.ts";
 
 const rewardScanPolicy = rewardScanPolicyModule.default ?? rewardScanPolicyModule;
+const claimTransactionIntent = claimTransactionIntentModule.default ?? claimTransactionIntentModule;
+
+function assertClaimTransactionIntentPolicy(candidate) {
+  const hash = `0x${"1".repeat(64)}`;
+  const actor = "0x1111111111111111111111111111111111111111";
+  const contract = "0x2222222222222222222222222222222222222222";
+  const calldata = "0x12345678";
+  const transaction = {
+    hash,
+    chainId: 59141,
+    from: actor,
+    to: contract,
+    value: 0n,
+    input: calldata,
+    type: "eip1559",
+  };
+  const intent = { actor, chainId: 59141, contract, calldata };
+  assert.doesNotThrow(() => candidate(intent, hash, transaction));
+  for (const mutated of [
+    { ...transaction, to: actor },
+    { ...transaction, from: contract },
+    { ...transaction, chainId: 1 },
+    { ...transaction, value: 1n },
+    { ...transaction, input: "0x87654321" },
+    { ...transaction, type: "eip7702" },
+  ]) {
+    assert.throws(() => candidate(intent, hash, mutated), /Claim transaction does not match/);
+  }
+}
 
 function assertAutomaticRewardScanBounds(candidate) {
   assert.deepEqual(candidate(0n), { startEpoch: 0n, minEpoch: 1n, quickMinEpoch: 1n });
@@ -48,6 +78,7 @@ function assertRewardSelectionPolicy(candidate) {
 
 export function runRewardScannerTests() {
   const rewardScanner = rewardScannerModule.default ?? rewardScannerModule;
+  assertClaimTransactionIntentPolicy(claimTransactionIntent.assertClaimTransactionMatchesIntent);
   const rewardScanNow = 1_000_000;
   assert.equal(rewardScanner.normalizeRewardScanEpochString("42"), "42");
   assert.equal(rewardScanner.normalizeRewardScanEpochString("bad"), null);

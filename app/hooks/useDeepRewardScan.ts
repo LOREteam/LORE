@@ -14,6 +14,10 @@ import { isUserRejection, delay } from "../lib/utils";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
+import {
+  assertClaimTransactionMatchesIntent,
+  type ClaimTransactionIntent,
+} from "../lib/claimTransactionIntent";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 type EpochTuple = readonly [bigint, bigint, bigint, boolean];
@@ -109,7 +113,7 @@ export function useDeepRewardScan(
   }, []);
 
   const waitReceipt = useCallback(
-    async (hash: `0x${string}`): Promise<ReceiptState> => {
+    async (hash: `0x${string}`, intent: ClaimTransactionIntent): Promise<ReceiptState> => {
       if (!publicClient) throw new Error("publicClient unavailable");
       const isReceiptTimeoutLike = (value: unknown) => {
         const message = value instanceof Error ? value.message.toLowerCase() : String(value).toLowerCase();
@@ -145,6 +149,7 @@ export function useDeepRewardScan(
         if (receipt.status !== "success") {
           throw new Error(`Transaction reverted: ${hash}`);
         }
+        assertClaimTransactionMatchesIntent(intent, hash, await publicClient.getTransaction({ hash }));
         return "confirmed";
       } catch (error) {
         try {
@@ -152,6 +157,7 @@ export function useDeepRewardScan(
           if (lateReceipt.status !== "success") {
             throw new Error(`Transaction reverted: ${hash}`);
           }
+          assertClaimTransactionMatchesIntent(intent, hash, await publicClient.getTransaction({ hash }));
           return "confirmed";
         } catch (lateReceiptError) {
           if (isReceiptTimeoutLike(error)) {
@@ -453,7 +459,12 @@ export function useDeepRewardScan(
       const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
       let receiptState: ReceiptState;
       try {
-        receiptState = await waitReceipt(hash);
+        receiptState = await waitReceipt(hash, {
+          actor: claimActor,
+          chainId: APP_CHAIN_ID,
+          contract: CONTRACT_ADDRESS,
+          calldata: data,
+        });
       } catch (err) {
         if (isDefinitiveClaimRevertError(err)) throw err;
         throw markPostSendClaimVerificationError(err, hash);
@@ -526,7 +537,12 @@ export function useDeepRewardScan(
         claimTxCount += 1;
         let receiptState: ReceiptState;
         try {
-          receiptState = await waitReceipt(hash);
+          receiptState = await waitReceipt(hash, {
+            actor: claimActor,
+            chainId: APP_CHAIN_ID,
+            contract: CONTRACT_ADDRESS,
+            calldata: data,
+          });
         } catch (err) {
           if (isDefinitiveClaimRevertError(err)) throw err;
           throw markPostSendClaimVerificationError(err, hash);
@@ -555,7 +571,12 @@ export function useDeepRewardScan(
         claimTxCount += 1;
         let receiptState: ReceiptState;
         try {
-          receiptState = await waitReceipt(hash);
+          receiptState = await waitReceipt(hash, {
+            actor: claimActor,
+            chainId: APP_CHAIN_ID,
+            contract: CONTRACT_ADDRESS,
+            calldata: data,
+          });
         } catch (err) {
           if (isDefinitiveClaimRevertError(err)) throw err;
           throw markPostSendClaimVerificationError(err, hash);

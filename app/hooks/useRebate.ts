@@ -21,6 +21,10 @@ import {
 } from "../lib/safetyPoolClaimThreshold";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
+import {
+  assertClaimTransactionMatchesIntent,
+  ClaimTransactionIntentError,
+} from "../lib/claimTransactionIntent";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 type SilentSendFn = (tx: {
@@ -108,6 +112,9 @@ const REBATE_HISTORY_PAGE_SIZE = 32;
 const REBATE_RECENT_DISPLAY_LIMIT = 64;
 
 type SafetyPoolClaimHash = `0x${string}`;
+type SafetyPoolClaimIntent =
+  | { kind: "batch"; epochs: bigint[] }
+  | { kind: "single"; epochs: [bigint] };
 
 export interface SafetyPoolClaimProgress {
   claimedEpochCount: number;
@@ -128,7 +135,7 @@ export interface SafetyPoolClaimBatchOptions {
   simulateSingle: (epoch: bigint) => Promise<void>;
   estimateSingleGas: (epoch: bigint) => Promise<bigint>;
   sendSingle: (epoch: bigint, gas: bigint) => Promise<SafetyPoolClaimHash>;
-  confirm: (hash: SafetyPoolClaimHash, epochs: bigint[]) => Promise<void>;
+  confirm: (hash: SafetyPoolClaimHash, intent: SafetyPoolClaimIntent) => Promise<void>;
   onInitialSplit: () => void;
   onSingleFallback: (epoch: number, error: unknown) => void;
 }
@@ -288,7 +295,7 @@ export async function executeSafetyPoolClaimBatches(options: SafetyPoolClaimBatc
     progress.lastClaimTxHash = hash;
     progress.claimTxCount += 1;
     assertActorActive();
-    await confirm(hash, batch);
+    await confirm(hash, { kind: "batch", epochs: batch });
     assertActorActive();
   };
 
@@ -302,7 +309,7 @@ export async function executeSafetyPoolClaimBatches(options: SafetyPoolClaimBatc
     progress.lastClaimTxHash = hash;
     progress.claimTxCount += 1;
     assertActorActive();
-    await confirm(hash, [epoch]);
+    await confirm(hash, { kind: "single", epochs: [epoch] });
     assertActorActive();
   };
 
@@ -845,17 +852,45 @@ export function useRebate(options?: UseRebateOptions) {
   }, []);
 
   const confirmClaimBatch = useCallback(
-    async (hash: `0x${string}`, sender: `0x${string}`, epochArgs: bigint[]) => {
+    async (hash: `0x${string}`, sender: `0x${string}`, intent: SafetyPoolClaimIntent) => {
       if (!publicClient) return;
+      const calldata = intent.kind === "batch"
+        ? encodeFunctionData({
+            abi: GAME_ABI,
+            functionName: "claimEpochsRebate",
+            args: [intent.epochs],
+          })
+        : encodeFunctionData({
+            abi: GAME_ABI,
+            functionName: "claimEpochRebate",
+            args: [intent.epochs[0]],
+          });
 
       for (let attempt = 0; attempt < REBATE_CONFIRM_ATTEMPTS; attempt += 1) {
+        let transactionIntentVerified = false;
         try {
+          assertClaimTransactionMatchesIntent(
+            {
+              actor: sender,
+              chainId: APP_CHAIN_ID,
+              contract: CONTRACT_ADDRESS,
+              calldata,
+            },
+            hash,
+            await publicClient.getTransaction({ hash }),
+          );
+          transactionIntentVerified = true;
           const receipt = await publicClient.getTransactionReceipt({ hash });
           if (receipt.status !== "success") {
             throw new Error(`Transaction reverted: ${hash}`);
           }
           return;
         } catch (err) {
+          if (err instanceof ClaimTransactionIntentError) {
+            throw createClaimConfirmationPendingError(
+              "Safety Pool claim transaction did not match the submitted claim intent. Check wallet activity before retrying.",
+            );
+          }
           const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
           if (message.startsWith("transaction reverted:")) throw err;
           const missingReceipt =
@@ -866,11 +901,16 @@ export function useRebate(options?: UseRebateOptions) {
               "Safety Pool claim was submitted, but confirmation is temporarily unavailable. Refresh the Safety Pool tab before retrying.",
             );
           }
+          if (!transactionIntentVerified) {
+            throw createClaimConfirmationPendingError(
+              "Safety Pool claim transaction identity is temporarily unavailable. Check wallet activity before retrying.",
+            );
+          }
         }
 
         let remainingEpochs: number[];
         try {
-          remainingEpochs = await loadClaimableEpochsExact(publicClient, sender, epochArgs);
+          remainingEpochs = await loadClaimableEpochsExact(publicClient, sender, intent.epochs);
         } catch {
           throw createClaimConfirmationPendingError(
             "Safety Pool claim was submitted, but claim state is temporarily unavailable. Refresh the Safety Pool tab before retrying.",
@@ -1381,7 +1421,7 @@ export function useRebate(options?: UseRebateOptions) {
             gas,
           });
         },
-        confirm: (hash, epochArgs) => confirmClaimBatch(hash, sender, epochArgs),
+        confirm: (hash, intent) => confirmClaimBatch(hash, sender, intent),
         onInitialSplit: () => {
           notify?.("Safety Pool claim is being sent in multiple transactions. Please wait until all parts finish.", "info");
         },

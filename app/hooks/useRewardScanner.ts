@@ -16,6 +16,11 @@ import {
   isRewardClaimWindowOpen,
   iterateDescendingRewardScanEpochChunks,
 } from "../lib/rewardScanPolicy";
+import {
+  assertClaimTransactionMatchesIntent,
+  ClaimTransactionIntentError,
+  type ClaimTransactionIntent,
+} from "../lib/claimTransactionIntent";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 export { isRewardClaimWindowOpen } from "../lib/rewardScanPolicy";
@@ -261,7 +266,7 @@ export function useRewardScanner(
   }, []);
 
   const waitReceipt = useCallback(
-    async (hash: `0x${string}`): Promise<ReceiptState> => {
+    async (hash: `0x${string}`, intent: ClaimTransactionIntent): Promise<ReceiptState> => {
       if (!publicClient) throw new Error("publicClient unavailable");
       const isReceiptTimeoutLike = (value: unknown) => {
         const message = value instanceof Error ? value.message.toLowerCase() : String(value).toLowerCase();
@@ -296,6 +301,7 @@ export function useRewardScanner(
         if (receipt.status !== "success") {
           throw new Error(`Transaction reverted: ${hash}`);
         }
+        assertClaimTransactionMatchesIntent(intent, hash, await publicClient.getTransaction({ hash }));
         return "confirmed";
       } catch (error) {
         try {
@@ -303,6 +309,7 @@ export function useRewardScanner(
           if (lateReceipt.status !== "success") {
             throw new Error(`Transaction reverted: ${hash}`);
           }
+          assertClaimTransactionMatchesIntent(intent, hash, await publicClient.getTransaction({ hash }));
           return "confirmed";
         } catch (lateReceiptError) {
           if (isReceiptTimeoutLike(error)) {
@@ -724,7 +731,12 @@ export function useRewardScanner(
         const { data, gas } = await prepareClaimTx(epochId);
         if (activeClaimAddressRef.current !== claimActor) return;
         const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
-        const receiptState = await waitReceipt(hash);
+        const receiptState = await waitReceipt(hash, {
+          actor: claimActor,
+          chainId: APP_CHAIN_ID,
+          contract: CONTRACT_ADDRESS,
+          calldata: data,
+        });
         if (activeClaimAddressRef.current !== claimActor) return;
         if (receiptState === "pending") {
           notify?.(
@@ -800,7 +812,12 @@ export function useRewardScanner(
         const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
         lastRewardClaimTxHash = hash;
         claimTxCount += 1;
-        const receiptState = await waitReceipt(hash);
+        const receiptState = await waitReceipt(hash, {
+          actor: claimActor,
+          chainId: APP_CHAIN_ID,
+          contract: CONTRACT_ADDRESS,
+          calldata: data,
+        });
         if (activeClaimAddressRef.current !== claimActor) {
           claimActorChanged = true;
           return null;
@@ -823,7 +840,12 @@ export function useRewardScanner(
         const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
         lastRewardClaimTxHash = hash;
         claimTxCount += 1;
-        const receiptState = await waitReceipt(hash);
+        const receiptState = await waitReceipt(hash, {
+          actor: claimActor,
+          chainId: APP_CHAIN_ID,
+          contract: CONTRACT_ADDRESS,
+          calldata: data,
+        });
         if (activeClaimAddressRef.current !== claimActor) {
           claimActorChanged = true;
           return null;
@@ -864,7 +886,7 @@ export function useRewardScanner(
             claimActorChanged = true;
             break;
           }
-          if (isAmbiguousPendingTxError(err)) {
+          if (isAmbiguousPendingTxError(err) || err instanceof ClaimTransactionIntentError) {
             pendingClaimTx = true;
             break;
           }
