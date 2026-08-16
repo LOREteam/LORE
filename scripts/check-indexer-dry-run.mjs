@@ -1,5 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { hasPublicProofHttpsUrl as hasPublicHttpsUrl } from "./collect-proof-common.mjs";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
 const summaryOnly = process.argv.includes("--summary-only");
@@ -169,38 +170,6 @@ function hasEvidence(value) {
     value.artifact,
     value.notes,
   ].some(hasRealText);
-}
-
-function hasPublicHttpsUrl(value) {
-  const text = String(value ?? "").trim();
-  const match = text.match(/https?:\/\/[^\s),.;]+/i);
-  if (!match) return false;
-  try {
-    const url = new URL(match[0]);
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
-      );
-  } catch {
-    return false;
-  }
 }
 
 function hasConcreteText(value) {

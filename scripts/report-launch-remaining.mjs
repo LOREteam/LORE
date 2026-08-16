@@ -1,88 +1,16 @@
-import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { createLaunchGatePolicyMaps, findLiveCanaryLogPaths } from "./launch-gate-policy.mjs";
+import { localLaunchArtifactExists, readLaunchMarkdown } from "./launch-gate-policy.mjs";
 
-const expected = Array.from({ length: 14 }, (_, index) => `G${index + 1}`);
-const requiredProofFilesByGate = new Map([
-  ["G1", ["docs/signoff-proof.json"]],
-  ["G2", ["docs/signoff-proof.json"]],
-  ["G3", ["docs/signoff-proof.json"]],
-  ["G4", ["docs/signoff-proof.json"]],
-  ["G5", ["docs/host-proof.json"]],
-  ["G6", ["docs/host-proof.json"]],
-  ["G7", ["docs/indexer-proof.json"]],
-  ["G8", ["docs/restore-proof.json"]],
-  ["G9", ["docs/monitoring-proof.json"]],
-  ["G10", ["docs/canary-proof.json"]],
-  ["G11", ["docs/canary-proof.json"]],
-  ["G12", ["docs/qa-proof.json"]],
-  ["G13", ["docs/qa-proof.json"]],
-  ["G14", ["docs/qa-proof.json"]],
-]);
-const launchGateGroups = new Map([
-  ["G1", "env"],
-  ["G2", "signoff"],
-  ["G3", "signoff"],
-  ["G4", "chain"],
-  ["G5", "host"],
-  ["G6", "host"],
-  ["G7", "indexer"],
-  ["G8", "restore"],
-  ["G9", "monitoring"],
-  ["G10", "canary"],
-  ["G11", "canary"],
-  ["G12", "qa"],
-  ["G13", "qa"],
-  ["G14", "qa"],
-]);
-const gatesRequiringCanaryLog = new Set(["G10", "G11", "G14"]);
-const statusBoardFirstCheckExpectations = new Map([
-  ["G1", ["proof:mainnet", "--strict", "--out=docs/mainnet-env-proof.log"]],
-  ["G2", ["proof:signoff", "--strict"]],
-  ["G3", ["proof:signoff", "--strict"]],
-  ["G4", ["proof:chain", "--strict", "--out=docs/chain-proof-snapshot.json"]],
-  ["G5", ["proof:host:collect", "--host-type=production", "--db-path=", "--supervisor=", "--process-evidence=docs/host-process-model.log", "--health-log=docs/host-health-prod.log", "--load-log=docs/host-load-http.log", "--out=docs/host-proof.draft.json"]],
-  ["G6", ["proof:host", "--strict"]],
-  ["G7", ["proof:indexer:collect", "--chain-id=59144", "--indexer-log=docs/indexer-once.log", "--health-log=docs/indexer-health-prod.log", "--chain-snapshot=docs/chain-proof-snapshot.json", "--out=docs/indexer-proof.draft.json"]],
-  ["G8", ["proof:restore:collect", "--restore-log=docs/restore-drill.log", "--health-log=docs/restore-health-prod.log", "--backup-schedule-artifact=docs/restore-backup-schedule.log", "--preservation-artifact=docs/restore-indexer-preservation.log", "--out=docs/restore-proof.draft.json"]],
-  ["G9", ["proof:monitoring:plan", "--provider=", "--error-provider=", "--origin=", "--out=docs/monitoring-alert-test-plan.draft.md"]],
-  ["G10", ["proof:canary", "data/live-test-runs/live-canary-YYYY.jsonl", "--strict"]],
-  ["G11", ["proof:canary", "data/live-test-runs/live-canary-YYYY.jsonl", "--strict"]],
-  ["G12", ["proof:qa:plan", "--origin=https://playlore.xyz", "--network=linea-mainnet", "--chain-id=59144", "--out=docs/qa-canary-test-plan.draft.md"]],
-  ["G13", ["proof:qa", "--strict"]],
-  ["G14", ["proof:files", "--canary-log="]],
-]);
-const compactStatusCheckByGate = new Map([
-  ["G1", "npm.cmd run proof:mainnet:strict:compact"],
-  ["G2", "npm.cmd run proof:signoff:strict:summary"],
-  ["G3", "npm.cmd run proof:signoff:strict:summary"],
-  ["G4", "npm.cmd run proof:chain:strict:summary"],
-  ["G5", "npm.cmd run proof:host:summary"],
-  ["G6", "npm.cmd run proof:host:strict:summary"],
-  ["G7", "npm.cmd run proof:indexer:strict:summary"],
-  ["G8", "npm.cmd run proof:restore:strict:summary"],
-  ["G9", "npm.cmd run proof:monitoring:strict:summary"],
-  ["G10", "npm.cmd run proof:testnet:canary:strict:summary"],
-  ["G11", "npm.cmd run proof:testnet:canary:strict:summary"],
-  ["G12", "npm.cmd run proof:qa:summary"],
-  ["G13", "npm.cmd run proof:qa:strict:summary"],
-  ["G14", "npm.cmd run proof:files:summary"],
-]);
-const requiredProofMarkerExpectations = new Map([
-  ["G1", ["contractEnv", "chain ID", "deploy block", "token", "finality", "V10 protected bets"]],
-  ["G2", ["ownership.directOwnerReadEvidence", "Safe/multisig governance evidence", "proof tx"]],
-  ["G3", ["randomness.decision", "operator/signer sign-off"]],
-  ["G4", ["chainComparison", "jackpot", "safetyPool", "deposits", "rewards", "rebates", "resolve"]],
-  ["G5", ["lore-site", "lore-bot", "lore-indexer", "supervisor evidence", "persistent DB"]],
-  ["G6", ["health:prod", "docs/host-health-prod.log", "base=<production origin>", "finalityLagBlocks", "load:http", "docs/host-load-http.log", "Load base URL:", "externalRateLimit", "webReplicaCount", "sharedBucketVerified", "failClosed"]],
-  ["G7", ["fresh external DB", "deploy block", "INDEXER_FINALITY_BLOCKS", "docs/indexer-once.log", "chainSnapshot", "rpcChainId", "contractAddress", "finalityLagBlocks", "chainComparison"]],
-  ["G8", ["backupSchedule", "retentionDays", "lastSuccessfulBackupAt", "docs/restore-backup-schedule.log", "docs/restore-drill.log", "docs/restore-health-prod.log", "docs/restore-indexer-preservation.log", "indexerPreservation"]],
-  ["G9", ["health-prod", "data-sync", "stale-indexer-heartbeat", "indexer-lag", "bot-restart", "indexer-restart", "reverted-tx", "docs/monitoring-alert-export.log", "docs/monitoring-recovery-export.log", "docs/monitoring-alert-target-test.log", "docs/error-tracking-test-event.log", "fired/recovery alerts", "verified email alert target", "error event"]],
-  ["G10", ["target-RPC JSONL", "MANUAL", "AUTOMINER_A", "AUTOMINER_B", "50 successful auto-miner unique epochs"]],
-  ["G11", ["noDuplicateBets", "noNonceLoops", "noStuckPending", "pendingRecoveryConverged", "recovery evidence"]],
-  ["G12", ["Privy allowed origins", "redacted production App ID configured proof", "wrong network", "mobile Web3 browser", "clean-wallet first tx", "slow auth"]],
-  ["G13", ["disabled reasons", "pending states", "degraded data", "bet history", "auto-miner logs", "diagnostics"]],
-  ["G14", ["debug autominer smoke", "mobile layout", "overlays", "chat geometry", "mainnet wording", "final security scan", "no open High/Medium local findings"]],
-]);
+const {
+  expected,
+  requiredProofFilesByGate,
+  launchGateGroups,
+  gatesRequiringCanaryLog,
+  statusBoardFirstCheckExpectations,
+  compactStatusCheckByGate,
+  requiredProofMarkerExpectations,
+} = createLaunchGatePolicyMaps();
 const proofRecordMarkerExpectations = requiredProofMarkerExpectations;
 const jsonOutput = process.argv.includes("--json");
 const summaryOnly = process.argv.includes("--summary-only");
@@ -97,7 +25,6 @@ const transactionPreviewChecks = [
 ];
 const transactionConsentRequirement = "No real bets, claims, resolver actions, approvals, nonce replacements, or soak starts without a fresh read-only Preview, a passing authorization-ready freshness check, and fresh exact bounded user consent.";
 const visibleMarkerTokenLimit = 8;
-const MAX_REMAINING_LAUNCH_MARKDOWN_BYTES = 1024 * 1024;
 
 function argValue(name, fallback) {
   const prefix = `--${name}=`;
@@ -107,25 +34,6 @@ function argValue(name, fallback) {
 
 const boardPath = path.resolve(process.cwd(), argValue("board", "docs/mainnet-status-board.md"));
 const proofPath = path.resolve(process.cwd(), argValue("proof", "docs/mainnet-proof-record.md"));
-
-function regularFileStat(filePath) {
-  try {
-    const stats = statSync(filePath);
-    return stats.isFile() ? stats : null;
-  } catch {
-    return null;
-  }
-}
-
-function readMarkdown(filePath) {
-  const stats = regularFileStat(filePath);
-  if (!stats) throw new Error(`Missing required file or not a file: ${filePath}`);
-  if (!stats.isFile()) throw new Error(`Required file must be a file: ${filePath}`);
-  if (stats.size > MAX_REMAINING_LAUNCH_MARKDOWN_BYTES) {
-    throw new Error(`Required file is too large to summarize safely: ${filePath}`);
-  }
-  return readFileSync(filePath, "utf8");
-}
 
 function parseTable(markdown, columns) {
   const rows = [];
@@ -217,23 +125,7 @@ function normalizeEvidencePath(value) {
 }
 
 function localArtifactExists(relativePath) {
-  const absolutePath = path.join(process.cwd(), ...relativePath.split("/"));
-  return regularFileStat(absolutePath) !== null;
-}
-
-const MAX_CANARY_LOG_PATHS = 16;
-
-function findLiveCanaryLogPaths(value) {
-  const paths = [];
-  const pattern = /\bdata\/live-test-runs\/[^|\s`]+\.jsonl\b/gi;
-  const normalized = normalizeEvidencePath(value);
-  let match = pattern.exec(normalized);
-  while (match !== null) {
-    paths.push(match[0]);
-    if (paths.length >= MAX_CANARY_LOG_PATHS) return paths;
-    match = pattern.exec(normalized);
-  }
-  return paths;
+  return localLaunchArtifactExists(process.cwd(), relativePath);
 }
 
 function hasConcreteEvidence(value) {
@@ -338,8 +230,25 @@ function proofRecordReferenceIssuesFor(id, evidence) {
   return issues;
 }
 
-const boardRows = parseTable(readMarkdown(boardPath), ["ID", "Gate", "Required proof", "First check", "Status"]);
-const proofRows = parseTable(readMarkdown(proofPath), ["ID", "Gate", "Status", "Evidence"]);
+let boardMarkdown;
+let proofMarkdown;
+try {
+    boardMarkdown = readLaunchMarkdown(boardPath);
+    proofMarkdown = readLaunchMarkdown(proofPath);
+} catch {
+  if (jsonOutput) {
+    console.log(JSON.stringify({ status: "fail", issue: "remaining-launch-input-invalid" }));
+  } else {
+    console.log("# Remaining Launch Evidence");
+    console.log("");
+    console.log("Input status: invalid");
+    console.log("Summary: remaining launch evidence inputs could not be read safely.");
+  }
+  process.exit(1);
+}
+
+const boardRows = parseTable(boardMarkdown, ["ID", "Gate", "Required proof", "First check", "Status"]);
+const proofRows = parseTable(proofMarkdown, ["ID", "Gate", "Status", "Evidence"]);
 const boardById = byId(boardRows);
 const proofById = byId(proofRows);
 

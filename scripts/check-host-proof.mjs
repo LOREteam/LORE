@@ -1,5 +1,14 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
+import { hasPublicProofHttpsUrl as hasPublicHttpsUrl, isFinalHttpsOrigin } from "./collect-proof-common.mjs";
+import {
+  formatHostLaunchGateSummary,
+  formatMissingHostArtifactRefs,
+  hasHostProofIsoTimestamp,
+  hasNonFutureHostProofIsoTimestamp,
+  hostProofFileSummaryStatus,
+  hostProofRegularFileStat,
+} from "./host-proof-policy.mjs";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
 const summaryOnly = process.argv.includes("--summary-only");
@@ -14,8 +23,6 @@ const args = new Map(
 );
 
 const requiredProcesses = ["lore-site", "lore-bot", "lore-indexer"];
-const hostLaunchGates = ["G5", "G6"];
-const hostLaunchGateGroups = "host=2";
 const MAX_HOST_ARTIFACT_TEXT_BYTES = 256 * 1024;
 const MAX_HOST_PROOF_MANIFEST_BYTES = 512 * 1024;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
@@ -45,68 +52,6 @@ function hasText(value) {
 
 function hasRealText(value) {
   return hasText(value) && !TEMPLATE_VALUE_RE.test(value);
-}
-
-function hasPublicHttpsUrl(value) {
-  const text = String(value ?? "").trim();
-  const match = text.match(/https?:\/\/[^\s),.;]+/i);
-  if (!match) return false;
-  try {
-    const url = new URL(match[0]);
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^0\./.test(host) ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
-        /^169\.254\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
-        /^192\.0\.2\./.test(host) ||
-        /^198\.(1[89])\./.test(host) ||
-        /^198\.51\.100\./.test(host) ||
-        /^203\.0\.113\./.test(host) ||
-        /^::ffff:/i.test(host) ||
-        /^f[cd][0-9a-f]*:/i.test(host) ||
-        /^fe[89ab][0-9a-f]*:/i.test(host) ||
-        /^2001:db8:/i.test(host)
-      );
-  } catch {
-    return false;
-  }
-}
-
-function hasIsoTimestamp(value) {
-  if (!hasRealText(value)) return false;
-  const text = String(value).trim();
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(text)) return false;
-  const parsed = new Date(text);
-  if (Number.isNaN(parsed.getTime())) return false;
-  const normalized = text.includes(".") ? text : text.replace("Z", ".000Z");
-  return parsed.toISOString() === normalized;
-}
-
-function isoTimestampMs(value) {
-  return hasIsoTimestamp(value) ? new Date(String(value).trim()).getTime() : Number.NaN;
-}
-
-function hasNonFutureIsoTimestamp(value) {
-  const timestampMs = isoTimestampMs(value);
-  return Number.isFinite(timestampMs) && timestampMs <= Date.now() + 5 * 60 * 1000;
 }
 
 function hasEvidence(value) {
@@ -162,17 +107,8 @@ function localArtifactPathFromText(value, key = "") {
   return (artifactMatch || keySuggestsPath) && valueLooksLikePath ? candidate : "";
 }
 
-function regularFileStat(filePath) {
-  try {
-    const stats = statSync(filePath);
-    return stats.isFile() ? stats : null;
-  } catch {
-    return null;
-  }
-}
-
 function localArtifactIsFile(artifactPath) {
-  return regularFileStat(resolve(process.cwd(), artifactPath)) !== null;
+  return hostProofRegularFileStat(resolve(process.cwd(), artifactPath)) !== null;
 }
 
 function findMissingLocalArtifactRefs(value, path = "$", key = "") {
@@ -193,11 +129,6 @@ function findMissingLocalArtifactRefs(value, path = "$", key = "") {
     findings.push(...findMissingLocalArtifactRefs(entry, `${path}.${childKey}`, childKey));
   }
   return findings;
-}
-
-function formatMissingLocalArtifactRefs(findings) {
-  const visible = summaryOnly ? findings.map((entry) => entry.split(" -> ")[0]) : findings;
-  return visible.slice(0, 5).join(", ");
 }
 
 function normalizedArtifactPathSet(value, key = "") {
@@ -458,49 +389,6 @@ function configuredSiteOrigin() {
   return env("NEXT_PUBLIC_SITE_URL") || env("PUBLIC_SITE_URL") || env("SITE_URL");
 }
 
-function isFinalHttpsOrigin(value) {
-  try {
-    const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.pathname === "/" &&
-      url.search === "" &&
-      url.hash === "" &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^0\./.test(host) ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
-        /^169\.254\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
-        /^192\.0\.2\./.test(host) ||
-        /^198\.(1[89])\./.test(host) ||
-        /^198\.51\.100\./.test(host) ||
-        /^203\.0\.113\./.test(host) ||
-        /^::ffff:/i.test(host) ||
-        /^f[cd][0-9a-f]*:/i.test(host) ||
-        /^fe[89ab][0-9a-f]*:/i.test(host) ||
-        /^2001:db8:/i.test(host)
-      );
-  } catch {
-    return false;
-  }
-}
-
 function normalizeCommand(value) {
   return String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -568,15 +456,6 @@ function sectionStatus(issueList, issuePatterns, candidateOk) {
   return issueList.some((issue) => issuePatterns.some((pattern) => pattern.test(issue))) ? "issue" : "checked";
 }
 
-function fileSummaryStatus(filePath) {
-  return regularFileStat(filePath) ? "present" : "missing";
-}
-
-function launchGateSummary(issueCount) {
-  const label = issueCount > 0 ? "blocked" : "covered";
-  return `${label} gates: ${hostLaunchGates.join(", ")}; groups: ${hostLaunchGateGroups}`;
-}
-
 const manifestPath = resolve(process.cwd(), argOrEnv("file", "HOST_PROOF_PATH", "docs/host-proof.json"));
 const issues = [];
 let manifest = null;
@@ -585,14 +464,14 @@ console.log("# Production Host Proof Summary");
 console.log("");
 console.log(`Timestamp: ${new Date().toISOString()}`);
 console.log(`Strict: ${strict ? "yes" : "no"}`);
-console.log(`Manifest: ${summaryOnly ? fileSummaryStatus(manifestPath) : manifestPath}`);
+console.log(`Manifest: ${summaryOnly ? hostProofFileSummaryStatus(manifestPath) : manifestPath}`);
 console.log("");
 
 if (strict && /\.draft\.json$/i.test(manifestPath)) {
   issues.push("draft proof manifests are not accepted as launch proof");
 }
 
-const manifestStat = regularFileStat(manifestPath);
+const manifestStat = hostProofRegularFileStat(manifestPath);
 if (!existsSync(manifestPath)) {
   issues.push("host proof manifest is missing");
 } else if (!manifestStat) {
@@ -623,7 +502,7 @@ if (manifest) {
     }
     const missingArtifactRefs = findMissingLocalArtifactRefs(manifest);
     if (missingArtifactRefs.length > 0) {
-      issues.push(`local host artifact references must exist: ${formatMissingLocalArtifactRefs(missingArtifactRefs)}`);
+    issues.push(`local host artifact references must exist: ${formatMissingHostArtifactRefs(missingArtifactRefs, summaryOnly)}`);
     }
     const sharedSectionArtifactIssues = sharedHostSectionArtifactIssues(manifest);
     if (sharedSectionArtifactIssues.length > 0) {
@@ -664,9 +543,9 @@ if (manifest) {
           issues.push(`processModel.${name}.command must match the expected launch role command`);
         }
       }
-      if (!hasIsoTimestamp(process.checkedAt)) {
+      if (!hasHostProofIsoTimestamp(process.checkedAt)) {
         issues.push(`processModel.${name}.checkedAt must be ISO-8601 UTC`);
-      } else if (!hasNonFutureIsoTimestamp(process.checkedAt)) {
+      } else if (!hasNonFutureHostProofIsoTimestamp(process.checkedAt)) {
         issues.push(`processModel.${name}.checkedAt must not be in the future`);
       }
       if (!hasEvidence(process)) issues.push(`processModel.${name} has no evidence`);
@@ -698,9 +577,9 @@ if (manifest) {
       if (!dbPath.isAbsolute) issues.push("persistentDb.path must be absolute");
       if (dbPath.insideRepo) issues.push("persistentDb.path must be outside the repo checkout");
     }
-    if (!hasIsoTimestamp(persistentDb.checkedAt)) {
+    if (!hasHostProofIsoTimestamp(persistentDb.checkedAt)) {
       issues.push("persistentDb.checkedAt must be ISO-8601 UTC");
-    } else if (!hasNonFutureIsoTimestamp(persistentDb.checkedAt)) {
+    } else if (!hasNonFutureHostProofIsoTimestamp(persistentDb.checkedAt)) {
       issues.push("persistentDb.checkedAt must not be in the future");
     }
     if (!hasEvidence(persistentDb)) issues.push("persistentDb has no evidence");
@@ -727,9 +606,9 @@ if (manifest) {
     if (healthProd.diagnosticsAuthPassed !== true) issues.push("healthProd.diagnosticsAuthPassed must be true");
     if (healthProd.finalityLagChecked !== true) issues.push("healthProd.finalityLagChecked must be true");
     if (healthProd.jackpotRowsChecked !== true) issues.push("healthProd.jackpotRowsChecked must be true");
-    if (!hasIsoTimestamp(healthProd.timestamp)) {
+    if (!hasHostProofIsoTimestamp(healthProd.timestamp)) {
       issues.push("healthProd.timestamp must be ISO-8601 UTC");
-    } else if (!hasNonFutureIsoTimestamp(healthProd.timestamp)) {
+    } else if (!hasNonFutureHostProofIsoTimestamp(healthProd.timestamp)) {
       issues.push("healthProd.timestamp must not be in the future");
     }
     if (!hasEvidence(healthProd)) issues.push("healthProd has no evidence");
@@ -776,9 +655,9 @@ if (manifest) {
     if (p95Ms != null && maxP95Ms != null && p95Ms > maxP95Ms) issues.push("loadHttp.p95Ms must be <= maxP95Ms");
     if (durationMs == null || durationMs <= 0) issues.push("loadHttp.durationMs must be positive");
     if (concurrency == null || concurrency <= 0) issues.push("loadHttp.concurrency must be positive");
-    if (!hasIsoTimestamp(loadHttp.timestamp)) {
+    if (!hasHostProofIsoTimestamp(loadHttp.timestamp)) {
       issues.push("loadHttp.timestamp must be ISO-8601 UTC");
-    } else if (!hasNonFutureIsoTimestamp(loadHttp.timestamp)) {
+    } else if (!hasNonFutureHostProofIsoTimestamp(loadHttp.timestamp)) {
       issues.push("loadHttp.timestamp must not be in the future");
     }
     if (!hasEvidence(loadHttp)) issues.push("loadHttp has no evidence");
@@ -798,9 +677,9 @@ if (manifest) {
     const distinctReplicas = asNonNegativeSafeInteger(externalRateLimit.distinctReplicas);
     if (webReplicaCount == null || webReplicaCount < 2) issues.push("externalRateLimit.webReplicaCount must be at least 2");
     if (distinctReplicas == null || distinctReplicas < 2) issues.push("externalRateLimit.distinctReplicas must be at least 2");
-    if (!hasIsoTimestamp(externalRateLimit.checkedAt)) {
+    if (!hasHostProofIsoTimestamp(externalRateLimit.checkedAt)) {
       issues.push("externalRateLimit.checkedAt must be ISO-8601 UTC");
-    } else if (!hasNonFutureIsoTimestamp(externalRateLimit.checkedAt)) {
+    } else if (!hasNonFutureHostProofIsoTimestamp(externalRateLimit.checkedAt)) {
       issues.push("externalRateLimit.checkedAt must not be in the future");
     }
     if (!hasEvidence(externalRateLimit)) issues.push("externalRateLimit has no evidence");
@@ -826,7 +705,7 @@ if (manifest) {
 }
 
 console.log("");
-console.log(`Summary: ${issues.length === 0 ? "production host proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}; ${launchGateSummary(issues.length)}.`);
+console.log(`Summary: ${issues.length === 0 ? "production host proof completed without detected issues" : `${issues.length} issue(s): ${issues.join("; ")}`}; ${formatHostLaunchGateSummary(issues.length)}.`);
 console.log("Copy this summary into `docs/mainnet-proof-record.md` only after confirming the manifest reflects the deployed host, process supervisor, health check, and load test evidence.");
 
 if (strict && issues.length > 0) {

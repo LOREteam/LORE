@@ -29,15 +29,25 @@ const CORE_STEPS = [
   { id: "api-recovery-provenance", file: "scripts/test-api-recovery-provenance.ts", timeoutMs: 45_000 },
   { id: "rebate-refresh-budget", file: "scripts/test-rebate-refresh-budget.ts", timeoutMs: 45_000 },
   { id: "api-route-matrix", file: "scripts/test-api-route-matrix.ts", timeoutMs: 90_000 },
+  { id: "redaction-fuzz", file: "scripts/test-redaction-fuzz.mjs", timeoutMs: 30_000 },
   { id: "data-sync-coverage", file: "scripts/test-data-sync-epoch-coverage.ts", timeoutMs: 30_000 },
   { id: "current-round-evidence", file: "scripts/test-current-round-evidence.ts", timeoutMs: 30_000 },
   { id: "bootstrap-lock", file: "scripts/test-bootstrap-resolve-lock.mjs", timeoutMs: 30_000 },
   { id: "wallet-state", file: "scripts/test-wallet-transaction-state.ts", timeoutMs: 30_000 },
+  {
+    id: "wallet-actions-hook",
+    file: "scripts/test-wallet-actions-hook-behavior.ts",
+    timeoutMs: 30_000,
+    nodeArgs: ["--experimental-test-module-mocks", "--import", "tsx"],
+    directNode: true,
+  },
   { id: "mining-tx-recovery-identity", file: "scripts/test-mining-tx-recovery-identity.ts", timeoutMs: 30_000 },
   { id: "wallet-transfer-intent", file: "scripts/test-wallet-transfer-intent.mjs", timeoutMs: 30_000 },
+  { id: "wallet-two-context", file: "scripts/test-wallet-two-context-nonce-lock.ts", timeoutMs: 45_000 },
   { id: "auto-miner-persistence", file: "scripts/test-auto-miner-persistence-security.mjs", timeoutMs: 30_000 },
   { id: "expiring-lock-cleanup", file: "scripts/test-expiring-lock-cleanup.mjs", timeoutMs: 45_000 },
   { id: "indexer-fork", file: "scripts/test-indexer-fork-recovery.ts", timeoutMs: 60_000 },
+  { id: "indexer-process-restart", file: "scripts/test-indexer-process-restart.ts", timeoutMs: 45_000 },
   { id: "sqlite-scope-backup", file: "scripts/test-sqlite-operations.mjs", timeoutMs: 90_000 },
   { id: "indexer-lease", file: "scripts/test-indexer-lease-contention.ts", timeoutMs: 60_000 },
   { id: "indexer-bet-identity", file: "scripts/test-indexer-bet-identity.ts", timeoutMs: 30_000 },
@@ -47,6 +57,12 @@ const CORE_STEPS = [
   { id: "privy-login-accessibility", file: "scripts/test-privy-login-accessibility.ts", timeoutMs: 30_000 },
   { id: "motion-dialog-accessibility", file: "scripts/test-motion-dialog-accessibility.ts", timeoutMs: 30_000 },
   { id: "soak-pid-identity", file: "scripts/test-soak-supervisor-process-identity.mjs", timeoutMs: 45_000 },
+  {
+    id: "performance-evidence-verifier",
+    file: "scripts/verify-p1-performance-evidence.mjs",
+    timeoutMs: 30_000,
+    args: ["--self-test"],
+  },
 ];
 
 const EVM_STEP = {
@@ -141,7 +157,10 @@ function classifyFailure(result) {
 function runStep(step, childEnvironment) {
   const absolutePath = resolveStepFile(step);
   const startedAt = Date.now();
-  const result = spawnSync(process.execPath, [TSX_CLI, absolutePath], {
+  const result = spawnSync(
+    process.execPath,
+    [...(step.nodeArgs ?? []), ...(step.directNode ? [] : [TSX_CLI]), absolutePath, ...(step.args ?? [])],
+    {
     cwd: REPO_ROOT,
     env: childEnvironment,
     encoding: "utf8",
@@ -150,7 +169,8 @@ function runStep(step, childEnvironment) {
     shell: false,
     windowsHide: true,
     killSignal: "SIGTERM",
-  });
+    },
+  );
   const durationMs = Date.now() - startedAt;
   const stdoutBytes = Buffer.byteLength(result.stdout ?? "", "utf8");
   const stderrBytes = Buffer.byteLength(result.stderr ?? "", "utf8");

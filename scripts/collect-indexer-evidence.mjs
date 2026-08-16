@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { argValue, baseCollectorMeta, hasFlag, isPositiveInteger, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
+import { argValue, baseCollectorMeta, hasFlag, isPositiveInteger, normalizeProofOrigin, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
 
 const COMPARISON_KEYS = ["jackpot", "deposits", "rewards", "rebates", "latestEpochs"];
 const CANONICAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
@@ -156,18 +156,8 @@ function lastMatchingLine(text, pattern) {
     .at(-1);
 }
 
-function normalizedOrigin(value) {
-  try {
-    const url = new URL(String(value ?? "").trim());
-    if (url.username || url.password) return "";
-    return `${url.protocol}//${url.host}`.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
 function expectedProductionHealthOrigin() {
-  return normalizedOrigin(process.env.PROD_HEALTH_BASE_URL || "https://playlore.xyz");
+  return normalizeProofOrigin(process.env.PROD_HEALTH_BASE_URL || "https://playlore.xyz");
 }
 
 function parseKeyValues(line = "") {
@@ -288,7 +278,7 @@ if (!isPrintPlan()) {
   requireCondition(Boolean(finishLine), "--indexer-log must include [indexer] Finished runOnce");
   requireCondition(!/\[indexer\]\s+Fatal:/i.test(indexerLog), "--indexer-log must not include [indexer] Fatal");
   requireCondition(finalityLagIsNumeric, "--health-log must include canonical non-negative decimal finalityLagBlocks=<number>");
-  requireCondition(normalizedOrigin(healthValues.base) === expectedProductionHealthOrigin(), "--health-log must include base=<production origin>");
+  requireCondition(normalizeProofOrigin(healthValues.base) === expectedProductionHealthOrigin(), "--health-log must include base=<production origin>");
   requireMatchingChainId("expectedChainId", expectedSnapshotChainId, chainId);
   requireMatchingChainId("rpcChainId", rpcSnapshotChainId, chainId);
   requireCondition(hasIsoTimestamp(snapshotGeneratedAt), "--chain-snapshot must include generatedAt as ISO-8601 UTC");
@@ -362,5 +352,4 @@ if (hasFlag("print-plan")) {
   console.log(`Indexer evidence draft written: ${written}`);
   console.log("Review TODO/false fields before promoting to docs/indexer-proof.json and running npm.cmd run proof:indexer -- --strict.");
 }
-
 

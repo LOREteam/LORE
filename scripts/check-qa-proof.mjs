@@ -2,6 +2,15 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  hasPublicProofHttpsUrl as hasPublicHttpsUrl,
+  isFinalHttpsOrigin as hasHttpsOrigin,
+  normalizeProofOrigin,
+} from "./collect-proof-common.mjs";
+import {
+  hasMobileQaDeviceProofText,
+  hasQaWalletContentProof,
+} from "./qa-proof-policy.mjs";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
 const summaryOnly = process.argv.includes("--summary-only");
@@ -111,49 +120,6 @@ function hasRealText(value) {
   return hasText(value) && !TEMPLATE_VALUE_RE.test(value);
 }
 
-function hasPublicHttpsUrl(value) {
-  const text = String(value ?? "").trim();
-  const match = text.match(/https?:\/\/[^\s),.;]+/i);
-  if (!match) return false;
-  try {
-    const url = new URL(match[0]);
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^0\./.test(host) ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
-        /^169\.254\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
-        /^192\.0\.2\./.test(host) ||
-        /^198\.(1[89])\./.test(host) ||
-        /^198\.51\.100\./.test(host) ||
-        /^203\.0\.113\./.test(host) ||
-        /^::ffff:/i.test(host) ||
-        /^f[cd][0-9a-f]*:/i.test(host) ||
-        /^fe[89ab][0-9a-f]*:/i.test(host) ||
-        /^2001:db8:/i.test(host)
-      );
-  } catch {
-    return false;
-  }
-}
-
 function hasIsoTimestamp(value) {
   if (!hasRealText(value)) return false;
   const text = String(value).trim();
@@ -196,8 +162,8 @@ function hasEvidence(check) {
 function hasConcreteText(value) {
   if (!hasRealText(value)) return false;
   const text = String(value).trim();
-  return hasPublicHttpsUrl(text) ||
-    /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv|png|jpg|jpeg|webp|html|zip)(?:\b|$)/i.test(text);
+  if (/\b[a-z][a-z0-9+.-]*:\/\//i.test(text)) return hasPublicHttpsUrl(text);
+  return /(?:^|[\\/\s])[^\s]+\.(?:json|jsonl|log|md|txt|csv|png|jpg|jpeg|webp|html|zip)(?:\b|$)/i.test(text);
 }
 
 function hasConcreteEvidence(check) {
@@ -819,37 +785,8 @@ function artifactBackedEvidenceText(check) {
 
 function hasQaContentProof(group, checkId, check) {
   const text = artifactBackedEvidenceText(check);
-  if (group === "wallet" && checkId === "privyAllowedOrigins") {
-    return /\bprivy\b/i.test(text) &&
-      /\b(?:allowed[-\s]?origin|dashboard|production\s+origin)\b/i.test(text) &&
-      /\bapp[-\s]?id\b/i.test(text);
-  }
-  if (group === "wallet" && checkId === "desktopConnect") {
-    return /\b(?:desktop|browser)\b/i.test(text) && /\b(?:connect|connected|wallet\s+ready)\b/i.test(text);
-  }
-  if (group === "wallet" && checkId === "desktopDisconnect") {
-    return /\b(?:desktop|browser)\b/i.test(text) && /\b(?:disconnect|disconnected|sign\s*out|log\s*out)\b/i.test(text);
-  }
-  if (group === "wallet" && checkId === "desktopReconnect") {
-    return /\b(?:desktop|browser)\b/i.test(text) && /\b(?:reconnect|reload|session\s+recovery|wallet\s+ready)\b/i.test(text);
-  }
-  if (group === "wallet" && checkId === "wrongNetwork") {
-    return /\bwrong\s+network|unsupported\s+chain|switch\s+network|chain\s+mismatch\b/i.test(text);
-  }
-  if (group === "wallet" && checkId === "mobileWeb3Browser") {
-    return /\bmobile\b/i.test(text) && /\b(?:web3|in[-\s]?app|browser|wallet)\b/i.test(text);
-  }
-  if (group === "wallet" && checkId === "cleanWalletFirstTx") {
-    return /\bclean\s+wallet|first\s+(?:tx|transaction)|first\s+bet|fresh\s+wallet\b/i.test(text);
-  }
-  if (group === "wallet" && checkId === "slowNetworkAuthModal") {
-    return /\bslow\s+network|timeout|delayed|latency\b/i.test(text) && /\bauth|modal|privy\b/i.test(text);
-  }
-  if (group === "wallet" && checkId === "slowNetworkChatAuth") {
-    return /\bslow\s+network|timeout|delayed|latency\b/i.test(text) && /\bchat\s+auth|chat|message\b/i.test(text);
-  }
   if (group === "wallet") {
-    return /\b(?:wallet|privy|connect|disconnect|reconnect|wrong\s+network|mobile|clean\s+wallet|auth|transaction|tx)\b/i.test(text);
+    return hasQaWalletContentProof(checkId, text);
   }
   if (group === "failureStateUx") {
     return /\b(?:failure|failed|disabled|reason|pending|degraded|stale|silent|no-op|route|recovery|ux)\b/i.test(text);
@@ -898,35 +835,9 @@ function hasCleanWalletReceiptProof(check) {
   return /\b(?:receipt|confirmed|confirmation|success|successful|status\s*:?\s*1|block\s+#?\d+|lineascan|explorer)\b/i.test(text);
 }
 
-function parseCanonicalViewportDimension(value) {
-  const normalized = String(value ?? "").trim();
-  if (!/^[1-9]\d{2,3}$/.test(normalized)) return null;
-  const parsed = BigInt(normalized);
-  return parsed <= MAX_SAFE_INTEGER_BIGINT ? Number(parsed) : null;
-}
-
-const MAX_VIEWPORT_MARKERS = 32;
-
-function hasMobileViewportProofText(text) {
-  const viewportMatches = String(text ?? "").matchAll(/\b(?:mobile\s+viewport|viewport)\s*[:=]?\s*(\d{3,4})\s*x\s*(\d{3,4})\b/gi);
-  let inspected = 0;
-  for (const match of viewportMatches) {
-    inspected += 1;
-    if (inspected > MAX_VIEWPORT_MARKERS) return false;
-    const width = parseCanonicalViewportDimension(match[1]);
-    const height = parseCanonicalViewportDimension(match[2]);
-    if (width == null || height == null) continue;
-    const portraitMobile = width >= 320 && width <= 480 && height >= 568 && height <= 1100;
-    const landscapeMobile = height >= 320 && height <= 480 && width >= 568 && width <= 1100;
-    if (portraitMobile || landscapeMobile) return true;
-  }
-  return false;
-}
-
 function hasMobileDeviceProof(check) {
   const text = artifactBackedEvidenceText(check);
-  return /\b(?:ios|android|iphone|metamask\s+mobile|rabby\s+mobile|trust\s+wallet|coinbase\s+wallet|walletconnect|in[-\s]?app\s+wallet)\b/i.test(text) ||
-    hasMobileViewportProofText(text);
+  return hasMobileQaDeviceProofText(text);
 }
 
 function findSecretLikeValues(value, path = "$") {
@@ -971,59 +882,6 @@ function isRealTx(value) {
   return TX_RE.test(normalized) && normalized.toLowerCase() !== ZERO_TX;
 }
 
-function hasHttpsOrigin(value) {
-  try {
-    const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.pathname === "/" &&
-      !url.search &&
-      !url.hash &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^0\./.test(host) ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
-        /^169\.254\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
-        /^192\.0\.2\./.test(host) ||
-        /^198\.(1[89])\./.test(host) ||
-        /^198\.51\.100\./.test(host) ||
-        /^203\.0\.113\./.test(host) ||
-        /^::ffff:/i.test(host) ||
-        /^f[cd][0-9a-f]*:/i.test(host) ||
-        /^fe[89ab][0-9a-f]*:/i.test(host) ||
-        /^2001:db8:/i.test(host)
-      );
-  } catch {
-    return false;
-  }
-}
-
-function normalizeOrigin(value) {
-  try {
-    const url = new URL(String(value ?? "").trim());
-    if (url.username || url.password) return "";
-    return url.origin.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
 function normalizeNetwork(value) {
   const normalized = String(value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "-");
   if (["main", "linea", "prod", "production", "linea-mainnet"].includes(normalized)) return "mainnet";
@@ -1053,7 +911,7 @@ function qaOriginIssues(check, label, expectedOrigin) {
   const origin = check?.origin;
   if (!hasHttpsOrigin(origin)) {
     issues.push(`${label}.origin must be the exact HTTPS production origin`);
-  } else if (expectedOrigin && normalizeOrigin(origin) !== normalizeOrigin(expectedOrigin)) {
+  } else if (expectedOrigin && normalizeProofOrigin(origin) !== normalizeProofOrigin(expectedOrigin)) {
     issues.push(`${label}.origin must match configured production origin`);
   }
   return issues;
@@ -1198,7 +1056,7 @@ if (manifest) {
       }
       if (!hasHttpsOrigin(smoke.origin)) {
         issues.push("finalQa.browserSmokeDebugAutominer.origin must be the exact HTTPS production origin");
-      } else if (expectedOrigin && normalizeOrigin(smoke.origin) !== normalizeOrigin(expectedOrigin)) {
+  } else if (expectedOrigin && normalizeProofOrigin(smoke.origin) !== normalizeProofOrigin(expectedOrigin)) {
         issues.push("finalQa.browserSmokeDebugAutominer.origin must match configured production origin");
       }
       if (smoke.debugAutominerScenariosPassed !== true) {
@@ -1247,7 +1105,7 @@ if (manifest) {
       if (
         expectedOrigin &&
         hasHttpsOrigin(privyAllowedOrigins.origin) &&
-        normalizeOrigin(privyAllowedOrigins.origin) !== normalizeOrigin(expectedOrigin)
+      normalizeProofOrigin(privyAllowedOrigins.origin) !== normalizeProofOrigin(expectedOrigin)
       ) {
         issues.push("wallet.privyAllowedOrigins.origin must match configured production origin");
       }

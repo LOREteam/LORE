@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import { launchPackageScriptCommandIssues } from "./launch-command-script-policy.mjs";
 
 const commandMapPath = resolve(process.cwd(), "docs/launch-evidence-command-map.md");
 const packagePath = resolve(process.cwd(), "package.json");
@@ -203,8 +204,13 @@ function printTable(title, rows) {
 }
 
 const issues = [];
+try {
 const commandMap = readText(commandMapPath);
 const scripts = extractNpmScripts();
+for (const issue of launchPackageScriptCommandIssues(scripts)) {
+  if (issue.reason === "missing" && requiredScripts.includes(issue.name)) continue;
+  issues.push(`package.json script ${issue.name} must match the exact launch command policy`);
+}
 
 for (const scriptName of requiredScripts) {
   if (!scripts[scriptName]) {
@@ -419,3 +425,9 @@ if (summaryOnly) {
   console.log("Launch command map checks passed.");
 }
 console.log("Summary: launch evidence command map is consistent.");
+} catch (error) {
+  if (!summaryOnly) throw error;
+  console.log(`status=fail, scripts=${requiredScripts.length}, linkedDocs=${linkedDocs.length}, proofFiles=${requiredProofFiles.length}, issues=1`);
+  console.log("Summary: 1 launch command map issue(s).");
+  process.exitCode = 1;
+}

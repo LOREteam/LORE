@@ -93,6 +93,7 @@ const rows = [];
 const issues = [];
 let inlineSyntaxIssueCount = 0;
 let missingPackageScriptCount = 0;
+let packageScriptLimitIssueCount = 0;
 let readIssueCount = 0;
 let missingPowerShellExampleCount = 0;
 let combined = "";
@@ -116,6 +117,7 @@ for (const doc of docs) {
       issues.push(`${doc} references missing package script(s): ${missingPackageScripts.join(", ")}`);
     }
     if (packageScriptScan.overLimit) {
+      packageScriptLimitIssueCount += 1;
       issues.push(`${doc} references too many package scripts to validate safely`);
     }
     rows.push([doc, matches.length === 0 ? "pass" : "fail", missingPackageScripts.length === 0 && !packageScriptScan.overLimit ? "pass" : "fail"]);
@@ -140,6 +142,7 @@ if (summaryOnly) {
       checkedDocs: rows.length,
       inlineSyntaxIssues: inlineSyntaxIssueCount,
       missingPackageScripts: missingPackageScriptCount,
+      packageScriptLimitIssues: packageScriptLimitIssueCount,
       readIssues: readIssueCount,
       missingPowerShellExamples: missingPowerShellExampleCount,
       launchGate: "local-ops",

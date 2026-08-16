@@ -2,16 +2,19 @@ import "dotenv/config";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import {
+  isHttpsRpcUrl,
+  launchGateSummary,
+  parseChainTileId,
+  parseEpochs,
+  validateEpochArg,
+} from "./chain-proof-policy.mjs";
 
 const require = createRequire(import.meta.url);
 const { LINEA_ORE_V10_ABI: READ_ABI } = require("../config/generated/lineaOreV10Abi.ts");
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
 const summaryOnly = process.argv.includes("--summary-only");
-const chainLaunchGates = ["G1"];
-const chainLaunchGateGroups = "chain=1";
-const MAX_TILE_ID = 25;
-const CANONICAL_POSITIVE_INTEGER_RE = /^[1-9]\d{0,15}$/;
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const args = new Map(
@@ -23,11 +26,6 @@ const args = new Map(
       return [key, rest.join("=")];
     }),
 );
-
-function launchGateSummary(issueCount) {
-  const label = issueCount > 0 ? "blocked" : "covered";
-  return `${label} gates: ${chainLaunchGates.join(", ")}; groups: ${chainLaunchGateGroups}`;
-}
 
 const CHAINS = {
   mainnet: {
@@ -71,15 +69,6 @@ function configuredRpcSource() {
   return "";
 }
 
-function isHttpsRpcUrl(value) {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "https:" && !parsed.username && !parsed.password && Boolean(parsed.hostname);
-  } catch {
-    return false;
-  }
-}
-
 function redactAddress(value) {
   if (!value || !isAddress(value)) return value || "missing";
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
@@ -95,72 +84,6 @@ function fmtWei(value) {
 
 function fmtBool(value) {
   return value ? "yes" : "no";
-}
-
-function parseChainTileId(value, tileCount = MAX_TILE_ID) {
-  if (typeof value !== "bigint") return null;
-  if (value < 1n || value > BigInt(tileCount)) return null;
-  return toSafeDisplayInteger("chain tile id", value, 1, tileCount);
-}
-
-function toSafeDisplayInteger(label, value, min, max) {
-  if (typeof value !== "bigint" || value < BigInt(min) || value > BigInt(max)) {
-    throw new Error(`${label} must be between ${min} and ${max}`);
-  }
-  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error(`${label} exceeds the safe integer display range`);
-  }
-  return Number(value);
-}
-
-function compareBigIntAscending(left, right) {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
-}
-
-function parseCanonicalPositiveBigInt(value) {
-  const text = String(value ?? "").trim();
-  if (!CANONICAL_POSITIVE_INTEGER_RE.test(text)) return null;
-  return BigInt(text);
-}
-
-function parseEpochArgValues(raw) {
-  if (!raw) return [];
-  return raw.split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map(parseCanonicalPositiveBigInt);
-}
-
-function parseEpochs(raw, currentEpoch) {
-  if (raw) {
-    const values = parseEpochArgValues(raw).filter((value) => value !== null);
-    return [...new Set(values)].sort(compareBigIntAscending);
-  }
-  const epochs = [];
-  const start = currentEpoch > 3n ? currentEpoch - 3n : 1n;
-  for (let epoch = start; epoch <= currentEpoch; epoch += 1n) epochs.push(epoch);
-  return epochs;
-}
-
-function validateEpochArg(raw) {
-  if (!raw) return [];
-  const rawValues = raw.split(",").map((part) => part.trim()).filter(Boolean);
-  const values = parseEpochArgValues(raw);
-  const errors = [];
-  let positiveCount = 0;
-  for (const value of values) {
-    if (value === null) {
-      errors.push("epoch values must be canonical positive decimal integers");
-    } else if (value > 0n) {
-      positiveCount += 1;
-    }
-  }
-  if (rawValues.length === 0 || positiveCount === 0) {
-    errors.push("at least one positive epoch must be checked");
-  }
-  return [...new Set(errors)];
 }
 
 function sum(values) {

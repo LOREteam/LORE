@@ -1,5 +1,5 @@
-import { readFileSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 const MAX_READINESS_CHECKLIST_TEXT_BYTES = 1024 * 1024;
 
@@ -55,6 +55,7 @@ const requiredSnippets = [
   "fresh Codex Security scan report or sealed scan artifact",
   "no open High/Medium local findings",
   "proof:security-followup:summary",
+  "Auto-miner logs expose round, epoch, nonce, tx, retry, and stop reason.",
   "proof:deps",
   "proof:deps:all",
   "proof:files -- --canary-log=",
@@ -95,9 +96,27 @@ function regularFileStat(filePath) {
   }
 }
 
+function isStrictlyInside(rootPath, candidatePath) {
+  const relativePath = relative(rootPath, candidatePath);
+  return relativePath !== ""
+    && !isAbsolute(relativePath)
+    && relativePath !== ".."
+    && !relativePath.startsWith(`..${sep}`);
+}
+
 function localEvidenceFileExists(evidencePath) {
-  const resolved = resolve(process.cwd(), evidencePath);
-  return regularFileStat(resolved) !== null;
+  const normalizedEvidencePath = String(evidencePath ?? "").replace(/\\/g, "/");
+  const scope = normalizedEvidencePath.split("/", 1)[0]?.toLowerCase();
+  if (scope !== "docs" && scope !== "data") return false;
+  try {
+    const scopeRoot = realpathSync.native(resolve(process.cwd(), scope));
+    const resolved = resolve(process.cwd(), normalizedEvidencePath);
+    const canonicalEvidencePath = realpathSync.native(resolved);
+    return isStrictlyInside(scopeRoot, canonicalEvidencePath)
+      && regularFileStat(resolved) !== null;
+  } catch {
+    return false;
+  }
 }
 
 function checkedEvidenceIssuesFor(item) {

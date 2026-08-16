@@ -1,6 +1,15 @@
-import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { argValue, baseCollectorMeta, hasFlag, isFinalHttpsOrigin, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
+import { argValue, baseCollectorMeta, hasFlag, isFinalHttpsOrigin, printPlan, requireCondition, sameProofOrigin, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
+import {
+  hostEvidenceRegularFileStat,
+  parseHostEvidenceKeyValues as parseKeyValues,
+  parseHostEvidenceNonNegativeDecimal as parseNonNegativeDecimal,
+  parseHostEvidenceNonNegativeInteger as parseNonNegativeInteger,
+  parseHostLoadMaxErrorRate as parseLoadMaxErrorRate,
+  parseHostLoadMaxP95Ms as parseLoadMaxP95Ms,
+  readHostEvidenceLog,
+  requireDistinctHostEvidenceArtifacts,
+} from "./host-evidence-policy.mjs";
 
 const origin = argValue("origin");
 const hostType = argValue("host-type", "production");
@@ -8,8 +17,6 @@ const loadOrigin = argValue("load-origin");
 const loadHostType = argValue("load-host-type");
 const out = argValue("out", "docs/host-proof.draft.json");
 refuseFinalProofOutput(out, "host");
-const MAX_KEY_VALUE_MARKERS = 64;
-const MAX_HOST_EVIDENCE_BYTES = 512 * 1024;
 
 requireCondition(isFinalHttpsOrigin(origin), "--origin must be a public HTTPS origin without path, query, or hash");
 requireCondition(hostType === "production", "--host-type must be production for launch host evidence");
@@ -26,13 +33,13 @@ const healthLogPath = argValue("health-log");
 const loadLogPath = argValue("load-log");
 requireConcreteValue("db-path", dbPath);
 requireConcreteValue("supervisor", supervisor);
-requireDistinctArtifactInputs([["process-evidence", processEvidence], ["health-log", healthLogPath], ["load-log", loadLogPath]]);
+requireDistinctHostEvidenceArtifacts([["process-evidence", processEvidence], ["health-log", healthLogPath], ["load-log", loadLogPath]], { skip: printPlanMode });
 requireExistingArtifact("process-evidence", processEvidence);
 requireExternalDbPath(dbPath);
 requireArtifact("health-log", healthLogPath);
 requireArtifact("load-log", loadLogPath);
-const healthLog = readOptionalLog("health-log", healthLogPath);
-const loadLog = readOptionalLog("load-log", loadLogPath);
+const healthLog = readHostEvidenceLog("health-log", healthLogPath);
+const loadLog = readHostEvidenceLog("load-log", loadLogPath);
 
 function hasConcreteValue(value) {
   return Boolean(String(value ?? "").trim()) && !/^(?:TODO|TBD|REPLACE|<)/i.test(String(value).trim());
@@ -51,38 +58,11 @@ function requireArtifact(name, value) {
   if (!printPlanMode) requireCondition(Boolean(value), `--${name} is required when collecting launch host evidence`);
 }
 
-function regularFileStat(filePath) {
-  try {
-    const stat = statSync(filePath);
-    return stat.isFile() ? stat : null;
-  } catch {
-    return null;
-  }
-}
-
 function requireExistingArtifact(name, value) {
   requireConcreteValue(name, value);
   if (printPlanMode) return;
   const resolved = resolve(process.cwd(), value);
-  requireCondition(Boolean(regularFileStat(resolved)), `--${name} must point to an existing redacted artifact`);
-}
-
-function sameArtifact(left, right) {
-  return resolve(process.cwd(), left).toLowerCase() === resolve(process.cwd(), right).toLowerCase();
-}
-
-function requireDistinctArtifactInputs(entries) {
-  if (printPlanMode) return;
-  for (let i = 0; i < entries.length; i += 1) {
-    for (let j = i + 1; j < entries.length; j += 1) {
-      const [leftName, leftPath] = entries[i];
-      const [rightName, rightPath] = entries[j];
-      if (!leftPath || !rightPath) continue;
-      if (sameArtifact(leftPath, rightPath)) {
-        throw new Error(`--${leftName} and --${rightName} must point to distinct host evidence files`);
-      }
-    }
-  }
+  requireCondition(Boolean(hostEvidenceRegularFileStat(resolved)), `--${name} must point to an existing redacted artifact`);
 }
 
 function requireExternalDbPath(value) {
@@ -91,97 +71,11 @@ function requireExternalDbPath(value) {
   requireCondition(isAbsolute(value) && !pathInsideOrSame(absolute, process.cwd()), "--db-path/LORE_DB_PATH must be an absolute path outside the repo checkout");
 }
 
-function readOptionalLog(name, filePath) {
-  if (!filePath) return "";
-  const resolved = resolve(process.cwd(), filePath);
-  const stat = regularFileStat(resolved);
-  if (!stat) {
-    throw new Error(`--${name} must point to an existing redacted artifact`);
-  }
-  if (stat.size > MAX_HOST_EVIDENCE_BYTES) {
-    throw new Error(`--${name} artifact is too large to validate safely`);
-  }
-  return readFileSync(resolved, "utf8");
-}
-
 function firstMatchingLine(text, pattern) {
   return text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => pattern.test(line));
-}
-
-function parseKeyValues(line = "") {
-  const result = {};
-  const pattern = /([a-zA-Z][a-zA-Z0-9]*)=([^\s]+)/g;
-  let inspected = 0;
-  let match = pattern.exec(line);
-  while (match) {
-    inspected += 1;
-    if (inspected > MAX_KEY_VALUE_MARKERS) {
-      throw new Error("host health evidence has too many key/value markers to validate safely");
-    }
-    result[match[1]] = match[2];
-    match = pattern.exec(line);
-  }
-  return result;
-}
-
-const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
-const DECIMAL_NUMBER_RE = /^(?:0|[1-9]\d{0,15})(?:\.\d{1,6})?$/;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-
-function parseNonNegativeInteger(value, fallback) {
-  const normalized = String(value ?? "").trim();
-  if (normalized === "") return fallback;
-  if (!DECIMAL_INTEGER_RE.test(normalized)) return fallback;
-  const parsed = BigInt(normalized);
-  if (parsed > MAX_SAFE_INTEGER_BIGINT) return fallback;
-  return Number(parsed);
-}
-
-function parseNonNegativeDecimal(value, fallback) {
-  const normalized = String(value ?? "").trim();
-  if (normalized === "") return fallback;
-  if (!DECIMAL_NUMBER_RE.test(normalized)) return fallback;
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-function parseLoadMaxErrorRate() {
-  const raw = process.env.LOAD_MAX_ERROR_RATE;
-  if (raw == null || raw === "") return 0.01;
-  const parsed = parseNonNegativeDecimal(raw, Number.NaN);
-  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
-    throw new Error("LOAD_MAX_ERROR_RATE must be a canonical decimal rate between 0 and 1");
-  }
-  return parsed;
-}
-
-function parseLoadMaxP95Ms() {
-  const raw = process.env.LOAD_MAX_P95_MS;
-  if (raw == null || raw === "") return 1500;
-  const parsed = parseNonNegativeInteger(raw, Number.NaN);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error("LOAD_MAX_P95_MS must be a canonical positive integer of milliseconds");
-  }
-  return parsed;
-}
-
-function normalizedOrigin(value) {
-  try {
-    const url = new URL(String(value ?? "").trim());
-    if (url.username || url.password) return "";
-    return url.origin.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-function sameOrigin(left, right) {
-  const normalizedLeft = normalizedOrigin(left);
-  const normalizedRight = normalizedOrigin(right);
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
 function parseHealth(log, logPath) {
@@ -209,7 +103,7 @@ function requireValidHealthArtifact(health) {
   if (printPlanMode) return;
   requireCondition(health.status === "pass", "--health-log must include [prod-health] OK");
   requireCondition(/\bbase=\S+/i.test(health.summary), "--health-log must include base=<production origin>");
-  requireCondition(sameOrigin(health.url, origin), "--health-log base must match --origin");
+  requireCondition(sameProofOrigin(health.url, origin), "--health-log base must match --origin");
   requireCondition(health.runtimeHealthPassed === true, "--health-log must include runtime=ok/pass/healthy");
   requireCondition(health.dataSyncHealthPassed === true, "--health-log must include dataSync=ok/pass/healthy");
   requireCondition(health.finalityLagChecked === true, "--health-log must include canonical non-negative decimal finalityLagBlocks=<number>");
@@ -254,7 +148,7 @@ function parseLoad(log, logPath) {
 function requireValidLoadArtifact(load) {
   if (printPlanMode) return;
   requireCondition(/^Load base URL:/im.test(load.summary), "--load-log must include Load base URL line");
-  requireCondition(sameOrigin(load.url, loadOrigin), "--load-log Load base URL must match --load-origin");
+  requireCondition(sameProofOrigin(load.url, loadOrigin), "--load-log Load base URL must match --load-origin");
   requireCondition(load.requestCount > 0, "--load-log TOTAL line must include positive count");
   requireCondition(load.durationMs > 0, "--load-log Concurrency line must include positive duration");
   requireCondition(load.concurrency > 0, "--load-log Concurrency line must include positive concurrency");

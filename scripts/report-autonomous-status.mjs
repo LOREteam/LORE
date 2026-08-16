@@ -1,19 +1,12 @@
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { redactProofText } from "./redact-proof-output.mjs";
 
-const npmCommand = process.env.npm_execpath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
 const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-const timeoutMs = parsePositiveIntegerEnv("AUTONOMOUS_STATUS_TIMEOUT_MS", 180_000, 1_000, 900_000);
-const quietNpmEnv = {
-  ...process.env,
-  NO_UPDATE_NOTIFIER: "1",
-  npm_config_update_notifier: "false",
-  npm_config_fund: "false",
-};
 
-function parsePositiveIntegerEnv(name, fallback, min, max) {
-  const raw = process.env[name];
+export function parseAutonomousStatusPositiveIntegerEnv(name, fallback, min, max, env = process.env) {
+  const raw = env[name];
   if (raw === undefined || raw === "") return fallback;
   if (!DECIMAL_INTEGER_RE.test(raw)) {
     throw new Error(`${name} must be a canonical decimal integer`);
@@ -92,48 +85,99 @@ function parseJsonObject(output) {
   return JSON.parse(json);
 }
 
-const checks = [
-  { id: "remaining", label: "remaining gates", script: "proof:remaining:summary", ok: new Set([0]) },
-  { id: "security-followup", label: "security follow-up", script: "proof:security-followup:summary", ok: new Set([0]) },
-  { id: "collector-redaction", label: "proof collector redaction", script: "proof:collector-redaction:summary", ok: new Set([0]) },
-  { id: "wallet-runtime", label: "wallet runtime logic", script: "test:logic:summary", ok: new Set([0]) },
-  { id: "v10-invariants", label: "V10 invariants", script: "test:contract:v10:summary", ok: new Set([0]) },
-  { id: "abi-indexer-storage", label: "ABI/indexer storage", script: "test:indexer-storage:summary", ok: new Set([0]) },
-  { id: "v10-deployed", label: "V10 deployed identity", script: "proof:contract-deployed:v10:summary", ok: new Set([0, 1]) },
-  { id: "signoff", label: "contract / funds sign-off strict", script: "proof:signoff:strict:summary", ok: new Set([0, 1]) },
-  { id: "chain", label: "chain reconciliation strict", script: "proof:chain:strict:summary", ok: new Set([0, 1]) },
-  { id: "host", label: "production host strict", script: "proof:host:strict:summary", ok: new Set([0, 1]) },
-  { id: "soak", label: "testnet soak", script: "soak:testnet:status:compact", ok: new Set([0]) },
-  { id: "pending-nonce", label: "pending nonce dry-run", script: "soak:testnet:clear-pending:summary", ok: new Set([0]) },
-  { id: "v10-preview", label: "V10 dry-run preview", script: "preview:canary:v10:dry-run:summary", ok: new Set([0, 1]) },
-  { id: "v10-authorization-preview", label: "V10 authorization-ready preview", script: "preview:canary:v10:authorization-ready:summary", ok: new Set([0, 1]) },
-  { id: "cleanup", label: "workspace cleanup dry-run", script: "cleanup:workspace:dry-run:summary", ok: new Set([0]) },
-  { id: "qa", label: "wallet / UX QA strict", script: "proof:qa:strict:summary", ok: new Set([0, 1]) },
-  { id: "v10-canary", label: "V10 canary matrix", script: "proof:testnet:canary:v10:summary", ok: new Set([0, 1]) },
-  { id: "launch", label: "full launch proof strict", script: "proof:launch:strict:summary", ok: new Set([0, 1]) },
-  { id: "runtime-monitor", label: "runtime monitor config", script: "monitor:runtime:summary", ok: new Set([0, 1]) },
-  { id: "indexer", label: "indexer strict", script: "proof:indexer:strict:summary", ok: new Set([0, 1]) },
-  { id: "restore", label: "restore strict", script: "proof:restore:strict:summary", ok: new Set([0, 1]) },
-  { id: "backup", label: "backup strict", script: "db:backup:strict:summary", ok: new Set([0, 1]) },
-  { id: "g1", label: "G1 env status", script: "proof:mainnet:strict:compact", ok: new Set([0, 1]) },
+const AUTONOMOUS_STATUS_POLICY = [
+  { id: "remaining", label: "remaining gates", script: "proof:remaining:summary", ok: [0] },
+  { id: "security-followup", label: "security follow-up", script: "proof:security-followup:summary", ok: [0] },
+  { id: "collector-redaction", label: "proof collector redaction", script: "proof:collector-redaction:summary", ok: [0] },
+  { id: "wallet-runtime", label: "wallet runtime logic", script: "test:logic:summary", ok: [0] },
+  { id: "v10-invariants", label: "V10 invariants", script: "test:contract:v10:summary", ok: [0] },
+  { id: "abi-indexer-storage", label: "ABI/indexer storage", script: "test:indexer-storage:summary", ok: [0] },
+  { id: "v10-deployed", label: "V10 deployed identity", script: "proof:contract-deployed:v10:summary", ok: [0, 1] },
+  { id: "signoff", label: "contract / funds sign-off strict", script: "proof:signoff:strict:summary", ok: [0, 1] },
+  { id: "chain", label: "chain reconciliation strict", script: "proof:chain:strict:summary", ok: [0, 1] },
+  { id: "host", label: "production host strict", script: "proof:host:strict:summary", ok: [0, 1] },
+  { id: "soak", label: "testnet soak", script: "soak:testnet:status:compact", ok: [0] },
+  { id: "pending-nonce", label: "pending nonce dry-run", script: "soak:testnet:clear-pending:summary", ok: [0] },
+  { id: "v10-preview", label: "V10 dry-run preview", script: "preview:canary:v10:dry-run:summary", ok: [0, 1] },
+  { id: "v10-authorization-preview", label: "V10 authorization-ready preview", script: "preview:canary:v10:authorization-ready:summary", ok: [0, 1] },
+  { id: "cleanup", label: "workspace cleanup dry-run", script: "cleanup:workspace:dry-run:summary", ok: [0] },
+  { id: "qa", label: "wallet / UX QA strict", script: "proof:qa:strict:summary", ok: [0, 1] },
+  { id: "v10-canary", label: "V10 canary matrix", script: "proof:testnet:canary:v10:summary", ok: [0, 1] },
+  { id: "launch", label: "full launch proof strict", script: "proof:launch:strict:summary", ok: [0, 1] },
+  { id: "runtime-monitor", label: "runtime monitor config", script: "monitor:runtime:summary", ok: [0, 1] },
+  { id: "indexer", label: "indexer strict", script: "proof:indexer:strict:summary", ok: [0, 1] },
+  { id: "restore", label: "restore strict", script: "proof:restore:strict:summary", ok: [0, 1] },
+  { id: "backup", label: "backup strict", script: "db:backup:strict:summary", ok: [0, 1] },
+  { id: "g1", label: "G1 env status", script: "proof:mainnet:strict:compact", ok: [0, 1] },
 ];
+
+export const AUTONOMOUS_STATUS_CHECKS = AUTONOMOUS_STATUS_POLICY.map((check) => ({
+  ...check,
+  ok: new Set(check.ok),
+}));
+
+export function autonomousStatusManifestIssues(checks) {
+  if (!Array.isArray(checks) || checks.length !== AUTONOMOUS_STATUS_POLICY.length) {
+    return ["length"];
+  }
+  const issues = [];
+  for (let index = 0; index < AUTONOMOUS_STATUS_POLICY.length; index += 1) {
+    const expected = AUTONOMOUS_STATUS_POLICY[index];
+    const actual = checks[index];
+    if (!actual || actual.id !== expected.id || actual.label !== expected.label || actual.script !== expected.script) {
+      issues.push(`entry-${index}`);
+      continue;
+    }
+    const actualExitCodes = actual.ok instanceof Set ? [...actual.ok] : [];
+    if (
+      !(actual.ok instanceof Set) ||
+      actualExitCodes.length !== expected.ok.length ||
+      expected.ok.some((code, codeIndex) => actualExitCodes[codeIndex] !== code)
+    ) {
+      issues.push(`exits-${expected.id}`);
+    }
+  }
+  return issues;
+}
 
 function clamp(value, max = 260) {
   const text = redactProofText(String(value ?? "")).replace(/\s+/g, " ").trim();
   return text.length > max ? `${text.slice(0, max - 3)}...` : text;
 }
 
-function runScript(script) {
-  const args = process.env.npm_execpath
-    ? [process.env.npm_execpath, "--silent", "run", script]
+export function createAutonomousStatusChildRunner({
+  env = process.env,
+  execPath = process.execPath,
+  platform = process.platform,
+  cwd = process.cwd(),
+  spawn = spawnSync,
+} = {}) {
+  const npmCommand = env.npm_execpath ? execPath : platform === "win32" ? "npm.cmd" : "npm";
+  const timeoutMs = parseAutonomousStatusPositiveIntegerEnv(
+    "AUTONOMOUS_STATUS_TIMEOUT_MS",
+    180_000,
+    1_000,
+    900_000,
+    env,
+  );
+  const quietNpmEnv = {
+    ...env,
+    NO_UPDATE_NOTIFIER: "1",
+    npm_config_update_notifier: "false",
+    npm_config_fund: "false",
+  };
+  return (script) => {
+    const args = env.npm_execpath
+    ? [env.npm_execpath, "--silent", "run", script]
     : ["--silent", "run", script];
-  return spawnSync(npmCommand, args, {
-    cwd: process.cwd(),
-    env: quietNpmEnv,
-    encoding: "utf8",
-    maxBuffer: 256 * 1024,
-    timeout: timeoutMs,
-  });
+    return spawn(npmCommand, args, {
+      cwd,
+      env: quietNpmEnv,
+      encoding: "utf8",
+      maxBuffer: 256 * 1024,
+      timeout: timeoutMs,
+    });
+  };
 }
 
 function lineStarting(output, prefix) {
@@ -342,6 +386,7 @@ function summarizeSecurityFollowup(output) {
     const failedIds = Array.isArray(parsed.failedIds) ? safeTokenList(parsed.failedIds) : "none";
     return clamp(
       `status=${parsed.status === "pass" ? "pass" : "fail"}, checks=${integerField(parsed.checks)}, passed=${integerField(parsed.passed)}, failed=${integerField(parsed.failed)}, failedIds=${failedIds}, hostAuth=${parsed.hostAuth === true}, webLocks=${parsed.webLocks === true}, keeperNonce=${parsed.keeperNonce === true}, keeperBotReceipts=${parsed.keeperBotReceipts === true}, depositLimiter=${parsed.depositLimiter === true}, dryRunDefaults=${parsed.dryRunDefaults === true}, ciSecurity=${parsed.ciSecurity === true}, autoResolve=${parsed.autoResolve === true}, appResolveEpochFiles=${integerField(parsed.appResolveEpochFiles)}`,
+      1_024,
     );
   } catch {
     return "status=fail issue=invalid-security-followup-json";
@@ -367,6 +412,7 @@ function summarizeWalletRuntimeLogic(output) {
     const parsed = parseJsonObject(output);
     return clamp(
       `status=${parsed.status === "pass" ? "pass" : "fail"}, businessLogic=${parsed.businessLogic === true}, localProof=${parsed.localProof === true}, apiBoundaryProof=${parsed.apiBoundaryProof === true}, walletTxStateMachineProof=${parsed.walletTxStateMachineProof === true}, walletClaimStateMachineProof=${parsed.walletClaimStateMachineProof === true}, authBoundaryProof=${parsed.authBoundaryProof === true}, replicaRateLimitBoundaryProof=${parsed.replicaRateLimitBoundaryProof === true}, browserBaselineCompactPerformance=${parsed.browserBaselineCompactPerformance === true}, jsonNoStoreRoutes=${parsed.jsonNoStoreRoutes === true}, sessionVaryCookie=${parsed.sessionVaryCookie === true}, boundedJsonRoutes=${parsed.boundedJsonRoutes === true}, rateLimitNoStore=${parsed.rateLimitNoStore === true}, routeErrorRedaction=${parsed.routeErrorRedaction === true}, depositsRecoveryGlobalBound=${parsed.depositsRecoveryGlobalBound === true}, miningPendingRecoveryScoped=${parsed.miningPendingRecoveryScoped === true}, miningReceiptRevertExplicit=${parsed.miningReceiptRevertExplicit === true}, walletHashlessNonceRecovery=${parsed.walletHashlessNonceRecovery === true}, manualMinePendingAmbiguousSafe=${parsed.manualMinePendingAmbiguousSafe === true}, approvalDuplicateSendSafe=${parsed.approvalDuplicateSendSafe === true}, autoMinerNonceRecoverySafe=${parsed.autoMinerNonceRecoverySafe === true}, autoMinerRpcReconnectSafe=${parsed.autoMinerRpcReconnectSafe === true}, rewardClaimStateSafe=${parsed.rewardClaimStateSafe === true}, safetyPoolClaimStateSafe=${parsed.safetyPoolClaimStateSafe === true}, resolverClaimStateSafe=${parsed.resolverClaimStateSafe === true}, authTrustedOriginFailClosed=${parsed.authTrustedOriginFailClosed === true}, authReplayNonceBoundary=${parsed.authReplayNonceBoundary === true}, authCanonicalNonceBoundary=${parsed.authCanonicalNonceBoundary === true}, authSessionCookieBoundary=${parsed.authSessionCookieBoundary === true}, sharedRateLimitRetryAfterBound=${parsed.sharedRateLimitRetryAfterBound === true}, externalRateLimitPublicEndpoint=${parsed.externalRateLimitPublicEndpoint === true}, externalRateLimitResponseBound=${parsed.externalRateLimitResponseBound === true}, externalSharedLockCanonical=${parsed.externalSharedLockCanonical === true}, replicaRateLimitStrictConfig=${parsed.replicaRateLimitStrictConfig === true}, expectedWarnings=${integerField(parsed.expectedWarnings)}, assertionFailures=${integerField(parsed.assertionFailures)}, timedOut=${parsed.timedOut === true}, durationMs=${integerField(parsed.durationMs)}, childExitCode=${optionalIntegerField(parsed.childExitCode)}`,
+      4_096,
     );
   } catch {
     return "status=fail issue=invalid-wallet-runtime-json";
@@ -378,6 +424,7 @@ function summarizeV10Invariants(output) {
     const parsed = parseJsonObject(output);
     return clamp(
       `status=${parsed.status === "pass" ? "pass" : "fail"}, suite=${safeStatusTokenList([parsed.invariantSuite])}, runtimeBytes=${integerField(parsed.runtimeBytes)}, selectors=${integerField(parsed.functionSelectors)}, guarded=${integerField(parsed.guardedLocalMutationEntrypoints)}, accountingCases=${integerField(parsed.fullRangeAccountingCases)}, proportionalCases=${integerField(parsed.fullRangeProportionalCases)}, assertionFailures=${integerField(parsed.assertionFailures)}, protocolFeeFlushCases=${integerField(parsed.protocolFeeFlushModelCases)}, protocolFeeFlushEntrypointCases=${integerField(parsed.protocolFeeFlushEntrypointCases)}, duplicateBatchCases=${integerField(parsed.duplicateBatchModelCases)}, tokenTransferRollbackCases=${integerField(parsed.tokenTransferRollbackCases)}, batchTransferRollbackCases=${integerField(parsed.batchTransferRollbackCases)}, dustTransferRollbackCases=${integerField(parsed.dustTransferRollbackCases)}, timelockBoundaryCases=${integerField(parsed.timelockBoundaryCases)}, dustBoundaryCases=${integerField(parsed.dustBoundaryCases)}, packedBoundaryCases=${integerField(parsed.packedBoundaryCases)}`,
+      2_048,
     );
   } catch {
     return "status=fail issue=invalid-v10-invariants-json";
@@ -389,6 +436,7 @@ function summarizeAbiIndexerStorage(output) {
     const parsed = parseJsonObject(output);
     return clamp(
       `status=${parsed.status === "pass" ? "pass" : "fail"}, categories=${integerField(parsed.categories)}, financialEventCategories=${safeStatusTokenList(parsed.financialEventCategories)}, depositScopeIsolation=${parsed.depositScopeIsolation === true}, idempotentDepositUpsert=${parsed.idempotentDepositUpsert === true}, resolverRewardScopeIsolation=${parsed.resolverRewardScopeIsolation === true}, idempotentResolverRewardUpsert=${parsed.idempotentResolverRewardUpsert === true}, dustSettlementScopeIsolation=${parsed.dustSettlementScopeIsolation === true}, idempotentDustSettlementUpsert=${parsed.idempotentDustSettlementUpsert === true}, singleRebateClaimParity=${parsed.singleRebateClaimParity === true}, epochScopeIsolation=${parsed.epochScopeIsolation === true}, idempotentEpochUpsert=${parsed.idempotentEpochUpsert === true}, jackpotScopeIsolation=${parsed.jackpotScopeIsolation === true}, idempotentJackpotUpsert=${parsed.idempotentJackpotUpsert === true}, rewardClaimScopeIsolation=${parsed.rewardClaimScopeIsolation === true}, idempotentRewardClaimUpsert=${parsed.idempotentRewardClaimUpsert === true}, batchClaimKindParity=${parsed.batchClaimKindParity === true}, dustSettlementKindParity=${parsed.dustSettlementKindParity === true}, sameBlockEventOrdering=${parsed.sameBlockEventOrdering === true}, staleEventReplayIgnored=${parsed.staleEventReplayIgnored === true}, staleEpochReplayIgnored=${parsed.staleEpochReplayIgnored === true}, staleFinancialReplayIgnored=${parsed.staleFinancialReplayIgnored === true}, normalizedEventIdRequiresTxLog=${parsed.normalizedEventIdRequiresTxLog === true}, partialRpcLogFallback=${parsed.partialRpcLogFallback === true}, malformedPayloadFallback=${parsed.malformedPayloadFallback === true}, boundedEventStorage=${parsed.boundedEventStorage === true}, limitedEventReads=${parsed.limitedEventReads === true}, legacyRead=${parsed.legacyRead === true}, pagination=${parsed.pagination === true}, tileUserCounts=${parsed.tileUserCounts === true}, chainScopeIsolation=${parsed.chainScopeIsolation === true}, scopeIsolation=${parsed.scopeIsolation === true}, categoryIdIsolation=${parsed.categoryIdIsolation === true}, normalizedEventScopeIsolation=${parsed.normalizedEventScopeIsolation === true}, protocolFeeScopeIsolation=${parsed.protocolFeeScopeIsolation === true}, idempotentUpsert=${parsed.idempotentUpsert === true}, idempotentBetUpsert=${parsed.idempotentBetUpsert === true}, idempotentProtocolFeeUpsert=${parsed.idempotentProtocolFeeUpsert === true}, assertionFailures=${integerField(parsed.assertionFailures)}`,
+      4_096,
     );
   } catch {
     return "status=fail issue=invalid-abi-indexer-storage-json";
@@ -557,7 +605,7 @@ function summarizeIndexer(output) {
   return summarizeManifestSummary(output);
 }
 
-function summarize(check, output) {
+export function summarizeAutonomousStatusCheck(check, output) {
   if (check.id === "remaining") return summarizeRemaining(output);
   if (check.id === "security-followup") return summarizeSecurityFollowup(output);
   if (check.id === "collector-redaction") return summarizeCollectorRedaction(output);
@@ -582,31 +630,55 @@ function summarize(check, output) {
   return clamp(output);
 }
 
-const rows = [];
-const failures = [];
+export function runAutonomousStatus({
+  checks = AUTONOMOUS_STATUS_CHECKS,
+  runScript = createAutonomousStatusChildRunner(),
+  writeLine = console.log,
+  now = () => new Date(),
+} = {}) {
+  const manifestIssues = autonomousStatusManifestIssues(checks);
+  if (manifestIssues.length > 0) {
+    throw new Error(`invalid autonomous status manifest: ${manifestIssues.join(",")}`);
+  }
+  const rows = [];
+  const failures = [];
+  for (const check of checks) {
+    const result = runScript(check.script);
+    const exitCode = typeof result.status === "number" ? result.status : 1;
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    const expected = check.ok.has(exitCode);
+    if (!expected) failures.push(check.script);
+    rows.push([
+      check.label,
+      check.script,
+      String(exitCode),
+      expected ? "ok" : "fail",
+      summarizeAutonomousStatusCheck(check, output).replace(/\|/g, "\\|"),
+    ]);
+  }
 
-for (const check of checks) {
-  const result = runScript(check.script);
-  const exitCode = typeof result.status === "number" ? result.status : 1;
-  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-  const expected = check.ok.has(exitCode);
-  if (!expected) failures.push(check.script);
-  rows.push([check.label, check.script, String(exitCode), expected ? "ok" : "fail", summarize(check, output).replace(/\|/g, "\\|")]);
+  writeLine("# Autonomous Status Summary");
+  writeLine("");
+  writeLine(`Timestamp: ${now().toISOString()}`);
+  writeLine("Mode: read-only, no transactions, no deploys, no live soak start");
+  writeLine("");
+  writeLine("| Check | Command | Exit | Expected | Summary |");
+  writeLine("| --- | --- | --- | --- | --- |");
+  for (const row of rows) writeLine(`| ${row.join(" | ")} |`);
+  writeLine("");
+  writeLine(
+    failures.length > 0
+      ? `Summary: ${failures.length} autonomous status command(s) failed unexpectedly: ${failures.join(", ")}.`
+      : "Summary: autonomous status commands completed; external launch evidence may still be missing.",
+  );
+  return { rows, failures, exitCode: failures.length > 0 ? 1 : 0 };
 }
 
-console.log("# Autonomous Status Summary");
-console.log("");
-console.log(`Timestamp: ${new Date().toISOString()}`);
-console.log("Mode: read-only, no transactions, no deploys, no live soak start");
-console.log("");
-console.log("| Check | Command | Exit | Expected | Summary |");
-console.log("| --- | --- | --- | --- | --- |");
-for (const row of rows) console.log(`| ${row.join(" | ")} |`);
-console.log("");
-console.log(
-  failures.length > 0
-    ? `Summary: ${failures.length} autonomous status command(s) failed unexpectedly: ${failures.join(", ")}.`
-    : "Summary: autonomous status commands completed; external launch evidence may still be missing.",
-);
-
-if (failures.length > 0) process.exitCode = 1;
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    process.exitCode = runAutonomousStatus().exitCode;
+  } catch (error) {
+    console.error(clamp(error instanceof Error ? error.message : String(error)));
+    process.exitCode = 1;
+  }
+}

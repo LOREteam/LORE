@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { argValue, baseCollectorMeta, hasFlag, isFinalHttpsOrigin, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
+import { argValue, baseCollectorMeta, hasFlag, isFinalHttpsOrigin, normalizeProofOrigin, printPlan, requireCondition, writeJson, refuseFinalProofOutput } from "./collect-proof-common.mjs";
 
 const CANONICAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
@@ -90,21 +90,10 @@ function requireDistinctArtifactInputs(entries) {
   }
 }
 
-function normalizedOrigin(value) {
-  if (!value) return "";
-  try {
-    const url = new URL(String(value).trim());
-    if (url.username || url.password) return "";
-    return url.origin.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
 function healthBaseMatches(summary, expectedOrigin) {
-  const expected = normalizedOrigin(expectedOrigin);
+  const expected = normalizeProofOrigin(expectedOrigin);
   const base = parseKeyValues(summary).base;
-  return Boolean(expected && base && normalizedOrigin(base) === expected);
+  return Boolean(expected && base && normalizeProofOrigin(base) === expected);
 }
 function parseKeyValues(line = "") {
   const values = {};

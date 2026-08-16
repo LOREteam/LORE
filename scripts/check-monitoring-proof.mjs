@@ -1,5 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import { hasPublicProofHttpsUrl as hasPublicHttpsUrl, isFinalHttpsOrigin } from "./collect-proof-common.mjs";
 
 const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
 const summaryOnly = process.argv.includes("--summary-only");
@@ -96,49 +97,6 @@ function originEmailDomains(manifest) {
     return host ? [host] : [];
   } catch {
     return [];
-  }
-}
-
-function hasPublicHttpsUrl(value) {
-  const text = String(value ?? "").trim();
-  const match = text.match(/https?:\/\/[^\s),.;]+/i);
-  if (!match) return false;
-  try {
-    const url = new URL(match[0]);
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^0\./.test(host) ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
-        /^169\.254\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
-        /^192\.0\.2\./.test(host) ||
-        /^198\.(1[89])\./.test(host) ||
-        /^198\.51\.100\./.test(host) ||
-        /^203\.0\.113\./.test(host) ||
-        /^::ffff:/i.test(host) ||
-        /^f[cd][0-9a-f]*:/i.test(host) ||
-        /^fe[89ab][0-9a-f]*:/i.test(host) ||
-        /^2001:db8:/i.test(host)
-      );
-  } catch {
-    return false;
   }
 }
 
@@ -616,49 +574,6 @@ function normalizeOrigin(value) {
     return url.origin;
   } catch {
     return "";
-  }
-}
-
-function isFinalHttpsOrigin(value) {
-  try {
-    const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.pathname === "/" &&
-      url.search === "" &&
-      url.hash === "" &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^0\./.test(host) ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
-        /^169\.254\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
-        /^192\.0\.2\./.test(host) ||
-        /^198\.(1[89])\./.test(host) ||
-        /^198\.51\.100\./.test(host) ||
-        /^203\.0\.113\./.test(host) ||
-        /^::ffff:/i.test(host) ||
-        /^f[cd][0-9a-f]*:/i.test(host) ||
-        /^fe[89ab][0-9a-f]*:/i.test(host) ||
-        /^2001:db8:/i.test(host)
-      );
-  } catch {
-    return false;
   }
 }
 

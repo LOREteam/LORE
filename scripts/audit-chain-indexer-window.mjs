@@ -1,7 +1,6 @@
 import "dotenv/config";
-import { mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   createPublicClient,
@@ -11,6 +10,28 @@ import {
   parseUnits,
 } from "viem";
 import { compareAccountingSnapshot, replayV9Accounting } from "./lib/chain-accounting-model.mjs";
+import {
+  buildChainAuditBetEventKey,
+  buildChainAuditEventId,
+  normalizeChainAuditTransactionHash,
+  parseChainAuditBoundedInteger,
+  parseChainAuditDbInteger,
+  parseChainAuditDbTileId,
+  parseChainAuditEpoch,
+  parseChainAuditTileId,
+  planChainAuditBlockChunks,
+  toChainAuditSqlBlockNumber,
+} from "./chain-indexer-audit-policy.mjs";
+import {
+  CHAIN_AUDIT_METADATA_CATEGORIES,
+  appendMissingChainAuditMetadataRows,
+  assertChainAuditDbFile,
+  isChainAuditDustSettlementEvent,
+  publishChainAuditSummary,
+  readChainAuditAccountingSnapshot,
+  readChainAuditStoredEventIds,
+  selectChainAuditResolvedEpochRows,
+} from "./chain-indexer-audit-runtime.mjs";
 
 const require = createRequire(import.meta.url);
 const {
@@ -24,96 +45,25 @@ const network = (process.env.LINEA_NETWORK || process.env.NEXT_PUBLIC_LINEA_NETW
 const chain = network === "mainnet"
   ? { id: 59144, name: "Linea", nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: ["https://rpc.linea.build"] } } }
   : { id: 59141, name: "Linea Sepolia", nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: ["https://rpc.sepolia.linea.build"] } }, testnet: true };
-const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
-const MAX_TILE_ID = 25;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-const MAX_SAFE_BLOCK_NUMBER = BigInt(Number.MAX_SAFE_INTEGER);
 const contractAddress = (process.env.KEEPER_CONTRACT_ADDRESS || process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "").toLowerCase();
 const dbRaw = process.env.LORE_DB_PATH?.trim();
 const dbPath = dbRaw ? (isAbsolute(dbRaw) ? dbRaw : resolve(dbRaw)) : "";
 const windowEpochs = parseBoundedIntegerEnv("CHAIN_INDEXER_AUDIT_EPOCHS", 50, 1, 500);
 const endEpochArg = process.argv.find((value) => value.startsWith("--end-epoch="));
 const auditEndEpoch = endEpochArg
-  ? parseBoundedInteger("--end-epoch", endEpochArg.slice("--end-epoch=".length), 0, Number.MAX_SAFE_INTEGER)
+  ? parseChainAuditBoundedInteger("--end-epoch", endEpochArg.slice("--end-epoch=".length), 0, Number.MAX_SAFE_INTEGER)
   : null;
 const summaryOnly = process.argv.includes("--summary-only");
 const finalityBlocks = BigInt(parseBoundedIntegerEnv("INDEXER_FINALITY_BLOCKS", 0, 0, 1_000_000));
 const outPath = resolve(process.env.CHAIN_INDEXER_AUDIT_OUT || ".tmp/pre-mainnet/chain-indexer-audit.json");
 
-function regularFileStat(filePath) {
-  try {
-    const stats = statSync(filePath);
-    return stats.isFile() ? stats : null;
-  } catch {
-    return null;
-  }
-}
-
 if (!/^0x[0-9a-f]{40}$/.test(contractAddress)) throw new Error("configured contract address is missing or invalid");
-if (!dbPath || !regularFileStat(dbPath)) {
-  throw new Error("LORE_DB_PATH must point to an existing indexer SQLite database file");
-}
+assertChainAuditDbFile(dbPath);
 
 function parseBoundedIntegerEnv(name, fallback, min, max) {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
-  return parseBoundedInteger(name, raw, min, max);
-}
-
-function parseBoundedInteger(name, raw, min, max) {
-  const value = String(raw ?? "");
-  if (!DECIMAL_INTEGER_RE.test(value)) {
-    throw new Error(`${name} must be a canonical decimal integer`);
-  }
-  const parsed = BigInt(value);
-  if (parsed > MAX_SAFE_INTEGER_BIGINT || parsed < BigInt(min) || parsed > BigInt(max)) {
-    throw new Error(`${name} must be between ${min} and ${max}`);
-  }
-  return Number(parsed);
-}
-
-function parseDbInteger(label, value, min = 0, max = Number.MAX_SAFE_INTEGER) {
-  const raw = String(value ?? "");
-  if (!DECIMAL_INTEGER_RE.test(raw)) {
-    throw new Error(`${label} must be a canonical decimal integer`);
-  }
-  const parsed = BigInt(raw);
-  if (parsed > MAX_SAFE_INTEGER_BIGINT || parsed < BigInt(min) || parsed > BigInt(max)) {
-    throw new Error(`${label} must be between ${min} and ${max}`);
-  }
-  return Number(parsed);
-}
-
-function parseDbTileId(label, value) {
-  return parseDbInteger(label, value, 1, MAX_TILE_ID);
-}
-
-function parseChainTileId(label, value) {
-  if (typeof value !== "bigint" || value <= 0n || value > BigInt(MAX_TILE_ID)) {
-    throw new Error(`${label} must be between 1 and ${MAX_TILE_ID}`);
-  }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > MAX_TILE_ID) {
-    throw new Error(`${label} must be between 1 and ${MAX_TILE_ID}`);
-  }
-  return parsed;
-}
-
-function parseChainEpoch(value) {
-  if (typeof value !== "bigint" || value <= 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function toSqlBlockNumber(label, value) {
-  if (typeof value !== "bigint" || value < 0n || value > MAX_SAFE_BLOCK_NUMBER) {
-    throw new Error(`${label} must be a safe non-negative block number`);
-  }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new Error(`${label} must be a safe non-negative block number`);
-  }
-  return parsed;
+  return parseChainAuditBoundedInteger(name, raw, min, max);
 }
 
 const rpcList = (process.env.KEEPER_RPC_URL || process.env.NEXT_PUBLIC_LINEA_RPCS || process.env.NEXT_PUBLIC_LINEA_SEPOLIA_RPCS || chain.rpcUrls.default.http.join(","))
@@ -125,82 +75,56 @@ const client = createPublicClient({
   transport: fallback(rpcList.map((url) => http(url, { timeout: 30_000, retryCount: 1 })), { rank: true }),
 });
 async function readAccountingSnapshot(blockNumber) {
-  const keys = ["rolloverPool", "dailyJackpotPool", "weeklyJackpotPool", "accruedOwnerFees", "accruedBurnFees"];
-  const values = await Promise.all(keys.map((functionName) => (
-    client.readContract({
-      address: contractAddress,
-      abi: ACCOUNTING_ABI,
-      functionName,
-      blockNumber,
-    })
-  )));
-  return Object.fromEntries(keys.map((key, index) => [key, values[index]]));
+  return readChainAuditAccountingSnapshot({
+    client,
+    contractAddress,
+    abi: ACCOUNTING_ABI,
+    blockNumber,
+  });
 }
 const db = new DatabaseSync(dbPath, { readOnly: true });
 const scope = `${network}:${contractAddress}`;
-const epochRows = (auditEndEpoch === null
-  ? db.prepare(`
-      SELECT epoch, winning_tile, total_pool, reward_pool, fee, jackpot_bonus, resolved_block
-      FROM scoped_epochs WHERE scope = ? ORDER BY epoch DESC LIMIT ?
-    `).all(scope, windowEpochs)
-  : db.prepare(`
-      SELECT epoch, winning_tile, total_pool, reward_pool, fee, jackpot_bonus, resolved_block
-      FROM scoped_epochs WHERE scope = ? AND epoch <= ? ORDER BY epoch DESC LIMIT ?
-    `).all(scope, auditEndEpoch, windowEpochs)
-).reverse();
+const epochRows = selectChainAuditResolvedEpochRows({
+  db,
+  scope,
+  auditEndEpoch,
+  windowEpochs,
+});
 if (epochRows.length === 0) throw new Error("indexer database has no resolved epochs for the configured contract scope");
 
 const firstEpochRow = epochRows[0];
 const lastEpochRow = epochRows.at(-1);
-const startEpoch = parseDbInteger("scoped_epochs first epoch", firstEpochRow.epoch, 1);
-const endEpoch = parseDbInteger("scoped_epochs last epoch", lastEpochRow.epoch, 1);
-const firstResolvedBlock = parseDbInteger("scoped_epochs first resolved_block", firstEpochRow.resolved_block);
-const lastResolvedBlock = parseDbInteger("scoped_epochs last resolved_block", lastEpochRow.resolved_block);
+const startEpoch = parseChainAuditDbInteger("scoped_epochs first epoch", firstEpochRow.epoch, 1);
+const endEpoch = parseChainAuditDbInteger("scoped_epochs last epoch", lastEpochRow.epoch, 1);
+const firstResolvedBlock = parseChainAuditDbInteger("scoped_epochs first resolved_block", firstEpochRow.resolved_block);
+const lastResolvedBlock = parseChainAuditDbInteger("scoped_epochs last resolved_block", lastEpochRow.resolved_block);
 const firstBetBlockRow = db.prepare(`
   SELECT MIN(block_number) AS value FROM scoped_bets WHERE scope = ? AND epoch BETWEEN ? AND ?
 `).get(scope, startEpoch, endEpoch);
 const firstBetBlock = firstBetBlockRow?.value === null || firstBetBlockRow?.value === undefined
   ? firstResolvedBlock
-  : parseDbInteger("scoped_bets first block_number", firstBetBlockRow.value);
+  : parseChainAuditDbInteger("scoped_bets first block_number", firstBetBlockRow.value);
 const fromBlock = BigInt(Math.min(firstBetBlock, firstResolvedBlock));
 const headBlock = await client.getBlockNumber();
 const toBlock = headBlock > finalityBlocks ? headBlock - finalityBlocks : 0n;
 if (toBlock < fromBlock) throw new Error("chain finality target is before the audit window");
-if (toBlock - fromBlock > 250_000n) {
-  throw new Error(
-    "audit window exceeds 250000 blocks; refresh the indexer DB to the finalized chain head or reduce CHAIN_INDEXER_AUDIT_EPOCHS",
-  );
-}
+const blockChunks = planChainAuditBlockChunks(fromBlock, toBlock);
 const accountingToBlock = BigInt(lastResolvedBlock);
 if (accountingToBlock > toBlock) throw new Error("last indexed resolve is beyond the finalized audit head");
-const sqlFromBlock = toSqlBlockNumber("audit fromBlock", fromBlock);
-const sqlToBlock = toSqlBlockNumber("audit toBlock", toBlock);
+const sqlFromBlock = toChainAuditSqlBlockNumber("audit fromBlock", fromBlock);
+const sqlToBlock = toChainAuditSqlBlockNumber("audit toBlock", toBlock);
 const accountingStartSnapshot = await readAccountingSnapshot(fromBlock > 0n ? fromBlock - 1n : 0n);
 const accountingEndSnapshot = await readAccountingSnapshot(accountingToBlock);
 
 const logs = [];
-for (let cursor = fromBlock; cursor <= toBlock; cursor += 10_000n) {
-  const chunkTo = cursor + 9_999n > toBlock ? toBlock : cursor + 9_999n;
-  logs.push(...await client.getLogs({ address: contractAddress, fromBlock: cursor, toBlock: chunkTo }));
+for (const chunk of blockChunks) {
+  logs.push(...await client.getLogs({ address: contractAddress, ...chunk }));
 }
 
 const mismatches = [];
 const addMismatch = (kind, detail) => {
   if (mismatches.length < 50) mismatches.push({ kind, detail });
 };
-function normalizeLogTransactionHash(log) {
-  const normalized = String(log.transactionHash ?? "").toLowerCase().trim();
-  return /^0x[0-9a-f]{64}$/.test(normalized) ? normalized : null;
-}
-function eventId(log) {
-  const normalizedHash = normalizeLogTransactionHash(log);
-  if (!normalizedHash || log.logIndex === null || log.logIndex === undefined) return null;
-  return `${normalizedHash}_${log.logIndex.toString()}`;
-}
-function betEventKey(epoch, log) {
-  const normalizedHash = normalizeLogTransactionHash(log);
-  return normalizedHash ? `${epoch}_${normalizedHash}` : null;
-}
 const parseStoredWei = (value) => parseUnits(String(value ?? "0"), 18);
 const storedObject = (key) => {
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(`${scope}:${key}`);
@@ -222,18 +146,7 @@ const storedIndexerEvents = (category, legacyKey) => {
   }
   return records;
 };
-const storedIndexerEventIds = (category) => {
-  try {
-    return db.prepare(`
-      SELECT id FROM scoped_indexer_events
-      WHERE scope = ? AND category = ? AND block_number BETWEEN ? AND ?
-    `).all(scope, category, sqlFromBlock, sqlToBlock)
-      .map((row) => String(row.id).toLowerCase());
-  } catch {
-    return [];
-  }
-};
-const dbEpochs = new Map(epochRows.map((row) => [parseDbInteger("scoped_epochs epoch", row.epoch, 1), row]));
+const dbEpochs = new Map(epochRows.map((row) => [parseChainAuditDbInteger("scoped_epochs epoch", row.epoch, 1), row]));
 const dbBets = new Map(db.prepare(`
   SELECT id, epoch, total_amount FROM scoped_bets WHERE scope = ? AND epoch BETWEEN ? AND ?
 `).all(scope, startEpoch, endEpoch).map((row) => [String(row.id).toLowerCase(), row]));
@@ -250,9 +163,16 @@ const dbFees = new Map(db.prepare(`
 const batchClaims = storedIndexerEvents("batch_claim", "gamedata:batchClaims");
 const resolverRewards = storedIndexerEvents("resolver_reward", "gamedata:resolverRewards");
 const dustSettlements = storedIndexerEvents("dust_settlement", "gamedata:dustSettlements");
-const dbBatchClaimIds = storedIndexerEventIds("batch_claim");
-const dbResolverRewardIds = storedIndexerEventIds("resolver_reward");
-const dbDustSettlementIds = storedIndexerEventIds("dust_settlement");
+const metadataIdsByCategory = Object.fromEntries(CHAIN_AUDIT_METADATA_CATEGORIES.map(({ category }) => [
+  category,
+  readChainAuditStoredEventIds({
+    db,
+    scope,
+    category,
+    fromBlock: sqlFromBlock,
+    toBlock: sqlToBlock,
+  }),
+]));
 
 const seen = {
   bets: new Set(), epochs: new Set(), jackpots: new Set(), rewards: new Set(),
@@ -264,7 +184,7 @@ for (const log of logs) {
   try {
     const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics, strict: false });
     if (decoded.eventName === "RebateBatchClaimed") {
-      const normalizedHash = normalizeLogTransactionHash(log);
+  const normalizedHash = normalizeChainAuditTransactionHash(log);
       if (normalizedHash) rebateBatchClaimTxs.add(normalizedHash);
     }
   } catch { /* unrelated contract event */ }
@@ -274,12 +194,12 @@ for (const log of logs) {
   let decoded;
   try { decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics, strict: false }); } catch { continue; }
   const args = decoded.args ?? {};
-  const epoch = "epoch" in args ? parseChainEpoch(args.epoch) : null;
+  const epoch = "epoch" in args ? parseChainAuditEpoch(args.epoch) : null;
   const inEpochWindow = epoch !== null && epoch >= startEpoch && epoch <= endEpoch;
-  const id = eventId(log);
+  const id = buildChainAuditEventId(log);
 
   if (["BetPlaced", "BatchBetsPlaced", "BatchBetsSameAmountPlaced", "BatchBetsBitmapPlaced"].includes(decoded.eventName) && inEpochWindow) {
-    const key = betEventKey(epoch, log);
+      const key = buildChainAuditBetEventKey(epoch, log);
     if (!key) {
       addMismatch("bet", `epoch ${epoch} malformed transaction identity`);
       continue;
@@ -304,8 +224,8 @@ for (const log of logs) {
     if (!row) addMismatch("resolve", `epoch ${epoch} missing index row`);
     else {
       if (
-        parseDbTileId(`epoch ${epoch} winning_tile`, row.winning_tile) !==
-        parseChainTileId(`epoch ${epoch} winningTile`, args.winningTile)
+        parseChainAuditDbTileId(`epoch ${epoch} winning_tile`, row.winning_tile) !==
+        parseChainAuditTileId(`epoch ${epoch} winningTile`, args.winningTile)
       ) addMismatch("resolve", `epoch ${epoch} winning tile mismatch`);
       if (parseStoredWei(row.total_pool) !== args.totalPool) addMismatch("resolve", `epoch ${epoch} total pool mismatch`);
       if (parseStoredWei(row.reward_pool) !== args.rewardPool) addMismatch("resolve", `epoch ${epoch} reward pool mismatch`);
@@ -330,7 +250,7 @@ for (const log of logs) {
     if (!row) addMismatch("reward", `epoch ${epoch} missing index row`);
     else if (parseStoredWei(row.reward) !== args.reward) addMismatch("reward", `epoch ${epoch} amount mismatch`);
   } else if (["RewardBatchClaimed", "RebateClaimed", "RebateBatchClaimed"].includes(decoded.eventName)) {
-    const normalizedHash = normalizeLogTransactionHash(log);
+    const normalizedHash = normalizeChainAuditTransactionHash(log);
     if (decoded.eventName === "RebateClaimed" && normalizedHash && rebateBatchClaimTxs.has(normalizedHash)) continue;
     if (!id) {
       addMismatch("claim", `${decoded.eventName} malformed transaction identity`);
@@ -354,7 +274,7 @@ for (const log of logs) {
     }
     seen.resolverRewards.add(id);
     if (!resolverRewards[id]) addMismatch("resolver-reward", `${decoded.eventName} missing index metadata`);
-  } else if (["RewardDustSettled", "RebateDustSettled"].includes(decoded.eventName) && inEpochWindow) {
+  } else if (isChainAuditDustSettlementEvent(decoded.eventName) && inEpochWindow) {
     if (!id) {
       addMismatch("dust-settlement", `${decoded.eventName} malformed transaction identity`);
       continue;
@@ -365,7 +285,7 @@ for (const log of logs) {
     if (!row) addMismatch("dust-settlement", `${decoded.eventName} missing index metadata`);
     else if (
       row.kind !== expectedKind ||
-      parseDbInteger("dust_settlement epoch", row.epoch, 1) !== epoch ||
+        parseChainAuditDbInteger("dust_settlement epoch", row.epoch, 1) !== epoch ||
       parseStoredWei(row.amount) !== args.amount
     ) {
       addMismatch("dust-settlement", `${decoded.eventName} metadata mismatch`);
@@ -392,13 +312,11 @@ for (const epoch of dbEpochs.keys()) if (!seen.epochs.has(epoch)) addMismatch("r
 for (const key of dbJackpots.keys()) if (!seen.jackpots.has(key)) addMismatch("jackpot", `${key} index row has no chain event`);
 for (const key of dbRewards.keys()) if (!seen.rewards.has(key)) addMismatch("reward", "index row has no chain event in window");
 for (const key of dbFees.keys()) if (!seen.fees.has(key)) addMismatch("fee-flush", "index row has no chain event in window");
-for (const key of dbBatchClaimIds) if (!seen.batchClaims.has(key)) addMismatch("claim", "index metadata row has no chain event in window");
-for (const key of dbResolverRewardIds) {
-  if (!seen.resolverRewards.has(key)) addMismatch("resolver-reward", "index metadata row has no chain event in window");
-}
-for (const key of dbDustSettlementIds) {
-  if (!seen.dustSettlements.has(key)) addMismatch("dust-settlement", "index metadata row has no chain event in window");
-}
+appendMissingChainAuditMetadataRows({
+  idsByCategory: metadataIdsByCategory,
+  seen,
+  addMismatch,
+});
 
 const accountingReplay = replayV9Accounting({ initial: accountingStartSnapshot, events: accountingEvents });
 const accountingSnapshotMismatches = compareAccountingSnapshot(accountingEndSnapshot, accountingReplay.state);
@@ -428,15 +346,5 @@ const summary = {
   },
   mismatches,
 };
-mkdirSync(dirname(outPath), { recursive: true });
-const temporaryOutPath = `${outPath}.${process.pid}.tmp`;
-writeFileSync(temporaryOutPath, `${JSON.stringify(summary, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-renameSync(temporaryOutPath, outPath);
-if (summaryOnly) {
-  console.log(
-    `status=${summary.status}, network=${summary.network}, epochs=${summary.epochWindow.count}, blocks=${summary.blockWindow.from}-${summary.blockWindow.to}, mismatches=${summary.mismatches.length}, accountingMismatches=${summary.accounting.mismatchCount}`,
-  );
-} else {
-  console.log(JSON.stringify(summary));
-}
-process.exit(mismatches.length === 0 ? 0 : 1);
+const publication = publishChainAuditSummary({ summary, outPath, summaryOnly });
+process.exit(publication.exitCode);

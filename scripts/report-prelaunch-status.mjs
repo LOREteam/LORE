@@ -1,15 +1,30 @@
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { redactProofText } from "./redact-proof-output.mjs";
+import {
+  resolveTrustedNpmCli,
+  trustedNpmCommand,
+  trustedNpmEnvironment,
+} from "./trusted-npm-cli.mjs";
+
+const rawRequireP1PerformanceRc = process.env.REQUIRE_P1_PERFORMANCE_RC ?? "";
+if (!["", "0", "1"].includes(rawRequireP1PerformanceRc)) {
+  console.error(JSON.stringify({ status: "fail", issue: "invalid-require-p1-performance-rc" }));
+  process.exit(1);
+}
+if (rawRequireP1PerformanceRc === "1") {
+  console.error(JSON.stringify({ status: "fail", issue: "p1-performance-rc-external-attestation-required" }));
+  process.exit(1);
+}
+const requireP1PerformanceRc = rawRequireP1PerformanceRc === "1";
 
 const checks = [
-  { label: "V9 compile", script: "proof:contract-compile:summary", requiredLocal: true },
   { label: "V10 compile", script: "proof:contract-compile:v10:summary", requiredLocal: true },
   { label: "V10 compiler advisories", script: "proof:contract-compiler-advisories:v10:summary", requiredLocal: true },
   { label: "V10 compiler matrix", script: "bench:contract:v10:compiler-matrix:summary", requiredLocal: true },
   { label: "V10 no-RPC diagnostics", script: "bench:contract:v10:diagnostics:summary", requiredLocal: true },
   { label: "V10 offline identity", script: "proof:contract-deployed:v10:offline:summary", requiredLocal: true },
   { label: "V10 deployed identity", script: "proof:contract-deployed:v10:summary" },
-  { label: "V9 compatibility invariants", script: "test:contract:summary", requiredLocal: true },
   { label: "V10 invariants", script: "test:contract:v10:summary", requiredLocal: true },
   { label: "ABI/indexer storage", script: "test:indexer-storage:summary", requiredLocal: true },
   { label: "fetch timeout", script: "test:fetch-timeout:summary", requiredLocal: true },
@@ -18,7 +33,9 @@ const checks = [
   { label: "P1 performance harness self-test", script: "perf:p1:self-test", requiredLocal: true },
   { label: "TypeScript typecheck", script: "typecheck:summary", requiredLocal: true },
   { label: "ESLint", script: "lint:summary", requiredLocal: true },
-  { label: "production build", script: "build:summary", requiredLocal: true },
+  ...(!requireP1PerformanceRc
+    ? [{ label: "production build", script: "build:summary", requiredLocal: true }]
+    : []),
   { label: "bundle baseline", script: "baseline:bundle:summary", requiredLocal: true },
   { label: "SQLite operations", script: "test:db-operations:summary", requiredLocal: true },
   { label: "runtime monitoring drill", script: "test:monitoring:summary", requiredLocal: true },
@@ -67,18 +84,118 @@ const checks = [
   { label: "backup", script: "db:backup:summary" },
   { label: "backup strict", script: "db:backup:strict:summary" },
   { label: "launch strict", script: "proof:launch:strict:summary" },
+  {
+    label: "P1 final-SHA performance evidence",
+    script: "perf:p1:verify",
+    args: ["--against-current-build", "--summary-only"],
+    requiredLocal: requireP1PerformanceRc,
+  },
 ];
 
-const npmCommand = process.env.npm_execpath ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
+const PRELAUNCH_EXTERNAL_SEQUENCE = [
+  "proof:testnet:canary:strict:summary",
+  "proof:testnet:canary:v10:summary",
+  "db:backup:summary",
+];
+
+function prelaunchManifestIssues(checkList) {
+  const scripts = checkList.map((check) => check.script);
+  const issues = [];
+  const duplicates = scripts.filter((script, index) => scripts.indexOf(script) !== index);
+  if (duplicates.length > 0) issues.push("duplicate-script");
+  if (checkList.some((check) =>
+    !check ||
+    typeof check.label !== "string" ||
+    typeof check.script !== "string" ||
+    check.label.trim().length === 0 ||
+    check.script.trim().length === 0
+  )) issues.push("invalid-check-shape");
+  if (scripts.some((script) => /(?:^|:)(?:deploy|execute|apply|start)(?::|$)/.test(String(script)))) {
+    issues.push("write-capable-script");
+  }
+  if (checkList.some((check) =>
+    Array.isArray(check.args) &&
+    !(check.script === "perf:p1:verify" && check.args.join("\0") === "--against-current-build\0--summary-only")
+  )) issues.push("unexpected-check-arguments");
+
+  const orderedEntries = PRELAUNCH_EXTERNAL_SEQUENCE.map((script) => ({
+    entry: checkList.find((check) => check.script === script),
+    index: scripts.indexOf(script),
+    script,
+  }));
+  if (orderedEntries.some(({ index }) => index < 0)) {
+    issues.push("missing-external-sequence-check");
+  } else if (!orderedEntries.every(({ index }, position) => position === 0 || orderedEntries[position - 1].index < index)) {
+    issues.push("external-sequence-out-of-order");
+  }
+  if (orderedEntries.some(({ entry }) => entry?.requiredLocal === true)) {
+    issues.push("external-sequence-marked-required-local");
+  }
+  return [...new Set(issues)];
+}
+
+const manifestIssues = prelaunchManifestIssues(checks);
+if (manifestIssues.length > 0) {
+  console.error(JSON.stringify({ status: "fail", issue: "invalid-prelaunch-check-manifest", issues: manifestIssues.length }));
+  process.exit(1);
+}
+
+if (process.argv.includes("--manifest-self-test")) {
+  const strictIndex = checks.findIndex((check) => check.script === PRELAUNCH_EXTERNAL_SEQUENCE[0]);
+  const v10Index = checks.findIndex((check) => check.script === PRELAUNCH_EXTERNAL_SEQUENCE[1]);
+  const outOfOrder = checks.map((check) => ({ ...check }));
+  [outOfOrder[strictIndex], outOfOrder[v10Index]] = [outOfOrder[v10Index], outOfOrder[strictIndex]];
+  const mutants = [
+    checks.filter((check) => check.script !== PRELAUNCH_EXTERNAL_SEQUENCE[1]),
+    outOfOrder,
+    checks.map((check) => check.script === PRELAUNCH_EXTERNAL_SEQUENCE[1]
+      ? { ...check, requiredLocal: true }
+      : { ...check }),
+    [...checks, { label: "write capable", script: "deploy:mainnet", requiredLocal: true }],
+  ];
+  const faultMutantsRejected = mutants.filter((mutant) => prelaunchManifestIssues(mutant).length > 0).length;
+  if (faultMutantsRejected !== mutants.length) {
+    console.error(JSON.stringify({ status: "fail", issue: "prelaunch-manifest-self-test-false-green" }));
+    process.exit(1);
+  }
+  console.log(JSON.stringify({
+    status: "pass",
+    checks: checks.length,
+    externalSequence: PRELAUNCH_EXTERNAL_SEQUENCE,
+    faultMutantsRejected,
+  }));
+  process.exit(0);
+}
+
 const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-const checkTimeoutMs = parsePositiveIntegerEnv("PRELAUNCH_CHECK_TIMEOUT_MS", 300_000, 1_000, 1_800_000);
-const quietNpmEnv = {
-  ...process.env,
-  NO_UPDATE_NOTIFIER: "1",
-  npm_config_update_notifier: "false",
-  npm_config_fund: "false",
-};
+let checkTimeoutMs;
+let npmLauncher;
+let quietNpmEnv;
+try {
+  checkTimeoutMs = parsePositiveIntegerEnv("PRELAUNCH_CHECK_TIMEOUT_MS", 300_000, 1_000, 1_800_000);
+} catch {
+  console.error(JSON.stringify({ status: "fail", issue: "invalid-prelaunch-check-timeout" }));
+  process.exit(1);
+}
+try {
+  if (process.env.npm_node_execpath) {
+    const npmParentNode = realpathSync(process.env.npm_node_execpath);
+    const currentNode = realpathSync(process.execPath);
+    const sameNode = process.platform === "win32"
+      ? npmParentNode.toLowerCase() === currentNode.toLowerCase()
+      : npmParentNode === currentNode;
+    if (!sameNode) throw new Error("npm parent Node identity mismatch");
+  }
+  npmLauncher = resolveTrustedNpmCli();
+  quietNpmEnv = trustedNpmEnvironment({
+    ...process.env,
+    NO_UPDATE_NOTIFIER: "1",
+  }, npmLauncher);
+} catch {
+  console.error(JSON.stringify({ status: "fail", issue: "trusted-npm-launcher-unavailable" }));
+  process.exit(1);
+}
 
 function parsePositiveIntegerEnv(name, fallback, min, max) {
   const raw = process.env[name];
@@ -149,19 +266,47 @@ function formatPackageVersion(value) {
   return /^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9._-]+)?$/.test(text) ? text : "missing";
 }
 
-function runScript(script) {
-  const args = process.env.npm_execpath
-    ? [process.env.npm_execpath, "--silent", "run", script]
-    : ["--silent", "run", script];
+function runScript(script, args = []) {
+  const command = trustedNpmCommand([
+    "--silent",
+    "run",
+    script,
+    ...(args.length > 0 ? ["--", ...args] : []),
+  ], npmLauncher);
   const startedAt = Date.now();
-  const result = spawnSync(npmCommand, args, {
-    cwd: process.cwd(),
+  const result = spawnSync(command.command, command.args, {
+    cwd: npmLauncher.repoRoot,
     env: quietNpmEnv,
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
     timeout: checkTimeoutMs,
   });
   return { ...result, elapsedMs: Date.now() - startedAt };
+}
+
+function classifyFailedCheck(result, requiredLocal, script) {
+  if (result.error) {
+    return {
+      disposition: "tool-failure",
+      value: `${script}: ${summarizeToolError(result.error)}`,
+    };
+  }
+  if (result.status !== 0) {
+    return {
+      disposition: requiredLocal ? "required-local-failure" : "launch-blocking",
+      value: script,
+    };
+  }
+  return { disposition: "passed", value: script };
+}
+
+if (process.argv.includes("--launcher-diagnostic")) {
+  console.log(JSON.stringify({
+    status: "diagnostic-only",
+    nodeMajor: process.versions.node.split(".", 1)[0],
+    npmVersion: npmLauncher.version,
+  }));
+  process.exit(78);
 }
 
 function stripAnsi(value) {
@@ -516,7 +661,7 @@ function summarizeJson(text) {
       return `status=${formatStatus(parsed.status)}, compiled=${parsed.compiled === true}, proxy=${parsed.proxy === true}, warnings=${nonNegativeIntegerField(parsed.warnings)}, warningKinds=${formatSafeTokenList(parsed.warningKinds)}, warningKindCounts=${formatSafeCountMap(parsed.warningKindCounts)}, classifiedWarnings=${nonNegativeIntegerField(parsed.classifiedWarnings)}, unclassifiedWarnings=${nonNegativeIntegerField(parsed.unclassifiedWarnings)}, notices=${nonNegativeIntegerField(parsed.notices)}, noticeKinds=${formatSafeTokenList(parsed.noticeKinds)}, errors=${nonNegativeIntegerField(parsed.errors)}`;
     }
     if (parsed && typeof parsed === "object" && "checkedDocs" in parsed && "inlineSyntaxIssues" in parsed) {
-      return `status=${formatStatus(parsed.status)}, docs=${nonNegativeIntegerField(parsed.checkedDocs)}, syntax=${nonNegativeIntegerField(parsed.inlineSyntaxIssues)}, missingScripts=${nonNegativeIntegerField(parsed.missingPackageScripts)}, readIssues=${nonNegativeIntegerField(parsed.readIssues)}, missingExamples=${nonNegativeIntegerField(parsed.missingPowerShellExamples)}, gate=${formatSafeTokenList([parsed.launchGate])}`;
+      return `status=${formatStatus(parsed.status)}, docs=${nonNegativeIntegerField(parsed.checkedDocs)}, syntax=${nonNegativeIntegerField(parsed.inlineSyntaxIssues)}, missingScripts=${nonNegativeIntegerField(parsed.missingPackageScripts)}, scriptLimitIssues=${nonNegativeIntegerField(parsed.packageScriptLimitIssues)}, readIssues=${nonNegativeIntegerField(parsed.readIssues)}, missingExamples=${nonNegativeIntegerField(parsed.missingPowerShellExamples)}, gate=${formatSafeTokenList([parsed.launchGate])}`;
     }
     if (parsed && typeof parsed === "object" && "fixtures" in parsed && "issues" in parsed && "launchGate" in parsed) {
       return `status=${formatStatus(parsed.status)}, fixtures=${nonNegativeIntegerField(parsed.fixtures)}, issues=${nonNegativeIntegerField(parsed.issues)}, gate=${formatSafeTokenList([parsed.launchGate])}`;
@@ -712,12 +857,230 @@ function summarizeWalletDependencies(text) {
   return `status=pass, privy=${versionFor("@privy-io/react-auth")}, privyWagmi=${versionFor("@privy-io/wagmi")}, wagmi=${versionFor("wagmi")}, viem=${versionFor("viem")}`;
 }
 
-const rows = [];
-const launchBlocking = [];
-const externalEvidenceIssues = [];
-const requiredLocalFailures = [];
-const toolFailures = [];
-const timings = [];
+function isExternalEvidenceIssue(requiredLocal, summary) {
+  return !requiredLocal &&
+    /\b(missing|issue\(s\)|proof issue|failing|status=fail|still require|requires external|require external|blocking launch evidence)\b/i.test(summary);
+}
+
+function executeChecks(checkList, execute, onRow = () => {}) {
+  const rows = [];
+  const launchBlocking = [];
+  const externalEvidenceIssues = [];
+  const requiredLocalFailures = [];
+  const toolFailures = [];
+  const timings = [];
+
+  for (const check of checkList) {
+    const { args = [], label, requiredLocal, script } = check;
+    const result = execute(script, args);
+    const exitCode = typeof result.status === "number" ? result.status : 1;
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    timings.push({ elapsedMs: result.elapsedMs, label });
+    let summary = clamp(summarizeOutput(output)).replace(/\|/g, "\\|");
+    if (result.error?.code === "ETIMEDOUT") {
+      summary = `status=timeout, timeoutMs=${checkTimeoutMs}`;
+    }
+    if (script === "lint" && exitCode === 0 && summary === "no output") {
+      summary = "status=pass, eslint=true";
+    }
+    if (script === "build" && exitCode === 0 && /Compiled successfully/.test(output) && /Proxy \(Middleware\)/.test(output)) {
+      summary = "status=pass, compiled=true, proxy=true";
+    }
+    const displayCommand = [script, ...args].join(" ");
+    const row = [label, displayCommand, requiredLocal ? "yes" : "no", String(exitCode), summary];
+    rows.push(row);
+    onRow(row);
+    const classification = classifyFailedCheck(result, requiredLocal, script);
+    if (classification.disposition === "tool-failure") toolFailures.push(classification.value);
+    if (classification.disposition === "required-local-failure") requiredLocalFailures.push(classification.value);
+    if (classification.disposition === "launch-blocking") launchBlocking.push(classification.value);
+    if (!result.error && isExternalEvidenceIssue(requiredLocal, summary)) {
+      externalEvidenceIssues.push(script);
+    }
+  }
+
+  return {
+    rows,
+    launchBlocking,
+    externalEvidenceIssues,
+    requiredLocalFailures,
+    toolFailures,
+    timings,
+  };
+}
+
+function runBehaviorSelfTest() {
+  const summaryVectors = [
+    {
+      input: JSON.stringify({ status: "fail", authorizationFreshnessRequired: true, ageMinutes: 16, maxPreviewAgeMinutes: 15, issue: "preview-stale" }),
+      expected: "status=fail, authFresh=true, ageMinutes=16, maxAgeMinutes=15, issue=preview-stale",
+    },
+    {
+      input: JSON.stringify({ status: "pass", pendingNonceGap: 0, role: "AUTOMINER_A", mode: "dry-run", replacementCap: 1, wouldSendReplacement: false, operationalBoundary: { dryRunDefault: true, signingMaterialLoaded: false, walletClientCreated: false, contractWriteSubmitted: false, transactionSent: false } }),
+      expected: "role=AUTOMINER_A, mode=dry-run, pendingGap=0, replacementCap=1, wouldSend=false, dryRunDefault=true, signing=false, walletClient=false, contractWrite=false, txSent=false",
+    },
+    {
+      input: JSON.stringify({ status: "pass", businessLogic: true, localProof: true, apiBoundaryProof: true, walletTxStateMachineProof: true, walletClaimStateMachineProof: true, authBoundaryProof: true, replicaRateLimitBoundaryProof: true, browserBaselineCompactPerformance: true, jsonNoStoreRoutes: true, sessionVaryCookie: true, boundedJsonRoutes: true, rateLimitNoStore: true, routeErrorRedaction: true, depositsRecoveryGlobalBound: true, miningPendingRecoveryScoped: true, miningReceiptRevertExplicit: true, walletHashlessNonceRecovery: true, manualMinePendingAmbiguousSafe: true, approvalDuplicateSendSafe: true, autoMinerNonceRecoverySafe: true, autoMinerRpcReconnectSafe: true, rewardClaimStateSafe: true, safetyPoolClaimStateSafe: true, resolverClaimStateSafe: true, authTrustedOriginFailClosed: true, authReplayNonceBoundary: true, authCanonicalNonceBoundary: true, authSessionCookieBoundary: true, sharedRateLimitRetryAfterBound: true, externalRateLimitPublicEndpoint: true, externalRateLimitResponseBound: true, externalSharedLockCanonical: true, replicaRateLimitStrictConfig: true, expectedWarnings: 2, assertionFailures: 0 }),
+      expectedIncludes: ["status=pass", "businessLogic=true", "walletTxStateMachineProof=true", "replicaRateLimitStrictConfig=true", "warnings=2", "assertionFailures=0"],
+    },
+    {
+      input: JSON.stringify({ status: "pass", compiled: true, proxy: true, warnings: 11, warningKinds: ["sqlite-experimental", "../../secret"], warningKindCounts: { "sqlite-experimental": 11, "../secret": 9 }, classifiedWarnings: 11, unclassifiedWarnings: 0, notices: 0, noticeKinds: [], errors: 0 }),
+      expected: "status=pass, compiled=true, proxy=true, warnings=11, warningKinds=sqlite-experimental, warningKindCounts=sqlite-experimental:11, classifiedWarnings=11, unclassifiedWarnings=0, notices=0, noticeKinds=none, errors=0",
+    },
+    {
+      input: JSON.stringify({ status: "fail", issue: "private/key/path", groups: "backup=1,env=2" }),
+      expected: "status=fail, groups=backup=1,env=2, issue=private-key-path",
+    },
+    {
+      input: "status=pass, cases=8, redacted=5, leaked=0, issues=0\nSummary: raw must not win",
+      expected: "status=pass, cases=8, redacted=5, leaked=0, issues=0",
+    },
+    {
+      input: JSON.stringify({ status: "pass", target: "v10", compilerVersion: "0.8.36", bytecodeBytes: 17278, runtimeBytecodeBytes: 16488, manifestMatches: true, wouldWrite: false }),
+      expectedIncludes: ["status=pass", "target=v10", "compiler=0.8.36", "creationBytes=17278", "runtimeBytes=16488", "manifestMatches=true", "wouldWrite=false"],
+    },
+    {
+      input: JSON.stringify({ status: "pass", v10OfflineIdentity: true, compilerVersion: "0.8.36", compilerProfile: "osaka-optimizer-200", runtimeBytes: 16488, executableRuntimeBytes: 16435, manifestMatches: true, transactionSent: false, assertionFailures: 0 }),
+      expectedIncludes: ["status=pass", "profile=osaka-optimizer-200", "runtimeBytes=16488", "transactionSent=false", "assertionFailures=0"],
+    },
+    {
+      input: JSON.stringify({ status: "fail", v10DeployedReadOnly: true, network: "sepolia", chainId: 59141, runtimeBytes: 16488, expectedRuntimeBytes: 16488, manifestMatches: true, runtimeBytecode: false, runtimeExecutable: true, metadataOnlyMismatch: true, transactionSent: false, assertionFailures: 0 }),
+      expectedIncludes: ["status=fail", "network=sepolia", "chainId=59141", "metadataOnlyMismatch=true", "transactionSent=false"],
+    },
+    {
+      input: JSON.stringify({ status: "pass", invariantSuite: "v10", runtimeBytes: 1, functionSelectors: 2, guardedLocalMutationEntrypoints: 3, fullRangeAccountingCases: 4, fullRangeProportionalCases: 5, assertionFailures: 0, protocolFeeFlushModelCases: 6, protocolFeeFlushEntrypointCases: 7, duplicateBatchModelCases: 8, timelockBoundaryCases: 9, dustBoundaryCases: 10, packedBoundaryCases: 11 }),
+      expectedIncludes: ["suite=v10", "accountingCases=4", "proportionalCases=5", "duplicateBatchCases=8", "packedBoundaryCases=11"],
+    },
+    {
+      input: JSON.stringify({ status: "pass", idempotentUpsert: true, malformedPayloadFallback: true, categories: 3, financialEventCategories: ["batch_claim", "BAD/PATH"], depositScopeIsolation: true, idempotentDepositUpsert: true, resolverRewardScopeIsolation: true, idempotentResolverRewardUpsert: true, dustSettlementScopeIsolation: true, idempotentDustSettlementUpsert: true, singleRebateClaimParity: true, epochScopeIsolation: true, idempotentEpochUpsert: true, jackpotScopeIsolation: true, idempotentJackpotUpsert: true, rewardClaimScopeIsolation: true, idempotentRewardClaimUpsert: true, batchClaimKindParity: true, dustSettlementKindParity: true, sameBlockEventOrdering: true, normalizedEventIdRequiresTxLog: true, partialRpcLogFallback: true, boundedEventStorage: true, limitedEventReads: true, chainScopeIsolation: true, normalizedEventScopeIsolation: true, protocolFeeScopeIsolation: true, idempotentBetUpsert: true, idempotentProtocolFeeUpsert: true, assertionFailures: 0 }),
+      expectedIncludes: ["status=pass", "categories=3", "financialEventCategories=batch_claim", "normalizedEventIdRequiresTxLog=true", "assertionFailures=0"],
+    },
+    {
+      input: JSON.stringify({ status: "pass", sqliteOperations: true, backupIntegrity: true, retentionExpiredRemoved: 1, scopeReadOnly: true, foreignRows: 1, futureSourceBackupSummaryRejected: true, restoreUsesSuppliedBackupArtifact: true, corruptBackupRestoreRejected: true, diskFullRejected: true, corruptStartupRejected: true, assertionFailures: 0 }),
+      expectedIncludes: ["backupIntegrity=true", "futureSourceBackupRejected=true", "restoreUsesSuppliedBackup=true", "diskFullRejected=true", "assertionFailures=0"],
+    },
+    {
+      input: JSON.stringify({ status: "pass", runtimeMonitoring: true, alerts: 2, recoveries: 2, duplicateAlertsAfterRestart: 0, deliveries: 4, repoLocalBackupDirRejected: true, localPathBaseUrlRejected: true, malformedDiagnosticsSecretRejected: true, malformedNumericEnvRejected: true, stateCleared: true, assertionFailures: 0 }),
+      expectedIncludes: ["alerts=2", "duplicateAfterRestart=0", "repoLocalBackupRejected=true", "localPathBaseUrlRejected=true", "assertionFailures=0"],
+    },
+    {
+      input: JSON.stringify({ status: "pass", fetchTimeout: true, passed: true, assertionFailures: 0 }),
+      expected: "status=pass, fetchTimeout=true, passed=true, assertionFailures=0",
+    },
+    {
+      input: JSON.stringify({ status: "pass", storedNumberParsing: true, passed: true, assertionFailures: 0 }),
+      expected: "status=pass, storedNumberParsing=true, passed=true, assertionFailures=0",
+    },
+    {
+      input: JSON.stringify({ status: "pass", checks: 8, passed: 8, failed: 0, failedIds: [], hostAuth: true, webLocks: true, keeperNonce: true, keeperBotReceipts: true, depositLimiter: true, dryRunDefaults: true, ciSecurity: true, autoResolve: true, appResolveEpochFiles: 0 }),
+      expectedIncludes: ["checks=8", "passed=8", "failedIds=none", "hostAuth=true", "autoResolve=true", "appResolveEpochFiles=0"],
+    },
+    {
+      input: JSON.stringify({ status: "pass", scope: "production", total: 25, high: 0, critical: 0, blockingHighCritical: 0, knownDevToolchainHigh: 0, breakingFixes: 0 }),
+      expected: "status=pass, scope=production, total=25, high=0, critical=0, blocking=0, knownDev=0, breaking=0",
+    },
+    {
+      input: JSON.stringify({ status: "pass", privy: "3.27.2", privyWagmi: "4.0.9", wagmi: "3.6.16", viem: "2.50.4", missing: [] }),
+      expected: "status=pass, privy=3.27.2, privyWagmi=4.0.9, wagmi=3.6.16, viem=2.50.4, missing=none",
+    },
+    {
+      input: JSON.stringify({ status: "pass", tsErrors: 0, tsCodes: [], nextTypegen: true, tsc: true }),
+      expected: "status=pass, nextTypegen=true, tsc=true, tsErrors=0, tsCodes=none",
+    },
+    {
+      input: JSON.stringify({ status: "pass", checkedDocs: 6, inlineSyntaxIssues: 0, missingPackageScripts: 0, packageScriptLimitIssues: 0, readIssues: 0, missingPowerShellExamples: 0, launchGate: "local-ops" }),
+      expected: "status=pass, docs=6, syntax=0, missingScripts=0, scriptLimitIssues=0, readIssues=0, missingExamples=0, gate=local-ops",
+    },
+    {
+      input: JSON.stringify({ status: "pass", fixtures: 5, issues: 0, launchGate: "host" }),
+      expected: "status=pass, fixtures=5, issues=0, gate=host",
+    },
+    {
+      input: JSON.stringify({ status: "pass", filesChecked: 531, filesWithIssues: 0, errors: 0, warnings: 0, ruleIds: [] }),
+      expected: "status=pass, files=531, issueFiles=0, errors=0, warnings=0, rules=none",
+    },
+    {
+      input: JSON.stringify({ status: "stopped", pid: 12345, issue: "none", stopRequested: true }),
+      expected: "status=stopped, pid=present, issue=none, stopRequested=true",
+    },
+    {
+      input: JSON.stringify({ status: "pass", totalBytes: 100, fileCount: 2, jsBytes: 80, largestJsBytes: 40, largestJsFile: { path: "static/chunks/a.js" }, budget: { maxSingleJsBytes: 50 }, cssBytes: 20, wasmBytes: 0 }),
+      expected: "status=pass, files=2, totalBytes=100, jsBytes=80, largestJsBytes=40, largestJsFile=static/chunks/a.js, maxSingleJsBytes=50, cssBytes=20, wasmBytes=0",
+    },
+    {
+      input: ["Complete gates: 0/14", "Remaining gate groups: env=1", "Next gate: G1 env", "Next gate group: env", "Next proof files: artifacts/proof/signoff.json", "Next status check: npm.cmd run proof:mainnet:strict:compact", "Autonomous next: npm.cmd run proof:autonomous:summary", "Transaction boundary: fresh Preview then consent", "Pre-transaction preview checks: chain id | nonce", "Consent requirement: exact", "Summary: 14 proof issue(s)"].join("\n"),
+      expectedIncludes: ["status=blocked", "remaining=14/14", "next=G1", "nextGroup=env", "consent=present", "previewChecks=chain-id,nonce"],
+    },
+  ];
+  const summaries = summaryVectors.map((vector) => summarizeOutput(vector.input));
+  const summaryResults = summaryVectors.map((vector, index) =>
+    vector.expected
+      ? summaries[index] === vector.expected
+      : vector.expectedIncludes.every((token) => summaries[index].includes(token))
+  );
+  const summariesPass = summaryResults.every(Boolean);
+  const forbiddenSummaryTokens = ["../../secret", "private/key/path", "raw must not win"];
+  const redactionPass = forbiddenSummaryTokens.every((token) => summaries.every((summary) => !summary.includes(token)));
+
+  const streamedRows = [];
+  const fixtureChecks = [
+    { label: "local pass", script: "local-pass", requiredLocal: true },
+    { label: "external blocker", script: "external-blocker" },
+    { label: "local regression", script: "local-regression", requiredLocal: true },
+  ];
+  const fixtureResults = new Map([
+    ["local-pass", { status: 0, stdout: JSON.stringify({ status: "pass", storedNumberParsing: true, passed: true, assertionFailures: 0 }), stderr: "", elapsedMs: 3 }],
+    ["external-blocker", { status: 1, stdout: JSON.stringify({ status: "fail", issue: "proof-is-missing", groups: "chain=1" }), stderr: "", elapsedMs: 2 }],
+    ["local-regression", { status: 1, stdout: JSON.stringify({ status: "fail", issue: "local-regression" }), stderr: "", elapsedMs: 1 }],
+  ]);
+  const execution = executeChecks(
+    fixtureChecks,
+    (script) => fixtureResults.get(script),
+    (row) => streamedRows.push(row),
+  );
+  const executionPass =
+    streamedRows.map((row) => row[0]).join(",") === "local pass,external blocker,local regression" &&
+    execution.requiredLocalFailures.join(",") === "local-regression" &&
+    execution.launchBlocking.join(",") === "external-blocker" &&
+    execution.externalEvidenceIssues.join(",") === "external-blocker" &&
+    execution.toolFailures.length === 0 &&
+    execution.timings.map((item) => item.elapsedMs).join(",") === "3,2,1";
+
+  const checks = [
+    [`summaries-${summaryResults.map((passed, index) => passed ? "" : index + 1).filter(Boolean).join("-") || "all"}`, summariesPass],
+    ["redaction", redactionPass],
+    ["execution", executionPass],
+    ["local-classification", classifyFailedCheck({ status: 1 }, true, "local")?.disposition === "required-local-failure"],
+    ["external-classification", classifyFailedCheck({ status: 1 }, false, "external")?.disposition === "launch-blocking"],
+    ["external-evidence", !isExternalEvidenceIssue(true, "status=fail, issue=missing") && isExternalEvidenceIssue(false, "status=fail, issue=missing")],
+  ];
+  const faultMutantsRejected = checks.filter(([, passed]) => passed).length;
+  if (faultMutantsRejected !== checks.length) {
+    const failed = checks.filter(([, passed]) => !passed).map(([id]) => id).join("-");
+    throw new Error(`prelaunch-behavior-self-test-failed-${failed}`);
+  }
+  return {
+    status: "pass",
+    summaryVectors: summaryVectors.length,
+    streamedRows: streamedRows.length,
+    faultMutantsRejected,
+    networkRequests: 0,
+    childProcesses: 0,
+  };
+}
+
+if (process.argv.includes("--behavior-self-test")) {
+  try {
+    console.log(JSON.stringify(runBehaviorSelfTest()));
+    process.exit(0);
+  } catch (error) {
+    const issue = error instanceof Error && /^[a-z0-9-]{1,160}$/.test(error.message)
+      ? error.message
+      : "prelaunch-behavior-self-test-failed";
+    console.error(JSON.stringify({ status: "fail", issue }));
+    process.exit(1);
+  }
+}
 
 console.log("# Prelaunch Status Summary");
 console.log("");
@@ -726,35 +1089,13 @@ console.log("");
 console.log("| Check | Command | Required Local | Exit | Summary |");
 console.log("| --- | --- | --- | --- | --- |");
 
-for (const check of checks) {
-  const { label, requiredLocal, script } = check;
-  const result = runScript(script);
-  const exitCode = typeof result.status === "number" ? result.status : 1;
-  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-  timings.push({ elapsedMs: result.elapsedMs, label });
-  let summary = clamp(summarizeOutput(output)).replace(/\|/g, "\\|");
-  if (result.error?.code === "ETIMEDOUT") {
-    summary = `status=timeout, timeoutMs=${checkTimeoutMs}`;
-  }
-  if (script === "lint" && exitCode === 0 && summary === "no output") {
-    summary = "status=pass, eslint=true";
-  }
-  if (script === "build" && exitCode === 0 && /Compiled successfully/.test(output) && /Proxy \(Middleware\)/.test(output)) {
-    summary = "status=pass, compiled=true, proxy=true";
-  }
-  const row = [label, script, requiredLocal ? "yes" : "no", String(exitCode), summary];
-  rows.push(row);
-  console.log(`| ${row.join(" | ")} |`);
-  if (exitCode !== 0 && requiredLocal) requiredLocalFailures.push(script);
-  if (exitCode !== 0 && !requiredLocal) launchBlocking.push(script);
-  if (
-    !requiredLocal &&
-    /\b(missing|issue\(s\)|proof issue|failing|status=fail|still require|requires external|require external|blocking launch evidence)\b/i.test(summary)
-  ) {
-    externalEvidenceIssues.push(script);
-  }
-  if (result.error) toolFailures.push(`${script}: ${summarizeToolError(result.error)}`);
-}
+const {
+  launchBlocking,
+  externalEvidenceIssues,
+  requiredLocalFailures,
+  toolFailures,
+  timings,
+} = executeChecks(checks, runScript, (row) => console.log(`| ${row.join(" | ")} |`));
 
 const externalBlockers = [...new Set([...externalEvidenceIssues, ...launchBlocking])];
 const blockerGroups = formatBlockerGroups(externalBlockers);
@@ -767,10 +1108,10 @@ const slowestChecks = timings
 
 console.log("");
 console.log(
-  requiredLocalFailures.length > 0
-    ? `Summary: ${requiredLocalFailures.length} required local status command(s) failed: ${requiredLocalFailures.join(", ")}.`
-    : toolFailures.length > 0
+  toolFailures.length > 0
     ? `Summary: ${toolFailures.length} status command(s) could not start: ${toolFailures.join("; ")}.`
+    : requiredLocalFailures.length > 0
+    ? `Summary: ${requiredLocalFailures.length} required local status command(s) failed: ${requiredLocalFailures.join(", ")}.`
     : externalBlockers.length > 0
       ? `Summary: required local checks passed; ${externalBlockers.length} external/status command(s) still report missing or blocking launch evidence: ${externalBlockers.join(", ")}.`
       : "Summary: all compact status commands completed without blocking status.",

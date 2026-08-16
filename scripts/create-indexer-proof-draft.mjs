@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { normalizeProofOrigin } from "./collect-proof-common.mjs";
 
 function refuseFinalProofOutput(outPath) {
   const normalized = path.relative(process.cwd(), outPath).replace(/\\/g, "/");
@@ -57,18 +58,8 @@ function firstMatchingLine(text, pattern) {
     .find((line) => pattern.test(line));
 }
 
-function normalizedOrigin(value) {
-  try {
-    const url = new URL(String(value ?? "").trim());
-    if (url.username || url.password) return "";
-    return `${url.protocol}//${url.host}`.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
 function expectedProductionHealthOrigin() {
-  return normalizedOrigin(process.env.PROD_HEALTH_BASE_URL || "https://playlore.xyz");
+  return normalizeProofOrigin(process.env.PROD_HEALTH_BASE_URL || "https://playlore.xyz");
 }
 
 function parseKeyValues(line = "") {
@@ -292,7 +283,7 @@ requireMatchingIndexerLine(finalityLine, "Finality blocks", finalityBlocks);
 requireCondition(Boolean(finishLine), "--indexer-log must include [indexer] Finished runOnce");
 requireCondition(!/\[indexer\]\s+Fatal:/i.test(indexerLog), "--indexer-log must not include [indexer] Fatal");
 requireCondition(finalityLagIsNumeric, "--health-log must include canonical non-negative decimal finalityLagBlocks=<number>");
-requireCondition(normalizedOrigin(healthValues.base) === expectedProductionHealthOrigin(), "--health-log must include base=<production origin>");
+  requireCondition(normalizeProofOrigin(healthValues.base) === expectedProductionHealthOrigin(), "--health-log must include base=<production origin>");
 requireMatchingChainId("expectedChainId", expectedSnapshotChainId, chainId);
 requireMatchingChainId("rpcChainId", rpcSnapshotChainId, chainId);
 requireCondition(hasIsoTimestamp(snapshotGeneratedAt), "--chain-snapshot must include generatedAt as ISO-8601 UTC");

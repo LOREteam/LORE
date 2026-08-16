@@ -1,8 +1,16 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-
-const MAX_KEY_VALUE_MARKERS = 64;
-const MAX_HOST_EVIDENCE_BYTES = 512 * 1024;
+import { isFinalHttpsOrigin, sameProofOrigin } from "./collect-proof-common.mjs";
+import {
+  hostEvidenceRegularFileStat,
+  parseHostEvidenceKeyValues as parseKeyValues,
+  parseHostEvidenceNonNegativeDecimal as parseNonNegativeDecimal,
+  parseHostEvidenceNonNegativeInteger as parseNonNegativeInteger,
+  parseHostLoadMaxErrorRate as parseLoadMaxErrorRate,
+  parseHostLoadMaxP95Ms as parseLoadMaxP95Ms,
+  readHostEvidenceLog,
+  requireDistinctHostEvidenceArtifacts,
+} from "./host-evidence-policy.mjs";
 
 function refuseFinalProofOutput(outPath) {
   const normalized = path.relative(process.cwd(), outPath).replace(/\\/g, "/");
@@ -25,52 +33,13 @@ function requireConcreteValue(name, value) {
   return value;
 }
 
-function regularFileStat(filePath) {
-  try {
-    const stat = statSync(filePath);
-    return stat.isFile() ? stat : null;
-  } catch {
-    return null;
-  }
-}
-
-function readRequiredLog(name, filePath) {
-  requireConcreteValue(name, filePath);
-  const resolved = path.resolve(process.cwd(), filePath);
-  const stat = regularFileStat(resolved);
-  if (!stat) {
-    throw new Error(`--${name} must point to an existing redacted artifact`);
-  }
-  if (stat.size > MAX_HOST_EVIDENCE_BYTES) {
-    throw new Error(`--${name} artifact is too large to validate safely`);
-  }
-  return readFileSync(resolved, "utf8");
-}
-
 function requireExistingArtifact(name, filePath) {
   requireConcreteValue(name, filePath);
   const resolved = path.resolve(process.cwd(), filePath);
-  if (!regularFileStat(resolved)) {
+  if (!hostEvidenceRegularFileStat(resolved)) {
     throw new Error(`--${name} must point to an existing redacted artifact`);
   }
   return filePath;
-}
-
-function sameArtifact(left, right) {
-  return path.resolve(process.cwd(), left).toLowerCase() === path.resolve(process.cwd(), right).toLowerCase();
-}
-
-function requireDistinctArtifactInputs(entries) {
-  for (let i = 0; i < entries.length; i += 1) {
-    for (let j = i + 1; j < entries.length; j += 1) {
-      const [leftName, leftPath] = entries[i];
-      const [rightName, rightPath] = entries[j];
-      if (!leftPath || !rightPath) continue;
-      if (sameArtifact(leftPath, rightPath)) {
-        throw new Error(`--${leftName} and --${rightName} must point to distinct host evidence files`);
-      }
-    }
-  }
 }
 
 function requireCondition(condition, message) {
@@ -87,63 +56,8 @@ function requireExternalDbPath(value) {
   requireCondition(path.isAbsolute(value) && !pathInsideOrSame(absolute, process.cwd()), "--db-path/LORE_DB_PATH must be an absolute path outside the repo checkout");
 }
 
-function normalizedOrigin(value) {
-  try {
-    const url = new URL(String(value ?? "").trim());
-    if (url.username || url.password) return "";
-    return url.origin.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-function isFinalHttpsOrigin(value) {
-  try {
-    const url = new URL(String(value ?? "").trim());
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.pathname === "/" &&
-      url.search === "" &&
-      url.hash === "" &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^0\./.test(host) ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
-        /^169\.254\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
-        /^192\.0\.2\./.test(host) ||
-        /^198\.(1[89])\./.test(host) ||
-        /^198\.51\.100\./.test(host) ||
-        /^203\.0\.113\./.test(host) ||
-        /^::ffff:/i.test(host) ||
-        /^f[cd][0-9a-f]*:/i.test(host) ||
-        /^fe[89ab][0-9a-f]*:/i.test(host) ||
-        /^2001:db8:/i.test(host)
-      );
-  } catch {
-    return false;
-  }
-}
-
 function sameOrigin(left, right) {
-  const normalizedLeft = normalizedOrigin(left);
-  const normalizedRight = normalizedOrigin(right);
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+  return sameProofOrigin(left, right);
 }
 
 function firstMatchingLine(text, pattern) {
@@ -151,63 +65,6 @@ function firstMatchingLine(text, pattern) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => pattern.test(line));
-}
-
-function parseKeyValues(line = "") {
-  const result = {};
-  const pattern = /([a-zA-Z][a-zA-Z0-9]*)=([^\s]+)/g;
-  let inspected = 0;
-  let match = pattern.exec(line);
-  while (match) {
-    inspected += 1;
-    if (inspected > MAX_KEY_VALUE_MARKERS) {
-      throw new Error("host health evidence has too many key/value markers to validate safely");
-    }
-    result[match[1]] = match[2];
-    match = pattern.exec(line);
-  }
-  return result;
-}
-
-const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
-const DECIMAL_NUMBER_RE = /^(?:0|[1-9]\d{0,15})(?:\.\d{1,6})?$/;
-const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-
-function parseNonNegativeInteger(value, fallback) {
-  const normalized = String(value ?? "").trim();
-  if (normalized === "") return fallback;
-  if (!DECIMAL_INTEGER_RE.test(normalized)) return fallback;
-  const parsed = BigInt(normalized);
-  if (parsed > MAX_SAFE_INTEGER_BIGINT) return fallback;
-  return Number(parsed);
-}
-
-function parseNonNegativeDecimal(value, fallback) {
-  const normalized = String(value ?? "").trim();
-  if (normalized === "") return fallback;
-  if (!DECIMAL_NUMBER_RE.test(normalized)) return fallback;
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-function parseLoadMaxErrorRate() {
-  const raw = process.env.LOAD_MAX_ERROR_RATE;
-  if (raw == null || raw === "") return 0.01;
-  const parsed = parseNonNegativeDecimal(raw, Number.NaN);
-  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
-    throw new Error("LOAD_MAX_ERROR_RATE must be a canonical decimal rate between 0 and 1");
-  }
-  return parsed;
-}
-
-function parseLoadMaxP95Ms() {
-  const raw = process.env.LOAD_MAX_P95_MS;
-  if (raw == null || raw === "") return 1500;
-  const parsed = parseNonNegativeInteger(raw, Number.NaN);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error("LOAD_MAX_P95_MS must be a canonical positive integer of milliseconds");
-  }
-  return parsed;
 }
 
 function parseHealth(log) {
@@ -287,9 +144,9 @@ refuseFinalProofOutput(outPath);
 const healthLogPath = argValue("health-log");
 const loadLogPath = argValue("load-log");
 const processEvidencePath = argValue("process-evidence", "");
-requireDistinctArtifactInputs([["process-evidence", processEvidencePath], ["health-log", healthLogPath], ["load-log", loadLogPath]]);
-const healthLog = readRequiredLog("health-log", healthLogPath);
-const loadLog = readRequiredLog("load-log", loadLogPath);
+requireDistinctHostEvidenceArtifacts([["process-evidence", processEvidencePath], ["health-log", healthLogPath], ["load-log", loadLogPath]]);
+const healthLog = readHostEvidenceLog("health-log", requireConcreteValue("health-log", healthLogPath), { required: true });
+const loadLog = readHostEvidenceLog("load-log", requireConcreteValue("load-log", loadLogPath), { required: true });
 const origin = requireConcreteValue("origin", argValue("origin", process.env.NEXT_PUBLIC_SITE_URL || ""));
 const hostType = argValue("host-type", "production");
 const loadOrigin = requireConcreteValue("load-origin", argValue("load-origin", process.env.LOAD_BASE_URL || process.env.LOAD_HTTP_BASE_URL || ""));

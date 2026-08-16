@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { redactProofText } from "./redact-proof-output.mjs";
 
 const COMPILER_VERSION = "0.8.36";
@@ -8,15 +10,18 @@ const BUG_DATABASE_URL =
 const MAX_BUG_DATABASE_BYTES = 512 * 1024;
 const CONTENT_LENGTH_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-const summaryOnly = process.argv.includes("--summary-only");
-
-function describeAdvisoryError(error) {
+export function describeAdvisoryError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  const safe = redactProofText(message).replace(/\s+/g, " ").trim();
+  const safe = redactProofText(message)
+    .replace(/\bS-\d+(?:-\d+){2,}\b/g, "<redacted-sid>")
+    .replace(/(?:https?|wss):\/\/\S+/gi, "<redacted-url>")
+    .replace(/(?:[A-Za-z]:[\\/]|\/(?:home|tmp|var|Users)\/)[^\s'"`]+/g, "<redacted-path>")
+    .replace(/\s+/g, " ")
+    .trim();
   return safe.length > 220 ? `${safe.slice(0, 217)}...` : safe;
 }
 
-function parseContentLengthHeader(value) {
+export function parseContentLengthHeader(value) {
   if (value == null || value === "") return null;
   if (!CONTENT_LENGTH_RE.test(value)) {
     throw new Error("Official Solidity bug database response has invalid content-length");
@@ -28,7 +33,7 @@ function parseContentLengthHeader(value) {
   return Number(parsed);
 }
 
-async function readBoundedJsonResponse(response) {
+export async function readBoundedJsonResponse(response) {
   const contentLength = parseContentLengthHeader(response.headers.get("content-length"));
   if (contentLength !== null && contentLength > MAX_BUG_DATABASE_BYTES) {
     throw new Error("Official Solidity bug database response is too large");
@@ -52,13 +57,16 @@ async function readBoundedJsonResponse(response) {
   return JSON.parse(text);
 }
 
-async function fetchOfficialBugDatabase() {
+export async function fetchOfficialBugDatabase({
+  fetchImpl = globalThis.fetch,
+  timeoutSignal = (timeoutMs) => AbortSignal.timeout(timeoutMs),
+} = {}) {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      const response = await fetch(BUG_DATABASE_URL, {
+      const response = await fetchImpl(BUG_DATABASE_URL, {
         headers: { accept: "application/json" },
-        signal: AbortSignal.timeout(15_000),
+        signal: timeoutSignal(15_000),
       });
       if (!response.ok) {
         throw new Error(`Official Solidity bug database returned HTTP ${response.status}`);
@@ -72,7 +80,7 @@ async function fetchOfficialBugDatabase() {
   throw lastError;
 }
 
-function validateCompilerEntry(entry) {
+export function validateCompilerEntry(entry) {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     throw new Error(`Official Solidity bug database has no ${COMPILER_VERSION} entry`);
   }
@@ -92,7 +100,7 @@ function validateCompilerEntry(entry) {
   return entry;
 }
 
-async function runSelfTest() {
+export async function runSelfTest({ writeLine = (line) => console.log(line) } = {}) {
   assert.deepEqual(validateCompilerEntry({ bugs: [], released: EXPECTED_RELEASE_DATE }), {
     bugs: [],
     released: EXPECTED_RELEASE_DATE,
@@ -152,13 +160,17 @@ async function runSelfTest() {
       ),
     TypeError,
   );
-  console.log(JSON.stringify({ status: "pass", mode: "self-test" }));
+  writeLine(JSON.stringify({ status: "pass", mode: "self-test" }));
 }
 
-async function runAdvisoryCheck() {
-  const database = await fetchOfficialBugDatabase();
+export async function runAdvisoryCheck({
+  fetchImpl = globalThis.fetch,
+  timeoutSignal = (timeoutMs) => AbortSignal.timeout(timeoutMs),
+  writeLine = (line) => console.log(line),
+} = {}) {
+  const database = await fetchOfficialBugDatabase({ fetchImpl, timeoutSignal });
   const entry = validateCompilerEntry(database?.[COMPILER_VERSION]);
-  console.log(
+  writeLine(
     JSON.stringify({
       status: "pass",
       compilerVersion: COMPILER_VERSION,
@@ -169,21 +181,38 @@ async function runAdvisoryCheck() {
   );
 }
 
-try {
-  if (process.argv.includes("--self-test")) {
-    await runSelfTest();
-  } else {
-    await runAdvisoryCheck();
+export async function runCompilerAdvisoryCli({
+  argv = process.argv.slice(2),
+  fetchImpl = globalThis.fetch,
+  timeoutSignal = (timeoutMs) => AbortSignal.timeout(timeoutMs),
+  writeLine = (line) => console.log(line),
+} = {}) {
+  const summaryOnly = argv.includes("--summary-only");
+  try {
+    if (argv.includes("--self-test")) {
+      await runSelfTest({ writeLine });
+    } else {
+      await runAdvisoryCheck({ fetchImpl, timeoutSignal, writeLine });
+    }
+    return 0;
+  } catch (error) {
+    if (!summaryOnly) throw error;
+    writeLine(
+      JSON.stringify({
+        status: "fail",
+        compilerVersion: COMPILER_VERSION,
+        issue: describeAdvisoryError(error),
+        source: "official-solidity-bug-database",
+      }),
+    );
+    return 1;
   }
-} catch (error) {
-  if (!summaryOnly) throw error;
-  console.log(
-    JSON.stringify({
-      status: "fail",
-      compilerVersion: COMPILER_VERSION,
-      issue: describeAdvisoryError(error),
-      source: "official-solidity-bug-database",
-    }),
-  );
-  process.exitCode = 1;
+}
+
+function isDirectRun() {
+  return Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+}
+
+if (isDirectRun()) {
+  process.exitCode = await runCompilerAdvisoryCli();
 }

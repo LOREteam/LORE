@@ -24,6 +24,16 @@ import {
   getLineaChain,
   getStableLineaReadRpcs,
 } from "../config/publicConfig";
+import {
+  MAX_V10_COMPILATION_MANIFEST_BYTES,
+  MAX_V10_COMPILER_CONFIG_BYTES,
+  MAX_V10_SOURCE_UNIT_BYTES,
+  canonicalizeV10Source,
+  createV10ImportReader,
+  readBoundedV10Utf8File,
+  readV10SourceUnit,
+  resolveContainedV10SourcePath,
+} from "./v10DeployedInputPolicy";
 
 const PREPARE_STANDARD_JSON = process.argv.includes("--prepare-standard-json");
 const PREPARE_REMIX_WORKSPACE = process.argv.includes("--prepare-remix-workspace");
@@ -39,52 +49,16 @@ const COMPILATION_MANIFEST_PATH = "contracts/LineaOreV10.compilation.json";
 const DEPLOYMENT_INITCODE_PATH = ".tmp/v10-canonical-initcode.hex";
 const STANDARD_JSON_PATH = ".tmp/v10-canonical-standard-json-input.json";
 const REMIX_WORKSPACE_PATH = ".tmp/v10-canonical-remix-workspace";
-const MAX_V10_SOURCE_UNIT_BYTES = 2 * 1024 * 1024;
-const MAX_V10_COMPILER_CONFIG_BYTES = 512 * 1024;
-const MAX_V10_COMPILATION_MANIFEST_BYTES = 512 * 1024;
 const EXPECTED_COMPILER = "0.8.36+commit.8a079791";
 const EIP_3860_INITCODE_LIMIT = 49_152;
-function canonicalizeSource(value: string) {
-  return value.replace(/\r\n?/g, "\n");
-}
-
-function readBoundedUtf8File(filePath: string, maxBytes: number, label: string) {
-  const stats = fs.statSync(filePath);
-  if (!stats.isFile()) {
-    throw new Error(`${label} must be a file: ${filePath}`);
-  }
-  if (stats.size > maxBytes) {
-    throw new Error(`${label} is too large to validate safely: ${filePath}`);
-  }
-  return fs.readFileSync(filePath, "utf8");
-}
-
-function readSourceUnit(sourceUnit: string) {
-  for (const candidate of [path.resolve(sourceUnit), path.resolve("node_modules", sourceUnit)]) {
-    try {
-      return canonicalizeSource(readBoundedUtf8File(candidate, MAX_V10_SOURCE_UNIT_BYTES, `Source unit ${sourceUnit}`));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
-      // Try the next deterministic local import root.
-    }
-  }
-  throw new Error(`Source unit not found: ${sourceUnit}`);
-}
-
-function readImport(importPath: string) {
-  try {
-    return { contents: readSourceUnit(importPath) };
-  } catch {
-    return { error: `Import not found: ${importPath}` };
-  }
-}
+const readImport = createV10ImportReader();
 
 function compileRuntime() {
   const compilerVersion = solc.version();
   assert.ok(compilerVersion.startsWith(EXPECTED_COMPILER), `Expected solc ${EXPECTED_COMPILER}, received ${compilerVersion}`);
-  const source = readSourceUnit(CONTRACT_PATH);
+  const source = readV10SourceUnit(CONTRACT_PATH);
   const compilerConfig = JSON.parse(
-    readBoundedUtf8File(COMPILER_CONFIG_PATH, MAX_V10_COMPILER_CONFIG_BYTES, "V10 compiler config"),
+    readBoundedV10Utf8File(COMPILER_CONFIG_PATH, MAX_V10_COMPILER_CONFIG_BYTES, "V10 compiler config"),
   );
   assert.equal(compilerConfig.language, "Solidity");
   assert.deepEqual(
@@ -122,13 +96,13 @@ function buildCanonicalStandardJson(
   compiled: ReturnType<typeof compileRuntime>,
 ) {
   const compilerConfig = JSON.parse(
-    readBoundedUtf8File(COMPILER_CONFIG_PATH, MAX_V10_COMPILER_CONFIG_BYTES, "V10 compiler config"),
+    readBoundedV10Utf8File(COMPILER_CONFIG_PATH, MAX_V10_COMPILER_CONFIG_BYTES, "V10 compiler config"),
   );
   const sourceUnitHashes = compilationManifest.sourceUnitsSha256 ?? {};
   const sourceUnits = Object.keys(sourceUnitHashes).sort();
   assert.ok(sourceUnits.includes(CONTRACT_PATH), "V10 manifest is missing the root source unit");
   const sources = Object.fromEntries(sourceUnits.map((sourceUnit) => {
-    const content = readSourceUnit(sourceUnit);
+    const content = readV10SourceUnit(sourceUnit);
     assert.equal(sha256(content), sourceUnitHashes[sourceUnit], `Source-unit hash mismatch: ${sourceUnit}`);
     return [sourceUnit, { content }];
   }));
@@ -158,21 +132,7 @@ function writeCanonicalRemixWorkspace(
   fs.mkdirSync(outputPath, { recursive: true });
   const sourceEntries = Object.entries(input.sources).sort(([left], [right]) => left.localeCompare(right));
   const resolveWorkspacePath = (sourceUnit: string) => {
-    const normalized = sourceUnit.replaceAll("\\", "/");
-    assert.equal(normalized, path.posix.normalize(normalized), `Unsafe source-unit path: ${sourceUnit}`);
-    assert.ok(
-      !path.posix.isAbsolute(normalized) && normalized !== ".." && !normalized.startsWith("../"),
-      `Unsafe source-unit path: ${sourceUnit}`,
-    );
-    const destination = path.resolve(outputPath, ...normalized.split("/"));
-    const relativeDestination = path.relative(outputPath, destination);
-    assert.ok(
-      relativeDestination !== ".." &&
-        !relativeDestination.startsWith(`..${path.sep}`) &&
-        !path.isAbsolute(relativeDestination),
-      `Source unit escapes workspace: ${sourceUnit}`,
-    );
-    return destination;
+    return resolveContainedV10SourcePath(outputPath, sourceUnit);
   };
   for (const [sourceUnit, source] of sourceEntries) {
     const destination = resolveWorkspacePath(sourceUnit);
@@ -184,15 +144,15 @@ function writeCanonicalRemixWorkspace(
   fs.mkdirSync(path.dirname(compilerConfigDestination), { recursive: true });
   fs.writeFileSync(
     compilerConfigDestination,
-    canonicalizeSource(readBoundedUtf8File(COMPILER_CONFIG_PATH, MAX_V10_COMPILER_CONFIG_BYTES, "V10 compiler config")),
+    canonicalizeV10Source(readBoundedV10Utf8File(COMPILER_CONFIG_PATH, MAX_V10_COMPILER_CONFIG_BYTES, "V10 compiler config")),
     { encoding: "utf8", mode: 0o600 },
   );
 
   const workspaceSources = Object.fromEntries(sourceEntries.map(([sourceUnit]) => [
     sourceUnit,
     {
-      content: canonicalizeSource(
-        readBoundedUtf8File(resolveWorkspacePath(sourceUnit), MAX_V10_SOURCE_UNIT_BYTES, `workspace source unit ${sourceUnit}`),
+      content: canonicalizeV10Source(
+        readBoundedV10Utf8File(resolveWorkspacePath(sourceUnit), MAX_V10_SOURCE_UNIT_BYTES, `workspace source unit ${sourceUnit}`),
       ),
     },
   ]));
@@ -219,8 +179,8 @@ function writeCanonicalRemixWorkspace(
     import(importPath: string) {
       try {
         return {
-          contents: canonicalizeSource(
-            readBoundedUtf8File(resolveWorkspacePath(importPath), MAX_V10_SOURCE_UNIT_BYTES, `workspace import ${importPath}`),
+          contents: canonicalizeV10Source(
+            readBoundedV10Utf8File(resolveWorkspacePath(importPath), MAX_V10_SOURCE_UNIT_BYTES, `workspace import ${importPath}`),
           ),
         };
       } catch {
@@ -390,7 +350,7 @@ async function main() {
   }
   const compiled = compileRuntime();
   const compilationManifest = JSON.parse(
-    readBoundedUtf8File(COMPILATION_MANIFEST_PATH, MAX_V10_COMPILATION_MANIFEST_BYTES, "V10 compilation manifest"),
+    readBoundedV10Utf8File(COMPILATION_MANIFEST_PATH, MAX_V10_COMPILATION_MANIFEST_BYTES, "V10 compilation manifest"),
   );
   assert.equal(sha256(compiled.creation), compilationManifest.bytecodeSha256, "V10 creation bytecode does not match its manifest");
   assert.equal(sha256(compiled.runtime), compilationManifest.runtimeBytecodeSha256, "V10 runtime bytecode does not match its manifest");

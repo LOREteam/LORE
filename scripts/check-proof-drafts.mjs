@@ -251,6 +251,7 @@ const qaOpenMediumSecurityScan = writeCanonicalSecurityScanBundle("qa-security-o
 });
 const { DatabaseSync } = await import("node:sqlite");
 const summaryOnly = process.argv.includes("--summary-only");
+const includeProofCases = process.argv.includes("--proof-cases") || process.argv.includes("--indexer-cases");
 const canaryLog = join(tmp, "canary.jsonl");
 const emptyCanaryLog = join(tmp, "empty-canary.jsonl");
 const canaryTargetArtifact = join(tmp, "canary-target-proof.log");
@@ -776,10 +777,30 @@ const qaMobileNoDeviceArtifact = join(tmp, "qa-mobile-no-device.md");
 const qaMobileNoDeviceManifest = join(tmp, "qa-mobile-no-device.json");
 const qaMobileTouchOnlyArtifact = join(tmp, "qa-mobile-touch-only.md");
 const qaMobileTouchOnlyManifest = join(tmp, "qa-mobile-touch-only.json");
+const qaMobileViewportOverflowArtifact = join(tmp, "qa-mobile-viewport-overflow.md");
+const qaMobileViewportOverflowManifest = join(tmp, "qa-mobile-viewport-overflow.json");
+const qaGenericWalletArtifact = join(tmp, "qa-generic-wallet-proof.md");
+const qaWalletSpecificCases = [
+  ["qa-desktop-connect-generic-wallet-proof", "desktopConnect"],
+  ["qa-desktop-disconnect-generic-wallet-proof", "desktopDisconnect"],
+  ["qa-desktop-reconnect-generic-wallet-proof", "desktopReconnect"],
+  ["qa-wrong-network-generic-wallet-proof", "wrongNetwork"],
+  ["qa-mobile-web3-browser-generic-wallet-proof", "mobileWeb3Browser"],
+  ["qa-clean-wallet-first-tx-generic-wallet-proof", "cleanWalletFirstTx"],
+  ["qa-slow-network-auth-modal-generic-wallet-proof", "slowNetworkAuthModal"],
+  ["qa-slow-network-chat-auth-generic-wallet-proof", "slowNetworkChatAuth"],
+];
+const qaWalletSpecificManifests = new Map(
+  qaWalletSpecificCases.map(([id, checkId]) => [id, { checkId, path: join(tmp, `${id}.json`) }]),
+);
 const qaValidStrictManifestPath = join(tmp, "qa-valid-strict.json");
 const qaSharedGroupArtifactManifest = join(tmp, "qa-shared-group-artifact.json");
 const qaFutureTimestampManifest = join(tmp, "qa-future-timestamp.json");
 const qaUnsafeTargetChainManifest = join(tmp, "qa-unsafe-target-chain-id.json");
+const qaProductionAppIdNotConfiguredManifest = join(tmp, "qa-production-app-id-not-configured.json");
+const qaPublicUrlEvidenceManifest = join(tmp, "qa-public-url-evidence.json");
+const qaPrivateUrlEvidenceManifest = join(tmp, "qa-private-url-evidence.json");
+const qaMissingAutoMinerLogFieldManifest = join(tmp, "qa-missing-auto-miner-log-field.json");
 const qaMissingSecurityScanManifest = join(tmp, "qa-missing-security-scan.json");
 const qaWrongCandidateRevisionManifest = join(tmp, "qa-wrong-candidate-revision.json");
 const qaWrongScanManifestDigestManifest = join(tmp, "qa-wrong-scan-manifest-digest.json");
@@ -798,6 +819,15 @@ writeFileSync(qaIrrelevantArtifact, "pm2 process list only\n", "utf8");
 writeFileSync(qaCleanWalletNoReceiptArtifact, "clean wallet first transaction hash verified\n", "utf8");
 writeFileSync(qaMobileNoDeviceArtifact, "mobile Web3 browser wallet flow verified\n", "utf8");
 writeFileSync(qaMobileTouchOnlyArtifact, "mobile Web3 browser touch targets verified\n", "utf8");
+writeFileSync(
+  qaMobileViewportOverflowArtifact,
+  [
+    "mobile Web3 browser wallet flow verified",
+    ...Array.from({ length: 33 }, () => "viewport 390x844"),
+  ].join("\n"),
+  "utf8",
+);
+writeFileSync(qaGenericWalletArtifact, "wallet transaction proof only\n", "utf8");
 const qaValidStrictManifest = {
   targetNetwork: "linea-mainnet",
   targetChainId: 59144,
@@ -908,6 +938,16 @@ writeFileSync(qaMobileTouchOnlyManifest, withQaArtifact(qaValidStrictManifest, q
   manifest.wallet.mobileWeb3Browser.evidencePath = artifact;
   return manifest;
 }), "utf8");
+writeFileSync(qaMobileViewportOverflowManifest, withQaArtifact(qaValidStrictManifest, qaMobileViewportOverflowArtifact, (manifest, artifact) => {
+  manifest.wallet.mobileWeb3Browser.evidencePath = artifact;
+  return manifest;
+}), "utf8");
+for (const { checkId, path } of qaWalletSpecificManifests.values()) {
+  writeFileSync(path, withQaArtifact(qaValidStrictManifest, qaGenericWalletArtifact, (manifest, artifact) => {
+    manifest.wallet[checkId].evidencePath = artifact;
+    return manifest;
+  }), "utf8");
+}
 writeFileSync(qaSharedGroupArtifactManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest, artifact) => {
   for (const check of Object.values(manifest.failureStateUx)) check.evidencePath = artifact;
   return manifest;
@@ -925,6 +965,24 @@ writeFileSync(qaFutureTimestampManifest, withQaArtifact(qaValidStrictManifest, q
 }), "utf8");
 writeFileSync(qaUnsafeTargetChainManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
   manifest.targetChainId = "9999999999999999";
+  return manifest;
+}), "utf8");
+writeFileSync(qaProductionAppIdNotConfiguredManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  manifest.wallet.privyAllowedOrigins.productionAppIdConfigured = false;
+  return manifest;
+}), "utf8");
+writeFileSync(qaPublicUrlEvidenceManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  delete manifest.wallet.desktopConnect.evidencePath;
+  manifest.wallet.desktopConnect.link = "https://evidence.playlore.xyz/desktop-wallet-connect.json";
+  return manifest;
+}), "utf8");
+writeFileSync(qaPrivateUrlEvidenceManifest, withQaArtifact(qaValidStrictManifest, qaWalletArtifact, (manifest) => {
+  delete manifest.wallet.desktopConnect.evidencePath;
+  manifest.wallet.desktopConnect.link = "https://127.0.0.1/desktop-wallet-connect.json";
+  return manifest;
+}), "utf8");
+writeFileSync(qaMissingAutoMinerLogFieldManifest, withQaArtifact(qaValidStrictManifest, qaSupportArtifact, (manifest) => {
+  manifest.supportAuditVisibility.autoMinerLogFields.fields = ["round", "epoch", "nonce", "txHash", "retryCount"];
   return manifest;
 }), "utf8");
 writeFileSync(qaDirectoryArtifactManifest, withQaArtifact(qaValidStrictManifest, qaDirectoryArtifact, (manifest, artifact) => {
@@ -1581,6 +1639,7 @@ writeFileSync(
 
 const monitoringIrrelevantArtifact = join(tmp, "monitoring-irrelevant.log");
 const monitoringIrrelevantAlertManifest = join(tmp, "monitoring-irrelevant-alert.json");
+const monitoringGenericAlertWordsManifest = join(tmp, "monitoring-generic-alert-words.json");
 const monitoringIrrelevantRecoveryManifest = join(tmp, "monitoring-irrelevant-recovery.json");
 const monitoringSharedAlertRecoveryManifest = join(tmp, "monitoring-shared-alert-recovery.json");
 const monitoringSharedSectionManifest = join(tmp, "monitoring-shared-section.json");
@@ -1636,6 +1695,13 @@ const monitoringValidStrictManifest = {
 };
 const monitoringValidStrictManifestPath = join(tmp, "monitoring-proof.valid.json");
 writeFileSync(monitoringValidStrictManifestPath, JSON.stringify(monitoringValidStrictManifest), "utf8");
+const monitoringGenericAlertWordsValue = structuredClone(monitoringValidStrictManifest);
+for (const monitor of monitoringGenericAlertWordsValue.monitors) {
+  delete monitor.evidencePath;
+  delete monitor.link;
+  monitor.notes = "monitor";
+}
+writeFileSync(monitoringGenericAlertWordsManifest, JSON.stringify(monitoringGenericAlertWordsValue), "utf8");
 writeFileSync(
   monitoringIrrelevantAlertManifest,
   JSON.stringify({
@@ -1805,7 +1871,9 @@ const restoreHealthLog = join(tmp, "restore-health-prod.log");
 const restoreHealthMissingRuntimeLog = join(tmp, "restore-health-missing-runtime.log");
 const restoreHealthMalformedFinalityLog = join(tmp, "restore-health-malformed-finality.log");
 const restoreHealthUnsafeFinalityLog = join(tmp, "restore-health-unsafe-finality.log");
+const restoreHealthTooManyMarkersLog = join(tmp, "restore-health-too-many-markers.log");
 const restoreHealthCredentialedBaseLog = join(tmp, "restore-health-credentialed-base.log");
+const restoreOversizedLog = join(tmp, "restore-oversized.log");
 const restoreMissingLogPath = join(tmp, "missing-restore-drill.log");
 const restoreBackupScheduleArtifact = join(tmp, "restore-backup-schedule.log");
 const restorePreservationArtifact = join(tmp, "restore-indexer-preservation.log");
@@ -1824,7 +1892,13 @@ writeFileSync(restoreHealthLog, "[prod-health] OK\nbase=https://restore.playlore
 writeFileSync(restoreHealthMissingRuntimeLog, "[prod-health] OK\nbase=https://restore.playlore.xyz dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
 writeFileSync(restoreHealthMalformedFinalityLog, "[prod-health] OK\nbase=https://restore.playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1e2\n", "utf8");
 writeFileSync(restoreHealthUnsafeFinalityLog, "[prod-health] OK\nbase=https://restore.playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=9999999999999999\n", "utf8");
+writeFileSync(
+  restoreHealthTooManyMarkersLog,
+  `[prod-health] OK\nbase=https://restore.playlore.xyz runtime=ok dataSync=ok finalityLagBlocks=1 ${Array.from({ length: 61 }, (_, index) => `extra${index}=1`).join(" ")}\n`,
+  "utf8",
+);
 writeFileSync(restoreHealthCredentialedBaseLog, "[prod-health] OK\nbase=https://user:pass@restore.playlore.xyz runtime=ok dataSync=ok effectiveLagBlocks=1 finalityLagBlocks=1\n", "utf8");
+writeFileSync(restoreOversizedLog, "x".repeat(512 * 1024 + 1), "utf8");
 writeFileSync(restoreBackupScheduleArtifact, "daily cron backup schedule active; latest backup completed successfully at lastSuccessfulBackupAt=2026-07-08T23:55:00.000Z; retentionDays=30 prune policy enabled\n", "utf8");
 writeFileSync(restorePreservationArtifact, "heartbeatBefore=abc heartbeatAfter=abc latestIndexedEpochBefore=1 latestIndexedEpochAfter=1\n", "utf8");
 const restoreMissingArtifact = join(tmp, "missing-restore-backup-schedule.log");
@@ -1890,9 +1964,20 @@ const restoreNoIntegrityManifest = join(tmp, "restore-no-integrity-artifact.json
 const restoreIrrelevantPreservationManifest = join(tmp, "restore-irrelevant-preservation-artifact.json");
 const restoreSharedSectionManifest = join(tmp, "restore-shared-section-artifact.json");
 const restoreFutureTimestampManifest = join(tmp, "restore-future-timestamp.json");
+const restoreFutureHealthTimestampManifest = join(tmp, "restore-future-health-timestamp.json");
+const restoreFutureIndexerTimestampManifest = join(tmp, "restore-future-indexer-timestamp.json");
 const restoreMalformedFinalityManifest = join(tmp, "restore-malformed-finality.json");
 const restoreUnsafeFinalityManifest = join(tmp, "restore-unsafe-finality.json");
 const restoreUnsafeIndexedEpochManifest = join(tmp, "restore-unsafe-indexed-epoch.json");
+const restoreOversizedRetentionManifest = join(tmp, "restore-oversized-retention.json");
+const restoreMissingLatestBackupManifest = join(tmp, "restore-missing-latest-backup.json");
+const restoreBackupAfterCheckManifest = join(tmp, "restore-backup-after-check.json");
+const restoreExpiredBackupManifest = join(tmp, "restore-expired-backup.json");
+const restoreExampleOriginManifest = join(tmp, "restore-example-origin.json");
+const restorePrivateOriginManifest = join(tmp, "restore-private-origin.json");
+const restoreOversizedManifest = join(tmp, "restore-oversized-manifest.json");
+const restoreBoundedArtifact = join(tmp, "restore-bounded-artifact.log");
+const restoreBoundedArtifactManifest = join(tmp, "restore-bounded-artifact.json");
 writeFileSync(restoreIrrelevantScheduleArtifact, "pm2 process list only\n", "utf8");
 writeFileSync(restoreNoIntegrityArtifact, "Summary: backup/restore drill completed without detected issues.\n", "utf8");
 writeFileSync(restoreIrrelevantPreservationArtifact, "restore drill completed without indexer comparison\n", "utf8");
@@ -1968,6 +2053,44 @@ writeFileSync(
   }),
   "utf8",
 );
+function writeRestoreManifestVariant(filePath, mutate) {
+  const manifest = structuredClone(restoreValidStrictManifest);
+  mutate(manifest);
+  writeFileSync(filePath, JSON.stringify(manifest), "utf8");
+}
+writeRestoreManifestVariant(restoreOversizedRetentionManifest, (manifest) => {
+  manifest.backupSchedule.retentionDays = "3651";
+});
+writeRestoreManifestVariant(restoreMissingLatestBackupManifest, (manifest) => {
+  manifest.backupSchedule.lastSuccessfulBackupAt = "";
+});
+writeRestoreManifestVariant(restoreBackupAfterCheckManifest, (manifest) => {
+  manifest.backupSchedule.lastSuccessfulBackupAt = "2026-07-09T00:05:00.000Z";
+});
+writeRestoreManifestVariant(restoreExpiredBackupManifest, (manifest) => {
+  manifest.backupSchedule.lastSuccessfulBackupAt = "2026-05-01T00:00:00.000Z";
+});
+writeRestoreManifestVariant(restoreFutureHealthTimestampManifest, (manifest) => {
+  manifest.restoredStagingHealth.timestamp = "2999-01-01T00:00:00.000Z";
+});
+writeRestoreManifestVariant(restoreFutureIndexerTimestampManifest, (manifest) => {
+  manifest.indexerPreservation.checkedAt = "2999-01-01T00:00:00.000Z";
+});
+writeRestoreManifestVariant(restoreExampleOriginManifest, (manifest) => {
+  manifest.restoredStagingHealth.url = "https://restore.example";
+});
+writeRestoreManifestVariant(restorePrivateOriginManifest, (manifest) => {
+  manifest.restoredStagingHealth.url = "https://192.168.1.10";
+});
+writeFileSync(restoreOversizedManifest, " ".repeat(512 * 1024 + 1), "utf8");
+writeFileSync(
+  restoreBoundedArtifact,
+  `${"x".repeat(256 * 1024)}\nSummary: backup/restore drill completed without detected issues. Restored DB integrity_check=ok.\n`,
+  "utf8",
+);
+writeRestoreManifestVariant(restoreBoundedArtifactManifest, (manifest) => {
+  manifest.restoreDrill.evidencePath = restoreBoundedArtifact;
+});
 writeFileSync(
   restoreIrrelevantScheduleManifest,
   JSON.stringify({
@@ -2139,6 +2262,10 @@ const draftCases = [
     createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
     check: ["scripts/verify-db-restore.mjs"],
     checkArgs: (out) => ["--strict", `--manifest=${out}`],
+    requiredFields: [
+      ["backupSchedule.retentionDays", "TODO: positive integer retention window in days"],
+      ["backupSchedule.lastSuccessfulBackupAt", "TODO: ISO timestamp of the latest successful scheduled backup"],
+    ],
   },
   {
     id: "monitoring",
@@ -2227,6 +2354,10 @@ const collectorDraftCases = [
       `--preservation-artifact=${restorePreservationArtifact}`,
     ],
     requiredSections: ["backupSchedule", "restoreDrill", "restoredStagingHealth", "indexerPreservation"],
+    requiredFields: [
+      ["backupSchedule.retentionDays", "TODO: positive integer retention window in days"],
+      ["backupSchedule.lastSuccessfulBackupAt", "TODO: ISO timestamp of the latest successful scheduled backup"],
+    ],
     check: ["scripts/verify-db-restore.mjs"],
     checkArgs: (out) => ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${out}`],
   },
@@ -2518,7 +2649,38 @@ const collectorRejectCases = [
     create: ["scripts/collect-restore-evidence.mjs"],
     createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreSharedSectionArtifact}`, `--health-log=${restoreSharedSectionArtifact}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
     expected: "--restore-log and --health-log must point to distinct restore evidence files",
-  },  {
+  },
+  {
+    id: "restore-collector-directory-source",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreDirectoryArtifact}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--source DB must exist before collecting restore evidence",
+  },
+  {
+    id: "restore-collector-file-backup-dir",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreSourcePath}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--backup-dir must point to a directory",
+  },
+  {
+    id: "restore-collector-directory-restore-log",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreDirectoryArtifact}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--restore-log must point to an existing redacted file artifact",
+  },
+  {
+    id: "restore-collector-oversized-restore-log",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreOversizedLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--restore-log artifact is too large to validate safely",
+  },
+  {
+    id: "restore-collector-too-many-health-markers",
+    create: ["scripts/collect-restore-evidence.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthTooManyMarkersLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "restore health evidence has too many key/value markers to validate safely",
+  },
+  {
     id: "canary-draft-missing-live-log",
     create: ["scripts/create-canary-proof-draft.mjs"],
     createArgs: ["--network=linea-mainnet", "--chain-id=59144", "--contract=0x1111111111111111111111111111111111111111", "--rpc-label=redacted-mainnet-rpc", `--target-artifact=${canaryTargetArtifact}`, `--recovery-artifact=${canaryRecoveryArtifact}`, `--session-artifact=${canarySessionArtifact}`, `--tx-artifact=${canaryTxArtifact}`],
@@ -2792,8 +2954,9 @@ const strictRejectCases = [
   {
     id: "restore-missing-local-artifact-ref",
     check: ["scripts/verify-db-restore.mjs"],
-    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreMissingArtifactManifest}`],
+    checkArgs: ["--strict", "--summary-only", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreMissingArtifactManifest}`],
     expected: "local restore artifact references must exist",
+    forbidden: [restoreMissingArtifact],
   },
   {
     id: "restore-directory-local-artifact-ref",
@@ -2868,6 +3031,66 @@ const strictRejectCases = [
     expected: "indexerPreservation.latestIndexedEpochBefore must be a non-negative integer",
   },
   {
+    id: "restore-retention-over-limit",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreOversizedRetentionManifest}`],
+    expected: "backupSchedule.retentionDays must be 3650 days or less",
+  },
+  {
+    id: "restore-missing-latest-backup-timestamp",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreMissingLatestBackupManifest}`],
+    expected: "backupSchedule.lastSuccessfulBackupAt must be ISO-8601 UTC",
+  },
+  {
+    id: "restore-backup-after-check",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreBackupAfterCheckManifest}`],
+    expected: "backupSchedule.lastSuccessfulBackupAt must not be after backupSchedule.checkedAt",
+  },
+  {
+    id: "restore-expired-latest-backup",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreExpiredBackupManifest}`],
+    expected: "backupSchedule.lastSuccessfulBackupAt must be within backupSchedule.retentionDays",
+  },
+  {
+    id: "restore-future-health-timestamp",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreFutureHealthTimestampManifest}`],
+    expected: "restoredStagingHealth.timestamp must not be in the future",
+  },
+  {
+    id: "restore-future-indexer-timestamp",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreFutureIndexerTimestampManifest}`],
+    expected: "indexerPreservation.checkedAt must not be in the future",
+  },
+  {
+    id: "restore-example-origin",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreExampleOriginManifest}`],
+    expected: "restoredStagingHealth.url must be a public HTTPS staging, canary, or restore URL",
+  },
+  {
+    id: "restore-private-origin",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restorePrivateOriginManifest}`],
+    expected: "restoredStagingHealth.url must be a public HTTPS staging, canary, or restore URL",
+  },
+  {
+    id: "restore-oversized-manifest",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreOversizedManifest}`],
+    expected: "restore proof manifest is too large to validate safely",
+  },
+  {
+    id: "restore-bounded-artifact-read",
+    check: ["scripts/verify-db-restore.mjs"],
+    checkArgs: ["--strict", `--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, `--manifest=${restoreBoundedArtifactManifest}`],
+    expected: "restoreDrill evidence must include restored SQLite integrity_check proof",
+  },
+  {
     id: "monitoring-missing-local-artifact-ref",
     check: ["scripts/check-monitoring-proof.mjs"],
     checkArgs: ["--strict", `--file=${monitoringMissingArtifactManifest}`],
@@ -2890,6 +3113,12 @@ const strictRejectCases = [
     check: ["scripts/check-monitoring-proof.mjs"],
     checkArgs: ["--strict", `--file=${monitoringIrrelevantAlertManifest}`],
     expected: "fired-alert evidence must mention alert, monitor, fired, triggered, or incident proof",
+  },
+  {
+    id: "monitoring-generic-alert-words",
+    check: ["scripts/check-monitoring-proof.mjs"],
+    checkArgs: ["--strict", `--file=${monitoringGenericAlertWordsManifest}`],
+    expected: "monitor kind health-prod has no monitor evidence link, artifact, or note",
   },
   {
     id: "monitoring-irrelevant-recovery-artifact",
@@ -3030,6 +3259,18 @@ const strictRejectCases = [
     expected: "wallet.mobileWeb3Browser evidence must include mobile device, wallet app, or viewport proof",
   },
   {
+    id: "qa-mobile-viewport-marker-overflow",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaMobileViewportOverflowManifest}`],
+    expected: "wallet.mobileWeb3Browser evidence must include mobile device, wallet app, or viewport proof",
+  },
+  ...[...qaWalletSpecificManifests.entries()].map(([id, { checkId, path }]) => ({
+    id,
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${path}`],
+    expected: `wallet.${checkId} evidence must mention wallet/Privy/connect/mobile/wrong-network proof`,
+  })),
+  {
     id: "qa-shared-group-artifact",
     check: ["scripts/check-qa-proof.mjs"],
     checkArgs: ["--strict", `--file=${qaSharedGroupArtifactManifest}`],
@@ -3046,6 +3287,31 @@ const strictRejectCases = [
     check: ["scripts/check-qa-proof.mjs"],
     checkArgs: ["--strict", `--file=${qaUnsafeTargetChainManifest}`],
     expected: "targetChainId must be a positive integer",
+  },
+  {
+    id: "qa-production-app-id-not-configured",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaProductionAppIdNotConfiguredManifest}`],
+    expected: "wallet.privyAllowedOrigins.productionAppIdConfigured must be true",
+  },
+  {
+    id: "qa-public-url-evidence-remains-external-required",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaPublicUrlEvidenceManifest}`],
+    expected: G14_EXTERNAL_REQUIRED_MESSAGE,
+    forbidden: ["wallet.desktopConnect must include concrete evidence"],
+  },
+  {
+    id: "qa-private-url-evidence",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaPrivateUrlEvidenceManifest}`],
+    expected: "wallet.desktopConnect must include concrete evidence path, link, artifact, screenshot, log, report, or tx hash",
+  },
+  {
+    id: "qa-missing-auto-miner-log-field",
+    check: ["scripts/check-qa-proof.mjs"],
+    checkArgs: ["--strict", `--file=${qaMissingAutoMinerLogFieldManifest}`],
+    expected: "supportAuditVisibility.autoMinerLogFields.fields must include round, epoch, nonce, txHash, retryCount, stopReason",
   },
   {
     id: "qa-missing-security-scan",
@@ -3628,7 +3894,38 @@ const finalOutputCases = [
     create: ["scripts/create-restore-proof-draft.mjs"],
     createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreSharedSectionArtifact}`, `--health-log=${restoreSharedSectionArtifact}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
     expected: "--restore-log and --health-log must point to distinct restore evidence files",
-  },  {
+  },
+  {
+    id: "restore-draft-directory-source",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreDirectoryArtifact}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--source must point to an existing file",
+  },
+  {
+    id: "restore-draft-file-backup-dir",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreSourcePath}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--backup-dir must point to an existing directory",
+  },
+  {
+    id: "restore-draft-directory-restore-log",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreDirectoryArtifact}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--restore-log must point to an existing redacted file artifact",
+  },
+  {
+    id: "restore-draft-oversized-restore-log",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreOversizedLog}`, `--health-log=${restoreHealthLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "--restore-log artifact is too large to validate safely",
+  },
+  {
+    id: "restore-draft-too-many-health-markers",
+    create: ["scripts/create-restore-proof-draft.mjs"],
+    createArgs: [`--source=${restoreSourcePath}`, `--backup-dir=${restoreBackupDir}`, `--restore-dir=${restoreDir}`, `--backup=${restoreBackupPath}`, "--restored-origin=https://restore.playlore.xyz", "--restored-host-type=restore", `--restore-log=${restoreLog}`, `--health-log=${restoreHealthTooManyMarkersLog}`, `--backup-schedule-artifact=${restoreBackupScheduleArtifact}`, `--preservation-artifact=${restorePreservationArtifact}`],
+    expected: "restore health evidence has too many key/value markers to validate safely",
+  },
+  {
     id: "restore-final-output",
     create: ["scripts/create-restore-proof-draft.mjs"],
     createArgs: ["--out=docs/restore-proof.json"],
@@ -3885,6 +4182,19 @@ function printTable(headers, rows) {
   for (const row of rows) console.log(`| ${row.join(" | ")} |`);
 }
 
+function manifestFieldValue(manifest, fieldPath) {
+  return String(fieldPath).split(".").reduce(
+    (value, key) => value && typeof value === "object" ? value[key] : undefined,
+    manifest,
+  );
+}
+
+function missingRequiredManifestFields(manifest, requiredFields = []) {
+  return requiredFields
+    .filter(([fieldPath, expected]) => manifestFieldValue(manifest, fieldPath) !== expected)
+    .map(([fieldPath]) => fieldPath);
+}
+
 const rows = [];
 const issues = [];
 
@@ -3895,6 +4205,18 @@ for (const item of draftCases) {
     issues.push(`${item.id}: draft generation failed`);
     rows.push([item.id, "create failed", String(createResult.status), oneLine(createOutput).replace(/\|/g, "\\|")]);
     continue;
+  }
+  if ((item.requiredFields ?? []).length > 0) {
+    let manifest = null;
+    try {
+      manifest = readProofDraftJson(item.out);
+    } catch {
+      issues.push(`${item.id}: generated draft is not valid bounded JSON`);
+    }
+    const missingFields = missingRequiredManifestFields(manifest, item.requiredFields);
+    if (missingFields.length > 0) {
+      issues.push(`${item.id}: generated draft missing exact fields ${missingFields.join(", ")}`);
+    }
   }
 
   const checkResult = runNode([...item.check, ...item.checkArgs(item.out)]);
@@ -3930,6 +4252,10 @@ for (const item of collectorDraftCases) {
   if (missingSections.length > 0) {
     issues.push(`${item.id}: collector output missing ${missingSections.join(", ")}`);
   }
+  const missingFields = missingRequiredManifestFields(manifest, item.requiredFields);
+  if (missingFields.length > 0) {
+    issues.push(`${item.id}: collector output missing exact fields ${missingFields.join(", ")}`);
+  }
 
   const checkResult = runNode([...item.check, ...item.checkArgs(item.out)]);
   const checkOutput = `${checkResult.stdout || ""}\n${checkResult.stderr || ""}`;
@@ -3964,7 +4290,8 @@ for (const item of strictRejectCases) {
   const checkOutput = `${checkResult.stdout || ""}\n${checkResult.stderr || ""}`;
   const rejected = checkResult.status !== 0 &&
     checkOutput.includes(item.expected) &&
-    (item.expectedAlso ?? []).every((expected) => checkOutput.includes(expected));
+    (item.expectedAlso ?? []).every((expected) => checkOutput.includes(expected)) &&
+    (item.forbidden ?? []).every((forbidden) => !checkOutput.includes(forbidden));
   if (!rejected) {
     issues.push(`${item.id}: strict validator did not reject missing local artifact evidence`);
   }
@@ -4013,6 +4340,32 @@ if (summaryOnly) {
     .map(([status, count]) => `${status}=${count}`)
     .join(" ");
   console.log(`Rows: total=${rows.length} ${compactCounts}`);
+  if (includeProofCases) {
+    const canaryCases = rows
+      .filter(([id]) => id === "canary" || id.startsWith("canary-"))
+      .map(([id, status]) => `${id}=${status}`);
+    console.log(`Canary cases: ${canaryCases.join(",")}`);
+    const indexerCases = rows
+      .filter(([id]) => id === "indexer" || id.startsWith("indexer-"))
+      .map(([id, status]) => `${id}=${status}`);
+    console.log(`Indexer cases: ${indexerCases.join(",")}`);
+    const signoffCases = rows
+      .filter(([id]) => id === "signoff" || id.startsWith("signoff-"))
+      .map(([id, status]) => `${id}=${status}`);
+    console.log(`Signoff cases: ${signoffCases.join(",")}`);
+    const hostCases = rows
+      .filter(([id]) => id === "host" || id.startsWith("host-"))
+      .map(([id, status]) => `${id}=${status}`);
+    console.log(`Host cases: ${hostCases.join(",")}`);
+    const monitoringCases = rows
+      .filter(([id]) => id === "monitoring" || id.startsWith("monitoring-"))
+      .map(([id, status]) => `${id}=${status}`);
+    console.log(`Monitoring cases: ${monitoringCases.join(",")}`);
+    const qaCases = rows
+      .filter(([id]) => id === "qa" || id.startsWith("qa-"))
+      .map(([id, status]) => `${id}=${status}`);
+    console.log(`QA cases: ${qaCases.join(",")}`);
+  }
 } else {
   printTable(["Draft", "Strict Result", "Exit", "Evidence"], rows);
 }

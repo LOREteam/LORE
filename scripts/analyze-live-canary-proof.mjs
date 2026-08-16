@@ -1,6 +1,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { resolveCanaryProofProfile } from "./canary-proof-profile.mjs";
+import { hasPublicProofHttpsUrl as hasPublicHttpsUrl } from "./collect-proof-common.mjs";
 
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_CANARY_ARTIFACT_TEXT_BYTES = 256 * 1024;
@@ -535,38 +536,6 @@ function looksLikeUrl(value) {
 function hasConcreteRpcLabel(value) {
   const normalized = String(value ?? "").trim();
   return hasRealText(normalized) && !looksLikeUrl(normalized) && !GENERIC_RPC_LABEL_RE.test(normalized);
-}
-
-function hasPublicHttpsUrl(value) {
-  const text = String(value ?? "").trim();
-  const match = text.match(/https?:\/\/[^\s),.;]+/i);
-  if (!match) return false;
-  try {
-    const url = new URL(match[0]);
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      (host.includes(".") || host.includes(":")) &&
-      !(
-        host === "localhost" ||
-        host === "0.0.0.0" ||
-        host === "::" ||
-        host === "::1" ||
-        host === "127.0.0.1" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host.endsWith(".example") ||
-        host.endsWith(".test") ||
-        host.endsWith(".invalid") ||
-        /^127\./.test(host) ||
-        /^10\./.test(host) ||
-        /^192\.168\./.test(host) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
-      );
-  } catch {
-    return false;
-  }
 }
 
 function hasConcreteText(value) {

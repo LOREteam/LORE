@@ -1,11 +1,18 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const templateDoc = "docs/launch-proof-manifest-templates.md";
 const MAX_PROOF_TEMPLATE_DOC_BYTES = 512 * 1024;
 const summaryOnly = process.argv.includes("--summary-only");
+
+function argValue(name, fallback) {
+  const prefix = `--${name}=`;
+  const found = process.argv.find((arg) => arg.startsWith(prefix));
+  return found ? found.slice(prefix.length).trim() : fallback;
+}
+
+const templateDoc = resolve(process.cwd(), argValue("template-doc", "docs/launch-proof-manifest-templates.md"));
 
 function readTemplateDoc(filePath) {
   if (!existsSync(filePath)) throw new Error(`Missing proof template doc: ${filePath}`);
@@ -17,7 +24,15 @@ function readTemplateDoc(filePath) {
   return readFileSync(filePath, "utf8");
 }
 
-const templateSource = readTemplateDoc(templateDoc);
+let templateSource = "";
+let templateReadIssue = null;
+try {
+  templateSource = readTemplateDoc(templateDoc);
+} catch (error) {
+  templateReadIssue = summaryOnly
+    ? "proof template doc could not be read"
+    : error instanceof Error ? error.message : String(error);
+}
 const checks = [
   {
     id: "signoff",
@@ -88,13 +103,14 @@ function printTable(headers, rows) {
 
 const tempDir = mkdtempSync(join(tmpdir(), "lore-proof-templates-"));
 const rows = [];
-const issues = [];
+const issues = templateReadIssue ? [templateReadIssue] : [];
 
 try {
-  const canaryLogPath = join(tempDir, "canary-template-sample.jsonl");
-  writeFileSync(
-    canaryLogPath,
-    `${JSON.stringify({
+  if (!templateReadIssue) {
+    const canaryLogPath = join(tempDir, "canary-template-sample.jsonl");
+    writeFileSync(
+      canaryLogPath,
+      `${JSON.stringify({
       amount: "1",
       chainId: 59144,
       contractAddress: "0x0000000000000000000000000000000000000001",
@@ -113,37 +129,42 @@ try {
       totalAmount: "1",
       txStatus: "success",
       tiles: [1],
-    })}\n`,
-  );
+      })}\n`,
+    );
 
-  for (const check of checks) {
-    const json = extractJsonBlock(check.heading);
-    const manifestPath = join(tempDir, `${check.id}.json`);
-    writeFileSync(manifestPath, json);
+    for (const check of checks) {
+      const json = extractJsonBlock(check.heading);
+      const manifestPath = join(tempDir, `${check.id}.json`);
+      writeFileSync(manifestPath, json);
 
-    const scriptArgs = [check.script, ...(check.needsCanaryLog ? [canaryLogPath] : []), ...(check.extraArgs ?? []), "--strict"];
-    const result = spawnSync(process.execPath, scriptArgs, {
-      cwd: process.cwd(),
-      env: { ...process.env, [check.envName]: manifestPath },
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
-    const output = `${result.stdout || ""}\n${result.stderr || ""}`;
-    const exitCode = typeof result.status === "number" ? result.status : 1;
-    const summary = output.split(/\r?\n/).find((line) => line.startsWith("Summary:")) ?? "no summary";
-    const failedAsExpected = exitCode !== 0 && check.expectedPattern.test(output);
-    if (!failedAsExpected) {
-      issues.push(`${check.id} template did not fail strict validation as expected`);
+      const scriptArgs = [check.script, ...(check.needsCanaryLog ? [canaryLogPath] : []), ...(check.extraArgs ?? []), "--strict"];
+      const result = spawnSync(process.execPath, scriptArgs, {
+        cwd: process.cwd(),
+        env: { ...process.env, [check.envName]: manifestPath },
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+      });
+      const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+      const exitCode = typeof result.status === "number" ? result.status : 1;
+      const summary = output.split(/\r?\n/).find((line) => line.startsWith("Summary:")) ?? "no summary";
+      const failedAsExpected = exitCode !== 0 && check.expectedPattern.test(output);
+      if (!failedAsExpected) {
+        issues.push(`${check.id} template did not fail strict validation as expected`);
+      }
+      rows.push([
+        check.id,
+        exitCode === 0 ? "unexpected pass" : "failed",
+        failedAsExpected ? "yes" : "no",
+        summary.replace(/\|/g, "\\|"),
+      ]);
     }
-    rows.push([
-      check.id,
-      exitCode === 0 ? "unexpected pass" : "failed",
-      failedAsExpected ? "yes" : "no",
-      summary.replace(/\|/g, "\\|"),
-    ]);
   }
+} catch (error) {
+  issues.push(summaryOnly
+    ? "proof template doc could not be validated"
+    : error instanceof Error ? error.message : String(error));
 } finally {
-  rmSync(tempDir, { recursive: true, force: true });
+  rmSync(tempDir, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 });
 }
 
 console.log("# Proof Template Guard");

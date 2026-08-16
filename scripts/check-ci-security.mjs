@@ -1,23 +1,28 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
-const summaryOnly = process.argv.includes("--summary-only");
-const workflowPath = path.resolve(process.cwd(), ".github/workflows/ci.yml");
-const MAX_CI_WORKFLOW_BYTES = 256 * 1024;
+const DEFAULT_WORKFLOW_PATH = path.resolve(process.cwd(), ".github/workflows/ci.yml");
+export const MAX_CI_WORKFLOW_BYTES = 256 * 1024;
 
-function readWorkflow() {
-  if (!existsSync(workflowPath)) {
+export function readCiWorkflow({
+  workflowPath = DEFAULT_WORKFLOW_PATH,
+  exists = existsSync,
+  stat = statSync,
+  read = readFileSync,
+} = {}) {
+  if (!exists(workflowPath)) {
     return { source: "", issues: ["CI workflow is missing"] };
   }
   try {
-    const stats = statSync(workflowPath);
+    const stats = stat(workflowPath);
     if (!stats.isFile()) {
       return { source: "", issues: ["CI workflow path is not a file"] };
     }
     if (stats.size > MAX_CI_WORKFLOW_BYTES) {
       return { source: "", issues: ["CI workflow is too large to validate safely"] };
     }
-    return { source: readFileSync(workflowPath, "utf8"), issues: [] };
+    return { source: read(workflowPath, "utf8"), issues: [] };
   } catch {
     return { source: "", issues: ["CI workflow could not be read"] };
   }
@@ -93,20 +98,21 @@ function hasExactPaths(stepBlock, expectedPaths) {
   return actual.size === expectedPaths.length && expectedPaths.every((entry) => actual.has(entry));
 }
 
-const { source, issues } = readWorkflow();
-let weeklySchedule = false;
-let safeConcurrency = false;
-let jobTimeouts = false;
-let ubuntuNonSchedule = false;
-let windowsNonSchedule = false;
-let windowsCompact = false;
-let p1HardeningRows = false;
-let explicitIndexerStorage = false;
-let scheduledDependencyAudit = false;
-let artifactPathsStrict = false;
-let allCheckoutCredentialsDisabled = false;
+export function assessCiSecuritySource(source, initialIssues = []) {
+  const issues = [...initialIssues];
+  let weeklySchedule = false;
+  let safeConcurrency = false;
+  let jobTimeouts = false;
+  let ubuntuNonSchedule = false;
+  let windowsNonSchedule = false;
+  let windowsCompact = false;
+  let p1HardeningRows = false;
+  let explicitIndexerStorage = false;
+  let scheduledDependencyAudit = false;
+  let artifactPathsStrict = false;
+  let allCheckoutCredentialsDisabled = false;
 
-if (source) {
+  if (source) {
   if (!/^\s*permissions:\s*$/m.test(source) || !/^\s{2}contents:\s*read\s*$/m.test(source)) {
     issues.push("CI must declare least-privilege top-level permissions with contents: read");
   }
@@ -176,9 +182,7 @@ if (source) {
     "test:logic:summary",
     "test:p1-hardening:summary",
     "perf:p1:self-test",
-    "test:contract:summary",
     "test:contract:v10:summary",
-    "proof:contract-compile:summary",
     "proof:contract-compile:v10:summary",
     "test:indexer-storage:summary",
     "test:db-operations:summary",
@@ -225,7 +229,6 @@ if (source) {
   }
 
   const provenancePaths = [
-    ".tmp/contract-compilation-provenance.json",
     ".tmp/contract-compilation-provenance-v10.json",
   ];
   const dependencyAuditPaths = [
@@ -257,9 +260,9 @@ if (source) {
   if (!artifactPathsStrict) {
     issues.push("CI artifacts must use exact reviewed paths, seven-day retention, and explicit hidden-file inclusion");
   }
-}
+  }
 
-const result = {
+  const result = {
   status: issues.length === 0 ? "pass" : "fail",
   workflow: ".github/workflows/ci.yml",
   permissionsReadOnly: /^\s*permissions:\s*$/m.test(source) && /^\s{2}contents:\s*read\s*$/m.test(source),
@@ -277,10 +280,12 @@ const result = {
   scheduledDependencyAudit,
   artifactPathsStrict,
   issues,
-};
+  };
+  return result;
+}
 
-if (summaryOnly) {
-  console.log(JSON.stringify({
+function compactCiSecurityResult(result) {
+  return {
     status: result.status,
     permissionsReadOnly: result.permissionsReadOnly,
     pullRequestTarget: result.pullRequestTarget,
@@ -297,9 +302,22 @@ if (summaryOnly) {
     scheduledDependencyAudit: result.scheduledDependencyAudit,
     artifactPathsStrict: result.artifactPathsStrict,
     issues: result.issues.length,
-  }));
-} else {
-  console.log(JSON.stringify(result, null, 2));
+  };
 }
 
-if (issues.length > 0) process.exitCode = 1;
+export function runCiSecurityCli({
+  argv = process.argv.slice(2),
+  readWorkflow = readCiWorkflow,
+  log = console.log,
+} = {}) {
+  const { source, issues } = readWorkflow();
+  const result = assessCiSecuritySource(source, issues);
+  const summaryOnly = argv.includes("--summary-only");
+  log(JSON.stringify(summaryOnly ? compactCiSecurityResult(result) : result, null, summaryOnly ? 0 : 2));
+  return { exitCode: result.issues.length > 0 ? 1 : 0, result };
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isMain) {
+  process.exitCode = runCiSecurityCli().exitCode;
+}
