@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-14.
+Last updated: 2026-08-16.
 
 This file contains current repository truth only. Detailed history is archived
 in [`docs/archive/`](archive/), including the post-2026-08-09 consolidation in
@@ -10,8 +10,9 @@ The single active queue is [`remaining-worklist.md`](remaining-worklist.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`; the `320`-path release candidate is committed
-  locally in the eight documented partitions. The current `HEAD` is the
-  documentation partition and the worktree is expected to be clean.
+  locally in the eight documented partitions, followed by one hermetic
+  clean-checkout test correction. The current `HEAD` is the documentation
+  update and the worktree is expected to be clean.
 - The historical one-to-one `320`-path partition map is retained in
   [`release-candidate-partition.md`](release-candidate-partition.md).
 - Local commits are explicitly authorized; they do not authorize push,

@@ -1,6 +1,6 @@
 # Agent Progress
 
-Last updated: 2026-08-14.
+Last updated: 2026-08-16.
 
 This is the compact continuation handoff. Current repository truth is in
 [`current_state.md`](current_state.md), the only active queue is
@@ -11,8 +11,9 @@ This is the compact continuation handoff. Current repository truth is in
 ## Current continuation point
 
 - Branch `codex/repo-cleanup`; the `320`-path candidate is committed locally
-  across the eight documented partitions. The documentation commit is the
-  current `HEAD`, with a clean worktree expected.
+  across the eight documented partitions, followed by one hermetic
+  clean-checkout test correction. The documentation update is the current
+  `HEAD`, with a clean worktree expected.
 - The exact eight-partition map is retained as historical commit evidence in
   [`release-candidate-partition.md`](release-candidate-partition.md).
 - Protected `data/lore-v10.sqlite` remains `258048` bytes with SHA-256
