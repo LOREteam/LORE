@@ -1,330 +1,150 @@
 # Current State
 
-Last updated: 2026-08-12.
+Last updated: 2026-08-14.
 
-Detailed history is preserved in:
+This file contains current repository truth only. Detailed history is archived
+in [`docs/archive/`](archive/), including the post-2026-08-09 consolidation in
+[`release-hardening-2026-08-10-through-2026-08-14.md`](archive/release-hardening-2026-08-10-through-2026-08-14.md).
+The single active queue is [`remaining-worklist.md`](remaining-worklist.md).
 
-- [`docs/archive/current-state-through-2026-08-09.md`](archive/current-state-through-2026-08-09.md)
-- [`docs/archive/agent-progress-through-2026-08-09.md`](archive/agent-progress-through-2026-08-09.md)
+## Release candidate snapshot
 
-Open archived evidence only when a task needs it. The single active queue is
-[`docs/remaining-worklist.md`](remaining-worklist.md).
+- Branch: `codex/repo-cleanup`; the `320`-path release candidate is committed
+  locally in the eight documented partitions. The current `HEAD` is the
+  documentation partition and the worktree is expected to be clean.
+- The historical one-to-one `320`-path partition map is retained in
+  [`release-candidate-partition.md`](release-candidate-partition.md).
+- Local commits are explicitly authorized; they do not authorize push,
+  deployment, signing, wallet actions, network writes, or chain writes.
+- Protected DB: `data/lore-v10.sqlite`, SHA-256
+  `C6EB88E635C4B3A978AF77CE7B50736D6A6A92CC7A481E166118A66D0EC2B482`,
+  `258048` bytes, mtime `2026-08-13T12:18:50.8015294Z`; WAL/SHM absent.
 
-## Candidate and provenance
+## Local verification
 
-- The last exact clean baseline is
-  `46d3bc5072f07b4246ad1f7e516253aef5c8054b`. Its detached reproduction used
-  Node 24/npm 11.5.1 and clean `npm ci`; V10 provenance, two full
-  `check:summary` passes, and prelaunch required-local rows passed.
-- The latest clean-reproduced pre-documentation candidate is
-  `8d42cdb3ca335a2e326a29cc32e63d10f37681eb`. A fresh detached `npm ci`, full
-  `check:summary`, and isolated-DB prelaunch all pass; its final documentation
-  follow-up still requires the supported full Standard exact-revision scan.
-- The verified hardening candidate is partitioned into local commits
-  `69237438` (runtime/data boundaries), `569e87f0` (hermetic tooling),
-  `6137dcde` (behavioral security/P1 gates), and `80ce70b7` (toolchain and
-  line endings). Follow-up commit `f01aa22` extracts the wallet-runtime test
-  domain and makes the soak-status fixture independent of host disk capacity.
-  Its exact committed diff scan is sealed as
-  `810da212-4774-48ae-a48f-9a5b702e8933`.
-- The functional release-candidate head is
-  `c53c0afcddae1f77b62ebebf5a041e5b9f27ec91`. It restores package-local
-  Webpack resolution for nested `viem` dependencies and keeps Wagmi's unused
-  optional Tempo `accounts` peer unavailable. Exact diff scan
-  `b39bde24-6ba0-4e18-9c39-38b91766187e` sealed with no findings. The current
-  functional candidate is `f8e93905d705b921334d2c5cea54eb680fece63d`, containing
-  only later test-domain extractions and documentation.
-- The current local test-architecture follow-up is `07c5211e`, following the
-  prior eleven further isolated commits. It extracts wallet external boundaries,
-  error-shell
-  boundaries, dialog accessibility, wallet funding presentation, jackpot-banner
-  presentation, wins presentation, runtime-health diagnostics, public metadata,
-  runtime-monitor alerts/config-artifact boundaries, Sidebar legal navigation,
-  tutorial/public copy, and HTTP/browser smoke and wallet-action boundaries
-  from the coordinator. The first five direct modules and their compact
-  `test:logic:summary` integrations pass. Wins-presentation, runtime-health
-  diagnostics, and runtime-monitor alerts pass focused checks, syntax, and diff
-  gates. The wallet-action and runtime-monitor boundary modules pass direct,
-  syntax, lint, full coordinator, and compact-summary checks. The HTTP/browser
-  smoke module passes direct, syntax, lint, and diff gates; the current shared
-  compact-summary rerun also passes.
-  Exact-diff scan
-  `cbb0266b-4243-4fa1-a1df-7d054bddccae` accepted its semantic draft, but scanner
-  completion still rejects the scanner-owned missing `snapshotDigest`; this
-  test-only follow-up has no canonical scan bundle yet.
-- Live V10 provenance on the current tree passes with solc `0.8.36`, optimizer
-  runs `200`, EVM `osaka`, runtime size `16488` bytes, manifest match, ABI
-  snapshot match, and reviewed-fragment digest
-  `69218b3a06dbe7faf71f17a33e6a4b21b2e033c6fdfa5f4ca2008dc7a2f1900c`.
-- The prior final current-tree verification includes two consecutive
-  `npm.cmd run check:summary` exits `0`, each ending with
-  `Local check completed successfully`. After each, protected SQLite identity
-  was unchanged, `.tmp/check-local-*` and owned per-build `lore-build-<random>`
-  residues were `0`, and port `3101` had no listener. The persistent empty
-  `lore-build-output-locks` directory is the wrapper's lock-coordination root,
-  not a one-shot build residue.
-- The exact test-proof head `825514da` also passes the complete local
-  `check:summary` sequence: lint, hermetic build, full logic, security follow-up,
-  P1/EVM, indexer/DB/monitoring, production build/typecheck, and HTTP/browser
-  smoke. It is local evidence only; its current diff scan is still unsealed.
-- A fresh current-tree `npm.cmd ci` completed after the final lockfile refresh.
-  The unused root `accounts` package was removed so Wagmi can resolve its own
-  compatible nested versions; `webpack@5.109.2` satisfies Sentry's declared
-  build peer; the only `x402` override updates its nested
-  `use-sync-external-store` to the React-19-compatible `1.6.0`. Typecheck,
-  hermetic production build, and the EVM-inclusive P1 runner pass against this
-  lockfile.
-- Exact Corepack npm `11.5.1` clean install resolves lockfile v3's
-  `nanoid@3.3.17` and `js-yaml@4.3.1`. Both dependency audit gates pass:
-  production has no blocking High/Critical; the 2026-08-12 clean all-deps
-  result has `1` explicitly allowed non-production dev-toolchain High advisory.
-  npm 11.5.1's `npm ls --all --package-lock-only` (including `--omit=dev`)
-  still exits `ELSPROBLEMS` for 34 edges across nine hoisted packages. Direct
-  Arborist inspection proves every edge's `satisfiedBy(node)` is true; all 34
-  failures are only mismatched nested-override contexts after hoisting. This
-  is a recorded npm presentation limitation, not an unsatisfied semver or
-  audit finding. Keep the lockfile/security pins as-is; do not force a broad
-  Privy/Wagmi upgrade merely to change that output.
-- Clean-checkout reproduction now passes for exact `8d42cdb3`: a fresh detached
-  worktree used Node `24.5.0`, npm `11.5.1`, and `npm ci`; the lock resolved only
-  `nanoid@3.3.17` and `js-yaml@4.3.1`. Its complete `check:summary` ended
-  `Local check completed successfully` after lint, hermetic build, full logic,
-  P1/EVM, contract/indexer/DB/monitoring, production build/typecheck, and
-  HTTP/browser smoke. A separate isolated-DB prelaunch passed every required-
-  local row and retained `25` external/status blockers. The protected canonical
-  DB/WAL/SHM hashes, lengths, and mtime ticks remained exact; check-local temp
-  directories and port `3101` listeners were both zero afterward.
-- The protected base DB remains byte-identical at SHA-256 `D2CF3A...C0061ABC`,
-  length `221184`, and its original mtime. A prior direct non-hermetic build
-  changed WAL/SHM only. Forensic analysis on preserved copies found no new
-  business, event, or user rows: the delta was two snapshot meta values and one
-  empty index. Current WAL/SHM are `B6E249...A8DFB53` and
-  `4A0365...7E73C5`. They must not be restored, checkpointed, or deleted as a
-  cleanup shortcut.
-- All build entry points now use a unique system-temp SQLite path, snapshot the
-  canonical DB/WAL/SHM, reject protected reparse paths, verify identity after
-  the child exits, and clean only the unchanged lexical temp directory. Raw
-  `next build` fails closed without the wrapper marker.
-- `.gitattributes` declares LF text checkout plus binary database/WASM
-  exclusions while preserving `.bat`/`.cmd` CRLF rules. The `80ce70b7`
-  line-ending commit supplies the reviewed policy; a controlled checkout pass
-  subsequently normalized the current tracked working tree to zero mixed or
-  non-batch CRLF files with no semantic Git diff. No synthetic EOL-only commit
-  was needed because the index was already canonical.
+| Boundary | Current evidence | Status |
+| --- | --- | --- |
+| Dependency policy | Node `24.5.0`, npm `11.5.1`; `nanoid@3.3.18`, `js-yaml@4.3.1`; production `0` High/Critical; no blocking all-deps finding | Pass locally |
+| Hermetic local gate | Owned temporary DB, protected DB hash/mtime/WAL/SHM invariant, bounded process cleanup, output lock/root identity | Pass on latest recorded exact-current run |
+| Clean-checkout reproduction | Disposable 297-path candidate, fresh `npm ci`, full local gate and required-local prelaunch rows | Pass for that snapshot; final SHA still pending |
+| V10 EVM properties | 8 seed epochs, 84 successful runtime transactions, 39 expected reverts, 33 conservation checks | Pass locally |
+| Business proof | Latest full summary `85501ms`, `childExitCode=0`, `assertionFailures=0` | Pass |
+| P1.10 extraction | Reproducible AST audit (`npm.cmd run audit:p1:behavior`): coordinator `18=11 source-operand + 7 behavioral`; 95 direct modules `5142=734 + 4408`; combined `5160=745 + 4415` (`85.56%` behavioral) | Partial; classifier is explicit, but source-operand assertions remain |
+| Performance P1.17 | Collector/verifier self-tests, profiling and transaction-disabled simulations | Partial; no native-hidden and sealed two-hour final-SHA evidence |
+| Working-tree security scan | Scan `1324c08f-9411-44ba-83ab-e3efd22218fc`: 287/287 reviews, 0 reportable findings, 2 suppressed candidates; both local defects were then remediated and regression-tested | Strong working-tree evidence; not final-SHA evidence |
 
-## Security scan and remediation
+The latest local packets added:
 
-- Standard scan `829f043d-0200-451f-b769-cd746800eb2a` ran against exact
-  baseline `46d3bc5072f07b4246ad1f7e516253aef5c8054b` and reported `4 High`,
-  `13 Medium`, and `6 Low` findings.
-- The current tree contains targeted fixes and executable regressions for every
-  permitted finding plus the bypasses found during the final combined diff
-  review. The resulting controls cover admin/auth, keeper/bootstrap signing,
-  wallet nonce/receipt ambiguity and fee limits, Auto-Miner authorization,
-  deposits and API recovery provenance, indexer quorum/budgets/leases/rollback,
-  Preview credential isolation, health origins, and hermetic builds.
-- The attempted standard working-tree scan
-  `c7662d53-c089-436a-93fd-f9506f2279f0` is unsealed: its artifact directory
-  disappeared before record and the scan service is account-limited. It is not
-  exact-SHA closure; after Git publication, the unchanged final SHA still needs
-  a fresh exact-revision scan.
-- A later sealed working-tree scan
-  `ad1649f6-e2e4-448a-b199-687e77fa4c6d` reviewed the 56-path snapshot
-  `89060390...2e8eacba1f58`. It found one Medium hashless-pending duplicate
-  stake path and one Low Auto-Miner actor-switch authorization path. Both have
-  now been fixed with focused tests, but the scan predates those edits and is
-  not final-SHA closure. Re-scan the eventual committed candidate.
-- Exact committed diff scan `810da212-4774-48ae-a48f-9a5b702e8933` covers
-  `fbec5216440bd8411e7df8ca50b1f7af624e63de..f01aa22e9c40cbfda3967f21ea63f1507419e1a3`.
-  It sealed canonical JSON/SARIF/Markdown artifacts with clean-worktree digest
-  `codex-security-snapshot/v1:sha256:1d74df0bc5da366ec7aad16a4841552de3d91d1cb5319d4e849096130ccb54eb`
-  and found no issue in its three test-orchestration surfaces. This narrow
-  scan supplements the preceding candidate coverage; it does not close the
-  protocol-randomness High.
-- Exact committed diff scan `b39bde24-6ba0-4e18-9c39-38b91766187e` covers
-  `44765951..c53c0afc`, sealed canonical JSON/SARIF/Markdown artifacts, and
-  found no issue in the one build-resolution surface. It is local evidence
-  only and does not close the protocol-randomness or external launch gates.
-- Exact committed follow-up scan `fda49613-9367-46f1-84c7-6f82dc8ce611`
-  covers `c53c0afc..9eefb9cd`. Its sealed canonical bundle is tracked at
-  [`artifacts/security/canonical-diff-c53c0afc-9eefb9cd`](../artifacts/security/canonical-diff-c53c0afc-9eefb9cd/);
-  it has deterministic snapshot digest `ca253f0c...dd09bb02` and no local
-  High/Medium finding in the five test-extraction surfaces. The desktop
-  Workbench completion endpoint omitted that required range digest, so this
-  bundle was validated and sealed by the same local contract finalizer rather
-  than treating the endpoint failure as a green scan.
-- Exact committed follow-up scan `fa83b0ff-3fc0-4338-817d-a78fb42bdd8a`
-  covers `c53c0afc..f8e93905`. Its canonical bundle is tracked at
-  [`artifacts/security/canonical-diff-c53c0afc-f8e93905`](../artifacts/security/canonical-diff-c53c0afc-f8e93905/);
-  all 27 changed test/proof/documentation rows were deep-reviewed and it has
-  no local findings. Its scope does not close the protocol-randomness High or
-  external G1-G14 evidence gates.
-- Exact committed follow-up scan `dd26cfc2-595f-432d-b6c7-58b12f206cdf`
-  covers `f8e93905..9ab501e6`. Its sealed canonical bundle is tracked at
-  [`artifacts/security/canonical-diff-f8e93905-9ab501e6`](../artifacts/security/canonical-diff-f8e93905-9ab501e6/);
-  all 18 changed rows have completion receipts and it has no local findings.
-  The desktop completion endpoint failed after discovery because it omitted the
-  range snapshot digest; the same plugin contract finalizer sealed the recorded
-  draft after that tool-generated digest and the exact range binding were restored.
-- Desktop range scan `59fa2d72-fff1-4d46-bb7d-5b94d507ac80` deep-reviewed all
-  `34/34` rows through reporting with no candidate, but canonical completion
-  failed because Codex Security `0.1.18` requires `snapshotDigest` for
-  `git_diff` while its commit/range launcher cannot persist that field. The
-  failed scan is not canonical closure. The supported next step is a full
-  Standard scan of the final clean immutable SHA, whose target is
-  `git_revision` and therefore binds directly to `revision` without this
-  range-only schema mismatch.
-- The post-scan wallet follow-up is covered by the current integrated P1
-  runner: all `36/36` bounded suites, including EVM fuzz, now pass under the
-  same npm invocation used by prelaunch.
-- The High protocol finding remains open: permissionless conditional-revert
-  grinding can bias block-derived randomness during epoch resolution. A real
-  fix requires changing the randomness design and deploying replacement
-  contract behavior, while the objective explicitly forbids randomness and
-  deployed-contract changes. Do not label this remediated or accepted.
+- one-time chat-profile legacy migration with cross-wallet isolation, scoped
+  corrupt-key cleanup, canonical remote requests, and bounded/redacted errors;
+- storage-failure-safe chat-wallet selection plus canonical unread/row ownership;
+- a black-box chat route check that rejects non-persistent unauthorized writes
+  and accepts a mixed-case sender only through its canonical lower-case session;
+- real HeaderWalletCard SSR for login/modal, connected, copy/copied, explorer,
+  invalid-address, syncing, and not-created states;
+- canonical V10 source reads that reject intermediate symlink/junction escapes;
+- an executable deposits recovery global-bound proof that now supplies the
+  business summary marker instead of an unexecuted constant;
+- an executable dialog focus runtime covering eligibility, initial/fallback
+  focus, Tab wrapping, escaped-focus recovery, fresh Escape callbacks, nested
+  scroll locks, and safe focus restoration.
+- an executable reduced-motion runtime covering stored/system preferences,
+  invalid-value cleanup, same-tab preference propagation, media-listener cleanup,
+  backdrop decoration gating, and maintenance-overlay animation suppression.
 
-## P1 local engineering state
+Focused tests, typecheck, targeted ESLint, diff-check, documentation validation,
+and the full business summary pass after these packets. The protected DB remains
+unchanged and no WAL/SHM was created.
 
-- `test:p1-hardening:all:summary` currently passes `36/36` bounded suites with
-  the EVM runner included. The EVM suite exercises eight seeded epochs,
-  84 runtime transactions, 33 conservation checks, 39 expected reverts,
-  duplicate/replay/late paths, large values, gas bounds, reentrancy, and hostile
-  ERC-20 behavior. This is local VM evidence, not Linea sequencer evidence.
-- A fresh isolated core P1 run also passed `35/35` with the EVM step skipped;
-  it now includes the real SQLite scope/backup/restore/WAL drill rather than
-  relying on three duplicate source-shape assertions. Its temporary DB and
-  drill directory were removed by the runner.
-- The compiler-derived V10 ABI snapshot, reviewed fragments, and semantic digest
-  are wired into shared frontend, route, indexer, canary, and keeper paths with
-  provenance drift checks. `JackpotBanner` now also resolves its three event
-  definitions from `GAME_EVENTS_ABI`; no production manual `parseAbi` or
-  `parseAbiItem` call remains. Tests retain only negative source assertions.
-- Wallet hardening now blocks hashless ambiguous broadcasts until manual
-  reconciliation and binds Auto-Miner send-time authorization to the live
-  preferred actor. It also covers tracked pending approval nonces, actor/signer
-  changes, retries, reload/reconnect, wrong
-  network, two-tab duplication, and terminal transaction states in executable
-  local tests. Real Privy/wallet signing proof remains external.
-- Indexer storage now couples events/checkpoints/cursor atomically, supports
-  bounded fork rollback/replay, uses an opaque single-writer lease, preserves
-  log-index bet identity, and has restart/two-process WAL/busy contention tests.
-- API work adds a black-box route matrix plus real two-process shared admission
-  proof for jackpots/OG, deposits, and health behavior. Production two-replica
-  evidence remains a G1-G14 requirement.
-- Business tests have begun domain extraction into wallet, read-model,
-  reward-scanner, live-state API, indexer-normalization, runtime-recovery,
-  cache/planner, wallet-runtime, history-presentation, game-data/presentation,
-  runtime-polling, chat-polling, chat-content, jackpot/rebate-security, and
-  chat-client-safety, release-operations, runtime-metrics, error-boundary,
-  wallet/route-safety, Sentry-sanitization, and auth/canary-boundary modules.
-  The client-identity/external-rate-limit behavioral module now owns proxy-trust,
-  shared-bucket, bounded-response, and unsafe-endpoint cases. The wallet-shell/
-  mining-action module now owns the async auto-resolve and wallet-shell checks. The
-  mining-runtime-safety module owns persisted-session/tab-lock/run-setup checks.
-  Explorer-link normalization and hostile-input cases run through their own direct
-  module. Utility-safety now executes decimal, rejection, timeout, and redact/
-  bounded-error behavior directly rather than inspecting source shape. Wallet
-  external-boundary, error-shell, dialog-accessibility, wallet-funding, and
-  jackpot-banner, wins-presentation, runtime-health-diagnostics, runtime-monitor
-  alerts/config-artifact boundaries, public-metadata, Sidebar legal-navigation,
-  tutorial/public-copy, HTTP/browser smoke-boundary, wallet-action, UI-motion/
-  read-only, Hub read-only, and public-presentation domains now execute from
-  dedicated imported modules. The coordinator is now 6,210 lines; stored-number,
-  summary-timeout, admin-proof parsing, and bigint balance formatting have
-  direct adversarial behavioral inputs, and an isolated compact logic run
-  passed in 98,834 ms with zero assertion failures and no timeout. The
-  pending-nonce Preview network/credential
-  boundary has an executable CLI regression instead of duplicate source regex;
-  game-data helper bounds now run through direct behavioral inputs rather than
-  duplicate source-shape checks, as do runtime-metrics, canary-health, game
-  and chat polling, chat-content validation state transitions, and bounded
-  wallet/route safety inputs.
-  Further source-string reduction remains open.
-- CI is committed with Linux and Windows rows, scheduled dependency
-  audits, explicit indexer-storage/P1 gates, concurrency, timeouts, and bounded
-  artifacts. No hosted run for the new candidate has completed yet.
-- Focused smoke checks pass after adapting selectors to the canonical `Login`
-  aria-label and exact `Manual Bet` text. The extreme fixture now follows the
-  authoritative chain epoch; huge-bigint behavior remains covered separately
-  by a dedicated unit test.
-- Round-state/current-source evidence, a 44px mobile mining dock, safe-area and
-  visual-viewport handling, Privy login state/accessibility, dialog focus
-  semantics, and reduced-motion behavior have dedicated passing local suites.
-  The round model executes direct `00:00`, active-empty, settling,
-  keeper-delayed, stale-RPC, and stale-indexer cases locally.
-  Browser runtime now passes the mobile dock at `390x844` and `320x800` after
-  the `HubContent` backdrop fix, plus sidebar Escape/focus return. The app Privy
-  trigger also passes Escape/focus return.
-- The Privy `3.27.2` embedded modal remains an upstream accessibility blocker:
-  the email control's accessible name becomes `Submit` and the close target is
-  `24x24`; no supported config/API fixes either issue. No DOM/CSS or
-  `node_modules` hack was used, so full real-modal closure remains open.
-- After clean `npm ci`, current-tree bundle proof passes across `226` files:
-  `7500007` total bytes, `7162708` JavaScript bytes, largest file `1043297`, below the `1250000`
-  limit; CSS is `216635` and WASM is `1056860` bytes.
-- The old exact `46d3bc50` baseline completed its two-hour local profile with
-  API writes `0`, external browser requests blocked, heap delta `-1099488`,
-  peak `+10091819`, and DOM slope `0`. The later exact `d626a0f` profile also
-  completed its requested `7200036ms`: API writes `0`, blocked external
-  requests `134`, heap delta `-702527`, peak `+2637951`, DOM delta `3`, and
-  long-task maximum `95ms`. Native hidden-state throttling was not observed;
-  only synthetic visibility was measured, so it remains open final-candidate
-  browser evidence.
-- The 2026-08-12 P17 run completed `7200036ms` against existing production
-  build `KtgFoXuIosh-DwRAGcr24` (`status=partial`; no rebuild). It fulfilled no
-  API writes, blocked `134` external requests, and measured polling at
-  `16.32/min` visible, `1.00/min` under synthetic hidden state, and `16.40/min`
-  after restore. Across `243` samples, heap changed
-  `15000690 -> 25610079` (`+10609389`; fitted slope `+262298` bytes/hour;
-  max `28484232`); DOM changed `473 -> 476` with slope `0/hour`. The experiment
-  had zero long tasks after two initial-load tasks (maximum `110ms`), and `/`
-  emitted `25` modern first-load assets (`1013390` gzip / `814726` Brotli).
-  This is observational evidence, not a leak finding. Native hidden state was
-  not observed, React rerenders were not profiled, and the reused build records
-  no Git SHA, so final exact-SHA evidence remains open.
-- On exact clean-checkout head `8d42cdb3`, prelaunch passes every required-local
-  row: V9/V10 compile/invariants, P1/EVM, typecheck, 503-file lint, hermetic
-  build, bundle baseline, SQLite operations, logic, security-followup, and both
-  dependency proofs. Production audit has `0` High/Critical; all-deps has `1`
-  allowed dev-toolchain High and `0` blocking. It reports `25` external/status
-  commands missing or blocking evidence; these remain outside local completion.
+## Objective status
+
+### P0
+
+1. Dependency overrides, lockfile, clean-install evidence, and both audit gates:
+   locally complete; hosted CI/final immutable SHA evidence remains external.
+2. Hermetic `check-local` and protected DB invariants: locally complete.
+3. Exact release candidate: the mapped local commits exist and a clean-checkout
+   reproduction exists for an earlier snapshot; final immutable-SHA
+   reproduction remains open.
+4. Security scan: working-tree scan is clean, but the required supported scan of
+   the eventual clean immutable commit remains open.
+
+### P1
+
+- V10 EVM properties, compiler-derived ABI/provenance, wallet state machines,
+  indexer/DB recovery, API route matrix, and CI hardening have strong local
+  executable evidence. They are not production evidence.
+- The reproducible current P1.10 AST audit is `PARTIAL` at `85.56%`
+  behavioral: `745` source-operand assertions remain across the coordinator and
+  its `95` direct test modules. It classifies operands bound to `readFileSync`;
+  it does not convert source-binding checks into behavioral proof. Sixteen
+  redundant indexer finality/restart-policy, strict epoch-parser, route-cache,
+  and Auto-Miner retry source checks were removed because existing public-function
+  boundary cases already kill their unsafe mutants. The 501-line coordinator is
+  now 429 lines: release documentation and environment-template checks run from
+  a direct module.
+- Documentation is now compacted: this file is current truth,
+  [`agent-progress.md`](agent-progress.md) is the short handoff, historical detail
+  is under [`archive/`](archive/), and
+  [`remaining-worklist.md`](remaining-worklist.md) is the only active queue.
+- Actual Redis/Valkey Lua `EVAL` semantics are still unproven locally; the
+  JavaScript model must not be represented as equivalent production evidence.
+
+### UX and performance
+
+- Runtime-state, sticky mobile controls, Privy/login accessibility, chat/safe-area,
+  reduced-motion, dialog, and read-only UI packets have executable local tests.
+- P1.17 remains open: native hidden-tab behavior and a sealed clean-final-SHA
+  two-hour memory run have not been produced.
+- Intentional user-visible refresh behavior remains unchanged unless measured
+  evidence supports a change.
+
+## V10 and V9 policy
+
+- Routine `check-local`, Linux/Windows CI, and the prelaunch manifest are V10-only;
+  they no longer compile V9, run V9 invariants, or upload V9 provenance.
+- Standalone V9 source/manifest commands remain an explicit compatibility
+  baseline until V10 deployment and cutover are externally proven. Removing that
+  baseline is a separately reviewed post-cutover action.
+- Deployed Sepolia V10 remains executable but has a metadata-only exact-bytecode
+  mismatch. Do not bypass or silently relabel it.
 
 ## External and live blockers
 
-- G1-G14 remain `0/14 Complete`. Canonical status lives in
-  [`docs/mainnet-status-board.md`](mainnet-status-board.md) and
-  [`docs/mainnet-proof-record.md`](mainnet-proof-record.md).
-- No wallet signing, chain write, deployment, approval, bet, claim, nonce
-  replacement, canary, or soak was performed during this work.
-- The latest Sepolia V10 Preview attempt on 2026-08-12 remained fully read-only
-  (`transactionSent=false`, no signing material, no wallet client, no contract
-  write), but planner and matrix stopped because the current runtime omits
-  `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1`. Do not inject that flag
-  ad hoc: validate the actual deployed V10 runtime configuration first, then
-  regenerate a passing Preview. The 2026-08-12 rerun failed at those local
-  preconditions before a matrix log was created; it blocks G10/G11 and
-  authorizes nothing.
-- Current policy requires G10/G11 evidence on Linea mainnet and says Sepolia
-  closes no G1-G14 gate. The requested Sepolia soak therefore remains testnet
-  evidence unless that conflict is explicitly resolved.
-- Deployed Sepolia V10 remains executable but has an exact metadata-only
-  bytecode mismatch. Do not bypass or silently relabel it.
-- The latest prelaunch report has `24` external/status command blockers across
-  backup, canary, chain, contract, environment, host, indexer, launch,
-  monitoring, QA, restore, and sign-off groups. Mainnet environment validation
-  has `41` failures; the testnet soak has not started.
+- G1-G14 remain `0/14 Complete`. Canonical status is in
+  [`mainnet-status-board.md`](mainnet-status-board.md) and
+  [`mainnet-proof-record.md`](mainnet-proof-record.md).
+- Current prelaunch passes every required-local row but retains exactly `25`
+  external/status blockers. Mainnet environment validation has `41` failures.
+- The latest Sepolia Preview was read-only and authorized nothing. It failed
+  closed because the actual runtime did not prove
+  `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1`; it was stale at the latest
+  refresh and supplies no G10/G11 evidence.
+- Mainnet policy does not allow Sepolia evidence to close G10/G11 without an
+  explicit policy decision.
+- Domain/HTTPS, Privy origins, ownership/randomness sign-off, supervised
+  processes, real two-replica limiting, fresh indexer DB, real backup/restore,
+  monitoring/Resend/Sentry, wallet/mobile QA, and final security sign-off remain
+  external requirements.
+- The protocol-randomness High cannot be closed without a scope decision that
+  permits a randomness redesign and replacement deployment; the current goal
+  explicitly forbids changing randomness.
+
+## Next authorized steps
+
+1. Continue bounded P1.10 behavioral extraction and finish P1.17 local evidence.
+2. On the resulting immutable SHA, run fresh `npm ci`, complete local gates,
+   protected DB invariants, and the supported full Standard security scan.
+3. Resolve external G1-G14 prerequisites and validate deployed V10 runtime.
+4. Generate a fresh read-only Preview. Request separate exact consent only after
+   that Preview; without it, perform no transaction, signing, wallet, or chain
+   action.
 
 ## Safety boundaries
 
-- The removed wallet-delegation experiment remains disabled.
-- Preserve intentional user-visible refresh behavior until measured evidence
-  supports a change.
-- Do not read or print secrets, private RPC URLs, signing material, wallet
-  files, or private environment values.
-- Do not claim production, mainnet, G1-G14, browser, or long-soak readiness from
-  local checks alone.
-- Hermetic builds use a bounded timeout, owned process-tree termination, and a
-  same-output lock that reclaims only a lock whose PID/start-time owner is
-  proven gone or PID-reused. Any malformed, uninspectable, live, or replaced
-  lock stays fail-closed; the focused adversarial suite and a real
-  `build:summary` pass cover this local boundary.
+- Never print secrets, keyed RPC URLs, signing material, wallet files, or private
+  environment values.
+- No deployment, wallet signing, bet, claim, approval, replacement, canary, or
+  soak has been authorized by local green checks.
+- Do not claim mainnet, G1-G14, browser, native-hidden, long-soak, or production
+  readiness from local tests alone.
