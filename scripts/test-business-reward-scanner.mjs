@@ -247,6 +247,11 @@ export async function runRewardScannerTests() {
     "deep reward scan must bind aligned multicall results to the tested claim-window policy",
   );
   assert.match(deepRewardScanSource, /getExplorerTxUrl/, "deep reward claim notifications must include explorer links when a tx hash is available");
+  assert.match(
+    deepRewardScanSource,
+    /const waitReceipt = useCallback[\s\S]*waitForClaimTransactionReceiptAgreement\(intent, hash, TX_RECEIPT_TIMEOUT_MS\)/,
+    "deep reward claims must remain pending until shared quorum and finality confirmation succeeds",
+  );
   assert.match(deepRewardScanSource, /readJsonResponse<ClaimCandidatePage>/, "deep reward candidate scans must use the bounded JSON response helper");
   assert.match(deepRewardScanSource, /import \{ fetchWithTimeout \} from "\.\.\/lib\/fetchWithTimeout";[\s\S]*fetchWithTimeout\(`\/api\/claim-candidates\?\$\{query\.toString\(\)\}`,\s*\{ cache: "no-store" \}\)/, "deep reward candidate scans must use the shared fetch timeout helper");
   assert.doesNotMatch(deepRewardScanSource, /response\.json\(\)/, "deep reward candidate scans must not use unbounded response.json");
