@@ -10,11 +10,14 @@ This is the compact continuation handoff. Current repository truth is in
 
 ## Current continuation point
 
-- Current local work is intentionally split into two uncommitted wallet-security
-  packets after the sealed `5cce4f92` scan: mining transaction-envelope
-  verification, then claim receipt quorum/finality. They require focused tests,
-  typecheck, a new immutable-SHA cycle, and separate commit approval; neither
-  packet authorizes a push, deployment, signing, wallet action, or chain write.
+- Commit `1321c7ea` carries the wallet-security packet from the sealed
+  `5cce4f92` scan: mining transaction-envelope verification and claim receipt
+  quorum/finality. Its first clean-checkout cycle exposed only test-fixture and
+  stale source-regex defects; the small follow-up is currently uncommitted and
+  has passed focused tests, typecheck, and the full business coordinator. It
+  still requires a separate commit approval and a new immutable-SHA cycle;
+  neither packet authorizes push, deployment, signing, wallet action, or chain
+  write.
 - Branch `codex/repo-cleanup`; the `320`-path candidate is committed locally
   across the eight documented partitions, followed by one hermetic
   clean-checkout test correction. The documentation update is the current

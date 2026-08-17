@@ -291,18 +291,18 @@ export function runJackpotAndRebateSecurityTests() {
   );
   assert.match(
     rebateSource,
-    /const confirmClaimBatch = useCallback[\s\S]*getTransactionReceipt\(\{ hash \}\)[\s\S]*if \(receipt\.status !== "success"\) \{[\s\S]*throw new Error\(`Transaction reverted: \$\{hash\}`\);/,
-    "Safety Pool confirmation must surface reverted receipts before ambiguous-pending fallback",
+    /const confirmClaimBatch = useCallback[\s\S]*waitForClaimTransactionReceiptAgreement\([\s\S]*if \(confirmation === "confirmed"\) return;/,
+    "Safety Pool confirmation must require shared quorum and finality before reporting success",
   );
   assert.match(
     rebateSource,
-    /if \(message\.startsWith\("transaction reverted:"\)\) throw err;/,
+    /if \(message\.startsWith\("transaction reverted"\)\) throw err;/,
     "Safety Pool reverted receipts must be rethrown instead of converted to ambiguous pending",
   );
-  assert.match(
+  assert.doesNotMatch(
     rebateSource,
-    /let remainingEpochs: number\[\];[\s\S]*loadClaimableEpochsExact[\s\S]*createClaimConfirmationPendingError/,
-    "Safety Pool post-send state reads must fail as ambiguous pending rather than trigger a duplicate fallback",
+    /const confirmClaimBatch = useCallback[\s\S]*loadClaimableEpochsExact\(publicClient, sender, intent\.epochs\)/,
+    "Safety Pool claim-state reads must not replace receipt quorum/finality confirmation",
   );
   const rebatesRouteSource = readFileSync("app/api/rebates/route.ts", "utf8");
   const rebateHistoryRouteSource = readFileSync("app/api/rebate-history/route.ts", "utf8");

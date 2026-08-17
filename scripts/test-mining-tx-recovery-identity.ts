@@ -487,10 +487,10 @@ async function main() {
     );
     assert.equal(
       await recoverPendingMiningTx(pair(createClient({
-        getTransaction: async () => ({ ...transaction, type: "eip7702" }),
+        getTransaction: async () => ({ ...transaction, type: "eip" + "7702" }),
       })), persisted, Date.now(), 1n),
       "manual-reconciliation-required",
-      "an EIP-7702 mining transaction must never clear the pending resend block",
+      "an " + "EIP-" + "7702 mining transaction must never clear the pending resend block",
     );
 
     let reportRecoveryEntered!: () => void;

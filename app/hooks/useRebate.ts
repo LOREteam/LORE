@@ -886,7 +886,7 @@ export function useRebate(options?: UseRebateOptions) {
             );
           }
           const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-          if (message.startsWith("transaction reverted:")) throw err;
+          if (message.startsWith("transaction reverted")) throw err;
           throw createClaimConfirmationPendingError(
             "Safety Pool claim was submitted, but confirmation is temporarily unavailable. Refresh the Safety Pool tab before retrying.",
           );

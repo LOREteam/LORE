@@ -48,7 +48,7 @@ async function assertClaimReceiptQuorumPolicy(candidate) {
     getTransactionReceipt: async () => receipt,
     getTransaction: async () => transaction,
     getChainId: async () => 59141,
-    getBlockNumber: async () => 11n,
+    getBlockNumber: async () => 12n,
     getBlock: async () => ({ hash: blockHash }),
   };
   const intent = { actor, chainId: 59141, contract, calldata };
