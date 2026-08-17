@@ -5,7 +5,9 @@ import {
   parseChainTileIds,
   toDisplayNumberWei,
 } from "./indexerNormalization.mjs";
-import { describeIndexerError } from "./indexerSafety.ts";
+import * as indexerSafetyModule from "./indexerSafety.ts";
+
+const { describeIndexerError } = indexerSafetyModule.default ?? indexerSafetyModule;
 
 export function runIndexerNormalizationTests() {
   const describedSecretError = describeIndexerError(new Error(
