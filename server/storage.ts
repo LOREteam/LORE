@@ -26,6 +26,7 @@ const SCOPED_INDEXER_EVENTS_TABLE = "scoped_indexer_events";
 const SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE = "scoped_indexer_block_checkpoints";
 const SCOPED_INDEXER_LEASES_TABLE = "scoped_indexer_leases";
 const ACTIVE_CONTRACT_SCOPE_META_KEY = "__storage_active_contract_scope";
+const PUBLIC_READ_MODEL_REVISION_META_KEY = "publicReadModelRevision";
 const LEGACY_CONTRACT_META_KEYS = [
   "currentEpoch",
   "lastIndexedBlock",
@@ -312,6 +313,22 @@ function setMetaValue(key: string, value: string) {
   }, "meta");
 }
 
+/**
+ * Monotonic, contract-scoped version for cached public aggregates. Call this
+ * only from the same transaction as a write that can change a public model.
+ */
+function bumpPublicReadModelRevision() {
+  const current = getMetaBigInt(PUBLIC_READ_MODEL_REVISION_META_KEY);
+  const next = current !== null && current >= 0n ? current + 1n : 1n;
+  setMetaValue(PUBLIC_READ_MODEL_REVISION_META_KEY, next.toString());
+  return next.toString();
+}
+
+export function getPublicReadModelRevision() {
+  const revision = getMetaBigInt(PUBLIC_READ_MODEL_REVISION_META_KEY);
+  return revision !== null && revision >= 0n ? revision.toString() : "0";
+}
+
 function purgeScopedContractData(exceptScope: string) {
   const scopedTables = [
     SCOPED_EPOCHS_TABLE,
@@ -345,6 +362,7 @@ function purgeScopedContractData(exceptScope: string) {
     db.prepare("DELETE FROM jackpots").run();
     db.prepare("DELETE FROM reward_claims").run();
     db.prepare("DELETE FROM protocol_fee_flushes").run();
+    bumpPublicReadModelRevision();
   }, "purge_scoped_contract_data");
 }
 
@@ -957,6 +975,7 @@ export function commitIndexerChunk(commit: IndexerChunkCommit, action: () => voi
         block_hash = excluded.block_hash
     `).run(CURRENT_STORAGE_SCOPE, blockNumber, blockHash);
     setMetaValue("lastIndexedBlock", String(blockNumber));
+    bumpPublicReadModelRevision();
   }, "indexer_chunk");
 }
 
@@ -1053,6 +1072,7 @@ export function rollbackIndexerToBlock(
     if (repairCursor === null || repairCursor > nextRepairBlock) {
       setMetaValue("repairCursorBlock", nextRepairBlock.toString());
     }
+    bumpPublicReadModelRevision();
   }, "indexer_rollback");
 }
 
@@ -1140,13 +1160,14 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
   `);
 
   runInTransaction(() => {
+    let changed = false;
     for (const [epoch, row] of entries) {
       const epochNumber = parseSafePositiveIntegerString(epoch);
       const resolvedBlockNumber = row.resolvedBlock == null
         ? null
         : parseSafePositiveIntegerString(row.resolvedBlock);
       if (epochNumber === null) continue;
-      statement.run(
+      changed = didStatementChangeRow(statement.run(
         CURRENT_STORAGE_SCOPE,
         epochNumber,
         row.winningTile,
@@ -1157,8 +1178,9 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
         boolToInt(row.isDailyJackpot),
         boolToInt(row.isWeeklyJackpot),
         resolvedBlockNumber,
-      );
+      )) || changed;
     }
+    if (changed) bumpPublicReadModelRevision();
   }, "epochs");
 }
 
@@ -1528,6 +1550,7 @@ export function upsertBets(rows: BetStorageRow[]) {
   `);
 
   runInTransaction(() => {
+    let changed = false;
     for (const row of rows) {
       const epochNumber = parseSafePositiveIntegerString(row.epoch);
       const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
@@ -1540,16 +1563,16 @@ export function upsertBets(rows: BetStorageRow[]) {
       );
       if (identity === null) continue;
       if (identity.id !== identity.legacyId) {
-        migrateLegacyStatement.run(
+        changed = didStatementChangeRow(migrateLegacyStatement.run(
           identity.id,
           CURRENT_STORAGE_SCOPE,
           identity.legacyId,
           epochNumber,
           CURRENT_STORAGE_SCOPE,
           identity.id,
-        );
+        )) || changed;
       }
-      statement.run(
+      changed = didStatementChangeRow(statement.run(
         CURRENT_STORAGE_SCOPE,
         identity.id,
         normalizeWallet(row.user),
@@ -1560,8 +1583,9 @@ export function upsertBets(rows: BetStorageRow[]) {
         row.totalAmountNum,
         row.txHash,
         blockNumber,
-      );
+      )) || changed;
     }
+    if (changed) bumpPublicReadModelRevision();
   }, "bets");
 }
 
@@ -1634,12 +1658,13 @@ export function upsertJackpots(rows: JackpotStorageRow[]) {
   `);
 
   runInTransaction(() => {
+    let changed = false;
     for (const row of rows) {
       const epochNumber = parseSafePositiveIntegerString(row.epoch);
       const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
       if (epochNumber === null || blockNumber === null) continue;
       const id = `${row.kind}_${row.epoch}`;
-      statement.run(
+      changed = didStatementChangeRow(statement.run(
         CURRENT_STORAGE_SCOPE,
         id,
         epochNumber,
@@ -1648,8 +1673,9 @@ export function upsertJackpots(rows: JackpotStorageRow[]) {
         row.amountNum,
         row.txHash,
         blockNumber,
-      );
+      )) || changed;
     }
+    if (changed) bumpPublicReadModelRevision();
   }, "jackpots");
 }
 
@@ -1669,11 +1695,12 @@ export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
   `);
 
   runInTransaction(() => {
+    let changed = false;
     for (const row of rows) {
       const epochNumber = parseSafePositiveIntegerString(row.epoch);
       const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
       if (epochNumber === null || blockNumber === null) continue;
-      statement.run(
+      changed = didStatementChangeRow(statement.run(
         CURRENT_STORAGE_SCOPE,
         row.id,
         epochNumber,
@@ -1682,8 +1709,9 @@ export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
         row.rewardNum,
         row.txHash,
         blockNumber,
-      );
+      )) || changed;
     }
+    if (changed) bumpPublicReadModelRevision();
   }, "reward_claims");
 }
 
@@ -1739,18 +1767,20 @@ export function upsertProtocolFeeFlushes(rows: FeeFlushStorageRow[]) {
   `);
 
   runInTransaction(() => {
+    let changed = false;
     for (const row of rows) {
       const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
       if (blockNumber === null) continue;
-      statement.run(
+      changed = didStatementChangeRow(statement.run(
         CURRENT_STORAGE_SCOPE,
         row.id,
         row.ownerAmount,
         row.burnAmount,
         row.txHash,
         blockNumber,
-      );
+      )) || changed;
     }
+    if (changed) bumpPublicReadModelRevision();
   }, "protocol_fee_flushes");
 }
 
@@ -1931,8 +1961,8 @@ export function getChatProfiles(wallets?: string[]) {
 }
 
 export function upsertChatProfile(wallet: string, profile: ChatProfileRow) {
-  runWrite(() => {
-    db.prepare(`
+  runInTransaction(() => {
+    const result = db.prepare(`
       INSERT INTO chat_profiles(wallet, name, avatar, custom_avatar, updated_at)
       VALUES(?, ?, ?, ?, ?)
       ON CONFLICT(wallet) DO UPDATE SET
@@ -1947,6 +1977,7 @@ export function upsertChatProfile(wallet: string, profile: ChatProfileRow) {
       profile.customAvatar,
       profile.updatedAt,
     );
+    if (didStatementChangeRow(result)) bumpPublicReadModelRevision();
   }, "chat_profile");
 }
 
@@ -2210,7 +2241,10 @@ export function putJsonPath(path: string, value: unknown) {
   }
 
   if (path === "gamedata/_meta/lastIndexedBlock") {
-    setMetaBigInt("lastIndexedBlock", BigInt(String(value ?? "0")));
+    runInTransaction(() => {
+      setMetaBigInt("lastIndexedBlock", BigInt(String(value ?? "0")));
+      bumpPublicReadModelRevision();
+    }, "put_indexed_block");
     return;
   }
 

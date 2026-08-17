@@ -160,6 +160,13 @@ export function isFreshPublicReadModelSnapshot(
   );
 }
 
+export function createPublicReadModelCacheKey(namespace: string, revision: unknown): string {
+  const normalizedRevision = typeof revision === "string" && /^(?:0|[1-9]\d*)$/.test(revision)
+    ? revision
+    : "0";
+  return `${namespace}:revision:${normalizedRevision}`;
+}
+
 export function buildPublicRewardClaimStorageIdentity(
   row: PublicRewardClaimIdentityRow,
 ): string {

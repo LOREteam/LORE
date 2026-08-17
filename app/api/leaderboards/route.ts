@@ -4,6 +4,7 @@ import {
   beginRouteMetric,
   failRouteMetric,
   finishRouteMetric,
+  markRouteBackgroundRefresh,
   markRouteCacheHit,
   markRouteInflightJoin,
   markRouteStaleServed,
@@ -21,19 +22,18 @@ import {
   getAllRewardClaims,
   getChatProfiles,
   getEpochMap,
-  getMetaBigInt,
   getMetaJson,
-  getRecentRewardClaims,
+  getPublicReadModelRevision,
   setMetaJson,
 } from "../../../server/storage";
 import { logRouteError } from "../_lib/routeError";
 import { createRouteCache } from "../_lib/routeCache";
-import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
 import {
   comparePublicBigIntDesc,
   buildPublicReadModelFailure,
   collectPublicLeaderboardWinningTiles,
   computePublicLeaderboardRoiBasisPoints,
+  createPublicReadModelCacheKey,
   createPublicReadModelJsonResponse,
   formatPublicLeaderboardRoiPercent,
   isFreshPublicReadModelSnapshot,
@@ -66,10 +66,10 @@ const LEADERBOARDS_STALE_REFRESH_MS = 60_000;
 const LEADERBOARDS_SNAPSHOT_MAX_AGE_MS = 60 * 60 * 1000;
 const ROUTE_METRIC_KEY = "api/leaderboards";
 const LEADERBOARDS_SNAPSHOT_META_KEY = "snapshot:leaderboards:v1";
-const LEADERBOARDS_CACHE_KEY = "latest";
+const LEADERBOARDS_CACHE_NAMESPACE = "leaderboards";
 const LEADERBOARDS_ROUTE_CACHE_MAX_KEYS = 2;
+const PUBLIC_READ_MODEL_STABILITY_ATTEMPTS = 2;
 const leaderboardsRouteCache = createRouteCache<LeaderboardsPayload>(LEADERBOARDS_ROUTE_CACHE_MAX_KEYS);
-let leaderboardsCacheWatermark: string | null = null;
 
 type UserAgg = {
   totalWagered: bigint;
@@ -82,15 +82,12 @@ function normalizeStoredUserAddress(user: string): `0x${string}` | null {
   return normalizePublicReadModelAddress(user);
 }
 
-function getLatestRewardClaimMarker() {
-  const latest = getRecentRewardClaims(1)[0];
-  if (!latest) return "none";
-  return `${latest.blockNumber}:${latest.txHash ?? ""}:${latest.epoch}`;
+function getLeaderboardsDataWatermark() {
+  return getPublicReadModelRevision();
 }
 
-function getLeaderboardsDataWatermark() {
-  const lastIndexedBlock = getMetaBigInt("lastIndexedBlock")?.toString() ?? "null";
-  return `${lastIndexedBlock}|${getLatestRewardClaimMarker()}`;
+function getLeaderboardsCacheKey(watermark: string) {
+  return createPublicReadModelCacheKey(LEADERBOARDS_CACHE_NAMESPACE, watermark);
 }
 
 function jsonNoStore(payload: LeaderboardsPayload, status = 200) {
@@ -410,31 +407,70 @@ function saveLeaderboardsSnapshot(payload: LeaderboardsPayload, watermark: strin
   });
 }
 
-function hydrateLeaderboardsSnapshot(watermark: string | null) {
-  const snapshot = loadLeaderboardsSnapshot(watermark);
-  if (!snapshot) return null;
-  leaderboardsCacheWatermark = watermark;
-  leaderboardsRouteCache.set(LEADERBOARDS_CACHE_KEY, snapshot, LEADERBOARDS_ROUTE_CACHE_MS);
-  return snapshot;
+function isLeaderboardsRevisionCurrent(watermark: string | null) {
+  return watermark !== null && getLeaderboardsDataWatermark() === watermark;
 }
 
-function startLeaderboardsRefresh(watermark: string | null) {
-  startVersionedBackgroundRefresh({
-    cache: leaderboardsRouteCache,
-    cacheKey: LEADERBOARDS_CACHE_KEY,
-    ttlMs: LEADERBOARDS_STALE_REFRESH_MS,
-    routeMetricKey: ROUTE_METRIC_KEY,
-    shouldSkip: () => leaderboardsCacheWatermark === watermark,
-    build: () => buildLeaderboardsPayload(),
-    toPayload: (result) => result,
-    onCommit: (result) => {
-      leaderboardsCacheWatermark = watermark;
-      saveLeaderboardsSnapshot(result, watermark);
-    },
-    onError: (error) => {
+function commitLeaderboardsPayload(
+  cacheKey: string,
+  payload: LeaderboardsPayload,
+  watermark: string | null,
+  ttlMs: number,
+  persistSnapshot = true,
+) {
+  if (!isLeaderboardsRevisionCurrent(watermark)) return false;
+  leaderboardsRouteCache.set(cacheKey, payload, ttlMs);
+  if (!isLeaderboardsRevisionCurrent(watermark)) return false;
+  if (persistSnapshot) saveLeaderboardsSnapshot(payload, watermark);
+  return true;
+}
+
+function hydrateLeaderboardsSnapshot(cacheKey: string, watermark: string | null) {
+  const snapshot = loadLeaderboardsSnapshot(watermark);
+  if (!snapshot) return null;
+  return commitLeaderboardsPayload(cacheKey, snapshot, watermark, LEADERBOARDS_ROUTE_CACHE_MS, false)
+    ? snapshot
+    : null;
+}
+
+function startLeaderboardsRefresh(cacheKey: string, watermark: string | null) {
+  if (
+    leaderboardsRouteCache.getRefresh(cacheKey) ||
+    leaderboardsRouteCache.getInflight(cacheKey)
+  ) {
+    return;
+  }
+
+  markRouteBackgroundRefresh(ROUTE_METRIC_KEY);
+  let refreshPromise: Promise<void>;
+  refreshPromise = buildLeaderboardsPayload()
+    .then((payload) => {
+      commitLeaderboardsPayload(cacheKey, payload, watermark, LEADERBOARDS_STALE_REFRESH_MS);
+    })
+    .catch((error) => {
       logRouteError(ROUTE_METRIC_KEY, error, { phase: "background-refresh" });
-    },
-  });
+    })
+    .finally(() => {
+      leaderboardsRouteCache.clearRefresh(cacheKey, refreshPromise);
+    });
+  leaderboardsRouteCache.setRefresh(cacheKey, refreshPromise);
+}
+
+function startLeaderboardsBuild(cacheKey: string, watermark: string | null) {
+  const existing = leaderboardsRouteCache.getInflight(cacheKey);
+  if (existing) return { joined: true, promise: existing };
+
+  let requestPromise: Promise<LeaderboardsPayload>;
+  requestPromise = buildLeaderboardsPayload()
+    .then((payload) => {
+      commitLeaderboardsPayload(cacheKey, payload, watermark, LEADERBOARDS_ROUTE_CACHE_MS);
+      return payload;
+    })
+    .finally(() => {
+      leaderboardsRouteCache.clearInflight(cacheKey, requestPromise);
+    });
+  leaderboardsRouteCache.setInflight(cacheKey, requestPromise);
+  return { joined: false, promise: requestPromise };
 }
 
 export async function GET(request: Request) {
@@ -446,59 +482,59 @@ export async function GET(request: Request) {
   if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
-  const now = Date.now();
-  const cached = leaderboardsRouteCache.getFresh(LEADERBOARDS_CACHE_KEY, now);
-  if (cached) {
-    markRouteCacheHit(ROUTE_METRIC_KEY);
-    finishRouteMetric(metric, 200);
-    return jsonNoStore(cached);
-  }
-
-  const currentWatermark = getLeaderboardsDataWatermark();
-  const staleCache = leaderboardsRouteCache.getStale(LEADERBOARDS_CACHE_KEY);
-  if (staleCache) {
-    markRouteStaleServed(ROUTE_METRIC_KEY);
-    if (leaderboardsCacheWatermark !== currentWatermark) {
-      startLeaderboardsRefresh(currentWatermark);
-    }
-    finishRouteMetric(metric, 200);
-    return jsonNoStore(staleCache);
-  }
-
-  const snapshot = hydrateLeaderboardsSnapshot(currentWatermark);
-  if (snapshot) {
-    markRouteCacheHit(ROUTE_METRIC_KEY);
-    finishRouteMetric(metric, 200);
-    return jsonNoStore(snapshot);
-  }
-
+  let staleFallback: { payload: LeaderboardsPayload; watermark: string } | null = null;
   try {
-    const inflight = leaderboardsRouteCache.getInflight(LEADERBOARDS_CACHE_KEY);
-    const payload = inflight
-      ? (markRouteInflightJoin(ROUTE_METRIC_KEY), await inflight)
-      : await (() => {
-          const { requestPromise } = startVersionedInflightBuild({
-            cache: leaderboardsRouteCache,
-            cacheKey: LEADERBOARDS_CACHE_KEY,
-            ttlMs: LEADERBOARDS_ROUTE_CACHE_MS,
-            build: () => buildLeaderboardsPayload(),
-            toPayload: (result) => result,
-            onCommit: (result) => {
-              leaderboardsCacheWatermark = currentWatermark;
-              saveLeaderboardsSnapshot(result, currentWatermark);
-            },
-          });
-          return requestPromise;
-        })();
+    for (let attempt = 0; attempt < PUBLIC_READ_MODEL_STABILITY_ATTEMPTS; attempt += 1) {
+      const currentWatermark = getLeaderboardsDataWatermark();
+      const cacheKey = getLeaderboardsCacheKey(currentWatermark);
+      const cached = leaderboardsRouteCache.getFresh(cacheKey, Date.now());
+      if (cached) {
+        if (isLeaderboardsRevisionCurrent(currentWatermark)) {
+          markRouteCacheHit(ROUTE_METRIC_KEY);
+          finishRouteMetric(metric, 200);
+          return jsonNoStore(cached);
+        }
+        continue;
+      }
 
+      const staleCache = leaderboardsRouteCache.getStale(cacheKey);
+      if (staleCache) {
+        if (!isLeaderboardsRevisionCurrent(currentWatermark)) continue;
+        staleFallback = { payload: staleCache, watermark: currentWatermark };
+        startLeaderboardsRefresh(cacheKey, currentWatermark);
+        if (!isLeaderboardsRevisionCurrent(currentWatermark)) continue;
+        markRouteStaleServed(ROUTE_METRIC_KEY);
+        finishRouteMetric(metric, 200);
+        return jsonNoStore(staleCache);
+      }
+
+      const snapshot = hydrateLeaderboardsSnapshot(cacheKey, currentWatermark);
+      if (snapshot) {
+        if (!isLeaderboardsRevisionCurrent(currentWatermark)) continue;
+        markRouteCacheHit(ROUTE_METRIC_KEY);
+        finishRouteMetric(metric, 200);
+        return jsonNoStore(snapshot);
+      }
+
+      const build = startLeaderboardsBuild(cacheKey, currentWatermark);
+      if (build.joined) markRouteInflightJoin(ROUTE_METRIC_KEY);
+      const payload = await build.promise;
+      if (!isLeaderboardsRevisionCurrent(currentWatermark)) continue;
+
+      finishRouteMetric(metric, 200);
+      return jsonNoStore(payload);
+    }
+
+    // A continuously changing multi-process revision must not populate a cache or snapshot.
+    const payload = await buildLeaderboardsPayload();
     finishRouteMetric(metric, 200);
     return jsonNoStore(payload);
   } catch (error) {
     logRouteError(ROUTE_METRIC_KEY, error);
-    if (staleCache) {
+    if (staleFallback && isLeaderboardsRevisionCurrent(staleFallback.watermark)) {
       markRouteStaleServed(ROUTE_METRIC_KEY);
       finishRouteMetric(metric, 200);
-      return jsonNoStore(staleCache);
+      return jsonNoStore(staleFallback.payload);
     }
     failRouteMetric(metric, 500);
     return jsonNoStore(buildPublicReadModelFailure({

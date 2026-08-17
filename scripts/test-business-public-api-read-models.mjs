@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import * as publicReadModelPolicyModule from "../app/api/_lib/publicReadModelPolicy.ts";
+import { runIsolatedBusinessLogicChild } from "./business-logic-isolated-runner.mjs";
 
 const policy = publicReadModelPolicyModule.default ?? publicReadModelPolicyModule;
 const {
@@ -9,6 +12,7 @@ const {
   collectPublicLeaderboardWinningTiles,
   comparePublicBigIntDesc,
   computePublicLeaderboardRoiBasisPoints,
+  createPublicReadModelCacheKey,
   createPublicReadModelJsonResponse,
   formatPublicLeaderboardRoiPercent,
   formatPublicRecentClaimAmount,
@@ -29,6 +33,282 @@ const CHECKSUM_ADDRESS = "0x00000000000000000000000000000000000000aA";
 const NORMALIZED_ADDRESS = CHECKSUM_ADDRESS.toLowerCase();
 const HASH_A = `0x${"a".repeat(64)}`;
 const HASH_B = `0x${"b".repeat(64)}`;
+const STORAGE_BEHAVIOR_CHILD_ARG = "--public-read-model-storage-child";
+
+function pathIsInsideOrSame(rootPath, candidatePath) {
+  const relativePath = relative(rootPath, candidatePath);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function buildStorageBehaviorChildEnvironment() {
+  const childEnv = { ...process.env };
+  const overriddenKeys = new Set([
+    "lore_premainnet_runtime_strict",
+    "next_public_linea_network",
+    "node_env",
+  ]);
+  for (const name of Object.keys(childEnv)) {
+    if (overriddenKeys.has(name.toLowerCase())) delete childEnv[name];
+  }
+  childEnv.LORE_PREMAINNET_RUNTIME_STRICT = "0";
+  childEnv.NEXT_PUBLIC_LINEA_NETWORK = "sepolia";
+  childEnv.NODE_ENV = "test";
+  return childEnv;
+}
+
+function assertRevision(storage, expected, message) {
+  assert.equal(storage.getPublicReadModelRevision(), String(expected), message);
+}
+
+function assertRevisionAdvance(storage, previous, action, message) {
+  action();
+  assertRevision(storage, BigInt(previous) + 1n, message);
+  return BigInt(previous) + 1n;
+}
+
+async function runPublicReadModelStorageBehaviorChild() {
+  const configuredDbPath = process.env.LORE_DB_PATH?.trim() ?? "";
+  const projectRoot = resolve(process.cwd());
+  assert.ok(isAbsolute(configuredDbPath), "storage behavior child requires an absolute LORE_DB_PATH");
+  assert.equal(
+    pathIsInsideOrSame(projectRoot, resolve(configuredDbPath)),
+    false,
+    "storage behavior child database must stay outside the repository",
+  );
+  assert.equal(process.env.LORE_ALLOW_CONTRACT_SCOPE_PURGE, "0");
+
+  const storageModule = await import("../server/storage.ts");
+  const storage = storageModule.default ?? storageModule;
+  const user = "0x0000000000000000000000000000000000000001";
+  const leaseOwnerToken = "public-read-model-test-lease";
+  let revision = 0n;
+
+  assertRevision(storage, revision, "a fresh scoped database must start at revision zero");
+  revision = assertRevisionAdvance(storage, revision, () => storage.upsertEpochMap({
+    "101": {
+      winningTile: 7,
+      totalPool: "1000",
+      rewardPool: "900",
+      fee: "100",
+      jackpotBonus: "25",
+      isDailyJackpot: true,
+      isWeeklyJackpot: false,
+      resolvedBlock: "100",
+    },
+  }), "accepted epoch write must advance the revision exactly once");
+  assert.equal(storage.getEpochMap()["101"]?.resolvedBlock, "100");
+
+  revision = assertRevisionAdvance(storage, revision, () => storage.upsertBets([{
+    epoch: "101",
+    user,
+    tileIds: [7],
+    amounts: ["10"],
+    totalAmount: "10",
+    totalAmountNum: 10,
+    txHash: HASH_A,
+    blockNumber: "100",
+    logIndex: "0",
+  }]), "accepted bet write must advance the revision exactly once");
+  assert.equal(storage.getAllBetRows().length, 1);
+
+  revision = assertRevisionAdvance(storage, revision, () => storage.upsertJackpots([{
+    epoch: "101",
+    kind: "daily",
+    amount: "25",
+    amountNum: 25,
+    txHash: HASH_A,
+    blockNumber: "100",
+  }]), "accepted jackpot write must advance the revision exactly once");
+  assert.equal(storage.getRecentJackpots(5).length, 1);
+
+  revision = assertRevisionAdvance(storage, revision, () => storage.upsertRewardClaims([{
+    id: "claim-101",
+    epoch: "101",
+    user,
+    reward: "900",
+    rewardNum: 900,
+    txHash: HASH_B,
+    blockNumber: "100",
+  }]), "accepted reward write must advance the revision exactly once");
+  assert.equal(storage.getAllRewardClaims().length, 1);
+
+  revision = assertRevisionAdvance(storage, revision, () => storage.upsertProtocolFeeFlushes([{
+    id: "fee-101",
+    ownerAmount: "75",
+    burnAmount: "25",
+    txHash: HASH_B,
+    blockNumber: "100",
+  }]), "accepted fee write must advance the revision exactly once");
+  assert.equal(storage.getGlobalStatsAggregate().totalBurnWei, "25000000000000000000");
+
+  revision = assertRevisionAdvance(storage, revision, () => storage.upsertChatProfile(user, {
+    name: "Revision Test",
+    avatar: "miner",
+    customAvatar: null,
+    updatedAt: 1,
+  }), "accepted profile write must advance the revision exactly once");
+  assert.equal(storage.getChatProfile(user)?.name, "Revision Test");
+
+  storage.upsertEpochMap({});
+  storage.upsertBets([]);
+  storage.upsertJackpots([]);
+  storage.upsertRewardClaims([]);
+  storage.upsertProtocolFeeFlushes([]);
+  storage.upsertEpochMap({
+    "0": {
+      winningTile: 1,
+      totalPool: "1",
+      rewardPool: "1",
+      isDailyJackpot: false,
+      isWeeklyJackpot: false,
+    },
+  });
+  storage.upsertBets([{
+    epoch: "0",
+    user,
+    tileIds: [1],
+    totalAmount: "1",
+    totalAmountNum: 1,
+    txHash: HASH_A,
+    blockNumber: "100",
+  }]);
+  assertRevision(storage, revision, "empty and rejected writes must not advance the revision");
+
+  storage.upsertEpochMap({
+    "101": {
+      winningTile: 9,
+      totalPool: "2000",
+      rewardPool: "1800",
+      isDailyJackpot: false,
+      isWeeklyJackpot: false,
+      resolvedBlock: "99",
+    },
+  });
+  storage.upsertBets([{
+    epoch: "101",
+    user,
+    tileIds: [9],
+    totalAmount: "20",
+    totalAmountNum: 20,
+    txHash: HASH_A,
+    blockNumber: "99",
+    logIndex: "0",
+  }]);
+  storage.upsertJackpots([{
+    epoch: "101",
+    kind: "daily",
+    amount: "99",
+    amountNum: 99,
+    txHash: HASH_A,
+    blockNumber: "99",
+  }]);
+  storage.upsertRewardClaims([{
+    id: "claim-101",
+    epoch: "101",
+    user,
+    reward: "999",
+    rewardNum: 999,
+    txHash: HASH_B,
+    blockNumber: "99",
+  }]);
+  storage.upsertProtocolFeeFlushes([{
+    id: "fee-101",
+    ownerAmount: "999",
+    burnAmount: "999",
+    txHash: HASH_B,
+    blockNumber: "99",
+  }]);
+  assertRevision(storage, revision, "stale upserts rejected by storage must not advance the revision");
+  assert.equal(storage.getEpochMap()["101"]?.winningTile, 7);
+  assert.equal(storage.getAllBetRows()[0]?.totalAmount, "10");
+  assert.equal(storage.getRecentJackpots(1)[0]?.amount, "25");
+  assert.equal(storage.getAllRewardClaims()[0]?.reward, "900");
+  assert.equal(storage.getGlobalStatsAggregate().totalBurnWei, "25000000000000000000");
+
+  assert.equal(storage.acquireIndexerLease(leaseOwnerToken, 60_000), true);
+  revision = assertRevisionAdvance(
+    storage,
+    revision,
+    () => storage.rollbackIndexerToBlock(0n, null, leaseOwnerToken),
+    "indexer rollback cursor commit must advance the revision exactly once",
+  );
+
+  const beforeFailedChunkRevision = revision;
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    assert.throws(
+      () => storage.commitIndexerChunk({
+        leaseOwnerToken,
+        expectedPreviousBlock: 0n,
+        expectedPreviousBlockHash: null,
+        blockNumber: 1n,
+        blockHash: HASH_A,
+      }, () => {
+        storage.upsertEpochMap({
+          "999": {
+            winningTile: 1,
+            totalPool: "1",
+            rewardPool: "1",
+            isDailyJackpot: false,
+            isWeeklyJackpot: false,
+            resolvedBlock: "1",
+          },
+        });
+        throw new Error("intentional public read-model transaction rollback");
+      }),
+      /intentional public read-model transaction rollback/,
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assertRevision(
+    storage,
+    beforeFailedChunkRevision,
+    "revision increments inside a failed indexer chunk must roll back atomically",
+  );
+  assert.equal(storage.getEpochMap()["999"], undefined);
+  assert.deepEqual(storage.getIndexerBlockCheckpoints(), []);
+
+  revision = assertRevisionAdvance(storage, revision, () => storage.commitIndexerChunk({
+    leaseOwnerToken,
+    expectedPreviousBlock: 0n,
+    expectedPreviousBlockHash: null,
+    blockNumber: 1n,
+    blockHash: HASH_A,
+  }, () => {}), "successful indexer chunk cursor commit must advance the revision exactly once");
+  assert.deepEqual(storage.getIndexerBlockCheckpoints(), [{ blockNumber: "1", blockHash: HASH_A }]);
+
+  revision = assertRevisionAdvance(
+    storage,
+    revision,
+    () => storage.rollbackIndexerToBlock(0n, null, leaseOwnerToken),
+    "subsequent indexer rollback must advance the revision exactly once",
+  );
+  assert.deepEqual(storage.getIndexerBlockCheckpoints(), []);
+  assert.equal(storage.releaseIndexerLease(leaseOwnerToken), true);
+  assertRevision(storage, revision, "lease housekeeping must not affect the public revision");
+}
+
+function assertPublicReadModelRevisionStorageBehavior() {
+  const result = runIsolatedBusinessLogicChild({
+    args: [
+      resolve("node_modules/tsx/dist/cli.mjs"),
+      resolve("scripts/test-business-public-api-read-models.mjs"),
+      STORAGE_BEHAVIOR_CHILD_ARG,
+    ],
+    env: buildStorageBehaviorChildEnvironment(),
+    maxBuffer: 1024 * 1024,
+    timeout: 30_000,
+  });
+  const output = `${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`.trim();
+  assert.equal(
+    result.status,
+    0,
+    `isolated public read-model storage behavior child failed${output ? `:\n${output.slice(-4_000)}` : ""}`,
+  );
+  assert.match(String(result.stdout ?? ""), /Public read-model storage revision behavior passed\./);
+}
 
 function assertEpochPolicy(candidate) {
   assert.deepEqual(candidate(undefined), { ok: true, epochs: [] });
@@ -59,6 +339,70 @@ function assertSnapshotFreshnessPolicy(candidate) {
   ]) {
     assert.equal(candidate(savedAt, maxAgeMs, now), false);
   }
+}
+
+function assertPublicReadModelRevisionCacheKeyPolicy(candidate) {
+  assert.equal(candidate("leaderboards", "0"), "leaderboards:revision:0");
+  assert.equal(candidate("global-stats", "42"), "global-stats:revision:42");
+  for (const value of ["", "01", "-1", "1.5", "1e3", 1, null]) {
+    assert.equal(candidate("leaderboards", value), "leaderboards:revision:0");
+  }
+}
+
+function publicReadModelRevisionMutationPattern(name) {
+  const beforeNextExport = "(?:(?!\\nexport function )[\\s\\S])*?";
+  return new RegExp(
+    `export function ${name}\\([\\s\\S]*?\\)\\s*\\{${beforeNextExport}` +
+      "runInTransaction\\(\\(\\) => \\{[\\s\\S]*?bumpPublicReadModelRevision\\(\\)",
+  );
+}
+
+function assertPublicReadModelRevisionSourceBinding() {
+  // Structural binding complements the isolated executable SQLite mutation coverage below.
+  const storageSource = readFileSync("server/storage.ts", "utf8");
+  const leaderboardsSource = readFileSync("app/api/leaderboards/route.ts", "utf8");
+  const globalStatsSource = readFileSync("app/api/global-stats/route.ts", "utf8");
+
+  assert.match(storageSource, /PUBLIC_READ_MODEL_REVISION_META_KEY = "publicReadModelRevision"/);
+  assert.match(storageSource, /export function getPublicReadModelRevision\(\)/);
+  for (const name of [
+    "upsertEpochMap",
+    "upsertBets",
+    "upsertJackpots",
+    "upsertRewardClaims",
+    "upsertProtocolFeeFlushes",
+    "upsertChatProfile",
+    "rollbackIndexerToBlock",
+    "commitIndexerChunk",
+  ]) {
+    assert.match(
+      storageSource,
+      publicReadModelRevisionMutationPattern(name),
+      `${name} must commit its public read-model revision atomically with the write`,
+    );
+  }
+  assert.match(leaderboardsSource, /getPublicReadModelRevision/);
+  assert.match(leaderboardsSource, /getLeaderboardsCacheKey\(currentWatermark\)/);
+  assert.match(leaderboardsSource, /const PUBLIC_READ_MODEL_STABILITY_ATTEMPTS = 2/);
+  assert.match(
+    leaderboardsSource,
+    /if \(isLeaderboardsRevisionCurrent\(currentWatermark\)\) \{[\s\S]*?return jsonNoStore\(cached\)/,
+  );
+  assert.match(
+    leaderboardsSource,
+    /if \(!isLeaderboardsRevisionCurrent\(watermark\)\) return false;[\s\S]*?leaderboardsRouteCache\.set\([\s\S]*?if \(!isLeaderboardsRevisionCurrent\(watermark\)\) return false;[\s\S]*?saveLeaderboardsSnapshot/,
+  );
+  assert.match(globalStatsSource, /getPublicReadModelRevision\(\)/);
+  assert.match(globalStatsSource, /createPublicReadModelCacheKey/);
+  assert.match(globalStatsSource, /const PUBLIC_READ_MODEL_STABILITY_ATTEMPTS = 2/);
+  assert.match(
+    globalStatsSource,
+    /if \(getPublicReadModelRevision\(\) === revision\) \{[\s\S]*?return applyNoStoreHeaders\(NextResponse\.json\(cached\)\)/,
+  );
+  assert.match(
+    globalStatsSource,
+    /if \(getPublicReadModelRevision\(\) !== revision\) continue;[\s\S]*?globalStatsRouteCache\.set/,
+  );
 }
 
 function assertAddressPolicy(candidate) {
@@ -176,6 +520,9 @@ export function runPublicApiReadModelTests() {
 
   assertEpochPolicy(parsePublicRewardsEpochs);
   assertSnapshotFreshnessPolicy(isFreshPublicReadModelSnapshot);
+  assertPublicReadModelRevisionCacheKeyPolicy(createPublicReadModelCacheKey);
+  assertPublicReadModelRevisionSourceBinding();
+  assertPublicReadModelRevisionStorageBehavior();
   assertAddressPolicy(normalizePublicReadModelAddress);
   assertHashPolicy(normalizePublicTransactionHash);
   assertTilePolicy(parsePublicReadModelTileId);
@@ -218,6 +565,11 @@ export function runPublicApiReadModelTests() {
     () => assertSnapshotFreshnessPolicy((savedAt, maxAgeMs, now) => now - savedAt <= maxAgeMs),
     /false/,
     "future and malformed snapshot timestamp mutant must be killed",
+  );
+  assert.throws(
+    () => assertPublicReadModelRevisionCacheKeyPolicy((namespace) => `${namespace}:revision:0`),
+    /Expected values to be strictly equal/,
+    "public cache keys must change with each valid revision",
   );
   assert.throws(
     () => assertAddressPolicy((value) => value.toLowerCase()),
@@ -289,6 +641,11 @@ export function runPublicApiReadModelTests() {
 }
 
 if (process.argv[1]?.endsWith("test-business-public-api-read-models.mjs")) {
-  runPublicApiReadModelTests();
-  console.log("Public API read-model behavior tests passed.");
+  if (process.argv.includes(STORAGE_BEHAVIOR_CHILD_ARG)) {
+    await runPublicReadModelStorageBehaviorChild();
+    console.log("Public read-model storage revision behavior passed.");
+  } else {
+    runPublicApiReadModelTests();
+    console.log("Public API read-model behavior tests passed.");
+  }
 }
