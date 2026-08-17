@@ -482,6 +482,39 @@ assert.equal(
   ),
   null,
 );
+const previousAdminCookieEnv = {
+  nodeEnv: process.env.NODE_ENV,
+  adminAuthSecret: process.env.ADMIN_AUTH_SECRET,
+};
+try {
+  process.env.NODE_ENV = "production";
+  delete process.env.ADMIN_AUTH_SECRET;
+  for (const malformedAdminCookie of [
+    `${"a".repeat(1025)}.sig`,
+    "encoded.sig.extra",
+    "encoded.signature!",
+  ]) {
+    await assert.doesNotReject(
+      () => adminSession.readAdminSessionForRefresh(
+        requestWithCookie(ADMIN_COOKIE, malformedAdminCookie),
+        100_000,
+      ),
+      "malformed admin cookies must be rejected before production secret lookup",
+    );
+    assert.equal(
+      await adminSession.readAdminSessionForRefresh(
+        requestWithCookie(ADMIN_COOKIE, malformedAdminCookie),
+        100_000,
+      ),
+      null,
+    );
+  }
+} finally {
+  if (previousAdminCookieEnv.nodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previousAdminCookieEnv.nodeEnv;
+  if (previousAdminCookieEnv.adminAuthSecret === undefined) delete process.env.ADMIN_AUTH_SECRET;
+  else process.env.ADMIN_AUTH_SECRET = previousAdminCookieEnv.adminAuthSecret;
+}
 const issuedAdmin = createCookieResponse();
 const adminExpiresAt = await adminSession.issueAdminSession(
   issuedAdmin.response,

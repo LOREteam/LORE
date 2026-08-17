@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import "./test-business-logic-isolated-runner.mjs";
+import "./test-live-canary-log-path.mjs";
 import { runWalletModelTests } from "./test-business-wallet-models.mjs";
 import { runReadModelTests } from "./test-business-read-models.mjs";
 import { runRuntimeRecoveryTests } from "./test-business-runtime-recovery.mjs";
@@ -95,8 +97,12 @@ import { runRuntimeSmokeRedactionBehaviorTests } from "./test-business-runtime-s
 import { runCiSecurityBehaviorTests } from "./test-business-ci-security.mjs";
 import { runNoticeStackBehaviorTests } from "./test-business-notice-stack.mjs";
 import { runV10DeployedInputPolicyTests } from "./test-business-v10-deployed-input-policy.mjs";
+import * as v10RuntimeIdentityTestModule from "./test-v10-runtime-identity.ts";
 import { runContractV10SummaryBehaviorTests } from "./test-business-contract-v10-summary.mjs";
 import { runReleaseDocumentationTests } from "./test-business-release-documentation.mjs";
+
+const { runV10RuntimeIdentityTests } =
+  v10RuntimeIdentityTestModule.default ?? v10RuntimeIdentityTestModule;
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   const entries = readdirSync(root, { withFileTypes: true });
@@ -126,8 +132,29 @@ async function withExpectedWarningSuppression(fn) {
   return suppressed;
 }
 
+function runAdminSessionSecurityTests() {
+  const result = spawnSync(
+    process.execPath,
+    [join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"), "scripts/test-admin-session-security.mjs"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, ADMIN_SESSION_TEST_MODE: "" },
+      maxBuffer: 1024 * 1024,
+      timeout: 60_000,
+      windowsHide: true,
+    },
+  );
+  const failure = String(result.stderr ?? "").slice(-4_000);
+  assert.equal(result.error, undefined, `admin session security tests failed to launch: ${failure}`);
+  assert.equal(result.signal, null, `admin session security tests were interrupted: ${result.signal ?? failure}`);
+  assert.equal(result.status, 0, `admin session security tests failed: ${failure}`);
+  assert.match(String(result.stdout ?? ""), /admin-session-security: ok/);
+}
+
 async function main() {
   await runAuthAndCanaryBoundaryTests();
+  runAdminSessionSecurityTests();
 
   const fetchTimeoutTests = fetchTimeoutTestModule.default ?? fetchTimeoutTestModule;
   const apiRouteMatrixTests = apiRouteMatrixTestModule.default ?? apiRouteMatrixTestModule;
@@ -159,6 +186,7 @@ async function main() {
   await runCompilerAdvisoryBehaviorTests();
   runContractV10SummaryBehaviorTests();
   runV10DeployedInputPolicyTests();
+  await runV10RuntimeIdentityTests();
   runSummaryTimeoutTests();
   runIndexerStorageBehaviorTests();
   const restoreProofValidationSource = readFileSync("scripts/verify-db-restore.mjs", "utf8");

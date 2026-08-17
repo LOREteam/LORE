@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import {
   createPublicClient,
@@ -16,6 +15,7 @@ import { LINEA_ORE_V10_ABI as POSTDEPLOY_AUDIT_ABI } from "../config/generated/l
 
 import {
   CONTRACT_ADDRESS,
+  CONTRACT_DEPLOY_BLOCK,
   CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
   GAME_ABI,
   LINEA_TOKEN_ADDRESS,
@@ -30,6 +30,7 @@ import {
   getLineaChain,
   getStableLineaReadRpcs,
 } from "../config/publicConfig";
+import { assertV10RuntimeIdentity } from "./v10-runtime-identity";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
@@ -47,8 +48,6 @@ const RESOLVE_GAS_FLOOR = 500_000n;
 const GAS_LIMIT_HEADROOM_BPS = 13_000n;
 const BPS_DENOMINATOR = 10_000n;
 const GAS_LIMIT_BUFFER = 20_000n;
-const COMPILATION_MANIFEST_PATH = "contracts/LineaOreV10.compilation.json";
-const MAX_V10_COMPILATION_MANIFEST_BYTES = 512 * 1024;
 const MAX_V10_PUBLIC_ADDRESS_FILE_BYTES = 64 * 1024;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const EPOCH_BOUND_BITMAP_SELECTOR = toFunctionSelector(
@@ -138,83 +137,6 @@ function readExpectedGovernanceAddress(envName: string, fallbackAddress: string)
   } catch {
     throw new SafePlanError(`${envName} must be a valid address`);
   }
-}
-
-type RuntimeIdentityManifest = {
-  executableRuntimeBytes: number;
-  normalizedExecutableRuntimeSha256: string;
-  runtimeImmutableReferences: Array<{ length: number; start: number }>;
-};
-
-function readRuntimeIdentityManifest(): RuntimeIdentityManifest {
-  let manifest: Partial<RuntimeIdentityManifest>;
-  try {
-    manifest = JSON.parse(
-      readBoundedUtf8File(
-        COMPILATION_MANIFEST_PATH,
-        MAX_V10_COMPILATION_MANIFEST_BYTES,
-        "Canonical V10 compilation manifest",
-      ),
-    );
-  } catch (error) {
-    if (error instanceof SafePlanError) throw error;
-    throw new SafePlanError("Canonical V10 compilation manifest is unavailable");
-  }
-  const references = manifest.runtimeImmutableReferences;
-  if (
-    !Number.isSafeInteger(manifest.executableRuntimeBytes) ||
-    Number(manifest.executableRuntimeBytes) <= 0 ||
-    !/^[0-9a-f]{64}$/.test(manifest.normalizedExecutableRuntimeSha256 ?? "") ||
-    !Array.isArray(references) ||
-    references.length === 0
-  ) {
-    throw new SafePlanError("Canonical V10 runtime identity is missing from the compilation manifest");
-  }
-  let previousEnd = 0;
-  for (const reference of references) {
-    if (
-      !Number.isSafeInteger(reference?.start) ||
-      !Number.isSafeInteger(reference?.length) ||
-      reference.length !== 32 ||
-      reference.start < previousEnd ||
-      reference.start + reference.length > Number(manifest.executableRuntimeBytes)
-    ) {
-      throw new SafePlanError("Canonical V10 immutable reference layout is invalid");
-    }
-    previousEnd = reference.start + reference.length;
-  }
-  return manifest as RuntimeIdentityManifest;
-}
-
-function stripSolidityMetadata(bytecode: string) {
-  if (bytecode.length < 4) return bytecode;
-  const encodedLength = bytecode.slice(-4);
-  if (!/^[0-9a-f]{4}$/i.test(encodedLength)) return bytecode;
-  const metadataBytes = Number.parseInt(encodedLength, 16);
-  const metadataHexLength = (metadataBytes + 2) * 2;
-  if (metadataBytes === 0 || metadataHexLength > bytecode.length) return bytecode;
-  return bytecode.slice(0, -metadataHexLength);
-}
-
-function normalizeExecutableRuntime(bytecode: string, manifest: RuntimeIdentityManifest) {
-  const executable = stripSolidityMetadata(bytecode.slice(2).toLowerCase());
-  if (executable.length / 2 !== manifest.executableRuntimeBytes) {
-    throw new SafePlanError("Deployed V10 executable runtime size does not match the canonical manifest");
-  }
-  let normalized = executable;
-  for (const reference of manifest.runtimeImmutableReferences) {
-    const start = reference.start * 2;
-    normalized = `${normalized.slice(0, start)}${"0".repeat(reference.length * 2)}${normalized.slice(start + reference.length * 2)}`;
-  }
-  const digest = createHash("sha256").update(normalized).digest("hex");
-  if (digest !== manifest.normalizedExecutableRuntimeSha256) {
-    throw new SafePlanError("Deployed V10 executable runtime does not match the canonical manifest");
-  }
-  return {
-    executableBytes: manifest.executableRuntimeBytes,
-    immutableReferences: manifest.runtimeImmutableReferences.length,
-    manifestMatched: true,
-  };
 }
 
 function classifyError(error: unknown) {
@@ -367,7 +289,6 @@ async function main() {
     3600,
   );
 
-  const runtimeIdentityManifest = readRuntimeIdentityManifest();
   const roles = readPublicRoleAddresses();
   const rpcUrls = getStableLineaReadRpcs(process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const client = createPublicClient({
@@ -375,12 +296,19 @@ async function main() {
     transport: fallback(rpcUrls.map((url) => http(url, { timeout: 20_000, retryCount: 1 }))),
   });
 
-  const [chainId, block] = await Promise.all([
-    client.getChainId(),
-    client.getBlock(),
-  ]);
-  if (chainId !== APP_CHAIN.id) throw new SafePlanError("RPC chain does not match Linea Sepolia");
+  const block = await client.getBlock();
+  if (block.number == null) throw new SafePlanError("Read-only planning snapshot block is unavailable");
+  if (!block.hash) throw new SafePlanError("Read-only planning snapshot block hash is unavailable");
   const snapshotBlock = block.number;
+  const runtimeIdentity = await assertV10RuntimeIdentity({
+    contractAddress: CONTRACT_ADDRESS,
+    deployBlock: CONTRACT_DEPLOY_BLOCK,
+    expectedChainId: APP_CHAIN.id,
+    reader: client,
+    snapshotBlock,
+    snapshotBlockHash: block.hash,
+  });
+  const chainId = runtimeIdentity.chainId;
   const readSnapshot = { blockNumber: snapshotBlock } as const;
   const [bytecode, tokenBytecode, contractToken, tokenDecimals, currentEpoch, contractBalance, currentGasPrice] = await Promise.all([
     client.getBytecode({ address: CONTRACT_ADDRESS, blockNumber: snapshotBlock }),
@@ -397,9 +325,7 @@ async function main() {
     }),
     client.getGasPrice(),
   ]);
-  if (!bytecode) throw new SafePlanError("Configured V10 contract has no deployed bytecode");
   if (!tokenBytecode) throw new SafePlanError("Configured token has no deployed bytecode");
-  const runtimeIdentity = normalizeExecutableRuntime(bytecode, runtimeIdentityManifest);
   if (String(contractToken).toLowerCase() !== LINEA_TOKEN_ADDRESS.toLowerCase()) {
     throw new SafePlanError("Configured token does not match deployed token()");
   }
@@ -1122,6 +1048,13 @@ async function main() {
       rpcCount: output.rpcCount,
       operationalBoundary: output.operationalBoundary,
       snapshot: output.snapshot,
+      runtimeIdentity: {
+        deployBlock: output.runtimeIdentity.deployBlock,
+        manifestDigest: output.runtimeIdentity.manifestDigest,
+        normalizedRuntimeSha256: output.runtimeIdentity.normalizedRuntimeSha256,
+        observedBlock: output.runtimeIdentity.observedBlock,
+        observedBlockHash: output.runtimeIdentity.observedBlockHash,
+      },
       scan: output.scan,
       currentEpoch: output.currentEpoch,
       admin: output.admin,

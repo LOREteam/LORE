@@ -1,5 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, statSync } from "node:fs";
 import { config as loadDotenv } from "dotenv";
 import {
   createPublicClient,
@@ -21,6 +20,7 @@ import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 
 import {
   CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
+  CONTRACT_DEPLOY_BLOCK,
   GAME_ABI,
   LINEA_TOKEN_ADDRESS,
   TOKEN_ABI,
@@ -45,6 +45,16 @@ import { assertTrustedHealthCredentialOrigin } from "./health-credential-origin.
 import { fetchCanaryHealthPayloadPair } from "./live-canary-health-policy.mjs";
 import { sanitizeSupportLogPayload } from "../app/lib/sentrySanitize";
 import { recordLineaEstimateGasShadow } from "../app/lib/lineaEstimateGasShadow";
+import {
+  assertCanaryApprovalPostcondition,
+  resolveCanaryAllowancePlan,
+} from "./live-canary-approval-policy.mjs";
+import {
+  appendBoundedLiveCanaryLine,
+  createLiveCanaryLogPath,
+  initializeLiveCanaryLogFile,
+} from "./live-canary-log-path.mjs";
+import { assertV10RuntimeIdentity, type V10RuntimeIdentity } from "./v10-runtime-identity";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
@@ -122,13 +132,18 @@ const RESOLVE_GAS_FLOOR = BigInt(parseIntegerEnv("LIVE_TEST_RESOLVE_GAS_FLOOR", 
 const LIVE_GAS_BUFFER_PERCENT = 150n;
 const LOOP_PAUSE_MS = parseIntegerEnv("LIVE_TEST_LOOP_PAUSE_MS", 1_500, 0, 120_000);
 const MAX_FAILURES = parseIntegerEnv("LIVE_TEST_MAX_FAILURES", 20, 1, 10_000);
+const LIVE_LOG_MAX_BYTES = parseIntegerEnv(
+  "LIVE_TEST_LOG_MAX_BYTES",
+  48 * 1024 * 1024,
+  1024 * 1024,
+  64 * 1024 * 1024,
+);
 const FORCE_ALLOWANCE_APPROVE = process.env.LIVE_TEST_FORCE_ALLOWANCE_APPROVE === "1";
 const REPEAT_SAME_BET = V10_MATRIX_ONLY || process.env.LIVE_TEST_REPEAT_SAME_BET === "1";
 const ALLOW_EMPTY_RESOLVE = process.env.LIVE_TEST_ALLOW_EMPTY_RESOLVE === "1";
 const VERBOSE_TARGETS = process.env.LIVE_TEST_VERBOSE_TARGETS === "1";
 const VERBOSE_WALLET_PREFLIGHT = process.env.LIVE_TEST_VERBOSE_WALLETS === "1";
 const BET_AMOUNT = parseTokenAmountEnv("LIVE_TEST_BET_AMOUNT", "0.01");
-const APPROVE_AMOUNT = parseTokenAmountEnv("LIVE_TEST_APPROVE_AMOUNT", "1000000000");
 const MIN_TOKEN_PER_WALLET = parseTokenAmountEnv("LIVE_TEST_MIN_TOKEN_PER_WALLET", "5");
 const MIN_ETH_PER_WALLET = parseTokenAmountEnv("LIVE_TEST_MIN_ETH_PER_WALLET", "0.005");
 const RANDOMIZE_ROUNDS = process.env.LIVE_TEST_RANDOMIZE_ROUNDS === "1";
@@ -177,6 +192,11 @@ for (const role of ROLES) {
     throw new Error(`LIVE_TEST_ROLES contains unsupported role ${role}`);
   }
 }
+if (process.env.LIVE_TEST_APPROVE_AMOUNT?.trim()) {
+  throw new Error(
+    "LIVE_TEST_APPROVE_AMOUNT is no longer supported; each canary role approves its exact declared run cap",
+  );
+}
 
 type BetMode = "single" | "bitmap" | "sameAmount" | "arrays";
 
@@ -208,7 +228,10 @@ const V10_CANARY_MATRIX = [
 
 type RoundEvent = {
   amount: string;
+  allowance?: string;
+  allowanceWithinRunCap?: boolean;
   amounts?: string[];
+  approvalTarget?: string;
   approvalRequired?: boolean;
   atomicAdvance?: boolean;
   chainId?: number;
@@ -238,6 +261,7 @@ type RoundEvent = {
   nonceReadMs?: number;
   nonceLatest?: number;
   noncePending?: number;
+  participant?: boolean;
   ok: boolean;
   repeat?: boolean;
   prepareMs?: number;
@@ -249,6 +273,7 @@ type RoundEvent = {
   role: string;
   round: number;
   runtimeUptimeSeconds?: number;
+  runtimeIdentity?: V10RuntimeIdentity;
   sampleKind?: "health";
   secondsLeft?: number;
   sendMs?: number;
@@ -406,21 +431,22 @@ function loadDryRunWallets(): CanaryWallet[] {
 }
 
 function createRunLogPath() {
-  const dir = join("data", "live-test-runs");
-  mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return join(dir, `live-canary-${stamp}.jsonl`);
+  return createLiveCanaryLogPath();
 }
 
 function writeEvent(logPath: string, event: RoundEvent) {
-  appendFileSync(logPath, `${JSON.stringify({
-    network: APP_NETWORK,
-    chainId: APP_CHAIN.id,
-    contractAddress: CONTRACT_ADDRESS,
-    rpcLabel: RPC_LABEL,
-    rpcFailoverInjected: INJECT_RPC_FAILOVER,
-    ...event,
-  })}\n`);
+  appendBoundedLiveCanaryLine({
+    logPath,
+    maxBytes: LIVE_LOG_MAX_BYTES,
+    line: `${JSON.stringify({
+      network: APP_NETWORK,
+      chainId: APP_CHAIN.id,
+      contractAddress: CONTRACT_ADDRESS,
+      rpcLabel: RPC_LABEL,
+      rpcFailoverInjected: INJECT_RPC_FAILOVER,
+      ...event,
+    })}\n`,
+  });
 }
 
 function createCanaryTransport(urls: string[]) {
@@ -825,10 +851,16 @@ async function ensureAllowance(params: {
     functionName: "allowance",
     args: [wallet.account.address, CONTRACT_ADDRESS],
   });
-  if (!FORCE_ALLOWANCE_APPROVE && allowance >= requiredAllowance) return;
+  const allowancePlan = resolveCanaryAllowancePlan({
+    currentAllowance: allowance,
+    plannedSpend: requiredAllowance,
+    forceApprove: FORCE_ALLOWANCE_APPROVE,
+  });
+  if (allowancePlan.rejectReason) throw new Error(allowancePlan.rejectReason);
+  if (!allowancePlan.needsApproval) return;
 
   const startedAt = Date.now();
-  const approveAmount = APPROVE_AMOUNT > requiredAllowance ? APPROVE_AMOUNT : requiredAllowance;
+  const approveAmount = allowancePlan.approvalTarget;
   const nativeBalance = await publicClient.getBalance({ address: wallet.account.address });
   const fees = await getFeeOverrides(publicClient);
   const gasEstimate = await estimateGasWithMethodRetry(() => publicClient.estimateContractGas({
@@ -855,8 +887,19 @@ async function ensureAllowance(params: {
     ...fees,
   } as never);
   const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
+  const actualAllowance = receipt.status === "success"
+    ? await publicClient.readContract({
+        address: LINEA_TOKEN_ADDRESS,
+        abi: TOKEN_ABI,
+        functionName: "allowance",
+        args: [wallet.account.address, CONTRACT_ADDRESS],
+      })
+    : allowance;
   writeEvent(logPath, {
     amount: formatUnits(approveAmount, 18),
+    allowance: formatUnits(actualAllowance, 18),
+    allowanceWithinRunCap: actualAllowance <= approveAmount,
+    approvalTarget: formatUnits(approveAmount, 18),
     durationMs: Date.now() - startedAt,
     effectiveGasPrice: receipt.effectiveGasPrice.toString(),
     gasUsed: receipt.gasUsed.toString(),
@@ -868,6 +911,8 @@ async function ensureAllowance(params: {
     round: -1,
     timestamp: new Date().toISOString(),
   });
+  if (receipt.status !== "success") throw new Error("approval transaction reverted");
+  assertCanaryApprovalPostcondition({ actualAllowance, approvalTarget: approveAmount });
 }
 
 async function placeRound(params: {
@@ -1035,7 +1080,10 @@ async function runPreflight(
   const rows = [];
   for (const wallet of wallets) {
     const plannedSpend = plannedSpendByRole.get(wallet.role) ?? 0n;
-    const requiredToken = plannedSpend > MIN_TOKEN_PER_WALLET ? plannedSpend : MIN_TOKEN_PER_WALLET;
+    const participates = plannedSpend > 0n;
+    const requiredToken = participates
+      ? (plannedSpend > MIN_TOKEN_PER_WALLET ? plannedSpend : MIN_TOKEN_PER_WALLET)
+      : 0n;
     const [eth, token, allowance, nonceLatest, noncePending] = await Promise.all([
       publicClient.getBalance({ address: wallet.address }),
       publicClient.readContract({
@@ -1053,60 +1101,80 @@ async function runPreflight(
       publicClient.getTransactionCount({ address: wallet.address, blockTag: "latest" }),
       publicClient.getTransactionCount({ address: wallet.address, blockTag: "pending" }),
     ]);
-    const nonceQueueClear = noncePending <= nonceLatest;
-    const approvalRequired = FORCE_ALLOWANCE_APPROVE || allowance < plannedSpend;
+    const nonceQueueClear = !participates || noncePending <= nonceLatest;
+    const allowancePlan = resolveCanaryAllowancePlan({
+      currentAllowance: allowance,
+      plannedSpend,
+      forceApprove: FORCE_ALLOWANCE_APPROVE,
+    });
+    const approvalRequired = allowancePlan.needsApproval;
+    const enoughEth = !participates || eth >= MIN_ETH_PER_WALLET;
+    const enoughToken = !participates || token >= requiredToken;
     rows.push({
       role: wallet.role,
       address: wallet.address,
       eth: formatEther(eth),
       linea: formatUnits(token, 18),
       allowance: formatUnits(allowance, 18),
+      allowanceWithinRunCap: allowancePlan.allowanceWithinRunCap,
       approvalRequired,
+      approvalTarget: formatUnits(allowancePlan.approvalTarget, 18),
+      participant: allowancePlan.participant,
       plannedSpend: formatUnits(plannedSpend, 18),
-      enoughEth: eth >= MIN_ETH_PER_WALLET,
-      enoughToken: token >= requiredToken,
+      enoughEth,
+      enoughToken,
       nonceLatest,
       noncePending,
       nonceQueueClear,
     });
     writeEvent(logPath, {
       amount: "0",
+      allowance: formatUnits(allowance, 18),
+      allowanceWithinRunCap: allowancePlan.allowanceWithinRunCap,
+      approvalTarget: formatUnits(allowancePlan.approvalTarget, 18),
       approvalRequired,
-      enoughEth: eth >= MIN_ETH_PER_WALLET,
-      enoughToken: token >= requiredToken,
-      errorKind: !nonceQueueClear
+      enoughEth,
+      enoughToken,
+      errorKind: allowancePlan.rejectReason
+        ? "allowance-exceeds-run-cap"
+        : !nonceQueueClear
         ? "pending-nonce-blocked"
-        : eth < MIN_ETH_PER_WALLET && token < requiredToken
+        : !enoughEth && !enoughToken
           ? "insufficient-native-and-token"
-          : eth < MIN_ETH_PER_WALLET
+          : !enoughEth
             ? "insufficient-native-gas"
-            : token < requiredToken
+            : !enoughToken
               ? "insufficient-token"
               : undefined,
       mode: "preflight",
       nonceLatest,
       noncePending,
-      ok: eth >= MIN_ETH_PER_WALLET && token >= requiredToken && nonceQueueClear,
+      ok: enoughEth && enoughToken && nonceQueueClear && !allowancePlan.rejectReason,
+      participant: allowancePlan.participant,
       role: wallet.role,
       round: -1,
       timestamp: new Date().toISOString(),
       totalAmount: formatUnits(plannedSpend, 18),
     });
   }
-  const readyWallets = rows.filter((row) => row.enoughEth && row.enoughToken && row.nonceQueueClear).length;
+  const readyWallets = rows.filter((row) => (
+    row.enoughEth && row.enoughToken && row.nonceQueueClear && row.allowanceWithinRunCap
+  )).length;
   const approvalsRequired = rows.filter((row) => row.approvalRequired).length;
   console.log(
     `[live-canary] walletPreflight ready=${readyWallets}/${rows.length} approvalsRequired=${approvalsRequired} ` +
       `roles=${rows.map((row) => row.role).join(",")}`,
   );
   if (VERBOSE_WALLET_PREFLIGHT) console.table(rows);
+  if (rows.some((row) => !row.allowanceWithinRunCap)) {
+    throw new Error("Preflight wallet allowance exceeds declared run cap");
+  }
   if (rows.some((row) => !row.enoughEth || !row.enoughToken || !row.nonceQueueClear)) {
     throw new Error("Preflight wallet safety checks failed");
   }
 }
 
 async function main() {
-  const wallets = DRY_RUN ? loadDryRunWallets() : loadWallets();
   const signingMaterialLoaded = hasSigningMaterialInEnvironment();
   if (DRY_RUN && signingMaterialLoaded) {
     throw new Error("Dry-run canary refuses signing material");
@@ -1117,11 +1185,9 @@ async function main() {
   const broadcastTransport = createCanaryTransport(broadcastRpcUrls);
   const publicClient = createPublicClient({ chain: APP_CHAIN, transport: readTransport });
   const logPath = createRunLogPath();
-  const plannedSpendByRole = getPlannedSpendByRole(wallets);
-  const plannedStake = [...plannedSpendByRole.values()].reduce((sum, value) => sum + value, 0n);
   const plannedBetTransactions = TARGET_ROUNDS * (REPEAT_SAME_BET ? 2 : 1);
 
-  writeFileSync(logPath, "");
+  initializeLiveCanaryLogFile({ logPath });
   console.log(`[live-canary] network=${APP_NETWORK} chainId=${APP_CHAIN.id}`);
   console.log(`[live-canary] contract=${VERBOSE_TARGETS ? CONTRACT_ADDRESS : "configured"}`);
   console.log(`[live-canary] token=${VERBOSE_TARGETS ? LINEA_TOKEN_ADDRESS : "configured"}`);
@@ -1132,18 +1198,47 @@ async function main() {
     `[live-canary] operationalBoundary signingMaterialLoaded=${signingMaterialLoaded} ` +
       `transactionSent=false walletClientCreated=false contractWriteSubmitted=false`,
   );
-  console.log(
-    `[live-canary] rounds=${TARGET_ROUNDS} plannedBetTx=${plannedBetTransactions} ` +
-      `plannedStake=${formatUnits(plannedStake, 18)} LINEA randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +
-      `configuredTotal=${formatUnits(MIN_TOTAL_BET_AMOUNT, 18)}..${formatUnits(MAX_TOTAL_BET_AMOUNT, 18)} ` +
-      `tiles=${MIN_TILES_PER_ROUND}..${MAX_TILES_PER_ROUND}`,
-  );
   console.log(`[live-canary] emptyResolveBootstrap=${ALLOW_EMPTY_RESOLVE ? "enabled" : "disabled"}`);
   if (MAX_RESOLVE_TRANSACTIONS !== null) {
     console.log(`[live-canary] resolveTxLimit=${MAX_RESOLVE_TRANSACTIONS}`);
   }
   console.log(`[live-canary] feeMeasurement repeatSameBet=${REPEAT_SAME_BET ? "enabled" : "disabled"} forceAllowanceApprove=${FORCE_ALLOWANCE_APPROVE ? "enabled" : "disabled"}`);
   console.log(`[live-canary] log=${logPath}`);
+
+  const identitySnapshot = await publicClient.getBlock();
+  if (identitySnapshot.number == null) throw new Error("V10 runtime identity snapshot block is unavailable");
+  if (!identitySnapshot.hash) throw new Error("V10 runtime identity snapshot block hash is unavailable");
+  const runtimeIdentity = await assertV10RuntimeIdentity({
+    contractAddress: CONTRACT_ADDRESS,
+    deployBlock: CONTRACT_DEPLOY_BLOCK,
+    expectedChainId: APP_CHAIN.id,
+    reader: publicClient,
+    snapshotBlock: identitySnapshot.number,
+    snapshotBlockHash: identitySnapshot.hash,
+  });
+  writeEvent(logPath, {
+    amount: "0",
+    mode: "preflight",
+    ok: true,
+    role: "SYSTEM",
+    round: -1,
+    runtimeIdentity,
+    timestamp: new Date().toISOString(),
+  });
+  console.log(
+    `[live-canary] runtimeIdentity deployBlock=${runtimeIdentity.deployBlock} ` +
+      `runtimeDigest=${runtimeIdentity.normalizedRuntimeSha256.slice(0, 12)}…`,
+  );
+
+  const wallets = DRY_RUN ? loadDryRunWallets() : loadWallets();
+  const plannedSpendByRole = getPlannedSpendByRole(wallets);
+  const plannedStake = [...plannedSpendByRole.values()].reduce((sum, value) => sum + value, 0n);
+  console.log(
+    `[live-canary] rounds=${TARGET_ROUNDS} plannedBetTx=${plannedBetTransactions} ` +
+      `plannedStake=${formatUnits(plannedStake, 18)} LINEA randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +
+      `configuredTotal=${formatUnits(MIN_TOTAL_BET_AMOUNT, 18)}..${formatUnits(MAX_TOTAL_BET_AMOUNT, 18)} ` +
+      `tiles=${MIN_TILES_PER_ROUND}..${MAX_TILES_PER_ROUND}`,
+  );
 
   const contractToken = await publicClient.readContract({
     address: CONTRACT_ADDRESS,

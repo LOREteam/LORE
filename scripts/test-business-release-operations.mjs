@@ -21,6 +21,10 @@ import {
   trustedNpmCommand,
   trustedNpmEnvironment,
 } from "./trusted-npm-cli.mjs";
+import {
+  assertCanaryApprovalPostcondition,
+  resolveCanaryAllowancePlan,
+} from "./live-canary-approval-policy.mjs";
 
 const safetyPoolClaimThreshold = safetyPoolClaimThresholdModule.default ?? safetyPoolClaimThresholdModule;
 const analyticsDepositsStatus = analyticsDepositsStatusModule.default ?? analyticsDepositsStatusModule;
@@ -499,26 +503,6 @@ export function runReleaseOperationsTests() {
   for (const [name, source] of [["chat", chatSessionSource]]) {
     assert.match(source, /randomBytes\(32\)\.toString\("hex"\)/, `${name} development sessions must use an ephemeral secret`);
     assert.doesNotMatch(source, /createHash\(|dev-(admin|chat)-session:/, `${name} development sessions must not derive a predictable secret`);
-    assert.match(
-      source,
-      /function normalize(?:Admin|Chat)SessionExpiresAt\(value: unknown, now = Date\.now\(\)\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*SESSION_MAX_FUTURE_SKEW_MS[\s\S]*const expiresAt = normalize(?:Admin|Chat)SessionExpiresAt\(parsed\.expiresAt\)/,
-      `${name} server session cookies must strictly normalize expiry before accepting a signed payload`,
-    );
-    assert.match(
-      source,
-      /const SESSION_COOKIE_MAX_LENGTH = 1024[\s\S]*const SESSION_COOKIE_PART_RE = \/\^\[A-Za-z0-9_-\]\+\$\/[\s\S]*function parseSessionCookie[\s\S]*raw\.length > SESSION_COOKIE_MAX_LENGTH[\s\S]*raw\.indexOf\("\.", dotIndex \+ 1\) !== -1[\s\S]*SESSION_COOKIE_PART_RE\.test\(encoded\)[\s\S]*SESSION_COOKIE_PART_RE\.test\(signature\)/,
-      `${name} server session cookies must reject oversized, malformed, or suffixed signed tokens before HMAC verification`,
-    );
-    assert.match(
-      source,
-      /const cookie = parseSessionCookie\(raw\)[\s\S]*if \(!cookie\) return null[\s\S]*const \[encoded, signature\] = cookie[\s\S]*const expected = sign\(encoded\)/,
-      `${name} server session cookie parsing must run before signed-token verification`,
-    );
-    assert.doesNotMatch(
-      source,
-      /typeof parsed\.expiresAt !== "number"[\s\S]*expiresAt: parsed\.expiresAt|raw\.split\("\.", 2\)/,
-      `${name} server session cookies must not broadly accept raw numeric expiry values or suffixed signed tokens`,
-    );
   }
   assert.match(
     collectIndexerEvidenceSource,
@@ -1123,12 +1107,12 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     liveRoundCanarySource,
-    /approvalRequired = FORCE_ALLOWANCE_APPROVE \|\| allowance < plannedSpend[\s\S]*approvalsRequired=/,
+    /const allowancePlan = resolveCanaryAllowancePlan\([\s\S]*const approvalRequired = allowancePlan\.needsApproval[\s\S]*const approvalsRequired = rows\.filter\(\(row\) => row\.approvalRequired\)\.length/,
     "V10 dry-run must report the bounded plan's approval transaction count",
   );
   assert.match(
     liveRoundCanarySource,
-    /plannedStake = \[\.\.\.plannedSpendByRole\.values\(\)\][\s\S]*plannedBetTransactions = TARGET_ROUNDS \* \(REPEAT_SAME_BET \? 2 : 1\)[\s\S]*plannedStake=/,
+    /plannedBetTransactions = TARGET_ROUNDS \* \(REPEAT_SAME_BET \? 2 : 1\)[\s\S]*plannedStake = \[\.\.\.plannedSpendByRole\.values\(\)\][\s\S]*plannedBetTx=\$\{plannedBetTransactions\}[\s\S]*plannedStake=\$\{formatUnits\(plannedStake, 18\)\}/,
     "live canary must report the exact planned stake and bet transaction count",
   );
   assert.match(
@@ -1344,7 +1328,7 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     liveRoundCanarySource,
-    /nonceQueueClear = noncePending <= nonceLatest[\s\S]*enoughEth: eth >= MIN_ETH_PER_WALLET[\s\S]*enoughToken: token >= requiredToken[\s\S]*pending-nonce-blocked[\s\S]*insufficient-native-and-token[\s\S]*insufficient-token/,
+    /nonceQueueClear = !participates \|\| noncePending <= nonceLatest[\s\S]*enoughEth = !participates \|\| eth >= MIN_ETH_PER_WALLET[\s\S]*enoughToken = !participates \|\| token >= requiredToken[\s\S]*pending-nonce-blocked[\s\S]*insufficient-native-and-token[\s\S]*insufficient-token/,
     "wallet preflight must expose safe balance categories and reject an existing pending nonce queue",
   );
   assert.match(
@@ -1547,7 +1531,7 @@ export function runReleaseOperationsTests() {
         atomicStatus: true,
         managedChildrenStarted: 0,
         networkRequests: 0,
-        faultMutantsRejected: 32,
+        faultMutantsRejected: 35,
       },
       `${name} soak admission behavior must remain transaction-free unless both live confirmations are present`,
     );
@@ -1775,7 +1759,7 @@ export function runReleaseOperationsTests() {
     assert.equal(soakCompactResult.status, 0, soakCompactResult.stderr);
     assert.match(
       soakCompactResult.stdout,
-      /status=failed dry=true alive=false stop=canary-1 ok=1 bound=1 unbound=0 fail=4 roles=MANUAL=1\/AUTOMINER_A=2,AUTOMINER_B=1,MANUAL=1 epochs=1 tx=1 nonces=1 dupTx=0 dupNonce=0 rev=0 health=0\/0 rpc=1 gas=2 resolver=1 slow=1 p95=400 diskLow=false diskFree=\d+ preflight=AUTOMINER_C:insufficient-native-gas,AUTOMINER_A:pending-nonce-blocked fk=network=1,pending-nonce-blocked=1,receipt-timeout=1,unknown=1 ff=missing-error=1,network=2,nonce-state=1/,
+      /status=failed dry=true alive=false stop=canary-1 ok=1 bound=1 unbound=0 fail=4 roles=MANUAL=1\/AUTOMINER_A=2,AUTOMINER_B=1,MANUAL=1 epochs=1 tx=1 nonces=1 dupTx=0 dupNonce=0 rev=0 health=0\/0 rpc=1 gas=2 resolver=1 slow=1 p95=400 proof=not-run diskLow=false diskFree=\d+ preflight=AUTOMINER_C:insufficient-native-gas,AUTOMINER_A:pending-nonce-blocked fk=network=1,pending-nonce-blocked=1,receipt-timeout=1,unknown=1 ff=missing-error=1,network=2,nonce-state=1/,
       "managed soak compact status must surface safe one-line aggregates without raw logs or addresses",
     );
     assert.doesNotMatch(soakCompactResult.stdout, /0x[a-fA-F0-9]{40}|untrusted raw error text|\{|\}/);
@@ -2187,6 +2171,52 @@ export function runReleaseOperationsTests() {
     /await runPreflight\(logPath, publicClient, wallets, plannedSpendByRole\);\s*if \(DRY_RUN\) return;[\s\S]*LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY[\s\S]*privateKeyToAccount/,
     "live canary dry-run must not parse optional resolver signing material before returning",
   );
+  const exactAllowance = resolveCanaryAllowancePlan({ currentAllowance: 2n, plannedSpend: 7n });
+  assert.deepEqual(exactAllowance, {
+    allowanceWithinRunCap: true,
+    approvalTarget: 7n,
+    needsApproval: true,
+    participant: true,
+    rejectReason: null,
+  });
+  assert.deepEqual(
+    resolveCanaryAllowancePlan({ currentAllowance: 7n, plannedSpend: 7n }),
+    { allowanceWithinRunCap: true, approvalTarget: 7n, needsApproval: false, participant: true, rejectReason: null },
+  );
+  assert.deepEqual(
+    resolveCanaryAllowancePlan({ currentAllowance: 7n, plannedSpend: 7n, forceApprove: true }),
+    { allowanceWithinRunCap: true, approvalTarget: 7n, needsApproval: true, participant: true, rejectReason: null },
+  );
+  assert.deepEqual(
+    resolveCanaryAllowancePlan({ currentAllowance: 8n, plannedSpend: 7n }),
+    {
+      allowanceWithinRunCap: false,
+      approvalTarget: 7n,
+      needsApproval: false,
+      participant: true,
+      rejectReason: "existing allowance exceeds the declared run cap",
+    },
+  );
+  assert.deepEqual(
+    resolveCanaryAllowancePlan({ currentAllowance: 999n, plannedSpend: 0n }),
+    { allowanceWithinRunCap: true, approvalTarget: 0n, needsApproval: false, participant: false, rejectReason: null },
+    "a role with no planned spend must not inherit or change an existing allowance",
+  );
+  assert.throws(
+    () => assertCanaryApprovalPostcondition({ actualAllowance: 8n, approvalTarget: 7n }),
+    /exact declared run cap/,
+  );
+  assert.doesNotMatch(liveRoundCanarySource, /parseTokenAmountEnv\("LIVE_TEST_APPROVE_AMOUNT", "1000000000"\)/);
+  assert.match(
+    liveRoundCanarySource,
+    /LIVE_TEST_APPROVE_AMOUNT is no longer supported[\s\S]*resolveCanaryAllowancePlan\([\s\S]*allowanceWithinRunCap[\s\S]*Preflight wallet allowance exceeds declared run cap/,
+    "live canary approvals must be exact per-role run caps, persist readiness, and reject excess allowance",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /assertCanaryApprovalPostcondition\(\{ actualAllowance, approvalTarget: approveAmount \}\)/,
+    "live canary must verify the exact allowance after every approval receipt",
+  );
   const v10DryRunPreviewSource = readFileSync("scripts/create-v10-canary-dry-run-preview.mjs", "utf8");
   const v10DryRunPreviewCheckSource = readFileSync("scripts/check-v10-dry-run-preview.mjs", "utf8");
   assert.equal(
@@ -2367,6 +2397,7 @@ export function runReleaseOperationsTests() {
     "V10 Linea gas benchmark RPC reads must not use unbounded response.json",
   );
   const v10PostdeployPlanSource = readFileSync("scripts/plan-v10-postdeploy-canary.ts", "utf8");
+  const v10RuntimeIdentitySource = readFileSync("scripts/v10-runtime-identity.ts", "utf8");
   const sharedGameFunctions = new Set(
     gameConstants.GAME_ABI
       .filter((item) => item.type === "function")
@@ -2457,13 +2488,13 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     v10PostdeployPlanSource,
-    /MAX_V10_COMPILATION_MANIFEST_BYTES = 512 \* 1024;[\s\S]*MAX_V10_PUBLIC_ADDRESS_FILE_BYTES = 64 \* 1024;[\s\S]*function readBoundedUtf8File\(filePath: string, maxBytes: number, label: string\)[\s\S]*const stats = statSync\(filePath\)[\s\S]*!stats\.isFile\(\)[\s\S]*stats\.size > maxBytes[\s\S]*too large to validate safely[\s\S]*readFileSync\(filePath, "utf8"\)/,
-    "V10 post-deploy planning must size-gate local manifest and public-address artifacts before reading",
+    /MAX_V10_PUBLIC_ADDRESS_FILE_BYTES = 64 \* 1024;[\s\S]*function readBoundedUtf8File\(filePath: string, maxBytes: number, label: string\)[\s\S]*const stats = statSync\(filePath\)[\s\S]*!stats\.isFile\(\)[\s\S]*stats\.size > maxBytes[\s\S]*too large to validate safely[\s\S]*readFileSync\(filePath, "utf8"\)/,
+    "V10 post-deploy planning must size-gate public-address artifacts before reading",
   );
   assert.match(
-    v10PostdeployPlanSource,
-    /readRuntimeIdentityManifest\(\)[\s\S]*readBoundedUtf8File\([\s\S]*COMPILATION_MANIFEST_PATH[\s\S]*MAX_V10_COMPILATION_MANIFEST_BYTES[\s\S]*Canonical V10 compilation manifest/,
-    "V10 post-deploy planning must size-gate the canonical compilation manifest before parsing",
+    v10RuntimeIdentitySource,
+    /readV10RuntimeIdentityManifest[\s\S]*readBoundedV10Utf8File\(\s*manifestPath,\s*MAX_V10_COMPILATION_MANIFEST_BYTES,\s*"Canonical V10 compilation manifest"[\s\S]*normalizeV10ExecutableRuntime[\s\S]*normalizedExecutableRuntimeSha256/,
+    "shared V10 runtime identity must size-gate and normalize the canonical compilation manifest",
   );
   assert.match(
     v10PostdeployPlanSource,
@@ -2484,8 +2515,8 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     v10PostdeployPlanSource,
-    /const \[chainId, block\] = await Promise\.all[\s\S]*const snapshotBlock = block\.number;[\s\S]*getBytecode\(\{ address: CONTRACT_ADDRESS, blockNumber: snapshotBlock \}\)[\s\S]*snapshot: \{[\s\S]*blockNumber: snapshotBlock\.toString\(\)/,
-    "V10 post-deploy identity and output must bind to one explicit block",
+    /const snapshotBlock = block\.number;[\s\S]*assertV10RuntimeIdentity\(\{[\s\S]*contractAddress: CONTRACT_ADDRESS,[\s\S]*deployBlock: CONTRACT_DEPLOY_BLOCK,[\s\S]*expectedChainId: APP_CHAIN\.id,[\s\S]*snapshotBlock,[\s\S]*snapshotBlockHash: block\.hash,[\s\S]*getBytecode\(\{ address: CONTRACT_ADDRESS, blockNumber: snapshotBlock \}\)[\s\S]*snapshot: \{[\s\S]*blockNumber: snapshotBlock\.toString\(\)/,
+    "V10 post-deploy identity must bind configured chain/address/deploy block before snapshot output",
   );
   assert.match(
     v10PostdeployPlanSource,
@@ -2609,11 +2640,11 @@ export function runReleaseOperationsTests() {
     "V10 post-deploy discovery must expose and enforce bounded read concurrency",
   );
   assert.match(
-    v10PostdeployPlanSource,
-    /LineaOreV10\.compilation\.json[\s\S]*normalizedExecutableRuntimeSha256[\s\S]*runtimeImmutableReferences[\s\S]*normalizeExecutableRuntime/,
-    "V10 post-deploy planning must bind deployed executable code to the canonical manifest",
+    v10RuntimeIdentitySource,
+    /LineaOreV10\.compilation\.json[\s\S]*verifyCanonicalV10CompilationProvenance[\s\S]*assertV10RuntimeIdentity[\s\S]*getBytecode\(\{ address: contractAddress, blockNumber: deployBlock - 1n \}\)[\s\S]*getBytecode\(\{ address: contractAddress, blockNumber: deployBlock \}\)[\s\S]*getBytecode\(\{ address: contractAddress, blockNumber: snapshotBlock \}\)/,
+    "shared V10 identity must verify canonical provenance and bind pre-deploy, deploy-block, and pinned snapshot code",
   );
-  const runtimeIdentityGateIndex = v10PostdeployPlanSource.indexOf("const runtimeIdentity = normalizeExecutableRuntime");
+  const runtimeIdentityGateIndex = v10PostdeployPlanSource.indexOf("assertV10RuntimeIdentity({");
   const firstLiabilityReadIndex = v10PostdeployPlanSource.indexOf('functionName: "accruedOwnerFees"');
   assert.ok(
     runtimeIdentityGateIndex >= 0 &&
@@ -2623,7 +2654,7 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     v10PostdeployPlanSource,
-    /manifestMatched:\s*true[\s\S]*runtimeIdentity,[\s\S]*scan:/,
+    /runtimeIdentity,[\s\S]*scan:/,
     "V10 post-deploy output must expose the successful executable-runtime identity gate",
   );
   assert.match(

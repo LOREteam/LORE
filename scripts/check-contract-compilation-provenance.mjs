@@ -517,7 +517,9 @@ if (ABI_SNAPSHOT_PATH && renderedAbiSnapshot) {
 if (process.argv.includes("--write-manifest") && !SUMMARY_ONLY) {
   fs.writeFileSync(MANIFEST_PATH, `${JSON.stringify(observed, null, 2)}\n`, "utf8");
 }
-const expected = JSON.parse(readBoundedUtf8File(MANIFEST_PATH, MAX_COMPILATION_MANIFEST_BYTES, "compilation manifest"));
+const expectedRaw = readBoundedUtf8File(MANIFEST_PATH, MAX_COMPILATION_MANIFEST_BYTES, "compilation manifest");
+const expected = JSON.parse(expectedRaw);
+const compilationManifestSha256 = sha256(expectedRaw);
 const manifestMatches = JSON.stringify(observed) === JSON.stringify(expected);
 const result = {
   status: manifestMatches && abiSnapshotMatches ? "pass" : "fail",
@@ -540,6 +542,10 @@ console.log(
           bytecodeBytes: result.bytecodeBytes,
           runtimeBytecodeBytes: result.runtimeBytecodeBytes,
           executableRuntimeBytes: result.executableRuntimeBytes,
+          compilationManifestSha256,
+          normalizedExecutableRuntimeSha256: result.normalizedExecutableRuntimeSha256,
+          runtimeBytecodeSha256: result.runtimeBytecodeSha256,
+          sourceSha256: result.sourceSha256,
           abiFragmentsSha256: result.abiFragmentsSha256,
           manifestMatches: result.manifestMatches,
           abiSnapshotMatches: result.abiSnapshotMatches,
