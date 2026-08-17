@@ -65,7 +65,7 @@ function serialize(payload: SessionPayload) {
   return `${encoded}.${sign(encoded)}`;
 }
 
-function parseSessionCookie(raw: string): [encoded: string, signature: string] | null {
+export function parseChatSessionCookie(raw: string): [encoded: string, signature: string] | null {
   if (raw.length > SESSION_COOKIE_MAX_LENGTH) return null;
   const dotIndex = raw.indexOf(".");
   if (dotIndex <= 0 || raw.indexOf(".", dotIndex + 1) !== -1) return null;
@@ -84,7 +84,7 @@ export function normalizeChatSessionExpiresAt(value: unknown, now = Date.now()) 
 }
 
 function parse(raw: string): SessionPayload | null {
-  const cookie = parseSessionCookie(raw);
+  const cookie = parseChatSessionCookie(raw);
   if (!cookie) return null;
   const [encoded, signature] = cookie;
   const expected = sign(encoded);

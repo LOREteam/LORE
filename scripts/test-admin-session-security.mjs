@@ -79,12 +79,14 @@ if (REFRESH_STORE_FAULT_PROBE) {
 }
 
 const adminAuthModule = await import("../app/lib/adminAuth.ts");
+const chatAuthModule = await import("../app/lib/chatAuth.ts");
 const adminSessionModule = await import("../app/api/_lib/adminSession.ts");
 const chatSessionModule = await import("../app/api/_lib/chatSession.ts");
 const diagnosticsAuthModule = await import("../app/api/health/_lib/diagnosticsAuth.ts");
 const dbModule = await import("../server/db.ts");
 
 const adminAuth = adminAuthModule.default ?? adminAuthModule;
+const chatAuth = chatAuthModule.default ?? chatAuthModule;
 const adminSession = adminSessionModule.default ?? adminSessionModule;
 const chatSession = chatSessionModule.default ?? chatSessionModule;
 const diagnosticsAuth = diagnosticsAuthModule.default ?? diagnosticsAuthModule;
@@ -511,6 +513,61 @@ assert.ok(chatCookie, "chat login must set its cookie");
 const chatPayload = decodePayload(chatCookie.value);
 assert.equal(chatPayload.aud, "lore-chat");
 assert.equal(chatPayload.type, "chat-session");
+
+for (const [raw, expected] of [
+  ["encoded.signature", ["encoded", "signature"]],
+  ["", null],
+  [".signature", null],
+  ["encoded.", null],
+  ["encoded.signature.extra", null],
+  ["encoded.signature!", null],
+  [`${"a".repeat(1025)}.signature`, null],
+]) {
+  assert.deepEqual(
+    chatSession.parseChatSessionCookie(raw),
+    expected,
+    "chat session cookie parser must reject malformed, suffixed, unsafe, and oversized values before HMAC verification",
+  );
+}
+
+assert.equal(chatSession.normalizeChatSessionExpiresAt(120_000, 100_000), 120_000);
+assert.equal(chatSession.normalizeChatSessionExpiresAt("120000", 100_000), null);
+assert.equal(chatSession.normalizeChatSessionExpiresAt(120_000.5, 100_000), null);
+assert.equal(chatSession.normalizeChatSessionExpiresAt(Number.MAX_SAFE_INTEGER + 1, 100_000), null);
+assert.equal(chatSession.normalizeChatSessionExpiresAt(99_999, 100_000), null);
+assert.equal(
+  chatSession.normalizeChatSessionExpiresAt(100_000 + chatAuth.CHAT_AUTH_SESSION_TTL_MS + 60_001, 100_000),
+  null,
+);
+
+const previousChatSessionEnv = {
+  nodeEnv: process.env.NODE_ENV,
+  chatAuthSecret: process.env.CHAT_AUTH_SECRET,
+  nextAuthSecret: process.env.NEXTAUTH_SECRET,
+};
+try {
+  process.env.NODE_ENV = "production";
+  delete process.env.CHAT_AUTH_SECRET;
+  delete process.env.NEXTAUTH_SECRET;
+  for (const malformedChatCookie of [
+    `${"a".repeat(1025)}.sig`,
+    "encoded.sig.extra",
+    "encoded.signature!",
+  ]) {
+    assert.doesNotThrow(
+      () => chatSession.readChatSession(requestWithCookie(CHAT_COOKIE, malformedChatCookie)),
+      "malformed chat cookies must be rejected before production secret lookup",
+    );
+    assert.equal(chatSession.readChatSession(requestWithCookie(CHAT_COOKIE, malformedChatCookie)), null);
+  }
+} finally {
+  if (previousChatSessionEnv.nodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previousChatSessionEnv.nodeEnv;
+  if (previousChatSessionEnv.chatAuthSecret === undefined) delete process.env.CHAT_AUTH_SECRET;
+  else process.env.CHAT_AUTH_SECRET = previousChatSessionEnv.chatAuthSecret;
+  if (previousChatSessionEnv.nextAuthSecret === undefined) delete process.env.NEXTAUTH_SECRET;
+  else process.env.NEXTAUTH_SECRET = previousChatSessionEnv.nextAuthSecret;
+}
 
 assert.equal(
   await adminSession.readAdminSession(requestWithCookie(ADMIN_COOKIE, chatCookie.value), baseNow),
