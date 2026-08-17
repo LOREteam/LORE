@@ -1,6 +1,6 @@
 # V10 Canary Dry-Run Preview
 
-Last updated: 2026-08-12T06:35:23.920Z.
+Last updated: 2026-08-17T11:27:34.998Z.
 
 Scope: Linea Sepolia V10 read-only and dry-run readiness only. This document is
 not an authorization to send transactions, start a soak, deploy, or change
@@ -37,9 +37,7 @@ Redacted excerpt:
 
 ```text
 > linea-miner@0.1.0 plan:canary:v10:postdeploy:summary
-> npm run proof:contract-compile:v10:summary && tsx scripts/plan-v10-postdeploy-canary.ts --summary-only
-> linea-miner@0.1.0 proof:contract-compile:v10:summary
-> node scripts/check-contract-compilation-provenance.mjs --target=v10 --summary-only
+> node scripts/check-contract-compilation-provenance.mjs --target=v10 --summary-only && tsx scripts/plan-v10-postdeploy-canary.ts --summary-only
 {"status":"pass","target":"v10","compilerVersion":"0.8.36+commit.8a079791.Emscripten.clang","settings":{"optimizer":true,"runs":200,"viaIR":false,"evmVersion":"osaka"},"bytecodeBytes":17278,"runtimeBytecodeBytes":16488,"executableRuntimeBytes":16435,"abiFragmentsSha256":"<redacted>","manifestMatches":true,"abiSnapshotMatches":true,"wouldWrite":false}
 [v10-postdeploy-plan] V10 post-deploy planning requires epoch-bound runtime mode
 ```
@@ -86,21 +84,21 @@ Redacted excerpt:
 ```text
 > linea-miner@0.1.0 live:canary:v10:matrix
 > tsx scripts/live-round-canary.ts --v10-matrix-only
-C:\Users\bogda\linea-miner-main\scripts\live-round-canary.ts:59
+C:\Users\bogda\linea-miner-main\scripts\live-round-canary.ts:60
 throw new Error("V10 matrix mode requires NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1");
 ^
 Error: V10 matrix mode requires NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1
-at event (C:\Users\bogda\linea-miner-main\scripts\live-round-canary.ts:59:9)
-at Object.<anonymous> (C:\Users\bogda\linea-miner-main\scripts\live-round-canary.ts:1356:2)
-at Module._compile (node:internal/modules/cjs/loader:1812:14)
+at event (C:\Users\bogda\linea-miner-main\scripts\live-round-canary.ts:60:9)
+at Object.<anonymous> (C:\Users\bogda\linea-miner-main\scripts\live-round-canary.ts:1318:2)
+at Module._compile (node:internal/modules/cjs/loader:1738:14)
 at Object.transformer (C:\Users\bogda\linea-miner-main\node_modules\tsx\dist\register-D46fvsV_.cjs:3:1104)
-at Module.load (node:internal/modules/cjs/loader:1533:32)
-at Module._load (node:internal/modules/cjs/loader:1335:12)
-at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
-at loadCJSModuleWithModuleLoad (node:internal/modules/esm/translators:328:3)
-at ModuleWrap.<anonymous> (node:internal/modules/esm/translators:233:7)
-at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
-Node.js v24.14.0
+at Module.load (node:internal/modules/cjs/loader:1470:32)
+at Module._load (node:internal/modules/cjs/loader:1290:12)
+at TracingChannel.traceSync (node:diagnostics_channel:322:14)
+at wrapModuleLoad (node:internal/modules/cjs/loader:238:24)
+at cjsLoader (node:internal/modules/esm/translators:317:5)
+at ModuleWrap.<anonymous> (node:internal/modules/esm/translators:209:7)
+Node.js v24.5.0
 ```
 
 ## Dry-Run Proof Analysis

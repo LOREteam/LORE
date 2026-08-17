@@ -489,6 +489,29 @@ test("Preview and proof commands ignore poisoned package-manager, PATH, and shel
   assert.match(previewSource, /cwd: TRUSTED_NPM_LAUNCHER\.repoRoot/);
 });
 
+test("V10 post-deploy summary remains executable inside the sanitized preview PATH", () => {
+  const launcher = resolveTrustedNpmCli({ repoRoot: REPO_ROOT });
+  const command = trustedNpmCommand(["run", "plan:canary:v10:postdeploy:summary"], launcher);
+  const env = trustedNpmEnvironment({
+    SystemRoot: process.env.SystemRoot,
+    WINDIR: process.env.WINDIR,
+    NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS: "0",
+  }, launcher);
+  const result = spawnSync(command.command, command.args, {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    env,
+    timeout: 120_000,
+  });
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+
+  assert.equal(result.error?.code, undefined, output);
+  assert.notEqual(result.status, 0, output);
+  assert.match(output, /"target":"v10"[\s\S]*"manifestMatches":true/);
+  assert.match(output, /V10 post-deploy planning requires epoch-bound runtime mode/);
+  assert.doesNotMatch(output, /'npm' is not recognized|npm: (?:command )?not found/i);
+});
+
 test("dependency audit accepts a complete canonical report despite npm's advisory exit status", () => {
   const report = canonicalAuditReport({
     "safe-moderate-package": {

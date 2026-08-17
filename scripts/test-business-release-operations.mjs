@@ -2667,7 +2667,7 @@ export function runReleaseOperationsTests() {
   }
   assert.equal(
     packageScripts["plan:canary:v10:postdeploy"],
-    "npm run proof:contract-compile:v10 && tsx scripts/plan-v10-postdeploy-canary.ts",
+    "node scripts/check-contract-compilation-provenance.mjs --target=v10 && tsx scripts/plan-v10-postdeploy-canary.ts",
     "V10 post-deploy planner must verify canonical provenance before its stable read-only command",
   );
   assert.equal(
@@ -2682,7 +2682,7 @@ export function runReleaseOperationsTests() {
   );
   assert.equal(
     packageScripts["plan:canary:v10:postdeploy:summary"],
-    "npm run proof:contract-compile:v10:summary && tsx scripts/plan-v10-postdeploy-canary.ts --summary-only",
+    "node scripts/check-contract-compilation-provenance.mjs --target=v10 --summary-only && tsx scripts/plan-v10-postdeploy-canary.ts --summary-only",
     "V10 post-deploy planner must expose a canonical compact read-only command",
   );
   const contractProvenanceSource = readFileSync("scripts/check-contract-compilation-provenance.mjs", "utf8");
