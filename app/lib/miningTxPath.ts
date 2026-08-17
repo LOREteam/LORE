@@ -47,6 +47,7 @@ type PendingMiningTransaction = {
   hash: `0x${string}`;
   from: `0x${string}`;
   to: `0x${string}` | null;
+  type?: unknown;
   nonce: number;
   input: `0x${string}`;
   blockHash?: `0x${string}` | null;
@@ -122,6 +123,7 @@ const PENDING_TX_NOT_FOUND_GRACE_MS = 15 * 60_000;
 const HEX_32_RE = /^0x[0-9a-fA-F]{64}$/;
 const CALLDATA_RE = /^0x(?:[0-9a-fA-F]{2})+$/;
 const UINT_RE = /^(?:0|[1-9][0-9]*)$/;
+const SUPPORTED_MINING_TRANSACTION_TYPES = new Set(["legacy", "eip2930", "eip1559"]);
 const ACTIVE_PENDING_BY_KEY = new Map<string, PendingMiningTxState>();
 const ACTIVE_KEY_BY_ACTOR = new Map<string, string>();
 const ACTOR_LOCK_RELEASES = new Map<string, () => void>();
@@ -918,6 +920,10 @@ function receiptFingerprint(receipt: PendingMiningReceipt, hash: `0x${string}`) 
   return `${receipt.status}:${hash}:${receipt.blockHash.toLowerCase()}:${receipt.blockNumber}:${receipt.transactionIndex}`;
 }
 
+function isSupportedMiningTransactionType(value: unknown) {
+  return typeof value === "string" && SUPPORTED_MINING_TRANSACTION_TYPES.has(value);
+}
+
 function transactionFingerprint(
   transaction: PendingMiningTransaction,
   state: PendingMiningTxState,
@@ -929,6 +935,7 @@ function transactionFingerprint(
       transaction.hash?.toLowerCase() !== state.hash ||
       getAddress(transaction.from).toLowerCase() !== state.actor ||
       !transaction.to || getAddress(transaction.to).toLowerCase() !== state.contract ||
+      !isSupportedMiningTransactionType(transaction.type) ||
       normalizePendingTxNonce(transaction.nonce) !== state.nonce ||
       transaction.input?.toLowerCase() !== state.calldata
     ) return null;
@@ -965,6 +972,7 @@ function canonicalTransactionFingerprint(transaction: PendingMiningTransaction, 
     if (
       transaction.hash?.toLowerCase() !== hash ||
       !transaction.to ||
+      !isSupportedMiningTransactionType(transaction.type) ||
       normalizePendingTxNonce(transaction.nonce) === null ||
       !CALLDATA_RE.test(transaction.input)
     ) return null;
@@ -1049,6 +1057,7 @@ function approvalTransactionFingerprint(
       transaction.hash?.toLowerCase() !== state.hash ||
       getAddress(transaction.from).toLowerCase() !== state.actor ||
       !transaction.to || getAddress(transaction.to).toLowerCase() !== state.token ||
+      !isSupportedMiningTransactionType(transaction.type) ||
       normalizePendingTxNonce(transaction.nonce) !== state.nonce ||
       transaction.input?.toLowerCase() !== expectedCalldata
     ) return null;

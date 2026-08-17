@@ -17,9 +17,9 @@ import {
   iterateDescendingRewardScanEpochChunks,
 } from "../lib/rewardScanPolicy";
 import {
-  assertClaimTransactionMatchesIntent,
   ClaimTransactionIntentError,
   type ClaimTransactionIntent,
+  waitForClaimTransactionReceiptAgreement,
 } from "../lib/claimTransactionIntent";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
@@ -267,70 +267,9 @@ export function useRewardScanner(
 
   const waitReceipt = useCallback(
     async (hash: `0x${string}`, intent: ClaimTransactionIntent): Promise<ReceiptState> => {
-      if (!publicClient) throw new Error("publicClient unavailable");
-      const isReceiptTimeoutLike = (value: unknown) => {
-        const message = value instanceof Error ? value.message.toLowerCase() : String(value).toLowerCase();
-        const name = value instanceof Error ? value.name : "";
-        return (
-          name === "TimeoutError" ||
-          name === "TransactionReceiptNotFoundError" ||
-          message.includes("timed out") ||
-          message.includes("timeout") ||
-          message.includes("receipt could not be found")
-        );
-      };
-      const isTxLookupMissing = (value: unknown) => {
-        const message = value instanceof Error ? value.message.toLowerCase() : String(value).toLowerCase();
-        const name = value instanceof Error ? value.name : "";
-        return (
-          name === "TransactionNotFoundError" ||
-          message.includes("transaction not found") ||
-          message.includes("transaction could not be found")
-        );
-      };
-
-      try {
-        const receipt = await Promise.race([
-          publicClient.waitForTransactionReceipt({ hash }),
-          delay(TX_RECEIPT_TIMEOUT_MS).then(() => {
-            const timeoutError = new Error("Transaction receipt timeout");
-            timeoutError.name = "TransactionReceiptTimeoutError";
-            throw timeoutError;
-          }),
-        ]);
-        if (receipt.status !== "success") {
-          throw new Error(`Transaction reverted: ${hash}`);
-        }
-        assertClaimTransactionMatchesIntent(intent, hash, await publicClient.getTransaction({ hash }));
-        return "confirmed";
-      } catch (error) {
-        try {
-          const lateReceipt = await publicClient.getTransactionReceipt({ hash });
-          if (lateReceipt.status !== "success") {
-            throw new Error(`Transaction reverted: ${hash}`);
-          }
-          assertClaimTransactionMatchesIntent(intent, hash, await publicClient.getTransaction({ hash }));
-          return "confirmed";
-        } catch (lateReceiptError) {
-          if (isReceiptTimeoutLike(error)) {
-            try {
-              await publicClient.getTransaction({ hash });
-              return "pending";
-            } catch (txLookupError) {
-              if (!isTxLookupMissing(txLookupError)) {
-                throw txLookupError;
-              }
-              throw error;
-            }
-          }
-          if (!isTxLookupMissing(lateReceiptError)) {
-            throw lateReceiptError;
-          }
-          throw error;
-        }
-      }
+      return waitForClaimTransactionReceiptAgreement(intent, hash, TX_RECEIPT_TIMEOUT_MS);
     },
-    [publicClient],
+    [],
   );
 
   const estimateClaimGas = useCallback(

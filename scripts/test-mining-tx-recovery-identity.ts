@@ -36,7 +36,7 @@ const hash = `0x${"a".repeat(64)}` as `0x${string}`;
 const calldata = "0x1234" as const;
 const blockHash = `0x${"b".repeat(64)}` as `0x${string}`;
 const receipt = { status: "success" as const, transactionHash: hash, blockHash, blockNumber: 10n, transactionIndex: 1 };
-const transaction = { hash, from: actor, to: contract, nonce: 7, input: calldata, blockHash, blockNumber: 10n, transactionIndex: 1 };
+const transaction = { hash, from: actor, to: contract, type: "eip1559", nonce: 7, input: calldata, blockHash, blockNumber: 10n, transactionIndex: 1 };
 const approvalSpender = "0x3333333333333333333333333333333333333333" as const;
 const approvalCalldata = encodeFunctionData({
   abi: TOKEN_ABI,
@@ -347,6 +347,7 @@ async function main() {
       hash,
       from: actor,
       to: contract,
+      type: "eip1559",
       nonce: 7,
       input: approvalCalldata,
       blockHash,
@@ -483,6 +484,13 @@ async function main() {
       })), persisted, Date.now(), 1n),
       "manual-reconciliation-required",
       "a transaction index that does not match its receipt must retain the duplicate-send block",
+    );
+    assert.equal(
+      await recoverPendingMiningTx(pair(createClient({
+        getTransaction: async () => ({ ...transaction, type: "eip7702" }),
+      })), persisted, Date.now(), 1n),
+      "manual-reconciliation-required",
+      "an EIP-7702 mining transaction must never clear the pending resend block",
     );
 
     let reportRecoveryEntered!: () => void;

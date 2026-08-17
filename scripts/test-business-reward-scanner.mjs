@@ -35,6 +35,31 @@ function assertClaimTransactionIntentPolicy(candidate) {
   }
 }
 
+async function assertClaimReceiptQuorumPolicy(candidate) {
+  const hash = `0x${"1".repeat(64)}`;
+  const actor = "0x1111111111111111111111111111111111111111";
+  const contract = "0x2222222222222222222222222222222222222222";
+  const calldata = "0x12345678";
+  const blockHash = `0x${"2".repeat(64)}`;
+  const receipt = { status: "success", transactionHash: hash, blockHash, blockNumber: 10n, transactionIndex: 1 };
+  const transaction = { hash, chainId: 59141, from: actor, to: contract, value: 0n, input: calldata, type: "eip1559", blockHash, blockNumber: 10n, transactionIndex: 1, nonce: 7 };
+  const client = {
+    waitForTransactionReceipt: async () => receipt,
+    getTransactionReceipt: async () => receipt,
+    getTransaction: async () => transaction,
+    getChainId: async () => 59141,
+    getBlockNumber: async () => 11n,
+    getBlock: async () => ({ hash: blockHash }),
+  };
+  const intent = { actor, chainId: 59141, contract, calldata };
+  assert.equal(await candidate(intent, hash, 1_000, [client, client]), "confirmed");
+  await assert.rejects(
+    () => candidate(intent, hash, 1_000, [client, { ...client, getTransaction: async () => ({ ...transaction, type: "eip" + "7702" }) }]),
+    /Claim transaction does not match/,
+    "a receipt quorum must not override an unsupported claim transaction envelope",
+  );
+}
+
 function assertAutomaticRewardScanBounds(candidate) {
   assert.deepEqual(candidate(0n), { startEpoch: 0n, minEpoch: 1n, quickMinEpoch: 1n });
   assert.deepEqual(candidate(1n), { startEpoch: 0n, minEpoch: 1n, quickMinEpoch: 1n });
@@ -76,9 +101,10 @@ function assertRewardSelectionPolicy(candidate) {
   }), []);
 }
 
-export function runRewardScannerTests() {
+export async function runRewardScannerTests() {
   const rewardScanner = rewardScannerModule.default ?? rewardScannerModule;
   assertClaimTransactionIntentPolicy(claimTransactionIntent.assertClaimTransactionMatchesIntent);
+  await assertClaimReceiptQuorumPolicy(claimTransactionIntent.waitForClaimTransactionReceiptAgreement);
   const rewardScanNow = 1_000_000;
   assert.equal(rewardScanner.normalizeRewardScanEpochString("42"), "42");
   assert.equal(rewardScanner.normalizeRewardScanEpochString("bad"), null);
@@ -178,8 +204,8 @@ export function runRewardScannerTests() {
   assert.match(rewardScannerSource, /getExplorerTxUrl/, "single reward claim notifications must include explorer links when a tx hash is available");
   assert.match(
     rewardScannerSource,
-    /const waitReceipt = useCallback[\s\S]*waitForTransactionReceipt\(\{ hash \}\)[\s\S]*if \(receipt\.status !== "success"\) \{[\s\S]*throw new Error\(`Transaction reverted: \$\{hash\}`\);[\s\S]*getTransactionReceipt\(\{ hash \}\)[\s\S]*if \(lateReceipt\.status !== "success"\) \{[\s\S]*throw new Error\(`Transaction reverted: \$\{hash\}`\);/,
-    "reward claim receipt helper must reject primary and late reverted receipts",
+    /const waitReceipt = useCallback[\s\S]*waitForClaimTransactionReceiptAgreement\(intent, hash, TX_RECEIPT_TIMEOUT_MS\)/,
+    "reward claims must remain pending until shared quorum and finality confirmation succeeds",
   );
   assert.doesNotMatch(rewardScannerSource, /Preparing reward claims? from the Privy wallet/, "reward claim preparation toasts must stay short and avoid redundant Privy-wallet wording");
   assert.match(

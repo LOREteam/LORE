@@ -22,8 +22,8 @@ import {
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 import {
-  assertClaimTransactionMatchesIntent,
   ClaimTransactionIntentError,
+  waitForClaimTransactionReceiptAgreement,
 } from "../lib/claimTransactionIntent";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
@@ -867,9 +867,8 @@ export function useRebate(options?: UseRebateOptions) {
           });
 
       for (let attempt = 0; attempt < REBATE_CONFIRM_ATTEMPTS; attempt += 1) {
-        let transactionIntentVerified = false;
         try {
-          assertClaimTransactionMatchesIntent(
+          const confirmation = await waitForClaimTransactionReceiptAgreement(
             {
               actor: sender,
               chainId: APP_CHAIN_ID,
@@ -877,14 +876,9 @@ export function useRebate(options?: UseRebateOptions) {
               calldata,
             },
             hash,
-            await publicClient.getTransaction({ hash }),
+            REBATE_CONFIRM_POLL_INTERVAL_MS,
           );
-          transactionIntentVerified = true;
-          const receipt = await publicClient.getTransactionReceipt({ hash });
-          if (receipt.status !== "success") {
-            throw new Error(`Transaction reverted: ${hash}`);
-          }
-          return;
+          if (confirmation === "confirmed") return;
         } catch (err) {
           if (err instanceof ClaimTransactionIntentError) {
             throw createClaimConfirmationPendingError(
@@ -893,31 +887,9 @@ export function useRebate(options?: UseRebateOptions) {
           }
           const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
           if (message.startsWith("transaction reverted:")) throw err;
-          const missingReceipt =
-            message.includes("could not be found") ||
-            message.includes("not found");
-          if (!missingReceipt) {
-            throw createClaimConfirmationPendingError(
-              "Safety Pool claim was submitted, but confirmation is temporarily unavailable. Refresh the Safety Pool tab before retrying.",
-            );
-          }
-          if (!transactionIntentVerified) {
-            throw createClaimConfirmationPendingError(
-              "Safety Pool claim transaction identity is temporarily unavailable. Check wallet activity before retrying.",
-            );
-          }
-        }
-
-        let remainingEpochs: number[];
-        try {
-          remainingEpochs = await loadClaimableEpochsExact(publicClient, sender, intent.epochs);
-        } catch {
           throw createClaimConfirmationPendingError(
-            "Safety Pool claim was submitted, but claim state is temporarily unavailable. Refresh the Safety Pool tab before retrying.",
+            "Safety Pool claim was submitted, but confirmation is temporarily unavailable. Refresh the Safety Pool tab before retrying.",
           );
-        }
-        if (remainingEpochs.length === 0) {
-          return;
         }
 
         await delay(REBATE_CONFIRM_POLL_INTERVAL_MS);

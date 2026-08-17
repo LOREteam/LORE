@@ -375,7 +375,7 @@ async function main() {
   await runWalletModelTests();
   await runReadModelTests();
 
-  runRewardScannerTests();
+  await runRewardScannerTests();
   runLiveStateApiTests();
   runIndexerNormalizationTests();
   await runChainIndexerAuditPolicyTests();

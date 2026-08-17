@@ -1,4 +1,9 @@
 import { getAddress } from "viem";
+import {
+  createPendingMiningAgreementClients,
+  waitForPendingMiningReceiptAgreement,
+  type PendingMiningTxClients,
+} from "./miningTxPath";
 
 const HEX_RE = /^0x(?:[0-9a-fA-F]{2})*$/;
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
@@ -75,5 +80,32 @@ export function assertClaimTransactionMatchesIntent(
     !SUPPORTED_TRANSACTION_TYPES.has(transactionType)
   ) {
     throw new ClaimTransactionIntentError();
+  }
+}
+
+/**
+ * A submitted claim stays pending until two independently selected RPC origins
+ * agree on a finalized receipt and both return the exact signed claim call.
+ */
+export async function waitForClaimTransactionReceiptAgreement(
+  intent: ClaimTransactionIntent,
+  hash: `0x${string}`,
+  timeout: number,
+  providedClients?: PendingMiningTxClients,
+): Promise<"confirmed" | "pending"> {
+  const clients = providedClients ?? createPendingMiningAgreementClients();
+  if (!clients) return "pending";
+  try {
+    const receiptState = await waitForPendingMiningReceiptAgreement(clients, hash, timeout);
+    if (receiptState !== "confirmed") return "pending";
+    const transactions = await Promise.all(clients.map((client) => client.getTransaction({ hash })));
+    assertClaimTransactionMatchesIntent(intent, hash, transactions[0]);
+    assertClaimTransactionMatchesIntent(intent, hash, transactions[1]);
+    return "confirmed";
+  } catch (error) {
+    if (error instanceof ClaimTransactionIntentError) throw error;
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    if (message.startsWith("transaction reverted")) throw error;
+    return "pending";
   }
 }
