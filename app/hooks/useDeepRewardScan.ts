@@ -58,7 +58,7 @@ function chunkEpochIds(epochIds: string[], size: number) {
 
 function isDefinitiveClaimRevertError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return message.toLowerCase().startsWith("transaction reverted:");
+  return message.toLowerCase().startsWith("transaction reverted");
 }
 
 function markPostSendClaimVerificationError(error: unknown, hash: `0x${string}`): PostSendClaimVerificationError {
