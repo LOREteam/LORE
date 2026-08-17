@@ -173,6 +173,7 @@ export function summarizeBusinessLogicResult(result, { durationMs = 0 } = {}) {
 
 export function runBusinessLogicSummary({
   spawn = spawnSync,
+  runIsolatedChild = runIsolatedBusinessLogicChild,
   exists = existsSync,
   cwd = process.cwd(),
   env = process.env,
@@ -184,7 +185,7 @@ export function runBusinessLogicSummary({
   if (!exists(tsxCliPath)) throw new Error("test:logic runner unavailable: node_modules/tsx/dist/cli.mjs is missing");
   const timeoutMs = parseSummaryTimeoutEnv("BUSINESS_LOGIC_SUMMARY_TIMEOUT_MS", 180_000);
   const startedAt = now();
-  const result = runIsolatedBusinessLogicChild({
+  const result = runIsolatedChild({
     processExecPath: execPath,
     args: [tsxCliPath, "scripts/test-business-logic.mjs"],
     cwd,

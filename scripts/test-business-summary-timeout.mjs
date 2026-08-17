@@ -212,7 +212,8 @@ export function runSummaryTimeoutTests() {
   assert.equal(summarizeBusinessLogicResult({ status: null, error: { code: "EACCES" } }).issue, "business-logic-spawn-failed");
   assert.equal(summarizeBusinessLogicResult({ status: null, error: { code: "ETIMEDOUT" } }).timedOut, true);
 
-  let businessSpawnCall = null;
+  let businessRunnerCall = null;
+  const businessSpawn = () => assert.fail("injected isolated runner must own child execution");
   const businessLines = [];
   const businessTimes = [1_000, 1_321];
   withTemporaryBusinessTimeout("240000", () => {
@@ -222,8 +223,9 @@ export function runSummaryTimeoutTests() {
       execPath: "C:\\safe\\node.exe",
       exists: () => true,
       now: () => businessTimes.shift(),
-      spawn: (command, args, options) => {
-        businessSpawnCall = { command, args, options };
+      spawn: businessSpawn,
+      runIsolatedChild: (options) => {
+        businessRunnerCall = options;
         return { status: 0, stdout: validBusinessOutput, stderr: "" };
       },
       writeLine: (line) => businessLines.push(line),
@@ -231,18 +233,19 @@ export function runSummaryTimeoutTests() {
     assert.equal(outcome.exitCode, 0);
     assert.equal(outcome.summary.status, "pass");
   });
-  assert.equal(businessSpawnCall?.command, "C:\\safe\\node.exe");
-  assert.deepEqual(businessSpawnCall?.args, [
+  assert.equal(businessRunnerCall?.processExecPath, "C:\\safe\\node.exe");
+  assert.deepEqual(businessRunnerCall?.args, [
     "C:\\isolated-business-summary\\node_modules\\tsx\\dist\\cli.mjs",
     "scripts/test-business-logic.mjs",
   ]);
-  assert.equal(businessSpawnCall?.options.cwd, "C:\\isolated-business-summary");
-  assert.equal(businessSpawnCall?.options.encoding, "utf8");
-  assert.equal(businessSpawnCall?.options.maxBuffer, 2 * 1024 * 1024);
-  assert.equal(businessSpawnCall?.options.timeout, 240_000);
-  assert.equal(businessSpawnCall?.options.env.NO_UPDATE_NOTIFIER, "1");
-  assert.equal(businessSpawnCall?.options.env.npm_config_update_notifier, "false");
-  assert.equal(businessSpawnCall?.options.env.npm_config_fund, "false");
+  assert.equal(businessRunnerCall?.cwd, "C:\\isolated-business-summary");
+  assert.equal(businessRunnerCall?.encoding, "utf8");
+  assert.equal(businessRunnerCall?.maxBuffer, 2 * 1024 * 1024);
+  assert.equal(businessRunnerCall?.timeout, 240_000);
+  assert.equal(businessRunnerCall?.spawnSyncFn, businessSpawn);
+  assert.equal(businessRunnerCall?.env.NO_UPDATE_NOTIFIER, "1");
+  assert.equal(businessRunnerCall?.env.npm_config_update_notifier, "false");
+  assert.equal(businessRunnerCall?.env.npm_config_fund, "false");
   assert.equal(businessLines.length, 1);
   assert.equal(JSON.parse(businessLines[0]).durationMs, 321);
   assert.throws(
