@@ -10,6 +10,9 @@ import { redactProofText } from "./redact-proof-output.mjs";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000001";
 const MAX_LOAD_ERROR_CHARS = 500;
 const HTTP_STATUS_RE = /^[1-5]\d{2}$/;
+export const LOAD_LATENCY_RESERVOIR_CAPACITY = 4_096;
+export const LOAD_ERROR_SAMPLE_CAPACITY = 32;
+const LOAD_RESERVOIR_INITIAL_STATE = 0x6d2b79f5;
 
 export const LOAD_HTTP_ENDPOINTS = Object.freeze([
   { name: "home", path: "/", weight: 8 },
@@ -110,14 +113,26 @@ function percentile(values, pct) {
   return sorted[index];
 }
 
-function emptyStats() {
+function normalizeP95ThresholdMs(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+export function createLoadStats({ p95ThresholdMs = MAX_P95_MS } = {}) {
+  const exactP95ThresholdMs = normalizeP95ThresholdMs(p95ThresholdMs);
   return {
     count: 0,
     ok: 0,
     failed: 0,
     statuses: new Map(),
     latencies: [],
+    latencySampleCount: 0,
+    latencyMaxMs: 0,
+    latencyReservoirState: LOAD_RESERVOIR_INITIAL_STATE,
+    exactP95ThresholdMs,
+    exactP95ThresholdExceededCount: 0,
     errors: new Map(),
+    errorCount: 0,
+    uncataloguedErrorCount: 0,
   };
 }
 
@@ -125,10 +140,106 @@ function recordStatus(stats, status) {
   stats.statuses.set(status, (stats.statuses.get(status) ?? 0) + 1);
 }
 
-function recordError(stats, error) {
+function nextReservoirRandom(stats) {
+  let state = Number.isSafeInteger(stats.latencyReservoirState)
+    ? stats.latencyReservoirState >>> 0
+    : LOAD_RESERVOIR_INITIAL_STATE;
+  state ^= state << 13;
+  state ^= state >>> 17;
+  state ^= state << 5;
+  state >>>= 0;
+  stats.latencyReservoirState = state;
+  return state;
+}
+
+export function recordLoadLatency(stats, value) {
+  if (!Number.isFinite(value) || value < 0) return;
+  stats.latencySampleCount = (Number.isSafeInteger(stats.latencySampleCount) ? stats.latencySampleCount : 0) + 1;
+  stats.latencyMaxMs = Math.max(Number.isFinite(stats.latencyMaxMs) ? stats.latencyMaxMs : 0, value);
+  if (normalizeP95ThresholdMs(stats.exactP95ThresholdMs) !== null && value > stats.exactP95ThresholdMs) {
+    stats.exactP95ThresholdExceededCount = (
+      Number.isSafeInteger(stats.exactP95ThresholdExceededCount) ? stats.exactP95ThresholdExceededCount : 0
+    ) + 1;
+  }
+  if (stats.latencies.length < LOAD_LATENCY_RESERVOIR_CAPACITY) {
+    stats.latencies.push(value);
+    return;
+  }
+  const reservoirIndex = nextReservoirRandom(stats) % stats.latencySampleCount;
+  if (reservoirIndex < LOAD_LATENCY_RESERVOIR_CAPACITY) stats.latencies[reservoirIndex] = value;
+}
+
+export function sanitizeLoadErrorSample(error) {
   const message = error instanceof Error ? error.message : String(error);
-  const key = message.slice(0, 180);
-  stats.errors.set(key, (stats.errors.get(key) ?? 0) + 1);
+  const redacted = redactProofText(message)
+    .replace(/\b(?:https?|wss?):\/\/[^\s/@]+:[^\s/@]+@/gi, "<redacted-url-credentials>@")
+    .replace(/([?&](?:access[_-]?token|api[_-]?key|authorization|key|password|secret|token)=)[^&#\s]+/gi, "$1<redacted>")
+    .replace(/\b((?:access[_-]?token|api[_-]?key|authorization|key|password|secret|token)\s*[:=]\s*)[^\s,;]+/gi, "$1<redacted>")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (redacted.length <= 180) return redacted || "unknown error";
+  return `${redacted.slice(0, 165)}...<truncated>`;
+}
+
+export function recordLoadError(stats, error) {
+  const key = sanitizeLoadErrorSample(error);
+  stats.errorCount = (Number.isSafeInteger(stats.errorCount) ? stats.errorCount : 0) + 1;
+  if (stats.errors.has(key)) {
+    stats.errors.set(key, (stats.errors.get(key) ?? 0) + 1);
+    return;
+  }
+  if (stats.errors.size < LOAD_ERROR_SAMPLE_CAPACITY) {
+    stats.errors.set(key, 1);
+    return;
+  }
+  stats.uncataloguedErrorCount = (
+    Number.isSafeInteger(stats.uncataloguedErrorCount) ? stats.uncataloguedErrorCount : 0
+  ) + 1;
+}
+
+function emptyStats() {
+  return createLoadStats();
+}
+
+export function summarizeLoadLatencies(stats) {
+  const latencies = Array.isArray(stats?.latencies) ? stats.latencies : [];
+  const sampled = latencies.length;
+  const total = Number.isSafeInteger(stats?.latencySampleCount) && stats.latencySampleCount >= sampled
+    ? stats.latencySampleCount
+    : sampled;
+  const sampledMax = latencies.length === 0 ? 0 : Math.max(...latencies);
+  return {
+    samples: total,
+    sampled,
+    p50: percentile(latencies, 50),
+    p95: percentile(latencies, 95),
+    p99: percentile(latencies, 99),
+    max: Number.isFinite(stats?.latencyMaxMs) ? Math.max(stats.latencyMaxMs, sampledMax) : sampledMax,
+  };
+}
+
+export function hasExactP95ThresholdFailure(stats, thresholdMs) {
+  const normalizedThreshold = normalizeP95ThresholdMs(thresholdMs);
+  const samples = Number.isSafeInteger(stats?.latencySampleCount) && stats.latencySampleCount >= 0
+    ? stats.latencySampleCount
+    : null;
+  if (
+    normalizedThreshold === null
+    || samples === null
+    || normalizeP95ThresholdMs(stats?.exactP95ThresholdMs) !== normalizedThreshold
+    || !Number.isSafeInteger(stats?.exactP95ThresholdExceededCount)
+    || stats.exactP95ThresholdExceededCount < 0
+  ) {
+    return null;
+  }
+  return stats.exactP95ThresholdExceededCount > Math.floor(samples / 20);
+}
+
+function exactP95ThresholdFailureMessage(prefix, stats, thresholdMs) {
+  const samples = stats.latencySampleCount;
+  const exceeded = stats.exactP95ThresholdExceededCount;
+  return `${prefix}load failed: exact p95 tail ${exceeded}/${samples} samples > ${thresholdMs}ms ` +
+    `(allowed ${Math.floor(samples / 20)})`;
 }
 
 function getClientIp(workerId) {
@@ -167,18 +278,18 @@ async function warmUp() {
       stats.count = 1;
       try {
         const response = await fetchWithTimeout(endpoint.path);
-        stats.latencies.push(performance.now() - startedAt);
+        recordLoadLatency(stats, performance.now() - startedAt);
         recordStatus(stats, response.status);
         if (response.ok || response.status === 429) stats.ok = 1;
         else {
           stats.failed = 1;
-          recordError(stats, new Error(`status ${response.status}`));
+          recordLoadError(stats, new Error(`status ${response.status}`));
         }
         return null;
       } catch (error) {
-        stats.latencies.push(performance.now() - startedAt);
+        recordLoadLatency(stats, performance.now() - startedAt);
         stats.failed = 1;
-        recordError(stats, error);
+        recordLoadError(stats, error);
         return endpoint.name;
       }
     }),
@@ -205,8 +316,8 @@ async function runWorker(workerId, deadline, globalStats, byEndpoint) {
     try {
       const response = await fetchWithTimeout(endpoint.path, workerId);
       const elapsed = performance.now() - startedAt;
-      stats.latencies.push(elapsed);
-      globalStats.latencies.push(elapsed);
+      recordLoadLatency(stats, elapsed);
+      recordLoadLatency(globalStats, elapsed);
       recordStatus(stats, response.status);
       recordStatus(globalStats, response.status);
       if (response.ok || response.status === 429) {
@@ -215,17 +326,17 @@ async function runWorker(workerId, deadline, globalStats, byEndpoint) {
       } else {
         stats.failed += 1;
         globalStats.failed += 1;
-        recordError(stats, new Error(`status ${response.status}`));
-        recordError(globalStats, new Error(`${endpoint.name}: status ${response.status}`));
+        recordLoadError(stats, new Error(`status ${response.status}`));
+        recordLoadError(globalStats, new Error(`${endpoint.name}: status ${response.status}`));
       }
     } catch (error) {
       const elapsed = performance.now() - startedAt;
-      stats.latencies.push(elapsed);
-      globalStats.latencies.push(elapsed);
+      recordLoadLatency(stats, elapsed);
+      recordLoadLatency(globalStats, elapsed);
       stats.failed += 1;
       globalStats.failed += 1;
-      recordError(stats, error);
-      recordError(globalStats, new Error(`${endpoint.name}: ${error instanceof Error ? error.message : String(error)}`));
+      recordLoadError(stats, error);
+      recordLoadError(globalStats, new Error(`${endpoint.name}: ${error instanceof Error ? error.message : String(error)}`));
     }
   }
 }
@@ -253,12 +364,12 @@ export function formatLoadStatuses(statuses) {
 
 export function formatLoadStatsLine(name, stats) {
   const errorRate = stats.count > 0 ? stats.failed / stats.count : 0;
-  const p50 = percentile(stats.latencies, 50);
-  const p95 = percentile(stats.latencies, 95);
-  const p99 = percentile(stats.latencies, 99);
+  const latency = summarizeLoadLatencies(stats);
+  const { p50, p95, p99 } = latency;
   return `${name.padEnd(17)} count=${String(stats.count).padStart(5)} ok=${String(stats.ok).padStart(5)} fail=${String(stats.failed).padStart(4)} ` +
       `err=${(errorRate * 100).toFixed(2).padStart(6)}% p50=${p50.toFixed(0).padStart(5)}ms ` +
-      `p95=${p95.toFixed(0).padStart(5)}ms p99=${p99.toFixed(0).padStart(5)}ms statuses=[${formatLoadStatuses(stats.statuses)}]`;
+      `p95=${p95.toFixed(0).padStart(5)}ms p99=${p99.toFixed(0).padStart(5)}ms ` +
+      `quantiles=sampled-approx samples=${latency.sampled}/${latency.samples} statuses=[${formatLoadStatuses(stats.statuses)}]`;
 }
 
 function printStats(name, stats) {
@@ -287,21 +398,29 @@ export function firstLoadThresholdFailure({
   endpoints = LOAD_HTTP_ENDPOINTS,
 }) {
   const errorRate = globalStats.count > 0 ? globalStats.failed / globalStats.count : 1;
-  const p95 = percentile(globalStats.latencies, 95);
+  const exactGlobalP95Failure = hasExactP95ThresholdFailure(globalStats, maxP95Ms);
+  const p95 = summarizeLoadLatencies(globalStats).p95;
   if (errorRate > maxErrorRate) {
     return `load test failed: error rate ${(errorRate * 100).toFixed(2)}% > ${(maxErrorRate * 100).toFixed(2)}%`;
   }
-  if (p95 > maxP95Ms) {
+  if (exactGlobalP95Failure === true) {
+    return exactP95ThresholdFailureMessage("", globalStats, maxP95Ms);
+  }
+  if (exactGlobalP95Failure === null && p95 > maxP95Ms) {
     return `load test failed: p95 ${p95.toFixed(0)}ms > ${maxP95Ms}ms`;
   }
   for (const endpoint of endpoints) {
     const stats = byEndpoint.get(endpoint.name) ?? emptyStats();
     const endpointErrorRate = stats.count > 0 ? stats.failed / stats.count : 1;
-    const endpointP95 = percentile(stats.latencies, 95);
+    const exactEndpointP95Failure = hasExactP95ThresholdFailure(stats, maxP95Ms);
+    const endpointP95 = summarizeLoadLatencies(stats).p95;
     if (endpointErrorRate > maxErrorRate) {
       return `${endpoint.name} load failed: error rate ${(endpointErrorRate * 100).toFixed(2)}% > ${(maxErrorRate * 100).toFixed(2)}%`;
     }
-    if (endpointP95 > maxP95Ms) {
+    if (exactEndpointP95Failure === true) {
+      return exactP95ThresholdFailureMessage(`${endpoint.name} `, stats, maxP95Ms);
+    }
+    if (exactEndpointP95Failure === null && endpointP95 > maxP95Ms) {
       return `${endpoint.name} load failed: p95 ${endpointP95.toFixed(0)}ms > ${maxP95Ms}ms`;
     }
   }
@@ -353,6 +472,9 @@ export async function main() {
     console.log("\nTop errors:");
     for (const [message, count] of [...globalStats.errors.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)) {
       console.log(`  ${count}x ${message}`);
+    }
+    if (globalStats.uncataloguedErrorCount > 0) {
+      console.log(`  ${globalStats.uncataloguedErrorCount}x uncatalogued error events`);
     }
   }
 
