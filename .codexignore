@@ -10,6 +10,7 @@ coverage/
 out/
 build/
 .tmp/
+.tmp-*/
 tmp/
 temp/
 .next-check/
