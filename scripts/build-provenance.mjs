@@ -18,10 +18,13 @@ import {
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 export const BUILD_PROVENANCE_FILENAME = "lore-build-provenance.json";
+export const REACT_PROFILING_BUILD_PROVENANCE_FILENAME = "lore-react-profiling-build-provenance.json";
 export const BUILD_OUTPUT_DIGEST_DOMAIN = "lore-next-output/v1";
 
 const BUILD_PROVENANCE_KIND = "lore-next-build-provenance";
 const BUILD_PROVENANCE_FORMAT_VERSION = 1;
+const REACT_PROFILING_BUILD_PROVENANCE_KIND = "lore-react-profiling-build-provenance";
+const REACT_PROFILING_BUILD_PROVENANCE_FORMAT_VERSION = 1;
 const BUILD_PROVENANCE_TEMP_PREFIX = ".lore-build-provenance.";
 const BUILD_PROVENANCE_TEMP_SUFFIX = ".tmp";
 const MAX_BUILD_OUTPUT_BYTES = 512 * 1_024 * 1_024;
@@ -30,6 +33,7 @@ const MAX_GIT_OUTPUT_BYTES = 4 * 1_024 * 1_024;
 const CLEAN_STATUS_DIGEST_SHA256 = createHash("sha256").update("", "utf8").digest("hex");
 const FULL_SHA_PATTERN = /^[a-f0-9]{40}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
+const REACT_PROFILING_BUILD_ROOT_PATTERN = /^\.next-[a-z0-9]+(?:[._-][a-z0-9]+)*$/i;
 const TRUSTED_GIT_CANDIDATES = process.platform === "win32"
   ? [
       "C:\\Program Files\\Git\\cmd\\git.exe",
@@ -137,11 +141,11 @@ function normalizeRelativePath(value) {
   return String(value).replaceAll("\\", "/");
 }
 
-function isExcludedBuildPath(relativePath) {
+function isExcludedBuildPath(relativePath, provenanceMarkerFilename) {
   const topLevel = relativePath.split("/")[0];
   return topLevel === "cache"
     || topLevel === "dev"
-    || relativePath === BUILD_PROVENANCE_FILENAME
+    || relativePath === provenanceMarkerFilename
     || (
       !relativePath.includes("/")
       && relativePath.startsWith(BUILD_PROVENANCE_TEMP_PREFIX)
@@ -321,7 +325,7 @@ export function captureCleanGitRevision(projectRoot, environment = process.env) 
   };
 }
 
-export function invalidateBuildProvenanceMarker(projectRoot, distDir) {
+function invalidateBuildProvenanceMarkerNamed(projectRoot, distDir, markerFilename) {
   const context = resolveBuildContext(projectRoot, distDir);
   const distStats = lstatIfPresent(context.resolvedDistDir);
   if (!distStats) return { removed: false, removedTemporaryFiles: 0 };
@@ -330,7 +334,7 @@ export function invalidateBuildProvenanceMarker(projectRoot, distDir) {
   let removed = false;
   let removedTemporaryFiles = 0;
   for (const entry of readdirSync(context.resolvedDistDir, { withFileTypes: true })) {
-    const isMarker = entry.name === BUILD_PROVENANCE_FILENAME;
+    const isMarker = entry.name === markerFilename;
     const isTemporary = entry.name.startsWith(BUILD_PROVENANCE_TEMP_PREFIX)
       && entry.name.endsWith(BUILD_PROVENANCE_TEMP_SUFFIX);
     if (!isMarker && !isTemporary) continue;
@@ -345,6 +349,18 @@ export function invalidateBuildProvenanceMarker(projectRoot, distDir) {
     else removedTemporaryFiles += 1;
   }
   return { removed, removedTemporaryFiles };
+}
+
+export function invalidateBuildProvenanceMarker(projectRoot, distDir) {
+  return invalidateBuildProvenanceMarkerNamed(projectRoot, distDir, BUILD_PROVENANCE_FILENAME);
+}
+
+export function invalidateReactProfilingBuildProvenanceMarker(projectRoot, distDir) {
+  return invalidateBuildProvenanceMarkerNamed(
+    projectRoot,
+    distDir,
+    REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
+  );
 }
 
 function clearCanonicalSealedBuildOutput(context) {
@@ -369,7 +385,39 @@ function clearCanonicalSealedBuildOutput(context) {
   return { removed: true };
 }
 
-export function collectBuildOutputIdentity(projectRoot, distDir) {
+function clearReactProfilingBuildOutput(context) {
+  if (!REACT_PROFILING_BUILD_ROOT_PATTERN.test(context.relativeBuildRoot)) {
+    throw new Error("React profiling provenance requires an isolated .next-<name> output directory");
+  }
+  const stats = lstatIfPresent(context.resolvedDistDir);
+  if (!stats) return { removed: false };
+  const canonicalDistDir = requireOrdinaryDirectory(context.resolvedDistDir, "React profiling build output");
+  if (!samePath(canonicalDistDir, context.resolvedDistDir)) {
+    throw new Error("React profiling build output must not resolve through a symlink, junction, or reparse point");
+  }
+  rmSync(context.resolvedDistDir, {
+    recursive: true,
+    force: false,
+    maxRetries: 3,
+    retryDelay: 100,
+  });
+  if (lstatIfPresent(context.resolvedDistDir)) {
+    throw new Error("React profiling build output remained after its fresh output boundary was cleared");
+  }
+  return { removed: true };
+}
+
+export function collectBuildOutputIdentity(
+  projectRoot,
+  distDir,
+  { provenanceMarkerFilename = BUILD_PROVENANCE_FILENAME } = {},
+) {
+  if (![
+    BUILD_PROVENANCE_FILENAME,
+    REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
+  ].includes(provenanceMarkerFilename)) {
+    throw new Error("Build output identity received an unsupported provenance marker filename");
+  }
   const context = resolveBuildContext(projectRoot, distDir);
   const canonicalDistDir = requireOrdinaryDirectory(context.resolvedDistDir, "Build output");
   if (!samePath(canonicalDistDir, context.resolvedDistDir)) {
@@ -390,9 +438,11 @@ export function collectBuildOutputIdentity(projectRoot, distDir) {
         throw new Error(`Build output identity refuses a symbolic link or reparse point: ${relativePath}`);
       }
       if (stats.isDirectory()) {
-        if (!isExcludedBuildPath(relativePath)) pending.push({ absolutePath, relativePath });
+        if (!isExcludedBuildPath(relativePath, provenanceMarkerFilename)) {
+          pending.push({ absolutePath, relativePath });
+        }
       } else if (stats.isFile()) {
-        if (!isExcludedBuildPath(relativePath)) {
+        if (!isExcludedBuildPath(relativePath, provenanceMarkerFilename)) {
           files.push({ absolutePath, relativePath, pathBytes: Buffer.from(relativePath, "utf8") });
         }
       } else {
@@ -430,7 +480,7 @@ export function collectBuildOutputIdentity(projectRoot, distDir) {
     fileCount: files.length,
     totalBytes,
     buildId,
-    scope: "ordinary production output excluding cache, dev, and provenance marker/temp files",
+    scope: `ordinary production output excluding cache, dev, ${provenanceMarkerFilename}, and provenance temp files`,
   };
 }
 
@@ -484,9 +534,116 @@ export function readBuildProvenanceMarker(projectRoot, distDir) {
   };
 }
 
-function publishBuildMarkerAtomic(context, marker) {
+function canonicalReleaseReference(verified) {
+  return {
+    relativeBuildRoot: ".next",
+    sourceRevisionSha: verified.marker.sourceRevisionSha,
+    buildId: verified.outputIdentity.buildId,
+    outputContentDigestSha256: verified.outputIdentity.contentDigestSha256,
+    outputDigestDomain: verified.outputIdentity.domain,
+    markerFileDigestSha256: verified.markerFileDigestSha256,
+  };
+}
+
+function validateCanonicalReleaseReference(reference) {
+  if (
+    !reference
+    || typeof reference !== "object"
+    || Array.isArray(reference)
+    || reference.relativeBuildRoot !== ".next"
+    || !FULL_SHA_PATTERN.test(reference.sourceRevisionSha ?? "")
+    || typeof reference.buildId !== "string"
+    || reference.buildId.length === 0
+    || !DIGEST_PATTERN.test(reference.outputContentDigestSha256 ?? "")
+    || reference.outputDigestDomain !== BUILD_OUTPUT_DIGEST_DOMAIN
+    || !DIGEST_PATTERN.test(reference.markerFileDigestSha256 ?? "")
+  ) {
+    throw new Error("React profiling provenance has an invalid canonical release reference");
+  }
+  return reference;
+}
+
+function assertCanonicalReleaseReferenceMatches(reference, verified, label) {
+  const expected = canonicalReleaseReference(verified);
+  if (
+    reference.relativeBuildRoot !== expected.relativeBuildRoot
+    || reference.sourceRevisionSha !== expected.sourceRevisionSha
+    || reference.buildId !== expected.buildId
+    || reference.outputContentDigestSha256 !== expected.outputContentDigestSha256
+    || reference.outputDigestDomain !== expected.outputDigestDomain
+    || reference.markerFileDigestSha256 !== expected.markerFileDigestSha256
+  ) {
+    throw new Error(`${label} does not match the canonical sealed .next build`);
+  }
+}
+
+function validateReactProfilingBuildMarker(marker, relativeBuildRoot) {
+  const outputIdentity = marker?.outputIdentity;
+  if (
+    !marker
+    || typeof marker !== "object"
+    || Array.isArray(marker)
+    || marker.formatVersion !== REACT_PROFILING_BUILD_PROVENANCE_FORMAT_VERSION
+    || marker.kind !== REACT_PROFILING_BUILD_PROVENANCE_KIND
+    || marker.buildRole !== "react-production-profiling"
+    || marker.reactProductionProfiling !== true
+    || !REACT_PROFILING_BUILD_ROOT_PATTERN.test(relativeBuildRoot)
+    || marker.relativeBuildRoot !== relativeBuildRoot
+    || !FULL_SHA_PATTERN.test(marker.sourceRevisionSha ?? "")
+    || marker.sourceStatusDigestSha256 !== CLEAN_STATUS_DIGEST_SHA256
+    || typeof marker.buildId !== "string"
+    || marker.buildId.length === 0
+    || !outputIdentity
+    || outputIdentity.domain !== BUILD_OUTPUT_DIGEST_DOMAIN
+    || outputIdentity.algorithm !== "sha256"
+    || !DIGEST_PATTERN.test(outputIdentity.contentDigestSha256 ?? "")
+    || !Number.isSafeInteger(outputIdentity.fileCount)
+    || outputIdentity.fileCount < 1
+    || !Number.isSafeInteger(outputIdentity.totalBytes)
+    || outputIdentity.totalBytes < 1
+    || typeof marker.generatedAt !== "string"
+    || !Number.isFinite(Date.parse(marker.generatedAt))
+  ) {
+    throw new Error("React profiling build provenance marker has an invalid or unsupported schema");
+  }
+  if (marker.buildId !== outputIdentity.buildId) {
+    throw new Error("React profiling build provenance BUILD_ID fields disagree");
+  }
+  validateCanonicalReleaseReference(marker.canonicalRelease);
+  if (marker.canonicalRelease.sourceRevisionSha !== marker.sourceRevisionSha) {
+    throw new Error("React profiling and canonical release provenance source revisions disagree");
+  }
+  return marker;
+}
+
+export function readReactProfilingBuildProvenanceMarker(projectRoot, distDir) {
+  const context = resolveBuildContext(projectRoot, distDir);
+  requireOrdinaryDirectory(context.resolvedDistDir, "React profiling build output");
+  const markerPath = resolve(
+    context.resolvedDistDir,
+    REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
+  );
+  const contents = readRegularFileStable(
+    markerPath,
+    "React profiling build provenance marker",
+    MAX_BUILD_MARKER_BYTES,
+  );
+  let marker;
+  try {
+    marker = JSON.parse(contents.toString("utf8"));
+  } catch {
+    throw new Error("React profiling build provenance marker is not valid JSON");
+  }
+  return {
+    marker: validateReactProfilingBuildMarker(marker, context.relativeBuildRoot),
+    markerPath,
+    fileDigestSha256: createHash("sha256").update(contents).digest("hex"),
+  };
+}
+
+function publishBuildMarkerAtomic(context, marker, markerFilename = BUILD_PROVENANCE_FILENAME) {
   requireOrdinaryDirectory(context.resolvedDistDir, "Build output");
-  const markerPath = resolve(context.resolvedDistDir, BUILD_PROVENANCE_FILENAME);
+  const markerPath = resolve(context.resolvedDistDir, markerFilename);
   if (lstatIfPresent(markerPath)) {
     throw new Error("Refusing to replace an existing build provenance marker");
   }
@@ -521,7 +678,19 @@ function publishBuildMarkerAtomic(context, marker) {
 
 export function prepareBuildProvenance({ projectRoot, distDir, seal, environment = process.env }) {
   const context = resolveBuildContext(projectRoot, distDir);
-  const invalidated = invalidateBuildProvenanceMarker(context.resolvedProjectRoot, context.resolvedDistDir);
+  const primaryInvalidated = invalidateBuildProvenanceMarker(
+    context.resolvedProjectRoot,
+    context.resolvedDistDir,
+  );
+  const foreignInvalidated = invalidateReactProfilingBuildProvenanceMarker(
+    context.resolvedProjectRoot,
+    context.resolvedDistDir,
+  );
+  const invalidated = {
+    ...primaryInvalidated,
+    foreignMarkerRemoved: foreignInvalidated.removed,
+    foreignTemporaryFilesRemoved: foreignInvalidated.removedTemporaryFiles,
+  };
   if (!seal) return { seal: false, context, invalidated };
   const repositoryBefore = captureCleanGitRevision(context.resolvedProjectRoot, environment);
   const clearedBuildOutput = clearCanonicalSealedBuildOutput(context);
@@ -564,6 +733,231 @@ export function verifyBuildProvenance({
     markerFileDigestSha256: markerAfter.fileDigestSha256,
     outputIdentity,
   };
+}
+
+export function prepareReactProfilingBuildProvenance({
+  projectRoot,
+  distDir,
+  seal = true,
+  environment = process.env,
+}) {
+  const context = resolveBuildContext(projectRoot, distDir);
+  if (!REACT_PROFILING_BUILD_ROOT_PATTERN.test(context.relativeBuildRoot)) {
+    throw new Error("React profiling provenance requires an isolated .next-<name> output directory");
+  }
+  const primaryInvalidated = invalidateReactProfilingBuildProvenanceMarker(
+    context.resolvedProjectRoot,
+    context.resolvedDistDir,
+  );
+  const foreignInvalidated = invalidateBuildProvenanceMarker(
+    context.resolvedProjectRoot,
+    context.resolvedDistDir,
+  );
+  const invalidated = {
+    ...primaryInvalidated,
+    foreignMarkerRemoved: foreignInvalidated.removed,
+    foreignTemporaryFilesRemoved: foreignInvalidated.removedTemporaryFiles,
+  };
+  if (!seal) {
+    return {
+      seal: false,
+      buildRole: "react-production-profiling",
+      context,
+      invalidated,
+    };
+  }
+  if (environment.LORE_P1_REACT_PROFILING !== "1") {
+    throw new Error("React profiling provenance requires LORE_P1_REACT_PROFILING=1");
+  }
+  const repositoryBefore = captureCleanGitRevision(context.resolvedProjectRoot, environment);
+  const canonicalReleaseBefore = verifyBuildProvenance({
+    projectRoot: context.resolvedProjectRoot,
+    distDir: resolve(context.resolvedProjectRoot, ".next"),
+    expectedSourceRevisionSha: repositoryBefore.headSha,
+  });
+  const clearedBuildOutput = clearReactProfilingBuildOutput(context);
+  const canonicalReleaseAfterClear = verifyBuildProvenance({
+    projectRoot: context.resolvedProjectRoot,
+    distDir: resolve(context.resolvedProjectRoot, ".next"),
+    expectedSourceRevisionSha: repositoryBefore.headSha,
+    expectedOutputIdentity: canonicalReleaseBefore.outputIdentity,
+  });
+  assertCanonicalReleaseReferenceMatches(
+    canonicalReleaseReference(canonicalReleaseBefore),
+    canonicalReleaseAfterClear,
+    "Canonical release provenance after profiling output reset",
+  );
+  return {
+    seal: true,
+    buildRole: "react-production-profiling",
+    context,
+    invalidated,
+    clearedBuildOutput,
+    repositoryBefore,
+    canonicalReleaseBefore,
+    environment,
+  };
+}
+
+export function verifyReactProfilingBuildProvenance({
+  projectRoot,
+  distDir,
+  expectedSourceRevisionSha,
+  expectedOutputIdentity,
+  expectedCanonicalRelease,
+}) {
+  const canonicalReleaseBefore = verifyBuildProvenance({
+    projectRoot,
+    distDir: resolve(projectRoot, ".next"),
+    expectedSourceRevisionSha,
+  });
+  const markerBefore = readReactProfilingBuildProvenanceMarker(projectRoot, distDir);
+  const outputIdentity = collectBuildOutputIdentity(projectRoot, distDir, {
+    provenanceMarkerFilename: REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
+  });
+  const markerAfter = readReactProfilingBuildProvenanceMarker(projectRoot, distDir);
+  if (markerBefore.fileDigestSha256 !== markerAfter.fileDigestSha256) {
+    throw new Error("React profiling build provenance marker changed during verification");
+  }
+  const marker = markerAfter.marker;
+  if (expectedSourceRevisionSha && marker.sourceRevisionSha !== expectedSourceRevisionSha) {
+    throw new Error("React profiling provenance does not match the expected Git HEAD");
+  }
+  if (marker.buildId !== outputIdentity.buildId) {
+    throw new Error("React profiling provenance BUILD_ID does not match the build output");
+  }
+  assertOutputIdentitiesMatch(
+    marker.outputIdentity,
+    outputIdentity,
+    "React profiling provenance output identity",
+  );
+  if (expectedOutputIdentity) {
+    assertOutputIdentitiesMatch(
+      expectedOutputIdentity,
+      outputIdentity,
+      "Final React profiling build output identity",
+    );
+  }
+  assertCanonicalReleaseReferenceMatches(
+    marker.canonicalRelease,
+    canonicalReleaseBefore,
+    "React profiling provenance canonical release reference",
+  );
+  if (expectedCanonicalRelease) {
+    assertCanonicalReleaseReferenceMatches(
+      marker.canonicalRelease,
+      expectedCanonicalRelease,
+      "React profiling provenance expected canonical release reference",
+    );
+  }
+  const canonicalReleaseAfter = verifyBuildProvenance({
+    projectRoot,
+    distDir: resolve(projectRoot, ".next"),
+    expectedSourceRevisionSha: marker.sourceRevisionSha,
+    expectedOutputIdentity: canonicalReleaseBefore.outputIdentity,
+  });
+  assertCanonicalReleaseReferenceMatches(
+    marker.canonicalRelease,
+    canonicalReleaseAfter,
+    "React profiling provenance final canonical release reference",
+  );
+  return {
+    marker,
+    markerPath: markerAfter.markerPath,
+    markerFileDigestSha256: markerAfter.fileDigestSha256,
+    outputIdentity,
+    canonicalRelease: canonicalReleaseAfter,
+  };
+}
+
+export function sealReactProfilingBuildProvenance(session) {
+  if (
+    !session?.seal
+    || session.buildRole !== "react-production-profiling"
+    || !session.context
+    || !session.repositoryBefore
+    || !session.canonicalReleaseBefore
+  ) {
+    throw new Error("A prepared React profiling build provenance session is required");
+  }
+  const {
+    context,
+    environment,
+    repositoryBefore,
+    canonicalReleaseBefore,
+  } = session;
+  const repositoryAfterBuild = captureCleanGitRevision(context.resolvedProjectRoot, environment);
+  if (repositoryAfterBuild.headSha !== repositoryBefore.headSha) {
+    throw new Error("Git HEAD changed during the React profiling build");
+  }
+  const canonicalReleaseAfterBuild = verifyBuildProvenance({
+    projectRoot: context.resolvedProjectRoot,
+    distDir: resolve(context.resolvedProjectRoot, ".next"),
+    expectedSourceRevisionSha: repositoryBefore.headSha,
+    expectedOutputIdentity: canonicalReleaseBefore.outputIdentity,
+  });
+  assertCanonicalReleaseReferenceMatches(
+    canonicalReleaseReference(canonicalReleaseBefore),
+    canonicalReleaseAfterBuild,
+    "Canonical release provenance during React profiling build",
+  );
+  const outputIdentityBeforeMarker = collectBuildOutputIdentity(
+    context.resolvedProjectRoot,
+    context.resolvedDistDir,
+    { provenanceMarkerFilename: REACT_PROFILING_BUILD_PROVENANCE_FILENAME },
+  );
+  const marker = {
+    formatVersion: REACT_PROFILING_BUILD_PROVENANCE_FORMAT_VERSION,
+    kind: REACT_PROFILING_BUILD_PROVENANCE_KIND,
+    buildRole: "react-production-profiling",
+    reactProductionProfiling: true,
+    relativeBuildRoot: context.relativeBuildRoot,
+    sourceRevisionSha: repositoryBefore.headSha,
+    sourceStatusDigestSha256: repositoryBefore.statusDigestSha256,
+    buildId: outputIdentityBeforeMarker.buildId,
+    outputIdentity: outputIdentityBeforeMarker,
+    canonicalRelease: canonicalReleaseReference(canonicalReleaseAfterBuild),
+    generatedAt: new Date().toISOString(),
+  };
+  publishBuildMarkerAtomic(
+    context,
+    marker,
+    REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
+  );
+  try {
+    const verified = verifyReactProfilingBuildProvenance({
+      projectRoot: context.resolvedProjectRoot,
+      distDir: context.resolvedDistDir,
+      expectedSourceRevisionSha: repositoryBefore.headSha,
+      expectedOutputIdentity: outputIdentityBeforeMarker,
+      expectedCanonicalRelease: canonicalReleaseBefore,
+    });
+    const repositoryAfterSeal = captureCleanGitRevision(context.resolvedProjectRoot, environment);
+    if (repositoryAfterSeal.headSha !== repositoryBefore.headSha) {
+      throw new Error("Git HEAD changed while React profiling provenance was sealed");
+    }
+    return {
+      status: "sealed",
+      buildRole: "react-production-profiling",
+      repositoryBefore,
+      repositoryAfterBuild,
+      repositoryAfterSeal,
+      ...verified,
+    };
+  } catch (error) {
+    try {
+      invalidateReactProfilingBuildProvenanceMarker(
+        context.resolvedProjectRoot,
+        context.resolvedDistDir,
+      );
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "React profiling provenance sealing and cleanup failed",
+      );
+    }
+    throw error;
+  }
 }
 
 export function sealBuildProvenance(session) {

@@ -806,6 +806,16 @@ export function assertProductionRuntimeConfig(scope: ProductionRuntimeScope) {
     configuredNetwork === "sepolia" && isTruthyEnv(getEnv("LORE_PREMAINNET_RUNTIME_STRICT"));
   if (configuredNetwork !== "mainnet" && !strictPremainnetTestnet) return;
 
+  const hermeticBuildVariables = Object.entries(process.env)
+    .filter(([name, value]) => name.toUpperCase().startsWith("LORE_HERMETIC_BUILD") && value?.trim())
+    .map(([name]) => name)
+    .sort();
+  if (hermeticBuildVariables.length > 0) {
+    throw new Error(
+      `Hermetic build-only environment variables are forbidden in a strict runtime: ${hermeticBuildVariables.join(", ")}.`,
+    );
+  }
+
   const cacheKey = `${strictPremainnetTestnet ? "pre-mainnet-testnet" : "mainnet"}:${scope}`;
   if (validatedScopes.has(cacheKey)) return;
 

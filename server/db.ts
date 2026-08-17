@@ -1,13 +1,61 @@
-import { mkdirSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { threadId } from "node:worker_threads";
 import { assertProductionRuntimeConfig } from "../config/productionRuntime";
 
 const DEFAULT_DB_PATH = "data/lore.sqlite";
+const HERMETIC_BUILD_MARKER = "1";
+const HERMETIC_BUILD_DB_ROOT_ENV = "LORE_HERMETIC_BUILD_DB_ROOT";
 
 assertProductionRuntimeConfig("server");
 
-function resolveDbPath() {
+function isPathInsideOrSame(rootPath: string, candidatePath: string) {
+  const relativePath = relative(rootPath, candidatePath);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function samePath(left: string, right: string) {
+  return process.platform === "win32"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+export function resolveHermeticBuildDbPath(
+  rootInput = process.env[HERMETIC_BUILD_DB_ROOT_ENV],
+  processId = process.pid,
+  workerThreadId = threadId,
+) {
+  const rawRoot = rootInput?.trim() ?? "";
+  if (!rawRoot || !isAbsolute(rawRoot)) {
+    throw new Error(`${HERMETIC_BUILD_DB_ROOT_ENV} must be an absolute directory during a hermetic build.`);
+  }
+  if (!Number.isSafeInteger(processId) || processId <= 0) {
+    throw new Error("Hermetic build database process identity must be a positive safe integer.");
+  }
+  if (!Number.isSafeInteger(workerThreadId) || workerThreadId < 0) {
+    throw new Error("Hermetic build database worker identity must be a non-negative safe integer.");
+  }
+  const lexicalRoot = resolve(rawRoot);
+  const rootStats = lstatSync(lexicalRoot);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new Error(`${HERMETIC_BUILD_DB_ROOT_ENV} must be an ordinary non-reparse directory during a hermetic build.`);
+  }
+  const canonicalRoot = realpathSync(lexicalRoot);
+  if (!samePath(canonicalRoot, lexicalRoot)) {
+    throw new Error(`${HERMETIC_BUILD_DB_ROOT_ENV} must not resolve through a symlink, junction, or reparse point.`);
+  }
+  const dbPath = resolve(canonicalRoot, `worker-${processId}-${workerThreadId}.sqlite`);
+  if (!isPathInsideOrSame(canonicalRoot, dbPath) || dirname(dbPath) !== canonicalRoot) {
+    throw new Error("Hermetic build database path escaped its owned directory.");
+  }
+  return dbPath;
+}
+
+export function resolveDbPath() {
+  if (process.env.LORE_HERMETIC_BUILD === HERMETIC_BUILD_MARKER) {
+    return resolveHermeticBuildDbPath();
+  }
   const configured = process.env.LORE_DB_PATH?.trim() || DEFAULT_DB_PATH;
   return isAbsolute(configured) ? configured : resolve(process.cwd(), configured);
 }

@@ -5,18 +5,23 @@ import os from "node:os";
 import path from "node:path";
 import {
   BUILD_PROVENANCE_FILENAME,
+  REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
   captureCleanGitRevision,
   verifyBuildProvenance,
+  verifyReactProfilingBuildProvenance,
 } from "./build-provenance.mjs";
 import {
   assessPerformanceEvidenceAgainstCurrentBuild,
   assessStrictPerformanceEvidence,
   BUILD_OUTPUT_DIGEST_DOMAIN,
+  createDualBuildBinding,
   MARKER_FILE_DIGEST_DOMAIN,
+  REACT_PROFILING_BUILD_ROLE,
   summarizePorcelainStatus,
   TWO_HOURS_MS,
 } from "./p1-performance-evidence-model.mjs";
 import { acquireBuildOutputLock } from "./run-hermetic-build.mjs";
+import { resolveNextDistDir } from "./next-dist-dir.mjs";
 import { redactProofText } from "./redact-proof-output.mjs";
 
 const PROJECT_ROOT = process.cwd();
@@ -45,6 +50,8 @@ function parseArgs(argv) {
     selfTest: false,
     summaryOnly: false,
     againstCurrentBuild: false,
+    profilingDistDir: null,
+    profilingDistDirRelativePath: null,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -53,28 +60,39 @@ function parseArgs(argv) {
     else if (arg === "--summary-only") options.summaryOnly = true;
     else if (arg === "--against-current-build") options.againstCurrentBuild = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
-    else if (arg === "--input") {
+    else if (arg === "--input" || arg === "--profiling-dist-dir") {
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) throw new Error("--input requires a path");
-      options.input = path.resolve(PROJECT_ROOT, value);
+      if (!value || value.startsWith("--")) throw new Error(`${arg} requires a path`);
+      if (arg === "--input") options.input = path.resolve(PROJECT_ROOT, value);
+      else {
+        const resolved = resolveNextDistDir(value, PROJECT_ROOT);
+        if (resolved.relativePath === ".next") {
+          throw new Error("--profiling-dist-dir must select an isolated React profiling output");
+        }
+        options.profilingDistDir = resolved.resolvedPath;
+        options.profilingDistDirRelativePath = resolved.relativePath;
+      }
       index += 1;
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
-  if (options.selfTest && (options.input !== DEFAULT_INPUT || options.againstCurrentBuild)) {
-    throw new Error("--self-test cannot be combined with --input or --against-current-build");
+  if (options.selfTest && (options.input !== DEFAULT_INPUT || options.againstCurrentBuild || options.profilingDistDir)) {
+    throw new Error("--self-test cannot be combined with --input, --against-current-build, or --profiling-dist-dir");
+  }
+  if (options.againstCurrentBuild !== Boolean(options.profilingDistDir)) {
+    throw new Error("--against-current-build requires --profiling-dist-dir, and that directory is only valid with current-build verification");
   }
   return options;
 }
 
 function printUsage() {
   console.log([
-    "Usage: node scripts/verify-p1-performance-evidence.mjs [--input <path>] [--against-current-build] [--summary-only]",
+    "Usage: node scripts/verify-p1-performance-evidence.mjs [--input <path>] [--against-current-build --profiling-dist-dir <.next-name>] [--summary-only]",
     "       node scripts/verify-p1-performance-evidence.mjs --self-test",
     "",
-    "Strictly verifies a full schema-2 P1 performance artifact without browser, network, wallet, or chain access.",
-    "--against-current-build additionally binds it to the locked current clean Git HEAD, marker bytes, and build output.",
+    "Strictly verifies a full schema-3 dual-build P1 performance artifact without browser, network, wallet, or chain access.",
+    "--against-current-build additionally binds both canonical .next and the explicit profiling output to the locked current clean Git HEAD.",
   ].join("\n"));
 }
 
@@ -109,6 +127,47 @@ function createPassingFixture() {
     totalBytes: 100_000,
     provenanceMarker,
   };
+  const canonicalReleaseReference = {
+    relativePath: provenanceMarker.relativePath,
+    sourceRevisionSha: headSha,
+    buildId,
+    outputContentDigestSha256: buildDigest,
+    outputDigestDomain: BUILD_OUTPUT_DIGEST_DOMAIN,
+    markerFileDigestSha256: provenanceMarker.fileDigestSha256,
+    markerFileDigestDomain: MARKER_FILE_DIGEST_DOMAIN,
+  };
+  const profilingMarker = {
+    status: "observed",
+    formatVersion: 1,
+    buildRole: REACT_PROFILING_BUILD_ROLE,
+    reactProductionProfiling: true,
+    relativePath: `.next-p1-profile/${REACT_PROFILING_BUILD_PROVENANCE_FILENAME}`,
+    sourceRevisionSha: headSha,
+    buildId: "fixture-profile-build",
+    outputContentDigestSha256: "d".repeat(64),
+    outputDigestDomain: BUILD_OUTPUT_DIGEST_DOMAIN,
+    fileDigestSha256: "e".repeat(64),
+    fileDigestDomain: MARKER_FILE_DIGEST_DOMAIN,
+    canonicalRelease: canonicalReleaseReference,
+  };
+  const profilingBuildIdentity = {
+    status: "observed",
+    buildId: profilingMarker.buildId,
+    contentDigestSha256: profilingMarker.outputContentDigestSha256,
+    digestDomain: BUILD_OUTPUT_DIGEST_DOMAIN,
+    digestAlgorithm: "sha256",
+    fileCount: 11,
+    totalBytes: 110_000,
+    provenanceMarker: profilingMarker,
+  };
+  const dualBuildBinding = createDualBuildBinding({
+    repositoryBefore: repository,
+    repositoryAfter: { ...repository },
+    canonicalBuildBefore: buildIdentity,
+    canonicalBuildAfter: structuredClone(buildIdentity),
+    profilingBuildBefore: profilingBuildIdentity,
+    profilingBuildAfter: structuredClone(profilingBuildIdentity),
+  });
   const samples = Array.from(
     { length: Math.floor(TWO_HOURS_MS / SAMPLE_INTERVAL_MS) + 1 },
     (_, index) => ({
@@ -121,7 +180,7 @@ function createPassingFixture() {
   const minimumHeapSampleCount = Math.ceil(expectedHeapSampleCount * 0.8);
   const minimumHeapWindowMs = TWO_HOURS_MS - (2 * SAMPLE_INTERVAL_MS);
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     status: "complete",
     provenance: {
       repositoryBefore: repository,
@@ -148,10 +207,12 @@ function createPassingFixture() {
           ...provenanceMarker,
         },
       },
+      dualBuildBinding,
     },
     build: {
       status: "measured",
       buildId,
+      outputDirectory: ".next",
       identityAtStart: buildIdentity,
       identityAtEnd: structuredClone(buildIdentity),
       missingRouteManifests: [],
@@ -174,6 +235,13 @@ function createPassingFixture() {
           attribution: "fixture manifest attribution",
         },
       }],
+    },
+    profilingBuild: {
+      status: "observed",
+      role: REACT_PROFILING_BUILD_ROLE,
+      outputDirectory: ".next-p1-profile",
+      identityAtStart: profilingBuildIdentity,
+      identityAtEnd: structuredClone(profilingBuildIdentity),
     },
     runtime: {
       status: "measured",
@@ -281,6 +349,8 @@ function currentObservationFromFixture(fixture) {
     repositoryAfter: structuredClone(fixture.provenance.repositoryAfter),
     buildBefore: structuredClone(fixture.build.identityAtStart),
     buildAfter: structuredClone(fixture.build.identityAtEnd),
+    profilingBuildBefore: structuredClone(fixture.profilingBuild.identityAtStart),
+    profilingBuildAfter: structuredClone(fixture.profilingBuild.identityAtEnd),
   };
 }
 
@@ -294,9 +364,22 @@ async function runSelfTest() {
   assert.match(redactedError, /<redacted-sid>/);
   assert.doesNotMatch(redactedError, /alice|runner|S-1-5|user:pass|token=abc|example\.test/i);
   cases += 1;
-  assert.equal(parseArgs(["--against-current-build"]).againstCurrentBuild, true);
+  const currentArgs = parseArgs([
+    "--against-current-build",
+    "--profiling-dist-dir",
+    ".next-p1-profile",
+  ]);
+  assert.equal(currentArgs.againstCurrentBuild, true);
+  assert.equal(currentArgs.profilingDistDirRelativePath, ".next-p1-profile");
   cases += 1;
-  assert.throws(() => parseArgs(["--self-test", "--against-current-build"]), /cannot be combined/);
+  assert.throws(() => parseArgs(["--against-current-build"]), /requires --profiling-dist-dir/);
+  cases += 1;
+  assert.throws(() => parseArgs(["--profiling-dist-dir", ".next-p1-profile"]), /only valid/);
+  cases += 1;
+  assert.throws(
+    () => parseArgs(["--self-test", "--against-current-build", "--profiling-dist-dir", ".next-p1-profile"]),
+    /cannot be combined/,
+  );
   cases += 1;
   const passing = createPassingFixture();
   assert.deepEqual(assessStrictPerformanceEvidence(passing).failures, []);
@@ -346,6 +429,21 @@ async function runSelfTest() {
   expectFailure("provenance.derivation.sealed", (fixture) => {
     fixture.build.identityAtEnd.provenanceMarker.buildId = "other-build";
   });
+  expectFailure("provenance.profiling.identity", (fixture) => {
+    delete fixture.profilingBuild;
+  });
+  expectFailure("provenance.profiling.identity", (fixture) => {
+    fixture.profilingBuild.identityAtStart.provenanceMarker.status = "blocked";
+  });
+  expectFailure("provenance.profiling.stable", (fixture) => {
+    fixture.profilingBuild.identityAtEnd.contentDigestSha256 = "f".repeat(64);
+  });
+  expectFailure("provenance.dual.sealed", (fixture) => {
+    fixture.profilingBuild.identityAtEnd.provenanceMarker.canonicalRelease.markerFileDigestSha256 = "f".repeat(64);
+  });
+  expectFailure("provenance.dual.sealed", (fixture) => {
+    fixture.provenance.dualBuildBinding.reactProfiling.contentDigestSha256 = "f".repeat(64);
+  });
   expectFailure("build.measurements.complete", (fixture) => {
     fixture.build.routes[0].status = "partial";
   });
@@ -360,6 +458,9 @@ async function runSelfTest() {
   });
   expectFailure("runtime.safety.read-only", (fixture) => {
     fixture.runtime.safety.browserMode = "personal-profile";
+  });
+  expectFailure("runtime.safety.read-only", (fixture) => {
+    fixture.runtime.safety.serverExternalNetworkGuard = "caller-owned server; not process-enforced";
   });
   expectFailure("runtime.measurements.complete", (fixture) => {
     fixture.runtime.routeFirstLoad.routes[0].status = "partial";
@@ -441,6 +542,17 @@ async function runSelfTest() {
     artifact.build.identityAtEnd.provenanceMarker.fileDigestSha256 = "d".repeat(64);
     artifact.provenance.buildDerivation.marker.fileDigestSha256 = "d".repeat(64);
   });
+  expectCurrentFailure("current.profiling.stable", (current) => {
+    current.profilingBuildAfter.contentDigestSha256 = "f".repeat(64);
+  });
+  expectCurrentFailure("current.artifact.profiling-build", () => {}, (artifact) => {
+    artifact.profilingBuild.identityAtStart.contentDigestSha256 = "f".repeat(64);
+    artifact.profilingBuild.identityAtEnd.contentDigestSha256 = "f".repeat(64);
+  });
+  expectCurrentFailure("current.artifact.profiling-marker", () => {}, (artifact) => {
+    artifact.profilingBuild.identityAtStart.provenanceMarker.fileDigestSha256 = "f".repeat(64);
+    artifact.profilingBuild.identityAtEnd.provenanceMarker.fileDigestSha256 = "f".repeat(64);
+  });
 
   const absentFixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "lore-p1-verify-"));
   try {
@@ -456,7 +568,7 @@ async function runSelfTest() {
     await fs.rm(absentFixtureRoot, { recursive: true, force: true });
   }
 
-  console.log(JSON.stringify({ status: "pass", cases, schemaVersion: 2 }));
+  console.log(JSON.stringify({ status: "pass", cases, schemaVersion: 3 }));
 }
 
 function stableFileStatsEqual(left, right) {
@@ -539,7 +651,45 @@ function buildObservation(verified) {
   };
 }
 
-async function readArtifactAgainstCurrentBuild(inputPath) {
+function profilingBuildObservation(verified, relativeBuildRoot) {
+  const outputIdentity = verified.outputIdentity;
+  const marker = verified.marker;
+  const canonicalRelease = verified.canonicalRelease;
+  return {
+    status: "observed",
+    buildId: outputIdentity.buildId,
+    contentDigestSha256: outputIdentity.contentDigestSha256,
+    digestDomain: outputIdentity.domain,
+    digestAlgorithm: outputIdentity.algorithm,
+    fileCount: outputIdentity.fileCount,
+    totalBytes: outputIdentity.totalBytes,
+    scope: outputIdentity.scope,
+    provenanceMarker: {
+      status: "observed",
+      formatVersion: marker.formatVersion,
+      buildRole: marker.buildRole,
+      reactProductionProfiling: marker.reactProductionProfiling,
+      relativePath: `${relativeBuildRoot}/${REACT_PROFILING_BUILD_PROVENANCE_FILENAME}`,
+      sourceRevisionSha: marker.sourceRevisionSha,
+      buildId: marker.buildId,
+      outputContentDigestSha256: marker.outputIdentity.contentDigestSha256,
+      outputDigestDomain: marker.outputIdentity.domain,
+      fileDigestSha256: verified.markerFileDigestSha256,
+      fileDigestDomain: MARKER_FILE_DIGEST_DOMAIN,
+      canonicalRelease: {
+        relativePath: `.next/${BUILD_PROVENANCE_FILENAME}`,
+        sourceRevisionSha: canonicalRelease.marker.sourceRevisionSha,
+        buildId: canonicalRelease.outputIdentity.buildId,
+        outputContentDigestSha256: canonicalRelease.outputIdentity.contentDigestSha256,
+        outputDigestDomain: canonicalRelease.outputIdentity.domain,
+        markerFileDigestSha256: canonicalRelease.markerFileDigestSha256,
+        markerFileDigestDomain: MARKER_FILE_DIGEST_DOMAIN,
+      },
+    },
+  };
+}
+
+async function readArtifactAgainstCurrentBuild(inputPath, profilingDistDir, profilingDistDirRelativePath) {
   const buildOutputLock = acquireBuildOutputLock(PROJECT_ROOT);
   let result;
   let observationFailure = null;
@@ -550,7 +700,20 @@ async function readArtifactAgainstCurrentBuild(inputPath) {
       distDir: path.join(PROJECT_ROOT, ".next"),
       expectedSourceRevisionSha: repositoryBefore.headSha,
     });
+    const profilingVerifiedBefore = verifyReactProfilingBuildProvenance({
+      projectRoot: PROJECT_ROOT,
+      distDir: profilingDistDir,
+      expectedSourceRevisionSha: repositoryBefore.headSha,
+      expectedCanonicalRelease: verifiedBefore,
+    });
     const artifact = await readArtifact(inputPath);
+    const profilingVerifiedAfter = verifyReactProfilingBuildProvenance({
+      projectRoot: PROJECT_ROOT,
+      distDir: profilingDistDir,
+      expectedSourceRevisionSha: repositoryBefore.headSha,
+      expectedOutputIdentity: profilingVerifiedBefore.outputIdentity,
+      expectedCanonicalRelease: verifiedBefore,
+    });
     const verifiedAfter = verifyBuildProvenance({
       projectRoot: PROJECT_ROOT,
       distDir: path.join(PROJECT_ROOT, ".next"),
@@ -565,6 +728,14 @@ async function readArtifactAgainstCurrentBuild(inputPath) {
         repositoryAfter,
         buildBefore: buildObservation(verifiedBefore),
         buildAfter: buildObservation(verifiedAfter),
+        profilingBuildBefore: profilingBuildObservation(
+          profilingVerifiedBefore,
+          profilingDistDirRelativePath,
+        ),
+        profilingBuildAfter: profilingBuildObservation(
+          profilingVerifiedAfter,
+          profilingDistDirRelativePath,
+        ),
       },
     };
   } catch (error) {
@@ -592,7 +763,11 @@ async function main() {
     return;
   }
   const observed = options.againstCurrentBuild
-    ? await readArtifactAgainstCurrentBuild(options.input)
+    ? await readArtifactAgainstCurrentBuild(
+        options.input,
+        options.profilingDistDir,
+        options.profilingDistDirRelativePath,
+      )
     : { artifact: await readArtifact(options.input), current: null };
   const strictResult = assessStrictPerformanceEvidence(observed.artifact);
   const currentResult = observed.current
@@ -610,6 +785,7 @@ async function main() {
     currentBuildBound: currentResult ? currentResult.status === "pass" : null,
     currentHeadSha: currentResult?.currentHeadSha ?? null,
     currentBuildId: currentResult?.currentBuildId ?? null,
+    currentProfilingBuildId: currentResult?.currentProfilingBuildId ?? null,
   };
   const output = options.summaryOnly
     ? { status: result.status, schemaVersion: result.schemaVersion, failureCount: result.failures.length, failures: result.failures }

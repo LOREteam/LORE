@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   BUILD_OUTPUT_DIGEST_DOMAIN,
   BUILD_PROVENANCE_FILENAME,
+  REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
 } from "./build-provenance.mjs";
 
 export { BUILD_OUTPUT_DIGEST_DOMAIN };
@@ -14,6 +15,7 @@ const CLEAN_PORCELAIN_DIGEST_SHA256 = createHash("sha256").update("", "utf8").di
 const FULL_SHA_PATTERN = /^[a-f0-9]{40}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 export const BUILD_PROVENANCE_RELATIVE_PATH = `.next/${BUILD_PROVENANCE_FILENAME}`;
+export const REACT_PROFILING_BUILD_ROLE = "react-production-profiling";
 export const MARKER_FILE_DIGEST_DOMAIN = "marker-file-bytes";
 
 export function summarizePorcelainStatus(rawStatus) {
@@ -95,6 +97,78 @@ function markerIdentitiesEqual(left, right) {
     && left.outputDigestDomain === right.outputDigestDomain
     && left.fileDigestSha256 === right.fileDigestSha256
     && left.fileDigestDomain === right.fileDigestDomain;
+}
+
+function canonicalReleaseReferenceIsComplete(reference) {
+  return reference?.relativePath === BUILD_PROVENANCE_RELATIVE_PATH
+    && FULL_SHA_PATTERN.test(reference.sourceRevisionSha ?? "")
+    && typeof reference.buildId === "string"
+    && reference.buildId.length > 0
+    && DIGEST_PATTERN.test(reference.outputContentDigestSha256 ?? "")
+    && reference.outputDigestDomain === BUILD_OUTPUT_DIGEST_DOMAIN
+    && DIGEST_PATTERN.test(reference.markerFileDigestSha256 ?? "")
+    && reference.markerFileDigestDomain === MARKER_FILE_DIGEST_DOMAIN;
+}
+
+function canonicalReleaseReferenceMatchesMarker(reference, marker) {
+  return canonicalReleaseReferenceIsComplete(reference)
+    && markerObservationIsComplete(marker)
+    && reference.relativePath === marker.relativePath
+    && reference.sourceRevisionSha === marker.sourceRevisionSha
+    && reference.buildId === marker.buildId
+    && reference.outputContentDigestSha256 === marker.outputContentDigestSha256
+    && reference.outputDigestDomain === marker.outputDigestDomain
+    && reference.markerFileDigestSha256 === marker.fileDigestSha256
+    && reference.markerFileDigestDomain === marker.fileDigestDomain;
+}
+
+function canonicalReleaseReferencesEqual(left, right) {
+  return canonicalReleaseReferenceIsComplete(left)
+    && canonicalReleaseReferenceIsComplete(right)
+    && left.relativePath === right.relativePath
+    && left.sourceRevisionSha === right.sourceRevisionSha
+    && left.buildId === right.buildId
+    && left.outputContentDigestSha256 === right.outputContentDigestSha256
+    && left.outputDigestDomain === right.outputDigestDomain
+    && left.markerFileDigestSha256 === right.markerFileDigestSha256
+    && left.markerFileDigestDomain === right.markerFileDigestDomain;
+}
+
+function profilingMarkerObservationIsComplete(marker) {
+  const relativePath = marker?.relativePath;
+  return marker?.status === "observed"
+    && marker.formatVersion === 1
+    && marker.buildRole === REACT_PROFILING_BUILD_ROLE
+    && marker.reactProductionProfiling === true
+    && typeof relativePath === "string"
+    && relativePath !== BUILD_PROVENANCE_RELATIVE_PATH
+    && relativePath.endsWith(`/${REACT_PROFILING_BUILD_PROVENANCE_FILENAME}`)
+    && /^\.next-[a-z0-9]+(?:[._-][a-z0-9]+)*\//i.test(relativePath)
+    && FULL_SHA_PATTERN.test(marker.sourceRevisionSha ?? "")
+    && typeof marker.buildId === "string"
+    && marker.buildId.length > 0
+    && DIGEST_PATTERN.test(marker.outputContentDigestSha256 ?? "")
+    && marker.outputDigestDomain === BUILD_OUTPUT_DIGEST_DOMAIN
+    && DIGEST_PATTERN.test(marker.fileDigestSha256 ?? "")
+    && marker.fileDigestDomain === MARKER_FILE_DIGEST_DOMAIN
+    && canonicalReleaseReferenceIsComplete(marker.canonicalRelease)
+    && marker.canonicalRelease.sourceRevisionSha === marker.sourceRevisionSha;
+}
+
+function profilingMarkerIdentitiesEqual(left, right) {
+  return profilingMarkerObservationIsComplete(left)
+    && profilingMarkerObservationIsComplete(right)
+    && left.formatVersion === right.formatVersion
+    && left.buildRole === right.buildRole
+    && left.reactProductionProfiling === right.reactProductionProfiling
+    && left.relativePath === right.relativePath
+    && left.sourceRevisionSha === right.sourceRevisionSha
+    && left.buildId === right.buildId
+    && left.outputContentDigestSha256 === right.outputContentDigestSha256
+    && left.outputDigestDomain === right.outputDigestDomain
+    && left.fileDigestSha256 === right.fileDigestSha256
+    && left.fileDigestDomain === right.fileDigestDomain
+    && canonicalReleaseReferencesEqual(left.canonicalRelease, right.canonicalRelease);
 }
 
 export function createBuildDerivation({ repositoryBefore, repositoryAfter, buildBefore, buildAfter }) {
@@ -215,6 +289,104 @@ export function createArtifactRevisionBinding({ repositoryBefore, repositoryAfte
     caveat: buildDerivationSealed
       ? "The marker, exact clean Git HEAD, and build output identity stayed equal throughout collection."
       : "The clean source and build bytes stayed stable during collection, but no sealed marker proves those build bytes were produced from this HEAD.",
+  };
+}
+
+function profilingBuildObservationIsComplete(build) {
+  return buildOutputObservationIsComplete(build)
+    && profilingMarkerObservationIsComplete(build.provenanceMarker);
+}
+
+export function createDualBuildBinding({
+  repositoryBefore,
+  repositoryAfter,
+  canonicalBuildBefore,
+  canonicalBuildAfter,
+  profilingBuildBefore,
+  profilingBuildAfter,
+}) {
+  const canonicalDerivation = createBuildDerivation({
+    repositoryBefore,
+    repositoryAfter,
+    buildBefore: canonicalBuildBefore,
+    buildAfter: canonicalBuildAfter,
+  });
+  const repositoryStable = repositoryObservationIsComplete(repositoryBefore)
+    && repositoryObservationIsComplete(repositoryAfter)
+    && repositoryBefore.dirty === false
+    && repositoryAfter.dirty === false
+    && repositoryBefore.headSha === repositoryAfter.headSha
+    && repositoryBefore.statusDigestSha256 === repositoryAfter.statusDigestSha256;
+  const profilingObserved = profilingBuildObservationIsComplete(profilingBuildBefore)
+    && profilingBuildObservationIsComplete(profilingBuildAfter);
+  const profilingOutputStable = outputIdentitiesEqual(profilingBuildBefore, profilingBuildAfter);
+  const profilingMarkerStable = profilingMarkerIdentitiesEqual(
+    profilingBuildBefore?.provenanceMarker,
+    profilingBuildAfter?.provenanceMarker,
+  );
+  const profilingMarkerMatchesOutput = profilingObserved
+    && profilingBuildBefore.provenanceMarker.buildId === profilingBuildBefore.buildId
+    && profilingBuildAfter.provenanceMarker.buildId === profilingBuildAfter.buildId
+    && profilingBuildBefore.provenanceMarker.outputContentDigestSha256
+      === profilingBuildBefore.contentDigestSha256
+    && profilingBuildAfter.provenanceMarker.outputContentDigestSha256
+      === profilingBuildAfter.contentDigestSha256;
+  const sameSourceRevision = profilingObserved && repositoryStable
+    && profilingBuildBefore.provenanceMarker.sourceRevisionSha === repositoryBefore.headSha
+    && profilingBuildAfter.provenanceMarker.sourceRevisionSha === repositoryAfter.headSha;
+  const canonicalReferenceMatches = profilingObserved
+    && canonicalReleaseReferenceMatchesMarker(
+      profilingBuildBefore.provenanceMarker.canonicalRelease,
+      canonicalBuildBefore?.provenanceMarker,
+    )
+    && canonicalReleaseReferenceMatchesMarker(
+      profilingBuildAfter.provenanceMarker.canonicalRelease,
+      canonicalBuildAfter?.provenanceMarker,
+    );
+  const sealed = repositoryStable
+    && canonicalDerivation.status === "sealed"
+    && profilingObserved
+    && profilingOutputStable
+    && profilingMarkerStable
+    && profilingMarkerMatchesOutput
+    && sameSourceRevision
+    && canonicalReferenceMatches;
+
+  if (!sealed) {
+    return {
+      status: "unsealed",
+      canonicalReleaseSealed: canonicalDerivation.status === "sealed",
+      profilingBuildObserved: profilingObserved,
+      profilingOutputStable,
+      profilingMarkerStable,
+      profilingMarkerMatchesOutput,
+      sameSourceRevision,
+      canonicalReferenceMatches,
+      releaseCandidateEligible: false,
+      caveat: "Canonical release and React profiling outputs are not both sealed to one unchanged clean Git revision.",
+    };
+  }
+  return {
+    status: "exact-clean-head-dual-build-sealed",
+    canonicalReleaseSealed: true,
+    profilingBuildObserved: true,
+    profilingOutputStable: true,
+    profilingMarkerStable: true,
+    profilingMarkerMatchesOutput: true,
+    sameSourceRevision: true,
+    canonicalReferenceMatches: true,
+    releaseCandidateEligible: true,
+    sourceRevisionSha: repositoryBefore.headSha,
+    canonicalRelease: {
+      buildId: canonicalBuildBefore.buildId,
+      contentDigestSha256: canonicalBuildBefore.contentDigestSha256,
+      marker: { ...canonicalBuildBefore.provenanceMarker },
+    },
+    reactProfiling: {
+      buildId: profilingBuildBefore.buildId,
+      contentDigestSha256: profilingBuildBefore.contentDigestSha256,
+      marker: { ...profilingBuildBefore.provenanceMarker },
+    },
   };
 }
 
@@ -445,6 +617,22 @@ function validateBuildObservation(build) {
     && markerObservationIsComplete(build.provenanceMarker);
 }
 
+function validateProfilingBuildContainer(profilingBuild) {
+  const outputDirectory = profilingBuild?.outputDirectory;
+  const expectedMarkerPath = typeof outputDirectory === "string"
+    ? `${outputDirectory}/${REACT_PROFILING_BUILD_PROVENANCE_FILENAME}`
+    : "";
+  return isRecord(profilingBuild)
+    && profilingBuild.status === "observed"
+    && profilingBuild.role === REACT_PROFILING_BUILD_ROLE
+    && typeof outputDirectory === "string"
+    && /^\.next-[a-z0-9]+(?:[._-][a-z0-9]+)*$/i.test(outputDirectory)
+    && profilingBuildObservationIsComplete(profilingBuild.identityAtStart)
+    && profilingBuildObservationIsComplete(profilingBuild.identityAtEnd)
+    && profilingBuild.identityAtStart.provenanceMarker.relativePath === expectedMarkerPath
+    && profilingBuild.identityAtEnd.provenanceMarker.relativePath === expectedMarkerPath;
+}
+
 function validateCompressionMeasurement(measurement) {
   return isRecord(measurement)
     && isFiniteNonNegative(measurement.rawBytes)
@@ -645,9 +833,13 @@ export function assessStrictPerformanceEvidence(report) {
   const repositoryAfter = report?.provenance?.repositoryAfter;
   const binding = report?.provenance?.artifactRevisionBinding;
   const derivation = report?.provenance?.buildDerivation;
+  const dualBinding = report?.provenance?.dualBuildBinding;
   const build = report?.build;
   const buildBefore = build?.identityAtStart;
   const buildAfter = build?.identityAtEnd;
+  const profilingBuild = report?.profilingBuild;
+  const profilingBuildBefore = profilingBuild?.identityAtStart;
+  const profilingBuildAfter = profilingBuild?.identityAtEnd;
   const runtime = report?.runtime;
   const expectedDerivation = createBuildDerivation({
     repositoryBefore,
@@ -661,8 +853,16 @@ export function assessStrictPerformanceEvidence(report) {
     buildBefore,
     buildAfter,
   });
+  const expectedDualBinding = createDualBuildBinding({
+    repositoryBefore,
+    repositoryAfter,
+    canonicalBuildBefore: buildBefore,
+    canonicalBuildAfter: buildAfter,
+    profilingBuildBefore,
+    profilingBuildAfter,
+  });
 
-  requireCheck(isRecord(report) && report.schemaVersion === 2, "schema.version");
+  requireCheck(isRecord(report) && report.schemaVersion === 3, "schema.version");
   requireCheck(report?.status === "complete", "report.complete");
   requireCheck(validateRepositoryObservation(repositoryBefore)
     && validateRepositoryObservation(repositoryAfter), "provenance.repository.clean");
@@ -696,6 +896,39 @@ export function assessStrictPerformanceEvidence(report) {
   requireCheck(markerIdentitiesEqual(buildBefore?.provenanceMarker, buildAfter?.provenanceMarker)
     && markerIdentitiesEqual(derivation?.marker, expectedDerivation.marker),
   "provenance.derivation.marker");
+  requireCheck(build?.outputDirectory === ".next", "provenance.canonical.output");
+  requireCheck(validateProfilingBuildContainer(profilingBuild), "provenance.profiling.identity");
+  requireCheck(outputIdentitiesEqual(profilingBuildBefore, profilingBuildAfter)
+    && profilingMarkerIdentitiesEqual(
+      profilingBuildBefore?.provenanceMarker,
+      profilingBuildAfter?.provenanceMarker,
+    ), "provenance.profiling.stable");
+  requireCheck(isRecord(dualBinding)
+    && expectedDualBinding.status === "exact-clean-head-dual-build-sealed"
+    && dualBinding.status === expectedDualBinding.status
+    && dualBinding.canonicalReleaseSealed === true
+    && dualBinding.profilingBuildObserved === true
+    && dualBinding.profilingOutputStable === true
+    && dualBinding.profilingMarkerStable === true
+    && dualBinding.profilingMarkerMatchesOutput === true
+    && dualBinding.sameSourceRevision === true
+    && dualBinding.canonicalReferenceMatches === true
+    && dualBinding.releaseCandidateEligible === true
+    && dualBinding.sourceRevisionSha === expectedDualBinding.sourceRevisionSha
+    && dualBinding.canonicalRelease?.buildId === expectedDualBinding.canonicalRelease?.buildId
+    && dualBinding.canonicalRelease?.contentDigestSha256
+      === expectedDualBinding.canonicalRelease?.contentDigestSha256
+    && markerIdentitiesEqual(
+      dualBinding.canonicalRelease?.marker,
+      expectedDualBinding.canonicalRelease?.marker,
+    )
+    && dualBinding.reactProfiling?.buildId === expectedDualBinding.reactProfiling?.buildId
+    && dualBinding.reactProfiling?.contentDigestSha256
+      === expectedDualBinding.reactProfiling?.contentDigestSha256
+    && profilingMarkerIdentitiesEqual(
+      dualBinding.reactProfiling?.marker,
+      expectedDualBinding.reactProfiling?.marker,
+    ), "provenance.dual.sealed");
   requireCheck(build?.buildId === buildBefore?.buildId, "build.identity.match");
   requireCheck(validateBuildMeasurements(build), "build.measurements.complete");
   requireCheck(isRecord(runtime)
@@ -735,6 +968,8 @@ export function assessPerformanceEvidenceAgainstCurrentBuild(report, current) {
   const repositoryAfter = current?.repositoryAfter;
   const buildBefore = current?.buildBefore;
   const buildAfter = current?.buildAfter;
+  const profilingBuildBefore = current?.profilingBuildBefore;
+  const profilingBuildAfter = current?.profilingBuildAfter;
   const currentDerivation = createBuildDerivation({
     repositoryBefore,
     repositoryAfter,
@@ -746,6 +981,16 @@ export function assessPerformanceEvidenceAgainstCurrentBuild(report, current) {
   const artifactBuildBefore = report?.build?.identityAtStart;
   const artifactBuildAfter = report?.build?.identityAtEnd;
   const artifactMarker = report?.provenance?.buildDerivation?.marker;
+  const artifactProfilingBuildBefore = report?.profilingBuild?.identityAtStart;
+  const artifactProfilingBuildAfter = report?.profilingBuild?.identityAtEnd;
+  const currentDualBinding = createDualBuildBinding({
+    repositoryBefore,
+    repositoryAfter,
+    canonicalBuildBefore: buildBefore,
+    canonicalBuildAfter: buildAfter,
+    profilingBuildBefore,
+    profilingBuildAfter,
+  });
 
   requireCheck(validateRepositoryObservation(repositoryBefore)
     && validateRepositoryObservation(repositoryAfter), "current.repository.clean");
@@ -771,6 +1016,25 @@ export function assessPerformanceEvidenceAgainstCurrentBuild(report, current) {
     && markerIdentitiesEqual(artifactBuildAfter?.provenanceMarker, buildAfter?.provenanceMarker)
     && markerIdentitiesEqual(artifactMarker, buildAfter?.provenanceMarker),
   "current.artifact.marker");
+  requireCheck(profilingBuildObservationIsComplete(profilingBuildBefore)
+    && profilingBuildObservationIsComplete(profilingBuildAfter)
+    && currentDualBinding.status === "exact-clean-head-dual-build-sealed",
+  "current.profiling.identity");
+  requireCheck(outputIdentitiesEqual(profilingBuildBefore, profilingBuildAfter)
+    && profilingMarkerIdentitiesEqual(
+      profilingBuildBefore?.provenanceMarker,
+      profilingBuildAfter?.provenanceMarker,
+    ), "current.profiling.stable");
+  requireCheck(outputIdentitiesEqual(artifactProfilingBuildBefore, profilingBuildBefore)
+    && outputIdentitiesEqual(artifactProfilingBuildAfter, profilingBuildAfter),
+  "current.artifact.profiling-build");
+  requireCheck(profilingMarkerIdentitiesEqual(
+    artifactProfilingBuildBefore?.provenanceMarker,
+    profilingBuildBefore?.provenanceMarker,
+  ) && profilingMarkerIdentitiesEqual(
+    artifactProfilingBuildAfter?.provenanceMarker,
+    profilingBuildAfter?.provenanceMarker,
+  ), "current.artifact.profiling-marker");
 
   return {
     status: failures.length === 0 ? "pass" : "fail",
@@ -778,6 +1042,9 @@ export function assessPerformanceEvidenceAgainstCurrentBuild(report, current) {
       ? repositoryBefore.headSha
       : null,
     currentBuildId: typeof buildBefore?.buildId === "string" ? buildBefore.buildId : null,
+    currentProfilingBuildId: typeof profilingBuildBefore?.buildId === "string"
+      ? profilingBuildBefore.buildId
+      : null,
     failures,
   };
 }

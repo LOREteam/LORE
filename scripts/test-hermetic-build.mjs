@@ -117,6 +117,10 @@ function assertTemporaryDbWasRemoved(dbPath) {
   );
 }
 
+function hermeticBuildDbPath(root, processId) {
+  return join(root, `worker-${processId}.sqlite`);
+}
+
 function removeTestEntry(entryPath) {
   if (!entryPath) return;
   let stats;
@@ -294,6 +298,30 @@ function runBuildWrapperCli(root, wrapperArgs, { seal = true } = {}) {
     removeFixture(root);
     removeFixture(target);
   }
+}
+
+{
+  const tsxCli = resolve("node_modules", "tsx", "dist", "cli.mjs");
+  const productionRuntimePath = resolve("config", "productionRuntime.ts");
+  const strictRuntimeGuard = spawnSync(process.execPath, [tsxCli, "-e", `
+    import { assertProductionRuntimeConfig } from ${JSON.stringify(productionRuntimePath)};
+    assertProductionRuntimeConfig("server");
+  `], {
+    cwd: resolve("."),
+    env: {
+      ...process.env,
+      LINEA_NETWORK: "mainnet",
+      LORE_HERMETIC_BUILD: "1",
+      LORE_HERMETIC_BUILD_DB_ROOT: resolve(tmpdir(), "lore-hermetic-should-never-run-in-runtime"),
+    },
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.notEqual(strictRuntimeGuard.status, 0, "strict runtime must reject hermetic build-only environment variables");
+  assert.match(
+    `${strictRuntimeGuard.stdout ?? ""}${strictRuntimeGuard.stderr ?? ""}`,
+    /Hermetic build-only environment variables are forbidden in a strict runtime: LORE_HERMETIC_BUILD, LORE_HERMETIC_BUILD_DB_ROOT\./,
+  );
 }
 
 {
@@ -719,9 +747,13 @@ for (const testCase of [
     const protectedBefore = snapshotProtectedDatabaseFiles(root);
     const source = `
       const fs = require("node:fs");
-      fs.writeFileSync(process.env.LORE_DB_PATH, "isolated-build-db");
+      const path = require("node:path");
+      const dbPath = path.join(process.env.LORE_HERMETIC_BUILD_DB_ROOT, "fixture.sqlite");
+      fs.writeFileSync(dbPath, "isolated-build-db");
       fs.writeFileSync(process.env.HERMETIC_BUILD_TEST_MARKER, JSON.stringify({
-        dbPath: process.env.LORE_DB_PATH,
+        dbPath,
+        dbRoot: process.env.LORE_HERMETIC_BUILD_DB_ROOT,
+        inheritedDbPath: process.env.LORE_DB_PATH,
         purge: process.env.LORE_ALLOW_CONTRACT_SCOPE_PURGE,
         hermetic: process.env.LORE_HERMETIC_BUILD,
         dist: process.env.NEXT_DIST_DIR,
@@ -735,9 +767,10 @@ for (const testCase of [
 
     assert.equal(first.result.status, 0);
     assert.equal(second.result.status, 0);
-    assert.notEqual(firstMarker.dbPath, secondMarker.dbPath, "every build must receive a unique database path");
+    assert.notEqual(firstMarker.dbRoot, secondMarker.dbRoot, "every build must receive a unique database root");
     assert.equal(isAbsolute(firstMarker.dbPath), true);
     assert.equal(relative(root, firstMarker.dbPath).startsWith(".."), true);
+    assert.equal(firstMarker.inheritedDbPath, "", "hermetic builds must not inherit a runtime database path");
     assert.equal(firstMarker.purge, "0", "build must disable contract-scope purge");
     assert.equal(firstMarker.hermetic, "1", "build must set the hermetic config marker itself");
     assert.equal(firstMarker.dist, ".next-test-output");
@@ -747,6 +780,139 @@ for (const testCase of [
     assert.deepEqual(snapshotProtectedDatabaseFiles(root), protectedBefore);
   } finally {
     removeFixture(root);
+  }
+}
+
+{
+  const root = createFixture();
+  const esbuildPath = resolve("node_modules", "esbuild", "lib", "main.js");
+  try {
+    const protectedBefore = snapshotProtectedDatabaseFiles(root);
+    const source = `
+      const { spawnSync } = require("node:child_process");
+      const esbuild = require(${JSON.stringify(esbuildPath)});
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const workerProbePath = path.join(process.env.LORE_HERMETIC_BUILD_DB_ROOT, "worker-db-probe.mjs");
+      esbuild.buildSync({
+        stdin: {
+          contents: ${JSON.stringify(`
+        import { Worker, isMainThread, parentPort } from "node:worker_threads";
+        import { db, dbPath } from "./server/db.ts";
+
+        if (!isMainThread) {
+          parentPort?.postMessage(dbPath);
+          db.close();
+        } else {
+          const collect = () => new Promise<string>((resolve, reject) => {
+            const worker = new Worker(new URL(import.meta.url));
+            worker.once("message", (value) => resolve(String(value)));
+            worker.once("error", reject);
+            worker.once("exit", (code) => {
+              if (code !== 0) reject(new Error(\`worker exited \${code}\`));
+            });
+          });
+          const main = async () => {
+            const paths = await Promise.all([collect(), collect()]);
+            console.log(JSON.stringify({ processId: process.pid, paths }));
+            db.close();
+          };
+          void main().catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+        }
+      `)},
+          loader: "ts",
+          resolveDir: ${JSON.stringify(resolve("."))},
+          sourcefile: "worker-db-probe.ts",
+        },
+        bundle: true,
+        format: "esm",
+        platform: "node",
+        outfile: workerProbePath,
+      });
+      const workers = spawnSync(
+        process.execPath,
+        [workerProbePath],
+        { cwd: process.cwd(), env: process.env, encoding: "utf8", windowsHide: true },
+      );
+      if (workers.status !== 0 || workers.error) {
+        throw new Error(workers.stderr || workers.error?.message || workers.status);
+      }
+      const workerResult = JSON.parse(workers.stdout.trim());
+      fs.writeFileSync(process.env.HERMETIC_BUILD_TEST_MARKER, JSON.stringify({
+        dbRoot: process.env.LORE_HERMETIC_BUILD_DB_ROOT,
+        processId: workerResult.processId,
+        workerPaths: workerResult.paths,
+      }));
+    `;
+    const outcome = runFixtureChild(root, source, "worker-db-paths.json");
+    assert.equal(outcome.result.status, 0, `${outcome.result.stdout ?? ""}${outcome.result.stderr ?? ""}`);
+    const marker = readMarker(outcome.markerPath);
+    assert.equal(marker.workerPaths.length, 2);
+    assert.notEqual(marker.workerPaths[0], marker.workerPaths[1], "separate build workers must receive separate SQLite files");
+    const threadIds = new Set();
+    for (const workerPath of marker.workerPaths) {
+      assert.equal(dirname(workerPath), marker.dbRoot, "worker SQLite files must stay directly inside the owned build root");
+      const workerIdentity = workerPath.match(/worker-(\d+)-(\d+)\.sqlite$/);
+      assert.ok(workerIdentity, `unexpected worker SQLite path: ${workerPath}`);
+      assert.equal(Number(workerIdentity[1]), marker.processId, "all Worker threads must share the probe process PID");
+      threadIds.add(Number(workerIdentity[2]));
+    }
+    assert.equal(threadIds.size, 2, "each Worker thread must receive a distinct thread-id suffix");
+    assert.throws(
+      () => lstatSync(marker.dbRoot),
+      (error) => error?.code === "ENOENT",
+      "worker SQLite root must be removed after the hermetic build",
+    );
+    assert.deepEqual(snapshotProtectedDatabaseFiles(root), protectedBefore);
+  } finally {
+    removeFixture(root);
+  }
+}
+
+{
+  const root = createFixture();
+  const externalTarget = mkdtempSync(join(systemTempRoot, "lore-hermetic-db-root-target-"));
+  const malformedRoot = join(root, "not-a-directory");
+  const reparseRoot = join(root, "db-root-link");
+  const tsxCli = resolve("node_modules", "tsx", "dist", "cli.mjs");
+  const dbModuleUrl = pathToFileURL(resolve("server", "db.ts")).href;
+  const resolverSource = `import { resolveHermeticBuildDbPath } from ${JSON.stringify(dbModuleUrl)}; console.log(resolveHermeticBuildDbPath());`;
+  try {
+    writeFileSync(malformedRoot, "not-a-directory", "utf8");
+    const malformed = spawnSync(process.execPath, [tsxCli, "-e", resolverSource], {
+      cwd: root,
+      env: {
+        ...process.env,
+        LORE_HERMETIC_BUILD: "1",
+        LORE_HERMETIC_BUILD_DB_ROOT: malformedRoot,
+      },
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    assert.notEqual(malformed.status, 0, "hermetic database resolution must reject a non-directory root");
+    assert.match(`${malformed.stdout ?? ""}${malformed.stderr ?? ""}`, /ordinary non-reparse directory/i);
+
+    symlinkSync(externalTarget, reparseRoot, process.platform === "win32" ? "junction" : "dir");
+    const reparse = spawnSync(process.execPath, [tsxCli, "-e", resolverSource], {
+      cwd: root,
+      env: {
+        ...process.env,
+        LORE_HERMETIC_BUILD: "1",
+        LORE_HERMETIC_BUILD_DB_ROOT: reparseRoot,
+      },
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    assert.notEqual(reparse.status, 0, "hermetic database resolution must reject a reparse root");
+    assert.match(`${reparse.stdout ?? ""}${reparse.stderr ?? ""}`, /ordinary non-reparse|symlink, junction, or reparse/i);
+    assert.deepEqual(readdirSync(externalTarget), [], "reparse root rejection must not create a SQLite file outside the owned root");
+  } finally {
+    removeTestEntry(reparseRoot);
+    removeFixture(root);
+    removeFixture(externalTarget);
   }
 }
 
@@ -854,7 +1020,7 @@ for (const testCase of [
     const source = `
       const fs = require("node:fs");
       const path = require("node:path");
-      const ownedDirectory = path.dirname(process.env.LORE_DB_PATH);
+      const ownedDirectory = process.env.LORE_HERMETIC_BUILD_DB_ROOT;
       fs.writeFileSync(process.env.HERMETIC_BUILD_TEST_MARKER, JSON.stringify({ ownedDirectory }));
       fs.rmSync(ownedDirectory, { recursive: true, force: true });
       fs.symlinkSync(process.env.HERMETIC_BUILD_TEST_TARGET, ownedDirectory, "junction");
@@ -884,7 +1050,7 @@ for (const testCase of [
     const source = `
       const fs = require("node:fs");
       const path = require("node:path");
-      const ownedDirectory = path.dirname(process.env.LORE_DB_PATH);
+      const ownedDirectory = process.env.LORE_HERMETIC_BUILD_DB_ROOT;
       fs.writeFileSync(process.env.HERMETIC_BUILD_TEST_MARKER, JSON.stringify({ ownedDirectory }));
       fs.rmSync(ownedDirectory, { recursive: true, force: true });
       fs.mkdirSync(ownedDirectory);
@@ -908,8 +1074,10 @@ for (const testCase of [
   try {
     const source = `
       const fs = require("node:fs");
-      fs.writeFileSync(process.env.LORE_DB_PATH, "failed-build-db");
-      fs.writeFileSync(process.env.HERMETIC_BUILD_TEST_MARKER, process.env.LORE_DB_PATH);
+      const path = require("node:path");
+      const dbPath = path.join(process.env.LORE_HERMETIC_BUILD_DB_ROOT, "failed-build.sqlite");
+      fs.writeFileSync(dbPath, "failed-build-db");
+      fs.writeFileSync(process.env.HERMETIC_BUILD_TEST_MARKER, dbPath);
       process.exit(7);
     `;
     const outcome = runFixtureChild(root, source, "failed.txt");
@@ -988,7 +1156,7 @@ for (const testCase of [
     const source = `
       const fs = require("node:fs");
       const path = require("node:path");
-      fs.writeFileSync(process.env.HERMETIC_BUILD_TEST_MARKER, process.env.LORE_DB_PATH);
+      fs.writeFileSync(process.env.HERMETIC_BUILD_TEST_MARKER, path.join(process.env.LORE_HERMETIC_BUILD_DB_ROOT, "nonzero-drift.sqlite"));
       fs.writeFileSync(path.join(process.cwd(), "data", "lore-v10.sqlite-wal"), "changed-and-failed");
       process.exit(7);
     `;

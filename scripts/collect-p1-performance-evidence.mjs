@@ -12,26 +12,40 @@ import { findExecutablePath } from "./smoke-browser-lib/core.mjs";
 import {
   BUILD_OUTPUT_DIGEST_DOMAIN,
   BUILD_PROVENANCE_FILENAME,
+  REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
   captureCleanGitRevision,
   collectBuildOutputIdentity,
+  prepareBuildProvenance,
+  prepareReactProfilingBuildProvenance,
   resolveTrustedGitExecutable,
+  sealBuildProvenance,
+  sealReactProfilingBuildProvenance,
   verifyBuildProvenance,
+  verifyReactProfilingBuildProvenance,
 } from "./build-provenance.mjs";
 import {
+  assessStrictPerformanceEvidence,
   createArtifactRevisionBinding,
   createBuildDerivation,
+  createDualBuildBinding,
   createRuntimeApplicability,
   MARKER_FILE_DIGEST_DOMAIN,
   MIN_NATIVE_HIDDEN_EVIDENCE_MS,
   MIN_SIMULATED_AUTO_MINER_EVIDENCE_MS,
+  REACT_PROFILING_BUILD_ROLE,
   summarizePorcelainStatus,
   TWO_HOURS_MS,
 } from "./p1-performance-evidence-model.mjs";
-import { acquireBuildOutputLock } from "./run-hermetic-build.mjs";
+import {
+  acquireBuildOutputLock,
+  parseNextBuildArguments,
+  runHermeticBuild,
+} from "./run-hermetic-build.mjs";
 import { resolveNextDistDir } from "./next-dist-dir.mjs";
 
 const PROJECT_ROOT = process.cwd();
 const DEFAULT_DIST_DIR = path.join(PROJECT_ROOT, ".next");
+const DEFAULT_PROFILING_DIST_DIR = path.join(PROJECT_ROOT, ".next-p1-profile");
 const OUTPUT_PATH = path.join(PROJECT_ROOT, "artifacts", "performance", "p1-evidence.json");
 const NETWORK_GUARD_PATH = path.join(PROJECT_ROOT, "scripts", "p1-perf-local-network-guard.mjs");
 const DEFAULT_DURATION_MS = 30_000;
@@ -59,11 +73,12 @@ function parseArgs(argv) {
     requireSealed: false,
     summaryOnly: false,
     selfTest: false,
+    help: false,
     durationMs: DEFAULT_DURATION_MS,
     sampleIntervalMs: null,
     baseUrl: null,
-    distDir: DEFAULT_DIST_DIR,
-    distDirRelativePath: ".next",
+    distDir: DEFAULT_PROFILING_DIST_DIR,
+    distDirRelativePath: ".next-p1-profile",
     headless: true,
     simulateAutoMiner: false,
   };
@@ -73,9 +88,12 @@ function parseArgs(argv) {
     else if (arg === "--require-sealed") options.requireSealed = true;
     else if (arg === "--summary-only") options.summaryOnly = true;
     else if (arg === "--self-test") options.selfTest = true;
+    else if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--headed-native-hidden") options.headless = false;
     else if (arg === "--simulate-auto-miner") options.simulateAutoMiner = true;
-    else if (["--duration", "--sample-interval", "--base-url", "--dist-dir"].includes(arg)) {
+    else if (arg === "--dist-dir") {
+      throw new Error("--dist-dir was removed; canonical measurements always use .next, so use --profiling-dist-dir for the isolated React profiling output");
+    } else if (["--duration", "--sample-interval", "--base-url", "--profiling-dist-dir"].includes(arg)) {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) throw new Error(`${arg} requires a value`);
       index += 1;
@@ -84,6 +102,9 @@ function parseArgs(argv) {
       else if (arg === "--base-url") options.baseUrl = validateLoopbackBaseUrl(value).href;
       else {
         const resolved = resolveNextDistDir(value, PROJECT_ROOT);
+        if (resolved.relativePath === ".next") {
+          throw new Error(`${arg} must select an isolated React profiling output, not canonical .next`);
+        }
         options.distDir = resolved.resolvedPath;
         options.distDirRelativePath = resolved.relativePath;
       }
@@ -103,6 +124,21 @@ function parseArgs(argv) {
     throw new Error("--simulate-auto-miner requires --duration of at least 60s");
   }
   return options;
+}
+
+function printUsage() {
+  console.log([
+    "Usage: node scripts/collect-p1-performance-evidence.mjs [options]",
+    "",
+    "Final schema-3 flow (run from one clean immutable checkout):",
+    "  1. $env:NEXT_DIST_DIR=''; $env:LORE_P1_REACT_PROFILING='0'; npm run build:sealed",
+    "  2. $env:NEXT_DIST_DIR='.next-p1-profile'; $env:LORE_P1_REACT_PROFILING='1'; node scripts/run-hermetic-build.mjs --seal-react-profiling-provenance",
+    "  3. node scripts/collect-p1-performance-evidence.mjs --require-sealed --profiling-dist-dir .next-p1-profile --duration 2h --sample-interval 60s --headed-native-hidden --simulate-auto-miner",
+    "  4. node scripts/verify-p1-performance-evidence.mjs --against-current-build --profiling-dist-dir .next-p1-profile",
+    "",
+    "Canonical route/chunk measurements always come from sealed .next; runtime React timings always come from the explicit isolated profiling output.",
+    "A caller-owned --base-url remains diagnostic and cannot satisfy strict final read-only server provenance.",
+  ].join("\n"));
 }
 
 function validateLoopbackBaseUrl(value) {
@@ -182,33 +218,92 @@ function buildObservation(outputIdentity, provenanceMarker) {
   };
 }
 
-async function collectBuildIdentity(distDir = DEFAULT_DIST_DIR, expectedSourceRevisionSha = null) {
+function canonicalReleaseReferenceObservation(verified) {
+  return {
+    relativePath: `.next/${BUILD_PROVENANCE_FILENAME}`,
+    sourceRevisionSha: verified.marker.sourceRevisionSha,
+    buildId: verified.outputIdentity.buildId,
+    outputContentDigestSha256: verified.outputIdentity.contentDigestSha256,
+    outputDigestDomain: verified.outputIdentity.domain,
+    markerFileDigestSha256: verified.markerFileDigestSha256,
+    markerFileDigestDomain: MARKER_FILE_DIGEST_DOMAIN,
+  };
+}
+
+async function collectBuildIdentity(
+  distDir = DEFAULT_DIST_DIR,
+  expectedSourceRevisionSha = null,
+  buildRole = "canonical-release",
+) {
   try {
-    const verified = verifyBuildProvenance({
-      projectRoot: PROJECT_ROOT,
-      distDir,
-      expectedSourceRevisionSha: expectedSourceRevisionSha ?? undefined,
-    });
+    const verified = buildRole === REACT_PROFILING_BUILD_ROLE
+      ? verifyReactProfilingBuildProvenance({
+          projectRoot: PROJECT_ROOT,
+          distDir,
+          expectedSourceRevisionSha: expectedSourceRevisionSha ?? undefined,
+        })
+      : verifyBuildProvenance({
+          projectRoot: PROJECT_ROOT,
+          distDir,
+          expectedSourceRevisionSha: expectedSourceRevisionSha ?? undefined,
+        });
     const marker = verified.marker;
     return buildObservation(verified.outputIdentity, {
       status: "observed",
       formatVersion: marker.formatVersion,
-      relativePath: `${path.relative(PROJECT_ROOT, distDir).replaceAll(path.sep, "/")}/${BUILD_PROVENANCE_FILENAME}`,
+      ...(buildRole === REACT_PROFILING_BUILD_ROLE
+        ? {
+            buildRole: marker.buildRole,
+            reactProductionProfiling: marker.reactProductionProfiling,
+          }
+        : {}),
+      relativePath: `${path.relative(PROJECT_ROOT, distDir).replaceAll(path.sep, "/")}/${
+        buildRole === REACT_PROFILING_BUILD_ROLE
+          ? REACT_PROFILING_BUILD_PROVENANCE_FILENAME
+          : BUILD_PROVENANCE_FILENAME
+      }`,
       sourceRevisionSha: marker.sourceRevisionSha,
       buildId: marker.buildId,
       outputContentDigestSha256: marker.outputIdentity.contentDigestSha256,
       outputDigestDomain: marker.outputIdentity.domain,
       fileDigestSha256: verified.markerFileDigestSha256,
       fileDigestDomain: MARKER_FILE_DIGEST_DOMAIN,
+      ...(buildRole === REACT_PROFILING_BUILD_ROLE
+        ? { canonicalRelease: canonicalReleaseReferenceObservation(verified.canonicalRelease) }
+        : {}),
     });
   } catch (error) {
-    const outputIdentity = collectBuildOutputIdentity(PROJECT_ROOT, distDir);
+    const outputIdentity = collectBuildOutputIdentity(
+      PROJECT_ROOT,
+      distDir,
+      buildRole === REACT_PROFILING_BUILD_ROLE
+        ? { provenanceMarkerFilename: REACT_PROFILING_BUILD_PROVENANCE_FILENAME }
+        : undefined,
+    );
     return buildObservation(outputIdentity, {
       status: "blocked",
-      relativePath: `${path.relative(PROJECT_ROOT, distDir).replaceAll(path.sep, "/")}/${BUILD_PROVENANCE_FILENAME}`,
+      relativePath: `${path.relative(PROJECT_ROOT, distDir).replaceAll(path.sep, "/")}/${
+        buildRole === REACT_PROFILING_BUILD_ROLE
+          ? REACT_PROFILING_BUILD_PROVENANCE_FILENAME
+          : BUILD_PROVENANCE_FILENAME
+      }`,
       blocker: compactError(error instanceof Error ? error.message : error),
     });
   }
+}
+
+async function collectDualBuildIdentity(profilingDistDir, expectedSourceRevisionSha = null) {
+  const canonicalRelease = await collectBuildIdentity(
+    DEFAULT_DIST_DIR,
+    expectedSourceRevisionSha,
+    "canonical-release",
+  );
+  const reactProfiling = await collectBuildIdentity(
+    profilingDistDir,
+    expectedSourceRevisionSha,
+    REACT_PROFILING_BUILD_ROLE,
+  );
+  return { canonicalRelease, reactProfiling };
 }
 
 function ownerLabel(rawOwner) {
@@ -683,24 +778,32 @@ function cleanRepositoryObservation(cleanRevision) {
   };
 }
 
-function assertRequiredSealedPreflight(repository, build) {
-  const marker = build?.provenanceMarker;
+function assertRequiredSealedPreflight(repository, canonicalBuild, profilingBuild) {
+  const marker = canonicalBuild?.provenanceMarker;
   const valid = repository?.status === "observed"
     && repository.dirty === false
     && /^[a-f0-9]{40}$/.test(repository.headSha ?? "")
-    && build?.status === "observed"
-    && build.digestDomain === BUILD_OUTPUT_DIGEST_DOMAIN
-    && build.digestAlgorithm === "sha256"
-    && /^[a-f0-9]{64}$/.test(build.contentDigestSha256 ?? "")
+    && canonicalBuild?.status === "observed"
+    && canonicalBuild.digestDomain === BUILD_OUTPUT_DIGEST_DOMAIN
+    && canonicalBuild.digestAlgorithm === "sha256"
+    && /^[a-f0-9]{64}$/.test(canonicalBuild.contentDigestSha256 ?? "")
     && marker?.status === "observed"
     && marker.fileDigestDomain === MARKER_FILE_DIGEST_DOMAIN
     && /^[a-f0-9]{64}$/.test(marker.fileDigestSha256 ?? "")
     && marker.sourceRevisionSha === repository.headSha
-    && marker.buildId === build.buildId
+    && marker.buildId === canonicalBuild.buildId
     && marker.outputDigestDomain === BUILD_OUTPUT_DIGEST_DOMAIN
-    && marker.outputContentDigestSha256 === build.contentDigestSha256;
-  if (!valid) {
-    throw new Error("--require-sealed requires a clean exact HEAD and a verified sealed marker matching the current build output before measurements start");
+    && marker.outputContentDigestSha256 === canonicalBuild.contentDigestSha256;
+  const dualBinding = createDualBuildBinding({
+    repositoryBefore: repository,
+    repositoryAfter: repository,
+    canonicalBuildBefore: canonicalBuild,
+    canonicalBuildAfter: canonicalBuild,
+    profilingBuildBefore: profilingBuild,
+    profilingBuildAfter: profilingBuild,
+  });
+  if (!valid || dualBinding.status !== "exact-clean-head-dual-build-sealed") {
+    throw new Error("--require-sealed requires canonical .next and isolated React profiling outputs sealed to the same clean exact HEAD before measurements start");
   }
 }
 
@@ -749,6 +852,9 @@ async function startLocalNextServer(distDirRelativePath = ".next") {
     NODE_OPTIONS: `--import=${pathToFileURL(NETWORK_GUARD_PATH).href}`,
     LORE_DB_PATH: path.join(tempRoot, "perf.sqlite"),
     NEXT_DIST_DIR: distDirRelativePath,
+    ...(distDirRelativePath === ".next"
+      ? {}
+      : { LORE_P1_REACT_PROFILING: "1" }),
     LINEA_NETWORK: "sepolia",
     KEEPER_RPC_URL: "http://127.0.0.1:9",
     ALLOW_WEAK_RATE_LIMIT_IDENTITY: "1",
@@ -1539,6 +1645,7 @@ function summaryView(report) {
     status: report.status,
     generatedAt: report.generatedAt,
     provenance: report.provenance,
+    profilingBuild: report.profilingBuild,
     build: {
       status: report.build.status,
       buildId: report.build.buildId,
@@ -1606,14 +1713,29 @@ function summaryView(report) {
   };
 }
 
-function derivePerformanceReportStatus({ artifactsOnly, build, runtime, binding, derivation }) {
+function derivePerformanceReportStatus({ artifactsOnly, build, runtime, binding, derivation, dualBinding }) {
   if (artifactsOnly) return build?.status === "measured" ? "artifact-only" : "partial";
   return build?.status === "measured"
     && runtime?.status === "measured"
     && binding?.releaseCandidateEligible === true
     && derivation?.status === "sealed"
+    && dualBinding?.status === "exact-clean-head-dual-build-sealed"
     ? "complete"
     : "partial";
+}
+
+function finalizePerformanceReportStatus(report, artifactsOnly) {
+  const derived = derivePerformanceReportStatus({
+    artifactsOnly,
+    build: report.build,
+    runtime: report.runtime,
+    binding: report.provenance?.artifactRevisionBinding,
+    derivation: report.provenance?.buildDerivation,
+    dualBinding: report.provenance?.dualBuildBinding,
+  });
+  if (derived !== "complete") return derived;
+  report.status = "complete";
+  return assessStrictPerformanceEvidence(report).status === "pass" ? "complete" : "partial";
 }
 
 async function runSelfTest() {
@@ -1622,10 +1744,13 @@ async function runSelfTest() {
   assert.throws(() => parseDuration("02h"), /canonical/);
   assert.throws(() => parseDuration("2 hours"), /canonical/);
   assert.equal(parseArgs(["--artifacts-only", "--require-sealed"]).requireSealed, true);
+  assert.equal(parseArgs(["--help"]).help, true);
   assert.equal(parseArgs(["--headed-native-hidden"]).headless, false);
   assert.equal(parseArgs(["--duration", "60s", "--simulate-auto-miner"]).simulateAutoMiner, true);
-  assert.equal(parseArgs(["--dist-dir", ".next-p1-profile"]).distDirRelativePath, ".next-p1-profile");
-  assert.throws(() => parseArgs(["--dist-dir", "../outside"]), /NEXT_DIST_DIR/);
+  assert.throws(() => parseArgs(["--dist-dir", ".next-p1-profile"]), /use --profiling-dist-dir/);
+  assert.equal(parseArgs(["--profiling-dist-dir", ".next-p1-profile"]).distDirRelativePath, ".next-p1-profile");
+  assert.throws(() => parseArgs(["--profiling-dist-dir", ".next"]), /isolated React profiling/);
+  assert.throws(() => parseArgs(["--profiling-dist-dir", "../outside"]), /NEXT_DIST_DIR/);
   assert.throws(
     () => parseArgs(["--duration", "30s", "--simulate-auto-miner"]),
     /requires --duration of at least 60s/,
@@ -1663,6 +1788,7 @@ async function runSelfTest() {
     runtime: { status: "measured" },
     binding: { releaseCandidateEligible: true },
     derivation: { status: "sealed" },
+    dualBinding: { status: "exact-clean-head-dual-build-sealed" },
   }), "complete");
   assert.equal(derivePerformanceReportStatus({
     artifactsOnly: false,
@@ -1671,6 +1797,18 @@ async function runSelfTest() {
     binding: { releaseCandidateEligible: true },
     derivation: { status: "sealed" },
   }), "partial");
+  const structurallyIncompleteReport = {
+    schemaVersion: 3,
+    status: "partial",
+    provenance: {
+      artifactRevisionBinding: { releaseCandidateEligible: true },
+      buildDerivation: { status: "sealed" },
+      dualBuildBinding: { status: "exact-clean-head-dual-build-sealed" },
+    },
+    build: { status: "measured" },
+    runtime: { status: "measured" },
+  };
+  assert.equal(finalizePerformanceReportStatus(structurallyIncompleteReport, false), "partial");
   const parsed = parseClientReferenceManifest(
     'globalThis.__RSC_MANIFEST=(globalThis.__RSC_MANIFEST||{});globalThis.__RSC_MANIFEST["/page"]={"clientModules":{}};',
     "fixture",
@@ -1700,6 +1838,222 @@ async function runSelfTest() {
     "-C",
     path.resolve("fixture-root"),
   ]);
+  assert.deepEqual(parseNextBuildArguments(["--seal-react-profiling-provenance"]), {
+    sealProvenance: false,
+    sealReactProfilingProvenance: true,
+    nextArgs: [],
+  });
+  assert.throws(
+    () => parseNextBuildArguments(["--seal-provenance", "--seal-react-profiling-provenance"]),
+    /mutually exclusive/,
+  );
+  const provenanceFixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "lore-p1-dual-provenance-"));
+  try {
+    const gitExecutable = resolveTrustedGitExecutable();
+    const gitEnvironment = trustedGitEnvironment();
+    const runFixtureGit = (args) => runBoundedCommand(gitExecutable, args, {
+      environment: gitEnvironment,
+      timeoutMs: 30_000,
+    });
+    await runFixtureGit(["init", "--initial-branch=main", provenanceFixtureRoot]);
+    await fs.writeFile(
+      path.join(provenanceFixtureRoot, ".gitignore"),
+      "/.next/\n/.next-*/\n",
+      "utf8",
+    );
+    await fs.writeFile(path.join(provenanceFixtureRoot, "source.txt"), "fixture source\n", "utf8");
+    await runFixtureGit(["-C", provenanceFixtureRoot, "add", "--all"]);
+    await runFixtureGit([
+      "-C",
+      provenanceFixtureRoot,
+      "-c",
+      "user.name=LORE Test",
+      "-c",
+      "user.email=lore-test@example.invalid",
+      "commit",
+      "--no-gpg-sign",
+      "-m",
+      "fixture",
+    ]);
+
+    const canonicalDistDir = path.join(provenanceFixtureRoot, ".next");
+    const profilingDistDir = path.join(provenanceFixtureRoot, ".next-p1-profile");
+    const writeFakeBuild = async (distDir, buildId, payload) => {
+      await fs.mkdir(path.join(distDir, "static"), { recursive: true });
+      await fs.writeFile(path.join(distDir, "BUILD_ID"), `${buildId}\n`, "utf8");
+      await fs.writeFile(path.join(distDir, "static", "app.js"), payload, "utf8");
+    };
+    const canonicalSession = prepareBuildProvenance({
+      projectRoot: provenanceFixtureRoot,
+      distDir: canonicalDistDir,
+      seal: true,
+    });
+    await writeFakeBuild(canonicalDistDir, "canonical-fixture", "canonical bytes\n");
+    const canonicalSealed = sealBuildProvenance(canonicalSession);
+    assert.equal(canonicalSealed.status, "sealed");
+    const canonicalForeignMarker = path.join(
+      canonicalDistDir,
+      REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
+    );
+    await fs.writeFile(canonicalForeignMarker, "{\"foreign\":true}\n", "utf8");
+    assert.throws(
+      () => verifyBuildProvenance({
+        projectRoot: provenanceFixtureRoot,
+        distDir: canonicalDistDir,
+      }),
+      /output identity/,
+    );
+    await fs.unlink(canonicalForeignMarker);
+    assert.throws(
+      () => prepareReactProfilingBuildProvenance({
+        projectRoot: provenanceFixtureRoot,
+        distDir: canonicalDistDir,
+        environment: { ...process.env, LORE_P1_REACT_PROFILING: "1" },
+      }),
+      /isolated .next-<name>/,
+    );
+    assert.throws(
+      () => prepareReactProfilingBuildProvenance({
+        projectRoot: provenanceFixtureRoot,
+        distDir: profilingDistDir,
+        environment: { ...process.env, LORE_P1_REACT_PROFILING: "0" },
+      }),
+      /LORE_P1_REACT_PROFILING=1/,
+    );
+    const reparseTarget = path.join(provenanceFixtureRoot, ".next-reparse-target");
+    const reparseOutput = path.join(provenanceFixtureRoot, ".next-p1-reparse");
+    await fs.mkdir(reparseTarget);
+    await fs.symlink(reparseTarget, reparseOutput, process.platform === "win32" ? "junction" : "dir");
+    assert.throws(
+      () => prepareReactProfilingBuildProvenance({
+        projectRoot: provenanceFixtureRoot,
+        distDir: reparseOutput,
+        environment: { ...process.env, LORE_P1_REACT_PROFILING: "1" },
+      }),
+      /reparse|symbolic link/i,
+    );
+    await fs.unlink(reparseOutput);
+    assert.throws(
+      () => runHermeticBuild({
+        projectRoot: provenanceFixtureRoot,
+        command: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        buildProvenance: {
+          distDir: profilingDistDir,
+          seal: false,
+          role: "unsupported-fixture-role",
+        },
+      }),
+      /Unsupported build provenance role/,
+    );
+    const profilingEnvironment = { ...process.env, LORE_P1_REACT_PROFILING: "1" };
+    const profilingSession = prepareReactProfilingBuildProvenance({
+      projectRoot: provenanceFixtureRoot,
+      distDir: profilingDistDir,
+      environment: profilingEnvironment,
+    });
+    await writeFakeBuild(profilingDistDir, "profiling-fixture", "profiling bytes\n");
+    const profilingSealed = sealReactProfilingBuildProvenance(profilingSession);
+    assert.equal(profilingSealed.buildRole, REACT_PROFILING_BUILD_ROLE);
+    const verifiedProfiling = verifyReactProfilingBuildProvenance({
+      projectRoot: provenanceFixtureRoot,
+      distDir: profilingDistDir,
+      expectedSourceRevisionSha: canonicalSealed.marker.sourceRevisionSha,
+      expectedCanonicalRelease: canonicalSealed,
+    });
+    assert.equal(
+      verifiedProfiling.marker.canonicalRelease.markerFileDigestSha256,
+      canonicalSealed.markerFileDigestSha256,
+    );
+    await fs.writeFile(
+      path.join(profilingDistDir, "static", "app.js"),
+      "mutated profiling bytes\n",
+      "utf8",
+    );
+    assert.throws(
+      () => verifyReactProfilingBuildProvenance({
+        projectRoot: provenanceFixtureRoot,
+        distDir: profilingDistDir,
+      }),
+      /output identity/,
+    );
+    await fs.writeFile(path.join(profilingDistDir, "static", "app.js"), "profiling bytes\n", "utf8");
+    await fs.writeFile(path.join(canonicalDistDir, "static", "app.js"), "canonical drift\n", "utf8");
+    assert.throws(
+      () => verifyReactProfilingBuildProvenance({
+        projectRoot: provenanceFixtureRoot,
+        distDir: profilingDistDir,
+      }),
+      /output identity/,
+    );
+    await fs.writeFile(path.join(canonicalDistDir, "static", "app.js"), "canonical bytes\n", "utf8");
+    assert.equal(
+      verifyReactProfilingBuildProvenance({
+        projectRoot: provenanceFixtureRoot,
+        distDir: profilingDistDir,
+      }).marker.buildRole,
+      REACT_PROFILING_BUILD_ROLE,
+    );
+    const foreignMarkerPath = path.join(profilingDistDir, BUILD_PROVENANCE_FILENAME);
+    await fs.writeFile(foreignMarkerPath, "{\"foreign\":true}\n", "utf8");
+    assert.throws(
+      () => verifyReactProfilingBuildProvenance({
+        projectRoot: provenanceFixtureRoot,
+        distDir: profilingDistDir,
+      }),
+      /output identity/,
+    );
+    const invalidatedProfiling = prepareReactProfilingBuildProvenance({
+      projectRoot: provenanceFixtureRoot,
+      distDir: profilingDistDir,
+      seal: false,
+    });
+    assert.equal(invalidatedProfiling.invalidated.removed, true);
+    assert.equal(invalidatedProfiling.invalidated.foreignMarkerRemoved, true);
+    await assert.rejects(fs.access(foreignMarkerPath));
+    const failedChild = runHermeticBuild({
+      projectRoot: provenanceFixtureRoot,
+      command: process.execPath,
+      args: ["-e", "process.exit(7)"],
+      env: profilingEnvironment,
+      stdio: "pipe",
+      encoding: "utf8",
+      timeoutMs: 30_000,
+      buildProvenance: {
+        distDir: profilingDistDir,
+        seal: true,
+        role: REACT_PROFILING_BUILD_ROLE,
+      },
+    });
+    assert.equal(failedChild.result.status, 7);
+    await assert.rejects(fs.access(path.join(
+      profilingDistDir,
+      REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
+    )));
+    assert.throws(
+      () => runHermeticBuild({
+        projectRoot: provenanceFixtureRoot,
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 60_000)"],
+        env: profilingEnvironment,
+        stdio: "pipe",
+        encoding: "utf8",
+        timeoutMs: 250,
+        buildProvenance: {
+          distDir: profilingDistDir,
+          seal: true,
+          role: REACT_PROFILING_BUILD_ROLE,
+        },
+      }),
+      /ETIMEDOUT|timed out/i,
+    );
+    await assert.rejects(fs.access(path.join(
+      profilingDistDir,
+      REACT_PROFILING_BUILD_PROVENANCE_FILENAME,
+    )));
+  } finally {
+    await fs.rm(provenanceFixtureRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
   const headSha = "a".repeat(40);
   const buildIdentity = {
     status: "observed",
@@ -1838,13 +2192,63 @@ async function runSelfTest() {
     fileDigestDomain: MARKER_FILE_DIGEST_DOMAIN,
   };
   const sealedBuildIdentity = { ...buildIdentity, provenanceMarker: marker };
-  assert.doesNotThrow(() => assertRequiredSealedPreflight(cleanRepository, sealedBuildIdentity));
+  const canonicalRelease = {
+    relativePath: marker.relativePath,
+    sourceRevisionSha: marker.sourceRevisionSha,
+    buildId: marker.buildId,
+    outputContentDigestSha256: marker.outputContentDigestSha256,
+    outputDigestDomain: marker.outputDigestDomain,
+    markerFileDigestSha256: marker.fileDigestSha256,
+    markerFileDigestDomain: marker.fileDigestDomain,
+  };
+  const profilingMarker = {
+    status: "observed",
+    formatVersion: 1,
+    buildRole: REACT_PROFILING_BUILD_ROLE,
+    reactProductionProfiling: true,
+    relativePath: `.next-p1-profile/${REACT_PROFILING_BUILD_PROVENANCE_FILENAME}`,
+    sourceRevisionSha: headSha,
+    buildId: "fixture-profile-build",
+    outputContentDigestSha256: "f".repeat(64),
+    outputDigestDomain: BUILD_OUTPUT_DIGEST_DOMAIN,
+    fileDigestSha256: "1".repeat(64),
+    fileDigestDomain: MARKER_FILE_DIGEST_DOMAIN,
+    canonicalRelease,
+  };
+  const profilingBuildIdentity = {
+    ...buildIdentity,
+    buildId: profilingMarker.buildId,
+    contentDigestSha256: profilingMarker.outputContentDigestSha256,
+    provenanceMarker: profilingMarker,
+  };
+  assert.doesNotThrow(() => assertRequiredSealedPreflight(
+    cleanRepository,
+    sealedBuildIdentity,
+    profilingBuildIdentity,
+  ));
+  const sealedDualBinding = createDualBuildBinding({
+    repositoryBefore: cleanRepository,
+    repositoryAfter: { ...cleanRepository },
+    canonicalBuildBefore: sealedBuildIdentity,
+    canonicalBuildAfter: structuredClone(sealedBuildIdentity),
+    profilingBuildBefore: profilingBuildIdentity,
+    profilingBuildAfter: structuredClone(profilingBuildIdentity),
+  });
+  assert.equal(sealedDualBinding.status, "exact-clean-head-dual-build-sealed");
   for (const invalid of [
-    [{ ...dirtyRepository }, sealedBuildIdentity],
-    [cleanRepository, { ...sealedBuildIdentity, provenanceMarker: { status: "blocked" } }],
-    [cleanRepository, { ...sealedBuildIdentity, provenanceMarker: { ...marker, sourceRevisionSha: "c".repeat(40) } }],
-    [cleanRepository, { ...sealedBuildIdentity, provenanceMarker: { ...marker, buildId: "other-build" } }],
-    [cleanRepository, { ...sealedBuildIdentity, provenanceMarker: { ...marker, outputContentDigestSha256: "d".repeat(64) } }],
+    [{ ...dirtyRepository }, sealedBuildIdentity, profilingBuildIdentity],
+    [cleanRepository, { ...sealedBuildIdentity, provenanceMarker: { status: "blocked" } }, profilingBuildIdentity],
+    [cleanRepository, { ...sealedBuildIdentity, provenanceMarker: { ...marker, sourceRevisionSha: "c".repeat(40) } }, profilingBuildIdentity],
+    [cleanRepository, { ...sealedBuildIdentity, provenanceMarker: { ...marker, buildId: "other-build" } }, profilingBuildIdentity],
+    [cleanRepository, { ...sealedBuildIdentity, provenanceMarker: { ...marker, outputContentDigestSha256: "d".repeat(64) } }, profilingBuildIdentity],
+    [cleanRepository, sealedBuildIdentity, undefined],
+    [cleanRepository, sealedBuildIdentity, {
+      ...profilingBuildIdentity,
+      provenanceMarker: {
+        ...profilingMarker,
+        canonicalRelease: { ...canonicalRelease, markerFileDigestSha256: "2".repeat(64) },
+      },
+    }],
   ]) {
     assert.throws(() => assertRequiredSealedPreflight(...invalid), /--require-sealed/);
   }
@@ -1853,7 +2257,7 @@ async function runSelfTest() {
     collectRepositorySnapshot: async () => ({ ...cleanRepository }),
     collectBuildIdentitySnapshot: async () => ({ ...buildIdentity }),
     collectMeasurements: async (identityAtStart, repositoryBefore) => {
-      assertRequiredSealedPreflight(repositoryBefore, identityAtStart);
+      assertRequiredSealedPreflight(repositoryBefore, identityAtStart, undefined);
       longRuntimeEntered = true;
       return { status: "unexpected" };
     },
@@ -2018,11 +2422,15 @@ async function runSelfTest() {
   assert.equal(clusteredHeapApplicability.duration.memoryCoverage.finiteHeapWindowMs, 5 * 60_000);
   assert.equal(clusteredHeapApplicability.visibility.nativeBrowserBackground.pollingMeasured, false);
   assert.equal(clusteredHeapApplicability.visibility.nativeBrowserBackground.measuredDurationMs, 0);
-  console.log(JSON.stringify({ status: "pass", cases: 80, maxDurationMs: MAX_DURATION_MS }));
+  console.log(JSON.stringify({ status: "pass", cases: 85, schemaVersion: 3, maxDurationMs: MAX_DURATION_MS }));
 }
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    printUsage();
+    return;
+  }
   if (options.selfTest) {
     await runSelfTest();
     return;
@@ -2044,7 +2452,7 @@ async function main() {
       },
       collectBuildIdentitySnapshot: async (phase, repositoryBefore) => {
         try {
-          return await collectBuildIdentity(
+          return await collectDualBuildIdentity(
             options.distDir,
             repositoryBefore?.status === "observed" ? repositoryBefore.headSha : null,
           );
@@ -2054,9 +2462,18 @@ async function main() {
         }
       },
       collectMeasurements: async (identityAtStart, repositoryBefore) => {
-        if (options.requireSealed) assertRequiredSealedPreflight(repositoryBefore, identityAtStart);
-        const build = await collectBuildEvidence(identityAtStart, options.distDir);
-        build.outputDirectory = options.distDirRelativePath;
+        if (options.requireSealed) {
+          assertRequiredSealedPreflight(
+            repositoryBefore,
+            identityAtStart.canonicalRelease,
+            identityAtStart.reactProfiling,
+          );
+        }
+        const build = await collectBuildEvidence(
+          identityAtStart.canonicalRelease,
+          DEFAULT_DIST_DIR,
+        );
+        build.outputDirectory = ".next";
         let runtime = null;
         if (!options.artifactsOnly) {
           try {
@@ -2091,8 +2508,15 @@ async function main() {
     buildIdentityAtEnd,
     repositoryAfter,
   } = boundedEvidence;
-  build.identityAtStart = buildIdentityAtStart;
-  build.identityAtEnd = buildIdentityAtEnd;
+  build.identityAtStart = buildIdentityAtStart.canonicalRelease;
+  build.identityAtEnd = buildIdentityAtEnd.canonicalRelease;
+  const profilingBuild = {
+    status: "observed",
+    role: REACT_PROFILING_BUILD_ROLE,
+    outputDirectory: options.distDirRelativePath,
+    identityAtStart: buildIdentityAtStart.reactProfiling,
+    identityAtEnd: buildIdentityAtEnd.reactProfiling,
+  };
   const artifactRevisionBinding = createArtifactRevisionBinding({
     repositoryBefore,
     repositoryAfter,
@@ -2105,29 +2529,40 @@ async function main() {
     buildBefore: build.identityAtStart,
     buildAfter: build.identityAtEnd,
   });
-  if (options.requireSealed && buildDerivation.status !== "sealed") {
-    throw new Error("--require-sealed rejected repository, build output, or marker drift during collection");
+  const dualBuildBinding = createDualBuildBinding({
+    repositoryBefore,
+    repositoryAfter,
+    canonicalBuildBefore: build.identityAtStart,
+    canonicalBuildAfter: build.identityAtEnd,
+    profilingBuildBefore: profilingBuild.identityAtStart,
+    profilingBuildAfter: profilingBuild.identityAtEnd,
+  });
+  if (
+    options.requireSealed
+    && (
+      buildDerivation.status !== "sealed"
+      || dualBuildBinding.status !== "exact-clean-head-dual-build-sealed"
+    )
+  ) {
+    throw new Error("--require-sealed rejected repository, canonical build, profiling build, or provenance drift during collection");
   }
   const report = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: new Date().toISOString(),
     scope: "local-only P1 performance evidence; no wallet or chain writes",
-    status: derivePerformanceReportStatus({
-      artifactsOnly: options.artifactsOnly,
-      build,
-      runtime,
-      binding: artifactRevisionBinding,
-      derivation: buildDerivation,
-    }),
+    status: "partial",
     provenance: {
       repositoryBefore,
       repositoryAfter,
       artifactRevisionBinding,
       buildDerivation,
+      dualBuildBinding,
     },
     build,
+    profilingBuild,
     runtime,
   };
+  report.status = finalizePerformanceReportStatus(report, options.artifactsOnly);
   const output = options.summaryOnly ? summaryView(report) : report;
   console.log(JSON.stringify(output, null, 2));
   if (!options.summaryOnly) {

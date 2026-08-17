@@ -23,8 +23,11 @@ import {
 import { fileURLToPath } from "node:url";
 import {
   invalidateBuildProvenanceMarker,
+  invalidateReactProfilingBuildProvenanceMarker,
   prepareBuildProvenance,
+  prepareReactProfilingBuildProvenance,
   sealBuildProvenance,
+  sealReactProfilingBuildProvenance,
 } from "./build-provenance.mjs";
 import { resolveNextDistDir } from "./next-dist-dir.mjs";
 
@@ -367,6 +370,20 @@ function terminateTimedOutBuildTree(pid) {
   }
 }
 
+function invalidateBuildProvenanceMarkersForRole(projectRoot, distDir, reactProfilingPrimary) {
+  const primary = reactProfilingPrimary
+    ? invalidateReactProfilingBuildProvenanceMarker(projectRoot, distDir)
+    : invalidateBuildProvenanceMarker(projectRoot, distDir);
+  const foreign = reactProfilingPrimary
+    ? invalidateBuildProvenanceMarker(projectRoot, distDir)
+    : invalidateReactProfilingBuildProvenanceMarker(projectRoot, distDir);
+  return {
+    ...primary,
+    foreignMarkerRemoved: foreign.removed,
+    foreignTemporaryFilesRemoved: foreign.removedTemporaryFiles,
+  };
+}
+
 export function runHermeticBuild({
   projectRoot = process.cwd(),
   command,
@@ -384,6 +401,11 @@ export function runHermeticBuild({
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
     throw new Error("Hermetic build timeout must be a positive safe integer");
   }
+  const provenanceRole = buildProvenance?.role ?? "canonical-release";
+  const reactProfilingProvenance = provenanceRole === "react-production-profiling";
+  if (buildProvenance && !["canonical-release", "react-production-profiling"].includes(provenanceRole)) {
+    throw new Error(`Unsupported build provenance role: ${buildProvenance.role}`);
+  }
 
   const resolvedProjectRoot = realpathSync(projectRoot);
   const resolvedTemporaryRoot = realpathSync(temporaryRoot);
@@ -394,16 +416,13 @@ export function runHermeticBuild({
   const protectedBefore = snapshotProtectedDatabaseFiles(resolvedProjectRoot);
   const buildTemporaryDirectory = mkdtempSync(join(resolvedTemporaryRoot, "lore-build-"));
   const buildTemporaryDirectoryIdentity = captureOwnedDirectoryIdentity(buildTemporaryDirectory);
-  const temporaryDbPath = join(buildTemporaryDirectory, "lore.sqlite");
-  if (!isPathInsideOrSame(buildTemporaryDirectory, temporaryDbPath)) {
-    throw new Error("Hermetic build database path escaped its temporary directory");
-  }
-
   const childEnv = { ...env };
   removeEnvironmentKeyCaseInsensitive(childEnv, "LORE_DB_PATH");
+  removeEnvironmentKeyCaseInsensitive(childEnv, "LORE_HERMETIC_BUILD_DB_ROOT");
   removeEnvironmentKeyCaseInsensitive(childEnv, "LORE_ALLOW_CONTRACT_SCOPE_PURGE");
   removeEnvironmentKeyCaseInsensitive(childEnv, "LORE_HERMETIC_BUILD");
-  childEnv.LORE_DB_PATH = temporaryDbPath;
+  childEnv.LORE_DB_PATH = "";
+  childEnv.LORE_HERMETIC_BUILD_DB_ROOT = buildTemporaryDirectory;
   childEnv.LORE_ALLOW_CONTRACT_SCOPE_PURGE = "0";
   childEnv.LORE_HERMETIC_BUILD = "1";
 
@@ -416,12 +435,19 @@ export function runHermeticBuild({
   try {
     buildOutputLock = acquireBuildOutputLock(resolvedProjectRoot, resolvedTemporaryRoot);
     if (buildProvenance) {
-      provenanceSession = prepareBuildProvenance({
-        projectRoot: resolvedProjectRoot,
-        distDir: buildProvenance.distDir,
-        seal: buildProvenance.seal === true,
-        environment: env,
-      });
+      provenanceSession = reactProfilingProvenance
+        ? prepareReactProfilingBuildProvenance({
+            projectRoot: resolvedProjectRoot,
+            distDir: buildProvenance.distDir,
+            seal: buildProvenance.seal === true,
+            environment: env,
+          })
+        : prepareBuildProvenance({
+            projectRoot: resolvedProjectRoot,
+            distDir: buildProvenance.distDir,
+            seal: buildProvenance.seal === true,
+            environment: env,
+          });
     }
     result = spawnSync(command, args, {
       cwd: resolvedProjectRoot,
@@ -473,7 +499,9 @@ export function runHermeticBuild({
     && postconditionFailures.length === 0
   ) {
     try {
-      sealedProvenance = sealBuildProvenance(provenanceSession);
+      sealedProvenance = reactProfilingProvenance
+        ? sealReactProfilingBuildProvenance(provenanceSession)
+        : sealBuildProvenance(provenanceSession);
     } catch (error) {
       postconditionFailures.push(error);
     }
@@ -481,9 +509,10 @@ export function runHermeticBuild({
 
   if (buildOutputLock && buildProvenance && !sealedProvenance) {
     try {
-      finalProvenanceInvalidation = invalidateBuildProvenanceMarker(
+      finalProvenanceInvalidation = invalidateBuildProvenanceMarkersForRole(
         resolvedProjectRoot,
         provenanceSession?.context.resolvedDistDir ?? buildProvenance.distDir,
+        reactProfilingProvenance,
       );
     } catch (error) {
       postconditionFailures.push(error);
@@ -496,9 +525,10 @@ export function runHermeticBuild({
     postconditionFailures.push(error);
     if (sealedProvenance) {
       try {
-        invalidateBuildProvenanceMarker(
+        invalidateBuildProvenanceMarkersForRole(
           resolvedProjectRoot,
           provenanceSession.context.resolvedDistDir,
+          reactProfilingProvenance,
         );
         sealedProvenance = null;
       } catch (cleanupError) {
@@ -520,11 +550,12 @@ export function runHermeticBuild({
 
   return {
     result,
-    temporaryDbPath,
+    temporaryDbRoot: buildTemporaryDirectory,
     buildProvenance: sealedProvenance
       ? {
           status: "sealed",
           sourceRevisionSha: sealedProvenance.marker.sourceRevisionSha,
+          buildRole: sealedProvenance.buildRole ?? "canonical-release",
           buildId: sealedProvenance.outputIdentity.buildId,
           contentDigestSha256: sealedProvenance.outputIdentity.contentDigestSha256,
           markerFileDigestSha256: sealedProvenance.markerFileDigestSha256,
@@ -544,18 +575,34 @@ export function parseNextBuildArguments(wrapperArgs) {
     throw new Error("Hermetic build arguments must be an array of strings");
   }
   const sealFlagCount = wrapperArgs.filter((arg) => arg === "--seal-provenance").length;
+  const profileSealFlagCount = wrapperArgs.filter(
+    (arg) => arg === "--seal-react-profiling-provenance",
+  ).length;
   if (sealFlagCount > 1) throw new Error("--seal-provenance may be provided only once");
+  if (profileSealFlagCount > 1) {
+    throw new Error("--seal-react-profiling-provenance may be provided only once");
+  }
+  if (sealFlagCount + profileSealFlagCount > 1) {
+    throw new Error("Canonical and React profiling provenance flags are mutually exclusive");
+  }
   const sealProvenance = sealFlagCount === 1;
-  if (sealProvenance && wrapperArgs.length !== 1) {
+  const sealReactProfilingProvenance = profileSealFlagCount === 1;
+  if ((sealProvenance || sealReactProfilingProvenance) && wrapperArgs.length !== 1) {
     throw new Error("Sealed build provenance does not accept Next build arguments");
   }
-  const nextArgs = wrapperArgs.filter((arg) => arg !== "--seal-provenance");
-  return { sealProvenance, nextArgs };
+  const nextArgs = wrapperArgs.filter(
+    (arg) => arg !== "--seal-provenance" && arg !== "--seal-react-profiling-provenance",
+  );
+  return { sealProvenance, sealReactProfilingProvenance, nextArgs };
 }
 
 function runNextBuild() {
   const projectRoot = process.cwd();
-  const { sealProvenance, nextArgs } = parseNextBuildArguments(process.argv.slice(2));
+  const {
+    sealProvenance,
+    sealReactProfilingProvenance,
+    nextArgs,
+  } = parseNextBuildArguments(process.argv.slice(2));
   const { relativePath: nextDistDir, resolvedPath: nextDistPath } = resolveNextDistDir(
     process.env.NEXT_DIST_DIR,
     projectRoot,
@@ -563,17 +610,31 @@ function runNextBuild() {
   if (sealProvenance && nextDistDir !== ".next") {
     throw new Error("Sealed build provenance requires the canonical .next output directory");
   }
+  if (sealReactProfilingProvenance) {
+    if (nextDistDir === ".next" || !nextDistDir.startsWith(".next-")) {
+      throw new Error("React profiling provenance requires an isolated .next-<name> output directory");
+    }
+    if (process.env.LORE_P1_REACT_PROFILING !== "1") {
+      throw new Error("React profiling provenance requires LORE_P1_REACT_PROFILING=1");
+    }
+  }
+  const reactProfilingBuild = nextDistDir !== ".next"
+    && process.env.LORE_P1_REACT_PROFILING === "1";
   const nextBin = resolve(projectRoot, "node_modules", "next", "dist", "bin", "next");
   const { result, buildProvenance } = runHermeticBuild({
     projectRoot,
     command: process.execPath,
     args: [nextBin, "build", "--webpack", ...nextArgs],
-    buildProvenance: { distDir: nextDistPath, seal: sealProvenance },
+    buildProvenance: {
+      distDir: nextDistPath,
+      seal: sealProvenance || sealReactProfilingProvenance,
+      ...(reactProfilingBuild ? { role: "react-production-profiling" } : {}),
+    },
   });
 
   if (buildProvenance?.status === "sealed") {
     console.log(
-      `LORE build provenance sealed: ${buildProvenance.sourceRevisionSha} `
+      `LORE ${buildProvenance.buildRole} build provenance sealed: ${buildProvenance.sourceRevisionSha} `
       + `${buildProvenance.contentDigestSha256}`,
     );
   }
