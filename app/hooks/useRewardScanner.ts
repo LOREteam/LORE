@@ -21,6 +21,7 @@ import {
   type ClaimTransactionIntent,
   waitForClaimTransactionReceiptAgreement,
 } from "../lib/claimTransactionIntent";
+import { acquireEoaNonceLockLease } from "../lib/eoaNonceLock";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 export { isRewardClaimWindowOpen } from "../lib/rewardScanPolicy";
@@ -666,7 +667,9 @@ export function useRewardScanner(
         setIsClaiming(true);
       }
       let submittedHash: `0x${string}` | null = null;
+      let claimLease: { release: () => void } | null = null;
       try {
+        claimLease = await acquireEoaNonceLockLease({ chainId: APP_CHAIN_ID, actor: claimActor });
         notify?.("Preparing reward claim.", "info");
         const { data, gas } = await prepareClaimTx(epochId);
         if (activeClaimAddressRef.current !== claimActor) return;
@@ -719,6 +722,7 @@ export function useRewardScanner(
           notify?.("Reward claim rejected in wallet.", "info");
         }
       } finally {
+        claimLease?.release();
         claimInFlightRef.current = false;
         if (mountedRef.current) {
           setIsClaiming(false);
@@ -735,8 +739,10 @@ export function useRewardScanner(
     if (mountedRef.current) {
       setIsClaiming(true);
     }
+    let claimLease: { release: () => void } | null = null;
 
     try {
+      claimLease = await acquireEoaNonceLockLease({ chainId: APP_CHAIN_ID, actor: claimActor });
       const all = [...unclaimedWins];
       const claimedEpochs = new Set<string>();
       let skippedEpochs = 0;
@@ -906,6 +912,7 @@ export function useRewardScanner(
         notify?.("Reward claim rejected in wallet.", "info");
       }
     } finally {
+      claimLease?.release();
       claimInFlightRef.current = false;
       if (mountedRef.current) {
         setIsClaiming(false);

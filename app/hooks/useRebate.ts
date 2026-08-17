@@ -25,6 +25,7 @@ import {
   ClaimTransactionIntentError,
   waitForClaimTransactionReceiptAgreement,
 } from "../lib/claimTransactionIntent";
+import { acquireEoaNonceLockLease } from "../lib/eoaNonceLock";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 type SilentSendFn = (tx: {
@@ -1269,6 +1270,7 @@ export function useRebate(options?: UseRebateOptions) {
     }
 
     const claimProgress = createSafetyPoolClaimProgress();
+    let claimLease: { release: () => void } | null = null;
 
     try {
       const connected = address ? getAddress(address) : null;
@@ -1277,6 +1279,8 @@ export function useRebate(options?: UseRebateOptions) {
         notify?.("Connect a wallet to claim Safety Pool payouts.", "warning");
         return;
       }
+
+      claimLease = await acquireEoaNonceLockLease({ chainId: APP_CHAIN_ID, actor: sender });
 
       if (!silentSend && sender.toLowerCase() !== rebateAddress.toLowerCase()) {
         throw new Error(
@@ -1430,6 +1434,7 @@ export function useRebate(options?: UseRebateOptions) {
       }
       notify?.(outcome.message, outcome.tone);
     } finally {
+      claimLease?.release();
       releaseSafetyPoolClaimLock(claimInFlightRef);
       if (mountedRef.current) {
         setIsClaiming(false);
