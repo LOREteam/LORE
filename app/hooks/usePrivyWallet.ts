@@ -36,6 +36,11 @@ import {
   type WalletTransferIntentLease,
   type WalletTransferNonceClients,
 } from "../lib/walletTransferIntent";
+import {
+  assertExternalWalletProviderContext,
+  isSafeExternalWalletProviderContextError,
+  type ExternalWalletEip1193Provider,
+} from "../lib/externalWalletProviderContext";
 
 const SILENT_SEND_TIMEOUT_MS = 45_000;
 const ACTIVE_WALLET_TIMEOUT_MS = 12_000;
@@ -70,8 +75,7 @@ type TransferAwareTransaction = {
   transferIntent?: WalletTransferIntentDetails;
 };
 
-type Eip1193Provider = {
-  request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
+type Eip1193Provider = ExternalWalletEip1193Provider & {
   on?: (event: "accountsChanged", listener: (accounts: unknown) => void) => void;
   removeListener?: (event: "accountsChanged", listener: (accounts: unknown) => void) => void;
 };
@@ -355,16 +359,11 @@ export function usePrivyWallet() {
           "External wallet wallet_switchEthereumChain",
         );
       }
-      const currentChainId = (await withTimeout(
-        provider.request({ method: "eth_chainId" }),
-        EXTERNAL_WALLET_NETWORK_TIMEOUT_MS,
-        "External wallet eth_chainId",
-      ) as string | undefined)?.toLowerCase();
-      if (!currentChainId || currentChainId !== targetChainIdHex.toLowerCase()) {
-        throw new Error(`Switch your external wallet to ${APP_CHAIN_NAME} and try again.`);
-      }
-      const providerAccount = getProviderSelectedAddress(await provider.request({ method: "eth_accounts" }));
-      if (!providerAccount) throw new Error("Select an account in your external wallet and try again.");
+      const providerAccount = await assertExternalWalletProviderContext({
+        provider,
+        expectedChainId: APP_CHAIN_ID,
+        timeoutMs: EXTERNAL_WALLET_NETWORK_TIMEOUT_MS,
+      });
       setProviderExternalWalletAddress(providerAccount);
       if (
         tx.expectedActor &&
@@ -414,6 +413,12 @@ export function usePrivyWallet() {
         ) => Promise<{ hash: unknown }>,
       ) => {
         if (lease) requestTx.nonce = toHex(lease.nonce) as `0x${string}`;
+        await assertExternalWalletProviderContext({
+          provider,
+          expectedActor: providerAccount,
+          expectedChainId: APP_CHAIN_ID,
+          timeoutMs: EXTERNAL_WALLET_NETWORK_TIMEOUT_MS,
+        });
         const sendPromise = (provider.request({
           method: "eth_sendTransaction",
           params: [requestTx],
@@ -440,7 +445,7 @@ export function usePrivyWallet() {
             if (acquisition.status === "known-hash") return acquisition.hash;
             return submitExternalTransaction(acquisition.lease, retainResult);
           },
-          { abandonOnError: isUserRejection },
+          { abandonOnError: (error) => isUserRejection(error) || isSafeExternalWalletProviderContextError(error) },
         );
       }
       return submitExternalTransaction();

@@ -30,6 +30,7 @@ export function runWalletExternalBoundaryTests() {
   );
 
   const privyWalletSource = readFileSync("app/hooks/usePrivyWallet.ts", "utf8");
+  const externalWalletProviderContextSource = readFileSync("app/lib/externalWalletProviderContext.ts", "utf8");
   assert.match(
     privyWalletSource,
     /import \{ log \} from "\.\.\/lib\/logger";[\s\S]*log\.warn\("PrivyWallet"/,
@@ -57,8 +58,8 @@ export function runWalletExternalBoundaryTests() {
   );
   assert.match(
     privyWalletSource,
-    /const currentChainId =[\s\S]*method: "eth_chainId"[\s\S]*method: "eth_accounts"[\s\S]*from: providerAccount/,
-    "external transfers must refresh the selected account after the network switch before sending",
+    /assertExternalWalletProviderContext\([\s\S]*expectedChainId: APP_CHAIN_ID[\s\S]*submitExternalTransaction[\s\S]*expectedActor: providerAccount[\s\S]*method: "eth_sendTransaction"[\s\S]*isSafeExternalWalletProviderContextError/,
+    "external transfers must revalidate chain and selected actor directly before the wallet send sink and only safely abandon proven pre-send mismatches",
   );
   assert.match(
     privyWalletSource,
@@ -66,8 +67,8 @@ export function runWalletExternalBoundaryTests() {
     "wallet settings must refresh the displayed external address after an injected-wallet account change",
   );
   assert.match(
-    privyWalletSource,
-    /"External wallet eth_chainId"/,
-    "external wallet chain verification must be time bounded",
+    externalWalletProviderContextSource,
+    /requestProviderWithTimeout[\s\S]*Promise\.race[\s\S]*setTimeout[\s\S]*request timed out/,
+    "external wallet context verification must keep its shared bounded provider request path",
   );
 }

@@ -40,6 +40,7 @@ import {
   type WalletTransferReceiptClients,
   hasTrackedWalletTransferNonce,
 } from "../lib/walletTransferIntent";
+import { isSafeExternalWalletProviderContextError } from "../lib/externalWalletProviderContext";
 import { hasTrackedMiningNonce } from "../lib/miningTxPath";
 import {
   isAmbiguousPendingTxError,
@@ -83,6 +84,14 @@ const WALLET_TRANSFER_RECEIPT_CLIENTS = createWalletTransferReceiptClients();
 
 function formatWalletTransferFailure(error: unknown, asset: "ETH" | "LINEA") {
   const message = error instanceof Error ? error.message : "";
+  if (isSafeExternalWalletProviderContextError(error)) {
+    if (error.code === "wallet_transfer_intent_external_chain_changed") {
+      return `${asset} transfer was not submitted because the external wallet changed networks. Switch to ${APP_CHAIN_NAME} and retry.`;
+    }
+    if (error.code === "wallet_transfer_intent_external_account_unavailable") {
+      return `${asset} transfer was not submitted because no external wallet account is selected. Select an account and retry.`;
+    }
+  }
   if (message.includes("wallet_transfer_intent_actor_changed")) {
     return `${asset} transfer was not submitted because the selected external account changed. Review the account and retry.`;
   }

@@ -4,9 +4,16 @@ import { readFileSync } from "node:fs";
 import { encodeFunctionData } from "viem";
 import * as transferIntentModule from "../app/lib/walletTransferIntent.ts";
 import * as utilsModule from "../app/lib/utils.ts";
+import * as externalWalletProviderContextModule from "../app/lib/externalWalletProviderContext.ts";
 
 const transferIntent = transferIntentModule.default ?? transferIntentModule;
 const utils = utilsModule.default ?? utilsModule;
+const externalWalletProviderContext = externalWalletProviderContextModule.default ?? externalWalletProviderContextModule;
+const {
+  ExternalWalletProviderContextError,
+  assertExternalWalletProviderContext,
+  isSafeExternalWalletProviderContextError,
+} = externalWalletProviderContext;
 
 class MemoryStorage {
   #values = new Map();
@@ -115,6 +122,77 @@ const stableNonceClient = {
   getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 7 : 7,
 };
 const stableNonceClients = [stableNonceClient, stableNonceClient];
+
+const externalProviderActor = "0x3333333333333333333333333333333333333333";
+const targetExternalProvider = {
+  request: async ({ method }) => {
+    if (method === "eth_chainId") return "0xe705";
+    if (method === "eth_accounts") return [externalProviderActor];
+    throw new Error(`unexpected external provider method ${method}`);
+  },
+};
+assert.equal(
+  await assertExternalWalletProviderContext({
+    provider: targetExternalProvider,
+    expectedActor: externalProviderActor,
+    expectedChainId: 59141,
+    timeoutMs: 100,
+  }),
+  externalProviderActor,
+  "a matching external provider chain and selected actor must pass sink-adjacent validation",
+);
+await assert.rejects(
+  assertExternalWalletProviderContext({
+    provider: {
+      request: async () => new Promise(() => {}),
+    },
+    expectedActor: externalProviderActor,
+    expectedChainId: 59141,
+    timeoutMs: 20,
+  }),
+  /request timed out/,
+  "external provider context validation must be time bounded before the wallet send sink",
+);
+const changedChainError = new ExternalWalletProviderContextError("wallet_transfer_intent_external_chain_changed");
+assert.equal(isSafeExternalWalletProviderContextError(changedChainError), true);
+assert.equal(isSafeExternalWalletProviderContextError(new Error("rpc unavailable")), false);
+await assert.rejects(
+  assertExternalWalletProviderContext({
+    provider: {
+      request: async ({ method }) => method === "eth_chainId" ? "0x1" : [externalProviderActor],
+    },
+    expectedActor: externalProviderActor,
+    expectedChainId: 59141,
+    timeoutMs: 100,
+  }),
+  (error) => error instanceof ExternalWalletProviderContextError &&
+    error.code === "wallet_transfer_intent_external_chain_changed",
+  "a known chain change must be classified as safe-before-submission",
+);
+await assert.rejects(
+  assertExternalWalletProviderContext({
+    provider: {
+      request: async ({ method }) => method === "eth_chainId" ? "0xe705" : [destination],
+    },
+    expectedActor: externalProviderActor,
+    expectedChainId: 59141,
+    timeoutMs: 100,
+  }),
+  (error) => error instanceof ExternalWalletProviderContextError &&
+    error.code === "wallet_transfer_intent_actor_changed",
+  "a selected-account change must be classified as safe-before-submission",
+);
+await assert.rejects(
+  assertExternalWalletProviderContext({
+    provider: {
+      request: async () => { throw new Error("rpc unavailable"); },
+    },
+    expectedChainId: 59141,
+    timeoutMs: 100,
+  }),
+  /rpc unavailable/,
+  "unknown provider failures must not be recategorized as safe pre-submission mismatches",
+);
 
 const walletTransferStorageKey = (intent) => [
   "lineaore:wallet-transfer-intent:v1",
@@ -287,6 +365,41 @@ assert.equal(
   (await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, Date.now())).status,
   "acquired",
   "a proven pre-broadcast rejection must release the exact intent without a grace delay",
+);
+
+storage.clear();
+await assert.rejects(
+  transferIntent.withWalletTransferIntentLease(
+    baseIntent,
+    stableNonceClients,
+    async () => { throw changedChainError; },
+    { abandonOnError: isSafeExternalWalletProviderContextError },
+  ),
+  (error) => error === changedChainError,
+  "a proven sink-adjacent chain change must abort before broadcast",
+);
+assert.equal(
+  (await transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, Date.now())).status,
+  "acquired",
+  "a known pre-send chain change with unchanged nonce must not leave a retry-blocking transfer intent",
+);
+
+storage.clear();
+const unknownPreSendFailure = new Error("rpc unavailable");
+await assert.rejects(
+  transferIntent.withWalletTransferIntentLease(
+    baseIntent,
+    stableNonceClients,
+    async () => { throw unknownPreSendFailure; },
+    { abandonOnError: isSafeExternalWalletProviderContextError },
+  ),
+  (error) => error === unknownPreSendFailure,
+  "an unknown provider failure must not be treated as a proven pre-broadcast abort",
+);
+await assert.rejects(
+  transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, Date.now()),
+  /wallet_transfer_intent_unresolved/,
+  "an unknown provider failure must retain the duplicate-send block",
 );
 
 storage.clear();
@@ -1764,8 +1877,8 @@ assert.match(
 );
 assert.match(
   privyWalletSource,
-  /sendTransactionFromExternal[\s\S]*wallet_switchEthereumChain[\s\S]*wallet_transfer_intent_actor_changed[\s\S]*eth_sendTransaction[\s\S]*withWalletTransferIntentLease\([\s\S]*submitExternalTransaction\(acquisition\.lease, retainResult\)[\s\S]*abandonOnError: isUserRejection/,
-  "external transfers must retain their explicit wallet prompt while sharing the durable late-hash lease",
+  /sendTransactionFromExternal[\s\S]*wallet_switchEthereumChain[\s\S]*assertExternalWalletProviderContext\([\s\S]*submitExternalTransaction[\s\S]*expectedActor: providerAccount[\s\S]*eth_sendTransaction[\s\S]*withWalletTransferIntentLease\([\s\S]*submitExternalTransaction\(acquisition\.lease, retainResult\)[\s\S]*isSafeExternalWalletProviderContextError/,
+  "external transfers must revalidate the selected account and chain directly before their explicit wallet prompt while sharing the durable late-hash lease",
 );
 
 const walletActionsSource = readFileSync("app/hooks/useWalletActions.ts", "utf8");
@@ -1836,5 +1949,65 @@ for (const handlerName of ["handleDepositEthToEmbedded", "handleDepositTokenToEm
   const source = walletActionsSource.slice(start, end >= 0 ? end : undefined);
   assert.match(source, /expectedActor: getAddress\(externalWalletAddress\)/, `${handlerName} must bind the explicit prompt to the prepared external account`);
 }
+
+async function assertProviderContextFailureIsSafe({ label, chainId, accounts, expectedCode }) {
+  let failure;
+  try {
+    await assertExternalWalletProviderContext({
+      provider: {
+        request: async ({ method }) => method === "eth_chainId" ? chainId : accounts,
+      },
+      expectedActor: "0x1111111111111111111111111111111111111111",
+      expectedChainId: 59144,
+      timeoutMs: 50,
+    });
+  } catch (error) {
+    failure = error;
+  }
+
+  if (!failure) throw new Error(`${label}: expected provider-context rejection`);
+  if (isSafeExternalWalletProviderContextError(failure) !== expectedCode) {
+    throw new Error(`${label}: incorrect safe-abandon classification`);
+  }
+}
+
+// Provider data is untrusted, so only fully valid, proven pre-sink mismatches
+// may release a lease.
+await assertProviderContextFailureIsSafe({
+  label: "valid wrong chain",
+  chainId: "0x1",
+  accounts: ["0x1111111111111111111111111111111111111111"],
+  expectedCode: true,
+});
+await assertProviderContextFailureIsSafe({
+  label: "explicit empty accounts",
+  chainId: "0xe708",
+  accounts: [],
+  expectedCode: true,
+});
+await assertProviderContextFailureIsSafe({
+  label: "valid wrong account",
+  chainId: "0xe708",
+  accounts: ["0x2222222222222222222222222222222222222222"],
+  expectedCode: true,
+});
+await assertProviderContextFailureIsSafe({
+  label: "malformed chain ID",
+  chainId: "not-a-chain",
+  accounts: ["0x1111111111111111111111111111111111111111"],
+  expectedCode: false,
+});
+await assertProviderContextFailureIsSafe({
+  label: "malformed accounts response",
+  chainId: "0xe708",
+  accounts: { 0: "0x1111111111111111111111111111111111111111", length: 1 },
+  expectedCode: false,
+});
+await assertProviderContextFailureIsSafe({
+  label: "invalid account address",
+  chainId: "0xe708",
+  accounts: ["not-an-address"],
+  expectedCode: false,
+});
 
 console.log("wallet transfer intent tests passed");
