@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { runIsolatedBusinessLogicChild } from "./business-logic-isolated-runner.mjs";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,6 +76,7 @@ export function summarizeBusinessLogicResult(result, { durationMs = 0 } = {}) {
   const output = redactProofText(`${result?.stdout ?? ""}\n${result?.stderr ?? ""}`);
   const timedOut = result?.error?.code === "ETIMEDOUT";
   const outputTooLarge = result?.error?.code === "ENOBUFS";
+  const databaseIsolationViolation = result?.businessLogicDbIsolationViolation === true;
   const childExitCode = Number.isSafeInteger(result?.status) ? result.status : null;
   const businessLogic = /\bBusiness logic tests passed\.(?:\s|$)/.test(output);
   const assertionFailures = countAssertionFailures(output);
@@ -157,7 +159,15 @@ export function summarizeBusinessLogicResult(result, { durationMs = 0 } = {}) {
     childExitCode,
     ...(!localProof ? { issue: "local-proof-summary-missing" } : {}),
     ...(outputTooLarge ? { issue: "business-logic-output-too-large" } : {}),
-    ...(!outputTooLarge && result?.error && result.error.code !== "ETIMEDOUT" ? { issue: "business-logic-spawn-failed" } : {}),
+    ...(
+      !databaseIsolationViolation
+      && !outputTooLarge
+      && result?.error
+      && result.error.code !== "ETIMEDOUT"
+        ? { issue: "business-logic-spawn-failed" }
+        : {}
+    ),
+    ...(databaseIsolationViolation ? { issue: "business-logic-db-isolation-violation" } : {}),
   };
 }
 
@@ -174,7 +184,9 @@ export function runBusinessLogicSummary({
   if (!exists(tsxCliPath)) throw new Error("test:logic runner unavailable: node_modules/tsx/dist/cli.mjs is missing");
   const timeoutMs = parseSummaryTimeoutEnv("BUSINESS_LOGIC_SUMMARY_TIMEOUT_MS", 180_000);
   const startedAt = now();
-  const result = spawn(execPath, [tsxCliPath, "scripts/test-business-logic.mjs"], {
+  const result = runIsolatedBusinessLogicChild({
+    processExecPath: execPath,
+    args: [tsxCliPath, "scripts/test-business-logic.mjs"],
     cwd,
     encoding: "utf8",
     maxBuffer: 2 * 1024 * 1024,
@@ -185,6 +197,7 @@ export function runBusinessLogicSummary({
       npm_config_update_notifier: "false",
       npm_config_fund: "false",
     },
+    spawnSyncFn: spawn,
   });
   const summary = summarizeBusinessLogicResult(result, { durationMs: now() - startedAt });
   writeLine(JSON.stringify(summary));

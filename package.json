@@ -30,7 +30,7 @@
     "lint": "eslint .",
     "lint:summary": "node scripts/run-eslint-summary.mjs",
     "lint:fix": "eslint . --fix",
-    "test:logic": "set NoDefaultCurrentDirectoryInExePath=1&&tsx scripts/test-business-logic.mjs",
+    "test:logic": "set NoDefaultCurrentDirectoryInExePath=1&&node scripts/business-logic-isolated-runner.mjs",
     "test:logic:summary": "set NoDefaultCurrentDirectoryInExePath=1&&node scripts/run-business-logic-summary.mjs",
     "test:fetch-timeout": "tsx scripts/test-fetch-with-timeout.ts",
     "test:fetch-timeout:summary": "node scripts/run-fetch-timeout-summary.mjs",
