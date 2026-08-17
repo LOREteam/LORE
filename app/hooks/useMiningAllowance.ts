@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
-import { encodeFunctionData, maxUint256 } from "viem";
+import { encodeFunctionData } from "viem";
 import type { MutableRefObject } from "react";
 import {
   APP_CHAIN_ID,
@@ -63,8 +63,24 @@ export function selectApprovalSubmissionNonce(trackedNonce: unknown, freshPendin
   return normalizeApprovalNonce(freshPendingNonce);
 }
 
+function assertExactApprovalAmount(requiredAmount: bigint): bigint {
+  if (typeof requiredAmount !== "bigint" || requiredAmount <= 0n) {
+    throw new Error("mining approval amount must be a positive bigint");
+  }
+  return requiredAmount;
+}
+
+export function buildMiningApprovalCalldata(requiredAmount: bigint): `0x${string}` {
+  return encodeFunctionData({
+    abi: TOKEN_ABI,
+    functionName: "approve",
+    args: [CONTRACT_ADDRESS, assertExactApprovalAmount(requiredAmount)],
+  });
+}
+
 export function buildDirectApprovalWriteRequest(
   approvalNonce: number,
+  requiredAmount: bigint,
   approveOverrides: GasOverrides | undefined,
 ) {
   assertKeeperFeeBudget(approveOverrides, MIN_GAS_APPROVE, APP_CHAIN_ID, "approval");
@@ -73,7 +89,7 @@ export function buildDirectApprovalWriteRequest(
     address: LINEA_TOKEN_ADDRESS,
     abi: TOKEN_ABI,
     functionName: "approve" as const,
-    args: [CONTRACT_ADDRESS, maxUint256] as const,
+    args: [CONTRACT_ADDRESS, assertExactApprovalAmount(requiredAmount)] as const,
     chainId: APP_CHAIN_ID,
     nonce: approvalNonce,
     gas: MIN_GAS_APPROVE,
@@ -307,11 +323,7 @@ export function useMiningAllowance({
           let approveHash: `0x${string}` | undefined;
           try {
             if (silentSend) {
-              const data = encodeFunctionData({
-                abi: TOKEN_ABI,
-                functionName: "approve",
-                args: [CONTRACT_ADDRESS, maxUint256],
-              });
+              const data = buildMiningApprovalCalldata(requiredAmount);
               approveHash = await executeReservedMiningApprovalWalletSink(
                 reservation,
                 async () => assertBeforeSend?.(),
@@ -325,7 +337,7 @@ export function useMiningAllowance({
                 reservation,
                 async () => assertBeforeSend?.(),
                 async () => readWriteContractAsync()(
-                  buildDirectApprovalWriteRequest(approvalNonce, approveOverrides),
+                  buildDirectApprovalWriteRequest(approvalNonce, requiredAmount, approveOverrides),
                 ) as Promise<`0x${string}`>,
               );
             }
