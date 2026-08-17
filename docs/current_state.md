@@ -30,7 +30,7 @@ The single active queue is [`remaining-worklist.md`](remaining-worklist.md).
 | Clean-checkout reproduction | Disposable 297-path candidate, fresh `npm ci`, full local gate and required-local prelaunch rows | Pass for that snapshot; final SHA still pending |
 | V10 EVM properties | 8 seed epochs, 84 successful runtime transactions, 39 expected reverts, 33 conservation checks | Pass locally |
 | Business proof | Latest full summary `85501ms`, `childExitCode=0`, `assertionFailures=0` | Pass |
-| P1.10 extraction | Reproducible AST audit (`npm.cmd run audit:p1:behavior`): coordinator `18=11 source-operand + 7 behavioral`; 95 direct modules `5142=734 + 4408`; combined `5160=745 + 4415` (`85.56%` behavioral) | Partial; classifier is explicit, but source-operand assertions remain |
+| P1.10 extraction | Reproducible AST audit (`npm.cmd run audit:p1:behavior`): coordinator `18=11 source-operand + 7 behavioral`; 95 direct modules `5147=736 + 4411`; combined `5165=747 + 4418` (`85.54%` behavioral) | Partial; classifier is explicit, but source-operand assertions remain |
 | Performance P1.17 | Collector/verifier self-tests, profiling and transaction-disabled simulations | Partial; no native-hidden and sealed two-hour final-SHA evidence |
 | Working-tree security scan | Scan `1324c08f-9411-44ba-83ab-e3efd22218fc`: 287/287 reviews, 0 reportable findings, 2 suppressed candidates; both local defects were then remediated and regression-tested | Strong working-tree evidence; not final-SHA evidence |
 
@@ -67,16 +67,20 @@ unchanged and no WAL/SHM was created.
 3. Exact release candidate: the mapped local commits exist and a clean-checkout
    reproduction exists for an earlier snapshot; final immutable-SHA
    reproduction remains open.
-4. Security scan: working-tree scan is clean, but the required supported scan of
-   the eventual clean immutable commit remains open.
+4. Security scan: supported Standard scan `66766128-d908-490a-aa46-ac144a336b1c`
+   sealed for immutable `4fdee212`; it identified legacy epoch rollover,
+   block-derived outcome entropy, unlimited approval, deep-reward single-origin
+   confirmation, and cross-context claim contention. The two locally remediable
+   claim findings are committed after that scan, so a fresh final-SHA scan remains
+   required. The V9/V10 contract and approval policy findings remain open.
 
 ### P1
 
 - V10 EVM properties, compiler-derived ABI/provenance, wallet state machines,
   indexer/DB recovery, API route matrix, and CI hardening have strong local
   executable evidence. They are not production evidence.
-- The reproducible current P1.10 AST audit is `PARTIAL` at `85.56%`
-  behavioral: `745` source-operand assertions remain across the coordinator and
+- The reproducible current P1.10 AST audit is `PARTIAL` at `85.54%`
+  behavioral: `747` source-operand assertions remain across the coordinator and
   its `95` direct test modules. It classifies operands bound to `readFileSync`;
   it does not convert source-binding checks into behavioral proof. Sixteen
   redundant indexer finality/restart-policy, strict epoch-parser, route-cache,

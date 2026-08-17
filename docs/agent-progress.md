@@ -27,8 +27,12 @@ This is the compact continuation handoff. Current repository truth is in
 - Protected `data/lore-v10.sqlite` remains `258048` bytes with SHA-256
   `C6EB88E635C4B3A978AF77CE7B50736D6A6A92CC7A481E166118A66D0EC2B482`,
   mtime `2026-08-13T12:18:50.8015294Z`, and no WAL/SHM.
-- No remaining change is expected. Push, deploy, signing, wallet, network, or
-  chain actions still require their own authorization.
+- Local wallet hardening continued autonomously: commits `9e136289` and `aa7c1c8b`
+  route deep-reward receipt verification through the existing two-origin finality
+  helper and hold a fail-closed chain-and-actor Web Lock through every reward,
+  deep-reward, and Safety Pool claim flow. `test-wallet-two-context-nonce-lock`,
+  the full business suite, and strict TypeScript passed. Push, deploy, signing,
+  wallet, network, or chain actions still require their own authorization.
 
 ## Latest verified packets
 
@@ -68,15 +72,17 @@ The latest full business summary passes in `85501ms` with `childExitCode=0`,
   for an earlier candidate snapshot; the final immutable SHA cycle is open.
 - V10 EVM properties pass locally: `8` seed epochs, `84` successful runtime
   transactions, `39` expected reverts, and `33` conservation checks.
-- Working-tree security scan `1324c08f-9411-44ba-83ab-e3efd22218fc` covered
-  `287/287` assigned paths with `0` reportable findings. Its two suppressed local
-  defects are now remediated; the supported scan of the final clean commit is
-  still required.
+- Supported Standard scan `66766128-d908-490a-aa46-ac144a336b1c` sealed against
+  immutable `4fdee212` and reported five source findings: V9 stale-epoch rollover,
+  block-derived entropy, unlimited approval, deep-reward single-origin receipt
+  confirmation, and cross-context claim submissions. The last two are remediated
+  in subsequent local commits; therefore a fresh supported scan of final `HEAD`
+  is still required. Contract/policy findings remain open.
 - The reproducible current P1.10 AST audit is coordinator
   `18=11 source-operand + 7 behavioral`, `95` direct modules
-  `5142=734 + 4408`, combined `5160=745 + 4415` (`85.56%` behavioral).
+  `5147=736 + 4411`, combined `5165=747 + 4418` (`85.54%` behavioral).
   `npm.cmd run audit:p1:behavior` classifies `assert` operands bound to
-  `readFileSync`; P1.10 remains `PARTIAL` because this still leaves `745`
+  `readFileSync`; P1.10 remains `PARTIAL` because this still leaves `747`
   source-operand assertions. Existing indexer finality/restart, strict
   epoch-parser, route-cache, and Auto-Miner retry public-function cases now
   replace sixteen redundant source checks. Release documentation and environment-template

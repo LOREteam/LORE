@@ -114,6 +114,12 @@ Last updated: 2026-08-16. This is the single active local work queue.
       test-only checkout-name portability fix, but neither it nor older
       range/working-tree scans cover the eventual final commit; the
       protocol-randomness High also remains open.
+- [x] Remediate local wallet confirmation findings after supported Standard scan
+      `66766128-d908-490a-aa46-ac144a336b1c` of `4fdee212`: deep rewards now use
+      the shared two-origin finality helper, and reward/deep-reward/Safety Pool
+      claim flows hold a fail-closed chain-and-actor Web Lock. The focused
+      two-context lock test, full business suite, and TypeScript pass. This creates
+      a newer SHA, so the final-SHA clean-checkout and supported scan rows remain open.
 
 ## P0 release candidate and security
 
