@@ -1,5 +1,6 @@
-import { existsSync, statSync } from "node:fs";
-import { config as loadDotenv } from "dotenv";
+import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import {
   createPublicClient,
   createWalletClient,
@@ -7,7 +8,6 @@ import {
   fallback,
   formatEther,
   formatUnits,
-  getAddress,
   http,
   parseUnits,
   toFunctionSelector,
@@ -16,7 +16,7 @@ import {
   type PublicClient,
   type Transport,
 } from "viem";
-import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
+import { type PrivateKeyAccount } from "viem/accounts";
 
 import {
   CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
@@ -54,6 +54,10 @@ import {
   createLiveCanaryLogPath,
   initializeLiveCanaryLogFile,
 } from "./live-canary-log-path.mjs";
+import {
+  loadLiveTestExecutionWalletConfig,
+  loadLiveTestPublicWalletConfig,
+} from "./live-test-wallet-config.mjs";
 import { assertV10RuntimeIdentity, type V10RuntimeIdentity } from "./v10-runtime-identity";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
@@ -72,43 +76,10 @@ if (V10_MATRIX_ONLY && !CONTRACT_REQUIRES_EPOCH_BOUND_BETS) {
 const LIVE_EXECUTION_CONFIRMED =
   process.env.LIVE_TEST_EXECUTE === "1" && process.argv.includes("--execute-live");
 const DRY_RUN = !LIVE_EXECUTION_CONFIRMED || (V10_MATRIX_ONLY && !V10_MATRIX_EXECUTE);
-const PUBLIC_ADDRESS_ENV_PATH = ".env.live-test-addresses";
-const LIVE_WALLET_ENV_PATH = ".env.live-test-wallets";
 const CANONICAL_INTEGER_ENV_RE = /^(?:0|[1-9]\d{0,15})$/;
-const PUBLIC_ADDRESS_ENV_NAME_RE =
-  /^LORE_LIVE_TEST_(?:MANUAL|AUTOMINER_A|AUTOMINER_B|AUTOMINER_C|RESOLVER)_ADDRESS$/;
 const SIGNING_ENV_NAME_RE = /(?:^|_)(?:PRIVATE_KEY|MNEMONIC|SEED(?:_PHRASE)?|SIGNING_KEY)(?:_|$)/i;
-
-function assertOptionalEnvFile(path: string, description: string) {
-  if (existsSync(path) && !statSync(path).isFile()) {
-    throw new Error(`${path} must be ${description}, not a directory`);
-  }
-}
-
-function loadPublicAddressEnvFileIfPresent() {
-  assertOptionalEnvFile(PUBLIC_ADDRESS_ENV_PATH, "an address env file");
-  if (!existsSync(PUBLIC_ADDRESS_ENV_PATH)) return;
-  const isolatedEnv: Record<string, string> = {};
-  const result = loadDotenv({
-    path: PUBLIC_ADDRESS_ENV_PATH,
-    override: false,
-    quiet: true,
-    processEnv: isolatedEnv,
-  });
-  if (result.error) throw new Error(`${PUBLIC_ADDRESS_ENV_PATH} could not be parsed safely`);
-  if (Object.keys(result.parsed ?? {}).some((name) => !PUBLIC_ADDRESS_ENV_NAME_RE.test(name))) {
-    throw new Error(`${PUBLIC_ADDRESS_ENV_PATH} may contain only public live-test role addresses`);
-  }
-  for (const [name, value] of Object.entries(result.parsed ?? {})) {
-    if (process.env[name] === undefined) process.env[name] = value;
-  }
-}
-
-function loadSigningEnvFileIfPresent() {
-  assertOptionalEnvFile(LIVE_WALLET_ENV_PATH, "a wallet env file");
-  if (!existsSync(LIVE_WALLET_ENV_PATH)) return;
-  loadDotenv({ path: LIVE_WALLET_ENV_PATH, override: false, quiet: true });
-}
+const PREVIEW_CHECK_SCRIPT = fileURLToPath(new URL("./check-v10-dry-run-preview.mjs", import.meta.url));
+const SHA256_RE = /^[a-f0-9]{64}$/;
 
 function hasSigningMaterialInEnvironment() {
   return Object.entries(process.env).some(
@@ -116,7 +87,6 @@ function hasSigningMaterialInEnvironment() {
   );
 }
 
-loadPublicAddressEnvFileIfPresent();
 if (DRY_RUN && hasSigningMaterialInEnvironment()) {
   throw new Error("Dry-run canary refuses inherited signing material");
 }
@@ -209,6 +179,23 @@ type LiveWallet = CanaryWallet & {
   account: PrivateKeyAccount;
 };
 
+type PublicWalletAdmission = {
+  roles: string[];
+  addressesByRole: Map<string, Address>;
+  walletSetSha256: string;
+};
+
+type ExecutionWalletAdmission = PublicWalletAdmission & {
+  accountsByRole: Map<string, PrivateKeyAccount>;
+};
+
+const loadExecutionWalletAdmission = loadLiveTestExecutionWalletConfig as unknown as (options: {
+  cwd?: string;
+  environment?: NodeJS.ProcessEnv;
+  expectedWalletSetSha256?: string;
+  publicConfig?: PublicWalletAdmission;
+}) => ExecutionWalletAdmission;
+
 type RoundPlan = {
   amount: bigint;
   amounts: bigint[];
@@ -228,7 +215,11 @@ const V10_CANARY_MATRIX = [
 
 type RoundEvent = {
   amount: string;
+  admission?: CanaryAdmission;
+  admissionSha256?: string;
   allowance?: string;
+  allowanceCapWei?: string;
+  allowanceWei?: string;
   allowanceWithinRunCap?: boolean;
   amounts?: string[];
   approvalTarget?: string;
@@ -255,7 +246,7 @@ type RoundEvent = {
   heapUsedBytes?: number;
   healthRetryCount?: number;
   hash?: Hash;
-  mode?: BetMode | "approve" | "diagnostic" | "epoch-wait" | "resolve" | "resolver-candidate" | "preflight" | "summary";
+  mode?: BetMode | "admission" | "approve" | "diagnostic" | "epoch-wait" | "resolve" | "resolver-candidate" | "runtime-identity" | "preflight" | "summary";
   network?: string;
   networkFeeWei?: string;
   nonceReadMs?: number;
@@ -277,17 +268,43 @@ type RoundEvent = {
   sampleKind?: "health";
   secondsLeft?: number;
   sendMs?: number;
+  signatureRequested?: boolean;
+  signingMaterialLoaded?: boolean;
   targetTotalAmount?: string;
   targetRounds?: number;
   tileCount?: number;
   tiles?: number[];
   timestamp: string;
   totalAmount?: string;
+  totalAmountWei?: string;
+  transactionSent?: boolean;
   txStatus?: string;
   walBytes?: number;
+  walletClientCreated?: boolean;
   successes?: number;
   failures?: number;
 };
+
+type CanaryAdmission = {
+  schema: 1;
+  runId: string;
+  execution: "dry-run" | "live";
+  profile: "v10-matrix" | "managed-soak";
+  network: string;
+  chainId: number;
+  contractAddress: string;
+  contractDeployBlock: string;
+  runtimeSha256: string;
+  manifestSha256: string;
+  canonicalProvenanceVerified: true;
+  previewSha256: string | null;
+  walletSetSha256: string;
+  canaryPlanSha256: string;
+  selectedRoles: string[];
+  roleCaps: Array<{ role: string; spendCapWei: string; allowanceCapWei: string }>;
+};
+
+let activeAdmissionSha256: string | null = null;
 
 const attemptedResolveEpochs = new Map<string, number>();
 const pendingResolveEpochs = new Set<string>();
@@ -307,6 +324,54 @@ function getRpcLabel() {
 }
 
 const RPC_LABEL = getRpcLabel();
+
+function createCanaryPlanSha256() {
+  const plan = {
+    schema: 1,
+    profile: V10_MATRIX_ONLY ? "v10-matrix" : "managed-soak",
+    network: APP_NETWORK,
+    chainId: APP_CHAIN.id,
+    contractAddress: CONTRACT_ADDRESS.toLowerCase(),
+    tokenAddress: LINEA_TOKEN_ADDRESS.toLowerCase(),
+    contractDeployBlock: String(CONTRACT_DEPLOY_BLOCK),
+    contractRequiresEpochBoundBets: CONTRACT_REQUIRES_EPOCH_BOUND_BETS,
+    targetRounds: TARGET_ROUNDS,
+    maxResolveTransactions: MAX_RESOLVE_TRANSACTIONS,
+    roles: [...ROLES],
+    matrix: V10_MATRIX_ONLY ? V10_CANARY_MATRIX : null,
+    tilesPerRound: TILES_PER_ROUND,
+    minTilesPerRound: MIN_TILES_PER_ROUND,
+    maxTilesPerRound: MAX_TILES_PER_ROUND,
+    betAmount: BET_AMOUNT.toString(),
+    minTotalBetAmount: MIN_TOTAL_BET_AMOUNT.toString(),
+    maxTotalBetAmount: MAX_TOTAL_BET_AMOUNT.toString(),
+    minTokenPerWallet: MIN_TOKEN_PER_WALLET.toString(),
+    minEthPerWallet: MIN_ETH_PER_WALLET.toString(),
+    safeSecondsLeft: SAFE_SECONDS_LEFT,
+    safeWindowTimeoutMs: SAFE_WINDOW_TIMEOUT_MS,
+    safeWindowHeartbeatMs: SAFE_WINDOW_HEARTBEAT_MS,
+    resolveRetryCooldownMs: RESOLVE_RETRY_COOLDOWN_MS,
+    resolveGasFloor: RESOLVE_GAS_FLOOR.toString(),
+    liveGasBufferPercent: LIVE_GAS_BUFFER_PERCENT.toString(),
+    transactionReceiptTimeoutMs: TX_RECEIPT_TIMEOUT_MS,
+    loopPauseMs: LOOP_PAUSE_MS,
+    maxFailures: MAX_FAILURES,
+    liveLogMaxBytes: LIVE_LOG_MAX_BYTES,
+    forceAllowanceApprove: FORCE_ALLOWANCE_APPROVE,
+    repeatSameBet: REPEAT_SAME_BET,
+    allowEmptyResolve: ALLOW_EMPTY_RESOLVE,
+    randomizeRounds: RANDOMIZE_ROUNDS,
+    stressSeed: STRESS_SEED,
+    injectRpcFailover: INJECT_RPC_FAILOVER,
+    rpcLabel: RPC_LABEL,
+    healthBaseUrl: HEALTH_BASE_URL ? String(HEALTH_BASE_URL) : null,
+    healthSampleEveryRounds: HEALTH_SAMPLE_EVERY_ROUNDS,
+    healthTimeoutMs: HEALTH_TIMEOUT_MS,
+  };
+  return createHash("sha256").update(JSON.stringify(plan), "utf8").digest("hex");
+}
+
+const CANARY_PLAN_SHA256 = createCanaryPlanSha256();
 
 function isEstimateGasOutOfGasError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -401,37 +466,220 @@ async function sampleHealth(logPath: string, round: number) {
   });
 }
 
-function normalizePrivateKey(raw: string): `0x${string}` {
-  const trimmed = raw.trim();
-  return trimmed.startsWith("0x") ? (trimmed as `0x${string}`) : (`0x${trimmed}` as `0x${string}`);
-}
-
-function loadWallets(): LiveWallet[] {
-  loadSigningEnvFileIfPresent();
+function loadWallets(config: ExecutionWalletAdmission): LiveWallet[] {
   const wallets = ROLES.map((role) => {
-    const key = process.env[`LORE_LIVE_TEST_${role}_PRIVATE_KEY`]?.trim();
-    if (!key) throw new Error(`Missing LORE_LIVE_TEST_${role}_PRIVATE_KEY in .env.live-test-wallets`);
-    const account = privateKeyToAccount(normalizePrivateKey(key));
+    const account = config.accountsByRole.get(role);
+    if (!account) throw new Error(`Validated execution wallet for ${role} is unavailable`);
     return { role, address: account.address, account };
   });
-  const unique = new Set(wallets.map((wallet) => wallet.address.toLowerCase()));
-  if (unique.size !== wallets.length) throw new Error("Live test wallet list contains duplicate addresses");
   return wallets;
 }
 
-function loadDryRunWallets(): CanaryWallet[] {
-  const wallets = ROLES.map((role) => {
-    const rawAddress = process.env[`LORE_LIVE_TEST_${role}_ADDRESS`]?.trim();
-    if (!rawAddress) throw new Error(`Missing LORE_LIVE_TEST_${role}_ADDRESS in .env.live-test-addresses`);
-    return { role, address: getAddress(rawAddress) };
+function inspectExecutionWalletBinding() {
+  const publicConfig = loadLiveTestPublicWalletConfig({
+    cwd: process.cwd(),
+    environment: process.env,
+  }) as PublicWalletAdmission;
+  const executionConfig = loadExecutionWalletAdmission({
+    cwd: process.cwd(),
+    environment: process.env,
+    expectedWalletSetSha256: publicConfig.walletSetSha256,
+    publicConfig,
+  }) as ExecutionWalletAdmission;
+  const wallets = loadWallets(executionConfig);
+  console.log(JSON.stringify({
+    status: "pass",
+    mode: "execution-wallet-binding-inspection",
+    roles: wallets.map((wallet) => wallet.role),
+    publicAddressFileBinding: true,
+    previewArtifactVerified: false,
+    walletSetSha256: publicConfig.walletSetSha256,
+    signingMaterialLoaded: true,
+    signatureRequested: false,
+    walletClientCreated: false,
+    networkRequests: 0,
+    contractWrites: 0,
+  }));
+}
+
+function inspectCanaryPlan() {
+  console.log(JSON.stringify({
+    status: "pass",
+    mode: "canary-plan-inspection",
+    profile: V10_MATRIX_ONLY ? "v10-matrix" : "managed-soak",
+    canaryPlanSha256: CANARY_PLAN_SHA256,
+    signingMaterialLoaded: hasSigningMaterialInEnvironment(),
+    signatureRequested: false,
+    walletClientCreated: false,
+    networkRequests: 0,
+    contractWrites: 0,
+  }));
+}
+
+function inspectFreshPreviewBinding() {
+  if (hasSigningMaterialInEnvironment()) {
+    throw new Error("Fresh Preview binding inspection refuses inherited signing material");
+  }
+  const publicConfig = loadLiveTestPublicWalletConfig({
+    cwd: process.cwd(),
+    environment: process.env,
+  }) as PublicWalletAdmission;
+  const previewBinding = assertFreshPreviewBinding(publicConfig);
+  console.log(JSON.stringify({
+    status: "pass",
+    mode: "fresh-preview-binding-inspection",
+    ...previewBinding,
+    signingMaterialLoaded: false,
+    signatureRequested: false,
+    walletClientCreated: false,
+    networkRequests: 0,
+    contractWrites: 0,
+  }));
+}
+
+function loadDryRunWallets(config: PublicWalletAdmission): CanaryWallet[] {
+  return ROLES.map((role) => {
+    const address = config.addressesByRole.get(role);
+    if (!address) throw new Error(`Validated public wallet for ${role} is unavailable`);
+    return { role, address };
   });
-  const unique = new Set(wallets.map((wallet) => wallet.address.toLowerCase()));
-  if (unique.size !== wallets.length) throw new Error("Live test address list contains duplicate addresses");
-  return wallets;
+}
+
+function createPreviewCheckerEnvironment() {
+  const environment: NodeJS.ProcessEnv = { NODE_ENV: "production", NO_COLOR: "1", FORCE_COLOR: "0" };
+  for (const name of ["SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR"]) {
+    const value = process.env[name];
+    if (typeof value === "string") environment[name] = value;
+  }
+  return environment;
+}
+
+function assertFreshPreviewBinding(publicConfig: PublicWalletAdmission) {
+  const expectedPreviewSha256 = process.env.LIVE_TEST_PREVIEW_SHA256?.trim().toLowerCase() ?? "";
+  if (!SHA256_RE.test(expectedPreviewSha256)) {
+    throw new Error("LIVE_TEST_PREVIEW_SHA256 must bind execution to a fresh validated Preview");
+  }
+  const result = spawnSync(process.execPath, [PREVIEW_CHECK_SCRIPT, "--require-fresh-authorization"], {
+    cwd: process.cwd(),
+    env: createPreviewCheckerEnvironment(),
+    encoding: "utf8",
+    timeout: 60_000,
+    maxBuffer: 1024 * 1024,
+    windowsHide: true,
+  });
+  if (result.error || result.signal || result.status !== 0) {
+    throw new Error("Fresh V10 Preview validation failed before live execution");
+  }
+  const outputLine = String(result.stdout ?? "").trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
+  let summary: Record<string, unknown>;
+  try {
+    summary = JSON.parse(outputLine) as Record<string, unknown>;
+  } catch {
+    throw new Error("Fresh V10 Preview validator returned invalid evidence");
+  }
+  if (
+    summary.status !== "pass" ||
+    summary.authorizationFreshnessRequired !== true ||
+    summary.previewSha256 !== expectedPreviewSha256 ||
+    summary.walletSetSha256 !== publicConfig.walletSetSha256 ||
+    summary.canaryPlanSha256 !== CANARY_PLAN_SHA256
+  ) {
+    throw new Error("Fresh V10 Preview identity does not match this execution wallet set and canary plan");
+  }
+  return {
+    previewSha256: expectedPreviewSha256,
+    walletSetSha256: publicConfig.walletSetSha256,
+    canaryPlanSha256: CANARY_PLAN_SHA256,
+  };
 }
 
 function createRunLogPath() {
   return createLiveCanaryLogPath();
+}
+
+function canonicalAdmissionPayload(admission: CanaryAdmission) {
+  return JSON.stringify({
+    schema: admission.schema,
+    runId: admission.runId,
+    execution: admission.execution,
+    profile: admission.profile,
+    network: admission.network,
+    chainId: admission.chainId,
+    contractAddress: admission.contractAddress.toLowerCase(),
+    contractDeployBlock: admission.contractDeployBlock,
+    runtimeSha256: admission.runtimeSha256,
+    manifestSha256: admission.manifestSha256,
+    canonicalProvenanceVerified: admission.canonicalProvenanceVerified,
+    previewSha256: admission.previewSha256,
+    walletSetSha256: admission.walletSetSha256,
+    canaryPlanSha256: admission.canaryPlanSha256,
+    selectedRoles: [...admission.selectedRoles].sort(),
+    roleCaps: [...admission.roleCaps]
+      .map((cap) => ({ ...cap }))
+      .sort((left, right) => left.role.localeCompare(right.role)),
+  });
+}
+
+function getCanaryRunId() {
+  const configured = process.env.LIVE_TEST_RUN_ID?.trim();
+  if (!configured) return randomUUID();
+  if (!/^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/.test(configured)) {
+    throw new Error("LIVE_TEST_RUN_ID must be a canonical lowercase UUID or 32-character hex identifier");
+  }
+  return configured;
+}
+
+function writeCanaryAdmission(params: {
+  logPath: string;
+  previewBinding: { previewSha256: string; walletSetSha256: string; canaryPlanSha256: string } | null;
+  runtimeIdentity: V10RuntimeIdentity;
+  plannedSpendByRole: Map<string, bigint>;
+  walletSetSha256: string;
+  wallets: CanaryWallet[];
+}) {
+  const selectedRoles = params.wallets.map((wallet) => wallet.role).sort();
+  const execution = DRY_RUN ? "dry-run" : "live";
+  if (execution === "live" && !params.previewBinding) {
+    throw new Error("Live admission requires a fresh Preview binding");
+  }
+  const admission: CanaryAdmission = {
+    schema: 1,
+    runId: getCanaryRunId(),
+    execution,
+    profile: V10_MATRIX_ONLY ? "v10-matrix" : "managed-soak",
+    network: APP_NETWORK,
+    chainId: APP_CHAIN.id,
+    contractAddress: CONTRACT_ADDRESS.toLowerCase(),
+    contractDeployBlock: CONTRACT_DEPLOY_BLOCK.toString(),
+    runtimeSha256: params.runtimeIdentity.normalizedRuntimeSha256,
+    manifestSha256: params.runtimeIdentity.manifestDigest,
+    canonicalProvenanceVerified: params.runtimeIdentity.canonicalProvenanceVerified,
+    previewSha256: params.previewBinding?.previewSha256 ?? null,
+    walletSetSha256: params.walletSetSha256,
+    canaryPlanSha256: params.previewBinding?.canaryPlanSha256 ?? CANARY_PLAN_SHA256,
+    selectedRoles,
+    roleCaps: selectedRoles.map((role) => {
+      const cap = params.plannedSpendByRole.get(role) ?? 0n;
+      if (cap < 0n) throw new Error(`Canary admission spend cap is invalid for ${role}`);
+      return { role, spendCapWei: cap.toString(), allowanceCapWei: cap.toString() };
+    }),
+  };
+  const admissionSha256 = createHash("sha256").update(canonicalAdmissionPayload(admission), "utf8").digest("hex");
+  writeEvent(params.logPath, {
+    admission,
+    admissionSha256,
+    amount: "0",
+    mode: "admission",
+    ok: true,
+    role: "SYSTEM",
+    round: -1,
+    signatureRequested: false,
+    signingMaterialLoaded: execution === "live",
+    timestamp: new Date().toISOString(),
+    transactionSent: false,
+    walletClientCreated: false,
+  });
+  activeAdmissionSha256 = admissionSha256;
 }
 
 function writeEvent(logPath: string, event: RoundEvent) {
@@ -444,6 +692,7 @@ function writeEvent(logPath: string, event: RoundEvent) {
       contractAddress: CONTRACT_ADDRESS,
       rpcLabel: RPC_LABEL,
       rpcFailoverInjected: INJECT_RPC_FAILOVER,
+      ...(activeAdmissionSha256 && event.mode !== "admission" ? { admissionSha256: activeAdmissionSha256 } : {}),
       ...event,
     })}\n`,
   });
@@ -898,6 +1147,8 @@ async function ensureAllowance(params: {
   writeEvent(logPath, {
     amount: formatUnits(approveAmount, 18),
     allowance: formatUnits(actualAllowance, 18),
+    allowanceCapWei: approveAmount.toString(),
+    allowanceWei: actualAllowance.toString(),
     allowanceWithinRunCap: actualAllowance <= approveAmount,
     approvalTarget: formatUnits(approveAmount, 18),
     durationMs: Date.now() - startedAt,
@@ -1031,6 +1282,7 @@ async function placeRound(params: {
     tileCount: plan.tileCount,
     tiles,
     totalAmount: formatUnits(plan.totalAmount, 18),
+    totalAmountWei: plan.totalAmount.toString(),
   };
   let receipt;
   try {
@@ -1116,6 +1368,8 @@ async function runPreflight(
       eth: formatEther(eth),
       linea: formatUnits(token, 18),
       allowance: formatUnits(allowance, 18),
+      allowanceCapWei: plannedSpend.toString(),
+      allowanceWei: allowance.toString(),
       allowanceWithinRunCap: allowancePlan.allowanceWithinRunCap,
       approvalRequired,
       approvalTarget: formatUnits(allowancePlan.approvalTarget, 18),
@@ -1130,6 +1384,8 @@ async function runPreflight(
     writeEvent(logPath, {
       amount: "0",
       allowance: formatUnits(allowance, 18),
+      allowanceCapWei: plannedSpend.toString(),
+      allowanceWei: allowance.toString(),
       allowanceWithinRunCap: allowancePlan.allowanceWithinRunCap,
       approvalTarget: formatUnits(allowancePlan.approvalTarget, 18),
       approvalRequired,
@@ -1155,6 +1411,7 @@ async function runPreflight(
       round: -1,
       timestamp: new Date().toISOString(),
       totalAmount: formatUnits(plannedSpend, 18),
+      totalAmountWei: plannedSpend.toString(),
     });
   }
   const readyWallets = rows.filter((row) => (
@@ -1179,6 +1436,11 @@ async function main() {
   if (DRY_RUN && signingMaterialLoaded) {
     throw new Error("Dry-run canary refuses signing material");
   }
+  const publicWalletConfig = loadLiveTestPublicWalletConfig({
+    cwd: process.cwd(),
+    environment: process.env,
+  }) as PublicWalletAdmission;
+  const previewBinding = DRY_RUN ? null : assertFreshPreviewBinding(publicWalletConfig);
   const readRpcUrls = getStableLineaReadRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const broadcastRpcUrls = getPreferredLineaRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const readTransport = createCanaryTransport(readRpcUrls);
@@ -1194,6 +1456,9 @@ async function main() {
   console.log(`[live-canary] rpcLabel=${RPC_LABEL} readRpcCount=${readRpcUrls.length} broadcastRpcCount=${broadcastRpcUrls.length}`);
   console.log(`[live-canary] rpcFailoverInjection=${INJECT_RPC_FAILOVER ? "enabled" : "disabled"}`);
   console.log(`[live-canary] v10Matrix=${V10_MATRIX_ONLY ? "bounded" : "disabled"} execution=${DRY_RUN ? "dry-run" : "enabled"}`);
+  console.log(`[live-canary] walletSetSha256=${publicWalletConfig.walletSetSha256}`);
+  console.log(`[live-canary] canaryPlanSha256=${CANARY_PLAN_SHA256}`);
+  if (previewBinding) console.log(`[live-canary] previewSha256=${previewBinding.previewSha256}`);
   console.log(
     `[live-canary] operationalBoundary signingMaterialLoaded=${signingMaterialLoaded} ` +
       `transactionSent=false walletClientCreated=false contractWriteSubmitted=false`,
@@ -1216,6 +1481,57 @@ async function main() {
     snapshotBlock: identitySnapshot.number,
     snapshotBlockHash: identitySnapshot.hash,
   });
+  console.log(
+    `[live-canary] runtimeIdentity deployBlock=${runtimeIdentity.deployBlock} ` +
+      `runtimeDigest=${runtimeIdentity.normalizedRuntimeSha256.slice(0, 12)}…`,
+  );
+  // Publish the read-only identity observation before loading any signing
+  // material. The later bound SYSTEM preflight ties the same evidence to the
+  // canonical admission once roles/caps have been derived.
+  writeEvent(logPath, {
+    amount: "0",
+    mode: "runtime-identity",
+    ok: true,
+    role: "SYSTEM",
+    round: -1,
+    runtimeIdentity,
+    timestamp: new Date().toISOString(),
+  });
+
+  let executionWalletConfig: ExecutionWalletAdmission | null = null;
+  let wallets: CanaryWallet[];
+  if (DRY_RUN) {
+    wallets = loadDryRunWallets(publicWalletConfig);
+  } else {
+    // Signing material is admitted only after the runtime identity check above,
+    // and the public file is re-read so a post-Preview change fails closed.
+    executionWalletConfig = loadExecutionWalletAdmission({
+      cwd: process.cwd(),
+      environment: process.env,
+      expectedWalletSetSha256: publicWalletConfig.walletSetSha256,
+      publicConfig: publicWalletConfig,
+    }) as ExecutionWalletAdmission;
+    wallets = loadWallets(executionWalletConfig);
+    console.log(
+      `[live-canary] executionWalletBinding walletSetSha256=${executionWalletConfig.walletSetSha256} ` +
+        "signingMaterialLoaded=true signatureRequested=false",
+    );
+  }
+  const plannedSpendByRole = getPlannedSpendByRole(wallets);
+  const plannedStake = [...plannedSpendByRole.values()].reduce((sum, value) => sum + value, 0n);
+  if (!DRY_RUN && (!previewBinding || !executionWalletConfig)) {
+    throw new Error("Live admission requires fresh Preview and validated execution wallets");
+  }
+  // This is the sole run admission record. It is appended after the read-only
+  // runtime proof and before any wallet client, signature, or transaction request.
+  writeCanaryAdmission({
+    logPath,
+    previewBinding,
+    runtimeIdentity,
+    plannedSpendByRole,
+    walletSetSha256: publicWalletConfig.walletSetSha256,
+    wallets,
+  });
   writeEvent(logPath, {
     amount: "0",
     mode: "preflight",
@@ -1225,14 +1541,6 @@ async function main() {
     runtimeIdentity,
     timestamp: new Date().toISOString(),
   });
-  console.log(
-    `[live-canary] runtimeIdentity deployBlock=${runtimeIdentity.deployBlock} ` +
-      `runtimeDigest=${runtimeIdentity.normalizedRuntimeSha256.slice(0, 12)}…`,
-  );
-
-  const wallets = DRY_RUN ? loadDryRunWallets() : loadWallets();
-  const plannedSpendByRole = getPlannedSpendByRole(wallets);
-  const plannedStake = [...plannedSpendByRole.values()].reduce((sum, value) => sum + value, 0n);
   console.log(
     `[live-canary] rounds=${TARGET_ROUNDS} plannedBetTx=${plannedBetTransactions} ` +
       `plannedStake=${formatUnits(plannedStake, 18)} LINEA randomize=${RANDOMIZE_ROUNDS ? "yes" : "no"} ` +
@@ -1252,16 +1560,14 @@ async function main() {
 
   await runPreflight(logPath, publicClient, wallets, plannedSpendByRole);
   if (DRY_RUN) return;
+  if (!executionWalletConfig) throw new Error("Validated execution wallet configuration is unavailable");
   const liveWallets = wallets as LiveWallet[];
-  const resolver = process.env.LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY
-    ? (() => {
-        const account = privateKeyToAccount(normalizePrivateKey(process.env.LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY));
-        return { role: "RESOLVER", address: account.address, account };
-      })()
-    : null;
+  const resolverAccount = executionWalletConfig.accountsByRole.get("RESOLVER");
+  if (!resolverAccount) throw new Error("Validated RESOLVER wallet is unavailable");
+  const resolver = { role: "RESOLVER", address: resolverAccount.address, account: resolverAccount };
   const resolverCandidates = [
-    ...(resolver ? [resolver] : []),
-    ...liveWallets.filter((wallet) => wallet.account.address.toLowerCase() !== resolver?.account.address.toLowerCase()),
+    resolver,
+    ...liveWallets.filter((wallet) => wallet.account.address.toLowerCase() !== resolver.account.address.toLowerCase()),
   ];
   if (HEALTH_BASE_URL && !process.env.HEALTH_DIAGNOSTICS_SECRET?.trim()) {
     throw new Error("HEALTH_DIAGNOSTICS_SECRET is required when LIVE_TEST_HEALTH_BASE_URL is configured");
@@ -1406,8 +1712,34 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : "Unknown error";
-  console.error(`[live-canary] failed: ${redactCanaryErrorMessage(message)}`);
-  process.exitCode = 1;
-});
+if (process.argv.includes("--inspect-canary-plan")) {
+  try {
+    inspectCanaryPlan();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[live-canary] failed: ${redactCanaryErrorMessage(message)}`);
+    process.exitCode = 1;
+  }
+} else if (process.argv.includes("--inspect-fresh-preview-binding")) {
+  try {
+    inspectFreshPreviewBinding();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[live-canary] failed: ${redactCanaryErrorMessage(message)}`);
+    process.exitCode = 1;
+  }
+} else if (process.argv.includes("--inspect-execution-wallet-binding")) {
+  try {
+    inspectExecutionWalletBinding();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[live-canary] failed: ${redactCanaryErrorMessage(message)}`);
+    process.exitCode = 1;
+  }
+} else {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[live-canary] failed: ${redactCanaryErrorMessage(message)}`);
+    process.exitCode = 1;
+  });
+}

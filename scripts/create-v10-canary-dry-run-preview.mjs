@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { redactProofText } from "./redact-proof-output.mjs";
 import { parseSummaryTimeoutEnv } from "./summary-timeout.mjs";
@@ -12,6 +13,7 @@ import {
 const DEFAULT_RPC_LABEL = "linea-sepolia-public-fallback";
 const PREVIEW_PATH = path.join("docs", "v10-canary-dry-run-preview.md");
 const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
+const MAX_DRY_RUN_LOG_BYTES = 256 * 1024;
 const MAX_PREVIEW_FIELD_CHARS = 180;
 const CHILD_TIMEOUT_MS = parseSummaryTimeoutEnv("V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS", 240_000);
 const CHILD_ENV_INSPECTION_ARG = "--inspect-read-only-child-env";
@@ -190,7 +192,9 @@ function runStep(name, spec) {
     timedOut,
     outputTooLarge,
     output,
+    rawOutput,
     errorCode: result.error?.code ?? null,
+    spawnError: result.error != null,
     ok: result.status === 0 && !timedOut && !outputTooLarge,
   };
 }
@@ -217,10 +221,17 @@ function extractBooleanFlag(output, name) {
   return reports.length > 0 && reports.every((value) => value === "false") ? false : null;
 }
 
+function extractSha256Flag(output, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [...output.matchAll(new RegExp(`\\b${escaped}=([a-f0-9]{64})(?=\\s|$)`, "gi"))];
+  if (matches.length !== 1) return null;
+  return matches[0][1].toLowerCase();
+}
+
 function extractCanaryLog(output) {
   const raw = extractValue(output, /\[live-canary\]\s+log=([^\r\n]+)/) ?? extractValue(output, /\blog=([^\s]+\.jsonl)\b/);
   if (!raw) return null;
-  return safeCanaryLogPath(raw);
+  return normalizeCanaryLogPath(raw);
 }
 
 function safeCanaryLogPath(value) {
@@ -242,6 +253,97 @@ function safeCanaryLogPath(value) {
     return null;
   }
   return path.join(...parts);
+}
+
+function samePath(left, right) {
+  return process.platform === "win32"
+    ? String(left).toLowerCase() === String(right).toLowerCase()
+    : String(left) === String(right);
+}
+
+function normalizeCanaryLogPath(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  if (!path.isAbsolute(text)) return safeCanaryLogPath(text);
+  try {
+    const repositoryRoot = realpathSync(process.cwd());
+    const dataDirectory = path.join(repositoryRoot, "data");
+    const runDirectory = path.join(dataDirectory, "live-test-runs");
+    const canonicalRunDirectory = realpathSync(runDirectory);
+    if (!samePath(canonicalRunDirectory, runDirectory)) return null;
+    assertOrdinaryPath(dataDirectory, "dry-run canary data directory", true);
+    assertOrdinaryPath(runDirectory, "dry-run canary run directory", true);
+
+    const absolutePath = path.resolve(text);
+    if (!samePath(path.dirname(absolutePath), runDirectory)) return null;
+    assertOrdinaryPath(absolutePath, "dry-run canary log", false);
+    const canonicalLogPath = realpathSync(absolutePath);
+    if (!samePath(path.dirname(canonicalLogPath), canonicalRunDirectory)) return null;
+    return safeCanaryLogPath(path.relative(repositoryRoot, canonicalLogPath));
+  } catch {
+    return null;
+  }
+}
+
+function sameFileFingerprint(left, right) {
+  return left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs;
+}
+
+function assertOrdinaryPath(filePath, label, directory) {
+  const stats = lstatSync(filePath);
+  if (stats.isSymbolicLink() || (directory ? !stats.isDirectory() : !stats.isFile())) {
+    throw new Error(`${label} must be an ordinary ${directory ? "directory" : "file"}`);
+  }
+  return stats;
+}
+
+function readBoundedCanaryLogBinding(relativePath) {
+  const safePath = safeCanaryLogPath(relativePath);
+  if (!safePath) throw new Error("dry-run canary log path is unsafe");
+  const repositoryRoot = realpathSync(process.cwd());
+  const dataDirectory = path.join(repositoryRoot, "data");
+  const runDirectory = path.join(dataDirectory, "live-test-runs");
+  const absolutePath = path.join(repositoryRoot, safePath);
+  if (path.dirname(absolutePath) !== runDirectory) throw new Error("dry-run canary log escaped its run directory");
+  assertOrdinaryPath(dataDirectory, "dry-run canary data directory", true);
+  assertOrdinaryPath(runDirectory, "dry-run canary run directory", true);
+  const initialPathStats = assertOrdinaryPath(absolutePath, "dry-run canary log", false);
+  if (path.dirname(realpathSync(absolutePath)) !== realpathSync(runDirectory)) {
+    throw new Error("dry-run canary log must not resolve through a reparse point");
+  }
+
+  const fd = openSync(absolutePath, "r");
+  const digest = createHash("sha256");
+  let bytes = 0;
+  try {
+    const initialHandleStats = fstatSync(fd);
+    if (!initialHandleStats.isFile() || !sameFileFingerprint(initialPathStats, initialHandleStats)) {
+      throw new Error("dry-run canary log changed before it could be read");
+    }
+    if (initialHandleStats.size > MAX_DRY_RUN_LOG_BYTES) {
+      throw new Error("dry-run canary log is too large to bind safely");
+    }
+    const buffer = Buffer.alloc(Math.min(64 * 1024, Math.max(1, initialHandleStats.size)));
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      bytes += bytesRead;
+      if (bytes > MAX_DRY_RUN_LOG_BYTES) throw new Error("dry-run canary log exceeded its safe bound");
+      digest.update(buffer.subarray(0, bytesRead));
+    }
+    const finalHandleStats = fstatSync(fd);
+    const finalPathStats = assertOrdinaryPath(absolutePath, "dry-run canary log", false);
+    if (!sameFileFingerprint(initialHandleStats, finalHandleStats) || !sameFileFingerprint(initialHandleStats, finalPathStats)) {
+      throw new Error("dry-run canary log changed while it was read");
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return { path: safePath, bytes, sha256: digest.digest("hex") };
 }
 
 function compactLines(output, limit = 24) {
@@ -287,6 +389,7 @@ function summarizePendingNonce(step) {
 }
 
 function summarizeMatrix(step) {
+  const rawOutput = step.rawOutput ?? step.output;
   return {
     network: extractValue(step.output, /\bnetwork=([a-z0-9_-]+)/i),
     chainId: extractValue(step.output, /\bchainId=([0-9]+)/),
@@ -295,6 +398,8 @@ function summarizeMatrix(step) {
     plannedBetTx: extractValue(step.output, /\bplannedBetTx=([0-9]+)/),
     plannedStake: extractValue(step.output, /\bplannedStake=([0-9.]+)/),
     walletReady: extractValue(step.output, /\bready=([0-9]+\/[0-9]+)/),
+    walletSetSha256: extractSha256Flag(rawOutput, "walletSetSha256"),
+    canaryPlanSha256: extractSha256Flag(rawOutput, "canaryPlanSha256"),
     transactionSent: extractBooleanFlag(step.output, "transactionSent"),
     signingMaterialLoaded: extractBooleanFlag(step.output, "signingMaterialLoaded"),
     walletClientCreated: extractBooleanFlag(step.output, "walletClientCreated"),
@@ -304,24 +409,34 @@ function summarizeMatrix(step) {
 }
 
 function summarizeAnalyzer(step) {
+  const output = step.rawOutput ?? step.output;
   return {
     status: step.status,
-    dryRunProofBlocksG10G11: /blocked gates:\s*G10,\s*G11/i.test(step.output) || /\bG10\b[\s\S]*\bG11\b/.test(step.output),
+    logName: extractValue(output, /^Log:\s*([^\r\n]+)$/m),
+    logSha256: extractValue(output, /^Log SHA-256:\s*([a-f0-9]{64})\s*$/mi),
+    logBytes: extractValue(output, /^Log bytes:\s*([0-9]+)\s*$/mi),
+    dryRunProofBlocksG10G11: /blocked gates:\s*G10,\s*G11/i.test(output) || /\bG10\b[\s\S]*\bG11\b/.test(output),
     successfulBetTx:
-      extractValue(step.output, /\bsuccessful bet tx:\s*([0-9]+)/i) ??
-      extractValue(step.output, /\|\s*successful bet tx\s*\|\s*([0-9]+)\s*\|/i),
+      extractValue(output, /\bsuccessful bet tx:\s*([0-9]+)/i) ??
+      extractValue(output, /\|\s*successful bet tx\s*\|\s*([0-9]+)\s*\|/i),
     uniqueBetEpochs:
-      extractValue(step.output, /\bunique bet epochs:\s*([0-9]+)/i) ??
-      extractValue(step.output, /\|\s*unique bet epochs\s*\|\s*([0-9]+)\s*\|/i),
+      extractValue(output, /\bunique bet epochs:\s*([0-9]+)/i) ??
+      extractValue(output, /\|\s*unique bet epochs\s*\|\s*([0-9]+)\s*\|/i),
     missingGasCases:
-      extractValue(step.output, /missing V10 gas cases:\s*([^\r\n]+)/i) ??
-      extractValue(step.output, /missing gas cases:\s*([^\r\n]+)/i),
+      extractValue(output, /missing V10 gas cases:\s*([^\r\n]+)/i) ??
+      extractValue(output, /missing gas cases:\s*([^\r\n]+)/i),
   };
 }
 
 function bullet(label, value) {
   if (value === null || value === undefined || value === "") return null;
   return `- ${label}: ${formatPreviewField(value)}`;
+}
+
+function sha256Bullet(label, value) {
+  const digest = String(value ?? "").trim();
+  if (!/^[a-f0-9]{64}$/.test(digest)) return null;
+  return `- ${label}: ${digest}`;
 }
 
 function formatPreviewField(value) {
@@ -340,6 +455,16 @@ const planner = runStep("read-only planner", npmRun("plan:canary:v10:postdeploy:
 const pendingNonce = runStep("pending nonce dry-run", npmRun("soak:testnet:clear-pending:summary"));
 const matrix = runStep("V10 matrix dry-run", npmRun("live:canary:v10:matrix"));
 const matrixSummary = summarizeMatrix(matrix);
+
+let logBindingBefore = null;
+let logBindingIssue = null;
+if (matrixSummary.log) {
+  try {
+    logBindingBefore = readBoundedCanaryLogBinding(matrixSummary.log);
+  } catch (error) {
+    logBindingIssue = error instanceof Error ? error.message : "dry-run canary log binding failed";
+  }
+}
 
 let analyzer = null;
 if (matrixSummary.log) {
@@ -360,10 +485,38 @@ if (matrixSummary.log) {
 const plannerSummary = summarizePlanner(planner);
 const pendingSummary = summarizePendingNonce(pendingNonce);
 const analyzerSummary = analyzer ? summarizeAnalyzer(analyzer) : null;
+let logBindingAfter = null;
+if (logBindingBefore) {
+  try {
+    logBindingAfter = readBoundedCanaryLogBinding(matrixSummary.log);
+  } catch (error) {
+    logBindingIssue = error instanceof Error ? error.message : "dry-run canary log binding failed";
+  }
+}
+const analyzerBoundToCurrentLog = Boolean(
+  analyzer &&
+  logBindingBefore &&
+  logBindingAfter &&
+  logBindingBefore.bytes === logBindingAfter.bytes &&
+  logBindingBefore.sha256 === logBindingAfter.sha256 &&
+  analyzerSummary?.logName === path.basename(logBindingBefore.path) &&
+  analyzerSummary?.logSha256 === logBindingAfter.sha256 &&
+  analyzerSummary?.logBytes === String(logBindingAfter.bytes),
+);
 
 const hardFailures = [planner, pendingNonce, matrix].filter((step) => !step.ok);
 const dryRunAnalyzerBlockedAsExpected =
-  analyzer && analyzer.status !== 0 && analyzerSummary?.dryRunProofBlocksG10G11 === true;
+  analyzer &&
+  analyzer.spawnError === false &&
+  Number.isInteger(analyzer.status) &&
+  analyzer.status !== 0 &&
+  analyzer.signal === null &&
+  !analyzer.timedOut &&
+  !analyzer.outputTooLarge &&
+  analyzerSummary?.dryRunProofBlocksG10G11 === true &&
+  analyzerSummary.successfulBetTx === "0" &&
+  analyzerSummary.uniqueBetEpochs === "0" &&
+  analyzerBoundToCurrentLog;
 const signingMaterialReports = [
   plannerSummary.signingMaterialLoaded,
   pendingSummary.signingMaterialLoaded,
@@ -406,9 +559,13 @@ const operationBoundaryVerified =
   !transactionSent &&
   !walletClientCreated &&
   !contractWriteSubmitted;
+const walletSetBound = /^[a-f0-9]{64}$/.test(matrixSummary.walletSetSha256 ?? "");
+const canaryPlanBound = /^[a-f0-9]{64}$/.test(matrixSummary.canaryPlanSha256 ?? "");
 const status =
   hardFailures.length === 0 &&
   operationBoundaryVerified &&
+  walletSetBound &&
+  canaryPlanBound &&
   !signingMaterialLoaded &&
   (analyzer?.ok || dryRunAnalyzerBlockedAsExpected)
     ? "pass"
@@ -439,6 +596,9 @@ ${renderBullets([
   bullet("walletClientCreated", walletClientCreated),
   bullet("contractWriteSubmitted", contractWriteSubmitted),
   bullet("dryRunProofBlocksG10G11", Boolean(dryRunAnalyzerBlockedAsExpected)),
+  sha256Bullet("walletSetSha256", matrixSummary.walletSetSha256),
+  sha256Bullet("canaryPlanSha256", matrixSummary.canaryPlanSha256),
+  bullet("canaryLogBound", analyzerBoundToCurrentLog),
 ])}
 
 ## Read-Only Planner
@@ -512,11 +672,15 @@ ${renderBullets([
   bullet("plannedBetTx", matrixSummary.plannedBetTx),
   bullet("plannedStake", matrixSummary.plannedStake),
   bullet("walletPreflightReady", matrixSummary.walletReady),
+  sha256Bullet("walletSetSha256", matrixSummary.walletSetSha256),
+  sha256Bullet("canaryPlanSha256", matrixSummary.canaryPlanSha256),
   bullet("transactionSent", matrixSummary.transactionSent),
   bullet("signingMaterialLoaded", matrixSummary.signingMaterialLoaded),
   bullet("walletClientCreated", matrixSummary.walletClientCreated),
   bullet("contractWriteSubmitted", matrixSummary.contractWriteSubmitted),
   bullet("log", matrixSummary.log),
+  bullet("logBytes", logBindingAfter?.bytes),
+  sha256Bullet("logSha256", logBindingAfter?.sha256),
 ])}
 
 Redacted excerpt:
@@ -536,6 +700,8 @@ ${analyzer ? renderBullets([
   bullet("dryRunProofBlocksG10G11", analyzerSummary.dryRunProofBlocksG10G11),
   bullet("successfulBetTx", analyzerSummary.successfulBetTx),
   bullet("uniqueBetEpochs", analyzerSummary.uniqueBetEpochs),
+  sha256Bullet("logSha256", analyzerSummary.logSha256),
+  bullet("logBytes", analyzerSummary.logBytes),
   bullet("missingGasCases", analyzerSummary.missingGasCases),
 ]) : "- analyzer skipped because the matrix dry-run did not expose a log path"}
 
@@ -565,9 +731,11 @@ Minimum fresh authorization fields:
 - permitted roles
 - stop criteria
 - confirmation that no already-completed transaction should be repeated
+- exact Preview SHA-256, walletSetSha256, and canaryPlanSha256 copied from this fresh output
 `;
 
 writeFileSync(PREVIEW_PATH, markdown, "utf8");
+const previewSha256 = createHash("sha256").update(markdown, "utf8").digest("hex");
 
 console.log(JSON.stringify({
   status,
@@ -577,6 +745,12 @@ console.log(JSON.stringify({
   matrixExit: matrix.status,
   analyzerExit: analyzer?.status ?? null,
   canaryLog: matrixSummary.log ?? null,
+  canaryLogSha256: logBindingAfter?.sha256 ?? null,
+  canaryLogBound: analyzerBoundToCurrentLog,
+  previewSha256,
+  walletSetSha256: matrixSummary.walletSetSha256 ?? null,
+  canaryPlanSha256: matrixSummary.canaryPlanSha256 ?? null,
+  logBindingIssue,
   dryRunProofBlocksG10G11: Boolean(dryRunAnalyzerBlockedAsExpected),
   transactionSent,
   signingMaterialLoaded,

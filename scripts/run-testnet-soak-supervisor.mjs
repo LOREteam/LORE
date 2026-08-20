@@ -1894,6 +1894,7 @@ async function validateLiveCanaryCompletion(liveLogPath) {
         "--profile=testnet",
         "--strict",
         "--require-epoch-bound",
+        "--require-canary-admission",
         "--summary-only",
       ],
       {
@@ -2036,6 +2037,7 @@ function buildCanaryEnvironment(
     LIVE_TEST_HEALTH_BASE_URL: BASE_URL,
     LIVE_TEST_LOG_PATH: LIVE_LOG_PATH,
     LIVE_TEST_LOG_MAX_BYTES: String(MAX_LIVE_LOG_BYTES),
+    LIVE_TEST_RUN_ID: RUN_ID,
     LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS: env.LIVE_TEST_HEALTH_SAMPLE_EVERY_ROUNDS || "5",
     LIVE_TEST_INJECT_RPC_FAILOVER: "1",
     LIVE_TEST_MAX_TILES_PER_ROUND: env.LIVE_TEST_MAX_TILES_PER_ROUND || "25",
@@ -2175,6 +2177,7 @@ async function runBehaviorSelfTest() {
   selfTestCondition(canaryEnv.HEALTH_DIAGNOSTICS_SECRET === HEALTH_SECRET, "diagnostics secret was not passed to the canary environment");
   selfTestCondition(canaryEnv.LIVE_TEST_DRY_RUN === (DRY_RUN ? "1" : "0"), "canary dry-run flag diverged from admission mode");
   selfTestCondition(canaryEnv.LIVE_TEST_EXECUTE === (LIVE_EXECUTION_CONFIRMED ? "1" : "0"), "canary execute flag diverged from admission mode");
+  selfTestCondition(canaryEnv.LIVE_TEST_RUN_ID === RUN_ID, "canary admission run ID diverged from supervisor run ID");
   selfTestCondition(canaryEnv.LIVE_TEST_ROLES === "MANUAL,AUTOMINER_A,AUTOMINER_B", "default canary roles changed");
 
   const proofValidationEnv = buildProofValidationEnvironment({

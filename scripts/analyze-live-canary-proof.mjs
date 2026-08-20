@@ -1,4 +1,5 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { resolveCanaryProofProfile } from "./canary-proof-profile.mjs";
 import { hasPublicProofHttpsUrl as hasPublicHttpsUrl } from "./collect-proof-common.mjs";
@@ -24,6 +25,7 @@ const canaryLaunchGates = ["G10", "G11"];
 const canaryLaunchGateGroups = "canary=2";
 const requireEpochBound = process.argv.includes("--require-epoch-bound") || process.env.CANARY_REQUIRE_EPOCH_BOUND === "1";
 const requireV10GasMatrix = process.argv.includes("--require-v10-gas-matrix") || process.env.CANARY_REQUIRE_V10_GAS_MATRIX === "1";
+const requireCanaryAdmission = process.argv.includes("--require-canary-admission") || process.env.CANARY_REQUIRE_ADMISSION === "1";
 const CANONICAL_POSITIVE_INTEGER_RE = /^[1-9]\d{0,15}$/;
 const CANONICAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
@@ -53,12 +55,15 @@ const TX_RE = /^0x[a-fA-F0-9]{64}$/;
 const ZERO_TX = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const BET_MODES = new Set(["single", "bitmap", "sameAmount", "arrays"]);
 const V10_GAS_CASES = ["1", "3-contiguous", "3-sparse", "5-contiguous", "5-sparse", "25"];
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
+const ADMISSION_RUN_ID_RE = /^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/;
+const CANONICAL_WEI_RE = /^(?:0|[1-9]\d{0,77})$/;
 
 if (!logPath) {
   if (summaryOnly) {
     printMissingLogSummary("live canary log path is missing");
   } else {
-    console.error("Usage: node scripts/analyze-live-canary-proof.mjs <live-canary.jsonl> [--profile=launch|testnet|v10-matrix] [--strict] [--summary-only] [--require-epoch-bound] [--require-v10-gas-matrix] [--manifest=<path>]");
+    console.error("Usage: node scripts/analyze-live-canary-proof.mjs <live-canary.jsonl> [--profile=launch|testnet|v10-matrix] [--strict] [--summary-only] [--require-epoch-bound] [--require-v10-gas-matrix] [--require-canary-admission] [--manifest=<path>]");
     process.exitCode = 1;
   }
 } else if (!isExistingFile(resolve(process.cwd(), logPath))) {
@@ -69,7 +74,8 @@ if (!logPath) {
     process.exitCode = 1;
   }
 } else {
-  const events = readJsonl(logPath);
+  const logEvidence = readJsonl(logPath);
+  const events = logEvidence.events;
   const bets = events.filter((event) => (
     Number.isInteger(event.round)
     && event.round >= 0
@@ -134,6 +140,24 @@ if (!logPath) {
     targetContractAddress,
     targetNetwork.rpc,
   );
+  // V10 execution logs are self-describing, but the declaration itself is only
+  // useful when every later monetary action is cryptographically tied to it.
+  // Keep historical V9/testnet logs analyzable: an admission becomes mandatory
+  // for the V10 matrix profile (and whenever a log claims to contain one).
+  const admissionRequired = strict && (
+    requireCanaryAdmission ||
+    profile.key === "v10-matrix" ||
+    events.some((event) => event.mode === "admission")
+  );
+  const admissionEvaluation = evaluateCanaryAdmission({
+    events,
+    required: admissionRequired,
+    profileKey: profile.key,
+    targetNetwork: targetNetworkName,
+    targetChainId,
+    targetContractAddress,
+    requiredRoles: requiredCanaryRoles,
+  });
   const liveLogTemplateFindings = findTemplateLikeValues(events);
   const liveLogSecretFindings = findSecretLikeValues(events);
   const liveLogUnsafeErrorFindings = findUnsafeErrorText(events);
@@ -180,6 +204,7 @@ if (!logPath) {
   if (liveLogTemplateFindings.length > 0) strictFailures.push(`live canary log contains template-like values at ${liveLogTemplateFindings.slice(0, 5).join(", ")}`);
   if (liveLogSecretFindings.length > 0) strictFailures.push(`live canary log contains secret-like values at ${liveLogSecretFindings.slice(0, 5).join(", ")}`);
   if (liveLogUnsafeErrorFindings.length > 0) strictFailures.push(`live canary log contains unsafe error text at ${liveLogUnsafeErrorFindings.slice(0, 5).join(", ")}`);
+  strictFailures.push(...admissionEvaluation.failures);
   if (manifestSummary) {
     const manifestAutoMinerRounds = positiveIntegerValue(manifestSummary.autoMinerSession.rounds);
     const manifestAutoMinerUniqueEpochs = positiveIntegerValue(manifestSummary.autoMinerSession.uniqueEpochs);
@@ -210,6 +235,8 @@ if (!logPath) {
   console.log("# Live Canary Proof Summary");
   console.log("");
   console.log(`Log: ${basename(logPath)}`);
+  console.log(`Log SHA-256: ${logEvidence.sha256}`);
+  console.log(`Log bytes: ${logEvidence.bytes}`);
   console.log(`Timestamp: ${new Date().toISOString()}`);
   console.log(`Strict: ${strict ? "yes" : "no"}`);
   console.log(`Require epoch-bound bets: ${requireEpochBound ? "yes" : "no"}`);
@@ -235,6 +262,7 @@ if (!logPath) {
   console.log(`| failed resolve tx | ${failedResolve.length} |`);
   console.log(`| epoch waits | ${epochWaits.length} |`);
   console.log(`| preflight checks / failures | ${preflightEvents.length} / ${failedPreflight.length} |`);
+  console.log(`| canary admission | ${admissionEvaluation.status} |`);
   console.log(`| malformed nonce evidence | ${malformedNonceEvidence.length} |`);
   console.log(`| nonce gaps | ${nonceGaps.length} |`);
   console.log(`| malformed bet tile evidence | ${malformedBetTileEvidence.length} |`);
@@ -356,6 +384,8 @@ function readJsonl(path) {
   const events = [];
   const fd = openSync(path, "r");
   const buffer = Buffer.alloc(JSONL_READ_CHUNK_BYTES);
+  const digest = createHash("sha256");
+  let bytes = 0;
   let pending = "";
   let lineNumber = 0;
   const parseLine = (line) => {
@@ -376,6 +406,8 @@ function readJsonl(path) {
     while (true) {
       const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
       if (bytesRead === 0) break;
+      digest.update(buffer.subarray(0, bytesRead));
+      bytes += bytesRead;
       pending += buffer.toString("utf8", 0, bytesRead);
       const lines = pending.split(/\r?\n/);
       pending = lines.pop() ?? "";
@@ -385,7 +417,7 @@ function readJsonl(path) {
   } finally {
     closeSync(fd);
   }
-  return events;
+  return { events, bytes, sha256: digest.digest("hex") };
 }
 
 function regularFileStat(filePath) {
@@ -1255,6 +1287,231 @@ function findDuplicateNonceKeys(events) {
     seen.add(key);
   }
   return [...duplicateKeys].sort();
+}
+
+function evaluateCanaryAdmission({
+  events,
+  required,
+  profileKey,
+  targetNetwork,
+  targetChainId,
+  targetContractAddress,
+  requiredRoles,
+}) {
+  const admissionIndexes = [];
+  for (let index = 0; index < events.length; index += 1) {
+    if (events[index].mode === "admission") admissionIndexes.push(index);
+  }
+  if (!required && admissionIndexes.length === 0) return { status: "not required", failures: [] };
+
+  const failures = [];
+  if (admissionIndexes.length !== 1) {
+    failures.push(`canonical canary admission count ${admissionIndexes.length} != 1`);
+    return { status: "invalid", failures };
+  }
+
+  const admissionIndex = admissionIndexes[0];
+  const event = events[admissionIndex];
+  const admission = event.admission;
+  if (!isPlainObject(admission)) {
+    failures.push("canonical canary admission payload is missing");
+    return { status: "invalid", failures };
+  }
+
+  const expectedAdmissionKeys = [
+    "schema", "runId", "execution", "profile", "network", "chainId", "contractAddress", "contractDeployBlock",
+    "runtimeSha256", "manifestSha256", "canonicalProvenanceVerified", "previewSha256", "walletSetSha256",
+    "canaryPlanSha256", "selectedRoles", "roleCaps",
+  ].sort();
+  const actualAdmissionKeys = Object.keys(admission).sort();
+  if (JSON.stringify(actualAdmissionKeys) !== JSON.stringify(expectedAdmissionKeys)) {
+    failures.push("canonical canary admission has an unexpected schema");
+  }
+  if (admission.schema !== 1) failures.push("canonical canary admission schema must be 1");
+  if (typeof admission.runId !== "string" || !ADMISSION_RUN_ID_RE.test(admission.runId)) {
+    failures.push("canonical canary admission runId is invalid");
+  }
+  if (admission.execution !== "live" && admission.execution !== "dry-run") {
+    failures.push("canonical canary admission execution is invalid");
+  }
+  if (required && admission.execution !== "live") {
+    failures.push("canonical canary admission execution must be live for strict proof");
+  }
+  if (admission.profile !== "v10-matrix" && admission.profile !== "managed-soak") {
+    failures.push("canonical canary admission profile is invalid");
+  }
+  if (profileKey === "v10-matrix" && admission.profile !== "v10-matrix") {
+    failures.push("canonical canary admission profile must be v10-matrix");
+  }
+  if (normalizeNetwork(admission.network) !== normalizeNetwork(targetNetwork)) {
+    failures.push("canonical canary admission network does not match target");
+  }
+  if (!Number.isSafeInteger(admission.chainId) || admission.chainId <= 0 || String(admission.chainId) !== positiveIntegerString(targetChainId)) {
+    failures.push("canonical canary admission chainId does not match target");
+  }
+  const normalizedAdmissionContract = normalizeAddress(admission.contractAddress);
+  if (!normalizedAdmissionContract || admission.contractAddress !== normalizedAdmissionContract) {
+    failures.push("canonical canary admission contractAddress must be lower-case address");
+  }
+  if (normalizeAddress(targetContractAddress) && normalizedAdmissionContract !== normalizeAddress(targetContractAddress)) {
+    failures.push("canonical canary admission contractAddress does not match target");
+  }
+  if (!canonicalWei(admission.contractDeployBlock, { allowZero: true })) {
+    failures.push("canonical canary admission contractDeployBlock is invalid");
+  }
+  for (const key of ["runtimeSha256", "manifestSha256", "walletSetSha256", "canaryPlanSha256"]) {
+    if (typeof admission[key] !== "string" || !SHA256_HEX_RE.test(admission[key])) {
+      failures.push(`canonical canary admission ${key} is invalid`);
+    }
+  }
+  if (admission.canonicalProvenanceVerified !== true) {
+    failures.push("canonical canary admission canonicalProvenanceVerified must be true");
+  }
+  if (admission.execution === "live" && (typeof admission.previewSha256 !== "string" || !SHA256_HEX_RE.test(admission.previewSha256))) {
+    failures.push("canonical live admission previewSha256 is invalid");
+  }
+  if (admission.execution === "dry-run" && admission.previewSha256 !== null) {
+    failures.push("canonical dry-run admission previewSha256 must be null");
+  }
+
+  const selectedRoles = canonicalAdmissionRoles(admission.selectedRoles);
+  if (!selectedRoles) {
+    failures.push("canonical canary admission selectedRoles are invalid");
+  } else {
+    const missingRoles = requiredRoles.filter((role) => !selectedRoles.includes(role));
+    if (missingRoles.length > 0) failures.push(`canonical canary admission roles missing: ${missingRoles.join(",")}`);
+  }
+  const roleCaps = canonicalAdmissionRoleCaps(admission.roleCaps, selectedRoles);
+  if (!roleCaps) failures.push("canonical canary admission roleCaps are invalid");
+
+  const canonicalPayload = canonicalAdmissionPayload(admission);
+  const calculatedSha = createHash("sha256").update(canonicalPayload, "utf8").digest("hex");
+  if (typeof event.admissionSha256 !== "string" || !SHA256_HEX_RE.test(event.admissionSha256) || event.admissionSha256 !== calculatedSha) {
+    failures.push("canonical canary admission SHA-256 does not match payload");
+  }
+
+  const relevantEvents = events
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.mode === "preflight" || item.mode === "approve" || isBetEvent(item));
+  const capByRole = roleCaps ? new Map(roleCaps.map((cap) => [cap.role, cap])) : new Map();
+  const spentByRole = new Map();
+  for (const { item, index } of relevantEvents) {
+    const label = `round=${item.round ?? "n/a"} mode=${item.mode ?? "n/a"}`;
+    if (index <= admissionIndex || item.admissionSha256 !== calculatedSha) {
+      failures.push(`canary action is not bound to canonical admission (${label})`);
+      continue;
+    }
+    if (
+      normalizeNetwork(item.network) !== normalizeNetwork(admission.network)
+      || positiveIntegerString(item.chainId) !== String(admission.chainId)
+      || normalizeAddress(item.contractAddress) !== normalizedAdmissionContract
+    ) {
+      failures.push(`canary action target does not match canonical admission (${label})`);
+    }
+    const role = normalizeRole(item.role);
+    const isRuntimeIdentity = item.mode === "preflight" && role === "SYSTEM" && isPlainObject(item.runtimeIdentity);
+    if (!isRuntimeIdentity && (!role || !capByRole.has(role))) {
+      failures.push(`canary action role is not admitted (${label})`);
+    }
+    if (isRuntimeIdentity) validateRuntimeIdentityBinding(item.runtimeIdentity, admission, failures);
+    if (item.mode === "preflight" && role && role !== "SYSTEM" && capByRole.has(role)) {
+      const cap = capByRole.get(role);
+      const allowanceWei = canonicalWei(item.allowanceWei, { allowZero: true });
+      const allowanceCapWei = canonicalWei(item.allowanceCapWei, { allowZero: true });
+      if (allowanceWei == null || allowanceCapWei == null) {
+        failures.push(`canary preflight allowance evidence is invalid (${label})`);
+      } else {
+        if (allowanceCapWei !== cap.allowanceCapWei) failures.push(`canary preflight allowance cap does not match admission (${label})`);
+        if (BigInt(allowanceWei) > BigInt(cap.allowanceCapWei)) failures.push(`canary preflight allowance exceeds admission cap (${label})`);
+      }
+      if (item.allowanceWithinRunCap !== true && item.allowanceWithinRunCap !== false) {
+        failures.push(`canary preflight allowance boundary is missing (${label})`);
+      }
+    }
+    if (isBetEvent(item) && item.ok === true && item.txStatus === "success" && role && capByRole.has(role)) {
+      const spend = canonicalWei(item.totalAmountWei, { allowZero: false });
+      if (spend == null) {
+        failures.push(`successful canary bet spend is invalid (${label})`);
+      } else {
+        const next = (spentByRole.get(role) ?? 0n) + BigInt(spend);
+        spentByRole.set(role, next);
+        if (next > BigInt(capByRole.get(role).spendCapWei)) {
+          failures.push(`successful canary spend exceeds admission cap (${label})`);
+        }
+      }
+    }
+  }
+
+  return { status: failures.length === 0 ? "checked" : "invalid", failures: [...new Set(failures)].sort() };
+}
+
+function isBetEvent(event) {
+  return Number.isInteger(event.round) && event.round >= 0 && BET_MODES.has(event.mode);
+}
+
+function canonicalWei(value, { allowZero }) {
+  if (typeof value !== "string" || !CANONICAL_WEI_RE.test(value)) return null;
+  if (!allowZero && value === "0") return null;
+  return value;
+}
+
+function canonicalAdmissionRoles(value) {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const normalized = value.map((role) => normalizeRole(role));
+  if (normalized.some((role) => !role) || normalized.some((role, index) => role !== value[index])) return null;
+  if (new Set(normalized).size !== normalized.length) return null;
+  const sorted = [...normalized].sort();
+  return JSON.stringify(normalized) === JSON.stringify(sorted) ? normalized : null;
+}
+
+function canonicalAdmissionRoleCaps(value, selectedRoles) {
+  if (!selectedRoles || !Array.isArray(value) || value.length !== selectedRoles.length) return null;
+  const parsed = [];
+  for (const cap of value) {
+    if (!isPlainObject(cap) || Object.keys(cap).sort().join(",") !== "allowanceCapWei,role,spendCapWei") return null;
+    const role = normalizeRole(cap.role);
+    const spendCapWei = canonicalWei(cap.spendCapWei, { allowZero: true });
+    const allowanceCapWei = canonicalWei(cap.allowanceCapWei, { allowZero: true });
+    if (!role || cap.role !== role || spendCapWei == null || allowanceCapWei == null) return null;
+    parsed.push({ role, spendCapWei, allowanceCapWei });
+  }
+  if (JSON.stringify(parsed.map((cap) => cap.role)) !== JSON.stringify(selectedRoles)) return null;
+  return parsed;
+}
+
+function canonicalAdmissionPayload(admission) {
+  const contractAddress = typeof admission?.contractAddress === "string"
+    ? admission.contractAddress.toLowerCase()
+    : "";
+  return JSON.stringify({
+    schema: admission.schema,
+    runId: admission.runId,
+    execution: admission.execution,
+    profile: admission.profile,
+    network: admission.network,
+    chainId: admission.chainId,
+    contractAddress,
+    contractDeployBlock: admission.contractDeployBlock,
+    runtimeSha256: admission.runtimeSha256,
+    manifestSha256: admission.manifestSha256,
+    canonicalProvenanceVerified: admission.canonicalProvenanceVerified,
+    previewSha256: admission.previewSha256,
+    walletSetSha256: admission.walletSetSha256,
+    canaryPlanSha256: admission.canaryPlanSha256,
+    selectedRoles: Array.isArray(admission.selectedRoles) ? [...admission.selectedRoles].sort() : [],
+    roleCaps: Array.isArray(admission.roleCaps)
+      ? [...admission.roleCaps].map((cap) => ({ ...cap })).sort((left, right) => String(left.role).localeCompare(String(right.role)))
+      : [],
+  });
+}
+
+function validateRuntimeIdentityBinding(runtimeIdentity, admission, failures) {
+  if (
+    runtimeIdentity.normalizedRuntimeSha256 !== admission.runtimeSha256
+    || runtimeIdentity.manifestDigest !== admission.manifestSha256
+    || runtimeIdentity.canonicalProvenanceVerified !== true
+    || String(runtimeIdentity.deployBlock) !== admission.contractDeployBlock
+  ) failures.push("runtime identity preflight does not match canonical admission");
 }
 
 function findTargetEventMismatches(events, network, chainId, contractAddress, rpcLabel) {

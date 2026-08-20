@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
@@ -7,6 +8,8 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +17,8 @@ import path from "node:path";
 import test from "node:test";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { privateKeyToAccount } from "viem/accounts";
+import { loadLiveTestPublicWalletConfig } from "./live-test-wallet-config.mjs";
 import {
   resolveTrustedNpmCli,
   trustedNpmCommand,
@@ -27,6 +32,7 @@ const PREVIEW_CHECK_SCRIPT = path.join(SCRIPT_DIR, "check-v10-dry-run-preview.mj
 const DEPENDENCY_AUDIT_SCRIPT = path.join(SCRIPT_DIR, "check-production-dependency-audit.mjs");
 const CLEAR_PENDING_SCRIPT = path.join(SCRIPT_DIR, "clear-live-test-pending-nonce.ts");
 const TSX_CLI = createRequire(import.meta.url).resolve("tsx/cli");
+const LIVE_CANARY_SCRIPT = path.join(SCRIPT_DIR, "live-round-canary.ts");
 const SIGNING_ENV_NAME_RE = /(?:^|_)(?:PRIVATE_KEY|MNEMONIC|SEED(?:_PHRASE)?|SIGNING_KEY)(?:_|$)/i;
 const UNTRUSTED_NPM_NETWORK_ENV_KEYS = [
   "all_proxy",
@@ -45,6 +51,16 @@ const UNTRUSTED_NPM_NETWORK_ENV_KEYS = [
   "ssl_cert_dir",
   "ssl_cert_file",
 ];
+const DRY_RUN_LOG_TEXT = "{}\n";
+const DRY_RUN_LOG_NAME = "live-canary-20260813T000000Z.jsonl";
+const DRY_RUN_LOG_RELATIVE_PATH = path.join("data", "live-test-runs", DRY_RUN_LOG_NAME);
+const LIVE_WALLET_ROLES = ["MANUAL", "AUTOMINER_A", "AUTOMINER_B", "AUTOMINER_C", "RESOLVER"];
+const WALLET_SET_SHA256 = "a".repeat(64);
+const CANARY_PLAN_SHA256 = "b".repeat(64);
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 function inspectChildEnv(extraEnv) {
   const result = spawnSync(process.execPath, [PREVIEW_SCRIPT, "--inspect-read-only-child-env"], {
@@ -57,7 +73,13 @@ function inspectChildEnv(extraEnv) {
   return JSON.parse(lines.at(-1));
 }
 
-function previewStepOutputs({ planner = {}, pending = {}, matrix = {} } = {}) {
+function previewStepOutputs({
+  planner = {},
+  pending = {},
+  matrix = {},
+  logPath = DRY_RUN_LOG_RELATIVE_PATH,
+  analyzer = {},
+} = {}) {
   const plannerSummary = {
     mode: "read-only",
     network: "sepolia",
@@ -94,6 +116,8 @@ function previewStepOutputs({ planner = {}, pending = {}, matrix = {} } = {}) {
     signingMaterialLoaded: "false",
     walletClientCreated: "false",
     contractWriteSubmitted: "false",
+    walletSetSha256: WALLET_SET_SHA256,
+    canaryPlanSha256: CANARY_PLAN_SHA256,
     ...matrix,
   };
   const matrixLine = Object.entries(matrixSummary)
@@ -104,21 +128,41 @@ function previewStepOutputs({ planner = {}, pending = {}, matrix = {} } = {}) {
     { status: 0, stdout: `${JSON.stringify(pendingSummary)}\n`, stderr: "" },
     {
       status: 0,
-      stdout: `[live-canary] ${matrixLine}\n[live-canary] log=data/live-test-runs/live-canary-20260813T000000Z.jsonl\n`,
+      stdout: `[live-canary] ${matrixLine}\n[live-canary] log=${logPath}\n`,
       stderr: "",
     },
     {
       status: 1,
-      stdout: "blocked gates: G10, G11\nsuccessful bet tx: 0\nunique bet epochs: 0\nmissing V10 gas cases: all\n",
+      signal: null,
+      stdout: [
+        `Log: ${path.basename(logPath)}`,
+        `Log SHA-256: ${sha256(DRY_RUN_LOG_TEXT)}`,
+        `Log bytes: ${Buffer.byteLength(DRY_RUN_LOG_TEXT, "utf8")}`,
+        "blocked gates: G10, G11",
+        "successful bet tx: 0",
+        "unique bet epochs: 0",
+        "missing V10 gas cases: all",
+      ].join("\n"),
       stderr: "",
+      ...analyzer,
     },
   ];
 }
 
-function runMockedPreview(overrides) {
+function runMockedPreview(overrides = {}, { matrixLogPath, absoluteMatrixLog = false, analyzer } = {}) {
   const cwd = mkdtempSync(path.join(tmpdir(), "lore-preview-boundary-"));
   mkdirSync(path.join(cwd, "docs"));
-  const outputs = previewStepOutputs(overrides);
+  const logDir = path.join(cwd, "data", "live-test-runs");
+  mkdirSync(logDir, { recursive: true });
+  writeFileSync(path.join(logDir, DRY_RUN_LOG_NAME), DRY_RUN_LOG_TEXT, "utf8");
+  const outputLogPath = matrixLogPath ?? (absoluteMatrixLog
+    ? path.join(logDir, DRY_RUN_LOG_NAME)
+    : DRY_RUN_LOG_RELATIVE_PATH);
+  const outputs = previewStepOutputs({
+    ...overrides,
+    logPath: outputLogPath,
+    analyzer,
+  });
   const preloadSource = `
     import childProcess from "node:child_process";
     import { syncBuiltinESMExports } from "node:module";
@@ -152,14 +196,14 @@ function runMockedPreview(overrides) {
   }
 }
 
-function checkPreviewMarkdown(markdown) {
+function checkPreviewMarkdown(markdown, { logText = DRY_RUN_LOG_TEXT } = {}) {
   const cwd = mkdtempSync(path.join(tmpdir(), "lore-preview-check-"));
   const docsDir = path.join(cwd, "docs");
   const logDir = path.join(cwd, "data", "live-test-runs");
   mkdirSync(docsDir);
   mkdirSync(logDir, { recursive: true });
   writeFileSync(path.join(docsDir, "v10-canary-dry-run-preview.md"), markdown, "utf8");
-  writeFileSync(path.join(logDir, "live-canary-20260813T000000Z.jsonl"), "{}\n", "utf8");
+  writeFileSync(path.join(logDir, "live-canary-20260813T000000Z.jsonl"), logText, "utf8");
   try {
     const result = spawnSync(process.execPath, [PREVIEW_CHECK_SCRIPT], {
       cwd,
@@ -171,6 +215,97 @@ function checkPreviewMarkdown(markdown) {
   } finally {
     rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
+}
+
+function bindMarkdownLog(markdown, logText) {
+  const digest = sha256(logText);
+  const bytes = String(Buffer.byteLength(logText, "utf8"));
+  let result = replaceSectionBullet(markdown, "V10 Matrix Dry-Run", "logSha256", digest);
+  result = replaceSectionBullet(result, "V10 Matrix Dry-Run", "logBytes", bytes);
+  result = replaceSectionBullet(result, "Dry-Run Proof Analysis", "logSha256", digest);
+  return replaceSectionBullet(result, "Dry-Run Proof Analysis", "logBytes", bytes);
+}
+
+function makeBoundPreviewMarkdown(
+  logText,
+  { walletSetSha256 = WALLET_SET_SHA256, canaryPlanSha256 = CANARY_PLAN_SHA256 } = {},
+) {
+  const digest = sha256(logText);
+  const bytes = Buffer.byteLength(logText, "utf8");
+  return `# V10 Canary Dry-Run Preview
+
+Last updated: ${new Date().toISOString()}.
+
+Scope: Linea Sepolia V10 read-only and dry-run readiness only. This document is
+not an authorization to send transactions, start a soak, deploy, or change
+contract behavior.
+
+## Overall Status
+
+- status: pass
+- transactionSent: false
+- signingMaterialLoaded: false
+- operationalBoundaryVerified: true
+- walletClientCreated: false
+- contractWriteSubmitted: false
+- dryRunProofBlocksG10G11: true
+- walletSetSha256: ${walletSetSha256}
+- canaryPlanSha256: ${canaryPlanSha256}
+
+## Read-Only Planner
+
+- exit: 0
+- mode: read-only
+- network: sepolia
+- chainId: 59141
+- transactionSent: false
+- signingMaterialLoaded: false
+- walletClientCreated: false
+- contractWriteSubmitted: false
+- transactionLimit: 4
+- estimatedGas: 21000
+
+## Pending Nonce Dry-Run
+
+- exit: 0
+- mode: dry-run
+- wouldSend: false
+- transactionSent: false
+- signingMaterialLoaded: false
+- walletClientCreated: false
+- contractWriteSubmitted: false
+
+## V10 Matrix Dry-Run
+
+- exit: 0
+- network: sepolia
+- chainId: 59141
+- execution: dry-run
+- plannedBetTx: 4
+- walletSetSha256: ${walletSetSha256}
+- canaryPlanSha256: ${canaryPlanSha256}
+- transactionSent: false
+- signingMaterialLoaded: false
+- walletClientCreated: false
+- contractWriteSubmitted: false
+- log: data/live-test-runs/live-canary-20260813T000000Z.jsonl
+- logBytes: ${bytes}
+- logSha256: ${digest}
+
+## Dry-Run Proof Analysis
+
+- exit: 1
+- dryRunProofBlocksG10G11: true
+- successfulBetTx: 0
+- uniqueBetEpochs: 0
+- logSha256: ${digest}
+- logBytes: ${bytes}
+
+## Fresh Consent Boundary
+
+Do not execute any of the following without a fresh exact authorization after a
+fresh Preview rerun:
+`;
 }
 
 function replaceSectionBullet(markdown, title, label, value) {
@@ -203,6 +338,116 @@ function clearPendingEnv(extraEnv = {}) {
     LIVE_TEST_EXECUTE: "0",
     ...extraEnv,
   };
+}
+
+function inspectExecutionWalletBinding({ publicAddresses, signingFile, extraEnv = {} }) {
+  const cwd = mkdtempSync(path.join(tmpdir(), "lore-live-wallet-binding-"));
+  try {
+    writeFileSync(
+      path.join(cwd, ".env.live-test-addresses"),
+      publicAddresses === undefined
+        ? ""
+        : `${LIVE_WALLET_ROLES.map((role, index) => `LORE_LIVE_TEST_${role}_ADDRESS=${publicAddresses[index]}`).join("\n")}\n`,
+      "utf8",
+    );
+    writeFileSync(path.join(cwd, ".env.live-test-wallets"), signingFile, "utf8");
+    const fetchGuard = `data:text/javascript,${encodeURIComponent(
+      'globalThis.fetch=async()=>{throw new Error("NETWORK_CALL_FORBIDDEN")}',
+    )}`;
+    return spawnSync(
+      process.execPath,
+      [
+        `--import=${fetchGuard}`,
+        TSX_CLI,
+        LIVE_CANARY_SCRIPT,
+        "--execute-live",
+        "--inspect-execution-wallet-binding",
+      ],
+      {
+        cwd,
+        encoding: "utf8",
+        env: clearPendingEnv({
+          LINEA_NETWORK: "sepolia",
+          NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
+          LIVE_CANARY_RPC_LABEL: "fixture-public-sepolia",
+          LIVE_TEST_EXECUTE: "1",
+          LIVE_TEST_ROLES: "MANUAL",
+          ...extraEnv,
+        }),
+        timeout: 10_000,
+      },
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+}
+
+function runLiveCanaryInspection(cwd, args, extraEnv = {}) {
+  const fetchGuard = `data:text/javascript,${encodeURIComponent(
+    'globalThis.fetch=async()=>{throw new Error("NETWORK_CALL_FORBIDDEN")}',
+  )}`;
+  return spawnSync(process.execPath, [`--import=${fetchGuard}`, TSX_CLI, LIVE_CANARY_SCRIPT, ...args], {
+    cwd,
+    encoding: "utf8",
+    env: clearPendingEnv({
+      LINEA_NETWORK: "sepolia",
+      NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
+      NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS: "1",
+      LIVE_CANARY_RPC_LABEL: "fixture-public-sepolia",
+      LIVE_TEST_ROLES: "MANUAL",
+      ...extraEnv,
+    }),
+    timeout: 30_000,
+  });
+}
+
+function inspectFreshPreviewBinding({ executionExtraEnv = {}, mutateAfterBinding } = {}) {
+  const cwd = mkdtempSync(path.join(tmpdir(), "lore-fresh-preview-binding-"));
+  try {
+    const docsDir = path.join(cwd, "docs");
+    const logDir = path.join(cwd, "data", "live-test-runs");
+    mkdirSync(docsDir);
+    mkdirSync(logDir, { recursive: true });
+
+    const signerKeys = LIVE_WALLET_ROLES.map((_, index) => `0x${String(index + 1).padStart(64, "0")}`);
+    const signerAddresses = signerKeys.map((key) => privateKeyToAccount(key).address);
+    const publicFilePath = path.join(cwd, ".env.live-test-addresses");
+    const publicFileText = `${LIVE_WALLET_ROLES.map(
+      (role, index) => `LORE_LIVE_TEST_${role}_ADDRESS=${signerAddresses[index]}`,
+    ).join("\n")}\n`;
+    writeFileSync(publicFilePath, publicFileText, "utf8");
+
+    const publicConfig = loadLiveTestPublicWalletConfig({
+      cwd,
+      environment: clearPendingEnv(),
+    });
+    const planResult = runLiveCanaryInspection(cwd, ["--v10-matrix-only", "--inspect-canary-plan"]);
+    assert.equal(planResult.status, 0, planResult.stderr || planResult.stdout);
+    const planSummary = JSON.parse(planResult.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1));
+
+    writeFileSync(path.join(logDir, DRY_RUN_LOG_NAME), DRY_RUN_LOG_TEXT, "utf8");
+    const previewPath = path.join(docsDir, "v10-canary-dry-run-preview.md");
+    const markdown = makeBoundPreviewMarkdown(DRY_RUN_LOG_TEXT, {
+      walletSetSha256: publicConfig.walletSetSha256,
+      canaryPlanSha256: planSummary.canaryPlanSha256,
+    });
+    writeFileSync(previewPath, markdown, "utf8");
+    const previewSha256 = sha256(markdown);
+
+    mutateAfterBinding?.({ cwd, previewPath, publicFilePath, publicFileText, signerAddresses });
+    const result = runLiveCanaryInspection(
+      cwd,
+      ["--v10-matrix-only", "--execute", "--execute-live", "--inspect-fresh-preview-binding"],
+      {
+        LIVE_TEST_EXECUTE: "1",
+        LIVE_TEST_PREVIEW_SHA256: previewSha256,
+        ...executionExtraEnv,
+      },
+    );
+    return { result, previewSha256, walletSetSha256: publicConfig.walletSetSha256, canaryPlanSha256: planSummary.canaryPlanSha256 };
+  } finally {
+    rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
 }
 
 function inspectClearPendingAddressFile(contents, extraEnv = {}) {
@@ -611,9 +856,6 @@ test("read-only planner, matrix, and playtest paths do not preload combined dote
   assert.doesNotMatch(plannerSource, /dotenv\/config/);
   assert.doesNotMatch(liveSource, /dotenv\/config/);
   assert.doesNotMatch(playtestSource, /dotenv\/config/);
-  assert.match(liveSource, /processEnv: isolatedEnv/);
-  assert.match(liveSource, /may contain only public live-test role addresses/);
-  assert.match(liveSource, /const wallets = DRY_RUN \? loadDryRunWallets\(\) : loadWallets\(\)/);
   assert.match(
     liveSource,
     /operationalBoundary signingMaterialLoaded=\$\{signingMaterialLoaded\}[\s\S]*transactionSent=false walletClientCreated=false contractWriteSubmitted=false/,
@@ -624,6 +866,110 @@ test("read-only planner, matrix, and playtest paths do not preload combined dote
   );
 });
 
+test("execution canary binds each signer to the strict public role file before any network work", () => {
+  const signerKeys = LIVE_WALLET_ROLES.map((_, index) => `0x${String(index + 1).padStart(64, "0")}`);
+  const signerAddresses = signerKeys.map((key) => privateKeyToAccount(key).address);
+  const differentKey = `0x${"6".padStart(64, "0")}`;
+  const differentAddress = privateKeyToAccount(differentKey).address;
+  const signingFile = `${LIVE_WALLET_ROLES.flatMap((role, index) => [
+    `LORE_LIVE_TEST_${role}_ADDRESS=${signerAddresses[index]}`,
+    `LORE_LIVE_TEST_${role}_PRIVATE_KEY=${signerKeys[index]}`,
+  ]).join("\n")}\n`;
+
+  const control = inspectExecutionWalletBinding({ publicAddresses: signerAddresses, signingFile });
+  assert.equal(control.status, 0, control.stderr || control.stdout);
+  const controlOutput = JSON.parse(control.stdout);
+  assert.match(controlOutput.walletSetSha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual({ ...controlOutput, walletSetSha256: "<digest>" }, {
+    status: "pass",
+    mode: "execution-wallet-binding-inspection",
+    roles: ["MANUAL"],
+    publicAddressFileBinding: true,
+    previewArtifactVerified: false,
+    walletSetSha256: "<digest>",
+    signingMaterialLoaded: true,
+    signatureRequested: false,
+    walletClientCreated: false,
+    networkRequests: 0,
+    contractWrites: 0,
+  });
+
+  const mismatch = inspectExecutionWalletBinding({
+    publicAddresses: [differentAddress, ...signerAddresses.slice(1)],
+    signingFile,
+  });
+  assert.notEqual(mismatch.status, 0);
+  assert.match(mismatch.stderr, /MANUAL: signing-address-mismatch/);
+  assert.doesNotMatch(`${mismatch.stdout}\n${mismatch.stderr}`, /NETWORK_CALL_FORBIDDEN|0x[0-9a-fA-F]{40}|0x[0-9a-fA-F]{64}/);
+
+  const inheritedPair = inspectExecutionWalletBinding({
+    publicAddresses: signerAddresses,
+    signingFile,
+    extraEnv: {
+      LORE_LIVE_TEST_MANUAL_ADDRESS: differentAddress,
+      LORE_LIVE_TEST_MANUAL_PRIVATE_KEY: differentKey,
+    },
+  });
+  assert.notEqual(inheritedPair.status, 0);
+  assert.match(inheritedPair.stderr, /MANUAL: inherited-address-conflict/);
+  assert.doesNotMatch(`${inheritedPair.stdout}\n${inheritedPair.stderr}`, /NETWORK_CALL_FORBIDDEN|0x[0-9a-fA-F]{40}|0x[0-9a-fA-F]{64}/);
+
+  const walletFileOnly = inspectExecutionWalletBinding({ publicAddresses: undefined, signingFile });
+  assert.notEqual(walletFileOnly.status, 0);
+  assert.match(walletFileOnly.stderr, /SYSTEM: address-file-empty|SYSTEM: address-keys-invalid/);
+  assert.doesNotMatch(`${walletFileOnly.stdout}\n${walletFileOnly.stderr}`, /NETWORK_CALL_FORBIDDEN|0x[0-9a-fA-F]{40}|0x[0-9a-fA-F]{64}/);
+});
+
+test("live V10 matrix execution requires the exact fresh Preview, wallet set, and canary plan before network work", () => {
+  const control = inspectFreshPreviewBinding();
+  assert.equal(control.result.status, 0, control.result.stderr || control.result.stdout);
+  const summary = JSON.parse(control.result.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1));
+  assert.deepEqual(summary, {
+    status: "pass",
+    mode: "fresh-preview-binding-inspection",
+    previewSha256: control.previewSha256,
+    walletSetSha256: control.walletSetSha256,
+    canaryPlanSha256: control.canaryPlanSha256,
+    signingMaterialLoaded: false,
+    signatureRequested: false,
+    walletClientCreated: false,
+    networkRequests: 0,
+    contractWrites: 0,
+  });
+
+  const changedPlan = inspectFreshPreviewBinding({
+    executionExtraEnv: { LIVE_TEST_ROLES: "MANUAL,AUTOMINER_A" },
+  });
+  assert.notEqual(changedPlan.result.status, 0, "a widened role set must invalidate the Preview plan");
+  assert.match(changedPlan.result.stderr, /does not match this execution wallet set and canary plan/);
+
+  const changedPreview = inspectFreshPreviewBinding({
+    mutateAfterBinding: ({ previewPath }) => {
+      const markdown = readFileSync(previewPath, "utf8");
+      writeFileSync(previewPath, `${markdown}\n`, "utf8");
+    },
+  });
+  assert.notEqual(changedPreview.result.status, 0, "a changed Preview artifact must invalidate its expected SHA");
+  assert.match(changedPreview.result.stderr, /does not match this execution wallet set and canary plan/);
+
+  const changedWalletSet = inspectFreshPreviewBinding({
+    mutateAfterBinding: ({ publicFilePath, publicFileText }) => {
+      const replacement = privateKeyToAccount(`0x${"9".padStart(64, "0")}`).address;
+      writeFileSync(
+        publicFilePath,
+        publicFileText.replace(/^LORE_LIVE_TEST_MANUAL_ADDRESS=.*$/m, `LORE_LIVE_TEST_MANUAL_ADDRESS=${replacement}`),
+        "utf8",
+      );
+    },
+  });
+  assert.notEqual(changedWalletSet.result.status, 0, "a changed public wallet set must invalidate the Preview");
+  assert.match(changedWalletSet.result.stderr, /does not match this execution wallet set and canary plan/);
+
+  for (const candidate of [changedPlan, changedPreview, changedWalletSet]) {
+    assert.doesNotMatch(`${candidate.result.stdout}\n${candidate.result.stderr}`, /NETWORK_CALL_FORBIDDEN|0x[0-9a-fA-F]{40}|0x[0-9a-fA-F]{64}/);
+  }
+});
+
 test("Preview generator behavior fails closed on contradictory or unreported child boundaries", () => {
   const control = runMockedPreview();
   assert.equal(control.result.status, 0, control.result.stderr || control.result.stdout);
@@ -632,7 +978,22 @@ test("Preview generator behavior fails closed on contradictory or unreported chi
   assert.equal(control.summary.transactionSent, false);
   assert.equal(control.summary.walletClientCreated, false);
   assert.equal(control.summary.contractWriteSubmitted, false);
+  assert.equal(control.summary.walletSetSha256, WALLET_SET_SHA256);
+  assert.equal(control.summary.canaryPlanSha256, CANARY_PLAN_SHA256);
+  assert.match(control.summary.previewSha256, /^[a-f0-9]{64}$/);
   assert.match(control.markdown, /^- operationalBoundaryVerified: true$/m);
+
+  const missingWalletBinding = runMockedPreview({ matrix: { walletSetSha256: null } });
+  assert.notEqual(missingWalletBinding.result.status, 0);
+  assert.equal(missingWalletBinding.summary.status, "fail");
+  assert.equal(missingWalletBinding.summary.operationalBoundaryVerified, true);
+  assert.equal(missingWalletBinding.summary.walletSetSha256, null);
+
+  const missingPlanBinding = runMockedPreview({ matrix: { canaryPlanSha256: null } });
+  assert.notEqual(missingPlanBinding.result.status, 0);
+  assert.equal(missingPlanBinding.summary.status, "fail");
+  assert.equal(missingPlanBinding.summary.operationalBoundaryVerified, true);
+  assert.equal(missingPlanBinding.summary.canaryPlanSha256, null);
 
   const mutants = [
     ["planner sent a transaction", { planner: { transactionSent: true } }, "transactionSent", true],
@@ -657,6 +1018,28 @@ test("Preview generator behavior fails closed on contradictory or unreported chi
   }
 });
 
+test("Preview generator normalizes the upstream absolute live-canary log path into its safe binding", () => {
+  const generated = runMockedPreview({}, { absoluteMatrixLog: true });
+  assert.equal(generated.result.status, 0, generated.result.stderr || generated.result.stdout);
+  assert.equal(generated.summary.status, "pass");
+  assert.equal(generated.summary.canaryLog, DRY_RUN_LOG_RELATIVE_PATH);
+  assert.match(generated.markdown, new RegExp(`^- log: ${DRY_RUN_LOG_RELATIVE_PATH.replace(/\\/g, "\\\\")}$`, "m"));
+});
+
+test("Preview generator rejects timed-out and signalled dry-run analyzers", () => {
+  const interruptedAnalyzers = [
+    ["timeout", { status: null, error: { code: "ETIMEDOUT" } }],
+    ["signal", { status: null, signal: "SIGTERM" }],
+  ];
+  for (const [label, analyzer] of interruptedAnalyzers) {
+    const generated = runMockedPreview({}, { analyzer });
+    assert.notEqual(generated.result.status, 0, `${label} analyzer must not satisfy dry-run proof evidence`);
+    assert.equal(generated.summary.status, "fail", label);
+    assert.equal(generated.summary.dryRunProofBlocksG10G11, false, label);
+    assert.match(generated.markdown, /^- dryRunProofBlocksG10G11: false$/m, label);
+  }
+});
+
 test("Preview checker behavior requires the generated operational boundary evidence", () => {
   const generated = runMockedPreview();
   assert.equal(generated.result.status, 0, generated.result.stderr || generated.result.stdout);
@@ -665,6 +1048,9 @@ test("Preview checker behavior requires the generated operational boundary evide
   assert.equal(control.result.status, 0, control.result.stderr || control.result.stdout);
   assert.equal(control.summary.status, "pass");
   assert.equal(control.summary.authorizationFreshnessRequired, false);
+  assert.equal(control.summary.walletSetSha256, WALLET_SET_SHA256);
+  assert.equal(control.summary.canaryPlanSha256, CANARY_PLAN_SHA256);
+  assert.equal(control.summary.previewSha256, sha256(generated.markdown));
 
   const mutations = [
     generated.markdown.replace("- operationalBoundaryVerified: true", "- operationalBoundaryVerified: false"),
@@ -674,11 +1060,111 @@ test("Preview checker behavior requires the generated operational boundary evide
     replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "contractWriteSubmitted", "true"),
     replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "transactionSent", null),
     replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "transactionSent", "false\n- transactionSent: true"),
+    replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "walletSetSha256", "c".repeat(64)),
+    replaceSectionBullet(generated.markdown, "V10 Matrix Dry-Run", "canaryPlanSha256", "d".repeat(64)),
+    replaceSectionBullet(generated.markdown, "Overall Status", "walletSetSha256", null),
+    replaceSectionBullet(generated.markdown, "Overall Status", "canaryPlanSha256", "not-a-digest"),
   ];
   for (const markdown of mutations) {
     const mutation = checkPreviewMarkdown(markdown);
     assert.notEqual(mutation.result.status, 0);
     assert.equal(mutation.summary.status, "fail");
+  }
+});
+
+test("Preview checker binds the current regular log and independently verifies the strict dry-run verdict", () => {
+  const generatedMarkdown = makeBoundPreviewMarkdown(DRY_RUN_LOG_TEXT);
+  const control = checkPreviewMarkdown(generatedMarkdown);
+  assert.equal(control.result.status, 0, control.result.stderr || control.result.stdout);
+
+  const stale = generatedMarkdown.replace(
+    /^Last updated:\s*.+\.$/m,
+    "Last updated: 2020-01-01T00:00:00.000Z.",
+  );
+  const staleResult = checkPreviewMarkdown(stale);
+  assert.notEqual(staleResult.result.status, 0, "stale previews must not be reusable");
+
+  const substituted = checkPreviewMarkdown(generatedMarkdown, {
+    logText: "{\"mode\":\"preflight\",\"ok\":true}\n",
+  });
+  assert.notEqual(substituted.result.status, 0, "a different JSONL must not satisfy the saved digest binding");
+
+  const digestTamper = replaceSectionBullet(
+    generatedMarkdown,
+    "V10 Matrix Dry-Run",
+    "logSha256",
+    "0".repeat(64),
+  );
+  const digestTamperResult = checkPreviewMarkdown(digestTamper);
+  assert.notEqual(digestTamperResult.result.status, 0, "digest tampering must fail closed");
+
+  const successfulBetLog = JSON.stringify({
+    round: 0,
+    mode: "single",
+    ok: true,
+    txStatus: "success",
+    epoch: 1,
+  }) + "\n";
+  const forgedBullets = bindMarkdownLog(generatedMarkdown, successfulBetLog);
+  const forgedResult = checkPreviewMarkdown(forgedBullets, { logText: successfulBetLog });
+  assert.notEqual(
+    forgedResult.result.status,
+    0,
+    "matching markdown digest and zero-valued analyzer bullets cannot replace the independent strict analyzer",
+  );
+});
+
+test("Preview checker rejects a leaf symlink or reparse docs parent", () => {
+  const markdown = makeBoundPreviewMarkdown(DRY_RUN_LOG_TEXT);
+
+  const leafCwd = mkdtempSync(path.join(tmpdir(), "lore-preview-leaf-link-"));
+  let leafLinkCreated = false;
+  try {
+    const docsDir = path.join(leafCwd, "docs");
+    mkdirSync(docsDir);
+    const targetPath = path.join(docsDir, "preview-target.md");
+    const previewPath = path.join(docsDir, "v10-canary-dry-run-preview.md");
+    writeFileSync(targetPath, markdown, "utf8");
+    try {
+      symlinkSync(targetPath, previewPath, "file");
+      leafLinkCreated = true;
+    } catch (error) {
+      if (!new Set(["EPERM", "EACCES", "UNKNOWN"]).has(error?.code)) throw error;
+    }
+    if (leafLinkCreated) {
+      const result = spawnSync(process.execPath, [PREVIEW_CHECK_SCRIPT], { cwd: leafCwd, encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stdout}\n${result.stderr}`, /preview-markdown-must-be-an-ordinary-file/);
+    }
+  } finally {
+    if (leafLinkCreated) unlinkSync(path.join(leafCwd, "docs", "v10-canary-dry-run-preview.md"));
+    rmSync(leafCwd, { recursive: true, force: true });
+  }
+
+  const parentCwd = mkdtempSync(path.join(tmpdir(), "lore-preview-parent-link-"));
+  const externalDocs = mkdtempSync(path.join(tmpdir(), "lore-preview-external-docs-"));
+  const linkedDocs = path.join(parentCwd, "docs");
+  let parentLinkCreated = false;
+  try {
+    writeFileSync(path.join(externalDocs, "v10-canary-dry-run-preview.md"), markdown, "utf8");
+    try {
+      symlinkSync(externalDocs, linkedDocs, "junction");
+      parentLinkCreated = true;
+    } catch (error) {
+      if (!new Set(["EPERM", "EACCES", "UNKNOWN"]).has(error?.code)) throw error;
+    }
+    if (parentLinkCreated) {
+      const result = spawnSync(process.execPath, [PREVIEW_CHECK_SCRIPT], { cwd: parentCwd, encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}\n${result.stderr}`,
+        /docs-directory-must-(?:be-an-ordinary-directory|not-resolve-through-a-reparse-point)/,
+      );
+    }
+  } finally {
+    if (parentLinkCreated) unlinkSync(linkedDocs);
+    rmSync(parentCwd, { recursive: true, force: true });
+    rmSync(externalDocs, { recursive: true, force: true });
   }
 });
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -141,6 +142,7 @@ export function runReleaseOperationsTests() {
   assert.match(remainingLaunch.stdout, /Next marker tokens: contractenv, chain-id, deploy-block, token, finality, v10-protected-bets/);
 
   const liveRoundCanarySource = readFileSync("scripts/live-round-canary.ts", "utf8");
+  const liveTestWalletConfigSource = readFileSync("scripts/live-test-wallet-config.mjs", "utf8");
   const keeperBotSource = readFileSync("bot.ts", "utf8");
   const botSupervisorSource = readFileSync("scripts/run-bot-forever.mjs", "utf8");
     const chatSessionSource = readFileSync("app/api/_lib/chatSession.ts", "utf8");
@@ -442,9 +444,14 @@ export function runReleaseOperationsTests() {
     "live canary must fail closed outside Linea Sepolia before transaction-capable setup",
   );
   assert.match(
+    liveTestWalletConfigSource,
+    /function readIsolatedEnvFile\(cwd, filename, label\)[\s\S]*lstatSync\(filePath\)[\s\S]*stat\.isSymbolicLink\(\) \|\| !stat\.isFile\(\)[\s\S]*openSync\(filePath, "r"\)[\s\S]*fstatSync\(fd\)[\s\S]*export function loadLiveTestExecutionWalletConfig[\s\S]*readIsolatedEnvFile\(cwd, "\.env\.live-test-wallets", "wallet"\)/,
+    "execution wallet config must reject non-ordinary or replaced secret files before parsing signing material",
+  );
+  assert.match(
     liveRoundCanarySource,
-    /function assertOptionalEnvFile\(path: string, description: string\)[\s\S]*existsSync\(path\) && !statSync\(path\)\.isFile\(\)[\s\S]*function loadSigningEnvFileIfPresent\(\)[\s\S]*assertOptionalEnvFile\(LIVE_WALLET_ENV_PATH[\s\S]*loadDotenv\(\{ path: LIVE_WALLET_ENV_PATH, override: false, quiet: true \}\)[\s\S]*function loadWallets\(\)[\s\S]*loadSigningEnvFileIfPresent\(\)/,
-    "live canary must reject a non-file secret wallet env path before deferred dotenv loading",
+    /loadLiveTestExecutionWalletConfig[\s\S]*executionWalletConfig = loadExecutionWalletAdmission\([\s\S]*wallets = loadWallets\(executionWalletConfig\)/,
+    "live canary must use the isolated execution-wallet admission before creating signer wallets",
   );
   assert.doesNotMatch(
     liveRoundCanarySource,
@@ -674,7 +681,7 @@ export function runReleaseOperationsTests() {
   );
   assert.equal(
     packageScripts["proof:testnet:canary:strict:summary"],
-    "node scripts/analyze-live-canary-proof.mjs --profile=testnet --strict --summary-only",
+    "node scripts/analyze-live-canary-proof.mjs --profile=testnet --strict --require-canary-admission --summary-only",
     "testnet canary proof must expose a compact strict summary command for launch checks",
   );
   assert.equal(
@@ -1102,7 +1109,7 @@ export function runReleaseOperationsTests() {
   );
   assert.ok(
     liveRoundCanarySource.indexOf("if (V10_MATRIX_ONLY && !CONTRACT_REQUIRES_EPOCH_BOUND_BETS)") <
-      liveRoundCanarySource.indexOf("const wallets = DRY_RUN ? loadDryRunWallets() : loadWallets()"),
+      liveRoundCanarySource.indexOf("executionWalletConfig = loadExecutionWalletAdmission"),
     "V10 matrix mode must reject stale runtime configuration before loading wallet secrets",
   );
   assert.match(
@@ -1157,13 +1164,37 @@ export function runReleaseOperationsTests() {
       noncePending: 0,
       durationMs: 1,
       gasUsed: "1",
+      totalAmountWei: "1",
       tileCount: 1,
       tiles: [1],
       timestamp: "2026-07-22T00:00:00.000Z",
     };
     const runV10CanaryProof = (name, events, extraArgs = []) => {
       const logPath = join(v10CanaryProofDir, `${name}.jsonl`);
-      writeFileSync(logPath, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+      const admission = {
+        schema: 1,
+        runId: "11111111111111111111111111111111",
+        execution: "live",
+        profile: "v10-matrix",
+        network: "sepolia",
+        chainId: 59141,
+        contractAddress: `0x${"1".repeat(40)}`,
+        contractDeployBlock: "0",
+        runtimeSha256: "a".repeat(64),
+        manifestSha256: "b".repeat(64),
+        canonicalProvenanceVerified: true,
+        previewSha256: "c".repeat(64),
+        walletSetSha256: "d".repeat(64),
+        canaryPlanSha256: "e".repeat(64),
+        selectedRoles: ["AUTOMINER_A"],
+        roleCaps: [{ role: "AUTOMINER_A", spendCapWei: "100", allowanceCapWei: "100" }],
+      };
+      const admissionSha256 = createHash("sha256").update(JSON.stringify(admission), "utf8").digest("hex");
+      const boundEvents = events.map((event) => ({ ...event, admissionSha256 }));
+      writeFileSync(logPath, `${[
+        { mode: "admission", admission, admissionSha256 },
+        ...boundEvents,
+      ].map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
       return spawnSync(process.execPath, [
         "scripts/analyze-live-canary-proof.mjs",
         logPath,
@@ -2163,12 +2194,12 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     liveRoundCanarySource,
-    /const DRY_RUN = !LIVE_EXECUTION_CONFIRMED[\s\S]*PUBLIC_ADDRESS_ENV_PATH = "\.env\.live-test-addresses"[\s\S]*loadPublicAddressEnvFileIfPresent\(\);[\s\S]*DRY_RUN && hasSigningMaterialInEnvironment\(\)[\s\S]*function loadWallets\(\)[\s\S]*loadSigningEnvFileIfPresent\(\)[\s\S]*function loadDryRunWallets\(\)[\s\S]*LORE_LIVE_TEST_\$\{role\}_ADDRESS[\s\S]*const wallets = DRY_RUN \? loadDryRunWallets\(\) : loadWallets\(\)/,
+    /const DRY_RUN = !LIVE_EXECUTION_CONFIRMED[\s\S]*DRY_RUN && hasSigningMaterialInEnvironment\(\)[\s\S]*async function main\(\)[\s\S]*const publicWalletConfig = loadLiveTestPublicWalletConfig\([\s\S]*if \(DRY_RUN\) \{[\s\S]*wallets = loadDryRunWallets\(publicWalletConfig\);[\s\S]*\} else \{[\s\S]*executionWalletConfig = loadExecutionWalletAdmission\([\s\S]*wallets = loadWallets\(executionWalletConfig\);/,
     "live canary dry-run must read only public role addresses and defer wallet-key loading to explicit execution",
   );
   assert.match(
     liveRoundCanarySource,
-    /await runPreflight\(logPath, publicClient, wallets, plannedSpendByRole\);\s*if \(DRY_RUN\) return;[\s\S]*LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY[\s\S]*privateKeyToAccount/,
+    /await runPreflight\(logPath, publicClient, wallets, plannedSpendByRole\);\s*if \(DRY_RUN\) return;[\s\S]*executionWalletConfig\.accountsByRole\.get\("RESOLVER"\)/,
     "live canary dry-run must not parse optional resolver signing material before returning",
   );
   const exactAllowance = resolveCanaryAllowancePlan({ currentAllowance: 2n, plannedSpend: 7n });
@@ -2276,8 +2307,8 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     v10DryRunPreviewSource,
-    /function extractCanaryLog\(output\)[\s\S]*safeCanaryLogPath\(raw\)[\s\S]*function safeCanaryLogPath\(value\)[\s\S]*path\.isAbsolute\(normalized\)[\s\S]*data[\s\S]*live-test-runs[\s\S]*\^live-canary-\[0-9TZ-\]\+\\\.jsonl\$/,
-    "V10 dry-run Preview must accept only relative live-test-run canary logs before running the analyzer",
+    /function extractCanaryLog\(output\)[\s\S]*normalizeCanaryLogPath\(raw\)[\s\S]*function safeCanaryLogPath\(value\)[\s\S]*path\.isAbsolute\(normalized\)[\s\S]*data[\s\S]*live-test-runs[\s\S]*\^live-canary-\[0-9TZ-\]\+\\\.jsonl\$[\s\S]*function normalizeCanaryLogPath\(value\)[\s\S]*if \(!path\.isAbsolute\(text\)\) return safeCanaryLogPath\(text\);[\s\S]*assertOrdinaryPath\(absolutePath, "dry-run canary log", false\)/,
+    "V10 dry-run Preview must restrict logs to ordinary current live-test-run artifacts before running the analyzer",
   );
   assert.doesNotMatch(
     v10DryRunPreviewSource,
@@ -2301,8 +2332,8 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     v10DryRunPreviewCheckSource,
-    /function safeCanaryLogPath\(value\)[\s\S]*path\.isAbsolute\(normalized\)[\s\S]*data[\s\S]*live-test-runs[\s\S]*\^live-canary-\[0-9TZ-\]\+\\\.jsonl\$[\s\S]*readBoundedText\(logPath, MAX_DRY_RUN_LOG_BYTES/,
-    "V10 dry-run Preview validator must only validate bounded safe relative dry-run logs",
+    /function readBoundedCanaryLogBinding\(relativePath\)[\s\S]*safeCanaryLogPath\(relativePath\)[\s\S]*assertCanonicalDirectory\(runDirectory[\s\S]*MAX_DRY_RUN_LOG_BYTES[\s\S]*function safeCanaryLogPath\(value\)[\s\S]*path\.isAbsolute\(normalized\)[\s\S]*data[\s\S]*live-test-runs[\s\S]*\^live-canary-\[0-9TZ-\]\+\\\.jsonl\$/,
+    "V10 dry-run Preview validator must only validate bounded ordinary relative dry-run logs",
   );
   assert.doesNotMatch(
     v10DryRunPreviewCheckSource,
