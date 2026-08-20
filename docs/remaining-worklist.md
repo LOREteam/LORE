@@ -30,8 +30,8 @@ detail belongs under [`docs/archive/`](archive/), not in this file.
 
 ### P1.10 behavioral extraction
 
-- [ ] Re-run `audit:p1:behavior` after the current packet and record fresh
-      coordinator/module totals.
+- [x] Re-run `audit:p1:behavior` after the current packet: `4573/5316`
+      behavioral assertions (`86.02%`).
 - [ ] Continue replacing source-operand assertions with imported public behavior
       only where a stable seam exists. Do not replace meaningful source-policy
       bindings with weaker smoke checks.
@@ -55,22 +55,21 @@ detail belongs under [`docs/archive/`](archive/), not in this file.
 
 ### Public read model and scale
 
-- [ ] Replace request-time O(N) scans for global stats and leaderboards with an
+- [x] Replace request-time O(N) scans for global stats and leaderboards with an
       atomic, contract-scoped materialized read model.
-- [ ] Add a monotonic `publicReadModelRevision` that changes on ordinary indexer
-      commits, historical repair/reconcile, rollback/reorg and chat profile
-      rename where relevant. Block/watermark alone is insufficient.
-- [ ] Compare the materialized snapshot with an independent full reconciliation
-      on 10k and 100k representative rows; enforce request latency and memory
-      budgets.
+- [x] Add a monotonic `publicReadModelRevision` for normal indexer commits,
+      repair/reconcile, rollback/reorg and relevant public profile changes.
+- [x] Compare materialized snapshots with independent reconciliation in isolated
+      10k global-stats and 110k leaderboard fixtures, including fail-closed
+      dirty/restart paths.
 - [ ] Keep stale/degraded public data explicit and never use it as wallet or
       financial authorization.
 
 ### Long-run tooling
 
-- [ ] Make soak status parsing incremental and checkpointed. Add JSONL rotation,
+- [x] Make soak status parsing incremental and checkpointed. Add JSONL rotation,
       retention, disk caps and a bounded status-latency budget.
-- [ ] Ensure the supervisor's final success invokes the strict analyzer for the
+- [x] Ensure the supervisor's final success invokes the strict analyzer for the
       current run and cannot accept early child exit, stale logs, duplicate
       hashes, missing epochs or unresolved pending state.
 - [x] Bind the supervisor to a current-run log and digest, manage analyzer

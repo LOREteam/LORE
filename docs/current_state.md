@@ -10,11 +10,12 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Current `HEAD`: `87e14374606ac855333ad2b93bd91db6d8b45acc`.
-- The product, storage, testnet-proof, UX, and P1 regression packets were
-  committed locally. Only documentation, the local campaign runner, and ignored
-  generated artifacts remain unstaged. This is not yet an immutable release
-  candidate and has not been pushed or deployed.
+- Current `HEAD`: `4c771971a806d7bfc84b6e1376a45473bda8a4d8`.
+- The product, storage, testnet-proof, UX, P1 regression, local campaign and
+  documentation packets are committed locally. The only tracked worktree
+  difference is the current read-only canary Preview; `.tmp-*` and campaign
+  reports are intentionally untracked generated artifacts. Nothing was pushed,
+  deployed, signed or submitted to a chain.
 - The historical eight-partition map remains in
   [`release-candidate-partition.md`](release-candidate-partition.md).
 - Local commits are authorized. Push, deployment, signing, wallet operations,
@@ -30,8 +31,9 @@ The protected base file remains exact:
 - mtime: `2026-08-13T12:18:50.8015294Z`;
 - exclusive open check: pass at the latest inspection.
 
-The protected invariant is nevertheless **not restored** because test-created
-auxiliary files remain:
+The protected base invariant remains exact, while the stricter three-file
+release invariant is **not restored** because test-created auxiliary files
+remain:
 
 - `data/lore-v10.sqlite-wal`: `659232` bytes;
 - `data/lore-v10.sqlite-shm`: `32768` bytes;
@@ -84,9 +86,9 @@ protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
   validated owned root; strict runtime rejects leaked hermetic-build variables.
 - Business suite: `test:logic` and its summary now delegate to one isolated
   runner with an OS-temp DB and protected main/WAL/SHM before/after snapshots.
-- P1.10: chat-session cookie parsing and expiry normalization have additional
-  executable coverage. The refreshed AST audit reports `4562/5311` behavioral
-  assertions (`85.90%`); the overall extraction remains partial.
+- P1.10: additional wallet, reward, history, wins and leaderboard presentation
+  seams are now executable. The refreshed AST audit reports `4573/5316`
+  behavioral assertions (`86.02%`); the overall extraction remains partial.
 - Testnet plan: production-like topology, read model, long campaigns, mobile QA,
   profiling and final evidence criteria are recorded in
   [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
@@ -99,11 +101,14 @@ protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
 | Focused wallet/admin/load/canary/supervisor tests | Relevant behavioral packets passed | Pass locally |
 | TypeScript | `tsc --noEmit` passed after the canary log-path fix | Pass locally |
 | Hermetic build wrapper | Full focused hermetic test passed outside the managed sandbox; Worker-thread DB isolation is executable | Pass locally |
-| Business-suite isolation runner | First twelve-hour campaign iteration passed with the isolated runner; protected paths were rechecked unchanged | Pass locally |
+| Business-suite isolation runner | Two completed local-campaign iterations passed with the isolated runner; protected paths were rechecked unchanged | Pass locally |
 | Full business logic | Logic reached `childExitCode=0` and `assertionFailures=0`, but that pre-isolation run created the protected WAL row | Not acceptable as DB-safe final evidence |
 | Diff hygiene | `git diff --check` passes; one CRLF-to-LF warning remains informational | Pass |
 | Security diff scan | Sealed scan `c611f992-3c4d-4ac6-8c9a-14033c6f7156`, snapshot digest `935fed40...3298e`, reviewed 22/22 files, 0 reportable findings; two same-user reparse candidates were validated not applicable | Pass for the frozen pre-log-fix patch only |
-| P1.17 | Collector/verifier self-tests pass; old schema-1 evidence is not reusable | Open |
+| P1.17 | Canonical and isolated profiling builds were separately sealed for this SHA; the 60-second headed preflight remained partial because native `document.hidden` was never observed | Open: physical native-hidden evidence required |
+| Final clean checkout | Detached fresh `npm ci`, typecheck, production dependency gate, business runner, hermetic build, P1/EVM, V9/V10 invariants and both materialization tests passed at `4c771971` | Pass locally for that SHA |
+| Prelaunch / current deployed V10 | Local compilation/provenance checks pass; external Sepolia bytecode is metadata-only mismatched against the manifest | External provenance blocker |
+| Supported Standard security scan | The local supported-scan entitlement is `not_granted`; no substitute scan was represented as Standard evidence | External entitlement blocker |
 
 The narrow canary log-path fix and documentation changes were made after the
 sealed diff snapshot, so a final immutable-SHA supported scan remains required.
