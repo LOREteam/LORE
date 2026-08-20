@@ -1,6 +1,6 @@
 # V10 Canary Dry-Run Preview
 
-Last updated: 2026-08-20T07:08:07.766Z.
+Last updated: 2026-08-20T14:51:25.542Z.
 
 Scope: Linea Sepolia V10 read-only and dry-run readiness only. This document is
 not an authorization to send transactions, start a soak, deploy, or change
@@ -23,7 +23,7 @@ npm.cmd run preview:canary:v10:dry-run
 - contractWriteSubmitted: false
 - dryRunProofBlocksG10G11: true
 - walletSetSha256: 7e6bdd41459e41c6d9bb4db7647bfc0a9c22b633c985f0dd826c474a8a592af5
-- canaryPlanSha256: 621695d20f8cc7a7d4a1b85e58edb49d5636d7b57bdd5c890f3ef29fad48adfe
+- canaryPlanSha256: 3d6343c6350992c0aa7b7b7961b28e199c5d85eabec2ce2cb158c7862d08fb02
 - canaryLogBound: true
 
 ## Read-Only Planner
@@ -42,9 +42,9 @@ npm.cmd run plan:canary:v10:postdeploy:summary
 - signingMaterialLoaded: false
 - walletClientCreated: false
 - contractWriteSubmitted: false
-- transactionLimit: 7
-- estimatedGas: 566008
-- plannedTransfersLinea: 0.793125
+- transactionLimit: 0
+- estimatedGas: 0
+- plannedTransfersLinea: 0
 
 Redacted excerpt:
 
@@ -65,14 +65,14 @@ Redacted excerpt:
 "outputAddressFree": true
 },
 "snapshot": {
-"blockNumber": "31671439",
-"timestamp": "1787209607"
+"blockNumber": "31678575",
+"timestamp": "1787237458"
 },
 "runtimeIdentity": {
-"deployBlock": "31035418",
+"deployBlock": "31678224",
 "manifestDigest": "<redacted>",
 "normalizedRuntimeSha256": "<redacted>",
-"observedBlock": "31671439",
+"observedBlock": "31678575",
 ```
 
 ## Pending Nonce Dry-Run
@@ -119,14 +119,14 @@ npm.cmd run live:canary:v10:matrix
 - plannedStake: 0.84
 - walletPreflightReady: 3/3
 - walletSetSha256: 7e6bdd41459e41c6d9bb4db7647bfc0a9c22b633c985f0dd826c474a8a592af5
-- canaryPlanSha256: 621695d20f8cc7a7d4a1b85e58edb49d5636d7b57bdd5c890f3ef29fad48adfe
+- canaryPlanSha256: 3d6343c6350992c0aa7b7b7961b28e199c5d85eabec2ce2cb158c7862d08fb02
 - transactionSent: false
 - signingMaterialLoaded: false
 - walletClientCreated: false
 - contractWriteSubmitted: false
-- log: data\live-test-runs\live-canary-2026-08-20T07-07-21-854Z.jsonl
-- logBytes: 5269
-- logSha256: ab8f72af34b3d6401891533f79a0720ba32a6ce802a66a13cec7e0f588ae08a4
+- log: data\live-test-runs\live-canary-2026-08-20T14-51-21-273Z.jsonl
+- logBytes: 5250
+- logSha256: 1036b847591c96f7b5a73da7f23608388768996144a277a65b54c301e9c9cd38
 
 Redacted excerpt:
 
@@ -145,8 +145,8 @@ Redacted excerpt:
 [live-canary] emptyResolveBootstrap=disabled
 [live-canary] resolveTxLimit=5
 [live-canary] feeMeasurement repeatSameBet=enabled forceAllowanceApprove=disabled
-[live-canary] log=C:\Users\bogda\linea-miner-main\data\live-test-runs\live-canary-2026-08-20T07-07-21-854Z.jsonl
-[live-canary] runtimeIdentity deployBlock=31035418 runtimeDigest=247fd0402f97…
+[live-canary] log=C:\Users\bogda\linea-miner-main\data\live-test-runs\live-canary-2026-08-20T14-51-21-273Z.jsonl
+[live-canary] runtimeIdentity deployBlock=31678224 runtimeDigest=247fd0402f97…
 [live-canary] rounds=6 plannedBetTx=12 plannedStake=0.84 LINEA randomize=no configuredTotal=0.01..0.03 tiles=1..25
 [live-canary] walletPreflight ready=3/3 approvalsRequired=3 roles=MANUAL,AUTOMINER_A,AUTOMINER_B
 ```
@@ -156,24 +156,24 @@ Redacted excerpt:
 Command:
 
 ```powershell
-node scripts/analyze-live-canary-proof.mjs data\live-test-runs\live-canary-2026-08-20T07-07-21-854Z.jsonl --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix
+node scripts/analyze-live-canary-proof.mjs data\live-test-runs\live-canary-2026-08-20T14-51-21-273Z.jsonl --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix
 ```
 
 - exit: 1
 - dryRunProofBlocksG10G11: true
 - successfulBetTx: 0
 - uniqueBetEpochs: 0
-- logSha256: ab8f72af34b3d6401891533f79a0720ba32a6ce802a66a13cec7e0f588ae08a4
-- logBytes: 5269
+- logSha256: 1036b847591c96f7b5a73da7f23608388768996144a277a65b54c301e9c9cd38
+- logBytes: 5250
 
 Redacted excerpt:
 
 ```text
 # Live Canary Proof Summary
-Log: live-canary-2026-08-20T07-07-21-854Z.jsonl
+Log: live-canary-2026-08-20T14-51-21-273Z.jsonl
 Log SHA-256: <redacted>
-Log bytes: 5269
-Timestamp: 2026-08-20T07:08:07.757Z
+Log bytes: 5250
+Timestamp: 2026-08-20T14:51:25.527Z
 Strict: yes
 Require epoch-bound bets: yes
 Require V10 gas matrix: yes
