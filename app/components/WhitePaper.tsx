@@ -222,6 +222,7 @@ export const WhitePaper = React.memo(function WhitePaper() {
           <P>This means:</P>
           <ul className="space-y-2 mb-6 ml-1">
             <Li emoji="🔐">Login with email, social, or existing wallet</Li>
+            <Li emoji="🧭">The same Privy account can restore normal access; export and protect the private key before funding for independent recovery</Li>
             <Li emoji="👻">No external wallet popups during auto-mining – the embedded wallet signs in the background</Li>
             <Li emoji="⛽">Gas is paid from the embedded wallet&apos;s ETH balance – top up ETH to pay for transaction fees</Li>
             <Li emoji="🔑">You can export your private key at any time</Li>

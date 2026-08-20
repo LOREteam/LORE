@@ -55,6 +55,20 @@ export function runPublicMetadataTests() {
     /\/privacy[\s\S]*\/terms/,
     "robots.txt must allow public privacy and terms routes in production",
   );
+  for (const [route, title] of [
+    ["faq", "FAQ | LORE"],
+    ["whitepaper", "White Paper | LORE"],
+    ["leaderboards", "Leaderboards | LORE"],
+  ]) {
+    const routeSource = readFileSync(`app/${route}/page.tsx`, "utf8");
+    assert.match(routeSource, new RegExp(`title: [\"']${title.replace("|", "\\\\|")}[\"']`));
+    assert.match(routeSource, new RegExp(`canonical: [\"']/${route}[\"']`));
+  }
+  assert.match(
+    rootLayoutSource,
+    /const canIndex = siteUrl === "https:\/\/playlore\.xyz" && process\.env\.VERCEL_ENV !== "preview"[\s\S]*robots: canIndex \? undefined : \{ index: false, follow: false \}/,
+    "non-canonical and preview origins must be noindex",
+  );
   const jackpotWinPageSource = readFileSync("app/jackpot-win/page.tsx", "utf8");
   const jackpotShareSource = readFileSync("app/lib/jackpotShareVerification.ts", "utf8");
   assert.match(

@@ -21,8 +21,8 @@ const faqData: FAQItem[] = [
     a: [
       "1. Click 'Login / Connect' in the top-right. You can use email, Google, or an existing wallet.",
       "2. Open Wallet Settings and create the embedded Privy wallet if it is not ready yet.",
-      "3. Send ETH to the Privy wallet for gas and LINEA tokens for betting.",
-      "4. Return to the Hub, select tiles on the grid, and place your first bet.",
+      "3. Export and safely back up its private key before funding it.",
+      "4. Send ETH to the Privy wallet for gas and LINEA tokens for betting, then return to the Hub, select tiles, and place your first bet.",
     ],
   },
   {
@@ -209,7 +209,7 @@ const faqData: FAQItem[] = [
   {
     category: "Wallet & Security",
     q: "What if I lose access to my account?",
-    a: "If you logged in via email or social, you can recover by logging in again the same way. Your embedded wallet is tied to your Privy account, not your browser. If you exported your private key, you can always import it into MetaMask.",
+    a: "Your embedded wallet is tied to your Privy account rather than this browser, so signing in again with the same email or social account can restore access while that account remains available. It is not an independent recovery guarantee: export and securely store the private key before funding the wallet. The exported key can be imported into a compatible wallet such as MetaMask; anyone with it controls the funds.",
   },
   {
     category: "Wallet & Security",

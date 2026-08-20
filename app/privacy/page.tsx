@@ -4,6 +4,12 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "Privacy Policy - LORE",
   description: "Privacy Policy for LORE - Linea Mining Game. How we handle wallet, email, and blockchain data.",
+  alternates: { canonical: "/privacy" },
+  openGraph: {
+    title: "Privacy Policy | LORE",
+    description: "How LORE handles wallet, email, and blockchain data.",
+    url: "/privacy",
+  },
 };
 
 export default function PrivacyPage() {

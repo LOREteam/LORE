@@ -35,6 +35,7 @@ const loreHud = localFont({
 });
 
 const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://playlore.xyz').trim().replace(/\/+$/, '');
+const canIndex = siteUrl === "https://playlore.xyz" && process.env.VERCEL_ENV !== "preview";
 
 export const metadata: Metadata = {
   title: 'LORE - Linea Mining Game',
@@ -43,6 +44,7 @@ export const metadata: Metadata = {
   alternates: {
     canonical: '/',
   },
+  robots: canIndex ? undefined : { index: false, follow: false },
   icons: {
     icon: { url: '/icon-64.png', type: 'image/png', sizes: '64x64' },
     apple: '/icon.png',

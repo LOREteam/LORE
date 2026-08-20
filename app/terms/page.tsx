@@ -4,6 +4,12 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "Terms of Play - LORE",
   description: "Terms of Play for LORE - Linea Mining Game. Player responsibilities, risk, fees, and on-chain rules.",
+  alternates: { canonical: "/terms" },
+  openGraph: {
+    title: "Terms of Play | LORE",
+    description: "LORE player responsibilities, risk, fees, and on-chain rules.",
+    url: "/terms",
+  },
 };
 
 export default function TermsPage() {
