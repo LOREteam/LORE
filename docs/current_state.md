@@ -10,7 +10,7 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest verified local commit before this state refresh: `12c4909c33b93e1ef710b241e3ee50aff4138467`.
+- Latest verified local commit before this state refresh: `3543d811f2695962343727e0d8df5b7d4e7123f1`.
 - The product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. The only tracked worktree
   difference is the current read-only canary Preview; `.tmp-*` and campaign
@@ -106,7 +106,8 @@ protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
 | Full business logic | Logic reached `childExitCode=0` and `assertionFailures=0`, but that pre-isolation run created the protected WAL row | Not acceptable as DB-safe final evidence |
 | Diff hygiene | `git diff --check` passes; one CRLF-to-LF warning remains informational | Pass |
 | Security diff scan | Sealed scan `c611f992-3c4d-4ac6-8c9a-14033c6f7156`, snapshot digest `935fed40...3298e`, reviewed 22/22 files, 0 reportable findings; two same-user reparse candidates were validated not applicable | Pass for the frozen pre-log-fix patch only |
-| P1.17 | Canonical and isolated profiling builds were separately sealed for this SHA; the 60-second headed preflight remained partial because native `document.hidden` was never observed | Open: physical native-hidden evidence required |
+| P1.17 | Same-SHA canonical and isolated profiling build markers sealed locally at `0288ba5e`; later test-only commits require a final repeat on the eventual immutable SHA | Open: physical native-hidden two-hour evidence and final-SHA verification required |
+| Local Playwright smoke | Desktop wallet selector, chat, navigation, accessibility, reduced motion and 390/430px shell checks passed; localhost mobile Privy login remained unavailable after one bounded reload | Partial local evidence only; public HTTPS and physical mobile proof remain external |
 | Privy embedded modal | The pinned 3.27.2 provider's `Submit` email name and 24x24 close target are documented as upstream-owned; no DOM/CSS/node_modules workaround is allowed | External HTTPS/mobile QA open |
 | Final clean checkout | Detached fresh `npm ci`, typecheck, production dependency gate, isolated business runner, P1/EVM, V9/V10 invariants and both materialization tests passed at `12c4909c`; hermetic self-test required an unsandboxed rerun because esbuild's parent-directory resolution is denied by the managed sandbox | Pass locally for that SHA; a sealed final build/evidence cycle remains open |
 | Sepolia V10 cutover | Canonical V10 deployed at `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` in block `31678224`; strict constructor/receipt/runtime and chain proof checks pass with epoch-bound bets enabled | Pass for local Sepolia runtime; hosted frontend/indexer rollout remains external |
@@ -134,16 +135,12 @@ sealed diff snapshot, so a final immutable-SHA supported scan remains required.
 
 - P1.10 remains partial. Continue replacing source-operand assertions only
   where a real public behavior seam exists.
-- P1.17 has an architectural gap: strict evidence needs canonical sealed build
-  provenance and React component timings, but the profiling build uses a
-  separate output directory. Add same-SHA dual-build provenance rather than
-  weakening the verifier, then collect the two-hour native-hidden evidence.
-- Public global stats and leaderboards still perform O(N) raw-table work as data
-  grows. Implement an atomic scoped materialized read model with a monotonic
-  revision that changes on normal indexing, repair/reconcile, rollback/reorg and
-  profile changes.
-- Soak status and JSONL processing still need bounded incremental checkpoints,
-  rotation/retention and status-latency budgets for 24-48 hour runs.
+- P1.17 dual-build provenance is implemented; retain the strict verifier and
+  collect the two-hour physical native-hidden evidence on the final SHA.
+- Global stats and leaderboards use atomic scoped materialized read models;
+  retain their dirty/restart and scale regressions in routine local gates.
+- Soak status and JSONL processing are incremental and bounded; the real
+  24-48 hour topology campaign remains external evidence.
 - Canonical Sepolia V10 is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a`
   (deployment tx `0x9ecd67de4de27efa42b174b2de1e3542dde74ac6d1450b1ac425b850303d58b1`).
   Its strict local post-deploy proof passes; the old `0x98ee...` 50-epoch proof

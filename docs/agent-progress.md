@@ -9,7 +9,7 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - Branch `codex/repo-cleanup`; `HEAD`
-  `12c4909c33b93e1ef710b241e3ee50aff4138467` before this progress refresh.
+  `3543d811f2695962343727e0d8df5b7d4e7123f1` before this progress refresh.
 - Product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. A read-only Preview and
   generated `.tmp-*`/campaign outputs remain outside commits. On 2026-08-20,
@@ -84,8 +84,9 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - P1.10 audit is refreshed to `4588/5306` behavioral (`86.47%`); continue
   bounded extraction.
 - Same-SHA canonical and profiling provenance is implemented and the two build
-  identities have been sealed. A 60-second headed preflight did not observe
-  native hidden state, so it cannot justify the required two-hour evidence.
+  identities sealed locally at `0288ba5e`. A 60-second headed preflight did not
+  observe native hidden state, and later test-only commits require the final
+  immutable-SHA build pair to be recreated before it can support two-hour evidence.
 - Global stats and leaderboards now use atomic materialized scoped read models
   with a monotonic revision; their isolated 10k/110k-row regressions pass.
 - Soak status/log processing is incremental, rotated and bounded; real
@@ -93,6 +94,10 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - Current canonical Sepolia V10 is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a`
   (block `31678224`, strict post-deploy proof passes); do not reuse the
   historical `0x98ee...` proof.
+- Local Playwright smoke passed desktop wallet selector, chat, navigation,
+  accessibility, reduced motion and 390/430px shell checks. Localhost mobile
+  Privy login was unavailable after one bounded reload, so it is not public
+  HTTPS or physical-mobile evidence.
 - The detached clean checkout at `12c4909c` completed fresh install, dependency,
   typecheck, P1/EVM, V9/V10, materialization and business-runner checks; the
   hermetic self-test passes only outside the managed sandbox because esbuild needs

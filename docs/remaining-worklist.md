@@ -40,9 +40,9 @@ detail belongs under [`docs/archive/`](archive/), not in this file.
 
 ### P1.17 sealed performance evidence
 
-- [ ] Extend provenance to bind two outputs to the same clean SHA: canonical
-      sealed `.next` plus an explicitly isolated profiling build. Do not weaken
-      the verifier or relabel an unsealed profiling directory as RC evidence.
+- [x] Extend provenance to bind two outputs to the same clean SHA: canonical
+      sealed `.next` plus an explicitly isolated profiling build. The local
+      `0288ba5e` pair verifies the mechanism; recreate it on the final SHA.
 - [ ] Run a 60-90 second headed smoke first. Require real native
       `document.hidden=true`, component duration fields, at least 60 seconds of
       read-only Auto-Miner UI simulation and zero wallet/API/chain writes.
