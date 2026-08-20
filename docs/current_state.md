@@ -10,7 +10,7 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Current `HEAD`: `4c771971a806d7bfc84b6e1376a45473bda8a4d8`.
+- Latest verified local commit before this state refresh: `12c4909c33b93e1ef710b241e3ee50aff4138467`.
 - The product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. The only tracked worktree
   difference is the current read-only canary Preview; `.tmp-*` and campaign
@@ -88,8 +88,8 @@ protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
 - Business suite: `test:logic` and its summary now delegate to one isolated
   runner with an OS-temp DB and protected main/WAL/SHM before/after snapshots.
 - P1.10: additional wallet, reward, history, wins and leaderboard presentation
-  seams are now executable. The refreshed AST audit reports `4588/5307`
-  behavioral assertions (`86.45%`); the overall extraction remains partial.
+  seams are now executable. The refreshed AST audit reports `4588/5306`
+  behavioral assertions (`86.47%`); the overall extraction remains partial.
 - Testnet plan: production-like topology, read model, long campaigns, mobile QA,
   profiling and final evidence criteria are recorded in
   [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
@@ -108,7 +108,7 @@ protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
 | Security diff scan | Sealed scan `c611f992-3c4d-4ac6-8c9a-14033c6f7156`, snapshot digest `935fed40...3298e`, reviewed 22/22 files, 0 reportable findings; two same-user reparse candidates were validated not applicable | Pass for the frozen pre-log-fix patch only |
 | P1.17 | Canonical and isolated profiling builds were separately sealed for this SHA; the 60-second headed preflight remained partial because native `document.hidden` was never observed | Open: physical native-hidden evidence required |
 | Privy embedded modal | The pinned 3.27.2 provider's `Submit` email name and 24x24 close target are documented as upstream-owned; no DOM/CSS/node_modules workaround is allowed | External HTTPS/mobile QA open |
-| Final clean checkout | Detached fresh `npm ci`, typecheck, production dependency gate, business runner, hermetic build, P1/EVM, V9/V10 invariants and both materialization tests passed at `4c771971` | Pass locally for that SHA |
+| Final clean checkout | Detached fresh `npm ci`, typecheck, production dependency gate, isolated business runner, P1/EVM, V9/V10 invariants and both materialization tests passed at `12c4909c`; hermetic self-test required an unsandboxed rerun because esbuild's parent-directory resolution is denied by the managed sandbox | Pass locally for that SHA; a sealed final build/evidence cycle remains open |
 | Sepolia V10 cutover | Canonical V10 deployed at `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` in block `31678224`; strict constructor/receipt/runtime and chain proof checks pass with epoch-bound bets enabled | Pass for local Sepolia runtime; hosted frontend/indexer rollout remains external |
 | Supported Standard security scan | The local supported-scan entitlement is `not_granted`; no substitute scan was represented as Standard evidence | External entitlement blocker |
 

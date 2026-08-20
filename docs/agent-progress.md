@@ -9,7 +9,7 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - Branch `codex/repo-cleanup`; `HEAD`
-  `4c771971a806d7bfc84b6e1376a45473bda8a4d8`.
+  `12c4909c33b93e1ef710b241e3ee50aff4138467` before this progress refresh.
 - Product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. A read-only Preview and
   generated `.tmp-*`/campaign outputs remain outside commits. On 2026-08-20,
@@ -81,7 +81,7 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 - Preserve and prove the protected DB invariant through the immutable-SHA
   cycle; WAL/SHM removal still needs separate destructive approval.
-- P1.10 audit is refreshed to `4588/5307` behavioral (`86.45%`); continue
+- P1.10 audit is refreshed to `4588/5306` behavioral (`86.47%`); continue
   bounded extraction.
 - Same-SHA canonical and profiling provenance is implemented and the two build
   identities have been sealed. A 60-second headed preflight did not observe
@@ -93,9 +93,11 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - Current canonical Sepolia V10 is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a`
   (block `31678224`, strict post-deploy proof passes); do not reuse the
   historical `0x98ee...` proof.
-- The detached clean checkout at `4c771971` completed fresh install, dependency,
-  build, P1/EVM, V9/V10, materialization and business-runner checks. A new docs
-  commit requires the same immutable-SHA cycle again. Real Redis/Valkey Lua,
+- The detached clean checkout at `12c4909c` completed fresh install, dependency,
+  typecheck, P1/EVM, V9/V10, materialization and business-runner checks; the
+  hermetic self-test passes only outside the managed sandbox because esbuild needs
+  parent-directory resolution. A sealed final build/evidence cycle remains open.
+  Real Redis/Valkey Lua,
   supported Standard scan and hosted CI remain external.
 
 ## External boundary
