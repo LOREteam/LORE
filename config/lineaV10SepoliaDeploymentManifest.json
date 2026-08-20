@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "network": "sepolia",
+  "chainId": 59141,
+  "contractAddress": "0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a",
+  "deployBlock": "31678224",
+  "deploymentTransactionHash": "0x9ecd67de4de27efa42b174b2de1e3542dde74ac6d1450b1ac425b850303d58b1",
+  "sourceArtifactGitSha": "a809026c16a9bedf312ea48a1d14149f380de628",
+  "compilationManifestSha256": "fca0e38eaff6e51e3f3650cf933808ce5e4fbaf7af9f7f6840873a7354bfb325",
+  "sourceSha256": "41d07b684cfeb1fd6cd97ec8a93b57096bcf391482b1b15dee2e468c61a6e3df",
+  "abiSha256": "96bddbce113f0c1ef7903434a1262492302a8baa0c756ca7a896240084f7aed8",
+  "runtimeBytecodeSha256": "aac4663525ab2b738bfd62fc419aeb09a2daeb69448ec67305851ef73557e75e",
+  "normalizedExecutableRuntimeSha256": "247fd0402f97c4d5524005f163e87faacf2044fdbe0bc2eee9a4c7d4323f28fa",
+  "epochBoundBetSelector": "0xd2815478",
+  "epochBoundBetsRequired": true,
+  "historicalContractAddresses": ["0x98eef041b012668529fb66ac3133900fdffc7282"]
+}

@@ -73,6 +73,8 @@
     "proof:contract-deployed:v10:fresh": "npm run proof:contract-compile:v10 && tsx scripts/verify-v10-deployed.ts --fresh",
     "proof:contract-deployed:v10:offline": "npm run proof:contract-compile:v10 && tsx scripts/verify-v10-deployed.ts --offline",
     "proof:contract-deployed:v10:offline:summary": "node scripts/run-v10-offline-identity-summary.mjs",
+    "proof:contract-deployed:v10:sepolia-manifest": "node scripts/verify-v10-sepolia-deployment-manifest.mjs",
+    "proof:contract-deployed:v10:sepolia-manifest:summary": "node scripts/verify-v10-sepolia-deployment-manifest.mjs --summary-only",
     "prepare:contract:v10:standard-json": "npm run proof:contract-compile:v10 && tsx scripts/verify-v10-deployed.ts --prepare-standard-json",
     "prepare:contract:v10:remix-workspace": "npm run proof:contract-compile:v10 && tsx scripts/verify-v10-deployed.ts --prepare-remix-workspace",
     "prepare:contract:v10:deployment": "npm run proof:contract-compile:v10 && tsx scripts/verify-v10-deployed.ts --prepare-deployment",

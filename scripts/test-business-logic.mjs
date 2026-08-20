@@ -93,6 +93,7 @@ import { runCiSecurityBehaviorTests } from "./test-business-ci-security.mjs";
 import { runNoticeStackBehaviorTests } from "./test-business-notice-stack.mjs";
 import { runV10DeployedInputPolicyTests } from "./test-business-v10-deployed-input-policy.mjs";
 import * as v10RuntimeIdentityTestModule from "./test-v10-runtime-identity.ts";
+import { runV10SepoliaDeploymentManifestTests } from "./test-v10-sepolia-deployment-manifest.mjs";
 import { runContractV10SummaryBehaviorTests } from "./test-business-contract-v10-summary.mjs";
 import { runReleaseDocumentationTests } from "./test-business-release-documentation.mjs";
 import { runBusinessCoordinatorIsolatedFixtures } from "./test-business-coordinator-isolated-fixtures.mjs";
@@ -155,6 +156,7 @@ async function main() {
   await runCompilerAdvisoryBehaviorTests();
   runContractV10SummaryBehaviorTests();
   runV10DeployedInputPolicyTests();
+  runV10SepoliaDeploymentManifestTests();
   await runV10RuntimeIdentityTests();
   runSummaryTimeoutTests();
   runIndexerStorageBehaviorTests();
