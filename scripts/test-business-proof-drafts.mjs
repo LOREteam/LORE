@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   hasMobileQaDeviceProofText,
   hasMobileQaViewportProofText,
@@ -11,7 +12,7 @@ import {
   parseCanonicalQaViewportDimension,
 } from "./qa-proof-policy.mjs";
 import { parsePositiveInteger as parseProofPositiveInteger } from "./collect-proof-common.mjs";
-import { hasKnownLaunchSqliteRows, readCanonicalSqliteCount } from "./sqlite-scope-audit-lib.mjs";
+import { auditSqliteScopes, hasKnownLaunchSqliteRows, readCanonicalSqliteCount } from "./sqlite-scope-audit-lib.mjs";
 
 const PROOF_TEMP_PREFIX = "lore-proof-";
 const REPOSITORY_ENV_PREFIX = /^(?:ADMIN_|ALLOW_|BOOTSTRAP_|CANARY_|CHAT_|CONTRACT_|EIP7702_|HEALTH_|INDEXER_|KEEPER_|LINEA_|LIVE_|LORE_|NEXT_PUBLIC_|PRELAUNCH_|PRIVY_|PROD_|PROOF_|RATE_LIMIT_|RESEND_|RUNTIME_|SMOKE_|SOURCE_VERSION$|UPSTASH_|V10_|VERCEL_|WEB_REPLICA_)/;
@@ -67,6 +68,35 @@ export function runProofDraftBehaviorTests() {
     null,
   ]) {
     assert.equal(hasKnownLaunchSqliteRows(invalidCounts == null ? invalidCounts : { counts: invalidCounts }), false);
+  }
+  const scopeAuditRoot = mkdtempSync(join(tmpdir(), "lore-scope-audit-global-stats-"));
+  try {
+    const scopeAuditDbPath = join(scopeAuditRoot, "scope-audit.sqlite");
+    const scopeAuditDb = new DatabaseSync(scopeAuditDbPath);
+    try {
+      for (const table of [
+        "scoped_global_stats_aggregate",
+        "scoped_global_stats_dirty",
+        "scoped_leaderboard_read_model",
+        "scoped_leaderboard_dirty",
+      ]) {
+        scopeAuditDb.exec(`CREATE TABLE ${table} (scope TEXT NOT NULL)`);
+        scopeAuditDb.prepare(`INSERT INTO ${table}(scope) VALUES (?)`).run("sepolia:0xffffffffffffffffffffffffffffffffffffffff");
+      }
+    } finally {
+      scopeAuditDb.close();
+    }
+    const scopeAudit = auditSqliteScopes(scopeAuditDbPath, "sepolia:0x0000000000000000000000000000000000000001");
+    assert.deepEqual(scopeAudit.foreignRowsByTable, {
+      scoped_global_stats_aggregate: 1,
+      scoped_global_stats_dirty: 1,
+      scoped_leaderboard_read_model: 1,
+      scoped_leaderboard_dirty: 1,
+    });
+    assert.equal(scopeAudit.foreignRows, 4, "materialized read-model tables must contribute to scope-audit foreign-row evidence");
+  } finally {
+    rmSync(scopeAuditRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+    assert.equal(existsSync(scopeAuditRoot), false, "materialized read-model scope-audit fixtures must be removed");
   }
   assert.equal(parseCanonicalQaViewportDimension("320"), 320);
   assert.equal(parseCanonicalQaViewportDimension(" 1100 "), 1100);

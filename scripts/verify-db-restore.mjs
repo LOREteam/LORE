@@ -111,6 +111,8 @@ async function openRestoredDb(dbPath, options = {}) {
     for (const table of [
       "meta", "epochs", "scoped_epochs", "bets", "scoped_bets", "jackpots", "scoped_jackpots",
       "reward_claims", "scoped_reward_claims", "protocol_fee_flushes", "scoped_protocol_fee_flushes",
+      "scoped_global_stats_aggregate", "scoped_global_stats_dirty",
+      "scoped_leaderboard_read_model", "scoped_leaderboard_dirty",
       "scoped_indexer_events",
     ]) {
       counts[table] = readCanonicalSqliteCount(db, table);

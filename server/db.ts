@@ -225,6 +225,257 @@ function bootstrapSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_scoped_protocol_fee_flushes_scope_block ON scoped_protocol_fee_flushes(scope, block_number DESC, id DESC);
 
+    CREATE TABLE IF NOT EXISTS scoped_global_stats_aggregate (
+      scope TEXT PRIMARY KEY,
+      model_version INTEGER NOT NULL,
+      total_volume_wei TEXT NOT NULL,
+      total_burn_wei TEXT NOT NULL,
+      epoch_count INTEGER NOT NULL,
+      last_indexed_block TEXT NOT NULL
+    );
+
+    -- A row means the aggregate for this scope cannot be trusted until a
+    -- transactional rebuild has consumed the raw source tables.  Keep this
+    -- separate from the aggregate so existing databases migrate without ALTER
+    -- TABLE and independent/older writers are observable in O(1).
+    BEGIN IMMEDIATE;
+    CREATE TABLE IF NOT EXISTS scoped_global_stats_dirty (
+      scope TEXT PRIMARY KEY
+    );
+
+    -- The leaderboard payload is a separate versioned read model. A dirty row
+    -- makes public reads fail closed until the source tables have been consumed
+    -- by one transactional rebuild.
+    CREATE TABLE IF NOT EXISTS scoped_leaderboard_read_model (
+      scope TEXT PRIMARY KEY,
+      model_version INTEGER NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS scoped_leaderboard_dirty (
+      scope TEXT PRIMARY KEY
+    );
+
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_bets_after_insert;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_bets_after_update;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_bets_after_delete;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_epochs_after_insert;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_epochs_after_update;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_epochs_after_delete;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_fee_flushes_after_insert;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_fee_flushes_after_update;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_fee_flushes_after_delete;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_meta_last_indexed_block_after_insert;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_meta_last_indexed_block_after_update;
+    DROP TRIGGER IF EXISTS scoped_global_stats_dirty_meta_last_indexed_block_after_delete;
+
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_bets_after_insert_v2
+    AFTER INSERT ON scoped_bets
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_bets_after_update_v2
+    AFTER UPDATE ON scoped_bets
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = OLD.scope);
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_bets_after_delete_v2
+    AFTER DELETE ON scoped_bets
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = OLD.scope);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_epochs_after_insert_v2
+    AFTER INSERT ON scoped_epochs
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_epochs_after_update_v2
+    AFTER UPDATE ON scoped_epochs
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = OLD.scope);
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_epochs_after_delete_v2
+    AFTER DELETE ON scoped_epochs
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = OLD.scope);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_fee_flushes_after_insert_v2
+    AFTER INSERT ON scoped_protocol_fee_flushes
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_fee_flushes_after_update_v2
+    AFTER UPDATE ON scoped_protocol_fee_flushes
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = OLD.scope);
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_fee_flushes_after_delete_v2
+    AFTER DELETE ON scoped_protocol_fee_flushes
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_global_stats_dirty WHERE scope = OLD.scope);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_meta_last_indexed_block_after_insert_v2
+    AFTER INSERT ON meta
+    WHEN NEW.key GLOB '?*:lastIndexedBlock'
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT substr(NEW.key, 1, length(NEW.key) - length(':lastIndexedBlock'))
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM scoped_global_stats_dirty
+        WHERE scope = substr(NEW.key, 1, length(NEW.key) - length(':lastIndexedBlock'))
+      );
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_meta_last_indexed_block_after_update_v2
+    AFTER UPDATE ON meta
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT substr(OLD.key, 1, length(OLD.key) - length(':lastIndexedBlock'))
+      WHERE OLD.key GLOB '?*:lastIndexedBlock'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM scoped_global_stats_dirty
+          WHERE scope = substr(OLD.key, 1, length(OLD.key) - length(':lastIndexedBlock'))
+        );
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT substr(NEW.key, 1, length(NEW.key) - length(':lastIndexedBlock'))
+      WHERE NEW.key GLOB '?*:lastIndexedBlock'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM scoped_global_stats_dirty
+          WHERE scope = substr(NEW.key, 1, length(NEW.key) - length(':lastIndexedBlock'))
+        );
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_global_stats_dirty_meta_last_indexed_block_after_delete_v2
+    AFTER DELETE ON meta
+    WHEN OLD.key GLOB '?*:lastIndexedBlock'
+    BEGIN
+      INSERT INTO scoped_global_stats_dirty(scope)
+      SELECT substr(OLD.key, 1, length(OLD.key) - length(':lastIndexedBlock'))
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM scoped_global_stats_dirty
+        WHERE scope = substr(OLD.key, 1, length(OLD.key) - length(':lastIndexedBlock'))
+      );
+    END;
+
+    -- INSERT OR IGNORE inside a trigger inherits the outer statement's
+    -- conflict policy.  An UPSERT into a dirty scope can therefore turn the
+    -- intended no-op into a UNIQUE failure.  Use a predicate instead and
+    -- replace the original trigger names on startup for existing databases.
+    DROP TRIGGER IF EXISTS scoped_leaderboard_dirty_bets_after_insert_v1;
+    DROP TRIGGER IF EXISTS scoped_leaderboard_dirty_bets_after_update_v1;
+    DROP TRIGGER IF EXISTS scoped_leaderboard_dirty_bets_after_delete_v1;
+    DROP TRIGGER IF EXISTS scoped_leaderboard_dirty_reward_claims_after_insert_v1;
+    DROP TRIGGER IF EXISTS scoped_leaderboard_dirty_reward_claims_after_update_v1;
+    DROP TRIGGER IF EXISTS scoped_leaderboard_dirty_reward_claims_after_delete_v1;
+    DROP TRIGGER IF EXISTS scoped_leaderboard_dirty_epochs_after_insert_v1;
+    DROP TRIGGER IF EXISTS scoped_leaderboard_dirty_epochs_after_update_v1;
+    DROP TRIGGER IF EXISTS scoped_leaderboard_dirty_epochs_after_delete_v1;
+
+    CREATE TRIGGER IF NOT EXISTS scoped_leaderboard_dirty_bets_after_insert_v2
+    AFTER INSERT ON scoped_bets
+    BEGIN
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_leaderboard_dirty_bets_after_update_v2
+    AFTER UPDATE ON scoped_bets
+    BEGIN
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = OLD.scope);
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_leaderboard_dirty_bets_after_delete_v2
+    AFTER DELETE ON scoped_bets
+    BEGIN
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = OLD.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_leaderboard_dirty_reward_claims_after_insert_v2
+    AFTER INSERT ON scoped_reward_claims
+    BEGIN
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_leaderboard_dirty_reward_claims_after_update_v2
+    AFTER UPDATE ON scoped_reward_claims
+    BEGIN
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = OLD.scope);
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_leaderboard_dirty_reward_claims_after_delete_v2
+    AFTER DELETE ON scoped_reward_claims
+    BEGIN
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = OLD.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_leaderboard_dirty_epochs_after_insert_v2
+    AFTER INSERT ON scoped_epochs
+    BEGIN
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_leaderboard_dirty_epochs_after_update_v2
+    AFTER UPDATE ON scoped_epochs
+    BEGIN
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = OLD.scope);
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT NEW.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = NEW.scope);
+    END;
+    CREATE TRIGGER IF NOT EXISTS scoped_leaderboard_dirty_epochs_after_delete_v2
+    AFTER DELETE ON scoped_epochs
+    BEGIN
+      INSERT INTO scoped_leaderboard_dirty(scope)
+      SELECT OLD.scope
+      WHERE NOT EXISTS (SELECT 1 FROM scoped_leaderboard_dirty WHERE scope = OLD.scope);
+    END;
+    COMMIT;
+
     CREATE TABLE IF NOT EXISTS scoped_indexer_events (
       scope TEXT NOT NULL,
       category TEXT NOT NULL,

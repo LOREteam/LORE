@@ -9,6 +9,10 @@ const SCOPED_TABLES = [
   "scoped_jackpots",
   "scoped_reward_claims",
   "scoped_protocol_fee_flushes",
+  "scoped_global_stats_aggregate",
+  "scoped_global_stats_dirty",
+  "scoped_leaderboard_read_model",
+  "scoped_leaderboard_dirty",
   "scoped_indexer_events",
 ];
 const LEGACY_TABLES = ["epochs", "bets", "jackpots", "reward_claims", "protocol_fee_flushes"];

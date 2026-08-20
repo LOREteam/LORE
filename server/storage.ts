@@ -1,6 +1,13 @@
 import { readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { parseUnits } from "viem";
+import { formatUnits, getAddress, parseUnits } from "viem";
+import {
+  computeWinningAmountWei,
+  formatLineaAmountFixed,
+  formatLineaWeiDisplayNumber,
+  parseLineaAmountWei,
+} from "../app/lib/tokenAmountMath";
+import { LEADERBOARD_TOP_N } from "../app/lib/constants";
 import { sanitizeSentryPayload } from "../app/lib/sentrySanitize";
 import {
   getConfiguredContractAddress,
@@ -22,11 +29,17 @@ const SCOPED_BETS_TABLE = "scoped_bets";
 const SCOPED_JACKPOTS_TABLE = "scoped_jackpots";
 const SCOPED_REWARD_CLAIMS_TABLE = "scoped_reward_claims";
 const SCOPED_PROTOCOL_FEE_FLUSHES_TABLE = "scoped_protocol_fee_flushes";
+const SCOPED_GLOBAL_STATS_AGGREGATE_TABLE = "scoped_global_stats_aggregate";
+const SCOPED_GLOBAL_STATS_DIRTY_TABLE = "scoped_global_stats_dirty";
+const SCOPED_LEADERBOARD_READ_MODEL_TABLE = "scoped_leaderboard_read_model";
+const SCOPED_LEADERBOARD_DIRTY_TABLE = "scoped_leaderboard_dirty";
 const SCOPED_INDEXER_EVENTS_TABLE = "scoped_indexer_events";
 const SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE = "scoped_indexer_block_checkpoints";
 const SCOPED_INDEXER_LEASES_TABLE = "scoped_indexer_leases";
 const ACTIVE_CONTRACT_SCOPE_META_KEY = "__storage_active_contract_scope";
 const PUBLIC_READ_MODEL_REVISION_META_KEY = "publicReadModelRevision";
+const GLOBAL_STATS_MODEL_VERSION = 3;
+const LEADERBOARD_READ_MODEL_VERSION = 1;
 const LEGACY_CONTRACT_META_KEYS = [
   "currentEpoch",
   "lastIndexedBlock",
@@ -230,6 +243,13 @@ function parseAmountWei(value: unknown) {
   }
 }
 
+function parseGlobalStatsAmountWei(value: unknown) {
+  const match = /^(\d+)(?:\.(\d*))?$/.exec(String(value ?? "").trim());
+  if (match === null) return 0n;
+  const [, whole, fraction = ""] = match;
+  return BigInt(`${whole}${fraction.slice(0, 18).padEnd(18, "0")}`);
+}
+
 function describeStorageError(error: unknown) {
   return sanitizeSentryPayload({
     name: error instanceof Error ? error.name : "Error",
@@ -325,8 +345,609 @@ function bumpPublicReadModelRevision() {
 }
 
 export function getPublicReadModelRevision() {
+  // Public route caches consult this before their payload getters. A dirty
+  // source marker must therefore fail before a stale cache entry can win.
+  if (isGlobalStatsAggregateDirty() || isLeaderboardReadModelDirty()) {
+    throw new Error("Public read model source data is dirty");
+  }
+  // Cache keys must not validate a stale route payload when a versioned
+  // materialization row is missing or malformed. This is bounded by top-K JSON,
+  // never by the raw history tables.
+  getLeaderboardReadModel();
   const revision = getMetaBigInt(PUBLIC_READ_MODEL_REVISION_META_KEY);
   return revision !== null && revision >= 0n ? revision.toString() : "0";
+}
+
+type GlobalStatsAggregate = {
+  totalVolumeWei: string;
+  totalBurnWei: string;
+  resolvedEpochs: number;
+  lastIndexedBlock: string;
+};
+
+type GlobalStatsAggregateRecord = Record<string, unknown>;
+
+type GlobalStatsAggregateDelta = {
+  volumeWei?: bigint;
+  burnWei?: bigint;
+  epochCount?: number;
+  lastIndexedBlock?: string;
+};
+
+type GlobalStatsAggregateReadiness = {
+  needsRevisionBump: boolean;
+};
+
+function parseCanonicalNonNegativeBigInt(value: unknown, label: string) {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/.test(value)) {
+    throw new Error(`${label} is not a canonical non-negative integer`);
+  }
+  const parsed = BigInt(value);
+  if (parsed.toString() !== value) {
+    throw new Error(`${label} is not a canonical non-negative integer`);
+  }
+  return parsed;
+}
+
+function parseSafeNonNegativeCount(value: unknown, label: string) {
+  let parsed: unknown = value;
+  if (typeof value === "bigint") {
+    parsed = value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : Number.NaN;
+  }
+  if (!Number.isSafeInteger(parsed) || Number(parsed) < 0) {
+    throw new Error(`${label} is not a safe non-negative integer`);
+  }
+  return Number(parsed);
+}
+
+function getGlobalStatsAggregateRecord() {
+  return db.prepare(`
+    SELECT model_version, total_volume_wei, total_burn_wei, epoch_count, last_indexed_block
+    FROM ${SCOPED_GLOBAL_STATS_AGGREGATE_TABLE}
+    WHERE scope = ?
+  `).get(CURRENT_STORAGE_SCOPE) as GlobalStatsAggregateRecord | undefined;
+}
+
+function isGlobalStatsAggregateDirty() {
+  return db.prepare(`
+    SELECT 1 AS dirty
+    FROM ${SCOPED_GLOBAL_STATS_DIRTY_TABLE}
+    WHERE scope = ?
+  `).get(CURRENT_STORAGE_SCOPE) !== undefined;
+}
+
+function clearGlobalStatsAggregateDirtyInTransaction() {
+  db.prepare(`DELETE FROM ${SCOPED_GLOBAL_STATS_DIRTY_TABLE} WHERE scope = ?`)
+    .run(CURRENT_STORAGE_SCOPE);
+}
+
+function decodeGlobalStatsAggregateRecord(record: GlobalStatsAggregateRecord): GlobalStatsAggregate {
+  if (record.model_version !== GLOBAL_STATS_MODEL_VERSION) {
+    throw new Error("Global stats aggregate model is unavailable");
+  }
+  const totalVolumeWei = parseCanonicalNonNegativeBigInt(
+    record.total_volume_wei,
+    "global stats total volume",
+  );
+  const totalBurnWei = parseCanonicalNonNegativeBigInt(
+    record.total_burn_wei,
+    "global stats total burn",
+  );
+  const resolvedEpochs = parseSafeNonNegativeCount(record.epoch_count, "global stats epoch count");
+  const lastIndexedBlock = parseCanonicalNonNegativeBigInt(
+    record.last_indexed_block,
+    "global stats last indexed block",
+  );
+
+  return {
+    totalVolumeWei: totalVolumeWei.toString(),
+    totalBurnWei: totalBurnWei.toString(),
+    resolvedEpochs,
+    lastIndexedBlock: lastIndexedBlock.toString(),
+  };
+}
+
+function getCanonicalLastIndexedBlock() {
+  const raw = getMetaValue("lastIndexedBlock");
+  if (raw === null) return "0";
+  try {
+    const parsed = BigInt(raw);
+    if (parsed < 0n) throw new Error("last indexed block metadata is invalid");
+    return parsed.toString();
+  } catch {
+    throw new Error("last indexed block metadata is invalid");
+  }
+}
+
+function calculateGlobalStatsAggregateFromRaw(): GlobalStatsAggregate {
+  const betRows = db.prepare(`
+    SELECT total_amount
+    FROM ${SCOPED_BETS_TABLE}
+    WHERE scope = ?
+  `).all(CURRENT_STORAGE_SCOPE) as Array<Record<string, unknown>>;
+  const feeRows = db.prepare(`
+    SELECT burn_amount
+    FROM ${SCOPED_PROTOCOL_FEE_FLUSHES_TABLE}
+    WHERE scope = ?
+  `).all(CURRENT_STORAGE_SCOPE) as Array<Record<string, unknown>>;
+  const resolved = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM ${SCOPED_EPOCHS_TABLE}
+    WHERE scope = ?
+  `).get(CURRENT_STORAGE_SCOPE) as { count?: unknown } | undefined;
+
+  return {
+    totalVolumeWei: betRows.reduce(
+      (total, row) => total + parseGlobalStatsAmountWei(row.total_amount),
+      0n,
+    ).toString(),
+    totalBurnWei: feeRows.reduce(
+      (total, row) => total + parseGlobalStatsAmountWei(row.burn_amount),
+      0n,
+    ).toString(),
+    resolvedEpochs: parseSafeNonNegativeCount(resolved?.count ?? 0, "raw global stats epoch count"),
+    lastIndexedBlock: getCanonicalLastIndexedBlock(),
+  };
+}
+
+function writeGlobalStatsAggregate(aggregate: GlobalStatsAggregate) {
+  db.prepare(`
+    INSERT INTO ${SCOPED_GLOBAL_STATS_AGGREGATE_TABLE}(
+      scope, model_version, total_volume_wei, total_burn_wei, epoch_count, last_indexed_block
+    ) VALUES(?, ?, ?, ?, ?, ?)
+    ON CONFLICT(scope) DO UPDATE SET
+      model_version = excluded.model_version,
+      total_volume_wei = excluded.total_volume_wei,
+      total_burn_wei = excluded.total_burn_wei,
+      epoch_count = excluded.epoch_count,
+      last_indexed_block = excluded.last_indexed_block
+  `).run(
+    CURRENT_STORAGE_SCOPE,
+    GLOBAL_STATS_MODEL_VERSION,
+    aggregate.totalVolumeWei,
+    aggregate.totalBurnWei,
+    aggregate.resolvedEpochs,
+    aggregate.lastIndexedBlock,
+  );
+}
+
+function rebuildGlobalStatsAggregateInTransaction() {
+  const aggregate = calculateGlobalStatsAggregateFromRaw();
+  writeGlobalStatsAggregate(aggregate);
+  clearGlobalStatsAggregateDirtyInTransaction();
+  return aggregate;
+}
+
+function ensureGlobalStatsAggregateReadyInTransaction(): GlobalStatsAggregateReadiness {
+  const record = getGlobalStatsAggregateRecord();
+  const wasDirty = isGlobalStatsAggregateDirty();
+  if (record === undefined) {
+    rebuildGlobalStatsAggregateInTransaction();
+    return { needsRevisionBump: wasDirty };
+  }
+
+  const modelVersion = parseSafeNonNegativeCount(
+    record.model_version,
+    "global stats aggregate model version",
+  );
+  if (modelVersion > GLOBAL_STATS_MODEL_VERSION) {
+    throw new Error("Global stats aggregate model version is newer than this runtime");
+  }
+  if (modelVersion !== GLOBAL_STATS_MODEL_VERSION || wasDirty) {
+    rebuildGlobalStatsAggregateInTransaction();
+    return { needsRevisionBump: true };
+  }
+
+  decodeGlobalStatsAggregateRecord(record);
+  return { needsRevisionBump: false };
+}
+
+function ensureGlobalStatsAggregate() {
+  runInTransaction(() => {
+    const readiness = ensureGlobalStatsAggregateReadyInTransaction();
+    if (readiness.needsRevisionBump) bumpPublicReadModelRevision();
+  }, "global_stats_backfill");
+}
+
+function readGlobalStatsAggregate() {
+  if (isGlobalStatsAggregateDirty()) {
+    throw new Error("Global stats aggregate source data is dirty");
+  }
+  const record = getGlobalStatsAggregateRecord();
+  if (record === undefined) {
+    throw new Error("Global stats aggregate model is unavailable");
+  }
+  return decodeGlobalStatsAggregateRecord(record);
+}
+
+function readGlobalStatsAggregateForSynchronizedMutationInTransaction() {
+  const record = getGlobalStatsAggregateRecord();
+  if (record === undefined) {
+    throw new Error("Global stats aggregate model is unavailable");
+  }
+  return decodeGlobalStatsAggregateRecord(record);
+}
+
+function applyGlobalStatsAggregateDeltaInTransaction({
+  volumeWei = 0n,
+  burnWei = 0n,
+  epochCount = 0,
+  lastIndexedBlock,
+  forceWrite = false,
+}: GlobalStatsAggregateDelta & { forceWrite?: boolean }) {
+  if (!forceWrite && volumeWei === 0n && burnWei === 0n && epochCount === 0 && lastIndexedBlock === undefined) {
+    return;
+  }
+  if (!Number.isSafeInteger(epochCount)) {
+    throw new Error("global stats epoch delta must be a safe integer");
+  }
+
+  // Source mutation triggers deliberately set the dirty marker before this point.
+  // Callers first establish a clean base in the same transaction, then use the
+  // exact delta below and clear that marker after the aggregate write.
+  const current = readGlobalStatsAggregateForSynchronizedMutationInTransaction();
+  const nextVolumeWei = BigInt(current.totalVolumeWei) + volumeWei;
+  const nextBurnWei = BigInt(current.totalBurnWei) + burnWei;
+  const nextEpochCount = current.resolvedEpochs + epochCount;
+  if (nextVolumeWei < 0n || nextBurnWei < 0n || !Number.isSafeInteger(nextEpochCount) || nextEpochCount < 0) {
+    throw new Error("global stats aggregate delta would violate model invariants");
+  }
+
+  const nextLastIndexedBlock = lastIndexedBlock === undefined
+    ? current.lastIndexedBlock
+    : parseCanonicalNonNegativeBigInt(lastIndexedBlock, "global stats last indexed block").toString();
+  writeGlobalStatsAggregate({
+    totalVolumeWei: nextVolumeWei.toString(),
+    totalBurnWei: nextBurnWei.toString(),
+    resolvedEpochs: nextEpochCount,
+    lastIndexedBlock: nextLastIndexedBlock,
+  });
+}
+
+function synchronizeGlobalStatsAggregateAfterSourceMutationInTransaction(delta: GlobalStatsAggregateDelta) {
+  applyGlobalStatsAggregateDeltaInTransaction({ ...delta, forceWrite: true });
+  clearGlobalStatsAggregateDirtyInTransaction();
+}
+
+function finalizeGlobalStatsAggregateAfterRawMutationInTransaction(
+  delta: GlobalStatsAggregateDelta,
+  rawChanged: boolean,
+) {
+  if (rawChanged) {
+    synchronizeGlobalStatsAggregateAfterSourceMutationInTransaction(delta);
+    return true;
+  }
+  // SQLite reports changed rows for the UPSERTs above. If that invariant ever
+  // diverges from a trigger firing, rebuild rather than leave a dirty model or
+  // apply an unproven delta.
+  if (isGlobalStatsAggregateDirty()) {
+    rebuildGlobalStatsAggregateInTransaction();
+    return true;
+  }
+  return false;
+}
+
+type LeaderboardReadModelEntry = {
+  address: string;
+  value: string;
+  valueNum: number;
+  extra?: string;
+};
+
+export type LeaderboardReadModel = {
+  biggestSingleWin: LeaderboardReadModelEntry[];
+  luckiest: LeaderboardReadModelEntry[];
+  oneTileWonder: LeaderboardReadModelEntry[];
+  mostWins: LeaderboardReadModelEntry[];
+  whales: LeaderboardReadModelEntry[];
+  underdog: LeaderboardReadModelEntry[];
+  luckyTile: Array<{ tileId: number; wins: number; pct: number }>;
+};
+
+type LeaderboardReadModelRecord = Record<string, unknown>;
+
+function normalizeLeaderboardAddress(value: string): `0x${string}` | null {
+  try {
+    return getAddress(value).toLowerCase() as `0x${string}`;
+  } catch {
+    return null;
+  }
+}
+
+function compareLeaderboardBigIntDesc(left: bigint, right: bigint) {
+  if (left === right) return 0;
+  return left > right ? -1 : 1;
+}
+
+function getLeaderboardWinningTile(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && value <= 25
+    ? value
+    : null;
+}
+
+function formatLeaderboardAmount(wei: bigint) {
+  return formatLineaAmountFixed(wei, 2);
+}
+
+function toLeaderboardDisplayNumber(wei: bigint) {
+  return formatLineaWeiDisplayNumber(wei);
+}
+
+function calculateLeaderboardReadModelFromRaw(): LeaderboardReadModel {
+  const bets = getAllBetRows();
+  const claims = getAllRewardClaims();
+  const epochs = getEpochMap();
+  const users = new Map<string, {
+    totalWagered: bigint;
+    totalWon: bigint;
+    maxSingleWin: bigint;
+    winCount: number;
+  }>();
+  const userWinningAmounts = new Map<string, bigint>();
+  const rewardByEpochUser = new Map<string, bigint>();
+  const maxSingleTileWinByUser = new Map<string, bigint>();
+  const luckyTileWins = new Map<number, number>();
+  let resolvedCount = 0;
+
+  for (const epochRow of Object.values(epochs)) {
+    const winningTile = getLeaderboardWinningTile(epochRow.winningTile);
+    if (winningTile === null) continue;
+    luckyTileWins.set(winningTile, (luckyTileWins.get(winningTile) ?? 0) + 1);
+    resolvedCount += 1;
+  }
+
+  for (const bet of bets) {
+    const address = normalizeLeaderboardAddress(bet.user);
+    if (!address) continue;
+    const previous = users.get(address) ?? {
+      totalWagered: 0n,
+      totalWon: 0n,
+      maxSingleWin: 0n,
+      winCount: 0,
+    };
+    previous.totalWagered += parseLineaAmountWei(bet.totalAmount);
+    users.set(address, previous);
+
+    const winningTile = getLeaderboardWinningTile(epochs[bet.epoch]?.winningTile);
+    if (winningTile === null) continue;
+    const winningAmountWei = computeWinningAmountWei(bet.tileIds, bet.amounts, winningTile, bet.totalAmount);
+    if (winningAmountWei <= 0n) continue;
+    const key = `${bet.epoch}:${address}`;
+    userWinningAmounts.set(key, (userWinningAmounts.get(key) ?? 0n) + winningAmountWei);
+  }
+
+  const underdogCandidates: Array<{ address: string; rewardWei: bigint; tile: number; tilePoolWei: bigint }> = [];
+  for (const claim of claims) {
+    const address = normalizeLeaderboardAddress(claim.user);
+    if (!address) continue;
+    const rewardWei = parseLineaAmountWei(claim.reward);
+    const rewardKey = `${claim.epoch}:${address}`;
+    rewardByEpochUser.set(rewardKey, (rewardByEpochUser.get(rewardKey) ?? 0n) + rewardWei);
+    const previous = users.get(address) ?? {
+      totalWagered: 0n,
+      totalWon: 0n,
+      maxSingleWin: 0n,
+      winCount: 0,
+    };
+    previous.totalWon += rewardWei;
+    if (rewardWei > previous.maxSingleWin) previous.maxSingleWin = rewardWei;
+    previous.winCount += 1;
+    users.set(address, previous);
+
+    const epochRow = epochs[claim.epoch];
+    const winningTile = getLeaderboardWinningTile(epochRow?.winningTile);
+    if (winningTile === null || rewardWei <= 0n) continue;
+    const userWinningWei = userWinningAmounts.get(`${claim.epoch}:${address}`) ?? 0n;
+    if (userWinningWei <= 0n) continue;
+    const rewardPoolWei = parseLineaAmountWei(epochRow.rewardPool);
+    if (rewardPoolWei <= 0n) continue;
+    const tilePoolWei = (rewardPoolWei * userWinningWei) / rewardWei;
+    if (tilePoolWei <= 0n) continue;
+    underdogCandidates.push({ address, rewardWei, tile: winningTile, tilePoolWei });
+  }
+
+  for (const bet of bets) {
+    const winningTile = getLeaderboardWinningTile(epochs[bet.epoch]?.winningTile);
+    if (winningTile === null) continue;
+    const address = normalizeLeaderboardAddress(bet.user);
+    if (!address) continue;
+    const key = `${bet.epoch}:${address}`;
+    const userWinningWei = userWinningAmounts.get(key) ?? 0n;
+    const rewardWei = rewardByEpochUser.get(key) ?? 0n;
+    if (userWinningWei <= 0n || rewardWei <= 0n) continue;
+    const winningAmountWei = computeWinningAmountWei(bet.tileIds, bet.amounts, winningTile, bet.totalAmount);
+    if (winningAmountWei <= 0n) continue;
+    const singleTileRewardWei = (rewardWei * winningAmountWei) / userWinningWei;
+    if (singleTileRewardWei > (maxSingleTileWinByUser.get(address) ?? 0n)) {
+      maxSingleTileWinByUser.set(address, singleTileRewardWei);
+    }
+  }
+
+  const userRows = [...users.entries()].map(([address, row]) => ({ address, ...row }));
+  const biggestSingleWin = userRows
+    .filter((row) => row.maxSingleWin > 0n)
+    .sort((left, right) => compareLeaderboardBigIntDesc(left.maxSingleWin, right.maxSingleWin) || left.address.localeCompare(right.address))
+    .slice(0, LEADERBOARD_TOP_N)
+    .map((row) => ({ address: row.address, value: formatLeaderboardAmount(row.maxSingleWin), valueNum: toLeaderboardDisplayNumber(row.maxSingleWin) }));
+  const luckiest = userRows
+    .filter((row) => row.totalWagered > 0n && row.totalWon > 0n)
+    .map((row) => {
+      const roiBasisPoints = (row.totalWon * 10_000n) / row.totalWagered;
+      const roundedTenths = (roiBasisPoints + 5n) / 10n;
+      return {
+        address: row.address,
+        value: `${roundedTenths / 10n}.${roundedTenths % 10n}%`,
+        valueNum: Number(roiBasisPoints > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : roiBasisPoints) / 100,
+        roiBasisPoints,
+        extra: `won ${formatUnits(row.totalWon, 18)} / wagered ${formatUnits(row.totalWagered, 18)}`,
+      };
+    })
+    .sort((left, right) => compareLeaderboardBigIntDesc(left.roiBasisPoints, right.roiBasisPoints) || left.address.localeCompare(right.address))
+    .slice(0, LEADERBOARD_TOP_N)
+    .map(({ address, value, valueNum, extra }) => ({ address, value, valueNum, extra }));
+  const mostWins = userRows
+    .filter((row) => row.winCount > 0)
+    .sort((left, right) => right.winCount - left.winCount || left.address.localeCompare(right.address))
+    .slice(0, LEADERBOARD_TOP_N)
+    .map((row) => ({ address: row.address, value: String(row.winCount), valueNum: row.winCount }));
+  const whales = userRows
+    .filter((row) => row.totalWagered > 0n)
+    .sort((left, right) => compareLeaderboardBigIntDesc(left.totalWagered, right.totalWagered) || left.address.localeCompare(right.address))
+    .slice(0, LEADERBOARD_TOP_N)
+    .map((row) => ({ address: row.address, value: formatLeaderboardAmount(row.totalWagered), valueNum: toLeaderboardDisplayNumber(row.totalWagered) }));
+  const underdog = underdogCandidates
+    .sort((left, right) => {
+      if (left.tilePoolWei !== right.tilePoolWei) return left.tilePoolWei < right.tilePoolWei ? -1 : 1;
+      return compareLeaderboardBigIntDesc(left.rewardWei, right.rewardWei) || left.address.localeCompare(right.address);
+    })
+    .slice(0, LEADERBOARD_TOP_N)
+    .map((row) => ({
+      address: row.address,
+      value: formatLeaderboardAmount(row.rewardWei),
+      valueNum: toLeaderboardDisplayNumber(row.rewardWei),
+      extra: `pool on tile ${row.tile} was ${formatLeaderboardAmount(row.tilePoolWei)} LINEA`,
+    }));
+  const oneTileWonder = [...maxSingleTileWinByUser.entries()]
+    .filter(([, rewardWei]) => rewardWei > 0n)
+    .sort((left, right) => compareLeaderboardBigIntDesc(left[1], right[1]) || left[0].localeCompare(right[0]))
+    .slice(0, LEADERBOARD_TOP_N)
+    .map(([address, rewardWei]) => ({ address, value: formatLeaderboardAmount(rewardWei), valueNum: toLeaderboardDisplayNumber(rewardWei) }));
+  const luckyTile = [...luckyTileWins.entries()]
+    .map(([tileId, wins]) => ({ tileId, wins, pct: resolvedCount > 0 ? (wins / resolvedCount) * 100 : 0 }))
+    .sort((left, right) => right.wins - left.wins || left.tileId - right.tileId);
+
+  return { biggestSingleWin, luckiest, oneTileWonder, mostWins, whales, underdog, luckyTile };
+}
+
+function isLeaderboardReadModelDirty() {
+  return db.prepare(`SELECT 1 AS dirty FROM ${SCOPED_LEADERBOARD_DIRTY_TABLE} WHERE scope = ?`)
+    .get(CURRENT_STORAGE_SCOPE) !== undefined;
+}
+
+function clearLeaderboardReadModelDirtyInTransaction() {
+  db.prepare(`DELETE FROM ${SCOPED_LEADERBOARD_DIRTY_TABLE} WHERE scope = ?`).run(CURRENT_STORAGE_SCOPE);
+}
+
+function writeLeaderboardReadModel(readModel: LeaderboardReadModel) {
+  db.prepare(`
+    INSERT INTO ${SCOPED_LEADERBOARD_READ_MODEL_TABLE}(scope, model_version, payload_json)
+    VALUES(?, ?, ?)
+    ON CONFLICT(scope) DO UPDATE SET model_version = excluded.model_version, payload_json = excluded.payload_json
+  `).run(CURRENT_STORAGE_SCOPE, LEADERBOARD_READ_MODEL_VERSION, JSON.stringify(readModel));
+}
+
+function rebuildLeaderboardReadModelInTransaction() {
+  const readModel = calculateLeaderboardReadModelFromRaw();
+  writeLeaderboardReadModel(readModel);
+  clearLeaderboardReadModelDirtyInTransaction();
+  return readModel;
+}
+
+function ensureLeaderboardReadModelReadyInTransaction() {
+  const record = db.prepare(`
+    SELECT model_version, payload_json FROM ${SCOPED_LEADERBOARD_READ_MODEL_TABLE} WHERE scope = ?
+  `).get(CURRENT_STORAGE_SCOPE) as LeaderboardReadModelRecord | undefined;
+  const wasDirty = isLeaderboardReadModelDirty();
+  if (record === undefined) {
+    rebuildLeaderboardReadModelInTransaction();
+    return { needsRevisionBump: wasDirty };
+  }
+  const modelVersion = parseSafeNonNegativeCount(record.model_version, "leaderboard read model version");
+  if (modelVersion > LEADERBOARD_READ_MODEL_VERSION) {
+    throw new Error("leaderboard read model version is newer than this runtime");
+  }
+  if (modelVersion !== LEADERBOARD_READ_MODEL_VERSION || wasDirty) {
+    rebuildLeaderboardReadModelInTransaction();
+    return { needsRevisionBump: true };
+  }
+  decodeLeaderboardReadModelRecord(record);
+  return { needsRevisionBump: false };
+}
+
+function ensureLeaderboardReadModel() {
+  runInTransaction(() => {
+    const readiness = ensureLeaderboardReadModelReadyInTransaction();
+    if (readiness.needsRevisionBump) bumpPublicReadModelRevision();
+  }, "leaderboard_read_model_backfill");
+}
+
+function finalizeLeaderboardReadModelAfterRawMutationInTransaction(rawChanged: boolean) {
+  if (rawChanged || isLeaderboardReadModelDirty()) {
+    rebuildLeaderboardReadModelInTransaction();
+    return true;
+  }
+  return false;
+}
+
+function decodeLeaderboardReadModelRecord(record: LeaderboardReadModelRecord): LeaderboardReadModel {
+  if (record.model_version !== LEADERBOARD_READ_MODEL_VERSION || typeof record.payload_json !== "string") {
+    throw new Error("leaderboard read model is unavailable");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(record.payload_json);
+  } catch {
+    throw new Error("leaderboard read model payload is invalid");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("leaderboard read model payload is invalid");
+  }
+  const source = parsed as Record<string, unknown>;
+  const decodeEntries = (key: keyof LeaderboardReadModel) => {
+    const rows = source[key];
+    if (!Array.isArray(rows) || rows.length > LEADERBOARD_TOP_N) throw new Error("leaderboard read model payload is invalid");
+    return rows.map((row) => {
+      if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("leaderboard read model payload is invalid");
+      const entry = row as Record<string, unknown>;
+      if (typeof entry.address !== "string" || normalizeLeaderboardAddress(entry.address) !== entry.address ||
+        typeof entry.value !== "string" || typeof entry.valueNum !== "number" || !Number.isFinite(entry.valueNum) ||
+        (entry.extra !== undefined && typeof entry.extra !== "string")) {
+        throw new Error("leaderboard read model payload is invalid");
+      }
+      return entry.extra === undefined
+        ? { address: entry.address, value: entry.value, valueNum: entry.valueNum }
+        : { address: entry.address, value: entry.value, valueNum: entry.valueNum, extra: entry.extra };
+    });
+  };
+  const luckyTile = source.luckyTile;
+  if (!Array.isArray(luckyTile) || luckyTile.length > 25) throw new Error("leaderboard read model payload is invalid");
+  return {
+    biggestSingleWin: decodeEntries("biggestSingleWin"),
+    luckiest: decodeEntries("luckiest"),
+    oneTileWonder: decodeEntries("oneTileWonder"),
+    mostWins: decodeEntries("mostWins"),
+    whales: decodeEntries("whales"),
+    underdog: decodeEntries("underdog"),
+    luckyTile: luckyTile.map((row) => {
+      if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("leaderboard read model payload is invalid");
+      const entry = row as Record<string, unknown>;
+      if (typeof entry.tileId !== "number" || !Number.isSafeInteger(entry.tileId) || entry.tileId < 1 || entry.tileId > 25 ||
+        typeof entry.wins !== "number" || !Number.isSafeInteger(entry.wins) || entry.wins < 0 ||
+        typeof entry.pct !== "number" || !Number.isFinite(entry.pct)) {
+        throw new Error("leaderboard read model payload is invalid");
+      }
+      return { tileId: Number(entry.tileId), wins: Number(entry.wins), pct: entry.pct };
+    }),
+  };
+}
+
+export function getLeaderboardReadModel() {
+  if (isLeaderboardReadModelDirty()) throw new Error("Leaderboard read model source data is dirty");
+  const record = db.prepare(`
+    SELECT model_version, payload_json FROM ${SCOPED_LEADERBOARD_READ_MODEL_TABLE} WHERE scope = ?
+  `).get(CURRENT_STORAGE_SCOPE) as LeaderboardReadModelRecord | undefined;
+  if (record === undefined) throw new Error("leaderboard read model is unavailable");
+  return decodeLeaderboardReadModelRecord(record);
+}
+
+function setLastIndexedBlockInTransaction(value: bigint) {
+  if (value < 0n) {
+    throw new Error("last indexed block metadata must be non-negative");
+  }
+  ensureGlobalStatsAggregateReadyInTransaction();
+  const canonical = value.toString();
+  setMetaValue("lastIndexedBlock", canonical);
+  synchronizeGlobalStatsAggregateAfterSourceMutationInTransaction({ lastIndexedBlock: canonical });
 }
 
 function purgeScopedContractData(exceptScope: string) {
@@ -336,6 +957,10 @@ function purgeScopedContractData(exceptScope: string) {
     SCOPED_JACKPOTS_TABLE,
     SCOPED_REWARD_CLAIMS_TABLE,
     SCOPED_PROTOCOL_FEE_FLUSHES_TABLE,
+    SCOPED_GLOBAL_STATS_AGGREGATE_TABLE,
+    SCOPED_GLOBAL_STATS_DIRTY_TABLE,
+    SCOPED_LEADERBOARD_READ_MODEL_TABLE,
+    SCOPED_LEADERBOARD_DIRTY_TABLE,
     SCOPED_INDEXER_EVENTS_TABLE,
     SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE,
   ];
@@ -406,6 +1031,10 @@ function hasForeignScopedContractData(exceptScope: string) {
     SCOPED_JACKPOTS_TABLE,
     SCOPED_REWARD_CLAIMS_TABLE,
     SCOPED_PROTOCOL_FEE_FLUSHES_TABLE,
+    SCOPED_GLOBAL_STATS_AGGREGATE_TABLE,
+    SCOPED_GLOBAL_STATS_DIRTY_TABLE,
+    SCOPED_LEADERBOARD_READ_MODEL_TABLE,
+    SCOPED_LEADERBOARD_DIRTY_TABLE,
     SCOPED_INDEXER_EVENTS_TABLE,
     SCOPED_INDEXER_BLOCK_CHECKPOINTS_TABLE,
   ];
@@ -461,6 +1090,8 @@ function reconcileContractStorageScope() {
 }
 
 reconcileContractStorageScope();
+ensureGlobalStatsAggregate();
+ensureLeaderboardReadModel();
 
 export function getMetaJson<T>(key: string): T | null {
   const raw = getMetaValue(key);
@@ -804,10 +1435,24 @@ export function getMetaBigInt(key: string) {
 }
 
 export function setMetaNumber(key: string, value: number) {
+  if (key === "lastIndexedBlock") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error("last indexed block metadata must be a non-negative safe integer");
+    }
+    setMetaBigInt(key, BigInt(value));
+    return;
+  }
   setMetaValue(key, String(value));
 }
 
 export function setMetaBigInt(key: string, value: bigint) {
+  if (key === "lastIndexedBlock") {
+    runInTransaction(() => {
+      setLastIndexedBlockInTransaction(value);
+      bumpPublicReadModelRevision();
+    }, "set_indexed_block");
+    return;
+  }
   setMetaValue(key, value.toString());
 }
 
@@ -974,7 +1619,7 @@ export function commitIndexerChunk(commit: IndexerChunkCommit, action: () => voi
       ON CONFLICT(scope, block_number) DO UPDATE SET
         block_hash = excluded.block_hash
     `).run(CURRENT_STORAGE_SCOPE, blockNumber, blockHash);
-    setMetaValue("lastIndexedBlock", String(blockNumber));
+    setLastIndexedBlockInTransaction(BigInt(blockNumber));
     bumpPublicReadModelRevision();
   }, "indexer_chunk");
 }
@@ -1029,6 +1674,8 @@ export function rollbackIndexerToBlock(
         throw new Error("retained indexer checkpoint does not match storage");
       }
     }
+    ensureGlobalStatsAggregateReadyInTransaction();
+    ensureLeaderboardReadModelReadyInTransaction();
 
     db.prepare(`
       DELETE FROM ${SCOPED_EPOCHS_TABLE}
@@ -1064,7 +1711,9 @@ export function rollbackIndexerToBlock(
       pruneLegacyIndexerEventMeta(key, blockNumber);
     }
 
-    setMetaValue("lastIndexedBlock", String(blockNumber));
+    rebuildGlobalStatsAggregateInTransaction();
+    rebuildLeaderboardReadModelInTransaction();
+    setLastIndexedBlockInTransaction(BigInt(blockNumber));
     db.prepare("DELETE FROM meta WHERE key = ?")
       .run(scopeMetaKey("indexerReconcileBlockCursor"));
     const repairCursor = getMetaBigInt("repairCursorBlock");
@@ -1140,6 +1789,11 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
   const entries = Object.entries(rows);
   if (entries.length === 0) return;
 
+  const existingStatement = db.prepare(`
+    SELECT 1 AS present
+    FROM ${SCOPED_EPOCHS_TABLE}
+    WHERE scope = ? AND epoch = ?
+  `);
   const statement = db.prepare(`
     INSERT INTO ${SCOPED_EPOCHS_TABLE}(
       scope, epoch, winning_tile, total_pool, reward_pool, fee, jackpot_bonus,
@@ -1160,14 +1814,18 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
   `);
 
   runInTransaction(() => {
+    const readiness = ensureGlobalStatsAggregateReadyInTransaction();
+    const leaderboardReadiness = ensureLeaderboardReadModelReadyInTransaction();
     let changed = false;
+    let epochCountDelta = 0;
     for (const [epoch, row] of entries) {
       const epochNumber = parseSafePositiveIntegerString(epoch);
       const resolvedBlockNumber = row.resolvedBlock == null
         ? null
         : parseSafePositiveIntegerString(row.resolvedBlock);
       if (epochNumber === null) continue;
-      changed = didStatementChangeRow(statement.run(
+      const existed = existingStatement.get(CURRENT_STORAGE_SCOPE, epochNumber) !== undefined;
+      const accepted = didStatementChangeRow(statement.run(
         CURRENT_STORAGE_SCOPE,
         epochNumber,
         row.winningTile,
@@ -1178,9 +1836,18 @@ export function upsertEpochMap(rows: Record<string, EpochStorageRow>) {
         boolToInt(row.isDailyJackpot),
         boolToInt(row.isWeeklyJackpot),
         resolvedBlockNumber,
-      )) || changed;
+      ));
+      if (accepted && !existed) epochCountDelta += 1;
+      changed = accepted || changed;
     }
-    if (changed) bumpPublicReadModelRevision();
+    const aggregateChanged = finalizeGlobalStatsAggregateAfterRawMutationInTransaction(
+      { epochCount: epochCountDelta },
+      changed,
+    );
+    const leaderboardChanged = finalizeLeaderboardReadModelAfterRawMutationInTransaction(changed);
+    if (aggregateChanged || leaderboardChanged || readiness.needsRevisionBump || leaderboardReadiness.needsRevisionBump) {
+      bumpPublicReadModelRevision();
+    }
   }, "epochs");
 }
 
@@ -1361,33 +2028,7 @@ export function getAllBetRows() {
 }
 
 export function getGlobalStatsAggregate() {
-  const parseAmount = (value: unknown) => {
-    const [whole, fraction = ""] = String(value ?? "").trim().split(".");
-    if (!/^\d+$/.test(whole) || !/^\d*$/.test(fraction)) return 0n;
-    return BigInt(`${whole}${fraction.slice(0, 18).padEnd(18, "0")}`);
-  };
-  const betRows = db.prepare(`
-    SELECT total_amount
-    FROM ${SCOPED_BETS_TABLE}
-    WHERE scope = ?
-  `).all(CURRENT_STORAGE_SCOPE) as Array<Record<string, unknown>>;
-  const feeRows = db.prepare(`
-    SELECT burn_amount
-    FROM ${SCOPED_PROTOCOL_FEE_FLUSHES_TABLE}
-    WHERE scope = ?
-  `).all(CURRENT_STORAGE_SCOPE) as Array<Record<string, unknown>>;
-  const resolved = db.prepare(`
-    SELECT COUNT(*) AS count
-    FROM ${SCOPED_EPOCHS_TABLE}
-    WHERE scope = ?
-  `).get(CURRENT_STORAGE_SCOPE) as { count?: number } | undefined;
-
-  return {
-    totalVolumeWei: betRows.reduce((total, row) => total + parseAmount(row.total_amount), 0n).toString(),
-    totalBurnWei: feeRows.reduce((total, row) => total + parseAmount(row.burn_amount), 0n).toString(),
-    resolvedEpochs: Number(resolved?.count ?? 0),
-    lastIndexedBlock: String(getMetaNumber("lastIndexedBlock") ?? 0),
-  };
+  return readGlobalStatsAggregate();
 }
 
 export function getBetRowsByEpochs(epochIds: number[]) {
@@ -1548,9 +2189,17 @@ export function upsertBets(rows: BetStorageRow[]) {
       block_number = excluded.block_number
     WHERE excluded.block_number >= ${SCOPED_BETS_TABLE}.block_number
   `);
+  const previousAmountStatement = db.prepare(`
+    SELECT total_amount
+    FROM ${SCOPED_BETS_TABLE}
+    WHERE scope = ? AND id = ?
+  `);
 
   runInTransaction(() => {
+    const readiness = ensureGlobalStatsAggregateReadyInTransaction();
+    const leaderboardReadiness = ensureLeaderboardReadModelReadyInTransaction();
     let changed = false;
+    let volumeWeiDelta = 0n;
     for (const row of rows) {
       const epochNumber = parseSafePositiveIntegerString(row.epoch);
       const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
@@ -1572,7 +2221,11 @@ export function upsertBets(rows: BetStorageRow[]) {
           identity.id,
         )) || changed;
       }
-      changed = didStatementChangeRow(statement.run(
+      const previous = previousAmountStatement.get(
+        CURRENT_STORAGE_SCOPE,
+        identity.id,
+      ) as Record<string, unknown> | undefined;
+      const accepted = didStatementChangeRow(statement.run(
         CURRENT_STORAGE_SCOPE,
         identity.id,
         normalizeWallet(row.user),
@@ -1583,9 +2236,21 @@ export function upsertBets(rows: BetStorageRow[]) {
         row.totalAmountNum,
         row.txHash,
         blockNumber,
-      )) || changed;
+      ));
+      if (accepted) {
+        volumeWeiDelta += parseGlobalStatsAmountWei(row.totalAmount) -
+          parseGlobalStatsAmountWei(previous?.total_amount);
+      }
+      changed = accepted || changed;
     }
-    if (changed) bumpPublicReadModelRevision();
+    const aggregateChanged = finalizeGlobalStatsAggregateAfterRawMutationInTransaction(
+      { volumeWei: volumeWeiDelta },
+      changed,
+    );
+    const leaderboardChanged = finalizeLeaderboardReadModelAfterRawMutationInTransaction(changed);
+    if (aggregateChanged || leaderboardChanged || readiness.needsRevisionBump || leaderboardReadiness.needsRevisionBump) {
+      bumpPublicReadModelRevision();
+    }
   }, "bets");
 }
 
@@ -1695,6 +2360,7 @@ export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
   `);
 
   runInTransaction(() => {
+    const leaderboardReadiness = ensureLeaderboardReadModelReadyInTransaction();
     let changed = false;
     for (const row of rows) {
       const epochNumber = parseSafePositiveIntegerString(row.epoch);
@@ -1711,7 +2377,8 @@ export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
         blockNumber,
       )) || changed;
     }
-    if (changed) bumpPublicReadModelRevision();
+    const leaderboardChanged = finalizeLeaderboardReadModelAfterRawMutationInTransaction(changed);
+    if (leaderboardChanged || leaderboardReadiness.needsRevisionBump) bumpPublicReadModelRevision();
   }, "reward_claims");
 }
 
@@ -1765,22 +2432,42 @@ export function upsertProtocolFeeFlushes(rows: FeeFlushStorageRow[]) {
       block_number = excluded.block_number
     WHERE excluded.block_number >= ${SCOPED_PROTOCOL_FEE_FLUSHES_TABLE}.block_number
   `);
+  const previousBurnStatement = db.prepare(`
+    SELECT burn_amount
+    FROM ${SCOPED_PROTOCOL_FEE_FLUSHES_TABLE}
+    WHERE scope = ? AND id = ?
+  `);
 
   runInTransaction(() => {
+    const readiness = ensureGlobalStatsAggregateReadyInTransaction();
     let changed = false;
+    let burnWeiDelta = 0n;
     for (const row of rows) {
       const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
       if (blockNumber === null) continue;
-      changed = didStatementChangeRow(statement.run(
+      const previous = previousBurnStatement.get(
+        CURRENT_STORAGE_SCOPE,
+        row.id,
+      ) as Record<string, unknown> | undefined;
+      const accepted = didStatementChangeRow(statement.run(
         CURRENT_STORAGE_SCOPE,
         row.id,
         row.ownerAmount,
         row.burnAmount,
         row.txHash,
         blockNumber,
-      )) || changed;
+      ));
+      if (accepted) {
+        burnWeiDelta += parseGlobalStatsAmountWei(row.burnAmount) -
+          parseGlobalStatsAmountWei(previous?.burn_amount);
+      }
+      changed = accepted || changed;
     }
-    if (changed) bumpPublicReadModelRevision();
+    const aggregateChanged = finalizeGlobalStatsAggregateAfterRawMutationInTransaction(
+      { burnWei: burnWeiDelta },
+      changed,
+    );
+    if (aggregateChanged || readiness.needsRevisionBump) bumpPublicReadModelRevision();
   }, "protocol_fee_flushes");
 }
 
@@ -2242,7 +2929,7 @@ export function putJsonPath(path: string, value: unknown) {
 
   if (path === "gamedata/_meta/lastIndexedBlock") {
     runInTransaction(() => {
-      setMetaBigInt("lastIndexedBlock", BigInt(String(value ?? "0")));
+      setLastIndexedBlockInTransaction(BigInt(String(value ?? "0")));
       bumpPublicReadModelRevision();
     }, "put_indexed_block");
     return;
