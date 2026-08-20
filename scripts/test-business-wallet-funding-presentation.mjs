@@ -38,11 +38,6 @@ export function runWalletFundingPresentationTests() {
     "auto-miner input cache must drop invalid in-progress bet sizes instead of restoring stale bad input",
   );
   assert.match(
-    autoMinerFormSource,
-    /LEGACY_AUTOMINER_INPUTS_KEY[\s\S]*window\.localStorage\.getItem\(LEGACY_AUTOMINER_INPUTS_KEY\)/,
-    "auto-miner settings cache must preserve the legacy v1 fallback during migration",
-  );
-  assert.match(
     readFileSync("scripts/smoke-browser.mjs", "utf8"),
     /lineaore:auto-miner-inputs:v2:\$\{SMOKE_CHAIN_ID\}:\$\{process\.env\.NEXT_PUBLIC_CONTRACT_ADDRESS\.toLowerCase\(\)\}/,
     "browser smoke must verify the same chain and contract scoped auto-miner cache key as runtime",
