@@ -106,6 +106,7 @@ protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
 | Diff hygiene | `git diff --check` passes; one CRLF-to-LF warning remains informational | Pass |
 | Security diff scan | Sealed scan `c611f992-3c4d-4ac6-8c9a-14033c6f7156`, snapshot digest `935fed40...3298e`, reviewed 22/22 files, 0 reportable findings; two same-user reparse candidates were validated not applicable | Pass for the frozen pre-log-fix patch only |
 | P1.17 | Canonical and isolated profiling builds were separately sealed for this SHA; the 60-second headed preflight remained partial because native `document.hidden` was never observed | Open: physical native-hidden evidence required |
+| Privy embedded modal | The pinned 3.27.2 provider's `Submit` email name and 24x24 close target are documented as upstream-owned; no DOM/CSS/node_modules workaround is allowed | External HTTPS/mobile QA open |
 | Final clean checkout | Detached fresh `npm ci`, typecheck, production dependency gate, business runner, hermetic build, P1/EVM, V9/V10 invariants and both materialization tests passed at `4c771971` | Pass locally for that SHA |
 | Prelaunch / current deployed V10 | Local compilation/provenance checks pass; external Sepolia bytecode is metadata-only mismatched against the manifest | External provenance blocker |
 | Supported Standard security scan | The local supported-scan entitlement is `not_granted`; no substitute scan was represented as Standard evidence | External entitlement blocker |
