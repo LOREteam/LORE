@@ -82,7 +82,7 @@ detail belongs under [`docs/archive/`](archive/), not in this file.
 ### Runtime identity and topology
 
 - [ ] Create a new strict V10 manifest for
-      `0x5e40c6e31642ebe8670658fe84c660bd2a0f820f` with chain, deploy block,
+      `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` with chain, deploy block,
       ABI/runtime digest, epoch-bound selector, source SHA and build provenance.
       Keep the old `0x98ee...` evidence explicitly historical.
 - [ ] Execute the production Redis/Valkey Lua `EVAL` behavior against a pinned

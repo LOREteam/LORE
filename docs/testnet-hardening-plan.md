@@ -5,7 +5,7 @@
 ## Guardrails / Границы
 
 - V9 остаётся compatibility baseline до внешне подтверждённого canonical V10 cutover. Нельзя удалять или ослаблять V9-маршруты только потому, что V10 проходит локальные проверки.
-- Старый proof для `0x98ee...` — историческое доказательство прежнего развёртывания. Текущий V10 `0x5e40c6e31642ebe8670658fe84c660bd2a0f820f` требует нового manifest, provenance и строгой проверки именно этой идентичности.
+- Старый proof для `0x98ee...` — историческое доказательство прежнего развёртывания. Текущий V10 `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` требует нового manifest, provenance и строгой проверки именно этой идентичности.
 - Randomness намеренно вне текущего объёма работ и остаётся открытым риском. Его нельзя неявно считать закрытым в testnet/mainnet readiness.
 - Никаких deploy, подписаний, wallet actions, approvals, транзакций или иных chain writes в рамках этого плана. Bounded signed canary допускается только после отдельного свежего, точного consent на конкретный Preview/лимит/окно.
 - Все секреты, приватные ключи, RPC URLs с ключами, wallet sessions и персональные данные исключаются из артефактов, журналов и отчётов.
@@ -14,7 +14,7 @@
 
 ### P0.1 Runtime identity and provenance / идентичность рантайма
 
-Собрать новый V10 testnet manifest, привязанный к canonical contract `0x5e40c6e31642ebe8670658fe84c660bd2a0f820f`, chain/network, deploy block, ABI/runtime digest и immutable Git SHA. Строгий анализатор обязан отклонять старый адрес, иной SHA, несовпадающий epoch-bound режим, неполный JSONL и неявные fallback values.
+Собрать новый V10 testnet manifest, привязанный к canonical contract `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a`, chain/network, deploy block, ABI/runtime digest и immutable Git SHA. Строгий анализатор обязан отклонять старый адрес, иной SHA, несовпадающий epoch-bound режим, неполный JSONL и неявные fallback values.
 
 Exit criteria:
 

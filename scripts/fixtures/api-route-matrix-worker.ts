@@ -330,9 +330,9 @@ async function runOgScenario() {
     amount: "1",
     amountNum: 1,
     txHash,
-    blockNumber: "31035418",
+    blockNumber: "31678225",
   }]);
-  storage.setMetaJson("lastIndexedBlock", "31035418");
+  storage.setMetaJson("lastIndexedBlock", "31678225");
   const route = await loadRoute("og");
   Object.assign(process.env, { NODE_ENV: "production" });
   const baseUrl = "https://attacker.invalid/api/jackpots/og";
