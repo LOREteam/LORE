@@ -18,8 +18,9 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   deployed, signed or submitted to a chain.
 - The historical eight-partition map remains in
   [`release-candidate-partition.md`](release-candidate-partition.md).
-- Local commits are authorized. Push, deployment, signing, wallet operations,
-  and network/chain writes are not authorized by local tests or this document.
+- Local commits are authorized. The 2026-08-20 Sepolia V10 deployment was
+  explicitly authorized and verified; no approval, bet, claim, mainnet action,
+  push, or hosted frontend deployment follows from that authorization.
 
 ## Protected database state
 
@@ -108,7 +109,7 @@ protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
 | P1.17 | Canonical and isolated profiling builds were separately sealed for this SHA; the 60-second headed preflight remained partial because native `document.hidden` was never observed | Open: physical native-hidden evidence required |
 | Privy embedded modal | The pinned 3.27.2 provider's `Submit` email name and 24x24 close target are documented as upstream-owned; no DOM/CSS/node_modules workaround is allowed | External HTTPS/mobile QA open |
 | Final clean checkout | Detached fresh `npm ci`, typecheck, production dependency gate, business runner, hermetic build, P1/EVM, V9/V10 invariants and both materialization tests passed at `4c771971` | Pass locally for that SHA |
-| Prelaunch / current deployed V10 | Local compilation/provenance checks pass; external Sepolia bytecode is metadata-only mismatched against the manifest | External provenance blocker |
+| Sepolia V10 cutover | Canonical V10 deployed at `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` in block `31678224`; strict constructor/receipt/runtime and chain proof checks pass with epoch-bound bets enabled | Pass for local Sepolia runtime; hosted frontend/indexer rollout remains external |
 | Supported Standard security scan | The local supported-scan entitlement is `not_granted`; no substitute scan was represented as Standard evidence | External entitlement blocker |
 
 The narrow canary log-path fix and documentation changes were made after the
@@ -143,9 +144,10 @@ sealed diff snapshot, so a final immutable-SHA supported scan remains required.
   profile changes.
 - Soak status and JSONL processing still need bounded incremental checkpoints,
   rotation/retention and status-latency budgets for 24-48 hour runs.
-- Current V10 `0x5e40c6e31642ebe8670658fe84c660bd2a0f820f`
-  needs a new runtime/provenance manifest. The old `0x98ee...` 50-epoch proof is
-  historical and cannot satisfy the current target.
+- Canonical Sepolia V10 is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a`
+  (deployment tx `0x9ecd67de4de27efa42b174b2de1e3542dde74ac6d1450b1ac425b850303d58b1`).
+  Its strict local post-deploy proof passes; the old `0x98ee...` 50-epoch proof
+  remains historical and cannot satisfy the current target.
 - Real Redis/Valkey Lua behavior, production-like replicas, external DB restore,
   public HTTPS/Privy and physical mobile-wallet evidence remain unproven.
 

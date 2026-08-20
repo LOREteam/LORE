@@ -12,8 +12,9 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   `4c771971a806d7bfc84b6e1376a45473bda8a4d8`.
 - Product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. A read-only Preview and
-  generated `.tmp-*`/campaign outputs remain outside commits. No push,
-  deployment, signing, wallet action, network write or chain write occurred.
+  generated `.tmp-*`/campaign outputs remain outside commits. On 2026-08-20,
+  one explicitly authorized canonical V10 deployment was sent to Sepolia and
+  strictly verified; no approval, bet, claim, mainnet action or push occurred.
 - Protected base DB is still exact (`C6EB88...EC2B482`, `258048` bytes,
   original mtime), but `659232`-byte WAL and `32768`-byte SHM exist. Both are
   exclusively openable. A copied forensic view showed only a test-created empty
@@ -89,7 +90,8 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   with a monotonic revision; their isolated 10k/110k-row regressions pass.
 - Soak status/log processing is incremental, rotated and bounded; real
   multi-replica/Redis/DB campaign evidence remains external.
-- Create a current-V10 manifest/runtime digest for `0x5e40...`; do not reuse the
+- Current canonical Sepolia V10 is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a`
+  (block `31678224`, strict post-deploy proof passes); do not reuse the
   historical `0x98ee...` proof.
 - The detached clean checkout at `4c771971` completed fresh install, dependency,
   build, P1/EVM, V9/V10, materialization and business-runner checks. A new docs
