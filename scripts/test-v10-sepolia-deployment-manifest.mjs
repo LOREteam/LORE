@@ -19,6 +19,7 @@ export function runV10SepoliaDeploymentManifestTests() {
   assert.throws(() => parseV10SepoliaDeploymentManifest(JSON.stringify({ ...manifest, fallbackAddress: manifest.contractAddress })), /unexpected schema/);
   const result = verifyV10SepoliaDeploymentManifest({ projectRoot: root });
   assert.equal(result.status, "pass");
+  assert.equal(verifyV10SepoliaDeploymentManifest({ projectRoot: root, verifyGitArtifact: false }).verifierGitSha, null);
   assert.equal(result.historicalTargetsExcluded, true);
   assert.equal(result.transactionSent, false);
 }

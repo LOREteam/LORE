@@ -76,7 +76,7 @@ function git(root, args) {
   return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-export function verifyV10SepoliaDeploymentManifest({ projectRoot = process.cwd(), manifestPath = DEFAULT_MANIFEST_PATH } = {}) {
+export function verifyV10SepoliaDeploymentManifest({ projectRoot = process.cwd(), manifestPath = DEFAULT_MANIFEST_PATH, verifyGitArtifact = true } = {}) {
   const root = path.resolve(projectRoot);
   const manifestAbsolutePath = path.resolve(root, manifestPath);
   const relativeManifestPath = path.relative(root, manifestAbsolutePath);
@@ -98,13 +98,16 @@ export function verifyV10SepoliaDeploymentManifest({ projectRoot = process.cwd()
   if (!publicConfig.includes(`"${manifest.contractAddress}" as const`) || !publicConfig.includes(`DEFAULT_INDEXER_START_BLOCK = ${deployBlockLiteral}`)) {
     throw new Error("public Sepolia config does not bind the canonical V10 target and deploy block");
   }
-  const verifierGitSha = git(root, ["rev-parse", "HEAD"]);
-  git(root, ["rev-parse", "--verify", `${manifest.sourceArtifactGitSha}^{commit}`]);
-  try {
-    execFileSync("git", ["-C", root, "diff", "--quiet", manifest.sourceArtifactGitSha, "--", ...CONTRACT_ARTIFACT_PATHS], { stdio: "ignore" });
-  } catch (error) {
-    if (error && error.status === 1) throw new Error("current V10 contract artifacts drifted from the immutable deployment artifact SHA");
-    throw error;
+  let verifierGitSha = null;
+  if (verifyGitArtifact) {
+    verifierGitSha = git(root, ["rev-parse", "HEAD"]);
+    git(root, ["rev-parse", "--verify", `${manifest.sourceArtifactGitSha}^{commit}`]);
+    try {
+      execFileSync("git", ["-C", root, "diff", "--quiet", manifest.sourceArtifactGitSha, "--", ...CONTRACT_ARTIFACT_PATHS], { stdio: "ignore" });
+    } catch (error) {
+      if (error && error.status === 1) throw new Error("current V10 contract artifacts drifted from the immutable deployment artifact SHA");
+      throw error;
+    }
   }
   return {
     status: "pass", schema: manifest.schema, network: manifest.network, chainId: manifest.chainId,

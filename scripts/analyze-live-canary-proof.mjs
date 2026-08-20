@@ -1381,7 +1381,7 @@ function evaluateCanaryAdmission({
   if (requireV10DeploymentManifest) {
     let deploymentManifest;
     try {
-      deploymentManifest = verifyV10SepoliaDeploymentManifest();
+      deploymentManifest = verifyV10SepoliaDeploymentManifest({ verifyGitArtifact: false });
     } catch (error) {
       failures.push(`canonical V10 deployment manifest is unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }

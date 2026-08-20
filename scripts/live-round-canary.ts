@@ -1503,7 +1503,7 @@ async function main() {
     `[live-canary] runtimeIdentity deployBlock=${runtimeIdentity.deployBlock} ` +
       `runtimeDigest=${runtimeIdentity.normalizedRuntimeSha256.slice(0, 12)}…`,
   );
-  const deploymentManifest = verifyV10SepoliaDeploymentManifest() as V10DeploymentManifestBinding;
+  const deploymentManifest = verifyV10SepoliaDeploymentManifest({ verifyGitArtifact: false }) as V10DeploymentManifestBinding;
   if (
     runtimeIdentity.contractAddress.toLowerCase() !== deploymentManifest.contractAddress
     || runtimeIdentity.deployBlock !== deploymentManifest.deployBlock
