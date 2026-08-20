@@ -2617,7 +2617,7 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     v10PostdeployPlanSource,
-    /const openClaimWindowEpoch = resolvedEpochs\.find\([\s\S]*block\.timestamp < epoch\.resolvedAt \+ DUST_SETTLE_DELAY[\s\S]*expectedError: openClaimWindowEpoch \? "NoWinningBet" : "RewardClaimWindowExpired"[\s\S]*if \(openClaimWindowEpoch\) \{[\s\S]*DustSettlementDelayNotReached[\s\S]*openClaimWindowChecksApplied: Boolean\(openClaimWindowEpoch\)/,
+    /const firstResolvedEpoch = firstResolved\?\.epoch[\s\S]*const openClaimWindowEpoch = firstResolved[\s\S]*resolvedEpochs\.find\([\s\S]*block\.timestamp < epoch\.resolvedAt \+ DUST_SETTLE_DELAY[\s\S]*expectedError: openClaimWindowEpoch \? "NoWinningBet" : "RewardClaimWindowExpired"[\s\S]*if \(openClaimWindowEpoch\) \{[\s\S]*DustSettlementDelayNotReached[\s\S]*openClaimWindowChecksApplied: Boolean\(openClaimWindowEpoch\)/,
     "V10 post-deploy claim and dust negatives must follow the one-year lifecycle instead of becoming stale",
   );
   assert.match(
