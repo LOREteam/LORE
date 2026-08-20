@@ -1,155 +1,186 @@
 # Current State
 
-Last updated: 2026-08-16.
+Last updated: 2026-08-20.
 
-This file contains current repository truth only. Detailed history is archived
-in [`docs/archive/`](archive/), including the post-2026-08-09 consolidation in
-[`release-hardening-2026-08-10-through-2026-08-14.md`](archive/release-hardening-2026-08-10-through-2026-08-14.md).
-The single active queue is [`remaining-worklist.md`](remaining-worklist.md).
+This file is current repository truth. Detailed history is under
+[`docs/archive/`](archive/). The only active queue is
+[`remaining-worklist.md`](remaining-worklist.md), and the long-running testnet
+campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Release candidate snapshot
 
-- Branch: `codex/repo-cleanup`; the `320`-path release candidate is committed
-  locally in the eight documented partitions, followed by one hermetic
-  clean-checkout test correction. The current `HEAD` is the documentation
-  update and the worktree is expected to be clean.
-- The historical one-to-one `320`-path partition map is retained in
+- Branch: `codex/repo-cleanup`.
+- Current `HEAD`: `87e14374606ac855333ad2b93bd91db6d8b45acc`.
+- The product, storage, testnet-proof, UX, and P1 regression packets were
+  committed locally. Only documentation, the local campaign runner, and ignored
+  generated artifacts remain unstaged. This is not yet an immutable release
+  candidate and has not been pushed or deployed.
+- The historical eight-partition map remains in
   [`release-candidate-partition.md`](release-candidate-partition.md).
-- Local commits are explicitly authorized; they do not authorize push,
-  deployment, signing, wallet actions, network writes, or chain writes.
-- Protected DB: `data/lore-v10.sqlite`, SHA-256
-  `C6EB88E635C4B3A978AF77CE7B50736D6A6A92CC7A481E166118A66D0EC2B482`,
-  `258048` bytes, mtime `2026-08-13T12:18:50.8015294Z`; WAL/SHM absent.
+- Local commits are authorized. Push, deployment, signing, wallet operations,
+  and network/chain writes are not authorized by local tests or this document.
 
-## Local verification
+## Protected database state
+
+The protected base file remains exact:
+
+- path: `data/lore-v10.sqlite`;
+- SHA-256: `C6EB88E635C4B3A978AF77CE7B50736D6A6A92CC7A481E166118A66D0EC2B482`;
+- bytes: `258048`;
+- mtime: `2026-08-13T12:18:50.8015294Z`;
+- exclusive open check: pass at the latest inspection.
+
+The protected invariant is nevertheless **not restored** because test-created
+auxiliary files remain:
+
+- `data/lore-v10.sqlite-wal`: `659232` bytes;
+- `data/lore-v10.sqlite-shm`: `32768` bytes;
+- both were exclusively openable at the latest inspection.
+
+Forensic inspection of a copy showed one logical change in the WAL: an empty
+recent-wins snapshot metadata row saved during a local test run. The base file
+was not checkpointed or modified. Removing only the WAL/SHM would discard that
+uncheckpointed test-only row and restore the recorded base invariant, but that
+is destructive and still requires explicit user approval. Until then, do not
+run a command that can resolve the default protected path and do not claim
+protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
+
+## 2026-08-20 local progress
+
+- V10 global-stats and leaderboard materialization fixtures pass after the
+  dirty-trigger conflict fix. Their database paths are explicit OS-temp paths;
+  protected base/WAL/SHM hashes remain exact at the latest recheck.
+- Testnet proof completion now fails closed on a missing canary admission in the
+  managed supervisor path. This does not constitute a signed canary or hosted
+  topology campaign.
+- Site hardening includes a real guest login CTA bridge, recovery-copy
+  consistency, transaction-bound jackpot sharing, persistent/error-aware wallet
+  transfer history, mobile rewards/onboarding/layer fixes, and dedicated public
+  FAQ/White Paper/Leaderboards metadata.
+- `https://playlore.xyz/` fails browser navigation with
+  `ERR_CERT_COMMON_NAME_INVALID`. No DNS/hosting certificate configuration is in
+  this repository; remediation remains an external domain/hosting operation.
+
+## Current local hardening packet
+
+- Wallet sink: external EIP-1193 `chainId` and the complete accounts array are
+  revalidated immediately before send. Only fully valid wrong-chain, empty-
+  account, or different-account states may safely abandon a transfer lease;
+  malformed/unknown provider state keeps it fail closed.
+- Canary allowance: the old large default approval is removed. Each role is
+  capped to exact planned spend, zero-spend roles do not approve, excessive
+  pre-existing allowance fails preflight, and the post-receipt allowance is
+  checked.
+- Soak completion: the supervisor binds proof to a run id, current-run log and
+  SHA-256 digest; the analyzer is allowlisted, redacted, timed out, tracked and
+  required for success.
+- Canary log integration: `LIVE_TEST_LOG_PATH` is now consumed through a pure
+  absolute-path policy with ordinary-file/directory checks, so the supervisor's
+  strict current-run containment can receive the actual JSONL.
+- Load tool: memory is bounded; displayed quantiles are labeled approximate,
+  while the p95 gate uses an exact above-threshold count. Error samples are
+  capped and redacted before storage/output.
+- Hermetic build DB: each process/thread receives its own SQLite file under a
+  validated owned root; strict runtime rejects leaked hermetic-build variables.
+- Business suite: `test:logic` and its summary now delegate to one isolated
+  runner with an OS-temp DB and protected main/WAL/SHM before/after snapshots.
+- P1.10: chat-session cookie parsing and expiry normalization have additional
+  executable coverage. The refreshed AST audit reports `4562/5311` behavioral
+  assertions (`85.90%`); the overall extraction remains partial.
+- Testnet plan: production-like topology, read model, long campaigns, mobile QA,
+  profiling and final evidence criteria are recorded in
+  [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
+- `.codexignore` now excludes generated `.tmp-*` trees from broad context scans.
+
+## Verification state
 
 | Boundary | Current evidence | Status |
 | --- | --- | --- |
-| Dependency policy | Node `24.5.0`, npm `11.5.1`; `nanoid@3.3.18`, `js-yaml@4.3.1`; production `0` High/Critical; no blocking all-deps finding | Pass locally |
-| Hermetic local gate | Owned temporary DB, protected DB hash/mtime/WAL/SHM invariant, bounded process cleanup, output lock/root identity | Pass on latest recorded exact-current run |
-| Clean-checkout reproduction | Disposable 297-path candidate, fresh `npm ci`, full local gate and required-local prelaunch rows | Pass for that snapshot; final SHA still pending |
-| V10 EVM properties | 8 seed epochs, 84 successful runtime transactions, 39 expected reverts, 33 conservation checks | Pass locally |
-| Business proof | Latest full summary `85501ms`, `childExitCode=0`, `assertionFailures=0` | Pass |
-| P1.10 extraction | Reproducible AST audit (`npm.cmd run audit:p1:behavior`): coordinator `18=11 source-operand + 7 behavioral`; 95 direct modules `5147=736 + 4411`; combined `5165=747 + 4418` (`85.54%` behavioral) | Partial; classifier is explicit, but source-operand assertions remain |
-| Performance P1.17 | Collector/verifier self-tests, profiling and transaction-disabled simulations | Partial; no native-hidden and sealed two-hour final-SHA evidence |
-| Working-tree security scan | Scan `1324c08f-9411-44ba-83ab-e3efd22218fc`: 287/287 reviews, 0 reportable findings, 2 suppressed candidates; both local defects were then remediated and regression-tested | Strong working-tree evidence; not final-SHA evidence |
+| Focused wallet/admin/load/canary/supervisor tests | Relevant behavioral packets passed | Pass locally |
+| TypeScript | `tsc --noEmit` passed after the canary log-path fix | Pass locally |
+| Hermetic build wrapper | Full focused hermetic test passed outside the managed sandbox; Worker-thread DB isolation is executable | Pass locally |
+| Business-suite isolation runner | First twelve-hour campaign iteration passed with the isolated runner; protected paths were rechecked unchanged | Pass locally |
+| Full business logic | Logic reached `childExitCode=0` and `assertionFailures=0`, but that pre-isolation run created the protected WAL row | Not acceptable as DB-safe final evidence |
+| Diff hygiene | `git diff --check` passes; one CRLF-to-LF warning remains informational | Pass |
+| Security diff scan | Sealed scan `c611f992-3c4d-4ac6-8c9a-14033c6f7156`, snapshot digest `935fed40...3298e`, reviewed 22/22 files, 0 reportable findings; two same-user reparse candidates were validated not applicable | Pass for the frozen pre-log-fix patch only |
+| P1.17 | Collector/verifier self-tests pass; old schema-1 evidence is not reusable | Open |
 
-The latest local packets added:
-
-- one-time chat-profile legacy migration with cross-wallet isolation, scoped
-  corrupt-key cleanup, canonical remote requests, and bounded/redacted errors;
-- storage-failure-safe chat-wallet selection plus canonical unread/row ownership;
-- a black-box chat route check that rejects non-persistent unauthorized writes
-  and accepts a mixed-case sender only through its canonical lower-case session;
-- real HeaderWalletCard SSR for login/modal, connected, copy/copied, explorer,
-  invalid-address, syncing, and not-created states;
-- canonical V10 source reads that reject intermediate symlink/junction escapes;
-- an executable deposits recovery global-bound proof that now supplies the
-  business summary marker instead of an unexecuted constant;
-- an executable dialog focus runtime covering eligibility, initial/fallback
-  focus, Tab wrapping, escaped-focus recovery, fresh Escape callbacks, nested
-  scroll locks, and safe focus restoration.
-- an executable reduced-motion runtime covering stored/system preferences,
-  invalid-value cleanup, same-tab preference propagation, media-listener cleanup,
-  backdrop decoration gating, and maintenance-overlay animation suppression.
-
-Focused tests, typecheck, targeted ESLint, diff-check, documentation validation,
-and the full business summary pass after these packets. The protected DB remains
-unchanged and no WAL/SHM was created.
+The narrow canary log-path fix and documentation changes were made after the
+sealed diff snapshot, so a final immutable-SHA supported scan remains required.
 
 ## Objective status
 
 ### P0
 
-1. Dependency overrides, lockfile, clean-install evidence, and both audit gates:
-   locally complete; hosted CI/final immutable SHA evidence remains external.
-2. Hermetic `check-local` and protected DB invariants: locally complete.
-3. Exact release candidate: the mapped local commits exist and a clean-checkout
-   reproduction exists for an earlier snapshot; final immutable-SHA
-   reproduction remains open.
-4. Security scan: supported Standard scan `66766128-d908-490a-aa46-ac144a336b1c`
-   sealed for immutable `4fdee212`; it identified legacy epoch rollover,
-   block-derived outcome entropy, unlimited approval, deep-reward single-origin
-   confirmation, and cross-context claim contention. The two locally remediable
-   claim findings are committed after that scan, so a fresh final-SHA scan remains
-   required. The V9/V10 contract and approval policy findings remain open.
+1. Restore the protected DB invariant by explicit approval to discard only the
+   test-created WAL/SHM, then prove the new isolated business runner leaves all
+   three protected paths unchanged.
+2. Commit the remaining verified documentation/operations packet without
+   generated artifacts.
+3. On the resulting immutable SHA, run a fresh detached `npm ci`, dependency
+   gates, complete local/prelaunch checks, clean-checkout reproduction and the
+   supported final security scan.
+4. Keep the known block-context randomness risk open. The user explicitly
+   deferred redesign; no contract randomness changes are in scope.
 
 ### P1
 
-- V10 EVM properties, compiler-derived ABI/provenance, wallet state machines,
-  indexer/DB recovery, API route matrix, and CI hardening have strong local
-  executable evidence. They are not production evidence.
-- The reproducible current P1.10 AST audit is `PARTIAL` at `85.54%`
-  behavioral: `747` source-operand assertions remain across the coordinator and
-  its `95` direct test modules. It classifies operands bound to `readFileSync`;
-  it does not convert source-binding checks into behavioral proof. Sixteen
-  redundant indexer finality/restart-policy, strict epoch-parser, route-cache,
-  and Auto-Miner retry source checks were removed because existing public-function
-  boundary cases already kill their unsafe mutants. The 501-line coordinator is
-  now 429 lines: release documentation and environment-template checks run from
-  a direct module.
-- Documentation is now compacted: this file is current truth,
-  [`agent-progress.md`](agent-progress.md) is the short handoff, historical detail
-  is under [`archive/`](archive/), and
-  [`remaining-worklist.md`](remaining-worklist.md) is the only active queue.
-- Actual Redis/Valkey Lua `EVAL` semantics are still unproven locally; the
-  JavaScript model must not be represented as equivalent production evidence.
-
-### UX and performance
-
-- Runtime-state, sticky mobile controls, Privy/login accessibility, chat/safe-area,
-  reduced-motion, dialog, and read-only UI packets have executable local tests.
-- P1.17 remains open: native hidden-tab behavior and a sealed clean-final-SHA
-  two-hour memory run have not been produced.
-- Intentional user-visible refresh behavior remains unchanged unless measured
-  evidence supports a change.
+- P1.10 remains partial. Continue replacing source-operand assertions only
+  where a real public behavior seam exists.
+- P1.17 has an architectural gap: strict evidence needs canonical sealed build
+  provenance and React component timings, but the profiling build uses a
+  separate output directory. Add same-SHA dual-build provenance rather than
+  weakening the verifier, then collect the two-hour native-hidden evidence.
+- Public global stats and leaderboards still perform O(N) raw-table work as data
+  grows. Implement an atomic scoped materialized read model with a monotonic
+  revision that changes on normal indexing, repair/reconcile, rollback/reorg and
+  profile changes.
+- Soak status and JSONL processing still need bounded incremental checkpoints,
+  rotation/retention and status-latency budgets for 24-48 hour runs.
+- Current V10 `0x5e40c6e31642ebe8670658fe84c660bd2a0f820f`
+  needs a new runtime/provenance manifest. The old `0x98ee...` 50-epoch proof is
+  historical and cannot satisfy the current target.
+- Real Redis/Valkey Lua behavior, production-like replicas, external DB restore,
+  public HTTPS/Privy and physical mobile-wallet evidence remain unproven.
 
 ## V10 and V9 policy
 
-- Routine `check-local`, Linux/Windows CI, and the prelaunch manifest are V10-only;
-  they no longer compile V9, run V9 invariants, or upload V9 provenance.
-- Standalone V9 source/manifest commands remain an explicit compatibility
-  baseline until V10 deployment and cutover are externally proven. Removing that
-  baseline is a separately reviewed post-cutover action.
-- Deployed Sepolia V10 remains executable but has a metadata-only exact-bytecode
-  mismatch. Do not bypass or silently relabel it.
+- Routine gates remain V10-only.
+- Standalone V9 source, manifests and compatibility commands remain until
+  canonical V10 deployment/cutover has external evidence.
+- Do not silently remove V9, relabel historical evidence or treat local selector
+  checks as deployed-bytecode proof.
 
 ## External and live blockers
 
-- G1-G14 remain `0/14 Complete`. Canonical status is in
-  [`mainnet-status-board.md`](mainnet-status-board.md) and
-  [`mainnet-proof-record.md`](mainnet-proof-record.md).
-- Current prelaunch passes every required-local row but retains exactly `25`
-  external/status blockers. Mainnet environment validation has `41` failures.
-- The latest Sepolia Preview was read-only and authorized nothing. It failed
-  closed because the actual runtime did not prove
-  `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1`; it was stale at the latest
-  refresh and supplies no G10/G11 evidence.
-- Mainnet policy does not allow Sepolia evidence to close G10/G11 without an
-  explicit policy decision.
+- G1-G14 remain `0/14 Complete`.
+- Prelaunch still has exactly `25` external/status blockers; mainnet environment
+  validation still has `41` failures until refreshed evidence proves otherwise.
 - Domain/HTTPS, Privy origins, ownership/randomness sign-off, supervised
-  processes, real two-replica limiting, fresh indexer DB, real backup/restore,
-  monitoring/Resend/Sentry, wallet/mobile QA, and final security sign-off remain
-  external requirements.
-- The protocol-randomness High cannot be closed without a scope decision that
-  permits a randomness redesign and replacement deployment; the current goal
-  explicitly forbids changing randomness.
+  processes, two replicas with real shared limiting, fresh indexer DB,
+  backup/restore, monitoring/alerts, wallet/mobile QA and final sign-off remain
+  external.
+- No current Preview authorizes a transaction. Any signed canary requires a new
+  exact read-only Preview followed by separate bounded consent.
 
-## Next authorized steps
+## Next safe sequence
 
-1. Continue bounded P1.10 behavioral extraction and finish P1.17 local evidence.
-2. On the resulting immutable SHA, run fresh `npm ci`, complete local gates,
-   protected DB invariants, and the supported full Standard security scan.
-3. Resolve external G1-G14 prerequisites and validate deployed V10 runtime.
-4. Generate a fresh read-only Preview. Request separate exact consent only after
-   that Preview; without it, perform no transaction, signing, wallet, or chain
-   action.
+1. Obtain explicit approval to delete only
+   `data/lore-v10.sqlite-wal` and `data/lore-v10.sqlite-shm` after one final
+   exclusive-access/base-hash check.
+2. Run the isolated full business summary and recheck the protected DB invariant.
+3. Commit the verified local packets, refresh P1.10 accounting and update the
+   release map/state.
+4. Implement the remaining local P1 work, then perform the immutable-SHA cycle.
+5. Run the staged campaigns in
+   [`testnet-hardening-plan.md`](testnet-hardening-plan.md) only when each
+   external prerequisite and any required live consent exists.
 
 ## Safety boundaries
 
-- Never print secrets, keyed RPC URLs, signing material, wallet files, or private
-  environment values.
-- No deployment, wallet signing, bet, claim, approval, replacement, canary, or
-  soak has been authorized by local green checks.
-- Do not claim mainnet, G1-G14, browser, native-hidden, long-soak, or production
-  readiness from local tests alone.
+- Never print secrets, private keys, mnemonics, wallet files, sessions, keyed
+  RPC URLs or private environment values.
+- No deploy, approval, bet, claim, canary, soak, signing or chain write follows
+  from a local green test.
+- Do not call the project mainnet-ready while P1.17, immutable-SHA evidence,
+  external gates and the current protected-DB invariant remain open.

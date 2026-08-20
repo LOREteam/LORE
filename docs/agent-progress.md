@@ -1,130 +1,114 @@
 # Agent Progress
 
-Last updated: 2026-08-16.
+Last updated: 2026-08-20.
 
-This is the compact continuation handoff. Current repository truth is in
-[`current_state.md`](current_state.md), the only active queue is
-[`remaining-worklist.md`](remaining-worklist.md), and detailed history is under
-[`archive/`](archive/), including
-[`release-hardening-2026-08-10-through-2026-08-14.md`](archive/release-hardening-2026-08-10-through-2026-08-14.md).
+Current truth is in [`current_state.md`](current_state.md). The active queue is
+[`remaining-worklist.md`](remaining-worklist.md); long-running testnet campaigns
+are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
-## Current continuation point
+## Continuation point
 
-- Commit `1321c7ea` carries the wallet-security packet from the sealed
-  `5cce4f92` scan: mining transaction-envelope verification and claim receipt
-  quorum/finality. Its first clean-checkout cycle exposed only test-fixture and
-  stale source-regex defects; the small follow-up is currently uncommitted and
-  has passed focused tests, typecheck, and the full business coordinator. It
-  still requires a separate commit approval and a new immutable-SHA cycle;
-  neither packet authorizes push, deployment, signing, wallet action, or chain
-  write.
-- Branch `codex/repo-cleanup`; the `320`-path candidate is committed locally
-  across the eight documented partitions, followed by one hermetic
-  clean-checkout test correction. The documentation update is the current
-  `HEAD`, with a clean worktree expected.
-- The exact eight-partition map is retained as historical commit evidence in
-  [`release-candidate-partition.md`](release-candidate-partition.md).
-- Protected `data/lore-v10.sqlite` remains `258048` bytes with SHA-256
-  `C6EB88E635C4B3A978AF77CE7B50736D6A6A92CC7A481E166118A66D0EC2B482`,
-  mtime `2026-08-13T12:18:50.8015294Z`, and no WAL/SHM.
-- Local wallet hardening continued autonomously: commits `9e136289` and `aa7c1c8b`
-  route deep-reward receipt verification through the existing two-origin finality
-  helper and hold a fail-closed chain-and-actor Web Lock through every reward,
-  deep-reward, and Safety Pool claim flow. `test-wallet-two-context-nonce-lock`,
-  the full business suite, and strict TypeScript passed. Push, deploy, signing,
-  wallet, network, or chain actions still require their own authorization.
+- Branch `codex/repo-cleanup`; `HEAD`
+  `87e14374606ac855333ad2b93bd91db6d8b45acc`.
+- Product, storage, testnet-proof, UX, and P1 regression packets are committed
+  locally. Only docs, a local campaign runner, and generated artifacts remain
+  outside commits. No push, deployment, signing, wallet action, network write
+  or chain write occurred in this continuation.
+- Protected base DB is still exact (`C6EB88...EC2B482`, `258048` bytes,
+  original mtime), but `659232`-byte WAL and `32768`-byte SHM exist. Both are
+  exclusively openable. A copied forensic view showed only a test-created empty
+  recent-wins snapshot metadata row in the WAL.
+- Do not run a command that can select the default protected DB. Explicitly
+  isolated OS-temp SQLite fixtures are allowed; never delete or checkpoint the
+  base DB or its auxiliary files without separate destructive approval.
 
-## Latest verified packets
+## Current local session — 2026-08-20
 
-- Chat profile: one-time legacy migration, wallet-scoped storage, corrupt-key
-  cleanup, canonical remote requests, and bounded/redacted errors.
-- Stable chat wallet identity: storage failures fail closed, candidates are
-  canonical and deduplicated, stale keys are removed exactly, and unread/row
-  ownership shares the same identity policy.
-- Chat message sender canonicalization: the real Next route matrix proves a
-  mixed-case sender is accepted only under its canonical session and persists
-  as the lower-case address, while rejected writes remain non-persistent.
-- Header wallet presentation: real SSR covers login/modal, connected,
-  copy/copied, explorer, invalid address, syncing, and not-created states.
-- Security-scan closure: V10 source-unit reads now reject intermediate
-  symlink/junction escapes, and the business proof executes the deposits
-  recovery global-bound control and its mutant before emitting the marker.
-- Dialog accessibility: the real hook delegates to an executable focus runtime;
-  behavior tests cover hidden/disabled/inert candidates, initial/fallback focus,
-  Tab wrapping, escaped focus, fresh Escape handlers, nested scroll locks, and
-  safe focus restoration.
-- Reduced motion: the real hook delegates to an executable storage/media
-  runtime; behavior tests cover explicit and system preferences, invalid-value
-  cleanup, same-tab propagation, listener cleanup, PageBackdrop decoration gating, and
-  MaintenanceOverlay animation suppression.
+- P0.3 global-stats and leaderboard materialization fixtures pass after the
+  leaderboard dirty-trigger conflict fix. Both use explicit OS-temp SQLite;
+  protected base/WAL/SHM hashes remain exact.
+- Strict managed-soak proof validation now always requires one canonical canary
+  admission; a missing declaration fails closed. This is not signed-canary
+  evidence.
+- Guest mining CTAs now open the Header-owned login flow rather than rendering
+  inert login buttons. No signing occurs at this boundary.
+- Wallet recovery copy is aligned across FAQ, tutorial, White Paper and backup
+  gate. Jackpot share/OG fields derive from verified indexed transaction events.
+- The UI now has direct public docs URLs, mobile rewards/onboarding/layer fixes,
+  and persistent stale/partial/error-aware wallet transfer history.
 
-Focused packet tests, typecheck, targeted ESLint, and scoped diff-check pass.
-The latest full business summary passes in `85501ms` with `childExitCode=0`,
-`assertionFailures=0`, and `depositsRecoveryGlobalBound=true`.
+## Implemented in the current packet
 
-## Objective evidence
+1. External-wallet provider context is fully validated immediately before the
+   send sink; unknown/malformed state preserves the transfer intent lease.
+2. Testnet canary approvals are exact-run-cap, with zero-spend and excess-
+   allowance behavior explicit and checked after receipt.
+3. Soak completion is bound to the current run/log/input digest and requires a
+   managed, timed, redacted strict analyzer.
+4. The canary now consumes supervisor `LIVE_TEST_LOG_PATH` through a pure strict
+   path policy; focused behavior, syntax and `tsc --noEmit` pass.
+5. `load-http` uses bounded approximate display samples, exact p95 gate counts
+   and pre-storage error redaction.
+6. Hermetic builds route DB imports to per-process/per-Worker files and strict
+   runtime rejects leaked hermetic variables.
+7. Both business-suite entrypoints use a shared OS-temp SQLite runner with
+   protected main/WAL/SHM snapshots; its mocked regression passes.
+8. Chat session parsing has additional imported behavior coverage; P1.10 remains
+   partial.
+9. A production-like testnet campaign plan was added and broad generated
+   `.tmp-*` paths were added to `.codexignore`.
 
-- P0 dependency and hermetic local gates have strong local evidence. Production
-  dependencies have `0` High/Critical findings; known dev-toolchain advisories
-  remain non-blocking under the recorded policy.
-- Two consecutive exact-tree local checks preserved the protected DB and cleaned
-  owned temporary state. A disposable clean checkout with fresh `npm ci` passed
-  for an earlier candidate snapshot; the final immutable SHA cycle is open.
-- V10 EVM properties pass locally: `8` seed epochs, `84` successful runtime
-  transactions, `39` expected reverts, and `33` conservation checks.
-- Supported Standard scan `66766128-d908-490a-aa46-ac144a336b1c` sealed against
-  immutable `4fdee212` and reported five source findings: V9 stale-epoch rollover,
-  block-derived entropy, unlimited approval, deep-reward single-origin receipt
-  confirmation, and cross-context claim submissions. The last two are remediated
-  in subsequent local commits; therefore a fresh supported scan of final `HEAD`
-  is still required. Contract/policy findings remain open.
-- The reproducible current P1.10 AST audit is coordinator
-  `18=11 source-operand + 7 behavioral`, `95` direct modules
-  `5147=736 + 4411`, combined `5165=747 + 4418` (`85.54%` behavioral).
-  `npm.cmd run audit:p1:behavior` classifies `assert` operands bound to
-  `readFileSync`; P1.10 remains `PARTIAL` because this still leaves `747`
-  source-operand assertions. Existing indexer finality/restart, strict
-  epoch-parser, route-cache, and Auto-Miner retry public-function cases now
-  replace sixteen redundant source checks. Release documentation and environment-template
-  checks now run from a direct module, reducing the coordinator from 501 to 429
-  lines. The chat route matrix replaces one former source-regex with an actual
-  canonical-sender/session/persistence flow.
-- P1.17 remains partial: no native hidden-tab evidence and no sealed two-hour
-  memory run bound to the eventual final SHA.
+## Verification and review
 
-## V10 and V9 boundary
+- Focused wallet, admin session, load statistics, release operations, supervisor
+  behavior and hermetic build tests passed during packet development.
+- The full business logic coordinator reached green, but the old launch path
+  opened the protected DB and created the WAL row. Treat that run as logic
+  evidence only, not protected-DB-safe release evidence.
+- The first iteration of the 12-hour local campaign passed its isolated full
+  business runner, P1/EVM, V9/V10, materialization and hermetic steps. It does
+  not replace the final immutable-SHA cycle.
+- Sealed Codex Security diff scan
+  `c611f992-3c4d-4ac6-8c9a-14033c6f7156` covered the frozen 22-file patch with
+  22/22 review items and 0 reportable findings. Two local same-user reparse race
+  candidates were validated `not_applicable` because the required actor already
+  has equivalent host filesystem authority.
+- The canary log-path integration fix and docs were added after that snapshot;
+  final immutable-SHA scanning remains open.
 
-- Routine `check-local`, Linux/Windows CI, and prelaunch are V10-only.
-- Standalone V9 source, manifest, and compatibility commands remain only as a
-  reviewed baseline until canonical V10 deployment and cutover are externally
-  proven. Do not remove that baseline or silently relabel the current deployment
-  before the cutover evidence exists.
-- Sepolia V10 is executable but retains a metadata-only exact-bytecode mismatch.
+## Important open local work
 
-## External blockers
+- Preserve and prove the protected DB invariant through the immutable-SHA
+  cycle; WAL/SHM removal still needs separate destructive approval.
+- P1.10 audit is refreshed to `4562/5311` behavioral (`85.90%`); continue
+  bounded extraction.
+- Add same-SHA dual provenance for canonical and profiling builds; collect the
+  real two-hour P1.17 native-hidden/read-only evidence.
+- Replace O(N) global-stats/leaderboard request work with an atomic materialized
+  scoped read model and monotonic revision.
+- Make soak status/log processing incremental, rotated and bounded.
+- Create a current-V10 manifest/runtime digest for `0x5e40...`; do not reuse the
+  historical `0x98ee...` proof.
+- Execute real Redis/Valkey Lua, clean-checkout/fresh-install/final scan, and
+  hosted CI evidence.
 
-- G1-G14 remain `0/14 Complete`.
-- Prelaunch passes every required-local row but still reports exactly `25`
-  external/status blockers and `41` mainnet environment failures.
-- The last Preview was read-only, is stale, and proved no transaction consent or
-  G10/G11 completion. It also failed closed on missing runtime proof for
-  `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1`.
-- Domain/HTTPS, Privy origins, ownership/randomness sign-off, supervised
-  processes, real two-replica rate limiting, fresh indexer DB, real
-  backup/restore, monitoring, wallet/mobile QA, and final security sign-off need
-  external evidence.
-- The protocol-randomness High needs a scope decision permitting a redesign and
-  replacement deployment; the active goal forbids changing randomness.
+## External boundary
 
-## Next safe sequence
+- V9 remains a compatibility baseline until independently evidenced V10 cutover.
+- Randomness redesign is explicitly deferred and remains an open risk.
+- G1-G14 remain `0/14`; the recorded `25` external/status blockers remain open.
+- Production-like replicas, Redis, external persistence/restore, HTTPS/Privy,
+  monitoring, physical mobile wallets, signed canary, recovery/soak campaigns
+  and final sign-off all require external evidence.
+- Any signed testnet operation requires a fresh exact Preview and separate
+  bounded consent. Existing private keys in environment do not constitute that
+  consent.
 
-1. Refresh the exact P1.10 audit and continue bounded behavioral extraction.
-2. Complete P1.17 local evidence without changing intentional refresh behavior.
-3. On the immutable SHA, run fresh `npm ci`, full local/prelaunch gates,
-   protected-DB invariants, and the supported Standard security scan.
-4. Resolve external G1-G14 prerequisites and validate canonical V10 cutover.
-5. Only then create a fresh read-only Preview and request separate exact consent
-   for any bounded live transaction sequence.
+## Immediate next sequence
 
-Local green checks do not authorize deployment, signing, wallet actions, bets,
-claims, approvals, replacement transactions, canaries, soaks, or chain writes.
+1. Ask once for the precise destructive permission to discard the two test-only
+   auxiliary SQLite files.
+2. Reverify exclusive access and base identity, delete only WAL/SHM if approved,
+   then run the isolated full business summary and prove no protected change.
+3. Commit the verified documentation/operations packet and refresh exact status.
+4. Continue remaining local P1 work before the final immutable-SHA cycle.

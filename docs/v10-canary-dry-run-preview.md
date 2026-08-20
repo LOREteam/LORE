@@ -1,6 +1,6 @@
 # V10 Canary Dry-Run Preview
 
-Last updated: 2026-08-17T11:27:34.998Z.
+Last updated: 2026-08-20T07:08:07.766Z.
 
 Scope: Linea Sepolia V10 read-only and dry-run readiness only. This document is
 not an authorization to send transactions, start a soak, deploy, or change
@@ -14,14 +14,17 @@ npm.cmd run preview:canary:v10:dry-run
 
 ## Overall Status
 
-- status: fail
+- status: pass
 - rpcLabel: linea-sepolia-public-fallback
 - transactionSent: false
 - signingMaterialLoaded: false
-- operationalBoundaryVerified: false
+- operationalBoundaryVerified: true
 - walletClientCreated: false
 - contractWriteSubmitted: false
-- dryRunProofBlocksG10G11: false
+- dryRunProofBlocksG10G11: true
+- walletSetSha256: 7e6bdd41459e41c6d9bb4db7647bfc0a9c22b633c985f0dd826c474a8a592af5
+- canaryPlanSha256: 621695d20f8cc7a7d4a1b85e58edb49d5636d7b57bdd5c890f3ef29fad48adfe
+- canaryLogBound: true
 
 ## Read-Only Planner
 
@@ -31,15 +34,45 @@ Command:
 npm.cmd run plan:canary:v10:postdeploy:summary
 ```
 
-- exit: 1
+- exit: 0
+- mode: read-only
+- network: sepolia
+- chainId: 59141
+- transactionSent: false
+- signingMaterialLoaded: false
+- walletClientCreated: false
+- contractWriteSubmitted: false
+- transactionLimit: 7
+- estimatedGas: 566008
+- plannedTransfersLinea: 0.793125
 
 Redacted excerpt:
 
 ```text
 > linea-miner@0.1.0 plan:canary:v10:postdeploy:summary
 > node scripts/check-contract-compilation-provenance.mjs --target=v10 --summary-only && tsx scripts/plan-v10-postdeploy-canary.ts --summary-only
-{"status":"pass","target":"v10","compilerVersion":"0.8.36+commit.8a079791.Emscripten.clang","settings":{"optimizer":true,"runs":200,"viaIR":false,"evmVersion":"osaka"},"bytecodeBytes":17278,"runtimeBytecodeBytes":16488,"executableRuntimeBytes":16435,"abiFragmentsSha256":"<redacted>","manifestMatches":true,"abiSnapshotMatches":true,"wouldWrite":false}
-[v10-postdeploy-plan] V10 post-deploy planning requires epoch-bound runtime mode
+{"status":"pass","target":"v10","compilerVersion":"0.8.36+commit.8a079791.Emscripten.clang","settings":{"optimizer":true,"runs":200,"viaIR":false,"evmVersion":"osaka"},"bytecodeBytes":17278,"runtimeBytecodeBytes":16488,"executableRuntimeBytes":16435,"compilationManifestSha256":"<redacted>","normalizedExecutableRuntimeSha256":"<redacted>","runtimeBytecodeSha256":"<redacted>","sourceSha256":"<redacted>","abiFragmentsSha256":"<redacted>","manifestMatches":true,"abiSnapshotMatches":true,"wouldWrite":false}
+{
+"mode": "read-only",
+"network": "sepolia",
+"chainId": 59141,
+"rpcCount": 2,
+"operationalBoundary": {
+"transactionSent": false,
+"signingMaterialLoaded": false,
+"walletClientCreated": false,
+"contractWriteSubmitted": false,
+"outputAddressFree": true
+},
+"snapshot": {
+"blockNumber": "31671439",
+"timestamp": "1787209607"
+},
+"runtimeIdentity": {
+"deployBlock": "31035418",
+"manifestDigest": "<redacted>",
+"normalizedRuntimeSha256": "<redacted>",
+"observedBlock": "31671439",
 ```
 
 ## Pending Nonce Dry-Run
@@ -77,28 +110,45 @@ $env:LIVE_CANARY_RPC_LABEL = "linea-sepolia-public-fallback"
 npm.cmd run live:canary:v10:matrix
 ```
 
-- exit: 1
+- exit: 0
+- network: sepolia
+- chainId: 59141
+- execution: dry-run
+- rounds: 6
+- plannedBetTx: 12
+- plannedStake: 0.84
+- walletPreflightReady: 3/3
+- walletSetSha256: 7e6bdd41459e41c6d9bb4db7647bfc0a9c22b633c985f0dd826c474a8a592af5
+- canaryPlanSha256: 621695d20f8cc7a7d4a1b85e58edb49d5636d7b57bdd5c890f3ef29fad48adfe
+- transactionSent: false
+- signingMaterialLoaded: false
+- walletClientCreated: false
+- contractWriteSubmitted: false
+- log: data\live-test-runs\live-canary-2026-08-20T07-07-21-854Z.jsonl
+- logBytes: 5269
+- logSha256: ab8f72af34b3d6401891533f79a0720ba32a6ce802a66a13cec7e0f588ae08a4
 
 Redacted excerpt:
 
 ```text
 > linea-miner@0.1.0 live:canary:v10:matrix
 > tsx scripts/live-round-canary.ts --v10-matrix-only
-C:\Users\bogda\linea-miner-main\scripts\live-round-canary.ts:60
-throw new Error("V10 matrix mode requires NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1");
-^
-Error: V10 matrix mode requires NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1
-at event (C:\Users\bogda\linea-miner-main\scripts\live-round-canary.ts:60:9)
-at Object.<anonymous> (C:\Users\bogda\linea-miner-main\scripts\live-round-canary.ts:1318:2)
-at Module._compile (node:internal/modules/cjs/loader:1738:14)
-at Object.transformer (C:\Users\bogda\linea-miner-main\node_modules\tsx\dist\register-D46fvsV_.cjs:3:1104)
-at Module.load (node:internal/modules/cjs/loader:1470:32)
-at Module._load (node:internal/modules/cjs/loader:1290:12)
-at TracingChannel.traceSync (node:diagnostics_channel:322:14)
-at wrapModuleLoad (node:internal/modules/cjs/loader:238:24)
-at cjsLoader (node:internal/modules/esm/translators:317:5)
-at ModuleWrap.<anonymous> (node:internal/modules/esm/translators:209:7)
-Node.js v24.5.0
+[live-canary] network=sepolia chainId=59141
+[live-canary] contract=configured
+[live-canary] token=configured
+[live-canary] rpcLabel=linea-sepolia-public-fallback readRpcCount=2 broadcastRpcCount=3
+[live-canary] rpcFailoverInjection=disabled
+[live-canary] v10Matrix=bounded execution=dry-run
+[live-canary] walletSetSha256=<redacted>
+[live-canary] canaryPlanSha256=<redacted>
+[live-canary] operationalBoundary signingMaterialLoaded=false transactionSent=false walletClientCreated=false contractWriteSubmitted=false
+[live-canary] emptyResolveBootstrap=disabled
+[live-canary] resolveTxLimit=5
+[live-canary] feeMeasurement repeatSameBet=enabled forceAllowanceApprove=disabled
+[live-canary] log=C:\Users\bogda\linea-miner-main\data\live-test-runs\live-canary-2026-08-20T07-07-21-854Z.jsonl
+[live-canary] runtimeIdentity deployBlock=31035418 runtimeDigest=247fd0402f97…
+[live-canary] rounds=6 plannedBetTx=12 plannedStake=0.84 LINEA randomize=no configuredTotal=0.01..0.03 tiles=1..25
+[live-canary] walletPreflight ready=3/3 approvalsRequired=3 roles=MANUAL,AUTOMINER_A,AUTOMINER_B
 ```
 
 ## Dry-Run Proof Analysis
@@ -106,14 +156,44 @@ Node.js v24.5.0
 Command:
 
 ```powershell
-node scripts/analyze-live-canary-proof.mjs <missing-log> --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix
+node scripts/analyze-live-canary-proof.mjs data\live-test-runs\live-canary-2026-08-20T07-07-21-854Z.jsonl --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix
 ```
 
-- analyzer skipped because the matrix dry-run did not expose a log path
+- exit: 1
+- dryRunProofBlocksG10G11: true
+- successfulBetTx: 0
+- uniqueBetEpochs: 0
+- logSha256: ab8f72af34b3d6401891533f79a0720ba32a6ce802a66a13cec7e0f588ae08a4
+- logBytes: 5269
 
 Redacted excerpt:
 
-_No output captured._
+```text
+# Live Canary Proof Summary
+Log: live-canary-2026-08-20T07-07-21-854Z.jsonl
+Log SHA-256: <redacted>
+Log bytes: 5269
+Timestamp: 2026-08-20T07:08:07.757Z
+Strict: yes
+Require epoch-bound bets: yes
+Require V10 gas matrix: yes
+Profile: v10-matrix (Linea Sepolia bounded V10 matrix)
+Minimum epochs: 6
+Minimum auto-miner epochs: 4
+Minimum elapsed ms per epoch: 45000
+Manifest: not required
+| Metric | Value |
+| --- | --- |
+| bet tx | 0 |
+| successful bet tx | 0 |
+| epoch-bound successful bet tx | 0 / 0 |
+| successful auto-miner bet tx | 0 |
+| successful auto-miner unique epochs | 0 |
+| failed bet tx | 0 |
+| unique bet epochs | 0 |
+| first / last epoch | n/a / n/a |
+| elapsed canary ms | n/a |
+```
 
 ## Fresh Consent Boundary
 
@@ -137,3 +217,4 @@ Minimum fresh authorization fields:
 - permitted roles
 - stop criteria
 - confirmation that no already-completed transaction should be repeated
+- exact Preview SHA-256, walletSetSha256, and canaryPlanSha256 copied from this fresh output
