@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as uiButtonModule from "../app/components/ui/UiButton.tsx";
 import * as walletTransferRowModule from "../app/components/wallet/WalletTransferRow.tsx";
 
+const uiButton = uiButtonModule.default ?? uiButtonModule;
 const walletTransferRow = walletTransferRowModule.default ?? walletTransferRowModule;
 
 export function runWalletFundingPresentationTests() {
@@ -101,12 +103,8 @@ export function runWalletFundingPresentationTests() {
     /<button[^>]*aria-label="Send ETH in progress"[^>]*title="Send ETH in progress"/,
     "wallet top-up action must expose the model-derived action label and title",
   );
-  const uiButtonSource = readFileSync("app/components/ui/UiButton.tsx", "utf8");
-  assert.match(
-    uiButtonSource,
-    /type\s*=\s*"button"[\s\S]*<button[\s\S]*type=\{type\}/,
-    "shared UiButton must default to non-submit semantics for reusable wallet/chat/admin actions",
-  );
+  const defaultUiButtonMarkup = renderToStaticMarkup(React.createElement(uiButton.UiButton, null, "Action"));
+  assert.match(defaultUiButtonMarkup, /<button[^>]*type="button"/);
 
   const walletSettingsModalSource = readFileSync("app/components/WalletSettingsModal.tsx", "utf8");
   assert.match(
