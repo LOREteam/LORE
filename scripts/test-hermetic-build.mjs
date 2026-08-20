@@ -117,10 +117,6 @@ function assertTemporaryDbWasRemoved(dbPath) {
   );
 }
 
-function hermeticBuildDbPath(root, processId) {
-  return join(root, `worker-${processId}.sqlite`);
-}
-
 function removeTestEntry(entryPath) {
   if (!entryPath) return;
   let stats;
@@ -785,56 +781,24 @@ for (const testCase of [
 
 {
   const root = createFixture();
-  const esbuildPath = resolve("node_modules", "esbuild", "lib", "main.js");
+  const workerProbePath = join(root, "worker-db-probe.mjs");
+  const workerProbeFixturePath = resolve("scripts", "fixtures", "hermetic-worker-db-probe.ts");
   try {
     const protectedBefore = snapshotProtectedDatabaseFiles(root);
+    const esbuild = await import("esbuild");
+    await esbuild.build({
+      entryPoints: [workerProbeFixturePath],
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      outfile: workerProbePath,
+    });
     const source = `
       const { spawnSync } = require("node:child_process");
-      const esbuild = require(${JSON.stringify(esbuildPath)});
       const fs = require("node:fs");
-      const path = require("node:path");
-      const workerProbePath = path.join(process.env.LORE_HERMETIC_BUILD_DB_ROOT, "worker-db-probe.mjs");
-      esbuild.buildSync({
-        stdin: {
-          contents: ${JSON.stringify(`
-        import { Worker, isMainThread, parentPort } from "node:worker_threads";
-        import { db, dbPath } from "./server/db.ts";
-
-        if (!isMainThread) {
-          parentPort?.postMessage(dbPath);
-          db.close();
-        } else {
-          const collect = () => new Promise<string>((resolve, reject) => {
-            const worker = new Worker(new URL(import.meta.url));
-            worker.once("message", (value) => resolve(String(value)));
-            worker.once("error", reject);
-            worker.once("exit", (code) => {
-              if (code !== 0) reject(new Error(\`worker exited \${code}\`));
-            });
-          });
-          const main = async () => {
-            const paths = await Promise.all([collect(), collect()]);
-            console.log(JSON.stringify({ processId: process.pid, paths }));
-            db.close();
-          };
-          void main().catch((error) => {
-            console.error(error);
-            process.exitCode = 1;
-          });
-        }
-      `)},
-          loader: "ts",
-          resolveDir: ${JSON.stringify(resolve("."))},
-          sourcefile: "worker-db-probe.ts",
-        },
-        bundle: true,
-        format: "esm",
-        platform: "node",
-        outfile: workerProbePath,
-      });
       const workers = spawnSync(
         process.execPath,
-        [workerProbePath],
+        [${JSON.stringify(workerProbePath)}],
         { cwd: process.cwd(), env: process.env, encoding: "utf8", windowsHide: true },
       );
       if (workers.status !== 0 || workers.error) {
