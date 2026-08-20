@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { resolveCanaryProofProfile } from "./canary-proof-profile.mjs";
 import { hasPublicProofHttpsUrl as hasPublicHttpsUrl } from "./collect-proof-common.mjs";
+import { verifyV10SepoliaDeploymentManifest } from "./verify-v10-sepolia-deployment-manifest.mjs";
 
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_CANARY_ARTIFACT_TEXT_BYTES = 256 * 1024;
@@ -26,6 +27,7 @@ const canaryLaunchGateGroups = "canary=2";
 const requireEpochBound = process.argv.includes("--require-epoch-bound") || process.env.CANARY_REQUIRE_EPOCH_BOUND === "1";
 const requireV10GasMatrix = process.argv.includes("--require-v10-gas-matrix") || process.env.CANARY_REQUIRE_V10_GAS_MATRIX === "1";
 const requireCanaryAdmission = process.argv.includes("--require-canary-admission") || process.env.CANARY_REQUIRE_ADMISSION === "1";
+const requireV10DeploymentManifest = process.argv.includes("--require-v10-deployment-manifest") || process.env.CANARY_REQUIRE_V10_DEPLOYMENT_MANIFEST === "1";
 const CANONICAL_POSITIVE_INTEGER_RE = /^[1-9]\d{0,15}$/;
 const CANONICAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
@@ -63,7 +65,7 @@ if (!logPath) {
   if (summaryOnly) {
     printMissingLogSummary("live canary log path is missing");
   } else {
-    console.error("Usage: node scripts/analyze-live-canary-proof.mjs <live-canary.jsonl> [--profile=launch|testnet|v10-matrix] [--strict] [--summary-only] [--require-epoch-bound] [--require-v10-gas-matrix] [--require-canary-admission] [--manifest=<path>]");
+    console.error("Usage: node scripts/analyze-live-canary-proof.mjs <live-canary.jsonl> [--profile=launch|testnet|v10-matrix] [--strict] [--summary-only] [--require-epoch-bound] [--require-v10-gas-matrix] [--require-canary-admission] [--require-v10-deployment-manifest] [--manifest=<path>]");
     process.exitCode = 1;
   }
 } else if (!isExistingFile(resolve(process.cwd(), logPath))) {
@@ -1322,12 +1324,14 @@ function evaluateCanaryAdmission({
     "schema", "runId", "execution", "profile", "network", "chainId", "contractAddress", "contractDeployBlock",
     "runtimeSha256", "manifestSha256", "canonicalProvenanceVerified", "previewSha256", "walletSetSha256",
     "canaryPlanSha256", "selectedRoles", "roleCaps",
+    ...(admission.schema === 2 ? ["deploymentManifestSha256", "sourceArtifactGitSha"] : []),
   ].sort();
   const actualAdmissionKeys = Object.keys(admission).sort();
   if (JSON.stringify(actualAdmissionKeys) !== JSON.stringify(expectedAdmissionKeys)) {
     failures.push("canonical canary admission has an unexpected schema");
   }
-  if (admission.schema !== 1) failures.push("canonical canary admission schema must be 1");
+  if (admission.schema !== 1 && admission.schema !== 2) failures.push("canonical canary admission schema must be 1 or 2");
+  if (requireV10DeploymentManifest && admission.schema !== 2) failures.push("V10 deployment manifest requires canonical admission schema 2");
   if (typeof admission.runId !== "string" || !ADMISSION_RUN_ID_RE.test(admission.runId)) {
     failures.push("canonical canary admission runId is invalid");
   }
@@ -1372,6 +1376,21 @@ function evaluateCanaryAdmission({
   }
   if (admission.execution === "dry-run" && admission.previewSha256 !== null) {
     failures.push("canonical dry-run admission previewSha256 must be null");
+  }
+
+  if (requireV10DeploymentManifest) {
+    let deploymentManifest;
+    try {
+      deploymentManifest = verifyV10SepoliaDeploymentManifest();
+    } catch (error) {
+      failures.push(`canonical V10 deployment manifest is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (deploymentManifest) {
+      if (admission.deploymentManifestSha256 !== deploymentManifest.deploymentManifestSha256) failures.push("canonical canary admission deployment manifest SHA-256 does not match current V10 manifest");
+      if (admission.sourceArtifactGitSha !== deploymentManifest.sourceArtifactGitSha) failures.push("canonical canary admission deployment artifact Git SHA does not match current V10 manifest");
+      if (normalizedAdmissionContract !== deploymentManifest.contractAddress || admission.contractDeployBlock !== deploymentManifest.deployBlock) failures.push("canonical canary admission target does not match current V10 deployment manifest");
+      if (admission.runtimeSha256 !== deploymentManifest.normalizedExecutableRuntimeSha256 || admission.manifestSha256 !== deploymentManifest.compilationManifestSha256) failures.push("canonical canary admission runtime provenance does not match current V10 deployment manifest");
+    }
   }
 
   const selectedRoles = canonicalAdmissionRoles(admission.selectedRoles);
@@ -1494,6 +1513,7 @@ function canonicalAdmissionPayload(admission) {
     contractDeployBlock: admission.contractDeployBlock,
     runtimeSha256: admission.runtimeSha256,
     manifestSha256: admission.manifestSha256,
+    ...(admission.schema === 2 ? { deploymentManifestSha256: admission.deploymentManifestSha256, sourceArtifactGitSha: admission.sourceArtifactGitSha } : {}),
     canonicalProvenanceVerified: admission.canonicalProvenanceVerified,
     previewSha256: admission.previewSha256,
     walletSetSha256: admission.walletSetSha256,

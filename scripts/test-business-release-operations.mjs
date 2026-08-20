@@ -686,7 +686,7 @@ export function runReleaseOperationsTests() {
   );
   assert.equal(
     packageScripts["proof:testnet:canary:v10:summary"],
-    "node scripts/analyze-live-canary-proof.mjs --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix",
+    "node scripts/analyze-live-canary-proof.mjs --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix --require-v10-deployment-manifest",
     "V10 testnet canary matrix proof must expose a compact fail-closed summary command",
   );
   assert.match(
@@ -1144,7 +1144,7 @@ export function runReleaseOperationsTests() {
   );
   assert.equal(
     packageScripts["proof:testnet:canary:v10"],
-    "node scripts/analyze-live-canary-proof.mjs --profile=v10-matrix --strict --require-epoch-bound --require-v10-gas-matrix",
+    "node scripts/analyze-live-canary-proof.mjs --profile=v10-matrix --strict --require-epoch-bound --require-v10-gas-matrix --require-v10-deployment-manifest",
     "V10 testnet proof command must fail closed on epoch-bound and mined-gas matrix evidence",
   );
   const v10CanaryProofDir = mkdtempSync(join(tmpdir(), "lore-v10-canary-proof-"));
@@ -1232,6 +1232,9 @@ export function runReleaseOperationsTests() {
     assert.match(pendingProof.stdout, /failed bets 1/);
     const protectedProof = runV10CanaryProof("protected", [{ ...baseBetEvent, epochBound: true }]);
     assert.equal(protectedProof.status, 1, "the synthetic proof still lacks its required gas matrix");
+    const manifestBoundProof = runV10CanaryProof("manifest-bound", [{ ...baseBetEvent, epochBound: true }], ["--require-v10-deployment-manifest"]);
+    assert.equal(manifestBoundProof.status, 1, "a synthetic non-canonical V10 target must fail the deployment-manifest gate");
+    assert.match(manifestBoundProof.stdout, /target does not match current V10 deployment manifest/);
     assert.doesNotMatch(protectedProof.stdout, /successful epoch-unbound bets/);
     assert.match(protectedProof.stdout, /missing V10 gas cases 3-contiguous,3-sparse,5-contiguous,5-sparse,25/);
     const malformedMatrixProof = runV10CanaryProof("malformed-matrix", [{

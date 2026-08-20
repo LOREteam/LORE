@@ -110,7 +110,7 @@ export function verifyV10SepoliaDeploymentManifest({ projectRoot = process.cwd()
     status: "pass", schema: manifest.schema, network: manifest.network, chainId: manifest.chainId,
     contractAddress: manifest.contractAddress, deployBlock: manifest.deployBlock,
     deploymentTransactionHash: manifest.deploymentTransactionHash, sourceArtifactGitSha: manifest.sourceArtifactGitSha,
-    verifierGitSha, compilationManifestSha256: manifest.compilationManifestSha256,
+    deploymentManifestSha256: sha256(raw), verifierGitSha, compilationManifestSha256: manifest.compilationManifestSha256,
     normalizedExecutableRuntimeSha256: manifest.normalizedExecutableRuntimeSha256,
     epochBoundBetSelector: manifest.epochBoundBetSelector, epochBoundBetsRequired: true,
     historicalTargetsExcluded: true, networkAccess: false, walletAccess: false, transactionSent: false,

@@ -59,6 +59,7 @@ import {
   loadLiveTestPublicWalletConfig,
 } from "./live-test-wallet-config.mjs";
 import { assertV10RuntimeIdentity, type V10RuntimeIdentity } from "./v10-runtime-identity";
+import { verifyV10SepoliaDeploymentManifest } from "./verify-v10-sepolia-deployment-manifest.mjs";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
 const APP_CHAIN = getLineaChain(APP_NETWORK);
@@ -278,6 +279,8 @@ type RoundEvent = {
   totalAmount?: string;
   totalAmountWei?: string;
   transactionSent?: boolean;
+  deploymentManifestSha256?: string;
+  sourceArtifactGitSha?: string;
   txStatus?: string;
   walBytes?: number;
   walletClientCreated?: boolean;
@@ -285,8 +288,16 @@ type RoundEvent = {
   failures?: number;
 };
 
+type V10DeploymentManifestBinding = {
+  contractAddress: string;
+  deployBlock: string;
+  deploymentManifestSha256: string;
+  normalizedExecutableRuntimeSha256: string;
+  sourceArtifactGitSha: string;
+};
+
 type CanaryAdmission = {
-  schema: 1;
+  schema: 2;
   runId: string;
   execution: "dry-run" | "live";
   profile: "v10-matrix" | "managed-soak";
@@ -296,6 +307,8 @@ type CanaryAdmission = {
   contractDeployBlock: string;
   runtimeSha256: string;
   manifestSha256: string;
+  deploymentManifestSha256: string;
+  sourceArtifactGitSha: string;
   canonicalProvenanceVerified: true;
   previewSha256: string | null;
   walletSetSha256: string;
@@ -609,6 +622,8 @@ function canonicalAdmissionPayload(admission: CanaryAdmission) {
     contractDeployBlock: admission.contractDeployBlock,
     runtimeSha256: admission.runtimeSha256,
     manifestSha256: admission.manifestSha256,
+    deploymentManifestSha256: admission.deploymentManifestSha256,
+    sourceArtifactGitSha: admission.sourceArtifactGitSha,
     canonicalProvenanceVerified: admission.canonicalProvenanceVerified,
     previewSha256: admission.previewSha256,
     walletSetSha256: admission.walletSetSha256,
@@ -633,6 +648,7 @@ function writeCanaryAdmission(params: {
   logPath: string;
   previewBinding: { previewSha256: string; walletSetSha256: string; canaryPlanSha256: string } | null;
   runtimeIdentity: V10RuntimeIdentity;
+  deploymentManifest: V10DeploymentManifestBinding;
   plannedSpendByRole: Map<string, bigint>;
   walletSetSha256: string;
   wallets: CanaryWallet[];
@@ -643,7 +659,7 @@ function writeCanaryAdmission(params: {
     throw new Error("Live admission requires a fresh Preview binding");
   }
   const admission: CanaryAdmission = {
-    schema: 1,
+    schema: 2,
     runId: getCanaryRunId(),
     execution,
     profile: V10_MATRIX_ONLY ? "v10-matrix" : "managed-soak",
@@ -653,6 +669,8 @@ function writeCanaryAdmission(params: {
     contractDeployBlock: CONTRACT_DEPLOY_BLOCK.toString(),
     runtimeSha256: params.runtimeIdentity.normalizedRuntimeSha256,
     manifestSha256: params.runtimeIdentity.manifestDigest,
+    deploymentManifestSha256: params.deploymentManifest.deploymentManifestSha256,
+    sourceArtifactGitSha: params.deploymentManifest.sourceArtifactGitSha,
     canonicalProvenanceVerified: params.runtimeIdentity.canonicalProvenanceVerified,
     previewSha256: params.previewBinding?.previewSha256 ?? null,
     walletSetSha256: params.walletSetSha256,
@@ -1485,6 +1503,14 @@ async function main() {
     `[live-canary] runtimeIdentity deployBlock=${runtimeIdentity.deployBlock} ` +
       `runtimeDigest=${runtimeIdentity.normalizedRuntimeSha256.slice(0, 12)}…`,
   );
+  const deploymentManifest = verifyV10SepoliaDeploymentManifest() as V10DeploymentManifestBinding;
+  if (
+    runtimeIdentity.contractAddress.toLowerCase() !== deploymentManifest.contractAddress
+    || runtimeIdentity.deployBlock !== deploymentManifest.deployBlock
+    || runtimeIdentity.normalizedRuntimeSha256 !== deploymentManifest.normalizedExecutableRuntimeSha256
+  ) {
+    throw new Error("V10 runtime identity does not match the canonical Sepolia deployment manifest");
+  }
   // Publish the read-only identity observation before loading any signing
   // material. The later bound SYSTEM preflight ties the same evidence to the
   // canonical admission once roles/caps have been derived.
@@ -1495,6 +1521,8 @@ async function main() {
     role: "SYSTEM",
     round: -1,
     runtimeIdentity,
+    deploymentManifestSha256: deploymentManifest.deploymentManifestSha256,
+    sourceArtifactGitSha: deploymentManifest.sourceArtifactGitSha,
     timestamp: new Date().toISOString(),
   });
 
@@ -1528,6 +1556,7 @@ async function main() {
     logPath,
     previewBinding,
     runtimeIdentity,
+    deploymentManifest,
     plannedSpendByRole,
     walletSetSha256: publicWalletConfig.walletSetSha256,
     wallets,
@@ -1539,6 +1568,8 @@ async function main() {
     role: "SYSTEM",
     round: -1,
     runtimeIdentity,
+    deploymentManifestSha256: deploymentManifest.deploymentManifestSha256,
+    sourceArtifactGitSha: deploymentManifest.sourceArtifactGitSha,
     timestamp: new Date().toISOString(),
   });
   console.log(
