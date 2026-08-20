@@ -10,12 +10,12 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest verified local commit before this state refresh: `3543d811f2695962343727e0d8df5b7d4e7123f1`.
+- Latest verified local commit before this state refresh: `adc51b0befab5718aeee932dc9d4dd8d1030c516`.
 - The product, storage, testnet-proof, UX, P1 regression, local campaign and
-  documentation packets are committed locally. The only tracked worktree
-  difference is the current read-only canary Preview; `.tmp-*` and campaign
-  reports are intentionally untracked generated artifacts. Nothing was pushed,
-  deployed, signed or submitted to a chain.
+  documentation packets are committed locally. The current immutable-checkout
+  reproduction is clean for tracked files; `.tmp-*` and campaign reports are
+  intentionally untracked generated artifacts. Nothing was pushed, signed or
+  submitted to a chain during this final local cycle.
 - The historical eight-partition map remains in
   [`release-candidate-partition.md`](release-candidate-partition.md).
 - Local commits are authorized. The 2026-08-20 Sepolia V10 deployment was
@@ -32,21 +32,12 @@ The protected base file remains exact:
 - mtime: `2026-08-13T12:18:50.8015294Z`;
 - exclusive open check: pass at the latest inspection.
 
-The protected base invariant remains exact, while the stricter three-file
-release invariant is **not restored** because test-created auxiliary files
-remain:
-
-- `data/lore-v10.sqlite-wal`: `659232` bytes;
-- `data/lore-v10.sqlite-shm`: `32768` bytes;
-- both were exclusively openable at the latest inspection.
-
-Forensic inspection of a copy showed one logical change in the WAL: an empty
-recent-wins snapshot metadata row saved during a local test run. The base file
-was not checkpointed or modified. Removing only the WAL/SHM would discard that
-uncheckpointed test-only row and restore the recorded base invariant, but that
-is destructive and still requires explicit user approval. Until then, do not
-run a command that can resolve the default protected path and do not claim
-protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
+After an explicit approval and an exclusive-access/base-hash recheck, only the
+test-created `data/lore-v10.sqlite-wal` and `data/lore-v10.sqlite-shm` files
+were removed. The base file was never checkpointed or modified. The final
+isolated business and prelaunch cycle left all three protected paths in the
+recorded state: exact base file, WAL absent, SHM absent. Explicit OS-temp SQLite
+fixtures remain the only permitted DB target for local test code.
 
 ## 2026-08-20 local progress
 
@@ -106,10 +97,10 @@ protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
 | Full business logic | Logic reached `childExitCode=0` and `assertionFailures=0`, but that pre-isolation run created the protected WAL row | Not acceptable as DB-safe final evidence |
 | Diff hygiene | `git diff --check` passes; one CRLF-to-LF warning remains informational | Pass |
 | Security diff scan | Sealed scan `c611f992-3c4d-4ac6-8c9a-14033c6f7156`, snapshot digest `935fed40...3298e`, reviewed 22/22 files, 0 reportable findings; two same-user reparse candidates were validated not applicable | Pass for the frozen pre-log-fix patch only |
-| P1.17 | Same-SHA canonical and isolated profiling build markers sealed locally at `0288ba5e`; later test-only commits require a final repeat on the eventual immutable SHA | Open: physical native-hidden two-hour evidence and final-SHA verification required |
+| P1.17 | Same-SHA canonical and isolated profiling build markers sealed locally at `adc51b0`; collector/verifier schema-3 self-tests passed | Open: physical native-hidden two-hour evidence and strict verification of the resulting report required |
 | Local Playwright smoke | Desktop wallet selector, chat, navigation, accessibility, reduced motion and 390/430px shell checks passed; localhost mobile Privy login remained unavailable after one bounded reload | Partial local evidence only; public HTTPS and physical mobile proof remain external |
 | Privy embedded modal | The pinned 3.27.2 provider's `Submit` email name and 24x24 close target are documented as upstream-owned; no DOM/CSS/node_modules workaround is allowed | External HTTPS/mobile QA open |
-| Final clean checkout | Detached fresh `npm ci`, typecheck, production dependency gate, isolated business runner, P1/EVM, V9/V10 invariants and both materialization tests passed at `12c4909c`; hermetic self-test required an unsandboxed rerun because esbuild's parent-directory resolution is denied by the managed sandbox | Pass locally for that SHA; a sealed final build/evidence cycle remains open |
+| Final clean checkout | Detached fresh `npm ci`, dependency/CI-security proofs, isolated business runner, P1/EVM, V9/V10 invariants, materialization tests, full local proof/prelaunch, and protected-DB recheck passed at `adc51b0`; canonical and isolated profiling provenance were sealed at the same SHA | Pass locally; the physical two-hour P1.17 evidence remains open |
 | Sepolia V10 cutover | Canonical V10 deployed at `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` in block `31678224`; strict constructor/receipt/runtime and chain proof checks pass with epoch-bound bets enabled | Pass for local Sepolia runtime; hosted frontend/indexer rollout remains external |
 | Supported Standard security scan | The local supported-scan entitlement is `not_granted`; no substitute scan was represented as Standard evidence | External entitlement blocker |
 
@@ -120,15 +111,10 @@ sealed diff snapshot, so a final immutable-SHA supported scan remains required.
 
 ### P0
 
-1. Restore the protected DB invariant by explicit approval to discard only the
-   test-created WAL/SHM, then prove the new isolated business runner leaves all
-   three protected paths unchanged.
-2. Commit the remaining verified documentation/operations packet without
-   generated artifacts.
-3. On the resulting immutable SHA, run a fresh detached `npm ci`, dependency
+1. On the resulting immutable SHA, run a fresh detached `npm ci`, dependency
    gates, complete local/prelaunch checks, clean-checkout reproduction and the
    supported final security scan.
-4. Keep the known block-context randomness risk open. The user explicitly
+2. Keep the known block-context randomness risk open. The user explicitly
    deferred redesign; no contract randomness changes are in scope.
 
 ### P1
