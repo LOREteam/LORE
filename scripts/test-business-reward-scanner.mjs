@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { RewardScanner } from "../app/components/RewardScanner.tsx";
 import * as rewardScannerModule from "../app/hooks/useRewardScanner.ts";
 import * as rewardScanPolicyModule from "../app/lib/rewardScanPolicy.ts";
 import * as claimTransactionIntentModule from "../app/lib/claimTransactionIntent.ts";
@@ -10,43 +8,15 @@ import * as claimTransactionIntentModule from "../app/lib/claimTransactionIntent
 const rewardScanPolicy = rewardScanPolicyModule.default ?? rewardScanPolicyModule;
 const claimTransactionIntent = claimTransactionIntentModule.default ?? claimTransactionIntentModule;
 
-const rewardScannerNoop = () => {};
-
-function renderRewardScanner({
-  unclaimedWins = [],
-  isScanning = false,
-  isDeepScanning = false,
-  isClaiming = false,
-} = {}) {
-  return renderToStaticMarkup(React.createElement(RewardScanner, {
-    unclaimedWins,
-    isScanning,
-    isDeepScanning,
-    isClaiming,
-    onScan: rewardScannerNoop,
-    onClaim: rewardScannerNoop,
-    onClaimAll: rewardScannerNoop,
-  }));
-}
-
 function assertRewardScannerPresentation() {
-  const rewards = [
-    { epoch: "101", amountWei: "1000000000000000000" },
-    { epoch: "100", amountWei: "2000000000000000000" },
-  ];
-  const ready = renderRewardScanner({ unclaimedWins: rewards });
-  assert.match(ready, /<button type="button" aria-label="Claim all 2 rewards" title="Claim all 2 rewards"/);
-  assert.match(ready, /<button type="button" aria-label="Scan for unclaimed rewards" title="Scan for unclaimed rewards"/);
-  assert.match(ready, /<button type="button" aria-label="Claim this reward" title="Claim this reward"/);
-
-  const claiming = renderRewardScanner({ unclaimedWins: rewards, isClaiming: true });
-  assert.match(claiming, /aria-label="Reward claim is already pending" title="Reward claim is already pending"[^>]*disabled=""/);
-
-  const deep = renderRewardScanner({ isDeepScanning: true });
-  assert.match(deep, /<div role="status" aria-live="polite"[^>]*>.*Full reward history is still loading in background\./);
-
-  const scanning = renderRewardScanner({ isScanning: true });
-  assert.match(scanning, /<div role="status" aria-live="polite" aria-busy="true"[^>]*>.*<svg aria-hidden="true"/);
+  const result = spawnSync(process.execPath, ["node_modules/tsx/dist/cli.mjs", "scripts/test-reward-scanner-presentation.tsx"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: { ...process.env },
+  });
+  assert.equal(result.error, undefined, `reward scanner presentation fixture failed to launch: ${result.error?.message ?? "unknown error"}`);
+  assert.equal(result.signal, null, `reward scanner presentation fixture was terminated by ${result.signal ?? "an unknown signal"}`);
+  assert.equal(result.status, 0, `reward scanner presentation fixture failed:\n${result.stderr || result.stdout}`);
 }
 
 function assertClaimTransactionIntentPolicy(candidate) {
