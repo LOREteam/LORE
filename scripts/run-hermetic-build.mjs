@@ -603,6 +603,23 @@ function runNextBuild() {
     sealReactProfilingProvenance,
     nextArgs,
   } = parseNextBuildArguments(process.argv.slice(2));
+  const nextBin = resolve(projectRoot, "node_modules", "next", "dist", "bin", "next");
+  if (nextArgs.some((arg) => arg === "--help" || arg === "-h")) {
+    const result = spawnSync(process.execPath, [nextBin, "build", ...nextArgs], {
+      cwd: projectRoot,
+      env: process.env,
+      stdio: "inherit",
+      windowsHide: true,
+    });
+    if (result.error) throw result.error;
+    if (result.status === null) {
+      console.error(`Next build help ended from signal ${result.signal ?? "unknown"}`);
+      process.exitCode = 1;
+      return;
+    }
+    process.exitCode = result.status;
+    return;
+  }
   const { relativePath: nextDistDir, resolvedPath: nextDistPath } = resolveNextDistDir(
     process.env.NEXT_DIST_DIR,
     projectRoot,
@@ -620,7 +637,6 @@ function runNextBuild() {
   }
   const reactProfilingBuild = nextDistDir !== ".next"
     && process.env.LORE_P1_REACT_PROFILING === "1";
-  const nextBin = resolve(projectRoot, "node_modules", "next", "dist", "bin", "next");
   const { result, buildProvenance } = runHermeticBuild({
     projectRoot,
     command: process.execPath,

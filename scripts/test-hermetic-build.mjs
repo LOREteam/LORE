@@ -380,9 +380,15 @@ function runBuildWrapperCli(root, wrapperArgs, { seal = true } = {}) {
       assert.equal(existsSync(fixtureProvenancePath(root)), false);
     }
 
+    writeFileSync(fixtureProvenancePath(root), "help-must-not-mutate", "utf8");
     const ordinary = runBuildWrapperCli(root, ["--help"], { seal: false });
     assert.equal(ordinary.status, 0, `${ordinary.stdout ?? ""}${ordinary.stderr ?? ""}`);
     assert.equal(existsSync(childMarkerPath), true, "ordinary builds must continue forwarding supported Next arguments");
+    assert.equal(
+      readFileSync(fixtureProvenancePath(root), "utf8"),
+      "help-must-not-mutate",
+      "informational Next help must not invalidate an existing sealed-build marker",
+    );
   } finally {
     removeFixture(root);
   }
