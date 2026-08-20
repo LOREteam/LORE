@@ -274,9 +274,15 @@ function runScript(script, args = []) {
     ...(args.length > 0 ? ["--", ...args] : []),
   ], npmLauncher);
   const startedAt = Date.now();
+  const scriptEnv = script === "test:logic:summary"
+    ? {
+      ...quietNpmEnv,
+      BUSINESS_LOGIC_SUMMARY_TIMEOUT_MS: String(Math.max(180_000, checkTimeoutMs)),
+    }
+    : quietNpmEnv;
   const result = spawnSync(command.command, command.args, {
     cwd: npmLauncher.repoRoot,
-    env: quietNpmEnv,
+    env: scriptEnv,
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
     timeout: checkTimeoutMs,
