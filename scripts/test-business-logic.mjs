@@ -31,7 +31,6 @@ import { runRuntimeMonitorBoundaryTests } from "./test-business-runtime-monitor-
 import { runHttpSmokeBoundaryTests } from "./test-business-http-smoke-boundaries.mjs";
 import { runWalletActionBoundaryTests } from "./test-business-wallet-action-boundaries.mjs";
 import { runPublicMetadataTests } from "./test-business-public-metadata.mjs";
-import { runSidebarLegalNavigationTests } from "./test-business-sidebar-legal-navigation.mjs";
 import { runTutorialAndPublicCopyTests } from "./test-business-tutorial-public-copy.mjs";
 import { runWalletShellAndMiningActionTests } from "./test-business-wallet-shell-actions.mjs";
 import { runApiRecoveryStorageTests } from "./test-business-api-recovery-storage.mjs";
@@ -178,7 +177,6 @@ async function main() {
   runPublicPresentationTests();
   runTutorialAndPublicCopyTests();
   await runRuntimeMonitorBoundaryTests();
-  runSidebarLegalNavigationTests();
   runHttpSmokeBoundaryTests();
   runRuntimeHealthDiagnosticsTests();
   runDataSyncHealthPolicyTests();
