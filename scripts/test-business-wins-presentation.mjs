@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import * as winsTickerModule from "../app/components/WinsTicker.tsx";
+
+const winsTicker = winsTickerModule.default ?? winsTickerModule;
+const WinsTicker = winsTicker.WinsTicker;
 
 export function runWinsPresentationTests() {
   const recentWinsApiSource = readFileSync("app/api/recent-wins/data.ts", "utf8");
@@ -9,15 +15,20 @@ export function runWinsPresentationTests() {
     /const userLabel = shortenAddr\(w\.user\)[\s\S]*title=\{`Epoch #\$\{w\.epoch\}, \+\$\{w\.amount\} LINEA, \$\{userLabel\}`\}/,
     "wins ticker tooltip must use the same shortened user label as the visible feed chip",
   );
+  assert.ok(WinsTicker, "wins ticker component export must remain available");
+  const unsafeBigintAmountMarkup = renderToStaticMarkup(React.createElement(WinsTicker, {
+    wins: [{
+      epoch: "7",
+      user: "0x1234567890abcdef1234567890abcdef12345678",
+      amount: "1000000000000000000500000",
+      jackpotKind: null,
+    }],
+    reducedMotion: true,
+  }));
   assert.match(
-    winsTickerSource,
-    /function divideDecimalTextFixed\(value: string, divisor: number, fractionDigits: number\)[\s\S]*BigInt\(`\$\{whole\}\$\{fractionalRaw\}`[\s\S]*formatScaledUnitsFixed\(scaledOutput, fractionDigits\)[\s\S]*formatDecimalTextFixed\(normalized, 2\)/,
-    "wins ticker compact reward display must use decimal-text and bigint scaling",
-  );
-  assert.doesNotMatch(
-    winsTickerSource,
-    /Number\.parseFloat|\.toFixed\(/,
-    "wins ticker compact reward display must not use parseFloat().toFixed()",
+    unsafeBigintAmountMarkup,
+    /\+1000000000000000001M/,
+    "wins ticker must preserve an unsafe integer's half-million rounding boundary without Number coercion",
   );
   const leaderboardsTooltipSource = readFileSync("app/components/Leaderboards.tsx", "utf8");
   assert.match(

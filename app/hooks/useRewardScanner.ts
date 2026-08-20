@@ -6,7 +6,7 @@ import { usePublicClient, useAccount } from "wagmi";
 import { encodeFunctionData, getAddress } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, REWARD_SCAN_CHUNK_SIZE, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
 import type { UnclaimedWin } from "../lib/types";
-import { isUserRejection, delay } from "../lib/utils";
+import { isUserRejection } from "../lib/utils";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 import {

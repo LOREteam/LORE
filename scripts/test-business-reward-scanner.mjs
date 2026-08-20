@@ -35,7 +35,7 @@ function assertClaimTransactionIntentPolicy(candidate) {
   }
 }
 
-async function assertClaimReceiptQuorumPolicy(candidate) {
+async function assertClaimReceiptQuorumAndFinalityPolicy(candidate) {
   const hash = `0x${"1".repeat(64)}`;
   const actor = "0x1111111111111111111111111111111111111111";
   const contract = "0x2222222222222222222222222222222222222222";
@@ -53,6 +53,25 @@ async function assertClaimReceiptQuorumPolicy(candidate) {
   };
   const intent = { actor, chainId: 59141, contract, calldata };
   assert.equal(await candidate(intent, hash, 1_000, [client, client]), "confirmed");
+  assert.equal(
+    await candidate(intent, hash, 1_000, [
+      client,
+      { ...client, getBlock: async () => ({ hash: `0x${"3".repeat(64)}` }) },
+    ]),
+    "pending",
+    "a claim must stay pending when independent origins disagree about the finalized block",
+  );
+  const revertedReceipt = { ...receipt, status: "reverted" };
+  const revertedClient = {
+    ...client,
+    waitForTransactionReceipt: async () => revertedReceipt,
+    getTransactionReceipt: async () => revertedReceipt,
+  };
+  await assert.rejects(
+    () => candidate(intent, hash, 1_000, [revertedClient, revertedClient]),
+    /Transaction reverted/,
+    "a finalized reverted receipt must not be downgraded to a successful or pending claim",
+  );
   await assert.rejects(
     () => candidate(intent, hash, 1_000, [client, { ...client, getTransaction: async () => ({ ...transaction, type: "eip" + "7702" }) }]),
     /Claim transaction does not match/,
@@ -104,7 +123,7 @@ function assertRewardSelectionPolicy(candidate) {
 export async function runRewardScannerTests() {
   const rewardScanner = rewardScannerModule.default ?? rewardScannerModule;
   assertClaimTransactionIntentPolicy(claimTransactionIntent.assertClaimTransactionMatchesIntent);
-  await assertClaimReceiptQuorumPolicy(claimTransactionIntent.waitForClaimTransactionReceiptAgreement);
+  await assertClaimReceiptQuorumAndFinalityPolicy(claimTransactionIntent.waitForClaimTransactionReceiptAgreement);
   const rewardScanNow = 1_000_000;
   assert.equal(rewardScanner.normalizeRewardScanEpochString("42"), "42");
   assert.equal(rewardScanner.normalizeRewardScanEpochString("bad"), null);

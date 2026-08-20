@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as analyticsBlockchainHistoryPanelModule from "../app/components/analytics/AnalyticsBlockchainHistoryPanel.tsx";
@@ -9,17 +8,6 @@ export function runHistoryPresentationTests() {
     ?? analyticsBlockchainHistoryPanelModule.default?.AnalyticsBlockchainHistoryPanel
     ?? analyticsBlockchainHistoryPanelModule.default;
   assert.ok(AnalyticsBlockchainHistoryPanel, "blockchain history component export must remain available");
-  const analyticsBlockchainHistoryPanelSource = readFileSync("app/components/analytics/AnalyticsBlockchainHistoryPanel.tsx", "utf8");
-  assert.match(
-    analyticsBlockchainHistoryPanelSource,
-    /GRID_SIZE[\s\S]*function parseHistoryWinningTile\(value: string\)[\s\S]*\^\[1-9\]\\d\*\$[\s\S]*Number\.isSafeInteger\(tile\)[\s\S]*tile >= 1 && tile <= GRID_SIZE[\s\S]*const winningTile = parseHistoryWinningTile\(row\.winningTile\)[\s\S]*winningTile !== null/,
-    "blockchain history display must reject unsafe or out-of-range winning tile IDs",
-  );
-  assert.doesNotMatch(
-    analyticsBlockchainHistoryPanelSource,
-    /Number\(row\.winningTile\)[\s\S]*winBlockNum > 0/,
-    "blockchain history display must not use positive-only winning tile parsing",
-  );
   const emptyHistoryMarkup = renderToStaticMarkup(createElement(AnalyticsBlockchainHistoryPanel, {
     historyViewData: [],
     historyLoading: false,
@@ -45,22 +33,22 @@ export function runHistoryPresentationTests() {
     "blockchain history loading status dots must stay decorative",
   );
   const invalidWinningTileMarkup = renderToStaticMarkup(createElement(AnalyticsBlockchainHistoryPanel, {
-    historyViewData: [{
-      roundId: "77",
+    historyViewData: ["1e3", "1.5", "0", "26", "9007199254740993"].map((winningTile, index) => ({
+      roundId: String(77 + index),
       poolDisplay: "10",
-      winningTile: "999",
+      winningTile,
       isResolved: true,
       userWon: true,
       isDailyJackpot: false,
       isWeeklyJackpot: false,
-    }],
+    })),
     historyLoading: false,
     historyRefreshing: false,
     newHistoryIds: new Set(),
   }));
   assert.doesNotMatch(
     invalidWinningTileMarkup,
-    /Block #999|You won/,
-    "blockchain history must not render invalid winning tile rows as user wins",
+    /Block #|You won/,
+    "blockchain history must reject exponent, fractional, zero, out-of-range, and unsafe winning tiles before rendering a user win",
   );
 }
