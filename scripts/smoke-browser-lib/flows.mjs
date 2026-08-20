@@ -409,7 +409,9 @@ export async function verifyMobileHubResponsiveGuards(page, timeoutMs) {
     const cards = [...document.querySelectorAll(".jackpot-vault-card")];
     const jackpotCardsStacked = cards.length < 2 || cards.every((card, index) => {
       if (index === 0) return true;
-      const previous = cards[index - 1]!.getBoundingClientRect();
+      const previousCard = cards[index - 1];
+      if (!previousCard) return false;
+      const previous = previousCard.getBoundingClientRect();
       const current = card.getBoundingClientRect();
       return current.top >= previous.bottom && Math.abs(previous.left - current.left) < 2;
     });
