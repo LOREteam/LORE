@@ -11,6 +11,7 @@ import {
 import type { CurrentRoundEvidence } from "../lib/currentRoundEvidence";
 import { formatTime } from "../lib/utils";
 import { usePrivyLoginAccessibility } from "../hooks/usePrivyLoginAccessibility";
+import { WALLET_LOGIN_REQUEST_EVENT } from "../lib/walletLoginRequest";
 import { WinsTicker } from "./WinsTicker";
 import type { JackpotHistoryEntry } from "../hooks/useJackpotHistory";
 import type { RecentWin } from "../hooks/useRecentWins";
@@ -110,6 +111,16 @@ export const Header = React.memo(function Header({
     modalOpen: privyModalStatus.isOpen,
     ready: privyReady && privyModalStatus.ready,
   });
+
+  useEffect(() => {
+    const handleWalletLoginRequest = () => {
+      if (!authenticated) {
+        void login();
+      }
+    };
+    window.addEventListener(WALLET_LOGIN_REQUEST_EVENT, handleWalletLoginRequest);
+    return () => window.removeEventListener(WALLET_LOGIN_REQUEST_EVENT, handleWalletLoginRequest);
+  }, [authenticated, login]);
 
   useEffect(() => {
     mountedRef.current = true;

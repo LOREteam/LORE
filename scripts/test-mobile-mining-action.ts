@@ -58,6 +58,19 @@ assert.deepEqual(
   deriveManualMiningAction({
     coldBootDefaults: false,
     isDisabled: true,
+    isPending: false,
+    liveStateReady: false,
+    readOnlyReason: null,
+    selectedTilesCount: 0,
+    walletConnected: false,
+  }),
+  { disabled: false, label: "LOGIN TO BET", variant: "primary" },
+  "guest manual CTA must be an active login action, not a disabled form button",
+);
+assert.deepEqual(
+  deriveManualMiningAction({
+    coldBootDefaults: false,
+    isDisabled: true,
     isPending: true,
     liveStateReady: true,
     readOnlyReason: null,
@@ -82,6 +95,11 @@ const autoBase = {
 assert.deepEqual(
   deriveAutoMinerAction(autoBase),
   { disabled: false, label: "START BOT", variant: "primary" },
+);
+assert.deepEqual(
+  deriveAutoMinerAction({ ...autoBase, walletConnected: false, isDisabled: true, liveStateReady: false }),
+  { disabled: false, label: "LOGIN TO START", variant: "primary" },
+  "guest Auto-Miner CTA must open login instead of remaining disabled",
 );
 assert.deepEqual(
   deriveAutoMinerAction({ ...autoBase, isDisabled: true, isPending: true }),
@@ -118,6 +136,8 @@ assert.match(sidePanelSource, /onMine=\{handleManualAction\}/);
 assert.match(sidePanelSource, /onToggle=\{handleAutoAction\}/);
 assert.match(sidePanelSource, /onManualAction=\{handleManualAction\}/);
 assert.match(sidePanelSource, /onAutoAction=\{handleAutoAction\}/);
+assert.match(sidePanelSource, /if \(!walletConnected\)\s*\{\s*requestWalletLogin\(\);/, "mobile guest CTAs must request login");
+assert.match(betPanelSource, /if \(!walletConnected\)\s*\{\s*requestWalletLogin\(\);/, "desktop guest CTAs must request login");
 assert.equal(
   (sidePanelSource.match(/mobileActionDocked/g) ?? []).length,
   2,

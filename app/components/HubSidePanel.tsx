@@ -9,6 +9,7 @@ import { GRID_SIZE } from "../lib/constants";
 import { getHubFeeEstimateLabel } from "../lib/hubFeeEstimate";
 import { normalizeDecimalInput, validateBetAmount } from "../lib/utils";
 import { cn } from "../lib/cn";
+import { requestWalletLogin } from "../lib/walletLoginRequest";
 import {
   AutoMinerPanel,
   ManualBetPanel,
@@ -394,7 +395,13 @@ function MobileMiningActionBar({
             data-testid="mobile-manual-bet-action"
             aria-label={manualAction.label}
             aria-describedby={manualAction.disabled && manualBetForm.disabledReason ? "mobile-manual-bet-disabled-reason" : undefined}
-            onClick={() => void onManualAction(manualBetForm.betAmount)}
+            onClick={() => {
+              if (!walletConnected) {
+                requestWalletLogin();
+                return;
+              }
+              void onManualAction(manualBetForm.betAmount);
+            }}
             disabled={manualAction.disabled}
             variant={manualAction.variant}
             size="sm"
@@ -408,7 +415,13 @@ function MobileMiningActionBar({
             data-testid="mobile-auto-miner-action"
             aria-label={autoAction.label}
             aria-describedby={autoAction.disabled && autoMinerForm.disabledReason && !isAutoMining ? "mobile-auto-miner-disabled-reason" : undefined}
-            onClick={() => void onAutoAction(autoMinerForm.betSize, autoMinerForm.targets, autoMinerForm.cycles)}
+            onClick={() => {
+              if (!walletConnected) {
+                requestWalletLogin();
+                return;
+              }
+              void onAutoAction(autoMinerForm.betSize, autoMinerForm.targets, autoMinerForm.cycles);
+            }}
             disabled={autoAction.disabled}
             variant={autoAction.variant}
             size="sm"
