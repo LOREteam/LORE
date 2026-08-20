@@ -403,7 +403,7 @@ export async function verifyHubVisualRegressionGuards(page, timeoutMs) {
 
 export async function verifyMobileHubResponsiveGuards(page, timeoutMs) {
   const guardTimeoutMs = Math.min(timeoutMs, 6_000);
-  await page.waitForFunction(() => document.body?.innerText.includes("Manual Bet"), undefined, { timeout: guardTimeoutMs });
+  await page.locator('[data-testid="manual-bet-action"]').first().waitFor({ state: "attached", timeout: guardTimeoutMs });
 
   const result = await page.evaluate(() => {
     const cards = [...document.querySelectorAll(".jackpot-vault-card")];
