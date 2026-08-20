@@ -927,10 +927,11 @@ export async function runChatAndClientSafetyTests() {
       /return readSavedAppShellTab\(window\.localStorage\)/.test(appShellStateSource),
       /return readCachedAppShellHotTiles\(window\.localStorage\)/.test(appShellStateSource),
       [...appShellStateSource.matchAll(/persistAppShellHotTiles\(window\.localStorage, hotTiles\)/g)].length,
-      /createAppMountDiagnostic\(window\.location, readHashTab\(\)\)/.test(appShellStateSource),
+      /createAppMountDiagnostic\(window\.location, readRequestedTab\(\)\)/.test(appShellStateSource),
+      /const DIRECT_TAB_PATHS:[\s\S]*faq: "\/faq"[\s\S]*whitepaper: "\/whitepaper"[\s\S]*leaderboards: "\/leaderboards"[\s\S]*window\.location\.pathname[\s\S]*const destination = DIRECT_TAB_PATHS\[tab\]/.test(appShellStateSource),
     ],
-    [true, true, 2, true],
-    "App shell runtime must remain bound to the behavior-tested storage and diagnostic policies",
+    [true, true, 2, true, true],
+    "App shell runtime must preserve storage/diagnostic policies and direct public tab routes",
   );
   const lineaOreClientViewProps = lineaOreClientViewPropsModule.default ?? lineaOreClientViewPropsModule;
   assert.equal(lineaOreClientViewProps.derivePreviousGridEpoch("42"), "41");

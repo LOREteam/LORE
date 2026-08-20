@@ -7,6 +7,11 @@ import { GRID_SIZE } from "../lib/constants";
 import { log } from "../lib/logger";
 
 const VALID_TABS: TabId[] = ["hub", "analytics", "rebate", "leaderboards", "whitepaper", "faq"];
+const DIRECT_TAB_PATHS: Partial<Record<TabId, string>> = {
+  faq: "/faq",
+  whitepaper: "/whitepaper",
+  leaderboards: "/leaderboards",
+};
 export const HOT_TILES_STORAGE_KEY = "lore:hot-tiles:v1";
 export const ACTIVE_TAB_STORAGE_KEY = "lore:active-tab:v1";
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
@@ -52,8 +57,11 @@ function loadSavedTab(): TabId | null {
   return readSavedAppShellTab(window.localStorage);
 }
 
-function readHashTab(): TabId {
+function readRequestedTab(): TabId {
   if (typeof window === "undefined") return "hub";
+  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+  const routeTab = (Object.entries(DIRECT_TAB_PATHS) as Array<[TabId, string]>).find(([, candidate]) => candidate === path)?.[0];
+  if (routeTab) return routeTab;
   const hash = window.location.hash.replace("#", "");
   if (VALID_TABS.includes(hash as TabId)) {
     return hash as TabId;
@@ -135,10 +143,10 @@ export function useAppShellState() {
   const noticeTimeoutsRef = useRef<Map<number, number>>(new Map());
 
   useEffect(() => {
-    log.info("App", "mounted", createAppMountDiagnostic(window.location, readHashTab()));
+    log.info("App", "mounted", createAppMountDiagnostic(window.location, readRequestedTab()));
     const syncFromHash = () => {
       setActiveTab((current) => {
-        const next = readHashTab();
+        const next = readRequestedTab();
         return current === next ? current : next;
       });
     };
@@ -172,13 +180,13 @@ export function useAppShellState() {
   const handleTabChange = useCallback((tab: TabId) => {
     setActiveTab(tab);
     saveActiveTab(tab);
-    const newHash = tab === "hub" ? "" : `#${tab}`;
-    history.replaceState(null, "", window.location.pathname + newHash);
+    const destination = DIRECT_TAB_PATHS[tab] ?? (tab === "hub" ? "/" : `/#${tab}`);
+    history.replaceState(null, "", destination);
   }, []);
 
   useLayoutEffect(() => {
     setActiveTab((current) => {
-      const next = readHashTab();
+      const next = readRequestedTab();
       return current === next ? current : next;
     });
     setVisibleHotTiles(loadCachedHotTiles());
