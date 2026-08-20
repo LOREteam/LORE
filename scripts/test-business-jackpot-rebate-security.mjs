@@ -5,9 +5,37 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as rebatePanelModule from "../app/components/RebatePanel.tsx";
 import * as safetyPoolClaimThresholdModule from "../app/lib/safetyPoolClaimThreshold.ts";
+import * as jackpotShareVerificationModule from "../app/lib/jackpotShareVerification.ts";
 
 const { RebatePanel } = rebatePanelModule.default ?? rebatePanelModule;
 const safetyPoolClaimThreshold = safetyPoolClaimThresholdModule.default ?? safetyPoolClaimThresholdModule;
+const jackpotShareVerification = jackpotShareVerificationModule.default ?? jackpotShareVerificationModule;
+
+function testJackpotShareVerification() {
+  const txHash = `0x${"a".repeat(64)}`;
+  const verified = jackpotShareVerification.selectVerifiedJackpotShare([
+    { epoch: "42", kind: "daily", amount: "123.45", txHash },
+  ], ` ${txHash.toUpperCase()} `);
+  assert.deepEqual(verified, { txHash, epoch: "42", kind: "daily", amount: "123.45" });
+  assert.equal(jackpotShareVerification.selectVerifiedJackpotShare([], txHash), null);
+  assert.equal(jackpotShareVerification.selectVerifiedJackpotShare([{ epoch: "42", kind: "daily", amount: "1", txHash }], "0xdead"), null);
+  assert.equal(
+    jackpotShareVerification.selectVerifiedJackpotShare([
+      { epoch: "42", kind: "daily", amount: "1", txHash },
+      { epoch: "43", kind: "weekly", amount: "2", txHash },
+    ], txHash),
+    null,
+    "one transaction must not create a cross-epoch share page",
+  );
+  assert.deepEqual(
+    jackpotShareVerification.selectVerifiedJackpotShare([
+      { epoch: "42", kind: "daily", amount: "1", txHash },
+      { epoch: "42", kind: "weekly", amount: "2", txHash },
+    ], txHash),
+    { txHash, epoch: "42", kind: "dual", amount: null },
+    "multi-event transactions must not invent a URL-controlled aggregate amount",
+  );
+}
 
 function createRebateInfo(overrides = {}) {
   return {
@@ -127,6 +155,7 @@ function testRebatePanelRuntimeBehavior() {
 }
 
 export function runJackpotAndRebateSecurityTests() {
+  testJackpotShareVerification();
   testRebatePanelRuntimeBehavior();
 
   const smokeHttpSource = readFileSync("scripts/smoke-http.mjs", "utf8");

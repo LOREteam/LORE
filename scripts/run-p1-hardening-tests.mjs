@@ -20,6 +20,7 @@ const CORE_STEPS = [
   { id: "runtime-tooling-guards", file: "scripts/test-runtime-tooling-guards.mjs", timeoutMs: 30_000 },
   { id: "purpose-separated-secrets", file: "scripts/test-purpose-separated-secrets.mjs", timeoutMs: 30_000 },
   { id: "health-credential-origin", file: "scripts/test-health-credential-origin.mjs", timeoutMs: 45_000 },
+  { id: "live-test-wallet-config", file: "scripts/test-check-live-test-wallet-config.mjs", timeoutMs: 30_000 },
   { id: "preview-env-boundary", file: "scripts/test-v10-preview-env-boundary.mjs", timeoutMs: 30_000 },
   { id: "deposits-recovery", file: "scripts/test-deposits-recovery-safety.mjs", timeoutMs: 30_000 },
   { id: "deposits-recovery-identity", file: "scripts/test-deposits-recovery-identity.ts", timeoutMs: 30_000 },

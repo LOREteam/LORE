@@ -323,34 +323,27 @@ export async function runErrorBoundaryAndJsonTests() {
     /minHeight:\s*"44px"[\s\S]*Try again[\s\S]*minHeight:\s*"44px"[\s\S]*Hard reload/,
     "global error boundary actions must keep 44px touch targets",
   );
-  const readJsonResponseSource = readFileSync("app/lib/readJsonResponse.ts", "utf8");
-  assert.match(readJsonResponseSource, /throw new Error\("Invalid JSON response"\)/);
-  assert.match(readJsonResponseSource, /JSON response too large/);
-  assert.ok(
-    readJsonResponseSource.includes("const JSON_CONTENT_TYPE_RE = /^application\\/(?:json|[a-z0-9!#$&^_.+-]+\\+json)$/;") &&
-      /function isJsonContentType[\s\S]*JSON_CONTENT_TYPE_RE\.test\(contentType\)/.test(readJsonResponseSource),
-    "client JSON response parsing must reject explicit non-application JSON content types",
-  );
-  assert.match(
-    readJsonResponseSource,
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseContentLengthHeader[\s\S]*const parsed = BigInt\(value\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)[\s\S]*contentLength === -1/,
-    "client JSON response parsing must reject malformed or non-canonical Content-Length instead of broad Number coercion",
-  );
-  assert.match(
-    readJsonResponseSource,
-    /const MAX_JSON_RESPONSE_BYTES = 2 \* 1024 \* 1024[\s\S]*function normalizeJsonResponseMaxBytes[\s\S]*Number\.isSafeInteger\(value\) && value > 0 && value <= MAX_JSON_RESPONSE_BYTES[\s\S]*const byteLimit = normalizeJsonResponseMaxBytes\(maxBytes\)[\s\S]*byteLimit === null/,
-    "client JSON response parsing must reject invalid maxBytes before body reads",
-  );
   const { readJsonResponse } = await import("../app/lib/readJsonResponse.ts");
   assert.deepEqual(
     await readJsonResponse(new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } })),
     { ok: true },
   );
   assert.equal(await readJsonResponse(new Response("", { headers: { "content-type": "application/json" } })), null);
+  const rawMalformedBody = `<html>proxy failure private-body-needle-${"x".repeat(256)}</html>`;
   await assert.rejects(
-    () => readJsonResponse(new Response("<html>proxy failure</html>", { headers: { "content-type": "text/html" } })),
-    /Invalid JSON response/,
-    "client JSON response parsing must reject explicit HTML/text payloads before exposing raw proxy errors",
+    () => readJsonResponse(new Response(rawMalformedBody, { headers: { "content-type": "text/html" } })),
+    (error) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, "Invalid JSON response");
+      assert.doesNotMatch(error.message, /private-body-needle|proxy failure|x{32}/);
+      return true;
+    },
+    "client JSON response parsing must reject explicit HTML/text payloads without exposing raw body content",
+  );
+  assert.deepEqual(
+    await readJsonResponse(new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/problem+json" } })),
+    { ok: true },
+    "client JSON response parsing must accept registered application/*+json payloads",
   );
   await assert.rejects(
     () => readJsonResponse(new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "text/plain+json" } })),
@@ -436,16 +429,6 @@ export async function runErrorBoundaryAndJsonTests() {
       ),
     /Invalid JSON response/,
     "client JSON response parsing must fail closed on malformed UTF-8 instead of accepting replacement characters",
-  );
-  assert.match(
-    readJsonResponseSource,
-    /new TextDecoder\("utf-8", \{ fatal: true \}\)/,
-    "client JSON response parsing must use fatal UTF-8 decoding",
-  );
-  assert.doesNotMatch(
-    readJsonResponseSource,
-    /Invalid JSON response:\s*\$\{raw\.slice/,
-    "JSON response parsing failures must not expose raw response bodies",
   );
   const safeRouteError = routeError.describeSafeRouteError(
     new Error(`RPC https://rpc.example.test/private failed for 0x${"ab".repeat(20)}`),

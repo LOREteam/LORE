@@ -111,7 +111,7 @@ export function runSecurityFollowupCheck({
       /if \(state\.gap === 0 \|\| !execute\) return;[\s\S]*const account = loadAccount\(\)/.test(clearPendingNonce) &&
       /await runRecoveryWithClients\(\{[\s\S]*execute: EXECUTE,[\s\S]*loadAccount: getAccount/.test(clearPendingNonce) &&
       /if \(!EXECUTE && signingMaterialLoaded\)[\s\S]*refuses inherited signing material/.test(clearPendingNonce) &&
-      /const DRY_RUN = !LIVE_EXECUTION_CONFIRMED[\s\S]*if \(DRY_RUN\) return;[\s\S]*LORE_LIVE_TEST_RESOLVER_PRIVATE_KEY/.test(liveCanary) &&
+      /const DRY_RUN = !LIVE_EXECUTION_CONFIRMED[\s\S]*if \(DRY_RUN && hasSigningMaterialInEnvironment\(\)\)[\s\S]*refuses inherited signing material[\s\S]*const signingMaterialLoaded = hasSigningMaterialInEnvironment\(\);[\s\S]*if \(DRY_RUN && signingMaterialLoaded\)[\s\S]*refuses signing material[\s\S]*if \(DRY_RUN\) return;/.test(liveCanary) &&
       /LIVE_TEST_DRY_RUN: "1"[\s\S]*LIVE_TEST_EXECUTE: "0"[\s\S]*SOAK_EXECUTE_LIVE: "0"[\s\S]*TEST_WALLET_EXECUTE: "0"/.test(previewDryRun)),
     check("ci-security", "CI uses read permissions, SHA pins, no pull_request_target, and no persisted checkout credentials", () =>
       /permissions:\s*\n\s+contents: read/.test(ciWorkflow) &&

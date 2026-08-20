@@ -266,7 +266,7 @@ export async function runV10RuntimeIdentityTests() {
   const liveCanarySource = readFileSync(path.join(process.cwd(), "scripts", "live-round-canary.ts"), "utf8");
   const identityStart = liveCanarySource.indexOf("const runtimeIdentity = await assertV10RuntimeIdentity");
   const identityEvidence = liveCanarySource.indexOf("runtimeIdentity,", identityStart);
-  const walletLoad = liveCanarySource.indexOf("const wallets = DRY_RUN ? loadDryRunWallets() : loadWallets();");
+  const walletLoad = liveCanarySource.indexOf("wallets = loadWallets(executionWalletConfig);", identityStart);
   const tokenRead = liveCanarySource.indexOf("const contractToken = await publicClient.readContract");
   const walletPreflight = liveCanarySource.indexOf("await runPreflight(logPath, publicClient, wallets, plannedSpendByRole);");
   assert.ok(identityStart >= 0 && identityEvidence > identityStart, "live canary must log runtime identity evidence");

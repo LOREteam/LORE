@@ -802,7 +802,7 @@ assertSubset({
 });
 assert.match(
   chainIndexerAuditSource,
-  /storedIndexerEvents\("dust_settlement", "gamedata:dustSettlements"\)[\s\S]*\["RewardDustSettled", "RebateDustSettled"\]\.includes\(decoded\.eventName\)[\s\S]*addMismatch\("dust-settlement"/,
+  /isChainAuditDustSettlementEvent[\s\S]*storedIndexerEvents\("dust_settlement", "gamedata:dustSettlements"\)[\s\S]*isChainAuditDustSettlementEvent\(decoded\.eventName\)[\s\S]*addMismatch\("dust-settlement"/,
   "chain-to-indexer audit must compare canonical reward and rebate dust events with stored evidence",
 );
 assert.match(

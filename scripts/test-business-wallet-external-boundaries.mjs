@@ -1,5 +1,116 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import * as externalWalletProviderContextModule from "../app/lib/externalWalletProviderContext.ts";
+
+const externalWalletProviderContext =
+  externalWalletProviderContextModule.default ?? externalWalletProviderContextModule;
+const PROVIDER_ACCOUNT_A = "0x1111111111111111111111111111111111111111";
+const PROVIDER_ACCOUNT_B = "0x2222222222222222222222222222222222222222";
+
+function fakeEip1193Provider(responses) {
+  return {
+    async request({ method }) {
+      const response = responses[method];
+      if (response instanceof Error) throw response;
+      return response;
+    },
+  };
+}
+
+async function assertSafeProviderContextMismatch(promise, code) {
+  await assert.rejects(promise, (error) => {
+    assert.ok(
+      externalWalletProviderContext.isSafeExternalWalletProviderContextError(error),
+      "only typed, proven provider context mismatches may safely abandon before submission",
+    );
+    assert.equal(error.code, code);
+    return true;
+  });
+}
+
+async function runExternalWalletProviderContextTests() {
+  const validProvider = fakeEip1193Provider({
+    eth_chainId: "0x1",
+    eth_accounts: [PROVIDER_ACCOUNT_A],
+  });
+  assert.equal(
+    await externalWalletProviderContext.assertExternalWalletProviderContext({
+      provider: validProvider,
+      expectedChainId: 1,
+      expectedActor: PROVIDER_ACCOUNT_A,
+    }),
+    PROVIDER_ACCOUNT_A,
+    "a valid provider chain and selected account must be accepted",
+  );
+
+  await assertSafeProviderContextMismatch(
+    externalWalletProviderContext.assertExternalWalletProviderContext({
+      provider: fakeEip1193Provider({
+        eth_chainId: "0x2",
+        eth_accounts: [PROVIDER_ACCOUNT_A],
+      }),
+      expectedChainId: 1,
+      expectedActor: PROVIDER_ACCOUNT_A,
+    }),
+    "wallet_transfer_intent_external_chain_changed",
+  );
+  await assertSafeProviderContextMismatch(
+    externalWalletProviderContext.assertExternalWalletProviderContext({
+      provider: fakeEip1193Provider({
+        eth_chainId: "0x1",
+        eth_accounts: [PROVIDER_ACCOUNT_B],
+      }),
+      expectedChainId: 1,
+      expectedActor: PROVIDER_ACCOUNT_A,
+    }),
+    "wallet_transfer_intent_actor_changed",
+  );
+
+  await assert.rejects(
+    externalWalletProviderContext.assertExternalWalletProviderContext({
+      provider: fakeEip1193Provider({
+        eth_chainId: "not-a-chain-id",
+        eth_accounts: [PROVIDER_ACCOUNT_A],
+      }),
+      expectedChainId: 1,
+      expectedActor: PROVIDER_ACCOUNT_A,
+    }),
+    (error) => {
+      assert.equal(
+        externalWalletProviderContext.isSafeExternalWalletProviderContextError(error),
+        false,
+        "malformed provider replies must remain ordinary errors and preserve the intent lease",
+      );
+      assert.match(error.message, /invalid chain ID/);
+      return true;
+    },
+  );
+
+  const hungProvider = {
+    request({ method }) {
+      if (method === "eth_chainId") return Promise.resolve("0x1");
+      return new Promise(() => {});
+    },
+  };
+  await assert.rejects(
+    externalWalletProviderContext.assertExternalWalletProviderContext({
+      provider: hungProvider,
+      expectedChainId: 1,
+      timeoutMs: 10,
+    }),
+    (error) => {
+      assert.equal(
+        externalWalletProviderContext.isSafeExternalWalletProviderContextError(error),
+        false,
+        "provider timeouts must not be treated as proven safe-abandon mismatches",
+      );
+      assert.match(error.message, /eth_accounts request timed out/);
+      return true;
+    },
+  );
+}
+
+await runExternalWalletProviderContextTests();
 
 export function runWalletExternalBoundaryTests() {
   const testnetRevertSource = readFileSync("scripts/run-testnet-revert-check.ts", "utf8");
@@ -30,7 +141,6 @@ export function runWalletExternalBoundaryTests() {
   );
 
   const privyWalletSource = readFileSync("app/hooks/usePrivyWallet.ts", "utf8");
-  const externalWalletProviderContextSource = readFileSync("app/lib/externalWalletProviderContext.ts", "utf8");
   assert.match(
     privyWalletSource,
     /import \{ log \} from "\.\.\/lib\/logger";[\s\S]*log\.warn\("PrivyWallet"/,
@@ -65,10 +175,5 @@ export function runWalletExternalBoundaryTests() {
     privyWalletSource,
     /accountsChanged[\s\S]*setProviderExternalWalletAddress\(getProviderSelectedAddress\(accounts\)\)/,
     "wallet settings must refresh the displayed external address after an injected-wallet account change",
-  );
-  assert.match(
-    externalWalletProviderContextSource,
-    /requestProviderWithTimeout[\s\S]*Promise\.race[\s\S]*setTimeout[\s\S]*request timed out/,
-    "external wallet context verification must keep its shared bounded provider request path",
   );
 }

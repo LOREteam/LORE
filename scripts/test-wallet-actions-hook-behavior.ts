@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { mock } from "node:test";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, EXPLORER_TX_BASE_URL } from "../app/lib/constants";
+import {
+  waitForStableWalletTransferReceipt,
+  WalletTransactionRevertedError,
+} from "../app/lib/walletTransferIntent";
 
 type Notification = {
   message: string;
@@ -22,11 +26,14 @@ type TransactionRequest = {
 };
 
 type HookResult = {
+  connectedResolverRewards: string;
+  embeddedResolverRewards: string;
   isDepositingEth: boolean;
   isClaimingConnectedResolverRewards: boolean;
   refreshPendingTransactionStatus: (replacementHash?: string) => Promise<unknown>;
   cancelPendingTransaction: () => Promise<void>;
   handleDepositEthToEmbedded: () => Promise<void>;
+  handleDepositTokenToEmbedded: () => Promise<void>;
   handleClaimConnectedResolverRewards: () => Promise<void>;
   handleClaimEmbeddedResolverRewards: () => Promise<void>;
 };
@@ -42,6 +49,21 @@ type LocalStorageLike = {
 };
 
 type ReceiptMode = "pending" | "success" | "reverted";
+
+type StableReceipt = {
+  transactionHash: `0x${string}`;
+  blockHash: `0x${string}`;
+  blockNumber: bigint;
+  transactionIndex: number;
+  status: Exclude<ReceiptMode, "pending">;
+};
+
+type StableReceiptClient = {
+  getBlockNumber: () => Promise<bigint>;
+  getTransaction: () => Promise<{ hash: `0x${string}` }>;
+  getTransactionReceipt: () => Promise<StableReceipt>;
+  waitForTransactionReceipt: () => Promise<StableReceipt>;
+};
 
 const EMBEDDED_ACTOR = "0x1111111111111111111111111111111111111111" as const;
 const EXTERNAL_ACTOR = "0x2222222222222222222222222222222222222222" as const;
@@ -344,6 +366,7 @@ type RenderOptions = {
   writeContractAsync?: (input: Record<string, unknown>) => Promise<typeof HASH>;
   simulateContract?: (input: Record<string, unknown>) => Promise<unknown>;
   resolverReceiptMode?: ReceiptMode;
+  externalTokenBalance?: bigint;
   notifications: Notification[];
   counters?: { embeddedEthRefetches: number; embeddedTokenRefetches: number };
 };
@@ -367,7 +390,7 @@ function createHookRenderer(initialOptions: RenderOptions) {
         if (resolverReceiptMode === "pending") throw receiptNotFoundError();
         return receiptFor(resolverReceiptMode);
       },
-      readContract: async () => 10n ** 30n,
+      readContract: async () => options.externalTokenBalance ?? 10n ** 30n,
       simulateContract: options.simulateContract ?? (async () => undefined),
       waitForTransactionReceipt: async () => {
         if (resolverReceiptMode === "pending") throw timeoutError();
@@ -730,6 +753,132 @@ async function testTransferProviderErrorIsRedacted() {
   assertNoRawNeedle(notifications, rawNeedle);
 }
 
+function stableReceipt(
+  status: Exclude<ReceiptMode, "pending">,
+  blockHash = BLOCK_HASH,
+): StableReceipt {
+  return {
+    transactionHash: HASH,
+    blockHash,
+    blockNumber: 100n,
+    transactionIndex: 0,
+    status,
+  };
+}
+
+function stableReceiptClient(input: {
+  waited: StableReceipt | Error;
+  receipts: readonly (StableReceipt | Error)[];
+  head: bigint;
+}): StableReceiptClient {
+  let receiptRead = 0;
+  return {
+    getBlockNumber: async () => input.head,
+    getTransaction: async () => ({ hash: HASH }),
+    getTransactionReceipt: async () => {
+      const result = input.receipts[Math.min(receiptRead, input.receipts.length - 1)];
+      receiptRead += 1;
+      if (result instanceof Error) throw result;
+      return result;
+    },
+    waitForTransactionReceipt: async () => {
+      if (input.waited instanceof Error) throw input.waited;
+      return input.waited;
+    },
+  };
+}
+
+async function testStableReceiptTwoOriginFinality() {
+  const confirmed = stableReceipt("success");
+  assert.equal(
+    await waitForStableWalletTransferReceipt([
+      stableReceiptClient({ waited: confirmed, receipts: [confirmed, confirmed], head: 101n }),
+      stableReceiptClient({ waited: confirmed, receipts: [confirmed, confirmed], head: 101n }),
+    ], HASH, 1_000),
+    "confirmed",
+    "matching finalized receipts from two origins must confirm",
+  );
+
+  const canonicalReorg = stableReceipt("success", `0x${"c".repeat(64)}` as `0x${string}`);
+  await assert.rejects(
+    () => waitForStableWalletTransferReceipt([
+      stableReceiptClient({ waited: confirmed, receipts: [confirmed, canonicalReorg], head: 101n }),
+      stableReceiptClient({ waited: confirmed, receipts: [confirmed, canonicalReorg], head: 101n }),
+    ], HASH, 1_000),
+    /wallet_transfer_receipt_diverged/,
+    "a canonical reread that differs after finality must reject",
+  );
+
+  await assert.rejects(
+    () => waitForStableWalletTransferReceipt([
+      stableReceiptClient({ waited: confirmed, receipts: [confirmed], head: 101n }),
+      stableReceiptClient({ waited: timeoutError(), receipts: [receiptNotFoundError()], head: 101n }),
+    ], HASH, 1_000),
+    /wallet_transfer_receipt_diverged/,
+    "one origin alone must not confirm a receipt",
+  );
+
+  await assert.rejects(
+    () => waitForStableWalletTransferReceipt([
+      stableReceiptClient({ waited: confirmed, receipts: [confirmed], head: 101n }),
+      stableReceiptClient({ waited: confirmed, receipts: [confirmed], head: 100n }),
+    ], HASH, 1_000),
+    /wallet_transfer_receipt_finality_insufficient/,
+    "a stale origin head must not confirm a receipt",
+  );
+
+  const reverted = stableReceipt("reverted");
+  await assert.rejects(
+    () => waitForStableWalletTransferReceipt([
+      stableReceiptClient({ waited: reverted, receipts: [reverted, reverted], head: 101n }),
+      stableReceiptClient({ waited: reverted, receipts: [reverted, reverted], head: 101n }),
+    ], HASH, 1_000),
+    (error: unknown) => {
+      assert.ok(error instanceof WalletTransactionRevertedError, "a finalized revert must retain its typed error");
+      assert.equal(error.transactionHash, HASH, "a finalized revert must retain its definitive hash");
+      return true;
+    },
+  );
+}
+
+async function testResolverRewardDisplaySemantics() {
+  resetRuntimeState();
+  resolverRewardsByActor.set(EXTERNAL_ACTOR.toLowerCase(), 1_234_567_890_000_000_000n);
+  resolverRewardsByActor.set(EMBEDDED_ACTOR.toLowerCase(), 100_126_000_000_000_000_000n);
+  const hook = createHookRenderer({
+    connectedWalletAddress: EXTERNAL_ACTOR,
+    notifications: [],
+  });
+  assert.equal(hook.result.connectedResolverRewards, "1.2346", "sub-threshold resolver rewards keep four decimal places");
+  assert.equal(hook.result.embeddedResolverRewards, "100.13", "large resolver rewards use the two-decimal display threshold");
+
+  resetRuntimeState();
+  resolverRewardsByActor.set(EXTERNAL_ACTOR.toLowerCase(), -1n);
+  const negativeHook = createHookRenderer({
+    connectedWalletAddress: EXTERNAL_ACTOR,
+    notifications: [],
+  });
+  assert.equal(negativeHook.result.connectedResolverRewards, "0.0000", "negative resolver rewards must fail closed in the display");
+}
+
+async function testExternalLineaBalanceBlocksDepositSink() {
+  resetRuntimeState();
+  const notifications: Notification[] = [];
+  let sends = 0;
+  const hook = createHookRenderer({
+    notifications,
+    externalTokenBalance: 9n * 10n ** 18n,
+    sendTransactionFromExternal: async () => {
+      sends += 1;
+      return HASH;
+    },
+  });
+
+  await hook.result.handleDepositTokenToEmbedded();
+  assert.equal(sends, 0, "an insufficient external LINEA balance must not reach the wallet send sink");
+  assert.ok(hasNotification(notifications, "warning", "Insufficient LINEA balance in external wallet."));
+}
+
 async function testResolverStaleActorAndDuplicateGuards() {
   resetRuntimeState();
   resolverRewardsByActor.set(EXTERNAL_ACTOR.toLowerCase(), 5n);
@@ -912,13 +1061,16 @@ async function main() {
   await testTransferRevertClearsIntentSafely();
   await testTransferNetworkMismatchFailsClosed();
   await testTransferProviderErrorIsRedacted();
+  await testStableReceiptTwoOriginFinality();
+  await testResolverRewardDisplaySemantics();
+  await testExternalLineaBalanceBlocksDepositSink();
   await testResolverStaleActorAndDuplicateGuards();
   await testEmbeddedResolverStaleActorStopsSink();
   await testResolverSuccessWiring();
   await testResolverPendingAndRevertedStates();
   await testResolverRejectionAndProviderRedaction();
 
-  console.log("wallet actions hook behavior tests passed (17 cases)");
+  console.log("wallet actions hook behavior tests passed (20 cases)");
 }
 
 void main().catch((error) => {

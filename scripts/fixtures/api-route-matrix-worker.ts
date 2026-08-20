@@ -322,27 +322,39 @@ async function loadRoute(
 
 async function runOgScenario() {
   const fetchState = installRouteFetchMock();
+  const storage = await import("../../server/storage");
+  const txHash = `0x${"ab".repeat(32)}`;
+  storage.upsertJackpots([{
+    epoch: "10",
+    kind: "daily",
+    amount: "1",
+    amountNum: 1,
+    txHash,
+    blockNumber: "31035418",
+  }]);
+  storage.setMetaJson("lastIndexedBlock", "31035418");
   const route = await loadRoute("og");
   Object.assign(process.env, { NODE_ENV: "production" });
   const baseUrl = "https://attacker.invalid/api/jackpots/og";
+  const verifiedUrl = `${baseUrl}?tx=${txHash}`;
   const headers = requestHeaders({ host: "attacker.invalid" });
 
   const captured = await captureRouteLogs(async () => {
-    const headFirst = await dispatch(route, "HEAD", `${baseUrl}?kind=daily`, { headers });
-    const headSecond = await dispatch(route, "HEAD", `${baseUrl}?kind=daily`, { headers });
-    const afterHeads = await snapshotResponse(await dispatch(route, "GET", `${baseUrl}?kind=daily`, { headers }));
+    const headFirst = await dispatch(route, "HEAD", verifiedUrl, { headers });
+    const headSecond = await dispatch(route, "HEAD", verifiedUrl, { headers });
+    const afterHeads = await snapshotResponse(await dispatch(route, "GET", verifiedUrl, { headers }));
 
-    const heldFirst = await dispatch(route, "GET", `${baseUrl}?kind=daily`, { headers });
-    const heldSecond = await dispatch(route, "GET", `${baseUrl}?kind=daily`, { headers });
-    const busy = await snapshotResponse(await dispatch(route, "GET", `${baseUrl}?kind=daily`, { headers }));
+    const heldFirst = await dispatch(route, "GET", verifiedUrl, { headers });
+    const heldSecond = await dispatch(route, "GET", verifiedUrl, { headers });
+    const busy = await snapshotResponse(await dispatch(route, "GET", verifiedUrl, { headers }));
     await heldFirst.body?.cancel();
     await heldSecond.body?.cancel();
 
-    const baseline = await snapshotResponse(await dispatch(route, "GET", `${baseUrl}?kind=daily`, { headers }));
+    const baseline = await snapshotResponse(await dispatch(route, "GET", verifiedUrl, { headers }));
     const oversized = await snapshotResponse(await dispatch(
       route,
       "GET",
-      `${baseUrl}?amount=${"9".repeat(10_000)}&tile=26&epoch=1000000001`,
+      `${verifiedUrl}&amount=${"9".repeat(10_000)}&kind=weekly&tile=26&epoch=1000000001`,
       { headers },
     ));
 

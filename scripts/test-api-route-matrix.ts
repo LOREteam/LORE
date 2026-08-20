@@ -227,8 +227,9 @@ function validateOg(result: WorkerResult) {
   assert.equal(oversized.bodySha256, baseline.bodySha256, "invalid oversized OG inputs must be omitted, not rendered");
 
   const fetchUrls = Array.isArray(result.fetchUrls) ? result.fetchUrls.map(String) : [];
-  assert.ok(fetchUrls.length > 0, "OG render must load its real local art through the fetch fixture");
-  for (const rawUrl of fetchUrls) {
+  const assetFetchUrls = fetchUrls.filter((rawUrl) => new URL(rawUrl).pathname.endsWith(".png"));
+  assert.ok(assetFetchUrls.length > 0, "OG render must load its real local art through the fetch fixture");
+  for (const rawUrl of assetFetchUrls) {
     const url = new URL(rawUrl);
     assert.equal(url.origin, "https://playlore.xyz", "hostile request Host must not control OG asset fetches");
     assert.match(url.pathname, /^\/jackpot-og-[a-z-]+\.png$/);
