@@ -44,6 +44,7 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
   onLoadWalletTransfers,
 }: WalletSettingsTransferPanelsProps) {
   const transferHistoryLoadLabel = walletTransfersLoading ? "Loading LINEA transfer history" : "Load LINEA transfer history";
+  const transferHistoryStatus = walletTransfers?.dataStatus;
 
   return (
     <>
@@ -117,6 +118,24 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
             </>
           ) : (
             <>
+              {walletTransfers.statusMessage && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className={`mb-3 rounded-lg border px-3 py-2 text-xs leading-relaxed ${
+                    transferHistoryStatus === "error"
+                      ? "border-red-400/35 bg-red-500/10 text-red-100"
+                      : transferHistoryStatus === "partial"
+                        ? "border-amber-300/35 bg-amber-400/10 text-amber-100"
+                        : "border-sky-300/30 bg-sky-400/10 text-sky-100"
+                  }`}
+                >
+                  {walletTransfers.statusMessage}
+                  {walletTransfers.updatedAt && (
+                    <span className="ml-1 text-white/65">Last verified {new Date(walletTransfers.updatedAt).toLocaleString()}.</span>
+                  )}
+                </div>
+              )}
               <div className="flex gap-3 mb-3">
                 <div className="flex-1 rounded-lg bg-emerald-500/6 border border-emerald-500/20 p-2.5 text-center">
                   <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Deposited</div>
@@ -130,14 +149,31 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
                 </div>
               </div>
 
-              {walletTransfers.transfers.length > 0 ? (
+              {walletTransfers.dataStatus === "error" ? (
+                <UiButton
+                  onClick={onLoadWalletTransfers}
+                  disabled={walletTransfersLoading}
+                  variant="secondary"
+                  size="md"
+                  fullWidth
+                  loading={walletTransfersLoading}
+                  aria-label={transferHistoryLoadLabel}
+                  title={transferHistoryLoadLabel}
+                >
+                  Try again
+                </UiButton>
+              ) : walletTransfers.transfers.length > 0 ? (
                 <div role="list" aria-label="LINEA transfer history" className="max-h-[180px] overflow-y-auto rounded-lg border border-white/4 divide-y divide-white/4">
                   {walletTransfers.transfers.map((transfer, index) => (
                     <WalletTransferHistoryRow key={`${transfer.txHash}-${index}`} transfer={transfer} />
                   ))}
                 </div>
               ) : (
-                <div role="status" aria-live="polite" className="text-center py-3 text-[10px] text-gray-400 italic">No ore has moved through these tunnels.</div>
+                <div role="status" aria-live="polite" className="text-center py-3 text-xs text-gray-300 italic">
+                  {walletTransfers.dataStatus === "partial"
+                    ? "Transfer history is incomplete; try again for a fresh check."
+                    : "No verified LINEA transfers were found for this wallet pair."}
+                </div>
               )}
             </>
           )}

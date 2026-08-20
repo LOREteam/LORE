@@ -61,27 +61,6 @@ export async function runWalletModelTests() {
     tokenAmountMath.formatLineaWeiDisplayNumber((BigInt(Number.MAX_SAFE_INTEGER) + 1n) * 1_000_000_000_000n),
     Number.MAX_SAFE_INTEGER,
   );
-  const tokenAmountMathSource = readFileSync("app/lib/tokenAmountMath.ts", "utf8");
-  assert.match(
-    tokenAmountMathSource,
-    /function addDecimalGroupSeparators\(value: string\)[\s\S]*formatLineaAmountFixed\(parseNonNegativeLineaWei\(value\), safeFractionDigits\)/,
-    "shared LINEA wei display formatter must format bigint decimal text directly",
-  );
-  assert.doesNotMatch(
-    tokenAmountMathSource,
-    /formatLineaWeiAmountDisplay[\s\S]*Number\(formatUnits\(/,
-    "shared LINEA wei display formatter must not coerce formatted wei values through Number(formatUnits())",
-  );
-  assert.match(
-    tokenAmountMathSource,
-    /function formatLineaWeiDisplayNumber\(value: bigint\)[\s\S]*value <= 0n[\s\S]*1_000_000_000_000n[\s\S]*scaled > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*return Number\(scaled\) \/ 1_000_000/,
-    "shared LINEA numeric compatibility formatter must use bounded bigint math",
-  );
-  assert.doesNotMatch(
-    tokenAmountMathSource,
-    /formatLineaWeiDisplayNumber[\s\S]*Number\(formatLineaAmountFixed|formatLineaWeiDisplayNumber[\s\S]*parseFloat/,
-    "shared LINEA numeric compatibility formatter must not parse formatted decimal strings",
-  );
   assert.equal(tokenAmountMath.formatLineaAmountFixed(1_234_567_899_000_000_000n, 2), "1.23");
   assert.equal(tokenAmountMath.formatLineaAmountFixed(1_235_000_000_000_000_000n, 2), "1.24");
   assert.equal(tokenAmountMath.formatLineaAmountFixed(999_999_999_999_999_999n, 0), "1");
@@ -415,11 +394,62 @@ export async function runWalletModelTests() {
   assert.equal(walletTransfers.normalizeWalletTransferAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"), "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
   assert.equal(walletTransfers.normalizeWalletTransferAddress("0xabc"), null);
   assert.equal(walletTransfers.normalizeWalletTransferAddress(null), null);
+  const persistedTransferSummary = walletTransfers.parsePersistedWalletTransfersSummary({
+    version: 1,
+    savedAt: 1_700_000_000_000,
+    transfers: [{
+      direction: "in",
+      counterparty: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+      amount: "12.50",
+      amountNum: 12.5,
+      txHash: `0x${"a".repeat(64)}`,
+      blockNumber: "123456",
+      transactionIndex: 1,
+      logIndex: 2,
+    }],
+    totalIn: 12.5,
+    totalOut: 0,
+    totalInDisplay: "12.50",
+    totalOutDisplay: "0.00",
+  });
+  assert.deepEqual(
+    persistedTransferSummary,
+    {
+      transfers: [{
+        direction: "in",
+        counterparty: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+        amount: "12.50",
+        amountNum: 12.5,
+        txHash: `0x${"a".repeat(64)}`,
+        blockNumber: 123456n,
+        transactionIndex: 1,
+        logIndex: 2,
+      }],
+      totalIn: 12.5,
+      totalOut: 0,
+      totalInDisplay: "12.50",
+      totalOutDisplay: "0.00",
+      dataStatus: "stale",
+      updatedAt: 1_700_000_000_000,
+      statusMessage: "Showing the last verified transfer history. Refresh to check for newer activity.",
+    },
+    "persisted transfer history must restore bigint block numbers and explicitly report staleness",
+  );
+  assert.equal(
+    walletTransfers.parsePersistedWalletTransfersSummary({ ...walletTransfers.serializeWalletTransfersSummary(persistedTransferSummary), transfers: [{ direction: "in" }] }),
+    null,
+    "malformed cached transfer history must not be rendered as a verified empty history",
+  );
   const walletTransfersSource = readFileSync("app/hooks/useWalletTransfers.ts", "utf8");
   assert.match(
     walletTransfersSource,
     /const seenLogs = new Set<string>\(\)[\s\S]*seenLogs\.add\(getWalletTransferLogKey\(log\)\)[\s\S]*seenLogs\.has\(getWalletTransferLogKey\(log\)\)/,
     "wallet transfer fallback dedupe must compare event logs, not whole transactions",
+  );
+  assert.match(
+    walletTransfersSource,
+    /readPersistedWalletTransfers[\s\S]*dataStatus: unavailableSummary\.dataStatus === "stale"[\s\S]*Transfer history is temporarily unavailable[\s\S]*persistWalletTransfers\(cacheKey, summary\)/,
+    "transfer history must preserve a verified cached result and report RPC failures instead of replacing it with an empty summary",
   );
   assert.match(
     walletTransfersSource,

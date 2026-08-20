@@ -199,6 +199,11 @@ export function runWalletPresentationTests() {
     /role="list"[\s\S]*aria-label="LINEA transfer history"[\s\S]*explorerLabel[\s\S]*role="listitem"[\s\S]*aria-label=\{explorerLabel\}[\s\S]*title=\{explorerLabel\}/,
     "wallet transfer history rows must expose list semantics and clear Lineascan link labels",
   );
+  assert.match(
+    walletTransferPanelsSource,
+    /walletTransfers\.statusMessage[\s\S]*dataStatus === "error"[\s\S]*Try again[\s\S]*No verified LINEA transfers were found/,
+    "wallet transfer history must distinguish unavailable RPC data from an empty verified history",
+  );
   const validReplacementHash = `0x${"a".repeat(64)}`;
   const blockedStatus = {
     latestNonce: 7,
