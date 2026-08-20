@@ -211,10 +211,74 @@ export async function runWalletModelTests() {
   assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: 1_000 }, 2_000.5), null);
   assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: 8_001 }, 2_000), null);
   const miningTxPathSource = readFileSync("app/lib/miningTxPath.ts", "utf8");
-  assert.match(
-    miningTxPathSource,
-    /if \(!hasCompletePendingIntent\(state\)\) return "manual-reconciliation-required";[\s\S]*Promise\.all\(clients\.map\(\(client\) => readOptionalReceipt\(client, state\.hash!\)\)\)[\s\S]*hasAgreedPendingMiningReceiptFinality[\s\S]*if \(receipts\[0\]\.status === "reverted"\) return "clear";[\s\S]*return deltaMatches \? "confirmed" : "manual-reconciliation-required";/,
-    "pending mining recovery must require a complete intent, two-RPC receipt identity, canonical finality, and the expected bet delta",
+  const completePendingMiningState = miningTxPath.sanitizePendingMiningTxState({
+    chainId: 59141,
+    contract: "0x1111111111111111111111111111111111111111",
+    actor: "0x2222222222222222222222222222222222222222",
+    hash: `0x${"a".repeat(64)}`,
+    nonce: 7,
+    calldata: "0x1234",
+    expectedEpoch: "42",
+    tileIds: [1],
+    amountRawPerTile: "5",
+    baselineBets: Array(25).fill("0"),
+    ts: 1_000,
+  }, 2_000);
+  assert.ok(completePendingMiningState);
+  const receipt = {
+    status: "success",
+    transactionHash: completePendingMiningState.hash,
+    blockHash: `0x${"b".repeat(64)}`,
+    blockNumber: 10n,
+    transactionIndex: 0,
+  };
+  const createRecoveryClient = (clientReceipt = receipt, bets = [5n, ...Array(24).fill(0n)]) => ({
+    getTransactionReceipt: async () => clientReceipt,
+    getTransaction: async () => ({
+      hash: completePendingMiningState.hash,
+      from: completePendingMiningState.actor,
+      to: completePendingMiningState.contract,
+      type: "eip1559",
+      nonce: completePendingMiningState.nonce,
+      input: completePendingMiningState.calldata,
+      blockHash: clientReceipt.blockHash,
+      blockNumber: clientReceipt.blockNumber,
+      transactionIndex: clientReceipt.transactionIndex,
+    }),
+    getTransactionCount: async () => 8,
+    getChainId: async () => 59141,
+    getBlockNumber: async () => 12n,
+    getBlock: async () => ({ hash: clientReceipt.blockHash }),
+    readContract: async () => bets,
+  });
+  const agreeingRecoveryClient = createRecoveryClient();
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx([agreeingRecoveryClient, agreeingRecoveryClient], completePendingMiningState, 2_000, 2n),
+    "confirmed",
+    "complete intent requires two matching final receipts and its expected bet delta before confirmation",
+  );
+  const mismatchedReceipt = { ...receipt, blockHash: `0x${"c".repeat(64)}` };
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx(
+      [createRecoveryClient(), createRecoveryClient(mismatchedReceipt)],
+      completePendingMiningState,
+      2_000,
+      2n,
+    ),
+    "manual-reconciliation-required",
+    "receipt disagreement must keep a pending mining intent fail-closed",
+  );
+  const revertedReceipt = { ...receipt, status: "reverted" };
+  const revertedRecoveryClient = createRecoveryClient(revertedReceipt);
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx(
+      [revertedRecoveryClient, revertedRecoveryClient],
+      completePendingMiningState,
+      2_000,
+      2n,
+    ),
+    "clear",
+    "a matching finalized reverted receipt clears the pending mining intent",
   );
   assert.match(
     miningTxPathSource,
