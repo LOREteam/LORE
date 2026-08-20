@@ -928,11 +928,25 @@ export async function runChatAndClientSafetyTests() {
       /return readCachedAppShellHotTiles\(window\.localStorage\)/.test(appShellStateSource),
       [...appShellStateSource.matchAll(/persistAppShellHotTiles\(window\.localStorage, hotTiles\)/g)].length,
       /createAppMountDiagnostic\(window\.location, readRequestedTab\(\)\)/.test(appShellStateSource),
-      /const DIRECT_TAB_PATHS:[\s\S]*faq: "\/faq"[\s\S]*whitepaper: "\/whitepaper"[\s\S]*leaderboards: "\/leaderboards"[\s\S]*window\.location\.pathname[\s\S]*const destination = DIRECT_TAB_PATHS\[tab\]/.test(appShellStateSource),
     ],
-    [true, true, 2, true, true],
-    "App shell runtime must preserve storage/diagnostic policies and direct public tab routes",
+    [true, true, 2, true],
+    "App shell runtime must preserve storage and mount-diagnostic policies",
   );
+  const resolveRequestedAppShellTab = (pathname, hash, savedTab = null) => appShellState.resolveRequestedAppShellTab(
+    { pathname, hash },
+    savedTab,
+  );
+  assert.equal(resolveRequestedAppShellTab("/faq", "#analytics", "hub"), "faq");
+  assert.equal(resolveRequestedAppShellTab("/whitepaper/", "#rebate", "hub"), "whitepaper");
+  assert.equal(resolveRequestedAppShellTab("/leaderboards", "", "hub"), "leaderboards");
+  assert.equal(resolveRequestedAppShellTab("/", "#analytics", "faq"), "analytics");
+  assert.equal(resolveRequestedAppShellTab("/", "#not-a-tab", "faq"), "faq");
+  assert.equal(resolveRequestedAppShellTab("/", "", null), "hub");
+  assert.equal(appShellState.getAppShellTabDestination("faq"), "/faq");
+  assert.equal(appShellState.getAppShellTabDestination("whitepaper"), "/whitepaper");
+  assert.equal(appShellState.getAppShellTabDestination("leaderboards"), "/leaderboards");
+  assert.equal(appShellState.getAppShellTabDestination("analytics"), "/#analytics");
+  assert.equal(appShellState.getAppShellTabDestination("hub"), "/");
   const lineaOreClientViewProps = lineaOreClientViewPropsModule.default ?? lineaOreClientViewPropsModule;
   assert.equal(lineaOreClientViewProps.derivePreviousGridEpoch("42"), "41");
   assert.equal(lineaOreClientViewProps.derivePreviousGridEpoch("1"), "0");

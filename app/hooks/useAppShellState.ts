@@ -57,16 +57,27 @@ function loadSavedTab(): TabId | null {
   return readSavedAppShellTab(window.localStorage);
 }
 
-function readRequestedTab(): TabId {
-  if (typeof window === "undefined") return "hub";
-  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+export function resolveRequestedAppShellTab(
+  location: Pick<Location, "pathname" | "hash">,
+  savedTab: TabId | null,
+): TabId {
+  const path = location.pathname.replace(/\/+$/, "") || "/";
   const routeTab = (Object.entries(DIRECT_TAB_PATHS) as Array<[TabId, string]>).find(([, candidate]) => candidate === path)?.[0];
   if (routeTab) return routeTab;
-  const hash = window.location.hash.replace("#", "");
+  const hash = location.hash.replace("#", "");
   if (VALID_TABS.includes(hash as TabId)) {
     return hash as TabId;
   }
-  return loadSavedTab() ?? "hub";
+  return savedTab ?? "hub";
+}
+
+function readRequestedTab(): TabId {
+  if (typeof window === "undefined") return "hub";
+  return resolveRequestedAppShellTab(window.location, loadSavedTab());
+}
+
+export function getAppShellTabDestination(tab: TabId): string {
+  return DIRECT_TAB_PATHS[tab] ?? (tab === "hub" ? "/" : `/#${tab}`);
 }
 
 function saveActiveTab(tab: TabId) {
@@ -180,7 +191,7 @@ export function useAppShellState() {
   const handleTabChange = useCallback((tab: TabId) => {
     setActiveTab(tab);
     saveActiveTab(tab);
-    const destination = DIRECT_TAB_PATHS[tab] ?? (tab === "hub" ? "/" : `/#${tab}`);
+    const destination = getAppShellTabDestination(tab);
     history.replaceState(null, "", destination);
   }, []);
 
