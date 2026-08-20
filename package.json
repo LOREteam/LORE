@@ -225,7 +225,6 @@
   },
   "dependencies": {
     "@base-org/account": "2.5.6",
-    "@metamask/connect-evm": "^1.4.0",
     "@openzeppelin/contracts": "5.6.1",
     "@privy-io/react-auth": "^3.27.2",
     "@privy-io/wagmi": "^4.0.9",
@@ -248,19 +247,18 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "webpack": "5.109.2",
     "autoprefixer": "^10.4.27",
     "concurrently": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.12",
-    "open-cli": "^9.0.0",
     "playwright-core": "^1.58.2",
     "postcss": "8.5.23",
     "solc": "0.8.36",
     "solc-0.8.34": "npm:solc@0.8.34",
     "tailwindcss": "^4.2.1",
     "tsx": "^4.20.5",
-    "typescript": "^5"
+    "typescript": "^5",
+    "webpack": "5.109.2"
   },
   "overrides": {
     "axios": "1.18.1",
