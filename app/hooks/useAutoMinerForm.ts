@@ -13,6 +13,8 @@ const DEFAULT_AUTO_MINER_INPUTS = {
   cycles: 5,
 };
 
+type AutoMinerInputsStorage = Pick<Storage, "getItem" | "removeItem">;
+
 interface RunningParams {
   betStr: string;
   blocks: number;
@@ -50,6 +52,26 @@ export function sanitizeAutoMinerInputs(value: unknown) {
   };
 }
 
+export function restoreAutoMinerInputs(storage: AutoMinerInputsStorage) {
+  try {
+    const raw = storage.getItem(AUTOMINER_INPUTS_KEY);
+    const legacyRaw = raw == null ? storage.getItem(LEGACY_AUTOMINER_INPUTS_KEY) : null;
+    const selectedRaw = raw ?? legacyRaw;
+    if (selectedRaw == null) return null;
+    const inputs = sanitizeAutoMinerInputs(JSON.parse(selectedRaw));
+    if (raw == null && legacyRaw != null) storage.removeItem(LEGACY_AUTOMINER_INPUTS_KEY);
+    return inputs;
+  } catch {
+    try {
+      storage.removeItem(AUTOMINER_INPUTS_KEY);
+      storage.removeItem(LEGACY_AUTOMINER_INPUTS_KEY);
+    } catch {
+      // ignore storage failures
+    }
+    return null;
+  }
+}
+
 export function useAutoMinerForm({
   isAutoMining,
   isPending,
@@ -67,25 +89,14 @@ export function useAutoMinerForm({
 
   useEffect(() => {
     try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(AUTOMINER_INPUTS_KEY) : null;
-      const legacyRaw = raw == null && typeof window !== "undefined"
-        ? window.localStorage.getItem(LEGACY_AUTOMINER_INPUTS_KEY)
-        : null;
-      const selectedRaw = raw ?? legacyRaw;
-      if (selectedRaw != null) {
-        const data = sanitizeAutoMinerInputs(JSON.parse(selectedRaw));
-        setBetSize(data.betSize);
-        setTargets(data.targets);
-        setCycles(data.cycles);
-        if (raw == null && legacyRaw != null) window.localStorage.removeItem(LEGACY_AUTOMINER_INPUTS_KEY);
-      }
+      if (typeof window === "undefined") return;
+      const data = restoreAutoMinerInputs(window.localStorage);
+      if (!data) return;
+      setBetSize(data.betSize);
+      setTargets(data.targets);
+      setCycles(data.cycles);
     } catch {
-      try {
-        window.localStorage.removeItem(AUTOMINER_INPUTS_KEY);
-        window.localStorage.removeItem(LEGACY_AUTOMINER_INPUTS_KEY);
-      } catch {
-        // ignore storage failures
-      }
+      // ignore unavailable browser storage
     }
   }, []);
 

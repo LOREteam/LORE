@@ -9,6 +9,7 @@ import * as pageWalletOverviewModule from "../app/hooks/usePageWalletOverview.ts
 import * as autoMinerFormModule from "../app/hooks/useAutoMinerForm.ts";
 import * as analyticsAchievementsModule from "../app/hooks/useAnalyticsAchievements.ts";
 import * as autoResolveStorageModule from "../app/hooks/autoResolveStorage.ts";
+import * as appConstantsModule from "../app/lib/constants.ts";
 
 export async function runWalletModelTests() {
   const miningShared = miningSharedModule.default ?? miningSharedModule;
@@ -20,6 +21,7 @@ export async function runWalletModelTests() {
   const autoMinerForm = autoMinerFormModule.default ?? autoMinerFormModule;
   const analyticsAchievements = analyticsAchievementsModule.default ?? analyticsAchievementsModule;
   const autoResolveStorage = autoResolveStorageModule.default ?? autoResolveStorageModule;
+  const appConstants = appConstantsModule.default ?? appConstantsModule;
   const normalizedDuplicateTiles = tokenAmountMath.normalizeTileAmounts(
     [2, 2, 5],
     ["1000000000000000.123456789123456789", "0.876543210876543211", "1"],
@@ -504,7 +506,7 @@ export async function runWalletModelTests() {
   assert.equal(pageWalletOverview.normalizePageWalletAddress(null), null);
   assert.equal(
     pageWalletOverview.getPrivyBalanceCacheKey("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"),
-    `lore:privy-balances:v1:59141:0x5e40c6e31642ebe8670658fe84c660bd2a0f820f:0xd8da6bf26964af9d7eed9e03e53415d37aa96045`,
+    `lore:privy-balances:v1:59141:0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a:0xd8da6bf26964af9d7eed9e03e53415d37aa96045`,
   );
   assert.equal(pageWalletOverview.getPrivyBalanceCacheKey("0xabc"), null);
   assert.equal(
@@ -578,12 +580,40 @@ export async function runWalletModelTests() {
     autoMinerForm.sanitizeAutoMinerInputs({ targets: 2.9, cycles: 0 }),
     { betSize: "1.0", targets: 2, cycles: 1 },
   );
-  const autoMinerFormStorageSource = readFileSync("app/hooks/useAutoMinerForm.ts", "utf8");
-  assert.match(
-    autoMinerFormStorageSource,
-    /JSON\.parse\(selectedRaw\)[\s\S]*window\.localStorage\.removeItem\(LEGACY_AUTOMINER_INPUTS_KEY\)[\s\S]*catch \{[\s\S]*window\.localStorage\.removeItem\(AUTOMINER_INPUTS_KEY\)[\s\S]*window\.localStorage\.removeItem\(LEGACY_AUTOMINER_INPUTS_KEY\)/,
-    "auto-miner form restore must clear corrupt current and legacy localStorage entries",
-  );
+  {
+    const storage = new Map([["lineaore:auto-miner-inputs:v1", JSON.stringify({ betSize: "2.5", targets: 7, cycles: 12 })]]);
+    const removed = [];
+    const restored = autoMinerForm.restoreAutoMinerInputs({
+      getItem: (key) => storage.get(key) ?? null,
+      removeItem: (key) => {
+        removed.push(key);
+        storage.delete(key);
+      },
+    });
+    assert.deepEqual(restored, { betSize: "2.5", targets: 7, cycles: 12 });
+    assert.deepEqual(removed, ["lineaore:auto-miner-inputs:v1"], "legacy auto-miner inputs must migrate by removing the legacy value");
+  }
+  {
+    const currentKey = `lineaore:auto-miner-inputs:v2:${appConstants.APP_CHAIN_ID}:${appConstants.CONTRACT_ADDRESS.toLowerCase()}`;
+    const storage = new Map([
+      ["lineaore:auto-miner-inputs:v1", "{"],
+      [currentKey, "{"],
+    ]);
+    const removed = [];
+    assert.equal(
+      autoMinerForm.restoreAutoMinerInputs({
+        getItem: (key) => storage.get(key) ?? null,
+        removeItem: (key) => {
+          removed.push(key);
+          storage.delete(key);
+        },
+      }),
+      null,
+      "corrupt auto-miner storage must not restore unsafe form values",
+    );
+    assert.equal(storage.size, 0, "corrupt auto-miner current and legacy entries must both be cleared");
+    assert.equal(removed.length, 2);
+  }
   assert.match(
     readFileSync("app/hooks/useMiningGuards.ts", "utf8"),
     /const sanitized = sanitizeLastBet\(JSON\.parse\(parsed\)\)[\s\S]*localStorage\.removeItem\(raw \? LAST_BET_KEY : LEGACY_LAST_BET_KEY\)[\s\S]*catch \{[\s\S]*localStorage\.removeItem\(LAST_BET_KEY\)/,
@@ -594,17 +624,25 @@ export async function runWalletModelTests() {
     ["bad", "2", "10"],
   );
   assert.doesNotThrow(() => analyticsAchievements.compareAchievementEpochs("bad", "2"));
+  assert.deepEqual(
+    [
+      { blockNumberNum: 0, epoch: "10", txHash: "0x10" },
+      { blockNumberNum: 0, epoch: "9007199254740993", txHash: "0x09" },
+      { blockNumberNum: 0, epoch: "bad", txHash: "0x0b" },
+      { blockNumberNum: 0, epoch: "2", txHash: "0x02" },
+      { blockNumberNum: 1, epoch: "9007199254740993", txHash: "0x01" },
+    ].sort(analyticsAchievements.compareAchievementDepositOrder).map((deposit) => deposit.txHash),
+    ["0x09", "0x0b", "0x01", "0x02", "0x10"],
+    "first-bet ordering must treat unsafe and malformed epoch strings as untrusted before the stable hash tie-breaker",
+  );
+  assert.ok(
+    analyticsAchievements.compareAchievementDepositOrder(
+      { blockNumberNum: 7, epoch: "99", txHash: "0xb" },
+      { blockNumberNum: 7, epoch: "2", txHash: "0xa" },
+    ) > 0,
+    "first-bet ordering must use the safe epoch order before its tx-hash tie-breaker",
+  );
   const analyticsAchievementsSource = readFileSync("app/hooks/useAnalyticsAchievements.ts", "utf8");
-  assert.match(
-    analyticsAchievementsSource,
-    /function parseAchievementEpochNumber/,
-    "analytics achievements must parse deposit epoch strings safely for first-bet ordering",
-  );
-  assert.doesNotMatch(
-    analyticsAchievementsSource,
-    /(^|[^A-Za-z])Number\(left\.epoch\)|(^|[^A-Za-z])Number\(right\.epoch\)/,
-    "analytics achievements must not use unchecked Number(epoch) in first-bet ordering",
-  );
   assert.match(
     analyticsAchievementsSource,
     /const parsed = JSON\.parse\(raw\) as PersistedAchievements[\s\S]*localStorage\.removeItem\(storageKey\)[\s\S]*catch \{[\s\S]*const storageKey = getAchievementStorageKey\(walletAddress\)[\s\S]*localStorage\.removeItem\(storageKey\)/,
@@ -711,6 +749,9 @@ export async function runWalletModelTests() {
       });
       assert.equal(autoResolveStorage.readResolveGuard(), null);
       assert.equal(storage.has("lore_resolve_epoch"), false, "legacy non-canonical auto-resolve epochs must be cleared");
+      storage.set("lore_resolve_epoch", "{");
+      assert.equal(autoResolveStorage.readResolveGuard(), null);
+      assert.equal(storage.has("lore_resolve_epoch"), false, "corrupt auto-resolve guard JSON must be cleared");
     } finally {
       if (previousLocalStorage === undefined) {
         delete globalThis.localStorage;
@@ -722,24 +763,4 @@ export async function runWalletModelTests() {
       }
     }
   }
-  assert.match(
-    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function normalizeResolveGuardEpoch[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\*\)\$\/[\s\S]*RESOLVE_GUARD_MAX_EPOCH_DIGITS[\s\S]*BigInt\(epoch\) > MAX_SAFE_INTEGER_BIGINT[\s\S]*const epoch = normalizeResolveGuardEpoch\(raw\.epoch\)[\s\S]*const epoch = normalizeResolveGuardEpoch\(raw\)[\s\S]*const normalizedEpoch = normalizeResolveGuardEpoch\(epoch\)[\s\S]*epoch: normalizedEpoch/,
-    "auto-resolve guard epochs must be canonicalized for JSON, legacy storage, and write paths",
-  );
-  assert.match(
-    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
-    /function normalizeResolveGuardTimestamp[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*value - now > RESOLVE_GUARD_MAX_FUTURE_SKEW_MS[\s\S]*const ts = normalizeResolveGuardTimestamp\(raw\.ts, now\)/,
-    "auto-resolve guard timestamps must use safe-integer non-future normalization",
-  );
-  assert.match(
-    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
-    /const entry = normalizeResolveGuardEntry\(JSON\.parse\(raw\)\)[\s\S]*if \(!entry\) clearResolveGuard\(\)[\s\S]*catch \{[\s\S]*clearResolveGuard\(\)/,
-    "auto-resolve guard reads must clear corrupt or invalid localStorage entries",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/hooks/autoResolveStorage.ts", "utf8"),
-    /Number\.isFinite\(raw\.ts\)|typeof raw\.ts === "number" && Number\.isFinite|\/\^\\d\+\$\/\.test\(epoch\)/,
-    "auto-resolve guard reads must not return to broad finite timestamp or regex-only/unbounded epoch acceptance",
-  );
 }

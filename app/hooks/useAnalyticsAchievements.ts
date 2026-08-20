@@ -100,6 +100,19 @@ export function compareAchievementEpochs(left: string, right: string): number {
   return leftEpoch === rightEpoch ? 0 : leftEpoch < rightEpoch ? -1 : 1;
 }
 
+export function compareAchievementDepositOrder(
+  left: Pick<DepositEntry, "blockNumberNum" | "epoch" | "txHash">,
+  right: Pick<DepositEntry, "blockNumberNum" | "epoch" | "txHash">,
+): number {
+  const leftOrder = left.blockNumberNum > 0 ? left.blockNumberNum : parseAchievementEpochNumber(left.epoch);
+  const rightOrder = right.blockNumberNum > 0 ? right.blockNumberNum : parseAchievementEpochNumber(right.epoch);
+  if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+  const leftEpoch = parseAchievementEpochNumber(left.epoch);
+  const rightEpoch = parseAchievementEpochNumber(right.epoch);
+  if (leftEpoch !== rightEpoch) return leftEpoch - rightEpoch;
+  return left.txHash.localeCompare(right.txHash);
+}
+
 function getAchievementStorageKey(walletAddress: string | undefined) {
   if (!walletAddress) return null;
   try {
@@ -249,15 +262,7 @@ export function useAnalyticsAchievements<TRarity extends string>({
       }
     }
 
-    const earliestDeposit = [...list].sort((left, right) => {
-      const leftOrder = left.blockNumberNum > 0 ? left.blockNumberNum : parseAchievementEpochNumber(left.epoch);
-      const rightOrder = right.blockNumberNum > 0 ? right.blockNumberNum : parseAchievementEpochNumber(right.epoch);
-      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
-      const leftEpoch = parseAchievementEpochNumber(left.epoch);
-      const rightEpoch = parseAchievementEpochNumber(right.epoch);
-      if (leftEpoch !== rightEpoch) return leftEpoch - rightEpoch;
-      return left.txHash.localeCompare(right.txHash);
-    })[0];
+    const earliestDeposit = [...list].sort(compareAchievementDepositOrder)[0];
     const firstBetWon = Boolean(
       earliestDeposit
       && earliestDeposit.winningTile !== null

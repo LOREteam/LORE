@@ -88,8 +88,8 @@ protected-DB-safe evidence. Explicit OS-temp SQLite fixtures remain permitted.
 - Business suite: `test:logic` and its summary now delegate to one isolated
   runner with an OS-temp DB and protected main/WAL/SHM before/after snapshots.
 - P1.10: additional wallet, reward, history, wins and leaderboard presentation
-  seams are now executable. The refreshed AST audit reports `4573/5316`
-  behavioral assertions (`86.02%`); the overall extraction remains partial.
+  seams are now executable. The refreshed AST audit reports `4588/5307`
+  behavioral assertions (`86.45%`); the overall extraction remains partial.
 - Testnet plan: production-like topology, read model, long campaigns, mobile QA,
   profiling and final evidence criteria are recorded in
   [`testnet-hardening-plan.md`](testnet-hardening-plan.md).

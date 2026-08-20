@@ -30,8 +30,8 @@ detail belongs under [`docs/archive/`](archive/), not in this file.
 
 ### P1.10 behavioral extraction
 
-- [x] Re-run `audit:p1:behavior` after the current packet: `4573/5316`
-      behavioral assertions (`86.02%`).
+- [x] Re-run `audit:p1:behavior` after the current packet: `4588/5307`
+      behavioral assertions (`86.45%`).
 - [ ] Continue replacing source-operand assertions with imported public behavior
       only where a stable seam exists. Do not replace meaningful source-policy
       bindings with weaker smoke checks.
