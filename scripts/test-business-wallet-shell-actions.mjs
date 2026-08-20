@@ -6,10 +6,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import * as autoResolveModule from "../app/hooks/useAutoResolve.ts";
 import * as backupGateModule from "../app/components/BackupGate.tsx";
 import * as miningManualActionsModule from "../app/hooks/useMiningManualActions.ts";
+import * as maintenanceOverlayModule from "../app/components/MaintenanceOverlay.tsx";
+import * as mobileTabNavModule from "../app/components/MobileTabNav.tsx";
 
 const autoResolve = autoResolveModule.default ?? autoResolveModule;
 const backupGate = backupGateModule.default ?? backupGateModule;
 const miningManualActions = miningManualActionsModule.default ?? miningManualActionsModule;
+const maintenanceOverlay = maintenanceOverlayModule.default ?? maintenanceOverlayModule;
+const mobileTabNav = mobileTabNavModule.default ?? mobileTabNavModule;
+const MaintenanceOverlay = maintenanceOverlay.MaintenanceOverlay;
+const MobileTabNav = mobileTabNav.MobileTabNav;
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   const entries = readdirSync(root, { withFileTypes: true });
@@ -111,19 +117,23 @@ export async function runWalletShellAndMiningActionTests() {
     "both backup actions must expose the shared keyboard focus ring",
   );
   assert.doesNotMatch(backupGateMarkup, /Opening(?:\u2026|\.\.\.)/);
+  const mobileTabNavMarkup = renderToStaticMarkup(React.createElement(MobileTabNav, {
+    activeTab: "hub",
+    onTabChange: () => {},
+  }));
+  const mobileTabButtons = [...mobileTabNavMarkup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map((match) => match[0]);
+  assert.equal(mobileTabButtons.length, 6, "mobile navigation must render every public tab");
+  assert.ok(mobileTabButtons.every((button) => /\btype="button"/.test(button)), "mobile navigation actions must not submit surrounding forms");
+  assert.equal(mobileTabButtons.filter((button) => /aria-current="page"/.test(button)).length, 1, "only the active mobile tab must expose current-page semantics");
+  assert.match(mobileTabButtons[0], /aria-label="Hub"[\s\S]*aria-current="page"[\s\S]*aria-pressed="true"/, "the active mobile tab must expose its accessible label and selection state");
+  const maintenanceOverlayMarkup = renderToStaticMarkup(React.createElement(MaintenanceOverlay));
   assert.match(
-    readFileSync("app/components/MobileTabNav.tsx", "utf8"),
-    /MOBILE_TABS\.map[\s\S]*<button[\s\S]{0,160}type="button"[\s\S]*aria-current=\{active \? "page" : undefined\}/,
-    "mobile tab navigation buttons must remain non-submit controls with current-page semantics",
-  );
-  const maintenanceOverlaySource = readFileSync("app/components/MaintenanceOverlay.tsx", "utf8");
-  assert.match(
-    maintenanceOverlaySource,
+    maintenanceOverlayMarkup,
     /role="status"[\s\S]*aria-live="polite"[\s\S]*aria-busy="true"[\s\S]*aria-labelledby="maintenance-title"[\s\S]*aria-describedby="maintenance-description"[\s\S]*id="maintenance-title"[\s\S]*id="maintenance-description"/,
     "maintenance overlay must announce busy status with stable title and description wiring",
   );
   assert.match(
-    maintenanceOverlaySource,
+    maintenanceOverlayMarkup,
     /aria-hidden="true"[\s\S]*orb-drift-1[\s\S]*aria-hidden="true"[\s\S]*opacity-\[0\.03\][\s\S]*aria-hidden="true"[\s\S]*animate-gradient-x/,
     "maintenance overlay decorative animation layers must stay hidden from assistive technology",
   );
