@@ -100,8 +100,8 @@ export function runPublicPresentationTests() {
   assert.match(whitePaperText, /explicit operator acceptance of this model[\s\S]*future hardening such as VRF or commit-reveal remains a separate protocol upgrade decision/, "White Paper must not imply VRF or commit-reveal is mandatory before mainnet launch");
   assert.doesNotMatch(`${readFileSync("app/opengraph-image.tsx", "utf8")}\n${readFileSync("app/api/jackpots/og/route.tsx", "utf8")}`, /letterSpacing:\s*["']-/, "OpenGraph images must not use negative letter spacing");
   const jackpotOgRouteSource = readFileSync("app/api/jackpots/og/route.tsx", "utf8");
-  assert.match(jackpotOgRouteSource, /import \{ parseBoundedPositiveIntegerParam \} from "\.\.\/\.\.\/_lib\/queryParams";[\s\S]*function sanitizePositiveInt\(raw: string \| null, max: number\)[\s\S]*parseBoundedPositiveIntegerParam\(raw, max\)/, "jackpot OpenGraph chips must reuse strict bounded integer query parsing for tile and epoch");
-  assert.doesNotMatch(jackpotOgRouteSource, /CANONICAL_POSITIVE_INTEGER_RE|const parsed = Number\(value\)|raw\?\.trim\(\)[\s\S]*Number\(|\^\[0-9\]\{1,10\}\$|Number\.isInteger\(parsed\)/, "jackpot OpenGraph integer parsing must not reintroduce local Number() coercion or trim-normalized integer parsing");
+  assert.match(jackpotOgRouteSource, /readVerifiedJackpotShare\(request\.nextUrl\.searchParams\.get\("tx"\)\)[\s\S]*const \{ amount, epoch \} = share;[\s\S]*getJackpotVisualTheme\(share\.kind\)/, "jackpot OpenGraph image must derive its fields from a verified transaction event");
+  assert.doesNotMatch(jackpotOgRouteSource, /searchParams\.get\("(?:amount|tile|epoch|kind)"\)|parseBoundedPositiveIntegerParam|sanitizePositiveInt/, "jackpot OpenGraph image must not render amount, tile, epoch, or mode from URL parameters");
   const allFaqText = getFaqPresentationModel().categories
     .flatMap((category) => getFaqPresentationModel(category).items)
     .flatMap((item) => [item.q, ...[item.a].flat()])

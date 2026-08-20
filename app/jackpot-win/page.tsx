@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { getJackpotVisualTheme, type JackpotVisualKind } from "../lib/jackpotVisualTheme";
+import { notFound } from "next/navigation";
+import { readVerifiedJackpotShare } from "../api/_lib/jackpotShare";
+import { getJackpotVisualTheme } from "../lib/jackpotVisualTheme";
 
 interface Props {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -8,162 +10,65 @@ interface Props {
 
 const PUBLIC_SITE_URL = "https://playlore.xyz";
 
-function isPublicHttpsOrigin(raw: string) {
-  try {
-    const url = new URL(raw);
-    const host = url.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-    if (url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash) return false;
-    if (!host.includes(".") && !host.includes(":")) return false;
-    return !(
-      host === "localhost" ||
-      host === "0.0.0.0" ||
-      host === "::" ||
-      host === "::1" ||
-      host === "127.0.0.1" ||
-      host.endsWith(".localhost") ||
-      host.endsWith(".local") ||
-      host.endsWith(".example") ||
-      host.endsWith(".test") ||
-      host.endsWith(".invalid") ||
-      /^127\./.test(host) ||
-      /^10\./.test(host) ||
-      /^192\.168\./.test(host) ||
-      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
-    );
-  } catch {
-    return false;
-  }
-}
-
 function getPublicSiteUrl() {
   const configured = (process.env.NEXT_PUBLIC_SITE_URL ?? PUBLIC_SITE_URL).trim().replace(/\/+$/, "");
-  return isPublicHttpsOrigin(configured) ? configured : PUBLIC_SITE_URL;
+  return configured === PUBLIC_SITE_URL ? configured : PUBLIC_SITE_URL;
 }
 
-function param(raw: string | string[] | undefined): string | null {
-  if (Array.isArray(raw)) return raw[0] ?? null;
-  return raw ?? null;
-}
-
-function resolveKind(raw: string | null): JackpotVisualKind {
-  if (raw === "weekly") return "weekly";
-  if (raw === "dual") return "dual";
-  return "daily";
-}
-
-function sanitizeAmount(raw: string | null) {
-  const value = raw?.trim();
-  if (!value) return null;
-  if (value.length > 24) return null;
-  if (!/^[0-9][0-9,. ]*$/.test(value)) return null;
-  return value;
-}
-
-function sanitizePositiveInt(raw: string | null, max: number) {
-  const value = raw?.trim();
-  if (!value || !/^[0-9]{1,10}$/.test(value)) return null;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > max) return null;
-  return String(parsed);
+function firstParam(raw: string | string[] | undefined): string | null {
+  return Array.isArray(raw) ? raw[0] ?? null : raw ?? null;
 }
 
 export async function generateMetadata({ searchParams }: Props): Promise<Metadata> {
-  const sp = await searchParams;
-  const kind = resolveKind(param(sp.kind));
-  const theme = getJackpotVisualTheme(kind);
-  const amount = sanitizeAmount(param(sp.amount));
-  const tile = sanitizePositiveInt(param(sp.tile), 25);
-  const epoch = sanitizePositiveInt(param(sp.epoch), 1_000_000_000);
+  const share = await readVerifiedJackpotShare(firstParam((await searchParams).tx));
+  if (!share) return { title: "Jackpot event not found | LORE", robots: { index: false, follow: false } };
 
+  const theme = getJackpotVisualTheme(share.kind);
   const label = theme.label;
-  const title = amount ? `${label} Winner - ${amount} LINEA | LORE` : `${label} Winner | LORE`;
-  const description = [
-    `A ${label} just hit in LORE.`,
-    amount ? `Reward: ${amount} LINEA.` : "Reward confirmed on-chain.",
-    tile ? `Winning Tile #${tile}.` : null,
-    epoch ? `Epoch #${epoch}.` : null,
-    "Mine tiles, chase jackpots, and play LORE on Linea.",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  const ogParams = new URLSearchParams();
-  ogParams.set("kind", kind);
-  if (amount) ogParams.set("amount", amount);
-  if (tile) ogParams.set("tile", tile);
-  if (epoch) ogParams.set("epoch", epoch);
+  const title = share.amount ? `${label} Winner - ${share.amount} LINEA | LORE` : `${label} Winner | LORE`;
+  const description = `${label} event verified on-chain for epoch #${share.epoch}.`;
   const publicSiteUrl = getPublicSiteUrl();
-  const pagePath = `/jackpot-win?${ogParams.toString()}`;
-  const pageUrl = `${publicSiteUrl}${pagePath}`;
-  const ogUrl = `${publicSiteUrl}/api/jackpots/og?${ogParams.toString()}`;
+  const params = new URLSearchParams({ tx: share.txHash });
+  const pageUrl = `${publicSiteUrl}/jackpot-win?${params.toString()}`;
+  const ogUrl = `${publicSiteUrl}/api/jackpots/og?${params.toString()}`;
 
   return {
     metadataBase: new URL(publicSiteUrl),
     title,
     description,
-    alternates: {
-      canonical: pageUrl,
-    },
+    alternates: { canonical: pageUrl },
     openGraph: {
       title,
       description,
       url: pageUrl,
       type: "website",
-      images: [
-        {
-          url: ogUrl,
-          width: 1200,
-          height: 630,
-          alt: amount ? `${label} Winner - ${amount} LINEA` : `${label} Winner`,
-        },
-      ],
+      images: [{ url: ogUrl, width: 1200, height: 630, alt: `${label} verified event` }],
     },
-    twitter: {
-      card: "summary_large_image",
-      title,
-      description,
-      images: [ogUrl],
-    },
+    twitter: { card: "summary_large_image", title, description, images: [ogUrl] },
   };
 }
 
 export default async function JackpotWinPage({ searchParams }: Props) {
-  const sp = await searchParams;
-  const kind = resolveKind(param(sp.kind));
-  const theme = getJackpotVisualTheme(kind);
-  const amount = sanitizeAmount(param(sp.amount));
-  const tile = sanitizePositiveInt(param(sp.tile), 25);
-  const epoch = sanitizePositiveInt(param(sp.epoch), 1_000_000_000);
+  const share = await readVerifiedJackpotShare(firstParam((await searchParams).tx));
+  if (!share) notFound();
 
+  const theme = getJackpotVisualTheme(share.kind);
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#05040b] px-4 py-10 text-white">
-      <div
-        className="absolute inset-0 scale-105 bg-cover bg-center opacity-75"
-        style={{ backgroundImage: `url('${theme.ogArt}')` }}
-      />
+      <div className="absolute inset-0 scale-105 bg-cover bg-center opacity-75" style={{ backgroundImage: `url('${theme.ogArt}')` }} />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(255,255,255,0.12),transparent_34%),linear-gradient(180deg,rgba(0,0,0,0.48),rgba(0,0,0,0.84))]" />
-
       <div className={`relative w-full max-w-3xl overflow-hidden rounded-3xl border ${theme.banner.frame} bg-black/46 p-6 text-center shadow-[0_28px_90px_rgba(0,0,0,0.55)] backdrop-blur-md sm:p-9`}>
-        <p className={`text-[0.7rem] font-black uppercase tracking-[0.32em] ${theme.banner.accent}`}>
-          LORE jackpot winner
-        </p>
-        <h1 className="lore-display mx-auto mt-3 max-w-2xl text-5xl font-black uppercase leading-[0.9] sm:text-7xl">
-          {theme.winTitle}
-        </h1>
+        <p className={`text-[0.7rem] font-black uppercase tracking-[0.32em] ${theme.banner.accent}`}>LORE verified jackpot event</p>
+        <h1 className="lore-display mx-auto mt-3 max-w-2xl text-5xl font-black uppercase leading-[0.9] sm:text-7xl">{theme.winTitle}</h1>
         <div className={`lore-hud-number mt-6 text-4xl font-black leading-none sm:text-6xl ${theme.banner.accent}`}>
-          {amount ? `${amount} LINEA` : "Reward confirmed"}
+          {share.amount ? `${share.amount} LINEA` : "Reward confirmed"}
         </div>
-
         <div className="mt-6 flex flex-wrap justify-center gap-2">
-          {tile && <InfoPill label="Tile" value={`#${tile}`} />}
-          {epoch && <InfoPill label="Epoch" value={`#${epoch}`} />}
+          <InfoPill label="Epoch" value={`#${share.epoch}`} />
           <InfoPill label="Mode" value={theme.label} />
         </div>
-
-        <Link
-          href="/"
-          className={`mt-8 inline-flex min-h-12 items-center justify-center rounded-xl border px-7 text-sm font-black uppercase tracking-[0.16em] transition hover:brightness-110 ${theme.banner.button} ${theme.banner.buttonBorder}`}
-        >
+        <p className="mx-auto mt-4 max-w-xl break-all text-xs leading-relaxed text-white/65">Verified event: {share.txHash}</p>
+        <Link href="/" className={`mt-8 inline-flex min-h-12 items-center justify-center rounded-xl border px-7 text-sm font-black uppercase tracking-[0.16em] transition hover:brightness-110 ${theme.banner.button} ${theme.banner.buttonBorder}`}>
           Play at playlore.xyz
         </Link>
       </div>

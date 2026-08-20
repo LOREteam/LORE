@@ -1,6 +1,5 @@
 import { ImageResponse } from "next/og";
 import { type NextRequest, NextResponse } from "next/server";
-import { parseBoundedPositiveIntegerParam } from "../../_lib/queryParams";
 import {
   acquireResponseConcurrencySlot,
   releaseResponseConcurrencySlotOnSettled,
@@ -8,7 +7,8 @@ import {
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
 import { getTrustedAuthOrigin } from "../../_lib/trustedAuthOrigin";
-import { getJackpotVisualTheme, type JackpotVisualKind } from "../../../lib/jackpotVisualTheme";
+import { getJackpotVisualTheme } from "../../../lib/jackpotVisualTheme";
+import { readVerifiedJackpotShare } from "../../_lib/jackpotShare";
 
 /* eslint-disable @next/next/no-img-element -- next/og ImageResponse renders raw img assets. */
 
@@ -35,36 +35,16 @@ function renderBudgetExceededResponse() {
   ));
 }
 
-function resolveKind(raw: string | null): JackpotVisualKind {
-  if (raw === "weekly") return "weekly";
-  if (raw === "dual") return "dual";
-  return "daily";
-}
-
-function sanitizeAmount(raw: string | null) {
-  const value = raw?.trim();
-  if (!value) return null;
-  if (value.length > 24) return null;
-  if (!/^[0-9][0-9,. ]*$/.test(value)) return null;
-  return value;
-}
-
-function sanitizePositiveInt(raw: string | null, max: number) {
-  const parsed = parseBoundedPositiveIntegerParam(raw, max);
-  if (parsed === null) return null;
-  return String(parsed);
-}
-
 export async function GET(request: NextRequest) {
   const rateLimited = await enforceOgRateLimit(request);
   if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
-  const { searchParams } = request.nextUrl;
-  const kind = resolveKind(searchParams.get("kind"));
-  const amount = sanitizeAmount(searchParams.get("amount"));
-  const tile = sanitizePositiveInt(searchParams.get("tile"), 25);
-  const epoch = sanitizePositiveInt(searchParams.get("epoch"), 1_000_000_000);
-  const theme = getJackpotVisualTheme(kind);
+  const share = await readVerifiedJackpotShare(request.nextUrl.searchParams.get("tx"));
+  if (!share) {
+    return applyNoStoreHeaders(NextResponse.json({ error: "Verified jackpot event not found" }, { status: 404 }));
+  }
+  const { amount, epoch } = share;
+  const theme = getJackpotVisualTheme(share.kind);
   const artOrigin = getTrustedAuthOrigin(request.url) ?? CANONICAL_SITE_ORIGIN;
   const artUrl = new URL(theme.ogArt, artOrigin).toString();
   const rewardDisplay = amount ? amount : "REWARD";
@@ -154,7 +134,7 @@ export async function GET(request: NextRequest) {
               style={{
                 color: theme.colors.title,
                 fontFamily: 'Georgia, "Times New Roman", serif',
-                fontSize: kind === "weekly" ? "70px" : "76px",
+                fontSize: share.kind === "weekly" ? "70px" : "76px",
                 fontWeight: 950,
                 letterSpacing: "1px",
                 lineHeight: "0.94",
@@ -206,40 +186,6 @@ export async function GET(request: NextRequest) {
               marginTop: "28px",
             }}
           >
-            {tile && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "10px",
-                  padding: "11px 19px",
-                  borderRadius: "999px",
-                  border: `1px solid ${theme.colors.chipBorder}`,
-                  background: theme.colors.chipBg,
-                  boxShadow: "0 10px 26px rgba(0,0,0,0.28)",
-                }}
-              >
-                <span
-                  style={{
-                    color: "rgba(255,255,255,0.66)",
-                    fontSize: "15px",
-                    fontWeight: 850,
-                    letterSpacing: "3px",
-                  }}
-                >
-                  TILE
-                </span>
-                <span
-                  style={{
-                    color: theme.colors.title,
-                    fontSize: "23px",
-                    fontWeight: 950,
-                  }}
-                >
-                  #{tile}
-                </span>
-              </div>
-            )}
             {epoch && (
               <div
                 style={{
@@ -323,6 +269,11 @@ export async function GET(request: NextRequest) {
 export async function HEAD(request: NextRequest) {
   const rateLimited = await enforceOgRateLimit(request);
   if (rateLimited) return applyNoStoreHeaders(rateLimited);
+
+  const share = await readVerifiedJackpotShare(request.nextUrl.searchParams.get("tx"));
+  if (!share) {
+    return applyNoStoreHeaders(NextResponse.json({ error: "Verified jackpot event not found" }, { status: 404 }));
+  }
 
   return new Response(null, {
     status: 200,

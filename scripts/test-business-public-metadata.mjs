@@ -56,6 +56,7 @@ export function runPublicMetadataTests() {
     "robots.txt must allow public privacy and terms routes in production",
   );
   const jackpotWinPageSource = readFileSync("app/jackpot-win/page.tsx", "utf8");
+  const jackpotShareSource = readFileSync("app/lib/jackpotShareVerification.ts", "utf8");
   assert.match(
     jackpotWinPageSource,
     /https:\/\/playlore\.xyz/,
@@ -63,9 +64,11 @@ export function runPublicMetadataTests() {
   );
   assert.match(
     jackpotWinPageSource,
-    /function isPublicHttpsOrigin[\s\S]*protocol !== "https:"[\s\S]*pathname !== "\/"[\s\S]*\.example[\s\S]*192\\.168/,
-    "jackpot share preview metadata must reject non-final, private, and placeholder origins",
+    /readVerifiedJackpotShare\(firstParam\(\(await searchParams\)\.tx\)\)[\s\S]*notFound\(\)/,
+    "jackpot share page must reject an unknown transaction instead of rendering URL-supplied jackpot fields",
   );
+  assert.match(jackpotShareSource, /selectVerifiedJackpotShare[\s\S]*events\.filter[\s\S]*rows\.some\(\(row\) => row\.epoch !== first\.epoch\)[\s\S]*amount: rows\.length === 1/,
+    "jackpot share verification must bind epoch, visual mode, and amount to indexed events");
   assert.match(
     jackpotWinPageSource,
     /Play at playlore\.xyz/,

@@ -123,8 +123,8 @@ function testOgAdmissionSource() {
   );
   assert.match(
     routeSource,
-    /export async function HEAD\(request: NextRequest\)[\s\S]*enforceOgRateLimit\(request\)[\s\S]*new Response\(null,[\s\S]*"Content-Type": "image\/png"/,
-    "OG HEAD must be an explicit bodyless response with the same image media type",
+    /export async function HEAD\(request: NextRequest\)[\s\S]*enforceOgRateLimit\(request\)[\s\S]*readVerifiedJackpotShare\(request\.nextUrl\.searchParams\.get\("tx"\)\)[\s\S]*new Response\(null,[\s\S]*"Content-Type": "image\/png"/,
+    "OG HEAD must validate the same verified event while remaining an explicit bodyless image response",
   );
   const headStart = routeSource.indexOf("export async function HEAD");
   assert.ok(headStart >= 0);
