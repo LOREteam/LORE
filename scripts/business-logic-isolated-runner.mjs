@@ -108,7 +108,11 @@ function validateOwnedBusinessLogicTempRoot(tempRoot, {
   fsApi = { lstatSync, realpathSync },
 } = {}) {
   const projectRoot = canonicalProjectRoot ?? resolve(fsApi.realpathSync(resolve(cwd)));
-  const protectedDataRoot = canonicalProtectedDataRoot ?? resolve(fsApi.realpathSync(join(projectRoot, "data")));
+  // `data/` is intentionally ignored and may be absent in a fresh checkout.
+  // The temp root is already required to sit outside the canonical repository,
+  // so its lexical child path is sufficient for the additional containment
+  // check without manufacturing or opening runtime storage.
+  const protectedDataRoot = canonicalProtectedDataRoot ?? resolve(join(projectRoot, "data"));
   const systemTemp = captureOrdinaryDirectory(temporaryDirectory, "business logic OS-temp parent", fsApi);
   if (expectedTemporaryIdentity && !sameDirectoryIdentity(systemTemp.identity, expectedTemporaryIdentity)) {
     throw new Error("refusing to use or clean through a replaced business logic OS-temp parent");
@@ -167,7 +171,7 @@ export function runIsolatedBusinessLogicChild({
 } = {}) {
   if (!Array.isArray(args) || args.length === 0) throw new Error("business logic child command is required");
   const projectRoot = resolve(fsApi.realpathSync(resolve(cwd)));
-  const protectedDataRoot = resolve(fsApi.realpathSync(join(projectRoot, "data")));
+  const protectedDataRoot = resolve(join(projectRoot, "data"));
   const temporaryRoot = captureOrdinaryDirectory(temporaryDirectory, "business logic OS-temp parent", fsApi);
   if (sameOrInside(temporaryRoot.canonicalPath, projectRoot)) {
     throw new Error("business logic OS-temp parent must stay outside the repository");

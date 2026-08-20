@@ -20,14 +20,17 @@ function makeFsApi({
   parentReparse = false,
   rootReparse = false,
   snapshotFailure = false,
+  withoutDataDirectory = false,
 } = {}) {
   let generation = 0;
   let removed = null;
   let snapshotReads = 0;
   const ownedRoot = join(FIXTURE_TEMP, "lore-business-logic-fixture");
-  const directories = new Set([FIXTURE_ROOT, join(FIXTURE_ROOT, "data"), FIXTURE_TEMP, ownedRoot]);
+  const dataDirectory = join(FIXTURE_ROOT, "data");
+  const directories = new Set([FIXTURE_ROOT, FIXTURE_TEMP, ownedRoot]);
+  if (!withoutDataDirectory) directories.add(dataDirectory);
   return {
-    existsSync: (filePath) => directories.has(filePath) || protectedPaths.includes(filePath),
+    existsSync: (filePath) => directories.has(filePath) || (!withoutDataDirectory && protectedPaths.includes(filePath)),
     lstatSync: (filePath) => directories.has(filePath)
       ? {
           size: 0,
@@ -100,6 +103,17 @@ assert.equal(passing.observedEnvironment.lore_db_path, undefined);
 assert.equal(passing.observedEnvironment.lore_hermetic_build, undefined);
 assert.equal(passing.observedEnvironment.LORE_HERMETIC_BUILD_DB_ROOT, undefined);
 assert.equal(passing.fsApi.getRemoved(), passing.observedEnvironment.LORE_DB_PATH.replace(/[\\/]lore\.sqlite$/, ""));
+
+const freshCheckoutFsApi = makeFsApi({ withoutDataDirectory: true });
+const freshCheckoutResult = runIsolatedBusinessLogicChild({
+  args: ["fixture-child.mjs"],
+  cwd: FIXTURE_ROOT,
+  temporaryDirectory: FIXTURE_TEMP,
+  fsApi: freshCheckoutFsApi,
+  spawnSyncFn: () => ({ status: 0, stdout: "fresh checkout pass\n", stderr: "" }),
+});
+assert.equal(freshCheckoutResult.status, 0, "a fresh checkout without ignored runtime data must still use an isolated DB");
+assert.equal(freshCheckoutFsApi.getRemoved(), join(FIXTURE_TEMP, "lore-business-logic-fixture"));
 
 const mutation = runFixture({ mutateProtected: true });
 assert.equal(mutation.result.status, 1);
