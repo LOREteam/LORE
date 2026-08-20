@@ -18,6 +18,7 @@ import * as chatWalletRuntimeModule from "../app/lib/chatWalletRuntime.ts";
 import * as chatProfileReadPolicyModule from "../app/api/chat/profile/readPolicy.ts";
 import * as chatProfileModalModule from "../app/components/chat/ChatProfileModal.tsx";
 import * as chatWindowModule from "../app/components/chat/ChatWindow.tsx";
+import * as floatingActionsModule from "../app/components/FloatingActions.tsx";
 import * as headerWalletCardModule from "../app/components/header/HeaderWalletCard.tsx";
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
@@ -42,6 +43,7 @@ const chatWalletRuntime = chatWalletRuntimeModule.default ?? chatWalletRuntimeMo
 const chatProfileReadPolicy = chatProfileReadPolicyModule.default ?? chatProfileReadPolicyModule;
 const chatProfileModal = chatProfileModalModule.default ?? chatProfileModalModule;
 const chatWindow = chatWindowModule.default ?? chatWindowModule;
+const floatingActions = floatingActionsModule.default ?? floatingActionsModule;
 const headerWalletCard = headerWalletCardModule.default ?? headerWalletCardModule;
 
 const CHAT_PROFILE_ADDRESS_A = "0x1111111111111111111111111111111111111111";
@@ -956,12 +958,13 @@ export async function runChatAndClientSafetyTests() {
   assert.equal(lineaOreClientViewProps.derivePreviousGridEpoch("1e3"), null);
   assert.equal(lineaOreClientViewProps.derivePreviousGridEpoch("9007199254740993"), "9007199254740992");
   const chatWindowSource = readFileSync("app/components/chat/ChatWindow.tsx", "utf8");
-  const floatingActionsSource = readFileSync("app/components/FloatingActions.tsx", "utf8");
-  assert.match(
-    floatingActionsSource,
-    /<button[\s\S]{0,120}type="button"[\s\S]{0,240}aria-label="Open chat"[\s\S]{0,80}disabled/,
-    "lazy chat fallback button must remain a non-submit accessible control",
-  );
+  const floatingActionsMarkup = renderToStaticMarkup(React.createElement(floatingActions.FloatingActions, {
+    walletAddress: null,
+    onChatOpenChange: () => undefined,
+  }));
+  const lazyChatFallback = findButtonTag(floatingActionsMarkup, 'aria-label="Open chat"');
+  assert.match(lazyChatFallback, /type="button"/);
+  assert.match(lazyChatFallback, /disabled=""/);
   const closedToggleMarkup = renderToStaticMarkup(React.createElement(chatWindow.ChatToggleButton, {
     open: false,
     unread: 120,
