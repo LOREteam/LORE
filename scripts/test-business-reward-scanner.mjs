@@ -1,11 +1,53 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { RewardScanner } from "../app/components/RewardScanner.tsx";
 import * as rewardScannerModule from "../app/hooks/useRewardScanner.ts";
 import * as rewardScanPolicyModule from "../app/lib/rewardScanPolicy.ts";
 import * as claimTransactionIntentModule from "../app/lib/claimTransactionIntent.ts";
 
 const rewardScanPolicy = rewardScanPolicyModule.default ?? rewardScanPolicyModule;
 const claimTransactionIntent = claimTransactionIntentModule.default ?? claimTransactionIntentModule;
+
+const rewardScannerNoop = () => {};
+
+function renderRewardScanner({
+  unclaimedWins = [],
+  isScanning = false,
+  isDeepScanning = false,
+  isClaiming = false,
+} = {}) {
+  return renderToStaticMarkup(React.createElement(RewardScanner, {
+    unclaimedWins,
+    isScanning,
+    isDeepScanning,
+    isClaiming,
+    onScan: rewardScannerNoop,
+    onClaim: rewardScannerNoop,
+    onClaimAll: rewardScannerNoop,
+  }));
+}
+
+function assertRewardScannerPresentation() {
+  const rewards = [
+    { epoch: "101", amountWei: "1000000000000000000" },
+    { epoch: "100", amountWei: "2000000000000000000" },
+  ];
+  const ready = renderRewardScanner({ unclaimedWins: rewards });
+  assert.match(ready, /<button type="button" aria-label="Claim all 2 rewards" title="Claim all 2 rewards"/);
+  assert.match(ready, /<button type="button" aria-label="Scan for unclaimed rewards" title="Scan for unclaimed rewards"/);
+  assert.match(ready, /<button type="button" aria-label="Claim this reward" title="Claim this reward"/);
+
+  const claiming = renderRewardScanner({ unclaimedWins: rewards, isClaiming: true });
+  assert.match(claiming, /aria-label="Reward claim is already pending" title="Reward claim is already pending"[^>]*disabled=""/);
+
+  const deep = renderRewardScanner({ isDeepScanning: true });
+  assert.match(deep, /<div role="status" aria-live="polite"[^>]*>.*Full reward history is still loading in background\./);
+
+  const scanning = renderRewardScanner({ isScanning: true });
+  assert.match(scanning, /<div role="status" aria-live="polite" aria-busy="true"[^>]*>.*<svg aria-hidden="true"/);
+}
 
 function assertClaimTransactionIntentPolicy(candidate) {
   const hash = `0x${"1".repeat(64)}`;
@@ -214,7 +256,6 @@ export async function runRewardScannerTests() {
   );
 
   const rewardScannerSource = readFileSync("app/hooks/useRewardScanner.ts", "utf8");
-  const rewardScannerComponentSource = readFileSync("app/components/RewardScanner.tsx", "utf8");
   assert.match(
     rewardScannerSource,
     /wins\.push\(\.\.\.collectOpenRewardScanWins\(\{[\s\S]*potentialWins,[\s\S]*betResults,[\s\S]*tilePoolResults,[\s\S]*resolvedAtResults,[\s\S]*chainTimestamp,[\s\S]*\}\)\)/,
@@ -244,14 +285,7 @@ export async function runRewardScannerTests() {
     /const claimReward[\s\S]*let submittedHash: `0x\$\{string\}` \| null = null;[\s\S]*const hash = await silentSend\(\{ to: CONTRACT_ADDRESS, data, gas \}\);[\s\S]*submittedHash = hash;[\s\S]*submittedHash && err instanceof ClaimTransactionIntentError[\s\S]*Claim transaction submitted and is still pending\. Rewards will refresh after confirmation\.[\s\S]*submittedHash/,
     "single reward claims must preserve the submitted hash as pending when post-send intent verification cannot be confirmed",
   );
-  assert.match(
-    rewardScannerComponentSource,
-    /aria-label=\{claimAllLabel\}[\s\S]*title=\{claimAllLabel\}[\s\S]*aria-label=\{scanLabel\}[\s\S]*title=\{scanLabel\}[\s\S]*aria-label=\{claimOneLabel\}[\s\S]*title=\{claimOneLabel\}/,
-    "reward scan and claim controls must expose accessible labels and disabled-state titles",
-  );
-  assert.match(rewardScannerComponentSource, /type="button"[\s\S]*aria-label=\{claimAllLabel\}[\s\S]*type="button"[\s\S]*aria-label=\{scanLabel\}[\s\S]*type="button"[\s\S]*aria-label=\{claimOneLabel\}/, "reward scan and claim controls must remain non-submit buttons");
-  assert.match(rewardScannerComponentSource, /role="status"[\s\S]*aria-live="polite"[\s\S]*Full reward history is still loading in background/, "deep reward scan progress must be announced without changing recovery scan behavior");
-  assert.match(rewardScannerComponentSource, /role="status"[\s\S]*aria-live="polite"[\s\S]*aria-busy="true"[\s\S]*aria-hidden="true"[\s\S]*<LoreText items=\{searchingQuotes\}/, "reward scan empty-results loading must be announced as a polite busy status with decorative spinner hidden");
+  assertRewardScannerPresentation();
   assert.match(
     rewardScannerSource,
     /const claimInFlightRef = useRef\(false\)[\s\S]*const claimReward[\s\S]*if \(claimInFlightRef\.current\) return;[\s\S]*claimInFlightRef\.current = true;[\s\S]*const claimAll[\s\S]*claimInFlightRef\.current\) return;[\s\S]*claimInFlightRef\.current = true;/,
