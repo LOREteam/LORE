@@ -103,7 +103,7 @@ export function BackupGate({
   if (!isVisible) return null;
 
   return (
-    <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-black/95 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-[360] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md animate-fade-in">
       <div
         ref={dialogRef}
         role="dialog"
@@ -124,7 +124,7 @@ export function BackupGate({
           </div>
 
           <p id="backup-gate-description" className="text-sm text-gray-300 leading-relaxed text-center">
-            Your Privy wallet holds your funds. If you lose access (clear data, new device), <span className="text-amber-300 font-semibold">only a backup of your private key</span> will restore it. We cannot recover it for you.
+            Your Privy wallet is linked to your Privy account, so the same email or social login can restore access while that account remains available. <span className="text-amber-300 font-semibold">A private-key backup is your independent recovery route</span> if that access changes. We cannot reset or recover the key for you.
           </p>
 
           <p className="text-xs text-gray-500 text-center">
@@ -159,7 +159,7 @@ export function BackupGate({
                 className="mt-1 w-4 h-4 rounded border-2 border-amber-500/50 bg-black/30 text-amber-500 focus:ring-amber-500/50"
               />
               <span className="text-xs text-gray-400 group-hover:text-gray-300">
-                I have copied or saved my private key in a safe place and understand that without it I can lose access to my funds.
+                I have copied or saved my private key in a safe place and understand that anyone with it can control my funds.
               </span>
             </label>
 

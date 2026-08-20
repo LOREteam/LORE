@@ -95,7 +95,7 @@ export const Sidebar = React.memo(function Sidebar({
           type="button"
           tabIndex={-1}
           aria-hidden="true"
-          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden animate-fade-in"
+          className="fixed inset-0 z-[270] bg-black/60 backdrop-blur-sm lg:hidden animate-fade-in"
           onClick={onMobileClose}
         />
       )}
@@ -108,7 +108,7 @@ export const Sidebar = React.memo(function Sidebar({
         aria-label={mobileOpen ? undefined : "LORE navigation"}
         tabIndex={mobileOpen ? -1 : undefined}
         className={cn(
-          "fixed inset-y-0 left-0 z-50 h-screen w-[calc(14rem+1cm)] flex-col overflow-hidden border-r border-violet-500/15 bg-[#0a0a18]/95 backdrop-blur-md transition-transform duration-300 lg:relative lg:z-auto lg:translate-x-0 lg:flex animate-slide-in-left",
+          "fixed inset-y-0 left-0 z-[280] h-screen w-[calc(14rem+1cm)] flex-col overflow-hidden border-r border-violet-500/15 bg-[#0a0a18]/95 backdrop-blur-md transition-transform duration-300 lg:relative lg:z-auto lg:translate-x-0 lg:flex animate-slide-in-left",
           mobileOpen ? "flex translate-x-0" : "hidden lg:flex -translate-x-full lg:translate-x-0",
         )}
       >
@@ -155,6 +155,19 @@ export const Sidebar = React.memo(function Sidebar({
               </span>
             </div>
           </div>
+          {mobileOpen && (
+            <button
+              type="button"
+              onClick={onMobileClose}
+              className="ml-auto flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/12 text-slate-200 transition hover:bg-white/8 focus-visible:ring-2 focus-visible:ring-violet-400 lg:hidden"
+              aria-label="Close sidebar menu"
+              title="Close menu"
+            >
+              <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="m6 6 12 12M18 6 6 18" />
+              </svg>
+            </button>
+          )}
         </div>
 
         <div className="mx-3.5 h-px bg-linear-to-r from-transparent via-white/8 to-transparent" />

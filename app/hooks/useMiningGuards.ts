@@ -39,6 +39,24 @@ interface UseMiningGuardsOptions {
 
 const LEGACY_LAST_BET_KEY = "lore:last-bet";
 const LAST_BET_KEY = `lore:last-bet:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+const CONFIRMED_FIRST_BET_KEY = `lore:onboarding:first-confirmed-bet:v1:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+
+function markConfirmedFirstBet() {
+  try {
+    localStorage.setItem(CONFIRMED_FIRST_BET_KEY, "1");
+  } catch {
+    // The checklist remains conservative when persistent browser storage is unavailable.
+  }
+}
+
+export function hasConfirmedFirstBet(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(CONFIRMED_FIRST_BET_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function normalizeBalanceDecimals(balance: BalanceData, fallbackDecimals = 18): number | null {
   if (!balance) return null;
@@ -176,6 +194,7 @@ export function useMiningGuards({
       }
       if (result !== "confirmed") return;
       notify("Bet confirmed on-chain.", "success");
+      markConfirmedFirstBet();
       onBetConfirmed();
       if (tilesSnapshot.length > 0) {
         const entry = { tiles: tilesSnapshot, amount };
@@ -217,6 +236,7 @@ export function useMiningGuards({
     }
     if (result !== "confirmed") return;
     notify("Repeat bet confirmed on-chain.", "success");
+    markConfirmedFirstBet();
     onBetConfirmed();
     try {
       localStorage.setItem(LAST_BET_KEY, JSON.stringify(lastBet));
