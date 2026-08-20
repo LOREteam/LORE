@@ -658,13 +658,13 @@ async function main() {
   const nonOwner = roles.find((role) => role.address.toLowerCase() !== String(owner).toLowerCase());
   if (!nonOwner) throw new SafePlanError("No non-owner role is available for deployed access-control checks");
   const firstResolved = resolvedEpochs[0];
-  if (currentEpoch <= 1n || !firstResolved) {
-    throw new SafePlanError("Deployed negative checks require one prior resolved epoch");
-  }
-  const firstResolvedEpoch = firstResolved.epoch;
-  const openClaimWindowEpoch = resolvedEpochs.find(
-    (epoch) => epoch.resolvedAt > 0n && block.timestamp < epoch.resolvedAt + DUST_SETTLE_DELAY,
-  );
+  const bootstrapNegativeChecksPending = currentEpoch <= 1n || !firstResolved;
+  const firstResolvedEpoch = firstResolved?.epoch;
+  const openClaimWindowEpoch = firstResolved
+    ? resolvedEpochs.find(
+        (epoch) => epoch.resolvedAt > 0n && block.timestamp < epoch.resolvedAt + DUST_SETTLE_DELAY,
+      )
+    : undefined;
   const rewardNegativeEpoch = openClaimWindowEpoch ?? firstResolved;
   const negativeCalls: NegativeCall[] = [
     {
@@ -674,22 +674,26 @@ async function main() {
       expectedError: "NotResolved",
       label: "unresolved single reward claim",
     },
-    {
-      account: "0x0000000000000000000000000000000000000000",
-      functionName: "claimReward",
-      args: [rewardNegativeEpoch.epoch],
-      expectedError: openClaimWindowEpoch ? "NoWinningBet" : "RewardClaimWindowExpired",
-      label: openClaimWindowEpoch
-        ? "resolved non-winning single reward claim"
-        : "expired single reward claim",
-    },
-    {
-      account: "0x0000000000000000000000000000000000000000",
-      functionName: "claimRewards",
-      args: [[firstResolvedEpoch]],
-      expectedError: "NothingToClaim",
-      label: "resolved non-winning reward batch",
-    },
+    ...(firstResolvedEpoch !== undefined && rewardNegativeEpoch
+      ? [
+          {
+            account: "0x0000000000000000000000000000000000000000" as Address,
+            functionName: "claimReward" as const,
+            args: [rewardNegativeEpoch.epoch],
+            expectedError: openClaimWindowEpoch ? "NoWinningBet" : "RewardClaimWindowExpired",
+            label: openClaimWindowEpoch
+              ? "resolved non-winning single reward claim"
+              : "expired single reward claim",
+          },
+          {
+            account: "0x0000000000000000000000000000000000000000" as Address,
+            functionName: "claimRewards" as const,
+            args: [[firstResolvedEpoch]],
+            expectedError: "NothingToClaim",
+            label: "resolved non-winning reward batch",
+          },
+        ]
+      : []),
     {
       account: roles[0].address,
       functionName: "claimEpochRebate",
@@ -697,20 +701,24 @@ async function main() {
       expectedError: "NotResolved",
       label: "unresolved single rebate claim",
     },
-    {
-      account: "0x0000000000000000000000000000000000000000",
-      functionName: "claimEpochRebate",
-      args: [firstResolvedEpoch],
-      expectedError: "NoRebateAvailable",
-      label: "resolved empty-account single rebate claim",
-    },
-    {
-      account: "0x0000000000000000000000000000000000000000",
-      functionName: "claimEpochsRebate",
-      args: [[firstResolvedEpoch]],
-      expectedError: "NoRebateAvailable",
-      label: "resolved empty-account rebate batch",
-    },
+    ...(firstResolvedEpoch !== undefined
+      ? [
+          {
+            account: "0x0000000000000000000000000000000000000000" as Address,
+            functionName: "claimEpochRebate" as const,
+            args: [firstResolvedEpoch],
+            expectedError: "NoRebateAvailable",
+            label: "resolved empty-account single rebate claim",
+          },
+          {
+            account: "0x0000000000000000000000000000000000000000" as Address,
+            functionName: "claimEpochsRebate" as const,
+            args: [[firstResolvedEpoch]],
+            expectedError: "NoRebateAvailable",
+            label: "resolved empty-account rebate batch",
+          },
+        ]
+      : []),
     {
       account: "0x0000000000000000000000000000000000000000",
       functionName: "claimResolverRewards",
@@ -976,6 +984,8 @@ async function main() {
     },
     negativeCoverage: {
       applicableChecks: negativeChecks.length,
+      bootstrapPending: bootstrapNegativeChecksPending,
+      rerunRequiredAfterFirstResolved: bootstrapNegativeChecksPending,
       openClaimWindowChecksApplied: Boolean(openClaimWindowEpoch),
       fundedExpiredBetCheckApplied: resolveReady,
     },
