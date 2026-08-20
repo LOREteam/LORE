@@ -81,7 +81,7 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 - Preserve and prove the protected DB invariant through the immutable-SHA
   cycle; WAL/SHM removal still needs separate destructive approval.
-- P1.10 audit is refreshed to `4588/5306` behavioral (`86.47%`); continue
+- P1.10 audit is refreshed to `4612/5324` behavioral (`86.63%`); continue
   bounded extraction.
 - Same-SHA canonical and profiling provenance is implemented and the two build
   identities sealed locally at `0288ba5e`. A 60-second headed preflight did not
