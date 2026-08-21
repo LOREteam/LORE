@@ -1,6 +1,6 @@
 # V10 Canary Dry-Run Preview
 
-Last updated: 2026-08-20T23:28:54.855Z.
+Last updated: 2026-08-21T01:20:46.275Z.
 
 Scope: Linea Sepolia V10 read-only and dry-run readiness only. This document is
 not an authorization to send transactions, start a soak, deploy, or change
@@ -65,14 +65,14 @@ Redacted excerpt:
 "outputAddressFree": true
 },
 "snapshot": {
-"blockNumber": "31686599",
-"timestamp": "1787268512"
+"blockNumber": "31688332",
+"timestamp": "1787275222"
 },
 "runtimeIdentity": {
 "deployBlock": "31678224",
 "manifestDigest": "<redacted>",
 "normalizedRuntimeSha256": "<redacted>",
-"observedBlock": "31686599",
+"observedBlock": "31688332",
 ```
 
 ## Pending Nonce Dry-Run
@@ -124,9 +124,9 @@ npm.cmd run live:canary:v10:matrix
 - signingMaterialLoaded: false
 - walletClientCreated: false
 - contractWriteSubmitted: false
-- log: data\live-test-runs\live-canary-2026-08-20T23-28-50-485Z.jsonl
+- log: data\live-test-runs\live-canary-2026-08-21T01-20-42-000Z.jsonl
 - logBytes: 5730
-- logSha256: 2a1136ca3272480f398b41dce5486a95189011fe788d7ae1f34be3b4298b806c
+- logSha256: e5f6f3d157398db30b942f1e46548400fe9374d1e23ed71c29603694e70fdb34
 
 Redacted excerpt:
 
@@ -145,7 +145,7 @@ Redacted excerpt:
 [live-canary] emptyResolveBootstrap=disabled
 [live-canary] resolveTxLimit=5
 [live-canary] feeMeasurement repeatSameBet=enabled forceAllowanceApprove=disabled
-[live-canary] log=C:\Users\bogda\linea-miner-main\data\live-test-runs\live-canary-2026-08-20T23-28-50-485Z.jsonl
+[live-canary] log=C:\Users\bogda\linea-miner-main\data\live-test-runs\live-canary-2026-08-21T01-20-42-000Z.jsonl
 [live-canary] runtimeIdentity deployBlock=31678224 runtimeDigest=247fd0402f97…
 [live-canary] rounds=6 plannedBetTx=12 plannedStake=0.84 LINEA randomize=no configuredTotal=0.01..0.03 tiles=1..25
 [live-canary] walletPreflight ready=3/3 approvalsRequired=3 roles=MANUAL,AUTOMINER_A,AUTOMINER_B
@@ -156,24 +156,24 @@ Redacted excerpt:
 Command:
 
 ```powershell
-node scripts/analyze-live-canary-proof.mjs data\live-test-runs\live-canary-2026-08-20T23-28-50-485Z.jsonl --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix
+node scripts/analyze-live-canary-proof.mjs data\live-test-runs\live-canary-2026-08-21T01-20-42-000Z.jsonl --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix
 ```
 
 - exit: 1
 - dryRunProofBlocksG10G11: true
 - successfulBetTx: 0
 - uniqueBetEpochs: 0
-- logSha256: 2a1136ca3272480f398b41dce5486a95189011fe788d7ae1f34be3b4298b806c
+- logSha256: e5f6f3d157398db30b942f1e46548400fe9374d1e23ed71c29603694e70fdb34
 - logBytes: 5730
 
 Redacted excerpt:
 
 ```text
 # Live Canary Proof Summary
-Log: live-canary-2026-08-20T23-28-50-485Z.jsonl
+Log: live-canary-2026-08-21T01-20-42-000Z.jsonl
 Log SHA-256: <redacted>
 Log bytes: 5730
-Timestamp: 2026-08-20T23:28:54.845Z
+Timestamp: 2026-08-21T01:20:46.265Z
 Strict: yes
 Require epoch-bound bets: yes
 Require V10 gas matrix: yes
