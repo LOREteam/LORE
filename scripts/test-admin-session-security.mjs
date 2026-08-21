@@ -43,7 +43,13 @@ if (ROUTE_AUTH_FAULT_PROBE) {
     } catch {
       // The fault may occur before storage is imported.
     }
-    if (testRunDir) rmSync(testRunDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    if (testRunDir) {
+      try {
+        rmSync(testRunDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      } catch {
+        // This child intentionally fails its boundary assertion. A transient Windows temp-dir lock must not mask it.
+      }
+    }
   }
   process.exit(0);
 }
