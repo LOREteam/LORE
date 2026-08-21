@@ -22,10 +22,10 @@ function resolveRelativeModule(fromFile, specifier) {
   return resolved;
 }
 
-function directCoordinatorModules(coordinatorPath) {
+function relativeImports(filePath) {
   const sourceFile = ts.createSourceFile(
-    coordinatorPath,
-    fs.readFileSync(coordinatorPath, "utf8"),
+    filePath,
+    fs.readFileSync(filePath, "utf8"),
     ts.ScriptTarget.Latest,
     true,
     ts.ScriptKind.JS,
@@ -34,7 +34,28 @@ function directCoordinatorModules(coordinatorPath) {
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     const specifier = statement.moduleSpecifier.text;
-    if (specifier.startsWith("./")) modules.add(resolveRelativeModule(coordinatorPath, specifier));
+    if (specifier.startsWith("./")) modules.add(resolveRelativeModule(filePath, specifier));
+  }
+  return [...modules];
+}
+
+function isBusinessTestModule(filePath) {
+  const name = path.basename(filePath);
+  return name.startsWith("test-") || name === "business-logic-suite.mjs";
+}
+
+function coordinatorTestModules(coordinatorPath) {
+  const pending = [coordinatorPath];
+  const visited = new Set([coordinatorPath]);
+  const modules = new Set();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const imported of relativeImports(current)) {
+      if (!isBusinessTestModule(imported) || visited.has(imported)) continue;
+      visited.add(imported);
+      modules.add(imported);
+      pending.push(imported);
+    }
   }
   return [...modules].sort((left, right) => left.localeCompare(right));
 }
@@ -124,7 +145,7 @@ function combine(rows) {
 
 export function auditP1Behavior({ coordinatorPath = COORDINATOR_PATH } = {}) {
   const coordinator = auditAssertionSource(fs.readFileSync(coordinatorPath, "utf8"), coordinatorPath);
-  const modules = directCoordinatorModules(coordinatorPath).map((file) => ({
+  const modules = coordinatorTestModules(coordinatorPath).map((file) => ({
     file: path.relative(PROJECT_ROOT, file).replaceAll("\\", "/"),
     ...auditAssertionSource(fs.readFileSync(file, "utf8"), file),
   }));
@@ -153,7 +174,10 @@ export function runSelfTest() {
     ].join("\n")),
     { total: 3, sourceOperand: 2, behavioral: 1 },
   );
-  console.log(JSON.stringify({ status: "pass", cases: 1, schemaVersion: 1 }));
+  const modules = coordinatorTestModules(COORDINATOR_PATH).map((file) => path.basename(file));
+  assert.ok(modules.includes("business-logic-suite.mjs"));
+  assert.ok(modules.includes("test-business-wallet-models.mjs"));
+  console.log(JSON.stringify({ status: "pass", cases: 2, schemaVersion: 1 }));
 }
 
 const args = new Set(process.argv.slice(2));
