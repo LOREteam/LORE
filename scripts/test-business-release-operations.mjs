@@ -505,6 +505,7 @@ export function assertLocalCampaignSourceProvenance() {
     const snapshotParentFailure = snapshotParentEvents.find((event) => event.status === "failed");
     assert.equal(snapshotParentFailure?.phase, "after-command");
     assert.equal(snapshotParentFailure?.sourceIntegrityFailure, "source-snapshot-path-drift");
+    assert.equal(snapshotParentEvents.some((event) => event.status === "passed"), false);
     assert.equal(snapshotParentEvents.some((event) => event.status === "completed"), false);
     assert.equal(lstatSync(snapshotParentDirectory).isSymbolicLink(), true, "fixture must replace the snapshot parent with a junction");
     assert.equal(existsSync(snapshotParentSentinel), true, "unsafe snapshot cleanup must not follow a substituted parent target");
@@ -540,6 +541,7 @@ export function assertLocalCampaignSourceProvenance() {
     const dependencySwapFailure = dependencySwapEvents.find((event) => event.status === "failed");
     assert.equal(dependencySwapFailure?.phase, "after-command");
     assert.equal(dependencySwapFailure?.sourceIntegrityFailure, "source-snapshot-dependency-drift");
+    assert.equal(dependencySwapEvents.some((event) => event.status === "passed"), false);
     assert.equal(dependencySwapEvents.some((event) => event.status === "completed"), false);
     assert.equal(existsSync(dependencySwapSentinel), true, "unsafe dependency cleanup must not follow a swapped junction target");
     if (existsSync(dependencySwapLink)) rmdirSync(dependencySwapLink);
