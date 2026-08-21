@@ -17,10 +17,11 @@ const CHUNK_BLOCKS = 100_000;
 const FALLBACK_CHUNK_BLOCKS = 20_000;
 const FALLBACK_MAX_BLOCKS = 250_000n;
 const CACHE_MS = 120_000;
-const PERSISTED_CACHE_PREFIX = "lore:wallet-transfer-history:v1";
+const PERSISTED_CACHE_PREFIX = "lore:wallet-transfer-history:v2";
 const MAX_PERSISTED_TRANSFERS = 500;
 
 export type WalletTransferDataStatus = "live" | "stale" | "partial" | "error";
+export type WalletTransferScanCoverage = "full" | "partial";
 
 function toDisplayNumberWei(value: bigint) {
   return formatLineaWeiDisplayNumber(value);
@@ -85,6 +86,8 @@ export interface WalletTransfersSummary {
   totalInDisplay: string;
   totalOutDisplay: string;
   dataStatus: WalletTransferDataStatus;
+  scanCoverage: WalletTransferScanCoverage | null;
+  historyRowsTruncated: boolean;
   updatedAt: number | null;
   statusMessage: string | null;
 }
@@ -100,19 +103,23 @@ function createEmptyWalletTransfersSummary(
     totalInDisplay: "0.00",
     totalOutDisplay: "0.00",
     dataStatus,
+    scanCoverage: dataStatus === "error" ? null : dataStatus === "partial" ? "partial" : "full",
+    historyRowsTruncated: false,
     updatedAt: dataStatus === "error" ? null : Date.now(),
     statusMessage,
   };
 }
 
 interface PersistedWalletTransfersSummary {
-  version: 1;
+  version: 2;
   savedAt: number;
   transfers: Array<Omit<WalletTransfer, "blockNumber"> & { blockNumber?: string }>;
   totalIn: number;
   totalOut: number;
   totalInDisplay: string;
   totalOutDisplay: string;
+  scanCoverage: WalletTransferScanCoverage;
+  historyRowsTruncated: boolean;
 }
 
 function getPersistedCacheKey(cacheKey: string) {
@@ -120,8 +127,9 @@ function getPersistedCacheKey(cacheKey: string) {
 }
 
 export function serializeWalletTransfersSummary(summary: WalletTransfersSummary): PersistedWalletTransfersSummary {
+  const historyRowsTruncated = summary.historyRowsTruncated || summary.transfers.length > MAX_PERSISTED_TRANSFERS;
   return {
-    version: 1,
+    version: 2,
     savedAt: summary.updatedAt ?? Date.now(),
     transfers: summary.transfers.slice(0, MAX_PERSISTED_TRANSFERS).map((transfer) => ({
       ...transfer,
@@ -131,6 +139,8 @@ export function serializeWalletTransfersSummary(summary: WalletTransfersSummary)
     totalOut: summary.totalOut,
     totalInDisplay: summary.totalInDisplay,
     totalOutDisplay: summary.totalOutDisplay,
+    scanCoverage: summary.scanCoverage === "full" ? "full" : "partial",
+    historyRowsTruncated,
   };
 }
 
@@ -138,19 +148,22 @@ export function parsePersistedWalletTransfersSummary(value: unknown): WalletTran
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<PersistedWalletTransfersSummary>;
   if (
-    candidate.version !== 1 ||
+    candidate.version !== 2 ||
     typeof candidate.savedAt !== "number" ||
     !Number.isFinite(candidate.savedAt) ||
     !Array.isArray(candidate.transfers) ||
+    candidate.transfers.length > MAX_PERSISTED_TRANSFERS ||
     typeof candidate.totalIn !== "number" ||
     !Number.isFinite(candidate.totalIn) ||
     typeof candidate.totalOut !== "number" ||
     !Number.isFinite(candidate.totalOut) ||
     typeof candidate.totalInDisplay !== "string" ||
-    typeof candidate.totalOutDisplay !== "string"
+    typeof candidate.totalOutDisplay !== "string" ||
+    (candidate.scanCoverage !== "full" && candidate.scanCoverage !== "partial") ||
+    typeof candidate.historyRowsTruncated !== "boolean"
   ) return null;
   const transfers: WalletTransfer[] = [];
-  for (const transfer of candidate.transfers.slice(0, MAX_PERSISTED_TRANSFERS)) {
+  for (const transfer of candidate.transfers) {
     if (
       !transfer ||
       (transfer.direction !== "in" && transfer.direction !== "out") ||
@@ -187,8 +200,14 @@ export function parsePersistedWalletTransfersSummary(value: unknown): WalletTran
     totalInDisplay: candidate.totalInDisplay,
     totalOutDisplay: candidate.totalOutDisplay,
     dataStatus: "stale",
+    scanCoverage: candidate.scanCoverage,
+    historyRowsTruncated: candidate.historyRowsTruncated,
     updatedAt: candidate.savedAt,
-    statusMessage: "Showing the last verified transfer history. Refresh to check for newer activity.",
+    statusMessage: candidate.scanCoverage === "partial"
+      ? "Showing the last checked partial transfer history. Refresh to check for newer activity."
+      : candidate.historyRowsTruncated
+        ? `Showing the last checked transfer history. Saved transfer list is capped at ${MAX_PERSISTED_TRANSFERS} rows; totals are from the full last check. Refresh to check for newer activity.`
+        : "Showing the last checked full transfer history. Refresh to check for newer activity.",
   };
 }
 
@@ -342,7 +361,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
 
       let outLogs: Log[] = [];
       let inLogs: Log[] = [];
-      let hasPartialFailure = false;
+      let hasPartialCoverage = false;
 
       // Try both queries in parallel; if incoming fails (null gap not supported), fallback
       const [outResult, inResult] = await Promise.allSettled([
@@ -353,7 +372,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       if (outResult.status === "fulfilled") {
         outLogs = outResult.value;
       } else {
-        hasPartialFailure = true;
+        hasPartialCoverage = true;
         log.warn("WalletTransfers", "outgoing fetch failed", { reason: String(outResult.reason) });
       }
 
@@ -364,6 +383,9 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
         // Limit the unfiltered scan window; full-token Transfer scans are too heavy on mainnet.
         const allLogs: Log[] = [];
         const fallbackFromBlock = getWalletTransferFallbackFromBlock(fromBlock, toBlock);
+        if (fallbackFromBlock > fromBlock) {
+          hasPartialCoverage = true;
+        }
         for (let from = fallbackFromBlock; from <= toBlock; from += BigInt(FALLBACK_CHUNK_BLOCKS)) {
           const to = from + BigInt(FALLBACK_CHUNK_BLOCKS) > toBlock ? toBlock : from + BigInt(FALLBACK_CHUNK_BLOCKS - 1);
           try {
@@ -376,7 +398,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
             const chunk = await publicClient.getLogs(request);
             allLogs.push(...chunk);
           } catch {
-            hasPartialFailure = true;
+            hasPartialCoverage = true;
             // If even this fails, skip this chunk
           }
         }
@@ -419,7 +441,9 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
             transactionIndex: log.transactionIndex ?? undefined,
             logIndex: log.logIndex ?? undefined,
           });
-        } catch { /* skip */ }
+        } catch {
+          hasPartialCoverage = true;
+        }
       }
 
       for (const log of inLogs) {
@@ -443,7 +467,9 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
             transactionIndex: log.transactionIndex ?? undefined,
             logIndex: log.logIndex ?? undefined,
           });
-        } catch { /* skip */ }
+        } catch {
+          hasPartialCoverage = true;
+        }
       }
 
       transfers.sort((a, b) => {
@@ -463,9 +489,11 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
         totalOut: toDisplayNumberWei(totalOutWei),
         totalInDisplay: toDisplayAmountWei(totalInWei),
         totalOutDisplay: toDisplayAmountWei(totalOutWei),
-        dataStatus: hasPartialFailure ? "partial" : "live",
+        dataStatus: hasPartialCoverage ? "partial" : "live",
+        scanCoverage: hasPartialCoverage ? "partial" : "full",
+        historyRowsTruncated: false,
         updatedAt: Date.now(),
-        statusMessage: hasPartialFailure ? "Some transfer records could not be verified and may be missing." : null,
+        statusMessage: hasPartialCoverage ? "Transfer history is partial; observed records may be missing." : null,
       };
       cachedAtRef.current = Date.now();
       cachedForRef.current = cacheKey;

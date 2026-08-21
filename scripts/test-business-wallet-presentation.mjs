@@ -234,6 +234,16 @@ export function runWalletPresentationTests() {
     /walletTransfers\.statusMessage[\s\S]*dataStatus === "error"[\s\S]*Try again[\s\S]*No verified LINEA transfers were found/,
     "wallet transfer history must distinguish unavailable RPC data from an empty verified history",
   );
+  assert.match(
+    walletTransferPanelsSource,
+    /scanCoverage === "partial"[\s\S]*historyRowsTruncated[\s\S]*Last checked[\s\S]*Observed deposits[\s\S]*LINEA · lower bound[\s\S]*Observed withdrawals/,
+    "partial transfer histories must label observed lower-bound totals and their last check",
+  );
+  assert.match(
+    walletTransferPanelsSource,
+    /Saved transfer list is capped; totals reflect the full last check[\s\S]*No transfers were observed in this partial scan; more may exist/,
+    "capped full caches and empty partial scans must keep their different provenance claims",
+  );
   assert.deepEqual(
     normalizeCachedPrivyBalances(undefined),
     { token: null, tokenUpdatedAt: null, eth: null, ethUpdatedAt: null },
@@ -304,6 +314,8 @@ export function runWalletPresentationTests() {
     totalInDisplay: "0.00",
     totalOutDisplay: "0.00",
     dataStatus: "error",
+    scanCoverage: null,
+    historyRowsTruncated: false,
     updatedAt: null,
     statusMessage: "Transfer history is temporarily unavailable. Check your network connection and try again.",
   };
@@ -340,13 +352,126 @@ export function runWalletPresentationTests() {
       ...transferPanelProps,
       formattedLineaBalance: "0.00",
       formattedEthBalance: "0.0000",
-      walletTransfers: { ...unavailableTransferSummary, dataStatus: "live", statusMessage: null },
+      walletTransfers: {
+        ...unavailableTransferSummary,
+        dataStatus: "live",
+        scanCoverage: "full",
+        historyRowsTruncated: false,
+        statusMessage: null,
+      },
     },
   ));
   assert.match(verifiedZeroTransferPanelHtml, /LINEA Balance: <span[^>]*>0\.00 LINEA<\/span>/);
   assert.match(verifiedZeroTransferPanelHtml, /ETH Balance: <span[^>]*>0\.0000 ETH<\/span>/);
   assert.match(verifiedZeroTransferPanelHtml, /Deposited<\/div>[\s\S]*?0\.00/);
   assert.match(verifiedZeroTransferPanelHtml, /Withdrawn<\/div>[\s\S]*?0\.00/);
+  assert.doesNotMatch(verifiedZeroTransferPanelHtml, /Observed deposits|lower bound/);
+  const emptyPartialTransferPanelHtml = renderToStaticMarkup(React.createElement(
+    walletTransferPanels.WalletSettingsTransferPanels,
+    {
+      ...transferPanelProps,
+      formattedLineaBalance: "0.00",
+      formattedEthBalance: "0.0000",
+      walletTransfers: {
+        ...unavailableTransferSummary,
+        dataStatus: "partial",
+        scanCoverage: "partial",
+        historyRowsTruncated: false,
+        updatedAt: 1_700_000_000_000,
+        statusMessage: "Transfer history is partial; observed records may be missing.",
+      },
+    },
+  ));
+  assert.match(emptyPartialTransferPanelHtml, /Observed deposits/);
+  assert.match(emptyPartialTransferPanelHtml, /Observed withdrawals/);
+  assert.match(emptyPartialTransferPanelHtml, /LINEA · lower bound/);
+  assert.match(emptyPartialTransferPanelHtml, /Partial history: totals are observed lower bounds\./);
+  assert.match(emptyPartialTransferPanelHtml, /Last checked/);
+  assert.match(emptyPartialTransferPanelHtml, /No transfers were observed in this partial scan; more may exist\./);
+  assert.doesNotMatch(emptyPartialTransferPanelHtml, /Saved transfer list is capped|No verified LINEA transfers were found/);
+  const observedPartialTransfers = [
+    {
+      direction: "in",
+      counterparty: "0x2222222222222222222222222222222222222222",
+      amount: "12.50",
+      amountNum: 12.5,
+      txHash: `0x${"c".repeat(64)}`,
+      blockNumber: 123456n,
+      transactionIndex: 1,
+      logIndex: 1,
+    },
+    {
+      direction: "out",
+      counterparty: "0x2222222222222222222222222222222222222222",
+      amount: "2.25",
+      amountNum: 2.25,
+      txHash: `0x${"d".repeat(64)}`,
+      blockNumber: 123455n,
+      transactionIndex: 0,
+      logIndex: 0,
+    },
+  ];
+  const observedPartialTransferPanelHtml = renderToStaticMarkup(React.createElement(
+    walletTransferPanels.WalletSettingsTransferPanels,
+    {
+      ...transferPanelProps,
+      formattedLineaBalance: "0.00",
+      formattedEthBalance: "0.0000",
+      walletTransfers: {
+        ...unavailableTransferSummary,
+        transfers: observedPartialTransfers,
+        dataStatus: "partial",
+        scanCoverage: "partial",
+        historyRowsTruncated: false,
+        totalIn: 12.5,
+        totalOut: 2.25,
+        totalInDisplay: "12.50",
+        totalOutDisplay: "2.25",
+        updatedAt: 1_700_000_000_000,
+        statusMessage: "Transfer history is partial; observed records may be missing.",
+      },
+    },
+  ));
+  assert.match(observedPartialTransferPanelHtml, /Observed deposits/);
+  assert.match(observedPartialTransferPanelHtml, /Observed withdrawals/);
+  assert.match(observedPartialTransferPanelHtml, /12\.50|2\.25/);
+  assert.doesNotMatch(observedPartialTransferPanelHtml, /No transfers were observed in this partial scan/);
+  const cappedFullTransferRows = Array.from({ length: 500 }, (_, index) => ({
+    direction: "in",
+    counterparty: "0x2222222222222222222222222222222222222222",
+    amount: "1.00",
+    amountNum: 1,
+    txHash: `0x${(index + 1).toString(16).padStart(64, "0")}`,
+    blockNumber: BigInt(index + 1),
+    transactionIndex: 0,
+    logIndex: 0,
+  }));
+  const cappedFullTransferPanelHtml = renderToStaticMarkup(React.createElement(
+    walletTransferPanels.WalletSettingsTransferPanels,
+    {
+      ...transferPanelProps,
+      formattedLineaBalance: "0.00",
+      formattedEthBalance: "0.0000",
+      walletTransfers: {
+        ...unavailableTransferSummary,
+        transfers: cappedFullTransferRows,
+        dataStatus: "stale",
+        scanCoverage: "full",
+        historyRowsTruncated: true,
+        totalIn: 501,
+        totalOut: 0,
+        totalInDisplay: "501.00",
+        totalOutDisplay: "0.00",
+        updatedAt: 1_700_000_000_000,
+        statusMessage: "Showing the last checked transfer history.",
+      },
+    },
+  ));
+  assert.match(cappedFullTransferPanelHtml, /Deposited/);
+  assert.match(cappedFullTransferPanelHtml, /Withdrawn/);
+  assert.match(cappedFullTransferPanelHtml, /Saved transfer list is capped; totals reflect the full last check\./);
+  assert.match(cappedFullTransferPanelHtml, /aria-label="LINEA transfer history"/);
+  assert.doesNotMatch(cappedFullTransferPanelHtml, /Observed deposits|lower bound/);
   const headerBuilderBase = {
     actualCurrentEpoch: 1,
     gridDisplayEpoch: 1,

@@ -460,8 +460,8 @@ export async function runWalletModelTests() {
   assert.equal(walletTransfers.normalizeWalletTransferAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"), "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
   assert.equal(walletTransfers.normalizeWalletTransferAddress("0xabc"), null);
   assert.equal(walletTransfers.normalizeWalletTransferAddress(null), null);
-  const persistedTransferSummary = walletTransfers.parsePersistedWalletTransfersSummary({
-    version: 1,
+  const persistedTransferCache = {
+    version: 2,
     savedAt: 1_700_000_000_000,
     transfers: [{
       direction: "in",
@@ -477,7 +477,10 @@ export async function runWalletModelTests() {
     totalOut: 0,
     totalInDisplay: "12.50",
     totalOutDisplay: "0.00",
-  });
+    scanCoverage: "full",
+    historyRowsTruncated: false,
+  };
+  const persistedTransferSummary = walletTransfers.parsePersistedWalletTransfersSummary(persistedTransferCache);
   assert.deepEqual(
     persistedTransferSummary,
     {
@@ -496,17 +499,88 @@ export async function runWalletModelTests() {
       totalInDisplay: "12.50",
       totalOutDisplay: "0.00",
       dataStatus: "stale",
+      scanCoverage: "full",
+      historyRowsTruncated: false,
       updatedAt: 1_700_000_000_000,
-      statusMessage: "Showing the last verified transfer history. Refresh to check for newer activity.",
+      statusMessage: "Showing the last checked full transfer history. Refresh to check for newer activity.",
     },
-    "persisted transfer history must restore bigint block numbers and explicitly report staleness",
+    "persisted transfer history must restore bigint block numbers with explicit full-range coverage",
+  );
+  assert.equal(
+    walletTransfers.parsePersistedWalletTransfersSummary({ ...persistedTransferCache, version: 1 }),
+    null,
+    "legacy v1 transfer cache must be rejected because it has no trustworthy coverage provenance",
+  );
+  assert.equal(
+    walletTransfers.parsePersistedWalletTransfersSummary({ ...persistedTransferCache, scanCoverage: undefined }),
+    null,
+    "v2 transfer cache without explicit coverage must not be upgraded to a full history",
   );
   assert.equal(
     walletTransfers.parsePersistedWalletTransfersSummary({ ...walletTransfers.serializeWalletTransfersSummary(persistedTransferSummary), transfers: [{ direction: "in" }] }),
     null,
     "malformed cached transfer history must not be rendered as a verified empty history",
   );
+  const cappedPersistedTransfer = walletTransfers.serializeWalletTransfersSummary({
+    ...persistedTransferSummary,
+    dataStatus: "live",
+    scanCoverage: "full",
+    historyRowsTruncated: false,
+    statusMessage: null,
+    transfers: Array.from({ length: 501 }, (_, index) => ({
+      ...persistedTransferSummary.transfers[0],
+      txHash: `0x${index.toString(16).padStart(64, "0")}`,
+    })),
+  });
+  assert.equal(cappedPersistedTransfer.version, 2);
+  assert.equal(cappedPersistedTransfer.transfers.length, 500);
+  assert.equal(cappedPersistedTransfer.historyRowsTruncated, true);
+  const cappedRestoredTransfer = walletTransfers.parsePersistedWalletTransfersSummary(cappedPersistedTransfer);
+  assert.equal(cappedRestoredTransfer?.scanCoverage, "full");
+  assert.equal(cappedRestoredTransfer?.historyRowsTruncated, true);
+  assert.match(cappedRestoredTransfer?.statusMessage ?? "", /capped at 500 rows; totals are from the full last check/i);
+  const partialPersistedTransfer = walletTransfers.parsePersistedWalletTransfersSummary(walletTransfers.serializeWalletTransfersSummary({
+    ...persistedTransferSummary,
+    dataStatus: "partial",
+    scanCoverage: "partial",
+    historyRowsTruncated: false,
+    statusMessage: "Transfer history is partial; observed records may be missing.",
+  }));
+  assert.equal(partialPersistedTransfer?.dataStatus, "stale");
+  assert.equal(partialPersistedTransfer?.scanCoverage, "partial");
+  assert.match(partialPersistedTransfer?.statusMessage ?? "", /last checked partial transfer history/i);
   const walletTransfersSource = readFileSync("app/hooks/useWalletTransfers.ts", "utf8");
+  assert.match(
+    walletTransfersSource,
+    /wallet-transfer-history:v2[\s\S]*version: 2[\s\S]*scanCoverage: WalletTransferScanCoverage[\s\S]*historyRowsTruncated: boolean[\s\S]*candidate\.version !== 2[\s\S]*candidate\.scanCoverage !== "full"[\s\S]*candidate\.historyRowsTruncated !== "boolean"/,
+    "transfer cache v2 must require explicit coverage and row-truncation provenance",
+  );
+  assert.match(
+    walletTransfersSource,
+    /if \(outResult\.status === "fulfilled"\) \{[\s\S]*?\} else \{\s*hasPartialCoverage = true;/,
+    "a failed outgoing query must make the transfer history partial",
+  );
+  assert.match(
+    walletTransfersSource,
+    /const fallbackFromBlock = getWalletTransferFallbackFromBlock\(fromBlock, toBlock\);[\s\S]*if \(fallbackFromBlock > fromBlock\) \{\s*hasPartialCoverage = true;/,
+    "a fallback window that starts after the full range must make the transfer history partial",
+  );
+  assert.match(
+    walletTransfersSource,
+    /allLogs\.push\(\.\.\.chunk\);\s*\} catch \{\s*hasPartialCoverage = true;/,
+    "a failed fallback log chunk must make the transfer history partial",
+  );
+  const decodeSkipCoverageMatches = walletTransfersSource.match(/const decoded = decodeEventLog\([\s\S]*?\} catch \{\s*hasPartialCoverage = true;\s*\}/g) ?? [];
+  assert.equal(
+    decodeSkipCoverageMatches.length,
+    2,
+    "both inbound and outbound decode skips must make the transfer history partial",
+  );
+  assert.match(
+    walletTransfersSource,
+    /dataStatus: hasPartialCoverage \? "partial" : "live"[\s\S]*scanCoverage: hasPartialCoverage \? "partial" : "full"/,
+    "every recorded partial condition must reach both summary status and explicit coverage",
+  );
   assert.match(
     walletTransfersSource,
     /const seenLogs = new Set<string>\(\)[\s\S]*seenLogs\.add\(getWalletTransferLogKey\(log\)\)[\s\S]*seenLogs\.has\(getWalletTransferLogKey\(log\)\)/,

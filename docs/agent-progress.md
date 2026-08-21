@@ -106,6 +106,13 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   occurred. The protected SQLite base, WAL, and SHM remained unchanged.
 - This is local mutable-worktree evidence only. It does not establish a full
   campaign pass, immutable-SHA seal, hosted readiness, or real wallet flow.
+- Transfer history now records explicit full/partial scan coverage and saved-list
+  truncation in a v2 cache; v1 is ignored rather than upgraded. A fallback window
+  gap, failed log chunk, or decode skip yields observed lower-bound totals, while a
+  real zero over the full range remains full. Cached capped lists disclose that
+  totals came from the full last check and the UI says `Last checked` rather than
+  implying current or complete rows. Focused model/SSR checks are local only; no
+  network, wallet, or database action occurred.
 
 - Wallet setup is runtime-owned across Hub, Sidebar, and Wallet Settings: one safe shared attempt lock exposes creating/error state, prevents duplicate creation requests across surfaces, retains retry after a rejected attempt, and releases only after wallet sync/connection. A generation token invalidates stale Promise settlement after reset, so it cannot overwrite a newer attempt. Local presentation and TypeScript checks passed; no wallet or chain action was performed.
 ## Campaign status

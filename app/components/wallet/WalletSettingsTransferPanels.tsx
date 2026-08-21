@@ -45,6 +45,24 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
 }: WalletSettingsTransferPanelsProps) {
   const transferHistoryLoadLabel = walletTransfersLoading ? "Loading LINEA transfer history" : "Load LINEA transfer history";
   const transferHistoryStatus = walletTransfers?.dataStatus;
+  const transferHistoryIsPartial = walletTransfers?.scanCoverage === "partial";
+  const transferHistoryProvenanceLabel = walletTransfers && walletTransfers.dataStatus !== "error"
+    ? [
+        transferHistoryIsPartial
+          ? "Partial history: totals are observed lower bounds."
+          : walletTransfers.scanCoverage === "full"
+            ? "Full history range checked."
+            : null,
+        walletTransfers.historyRowsTruncated
+          ? transferHistoryIsPartial
+            ? "Saved transfer list is capped; totals are observed lower bounds."
+            : "Saved transfer list is capped; totals reflect the full last check."
+          : null,
+        walletTransfers.updatedAt !== null
+          ? `Last checked ${new Date(walletTransfers.updatedAt).toLocaleString()}.`
+          : null,
+      ].filter((message): message is string => Boolean(message)).join(" ")
+    : null;
 
   return (
     <>
@@ -125,15 +143,25 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
                   className={`mb-3 rounded-lg border px-3 py-2 text-xs leading-relaxed ${
                     transferHistoryStatus === "error"
                       ? "border-red-400/35 bg-red-500/10 text-red-100"
-                      : transferHistoryStatus === "partial"
+                      : transferHistoryIsPartial
                         ? "border-amber-300/35 bg-amber-400/10 text-amber-100"
                         : "border-sky-300/30 bg-sky-400/10 text-sky-100"
                   }`}
                 >
                   {walletTransfers.statusMessage}
-                  {walletTransfers.updatedAt && (
-                    <span className="ml-1 text-white/65">Last verified {new Date(walletTransfers.updatedAt).toLocaleString()}.</span>
-                  )}
+                </div>
+              )}
+              {transferHistoryProvenanceLabel && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className={`mb-3 rounded-lg border px-3 py-2 text-xs leading-relaxed ${
+                    transferHistoryIsPartial
+                      ? "border-amber-300/35 bg-amber-400/10 text-amber-100"
+                      : "border-sky-300/30 bg-sky-400/10 text-sky-100"
+                  }`}
+                >
+                  {transferHistoryProvenanceLabel}
                 </div>
               )}
               {walletTransfers.dataStatus === "error" ? (
@@ -143,14 +171,18 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
               ) : (
                 <div className="flex gap-3 mb-3">
                   <div className="flex-1 rounded-lg bg-emerald-500/6 border border-emerald-500/20 p-2.5 text-center">
-                    <div className="text-[11px] text-gray-300 font-bold uppercase tracking-widest mb-0.5">Deposited</div>
+                    <div className="text-[11px] text-gray-300 font-bold uppercase tracking-widest mb-0.5">
+                      {transferHistoryIsPartial ? "Observed deposits" : "Deposited"}
+                    </div>
                     <div className="lore-nums text-sm font-bold text-emerald-400">{walletTransfers.totalInDisplay}</div>
-                    <div className="text-[11px] text-gray-400">LINEA</div>
+                    <div className="text-[11px] text-gray-400">{transferHistoryIsPartial ? "LINEA · lower bound" : "LINEA"}</div>
                   </div>
                   <div className="flex-1 rounded-lg bg-red-500/6 border border-red-500/20 p-2.5 text-center">
-                    <div className="text-[11px] text-gray-300 font-bold uppercase tracking-widest mb-0.5">Withdrawn</div>
+                    <div className="text-[11px] text-gray-300 font-bold uppercase tracking-widest mb-0.5">
+                      {transferHistoryIsPartial ? "Observed withdrawals" : "Withdrawn"}
+                    </div>
                     <div className="lore-nums text-sm font-bold text-red-400">{walletTransfers.totalOutDisplay}</div>
-                    <div className="text-[11px] text-gray-400">LINEA</div>
+                    <div className="text-[11px] text-gray-400">{transferHistoryIsPartial ? "LINEA · lower bound" : "LINEA"}</div>
                   </div>
                 </div>
               )}
@@ -176,8 +208,8 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
                 </div>
               ) : (
                 <div role="status" aria-live="polite" className="text-center py-3 text-xs text-gray-300 italic">
-                  {walletTransfers.dataStatus === "partial"
-                    ? "Transfer history is incomplete; try again for a fresh check."
+                  {transferHistoryIsPartial
+                    ? "No transfers were observed in this partial scan; more may exist. Try again for a fresh check."
                     : "No verified LINEA transfers were found for this wallet pair."}
                 </div>
               )}
