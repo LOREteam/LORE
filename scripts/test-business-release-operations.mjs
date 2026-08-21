@@ -151,6 +151,8 @@ function redactCampaignFixtureDiagnostic(value, root) {
     .replace(/https?:\/\/[^\s]+/gi, "<url>")
     .replace(/\b0x[\da-f]{64}\b/gi, "<secret>")
     .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer <secret>")
+    .replace(/((?:["'](?:api(?:[_ -]?key|key)|access(?:[_ -]?token|token)|auth(?:orization)?|cookie|mnemonic|password|private(?:[_ -]?key|key)|rpc(?:[_ -]?(?:key|token|url)|(?:key|token|url))|secret|seed(?:[_ -]?phrase|phrase)?|session(?:[_ -]?token|token)?)["'])\s*:\s*")(?:(?:\\.|[^"\\])*)(")/gi, "$1<secret>$2")
+    .replace(/\b(?:mnemonic|seed(?:[_ -]?phrase|phrase)?)[\t ]*(?:=|:)[^\r\n]*/gi, (match) => `${match.slice(0, match.search(/(?:=|:)/) + 1)}<secret>`)
     .replace(/\b(?:api(?:[_ -]?key|key)|access(?:[_ -]?token|token)|auth(?:orization)?|cookie|mnemonic|password|private(?:[_ -]?key|key)|rpc(?:[_ -]?(?:key|token|url)|(?:key|token|url))|secret|seed(?:[_ -]?phrase|phrase)?|session(?:[_ -]?token|token)?)[\t ]*(?:=|:)[\t ]*(?:Bearer[\t ]+)?[^\s,;]+/gi, (match) => `${match.slice(0, match.search(/(?:=|:)/) + 1)}<secret>`)
     .replace(/[A-Za-z]:[\\/][^\r\n]*/g, "<path>")
     .replace(/(?:\\\\|\/\/)[^\\/\r\n]+[\\/][^\r\n]*/g, "<path>");
@@ -395,6 +397,9 @@ export function assertLocalCampaignSourceProvenance() {
       "api_key: fixture-api-token",
       "privateKey=fixture-private-key-token",
       "rpcUrl: fixture-rpc-url-token",
+      '{"privateKey":"fixture-json-private-key-token","rpcUrl":"fixture-json-rpc-url-token","mnemonic":"fixture json mnemonic words must all be redacted"}',
+      "mnemonic: fixture mnemonic words must all be redacted",
+      "seed phrase=fixture seed words must all be redacted",
       "Authorization: Bearer fixture-bearer-token",
       "session_token=fixture-session-token",
       `${root}\\private\\fixture-tail`,
@@ -421,7 +426,7 @@ export function assertLocalCampaignSourceProvenance() {
         assert.ok(Buffer.byteLength(diagnostic[key], "utf8") <= MAX_CAMPAIGN_FIXTURE_DIAGNOSTIC_BYTES, `${campaignId} ${key} must remain bounded`);
       }
       const serialized = JSON.stringify(diagnostic);
-      assert.doesNotMatch(serialized, /fixture-api-token|fixture-private-key-token|fixture-rpc-url-token|fixture-bearer-token|fixture-session-token|fixture-password|fixture-url-token|0x(?:ab){32}/i, `${campaignId} diagnostic must redact standalone secret patterns`);
+      assert.doesNotMatch(serialized, /fixture-api-token|fixture-private-key-token|fixture-rpc-url-token|fixture-json-private-key-token|fixture-json-rpc-url-token|fixture-bearer-token|fixture-session-token|fixture-password|fixture-url-token|fixture(?: json| mnemonic| seed) words|0x(?:ab){32}/i, `${campaignId} diagnostic must redact standalone secret patterns`);
       assert.doesNotMatch(serialized, new RegExp(escapeCampaignFixtureRegExp(root), "i"), `${campaignId} diagnostic must redact backslash fixture paths`);
       assert.doesNotMatch(serialized, new RegExp(escapeCampaignFixtureRegExp(diagnosticRootForward), "i"), `${campaignId} diagnostic must redact forward-slash fixture paths`);
       return diagnostic;
