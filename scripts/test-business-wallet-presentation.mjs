@@ -4,9 +4,11 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as walletTransferRowModule from "../app/components/wallet/WalletTransferRow.tsx";
 import * as pendingTxPanelModule from "../app/components/wallet/WalletSettingsPendingTxPanel.tsx";
+import * as headerPoolChartModule from "../app/components/header/HeaderPoolChart.tsx";
 
 const walletTransferRow = walletTransferRowModule.default ?? walletTransferRowModule;
 const pendingTxPanel = pendingTxPanelModule.default ?? pendingTxPanelModule;
+const headerPoolChart = headerPoolChartModule.default ?? headerPoolChartModule;
 
 function assertTransferPresentation(input, actual) {
   const expectedState = input.loading ? "pending" : input.disabled ? "unavailable" : "ready";
@@ -396,30 +398,24 @@ export function runWalletPresentationTests() {
     /min-h-11[^"]*focus-visible:ring-2/,
     "mobile wallet settings sections must keep a 44px touch target and visible keyboard focus",
   );
-  const headerPoolChartSource = readFileSync("app/components/header/HeaderPoolChart.tsx", "utf8");
-  assert.match(
-    headerPoolChartSource,
-    /EMPTY_POOL_LINE_PATH/,
-    "pool chart must keep a visible empty-state path when there are no bets",
-  );
-  assert.match(
-    headerPoolChartSource,
-    /const showChartVisual\s*=\s*true/,
-    "pool chart visual must remain mounted for empty no-bet epochs",
-  );
-  assert.match(
-    headerPoolChartSource,
-    /data-testid="header-pool-chart-line"/,
-    "pool chart line must expose a stable selector for browser smoke",
-  );
-  assert.match(
-    headerPoolChartSource,
-    /data-testid="header-pool-chart-visual"[\s\S]*data-empty-pool=\{realTotalStaked <= 0 \? "true" : "false"\}/,
-    "pool chart visual must expose a stable empty-pool state for browser smoke",
-  );
-  assert.match(
-    headerPoolChartSource,
-    /aria-label=\{realTotalStaked <= 0 \? "Pool chart empty state" : "Pool activity chart"\}/,
-    "pool chart empty state must be accessible without relying on pixels",
-  );
+  const emptyPoolChartHtml = renderToStaticMarkup(React.createElement(headerPoolChart.HeaderPoolChart, {
+    linePath: "",
+    muted: false,
+    onToggleMute: () => undefined,
+    realTotalStaked: 0,
+    rolloverAmount: 0,
+  }));
+  assert.match(emptyPoolChartHtml, /data-testid="header-pool-chart-visual"[^>]*data-empty-pool="true"[^>]*aria-label="Pool chart empty state"/);
+  const emptyPoolLine = emptyPoolChartHtml.match(/<path\b[^>]*data-testid="header-pool-chart-line"[^>]*\bd="([^"]+)"/);
+  assert.ok(emptyPoolLine?.[1], "empty pool must still render a visible chart line for browser smoke");
+  const activePoolChartHtml = renderToStaticMarkup(React.createElement(headerPoolChart.HeaderPoolChart, {
+    hydrated: true,
+    linePath: "M 1,50 L 99,40",
+    muted: true,
+    onToggleMute: () => undefined,
+    realTotalStaked: 2.5,
+    rolloverAmount: 0,
+  }));
+  assert.match(activePoolChartHtml, /data-testid="header-pool-chart-visual"[^>]*data-empty-pool="false"[^>]*aria-label="Pool activity chart"/);
+  assert.match(activePoolChartHtml, /data-testid="header-pool-chart-line"[^>]*d="M 1,50 L 99,40"/);
 }

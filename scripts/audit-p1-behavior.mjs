@@ -31,11 +31,24 @@ function relativeImports(filePath) {
     ts.ScriptKind.JS,
   );
   const modules = new Set();
-  for (const statement of sourceFile.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-    const specifier = statement.moduleSpecifier.text;
+  const addSpecifier = (specifier) => {
     if (specifier.startsWith("./")) modules.add(resolveRelativeModule(filePath, specifier));
-  }
+  };
+  const visit = (node) => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      addSpecifier(node.moduleSpecifier.text);
+    }
+    if (
+      ts.isCallExpression(node)
+      && node.expression.kind === ts.SyntaxKind.ImportKeyword
+      && node.arguments.length === 1
+      && ts.isStringLiteral(node.arguments[0])
+    ) {
+      addSpecifier(node.arguments[0].text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
   return [...modules];
 }
 
