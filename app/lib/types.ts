@@ -24,7 +24,7 @@ export type RewardScanStatus = "idle" | "loading" | "refreshing" | "verified" | 
 
 /**
  * The trust state of rewards read from the contract. A non-null
- * `lastVerifiedAt` only comes from a completed scan for `walletAddress`; claims may invalidate it but never advance it.
+ * `lastVerifiedAt` only comes from a completed scan for `walletAddress`; submitted or confirmed claims may invalidate it but never advance it.
  */
 export interface RewardScanVerificationState {
   status: RewardScanStatus;

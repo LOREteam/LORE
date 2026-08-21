@@ -183,7 +183,7 @@ export function requireCompleteRewardScanMulticallResults(
       throw new RewardScanIncompleteError(`Reward scan incomplete: ${label}[${index}] has no successful result`);
     }
     const row = item as { status?: unknown; result?: unknown; error?: unknown };
-    if (row.status === "failure" || row.status === "error" || "error" in row || !("result" in row)) {
+    if (row.status !== "success" || "error" in row || !("result" in row)) {
       throw new RewardScanIncompleteError(`Reward scan incomplete: ${label}[${index}] failed`);
     }
     return { result: row.result };
@@ -896,6 +896,12 @@ export function useRewardScanner(
         if (activeClaimAddressRef.current !== claimActor) return;
         const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
         submittedHash = hash;
+        invalidateVerifiedRewardScanCache(claimActor, unclaimedWinsRef.current);
+        if (mountedRef.current) {
+          setRewardScanState((previous) => previous.walletAddress === claimActor
+            ? { ...previous, status: "stale", incomplete: false, error: null }
+            : previous);
+        }
         const receiptState = await waitReceipt(hash, {
           actor: claimActor,
           chainId: APP_CHAIN_ID,
@@ -983,6 +989,12 @@ export function useRewardScanner(
         const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
         lastRewardClaimTxHash = hash;
         claimTxCount += 1;
+        invalidateVerifiedRewardScanCache(claimActor, unclaimedWinsRef.current);
+        if (mountedRef.current) {
+          setRewardScanState((previous) => previous.walletAddress === claimActor
+            ? { ...previous, status: "stale", incomplete: false, error: null }
+            : previous);
+        }
         const receiptState = await waitReceipt(hash, {
           actor: claimActor,
           chainId: APP_CHAIN_ID,
@@ -1011,6 +1023,12 @@ export function useRewardScanner(
         const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
         lastRewardClaimTxHash = hash;
         claimTxCount += 1;
+        invalidateVerifiedRewardScanCache(claimActor, unclaimedWinsRef.current);
+        if (mountedRef.current) {
+          setRewardScanState((previous) => previous.walletAddress === claimActor
+            ? { ...previous, status: "stale", incomplete: false, error: null }
+            : previous);
+        }
         const receiptState = await waitReceipt(hash, {
           actor: claimActor,
           chainId: APP_CHAIN_ID,

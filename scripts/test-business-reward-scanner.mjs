@@ -212,6 +212,21 @@ export async function runRewardScannerTests() {
     },
     "a claim followed by reload must keep the claimed reward absent and only restore stale provenance",
   );
+  const pendingReloadCache = rewardScanner.parseRewardScanCacheEnvelope({
+    cacheVersion: 3,
+    verifiedAt,
+    savedAt: verifiedAt,
+    invalidatedAt: verifiedAt,
+    lastScannedEpoch: "100",
+    deepestScannedEpoch: "1",
+    wins: [{ epoch: "7", amountWei: "11" }],
+  }, 3);
+  assert.equal(
+    rewardScanner.getCachedRewardScanState(pendingReloadCache, "0xabc", 100n).status,
+    "stale",
+    "a pending claim must not reload as a verified reward result",
+  );
+  assert.deepEqual(pendingReloadCache.wins, [{ epoch: "7", amountWei: "11" }], "pending claims retain the candidate until on-chain outcome is known");
   const legacyEmptyCache = rewardScanner.parseRewardScanCacheEnvelope({
     savedAt: verifiedAt,
     lastScannedEpoch: "100",
@@ -255,9 +270,19 @@ export async function runRewardScannerTests() {
   assert.deepEqual(
     rewardScanner.requireCompleteRewardScanMulticallResults([
       { status: "success", result: false },
-      { result: 0n },
+      { status: "success", result: 0n },
     ], 2, "fixture"),
     [{ result: false }, { result: 0n }],
+  );
+  assert.throws(
+    () => rewardScanner.requireCompleteRewardScanMulticallResults([{ result: false }], 1, "fixture"),
+    rewardScanner.RewardScanIncompleteError,
+    "a multicall row without explicit success status must be rejected",
+  );
+  assert.throws(
+    () => rewardScanner.requireCompleteRewardScanMulticallResults([{ status: "unknown", result: false }], 1, "fixture"),
+    rewardScanner.RewardScanIncompleteError,
+    "an unknown multicall row status must be rejected",
   );
   assert.throws(
     () => rewardScanner.requireCompleteRewardScanMulticallResults([{ result: false }], 2, "fixture"),
@@ -379,6 +404,12 @@ export async function runRewardScannerTests() {
   assert.match(rewardScannerSource, /getRewardScanRescanDelayMs\(cacheCoversCurrentEpoch \? cached\.verifiedAt : null\)/, "only current-epoch v3 coverage may defer a reward refresh");
 
   const rewardClaimSource = rewardScannerSource.slice(rewardScannerSource.indexOf("const claimReward"), rewardScannerSource.indexOf("return useMemo"));
+  assert.match(rewardClaimSource, /submittedHash = hash;[\s\S]*invalidateVerifiedRewardScanCache\(claimActor, unclaimedWinsRef\.current\);[\s\S]*const receiptState = await waitReceipt\(hash/, "single claim submission must invalidate cache before receipt certainty");
+  assert.equal(
+    (rewardClaimSource.match(/lastRewardClaimTxHash = hash;[\s\S]*?claimTxCount \+= 1;[\s\S]*?invalidateVerifiedRewardScanCache\(claimActor, unclaimedWinsRef\.current\);[\s\S]*?const receiptState = await waitReceipt\(hash/g) ?? []).length,
+    2,
+    "single and batch claim-all submissions must both invalidate cache before receipt certainty",
+  );
   assert.match(rewardClaimSource, /invalidateVerifiedRewardScanCache\(claimActor, nextWins\)/, "confirmed claims must persist an invalidated stale cache for reload");
   assert.doesNotMatch(rewardClaimSource, /saveCachedRewardScan\(/, "claim confirmation must not advance or persist the full reward-scan verification watermark");
 
