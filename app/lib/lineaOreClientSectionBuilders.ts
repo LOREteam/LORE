@@ -20,11 +20,13 @@ type BuildSidebarPropsOptions = {
   visibleHotTiles: SidebarProps["hotTiles"];
   unclaimedWins: SidebarProps["unclaimedWins"];
   rewardScanState: SidebarProps["rewardScanState"];
+  rewardsWalletCta: SidebarProps["rewardsWalletCta"];
   isScanning: SidebarProps["isScanning"];
   isDeepScanning: SidebarProps["isDeepScanning"];
   isClaiming: SidebarProps["isClaiming"];
   claimReward: SidebarProps["onClaim"];
   claimAll: SidebarProps["onClaimAll"];
+  createEmbeddedWallet: SidebarProps["onCreateWallet"];
   scanRewards: SidebarProps["onScan"];
 };
 
@@ -36,11 +38,13 @@ export function buildSidebarProps({
   visibleHotTiles,
   unclaimedWins,
   rewardScanState,
+  rewardsWalletCta,
   isScanning,
   isDeepScanning,
   isClaiming,
   claimReward,
   claimAll,
+  createEmbeddedWallet,
   scanRewards,
 }: BuildSidebarPropsOptions): SidebarProps {
   return {
@@ -51,11 +55,13 @@ export function buildSidebarProps({
     hotTiles: visibleHotTiles,
     unclaimedWins,
     rewardScanState,
+    rewardsWalletCta,
     isScanning,
     isDeepScanning,
     isClaiming,
     onClaim: claimReward,
     onClaimAll: claimAll,
+    onCreateWallet: createEmbeddedWallet,
     onScan: scanRewards,
   };
 }

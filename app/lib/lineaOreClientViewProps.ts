@@ -4,6 +4,7 @@ import { Header } from "../components/Header";
 import { PageTabContent } from "../components/PageTabContent";
 import { Sidebar } from "../components/Sidebar";
 import { WalletShell } from "../components/WalletShell";
+import { deriveWalletCta } from "../components/BetPanel";
 import {
   buildFloatingActionsProps,
   buildHeaderProps,
@@ -363,6 +364,7 @@ export function createLineaOreClientViewProps({
   return {
     currentRoundEvidence,
     sidebarProps: buildSidebarProps({
+      rewardsWalletCta: deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing }),
       activeTab,
       actualCurrentEpoch,
       isPageVisible,
@@ -375,6 +377,7 @@ export function createLineaOreClientViewProps({
       isClaiming,
       claimReward,
       claimAll,
+      createEmbeddedWallet,
       scanRewards,
     }),
     headerProps: buildHeaderProps({

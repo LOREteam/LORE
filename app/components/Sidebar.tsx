@@ -12,11 +12,14 @@ import { UiButton } from "./ui/UiButton";
 import { UiPanel } from "./ui/UiPanel";
 import { uiTokens } from "./ui/tokens";
 import { useDialogFocusTrap } from "../hooks/useDialogFocusTrap";
+import { requestWalletLogin } from "../lib/walletLoginRequest";
 
 interface HotTile {
   tileId: number;
   wins: number;
 }
+
+type RewardsWalletCta = "create" | "creating" | "login" | "ready" | "syncing";
 
 interface SidebarProps {
   activeTab: TabId;
@@ -26,11 +29,13 @@ interface SidebarProps {
   hotTiles?: HotTile[];
   unclaimedWins: UnclaimedWin[];
   rewardScanState: RewardScanVerificationState;
+  rewardsWalletCta: RewardsWalletCta;
   isScanning: boolean;
   isDeepScanning: boolean;
   isClaiming: boolean;
   onClaim: (epochId: string) => void;
   onClaimAll: () => void;
+  onCreateWallet: () => Promise<void>;
   onScan: () => void;
   /** Mobile drawer state */
   mobileOpen?: boolean;
@@ -55,10 +60,12 @@ export const Sidebar = React.memo(function Sidebar({
   hotTiles,
   unclaimedWins,
   rewardScanState,
+  rewardsWalletCta,
   isScanning,
   isClaiming,
   onClaim,
   onClaimAll,
+  onCreateWallet,
   onScan,
   mobileOpen = false,
   onMobileClose,
@@ -70,6 +77,7 @@ export const Sidebar = React.memo(function Sidebar({
   );
   const hotTilesReady = Boolean(hotTiles && hotTiles.length > 0);
   const claimAllLabel = isClaiming ? "Reward claim is already pending" : `Claim all ${unclaimedWins.length} rewards`;
+  const rewardsWalletMessage = getSidebarRewardsWalletMessage(rewardsWalletCta);
   const canConfirmEmptyRewards = rewardScanState.status === "verified" && !rewardScanState.incomplete;
   const rewardStatus = getRewardScanStatus(rewardScanState, isScanning, unclaimedWins.length > 0);
   const retryLabel = isScanning ? "Reward scan is already running" : "Retry reward scan";
@@ -304,7 +312,7 @@ export const Sidebar = React.memo(function Sidebar({
                   <span className="h-2.5 w-1 rounded-sm bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.28)]" />
                   Rewards
                 </p>
-                {unclaimedWins.length > 1 && (
+                {rewardsWalletCta === "ready" && unclaimedWins.length > 1 && (
                   <UiButton
                     aria-label={claimAllLabel}
                     title={claimAllLabel}
@@ -318,7 +326,9 @@ export const Sidebar = React.memo(function Sidebar({
                   </UiButton>
                 )}
               </div>
-              {unclaimedWins.length > 0 ? (
+              {rewardsWalletCta !== "ready" ? (
+                <RewardWalletAccess walletCta={rewardsWalletCta} message={rewardsWalletMessage} onCreateWallet={onCreateWallet} />
+              ) : unclaimedWins.length > 0 ? (
                 <>
                   <RewardScanStatus status={rewardStatus} onScan={onScan} retryLabel={retryLabel} isScanning={isScanning} />
                   <div className="-mx-1 flex flex-col gap-1 pb-0.5">
@@ -382,6 +392,38 @@ export const Sidebar = React.memo(function Sidebar({
   );
 });
 
+function getSidebarRewardsWalletMessage(walletCta: RewardsWalletCta): string | null {
+  if (walletCta === "login") return "Log in to check rewards for your wallet.";
+  if (walletCta === "create") return "Create your LORE wallet to check rewards.";
+  if (walletCta === "creating") return "Creating your LORE wallet.";
+  if (walletCta === "syncing") return "Your LORE wallet is still loading.";
+  return null;
+}
+
+const RewardWalletAccess = React.memo(function RewardWalletAccess({
+  walletCta,
+  message,
+  onCreateWallet,
+}: {
+  walletCta: RewardsWalletCta;
+  message: string | null;
+  onCreateWallet: () => Promise<void>;
+}) {
+  return (
+    <div role="status" aria-live="polite" className="flex items-center justify-center gap-1.5 py-1 text-center">
+      <span className="text-[9px] font-medium text-amber-200/90">{message}</span>
+      {walletCta === "login" ? (
+        <UiButton aria-label="Log in to check rewards" title="Log in to check rewards" onClick={requestWalletLogin} variant="ghost" size="xs" className="h-6 shrink-0 px-2 text-[9px]">
+          Log in
+        </UiButton>
+      ) : walletCta === "create" ? (
+        <UiButton aria-label="Create LORE wallet to check rewards" title="Create LORE wallet to check rewards" onClick={() => void onCreateWallet()} variant="ghost" size="xs" className="h-6 shrink-0 px-2 text-[9px]">
+          Create wallet
+        </UiButton>
+      ) : null}
+    </div>
+  );
+});
 function getRewardScanStatus(
   rewardScanState: RewardScanVerificationState,
   isScanning: boolean,

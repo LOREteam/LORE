@@ -30,11 +30,13 @@ function renderSidebar(options: Partial<SidebarProps> = {}) {
         incomplete: false,
         error: null,
       }}
+      rewardsWalletCta="ready"
       isScanning={false}
       isDeepScanning={false}
       isClaiming={false}
       onClaim={() => {}}
       onClaimAll={() => {}}
+      onCreateWallet={async () => {}}
       onScan={() => {}}
       {...options}
     />,
@@ -120,6 +122,26 @@ const partialSidebar = renderSidebar({ rewardScanState: { status: "stale", walle
 assert.match(partialSidebar, /Reward scan was incomplete\. Results may be partial\./, "partial rewards data must remain explicit");
 assert.match(partialSidebar, /aria-label="Retry reward scan"/, "partial rewards data must expose retry");
 assert.doesNotMatch(partialSidebar, /No claimable rewards/, "partial rewards data must not use empty-result copy");
+const guestRewardsSidebar = renderSidebar({
+  rewardsWalletCta: "login",
+  unclaimedWins: [{ epoch: "101", amountWei: "100" }],
+  rewardScanState: { status: "error", walletAddress: null, lastVerifiedAt: null, incomplete: false, error: "RPC unavailable" },
+});
+assert.match(guestRewardsSidebar, /Log in to check rewards for your wallet\./, "guest rewards must explain the required login");
+assert.match(guestRewardsSidebar, /aria-label="Log in to check rewards"/, "guest rewards must expose a real login action");
+assert.doesNotMatch(guestRewardsSidebar, /Retry reward scan/, "guest rewards must not expose a silent scanner retry");
+assert.doesNotMatch(guestRewardsSidebar, /Claim all/, "guest rewards must not expose stale claim actions");
+
+const createWalletRewardsSidebar = renderSidebar({ rewardsWalletCta: "create" });
+assert.match(createWalletRewardsSidebar, /Create your LORE wallet to check rewards\./, "authenticated users without a wallet must get the create-wallet explanation");
+assert.match(createWalletRewardsSidebar, /aria-label="Create LORE wallet to check rewards"/, "create-wallet rewards CTA must be actionable");
+assert.doesNotMatch(createWalletRewardsSidebar, /Retry reward scan/, "create-wallet state must not expose scanner retry");
+
+const syncingRewardsSidebar = renderSidebar({ rewardsWalletCta: "syncing" });
+assert.match(syncingRewardsSidebar, /Your LORE wallet is still loading\./, "syncing wallet must remain a non-action status");
+assert.doesNotMatch(syncingRewardsSidebar, /aria-label="Log in to check rewards"/, "syncing wallet must not show a login action");
+assert.doesNotMatch(syncingRewardsSidebar, /aria-label="Create LORE wallet to check rewards"/, "syncing wallet must not show a create action");
+assert.doesNotMatch(syncingRewardsSidebar, /Retry reward scan/, "syncing wallet must not expose scanner retry");
 const lineaOreClientSource = readFileSync("app/LineaOreClient.tsx", "utf8");
 assert.match(lineaOreClientSource, /aria-expanded=\{mobileSidebarOpen\}/, "mobile sidebar opener must expose its expanded state");
 assert.match(lineaOreClientSource, /aria-controls="lore-sidebar"/, "mobile sidebar opener must identify the controlled menu");
