@@ -100,7 +100,8 @@ export function runPublicPresentationTests() {
   assert.match(whitePaperText, /explicit operator acceptance of this model[\s\S]*future hardening such as VRF or commit-reveal remains a separate protocol upgrade decision/, "White Paper must not imply VRF or commit-reveal is mandatory before mainnet launch");
   assert.doesNotMatch(`${readFileSync("app/opengraph-image.tsx", "utf8")}\n${readFileSync("app/api/jackpots/og/route.tsx", "utf8")}`, /letterSpacing:\s*["']-/, "OpenGraph images must not use negative letter spacing");
   const jackpotOgRouteSource = readFileSync("app/api/jackpots/og/route.tsx", "utf8");
-  assert.match(jackpotOgRouteSource, /readVerifiedJackpotShare\(request\.nextUrl\.searchParams\.get\("tx"\)\)[\s\S]*const \{ amount, epoch \} = share;[\s\S]*getJackpotVisualTheme\(share\.kind\)/, "jackpot OpenGraph image must derive its fields from a verified transaction event");
+  assert.match(jackpotOgRouteSource, /readVerifiedJackpotShare\(\s*request\.nextUrl\.searchParams\.get\("event"\)\s*\?\?\s*request\.nextUrl\.searchParams\.get\("tx"\),\s*\)/, "jackpot OpenGraph image must resolve a canonical event id before the legacy transaction fallback");
+  assert.match(jackpotOgRouteSource, /const \{ amount, epoch \} = share;[\s\S]*getJackpotVisualTheme\(share\.kind\)/, "jackpot OpenGraph image must derive its fields from the verified jackpot event");
   assert.doesNotMatch(jackpotOgRouteSource, /searchParams\.get\("(?:amount|tile|epoch|kind)"\)|parseBoundedPositiveIntegerParam|sanitizePositiveInt/, "jackpot OpenGraph image must not render amount, tile, epoch, or mode from URL parameters");
   const allFaqText = getFaqPresentationModel().categories
     .flatMap((category) => getFaqPresentationModel(category).items)
