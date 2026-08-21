@@ -9,10 +9,12 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - Branch `codex/repo-cleanup`; latest code commit before this progress refresh:
-  `7a75f709f4412f4880dd5659cee4f7c607302996`.
+  `466de05d2937bdf7e1aaa34a240e8ffb3607c892`.
 - Recent local sequence: `d51b5bb02` honest global-data state,
   `603c43b75` honest wallet unavailable state, `ef0359c95` model-contract
-  regression, and `7a75f709f` completed Header loading truthfulness.
+  regression, `7a75f709f` completed Header loading truthfulness, `2518babcf` fixed
+  manual bet restore-before-persist, `e185c392e` hardened local campaign
+  cache/env handling, and `466de05d` renders Header unavailable balances.
 - No remote, hosted, wallet, signing, or chain actions occurred in this local
   sequence.
 - The protected base, WAL, and SHM are all present and exact. Preserve their
@@ -25,17 +27,22 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
    fabricated zeros. Cached global values are explicitly stale until a
    successful current-epoch read.
 2. Wallet UI now distinguishes unknown balances from real zero: null/malformed
-   cache is unavailable, Header uses `—`, wallet settings uses `Unavailable`,
+   cache is unavailable, Header renders `Unavailable`, wallet settings uses `Unavailable`,
    transfer RPC errors suppress totals and offer retry, and a literal zero stays
    visible.
 3. The Header skeleton is now conditional on a genuinely pending empty read;
    it no longer persists after a completed RPC no-data/error result.
-4. Direct wallet-model and presentation tests, full isolated business runner,
-   TypeScript, ESLint, and diff checks passed at the relevant local commits;
+4. Manual bet storage now waits for browser restore before first persistence,
+   preserving saved amounts instead of overwriting them with the default.
+5. Local campaign child commands disable rebuildable `tsx` cache, restore the
+   environment fail-closed, and fail closed on launch anomalies.
+6. Direct wallet-model and presentation tests, Header unavailable SSR coverage,
+   the focused wallet-funding test, full isolated business runner, TypeScript,
+   ESLint, script parse, and diff checks passed at the relevant local commits;
    protected DB snapshots remained exact.
-5. The P1.10 audit currently reports `4729/5423` behavioral assertions
-   (`87.20%`).
-6. Bounded cleanup removed about `1.00 GiB` of old Node/npm caches only. No
+7. The P1.10 audit currently reports `4754/5447` behavioral assertions
+   (`87.28%`).
+8. Bounded cleanup removed about `1.00 GiB` of old Node/npm caches only. No
    project data, campaign record, browser profile, protected SQLite, or active
    runtime was removed.
 
@@ -50,7 +57,8 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   regression evidence for mutable earlier code, not current/final-SHA proof.
 - Before a new campaign, capture its exact starting SHA, preserve the DB
   snapshot, and ensure disk headroom; do not start it merely to replace a failed
-  log.
+  log. The runner now disables `tsx` cache per child command and fail-closes
+  launch anomalies/environment-restore failures, but the stopped campaign is still not final evidence.
 
 ## Open local work
 

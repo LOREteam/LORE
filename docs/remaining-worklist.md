@@ -24,7 +24,9 @@ under [`docs/archive/`](archive/).
 
 ### P1.10 behavioral extraction
 
-- [x] Current audit: `4729/5423` behavioral assertions (`87.20%`).
+- [x] Current audit: `4754/5447` behavioral assertions (`87.28%`).
+- [x] Extract and cover manual bet storage restore/persist behavior, including
+      restore-before-persist on browser mount.
 - [ ] Continue replacing source operands only when a stable public behavior seam
       exists; preserve meaningful policy/source bindings.
 - [ ] Keep new assertions in focused domain modules, not coordinator bloat.
@@ -56,6 +58,9 @@ under [`docs/archive/`](archive/).
       strict-analyzer gated.
 - [x] V10 canary actions are admission/run/wallet-set bound with exact caps and
       runtime preflight validation.
+- [x] Harden the local campaign runner to disable rebuildable `tsx` cache per
+      child command, restore the environment fail-closed, and fail closed on
+      child launch anomalies.
 - [ ] Restart a new local SHA-bound campaign after adequate disk headroom;
       `local-20260821-final-r3` cycles 1–3 are historical and cycle 4 stopped
       on the now-fixed stale wallet-model expectation.
