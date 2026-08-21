@@ -411,6 +411,7 @@ async function runJackpotsScenario() {
 
 async function runDepositsScenario() {
   installRouteFetchMock();
+  const storage = await import("../../server/storage");
   const route = await loadRoute("deposits");
   const baseUrl = "https://playlore.xyz/api/deposits";
   const headers = requestHeaders();
@@ -429,6 +430,14 @@ async function runDepositsScenario() {
       `${baseUrl}?user=0x1111111111111111111111111111111111111111&includeRewards=1`,
       { headers },
     )),
+    invalidWatermark: await (async () => {
+      storage.setMetaJson("lastIndexedBlock", "not-a-block");
+      return snapshotResponse(await dispatch(route, "GET", `${baseUrl}?user=0x2222222222222222222222222222222222222222`, { headers }));
+    })(),
+    negativeWatermark: await (async () => {
+      storage.setMetaJson("lastIndexedBlock", "-1");
+      return snapshotResponse(await dispatch(route, "GET", `${baseUrl}?user=0x3333333333333333333333333333333333333333`, { headers }));
+    })(),
     methods: await methodMatrix(route, baseUrl),
   }));
   return { scenario: "deposits", ...captured.value, logs: captured.logs };
@@ -468,10 +477,10 @@ function buildRecoveryBetLog(
   };
 }
 
-async function runDepositsPersistenceScenario() {
+async function runDepositsPersistenceScenario(options: { rewardEnrichmentFailure?: boolean } = {}) {
   process.env.INDEXER_START_BLOCK = "1";
   const readNetworkFetchUrls = installForbiddenNetworkFetch();
-  const { getUserBetsMap, putJsonPath, upsertBets } = await import("../../server/storage");
+  const { getUserBetsMap, putJsonPath, upsertBets, upsertEpochMap } = await import("../../server/storage");
   const user = TEST_WALLET;
   const validHash = `0x${"44".repeat(32)}`;
   upsertBets([
@@ -518,16 +527,30 @@ async function runDepositsPersistenceScenario() {
   ]);
   putJsonPath("gamedata/_meta/currentEpoch", 12);
   putJsonPath("gamedata/_meta/lastIndexedBlock", "120");
+  upsertEpochMap({
+    "10": { winningTile: 9, totalPool: "10", rewardPool: "5", isDailyJackpot: false, isWeeklyJackpot: false },
+    "12": { winningTile: 7, totalPool: "10", rewardPool: "5", isDailyJackpot: false, isWeeklyJackpot: false },
+  });
+  const { publicClient } = await import("../../app/api/_lib/dataBridge");
+  const originalMulticall = publicClient.multicall;
+  publicClient.multicall = (options.rewardEnrichmentFailure
+    ? (async () => { throw new Error("test reward enrichment failure"); })
+    : (async ({ contracts }) => contracts.map(() => ({ result: 0n })))) as typeof publicClient.multicall;
 
   const route = await loadRoute("deposits");
-  const response = await snapshotResponse(await dispatch(
-    route,
-    "GET",
-    `https://playlore.xyz/api/deposits?user=${user}`,
-    { headers: requestHeaders() },
-  ));
+  let response: ResponseSnapshot;
+  try {
+    response = await snapshotResponse(await dispatch(
+      route,
+      "GET",
+      `https://playlore.xyz/api/deposits?user=${user}&includeRewards=1`,
+      { headers: requestHeaders() },
+    ));
+  } finally {
+    publicClient.multicall = originalMulticall;
+  }
   return {
-    scenario: "deposits-persistence",
+    scenario: options.rewardEnrichmentFailure ? "deposits-rewards-fallback" : "deposits-persistence",
     response,
     storedRows: Object.values(getUserBetsMap(user, 50)),
     mockedFetchUrls: readNetworkFetchUrls(),
@@ -1220,6 +1243,7 @@ async function main() {
   else if (mode === "jackpots") result = await runJackpotsScenario();
   else if (mode === "deposits") result = await runDepositsScenario();
   else if (mode === "deposits-persistence") result = await runDepositsPersistenceScenario();
+  else if (mode === "deposits-rewards-fallback") result = await runDepositsPersistenceScenario({ rewardEnrichmentFailure: true });
   else if (mode === "deposits-recovery") result = await runDepositsRecoveryScenario();
   else if (mode === "deposits-recovery-global-bound-mutant") {
     result = await runDepositsRecoveryScenario({ globalBoundMutant: true });

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo } from "react";
-import type { DepositEntry } from "../hooks/useDepositHistory";
+import type { DepositEntry, DepositReadState } from "../hooks/useDepositHistory";
 import type { JackpotHistoryEntry } from "../hooks/useJackpotHistory";
 import { useAnalyticsRuntime } from "../hooks/useAnalyticsRuntime";
 import { AnalyticsAchievementsPanel } from "./analytics/AnalyticsAchievementsPanel";
@@ -28,6 +28,7 @@ interface AnalyticsProps {
   depositsLoading: boolean;
   depositsMetadataLoading: boolean;
   depositsLastLoadedAt: number | null;
+  depositReadState: DepositReadState;
   depositsError: string | null;
   totalDeposited: number;
   onLoadDeposits: () => void;
@@ -48,6 +49,7 @@ export const Analytics = React.memo(function Analytics({
   depositsLoading,
   depositsMetadataLoading,
   depositsLastLoadedAt,
+  depositReadState,
   depositsError,
   totalDeposited,
   onLoadDeposits,
@@ -112,9 +114,10 @@ export const Analytics = React.memo(function Analytics({
         deposits={enrichedDeposits}
         depositsError={depositsError}
         depositsLoading={depositsLoading}
-        depositsRefreshing={depositsLoading && enrichedDeposits !== null}
+        depositsRefreshing={depositReadState.freshness === "refreshing"}
         depositsMetadataLoading={depositsMetadataLoading}
         depositsLastLoadedAt={depositsLastLoadedAt}
+        depositReadState={depositReadState}
         newDepositIds={newDepositIds}
         onLoadDeposits={onLoadDeposits}
         onRefreshDeposits={onRefreshDeposits}

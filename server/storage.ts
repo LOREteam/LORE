@@ -483,7 +483,8 @@ function decodeGlobalStatsAggregateRecord(record: GlobalStatsAggregateRecord): G
   };
 }
 
-function getCanonicalLastIndexedBlock() {
+/** Read-only canonical indexer watermark: absent is 0; malformed or negative metadata fails closed. */
+export function getCanonicalLastIndexedBlock() {
   const raw = getMetaValue("lastIndexedBlock");
   if (raw === null) return "0";
   try {

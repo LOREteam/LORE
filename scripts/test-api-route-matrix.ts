@@ -272,7 +272,18 @@ function validateDeposits(result: WorkerResult) {
   assertJsonStatus(valid, 200, "deposits valid");
   assertNoStore(valid, "deposits valid");
   assertNoCors(valid, "deposits valid");
-  assert.deepEqual(valid.json, { deposits: [] });
+  assert.deepEqual(valid.json, { deposits: [], coverage: "partial", indexedThroughBlock: "0" });
+  for (const [label, raw] of Object.entries({
+    invalidWatermark: result.invalidWatermark,
+    negativeWatermark: result.negativeWatermark,
+  })) {
+    const snapshot = asSnapshot(raw, `deposits ${label}`);
+    assertJsonStatus(snapshot, 503, `deposits ${label}`);
+    assertNoStore(snapshot, `deposits ${label}`);
+    assertNoCors(snapshot, `deposits ${label}`);
+    assert.deepEqual(snapshot.json, { deposits: [], error: "Deposit index watermark is unavailable" });
+    assert.notDeepEqual(snapshot.json, { deposits: [], coverage: "partial", indexedThroughBlock: "0" }, `${label} must not coerce invalid indexer metadata to a valid zero watermark`);
+  }
   assertFrameworkMethodMatrix(asMethodMatrix(result.methods, "deposits methods"), "deposits");
   assertLogsRedacted(result, "deposits", ["route-matrix-proxy-secret"]);
 }
@@ -303,6 +314,11 @@ function validateDepositsPersistence(result: WorkerResult) {
   assertNoCors(response, "deposits persistence response");
 
   const payload = asRecord(response.json, "deposits persistence payload");
+  assert.equal(payload.coverage, "partial", "indexed deposits must never claim complete chain coverage");
+  assert.equal(payload.indexedThroughBlock, "120", "indexed through block must preserve canonical indexer provenance");
+  assert.deepEqual(Object.keys(asRecord(payload.epochs, "nonempty includeRewards epochs")).sort(), ["10", "12"], "nonempty includeRewards response must include its resolved epoch summaries");
+  assert.deepEqual(payload.rewards, {}, "nonempty includeRewards response must preserve the rewards payload shape");
+  assert.equal(payload.rewardsStatus, "available", "successful includeRewards enrichment must disclose its availability");
   const rows = asDepositRows(payload.deposits, "deposits persistence rows");
   assert.deepEqual(
     rows.map((row) => ({
@@ -334,6 +350,26 @@ function validateDepositsPersistence(result: WorkerResult) {
   assertNetworkStayedInsideBlocker(result, "deposits persistence");
 }
 
+function validateDepositsRewardsFallback(result: WorkerResult) {
+  assert.equal(result.scenario, "deposits-rewards-fallback");
+  const response = asSnapshot(result.response, "deposits rewards fallback response");
+  assertJsonStatus(response, 200, "deposits rewards fallback response");
+  assertNoStore(response, "deposits rewards fallback response");
+  assertNoCors(response, "deposits rewards fallback response");
+  const payload = asRecord(response.json, "deposits rewards fallback payload");
+  assert.equal(payload.coverage, "partial", "reward enrichment failure must preserve lower-bound deposit coverage");
+  assert.equal(payload.indexedThroughBlock, "120", "reward enrichment failure must preserve canonical indexed provenance");
+  assert.equal(payload.rewardsStatus, "unavailable", "reward enrichment failure must be explicit");
+  assert.deepEqual(payload.epochs, {}, "reward enrichment failure must not invent epoch summaries");
+  assert.deepEqual(payload.rewards, {}, "reward enrichment failure must not invent rewards");
+  assert.deepEqual(
+    asDepositRows(payload.deposits, "deposits rewards fallback rows").map((row) => row.epoch),
+    ["12", "10"],
+    "reward enrichment failure must retain the recovered/indexed deposit rows",
+  );
+  assertNetworkStayedInsideBlocker(result, "deposits rewards fallback");
+}
+
 function validateDepositsRecovery(result: WorkerResult) {
   assert.equal(result.scenario, "deposits-recovery");
   const initial = asDepositRows(result.initial, "deposits recovery initial responses");
@@ -348,8 +384,11 @@ function validateDepositsRecovery(result: WorkerResult) {
     assertJsonStatus(snapshot, 200, `deposits recovery response ${index}`);
     assertNoStore(snapshot, `deposits recovery response ${index}`);
     assertNoCors(snapshot, `deposits recovery response ${index}`);
+    const recoveryPayload = asRecord(snapshot.json, `deposits recovery payload ${index}`);
+    assert.equal(recoveryPayload.coverage, "partial", "background recovery must retain lower-bound coverage evidence");
+    assert.equal(recoveryPayload.indexedThroughBlock, "100", "recovered rows must not overstate the canonical indexer watermark");
     const deposits = asDepositRows(
-      asRecord(snapshot.json, `deposits recovery payload ${index}`).deposits,
+      recoveryPayload.deposits,
       `deposits recovery payload ${index} rows`,
     );
     responseRows.push(deposits);
@@ -949,6 +988,7 @@ export async function runApiRouteMatrixTests() {
     validateJackpots(runWorker(tempRoot, "jackpots"));
     validateDeposits(runWorker(tempRoot, "deposits"));
     validateDepositsPersistence(runWorker(tempRoot, "deposits-persistence"));
+    validateDepositsRewardsFallback(runWorker(tempRoot, "deposits-rewards-fallback"));
     proveDepositsRecoveryGlobalBound(tempRoot);
     validateRecoveryStorageAllowlist(runWorker(tempRoot, "recovery-storage-allowlist"));
     assertRecoveryStorageAllowlistMutantRejected(tempRoot);

@@ -1,7 +1,7 @@
 "use client";
 
 import { log } from "../lib/logger";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import { getAddress } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GRID_SIZE } from "../lib/constants";
 import {
@@ -11,10 +11,10 @@ import {
   normalizeTileAmounts,
   parseLineaAmountWei,
 } from "../lib/tokenAmountMath";
-import { getFreshCacheDelayMs } from "../lib/cacheTimestamp";
+import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import { readJsonResponse } from "../lib/readJsonResponse";
-import { loadReadModelCache, type ReadModelCacheStorage } from "../lib/readModelCache";
+import type { ReadModelCacheStorage } from "../lib/readModelCache";
 
 export interface DepositEntry {
   epoch: string;
@@ -56,9 +56,40 @@ interface ApiRewardInfo {
   userWinningAmount: string;
 }
 
-interface DepositCacheEnvelope {
+type DepositCoverage = "partial";
+
+export type DepositHistoryProvenance = {
+  coverage: DepositCoverage;
+  indexedThroughBlock: string;
+};
+
+export type DepositReadFreshness = "idle" | "loading" | "refreshing" | "partial" | "stale" | "error";
+
+export type DepositReadState = {
+  freshness: DepositReadFreshness;
+  coverage: DepositCoverage | null;
+  indexedThroughBlock: string | null;
+  lastUpdatedAt: number | null;
+};
+
+const EMPTY_DEPOSIT_READ_STATE: DepositReadState = {
+  freshness: "idle",
+  coverage: null,
+  indexedThroughBlock: null,
+  lastUpdatedAt: null,
+};
+
+interface DepositCacheEnvelope extends DepositHistoryProvenance {
+  cacheVersion?: number;
   savedAt?: number;
   data?: DepositEntry[];
+}
+
+interface ApiDepositHistoryPayload extends DepositHistoryProvenance {
+  deposits: ApiDeposit[];
+  epochs?: Record<string, ApiEpoch>;
+  rewards?: Record<string, ApiRewardInfo>;
+  error?: string;
 }
 
 const DEPOSIT_CACHE_TTL_MS = 30_000;
@@ -87,7 +118,7 @@ function toDisplayNumberWei(value: bigint): number {
 }
 
 function getDepositCacheKey(userAddress: string) {
-  return `lore:deposits:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${getAddress(userAddress).toLowerCase()}`;
+  return `lore:deposits:v3:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${getAddress(userAddress).toLowerCase()}`;
 }
 
 function normalizeDepositUserAddress(userAddress: string | null | undefined): `0x${string}` | null {
@@ -177,24 +208,65 @@ export function normalizeCachedDepositEntries(value: unknown): DepositEntry[] | 
     .filter((item): item is DepositEntry => item !== null);
 }
 
+function parseCanonicalIndexedThroughBlock(value: unknown): string | null {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/.test(value)) return null;
+  try {
+    BigInt(value);
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function normalizeDepositHistoryPayload(value: unknown): ApiDepositHistoryPayload | null {
+  if (!isRecord(value) || value.coverage !== "partial" || !Array.isArray(value.deposits)) return null;
+  const indexedThroughBlock = parseCanonicalIndexedThroughBlock(value.indexedThroughBlock);
+  if (indexedThroughBlock === null) return null;
+  return {
+    deposits: normalizeApiDeposits(value.deposits),
+    coverage: "partial",
+    indexedThroughBlock,
+    epochs: isRecord(value.epochs) ? value.epochs as Record<string, ApiEpoch> : undefined,
+    rewards: isRecord(value.rewards) ? value.rewards as Record<string, ApiRewardInfo> : undefined,
+    error: typeof value.error === "string" ? value.error : undefined,
+  };
+}
+
 export function loadDepositHistoryCache(
   userAddress: string,
   storage: ReadModelCacheStorage | null = typeof localStorage === "undefined" ? null : localStorage,
   now = Date.now(),
-): { data: DepositEntry[] | null; savedAt: number | null } {
+): { data: DepositEntry[] | null; savedAt: number | null; provenance: DepositHistoryProvenance | null } {
+  const empty = { data: null, savedAt: null, provenance: null };
+  if (!storage) return empty;
   const cacheKey = getDepositCacheKey(userAddress);
-  const restored = loadReadModelCache<DepositEntry[] | null>({
-    storage,
-    cacheKey,
-    payloadKey: "data",
-    emptyValue: null,
-    normalizePayload: normalizeCachedDepositEntries,
-    acceptPayload: ({ rawPayload, value, legacy }) =>
-      value !== null &&
-      (!legacy || !Array.isArray(rawPayload) || rawPayload.length === 0 || value.length > 0),
-    now,
-  });
-  return { data: restored.value, savedAt: restored.savedAt };
+  try {
+    const raw = storage.getItem(cacheKey);
+    if (!raw) return empty;
+    const envelope = JSON.parse(raw) as unknown;
+    if (!isRecord(envelope) || envelope.cacheVersion !== 3 || envelope.coverage !== "partial") {
+      storage.removeItem(cacheKey);
+      return empty;
+    }
+    const indexedThroughBlock = parseCanonicalIndexedThroughBlock(envelope.indexedThroughBlock);
+    const data = normalizeCachedDepositEntries(envelope.data);
+    if (indexedThroughBlock === null || data === null) {
+      storage.removeItem(cacheKey);
+      return empty;
+    }
+    return {
+      data,
+      savedAt: normalizeCacheTimestamp(envelope.savedAt, now),
+      provenance: { coverage: "partial", indexedThroughBlock },
+    };
+  } catch {
+    try { storage.removeItem(cacheKey); } catch { /* cache cleanup is best effort */ }
+    return empty;
+  }
 }
 
 export function getDepositHistoryRefreshDelay(savedAt: unknown, now = Date.now()) {
@@ -205,14 +277,40 @@ export function getDepositHistoryLoadError() {
   return DEPOSIT_HISTORY_LOAD_ERROR;
 }
 
-function saveCachedDeposits(userAddress: string, entries: DepositEntry[]) {
+export function shouldWriteDepositHistoryCache({
+  cachedEntries,
+  cachedProvenance,
+  entries,
+  provenance,
+  savedAt,
+  now,
+}: {
+  cachedEntries: DepositEntry[] | null;
+  cachedProvenance: DepositHistoryProvenance | null;
+  entries: DepositEntry[];
+  provenance: DepositHistoryProvenance;
+  savedAt: number | null;
+  now: number;
+}) {
+  return (
+    !depositsEqual(cachedEntries, entries) ||
+    cachedProvenance?.coverage !== provenance.coverage ||
+    cachedProvenance.indexedThroughBlock !== provenance.indexedThroughBlock ||
+    !savedAt ||
+    now - savedAt >= DEPOSIT_CACHE_WRITE_MIN_MS
+  );
+}
+
+function saveCachedDeposits(userAddress: string, entries: DepositEntry[], provenance: DepositHistoryProvenance) {
   if (typeof localStorage === "undefined") return;
   try {
     localStorage.setItem(
       getDepositCacheKey(userAddress),
       JSON.stringify({
+        cacheVersion: 3,
         savedAt: Date.now(),
         data: entries,
+        ...provenance,
       } satisfies DepositCacheEnvelope),
     );
   } catch {
@@ -223,16 +321,16 @@ function saveCachedDeposits(userAddress: string, entries: DepositEntry[]) {
 export async function fetchDepositHistoryPayload(
   userAddress: string,
   fetchImpl: DepositHistoryFetch = fetchWithTimeout,
+  signal?: AbortSignal,
 ) {
-  const response = await fetchImpl(`/api/deposits?user=${userAddress}`, { cache: "no-store" });
-  const payload = await readJsonResponse<{
-    deposits?: ApiDeposit[];
-    epochs?: Record<string, ApiEpoch>;
-    rewards?: Record<string, ApiRewardInfo>;
-    error?: string;
-  }>(response);
-  if (!payload) throw new Error(`Deposit history returned empty JSON (HTTP ${response.status})`);
-  if (!response.ok || payload.error) {
+  const response = await fetchImpl(`/api/deposits?user=${userAddress}`, {
+    cache: "no-store",
+    ...(signal ? { signal } : {}),
+  });
+  const rawPayload = await readJsonResponse<unknown>(response);
+  if (!rawPayload) throw new Error(`Deposit history returned empty JSON (HTTP ${response.status})`);
+  const payload = normalizeDepositHistoryPayload(rawPayload);
+  if (!response.ok || !payload || payload.error) {
     throw new Error(`Deposit history request failed (HTTP ${response.status})`);
   }
   return payload;
@@ -241,6 +339,7 @@ export async function fetchDepositHistoryPayload(
 export async function fetchEpochMap(
   epochIds: string[],
   fetchImpl: DepositHistoryFetch = fetchWithTimeout,
+  signal?: AbortSignal,
 ) {
   if (epochIds.length === 0) return {} as Record<string, ApiEpoch>;
 
@@ -248,7 +347,10 @@ export async function fetchEpochMap(
   for (let index = 0; index < epochIds.length; index += EPOCHS_FETCH_CHUNK) {
     const chunk = epochIds.slice(index, index + EPOCHS_FETCH_CHUNK);
     const epochsQuery = encodeURIComponent(chunk.join(","));
-    const response = await fetchImpl(`/api/epochs?epochs=${epochsQuery}`, { cache: "no-store" });
+    const response = await fetchImpl(`/api/epochs?epochs=${epochsQuery}`, {
+      cache: "no-store",
+      ...(signal ? { signal } : {}),
+    });
     if (!response.ok) continue;
     try {
       const json = await readJsonResponse<{ epochs?: Record<string, ApiEpoch> }>(response) ?? {};
@@ -265,6 +367,7 @@ export async function fetchRewardsMap(
   userAddress: string,
   epochIds: string[],
   fetchImpl: DepositHistoryFetch = fetchWithTimeout,
+  signal?: AbortSignal,
 ) {
   if (epochIds.length === 0) return {} as Record<string, ApiRewardInfo>;
 
@@ -275,6 +378,7 @@ export async function fetchRewardsMap(
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
+      ...(signal ? { signal } : {}),
       body: JSON.stringify({
         user: userAddress,
         epochs: chunk,
@@ -386,74 +490,271 @@ function depositsEqual(left: DepositEntry[] | null, right: DepositEntry[]) {
   return true;
 }
 
+export type DepositHistorySnapshot = {
+  owner: string | null;
+  requestId: number;
+  data: DepositEntry[] | null;
+  loading: boolean;
+  metadataLoading: boolean;
+  lastLoadedAt: number | null;
+  readState: DepositReadState;
+  error: string | null;
+};
+
+export type DepositHistorySnapshotAction =
+  | {
+      type: "activate";
+      owner: string | null;
+      requestId: number;
+      data: DepositEntry[] | null;
+      savedAt: number | null;
+      provenance: DepositHistoryProvenance | null;
+    }
+  | { type: "start"; owner: string; requestId: number }
+  | { type: "publish"; owner: string; requestId: number; entries: DepositEntry[] }
+  | {
+      type: "complete";
+      owner: string;
+      requestId: number;
+      completedAt: number;
+      provenance: DepositHistoryProvenance;
+    }
+  | { type: "metadata"; owner: string; requestId: number; loading: boolean }
+  | { type: "error"; owner: string; requestId: number; error: string }
+  | { type: "settle"; owner: string; requestId: number };
+
+export function createDepositHistorySnapshot(): DepositHistorySnapshot {
+  return {
+    owner: null,
+    requestId: 0,
+    data: null,
+    loading: false,
+    metadataLoading: false,
+    lastLoadedAt: null,
+    readState: EMPTY_DEPOSIT_READ_STATE,
+    error: null,
+  };
+}
+
+function isCurrentSnapshotAction(
+  snapshot: DepositHistorySnapshot,
+  action: Extract<DepositHistorySnapshotAction, { owner: string; requestId: number }>,
+) {
+  return snapshot.owner === action.owner && snapshot.requestId === action.requestId;
+}
+
+export function reduceDepositHistorySnapshot(
+  snapshot: DepositHistorySnapshot,
+  action: DepositHistorySnapshotAction,
+): DepositHistorySnapshot {
+  switch (action.type) {
+    case "activate": {
+      if (action.requestId < snapshot.requestId) return snapshot;
+      const provenance = action.provenance;
+      if (action.owner === null || action.data === null || provenance === null) {
+        return {
+          owner: action.owner,
+          requestId: action.requestId,
+          data: null,
+          loading: action.owner !== null,
+          metadataLoading: false,
+          lastLoadedAt: null,
+          readState: action.owner !== null
+            ? { ...EMPTY_DEPOSIT_READ_STATE, freshness: "loading" }
+            : EMPTY_DEPOSIT_READ_STATE,
+          error: null,
+        };
+      }
+      return {
+        owner: action.owner,
+        requestId: action.requestId,
+        data: action.data,
+        loading: false,
+        metadataLoading: false,
+        lastLoadedAt: action.savedAt,
+        readState: {
+          freshness: "partial",
+          coverage: provenance.coverage,
+          indexedThroughBlock: provenance.indexedThroughBlock,
+          lastUpdatedAt: action.savedAt,
+        },
+        error: null,
+      };
+    }
+    case "start":
+      if (snapshot.owner !== action.owner || action.requestId < snapshot.requestId) return snapshot;
+      return {
+        ...snapshot,
+        requestId: action.requestId,
+        loading: snapshot.data === null,
+        metadataLoading: false,
+        readState: snapshot.readState.coverage === "partial"
+          ? { ...snapshot.readState, freshness: "refreshing" }
+          : { ...EMPTY_DEPOSIT_READ_STATE, freshness: "loading" },
+        error: null,
+      };
+    case "publish":
+      if (!isCurrentSnapshotAction(snapshot, action) || depositsEqual(snapshot.data, action.entries)) return snapshot;
+      return { ...snapshot, data: action.entries };
+    case "complete":
+      if (!isCurrentSnapshotAction(snapshot, action)) return snapshot;
+      return {
+        ...snapshot,
+        loading: false,
+        lastLoadedAt: action.completedAt,
+        readState: {
+          freshness: "partial",
+          coverage: action.provenance.coverage,
+          indexedThroughBlock: action.provenance.indexedThroughBlock,
+          lastUpdatedAt: action.completedAt,
+        },
+      };
+    case "metadata":
+      if (!isCurrentSnapshotAction(snapshot, action)) return snapshot;
+      return { ...snapshot, metadataLoading: action.loading };
+    case "error":
+      if (!isCurrentSnapshotAction(snapshot, action)) return snapshot;
+      return {
+        ...snapshot,
+        loading: false,
+        metadataLoading: false,
+        readState: snapshot.readState.coverage === "partial"
+          ? { ...snapshot.readState, freshness: "stale" }
+          : { ...EMPTY_DEPOSIT_READ_STATE, freshness: "error" },
+        error: action.error,
+      };
+    case "settle":
+      if (!isCurrentSnapshotAction(snapshot, action)) return snapshot;
+      return { ...snapshot, loading: false, metadataLoading: false };
+    default:
+      return snapshot;
+  }
+}
+
+export function isDepositHistoryRequestCurrent({
+  requestId,
+  activeRequestId,
+  requestUser,
+  activeUser,
+}: {
+  requestId: number;
+  activeRequestId: number;
+  requestUser: string;
+  activeUser: string | null;
+}) {
+  return requestId === activeRequestId && requestUser === activeUser;
+}
+
+export function selectVisibleDepositHistory({
+  activeUser,
+  enabled,
+  snapshot,
+}: {
+  activeUser: string | null;
+  enabled: boolean;
+  snapshot: DepositHistorySnapshot;
+}) {
+  const hasCurrentSnapshot = enabled && activeUser !== null && snapshot.owner === activeUser;
+  if (!hasCurrentSnapshot) {
+    return {
+      data: null,
+      loading: Boolean(activeUser && enabled),
+      metadataLoading: false,
+      lastLoadedAt: null,
+      readState: activeUser && enabled
+        ? { ...EMPTY_DEPOSIT_READ_STATE, freshness: "loading" as const }
+        : EMPTY_DEPOSIT_READ_STATE,
+      error: null,
+    };
+  }
+
+  return {
+    data: snapshot.data,
+    loading: snapshot.loading,
+    metadataLoading: snapshot.metadataLoading,
+    lastLoadedAt: snapshot.lastLoadedAt,
+    readState: snapshot.readState,
+    error: snapshot.error,
+  };
+}
+
 export function useDepositHistory(userAddress?: string, enabled = true) {
-  const [loading, setLoading] = useState(false);
-  const [metadataLoading, setMetadataLoading] = useState(false);
-  const [data, setData] = useState<DepositEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
+  const [snapshot, dispatchSnapshot] = useReducer(
+    reduceDepositHistorySnapshot,
+    undefined,
+    createDepositHistorySnapshot,
+  );
   const runningRef = useRef(false);
   const runningForRef = useRef<string | null>(null);
   const requestIdRef = useRef(0);
   const mountedRef = useRef(false);
-  const dataRef = useRef<DepositEntry[] | null>(null);
+  const committedUserRef = useRef<string | null>(null);
+  const requestAbortRef = useRef<AbortController | null>(null);
   const cacheSavedAtRef = useRef<Record<string, number | null>>({});
+  const cachedEntriesRef = useRef<Record<string, DepositEntry[] | null>>({});
+  const cachedProvenanceRef = useRef<Record<string, DepositHistoryProvenance | null>>({});
+  const normalizedRenderedUser = normalizeDepositUserAddress(userAddress);
 
-  useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      requestIdRef.current += 1;
+      committedUserRef.current = null;
+      requestAbortRef.current?.abort();
+      requestAbortRef.current = null;
     };
   }, []);
 
   const fetchFromApi = useCallback(async () => {
     const normalizedUser = normalizeDepositUserAddress(userAddress);
-    if (!normalizedUser) return;
+    if (!normalizedUser || committedUserRef.current !== normalizedUser) return;
     if (runningRef.current && runningForRef.current === normalizedUser) return;
+
+    requestAbortRef.current?.abort();
+    const controller = new AbortController();
+    requestAbortRef.current = controller;
     const requestId = ++requestIdRef.current;
-    const shouldShowLoading = dataRef.current === null;
+    const isCurrentRequest = () => (
+      !controller.signal.aborted &&
+      requestAbortRef.current === controller &&
+      isDepositHistoryRequestCurrent({
+        requestId,
+        activeRequestId: requestIdRef.current,
+        requestUser: normalizedUser,
+        activeUser: committedUserRef.current,
+      })
+    );
+    if (!isCurrentRequest()) return;
+
     runningRef.current = true;
     runningForRef.current = normalizedUser;
-    if (mountedRef.current) {
-      if (shouldShowLoading) {
-        setLoading(true);
-      }
-      setError(null);
+    if (mountedRef.current && isCurrentRequest()) {
+      dispatchSnapshot({ type: "start", owner: normalizedUser, requestId });
     }
 
     try {
-      const depositsJson = await fetchDepositHistoryPayload(normalizedUser);
+      const depositsJson = await fetchDepositHistoryPayload(normalizedUser, fetchWithTimeout, controller.signal);
+      if (!mountedRef.current || !isCurrentRequest()) return;
 
-      const deposits = normalizeApiDeposits(depositsJson.deposits);
+      const deposits = depositsJson.deposits;
+      const provenance: DepositHistoryProvenance = {
+        coverage: depositsJson.coverage,
+        indexedThroughBlock: depositsJson.indexedThroughBlock,
+      };
       const uniqueEpochs = [...new Set(deposits.map((d) => d.epoch))];
       let epochsMap: Record<string, ApiEpoch> = depositsJson.epochs ?? {};
       let rewardsMap: Record<string, ApiRewardInfo> = depositsJson.rewards ?? {};
 
       const publishEntries = (entries: DepositEntry[]) => {
-        const entriesChanged = !depositsEqual(dataRef.current, entries);
-        if (mountedRef.current && requestId === requestIdRef.current && entriesChanged) {
-          setData(entries);
-        }
-        const now = Date.now();
-        const savedAt = cacheSavedAtRef.current[normalizedUser] ?? null;
-        const shouldWriteCache =
-          entriesChanged ||
-          !savedAt ||
-          now - savedAt >= DEPOSIT_CACHE_WRITE_MIN_MS;
-        if (shouldWriteCache) {
-          saveCachedDeposits(normalizedUser, entries);
-          cacheSavedAtRef.current[normalizedUser] = now;
-        }
+        if (!mountedRef.current || !isCurrentRequest()) return;
+        dispatchSnapshot({ type: "publish", owner: normalizedUser, requestId, entries });
       };
 
       publishEntries(mapDepositEntries(deposits, epochsMap, rewardsMap));
-      if (mountedRef.current && requestId === requestIdRef.current) {
-        setLastLoadedAt(Date.now());
-        setLoading(false);
+      const completedAt = Date.now();
+      if (mountedRef.current && isCurrentRequest()) {
+        dispatchSnapshot({ type: "complete", owner: normalizedUser, requestId, completedAt, provenance });
       }
 
       const priorityEpochs = uniqueEpochs.slice(0, SYNC_EPOCH_PREFETCH_LIMIT);
@@ -461,19 +762,19 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       const syncMissingRewards = priorityEpochs.filter((epoch) => !rewardsMap[String(epoch)]);
 
       if (syncMissingEpochs.length > 0 || syncMissingRewards.length > 0) {
-        if (mountedRef.current && requestId === requestIdRef.current) {
-          setMetadataLoading(true);
+        if (mountedRef.current && isCurrentRequest()) {
+          dispatchSnapshot({ type: "metadata", owner: normalizedUser, requestId, loading: true });
         }
         const [extraEpochsMap, extraRewardsMap] = await Promise.all([
-          fetchEpochMap(syncMissingEpochs),
-          fetchRewardsMap(normalizedUser, syncMissingRewards),
+          fetchEpochMap(syncMissingEpochs, fetchWithTimeout, controller.signal),
+          fetchRewardsMap(normalizedUser, syncMissingRewards, fetchWithTimeout, controller.signal),
         ]);
-        if (requestId !== requestIdRef.current) return;
+        if (!mountedRef.current || !isCurrentRequest()) return;
         epochsMap = { ...epochsMap, ...extraEpochsMap };
         rewardsMap = { ...rewardsMap, ...extraRewardsMap };
         publishEntries(mapDepositEntries(deposits, epochsMap, rewardsMap));
-        if (mountedRef.current && requestId === requestIdRef.current) {
-          setMetadataLoading(false);
+        if (mountedRef.current && isCurrentRequest()) {
+          dispatchSnapshot({ type: "metadata", owner: normalizedUser, requestId, loading: false });
         }
       }
 
@@ -482,87 +783,76 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       const deferredMissingRewards = deferredEpochs.filter((epoch) => !rewardsMap[String(epoch)]);
       if (deferredMissingEpochs.length > 0 || deferredMissingRewards.length > 0) {
         void (async () => {
-          const [deferredEpochsMap, deferredRewardsMap] = await Promise.all([
-            fetchEpochMap(deferredMissingEpochs),
-            fetchRewardsMap(normalizedUser, deferredMissingRewards),
-          ]);
-          if (requestId !== requestIdRef.current) return;
-          const mergedEpochsMap = { ...epochsMap, ...deferredEpochsMap };
-          const mergedRewardsMap = { ...rewardsMap, ...deferredRewardsMap };
-          const fullEntries = mapDepositEntries(deposits, mergedEpochsMap, mergedRewardsMap);
-          const fullEntriesChanged = !depositsEqual(dataRef.current, fullEntries);
-          if (mountedRef.current && requestId === requestIdRef.current) {
-            if (fullEntriesChanged) {
-              setData(fullEntries);
+          try {
+            const [deferredEpochsMap, deferredRewardsMap] = await Promise.all([
+              fetchEpochMap(deferredMissingEpochs, fetchWithTimeout, controller.signal),
+              fetchRewardsMap(normalizedUser, deferredMissingRewards, fetchWithTimeout, controller.signal),
+            ]);
+            if (!mountedRef.current || !isCurrentRequest()) return;
+            const mergedEpochsMap = { ...epochsMap, ...deferredEpochsMap };
+            const mergedRewardsMap = { ...rewardsMap, ...deferredRewardsMap };
+            publishEntries(mapDepositEntries(deposits, mergedEpochsMap, mergedRewardsMap));
+          } catch (error) {
+            if (!controller.signal.aborted) {
+              log.warn("DepositHistory", "Deferred metadata fetch failed", { message: error instanceof Error ? error.message : String(error) });
             }
-          }
-          const deferredNow = Date.now();
-          const deferredSavedAt = cacheSavedAtRef.current[normalizedUser] ?? null;
-          const shouldWriteDeferredCache =
-            fullEntriesChanged ||
-            !deferredSavedAt ||
-            deferredNow - deferredSavedAt >= DEPOSIT_CACHE_WRITE_MIN_MS;
-          if (shouldWriteDeferredCache) {
-            saveCachedDeposits(normalizedUser, fullEntries);
-            cacheSavedAtRef.current[normalizedUser] = deferredNow;
           }
         })();
       }
-    } catch (err) {
-      log.warn("DepositHistory", "API fetch failed", { message: err instanceof Error ? err.message : String(err) });
-      if (mountedRef.current && requestId === requestIdRef.current) {
-        setError(getDepositHistoryLoadError());
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        log.warn("DepositHistory", "API fetch failed", { message: error instanceof Error ? error.message : String(error) });
+      }
+      if (mountedRef.current && isCurrentRequest()) {
+        dispatchSnapshot({ type: "error", owner: normalizedUser, requestId, error: getDepositHistoryLoadError() });
       }
     } finally {
-      if (mountedRef.current && requestId === requestIdRef.current) {
-        setLoading(false);
-        setMetadataLoading(false);
+      if (mountedRef.current && isCurrentRequest()) {
+        dispatchSnapshot({ type: "settle", owner: normalizedUser, requestId });
       }
-      if (requestId === requestIdRef.current && runningForRef.current === normalizedUser) {
+      if (isCurrentRequest() && runningForRef.current === normalizedUser) {
         runningRef.current = false;
         runningForRef.current = null;
       }
     }
   }, [userAddress]);
 
-  useEffect(() => {
-    const normalizedUser = normalizeDepositUserAddress(userAddress);
-    if (!normalizedUser) {
-      requestIdRef.current += 1;
-      runningRef.current = false;
-      runningForRef.current = null;
-      if (mountedRef.current) {
-        setData(null);
-        setError(null);
-        setLoading(false);
-        setMetadataLoading(false);
-        setLastLoadedAt(null);
-      }
-      dataRef.current = null;
+  useLayoutEffect(() => {
+    const normalizedUser = normalizedRenderedUser;
+    const activationRequestId = ++requestIdRef.current;
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
+    runningRef.current = false;
+    runningForRef.current = null;
+
+    if (!normalizedUser || !enabled) {
+      committedUserRef.current = null;
+      dispatchSnapshot({
+        type: "activate",
+        owner: null,
+        requestId: activationRequestId,
+        data: null,
+        savedAt: null,
+        provenance: null,
+      });
       return;
     }
 
-    if (!enabled) {
-      requestIdRef.current += 1;
-      runningRef.current = false;
-      runningForRef.current = null;
-      if (mountedRef.current) {
-        setError(null);
-        setLoading(false);
-        setMetadataLoading(false);
-      }
-      return;
-    }
-
+    committedUserRef.current = normalizedUser;
     const cached = loadDepositHistoryCache(normalizedUser);
     cacheSavedAtRef.current[normalizedUser] = cached.savedAt;
-    if (mountedRef.current) {
-      setData(cached.data);
-      setLastLoadedAt(cached.data ? cached.savedAt : null);
-      setError(null);
-    }
-    const savedAt = cached.savedAt;
-    const refreshDelayMs = getDepositHistoryRefreshDelay(savedAt);
+    cachedEntriesRef.current[normalizedUser] = cached.data;
+    cachedProvenanceRef.current[normalizedUser] = cached.provenance;
+    dispatchSnapshot({
+      type: "activate",
+      owner: normalizedUser,
+      requestId: activationRequestId,
+      data: cached.data,
+      savedAt: cached.savedAt,
+      provenance: cached.provenance,
+    });
+
+    const refreshDelayMs = getDepositHistoryRefreshDelay(cached.savedAt);
     if (refreshDelayMs !== null) {
       const timeoutId = window.setTimeout(() => {
         void fetchFromApi();
@@ -570,20 +860,64 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       return () => window.clearTimeout(timeoutId);
     }
 
-    if (mountedRef.current && !cached.data && dataRef.current === null) {
-      setLoading(true);
-    }
     void fetchFromApi();
-  }, [enabled, userAddress, fetchFromApi]);
+  }, [enabled, fetchFromApi, normalizedRenderedUser]);
+
+  useEffect(() => {
+    const owner = snapshot.owner;
+    const indexedThroughBlock = snapshot.readState.indexedThroughBlock;
+    if (
+      owner === null ||
+      snapshot.data === null ||
+      snapshot.readState.freshness !== "partial" ||
+      snapshot.readState.coverage !== "partial" ||
+      indexedThroughBlock === null ||
+      owner !== committedUserRef.current ||
+      snapshot.requestId !== requestIdRef.current ||
+      requestAbortRef.current?.signal.aborted
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    const savedAt = cacheSavedAtRef.current[owner] ?? null;
+    const provenance = { coverage: "partial" as const, indexedThroughBlock };
+    const shouldWriteCache = shouldWriteDepositHistoryCache({
+      cachedEntries: cachedEntriesRef.current[owner] ?? null,
+      cachedProvenance: cachedProvenanceRef.current[owner] ?? null,
+      entries: snapshot.data,
+      provenance,
+      savedAt,
+      now,
+    });
+    if (!shouldWriteCache) return;
+
+    if (
+      owner !== committedUserRef.current ||
+      snapshot.requestId !== requestIdRef.current ||
+      requestAbortRef.current?.signal.aborted
+    ) {
+      return;
+    }
+    saveCachedDeposits(owner, snapshot.data, provenance);
+    cacheSavedAtRef.current[owner] = now;
+    cachedEntriesRef.current[owner] = snapshot.data;
+    cachedProvenanceRef.current[owner] = provenance;
+  }, [snapshot]);
 
   const refresh = useCallback(async () => {
     await fetchFromApi();
   }, [fetchFromApi]);
 
+  const visibleHistory = selectVisibleDepositHistory({
+    activeUser: normalizedRenderedUser,
+    enabled,
+    snapshot,
+  });
   const totalDeposited = useMemo(
-    () => (data ?? []).reduce((sum, e) => sum + e.amountNum, 0),
-    [data],
+    () => (visibleHistory.data ?? []).reduce((sum, entry) => sum + entry.amountNum, 0),
+    [visibleHistory.data],
   );
 
-  return { data, loading, metadataLoading, lastLoadedAt, totalDeposited, error, fetch: fetchFromApi, refresh };
+  return { ...visibleHistory, totalDeposited, fetch: fetchFromApi, refresh };
 }

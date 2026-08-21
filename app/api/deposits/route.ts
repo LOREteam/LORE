@@ -17,7 +17,7 @@ import {
   markRouteStaleServed,
 } from "../_lib/runtimeMetrics";
 import { loadRewardMapsForUserEpochs } from "../_lib/rewardSummary";
-import { getMetaBigInt, getMetaNumber, getUserBetsMap } from "../../../server/storage";
+import { getCanonicalLastIndexedBlock, getMetaBigInt, getMetaNumber, getUserBetsMap } from "../../../server/storage";
 import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
@@ -89,12 +89,23 @@ type RewardInfoRow = {
   userWinningAmount: string;
 };
 
-type DepositsPayload = {
+type DepositsSuccessPayload = {
   deposits: DepositRow[];
+  /** Indexed reads are intentionally a lower-bound snapshot, never a complete chain history. */
+  coverage: "partial";
+  /** Canonical decimal block number through which the indexer has processed data. */
+  indexedThroughBlock: string;
   epochs?: Record<string, EpochInfoRow>;
   rewards?: Record<string, RewardInfoRow>;
-  error?: string;
+  rewardsStatus?: "available" | "unavailable";
 };
+
+type DepositsErrorPayload = {
+  deposits: DepositRow[];
+  error: string;
+};
+
+type DepositsPayload = DepositsSuccessPayload | DepositsErrorPayload;
 
 type DepositsBuildOptions = {
   allowSlowRecovery?: boolean;
@@ -115,8 +126,7 @@ let depositsRecoveryStartedAt = 0;
 
 function getDepositsDataWatermark() {
   const currentEpoch = getMetaNumber("currentEpoch");
-  const lastIndexedBlock = getMetaBigInt("lastIndexedBlock")?.toString() ?? "null";
-  return `${Number.isInteger(currentEpoch) ? String(currentEpoch) : "null"}|${lastIndexedBlock}`;
+  return `${Number.isInteger(currentEpoch) ? String(currentEpoch) : "null"}|${getCanonicalLastIndexedBlock()}`;
 }
 
 function buildDepositKey(epoch: string, txHash: string, blockNumber: string): string {
@@ -574,6 +584,10 @@ async function buildDepositsPayload(
       ? indexedCurrentEpochNum
       : null;
   let deposits = readIndexedDeposits(user, currentEpochNum);
+  const provenance = {
+    coverage: "partial" as const,
+    indexedThroughBlock: getCanonicalLastIndexedBlock(),
+  };
 
   const indexedEpochLag =
     currentEpochNum && indexedCurrentEpochNum ? currentEpochNum - indexedCurrentEpochNum : 0;
@@ -592,7 +606,7 @@ async function buildDepositsPayload(
 
   if (!includeRewards || deposits.length === 0) {
     return {
-      payload: { deposits },
+      payload: { deposits, ...provenance },
       recoveryNeeded: shouldAttemptRecovery,
     };
   }
@@ -602,19 +616,41 @@ async function buildDepositsPayload(
       .map((row) => parseStoredEpochNumber(row.epoch))
       .filter(isSafePositiveInteger),
   )].slice(0, INLINE_REWARD_EPOCH_LIMIT);
-  const rewardSummary = await loadRewardMapsForUserEpochs(user, epochs);
-  return {
-    payload: {
-      deposits,
-      epochs: rewardSummary.epochs,
-      rewards: rewardSummary.rewards,
-    },
-    recoveryNeeded: shouldAttemptRecovery,
-  };
+  try {
+    const rewardSummary = await loadRewardMapsForUserEpochs(user, epochs);
+    return {
+      payload: {
+        deposits,
+        ...provenance,
+        epochs: rewardSummary.epochs,
+        rewards: rewardSummary.rewards,
+        rewardsStatus: "available",
+      },
+      recoveryNeeded: shouldAttemptRecovery,
+    };
+  } catch (error) {
+    logRouteError(ROUTE_METRIC_KEY, error, { user, includeRewards, phase: "reward-enrichment" });
+    return {
+      payload: {
+        deposits,
+        ...provenance,
+        epochs: {},
+        rewards: {},
+        rewardsStatus: "unavailable",
+      },
+      recoveryNeeded: shouldAttemptRecovery,
+    };
+  }
 }
 
 function startDepositsRefresh(cacheKey: string, user: string, includeRewards: boolean) {
-  const watermark = getDepositsDataWatermark();
+  let watermark: string;
+  try {
+    watermark = getDepositsDataWatermark();
+  } catch (error) {
+    logRouteError(ROUTE_METRIC_KEY, error, { user, includeRewards, phase: "watermark" });
+    return;
+  }
   startVersionedBackgroundRefresh({
     cache: depositsRouteCache,
     cacheKey,
@@ -656,7 +692,14 @@ export async function GET(request: NextRequest) {
 
   const metric = beginRouteMetric(ROUTE_METRIC_KEY);
   const cacheKey = includeRewards ? `${user}:rewards` : user;
-  const currentWatermark = getDepositsDataWatermark();
+  let currentWatermark: string;
+  try {
+    currentWatermark = getDepositsDataWatermark();
+  } catch (error) {
+    logRouteError(ROUTE_METRIC_KEY, error, { user, includeRewards, phase: "watermark" });
+    failRouteMetric(metric, 503);
+    return jsonNoStore({ deposits: [], error: "Deposit index watermark is unavailable" }, 503);
+  }
   const now = Date.now();
   const cached = depositsRouteCache.getFresh(cacheKey, now);
   if (cached) {

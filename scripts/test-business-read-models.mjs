@@ -85,6 +85,7 @@ export async function runReadModelTests() {
   const globalStats = globalStatsModule.default ?? globalStatsModule;
   const globalStatsRuntime = globalStatsRuntimeModule.default ?? globalStatsRuntimeModule;
   const depositHistory = depositHistoryModule.default ?? depositHistoryModule;
+  const depositHistorySource = readFileSync("app/hooks/useDepositHistory.ts", "utf8");
   const jackpotHistory = jackpotHistoryModule.default ?? jackpotHistoryModule;
   const recentWins = recentWinsModule.default ?? recentWinsModule;
   const leaderboards = leaderboardsModule.default ?? leaderboardsModule;
@@ -591,7 +592,7 @@ export async function runReadModelTests() {
   const depositCacheStorage = {
     getItem(key) {
       depositCacheReads.push(key);
-      return JSON.stringify({ savedAt: 1_000, data: [cachedDepositEntry] });
+      return JSON.stringify({ cacheVersion: 3, savedAt: 1_000, coverage: "partial", indexedThroughBlock: "120", data: [cachedDepositEntry] });
     },
     removeItem() {},
   };
@@ -604,12 +605,171 @@ export async function runReadModelTests() {
   );
   assert.equal(restoredDepositCache.data?.length, 1);
   assert.equal(restoredDepositCache.savedAt, 1_000);
+  assert.deepEqual(restoredDepositCache.provenance, { coverage: "partial", indexedThroughBlock: "120" });
   depositHistory.loadDepositHistoryCache(secondDepositActor, depositCacheStorage, 2_000);
   assert.equal(depositCacheReads.length, 2);
   assert.notEqual(depositCacheReads[0], depositCacheReads[1], "deposit caches must stay isolated by normalized actor");
+  assert.match(depositCacheReads[0], /^lore:deposits:v3:/, "deposit cache must not reuse unprovenanced v2 snapshots");
   assert.match(depositCacheReads[0], new RegExp(`${firstDepositActor}$`));
   assert.match(depositCacheReads[1], new RegExp(`${secondDepositActor}$`));
-  assert.equal(depositHistory.getDepositHistoryRefreshDelay(1_000, 2_000), 29_000);
+  const rejectedDepositCacheKeys = [];
+  const rejectedDepositCache = depositHistory.loadDepositHistoryCache(firstDepositActor, {
+    getItem: () => JSON.stringify({ cacheVersion: 3, savedAt: 1_000, data: [cachedDepositEntry] }),
+    removeItem: (key) => rejectedDepositCacheKeys.push(key),
+  }, 2_000);
+  assert.deepEqual(rejectedDepositCache, { data: null, savedAt: null, provenance: null }, "cache without provenance must not appear as a verified deposit read model");
+  assert.equal(rejectedDepositCacheKeys.length, 1);
+  const accountA = firstDepositActor;
+  const accountB = secondDepositActor;
+  const accountAProvenance = { coverage: "partial", indexedThroughBlock: "120" };
+  let accountAState = depositHistory.reduceDepositHistorySnapshot(
+    depositHistory.createDepositHistorySnapshot(),
+    {
+      type: "activate",
+      owner: accountA,
+      requestId: 1,
+      data: null,
+      savedAt: null,
+      provenance: null,
+    },
+  );
+  accountAState = depositHistory.reduceDepositHistorySnapshot(accountAState, {
+    type: "publish",
+    owner: accountA,
+    requestId: 1,
+    entries: [cachedDepositEntry],
+  });
+  accountAState = depositHistory.reduceDepositHistorySnapshot(accountAState, {
+    type: "complete",
+    owner: accountA,
+    requestId: 1,
+    completedAt: 1_000,
+    provenance: accountAProvenance,
+  });
+  const speculativeBProjection = depositHistory.selectVisibleDepositHistory({
+    activeUser: accountB,
+    enabled: true,
+    snapshot: accountAState,
+  });
+  assert.deepEqual(speculativeBProjection, {
+    data: null,
+    loading: true,
+    metadataLoading: false,
+    lastLoadedAt: null,
+    readState: { freshness: "loading", coverage: null, indexedThroughBlock: null, lastUpdatedAt: null },
+    error: null,
+  }, "a preempted B render must project a synthetic B loading state instead of A rows or provenance");
+  const accountBLoading = depositHistory.reduceDepositHistorySnapshot(accountAState, {
+    type: "activate",
+    owner: accountB,
+    requestId: 2,
+    data: null,
+    savedAt: null,
+    provenance: null,
+  });
+  assert.deepEqual(accountBLoading, {
+    owner: accountB,
+    requestId: 2,
+    data: null,
+    loading: true,
+    metadataLoading: false,
+    lastLoadedAt: null,
+    readState: { freshness: "loading", coverage: null, indexedThroughBlock: null, lastUpdatedAt: null },
+    error: null,
+  }, "committed A→B must atomically reset every A-owned deposit field before B loads");
+  const lateAPublish = depositHistory.reduceDepositHistorySnapshot(accountBLoading, {
+    type: "publish",
+    owner: accountA,
+    requestId: 1,
+    entries: [cachedDepositEntry],
+  });
+  const lateAComplete = depositHistory.reduceDepositHistorySnapshot(accountBLoading, {
+    type: "complete",
+    owner: accountA,
+    requestId: 1,
+    completedAt: 2_000,
+    provenance: accountAProvenance,
+  });
+  assert.strictEqual(lateAPublish, accountBLoading, "late A data must be rejected by the reducer after B ownership commits");
+  assert.strictEqual(lateAComplete, accountBLoading, "late A provenance must be rejected by the reducer after B ownership commits");
+  assert.deepEqual(
+    depositHistory.selectVisibleDepositHistory({ activeUser: accountB, enabled: true, snapshot: lateAPublish }),
+    {
+      data: null,
+      loading: true,
+      metadataLoading: false,
+      lastLoadedAt: null,
+      readState: { freshness: "loading", coverage: null, indexedThroughBlock: null, lastUpdatedAt: null },
+      error: null,
+    },
+    "late A work must not restore rows, provenance, error, or CTA state for B",
+  );
+  const loggedOutState = depositHistory.reduceDepositHistorySnapshot(accountBLoading, {
+    type: "activate",
+    owner: null,
+    requestId: 3,
+    data: null,
+    savedAt: null,
+    provenance: null,
+  });
+  const lateBPublish = depositHistory.reduceDepositHistorySnapshot(loggedOutState, {
+    type: "publish",
+    owner: accountB,
+    requestId: 2,
+    entries: [cachedDepositEntry],
+  });
+  assert.strictEqual(lateBPublish, loggedOutState, "late B data must remain rejected after logout");
+  assert.deepEqual(
+    depositHistory.selectVisibleDepositHistory({ activeUser: null, enabled: false, snapshot: lateBPublish }),
+    {
+      data: null,
+      loading: false,
+      metadataLoading: false,
+      lastLoadedAt: null,
+      readState: { freshness: "idle", coverage: null, indexedThroughBlock: null, lastUpdatedAt: null },
+      error: null,
+    },
+    "logout must remain empty and idle even when a late B response resolves",
+  );
+  assert.equal(
+    depositHistory.isDepositHistoryRequestCurrent({
+      requestId: 7,
+      activeRequestId: 7,
+      requestUser: accountA,
+      activeUser: accountB,
+    }),
+    false,
+    "a late A request must fail the committed owner guard even if request ids otherwise match",
+  );
+  assert.match(
+    depositHistorySource,
+    /useReducer\(\s*reduceDepositHistorySnapshot,[\s\S]*?useLayoutEffect\([\s\S]*?committedUserRef\.current = normalizedUser[\s\S]*?useEffect\([\s\S]*?owner !== committedUserRef\.current[\s\S]*?snapshot\.requestId !== requestIdRef\.current[\s\S]*?saveCachedDeposits\(/,
+    "the hook must use the tested owner-tagged reducer and guard cache writes with committed owner plus request id",
+  );
+  assert.equal(
+    depositHistory.shouldWriteDepositHistoryCache({
+      cachedEntries: [cachedDepositEntry],
+      cachedProvenance: { coverage: "partial", indexedThroughBlock: "120" },
+      entries: [cachedDepositEntry],
+      provenance: { coverage: "partial", indexedThroughBlock: "121" },
+      savedAt: 1_999,
+      now: 2_000,
+    }),
+    true,
+    "a newer canonical indexed watermark must refresh v3 cache even when the indexed rows are unchanged",
+  );
+  assert.equal(
+    depositHistory.shouldWriteDepositHistoryCache({
+      cachedEntries: [cachedDepositEntry],
+      cachedProvenance: { coverage: "partial", indexedThroughBlock: "120" },
+      entries: [cachedDepositEntry],
+      provenance: { coverage: "partial", indexedThroughBlock: "120" },
+      savedAt: 1_999,
+      now: 2_000,
+    }),
+    false,
+    "unchanged fresh partial snapshots should keep the bounded cache-write throttle",
+  );  assert.equal(depositHistory.getDepositHistoryRefreshDelay(1_000, 2_000), 29_000);
   assert.equal(depositHistory.getDepositHistoryRefreshDelay(1_000, 31_000), null);
   assert.equal(depositHistory.getDepositHistoryRefreshDelay(8_001, 2_000), null);
   assert.deepEqual(
@@ -746,7 +906,18 @@ export async function runReadModelTests() {
     ["1", "999999999999999999999999"],
     "unsafe jackpot epochs must fail closed instead of winning a Number-based descending sort",
   );
-  const depositHistorySource = readFileSync("app/hooks/useDepositHistory.ts", "utf8");
+  assert.deepEqual(
+    depositHistory.normalizeDepositHistoryPayload({ deposits: [], coverage: "partial", indexedThroughBlock: "120" }),
+    { deposits: [], coverage: "partial", indexedThroughBlock: "120", epochs: undefined, rewards: undefined, error: undefined },
+  );
+  for (const invalidProvenance of [
+    { deposits: [], coverage: "complete", indexedThroughBlock: "120" },
+    { deposits: [], coverage: "partial", indexedThroughBlock: "0120" },
+    { deposits: [], coverage: "partial", indexedThroughBlock: "-1" },
+    { deposits: [], coverage: "partial", indexedThroughBlock: 120 },
+  ]) {
+    assert.equal(depositHistory.normalizeDepositHistoryPayload(invalidProvenance), null, "deposit payload provenance must be explicit and canonical");
+  }
   const depositUser = "0x1111111111111111111111111111111111111111";
   const depositRequests = [];
   const depositPayload = await depositHistory.fetchDepositHistoryPayload(depositUser, async (input, init) => {
@@ -760,6 +931,8 @@ export async function runReadModelTests() {
         txHash: `0x${"ab".repeat(32)}`,
         blockNumber: "7",
       }],
+      coverage: "partial",
+      indexedThroughBlock: "120",
       epochs: {},
       rewards: {},
     }), { status: 200, headers: { "content-type": "application/json" } });
@@ -768,7 +941,17 @@ export async function runReadModelTests() {
     input: `/api/deposits?user=${depositUser}`,
     init: { cache: "no-store" },
   }]);
-  assert.equal(depositPayload.deposits?.length, 1);
+  assert.equal(depositPayload.deposits.length, 1);
+  assert.equal(depositPayload.coverage, "partial");
+  assert.equal(depositPayload.indexedThroughBlock, "120");
+  await assert.rejects(
+    depositHistory.fetchDepositHistoryPayload(depositUser, async () => new Response(JSON.stringify({ deposits: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })),
+    /request failed \(HTTP 200\)/,
+    "a successful HTTP response without explicit provenance must fail closed",
+  );
   await assert.rejects(
     depositHistory.fetchDepositHistoryPayload(depositUser, async () => new Response(null, {
       status: 200,
@@ -830,7 +1013,7 @@ export async function runReadModelTests() {
   assert.equal(Object.keys(fetchedRewardsMap).length, 201);
   assert.match(
     depositHistorySource,
-    /const depositsJson = await fetchDepositHistoryPayload\(normalizedUser\)[\s\S]*publishEntries\(mapDepositEntries\(deposits, epochsMap, rewardsMap\)\)[\s\S]*fetchEpochMap\(syncMissingEpochs\)[\s\S]*fetchRewardsMap\(normalizedUser, syncMissingRewards\)[\s\S]*const fullEntries = mapDepositEntries\(deposits, mergedEpochsMap, mergedRewardsMap\)[\s\S]*setError\(getDepositHistoryLoadError\(\)\)/,
+    /const depositsJson = await fetchDepositHistoryPayload\(normalizedUser, fetchWithTimeout, controller\.signal\)[\s\S]*const provenance: DepositHistoryProvenance = \{[\s\S]*indexedThroughBlock: depositsJson\.indexedThroughBlock,[\s\S]*publishEntries\(mapDepositEntries\(deposits, epochsMap, rewardsMap\)\)[\s\S]*fetchEpochMap\(syncMissingEpochs, fetchWithTimeout, controller\.signal\)[\s\S]*fetchRewardsMap\(normalizedUser, syncMissingRewards, fetchWithTimeout, controller\.signal\)[\s\S]*publishEntries\(mapDepositEntries\(deposits, mergedEpochsMap, mergedRewardsMap\)\)[\s\S]*dispatchSnapshot\(\{ type: "error", owner: normalizedUser, requestId, error: getDepositHistoryLoadError\(\) \}\)/,
     "deposit history hook must bind the behavior-tested bounded fetch, mapping, metadata, and safe-error policies",
   );
   const jackpotHistorySource = readFileSync("app/hooks/useJackpotHistory.ts", "utf8");
@@ -917,6 +1100,7 @@ export async function runReadModelTests() {
     depositsRefreshing: false,
     depositsMetadataLoading: false,
     depositsLastLoadedAt: null,
+    depositReadState: { freshness: "partial", coverage: "partial", indexedThroughBlock: "120", lastUpdatedAt: 1_000 },
     newDepositIds: new Set(),
     onLoadDeposits: () => {},
     onRefreshDeposits: () => {},
@@ -933,7 +1117,7 @@ export async function runReadModelTests() {
   assert.match(depositLoadingHtml, /role="status"[^>]*aria-live="polite"[^>]*aria-busy="true"/);
   const depositRefreshingHtml = renderToStaticMarkup(React.createElement(
     analyticsDepositsPanel.AnalyticsDepositsPanel,
-    { ...depositPanelProps, depositsRefreshing: true },
+    { ...depositPanelProps, depositsRefreshing: true, depositReadState: { ...depositPanelProps.depositReadState, freshness: "refreshing" } },
   ));
   assert.match(depositRefreshingHtml, /role="status"[^>]*aria-live="polite"[^>]*aria-busy="true"[^>]*>[\s\S]*Refreshing/);
   const depositMetadataHtml = renderToStaticMarkup(React.createElement(

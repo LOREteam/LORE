@@ -54,6 +54,7 @@ interface CreateLineaOreClientViewPropsOptions {
   deposits: PageTabContentProps["analyticsProps"]["deposits"];
   depositsError: PageTabContentProps["analyticsProps"]["depositsError"];
   depositsLastLoadedAt: PageTabContentProps["analyticsProps"]["depositsLastLoadedAt"];
+  depositsReadState: PageTabContentProps["analyticsProps"]["depositReadState"];
   depositsLoading: PageTabContentProps["analyticsProps"]["depositsLoading"];
   depositsMetadataLoading: PageTabContentProps["analyticsProps"]["depositsMetadataLoading"];
   dismissBalanceWarning: PageTabContentProps["onDismissBalanceWarning"];
@@ -218,6 +219,7 @@ export function createLineaOreClientViewProps({
   deposits,
   depositsError,
   depositsLastLoadedAt,
+  depositsReadState,
   depositsLoading,
   depositsMetadataLoading,
   dismissBalanceWarning,
@@ -484,6 +486,7 @@ export function createLineaOreClientViewProps({
       depositsLoading,
       depositsMetadataLoading,
       depositsLastLoadedAt,
+      depositsReadState,
       depositsError,
       totalDeposited,
       fetchDeposits,

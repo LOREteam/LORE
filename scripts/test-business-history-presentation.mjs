@@ -32,6 +32,7 @@ export function runHistoryPresentationTests() {
     depositsRefreshing: false,
     depositsMetadataLoading: false,
     depositsLastLoadedAt: null,
+    depositReadState: { freshness: "partial", coverage: "partial", indexedThroughBlock: "120", lastUpdatedAt: 1_000 },
     newDepositIds: new Set(),
     onLoadDeposits: () => {},
     onRefreshDeposits: () => {},
@@ -48,6 +49,13 @@ export function runHistoryPresentationTests() {
   }));
   assert.match(unavailableDepositMarkup, /Unable to load deposit history/, "failed first deposit read must be explicit");
   assert.doesNotMatch(unavailableDepositMarkup, /Load History/, "failed first deposit read must not become an empty history");
+  const idleDepositMarkup = renderToStaticMarkup(createElement(AnalyticsDepositsPanel, {
+    ...depositPanelProps,
+    deposits: null,
+    depositsError: null,
+    depositReadState: { freshness: "idle", coverage: null, indexedThroughBlock: null, lastUpdatedAt: null },
+  }));
+  assert.match(idleDepositMarkup, /Loads indexed deposit history; coverage may be partial/, "initial deposit CTA must not claim a complete chain scan");
   const staleDepositMarkup = renderToStaticMarkup(createElement(AnalyticsDepositsPanel, {
     ...depositPanelProps,
     deposits: [deposit],
@@ -57,8 +65,24 @@ export function runHistoryPresentationTests() {
     visibleCount: 1,
     visibleDeposits: [deposit],
   }));
-  assert.match(staleDepositMarkup, /Showing the last verified deposit history/, "failed refresh must retain the verified deposit snapshot");
+  assert.match(staleDepositMarkup, /Showing the last checked partial deposit history/, "failed refresh must retain the verified partial deposit snapshot");
   assert.match(staleDepositMarkup, /#42/, "failed refresh must keep the verified deposit rows visible");
+  assert.match(staleDepositMarkup, /Indexed total/, "partial snapshots must label totals as indexed rather than complete");
+  assert.match(staleDepositMarkup, /indexed tx/, "partial snapshots must label row counts as indexed");
+  const partialEmptyDepositMarkup = renderToStaticMarkup(createElement(AnalyticsDepositsPanel, {
+    ...depositPanelProps,
+    deposits: [],
+    depositsError: null,
+  }));
+  assert.match(partialEmptyDepositMarkup, /No indexed deposits through block 120/, "a partial empty deposit response must retain its indexed-block provenance");
+  assert.match(partialEmptyDepositMarkup, /This is a partial indexed history/, "a partial empty deposit response must not render as a complete empty history");
+  const stalePartialEmptyDepositMarkup = renderToStaticMarkup(createElement(AnalyticsDepositsPanel, {
+    ...depositPanelProps,
+    deposits: [],
+    depositsError: "safe error",
+  }));
+  assert.match(stalePartialEmptyDepositMarkup, /role="alert"[\s\S]*Refresh failed\. Showing the last checked partial deposit history/, "a failed partial-empty refresh must surface an alert without hiding provenance");
+  assert.match(stalePartialEmptyDepositMarkup, /No indexed deposits through block 120/, "a failed partial-empty refresh must retain its indexed-block provenance");
   const emptyHistoryMarkup = renderToStaticMarkup(createElement(AnalyticsBlockchainHistoryPanel, {
     historyViewData: [],
     historyLoading: false,

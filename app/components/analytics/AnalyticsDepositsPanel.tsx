@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo } from "react";
-import type { DepositEntry } from "../../hooks/useDepositHistory";
+import type { DepositEntry, DepositReadState } from "../../hooks/useDepositHistory";
 import { formatDepositFreshnessLabel } from "../../lib/analyticsDepositsStatus";
 import { getExplorerTxUrl } from "../../lib/explorerLinks";
 import { loadingQuotes, emptyStates } from "../../lib/loreTexts";
@@ -17,6 +17,7 @@ interface AnalyticsDepositsPanelProps {
   depositsRefreshing: boolean;
   depositsMetadataLoading: boolean;
   depositsLastLoadedAt: number | null;
+  depositReadState: DepositReadState;
   newDepositIds: Set<string>;
   onLoadDeposits: () => void;
   onRefreshDeposits: () => void;
@@ -34,6 +35,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
   depositsRefreshing,
   depositsMetadataLoading,
   depositsLastLoadedAt,
+  depositReadState,
   newDepositIds,
   onLoadDeposits,
   onRefreshDeposits,
@@ -66,15 +68,41 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
       }),
     [newDepositIds, visibleDeposits],
   );
-  const freshnessLabel = formatDepositFreshnessLabel(depositsLastLoadedAt);
-  const statusLabel = depositsError && deposits !== null
-    ? "Stale"
-    : depositsRefreshing
-      ? "Refreshing"
-      : depositsMetadataLoading
-        ? "Syncing rewards"
-        : "Ready";
-  const statusActive = depositsRefreshing || depositsMetadataLoading;
+  const hasPartialCoverage = depositReadState.coverage === "partial";
+  const indexedThroughBlock = depositReadState.indexedThroughBlock;
+  const freshnessLabel = formatDepositFreshnessLabel(
+    depositReadState.lastUpdatedAt ?? depositsLastLoadedAt,
+  );
+  const statusLabel = depositReadState.freshness === "error"
+    ? "Unavailable"
+    : depositReadState.freshness === "stale"
+      ? "Stale"
+      : depositReadState.freshness === "loading"
+        ? "Loading"
+        : depositReadState.freshness === "refreshing"
+          ? "Refreshing"
+          : depositsMetadataLoading
+            ? "Syncing rewards"
+            : hasPartialCoverage
+              ? "Partial index"
+              : "Idle";
+  const statusActive = depositReadState.freshness === "loading"
+    || depositReadState.freshness === "refreshing"
+    || depositsMetadataLoading;
+  const statusClassName = depositReadState.freshness === "error" || depositReadState.freshness === "stale"
+    ? "text-amber-300"
+    : statusActive
+      ? "text-sky-300"
+      : hasPartialCoverage
+        ? "text-amber-300"
+        : "text-gray-400";
+  const statusDotClassName = depositReadState.freshness === "error" || depositReadState.freshness === "stale"
+    ? "bg-amber-400/90"
+    : statusActive
+      ? "bg-sky-400 animate-synced-pulse"
+      : hasPartialCoverage
+        ? "bg-amber-400/90"
+        : "bg-gray-500";
 
   return (
     <UiPanel
@@ -94,9 +122,9 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
                 role="status"
                 aria-live="polite"
                 aria-busy={statusActive}
-                className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${statusActive ? "text-sky-300" : "text-gray-400"}`}
+                className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${statusClassName}`}
               >
-                <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${statusActive ? "bg-sky-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
+                <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${statusDotClassName}`} />
                 {statusLabel}
               </span>
               {freshnessLabel && (
@@ -108,8 +136,8 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
           )}
           {deposits && deposits.length > 0 && (
             <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-              Total: <span className="text-sky-400">{totalDeposited.toFixed(2)} LINEA</span>
-              <span className="text-gray-400 ml-1.5">({deposits.length} tx)</span>
+              Indexed total: <span className="text-sky-400">{totalDeposited.toFixed(2)} LINEA</span>
+              <span className="text-gray-400 ml-1.5">({deposits.length} indexed tx)</span>
             </span>
           )}
           <UiButton
@@ -138,7 +166,7 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
         </div>
       ) : deposits === null && !depositsLoading ? (
         <div className="flex flex-col items-center justify-center py-3 gap-2">
-          <span className="text-[12px] text-gray-300">Scans full chain history for your bets (cached incrementally)</span>
+          <span className="text-[12px] text-gray-300">Loads indexed deposit history; coverage may be partial.</span>
           <UiButton
             onClick={onLoadDeposits}
             disabled={depositsLoading}
@@ -170,14 +198,33 @@ export const AnalyticsDepositsPanel = React.memo(function AnalyticsDepositsPanel
         </div>
       ) : deposits && deposits.length === 0 ? (
         <div className="text-center py-4 flex flex-col items-center gap-2">
-          <span className="text-[11px] text-gray-400 italic"><LoreText items={emptyStates.analytics} /></span>
-          <span className="text-[10px] text-gray-400">If you&apos;ve already placed bets, use <strong className="text-sky-400/90">Refresh</strong> above to load history.</span>
+          {depositsError && (
+            <div role="alert" className="rounded-md border border-amber-400/20 bg-amber-500/8 px-3 py-2 text-[10px] text-amber-200">
+              Refresh failed. Showing the last checked partial deposit history.
+            </div>
+          )}
+          {hasPartialCoverage ? (
+            <>
+              <span role="status" className="text-[11px] text-amber-200">No indexed deposits through block {indexedThroughBlock ?? "unknown"}.</span>
+              <span className="text-[10px] text-gray-400">This is a partial indexed history. Newer or unavailable records may not be included; use <strong className="text-sky-400/90">Refresh</strong> to check again.</span>
+            </>
+          ) : (
+            <>
+              <span className="text-[11px] text-gray-400 italic"><LoreText items={emptyStates.analytics} /></span>
+              <span className="text-[10px] text-gray-400">If you&apos;ve already placed bets, use <strong className="text-sky-400/90">Refresh</strong> above to load history.</span>
+            </>
+          )}
         </div>
       ) : (
         <>
+          {hasPartialCoverage && (
+            <div role="status" className="mb-2 rounded-md border border-amber-400/20 bg-amber-500/8 px-3 py-2 text-[10px] text-amber-200">
+              Showing partial indexed history through block {indexedThroughBlock ?? "unknown"}.
+            </div>
+          )}
           {depositsError && (
             <div role="alert" className="mb-2 rounded-md border border-amber-400/20 bg-amber-500/8 px-3 py-2 text-[10px] text-amber-200">
-              Refresh failed. Showing the last verified deposit history.
+              Refresh failed. Showing the last checked partial deposit history.
             </div>
           )}
           <UiTable aria-label="Deposit history" tone="sky" maxHeightClass="max-h-[260px]">

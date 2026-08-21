@@ -96,6 +96,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   partial cache as a complete reward result. Desktop and mobile status UI expose
   the resulting loading/stale/error/partial state, and the mobile P1 review
   received its corrective follow-up.
+- Deposit history now preserves canonical indexed-block provenance end-to-end: successful reads are explicitly `partial`, the v3 cache validates it, and Analytics distinguishes loading, partial, stale, and unavailable snapshots. A partial empty index is not presented as a complete empty history; focused route, read-model, and presentation checks cover the contract.
 - The local accessibility pass includes the `d042` corrective work. A local,
   read-only Playwright activity check also passed for the available flow; its
   external bootstrap stayed intentionally read-only and limited by the absence
