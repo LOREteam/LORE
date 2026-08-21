@@ -40,6 +40,25 @@ function Get-CampaignSourceSha {
   return $head.ToLowerInvariant()
 }
 
+function Get-CampaignSourceIntegrityFailure([string]$ExpectedSourceSha) {
+  $headLines = @(& git -C $repoRoot rev-parse --verify 'HEAD^{commit}' 2>$null)
+  $headExitCode = $LASTEXITCODE
+  if ($headExitCode -ne 0 -or $headLines.Count -ne 1) {
+    return 'source-drift'
+  }
+  $head = [string]$headLines[0]
+  if ($head -notmatch '^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$' -or -not [string]::Equals($head, $ExpectedSourceSha, [StringComparison]::OrdinalIgnoreCase)) {
+    return 'source-drift'
+  }
+
+  $trackedChanges = @(& git -C $repoRoot status --porcelain=v1 --untracked-files=no 2>$null)
+  $statusExitCode = $LASTEXITCODE
+  if ($statusExitCode -ne 0 -or $trackedChanges.Count -ne 0) {
+    return 'tracked-tree-dirty'
+  }
+  return $null
+}
+
 $sourceSha = Get-CampaignSourceSha
 
 if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {
@@ -61,6 +80,37 @@ function Write-CampaignEvent([hashtable]$Event) {
   ($record | ConvertTo-Json -Compress) | Add-Content -LiteralPath $summaryPath -Encoding utf8
 }
 
+function Stop-CampaignForSourceIntegrityFailure(
+  [int]$Iteration,
+  [string]$Phase,
+  [string]$Failure,
+  [string]$CommandName
+) {
+  $event = @{
+    status = 'failed'
+    iteration = $Iteration
+    phase = $Phase
+    sourceIntegrityFailure = $Failure
+    exitCode = 1
+  }
+  if (-not [string]::IsNullOrWhiteSpace($CommandName)) {
+    $event.command = $CommandName
+  }
+  Write-CampaignEvent $event
+  $stoppedEvent = @{
+    status = 'stopped-on-failure'
+    iteration = $Iteration
+    phase = $Phase
+    sourceIntegrityFailure = $Failure
+    exitCode = 1
+  }
+  if (-not [string]::IsNullOrWhiteSpace($CommandName)) {
+    $stoppedEvent.command = $CommandName
+  }
+  Write-CampaignEvent $stoppedEvent
+  exit 1
+}
+
 $commands = @(
   @{ name = 'business-logic-isolated'; arguments = @('scripts\business-logic-isolated-runner.mjs') },
   @{ name = 'p1-hardening-evm'; arguments = @('scripts\run-p1-hardening-tests.mjs', '--include-evm') },
@@ -78,6 +128,10 @@ Write-CampaignEvent @{ status = 'started'; campaignId = $CampaignId; hours = $Ho
 while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteration -lt $MaxIterations)) {
   $iteration += 1
   foreach ($command in $commands) {
+    $sourceIntegrityFailure = Get-CampaignSourceIntegrityFailure $sourceSha
+    if ($null -ne $sourceIntegrityFailure) {
+      Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'before-command' -Failure $sourceIntegrityFailure -CommandName $command.name
+    }
     $logPath = Join-Path $campaignDirectory ("local-{0:d3}-{1}.log" -f $iteration, $command.name)
     $started = [DateTime]::UtcNow
     $processEnvironment = [Environment]::GetEnvironmentVariables([EnvironmentVariableTarget]::Process)
@@ -127,4 +181,8 @@ while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteratio
   Start-Sleep -Seconds ([Math]::Min($IntervalMinutes * 60, [Math]::Floor($remainingMs / 1000)))
 }
 
+$completionIntegrityFailure = Get-CampaignSourceIntegrityFailure $sourceSha
+if ($null -ne $completionIntegrityFailure) {
+  Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'before-completed' -Failure $completionIntegrityFailure -CommandName $null
+}
 Write-CampaignEvent @{ status = 'completed'; iterations = $iteration }

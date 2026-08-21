@@ -112,6 +112,10 @@ export function assertLocalCampaignSourceProvenance() {
   assert.match(source, /requires a clean tracked worktree/);
   assert.match(source, /sourceSha = \$sourceSha/);
   assert.match(source, /\$Event\.ContainsKey\('sourceSha'\)/);
+  assert.match(source, /function Get-CampaignSourceIntegrityFailure\(/);
+  assert.match(source, /sourceIntegrityFailure = \$Failure/);
+  assert.match(source, /-Phase 'before-command'/);
+  assert.match(source, /-Phase 'before-completed'/);
 
   if (process.platform !== "win32") return;
 
@@ -151,22 +155,98 @@ export function assertLocalCampaignSourceProvenance() {
       copyFileSync(process.execPath, fixtureRuntime);
     }
 
+    const readEvents = (campaignId) => readFileSync(
+      join(root, "artifacts", "test-campaign-2026-08-20", campaignId, "local-test-campaign.jsonl"),
+      "utf8",
+    ).trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    const assertBoundSourceSha = (events, expectedSourceSha) => {
+      for (const event of events) {
+        assert.equal(event.sourceSha, expectedSourceSha, "every campaign event must bind the startup commit SHA");
+      }
+    };
+
     const clean = runCampaignFixturePowerShell(scriptPath, "fixture-clean");
     assert.equal(clean.error, undefined, clean.error?.message);
     assert.equal(clean.status, 0, `${clean.stdout ?? ""}${clean.stderr ?? ""}`);
-    const eventPath = join(root, "artifacts", "test-campaign-2026-08-20", "fixture-clean", "local-test-campaign.jsonl");
-    const events = readFileSync(eventPath, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
-    assert.deepEqual(events.map((event) => event.status), ["started", ...Array(7).fill("passed"), "completed"]);
-    for (const event of events) {
-      assert.equal(event.sourceSha, sourceSha, "every campaign event must bind the startup commit SHA");
-    }
+    const cleanEvents = readEvents("fixture-clean");
+    assert.deepEqual(cleanEvents.map((event) => event.status), ["started", ...Array(7).fill("passed"), "completed"]);
+    assertBoundSourceSha(cleanEvents, sourceSha);
+
+    const firstCommandPath = join(scriptDirectory, "business-logic-isolated-runner.mjs");
+    const p1CommandPath = join(scriptDirectory, "run-p1-hardening-tests.mjs");
+    const finalCommandPath = join(scriptDirectory, "test-hermetic-build.mjs");
+    writeFileSync(firstCommandPath, [
+      'import { appendFileSync } from "node:fs";',
+      'appendFileSync("scripts/run-p1-hardening-tests.mjs", "// tracked tree fixture drift\\n", "utf8");',
+    ].join("\n"), "utf8");
+    runCampaignFixtureGit(root, ["add", "--", "scripts/business-logic-isolated-runner.mjs"]);
+    runCampaignFixtureGit(root, [
+      "-c", "user.name=LORE Campaign Fixture",
+      "-c", "user.email=lore-campaign-fixture@example.invalid",
+      "commit", "--quiet", "-m", "fixture tracked tree drift child",
+    ]);
+    const trackedTreeSourceSha = runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    const trackedTreeDirty = runCampaignFixturePowerShell(scriptPath, "fixture-tracked-tree-dirty");
+    assert.equal(trackedTreeDirty.error, undefined, trackedTreeDirty.error?.message);
+    assert.notEqual(trackedTreeDirty.status, 0, "a child-created tracked change must stop the next command");
+    const trackedTreeEvents = readEvents("fixture-tracked-tree-dirty");
+    assert.deepEqual(
+      trackedTreeEvents.map((event) => event.status),
+      ["started", "passed", "failed", "stopped-on-failure"],
+    );
+    assertBoundSourceSha(trackedTreeEvents, trackedTreeSourceSha);
+    assert.equal(trackedTreeEvents.at(-2).sourceIntegrityFailure, "tracked-tree-dirty");
+    assert.equal(trackedTreeEvents.at(-2).phase, "before-command");
+    assert.equal(trackedTreeEvents.at(-2).command, "p1-hardening-evm");
+    assert.equal(trackedTreeEvents.some((event) => event.status === "completed"), false);
+    assert.equal(
+      existsSync(join(root, "artifacts", "test-campaign-2026-08-20", "fixture-tracked-tree-dirty", "local-001-p1-hardening-evm.log")),
+      false,
+      "tracked-tree drift must be detected before starting the next child",
+    );
+
+    writeFileSync(firstCommandPath, "process.exit(0);\n", "utf8");
+    writeFileSync(p1CommandPath, "process.exit(0);\n", "utf8");
+    writeFileSync(finalCommandPath, [
+      'import { spawnSync } from "node:child_process";',
+      'const result = spawnSync("git", ["-c", "user.name=LORE Campaign Fixture", "-c", "user.email=lore-campaign-fixture@example.invalid", "commit", "--allow-empty", "--quiet", "-m", "fixture source drift"], { cwd: process.cwd(), stdio: "ignore" });',
+      'process.exit(result.status ?? 1);',
+    ].join("\n"), "utf8");
+    runCampaignFixtureGit(root, [
+      "add", "--",
+      "scripts/business-logic-isolated-runner.mjs",
+      "scripts/run-p1-hardening-tests.mjs",
+      "scripts/test-hermetic-build.mjs",
+    ]);
+    runCampaignFixtureGit(root, [
+      "-c", "user.name=LORE Campaign Fixture",
+      "-c", "user.email=lore-campaign-fixture@example.invalid",
+      "commit", "--quiet", "-m", "fixture completion source drift child",
+    ]);
+    const completionSourceSha = runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    const sourceDrift = runCampaignFixturePowerShell(scriptPath, "fixture-source-drift");
+    assert.equal(sourceDrift.error, undefined, sourceDrift.error?.message);
+    assert.notEqual(sourceDrift.status, 0, "a changed HEAD after the final child must block completed evidence");
+    const sourceDriftEvents = readEvents("fixture-source-drift");
+    assert.deepEqual(
+      sourceDriftEvents.map((event) => event.status),
+      ["started", ...Array(7).fill("passed"), "failed", "stopped-on-failure"],
+    );
+    assertBoundSourceSha(sourceDriftEvents, completionSourceSha);
+    assert.equal(sourceDriftEvents.at(-2).sourceIntegrityFailure, "source-drift");
+    assert.equal(sourceDriftEvents.at(-2).phase, "before-completed");
+    assert.equal(sourceDriftEvents.at(-2).command, undefined);
+    assert.equal(sourceDriftEvents.some((event) => event.status === "completed"), false);
+    const sourceHeadAfterDrift = runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    assert.notEqual(sourceHeadAfterDrift, completionSourceSha);
+    assert.doesNotMatch(JSON.stringify(sourceDriftEvents.at(-2)), new RegExp(sourceHeadAfterDrift, "i"));
 
     appendFileSync(scriptPath, "# tracked dirty fixture\n", "utf8");
-    const dirty = runCampaignFixturePowerShell(scriptPath, "fixture-dirty");
-    assert.notEqual(dirty.status, 0, "a tracked-dirty worktree must be rejected before campaign startup");
-    assert.match(`${dirty.stdout ?? ""}\n${dirty.stderr ?? ""}`, /requires a clean tracked worktree/i);
+    const preflightDirty = runCampaignFixturePowerShell(scriptPath, "fixture-preflight-dirty");
+    assert.notEqual(preflightDirty.status, 0, "a tracked-dirty worktree must be rejected before campaign startup");
+    assert.match(`${preflightDirty.stdout ?? ""}\n${preflightDirty.stderr ?? ""}`, /requires a clean tracked worktree/i);
     assert.equal(
-      existsSync(join(root, "artifacts", "test-campaign-2026-08-20", "fixture-dirty")),
+      existsSync(join(root, "artifacts", "test-campaign-2026-08-20", "fixture-preflight-dirty")),
       false,
       "dirty rejection must happen before creating campaign evidence",
     );
