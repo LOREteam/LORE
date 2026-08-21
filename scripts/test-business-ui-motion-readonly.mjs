@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import * as reducedMotionModule from "../app/lib/reducedMotionRuntime.ts";
+import * as whitePaperModule from "../app/components/WhitePaper.tsx";
 
 const reducedMotionRuntime = reducedMotionModule.default ?? reducedMotionModule;
+const whitePaper = whitePaperModule.default ?? whitePaperModule;
+const WhitePaper = whitePaper.WhitePaper;
 
 export function runUiMotionAndReadOnlyTests() {
   const proxySource = readFileSync("proxy.ts", "utf8");
@@ -97,10 +102,11 @@ export function runUiMotionAndReadOnlyTests() {
   assert.equal(reducedMotionRuntime.motionClass(false, "animate-ping"), "animate-ping");
 
   const whitePaperMotionSource = readFileSync("app/components/WhitePaper.tsx", "utf8");
-  assert.match(
-    whitePaperMotionSource,
-    /useReducedMotion[\s\S]*const \{ reducedMotion, motionReady \} = useReducedMotion\(\)[\s\S]*\{motionReady && !reducedMotion && <FloatingParticles \/>}/,
-    "White Paper decorative particles must not render until motion preference is known and reduced motion is off",
+  const whitePaperSsrMarkup = renderToStaticMarkup(React.createElement(WhitePaper));
+  assert.doesNotMatch(
+    whitePaperSsrMarkup,
+    /animation:float /,
+    "White Paper decorative particles must not render before the client knows the motion preference",
   );
   assert.match(
     whitePaperMotionSource,
