@@ -18,14 +18,42 @@ $runtime = Join-Path $repoRoot '.tmp-npm-runtime-115\node.exe'
 $campaignDirectory = Join-Path (Join-Path $repoRoot 'artifacts\test-campaign-2026-08-20') $CampaignId
 $summaryPath = Join-Path $campaignDirectory 'local-test-campaign.jsonl'
 
+function Get-CampaignSourceSha {
+  $headLines = @(& git -C $repoRoot rev-parse --verify 'HEAD^{commit}' 2>$null)
+  $headExitCode = $LASTEXITCODE
+  if ($headExitCode -ne 0 -or $headLines.Count -ne 1) {
+    throw 'Local test campaign requires a canonical Git HEAD.'
+  }
+  $head = [string]$headLines[0]
+  if ($head -notmatch '^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$') {
+    throw 'Local test campaign requires a canonical Git commit SHA.'
+  }
+
+  $trackedChanges = @(& git -C $repoRoot status --porcelain=v1 --untracked-files=no 2>$null)
+  $statusExitCode = $LASTEXITCODE
+  if ($statusExitCode -ne 0) {
+    throw 'Local test campaign could not verify tracked worktree state.'
+  }
+  if ($trackedChanges.Count -ne 0) {
+    throw 'Local test campaign requires a clean tracked worktree.'
+  }
+  return $head.ToLowerInvariant()
+}
+
+$sourceSha = Get-CampaignSourceSha
+
 if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {
   throw "Private Node runtime is unavailable: $runtime"
 }
 New-Item -ItemType Directory -Force -Path $campaignDirectory | Out-Null
 
 function Write-CampaignEvent([hashtable]$Event) {
+  if ($Event.ContainsKey('sourceSha')) {
+    throw 'Campaign event source SHA is assigned by the runner.'
+  }
   $record = [ordered]@{
     timestamp = [DateTime]::UtcNow.ToString('o')
+    sourceSha = $sourceSha
   }
   foreach ($key in $Event.Keys) {
     $record[$key] = $Event[$key]

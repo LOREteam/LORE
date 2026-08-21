@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import * as safetyPoolClaimThresholdModule from "../app/lib/safetyPoolClaimThreshold.ts";
 import * as analyticsDepositsStatusModule from "../app/lib/analyticsDepositsStatus.ts";
@@ -35,6 +45,135 @@ const chatAuth = chatAuthModule.default ?? chatAuthModule;
 const chatSession = chatSessionModule.default ?? chatSessionModule;
 const indexerNormalization = indexerNormalizationModule.default ?? indexerNormalizationModule;
 const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+function campaignFixtureGitEnvironment() {
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (key.toUpperCase().startsWith("GIT_")) delete environment[key];
+  }
+  environment.GIT_CONFIG_NOSYSTEM = "1";
+  environment.GIT_CONFIG_GLOBAL = "NUL";
+  environment.GIT_OPTIONAL_LOCKS = "0";
+  environment.GIT_TERMINAL_PROMPT = "0";
+  return environment;
+}
+
+function runCampaignFixtureGit(root, args) {
+  const result = spawnSync("git", ["-C", root, ...args], {
+    cwd: root,
+    env: campaignFixtureGitEnvironment(),
+    encoding: "utf8",
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 0, `${result.stdout ?? ""}${result.stderr ?? ""}`);
+  return String(result.stdout ?? "").trim().toLowerCase();
+}
+
+function runCampaignFixturePowerShell(scriptPath, campaignId) {
+  const powerShellPath = join(
+    process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  assert.ok(existsSync(powerShellPath), "Windows PowerShell must be available for the campaign fixture");
+  return spawnSync(powerShellPath, [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath,
+    "-Hours",
+    "1",
+    "-IntervalMinutes",
+    "15",
+    "-MaxIterations",
+    "1",
+    "-CampaignId",
+    campaignId,
+  ], {
+    cwd: resolve(scriptPath, "..", ".."),
+    env: campaignFixtureGitEnvironment(),
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 1024 * 1024,
+    windowsHide: true,
+  });
+}
+
+export function assertLocalCampaignSourceProvenance() {
+  const source = readFileSync("scripts/run-local-test-campaign.ps1", "utf8");
+  assert.match(source, /git -C \$repoRoot rev-parse --verify 'HEAD\^\{commit\}'/);
+  assert.match(source, /git -C \$repoRoot status --porcelain=v1 --untracked-files=no/);
+  assert.match(source, /requires a clean tracked worktree/);
+  assert.match(source, /sourceSha = \$sourceSha/);
+  assert.match(source, /\$Event\.ContainsKey\('sourceSha'\)/);
+
+  if (process.platform !== "win32") return;
+
+  const root = mkdtempSync(join(tmpdir(), "lore-campaign-provenance-"));
+  try {
+    const scriptDirectory = join(root, "scripts");
+    const scriptPath = join(scriptDirectory, "run-local-test-campaign.ps1");
+    mkdirSync(scriptDirectory, { recursive: true });
+    copyFileSync("scripts/run-local-test-campaign.ps1", scriptPath);
+    for (const script of [
+      "business-logic-isolated-runner.mjs",
+      "run-p1-hardening-tests.mjs",
+      "test-contract-v9-invariants.mjs",
+      "test-contract-v10-invariants.mjs",
+      "test-hermetic-build.mjs",
+    ]) {
+      writeFileSync(join(scriptDirectory, script), "process.exit(0);\n", "utf8");
+    }
+    const tsxDirectory = join(root, "node_modules", "tsx", "dist");
+    mkdirSync(tsxDirectory, { recursive: true });
+    writeFileSync(join(tsxDirectory, "cli.mjs"), "process.exit(0);\n", "utf8");
+    runCampaignFixtureGit(root, ["init", "--quiet"]);
+    runCampaignFixtureGit(root, ["add", "--", "."]);
+    runCampaignFixtureGit(root, [
+      "-c", "user.name=LORE Campaign Fixture",
+      "-c", "user.email=lore-campaign-fixture@example.invalid",
+      "commit", "--quiet", "-m", "fixture",
+    ]);
+    const sourceSha = runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
+
+    const runtimeDirectory = join(root, ".tmp-npm-runtime-115");
+    mkdirSync(runtimeDirectory, { recursive: true });
+    const fixtureRuntime = join(runtimeDirectory, "node.exe");
+    try {
+      linkSync(process.execPath, fixtureRuntime);
+    } catch {
+      copyFileSync(process.execPath, fixtureRuntime);
+    }
+
+    const clean = runCampaignFixturePowerShell(scriptPath, "fixture-clean");
+    assert.equal(clean.error, undefined, clean.error?.message);
+    assert.equal(clean.status, 0, `${clean.stdout ?? ""}${clean.stderr ?? ""}`);
+    const eventPath = join(root, "artifacts", "test-campaign-2026-08-20", "fixture-clean", "local-test-campaign.jsonl");
+    const events = readFileSync(eventPath, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.deepEqual(events.map((event) => event.status), ["started", ...Array(7).fill("passed"), "completed"]);
+    for (const event of events) {
+      assert.equal(event.sourceSha, sourceSha, "every campaign event must bind the startup commit SHA");
+    }
+
+    appendFileSync(scriptPath, "# tracked dirty fixture\n", "utf8");
+    const dirty = runCampaignFixturePowerShell(scriptPath, "fixture-dirty");
+    assert.notEqual(dirty.status, 0, "a tracked-dirty worktree must be rejected before campaign startup");
+    assert.match(`${dirty.stdout ?? ""}\n${dirty.stderr ?? ""}`, /requires a clean tracked worktree/i);
+    assert.equal(
+      existsSync(join(root, "artifacts", "test-campaign-2026-08-20", "fixture-dirty")),
+      false,
+      "dirty rejection must happen before creating campaign evidence",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+  }
+}
 
 function workflowJobBlock(source, jobName) {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
@@ -63,6 +202,7 @@ function withTemporaryEnv(values, fn) {
 }
 
 export function runReleaseOperationsTests() {
+  assertLocalCampaignSourceProvenance();
   const launchPolicy = createLaunchGatePolicyMaps();
   const verifierLaunchPolicy = createLaunchGatePolicyMaps({ verifier: true });
   assert.deepEqual(launchPolicy.expected, Array.from({ length: 14 }, (_, index) => `G${index + 1}`));
