@@ -461,7 +461,7 @@ export async function runWalletModelTests() {
   assert.equal(walletTransfers.normalizeWalletTransferAddress("0xabc"), null);
   assert.equal(walletTransfers.normalizeWalletTransferAddress(null), null);
   const persistedTransferCache = {
-    version: 2,
+    version: 3,
     savedAt: 1_700_000_000_000,
     transfers: [{
       direction: "in",
@@ -507,6 +507,11 @@ export async function runWalletModelTests() {
     "persisted transfer history must restore bigint block numbers with explicit full-range coverage",
   );
   assert.equal(
+    walletTransfers.parsePersistedWalletTransfersSummary({ ...persistedTransferCache, version: 2 }),
+    null,
+    "v2 transfer cache must be ignored because its cache scope omits the configured token and deploy block",
+  );
+  assert.equal(
     walletTransfers.parsePersistedWalletTransfersSummary({ ...persistedTransferCache, version: 1 }),
     null,
     "legacy v1 transfer cache must be rejected because it has no trustworthy coverage provenance",
@@ -514,7 +519,7 @@ export async function runWalletModelTests() {
   assert.equal(
     walletTransfers.parsePersistedWalletTransfersSummary({ ...persistedTransferCache, scanCoverage: undefined }),
     null,
-    "v2 transfer cache without explicit coverage must not be upgraded to a full history",
+    "v3 transfer cache without explicit coverage must not be upgraded to a full history",
   );
   assert.equal(
     walletTransfers.parsePersistedWalletTransfersSummary({ ...walletTransfers.serializeWalletTransfersSummary(persistedTransferSummary), transfers: [{ direction: "in" }] }),
@@ -532,7 +537,7 @@ export async function runWalletModelTests() {
       txHash: `0x${index.toString(16).padStart(64, "0")}`,
     })),
   });
-  assert.equal(cappedPersistedTransfer.version, 2);
+  assert.equal(cappedPersistedTransfer.version, 3);
   assert.equal(cappedPersistedTransfer.transfers.length, 500);
   assert.equal(cappedPersistedTransfer.historyRowsTruncated, true);
   const cappedRestoredTransfer = walletTransfers.parsePersistedWalletTransfersSummary(cappedPersistedTransfer);
@@ -549,11 +554,45 @@ export async function runWalletModelTests() {
   assert.equal(partialPersistedTransfer?.dataStatus, "stale");
   assert.equal(partialPersistedTransfer?.scanCoverage, "partial");
   assert.match(partialPersistedTransfer?.statusMessage ?? "", /last checked partial transfer history/i);
+  assert.match(partialPersistedTransfer?.statusMessage ?? "", /totals are observed lower bounds; more transfers may exist/i);
+  const tokenScopedCacheKey = walletTransfers.getWalletTransferPersistedCacheKey(
+    "0x1111111111111111111111111111111111111111:any",
+    "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    123456n,
+  );
+  assert.equal(
+    tokenScopedCacheKey,
+    walletTransfers.getWalletTransferPersistedCacheKey(
+      "0x1111111111111111111111111111111111111111:any",
+      "0xd8da6bf26964af9d7eed9e03e53415d37aa96045",
+      123456n,
+    ),
+    "wallet transfer cache keys must normalize the token address",
+  );
+  assert.match(
+    tokenScopedCacheKey,
+    /wallet-transfer-history:v3:[^:]+:[^:]+:0xd8da6bf26964af9d7eed9e03e53415d37aa96045:123456:0x1111111111111111111111111111111111111111:any$/,
+    "wallet transfer cache keys must bind the normalized token address and configured deploy block",
+  );
+  assert.notEqual(
+    tokenScopedCacheKey,
+    walletTransfers.getWalletTransferPersistedCacheKey(
+      "0x1111111111111111111111111111111111111111:any",
+      "0xd8da6bf26964af9d7eed9e03e53415d37aa96045",
+      123457n,
+    ),
+    "wallet transfer cache keys must not reuse a history scanned from a different deploy block",
+  );
   const walletTransfersSource = readFileSync("app/hooks/useWalletTransfers.ts", "utf8");
   assert.match(
     walletTransfersSource,
-    /wallet-transfer-history:v2[\s\S]*version: 2[\s\S]*scanCoverage: WalletTransferScanCoverage[\s\S]*historyRowsTruncated: boolean[\s\S]*candidate\.version !== 2[\s\S]*candidate\.scanCoverage !== "full"[\s\S]*candidate\.historyRowsTruncated !== "boolean"/,
-    "transfer cache v2 must require explicit coverage and row-truncation provenance",
+    /wallet-transfer-history:v3[\s\S]*version: 3[\s\S]*scanCoverage: WalletTransferScanCoverage[\s\S]*historyRowsTruncated: boolean[\s\S]*candidate\.version !== 3[\s\S]*candidate\.scanCoverage !== "full"[\s\S]*candidate\.historyRowsTruncated !== "boolean"/,
+    "transfer cache v3 must require explicit coverage and row-truncation provenance",
+  );
+  assert.match(
+    walletTransfersSource,
+    /export function getWalletTransferPersistedCacheKey\([\s\S]*normalizeWalletTransferAddress\(tokenAddress\)[\s\S]*deployBlock\.toString\(\)[\s\S]*readPersistedWalletTransfers[\s\S]*getWalletTransferPersistedCacheKey\(cacheKey\)[\s\S]*persistWalletTransfers[\s\S]*getWalletTransferPersistedCacheKey\(cacheKey\)/,
+    "persisted transfer cache reads and writes must use a token- and deploy-block-scoped key",
   );
   assert.match(
     walletTransfersSource,

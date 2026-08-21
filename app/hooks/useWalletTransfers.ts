@@ -17,7 +17,7 @@ const CHUNK_BLOCKS = 100_000;
 const FALLBACK_CHUNK_BLOCKS = 20_000;
 const FALLBACK_MAX_BLOCKS = 250_000n;
 const CACHE_MS = 120_000;
-const PERSISTED_CACHE_PREFIX = "lore:wallet-transfer-history:v2";
+const PERSISTED_CACHE_PREFIX = "lore:wallet-transfer-history:v3";
 const MAX_PERSISTED_TRANSFERS = 500;
 
 export type WalletTransferDataStatus = "live" | "stale" | "partial" | "error";
@@ -111,7 +111,7 @@ function createEmptyWalletTransfersSummary(
 }
 
 interface PersistedWalletTransfersSummary {
-  version: 2;
+  version: 3;
   savedAt: number;
   transfers: Array<Omit<WalletTransfer, "blockNumber"> & { blockNumber?: string }>;
   totalIn: number;
@@ -122,14 +122,22 @@ interface PersistedWalletTransfersSummary {
   historyRowsTruncated: boolean;
 }
 
-function getPersistedCacheKey(cacheKey: string) {
-  return `${PERSISTED_CACHE_PREFIX}:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${cacheKey}`;
+export function getWalletTransferPersistedCacheKey(
+  cacheKey: string,
+  tokenAddress: string = LINEA_TOKEN_ADDRESS,
+  deployBlock: bigint = CONTRACT_DEPLOY_BLOCK,
+) {
+  const normalizedTokenAddress = normalizeWalletTransferAddress(tokenAddress);
+  if (!normalizedTokenAddress) {
+    throw new Error("Wallet transfer cache requires a valid LINEA token address.");
+  }
+  return `${PERSISTED_CACHE_PREFIX}:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${normalizedTokenAddress}:${deployBlock.toString()}:${cacheKey}`;
 }
 
 export function serializeWalletTransfersSummary(summary: WalletTransfersSummary): PersistedWalletTransfersSummary {
   const historyRowsTruncated = summary.historyRowsTruncated || summary.transfers.length > MAX_PERSISTED_TRANSFERS;
   return {
-    version: 2,
+    version: 3,
     savedAt: summary.updatedAt ?? Date.now(),
     transfers: summary.transfers.slice(0, MAX_PERSISTED_TRANSFERS).map((transfer) => ({
       ...transfer,
@@ -148,7 +156,7 @@ export function parsePersistedWalletTransfersSummary(value: unknown): WalletTran
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<PersistedWalletTransfersSummary>;
   if (
-    candidate.version !== 2 ||
+    candidate.version !== 3 ||
     typeof candidate.savedAt !== "number" ||
     !Number.isFinite(candidate.savedAt) ||
     !Array.isArray(candidate.transfers) ||
@@ -204,7 +212,7 @@ export function parsePersistedWalletTransfersSummary(value: unknown): WalletTran
     historyRowsTruncated: candidate.historyRowsTruncated,
     updatedAt: candidate.savedAt,
     statusMessage: candidate.scanCoverage === "partial"
-      ? "Showing the last checked partial transfer history. Refresh to check for newer activity."
+      ? "Showing the last checked partial transfer history. Totals are observed lower bounds; more transfers may exist. Refresh to check for newer activity."
       : candidate.historyRowsTruncated
         ? `Showing the last checked transfer history. Saved transfer list is capped at ${MAX_PERSISTED_TRANSFERS} rows; totals are from the full last check. Refresh to check for newer activity.`
         : "Showing the last checked full transfer history. Refresh to check for newer activity.",
@@ -214,7 +222,7 @@ export function parsePersistedWalletTransfersSummary(value: unknown): WalletTran
 function readPersistedWalletTransfers(cacheKey: string): WalletTransfersSummary | null {
   if (typeof window === "undefined") return null;
   try {
-    return parsePersistedWalletTransfersSummary(JSON.parse(window.localStorage.getItem(getPersistedCacheKey(cacheKey)) ?? "null"));
+    return parsePersistedWalletTransfersSummary(JSON.parse(window.localStorage.getItem(getWalletTransferPersistedCacheKey(cacheKey)) ?? "null"));
   } catch {
     return null;
   }
@@ -223,7 +231,7 @@ function readPersistedWalletTransfers(cacheKey: string): WalletTransfersSummary 
 function persistWalletTransfers(cacheKey: string, summary: WalletTransfersSummary) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(getPersistedCacheKey(cacheKey), JSON.stringify(serializeWalletTransfersSummary(summary)));
+    window.localStorage.setItem(getWalletTransferPersistedCacheKey(cacheKey), JSON.stringify(serializeWalletTransfersSummary(summary)));
   } catch {
     // Storage is an optional offline convenience; a quota/privacy failure must not hide live data.
   }

@@ -389,6 +389,25 @@ export function runWalletPresentationTests() {
   assert.match(emptyPartialTransferPanelHtml, /Last checked/);
   assert.match(emptyPartialTransferPanelHtml, /No transfers were observed in this partial scan; more may exist\./);
   assert.doesNotMatch(emptyPartialTransferPanelHtml, /Saved transfer list is capped|No verified LINEA transfers were found/);
+  const stalePartialTransferPanelHtml = renderToStaticMarkup(React.createElement(
+    walletTransferPanels.WalletSettingsTransferPanels,
+    {
+      ...transferPanelProps,
+      formattedLineaBalance: "0.00",
+      formattedEthBalance: "0.0000",
+      walletTransfers: {
+        ...unavailableTransferSummary,
+        dataStatus: "stale",
+        scanCoverage: "partial",
+        historyRowsTruncated: false,
+        updatedAt: 1_700_000_000_000,
+        statusMessage: "Showing the last checked partial transfer history. Totals are observed lower bounds; more transfers may exist. Refresh to check for newer activity.",
+      },
+    },
+  ));
+  assert.match(stalePartialTransferPanelHtml, /Showing the last checked partial transfer history\. Totals are observed lower bounds; more transfers may exist\./);
+  assert.match(stalePartialTransferPanelHtml, /Observed deposits/);
+  assert.doesNotMatch(stalePartialTransferPanelHtml, /Full history range checked\./);
   const observedPartialTransfers = [
     {
       direction: "in",
