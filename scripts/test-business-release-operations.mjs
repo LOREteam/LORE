@@ -432,7 +432,7 @@ export function assertLocalCampaignSourceProvenance() {
       return diagnostic;
     };
     assertDiagnosticEvidence("fixture-missing-evidence", null, "missing JSONL evidence", "<missing>");
-    assertDiagnosticEvidence("fixture-empty-evidence", "\r\n", "empty JSONL evidence", "");
+    assertDiagnosticEvidence("fixture-empty-evidence", "\r\n", "empty JSONL evidence", "\r\n");
     assertDiagnosticEvidence("fixture-truncated-evidence", `{"secret":"${diagnosticSecret}",`, "malformed JSONL evidence", "{\"secret\":\"<secret>\",");
     assertDiagnosticEvidence("fixture-malformed-evidence", "not-json", "malformed JSONL evidence", "not-json");
     assert.equal(retainCampaignFixture, false, "diagnostic regression fixtures must not retain the temporary root outside the explicit opt-in unexpected-run path");
