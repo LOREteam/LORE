@@ -606,6 +606,7 @@ interface RewardClaimRecord {
   rewardNum: number;
   txHash: string;
   blockNumber: string;
+  recordUserActivity?: boolean;
 }
 
 interface FeeFlushRecord {
@@ -834,7 +835,9 @@ function processLogs(logs: Log[], finalizedAtBlock: bigint) {
           finalizedAtBlock: finalizedAtBlock.toString(),
         });
       } else if (topic0 === rewardClaimedSig) {
-        if (log.transactionHash && rewardBatchClaimTxs.has(log.transactionHash.toLowerCase())) continue;
+        const isRewardBatchClaim = Boolean(
+          log.transactionHash && rewardBatchClaimTxs.has(log.transactionHash.toLowerCase()),
+        );
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RewardClaimed") continue;
         const id = buildNormalizedEventIdForLog(log);
@@ -848,6 +851,7 @@ function processLogs(logs: Log[], finalizedAtBlock: bigint) {
           rewardNum: toDisplayNumberWei(args.reward),
           txHash: log.transactionHash ?? "",
           blockNumber: (log.blockNumber ?? 0n).toString(),
+          recordUserActivity: !isRewardBatchClaim,
         });
       } else if (topic0 === rewardBatchClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });

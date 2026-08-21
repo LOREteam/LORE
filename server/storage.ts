@@ -102,6 +102,8 @@ export interface RewardClaimStorageRow {
   rewardNum: number;
   txHash: string;
   blockNumber: string;
+  /** Batch event owns the user-activity row; retain this raw claim for read models. */
+  recordUserActivity?: boolean;
 }
 
 export type UserActivityType =
@@ -2619,7 +2621,7 @@ export function upsertJackpots(rows: JackpotStorageRow[]) {
 }
 export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
   if (rows.length === 0) return;
-  const activityRows = rows.map((row) => ({
+  const activityRows = rows.filter((row) => row.recordUserActivity !== false).map((row) => ({
     eventId: row.id,
     user: row.user,
     activityType: "reward_claim" as const,

@@ -58,6 +58,15 @@ async function main() {
     storage.upsertUserActivity([{
       eventId: `${TX_C}:8`, user: OTHER_USER, activityType: "reward_batch_claim", amount: "7", amountNum: 7, txHash: TX_C, blockNumber: "104",
     }]);
+    storage.upsertRewardClaims([{
+      id: `${TX_C}:9`, epoch: "44", user: OTHER_USER, reward: "2", rewardNum: 2, txHash: TX_C, blockNumber: "104",
+      recordUserActivity: false,
+    }]);
+    assert.equal(
+      storage.getAllRewardClaims().some((row) => row.id === `${TX_C}:9`),
+      true,
+      "batch per-epoch claims must remain available to existing raw read models",
+    );
     const batchRows = storage.getUserActivityPage(OTHER_USER, { limit: 64 }).rows;
     assert.deepEqual(
       batchRows.map((row) => ({ eventId: row.eventId, activityType: row.activityType })),
