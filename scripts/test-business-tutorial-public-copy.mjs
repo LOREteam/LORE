@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 export function runTutorialAndPublicCopyTests() {
-  const homePageSource = readFileSync("app/page.tsx", "utf8");
+  const homePageSource = readFileSync("app/LorePage.tsx", "utf8");
+  const rootPageSource = readFileSync("app/page.tsx", "utf8");
   const firstVisitTutorialSource = readFileSync("app/components/FirstVisitTutorial.tsx", "utf8");
   const faqSource = readFileSync("app/components/FAQ.tsx", "utf8");
   const backupGateSource = readFileSync("app/components/BackupGate.tsx", "utf8");
@@ -67,6 +68,7 @@ export function runTutorialAndPublicCopyTests() {
     /Promise\.all\(\[\s*getInitialLiveState\(\),\s*getInitialRecentWins\(\),?\s*\]\)/,
     "homepage SSR must load independent live-state and recent-wins bootstrap data concurrently",
   );
+  assert.match(rootPageSource, /import \{ LorePage \} from "\.\/LorePage";[\s\S]*return <LorePage \/>;/, "root route must render the shared homepage SSR entrypoint");
   assert.match(
     homePageSource,
     /MAX_TIMER_DELAY_MS = 2_147_483_647[\s\S]*function withTimeout<T>\(promise: Promise<T>, timeoutMs: number\)[\s\S]*Number\.isSafeInteger\(timeoutMs\)[\s\S]*timeoutMs <= 0[\s\S]*timeoutMs > MAX_TIMER_DELAY_MS[\s\S]*return Promise\.resolve\(null\)/,
