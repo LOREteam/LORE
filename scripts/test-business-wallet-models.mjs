@@ -554,16 +554,32 @@ export async function runWalletModelTests() {
   );
   assert.deepEqual(
     pageWalletOverview.normalizeCachedPrivyBalances({ token: "12.3", eth: "0.0925" }),
-    { token: "12.30", eth: "0.0925" },
+    { token: "12.30", tokenUpdatedAt: null, eth: "0.0925", ethUpdatedAt: null },
+    "legacy cache remains readable but lacks a trusted last-update timestamp",
   );
   assert.deepEqual(
-    pageWalletOverview.normalizeCachedPrivyBalances({ token: "9007199254740993.555", eth: "0.00005" }),
-    { token: "9007199254740993.56", eth: "0.0001" },
-    "wallet overview cached balances must round decimal text without Number precision loss",
+    pageWalletOverview.normalizeCachedPrivyBalances({
+      token: "9007199254740993.555",
+      tokenUpdatedAt: 1_700_000_000_000,
+      eth: "0.00005",
+      ethUpdatedAt: 1_700_000_001_000,
+    }),
+    {
+      token: "9007199254740993.56",
+      tokenUpdatedAt: 1_700_000_000_000,
+      eth: "0.0001",
+      ethUpdatedAt: 1_700_000_001_000,
+    },
+    "current cache entries must preserve valid per-asset timestamps without Number precision loss",
+  );
+  assert.deepEqual(
+    pageWalletOverview.normalizeCachedPrivyBalances({ token: "12.3", tokenUpdatedAt: "1700000000000", eth: "0.0925", ethUpdatedAt: 0 }),
+    { token: "12.30", tokenUpdatedAt: null, eth: "0.0925", ethUpdatedAt: null },
+    "cache timestamps must be positive safe integers rather than coerced values",
   );
   assert.deepEqual(
     pageWalletOverview.normalizeCachedPrivyBalances({ token: "bad", eth: "-1" }),
-    { token: null, eth: null },
+    { token: null, tokenUpdatedAt: null, eth: null, ethUpdatedAt: null },
     "unknown cached balances must not be presented as a verified zero",
   );
   assert.equal(pageWalletOverview.normalizePageWalletAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"), "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
