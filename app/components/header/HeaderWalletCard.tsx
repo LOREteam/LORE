@@ -52,6 +52,22 @@ function HeaderWalletActions({
     </div>
   );
 }
+type HeaderWalletBalanceState = "loading" | "ready" | "unavailable";
+
+export function getHeaderWalletBalancePresentation(asset: "ETH" | "LINEA", value: string, loading: boolean): {
+  state: HeaderWalletBalanceState;
+  text: string;
+  suffix: string;
+  label: string;
+} {
+  if (loading) {
+    return { state: "loading", text: "", suffix: asset, label: `${asset} balance loading` };
+  }
+  if (!value.trim() || value === "—") {
+    return { state: "unavailable", text: "Unavailable", suffix: asset, label: `${asset} balance unavailable` };
+  }
+  return { state: "ready", text: value, suffix: asset, label: `${asset} balance ${value}` };
+}
 
 export function HeaderWalletCard({
   authenticated,
@@ -69,6 +85,8 @@ export function HeaderWalletCard({
   privyTokenBalanceLoading,
 }: HeaderWalletCardProps) {
   const explorerAddressUrl = getExplorerAddressUrl(embeddedWalletAddress);
+  const ethBalancePresentation = getHeaderWalletBalancePresentation("ETH", privyEthBalance, privyEthBalanceLoading);
+  const tokenBalancePresentation = getHeaderWalletBalancePresentation("LINEA", privyTokenBalance, privyTokenBalanceLoading);
   const showLoginReload = Boolean(
     loginState.error && (loginState.error.includes("still loading") || loginState.error.includes("timed out")),
   );
@@ -185,11 +203,21 @@ export function HeaderWalletCard({
               )}
             </div>
             <div className="flex flex-col items-start gap-0.5 text-[11px] leading-tight min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
-              <span className="lore-nums text-gray-400">
-                {privyEthBalanceLoading ? <span className="inline-block h-3 w-12 animate-pulse rounded bg-white/10" /> : privyEthBalance}<span className="text-gray-500 font-medium"> ETH</span>
+              <span
+                aria-label={ethBalancePresentation.label}
+                className={`lore-nums ${ethBalancePresentation.state === "unavailable" ? "font-semibold text-amber-200/80" : "text-gray-400"}`}
+                data-balance-state={ethBalancePresentation.state}
+                title={ethBalancePresentation.label}
+              >
+                {ethBalancePresentation.state === "loading" ? <span className="inline-block h-3 w-12 animate-pulse rounded bg-white/10" /> : ethBalancePresentation.text}<span className="text-gray-500 font-medium"> {ethBalancePresentation.suffix}</span>
               </span>
-              <span className="lore-nums text-[13px] font-black leading-none text-white min-[900px]:text-sm">
-                {privyTokenBalanceLoading ? <span className="inline-block h-3 w-16 animate-pulse rounded bg-white/10" /> : privyTokenBalance}<span className="text-[10px] font-medium text-gray-500"> LINEA</span>
+              <span
+                aria-label={tokenBalancePresentation.label}
+                className={`lore-nums text-[13px] font-black leading-none min-[900px]:text-sm ${tokenBalancePresentation.state === "unavailable" ? "text-amber-200/85" : "text-white"}`}
+                data-balance-state={tokenBalancePresentation.state}
+                title={tokenBalancePresentation.label}
+              >
+                {tokenBalancePresentation.state === "loading" ? <span className="inline-block h-3 w-16 animate-pulse rounded bg-white/10" /> : tokenBalancePresentation.text}<span className="text-[10px] font-medium text-gray-500"> {tokenBalancePresentation.suffix}</span>
               </span>
             </div>
           </div>

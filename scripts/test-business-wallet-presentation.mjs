@@ -6,6 +6,7 @@ import * as walletTransferRowModule from "../app/components/wallet/WalletTransfe
 import * as walletTransferPanelsModule from "../app/components/wallet/WalletSettingsTransferPanels.tsx";
 import * as pendingTxPanelModule from "../app/components/wallet/WalletSettingsPendingTxPanel.tsx";
 import * as headerPoolChartModule from "../app/components/header/HeaderPoolChart.tsx";
+import * as headerWalletCardModule from "../app/components/header/HeaderWalletCard.tsx";
 import * as sectionBuildersModule from "../app/lib/lineaOreClientSectionBuilders.ts";
 import * as pageWalletOverviewModule from "../app/hooks/usePageWalletOverview.ts";
 
@@ -15,6 +16,7 @@ const pageWalletOverview = pageWalletOverviewModule.default ?? pageWalletOvervie
 const normalizeCachedPrivyBalances = pageWalletOverview.normalizeCachedPrivyBalances;
 const pendingTxPanel = pendingTxPanelModule.default ?? pendingTxPanelModule;
 const headerPoolChart = headerPoolChartModule.default ?? headerPoolChartModule;
+const headerWalletCard = headerWalletCardModule.default ?? headerWalletCardModule;
 const sectionBuilders = sectionBuildersModule.default ?? sectionBuildersModule;
 
 function assertTransferPresentation(input, actual) {
@@ -335,6 +337,41 @@ export function runWalletPresentationTests() {
   });
   assert.equal(verifiedZeroHeaderProps.privyTokenBalance, "0.00");
   assert.equal(verifiedZeroHeaderProps.privyEthBalance, "0.0000");
+  assert.deepEqual(
+    headerWalletCard.getHeaderWalletBalancePresentation("LINEA", "—", false),
+    { state: "unavailable", text: "Unavailable", suffix: "LINEA", label: "LINEA balance unavailable" },
+  );
+  assert.deepEqual(
+    headerWalletCard.getHeaderWalletBalancePresentation("LINEA", "0.00", false),
+    { state: "ready", text: "0.00", suffix: "LINEA", label: "LINEA balance 0.00" },
+  );
+  assert.equal(headerWalletCard.getHeaderWalletBalancePresentation("ETH", "—", true).state, "loading");
+  const unavailableHeaderWalletHtml = renderToStaticMarkup(React.createElement(headerWalletCard.HeaderWalletCard, {
+    authenticated: true,
+    loginState: {
+      busy: false,
+      buttonText: "Login / Connect",
+      disabled: false,
+      error: null,
+      modalOpen: false,
+      statusAnnouncement: "Wallet connected.",
+    },
+    embeddedWalletAddress: "0x1111111111111111111111111111111111111111",
+    embeddedWalletSyncing: false,
+    embeddedAddressCopied: false,
+    onCopyEmbeddedAddress: () => undefined,
+    onLogin: () => undefined,
+    onLogout: () => undefined,
+    onOpenWalletSettings: () => undefined,
+    privyEthBalance: "—",
+    privyEthBalanceLoading: false,
+    privyTokenBalance: "—",
+    privyTokenBalanceLoading: false,
+  }));
+  assert.match(unavailableHeaderWalletHtml, /aria-label="ETH balance unavailable"[^>]*data-balance-state="unavailable"/);
+  assert.match(unavailableHeaderWalletHtml, /Unavailable<span[^>]*> ETH<\/span>/);
+  assert.match(unavailableHeaderWalletHtml, /aria-label="LINEA balance unavailable"[^>]*data-balance-state="unavailable"/);
+  assert.match(unavailableHeaderWalletHtml, /Unavailable<span[^>]*> LINEA<\/span>/);
   const validReplacementHash = `0x${"a".repeat(64)}`;
   const blockedStatus = {
     latestNonce: 7,
