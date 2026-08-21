@@ -4,7 +4,6 @@ import {
   appendFileSync,
   copyFileSync,
   existsSync,
-  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -133,6 +132,13 @@ export function assertLocalCampaignSourceProvenance() {
   assert.match(source, /executionSource = 'detached-worktree'/);
   assert.match(source, /git -C \$repoRoot worktree remove --force \$snapshotDirectory/);
   assert.match(source, /source-snapshot-dirty/);
+  assert.match(source, /Get-CampaignProtectedDatabaseSnapshot/);
+  assert.match(source, /protected-db-drift/);
+  assert.match(source, /runtime-dependency-drift/);
+  assert.match(source, /source-snapshot-path-drift/);
+  assert.match(source, /Test-CampaignSnapshotDependencyLink/);
+  assert.match(source, /\[IO\.Directory\]::Delete\(\$snapshotNodeModules, \$false\)/);
+  assert.match(source, /Get-CampaignSha256 \$item.FullName/);
 
   if (process.platform !== "win32") return;
 
@@ -151,9 +157,7 @@ export function assertLocalCampaignSourceProvenance() {
     ]) {
       writeFileSync(join(scriptDirectory, script), "process.exit(0);\n", "utf8");
     }
-    const tsxDirectory = join(root, "node_modules", "tsx", "dist");
-    mkdirSync(tsxDirectory, { recursive: true });
-    writeFileSync(join(tsxDirectory, "cli.mjs"), "process.exit(0);\n", "utf8");
+    writeFileSync(join(root, "package-lock.json"), "{}\n", "utf8");
     runCampaignFixtureGit(root, ["init", "--quiet"]);
     runCampaignFixtureGit(root, ["add", "--", "."]);
     runCampaignFixtureGit(root, [
@@ -162,15 +166,14 @@ export function assertLocalCampaignSourceProvenance() {
       "commit", "--quiet", "-m", "fixture",
     ]);
     const sourceSha = runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    const tsxDirectory = join(root, "node_modules", "tsx", "dist");
+    mkdirSync(tsxDirectory, { recursive: true });
+    writeFileSync(join(tsxDirectory, "cli.mjs"), "process.exit(0);\n", "utf8");
 
     const runtimeDirectory = join(root, ".tmp-npm-runtime-115");
     mkdirSync(runtimeDirectory, { recursive: true });
     const fixtureRuntime = join(runtimeDirectory, "node.exe");
-    try {
-      linkSync(process.execPath, fixtureRuntime);
-    } catch {
-      copyFileSync(process.execPath, fixtureRuntime);
-    }
+    copyFileSync(process.execPath, fixtureRuntime);
 
     const readEvents = (campaignId) => readFileSync(
       join(root, "artifacts", "test-campaign-2026-08-20", campaignId, "local-test-campaign.jsonl"),
@@ -242,8 +245,16 @@ export function assertLocalCampaignSourceProvenance() {
     );
 
     writeFileSync(firstCommandPath, [
-      'import { appendFileSync } from "node:fs";',
-      'appendFileSync("scripts/run-p1-hardening-tests.mjs", "// snapshot tracked tree fixture drift\\n", "utf8");',
+      'import { execFileSync } from "node:child_process";',
+      'import { readFileSync, writeFileSync } from "node:fs";',
+      'const target = "scripts/run-p1-hardening-tests.mjs";',
+      'const original = readFileSync(target, "utf8");',
+      'const changed = original.replace("process.exit(0)", "process.exit(9)");',
+      'if (changed.length !== original.length) process.exit(25);',
+      'const powerShell = "powershell.exe";',
+      'const ticks = execFileSync(powerShell, ["-NoProfile", "-NonInteractive", "-Command", `([IO.File]::GetLastWriteTimeUtc(\'${target}\')).Ticks`], { encoding: "utf8" }).trim();',
+      'writeFileSync(target, changed, "utf8");',
+      'execFileSync(powerShell, ["-NoProfile", "-NonInteractive", "-Command", `[IO.File]::SetLastWriteTimeUtc(\'${target}\', [DateTime]::new(${ticks}, [DateTimeKind]::Utc))`]);',
     ].join("\n"), "utf8");
     runCampaignFixtureGit(root, ["add", "--", "scripts/business-logic-isolated-runner.mjs"]);
     runCampaignFixtureGit(root, [
@@ -267,6 +278,29 @@ export function assertLocalCampaignSourceProvenance() {
       "",
       "a snapshot-only mutation must never dirty the original source root",
     );
+
+    const protectedDbPath = join(root, "data", "lore-v10.sqlite");
+    writeFileSync(firstCommandPath, [
+      'import { appendFileSync, mkdirSync } from "node:fs";',
+      `mkdirSync(${JSON.stringify(join(root, "data"))}, { recursive: true });`,
+      `appendFileSync(${JSON.stringify(protectedDbPath)}, "db drift", "utf8");`,
+    ].join("\n"), "utf8");
+    runCampaignFixtureGit(root, ["add", "--", "scripts/business-logic-isolated-runner.mjs"]);
+    runCampaignFixtureGit(root, [
+      "-c", "user.name=LORE Campaign Fixture",
+      "-c", "user.email=lore-campaign-fixture@example.invalid",
+      "commit", "--quiet", "-m", "fixture protected database drift child",
+    ]);
+    const protectedDbSourceSha = runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    const protectedDbDrift = runCampaignFixturePowerShell(scriptPath, "fixture-protected-db-drift");
+    assert.equal(protectedDbDrift.error, undefined, protectedDbDrift.error?.message);
+    assert.notEqual(protectedDbDrift.status, 0, "a protected DB mutation must stop after the child");
+    const protectedDbEvents = readEvents("fixture-protected-db-drift");
+    assert.deepEqual(protectedDbEvents.map((event) => event.status), ["started", "failed", "stopped-on-failure"]);
+    assertBoundSourceSha(protectedDbEvents, protectedDbSourceSha);
+    assert.equal(protectedDbEvents.at(-2).sourceIntegrityFailure, "protected-db-drift");
+    assert.equal(protectedDbEvents.at(-2).phase, "after-command");
+    assert.equal(protectedDbEvents.some((event) => event.status === "passed"), false);
 
     writeFileSync(firstCommandPath, "process.exit(0);\n", "utf8");
     writeFileSync(p1CommandPath, "process.exit(0);\n", "utf8");
