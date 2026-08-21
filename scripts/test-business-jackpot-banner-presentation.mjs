@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import * as jackpotBannerModule from "../app/components/JackpotBanner.tsx";
 
 export function runJackpotBannerPresentationTests() {
   const jackpotBannerSource = readFileSync("app/components/JackpotBanner.tsx", "utf8");
+  const jackpotBanner = jackpotBannerModule.default ?? jackpotBannerModule;
   assert.match(
     jackpotBannerSource,
     /import \{ GAME_EVENTS_ABI \} from "\.\.\/\.\.\/config\/generated\/lineaOreV10Abi"[\s\S]*function getGameEvent<Name extends \(typeof GAME_EVENTS_ABI\)\[number\]\["name"\]>[\s\S]*GAME_EVENTS_ABI\.find[\s\S]*Missing generated game event[\s\S]*getGameEvent\("DailyJackpotAwarded"\)[\s\S]*getGameEvent\("WeeklyJackpotAwarded"\)[\s\S]*getGameEvent\("EpochResolved"\)/,
@@ -38,26 +40,33 @@ export function runJackpotBannerPresentationTests() {
     /Math\.random/,
     "jackpot banner decorative overlays must stay deterministic to avoid hydration and visual-smoke noise",
   );
-  assert.match(
-    jackpotBannerSource,
-    /function formatJackpotAmountText\(value: unknown\): string \| null[\s\S]*formatDecimalTextFixed\(String\(value \?\? ""\)\.trim\(\), JACKPOT_AMOUNT_FRACTION_DIGITS\)[\s\S]*fixedAmountToScaled\(fixed\) !== 0n/,
-    "jackpot banner indexed/API amount display must canonical-parse decimal text before using compatibility numbers",
+  assert.equal(
+    jackpotBanner.formatJackpotAmountText("9007199254740993.1234567"),
+    "9007199254740993.123457",
+    "indexed jackpot decimal text must round exactly without Number precision loss",
   );
-  assert.match(
-    jackpotBannerSource,
-    /function formatJackpotAmountWei\(value: bigint \| null \| undefined\): string \| null[\s\S]*formatBalanceFixed\([\s\S]*decimals: 18[\s\S]*JACKPOT_AMOUNT_FRACTION_DIGITS/,
-    "jackpot banner on-chain amount fallback must format raw bigint wei without Number(formatUnits()) precision loss",
+  for (const invalidAmount of ["0", "bad", Infinity, null]) {
+    assert.equal(
+      jackpotBanner.formatJackpotAmountText(invalidAmount),
+      null,
+      `indexed jackpot amount ${String(invalidAmount)} must not create a displayable payout`,
+    );
+  }
+  assert.equal(
+    jackpotBanner.formatJackpotAmountWei(9007199254740993123456789n),
+    "9007199.254741",
+    "on-chain jackpot wei must retain exact bigint rounding without formatUnits coercion",
   );
-  assert.match(
-    jackpotBannerSource,
-    /function formatJackpotDisplayAmount\(text: string \| null\): string \| null[\s\S]*formatDecimalTextFixed\(text, JACKPOT_DISPLAY_FRACTION_DIGITS\)[\s\S]*replace\(\/\\B\(\?=\(\\d\{3\}\)\+\(\?!\\d\)\)\/g, ","\)/,
-    "jackpot banner visible/share amount must group decimal text without toLocaleString number coercion",
+  assert.equal(jackpotBanner.formatJackpotAmountWei(0n), null);
+  assert.equal(jackpotBanner.formatJackpotAmountWei(null), null);
+  assert.equal(
+    jackpotBanner.formatJackpotDisplayAmount("12345678901234567890.123456"),
+    "12,345,678,901,234,567,890.1235",
+    "visible and shared jackpot text must group exact decimal text without number-locale coercion",
   );
-  assert.doesNotMatch(
-    jackpotBannerSource,
-    /Number\.parseFloat|formatUnits|toLocaleString/,
-    "jackpot banner amount recovery and display must not use parseFloat, formatUnits, or number-locale formatting",
-  );
+  assert.equal(jackpotBanner.formatJackpotDisplayAmount("1000.000001"), "1,000");
+  assert.equal(jackpotBanner.formatJackpotDisplayAmount("bad"), null);
+  assert.equal(jackpotBanner.formatJackpotDisplayAmount(null), null);
   assert.match(
     jackpotBannerSource,
     /aria-label="Close jackpot banner"[\s\S]*h-12 w-12/,

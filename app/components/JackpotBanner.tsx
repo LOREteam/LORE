@@ -80,13 +80,13 @@ function fixedAmountToScaled(text: string): bigint | null {
   return BigInt(text.replace(".", ""));
 }
 
-function formatJackpotAmountText(value: unknown): string | null {
+export function formatJackpotAmountText(value: unknown): string | null {
   if (typeof value === "number" && !Number.isFinite(value)) return null;
   const fixed = formatDecimalTextFixed(String(value ?? "").trim(), JACKPOT_AMOUNT_FRACTION_DIGITS);
   return fixed && fixedAmountToScaled(fixed) !== 0n ? fixed : null;
 }
 
-function formatJackpotAmountWei(value: bigint | null | undefined): string | null {
+export function formatJackpotAmountWei(value: bigint | null | undefined): string | null {
   const fixed = formatBalanceFixed(
     { value: value ?? 0n, decimals: 18 },
     JACKPOT_AMOUNT_FRACTION_DIGITS,
@@ -102,7 +102,7 @@ function addJackpotAmountText(totalText: string | null, amountText: string | nul
   return next > 0n ? formatScaledUnitsFixed(next, JACKPOT_AMOUNT_FRACTION_DIGITS) : null;
 }
 
-function formatJackpotDisplayAmount(text: string | null): string | null {
+export function formatJackpotDisplayAmount(text: string | null): string | null {
   if (!text) return null;
   const fixed = formatDecimalTextFixed(text, JACKPOT_DISPLAY_FRACTION_DIGITS);
   if (!fixed) return null;
