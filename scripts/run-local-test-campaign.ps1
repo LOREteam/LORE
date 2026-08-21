@@ -52,10 +52,26 @@ while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteratio
   foreach ($command in $commands) {
     $logPath = Join-Path $campaignDirectory ("local-{0:d3}-{1}.log" -f $iteration, $command.name)
     $started = [DateTime]::UtcNow
-    & $runtime @($command.arguments) *> $logPath
-    $exitCode = $LASTEXITCODE
+    $processEnvironment = [Environment]::GetEnvironmentVariables([EnvironmentVariableTarget]::Process)
+    $hadTsxDisableCache = $processEnvironment.Contains('TSX_DISABLE_CACHE')
+    $previousTsxDisableCache = [Environment]::GetEnvironmentVariable('TSX_DISABLE_CACHE', [EnvironmentVariableTarget]::Process)
+    $exitCode = 1
+    $launchError = $null
+    try {
+      [Environment]::SetEnvironmentVariable('TSX_DISABLE_CACHE', '1', [EnvironmentVariableTarget]::Process)
+      & $runtime @($command.arguments) *> $logPath
+      $exitCode = $LASTEXITCODE
+    } catch {
+      $launchError = 'child-launch-failed'
+    } finally {
+      [Environment]::SetEnvironmentVariable(
+        'TSX_DISABLE_CACHE',
+        $(if ($hadTsxDisableCache) { $previousTsxDisableCache } else { $null }),
+        [EnvironmentVariableTarget]::Process
+      )
+    }
     $elapsedMs = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
-    Write-CampaignEvent @{
+    $event = @{
       status = if ($exitCode -eq 0) { 'passed' } else { 'failed' }
       iteration = $iteration
       command = $command.name
@@ -63,6 +79,8 @@ while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteratio
       elapsedMs = $elapsedMs
       log = (Split-Path -Leaf $logPath)
     }
+    if ($null -ne $launchError) { $event.launchError = $launchError }
+    Write-CampaignEvent $event
     if ($exitCode -ne 0) {
       Write-CampaignEvent @{ status = 'stopped-on-failure'; iteration = $iteration; command = $command.name; exitCode = $exitCode }
       exit $exitCode
