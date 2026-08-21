@@ -57,6 +57,16 @@ export function persistManualBetAmount(storage: Pick<ManualBetAmountStorage, "se
     // ignore storage failures
   }
 }
+
+export function persistManualBetAmountAfterRestore(
+  storage: Pick<ManualBetAmountStorage, "setItem" | "removeItem">,
+  storageReady: boolean,
+  value: string,
+) {
+  if (!storageReady) return;
+  persistManualBetAmount(storage, value);
+}
+
 function formatManualNumberDisplay(value: number | null | undefined, fractionDigits = 2) {
   if (typeof value !== "number" || !Number.isFinite(value)) return fractionDigits > 0 ? `0.${"0".repeat(fractionDigits)}` : "0";
   return formatDecimalTextFixed(String(value), fractionDigits) ?? (fractionDigits > 0 ? `0.${"0".repeat(fractionDigits)}` : "0");
@@ -101,8 +111,9 @@ export function useManualBetForm({
 
   useEffect(() => {
     try {
-      if (!manualBetStorageReady) return;
-      if (typeof window !== "undefined") persistManualBetAmount(window.localStorage, betAmount);
+      if (typeof window !== "undefined") {
+        persistManualBetAmountAfterRestore(window.localStorage, manualBetStorageReady, betAmount);
+      }
     } catch {
       // ignore unavailable browser storage
     }
