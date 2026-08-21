@@ -10,7 +10,7 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest verified local code commit before this state refresh: `1c880bdc`.
+- Latest verified local code commit before this state refresh: `452a1b9f`.
 - The product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. The current immutable-checkout
   reproduction is clean for tracked files; `.tmp-*` and campaign reports are
@@ -75,6 +75,10 @@ OS-temp SQLite fixtures remain the only permitted DB target for local test code.
 - Canary log integration: `LIVE_TEST_LOG_PATH` is now consumed through a pure
   absolute-path policy with ordinary-file/directory checks, so the supervisor's
   strict current-run containment can receive the actual JSONL.
+- The dry-run Preview now loads the local public runtime configuration before
+  applying its secret-stripping child allowlist. With epoch-bound bets enabled,
+  the fresh Preview and bound dry-run JSONL pass while reporting no signing,
+  wallet client, contract write, or transaction submission.
 - Load tool: memory is bounded; displayed quantiles are labeled approximate,
   while the p95 gate uses an exact above-threshold count. Error samples are
   capped and redacted before storage/output.
