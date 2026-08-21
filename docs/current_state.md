@@ -10,7 +10,7 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest verified local code commit before this state refresh: `452a1b9f`.
+- Latest verified local code commit before this state refresh: `c0aa4f7f`.
 - The product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. The current immutable-checkout
   reproduction is clean for tracked files; `.tmp-*` and campaign reports are
