@@ -99,7 +99,6 @@ const SAFE_NON_CREDENTIAL_ENV_NAMES = new Set([
 const TRUSTED_NPM_LAUNCHER = resolveTrustedNpmCli();
 
 loadDotenv({ path: ".env.local", override: false, quiet: true });
-loadDotenv({ path: ".env", override: false, quiet: true });
 
 function npmRun(script) {
   const command = trustedNpmCommand(["run", script], TRUSTED_NPM_LAUNCHER);
