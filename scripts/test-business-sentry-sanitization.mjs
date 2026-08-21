@@ -1,5 +1,18 @@
 import assert from "node:assert/strict";
 import * as sentrySanitizeModule from "../app/lib/sentrySanitize.ts";
+import * as webVitalsTelemetryModule from "../app/components/WebVitalsTelemetry.tsx";
+
+const webVitalsTelemetry = webVitalsTelemetryModule.default ?? webVitalsTelemetryModule["module.exports"] ?? webVitalsTelemetryModule;
+const { buildWebVitalEmission, recordWebVital } = webVitalsTelemetry;
+
+const webVitalsEnvironment = {
+  NODE_ENV: "production",
+  NEXT_PUBLIC_WEB_VITALS_ENABLED: "1",
+  NEXT_PUBLIC_SENTRY_DSN: "configured",
+  NEXT_PUBLIC_SENTRY_ENVIRONMENT: "production",
+  NEXT_PUBLIC_SENTRY_RELEASE: "6952ff652",
+  NEXT_PUBLIC_WEB_VITALS_SAMPLE_RATE: "1",
+};
 
 export function runSentrySanitizationTests() {
   const sentrySanitize = sentrySanitizeModule.default ?? sentrySanitizeModule;
@@ -71,4 +84,73 @@ export function runSentrySanitizationTests() {
   assert.equal(sanitizedSupportLog.privateKey, "<redacted>");
   assert.equal(sanitizedSupportLog.walletAddress, "<redacted>");
   assert.doesNotMatch(sanitizedSupportLog.error, /secret|rpc\.example|0x[d]{64}|0x[f]{80,}/i);
+
+  const lcpEmission = buildWebVitalEmission(
+    { name: "LCP", rating: "good", value: 1234.56789 },
+    "/?wallet=0x1111111111111111111111111111111111111111#recovery",
+    webVitalsEnvironment,
+  );
+  assert.deepEqual(lcpEmission, {
+    value: 1234.568,
+    unit: "millisecond",
+    attributes: {
+      name: "LCP",
+      rating: "good",
+      route: "other",
+      release: "6952ff652",
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(lcpEmission), /wallet|0x111|recovery|\?|#/i);
+  assert.deepEqual(
+    buildWebVitalEmission({ name: "CLS", rating: "needs-improvement", value: 0.125 }, "/faq", webVitalsEnvironment),
+    {
+      value: 0.125,
+      unit: "none",
+      attributes: {
+        name: "CLS",
+        rating: "needs-improvement",
+        route: "/faq",
+        release: "6952ff652",
+      },
+    },
+  );
+  for (const [metric, environment] of [
+    [{ name: "FID", rating: "good", value: 1 }, webVitalsEnvironment],
+    [{ name: "LCP", rating: "unknown", value: 1 }, webVitalsEnvironment],
+    [{ name: "LCP", rating: "good", value: Number.NaN }, webVitalsEnvironment],
+    [{ name: "LCP", rating: "good", value: -1 }, webVitalsEnvironment],
+    [{ name: "LCP", rating: "good", value: 120_001 }, webVitalsEnvironment],
+    [{ name: "CLS", rating: "good", value: 10.001 }, webVitalsEnvironment],
+    [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NODE_ENV: "development" }],
+    [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_SENTRY_DSN: "" }],
+    [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_WEB_VITALS_ENABLED: "0" }],
+    [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_SENTRY_RELEASE: "not safe!" }],
+    [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_WEB_VITALS_SAMPLE_RATE: "1.1" }],
+  ]) {
+    assert.equal(buildWebVitalEmission(metric, "/faq", environment), null);
+  }
+
+  const recorded = [];
+  assert.equal(
+    recordWebVital(
+      { name: "INP", rating: "poor", value: 456 },
+      "/jackpot-win",
+      webVitalsEnvironment,
+      (...args) => recorded.push(args),
+    ),
+    true,
+  );
+  assert.deepEqual(recorded, [[
+    "lore.web_vital",
+    456,
+    {
+      unit: "millisecond",
+      attributes: {
+        name: "INP",
+        rating: "poor",
+        route: "/jackpot-win",
+        release: "6952ff652",
+      },
+    },
+  ]]);
 }
