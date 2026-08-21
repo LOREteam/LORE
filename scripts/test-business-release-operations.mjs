@@ -75,7 +75,7 @@ function runCampaignFixtureGit(root, args) {
   return String(result.stdout ?? "").trim().toLowerCase();
 }
 
-function runCampaignFixturePowerShell(scriptPath, campaignId, { failEventWrite = false } = {}) {
+function runCampaignFixturePowerShell(scriptPath, campaignId, { failEventWrite = false, fixtureFault = null } = {}) {
   const powerShellPath = join(
     process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows",
     "System32",
@@ -109,6 +109,7 @@ function runCampaignFixturePowerShell(scriptPath, campaignId, { failEventWrite =
     environment.LORE_CAMPAIGN_FIXTURE_SCRIPT = scriptPath;
     environment.LORE_CAMPAIGN_FIXTURE_ID = campaignId;
   }
+  if (fixtureFault !== null) environment.LORE_CAMPAIGN_FIXTURE_FAULT = fixtureFault;
   return spawnSync(powerShellPath, args, {
     cwd: resolve(scriptPath, "..", ".."),
     env: environment,
@@ -152,7 +153,45 @@ export function assertLocalCampaignSourceProvenance() {
     const scriptDirectory = join(root, "scripts");
     const scriptPath = join(scriptDirectory, "run-local-test-campaign.ps1");
     mkdirSync(scriptDirectory, { recursive: true });
-    copyFileSync("scripts/run-local-test-campaign.ps1", scriptPath);
+    const fixtureFaultHook = [
+      "function Invoke-CampaignFixturePostChildFault {",
+      "  $fault = [Environment]::GetEnvironmentVariable('LORE_CAMPAIGN_FIXTURE_FAULT', [EnvironmentVariableTarget]::Process)",
+      "  if ([string]::IsNullOrWhiteSpace($fault)) { return }",
+      "  $marker = Join-Path $campaignDirectory 'fixture-post-child-mutation'",
+      "  switch ($fault) {",
+      "    'snapshot-directory-substitution' {",
+      "      $backup = \"$snapshotDirectory.fixture-original\"",
+      "      Move-Item -LiteralPath $snapshotDirectory -Destination $backup -ErrorAction Stop",
+      "      New-Item -ItemType Directory -Path $snapshotDirectory -ErrorAction Stop | Out-Null",
+      "    }",
+      "    'snapshot-parent-reparse' {",
+      "      $backup = \"$snapshotParent.fixture-original\"",
+      "      $target = Join-Path $campaignDirectory 'fixture-snapshot-parent-target'",
+      "      New-Item -ItemType Directory -Path $target -ErrorAction Stop | Out-Null",
+      "      Set-Content -LiteralPath (Join-Path $target 'must-survive') -Value 'sentinel' -NoNewline -Encoding utf8 -ErrorAction Stop",
+      "      Move-Item -LiteralPath $snapshotParent -Destination $backup -ErrorAction Stop",
+      "      New-Item -ItemType Junction -Path $snapshotParent -Target $target -ErrorAction Stop | Out-Null",
+      "    }",
+      "    'snapshot-dependency-junction-swap' {",
+      "      $target = Join-Path $campaignDirectory 'fixture-snapshot-dependency-target'",
+      "      New-Item -ItemType Directory -Path $target -ErrorAction Stop | Out-Null",
+      "      Set-Content -LiteralPath (Join-Path $target 'must-survive') -Value 'sentinel' -NoNewline -Encoding utf8 -ErrorAction Stop",
+      "      [IO.Directory]::Delete($snapshotNodeModules, $false)",
+      "      New-Item -ItemType Junction -Path $snapshotNodeModules -Target $target -ErrorAction Stop | Out-Null",
+      "    }",
+      "    default { throw \"Unknown fixture campaign fault: $fault\" }",
+      "  }",
+      "  Set-Content -LiteralPath $marker -Value $fault -NoNewline -Encoding utf8 -ErrorAction Stop",
+      "}",
+    ].join("\n");
+    const fixtureRunnerSource = readFileSync("scripts/run-local-test-campaign.ps1", "utf8");
+    const fixtureRunnerAnchor = '    $postChildIntegrityFailure = Get-CampaignSourceIntegrityFailure $sourceSha $trackedMetadataBefore';
+    assert.notEqual(fixtureRunnerSource.indexOf(fixtureRunnerAnchor), -1, "campaign fixture hook must bind immediately before post-child integrity checks");
+    writeFileSync(
+      scriptPath,
+      fixtureRunnerSource.replace(fixtureRunnerAnchor, `    Invoke-CampaignFixturePostChildFault\n${fixtureRunnerAnchor}`) + `\n${fixtureFaultHook}`,
+      "utf8",
+    );
     for (const script of [
       "business-logic-isolated-runner.mjs",
       "run-p1-hardening-tests.mjs",
@@ -448,21 +487,16 @@ export function assertLocalCampaignSourceProvenance() {
     });
     resetProtectedDatabaseFixture({ wal: false, shm: false });
 
+    const campaignFixtureDirectory = (campaignId) => join(root, "artifacts", "test-campaign-2026-08-20", campaignId);
+    const readFixtureFaultMarker = (campaignId) => readFileSync(join(campaignFixtureDirectory(campaignId), "fixture-post-child-mutation"), "utf8");
+
     const snapshotSubstitutionId = "fixture-snapshot-directory-substitution";
-    const snapshotSubstitutionMarker = join(root, "snapshot-directory-substitution-completed");
-    const snapshotSubstitutionSourceSha = commitFixtureCommand("fixture snapshot directory substitution", [
-      'import { mkdirSync, renameSync, writeFileSync } from "node:fs";',
-      'const snapshot = process.cwd();',
-      'const backup = `${snapshot}.fixture-original`;',
-      'renameSync(snapshot, backup);',
-      'mkdirSync(snapshot);',
-      `writeFileSync(${JSON.stringify(snapshotSubstitutionMarker)}, "substituted", "utf8");`,
-    ].join("\n"));
-    const snapshotSubstitution = runCampaignFixturePowerShell(scriptPath, snapshotSubstitutionId);
+    const snapshotSubstitutionSourceSha = commitFixtureCommand("fixture snapshot directory substitution", "process.exit(0);\n");
+    const snapshotSubstitution = runCampaignFixturePowerShell(scriptPath, snapshotSubstitutionId, { fixtureFault: "snapshot-directory-substitution" });
     assert.equal(snapshotSubstitution.error, undefined, snapshotSubstitution.error?.message);
     const snapshotSubstitutionPath = campaignSnapshotDirectory(snapshotSubstitutionId, snapshotSubstitutionSourceSha);
     const snapshotSubstitutionBackup = `${snapshotSubstitutionPath}.fixture-original`;
-    assert.equal(existsSync(snapshotSubstitutionMarker), true, "snapshot directory substitution fixture action must run");
+    assert.equal(readFixtureFaultMarker(snapshotSubstitutionId), "snapshot-directory-substitution", "snapshot directory fixture hook must run after the child");
     assert.notEqual(snapshotSubstitution.status, 0, "a substituted snapshot path must stop the campaign");
     const snapshotSubstitutionEvents = readEvents(snapshotSubstitutionId);
     assertBoundSourceSha(snapshotSubstitutionEvents, snapshotSubstitutionSourceSha);
@@ -471,34 +505,21 @@ export function assertLocalCampaignSourceProvenance() {
     assert.equal(snapshotSubstitutionFailure?.sourceIntegrityFailure, "source-snapshot-path-drift");
     assert.equal(snapshotSubstitutionEvents.some((event) => event.status === "passed"), false);
     assert.equal(snapshotSubstitutionEvents.some((event) => event.status === "completed"), false);
-    if (existsSync(snapshotSubstitutionBackup)) {
-      if (existsSync(snapshotSubstitutionPath)) rmSync(snapshotSubstitutionPath, { recursive: true, force: true });
-      renameSync(snapshotSubstitutionBackup, snapshotSubstitutionPath);
-    }
+    assert.equal(existsSync(snapshotSubstitutionBackup), true, "snapshot substitution fixture must retain the original worktree for safe test cleanup");
+    if (existsSync(snapshotSubstitutionPath)) rmSync(snapshotSubstitutionPath, { recursive: true, force: true });
+    renameSync(snapshotSubstitutionBackup, snapshotSubstitutionPath);
     removeFixtureSnapshot(snapshotSubstitutionId, snapshotSubstitutionSourceSha);
 
     const snapshotParentId = "fixture-snapshot-parent-reparse";
-    const snapshotParentMarker = join(root, "snapshot-parent-reparse-completed");
-    const snapshotParentTarget = join(root, "snapshot-parent-reparse-target");
-    const snapshotParentSentinel = join(snapshotParentTarget, "must-survive");
-    mkdirSync(snapshotParentTarget, { recursive: true });
-    writeFileSync(snapshotParentSentinel, "sentinel", "utf8");
-    const snapshotParentSourceSha = commitFixtureCommand("fixture snapshot parent reparse", [
-      'import { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";',
-      'import { dirname } from "node:path";',
-      'const snapshotParent = dirname(process.cwd());',
-      'const backup = `${snapshotParent}.fixture-original`;',
-      `mkdirSync(${JSON.stringify(snapshotParentTarget)}, { recursive: true });`,
-      'renameSync(snapshotParent, backup);',
-      `symlinkSync(${JSON.stringify(snapshotParentTarget)}, snapshotParent, "junction");`,
-      `writeFileSync(${JSON.stringify(snapshotParentMarker)}, "reparse", "utf8");`,
-    ].join("\n"));
-    const snapshotParentRun = runCampaignFixturePowerShell(scriptPath, snapshotParentId);
+    const snapshotParentSourceSha = commitFixtureCommand("fixture snapshot parent reparse", "process.exit(0);\n");
+    const snapshotParentRun = runCampaignFixturePowerShell(scriptPath, snapshotParentId, { fixtureFault: "snapshot-parent-reparse" });
     assert.equal(snapshotParentRun.error, undefined, snapshotParentRun.error?.message);
     const snapshotParentPath = campaignSnapshotDirectory(snapshotParentId, snapshotParentSourceSha);
     const snapshotParentDirectory = dirname(snapshotParentPath);
     const snapshotParentBackup = `${snapshotParentDirectory}.fixture-original`;
-    assert.equal(existsSync(snapshotParentMarker), true, "snapshot parent junction fixture action must run");
+    const snapshotParentTarget = join(campaignFixtureDirectory(snapshotParentId), "fixture-snapshot-parent-target");
+    const snapshotParentSentinel = join(snapshotParentTarget, "must-survive");
+    assert.equal(readFixtureFaultMarker(snapshotParentId), "snapshot-parent-reparse", "snapshot parent fixture hook must run after the child");
     assert.notEqual(snapshotParentRun.status, 0, "a snapshot parent junction must stop the campaign");
     const snapshotParentEvents = readEvents(snapshotParentId);
     assertBoundSourceSha(snapshotParentEvents, snapshotParentSourceSha);
@@ -509,32 +530,21 @@ export function assertLocalCampaignSourceProvenance() {
     assert.equal(snapshotParentEvents.some((event) => event.status === "completed"), false);
     assert.equal(lstatSync(snapshotParentDirectory).isSymbolicLink(), true, "fixture must replace the snapshot parent with a junction");
     assert.equal(existsSync(snapshotParentSentinel), true, "unsafe snapshot cleanup must not follow a substituted parent target");
-    if (existsSync(snapshotParentBackup)) {
-      if (existsSync(snapshotParentDirectory)) rmdirSync(snapshotParentDirectory);
-      renameSync(snapshotParentBackup, snapshotParentDirectory);
-    }
+    assert.equal(existsSync(snapshotParentBackup), true, "snapshot parent fixture must retain the original parent for safe test cleanup");
+    rmdirSync(snapshotParentDirectory);
+    renameSync(snapshotParentBackup, snapshotParentDirectory);
     removeFixtureSnapshot(snapshotParentId, snapshotParentSourceSha);
     rmSync(snapshotParentTarget, { recursive: true, force: true });
 
     const dependencySwapId = "fixture-snapshot-dependency-junction-swap";
-    const dependencySwapMarker = join(root, "snapshot-dependency-junction-swap-completed");
-    const dependencySwapTarget = join(root, "snapshot-dependency-junction-target");
-    const dependencySwapSentinel = join(dependencySwapTarget, "must-survive");
-    mkdirSync(dependencySwapTarget, { recursive: true });
-    writeFileSync(dependencySwapSentinel, "sentinel", "utf8");
-    const dependencySwapSourceSha = commitFixtureCommand("fixture snapshot dependency junction swap", [
-      'import { rmdirSync, symlinkSync, writeFileSync } from "node:fs";',
-      'import { join } from "node:path";',
-      'const link = join(process.cwd(), "node_modules");',
-      'rmdirSync(link);',
-      `symlinkSync(${JSON.stringify(dependencySwapTarget)}, link, "junction");`,
-      `writeFileSync(${JSON.stringify(dependencySwapMarker)}, "swapped", "utf8");`,
-    ].join("\n"));
-    const dependencySwapRun = runCampaignFixturePowerShell(scriptPath, dependencySwapId);
+    const dependencySwapSourceSha = commitFixtureCommand("fixture snapshot dependency junction swap", "process.exit(0);\n");
+    const dependencySwapRun = runCampaignFixturePowerShell(scriptPath, dependencySwapId, { fixtureFault: "snapshot-dependency-junction-swap" });
     assert.equal(dependencySwapRun.error, undefined, dependencySwapRun.error?.message);
     const dependencySwapPath = campaignSnapshotDirectory(dependencySwapId, dependencySwapSourceSha);
     const dependencySwapLink = join(dependencySwapPath, "node_modules");
-    assert.equal(existsSync(dependencySwapMarker), true, "snapshot dependency junction swap fixture action must run");
+    const dependencySwapTarget = join(campaignFixtureDirectory(dependencySwapId), "fixture-snapshot-dependency-target");
+    const dependencySwapSentinel = join(dependencySwapTarget, "must-survive");
+    assert.equal(readFixtureFaultMarker(dependencySwapId), "snapshot-dependency-junction-swap", "snapshot dependency fixture hook must run after the child");
     assert.notEqual(dependencySwapRun.status, 0, "a swapped snapshot dependency junction must stop the campaign");
     const dependencySwapEvents = readEvents(dependencySwapId);
     assertBoundSourceSha(dependencySwapEvents, dependencySwapSourceSha);
@@ -544,11 +554,10 @@ export function assertLocalCampaignSourceProvenance() {
     assert.equal(dependencySwapEvents.some((event) => event.status === "passed"), false);
     assert.equal(dependencySwapEvents.some((event) => event.status === "completed"), false);
     assert.equal(existsSync(dependencySwapSentinel), true, "unsafe dependency cleanup must not follow a swapped junction target");
-    if (existsSync(dependencySwapLink)) rmdirSync(dependencySwapLink);
-    if (existsSync(dependencySwapPath)) symlinkSync(nodeModulesPath, dependencySwapLink, "junction");
+    rmdirSync(dependencySwapLink);
+    symlinkSync(nodeModulesPath, dependencySwapLink, "junction");
     removeFixtureSnapshot(dependencySwapId, dependencySwapSourceSha);
     rmSync(dependencySwapTarget, { recursive: true, force: true });
-
     writeFileSync(firstCommandPath, "process.exit(0);\n", "utf8");
     writeFileSync(p1CommandPath, "process.exit(0);\n", "utf8");
     writeFileSync(finalCommandPath, [
