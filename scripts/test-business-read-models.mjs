@@ -315,6 +315,16 @@ export async function runReadModelTests() {
   assert.equal(globalStatsRuntime.safeGlobalStatsCurrentEpoch(-1n), null);
   assert.equal(globalStatsRuntime.safeGlobalStatsCurrentEpoch(BigInt(Number.MAX_SAFE_INTEGER) + 1n), null);
   assert.equal(globalStatsRuntime.safeGlobalStatsCurrentEpoch(42n), 42);
+  assert.equal(globalStats.getGlobalStatsStatus({ hasStats: false, currentEpochVerified: false, requestFailed: false }), "loading");
+  assert.equal(globalStats.getGlobalStatsStatus({ hasStats: false, currentEpochVerified: false, requestFailed: true }), "error");
+  assert.equal(globalStats.getGlobalStatsStatus({ hasStats: true, currentEpochVerified: false, requestFailed: false }), "stale");
+  assert.equal(globalStats.getGlobalStatsStatus({ hasStats: true, currentEpochVerified: false, requestFailed: true }), "stale");
+  assert.equal(globalStats.getGlobalStatsStatus({ hasStats: true, currentEpochVerified: true, requestFailed: false }), "ready");
+  assert.equal(globalStats.isCurrentGlobalStatsEpochVerified(null, null), false);
+  assert.equal(globalStats.isCurrentGlobalStatsEpochVerified(null, undefined), false);
+  assert.equal(globalStats.isCurrentGlobalStatsEpochVerified(null, 1n), false);
+  assert.equal(globalStats.isCurrentGlobalStatsEpochVerified(1n, 1n), true);
+  assert.equal(globalStats.isCurrentGlobalStatsEpochVerified(1n, -1n), false);
 
   const globalStatsStorage = createMemoryReadStorage({
     target: JSON.stringify({

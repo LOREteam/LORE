@@ -59,7 +59,7 @@ export const Sidebar = React.memo(function Sidebar({
   mobileOpen = false,
   onMobileClose,
 }: SidebarProps) {
-  const { stats, loading: statsLoading } = useGlobalStats(currentEpoch, isPageVisible);
+  const { stats, loading: statsLoading, status: statsStatus } = useGlobalStats(currentEpoch, isPageVisible);
   const renderedHotTiles = useMemo(
     () => (hotTiles && hotTiles.length > 0 ? hotTiles : HOT_TILE_PLACEHOLDERS),
     [hotTiles],
@@ -231,17 +231,22 @@ export const Sidebar = React.memo(function Sidebar({
             <StatRow
               icon="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
               label="Total Volume"
-              value={stats ? `${stats.totalVolume} LINEA` : undefined}
+              value={stats ? `${stats.totalVolume} LINEA` : statsStatus === "error" ? "Unavailable" : undefined}
               loading={statsLoading && !stats}
             />
             <div className="h-px bg-white/4" />
             <StatRow
               icon="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"
               label="Total Burn"
-              value={stats ? `${stats.totalBurn} LINEA` : undefined}
+              value={stats ? `${stats.totalBurn} LINEA` : statsStatus === "error" ? "Unavailable" : undefined}
               loading={statsLoading && !stats}
               accent="orange"
             />
+            {statsStatus === "stale" && (
+              <p role="status" aria-live="polite" className="text-[10px] font-medium leading-snug text-amber-300">
+                Showing last known protocol totals.
+              </p>
+            )}
           </UiPanel>
 
           <p className="px-1 pt-1 text-slate-500 font-bold uppercase tracking-[0.14em]" style={{ fontSize: "11px" }}>
@@ -439,7 +444,7 @@ const StatRow = React.memo(function StatRow({
           <div className="mt-1 h-3 w-20 animate-pulse rounded bg-white/10" />
         ) : (
           <p className={`lore-nums mt-0.5 truncate font-bold leading-tight ${accentColor}`} style={{ fontSize: 12 }}>
-            {value ?? "0.00 LINEA"}
+            {value ?? "—"}
           </p>
         )}
       </div>

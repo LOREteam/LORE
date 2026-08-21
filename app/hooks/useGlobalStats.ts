@@ -30,6 +30,28 @@ export interface GlobalStats {
   resolvedEpochs: number;
 }
 
+export type GlobalStatsStatus = "loading" | "ready" | "stale" | "error";
+
+export function getGlobalStatsStatus({
+  hasStats,
+  currentEpochVerified,
+  requestFailed,
+}: {
+  hasStats: boolean;
+  currentEpochVerified: boolean;
+  requestFailed: boolean;
+}): GlobalStatsStatus {
+  if (!hasStats) return requestFailed ? "error" : "loading";
+  return currentEpochVerified ? "ready" : "stale";
+}
+
+export function isCurrentGlobalStatsEpochVerified(
+  lastFetchedEpoch: bigint | null,
+  currentEpoch?: bigint | null,
+) {
+  return safeGlobalStatsCurrentEpoch(currentEpoch) !== null && lastFetchedEpoch === currentEpoch;
+}
+
 function fmt(v: bigint): string {
   const oneTokenWei = 10n ** 18n;
   if (v >= 1_000_000n * oneTokenWei) return `${formatLineaAmountFixed(v / 1_000_000n, 2)}M`;
@@ -50,6 +72,7 @@ function toStats(acc: GlobalStatsAccumulator): GlobalStats {
 export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
   const [stats, setStats] = useState<GlobalStats | null>(null);
   const [loading, setLoading] = useState(false);
+  const [requestFailed, setRequestFailed] = useState(false);
   const accRef = useRef<GlobalStatsAccumulator | null>(null);
   const initializedRef = useRef(false);
   const lastFetchedEpochRef = useRef<bigint | null>(null);
@@ -115,10 +138,14 @@ export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
           next,
         );
         lastFetchedEpochRef.current = currentEpoch;
-        if (mountedRef.current) setStats(toStats(next));
+        if (mountedRef.current) {
+          setStats(toStats(next));
+          setRequestFailed(false);
+        }
       })
       .catch(() => {
-        // Non-critical: keep the last indexer-backed value when the API is unavailable.
+        if (controller.signal.aborted && !timedOut) return;
+        if (mountedRef.current) setRequestFailed(true);
       })
       .finally(() => {
         window.clearTimeout(timeoutId);
@@ -131,5 +158,10 @@ export function useGlobalStats(currentEpoch?: bigint | null, enabled = true) {
     };
   }, [currentEpoch, enabled]);
 
-  return { stats, loading };
+  const status = getGlobalStatsStatus({
+    hasStats: stats !== null,
+    currentEpochVerified: isCurrentGlobalStatsEpochVerified(lastFetchedEpochRef.current, currentEpoch),
+    requestFailed,
+  });
+  return { stats, loading, status };
 }

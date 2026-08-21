@@ -13,6 +13,7 @@ const EXPECTED_SCOPE = `sepolia:${CONTRACT_ADDRESS}`;
 Object.assign(process.env, {
   LORE_DB_PATH: TEST_DB_PATH,
   LORE_ALLOW_CONTRACT_SCOPE_PURGE: "0",
+  NODE_ENV: "test",
   LINEA_NETWORK: "sepolia",
   NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
   NEXT_PUBLIC_CONTRACT_ADDRESS: CONTRACT_ADDRESS,
@@ -172,6 +173,7 @@ async function main() {
     `).run(EXPECTED_SCOPE, 2, "1", "1", 99, "0");
 
     const storage = await import("../server/storage");
+    const globalStatsRoute = await import("../app/api/global-stats/route");
     const {
       acquireIndexerLease,
       commitIndexerChunk,
@@ -197,7 +199,17 @@ async function main() {
         `materialized global stats must equal the raw BigInt oracle after ${label}`,
       );
     };
-    const assertDirtyRead = (label: string) => {
+    const assertPublicReadModelFailure = async (label: string) => {
+      const response = await globalStatsRoute.GET(new Request("http://localhost/api/global-stats", {
+        headers: { "user-agent": `global-stats-materialization:${label}` },
+      }));
+      assert.equal(response.status, 503, `public route must return 503 after ${label}`);
+      assert.equal(response.headers.get("cache-control"), "no-store, no-cache, must-revalidate");
+      assert.equal(response.headers.get("pragma"), "no-cache");
+      assert.equal(response.headers.get("expires"), "0");
+      assert.deepEqual(await response.json(), { error: "fetch failed" });
+    };
+    const assertDirtyRead = async (label: string) => {
       assert.notEqual(
         db.prepare("SELECT 1 AS dirty FROM scoped_global_stats_dirty WHERE scope = ?")
           .get(scope),
@@ -214,6 +226,7 @@ async function main() {
         /source data is dirty/,
         `public cache revision must fail closed after source ${label}`,
       );
+      await assertPublicReadModelFailure(`dirty source ${label}`);
     };
     const restartAndAssertRebuild = (
       label: string,
@@ -501,7 +514,7 @@ async function main() {
       makeHash(14),
       101,
     );
-    assertDirtyRead("INSERT to scoped_bets");
+    await assertDirtyRead("INSERT to scoped_bets");
     restartAndAssertRebuild("INSERT to scoped_bets", {
       totalVolumeWei: "13750000000000000000",
       totalBurnWei: "550000000000000000",
@@ -515,7 +528,7 @@ async function main() {
       SET burn_amount = ?
       WHERE scope = ? AND id = ?
     `).run("0.4", scope, "fee-replay");
-    assertDirtyRead("UPDATE to scoped_protocol_fee_flushes");
+    await assertDirtyRead("UPDATE to scoped_protocol_fee_flushes");
     restartAndAssertRebuild("UPDATE to scoped_protocol_fee_flushes", {
       totalVolumeWei: "13750000000000000000",
       totalBurnWei: "650000000000000000",
@@ -526,7 +539,7 @@ async function main() {
     const revisionBeforeDirectDelete = getPublicReadModelRevision();
     db.prepare(`DELETE FROM scoped_epochs WHERE scope = ? AND epoch = ?`)
       .run(scope, 2);
-    assertDirtyRead("DELETE from scoped_epochs");
+    await assertDirtyRead("DELETE from scoped_epochs");
     restartAndAssertRebuild("DELETE from scoped_epochs", {
       totalVolumeWei: "13750000000000000000",
       totalBurnWei: "650000000000000000",
@@ -538,7 +551,7 @@ async function main() {
     const revisionBeforeDirectCursorUpdate = getPublicReadModelRevision();
     db.prepare("UPDATE meta SET value = ? WHERE key = ?")
       .run("101", scopedLastIndexedBlockKey);
-    assertDirtyRead("UPDATE to scoped lastIndexedBlock metadata");
+    await assertDirtyRead("UPDATE to scoped lastIndexedBlock metadata");
     restartAndAssertRebuild("UPDATE to scoped lastIndexedBlock metadata", {
       totalVolumeWei: "13750000000000000000",
       totalBurnWei: "650000000000000000",
@@ -548,7 +561,7 @@ async function main() {
 
     const revisionBeforeDirectCursorDelete = getPublicReadModelRevision();
     db.prepare("DELETE FROM meta WHERE key = ?").run(scopedLastIndexedBlockKey);
-    assertDirtyRead("DELETE from scoped lastIndexedBlock metadata");
+    await assertDirtyRead("DELETE from scoped lastIndexedBlock metadata");
     restartAndAssertRebuild("DELETE from scoped lastIndexedBlock metadata", {
       totalVolumeWei: "13750000000000000000",
       totalBurnWei: "650000000000000000",
@@ -559,7 +572,7 @@ async function main() {
     const revisionBeforeDirectCursorInsert = getPublicReadModelRevision();
     db.prepare("INSERT INTO meta(key, value) VALUES(?, ?)")
       .run(scopedLastIndexedBlockKey, "102");
-    assertDirtyRead("INSERT to scoped lastIndexedBlock metadata");
+    await assertDirtyRead("INSERT to scoped lastIndexedBlock metadata");
     restartAndAssertRebuild("INSERT to scoped lastIndexedBlock metadata", {
       totalVolumeWei: "13750000000000000000",
       totalBurnWei: "650000000000000000",
@@ -611,6 +624,12 @@ async function main() {
       /last indexed block is not a canonical non-negative integer/,
       "a negative aggregate cursor must fail closed",
     );
+    await assertPublicReadModelFailure("negative aggregate cursor");
+    db.prepare(`
+      UPDATE scoped_global_stats_aggregate
+      SET last_indexed_block = ?
+      WHERE scope = ?
+    `).run("102", scope);
     db.prepare(`
       UPDATE scoped_global_stats_aggregate
       SET total_volume_wei = ?
@@ -621,6 +640,7 @@ async function main() {
       /canonical non-negative integer/,
       "a malformed aggregate row must fail closed rather than scan raw tables",
     );
+    await assertPublicReadModelFailure("malformed aggregate row");
 
     console.log(JSON.stringify({
       status: "pass",
