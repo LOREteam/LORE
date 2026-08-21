@@ -10,7 +10,7 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest verified local code commit before this state refresh: `8e446a88`.
+- Latest verified local code commit before this state refresh: `7834e2c6`.
 - The product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. The current immutable-checkout
   reproduction is clean for tracked files; `.tmp-*` and campaign reports are
@@ -82,6 +82,9 @@ OS-temp SQLite fixtures remain the only permitted DB target for local test code.
   validated owned root; strict runtime rejects leaked hermetic-build variables.
 - Business suite: `test:logic` and its summary now delegate to one isolated
   runner with an OS-temp DB and protected main/WAL/SHM before/after snapshots.
+- The business coordinator now rejects a direct process before importing its
+  suite unless the isolated runner supplies an absolute non-protected DB path
+  and its one-shot admission marker.
 - P1.10: additional wallet, reward, history, wins and leaderboard presentation
   seams are now executable. The refreshed AST audit reports `4660/5369`
   behavioral assertions (`86.79%`); the overall extraction remains partial.
