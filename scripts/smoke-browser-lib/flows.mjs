@@ -826,20 +826,9 @@ export async function openDesktopTab(page, options) {
 }
 
 export async function closeChatDrawer(page, options) {
-  const { baseUrl, timeoutMs } = options;
+  const { timeoutMs } = options;
   const drawerTimeoutMs = Math.min(timeoutMs, 6_000);
-  try {
-    await waitForUiHydration(page, drawerTimeoutMs, "chat ui hydrated before close");
-    await page.getByRole("button", { name: "Close chat panel" }).click();
-    await expectVisible(page.getByRole("button", { name: "Open chat" }), "chat drawer closes", drawerTimeoutMs);
-  } catch {
-    try {
-      await page.keyboard.press("Escape");
-      await expectVisible(page.getByRole("button", { name: "Open chat" }), "chat drawer closes", drawerTimeoutMs);
-    } catch {
-      console.log("SKIP chat drawer close assertion (resetting hub state via reload)");
-      await safeReload(page, baseUrl, drawerTimeoutMs);
-      await expectVisible(page.getByText("Manual Bet"), "hub manual bet panel after chat reset", drawerTimeoutMs);
-    }
-  }
+  await waitForUiHydration(page, drawerTimeoutMs, "chat ui hydrated before close");
+  await page.getByRole("button", { name: "Close chat panel" }).click();
+  await expectVisible(page.getByRole("button", { name: "Open chat" }), "chat drawer closes", drawerTimeoutMs);
 }
