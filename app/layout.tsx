@@ -6,6 +6,7 @@ import './lib/installBigIntJson';
 import Providers from './providers';
 import { ErrorCatcher } from './components/ErrorCatcher';
 import { MaintenanceGate } from './components/MaintenanceGate';
+import { WebVitalsTelemetry } from './components/WebVitalsTelemetry';
 import { assertProductionRuntimeConfig } from '../config/productionRuntime';
 
 assertProductionRuntimeConfig("web");
@@ -35,7 +36,12 @@ const loreHud = localFont({
 });
 
 const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://playlore.xyz').trim().replace(/\/+$/, '');
-const canIndex = siteUrl === "https://playlore.xyz" && process.env.VERCEL_ENV !== "preview";
+const canIndex =
+  process.env.NODE_ENV === "production" &&
+  process.env.LORE_ALLOW_PUBLIC_INDEXING === "1" &&
+  process.env.NEXT_PUBLIC_MAINTENANCE_MODE !== "1" &&
+  siteUrl === "https://playlore.xyz" &&
+  (process.env.VERCEL_ENV === undefined || process.env.VERCEL_ENV === "production");
 
 export const metadata: Metadata = {
   title: 'LORE - Linea Mining Game',
@@ -78,6 +84,7 @@ export default async function RootLayout({
         <script nonce={nonce} src="/early-runtime.js" suppressHydrationWarning />
       </head>
       <body className={`${interDigits.variable} ${loreTitle.variable} ${loreHud.variable} antialiased`}>
+        <WebVitalsTelemetry />
         <ErrorCatcher />
         <MaintenanceGate>
           <Providers>{children}</Providers>

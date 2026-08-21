@@ -9,6 +9,14 @@ export const metadata: Metadata = {
     title: "Terms of Play | LORE",
     description: "LORE player responsibilities, risk, fees, and on-chain rules.",
     url: "/terms",
+    type: "website",
+    images: ["/opengraph-image"],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Terms of Play | LORE",
+    description: "LORE player responsibilities, risk, fees, and on-chain rules.",
+    images: ["/opengraph-image"],
   },
 };
 

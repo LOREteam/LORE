@@ -9,6 +9,14 @@ export const metadata: Metadata = {
     title: "Privacy Policy | LORE",
     description: "How LORE handles wallet, email, and blockchain data.",
     url: "/privacy",
+    type: "website",
+    images: ["/opengraph-image"],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Privacy Policy | LORE",
+    description: "How LORE handles wallet, email, and blockchain data.",
+    images: ["/opengraph-image"],
   },
 };
 
@@ -69,6 +77,14 @@ export default function PrivacyPage() {
             </p>
           </section>
 
+          <section>
+            <h2 className="text-violet-400 font-bold text-sm uppercase tracking-wider mb-2">Performance monitoring</h2>
+            <p>
+              When explicitly enabled for production, monitoring may receive a Web Vitals metric name, numerical
+              performance value, rating, approved page label, and release identifier. We do not include wallet or
+              account data, email, transaction data, or URL query and fragment values in these measurements.
+            </p>
+          </section>
           <section>
             <h2 className="text-violet-400 font-bold text-sm uppercase tracking-wider mb-2">No advertising sale</h2>
             <p>
