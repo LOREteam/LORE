@@ -70,7 +70,7 @@ type BuildHeaderPropsOptions = {
   embeddedWalletSyncing: HeaderProps["embeddedWalletSyncing"];
   formattedPrivyEthBalance: string | null;
   headerEthLoading: HeaderProps["privyEthBalanceLoading"];
-  headerLineaBalance: HeaderProps["privyTokenBalance"];
+  headerLineaBalance: string | null;
   headerLineaLoading: HeaderProps["privyTokenBalanceLoading"];
   openWalletSettings: HeaderProps["onOpenWalletSettings"];
   soundMuted: HeaderProps["muted"];
@@ -123,9 +123,9 @@ export function buildHeaderProps({
     jackpotInfo,
     embeddedWalletAddress,
     embeddedWalletSyncing,
-    privyEthBalance: formattedPrivyEthBalance ?? "0.0000",
+    privyEthBalance: formattedPrivyEthBalance ?? "—",
     privyEthBalanceLoading: headerEthLoading,
-    privyTokenBalance: headerLineaBalance,
+    privyTokenBalance: headerLineaBalance ?? "—",
     privyTokenBalanceLoading: headerLineaLoading,
     onOpenWalletSettings: openWalletSettings,
     muted: soundMuted,

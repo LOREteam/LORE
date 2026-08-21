@@ -7,27 +7,27 @@ import { formatBalanceFixed, formatDecimalTextFixed, type WagmiBalanceLike } fro
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 
 type CachedPrivyBalances = {
-  token: string;
-  eth: string;
+  token: string | null;
+  eth: string | null;
 };
 
 const EMPTY_CACHED_BALANCES: CachedPrivyBalances = {
-  token: "0.00",
-  eth: "0.0000",
+  token: null,
+  eth: null,
 };
 
-function normalizeCachedBalance(value: unknown, fallback: string, fractionDigits: number): string {
-  if (typeof value !== "string" && typeof value !== "number") return fallback;
+function normalizeCachedBalance(value: unknown, fractionDigits: number): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
   const text = String(value).trim();
-  if (!text || text.length > 40) return fallback;
-  return formatDecimalTextFixed(text, fractionDigits) ?? fallback;
+  if (!text || text.length > 40) return null;
+  return formatDecimalTextFixed(text, fractionDigits) ?? null;
 }
 
 export function normalizeCachedPrivyBalances(value: unknown): CachedPrivyBalances {
   const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
-    token: normalizeCachedBalance(raw.token, EMPTY_CACHED_BALANCES.token, 2),
-    eth: normalizeCachedBalance(raw.eth, EMPTY_CACHED_BALANCES.eth, 4),
+    token: normalizeCachedBalance(raw.token, 2),
+    eth: normalizeCachedBalance(raw.eth, 4),
   };
 }
 
@@ -156,11 +156,11 @@ export function usePageWalletOverview({
   );
 
   const headerLineaBalance =
-    isEmbeddedActive && formattedLineaBalance != null ? formattedLineaBalance : formattedPrivyBalance;
+    (isEmbeddedActive && formattedLineaBalance != null ? formattedLineaBalance : formattedPrivyBalance) ?? "—";
 
   const headerLineaLoading =
     (isEmbeddedActive && formattedLineaBalance == null) ||
-    (!isEmbeddedActive && embeddedTokenPending && formattedPrivyBalance === "0.00");
+    (!isEmbeddedActive && embeddedTokenPending && formattedPrivyBalance == null);
 
   return useMemo(
     () => ({
@@ -175,7 +175,7 @@ export function usePageWalletOverview({
       isEmbeddedActive,
       headerLineaBalance,
       headerLineaLoading,
-      headerEthLoading: embeddedEthPending && formattedPrivyEthBalance === "0.0000",
+      headerEthLoading: embeddedEthPending && formattedPrivyEthBalance == null,
     }),
     [
       embeddedTokenBalance,

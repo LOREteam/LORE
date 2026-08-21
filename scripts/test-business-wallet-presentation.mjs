@@ -3,12 +3,19 @@ import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as walletTransferRowModule from "../app/components/wallet/WalletTransferRow.tsx";
+import * as walletTransferPanelsModule from "../app/components/wallet/WalletSettingsTransferPanels.tsx";
 import * as pendingTxPanelModule from "../app/components/wallet/WalletSettingsPendingTxPanel.tsx";
 import * as headerPoolChartModule from "../app/components/header/HeaderPoolChart.tsx";
+import * as sectionBuildersModule from "../app/lib/lineaOreClientSectionBuilders.ts";
+import * as pageWalletOverviewModule from "../app/hooks/usePageWalletOverview.ts";
 
 const walletTransferRow = walletTransferRowModule.default ?? walletTransferRowModule;
+const walletTransferPanels = walletTransferPanelsModule.default ?? walletTransferPanelsModule;
+const pageWalletOverview = pageWalletOverviewModule.default ?? pageWalletOverviewModule;
+const normalizeCachedPrivyBalances = pageWalletOverview.normalizeCachedPrivyBalances;
 const pendingTxPanel = pendingTxPanelModule.default ?? pendingTxPanelModule;
 const headerPoolChart = headerPoolChartModule.default ?? headerPoolChartModule;
+const sectionBuilders = sectionBuildersModule.default ?? sectionBuildersModule;
 
 function assertTransferPresentation(input, actual) {
   const expectedState = input.loading ? "pending" : input.disabled ? "unavailable" : "ready";
@@ -206,6 +213,108 @@ export function runWalletPresentationTests() {
     /walletTransfers\.statusMessage[\s\S]*dataStatus === "error"[\s\S]*Try again[\s\S]*No verified LINEA transfers were found/,
     "wallet transfer history must distinguish unavailable RPC data from an empty verified history",
   );
+  assert.deepEqual(
+    normalizeCachedPrivyBalances(undefined),
+    { token: null, eth: null },
+    "missing cached wallet balances must remain unknown instead of becoming zero",
+  );
+  assert.deepEqual(
+    normalizeCachedPrivyBalances({ token: "not-a-number", eth: "Infinity" }),
+    { token: null, eth: null },
+    "invalid cached wallet balances must remain unknown instead of becoming zero",
+  );
+  assert.deepEqual(
+    normalizeCachedPrivyBalances({ token: "0", eth: "0" }),
+    { token: "0.00", eth: "0.0000" },
+    "a verified literal zero must remain distinguishable from an unavailable balance",
+  );
+  const unavailableTransferSummary = {
+    transfers: [],
+    totalIn: 0,
+    totalOut: 0,
+    totalInDisplay: "0.00",
+    totalOutDisplay: "0.00",
+    dataStatus: "error",
+    updatedAt: null,
+    statusMessage: "Transfer history is temporarily unavailable. Check your network connection and try again.",
+  };
+  const transferPanelProps = {
+    embeddedWalletAddress: "0x1111111111111111111111111111111111111111",
+    externalWalletAddress: "0x2222222222222222222222222222222222222222",
+    formattedLineaBalance: null,
+    formattedEthBalance: null,
+    withdrawAmount: "",
+    withdrawEthAmount: "",
+    isWithdrawing: false,
+    isWithdrawingEth: false,
+    walletTransfers: unavailableTransferSummary,
+    walletTransfersLoading: false,
+    onWithdrawAmountChange: () => undefined,
+    onWithdrawEthAmountChange: () => undefined,
+    onWithdrawToExternal: () => undefined,
+    onWithdrawEthToExternal: () => undefined,
+    onLoadWalletTransfers: () => undefined,
+  };
+  const unavailableTransferPanelHtml = renderToStaticMarkup(React.createElement(
+    walletTransferPanels.WalletSettingsTransferPanels,
+    transferPanelProps,
+  ));
+  assert.match(unavailableTransferPanelHtml, /LINEA Balance: <span[^>]*>Unavailable<\/span>/);
+  assert.match(unavailableTransferPanelHtml, /ETH Balance: <span[^>]*>Unavailable<\/span>/);
+  assert.match(unavailableTransferPanelHtml, /Transfer totals unavailable until a successful refresh\./);
+  assert.match(unavailableTransferPanelHtml, />Try again<\/button>/);
+  assert.doesNotMatch(unavailableTransferPanelHtml, /Deposited<\/div>[\s\S]*?0\.00/);
+  assert.doesNotMatch(unavailableTransferPanelHtml, /Withdrawn<\/div>[\s\S]*?0\.00/);
+  const verifiedZeroTransferPanelHtml = renderToStaticMarkup(React.createElement(
+    walletTransferPanels.WalletSettingsTransferPanels,
+    {
+      ...transferPanelProps,
+      formattedLineaBalance: "0.00",
+      formattedEthBalance: "0.0000",
+      walletTransfers: { ...unavailableTransferSummary, dataStatus: "live", statusMessage: null },
+    },
+  ));
+  assert.match(verifiedZeroTransferPanelHtml, /LINEA Balance: <span[^>]*>0\.00 LINEA<\/span>/);
+  assert.match(verifiedZeroTransferPanelHtml, /ETH Balance: <span[^>]*>0\.0000 ETH<\/span>/);
+  assert.match(verifiedZeroTransferPanelHtml, /Deposited<\/div>[\s\S]*?0\.00/);
+  assert.match(verifiedZeroTransferPanelHtml, /Withdrawn<\/div>[\s\S]*?0\.00/);
+  const headerBuilderBase = {
+    actualCurrentEpoch: 1,
+    gridDisplayEpoch: 1,
+    currentRoundEvidence: null,
+    visualEpoch: 1,
+    isRevealing: false,
+    coldBootDefaults: false,
+    liveStateReady: true,
+    timerReady: true,
+    timeLeft: 0,
+    rolloverAmount: 0,
+    jackpotInfo: null,
+    embeddedWalletAddress: null,
+    embeddedWalletSyncing: false,
+    formattedPrivyEthBalance: null,
+    headerEthLoading: false,
+    headerLineaBalance: null,
+    headerLineaLoading: false,
+    openWalletSettings: () => undefined,
+    soundMuted: false,
+    toggleSoundMute: () => undefined,
+    recentWins: [],
+    jackpotHistory: [],
+    reducedMotion: true,
+    isPageVisible: true,
+    epochDurationChange: null,
+  };
+  const unknownHeaderProps = sectionBuilders.buildHeaderProps(headerBuilderBase);
+  assert.equal(unknownHeaderProps.privyTokenBalance, "—");
+  assert.equal(unknownHeaderProps.privyEthBalance, "—");
+  const verifiedZeroHeaderProps = sectionBuilders.buildHeaderProps({
+    ...headerBuilderBase,
+    headerLineaBalance: "0.00",
+    formattedPrivyEthBalance: "0.0000",
+  });
+  assert.equal(verifiedZeroHeaderProps.privyTokenBalance, "0.00");
+  assert.equal(verifiedZeroHeaderProps.privyEthBalance, "0.0000");
   const validReplacementHash = `0x${"a".repeat(64)}`;
   const blockedStatus = {
     latestNonce: 7,

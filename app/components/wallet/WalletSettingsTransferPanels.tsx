@@ -52,10 +52,10 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
         <div className="text-[10px] text-gray-300 font-bold uppercase tracking-widest mb-1.5">Withdraw to Deposit Wallet</div>
         <div className="text-xs text-gray-500 mb-1">To: {externalWalletAddress ? shortenAddress(externalWalletAddress) : "none"}</div>
         <div className="text-xs text-gray-500 mb-1">
-          LINEA Balance: <span className="text-white font-semibold">{formattedLineaBalance ?? "0.00"} LINEA</span>
+          LINEA Balance: <span className="text-white font-semibold">{formattedLineaBalance == null ? "Unavailable" : `${formattedLineaBalance} LINEA`}</span>
         </div>
         <div className="text-xs text-gray-500 mb-2">
-          ETH Balance: <span className="text-white font-semibold">{formattedEthBalance ?? "0.0000"} ETH</span>
+          ETH Balance: <span className="text-white font-semibold">{formattedEthBalance == null ? "Unavailable" : `${formattedEthBalance} ETH`}</span>
         </div>
         <div className="space-y-2">
           <WalletTransferRow
@@ -136,18 +136,24 @@ export const WalletSettingsTransferPanels = React.memo(function WalletSettingsTr
                   )}
                 </div>
               )}
-              <div className="flex gap-3 mb-3">
-                <div className="flex-1 rounded-lg bg-emerald-500/6 border border-emerald-500/20 p-2.5 text-center">
-                  <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Deposited</div>
-                  <div className="lore-nums text-sm font-bold text-emerald-400">{walletTransfers.totalInDisplay}</div>
-                  <div className="text-[9px] text-gray-400">LINEA</div>
+              {walletTransfers.dataStatus === "error" ? (
+                <div role="status" aria-live="polite" className="mb-3 rounded-lg border border-red-400/35 bg-red-500/10 px-3 py-2 text-center text-xs text-red-100">
+                  Transfer totals unavailable until a successful refresh.
                 </div>
-                <div className="flex-1 rounded-lg bg-red-500/6 border border-red-500/20 p-2.5 text-center">
-                  <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Withdrawn</div>
-                  <div className="lore-nums text-sm font-bold text-red-400">{walletTransfers.totalOutDisplay}</div>
-                  <div className="text-[9px] text-gray-400">LINEA</div>
+              ) : (
+                <div className="flex gap-3 mb-3">
+                  <div className="flex-1 rounded-lg bg-emerald-500/6 border border-emerald-500/20 p-2.5 text-center">
+                    <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Deposited</div>
+                    <div className="lore-nums text-sm font-bold text-emerald-400">{walletTransfers.totalInDisplay}</div>
+                    <div className="text-[9px] text-gray-400">LINEA</div>
+                  </div>
+                  <div className="flex-1 rounded-lg bg-red-500/6 border border-red-500/20 p-2.5 text-center">
+                    <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-0.5">Withdrawn</div>
+                    <div className="lore-nums text-sm font-bold text-red-400">{walletTransfers.totalOutDisplay}</div>
+                    <div className="text-[9px] text-gray-400">LINEA</div>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {walletTransfers.dataStatus === "error" ? (
                 <UiButton
