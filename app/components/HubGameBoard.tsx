@@ -9,6 +9,7 @@ import { MiningGrid } from "./MiningGrid";
 import { deriveWalletCta } from "./BetPanel";
 import { requestWalletLogin } from "../lib/walletLoginRequest";
 import { UiButton } from "./ui/UiButton";
+import type { RewardScanVerificationState } from "../lib/types";
 
 interface TileViewRow {
   tileId: number;
@@ -51,6 +52,7 @@ interface HubGameBoardProps {
   weeklyJackpotFallbackAmount?: number;
   hasMyWinningBet: boolean;
   unclaimedWins: UnclaimedWin[];
+  rewardScanState: RewardScanVerificationState;
   isScanning: boolean;
   isDeepScanning: boolean;
   isClaiming: boolean;
@@ -77,6 +79,38 @@ export function getMobileRewardsWalletPresentation({
   };
 }
 
+export function getMobileRewardScanPresentation({
+  rewardScanState,
+  isScanning,
+  isDeepScanning,
+  hasVisibleWins,
+}: {
+  rewardScanState: RewardScanVerificationState;
+  isScanning: boolean;
+  isDeepScanning: boolean;
+  hasVisibleWins: boolean;
+}) {
+  const scanInProgress = isScanning || isDeepScanning || rewardScanState.status === "loading" || rewardScanState.status === "refreshing";
+  if (rewardScanState.incomplete) {
+    return { message: "Reward scan was incomplete. Results may be partial.", canRetry: true, scanInProgress };
+  }
+  if (scanInProgress) {
+    return { message: "Checking on-chain rewards…", canRetry: true, scanInProgress };
+  }
+  if (rewardScanState.status === "idle") {
+    return { message: "Rewards have not been checked yet.", canRetry: true, scanInProgress };
+  }
+  if (rewardScanState.status === "stale") {
+    return { message: hasVisibleWins ? "Showing last verified rewards." : "Rewards need verification.", canRetry: true, scanInProgress };
+  }
+  if (rewardScanState.status === "error") {
+    return { message: "Reward scan failed.", canRetry: true, scanInProgress };
+  }
+  if (rewardScanState.status === "verified" && !hasVisibleWins) {
+    return { message: "No claimable rewards found", canRetry: false, scanInProgress };
+  }
+  return { message: hasVisibleWins ? "Rewards verified." : "Rewards need verification.", canRetry: !hasVisibleWins, scanInProgress };
+}
 export const HubGameBoard = React.memo(function HubGameBoard({
   gridDisplayEpoch,
   coldBootDefaults,
@@ -106,6 +140,7 @@ export const HubGameBoard = React.memo(function HubGameBoard({
   weeklyJackpotFallbackAmount,
   hasMyWinningBet,
   unclaimedWins,
+  rewardScanState,
   isScanning,
   isDeepScanning,
   isClaiming,
@@ -126,6 +161,22 @@ export const HubGameBoard = React.memo(function HubGameBoard({
     embeddedWalletSyncing,
   });
   const { walletCta: rewardsWalletCta } = rewardsWalletPresentation;
+  const rewardSummary = unclaimedWins.length > 0
+    ? `${formatLineaWeiAmountDisplay(totalUnclaimedWei)} LINEA across ${unclaimedWins.length} epoch${unclaimedWins.length === 1 ? "" : "s"}`
+    : null;
+  const rewardScanPresentation = getMobileRewardScanPresentation({
+    rewardScanState,
+    isScanning,
+    isDeepScanning,
+    hasVisibleWins: unclaimedWins.length > 0,
+  });
+  const mobileRewardsMessage = rewardsWalletPresentation.message
+    ?? (rewardSummary
+      ? `${rewardScanPresentation.message} ${rewardSummary}`
+      : rewardScanPresentation.message);
+  const shouldShowRewardScanAction = rewardsWalletCta === "ready"
+    && Boolean(walletAddress)
+    && (unclaimedWins.length === 0 || rewardScanPresentation.canRetry);
   const onboarding = getOnboardingState({ walletAddress, walletConnected, formattedBalance, formattedEthBalance, lowEthBalance });
   const onboardingComplete = Object.values(onboarding).every(Boolean);
   const onboardingAction = getOnboardingNextAction({ onboarding, walletCta: rewardsWalletCta });
@@ -210,12 +261,7 @@ export const HubGameBoard = React.memo(function HubGameBoard({
           <div className="min-w-0">
             <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-200">Unclaimed rewards</p>
             <p className="mt-1 text-sm font-bold text-white">
-              {isScanning || isDeepScanning
-                ? "Checking on-chain rewards…"
-                : rewardsWalletPresentation.message
-                  ?? (unclaimedWins.length > 0
-                    ? `${formatLineaWeiAmountDisplay(totalUnclaimedWei)} LINEA across ${unclaimedWins.length} epoch${unclaimedWins.length === 1 ? "" : "s"}`
-                    : "No claimable rewards found")}
+              {mobileRewardsMessage}
             </p>
           </div>
           {rewardsWalletCta === "login" ? (
@@ -237,9 +283,16 @@ export const HubGameBoard = React.memo(function HubGameBoard({
             Claim reward
           </UiButton>
         )}
-        {rewardsWalletCta === "ready" && !isScanning && !isDeepScanning && unclaimedWins.length === 0 && walletAddress && (
-          <UiButton onClick={onScan} variant="ghost" size="sm" fullWidth className="mt-3 min-h-11">
-            Check rewards
+        {shouldShowRewardScanAction && (
+          <UiButton
+            onClick={onScan}
+            disabled={rewardScanPresentation.scanInProgress}
+            variant="ghost"
+            size="sm"
+            fullWidth
+            className="mt-3 min-h-11"
+          >
+            {rewardScanPresentation.scanInProgress ? "Checking rewards" : rewardScanPresentation.canRetry ? "Retry rewards" : "Check rewards"}
           </UiButton>
         )}
       </section>

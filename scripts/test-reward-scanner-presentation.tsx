@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RewardScanner } from "../app/components/RewardScanner";
+import { getMobileRewardScanPresentation, getMobileRewardsWalletPresentation } from "../app/components/HubGameBoard";
 
 type RewardScannerProps = React.ComponentProps<typeof RewardScanner>;
 
@@ -40,4 +41,59 @@ assert.match(deep, /<div role="status" aria-live="polite"[^>]*>.*Full reward his
 const scanning = renderRewardScanner({ isScanning: true });
 assert.match(scanning, /<div role="status" aria-live="polite" aria-busy="true"[^>]*>.*<svg aria-hidden="true"/);
 
+const verifiedEmptyMobileRewards = getMobileRewardScanPresentation({
+  rewardScanState: { status: "verified", walletAddress: "0xabc", lastVerifiedAt: 1_000, incomplete: false, error: null },
+  isScanning: false,
+  isDeepScanning: false,
+  hasVisibleWins: false,
+});
+assert.deepEqual(verifiedEmptyMobileRewards, { message: "No claimable rewards found", canRetry: false, scanInProgress: false });
+
+const idleMobileRewards = getMobileRewardScanPresentation({
+  rewardScanState: { status: "idle", walletAddress: "0xabc", lastVerifiedAt: null, incomplete: false, error: null },
+  isScanning: false,
+  isDeepScanning: false,
+  hasVisibleWins: false,
+});
+assert.equal(idleMobileRewards.message, "Rewards have not been checked yet.");
+assert.equal(idleMobileRewards.canRetry, true);
+
+const loadingMobileRewards = getMobileRewardScanPresentation({
+  rewardScanState: { status: "loading", walletAddress: "0xabc", lastVerifiedAt: null, incomplete: false, error: null },
+  isScanning: true,
+  isDeepScanning: false,
+  hasVisibleWins: false,
+});
+assert.equal(loadingMobileRewards.message, "Checking on-chain rewards…");
+assert.equal(loadingMobileRewards.scanInProgress, true);
+
+const staleMobileRewards = getMobileRewardScanPresentation({
+  rewardScanState: { status: "stale", walletAddress: "0xabc", lastVerifiedAt: 1_000, incomplete: false, error: null },
+  isScanning: false,
+  isDeepScanning: false,
+  hasVisibleWins: true,
+});
+assert.equal(staleMobileRewards.message, "Showing last verified rewards.");
+assert.equal(staleMobileRewards.canRetry, true);
+
+const failedMobileRewards = getMobileRewardScanPresentation({
+  rewardScanState: { status: "error", walletAddress: "0xabc", lastVerifiedAt: null, incomplete: false, error: "RPC unavailable" },
+  isScanning: false,
+  isDeepScanning: false,
+  hasVisibleWins: false,
+});
+assert.equal(failedMobileRewards.message, "Reward scan failed.");
+assert.equal(failedMobileRewards.canRetry, true);
+
+const partialMobileRewards = getMobileRewardScanPresentation({
+  rewardScanState: { status: "stale", walletAddress: "0xabc", lastVerifiedAt: 1_000, incomplete: true, error: "short multicall" },
+  isScanning: false,
+  isDeepScanning: false,
+  hasVisibleWins: true,
+});
+assert.equal(partialMobileRewards.message, "Reward scan was incomplete. Results may be partial.");
+assert.equal(partialMobileRewards.canRetry, true);
+
+assert.equal(getMobileRewardsWalletPresentation({ walletAuthenticated: false, walletConnected: false, embeddedWalletSyncing: false }).walletCta, "login");
+assert.equal(getMobileRewardsWalletPresentation({ walletAuthenticated: true, walletConnected: false, embeddedWalletSyncing: false }).walletCta, "create");
 console.log("reward-scanner-presentation-pass");

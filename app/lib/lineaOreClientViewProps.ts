@@ -505,6 +505,7 @@ export function createLineaOreClientViewProps({
       isPending,
       isRevealing,
       isScanning,
+      rewardScanState,
       coldBootDefaults,
       liveStateReady,
       isWeeklyJackpot,

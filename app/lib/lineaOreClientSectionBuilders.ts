@@ -375,6 +375,7 @@ type BuildPageTabContentPropsOptions = {
   isPending: PageTabContentProps["hubProps"]["isPending"];
   isRevealing: PageTabContentProps["hubProps"]["isRevealing"];
   isScanning: PageTabContentProps["hubProps"]["isScanning"];
+  rewardScanState: PageTabContentProps["hubProps"]["rewardScanState"];
   coldBootDefaults: PageTabContentProps["hubProps"]["coldBootDefaults"];
   liveStateReady: PageTabContentProps["hubProps"]["liveStateReady"];
   isWeeklyJackpot: PageTabContentProps["hubProps"]["isWeeklyJackpot"];
@@ -451,6 +452,7 @@ export function buildPageTabContentProps({
   isPending,
   isRevealing,
   isScanning,
+  rewardScanState,
   coldBootDefaults,
   liveStateReady,
   isWeeklyJackpot,
@@ -529,6 +531,7 @@ export function buildPageTabContentProps({
       isPending,
       isRevealing,
       isScanning,
+      rewardScanState,
       coldBootDefaults,
       liveStateReady,
       isWeeklyJackpot,

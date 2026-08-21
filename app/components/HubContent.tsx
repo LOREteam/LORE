@@ -5,6 +5,7 @@ import Image from "next/image";
 import { parseUnits } from "viem";
 import { usePublicClient } from "wagmi";
 import type { AutoMinePhase } from "../hooks/useMining.types";
+import type { RewardScanVerificationState } from "../lib/types";
 import { useManualBetForm } from "../hooks/useManualBetForm";
 import {
   APP_CHAIN_ID,
@@ -64,6 +65,7 @@ interface HubContentProps {
   isPending: boolean;
   isRevealing: boolean;
   isScanning: boolean;
+  rewardScanState: RewardScanVerificationState;
   coldBootDefaults: boolean;
   liveStateReady: boolean;
   isDailyJackpot: boolean;
@@ -112,6 +114,7 @@ export const HubContent = React.memo(function HubContent({
   isPending,
   isRevealing,
   isScanning,
+  rewardScanState,
   coldBootDefaults,
   liveStateReady,
   isDailyJackpot,
@@ -268,6 +271,7 @@ export const HubContent = React.memo(function HubContent({
             weeklyJackpotFallbackAmount={weeklyJackpotFallbackAmount}
             hasMyWinningBet={hasMyWinningBet}
             unclaimedWins={unclaimedWins}
+            rewardScanState={rewardScanState}
             isScanning={isScanning}
             isDeepScanning={isDeepScanning}
             isClaiming={isClaiming}
