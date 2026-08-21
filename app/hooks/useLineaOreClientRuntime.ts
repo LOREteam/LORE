@@ -13,6 +13,7 @@ import { useLineaOreWalletRuntime } from "./useLineaOreWalletRuntime";
 import { usePageAncillaryData } from "./usePageAncillaryData";
 import { useRebate } from "./useRebate";
 import type { RecentWin } from "./useRecentWins";
+import type { TabId } from "../lib/types";
 
 const MIN_ETH_FOR_GAS = 0.0005;
 const MIN_ETH_WITHDRAW_RESERVE_WEI = parseUnits("0.0005", 18);
@@ -21,16 +22,19 @@ const READ_ONLY_REASON = "Maintenance mode: betting is temporarily paused. Exist
 interface UseLineaOreClientRuntimeOptions {
   initialLiveState?: LiveStateApiResponse | null;
   initialRecentWins?: RecentWin[];
+  initialTab?: TabId;
 }
 
 export function useLineaOreClientRuntime({
   initialLiveState = null,
   initialRecentWins = [],
+  initialTab = "hub",
 }: UseLineaOreClientRuntimeOptions) {
   const { writeContractAsync } = useWriteContract();
   const { getAccessToken } = usePrivy();
   const baseState = useLineaOreClientBaseState({
     initialLiveState,
+    initialTab,
   });
   const { uiHydrated, motion, sound, wallet, shell, gameData, chart, normalizedEmbeddedAddress, publicClient } =
     baseState;

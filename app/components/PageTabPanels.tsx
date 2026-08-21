@@ -3,8 +3,10 @@
 import React from "react";
 import dynamic from "next/dynamic";
 import { HubContent } from "./HubContent";
+import { FAQ } from "./FAQ";
+import { Leaderboards } from "./Leaderboards";
+import { WhitePaper } from "./WhitePaper";
 import type { Analytics } from "./Analytics";
-import type { Leaderboards } from "./Leaderboards";
 import type { RebatePanel } from "./RebatePanel";
 import { isChunkLoadLikeErrorMessage } from "../lib/chunkReloadRecovery";
 
@@ -34,24 +36,12 @@ async function loadStaticTabWithRetry<T>(loader: () => Promise<T>): Promise<T> {
 }
 
 const loadAnalytics = () => loadStaticTabWithRetry(() => import("./Analytics")).then((mod) => mod.Analytics);
-const loadLeaderboards = () => loadStaticTabWithRetry(() => import("./Leaderboards")).then((mod) => mod.Leaderboards);
 const loadRebatePanel = () => loadStaticTabWithRetry(() => import("./RebatePanel")).then((mod) => mod.RebatePanel);
-const loadWhitePaper = () => loadStaticTabWithRetry(() => import("./WhitePaper")).then((mod) => mod.WhitePaper);
-const loadFAQ = () => loadStaticTabWithRetry(() => import("./FAQ")).then((mod) => mod.FAQ);
 
 const LazyAnalytics = dynamic(loadAnalytics, {
   loading: TabPanelFallback,
 });
-const LazyLeaderboards = dynamic(loadLeaderboards, {
-  loading: TabPanelFallback,
-});
 const LazyRebatePanel = dynamic(loadRebatePanel, {
-  loading: TabPanelFallback,
-});
-const LazyWhitePaper = dynamic(loadWhitePaper, {
-  loading: TabPanelFallback,
-});
-const LazyFAQ = dynamic(loadFAQ, {
   loading: TabPanelFallback,
 });
 
@@ -82,13 +72,13 @@ export const PageTabPanels = React.memo(function PageTabPanels({
       activePanel = <LazyRebatePanel {...rebateProps} />;
       break;
     case "leaderboards":
-      activePanel = <LazyLeaderboards {...leaderboardsProps} />;
+      activePanel = <Leaderboards {...leaderboardsProps} />;
       break;
     case "whitepaper":
-      activePanel = <LazyWhitePaper />;
+      activePanel = <WhitePaper />;
       break;
     case "faq":
-      activePanel = <LazyFAQ />;
+      activePanel = <FAQ />;
       break;
     default:
       activePanel = null;

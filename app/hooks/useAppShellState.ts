@@ -142,8 +142,8 @@ export function createAppMountDiagnostic(
   return { path: location.pathname, tab, time: now.toISOString() };
 }
 
-export function useAppShellState() {
-  const [activeTab, setActiveTab] = useState<TabId>("hub");
+export function useAppShellState(initialTab: TabId = "hub") {
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
   const [chatOpen, setChatOpen] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(true);
   const [isWalletSettingsOpen, setIsWalletSettingsOpen] = useState(false);

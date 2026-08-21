@@ -61,6 +61,7 @@ import { runHubReadOnlyControlTests } from "./test-business-hub-readonly-control
 import { runBrowserToolingBehaviorTests } from "./test-business-browser-tooling-behavior.mjs";
 import { runSecurityFollowupBehaviorTests } from "./test-business-security-followup.mjs";
 import { runPublicPresentationTests } from "./test-business-public-presentation.mjs";
+import { runDirectRouteSsrTests } from "./test-business-direct-route-ssr.mjs";
 import { runSummaryTimeoutTests } from "./test-business-summary-timeout.mjs";
 import { runAutonomousStatusBehaviorTests } from "./test-business-autonomous-status.mjs";
 import { runAutonomousDailyStatusTests } from "./test-business-autonomous-daily-status.mjs";
@@ -158,6 +159,7 @@ export async function runBusinessLogicSuite() {
   runJackpotBannerPresentationTests();
   runPublicMetadataTests();
   runPublicPresentationTests();
+  runDirectRouteSsrTests();
   runTutorialAndPublicCopyTests();
   await runRuntimeMonitorBoundaryTests();
   runHttpSmokeBoundaryTests();

@@ -12,13 +12,16 @@ import { usePrivyWallet } from "./usePrivyWallet";
 import { useReducedMotion } from "./useReducedMotion";
 import { useSound } from "./useSound";
 import { useStableChatWalletAddress } from "./useStableChatWalletAddress";
+import type { TabId } from "../lib/types";
 
 interface UseLineaOreClientBaseStateOptions {
   initialLiveState?: LiveStateApiResponse | null;
+  initialTab?: TabId;
 }
 
 export function useLineaOreClientBaseState({
   initialLiveState = null,
+  initialTab = "hub",
 }: UseLineaOreClientBaseStateOptions) {
   const [uiHydrated, setUiHydrated] = useState(false);
   const motion = useReducedMotion();
@@ -34,7 +37,7 @@ export function useLineaOreClientBaseState({
     }
   }, [wallet.embeddedWalletAddress]);
 
-  const shell = useAppShellState();
+  const shell = useAppShellState(initialTab);
   const gameData = useGameData({
     historyDetailed: shell.activeTab === "analytics",
     initialServerLiveState: initialLiveState,

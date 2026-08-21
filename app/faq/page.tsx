@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { LorePage } from "../LorePage";
 
 export const metadata: Metadata = {
   title: "FAQ | LORE",
@@ -7,4 +8,6 @@ export const metadata: Metadata = {
   openGraph: { title: "LORE FAQ", url: "/faq" },
 };
 
-export { default } from "../page";
+export default function FaqPage() {
+  return <LorePage initialTab="faq" />;
+}

@@ -33,12 +33,14 @@ interface LineaOreClientProps {
   initialLiveState?: LiveStateApiResponse | null;
   initialNowMs?: number;
   initialRecentWins?: RecentWin[];
+  initialTab?: TabId;
 }
 
 export default function LineaOreClient({
   initialLiveState = null,
   initialNowMs = 0,
   initialRecentWins = [],
+  initialTab = "hub",
 }: LineaOreClientProps) {
   const {
     uiHydrated,
@@ -58,6 +60,7 @@ export default function LineaOreClient({
   } = useLineaOreClientRuntime({
     initialLiveState,
     initialRecentWins,
+    initialTab,
   });
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
