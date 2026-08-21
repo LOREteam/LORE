@@ -105,9 +105,11 @@ assert.equal(passing.observedEnvironment.lore_db_path, undefined);
 assert.equal(passing.observedEnvironment.lore_hermetic_build, undefined);
 assert.equal(passing.observedEnvironment.LORE_HERMETIC_BUILD_DB_ROOT, undefined);
 
+const directCoordinatorEnvironment = { ...process.env, LORE_DB_PATH: join(FIXTURE_TEMP, "lore.sqlite") };
+delete directCoordinatorEnvironment.LORE_BUSINESS_LOGIC_ISOLATED_RUNNER;
 const directCoordinator = spawnSync(process.execPath, ["scripts/test-business-logic.mjs"], {
   cwd: FIXTURE_ROOT,
-  env: { ...process.env, LORE_DB_PATH: join(FIXTURE_TEMP, "lore.sqlite") },
+  env: directCoordinatorEnvironment,
   encoding: "utf8",
   windowsHide: true,
 });
