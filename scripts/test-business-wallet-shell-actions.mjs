@@ -18,7 +18,6 @@ const mobileTabNav = mobileTabNavModule.default ?? mobileTabNavModule;
 const MaintenanceOverlay = maintenanceOverlay.MaintenanceOverlay;
 const MobileTabNav = mobileTabNav.MobileTabNav;
 const hubGameBoard = hubGameBoardModule.default ?? hubGameBoardModule;
-const HubGameBoard = hubGameBoard.HubGameBoard;
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   const entries = readdirSync(root, { withFileTypes: true });
