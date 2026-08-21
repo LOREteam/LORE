@@ -8,8 +8,10 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- Branch `codex/repo-cleanup`; latest code commit before this progress refresh:
-  `466de05d2937bdf7e1aaa34a240e8ffb3607c892`.
+- Branch `codex/repo-cleanup`; latest code/test source commit before this
+  progress refresh: `7905dc764` (`test(recovery): cover canonical jackpot event
+  identity`). It is pre-document local-verification lineage, not final
+  immutable-SHA, sealed-provenance, clean-checkout, deployment, or hosted proof.
 - Recent local sequence: `d51b5bb02` honest global-data state,
   `603c43b75` honest wallet unavailable state, `ef0359c95` model-contract
   regression, `7a75f709f` completed Header loading truthfulness, `2518babcf` fixed
@@ -40,8 +42,8 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
    the focused wallet-funding test, full isolated business runner, TypeScript,
    ESLint, script parse, and diff checks passed at the relevant local commits;
    protected DB snapshots remained exact.
-7. The P1.10 audit currently reports `4754/5447` behavioral assertions
-   (`87.28%`).
+7. The P1.10 audit currently reports `4796/5509` behavioral assertions
+   (`87.06%`) at `7905dc764`.
 8. Bounded cleanup removed about `1.00 GiB` of old Node/npm caches only. No
    project data, campaign record, browser profile, protected SQLite, or active
    runtime was removed.
@@ -68,6 +70,23 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     login or wallet creation, Wallet Settings for backup/funding, or scroll to
     bet preparation. Unknown ETH never counts as gas-ready, and first-bet
     browser markers are scoped to the wallet address.
+
+## Pre-document verification snapshot
+
+- The isolated business suite passed at `786b8692b` after stale-fixture fixes.
+  `7905dc764` adds a later recovery-identity assertion only; it does not turn
+  the earlier business-suite result into final current-SHA evidence.
+- At pre-document source `7905dc764`, P1 hardening passed `42/42` in
+  `139491ms`; `typegen` plus `tsc`, standalone V10 and V9 local invariants,
+  global-stats `10000+`, leaderboard `110003`, and the hermetic wrapper passed.
+  These are local mutable-lineage results only.
+- Local read-only Playwright smoke passed with screenshot
+  `artifacts/smoke-browser/sha7905-current-readonly.png`; it did not create a
+  wallet, sign, approve, bet, claim, or send a transaction. It is not launch,
+  hosted, or live-wallet proof.
+- P1.17 self-tests passed at `7905dc764`: collector `85` cases (schema `3`) and
+  verifier `55` cases (schema `3`). They do not replace the final immutable
+  clean-SHA seal pair, headed native-hidden two-hour run, or strict verification.
 ## Campaign status
 
 - `local-20260821-final-r3` iterations 1–3 completed all seven isolated gates.
@@ -98,6 +117,11 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 - V9 remains a compatibility baseline until independently evidenced V10
   cutover. Randomness redesign remains deliberately deferred.
+- The current Sepolia V10 target is
+  `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` at block `31678224`.
+  Runtime/canary use requires `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1`
+  and the epoch-bound selector; the `7905dc764` manifest/provenance check is
+  offline local evidence only.
 - G1–G14 remain `0/14`; `25` external/status blockers and `41` recorded
   mainnet-environment failures remain open.
 - Hosted TLS/HTTPS, Privy origins, real replicas/Redis/DB restore, monitoring,

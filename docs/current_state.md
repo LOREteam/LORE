@@ -10,11 +10,13 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest code commit before this state refresh: `466de05d2937bdf7e1aaa34a240e8ffb3607c892`
-  (`fix(wallet): show header balances as unavailable`).
+- Latest code/test source commit before this state refresh: `7905dc764`
+  (`test(recovery): cover canonical jackpot event identity`). This is
+  pre-document local-verification lineage only, not final immutable-SHA,
+  sealed-provenance, clean-checkout, deployment, or hosted evidence.
 - Before this docs refresh, tracked files were clean. The intentionally
-  untracked `.tmp-npm-runtime-115/`, final-SHA local-gate artifact, and local
-  campaign records are generated evidence/runtime inputs; they are not staged.
+  untracked final-SHA local-gate artifact and local campaign records are
+  generated evidence; they are not staged.
 - Nothing was pushed, hosted, signed, approved, bet, claimed, or submitted to a
   chain in this local cycle.
 - V9 remains a compatibility baseline. Routine gates are V10-oriented, but V9
@@ -62,10 +64,15 @@ OS-temp SQLite paths.
 - `91f951731`, `c06a9bc9d`, and `e185c392e`: local campaign runner disables
   rebuildable `tsx` cache per child command and fail-closes launch/environment
   restore anomalies.
+- `37bf7dbf8` through `7905dc764`: Hub CTA now routes an authenticated user
+  without an embedded wallet into the existing wallet-creation flow; history,
+  mobile rewards, canonical jackpot-share identity, direct public routes,
+  indexing defaults, and opt-in Web Vitals received focused local hardening.
+  The later `7905dc764` change is a recovery assertion only.
 - Removed only measured rebuildable caches: the old Node compile cache and npm
   `_cacache`/`_npx`, freeing about `1.00 GiB`. The active runtime, campaign
   records, project data, browser profile, and all SQLite files were retained.
-- P1.10 AST audit is currently `4754/5447` behavioral assertions (`87.28%`);
+- P1.10 AST audit is currently `4796/5509` behavioral assertions (`87.06%`);
   extraction remains partial.
 
 ## Verification state
@@ -77,9 +84,12 @@ OS-temp SQLite paths.
 | Manual bet persistence | Focused wallet-funding presentation test proves restore-before-persist and scoped storage behavior; TypeScript passed | Pass locally |
 | Campaign runner hardening | PowerShell script parses, diff hygiene passed, child commands run with `TSX_DISABLE_CACHE=1`, environment restoration is fail-closed, and launch anomalies fail closed | Pass locally without rerunning full campaign |
 | Local campaign | Iterations 1–3 completed all seven isolated gates. Iteration 4 stopped at `business-logic-isolated` because its old model assertion expected fake zero strings while code correctly returned `null`. The protected snapshot did not change and the campaign process exited. | Historical regression evidence only; not current-SHA/final evidence |
-| P1.10 audit | `scripts/audit-p1-behavior.mjs` passed: `4754/5447` (`87.28%`) | Pass locally; partial objective |
-| P1.17 mechanism | Dual canonical/profiling provenance tooling and self-tests exist | Open: final-SHA sealed builds plus physical native-hidden two-hour evidence |
-| Sepolia V10 cutover | Canonical deployment/runtime proof is recorded locally with epoch-bound mode enabled | Hosted frontend/indexer and independent external evidence remain open |
+| Pre-doc local business suite | The isolated business suite passed at `786b8692b` after stale-fixture fixes. `7905dc764` adds a later test-only recovery-identity assertion; this is not represented as a current-SHA final-suite rerun. | Pass locally for the stated mutable lineage only |
+| Pre-doc local gate packet | At `7905dc764`: P1 hardening `42/42` in `139491ms`; TypeScript `typegen` plus `tsc`, standalone V10 and V9 local invariants, global-stats `10000+`, leaderboard `110003`, and the hermetic wrapper passed. | Pass locally only; not final immutable-SHA evidence |
+| Read-only browser smoke | Local read-only Playwright smoke passed; screenshot: `artifacts/smoke-browser/sha7905-current-readonly.png`. It did not sign, create a wallet, approve, bet, claim, or send a transaction. | Local UI evidence only, not launch, hosted, or live-wallet proof |
+| P1.10 audit | `scripts/audit-p1-behavior.mjs` passed at `7905dc764`: `4796/5509` behavioral assertions (`87.06%`) | Pass locally; partial objective |
+| P1.17 mechanism | Current self-tests at `7905dc764` passed: collector `85` cases (schema `3`) and verifier `55` cases (schema `3`). No two-hour run, build, browser, or DB gate is represented here. | Open: final immutable clean SHA, sealed canonical/profile pair, headed native-hidden two-hour run, and strict verification |
+| Sepolia V10 target | Canonical target is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` at block `31678224`; managed runtime must set `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1` and require the epoch-bound selector. Offline manifest/provenance verification at `7905dc764` is local only. | Deployed-bytecode, hosted frontend/indexer, and independent external evidence remain open |
 | Production HTTPS | `https://playlore.xyz/` previously presented `ERR_CERT_COMMON_NAME_INVALID` | External hosting/domain remediation |
 | Supported Standard security scan | Supported entitlement remains unavailable locally | External entitlement blocker |
 

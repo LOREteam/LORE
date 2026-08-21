@@ -15,6 +15,9 @@ under [`docs/archive/`](archive/).
       `npm ci`; run dependency gates, full local/prelaunch gates, hermetic
       build, typecheck, supported browser/HTTP smoke, V10 properties, and DB
       invariants when disk permits.
+- [ ] Do not promote the pre-document results at `7905dc764` to this final-SHA
+      item: the business suite passed at `786b8692b`, while `7905dc764` adds a
+      test-only recovery assertion. Both are mutable local lineage only.
 - [ ] Run and seal the supported final security scan of that exact immutable
       SHA. Existing scans are historical patch evidence, not final-SHA proof.
 - [ ] Obtain green hosted Linux/Windows CI for the exact final commit.
@@ -24,7 +27,8 @@ under [`docs/archive/`](archive/).
 
 ### P1.10 behavioral extraction
 
-- [x] Current audit: `4754/5447` behavioral assertions (`87.28%`).
+- [x] Current audit at `7905dc764`: `4796/5509` behavioral assertions
+      (`87.06%`).
 - [x] Extract and cover manual bet storage restore/persist behavior, including
       restore-before-persist on browser mount.
 - [ ] Continue replacing source operands only when a stable public behavior seam
@@ -33,10 +37,13 @@ under [`docs/archive/`](archive/).
 
 ### P1.17 sealed performance evidence
 
-- [x] Dual canonical/profiling provenance mechanism is implemented.
-- [ ] On the final SHA, seal canonical and isolated profiling outputs, run the
-      60–90 second headed native-hidden preflight, then one two-hour read-only
-      loopback collection and strict clean-checkout verification.
+- [x] Dual canonical/profiling provenance mechanism is implemented; current
+      self-tests at `7905dc764` passed collector `85` cases (schema `3`) and
+      verifier `55` cases (schema `3`).
+- [ ] On the final immutable clean SHA, seal the canonical/profile pair, run
+      the 60–90 second headed native-hidden preflight, then one two-hour
+      read-only loopback collection and strict verification. No current
+      build/browser/DB/two-hour evidence is claimed by the self-tests.
 
 ### Truthful public and wallet data
 
@@ -75,8 +82,10 @@ Detailed criteria are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md
 - [ ] 2–4h read-only topology rehearsal.
 - [ ] 6 unique-epoch signed canary after fresh Preview and separate bounded
       consent.
-- [ ] 8–12h recovery campaign with controlled failures/reconciliation.
-- [ ] 24–48h soak with at least 50 unique epochs and strict current-V10 proof.
+- [ ] After the consent-bound 6-epoch canary, run the 8–12h recovery campaign
+      with controlled failures/reconciliation.
+- [ ] Only after that recovery evidence, run the 24–48h soak with at least 50
+      unique epochs and strict current-V10 proof.
 - [ ] 2h P1.17 same-SHA native-hidden run.
 - [ ] 6h HTTP load with exact latency/memory gates.
 - [ ] Physical mobile/Privy HTTPS wallet matrix.
@@ -91,6 +100,11 @@ Detailed criteria are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md
       deferred.
 - [ ] Require epoch-bound V10 mode in managed frontend/canary; legacy selectors
       remain compatibility-only.
+- [ ] Bind the next testnet verification to canonical target
+      `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` at block `31678224`, with
+      `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1` and the epoch-bound
+      selector required. The `7905dc764` manifest/provenance result is local
+      only and does not close a live gate.
 
 ## External and live blockers
 

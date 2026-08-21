@@ -5,7 +5,15 @@ Use this runbook for Linea Sepolia validation only. It does not close or modify 
 ## Scope
 
 - Target network: `sepolia` / Linea Sepolia (`59141`).
-- Current V10 test deployment: contract `0x5e40c6e31642ebe8670658fe84c660bd2a0f820f`, deploy block `31035418`.
+- Current canonical V10 target: contract
+  `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a`, deploy block `31678224`.
+- Runtime and every V10 canary must set
+  `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1` and reject a target that
+  lacks the epoch-bound betting selector. Legacy selectors are compatibility
+  only.
+- Offline local V10 manifest/provenance verification is recorded against
+  verifier source SHA `7905dc764` only. It does not prove deployed bytecode,
+  a hosted runtime, a wallet flow, or any signed testnet transaction.
 - Do not copy testnet artifacts into `docs/canary-proof.json`, `docs/qa-proof.json`, or any mainnet proof record.
 
 ## Local Baseline
@@ -80,12 +88,20 @@ available.
 
 Never include private keys, wallet inventory, Privy sessions, cookies, or keyed RPC URLs in reports.
 
-## Real Sepolia Canary
+## Consent-Bound Sepolia Campaign
 
-The target is at least 50 successful unique auto-miner epochs. A count of submitted transactions is not evidence of 50 epochs: the saved JSONL timestamps must show at least 45 seconds between the first and last of the first 50 unique epochs.
+The required order is fixed: (1) a fresh-consent, six-unique-epoch V10
+canary, (2) recovery and reconciliation against that canary, then (3) a
+freshly authorized 50-unique-epoch soak. No phase may be inferred from a
+submission count or from historical records. Every phase must use the canonical
+target, required epoch-bound runtime mode, and its own exact bounded authority.
+
+For phase 1, the saved JSONL must show six successful unique epochs and at
+least 45 seconds between the first and last of those epochs. This is admission
+evidence only; it is not the 50-epoch soak.
 
 ```powershell
-$env:LIVE_CANARY_MIN_EPOCHS = "50"
+$env:LIVE_CANARY_MIN_EPOCHS = "6"
 $env:LIVE_CANARY_MIN_ELAPSED_MS_PER_EPOCH = "45000"
 $env:LIVE_CANARY_RPC_LABEL = "<concrete-redacted-sepolia-provider-label>"
 # This is read-only unless both execution confirmations below are present.
@@ -96,9 +112,10 @@ $env:LIVE_TEST_EXECUTE = "1"
 npm.cmd run live:canary -- --execute-live
 ```
 
-For the production-like 24-hour soak, first run the transaction-free supervisor
-preflight, then keep the real supervisor in a durable foreground terminal or an
-external process manager:
+Only after the six-epoch canary has completed and its recovery/reconciliation
+record is accepted, run the transaction-free supervisor preflight for the
+50-unique-epoch production-like soak. Keep the real supervisor in a durable
+foreground terminal or an external process manager:
 
 ```powershell
 npm.cmd run soak:testnet:dry-run
@@ -145,13 +162,23 @@ Review and replace draft TODO fields only with real evidence, then promote it ma
 npm.cmd run proof:testnet:canary -- data/live-test-runs/<real-log>.jsonl --strict --manifest=docs/testnet-canary-proof.json
 ```
 
-The strict testnet validator requires: Sepolia target metadata, 50 unique successful auto-miner epochs, elapsed wall-clock evidence, unique valid tx hashes, no duplicate role/epoch/tile keys, no nonce gaps, no failed bets/resolves, no template/secret-like values, and verified recovery plus transaction-health evidence.
+The phase-1 validator must require its six unique successful auto-miner epochs;
+the final soak validator must require 50 unique successful epochs. Both require
+Sepolia target metadata, elapsed wall-clock evidence, unique valid tx hashes,
+no duplicate role/epoch/tile keys, no nonce gaps, no failed bets/resolves,
+no template/secret-like values, and verified recovery plus transaction-health
+evidence.
 
 ## Evidence Status
 
 Keep testnet reports and the live JSONL separate from mainnet proof manifests. A passing testnet canary is readiness evidence for testnet only; it is not mainnet launch approval.
 
-### Current Ledger (2026-07-23)
+### Historical Ledger (2026-07-23; not current canonical-V10 evidence)
+
+The rows below preserve prior testnet history only. They do not establish a
+live claim for the canonical target above: no signed canonical-V10 canary, bet,
+claim/rebate, recovery, or soak is recorded by this runbook. Local offline
+manifest/provenance verification at `7905dc764` remains local only.
 
 | Area | Status | Evidence / limit |
 | --- | --- | --- |
@@ -159,7 +186,7 @@ Keep testnet reports and the live JSONL separate from mainnet proof manifests. A
 | Final real-token predeployment gas refresh | Blocked | The stricter predeploy command reached its final transaction-free gas benchmark and failed closed because no configured public test account currently has sufficient existing allowance. Its redacted readiness diagnostic shows sufficient token balance and missing allowance for all four configured roles, without addresses, amounts, or RPC URLs. Existing mined V9/V10 receipts remain historical gas evidence; no synthetic-token estimate is presented as a replacement. |
 | Contract/indexer reconciliation | Pass | A fresh V10 indexer replay stored 12 protected bets over six epochs; restart catch-up was clean and direct chain/indexer accounting matched through the latest resolved epoch. The older `docs/testnet-indexer-chain-comparison-2026-07-10.json` remains V9 regression evidence only. |
 | Current indexer/runtime recheck | Pass | Exact Next/eslint-config-next pins were upgraded from 16.2.6 to 16.2.12. The production dependency audit is clear of high/critical advisories; the full dev-scope audit uses the documented ESLint/minimatch exception. The complete local check passes production build, HTTP smoke, and responsive desktop/mobile browser smoke against the V10 runtime and fresh V10 indexer scope. Its weak rate-limit identity exists only in managed child-process env, production validation rejects the flag, stale smoke origins fail before spawn, and port 3101 is closed. This does not replace the remaining signed wallet matrix. |
-| Current-candidate live canary | In progress | The bounded V10 tranche completed four approvals, 12 protected bets, and five resolves with 21/21 successful receipts, no duplicate hashes or nonce gaps, and lower mined bet gas on every comparable V9 path. A separately authorized sixth resolve then closed funded epoch 7 without a retry, bringing the bounded evidence to 22 successful transactions. The fresh post-receipt planner now exposes seven claim/resolver/fee-flush calls; those live calls and the signed failure matrix remain open before any long soak. |
+| Prior-deployment live canary | Historical only | The bounded V10 tranche recorded four approvals, 12 protected bets, five resolves, and a later sixth resolve on the prior deployment. It does not authorize or prove any action on the canonical target; no claims/rebates, recovery, or long soak are recorded for the current target. |
 | Signed V10 Privy bet and recovery | Open | Existing signed Privy game-bet evidence predates V10. The active V10 browser path still needs a bounded signed bet plus rejection/pending/reload recovery evidence; responsive unsigned browser smoke already passes. |
 | Basic browser UX | Pass | `docs/testnet-browser-smoke.log`: desktop/mobile layout, chart, number typography, navigation, chat, and local persistence. The global-stats browser RPC scan was replaced by indexer-backed `/api/global-stats`; the rebuilt production bundle uses local WOFF2 fonts and passed desktop/mobile Chrome checks with zero console errors. |
 | Local failure-state UX | Pass | Extended browser smoke rendered RPC-offline retry wait, `Recovery queued`, `RESUME PENDING`, session-expired guidance, and state cleanup. This is local UI evidence, not a signed reverted/pending transaction claim. |
