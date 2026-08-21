@@ -50,6 +50,8 @@ type RewardScanCacheEnvelope = {
   cacheVersion?: number;
   /** Timestamp of the last fully verified scan. */
   verifiedAt?: number;
+  /** Set after a confirmed claim; preserves provenance but forces a refresh. */
+  invalidatedAt?: number;
   /** Timestamp retained only for backwards-compatible rescan scheduling. */
   savedAt?: number;
   /** The highest epoch that was scanned up to (exclusive upper bound of scanned range). */
@@ -60,13 +62,14 @@ type RewardScanCacheEnvelope = {
   wins?: UnclaimedWin[];
 };
 
-type CachedRewardScan = {
+export type CachedRewardScan = {
   wins: UnclaimedWin[];
   savedAt: number | null;
   lastScannedEpoch: string | null;
   deepestScannedEpoch: string | null;
   verifiedAt: number | null;
   isVerified: boolean;
+  isInvalidated: boolean;
 };
 
 const EMPTY_REWARD_SCAN_CACHE: CachedRewardScan = {
@@ -76,6 +79,7 @@ const EMPTY_REWARD_SCAN_CACHE: CachedRewardScan = {
   deepestScannedEpoch: null,
   verifiedAt: null,
   isVerified: false,
+  isInvalidated: false,
 };
 
 export class RewardScanIncompleteError extends Error {
@@ -102,6 +106,7 @@ export function parseRewardScanCacheEnvelope(value: unknown, sourceVersion: 2 | 
     ? normalizeCacheTimestamp(parsed.verifiedAt)
     : null;
   const isVerified = verifiedAt !== null && lastScannedEpoch !== null && deepestScannedEpoch !== null;
+  const isInvalidated = sourceVersion === 3 && normalizeCacheTimestamp(parsed.invalidatedAt) !== null;
 
   return {
     wins: normalizeRewardScanWins(parsed.wins),
@@ -110,6 +115,34 @@ export function parseRewardScanCacheEnvelope(value: unknown, sourceVersion: 2 | 
     deepestScannedEpoch,
     verifiedAt: isVerified ? verifiedAt : null,
     isVerified,
+    isInvalidated,
+  };
+}
+
+export function isRewardScanCacheCoveredForEpoch(cache: CachedRewardScan, currentEpoch: bigint): boolean {
+  if (!cache.isVerified || cache.isInvalidated || !cache.lastScannedEpoch || !cache.deepestScannedEpoch) return false;
+  const { minEpoch } = getAutomaticRewardScanBounds(currentEpoch);
+  try {
+    return BigInt(cache.lastScannedEpoch) === currentEpoch && BigInt(cache.deepestScannedEpoch) <= minEpoch;
+  } catch {
+    return false;
+  }
+}
+
+export function getCachedRewardScanState(
+  cache: CachedRewardScan,
+  walletAddress: string,
+  currentEpoch: bigint,
+): RewardScanVerificationState {
+  if (!cache.isVerified || cache.verifiedAt === null) {
+    return { status: "idle", walletAddress, lastVerifiedAt: null, incomplete: false, error: null };
+  }
+  return {
+    status: isRewardScanCacheCoveredForEpoch(cache, currentEpoch) ? "verified" : "stale",
+    walletAddress,
+    lastVerifiedAt: cache.verifiedAt,
+    incomplete: false,
+    error: null,
   };
 }
 
@@ -233,6 +266,31 @@ function loadCachedRewardScan(address: string): CachedRewardScan {
   }
 }
 
+function saveInvalidatedRewardScanCache(
+  address: string,
+  wins: UnclaimedWin[],
+  lastScannedEpoch: string,
+  deepestScannedEpoch: string,
+  verifiedAt: number,
+) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(
+      getRewardScanCacheKey(address, 3),
+      JSON.stringify({
+        cacheVersion: 3,
+        verifiedAt,
+        savedAt: verifiedAt,
+        invalidatedAt: Date.now(),
+        lastScannedEpoch,
+        deepestScannedEpoch,
+        wins,
+      } satisfies RewardScanCacheEnvelope),
+    );
+  } catch {
+    // Leave the in-memory state stale when cache storage is unavailable.
+  }
+}
 function saveCachedRewardScan(
   address: string,
   wins: UnclaimedWin[],
@@ -257,6 +315,18 @@ function saveCachedRewardScan(
     // A completed live scan remains verified in memory even if storage is unavailable.
   }
   return verifiedAt;
+}
+
+function invalidateVerifiedRewardScanCache(address: string, wins: UnclaimedWin[]) {
+  const cached = loadCachedRewardScan(address);
+  if (!cached.isVerified || cached.verifiedAt === null || !cached.lastScannedEpoch || !cached.deepestScannedEpoch) return;
+  saveInvalidatedRewardScanCache(
+    address,
+    wins,
+    cached.lastScannedEpoch,
+    cached.deepestScannedEpoch,
+    cached.verifiedAt,
+  );
 }
 
 export function getRewardScanRescanDelayMs(savedAt: number | null, now = Date.now()) {
@@ -507,6 +577,7 @@ export function useRewardScanner(
     const cached = loadCachedRewardScan(normalizedAddress);
     const cachedLastScanned = cached.lastScannedEpoch ? BigInt(cached.lastScannedEpoch) : null;
     const cachedDeepest = cached.deepestScannedEpoch ? BigInt(cached.deepestScannedEpoch) : null;
+    const cacheCoversCurrentEpoch = isRewardScanCacheCoveredForEpoch(cached, actualCurrentEpoch);
     const hasInMemoryVerification = lastVerifiedAddressRef.current === normalizedAddress
       && lastVerifiedAtRef.current !== null;
     const lastVerifiedAt = hasInMemoryVerification
@@ -634,7 +705,7 @@ export function useRewardScanner(
       // --- Incremental scanning logic ---
       // If we have a valid cache, only scan the gap: [cachedLastScanned .. currentEpoch-1]
       // Then re-validate cached wins to remove any that were claimed since last scan.
-      const hasValidCache = cached.isVerified && cachedLastScanned != null && cachedLastScanned > BigInt(0);
+      const hasValidCache = cacheCoversCurrentEpoch && cachedLastScanned != null && cachedLastScanned > BigInt(0);
       if (hasValidCache && cachedLastScanned! < startEpoch) {
         // Incremental: scan only new epochs (from current-1 down to cachedLastScanned)
         await scanRange(startEpoch, cachedLastScanned!);
@@ -747,24 +818,19 @@ export function useRewardScanner(
     if (!enabled || !isPageVisible || !address || !actualCurrentEpoch) return;
     const normalizedAddress = address.toLowerCase();
     const cached = loadCachedRewardScan(normalizedAddress);
+    const cacheCoversCurrentEpoch = isRewardScanCacheCoveredForEpoch(cached, actualCurrentEpoch);
     cacheSavedAtRef.current = cached.isVerified ? cached.verifiedAt : null;
     lastVerifiedAtRef.current = cached.isVerified ? cached.verifiedAt : null;
     lastVerifiedAddressRef.current = cached.isVerified ? normalizedAddress : null;
 
-    // Only a fully verified v3 cache may be restored, including a verified empty result.
+    // A v3 snapshot may be shown as stale, but only current-epoch coverage may defer a refresh.
     if (mountedRef.current) {
       setUnclaimedWins(cached.isVerified ? cached.wins : []);
-      setRewardScanState({
-        status: cached.isVerified ? "verified" : "idle",
-        walletAddress: normalizedAddress,
-        lastVerifiedAt: cached.isVerified ? cached.verifiedAt : null,
-        incomplete: false,
-        error: null,
-      });
+      setRewardScanState(getCachedRewardScanState(cached, normalizedAddress, actualCurrentEpoch));
     }
 
-    // If cache is recent enough, defer the background rescan
-    const remaining = getRewardScanRescanDelayMs(cached.isVerified ? cached.verifiedAt : null);
+    // Missing coverage, including an invalidated post-claim cache, refreshes immediately.
+    const remaining = getRewardScanRescanDelayMs(cacheCoversCurrentEpoch ? cached.verifiedAt : null);
     if (remaining > 0) {
       const timeoutId = window.setTimeout(() => {
         void scanRewards();
@@ -846,10 +912,10 @@ export function useRewardScanner(
           return;
         }
         if (mountedRef.current) {
-          setUnclaimedWins((prev) => {
-            if (activeClaimAddressRef.current !== claimActor) return prev;
-            return prev.filter((w) => w.epoch !== epochId);
-          });
+          const nextWins = unclaimedWinsRef.current.filter((w) => w.epoch !== epochId);
+          unclaimedWinsRef.current = nextWins;
+          setUnclaimedWins(nextWins);
+          invalidateVerifiedRewardScanCache(claimActor, nextWins);
           setRewardScanState((previous) => previous.walletAddress === claimActor
             ? { ...previous, status: "stale", incomplete: false, error: null }
             : previous);
@@ -1012,10 +1078,10 @@ export function useRewardScanner(
       if (claimActorChanged || activeClaimAddressRef.current !== claimActor) return;
       if (claimedEpochs.size > 0) {
         if (mountedRef.current) {
-          setUnclaimedWins((prev) => {
-            if (activeClaimAddressRef.current !== claimActor) return prev;
-            return prev.filter((w) => !claimedEpochs.has(w.epoch));
-          });
+          const nextWins = unclaimedWinsRef.current.filter((w) => !claimedEpochs.has(w.epoch));
+          unclaimedWinsRef.current = nextWins;
+          setUnclaimedWins(nextWins);
+          invalidateVerifiedRewardScanCache(claimActor, nextWins);
           setRewardScanState((previous) => previous.walletAddress === claimActor
             ? { ...previous, status: "stale", incomplete: false, error: null }
             : previous);

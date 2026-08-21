@@ -177,8 +177,40 @@ export async function runRewardScannerTests() {
       deepestScannedEpoch: "1",
       verifiedAt,
       isVerified: true,
+      isInvalidated: false,
     },
     "a v3 empty cache is a verified no-reward result",
+  );
+  assert.equal(rewardScanner.isRewardScanCacheCoveredForEpoch(verifiedEmptyCache, 100n), true);
+  assert.equal(rewardScanner.isRewardScanCacheCoveredForEpoch(verifiedEmptyCache, 101n), false, "a cache verified for an older epoch must refresh immediately");
+  assert.equal(
+    rewardScanner.getCachedRewardScanState(verifiedEmptyCache, "0xabc", 101n).status,
+    "stale",
+    "an epoch transition must restore prior reward data only as stale",
+  );
+  const claimReloadCache = rewardScanner.parseRewardScanCacheEnvelope({
+    cacheVersion: 3,
+    verifiedAt,
+    savedAt: verifiedAt,
+    invalidatedAt: verifiedAt,
+    lastScannedEpoch: "100",
+    deepestScannedEpoch: "1",
+    wins: [],
+  }, 3);
+  assert.equal(claimReloadCache.isVerified, true, "a post-claim cache retains its last verification provenance");
+  assert.equal(claimReloadCache.isInvalidated, true, "a post-claim cache is explicitly invalidated");
+  assert.deepEqual(claimReloadCache.wins, [], "a claim followed by reload cannot restore the claimed reward row");
+  assert.equal(rewardScanner.isRewardScanCacheCoveredForEpoch(claimReloadCache, 100n), false, "a post-claim cache cannot defer a refresh");
+  assert.deepEqual(
+    rewardScanner.getCachedRewardScanState(claimReloadCache, "0xabc", 100n),
+    {
+      status: "stale",
+      walletAddress: "0xabc",
+      lastVerifiedAt: verifiedAt,
+      incomplete: false,
+      error: null,
+    },
+    "a claim followed by reload must keep the claimed reward absent and only restore stale provenance",
   );
   const legacyEmptyCache = rewardScanner.parseRewardScanCacheEnvelope({
     savedAt: verifiedAt,
@@ -343,9 +375,11 @@ export async function runRewardScannerTests() {
     "reward claims must synchronously prevent overlapping single and batch submissions",
   );
   assert.match(rewardScannerSource, /activeClaimAddressRef\.current = address\?\.toLowerCase\(\)[\s\S]*const claimActor = address\.toLowerCase\(\)[\s\S]*activeClaimAddressRef\.current !== claimActor[\s\S]*claimActorChanged/, "reward claims must stop sends and stale state updates when the active wallet changes");
-  assert.match(rewardScannerSource, /cacheVersion: 3,[\s\S]*verifiedAt,[\s\S]*lastScannedEpoch,[\s\S]*deepestScannedEpoch/, "only a completed v3 scan may persist a verification watermark");
-  assert.match(rewardScannerSource, /getRewardScanRescanDelayMs\(cached\.isVerified \? cached\.verifiedAt : null\)/, "an untrusted v2 cache must not defer its first full verification scan");
+  assert.match(rewardScannerSource, /function saveInvalidatedRewardScanCache[\s\S]*verifiedAt: number,[\s\S]*verifiedAt,[\s\S]*invalidatedAt: Date\.now\(\)/, "claim invalidation must retain the prior verification timestamp instead of advancing it");
+  assert.match(rewardScannerSource, /getRewardScanRescanDelayMs\(cacheCoversCurrentEpoch \? cached\.verifiedAt : null\)/, "only current-epoch v3 coverage may defer a reward refresh");
+
   const rewardClaimSource = rewardScannerSource.slice(rewardScannerSource.indexOf("const claimReward"), rewardScannerSource.indexOf("return useMemo"));
+  assert.match(rewardClaimSource, /invalidateVerifiedRewardScanCache\(claimActor, nextWins\)/, "confirmed claims must persist an invalidated stale cache for reload");
   assert.doesNotMatch(rewardClaimSource, /saveCachedRewardScan\(/, "claim confirmation must not advance or persist the full reward-scan verification watermark");
 
   const deepRewardScanSource = readFileSync("app/hooks/useDeepRewardScan.ts", "utf8");
