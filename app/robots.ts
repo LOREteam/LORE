@@ -20,7 +20,7 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       {
         userAgent: "*",
-        allow: ["/", "/jackpot-win", "/faq", "/whitepaper", "/leaderboards", "/privacy", "/terms", "/api/jackpots/og"],
+        allow: ["/", "/faq", "/whitepaper", "/leaderboards", "/privacy", "/terms", "/api/jackpots/og"],
         disallow: ["/api/", "/admin", "/dev"],
       },
     ],

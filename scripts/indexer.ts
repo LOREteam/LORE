@@ -591,6 +591,9 @@ interface JackpotRecord {
   amountNum: number;
   txHash: string;
   blockNumber: string;
+  logIndex: string;
+  blockHash: string;
+  finalizedAtBlock: string;
 }
 
 interface RewardClaimRecord {
@@ -654,7 +657,7 @@ interface DustSettlementRecord {
   blockNumber: string;
 }
 
-function processLogs(logs: Log[]) {
+function processLogs(logs: Log[], finalizedAtBlock: bigint) {
   const bets: BetRecord[] = [];
   const epochs: Map<string, EpochRecord> = new Map();
   const jackpots: JackpotRecord[] = [];
@@ -784,6 +787,9 @@ function processLogs(logs: Log[]) {
         if (decoded.eventName !== "DailyJackpotAwarded") continue;
         const args = decoded.args as { epoch: bigint; amount: bigint };
         const ep = args.epoch.toString();
+        const logIndex = normalizeIndexerLogIndex(log.logIndex);
+        const blockHash = normalizeBlockHash(log.blockHash);
+        if (!log.transactionHash || logIndex === null || blockHash === null) continue;
         dailyJackpotEpochs.add(ep);
         const existing = epochs.get(ep);
         if (existing) existing.isDailyJackpot = true;
@@ -792,14 +798,20 @@ function processLogs(logs: Log[]) {
           kind: "daily",
           amount: formatUnits(args.amount, 18),
           amountNum: toDisplayNumberWei(args.amount),
-          txHash: log.transactionHash ?? "",
+          txHash: log.transactionHash,
           blockNumber: (log.blockNumber ?? 0n).toString(),
+          logIndex,
+          blockHash,
+          finalizedAtBlock: finalizedAtBlock.toString(),
         });
       } else if (topic0 === weeklySig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "WeeklyJackpotAwarded") continue;
         const args = decoded.args as { epoch: bigint; amount: bigint };
         const ep = args.epoch.toString();
+        const logIndex = normalizeIndexerLogIndex(log.logIndex);
+        const blockHash = normalizeBlockHash(log.blockHash);
+        if (!log.transactionHash || logIndex === null || blockHash === null) continue;
         weeklyJackpotEpochs.add(ep);
         const existing = epochs.get(ep);
         if (existing) existing.isWeeklyJackpot = true;
@@ -808,8 +820,11 @@ function processLogs(logs: Log[]) {
           kind: "weekly",
           amount: formatUnits(args.amount, 18),
           amountNum: toDisplayNumberWei(args.amount),
-          txHash: log.transactionHash ?? "",
+          txHash: log.transactionHash,
           blockNumber: (log.blockNumber ?? 0n).toString(),
+          logIndex,
+          blockHash,
+          finalizedAtBlock: finalizedAtBlock.toString(),
         });
       } else if (topic0 === rewardClaimedSig) {
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
@@ -1437,7 +1452,7 @@ async function runRepairPass(
     }
     throw error;
   }
-  const parsed = processLogs(logs);
+  const parsed = processLogs(logs, currentBlock);
   const nextRepairCursor = advanceIndexerMaintenanceRangeCursor(
     attempt,
     currentBlock,
@@ -1997,7 +2012,7 @@ async function runOnce(budget: IndexerRpcWorkBudget) {
     totalLogs += logs.length;
     console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} fetched ${logs.length} logs`);
 
-    const parsed = processLogs(logs);
+    const parsed = processLogs(logs, currentBlock);
     if (logs.length > 0) {
       console.log(`[indexer] Chunk ${chunkIndex}/${chunkCount} parsed: ${parsed.bets.length} bets, ${parsed.epochs.size} epochs, ${parsed.jackpots.length} jackpots, ${parsed.rewardClaims.length} claims`);
     }

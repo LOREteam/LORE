@@ -63,6 +63,10 @@ export type JackpotRow = {
   amountNum: number;
   txHash: string;
   blockNumber: string;
+  eventId?: string;
+  logIndex?: string;
+  blockHash?: string;
+  finalizedAtBlock?: string;
   timestamp?: number | null;
 };
 
@@ -86,7 +90,7 @@ type JackpotReadOptions = {
   bypassResponseCache?: boolean;
 };
 
-type JackpotEventLookup = { txHash: string; blockNumber: string; timestamp: number | null } | null;
+type JackpotEventLookup = Pick<JackpotRow, "txHash" | "blockNumber" | "eventId" | "logIndex" | "blockHash" | "finalizedAtBlock"> & { timestamp: number | null } | null;
 type JackpotCacheEntry = { payload: JackpotPayload; expiresAt: number };
 type JackpotEventCacheEntry = { value: JackpotEventLookup; expiresAt: number };
 type JackpotBlockTimestampCacheEntry = { value: number | null; expiresAt: number };
@@ -504,7 +508,7 @@ function toDisplayNumberWei(value: bigint): number {
   return formatLineaWeiDisplayNumber(value);
 }
 
-function mapJackpotLog(log: JackpotLog): JackpotRow | null {
+function mapJackpotLog(log: JackpotLog, finalizedAtBlock: bigint): JackpotRow | null {
   const topic0 = log.topics[0];
   if (!topic0) return null;
   const identity = getCanonicalRecoveryLogIdentity(log);
@@ -519,8 +523,12 @@ function mapJackpotLog(log: JackpotLog): JackpotRow | null {
         kind: "daily",
         amount: formatUnits(args.amount, 18),
         amountNum: toDisplayNumberWei(args.amount),
-        txHash: normalizeJackpotTxHash(log.transactionHash),
+        txHash: identity.txHash,
         blockNumber: identity.blockNumber.toString(),
+        eventId: `${identity.txHash}:${identity.logIndex}`,
+        logIndex: identity.logIndex,
+        blockHash: identity.blockHash,
+        finalizedAtBlock: finalizedAtBlock.toString(),
       };
     }
 
@@ -531,8 +539,12 @@ function mapJackpotLog(log: JackpotLog): JackpotRow | null {
         kind: "weekly",
         amount: formatUnits(args.amount, 18),
         amountNum: toDisplayNumberWei(args.amount),
-        txHash: normalizeJackpotTxHash(log.transactionHash),
+        txHash: identity.txHash,
         blockNumber: identity.blockNumber.toString(),
+        eventId: `${identity.txHash}:${identity.logIndex}`,
+        logIndex: identity.logIndex,
+        blockHash: identity.blockHash,
+        finalizedAtBlock: finalizedAtBlock.toString(),
       };
     }
   } catch {
@@ -545,10 +557,10 @@ function mapJackpotLog(log: JackpotLog): JackpotRow | null {
 function mergeJackpotRows(existing: JackpotRow[], incoming: JackpotRow[]) {
   const byKey = new Map<string, JackpotRow>();
   for (const row of existing) {
-    byKey.set(`${row.kind}_${row.epoch}`, row);
+    byKey.set(row.eventId ?? `${row.kind}_${row.epoch}`, row);
   }
   for (const row of incoming) {
-    byKey.set(`${row.kind}_${row.epoch}`, row);
+    byKey.set(row.eventId ?? `${row.kind}_${row.epoch}`, row);
   }
   return sortJackpotsDesc(Array.from(byKey.values())).slice(0, JACKPOT_HISTORY_LIMIT);
 }
@@ -707,7 +719,7 @@ async function fetchJackpotEventByEpoch(
   } as const, budget);
   let recoveredEvent: JackpotRow | null = null;
   for (const log of logs) {
-    const row = mapJackpotLog(log);
+    const row = mapJackpotLog(log, context.blockNumber);
     if (row?.kind === kind && row.epoch === String(epoch)) {
       recoveredEvent = row;
     }
@@ -717,6 +729,10 @@ async function fetchJackpotEventByEpoch(
     : {
         txHash: recoveredEvent.txHash,
         blockNumber: recoveredEvent.blockNumber,
+        eventId: recoveredEvent.eventId,
+        logIndex: recoveredEvent.logIndex,
+        blockHash: recoveredEvent.blockHash,
+        finalizedAtBlock: recoveredEvent.finalizedAtBlock,
         timestamp:
           parseStoredBlockNumber(recoveredEvent.blockNumber) > 0n
             ? await getBlockTimestampMs(parseStoredBlockNumber(recoveredEvent.blockNumber), budget)
@@ -819,6 +835,10 @@ async function reconcileLatestJackpots(
         amountNum: dailyFormatted.amountNum,
         txHash: normalizeJackpotTxHash(onchain?.txHash),
         blockNumber: onchain?.blockNumber ?? "0",
+        eventId: onchain?.eventId,
+        logIndex: onchain?.logIndex,
+        blockHash: onchain?.blockHash,
+        finalizedAtBlock: onchain?.finalizedAtBlock,
         timestamp: onchain?.timestamp ?? null,
       };
       byKey.set(key, recovered);
@@ -837,6 +857,10 @@ async function reconcileLatestJackpots(
         amountNum: weeklyFormatted.amountNum,
         txHash: normalizeJackpotTxHash(onchain?.txHash),
         blockNumber: onchain?.blockNumber ?? "0",
+        eventId: onchain?.eventId,
+        logIndex: onchain?.logIndex,
+        blockHash: onchain?.blockHash,
+        finalizedAtBlock: onchain?.finalizedAtBlock,
         timestamp: onchain?.timestamp ?? null,
       };
       byKey.set(key, recovered);
@@ -872,7 +896,7 @@ async function fetchOnchainJackpotDelta(
       : CONTRACT_DEPLOY_BLOCK;
   const logs = await fetchJackpotLogsInRange(fromBlock, finalizedTargetBlock, budget);
   return logs
-    .map((log) => mapJackpotLog(log))
+    .map((log) => mapJackpotLog(log, finalizedTargetBlock))
     .filter((row): row is JackpotRow => row !== null);
 }
 
@@ -885,7 +909,7 @@ async function buildOnchainJackpots(
     existingJackpots.length > 0
       ? await fetchOnchainJackpotDelta(existingJackpots, context.blockNumber, budget)
       : (await fetchRecentJackpotLogsFromChain(context.blockNumber, budget, JACKPOT_HISTORY_LIMIT))
-          .map((log) => mapJackpotLog(log))
+          .map((log) => mapJackpotLog(log, context.blockNumber))
           .filter((row): row is JackpotRow => row !== null);
 
   if (!(await isRecoveryContextCurrent(context, budget))) {

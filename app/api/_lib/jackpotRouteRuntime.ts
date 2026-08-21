@@ -13,6 +13,11 @@ export type JackpotPublicRow = {
   amountNum: number;
   txHash: string;
   blockNumber: string;
+  /** Present only for a canonical finalized log; legacy history remains non-shareable. */
+  eventId?: string;
+  logIndex?: string;
+  blockHash?: string;
+  finalizedAtBlock?: string;
   timestamp?: number | null;
 };
 
@@ -117,6 +122,27 @@ export function sanitizeJackpotPublicRows(
       txHash: TX_HASH_RE.test(normalizedTxHash) ? normalizedTxHash : "",
       blockNumber: row.blockNumber,
     };
+    const logIndex = typeof row.logIndex === "string" && /^(?:0|[1-9]\d*)$/.test(row.logIndex)
+      ? row.logIndex
+      : null;
+    const blockHash = typeof row.blockHash === "string" ? row.blockHash.trim().toLowerCase() : "";
+    const finalizedAtBlock = typeof row.finalizedAtBlock === "string" && /^[1-9]\d*$/.test(row.finalizedAtBlock)
+      ? row.finalizedAtBlock
+      : null;
+    const eventId = typeof row.eventId === "string" ? row.eventId.trim().toLowerCase() : "";
+    if (
+      normalizedTxHash &&
+      logIndex !== null &&
+      BLOCK_HASH_RE.test(blockHash) &&
+      finalizedAtBlock !== null &&
+      BigInt(finalizedAtBlock) >= blockNumber &&
+      eventId === `${normalizedTxHash}:${BigInt(logIndex)}`
+    ) {
+      normalized.eventId = eventId;
+      normalized.logIndex = BigInt(logIndex).toString();
+      normalized.blockHash = blockHash;
+      normalized.finalizedAtBlock = finalizedAtBlock;
+    }
     if (Object.prototype.hasOwnProperty.call(row, "timestamp")) {
       normalized.timestamp = row.timestamp === null
         ? null

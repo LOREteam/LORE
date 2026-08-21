@@ -39,7 +39,9 @@ export async function GET(request: NextRequest) {
   const rateLimited = await enforceOgRateLimit(request);
   if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
-  const share = await readVerifiedJackpotShare(request.nextUrl.searchParams.get("tx"));
+  const share = await readVerifiedJackpotShare(
+    request.nextUrl.searchParams.get("event") ?? request.nextUrl.searchParams.get("tx"),
+  );
   if (!share) {
     return applyNoStoreHeaders(NextResponse.json({ error: "Verified jackpot event not found" }, { status: 404 }));
   }
@@ -270,7 +272,9 @@ export async function HEAD(request: NextRequest) {
   const rateLimited = await enforceOgRateLimit(request);
   if (rateLimited) return applyNoStoreHeaders(rateLimited);
 
-  const share = await readVerifiedJackpotShare(request.nextUrl.searchParams.get("tx"));
+  const share = await readVerifiedJackpotShare(
+    request.nextUrl.searchParams.get("event") ?? request.nextUrl.searchParams.get("tx"),
+  );
   if (!share) {
     return applyNoStoreHeaders(NextResponse.json({ error: "Verified jackpot event not found" }, { status: 404 }));
   }

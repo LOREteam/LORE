@@ -324,6 +324,7 @@ async function runOgScenario() {
   const fetchState = installRouteFetchMock();
   const storage = await import("../../server/storage");
   const txHash = `0x${"ab".repeat(32)}`;
+  const eventId = `${txHash}:0`;
   storage.upsertJackpots([{
     epoch: "10",
     kind: "daily",
@@ -331,12 +332,15 @@ async function runOgScenario() {
     amountNum: 1,
     txHash,
     blockNumber: "31678225",
+    logIndex: "0",
+    blockHash: `0x${"cd".repeat(32)}`,
+    finalizedAtBlock: "31678230",
   }]);
   storage.setMetaJson("lastIndexedBlock", "31678225");
   const route = await loadRoute("og");
   Object.assign(process.env, { NODE_ENV: "production" });
   const baseUrl = "https://attacker.invalid/api/jackpots/og";
-  const verifiedUrl = `${baseUrl}?tx=${txHash}`;
+  const verifiedUrl = `${baseUrl}?event=${encodeURIComponent(eventId)}`;
   const headers = requestHeaders({ host: "attacker.invalid" });
 
   const captured = await captureRouteLogs(async () => {

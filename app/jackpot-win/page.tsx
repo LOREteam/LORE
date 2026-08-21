@@ -19,8 +19,13 @@ function firstParam(raw: string | string[] | undefined): string | null {
   return Array.isArray(raw) ? raw[0] ?? null : raw ?? null;
 }
 
+async function readShare(searchParams: Props["searchParams"]) {
+  const params = await searchParams;
+  return await readVerifiedJackpotShare(firstParam(params.event) ?? firstParam(params.tx));
+}
+
 export async function generateMetadata({ searchParams }: Props): Promise<Metadata> {
-  const share = await readVerifiedJackpotShare(firstParam((await searchParams).tx));
+  const share = await readShare(searchParams);
   if (!share) return { title: "Jackpot event not found | LORE", robots: { index: false, follow: false } };
 
   const theme = getJackpotVisualTheme(share.kind);
@@ -28,7 +33,7 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
   const title = share.amount ? `${label} Winner - ${share.amount} LINEA | LORE` : `${label} Winner | LORE`;
   const description = `${label} event verified on-chain for epoch #${share.epoch}.`;
   const publicSiteUrl = getPublicSiteUrl();
-  const params = new URLSearchParams({ tx: share.txHash });
+  const params = new URLSearchParams({ event: share.eventId });
   const pageUrl = `${publicSiteUrl}/jackpot-win?${params.toString()}`;
   const ogUrl = `${publicSiteUrl}/api/jackpots/og?${params.toString()}`;
 
@@ -49,7 +54,7 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
 }
 
 export default async function JackpotWinPage({ searchParams }: Props) {
-  const share = await readVerifiedJackpotShare(firstParam((await searchParams).tx));
+  const share = await readShare(searchParams);
   if (!share) notFound();
 
   const theme = getJackpotVisualTheme(share.kind);
@@ -67,7 +72,7 @@ export default async function JackpotWinPage({ searchParams }: Props) {
           <InfoPill label="Epoch" value={`#${share.epoch}`} />
           <InfoPill label="Mode" value={theme.label} />
         </div>
-        <p className="mx-auto mt-4 max-w-xl break-all text-xs leading-relaxed text-white/65">Verified event: {share.txHash}</p>
+        <p className="mx-auto mt-4 max-w-xl break-all text-xs leading-relaxed text-white/65">Verified event: {share.eventId}</p>
         <Link href="/" className={`mt-8 inline-flex min-h-12 items-center justify-center rounded-xl border px-7 text-sm font-black uppercase tracking-[0.16em] transition hover:brightness-110 ${theme.banner.button} ${theme.banner.buttonBorder}`}>
           Play at playlore.xyz
         </Link>

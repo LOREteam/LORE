@@ -173,6 +173,9 @@ function bootstrapSchema() {
       amount_num REAL NOT NULL,
       tx_hash TEXT NOT NULL,
       block_number INTEGER NOT NULL,
+      log_index INTEGER,
+      block_hash TEXT,
+      finalized_at_block INTEGER,
       PRIMARY KEY(scope, id)
     );
     CREATE INDEX IF NOT EXISTS idx_scoped_jackpots_scope_epoch ON scoped_jackpots(scope, epoch DESC, block_number DESC);
@@ -554,6 +557,18 @@ function bootstrapSchema() {
 
 configureConnection();
 bootstrapSchema();
+
+function ensureScopedJackpotColumn(column: "log_index" | "block_hash" | "finalized_at_block", definition: string) {
+  const columns = db.prepare("PRAGMA table_info(scoped_jackpots)").all() as Array<{ name?: unknown }>;
+  if (columns.some((entry) => entry.name === column)) return;
+  db.exec(`ALTER TABLE scoped_jackpots ADD COLUMN ${column} ${definition}`);
+}
+
+// Existing databases predate immutable jackpot-log identities. Keep their rows
+// readable as legacy history, but add the proof fields for all new events.
+ensureScopedJackpotColumn("log_index", "INTEGER");
+ensureScopedJackpotColumn("block_hash", "TEXT");
+ensureScopedJackpotColumn("finalized_at_block", "INTEGER");
 
 if (!shutdownGlobal.__loreDbShutdownHandlersInstalled) {
   shutdownGlobal.__loreDbShutdownHandlersInstalled = true;

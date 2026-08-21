@@ -86,6 +86,11 @@ export interface JackpotStorageRow {
   amountNum: number;
   txHash: string;
   blockNumber: string;
+  /** Required for canonical shareability; omitted rows remain legacy history only. */
+  logIndex?: string;
+  blockHash?: string;
+  finalizedAtBlock?: string;
+  eventId?: string;
 }
 
 export interface RewardClaimStorageRow {
@@ -2254,18 +2259,63 @@ export function upsertBets(rows: BetStorageRow[]) {
   }, "bets");
 }
 
+export function buildIndexerJackpotIdentity(
+  kind: JackpotStorageRow["kind"],
+  epoch: string,
+  txHash: string,
+  logIndex?: unknown,
+) {
+  const legacyId = `${kind}_${epoch}`;
+  if (logIndex === undefined) return { id: legacyId, legacyId };
+  const normalizedTxHash = normalizeJackpotTxHash(txHash);
+  const normalizedLogIndex = normalizeIndexerLogIndex(logIndex);
+  if (normalizedTxHash === null || normalizedLogIndex === null) return null;
+  return { id: `${normalizedTxHash}:${normalizedLogIndex}`, legacyId };
+}
+
+function normalizeJackpotTxHash(value: string | null | undefined) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? normalized : null;
+}
+
+function readCanonicalJackpotIdentity(row: Record<string, unknown>) {
+  const identity = buildIndexerJackpotIdentity(
+    row.kind === "weekly" ? "weekly" : "daily",
+    String(row.epoch ?? "0"),
+    String(row.tx_hash ?? ""),
+    row.log_index,
+  );
+  const blockHash = normalizeIndexerBlockHash(String(row.block_hash ?? ""));
+  const blockNumber = parseSafePositiveIntegerString(String(row.block_number ?? ""));
+  const finalizedAtBlock = parseSafePositiveIntegerString(String(row.finalized_at_block ?? ""));
+  if (
+    identity === null ||
+    identity.id === identity.legacyId ||
+    String(row.id ?? "") !== identity.id ||
+    blockHash === null ||
+    blockNumber === null ||
+    finalizedAtBlock === null ||
+    finalizedAtBlock < blockNumber
+  ) return null;
+  return {
+    eventId: identity.id,
+    logIndex: normalizeIndexerLogIndex(row.log_index)!,
+    blockHash,
+    finalizedAtBlock: String(finalizedAtBlock),
+  };
+}
 export function getJackpotsMap(limit?: number) {
   const rows = (
     limit
       ? db.prepare(`
-          SELECT id, epoch, kind, amount, amount_num, tx_hash, block_number
+          SELECT id, epoch, kind, amount, amount_num, tx_hash, block_number, log_index, block_hash, finalized_at_block
           FROM ${SCOPED_JACKPOTS_TABLE}
           WHERE scope = ?
           ORDER BY block_number DESC, id DESC
           LIMIT ?
         `).all(CURRENT_STORAGE_SCOPE, limit)
       : db.prepare(`
-          SELECT id, epoch, kind, amount, amount_num, tx_hash, block_number
+          SELECT id, epoch, kind, amount, amount_num, tx_hash, block_number, log_index, block_hash, finalized_at_block
           FROM ${SCOPED_JACKPOTS_TABLE}
           WHERE scope = ?
           ORDER BY block_number DESC, id DESC
@@ -2283,6 +2333,7 @@ export function getJackpotsMap(limit?: number) {
       amountNum: Number(row.amount_num ?? 0),
       txHash: String(row.tx_hash ?? ""),
       blockNumber: String(row.block_number ?? "0"),
+      ...(readCanonicalJackpotIdentity(row) ?? {}),
     };
   }
   return map;
@@ -2290,7 +2341,7 @@ export function getJackpotsMap(limit?: number) {
 
 export function getRecentJackpots(limit = 200) {
   const rows = db.prepare(`
-    SELECT epoch, kind, amount, amount_num, tx_hash, block_number
+    SELECT id, epoch, kind, amount, amount_num, tx_hash, block_number, log_index, block_hash, finalized_at_block
     FROM ${SCOPED_JACKPOTS_TABLE}
     WHERE scope = ?
     ORDER BY block_number DESC, id DESC
@@ -2304,21 +2355,36 @@ export function getRecentJackpots(limit = 200) {
     amountNum: Number(row.amount_num ?? 0),
     txHash: String(row.tx_hash ?? ""),
     blockNumber: String(row.block_number ?? "0"),
+    ...(readCanonicalJackpotIdentity(row) ?? {}),
   })) satisfies JackpotStorageRow[];
 }
 
 export function upsertJackpots(rows: JackpotStorageRow[]) {
   if (rows.length === 0) return;
+  const migrateLegacyStatement = db.prepare(`
+    UPDATE ${SCOPED_JACKPOTS_TABLE}
+    SET id = ?
+    WHERE scope = ? AND id = ? AND epoch = ? AND kind = ?
+      AND NOT EXISTS (
+        SELECT 1 FROM ${SCOPED_JACKPOTS_TABLE} AS canonical
+        WHERE canonical.scope = ? AND canonical.id = ?
+      )
+  `);
   const statement = db.prepare(`
-    INSERT INTO ${SCOPED_JACKPOTS_TABLE}(scope, id, epoch, kind, amount, amount_num, tx_hash, block_number)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO ${SCOPED_JACKPOTS_TABLE}(
+      scope, id, epoch, kind, amount, amount_num, tx_hash, block_number,
+      log_index, block_hash, finalized_at_block
+    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(scope, id) DO UPDATE SET
       epoch = excluded.epoch,
       kind = excluded.kind,
       amount = excluded.amount,
       amount_num = excluded.amount_num,
       tx_hash = excluded.tx_hash,
-      block_number = excluded.block_number
+      block_number = excluded.block_number,
+      log_index = excluded.log_index,
+      block_hash = excluded.block_hash,
+      finalized_at_block = excluded.finalized_at_block
     WHERE excluded.block_number >= ${SCOPED_JACKPOTS_TABLE}.block_number
   `);
 
@@ -2328,22 +2394,48 @@ export function upsertJackpots(rows: JackpotStorageRow[]) {
       const epochNumber = parseSafePositiveIntegerString(row.epoch);
       const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
       if (epochNumber === null || blockNumber === null) continue;
-      const id = `${row.kind}_${row.epoch}`;
+      const identity = buildIndexerJackpotIdentity(row.kind, row.epoch, row.txHash, row.logIndex);
+      if (identity === null) continue;
+      const blockHash = row.blockHash === undefined ? null : normalizeIndexerBlockHash(row.blockHash);
+      const finalizedAtBlock = row.finalizedAtBlock === undefined
+        ? null
+        : parseSafePositiveIntegerString(row.finalizedAtBlock);
+      const canonicalProof =
+        identity.id !== identity.legacyId &&
+        blockHash !== null &&
+        finalizedAtBlock !== null &&
+        finalizedAtBlock >= blockNumber;
+      // A caller that supplied a log identity but not its canonical block and
+      // finality proof must not create a shareable event.
+      if (identity.id !== identity.legacyId && !canonicalProof) continue;
+      if (canonicalProof) {
+        changed = didStatementChangeRow(migrateLegacyStatement.run(
+          identity.id,
+          CURRENT_STORAGE_SCOPE,
+          identity.legacyId,
+          epochNumber,
+          row.kind,
+          CURRENT_STORAGE_SCOPE,
+          identity.id,
+        )) || changed;
+      }
       changed = didStatementChangeRow(statement.run(
         CURRENT_STORAGE_SCOPE,
-        id,
+        identity.id,
         epochNumber,
         row.kind,
         row.amount,
         row.amountNum,
         row.txHash,
         blockNumber,
+        canonicalProof ? Number(identity.id.slice(identity.id.lastIndexOf(":") + 1)) : null,
+        canonicalProof ? blockHash : null,
+        canonicalProof ? finalizedAtBlock : null,
       )) || changed;
     }
     if (changed) bumpPublicReadModelRevision();
   }, "jackpots");
 }
-
 export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
   if (rows.length === 0) return;
   const statement = db.prepare(`
