@@ -123,7 +123,7 @@ function testOgAdmissionSource() {
   );
   assert.match(
     routeSource,
-    /export async function HEAD\(request: NextRequest\)[\s\S]*enforceOgRateLimit\(request\)[\s\S]*readVerifiedJackpotShare\(request\.nextUrl\.searchParams\.get\("tx"\)\)[\s\S]*new Response\(null,[\s\S]*"Content-Type": "image\/png"/,
+    /export async function HEAD\(request: NextRequest\)[\s\S]*enforceOgRateLimit\(request\)[\s\S]*readVerifiedJackpotShare\(\s*request\.nextUrl\.searchParams\.get\("event"\)\s*\?\?\s*request\.nextUrl\.searchParams\.get\("tx"\),\s*\)[\s\S]*new Response\(null,[\s\S]*"Content-Type": "image\/png"/,
     "OG HEAD must validate the same verified event while remaining an explicit bodyless image response",
   );
   const headStart = routeSource.indexOf("export async function HEAD");

@@ -13,27 +13,45 @@ const jackpotShareVerification = jackpotShareVerificationModule.default ?? jackp
 
 function testJackpotShareVerification() {
   const txHash = `0x${"a".repeat(64)}`;
+  const blockHash = `0x${"b".repeat(64)}`;
+  const finalizedEvent = ({ epoch = "42", kind = "daily", amount = "123.45", logIndex = "7" } = {}) => ({
+    epoch,
+    kind,
+    amount,
+    txHash,
+    eventId: `${txHash}:${logIndex}`,
+    logIndex,
+    blockHash,
+    blockNumber: "100",
+    finalizedAtBlock: "110",
+  });
   const verified = jackpotShareVerification.selectVerifiedJackpotShare([
-    { epoch: "42", kind: "daily", amount: "123.45", txHash },
-  ], ` ${txHash.toUpperCase()} `);
-  assert.deepEqual(verified, { txHash, epoch: "42", kind: "daily", amount: "123.45" });
+    finalizedEvent(),
+  ], ` ${txHash.toUpperCase()}:0007 `);
+  assert.deepEqual(verified, { eventId: `${txHash}:7`, txHash, logIndex: "7", epoch: "42", kind: "daily", amount: "123.45" });
   assert.equal(jackpotShareVerification.selectVerifiedJackpotShare([], txHash), null);
-  assert.equal(jackpotShareVerification.selectVerifiedJackpotShare([{ epoch: "42", kind: "daily", amount: "1", txHash }], "0xdead"), null);
+  assert.equal(jackpotShareVerification.selectVerifiedJackpotShare([finalizedEvent()], "0xdead"), null);
+  assert.equal(jackpotShareVerification.selectVerifiedJackpotShare([finalizedEvent()], `${txHash}:8`), null);
+  assert.deepEqual(
+    jackpotShareVerification.selectVerifiedJackpotShare([finalizedEvent()], txHash),
+    verified,
+    "legacy transaction URLs must resolve only when exactly one finalized canonical event matches",
+  );
   assert.equal(
     jackpotShareVerification.selectVerifiedJackpotShare([
-      { epoch: "42", kind: "daily", amount: "1", txHash },
-      { epoch: "43", kind: "weekly", amount: "2", txHash },
+      finalizedEvent({ amount: "1", logIndex: "7" }),
+      finalizedEvent({ epoch: "43", kind: "weekly", amount: "2", logIndex: "8" }),
     ], txHash),
     null,
-    "one transaction must not create a cross-epoch share page",
+    "one transaction with multiple events must not leave a legacy URL ambiguous",
   );
   assert.deepEqual(
     jackpotShareVerification.selectVerifiedJackpotShare([
-      { epoch: "42", kind: "daily", amount: "1", txHash },
-      { epoch: "42", kind: "weekly", amount: "2", txHash },
-    ], txHash),
-    { txHash, epoch: "42", kind: "dual", amount: null },
-    "multi-event transactions must not invent a URL-controlled aggregate amount",
+      finalizedEvent({ amount: "1", logIndex: "7" }),
+      finalizedEvent({ kind: "weekly", amount: "2", logIndex: "8" }),
+    ], `${txHash}:8`),
+    { eventId: `${txHash}:8`, txHash, logIndex: "8", epoch: "42", kind: "weekly", amount: "2" },
+    "canonical event URLs must select exactly one finalized event without inventing an aggregate amount",
   );
 }
 
