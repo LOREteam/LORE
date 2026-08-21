@@ -10,7 +10,7 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest verified local code commit before this state refresh: `78df8c76`.
+- Latest verified local code commit before this state refresh: `1c880bdc`.
 - The product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. The current immutable-checkout
   reproduction is clean for tracked files; `.tmp-*` and campaign reports are
@@ -86,8 +86,8 @@ OS-temp SQLite fixtures remain the only permitted DB target for local test code.
   suite unless the isolated runner supplies an absolute non-protected DB path
   and its one-shot admission marker.
 - P1.10: additional wallet, reward, history, wins and leaderboard presentation
-  seams are now executable. The refreshed AST audit reports `4660/5369`
-  behavioral assertions (`86.79%`); the overall extraction remains partial.
+  seams are now executable. The refreshed AST audit reports `4667/5371`
+  behavioral assertions (`86.89%`); the overall extraction remains partial.
 - The corrected managed local campaign started a fresh iteration at this SHA
   lineage and completed all seven first-cycle steps. A previous second-cycle
   failure exposed an undefined analyzer helper in the exact-cap approval
