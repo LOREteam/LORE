@@ -19,7 +19,10 @@ const WEB_VITAL_ROUTES = new Set([
 const MAX_WEB_VITAL_MILLISECONDS = 120_000;
 const MAX_WEB_VITAL_CLS = 10;
 const DEFAULT_WEB_VITAL_SAMPLE_RATE = 0.1;
-const RELEASE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{6,127}$/;
+// Browser telemetry must be attributable to one immutable source revision. A
+// full lowercase Git object ID is portable across supported hosts and avoids
+// mutable deployment labels or abbreviated SHAs in production distributions.
+const IMMUTABLE_RELEASE_SHA_PATTERN = /^[a-f0-9]{40}$/;
 const SAMPLE_RATE_PATTERN = /^(?:0(?:\.\d+)?|1(?:\.0+)?)$/;
 
 type WebVitalName = "TTFB" | "FCP" | "LCP" | "CLS" | "INP";
@@ -82,7 +85,7 @@ function getWebVitalsTelemetryConfig(
   }
 
   const release = environment.NEXT_PUBLIC_SENTRY_RELEASE?.trim() ?? "";
-  if (!RELEASE_PATTERN.test(release)) return null;
+  if (!IMMUTABLE_RELEASE_SHA_PATTERN.test(release)) return null;
   const sampleRate = parseSampleRate(environment.NEXT_PUBLIC_WEB_VITALS_SAMPLE_RATE);
   return sampleRate === null ? null : { release, sampleRate };
 }

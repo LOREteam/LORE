@@ -54,6 +54,17 @@ Required runtime shape:
 - `lore-indexer` runs separately from both.
 - `lore-monitor` polls private runtime/data-sync diagnostics and live state, then alerts on API failure, stale indexer heartbeat, excessive lag, stale snapshots, and overdue non-empty epochs.
 - `LORE_DB_PATH` points to a persistent absolute path outside the repo.
+- Crawlers remain denied by default. Set `LORE_ALLOW_PUBLIC_INDEXING=1` only on
+  the canonical `https://playlore.xyz` production deployment after its real
+  TLS/HTTPS and metadata checks pass. Leave it unset on local, preview,
+  staging, custom-origin, and maintenance deployments; the application still
+  fails closed for those origins even if the variable is accidentally set.
+- Production Web Vitals are opt-in. If `NEXT_PUBLIC_WEB_VITALS_ENABLED=1`, set
+  `NEXT_PUBLIC_SENTRY_RELEASE` to the exact lowercase 40-hex Git SHA used for
+  that immutable deployment. The browser rejects abbreviated SHAs, branches,
+  tags, and host deployment labels, so confirm the value against the deploy
+  revision before release. This telemetry is operational evidence only and
+  does not replace hosted browser or release-gate proof.
 - `health:prod` evidence must use a public HTTPS origin; localhost/private/reserved/example/test origins are launch-proof invalid. `PROD_HEALTH_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6. Use `health:prod:summary` for low-noise preflight only; saved launch evidence must still come from full `health:prod` output.
 - `load:http` evidence must use a staging/canary public HTTPS origin; localhost/private/reserved/example/test origins are launch-proof invalid. `LOAD_ALLOW_LOCAL=1` is only for local smoke and cannot satisfy G6.
 - Deployed testnet, staging, and mainnet hosts must provide trusted proxy identity. `ALLOW_WEAK_RATE_LIMIT_IDENTITY=1` is only for local/CI production smoke and is rejected by the mainnet runtime validator.

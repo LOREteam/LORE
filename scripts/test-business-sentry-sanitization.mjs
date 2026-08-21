@@ -10,7 +10,7 @@ const webVitalsEnvironment = {
   NEXT_PUBLIC_WEB_VITALS_ENABLED: "1",
   NEXT_PUBLIC_SENTRY_DSN: "configured",
   NEXT_PUBLIC_SENTRY_ENVIRONMENT: "production",
-  NEXT_PUBLIC_SENTRY_RELEASE: "6952ff652",
+  NEXT_PUBLIC_SENTRY_RELEASE: "6952ff652db496a0a643bbeb54a76eabc92985a9",
   NEXT_PUBLIC_WEB_VITALS_SAMPLE_RATE: "1",
 };
 
@@ -97,7 +97,7 @@ export function runSentrySanitizationTests() {
       name: "LCP",
       rating: "good",
       route: "other",
-      release: "6952ff652",
+      release: "6952ff652db496a0a643bbeb54a76eabc92985a9",
     },
   });
   assert.doesNotMatch(JSON.stringify(lcpEmission), /wallet|0x111|recovery|\?|#/i);
@@ -110,7 +110,7 @@ export function runSentrySanitizationTests() {
         name: "CLS",
         rating: "needs-improvement",
         route: "/faq",
-        release: "6952ff652",
+        release: "6952ff652db496a0a643bbeb54a76eabc92985a9",
       },
     },
   );
@@ -125,6 +125,9 @@ export function runSentrySanitizationTests() {
     [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_SENTRY_DSN: "" }],
     [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_WEB_VITALS_ENABLED: "0" }],
     [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_SENTRY_RELEASE: "not safe!" }],
+    [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_SENTRY_RELEASE: "6952ff652" }],
+    [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_SENTRY_RELEASE: "6952FF652DB496A0A643BBEB54A76EABC92985A9" }],
+    [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_SENTRY_RELEASE: "deployment:6952ff652db496a0a643bbeb54a76eabc92985a9" }],
     [{ name: "LCP", rating: "good", value: 1 }, { ...webVitalsEnvironment, NEXT_PUBLIC_WEB_VITALS_SAMPLE_RATE: "1.1" }],
   ]) {
     assert.equal(buildWebVitalEmission(metric, "/faq", environment), null);
@@ -149,7 +152,7 @@ export function runSentrySanitizationTests() {
         name: "INP",
         rating: "poor",
         route: "/jackpot-win",
-        release: "6952ff652",
+        release: "6952ff652db496a0a643bbeb54a76eabc92985a9",
       },
     },
   ]]);
