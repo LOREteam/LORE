@@ -54,6 +54,16 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     (or remain null) after an API/RPC error and render an explicit unavailable
     or stale state rather than a false empty history.
 
+11. Jackpot-share now requires the canonical finalized event identity
+    `event=<txHash>:<logIndex>`: indexer/storage retain the event key,
+    block hash, and finalized target; page and OG content derive entirely from
+    that stored event. A legacy `tx` link is accepted only when it resolves
+    exactly one canonical event, otherwise it fails closed. Generic
+    `/jackpot-win` was removed from sitemap/robots because it has no canonical
+    event identity.
+12. Direct public URLs now pass their server-selected tab into the first app-shell
+    render, and FAQ, White Paper, and Leaderboards are statically imported so
+    SSR returns their requested content rather than Hub or a loading fallback.
 ## Campaign status
 
 - `local-20260821-final-r3` iterations 1–3 completed all seven isolated gates.
