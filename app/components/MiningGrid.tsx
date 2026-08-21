@@ -29,6 +29,55 @@ function compactTileAmount(value: string): string {
   return fixed === null ? value : trimFixedDecimalText(fixed);
 }
 
+export function deriveMiningGridTilePresentation({
+  displayAmount,
+  users,
+  hasMyBet,
+  liveStateReady,
+  coldBootDefaults,
+}: {
+  displayAmount: string;
+  users: number;
+  hasMyBet: boolean;
+  liveStateReady: boolean;
+  coldBootDefaults: boolean;
+}) {
+  const isLiveDisplayReady = liveStateReady || coldBootDefaults;
+  const hasDisplayedStake = isPositiveFixedDecimalText(formatTileAmountFixed(displayAmount));
+
+  return {
+    isLiveDisplayReady,
+    compactAmount: isLiveDisplayReady ? compactTileAmount(displayAmount) : "...",
+    hasDisplayedStake,
+    showUserBadge: !isLiveDisplayReady || hasDisplayedStake,
+    displayedUsers: isLiveDisplayReady
+      ? hasDisplayedStake
+        ? Math.max(users, hasMyBet ? 1 : 0)
+        : 0
+      : users,
+  };
+}
+
+export function isMiningGridTileSelectable({
+  liveStateReady,
+  isRevealing,
+  isAnalyzing,
+}: {
+  liveStateReady: boolean;
+  isRevealing: boolean;
+  isAnalyzing: boolean;
+}) {
+  // A quiet expired epoch is resolved atomically by the next bet, so analysis
+  // state is deliberately not a selection blocker.
+  void isAnalyzing;
+  return liveStateReady && !isRevealing;
+}
+
+export function parseMiningGridTileId(value: string | undefined): number | null {
+  const tileId = Number(value);
+  return Number.isSafeInteger(tileId) && tileId >= 1 && tileId <= GRID_SIZE ? tileId : null;
+}
+
 function buildTileAriaLabel({
   tileId,
   users,
@@ -176,8 +225,8 @@ function MiningGridView({
       const tileButton = target.closest<HTMLButtonElement>("button[data-tile-id]");
       if (!tileButton || !gridElement.contains(tileButton) || tileButton.disabled) return;
 
-      const tileId = Number(tileButton.dataset.tileId);
-      if (!Number.isSafeInteger(tileId) || tileId < 1 || tileId > GRID_SIZE) return;
+      const tileId = parseMiningGridTileId(tileButton.dataset.tileId);
+      if (tileId === null) return;
       onTileClick(tileId);
     };
 
@@ -221,6 +270,7 @@ function MiningGridView({
               isSelected={selectionSet.has(tileId)}
               hasMyBet={tile.hasMyBet}
               isRevealing={isRevealing}
+              isAnalyzing={isAnalyzing}
               reducedMotion={reducedMotion}
             />
           );
@@ -260,6 +310,7 @@ const Tile = React.memo(function Tile({
   isSelected,
   hasMyBet,
   isRevealing,
+  isAnalyzing,
   reducedMotion,
 }: {
   tileId: number;
@@ -271,20 +322,18 @@ const Tile = React.memo(function Tile({
   isSelected: boolean;
   hasMyBet: boolean;
   isRevealing: boolean;
+  isAnalyzing: boolean;
   reducedMotion: boolean;
 }) {
   const isMyWin = isWinner && hasMyBet;
   const isNeutralWinner = isWinner && !hasMyBet;
-  const compactAmount = liveStateReady || coldBootDefaults ? compactTileAmount(displayAmount) : "...";
-  const hasDisplayedStake = isPositiveFixedDecimalText(formatTileAmountFixed(displayAmount));
-  const isLiveDisplayReady = liveStateReady || coldBootDefaults;
-  const showUserBadge = !isLiveDisplayReady || hasDisplayedStake;
-  const displayedUsers =
-    isLiveDisplayReady
-      ? hasDisplayedStake
-        ? Math.max(users, hasMyBet ? 1 : 0)
-        : 0
-      : users;
+  const { isLiveDisplayReady, compactAmount, hasDisplayedStake, showUserBadge, displayedUsers } = deriveMiningGridTilePresentation({
+    displayAmount,
+    users,
+    hasMyBet,
+    liveStateReady,
+    coldBootDefaults,
+  });
   const ariaLabel = buildTileAriaLabel({
     tileId,
     users: displayedUsers,
@@ -326,13 +375,14 @@ const Tile = React.memo(function Tile({
         : isSelected
           ? "ore-tile-selected"
           : "";
-  const disabledClass = !liveStateReady || isRevealing ? "cursor-not-allowed" : "";
+  const isSelectable = isMiningGridTileSelectable({ liveStateReady, isRevealing, isAnalyzing });
+  const disabledClass = !isSelectable ? "cursor-not-allowed" : "";
 
   return (
     <button
       type="button"
       data-tile-id={tileId}
-      disabled={!liveStateReady || isRevealing}
+      disabled={!isSelectable}
       aria-label={ariaLabel}
       aria-pressed={isSelected && !isWinner}
       className={`ore-tile ${isBackgroundWindow ? "ore-tile-window" : "ore-tile-stone"} ${stateClass} relative h-full w-full min-h-0 overflow-hidden rounded-lg border p-1 transition-[border-color,background-color,box-shadow,opacity,transform,color] duration-200 group flex flex-col items-center justify-between sm:p-1.5 contain-[layout_paint] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-[#070712] ${base} ${faded} ${disabledClass}`}

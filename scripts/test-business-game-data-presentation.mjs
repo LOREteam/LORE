@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import * as miningGridModule from "../app/components/MiningGrid.tsx";
 import * as gameDataHelpersModule from "../app/hooks/useGameData.helpers.ts";
 import * as roundPresentationModule from "../app/lib/roundPresentation.ts";
 
 export function runGameDataPresentationTests() {
   const gameDataHelpers = gameDataHelpersModule.default ?? gameDataHelpersModule;
+  const miningGrid = miningGridModule.default ?? miningGridModule;
   const roundPresentation = roundPresentationModule.default ?? roundPresentationModule;
   const roundInput = {
     actualCurrentEpoch: 17n,
@@ -153,37 +155,81 @@ export function runGameDataPresentationTests() {
     },
     "tile with display-zero pool must not show players",
   );
-  const miningGridSource = readFileSync("app/components/MiningGrid.tsx", "utf8");
-  assert.match(
-    miningGridSource,
-    /formatTileAmountFixed\(value: string\)[\s\S]*formatDecimalTextFixed\(value\.trim\(\), 2\)[\s\S]*isPositiveFixedDecimalText\(formatTileAmountFixed\(displayAmount\)\)/,
-    "mining grid tile display and visible stake detection must use canonical decimal-text formatting",
+  assert.deepEqual(
+    miningGrid.deriveMiningGridTilePresentation({
+      displayAmount: "1000000000000000000.005",
+      users: 3,
+      hasMyBet: false,
+      liveStateReady: true,
+      coldBootDefaults: false,
+    }),
+    {
+      isLiveDisplayReady: true,
+      compactAmount: "1000000000000000000.01",
+      hasDisplayedStake: true,
+      showUserBadge: true,
+      displayedUsers: 3,
+    },
+    "mining grid pool display must retain canonical decimal-text precision instead of coercing to Number",
   );
-  assert.doesNotMatch(
-    miningGridSource,
-    /Number\.parseFloat\(value\)|Number\.parseFloat\(displayAmount\)|amount\.toFixed\(2\)/,
-    "mining grid tile display must not use parseFloat().toFixed() for pool amounts",
+  assert.deepEqual(
+    miningGrid.deriveMiningGridTilePresentation({
+      displayAmount: "0.004",
+      users: 7,
+      hasMyBet: false,
+      liveStateReady: true,
+      coldBootDefaults: false,
+    }),
+    {
+      isLiveDisplayReady: true,
+      compactAmount: "0",
+      hasDisplayedStake: false,
+      showUserBadge: false,
+      displayedUsers: 0,
+    },
+    "display-zero tile stakes must not surface a player badge or player count",
   );
-  assert.match(
-    miningGridSource,
-    /showUserBadge[\s\S]*hasDisplayedStake[\s\S]*showUserBadge &&/,
-    "mining grid must hide the player badge on display-zero tiles",
+  assert.equal(
+    miningGrid.deriveMiningGridTilePresentation({
+      displayAmount: "0.005",
+      users: 0,
+      hasMyBet: true,
+      liveStateReady: true,
+      coldBootDefaults: false,
+    }).displayedUsers,
+    1,
+    "a positive own stake must remain visible even when an upstream player count is zero",
   );
-  assert.doesNotMatch(
-    miningGridSource,
-    /disabled=\{!liveStateReady \|\| isRevealing \|\| isAnalyzing\}/,
-    "an expired quiet epoch must remain selectable so the next bet can atomically advance it",
+  assert.equal(
+    miningGrid.isMiningGridTileSelectable({ liveStateReady: true, isRevealing: false, isAnalyzing: true }),
+    true,
+    "a quiet expired epoch must remain selectable so the next bet can atomically advance it",
   );
-  assert.match(
-    miningGridSource,
-    /Number\.isSafeInteger\(tileId\)[\s\S]*tileId < 1 \|\| tileId > GRID_SIZE[\s\S]*onTileClick\(tileId\)/,
-    "mining grid delegated click handling must reject malformed tile ids before invoking bet selection",
+  assert.equal(
+    miningGrid.isMiningGridTileSelectable({ liveStateReady: false, isRevealing: false, isAnalyzing: false }),
+    false,
+    "unavailable live state must disable tile selection",
   );
-  assert.doesNotMatch(
-    miningGridSource,
-    /Number\.isInteger\(tileId\) \|\| tileId <= 0/,
-    "mining grid delegated click handling must not use positive-only tile guards",
+  assert.equal(
+    miningGrid.isMiningGridTileSelectable({ liveStateReady: true, isRevealing: true, isAnalyzing: false }),
+    false,
+    "revealing state must disable tile selection",
   );
+  for (const [rawTileId, expected] of [
+    ["1", 1],
+    ["25", 25],
+    [undefined, null],
+    ["0", null],
+    ["1.5", null],
+    ["26", null],
+    ["9007199254740992", null],
+  ]) {
+    assert.equal(
+      miningGrid.parseMiningGridTileId(rawTileId),
+      expected,
+      `delegated tile selection must reject malformed grid id ${String(rawTileId)}`,
+    );
+  }
   const manualBetFormSource = readFileSync("app/hooks/useManualBetForm.ts", "utf8");
   assert.doesNotMatch(
     manualBetFormSource,
