@@ -44,6 +44,8 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
   onDepositEthAmountChange,
   onDepositTokenAmountChange,
   onCreateEmbeddedWallet,
+  walletSetupCreating,
+  walletSetupError,
   onCopyEmbeddedAddress,
   embeddedAddressCopied = false,
   onExportEmbeddedWallet,
@@ -192,6 +194,8 @@ export const WalletSettingsModal = React.memo(function WalletSettingsModal({
               onCopyEmbeddedAddress={onCopyEmbeddedAddress}
               onExportEmbeddedWallet={onExportEmbeddedWallet}
               onCreateEmbeddedWallet={onCreateEmbeddedWallet}
+              walletSetupCreating={walletSetupCreating}
+              walletSetupError={walletSetupError}
               onDepositEthAmountChange={onDepositEthAmountChange}
               onDepositTokenAmountChange={onDepositTokenAmountChange}
               onDepositEthToEmbedded={onDepositEthToEmbedded}

@@ -27,6 +27,8 @@ export interface WalletSettingsModalProps {
   onDepositEthAmountChange: (value: string) => void;
   onDepositTokenAmountChange: (value: string) => void;
   onCreateEmbeddedWallet: () => Promise<void>;
+  walletSetupCreating: boolean;
+  walletSetupError: string | null;
   onCopyEmbeddedAddress: () => void;
   embeddedAddressCopied?: boolean;
   onExportEmbeddedWallet: () => void;

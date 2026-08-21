@@ -107,7 +107,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - This is local mutable-worktree evidence only. It does not establish a full
   campaign pass, immutable-SHA seal, hosted readiness, or real wallet flow.
 
-- Wallet setup is now runtime-owned across the Hub and Sidebar: one safe shared attempt lock exposes creating/error state, prevents duplicate creation requests across surfaces, retains retry after a rejected attempt, and releases only after wallet sync/connection. Local presentation and TypeScript checks passed; no wallet or chain action was performed.
+- Wallet setup is runtime-owned across Hub, Sidebar, and Wallet Settings: one safe shared attempt lock exposes creating/error state, prevents duplicate creation requests across surfaces, retains retry after a rejected attempt, and releases only after wallet sync/connection. A generation token invalidates stale Promise settlement after reset, so it cannot overwrite a newer attempt. Local presentation and TypeScript checks passed; no wallet or chain action was performed.
 ## Campaign status
 
 - `local-20260821-final-r3` iterations 1–3 completed all seven isolated gates.

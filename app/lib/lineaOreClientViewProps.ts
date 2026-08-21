@@ -436,6 +436,8 @@ export function createLineaOreClientViewProps({
       setDepositEthAmount,
       setDepositTokenAmount,
       createEmbeddedWallet,
+      walletSetupCreating,
+      walletSetupError,
       handleCopyEmbeddedAddress,
       embeddedAddressCopied,
       handleWithdrawToExternal,

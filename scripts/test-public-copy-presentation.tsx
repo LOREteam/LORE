@@ -6,6 +6,7 @@ import { FAQ } from "../app/components/FAQ";
 import { getMobileRewardsWalletPresentation } from "../app/components/HubGameBoard";
 import { createWalletSetupGuard } from "../app/lib/walletSetup";
 import { Sidebar } from "../app/components/Sidebar";
+import { WalletSettingsPrivyPanel } from "../app/components/wallet/WalletSettingsPrivyPanel";
 import { WhitePaper } from "../app/components/WhitePaper";
 import { CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS } from "../app/lib/constants";
 import { shortenAddress } from "../app/lib/utils";
@@ -134,6 +135,52 @@ assert.match(guestRewardsSidebar, /aria-label="Log in to check rewards"/, "guest
 assert.doesNotMatch(guestRewardsSidebar, /Retry reward scan/, "guest rewards must not expose a silent scanner retry");
 assert.doesNotMatch(guestRewardsSidebar, /Claim all/, "guest rewards must not expose stale claim actions");
 
+const creatingWalletSettings = renderToStaticMarkup(
+  <WalletSettingsPrivyPanel
+    embeddedWalletAddress={null}
+    externalWalletAddress={null}
+    embeddedAddressCopied={false}
+    depositEthAmount=""
+    depositTokenAmount=""
+    isDepositingEth={false}
+    isDepositingToken={false}
+    onCopyEmbeddedAddress={() => {}}
+    onExportEmbeddedWallet={() => {}}
+    onCreateEmbeddedWallet={() => {}}
+    walletSetupCreating
+    walletSetupError={null}
+    onDepositEthAmountChange={() => {}}
+    onDepositTokenAmountChange={() => {}}
+    onDepositEthToEmbedded={() => {}}
+    onDepositTokenToEmbedded={() => {}}
+  />,
+);
+assert.match(creatingWalletSettings, /Creating your wallet/, "Wallet Settings must expose wallet creation progress");
+assert.match(creatingWalletSettings, /aria-busy="true"/, "Wallet Settings creation CTA must expose busy state");
+assert.match(creatingWalletSettings, /disabled=""/, "Wallet Settings creation CTA must be disabled while shared setup is running");
+
+const failedWalletSettings = renderToStaticMarkup(
+  <WalletSettingsPrivyPanel
+    embeddedWalletAddress={null}
+    externalWalletAddress={null}
+    embeddedAddressCopied={false}
+    depositEthAmount=""
+    depositTokenAmount=""
+    isDepositingEth={false}
+    isDepositingToken={false}
+    onCopyEmbeddedAddress={() => {}}
+    onExportEmbeddedWallet={() => {}}
+    onCreateEmbeddedWallet={() => {}}
+    walletSetupCreating={false}
+    walletSetupError="Wallet creation could not be completed. Please try again."
+    onDepositEthAmountChange={() => {}}
+    onDepositTokenAmountChange={() => {}}
+    onDepositEthToEmbedded={() => {}}
+    onDepositTokenToEmbedded={() => {}}
+  />,
+);
+assert.match(failedWalletSettings, /Wallet creation could not be completed\. Please try again\./, "Wallet Settings must expose a retryable setup failure");
+assert.match(failedWalletSettings, /Create Privy Wallet/, "Wallet Settings must retain create action after a setup failure");
 const createWalletRewardsSidebar = renderSidebar({ rewardsWalletCta: "create" });
 assert.match(createWalletRewardsSidebar, /Create your LORE wallet to check rewards\./, "authenticated users without a wallet must get the create-wallet explanation");
 assert.match(createWalletRewardsSidebar, /aria-label="Create LORE wallet to check rewards"/, "create-wallet rewards CTA must be actionable");

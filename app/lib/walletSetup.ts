@@ -18,19 +18,24 @@ export function createWalletSetupGuard({
   onCreateEmbeddedWallet: () => Promise<void>;
   onStateChange: (state: WalletSetupState) => void;
 }) {
+  let generation = 0;
   let locked = false;
 
   return {
     async run(): Promise<void> {
       if (locked) return;
       locked = true;
+      const attemptGeneration = ++generation;
       onStateChange("creating");
-      if (await runWalletSetupAttempt(onCreateEmbeddedWallet) === "failed") {
+      const result = await runWalletSetupAttempt(onCreateEmbeddedWallet);
+      if (attemptGeneration !== generation) return;
+      if (result === "failed") {
         locked = false;
         onStateChange("error");
       }
     },
     reset() {
+      generation += 1;
       locked = false;
       onStateChange("idle");
     },

@@ -7,9 +7,9 @@ import {
 } from "../app/components/BetPanel";
 import {
   formatExactMobileBetTotal,
-  runWalletSetupAttempt,
   summarizeMobileTileSelection,
 } from "../app/components/HubSidePanel";
+import { createWalletSetupGuard, runWalletSetupAttempt } from "../app/lib/walletSetup";
 
 assert.equal(
   formatExactMobileBetTotal("0.123456789123456789", 25),
@@ -160,6 +160,7 @@ assert.deepEqual(
 const sidePanelSource = readFileSync("app/components/HubSidePanel.tsx", "utf8");
 const betPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
 const hubSource = readFileSync("app/components/HubContent.tsx", "utf8");
+const walletSetupSource = readFileSync("app/lib/walletSetup.ts", "utf8");
 const gameplayStageClass = hubSource.match(/className="([^"]*gameplay-stage[^"]*)"/)?.[1] ?? "";
 
 assert.equal(
@@ -180,7 +181,8 @@ assert.match(sidePanelSource, /onAutoAction=\{handleAutoAction\}/);
 assert.match(sidePanelSource, /manualWalletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*manualWalletCta === "create"[\s\S]*onWalletSetup\(\)/, "mobile manual CTA must separate guest login from authenticated wallet setup");
 assert.match(sidePanelSource, /autoWalletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*autoWalletCta === "create"[\s\S]*onWalletSetup\(\)/, "mobile Auto-Miner CTA must separate guest login from authenticated wallet setup");
 assert.match(betPanelSource, /walletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*walletCta === "create"[\s\S]*onWalletSetup/, "desktop CTA must separate guest login from authenticated wallet setup");
-assert.match(sidePanelSource, /handleWalletSetup[\s\S]*actionInFlightRef\.current[\s\S]*runWalletSetupAttempt\(onCreateEmbeddedWallet\)/, "manual and Auto-Miner wallet setup must share a caught duplicate-action guard");
+assert.match(sidePanelSource, /handleWalletSetup[\s\S]*actionInFlightRef\.current[\s\S]*onCreateEmbeddedWallet\(\)/, "manual and Auto-Miner wallet setup must delegate to the shared duplicate-action guard");
+assert.match(walletSetupSource, /let generation = 0;[\s\S]*attemptGeneration !== generation/, "wallet setup reset must invalidate stale attempt settlement");
 assert.match(sidePanelSource, /onCreateEmbeddedWallet: \(\) => Promise<void>/, "wallet setup must retain the async creation contract");
 assert.match(sidePanelSource, /aria-describedby=\{manualBetForm\.betAmountError \? "mobile-bet-amount-error" : undefined\}/, "the mobile amount input must describe only its validation message");
 assert.match(sidePanelSource, /id="mobile-wallet-setup-status"[\s\S]*role=\{walletSetupError \? "alert" : "status"\}[\s\S]*aria-live="polite"[\s\S]*aria-busy=\{walletSetupCreating \|\| undefined\}/, "wallet setup creation must expose a separate live busy status");
@@ -229,26 +231,47 @@ assert.deepEqual(
 );
 
 const walletSetupBehaviorTest = (async () => {
-let rejectWalletCreation: (error: Error) => void = () => { throw new Error("wallet creation rejection was not initialized"); };
-const pendingWalletCreation = new Promise<void>((_resolve, reject) => {
-  rejectWalletCreation = reject;
-});
-let createCalls = 0;
-const pendingAttempt = runWalletSetupAttempt(() => {
-  createCalls += 1;
-  return pendingWalletCreation;
-});
-await Promise.resolve();
-assert.equal(createCalls, 1, "wallet creation must start exactly once while the CTA is disabled");
-let pendingSettled = false;
-void pendingAttempt.then(() => { pendingSettled = true; });
-await Promise.resolve();
-assert.equal(pendingSettled, false, "wallet CTA must retain creating feedback while the wallet promise is deferred");
-rejectWalletCreation(new Error("synthetic Privy failure"));
-assert.equal(await pendingAttempt, "failed", "wallet creation rejection must be caught for a retryable error state");
-assert.equal(await runWalletSetupAttempt(() => Promise.resolve()), "complete", "wallet creation must remain retryable after a handled rejection");
-})();
+  const states: string[] = [];
+  const firstDeferred: { reject: (error: Error) => void } = { reject: () => { throw new Error("first rejection was not initialized"); } };
+  const retryDeferred: { resolve: () => void } = { resolve: () => { throw new Error("retry resolution was not initialized"); } };
+  const pendingFirst = new Promise<void>((_resolve, reject) => {
+    firstDeferred.reject = reject;
+  });
+  const pendingRetry = new Promise<void>((resolve) => {
+    retryDeferred.resolve = resolve;
+  });
+  let createCalls = 0;
+  const sharedGuard = createWalletSetupGuard({
+    onCreateEmbeddedWallet: () => {
+      createCalls += 1;
+      if (createCalls === 1) return pendingFirst;
+      if (createCalls === 2) return pendingRetry;
+      if (createCalls === 3) return Promise.reject(new Error("synthetic Privy failure"));
+      return Promise.resolve();
+    },
+    onStateChange: (state) => states.push(state),
+  });
 
+  const staleAttempt = sharedGuard.run();
+  assert.equal(createCalls, 1, "wallet creation must start exactly once while the CTA is disabled");
+  sharedGuard.reset();
+  const retryAttempt = sharedGuard.run();
+  assert.equal(createCalls, 2, "reset must permit a fresh wallet setup attempt");
+  firstDeferred.reject(new Error("stale Privy failure"));
+  await staleAttempt;
+  assert.deepEqual(states, ["creating", "idle", "creating"], "stale settlement after reset must not unlock or overwrite the retry state");
+  retryDeferred.resolve();
+  await retryAttempt;
+  assert.equal(states.at(-1), "creating", "a successful attempt remains locked until wallet sync confirms it");
+  sharedGuard.reset();
+  await sharedGuard.run();
+  assert.equal(states.at(-1), "error", "current wallet creation rejection must become a retryable error state");
+  await sharedGuard.run();
+  assert.equal(createCalls, 4, "wallet setup error must permit a later retry");
+  sharedGuard.reset();
+  assert.equal(states.at(-1), "idle", "wallet connection reset must release the shared setup lock");
+  assert.equal(await runWalletSetupAttempt(() => Promise.resolve()), "complete", "wallet setup helper must preserve successful completion");
+})();
 void walletSetupBehaviorTest.then(
   () => console.log(JSON.stringify({
   ok: true,

@@ -178,6 +178,8 @@ type BuildWalletShellPropsOptions = {
   setDepositEthAmount: WalletSettingsProps["onDepositEthAmountChange"];
   setDepositTokenAmount: WalletSettingsProps["onDepositTokenAmountChange"];
   createEmbeddedWallet: WalletSettingsProps["onCreateEmbeddedWallet"];
+  walletSetupCreating: WalletSettingsProps["walletSetupCreating"];
+  walletSetupError: WalletSettingsProps["walletSetupError"];
   handleCopyEmbeddedAddress: WalletSettingsProps["onCopyEmbeddedAddress"];
   embeddedAddressCopied: WalletSettingsProps["embeddedAddressCopied"];
   handleWithdrawToExternal: WalletSettingsProps["onWithdrawToExternal"];
@@ -238,6 +240,8 @@ export function buildWalletShellProps({
   setDepositEthAmount,
   setDepositTokenAmount,
   createEmbeddedWallet,
+  walletSetupCreating,
+  walletSetupError,
   handleCopyEmbeddedAddress,
   embeddedAddressCopied,
   handleWithdrawToExternal,
@@ -303,6 +307,8 @@ export function buildWalletShellProps({
       onDepositEthAmountChange: setDepositEthAmount,
       onDepositTokenAmountChange: setDepositTokenAmount,
       onCreateEmbeddedWallet: createEmbeddedWallet,
+      walletSetupCreating,
+      walletSetupError,
       onCopyEmbeddedAddress: handleCopyEmbeddedAddress,
       embeddedAddressCopied,
       onExportEmbeddedWallet: exportEmbeddedWallet,

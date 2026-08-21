@@ -17,6 +17,8 @@ interface WalletSettingsPrivyPanelProps {
   onCopyEmbeddedAddress: () => void;
   onExportEmbeddedWallet: () => void;
   onCreateEmbeddedWallet: () => void;
+  walletSetupCreating: boolean;
+  walletSetupError: string | null;
   onDepositEthAmountChange: (value: string) => void;
   onDepositTokenAmountChange: (value: string) => void;
   onDepositEthToEmbedded: () => void;
@@ -34,6 +36,8 @@ export const WalletSettingsPrivyPanel = React.memo(function WalletSettingsPrivyP
   onCopyEmbeddedAddress,
   onExportEmbeddedWallet,
   onCreateEmbeddedWallet,
+  walletSetupCreating,
+  walletSetupError,
   onDepositEthAmountChange,
   onDepositTokenAmountChange,
   onDepositEthToEmbedded,
@@ -123,8 +127,26 @@ export const WalletSettingsPrivyPanel = React.memo(function WalletSettingsPrivyP
       ) : (
         <>
           <p className="text-xs text-gray-400 mb-2">Not created yet.</p>
-          <UiButton onClick={onCreateEmbeddedWallet} variant="success" size="sm" uppercase>
-            Create Privy Wallet
+          {walletSetupError && (
+            <p role="alert" className="mb-2 text-xs font-medium text-red-300">
+              {walletSetupError}
+            </p>
+          )}
+          {walletSetupCreating && (
+            <p role="status" aria-live="polite" aria-busy="true" className="mb-2 text-xs font-medium text-violet-200">
+              Creating your wallet…
+            </p>
+          )}
+          <UiButton
+            onClick={() => void onCreateEmbeddedWallet()}
+            disabled={walletSetupCreating}
+            loading={walletSetupCreating}
+            aria-busy={walletSetupCreating || undefined}
+            variant="success"
+            size="sm"
+            uppercase
+          >
+            {walletSetupCreating ? "Creating wallet..." : "Create Privy Wallet"}
           </UiButton>
         </>
       )}
