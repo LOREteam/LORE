@@ -265,14 +265,19 @@ export async function runV10RuntimeIdentityTests() {
 
   const liveCanarySource = readFileSync(path.join(process.cwd(), "scripts", "live-round-canary.ts"), "utf8");
   const identityStart = liveCanarySource.indexOf("const runtimeIdentity = await assertV10RuntimeIdentity");
-  const identityEvidence = liveCanarySource.indexOf("runtimeIdentity,", identityStart);
-  const walletLoad = liveCanarySource.indexOf("wallets = loadWallets(executionWalletConfig);", identityStart);
-  const tokenRead = liveCanarySource.indexOf("const contractToken = await publicClient.readContract");
-  const walletPreflight = liveCanarySource.indexOf("await runPreflight(logPath, publicClient, wallets, plannedSpendByRole);");
-  assert.ok(identityStart >= 0 && identityEvidence > identityStart, "live canary must log runtime identity evidence");
-  assert.ok(walletLoad > identityEvidence, "live canary must record runtime identity before loading wallet material");
-  assert.ok(tokenRead > identityEvidence, "live canary must record runtime identity before token work");
-  assert.ok(walletPreflight > identityEvidence, "live canary must record runtime identity before wallet preflight");
+  const admissionStart = liveCanarySource.indexOf("writeCanaryAdmission({", identityStart);
+  const walletLoad = liveCanarySource.indexOf("wallets = loadWallets(executionWalletConfig);", admissionStart);
+  const tokenRead = liveCanarySource.indexOf("const contractToken = await publicClient.readContract", admissionStart);
+  const walletPreflight = liveCanarySource.indexOf("await runPreflight(logPath, publicClient, wallets, plannedSpendByRole);", admissionStart);
+  const admissionRecord = liveCanarySource.slice(admissionStart, walletLoad);
+  const admissionWriter = liveCanarySource.slice(liveCanarySource.indexOf("function writeCanaryAdmission"), admissionStart);
+  assert.ok(identityStart >= 0 && admissionStart > identityStart, "live canary must record runtime identity in its admission");
+  assert.match(admissionRecord, /runtimeIdentity,/);
+  assert.match(admissionRecord, /wallets: admissionWallets,/);
+  assert.match(admissionWriter, /signingMaterialLoaded: false,/);
+  assert.ok(walletLoad > admissionStart, "live canary must record admission before loading wallet material");
+  assert.ok(tokenRead > admissionStart, "live canary must record admission before token work");
+  assert.ok(walletPreflight > admissionStart, "live canary must record admission before wallet preflight");
 }
 
 if (process.argv[1]?.endsWith("test-v10-runtime-identity.ts")) {

@@ -698,7 +698,7 @@ function writeCanaryAdmission(params: {
     role: "SYSTEM",
     round: -1,
     signatureRequested: false,
-    signingMaterialLoaded: execution === "live",
+    signingMaterialLoaded: false,
     timestamp: new Date().toISOString(),
     transactionSent: false,
     walletClientCreated: false,
@@ -1528,13 +1528,31 @@ async function main() {
     throw new Error("V10 runtime identity does not match the canonical Sepolia deployment manifest");
   }
 
+  // The public, pinned wallet set is sufficient to make the plan and persist the
+  // admission record. Keep the execution keys out of this phase entirely.
+  const admissionWallets = loadDryRunWallets(publicWalletConfig);
+  const plannedSpendByRole = getPlannedSpendByRole(admissionWallets);
+  const plannedStake = [...plannedSpendByRole.values()].reduce((sum, value) => sum + value, 0n);
+  if (!DRY_RUN && !previewBinding) {
+    throw new Error("Live admission requires a fresh Preview binding");
+  }
+  // This is the sole run admission record. It is appended after the read-only
+  // runtime proof and before any signing material, wallet client, signature, or
+  // transaction request.
+  writeCanaryAdmission({
+    logPath,
+    previewBinding,
+    runtimeIdentity,
+    deploymentManifest,
+    plannedSpendByRole,
+    walletSetSha256: publicWalletConfig.walletSetSha256,
+    wallets: admissionWallets,
+  });
   let executionWalletConfig: ExecutionWalletAdmission | null = null;
-  let wallets: CanaryWallet[];
-  if (DRY_RUN) {
-    wallets = loadDryRunWallets(publicWalletConfig);
-  } else {
-    // Signing material is admitted only after the runtime identity check above,
-    // and the public file is re-read so a post-Preview change fails closed.
+  let wallets: CanaryWallet[] = admissionWallets;
+  if (!DRY_RUN) {
+    // The public file is re-read while loading the signing keys so a
+    // post-Preview address-set change fails closed after the recorded admission.
     executionWalletConfig = loadExecutionWalletAdmission({
       cwd: process.cwd(),
       environment: process.env,
@@ -1547,22 +1565,6 @@ async function main() {
         "signingMaterialLoaded=true signatureRequested=false",
     );
   }
-  const plannedSpendByRole = getPlannedSpendByRole(wallets);
-  const plannedStake = [...plannedSpendByRole.values()].reduce((sum, value) => sum + value, 0n);
-  if (!DRY_RUN && (!previewBinding || !executionWalletConfig)) {
-    throw new Error("Live admission requires fresh Preview and validated execution wallets");
-  }
-  // This is the sole run admission record. It is appended after the read-only
-  // runtime proof and before any wallet client, signature, or transaction request.
-  writeCanaryAdmission({
-    logPath,
-    previewBinding,
-    runtimeIdentity,
-    deploymentManifest,
-    plannedSpendByRole,
-    walletSetSha256: publicWalletConfig.walletSetSha256,
-    wallets,
-  });
   writeEvent(logPath, {
     amount: "0",
     mode: "preflight",
