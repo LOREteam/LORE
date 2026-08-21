@@ -159,6 +159,87 @@ export async function runRewardScannerTests() {
       { epoch: "bad", amountWei: "1" },
     ],
   );
+  const verifiedAt = Date.now() - 1;
+  const verifiedEmptyCache = rewardScanner.parseRewardScanCacheEnvelope({
+    cacheVersion: 3,
+    verifiedAt,
+    savedAt: verifiedAt,
+    lastScannedEpoch: "100",
+    deepestScannedEpoch: "1",
+    wins: [],
+  }, 3);
+  assert.deepEqual(
+    verifiedEmptyCache,
+    {
+      wins: [],
+      savedAt: verifiedAt,
+      lastScannedEpoch: "100",
+      deepestScannedEpoch: "1",
+      verifiedAt,
+      isVerified: true,
+    },
+    "a v3 empty cache is a verified no-reward result",
+  );
+  const legacyEmptyCache = rewardScanner.parseRewardScanCacheEnvelope({
+    savedAt: verifiedAt,
+    lastScannedEpoch: "100",
+    deepestScannedEpoch: "1",
+    wins: [],
+  }, 2);
+  assert.equal(legacyEmptyCache.isVerified, false, "a v2 empty cache cannot prove that no rewards exist");
+  assert.equal(legacyEmptyCache.verifiedAt, null);
+  assert.deepEqual(
+    rewardScanner.getRewardScanFailureState({
+      walletAddress: "0xabc",
+      lastVerifiedAt: verifiedAt,
+      incomplete: true,
+      message: "Reward scan incomplete: hasClaimed[1] failed",
+    }),
+    {
+      status: "stale",
+      walletAddress: "0xabc",
+      lastVerifiedAt: verifiedAt,
+      incomplete: true,
+      error: "Reward scan incomplete: hasClaimed[1] failed",
+    },
+    "a failed refresh must preserve the verified v3 watermark as stale",
+  );
+  assert.deepEqual(
+    rewardScanner.getRewardScanFailureState({
+      walletAddress: "0xabc",
+      lastVerifiedAt: null,
+      incomplete: false,
+      message: "RPC unavailable",
+    }),
+    {
+      status: "error",
+      walletAddress: "0xabc",
+      lastVerifiedAt: null,
+      incomplete: false,
+      error: "RPC unavailable",
+    },
+    "an initial failed scan must be an error rather than an empty result",
+  );
+  assert.deepEqual(
+    rewardScanner.requireCompleteRewardScanMulticallResults([
+      { status: "success", result: false },
+      { result: 0n },
+    ], 2, "fixture"),
+    [{ result: false }, { result: 0n }],
+  );
+  assert.throws(
+    () => rewardScanner.requireCompleteRewardScanMulticallResults([{ result: false }], 2, "fixture"),
+    rewardScanner.RewardScanIncompleteError,
+    "a shortened multicall must never be interpreted as no reward",
+  );
+  assert.throws(
+    () => rewardScanner.requireCompleteRewardScanMulticallResults([
+      { status: "success", result: false },
+      { status: "failure", error: new Error("RPC") },
+    ], 2, "fixture"),
+    rewardScanner.RewardScanIncompleteError,
+    "a failed multicall entry must never be interpreted as no reward",
+  );
   assert.equal(rewardScanner.getRewardScanRescanDelayMs(null, rewardScanNow), 0);
   assert.equal(rewardScanner.getRewardScanRescanDelayMs(rewardScanNow - 14 * 60_000, rewardScanNow), 60_000);
   assert.equal(rewardScanner.getRewardScanRescanDelayMs(rewardScanNow - 15 * 60_000, rewardScanNow), 0);
@@ -228,8 +309,8 @@ export async function runRewardScannerTests() {
   const rewardScannerSource = readFileSync("app/hooks/useRewardScanner.ts", "utf8");
   assert.match(
     rewardScannerSource,
-    /wins\.push\(\.\.\.collectOpenRewardScanWins\(\{[\s\S]*potentialWins,[\s\S]*betResults,[\s\S]*tilePoolResults,[\s\S]*resolvedAtResults,[\s\S]*chainTimestamp,[\s\S]*\}\)\)/,
-    "automatic reward scan must bind aligned multicall results to the tested claim-window policy",
+    /requireCompleteRewardScanMulticallResults\(betResults, potentialWins\.length, "userBets"\)[\s\S]*wins\.push\(\.\.\.collectOpenRewardScanWins\(\{[\s\S]*potentialWins,[\s\S]*betResults: completeBetResults,[\s\S]*tilePoolResults: completeTilePoolResults,[\s\S]*resolvedAtResults: completeResolvedAtResults,[\s\S]*chainTimestamp,[\s\S]*\}\)\)/,
+    "automatic reward scan must reject incomplete multicalls before binding aligned results to the claim-window policy",
   );
   assert.match(rewardScannerSource, /getExplorerTxUrl/, "single reward claim notifications must include explorer links when a tx hash is available");
   assert.match(
@@ -262,6 +343,10 @@ export async function runRewardScannerTests() {
     "reward claims must synchronously prevent overlapping single and batch submissions",
   );
   assert.match(rewardScannerSource, /activeClaimAddressRef\.current = address\?\.toLowerCase\(\)[\s\S]*const claimActor = address\.toLowerCase\(\)[\s\S]*activeClaimAddressRef\.current !== claimActor[\s\S]*claimActorChanged/, "reward claims must stop sends and stale state updates when the active wallet changes");
+  assert.match(rewardScannerSource, /cacheVersion: 3,[\s\S]*verifiedAt,[\s\S]*lastScannedEpoch,[\s\S]*deepestScannedEpoch/, "only a completed v3 scan may persist a verification watermark");
+  assert.match(rewardScannerSource, /getRewardScanRescanDelayMs\(cached\.isVerified \? cached\.verifiedAt : null\)/, "an untrusted v2 cache must not defer its first full verification scan");
+  const rewardClaimSource = rewardScannerSource.slice(rewardScannerSource.indexOf("const claimReward"), rewardScannerSource.indexOf("return useMemo"));
+  assert.doesNotMatch(rewardClaimSource, /saveCachedRewardScan\(/, "claim confirmation must not advance or persist the full reward-scan verification watermark");
 
   const deepRewardScanSource = readFileSync("app/hooks/useDeepRewardScan.ts", "utf8");
   assert.match(

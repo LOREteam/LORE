@@ -5,7 +5,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { usePublicClient, useAccount } from "wagmi";
 import { encodeFunctionData, getAddress } from "viem";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS, GAME_ABI, REWARD_SCAN_CHUNK_SIZE, TX_RECEIPT_TIMEOUT_MS } from "../lib/constants";
-import type { UnclaimedWin } from "../lib/types";
+import type { RewardScanVerificationState, UnclaimedWin } from "../lib/types";
 import { isUserRejection } from "../lib/utils";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { normalizeCacheTimestamp } from "../lib/cacheTimestamp";
@@ -47,18 +47,136 @@ const REWARD_SCAN_CHUNK_SIZE_NUMBER = Number(REWARD_SCAN_CHUNK_SIZE);
 const REWARD_SCAN_CACHE_RESCAN_MS = 15 * 60_000; // 15 minutes
 
 type RewardScanCacheEnvelope = {
-  /** Timestamp of the last save */
+  cacheVersion?: number;
+  /** Timestamp of the last fully verified scan. */
+  verifiedAt?: number;
+  /** Timestamp retained only for backwards-compatible rescan scheduling. */
   savedAt?: number;
-  /** The highest epoch that was scanned up to (exclusive upper bound of scanned range) */
+  /** The highest epoch that was scanned up to (exclusive upper bound of scanned range). */
   lastScannedEpoch?: string;
-  /** The deepest (lowest) epoch that was scanned down to */
+  /** The deepest (lowest) epoch that was scanned down to. */
   deepestScannedEpoch?: string;
-  /** Unclaimed wins found during scan */
+  /** Unclaimed wins found during scan. */
   wins?: UnclaimedWin[];
 };
 
-function getRewardScanCacheKey(address: string) {
-  return `lore:reward-scan:v2:${getAddress(address).toLowerCase()}`;
+type CachedRewardScan = {
+  wins: UnclaimedWin[];
+  savedAt: number | null;
+  lastScannedEpoch: string | null;
+  deepestScannedEpoch: string | null;
+  verifiedAt: number | null;
+  isVerified: boolean;
+};
+
+const EMPTY_REWARD_SCAN_CACHE: CachedRewardScan = {
+  wins: [],
+  savedAt: null,
+  lastScannedEpoch: null,
+  deepestScannedEpoch: null,
+  verifiedAt: null,
+  isVerified: false,
+};
+
+export class RewardScanIncompleteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RewardScanIncompleteError";
+  }
+}
+
+function getRewardScanCacheKey(address: string, version: 2 | 3 = 3) {
+  return `lore:reward-scan:v${version}:${getAddress(address).toLowerCase()}`;
+}
+
+export function parseRewardScanCacheEnvelope(value: unknown, sourceVersion: 2 | 3): CachedRewardScan {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ...EMPTY_REWARD_SCAN_CACHE };
+  const parsed = value as RewardScanCacheEnvelope;
+  if (!Array.isArray(parsed.wins)) return { ...EMPTY_REWARD_SCAN_CACHE };
+
+  const lastScannedEpoch = normalizeRewardScanEpochString(parsed.lastScannedEpoch)
+    ?? (sourceVersion === 2 ? normalizeRewardScanEpochString((parsed as Record<string, unknown>).epoch) : null);
+  const deepestScannedEpoch = normalizeRewardScanEpochString(parsed.deepestScannedEpoch);
+  const savedAt = normalizeCacheTimestamp(parsed.savedAt);
+  const verifiedAt = sourceVersion === 3 && parsed.cacheVersion === 3
+    ? normalizeCacheTimestamp(parsed.verifiedAt)
+    : null;
+  const isVerified = verifiedAt !== null && lastScannedEpoch !== null && deepestScannedEpoch !== null;
+
+  return {
+    wins: normalizeRewardScanWins(parsed.wins),
+    savedAt: verifiedAt ?? savedAt,
+    lastScannedEpoch,
+    deepestScannedEpoch,
+    verifiedAt: isVerified ? verifiedAt : null,
+    isVerified,
+  };
+}
+
+export function getRewardScanFailureState({
+  walletAddress,
+  lastVerifiedAt,
+  incomplete,
+  message,
+}: {
+  walletAddress: string;
+  lastVerifiedAt: number | null;
+  incomplete: boolean;
+  message: string;
+}): RewardScanVerificationState {
+  const hasVerifiedState = lastVerifiedAt !== null;
+  return {
+    status: hasVerifiedState ? "stale" : "error",
+    walletAddress,
+    lastVerifiedAt: hasVerifiedState ? lastVerifiedAt : null,
+    incomplete,
+    error: message,
+  };
+}
+
+export function requireCompleteRewardScanMulticallResults(
+  value: unknown,
+  expectedLength: number,
+  label: string,
+): Array<{ result: unknown }> {
+  if (!Number.isSafeInteger(expectedLength) || expectedLength < 0) {
+    throw new RangeError("reward scan multicall expected length must be a non-negative safe integer");
+  }
+  if (!Array.isArray(value) || value.length !== expectedLength) {
+    throw new RewardScanIncompleteError(`Reward scan incomplete: ${label} returned ${Array.isArray(value) ? value.length : "no"} results for ${expectedLength} calls`);
+  }
+  return value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new RewardScanIncompleteError(`Reward scan incomplete: ${label}[${index}] has no successful result`);
+    }
+    const row = item as { status?: unknown; result?: unknown; error?: unknown };
+    if (row.status === "failure" || row.status === "error" || "error" in row || !("result" in row)) {
+      throw new RewardScanIncompleteError(`Reward scan incomplete: ${label}[${index}] failed`);
+    }
+    return { result: row.result };
+  });
+}
+
+function requireRewardScanValue<T>(value: unknown, predicate: (candidate: unknown) => candidate is T, label: string): T {
+  if (!predicate(value)) throw new RewardScanIncompleteError(`Reward scan incomplete: ${label} returned an invalid result`);
+  return value;
+}
+
+function isEpochTuple(value: unknown): value is EpochTuple {
+  return Array.isArray(value)
+    && value.length >= 4
+    && typeof value[0] === "bigint"
+    && typeof value[1] === "bigint"
+    && typeof value[2] === "bigint"
+    && typeof value[3] === "boolean";
+}
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
+function isBigInt(value: unknown): value is bigint {
+  return typeof value === "bigint";
 }
 
 export function normalizeRewardScanEpochString(value: unknown): string | null {
@@ -97,49 +215,21 @@ export function compareRewardScanWinsDesc(left: UnclaimedWin, right: UnclaimedWi
   return a === b ? 0 : b > a ? 1 : -1;
 }
 
-function loadCachedRewardScan(address: string): {
-  wins: UnclaimedWin[];
-  savedAt: number | null;
-  lastScannedEpoch: string | null;
-  deepestScannedEpoch: string | null;
-} {
-  if (typeof localStorage === "undefined") return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
-  const cacheKey = getRewardScanCacheKey(address);
-  let sourceKey = cacheKey;
+function loadCachedRewardScan(address: string): CachedRewardScan {
+  if (typeof localStorage === "undefined") return { ...EMPTY_REWARD_SCAN_CACHE };
+  const v3Key = getRewardScanCacheKey(address, 3);
+  const v2Key = getRewardScanCacheKey(address, 2);
+  const v1Key = `lore:reward-scan:v1:${getAddress(address).toLowerCase()}`;
   try {
-    // Try v2 first, then migrate v1 if present
-    let raw = localStorage.getItem(cacheKey);
-    if (!raw) {
-      // Attempt to read legacy v1 cache for seamless migration
-      const v1Key = `lore:reward-scan:v1:${getAddress(address).toLowerCase()}`;
-      raw = localStorage.getItem(v1Key);
-      if (raw) {
-        sourceKey = v1Key;
-        // Remove legacy key after reading
-        try { localStorage.removeItem(v1Key); } catch { /* ignore */ }
-      }
-    }
-    if (!raw) return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
-    const parsed = JSON.parse(raw) as RewardScanCacheEnvelope;
-    if (!parsed || !Array.isArray(parsed.wins)) {
-      try { localStorage.removeItem(sourceKey); } catch { /* ignore */ }
-      return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
-    }
-    const wins = normalizeRewardScanWins(parsed.wins);
-    const legacyEpoch = normalizeRewardScanEpochString((parsed as Record<string, unknown>).epoch);
-    return {
-      wins,
-      savedAt: normalizeCacheTimestamp(parsed.savedAt),
-      lastScannedEpoch:
-        normalizeRewardScanEpochString(parsed.lastScannedEpoch)
-        // Legacy v1 used `epoch` field — treat it as lastScannedEpoch
-        ?? legacyEpoch,
-      deepestScannedEpoch:
-        normalizeRewardScanEpochString(parsed.deepestScannedEpoch),
-    };
+    const v3Raw = localStorage.getItem(v3Key);
+    if (v3Raw) return parseRewardScanCacheEnvelope(JSON.parse(v3Raw), 3);
+    const v2Raw = localStorage.getItem(v2Key);
+    if (v2Raw) return parseRewardScanCacheEnvelope(JSON.parse(v2Raw), 2);
+    const v1Raw = localStorage.getItem(v1Key);
+    if (v1Raw) return parseRewardScanCacheEnvelope(JSON.parse(v1Raw), 2);
+    return { ...EMPTY_REWARD_SCAN_CACHE };
   } catch {
-    try { localStorage.removeItem(sourceKey); } catch { /* ignore */ }
-    return { wins: [], savedAt: null, lastScannedEpoch: null, deepestScannedEpoch: null };
+    return { ...EMPTY_REWARD_SCAN_CACHE };
   }
 }
 
@@ -148,21 +238,25 @@ function saveCachedRewardScan(
   wins: UnclaimedWin[],
   lastScannedEpoch: string,
   deepestScannedEpoch: string,
-) {
-  if (typeof localStorage === "undefined") return;
+): number {
+  const verifiedAt = Date.now();
+  if (typeof localStorage === "undefined") return verifiedAt;
   try {
     localStorage.setItem(
-      getRewardScanCacheKey(address),
+      getRewardScanCacheKey(address, 3),
       JSON.stringify({
-        savedAt: Date.now(),
+        cacheVersion: 3,
+        verifiedAt,
+        savedAt: verifiedAt,
         lastScannedEpoch,
         deepestScannedEpoch,
         wins,
       } satisfies RewardScanCacheEnvelope),
     );
   } catch {
-    // ignore cache write failures
+    // A completed live scan remains verified in memory even if storage is unavailable.
   }
+  return verifiedAt;
 }
 
 export function getRewardScanRescanDelayMs(savedAt: number | null, now = Date.now()) {
@@ -240,12 +334,21 @@ export function useRewardScanner(
   const [isScanning, setIsScanning] = useState(false);
   const [isDeepScanning, setIsDeepScanning] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
+  const [rewardScanState, setRewardScanState] = useState<RewardScanVerificationState>({
+    status: "idle",
+    walletAddress: address?.toLowerCase() ?? null,
+    lastVerifiedAt: null,
+    incomplete: false,
+    error: null,
+  });
   const scanAbortRef = useRef(false);
   const scanRunningRef = useRef(false);
   const activeScanKeyRef = useRef<string | null>(null);
   const requestIdRef = useRef(0);
   const lastScannedEpochRef = useRef<string | null>(null);
   const lastScannedAddressRef = useRef<string | null>(null);
+  const lastVerifiedAtRef = useRef<number | null>(null);
+  const lastVerifiedAddressRef = useRef<string | null>(null);
   const cacheSavedAtRef = useRef<number | null>(null);
   const mountedRef = useRef(false);
   const claimInFlightRef = useRef(false);
@@ -404,6 +507,13 @@ export function useRewardScanner(
     const cached = loadCachedRewardScan(normalizedAddress);
     const cachedLastScanned = cached.lastScannedEpoch ? BigInt(cached.lastScannedEpoch) : null;
     const cachedDeepest = cached.deepestScannedEpoch ? BigInt(cached.deepestScannedEpoch) : null;
+    const hasInMemoryVerification = lastVerifiedAddressRef.current === normalizedAddress
+      && lastVerifiedAtRef.current !== null;
+    const lastVerifiedAt = hasInMemoryVerification
+      ? lastVerifiedAtRef.current
+      : cached.isVerified ? cached.verifiedAt : null;
+    const hasVerifiedState = lastVerifiedAt !== null;
+    const preservedWins = hasInMemoryVerification ? unclaimedWinsRef.current : cached.wins;
 
     // Skip if we already scanned up to this epoch and have results in memory
     if (
@@ -422,6 +532,13 @@ export function useRewardScanner(
     if (mountedRef.current) {
       setIsScanning(shouldShowScanning);
       setIsDeepScanning(false);
+      setRewardScanState({
+        status: hasVerifiedState ? "refreshing" : "loading",
+        walletAddress: normalizedAddress,
+        lastVerifiedAt,
+        incomplete: false,
+        error: null,
+      });
     }
 
     try {
@@ -464,12 +581,14 @@ export function useRewardScanner(
           ]);
           if (requestId !== requestIdRef.current) return;
 
+          const completeEpochResults = requireCompleteRewardScanMulticallResults(epochResults, epochIds.length, "epochs");
+          const completeClaimResults = requireCompleteRewardScanMulticallResults(claimResults, epochIds.length, "hasClaimed");
+          const completeDustSettledResults = requireCompleteRewardScanMulticallResults(dustSettledResults, epochIds.length, "epochDustSettled");
           const potentialWins: { id: bigint; winTile: bigint; rewardPool: bigint }[] = [];
           epochIds.forEach((id, index) => {
-            const epRes = epochResults[index]?.result as unknown as EpochTuple | undefined;
-            const claimed = claimResults[index]?.result as unknown as boolean | undefined;
-            const dustSettled = dustSettledResults[index]?.result as unknown as boolean | undefined;
-            if (!epRes) return;
+            const epRes = requireRewardScanValue(completeEpochResults[index]?.result, isEpochTuple, `epochs[${index}]`);
+            const claimed = requireRewardScanValue(completeClaimResults[index]?.result, isBoolean, `hasClaimed[${index}]`);
+            const dustSettled = requireRewardScanValue(completeDustSettledResults[index]?.result, isBoolean, `epochDustSettled[${index}]`);
             if (claimed === false && dustSettled !== true && epRes[3]) {
               potentialWins.push({ id, rewardPool: epRes[1], winTile: epRes[2] });
             }
@@ -495,11 +614,17 @@ export function useRewardScanner(
             ]);
             if (requestId !== requestIdRef.current) return;
 
+            const completeBetResults = requireCompleteRewardScanMulticallResults(betResults, potentialWins.length, "userBets");
+            const completeTilePoolResults = requireCompleteRewardScanMulticallResults(tilePoolResults, potentialWins.length, "tilePools");
+            const completeResolvedAtResults = requireCompleteRewardScanMulticallResults(resolvedAtResults, potentialWins.length, "epochResolvedAt");
+            completeBetResults.forEach((item, index) => requireRewardScanValue(item.result, isBigInt, `userBets[${index}]`));
+            completeTilePoolResults.forEach((item, index) => requireRewardScanValue(item.result, isBigInt, `tilePools[${index}]`));
+            completeResolvedAtResults.forEach((item, index) => requireRewardScanValue(item.result, isBigInt, `epochResolvedAt[${index}]`));
             wins.push(...collectOpenRewardScanWins({
               potentialWins,
-              betResults,
-              tilePoolResults,
-              resolvedAtResults,
+              betResults: completeBetResults,
+              tilePoolResults: completeTilePoolResults,
+              resolvedAtResults: completeResolvedAtResults,
               chainTimestamp,
             }));
           }
@@ -509,7 +634,7 @@ export function useRewardScanner(
       // --- Incremental scanning logic ---
       // If we have a valid cache, only scan the gap: [cachedLastScanned .. currentEpoch-1]
       // Then re-validate cached wins to remove any that were claimed since last scan.
-      const hasValidCache = cachedLastScanned != null && cachedLastScanned > BigInt(0);
+      const hasValidCache = cached.isVerified && cachedLastScanned != null && cachedLastScanned > BigInt(0);
       if (hasValidCache && cachedLastScanned! < startEpoch) {
         // Incremental: scan only new epochs (from current-1 down to cachedLastScanned)
         await scanRange(startEpoch, cachedLastScanned!);
@@ -539,24 +664,20 @@ export function useRewardScanner(
             ]);
             if (scanAbortRef.current || requestId !== requestIdRef.current) return;
 
+            const completeClaimChecks = requireCompleteRewardScanMulticallResults(claimChecks, cachedWinChunk.length, "cached hasClaimed");
+            const completeDustChecks = requireCompleteRewardScanMulticallResults(dustChecks, cachedWinChunk.length, "cached epochDustSettled");
+            const completeResolvedAtChecks = requireCompleteRewardScanMulticallResults(resolvedAtChecks, cachedWinChunk.length, "cached epochResolvedAt");
             cachedWinChunk.forEach((w, index) => {
-              const claimed = claimChecks[index]?.result as unknown as boolean | undefined;
-              const dustSettled = dustChecks[index]?.result as unknown as boolean | undefined;
-              const resolvedAt = resolvedAtChecks[index]?.result as unknown as bigint | undefined;
-              if (
-                claimed !== true && dustSettled !== true && resolvedAt !== undefined
-                && isRewardClaimWindowOpen(resolvedAt, chainTimestamp)
-              ) {
+              const claimed = requireRewardScanValue(completeClaimChecks[index]?.result, isBoolean, `cached hasClaimed[${index}]`);
+              const dustSettled = requireRewardScanValue(completeDustChecks[index]?.result, isBoolean, `cached epochDustSettled[${index}]`);
+              const resolvedAt = requireRewardScanValue(completeResolvedAtChecks[index]?.result, isBigInt, `cached epochResolvedAt[${index}]`);
+              if (claimed !== true && dustSettled !== true && isRewardClaimWindowOpen(resolvedAt, chainTimestamp)) {
                 wins.push(w);
               }
             });
           }
         }
 
-        // Update UI with merged results after incremental scan
-        if (mountedRef.current) {
-          setUnclaimedWins(mergeWins(wins));
-        }
 
         // If the previous deep scan didn't reach minEpoch, continue the deep scan
         const needsDeepExtension = cachedDeepest != null && cachedDeepest > minEpoch;
@@ -571,10 +692,6 @@ export function useRewardScanner(
         // Full scan: no usable cache, scan everything in two phases (fast + deep)
         await scanRange(startEpoch, quickMinEpoch);
         if (scanAbortRef.current || requestId !== requestIdRef.current) return;
-        if (mountedRef.current) {
-          setUnclaimedWins(mergeWins(wins));
-        }
-
         if (quickMinEpoch > minEpoch) {
           if (mountedRef.current && shouldShowScanning) {
             setIsDeepScanning(true);
@@ -585,15 +702,35 @@ export function useRewardScanner(
       }
 
       const mergedWins = mergeWins(wins);
+      const verifiedAt = saveCachedRewardScan(normalizedAddress, mergedWins, epochKey, minEpoch.toString());
       lastScannedEpochRef.current = epochKey;
       lastScannedAddressRef.current = normalizedAddress;
-      saveCachedRewardScan(normalizedAddress, mergedWins, epochKey, minEpoch.toString());
-      cacheSavedAtRef.current = Date.now();
+      lastVerifiedAtRef.current = verifiedAt;
+      lastVerifiedAddressRef.current = normalizedAddress;
+      cacheSavedAtRef.current = verifiedAt;
       if (requestId === requestIdRef.current && mountedRef.current) {
         setUnclaimedWins(mergedWins);
+        setRewardScanState({
+          status: "verified",
+          walletAddress: normalizedAddress,
+          lastVerifiedAt: verifiedAt,
+          incomplete: false,
+          error: null,
+        });
       }
     } catch (e) {
-      log.warn("RewardScanner", "scan error", { message: e instanceof Error ? e.message : String(e) });
+      const message = e instanceof Error ? e.message : String(e);
+      const incomplete = e instanceof RewardScanIncompleteError;
+      log.warn("RewardScanner", "scan error", { message });
+      if (requestId === requestIdRef.current && mountedRef.current) {
+        if (hasVerifiedState) setUnclaimedWins(preservedWins);
+        setRewardScanState(getRewardScanFailureState({
+          walletAddress: normalizedAddress,
+          lastVerifiedAt,
+          incomplete,
+          message,
+        }));
+      }
     } finally {
       if (requestId === requestIdRef.current) {
         if (mountedRef.current) {
@@ -610,15 +747,24 @@ export function useRewardScanner(
     if (!enabled || !isPageVisible || !address || !actualCurrentEpoch) return;
     const normalizedAddress = address.toLowerCase();
     const cached = loadCachedRewardScan(normalizedAddress);
-    cacheSavedAtRef.current = cached.savedAt;
+    cacheSavedAtRef.current = cached.isVerified ? cached.verifiedAt : null;
+    lastVerifiedAtRef.current = cached.isVerified ? cached.verifiedAt : null;
+    lastVerifiedAddressRef.current = cached.isVerified ? normalizedAddress : null;
 
-    // Immediately restore cached wins so the UI doesn't flash empty
-    if (mountedRef.current && cached.wins.length > 0) {
-      setUnclaimedWins(cached.wins);
+    // Only a fully verified v3 cache may be restored, including a verified empty result.
+    if (mountedRef.current) {
+      setUnclaimedWins(cached.isVerified ? cached.wins : []);
+      setRewardScanState({
+        status: cached.isVerified ? "verified" : "idle",
+        walletAddress: normalizedAddress,
+        lastVerifiedAt: cached.isVerified ? cached.verifiedAt : null,
+        incomplete: false,
+        error: null,
+      });
     }
 
     // If cache is recent enough, defer the background rescan
-    const remaining = getRewardScanRescanDelayMs(cached.savedAt);
+    const remaining = getRewardScanRescanDelayMs(cached.isVerified ? cached.verifiedAt : null);
     if (remaining > 0) {
       const timeoutId = window.setTimeout(() => {
         void scanRewards();
@@ -646,10 +792,19 @@ export function useRewardScanner(
     activeScanKeyRef.current = null;
     lastScannedEpochRef.current = null;
     lastScannedAddressRef.current = null;
+    lastVerifiedAtRef.current = null;
+    lastVerifiedAddressRef.current = null;
     if (mountedRef.current) {
       setUnclaimedWins([]);
       setIsScanning(false);
       setIsDeepScanning(false);
+      setRewardScanState({
+        status: "idle",
+        walletAddress: address?.toLowerCase() ?? null,
+        lastVerifiedAt: null,
+        incomplete: false,
+        error: null,
+      });
     }
   }, [address]);
 
@@ -693,14 +848,11 @@ export function useRewardScanner(
         if (mountedRef.current) {
           setUnclaimedWins((prev) => {
             if (activeClaimAddressRef.current !== claimActor) return prev;
-            const next = prev.filter((w) => w.epoch !== epochId);
-            if (actualCurrentEpoch) {
-              const { minEpoch } = getAutomaticRewardScanBounds(actualCurrentEpoch);
-              saveCachedRewardScan(claimActor, next, actualCurrentEpoch.toString(), minEpoch.toString());
-              cacheSavedAtRef.current = Date.now();
-            }
-            return next;
+            return prev.filter((w) => w.epoch !== epochId);
           });
+          setRewardScanState((previous) => previous.walletAddress === claimActor
+            ? { ...previous, status: "stale", incomplete: false, error: null }
+            : previous);
         }
         notify?.(formatClaimTxMessage("Reward claimed successfully.", hash), "success");
       } catch (err) {
@@ -862,14 +1014,11 @@ export function useRewardScanner(
         if (mountedRef.current) {
           setUnclaimedWins((prev) => {
             if (activeClaimAddressRef.current !== claimActor) return prev;
-            const next = prev.filter((w) => !claimedEpochs.has(w.epoch));
-            if (actualCurrentEpoch) {
-              const { minEpoch } = getAutomaticRewardScanBounds(actualCurrentEpoch);
-              saveCachedRewardScan(claimActor, next, actualCurrentEpoch.toString(), minEpoch.toString());
-              cacheSavedAtRef.current = Date.now();
-            }
-            return next;
+            return prev.filter((w) => !claimedEpochs.has(w.epoch));
           });
+          setRewardScanState((previous) => previous.walletAddress === claimActor
+            ? { ...previous, status: "stale", incomplete: false, error: null }
+            : previous);
         }
         notify?.(
           lastRewardClaimTxHash
@@ -937,10 +1086,11 @@ export function useRewardScanner(
       isScanning,
       isDeepScanning,
       isClaiming,
+      rewardScanState,
       scanRewards,
       claimReward,
       claimAll,
     }),
-    [claimAll, claimReward, isClaiming, isDeepScanning, isScanning, scanRewards, unclaimedWins],
+    [claimAll, claimReward, isClaiming, isDeepScanning, isScanning, rewardScanState, scanRewards, unclaimedWins],
   );
 }

@@ -20,6 +20,21 @@ export interface UnclaimedWin {
   amountWei: string;
 }
 
+export type RewardScanStatus = "idle" | "loading" | "refreshing" | "verified" | "stale" | "error";
+
+/**
+ * The trust state of rewards read from the contract. A non-null
+ * `lastVerifiedAt` only comes from a completed scan for `walletAddress`.
+ */
+export interface RewardScanVerificationState {
+  status: RewardScanStatus;
+  walletAddress: string | null;
+  lastVerifiedAt: number | null;
+  /** True when the latest attempted scan had a failed or shortened multicall. */
+  incomplete: boolean;
+  error: string | null;
+}
+
 export interface EpochHistoryEntry {
   roundId: string;
   totalPoolWei: string;
