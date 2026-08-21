@@ -10,7 +10,7 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest verified local commit before this state refresh: `81a5006fb3b5492e20f5de3f3fd00fa48f8a6f2e`.
+- Latest verified local code commit before this state refresh: `c11723f9`.
 - The product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. The current immutable-checkout
   reproduction is clean for tracked files; `.tmp-*` and campaign reports are
@@ -81,8 +81,8 @@ fixtures remain the only permitted DB target for local test code.
 - Business suite: `test:logic` and its summary now delegate to one isolated
   runner with an OS-temp DB and protected main/WAL/SHM before/after snapshots.
 - P1.10: additional wallet, reward, history, wins and leaderboard presentation
-  seams are now executable. The refreshed AST audit reports `4650/5362`
-  behavioral assertions (`86.72%`); the overall extraction remains partial.
+  seams are now executable. The refreshed AST audit reports `4657/5369`
+  behavioral assertions (`86.74%`); the overall extraction remains partial.
 - Testnet plan: production-like topology, read model, long campaigns, mobile QA,
   profiling and final evidence criteria are recorded in
   [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
