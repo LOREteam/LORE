@@ -512,9 +512,6 @@ export function useDepositHistory(userAddress?: string, enabled = true) {
       log.warn("DepositHistory", "API fetch failed", { message: err instanceof Error ? err.message : String(err) });
       if (mountedRef.current && requestId === requestIdRef.current) {
         setError(getDepositHistoryLoadError());
-        if (dataRef.current === null) {
-          setData([]);
-        }
       }
     } finally {
       if (mountedRef.current && requestId === requestIdRef.current) {
