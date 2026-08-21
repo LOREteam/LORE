@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-20.
+Last updated: 2026-08-21.
 
 This file is current repository truth. Detailed history is under
 [`docs/archive/`](archive/). The only active queue is
@@ -10,7 +10,7 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest verified local commit before this state refresh: `adc51b0befab5718aeee932dc9d4dd8d1030c516`.
+- Latest verified local commit before this state refresh: `81a5006fb3b5492e20f5de3f3fd00fa48f8a6f2e`.
 - The product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. The current immutable-checkout
   reproduction is clean for tracked files; `.tmp-*` and campaign reports are
@@ -79,8 +79,8 @@ fixtures remain the only permitted DB target for local test code.
 - Business suite: `test:logic` and its summary now delegate to one isolated
   runner with an OS-temp DB and protected main/WAL/SHM before/after snapshots.
 - P1.10: additional wallet, reward, history, wins and leaderboard presentation
-  seams are now executable. The refreshed AST audit reports `4612/5324`
-  behavioral assertions (`86.63%`); the overall extraction remains partial.
+  seams are now executable. The refreshed AST audit reports `4650/5362`
+  behavioral assertions (`86.72%`); the overall extraction remains partial.
 - Testnet plan: production-like topology, read model, long campaigns, mobile QA,
   profiling and final evidence criteria are recorded in
   [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
@@ -97,10 +97,10 @@ fixtures remain the only permitted DB target for local test code.
 | Full business logic | Logic reached `childExitCode=0` and `assertionFailures=0`, but that pre-isolation run created the protected WAL row | Not acceptable as DB-safe final evidence |
 | Diff hygiene | `git diff --check` passes; one CRLF-to-LF warning remains informational | Pass |
 | Security diff scan | Sealed scan `c611f992-3c4d-4ac6-8c9a-14033c6f7156`, snapshot digest `935fed40...3298e`, reviewed 22/22 files, 0 reportable findings; two same-user reparse candidates were validated not applicable | Pass for the frozen pre-log-fix patch only |
-| P1.17 | Same-SHA canonical and isolated profiling build markers sealed locally at `adc51b0`; collector/verifier schema-3 self-tests passed | Open: physical native-hidden two-hour evidence and strict verification of the resulting report required |
+| P1.17 | Same-SHA canonical and isolated profiling build markers sealed locally at `81a5006f`; collector/verifier schema-3 self-tests passed | Open: physical native-hidden two-hour evidence and strict verification of the resulting report required |
 | Local Playwright smoke | Desktop wallet selector, chat, navigation, accessibility, reduced motion and 390/430px shell checks passed; localhost mobile Privy login remained unavailable after one bounded reload | Partial local evidence only; public HTTPS and physical mobile proof remain external |
 | Privy embedded modal | The pinned 3.27.2 provider's `Submit` email name and 24x24 close target are documented as upstream-owned; no DOM/CSS/node_modules workaround is allowed | External HTTPS/mobile QA open |
-| Final clean checkout | Detached fresh `npm ci`, dependency/CI-security proofs, isolated business runner, P1/EVM, V9/V10 invariants, materialization tests, full local proof/prelaunch, and protected-DB recheck passed at `adc51b0`; canonical and isolated profiling provenance were sealed at the same SHA | Pass locally; the physical two-hour P1.17 evidence remains open |
+| Final clean checkout | Detached fresh `npm ci`, dependency/CI-security proofs, isolated business runner, P1/EVM, V9/V10 invariants, materialization tests, full local proof/prelaunch, and protected-DB recheck passed at `81a5006f`; canonical and isolated profiling provenance were sealed at the same SHA | Pass locally; the physical two-hour P1.17 evidence remains open |
 | Sepolia V10 cutover | Canonical V10 deployed at `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` in block `31678224`; strict constructor/receipt/runtime and chain proof checks pass with epoch-bound bets enabled | Pass for local Sepolia runtime; hosted frontend/indexer rollout remains external |
 | Supported Standard security scan | The local supported-scan entitlement is `not_granted`; no substitute scan was represented as Standard evidence | External entitlement blocker |
 
