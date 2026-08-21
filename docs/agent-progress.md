@@ -45,6 +45,10 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 8. Bounded cleanup removed about `1.00 GiB` of old Node/npm caches only. No
    project data, campaign record, browser profile, protected SQLite, or active
    runtime was removed.
+9. Hub CTA now separates guest login from authenticated embedded-wallet setup:
+   users wait while wallet state syncs, then get `CREATE WALLET` without a
+   duplicate login action. Desktop and mobile actions share the existing
+   in-flight guard.
 
 ## Campaign status
 

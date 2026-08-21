@@ -28,12 +28,26 @@ export type AutoMinerFormState = ReturnType<typeof useAutoMinerForm>;
 
 interface ManualMiningActionInput {
   coldBootDefaults: boolean;
+  embeddedWalletSyncing?: boolean;
   isDisabled: boolean;
   isPending: boolean;
   liveStateReady: boolean;
   readOnlyReason?: string | null;
   selectedTilesCount: number;
+  walletAuthenticated?: boolean;
   walletConnected: boolean;
+}
+
+type WalletCta = "create" | "login" | "ready" | "syncing";
+
+export function deriveWalletCta({
+  embeddedWalletSyncing = false,
+  walletAuthenticated = false,
+  walletConnected,
+}: Pick<ManualMiningActionInput, "embeddedWalletSyncing" | "walletAuthenticated" | "walletConnected">): WalletCta {
+  if (walletConnected) return "ready";
+  if (!walletAuthenticated) return "login";
+  return embeddedWalletSyncing ? "syncing" : "create";
 }
 
 export function deriveManualMiningAction({
@@ -43,18 +57,20 @@ export function deriveManualMiningAction({
   liveStateReady,
   readOnlyReason,
   selectedTilesCount,
+  walletAuthenticated,
   walletConnected,
+  embeddedWalletSyncing,
 }: ManualMiningActionInput): {
   disabled: boolean;
   label: string;
   variant: MiningActionVariant;
 } {
   const syncing = !liveStateReady && !coldBootDefaults;
-  const needsLogin = !walletConnected;
-  const disabled = Boolean(readOnlyReason) || (!needsLogin && isDisabled);
-  const variant: MiningActionVariant = needsLogin
+  const walletCta = deriveWalletCta({ walletConnected, walletAuthenticated, embeddedWalletSyncing });
+  const disabled = Boolean(readOnlyReason) || walletCta === "syncing" || (walletCta === "ready" && isDisabled);
+  const variant: MiningActionVariant = walletCta === "login" || walletCta === "create"
     ? "primary"
-    : isPending || syncing
+    : isPending || syncing || walletCta === "syncing"
     ? "pending"
     : disabled
       ? "locked"
@@ -63,10 +79,12 @@ export function deriveManualMiningAction({
     ? "BET PENDING"
     : readOnlyReason
         ? "BETTING PAUSED"
-        : needsLogin
+        : walletCta === "login"
           ? "LOGIN TO BET"
-          : syncing
-            ? "SYNCING..."
+          : walletCta === "create"
+            ? "CREATE WALLET"
+            : walletCta === "syncing" || syncing
+              ? "SYNCING..."
           : selectedTilesCount > 0
             ? `BET ON ${selectedTilesCount} TILES`
             : "SELECT TILES";
@@ -76,12 +94,14 @@ export function deriveManualMiningAction({
 interface AutoMinerActionInput {
   autoMinePhase: AutoMinePhase;
   coldBootDefaults: boolean;
+  embeddedWalletSyncing?: boolean;
   isAutoMining: boolean;
   isDisabled: boolean;
   isPending: boolean;
   liveStateReady: boolean;
   lowEthForGas?: boolean;
   readOnlyReason?: string | null;
+  walletAuthenticated?: boolean;
   walletConnected: boolean;
 }
 
@@ -94,14 +114,16 @@ export function deriveAutoMinerAction({
   liveStateReady,
   lowEthForGas,
   readOnlyReason,
+  walletAuthenticated,
   walletConnected,
+  embeddedWalletSyncing,
 }: AutoMinerActionInput): {
   disabled: boolean;
   label: string;
   variant: MiningActionVariant;
 } {
-  const needsLogin = !walletConnected;
-  const disabled = Boolean(readOnlyReason) || (!needsLogin && (
+  const walletCta = deriveWalletCta({ walletConnected, walletAuthenticated, embeddedWalletSyncing });
+  const disabled = Boolean(readOnlyReason) || walletCta === "syncing" || (walletCta === "ready" && (
     isDisabled || autoMinePhase === "retry-wait" || autoMinePhase === "session-expired"
   ));
   const label = isAutoMining
@@ -114,20 +136,22 @@ export function deriveAutoMinerAction({
           ? "RESUME PENDING"
           : autoMinePhase === "session-expired"
             ? "SESSION EXPIRED"
-            : needsLogin
+            : walletCta === "login"
                 ? "LOGIN TO START"
-                : !liveStateReady && !coldBootDefaults
-                  ? "SYNCING..."
+                : walletCta === "create"
+                  ? "CREATE WALLET"
+                  : walletCta === "syncing" || (!liveStateReady && !coldBootDefaults)
+                    ? "SYNCING..."
                 : lowEthForGas
                   ? "LOW ETH FOR GAS"
                   : "START BOT";
-  const variant: MiningActionVariant = needsLogin
+  const variant: MiningActionVariant = walletCta === "login" || walletCta === "create"
     ? "primary"
     : isAutoMining
       ? "danger"
     : autoMinePhase === "session-expired"
       ? "danger"
-      : isPending || autoMinePhase === "retry-wait" || (!liveStateReady && !coldBootDefaults)
+      : isPending || walletCta === "syncing" || autoMinePhase === "retry-wait" || (!liveStateReady && !coldBootDefaults)
         ? "pending"
         : disabled
           ? "locked"
@@ -190,7 +214,9 @@ function getAutoMinePhaseMeta(phase: AutoMinePhase) {
 
 interface ManualBetProps {
   formattedBalance: string | null;
+  walletAuthenticated?: boolean;
   walletConnected: boolean;
+  embeddedWalletSyncing?: boolean;
   coldBootDefaults?: boolean;
   liveStateReady?: boolean;
   readOnlyReason?: string | null;
@@ -204,10 +230,13 @@ interface ManualBetProps {
   manualBetForm: ManualBetFormState;
   onMine: (betAmount: string) => void;
   onQuickPickTiles: (tileIds: number[]) => void;
+  onWalletSetup?: () => void;
 }
 
 export const ManualBetPanel = React.memo(function ManualBetPanel({
+  walletAuthenticated = false,
   walletConnected,
+  embeddedWalletSyncing = false,
   coldBootDefaults = false,
   liveStateReady = true,
   readOnlyReason = null,
@@ -221,6 +250,7 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
   manualBetForm,
   onMine,
   onQuickPickTiles,
+  onWalletSetup,
 }: ManualBetProps) {
   const {
     betAmount,
@@ -248,8 +278,11 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
     liveStateReady,
     readOnlyReason,
     selectedTilesCount,
+    walletAuthenticated,
     walletConnected,
+    embeddedWalletSyncing,
   });
+  const walletCta = deriveWalletCta({ walletConnected, walletAuthenticated, embeddedWalletSyncing });
   const manualButtonDescriptionId = readOnlyReason
     ? "manual-bet-readonly-reason"
     : manualInsufficient
@@ -409,11 +442,15 @@ export const ManualBetPanel = React.memo(function ManualBetPanel({
         data-testid="manual-bet-action"
         aria-describedby={manualButtonDescriptionId}
         onClick={() => {
-          if (!walletConnected) {
+          if (walletCta === "login") {
             requestWalletLogin();
             return;
           }
-          onMine(betAmount);
+          if (walletCta === "create") {
+            onWalletSetup?.();
+            return;
+          }
+          if (walletCta === "ready") onMine(betAmount);
         }}
         disabled={manualAction.disabled}
         variant={manualAction.variant}
@@ -465,10 +502,13 @@ interface AutoMinerProps {
   liveStateReady?: boolean;
   readOnlyReason?: string | null;
   autoMineProgress?: string | null;
+  walletAuthenticated?: boolean;
   walletConnected: boolean;
+  embeddedWalletSyncing?: boolean;
   lowEthForGas?: boolean;
   mobileActionDocked?: boolean;
   onToggle: (betStr: string, blocks: number, rounds: number) => void;
+  onWalletSetup?: () => void;
 }
 
 export const AutoMinerPanel = React.memo(function AutoMinerPanel({
@@ -481,10 +521,13 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
   liveStateReady = true,
   readOnlyReason = null,
   autoMineProgress,
+  walletAuthenticated = false,
   walletConnected,
+  embeddedWalletSyncing = false,
   lowEthForGas,
   mobileActionDocked = false,
   onToggle,
+  onWalletSetup,
 }: AutoMinerProps) {
   const {
     betSize,
@@ -532,8 +575,11 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
     liveStateReady,
     lowEthForGas,
     readOnlyReason,
+    walletAuthenticated,
     walletConnected,
+    embeddedWalletSyncing,
   });
+  const walletCta = deriveWalletCta({ walletConnected, walletAuthenticated, embeddedWalletSyncing });
   const autoMinerStatusText =
     !liveStateReady && !coldBootDefaults
         ? "Waiting for live epoch sync"
@@ -704,11 +750,15 @@ export const AutoMinerPanel = React.memo(function AutoMinerPanel({
         data-testid="auto-miner-action"
         aria-describedby={autoAction.disabled && disabledReason && !isAutoMining ? "auto-miner-disabled-reason" : undefined}
         onClick={() => {
-          if (!walletConnected) {
+          if (walletCta === "login") {
             requestWalletLogin();
             return;
           }
-          onToggle(betSize, targets, cycles);
+          if (walletCta === "create") {
+            onWalletSetup?.();
+            return;
+          }
+          if (walletCta === "ready") onToggle(betSize, targets, cycles);
         }}
         disabled={autoAction.disabled}
         variant={autoAction.variant}

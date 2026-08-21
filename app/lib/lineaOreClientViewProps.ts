@@ -60,7 +60,7 @@ interface CreateLineaOreClientViewPropsOptions {
   embeddedResolverRewards: WalletSettingsProps["embeddedResolverRewards"];
   embeddedResolverRewardsWei: WalletSettingsProps["embeddedResolverRewardsWei"];
   embeddedWalletAddress: string | null;
-  embeddedWalletSyncing: HeaderProps["embeddedWalletSyncing"];
+  embeddedWalletSyncing: PageTabContentProps["hubProps"]["embeddedWalletSyncing"];
   epochDurationChange: HeaderProps["epochDurationChange"];
   exportEmbeddedWallet: WalletSettingsProps["onExportEmbeddedWallet"];
   externalWalletAddress: string | null;
@@ -155,6 +155,7 @@ interface CreateLineaOreClientViewPropsOptions {
   visualEpoch: HeaderProps["visualEpoch"];
   walletTransfers: WalletSettingsProps["walletTransfers"];
   walletTransfersLoading: WalletSettingsProps["walletTransfersLoading"];
+  walletAuthenticated: PageTabContentProps["hubProps"]["walletAuthenticated"];
   walletConnected: PageTabContentProps["hubProps"]["walletConnected"];
   winningTileId: PageTabContentProps["hubProps"]["winningTileId"];
   withdrawAmount: string;
@@ -314,6 +315,7 @@ export function createLineaOreClientViewProps({
   visualEpoch,
   walletTransfers,
   walletTransfersLoading,
+  walletAuthenticated,
   walletConnected,
   winningTileId,
   withdrawAmount,
@@ -478,7 +480,10 @@ export function createLineaOreClientViewProps({
       readOnlyReason,
       chatOpen,
       formattedLineaBalance,
+      walletAuthenticated,
       walletConnected,
+      embeddedWalletSyncing,
+      onCreateEmbeddedWallet: createEmbeddedWallet,
       gridDisplayEpoch,
       gridSelectedTiles,
       handleAutoMineWithGuard,

@@ -15,6 +15,7 @@ import {
   ManualBetPanel,
   deriveAutoMinerAction,
   deriveManualMiningAction,
+  deriveWalletCta,
   type AutoMinerFormState,
 } from "./BetPanel";
 import { UiButton } from "./ui/UiButton";
@@ -29,7 +30,10 @@ interface HubSidePanelProps {
   chatOpen: boolean;
   coldBootDefaults: boolean;
   formattedBalance: string | null;
+  walletAuthenticated: boolean;
   walletConnected: boolean;
+  embeddedWalletSyncing: boolean;
+  onCreateEmbeddedWallet: () => void;
   liveStateReady: boolean;
   readOnlyReason?: string | null;
   gridSelectedTiles: number[];
@@ -54,7 +58,10 @@ export const HubSidePanel = React.memo(function HubSidePanel({
   chatOpen,
   coldBootDefaults,
   formattedBalance,
+  walletAuthenticated,
   walletConnected,
+  embeddedWalletSyncing,
+  onCreateEmbeddedWallet,
   liveStateReady,
   readOnlyReason = null,
   gridSelectedTiles,
@@ -105,6 +112,15 @@ export const HubSidePanel = React.memo(function HubSidePanel({
       actionInFlightRef.current = false;
     }
   }, [handleAutoMineWithGuard]);
+  const handleWalletSetup = React.useCallback(async () => {
+    if (actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    try {
+      await onCreateEmbeddedWallet();
+    } finally {
+      actionInFlightRef.current = false;
+    }
+  }, [onCreateEmbeddedWallet]);
 
   return (
     <>
@@ -117,7 +133,9 @@ export const HubSidePanel = React.memo(function HubSidePanel({
               <ManualBetPanel
                 coldBootDefaults={coldBootDefaults}
                 formattedBalance={formattedBalance}
+                walletAuthenticated={walletAuthenticated}
                 walletConnected={walletConnected}
+                embeddedWalletSyncing={embeddedWalletSyncing}
                 liveStateReady={liveStateReady}
                 readOnlyReason={readOnlyReason}
                 selectedTilesCount={selectedTilesCount}
@@ -130,6 +148,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
                 manualBetForm={manualBetForm}
                 onMine={handleManualAction}
                 onQuickPickTiles={onQuickPickTiles}
+                onWalletSetup={handleWalletSetup}
               />
             </div>
 
@@ -143,10 +162,13 @@ export const HubSidePanel = React.memo(function HubSidePanel({
               readOnlyReason={readOnlyReason}
               autoMinePhase={autoMinePhase}
               autoMineProgress={autoMineProgress}
+              walletAuthenticated={walletAuthenticated}
               walletConnected={walletConnected}
+              embeddedWalletSyncing={embeddedWalletSyncing}
               lowEthForGas={lowEthBalance}
               mobileActionDocked
               onToggle={handleAutoAction}
+              onWalletSetup={handleWalletSetup}
             />
 
             <div className="h-[8.5rem] min-[900px]:hidden" aria-hidden="true" />
@@ -172,7 +194,10 @@ export const HubSidePanel = React.memo(function HubSidePanel({
         onManualAction={handleManualAction}
         readOnlyReason={readOnlyReason}
         selectedTilesCount={selectedTilesCount}
+        walletAuthenticated={walletAuthenticated}
         walletConnected={walletConnected}
+        embeddedWalletSyncing={embeddedWalletSyncing}
+        onWalletSetup={handleWalletSetup}
       />
     </>
   );
@@ -288,7 +313,10 @@ function MobileMiningActionBar({
   onManualAction,
   readOnlyReason,
   selectedTilesCount,
+  walletAuthenticated,
   walletConnected,
+  embeddedWalletSyncing,
+  onWalletSetup,
 }: {
   autoMinePhase: AutoMinePhase;
   autoMinerForm: AutoMinerFormState;
@@ -307,7 +335,10 @@ function MobileMiningActionBar({
   onManualAction: (betAmount: string) => Promise<void>;
   readOnlyReason?: string | null;
   selectedTilesCount: number;
+  walletAuthenticated: boolean;
   walletConnected: boolean;
+  embeddedWalletSyncing: boolean;
+  onWalletSetup: () => void;
 }) {
   const keyboardInset = useVisualViewportKeyboardInset();
   const selection = summarizeMobileTileSelection(gridSelectedTiles);
@@ -319,8 +350,11 @@ function MobileMiningActionBar({
     liveStateReady,
     readOnlyReason,
     selectedTilesCount,
+    walletAuthenticated,
     walletConnected,
+    embeddedWalletSyncing,
   });
+  const manualWalletCta = deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing });
   const autoAction = deriveAutoMinerAction({
     autoMinePhase,
     coldBootDefaults,
@@ -330,8 +364,11 @@ function MobileMiningActionBar({
     liveStateReady,
     lowEthForGas: lowEthBalance,
     readOnlyReason,
+    walletAuthenticated,
     walletConnected,
+    embeddedWalletSyncing,
   });
+  const autoWalletCta = deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing });
   const visibleStatus = manualBetForm.betAmountError
     ?? (manualAction.disabled ? manualBetForm.disabledReason : null)
     ?? (autoAction.disabled && !isAutoMining ? autoMinerForm.disabledReason : null)
@@ -396,11 +433,15 @@ function MobileMiningActionBar({
             aria-label={manualAction.label}
             aria-describedby={manualAction.disabled && manualBetForm.disabledReason ? "mobile-manual-bet-disabled-reason" : undefined}
             onClick={() => {
-              if (!walletConnected) {
+              if (manualWalletCta === "login") {
                 requestWalletLogin();
                 return;
               }
-              void onManualAction(manualBetForm.betAmount);
+              if (manualWalletCta === "create") {
+                onWalletSetup();
+                return;
+              }
+              if (manualWalletCta === "ready") void onManualAction(manualBetForm.betAmount);
             }}
             disabled={manualAction.disabled}
             variant={manualAction.variant}
@@ -416,11 +457,15 @@ function MobileMiningActionBar({
             aria-label={autoAction.label}
             aria-describedby={autoAction.disabled && autoMinerForm.disabledReason && !isAutoMining ? "mobile-auto-miner-disabled-reason" : undefined}
             onClick={() => {
-              if (!walletConnected) {
+              if (autoWalletCta === "login") {
                 requestWalletLogin();
                 return;
               }
-              void onAutoAction(autoMinerForm.betSize, autoMinerForm.targets, autoMinerForm.cycles);
+              if (autoWalletCta === "create") {
+                onWalletSetup();
+                return;
+              }
+              if (autoWalletCta === "ready") void onAutoAction(autoMinerForm.betSize, autoMinerForm.targets, autoMinerForm.cycles);
             }}
             disabled={autoAction.disabled}
             variant={autoAction.variant}

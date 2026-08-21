@@ -103,6 +103,7 @@ export function buildLineaOreClientRuntimeViewProps({
     fetchDeposits,
     fetchWalletTransfers,
     formattedLineaBalance: gameData.formattedLineaBalance,
+    walletAuthenticated: wallet.authenticated,
     walletConnected: wallet.authenticated && Boolean(normalizedEmbeddedAddress),
     formattedPrivyBalance: walletRuntime.formattedPrivyBalance,
     formattedPrivyEthBalance: walletRuntime.formattedPrivyEthBalance,

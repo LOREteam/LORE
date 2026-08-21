@@ -350,7 +350,10 @@ type BuildPageTabContentPropsOptions = {
   readOnlyReason: PageTabContentProps["hubProps"]["readOnlyReason"];
   chatOpen: PageTabContentProps["hubProps"]["chatOpen"];
   formattedLineaBalance: PageTabContentProps["hubProps"]["formattedBalance"];
+  walletAuthenticated: PageTabContentProps["hubProps"]["walletAuthenticated"];
   walletConnected: PageTabContentProps["hubProps"]["walletConnected"];
+  embeddedWalletSyncing: PageTabContentProps["hubProps"]["embeddedWalletSyncing"];
+  onCreateEmbeddedWallet: PageTabContentProps["hubProps"]["onCreateEmbeddedWallet"];
   gridDisplayEpoch: PageTabContentProps["hubProps"]["gridDisplayEpoch"];
   gridSelectedTiles: PageTabContentProps["hubProps"]["gridSelectedTiles"];
   handleAutoMineWithGuard: PageTabContentProps["hubProps"]["handleAutoMineWithGuard"];
@@ -420,7 +423,10 @@ export function buildPageTabContentProps({
   readOnlyReason,
   chatOpen,
   formattedLineaBalance,
+  walletAuthenticated,
   walletConnected,
+  embeddedWalletSyncing,
+  onCreateEmbeddedWallet,
   gridDisplayEpoch,
   gridSelectedTiles,
   handleAutoMineWithGuard,
@@ -492,7 +498,10 @@ export function buildPageTabContentProps({
       readOnlyReason,
       chatOpen,
       formattedBalance: formattedLineaBalance,
+      walletAuthenticated,
       walletConnected,
+      embeddedWalletSyncing,
+      onCreateEmbeddedWallet,
       gridDisplayEpoch,
       gridSelectedTiles,
       handleAutoMineWithGuard,

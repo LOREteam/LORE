@@ -47,7 +47,10 @@ interface HubContentProps {
   readOnlyReason?: string | null;
   chatOpen: boolean;
   formattedBalance: string | null;
+  walletAuthenticated: boolean;
   walletConnected: boolean;
+  embeddedWalletSyncing: boolean;
+  onCreateEmbeddedWallet: () => void;
   gridDisplayEpoch: string | null;
   gridSelectedTiles: number[];
   handleAutoMineWithGuard: (betStr: string, blocks: number, rounds: number) => Promise<void>;
@@ -90,7 +93,10 @@ export const HubContent = React.memo(function HubContent({
   readOnlyReason = null,
   chatOpen,
   formattedBalance,
+  walletAuthenticated,
   walletConnected,
+  embeddedWalletSyncing,
+  onCreateEmbeddedWallet,
   gridDisplayEpoch,
   gridSelectedTiles,
   handleAutoMineWithGuard,
@@ -265,7 +271,10 @@ export const HubContent = React.memo(function HubContent({
             chatOpen={chatOpen}
             coldBootDefaults={coldBootDefaults}
             formattedBalance={formattedBalance}
+            walletAuthenticated={walletAuthenticated}
             walletConnected={walletConnected}
+            embeddedWalletSyncing={embeddedWalletSyncing}
+            onCreateEmbeddedWallet={onCreateEmbeddedWallet}
             liveStateReady={liveStateReady}
             readOnlyReason={readOnlyPresentation?.text ?? null}
             gridSelectedTiles={gridSelectedTiles}

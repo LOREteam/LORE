@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   deriveAutoMinerAction,
   deriveManualMiningAction,
+  deriveWalletCta,
 } from "../app/components/BetPanel";
 import {
   formatExactMobileBetTotal,
@@ -70,6 +71,35 @@ assert.deepEqual(
 assert.deepEqual(
   deriveManualMiningAction({
     coldBootDefaults: false,
+    isDisabled: false,
+    isPending: false,
+    liveStateReady: true,
+    readOnlyReason: null,
+    selectedTilesCount: 3,
+    walletAuthenticated: true,
+    walletConnected: false,
+  }),
+  { disabled: false, label: "CREATE WALLET", variant: "primary" },
+  "an authenticated user without an embedded wallet must enter wallet setup instead of reopening login",
+);
+assert.deepEqual(
+  deriveManualMiningAction({
+    coldBootDefaults: false,
+    isDisabled: false,
+    isPending: false,
+    liveStateReady: true,
+    readOnlyReason: null,
+    selectedTilesCount: 3,
+    walletAuthenticated: true,
+    walletConnected: false,
+    embeddedWalletSyncing: true,
+  }),
+  { disabled: true, label: "SYNCING...", variant: "pending" },
+  "wallet setup must wait while Privy wallet state is syncing",
+);
+assert.deepEqual(
+  deriveManualMiningAction({
+    coldBootDefaults: false,
     isDisabled: true,
     isPending: true,
     liveStateReady: true,
@@ -101,6 +131,15 @@ assert.deepEqual(
   { disabled: false, label: "LOGIN TO START", variant: "primary" },
   "guest Auto-Miner CTA must open login instead of remaining disabled",
 );
+assert.deepEqual(
+  deriveAutoMinerAction({ ...autoBase, walletAuthenticated: true, walletConnected: false }),
+  { disabled: false, label: "CREATE WALLET", variant: "primary" },
+  "authenticated Auto-Miner CTA must create an embedded wallet instead of reopening login",
+);
+assert.equal(deriveWalletCta({ walletAuthenticated: false, walletConnected: false }), "login");
+assert.equal(deriveWalletCta({ walletAuthenticated: true, walletConnected: false }), "create");
+assert.equal(deriveWalletCta({ walletAuthenticated: true, walletConnected: false, embeddedWalletSyncing: true }), "syncing");
+assert.equal(deriveWalletCta({ walletAuthenticated: true, walletConnected: true, embeddedWalletSyncing: true }), "ready");
 assert.deepEqual(
   deriveAutoMinerAction({ ...autoBase, isDisabled: true, isPending: true }),
   { disabled: true, label: "TX PENDING", variant: "pending" },
@@ -136,8 +175,10 @@ assert.match(sidePanelSource, /onMine=\{handleManualAction\}/);
 assert.match(sidePanelSource, /onToggle=\{handleAutoAction\}/);
 assert.match(sidePanelSource, /onManualAction=\{handleManualAction\}/);
 assert.match(sidePanelSource, /onAutoAction=\{handleAutoAction\}/);
-assert.match(sidePanelSource, /if \(!walletConnected\)\s*\{\s*requestWalletLogin\(\);/, "mobile guest CTAs must request login");
-assert.match(betPanelSource, /if \(!walletConnected\)\s*\{\s*requestWalletLogin\(\);/, "desktop guest CTAs must request login");
+assert.match(sidePanelSource, /manualWalletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*manualWalletCta === "create"[\s\S]*onWalletSetup\(\)/, "mobile manual CTA must separate guest login from authenticated wallet setup");
+assert.match(sidePanelSource, /autoWalletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*autoWalletCta === "create"[\s\S]*onWalletSetup\(\)/, "mobile Auto-Miner CTA must separate guest login from authenticated wallet setup");
+assert.match(betPanelSource, /walletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*walletCta === "create"[\s\S]*onWalletSetup/, "desktop CTA must separate guest login from authenticated wallet setup");
+assert.match(sidePanelSource, /handleWalletSetup[\s\S]*actionInFlightRef\.current[\s\S]*await onCreateEmbeddedWallet\(\)/, "manual and Auto-Miner wallet setup must share the existing duplicate-action guard");
 assert.equal(
   (sidePanelSource.match(/mobileActionDocked/g) ?? []).length,
   2,
@@ -168,4 +209,5 @@ console.log(JSON.stringify({
   sharedActionLock: true,
   touchTargetsPx: 44,
   visualViewportAware: true,
+  walletSetupCta: true,
 }));
