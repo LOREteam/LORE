@@ -44,9 +44,11 @@ fixtures remain the only permitted DB target for local test code.
 - V10 global-stats and leaderboard materialization fixtures pass after the
   dirty-trigger conflict fix. Their database paths are explicit OS-temp paths;
   protected base/WAL/SHM hashes remain exact at the latest recheck.
-- Testnet proof completion now fails closed on a missing canary admission in the
-  managed supervisor path. This does not constitute a signed canary or hosted
-  topology campaign.
+- Testnet proof completion now fails closed unless one canonical canary
+  admission binds exactly one runtime-identity preflight and one wallet
+  preflight per admitted role. A declared approval also requires one successful
+  receipt whose exact allowance equals the admitted cap. This does not
+  constitute a signed canary or hosted topology campaign.
 - Site hardening includes a real guest login CTA bridge, recovery-copy
   consistency, transaction-bound jackpot sharing, persistent/error-aware wallet
   transfer history, mobile rewards/onboarding/layer fixes, and dedicated public
