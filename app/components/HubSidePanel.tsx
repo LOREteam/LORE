@@ -26,6 +26,17 @@ interface RunningParams {
   rounds: number;
 }
 
+export async function runWalletSetupAttempt(onCreateEmbeddedWallet: () => void): Promise<"complete" | "failed"> {
+  try {
+    await Promise.resolve(onCreateEmbeddedWallet());
+    return "complete";
+  } catch {
+    return "failed";
+  }
+}
+
+const WALLET_SETUP_ERROR = "Wallet creation could not be completed. Please try again.";
+
 interface HubSidePanelProps {
   chatOpen: boolean;
   coldBootDefaults: boolean;
@@ -94,6 +105,12 @@ export const HubSidePanel = React.memo(function HubSidePanel({
     lowEthForGas: lowEthBalance,
   });
   const actionInFlightRef = React.useRef(false);
+  const [walletSetupState, setWalletSetupState] = React.useState<"idle" | "creating" | "error">("idle");
+  const walletSetupCreating = walletSetupState === "creating";
+  const walletSetupError = walletSetupState === "error" ? WALLET_SETUP_ERROR : null;
+  React.useEffect(() => {
+    if (walletConnected || embeddedWalletSyncing) setWalletSetupState("idle");
+  }, [embeddedWalletSyncing, walletConnected]);
   const handleManualAction = React.useCallback(async (betAmount: string) => {
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
@@ -112,15 +129,15 @@ export const HubSidePanel = React.memo(function HubSidePanel({
       actionInFlightRef.current = false;
     }
   }, [handleAutoMineWithGuard]);
-  const handleWalletSetup = React.useCallback(async () => {
-    if (actionInFlightRef.current) return;
+  const handleWalletSetup = React.useCallback(() => {
+    if (actionInFlightRef.current || walletSetupCreating) return;
     actionInFlightRef.current = true;
-    try {
-      await onCreateEmbeddedWallet();
-    } finally {
+    setWalletSetupState("creating");
+    void runWalletSetupAttempt(onCreateEmbeddedWallet).then((result) => {
+      if (result === "failed") setWalletSetupState("error");
       actionInFlightRef.current = false;
-    }
-  }, [onCreateEmbeddedWallet]);
+    });
+  }, [onCreateEmbeddedWallet, walletSetupCreating]);
 
   return (
     <>
@@ -136,6 +153,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
                 walletAuthenticated={walletAuthenticated}
                 walletConnected={walletConnected}
                 embeddedWalletSyncing={embeddedWalletSyncing}
+                walletSetupCreating={walletSetupCreating}
                 liveStateReady={liveStateReady}
                 readOnlyReason={readOnlyReason}
                 selectedTilesCount={selectedTilesCount}
@@ -165,11 +183,18 @@ export const HubSidePanel = React.memo(function HubSidePanel({
               walletAuthenticated={walletAuthenticated}
               walletConnected={walletConnected}
               embeddedWalletSyncing={embeddedWalletSyncing}
+              walletSetupCreating={walletSetupCreating}
               lowEthForGas={lowEthBalance}
               mobileActionDocked
               onToggle={handleAutoAction}
               onWalletSetup={handleWalletSetup}
             />
+
+            {walletSetupError && (
+              <p role="alert" className="hidden min-[900px]:block px-1 text-center text-[10px] font-semibold text-red-300">
+                {walletSetupError}
+              </p>
+            )}
 
             <div className="h-[8.5rem] min-[900px]:hidden" aria-hidden="true" />
           </>
@@ -197,6 +222,8 @@ export const HubSidePanel = React.memo(function HubSidePanel({
         walletAuthenticated={walletAuthenticated}
         walletConnected={walletConnected}
         embeddedWalletSyncing={embeddedWalletSyncing}
+        walletSetupCreating={walletSetupCreating}
+        walletSetupError={walletSetupError}
         onWalletSetup={handleWalletSetup}
       />
     </>
@@ -284,6 +311,7 @@ function compactManualActionLabel(label: string): string {
   if (label === "LOGIN TO BET") return "LOGIN";
   if (label === "BET PENDING") return "PENDING";
   if (label === "BETTING PAUSED") return "PAUSED";
+  if (label === "CREATING WALLET...") return "CREATING...";
   return label;
 }
 
@@ -292,6 +320,7 @@ function compactAutoActionLabel(label: string): string {
   if (label === "LOGIN TO START") return "LOGIN";
   if (label === "TX PENDING") return "PENDING";
   if (label === "BETTING PAUSED") return "PAUSED";
+  if (label === "CREATING WALLET...") return "CREATING...";
   return label;
 }
 
@@ -316,6 +345,8 @@ function MobileMiningActionBar({
   walletAuthenticated,
   walletConnected,
   embeddedWalletSyncing,
+  walletSetupCreating,
+  walletSetupError,
   onWalletSetup,
 }: {
   autoMinePhase: AutoMinePhase;
@@ -338,6 +369,8 @@ function MobileMiningActionBar({
   walletAuthenticated: boolean;
   walletConnected: boolean;
   embeddedWalletSyncing: boolean;
+  walletSetupCreating: boolean;
+  walletSetupError: string | null;
   onWalletSetup: () => void;
 }) {
   const keyboardInset = useVisualViewportKeyboardInset();
@@ -353,8 +386,9 @@ function MobileMiningActionBar({
     walletAuthenticated,
     walletConnected,
     embeddedWalletSyncing,
+    walletSetupCreating,
   });
-  const manualWalletCta = deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing });
+  const manualWalletCta = deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing, walletSetupCreating });
   const autoAction = deriveAutoMinerAction({
     autoMinePhase,
     coldBootDefaults,
@@ -367,9 +401,11 @@ function MobileMiningActionBar({
     walletAuthenticated,
     walletConnected,
     embeddedWalletSyncing,
+    walletSetupCreating,
   });
-  const autoWalletCta = deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing });
-  const visibleStatus = manualBetForm.betAmountError
+  const autoWalletCta = deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing, walletSetupCreating });
+  const visibleStatus = walletSetupError
+    ?? manualBetForm.betAmountError
     ?? (manualAction.disabled ? manualBetForm.disabledReason : null)
     ?? (autoAction.disabled && !isAutoMining ? autoMinerForm.disabledReason : null)
     ?? "Amount per tile";
@@ -478,7 +514,7 @@ function MobileMiningActionBar({
         </div>
 
         <div className="mt-1 flex min-h-3 items-center justify-between gap-2 px-0.5 text-[8px] font-bold uppercase tracking-[0.06em] text-slate-500">
-          <span id="mobile-bet-amount-error" className={manualBetForm.betAmountError ? "truncate text-red-300" : "truncate"}>
+          <span id="mobile-bet-amount-error" role={walletSetupError ? "alert" : undefined} className={walletSetupError || manualBetForm.betAmountError ? "truncate text-red-300" : "truncate"}>
             {visibleStatus}
           </span>
           {walletConnected && selectedTilesCount > 0 && (

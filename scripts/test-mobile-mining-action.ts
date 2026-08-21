@@ -7,6 +7,7 @@ import {
 } from "../app/components/BetPanel";
 import {
   formatExactMobileBetTotal,
+  runWalletSetupAttempt,
   summarizeMobileTileSelection,
 } from "../app/components/HubSidePanel";
 
@@ -139,6 +140,7 @@ assert.deepEqual(
 assert.equal(deriveWalletCta({ walletAuthenticated: false, walletConnected: false }), "login");
 assert.equal(deriveWalletCta({ walletAuthenticated: true, walletConnected: false }), "create");
 assert.equal(deriveWalletCta({ walletAuthenticated: true, walletConnected: false, embeddedWalletSyncing: true }), "syncing");
+assert.equal(deriveWalletCta({ walletAuthenticated: true, walletConnected: false, walletSetupCreating: true }), "creating");
 assert.equal(deriveWalletCta({ walletAuthenticated: true, walletConnected: true, embeddedWalletSyncing: true }), "ready");
 assert.deepEqual(
   deriveAutoMinerAction({ ...autoBase, isDisabled: true, isPending: true }),
@@ -178,7 +180,7 @@ assert.match(sidePanelSource, /onAutoAction=\{handleAutoAction\}/);
 assert.match(sidePanelSource, /manualWalletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*manualWalletCta === "create"[\s\S]*onWalletSetup\(\)/, "mobile manual CTA must separate guest login from authenticated wallet setup");
 assert.match(sidePanelSource, /autoWalletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*autoWalletCta === "create"[\s\S]*onWalletSetup\(\)/, "mobile Auto-Miner CTA must separate guest login from authenticated wallet setup");
 assert.match(betPanelSource, /walletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*walletCta === "create"[\s\S]*onWalletSetup/, "desktop CTA must separate guest login from authenticated wallet setup");
-assert.match(sidePanelSource, /handleWalletSetup[\s\S]*actionInFlightRef\.current[\s\S]*await onCreateEmbeddedWallet\(\)/, "manual and Auto-Miner wallet setup must share the existing duplicate-action guard");
+assert.match(sidePanelSource, /handleWalletSetup[\s\S]*actionInFlightRef\.current[\s\S]*runWalletSetupAttempt\(onCreateEmbeddedWallet\)/, "manual and Auto-Miner wallet setup must share a caught duplicate-action guard");
 assert.equal(
   (sidePanelSource.match(/mobileActionDocked/g) ?? []).length,
   2,
@@ -202,7 +204,50 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(hubSource, /MobileManualActionBar/, "the obsolete second mobile action implementation must be removed");
 
-console.log(JSON.stringify({
+assert.deepEqual(
+  deriveManualMiningAction({
+    coldBootDefaults: false,
+    isDisabled: false,
+    isPending: false,
+    liveStateReady: true,
+    readOnlyReason: null,
+    selectedTilesCount: 3,
+    walletAuthenticated: true,
+    walletConnected: false,
+    walletSetupCreating: true,
+  }),
+  { disabled: true, label: "CREATING WALLET...", variant: "pending" },
+  "desktop and mobile manual CTAs must expose a disabled creating state",
+);
+assert.deepEqual(
+  deriveAutoMinerAction({ ...autoBase, walletAuthenticated: true, walletConnected: false, walletSetupCreating: true }),
+  { disabled: true, label: "CREATING WALLET...", variant: "pending" },
+  "desktop and mobile Auto-Miner CTAs must expose a disabled creating state",
+);
+
+const walletSetupBehaviorTest = (async () => {
+let rejectWalletCreation: (error: Error) => void = () => { throw new Error("wallet creation rejection was not initialized"); };
+const pendingWalletCreation = new Promise<void>((_resolve, reject) => {
+  rejectWalletCreation = reject;
+});
+let createCalls = 0;
+const pendingAttempt = runWalletSetupAttempt(() => {
+  createCalls += 1;
+  return pendingWalletCreation;
+});
+await Promise.resolve();
+assert.equal(createCalls, 1, "wallet creation must start exactly once while the CTA is disabled");
+let pendingSettled = false;
+void pendingAttempt.then(() => { pendingSettled = true; });
+await Promise.resolve();
+assert.equal(pendingSettled, false, "wallet CTA must retain creating feedback while the wallet promise is deferred");
+rejectWalletCreation(new Error("synthetic Privy failure"));
+assert.equal(await pendingAttempt, "failed", "wallet creation rejection must be caught for a retryable error state");
+assert.equal(await runWalletSetupAttempt(() => Promise.resolve()), "complete", "wallet creation must remain retryable after a handled rejection");
+})();
+
+void walletSetupBehaviorTest.then(
+  () => console.log(JSON.stringify({
   ok: true,
   exactDecimalTotal: true,
   sharedAutoMinerForm: true,
@@ -210,4 +255,9 @@ console.log(JSON.stringify({
   touchTargetsPx: 44,
   visualViewportAware: true,
   walletSetupCta: true,
-}));
+})),
+  (error) => {
+    console.error(error);
+    process.exitCode = 1;
+  },
+);
