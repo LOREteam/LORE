@@ -64,9 +64,12 @@ import {
   upsertUserActivity,
   type FeeFlushStorageRow,
   type IndexerBlockCheckpoint,
-  type RewardClaimStorageRow,
   type UserActivityStorageRow,
 } from "../server/storage";
+import {
+  toRewardClaimStorageRows,
+  type IndexedRewardClaim,
+} from "./indexerRewardClaimAdapter";
 import {
   findLatestCanonicalCheckpoint,
   normalizeBlockHash,
@@ -598,16 +601,7 @@ interface JackpotRecord {
   finalizedAtBlock: string;
 }
 
-interface RewardClaimRecord {
-  id: string;
-  epoch: string;
-  user: string;
-  reward: string;
-  rewardNum: number;
-  txHash: string;
-  blockNumber: string;
-  recordUserActivity?: boolean;
-}
+type RewardClaimRecord = IndexedRewardClaim;
 
 interface FeeFlushRecord {
   id: string;
@@ -1034,16 +1028,7 @@ function writeJackpots(jackpots: JackpotRecord[]) {
 
 function writeRewardClaims(rewardClaims: RewardClaimRecord[]) {
   if (rewardClaims.length === 0) return;
-  const rows: RewardClaimStorageRow[] = rewardClaims.map((row) => ({
-    id: row.id,
-    epoch: row.epoch,
-    user: row.user,
-    reward: row.reward,
-    rewardNum: row.rewardNum,
-    txHash: row.txHash,
-    blockNumber: row.blockNumber,
-  }));
-  upsertRewardClaims(rows);
+  upsertRewardClaims(toRewardClaimStorageRows(rewardClaims));
 }
 
 function writeBatchClaims(records: BatchClaimRecord[]) {

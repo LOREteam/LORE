@@ -19,6 +19,7 @@ const TX_C = `0x${"cc".repeat(32)}`;
 
 async function main() {
   const storage = await import("../server/storage");
+  const { toRewardClaimStorageRows } = await import("./indexerRewardClaimAdapter");
   const { createUserActivityRequestGuard } = await import("../app/hooks/useUserActivityHistory");
   const { GET } = await import("../app/api/activity/route");
   const { db } = await import("../server/db");
@@ -35,6 +36,7 @@ async function main() {
     /const rewardBatchClaimTxs = new Set\([\s\S]*rewardBatchClaimedSig[\s\S]*topic0 === rewardClaimedSig[\s\S]*rewardBatchClaimTxs\.has/,
     "a reward batch transaction must suppress its per-epoch RewardClaimed ledger records",
   );
+  assert.match(indexerSource, /toRewardClaimStorageRows\(rewardClaims\)/, "the indexer must write claims through the tested adapter");
   try {
     storage.upsertBets([
       {
@@ -58,10 +60,14 @@ async function main() {
     storage.upsertUserActivity([{
       eventId: `${TX_C}:8`, user: OTHER_USER, activityType: "reward_batch_claim", amount: "7", amountNum: 7, txHash: TX_C, blockNumber: "104",
     }]);
-    storage.upsertRewardClaims([{
+    // This is the same adapter used by the indexer before it reaches storage;
+    // importing scripts/indexer.ts itself would run its networked entrypoint.
+    const batchChildRows = toRewardClaimStorageRows([{
       id: `${TX_C}:9`, epoch: "44", user: OTHER_USER, reward: "2", rewardNum: 2, txHash: TX_C, blockNumber: "104",
       recordUserActivity: false,
     }]);
+    assert.equal(batchChildRows[0]?.recordUserActivity, false, "the adapter must preserve the batch child projection opt-out");
+    storage.upsertRewardClaims(batchChildRows);
     assert.equal(
       storage.getAllRewardClaims().some((row) => row.id === `${TX_C}:9`),
       true,
