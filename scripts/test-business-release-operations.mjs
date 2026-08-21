@@ -1185,10 +1185,18 @@ export function runReleaseOperationsTests() {
           mode: "preflight",
           role: "SYSTEM",
           runtimeIdentity: {
-            normalizedRuntimeSha256: "a".repeat(64),
-            manifestDigest: "b".repeat(64),
             canonicalProvenanceVerified: true,
+            chainId: 59141,
+            contractAddress: `0x${"1".repeat(40)}`,
             deployBlock: "0",
+            executableBytes: 1,
+            executableRuntimeBytes: 1,
+            immutableReferences: 0,
+            manifestDigest: "b".repeat(64),
+            manifestMatched: true,
+            normalizedRuntimeSha256: "a".repeat(64),
+            observedBlock: "1",
+            observedBlockHash: `0x${"f".repeat(64)}`,
           },
         });
       }
@@ -1224,7 +1232,12 @@ export function runReleaseOperationsTests() {
         roleCaps: [{ role: "AUTOMINER_A", spendCapWei: "100", allowanceCapWei: "100" }],
       };
       const admissionSha256 = createHash("sha256").update(JSON.stringify(admission), "utf8").digest("hex");
-      const boundEvents = [...admissionEvidence, ...events].map((event) => ({ ...event, admissionSha256 }));
+      const boundEvents = [...admissionEvidence, ...events].map((event) => ({
+        admissionSha256,
+        runId: admission.runId,
+        walletSetSha256: admission.walletSetSha256,
+        ...event,
+      }));
       writeFileSync(logPath, `${[
         { mode: "admission", admission, admissionSha256 },
         ...boundEvents,
@@ -1317,6 +1330,82 @@ export function runReleaseOperationsTests() {
     assert.doesNotMatch(matrixProof.stdout, /missing V10 gas cases/);
     assert.doesNotMatch(matrixProof.stdout, /duplicate role\/epoch\/tile keys [1-9]/);
     assert.match(matrixProof.stdout, /\| 3-sparse \| 2 \| 100002 \| 100002 \| 200002 \|/);
+    const expectedRunMatrixProof = runV10CanaryProof(
+      "expected-run-matrix",
+      matrixEvents,
+      ["--summary-only", `--expected-run-id=${"1".repeat(32)}`],
+    );
+    assert.equal(expectedRunMatrixProof.status, 0, "a fully bound proof must match the expected supervisor run");
+    const wrongActionRunIdProof = runV10CanaryProof(
+      "wrong-action-run-id",
+      [{ ...matrixEvents[0], runId: "2".repeat(32) }, ...matrixEvents.slice(1)],
+      ["--summary-only", `--expected-run-id=${"1".repeat(32)}`],
+    );
+    assert.equal(wrongActionRunIdProof.status, 1, "a post-admission action must not replay under another run id");
+    assert.match(wrongActionRunIdProof.stdout, /canary action runId does not match canonical admission/);
+    const wrongWalletSetEvidence = buildAdmissionEvidence();
+    wrongWalletSetEvidence[1] = { ...wrongWalletSetEvidence[1], walletSetSha256: "f".repeat(64) };
+    const wrongWalletSetProof = runV10CanaryProof(
+      "wrong-wallet-set",
+      matrixEvents,
+      ["--summary-only"],
+      wrongWalletSetEvidence,
+    );
+    assert.equal(wrongWalletSetProof.status, 1, "a wallet preflight must bind the admitted wallet set");
+    assert.match(wrongWalletSetProof.stdout, /canary action wallet set does not match canonical admission/);
+    const wrongRuntimeIdentityEvidence = buildAdmissionEvidence();
+    wrongRuntimeIdentityEvidence[0] = {
+      ...wrongRuntimeIdentityEvidence[0],
+      runtimeIdentity: { ...wrongRuntimeIdentityEvidence[0].runtimeIdentity, chainId: 1 },
+    };
+    const wrongRuntimeIdentityProof = runV10CanaryProof(
+      "wrong-runtime-chain",
+      matrixEvents,
+      ["--summary-only"],
+      wrongRuntimeIdentityEvidence,
+    );
+    assert.equal(wrongRuntimeIdentityProof.status, 1, "runtime identity must bind the admitted chain and target");
+    assert.match(wrongRuntimeIdentityProof.stdout, /runtime identity preflight does not match canonical admission/);
+    const missingRuntimeSnapshotEvidence = buildAdmissionEvidence();
+    missingRuntimeSnapshotEvidence[0] = {
+      ...missingRuntimeSnapshotEvidence[0],
+      runtimeIdentity: { ...missingRuntimeSnapshotEvidence[0].runtimeIdentity, observedBlockHash: `0x${"0".repeat(64)}` },
+    };
+    const missingRuntimeSnapshotProof = runV10CanaryProof(
+      "invalid-runtime-snapshot",
+      matrixEvents,
+      ["--summary-only"],
+      missingRuntimeSnapshotEvidence,
+    );
+    assert.equal(missingRuntimeSnapshotProof.status, 1, "runtime identity must include a nonzero observed snapshot hash");
+    assert.match(missingRuntimeSnapshotProof.stdout, /runtime identity preflight does not match canonical admission/);
+    const resolveTarget = {
+      amount: "0",
+      chainId: 59141,
+      contractAddress: `0x${"1".repeat(40)}`,
+      epoch: "7",
+      mode: "resolve",
+      network: "sepolia",
+      ok: true,
+      role: "RESOLVER",
+      round: -1,
+      timestamp: "2026-07-22T00:00:20.000Z",
+      txStatus: "success",
+    };
+    const missingResolveHashProof = runV10CanaryProof(
+      "missing-resolve-hash",
+      [...matrixEvents, resolveTarget],
+      ["--summary-only"],
+    );
+    assert.equal(missingResolveHashProof.status, 1, "a successful resolver action must retain its transaction hash");
+    assert.match(missingResolveHashProof.stdout, /successful canary resolve tx hash is invalid/);
+    const unboundResolveProof = runV10CanaryProof(
+      "unbound-resolve",
+      [...matrixEvents, { ...resolveTarget, admissionSha256: "f".repeat(64), hash: `0x${"3".repeat(64)}` }],
+      ["--summary-only"],
+    );
+    assert.equal(unboundResolveProof.status, 1, "a successful resolver action must bind the canonical admission");
+    assert.match(unboundResolveProof.stdout, /canary action is not bound to canonical admission \(round=-1 mode=resolve\)/);
     const missingRuntimeAdmission = runV10CanaryProof(
       "missing-runtime-admission",
       matrixEvents,

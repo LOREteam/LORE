@@ -218,6 +218,7 @@ type RoundEvent = {
   amount: string;
   admission?: CanaryAdmission;
   admissionSha256?: string;
+  runId?: string;
   allowance?: string;
   allowanceCapWei?: string;
   allowanceWei?: string;
@@ -283,6 +284,7 @@ type RoundEvent = {
   sourceArtifactGitSha?: string;
   txStatus?: string;
   walBytes?: number;
+  walletSetSha256?: string;
   walletClientCreated?: boolean;
   successes?: number;
   failures?: number;
@@ -317,7 +319,11 @@ type CanaryAdmission = {
   roleCaps: Array<{ role: string; spendCapWei: string; allowanceCapWei: string }>;
 };
 
-let activeAdmissionSha256: string | null = null;
+let activeAdmission: {
+  admissionSha256: string;
+  runId: string;
+  walletSetSha256: string;
+} | null = null;
 
 const attemptedResolveEpochs = new Map<string, number>();
 const pendingResolveEpochs = new Set<string>();
@@ -697,7 +703,11 @@ function writeCanaryAdmission(params: {
     transactionSent: false,
     walletClientCreated: false,
   });
-  activeAdmissionSha256 = admissionSha256;
+  activeAdmission = {
+    admissionSha256,
+    runId: admission.runId,
+    walletSetSha256: admission.walletSetSha256,
+  };
 }
 
 function writeEvent(logPath: string, event: RoundEvent) {
@@ -710,8 +720,14 @@ function writeEvent(logPath: string, event: RoundEvent) {
       contractAddress: CONTRACT_ADDRESS,
       rpcLabel: RPC_LABEL,
       rpcFailoverInjected: INJECT_RPC_FAILOVER,
-      ...(activeAdmissionSha256 && event.mode !== "admission" ? { admissionSha256: activeAdmissionSha256 } : {}),
       ...event,
+      ...(activeAdmission && event.mode !== "admission"
+        ? {
+          admissionSha256: activeAdmission.admissionSha256,
+          runId: activeAdmission.runId,
+          walletSetSha256: activeAdmission.walletSetSha256,
+        }
+        : {}),
     })}\n`,
   });
 }

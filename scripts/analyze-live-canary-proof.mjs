@@ -1419,7 +1419,7 @@ function evaluateCanaryAdmission({
 
   const relevantEvents = events
     .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item.mode === "preflight" || item.mode === "approve" || isBetEvent(item));
+    .filter(({ item }) => item.mode === "preflight" || item.mode === "approve" || item.mode === "resolve" || isBetEvent(item));
   const capByRole = roleCaps ? new Map(roleCaps.map((cap) => [cap.role, cap])) : new Map();
   const spentByRole = new Map();
   const runtimeIdentityPreflights = [];
@@ -1431,6 +1431,12 @@ function evaluateCanaryAdmission({
       failures.push(`canary action is not bound to canonical admission (${label})`);
       continue;
     }
+    if (item.runId !== admission.runId) {
+      failures.push(`canary action runId does not match canonical admission (${label})`);
+    }
+    if (item.walletSetSha256 !== admission.walletSetSha256) {
+      failures.push(`canary action wallet set does not match canonical admission (${label})`);
+    }
     if (
       normalizeNetwork(item.network) !== normalizeNetwork(admission.network)
       || positiveIntegerString(item.chainId) !== String(admission.chainId)
@@ -1439,13 +1445,20 @@ function evaluateCanaryAdmission({
       failures.push(`canary action target does not match canonical admission (${label})`);
     }
     const role = normalizeRole(item.role);
+    const isResolverAction = item.mode === "resolve";
     const isRuntimeIdentity = item.mode === "preflight" && role === "SYSTEM" && isPlainObject(item.runtimeIdentity);
-    if (!isRuntimeIdentity && (!role || !capByRole.has(role))) {
+    if (!isRuntimeIdentity && !isResolverAction && (!role || !capByRole.has(role))) {
       failures.push(`canary action role is not admitted (${label})`);
+    }
+    if (isResolverAction && (!role || (role !== "RESOLVER" && !capByRole.has(role)))) {
+      failures.push(`canary resolve role is not admitted (${label})`);
     }
     if (isRuntimeIdentity) {
       runtimeIdentityPreflights.push(item);
       validateRuntimeIdentityBinding(item.runtimeIdentity, admission, failures);
+    }
+    if (isResolverAction && item.ok === true && item.txStatus === "success" && !isRealTx(eventTxHash(item))) {
+      failures.push(`successful canary resolve tx hash is invalid (${label})`);
     }
     if (item.mode === "preflight" && role && role !== "SYSTEM" && capByRole.has(role)) {
       const preflights = walletPreflightsByRole.get(role) ?? [];
@@ -1585,11 +1598,30 @@ function canonicalAdmissionPayload(admission) {
 }
 
 function validateRuntimeIdentityBinding(runtimeIdentity, admission, failures) {
+  const runtimeDeployBlock = canonicalWei(runtimeIdentity?.deployBlock, { allowZero: true });
+  const observedBlock = canonicalWei(runtimeIdentity?.observedBlock, { allowZero: true });
+  const observedBlockIsAtOrAfterDeployment = runtimeDeployBlock !== null
+    && observedBlock !== null
+    && BigInt(observedBlock) >= BigInt(runtimeDeployBlock);
   if (
-    runtimeIdentity.normalizedRuntimeSha256 !== admission.runtimeSha256
+    !isPlainObject(runtimeIdentity)
+    || runtimeIdentity.normalizedRuntimeSha256 !== admission.runtimeSha256
     || runtimeIdentity.manifestDigest !== admission.manifestSha256
     || runtimeIdentity.canonicalProvenanceVerified !== true
+    || runtimeIdentity.chainId !== admission.chainId
+    || normalizeAddress(runtimeIdentity.contractAddress) !== normalizeAddress(admission.contractAddress)
+    || runtimeIdentity.manifestMatched !== true
+    || runtimeDeployBlock === null
     || String(runtimeIdentity.deployBlock) !== admission.contractDeployBlock
+    || observedBlock === null
+    || !observedBlockIsAtOrAfterDeployment
+    || !isRealTx(runtimeIdentity.observedBlockHash)
+    || !Number.isSafeInteger(runtimeIdentity.executableBytes)
+    || runtimeIdentity.executableBytes <= 0
+    || !Number.isSafeInteger(runtimeIdentity.executableRuntimeBytes)
+    || runtimeIdentity.executableRuntimeBytes <= 0
+    || !Number.isSafeInteger(runtimeIdentity.immutableReferences)
+    || runtimeIdentity.immutableReferences < 0
   ) failures.push("runtime identity preflight does not match canonical admission");
 }
 

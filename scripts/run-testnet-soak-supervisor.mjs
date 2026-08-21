@@ -1895,6 +1895,7 @@ async function validateLiveCanaryCompletion(liveLogPath) {
         "--strict",
         "--require-epoch-bound",
         "--require-canary-admission",
+        "--require-v10-deployment-manifest",
         `--expected-run-id=${RUN_ID}`,
         "--summary-only",
       ],
