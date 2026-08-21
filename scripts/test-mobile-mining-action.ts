@@ -161,6 +161,7 @@ const sidePanelSource = readFileSync("app/components/HubSidePanel.tsx", "utf8");
 const betPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
 const hubSource = readFileSync("app/components/HubContent.tsx", "utf8");
 const walletSetupSource = readFileSync("app/lib/walletSetup.ts", "utf8");
+const walletRuntimeSource = readFileSync("app/hooks/useLineaOreClientRuntime.ts", "utf8");
 const gameplayStageClass = hubSource.match(/className="([^"]*gameplay-stage[^"]*)"/)?.[1] ?? "";
 
 assert.equal(
@@ -183,6 +184,7 @@ assert.match(sidePanelSource, /autoWalletCta === "login"[\s\S]*requestWalletLogi
 assert.match(betPanelSource, /walletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*walletCta === "create"[\s\S]*onWalletSetup/, "desktop CTA must separate guest login from authenticated wallet setup");
 assert.match(sidePanelSource, /handleWalletSetup[\s\S]*actionInFlightRef\.current[\s\S]*onCreateEmbeddedWallet\(\)/, "manual and Auto-Miner wallet setup must delegate to the shared duplicate-action guard");
 assert.match(walletSetupSource, /let generation = 0;[\s\S]*attemptGeneration !== generation/, "wallet setup reset must invalidate stale attempt settlement");
+assert.match(walletRuntimeSource, /walletSetupIdentityRef[\s\S]*!wallet\.authenticated \|\| identityChanged/, "wallet setup must invalidate its guard on logout or wallet identity change");
 assert.match(sidePanelSource, /onCreateEmbeddedWallet: \(\) => Promise<void>/, "wallet setup must retain the async creation contract");
 assert.match(sidePanelSource, /aria-describedby=\{manualBetForm\.betAmountError \? "mobile-bet-amount-error" : undefined\}/, "the mobile amount input must describe only its validation message");
 assert.match(sidePanelSource, /id="mobile-wallet-setup-status"[\s\S]*role=\{walletSetupError \? "alert" : "status"\}[\s\S]*aria-live="polite"[\s\S]*aria-busy=\{walletSetupCreating \|\| undefined\}/, "wallet setup creation must expose a separate live busy status");
@@ -252,16 +254,16 @@ const walletSetupBehaviorTest = (async () => {
     onStateChange: (state) => states.push(state),
   });
 
-  const staleAttempt = sharedGuard.run();
+  const oldUserAttempt = sharedGuard.run();
   assert.equal(createCalls, 1, "wallet creation must start exactly once while the CTA is disabled");
-  sharedGuard.reset();
-  const retryAttempt = sharedGuard.run();
-  assert.equal(createCalls, 2, "reset must permit a fresh wallet setup attempt");
+  sharedGuard.reset(); // User logs out; this invalidates the old user attempt.
+  const newUserRetryAttempt = sharedGuard.run();
+  assert.equal(createCalls, 2, "logout reset must permit a new user wallet setup attempt");
   firstDeferred.reject(new Error("stale Privy failure"));
-  await staleAttempt;
-  assert.deepEqual(states, ["creating", "idle", "creating"], "stale settlement after reset must not unlock or overwrite the retry state");
+  await oldUserAttempt;
+  assert.deepEqual(states, ["creating", "idle", "creating"], "stale old-user settlement after logout must not unlock or overwrite the new-user retry state");
   retryDeferred.resolve();
-  await retryAttempt;
+  await newUserRetryAttempt;
   assert.equal(states.at(-1), "creating", "a successful attempt remains locked until wallet sync confirms it");
   sharedGuard.reset();
   await sharedGuard.run();

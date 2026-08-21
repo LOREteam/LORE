@@ -40,9 +40,13 @@ export function useLineaOreClientRuntime({
   const { uiHydrated, motion, sound, wallet, shell, gameData, chart, normalizedEmbeddedAddress, publicClient } =
     baseState;
   const readOnlyReason = getConfiguredReadOnlyMode() ? READ_ONLY_REASON : null;
+  const walletSetupIdentity = wallet.authenticated
+    ? `${wallet.externalWalletAddress?.toLowerCase() ?? "no-external"}:${normalizedEmbeddedAddress?.toLowerCase() ?? "no-embedded"}`
+    : null;
   const createEmbeddedWalletRef = useRef(wallet.createEmbeddedWallet);
   const [walletSetupState, setWalletSetupState] = useState<WalletSetupState>("idle");
   const walletSetupGuardRef = useRef<ReturnType<typeof createWalletSetupGuard> | null>(null);
+  const walletSetupIdentityRef = useRef<string | null | undefined>(undefined);
   createEmbeddedWalletRef.current = wallet.createEmbeddedWallet;
   if (!walletSetupGuardRef.current) {
     walletSetupGuardRef.current = createWalletSetupGuard({
@@ -57,10 +61,13 @@ export function useLineaOreClientRuntime({
     : null;
 
   useEffect(() => {
-    if (wallet.authenticated && (normalizedEmbeddedAddress || wallet.embeddedWalletSyncing)) {
+    const identityChanged = walletSetupIdentityRef.current !== undefined
+      && walletSetupIdentityRef.current !== walletSetupIdentity;
+    if (!wallet.authenticated || identityChanged || normalizedEmbeddedAddress || wallet.embeddedWalletSyncing) {
       walletSetupGuardRef.current?.reset();
     }
-  }, [normalizedEmbeddedAddress, wallet.authenticated, wallet.embeddedWalletSyncing]);
+    walletSetupIdentityRef.current = walletSetupIdentity;
+  }, [normalizedEmbeddedAddress, wallet.authenticated, wallet.embeddedWalletSyncing, walletSetupIdentity]);
 
   const { rebateInfo, isClaiming: isClaimingRebate, claimRebates } = useRebate({
     enabled: Boolean(normalizedEmbeddedAddress),
