@@ -85,6 +85,7 @@ function runCampaignFixturePowerShell(scriptPath, campaignId, { failEventWrite =
   );
   assert.ok(existsSync(powerShellPath), "Windows PowerShell must be available for the campaign fixture");
   const environment = campaignFixtureGitEnvironment();
+  delete environment.LORE_CAMPAIGN_FIXTURE_FAULT;
   const commonArgs = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"];
   const args = failEventWrite
     ? [
@@ -210,7 +211,8 @@ export function assertLocalCampaignSourceProvenance() {
       "commit", "--quiet", "-m", "fixture",
     ]);
     const sourceSha = runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
-    const tsxDirectory = join(root, "node_modules", "tsx", "dist");
+    const fixtureNodeModules = join(root, "node_modules");
+    const tsxDirectory = join(fixtureNodeModules, "tsx", "dist");
     mkdirSync(tsxDirectory, { recursive: true });
     writeFileSync(join(tsxDirectory, "cli.mjs"), "process.exit(0);\n", "utf8");
 
@@ -218,6 +220,14 @@ export function assertLocalCampaignSourceProvenance() {
     mkdirSync(runtimeDirectory, { recursive: true });
     const fixtureRuntime = join(runtimeDirectory, "node.exe");
     copyFileSync(process.execPath, fixtureRuntime);
+    for (const [path, label] of [[fixtureNodeModules, "fixture dependency root"], [runtimeDirectory, "fixture runtime directory"]]) {
+      const stats = lstatSync(path);
+      assert.equal(stats.isDirectory(), true, `${label} must be a directory`);
+      assert.equal(stats.isSymbolicLink(), false, `${label} must be an ordinary non-reparse directory`);
+    }
+    const runtimeStats = lstatSync(fixtureRuntime);
+    assert.equal(runtimeStats.isFile(), true, "fixture runtime must be a copied regular file");
+    assert.equal(runtimeStats.isSymbolicLink(), false, "fixture runtime must not inherit an outer snapshot link");
 
     const readEvents = (campaignId) => readFileSync(
       join(root, "artifacts", "test-campaign-2026-08-20", campaignId, "local-test-campaign.jsonl"),
