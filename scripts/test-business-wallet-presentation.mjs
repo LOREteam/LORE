@@ -14,6 +14,7 @@ const walletTransferRow = walletTransferRowModule.default ?? walletTransferRowMo
 const walletTransferPanels = walletTransferPanelsModule.default ?? walletTransferPanelsModule;
 const pageWalletOverview = pageWalletOverviewModule.default ?? pageWalletOverviewModule;
 const normalizeCachedPrivyBalances = pageWalletOverview.normalizeCachedPrivyBalances;
+const getCachedPrivyBalancesForKey = pageWalletOverview.getCachedPrivyBalancesForKey;
 const pendingTxPanel = pendingTxPanelModule.default ?? pendingTxPanelModule;
 const headerPoolChart = headerPoolChartModule.default ?? headerPoolChartModule;
 const headerWalletCard = headerWalletCardModule.default ?? headerWalletCardModule;
@@ -219,18 +220,51 @@ export function runWalletPresentationTests() {
   );
   assert.deepEqual(
     normalizeCachedPrivyBalances(undefined),
-    { token: null, eth: null },
+    { token: null, tokenUpdatedAt: null, eth: null, ethUpdatedAt: null },
     "missing cached wallet balances must remain unknown instead of becoming zero",
   );
   assert.deepEqual(
     normalizeCachedPrivyBalances({ token: "not-a-number", eth: "Infinity" }),
-    { token: null, eth: null },
+    { token: null, tokenUpdatedAt: null, eth: null, ethUpdatedAt: null },
     "invalid cached wallet balances must remain unknown instead of becoming zero",
   );
   assert.deepEqual(
     normalizeCachedPrivyBalances({ token: "0", eth: "0" }),
-    { token: "0.00", eth: "0.0000" },
+    { token: "0.00", tokenUpdatedAt: null, eth: "0.0000", ethUpdatedAt: null },
     "a verified literal zero must remain distinguishable from an unavailable balance",
+  );
+  const walletACacheEntry = {
+    cacheKey: "lore:privy-balances:v1:test:wallet-a",
+    balances: {
+      token: "42.00",
+      tokenUpdatedAt: 1_700_000_000_000,
+      eth: "1.2500",
+      ethUpdatedAt: 1_700_000_001_000,
+    },
+  };
+  const walletBKey = "lore:privy-balances:v1:test:wallet-b";
+  const walletBCache = getCachedPrivyBalancesForKey(walletACacheEntry, walletBKey);
+  assert.deepEqual(
+    walletBCache,
+    { token: null, tokenUpdatedAt: null, eth: null, ethUpdatedAt: null },
+    "an A-to-B wallet switch must not render A cache while B is pending or failed",
+  );
+  assert.equal(
+    headerWalletCard.getHeaderWalletBalancePresentation("LINEA", walletBCache.token ?? "—", { ...READY_BALANCE_STATUS, fetching: true }).state,
+    "loading",
+    "B pending must not reuse A token balance",
+  );
+  const walletBError = headerWalletCard.getHeaderWalletBalancePresentation(
+    "ETH",
+    walletBCache.eth ?? "—",
+    { ...READY_BALANCE_STATUS, error: true },
+  );
+  assert.equal(walletBError.state, "error", "B RPC error must not reuse A ETH balance");
+  assert.doesNotMatch(walletBError.text, /42|1\.25/, "B error text must not disclose A cached balances");
+  assert.deepEqual(
+    normalizeCachedPrivyBalances({ token: "42", tokenUpdatedAt: 1_700_000_000_000, eth: "1.25", ethUpdatedAt: 1_700_000_001_000 }),
+    walletACacheEntry.balances,
+    "current cache entries persist per-asset validated last-update timestamps",
   );
   assert.equal(
     pageWalletOverview.isHeaderLineaBalanceLoading(true, null, null),
