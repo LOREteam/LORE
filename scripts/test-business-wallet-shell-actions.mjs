@@ -8,6 +8,7 @@ import * as backupGateModule from "../app/components/BackupGate.tsx";
 import * as miningManualActionsModule from "../app/hooks/useMiningManualActions.ts";
 import * as maintenanceOverlayModule from "../app/components/MaintenanceOverlay.tsx";
 import * as mobileTabNavModule from "../app/components/MobileTabNav.tsx";
+import * as hubGameBoardModule from "../app/components/HubGameBoard.tsx";
 
 const autoResolve = autoResolveModule.default ?? autoResolveModule;
 const backupGate = backupGateModule.default ?? backupGateModule;
@@ -16,6 +17,7 @@ const maintenanceOverlay = maintenanceOverlayModule.default ?? maintenanceOverla
 const mobileTabNav = mobileTabNavModule.default ?? mobileTabNavModule;
 const MaintenanceOverlay = maintenanceOverlay.MaintenanceOverlay;
 const MobileTabNav = mobileTabNav.MobileTabNav;
+const HubGameBoard = hubGameBoardModule.HubGameBoard;
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   const entries = readdirSync(root, { withFileTypes: true });
@@ -53,6 +55,36 @@ export async function runWalletShellAndMiningActionTests() {
   const backupAddress = "0x0000000000000000000000000000000000000001";
   assert.equal(backupGate.normalizeBackupAddress(backupAddress.toUpperCase().replace("0X", "0x")), backupAddress);
   assert.equal(backupGate.normalizeBackupAddress("not-an-address"), null);
+  const guestOnboardingMarkup = renderToStaticMarkup(React.createElement(HubGameBoard, {
+    gridDisplayEpoch: null,
+    coldBootDefaults: true,
+    liveStateReady: false,
+    tileViewData: [],
+    gridSelectedTiles: [],
+    winningTileId: null,
+    isRevealing: false,
+    isAnalyzing: false,
+    reducedMotion: true,
+    showSelectionOnGrid: false,
+    onTileClick: () => {},
+    walletAddress: null,
+    walletConnected: false,
+    formattedBalance: null,
+    lowEthBalance: true,
+    isDailyJackpot: false,
+    isWeeklyJackpot: false,
+    hasMyWinningBet: false,
+    unclaimedWins: [],
+    isScanning: false,
+    isDeepScanning: false,
+    isClaiming: false,
+    onScan: () => {},
+    onClaim: () => {},
+    onClaimAll: () => {},
+  }));
+  assert.match(guestOnboardingMarkup, /Next · Back up key[\s\S]*Export the private key before funding/,
+    "a guest must not be told that a wallet backup was saved");
+  assert.doesNotMatch(guestOnboardingMarkup, /Done · Back up key[\s\S]*Saved/);
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const storedValues = new Map([["lineaore:privy-backup-confirmed", "invalid-address"]]);
   const removedStorageKeys = [];

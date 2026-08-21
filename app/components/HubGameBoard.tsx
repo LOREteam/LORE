@@ -92,7 +92,7 @@ export const HubGameBoard = React.memo(function HubGameBoard({
   }, 0n);
   const onboarding = {
     wallet: Boolean(walletAddress && walletConnected),
-    backup: isBackupConfirmedFor(walletAddress ?? null),
+    backup: Boolean(walletAddress && isBackupConfirmedFor(walletAddress)),
     eth: Boolean(walletAddress && !lowEthBalance),
     linea: hasPositiveFormattedBalance(formattedBalance),
     firstBet: hasConfirmedFirstBet(),
