@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
   MAX_API_LATENCY_SAMPLES_PER_PATH,
@@ -358,6 +359,16 @@ function createFakeBuildOutputFs({ buildId = "build-fixture" } = {}) {
 }
 
 export async function runBrowserToolingBehaviorTests() {
+  const browserSmokeSource = readFileSync(new URL("./smoke-browser.mjs", import.meta.url), "utf8");
+  assert.match(browserSmokeSource, /Log in to check rewards for your wallet\./);
+  assert.match(browserSmokeSource, /name: "Log in to check rewards"/);
+  assert.match(browserSmokeSource, /guest rewards must not render a verified empty state/);
+  assert.doesNotMatch(
+    browserSmokeSource,
+    /expectVisible\(emptyPage\.locator\('\[data-testid="rewards-empty-state"\]'\), "empty rewards state"/,
+    "guest smoke must not pass by treating unchecked rewards as empty",
+  );
+
   const buildSummaryFs = createFakeBuildOutputFs();
   const buildSummaryLogs = [];
   const buildSummary = await runBuildOutputCli({

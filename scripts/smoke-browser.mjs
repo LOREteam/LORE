@@ -771,7 +771,19 @@ async function main() {
         throw new Error(`empty pool chart aria label mismatch: ${emptyPoolLabel ?? "missing"}`);
       }
       await expectVisible(emptyPage.locator('[data-testid="header-pool-chart-line"]'), "empty pool chart line", TIMEOUT_MS);
-      await expectVisible(emptyPage.locator('[data-testid="rewards-empty-state"]'), "empty rewards state", TIMEOUT_MS);
+      await expectVisible(
+        emptyPage.getByText("Log in to check rewards for your wallet.", { exact: true }),
+        "unchecked guest rewards status",
+        TIMEOUT_MS,
+      );
+      await expectVisible(
+        emptyPage.getByRole("button", { name: "Log in to check rewards" }),
+        "guest rewards login CTA",
+        TIMEOUT_MS,
+      );
+      if (await emptyPage.locator('[data-testid="rewards-empty-state"]').count() > 0) {
+        throw new Error("guest rewards must not render a verified empty state");
+      }
       const analyticsEmptyOpened = await openDesktopTab(emptyPage, {
         ...smokeOptions,
         buttonName: "Analytics",
@@ -789,7 +801,7 @@ async function main() {
       });
       if (!leaderboardEmptyOpened) throw new Error("leaderboard empty state did not become ready");
       await emptyContext.close();
-      console.log("PASS empty pool, rewards, leaderboards, and jackpots remain explicit");
+      console.log("PASS empty pool, unchecked guest rewards, leaderboards, and jackpots remain explicit");
     });
 
     await runStep("verify pool chart freshness", async () => {
