@@ -362,27 +362,18 @@ export function assertLocalCampaignSourceProvenance() {
     const runtimeSwapId = "fixture-runtime-identity-drift";
     const runtimeSwap = runCampaignFixturePowerShell(scriptPath, runtimeSwapId);
     assert.equal(runtimeSwap.error, undefined, runtimeSwap.error?.message);
-    if (existsSync(runtimeSwapMarker)) {
-      assert.notEqual(runtimeSwap.status, 0, "a swapped private runtime must stop the campaign");
-      const runtimeSwapEvents = readEvents(runtimeSwapId);
-      assertBoundSourceSha(runtimeSwapEvents, runtimeSwapSourceSha);
-      const runtimeFailure = runtimeSwapEvents.find((event) => event.status === "failed");
-      assert.equal(runtimeFailure?.phase, "after-command");
-      assert.equal(runtimeFailure?.sourceIntegrityFailure, "runtime-dependency-drift");
-      assert.equal(runtimeSwapEvents.some((event) => event.status === "passed"), false);
-      assert.equal(runtimeSwapEvents.some((event) => event.status === "completed"), false);
-      rmSync(fixtureRuntime, { force: true });
-      renameSync(runtimeOriginalPath, fixtureRuntime);
-      removeFixtureSnapshot(runtimeSwapId, runtimeSwapSourceSha);
-    } else {
-      assert.notEqual(runtimeSwap.status, 0, "a locked runtime replacement probe must not be treated as a pass");
-      assert.ok(
-        `${runtimeSwap.stdout ?? ""}\n${runtimeSwap.stderr ?? ""}`.length > 0,
-        "a platform that forbids replacing its running executable must surface the failed fixture action",
-      );
-      assert.equal(existsSync(runtimeOriginalPath), false, "an unsuccessful runtime replacement must leave the fixture runtime intact");
-      rmSync(runtimeReplacementPath, { force: true });
-    }
+    assert.equal(existsSync(runtimeSwapMarker), true, "runtime replacement fixture action must run");
+    assert.notEqual(runtimeSwap.status, 0, "a swapped private runtime must stop the campaign");
+    const runtimeSwapEvents = readEvents(runtimeSwapId);
+    assertBoundSourceSha(runtimeSwapEvents, runtimeSwapSourceSha);
+    const runtimeFailure = runtimeSwapEvents.find((event) => event.status === "failed");
+    assert.equal(runtimeFailure?.phase, "after-command");
+    assert.equal(runtimeFailure?.sourceIntegrityFailure, "runtime-dependency-drift");
+    assert.equal(runtimeSwapEvents.some((event) => event.status === "passed"), false);
+    assert.equal(runtimeSwapEvents.some((event) => event.status === "completed"), false);
+    rmSync(fixtureRuntime, { force: true });
+    renameSync(runtimeOriginalPath, fixtureRuntime);
+    removeFixtureSnapshot(runtimeSwapId, runtimeSwapSourceSha);
 
     const lockfilePath = join(root, "package-lock.json");
     const lockfileOriginal = readFileSync(lockfilePath, "utf8");
@@ -471,18 +462,15 @@ export function assertLocalCampaignSourceProvenance() {
     assert.equal(snapshotSubstitution.error, undefined, snapshotSubstitution.error?.message);
     const snapshotSubstitutionPath = campaignSnapshotDirectory(snapshotSubstitutionId, snapshotSubstitutionSourceSha);
     const snapshotSubstitutionBackup = `${snapshotSubstitutionPath}.fixture-original`;
-    if (existsSync(snapshotSubstitutionMarker)) {
-      assert.notEqual(snapshotSubstitution.status, 0, "a substituted snapshot path must stop the campaign");
-      const events = readEvents(snapshotSubstitutionId);
-      assertBoundSourceSha(events, snapshotSubstitutionSourceSha);
-      const failure = events.find((event) => event.status === "failed");
-      assert.equal(failure?.phase, "after-command");
-      assert.equal(failure?.sourceIntegrityFailure, "source-snapshot-path-drift");
-      assert.equal(events.some((event) => event.status === "passed"), false);
-      assert.equal(events.some((event) => event.status === "completed"), false);
-    } else {
-      assert.notEqual(snapshotSubstitution.status, 0, "an unavailable snapshot substitution action must still fail closed");
-    }
+    assert.equal(existsSync(snapshotSubstitutionMarker), true, "snapshot directory substitution fixture action must run");
+    assert.notEqual(snapshotSubstitution.status, 0, "a substituted snapshot path must stop the campaign");
+    const snapshotSubstitutionEvents = readEvents(snapshotSubstitutionId);
+    assertBoundSourceSha(snapshotSubstitutionEvents, snapshotSubstitutionSourceSha);
+    const snapshotSubstitutionFailure = snapshotSubstitutionEvents.find((event) => event.status === "failed");
+    assert.equal(snapshotSubstitutionFailure?.phase, "after-command");
+    assert.equal(snapshotSubstitutionFailure?.sourceIntegrityFailure, "source-snapshot-path-drift");
+    assert.equal(snapshotSubstitutionEvents.some((event) => event.status === "passed"), false);
+    assert.equal(snapshotSubstitutionEvents.some((event) => event.status === "completed"), false);
     if (existsSync(snapshotSubstitutionBackup)) {
       if (existsSync(snapshotSubstitutionPath)) rmSync(snapshotSubstitutionPath, { recursive: true, force: true });
       renameSync(snapshotSubstitutionBackup, snapshotSubstitutionPath);
@@ -510,19 +498,16 @@ export function assertLocalCampaignSourceProvenance() {
     const snapshotParentPath = campaignSnapshotDirectory(snapshotParentId, snapshotParentSourceSha);
     const snapshotParentDirectory = dirname(snapshotParentPath);
     const snapshotParentBackup = `${snapshotParentDirectory}.fixture-original`;
-    if (existsSync(snapshotParentMarker)) {
-      assert.notEqual(snapshotParentRun.status, 0, "a snapshot parent junction must stop the campaign");
-      const events = readEvents(snapshotParentId);
-      assertBoundSourceSha(events, snapshotParentSourceSha);
-      const failure = events.find((event) => event.status === "failed");
-      assert.equal(failure?.phase, "after-command");
-      assert.equal(failure?.sourceIntegrityFailure, "source-snapshot-path-drift");
-      assert.equal(events.some((event) => event.status === "completed"), false);
-      assert.equal(lstatSync(snapshotParentDirectory).isSymbolicLink(), true, "fixture must replace the snapshot parent with a junction");
-      assert.equal(existsSync(snapshotParentSentinel), true, "unsafe snapshot cleanup must not follow a substituted parent target");
-    } else {
-      assert.notEqual(snapshotParentRun.status, 0, "an unavailable snapshot parent replacement action must still fail closed");
-    }
+    assert.equal(existsSync(snapshotParentMarker), true, "snapshot parent junction fixture action must run");
+    assert.notEqual(snapshotParentRun.status, 0, "a snapshot parent junction must stop the campaign");
+    const snapshotParentEvents = readEvents(snapshotParentId);
+    assertBoundSourceSha(snapshotParentEvents, snapshotParentSourceSha);
+    const snapshotParentFailure = snapshotParentEvents.find((event) => event.status === "failed");
+    assert.equal(snapshotParentFailure?.phase, "after-command");
+    assert.equal(snapshotParentFailure?.sourceIntegrityFailure, "source-snapshot-path-drift");
+    assert.equal(snapshotParentEvents.some((event) => event.status === "completed"), false);
+    assert.equal(lstatSync(snapshotParentDirectory).isSymbolicLink(), true, "fixture must replace the snapshot parent with a junction");
+    assert.equal(existsSync(snapshotParentSentinel), true, "unsafe snapshot cleanup must not follow a substituted parent target");
     if (existsSync(snapshotParentBackup)) {
       if (existsSync(snapshotParentDirectory)) rmdirSync(snapshotParentDirectory);
       renameSync(snapshotParentBackup, snapshotParentDirectory);
@@ -548,18 +533,15 @@ export function assertLocalCampaignSourceProvenance() {
     assert.equal(dependencySwapRun.error, undefined, dependencySwapRun.error?.message);
     const dependencySwapPath = campaignSnapshotDirectory(dependencySwapId, dependencySwapSourceSha);
     const dependencySwapLink = join(dependencySwapPath, "node_modules");
-    if (existsSync(dependencySwapMarker)) {
-      assert.notEqual(dependencySwapRun.status, 0, "a swapped snapshot dependency junction must stop the campaign");
-      const events = readEvents(dependencySwapId);
-      assertBoundSourceSha(events, dependencySwapSourceSha);
-      const failure = events.find((event) => event.status === "failed");
-      assert.equal(failure?.phase, "after-command");
-      assert.equal(failure?.sourceIntegrityFailure, "source-snapshot-dependency-drift");
-      assert.equal(events.some((event) => event.status === "completed"), false);
-      assert.equal(existsSync(dependencySwapSentinel), true, "unsafe dependency cleanup must not follow a swapped junction target");
-    } else {
-      assert.notEqual(dependencySwapRun.status, 0, "an unavailable dependency junction swap must still fail closed");
-    }
+    assert.equal(existsSync(dependencySwapMarker), true, "snapshot dependency junction swap fixture action must run");
+    assert.notEqual(dependencySwapRun.status, 0, "a swapped snapshot dependency junction must stop the campaign");
+    const dependencySwapEvents = readEvents(dependencySwapId);
+    assertBoundSourceSha(dependencySwapEvents, dependencySwapSourceSha);
+    const dependencySwapFailure = dependencySwapEvents.find((event) => event.status === "failed");
+    assert.equal(dependencySwapFailure?.phase, "after-command");
+    assert.equal(dependencySwapFailure?.sourceIntegrityFailure, "source-snapshot-dependency-drift");
+    assert.equal(dependencySwapEvents.some((event) => event.status === "completed"), false);
+    assert.equal(existsSync(dependencySwapSentinel), true, "unsafe dependency cleanup must not follow a swapped junction target");
     if (existsSync(dependencySwapLink)) rmdirSync(dependencySwapLink);
     if (existsSync(dependencySwapPath)) symlinkSync(nodeModulesPath, dependencySwapLink, "junction");
     removeFixtureSnapshot(dependencySwapId, dependencySwapSourceSha);
