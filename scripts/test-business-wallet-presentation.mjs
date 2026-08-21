@@ -241,14 +241,9 @@ export function runWalletPresentationTests() {
     "a completed unavailable embedded balance read must not look like perpetual loading",
   );
   assert.equal(
-    pageWalletOverview.isHeaderLineaBalanceLoading(true, null, "0.00"),
-    false,
-    "a cached verified zero must remain visible while a refresh runs",
-  );
-  assert.equal(
-    pageWalletOverview.isHeaderLineaBalanceLoading(true, "0.00", null),
-    false,
-    "a current verified zero must not be rendered as loading",
+    pageWalletOverview.isHeaderLineaBalanceLoading(true),
+    true,
+    "a pending refresh must reach the Header so cached values can be labeled honestly",
   );
   const unavailableTransferSummary = {
     transfers: [],
@@ -346,6 +341,16 @@ export function runWalletPresentationTests() {
     { state: "ready", text: "0.00", suffix: "LINEA", label: "LINEA balance 0.00" },
   );
   assert.equal(headerWalletCard.getHeaderWalletBalancePresentation("ETH", "—", true).state, "loading");
+  assert.deepEqual(
+    headerWalletCard.getHeaderWalletBalancePresentation("ETH", "0.0000", true),
+    {
+      state: "refreshing",
+      text: "0.0000",
+      suffix: "ETH",
+      label: "ETH balance refreshing; showing last known 0.0000",
+    },
+    "a known literal zero or cached balance must remain visible while its refresh runs",
+  );
   const unavailableHeaderWalletHtml = renderToStaticMarkup(React.createElement(headerWalletCard.HeaderWalletCard, {
     authenticated: true,
     loginState: {
@@ -372,6 +377,32 @@ export function runWalletPresentationTests() {
   assert.match(unavailableHeaderWalletHtml, /Unavailable<span[^>]*> ETH<\/span>/);
   assert.match(unavailableHeaderWalletHtml, /aria-label="LINEA balance unavailable"[^>]*data-balance-state="unavailable"/);
   assert.match(unavailableHeaderWalletHtml, /Unavailable<span[^>]*> LINEA<\/span>/);
+  const refreshingHeaderWalletHtml = renderToStaticMarkup(React.createElement(headerWalletCard.HeaderWalletCard, {
+    authenticated: true,
+    loginState: {
+      busy: false,
+      buttonText: "Login / Connect",
+      disabled: false,
+      error: null,
+      modalOpen: false,
+      statusAnnouncement: "Wallet connected.",
+    },
+    embeddedWalletAddress: "0x1111111111111111111111111111111111111111",
+    embeddedWalletSyncing: false,
+    embeddedAddressCopied: false,
+    onCopyEmbeddedAddress: () => undefined,
+    onLogin: () => undefined,
+    onLogout: () => undefined,
+    onOpenWalletSettings: () => undefined,
+    privyEthBalance: "0.0000",
+    privyEthBalanceLoading: true,
+    privyTokenBalance: "0.00",
+    privyTokenBalanceLoading: true,
+  }));
+  assert.match(refreshingHeaderWalletHtml, /aria-label="ETH balance refreshing; showing last known 0\.0000"[^>]*data-balance-state="refreshing"/);
+  assert.match(refreshingHeaderWalletHtml, />0\.0000<span[^>]*> ETH<\/span><span[^>]*>Refreshing<\/span>/);
+  assert.match(refreshingHeaderWalletHtml, /aria-label="LINEA balance refreshing; showing last known 0\.00"[^>]*data-balance-state="refreshing"/);
+  assert.match(refreshingHeaderWalletHtml, />0\.00<span[^>]*> LINEA<\/span><span[^>]*>Refreshing<\/span>/);
   const validReplacementHash = `0x${"a".repeat(64)}`;
   const blockedStatus = {
     latestNonce: 7,

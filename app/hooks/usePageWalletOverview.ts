@@ -33,10 +33,8 @@ export function normalizeCachedPrivyBalances(value: unknown): CachedPrivyBalance
 
 export function isHeaderLineaBalanceLoading(
   embeddedTokenPending: boolean,
-  formattedLineaBalance: string | null | undefined,
-  formattedPrivyBalance: string | null,
 ) {
-  return embeddedTokenPending && formattedLineaBalance == null && formattedPrivyBalance == null;
+  return embeddedTokenPending;
 }
 
 export function normalizePageWalletAddress(value: string | null | undefined): `0x${string}` | null {
@@ -166,11 +164,7 @@ export function usePageWalletOverview({
   const headerLineaBalance =
     (isEmbeddedActive && formattedLineaBalance != null ? formattedLineaBalance : formattedPrivyBalance) ?? "—";
 
-  const headerLineaLoading = isHeaderLineaBalanceLoading(
-    embeddedTokenPending,
-    formattedLineaBalance,
-    formattedPrivyBalance,
-  );
+  const headerLineaLoading = isHeaderLineaBalanceLoading(embeddedTokenPending);
 
   return useMemo(
     () => ({
@@ -185,7 +179,7 @@ export function usePageWalletOverview({
       isEmbeddedActive,
       headerLineaBalance,
       headerLineaLoading,
-      headerEthLoading: embeddedEthPending && formattedPrivyEthBalance == null,
+      headerEthLoading: embeddedEthPending,
     }),
     [
       embeddedTokenBalance,
