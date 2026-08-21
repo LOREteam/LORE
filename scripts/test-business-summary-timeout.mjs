@@ -423,6 +423,81 @@ export function runSummaryTimeoutTests() {
   assert.equal(indexerLines.length, 1);
   assert.equal(JSON.parse(indexerLines[0]).sameBlockEventOrdering, true);
 
+  let fallbackSpawnCall = null;
+  const fallbackLines = [];
+  const fallbackLauncher = {
+    command: "C:\\private\\node.exe",
+    cliPath: "C:\\private\\node_modules\\npm\\bin\\npm-cli.js",
+    repoRoot: "C:\\isolated-indexer-summary",
+  };
+  const fallbackOutcome = runIndexerStorageSummary({
+    cwd: "C:\\isolated-indexer-summary",
+    env: { SAFE_ENV: "present" },
+    execPath: "C:\\private\\node.exe",
+    platform: "win32",
+    resolveTrustedNpmCliFn: (options) => {
+      assert.deepEqual(options, {
+        repoRoot: "C:\\isolated-indexer-summary",
+        nodeExecutable: "C:\\private\\node.exe",
+      });
+      return fallbackLauncher;
+    },
+    trustedNpmCommandFn: (args, launcher) => {
+      assert.equal(launcher, fallbackLauncher);
+      assert.deepEqual(args, ["--silent", "run", "test:indexer-storage"]);
+      return {
+        command: launcher.command,
+        args: [launcher.cliPath, ...args],
+      };
+    },
+    trustedNpmEnvironmentFn: (env, launcher) => {
+      assert.equal(launcher, fallbackLauncher);
+      assert.deepEqual(env, { SAFE_ENV: "present", NO_UPDATE_NOTIFIER: "1" });
+      return { SAFE_ENV: "trusted", NO_UPDATE_NOTIFIER: "1", npm_config_fund: "false" };
+    },
+    spawn: (command, args, options) => {
+      fallbackSpawnCall = { command, args, options };
+      return { status: 0, stdout: JSON.stringify(indexerPayload), stderr: "" };
+    },
+    writeLine: (line) => fallbackLines.push(line),
+  });
+  assert.equal(fallbackOutcome.exitCode, 0);
+  assert.equal(fallbackOutcome.summary.status, "pass");
+  assert.equal(fallbackSpawnCall?.command, fallbackLauncher.command);
+  assert.deepEqual(fallbackSpawnCall?.args, [
+    fallbackLauncher.cliPath,
+    "--silent",
+    "run",
+    "test:indexer-storage",
+  ]);
+  assert.equal(fallbackSpawnCall?.options.cwd, "C:\\isolated-indexer-summary");
+  assert.deepEqual(fallbackSpawnCall?.options.env, {
+    SAFE_ENV: "trusted",
+    NO_UPDATE_NOTIFIER: "1",
+    npm_config_fund: "false",
+  });
+  assert.equal(fallbackLines.length, 1);
+  assert.equal(JSON.parse(fallbackLines[0]).status, "pass");
+
+  let fallbackFailureSpawned = false;
+  const fallbackFailureLines = [];
+  const fallbackFailure = runIndexerStorageSummary({
+    env: {},
+    resolveTrustedNpmCliFn: () => {
+      throw new Error("trusted launcher unavailable");
+    },
+    spawn: () => {
+      fallbackFailureSpawned = true;
+      return { status: 0, stdout: JSON.stringify(indexerPayload), stderr: "" };
+    },
+    writeLine: (line) => fallbackFailureLines.push(line),
+  });
+  assert.equal(fallbackFailure.exitCode, 1);
+  assert.equal(fallbackFailure.summary.status, "fail");
+  assert.equal(fallbackFailure.summary.issue, "indexer-storage-spawn-failed");
+  assert.equal(fallbackFailureSpawned, false, "missing trusted launcher must not fall back to npm.cmd");
+  assert.equal(fallbackFailureLines.length, 1);
+
   const dbPayload = {
     status: "pass",
     backup: { integrity: "ok", rows: 21 },

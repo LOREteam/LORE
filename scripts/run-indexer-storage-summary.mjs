@@ -3,6 +3,11 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { redactProofText } from "./redact-proof-output.mjs";
 import { parseSummaryTimeoutEnv } from "./summary-timeout.mjs";
+import {
+  resolveTrustedNpmCli,
+  trustedNpmCommand,
+  trustedNpmEnvironment,
+} from "./trusted-npm-cli.mjs";
 
 const MAX_ASSERTION_FAILURE_COUNT = 9999;
 
@@ -114,24 +119,46 @@ export function runIndexerStorageSummary({
   env = process.env,
   execPath = process.execPath,
   platform = process.platform,
+  resolveTrustedNpmCliFn = resolveTrustedNpmCli,
+  trustedNpmCommandFn = trustedNpmCommand,
+  trustedNpmEnvironmentFn = trustedNpmEnvironment,
   writeLine = (line) => console.log(line),
 } = {}) {
   const npmExecPath = env.npm_execpath;
-  const command = npmExecPath ? execPath : platform === "win32" ? "npm.cmd" : "npm";
-  const args = npmExecPath
-    ? [npmExecPath, "--silent", "run", "test:indexer-storage"]
-    : ["--silent", "run", "test:indexer-storage"];
+  let command;
+  let args;
+  let childEnv;
+  try {
+    if (npmExecPath) {
+      command = execPath;
+      args = [npmExecPath, "--silent", "run", "test:indexer-storage"];
+      childEnv = {
+        ...env,
+        NO_UPDATE_NOTIFIER: "1",
+        npm_config_update_notifier: "false",
+        npm_config_fund: "false",
+      };
+    } else {
+      const launcher = resolveTrustedNpmCliFn({ repoRoot: cwd, nodeExecutable: execPath });
+      const invocation = trustedNpmCommandFn(["--silent", "run", "test:indexer-storage"], launcher);
+      command = invocation.command;
+      args = invocation.args;
+      childEnv = trustedNpmEnvironmentFn({
+        ...env,
+        NO_UPDATE_NOTIFIER: "1",
+      }, launcher);
+    }
+  } catch (error) {
+    const summary = summarizeIndexerStorageResult({ error, stdout: "", stderr: "" });
+    writeLine(JSON.stringify(summary));
+    return { summary, exitCode: 1 };
+  }
   const result = spawn(command, args, {
     cwd,
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
     timeout: parseSummaryTimeoutEnv("INDEXER_STORAGE_SUMMARY_TIMEOUT_MS", 120_000),
-    env: {
-      ...env,
-      NO_UPDATE_NOTIFIER: "1",
-      npm_config_update_notifier: "false",
-      npm_config_fund: "false",
-    },
+    env: childEnv,
   });
   const summary = summarizeIndexerStorageResult(result);
   writeLine(JSON.stringify(summary));
