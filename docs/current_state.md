@@ -10,7 +10,7 @@ campaign design is [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest verified local code commit before this state refresh: `d8774f69`.
+- Latest verified local code commit before this state refresh: `8e446a88`.
 - The product, storage, testnet-proof, UX, P1 regression, local campaign and
   documentation packets are committed locally. The current immutable-checkout
   reproduction is clean for tracked files; `.tmp-*` and campaign reports are
@@ -32,12 +32,12 @@ The protected base file remains exact:
 - mtime: `2026-08-13T12:18:50.8015294Z`;
 - exclusive open check: pass at the latest inspection.
 
-After an explicit approval and an exclusive-access/base-hash recheck, only the
-test-created `data/lore-v10.sqlite-wal` and `data/lore-v10.sqlite-shm` files
-were removed. The base file was never checkpointed or modified. The final
-isolated business and prelaunch cycle left all three protected paths in the
-recorded state: exact base file, WAL absent, SHM absent. Explicit OS-temp SQLite
-fixtures remain the only permitted DB target for local test code.
+Earlier test-created sidecars were removed after an explicit approval and base
+hash recheck. A later accidental direct invocation of the business coordinator
+created a new `90672`-byte WAL and `32768`-byte SHM; its process was stopped and
+the base hash/size/mtime remain exact. The sidecars are not release evidence and
+must not be deleted or checkpointed without a fresh explicit approval. Explicit
+OS-temp SQLite fixtures remain the only permitted DB target for local test code.
 
 ## 2026-08-20 local progress
 
@@ -83,8 +83,8 @@ fixtures remain the only permitted DB target for local test code.
 - Business suite: `test:logic` and its summary now delegate to one isolated
   runner with an OS-temp DB and protected main/WAL/SHM before/after snapshots.
 - P1.10: additional wallet, reward, history, wins and leaderboard presentation
-  seams are now executable. The refreshed AST audit reports `4660/5371`
-  behavioral assertions (`86.76%`); the overall extraction remains partial.
+  seams are now executable. The refreshed AST audit reports `4660/5369`
+  behavioral assertions (`86.79%`); the overall extraction remains partial.
 - The corrected managed local campaign started a fresh iteration at this SHA
   lineage and completed all seven first-cycle steps. A previous second-cycle
   failure exposed an undefined analyzer helper in the exact-cap approval
