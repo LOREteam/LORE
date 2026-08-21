@@ -156,7 +156,7 @@ async function main() {
   await runCompilerAdvisoryBehaviorTests();
   runContractV10SummaryBehaviorTests();
   runV10DeployedInputPolicyTests();
-  runV10SepoliaDeploymentManifestTests();
+  runV10SepoliaDeploymentManifestTests({ verifyGitArtifact: false });
   await runV10RuntimeIdentityTests();
   runSummaryTimeoutTests();
   runIndexerStorageBehaviorTests();

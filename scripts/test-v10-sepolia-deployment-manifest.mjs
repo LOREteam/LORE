@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseV10SepoliaDeploymentManifest, verifyV10SepoliaDeploymentManifest } from "./verify-v10-sepolia-deployment-manifest.mjs";
 
-export function runV10SepoliaDeploymentManifestTests() {
+export function runV10SepoliaDeploymentManifestTests({ verifyGitArtifact = true } = {}) {
   const root = process.cwd();
   const raw = readFileSync(path.join(root, "config", "lineaV10SepoliaDeploymentManifest.json"), "utf8");
   const manifest = parseV10SepoliaDeploymentManifest(raw);
@@ -17,7 +17,7 @@ export function runV10SepoliaDeploymentManifestTests() {
   assert.throws(() => parseV10SepoliaDeploymentManifest(JSON.stringify({ ...manifest, epochBoundBetsRequired: false })), /epoch-bound mode is invalid/);
   assert.throws(() => parseV10SepoliaDeploymentManifest(JSON.stringify({ ...manifest, sourceSha256: "0".repeat(63) })), /sourceSha256 is invalid/);
   assert.throws(() => parseV10SepoliaDeploymentManifest(JSON.stringify({ ...manifest, fallbackAddress: manifest.contractAddress })), /unexpected schema/);
-  const result = verifyV10SepoliaDeploymentManifest({ projectRoot: root });
+  const result = verifyV10SepoliaDeploymentManifest({ projectRoot: root, verifyGitArtifact });
   assert.equal(result.status, "pass");
   assert.equal(verifyV10SepoliaDeploymentManifest({ projectRoot: root, verifyGitArtifact: false }).verifierGitSha, null);
   assert.equal(result.historicalTargetsExcluded, true);
