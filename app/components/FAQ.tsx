@@ -174,7 +174,7 @@ const faqData: FAQItem[] = [
   {
     category: "Troubleshooting",
     q: "I won but my balance didn't change.",
-    a: "Rewards are not auto-deposited. Open the Rewards panel in the sidebar menu, where unclaimed wins are listed, then click 'Claim' or 'Claim All'.",
+    a: "Rewards are not auto-deposited. On mobile, open the Mining Hub's Unclaimed rewards card; on wider screens, use the Rewards panel in the sidebar. After you find a reward, click 'Claim' or 'Claim All'.",
   },
   {
     category: "Troubleshooting",

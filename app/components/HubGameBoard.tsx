@@ -6,6 +6,8 @@ import { hasConfirmedFirstBet } from "../hooks/useMiningGuards";
 import { formatLineaWeiAmountDisplay } from "../lib/tokenAmountMath";
 import { JackpotBanner } from "./JackpotBanner";
 import { MiningGrid } from "./MiningGrid";
+import { deriveWalletCta } from "./BetPanel";
+import { requestWalletLogin } from "../lib/walletLoginRequest";
 import { UiButton } from "./ui/UiButton";
 
 interface TileViewRow {
@@ -33,7 +35,10 @@ interface HubGameBoardProps {
   showSelectionOnGrid: boolean;
   onTileClick: (tileId: number) => void;
   walletAddress?: string | null;
+  walletAuthenticated: boolean;
   walletConnected: boolean;
+  embeddedWalletSyncing: boolean;
+  onCreateEmbeddedWallet: () => void;
   formattedBalance: string | null;
   lowEthBalance: boolean;
   isDailyJackpot: boolean;
@@ -52,6 +57,24 @@ interface HubGameBoardProps {
   onClaimAll: () => void;
 }
 
+export function getMobileRewardsWalletPresentation({
+  walletAuthenticated,
+  walletConnected,
+  embeddedWalletSyncing,
+}: Pick<HubGameBoardProps, "walletAuthenticated" | "walletConnected" | "embeddedWalletSyncing">) {
+  const walletCta = deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing });
+  return {
+    walletCta,
+    message: walletCta === "login"
+      ? "Log in to check rewards for your wallet"
+      : walletCta === "syncing"
+        ? "Your LORE wallet is still loading"
+        : walletCta === "create"
+          ? "Create your LORE wallet to check rewards"
+          : null,
+  };
+}
+
 export const HubGameBoard = React.memo(function HubGameBoard({
   gridDisplayEpoch,
   coldBootDefaults,
@@ -65,7 +88,10 @@ export const HubGameBoard = React.memo(function HubGameBoard({
   showSelectionOnGrid,
   onTileClick,
   walletAddress,
+  walletAuthenticated,
   walletConnected,
+  embeddedWalletSyncing,
+  onCreateEmbeddedWallet,
   formattedBalance,
   lowEthBalance,
   isDailyJackpot,
@@ -90,6 +116,12 @@ export const HubGameBoard = React.memo(function HubGameBoard({
       return total;
     }
   }, 0n);
+  const rewardsWalletPresentation = getMobileRewardsWalletPresentation({
+    walletAuthenticated,
+    walletConnected,
+    embeddedWalletSyncing,
+  });
+  const { walletCta: rewardsWalletCta } = rewardsWalletPresentation;
   const onboarding = getOnboardingState({ walletAddress, walletConnected, formattedBalance, lowEthBalance });
   const onboardingComplete = Object.values(onboarding).every(Boolean);
   return (
@@ -154,23 +186,32 @@ export const HubGameBoard = React.memo(function HubGameBoard({
             <p className="mt-1 text-sm font-bold text-white">
               {isScanning || isDeepScanning
                 ? "Checking on-chain rewards…"
-                : unclaimedWins.length > 0
-                  ? `${formatLineaWeiAmountDisplay(totalUnclaimedWei)} LINEA across ${unclaimedWins.length} epoch${unclaimedWins.length === 1 ? "" : "s"}`
-                  : "No claimable rewards found"}
+                : rewardsWalletPresentation.message
+                  ?? (unclaimedWins.length > 0
+                    ? `${formatLineaWeiAmountDisplay(totalUnclaimedWei)} LINEA across ${unclaimedWins.length} epoch${unclaimedWins.length === 1 ? "" : "s"}`
+                    : "No claimable rewards found")}
             </p>
           </div>
-          {unclaimedWins.length > 1 && (
+          {rewardsWalletCta === "login" ? (
+            <UiButton onClick={requestWalletLogin} variant="primary" size="sm" className="min-h-11 shrink-0 px-3">
+              Log in
+            </UiButton>
+          ) : rewardsWalletCta === "create" ? (
+            <UiButton onClick={onCreateEmbeddedWallet} variant="primary" size="sm" className="min-h-11 shrink-0 px-3">
+              Create wallet
+            </UiButton>
+          ) : unclaimedWins.length > 1 && (
             <UiButton onClick={onClaimAll} disabled={isClaiming} loading={isClaiming} variant="warning" size="sm" className="min-h-11 shrink-0 px-3">
               Claim all
             </UiButton>
           )}
         </div>
-        {unclaimedWins.length === 1 && (
+        {rewardsWalletCta === "ready" && unclaimedWins.length === 1 && (
           <UiButton onClick={() => onClaim(unclaimedWins[0]!.epoch)} disabled={isClaiming} loading={isClaiming} variant="warning" size="sm" fullWidth className="mt-3 min-h-11">
             Claim reward
           </UiButton>
         )}
-        {!isScanning && !isDeepScanning && unclaimedWins.length === 0 && walletAddress && (
+        {rewardsWalletCta === "ready" && !isScanning && !isDeepScanning && unclaimedWins.length === 0 && walletAddress && (
           <UiButton onClick={onScan} variant="ghost" size="sm" fullWidth className="mt-3 min-h-11">
             Check rewards
           </UiButton>
