@@ -88,6 +88,25 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - P1.17 self-tests passed at `7905dc764`: collector `85` cases (schema `3`) and
   verifier `55` cases (schema `3`). They do not replace the final immutable
   clean-SHA seal pair, headed native-hidden two-hour run, or strict verification.
+
+## Latest local corrective work
+
+- Reward scanning now fails closed on incomplete or untrusted data: the P0 path
+  records strict/full verification and cache provenance rather than presenting a
+  partial cache as a complete reward result. Desktop and mobile status UI expose
+  the resulting loading/stale/error/partial state, and the mobile P1 review
+  received its corrective follow-up.
+- The local accessibility pass includes the `d042` corrective work. A local,
+  read-only Playwright activity check also passed for the available flow; its
+  external bootstrap stayed intentionally read-only and limited by the absence
+  of an external authenticated/runtime fixture. It is neither production nor
+  browser-launch proof.
+- Dependencies were restored with `npm ci` for the local verification path. No
+  wallet, signing, approval, bet, claim, deployment, or other chain write
+  occurred. The protected SQLite base, WAL, and SHM remained unchanged.
+- This is local mutable-worktree evidence only. It does not establish a full
+  campaign pass, immutable-SHA seal, hosted readiness, or real wallet flow.
+
 ## Campaign status
 
 - `local-20260821-final-r3` iterations 1–3 completed all seven isolated gates.
