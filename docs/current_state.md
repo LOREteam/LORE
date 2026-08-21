@@ -47,8 +47,10 @@ fixtures remain the only permitted DB target for local test code.
 - Testnet proof completion now fails closed unless one canonical canary
   admission binds exactly one runtime-identity preflight and one wallet
   preflight per admitted role. A declared approval also requires one successful
-  receipt whose exact allowance equals the admitted cap. This does not
-  constitute a signed canary or hosted topology campaign.
+  receipt whose exact allowance equals the admitted cap. The managed supervisor
+  passes its fresh run id to the strict analyzer, so replayed evidence from a
+  different run also fails. This does not constitute a signed canary or hosted
+  topology campaign.
 - Site hardening includes a real guest login CTA bridge, recovery-copy
   consistency, transaction-bound jackpot sharing, persistent/error-aware wallet
   transfer history, mobile rewards/onboarding/layer fixes, and dedicated public
