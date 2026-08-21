@@ -3914,10 +3914,63 @@ export function runReleaseOperationsTests() {
     /const singleTx = useEpochBoundBets[\s\S]*const batchTx = useEpochBoundBets/,
     "wallet playtest must keep both V10 sends on the protected path",
   );
-  assert.match(
-    liveRoundCanarySource,
-    /const DRY_RUN = !LIVE_EXECUTION_CONFIRMED[\s\S]*DRY_RUN && hasSigningMaterialInEnvironment\(\)[\s\S]*async function main\(\)[\s\S]*const publicWalletConfig = loadLiveTestPublicWalletConfig\([\s\S]*if \(DRY_RUN\) \{[\s\S]*wallets = loadDryRunWallets\(publicWalletConfig\);[\s\S]*\} else \{[\s\S]*executionWalletConfig = loadExecutionWalletAdmission\([\s\S]*wallets = loadWallets\(executionWalletConfig\);/,
-    "live canary dry-run must read only public role addresses and defer wallet-key loading to explicit execution",
+  const liveCanaryDryRunPolicy = [
+    "const LIVE_EXECUTION_CONFIRMED =",
+    '  process.env.LIVE_TEST_EXECUTE === "1" && process.argv.includes("--execute-live");',
+    "const DRY_RUN = !LIVE_EXECUTION_CONFIRMED || (V10_MATRIX_ONLY && !V10_MATRIX_EXECUTE);",
+  ].join("\n");
+  const liveCanaryDryRunPolicyOffset = liveRoundCanarySource.indexOf(liveCanaryDryRunPolicy);
+  const liveCanaryMainStart = liveRoundCanarySource.indexOf("async function main() {");
+  assert.ok(
+    liveCanaryDryRunPolicyOffset >= 0 && liveCanaryDryRunPolicyOffset < liveCanaryMainStart,
+    "live canary must remain dry-run by default and require both explicit live consent and V10 matrix execution opt-in",
+  );
+  assert.notEqual(liveCanaryMainStart, -1, "live canary must retain its entry point");
+  const liveCanaryMainSource = liveRoundCanarySource.slice(liveCanaryMainStart);
+  const liveOnlyExecutionBranch = [
+    "if (!DRY_RUN) {",
+    "    // The public file is re-read while loading the signing keys so a",
+    "    // post-Preview address-set change fails closed after the recorded admission.",
+    "    executionWalletConfig = loadExecutionWalletAdmission({",
+    "      cwd: process.cwd(),",
+    "      environment: process.env,",
+    "      expectedWalletSetSha256: publicWalletConfig.walletSetSha256,",
+    "      publicConfig: publicWalletConfig,",
+    "    }) as ExecutionWalletAdmission;",
+    "    wallets = loadWallets(executionWalletConfig);",
+    "    console.log(",
+    '      `[live-canary] executionWalletBinding walletSetSha256=${executionWalletConfig.walletSetSha256} ` +',
+    '        "signingMaterialLoaded=true signatureRequested=false",',
+    "    );",
+    "  }",
+  ].join("\n");
+  const canaryMainOffsets = Object.fromEntries([
+    ["dryRunSigningCheck", liveCanaryMainSource.indexOf("const signingMaterialLoaded = hasSigningMaterialInEnvironment();")],
+    ["dryRunSigningRefusal", liveCanaryMainSource.indexOf('if (DRY_RUN && signingMaterialLoaded) {\n    throw new Error("Dry-run canary refuses signing material");\n  }')],
+    ["publicWalletAdmission", liveCanaryMainSource.indexOf("const publicWalletConfig = loadLiveTestPublicWalletConfig({")],
+    ["runtimeProof", liveCanaryMainSource.indexOf("const runtimeIdentity = await assertV10RuntimeIdentity({")],
+    ["publicOnlyWallets", liveCanaryMainSource.indexOf("const admissionWallets = loadDryRunWallets(publicWalletConfig);")],
+    ["pinnedAdmission", liveCanaryMainSource.indexOf("writeCanaryAdmission({\n    logPath,\n    previewBinding,\n    runtimeIdentity,\n    deploymentManifest,\n    plannedSpendByRole,\n    walletSetSha256: publicWalletConfig.walletSetSha256,\n    wallets: admissionWallets,\n  });")],
+    ["liveOnlyExecutionBranch", liveCanaryMainSource.indexOf(liveOnlyExecutionBranch)],
+    ["tokenRead", liveCanaryMainSource.indexOf("const contractToken = await publicClient.readContract({")],
+    ["preflight", liveCanaryMainSource.indexOf("await runPreflight(logPath, publicClient, wallets, plannedSpendByRole);")],
+    ["dryRunReturn", liveCanaryMainSource.indexOf("if (DRY_RUN) return;")],
+  ]);
+  for (const [name, offset] of Object.entries(canaryMainOffsets)) {
+    assert.ok(offset >= 0, `live canary main is missing ${name} security anchor`);
+  }
+
+  assert.ok(
+    canaryMainOffsets.dryRunSigningCheck < canaryMainOffsets.dryRunSigningRefusal
+      && canaryMainOffsets.dryRunSigningRefusal < canaryMainOffsets.publicWalletAdmission
+      && canaryMainOffsets.publicWalletAdmission < canaryMainOffsets.runtimeProof
+      && canaryMainOffsets.runtimeProof < canaryMainOffsets.publicOnlyWallets
+      && canaryMainOffsets.publicOnlyWallets < canaryMainOffsets.pinnedAdmission
+      && canaryMainOffsets.pinnedAdmission < canaryMainOffsets.liveOnlyExecutionBranch
+      && canaryMainOffsets.liveOnlyExecutionBranch < canaryMainOffsets.tokenRead
+      && canaryMainOffsets.tokenRead < canaryMainOffsets.preflight
+      && canaryMainOffsets.preflight < canaryMainOffsets.dryRunReturn,
+    "live canary must reject dry-run signing material and admit runtime-verified pinned public wallets before execution keys, token reads, or preflight",
   );
   assert.match(
     liveRoundCanarySource,
