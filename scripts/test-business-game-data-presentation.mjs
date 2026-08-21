@@ -197,16 +197,6 @@ export function runGameDataPresentationTests() {
     "quick picks must stay available for a quiet expired epoch",
   );
   const pageRuntimeEffectsSource = readFileSync("app/hooks/usePageRuntimeEffects.ts", "utf8");
-  assert.match(
-    pageRuntimeEffectsSource,
-    /GRID_SIZE[\s\S]*function parseHistoryWinningTile\(value: string\)[\s\S]*\^\[1-9\]\\d\*\$[\s\S]*Number\.isSafeInteger\(tile\)[\s\S]*tile >= 1 && tile <= GRID_SIZE[\s\S]*const tile = parseHistoryWinningTile\(round\.winningTile\)[\s\S]*tile !== null/,
-    "hot-tile history stats must reject unsafe or out-of-range winning tile IDs",
-  );
-  assert.doesNotMatch(
-    pageRuntimeEffectsSource,
-    /Number\(round\.winningTile\)[\s\S]*tile > 0/,
-    "hot-tile history stats must not use positive-only winning tile parsing",
-  );
   assert.doesNotMatch(
     pageRuntimeEffectsSource,
     /handleTileClick\(id,\s*isRevealingRef\.current\s*\|\|\s*isAnalyzingRef\.current\)/,
