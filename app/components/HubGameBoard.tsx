@@ -79,6 +79,39 @@ export function getMobileRewardsWalletPresentation({
   };
 }
 
+export function getCurrentWalletMobileRewards({
+  walletAddress,
+  rewardScanState,
+  unclaimedWins,
+}: {
+  walletAddress?: string | null;
+  rewardScanState: RewardScanVerificationState;
+  unclaimedWins: UnclaimedWin[];
+}) {
+  const currentWalletAddress = walletAddress?.toLowerCase() ?? null;
+  const hasCurrentWalletData = Boolean(
+    currentWalletAddress
+      && rewardScanState.walletAddress
+      && rewardScanState.walletAddress.toLowerCase() === currentWalletAddress,
+  );
+  return {
+    hasCurrentWalletData,
+    unclaimedWins: hasCurrentWalletData ? unclaimedWins : [],
+    rewardScanState: hasCurrentWalletData
+      ? rewardScanState
+      : {
+          status: "idle" as const,
+          walletAddress: currentWalletAddress,
+          lastVerifiedAt: null,
+          incomplete: false,
+          error: null,
+        },
+  };
+}
+export function canClaimCurrentMobileRewards(walletCta: ReturnType<typeof getMobileRewardsWalletPresentation>["walletCta"], hasCurrentWalletData: boolean) {
+  return walletCta === "ready" && hasCurrentWalletData;
+}
+
 export function getMobileRewardScanPresentation({
   rewardScanState,
   isScanning,
@@ -92,7 +125,13 @@ export function getMobileRewardScanPresentation({
 }) {
   const scanInProgress = isScanning || isDeepScanning || rewardScanState.status === "loading" || rewardScanState.status === "refreshing";
   if (rewardScanState.incomplete) {
-    return { message: "Reward scan was incomplete. Results may be partial.", canRetry: true, scanInProgress };
+    return {
+      message: rewardScanState.status === "stale" && rewardScanState.error
+        ? "Refresh failed. Results may be partial."
+        : "Reward scan was incomplete. Results may be partial.",
+      canRetry: true,
+      scanInProgress,
+    };
   }
   if (scanInProgress) {
     return { message: "Checking on-chain rewards…", canRetry: true, scanInProgress };
@@ -101,7 +140,13 @@ export function getMobileRewardScanPresentation({
     return { message: "Rewards have not been checked yet.", canRetry: true, scanInProgress };
   }
   if (rewardScanState.status === "stale") {
-    return { message: hasVisibleWins ? "Showing last verified rewards." : "Rewards need verification.", canRetry: true, scanInProgress };
+    return {
+      message: rewardScanState.error
+        ? hasVisibleWins ? "Refresh failed. Showing last verified rewards." : "Refresh failed. Rewards need verification."
+        : hasVisibleWins ? "Showing last verified rewards." : "Rewards need verification.",
+      canRetry: true,
+      scanInProgress,
+    };
   }
   if (rewardScanState.status === "error") {
     return { message: "Reward scan failed.", canRetry: true, scanInProgress };
@@ -148,7 +193,9 @@ export const HubGameBoard = React.memo(function HubGameBoard({
   onClaim,
   onClaimAll,
 }: HubGameBoardProps) {
-  const totalUnclaimedWei = unclaimedWins.reduce((total, win) => {
+  const currentWalletRewards = getCurrentWalletMobileRewards({ walletAddress, rewardScanState, unclaimedWins });
+  const currentWalletUnclaimedWins = currentWalletRewards.unclaimedWins;
+  const totalUnclaimedWei = currentWalletUnclaimedWins.reduce((total, win) => {
     try {
       return total + BigInt(win.amountWei);
     } catch {
@@ -161,14 +208,15 @@ export const HubGameBoard = React.memo(function HubGameBoard({
     embeddedWalletSyncing,
   });
   const { walletCta: rewardsWalletCta } = rewardsWalletPresentation;
-  const rewardSummary = unclaimedWins.length > 0
-    ? `${formatLineaWeiAmountDisplay(totalUnclaimedWei)} LINEA across ${unclaimedWins.length} epoch${unclaimedWins.length === 1 ? "" : "s"}`
+  const canClaimCurrentRewards = canClaimCurrentMobileRewards(rewardsWalletCta, currentWalletRewards.hasCurrentWalletData);
+  const rewardSummary = currentWalletUnclaimedWins.length > 0
+    ? `${formatLineaWeiAmountDisplay(totalUnclaimedWei)} LINEA across ${currentWalletUnclaimedWins.length} epoch${currentWalletUnclaimedWins.length === 1 ? "" : "s"}`
     : null;
   const rewardScanPresentation = getMobileRewardScanPresentation({
-    rewardScanState,
+    rewardScanState: currentWalletRewards.rewardScanState,
     isScanning,
     isDeepScanning,
-    hasVisibleWins: unclaimedWins.length > 0,
+    hasVisibleWins: currentWalletUnclaimedWins.length > 0,
   });
   const mobileRewardsMessage = rewardsWalletPresentation.message
     ?? (rewardSummary
@@ -176,7 +224,7 @@ export const HubGameBoard = React.memo(function HubGameBoard({
       : rewardScanPresentation.message);
   const shouldShowRewardScanAction = rewardsWalletCta === "ready"
     && Boolean(walletAddress)
-    && (unclaimedWins.length === 0 || rewardScanPresentation.canRetry);
+    && (currentWalletUnclaimedWins.length === 0 || rewardScanPresentation.canRetry);
   const onboarding = getOnboardingState({ walletAddress, walletConnected, formattedBalance, formattedEthBalance, lowEthBalance });
   const onboardingComplete = Object.values(onboarding).every(Boolean);
   const onboardingAction = getOnboardingNextAction({ onboarding, walletCta: rewardsWalletCta });
@@ -272,14 +320,14 @@ export const HubGameBoard = React.memo(function HubGameBoard({
             <UiButton onClick={onCreateEmbeddedWallet} variant="primary" size="sm" className="min-h-11 shrink-0 px-3">
               Create wallet
             </UiButton>
-          ) : unclaimedWins.length > 1 && (
+          ) : canClaimCurrentRewards && currentWalletUnclaimedWins.length > 1 && (
             <UiButton onClick={onClaimAll} disabled={isClaiming} loading={isClaiming} variant="warning" size="sm" className="min-h-11 shrink-0 px-3">
               Claim all
             </UiButton>
           )}
         </div>
-        {rewardsWalletCta === "ready" && unclaimedWins.length === 1 && (
-          <UiButton onClick={() => onClaim(unclaimedWins[0]!.epoch)} disabled={isClaiming} loading={isClaiming} variant="warning" size="sm" fullWidth className="mt-3 min-h-11">
+        {canClaimCurrentRewards && currentWalletUnclaimedWins.length === 1 && (
+          <UiButton onClick={() => onClaim(currentWalletUnclaimedWins[0]!.epoch)} disabled={isClaiming} loading={isClaiming} variant="warning" size="sm" fullWidth className="mt-3 min-h-11">
             Claim reward
           </UiButton>
         )}
