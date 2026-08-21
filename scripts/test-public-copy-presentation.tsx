@@ -13,25 +13,41 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+type SidebarProps = React.ComponentProps<typeof Sidebar>;
+
+function renderSidebar(options: Partial<SidebarProps> = {}) {
+  return renderToStaticMarkup(
+    <Sidebar
+      activeTab="hub"
+      currentEpoch={1n}
+      onTabChange={() => {}}
+      hotTiles={[]}
+      unclaimedWins={[]}
+      rewardScanState={{
+        status: "verified",
+        walletAddress: "0xabc",
+        lastVerifiedAt: 1_000,
+        incomplete: false,
+        error: null,
+      }}
+      isScanning={false}
+      isDeepScanning={false}
+      isClaiming={false}
+      onClaim={() => {}}
+      onClaimAll={() => {}}
+      onScan={() => {}}
+      {...options}
+    />,
+  );
+}
 const whitePaper = renderToStaticMarkup(<WhitePaper />);
 const faq = renderToStaticMarkup(<FAQ />);
-const sidebar = renderToStaticMarkup(
-  <Sidebar
-    activeTab="hub"
-    currentEpoch={1n}
-    onTabChange={() => {}}
-    hotTiles={[]}
-    unclaimedWins={[{ epoch: "17", amountWei: "1000000000000000000" }]}
-    isScanning={false}
-    isDeepScanning={false}
-    isClaiming
-    onClaim={() => {}}
-    onClaimAll={() => {}}
-    mobileOpen
-    onMobileClose={() => {}}
-  />,
-);
-
+const sidebar = renderSidebar({
+  unclaimedWins: [{ epoch: "17", amountWei: "1000000000000000000" }],
+  isClaiming: true,
+  mobileOpen: true,
+  onMobileClose: () => {},
+});
 const disconnectedMobileRewards = getMobileRewardsWalletPresentation({
   walletAuthenticated: false,
   walletConnected: false,
@@ -76,7 +92,34 @@ assert.match(whitePaper, /<a[^>]*href="\/terms"[^>]*>Terms of Play<\/a>/, "White
 assert.match(sidebar, /<a[^>]*href="\/privacy"[^>]*class="[^"]*min-h-11[^"]*"[^>]*>Privacy<\/a>/, "Sidebar Privacy link must be rendered with a mobile touch target");
 assert.match(sidebar, /<a[^>]*href="\/terms"[^>]*class="[^"]*min-h-11[^"]*"[^>]*>Terms<\/a>/, "Sidebar Terms link must be rendered with a mobile touch target");
 assert.match(sidebar, /aria-label="Reward claim is already pending"[^>]*title="Reward claim is already pending"/, "Sidebar pending claim action must retain an accessible name and title");
+assert.match(sidebar, /Rewards verified\. Last verified/, "verified visible rewards must expose their verification watermark");
 
+const verifiedEmptySidebar = renderSidebar();
+assert.match(verifiedEmptySidebar, /No claimable rewards/, "only a complete verified scan may report an empty rewards result");
+assert.doesNotMatch(verifiedEmptySidebar, /Retry reward scan/, "a current verified empty result should not imply a retry is necessary");
+
+const idleSidebar = renderSidebar({ rewardScanState: { status: "idle", walletAddress: "0xabc", lastVerifiedAt: null, incomplete: false, error: null } });
+assert.match(idleSidebar, /Rewards have not been checked yet\./, "idle rewards must not use the empty-result copy");
+assert.match(idleSidebar, /aria-label="Retry reward scan"/, "idle rewards must expose a scan action");
+
+const loadingSidebar = renderSidebar({ isScanning: true, rewardScanState: { status: "loading", walletAddress: "0xabc", lastVerifiedAt: null, incomplete: false, error: null } });
+assert.match(loadingSidebar, /Checking reward history\./, "loading rewards must remain explicit");
+assert.match(loadingSidebar, /<button[^>]*aria-label="Reward scan is already running"[^>]*>/, "loading rewards must keep the scan action visible");
+assert.doesNotMatch(loadingSidebar, /No claimable rewards/, "loading rewards must not use empty-result copy");
+
+const staleSidebar = renderSidebar({ unclaimedWins: [{ epoch: "101", amountWei: "1000000000000000000" }], rewardScanState: { status: "stale", walletAddress: "0xabc", lastVerifiedAt: 1_000, incomplete: false, error: null } });
+assert.match(staleSidebar, /Showing last verified rewards\./, "stale rewards must retain their provenance");
+assert.match(staleSidebar, /#101/, "stale rewards must retain visible prior wins");
+assert.match(staleSidebar, /aria-label="Retry reward scan"/, "stale rewards must expose refresh");
+
+const errorSidebar = renderSidebar({ rewardScanState: { status: "error", walletAddress: "0xabc", lastVerifiedAt: null, incomplete: false, error: "RPC unavailable" } });
+assert.match(errorSidebar, /Reward scan failed\./, "failed rewards scan must not use empty-result copy");
+assert.match(errorSidebar, /aria-label="Retry reward scan"/, "failed rewards scan must expose retry");
+
+const partialSidebar = renderSidebar({ rewardScanState: { status: "stale", walletAddress: "0xabc", lastVerifiedAt: 1_000, incomplete: true, error: "short multicall" } });
+assert.match(partialSidebar, /Reward scan was incomplete\. Results may be partial\./, "partial rewards data must remain explicit");
+assert.match(partialSidebar, /aria-label="Retry reward scan"/, "partial rewards data must expose retry");
+assert.doesNotMatch(partialSidebar, /No claimable rewards/, "partial rewards data must not use empty-result copy");
 const lineaOreClientSource = readFileSync("app/LineaOreClient.tsx", "utf8");
 assert.match(lineaOreClientSource, /aria-expanded=\{mobileSidebarOpen\}/, "mobile sidebar opener must expose its expanded state");
 assert.match(lineaOreClientSource, /aria-controls="lore-sidebar"/, "mobile sidebar opener must identify the controlled menu");

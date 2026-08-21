@@ -172,6 +172,7 @@ export function buildLineaOreClientRuntimeViewProps({
     refreshPendingTransactionStatus: walletRuntime.refreshPendingTransactionStatus,
     rolloverAmount: gameData.rolloverAmount,
     runningParams: hubRuntime.runningParams,
+    rewardScanState: hubRuntime.rewardScanState,
     scanRewards: hubRuntime.scanRewards,
     selectedTilesCount: hubRuntime.selectedTiles.length,
     setTiles: hubRuntime.setTiles,

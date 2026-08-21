@@ -2,10 +2,10 @@
 
 import React, { useCallback, useMemo } from "react";
 import Image from "next/image";
-import type { TabId, UnclaimedWin } from "../lib/types";
+import type { RewardScanVerificationState, TabId, UnclaimedWin } from "../lib/types";
 import { formatLineaWeiAmountDisplay } from "../lib/tokenAmountMath";
 import { useGlobalStats } from "../hooks/useGlobalStats";
-import { searchingQuotes, emptyStates } from "../lib/loreTexts";
+import { searchingQuotes } from "../lib/loreTexts";
 import { LoreText } from "./LoreText";
 import { cn } from "../lib/cn";
 import { UiButton } from "./ui/UiButton";
@@ -25,11 +25,13 @@ interface SidebarProps {
   onTabChange: (tab: TabId) => void;
   hotTiles?: HotTile[];
   unclaimedWins: UnclaimedWin[];
+  rewardScanState: RewardScanVerificationState;
   isScanning: boolean;
   isDeepScanning: boolean;
   isClaiming: boolean;
   onClaim: (epochId: string) => void;
   onClaimAll: () => void;
+  onScan: () => void;
   /** Mobile drawer state */
   mobileOpen?: boolean;
   onMobileClose?: () => void;
@@ -52,10 +54,12 @@ export const Sidebar = React.memo(function Sidebar({
   onTabChange,
   hotTiles,
   unclaimedWins,
+  rewardScanState,
   isScanning,
   isClaiming,
   onClaim,
   onClaimAll,
+  onScan,
   mobileOpen = false,
   onMobileClose,
 }: SidebarProps) {
@@ -66,6 +70,9 @@ export const Sidebar = React.memo(function Sidebar({
   );
   const hotTilesReady = Boolean(hotTiles && hotTiles.length > 0);
   const claimAllLabel = isClaiming ? "Reward claim is already pending" : `Claim all ${unclaimedWins.length} rewards`;
+  const canConfirmEmptyRewards = rewardScanState.status === "verified" && !rewardScanState.incomplete;
+  const rewardStatus = getRewardScanStatus(rewardScanState, isScanning, unclaimedWins.length > 0);
+  const retryLabel = isScanning ? "Reward scan is already running" : "Retry reward scan";
 
   const handleMobileTabChange = useCallback(
     (tab: TabId) => {
@@ -311,38 +318,46 @@ export const Sidebar = React.memo(function Sidebar({
                   </UiButton>
                 )}
               </div>
-              {isScanning && unclaimedWins.length === 0 ? (
-                <div className="flex items-center justify-center gap-1.5 py-1">
-                  <svg className="h-2.5 w-2.5 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  <span className="text-[8px] font-bold uppercase tracking-widest text-gray-500">
-                    <LoreText items={searchingQuotes} />
-                  </span>
-                </div>
-              ) : unclaimedWins.length > 0 ? (
-                <div className="-mx-1 flex flex-col gap-1 pb-0.5">
-                  {unclaimedWins.map((win, idx) => (
-                    <RewardClaimRow
-                      key={win.epoch}
-                      epoch={win.epoch}
-                      amountWei={win.amountWei}
-                      delay={idx * 0.05}
-                      isClaiming={isClaiming}
-                      onClaim={onClaim}
-                    />
-                  ))}
-                </div>
-              ) : (
+              {unclaimedWins.length > 0 ? (
+                <>
+                  <RewardScanStatus status={rewardStatus} onScan={onScan} retryLabel={retryLabel} isScanning={isScanning} />
+                  <div className="-mx-1 flex flex-col gap-1 pb-0.5">
+                    {unclaimedWins.map((win, idx) => (
+                      <RewardClaimRow
+                        key={win.epoch}
+                        epoch={win.epoch}
+                        amountWei={win.amountWei}
+                        delay={idx * 0.05}
+                        isClaiming={isClaiming}
+                        onClaim={onClaim}
+                      />
+                    ))}
+                  </div>
+                </>
+              ) : isScanning || rewardScanState.status === "loading" ? (
+                <>
+                  <div role="status" aria-live="polite" aria-busy="true" className="flex items-center justify-center gap-1.5 py-1">
+                    <svg className="h-2.5 w-2.5 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <span className="text-[8px] font-bold uppercase tracking-widest text-gray-500">
+                      <LoreText items={searchingQuotes} />
+                    </span>
+                  </div>
+                  <RewardScanStatus status={rewardStatus} onScan={onScan} retryLabel={retryLabel} isScanning={isScanning} />
+                </>
+              ) : canConfirmEmptyRewards ? (
                 <div data-testid="rewards-empty-state" className="flex items-center justify-center gap-1.5 py-1">
                   <svg className="h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7v10l8 4" />
                   </svg>
                   <span className="text-[9px] font-bold italic tracking-widest text-gray-400">
-                    <LoreText items={emptyStates.rewards} />
+                    No claimable rewards
                   </span>
                 </div>
+              ) : (
+                <RewardScanStatus status={rewardStatus} onScan={onScan} retryLabel={retryLabel} isScanning={isScanning} />
               )}
             </div>
           </UiPanel>
@@ -367,6 +382,67 @@ export const Sidebar = React.memo(function Sidebar({
   );
 });
 
+function getRewardScanStatus(
+  rewardScanState: RewardScanVerificationState,
+  isScanning: boolean,
+  hasVisibleWins: boolean,
+) {
+  const lastVerified = rewardScanState.lastVerifiedAt
+    ? ` Last verified ${new Date(rewardScanState.lastVerifiedAt).toLocaleString()}.`
+    : "";
+  if (rewardScanState.incomplete) {
+    return `Reward scan was incomplete. Results may be partial.${lastVerified}`;
+  }
+  if (rewardScanState.status === "error") {
+    return `Reward scan failed.${lastVerified}`;
+  }
+  if (rewardScanState.status === "stale") {
+    return `${hasVisibleWins ? "Showing last verified rewards." : "Rewards need verification."}${lastVerified}`;
+  }
+  if (rewardScanState.status === "idle") {
+    return "Rewards have not been checked yet.";
+  }
+  if (rewardScanState.status === "loading" || isScanning) {
+    return "Checking reward history.";
+  }
+  if (rewardScanState.status === "refreshing") {
+    return `Refreshing reward verification.${lastVerified}`;
+  }
+  if (rewardScanState.status === "verified" && hasVisibleWins) {
+    return `Rewards verified.${lastVerified}`;
+  }
+  return null;
+}
+
+const RewardScanStatus = React.memo(function RewardScanStatus({
+  status,
+  onScan,
+  retryLabel,
+  isScanning,
+}: {
+  status: string | null;
+  onScan: () => void;
+  retryLabel: string;
+  isScanning: boolean;
+}) {
+  if (!status) return null;
+  return (
+    <div role="status" aria-live="polite" className="flex items-center justify-center gap-1.5 py-1 text-center">
+      <span className="text-[9px] font-medium text-amber-200/90">{status}</span>
+      <UiButton
+        aria-label={retryLabel}
+        title={retryLabel}
+        onClick={onScan}
+        disabled={isScanning}
+        variant="ghost"
+        size="xs"
+        className="h-6 shrink-0 px-2 text-[9px]"
+      >
+        {isScanning ? "Scanning" : "Retry"}
+      </UiButton>
+    </div>
+  );
+});
 const RewardClaimRow = React.memo(function RewardClaimRow({
   epoch,
   amountWei,

@@ -134,6 +134,7 @@ interface CreateLineaOreClientViewPropsOptions {
   refreshPendingTransactionStatus: WalletSettingsProps["onRefreshPendingTx"];
   rolloverAmount: HeaderProps["rolloverAmount"];
   runningParams: PageTabContentProps["hubProps"]["runningParams"];
+  rewardScanState: SidebarProps["rewardScanState"];
   scanRewards: PageTabContentProps["hubProps"]["onScan"];
   selectedTilesCount: PageTabContentProps["hubProps"]["selectedTilesCount"];
   setTiles: PageTabContentProps["hubProps"]["onQuickPickTiles"];
@@ -295,6 +296,7 @@ export function createLineaOreClientViewProps({
   refreshPendingTransactionStatus,
   rolloverAmount,
   runningParams,
+  rewardScanState,
   scanRewards,
   selectedTilesCount,
   setTiles,
@@ -367,11 +369,13 @@ export function createLineaOreClientViewProps({
       handleTabChange,
       visibleHotTiles,
       unclaimedWins,
+      rewardScanState,
       isScanning,
       isDeepScanning,
       isClaiming,
       claimReward,
       claimAll,
+      scanRewards,
     }),
     headerProps: buildHeaderProps({
       actualCurrentEpoch,

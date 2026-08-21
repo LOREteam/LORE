@@ -19,11 +19,13 @@ type BuildSidebarPropsOptions = {
   handleTabChange: SidebarProps["onTabChange"];
   visibleHotTiles: SidebarProps["hotTiles"];
   unclaimedWins: SidebarProps["unclaimedWins"];
+  rewardScanState: SidebarProps["rewardScanState"];
   isScanning: SidebarProps["isScanning"];
   isDeepScanning: SidebarProps["isDeepScanning"];
   isClaiming: SidebarProps["isClaiming"];
   claimReward: SidebarProps["onClaim"];
   claimAll: SidebarProps["onClaimAll"];
+  scanRewards: SidebarProps["onScan"];
 };
 
 export function buildSidebarProps({
@@ -33,11 +35,13 @@ export function buildSidebarProps({
   handleTabChange,
   visibleHotTiles,
   unclaimedWins,
+  rewardScanState,
   isScanning,
   isDeepScanning,
   isClaiming,
   claimReward,
   claimAll,
+  scanRewards,
 }: BuildSidebarPropsOptions): SidebarProps {
   return {
     activeTab,
@@ -46,11 +50,13 @@ export function buildSidebarProps({
     onTabChange: handleTabChange,
     hotTiles: visibleHotTiles,
     unclaimedWins,
+    rewardScanState,
     isScanning,
     isDeepScanning,
     isClaiming,
     onClaim: claimReward,
     onClaimAll: claimAll,
+    onScan: scanRewards,
   };
 }
 
