@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  closeSync,
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   mkdtempSync,
   readFileSync,
+  readSync,
+  readdirSync,
   renameSync,
   rmSync,
   rmdirSync,
@@ -118,6 +122,73 @@ function runCampaignFixturePowerShell(scriptPath, campaignId, { failEventWrite =
     timeout: 30_000,
     maxBuffer: 1024 * 1024,
     windowsHide: true,
+  });
+}
+
+// This is intentionally opt-in and temporary-root-only: it exists solely to
+// diagnose a nested detached-worktree fixture failure without exposing the
+// full fixture tree or unbounded child output in ordinary test failures.
+const retainCampaignFixtureOnFailure = process.env.LORE_CAMPAIGN_FIXTURE_RETAIN_ON_FAILURE === "1";
+const MAX_CAMPAIGN_FIXTURE_DIAGNOSTIC_BYTES = 3 * 1024;
+let retainCampaignFixture = false;
+
+function redactCampaignFixtureDiagnostic(value, root) {
+  const redacted = String(value ?? "")
+    .replaceAll(root, "<fixture-root>")
+    .replace(/https?:\/\/[^\s]+/gi, "<url>")
+    .replace(/[A-Za-z]:\\[^\r\n]*/g, "<path>")
+    .replace(/\\\\[^\\\r\n]+\\[^\r\n]*/g, "<path>");
+  const bytes = Buffer.from(redacted, "utf8");
+  return bytes.length <= MAX_CAMPAIGN_FIXTURE_DIAGNOSTIC_BYTES
+    ? redacted
+    : Buffer.from(bytes.subarray(bytes.length - MAX_CAMPAIGN_FIXTURE_DIAGNOSTIC_BYTES)).toString("utf8");
+}
+
+function readCampaignFixtureDiagnosticTail(path, root) {
+  try {
+    const bytes = Math.min(statSync(path).size, MAX_CAMPAIGN_FIXTURE_DIAGNOSTIC_BYTES);
+    if (bytes === 0) return "";
+    const descriptor = openSync(path, "r");
+    try {
+      const buffer = Buffer.allocUnsafe(bytes);
+      readSync(descriptor, buffer, 0, bytes, Math.max(0, statSync(path).size - bytes));
+      return redactCampaignFixtureDiagnostic(buffer.toString("utf8"), root);
+    } finally {
+      closeSync(descriptor);
+    }
+  } catch {
+    return "<unavailable>";
+  }
+}
+
+function campaignFixtureFailureDiagnostic(root, campaignId, run) {
+  const campaignDirectory = join(root, "artifacts", "test-campaign-2026-08-20", campaignId);
+  const summaryPath = join(campaignDirectory, "local-test-campaign.jsonl");
+  let newestLog;
+  try {
+    newestLog = existsSync(campaignDirectory)
+      ? readdirSync(campaignDirectory)
+        .filter((name) => /^local-\d{3}-.*\.log$/i.test(name))
+        .map((name) => ({ name, path: join(campaignDirectory, name), mtimeMs: statSync(join(campaignDirectory, name)).mtimeMs }))
+        .sort((left, right) => right.mtimeMs - left.mtimeMs || right.name.localeCompare(left.name))[0]
+      : undefined;
+  } catch {
+    newestLog = undefined;
+  }
+  return JSON.stringify({
+    campaignId,
+    exitStatus: run.status,
+    signal: run.signal,
+    stdoutTail: redactCampaignFixtureDiagnostic(run.stdout, root),
+    stderrTail: redactCampaignFixtureDiagnostic(run.stderr, root),
+    eventsTail: existsSync(summaryPath)
+      ? readCampaignFixtureDiagnosticTail(summaryPath, root)
+      : "<missing>",
+    newestChildLog: newestLog?.name ?? "<missing>",
+    newestChildLogTail: newestLog
+      ? readCampaignFixtureDiagnosticTail(newestLog.path, root)
+      : "<missing>",
+    retained: retainCampaignFixtureOnFailure,
   });
 }
 export function assertLocalCampaignSourceProvenance() {
@@ -281,10 +352,18 @@ export function assertLocalCampaignSourceProvenance() {
     };
 
     const clean = runCampaignFixturePowerShell(scriptPath, "fixture-clean");
-    assert.equal(clean.error, undefined, clean.error?.message);
-    assert.equal(clean.status, 0, `${clean.stdout ?? ""}${clean.stderr ?? ""}`);
     const cleanEvents = readEvents("fixture-clean");
-    assert.deepEqual(cleanEvents.map((event) => event.status), ["started", ...Array(7).fill("passed"), "completed"]);
+    const expectedCleanStatuses = ["started", ...Array(7).fill("passed"), "completed"];
+    const cleanUnexpected = clean.status !== 0
+      || clean.error !== undefined
+      || JSON.stringify(cleanEvents.map((event) => event.status)) !== JSON.stringify(expectedCleanStatuses);
+    const cleanDiagnostic = retainCampaignFixtureOnFailure && cleanUnexpected
+      ? campaignFixtureFailureDiagnostic(root, "fixture-clean", clean)
+      : null;
+    retainCampaignFixture = cleanDiagnostic !== null;
+    assert.equal(clean.error, undefined, clean.error?.message);
+    assert.equal(clean.status, 0, cleanDiagnostic ?? `${clean.stdout ?? ""}${clean.stderr ?? ""}`);
+    assert.deepEqual(cleanEvents.map((event) => event.status), expectedCleanStatuses, cleanDiagnostic ?? undefined);
     assertBoundSourceSha(cleanEvents, sourceSha);
 
     const eventWriteFailure = runCampaignFixturePowerShell(scriptPath, "fixture-event-write-failure", { failEventWrite: true });
@@ -626,7 +705,9 @@ export function assertLocalCampaignSourceProvenance() {
       "dirty rejection must happen before creating campaign evidence",
     );
   } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+    if (!retainCampaignFixture) {
+      rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+    }
   }
 }
 
