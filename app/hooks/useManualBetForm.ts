@@ -84,24 +84,29 @@ export function useManualBetForm({
   isAutoMining,
 }: UseManualBetFormOptions) {
   const [betAmount, setBetAmount] = useState("10.0");
+  const [manualBetStorageReady, setManualBetStorageReady] = useState(false);
 
   useEffect(() => {
     try {
-      if (typeof window === "undefined") return;
-      const restored = restoreManualBetAmount(window.localStorage);
-      if (restored !== null) setBetAmount(restored);
+      if (typeof window !== "undefined") {
+        const restored = restoreManualBetAmount(window.localStorage);
+        if (restored !== null) setBetAmount(restored);
+      }
     } catch {
       // ignore unavailable browser storage
+    } finally {
+      setManualBetStorageReady(true);
     }
   }, []);
 
   useEffect(() => {
     try {
+      if (!manualBetStorageReady) return;
       if (typeof window !== "undefined") persistManualBetAmount(window.localStorage, betAmount);
     } catch {
       // ignore unavailable browser storage
     }
-  }, [betAmount]);
+  }, [betAmount, manualBetStorageReady]);
   const totalBet = useMemo(() => safeParseFloat(betAmount) * selectedTilesCount, [betAmount, selectedTilesCount]);
   const betAmountError = useMemo(() => validateBetAmount(betAmount), [betAmount]);
   const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;

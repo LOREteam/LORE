@@ -41,6 +41,11 @@ export function runWalletFundingPresentationTests() {
     /function formatManualNumberDisplay\(value: number \| null \| undefined, fractionDigits = 2\)[\s\S]*formatDecimalTextFixed\(String\(value\), fractionDigits\)[\s\S]*totalBetDisplay[\s\S]*balanceDisplay[\s\S]*lineaDeficitDisplay/,
     "manual betting display amounts must be prepared through canonical decimal display formatting",
   );
+  assert.match(
+    fundingManualFormSource,
+    /const \[manualBetStorageReady, setManualBetStorageReady\] = useState\(false\);[\s\S]*setManualBetStorageReady\(true\);[\s\S]*if \(!manualBetStorageReady\) return;[\s\S]*persistManualBetAmount\(window\.localStorage, betAmount\);[\s\S]*\}, \[betAmount, manualBetStorageReady\]\);/,
+    "manual bet storage must not persist the default amount before restore completes",
+  );
   const currentWinsStorage = createManualBetStorage([
     [MANUAL_BET_AMOUNT_KEY, " 12.5 "],
     [LEGACY_MANUAL_BET_AMOUNT_KEY, "3.5"],
