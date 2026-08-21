@@ -4,11 +4,14 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { redactProofText } from "./redact-proof-output.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const TSX_CLI = createRequire(import.meta.url).resolve("tsx/cli");
 const MAX_OUTPUT_BYTES = 512 * 1024;
+const MAX_FAILURE_OUTPUT_CHARS = 4_000;
+const MAX_FAILURE_OUTPUT_LINES = 40;
 const RUN_DIR_PREFIX = "lore-p1-hardening-";
 
 const CORE_STEPS = [
@@ -155,6 +158,15 @@ function classifyFailure(result) {
   return "exit";
 }
 
+function compactFailureOutput(value) {
+  const redacted = redactProofText(value).trim();
+  if (!redacted) return "";
+  const tailLines = redacted.split(/\r?\n/).slice(-MAX_FAILURE_OUTPUT_LINES).join("\n");
+  return tailLines.length > MAX_FAILURE_OUTPUT_CHARS
+    ? tailLines.slice(-MAX_FAILURE_OUTPUT_CHARS)
+    : tailLines;
+}
+
 function runStep(step, childEnvironment) {
   const absolutePath = resolveStepFile(step);
   const startedAt = Date.now();
@@ -193,6 +205,8 @@ function runStep(step, childEnvironment) {
     signal: result.signal ?? null,
     stdoutBytes,
     stderrBytes,
+    stdoutTail: compactFailureOutput(result.stdout),
+    stderrTail: compactFailureOutput(result.stderr),
   };
 }
 
@@ -213,6 +227,8 @@ function emitSummary(summary, summaryOnly) {
     `(${summary.failureKind ?? "error"}) after ${summary.passedSteps}/${summary.totalSteps} steps; ` +
     `V10 EVM ${summary.evm}`,
   );
+  if (summary.stdoutTail) console.error(`[p1-hardening] stdout tail:\n${summary.stdoutTail}`);
+  if (summary.stderrTail) console.error(`[p1-hardening] stderr tail:\n${summary.stderrTail}`);
 }
 
 function main() {
@@ -272,6 +288,8 @@ function main() {
         signal: failure?.signal ?? null,
         stdoutBytes: failure?.stdoutBytes ?? 0,
         stderrBytes: failure?.stderrBytes ?? 0,
+        ...(failure?.stdoutTail ? { stdoutTail: failure.stdoutTail } : {}),
+        ...(failure?.stderrTail ? { stderrTail: failure.stderrTail } : {}),
         durationMs: Date.now() - startedAt,
         evm: options.includeEvm ? "included" : "skipped",
       }
