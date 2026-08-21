@@ -181,6 +181,9 @@ assert.match(sidePanelSource, /manualWalletCta === "login"[\s\S]*requestWalletLo
 assert.match(sidePanelSource, /autoWalletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*autoWalletCta === "create"[\s\S]*onWalletSetup\(\)/, "mobile Auto-Miner CTA must separate guest login from authenticated wallet setup");
 assert.match(betPanelSource, /walletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*walletCta === "create"[\s\S]*onWalletSetup/, "desktop CTA must separate guest login from authenticated wallet setup");
 assert.match(sidePanelSource, /handleWalletSetup[\s\S]*actionInFlightRef\.current[\s\S]*runWalletSetupAttempt\(onCreateEmbeddedWallet\)/, "manual and Auto-Miner wallet setup must share a caught duplicate-action guard");
+assert.match(sidePanelSource, /onCreateEmbeddedWallet: \(\) => Promise<void>/, "wallet setup must retain the async creation contract");
+assert.match(sidePanelSource, /aria-describedby=\{manualBetForm\.betAmountError \? "mobile-bet-amount-error" : undefined\}/, "the mobile amount input must describe only its validation message");
+assert.match(sidePanelSource, /id="mobile-wallet-setup-status"[\s\S]*role=\{walletSetupError \? "alert" : "status"\}[\s\S]*aria-live="polite"[\s\S]*aria-busy=\{walletSetupCreating \|\| undefined\}/, "wallet setup creation must expose a separate live busy status");
 assert.equal(
   (sidePanelSource.match(/mobileActionDocked/g) ?? []).length,
   2,

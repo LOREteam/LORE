@@ -26,9 +26,9 @@ interface RunningParams {
   rounds: number;
 }
 
-export async function runWalletSetupAttempt(onCreateEmbeddedWallet: () => void): Promise<"complete" | "failed"> {
+export async function runWalletSetupAttempt(onCreateEmbeddedWallet: () => Promise<void>): Promise<"complete" | "failed"> {
   try {
-    await Promise.resolve(onCreateEmbeddedWallet());
+    await onCreateEmbeddedWallet();
     return "complete";
   } catch {
     return "failed";
@@ -44,7 +44,7 @@ interface HubSidePanelProps {
   walletAuthenticated: boolean;
   walletConnected: boolean;
   embeddedWalletSyncing: boolean;
-  onCreateEmbeddedWallet: () => void;
+  onCreateEmbeddedWallet: () => Promise<void>;
   liveStateReady: boolean;
   readOnlyReason?: string | null;
   gridSelectedTiles: number[];
@@ -404,8 +404,8 @@ function MobileMiningActionBar({
     walletSetupCreating,
   });
   const autoWalletCta = deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing, walletSetupCreating });
-  const visibleStatus = walletSetupError
-    ?? manualBetForm.betAmountError
+  const mobileWalletStatus = walletSetupError ?? (walletSetupCreating ? "Creating wallet..." : null);
+  const visibleStatus = manualBetForm.betAmountError
     ?? (manualAction.disabled ? manualBetForm.disabledReason : null)
     ?? (autoAction.disabled && !isAutoMining ? autoMinerForm.disabledReason : null)
     ?? "Amount per tile";
@@ -514,9 +514,21 @@ function MobileMiningActionBar({
         </div>
 
         <div className="mt-1 flex min-h-3 items-center justify-between gap-2 px-0.5 text-[8px] font-bold uppercase tracking-[0.06em] text-slate-500">
-          <span id="mobile-bet-amount-error" role={walletSetupError ? "alert" : undefined} className={walletSetupError || manualBetForm.betAmountError ? "truncate text-red-300" : "truncate"}>
+          <span id="mobile-bet-amount-error" role={manualBetForm.betAmountError ? "alert" : undefined} className={manualBetForm.betAmountError ? "truncate text-red-300" : "truncate"}>
             {visibleStatus}
           </span>
+          {mobileWalletStatus && (
+            <span
+              id="mobile-wallet-setup-status"
+              role={walletSetupError ? "alert" : "status"}
+              aria-live="polite"
+              aria-atomic="true"
+              aria-busy={walletSetupCreating || undefined}
+              className={walletSetupError ? "truncate text-red-300" : "truncate text-violet-200"}
+            >
+              {mobileWalletStatus}
+            </span>
+          )}
           {walletConnected && selectedTilesCount > 0 && (
             <span className="lore-nums shrink-0 text-sky-200">
               Fee {getHubFeeEstimateLabel(feeEstimate, feeEstimateUnavailable)}

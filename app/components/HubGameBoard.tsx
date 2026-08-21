@@ -38,7 +38,7 @@ interface HubGameBoardProps {
   walletAuthenticated: boolean;
   walletConnected: boolean;
   embeddedWalletSyncing: boolean;
-  onCreateEmbeddedWallet: () => void;
+  onCreateEmbeddedWallet: () => Promise<void>;
   formattedBalance: string | null;
   lowEthBalance: boolean;
   isDailyJackpot: boolean;

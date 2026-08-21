@@ -50,7 +50,7 @@ interface HubContentProps {
   walletAuthenticated: boolean;
   walletConnected: boolean;
   embeddedWalletSyncing: boolean;
-  onCreateEmbeddedWallet: () => void;
+  onCreateEmbeddedWallet: () => Promise<void>;
   gridDisplayEpoch: string | null;
   gridSelectedTiles: number[];
   handleAutoMineWithGuard: (betStr: string, blocks: number, rounds: number) => Promise<void>;
