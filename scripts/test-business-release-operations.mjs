@@ -283,15 +283,25 @@ export function assertLocalCampaignSourceProvenance() {
       "    }",
       "    default { throw \"Unknown fixture campaign fault: $fault\" }",
       "  }",
-      "  Set-Content -LiteralPath $marker -Value $fault -NoNewline -Encoding utf8 -ErrorAction Stop",
+      "  [IO.File]::WriteAllText($marker, $fault, [Text.UTF8Encoding]::new($false))",
       "}",
     ].join("\n");
     const fixtureRunnerSource = readFileSync("scripts/run-local-test-campaign.ps1", "utf8");
+    const fixtureRunnerDefinitionAnchor = "}if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {";
     const fixtureRunnerAnchor = '    $postChildIntegrityFailure = Get-CampaignSourceIntegrityFailure $sourceSha $trackedMetadataBefore';
+    assert.notEqual(fixtureRunnerSource.indexOf(fixtureRunnerDefinitionAnchor), -1, "campaign fixture hook definition must bind before the executable campaign setup");
     assert.notEqual(fixtureRunnerSource.indexOf(fixtureRunnerAnchor), -1, "campaign fixture hook must bind immediately before post-child integrity checks");
+    const fixtureRunnerWithHook = fixtureRunnerSource
+      .replace(fixtureRunnerDefinitionAnchor, `}\n\n${fixtureFaultHook}\n\nif (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {`)
+      .replace(fixtureRunnerAnchor, `    Invoke-CampaignFixturePostChildFault\n${fixtureRunnerAnchor}`);
+    assert.ok(
+      fixtureRunnerWithHook.indexOf("function Invoke-CampaignFixturePostChildFault {")
+        < fixtureRunnerWithHook.indexOf("    Invoke-CampaignFixturePostChildFault"),
+      "campaign fixture hook definition must precede its injected invocation",
+    );
     writeFileSync(
       scriptPath,
-      fixtureRunnerSource.replace(fixtureRunnerAnchor, `    Invoke-CampaignFixturePostChildFault\n${fixtureRunnerAnchor}`) + `\n${fixtureFaultHook}`,
+      fixtureRunnerWithHook,
       "utf8",
     );
     for (const script of [
