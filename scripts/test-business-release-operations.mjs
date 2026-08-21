@@ -88,8 +88,12 @@ function runCampaignFixturePowerShell(scriptPath, campaignId, { failEventWrite =
     "powershell.exe",
   );
   assert.ok(existsSync(powerShellPath), "Windows PowerShell must be available for the campaign fixture");
+  const fixtureRoot = resolve(scriptPath, "..", "..");
+  const fixtureSnapshotParent = join(fixtureRoot, ".fixture-source-snapshots");
   const environment = campaignFixtureGitEnvironment();
   delete environment.LORE_CAMPAIGN_FIXTURE_FAULT;
+  delete environment.LORE_CAMPAIGN_FIXTURE_SNAPSHOT_PARENT;
+  environment.LORE_CAMPAIGN_FIXTURE_SNAPSHOT_PARENT = fixtureSnapshotParent;
   const commonArgs = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"];
   const args = failEventWrite
     ? [
@@ -116,7 +120,7 @@ function runCampaignFixturePowerShell(scriptPath, campaignId, { failEventWrite =
   }
   if (fixtureFault !== null) environment.LORE_CAMPAIGN_FIXTURE_FAULT = fixtureFault;
   return spawnSync(powerShellPath, args, {
-    cwd: resolve(scriptPath, "..", ".."),
+    cwd: fixtureRoot,
     env: environment,
     encoding: "utf8",
     timeout: 30_000,
@@ -251,6 +255,7 @@ export function assertLocalCampaignSourceProvenance() {
   if (process.platform !== "win32") return;
 
   const root = mkdtempSync(join(tmpdir(), "lore-campaign-provenance-"));
+  const fixtureSnapshotParent = join(root, ".fixture-source-snapshots");
   try {
     const scriptDirectory = join(root, "scripts");
     const scriptPath = join(scriptDirectory, "run-local-test-campaign.ps1");
@@ -287,18 +292,34 @@ export function assertLocalCampaignSourceProvenance() {
       "}",
     ].join("\n");
     const fixtureRunnerSource = readFileSync("scripts/run-local-test-campaign.ps1", "utf8");
+    const fixtureSnapshotParentAnchor = "$snapshotParent = Join-Path ([IO.Path]::GetTempPath()) 'lore-local-test-campaign-source-snapshots'";
+    const fixtureSnapshotParentAssignment = [
+      "$snapshotParent = [Environment]::GetEnvironmentVariable('LORE_CAMPAIGN_FIXTURE_SNAPSHOT_PARENT', [EnvironmentVariableTarget]::Process)",
+      "if ([string]::IsNullOrWhiteSpace($snapshotParent)) { throw 'Campaign fixture requires an isolated snapshot parent.' }",
+    ].join("\n");
     const fixtureRunnerDefinitionAnchor = "}if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {";
     const fixtureRunnerAnchor = '    $postChildIntegrityFailure = Get-CampaignSourceIntegrityFailure $sourceSha $trackedMetadataBefore';
-    assert.notEqual(fixtureRunnerSource.indexOf(fixtureRunnerDefinitionAnchor), -1, "campaign fixture hook definition must bind before the executable campaign setup");
-    assert.notEqual(fixtureRunnerSource.indexOf(fixtureRunnerAnchor), -1, "campaign fixture hook must bind immediately before post-child integrity checks");
+    const countFixtureRunnerToken = (text, token) => text.split(token).length - 1;
+    const fixtureRunnerDefinitionReplacement = `}\n\n${fixtureFaultHook}\n\nif (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {`;
+    const fixtureRunnerInvocationReplacement = `    Invoke-CampaignFixturePostChildFault\n${fixtureRunnerAnchor}`;
+    assert.equal(countFixtureRunnerToken(fixtureRunnerSource, fixtureRunnerDefinitionAnchor), 1, "campaign fixture hook definition must bind exactly once before executable campaign setup");
+    assert.equal(countFixtureRunnerToken(fixtureRunnerSource, fixtureRunnerAnchor), 1, "campaign fixture hook must bind exactly once before post-child integrity checks");
+    assert.equal(countFixtureRunnerToken(fixtureRunnerSource, fixtureSnapshotParentAnchor), 1, "campaign fixture must bind the default snapshot parent exactly once");
     const fixtureRunnerWithHook = fixtureRunnerSource
-      .replace(fixtureRunnerDefinitionAnchor, `}\n\n${fixtureFaultHook}\n\nif (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {`)
-      .replace(fixtureRunnerAnchor, `    Invoke-CampaignFixturePostChildFault\n${fixtureRunnerAnchor}`);
+      .replace(fixtureSnapshotParentAnchor, fixtureSnapshotParentAssignment)
+      .replace(fixtureRunnerDefinitionAnchor, fixtureRunnerDefinitionReplacement)
+      .replace(fixtureRunnerAnchor, fixtureRunnerInvocationReplacement);
+    assert.equal(countFixtureRunnerToken(fixtureRunnerWithHook, fixtureRunnerDefinitionAnchor), 0, "fixture runner must replace the original hook-definition anchor");
+    assert.equal(countFixtureRunnerToken(fixtureRunnerWithHook, fixtureRunnerDefinitionReplacement), 1, "fixture runner must inject the fault hook definition exactly once");
+    assert.equal(countFixtureRunnerToken(fixtureRunnerWithHook, fixtureRunnerInvocationReplacement), 1, "fixture runner must inject the fault hook invocation exactly once");
+    assert.equal(countFixtureRunnerToken(fixtureRunnerWithHook, fixtureRunnerAnchor), 1, "fixture runner must retain the post-child integrity check exactly once");
     assert.ok(
-      fixtureRunnerWithHook.indexOf("function Invoke-CampaignFixturePostChildFault {")
-        < fixtureRunnerWithHook.indexOf("    Invoke-CampaignFixturePostChildFault"),
+      fixtureRunnerWithHook.indexOf(fixtureRunnerDefinitionReplacement)
+        < fixtureRunnerWithHook.indexOf(fixtureRunnerInvocationReplacement),
       "campaign fixture hook definition must precede its injected invocation",
     );
+    assert.equal(countFixtureRunnerToken(fixtureRunnerWithHook, fixtureSnapshotParentAnchor), 0, "fixture runner must not share the default snapshot parent");
+    assert.equal(countFixtureRunnerToken(fixtureRunnerWithHook, fixtureSnapshotParentAssignment), 1, "fixture runner must use its isolated snapshot parent exactly once");
     writeFileSync(
       scriptPath,
       fixtureRunnerWithHook,
@@ -377,8 +398,7 @@ export function assertLocalCampaignSourceProvenance() {
       return runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
     };
     const campaignSnapshotDirectory = (campaignId, sourceSha) => join(
-      tmpdir(),
-      "lore-local-test-campaign-source-snapshots",
+      fixtureSnapshotParent,
       `${campaignId}-${sourceSha}`,
     );
     const assertStoppedForIntegrityFailure = (campaignId, expectedSourceSha, expectedFailure) => {
@@ -622,6 +642,7 @@ export function assertLocalCampaignSourceProvenance() {
     assertStoppedForIntegrityFailure("fixture-package-lock-drift", lockfileSourceSha, "tracked-tree-dirty");
     assert.equal(readFileSync(lockfilePath, "utf8"), lockfileOriginal, "package lock fixture must restore tracked content before the next case");
     utimesSync(lockfilePath, lockfileStat.atime, lockfileStat.mtime);
+    removeFixtureSnapshot("fixture-package-lock-drift", lockfileSourceSha);
 
     const nodeModulesPath = join(root, "node_modules");
     const nodeModulesBackup = `${nodeModulesPath}.fixture-original`;
@@ -637,6 +658,7 @@ export function assertLocalCampaignSourceProvenance() {
     rmSync(nodeModulesPath, { recursive: true, force: true });
     renameSync(nodeModulesBackup, nodeModulesPath);
     restoreFixtureTsxCli();
+    removeFixtureSnapshot("fixture-node-modules-drift", nodeModulesSourceSha);
 
     const fixtureDataDirectory = join(root, "data");
     const fixtureDb = join(fixtureDataDirectory, "lore-v10.sqlite");
@@ -814,6 +836,19 @@ export function assertLocalCampaignSourceProvenance() {
     );
   } finally {
     if (!retainCampaignFixture) {
+      let snapshotParentStats;
+      try {
+        snapshotParentStats = lstatSync(fixtureSnapshotParent);
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      if (snapshotParentStats) {
+        assert.equal(snapshotParentStats.isDirectory(), true, "fixture snapshot parent cleanup requires an ordinary directory");
+        assert.equal(snapshotParentStats.isSymbolicLink(), false, "fixture snapshot parent cleanup must reject a junction before non-recursive removal");
+        // Non-recursive removal cannot descend into a late substituted entry.
+        rmdirSync(fixtureSnapshotParent);
+        assert.equal(existsSync(fixtureSnapshotParent), false, "fixture snapshot parent cleanup must remove its isolated temporary directory");
+      }
       rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
     }
   }
