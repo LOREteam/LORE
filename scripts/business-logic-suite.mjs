@@ -25,6 +25,7 @@ import { runErrorShellBoundaryTests } from "./test-business-error-shell-boundari
 import { runDialogAccessibilityTests } from "./test-business-dialog-accessibility.mjs";
 import { runWalletFundingPresentationTests } from "./test-business-wallet-funding-presentation.mjs";
 import { runJackpotBannerPresentationTests } from "./test-business-jackpot-banner-presentation.mjs";
+import { runJackpotShareVerificationTests } from "./test-business-jackpot-share-verification.mjs";
 import { runWinsPresentationTests } from "./test-business-wins-presentation.mjs";
 import { runRuntimeHealthDiagnosticsTests } from "./test-business-runtime-health-diagnostics.mjs";
 import { runRuntimeMonitorBoundaryTests } from "./test-business-runtime-monitor-boundaries.mjs";
@@ -157,6 +158,7 @@ export async function runBusinessLogicSuite() {
   await runHubReadOnlyControlTests();
   await runBrowserToolingBehaviorTests();
   runJackpotBannerPresentationTests();
+  runJackpotShareVerificationTests();
   runPublicMetadataTests();
   runPublicPresentationTests();
   runDirectRouteSsrTests();
