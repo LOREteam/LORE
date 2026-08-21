@@ -1511,7 +1511,7 @@ function evaluateCanaryAdmission({
       const approval = approvals[0];
       const approvalAllowance = canonicalWei(approval.allowanceWei, { allowZero: true });
       const approvalCap = canonicalWei(approval.allowanceCapWei, { allowZero: true });
-      if (approval.ok !== true || !isRealTxHash(approval.hash) || approval.allowanceWithinRunCap !== true) {
+      if (approval.ok !== true || !isRealTx(approval.hash) || approval.allowanceWithinRunCap !== true) {
         failures.push(`canonical admission approval receipt is invalid for ${role}`);
       }
       if (approvalAllowance !== cap.allowanceCapWei || approvalCap !== cap.allowanceCapWei) {
