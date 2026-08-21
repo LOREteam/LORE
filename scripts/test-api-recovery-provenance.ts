@@ -484,7 +484,7 @@ async function main() {
     );
     assert.match(
       jackpotSource,
-      /getCanonicalRecoveryLogIdentity\(log\)[\s\S]*if \(!identity\) return null[\s\S]*txHash: normalizeJackpotTxHash\(log\.transactionHash\)[\s\S]*blockNumber: identity\.blockNumber\.toString\(\)/,
+      /getCanonicalRecoveryLogIdentity\(log\)[\s\S]*if \(!identity\) return null[\s\S]*txHash: identity\.txHash,[\s\S]*blockNumber: identity\.blockNumber\.toString\(\),[\s\S]*eventId: `\$\{identity\.txHash\}:\$\{identity\.logIndex\}`,[\s\S]*logIndex: identity\.logIndex,/,
       "jackpot decoding must reject logs without canonical mined identity before cache admission",
     );
     assert.match(
