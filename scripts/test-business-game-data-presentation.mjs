@@ -189,6 +189,40 @@ export function runGameDataPresentationTests() {
     },
     "display-zero tile stakes must not surface a player badge or player count",
   );
+  assert.deepEqual(
+    miningGrid.deriveMiningGridTilePresentation({
+      displayAmount: "2.5",
+      users: 4,
+      hasMyBet: false,
+      liveStateReady: false,
+      coldBootDefaults: false,
+    }),
+    {
+      isLiveDisplayReady: false,
+      compactAmount: "...",
+      hasDisplayedStake: true,
+      showUserBadge: true,
+      displayedUsers: 4,
+    },
+    "a loading tile must withhold its pool total while retaining the observed player count",
+  );
+  assert.deepEqual(
+    miningGrid.deriveMiningGridTilePresentation({
+      displayAmount: "2.5",
+      users: 4,
+      hasMyBet: false,
+      liveStateReady: false,
+      coldBootDefaults: true,
+    }),
+    {
+      isLiveDisplayReady: true,
+      compactAmount: "2.5",
+      hasDisplayedStake: true,
+      showUserBadge: true,
+      displayedUsers: 4,
+    },
+    "cold-boot defaults must publish the supplied pool amount and player count",
+  );
   assert.equal(
     miningGrid.deriveMiningGridTilePresentation({
       displayAmount: "0.005",
