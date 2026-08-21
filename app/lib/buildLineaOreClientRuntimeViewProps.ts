@@ -11,6 +11,9 @@ interface BuildLineaOreClientRuntimeViewPropsOptions {
   walletRuntime: ReturnType<typeof useLineaOreWalletRuntime>;
   hubRuntime: ReturnType<typeof useLineaOreHubRuntime>;
   rebateState: Pick<ReturnType<typeof useRebate>, "rebateInfo" | "isClaiming" | "claimRebates">;
+  onCreateEmbeddedWallet: () => Promise<void>;
+  walletSetupCreating: boolean;
+  walletSetupError: string | null;
   readOnlyReason?: string | null;
 }
 
@@ -20,6 +23,9 @@ export function buildLineaOreClientRuntimeViewProps({
   walletRuntime,
   hubRuntime,
   rebateState,
+  onCreateEmbeddedWallet,
+  walletSetupCreating,
+  walletSetupError,
   readOnlyReason = null,
 }: BuildLineaOreClientRuntimeViewPropsOptions) {
   const { shell, gameData, wallet, motion, sound, normalizedEmbeddedAddress, chatWalletAddress, coldBootDefaults } =
@@ -74,7 +80,7 @@ export function buildLineaOreClientRuntimeViewProps({
     closeWalletSettings: shell.closeWalletSettings,
     coldBootDefaults,
     currentRoundEvidence: gameData.currentRoundEvidence,
-    createEmbeddedWallet: wallet.createEmbeddedWallet,
+    createEmbeddedWallet: onCreateEmbeddedWallet,
     deepClaimOne,
     deepScan,
     deepScanClaiming,
@@ -97,6 +103,8 @@ export function buildLineaOreClientRuntimeViewProps({
     embeddedResolverRewardsWei: walletRuntime.embeddedResolverRewardsWei,
     embeddedWalletAddress: wallet.embeddedWalletAddress,
     embeddedWalletSyncing: wallet.embeddedWalletSyncing,
+    walletSetupCreating,
+    walletSetupError,
     epochDurationChange: gameData.epochDurationChange,
     exportEmbeddedWallet: wallet.exportEmbeddedWallet,
     externalWalletAddress: wallet.externalWalletAddress,

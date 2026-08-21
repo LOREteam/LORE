@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { FAQ } from "../app/components/FAQ";
 import { getMobileRewardsWalletPresentation } from "../app/components/HubGameBoard";
+import { createWalletSetupGuard } from "../app/lib/walletSetup";
 import { Sidebar } from "../app/components/Sidebar";
 import { WhitePaper } from "../app/components/WhitePaper";
 import { CONTRACT_ADDRESS, LINEA_TOKEN_ADDRESS } from "../app/lib/constants";
@@ -37,6 +38,7 @@ function renderSidebar(options: Partial<SidebarProps> = {}) {
       onClaim={() => {}}
       onClaimAll={() => {}}
       onCreateWallet={async () => {}}
+      walletSetupError={null}
       onScan={() => {}}
       {...options}
     />,
@@ -137,6 +139,45 @@ assert.match(createWalletRewardsSidebar, /Create your LORE wallet to check rewar
 assert.match(createWalletRewardsSidebar, /aria-label="Create LORE wallet to check rewards"/, "create-wallet rewards CTA must be actionable");
 assert.doesNotMatch(createWalletRewardsSidebar, /Retry reward scan/, "create-wallet state must not expose scanner retry");
 
+const creatingRewardsSidebar = renderSidebar({ rewardsWalletCta: "creating" });
+assert.match(creatingRewardsSidebar, /Creating your LORE wallet\./, "shared wallet setup must show creation in progress");
+assert.doesNotMatch(creatingRewardsSidebar, /aria-label="Create LORE wallet to check rewards"/, "creating wallet state must prevent a parallel create action");
+
+const failedWalletSetupSidebar = renderSidebar({
+  rewardsWalletCta: "create",
+  walletSetupError: "Wallet creation could not be completed. Please try again.",
+});
+assert.match(failedWalletSetupSidebar, /Wallet creation could not be completed\. Please try again\./, "failed wallet setup must show a retryable error");
+assert.match(failedWalletSetupSidebar, /aria-label="Create LORE wallet to check rewards"/, "failed wallet setup must retain the retry action");
+
+void (async () => {
+  const walletSetupStates: string[] = [];
+  let walletSetupCalls = 0;
+  const firstWalletSetupDeferred: { reject: ((reason?: unknown) => void) | null } = { reject: null };
+  const sharedWalletSetupGuard = createWalletSetupGuard({
+    onCreateEmbeddedWallet: () => {
+      walletSetupCalls += 1;
+      if (walletSetupCalls > 1) return Promise.resolve();
+      return new Promise<void>((_resolve, reject) => {
+        firstWalletSetupDeferred.reject = reject;
+      });
+    },
+    onStateChange: (state) => walletSetupStates.push(state),
+  });
+  const firstWalletSetup = sharedWalletSetupGuard.run();
+  const duplicateWalletSetup = sharedWalletSetupGuard.run();
+  assert.equal(walletSetupCalls, 1, "shared wallet setup guard must not start a parallel create request");
+  if (!firstWalletSetupDeferred.reject) throw new Error("wallet setup deferred rejection was not initialized");
+  firstWalletSetupDeferred.reject(new Error("rejected"));
+  await Promise.all([firstWalletSetup, duplicateWalletSetup]);
+  assert.deepEqual(walletSetupStates, ["creating", "error"], "wallet setup rejection must become visible retryable state");
+  await sharedWalletSetupGuard.run();
+  assert.equal(walletSetupCalls, 2, "wallet setup error must permit a later retry");
+  sharedWalletSetupGuard.reset();
+  assert.equal(walletSetupStates.at(-1), "idle", "wallet connection reset must release the shared setup lock");
+})().catch((error: unknown) => {
+  throw error;
+});
 const syncingRewardsSidebar = renderSidebar({ rewardsWalletCta: "syncing" });
 assert.match(syncingRewardsSidebar, /Your LORE wallet is still loading\./, "syncing wallet must remain a non-action status");
 assert.doesNotMatch(syncingRewardsSidebar, /aria-label="Log in to check rewards"/, "syncing wallet must not show a login action");

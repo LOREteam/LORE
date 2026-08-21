@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+export { runWalletSetupAttempt } from "../lib/walletSetup";
 import { formatUnits, parseUnits } from "viem";
 import type { AutoMinePhase } from "../hooks/useMining.types";
 import type { ManualBetFormState } from "../hooks/useManualBetForm";
@@ -26,17 +27,6 @@ interface RunningParams {
   rounds: number;
 }
 
-export async function runWalletSetupAttempt(onCreateEmbeddedWallet: () => Promise<void>): Promise<"complete" | "failed"> {
-  try {
-    await onCreateEmbeddedWallet();
-    return "complete";
-  } catch {
-    return "failed";
-  }
-}
-
-const WALLET_SETUP_ERROR = "Wallet creation could not be completed. Please try again.";
-
 interface HubSidePanelProps {
   chatOpen: boolean;
   coldBootDefaults: boolean;
@@ -44,6 +34,8 @@ interface HubSidePanelProps {
   walletAuthenticated: boolean;
   walletConnected: boolean;
   embeddedWalletSyncing: boolean;
+  walletSetupCreating: boolean;
+  walletSetupError: string | null;
   onCreateEmbeddedWallet: () => Promise<void>;
   liveStateReady: boolean;
   readOnlyReason?: string | null;
@@ -72,6 +64,8 @@ export const HubSidePanel = React.memo(function HubSidePanel({
   walletAuthenticated,
   walletConnected,
   embeddedWalletSyncing,
+  walletSetupCreating,
+  walletSetupError,
   onCreateEmbeddedWallet,
   liveStateReady,
   readOnlyReason = null,
@@ -105,12 +99,6 @@ export const HubSidePanel = React.memo(function HubSidePanel({
     lowEthForGas: lowEthBalance,
   });
   const actionInFlightRef = React.useRef(false);
-  const [walletSetupState, setWalletSetupState] = React.useState<"idle" | "creating" | "error">("idle");
-  const walletSetupCreating = walletSetupState === "creating";
-  const walletSetupError = walletSetupState === "error" ? WALLET_SETUP_ERROR : null;
-  React.useEffect(() => {
-    if (walletConnected || embeddedWalletSyncing) setWalletSetupState("idle");
-  }, [embeddedWalletSyncing, walletConnected]);
   const handleManualAction = React.useCallback(async (betAmount: string) => {
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
@@ -131,12 +119,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
   }, [handleAutoMineWithGuard]);
   const handleWalletSetup = React.useCallback(() => {
     if (actionInFlightRef.current || walletSetupCreating) return;
-    actionInFlightRef.current = true;
-    setWalletSetupState("creating");
-    void runWalletSetupAttempt(onCreateEmbeddedWallet).then((result) => {
-      if (result === "failed") setWalletSetupState("error");
-      actionInFlightRef.current = false;
-    });
+    void onCreateEmbeddedWallet();
   }, [onCreateEmbeddedWallet, walletSetupCreating]);
 
   return (

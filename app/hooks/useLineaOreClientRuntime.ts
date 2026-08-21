@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { parseUnits } from "viem";
 import { useWriteContract } from "wagmi";
@@ -12,6 +12,7 @@ import { useLineaOreHubRuntime } from "./useLineaOreHubRuntime";
 import { useLineaOreWalletRuntime } from "./useLineaOreWalletRuntime";
 import { usePageAncillaryData } from "./usePageAncillaryData";
 import { useRebate } from "./useRebate";
+import { createWalletSetupGuard, WALLET_SETUP_ERROR, type WalletSetupState } from "../lib/walletSetup";
 import type { RecentWin } from "./useRecentWins";
 import type { TabId } from "../lib/types";
 
@@ -39,6 +40,27 @@ export function useLineaOreClientRuntime({
   const { uiHydrated, motion, sound, wallet, shell, gameData, chart, normalizedEmbeddedAddress, publicClient } =
     baseState;
   const readOnlyReason = getConfiguredReadOnlyMode() ? READ_ONLY_REASON : null;
+  const createEmbeddedWalletRef = useRef(wallet.createEmbeddedWallet);
+  const [walletSetupState, setWalletSetupState] = useState<WalletSetupState>("idle");
+  const walletSetupGuardRef = useRef<ReturnType<typeof createWalletSetupGuard> | null>(null);
+  createEmbeddedWalletRef.current = wallet.createEmbeddedWallet;
+  if (!walletSetupGuardRef.current) {
+    walletSetupGuardRef.current = createWalletSetupGuard({
+      onCreateEmbeddedWallet: () => createEmbeddedWalletRef.current(),
+      onStateChange: setWalletSetupState,
+    });
+  }
+  const onCreateEmbeddedWallet = useCallback(() => walletSetupGuardRef.current!.run(), []);
+  const walletSetupCreating = walletSetupState === "creating";
+  const walletSetupError = walletSetupState === "error"
+    ? WALLET_SETUP_ERROR
+    : null;
+
+  useEffect(() => {
+    if (wallet.authenticated && (normalizedEmbeddedAddress || wallet.embeddedWalletSyncing)) {
+      walletSetupGuardRef.current?.reset();
+    }
+  }, [normalizedEmbeddedAddress, wallet.authenticated, wallet.embeddedWalletSyncing]);
 
   const { rebateInfo, isClaiming: isClaimingRebate, claimRebates } = useRebate({
     enabled: Boolean(normalizedEmbeddedAddress),
@@ -135,8 +157,11 @@ export function useLineaOreClientRuntime({
         hubRuntime,
         rebateState,
         readOnlyReason,
+        onCreateEmbeddedWallet,
+        walletSetupCreating,
+        walletSetupError,
       }),
-    [ancillaryState, baseState, hubRuntime, readOnlyReason, rebateState, walletRuntime],
+    [ancillaryState, baseState, hubRuntime, onCreateEmbeddedWallet, readOnlyReason, rebateState, walletRuntime, walletSetupCreating, walletSetupError],
   );
 
   return useMemo(

@@ -39,6 +39,8 @@ interface HubGameBoardProps {
   walletAuthenticated: boolean;
   walletConnected: boolean;
   embeddedWalletSyncing: boolean;
+  walletSetupCreating: boolean;
+  walletSetupError: string | null;
   onCreateEmbeddedWallet: () => Promise<void>;
   onOpenWalletSettings: () => void;
   formattedBalance: string | null;
@@ -65,15 +67,18 @@ export function getMobileRewardsWalletPresentation({
   walletAuthenticated,
   walletConnected,
   embeddedWalletSyncing,
-}: Pick<HubGameBoardProps, "walletAuthenticated" | "walletConnected" | "embeddedWalletSyncing">) {
-  const walletCta = deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing });
+  walletSetupCreating = false,
+}: Pick<HubGameBoardProps, "walletAuthenticated" | "walletConnected" | "embeddedWalletSyncing"> & { walletSetupCreating?: boolean }) {
+  const walletCta = deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing, walletSetupCreating });
   return {
     walletCta,
     message: walletCta === "login"
       ? "Log in to check rewards for your wallet"
       : walletCta === "syncing"
         ? "Your LORE wallet is still loading"
-        : walletCta === "create"
+        : walletCta === "creating"
+          ? "Creating your LORE wallet"
+          : walletCta === "create"
           ? "Create your LORE wallet to check rewards"
           : null,
   };
@@ -172,6 +177,8 @@ export const HubGameBoard = React.memo(function HubGameBoard({
   walletAuthenticated,
   walletConnected,
   embeddedWalletSyncing,
+  walletSetupCreating,
+  walletSetupError,
   onCreateEmbeddedWallet,
   onOpenWalletSettings,
   formattedBalance,
@@ -206,6 +213,7 @@ export const HubGameBoard = React.memo(function HubGameBoard({
     walletAuthenticated,
     walletConnected,
     embeddedWalletSyncing,
+    walletSetupCreating,
   });
   const { walletCta: rewardsWalletCta } = rewardsWalletPresentation;
   const canClaimCurrentRewards = canClaimCurrentMobileRewards(rewardsWalletCta, currentWalletRewards.hasCurrentWalletData);
@@ -218,7 +226,8 @@ export const HubGameBoard = React.memo(function HubGameBoard({
     isDeepScanning,
     hasVisibleWins: currentWalletUnclaimedWins.length > 0,
   });
-  const mobileRewardsMessage = rewardsWalletPresentation.message
+  const mobileRewardsMessage = walletSetupError
+    ?? rewardsWalletPresentation.message
     ?? (rewardSummary
       ? `${rewardScanPresentation.message} ${rewardSummary}`
       : rewardScanPresentation.message);

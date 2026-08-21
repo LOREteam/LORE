@@ -62,6 +62,8 @@ interface CreateLineaOreClientViewPropsOptions {
   embeddedResolverRewardsWei: WalletSettingsProps["embeddedResolverRewardsWei"];
   embeddedWalletAddress: string | null;
   embeddedWalletSyncing: PageTabContentProps["hubProps"]["embeddedWalletSyncing"];
+  walletSetupCreating: boolean;
+  walletSetupError: string | null;
   epochDurationChange: HeaderProps["epochDurationChange"];
   exportEmbeddedWallet: WalletSettingsProps["onExportEmbeddedWallet"];
   externalWalletAddress: string | null;
@@ -224,6 +226,8 @@ export function createLineaOreClientViewProps({
   embeddedResolverRewardsWei,
   embeddedWalletAddress,
   embeddedWalletSyncing,
+  walletSetupCreating,
+  walletSetupError,
   epochDurationChange,
   exportEmbeddedWallet,
   externalWalletAddress,
@@ -364,7 +368,7 @@ export function createLineaOreClientViewProps({
   return {
     currentRoundEvidence,
     sidebarProps: buildSidebarProps({
-      rewardsWalletCta: deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing }),
+      rewardsWalletCta: deriveWalletCta({ walletAuthenticated, walletConnected, embeddedWalletSyncing, walletSetupCreating }),
       activeTab,
       actualCurrentEpoch,
       isPageVisible,
@@ -378,6 +382,7 @@ export function createLineaOreClientViewProps({
       claimReward,
       claimAll,
       createEmbeddedWallet,
+      walletSetupError,
       scanRewards,
     }),
     headerProps: buildHeaderProps({
@@ -493,6 +498,8 @@ export function createLineaOreClientViewProps({
       walletAuthenticated,
       walletConnected,
       embeddedWalletSyncing,
+      walletSetupCreating,
+      walletSetupError,
       onCreateEmbeddedWallet: createEmbeddedWallet,
       onOpenWalletSettings: openWalletSettings,
       formattedEthBalance: formattedPrivyEthBalance,

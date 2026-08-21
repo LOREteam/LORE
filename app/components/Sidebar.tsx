@@ -36,6 +36,7 @@ interface SidebarProps {
   onClaim: (epochId: string) => void;
   onClaimAll: () => void;
   onCreateWallet: () => Promise<void>;
+  walletSetupError: string | null;
   onScan: () => void;
   /** Mobile drawer state */
   mobileOpen?: boolean;
@@ -66,6 +67,7 @@ export const Sidebar = React.memo(function Sidebar({
   onClaim,
   onClaimAll,
   onCreateWallet,
+  walletSetupError,
   onScan,
   mobileOpen = false,
   onMobileClose,
@@ -327,7 +329,7 @@ export const Sidebar = React.memo(function Sidebar({
                 )}
               </div>
               {rewardsWalletCta !== "ready" ? (
-                <RewardWalletAccess walletCta={rewardsWalletCta} message={rewardsWalletMessage} onCreateWallet={onCreateWallet} />
+                <RewardWalletAccess walletCta={rewardsWalletCta} message={rewardsWalletMessage} error={walletSetupError} onCreateWallet={onCreateWallet} />
               ) : unclaimedWins.length > 0 ? (
                 <>
                   <RewardScanStatus status={rewardStatus} onScan={onScan} retryLabel={retryLabel} isScanning={isScanning} />
@@ -403,15 +405,18 @@ function getSidebarRewardsWalletMessage(walletCta: RewardsWalletCta): string | n
 const RewardWalletAccess = React.memo(function RewardWalletAccess({
   walletCta,
   message,
+  error,
   onCreateWallet,
 }: {
   walletCta: RewardsWalletCta;
   message: string | null;
+  error: string | null;
   onCreateWallet: () => Promise<void>;
 }) {
   return (
     <div role="status" aria-live="polite" className="flex items-center justify-center gap-1.5 py-1 text-center">
       <span className="text-[9px] font-medium text-amber-200/90">{message}</span>
+      {error && <span role="alert" className="text-[9px] font-medium text-red-300">{error}</span>}
       {walletCta === "login" ? (
         <UiButton aria-label="Log in to check rewards" title="Log in to check rewards" onClick={requestWalletLogin} variant="ghost" size="xs" className="h-6 shrink-0 px-2 text-[9px]">
           Log in

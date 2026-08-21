@@ -51,6 +51,8 @@ interface HubContentProps {
   walletAuthenticated: boolean;
   walletConnected: boolean;
   embeddedWalletSyncing: boolean;
+  walletSetupCreating: boolean;
+  walletSetupError: string | null;
   onCreateEmbeddedWallet: () => Promise<void>;
   onOpenWalletSettings: () => void;
   formattedEthBalance: string | null;
@@ -100,6 +102,8 @@ export const HubContent = React.memo(function HubContent({
   walletAuthenticated,
   walletConnected,
   embeddedWalletSyncing,
+  walletSetupCreating,
+  walletSetupError,
   onCreateEmbeddedWallet,
   onOpenWalletSettings,
   formattedEthBalance,
@@ -258,6 +262,8 @@ export const HubContent = React.memo(function HubContent({
             walletAuthenticated={walletAuthenticated}
             walletConnected={walletConnected}
             embeddedWalletSyncing={embeddedWalletSyncing}
+            walletSetupCreating={walletSetupCreating}
+            walletSetupError={walletSetupError}
             onCreateEmbeddedWallet={onCreateEmbeddedWallet}
             onOpenWalletSettings={onOpenWalletSettings}
             formattedBalance={formattedBalance}
@@ -287,6 +293,8 @@ export const HubContent = React.memo(function HubContent({
             walletAuthenticated={walletAuthenticated}
             walletConnected={walletConnected}
             embeddedWalletSyncing={embeddedWalletSyncing}
+            walletSetupCreating={walletSetupCreating}
+            walletSetupError={walletSetupError}
             onCreateEmbeddedWallet={onCreateEmbeddedWallet}
             liveStateReady={liveStateReady}
             readOnlyReason={readOnlyPresentation?.text ?? null}

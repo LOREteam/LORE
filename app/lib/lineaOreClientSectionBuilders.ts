@@ -27,6 +27,7 @@ type BuildSidebarPropsOptions = {
   claimReward: SidebarProps["onClaim"];
   claimAll: SidebarProps["onClaimAll"];
   createEmbeddedWallet: SidebarProps["onCreateWallet"];
+  walletSetupError: SidebarProps["walletSetupError"];
   scanRewards: SidebarProps["onScan"];
 };
 
@@ -45,6 +46,7 @@ export function buildSidebarProps({
   claimReward,
   claimAll,
   createEmbeddedWallet,
+  walletSetupError,
   scanRewards,
 }: BuildSidebarPropsOptions): SidebarProps {
   return {
@@ -62,6 +64,7 @@ export function buildSidebarProps({
     onClaim: claimReward,
     onClaimAll: claimAll,
     onCreateWallet: createEmbeddedWallet,
+    walletSetupError,
     onScan: scanRewards,
   };
 }
@@ -366,6 +369,8 @@ type BuildPageTabContentPropsOptions = {
   walletAuthenticated: PageTabContentProps["hubProps"]["walletAuthenticated"];
   walletConnected: PageTabContentProps["hubProps"]["walletConnected"];
   embeddedWalletSyncing: PageTabContentProps["hubProps"]["embeddedWalletSyncing"];
+  walletSetupCreating: PageTabContentProps["hubProps"]["walletSetupCreating"];
+  walletSetupError: PageTabContentProps["hubProps"]["walletSetupError"];
   onCreateEmbeddedWallet: PageTabContentProps["hubProps"]["onCreateEmbeddedWallet"];
   onOpenWalletSettings: PageTabContentProps["hubProps"]["onOpenWalletSettings"];
   formattedEthBalance: PageTabContentProps["hubProps"]["formattedEthBalance"];
@@ -443,6 +448,8 @@ export function buildPageTabContentProps({
   walletAuthenticated,
   walletConnected,
   embeddedWalletSyncing,
+  walletSetupCreating,
+  walletSetupError,
   onCreateEmbeddedWallet,
   onOpenWalletSettings,
   formattedEthBalance,
@@ -522,6 +529,8 @@ export function buildPageTabContentProps({
       walletAuthenticated,
       walletConnected,
       embeddedWalletSyncing,
+      walletSetupCreating,
+      walletSetupError,
       onCreateEmbeddedWallet,
       onOpenWalletSettings,
       formattedEthBalance,
