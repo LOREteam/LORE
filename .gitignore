@@ -67,6 +67,7 @@ artifacts/solc/
 /.playwright-mcp/
 /.npm-cache/
 /.tmp-npm-cache/
+/.tmp-npm-runtime-*/
 /.tmp/
 /System.Management.Automation.Internal.Host.InternalHost
 /lore-fixed-home-3000.png

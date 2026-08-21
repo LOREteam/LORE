@@ -25,6 +25,7 @@ playwright-report/
 test-results/
 .npm-cache/
 .tmp-npm-cache/
+.tmp-npm-runtime-*/
 data/proof-runs/
 data/backtest/
 data/backtests/
