@@ -28,6 +28,7 @@ const requireEpochBound = process.argv.includes("--require-epoch-bound") || proc
 const requireV10GasMatrix = process.argv.includes("--require-v10-gas-matrix") || process.env.CANARY_REQUIRE_V10_GAS_MATRIX === "1";
 const requireCanaryAdmission = process.argv.includes("--require-canary-admission") || process.env.CANARY_REQUIRE_ADMISSION === "1";
 const requireV10DeploymentManifest = process.argv.includes("--require-v10-deployment-manifest") || process.env.CANARY_REQUIRE_V10_DEPLOYMENT_MANIFEST === "1";
+const expectedAdmissionRunId = optionArgs.get("expected-run-id")?.trim() || "";
 const CANONICAL_POSITIVE_INTEGER_RE = /^[1-9]\d{0,15}$/;
 const CANONICAL_NON_NEGATIVE_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
@@ -159,6 +160,7 @@ if (!logPath) {
     targetChainId,
     targetContractAddress,
     requiredRoles: requiredCanaryRoles,
+    expectedRunId: expectedAdmissionRunId,
   });
   const liveLogTemplateFindings = findTemplateLikeValues(events);
   const liveLogSecretFindings = findSecretLikeValues(events);
@@ -1299,6 +1301,7 @@ function evaluateCanaryAdmission({
   targetChainId,
   targetContractAddress,
   requiredRoles,
+  expectedRunId,
 }) {
   const admissionIndexes = [];
   for (let index = 0; index < events.length; index += 1) {
@@ -1334,6 +1337,11 @@ function evaluateCanaryAdmission({
   if (requireV10DeploymentManifest && admission.schema !== 2) failures.push("V10 deployment manifest requires canonical admission schema 2");
   if (typeof admission.runId !== "string" || !ADMISSION_RUN_ID_RE.test(admission.runId)) {
     failures.push("canonical canary admission runId is invalid");
+  }
+  if (expectedRunId && !ADMISSION_RUN_ID_RE.test(expectedRunId)) {
+    failures.push("expected canary admission runId is invalid");
+  } else if (expectedRunId && admission.runId !== expectedRunId) {
+    failures.push("canonical canary admission runId does not match the expected supervisor run");
   }
   if (admission.execution !== "live" && admission.execution !== "dry-run") {
     failures.push("canonical canary admission execution is invalid");

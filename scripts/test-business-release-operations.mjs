@@ -1364,6 +1364,13 @@ export function runReleaseOperationsTests() {
       }),
     );
     assert.equal(approvedMatrixProof.status, 0, "a declared approval must bind one exact-cap successful receipt");
+    const replayedRunProof = runV10CanaryProof(
+      "replayed-run",
+      matrixEvents,
+      ["--summary-only", `--expected-run-id=${"2".repeat(32)}`],
+    );
+    assert.equal(replayedRunProof.status, 1, "strict proof must bind admission evidence to the expected supervisor run");
+    assert.match(replayedRunProof.stdout, /admission runId does not match the expected supervisor run/);
     const compactCanaryOutput = (result) => `${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`;
     const assertCompactCanaryOutputSafe = (name, result) => {
       const output = compactCanaryOutput(result);
