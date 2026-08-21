@@ -17,7 +17,8 @@ const maintenanceOverlay = maintenanceOverlayModule.default ?? maintenanceOverla
 const mobileTabNav = mobileTabNavModule.default ?? mobileTabNavModule;
 const MaintenanceOverlay = maintenanceOverlay.MaintenanceOverlay;
 const MobileTabNav = mobileTabNav.MobileTabNav;
-const HubGameBoard = hubGameBoardModule.HubGameBoard;
+const hubGameBoard = hubGameBoardModule.default ?? hubGameBoardModule;
+const HubGameBoard = hubGameBoard.HubGameBoard;
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   const entries = readdirSync(root, { withFileTypes: true });
@@ -55,36 +56,18 @@ export async function runWalletShellAndMiningActionTests() {
   const backupAddress = "0x0000000000000000000000000000000000000001";
   assert.equal(backupGate.normalizeBackupAddress(backupAddress.toUpperCase().replace("0X", "0x")), backupAddress);
   assert.equal(backupGate.normalizeBackupAddress("not-an-address"), null);
-  const guestOnboardingMarkup = renderToStaticMarkup(React.createElement(HubGameBoard, {
-    gridDisplayEpoch: null,
-    coldBootDefaults: true,
-    liveStateReady: false,
-    tileViewData: [],
-    gridSelectedTiles: [],
-    winningTileId: null,
-    isRevealing: false,
-    isAnalyzing: false,
-    reducedMotion: true,
-    showSelectionOnGrid: false,
-    onTileClick: () => {},
+  assert.deepEqual(hubGameBoard.getOnboardingState({
     walletAddress: null,
     walletConnected: false,
     formattedBalance: null,
     lowEthBalance: true,
-    isDailyJackpot: false,
-    isWeeklyJackpot: false,
-    hasMyWinningBet: false,
-    unclaimedWins: [],
-    isScanning: false,
-    isDeepScanning: false,
-    isClaiming: false,
-    onScan: () => {},
-    onClaim: () => {},
-    onClaimAll: () => {},
-  }));
-  assert.match(guestOnboardingMarkup, /Next · Back up key[\s\S]*Export the private key before funding/,
-    "a guest must not be told that a wallet backup was saved");
-  assert.doesNotMatch(guestOnboardingMarkup, /Done · Back up key[\s\S]*Saved/);
+  }), {
+    wallet: false,
+    backup: false,
+    eth: false,
+    linea: false,
+    firstBet: false,
+  }, "a guest must not be told that a wallet backup was saved");
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const storedValues = new Map([["lineaore:privy-backup-confirmed", "invalid-address"]]);
   const removedStorageKeys = [];

@@ -90,13 +90,7 @@ export const HubGameBoard = React.memo(function HubGameBoard({
       return total;
     }
   }, 0n);
-  const onboarding = {
-    wallet: Boolean(walletAddress && walletConnected),
-    backup: Boolean(walletAddress && isBackupConfirmedFor(walletAddress)),
-    eth: Boolean(walletAddress && !lowEthBalance),
-    linea: hasPositiveFormattedBalance(formattedBalance),
-    firstBet: hasConfirmedFirstBet(),
-  };
+  const onboarding = getOnboardingState({ walletAddress, walletConnected, formattedBalance, lowEthBalance });
   const onboardingComplete = Object.values(onboarding).every(Boolean);
   return (
     <div className="gameplay-board-zone min-[900px]:col-span-9 flex min-w-0 flex-col gap-1.5">
@@ -185,6 +179,21 @@ export const HubGameBoard = React.memo(function HubGameBoard({
     </div>
   );
 });
+
+export function getOnboardingState({
+  walletAddress,
+  walletConnected,
+  formattedBalance,
+  lowEthBalance,
+}: Pick<HubGameBoardProps, "walletAddress" | "walletConnected" | "formattedBalance" | "lowEthBalance">) {
+  return {
+    wallet: Boolean(walletAddress && walletConnected),
+    backup: Boolean(walletAddress && isBackupConfirmedFor(walletAddress)),
+    eth: Boolean(walletAddress && !lowEthBalance),
+    linea: hasPositiveFormattedBalance(formattedBalance),
+    firstBet: hasConfirmedFirstBet(),
+  };
+}
 
 function hasPositiveFormattedBalance(value: string | null): boolean {
   if (!value || !/^\d+(?:\.\d+)?$/.test(value.trim())) return false;
