@@ -67,11 +67,16 @@ while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteratio
     } catch {
       $launchError = 'child-launch-failed'
     } finally {
-      [Environment]::SetEnvironmentVariable(
-        'TSX_DISABLE_CACHE',
-        $(if ($hadTsxDisableCache) { $previousTsxDisableCache } else { $null }),
-        [EnvironmentVariableTarget]::Process
-      )
+      try {
+        if ($hadTsxDisableCache) {
+          [Environment]::SetEnvironmentVariable('TSX_DISABLE_CACHE', $previousTsxDisableCache, [EnvironmentVariableTarget]::Process)
+        } elseif (Test-Path -LiteralPath 'Env:TSX_DISABLE_CACHE') {
+          Remove-Item -LiteralPath 'Env:TSX_DISABLE_CACHE' -Force -ErrorAction Stop
+        }
+      } catch {
+        $exitCode = 1
+        $launchError = 'campaign-environment-restore-failed'
+      }
     }
     $elapsedMs = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
     $event = @{
