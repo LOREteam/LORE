@@ -4,10 +4,32 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as uiButtonModule from "../app/components/ui/UiButton.tsx";
 import * as walletTransferRowModule from "../app/components/wallet/WalletTransferRow.tsx";
+import * as manualBetFormModule from "../app/hooks/useManualBetForm.ts";
+import * as appConstantsModule from "../app/lib/constants.ts";
 
 const uiButton = uiButtonModule.default ?? uiButtonModule;
 const walletTransferRow = walletTransferRowModule.default ?? walletTransferRowModule;
 
+const manualBetForm = manualBetFormModule.default ?? manualBetFormModule;
+const appConstants = appConstantsModule.default ?? appConstantsModule;
+const MANUAL_BET_AMOUNT_KEY = `lineaore:manual-bet-amount:v2:${appConstants.APP_CHAIN_ID}:${appConstants.CONTRACT_ADDRESS.toLowerCase()}`;
+const LEGACY_MANUAL_BET_AMOUNT_KEY = "lineaore:manual-bet-amount:v1";
+
+function createManualBetStorage(initialEntries = []) {
+  const values = new Map(initialEntries);
+  return {
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    setItem(key, value) {
+      values.set(key, value);
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+    values,
+  };
+}
 export function runWalletFundingPresentationTests() {
   const fundingManualFormSource = readFileSync("app/hooks/useManualBetForm.ts", "utf8");
   const autoMinerFormSource = readFileSync("app/hooks/useAutoMinerForm.ts", "utf8");
@@ -16,19 +38,73 @@ export function runWalletFundingPresentationTests() {
   assert.match(fundingManualFormSource, /lineaDeficit/, "manual betting must expose the exact LINEA shortfall");
   assert.match(
     fundingManualFormSource,
-    /validateBetAmount\(betAmount\) !== null[\s\S]*window\.localStorage\.removeItem\(MANUAL_BET_AMOUNT_KEY\)[\s\S]*window\.localStorage\.setItem\(MANUAL_BET_AMOUNT_KEY, betAmount\)/,
-    "manual bet amount cache must drop invalid in-progress values instead of restoring stale bad input",
-  );
-  assert.match(
-    fundingManualFormSource,
     /function formatManualNumberDisplay\(value: number \| null \| undefined, fractionDigits = 2\)[\s\S]*formatDecimalTextFixed\(String\(value\), fractionDigits\)[\s\S]*totalBetDisplay[\s\S]*balanceDisplay[\s\S]*lineaDeficitDisplay/,
     "manual betting display amounts must be prepared through canonical decimal display formatting",
   );
-  assert.match(
-    fundingManualFormSource,
-    /if \(raw != null\) \{[\s\S]*else window\.localStorage\.removeItem\(MANUAL_BET_AMOUNT_KEY\)[\s\S]*if \(legacyRaw != null\) \{[\s\S]*window\.localStorage\.removeItem\(LEGACY_MANUAL_BET_AMOUNT_KEY\)[\s\S]*catch \{[\s\S]*window\.localStorage\.removeItem\(MANUAL_BET_AMOUNT_KEY\)[\s\S]*window\.localStorage\.removeItem\(LEGACY_MANUAL_BET_AMOUNT_KEY\)/,
-    "manual bet amount restore must clear invalid current and legacy localStorage entries",
-  );
+  const currentWinsStorage = createManualBetStorage([
+    [MANUAL_BET_AMOUNT_KEY, " 12.5 "],
+    [LEGACY_MANUAL_BET_AMOUNT_KEY, "3.5"],
+  ]);
+  assert.equal(manualBetForm.restoreManualBetAmount(currentWinsStorage), "12.5");
+  assert.equal(currentWinsStorage.values.get(LEGACY_MANUAL_BET_AMOUNT_KEY), "3.5");
+
+  const invalidCurrentStorage = createManualBetStorage([
+    [MANUAL_BET_AMOUNT_KEY, "1e3"],
+    [LEGACY_MANUAL_BET_AMOUNT_KEY, "3.5"],
+  ]);
+  assert.equal(manualBetForm.restoreManualBetAmount(invalidCurrentStorage), null);
+  assert.equal(invalidCurrentStorage.values.has(MANUAL_BET_AMOUNT_KEY), false);
+  assert.equal(invalidCurrentStorage.values.get(LEGACY_MANUAL_BET_AMOUNT_KEY), "3.5");
+
+  const legacyStorage = createManualBetStorage([[LEGACY_MANUAL_BET_AMOUNT_KEY, " 4.25 "]]);
+  const restoredLegacyAmount = manualBetForm.restoreManualBetAmount(legacyStorage);
+  assert.equal(restoredLegacyAmount, "4.25");
+  assert.equal(legacyStorage.values.has(LEGACY_MANUAL_BET_AMOUNT_KEY), false);
+  manualBetForm.persistManualBetAmount(legacyStorage, restoredLegacyAmount);
+  assert.equal(legacyStorage.values.get(MANUAL_BET_AMOUNT_KEY), "4.25");
+
+  const removalFailingLegacyStorage = {
+    getItem(key) {
+      return key === LEGACY_MANUAL_BET_AMOUNT_KEY ? " 2.5 " : null;
+    },
+    removeItem() {
+      throw new Error("storage unavailable");
+    },
+  };
+  assert.equal(manualBetForm.restoreManualBetAmount(removalFailingLegacyStorage), "2.5");
+
+  const invalidLegacyStorage = createManualBetStorage([[LEGACY_MANUAL_BET_AMOUNT_KEY, "0"]]);
+  assert.equal(manualBetForm.restoreManualBetAmount(invalidLegacyStorage), null);
+  assert.equal(invalidLegacyStorage.values.has(LEGACY_MANUAL_BET_AMOUNT_KEY), false);
+  assert.equal(manualBetForm.restoreManualBetAmount(createManualBetStorage()), null);
+
+  const commaAmountStorage = createManualBetStorage([[MANUAL_BET_AMOUNT_KEY, " 7,5 "]]);
+  assert.equal(manualBetForm.restoreManualBetAmount(commaAmountStorage), "7,5");
+
+  const persistedStorage = createManualBetStorage();
+  manualBetForm.persistManualBetAmount(persistedStorage, " 7,5 ");
+  assert.equal(persistedStorage.values.get(MANUAL_BET_AMOUNT_KEY), " 7,5 ");
+  manualBetForm.persistManualBetAmount(persistedStorage, "1.0000000000000000001");
+  assert.equal(persistedStorage.values.has(MANUAL_BET_AMOUNT_KEY), false);
+
+  const clearedKeys = [];
+  const readFailingStorage = {
+    getItem() {
+      throw new Error("storage unavailable");
+    },
+    removeItem(key) {
+      clearedKeys.push(key);
+    },
+  };
+  assert.equal(manualBetForm.restoreManualBetAmount(readFailingStorage), null);
+  assert.deepEqual(clearedKeys, [MANUAL_BET_AMOUNT_KEY, LEGACY_MANUAL_BET_AMOUNT_KEY]);
+
+  const setFailingStorage = createManualBetStorage([[MANUAL_BET_AMOUNT_KEY, "5"]]);
+  setFailingStorage.setItem = () => {
+    throw new Error("storage unavailable");
+  };
+  assert.doesNotThrow(() => manualBetForm.persistManualBetAmount(setFailingStorage, "2"));
+  assert.equal(setFailingStorage.values.get(MANUAL_BET_AMOUNT_KEY), "5");
   assert.match(
     autoMinerFormSource,
     /lineaore:auto-miner-inputs:v2:\$\{APP_CHAIN_ID\}:\$\{CONTRACT_ADDRESS\.toLowerCase\(\)\}/,

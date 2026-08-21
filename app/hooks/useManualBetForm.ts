@@ -8,6 +8,55 @@ import { safeParseFloat, validateBetAmount } from "../lib/utils";
 const LEGACY_MANUAL_BET_AMOUNT_KEY = "lineaore:manual-bet-amount:v1";
 const MANUAL_BET_AMOUNT_KEY = `lineaore:manual-bet-amount:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 
+type ManualBetAmountStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+function clearManualBetAmountStorage(storage: Pick<ManualBetAmountStorage, "removeItem">) {
+  try {
+    storage.removeItem(MANUAL_BET_AMOUNT_KEY);
+    storage.removeItem(LEGACY_MANUAL_BET_AMOUNT_KEY);
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function restoreManualBetAmount(storage: Pick<ManualBetAmountStorage, "getItem" | "removeItem">) {
+  try {
+    const raw = storage.getItem(MANUAL_BET_AMOUNT_KEY);
+    if (raw != null) {
+      const value = raw.trim();
+      if (validateBetAmount(value) === null) return value;
+      storage.removeItem(MANUAL_BET_AMOUNT_KEY);
+      return null;
+    }
+
+    const legacyRaw = storage.getItem(LEGACY_MANUAL_BET_AMOUNT_KEY);
+    if (legacyRaw == null) return null;
+
+    const value = legacyRaw.trim();
+    const restored = validateBetAmount(value) === null ? value : null;
+    try {
+      storage.removeItem(LEGACY_MANUAL_BET_AMOUNT_KEY);
+    } catch {
+      clearManualBetAmountStorage(storage);
+    }
+    return restored;
+  } catch {
+    clearManualBetAmountStorage(storage);
+    return null;
+  }
+}
+
+export function persistManualBetAmount(storage: Pick<ManualBetAmountStorage, "setItem" | "removeItem">, value: string) {
+  try {
+    if (validateBetAmount(value) !== null) {
+      storage.removeItem(MANUAL_BET_AMOUNT_KEY);
+      return;
+    }
+    storage.setItem(MANUAL_BET_AMOUNT_KEY, value);
+  } catch {
+    // ignore storage failures
+  }
+}
 function formatManualNumberDisplay(value: number | null | undefined, fractionDigits = 2) {
   if (typeof value !== "number" || !Number.isFinite(value)) return fractionDigits > 0 ? `0.${"0".repeat(fractionDigits)}` : "0";
   return formatDecimalTextFixed(String(value), fractionDigits) ?? (fractionDigits > 0 ? `0.${"0".repeat(fractionDigits)}` : "0");
@@ -38,43 +87,21 @@ export function useManualBetForm({
 
   useEffect(() => {
     try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(MANUAL_BET_AMOUNT_KEY) : null;
-      const legacyRaw = raw == null && typeof window !== "undefined"
-        ? window.localStorage.getItem(LEGACY_MANUAL_BET_AMOUNT_KEY)
-        : null;
-      if (raw != null) {
-        const value = String(raw).trim();
-        if (validateBetAmount(value) === null) setBetAmount(value);
-        else window.localStorage.removeItem(MANUAL_BET_AMOUNT_KEY);
-        return;
-      }
-      if (legacyRaw != null) {
-        const value = String(legacyRaw).trim();
-        if (validateBetAmount(value) === null) setBetAmount(value);
-        window.localStorage.removeItem(LEGACY_MANUAL_BET_AMOUNT_KEY);
-      }
+      if (typeof window === "undefined") return;
+      const restored = restoreManualBetAmount(window.localStorage);
+      if (restored !== null) setBetAmount(restored);
     } catch {
-      try {
-        window.localStorage.removeItem(MANUAL_BET_AMOUNT_KEY);
-        window.localStorage.removeItem(LEGACY_MANUAL_BET_AMOUNT_KEY);
-      } catch {
-        // ignore storage failures
-      }
+      // ignore unavailable browser storage
     }
   }, []);
 
   useEffect(() => {
     try {
-      if (typeof window !== "undefined") {
-        if (validateBetAmount(betAmount) !== null) {
-          window.localStorage.removeItem(MANUAL_BET_AMOUNT_KEY);
-          return;
-        }
-        window.localStorage.setItem(MANUAL_BET_AMOUNT_KEY, betAmount);
-      }
-    } catch {}
+      if (typeof window !== "undefined") persistManualBetAmount(window.localStorage, betAmount);
+    } catch {
+      // ignore unavailable browser storage
+    }
   }, [betAmount]);
-
   const totalBet = useMemo(() => safeParseFloat(betAmount) * selectedTilesCount, [betAmount, selectedTilesCount]);
   const betAmountError = useMemo(() => validateBetAmount(betAmount), [betAmount]);
   const balance = formattedBalance ? safeParseFloat(formattedBalance) : null;
