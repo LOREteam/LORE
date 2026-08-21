@@ -59,6 +59,29 @@ function normalizeWalletAddress(value: string | null | undefined) {
     return null;
   }
 }
+export function createUserActivityRequestGuard() {
+  let generation = 0;
+  let activeAddress: string | null = null;
+  const capture = () => ({ address: activeAddress, generation });
+  return {
+    activate(address: string | null) {
+      activeAddress = address;
+      generation += 1;
+      return capture();
+    },
+    ensure(address: string | null) {
+      if (activeAddress !== address) {
+        activeAddress = address;
+        generation += 1;
+      }
+      return capture();
+    },
+    capture,
+    isCurrent(candidate: { address: string | null; generation: number }) {
+      return candidate.generation === generation && candidate.address === activeAddress;
+    },
+  };
+}
 
 async function fetchActivity(address: string, cursor: string | null) {
   const params = new URLSearchParams({ user: address });
@@ -90,15 +113,23 @@ export function useUserActivityHistory(walletAddress?: string | null) {
   const runningRef = useRef(false);
   const mountedRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
+  const requestGuardRef = useRef(createUserActivityRequestGuard());
+  const activeRequest = requestGuardRef.current.ensure(address);
+  const activeRequestAddress = activeRequest.address;
+  const activeRequestGeneration = activeRequest.generation;
 
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
 
-  const load = useCallback(async (mode: "refresh" | "more") => {
+  const load = useCallback(async (
+    mode: "refresh" | "more",
+    request = requestGuardRef.current.capture(),
+  ) => {
     const cursor = nextCursorRef.current;
-    if (!address || runningRef.current || (mode === "more" && !cursor)) return;
+    if (!address || !requestGuardRef.current.isCurrent(request) ||
+      runningRef.current || (mode === "more" && !cursor)) return;
     runningRef.current = true;
     if (mountedRef.current) {
       setLoading(true);
@@ -106,27 +137,33 @@ export function useUserActivityHistory(walletAddress?: string | null) {
     }
     try {
       const payload = await fetchActivity(address, mode === "more" ? cursor : null);
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || !requestGuardRef.current.isCurrent(request)) return;
       setItems((previous) => mode === "more" && previous !== null ? [...previous, ...payload.rows] : payload.rows);
       setHasMore(payload.hasMore);
       nextCursorRef.current = payload.nextCursor;
       setIndexedThroughBlock(payload.indexedThroughBlock);
     } catch {
-      if (mountedRef.current) setError(ACTIVITY_LOAD_ERROR);
+      if (mountedRef.current && requestGuardRef.current.isCurrent(request)) {
+        setError(ACTIVITY_LOAD_ERROR);
+      }
     } finally {
-      if (mountedRef.current) setLoading(false);
-      runningRef.current = false;
+      if (requestGuardRef.current.isCurrent(request)) {
+        if (mountedRef.current) setLoading(false);
+        runningRef.current = false;
+      }
     }
   }, [address]);
 
   useEffect(() => {
+    const request = { address: activeRequestAddress, generation: activeRequestGeneration };
+    runningRef.current = false;
     setItems(null);
     setError(null);
     setHasMore(false);
     nextCursorRef.current = null;
     setIndexedThroughBlock("0");
-    if (address) void load("refresh");
-  }, [address, load]);
+    if (address) void load("refresh", request);
+  }, [activeRequestAddress, activeRequestGeneration, address, load]);
 
   return {
     address,

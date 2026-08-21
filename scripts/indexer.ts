@@ -670,6 +670,11 @@ function processLogs(logs: Log[], finalizedAtBlock: bigint) {
   const dustSettlements: DustSettlementRecord[] = [];
   const dailyJackpotEpochs = new Set<string>();
   const weeklyJackpotEpochs = new Set<string>();
+  const rewardBatchClaimTxs = new Set(
+    logs
+      .filter((log) => log.topics[0] === rewardBatchClaimedSig && log.transactionHash)
+      .map((log) => log.transactionHash!.toLowerCase()),
+  );
   const rebateBatchClaimTxs = new Set(
     logs
       .filter((log) => log.topics[0] === rebateBatchClaimedSig && log.transactionHash)
@@ -829,6 +834,7 @@ function processLogs(logs: Log[], finalizedAtBlock: bigint) {
           finalizedAtBlock: finalizedAtBlock.toString(),
         });
       } else if (topic0 === rewardClaimedSig) {
+        if (log.transactionHash && rewardBatchClaimTxs.has(log.transactionHash.toLowerCase())) continue;
         const decoded = decodeEventLog({ abi: EVENTS_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName !== "RewardClaimed") continue;
         const id = buildNormalizedEventIdForLog(log);

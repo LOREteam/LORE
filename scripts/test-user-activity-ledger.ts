@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
@@ -19,9 +19,22 @@ const TX_C = `0x${"cc".repeat(32)}`;
 
 async function main() {
   const storage = await import("../server/storage");
+  const { createUserActivityRequestGuard } = await import("../app/hooks/useUserActivityHistory");
   const { GET } = await import("../app/api/activity/route");
   const { db } = await import("../server/db");
   const owner = randomUUID();
+  const requestGuard = createUserActivityRequestGuard();
+  const pendingA = requestGuard.activate(USER);
+  const pendingB = requestGuard.activate(OTHER_USER);
+  assert.equal(requestGuard.isCurrent(pendingA), false, "a late A response must be rejected after switching to B");
+  assert.equal(requestGuard.isCurrent(pendingB), true, "the B request must remain eligible after the switch");
+
+  const indexerSource = readFileSync(new URL("./indexer.ts", import.meta.url), "utf8");
+  assert.match(
+    indexerSource,
+    /const rewardBatchClaimTxs = new Set\([\s\S]*rewardBatchClaimedSig[\s\S]*topic0 === rewardClaimedSig[\s\S]*rewardBatchClaimTxs\.has/,
+    "a reward batch transaction must suppress its per-epoch RewardClaimed ledger records",
+  );
   try {
     storage.upsertBets([
       {
@@ -42,6 +55,15 @@ async function main() {
       eventId: "not-a-canonical-event", user: OTHER_USER, activityType: "bet", epoch: "1", amount: "99", amountNum: 99, txHash: TX_C, blockNumber: "103",
     }]);
 
+    storage.upsertUserActivity([{
+      eventId: `${TX_C}:8`, user: OTHER_USER, activityType: "reward_batch_claim", amount: "7", amountNum: 7, txHash: TX_C, blockNumber: "104",
+    }]);
+    const batchRows = storage.getUserActivityPage(OTHER_USER, { limit: 64 }).rows;
+    assert.deepEqual(
+      batchRows.map((row) => ({ eventId: row.eventId, activityType: row.activityType })),
+      [{ eventId: `${TX_C}:8`, activityType: "reward_batch_claim" }],
+      "a batch claim ledger write must expose only its aggregate record",
+    );
     const first = storage.getUserActivityPage(USER, { limit: 2 });
     assert.equal(first.coverage, "partial", "new ledger must never imply a historical backfill");
     assert.equal(first.rows.length, 2);
