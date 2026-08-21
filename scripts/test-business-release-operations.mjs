@@ -132,18 +132,45 @@ const retainCampaignFixtureOnFailure = process.env.LORE_CAMPAIGN_FIXTURE_RETAIN_
 const MAX_CAMPAIGN_FIXTURE_DIAGNOSTIC_BYTES = 3 * 1024;
 let retainCampaignFixture = false;
 
+function escapeCampaignFixtureRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function redactCampaignFixtureDiagnostic(value, root) {
+  const rootText = String(root ?? "");
+  const rootVariants = [...new Set([
+    rootText,
+    rootText.replace(/\\/g, "/"),
+    rootText.replace(/\//g, "\\"),
+  ].filter(Boolean))];
+  const rootPattern = rootVariants.length > 0
+    ? new RegExp(rootVariants.map(escapeCampaignFixtureRegExp).join("|"), "gi")
+    : null;
   const redacted = String(value ?? "")
-    .replaceAll(root, "<fixture-root>")
+    .replace(rootPattern ?? /$^/, "<fixture-root>")
     .replace(/https?:\/\/[^\s]+/gi, "<url>")
-    .replace(/[A-Za-z]:\\[^\r\n]*/g, "<path>")
-    .replace(/\\\\[^\\\r\n]+\\[^\r\n]*/g, "<path>");
+    .replace(/\b0x[\da-f]{64}\b/gi, "<secret>")
+    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer <secret>")
+    .replace(/\b(?:api(?:[_ -]?key|key)|access(?:[_ -]?token|token)|auth(?:orization)?|cookie|mnemonic|password|private(?:[_ -]?key|key)|rpc(?:[_ -]?(?:key|token|url)|(?:key|token|url))|secret|seed(?:[_ -]?phrase|phrase)?|session(?:[_ -]?token|token)?)[\t ]*(?:=|:)[\t ]*(?:Bearer[\t ]+)?[^\s,;]+/gi, (match) => `${match.slice(0, match.search(/(?:=|:)/) + 1)}<secret>`)
+    .replace(/[A-Za-z]:[\\/][^\r\n]*/g, "<path>")
+    .replace(/(?:\\\\|\/\/)[^\\/\r\n]+[\\/][^\r\n]*/g, "<path>");
   const bytes = Buffer.from(redacted, "utf8");
   return bytes.length <= MAX_CAMPAIGN_FIXTURE_DIAGNOSTIC_BYTES
     ? redacted
     : Buffer.from(bytes.subarray(bytes.length - MAX_CAMPAIGN_FIXTURE_DIAGNOSTIC_BYTES)).toString("utf8");
 }
 
+function readCampaignFixtureEvents(path) {
+  try {
+    if (!existsSync(path)) return { error: "missing JSONL evidence", events: null };
+    const text = readFileSync(path, "utf8");
+    const lines = text.trim().split(/\r?\n/).filter(Boolean);
+    if (lines.length === 0) return { error: "empty JSONL evidence", events: null };
+    return { error: null, events: lines.map((line) => JSON.parse(line)) };
+  } catch {
+    return { error: "malformed JSONL evidence", events: null };
+  }
+}
 function readCampaignFixtureDiagnosticTail(path, root) {
   try {
     const bytes = Math.min(statSync(path).size, MAX_CAMPAIGN_FIXTURE_DIAGNOSTIC_BYTES);
@@ -161,7 +188,7 @@ function readCampaignFixtureDiagnosticTail(path, root) {
   }
 }
 
-function campaignFixtureFailureDiagnostic(root, campaignId, run) {
+function campaignFixtureFailureDiagnostic(root, campaignId, run, eventsError = null) {
   const campaignDirectory = join(root, "artifacts", "test-campaign-2026-08-20", campaignId);
   const summaryPath = join(campaignDirectory, "local-test-campaign.jsonl");
   let newestLog;
@@ -184,6 +211,7 @@ function campaignFixtureFailureDiagnostic(root, campaignId, run) {
     eventsTail: existsSync(summaryPath)
       ? readCampaignFixtureDiagnosticTail(summaryPath, root)
       : "<missing>",
+    eventsReadError: eventsError,
     newestChildLog: newestLog?.name ?? "<missing>",
     newestChildLogTail: newestLog
       ? readCampaignFixtureDiagnosticTail(newestLog.path, root)
@@ -300,10 +328,19 @@ export function assertLocalCampaignSourceProvenance() {
     assert.equal(runtimeStats.isFile(), true, "fixture runtime must be a copied regular file");
     assert.equal(runtimeStats.isSymbolicLink(), false, "fixture runtime must not inherit an outer snapshot link");
 
-    const readEvents = (campaignId) => readFileSync(
-      join(root, "artifacts", "test-campaign-2026-08-20", campaignId, "local-test-campaign.jsonl"),
-      "utf8",
-    ).trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    const campaignEventsPath = (campaignId) => join(
+      root,
+      "artifacts",
+      "test-campaign-2026-08-20",
+      campaignId,
+      "local-test-campaign.jsonl",
+    );
+    const readEventsSafely = (campaignId) => readCampaignFixtureEvents(campaignEventsPath(campaignId));
+    const readEvents = (campaignId) => {
+      const evidence = readEventsSafely(campaignId);
+      assert.equal(evidence.error, null, `fixture ${campaignId} campaign evidence must be readable`);
+      return evidence.events;
+    };
     const assertBoundSourceSha = (events, expectedSourceSha) => {
       for (const event of events) {
         assert.equal(event.sourceSha, expectedSourceSha, "every campaign event must bind the startup commit SHA");
@@ -351,17 +388,63 @@ export function assertLocalCampaignSourceProvenance() {
       assert.equal(existsSync(snapshot), false, "fixture snapshot cleanup must remove only the restored worktree");
     };
 
+    const diagnosticSecret = `0x${"ab".repeat(32)}`;
+    const diagnosticRootForward = root.replace(/\\/g, "/");
+    const diagnosticSensitiveText = [
+      `PRIVATE_KEY=${diagnosticSecret}`,
+      "api_key: fixture-api-token",
+      "privateKey=fixture-private-key-token",
+      "rpcUrl: fixture-rpc-url-token",
+      "Authorization: Bearer fixture-bearer-token",
+      "session_token=fixture-session-token",
+      `${root}\\private\\fixture-tail`,
+      `${diagnosticRootForward}/forward/fixture-tail`,
+      "https://fixture-user:fixture-password@example.invalid/private?api_key=fixture-url-token",
+    ].join("\n");
+    const assertDiagnosticEvidence = (campaignId, content, expectedError, expectedTail) => {
+      const summaryPath = campaignEventsPath(campaignId);
+      mkdirSync(dirname(summaryPath), { recursive: true });
+      if (content !== null) writeFileSync(summaryPath, content, "utf8");
+      const childLogPath = join(dirname(summaryPath), "local-001-fixture.log");
+      writeFileSync(childLogPath, diagnosticSensitiveText, "utf8");
+      const evidence = readEventsSafely(campaignId);
+      assert.equal(evidence.error, expectedError, `${campaignId} must report readable evidence state without throwing`);
+      const diagnostic = JSON.parse(campaignFixtureFailureDiagnostic(root, campaignId, {
+        status: 1,
+        signal: null,
+        stdout: diagnosticSensitiveText,
+        stderr: diagnosticSensitiveText,
+      }, evidence.error));
+      assert.equal(diagnostic.eventsReadError, expectedError);
+      assert.equal(diagnostic.eventsTail, expectedTail);
+      for (const key of ["stdoutTail", "stderrTail", "eventsTail", "newestChildLogTail"]) {
+        assert.ok(Buffer.byteLength(diagnostic[key], "utf8") <= MAX_CAMPAIGN_FIXTURE_DIAGNOSTIC_BYTES, `${campaignId} ${key} must remain bounded`);
+      }
+      const serialized = JSON.stringify(diagnostic);
+      assert.doesNotMatch(serialized, /fixture-api-token|fixture-private-key-token|fixture-rpc-url-token|fixture-bearer-token|fixture-session-token|fixture-password|fixture-url-token|0x(?:ab){32}/i, `${campaignId} diagnostic must redact standalone secret patterns`);
+      assert.doesNotMatch(serialized, new RegExp(escapeCampaignFixtureRegExp(root), "i"), `${campaignId} diagnostic must redact backslash fixture paths`);
+      assert.doesNotMatch(serialized, new RegExp(escapeCampaignFixtureRegExp(diagnosticRootForward), "i"), `${campaignId} diagnostic must redact forward-slash fixture paths`);
+      return diagnostic;
+    };
+    assertDiagnosticEvidence("fixture-missing-evidence", null, "missing JSONL evidence", "<missing>");
+    assertDiagnosticEvidence("fixture-empty-evidence", "\r\n", "empty JSONL evidence", "");
+    assertDiagnosticEvidence("fixture-truncated-evidence", `{"secret":"${diagnosticSecret}",`, "malformed JSONL evidence", "{\"secret\":\"<secret>\",");
+    assertDiagnosticEvidence("fixture-malformed-evidence", "not-json", "malformed JSONL evidence", "not-json");
+    assert.equal(retainCampaignFixture, false, "diagnostic regression fixtures must not retain the temporary root outside the explicit opt-in unexpected-run path");
     const clean = runCampaignFixturePowerShell(scriptPath, "fixture-clean");
-    const cleanEvents = readEvents("fixture-clean");
+    const cleanEvidence = readEventsSafely("fixture-clean");
+    const cleanEvents = cleanEvidence.events ?? [];
     const expectedCleanStatuses = ["started", ...Array(7).fill("passed"), "completed"];
     const cleanUnexpected = clean.status !== 0
       || clean.error !== undefined
+      || cleanEvidence.error !== null
       || JSON.stringify(cleanEvents.map((event) => event.status)) !== JSON.stringify(expectedCleanStatuses);
     const cleanDiagnostic = retainCampaignFixtureOnFailure && cleanUnexpected
-      ? campaignFixtureFailureDiagnostic(root, "fixture-clean", clean)
+      ? campaignFixtureFailureDiagnostic(root, "fixture-clean", clean, cleanEvidence.error)
       : null;
     retainCampaignFixture = cleanDiagnostic !== null;
     assert.equal(clean.error, undefined, clean.error?.message);
+    assert.equal(cleanEvidence.error, null, cleanDiagnostic ?? "fixture-clean campaign evidence must be readable");
     assert.equal(clean.status, 0, cleanDiagnostic ?? `${clean.stdout ?? ""}${clean.stderr ?? ""}`);
     assert.deepEqual(cleanEvents.map((event) => event.status), expectedCleanStatuses, cleanDiagnostic ?? undefined);
     assertBoundSourceSha(cleanEvents, sourceSha);
