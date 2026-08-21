@@ -2032,7 +2032,17 @@ export function runReleaseOperationsTests() {
       });
       return [...evidence, ...approvals];
     };
-    const runV10CanaryProof = (name, events, extraArgs = [], admissionEvidence = buildAdmissionEvidence()) => {
+    const runV10CanaryProof = (
+      name,
+      events,
+      extraArgs = [],
+      admissionEvidence = buildAdmissionEvidence(),
+      admissionOverrides = {},
+      leadingEvents = [],
+      admissionEnvelopeOverrides = {},
+      includeTerminalSummary = true,
+      postAdmissionLeadingEvents = [],
+    ) => {
       const logPath = join(v10CanaryProofDir, `${name}.jsonl`);
       const admission = {
         schema: 1,
@@ -2051,16 +2061,63 @@ export function runReleaseOperationsTests() {
         canaryPlanSha256: "e".repeat(64),
         selectedRoles: ["AUTOMINER_A"],
         roleCaps: [{ role: "AUTOMINER_A", spendCapWei: "100", allowanceCapWei: "100" }],
+        ...admissionOverrides,
       };
       const admissionSha256 = createHash("sha256").update(JSON.stringify(admission), "utf8").digest("hex");
-      const boundEvents = [...admissionEvidence, ...events].map((event) => ({
+      const admissionEvent = {
+        admission,
+        admissionSha256,
+        amount: "0",
+        chainId: admission.chainId,
+        contractAddress: admission.contractAddress,
+        mode: "admission",
+        network: admission.network,
+        ok: true,
+        role: "SYSTEM",
+        round: -1,
+        signatureRequested: false,
+        signingMaterialLoaded: false,
+        timestamp: "2026-07-22T00:00:00.000Z",
+        transactionSent: false,
+        walletClientCreated: false,
+        ...admissionEnvelopeOverrides,
+      };
+      const fixtureEvents = [...postAdmissionLeadingEvents, ...admissionEvidence, ...events];
+      const hasExplicitSummary = fixtureEvents.some((event) => event.mode === "summary");
+      const fixtureBets = fixtureEvents.filter((event) => (
+        Number.isInteger(event.round)
+        && event.round >= 0
+        && ["single", "bitmap", "sameAmount", "arrays"].includes(event.mode)
+      ));
+      const targetRounds = Math.max(1, ...fixtureBets.map((event) => event.round + 1));
+      const successes = fixtureBets.filter((event) => event.ok === true && event.txStatus === "success").length;
+      const failures = fixtureBets.length - successes;
+      const automaticSummary = {
+        amount: "0",
+        chainId: admission.chainId,
+        contractAddress: admission.contractAddress,
+        failures,
+        mode: "summary",
+        network: admission.network,
+        ok: failures === 0,
+        role: "SYSTEM",
+        round: targetRounds,
+        successes,
+        targetRounds,
+        timestamp: "2026-07-22T00:10:00.000Z",
+      };
+      const boundEvents = [
+        ...fixtureEvents,
+        ...(!hasExplicitSummary && includeTerminalSummary ? [automaticSummary] : []),
+      ].map((event) => ({
         admissionSha256,
         runId: admission.runId,
         walletSetSha256: admission.walletSetSha256,
         ...event,
       }));
       writeFileSync(logPath, `${[
-        { mode: "admission", admission, admissionSha256 },
+        ...leadingEvents,
+        admissionEvent,
         ...boundEvents,
       ].map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
       return spawnSync(process.execPath, [
@@ -2131,6 +2188,7 @@ export function runReleaseOperationsTests() {
         hash: `0x${String(index + 1).repeat(64)}`,
         nonceLatest: index * 2,
         noncePending: index * 2,
+        repeat: false,
         round: index,
         tileCount: tiles.length,
         tiles,
@@ -2147,10 +2205,202 @@ export function runReleaseOperationsTests() {
       }];
     });
     const matrixProof = runV10CanaryProof("matrix", matrixEvents);
+    const controlTarget = {
+      amount: "0",
+      chainId: baseBetEvent.chainId,
+      contractAddress: baseBetEvent.contractAddress,
+      network: baseBetEvent.network,
+    };
+    const canarySummaryEvent = (overrides = {}) => ({
+      ...controlTarget,
+      failures: 0,
+      mode: "summary",
+      ok: true,
+      role: "SYSTEM",
+      round: 6,
+      successes: 12,
+      targetRounds: 6,
+      timestamp: "2026-07-22T00:03:00.250Z",
+      ...overrides,
+    });
+    const approvedReceiptEvent = (overrides = {}) => ({
+      amount: "0.0000000000000001",
+      allowanceCapWei: "100",
+      allowanceWei: "100",
+      allowanceWithinRunCap: true,
+      chainId: baseBetEvent.chainId,
+      contractAddress: baseBetEvent.contractAddress,
+      hash: "0x" + "9".repeat(64),
+      mode: "approve",
+      network: baseBetEvent.network,
+      ok: true,
+      role: "AUTOMINER_A",
+      round: -1,
+      timestamp: "2026-07-22T00:02:30.000Z",
+      txStatus: "success",
+      ...overrides,
+    });
+    const healthDiagnosticEvent = (round, timestamp, overrides = {}) => ({
+      ...controlTarget,
+      dbBytes: 1,
+      diskFreeBytes: 1,
+      healthRetryCount: 0,
+      heapUsedBytes: 1,
+      mode: "diagnostic",
+      ok: true,
+      role: "SYSTEM",
+      round,
+      rssBytes: 1,
+      runtimeUptimeSeconds: 1,
+      sampleKind: "health",
+      timestamp,
+      walBytes: 1,
+      ...overrides,
+    });
+    const successfulResolveEvent = (overrides = {}) => ({
+      ...controlTarget,
+      durationMs: 1,
+      effectiveGasPrice: "1",
+      epoch: "7",
+      gasEstimate: "1",
+      gasLimit: "1",
+      gasUsed: "1",
+      hash: "0x" + "9".repeat(64),
+      mode: "resolve",
+      networkFeeWei: "1",
+      ok: true,
+      resolverFallbackUsed: true,
+      role: "AUTOMINER_A",
+      round: -1,
+      secondsLeft: 0,
+      timestamp: "2026-07-22T00:00:03.000Z",
+      txStatus: "success",
+      ...overrides,
+    });
+    const controlPlaneTraceEvents = [
+      healthDiagnosticEvent(0, "2026-07-22T00:00:00.250Z"),
+      healthDiagnosticEvent(1, "2026-07-22T00:00:00.750Z"),
+      {
+        ...controlTarget,
+        durationMs: 1,
+        epoch: "7",
+        mode: "epoch-wait",
+        ok: true,
+        role: "RESOLVER",
+        round: -1,
+        secondsLeft: 10,
+        timestamp: "2026-07-22T00:00:02.250Z",
+      },
+      {
+        ...controlTarget,
+        epoch: "7",
+        error: "resolver has insufficient native gas",
+        errorKind: "insufficient-native-gas",
+        mode: "resolver-candidate",
+        ok: false,
+        role: "RESOLVER",
+        round: -1,
+        secondsLeft: 0,
+        timestamp: "2026-07-22T00:00:02.500Z",
+      },
+      successfulResolveEvent(),
+      successfulResolveEvent({
+        epoch: "8",
+        hash: "0x" + "7".repeat(64),
+        resolverFallbackUsed: false,
+        role: "RESOLVER",
+        timestamp: "2026-07-22T00:00:03.125Z",
+      }),
+      {
+        ...controlTarget,
+        failures: 0,
+        mode: "summary",
+        ok: true,
+        role: "SYSTEM",
+        round: 6,
+        successes: 12,
+        targetRounds: 6,
+        timestamp: "2026-07-22T00:00:03.250Z",
+      },
+    ];
+    const compactControlPlaneTraceProof = runV10CanaryProof(
+      "control-plane-trace",
+      [...matrixEvents, ...controlPlaneTraceEvents],
+      ["--summary-only"],
+    );
+    assert.equal(compactControlPlaneTraceProof.status, 0, "a fully bound mixed control-plane trace must preserve strict proof validation");
+    assert.match(compactControlPlaneTraceProof.stdout, /Summary: live canary proof checks passed/);
     assert.equal(matrixProof.status, 0, "the complete bounded matrix must not require the 50-epoch soak manifest");
     assert.doesNotMatch(matrixProof.stdout, /missing V10 gas cases/);
     assert.doesNotMatch(matrixProof.stdout, /duplicate role\/epoch\/tile keys [1-9]/);
     assert.match(matrixProof.stdout, /\| 3-sparse \| 2 \| 100002 \| 100002 \| 200002 \|/);
+    const missingTerminalSummaryProof = runV10CanaryProof(
+      "missing-terminal-summary",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence(),
+      {},
+      [],
+      {},
+      false,
+    );
+    assert.equal(missingTerminalSummaryProof.status, 1, "a strict bound proof must include exactly one terminal summary");
+    assert.match(missingTerminalSummaryProof.stdout, /canonical canary summary count 0 != 1/);
+    const duplicateTerminalSummaryProof = runV10CanaryProof(
+      "duplicate-terminal-summary",
+      [...matrixEvents, canarySummaryEvent(), canarySummaryEvent({ timestamp: "2026-07-22T00:03:01.250Z" })],
+      ["--summary-only"],
+    );
+    assert.equal(duplicateTerminalSummaryProof.status, 1, "a strict bound proof must reject duplicate summaries");
+    assert.match(duplicateTerminalSummaryProof.stdout, /canonical canary summary count 2 != 1/);
+    const postSummaryActionProof = runV10CanaryProof(
+      "post-summary-action",
+      [...matrixEvents, canarySummaryEvent(), successfulResolveEvent({
+        epoch: "8",
+        hash: "0x" + "7".repeat(64),
+        resolverFallbackUsed: false,
+        role: "RESOLVER",
+        timestamp: "2026-07-22T00:03:02.000Z",
+      })],
+      ["--summary-only"],
+    );
+    assert.equal(postSummaryActionProof.status, 1, "a strict bound proof must reject actions after its summary");
+    assert.match(postSummaryActionProof.stdout, /canonical canary summary must be terminal/);
+    const mismatchedSummaryOutcomeProof = runV10CanaryProof(
+      "mismatched-summary-outcomes",
+      [...matrixEvents, canarySummaryEvent({ successes: 11 })],
+      ["--summary-only"],
+    );
+    assert.equal(mismatchedSummaryOutcomeProof.status, 1, "the terminal summary must reconcile successes with observed bets");
+    assert.match(mismatchedSummaryOutcomeProof.stdout, /canonical canary summary outcomes do not match observed bets/);
+    const mismatchedSummaryRoundProof = runV10CanaryProof(
+      "mismatched-summary-round",
+      [...matrixEvents, canarySummaryEvent({ round: 5 })],
+      ["--summary-only"],
+    );
+    assert.equal(mismatchedSummaryRoundProof.status, 1, "the terminal summary round must equal targetRounds");
+    assert.match(mismatchedSummaryRoundProof.stdout, /canonical canary summary is invalid/);
+    const missingSummaryRoundProof = runV10CanaryProof(
+      "missing-summary-round",
+      [...matrixEvents, canarySummaryEvent({ round: 7, targetRounds: 7 })],
+      ["--summary-only"],
+    );
+    assert.equal(missingSummaryRoundProof.status, 1, "the terminal summary target must cover every observed round");
+    assert.match(missingSummaryRoundProof.stdout, /canonical canary summary targetRounds do not match observed bet rounds/);
+    const missingMatrixRepeatProof = runV10CanaryProof(
+      "missing-v10-repeat-pairs",
+      matrixEvents.filter((event) => event.repeat !== true),
+      ["--summary-only"],
+    );
+    assert.equal(missingMatrixRepeatProof.status, 1, "the V10 matrix must retain one repeat fee-measurement receipt per round");
+    assert.match(missingMatrixRepeatProof.stdout, /canonical V10 matrix requires one exact primary\/repeat pair/);
+    const dualBetHashAliasProof = runV10CanaryProof(
+      "dual-bet-hash-alias",
+      [{ ...matrixEvents[0], txHash: "0x" + "8".repeat(64) }, ...matrixEvents.slice(1)],
+      ["--summary-only"],
+    );
+    assert.equal(dualBetHashAliasProof.status, 1, "a successful V10 bet must use exactly the producer hash field");
+    assert.match(dualBetHashAliasProof.stdout, /successful canary bet tx hash is invalid/);
     const expectedRunMatrixProof = runV10CanaryProof(
       "expected-run-matrix",
       matrixEvents,
@@ -2178,12 +2428,14 @@ export function runReleaseOperationsTests() {
       "unbound-diagnostic",
       [{
         amount: "0",
+        admissionSha256: undefined,
         chainId: 59141,
         contractAddress: `0x${"1".repeat(40)}`,
         mode: "diagnostic",
         network: "sepolia",
         ok: true,
         role: "SYSTEM",
+        sampleKind: "health",
         round: -1,
         runId: undefined,
         timestamp: "2026-07-22T00:00:00.500Z",
@@ -2193,6 +2445,156 @@ export function runReleaseOperationsTests() {
     );
     assert.equal(unboundDiagnosticProof.status, 1, "every post-admission canary record must bind the admitted run and wallet set");
     assert.match(unboundDiagnosticProof.stdout, /canary action is not bound to canonical admission \(round=-1 mode=diagnostic\)/);
+    const preAdmissionMonetaryProof = runV10CanaryProof(
+      "pre-admission-monetary-actions",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence(),
+      {},
+      [
+        { ...baseBetEvent, amount: "1", role: "SYSTEM" },
+        { ...baseBetEvent, amount: "1", hash: "0x" + "8".repeat(64), role: "RESOLVER" },
+      ],
+    );
+    assert.equal(preAdmissionMonetaryProof.status, 1, "a monetary action before admission must invalidate the whole proof");
+    assert.match(preAdmissionMonetaryProof.stdout, /canonical canary admission must be the first event/);
+    const malformedAdmissionEnvelopeProof = runV10CanaryProof(
+      "malformed-admission-envelope",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence(),
+      {},
+      [],
+      { amount: "1", hash: baseBetEvent.hash, role: "AUTOMINER_A" },
+    );
+    assert.equal(malformedAdmissionEnvelopeProof.status, 1, "the outer admission record must remain a zero-action SYSTEM control");
+    assert.match(malformedAdmissionEnvelopeProof.stdout, /canonical canary admission envelope is invalid/);
+    assert.match(malformedAdmissionEnvelopeProof.stdout, /canary control action amount must be zero/);
+    const unknownModeProof = runV10CanaryProof(
+      "unknown-admitted-mode",
+      [...matrixEvents, {
+        ...controlTarget,
+        mode: "runtime-identity",
+        ok: true,
+        role: "AUTOMINER_A",
+        round: -1,
+        timestamp: "2026-07-22T00:00:04.000Z",
+      }],
+      ["--summary-only"],
+    );
+    assert.equal(unknownModeProof.status, 1, "an admitted role must not authorize an unknown post-admission mode");
+    assert.match(unknownModeProof.stdout, /unsupported canary action mode/);
+    const wrongDiagnosticRoleProof = runV10CanaryProof(
+      "diagnostic-selected-role",
+      [...matrixEvents, {
+        ...controlTarget,
+        mode: "diagnostic",
+        ok: true,
+        role: "AUTOMINER_A",
+        round: 0,
+        sampleKind: "health",
+        timestamp: "2026-07-22T00:00:04.250Z",
+      }],
+      ["--summary-only"],
+    );
+    assert.equal(wrongDiagnosticRoleProof.status, 1, "a selected wallet role must not impersonate the SYSTEM diagnostic control plane");
+    assert.match(wrongDiagnosticRoleProof.stdout, /canary diagnostic role or shape is not allowed/);
+    const controlSpendShapeProof = runV10CanaryProof(
+      "diagnostic-spend-shape",
+      [...matrixEvents, {
+        ...controlTarget,
+        allowanceWei: "1",
+        amount: "1",
+        mode: "diagnostic",
+        ok: true,
+        role: "SYSTEM",
+        round: 0,
+        sampleKind: "health",
+        timestamp: "2026-07-22T00:00:04.500Z",
+      }],
+      ["--summary-only"],
+    );
+    assert.equal(controlSpendShapeProof.status, 1, "a no-action control must not carry token authorization or nonzero spend evidence");
+    assert.match(controlSpendShapeProof.stdout, /canary control action amount must be zero/);
+    assert.match(controlSpendShapeProof.stdout, /canary control action has spend or token authorization fields/);
+    const controlTransactionShapeProof = runV10CanaryProof(
+      "diagnostic-transaction-shape",
+      [...matrixEvents, {
+        ...controlTarget,
+        hash: baseBetEvent.hash,
+        mode: "diagnostic",
+        ok: true,
+        role: "SYSTEM",
+        round: 0,
+        sampleKind: "health",
+        timestamp: "2026-07-22T00:00:04.750Z",
+        txStatus: "success",
+      }],
+      ["--summary-only"],
+    );
+    assert.equal(controlTransactionShapeProof.status, 1, "a no-action control must not relabel transaction evidence");
+    assert.match(controlTransactionShapeProof.stdout, /canary no-action control has transaction evidence/);
+    const unexpectedHealthControlFieldProof = runV10CanaryProof(
+      "unexpected-health-control-field",
+      [...matrixEvents, healthDiagnosticEvent(2, "2026-07-22T00:04:55.000Z", { injected: true })],
+      ["--summary-only"],
+    );
+    assert.equal(unexpectedHealthControlFieldProof.status, 1, "health controls must reject undeclared fields");
+    assert.match(unexpectedHealthControlFieldProof.stdout, /canary control action has unexpected fields/);
+    const malformedResolverControlProof = runV10CanaryProof(
+      "epoch-wait-shape",
+      [...matrixEvents, {
+        ...controlTarget,
+        epoch: "0",
+        mode: "epoch-wait",
+        ok: true,
+        role: "RESOLVER",
+        round: 0,
+        secondsLeft: 10,
+        timestamp: "2026-07-22T00:00:05.000Z",
+      }],
+      ["--summary-only"],
+    );
+    assert.equal(malformedResolverControlProof.status, 1, "resolver control records must retain a canonical positive epoch and sentinel round");
+    assert.match(malformedResolverControlProof.stdout, /canary resolver control epoch or round is invalid/);
+    const forbiddenSystemParticipantActionsProof = runV10CanaryProof(
+      "system-participant-actions",
+      [...matrixEvents, {
+        ...matrixEvents[0],
+        role: "SYSTEM",
+      }, {
+        ...controlTarget,
+        amount: "1",
+        mode: "approve",
+        ok: true,
+        role: "SYSTEM",
+        round: -1,
+        timestamp: "2026-07-22T00:00:05.250Z",
+      }],
+      ["--summary-only"],
+    );
+    assert.equal(forbiddenSystemParticipantActionsProof.status, 1, "SYSTEM must not enter participant bet or approval paths");
+    assert.match(forbiddenSystemParticipantActionsProof.stdout, /canary bet role is not admitted/);
+    assert.match(forbiddenSystemParticipantActionsProof.stdout, /canary approval role is not admitted/);
+    const forbiddenResolverParticipantActionsProof = runV10CanaryProof(
+      "resolver-participant-actions",
+      [...matrixEvents, {
+        ...matrixEvents[0],
+        role: "RESOLVER",
+      }, {
+        ...controlTarget,
+        amount: "1",
+        mode: "approve",
+        ok: true,
+        role: "RESOLVER",
+        round: -1,
+        timestamp: "2026-07-22T00:00:05.500Z",
+      }],
+      ["--summary-only"],
+    );
+    assert.equal(forbiddenResolverParticipantActionsProof.status, 1, "RESOLVER must not enter participant bet or approval paths");
+    assert.match(forbiddenResolverParticipantActionsProof.stdout, /canary bet role is not admitted/);
+    assert.match(forbiddenResolverParticipantActionsProof.stdout, /canary approval role is not admitted/);
     const wrongRuntimeIdentityEvidence = buildAdmissionEvidence();
     wrongRuntimeIdentityEvidence[0] = {
       ...wrongRuntimeIdentityEvidence[0],
@@ -2219,6 +2621,19 @@ export function runReleaseOperationsTests() {
     );
     assert.equal(missingRuntimeSnapshotProof.status, 1, "runtime identity must include a nonzero observed snapshot hash");
     assert.match(missingRuntimeSnapshotProof.stdout, /runtime identity preflight does not match canonical admission/);
+    const extraRuntimeIdentityEvidence = buildAdmissionEvidence();
+    extraRuntimeIdentityEvidence[0] = {
+      ...extraRuntimeIdentityEvidence[0],
+      runtimeIdentity: { ...extraRuntimeIdentityEvidence[0].runtimeIdentity, injected: true },
+    };
+    const extraRuntimeIdentityProof = runV10CanaryProof(
+      "extra-runtime-identity-field",
+      matrixEvents,
+      ["--summary-only"],
+      extraRuntimeIdentityEvidence,
+    );
+    assert.equal(extraRuntimeIdentityProof.status, 1, "runtime identity must reject undeclared fields");
+    assert.match(extraRuntimeIdentityProof.stdout, /canary runtime identity preflight shape is invalid/);
     const resolveTarget = {
       amount: "0",
       chainId: 59141,
@@ -2239,6 +2654,86 @@ export function runReleaseOperationsTests() {
     );
     assert.equal(missingResolveHashProof.status, 1, "a successful resolver action must retain its transaction hash");
     assert.match(missingResolveHashProof.stdout, /successful canary resolve tx hash is invalid/);
+    const pendingSuccessfulResolveProof = runV10CanaryProof(
+      "pending-successful-resolve",
+      [...matrixEvents, { ...resolveTarget, hash: baseBetEvent.hash, txStatus: "pending" }],
+      ["--summary-only"],
+    );
+    assert.equal(pendingSuccessfulResolveProof.status, 1, "a successful resolver action must retain a successful receipt status");
+    assert.match(pendingSuccessfulResolveProof.stdout, /successful canary resolve tx status is invalid/);
+    const resolveBetHashCollisionProof = runV10CanaryProof(
+      "resolve-bet-hash-collision",
+      [...matrixEvents, { ...resolveTarget, hash: matrixEvents[0].hash }],
+      ["--summary-only"],
+    );
+    assert.equal(resolveBetHashCollisionProof.status, 1, "a resolve must not reuse a successful bet hash");
+    assert.match(resolveBetHashCollisionProof.stdout, /duplicate successful cross-action tx hashes 1/);
+    const duplicateResolveHashProof = runV10CanaryProof(
+      "duplicate-resolve-hash",
+      [...matrixEvents, {
+        ...resolveTarget,
+        epoch: "7",
+        hash: "0x" + "7".repeat(64),
+      }, {
+        ...resolveTarget,
+        epoch: "8",
+        hash: "0x" + "7".repeat(64),
+        timestamp: "2026-07-22T00:00:21.000Z",
+      }],
+      ["--summary-only"],
+    );
+    assert.equal(duplicateResolveHashProof.status, 1, "two successful resolve records must not share a transaction hash");
+    assert.match(duplicateResolveHashProof.stdout, /duplicate successful cross-action tx hashes 1/);
+    const duplicateResolveEpochProof = runV10CanaryProof(
+      "duplicate-resolve-epoch",
+      [...matrixEvents, {
+        ...resolveTarget,
+        hash: "0x" + "7".repeat(64),
+      }, {
+        ...resolveTarget,
+        hash: "0x" + "8".repeat(64),
+        timestamp: "2026-07-22T00:00:21.000Z",
+      }],
+      ["--summary-only"],
+    );
+    assert.equal(duplicateResolveEpochProof.status, 1, "two successful resolve records must not claim the same epoch");
+    assert.match(duplicateResolveEpochProof.stdout, /duplicate successful resolve epochs 1/);
+    const invalidFallbackResolveProof = runV10CanaryProof(
+      "invalid-fallback-resolve",
+      [...matrixEvents, successfulResolveEvent({ resolverFallbackUsed: false })],
+      ["--summary-only"],
+    );
+    assert.equal(invalidFallbackResolveProof.status, 1, "a selected fallback resolver must declare fallback evidence");
+    assert.match(invalidFallbackResolveProof.stdout, /successful canary resolve fallback binding is invalid/);
+    const invalidDedicatedResolveProof = runV10CanaryProof(
+      "invalid-dedicated-resolve",
+      [...matrixEvents, successfulResolveEvent({
+        epoch: "8",
+        hash: "0x" + "7".repeat(64),
+        resolverFallbackUsed: true,
+        role: "RESOLVER",
+      })],
+      ["--summary-only"],
+    );
+    assert.equal(invalidDedicatedResolveProof.status, 1, "the dedicated resolver must not claim fallback evidence");
+    assert.match(invalidDedicatedResolveProof.stdout, /successful canary resolve fallback binding is invalid/);
+    const malformedResolveReceiptProof = runV10CanaryProof(
+      "malformed-resolve-receipt",
+      [...matrixEvents, successfulResolveEvent({ gasUsed: "0" })],
+      ["--summary-only"],
+    );
+    assert.equal(malformedResolveReceiptProof.status, 1, "a successful resolve must retain canonical gas and fee receipt fields");
+    assert.match(malformedResolveReceiptProof.stdout, /successful canary resolve receipt metrics are invalid/);
+    const resolveTxHashAliasProof = runV10CanaryProof(
+      "resolve-txhash-alias",
+      [...matrixEvents, successfulResolveEvent({
+        hash: undefined,
+        txHash: "0x" + "7".repeat(64),
+      })],
+      ["--summary-only"],
+    );
+    assert.equal(resolveTxHashAliasProof.status, 1, "a successful resolve must use the producer hash field without aliases");
+    assert.match(resolveTxHashAliasProof.stdout, /successful canary resolve tx hash is invalid/);
     const unboundResolveProof = runV10CanaryProof(
       "unbound-resolve",
       [...matrixEvents, { ...resolveTarget, admissionSha256: "f".repeat(64), hash: `0x${"3".repeat(64)}` }],
@@ -2284,23 +2779,222 @@ export function runReleaseOperationsTests() {
       ["--summary-only"],
       buildAdmissionEvidence({
         approvalRequired: true,
-        approvals: [{
-          amount: "0",
-          allowanceCapWei: "100",
-          allowanceWei: "100",
-          allowanceWithinRunCap: true,
-          chainId: 59141,
-          contractAddress: `0x${"1".repeat(40)}`,
-          hash: `0x${"2".repeat(64)}`,
-          mode: "approve",
-          network: "sepolia",
-          ok: true,
-          role: "AUTOMINER_A",
-          round: -1,
-        }],
+        approvals: [approvedReceiptEvent()],
       }),
     );
     assert.equal(approvedMatrixProof.status, 0, "a declared approval must bind one exact-cap successful receipt");
+    const pendingApprovalProof = runV10CanaryProof(
+      "pending-approval-receipt",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence({
+        approvalRequired: true,
+        approvals: [approvedReceiptEvent({ txStatus: "pending" })],
+      }),
+    );
+    assert.equal(pendingApprovalProof.status, 1, "a successful approval must retain a successful receipt status");
+    assert.match(pendingApprovalProof.stdout, /canonical admission approval receipt is invalid for AUTOMINER_A/);
+    const missingApprovalHashProof = runV10CanaryProof(
+      "missing-approval-hash",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence({
+        approvalRequired: true,
+        approvals: [approvedReceiptEvent({ hash: undefined })],
+      }),
+    );
+    assert.equal(missingApprovalHashProof.status, 1, "a successful approval must retain a real transaction hash");
+    assert.match(missingApprovalHashProof.stdout, /canonical admission approval receipt is invalid for AUTOMINER_A/);
+    const wrongApprovalRoundProof = runV10CanaryProof(
+      "wrong-approval-round",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence({
+        approvalRequired: true,
+        approvals: [approvedReceiptEvent({ round: 0 })],
+      }),
+    );
+    assert.equal(wrongApprovalRoundProof.status, 1, "a successful approval must use the pre-bet sentinel round");
+    assert.match(wrongApprovalRoundProof.stdout, /canonical admission approval receipt is invalid for AUTOMINER_A/);
+    const betBeforePreflightProof = runV10CanaryProof(
+      "bet-before-preflight",
+      matrixEvents.slice(1),
+      ["--summary-only"],
+      buildAdmissionEvidence(),
+      {},
+      [],
+      {},
+      true,
+      [matrixEvents[0]],
+    );
+    assert.equal(betBeforePreflightProof.status, 1, "wallet preflight must precede every monetary action");
+    assert.match(betBeforePreflightProof.stdout, /canonical admission wallet preflights must precede monetary actions/);
+    const resolveBeforeRuntimeProof = runV10CanaryProof(
+      "resolve-before-runtime-preflight",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence(),
+      {},
+      [],
+      {},
+      true,
+      [successfulResolveEvent({
+        epoch: "8",
+        hash: "0x" + "7".repeat(64),
+        resolverFallbackUsed: false,
+        role: "RESOLVER",
+      })],
+    );
+    assert.equal(resolveBeforeRuntimeProof.status, 1, "a successful resolve must follow runtime and wallet preflights");
+    assert.match(resolveBeforeRuntimeProof.stdout, /canonical admission runtime identity preflight must precede resolves/);
+    const failedResolveBeforePreflightApprovalProof = runV10CanaryProof(
+      "failed-resolve-before-preflight-approval",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence({
+        approvalRequired: true,
+        approvals: [approvedReceiptEvent({ hash: "0x" + "8".repeat(64) })],
+      }),
+      {},
+      [],
+      {},
+      true,
+      [successfulResolveEvent({
+        epoch: "8",
+        hash: "0x" + "7".repeat(64),
+        ok: false,
+        resolverFallbackUsed: false,
+        role: "RESOLVER",
+        txStatus: "reverted",
+      })],
+    );
+    assert.equal(failedResolveBeforePreflightApprovalProof.status, 1, "a failed resolve attempt must still follow runtime, preflight, and required approval phases");
+    assert.match(failedResolveBeforePreflightApprovalProof.stdout, /canonical admission runtime identity preflight must precede resolves/);
+    assert.match(failedResolveBeforePreflightApprovalProof.stdout, /canonical admission required approvals must precede resolves/);
+    const resolveBeforeApprovalEvidence = buildAdmissionEvidence({ approvalRequired: true });
+    const resolveRuntimePreflight = resolveBeforeApprovalEvidence.shift();
+    const resolveWalletPreflight = resolveBeforeApprovalEvidence.shift();
+    const resolveBeforeApprovalProof = runV10CanaryProof(
+      "resolve-before-required-approval",
+      matrixEvents,
+      ["--summary-only"],
+      [
+        resolveRuntimePreflight,
+        resolveWalletPreflight,
+        successfulResolveEvent({
+          epoch: "8",
+          hash: "0x" + "7".repeat(64),
+          resolverFallbackUsed: false,
+          role: "RESOLVER",
+        }),
+        approvedReceiptEvent({ hash: "0x" + "7".repeat(64) }),
+      ],
+    );
+    assert.equal(resolveBeforeApprovalProof.status, 1, "a successful resolve must follow required approvals");
+    assert.match(resolveBeforeApprovalProof.stdout, /canonical admission approval must precede resolves for AUTOMINER_A/);
+    const runtimeAfterWalletEvidence = buildAdmissionEvidence();
+    const runtimePreflight = runtimeAfterWalletEvidence.shift();
+    runtimeAfterWalletEvidence.push(runtimePreflight);
+    const runtimeAfterWalletProof = runV10CanaryProof(
+      "runtime-after-wallet-preflight",
+      matrixEvents,
+      ["--summary-only"],
+      runtimeAfterWalletEvidence,
+    );
+    assert.equal(runtimeAfterWalletProof.status, 1, "runtime identity preflight must precede wallet preflights");
+    assert.match(runtimeAfterWalletProof.stdout, /canonical admission runtime identity preflight must precede wallet preflights/);
+    const approvalBeforePreflightEvidence = buildAdmissionEvidence({ approvalRequired: true });
+    const approvalRuntimePreflight = approvalBeforePreflightEvidence.shift();
+    const approvalWalletPreflight = approvalBeforePreflightEvidence.shift();
+    const approvalBeforePreflightProof = runV10CanaryProof(
+      "approval-before-wallet-preflight",
+      matrixEvents,
+      ["--summary-only"],
+      [approvalRuntimePreflight, approvedReceiptEvent({ hash: "0x" + "8".repeat(64) }), approvalWalletPreflight],
+    );
+    assert.equal(approvalBeforePreflightProof.status, 1, "an approval must follow its wallet preflight");
+    assert.match(approvalBeforePreflightProof.stdout, /canonical admission approval must follow wallet preflight for AUTOMINER_A/);
+    const approvalAfterBetProof = runV10CanaryProof(
+      "approval-after-bet",
+      [...matrixEvents, approvedReceiptEvent({ hash: "0x" + "8".repeat(64) })],
+      ["--summary-only"],
+      buildAdmissionEvidence({ approvalRequired: true }),
+    );
+    assert.equal(approvalAfterBetProof.status, 1, "an approval must precede bets for its role");
+    assert.match(approvalAfterBetProof.stdout, /canonical admission approval must precede bets for AUTOMINER_A/);
+    const crossRoleApprovalEvidence = buildAdmissionEvidence({ approvalRequired: true });
+    const crossRoleRuntimePreflight = crossRoleApprovalEvidence.shift();
+    const crossRoleApprovalPreflight = crossRoleApprovalEvidence.shift();
+    const crossRoleWalletPreflight = {
+      ...crossRoleApprovalPreflight,
+      approvalRequired: false,
+      role: "AUTOMINER_B",
+    };
+    const lateCrossRoleApprovalProof = runV10CanaryProof(
+      "late-cross-role-approval",
+      [
+        ...matrixEvents.map((event) => ({ ...event, role: "AUTOMINER_B" })),
+        approvedReceiptEvent({ hash: "0x" + "8".repeat(64) }),
+      ],
+      ["--summary-only"],
+      [crossRoleRuntimePreflight, crossRoleApprovalPreflight, crossRoleWalletPreflight],
+      {
+        roleCaps: [
+          { role: "AUTOMINER_A", spendCapWei: "100", allowanceCapWei: "100" },
+          { role: "AUTOMINER_B", spendCapWei: "100", allowanceCapWei: "100" },
+        ],
+        selectedRoles: ["AUTOMINER_A", "AUTOMINER_B"],
+      },
+    );
+    assert.equal(lateCrossRoleApprovalProof.status, 1, "all required approvals must finish before a different selected role bets");
+    assert.match(lateCrossRoleApprovalProof.stdout, /canonical admission required approvals must precede bets/);
+    const approvalBetHashCollisionProof = runV10CanaryProof(
+      "approval-bet-hash-collision",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence({
+        approvalRequired: true,
+        approvals: [approvedReceiptEvent({
+          contractAddress: baseBetEvent.contractAddress,
+          hash: matrixEvents[0].hash,
+        })],
+      }),
+    );
+    assert.equal(approvalBetHashCollisionProof.status, 1, "an approval must not reuse a successful bet hash");
+    assert.match(approvalBetHashCollisionProof.stdout, /duplicate successful cross-action tx hashes 1/);
+    const mismatchedRoleCapProof = runV10CanaryProof(
+      "mismatched-role-cap",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence(),
+      { roleCaps: [{ role: "AUTOMINER_A", spendCapWei: "99", allowanceCapWei: "100" }] },
+    );
+    assert.equal(mismatchedRoleCapProof.status, 1, "a role cap must not separate spend and allowance budgets");
+    assert.match(mismatchedRoleCapProof.stdout, /canonical canary admission roleCaps are invalid/);
+    const reservedControlRoleCapProof = runV10CanaryProof(
+      "reserved-control-role-cap",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence(),
+      {
+        roleCaps: [{ role: "RESOLVER", spendCapWei: "100", allowanceCapWei: "100" }],
+        selectedRoles: ["RESOLVER"],
+      },
+    );
+    assert.equal(reservedControlRoleCapProof.status, 1, "SYSTEM and RESOLVER must remain outside selected spend-cap roles");
+    assert.match(reservedControlRoleCapProof.stdout, /canonical canary admission selectedRoles are invalid/);
+    const unknownParticipantRoleCapProof = runV10CanaryProof(
+      "unknown-participant-role-cap",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence(),
+      {
+        roleCaps: [{ role: "FOO", spendCapWei: "100", allowanceCapWei: "100" }],
+        selectedRoles: ["FOO"],
+      },
+    );
+    assert.equal(unknownParticipantRoleCapProof.status, 1, "admission must reject roles outside the producer participant safelist");
+    assert.match(unknownParticipantRoleCapProof.stdout, /canonical canary admission selectedRoles are invalid/);
     const replayedRunProof = runV10CanaryProof(
       "replayed-run",
       matrixEvents,

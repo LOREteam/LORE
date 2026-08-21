@@ -115,6 +115,18 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   network, wallet, or database action occurred.
 
 - Wallet setup is runtime-owned across Hub, Sidebar, and Wallet Settings: one safe shared attempt lock exposes creating/error state, prevents duplicate creation requests across surfaces, retains retry after a rejected attempt, and releases only after wallet sync/connection. A generation token invalidates stale Promise settlement after reset, so it cannot overwrite a newer attempt. Local presentation and TypeScript checks passed; no wallet or chain action was performed.
+- Current local canary-proof P1 hardening passed the focused release-operations
+  suite (with an isolated temporary `LORE_DB_PATH`) and `npm.cmd run typecheck`:
+  `live-round-canary.ts` now records the
+  approval receipt `txStatus`; strict V10 proof accepts an approval only with
+  `txStatus: "success"`, a real hash, and `round: -1`. Bound JSONL evidence
+  also requires admission-first ordering, the exact role/mode control plane,
+  phase-ordered runtime/wallet-preflight/approval/bet records, a single terminal
+  SYSTEM summary reconciled to observed bets, and one exact primary/repeat
+  receipt pair per V10 round. This is local source/test work only: it neither
+  proves on-chain resolve calldata/from/receipt provenance nor invents a
+  resolver-state-change budget outside the admitted ERC20 role caps.
+
 ## Campaign status
 
 - `local-20260821-final-r3` iterations 1–3 completed all seven isolated gates.

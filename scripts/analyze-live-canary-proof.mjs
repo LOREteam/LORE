@@ -61,6 +61,113 @@ const V10_GAS_CASES = ["1", "3-contiguous", "3-sparse", "5-contiguous", "5-spars
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 const ADMISSION_RUN_ID_RE = /^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/;
 const CANONICAL_WEI_RE = /^(?:0|[1-9]\d{0,77})$/;
+const CANARY_PARTICIPANT_ROLES = new Set(["MANUAL", "AUTOMINER_A", "AUTOMINER_B", "AUTOMINER_C"]);
+const CANARY_CONTROL_FORBIDDEN_FIELDS = new Set([
+  "amounts",
+  "participant",
+  "targetTotalAmount",
+  "totalAmount",
+  "totalAmountWei",
+]);
+const CANARY_CONTROL_TOKEN_FIELD_RE = /^(?:allowance|approval)/;
+const CANARY_CONTROL_TRANSACTION_EVIDENCE_FIELD_RE = /^(?:effectiveGasPrice|gas|hash|networkFeeWei|receipt|tx|transactionHash)/;
+const CANARY_RUNTIME_IDENTITY_KEYS = [
+  "canonicalProvenanceVerified",
+  "chainId",
+  "contractAddress",
+  "deployBlock",
+  "executableBytes",
+  "executableRuntimeBytes",
+  "immutableReferences",
+  "manifestDigest",
+  "manifestMatched",
+  "normalizedRuntimeSha256",
+  "observedBlock",
+  "observedBlockHash",
+];
+const CANARY_CONTROL_COMMON_FIELDS = new Set([
+  "admissionSha256",
+  "amount",
+  "chainId",
+  "contractAddress",
+  "mode",
+  "network",
+  "ok",
+  "role",
+  "round",
+  "rpcFailoverInjected",
+  "rpcLabel",
+  "runId",
+  "timestamp",
+  "walletSetSha256",
+]);
+const CANARY_HEALTH_METRIC_FIELDS = [
+  "dbBytes",
+  "diskFreeBytes",
+  "heapUsedBytes",
+  "rssBytes",
+  "runtimeUptimeSeconds",
+  "walBytes",
+];
+const CANARY_CONTROL_ALLOWED_FIELDS_BY_MODE = {
+  admission: new Set([
+    ...CANARY_CONTROL_COMMON_FIELDS,
+    "admission",
+    "signatureRequested",
+    "signingMaterialLoaded",
+    "transactionSent",
+    "walletClientCreated",
+  ]),
+  diagnostic: new Set([
+    ...CANARY_CONTROL_COMMON_FIELDS,
+    ...CANARY_HEALTH_METRIC_FIELDS,
+    "error",
+    "errorKind",
+    "healthRetryCount",
+    "sampleKind",
+  ]),
+  "epoch-wait": new Set([
+    ...CANARY_CONTROL_COMMON_FIELDS,
+    "durationMs",
+    "epoch",
+    "secondsLeft",
+  ]),
+  preflight: new Set([
+    ...CANARY_CONTROL_COMMON_FIELDS,
+    "deploymentManifestSha256",
+    "runtimeIdentity",
+    "sourceArtifactGitSha",
+  ]),
+  resolve: new Set([
+    ...CANARY_CONTROL_COMMON_FIELDS,
+    "durationMs",
+    "effectiveGasPrice",
+    "epoch",
+    "error",
+    "errorKind",
+    "gasEstimate",
+    "gasLimit",
+    "gasUsed",
+    "hash",
+    "networkFeeWei",
+    "resolverFallbackUsed",
+    "secondsLeft",
+    "txStatus",
+  ]),
+  "resolver-candidate": new Set([
+    ...CANARY_CONTROL_COMMON_FIELDS,
+    "epoch",
+    "error",
+    "errorKind",
+    "secondsLeft",
+  ]),
+  summary: new Set([
+    ...CANARY_CONTROL_COMMON_FIELDS,
+    "failures",
+    "successes",
+    "targetRounds",
+  ]),
+};
 
 if (!logPath) {
   if (summaryOnly) {
@@ -91,6 +198,22 @@ if (!logPath) {
   const autoMinerBets = okBets.filter((event) => String(event.role ?? "").toUpperCase().includes("AUTOMINER"));
   const autoMinerEpochs = unique(autoMinerBets.map((event) => positiveIntegerString(event.epoch)).filter(Boolean));
   const resolveEvents = events.filter((event) => event.mode === "resolve");
+  const successfulResolveEvents = resolveEvents.filter((event) => event.ok === true && event.txStatus === "success");
+  const successfulApprovalEvents = events.filter((event) => event.mode === "approve" && event.ok === true && event.txStatus === "success");
+  const successfulOnchainActionEvents = [...okBets, ...successfulApprovalEvents, ...successfulResolveEvents];
+  const successfulNonBetActionTxHashes = new Set(
+    [...successfulApprovalEvents, ...successfulResolveEvents]
+      .map((event) => String(eventTxHash(event) ?? "").trim().toLowerCase())
+      .filter((hash) => isRealTx(hash)),
+  );
+  const duplicateSuccessfulCrossActionTxHashes = findDuplicateTxHashes(successfulOnchainActionEvents)
+    .filter((hash) => successfulNonBetActionTxHashes.has(hash));
+  const successfulResolveEpochs = successfulResolveEvents
+    .map((event) => canonicalWei(event.epoch, { allowZero: false }))
+    .filter(Boolean);
+  const duplicateSuccessfulResolveEpochs = [...new Set(
+    successfulResolveEpochs.filter((epoch, index) => successfulResolveEpochs.indexOf(epoch) !== index),
+  )].sort();
   const failedResolve = resolveEvents.filter((event) => event.ok !== true || event.txStatus !== "success");
   const epochWaits = events.filter((event) => event.mode === "epoch-wait");
   const preflightEvents = events.filter((event) => event.mode === "preflight");
@@ -190,6 +313,8 @@ if (!logPath) {
   }
   if (missingSuccessfulTxHashes.length > 0) strictFailures.push(`successful bet tx hashes missing or invalid ${missingSuccessfulTxHashes.length}`);
   if (duplicateSuccessfulTxHashes.length > 0) strictFailures.push(`duplicate successful tx hashes ${duplicateSuccessfulTxHashes.length}`);
+  if (duplicateSuccessfulCrossActionTxHashes.length > 0) strictFailures.push("duplicate successful cross-action tx hashes " + duplicateSuccessfulCrossActionTxHashes.length);
+  if (duplicateSuccessfulResolveEpochs.length > 0) strictFailures.push("duplicate successful resolve epochs " + duplicateSuccessfulResolveEpochs.length);
   if (duplicateNonceKeys.length > 0) strictFailures.push(`duplicate successful nonce keys ${duplicateNonceKeys.length}`);
   if (malformedBetTimestampEvidence.length > 0) strictFailures.push(`malformed bet timestamp evidence ${malformedBetTimestampEvidence.length}`);
   if (malformedBetEpochEvidence.length > 0) strictFailures.push(`malformed bet epoch evidence ${malformedBetEpochEvidence.length}`);
@@ -519,6 +644,34 @@ function duplicateTxHashEntries(value) {
   return duplicates;
 }
 
+function hasCanonicalProducerTxHash(event) {
+  return (
+    isPlainObject(event)
+    && !Object.hasOwn(event, "txHash")
+    && !Object.hasOwn(event, "transactionHash")
+    && isRealTx(event.hash)
+  );
+}
+
+function hasCanonicalResolveReceiptMetrics(event) {
+  const effectiveGasPrice = canonicalWei(event?.effectiveGasPrice, { allowZero: true });
+  const gasEstimate = canonicalWei(event?.gasEstimate, { allowZero: false });
+  const gasLimit = canonicalWei(event?.gasLimit, { allowZero: false });
+  const gasUsed = canonicalWei(event?.gasUsed, { allowZero: false });
+  const networkFeeWei = canonicalWei(event?.networkFeeWei, { allowZero: true });
+  if (
+    effectiveGasPrice == null
+    || gasEstimate == null
+    || gasLimit == null
+    || gasUsed == null
+    || networkFeeWei == null
+  ) return false;
+  return (
+    BigInt(gasLimit) >= BigInt(gasEstimate)
+    && BigInt(gasLimit) >= BigInt(gasUsed)
+    && BigInt(networkFeeWei) === BigInt(gasUsed) * BigInt(effectiveGasPrice)
+  );
+}
 function eventTxHash(event) {
   return event?.txHash ?? event?.hash ?? "";
 }
@@ -1316,6 +1469,7 @@ function evaluateCanaryAdmission({
   }
 
   const admissionIndex = admissionIndexes[0];
+  if (admissionIndex !== 0) failures.push("canonical canary admission must be the first event");
   const event = events[admissionIndex];
   const admission = event.admission;
   if (!isPlainObject(admission)) {
@@ -1416,6 +1570,7 @@ function evaluateCanaryAdmission({
   if (typeof event.admissionSha256 !== "string" || !SHA256_HEX_RE.test(event.admissionSha256) || event.admissionSha256 !== calculatedSha) {
     failures.push("canonical canary admission SHA-256 does not match payload");
   }
+  validateCanaryAdmissionEnvelope(event, admission, normalizedAdmissionContract, failures);
 
   // Once the canonical admission is written, every subsequent run record is
   // part of this evidence set. Do not leave health, timing, or failed-action
@@ -1427,8 +1582,13 @@ function evaluateCanaryAdmission({
   const capByRole = roleCaps ? new Map(roleCaps.map((cap) => [cap.role, cap])) : new Map();
   const spentByRole = new Map();
   const runtimeIdentityPreflights = [];
+  const runtimeIdentityPreflightIndexes = [];
   const walletPreflightsByRole = new Map();
+  const walletPreflightIndexesByRole = new Map();
   const approvalsByRole = new Map();
+  const approvalIndexesByRole = new Map();
+  const betIndexesByRole = new Map();
+  const resolveIndexes = [];
   for (const { item, index } of relevantEvents) {
     const label = `round=${item.round ?? "n/a"} mode=${item.mode ?? "n/a"}`;
     if (index <= admissionIndex || item.admissionSha256 !== calculatedSha) {
@@ -1449,57 +1609,150 @@ function evaluateCanaryAdmission({
       failures.push(`canary action target does not match canonical admission (${label})`);
     }
     const role = normalizeRole(item.role);
-    const isResolverAction = item.mode === "resolve";
-    const isRuntimeIdentity = item.mode === "preflight" && role === "SYSTEM" && isPlainObject(item.runtimeIdentity);
-    if (!isRuntimeIdentity && !isResolverAction && (!role || !capByRole.has(role))) {
-      failures.push(`canary action role is not admitted (${label})`);
-    }
-    if (isResolverAction && (!role || (role !== "RESOLVER" && !capByRole.has(role)))) {
-      failures.push(`canary resolve role is not admitted (${label})`);
-    }
-    if (isRuntimeIdentity) {
-      runtimeIdentityPreflights.push(item);
-      validateRuntimeIdentityBinding(item, admission, failures);
-    }
-    if (isResolverAction && item.ok === true && item.txStatus === "success" && !isRealTx(eventTxHash(item))) {
-      failures.push(`successful canary resolve tx hash is invalid (${label})`);
-    }
-    if (item.mode === "preflight" && role && role !== "SYSTEM" && capByRole.has(role)) {
-      const preflights = walletPreflightsByRole.get(role) ?? [];
-      preflights.push(item);
-      walletPreflightsByRole.set(role, preflights);
-      const cap = capByRole.get(role);
-      const allowanceWei = canonicalWei(item.allowanceWei, { allowZero: true });
-      const allowanceCapWei = canonicalWei(item.allowanceCapWei, { allowZero: true });
-      if (allowanceWei == null || allowanceCapWei == null) {
-        failures.push(`canary preflight allowance evidence is invalid (${label})`);
-      } else {
-        if (allowanceCapWei !== cap.allowanceCapWei) failures.push(`canary preflight allowance cap does not match admission (${label})`);
-        if (BigInt(allowanceWei) > BigInt(cap.allowanceCapWei)) failures.push(`canary preflight allowance exceeds admission cap (${label})`);
-        if (item.allowanceWithinRunCap !== (BigInt(allowanceWei) <= BigInt(allowanceCapWei))) {
-          failures.push(`canary preflight allowance boundary does not match evidence (${label})`);
+    const exactRole = role && item.role === role ? role : "";
+    const selectedRole = Boolean(exactRole && capByRole.has(exactRole));
+    const resolverOrSelectedRole = exactRole === "RESOLVER" || selectedRole;
+    switch (item.mode) {
+      case "preflight": {
+        if (exactRole === "SYSTEM") {
+          validateCanaryControlActionShape(item, label, failures, { allowRuntimeIdentity: true });
+          if (!hasExactRuntimeIdentityShape(item.runtimeIdentity)) {
+            failures.push("canary runtime identity preflight shape is invalid (" + label + ")");
+            break;
+          }
+          runtimeIdentityPreflights.push(item);
+          runtimeIdentityPreflightIndexes.push(index);
+          validateRuntimeIdentityBinding(item, admission, failures);
+          break;
         }
-      }
-      if (item.allowanceWithinRunCap !== true && item.allowanceWithinRunCap !== false) {
-        failures.push(`canary preflight allowance boundary is missing (${label})`);
-      }
-    }
-    if (item.mode === "approve" && role && capByRole.has(role)) {
-      const approvals = approvalsByRole.get(role) ?? [];
-      approvals.push(item);
-      approvalsByRole.set(role, approvals);
-    }
-    if (isBetEvent(item) && item.ok === true && item.txStatus === "success" && role && capByRole.has(role)) {
-      const spend = canonicalWei(item.totalAmountWei, { allowZero: false });
-      if (spend == null) {
-        failures.push(`successful canary bet spend is invalid (${label})`);
-      } else {
-        const next = (spentByRole.get(role) ?? 0n) + BigInt(spend);
-        spentByRole.set(role, next);
-        if (next > BigInt(capByRole.get(role).spendCapWei)) {
-          failures.push(`successful canary spend exceeds admission cap (${label})`);
+        if (!selectedRole) {
+          failures.push("canary wallet preflight role is not admitted (" + label + ")");
+          break;
         }
+        if (item.amount !== "0" || Object.hasOwn(item, "runtimeIdentity")) {
+          failures.push("canary wallet preflight shape is invalid (" + label + ")");
+        }
+        const preflights = walletPreflightsByRole.get(exactRole) ?? [];
+        preflights.push(item);
+        walletPreflightsByRole.set(exactRole, preflights);
+        const preflightIndexes = walletPreflightIndexesByRole.get(exactRole) ?? [];
+        preflightIndexes.push(index);
+        walletPreflightIndexesByRole.set(exactRole, preflightIndexes);
+        const cap = capByRole.get(exactRole);
+        const allowanceWei = canonicalWei(item.allowanceWei, { allowZero: true });
+        const allowanceCapWei = canonicalWei(item.allowanceCapWei, { allowZero: true });
+        if (allowanceWei == null || allowanceCapWei == null) {
+          failures.push("canary preflight allowance evidence is invalid (" + label + ")");
+        } else {
+          if (allowanceCapWei !== cap.allowanceCapWei) failures.push("canary preflight allowance cap does not match admission (" + label + ")");
+          if (BigInt(allowanceWei) > BigInt(cap.allowanceCapWei)) failures.push("canary preflight allowance exceeds admission cap (" + label + ")");
+          if (item.allowanceWithinRunCap !== (BigInt(allowanceWei) <= BigInt(allowanceCapWei))) {
+            failures.push("canary preflight allowance boundary does not match evidence (" + label + ")");
+          }
+        }
+        if (item.allowanceWithinRunCap !== true && item.allowanceWithinRunCap !== false) {
+          failures.push("canary preflight allowance boundary is missing (" + label + ")");
+        }
+        break;
       }
+      case "diagnostic":
+        if (exactRole !== "SYSTEM" || item.sampleKind !== "health") {
+          failures.push("canary diagnostic role or shape is not allowed (" + label + ")");
+        } else {
+          validateCanaryControlActionShape(item, label, failures);
+        }
+        break;
+      case "summary":
+        if (exactRole !== "SYSTEM") {
+          failures.push("canary summary role is not allowed (" + label + ")");
+        } else {
+          validateCanaryControlActionShape(item, label, failures);
+        }
+        break;
+      case "epoch-wait":
+        if (exactRole !== "RESOLVER") {
+          failures.push("canary epoch-wait role is not allowed (" + label + ")");
+        } else {
+          validateCanaryControlActionShape(item, label, failures, { requireResolverEpoch: true });
+        }
+        break;
+      case "resolver-candidate":
+        if (!resolverOrSelectedRole) {
+          failures.push("canary resolver-candidate role is not admitted (" + label + ")");
+        } else {
+          validateCanaryControlActionShape(item, label, failures, { requireResolverEpoch: true });
+        }
+        break;
+      case "resolve":
+        if (!resolverOrSelectedRole) {
+          failures.push("canary resolve role is not admitted (" + label + ")");
+        } else {
+          validateCanaryControlActionShape(item, label, failures, {
+            allowTransactionEvidence: true,
+            requireResolverEpoch: true,
+          });
+          // Resolve is a separately admitted state change outside the ERC20 role caps.
+          if (item.ok === true && item.txStatus !== "success") {
+            failures.push("successful canary resolve tx status is invalid (" + label + ")");
+          }
+          resolveIndexes.push(index);
+          if (item.ok === true && !hasCanonicalProducerTxHash(item)) {
+            failures.push("successful canary resolve tx hash is invalid (" + label + ")");
+          }
+          if (item.ok === true && !hasCanonicalResolveReceiptMetrics(item)) {
+            failures.push("successful canary resolve receipt metrics are invalid (" + label + ")");
+          }
+          if (item.ok === true && item.resolverFallbackUsed !== (exactRole !== "RESOLVER")) {
+            failures.push("successful canary resolve fallback binding is invalid (" + label + ")");
+          }
+        }
+        break;
+      case "approve": {
+        if (!selectedRole) {
+          failures.push("canary approval role is not admitted (" + label + ")");
+          break;
+        }
+        const approvals = approvalsByRole.get(exactRole) ?? [];
+        approvals.push(item);
+        approvalsByRole.set(exactRole, approvals);
+        const approvalIndexes = approvalIndexesByRole.get(exactRole) ?? [];
+        approvalIndexes.push(index);
+        approvalIndexesByRole.set(exactRole, approvalIndexes);
+        break;
+      }
+      case "single":
+      case "bitmap":
+      case "sameAmount":
+      case "arrays":
+        if (!selectedRole) {
+          failures.push("canary bet role is not admitted (" + label + ")");
+          break;
+        }
+        if (!isBetEvent(item)) {
+          failures.push("canary bet shape is invalid (" + label + ")");
+          break;
+        }
+        const betIndexes = betIndexesByRole.get(exactRole) ?? [];
+        betIndexes.push(index);
+        betIndexesByRole.set(exactRole, betIndexes);
+        if (item.ok === true && item.txStatus === "success") {
+          if (!hasCanonicalProducerTxHash(item)) {
+            failures.push("successful canary bet tx hash is invalid (" + label + ")");
+          }
+          const spend = canonicalWei(item.totalAmountWei, { allowZero: false });
+          if (spend == null) {
+            failures.push("successful canary bet spend is invalid (" + label + ")");
+          } else {
+            const next = (spentByRole.get(exactRole) ?? 0n) + BigInt(spend);
+            spentByRole.set(exactRole, next);
+            if (next > BigInt(capByRole.get(exactRole).spendCapWei)) {
+              failures.push("successful canary spend exceeds admission cap (" + label + ")");
+            }
+          }
+        }
+        break;
+      default:
+        failures.push("unsupported canary action mode (" + label + ")");
     }
   }
 
@@ -1538,7 +1791,13 @@ function evaluateCanaryAdmission({
       const approval = approvals[0];
       const approvalAllowance = canonicalWei(approval.allowanceWei, { allowZero: true });
       const approvalCap = canonicalWei(approval.allowanceCapWei, { allowZero: true });
-      if (approval.ok !== true || !isRealTx(approval.hash) || approval.allowanceWithinRunCap !== true) {
+      if (
+        approval.ok !== true
+        || approval.txStatus !== "success"
+        || !hasCanonicalProducerTxHash(approval)
+        || approval.round !== -1
+        || approval.allowanceWithinRunCap !== true
+      ) {
         failures.push(`canonical admission approval receipt is invalid for ${role}`);
       }
       if (approvalAllowance !== cap.allowanceCapWei || approvalCap !== cap.allowanceCapWei) {
@@ -1547,11 +1806,299 @@ function evaluateCanaryAdmission({
     }
   }
 
+  validateCanaryAdmissionActionOrdering({
+    betIndexesByRole,
+    capByRole,
+    failures,
+    approvalIndexesByRole,
+    runtimeIdentityPreflightIndexes,
+    resolveIndexes,
+    walletPreflightIndexesByRole,
+    walletPreflightsByRole,
+  });
+  validateCanarySummaryLifecycle({ events, relevantEvents, failures });
+  if (profileKey === "v10-matrix") validateV10MatrixRepeatPairs(relevantEvents, failures);
+
   return { status: failures.length === 0 ? "checked" : "invalid", failures: [...new Set(failures)].sort() };
+}
+
+function validateV10MatrixRepeatPairs(relevantEvents, failures) {
+  const successfulBetsByRound = new Map();
+  for (const { item } of relevantEvents) {
+    if (!isBetEvent(item) || item.ok !== true || item.txStatus !== "success") continue;
+    const roundBets = successfulBetsByRound.get(item.round) ?? [];
+    roundBets.push(item);
+    successfulBetsByRound.set(item.round, roundBets);
+  }
+  for (const [round, roundBets] of successfulBetsByRound) {
+    const primary = roundBets.filter((item) => item.repeat === false);
+    const repeat = roundBets.filter((item) => item.repeat === true);
+    if (
+      roundBets.length !== 2
+      || primary.length !== 1
+      || repeat.length !== 1
+      || repeatBetSignature(primary[0]) !== repeatBetSignature(repeat[0])
+    ) {
+      failures.push(`canonical V10 matrix requires one exact primary/repeat pair for round ${round}`);
+    }
+  }
+}
+
+function validateCanaryAdmissionActionOrdering({
+  betIndexesByRole,
+  capByRole,
+  failures,
+  approvalIndexesByRole,
+  runtimeIdentityPreflightIndexes,
+  resolveIndexes,
+  walletPreflightIndexesByRole,
+  walletPreflightsByRole,
+}) {
+  const runtimePreflightIndex = runtimeIdentityPreflightIndexes.length === 1
+    ? runtimeIdentityPreflightIndexes[0]
+    : null;
+  const walletPreflightIndexes = [...walletPreflightIndexesByRole.values()].flat();
+  const approvalIndexes = [...approvalIndexesByRole.values()].flat();
+  const betIndexes = [...betIndexesByRole.values()].flat();
+  const monetaryIndexes = [...approvalIndexes, ...betIndexes];
+
+  if (
+    runtimePreflightIndex != null
+    && walletPreflightIndexes.some((index) => index <= runtimePreflightIndex)
+  ) {
+    failures.push("canonical admission runtime identity preflight must precede wallet preflights");
+  }
+  if (
+    runtimePreflightIndex != null
+    && betIndexes.some((index) => index <= runtimePreflightIndex)
+  ) {
+    failures.push("canonical admission runtime identity preflight must precede bets");
+  }
+  if (
+    runtimePreflightIndex != null
+    && resolveIndexes.some((index) => index <= runtimePreflightIndex)
+  ) {
+    failures.push("canonical admission runtime identity preflight must precede resolves");
+  }
+  if (resolveIndexes.length > 0) {
+    const firstResolveIndex = Math.min(...resolveIndexes);
+    if (walletPreflightIndexes.some((index) => index >= firstResolveIndex)) {
+      failures.push("canonical admission wallet preflights must precede resolves");
+    }
+  }
+  if (monetaryIndexes.length > 0) {
+    const firstMonetaryIndex = Math.min(...monetaryIndexes);
+    if (walletPreflightIndexes.some((index) => index >= firstMonetaryIndex)) {
+      failures.push("canonical admission wallet preflights must precede monetary actions");
+    }
+  }
+
+  const requiredApprovalIndexes = [];
+  for (const role of capByRole.keys()) {
+    const preflight = (walletPreflightsByRole.get(role) ?? [])[0];
+    if (preflight?.approvalRequired !== true) continue;
+    const roleApprovalIndexes = approvalIndexesByRole.get(role) ?? [];
+    if (roleApprovalIndexes.length === 1) requiredApprovalIndexes.push(roleApprovalIndexes[0]);
+  }
+  if (requiredApprovalIndexes.length > 0) {
+    const latestRequiredApprovalIndex = Math.max(...requiredApprovalIndexes);
+    if (betIndexes.some((index) => index <= latestRequiredApprovalIndex)) {
+      failures.push("canonical admission required approvals must precede bets");
+    }
+    if (resolveIndexes.some((index) => index <= latestRequiredApprovalIndex)) {
+      failures.push("canonical admission required approvals must precede resolves");
+    }
+  }
+  for (const role of capByRole.keys()) {
+    const preflightIndexes = walletPreflightIndexesByRole.get(role) ?? [];
+    const roleBetIndexes = betIndexesByRole.get(role) ?? [];
+    if (preflightIndexes.length !== 1) continue;
+    const preflightIndex = preflightIndexes[0];
+    if (roleBetIndexes.some((index) => index <= preflightIndex)) {
+      failures.push(`canonical admission wallet preflight must precede bets for ${role}`);
+    }
+    const preflight = (walletPreflightsByRole.get(role) ?? [])[0];
+    if (preflight?.approvalRequired !== true) continue;
+    const roleApprovalIndexes = approvalIndexesByRole.get(role) ?? [];
+    if (roleApprovalIndexes.length !== 1) continue;
+    const approvalIndex = roleApprovalIndexes[0];
+    if (approvalIndex <= preflightIndex) {
+      failures.push(`canonical admission approval must follow wallet preflight for ${role}`);
+    }
+    if (roleBetIndexes.some((index) => index <= approvalIndex)) {
+      failures.push(`canonical admission approval must precede bets for ${role}`);
+    }
+    if (resolveIndexes.some((index) => index <= approvalIndex)) {
+      failures.push(`canonical admission approval must precede resolves for ${role}`);
+    }
+  }
+}
+
+function validateCanarySummaryLifecycle({ events, relevantEvents, failures }) {
+  const summaries = relevantEvents.filter(({ item }) => item.mode === "summary");
+  if (summaries.length !== 1) {
+    failures.push(`canonical canary summary count ${summaries.length} != 1`);
+    return;
+  }
+  const [{ item: summary, index: summaryIndex }] = summaries;
+  if (summaryIndex !== events.length - 1) {
+    failures.push("canonical canary summary must be terminal");
+  }
+  const successes = summary.successes;
+  const failureCount = summary.failures;
+  const targetRounds = summary.targetRounds;
+  if (
+    !Number.isSafeInteger(successes)
+    || successes < 0
+    || !Number.isSafeInteger(failureCount)
+    || failureCount < 0
+    || !Number.isSafeInteger(targetRounds)
+    || targetRounds <= 0
+    || targetRounds > 10_000
+    || summary.round !== targetRounds
+    || summary.ok !== (failureCount === 0)
+    || !hasIsoTimestamp(summary.timestamp)
+  ) {
+    failures.push("canonical canary summary is invalid");
+    return;
+  }
+  const observedBets = relevantEvents
+    .map(({ item }) => item)
+    .filter(isBetEvent);
+  const observedSuccessfulBets = observedBets.filter((item) => item.ok === true && item.txStatus === "success");
+  const observedFailedBets = observedBets.filter((item) => item.ok !== true || item.txStatus !== "success");
+  const observedRounds = new Set(observedBets.map((item) => item.round));
+  if (
+    successes !== observedSuccessfulBets.length
+    || failureCount !== observedFailedBets.length
+    || successes + failureCount < targetRounds
+  ) {
+    failures.push("canonical canary summary outcomes do not match observed bets");
+  }
+  if (
+    observedRounds.size !== targetRounds
+    || [...observedRounds].some((round) => !Number.isInteger(round) || round < 0 || round >= targetRounds)
+  ) {
+    failures.push("canonical canary summary targetRounds do not match observed bet rounds");
+  }
 }
 
 function isBetEvent(event) {
   return Number.isInteger(event.round) && event.round >= 0 && BET_MODES.has(event.mode);
+}
+
+function validateCanaryControlActionShape(event, label, failures, {
+  allowRuntimeIdentity = false,
+  allowTransactionEvidence = false,
+  requireResolverEpoch = false,
+} = {}) {
+  validateCanaryControlFieldShape(event, label, failures);
+  if (event.amount !== "0") {
+    failures.push("canary control action amount must be zero (" + label + ")");
+  }
+  const forbiddenFields = Object.keys(event).filter((key) => (
+    CANARY_CONTROL_FORBIDDEN_FIELDS.has(key)
+    || CANARY_CONTROL_TOKEN_FIELD_RE.test(key)
+  ));
+  if (forbiddenFields.length > 0) {
+    failures.push("canary control action has spend or token authorization fields (" + label + ")");
+  }
+  if (!allowTransactionEvidence && Object.keys(event).some((key) => CANARY_CONTROL_TRANSACTION_EVIDENCE_FIELD_RE.test(key))) {
+    failures.push("canary no-action control has transaction evidence (" + label + ")");
+  }
+  if (!allowRuntimeIdentity && Object.hasOwn(event, "runtimeIdentity")) {
+    failures.push("canary control action runtime identity shape is invalid (" + label + ")");
+  }
+  if (
+    requireResolverEpoch
+    && (event.round !== -1 || canonicalWei(event.epoch, { allowZero: false }) == null)
+  ) {
+    failures.push("canary resolver control epoch or round is invalid (" + label + ")");
+  }
+}
+
+function validateCanaryControlFieldShape(event, label, failures) {
+  const allowedFields = CANARY_CONTROL_ALLOWED_FIELDS_BY_MODE[event.mode];
+  if (!allowedFields) return;
+  const unexpectedFields = Object.keys(event).filter((key) => !allowedFields.has(key));
+  if (unexpectedFields.length > 0) {
+    failures.push("canary control action has unexpected fields (" + label + ")");
+  }
+  if (event.mode === "diagnostic") {
+    const validRetryCount = isNonNegativeInteger(event.healthRetryCount) && event.healthRetryCount <= 1;
+    const validMetrics = CANARY_HEALTH_METRIC_FIELDS.every((field) => isNonNegativeInteger(event[field]));
+    if (
+      event.ok === true
+      && (
+        !validRetryCount
+        || !validMetrics
+        || Object.hasOwn(event, "error")
+        || Object.hasOwn(event, "errorKind")
+      )
+    ) {
+      failures.push("canary health diagnostic success shape is invalid (" + label + ")");
+    }
+    if (
+      event.ok === false
+      && (
+        event.healthRetryCount !== 1
+        || !hasRealText(event.error)
+        || !hasRealText(event.errorKind)
+        || CANARY_HEALTH_METRIC_FIELDS.some((field) => Object.hasOwn(event, field))
+      )
+    ) {
+      failures.push("canary health diagnostic failure shape is invalid (" + label + ")");
+    }
+  }
+  if (
+    event.mode === "epoch-wait"
+    && (
+      event.ok !== true
+      || !isNonNegativeInteger(event.durationMs)
+      || !Number.isSafeInteger(event.secondsLeft)
+    )
+  ) {
+    failures.push("canary epoch-wait control shape is invalid (" + label + ")");
+  }
+  if (
+    event.mode === "resolver-candidate"
+    && (
+      event.ok !== false
+      || !hasRealText(event.error)
+      || !hasRealText(event.errorKind)
+      || !Number.isSafeInteger(event.secondsLeft)
+    )
+  ) {
+    failures.push("canary resolver-candidate control shape is invalid (" + label + ")");
+  }
+}
+function hasExactRuntimeIdentityShape(value) {
+  return isPlainObject(value)
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify(CANARY_RUNTIME_IDENTITY_KEYS);
+}
+function validateCanaryAdmissionEnvelope(event, admission, normalizedAdmissionContract, failures) {
+  const label = "round=" + (event.round ?? "n/a") + " mode=" + (event.mode ?? "n/a");
+  validateCanaryControlActionShape(event, label, failures);
+  if (
+    event.mode !== "admission"
+    || event.role !== "SYSTEM"
+    || event.ok !== true
+    || event.round !== -1
+    || event.signatureRequested !== false
+    || event.signingMaterialLoaded !== false
+    || event.transactionSent !== false
+    || event.walletClientCreated !== false
+    || !hasIsoTimestamp(event.timestamp)
+  ) {
+    failures.push("canonical canary admission envelope is invalid");
+  }
+  if (
+    normalizeNetwork(event.network) !== normalizeNetwork(admission.network)
+    || event.chainId !== admission.chainId
+    || normalizeAddress(event.contractAddress) !== normalizedAdmissionContract
+  ) {
+    failures.push("canonical canary admission outer target does not match payload");
+  }
 }
 
 function canonicalWei(value, { allowZero }) {
@@ -1564,6 +2111,7 @@ function canonicalAdmissionRoles(value) {
   if (!Array.isArray(value) || value.length === 0) return null;
   const normalized = value.map((role) => normalizeRole(role));
   if (normalized.some((role) => !role) || normalized.some((role, index) => role !== value[index])) return null;
+  if (normalized.some((role) => !CANARY_PARTICIPANT_ROLES.has(role))) return null;
   if (new Set(normalized).size !== normalized.length) return null;
   const sorted = [...normalized].sort();
   return JSON.stringify(normalized) === JSON.stringify(sorted) ? normalized : null;
@@ -1577,7 +2125,7 @@ function canonicalAdmissionRoleCaps(value, selectedRoles) {
     const role = normalizeRole(cap.role);
     const spendCapWei = canonicalWei(cap.spendCapWei, { allowZero: true });
     const allowanceCapWei = canonicalWei(cap.allowanceCapWei, { allowZero: true });
-    if (!role || cap.role !== role || spendCapWei == null || allowanceCapWei == null) return null;
+    if (!role || cap.role !== role || spendCapWei == null || allowanceCapWei == null || spendCapWei !== allowanceCapWei) return null;
     parsed.push({ role, spendCapWei, allowanceCapWei });
   }
   if (JSON.stringify(parsed.map((cap) => cap.role)) !== JSON.stringify(selectedRoles)) return null;

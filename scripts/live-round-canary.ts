@@ -1195,6 +1195,7 @@ async function ensureAllowance(params: {
     role: wallet.role,
     round: -1,
     timestamp: new Date().toISOString(),
+    txStatus: receipt.status,
   });
   if (receipt.status !== "success") throw new Error("approval transaction reverted");
   assertCanaryApprovalPostcondition({ actualAllowance, approvalTarget: approveAmount });
