@@ -1169,7 +1169,41 @@ export function runReleaseOperationsTests() {
       tiles: [1],
       timestamp: "2026-07-22T00:00:00.000Z",
     };
-    const runV10CanaryProof = (name, events, extraArgs = []) => {
+    const buildAdmissionEvidence = ({ includeRuntime = true, approvalRequired = false, allowanceWithinRunCap = true, approvals = [] } = {}) => {
+      const target = {
+        amount: "0",
+        chainId: 59141,
+        contractAddress: `0x${"1".repeat(40)}`,
+        network: "sepolia",
+        ok: true,
+        round: -1,
+      };
+      const evidence = [];
+      if (includeRuntime) {
+        evidence.push({
+          ...target,
+          mode: "preflight",
+          role: "SYSTEM",
+          runtimeIdentity: {
+            normalizedRuntimeSha256: "a".repeat(64),
+            manifestDigest: "b".repeat(64),
+            canonicalProvenanceVerified: true,
+            deployBlock: "0",
+          },
+        });
+      }
+      evidence.push({
+        ...target,
+        allowanceCapWei: "100",
+        allowanceWei: "100",
+        allowanceWithinRunCap,
+        approvalRequired,
+        mode: "preflight",
+        role: "AUTOMINER_A",
+      });
+      return [...evidence, ...approvals];
+    };
+    const runV10CanaryProof = (name, events, extraArgs = [], admissionEvidence = buildAdmissionEvidence()) => {
       const logPath = join(v10CanaryProofDir, `${name}.jsonl`);
       const admission = {
         schema: 1,
@@ -1190,7 +1224,7 @@ export function runReleaseOperationsTests() {
         roleCaps: [{ role: "AUTOMINER_A", spendCapWei: "100", allowanceCapWei: "100" }],
       };
       const admissionSha256 = createHash("sha256").update(JSON.stringify(admission), "utf8").digest("hex");
-      const boundEvents = events.map((event) => ({ ...event, admissionSha256 }));
+      const boundEvents = [...admissionEvidence, ...events].map((event) => ({ ...event, admissionSha256 }));
       writeFileSync(logPath, `${[
         { mode: "admission", admission, admissionSha256 },
         ...boundEvents,
@@ -1283,6 +1317,53 @@ export function runReleaseOperationsTests() {
     assert.doesNotMatch(matrixProof.stdout, /missing V10 gas cases/);
     assert.doesNotMatch(matrixProof.stdout, /duplicate role\/epoch\/tile keys [1-9]/);
     assert.match(matrixProof.stdout, /\| 3-sparse \| 2 \| 100002 \| 100002 \| 200002 \|/);
+    const missingRuntimeAdmission = runV10CanaryProof(
+      "missing-runtime-admission",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence({ includeRuntime: false }),
+    );
+    assert.equal(missingRuntimeAdmission.status, 1, "strict proof must require exactly one bound runtime identity preflight");
+    assert.match(missingRuntimeAdmission.stdout, /runtime identity preflight count 0 != 1/);
+    const unsafeAllowanceAdmission = runV10CanaryProof(
+      "unsafe-allowance-admission",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence({ allowanceWithinRunCap: false }),
+    );
+    assert.equal(unsafeAllowanceAdmission.status, 1, "strict proof must reject an unsafe allowance preflight");
+    assert.match(unsafeAllowanceAdmission.stdout, /wallet preflight exceeds allowance cap for AUTOMINER_A/);
+    const missingApprovalAdmission = runV10CanaryProof(
+      "missing-approval-admission",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence({ approvalRequired: true }),
+    );
+    assert.equal(missingApprovalAdmission.status, 1, "strict proof must require the declared exact-cap approval receipt");
+    assert.match(missingApprovalAdmission.stdout, /admission approval count for AUTOMINER_A 0 != 1/);
+    const approvedMatrixProof = runV10CanaryProof(
+      "approved-matrix",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence({
+        approvalRequired: true,
+        approvals: [{
+          amount: "0",
+          allowanceCapWei: "100",
+          allowanceWei: "100",
+          allowanceWithinRunCap: true,
+          chainId: 59141,
+          contractAddress: `0x${"1".repeat(40)}`,
+          hash: `0x${"2".repeat(64)}`,
+          mode: "approve",
+          network: "sepolia",
+          ok: true,
+          role: "AUTOMINER_A",
+          round: -1,
+        }],
+      }),
+    );
+    assert.equal(approvedMatrixProof.status, 0, "a declared approval must bind one exact-cap successful receipt");
     const compactCanaryOutput = (result) => `${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`;
     const assertCompactCanaryOutputSafe = (name, result) => {
       const output = compactCanaryOutput(result);

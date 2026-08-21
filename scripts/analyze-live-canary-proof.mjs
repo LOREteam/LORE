@@ -1414,6 +1414,9 @@ function evaluateCanaryAdmission({
     .filter(({ item }) => item.mode === "preflight" || item.mode === "approve" || isBetEvent(item));
   const capByRole = roleCaps ? new Map(roleCaps.map((cap) => [cap.role, cap])) : new Map();
   const spentByRole = new Map();
+  const runtimeIdentityPreflights = [];
+  const walletPreflightsByRole = new Map();
+  const approvalsByRole = new Map();
   for (const { item, index } of relevantEvents) {
     const label = `round=${item.round ?? "n/a"} mode=${item.mode ?? "n/a"}`;
     if (index <= admissionIndex || item.admissionSha256 !== calculatedSha) {
@@ -1432,8 +1435,14 @@ function evaluateCanaryAdmission({
     if (!isRuntimeIdentity && (!role || !capByRole.has(role))) {
       failures.push(`canary action role is not admitted (${label})`);
     }
-    if (isRuntimeIdentity) validateRuntimeIdentityBinding(item.runtimeIdentity, admission, failures);
+    if (isRuntimeIdentity) {
+      runtimeIdentityPreflights.push(item);
+      validateRuntimeIdentityBinding(item.runtimeIdentity, admission, failures);
+    }
     if (item.mode === "preflight" && role && role !== "SYSTEM" && capByRole.has(role)) {
+      const preflights = walletPreflightsByRole.get(role) ?? [];
+      preflights.push(item);
+      walletPreflightsByRole.set(role, preflights);
       const cap = capByRole.get(role);
       const allowanceWei = canonicalWei(item.allowanceWei, { allowZero: true });
       const allowanceCapWei = canonicalWei(item.allowanceCapWei, { allowZero: true });
@@ -1447,6 +1456,11 @@ function evaluateCanaryAdmission({
         failures.push(`canary preflight allowance boundary is missing (${label})`);
       }
     }
+    if (item.mode === "approve" && role && capByRole.has(role)) {
+      const approvals = approvalsByRole.get(role) ?? [];
+      approvals.push(item);
+      approvalsByRole.set(role, approvals);
+    }
     if (isBetEvent(item) && item.ok === true && item.txStatus === "success" && role && capByRole.has(role)) {
       const spend = canonicalWei(item.totalAmountWei, { allowZero: false });
       if (spend == null) {
@@ -1457,6 +1471,43 @@ function evaluateCanaryAdmission({
         if (next > BigInt(capByRole.get(role).spendCapWei)) {
           failures.push(`successful canary spend exceeds admission cap (${label})`);
         }
+      }
+    }
+  }
+
+  if (runtimeIdentityPreflights.length !== 1) {
+    failures.push(`canonical admission runtime identity preflight count ${runtimeIdentityPreflights.length} != 1`);
+  }
+  for (const [role, cap] of capByRole) {
+    const preflights = walletPreflightsByRole.get(role) ?? [];
+    if (preflights.length !== 1) {
+      failures.push(`canonical admission wallet preflight count for ${role} ${preflights.length} != 1`);
+      continue;
+    }
+    const preflight = preflights[0];
+    if (preflight.ok !== true) failures.push(`canonical admission wallet preflight failed for ${role}`);
+    if (preflight.allowanceWithinRunCap !== true) failures.push(`canonical admission wallet preflight exceeds allowance cap for ${role}`);
+    if (typeof preflight.approvalRequired !== "boolean") {
+      failures.push(`canonical admission wallet preflight approval requirement is missing for ${role}`);
+      continue;
+    }
+    const approvals = approvalsByRole.get(role) ?? [];
+    if (!preflight.approvalRequired && approvals.length !== 0) {
+      failures.push(`unexpected canary approval evidence for ${role}`);
+    }
+    if (preflight.approvalRequired) {
+      if (approvals.length !== 1) {
+        failures.push(`canonical admission approval count for ${role} ${approvals.length} != 1`);
+        continue;
+      }
+      const approval = approvals[0];
+      const approvalAllowance = canonicalWei(approval.allowanceWei, { allowZero: true });
+      const approvalCap = canonicalWei(approval.allowanceCapWei, { allowZero: true });
+      if (approval.ok !== true || !isRealTxHash(approval.hash) || approval.allowanceWithinRunCap !== true) {
+        failures.push(`canonical admission approval receipt is invalid for ${role}`);
+      }
+      if (approvalAllowance !== cap.allowanceCapWei || approvalCap !== cap.allowanceCapWei) {
+        failures.push(`canonical admission approval allowance does not match cap for ${role}`);
       }
     }
   }
