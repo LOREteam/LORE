@@ -31,6 +31,14 @@ export function normalizeCachedPrivyBalances(value: unknown): CachedPrivyBalance
   };
 }
 
+export function isHeaderLineaBalanceLoading(
+  embeddedTokenPending: boolean,
+  formattedLineaBalance: string | null | undefined,
+  formattedPrivyBalance: string | null,
+) {
+  return embeddedTokenPending && formattedLineaBalance == null && formattedPrivyBalance == null;
+}
+
 export function normalizePageWalletAddress(value: string | null | undefined): `0x${string}` | null {
   if (!value) return null;
   try {
@@ -158,9 +166,11 @@ export function usePageWalletOverview({
   const headerLineaBalance =
     (isEmbeddedActive && formattedLineaBalance != null ? formattedLineaBalance : formattedPrivyBalance) ?? "—";
 
-  const headerLineaLoading =
-    (isEmbeddedActive && formattedLineaBalance == null) ||
-    (!isEmbeddedActive && embeddedTokenPending && formattedPrivyBalance == null);
+  const headerLineaLoading = isHeaderLineaBalanceLoading(
+    embeddedTokenPending,
+    formattedLineaBalance,
+    formattedPrivyBalance,
+  );
 
   return useMemo(
     () => ({

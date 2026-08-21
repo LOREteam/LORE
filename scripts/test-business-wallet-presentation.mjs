@@ -228,6 +228,26 @@ export function runWalletPresentationTests() {
     { token: "0.00", eth: "0.0000" },
     "a verified literal zero must remain distinguishable from an unavailable balance",
   );
+  assert.equal(
+    pageWalletOverview.isHeaderLineaBalanceLoading(true, null, null),
+    true,
+    "a first embedded balance read with no data must show loading",
+  );
+  assert.equal(
+    pageWalletOverview.isHeaderLineaBalanceLoading(false, null, null),
+    false,
+    "a completed unavailable embedded balance read must not look like perpetual loading",
+  );
+  assert.equal(
+    pageWalletOverview.isHeaderLineaBalanceLoading(true, null, "0.00"),
+    false,
+    "a cached verified zero must remain visible while a refresh runs",
+  );
+  assert.equal(
+    pageWalletOverview.isHeaderLineaBalanceLoading(true, "0.00", null),
+    false,
+    "a current verified zero must not be rendered as loading",
+  );
   const unavailableTransferSummary = {
     transfers: [],
     totalIn: 0,
