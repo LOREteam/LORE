@@ -87,6 +87,7 @@ export function createBusinessLogicChildEnvironment({ env = process.env, dbPath 
   const removedKeys = new Set([
     "lore_allow_contract_scope_purge",
     "lore_db_path",
+    "lore_business_logic_isolated_runner",
     "lore_hermetic_build",
     "lore_hermetic_build_db_root",
   ]);
@@ -94,6 +95,7 @@ export function createBusinessLogicChildEnvironment({ env = process.env, dbPath 
     if (removedKeys.has(name.toLowerCase())) delete childEnv[name];
   }
   childEnv.LORE_ALLOW_CONTRACT_SCOPE_PURGE = "0";
+  childEnv.LORE_BUSINESS_LOGIC_ISOLATED_RUNNER = "1";
   childEnv.LORE_DB_PATH = dbPath;
   return childEnv;
 }

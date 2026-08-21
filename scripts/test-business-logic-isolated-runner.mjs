@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import {
   assertOwnedBusinessLogicTempRoot,
@@ -98,10 +99,24 @@ const passing = runFixture();
 assert.equal(passing.result.status, 0);
 assert.match(passing.observedEnvironment.LORE_DB_PATH, /lore-business-logic-fixture[\\/]lore\.sqlite$/);
 assert.equal(passing.observedEnvironment.LORE_ALLOW_CONTRACT_SCOPE_PURGE, "0");
+assert.equal(passing.observedEnvironment.LORE_BUSINESS_LOGIC_ISOLATED_RUNNER, "1");
 assert.equal(passing.observedEnvironment.KEEP_ME, "preserved");
 assert.equal(passing.observedEnvironment.lore_db_path, undefined);
 assert.equal(passing.observedEnvironment.lore_hermetic_build, undefined);
 assert.equal(passing.observedEnvironment.LORE_HERMETIC_BUILD_DB_ROOT, undefined);
+
+const directCoordinator = spawnSync(process.execPath, ["scripts/test-business-logic.mjs"], {
+  cwd: FIXTURE_ROOT,
+  env: { ...process.env, LORE_DB_PATH: join(FIXTURE_TEMP, "lore.sqlite") },
+  encoding: "utf8",
+  windowsHide: true,
+});
+assert.notEqual(directCoordinator.status, 0, "a direct coordinator run must fail before importing the suite");
+assert.match(
+  String(directCoordinator.stderr),
+  /must start through business-logic-isolated-runner\.mjs/,
+  "direct coordinator admission must name the isolated runner",
+);
 assert.equal(passing.fsApi.getRemoved(), passing.observedEnvironment.LORE_DB_PATH.replace(/[\\/]lore\.sqlite$/, ""));
 
 const freshCheckoutFsApi = makeFsApi({ withoutDataDirectory: true });

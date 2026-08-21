@@ -1,4 +1,22 @@
-import { runBusinessLogicSuite } from "./business-logic-suite.mjs";
+import { isAbsolute, relative, resolve } from "node:path";
+
+function assertIsolatedBusinessLogicEnvironment() {
+  if (process.env.LORE_BUSINESS_LOGIC_ISOLATED_RUNNER !== "1") {
+    throw new Error("test-business-logic.mjs must start through business-logic-isolated-runner.mjs");
+  }
+  const dbPath = process.env.LORE_DB_PATH;
+  if (typeof dbPath !== "string" || !isAbsolute(dbPath)) {
+    throw new Error("test-business-logic.mjs requires an absolute isolated LORE_DB_PATH");
+  }
+  const protectedDataRoot = resolve("data");
+  const relativePath = relative(protectedDataRoot, resolve(dbPath));
+  if (relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath))) {
+    throw new Error("test-business-logic.mjs refuses a LORE_DB_PATH inside protected data");
+  }
+}
+
+assertIsolatedBusinessLogicEnvironment();
+const { runBusinessLogicSuite } = await import("./business-logic-suite.mjs");
 
 async function withExpectedWarningSuppression(fn) {
   const originalWarn = console.warn;
